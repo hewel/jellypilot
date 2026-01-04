@@ -48,6 +48,16 @@ JMSR allows you to cast media from any Jellyfin client (web, mobile, TV) to your
 - [ ] **Embedded Player** - Optional built-in video player without external MPV dependency
 - [ ] **MPRIS Support** - Linux media player integration for desktop controls
 
+### 🚀 Enhanced Experience
+- [ ] **Discord Rich Presence** - Show current playback status on Discord profile
+- [ ] **Custom Shaders Manager** - Easy toggle for Anime4K, FSR, and other MPV shaders
+- [ ] **SyncPlay Support** - Watch together with friends via Jellyfin SyncPlay group
+
+### 🖥️ Desktop Power User
+- [ ] **Picture-in-Picture (PiP)** - Floating mini-player mode
+- [ ] **Global Hotkeys** - Customizable shortcuts that work in the background
+- [ ] **Offline Mode** - Download media for offline playback
+
 ## 🏗️ Architecture
 
 JMSR utilizes a robust three-actor architecture to ensure stability and separation of concerns.
