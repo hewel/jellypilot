@@ -15,6 +15,7 @@
   },
   "dependencies": {
     "@ark-ui/solid": "^5.30.0",
+    "@tanstack/router-plugin": "^1.145.2",
     "@tanstack/solid-form": "^1.27.6",
     "@tanstack/solid-query": "^5.90.16",
     "@tanstack/solid-router": "^1.144.0",

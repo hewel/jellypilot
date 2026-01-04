@@ -25,7 +25,8 @@
     /* paths */
     "baseUrl": ".",
     "paths": {
-      "styled-system/*": ["./src/styled-system/*"]
+      "styled-system/*": ["./styled-system/*"],
+      "components/*": ["./src/components/*"],
     }
   },
   "include": ["src"]

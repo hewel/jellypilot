@@ -5,7 +5,7 @@ import { css, cx } from '../../styled-system/css';
 import { button, input } from '../../styled-system/recipes';
 import { type Credentials, commands } from '../bindings';
 import { Card, PageFooter } from '../components/ui';
-import { saveSession } from '../router';
+import { saveSession } from '../lib/auth';
 
 interface LoginPageProps {
   onConnected: () => void;

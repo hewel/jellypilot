@@ -1,4 +1,54 @@
-import { defineConfig } from '@pandacss/dev';
+import { tabsAnatomy } from '@ark-ui/solid/anatomy'
+import { defineConfig, defineSlotRecipe } from '@pandacss/dev'
+
+const sidebarStyles = defineSlotRecipe({
+  className: 'sidebar',
+  slots: tabsAnatomy.keys(),
+  base: {
+    root: {
+      height: '100vh',
+      width: '100vw',
+      display: 'flex',
+      backgroundColor: 'background',
+      overflow: 'hidden'
+    },
+    list: {
+      width: '80px',
+      flexShrink: 0,
+      backgroundColor: 'surfaceContainerLow',
+      borderRightWidth: '1px',
+      borderRightColor: 'outlineVariant',
+      display: 'flex',
+      flexDirection: 'column',
+      alignItems: 'center',
+      paddingY: '24px',
+      gap: '16px'
+    },
+    trigger: {
+      display: 'flex',
+      flexDirection: 'column',
+      alignItems: 'center',
+      justifyContent: 'center',
+      gap: '4px',
+      width: '64px',
+      height: '64px',
+      borderRadius: '16px',
+      cursor: 'pointer',
+      transition: 'all 0.2s',
+      color: 'onSurfaceVariant',
+      backgroundColor: 'transparent',
+      border: 'none',
+      _hover: {
+        backgroundColor: 'surfaceContainerHigh',
+        color: 'onSurface'
+      },
+      _selected: {
+        backgroundColor: 'secondaryContainer',
+        color: 'onSecondaryContainer'
+      }
+    },
+  }
+})
 
 export default defineConfig({
   // Whether to use css reset
@@ -24,28 +74,28 @@ export default defineConfig({
       keyframes: {
         spin: {
           from: { transform: 'rotate(0deg)' },
-          to: { transform: 'rotate(360deg)' },
+          to: { transform: 'rotate(360deg)' }
         },
         pulse: {
           '0%, 100%': { opacity: '1' },
-          '50%': { opacity: '0.5' },
+          '50%': { opacity: '0.5' }
         },
         fadeIn: {
           from: { opacity: '0' },
-          to: { opacity: '1' },
+          to: { opacity: '1' }
         },
         slideInFromTop: {
           from: { transform: 'translateY(-4px)', opacity: '0' },
-          to: { transform: 'translateY(0)', opacity: '1' },
+          to: { transform: 'translateY(0)', opacity: '1' }
         },
         slideInFromBottom: {
           from: { transform: 'translateY(8px)', opacity: '0' },
-          to: { transform: 'translateY(0)', opacity: '1' },
+          to: { transform: 'translateY(0)', opacity: '1' }
         },
         slideInFromRight: {
           from: { transform: 'translateX(100%)', opacity: '0' },
-          to: { transform: 'translateX(0)', opacity: '1' },
-        },
+          to: { transform: 'translateX(0)', opacity: '1' }
+        }
       },
 
       tokens: {
@@ -97,11 +147,14 @@ export default defineConfig({
 
           // Shadow & Scrim
           shadow: { value: '#000000' },
-          scrim: { value: '#000000' },
+          scrim: { value: '#000000' }
         },
         fonts: {
           sans: { value: '"Roboto", ui-sans-serif, system-ui, sans-serif' },
-          mono: { value: 'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace' },
+          mono: {
+            value:
+              'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace'
+          }
         },
         letterSpacings: {
           tighter: { value: '-0.05em' },
@@ -109,17 +162,17 @@ export default defineConfig({
           normal: { value: '0em' },
           wide: { value: '0.025em' },
           wider: { value: '0.05em' },
-          widest: { value: '0.1em' },
+          widest: { value: '0.1em' }
         },
         lineHeights: {
-          relaxed: { value: '1.625' },
+          relaxed: { value: '1.625' }
         },
         shadows: {
           sm: { value: '0 1px 2px 0 rgb(0 0 0 / 0.05)' },
           md: { value: '0 4px 6px -1px rgb(0 0 0 / 0.1), 0 2px 4px -2px rgb(0 0 0 / 0.1)' },
           lg: { value: '0 10px 15px -3px rgb(0 0 0 / 0.1), 0 4px 6px -4px rgb(0 0 0 / 0.1)' },
-          xl: { value: '0 20px 25px -5px rgb(0 0 0 / 0.1), 0 8px 10px -6px rgb(0 0 0 / 0.1)' },
-        },
+          xl: { value: '0 20px 25px -5px rgb(0 0 0 / 0.1), 0 8px 10px -6px rgb(0 0 0 / 0.1)' }
+        }
       },
 
       // M3 Text Styles
@@ -130,24 +183,24 @@ export default defineConfig({
             fontSize: '57px',
             lineHeight: '64px',
             fontWeight: '400',
-            letterSpacing: '-0.25px',
-          },
+            letterSpacing: '-0.25px'
+          }
         },
         displayMedium: {
           value: {
             fontSize: '45px',
             lineHeight: '52px',
             fontWeight: '400',
-            letterSpacing: '0px',
-          },
+            letterSpacing: '0px'
+          }
         },
         displaySmall: {
           value: {
             fontSize: '36px',
             lineHeight: '44px',
             fontWeight: '400',
-            letterSpacing: '0px',
-          },
+            letterSpacing: '0px'
+          }
         },
 
         // Headline styles (Section headers)
@@ -156,24 +209,24 @@ export default defineConfig({
             fontSize: '32px',
             lineHeight: '40px',
             fontWeight: '400',
-            letterSpacing: '0px',
-          },
+            letterSpacing: '0px'
+          }
         },
         headlineMedium: {
           value: {
             fontSize: '28px',
             lineHeight: '36px',
             fontWeight: '400',
-            letterSpacing: '0px',
-          },
+            letterSpacing: '0px'
+          }
         },
         headlineSmall: {
           value: {
             fontSize: '24px',
             lineHeight: '32px',
             fontWeight: '400',
-            letterSpacing: '0px',
-          },
+            letterSpacing: '0px'
+          }
         },
 
         // Title styles (Card titles, Dialog titles)
@@ -182,24 +235,24 @@ export default defineConfig({
             fontSize: '22px',
             lineHeight: '28px',
             fontWeight: '400',
-            letterSpacing: '0px',
-          },
+            letterSpacing: '0px'
+          }
         },
         titleMedium: {
           value: {
             fontSize: '16px',
             lineHeight: '24px',
             fontWeight: '500',
-            letterSpacing: '0.15px',
-          },
+            letterSpacing: '0.15px'
+          }
         },
         titleSmall: {
           value: {
             fontSize: '14px',
             lineHeight: '20px',
             fontWeight: '500',
-            letterSpacing: '0.1px',
-          },
+            letterSpacing: '0.1px'
+          }
         },
 
         // Body styles (Reading text)
@@ -208,24 +261,24 @@ export default defineConfig({
             fontSize: '16px',
             lineHeight: '24px',
             fontWeight: '400',
-            letterSpacing: '0.5px',
-          },
+            letterSpacing: '0.5px'
+          }
         },
         bodyMedium: {
           value: {
             fontSize: '14px',
             lineHeight: '20px',
             fontWeight: '400',
-            letterSpacing: '0.25px',
-          },
+            letterSpacing: '0.25px'
+          }
         },
         bodySmall: {
           value: {
             fontSize: '12px',
             lineHeight: '16px',
             fontWeight: '400',
-            letterSpacing: '0.4px',
-          },
+            letterSpacing: '0.4px'
+          }
         },
 
         // Label styles (Buttons, Captions)
@@ -234,26 +287,26 @@ export default defineConfig({
             fontSize: '14px',
             lineHeight: '20px',
             fontWeight: '500',
-            letterSpacing: '0.1px',
-          },
+            letterSpacing: '0.1px'
+          }
         },
         labelMedium: {
           value: {
             fontSize: '12px',
             lineHeight: '16px',
             fontWeight: '500',
-            letterSpacing: '0.5px',
-          },
+            letterSpacing: '0.5px'
+          }
         },
         labelSmall: {
           value: {
             fontSize: '11px',
             lineHeight: '16px',
             fontWeight: '500',
-            letterSpacing: '0.5px',
-          },
-        },
-      },
+            letterSpacing: '0.5px'
+          }
+        }
+      }
     },
 
     // M3 Component Recipes
@@ -270,8 +323,8 @@ export default defineConfig({
           cursor: 'pointer',
           transition: 'all 0.2s ease-out',
           _disabled: {
-            cursor: 'not-allowed',
-          },
+            cursor: 'not-allowed'
+          }
         },
         variants: {
           variant: {
@@ -287,16 +340,16 @@ export default defineConfig({
               borderRadius: '9999px',
               _hover: {
                 backgroundColor: 'primary/90',
-                boxShadow: '0 4px 6px -1px rgb(0 0 0 / 0.1)',
+                boxShadow: '0 4px 6px -1px rgb(0 0 0 / 0.1)'
               },
               _active: {
-                transform: 'scale(0.98)',
+                transform: 'scale(0.98)'
               },
               _disabled: {
                 backgroundColor: 'onSurface/12',
                 color: 'onSurface/38',
-                boxShadow: 'none',
-              },
+                boxShadow: 'none'
+              }
             },
             tonal: {
               height: '40px',
@@ -310,15 +363,15 @@ export default defineConfig({
               borderRadius: '9999px',
               _hover: {
                 backgroundColor: 'secondaryContainer/90',
-                boxShadow: '0 1px 3px 0 rgb(0 0 0 / 0.1)',
+                boxShadow: '0 1px 3px 0 rgb(0 0 0 / 0.1)'
               },
               _active: {
-                transform: 'scale(0.98)',
+                transform: 'scale(0.98)'
               },
               _disabled: {
                 backgroundColor: 'onSurface/12',
-                color: 'onSurface/38',
-              },
+                color: 'onSurface/38'
+              }
             },
             secondary: {
               height: '40px',
@@ -332,15 +385,15 @@ export default defineConfig({
               borderRadius: '9999px',
               _hover: {
                 backgroundColor: 'secondaryContainer/90',
-                boxShadow: '0 1px 3px 0 rgb(0 0 0 / 0.1)',
+                boxShadow: '0 1px 3px 0 rgb(0 0 0 / 0.1)'
               },
               _active: {
-                transform: 'scale(0.98)',
+                transform: 'scale(0.98)'
               },
               _disabled: {
                 backgroundColor: 'onSurface/12',
-                color: 'onSurface/38',
-              },
+                color: 'onSurface/38'
+              }
             },
             outlined: {
               height: '40px',
@@ -356,19 +409,19 @@ export default defineConfig({
               letterSpacing: '0.1px',
               borderRadius: '9999px',
               _hover: {
-                backgroundColor: 'primary/8',
+                backgroundColor: 'primary/8'
               },
               _focus: {
                 ringWidth: '2px',
-                ringColor: 'primary',
+                ringColor: 'primary'
               },
               _active: {
-                backgroundColor: 'primary/12',
+                backgroundColor: 'primary/12'
               },
               _disabled: {
                 borderColor: 'onSurface/12',
-                color: 'onSurface/38',
-              },
+                color: 'onSurface/38'
+              }
             },
             text: {
               height: '40px',
@@ -382,14 +435,14 @@ export default defineConfig({
               borderRadius: '9999px',
               minWidth: '64px',
               _hover: {
-                backgroundColor: 'primary/8',
+                backgroundColor: 'primary/8'
               },
               _active: {
-                backgroundColor: 'primary/12',
+                backgroundColor: 'primary/12'
               },
               _disabled: {
-                color: 'onSurface/38',
-              },
+                color: 'onSurface/38'
+              }
             },
             icon: {
               width: '40px',
@@ -397,17 +450,17 @@ export default defineConfig({
               borderRadius: '9999px',
               color: 'onSurfaceVariant',
               _hover: {
-                backgroundColor: 'onSurfaceVariant/8',
+                backgroundColor: 'onSurfaceVariant/8'
               },
               _active: {
-                backgroundColor: 'onSurfaceVariant/12',
-              },
-            },
-          },
+                backgroundColor: 'onSurfaceVariant/12'
+              }
+            }
+          }
         },
         defaultVariants: {
-          variant: 'primary',
-        },
+          variant: 'primary'
+        }
       },
 
       // Card Recipe
@@ -417,7 +470,7 @@ export default defineConfig({
         base: {
           borderRadius: '12px',
           padding: '16px',
-          color: 'onSurface',
+          color: 'onSurface'
         },
         variants: {
           variant: {
@@ -426,26 +479,26 @@ export default defineConfig({
               boxShadow: '0 4px 6px -1px rgb(0 0 0 / 0.1)',
               transition: 'box-shadow 0.2s',
               _hover: {
-                boxShadow: '0 10px 15px -3px rgb(0 0 0 / 0.1)',
-              },
+                boxShadow: '0 10px 15px -3px rgb(0 0 0 / 0.1)'
+              }
             },
             filled: {
               backgroundColor: 'surfaceContainerHighest',
               borderWidth: '1px',
               borderStyle: 'solid',
-              borderColor: 'transparent',
+              borderColor: 'transparent'
             },
             outlined: {
               backgroundColor: 'surface',
               borderWidth: '1px',
               borderStyle: 'solid',
-              borderColor: 'outlineVariant',
-            },
-          },
+              borderColor: 'outlineVariant'
+            }
+          }
         },
         defaultVariants: {
-          variant: 'filled',
-        },
+          variant: 'filled'
+        }
       },
 
       // Input Recipe
@@ -464,8 +517,8 @@ export default defineConfig({
           outline: 'none',
           transition: 'all 0.2s',
           _placeholder: {
-            color: 'onSurfaceVariant/70',
-          },
+            color: 'onSurfaceVariant/70'
+          }
         },
         variants: {
           variant: {
@@ -478,12 +531,12 @@ export default defineConfig({
               borderBottomStyle: 'solid',
               borderBottomColor: 'onSurfaceVariant',
               _hover: {
-                backgroundColor: 'surfaceContainerHighest/80',
+                backgroundColor: 'surfaceContainerHighest/80'
               },
               _focus: {
                 borderBottomWidth: '2px',
-                borderBottomColor: 'primary',
-              },
+                borderBottomColor: 'primary'
+              }
             },
             outlined: {
               height: '56px',
@@ -494,8 +547,8 @@ export default defineConfig({
               _focus: {
                 borderWidth: '2px',
                 borderColor: 'primary',
-                color: 'primary',
-              },
+                color: 'primary'
+              }
             },
             default: {
               height: '48px',
@@ -507,16 +560,19 @@ export default defineConfig({
               _focus: {
                 borderColor: 'primary',
                 ringWidth: '1px',
-                ringColor: 'primary',
-              },
-            },
-          },
+                ringColor: 'primary'
+              }
+            }
+          }
         },
         defaultVariants: {
-          variant: 'default',
-        },
-      },
+          variant: 'default'
+        }
+      }
     },
+    slotRecipes: {
+      sidebar: sidebarStyles
+    }
   },
 
   // Global CSS
@@ -527,26 +583,26 @@ export default defineConfig({
       fontFamily: 'sans',
       margin: 0,
       WebkitFontSmoothing: 'antialiased',
-      MozOsxFontSmoothing: 'grayscale',
+      MozOsxFontSmoothing: 'grayscale'
     },
     '::selection': {
       backgroundColor: 'primaryContainer',
-      color: 'onPrimaryContainer',
+      color: 'onPrimaryContainer'
     },
     // Scrollbar styling
     '::-webkit-scrollbar': {
       width: '8px',
-      height: '8px',
+      height: '8px'
     },
     '::-webkit-scrollbar-track': {
-      backgroundColor: 'surfaceContainer',
+      backgroundColor: 'surfaceContainer'
     },
     '::-webkit-scrollbar-thumb': {
       backgroundColor: 'outlineVariant',
-      borderRadius: '9999px',
+      borderRadius: '9999px'
     },
     '::-webkit-scrollbar-thumb:hover': {
-      backgroundColor: 'outline',
-    },
-  },
-});
+      backgroundColor: 'outline'
+    }
+  }
+})

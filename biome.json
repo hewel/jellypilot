@@ -1,7 +1,7 @@
 {
   "$schema": "./node_modules/@biomejs/biome/configuration_schema.json",
   "files": {
-    "includes": ["src/**", "tests/**", "!**/bindings.ts"]
+    "includes": ["src/**", "tests/**", "!**/bindings.ts", "!**/*.gen.ts"]
   },
   "assist": {
     "actions": {
