@@ -69,6 +69,8 @@ bun tauri build     # Production desktop build
 - Tauri v2: https://v2.tauri.app
 - tauri-specta: https://github.com/oscartbeaumont/tauri-specta
 - Solid.js: https://www.solidjs.com
+- Panda CSS: https://panda-css.com/llms-full.txt
+- Ark UI: https://ark-ui.com/docs/ai/llms.txt
 
 ## Notes
 
