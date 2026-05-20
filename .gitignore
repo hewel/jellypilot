@@ -17,3 +17,5 @@ dist/
 
 # Temp
 *.tmp
+
+.agents
