@@ -61,6 +61,20 @@ bun tauri build     # Production desktop build
 - **React patterns in Solid**: No `useState`, `useEffect` – use Solid primitives
 - **Raw Tauri invoke**: Always use typed `commands.*` from bindings
 
+## Agent skills
+
+### Issue tracker
+
+Issues and PRDs are tracked in GitHub Issues for `hewel/jmsr`. See `docs/agents/issue-tracker.md`.
+
+### Triage labels
+
+Uses the default five-label triage vocabulary. See `docs/agents/triage-labels.md`.
+
+### Domain docs
+
+Single-context repo using root `CONTEXT.md` and root `docs/adr/`. See `docs/agents/domain.md`.
+
 ## Docs
 
 - Rsbuild: https://rsbuild.rs/llms.txt
