@@ -159,7 +159,7 @@ jmsr/
 │   │   ├── jellyfin/      # Jellyfin client implementation
 │   │   └── mpv/           # MPV IPC driver logic
 │   └── tauri.conf.json    # Tauri configuration
-└── doc/PRD.md            # Product requirements
+└── docs/PRD.md            # Product requirements
 ```
 
 ### Commands

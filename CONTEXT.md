@@ -20,6 +20,10 @@ _Avoid_: Discovery, pairing, device link
 A user-started login attempt against a known Server URL that produces a short code for approval in Jellyfin. While a Quick Connect Request is waiting, its Server URL is fixed until the user cancels the request.
 _Avoid_: Auto-started login, background pairing
 
+**Quick Connect Code**:
+The short server-issued code JMSR displays during a Quick Connect Request. The code is approved from another signed-in Jellyfin client.
+_Avoid_: Pairing code, device link code
+
 **Quick Connect Approval**:
 The point where a signed-in Jellyfin user authorizes the displayed Quick Connect code. JMSR waits for this approval automatically after showing the code.
 _Avoid_: Manual confirmation
@@ -39,6 +43,10 @@ _Avoid_: Saved Session, remembered password
 **Password Login**:
 A fallback authentication method where the user signs in to a known Server URL with Jellyfin username and password.
 _Avoid_: Primary login
+
+**Login Method**:
+One of the user-selectable ways to authenticate to a known Server URL. Quick Connect and Password Login are the Login Methods currently exposed by JMSR.
+_Avoid_: Account type, server type
 
 ## Example Dialogue
 
@@ -69,6 +77,10 @@ Domain expert: "No. The request belongs to that Server URL, so the user cancels 
 Dev: "After the code is shown, does the user need to tell JMSR they approved it?"
 
 Domain expert: "No. JMSR waits for Quick Connect Approval automatically and then finishes the login."
+
+Dev: "Can the user switch Login Methods while a Quick Connect Code is waiting?"
+
+Domain expert: "No. The user cancels the current Quick Connect Request before choosing another Login Method."
 
 Dev: "If the Quick Connect code expires, should JMSR switch to Password Login?"
 
