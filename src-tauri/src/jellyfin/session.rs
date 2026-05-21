@@ -1695,7 +1695,7 @@ mod tests {
   use super::super::intro_skipper::{IntroSkipKind, IntroSkipRange};
   use super::*;
 
-  fn test_state_with_intro_range() -> RwLock<SessionState> {
+  pub(super) fn test_state_with_intro_range() -> RwLock<SessionState> {
     test_state_with_range(IntroSkipKind::Introduction, 10.0, 80.0)
   }
 
@@ -1844,5 +1844,98 @@ mod tests {
     SessionManager::apply_intro_skipper(&state, &action_tx, &config, &event).await;
 
     assert!(action_rx.try_recv().is_err());
+  }
+
+  #[tokio::test]
+  async fn disabled_intro_skipper_setting_blocks_credit_seek_action() {
+    let state = test_state_with_range(IntroSkipKind::Credits, 1200.0, 1260.0);
+    let (action_tx, mut action_rx) = mpsc::channel(1);
+    let mut config = AppConfig::default();
+    config.intro_skipper_enabled = false;
+    let config = RwLock::new(config);
+    let event = crate::mpv::MpvEvent {
+      event: "property-change".to_string(),
+      id: Some(4),
+      name: Some("time-pos".to_string()),
+      data: Some(serde_json::json!(1200.0)),
+      reason: None,
+      args: None,
+    };
+
+    SessionManager::apply_intro_skipper(&state, &action_tx, &config, &event).await;
+
+    assert!(action_rx.try_recv().is_err());
+  }
+}
+
+#[cfg(test)]
+mod regression_tests {
+  use super::*;
+
+  #[test]
+  fn playback_position_updates_to_seek_target_after_mpv_reports_new_time_pos() {
+    let state = super::tests::test_state_with_intro_range();
+    let event = crate::mpv::MpvEvent {
+      event: "property-change".to_string(),
+      id: Some(4),
+      name: Some("time-pos".to_string()),
+      data: Some(serde_json::json!(80.0)),
+      reason: None,
+      args: None,
+    };
+
+    SessionManager::update_state_from_property(&state, &event);
+
+    let position_ticks = state
+      .read()
+      .playback
+      .as_ref()
+      .map(|playback| playback.position_ticks);
+    assert_eq!(position_ticks, Some(seconds_to_ticks(80.0)));
+  }
+
+  #[test]
+  fn jellyfin_track_selection_conversion_still_uses_type_local_mpv_indices() {
+    let streams = vec![
+      MediaStream {
+        index: 0,
+        stream_type: "Video".to_string(),
+        codec: None,
+        language: None,
+        display_title: None,
+        is_default: false,
+        is_external: false,
+      },
+      MediaStream {
+        index: 1,
+        stream_type: "Audio".to_string(),
+        codec: None,
+        language: Some("eng".to_string()),
+        display_title: None,
+        is_default: true,
+        is_external: false,
+      },
+      MediaStream {
+        index: 2,
+        stream_type: "Audio".to_string(),
+        codec: None,
+        language: Some("jpn".to_string()),
+        display_title: None,
+        is_default: false,
+        is_external: false,
+      },
+      MediaStream {
+        index: 3,
+        stream_type: "Subtitle".to_string(),
+        codec: None,
+        language: Some("eng".to_string()),
+        display_title: None,
+        is_default: false,
+        is_external: false,
+      },
+    ];
+
+    assert_eq!(jellyfin_to_mpv_track_index(&streams, "Audio", 2), 2);
+    assert_eq!(jellyfin_to_mpv_track_index(&streams, "Subtitle", 3), 1);
   }
 }

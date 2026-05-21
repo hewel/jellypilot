@@ -141,6 +141,18 @@ mod tests {
   }
 
   #[test]
+  fn ignores_malformed_ranges_with_non_positive_or_reversed_bounds() {
+    let response = HashMap::from([
+      ("Introduction".to_string(), plugin_segment(-1.0, 80.0)),
+      ("Credits".to_string(), plugin_segment(1200.0, 0.0)),
+    ]);
+
+    let ranges = parse_intro_skipper_ranges(response);
+
+    assert!(ranges.is_empty());
+  }
+
+  #[test]
   fn empty_response_has_no_active_ranges() {
     let ranges = parse_intro_skipper_ranges(HashMap::new());
 

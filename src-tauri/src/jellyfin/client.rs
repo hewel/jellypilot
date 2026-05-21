@@ -1025,6 +1025,20 @@ mod tests {
   }
 
   #[tokio::test]
+  async fn intro_skipper_ranges_return_empty_for_empty_plugin_response() {
+    let server_url = serve_once("200 OK", r#"{}"#).await;
+    let client = JellyfinClient::new();
+    connect_test_client(&client, server_url);
+
+    let ranges = client
+      .get_intro_skipper_ranges("item-1")
+      .await
+      .expect("empty plugin response should parse");
+
+    assert!(ranges.is_empty());
+  }
+
+  #[tokio::test]
   async fn intro_skipper_ranges_report_endpoint_failure_to_caller() {
     let server_url = serve_once("404 Not Found", r#"{"Message":"missing plugin"}"#).await;
     let client = JellyfinClient::new();
