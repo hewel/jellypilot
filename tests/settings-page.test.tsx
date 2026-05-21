@@ -91,3 +91,30 @@ test('settings page saves changed intro skipper setting', async () => {
 
   cleanup();
 });
+
+test('settings page keeps diagnostics under collapsed troubleshooting', async () => {
+  rstest.spyOn(commands, 'configGet').mockResolvedValue({
+    deviceName: 'JMSR Test',
+    mpvPath: null,
+    mpvArgs: [],
+    progressInterval: 5,
+    startMinimized: false,
+    introSkipperEnabled: true,
+    keybindNext: 'Shift+n',
+    keybindPrev: 'Shift+p',
+  });
+  const cleanup = renderSettingsPage();
+
+  await waitFor(() =>
+    expect(screen.getByText('Troubleshooting')).toBeVisible(),
+  );
+  expect(screen.getByText('Diagnostics')).not.toBeVisible();
+
+  fireEvent.click(
+    screen.getByRole('button', { name: 'Toggle troubleshooting' }),
+  );
+
+  expect(screen.getByText('Diagnostics')).toBeVisible();
+
+  cleanup();
+});

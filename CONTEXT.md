@@ -64,6 +64,10 @@ _Avoid_: Next episode command, outro button
 A global user preference that controls whether JMSR uses Intro Skipper ranges during playback. The Intro Skipper Setting defaults to enabled so plugin ranges are used unless the user turns the behavior off.
 _Avoid_: Plugin install state, server setting
 
+**Diagnostics**:
+A user-facing support view that shows sanitized JMSR runtime events useful for understanding Jellyfin connection, Playback Target, and external player problems. Diagnostics are not a developer console and should not expose arbitrary frontend console output or secret-bearing values.
+_Avoid_: Frontend logs, debug console, telemetry
+
 ## Example Dialogue
 
 Dev: "Can Quick Connect find my Jellyfin server?"

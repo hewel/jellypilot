@@ -1,7 +1,9 @@
 import { createForm } from '@tanstack/solid-form';
 import {
   Cast,
+  ChevronDown,
   CircleCheckBig,
+  ClipboardList,
   Keyboard,
   LogOut,
   Play,
@@ -12,7 +14,7 @@ import {
 import { createEffect, createResource, createSignal, Show } from 'solid-js';
 import { type AppConfig, type ConnectionState, commands } from '../bindings';
 import { clearSavedSession } from '../router';
-import LogPanel from './LogPanel';
+import DiagnosticsPanel from './DiagnosticsPanel';
 import { useToast } from './ToastProvider';
 import {
   InfoCard,
@@ -43,6 +45,8 @@ export default function SettingsPage(props: SettingsPageProps) {
   const [disconnecting, setDisconnecting] = createSignal(false);
   const [clearingSession, setClearingSession] = createSignal(false);
   const [detectingMpv, setDetectingMpv] = createSignal(false);
+  const [troubleshootingExpanded, setTroubleshootingExpanded] =
+    createSignal(false);
   const [saveMessage, setSaveMessage] = createSignal<{
     type: 'success' | 'error';
     text: string;
@@ -562,8 +566,29 @@ export default function SettingsPage(props: SettingsPageProps) {
           </div>
         </div>
 
-        {/* Log Panel */}
-        <LogPanel />
+        <SectionCard
+          icon={<ClipboardList class="w-5 h-5" />}
+          title="Troubleshooting"
+          trailing={
+            <button
+              type="button"
+              class="btn-text min-w-0 px-3"
+              onClick={() =>
+                setTroubleshootingExpanded((expanded) => !expanded)
+              }
+              aria-expanded={troubleshootingExpanded()}
+              aria-label="Toggle troubleshooting"
+            >
+              <ChevronDown
+                class={`w-5 h-5 text-on-surface-variant transition-transform ${troubleshootingExpanded() ? 'rotate-180' : ''}`}
+              />
+            </button>
+          }
+        >
+          <div hidden={!troubleshootingExpanded()}>
+            <DiagnosticsPanel />
+          </div>
+        </SectionCard>
 
         {/* Version Footer */}
         <PageFooter />
