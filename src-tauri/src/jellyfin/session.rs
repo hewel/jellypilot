@@ -208,16 +208,8 @@ impl SessionManager {
         // Process commands until channel closes
         let mut command_rx = command_rx;
         while let Some(cmd) = command_rx.recv().await {
-          if let Err(e) = Self::handle_command(
-            &client,
-            &state,
-            &action_tx,
-            &app_handle,
-            &mpv,
-            &config,
-            cmd,
-          )
-          .await
+          if let Err(e) =
+            Self::handle_command(&client, &state, &action_tx, &app_handle, &mpv, &config, cmd).await
           {
             log::error!("Failed to handle Jellyfin command: {}", e);
             AppNotification::error(&app_handle, format!("Command failed: {}", e));
@@ -1276,8 +1268,7 @@ impl SessionManager {
               Self::handle_end_file_event(&event, &client, &state, &action_tx, &config).await;
             }
             "client-message" => {
-              Self::handle_client_message_event(&event, &client, &state, &action_tx, &config)
-                .await;
+              Self::handle_client_message_event(&event, &client, &state, &action_tx, &config).await;
             }
             _ => {
               // Ignore other events
@@ -1705,15 +1696,23 @@ mod tests {
   use super::*;
 
   fn test_state_with_intro_range() -> RwLock<SessionState> {
+    test_state_with_range(IntroSkipKind::Introduction, 10.0, 80.0)
+  }
+
+  fn test_state_with_range(
+    kind: IntroSkipKind,
+    start_seconds: f64,
+    end_seconds: f64,
+  ) -> RwLock<SessionState> {
     RwLock::new(SessionState {
       playback: Some(PlaybackSession {
         item_id: "item-1".to_string(),
         media_source_id: Some("source-1".to_string()),
         play_session_id: Some("play-1".to_string()),
         intro_skipper_ranges: vec![IntroSkipRange {
-          kind: IntroSkipKind::Introduction,
-          start_seconds: 10.0,
-          end_seconds: 80.0,
+          kind,
+          start_seconds,
+          end_seconds,
           skipped: false,
         }],
         position_ticks: 0,
@@ -1776,6 +1775,28 @@ mod tests {
     SessionManager::apply_intro_skipper(&state, &action_tx, &config, &event).await;
 
     assert!(action_rx.try_recv().is_err());
+  }
+
+  #[tokio::test]
+  async fn time_pos_update_inside_credit_range_emits_seek_not_next_episode_action() {
+    let state = test_state_with_range(IntroSkipKind::Credits, 1200.0, 1260.0);
+    let (action_tx, mut action_rx) = mpsc::channel(1);
+    let config = RwLock::new(AppConfig::default());
+    let event = crate::mpv::MpvEvent {
+      event: "property-change".to_string(),
+      id: Some(4),
+      name: Some("time-pos".to_string()),
+      data: Some(serde_json::json!(1200.0)),
+      reason: None,
+      args: None,
+    };
+
+    SessionManager::apply_intro_skipper(&state, &action_tx, &config, &event).await;
+
+    assert!(matches!(
+      action_rx.recv().await,
+      Some(MpvAction::Seek(1260.0))
+    ));
   }
 
   #[tokio::test]

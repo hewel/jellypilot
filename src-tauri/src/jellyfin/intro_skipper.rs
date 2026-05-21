@@ -9,6 +9,7 @@ const LOOKAHEAD_SECONDS: f64 = 1.0;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum IntroSkipKind {
   Introduction,
+  Credits,
 }
 
 /// Active Intro Skipper range for the current playback session.
@@ -56,6 +57,7 @@ pub fn parse_intro_skipper_ranges(response: IntroSkipperPluginResponse) -> Vec<I
       "Introduction" => {
         IntroSkipRange::new(IntroSkipKind::Introduction, segment.start, segment.end)
       }
+      "Credits" => IntroSkipRange::new(IntroSkipKind::Credits, segment.start, segment.end),
       _ => None,
     })
     .collect()
@@ -85,8 +87,16 @@ mod tests {
   use super::*;
 
   fn intro_range(start_seconds: f64, end_seconds: f64) -> IntroSkipRange {
+    range(IntroSkipKind::Introduction, start_seconds, end_seconds)
+  }
+
+  fn credit_range(start_seconds: f64, end_seconds: f64) -> IntroSkipRange {
+    range(IntroSkipKind::Credits, start_seconds, end_seconds)
+  }
+
+  fn range(kind: IntroSkipKind, start_seconds: f64, end_seconds: f64) -> IntroSkipRange {
     IntroSkipRange {
-      kind: IntroSkipKind::Introduction,
+      kind,
       start_seconds,
       end_seconds,
       skipped: false,
@@ -107,11 +117,21 @@ mod tests {
   }
 
   #[test]
+  fn parses_valid_credit_range() {
+    let response = HashMap::from([("Credits".to_string(), plugin_segment(1200.0, 1260.0))]);
+
+    let ranges = parse_intro_skipper_ranges(response);
+
+    assert_eq!(ranges, vec![credit_range(1200.0, 1260.0)]);
+  }
+
+  #[test]
   fn ignores_invalid_and_unsupported_ranges() {
     let response = HashMap::from([
       ("Introduction".to_string(), plugin_segment(90.0, 80.0)),
-      ("Credits".to_string(), plugin_segment(1200.0, 1260.0)),
       ("Preview".to_string(), plugin_segment(0.0, 30.0)),
+      ("Recap".to_string(), plugin_segment(1.0, 20.0)),
+      ("Commercial".to_string(), plugin_segment(40.0, 70.0)),
       ("Unknown".to_string(), plugin_segment(10.0, 20.0)),
     ]);
 
@@ -187,5 +207,14 @@ mod tests {
 
     assert_eq!(evaluate_skip(79.5, &mut ranges), Some(80.0));
     assert_eq!(evaluate_skip(79.75, &mut ranges), None);
+  }
+
+  #[test]
+  fn credit_range_uses_same_seek_rules() {
+    let mut lookahead_ranges = vec![credit_range(1200.0, 1260.0)];
+    let mut start_ranges = vec![credit_range(1200.0, 1260.0)];
+
+    assert_eq!(evaluate_skip(1199.0, &mut lookahead_ranges), Some(1260.0));
+    assert_eq!(evaluate_skip(1200.0, &mut start_ranges), Some(1260.0));
   }
 }

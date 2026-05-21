@@ -1010,7 +1010,7 @@ mod tests {
   async fn intro_skipper_ranges_return_empty_for_unsupported_or_invalid_segments() {
     let server_url = serve_once(
       "200 OK",
-      r#"{"Credits":{"Start":1200.0,"End":1260.0},"Preview":{"Start":1.0,"End":20.0},"Introduction":{"Start":90.0,"End":80.0}}"#,
+      r#"{"Recap":{"Start":1200.0,"End":1260.0},"Preview":{"Start":1.0,"End":20.0},"Commercial":{"Start":30.0,"End":45.0},"Introduction":{"Start":90.0,"End":80.0}}"#,
     )
     .await;
     let client = JellyfinClient::new();
