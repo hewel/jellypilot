@@ -13,7 +13,7 @@
 
 * **Language:** Rust (Latest Stable).
 * **Code Formatting:** `rustfmt` configured with `tab_spaces = 2`.
-* **GUI Framework:** Tauri v2 (Frontend: React/TypeScript + Tailwind CSS).
+* **GUI Framework:** Tauri v2 (Frontend: Solid.js/TypeScript + Tailwind CSS).
 * **Type Sync:** `tauri-specta` v2 (with `specta-typescript`) for generating frontend bindings from Rust types.
 * **Async Runtime:** Tokio.
 * **Communication:**
@@ -28,7 +28,7 @@
 The system is composed of three distinct actors:
 
 1. **The Sentinel (Rust/Tauri):** The main application daemon.
-* Manages the GUI (Settings, Tray).
+* Manages the GUI (Operations Console, Tray).
 * Handles Service Discovery (UDP).
 * Maintains the Jellyfin WebSocket session.
 * Exposes strictly typed Commands/Events to the Frontend via `tauri-specta`.
@@ -50,7 +50,7 @@ The system is composed of three distinct actors:
 
 ### 4.1. MPV Process Management (The Bridge)
 
-* **Detection:** Auto-detect `mpv` in `PATH` or common install locations. Allow user override in Settings.
+* **Detection:** Auto-detect `mpv` in `PATH` or common install locations. Allow user override in Operations Console Player Bridge settings.
 * **Spawning:**
 * Spawn `mpv` as a child process.
 * **Mandatory Flags:**
@@ -106,11 +106,11 @@ The system is composed of three distinct actors:
 
 
 * **UI Features:**
-* **Tray Icon:** Menu for "Show Settings", "Quit".
-* **Settings Page:**
-* MPV Executable Path selector.
-* Jellyfin Server URL / API Key (manual entry fallback).
-* "Always Transcode" toggle.
+* **Tray Icon:** Menu for "Show Operations Console", "Quit".
+* **Operations Console:**
+* Player Bridge settings for MPV executable path and advanced options.
+* Connection summary for the active Jellyfin Saved Session.
+* Automation controls such as Automatic Intro Skip.
 * **Shader Pack Selector:** A dropdown to select glsl-shader profiles (e.g., "Anime4K", "FSR").
 
 
@@ -145,6 +145,6 @@ The system is composed of three distinct actors:
 
 ### Phase 4: The Frontend
 
-* Build the Settings UI using React.
+* Build the Operations Console UI using Solid.js.
 * Implement System Tray logic.
 * Finalize packaging (MSI/Deb/AppImage).

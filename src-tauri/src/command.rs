@@ -194,8 +194,9 @@ fn jellyfin_err(e: JellyfinError) -> CommandError {
 // Types
 // ============================================================================
 
-/// Player state returned to frontend.
+/// Player transport state returned to frontend.
 #[derive(Debug, Clone, Serialize, Deserialize, specta::Type)]
+#[serde(rename_all = "camelCase")]
 pub struct PlayerState {
   pub connected: bool,
   pub paused: bool,
@@ -214,6 +215,59 @@ impl Default for PlayerState {
       volume: 100.0,
     }
   }
+}
+
+/// User-facing Now Playing status.
+#[derive(Debug, Clone, Serialize, Deserialize, specta::Type)]
+#[serde(rename_all = "camelCase")]
+pub enum NowPlayingStatus {
+  Offline,
+  Idle,
+  Playing,
+  Paused,
+  Unknown,
+}
+
+/// Reason an adjacent episode control is unavailable.
+#[derive(Debug, Clone, Serialize, Deserialize, specta::Type)]
+#[serde(rename_all = "camelCase")]
+pub enum AdjacentEpisodeUnavailableReason {
+  NoSession,
+  NoCurrentItem,
+  NotEpisode,
+  Unknown,
+}
+
+/// Minimal current media metadata safe for UI display.
+#[derive(Debug, Clone, Serialize, Deserialize, specta::Type)]
+#[serde(rename_all = "camelCase")]
+pub struct NowPlayingMedia {
+  pub item_id: String,
+  pub name: String,
+  pub item_type: String,
+  pub series_name: Option<String>,
+  pub season_number: Option<i32>,
+  pub episode_number: Option<i32>,
+}
+
+/// User-facing playback state for the Operations Console.
+#[derive(Debug, Clone, Serialize, Deserialize, specta::Type)]
+#[serde(rename_all = "camelCase")]
+pub struct NowPlayingState {
+  pub status: NowPlayingStatus,
+  pub player: PlayerState,
+  pub media: Option<NowPlayingMedia>,
+  pub can_play_next: bool,
+  pub can_play_previous: bool,
+  pub next_unavailable_reason: Option<AdjacentEpisodeUnavailableReason>,
+  pub previous_unavailable_reason: Option<AdjacentEpisodeUnavailableReason>,
+}
+
+/// Now Playing state event emitted to frontend.
+#[derive(Debug, Clone, Serialize, specta::Type, Event)]
+#[serde(rename_all = "camelCase")]
+pub struct NowPlayingChanged {
+  pub state: NowPlayingState,
 }
 
 /// MPV client state managed by Tauri.
@@ -236,6 +290,120 @@ impl JellyfinState {
   }
 }
 
+async fn collect_player_state(mpv: &MpvClient) -> PlayerState {
+  if !mpv.is_connected() {
+    return PlayerState::default();
+  }
+
+  let (paused_res, time_pos_res, duration_res, volume_res) = tokio::join!(
+    mpv.get_property("pause"),
+    mpv.get_property("time-pos"),
+    mpv.get_property("duration"),
+    mpv.get_property("volume"),
+  );
+
+  let paused = match paused_res {
+    Ok(PropertyValue::Bool(b)) => b,
+    Ok(_) => true,
+    Err(e) => {
+      log::warn!("Failed to get pause property: {}", e);
+      true
+    }
+  };
+
+  let time_pos = match time_pos_res {
+    Ok(PropertyValue::Number(n)) if n.is_finite() => n,
+    Ok(_) => 0.0,
+    Err(e) => {
+      log::warn!("Failed to get time-pos property: {}", e);
+      0.0
+    }
+  };
+
+  let duration = match duration_res {
+    Ok(PropertyValue::Number(n)) if n.is_finite() => n,
+    Ok(_) => 0.0,
+    Err(e) => {
+      log::warn!("Failed to get duration property: {}", e);
+      0.0
+    }
+  };
+
+  let volume = match volume_res {
+    Ok(PropertyValue::Number(n)) if n.is_finite() => n.clamp(0.0, 100.0),
+    Ok(_) => 100.0,
+    Err(e) => {
+      log::warn!("Failed to get volume property: {}", e);
+      100.0
+    }
+  };
+
+  PlayerState {
+    connected: true,
+    paused,
+    time_pos,
+    duration,
+    volume,
+  }
+}
+
+async fn collect_now_playing_state(state: &JellyfinState) -> NowPlayingState {
+  let player = collect_player_state(&state.mpv).await;
+  let session = state.session.read().clone();
+  let current_item = session.as_ref().and_then(|session| session.current_item());
+
+  let media = current_item.as_ref().map(|item| NowPlayingMedia {
+    item_id: item.id.clone(),
+    name: item.name.clone(),
+    item_type: item.item_type.clone(),
+    series_name: item.series_name.clone(),
+    season_number: item.parent_index_number,
+    episode_number: item.index_number,
+  });
+
+  let unavailable_reason = if session.is_none() {
+    Some(AdjacentEpisodeUnavailableReason::NoSession)
+  } else {
+    match current_item.as_ref() {
+      None => Some(AdjacentEpisodeUnavailableReason::NoCurrentItem),
+      Some(item) if item.item_type != "Episode" => {
+        Some(AdjacentEpisodeUnavailableReason::NotEpisode)
+      }
+      Some(_) => None,
+    }
+  };
+
+  let can_play_adjacent = unavailable_reason.is_none();
+  let status = if !player.connected {
+    NowPlayingStatus::Offline
+  } else if media.is_none() && player.duration <= 0.0 {
+    NowPlayingStatus::Idle
+  } else if player.paused {
+    NowPlayingStatus::Paused
+  } else {
+    NowPlayingStatus::Playing
+  };
+
+  NowPlayingState {
+    status,
+    player,
+    media,
+    can_play_next: can_play_adjacent,
+    can_play_previous: can_play_adjacent,
+    next_unavailable_reason: unavailable_reason.clone(),
+    previous_unavailable_reason: unavailable_reason,
+  }
+}
+
+async fn emit_now_playing_changed(app: &tauri::AppHandle, state: &JellyfinState) {
+  let event = NowPlayingChanged {
+    state: collect_now_playing_state(state).await,
+  };
+  if let Err(e) = event.emit(app) {
+    log::error!("Failed to emit now playing state: {}", e);
+  }
+}
+
 // ============================================================================
 // MPV Commands
 // ============================================================================
@@ -243,15 +411,26 @@ impl JellyfinState {
 /// Start the MPV player.
 #[tauri::command]
 #[specta]
-pub async fn mpv_start(state: State<'_, MpvState>) -> Result<(), CommandError> {
-  state.0.start().await.map_err(internal_err)
+pub async fn mpv_start(
+  app: tauri::AppHandle,
+  state: State<'_, MpvState>,
+  jellyfin_state: State<'_, JellyfinState>,
+) -> Result<(), CommandError> {
+  state.0.start().await.map_err(internal_err)?;
+  emit_now_playing_changed(&app, &jellyfin_state).await;
+  Ok(())
 }
 
 /// Stop the MPV player.
 #[tauri::command]
 #[specta]
-pub async fn mpv_stop(state: State<'_, MpvState>) -> Result<(), CommandError> {
+pub async fn mpv_stop(
+  app: tauri::AppHandle,
+  state: State<'_, MpvState>,
+  jellyfin_state: State<'_, JellyfinState>,
+) -> Result<(), CommandError> {
   state.0.stop().await;
+  emit_now_playing_changed(&app, &jellyfin_state).await;
   Ok(())
 }
 
@@ -271,30 +450,51 @@ pub async fn mpv_loadfile(state: State<'_, MpvState>, url: String) -> Result<(),
 /// Seek to absolute position in seconds.
 #[tauri::command]
 #[specta]
-pub async fn mpv_seek(state: State<'_, MpvState>, time: f64) -> Result<(), CommandError> {
+pub async fn mpv_seek(
+  app: tauri::AppHandle,
+  state: State<'_, MpvState>,
+  jellyfin_state: State<'_, JellyfinState>,
+  time: f64,
+) -> Result<(), CommandError> {
   if time < 0.0 {
     return Err(CommandError::invalid_input("Seek time cannot be negative"));
   }
-  state.0.seek(time).await.map_err(internal_err)
+  state.0.seek(time).await.map_err(internal_err)?;
+  emit_now_playing_changed(&app, &jellyfin_state).await;
+  Ok(())
 }
 
 /// Set pause state.
 #[tauri::command]
 #[specta]
-pub async fn mpv_set_pause(state: State<'_, MpvState>, paused: bool) -> Result<(), CommandError> {
-  state.0.set_pause(paused).await.map_err(internal_err)
+pub async fn mpv_set_pause(
+  app: tauri::AppHandle,
+  state: State<'_, MpvState>,
+  jellyfin_state: State<'_, JellyfinState>,
+  paused: bool,
+) -> Result<(), CommandError> {
+  state.0.set_pause(paused).await.map_err(internal_err)?;
+  emit_now_playing_changed(&app, &jellyfin_state).await;
+  Ok(())
 }
 
 /// Set volume (0-100).
 #[tauri::command]
 #[specta]
-pub async fn mpv_set_volume(state: State<'_, MpvState>, volume: f64) -> Result<(), CommandError> {
+pub async fn mpv_set_volume(
+  app: tauri::AppHandle,
+  state: State<'_, MpvState>,
+  jellyfin_state: State<'_, JellyfinState>,
+  volume: f64,
+) -> Result<(), CommandError> {
   if !(0.0..=100.0).contains(&volume) {
     return Err(CommandError::invalid_input(
       "Volume must be between 0 and 100",
     ));
   }
-  state.0.set_volume(volume).await.map_err(internal_err)
+  state.0.set_volume(volume).await.map_err(internal_err)?;
+  emit_now_playing_changed(&app, &jellyfin_state).await;
+  Ok(())
 }
 
 /// Set audio track by ID.
@@ -332,65 +532,33 @@ pub async fn mpv_get_property(
   state.0.get_property(&name).await.map_err(internal_err)
 }
 
+/// Toggle mute state.
+#[tauri::command]
+#[specta]
+pub async fn mpv_toggle_mute(
+  app: tauri::AppHandle,
+  state: State<'_, MpvState>,
+  jellyfin_state: State<'_, JellyfinState>,
+) -> Result<(), CommandError> {
+  state.0.toggle_mute().await.map_err(internal_err)?;
+  emit_now_playing_changed(&app, &jellyfin_state).await;
+  Ok(())
+}
+
 /// Get current player state.
 #[tauri::command]
 #[specta]
 pub async fn mpv_get_state(state: State<'_, MpvState>) -> Result<PlayerState, CommandError> {
-  if !state.0.is_connected() {
-    return Ok(PlayerState::default());
-  }
+  Ok(collect_player_state(&state.0).await)
+}
 
-  // Fetch all properties in parallel for better performance
-  let (paused_res, time_pos_res, duration_res, volume_res) = tokio::join!(
-    state.0.get_property("pause"),
-    state.0.get_property("time-pos"),
-    state.0.get_property("duration"),
-    state.0.get_property("volume"),
-  );
-
-  let paused = match paused_res {
-    Ok(PropertyValue::Bool(b)) => b,
-    Ok(_) => true,
-    Err(e) => {
-      log::warn!("Failed to get pause property: {}", e);
-      true
-    }
-  };
-
-  let time_pos = match time_pos_res {
-    Ok(PropertyValue::Number(n)) => n,
-    Ok(_) => 0.0,
-    Err(e) => {
-      log::warn!("Failed to get time-pos property: {}", e);
-      0.0
-    }
-  };
-
-  let duration = match duration_res {
-    Ok(PropertyValue::Number(n)) => n,
-    Ok(_) => 0.0,
-    Err(e) => {
-      log::warn!("Failed to get duration property: {}", e);
-      0.0
-    }
-  };
-
-  let volume = match volume_res {
-    Ok(PropertyValue::Number(n)) => n,
-    Ok(_) => 100.0,
-    Err(e) => {
-      log::warn!("Failed to get volume property: {}", e);
-      100.0
-    }
-  };
-
-  Ok(PlayerState {
-    connected: true,
-    paused,
-    time_pos,
-    duration,
-    volume,
-  })
+/// Get current user-facing Now Playing state.
+#[tauri::command]
+#[specta]
+pub async fn now_playing_get_state(
+  state: State<'_, JellyfinState>,
+) -> Result<NowPlayingState, CommandError> {
+  Ok(collect_now_playing_state(&state).await)
 }
 
 /// Check if MPV is connected.
@@ -425,7 +593,7 @@ pub async fn jellyfin_connect(
     state.client.clone(),
     state.mpv.clone(),
     config_state.0.clone(),
-    app,
+    app.clone(),
   ));
   new_session.start().await.map_err(internal_err)?;
 
@@ -436,6 +604,7 @@ pub async fn jellyfin_connect(
       log::warn!("Failed to stop old session: {}", e);
     }
   }
+  emit_now_playing_changed(&app, &state).await;
 
   Ok(())
 }
@@ -490,7 +659,7 @@ pub async fn jellyfin_quick_connect_authenticate(
     state.client.clone(),
     state.mpv.clone(),
     config_state.0.clone(),
-    app,
+    app.clone(),
   ));
   new_session.start().await.map_err(internal_err)?;
 
@@ -501,6 +670,7 @@ pub async fn jellyfin_quick_connect_authenticate(
       log::warn!("Failed to stop old session: {}", e);
     }
   }
+  emit_now_playing_changed(&app, &state).await;
 
   Ok(())
 }
@@ -508,7 +678,10 @@ pub async fn jellyfin_quick_connect_authenticate(
 /// Disconnect from Jellyfin server.
 #[tauri::command]
 #[specta]
-pub async fn jellyfin_disconnect(state: State<'_, JellyfinState>) -> Result<(), CommandError> {
+pub async fn jellyfin_disconnect(
+  app: tauri::AppHandle,
+  state: State<'_, JellyfinState>,
+) -> Result<(), CommandError> {
   // Take session without holding lock across await
   let session = state.session.write().take();
 
@@ -519,6 +692,7 @@ pub async fn jellyfin_disconnect(state: State<'_, JellyfinState>) -> Result<(), 
 
   // Disconnect client
   state.client.disconnect();
+  emit_now_playing_changed(&app, &state).await;
 
   Ok(())
 }
@@ -565,7 +739,7 @@ pub async fn jellyfin_restore_session(
     state.client.clone(),
     state.mpv.clone(),
     config_state.0.clone(),
-    app,
+    app.clone(),
   ));
   new_session.start().await.map_err(internal_err)?;
 
@@ -576,6 +750,7 @@ pub async fn jellyfin_restore_session(
       log::warn!("Failed to stop old session: {}", e);
     }
   }
+  emit_now_playing_changed(&app, &state).await;
 
   Ok(())
 }
@@ -586,7 +761,10 @@ pub async fn jellyfin_restore_session(
 /// clearing the saved session from localStorage on the frontend.
 #[tauri::command]
 #[specta]
-pub async fn jellyfin_clear_session(state: State<'_, JellyfinState>) -> Result<(), CommandError> {
+pub async fn jellyfin_clear_session(
+  app: tauri::AppHandle,
+  state: State<'_, JellyfinState>,
+) -> Result<(), CommandError> {
   // Take session without holding lock across await
   let session = state.session.write().take();
 
@@ -599,6 +777,43 @@ pub async fn jellyfin_clear_session(state: State<'_, JellyfinState>) -> Result<(
   state.client.disconnect();
 
   log::info!("Session cleared");
+  emit_now_playing_changed(&app, &state).await;
+  Ok(())
+}
+
+/// Play the next episode from the active Jellyfin session.
+#[tauri::command]
+#[specta]
+pub async fn jellyfin_play_next_episode(
+  app: tauri::AppHandle,
+  state: State<'_, JellyfinState>,
+) -> Result<(), CommandError> {
+  let session = state.session.read().clone().ok_or_else(|| {
+    CommandError::invalid_input("Next episode is available during episode playback")
+  })?;
+  session
+    .play_next_episode()
+    .await
+    .map_err(CommandError::invalid_input)?;
+  emit_now_playing_changed(&app, &state).await;
+  Ok(())
+}
+
+/// Play the previous episode from the active Jellyfin session.
+#[tauri::command]
+#[specta]
+pub async fn jellyfin_play_previous_episode(
+  app: tauri::AppHandle,
+  state: State<'_, JellyfinState>,
+) -> Result<(), CommandError> {
+  let session = state.session.read().clone().ok_or_else(|| {
+    CommandError::invalid_input("Previous episode is available during episode playback")
+  })?;
+  session
+    .play_previous_episode()
+    .await
+    .map_err(CommandError::invalid_input)?;
+  emit_now_playing_changed(&app, &state).await;
   Ok(())
 }
 
@@ -739,11 +954,13 @@ pub fn specta_builder() -> Builder<tauri::Wry> {
       mpv_seek,
       mpv_set_pause,
       mpv_set_volume,
+      mpv_toggle_mute,
       mpv_set_audio_track,
       mpv_set_subtitle_track,
       mpv_get_property,
       mpv_get_state,
       mpv_is_connected,
+      now_playing_get_state,
       // Jellyfin commands
       jellyfin_connect,
       jellyfin_disconnect,
@@ -752,6 +969,8 @@ pub fn specta_builder() -> Builder<tauri::Wry> {
       jellyfin_get_session,
       jellyfin_restore_session,
       jellyfin_clear_session,
+      jellyfin_play_next_episode,
+      jellyfin_play_previous_episode,
       jellyfin_quick_connect_start,
       jellyfin_quick_connect_check,
       jellyfin_quick_connect_authenticate,
@@ -761,7 +980,7 @@ pub fn specta_builder() -> Builder<tauri::Wry> {
       config_default,
       config_detect_mpv,
     ])
-    .events(collect_events![AppNotification]);
+    .events(collect_events![AppNotification, NowPlayingChanged]);
 
   #[cfg(debug_assertions)] // <- Only export on non-release builds
   {

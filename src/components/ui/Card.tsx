@@ -9,7 +9,7 @@ interface CardProps {
 }
 
 /**
- * M3 Card component with surface tint overlay.
+ * Control Room card component with subtle surface tint.
  * @param variant - 'filled' (default), 'elevated', or 'outlined'
  */
 export default function Card(props: CardProps) {
@@ -30,7 +30,7 @@ export default function Card(props: CardProps) {
     <div
       class={`${variantClasses()} relative overflow-hidden ${props.class ?? ''}`}
     >
-      {/* Surface Tint Overlay for M3 elevation effect */}
+      {/* Subtle brand surface tint */}
       <div class="absolute inset-0 bg-surface-tint/[0.03] pointer-events-none" />
       <div class="relative z-10">{props.children}</div>
     </div>

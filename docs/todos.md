@@ -17,7 +17,7 @@
   - On reconnect: re-reports capabilities, shows success notification
 - [x] Lucide icons integration (`lucide-solid@0.562.0`):
   - `LoginPage.tsx`: `Loader2` spinner
-  - `SettingsPage.tsx`: `RefreshCw`, `CheckCircle`, `Play`, `Keyboard`
+  - `OperationsConsole.tsx`: `RefreshCw`, `CircleCheckBig`, `Play`, `Keyboard`
   - `Toast.tsx`: `Check`, `X`, `AlertTriangle`, `Info`
 - [x] Footer versions updated to 1.0.0
 
@@ -130,7 +130,7 @@
 - [x] MPV death handling - `clear_playback_context()` reports stop to Jellyfin and clears state when MPV disconnects
 
 ### Testing
-- [ ] Add frontend tests for SettingsPage form validation
+- [ ] Add frontend tests for Operations Console form validation
 - [ ] Add Rust unit tests for config validation
 - [ ] Add integration tests for MPV IPC
 
@@ -153,7 +153,7 @@
 - [x] Config Tauri commands (get/set/default/detect)
 - [x] Configurable MPV path and extra args
 - [x] Configurable device name
-- [x] Settings UI with @tanstack/solid-form
+- [x] Operations Console settings UI with @tanstack/solid-form
 - [x] PlayPause toggle command support
 - [x] Config persistence to disk (tauri-plugin-store)
 - [x] Apply config changes live (MPV path/args, device name)

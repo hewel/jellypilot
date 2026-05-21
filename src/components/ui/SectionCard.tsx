@@ -8,7 +8,7 @@ interface SectionCardProps {
 }
 
 /**
- * M3 Section Card with icon + title header.
+ * Control Room section card with icon + title header.
  */
 export default function SectionCard(props: SectionCardProps) {
   return (

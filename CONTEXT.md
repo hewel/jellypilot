@@ -36,6 +36,14 @@ _Avoid_: Automatic password fallback
 An authenticated Jellyfin session that JMSR can restore after restart without asking the user to log in again. Saved Sessions are created the same way after Quick Connect and Password Login.
 _Avoid_: Remembered password
 
+**Disconnect**:
+Ending JMSR's current live Jellyfin connection while keeping any Saved Session available for later reconnect.
+_Avoid_: Sign out, clear session
+
+**Sign Out**:
+Ending the live Jellyfin connection and removing the Saved Session so JMSR requires authentication before reconnecting.
+_Avoid_: Temporary disconnect
+
 **Login Prefill**:
 Remembered unauthenticated login inputs, such as Server URL and username, used to make Password Login easier. Login Prefill is separate from a Saved Session.
 _Avoid_: Saved Session, remembered password
@@ -47,6 +55,10 @@ _Avoid_: Primary login
 **Login Method**:
 One of the user-selectable ways to authenticate to a known Server URL. Quick Connect and Password Login are the Login Methods currently exposed by JMSR.
 _Avoid_: Account type, server type
+
+**Now Playing**:
+The user-facing playback status shown by JMSR for the current external player session. Now Playing may show transport state before rich Jellyfin media metadata is available.
+_Avoid_: MPV state, playback session internals
 
 **Intro Skipper**:
 A Jellyfin server plugin that detects intro and credit ranges for media items so a Playback Target can skip those ranges during playback. In JMSR, Intro Skipper refers to the plugin-provided ranges, not Jellyfin media segments in general.
@@ -82,7 +94,7 @@ Dev: "What if Quick Connect is disabled on the server?"
 
 Domain expert: "The user toggles to Password Login and signs in with their Jellyfin credentials."
 
-Dev: "Can I start Quick Connect from Settings?"
+Dev: "Can I start Quick Connect from the Operations Console?"
 
 Domain expert: "No. Disconnect first, then authenticate again from the Login screen."
 

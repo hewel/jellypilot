@@ -4,13 +4,6 @@ import { render } from 'solid-js/web';
 import { commands } from '../src/bindings';
 import LoginPage from '../src/components/LoginPage';
 
-afterEach(() => {
-  rstest.restoreAllMocks();
-  rstest.useRealTimers();
-  localStorage.clear();
-  document.body.innerHTML = '';
-});
-
 function renderLoginPage(onConnected = () => undefined) {
   const root = document.createElement('div');
   document.body.append(root);
@@ -21,14 +14,85 @@ function renderLoginPage(onConnected = () => undefined) {
   };
 }
 
+afterEach(() => {
+  rstest.restoreAllMocks();
+  rstest.useRealTimers();
+  localStorage.clear();
+  document.body.innerHTML = '';
+});
+
 test('login page shows quick connect as the default login method', () => {
   const cleanup = renderLoginPage();
 
-  expect(screen.getByRole('button', { name: 'Request code' })).toBeVisible();
   expect(
-    screen.getByRole('button', { name: 'Use password instead' }),
+    screen.getByRole('button', { name: 'Request Quick Connect code' }),
   ).toBeVisible();
-  expect(screen.queryByLabelText('Username')).not.toBeInTheDocument();
+  expect(screen.getByRole('tab', { name: 'Quick Connect' })).toHaveAttribute(
+    'aria-selected',
+    'true',
+  );
+  expect(screen.queryByText('Username')).not.toBeInTheDocument();
+
+  cleanup();
+});
+
+test('login page builds local http server url preview with jellyfin port', () => {
+  const cleanup = renderLoginPage();
+
+  fireEvent.input(
+    screen.getByPlaceholderText('jellyfin.local or media.example.com/jellyfin'),
+    {
+      target: { value: '192.168.1.20' },
+    },
+  );
+
+  expect(screen.getByText('http://192.168.1.20:8096')).toBeVisible();
+  expect(screen.getByRole('button', { name: 'HTTP' })).toHaveClass(
+    'bg-primary',
+  );
+
+  cleanup();
+});
+
+test('login page preserves explicit pasted schemes', () => {
+  const cleanup = renderLoginPage();
+
+  fireEvent.input(
+    screen.getByPlaceholderText('jellyfin.local or media.example.com/jellyfin'),
+    {
+      target: { value: 'http://media.example.com' },
+    },
+  );
+  expect(screen.getByText('http://media.example.com')).toBeVisible();
+  expect(screen.getByRole('button', { name: 'HTTP' })).toHaveClass(
+    'bg-primary',
+  );
+
+  fireEvent.input(
+    screen.getByPlaceholderText('jellyfin.local or media.example.com/jellyfin'),
+    {
+      target: { value: 'https://192.168.1.20:8096' },
+    },
+  );
+  expect(screen.getByText('https://192.168.1.20:8096')).toBeVisible();
+  expect(screen.getByRole('button', { name: 'HTTPS' })).toHaveClass(
+    'bg-primary',
+  );
+
+  cleanup();
+});
+
+test('login page preserves public reverse proxy path without default jellyfin port', () => {
+  const cleanup = renderLoginPage();
+
+  fireEvent.input(
+    screen.getByPlaceholderText('jellyfin.local or media.example.com/jellyfin'),
+    {
+      target: { value: 'media.example.com/jellyfin' },
+    },
+  );
+
+  expect(screen.getByText('https://media.example.com/jellyfin')).toBeVisible();
 
   cleanup();
 });
@@ -44,41 +108,46 @@ test('login page locks quick connect request while waiting for approval', async 
   });
   const cleanup = renderLoginPage();
 
-  fireEvent.input(screen.getByLabelText('Server URL'), {
-    target: { value: 'https://jellyfin.example.com' },
-  });
-  fireEvent.click(screen.getByRole('button', { name: 'Request code' }));
+  fireEvent.input(
+    screen.getByPlaceholderText('jellyfin.local or media.example.com/jellyfin'),
+    {
+      target: { value: 'jellyfin.example.com' },
+    },
+  );
+  fireEvent.click(
+    screen.getByRole('button', { name: 'Request Quick Connect code' }),
+  );
 
   await waitFor(() => expect(screen.getByText('ABCD12')).toBeVisible());
-  expect(screen.getByLabelText('Server URL')).toBeDisabled();
   expect(
-    screen.getByRole('button', { name: 'Use password instead' }),
+    screen.getByPlaceholderText('jellyfin.local or media.example.com/jellyfin'),
   ).toBeDisabled();
-  expect(screen.getByRole('button', { name: 'Cancel' })).toBeVisible();
+  expect(screen.getByRole('tab', { name: 'Password' })).toBeDisabled();
+  expect(screen.getByRole('button', { name: 'Cancel Request' })).toBeVisible();
 
-  fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+  fireEvent.click(screen.getByRole('button', { name: 'Cancel Request' }));
 
   await waitFor(() =>
-    expect(screen.getByLabelText('Server URL')).not.toBeDisabled(),
+    expect(
+      screen.getByPlaceholderText(
+        'jellyfin.local or media.example.com/jellyfin',
+      ),
+    ).not.toBeDisabled(),
   );
-  expect(screen.getByRole('button', { name: 'Request code' })).toBeVisible();
 
   cleanup();
 });
 
-test('login page shows password login after fallback toggle', async () => {
+test('login page shows password login after method selection', async () => {
   const cleanup = renderLoginPage();
 
-  fireEvent.click(screen.getByRole('button', { name: 'Use password instead' }));
+  fireEvent.click(screen.getByRole('tab', { name: 'Password' }));
 
-  await waitFor(() => expect(screen.getByLabelText('Username')).toBeVisible());
-  expect(screen.getByLabelText('Password')).toBeVisible();
-  expect(screen.getByLabelText('Remember server and username')).toBeVisible();
+  await waitFor(() => expect(screen.getByText('Username')).toBeVisible());
+  expect(screen.getByPlaceholderText('Jellyfin password')).toBeVisible();
+  expect(screen.getByText('Remember Server URL and username')).toBeVisible();
   expect(
-    screen.getByRole('button', { name: 'Use Quick Connect' }),
-  ).toBeVisible();
-  expect(
-    screen.queryByRole('button', { name: 'Request code' }),
+    screen.queryByRole('button', { name: 'Request Quick Connect code' }),
   ).not.toBeInTheDocument();
 
   cleanup();
@@ -109,10 +178,15 @@ test('login page completes quick connect when approval is observed', async () =>
   const onConnected = rstest.fn();
   const cleanup = renderLoginPage(onConnected);
 
-  fireEvent.input(screen.getByLabelText('Server URL'), {
-    target: { value: 'https://jellyfin.example.com' },
-  });
-  fireEvent.click(screen.getByRole('button', { name: 'Request code' }));
+  fireEvent.input(
+    screen.getByPlaceholderText('jellyfin.local or media.example.com/jellyfin'),
+    {
+      target: { value: 'jellyfin.example.com' },
+    },
+  );
+  fireEvent.click(
+    screen.getByRole('button', { name: 'Request Quick Connect code' }),
+  );
 
   await waitFor(() => expect(screen.getByText('ABCD12')).toBeVisible());
   await rstest.advanceTimersByTimeAsync(5000);

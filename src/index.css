@@ -1,221 +1,240 @@
 @import "tailwindcss";
 
 /* ==========================================================================\
-   Material Design 3 - Dark Theme
-   Generated from Jellyfin seed color #00A4DC (Purple/Blue variant)
+   JMSR Control Room - Dark Desktop Theme
    ========================================================================== */
 
 @theme {
-  /* Primary colors */
-  --color-primary: #8fcef3;
-  --color-on-primary: #003549;
-  --color-primary-container: #004c69;
-  --color-on-primary-container: #c3e7ff;
+  --font-sans: "Inter Variable", ui-sans-serif, system-ui, sans-serif;
+  --font-display:
+    "Space Grotesk Variable", "Inter Variable", ui-sans-serif, system-ui,
+    sans-serif;
+  --font-mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
 
-  /* Secondary colors */
-  --color-secondary: #b5c9d7;
-  --color-on-secondary: #20333e;
-  --color-secondary-container: #364955;
-  --color-on-secondary-container: #d1e5f4;
+  --color-primary: #a501db;
+  --color-on-primary: #ffffff;
+  --color-primary-container: #2a0b38;
+  --color-on-primary-container: #f4d7ff;
 
-  /* Tertiary colors */
-  --color-tertiary: #cac1ea;
-  --color-on-tertiary: #322c4c;
-  --color-tertiary-container: #484264;
-  --color-on-tertiary-container: #e6deff;
+  --color-secondary: #39d5ff;
+  --color-on-secondary: #001f2a;
+  --color-secondary-container: #073544;
+  --color-on-secondary-container: #bdeeff;
 
-  /* Error colors */
-  --color-error: #ffb4ab;
-  --color-on-error: #690005;
-  --color-error-container: #93000a;
-  --color-on-error-container: #ffdad6;
+  --color-tertiary: #4fe3b1;
+  --color-on-tertiary: #001f16;
+  --color-tertiary-container: #06382a;
+  --color-on-tertiary-container: #bfffe8;
 
-  /* Surface colors */
-  --color-surface: #0f1417;
-  --color-on-surface: #dfe3e7;
-  --color-surface-variant: #40484c;
-  --color-on-surface-variant: #c0c8cc;
+  --color-warning: #f6c768;
+  --color-on-warning: #2a1a00;
+  --color-warning-container: #3f2e08;
+  --color-on-warning-container: #ffe7a8;
 
-  /* Surface Containers (M3 Elevation replacement) */
-  --color-surface-container-lowest: #0a0f11;
-  --color-surface-container-low: #171c1f;
-  --color-surface-container: #1b2023;
-  --color-surface-container-high: #252b2e;
-  --color-surface-container-highest: #303639;
+  --color-error: #ff6b7a;
+  --color-on-error: #330006;
+  --color-error-container: #4b1119;
+  --color-on-error-container: #ffd9de;
 
-  /* Outline */
-  --color-outline: #8a9296;
-  --color-outline-variant: #40484c;
+  --color-background: #07080d;
+  --color-on-background: #f3f6ff;
+  --color-surface: #0b0d14;
+  --color-on-surface: #f3f6ff;
+  --color-surface-variant: #30384c;
+  --color-on-surface-variant: #aeb8cc;
 
-  /* Background (matches surface in dark mode typically) */
-  --color-background: #0f1417;
-  --color-on-background: #dfe3e7;
+  --color-surface-container-lowest: #080a10;
+  --color-surface-container-low: #11131c;
+  --color-surface-container: #151823;
+  --color-surface-container-high: #1c2030;
+  --color-surface-container-highest: #242938;
+  --color-surface-tint: #a501db;
+  --color-brand-glow: #a501db;
+  --color-console-grid: #1a2240;
 
-  /* Shadow & Scrim */
-  --color-shadow: #000000;
-  --color-scrim: #000000;
-
-  /* Font Families (Optional overrides) */
-  --font-sans: "Roboto", ui-sans-serif, system-ui, sans-serif;
+  --color-outline: #738099;
+  --color-outline-variant: #30384c;
 }
 
-/* ==========================================================================\
-   Base Styles
-   ========================================================================== */
 body {
-  @apply bg-background text-on-surface font-sans antialiased selection:bg-primary-container selection:text-on-primary-container;
-  margin: 0;
+  @apply bg-background text-on-surface font-sans antialiased;
+  min-height: 100dvh;
+  background:
+    radial-gradient(
+      circle at top left,
+      rgb(165 1 219 / 0.18),
+      transparent 34rem
+    ),
+    radial-gradient(
+      circle at bottom right,
+      rgb(57 213 255 / 0.1),
+      transparent 30rem
+    ),
+    #07080d;
 }
 
-/* ==========================================================================\
-   M3 Typography Classes (Utility Helpers)
-   ========================================================================== */
 @layer components {
-  /* Display styles (Large, impressive headers) */
+  .brand-type,
+  .text-display-large,
+  .text-display-medium,
+  .text-display-small,
+  .text-headline-large,
+  .text-headline-medium,
+  .text-headline-small {
+    font-family: var(--font-display);
+  }
+
   .text-display-large {
-    @apply text-[57px] leading-[64px] font-normal tracking-[-0.25px];
+    @apply text-[57px] leading-[64px] tracking-[-0.25px];
   }
   .text-display-medium {
-    @apply text-[45px] leading-[52px] font-normal tracking-[0px];
+    @apply text-[45px] leading-[52px];
   }
   .text-display-small {
-    @apply text-[36px] leading-[44px] font-normal tracking-[0px];
+    @apply text-[36px] leading-[44px];
   }
-
-  /* Headline styles (Section headers) */
   .text-headline-large {
-    @apply text-[32px] leading-[40px] font-normal tracking-[0px];
+    @apply text-[32px] leading-[40px];
   }
   .text-headline-medium {
-    @apply text-[28px] leading-[36px] font-normal tracking-[0px];
+    @apply text-[28px] leading-[36px];
   }
   .text-headline-small {
-    @apply text-[24px] leading-[32px] font-normal tracking-[0px];
+    @apply text-[24px] leading-[32px];
   }
-
-  /* Title styles (Card titles, Dialog titles) */
   .text-title-large {
-    @apply text-[22px] leading-[28px] font-normal tracking-[0px];
+    @apply text-[22px] leading-[28px] font-medium;
   }
   .text-title-medium {
-    @apply text-[16px] leading-[24px] font-medium tracking-[0.15px];
+    @apply text-[16px] leading-[24px] font-semibold;
   }
   .text-title-small {
-    @apply text-[14px] leading-[20px] font-medium tracking-[0.1px];
+    @apply text-[14px] leading-[20px] font-semibold;
   }
-
-  /* Body styles (Reading text) */
   .text-body-large {
-    @apply text-[16px] leading-[24px] font-normal tracking-[0.5px];
+    @apply text-[16px] leading-[24px];
   }
   .text-body-medium {
-    @apply text-[14px] leading-[20px] font-normal tracking-[0.25px];
+    @apply text-[14px] leading-[20px];
   }
   .text-body-small {
-    @apply text-[12px] leading-[16px] font-normal tracking-[0.4px];
+    @apply text-[12px] leading-[16px];
   }
-
-  /* Label styles (Buttons, Captions) */
   .text-label-large {
-    @apply text-[14px] leading-[20px] font-medium tracking-[0.1px];
+    @apply text-[14px] leading-[20px] font-semibold;
   }
   .text-label-medium {
-    @apply text-[12px] leading-[16px] font-medium tracking-[0.5px];
+    @apply text-[12px] leading-[16px] font-semibold tracking-[0.3px];
   }
   .text-label-small {
-    @apply text-[11px] leading-[16px] font-medium tracking-[0.5px];
+    @apply text-[11px] leading-[16px] font-semibold tracking-[0.3px];
   }
 }
 
-/* ==========================================================================\
-   M3 Components
-   ========================================================================== */
 @layer components {
-  /* --- Inputs --- */
-
-  /* Basic Input style reset */
-  .input-base {
-    @apply w-full px-4 text-[16px] leading-[24px] font-normal tracking-[0.5px] text-on-surface bg-transparent focus:outline-none placeholder-on-surface-variant/70 transition-all duration-200;
+  .console-shell {
+    @apply min-h-dvh bg-background text-on-surface p-4 sm:p-6 lg:p-8;
   }
 
-  /* M3 Filled Input (Standard) */
-  /* Usage: <div class="input-filled-container"><input class="input-base" .../><label>...</label></div> */
+  .console-container {
+    @apply mx-auto w-full max-w-6xl space-y-6;
+  }
+
+  .console-grid {
+    @apply grid grid-cols-1 gap-6 lg:grid-cols-[minmax(0,1.25fr)_minmax(320px,0.75fr)];
+  }
+
+  .status-grid {
+    @apply grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4;
+  }
+
+  .hero-panel {
+    @apply relative overflow-hidden rounded-[2rem] border border-primary/20 bg-surface-container-low p-6 shadow-2xl shadow-primary/10;
+  }
+
+  .hero-panel::before {
+    content: "";
+    @apply pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_20%_0%,rgb(165_1_219/0.22),transparent_35%),radial-gradient(circle_at_90%_20%,rgb(57_213_255/0.14),transparent_30%)];
+  }
+
+  .status-tile {
+    @apply rounded-2xl border border-outline-variant/70 bg-surface-container p-4 shadow-lg shadow-black/20 transition-colors duration-200;
+  }
+
+  .status-tile-icon {
+    @apply flex h-10 w-10 items-center justify-center rounded-2xl bg-surface-container-high text-primary;
+  }
+
   .input-filled {
-    @apply h-14 bg-surface-container-highest rounded-t-lg border-b border-on-surface-variant hover:bg-surface-container-highest/80 focus:border-b-2 focus:border-primary px-4 text-on-surface placeholder-on-surface-variant transition-colors;
+    @apply h-14 rounded-2xl border border-outline-variant bg-surface-container-high px-4 text-on-surface placeholder-on-surface-variant/70 outline-none transition-colors duration-200 hover:border-outline focus:border-primary focus:ring-2 focus:ring-primary/30 disabled:cursor-not-allowed disabled:opacity-50;
   }
 
-  /* M3 Outlined Input */
   .input-outlined {
-    @apply h-14 bg-transparent rounded-lg border border-outline text-on-surface px-4 focus:border-2 focus:border-primary focus:text-primary transition-all;
+    @apply h-14 rounded-2xl border border-outline bg-transparent px-4 text-on-surface outline-none transition-colors duration-200 focus:border-primary focus:ring-2 focus:ring-primary/30 disabled:cursor-not-allowed disabled:opacity-50;
   }
 
-  /* Default Legacy Input Style (Kept for backward compatibility) */
-  input[type="text"]:not(.no-style),
-  input[type="password"]:not(.no-style),
-  input[type="url"]:not(.no-style) {
-    @apply h-12 w-full px-4 bg-surface-container border border-outline-variant rounded-lg text-on-surface placeholder-on-surface-variant focus:outline-none focus:border-primary focus:ring-1 focus:ring-primary transition-all duration-200;
+  .select-filled {
+    @apply h-14 rounded-2xl border border-outline-variant bg-surface-container-high px-4 text-on-surface outline-none transition-colors duration-200 focus:border-primary focus:ring-2 focus:ring-primary/30;
   }
 
-  /* --- Buttons --- */
-
-  /* 1. Filled Button (High Emphasis) */
   .btn-primary {
-    @apply h-10 px-6 bg-primary text-on-primary text-[14px] leading-[20px] font-medium tracking-[0.1px] rounded-full hover:bg-primary/90 hover:shadow-md active:scale-[0.98] disabled:bg-on-surface/12 disabled:text-on-surface/38 disabled:shadow-none disabled:cursor-not-allowed flex items-center justify-center gap-2 transition-all duration-200 ease-out;
+    @apply inline-flex min-h-11 items-center justify-center gap-2 rounded-full bg-primary px-6 py-2.5 text-[14px] leading-[20px] font-semibold text-on-primary shadow-lg shadow-primary/25 transition duration-200 hover:bg-[#B91AED] focus:outline-none focus:ring-2 focus:ring-primary/50 focus:ring-offset-2 focus:ring-offset-background active:scale-[0.98] disabled:pointer-events-none disabled:opacity-50;
   }
 
-  /* 2. Tonal Button (Medium Emphasis) */
+  .btn-secondary,
   .btn-tonal {
-    @apply h-10 px-6 bg-secondary-container text-on-secondary-container text-[14px] leading-[20px] font-medium tracking-[0.1px] rounded-full hover:bg-secondary-container/90 hover:shadow-sm active:scale-[0.98] disabled:bg-on-surface/12 disabled:text-on-surface/38 disabled:cursor-not-allowed flex items-center justify-center gap-2 transition-all duration-200 ease-out;
+    @apply inline-flex min-h-11 items-center justify-center gap-2 rounded-full bg-secondary-container px-6 py-2.5 text-[14px] leading-[20px] font-semibold text-on-secondary-container transition duration-200 hover:bg-secondary-container/80 focus:outline-none focus:ring-2 focus:ring-secondary/40 focus:ring-offset-2 focus:ring-offset-background active:scale-[0.98] disabled:pointer-events-none disabled:opacity-50;
   }
 
-  /* Backward compatibility alias for existing code */
-  .btn-secondary {
-    @apply h-10 px-6 bg-secondary-container text-on-secondary-container text-[14px] leading-[20px] font-medium tracking-[0.1px] rounded-full hover:bg-secondary-container/90 hover:shadow-sm active:scale-[0.98] disabled:bg-on-surface/12 disabled:text-on-surface/38 disabled:cursor-not-allowed flex items-center justify-center gap-2 transition-all duration-200 ease-out;
-  }
-
-  /* 3. Outlined Button (Low Emphasis) */
   .btn-outlined {
-    @apply h-10 px-6 bg-transparent border border-outline text-primary text-[14px] leading-[20px] font-medium tracking-[0.1px] rounded-full hover:bg-primary/8 focus:ring-2 focus:ring-primary active:bg-primary/12 disabled:border-on-surface/12 disabled:text-on-surface/38 disabled:cursor-not-allowed flex items-center justify-center gap-2 transition-all duration-200 ease-out;
+    @apply inline-flex min-h-11 items-center justify-center gap-2 rounded-full border border-outline px-6 py-2.5 text-[14px] leading-[20px] font-semibold text-on-surface transition duration-200 hover:border-primary hover:bg-primary/10 hover:text-on-surface focus:outline-none focus:ring-2 focus:ring-primary/40 focus:ring-offset-2 focus:ring-offset-background active:scale-[0.98] disabled:pointer-events-none disabled:opacity-50;
   }
 
-  /* 4. Text Button (Lowest Emphasis) */
   .btn-text {
-    @apply h-10 px-4 bg-transparent text-primary text-[14px] leading-[20px] font-medium tracking-[0.1px] rounded-full min-w-[64px] hover:bg-primary/8 active:bg-primary/12 disabled:text-on-surface/38 disabled:cursor-not-allowed flex items-center justify-center gap-2 transition-all duration-200 ease-out;
+    @apply inline-flex min-h-10 items-center justify-center gap-2 rounded-full px-4 py-2 text-[14px] leading-[20px] font-semibold text-secondary transition duration-200 hover:bg-secondary/10 focus:outline-none focus:ring-2 focus:ring-secondary/40 focus:ring-offset-2 focus:ring-offset-background active:scale-[0.98] disabled:pointer-events-none disabled:opacity-50;
   }
 
-  /* 5. Icon Button */
   .btn-icon {
-    @apply w-10 h-10 rounded-full flex items-center justify-center text-on-surface-variant hover:bg-on-surface-variant/8 active:bg-on-surface-variant/12 transition-colors;
+    @apply inline-flex h-11 w-11 items-center justify-center rounded-full text-on-surface-variant transition duration-200 hover:bg-primary/10 hover:text-on-surface focus:outline-none focus:ring-2 focus:ring-primary/40 focus:ring-offset-2 focus:ring-offset-background active:scale-[0.96] disabled:pointer-events-none disabled:opacity-50;
   }
 
-  /* --- Cards --- */
-
-  /* Elevated Card */
   .card-elevated {
-    @apply bg-surface-container-low rounded-xl p-4 shadow-md text-on-surface transition-shadow hover:shadow-lg;
+    @apply rounded-[1.75rem] border border-outline-variant/60 bg-surface-container-low p-6 shadow-2xl shadow-black/30;
   }
 
-  /* Filled Card (Default) */
   .card-filled {
-    @apply bg-surface-container-highest rounded-xl p-4 text-on-surface border border-transparent;
+    @apply rounded-[1.5rem] border border-outline-variant/60 bg-surface-container p-6 shadow-lg shadow-black/20;
   }
 
-  /* Outlined Card */
   .card-outlined {
-    @apply bg-surface rounded-xl p-4 border border-outline-variant text-on-surface;
+    @apply rounded-[1.5rem] border border-outline-variant bg-surface p-6;
+  }
+
+  .diagnostic-row {
+    @apply rounded-xl border border-outline-variant/50 bg-surface-container-lowest px-3 py-2 font-mono text-[12px] leading-5 text-on-surface-variant;
   }
 }
 
-/* Scrollbar Styling (Optional but recommended for Desktop Apps) */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  ::before,
+  ::after {
+    animation-duration: 0.01ms;
+    animation-iteration-count: 1;
+    scroll-behavior: auto;
+    transition-duration: 0.01ms;
+  }
+}
+
 ::-webkit-scrollbar {
-  width: 8px;
-  height: 8px;
+  width: 10px;
+  height: 10px;
 }
 ::-webkit-scrollbar-track {
-  @apply bg-surface-container;
+  @apply bg-surface-container-lowest;
 }
 ::-webkit-scrollbar-thumb {
-  @apply bg-outline-variant rounded-full;
+  @apply rounded-full bg-outline-variant;
 }
 ::-webkit-scrollbar-thumb:hover {
   @apply bg-outline;

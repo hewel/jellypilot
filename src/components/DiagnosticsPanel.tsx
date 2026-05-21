@@ -20,13 +20,17 @@ interface DiagnosticEntry {
   time: string;
 }
 
+interface DiagnosticsPanelProps {
+  compact?: boolean;
+}
+
 const MAX_DIAGNOSTICS = 200;
 
 const LOG_LEVEL: Record<number, { name: string; color: string }> = {
   1: { name: 'TRACE', color: 'text-outline' },
   2: { name: 'DEBUG', color: 'text-on-surface-variant' },
-  3: { name: 'INFO', color: 'text-primary' },
-  4: { name: 'WARN', color: 'text-secondary' },
+  3: { name: 'INFO', color: 'text-secondary' },
+  4: { name: 'WARN', color: 'text-warning' },
   5: { name: 'ERROR', color: 'text-error' },
 };
 
@@ -52,7 +56,7 @@ function sanitizeDiagnosticMessage(message: string) {
 function toDiagnosticEntry(entry: BackendLogEntry): DiagnosticEntry {
   const level = LOG_LEVEL[entry.level] ?? {
     name: 'UNKNOWN',
-    color: 'text-gray-400',
+    color: 'text-on-surface-variant',
   };
 
   return {
@@ -69,9 +73,8 @@ function formatDiagnosticsForClipboard(entries: DiagnosticEntry[]) {
     .join('\n');
 }
 
-export default function DiagnosticsPanel() {
+export default function DiagnosticsPanel(props: DiagnosticsPanelProps) {
   const [diagnostics, setDiagnostics] = createSignal<DiagnosticEntry[]>([]);
-  const [expanded, setExpanded] = createSignal(false);
   const [autoScroll, setAutoScroll] = createSignal(true);
   const [copyStatus, setCopyStatus] = createSignal<
     'idle' | 'copied' | 'failed'
@@ -101,22 +104,14 @@ export default function DiagnosticsPanel() {
   });
 
   createEffect(() => {
-    if (autoScroll() && containerRef) {
+    if (!props.compact && autoScroll() && containerRef) {
       diagnostics();
       containerRef.scrollTop = containerRef.scrollHeight;
     }
   });
 
-  const toggleExpand = () => {
-    setExpanded(!expanded());
-  };
-
-  const handleScroll = () => {
-    if (containerRef) {
-      const { scrollTop, scrollHeight, clientHeight } = containerRef;
-      setAutoScroll(scrollTop + clientHeight >= scrollHeight - 10);
-    }
-  };
+  const visibleEntries = () =>
+    props.compact ? diagnostics().slice(-5) : diagnostics();
 
   const clearDiagnostics = () => {
     setDiagnostics([]);
@@ -135,130 +130,79 @@ export default function DiagnosticsPanel() {
   };
 
   return (
-    <div class="card-outlined overflow-hidden p-0">
-      <button
-        type="button"
-        class="w-full flex items-center justify-between p-4 hover:bg-surface-container-high/50 transition-colors group"
-        onClick={toggleExpand}
-        aria-expanded={expanded()}
+    <div class="space-y-3">
+      <div class="flex items-center justify-between gap-3">
+        <p class="text-body-small text-on-surface-variant">
+          {diagnostics().length} sanitized runtime events
+        </p>
+        <Show when={!props.compact}>
+          <label class="flex items-center gap-2 text-label-small text-on-surface-variant">
+            <input
+              type="checkbox"
+              checked={autoScroll()}
+              onChange={(event) => setAutoScroll(event.currentTarget.checked)}
+              class="rounded border-outline-variant bg-surface-container-high text-primary focus:ring-primary/50"
+            />
+            Auto-scroll
+          </label>
+        </Show>
+      </div>
+
+      <div
+        ref={containerRef}
+        class={`${props.compact ? 'max-h-56' : 'max-h-96'} space-y-2 overflow-y-auto rounded-2xl border border-outline-variant/60 bg-surface-container-lowest p-2`}
       >
-        <div class="flex items-center gap-3">
-          <div class="p-2 bg-primary/10 rounded-full group-hover:bg-primary/20 transition-colors">
-            <svg
-              class="w-5 h-5 text-primary"
-              fill="none"
-              stroke="currentColor"
-              viewBox="0 0 24 24"
-              aria-hidden="true"
-            >
-              <path
-                stroke-linecap="round"
-                stroke-linejoin="round"
-                stroke-width="2"
-                d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"
-              />
-            </svg>
-          </div>
-          <div>
-            <h2 class="text-title-medium text-on-surface text-left">
-              Diagnostics
-            </h2>
-            <div class="text-on-surface-variant text-label-small mt-0.5 flex gap-2">
-              <span>Recent runtime events for support troubleshooting</span>
-              <span class="px-1.5 py-0.5 bg-surface-container-highest rounded-md font-mono">
-                {diagnostics().length} entries
-              </span>
-            </div>
-          </div>
-        </div>
-        <svg
-          class={`w-5 h-5 text-on-surface-variant transition-transform duration-300 ${expanded() ? 'rotate-180' : ''}`}
-          fill="none"
-          stroke="currentColor"
-          viewBox="0 0 24 24"
-          aria-hidden="true"
+        <Show
+          when={visibleEntries().length > 0}
+          fallback={
+            <p class="py-8 text-center text-body-small text-on-surface-variant">
+              No diagnostics yet. Runtime events from the Rust backend will
+              appear here.
+            </p>
+          }
         >
-          <path
-            stroke-linecap="round"
-            stroke-linejoin="round"
-            stroke-width="2"
-            d="M19 9l-7 7-7-7"
-          />
-        </svg>
-      </button>
+          <For each={visibleEntries()}>
+            {(entry) => (
+              <div class="diagnostic-row">
+                <div class="flex flex-wrap gap-x-3 gap-y-1">
+                  <span class="text-outline">{entry.time}</span>
+                  <span class={entry.levelClass}>{entry.levelName}</span>
+                  <span class="break-all text-on-surface-variant">
+                    {entry.message}
+                  </span>
+                </div>
+              </div>
+            )}
+          </For>
+        </Show>
+      </div>
 
-      <Show when={expanded()}>
-        <div class="border-t border-outline-variant/30 animate-in slide-in-from-top-2 fade-in duration-200">
-          <div class="flex items-center justify-between px-4 py-2 bg-surface-container-low">
-            <label class="flex items-center gap-1.5 text-label-small text-on-surface-variant cursor-pointer">
-              <input
-                type="checkbox"
-                checked={autoScroll()}
-                onChange={(e) => setAutoScroll(e.target.checked)}
-                class="rounded bg-surface-container-high border-outline-variant text-primary focus:ring-primary/50"
-              />
-              Auto-scroll
-            </label>
-
-            <div class="flex items-center gap-2">
-              <Show when={copyStatus() !== 'idle'}>
-                <span
-                  role="status"
-                  aria-live="polite"
-                  class={`text-label-small ${copyStatus() === 'copied' ? 'text-primary' : 'text-error'}`}
-                >
-                  {copyStatus() === 'copied' ? 'Copied' : 'Copy failed'}
-                </span>
-              </Show>
-              <button
-                type="button"
-                onClick={copyDiagnostics}
-                disabled={diagnostics().length === 0}
-                class="btn-text h-8 min-w-0 px-3 text-label-small disabled:opacity-50 disabled:cursor-not-allowed"
-              >
-                Copy diagnostics
-              </button>
-              <button
-                type="button"
-                onClick={clearDiagnostics}
-                class="btn-text h-8 min-w-0 px-3 text-label-small"
-              >
-                Clear
-              </button>
-            </div>
-          </div>
-
-          <div
-            ref={containerRef}
-            onScroll={handleScroll}
-            class="h-64 overflow-y-auto bg-surface-container-lowest/50 font-mono text-body-small p-2 space-y-0.5"
+      <div class="flex flex-wrap items-center justify-end gap-2">
+        <Show when={copyStatus() !== 'idle'}>
+          <span
+            role="status"
+            aria-live="polite"
+            class={`text-label-small ${copyStatus() === 'copied' ? 'text-tertiary' : 'text-error'}`}
           >
-            <Show
-              when={diagnostics().length > 0}
-              fallback={
-                <p class="text-outline text-center py-8">
-                  No diagnostics yet. Runtime events from the Rust backend will
-                  appear here.
-                </p>
-              }
-            >
-              <For each={diagnostics()}>
-                {(entry) => (
-                  <div class="flex gap-2 hover:bg-on-surface/5 px-1 rounded">
-                    <span class="shrink-0 w-20 text-outline">{entry.time}</span>
-                    <span class={`shrink-0 w-12 ${entry.levelClass}`}>
-                      {entry.levelName}
-                    </span>
-                    <span class="text-on-surface-variant break-all">
-                      {entry.message}
-                    </span>
-                  </div>
-                )}
-              </For>
-            </Show>
-          </div>
-        </div>
-      </Show>
+            {copyStatus() === 'copied' ? 'Copied' : 'Copy failed'}
+          </span>
+        </Show>
+        <button
+          type="button"
+          onClick={copyDiagnostics}
+          disabled={diagnostics().length === 0}
+          class="btn-text min-h-9 px-3 text-label-small"
+        >
+          Copy diagnostics
+        </button>
+        <button
+          type="button"
+          onClick={clearDiagnostics}
+          class="btn-text min-h-9 px-3 text-label-small"
+        >
+          Clear
+        </button>
+      </div>
     </div>
   );
 }

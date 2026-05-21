@@ -8,18 +8,16 @@ import {
 } from '@tanstack/solid-router';
 import { commands, type SavedSession } from './bindings';
 import LoginPage from './components/LoginPage';
-import SettingsPage from './components/SettingsPage';
+import OperationsConsole from './components/OperationsConsole';
 
 const SESSION_STORAGE_KEY = 'jmsr_auth_session';
 
 export function loadSavedSession(): SavedSession | null {
   try {
     const saved = localStorage.getItem(SESSION_STORAGE_KEY);
-    if (saved) {
-      return JSON.parse(saved) as SavedSession;
-    }
+    if (saved) return JSON.parse(saved) as SavedSession;
   } catch {
-    // Ignore parse errors
+    // Ignore parse errors.
   }
   return null;
 }
@@ -32,44 +30,45 @@ export function clearSavedSession(): void {
   localStorage.removeItem(SESSION_STORAGE_KEY);
 }
 
-// Check if user is authenticated (connected to Jellyfin)
-async function checkAuth(): Promise<boolean> {
-  try {
-    const isConnected = await commands.jellyfinIsConnected();
-    if (isConnected) {
-      return true;
-    }
+async function restoreSavedSession(): Promise<boolean> {
+  const savedSession = loadSavedSession();
+  if (!savedSession) return false;
 
-    // Try to restore saved session
-    const savedSession = loadSavedSession();
-    if (savedSession) {
-      const result = await commands.jellyfinRestoreSession(savedSession);
-      if (result.status === 'ok') {
-        return true;
-      }
-      // Session restoration failed - clear invalid session
-      clearSavedSession();
-    }
-    return false;
+  const result = await commands.jellyfinRestoreSession(savedSession);
+  if (result.status === 'ok') return true;
+
+  clearSavedSession();
+  return false;
+}
+
+async function checkAuthWithRestore(): Promise<boolean> {
+  try {
+    if (await commands.jellyfinIsConnected()) return true;
+    return await restoreSavedSession();
   } catch {
     return false;
   }
 }
 
-// Root route - renders outlet for child routes
+async function canAccessConsole(): Promise<boolean> {
+  try {
+    if (await commands.jellyfinIsConnected()) return true;
+  } catch {
+    // Fall back to Saved Session check.
+  }
+  return loadSavedSession() !== null;
+}
+
 const rootRoute = createRootRoute({
   component: () => <Outlet />,
 });
 
-// Login route
 const loginRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: '/login',
   beforeLoad: async () => {
-    // If already authenticated, redirect to settings
-    const isAuth = await checkAuth();
-    if (isAuth) {
-      throw redirect({ to: '/settings' });
+    if (await canAccessConsole()) {
+      throw redirect({ to: '/console' });
     }
   },
   component: LoginRouteComponent,
@@ -79,64 +78,52 @@ function LoginRouteComponent() {
   const navigate = useNavigate();
 
   const handleConnected = () => {
-    navigate({ to: '/settings' });
+    navigate({ to: '/console' });
   };
 
   return <LoginPage onConnected={handleConnected} />;
 }
 
-// Settings route (protected)
-const settingsRoute = createRoute({
+const consoleRoute = createRoute({
   getParentRoute: () => rootRoute,
-  path: '/settings',
+  path: '/console',
   beforeLoad: async () => {
-    // If not authenticated, redirect to login
-    const isAuth = await checkAuth();
-    if (!isAuth) {
+    if (!(await canAccessConsole())) {
       throw redirect({ to: '/login' });
     }
   },
-  component: SettingsRouteComponent,
+  component: ConsoleRouteComponent,
 });
 
-function SettingsRouteComponent() {
+function ConsoleRouteComponent() {
   const navigate = useNavigate();
 
-  const handleDisconnected = () => {
+  const handleSignedOut = () => {
     navigate({ to: '/login' });
   };
 
-  return <SettingsPage onDisconnected={handleDisconnected} />;
+  return <OperationsConsole onSignedOut={handleSignedOut} />;
 }
 
-// Index route - redirects based on auth state
 const indexRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: '/',
   beforeLoad: async () => {
-    const isAuth = await checkAuth();
-    if (isAuth) {
-      throw redirect({ to: '/settings' });
+    if (await checkAuthWithRestore()) {
+      throw redirect({ to: '/console' });
     }
     throw redirect({ to: '/login' });
   },
   component: () => null,
 });
 
-// Build route tree
-const routeTree = rootRoute.addChildren([
-  indexRoute,
-  loginRoute,
-  settingsRoute,
-]);
+const routeTree = rootRoute.addChildren([indexRoute, loginRoute, consoleRoute]);
 
-// Create router instance
 export const router = createRouter({
   routeTree,
   defaultPreload: 'intent',
 });
 
-// Register router for type safety
 declare module '@tanstack/solid-router' {
   interface Register {
     router: typeof router;

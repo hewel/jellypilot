@@ -48,7 +48,6 @@ async function emitLog(level: number, message: string) {
 test('diagnostics panel shows backend log entries with timestamps', async () => {
   const cleanup = renderDiagnosticsPanel();
 
-  fireEvent.click(screen.getByRole('button', { name: /Diagnostics/ }));
   await emitLog(3, 'WebSocket reconnected successfully');
 
   await waitFor(() =>
@@ -65,12 +64,13 @@ test('diagnostics panel shows backend log entries with timestamps', async () => 
 test('diagnostics panel keeps the latest 200 entries', async () => {
   const cleanup = renderDiagnosticsPanel();
 
-  fireEvent.click(screen.getByRole('button', { name: /Diagnostics/ }));
   for (let i = 0; i < 201; i += 1) {
     await emitLog(3, `event ${i}`);
   }
 
-  await waitFor(() => expect(screen.getByText('200 entries')).toBeVisible());
+  await waitFor(() =>
+    expect(screen.getByText('200 sanitized runtime events')).toBeVisible(),
+  );
   expect(screen.queryByText('event 0')).toBeNull();
   expect(screen.getByText('event 200')).toBeVisible();
 
@@ -80,7 +80,6 @@ test('diagnostics panel keeps the latest 200 entries', async () => {
 test('diagnostics panel copies visible diagnostics', async () => {
   const cleanup = renderDiagnosticsPanel();
 
-  fireEvent.click(screen.getByRole('button', { name: /Diagnostics/ }));
   await emitLog(4, 'MPV IPC connection closed');
   fireEvent.click(screen.getByRole('button', { name: 'Copy diagnostics' }));
 
@@ -96,7 +95,6 @@ test('diagnostics panel copies visible diagnostics', async () => {
 test('diagnostics panel redacts secret-bearing values', async () => {
   const cleanup = renderDiagnosticsPanel();
 
-  fireEvent.click(screen.getByRole('button', { name: /Diagnostics/ }));
   await emitLog(
     5,
     'Loading file: https://jellyfin.example.com/Videos/1/stream?api_key=secret-token&MediaSourceId=source-1',

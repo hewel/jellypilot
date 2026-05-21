@@ -1,8 +1,16 @@
 import { createForm } from '@tanstack/solid-form';
-import { Check, CircleAlert, LoaderCircle } from 'lucide-solid';
+import { Check, CircleAlert, LoaderCircle, RadioTower } from 'lucide-solid';
 import { createSignal, onCleanup, onMount, Show } from 'solid-js';
 import { type Credentials, commands } from '../bindings';
 import { saveSession } from '../router';
+import {
+  buildServerUrl,
+  defaultSchemeForHost,
+  explicitSchemeFromInput,
+  parseServerUrl,
+  type ServerScheme,
+  stripServerScheme,
+} from '../serverUrl';
 import { Card, PageFooter } from './ui';
 
 interface LoginPageProps {
@@ -11,38 +19,45 @@ interface LoginPageProps {
 
 const STORAGE_KEY = 'jmsr_saved_credentials';
 
+type LoginMethod = 'quickConnect' | 'password';
+type QuickConnectState = 'idle' | 'waiting' | 'failed';
+
 interface SavedCredentials {
   serverUrl: string;
   username: string;
   rememberMe: boolean;
 }
 
+interface LoginValues {
+  scheme: ServerScheme;
+  host: string;
+  username: string;
+  password: string;
+  rememberMe: boolean;
+}
+
 function loadSavedCredentials(): SavedCredentials | null {
   try {
     const saved = localStorage.getItem(STORAGE_KEY);
-    if (saved) {
-      return JSON.parse(saved) as SavedCredentials;
-    }
+    if (saved) return JSON.parse(saved) as SavedCredentials;
   } catch {
-    // Ignore parse errors
+    // Ignore parse errors.
   }
   return null;
 }
 
 function saveCredentials(serverUrl: string, username: string): void {
-  const data: SavedCredentials = { serverUrl, username, rememberMe: true };
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
+  localStorage.setItem(
+    STORAGE_KEY,
+    JSON.stringify({ serverUrl, username, rememberMe: true }),
+  );
 }
 
 function clearSavedCredentials(): void {
   localStorage.removeItem(STORAGE_KEY);
 }
 
-type LoginMethod = 'quickConnect' | 'password';
-type QuickConnectState = 'idle' | 'waiting' | 'failed';
-
 export default function LoginPage(props: LoginPageProps) {
-  const [error, setError] = createSignal<string | null>(null);
   const [loginMethod, setLoginMethod] =
     createSignal<LoginMethod>('quickConnect');
   const [quickConnectState, setQuickConnectState] =
@@ -50,10 +65,43 @@ export default function LoginPage(props: LoginPageProps) {
   const [quickConnectCode, setQuickConnectCode] = createSignal<string | null>(
     null,
   );
-  const [isQuickConnectSubmitting, setIsQuickConnectSubmitting] =
-    createSignal(false);
+  const [error, setError] = createSignal<string | null>(null);
+  const [submitting, setSubmitting] = createSignal(false);
   let pollInterval: ReturnType<typeof setInterval> | undefined;
   let timeoutHandle: ReturnType<typeof setTimeout> | undefined;
+
+  const form = createForm(() => ({
+    defaultValues: {
+      scheme: 'https' as ServerScheme,
+      host: '',
+      username: '',
+      password: '',
+      rememberMe: false,
+    },
+    onSubmit: async ({ value }) => {
+      if (loginMethod() === 'quickConnect') {
+        await startQuickConnect(value);
+      } else {
+        await connectWithPassword(value);
+      }
+    },
+  }));
+  const formValues = form.useStore((state) => state.values);
+
+  const isQuickConnectWaiting = () => quickConnectState() === 'waiting';
+
+  const serverUrlResult = () => {
+    try {
+      return buildServerUrl({
+        scheme: formValues().scheme,
+        host: formValues().host,
+      });
+    } catch {
+      return null;
+    }
+  };
+
+  const serverUrl = () => serverUrlResult()?.url ?? '';
 
   const stopQuickConnectPolling = () => {
     if (pollInterval) {
@@ -71,61 +119,26 @@ export default function LoginPage(props: LoginPageProps) {
     setQuickConnectState('idle');
     setQuickConnectCode(null);
     setError(null);
-    setIsQuickConnectSubmitting(false);
+    setSubmitting(false);
   };
 
   const finishConnected = async () => {
     const session = await commands.jellyfinGetSession();
-    if (session) {
-      saveSession(session);
-    }
-
+    if (session) saveSession(session);
     props.onConnected();
   };
 
-  const form = createForm(() => ({
-    defaultValues: {
-      serverUrl: '',
-      username: '',
-      password: '',
-      rememberMe: false,
-    },
-    onSubmit: async ({ value }) => {
-      setError(null);
-
-      if (loginMethod() === 'quickConnect') {
-        await startQuickConnect(value.serverUrl);
-        return;
-      }
-
-      const credentials: Credentials = {
-        serverUrl: value.serverUrl,
-        username: value.username,
-        password: value.password,
-      };
-
-      try {
-        const result = await commands.jellyfinConnect(credentials);
-        if (result.status === 'ok') {
-          // Save or clear credentials based on rememberMe
-          if (value.rememberMe) {
-            saveCredentials(value.serverUrl, value.username);
-          } else {
-            clearSavedCredentials();
-          }
-
-          await finishConnected();
-        } else {
-          setError(result.error.message);
-        }
-      } catch (err) {
-        setError(err instanceof Error ? err.message : 'Connection failed');
-      }
-    },
-  }));
-
-  const isSubmitting = form.useStore((state) => state.isSubmitting);
-  const isQuickConnectWaiting = () => quickConnectState() === 'waiting';
+  const validateServerUrl = (value: LoginValues): string | null => {
+    if (!value.host.trim()) return 'Server host is required';
+    try {
+      buildServerUrl({ scheme: value.scheme, host: value.host });
+      return null;
+    } catch (err) {
+      return err instanceof Error
+        ? err.message
+        : 'Enter a valid Jellyfin server host';
+    }
+  };
 
   const checkQuickConnectApproval = async (
     serverUrlValue: string,
@@ -142,17 +155,15 @@ export default function LoginPage(props: LoginPageProps) {
       return;
     }
 
-    if (result.data !== 'approved') {
-      return;
-    }
+    if (result.data !== 'approved') return;
 
     stopQuickConnectPolling();
-    setIsQuickConnectSubmitting(true);
+    setSubmitting(true);
     const authResult = await commands.jellyfinQuickConnectAuthenticate(
       serverUrlValue,
       secret,
     );
-    setIsQuickConnectSubmitting(false);
+    setSubmitting(false);
 
     if (authResult.status === 'error') {
       setQuickConnectState('failed');
@@ -163,20 +174,18 @@ export default function LoginPage(props: LoginPageProps) {
     await finishConnected();
   };
 
-  const startQuickConnect = async (serverUrlValue: string) => {
+  const startQuickConnect = async (value: LoginValues) => {
     setError(null);
-    setIsQuickConnectSubmitting(true);
-
-    try {
-      new URL(serverUrlValue);
-    } catch {
-      setError('Please enter a valid URL');
-      setIsQuickConnectSubmitting(false);
+    const validationError = validateServerUrl(value);
+    if (validationError) {
+      setError(validationError);
       return;
     }
 
+    setSubmitting(true);
+    const serverUrlValue = buildServerUrl(value).url;
     const result = await commands.jellyfinQuickConnectStart(serverUrlValue);
-    setIsQuickConnectSubmitting(false);
+    setSubmitting(false);
 
     if (result.status === 'error') {
       setQuickConnectState('failed');
@@ -203,302 +212,322 @@ export default function LoginPage(props: LoginPageProps) {
     );
   };
 
-  onCleanup(stopQuickConnectPolling);
+  const connectWithPassword = async (value: LoginValues) => {
+    setError(null);
+    const validationError = validateServerUrl(value);
+    if (validationError) {
+      setError(validationError);
+      return;
+    }
+    if (!value.username.trim()) {
+      setError('Username is required');
+      return;
+    }
 
-  // Load saved credentials on mount
+    const finalServerUrl = buildServerUrl(value).url;
+    const credentials: Credentials = {
+      serverUrl: finalServerUrl,
+      username: value.username,
+      password: value.password,
+    };
+
+    setSubmitting(true);
+    try {
+      const result = await commands.jellyfinConnect(credentials);
+      if (result.status === 'ok') {
+        if (value.rememberMe) saveCredentials(finalServerUrl, value.username);
+        else clearSavedCredentials();
+        await finishConnected();
+      } else {
+        setError(result.error.message);
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Connection failed');
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  const submit = () => {
+    void form.handleSubmit();
+  };
+
   onMount(() => {
     const saved = loadSavedCredentials();
-    if (saved) {
-      form.reset({
-        serverUrl: saved.serverUrl,
-        username: saved.username,
-        password: '',
-        rememberMe: saved.rememberMe,
-      });
-    }
+    if (!saved) return;
+    const parsed = parseServerUrl(saved.serverUrl);
+    form.reset({
+      scheme: parsed.scheme,
+      host: parsed.host,
+      username: saved.username,
+      password: '',
+      rememberMe: saved.rememberMe,
+    });
   });
 
+  onCleanup(stopQuickConnectPolling);
+
   return (
-    <div class="min-h-screen bg-background flex items-center justify-center p-6">
-      <div class="w-full max-w-md">
-        {/* Logo */}
-        <div class="text-center mb-10">
-          <h1 class="text-display-medium font-normal text-primary tracking-tight drop-shadow-sm">
+    <div class="console-shell flex items-center justify-center">
+      <main class="w-full max-w-5xl">
+        <div class="mb-8 text-center">
+          <p class="text-label-medium uppercase text-secondary">
+            Docking Sequence
+          </p>
+          <h1 class="brand-type mt-2 text-display-medium text-on-surface">
             JMSR
           </h1>
-          <p class="text-body-large text-on-surface-variant mt-2 tracking-wide font-normal">
-            Jellyfin MPV Shim
+          <p class="mt-2 text-body-large text-on-surface-variant">
+            Connect this Playback Target to a known Jellyfin server.
           </p>
         </div>
 
-        {/* Login Card */}
-        <Card variant="elevated" class="relative overflow-hidden">
-          {/* Surface Tint Overlay for Elevation 1 */}
-          <div class="absolute inset-0 bg-surface-tint/[0.05] pointer-events-none" />
+        <Card variant="elevated" class="mx-auto max-w-3xl">
+          <div class="space-y-7">
+            <div>
+              <h2 class="text-headline-small text-on-surface">
+                Server coordinates
+              </h2>
+              <p class="mt-1 text-body-medium text-on-surface-variant">
+                Choose the protocol and host. JMSR shows the final Server URL
+                before any Login Method starts.
+              </p>
+            </div>
 
-          <div class="relative z-10">
-            <h2 class="text-headline-small text-on-surface mb-8 tracking-tight">
-              Connect to Server
-            </h2>
-
-            <form
-              onSubmit={(e) => {
-                e.preventDefault();
-                e.stopPropagation();
-                form.handleSubmit();
-              }}
-              class="space-y-6"
-            >
-              {/* Server URL */}
-              <form.Field
-                name="serverUrl"
-                validators={{
-                  onBlur: ({ value }) => {
-                    if (!value) return 'Server URL is required';
-                    try {
-                      new URL(value);
-                      return undefined;
-                    } catch {
-                      return 'Please enter a valid URL';
-                    }
-                  },
-                }}
-                children={(field) => {
-                  const errors = () => field().state.meta.errors;
-                  const touched = () => field().state.meta.isTouched;
-                  return (
-                    <div class="group">
-                      <label
-                        for={field().name}
-                        class="text-label-medium block text-on-surface-variant mb-1 ml-1 uppercase tracking-wider group-focus-within:text-primary transition-colors"
-                      >
-                        Server URL
-                      </label>
-                      <input
-                        id={field().name}
-                        name={field().name}
-                        type="url"
-                        value={field().state.value}
-                        onInput={(e) =>
-                          field().handleChange(e.currentTarget.value)
-                        }
-                        onBlur={field().handleBlur}
-                        placeholder="https://jellyfin.example.com"
-                        disabled={isSubmitting() || isQuickConnectWaiting()}
-                        class="input-filled w-full"
-                      />
-                      <Show when={touched() && errors().length > 0}>
-                        <p class="text-error text-body-small mt-1.5 ml-1 animate-in slide-in-from-top-1 fade-in duration-200">
-                          {errors()[0]}
-                        </p>
-                      </Show>
-                    </div>
-                  );
-                }}
-              />
-
-              <Show
-                when={loginMethod() === 'quickConnect'}
-                fallback={
-                  <>
-                    {/* Username */}
-                    <form.Field
-                      name="username"
-                      validators={{
-                        onBlur: ({ value }) => {
-                          if (!value) return 'Username is required';
-                          return undefined;
-                        },
-                      }}
-                      children={(field) => {
-                        const errors = () => field().state.meta.errors;
-                        const touched = () => field().state.meta.isTouched;
-                        return (
-                          <div class="group">
-                            <label
-                              for={field().name}
-                              class="text-label-medium block text-on-surface-variant mb-1 ml-1 uppercase tracking-wider group-focus-within:text-primary transition-colors"
-                            >
-                              Username
-                            </label>
-                            <input
-                              id={field().name}
-                              name={field().name}
-                              type="text"
-                              value={field().state.value}
-                              onInput={(e) =>
-                                field().handleChange(e.currentTarget.value)
-                              }
-                              onBlur={field().handleBlur}
-                              placeholder="Enter your username"
-                              disabled={isSubmitting()}
-                              class="input-filled w-full"
-                            />
-                            <Show when={touched() && errors().length > 0}>
-                              <p class="text-error text-body-small mt-1.5 ml-1 animate-in slide-in-from-top-1 fade-in duration-200">
-                                {errors()[0]}
-                              </p>
-                            </Show>
-                          </div>
+            <div class="grid grid-cols-1 gap-3 sm:grid-cols-[auto_minmax(0,1fr)]">
+              <form.Field name="scheme">
+                {(field) => (
+                  <fieldset
+                    class="grid grid-cols-2 rounded-2xl border border-outline-variant bg-surface-container-high p-1"
+                    aria-label="Server protocol"
+                  >
+                    <button
+                      type="button"
+                      class={`rounded-xl px-4 py-3 text-label-large transition ${field().state.value === 'https' ? 'bg-primary text-on-primary' : 'text-on-surface-variant hover:bg-primary/10'}`}
+                      disabled={isQuickConnectWaiting()}
+                      onClick={() => field().handleChange('https')}
+                    >
+                      HTTPS
+                    </button>
+                    <button
+                      type="button"
+                      class={`rounded-xl px-4 py-3 text-label-large transition ${field().state.value === 'http' ? 'bg-primary text-on-primary' : 'text-on-surface-variant hover:bg-primary/10'}`}
+                      disabled={isQuickConnectWaiting()}
+                      onClick={() => field().handleChange('http')}
+                    >
+                      HTTP
+                    </button>
+                  </fieldset>
+                )}
+              </form.Field>
+              <form.Field name="host">
+                {(field) => (
+                  <label class="block">
+                    <span class="sr-only">Jellyfin host</span>
+                    <input
+                      type="text"
+                      value={field().state.value}
+                      onInput={(event) => {
+                        const value = event.currentTarget.value;
+                        const explicitScheme = explicitSchemeFromInput(value);
+                        const strippedHost = stripServerScheme(value);
+                        field().handleChange(strippedHost);
+                        form.setFieldValue(
+                          'scheme',
+                          explicitScheme ?? defaultSchemeForHost(value),
                         );
                       }}
+                      disabled={isQuickConnectWaiting()}
+                      class="input-filled w-full"
+                      placeholder="jellyfin.local or media.example.com/jellyfin"
                     />
+                  </label>
+                )}
+              </form.Field>
+            </div>
 
-                    {/* Password */}
-                    <form.Field
-                      name="password"
-                      children={(field) => (
-                        <div class="group">
-                          <label
-                            for={field().name}
-                            class="text-label-medium block text-on-surface-variant mb-1 ml-1 uppercase tracking-wider group-focus-within:text-primary transition-colors"
-                          >
-                            Password
-                          </label>
-                          <input
-                            id={field().name}
-                            name={field().name}
-                            type="password"
-                            value={field().state.value}
-                            onInput={(e) =>
-                              field().handleChange(e.currentTarget.value)
-                            }
-                            onBlur={field().handleBlur}
-                            placeholder="Enter your password"
-                            disabled={isSubmitting()}
-                            class="input-filled w-full"
-                          />
-                        </div>
-                      )}
-                    />
-
-                    {/* Remember Me */}
-                    <form.Field
-                      name="rememberMe"
-                      children={(field) => (
-                        <div class="flex items-center gap-3 py-1">
-                          <div class="relative flex items-center">
-                            <input
-                              id={field().name}
-                              name={field().name}
-                              type="checkbox"
-                              checked={field().state.value}
-                              onChange={(e) =>
-                                field().handleChange(e.currentTarget.checked)
-                              }
-                              disabled={isSubmitting()}
-                              class="peer w-5 h-5 rounded border-2 border-on-surface-variant checked:border-primary bg-transparent checked:bg-primary text-primary focus:ring-primary focus:ring-2 focus:ring-offset-0 focus:ring-offset-surface transition-all duration-200 cursor-pointer appearance-none"
-                            />
-                            <Check
-                              class="absolute pointer-events-none opacity-0 peer-checked:opacity-100 text-on-primary w-3.5 h-3.5 left-1 top-1 transition-opacity duration-200"
-                              stroke-width={4}
-                            />
-                          </div>
-                          <label
-                            for={field().name}
-                            class="text-body-medium text-on-surface select-none cursor-pointer"
-                          >
-                            Remember server and username
-                          </label>
-                        </div>
-                      )}
-                    />
-                  </>
-                }
+            <div class="rounded-2xl border border-outline-variant bg-surface-container-lowest p-4">
+              <p class="text-label-small uppercase text-on-surface-variant">
+                Server URL preview
+              </p>
+              <p
+                class={`mt-1 break-all font-mono text-body-medium ${serverUrl() ? 'text-secondary' : 'text-warning'}`}
               >
-                <Show when={quickConnectCode()}>
-                  <div class="rounded-lg bg-surface-container-highest border border-outline-variant p-4 text-center">
-                    <p class="text-label-medium text-on-surface-variant uppercase">
-                      Quick Connect Code
-                    </p>
-                    <p class="text-display-small text-primary font-mono tracking-normal mt-2">
-                      {quickConnectCode()}
-                    </p>
-                    <p class="text-body-medium text-on-surface-variant mt-2">
-                      Approve this code from a signed-in Jellyfin app.
-                    </p>
-                  </div>
-                </Show>
+                {serverUrl() || 'Enter a server host to preview the final URL'}
+              </p>
+            </div>
 
-                <Show when={isQuickConnectWaiting()}>
-                  <p class="text-body-medium text-on-surface-variant">
-                    Waiting for Quick Connect approval...
-                  </p>
-                </Show>
-              </Show>
-
-              {/* Error Message */}
-              <Show when={error()}>
-                <div class="p-4 bg-error-container text-on-error-container rounded-xl animate-in slide-in-from-top-2 fade-in duration-300 flex items-start gap-3">
-                  <div class="mt-0.5">
-                    <CircleAlert class="w-5 h-5" />
-                  </div>
-                  <p class="text-body-medium font-medium">{error()}</p>
-                </div>
-              </Show>
-
-              {/* Submit Button */}
-              <Show
-                when={isQuickConnectWaiting()}
-                fallback={
-                  <button
-                    type="submit"
-                    disabled={isSubmitting() || isQuickConnectSubmitting()}
-                    class="btn-primary w-full"
-                  >
-                    <Show
-                      when={isSubmitting() || isQuickConnectSubmitting()}
-                      fallback={
-                        loginMethod() === 'quickConnect'
-                          ? quickConnectState() === 'failed'
-                            ? 'Try again'
-                            : 'Request code'
-                          : 'Connect'
-                      }
-                    >
-                      <LoaderCircle class="animate-spin h-5 w-5" />
-                      <span>
-                        {loginMethod() === 'quickConnect'
-                          ? 'Requesting...'
-                          : 'Connecting...'}
-                      </span>
-                    </Show>
-                  </button>
-                }
-              >
-                <button
-                  type="button"
-                  class="btn-secondary w-full"
-                  onClick={resetQuickConnect}
-                >
-                  Cancel
-                </button>
-              </Show>
-
+            <div
+              class="grid grid-cols-2 rounded-full border border-outline-variant bg-surface-container-high p-1"
+              role="tablist"
+              aria-label="Login Method"
+            >
               <button
                 type="button"
-                class="btn-text w-full"
+                role="tab"
+                aria-selected={loginMethod() === 'quickConnect'}
                 disabled={isQuickConnectWaiting()}
+                class={`rounded-full px-4 py-3 text-label-large transition ${loginMethod() === 'quickConnect' ? 'bg-primary text-on-primary' : 'text-on-surface-variant hover:bg-primary/10'}`}
                 onClick={() => {
                   resetQuickConnect();
-                  setLoginMethod(
-                    loginMethod() === 'quickConnect'
-                      ? 'password'
-                      : 'quickConnect',
-                  );
+                  setLoginMethod('quickConnect');
                 }}
               >
-                {loginMethod() === 'quickConnect'
-                  ? 'Use password instead'
-                  : 'Use Quick Connect'}
+                Quick Connect
               </button>
-            </form>
+              <button
+                type="button"
+                role="tab"
+                aria-selected={loginMethod() === 'password'}
+                disabled={isQuickConnectWaiting()}
+                class={`rounded-full px-4 py-3 text-label-large transition ${loginMethod() === 'password' ? 'bg-primary text-on-primary' : 'text-on-surface-variant hover:bg-primary/10'}`}
+                onClick={() => {
+                  resetQuickConnect();
+                  setLoginMethod('password');
+                }}
+              >
+                Password
+              </button>
+            </div>
+
+            <Show
+              when={loginMethod() === 'quickConnect'}
+              fallback={
+                <div class="space-y-4">
+                  <form.Field name="username">
+                    {(field) => (
+                      <label class="block">
+                        <span class="mb-1 block text-label-medium uppercase text-on-surface-variant">
+                          Username
+                        </span>
+                        <input
+                          class="input-filled w-full"
+                          value={field().state.value}
+                          onInput={(event) =>
+                            field().handleChange(event.currentTarget.value)
+                          }
+                          placeholder="Jellyfin username"
+                        />
+                      </label>
+                    )}
+                  </form.Field>
+                  <form.Field name="password">
+                    {(field) => (
+                      <label class="block">
+                        <span class="mb-1 block text-label-medium uppercase text-on-surface-variant">
+                          Password
+                        </span>
+                        <input
+                          type="password"
+                          class="input-filled w-full"
+                          value={field().state.value}
+                          onInput={(event) =>
+                            field().handleChange(event.currentTarget.value)
+                          }
+                          placeholder="Jellyfin password"
+                        />
+                      </label>
+                    )}
+                  </form.Field>
+                  <form.Field name="rememberMe">
+                    {(field) => (
+                      <label class="flex items-center gap-3 text-body-medium text-on-surface">
+                        <span class="relative flex h-5 w-5 items-center justify-center">
+                          <input
+                            type="checkbox"
+                            checked={field().state.value}
+                            onChange={(event) =>
+                              field().handleChange(event.currentTarget.checked)
+                            }
+                            class="peer h-5 w-5 appearance-none rounded border-2 border-outline-variant bg-transparent checked:border-primary checked:bg-primary"
+                          />
+                          <Check
+                            class="pointer-events-none absolute h-3.5 w-3.5 opacity-0 text-on-primary peer-checked:opacity-100"
+                            stroke-width={4}
+                          />
+                        </span>
+                        Remember Server URL and username
+                      </label>
+                    )}
+                  </form.Field>
+                </div>
+              }
+            >
+              <div class="rounded-3xl border border-secondary/30 bg-secondary-container/60 p-5 text-center">
+                <RadioTower class="mx-auto h-8 w-8 text-secondary" />
+                <p class="mt-3 text-body-medium text-on-secondary-container">
+                  Approve this code from another signed-in Jellyfin client. JMSR
+                  will finish login automatically after approval.
+                </p>
+                <p class="mt-2 text-body-small text-on-surface-variant">
+                  You are authorizing this Playback Target.
+                </p>
+                <Show when={quickConnectCode()}>
+                  <p class="mt-5 font-mono text-display-small tracking-[0.35em] text-secondary">
+                    {quickConnectCode()}
+                  </p>
+                </Show>
+                <Show when={isQuickConnectWaiting()}>
+                  <p class="mt-4 text-label-medium uppercase text-secondary">
+                    Awaiting Quick Connect Approval…
+                  </p>
+                </Show>
+              </div>
+            </Show>
+
+            <Show when={error()}>
+              <div
+                class="flex items-start gap-3 rounded-2xl bg-error-container p-4 text-on-error-container"
+                role="alert"
+              >
+                <CircleAlert class="mt-0.5 h-5 w-5" />
+                <div>
+                  <p class="text-title-small">Connection needs attention</p>
+                  <p class="text-body-medium">{error()}</p>
+                </div>
+              </div>
+            </Show>
+
+            <Show
+              when={isQuickConnectWaiting()}
+              fallback={
+                <button
+                  type="button"
+                  disabled={submitting()}
+                  class="btn-primary w-full"
+                  onClick={submit}
+                >
+                  <Show
+                    when={submitting()}
+                    fallback={
+                      loginMethod() === 'quickConnect'
+                        ? quickConnectState() === 'failed'
+                          ? 'Request a new code'
+                          : 'Request Quick Connect code'
+                        : 'Connect'
+                    }
+                  >
+                    <LoaderCircle class="h-5 w-5 animate-spin" />
+                    {loginMethod() === 'quickConnect'
+                      ? 'Requesting...'
+                      : 'Connecting...'}
+                  </Show>
+                </button>
+              }
+            >
+              <button
+                type="button"
+                class="btn-secondary w-full"
+                onClick={resetQuickConnect}
+              >
+                Cancel Request
+              </button>
+            </Show>
           </div>
         </Card>
 
-        {/* Footer */}
         <PageFooter class="mt-8" />
-      </div>
+      </main>
     </div>
   );
 }

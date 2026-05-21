@@ -17,6 +17,8 @@ export const commands = {
 	mpvSetPause: (paused: boolean) => typedError<null, CommandError>(__TAURI_INVOKE("mpv_set_pause", { paused })),
 	/**  Set volume (0-100). */
 	mpvSetVolume: (volume: number | null) => typedError<null, CommandError>(__TAURI_INVOKE("mpv_set_volume", { volume })),
+	/**  Toggle mute state. */
+	mpvToggleMute: () => typedError<null, CommandError>(__TAURI_INVOKE("mpv_toggle_mute")),
 	/**  Set audio track by ID. */
 	mpvSetAudioTrack: (id: number) => typedError<null, CommandError>(__TAURI_INVOKE("mpv_set_audio_track", { id })),
 	/**  Set subtitle track by ID. */
@@ -27,6 +29,8 @@ export const commands = {
 	mpvGetState: () => typedError<PlayerState, CommandError>(__TAURI_INVOKE("mpv_get_state")),
 	/**  Check if MPV is connected. */
 	mpvIsConnected: () => __TAURI_INVOKE<boolean>("mpv_is_connected"),
+	/**  Get current user-facing Now Playing state. */
+	nowPlayingGetState: () => typedError<NowPlayingState, CommandError>(__TAURI_INVOKE("now_playing_get_state")),
 	/**  Connect to a Jellyfin server. */
 	jellyfinConnect: (credentials: Credentials) => typedError<null, CommandError>(__TAURI_INVOKE("jellyfin_connect", { credentials })),
 	/**  Disconnect from Jellyfin server. */
@@ -53,6 +57,10 @@ export const commands = {
 	 *  clearing the saved session from localStorage on the frontend.
 	 */
 	jellyfinClearSession: () => typedError<null, CommandError>(__TAURI_INVOKE("jellyfin_clear_session")),
+	/**  Play the next episode from the active Jellyfin session. */
+	jellyfinPlayNextEpisode: () => typedError<null, CommandError>(__TAURI_INVOKE("jellyfin_play_next_episode")),
+	/**  Play the previous episode from the active Jellyfin session. */
+	jellyfinPlayPreviousEpisode: () => typedError<null, CommandError>(__TAURI_INVOKE("jellyfin_play_previous_episode")),
 	/**  Start a Jellyfin Quick Connect request. */
 	jellyfinQuickConnectStart: (serverUrl: string) => typedError<QuickConnectRequest, CommandError>(__TAURI_INVOKE("jellyfin_quick_connect_start", { serverUrl })),
 	/**  Check whether a Jellyfin Quick Connect request has been approved. */
@@ -72,9 +80,13 @@ export const commands = {
 /** Events */
 export const events = {
 	appNotification: makeEvent<AppNotification>("app-notification"),
+	nowPlayingChanged: makeEvent<NowPlayingChanged>("now-playing-changed"),
 };
 
 /* Types */
+/**  Reason an adjacent episode control is unavailable. */
+export type AdjacentEpisodeUnavailableReason = "noSession" | "noCurrentItem" | "notEpisode" | "unknown";
+
 /**  Application configuration. */
 export type AppConfig = {
 	/**  Custom MPV executable path (None = auto-detect). */
@@ -140,11 +152,40 @@ export type Credentials = {
 /**  Notification level for UI display. */
 export type NotificationLevel = "error" | "warning" | "info" | "success";
 
-/**  Player state returned to frontend. */
+/**  Now Playing state event emitted to frontend. */
+export type NowPlayingChanged = {
+	state: NowPlayingState,
+};
+
+/**  Minimal current media metadata safe for UI display. */
+export type NowPlayingMedia = {
+	itemId: string,
+	name: string,
+	itemType: string,
+	seriesName: string | null,
+	seasonNumber: number | null,
+	episodeNumber: number | null,
+};
+
+/**  User-facing playback state for the Operations Console. */
+export type NowPlayingState = {
+	status: NowPlayingStatus,
+	player: PlayerState,
+	media: NowPlayingMedia | null,
+	canPlayNext: boolean,
+	canPlayPrevious: boolean,
+	nextUnavailableReason: AdjacentEpisodeUnavailableReason | null,
+	previousUnavailableReason: AdjacentEpisodeUnavailableReason | null,
+};
+
+/**  User-facing Now Playing status. */
+export type NowPlayingStatus = "offline" | "idle" | "playing" | "paused" | "unknown";
+
+/**  Player transport state returned to frontend. */
 export type PlayerState = {
 	connected: boolean,
 	paused: boolean,
-	time_pos: number | null,
+	timePos: number | null,
 	duration: number | null,
 	volume: number | null,
 };

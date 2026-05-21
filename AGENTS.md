@@ -91,4 +91,4 @@ Single-context repo using root `CONTEXT.md` and root `docs/adr/`. See `docs/agen
 - Test setup extends expect with jest-dom matchers (rstest.setup.ts)
 - See `docs/todos.md` for current tasks and priorities
 - When edit finished, use @oracle to review changes
-- Design system at `docs/m3.md` with predefined CSS classes based on Tailwind + M3
+- Design system at `docs/design-system.md` with predefined CSS classes based on Tailwind + JMSR Control Room

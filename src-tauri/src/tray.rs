@@ -5,7 +5,7 @@
 //! - Next: Play next episode
 //! - Previous: Play previous episode
 //! - Mute: Toggle mute
-//! - Show Settings: Opens/focuses the main window
+//! - Show Operations Console: Opens/focuses the main window
 //! - Quit: Exits the application
 
 use tauri::{
@@ -21,7 +21,7 @@ const MENU_PLAY_PAUSE: &str = "play_pause";
 const MENU_NEXT: &str = "next";
 const MENU_PREVIOUS: &str = "previous";
 const MENU_MUTE: &str = "mute";
-const MENU_SHOW: &str = "show_settings";
+const MENU_SHOW: &str = "show_console";
 const MENU_QUIT: &str = "quit";
 
 /// Sets up the system tray icon with menu.
@@ -31,7 +31,7 @@ const MENU_QUIT: &str = "quit";
 /// - **Next**: Play next episode
 /// - **Previous**: Play previous episode
 /// - **Mute**: Toggle mute
-/// - **Show Settings**: Shows and focuses the main window
+/// - **Show Operations Console**: Shows and focuses the main window
 /// - **Quit**: Exits the application
 ///
 /// # Tray Click Behavior
@@ -43,7 +43,13 @@ pub fn setup_tray(app: &tauri::App) -> Result<(), Box<dyn std::error::Error>> {
   let previous_item = MenuItem::with_id(app, MENU_PREVIOUS, "Previous", true, None::<&str>)?;
   let mute_item = MenuItem::with_id(app, MENU_MUTE, "Mute", true, None::<&str>)?;
   let separator = PredefinedMenuItem::separator(app)?;
-  let show_item = MenuItem::with_id(app, MENU_SHOW, "Show Settings", true, None::<&str>)?;
+  let show_item = MenuItem::with_id(
+    app,
+    MENU_SHOW,
+    "Show Operations Console",
+    true,
+    None::<&str>,
+  )?;
   let quit_item = MenuItem::with_id(app, MENU_QUIT, "Quit", true, None::<&str>)?;
 
   // Build the menu
@@ -90,7 +96,9 @@ pub fn setup_tray(app: &tauri::App) -> Result<(), Box<dyn std::error::Error>> {
           let session = jellyfin_state.session.read().clone();
           if let Some(session) = session {
             tauri::async_runtime::spawn(async move {
-              session.play_next_episode().await;
+              if let Err(e) = session.play_next_episode().await {
+                log::warn!("Failed to play next episode: {}", e);
+              }
             });
           } else {
             log::warn!("No active Jellyfin session for next episode");
@@ -101,7 +109,9 @@ pub fn setup_tray(app: &tauri::App) -> Result<(), Box<dyn std::error::Error>> {
           let session = jellyfin_state.session.read().clone();
           if let Some(session) = session {
             tauri::async_runtime::spawn(async move {
-              session.play_previous_episode().await;
+              if let Err(e) = session.play_previous_episode().await {
+                log::warn!("Failed to play previous episode: {}", e);
+              }
             });
           } else {
             log::warn!("No active Jellyfin session for previous episode");

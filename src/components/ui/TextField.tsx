@@ -19,7 +19,7 @@ interface TextFieldProps {
 }
 
 /**
- * M3 TextField with label, input, error, and hint.
+ * Control Room text field with label, input, error, and hint.
  */
 export default function TextField(props: TextFieldProps) {
   const [local, rest] = splitProps(props, [

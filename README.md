@@ -69,7 +69,7 @@ JMSR allows you to cast media from any Jellyfin client (web, mobile, TV) to your
 ### v1.3.0
 
 - Added Intro Skipper plugin support for automatic introduction and credit skips.
-- Added a global Settings toggle to enable or disable Intro Skipper behavior.
+- Added a global Automation toggle to enable or disable Intro Skipper behavior.
 - Added once-per-session skip semantics so manual seeks back into skipped ranges are respected.
 - Added verification coverage for plugin failures, malformed ranges, disabled behavior, progress reporting, and existing track controls.
 
@@ -152,7 +152,7 @@ Binaries will be in `src-tauri/target/release/bundle/`.
 1.  **Launch JMSR** from your application menu or terminal.
 2.  **Authenticate** with Quick Connect or by entering your Jellyfin server URL and credentials.
 3.  **Cast Media**: JMSR will appear as "JMSR" in your Jellyfin client's cast menu.
-4.  **Optional Intro Skipper**: Install the Jellyfin Intro Skipper plugin and keep Settings > Playback > Intro Skipper enabled to skip detected intros and credits.
+4.  **Optional Intro Skipper**: Install the Jellyfin Intro Skipper plugin and keep Operations Console > Automation > Automatic Intro Skip enabled to skip detected intros and credits.
 5.  **Enjoy**: Media plays in MPV on your desktop with full control syncing.
 
 ## 🛠️ How It Works
@@ -226,7 +226,7 @@ jmsr/
 <details>
 <summary><strong>JMSR doesn't appear as cast target</strong></summary>
 
-*   Ensure you're logged in (check Settings page shows "Connected").
+*   Ensure you're logged in (check Operations Console shows "Connected").
 *   Refresh the Jellyfin web page after JMSR connects.
 *   Check Jellyfin Dashboard > Activity for the JMSR session.
 </details>
@@ -235,9 +235,9 @@ jmsr/
 <summary><strong>MPV doesn't start</strong></summary>
 
 *   Verify MPV is installed: `mpv --version`.
-*   Check MPV is in PATH (or set explicit path in Settings).
+*   Check MPV is in PATH (or set explicit path in Operations Console settings).
 *   **Windows (Scoop)**: JMSR auto-resolves symlinks, but ensure the shim is valid.
-*   Check Settings > MPV Player for detected path.
+*   Check Operations Console > Player Bridge settings for detected path.
 </details>
 
 <details>
@@ -245,7 +245,7 @@ jmsr/
 
 *   Check Jellyfin transcoding settings.
 *   Verify network connectivity to Jellyfin server.
-*   Check JMSR log panel (Settings page) for error messages.
+*   Check Diagnostics in the Operations Console for error messages.
 </details>
 
 <details>
