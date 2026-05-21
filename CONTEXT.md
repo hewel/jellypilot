@@ -48,6 +48,22 @@ _Avoid_: Primary login
 One of the user-selectable ways to authenticate to a known Server URL. Quick Connect and Password Login are the Login Methods currently exposed by JMSR.
 _Avoid_: Account type, server type
 
+**Intro Skipper**:
+A Jellyfin server plugin that detects intro and credit ranges for media items so a Playback Target can skip those ranges during playback. In JMSR, Intro Skipper refers to the plugin-provided ranges, not Jellyfin media segments in general.
+_Avoid_: Media Segment Skipping, chapter skipping, generic skip markers
+
+**Automatic Intro Skip**:
+JMSR advancing playback past an Intro Skipper range without asking the user for confirmation. Automatic Intro Skip is a playback behavior of the Playback Target, not an MPV overlay or prompt, and each fetched range is skipped at most once per playback session.
+_Avoid_: Skip prompt, countdown, overlay
+
+**Credit Skip**:
+JMSR advancing playback past an Intro Skipper credit range. Credit Skip does not directly start the next episode; if the skip reaches natural end of playback, JMSR's normal next-episode behavior applies.
+_Avoid_: Next episode command, outro button
+
+**Intro Skipper Setting**:
+A global user preference that controls whether JMSR uses Intro Skipper ranges during playback. The Intro Skipper Setting defaults to enabled so plugin ranges are used unless the user turns the behavior off.
+_Avoid_: Plugin install state, server setting
+
 ## Example Dialogue
 
 Dev: "Can Quick Connect find my Jellyfin server?"
@@ -93,3 +109,23 @@ Domain expert: "No. After approval, JMSR creates a Saved Session just like Passw
 Dev: "Does Quick Connect need a remember-me checkbox?"
 
 Domain expert: "No. Quick Connect creates a Saved Session after approval; Login Prefill only applies to Password Login."
+
+Dev: "Is Intro Skipper just any Jellyfin media segment?"
+
+Domain expert: "No. For this feature, Intro Skipper means ranges supplied by the Intro Skipper plugin specifically."
+
+Dev: "Should JMSR show a skip button over MPV?"
+
+Domain expert: "No. Automatic Intro Skip means JMSR skips the plugin range silently."
+
+Dev: "If the user seeks back into a skipped intro, should JMSR skip it again?"
+
+Domain expert: "No. Each fetched Intro Skipper range is skipped at most once for that playback session."
+
+Dev: "Does skipping credits mean JMSR immediately starts the next episode?"
+
+Domain expert: "No. Credit Skip advances past the credit range; next-episode playback is still driven by natural end of playback."
+
+Dev: "If the server has Intro Skipper ranges, are skips mandatory?"
+
+Domain expert: "No. The Intro Skipper Setting lets the user turn automatic skipping off in JMSR."
