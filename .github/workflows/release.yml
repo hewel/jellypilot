@@ -87,9 +87,37 @@ jobs:
           path: |
             src-tauri/target/release/bundle/dmg/*.dmg
 
+  arch-package:
+    name: Build Arch package
+    runs-on: ubuntu-latest
+    container: archlinux:base-devel
+    steps:
+      - name: Install action runtime and package tooling
+        run: |
+          pacman -Syu --noconfirm nodejs git bun rust webkit2gtk-4.1 gtk3 libayatana-appindicator librsvg mpv
+
+      - uses: actions/checkout@v4
+
+      - name: Validate package version matches release tag
+        run: |
+          pkgver="$(sed -n 's/^pkgver=//p' packaging/arch/PKGBUILD)"
+          test "v${pkgver}" = "${GITHUB_REF_NAME}"
+
+      - name: Build package
+        run: |
+          useradd -m builder
+          chown -R builder:builder "$GITHUB_WORKSPACE"
+          su builder -c "cd '$GITHUB_WORKSPACE/packaging/arch' && makepkg --syncdeps --noconfirm"
+
+      - name: Upload Arch artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: arch-artifacts
+          path: packaging/arch/*.pkg.tar.zst
+
   release:
     name: Create Release
-    needs: [changelog, build]
+    needs: [changelog, build, arch-package]
     runs-on: ubuntu-latest
     permissions:
       contents: write

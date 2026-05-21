@@ -110,7 +110,13 @@ Download the latest release for your platform from the [Releases page](https://g
 | :--- | :--- |
 | **Windows** | `.msi` (installer) or `.exe` (NSIS) |
 | **macOS** | `.dmg` |
-| **Linux** | `.deb` or `.AppImage` |
+| **Linux** | `.deb`, `.AppImage`, or Arch Linux `.pkg.tar.zst` |
+
+Install the Arch Linux package from a release asset with:
+
+```bash
+sudo pacman -U jmsr-<version>-1-x86_64.pkg.tar.zst
+```
 
 #### Build from Source
 

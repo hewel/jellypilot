@@ -1,6 +1,7 @@
 use parking_lot::RwLock;
 use serde::{Deserialize, Serialize};
 use specta::specta;
+#[cfg(debug_assertions)]
 use specta_typescript::Typescript;
 use std::sync::Arc;
 use tauri::State;

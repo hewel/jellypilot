@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=JMSR
+Comment=Jellyfin cast receiver that controls external MPV
+Exec=jmsr
+Icon=top.pigfun.jmsr
+Categories=AudioVideo;Player;
+Terminal=false
