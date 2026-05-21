@@ -1357,10 +1357,10 @@ impl SessionManager {
     };
 
     let seek_target = {
-      let s = state.read();
+      let mut s = state.write();
       s.playback
-        .as_ref()
-        .and_then(|playback| evaluate_skip(position_seconds, &playback.intro_skipper_ranges))
+        .as_mut()
+        .and_then(|playback| evaluate_skip(position_seconds, &mut playback.intro_skipper_ranges))
     };
 
     if let Some(seek_target) = seek_target {
@@ -1714,6 +1714,7 @@ mod tests {
           kind: IntroSkipKind::Introduction,
           start_seconds: 10.0,
           end_seconds: 80.0,
+          skipped: false,
         }],
         position_ticks: 0,
         is_paused: false,
@@ -1750,6 +1751,31 @@ mod tests {
       action_rx.recv().await,
       Some(MpvAction::Seek(80.0))
     ));
+  }
+
+  #[tokio::test]
+  async fn time_pos_update_inside_already_skipped_range_emits_no_second_seek() {
+    let state = test_state_with_intro_range();
+    let (action_tx, mut action_rx) = mpsc::channel(2);
+    let config = RwLock::new(AppConfig::default());
+    let event = crate::mpv::MpvEvent {
+      event: "property-change".to_string(),
+      id: Some(4),
+      name: Some("time-pos".to_string()),
+      data: Some(serde_json::json!(10.0)),
+      reason: None,
+      args: None,
+    };
+
+    SessionManager::apply_intro_skipper(&state, &action_tx, &config, &event).await;
+    assert!(matches!(
+      action_rx.recv().await,
+      Some(MpvAction::Seek(80.0))
+    ));
+
+    SessionManager::apply_intro_skipper(&state, &action_tx, &config, &event).await;
+
+    assert!(action_rx.try_recv().is_err());
   }
 
   #[tokio::test]

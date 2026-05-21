@@ -17,6 +17,7 @@ pub struct IntroSkipRange {
   pub kind: IntroSkipKind,
   pub start_seconds: f64,
   pub end_seconds: f64,
+  pub skipped: bool,
 }
 
 impl IntroSkipRange {
@@ -33,6 +34,7 @@ impl IntroSkipRange {
       kind,
       start_seconds,
       end_seconds,
+      skipped: false,
     })
   }
 }
@@ -60,23 +62,36 @@ pub fn parse_intro_skipper_ranges(response: IntroSkipperPluginResponse) -> Vec<I
 }
 
 /// Return the seek target when playback is inside a skippable range.
-pub fn evaluate_skip(position_seconds: f64, ranges: &[IntroSkipRange]) -> Option<f64> {
+pub fn evaluate_skip(position_seconds: f64, ranges: &mut [IntroSkipRange]) -> Option<f64> {
   if !position_seconds.is_finite() {
     return None;
   }
 
   ranges
-    .iter()
+    .iter_mut()
     .find(|range| {
-      position_seconds >= range.start_seconds - LOOKAHEAD_SECONDS
+      !range.skipped
+        && position_seconds >= range.start_seconds - LOOKAHEAD_SECONDS
         && position_seconds < range.end_seconds
     })
-    .map(|range| range.end_seconds)
+    .map(|range| {
+      range.skipped = true;
+      range.end_seconds
+    })
 }
 
 #[cfg(test)]
 mod tests {
   use super::*;
+
+  fn intro_range(start_seconds: f64, end_seconds: f64) -> IntroSkipRange {
+    IntroSkipRange {
+      kind: IntroSkipKind::Introduction,
+      start_seconds,
+      end_seconds,
+      skipped: false,
+    }
+  }
 
   fn plugin_segment(start: f64, end: f64) -> IntroSkipperPluginSegment {
     IntroSkipperPluginSegment { start, end }
@@ -88,14 +103,7 @@ mod tests {
 
     let ranges = parse_intro_skipper_ranges(response);
 
-    assert_eq!(
-      ranges,
-      vec![IntroSkipRange {
-        kind: IntroSkipKind::Introduction,
-        start_seconds: 12.5,
-        end_seconds: 82.0,
-      }]
-    );
+    assert_eq!(ranges, vec![intro_range(12.5, 82.0)]);
   }
 
   #[test]
@@ -120,27 +128,64 @@ mod tests {
   }
 
   #[test]
-  fn returns_seek_target_inside_half_open_range() {
-    let ranges = vec![IntroSkipRange {
-      kind: IntroSkipKind::Introduction,
-      start_seconds: 10.0,
-      end_seconds: 80.0,
-    }];
+  fn first_entry_into_unskipped_range_returns_seek_target_once() {
+    let mut ranges = vec![intro_range(10.0, 80.0)];
 
-    assert_eq!(evaluate_skip(10.0, &ranges), Some(80.0));
-    assert_eq!(evaluate_skip(79.99, &ranges), Some(80.0));
-    assert_eq!(evaluate_skip(80.0, &ranges), None);
+    assert_eq!(evaluate_skip(10.0, &mut ranges), Some(80.0));
+    assert!(ranges[0].skipped);
+    assert_eq!(evaluate_skip(10.5, &mut ranges), None);
+  }
+
+  #[test]
+  fn resume_or_manual_seek_into_unskipped_range_still_skips() {
+    let mut ranges = vec![intro_range(10.0, 80.0)];
+
+    assert_eq!(evaluate_skip(42.0, &mut ranges), Some(80.0));
+  }
+
+  #[test]
+  fn manual_seek_back_into_already_skipped_range_does_not_skip_again() {
+    let mut ranges = vec![intro_range(10.0, 80.0)];
+
+    assert_eq!(evaluate_skip(10.0, &mut ranges), Some(80.0));
+    assert_eq!(evaluate_skip(20.0, &mut ranges), None);
+  }
+
+  #[test]
+  fn new_playback_range_set_resets_skipped_state() {
+    let mut first_session_ranges = vec![intro_range(10.0, 80.0)];
+    assert_eq!(evaluate_skip(10.0, &mut first_session_ranges), Some(80.0));
+
+    let mut next_session_ranges = vec![intro_range(10.0, 80.0)];
+
+    assert_eq!(evaluate_skip(10.0, &mut next_session_ranges), Some(80.0));
+  }
+
+  #[test]
+  fn returns_seek_target_inside_half_open_range() {
+    let mut at_start = vec![intro_range(10.0, 80.0)];
+    let mut before_end = vec![intro_range(10.0, 80.0)];
+    let mut at_end = vec![intro_range(10.0, 80.0)];
+
+    assert_eq!(evaluate_skip(10.0, &mut at_start), Some(80.0));
+    assert_eq!(evaluate_skip(79.99, &mut before_end), Some(80.0));
+    assert_eq!(evaluate_skip(80.0, &mut at_end), None);
   }
 
   #[test]
   fn returns_seek_target_inside_one_second_lookahead_window() {
-    let ranges = vec![IntroSkipRange {
-      kind: IntroSkipKind::Introduction,
-      start_seconds: 10.0,
-      end_seconds: 80.0,
-    }];
+    let mut inside_lookahead = vec![intro_range(10.0, 80.0)];
+    let mut outside_lookahead = vec![intro_range(10.0, 80.0)];
 
-    assert_eq!(evaluate_skip(9.0, &ranges), Some(80.0));
-    assert_eq!(evaluate_skip(8.99, &ranges), None);
+    assert_eq!(evaluate_skip(9.0, &mut inside_lookahead), Some(80.0));
+    assert_eq!(evaluate_skip(8.99, &mut outside_lookahead), None);
+  }
+
+  #[test]
+  fn position_near_range_end_does_not_retrigger_after_skip() {
+    let mut ranges = vec![intro_range(10.0, 80.0)];
+
+    assert_eq!(evaluate_skip(79.5, &mut ranges), Some(80.0));
+    assert_eq!(evaluate_skip(79.75, &mut ranges), None);
   }
 }
