@@ -78,16 +78,7 @@ impl JellyfinClient {
 
   /// Authenticate with Jellyfin server.
   pub async fn authenticate(&self, creds: &Credentials) -> Result<AuthResponse, JellyfinError> {
-    // Normalize server URL
-    let server_url = creds.server_url.trim_end_matches('/').to_string();
-
-    // Validate URL format
-    if !server_url.starts_with("http://") && !server_url.starts_with("https://") {
-      return Err(JellyfinError::InvalidUrl(
-        "URL must start with http:// or https://".to_string(),
-      ));
-    }
-
+    let server_url = Self::normalize_server_url(&creds.server_url)?;
     let url = format!("{}/Users/AuthenticateByName", server_url);
 
     let body = serde_json::json!({
@@ -125,6 +116,118 @@ impl JellyfinClient {
     }
 
     // Fetch server info
+    self.fetch_server_info().await.ok();
+
+    Ok(auth)
+  }
+
+  /// Start a Quick Connect request on a Jellyfin server.
+  pub async fn quick_connect_start(
+    &self,
+    server_url: &str,
+  ) -> Result<QuickConnectRequest, JellyfinError> {
+    let server_url = Self::normalize_server_url(server_url)?;
+    let url = format!("{}/QuickConnect/Initiate", server_url);
+
+    let response = self
+      .http
+      .post(&url)
+      .header("X-Emby-Authorization", self.auth_header(None))
+      .send()
+      .await?;
+
+    if response.status() == reqwest::StatusCode::UNAUTHORIZED {
+      return Err(JellyfinError::QuickConnectUnavailable);
+    }
+
+    if !response.status().is_success() {
+      let status = response.status();
+      let text = response.text().await.unwrap_or_default();
+      return Err(JellyfinError::HttpError(format!(
+        "HTTP {}: {}",
+        status, text
+      )));
+    }
+
+    let request: QuickConnectInitiateResponse = response.json().await?;
+    Ok(QuickConnectRequest {
+      code: request.code,
+      secret: request.secret,
+    })
+  }
+
+  /// Check whether a Quick Connect request has been approved.
+  pub async fn quick_connect_check(
+    &self,
+    server_url: &str,
+    secret: &str,
+  ) -> Result<QuickConnectStatus, JellyfinError> {
+    let server_url = Self::normalize_server_url(server_url)?;
+    let url = format!("{}/QuickConnect/Connect", server_url);
+
+    let response = self
+      .http
+      .get(&url)
+      .query(&[("secret", secret)])
+      .header("X-Emby-Authorization", self.auth_header(None))
+      .send()
+      .await?;
+
+    if !response.status().is_success() {
+      let status = response.status();
+      let text = response.text().await.unwrap_or_default();
+      return Err(JellyfinError::HttpError(format!(
+        "HTTP {}: {}",
+        status, text
+      )));
+    }
+
+    let state: QuickConnectState = response.json().await?;
+    if state.authenticated {
+      Ok(QuickConnectStatus::Approved)
+    } else {
+      Ok(QuickConnectStatus::Waiting)
+    }
+  }
+
+  /// Complete Quick Connect authentication after the request is approved.
+  pub async fn quick_connect_authenticate(
+    &self,
+    server_url: &str,
+    secret: &str,
+  ) -> Result<AuthResponse, JellyfinError> {
+    let server_url = Self::normalize_server_url(server_url)?;
+    let url = format!("{}/Users/AuthenticateWithQuickConnect", server_url);
+    let body = serde_json::json!({ "Secret": secret });
+
+    let response = self
+      .http
+      .post(&url)
+      .header(header::CONTENT_TYPE, "application/json")
+      .header("X-Emby-Authorization", self.auth_header(None))
+      .json(&body)
+      .send()
+      .await?;
+
+    if !response.status().is_success() {
+      let status = response.status();
+      let text = response.text().await.unwrap_or_default();
+      return Err(JellyfinError::AuthFailed(format!(
+        "HTTP {}: {}",
+        status, text
+      )));
+    }
+
+    let auth: AuthResponse = response.json().await?;
+
+    {
+      let mut state = self.state.write();
+      state.server_url = Some(server_url);
+      state.access_token = Some(auth.access_token.clone());
+      state.user_id = Some(auth.user.id.clone());
+      state.user_name = Some(auth.user.name.clone());
+    }
+
     self.fetch_server_info().await.ok();
 
     Ok(auth)
@@ -235,6 +338,17 @@ impl JellyfinClient {
       .server_url
       .clone()
       .ok_or(JellyfinError::NotConnected)
+  }
+
+  fn normalize_server_url(server_url: &str) -> Result<String, JellyfinError> {
+    let server_url = server_url.trim_end_matches('/').to_string();
+    if !server_url.starts_with("http://") && !server_url.starts_with("https://") {
+      return Err(JellyfinError::InvalidUrl(
+        "URL must start with http:// or https://".to_string(),
+      ));
+    }
+
+    Ok(server_url)
   }
 
   /// Get access token or error if not connected.
@@ -530,7 +644,10 @@ impl JellyfinClient {
   ///
   /// Uses the /Shows/{seriesId}/Episodes endpoint with StartItemId to get adjacent episodes.
   /// Returns None if there's no next episode or if the item is not an episode.
-  pub async fn get_next_episode(&self, current_item: &MediaItem) -> Result<Option<MediaItem>, JellyfinError> {
+  pub async fn get_next_episode(
+    &self,
+    current_item: &MediaItem,
+  ) -> Result<Option<MediaItem>, JellyfinError> {
     // Only works for episodes
     if current_item.item_type != "Episode" {
       log::debug!("get_next_episode: not an episode, skipping");
@@ -546,7 +663,7 @@ impl JellyfinClient {
     };
 
     let user_id = self.user_id()?;
-    
+
     // Get episodes starting from current, limit 2 (current + next)
     let path = format!(
       "/Shows/{}/Episodes?UserId={}&StartItemId={}&Limit=2&Fields=MediaSources,MediaStreams",
@@ -554,7 +671,7 @@ impl JellyfinClient {
     );
 
     let response: EpisodesResponse = self.get(&path).await?;
-    
+
     // The response includes the current episode and the next one (if exists)
     // We want the second item (index 1) which is the next episode
     if response.items.len() >= 2 {
@@ -579,7 +696,10 @@ impl JellyfinClient {
   ///
   /// Uses the /Shows/{seriesId}/Episodes endpoint to find adjacent episodes.
   /// Returns None if there's no previous episode or if the item is not an episode.
-  pub async fn get_previous_episode(&self, current_item: &MediaItem) -> Result<Option<MediaItem>, JellyfinError> {
+  pub async fn get_previous_episode(
+    &self,
+    current_item: &MediaItem,
+  ) -> Result<Option<MediaItem>, JellyfinError> {
     // Only works for episodes
     if current_item.item_type != "Episode" {
       log::debug!("get_previous_episode: not an episode, skipping");
@@ -595,7 +715,7 @@ impl JellyfinClient {
     };
 
     let user_id = self.user_id()?;
-    
+
     // Get all episodes for the series to find the previous one
     // We need to fetch episodes and find the one before current
     let path = format!(
@@ -604,7 +724,7 @@ impl JellyfinClient {
     );
 
     let response: EpisodesResponse = self.get(&path).await?;
-    
+
     // Find the current episode index and return the previous one
     let mut prev_ep: Option<MediaItem> = None;
     for ep in response.items {
@@ -623,7 +743,7 @@ impl JellyfinClient {
       }
       prev_ep = Some(ep);
     }
-    
+
     log::info!("No previous episode available (start of series)");
     Ok(None)
   }
@@ -721,5 +841,124 @@ impl JellyfinClient {
 impl Default for JellyfinClient {
   fn default() -> Self {
     Self::new()
+  }
+}
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+  use tokio::io::{AsyncReadExt, AsyncWriteExt};
+  use tokio::net::TcpListener;
+
+  async fn serve_once(status: &'static str, response_body: &'static str) -> String {
+    serve_responses(vec![(status, response_body)]).await
+  }
+
+  async fn serve_responses(responses: Vec<(&'static str, &'static str)>) -> String {
+    let listener = TcpListener::bind("127.0.0.1:0")
+      .await
+      .expect("test server should bind");
+    let addr = listener.local_addr().expect("test server should have addr");
+
+    tokio::spawn(async move {
+      for (status, response_body) in responses {
+        let (mut stream, _) = listener.accept().await.expect("test server should accept");
+        let mut buffer = [0; 1024];
+        let _ = stream
+          .read(&mut buffer)
+          .await
+          .expect("test server should read request");
+        let response = format!(
+          "HTTP/1.1 {}\r\ncontent-type: application/json\r\ncontent-length: {}\r\n\r\n{}",
+          status,
+          response_body.len(),
+          response_body
+        );
+        stream
+          .write_all(response.as_bytes())
+          .await
+          .expect("test server should write response");
+      }
+    });
+
+    format!("http://{}", addr)
+  }
+
+  #[tokio::test]
+  async fn quick_connect_start_returns_code_and_secret_from_server() {
+    let server_url = serve_once("200 OK", r#"{"Code":"ABCD12","Secret":"secret-123"}"#).await;
+    let client = JellyfinClient::new();
+
+    let request = client
+      .quick_connect_start(&server_url)
+      .await
+      .expect("quick connect request should start");
+
+    assert_eq!(request.code, "ABCD12");
+    assert_eq!(request.secret, "secret-123");
+  }
+
+  #[tokio::test]
+  async fn quick_connect_start_returns_unavailable_when_server_rejects_request() {
+    let server_url = serve_once(
+      "401 Unauthorized",
+      r#"{"Message":"Quick Connect is disabled"}"#,
+    )
+    .await;
+    let client = JellyfinClient::new();
+
+    let err = client
+      .quick_connect_start(&server_url)
+      .await
+      .expect_err("quick connect should report unavailable");
+
+    assert!(
+      matches!(err, JellyfinError::QuickConnectUnavailable),
+      "expected quick connect unavailable, got {err:?}"
+    );
+  }
+
+  #[tokio::test]
+  async fn quick_connect_check_returns_approved_when_server_authenticated_request() {
+    let server_url = serve_once(
+      "200 OK",
+      r#"{"Authenticated":true,"Code":"ABCD12","Secret":"secret-123"}"#,
+    )
+    .await;
+    let client = JellyfinClient::new();
+
+    let status = client
+      .quick_connect_check(&server_url, "secret-123")
+      .await
+      .expect("quick connect state should load");
+
+    assert!(matches!(status, QuickConnectStatus::Approved));
+  }
+
+  #[tokio::test]
+  async fn quick_connect_authenticate_creates_saved_session() {
+    let server_url = serve_responses(vec![
+      (
+        "200 OK",
+        r#"{"User":{"Id":"user-1","Name":"Ada"},"AccessToken":"token-1","ServerId":"server-1"}"#,
+      ),
+      (
+        "200 OK",
+        r#"{"ServerName":"Jellyfin Home","Version":"10.10.0","Id":"server-1"}"#,
+      ),
+    ])
+    .await;
+    let client = JellyfinClient::new();
+
+    client
+      .quick_connect_authenticate(&server_url, "secret-123")
+      .await
+      .expect("quick connect authentication should succeed");
+
+    let session = client
+      .get_saved_session()
+      .expect("quick connect should create saved session");
+
+    assert_eq!(session.access_token, "token-1");
   }
 }

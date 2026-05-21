@@ -187,6 +187,39 @@ async jellyfinClearSession() : Promise<Result<null, CommandError>> {
 }
 },
 /**
+ * Start a Jellyfin Quick Connect request.
+ */
+async jellyfinQuickConnectStart(serverUrl: string) : Promise<Result<QuickConnectRequest, CommandError>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("jellyfin_quick_connect_start", { serverUrl }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
+ * Check whether a Jellyfin Quick Connect request has been approved.
+ */
+async jellyfinQuickConnectCheck(serverUrl: string, secret: string) : Promise<Result<QuickConnectStatus, CommandError>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("jellyfin_quick_connect_check", { serverUrl, secret }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
+ * Complete Jellyfin Quick Connect authentication.
+ */
+async jellyfinQuickConnectAuthenticate(serverUrl: string, secret: string) : Promise<Result<null, CommandError>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("jellyfin_quick_connect_authenticate", { serverUrl, secret }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
  * Get the current app configuration.
  */
 async configGet() : Promise<AppConfig> {
@@ -324,6 +357,14 @@ export type PropertyValue = boolean | number | string |
  * Arrays serialized as JSON string for specta compatibility.
  */
 string | null
+/**
+ * Quick Connect request created by the server.
+ */
+export type QuickConnectRequest = { code: string; secret: string }
+/**
+ * Quick Connect request status exposed to the frontend.
+ */
+export type QuickConnectStatus = "waiting" | "approved"
 /**
  * Saved session data for persistence.
  */

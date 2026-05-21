@@ -51,6 +51,37 @@ pub struct Credentials {
   pub password: String,
 }
 
+/// Quick Connect request created by the server.
+#[derive(Debug, Clone, Serialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct QuickConnectRequest {
+  pub code: String,
+  pub secret: String,
+}
+
+/// Quick Connect request returned by Jellyfin.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "PascalCase")]
+pub struct QuickConnectInitiateResponse {
+  pub code: String,
+  pub secret: String,
+}
+
+/// Quick Connect request status exposed to the frontend.
+#[derive(Debug, Clone, Serialize, Type, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub enum QuickConnectStatus {
+  Waiting,
+  Approved,
+}
+
+/// Quick Connect state returned by Jellyfin.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "PascalCase")]
+pub struct QuickConnectState {
+  pub authenticated: bool,
+}
+
 /// WebSocket message types from Jellyfin server.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "PascalCase")]
@@ -309,7 +340,11 @@ pub fn find_stream_by_lang(streams: &[MediaStream], stream_type: &str, lang: &st
     .iter()
     .find(|s| {
       s.stream_type == stream_type
-        && s.language.as_deref().map(|l| l.eq_ignore_ascii_case(lang)).unwrap_or(false)
+        && s
+          .language
+          .as_deref()
+          .map(|l| l.eq_ignore_ascii_case(lang))
+          .unwrap_or(false)
     })
     .map(|s| s.index)
 }
@@ -327,8 +362,16 @@ pub fn find_stream_by_preference(
   if let Some(title) = title {
     if let Some(stream) = streams.iter().find(|s| {
       s.stream_type == stream_type
-        && s.language.as_deref().map(|l| l.eq_ignore_ascii_case(lang)).unwrap_or(false)
-        && s.display_title.as_deref().map(|t| t == title).unwrap_or(false)
+        && s
+          .language
+          .as_deref()
+          .map(|l| l.eq_ignore_ascii_case(lang))
+          .unwrap_or(false)
+        && s
+          .display_title
+          .as_deref()
+          .map(|t| t == title)
+          .unwrap_or(false)
     }) {
       return Some(stream.index);
     }

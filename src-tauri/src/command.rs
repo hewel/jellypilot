@@ -7,7 +7,10 @@ use tauri::State;
 use tauri_specta::{collect_commands, collect_events, Builder, Event};
 
 use crate::config::AppConfig;
-use crate::jellyfin::{ConnectionState, Credentials, JellyfinClient, SavedSession, SessionManager};
+use crate::jellyfin::{
+  ConnectionState, Credentials, JellyfinClient, JellyfinError, QuickConnectRequest,
+  QuickConnectStatus, SavedSession, SessionManager,
+};
 use crate::mpv::{write_input_conf, MpvClient, PropertyValue};
 
 // ============================================================================
@@ -171,6 +174,21 @@ fn internal_err(e: impl std::fmt::Display) -> CommandError {
   CommandError::internal(e.to_string())
 }
 
+fn jellyfin_err(e: JellyfinError) -> CommandError {
+  match e {
+    JellyfinError::InvalidUrl(message) => CommandError::invalid_input(message),
+    JellyfinError::QuickConnectUnavailable => {
+      CommandError::auth_failed("Quick Connect is not enabled on this server")
+    }
+    JellyfinError::AuthFailed(message) => CommandError::auth_failed(message),
+    JellyfinError::Http(_) | JellyfinError::HttpError(_) => CommandError::network(e.to_string()),
+    JellyfinError::NotConnected | JellyfinError::SessionNotFound => {
+      CommandError::not_connected(e.to_string())
+    }
+    JellyfinError::WebSocket(_) | JellyfinError::Json(_) => internal_err(e),
+  }
+}
+
 // ============================================================================
 // Types
 // ============================================================================
@@ -292,7 +310,10 @@ pub async fn mpv_set_audio_track(state: State<'_, MpvState>, id: i32) -> Result<
 /// Set subtitle track by ID.
 #[tauri::command]
 #[specta]
-pub async fn mpv_set_subtitle_track(state: State<'_, MpvState>, id: i32) -> Result<(), CommandError> {
+pub async fn mpv_set_subtitle_track(
+  state: State<'_, MpvState>,
+  id: i32,
+) -> Result<(), CommandError> {
   state
     .0
     .set_subtitle_track(id as i64)
@@ -396,6 +417,69 @@ pub async fn jellyfin_connect(
     .authenticate(&credentials)
     .await
     .map_err(|e| CommandError::auth_failed(e.to_string()))?;
+
+  // Create and start session manager
+  let new_session = Arc::new(SessionManager::new(
+    state.client.clone(),
+    state.mpv.clone(),
+    app,
+  ));
+  new_session.start().await.map_err(internal_err)?;
+
+  // Stop existing session before replacing (idempotent connect)
+  let old_session = state.session.write().replace(new_session);
+  if let Some(old) = old_session {
+    if let Err(e) = old.stop().await {
+      log::warn!("Failed to stop old session: {}", e);
+    }
+  }
+
+  Ok(())
+}
+
+/// Start a Jellyfin Quick Connect request.
+#[tauri::command]
+#[specta]
+pub async fn jellyfin_quick_connect_start(
+  state: State<'_, JellyfinState>,
+  server_url: String,
+) -> Result<QuickConnectRequest, CommandError> {
+  state
+    .client
+    .quick_connect_start(&server_url)
+    .await
+    .map_err(jellyfin_err)
+}
+
+/// Check whether a Jellyfin Quick Connect request has been approved.
+#[tauri::command]
+#[specta]
+pub async fn jellyfin_quick_connect_check(
+  state: State<'_, JellyfinState>,
+  server_url: String,
+  secret: String,
+) -> Result<QuickConnectStatus, CommandError> {
+  state
+    .client
+    .quick_connect_check(&server_url, &secret)
+    .await
+    .map_err(jellyfin_err)
+}
+
+/// Complete Jellyfin Quick Connect authentication.
+#[tauri::command]
+#[specta]
+pub async fn jellyfin_quick_connect_authenticate(
+  app: tauri::AppHandle,
+  state: State<'_, JellyfinState>,
+  server_url: String,
+  secret: String,
+) -> Result<(), CommandError> {
+  state
+    .client
+    .quick_connect_authenticate(&server_url, &secret)
+    .await
+    .map_err(jellyfin_err)?;
 
   // Create and start session manager
   let new_session = Arc::new(SessionManager::new(
@@ -661,6 +745,9 @@ pub fn specta_builder() -> Builder {
       jellyfin_get_session,
       jellyfin_restore_session,
       jellyfin_clear_session,
+      jellyfin_quick_connect_start,
+      jellyfin_quick_connect_check,
+      jellyfin_quick_connect_authenticate,
       // Config commands
       config_get,
       config_set,

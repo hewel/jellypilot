@@ -20,6 +20,9 @@ pub enum JellyfinError {
   #[error("Authentication failed: {0}")]
   AuthFailed(String),
 
+  #[error("Quick Connect is not enabled on this server")]
+  QuickConnectUnavailable,
+
   #[error("Not connected to server")]
   NotConnected,
 
