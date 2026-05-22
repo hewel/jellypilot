@@ -1,11 +1,8 @@
-import { Dialog } from '@ark-ui/solid/dialog';
 import { Checkbox } from '@ark-ui/solid/checkbox';
 import { Collapsible } from '@ark-ui/solid/collapsible';
+import { Combobox, createListCollection } from '@ark-ui/solid/combobox';
+import { Dialog } from '@ark-ui/solid/dialog';
 import { Field as ArkField } from '@ark-ui/solid/field';
-import {
-  Combobox,
-  createListCollection,
-} from '@ark-ui/solid/combobox';
 import { TagsInput } from '@ark-ui/solid/tags-input';
 import { createForm } from '@tanstack/solid-form';
 import {
@@ -971,7 +968,9 @@ export default function OperationsConsole(props: OperationsConsoleProps) {
                             type="text"
                             value={subtitleLanguageInput()}
                             onInput={(event) =>
-                              setSubtitleLanguageInput(event.currentTarget.value)
+                              setSubtitleLanguageInput(
+                                event.currentTarget.value,
+                              )
                             }
                             onKeyDown={(event) => {
                               if (event.key !== 'Enter') return;
@@ -1003,10 +1002,14 @@ export default function OperationsConsole(props: OperationsConsoleProps) {
                                 item={item}
                                 class="cursor-pointer rounded-xl px-3 py-2 text-body-small text-on-surface-variant hover:bg-surface-container-high"
                                 onClick={() =>
-                                  addPreferredSubtitleLanguageCodes([item.value])
+                                  addPreferredSubtitleLanguageCodes([
+                                    item.value,
+                                  ])
                                 }
                               >
-                                <Combobox.ItemText>{item.label}</Combobox.ItemText>
+                                <Combobox.ItemText>
+                                  {item.label}
+                                </Combobox.ItemText>
                               </Combobox.Item>
                             )}
                           </For>
@@ -1244,7 +1247,6 @@ export default function OperationsConsole(props: OperationsConsoleProps) {
           </aside>
         </div>
       </div>
-
     </div>
   );
 }

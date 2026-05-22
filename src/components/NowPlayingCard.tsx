@@ -157,7 +157,11 @@ export default function NowPlayingCard(props: {
   };
   const commitSeek = (value: number) => {
     if (!activeTimeline() || !canControlPlayback() || busy() !== null) return;
-    void runCommand('seek', () => commands.mpvSeek(value), 'Could not seek playback');
+    void runCommand(
+      'seek',
+      () => commands.mpvSeek(value),
+      'Could not seek playback',
+    );
   };
 
   const commitVolume = (value: number) => {
@@ -168,7 +172,6 @@ export default function NowPlayingCard(props: {
       'Could not set volume',
     );
   };
-
 
   return (
     <section
@@ -211,7 +214,9 @@ export default function NowPlayingCard(props: {
             min={0}
             max={player()?.duration ?? 0}
             value={[seekValue()]}
-            disabled={!activeTimeline() || !canControlPlayback() || busy() !== null}
+            disabled={
+              !activeTimeline() || !canControlPlayback() || busy() !== null
+            }
             onValueChange={(details) => setSeekDraft(details.value[0] ?? 0)}
             onValueChangeEnd={(details) => commitSeek(details.value[0] ?? 0)}
             class="ark-slider"

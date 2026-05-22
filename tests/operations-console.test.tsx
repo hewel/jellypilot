@@ -558,7 +558,9 @@ test('sign out dialog uses Ark dialog dismissal semantics', async () => {
 
 test('sign out dialog locks dismissal while signing out', async () => {
   let resolveClearSession:
-    | ((result: Awaited<ReturnType<typeof commands.jellyfinClearSession>>) => void)
+    | ((
+        result: Awaited<ReturnType<typeof commands.jellyfinClearSession>>,
+      ) => void)
     | undefined;
   rstest.spyOn(commands, 'jellyfinClearSession').mockImplementation(
     () =>
@@ -594,7 +596,9 @@ test('player bridge settings use Ark field collapsible and checkbox primitives',
   const mpvPath = await screen.findByPlaceholderText('Path to mpv executable');
   expect(mpvPath.closest('[data-scope="field"]')).not.toBeNull();
 
-  expect(screen.queryByPlaceholderText('--fullscreen&#10;--force-window')).toBeNull();
+  expect(
+    screen.queryByPlaceholderText('--fullscreen&#10;--force-window'),
+  ).toBeNull();
 
   const advancedTrigger = screen.getByRole('button', {
     name: 'Advanced MPV options',
@@ -602,7 +606,9 @@ test('player bridge settings use Ark field collapsible and checkbox primitives',
   expect(advancedTrigger.closest('[data-scope="collapsible"]')).not.toBeNull();
 
   fireEvent.click(advancedTrigger);
-  await waitFor(() => expect(advancedTrigger).toHaveAttribute('aria-expanded', 'true'));
+  await waitFor(() =>
+    expect(advancedTrigger).toHaveAttribute('aria-expanded', 'true'),
+  );
   const mpvArgs = await screen.findByLabelText('Extra arguments');
   expect(mpvArgs.closest('[data-scope="field"]')).not.toBeNull();
   expect(mpvArgs.closest('[data-scope="collapsible"]')).not.toBeNull();
