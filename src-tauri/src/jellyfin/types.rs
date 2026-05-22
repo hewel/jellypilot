@@ -332,8 +332,25 @@ pub struct TrackPreference {
   /// Preferred subtitle display title (e.g., "English - SRT", "English SDH").
   #[serde(default)]
   pub subtitle_title: Option<String>,
-  /// Whether subtitles should be enabled.
+  /// Whether a subtitle preference was explicitly saved for this series.
+  #[serde(default)]
+  pub subtitle_preference_set: bool,
+  /// Whether subtitles should be enabled when a subtitle preference is set.
+  #[serde(default)]
   pub is_subtitle_enabled: bool,
+}
+
+impl TrackPreference {
+  /// Normalize preferences loaded from older stores that predate `subtitle_preference_set`.
+  pub fn normalize_loaded(&mut self) {
+    if self.subtitle_preference_set {
+      return;
+    }
+
+    self.subtitle_preference_set = self.subtitle_language.is_some()
+      || self.subtitle_title.is_some()
+      || (!self.is_subtitle_enabled && self.audio_language.is_none() && self.audio_title.is_none());
+  }
 }
 
 /// Find a stream by language and type.
@@ -382,6 +399,206 @@ pub fn find_stream_by_preference(
 
   // Fall back to language-only match
   find_stream_by_lang(streams, stream_type, lang)
+}
+
+/// Find the first stream matching an ordered language priority list.
+pub fn find_stream_by_language_priority(
+  streams: &[MediaStream],
+  stream_type: &str,
+  languages: &[String],
+) -> Option<i32> {
+  languages.iter().find_map(|language| {
+    let language = language.trim();
+    if language.is_empty() {
+      None
+    } else {
+      find_stream_by_lang(streams, stream_type, language)
+    }
+  })
+}
+
+/// Select a subtitle stream using request, series, then global language preference precedence.
+pub fn select_subtitle_stream_index(
+  request_subtitle_index: Option<i32>,
+  series_preference: Option<&TrackPreference>,
+  streams: &[MediaStream],
+  preferred_languages: &[String],
+) -> Option<i32> {
+  if request_subtitle_index.is_some() {
+    return request_subtitle_index;
+  }
+
+  if let Some(pref) = series_preference {
+    if pref.subtitle_preference_set {
+      if !pref.is_subtitle_enabled {
+        return Some(-1);
+      }
+
+      if let Some(ref lang) = pref.subtitle_language {
+        if let Some(idx) =
+          find_stream_by_preference(streams, "Subtitle", lang, pref.subtitle_title.as_deref())
+        {
+          return Some(idx);
+        }
+      }
+    }
+  }
+
+  find_stream_by_language_priority(streams, "Subtitle", preferred_languages)
+}
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+
+  fn stream(index: i32, stream_type: &str, language: Option<&str>) -> MediaStream {
+    MediaStream {
+      index,
+      stream_type: stream_type.to_string(),
+      codec: None,
+      language: language.map(str::to_string),
+      display_title: None,
+      is_default: false,
+      is_external: false,
+    }
+  }
+
+  #[test]
+  fn find_stream_by_language_priority_uses_configured_order() {
+    let streams = vec![
+      stream(2, "Subtitle", Some("eng")),
+      stream(4, "Subtitle", Some("jpn")),
+    ];
+    let languages = vec!["jpn".to_string(), "eng".to_string()];
+
+    let index = find_stream_by_language_priority(&streams, "Subtitle", &languages);
+
+    assert_eq!(index, Some(4));
+  }
+
+  #[test]
+  fn find_stream_by_language_priority_matches_case_insensitively() {
+    let streams = vec![stream(9, "Subtitle", Some("ENG"))];
+    let languages = vec!["eng".to_string()];
+
+    let index = find_stream_by_language_priority(&streams, "Subtitle", &languages);
+
+    assert_eq!(index, Some(9));
+  }
+
+  #[test]
+  fn find_stream_by_language_priority_ignores_surrounding_whitespace() {
+    let streams = vec![stream(7, "Subtitle", Some("eng"))];
+    let languages = vec![" eng ".to_string()];
+
+    let index = find_stream_by_language_priority(&streams, "Subtitle", &languages);
+
+    assert_eq!(index, Some(7));
+  }
+
+  #[test]
+  fn select_subtitle_stream_index_keeps_explicit_request() {
+    let streams = vec![stream(2, "Subtitle", Some("jpn"))];
+    let preference = TrackPreference {
+      subtitle_preference_set: true,
+      is_subtitle_enabled: false,
+      ..TrackPreference::default()
+    };
+    let languages = vec!["jpn".to_string()];
+
+    let index = select_subtitle_stream_index(Some(12), Some(&preference), &streams, &languages);
+
+    assert_eq!(index, Some(12));
+  }
+
+  #[test]
+  fn select_subtitle_stream_index_keeps_series_disabled_preference() {
+    let streams = vec![stream(2, "Subtitle", Some("jpn"))];
+    let preference = TrackPreference {
+      subtitle_preference_set: true,
+      is_subtitle_enabled: false,
+      ..TrackPreference::default()
+    };
+    let languages = vec!["jpn".to_string()];
+
+    let index = select_subtitle_stream_index(None, Some(&preference), &streams, &languages);
+
+    assert_eq!(index, Some(-1));
+  }
+
+  #[test]
+  fn select_subtitle_stream_index_prefers_series_language_over_global_language() {
+    let streams = vec![
+      stream(2, "Subtitle", Some("eng")),
+      stream(4, "Subtitle", Some("jpn")),
+    ];
+    let preference = TrackPreference {
+      subtitle_language: Some("jpn".to_string()),
+      subtitle_preference_set: true,
+      is_subtitle_enabled: true,
+      ..TrackPreference::default()
+    };
+    let languages = vec!["eng".to_string()];
+
+    let index = select_subtitle_stream_index(None, Some(&preference), &streams, &languages);
+
+    assert_eq!(index, Some(4));
+  }
+
+  #[test]
+  fn select_subtitle_stream_index_ignores_audio_only_series_preference() {
+    let streams = vec![stream(2, "Subtitle", Some("eng"))];
+    let preference = TrackPreference {
+      audio_language: Some("jpn".to_string()),
+      ..TrackPreference::default()
+    };
+    let languages = vec!["eng".to_string()];
+
+    let index = select_subtitle_stream_index(None, Some(&preference), &streams, &languages);
+
+    assert_eq!(index, Some(2));
+  }
+
+  #[test]
+  fn normalize_loaded_keeps_legacy_audio_only_preference_without_subtitle_preference() {
+    let mut preference = TrackPreference {
+      audio_language: Some("jpn".to_string()),
+      is_subtitle_enabled: false,
+      ..TrackPreference::default()
+    };
+
+    preference.normalize_loaded();
+
+    assert!(!preference.subtitle_preference_set);
+  }
+
+  #[test]
+  fn normalize_loaded_marks_legacy_subtitle_only_disabled_preference() {
+    let mut preference = TrackPreference {
+      is_subtitle_enabled: false,
+      ..TrackPreference::default()
+    };
+
+    preference.normalize_loaded();
+
+    assert!(preference.subtitle_preference_set);
+  }
+
+  #[test]
+  fn select_subtitle_stream_index_falls_back_to_global_language() {
+    let streams = vec![stream(2, "Subtitle", Some("eng"))];
+    let preference = TrackPreference {
+      subtitle_language: Some("jpn".to_string()),
+      subtitle_preference_set: true,
+      is_subtitle_enabled: true,
+      ..TrackPreference::default()
+    };
+    let languages = vec!["eng".to_string()];
+
+    let index = select_subtitle_stream_index(None, Some(&preference), &streams, &languages);
+
+    assert_eq!(index, Some(2));
+  }
 }
 
 /// Response from /Shows/{seriesId}/Episodes endpoint.

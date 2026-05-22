@@ -101,6 +101,8 @@ export type AppConfig = {
 	startMinimized?: boolean,
 	/**  Enable automatic Intro Skipper plugin skips. */
 	introSkipperEnabled?: boolean,
+	/**  Ordered subtitle language codes to prefer when Jellyfin does not request a track. */
+	preferredSubtitleLanguages?: string[],
 	/**  Keybinding for next episode in MPV. */
 	keybindNext?: string,
 	/**  Keybinding for previous episode in MPV. */

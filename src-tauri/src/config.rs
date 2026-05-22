@@ -31,6 +31,10 @@ pub struct AppConfig {
   #[serde(default = "default_intro_skipper_enabled")]
   pub intro_skipper_enabled: bool,
 
+  /// Ordered subtitle language codes to prefer when Jellyfin does not request a track.
+  #[serde(default)]
+  pub preferred_subtitle_languages: Vec<String>,
+
   /// Keybinding for next episode in MPV.
   #[serde(default = "default_keybind_next")]
   pub keybind_next: String,
@@ -69,6 +73,7 @@ impl Default for AppConfig {
       progress_interval: default_progress_interval(),
       start_minimized: false,
       intro_skipper_enabled: default_intro_skipper_enabled(),
+      preferred_subtitle_languages: Vec::new(),
       keybind_next: default_keybind_next(),
       keybind_prev: default_keybind_prev(),
     }
@@ -89,6 +94,13 @@ impl AppConfig {
     }
     if self.keybind_prev.trim().is_empty() {
       return Err("Previous episode keybinding cannot be empty".to_string());
+    }
+    if self
+      .preferred_subtitle_languages
+      .iter()
+      .any(|language| language.trim().is_empty())
+    {
+      return Err("Preferred subtitle languages cannot contain empty entries".to_string());
     }
     Ok(())
   }
@@ -112,5 +124,19 @@ mod tests {
     .expect("older config should deserialize");
 
     assert!(config.intro_skipper_enabled);
+    assert!(config.preferred_subtitle_languages.is_empty());
+  }
+
+  #[test]
+  fn config_rejects_empty_preferred_subtitle_language() {
+    let mut config = AppConfig::default();
+    config.preferred_subtitle_languages.push(" ".to_string());
+
+    let err = config.validate().expect_err("empty language should fail");
+
+    assert_eq!(
+      err,
+      "Preferred subtitle languages cannot contain empty entries"
+    );
   }
 }

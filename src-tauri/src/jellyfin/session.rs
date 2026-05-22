@@ -220,7 +220,10 @@ impl SessionManager {
         if let Some(value) = store.get(SERIES_PREFERENCES_KEY) {
           log::info!("Found stored value: {:?}", value);
           match serde_json::from_value::<HashMap<String, TrackPreference>>(value.clone()) {
-            Ok(prefs) => {
+            Ok(mut prefs) => {
+              for pref in prefs.values_mut() {
+                pref.normalize_loaded();
+              }
               log::info!("Loaded {} series track preferences from disk", prefs.len());
               return prefs;
             }
@@ -582,9 +585,10 @@ impl SessionManager {
     if let Some(ref series_id) = item.series_id {
       let s = state.read();
       log::info!(
-        "Looking up preferences for series_id={}, available prefs: {:?}",
+        "Looking up preferences for series_id={}, preference_count={}, has_preference={}",
         series_id,
-        s.series_preferences.keys().collect::<Vec<_>>()
+        s.series_preferences.len(),
+        s.series_preferences.contains_key(series_id)
       );
       if let Some(pref) = s.series_preferences.get(series_id) {
         log::info!(
@@ -613,30 +617,40 @@ impl SessionManager {
           }
         }
 
-        // Apply subtitle preference if not explicitly set in request
-        if subtitle_index.is_none() {
-          if pref.is_subtitle_enabled {
-            if let Some(ref lang) = pref.subtitle_language {
-              if let Some(idx) = find_stream_by_preference(
-                &media_source.media_streams,
-                "Subtitle",
-                lang,
-                pref.subtitle_title.as_deref(),
-              ) {
-                log::info!(
-                  "Applying preferred subtitle lang='{}' title={:?} -> index {}",
-                  lang,
-                  pref.subtitle_title,
-                  idx
-                );
-                subtitle_index = Some(idx);
-              }
-            }
-          } else {
-            // User previously disabled subtitles for this series
-            log::info!("Disabling subtitles based on preference");
-            subtitle_index = Some(-1);
-          }
+        let previous_subtitle_index = subtitle_index;
+        subtitle_index = select_subtitle_stream_index(
+          subtitle_index,
+          Some(pref),
+          &media_source.media_streams,
+          &[],
+        );
+        if subtitle_index != previous_subtitle_index {
+          log::info!(
+            "Applying series subtitle preference for series {} -> index {:?}",
+            series_id,
+            subtitle_index
+          );
+        }
+      }
+    }
+
+    {
+      let config_guard = config.read();
+      let preferred_subtitle_languages = &config_guard.preferred_subtitle_languages;
+      if subtitle_index.is_none() && !preferred_subtitle_languages.is_empty() {
+        let previous_subtitle_index = subtitle_index;
+        subtitle_index = select_subtitle_stream_index(
+          subtitle_index,
+          None,
+          &media_source.media_streams,
+          preferred_subtitle_languages,
+        );
+        if subtitle_index != previous_subtitle_index {
+          log::info!(
+            "Applying globally preferred subtitle languages {:?} -> index {:?}",
+            preferred_subtitle_languages,
+            subtitle_index
+          );
         }
       }
     }
@@ -1041,6 +1055,7 @@ impl SessionManager {
                   );
                   let pref = s.series_preferences.entry(series_id).or_default();
                   pref.is_subtitle_enabled = false;
+                  pref.subtitle_preference_set = true;
                   pref.subtitle_language = None;
                   pref.subtitle_title = None;
                   should_save_prefs = true;
@@ -1060,10 +1075,12 @@ impl SessionManager {
                       title
                     );
                     pref.is_subtitle_enabled = true;
+                    pref.subtitle_preference_set = true;
                     pref.subtitle_language = lang;
                     pref.subtitle_title = title;
                   } else {
                     pref.is_subtitle_enabled = true;
+                    pref.subtitle_preference_set = true;
                   }
                   should_save_prefs = true;
                 }

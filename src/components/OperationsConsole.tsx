@@ -13,7 +13,13 @@ import {
   Settings,
   ShieldAlert,
 } from 'lucide-solid';
-import { createEffect, createResource, createSignal, Show } from 'solid-js';
+import {
+  createEffect,
+  createResource,
+  createSignal,
+  For,
+  Show,
+} from 'solid-js';
 import { type AppConfig, type ConnectionState, commands } from '../bindings';
 import { clearSavedSession, loadSavedSession } from '../router';
 import DiagnosticsPanel from './DiagnosticsPanel';
@@ -35,6 +41,48 @@ async function fetchMpvStatus(): Promise<boolean> {
 
 function statusTone(connected: boolean) {
   return connected ? 'text-secondary' : 'text-warning';
+}
+
+const COMMON_SUBTITLE_LANGUAGE_OPTIONS = [
+  { code: 'eng', label: 'English' },
+  { code: 'jpn', label: 'Japanese' },
+  { code: 'spa', label: 'Spanish' },
+  { code: 'fre', label: 'French' },
+  { code: 'ger', label: 'German' },
+  { code: 'ita', label: 'Italian' },
+  { code: 'por', label: 'Portuguese' },
+  { code: 'chi', label: 'Chinese' },
+  { code: 'kor', label: 'Korean' },
+] as const;
+
+function parseSubtitleLanguageInput(value: string) {
+  return value
+    .split(/[\n,]+/)
+    .map((language) => language.trim().toLowerCase())
+    .filter((language) => language.length > 0);
+}
+
+function normalizePreferredSubtitleLanguages(
+  languages: string[] | null | undefined,
+) {
+  const normalized: string[] = [];
+  const seen = new Set<string>();
+
+  for (const language of languages ?? []) {
+    const [code] = parseSubtitleLanguageInput(language);
+    if (!code || seen.has(code)) continue;
+    seen.add(code);
+    normalized.push(code);
+  }
+
+  return normalized;
+}
+
+function getSubtitleLanguageLabel(code: string) {
+  return (
+    COMMON_SUBTITLE_LANGUAGE_OPTIONS.find((option) => option.code === code)
+      ?.label ?? 'Custom'
+  );
 }
 
 function StatusTile(props: {
@@ -82,6 +130,9 @@ export default function OperationsConsole(props: OperationsConsoleProps) {
     type: 'success' | 'error';
     text: string;
   } | null>(null);
+  const [selectedSubtitleLanguages, setSelectedSubtitleLanguages] =
+    createSignal<string[]>([]);
+  const [subtitleLanguageInput, setSubtitleLanguageInput] = createSignal('');
 
   const [connectionState, { refetch: refetchConnection }] =
     createResource(fetchConnectionState);
@@ -113,6 +164,7 @@ export default function OperationsConsole(props: OperationsConsoleProps) {
           .split('\n')
           .map((s) => s.trim())
           .filter((s) => s.length > 0);
+        const preferredSubtitleLanguages = selectedSubtitleLanguages();
 
         const newConfig: AppConfig = {
           deviceName: value.deviceName,
@@ -122,6 +174,7 @@ export default function OperationsConsole(props: OperationsConsoleProps) {
           startMinimized: cfg?.startMinimized ?? false,
           introSkipperEnabled:
             introSkipperInput?.checked ?? introSkipperEnabledValue,
+          preferredSubtitleLanguages,
           keybindNext: value.keybindNext,
           keybindPrev: value.keybindPrev,
         };
@@ -152,6 +205,9 @@ export default function OperationsConsole(props: OperationsConsoleProps) {
       form.setFieldValue('mpvArgs', (cfg.mpvArgs ?? []).join('\n'));
       form.setFieldValue('keybindNext', cfg.keybindNext ?? 'Shift+n');
       form.setFieldValue('keybindPrev', cfg.keybindPrev ?? 'Shift+p');
+      setSelectedSubtitleLanguages(
+        normalizePreferredSubtitleLanguages(cfg.preferredSubtitleLanguages),
+      );
       form.setFieldValue(
         'introSkipperEnabled',
         cfg.introSkipperEnabled ?? true,
@@ -167,6 +223,42 @@ export default function OperationsConsole(props: OperationsConsoleProps) {
 
   const state = () => connectionState();
   const config = () => initialConfig();
+
+  const addPreferredSubtitleLanguages = () => {
+    const additions = parseSubtitleLanguageInput(subtitleLanguageInput());
+    if (additions.length === 0) return;
+
+    setSelectedSubtitleLanguages((current) => {
+      const seen = new Set(current);
+      const next = [...current];
+
+      for (const language of additions) {
+        if (seen.has(language)) continue;
+        seen.add(language);
+        next.push(language);
+      }
+
+      return next;
+    });
+    setSubtitleLanguageInput('');
+  };
+
+  const removePreferredSubtitleLanguage = (language: string) => {
+    setSelectedSubtitleLanguages((current) =>
+      current.filter((selected) => selected !== language),
+    );
+  };
+
+  const movePreferredSubtitleLanguage = (index: number, direction: -1 | 1) => {
+    setSelectedSubtitleLanguages((current) => {
+      const target = index + direction;
+      if (target < 0 || target >= current.length) return current;
+
+      const next = [...current];
+      [next[index], next[target]] = [next[target], next[index]];
+      return next;
+    });
+  };
 
   const handleRefresh = () => {
     refetchConnection();
@@ -606,36 +698,171 @@ export default function OperationsConsole(props: OperationsConsoleProps) {
               </SectionCard>
 
               <SectionCard icon={<Bot class="h-6 w-6" />} title="Automation">
-                <label
-                  for="intro-skipper-enabled"
-                  class="flex cursor-pointer items-center justify-between gap-4 rounded-2xl bg-surface-container-high px-4 py-3"
-                >
-                  <span>
-                    <span class="block text-title-medium text-on-surface">
-                      Automatic Intro Skip
+                <div class="space-y-4">
+                  <div class="rounded-2xl bg-surface-container-high p-4">
+                    <div class="flex flex-wrap items-start justify-between gap-3">
+                      <div>
+                        <h3 class="text-title-medium text-on-surface">
+                          Preferred subtitle languages
+                        </h3>
+                        <p class="mt-1 text-body-small text-on-surface-variant">
+                          Add Jellyfin language codes in fallback priority
+                          order.
+                        </p>
+                      </div>
+                      <Show when={selectedSubtitleLanguages().length > 0}>
+                        <button
+                          type="button"
+                          class="btn-text min-w-0 px-3"
+                          onClick={() => setSelectedSubtitleLanguages([])}
+                        >
+                          Clear all
+                        </button>
+                      </Show>
+                    </div>
+
+                    <div class="mt-4 flex flex-col gap-3 sm:flex-row">
+                      <label class="min-w-0 flex-1">
+                        <span class="mb-1 block text-label-medium uppercase text-on-surface-variant">
+                          Add preferred subtitle language
+                        </span>
+                        <input
+                          id="preferred-subtitle-language-input"
+                          list="preferred-subtitle-language-options"
+                          type="text"
+                          value={subtitleLanguageInput()}
+                          onInput={(event) =>
+                            setSubtitleLanguageInput(event.currentTarget.value)
+                          }
+                          onKeyDown={(event) => {
+                            if (event.key !== 'Enter') return;
+                            event.preventDefault();
+                            addPreferredSubtitleLanguages();
+                          }}
+                          class="input-filled w-full font-mono"
+                          placeholder="eng"
+                          autoComplete="off"
+                        />
+                        <datalist id="preferred-subtitle-language-options">
+                          <For each={COMMON_SUBTITLE_LANGUAGE_OPTIONS}>
+                            {(option) => (
+                              <option
+                                value={option.code}
+                                label={`${option.code} — ${option.label}`}
+                              />
+                            )}
+                          </For>
+                        </datalist>
+                      </label>
+                      <button
+                        type="button"
+                        class="btn-secondary self-end"
+                        disabled={
+                          parseSubtitleLanguageInput(subtitleLanguageInput())
+                            .length === 0
+                        }
+                        onClick={addPreferredSubtitleLanguages}
+                      >
+                        Add language
+                      </button>
+                    </div>
+
+                    <Show
+                      when={selectedSubtitleLanguages().length > 0}
+                      fallback={
+                        <p class="mt-4 rounded-2xl border border-dashed border-outline-variant px-4 py-3 text-body-small text-on-surface-variant">
+                          No preferred subtitle languages selected. JMSR will
+                          use Jellyfin and media defaults.
+                        </p>
+                      }
+                    >
+                      <ol
+                        class="mt-4 space-y-2"
+                        aria-label="Selected preferred subtitle languages"
+                      >
+                        <For each={selectedSubtitleLanguages()}>
+                          {(language, index) => (
+                            <li class="flex flex-wrap items-center gap-2 rounded-2xl bg-surface-container-lowest px-3 py-2">
+                              <span class="flex min-w-0 flex-1 items-baseline gap-2">
+                                <span class="rounded-full bg-primary-container px-3 py-1 font-mono text-label-large text-on-primary-container">
+                                  {language}
+                                </span>
+                                <span class="text-body-small text-on-surface-variant">
+                                  {getSubtitleLanguageLabel(language)}
+                                </span>
+                              </span>
+                              <button
+                                type="button"
+                                class="btn-text min-w-0 px-2"
+                                disabled={index() === 0}
+                                aria-label={`Move ${language} up`}
+                                onClick={() =>
+                                  movePreferredSubtitleLanguage(index(), -1)
+                                }
+                              >
+                                Move up
+                              </button>
+                              <button
+                                type="button"
+                                class="btn-text min-w-0 px-2"
+                                disabled={
+                                  index() ===
+                                  selectedSubtitleLanguages().length - 1
+                                }
+                                aria-label={`Move ${language} down`}
+                                onClick={() =>
+                                  movePreferredSubtitleLanguage(index(), 1)
+                                }
+                              >
+                                Move down
+                              </button>
+                              <button
+                                type="button"
+                                class="btn-text min-w-0 px-2"
+                                aria-label={`Remove ${language}`}
+                                onClick={() =>
+                                  removePreferredSubtitleLanguage(language)
+                                }
+                              >
+                                Remove
+                              </button>
+                            </li>
+                          )}
+                        </For>
+                      </ol>
+                    </Show>
+                  </div>
+                  <label
+                    for="intro-skipper-enabled"
+                    class="flex cursor-pointer items-center justify-between gap-4 rounded-2xl bg-surface-container-high px-4 py-3"
+                  >
+                    <span>
+                      <span class="block text-title-medium text-on-surface">
+                        Automatic Intro Skip
+                      </span>
+                      <span class="text-body-small text-on-surface-variant">
+                        Use Intro Skipper ranges when available.
+                      </span>
                     </span>
-                    <span class="text-body-small text-on-surface-variant">
-                      Use Intro Skipper ranges when available.
-                    </span>
-                  </span>
-                  <input
-                    id="intro-skipper-enabled"
-                    name="introSkipperEnabled"
-                    type="checkbox"
-                    aria-label="Automatic Intro Skip"
-                    ref={(el) => {
-                      introSkipperInput = el;
-                    }}
-                    checked={introSkipperEnabledValue}
-                    onInput={(event) =>
-                      handleIntroSkipperToggle(event.currentTarget.checked)
-                    }
-                    onChange={(event) =>
-                      handleIntroSkipperToggle(event.currentTarget.checked)
-                    }
-                    class="h-6 w-6 rounded border-outline text-primary focus:ring-primary"
-                  />
-                </label>
+                    <input
+                      id="intro-skipper-enabled"
+                      name="introSkipperEnabled"
+                      type="checkbox"
+                      aria-label="Automatic Intro Skip"
+                      ref={(el) => {
+                        introSkipperInput = el;
+                      }}
+                      checked={introSkipperEnabledValue}
+                      onInput={(event) =>
+                        handleIntroSkipperToggle(event.currentTarget.checked)
+                      }
+                      onChange={(event) =>
+                        handleIntroSkipperToggle(event.currentTarget.checked)
+                      }
+                      class="h-6 w-6 rounded border-outline text-primary focus:ring-primary"
+                    />
+                  </label>
+                </div>
               </SectionCard>
 
               <form.Subscribe selector={(formState) => formState.isSubmitting}>

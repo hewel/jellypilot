@@ -1,5 +1,5 @@
 import { afterEach, expect, rstest, test } from '@rstest/core';
-import { fireEvent, screen, waitFor } from '@testing-library/dom';
+import { fireEvent, screen, waitFor, within } from '@testing-library/dom';
 import { render } from 'solid-js/web';
 import { commands, events, type NowPlayingState } from '../src/bindings';
 import OperationsConsole from '../src/components/OperationsConsole';
@@ -21,6 +21,7 @@ const config = {
   introSkipperEnabled: true,
   keybindNext: 'Shift+n',
   keybindPrev: 'Shift+p',
+  preferredSubtitleLanguages: [],
 };
 
 const nowPlaying: NowPlayingState = {
@@ -39,10 +40,10 @@ const nowPlaying: NowPlayingState = {
   previousUnavailableReason: 'noCurrentItem',
 };
 
-function mockCommon() {
+function mockCommon(appConfig = config) {
   rstest.spyOn(commands, 'jellyfinGetState').mockResolvedValue(connectedState);
   rstest.spyOn(commands, 'mpvIsConnected').mockResolvedValue(false);
-  rstest.spyOn(commands, 'configGet').mockResolvedValue(config);
+  rstest.spyOn(commands, 'configGet').mockResolvedValue(appConfig);
   rstest.spyOn(commands, 'nowPlayingGetState').mockResolvedValue({
     status: 'ok',
     data: nowPlaying,
@@ -52,8 +53,8 @@ function mockCommon() {
     .mockResolvedValue(() => undefined);
 }
 
-function renderConsole(onSignedOut = () => undefined) {
-  mockCommon();
+function renderConsole(onSignedOut = () => undefined, appConfig = config) {
+  mockCommon(appConfig);
   const root = document.createElement('div');
   document.body.append(root);
   const dispose = render(
@@ -110,6 +111,85 @@ test('operations console saves changed intro skipper setting', async () => {
     expect.objectContaining({ introSkipperEnabled: false }),
   );
   await waitFor(() => expect(screen.getByText('Manual')).toBeVisible());
+
+  cleanup();
+});
+
+test('operations console saves ordered preferred subtitle languages', async () => {
+  const configSet = rstest.spyOn(commands, 'configSet').mockResolvedValue({
+    status: 'ok',
+    data: null,
+  });
+  const cleanup = renderConsole(() => undefined, {
+    ...config,
+    preferredSubtitleLanguages: ['jpn', 'eng'],
+  });
+
+  await waitFor(() =>
+    expect(
+      screen.getByRole('list', {
+        name: 'Selected preferred subtitle languages',
+      }),
+    ).toBeVisible(),
+  );
+  const list = screen.getByRole('list', {
+    name: 'Selected preferred subtitle languages',
+  });
+  expect(
+    within(list)
+      .getAllByText(/^(jpn|eng)$/)
+      .map((el) => el.textContent),
+  ).toEqual(['jpn', 'eng']);
+
+  fireEvent.click(screen.getByRole('button', { name: 'Move jpn down' }));
+  const input = screen.getByLabelText(
+    'Add preferred subtitle language',
+  ) as HTMLInputElement;
+  fireEvent.input(input, { target: { value: ' SWE ' } });
+  fireEvent.keyDown(input, { key: 'Enter' });
+  fireEvent.click(screen.getByRole('button', { name: 'Move swe up' }));
+  fireEvent.input(input, { target: { value: 'spa' } });
+  fireEvent.click(screen.getByRole('button', { name: 'Add language' }));
+  fireEvent.click(screen.getByRole('button', { name: 'Remove jpn' }));
+  fireEvent.click(screen.getByRole('button', { name: 'Save Settings' }));
+
+  await waitFor(() => expect(configSet).toHaveBeenCalledTimes(1));
+  expect(configSet).toHaveBeenCalledWith(
+    expect.objectContaining({
+      preferredSubtitleLanguages: ['eng', 'swe', 'spa'],
+    }),
+  );
+
+  cleanup();
+});
+
+test('operations console clears preferred subtitle languages', async () => {
+  const configSet = rstest.spyOn(commands, 'configSet').mockResolvedValue({
+    status: 'ok',
+    data: null,
+  });
+  const cleanup = renderConsole(() => undefined, {
+    ...config,
+    preferredSubtitleLanguages: ['jpn'],
+  });
+
+  await waitFor(() =>
+    expect(screen.getByRole('button', { name: 'Clear all' })).toBeVisible(),
+  );
+  fireEvent.click(screen.getByRole('button', { name: 'Clear all' }));
+  expect(
+    screen.getByText(
+      /No preferred subtitle languages selected. JMSR will use Jellyfin and media defaults./,
+    ),
+  ).toBeVisible();
+  fireEvent.click(screen.getByRole('button', { name: 'Save Settings' }));
+
+  await waitFor(() => expect(configSet).toHaveBeenCalledTimes(1));
+  expect(configSet).toHaveBeenCalledWith(
+    expect.objectContaining({
+      preferredSubtitleLanguages: [],
+    }),
+  );
 
   cleanup();
 });
