@@ -490,7 +490,10 @@ export default function OperationsConsole(props: OperationsConsoleProps) {
               </p>
             </SectionCard>
 
-            <NowPlayingCard />
+            <NowPlayingCard
+              jellyfinConnected={state()?.connected ?? false}
+              onPlayerStarted={() => refetchMpv()}
+            />
             <form
               onSubmit={(event) => {
                 event.preventDefault();

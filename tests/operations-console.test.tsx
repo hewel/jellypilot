@@ -213,7 +213,7 @@ test('connection comes before now playing and hero keeps only refresh', async ()
     ),
   );
   expect(screen.getByRole('button', { name: 'Refresh status' })).toBeVisible();
-  expect(screen.queryByRole('button', { name: 'Start MPV' })).toBeVisible();
+  expect(screen.queryByRole('button', { name: 'Start MPV' })).toBeNull();
   expect(screen.queryByRole('button', { name: 'Reconnect' })).toBeNull();
 
   cleanup();

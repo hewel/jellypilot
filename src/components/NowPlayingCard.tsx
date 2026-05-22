@@ -1,7 +1,6 @@
 import {
   Pause,
   Play,
-  RotateCcw,
   SkipBack,
   SkipForward,
   Square,
@@ -60,7 +59,10 @@ function statusVariant(status: NowPlayingState['status']) {
   }
 }
 
-export default function NowPlayingCard() {
+export default function NowPlayingCard(props: {
+  jellyfinConnected: boolean;
+  onPlayerStarted?: () => void;
+}) {
   const { showToast } = useToast();
   const [state, setState] = createSignal<NowPlayingState | null>(null);
   const [busy, setBusy] = createSignal<string | null>(null);
@@ -128,9 +130,9 @@ export default function NowPlayingCard() {
   const mediaSubtitle = () => {
     const media = current()?.media;
     if (!media)
-      return connected()
+      return props.jellyfinConnected
         ? 'Waiting for Jellyfin playback'
-        : 'Start MPV or cast media from Jellyfin';
+        : 'Reconnect Jellyfin before starting MPV';
     if (media.seriesName) {
       const episode =
         media.seasonNumber && media.episodeNumber
@@ -273,13 +275,17 @@ export default function NowPlayingCard() {
           <button
             type="button"
             class="btn-secondary"
-            disabled={busy() !== null}
+            disabled={!props.jellyfinConnected || busy() !== null}
             onClick={() =>
-              void runCommand('start', commands.mpvStart, 'Could not start MPV')
+              void runCommand(
+                'start',
+                commands.mpvStart,
+                'Could not start MPV',
+              ).then(() => props.onPlayerStarted?.())
             }
           >
-            <RotateCcw class="h-5 w-5" />
-            Start MPV
+            <Play class="h-5 w-5" />
+            {props.jellyfinConnected ? 'Start MPV' : 'Reconnect Jellyfin first'}
           </button>
         </Show>
       </div>

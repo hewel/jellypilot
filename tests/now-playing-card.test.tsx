@@ -44,7 +44,10 @@ const playingState: NowPlayingState = {
   previousUnavailableReason: null,
 };
 
-function renderCard(state: NowPlayingState = offlineState) {
+function renderCard(
+  state: NowPlayingState = offlineState,
+  jellyfinConnected = true,
+) {
   rstest
     .spyOn(commands, 'nowPlayingGetState')
     .mockResolvedValue({ status: 'ok', data: state });
@@ -56,7 +59,7 @@ function renderCard(state: NowPlayingState = offlineState) {
   const dispose = render(
     () => (
       <ToastProvider>
-        <NowPlayingCard />
+        <NowPlayingCard jellyfinConnected={jellyfinConnected} />
       </ToastProvider>
     ),
     root,
@@ -72,7 +75,7 @@ afterEach(() => {
   document.body.innerHTML = '';
 });
 
-test('offline now playing disables transport controls and offers start mpv', async () => {
+test('offline now playing offers start mpv when Jellyfin is connected', async () => {
   const cleanup = renderCard();
 
   await waitFor(() =>
@@ -80,6 +83,29 @@ test('offline now playing disables transport controls and offers start mpv', asy
   );
   expect(screen.getByRole('button', { name: 'Play' })).toBeDisabled();
   expect(screen.getByRole('button', { name: 'Start MPV' })).toBeVisible();
+
+  cleanup();
+});
+
+test('offline now playing blocks start mpv when Jellyfin is disconnected', async () => {
+  const startMpv = rstest
+    .spyOn(commands, 'mpvStart')
+    .mockResolvedValue({ status: 'ok', data: null });
+  const cleanup = renderCard(offlineState, false);
+
+  await waitFor(() =>
+    expect(screen.getByText('Player bridge offline')).toBeVisible(),
+  );
+
+  expect(
+    screen.getByText('Reconnect Jellyfin before starting MPV'),
+  ).toBeVisible();
+  const button = screen.getByRole('button', {
+    name: 'Reconnect Jellyfin first',
+  });
+  expect(button).toBeDisabled();
+  fireEvent.click(button);
+  expect(startMpv).not.toHaveBeenCalled();
 
   cleanup();
 });
