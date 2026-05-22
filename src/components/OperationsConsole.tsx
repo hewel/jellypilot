@@ -1,4 +1,7 @@
 import { Dialog } from '@ark-ui/solid/dialog';
+import { Checkbox } from '@ark-ui/solid/checkbox';
+import { Collapsible } from '@ark-ui/solid/collapsible';
+import { Field as ArkField } from '@ark-ui/solid/field';
 import { createForm } from '@tanstack/solid-form';
 import {
   Activity,
@@ -118,7 +121,6 @@ function StatusTile(props: {
 export default function OperationsConsole(props: OperationsConsoleProps) {
   const { showToast } = useToast();
   let configHydrated = false;
-  let introSkipperInput: HTMLInputElement | undefined;
   type PendingSave = {
     config: AppConfig;
     onSuccess?: () => void;
@@ -192,9 +194,6 @@ export default function OperationsConsole(props: OperationsConsoleProps) {
         'introSkipperEnabled',
         cfg.introSkipperEnabled ?? true,
       );
-      if (introSkipperInput) {
-        introSkipperInput.checked = cfg.introSkipperEnabled ?? true;
-      }
       if ((cfg.mpvArgs?.length ?? 0) > 0) setAdvancedOpen(true);
       configHydrated = true;
     }
@@ -354,7 +353,6 @@ export default function OperationsConsole(props: OperationsConsoleProps) {
         setIntroSkipperSaving(false);
         setIntroSkipperError(message);
         form.setFieldValue('introSkipperEnabled', previous);
-        if (introSkipperInput) introSkipperInput.checked = previous;
       },
     });
   };
@@ -679,11 +677,14 @@ export default function OperationsConsole(props: OperationsConsoleProps) {
                     }}
                   >
                     {(field) => (
-                      <label class="block">
-                        <span class="mb-1 block text-label-medium uppercase text-on-surface-variant">
+                      <ArkField.Root
+                        class="block"
+                        invalid={field().state.meta.errors.length > 0}
+                      >
+                        <ArkField.Label class="mb-1 block text-label-medium uppercase text-on-surface-variant">
                           Playback Target name
-                        </span>
-                        <input
+                        </ArkField.Label>
+                        <ArkField.Input
                           id={field().name}
                           name={field().name}
                           type="text"
@@ -702,25 +703,25 @@ export default function OperationsConsole(props: OperationsConsoleProps) {
                           placeholder="JMSR"
                         />
                         <Show when={field().state.meta.errors.length > 0}>
-                          <p class="mt-1 text-body-small text-error">
+                          <ArkField.ErrorText class="mt-1 text-body-small text-error">
                             {field().state.meta.errors[0]}
-                          </p>
+                          </ArkField.ErrorText>
                         </Show>
-                        <p class="mt-1 text-body-small text-on-surface-variant">
+                        <ArkField.HelperText class="mt-1 text-body-small text-on-surface-variant">
                           Name displayed in Jellyfin cast menu.
-                        </p>
-                      </label>
+                        </ArkField.HelperText>
+                      </ArkField.Root>
                     )}
                   </form.Field>
 
                   <form.Field name="mpvPath">
                     {(field) => (
-                      <label class="block">
-                        <span class="mb-1 block text-label-medium uppercase text-on-surface-variant">
+                      <ArkField.Root class="block">
+                        <ArkField.Label class="mb-1 block text-label-medium uppercase text-on-surface-variant">
                           MPV executable path
-                        </span>
+                        </ArkField.Label>
                         <div class="flex flex-col gap-2 sm:flex-row">
-                          <input
+                          <ArkField.Input
                             id={field().name}
                             name={field().name}
                             type="text"
@@ -747,33 +748,43 @@ export default function OperationsConsole(props: OperationsConsoleProps) {
                             {detectingMpv() ? 'Detecting...' : 'Detect MPV'}
                           </button>
                         </div>
-                      </label>
+                      </ArkField.Root>
                     )}
                   </form.Field>
 
-                  <button
-                    type="button"
-                    class="btn-text px-0"
-                    aria-expanded={advancedOpen()}
-                    onClick={() => setAdvancedOpen((open) => !open)}
+                  <Collapsible.Root
+                    open={advancedOpen()}
+                    onClick={(event) => {
+                      const target = event.target;
+                      if (
+                        target instanceof HTMLElement &&
+                        target.closest(
+                          '[data-scope="collapsible"][data-part="trigger"]',
+                        )
+                      ) {
+                        setAdvancedOpen((open) => !open);
+                      }
+                    }}
+                    lazyMount
+                    unmountOnExit
                   >
-                    <ChevronDown
-                      class={`h-5 w-5 transition-transform ${advancedOpen() ? 'rotate-180' : ''}`}
-                    />
-                    Advanced MPV options
-                  </button>
+                    <Collapsible.Trigger class="btn-text px-0">
+                      <Collapsible.Indicator>
+                        <ChevronDown
+                          class={`h-5 w-5 transition-transform ${advancedOpen() ? 'rotate-180' : ''}`}
+                        />
+                      </Collapsible.Indicator>
+                      Advanced MPV options
+                    </Collapsible.Trigger>
 
-                  <Show when={advancedOpen()}>
-                    <div class="space-y-5 rounded-3xl border border-outline-variant bg-surface-container-lowest p-4">
+                    <Collapsible.Content class="space-y-5 rounded-3xl border border-outline-variant bg-surface-container-lowest p-4">
                       <form.Field name="mpvArgs">
                         {(field) => (
-                          <label class="block">
-                            <span class="mb-1 block text-label-medium uppercase text-on-surface-variant">
+                          <ArkField.Root class="block">
+                            <ArkField.Label class="mb-1 block text-label-medium uppercase text-on-surface-variant">
                               Extra arguments
-                            </span>
-                            <textarea
-                              id={field().name}
-                              name={field().name}
+                            </ArkField.Label>
+                            <ArkField.Textarea
                               value={field().state.value}
                               onInput={(event) =>
                                 field().handleChange(event.currentTarget.value)
@@ -789,7 +800,7 @@ export default function OperationsConsole(props: OperationsConsoleProps) {
                               placeholder="--fullscreen&#10;--force-window"
                               class="input-filled h-auto w-full py-3 font-mono text-body-small"
                             />
-                          </label>
+                          </ArkField.Root>
                         )}
                       </form.Field>
 
@@ -804,11 +815,14 @@ export default function OperationsConsole(props: OperationsConsoleProps) {
                           }}
                         >
                           {(field) => (
-                            <label class="block">
-                              <span class="mb-1 block text-label-medium uppercase text-on-surface-variant">
+                            <ArkField.Root
+                              class="block"
+                              invalid={field().state.meta.errors.length > 0}
+                            >
+                              <ArkField.Label class="mb-1 block text-label-medium uppercase text-on-surface-variant">
                                 Next episode key
-                              </span>
-                              <input
+                              </ArkField.Label>
+                              <ArkField.Input
                                 id={field().name}
                                 name={field().name}
                                 type="text"
@@ -828,7 +842,7 @@ export default function OperationsConsole(props: OperationsConsoleProps) {
                                 class="input-filled w-full font-mono"
                                 placeholder="Shift+n"
                               />
-                            </label>
+                            </ArkField.Root>
                           )}
                         </form.Field>
                         <form.Field
@@ -841,11 +855,14 @@ export default function OperationsConsole(props: OperationsConsoleProps) {
                           }}
                         >
                           {(field) => (
-                            <label class="block">
-                              <span class="mb-1 block text-label-medium uppercase text-on-surface-variant">
+                            <ArkField.Root
+                              class="block"
+                              invalid={field().state.meta.errors.length > 0}
+                            >
+                              <ArkField.Label class="mb-1 block text-label-medium uppercase text-on-surface-variant">
                                 Previous episode key
-                              </span>
-                              <input
+                              </ArkField.Label>
+                              <ArkField.Input
                                 id={field().name}
                                 name={field().name}
                                 type="text"
@@ -865,12 +882,12 @@ export default function OperationsConsole(props: OperationsConsoleProps) {
                                 class="input-filled w-full font-mono"
                                 placeholder="Shift+p"
                               />
-                            </label>
+                            </ArkField.Root>
                           )}
                         </form.Field>
                       </div>
-                    </div>
-                  </Show>
+                    </Collapsible.Content>
+                  </Collapsible.Root>
                   <div class="rounded-2xl bg-surface-container-high p-4">
                     <div class="flex flex-wrap items-start justify-between gap-3">
                       <div>
@@ -1036,33 +1053,30 @@ export default function OperationsConsole(props: OperationsConsoleProps) {
               title="Automatic Intro Skip"
             >
               <div class="space-y-4">
-                <label
-                  for="intro-skipper-enabled"
-                  class="flex cursor-pointer items-center justify-between gap-4 rounded-2xl bg-surface-container-high px-4 py-3 focus-within:outline focus-within:outline-2 focus-within:outline-offset-2 focus-within:outline-primary"
+                <Checkbox.Root
+                  ids={{ hiddenInput: 'intro-skipper-enabled' }}
+                  name="introSkipperEnabled"
+                  checked={introSkipperEnabled()}
+                  onCheckedChange={(details) =>
+                    handleIntroSkipperToggle(details.checked === true)
+                  }
+                  class="ark-checkbox flex w-full cursor-pointer items-center justify-between gap-4 rounded-2xl bg-surface-container-high px-4 py-3 text-left"
                 >
                   <span>
-                    <span class="block text-title-medium text-on-surface">
+                    <Checkbox.Label class="block text-title-medium text-on-surface">
                       Automatic Intro Skip
-                    </span>
+                    </Checkbox.Label>
                     <span class="text-body-small text-on-surface-variant">
                       Use Intro Skipper ranges when available.
                     </span>
                   </span>
-                  <input
-                    id="intro-skipper-enabled"
-                    name="introSkipperEnabled"
-                    type="checkbox"
-                    aria-label="Automatic Intro Skip"
-                    ref={(el) => {
-                      introSkipperInput = el;
-                    }}
-                    checked={introSkipperEnabled()}
-                    onChange={(event) =>
-                      handleIntroSkipperToggle(event.currentTarget.checked)
-                    }
-                    class="h-6 w-6 rounded border-outline text-primary focus:ring-primary"
-                  />
-                </label>
+                  <Checkbox.Control class="ark-checkbox__control h-6 w-6">
+                    <Checkbox.Indicator class="ark-checkbox__indicator">
+                      ✓
+                    </Checkbox.Indicator>
+                  </Checkbox.Control>
+                  <Checkbox.HiddenInput aria-label="Automatic Intro Skip" />
+                </Checkbox.Root>
                 <Show when={introSkipperSaving()}>
                   <p class="text-body-small text-secondary">
                     Saving preference…

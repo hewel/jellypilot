@@ -561,6 +561,32 @@ test('sign out dialog locks dismissal while signing out', async () => {
 
   cleanup();
 });
+test('player bridge settings use Ark field collapsible and checkbox primitives', async () => {
+  const cleanup = renderConsole();
+
+  const mpvPath = await screen.findByPlaceholderText('Path to mpv executable');
+  expect(mpvPath.closest('[data-scope="field"]')).not.toBeNull();
+
+  expect(screen.queryByPlaceholderText('--fullscreen&#10;--force-window')).toBeNull();
+
+  const advancedTrigger = screen.getByRole('button', {
+    name: 'Advanced MPV options',
+  });
+  expect(advancedTrigger.closest('[data-scope="collapsible"]')).not.toBeNull();
+
+  fireEvent.click(advancedTrigger);
+  await waitFor(() => expect(advancedTrigger).toHaveAttribute('aria-expanded', 'true'));
+  const mpvArgs = await screen.findByLabelText('Extra arguments');
+  expect(mpvArgs.closest('[data-scope="field"]')).not.toBeNull();
+  expect(mpvArgs.closest('[data-scope="collapsible"]')).not.toBeNull();
+
+  const introSkip = screen.getByRole('checkbox', {
+    name: 'Automatic Intro Skip',
+  });
+  expect(introSkip.closest('[data-scope="checkbox"]')).not.toBeNull();
+
+  cleanup();
+});
 
 test('settings and session actions keep shared visual semantics', async () => {
   const cleanup = renderConsole();
