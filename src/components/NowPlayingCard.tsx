@@ -1,3 +1,4 @@
+import { Slider } from '@ark-ui/solid/slider';
 import {
   Pause,
   Play,
@@ -66,11 +67,15 @@ export default function NowPlayingCard(props: {
   const { showToast } = useToast();
   const [state, setState] = createSignal<NowPlayingState | null>(null);
   const [busy, setBusy] = createSignal<string | null>(null);
+  const [seekDraft, setSeekDraft] = createSignal<number | null>(null);
+  const [volumeDraft, setVolumeDraft] = createSignal<number | null>(null);
 
   const loadState = async () => {
     const result = await commands.nowPlayingGetState();
     if (result.status === 'ok') {
       setState(result.data);
+      setSeekDraft(null);
+      setVolumeDraft(null);
     }
   };
 
@@ -103,6 +108,8 @@ export default function NowPlayingCard(props: {
     events.nowPlayingChanged
       .listen((event) => {
         setState(event.payload.state);
+        setSeekDraft(null);
+        setVolumeDraft(null);
       })
       .then((unlisten) => {
         if (disposed) {
@@ -121,6 +128,8 @@ export default function NowPlayingCard(props: {
   const current = () => state();
   const player = () => current()?.player;
   const connected = () => player()?.connected ?? false;
+  const seekValue = () => seekDraft() ?? player()?.timePos ?? 0;
+  const volumeValue = () => volumeDraft() ?? player()?.volume ?? 100;
   const activeTimeline = () => {
     const duration = player()?.duration ?? 0;
     return connected() && Number.isFinite(duration) && duration > 0;
@@ -146,6 +155,20 @@ export default function NowPlayingCard(props: {
     }
     return media.itemType;
   };
+  const commitSeek = (value: number) => {
+    if (!activeTimeline() || !canControlPlayback() || busy() !== null) return;
+    void runCommand('seek', () => commands.mpvSeek(value), 'Could not seek playback');
+  };
+
+  const commitVolume = (value: number) => {
+    if (!connected() || busy() !== null) return;
+    void runCommand(
+      'volume',
+      () => commands.mpvSetVolume(value),
+      'Could not set volume',
+    );
+  };
+
 
   return (
     <section
@@ -172,7 +195,7 @@ export default function NowPlayingCard(props: {
 
       <div class="rounded-3xl border border-outline-variant/60 bg-surface-container-lowest p-4">
         <div class="mb-3 flex items-center justify-between text-label-small text-on-surface-variant">
-          <span>{formatTime(player()?.timePos ?? 0)}</span>
+          <span>{formatTime(seekValue())}</span>
           <span>
             {activeTimeline()
               ? formatTime(player()?.duration ?? 0)
@@ -183,23 +206,25 @@ export default function NowPlayingCard(props: {
           when={activeTimeline()}
           fallback={<div class="h-2 rounded-full bg-surface-container-high" />}
         >
-          <input
-            aria-label="Seek position"
-            type="range"
-            min="0"
+          <Slider.Root
+            aria-label={['Seek position']}
+            min={0}
             max={player()?.duration ?? 0}
-            value={player()?.timePos ?? 0}
-            disabled={!connected() || busy() !== null}
-            class="w-full accent-primary"
-            onChange={(event) => {
-              const time = Number(event.currentTarget.value);
-              void runCommand(
-                'seek',
-                () => commands.mpvSeek(time),
-                'Could not seek playback',
-              );
-            }}
-          />
+            value={[seekValue()]}
+            disabled={!activeTimeline() || !canControlPlayback() || busy() !== null}
+            onValueChange={(details) => setSeekDraft(details.value[0] ?? 0)}
+            onValueChangeEnd={(details) => commitSeek(details.value[0] ?? 0)}
+            class="ark-slider"
+          >
+            <Slider.Control class="ark-slider__control">
+              <Slider.Track class="ark-slider__track">
+                <Slider.Range class="ark-slider__range bg-primary" />
+              </Slider.Track>
+              <Slider.Thumb index={0} class="ark-slider__thumb">
+                <Slider.HiddenInput />
+              </Slider.Thumb>
+            </Slider.Control>
+          </Slider.Root>
         </Show>
       </div>
 
@@ -312,25 +337,27 @@ export default function NowPlayingCard(props: {
             <Volume2 class="h-5 w-5" />
           </Show>
         </button>
-        <input
-          aria-label="Volume"
-          type="range"
-          min="0"
-          max="100"
-          value={player()?.volume ?? 100}
+        <Slider.Root
+          aria-label={['Volume']}
+          min={0}
+          max={100}
+          value={[volumeValue()]}
           disabled={!connected() || busy() !== null}
-          class="w-full accent-secondary"
-          onChange={(event) => {
-            const volume = Number(event.currentTarget.value);
-            void runCommand(
-              'volume',
-              () => commands.mpvSetVolume(volume),
-              'Could not set volume',
-            );
-          }}
-        />
+          onValueChange={(details) => setVolumeDraft(details.value[0] ?? 100)}
+          onValueChangeEnd={(details) => commitVolume(details.value[0] ?? 100)}
+          class="ark-slider flex-1"
+        >
+          <Slider.Control class="ark-slider__control">
+            <Slider.Track class="ark-slider__track">
+              <Slider.Range class="ark-slider__range bg-secondary" />
+            </Slider.Track>
+            <Slider.Thumb index={0} class="ark-slider__thumb">
+              <Slider.HiddenInput />
+            </Slider.Thumb>
+          </Slider.Control>
+        </Slider.Root>
         <span class="w-12 text-right font-mono text-body-small text-on-surface-variant">
-          {Math.round(player()?.volume ?? 100)}%
+          {Math.round(volumeValue())}%
         </span>
       </div>
     </section>

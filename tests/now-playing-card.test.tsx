@@ -163,6 +163,32 @@ test('playing state exposes transport controls and media metadata', async () => 
   await waitFor(() => expect(setPause).toHaveBeenCalledWith(true));
   cleanup();
 });
+test('playing state uses Ark sliders for seek and volume', async () => {
+  const seek = rstest
+    .spyOn(commands, 'mpvSeek')
+    .mockResolvedValue({ status: 'ok', data: null });
+  const setVolume = rstest
+    .spyOn(commands, 'mpvSetVolume')
+    .mockResolvedValue({ status: 'ok', data: null });
+  const cleanup = renderCard(playingState);
+
+  await waitFor(() => expect(screen.getByText('The Pilot')).toBeVisible());
+
+  const seekSlider = screen.getByRole('slider', { name: 'Seek position' });
+  const volumeSlider = screen.getByRole('slider', { name: 'Volume' });
+
+  expect(seekSlider.closest('[data-scope="slider"]')).not.toBeNull();
+  expect(volumeSlider.closest('[data-scope="slider"]')).not.toBeNull();
+
+  expect(seekSlider).toHaveAttribute('aria-valuemin', '0');
+  expect(seekSlider).toHaveAttribute('aria-valuemax', '120');
+  expect(volumeSlider).toHaveAttribute('aria-valuemin', '0');
+  expect(volumeSlider).toHaveAttribute('aria-valuemax', '100');
+  expect(seek).not.toHaveBeenCalled();
+  expect(setVolume).not.toHaveBeenCalled();
+
+  cleanup();
+});
 
 test('next and previous are disabled when unavailable', async () => {
   const cleanup = renderCard();

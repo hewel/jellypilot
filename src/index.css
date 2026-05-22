@@ -200,6 +200,29 @@ body {
   .ark-checkbox__indicator {
     @apply flex items-center justify-center font-bold;
   }
+  .ark-slider {
+    @apply flex w-full flex-col gap-1 disabled:opacity-50;
+  }
+
+  .ark-slider[data-disabled] {
+    @apply opacity-50;
+  }
+
+  .ark-slider__control {
+    @apply relative flex h-6 items-center;
+  }
+
+  .ark-slider__track {
+    @apply h-2 flex-1 overflow-hidden rounded-full bg-surface-container-high;
+  }
+
+  .ark-slider__range {
+    @apply h-full rounded-full;
+  }
+
+  .ark-slider__thumb {
+    @apply flex h-5 w-5 items-center justify-center rounded-full border-2 border-surface-container-lowest bg-on-surface shadow-lg shadow-black/30 outline-none transition data-[disabled]:opacity-50 data-[focus-visible]:ring-2 data-[focus-visible]:ring-primary/50 data-[focus-visible]:ring-offset-2 data-[focus-visible]:ring-offset-background;
+  }
 
   .btn-primary {
     @apply inline-flex min-h-11 items-center justify-center gap-2 rounded-full bg-primary px-6 py-2.5 text-[14px] leading-[20px] font-semibold text-on-primary shadow-lg shadow-primary/25 transition duration-200 hover:bg-[#B91AED] focus:outline-none focus:ring-2 focus:ring-primary/50 focus:ring-offset-2 focus:ring-offset-background active:scale-[0.98] disabled:pointer-events-none disabled:opacity-50;
