@@ -16,7 +16,7 @@ use super::mpv_event::{
 };
 use super::play_resolution::{resolve_play_request, PlayResolutionConfig};
 use super::types::*;
-use super::websocket::{JellyfinCommand, JellyfinWebSocket};
+use super::websocket::{JellyfinCommand, JellyfinWebSocket, JellyfinWebSocketEvent};
 use crate::command::{AppNotification, NowPlayingChanged};
 use crate::config::AppConfig;
 use crate::mpv::MpvClient;
@@ -210,7 +210,7 @@ impl SessionManager {
     Ok(())
   }
 
-  /// Start WebSocket command consumer with auto-reconnect capability.
+  /// Start WebSocket command stream consumer.
   fn start_websocket_consumer(&self) {
     let client = self.client.clone();
     let websocket = self.websocket.clone();
@@ -221,83 +221,38 @@ impl SessionManager {
     let config = self.config.clone();
 
     tokio::spawn(async move {
-      const RECONNECT_DELAYS: &[u64] = &[1, 2, 5, 10, 30, 60]; // seconds
-      let mut reconnect_attempt: usize = 0;
-      let mut first_connect = true;
+      let Some(mut event_rx) = websocket.take_event_receiver() else {
+        log::warn!("No WebSocket event receiver available");
+        return;
+      };
 
-      loop {
-        // Take the command receiver for this connection
-        let command_rx = match websocket.take_command_receiver() {
-          Some(rx) => rx,
-          None => {
-            log::warn!("No command receiver available, waiting...");
-            tokio::time::sleep(std::time::Duration::from_secs(1)).await;
-            continue;
+      log::info!("WebSocket command stream consumer started");
+      while let Some(event) = event_rx.recv().await {
+        match event {
+          JellyfinWebSocketEvent::Connected => {
+            log::info!("Jellyfin WebSocket connected");
           }
-        };
-
-        log::info!("WebSocket command consumer started");
-        if !first_connect {
-          reconnect_attempt = 0; // Reset on successful reconnection
-        }
-        first_connect = false;
-
-        // Process commands until channel closes
-        let mut command_rx = command_rx;
-        while let Some(cmd) = command_rx.recv().await {
-          if let Err(e) =
-            Self::handle_command(&client, &state, &action_tx, &app_handle, &mpv, &config, cmd).await
-          {
-            log::error!("Failed to handle Jellyfin command: {}", e);
-            AppNotification::error(&app_handle, format!("Command failed: {}", e));
+          JellyfinWebSocketEvent::ConnectionLost => {
+            log::warn!("Jellyfin WebSocket connection lost");
+            Self::clear_playback_context(&client, &state).await;
+            AppNotification::warning(&app_handle, "Connection lost. Reconnecting...");
           }
-        }
-
-        // Channel closed - WebSocket disconnected
-        log::warn!("Jellyfin WebSocket connection lost");
-
-        // Clear playback context since we lost connection
-        Self::clear_playback_context(&client, &state).await;
-
-        // Calculate reconnect delay with exponential backoff
-        let delay_idx = reconnect_attempt.min(RECONNECT_DELAYS.len() - 1);
-        let delay = RECONNECT_DELAYS[delay_idx];
-        reconnect_attempt += 1;
-
-        log::info!(
-          "Attempting WebSocket reconnection in {} seconds (attempt {})",
-          delay,
-          reconnect_attempt
-        );
-        AppNotification::warning(
-          &app_handle,
-          format!("Connection lost. Reconnecting in {} seconds...", delay),
-        );
-
-        tokio::time::sleep(std::time::Duration::from_secs(delay)).await;
-
-        // Attempt to reconnect
-        let ws_url = match client.playback().websocket_url() {
-          Ok(url) => url,
-          Err(e) => {
-            log::error!("Failed to get WebSocket URL: {}", e);
-            continue;
-          }
-        };
-
-        match websocket.connect(&ws_url).await {
-          Ok(_) => {
+          JellyfinWebSocketEvent::Reconnected => {
             log::info!("WebSocket reconnected successfully");
             AppNotification::info(&app_handle, "Reconnected to Jellyfin");
 
-            // Re-report capabilities after reconnection
             if let Err(e) = client.playback().report_capabilities().await {
               log::error!("Failed to report capabilities after reconnect: {}", e);
             }
           }
-          Err(e) => {
-            log::error!("WebSocket reconnection failed: {}", e);
-            // Will retry on next loop iteration
+          JellyfinWebSocketEvent::Command(cmd) => {
+            if let Err(e) =
+              Self::handle_command(&client, &state, &action_tx, &app_handle, &mpv, &config, cmd)
+                .await
+            {
+              log::error!("Failed to handle Jellyfin command: {}", e);
+              AppNotification::error(&app_handle, format!("Command failed: {}", e));
+            }
           }
         }
       }

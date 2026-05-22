@@ -3,7 +3,8 @@
 use futures_util::{SinkExt, StreamExt};
 use parking_lot::RwLock;
 use std::sync::Arc;
-use tokio::sync::mpsc;
+use std::time::Duration;
+use tokio::sync::{mpsc, oneshot};
 use tokio::task::JoinHandle;
 use tokio_tungstenite::{connect_async, tungstenite::Message};
 use tokio_util::sync::CancellationToken;
@@ -22,10 +23,23 @@ pub enum JellyfinCommand {
   GeneralCommand(GeneralCommand),
 }
 
-/// Internal state for channel management.
+/// Stream events emitted by the restartable Jellyfin WebSocket command stream.
+#[derive(Debug, Clone)]
+pub enum JellyfinWebSocketEvent {
+  /// Initial socket connection has been established.
+  Connected,
+  /// The active socket was lost. A reconnect may follow unless shutdown was requested.
+  ConnectionLost,
+  /// A lost socket has reconnected successfully.
+  Reconnected,
+  /// A Jellyfin command received from the active socket.
+  Command(JellyfinCommand),
+}
+
+/// Internal state for the command stream receiver.
 struct ChannelState {
-  command_tx: mpsc::Sender<JellyfinCommand>,
-  command_rx: Option<mpsc::Receiver<JellyfinCommand>>,
+  event_tx: Option<mpsc::Sender<JellyfinWebSocketEvent>>,
+  event_rx: Option<mpsc::Receiver<JellyfinWebSocketEvent>>,
 }
 
 /// WebSocket connection to Jellyfin server.
@@ -39,11 +53,11 @@ pub struct JellyfinWebSocket {
 impl JellyfinWebSocket {
   /// Create a new WebSocket handler.
   pub fn new() -> Self {
-    let (command_tx, command_rx) = mpsc::channel(32);
+    let (event_tx, event_rx) = mpsc::channel(32);
     Self {
       channel: Arc::new(RwLock::new(ChannelState {
-        command_tx,
-        command_rx: Some(command_rx),
+        event_tx: Some(event_tx),
+        event_rx: Some(event_rx),
       })),
       connected: Arc::new(RwLock::new(false)),
       cancel_token: Arc::new(RwLock::new(None)),
@@ -51,109 +65,236 @@ impl JellyfinWebSocket {
     }
   }
 
-  /// Reset channels for a fresh connection.
-  /// This creates new tx/rx pairs, allowing the receiver to be taken again.
-  pub fn reset_channels(&self) {
-    let (command_tx, command_rx) = mpsc::channel(32);
-    let mut channel = self.channel.write();
-    channel.command_tx = command_tx;
-    channel.command_rx = Some(command_rx);
-  }
-
-  /// Connect to Jellyfin WebSocket.
-  /// Accepts optional capabilities JSON to send via WebSocket (Double Report Strategy).
+  /// Connect to Jellyfin WebSocket and own reconnects until explicit shutdown.
   pub async fn connect(&self, url: &str) -> Result<(), JellyfinError> {
-    // Cancel any existing connection
-    self.disconnect().await;
+    self.stop_task(false).await;
 
-    // Reset channels for fresh receiver
-    self.reset_channels();
+    let Some(event_tx) = self.channel.read().event_tx.clone() else {
+      return Err(JellyfinError::NotConnected);
+    };
 
-    let (ws_stream, _) = connect_async(url).await?;
-    let (mut write, mut read) = ws_stream.split();
-
-    *self.connected.write() = true;
-
-    // Create cancellation token
     let cancel_token = CancellationToken::new();
     *self.cancel_token.write() = Some(cancel_token.clone());
 
     let connected = self.connected.clone();
-    let command_tx = self.channel.read().command_tx.clone();
+    let url = url.to_string();
+    let (initial_tx, initial_rx) = oneshot::channel();
 
-    // Spawn WebSocket reader task
     let handle = tokio::spawn(async move {
-      // FIX 1: "1000,1000" tells the server we are an ACTIVE client
-      let session_start = serde_json::json!({
-        "MessageType": "SessionsStart",
-        "Data": "1000,1000"
-      });
-      if let Err(e) = write
-        .send(Message::Text(session_start.to_string().into()))
-        .await
-      {
-        log::error!("Failed to send SessionsStart: {}", e);
-        *connected.write() = false;
-        return;
+      Self::run_command_stream(url, event_tx, connected, cancel_token, Some(initial_tx)).await;
+    });
+    *self.task_handle.write() = Some(handle);
+
+    initial_rx.await.unwrap_or(Err(JellyfinError::NotConnected))
+  }
+
+  async fn run_command_stream(
+    url: String,
+    event_tx: mpsc::Sender<JellyfinWebSocketEvent>,
+    connected: Arc<RwLock<bool>>,
+    cancel_token: CancellationToken,
+    mut initial_tx: Option<oneshot::Sender<Result<(), JellyfinError>>>,
+  ) {
+    let mut reconnect_attempt = 0usize;
+    let mut has_connected = false;
+
+    loop {
+      if cancel_token.is_cancelled() {
+        break;
       }
 
-      // Keep-alive interval
-      let mut keepalive_interval = tokio::time::interval(std::time::Duration::from_secs(30));
+      let connection = tokio::select! {
+        _ = cancel_token.cancelled() => break,
+        connection = connect_async(&url) => connection,
+      };
 
-      loop {
-        tokio::select! {
-          _ = cancel_token.cancelled() => {
-            log::info!("WebSocket shutdown requested via cancellation");
-            let _ = write.close().await;
+      let (ws_stream, _) = match connection {
+        Ok(connection) => connection,
+        Err(error) => {
+          *connected.write() = false;
+          if let Some(initial_tx) = initial_tx.take() {
+            let _ = initial_tx.send(Err(error.into()));
             break;
           }
-          msg = read.next() => {
-            match msg {
-              Some(Ok(Message::Text(text))) => {
-                if let Err(e) = Self::handle_message(&text, &command_tx).await {
-                  log::error!("Failed to handle WebSocket message: {}", e);
-                }
-              }
-              Some(Ok(Message::Close(_))) => {
-                log::info!("WebSocket closed by server");
-                break;
-              }
-              Some(Err(e)) => {
-                log::error!("WebSocket error: {}", e);
-                break;
-              }
-              None => {
-                log::info!("WebSocket stream ended");
-                break;
-              }
-              _ => {}
-            }
+          log::error!("WebSocket reconnection failed: {}", error);
+          let delay = reconnect_delay(reconnect_attempt);
+          reconnect_attempt = reconnect_attempt.saturating_add(1);
+          if wait_for_reconnect_delay(delay, &cancel_token).await {
+            break;
           }
-          _ = keepalive_interval.tick() => {
-            let keepalive = serde_json::json!({
-              "MessageType": "KeepAlive"
-            });
-            if let Err(e) = write.send(Message::Text(keepalive.to_string().into())).await {
-              log::error!("Failed to send keepalive: {}", e);
-              break;
-            }
-          }
+          continue;
+        }
+      };
+
+      *connected.write() = true;
+      reconnect_attempt = 0;
+      if has_connected {
+        if Self::send_event(
+          &event_tx,
+          JellyfinWebSocketEvent::Reconnected,
+          &cancel_token,
+        )
+        .await
+        {
+          break;
+        }
+      } else {
+        has_connected = true;
+        if let Some(initial_tx) = initial_tx.take() {
+          let _ = initial_tx.send(Ok(()));
+        }
+        if Self::send_event(&event_tx, JellyfinWebSocketEvent::Connected, &cancel_token).await {
+          break;
         }
       }
 
+      let lost = Self::run_socket(ws_stream, &event_tx, &cancel_token).await;
       *connected.write() = false;
-    });
 
-    *self.task_handle.write() = Some(handle);
+      if !lost || cancel_token.is_cancelled() {
+        break;
+      }
+
+      if Self::send_event(
+        &event_tx,
+        JellyfinWebSocketEvent::ConnectionLost,
+        &cancel_token,
+      )
+      .await
+      {
+        break;
+      }
+      let delay = reconnect_delay(reconnect_attempt);
+      reconnect_attempt = reconnect_attempt.saturating_add(1);
+      log::info!(
+        "Attempting WebSocket reconnection in {} seconds (attempt {})",
+        delay.as_secs(),
+        reconnect_attempt
+      );
+      if wait_for_reconnect_delay(delay, &cancel_token).await {
+        break;
+      }
+    }
+
+    *connected.write() = false;
+  }
+
+  async fn run_socket<S>(
+    ws_stream: tokio_tungstenite::WebSocketStream<S>,
+    event_tx: &mpsc::Sender<JellyfinWebSocketEvent>,
+    cancel_token: &CancellationToken,
+  ) -> bool
+  where
+    S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin,
+  {
+    let (mut write, mut read) = ws_stream.split();
+
+    // "1000,1000" tells Jellyfin we are an active remote-control client.
+    let session_start = serde_json::json!({
+      "MessageType": "SessionsStart",
+      "Data": "1000,1000"
+    });
+    if let Err(e) = write
+      .send(Message::Text(session_start.to_string().into()))
+      .await
+    {
+      log::error!("Failed to send SessionsStart: {}", e);
+      return true;
+    }
+
+    let mut keepalive_interval = tokio::time::interval(Duration::from_secs(30));
+
+    loop {
+      tokio::select! {
+        _ = cancel_token.cancelled() => {
+          log::info!("WebSocket shutdown requested via cancellation");
+          let _ = write.close().await;
+          return false;
+        }
+        msg = read.next() => {
+          match msg {
+            Some(Ok(Message::Text(text))) => {
+              if let Err(e) = Self::handle_socket_message(&text, event_tx, cancel_token).await {
+                log::error!("Failed to handle WebSocket message: {}", e);
+              }
+            }
+            Some(Ok(Message::Close(_))) => {
+              log::info!("WebSocket closed by server");
+              return true;
+            }
+            Some(Err(e)) => {
+              log::error!("WebSocket error: {}", e);
+              return true;
+            }
+            None => {
+              log::info!("WebSocket stream ended");
+              return true;
+            }
+            _ => {}
+          }
+        }
+        _ = keepalive_interval.tick() => {
+          let keepalive = serde_json::json!({
+            "MessageType": "KeepAlive"
+          });
+          if let Err(e) = write.send(Message::Text(keepalive.to_string().into())).await {
+            log::error!("Failed to send keepalive: {}", e);
+            return true;
+          }
+        }
+      }
+    }
+  }
+
+  async fn send_event(
+    event_tx: &mpsc::Sender<JellyfinWebSocketEvent>,
+    event: JellyfinWebSocketEvent,
+    cancel_token: &CancellationToken,
+  ) -> bool {
+    if cancel_token.is_cancelled() {
+      return true;
+    }
+
+    tokio::select! {
+      biased;
+      _ = cancel_token.cancelled() => true,
+      result = event_tx.send(event) => result.is_err(),
+    }
+  }
+
+  async fn handle_socket_message(
+    text: &str,
+    event_tx: &mpsc::Sender<JellyfinWebSocketEvent>,
+    cancel_token: &CancellationToken,
+  ) -> Result<(), JellyfinError> {
+    if let Some(command) = Self::parse_message(text)? {
+      let _ = Self::send_event(
+        event_tx,
+        JellyfinWebSocketEvent::Command(command),
+        cancel_token,
+      )
+      .await;
+    }
 
     Ok(())
   }
 
+  #[cfg(test)]
   /// Handle incoming WebSocket message.
   async fn handle_message(
     text: &str,
-    command_tx: &mpsc::Sender<JellyfinCommand>,
+    event_tx: &mpsc::Sender<JellyfinWebSocketEvent>,
   ) -> Result<(), JellyfinError> {
+    if let Some(command) = Self::parse_message(text)? {
+      let _ = event_tx
+        .send(JellyfinWebSocketEvent::Command(command))
+        .await;
+    }
+
+    Ok(())
+  }
+
+  fn parse_message(text: &str) -> Result<Option<JellyfinCommand>, JellyfinError> {
     let msg: WsMessage = serde_json::from_str(text)?;
 
     match msg.message_type.as_str() {
@@ -161,50 +302,57 @@ impl JellyfinWebSocket {
         if let Some(data) = msg.data {
           let play_request: PlayRequest = serde_json::from_value(data)?;
           log::info!("Received Play command: {:?}", play_request);
-          let _ = command_tx.send(JellyfinCommand::Play(play_request)).await;
+          Ok(Some(JellyfinCommand::Play(play_request)))
+        } else {
+          Ok(None)
         }
       }
       "Playstate" => {
         if let Some(data) = msg.data {
           let playstate: PlaystateRequest = serde_json::from_value(data)?;
           log::info!("Received Playstate command: {:?}", playstate);
-          let _ = command_tx.send(JellyfinCommand::Playstate(playstate)).await;
+          Ok(Some(JellyfinCommand::Playstate(playstate)))
+        } else {
+          Ok(None)
         }
       }
       "GeneralCommand" => {
         if let Some(data) = msg.data {
           let command: GeneralCommand = serde_json::from_value(data)?;
           log::info!("Received GeneralCommand: {:?}", command);
-          let _ = command_tx
-            .send(JellyfinCommand::GeneralCommand(command))
-            .await;
+          Ok(Some(JellyfinCommand::GeneralCommand(command)))
+        } else {
+          Ok(None)
         }
       }
-      "ForceKeepAlive" | "KeepAlive" => {
-        // Ignore keepalive messages
-      }
+      "ForceKeepAlive" | "KeepAlive" => Ok(None),
       _ => {
         log::debug!("Unhandled WebSocket message type: {}", msg.message_type);
+        Ok(None)
       }
     }
-
-    Ok(())
   }
 
-  /// Disconnect from WebSocket.
-  pub async fn disconnect(&self) {
-    // Cancel the task via token
+  async fn stop_task(&self, close_delivery: bool) {
     if let Some(token) = self.cancel_token.write().take() {
       token.cancel();
     }
 
-    // Take the handle without holding the lock across await
     let handle = self.task_handle.write().take();
     if let Some(handle) = handle {
-      let _ = tokio::time::timeout(std::time::Duration::from_secs(2), handle).await;
+      let _ = tokio::time::timeout(Duration::from_secs(2), handle).await;
     }
 
     *self.connected.write() = false;
+
+    if close_delivery {
+      self.channel.write().event_tx.take();
+    }
+  }
+
+  /// Disconnect from WebSocket and close command delivery for this stream.
+  pub async fn disconnect(&self) {
+    self.stop_task(true).await;
   }
 
   /// Check if connected.
@@ -213,14 +361,222 @@ impl JellyfinWebSocket {
     *self.connected.read()
   }
 
-  /// Take the command receiver (can be called after each connect).
-  pub fn take_command_receiver(&self) -> Option<mpsc::Receiver<JellyfinCommand>> {
-    self.channel.write().command_rx.take()
+  /// Take the restartable command stream receiver.
+  pub fn take_event_receiver(&self) -> Option<mpsc::Receiver<JellyfinWebSocketEvent>> {
+    self.channel.write().event_rx.take()
+  }
+}
+
+fn reconnect_delay(attempt: usize) -> Duration {
+  #[cfg(not(test))]
+  const RECONNECT_DELAYS: &[u64] = &[1, 2, 5, 10, 30, 60];
+  #[cfg(test)]
+  const TEST_RECONNECT_DELAYS: &[u64] = &[0, 0, 0, 0, 0, 0];
+
+  #[cfg(test)]
+  let delays = TEST_RECONNECT_DELAYS;
+  #[cfg(not(test))]
+  let delays = RECONNECT_DELAYS;
+
+  Duration::from_secs(delays[attempt.min(delays.len() - 1)])
+}
+
+async fn wait_for_reconnect_delay(delay: Duration, cancel_token: &CancellationToken) -> bool {
+  tokio::select! {
+    _ = cancel_token.cancelled() => true,
+    _ = tokio::time::sleep(delay) => false,
   }
 }
 
 impl Default for JellyfinWebSocket {
   fn default() -> Self {
     Self::new()
+  }
+}
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+  use tokio::net::{TcpListener, TcpStream};
+  use tokio_tungstenite::{accept_async, tungstenite::Message, WebSocketStream};
+
+  async fn send_text(stream: &mut WebSocketStream<TcpStream>, value: serde_json::Value) {
+    stream
+      .send(Message::Text(value.to_string().into()))
+      .await
+      .expect("send websocket message");
+  }
+
+  async fn expect_sessions_start(stream: &mut WebSocketStream<TcpStream>) {
+    let Some(Ok(Message::Text(text))) = stream.next().await else {
+      panic!("expected SessionsStart");
+    };
+    let value: serde_json::Value = serde_json::from_str(&text).expect("valid json");
+    assert_eq!(value["MessageType"], "SessionsStart");
+  }
+
+  async fn next_event(rx: &mut mpsc::Receiver<JellyfinWebSocketEvent>) -> JellyfinWebSocketEvent {
+    tokio::time::timeout(Duration::from_secs(2), rx.recv())
+      .await
+      .expect("event before timeout")
+      .expect("stream still open")
+  }
+
+  #[tokio::test]
+  async fn command_delivery_preserves_supported_messages_and_skips_bad_messages() {
+    let (event_tx, mut event_rx) = mpsc::channel(8);
+
+    JellyfinWebSocket::handle_message(
+      r#"{"MessageType":"Play","Data":{"ItemIds":["item-1"],"PlayCommand":"PlayNow"}}"#,
+      &event_tx,
+    )
+    .await
+    .expect("play message handled");
+    JellyfinWebSocket::handle_message(
+      r#"{"MessageType":"Unsupported","Data":{"Name":"ignored"}}"#,
+      &event_tx,
+    )
+    .await
+    .expect("unsupported message skipped");
+    assert!(JellyfinWebSocket::handle_message(
+      r#"{"MessageType":"Playstate","Data":{"Command":42}}"#,
+      &event_tx,
+    )
+    .await
+    .is_err());
+    JellyfinWebSocket::handle_message(
+      r#"{"MessageType":"Playstate","Data":{"Command":"Pause"}}"#,
+      &event_tx,
+    )
+    .await
+    .expect("playstate message handled");
+    JellyfinWebSocket::handle_message(
+      r#"{"MessageType":"GeneralCommand","Data":{"Name":"SetVolume","Arguments":{"Volume":"50"}}}"#,
+      &event_tx,
+    )
+    .await
+    .expect("general command handled");
+
+    match next_event(&mut event_rx).await {
+      JellyfinWebSocketEvent::Command(JellyfinCommand::Play(request)) => {
+        assert_eq!(request.item_ids, ["item-1"]);
+        assert_eq!(request.play_command, "PlayNow");
+      }
+      event => panic!("unexpected event: {event:?}"),
+    }
+    match next_event(&mut event_rx).await {
+      JellyfinWebSocketEvent::Command(JellyfinCommand::Playstate(request)) => {
+        assert_eq!(request.command, "Pause");
+      }
+      event => panic!("unexpected event: {event:?}"),
+    }
+    match next_event(&mut event_rx).await {
+      JellyfinWebSocketEvent::Command(JellyfinCommand::GeneralCommand(command)) => {
+        assert_eq!(command.name, "SetVolume");
+      }
+      event => panic!("unexpected event: {event:?}"),
+    }
+    assert!(event_rx.try_recv().is_err());
+  }
+
+  #[tokio::test]
+  async fn command_stream_reconnects_and_delivers_lifecycle_events() {
+    let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
+    let url = format!("ws://{}", listener.local_addr().expect("addr"));
+
+    let server = tokio::spawn(async move {
+      let (first_socket, _) = listener.accept().await.expect("first accept");
+      let mut first = accept_async(first_socket).await.expect("first websocket");
+      expect_sessions_start(&mut first).await;
+      send_text(
+        &mut first,
+        serde_json::json!({
+          "MessageType": "Play",
+          "Data": { "ItemIds": ["item-1"], "PlayCommand": "PlayNow" }
+        }),
+      )
+      .await;
+      first.close(None).await.expect("close first");
+
+      let (second_socket, _) = listener.accept().await.expect("second accept");
+      let mut second = accept_async(second_socket).await.expect("second websocket");
+      expect_sessions_start(&mut second).await;
+      send_text(
+        &mut second,
+        serde_json::json!({
+          "MessageType": "Playstate",
+          "Data": { "Command": "Pause" }
+        }),
+      )
+      .await;
+      send_text(
+        &mut second,
+        serde_json::json!({
+          "MessageType": "GeneralCommand",
+          "Data": { "Name": "Mute" }
+        }),
+      )
+      .await;
+      second.next().await;
+    });
+
+    let websocket = JellyfinWebSocket::new();
+    let mut rx = websocket.take_event_receiver().expect("event receiver");
+    websocket.connect(&url).await.expect("initial connect");
+
+    assert!(matches!(
+      next_event(&mut rx).await,
+      JellyfinWebSocketEvent::Connected
+    ));
+    assert!(matches!(
+      next_event(&mut rx).await,
+      JellyfinWebSocketEvent::Command(JellyfinCommand::Play(_))
+    ));
+    assert!(matches!(
+      next_event(&mut rx).await,
+      JellyfinWebSocketEvent::ConnectionLost
+    ));
+    assert!(matches!(
+      next_event(&mut rx).await,
+      JellyfinWebSocketEvent::Reconnected
+    ));
+    assert!(matches!(
+      next_event(&mut rx).await,
+      JellyfinWebSocketEvent::Command(JellyfinCommand::Playstate(_))
+    ));
+    assert!(matches!(
+      next_event(&mut rx).await,
+      JellyfinWebSocketEvent::Command(JellyfinCommand::GeneralCommand(_))
+    ));
+
+    websocket.disconnect().await;
+    server.await.expect("server done");
+    assert!(!websocket.is_connected());
+  }
+
+  #[tokio::test]
+  async fn explicit_shutdown_does_not_schedule_reconnect() {
+    let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
+    let url = format!("ws://{}", listener.local_addr().expect("addr"));
+
+    let server = tokio::spawn(async move {
+      let (socket, _) = listener.accept().await.expect("accept");
+      let mut stream = accept_async(socket).await.expect("websocket");
+      expect_sessions_start(&mut stream).await;
+      stream.next().await;
+    });
+
+    let websocket = JellyfinWebSocket::new();
+    let mut rx = websocket.take_event_receiver().expect("event receiver");
+    websocket.connect(&url).await.expect("connect");
+    assert!(matches!(
+      next_event(&mut rx).await,
+      JellyfinWebSocketEvent::Connected
+    ));
+
+    websocket.disconnect().await;
+    server.await.expect("server done");
+    assert!(!websocket.is_connected());
+    assert!(rx.recv().await.is_none());
   }
 }
