@@ -5,6 +5,7 @@
 mod client;
 mod error;
 mod intro_skipper;
+mod play_resolution;
 mod session;
 mod types;
 mod websocket;

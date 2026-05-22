@@ -10,6 +10,7 @@ use tokio::sync::mpsc;
 use super::client::JellyfinClient;
 use super::error::JellyfinError;
 use super::intro_skipper::evaluate_skip;
+use super::play_resolution::{resolve_play_request, PlayResolutionConfig};
 use super::types::*;
 use super::websocket::{JellyfinCommand, JellyfinWebSocket};
 use crate::command::{AppNotification, NowPlayingChanged};
@@ -509,11 +510,7 @@ impl SessionManager {
       media_source.protocol
     );
 
-    // Apply series track preferences if available
-    let mut audio_index = request.audio_stream_index;
-    let mut subtitle_index = request.subtitle_stream_index;
-
-    if let Some(ref series_id) = item.series_id {
+    let series_preference = item.series_id.as_ref().and_then(|series_id| {
       let s = state.read();
       log::info!(
         "Looking up preferences for series_id={}, preference_count={}, has_preference={}",
@@ -521,70 +518,34 @@ impl SessionManager {
         s.series_preferences.len(),
         s.series_preferences.contains_key(series_id)
       );
-      if let Some(pref) = s.series_preferences.get(series_id) {
-        log::info!(
-          "Found track preference for series {}: {:?}",
-          series_id,
-          pref
-        );
-
-        // Apply audio preference if not explicitly set in request
-        if audio_index.is_none() {
-          if let Some(ref lang) = pref.audio_language {
-            if let Some(idx) = find_stream_by_preference(
-              &media_source.media_streams,
-              "Audio",
-              lang,
-              pref.audio_title.as_deref(),
-            ) {
-              log::info!(
-                "Applying preferred audio lang='{}' title={:?} -> index {}",
-                lang,
-                pref.audio_title,
-                idx
-              );
-              audio_index = Some(idx);
-            }
-          }
-        }
-
-        let previous_subtitle_index = subtitle_index;
-        subtitle_index = select_subtitle_stream_index(
-          subtitle_index,
-          Some(pref),
-          &media_source.media_streams,
-          &[],
-        );
-        if subtitle_index != previous_subtitle_index {
-          log::info!(
-            "Applying series subtitle preference for series {} -> index {:?}",
-            series_id,
-            subtitle_index
-          );
-        }
-      }
+      s.series_preferences.get(series_id).cloned()
+    });
+    if let Some(ref pref) = series_preference {
+      log::info!(
+        "Found track preference for series {:?}: {:?}",
+        item.series_id,
+        pref
+      );
     }
 
-    {
+    let (preferred_subtitle_languages, intro_skipper_enabled) = {
       let config_guard = config.read();
-      let preferred_subtitle_languages = &config_guard.preferred_subtitle_languages;
-      if subtitle_index.is_none() && !preferred_subtitle_languages.is_empty() {
-        let previous_subtitle_index = subtitle_index;
-        subtitle_index = select_subtitle_stream_index(
-          subtitle_index,
-          None,
-          &media_source.media_streams,
-          preferred_subtitle_languages,
-        );
-        if subtitle_index != previous_subtitle_index {
-          log::info!(
-            "Applying globally preferred subtitle languages {:?} -> index {:?}",
-            preferred_subtitle_languages,
-            subtitle_index
-          );
-        }
-      }
-    }
+      (
+        config_guard.preferred_subtitle_languages.clone(),
+        config_guard.intro_skipper_enabled,
+      )
+    };
+    let resolution = resolve_play_request(
+      &request,
+      &item,
+      &playback_info,
+      media_source,
+      series_preference.as_ref(),
+      PlayResolutionConfig {
+        preferred_subtitle_languages: &preferred_subtitle_languages,
+        intro_skipper_enabled,
+      },
+    );
 
     // Build stream URL
     let url = client
@@ -592,13 +553,7 @@ impl SessionManager {
       .ok_or(JellyfinError::NotConnected)?;
     log::info!("Built stream URL: {}", redact_url(&url));
 
-    // Calculate start position
-    let start_position = request
-      .start_position_ticks
-      .map(ticks_to_seconds)
-      .unwrap_or(0.0);
-
-    let intro_skipper_ranges = if config.read().intro_skipper_enabled {
+    let intro_skipper_ranges = if resolution.should_fetch_intro_skipper_ranges {
       match client.get_intro_skipper_ranges(item_id).await {
         Ok(ranges) => {
           log::info!("Loaded {} Intro Skipper ranges", ranges.len());
@@ -610,7 +565,7 @@ impl SessionManager {
         }
       }
     } else {
-      log::debug!("Intro Skipper disabled; skipping range fetch");
+      log::debug!("Intro Skipper disabled or inapplicable; skipping range fetch");
       Vec::new()
     };
 
@@ -625,12 +580,12 @@ impl SessionManager {
         media_source_id: Some(media_source.id.clone()),
         play_session_id: playback_info.play_session_id.clone(),
         intro_skipper_ranges,
-        position_ticks: request.start_position_ticks.unwrap_or(0),
+        position_ticks: resolution.position_ticks,
         is_paused: false,
         is_muted: false,
         volume: 100,
-        audio_stream_index: audio_index,
-        subtitle_stream_index: subtitle_index,
+        audio_stream_index: resolution.audio_stream_index,
+        subtitle_stream_index: resolution.subtitle_stream_index,
       });
       s.last_report_time = std::time::Instant::now();
     }
@@ -644,73 +599,34 @@ impl SessionManager {
       is_paused: false,
       is_muted: false,
       volume_level: 100,
-      audio_stream_index: audio_index,
-      subtitle_stream_index: subtitle_index,
-      play_method: if media_source.supports_direct_play {
-        "DirectPlay".to_string()
-      } else if media_source.supports_direct_stream {
-        "DirectStream".to_string()
-      } else {
-        "Transcode".to_string()
-      },
+      audio_stream_index: resolution.audio_stream_index,
+      subtitle_stream_index: resolution.subtitle_stream_index,
+      play_method: resolution.play_method.to_string(),
       can_seek: true,
     };
     client.report_playback_start(&start_info).await?;
 
-    // Convert Jellyfin indices to MPV indices before sending
-    let mpv_audio_index = audio_index.map(|idx| {
-      if idx < 0 {
-        idx // -1 means disable
-      } else {
-        jellyfin_to_mpv_track_index(&media_source.media_streams, "Audio", idx)
-      }
-    });
-
-    // Check if the selected subtitle is external
-    // External subtitles need to be loaded via sub-add command, not via loadfile options
-    let external_subtitle_stream = subtitle_index.and_then(|idx| {
-      if idx < 0 {
-        None // Disabled subtitles
-      } else {
-        media_source
-          .media_streams
-          .iter()
-          .find(|s| s.stream_type == "Subtitle" && s.index == idx && s.is_external)
-      }
-    });
-
-    // For external subtitles, we don't pass sid to loadfile - we'll use sub-add instead
-    let mpv_subtitle_index = if external_subtitle_stream.is_some() {
-      log::info!("Selected subtitle is external, will use sub-add command");
-      None // Don't set sid in loadfile for external subs
-    } else {
-      subtitle_index.map(|idx| {
-        if idx < 0 {
-          idx // -1 means disable
-        } else {
-          jellyfin_to_mpv_track_index(&media_source.media_streams, "Subtitle", idx)
-        }
-      })
-    };
-
     // Send action to MPV with converted indices
     log::info!(
       "Sending MpvAction::Play: audio_index {:?} (Jellyfin) -> {:?} (MPV), subtitle_index {:?} (Jellyfin) -> {:?} (MPV)",
-      audio_index, mpv_audio_index, subtitle_index, mpv_subtitle_index
+      resolution.audio_stream_index,
+      resolution.mpv_audio_index,
+      resolution.subtitle_stream_index,
+      resolution.mpv_subtitle_index
     );
     let _ = action_tx
       .send(MpvAction::Play {
         url,
-        start_position,
+        start_position: resolution.start_position,
         title,
-        audio_index: mpv_audio_index,
-        subtitle_index: mpv_subtitle_index,
+        audio_index: resolution.mpv_audio_index,
+        subtitle_index: resolution.mpv_subtitle_index,
       })
       .await;
     log::info!("MpvAction::Play sent successfully");
 
     // Load external subtitle if the selected subtitle is external
-    if let Some(ext_sub_stream) = external_subtitle_stream {
+    if let Some(ext_sub_stream) = resolution.external_subtitle_stream {
       if let Some(sub_url) = client.build_subtitle_url(item_id, &media_source.id, ext_sub_stream) {
         log::info!(
           "Loading external subtitle: codec={:?}, url={}",
