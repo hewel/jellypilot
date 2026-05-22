@@ -221,6 +221,33 @@ test('operations console autosaves compact preferred subtitle language chips', a
 
   cleanup();
 });
+test('preferred subtitle language editor uses Ark tags input and combobox', async () => {
+  const configSet = rstest.spyOn(commands, 'configSet').mockResolvedValue({
+    status: 'ok',
+    data: null,
+  });
+  const cleanup = renderConsole();
+
+  const input = await screen.findByLabelText('Add preferred subtitle language');
+  expect(input.closest('[data-scope="tags-input"]')).not.toBeNull();
+
+  fireEvent.input(input, { target: { value: 'jap' } });
+
+  const suggestion = await screen.findByText('jpn — Japanese');
+  expect(suggestion.closest('[data-scope="combobox"]')).not.toBeNull();
+  fireEvent.click(suggestion);
+
+  await waitFor(() =>
+    expect(configSet).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        preferredSubtitleLanguages: ['jpn'],
+      }),
+    ),
+  );
+  expect(screen.getByRole('button', { name: 'Remove jpn' })).toBeVisible();
+
+  cleanup();
+});
 
 test('operations console autosaves clearing preferred subtitle languages', async () => {
   const configSet = rstest.spyOn(commands, 'configSet').mockResolvedValue({
