@@ -113,6 +113,63 @@ test('operations console autosaves changed intro skipper setting', async () => {
   cleanup();
 });
 
+test('automatic intro skip tile toggles the synced checkbox optimistically', async () => {
+  const configSet = rstest.spyOn(commands, 'configSet').mockResolvedValue({
+    status: 'ok',
+    data: null,
+  });
+  const cleanup = renderConsole();
+
+  await screen.findByDisplayValue('JMSR Test');
+  const tile = screen.getByRole('button', { name: /Automatic Intro Skip/ });
+  const checkbox = screen.getByLabelText(
+    'Automatic Intro Skip',
+  ) as HTMLInputElement;
+
+  expect(tile).toHaveAttribute('aria-pressed', 'true');
+  expect(checkbox).toBeChecked();
+
+  fireEvent.click(tile);
+
+  expect(tile).toHaveAttribute('aria-pressed', 'false');
+  expect(checkbox).not.toBeChecked();
+  expect(screen.getAllByText('Saving preference…').length).toBeGreaterThan(0);
+  await waitFor(() =>
+    expect(configSet).toHaveBeenCalledWith(
+      expect.objectContaining({ introSkipperEnabled: false }),
+    ),
+  );
+
+  cleanup();
+});
+
+test('automatic intro skip rolls back and shows inline error on save failure', async () => {
+  rstest.spyOn(commands, 'configSet').mockResolvedValue({
+    status: 'error',
+    error: { message: 'Config write failed' },
+  });
+  const cleanup = renderConsole();
+
+  await screen.findByDisplayValue('JMSR Test');
+  const tile = screen.getByRole('button', { name: /Automatic Intro Skip/ });
+  const checkbox = screen.getByLabelText(
+    'Automatic Intro Skip',
+  ) as HTMLInputElement;
+
+  fireEvent.click(tile);
+
+  expect(tile).toHaveAttribute('aria-pressed', 'false');
+  await waitFor(() =>
+    expect(screen.getAllByText('Config write failed').length).toBeGreaterThan(
+      0,
+    ),
+  );
+  expect(tile).toHaveAttribute('aria-pressed', 'true');
+  expect(checkbox).toBeChecked();
+
+  cleanup();
+});
+
 test('operations console autosaves compact preferred subtitle language chips', async () => {
   const configSet = rstest.spyOn(commands, 'configSet').mockResolvedValue({
     status: 'ok',

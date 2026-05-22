@@ -115,12 +115,16 @@ function StatusTile(props: {
 
 export default function OperationsConsole(props: OperationsConsoleProps) {
   const { showToast } = useToast();
-  let introSkipperEnabledValue = true;
   let configHydrated = false;
   let introSkipperInput: HTMLInputElement | undefined;
+  type PendingSave = {
+    config: AppConfig;
+    onSuccess?: () => void;
+    onError?: (message: string) => void;
+  };
   let lastSavedConfig: AppConfig | null = null;
   let saveInFlight = false;
-  let pendingSave: AppConfig | null = null;
+  let pendingSave: PendingSave | null = null;
   let latestConfigSnapshot: AppConfig | null = null;
   let clearPlayerBridgeStatusTimer: ReturnType<typeof setTimeout> | null = null;
 
@@ -135,6 +139,13 @@ export default function OperationsConsole(props: OperationsConsoleProps) {
     type: 'saving' | 'saved' | 'error';
     text: string;
   } | null>(null);
+  const [introSkipperDraft, setIntroSkipperDraft] = createSignal<
+    boolean | null
+  >(null);
+  const [introSkipperSaving, setIntroSkipperSaving] = createSignal(false);
+  const [introSkipperError, setIntroSkipperError] = createSignal<string | null>(
+    null,
+  );
   const [selectedSubtitleLanguages, setSelectedSubtitleLanguages] =
     createSignal<string[]>([]);
   const [subtitleLanguageInput, setSubtitleLanguageInput] = createSignal('');
@@ -179,7 +190,6 @@ export default function OperationsConsole(props: OperationsConsoleProps) {
         'introSkipperEnabled',
         cfg.introSkipperEnabled ?? true,
       );
-      introSkipperEnabledValue = cfg.introSkipperEnabled ?? true;
       if (introSkipperInput) {
         introSkipperInput.checked = cfg.introSkipperEnabled ?? true;
       }
@@ -190,6 +200,8 @@ export default function OperationsConsole(props: OperationsConsoleProps) {
 
   const state = () => connectionState();
   const config = () => initialConfig();
+  const introSkipperEnabled = () =>
+    introSkipperDraft() ?? config()?.introSkipperEnabled ?? true;
   const showPlayerBridgeStatus = (
     type: 'saving' | 'saved' | 'error',
     text: string,
@@ -215,7 +227,10 @@ export default function OperationsConsole(props: OperationsConsoleProps) {
 
   const buildConfigSnapshot = (overrides: Partial<AppConfig>) => {
     const saved =
-      pendingSave ?? latestConfigSnapshot ?? lastSavedConfig ?? config();
+      pendingSave?.config ??
+      latestConfigSnapshot ??
+      lastSavedConfig ??
+      config();
     if (!saved) return null;
 
     return {
@@ -230,17 +245,19 @@ export default function OperationsConsole(props: OperationsConsoleProps) {
 
     try {
       while (pendingSave) {
-        const nextConfig = pendingSave;
+        const nextSave = pendingSave;
         pendingSave = null;
         showPlayerBridgeStatus('saving', 'Saving…');
 
-        const result = await commands.configSet(nextConfig);
+        const result = await commands.configSet(nextSave.config);
         if (result.status === 'ok') {
-          lastSavedConfig = nextConfig;
-          mutateConfig(nextConfig);
+          lastSavedConfig = nextSave.config;
+          mutateConfig(nextSave.config);
           refetchMpv();
+          nextSave.onSuccess?.();
           showPlayerBridgeStatus('saved', 'Saved');
         } else {
+          nextSave.onError?.(result.error.message);
           showPlayerBridgeStatus('error', result.error.message);
           showToast('error', result.error.message);
         }
@@ -255,10 +272,13 @@ export default function OperationsConsole(props: OperationsConsoleProps) {
     }
   };
 
-  const queueConfigSave = (snapshot: AppConfig | null) => {
+  const queueConfigSave = (
+    snapshot: AppConfig | null,
+    callbacks: Omit<PendingSave, 'config'> = {},
+  ) => {
     if (!snapshot) return;
     latestConfigSnapshot = snapshot;
-    pendingSave = snapshot;
+    pendingSave = { config: snapshot, ...callbacks };
     void processConfigSaveQueue();
   };
 
@@ -315,9 +335,26 @@ export default function OperationsConsole(props: OperationsConsoleProps) {
   };
 
   const saveIntroSkipperSetting = (enabled: boolean) => {
+    const previous = introSkipperEnabled();
     const desired = latestConfigSnapshot ?? lastSavedConfig ?? config();
     if (desired?.introSkipperEnabled === enabled) return;
-    queueConfigSave(buildConfigSnapshot({ introSkipperEnabled: enabled }));
+
+    setIntroSkipperDraft(enabled);
+    setIntroSkipperSaving(true);
+    setIntroSkipperError(null);
+    queueConfigSave(buildConfigSnapshot({ introSkipperEnabled: enabled }), {
+      onSuccess: () => {
+        setIntroSkipperDraft(null);
+        setIntroSkipperSaving(false);
+      },
+      onError: (message) => {
+        setIntroSkipperDraft(previous);
+        setIntroSkipperSaving(false);
+        setIntroSkipperError(message);
+        form.setFieldValue('introSkipperEnabled', previous);
+        if (introSkipperInput) introSkipperInput.checked = previous;
+      },
+    });
   };
 
   const addPreferredSubtitleLanguages = () => {
@@ -453,7 +490,6 @@ export default function OperationsConsole(props: OperationsConsoleProps) {
   };
 
   const handleIntroSkipperToggle = (enabled: boolean) => {
-    introSkipperEnabledValue = enabled;
     form.setFieldValue('introSkipperEnabled', enabled);
     saveIntroSkipperSetting(enabled);
   };
@@ -519,21 +555,31 @@ export default function OperationsConsole(props: OperationsConsoleProps) {
             }
             tone={mpvConnected() ? 'text-tertiary' : 'text-warning'}
           />
-          <StatusTile
-            icon={Bot}
-            label="Automation"
-            value={
-              config()?.introSkipperEnabled === false
-                ? 'Manual'
-                : 'Automatic Intro Skip'
-            }
-            description="Uses Intro Skipper ranges when available"
-            tone={
-              config()?.introSkipperEnabled === false
-                ? 'text-on-surface-variant'
-                : 'text-tertiary'
-            }
-          />
+          <button
+            type="button"
+            class="status-tile w-full text-left transition hover:border-primary/50 hover:bg-surface-container-high focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary"
+            aria-pressed={introSkipperEnabled()}
+            onClick={() => handleIntroSkipperToggle(!introSkipperEnabled())}
+          >
+            <div class="mb-4 flex items-center justify-between gap-3">
+              <div
+                class={`status-tile-icon ${introSkipperEnabled() ? 'text-tertiary' : 'text-on-surface-variant'}`}
+              >
+                <Bot class="h-5 w-5" />
+              </div>
+              <span class="text-label-small uppercase text-on-surface-variant">
+                Automatic Intro Skip
+              </span>
+            </div>
+            <p class="truncate text-title-medium text-on-surface">
+              {introSkipperEnabled() ? 'Enabled' : 'Manual'}
+            </p>
+            <p class="mt-1 text-body-small text-on-surface-variant">
+              {introSkipperSaving()
+                ? 'Saving preference…'
+                : 'Uses Intro Skipper ranges when available'}
+            </p>
+          </button>
         </section>
 
         <div class="console-grid">
@@ -959,41 +1005,6 @@ export default function OperationsConsole(props: OperationsConsoleProps) {
                   </div>
                 </div>
               </SectionCard>
-
-              <SectionCard icon={<Bot class="h-6 w-6" />} title="Automation">
-                <div class="space-y-4">
-                  <label
-                    for="intro-skipper-enabled"
-                    class="flex cursor-pointer items-center justify-between gap-4 rounded-2xl bg-surface-container-high px-4 py-3"
-                  >
-                    <span>
-                      <span class="block text-title-medium text-on-surface">
-                        Automatic Intro Skip
-                      </span>
-                      <span class="text-body-small text-on-surface-variant">
-                        Use Intro Skipper ranges when available.
-                      </span>
-                    </span>
-                    <input
-                      id="intro-skipper-enabled"
-                      name="introSkipperEnabled"
-                      type="checkbox"
-                      aria-label="Automatic Intro Skip"
-                      ref={(el) => {
-                        introSkipperInput = el;
-                      }}
-                      checked={introSkipperEnabledValue}
-                      onInput={(event) =>
-                        handleIntroSkipperToggle(event.currentTarget.checked)
-                      }
-                      onChange={(event) =>
-                        handleIntroSkipperToggle(event.currentTarget.checked)
-                      }
-                      class="h-6 w-6 rounded border-outline text-primary focus:ring-primary"
-                    />
-                  </label>
-                </div>
-              </SectionCard>
             </form>
           </div>
 
@@ -1016,6 +1027,53 @@ export default function OperationsConsole(props: OperationsConsoleProps) {
               }
             >
               <DiagnosticsPanel compact={!diagnosticsExpanded()} />
+            </SectionCard>
+
+            <SectionCard
+              icon={<Bot class="h-6 w-6" />}
+              title="Automatic Intro Skip"
+            >
+              <div class="space-y-4">
+                <label
+                  for="intro-skipper-enabled"
+                  class="flex cursor-pointer items-center justify-between gap-4 rounded-2xl bg-surface-container-high px-4 py-3 focus-within:outline focus-within:outline-2 focus-within:outline-offset-2 focus-within:outline-primary"
+                >
+                  <span>
+                    <span class="block text-title-medium text-on-surface">
+                      Automatic Intro Skip
+                    </span>
+                    <span class="text-body-small text-on-surface-variant">
+                      Use Intro Skipper ranges when available.
+                    </span>
+                  </span>
+                  <input
+                    id="intro-skipper-enabled"
+                    name="introSkipperEnabled"
+                    type="checkbox"
+                    aria-label="Automatic Intro Skip"
+                    ref={(el) => {
+                      introSkipperInput = el;
+                    }}
+                    checked={introSkipperEnabled()}
+                    onChange={(event) =>
+                      handleIntroSkipperToggle(event.currentTarget.checked)
+                    }
+                    class="h-6 w-6 rounded border-outline text-primary focus:ring-primary"
+                  />
+                </label>
+                <Show when={introSkipperSaving()}>
+                  <p class="text-body-small text-secondary">
+                    Saving preference…
+                  </p>
+                </Show>
+                <Show when={introSkipperError()}>
+                  {(message) => (
+                    <p class="rounded-2xl bg-error-container px-4 py-3 text-body-small text-on-error-container">
+                      {message()}
+                    </p>
+                  )}
+                </Show>
+              </div>
             </SectionCard>
 
             <section class="card-filled border-error/30">
