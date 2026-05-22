@@ -89,7 +89,7 @@ test('operations console loads intro skipper setting from config', async () => {
   cleanup();
 });
 
-test('operations console saves changed intro skipper setting', async () => {
+test('operations console autosaves changed intro skipper setting', async () => {
   const configSet = rstest.spyOn(commands, 'configSet').mockResolvedValue({
     status: 'ok',
     data: null,
@@ -103,8 +103,6 @@ test('operations console saves changed intro skipper setting', async () => {
     'Automatic Intro Skip',
   ) as HTMLInputElement;
   fireEvent.click(checkbox);
-  await waitFor(() => expect(checkbox).not.toBeChecked());
-  fireEvent.click(screen.getByRole('button', { name: 'Save Settings' }));
 
   await waitFor(() => expect(configSet).toHaveBeenCalledTimes(1));
   expect(configSet).toHaveBeenCalledWith(
@@ -115,7 +113,7 @@ test('operations console saves changed intro skipper setting', async () => {
   cleanup();
 });
 
-test('operations console saves ordered preferred subtitle languages', async () => {
+test('operations console autosaves compact preferred subtitle language chips', async () => {
   const configSet = rstest.spyOn(commands, 'configSet').mockResolvedValue({
     status: 'ok',
     data: null,
@@ -151,19 +149,23 @@ test('operations console saves ordered preferred subtitle languages', async () =
   fireEvent.input(input, { target: { value: 'spa' } });
   fireEvent.click(screen.getByRole('button', { name: 'Add language' }));
   fireEvent.click(screen.getByRole('button', { name: 'Remove jpn' }));
-  fireEvent.click(screen.getByRole('button', { name: 'Save Settings' }));
 
-  await waitFor(() => expect(configSet).toHaveBeenCalledTimes(1));
-  expect(configSet).toHaveBeenCalledWith(
-    expect.objectContaining({
-      preferredSubtitleLanguages: ['eng', 'swe', 'spa'],
-    }),
+  await waitFor(() =>
+    expect(configSet).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        preferredSubtitleLanguages: ['eng', 'swe', 'spa'],
+      }),
+    ),
   );
+  expect(within(list).getByText('1')).toBeVisible();
+  expect(
+    within(list).getByRole('button', { name: 'Remove eng' }),
+  ).toBeVisible();
 
   cleanup();
 });
 
-test('operations console clears preferred subtitle languages', async () => {
+test('operations console autosaves clearing preferred subtitle languages', async () => {
   const configSet = rstest.spyOn(commands, 'configSet').mockResolvedValue({
     status: 'ok',
     data: null,
@@ -182,12 +184,106 @@ test('operations console clears preferred subtitle languages', async () => {
       /No preferred subtitle languages selected. JMSR will use Jellyfin and media defaults./,
     ),
   ).toBeVisible();
-  fireEvent.click(screen.getByRole('button', { name: 'Save Settings' }));
+
+  await waitFor(() =>
+    expect(configSet).toHaveBeenCalledWith(
+      expect.objectContaining({
+        preferredSubtitleLanguages: [],
+      }),
+    ),
+  );
+
+  cleanup();
+});
+
+test('player bridge text fields autosave on valid blur and keep invalid drafts local', async () => {
+  const configSet = rstest.spyOn(commands, 'configSet').mockResolvedValue({
+    status: 'ok',
+    data: null,
+  });
+  const cleanup = renderConsole();
+
+  const deviceName = (await screen.findByDisplayValue(
+    'JMSR Test',
+  )) as HTMLInputElement;
+  fireEvent.input(deviceName, { target: { value: '' } });
+  fireEvent.blur(deviceName);
+
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  expect(configSet).not.toHaveBeenCalled();
+
+  const mpvPath = screen.getByPlaceholderText(
+    'Path to mpv executable',
+  ) as HTMLInputElement;
+  fireEvent.input(mpvPath, { target: { value: '/usr/bin/mpv' } });
+  fireEvent.blur(mpvPath);
+
+  await waitFor(() =>
+    expect(configSet).toHaveBeenCalledWith(
+      expect.objectContaining({
+        deviceName: 'JMSR Test',
+        mpvPath: '/usr/bin/mpv',
+      }),
+    ),
+  );
+  expect(screen.getByText('Saved')).toBeVisible();
+
+  cleanup();
+});
+
+test('detect mpv autosaves detected path', async () => {
+  rstest.spyOn(commands, 'configDetectMpv').mockResolvedValue('/opt/bin/mpv');
+  const configSet = rstest.spyOn(commands, 'configSet').mockResolvedValue({
+    status: 'ok',
+    data: null,
+  });
+  const cleanup = renderConsole();
+
+  await screen.findByDisplayValue('JMSR Test');
+  fireEvent.click(screen.getByRole('button', { name: 'Detect MPV' }));
+
+  await waitFor(() =>
+    expect(configSet).toHaveBeenCalledWith(
+      expect.objectContaining({ mpvPath: '/opt/bin/mpv' }),
+    ),
+  );
+
+  cleanup();
+});
+
+test('autosaves are serialized without overwriting newer drafts', async () => {
+  let resolveFirstSave: (() => void) | undefined;
+  const configSet = rstest.spyOn(commands, 'configSet').mockImplementation(
+    () =>
+      new Promise((resolve) => {
+        resolveFirstSave = () => resolve({ status: 'ok' as const, data: null });
+      }),
+  );
+
+  const cleanup = renderConsole();
+
+  await screen.findByDisplayValue('JMSR Test');
+  const mpvPath = (await screen.findByPlaceholderText(
+    'Path to mpv executable',
+  )) as HTMLInputElement;
+  fireEvent.input(mpvPath, { target: { value: '/one/mpv' } });
+  fireEvent.blur(mpvPath);
 
   await waitFor(() => expect(configSet).toHaveBeenCalledTimes(1));
-  expect(configSet).toHaveBeenCalledWith(
+
+  const deviceName = screen.getByDisplayValue('JMSR Test') as HTMLInputElement;
+  fireEvent.input(deviceName, { target: { value: 'JMSR Bridge' } });
+  fireEvent.blur(deviceName);
+  fireEvent.input(deviceName, { target: { value: 'JMSR Test' } });
+  fireEvent.blur(deviceName);
+
+  resolveFirstSave?.();
+
+  await waitFor(() => expect(configSet).toHaveBeenCalledTimes(2));
+  expect(configSet).toHaveBeenLastCalledWith(
     expect.objectContaining({
-      preferredSubtitleLanguages: [],
+      deviceName: 'JMSR Test',
+      mpvPath: '/one/mpv',
     }),
   );
 

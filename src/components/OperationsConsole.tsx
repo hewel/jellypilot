@@ -118,6 +118,11 @@ export default function OperationsConsole(props: OperationsConsoleProps) {
   let introSkipperEnabledValue = true;
   let configHydrated = false;
   let introSkipperInput: HTMLInputElement | undefined;
+  let lastSavedConfig: AppConfig | null = null;
+  let saveInFlight = false;
+  let pendingSave: AppConfig | null = null;
+  let latestConfigSnapshot: AppConfig | null = null;
+  let clearPlayerBridgeStatusTimer: ReturnType<typeof setTimeout> | null = null;
 
   const [disconnecting, setDisconnecting] = createSignal(false);
   const [reconnecting, setReconnecting] = createSignal(false);
@@ -126,8 +131,8 @@ export default function OperationsConsole(props: OperationsConsoleProps) {
   const [detectingMpv, setDetectingMpv] = createSignal(false);
   const [advancedOpen, setAdvancedOpen] = createSignal(false);
   const [diagnosticsExpanded, setDiagnosticsExpanded] = createSignal(false);
-  const [saveMessage, setSaveMessage] = createSignal<{
-    type: 'success' | 'error';
+  const [playerBridgeSaveStatus, setPlayerBridgeSaveStatus] = createSignal<{
+    type: 'saving' | 'saved' | 'error';
     text: string;
   } | null>(null);
   const [selectedSubtitleLanguages, setSelectedSubtitleLanguages] =
@@ -156,50 +161,12 @@ export default function OperationsConsole(props: OperationsConsoleProps) {
       keybindPrev: 'Shift+p',
       introSkipperEnabled: true,
     },
-    onSubmit: async ({ value }) => {
-      setSaveMessage(null);
-      try {
-        const cfg = initialConfig();
-        const argsList = value.mpvArgs
-          .split('\n')
-          .map((s) => s.trim())
-          .filter((s) => s.length > 0);
-        const preferredSubtitleLanguages = selectedSubtitleLanguages();
-
-        const newConfig: AppConfig = {
-          deviceName: value.deviceName,
-          mpvPath: value.mpvPath || null,
-          mpvArgs: argsList,
-          progressInterval: cfg?.progressInterval ?? 5,
-          startMinimized: cfg?.startMinimized ?? false,
-          introSkipperEnabled:
-            introSkipperInput?.checked ?? introSkipperEnabledValue,
-          preferredSubtitleLanguages,
-          keybindNext: value.keybindNext,
-          keybindPrev: value.keybindPrev,
-        };
-
-        const result = await commands.configSet(newConfig);
-        if (result.status === 'ok') {
-          setSaveMessage({
-            type: 'success',
-            text: 'Settings saved successfully',
-          });
-          setTimeout(() => setSaveMessage(null), 3000);
-          refetchMpv();
-          mutateConfig(newConfig);
-        } else {
-          setSaveMessage({ type: 'error', text: result.error.message });
-        }
-      } catch (error) {
-        setSaveMessage({ type: 'error', text: String(error) });
-      }
-    },
   }));
 
   createEffect(() => {
     const cfg = initialConfig();
     if (cfg && !configHydrated) {
+      lastSavedConfig = cfg;
       form.setFieldValue('deviceName', cfg.deviceName ?? 'JMSR');
       form.setFieldValue('mpvPath', cfg.mpvPath ?? '');
       form.setFieldValue('mpvArgs', (cfg.mpvArgs ?? []).join('\n'));
@@ -223,11 +190,141 @@ export default function OperationsConsole(props: OperationsConsoleProps) {
 
   const state = () => connectionState();
   const config = () => initialConfig();
+  const showPlayerBridgeStatus = (
+    type: 'saving' | 'saved' | 'error',
+    text: string,
+  ) => {
+    if (clearPlayerBridgeStatusTimer) {
+      clearTimeout(clearPlayerBridgeStatusTimer);
+      clearPlayerBridgeStatusTimer = null;
+    }
+    setPlayerBridgeSaveStatus({ type, text });
+    if (type === 'saved') {
+      clearPlayerBridgeStatusTimer = setTimeout(
+        () => setPlayerBridgeSaveStatus(null),
+        3000,
+      );
+    }
+  };
+
+  const parseMpvArgs = (value: string) =>
+    value
+      .split('\n')
+      .map((arg) => arg.trim())
+      .filter((arg) => arg.length > 0);
+
+  const buildConfigSnapshot = (overrides: Partial<AppConfig>) => {
+    const saved =
+      pendingSave ?? latestConfigSnapshot ?? lastSavedConfig ?? config();
+    if (!saved) return null;
+
+    return {
+      ...saved,
+      ...overrides,
+    };
+  };
+
+  const processConfigSaveQueue = async () => {
+    if (saveInFlight) return;
+    saveInFlight = true;
+
+    try {
+      while (pendingSave) {
+        const nextConfig = pendingSave;
+        pendingSave = null;
+        showPlayerBridgeStatus('saving', 'Saving…');
+
+        const result = await commands.configSet(nextConfig);
+        if (result.status === 'ok') {
+          lastSavedConfig = nextConfig;
+          mutateConfig(nextConfig);
+          refetchMpv();
+          showPlayerBridgeStatus('saved', 'Saved');
+        } else {
+          showPlayerBridgeStatus('error', result.error.message);
+          showToast('error', result.error.message);
+        }
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      showPlayerBridgeStatus('error', message);
+      showToast('error', message);
+    } finally {
+      saveInFlight = false;
+      if (pendingSave) void processConfigSaveQueue();
+    }
+  };
+
+  const queueConfigSave = (snapshot: AppConfig | null) => {
+    if (!snapshot) return;
+    latestConfigSnapshot = snapshot;
+    pendingSave = snapshot;
+    void processConfigSaveQueue();
+  };
+
+  const saveTextSetting = (
+    field: 'deviceName' | 'mpvPath' | 'mpvArgs' | 'keybindNext' | 'keybindPrev',
+    value: string,
+  ) => {
+    const saved = lastSavedConfig ?? config();
+    const desired = latestConfigSnapshot ?? saved;
+    if (!saved || !desired) return;
+
+    if (field === 'deviceName' && value.trim().length === 0) return;
+    if (field === 'keybindNext' && value.trim().length === 0) return;
+    if (field === 'keybindPrev' && value.trim().length === 0) return;
+
+    const override =
+      field === 'mpvArgs'
+        ? { mpvArgs: parseMpvArgs(value) }
+        : field === 'mpvPath'
+          ? { mpvPath: value.trim().length > 0 ? value : null }
+          : { [field]: value };
+
+    if (field === 'mpvArgs') {
+      const nextArgs = override.mpvArgs ?? [];
+      if (
+        nextArgs.length === (desired.mpvArgs?.length ?? 0) &&
+        nextArgs.every((arg, index) => arg === desired.mpvArgs?.[index])
+      )
+        return;
+    } else if (field === 'mpvPath') {
+      if (override.mpvPath === desired.mpvPath) return;
+    } else if (override[field] === desired[field]) {
+      return;
+    }
+
+    queueConfigSave(buildConfigSnapshot(override));
+  };
+
+  const savePreferredSubtitleLanguages = (languages: string[]) => {
+    const desired = latestConfigSnapshot ?? lastSavedConfig ?? config();
+    if (
+      desired &&
+      languages.length === (desired.preferredSubtitleLanguages?.length ?? 0) &&
+      languages.every(
+        (language, index) =>
+          language === desired.preferredSubtitleLanguages?.[index],
+      )
+    )
+      return;
+
+    queueConfigSave(
+      buildConfigSnapshot({ preferredSubtitleLanguages: languages }),
+    );
+  };
+
+  const saveIntroSkipperSetting = (enabled: boolean) => {
+    const desired = latestConfigSnapshot ?? lastSavedConfig ?? config();
+    if (desired?.introSkipperEnabled === enabled) return;
+    queueConfigSave(buildConfigSnapshot({ introSkipperEnabled: enabled }));
+  };
 
   const addPreferredSubtitleLanguages = () => {
     const additions = parseSubtitleLanguageInput(subtitleLanguageInput());
     if (additions.length === 0) return;
 
+    let nextLanguages: string[] = [];
     setSelectedSubtitleLanguages((current) => {
       const seen = new Set(current);
       const next = [...current];
@@ -238,26 +335,39 @@ export default function OperationsConsole(props: OperationsConsoleProps) {
         next.push(language);
       }
 
+      nextLanguages = next;
       return next;
     });
+    savePreferredSubtitleLanguages(nextLanguages);
     setSubtitleLanguageInput('');
   };
 
   const removePreferredSubtitleLanguage = (language: string) => {
-    setSelectedSubtitleLanguages((current) =>
-      current.filter((selected) => selected !== language),
-    );
+    let nextLanguages: string[] = [];
+    setSelectedSubtitleLanguages((current) => {
+      nextLanguages = current.filter((selected) => selected !== language);
+      return nextLanguages;
+    });
+    savePreferredSubtitleLanguages(nextLanguages);
+  };
+
+  const clearPreferredSubtitleLanguages = () => {
+    setSelectedSubtitleLanguages([]);
+    savePreferredSubtitleLanguages([]);
   };
 
   const movePreferredSubtitleLanguage = (index: number, direction: -1 | 1) => {
+    let nextLanguages: string[] | null = null;
     setSelectedSubtitleLanguages((current) => {
       const target = index + direction;
       if (target < 0 || target >= current.length) return current;
 
       const next = [...current];
       [next[index], next[target]] = [next[target], next[index]];
+      nextLanguages = next;
       return next;
     });
+    if (nextLanguages) savePreferredSubtitleLanguages(nextLanguages);
   };
 
   const handleRefresh = () => {
@@ -326,6 +436,7 @@ export default function OperationsConsole(props: OperationsConsoleProps) {
       const path = await commands.configDetectMpv();
       if (path) {
         form.setFieldValue('mpvPath', path);
+        queueConfigSave(buildConfigSnapshot({ mpvPath: path }));
         showToast('success', 'MPV detected successfully');
       } else {
         showToast(
@@ -344,6 +455,7 @@ export default function OperationsConsole(props: OperationsConsoleProps) {
   const handleIntroSkipperToggle = (enabled: boolean) => {
     introSkipperEnabledValue = enabled;
     form.setFieldValue('introSkipperEnabled', enabled);
+    saveIntroSkipperSetting(enabled);
   };
 
   return (
@@ -494,17 +606,21 @@ export default function OperationsConsole(props: OperationsConsoleProps) {
               jellyfinConnected={state()?.connected ?? false}
               onPlayerStarted={() => refetchMpv()}
             />
-            <form
-              onSubmit={(event) => {
-                event.preventDefault();
-                event.stopPropagation();
-                void form.handleSubmit();
-              }}
-              class="space-y-6"
-            >
+            <form class="space-y-6">
               <SectionCard
                 icon={<Settings class="h-6 w-6" />}
                 title="Player Bridge settings"
+                trailing={
+                  <Show when={playerBridgeSaveStatus()}>
+                    {(status) => (
+                      <span
+                        class={`text-label-small font-semibold ${status().type === 'error' ? 'text-error' : 'text-secondary'}`}
+                      >
+                        {status().text}
+                      </span>
+                    )}
+                  </Show>
+                }
               >
                 <div class="space-y-5">
                   <form.Field
@@ -527,7 +643,13 @@ export default function OperationsConsole(props: OperationsConsoleProps) {
                           onInput={(event) =>
                             field().handleChange(event.currentTarget.value)
                           }
-                          onBlur={() => field().handleBlur()}
+                          onBlur={(event) => {
+                            field().handleBlur();
+                            saveTextSetting(
+                              'deviceName',
+                              event.currentTarget.value,
+                            );
+                          }}
                           class="input-filled w-full"
                           placeholder="JMSR"
                         />
@@ -558,7 +680,13 @@ export default function OperationsConsole(props: OperationsConsoleProps) {
                             onInput={(event) =>
                               field().handleChange(event.currentTarget.value)
                             }
-                            onBlur={() => field().handleBlur()}
+                            onBlur={(event) => {
+                              field().handleBlur();
+                              saveTextSetting(
+                                'mpvPath',
+                                event.currentTarget.value,
+                              );
+                            }}
                             placeholder="Path to mpv executable"
                             class="input-filled min-w-0 flex-1"
                           />
@@ -602,7 +730,13 @@ export default function OperationsConsole(props: OperationsConsoleProps) {
                               onInput={(event) =>
                                 field().handleChange(event.currentTarget.value)
                               }
-                              onBlur={() => field().handleBlur()}
+                              onBlur={(event) => {
+                                field().handleBlur();
+                                saveTextSetting(
+                                  'mpvArgs',
+                                  event.currentTarget.value,
+                                );
+                              }}
                               rows={4}
                               placeholder="--fullscreen&#10;--force-window"
                               class="input-filled h-auto w-full py-3 font-mono text-body-small"
@@ -636,7 +770,13 @@ export default function OperationsConsole(props: OperationsConsoleProps) {
                                     event.currentTarget.value,
                                   )
                                 }
-                                onBlur={() => field().handleBlur()}
+                                onBlur={(event) => {
+                                  field().handleBlur();
+                                  saveTextSetting(
+                                    'keybindNext',
+                                    event.currentTarget.value,
+                                  );
+                                }}
                                 class="input-filled w-full font-mono"
                                 placeholder="Shift+n"
                               />
@@ -667,7 +807,13 @@ export default function OperationsConsole(props: OperationsConsoleProps) {
                                     event.currentTarget.value,
                                   )
                                 }
-                                onBlur={() => field().handleBlur()}
+                                onBlur={(event) => {
+                                  field().handleBlur();
+                                  saveTextSetting(
+                                    'keybindPrev',
+                                    event.currentTarget.value,
+                                  );
+                                }}
                                 class="input-filled w-full font-mono"
                                 placeholder="Shift+p"
                               />
@@ -677,11 +823,6 @@ export default function OperationsConsole(props: OperationsConsoleProps) {
                       </div>
                     </div>
                   </Show>
-                </div>
-              </SectionCard>
-
-              <SectionCard icon={<Bot class="h-6 w-6" />} title="Automation">
-                <div class="space-y-4">
                   <div class="rounded-2xl bg-surface-container-high p-4">
                     <div class="flex flex-wrap items-start justify-between gap-3">
                       <div>
@@ -697,7 +838,7 @@ export default function OperationsConsole(props: OperationsConsoleProps) {
                         <button
                           type="button"
                           class="btn-text min-w-0 px-3"
-                          onClick={() => setSelectedSubtitleLanguages([])}
+                          onClick={clearPreferredSubtitleLanguages}
                         >
                           Clear all
                         </button>
@@ -760,34 +901,35 @@ export default function OperationsConsole(props: OperationsConsoleProps) {
                       }
                     >
                       <ol
-                        class="mt-4 space-y-2"
+                        class="mt-4 flex flex-wrap gap-2"
                         aria-label="Selected preferred subtitle languages"
                       >
                         <For each={selectedSubtitleLanguages()}>
                           {(language, index) => (
-                            <li class="flex flex-wrap items-center gap-2 rounded-2xl bg-surface-container-lowest px-3 py-2">
-                              <span class="flex min-w-0 flex-1 items-baseline gap-2">
-                                <span class="rounded-full bg-primary-container px-3 py-1 font-mono text-label-large text-on-primary-container">
-                                  {language}
-                                </span>
-                                <span class="text-body-small text-on-surface-variant">
-                                  {getSubtitleLanguageLabel(language)}
-                                </span>
+                            <li class="inline-flex max-w-full items-center gap-2 rounded-full border border-outline-variant bg-surface-container-lowest px-3 py-2">
+                              <span class="text-label-small text-on-surface-variant">
+                                {index() + 1}
+                              </span>
+                              <span class="font-mono text-label-large text-on-surface">
+                                {language}
+                              </span>
+                              <span class="text-body-small text-on-surface-variant">
+                                {getSubtitleLanguageLabel(language)}
                               </span>
                               <button
                                 type="button"
-                                class="btn-text min-w-0 px-2"
+                                class="btn-text min-w-0 px-1"
                                 disabled={index() === 0}
                                 aria-label={`Move ${language} up`}
                                 onClick={() =>
                                   movePreferredSubtitleLanguage(index(), -1)
                                 }
                               >
-                                Move up
+                                ↑
                               </button>
                               <button
                                 type="button"
-                                class="btn-text min-w-0 px-2"
+                                class="btn-text min-w-0 px-1"
                                 disabled={
                                   index() ===
                                   selectedSubtitleLanguages().length - 1
@@ -797,11 +939,11 @@ export default function OperationsConsole(props: OperationsConsoleProps) {
                                   movePreferredSubtitleLanguage(index(), 1)
                                 }
                               >
-                                Move down
+                                ↓
                               </button>
                               <button
                                 type="button"
-                                class="btn-text min-w-0 px-2"
+                                class="btn-text min-w-0 px-1"
                                 aria-label={`Remove ${language}`}
                                 onClick={() =>
                                   removePreferredSubtitleLanguage(language)
@@ -815,6 +957,11 @@ export default function OperationsConsole(props: OperationsConsoleProps) {
                       </ol>
                     </Show>
                   </div>
+                </div>
+              </SectionCard>
+
+              <SectionCard icon={<Bot class="h-6 w-6" />} title="Automation">
+                <div class="space-y-4">
                   <label
                     for="intro-skipper-enabled"
                     class="flex cursor-pointer items-center justify-between gap-4 rounded-2xl bg-surface-container-high px-4 py-3"
@@ -847,26 +994,6 @@ export default function OperationsConsole(props: OperationsConsoleProps) {
                   </label>
                 </div>
               </SectionCard>
-
-              <form.Subscribe selector={(formState) => formState.isSubmitting}>
-                {(isSubmitting) => (
-                  <button
-                    type="submit"
-                    disabled={isSubmitting()}
-                    class="btn-primary w-full"
-                  >
-                    {isSubmitting() ? 'Saving...' : 'Save Settings'}
-                  </button>
-                )}
-              </form.Subscribe>
-
-              <Show when={saveMessage()}>
-                <div
-                  class={`rounded-2xl p-4 text-center text-body-medium font-medium ${saveMessage()?.type === 'success' ? 'bg-tertiary-container text-on-tertiary-container' : 'bg-error-container text-on-error-container'}`}
-                >
-                  {saveMessage()?.text}
-                </div>
-              </Show>
             </form>
           </div>
 
