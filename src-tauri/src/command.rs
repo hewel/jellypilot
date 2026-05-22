@@ -13,6 +13,7 @@ use crate::jellyfin::{
   QuickConnectStatus, SavedSession, SessionManager,
 };
 use crate::mpv::{write_input_conf, MpvClient, PropertyValue};
+use crate::now_playing::{build_now_playing_state, collect_player_state, PlaybackContext};
 
 // ============================================================================
 // Events
@@ -290,109 +291,18 @@ impl JellyfinState {
   }
 }
 
-async fn collect_player_state(mpv: &MpvClient) -> PlayerState {
-  if !mpv.is_connected() {
-    return PlayerState::default();
-  }
-
-  let (paused_res, time_pos_res, duration_res, volume_res) = tokio::join!(
-    mpv.get_property("pause"),
-    mpv.get_property("time-pos"),
-    mpv.get_property("duration"),
-    mpv.get_property("volume"),
-  );
-
-  let paused = match paused_res {
-    Ok(PropertyValue::Bool(b)) => b,
-    Ok(_) => true,
-    Err(e) => {
-      log::warn!("Failed to get pause property: {}", e);
-      true
-    }
-  };
-
-  let time_pos = match time_pos_res {
-    Ok(PropertyValue::Number(n)) if n.is_finite() => n,
-    Ok(_) => 0.0,
-    Err(e) => {
-      log::warn!("Failed to get time-pos property: {}", e);
-      0.0
-    }
-  };
-
-  let duration = match duration_res {
-    Ok(PropertyValue::Number(n)) if n.is_finite() => n,
-    Ok(_) => 0.0,
-    Err(e) => {
-      log::warn!("Failed to get duration property: {}", e);
-      0.0
-    }
-  };
-
-  let volume = match volume_res {
-    Ok(PropertyValue::Number(n)) if n.is_finite() => n.clamp(0.0, 100.0),
-    Ok(_) => 100.0,
-    Err(e) => {
-      log::warn!("Failed to get volume property: {}", e);
-      100.0
-    }
-  };
-
-  PlayerState {
-    connected: true,
-    paused,
-    time_pos,
-    duration,
-    volume,
-  }
-}
-
 async fn collect_now_playing_state(state: &JellyfinState) -> NowPlayingState {
   let player = collect_player_state(&state.mpv).await;
   let session = state.session.read().clone();
   let current_item = session.as_ref().and_then(|session| session.current_item());
 
-  let media = current_item.as_ref().map(|item| NowPlayingMedia {
-    item_id: item.id.clone(),
-    name: item.name.clone(),
-    item_type: item.item_type.clone(),
-    series_name: item.series_name.clone(),
-    season_number: item.parent_index_number,
-    episode_number: item.index_number,
-  });
-
-  let unavailable_reason = if session.is_none() {
-    Some(AdjacentEpisodeUnavailableReason::NoSession)
-  } else {
-    match current_item.as_ref() {
-      None => Some(AdjacentEpisodeUnavailableReason::NoCurrentItem),
-      Some(item) if item.item_type != "Episode" => {
-        Some(AdjacentEpisodeUnavailableReason::NotEpisode)
-      }
-      Some(_) => None,
-    }
-  };
-
-  let can_play_adjacent = unavailable_reason.is_none();
-  let status = if !player.connected {
-    NowPlayingStatus::Offline
-  } else if media.is_none() && player.duration <= 0.0 {
-    NowPlayingStatus::Idle
-  } else if player.paused {
-    NowPlayingStatus::Paused
-  } else {
-    NowPlayingStatus::Playing
-  };
-
-  NowPlayingState {
-    status,
+  build_now_playing_state(
     player,
-    media,
-    can_play_next: can_play_adjacent,
-    can_play_previous: can_play_adjacent,
-    next_unavailable_reason: unavailable_reason.clone(),
-    previous_unavailable_reason: unavailable_reason,
-  }
+    PlaybackContext {
+      has_active_session: session.is_some(),
+      current_item: current_item.as_ref(),
+    },
+  )
 }
 
 async fn emit_now_playing_changed(app: &tauri::AppHandle, state: &JellyfinState) {

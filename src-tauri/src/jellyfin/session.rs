@@ -12,12 +12,10 @@ use super::error::JellyfinError;
 use super::intro_skipper::evaluate_skip;
 use super::types::*;
 use super::websocket::{JellyfinCommand, JellyfinWebSocket};
-use crate::command::{
-  AdjacentEpisodeUnavailableReason, AppNotification, NowPlayingChanged, NowPlayingMedia,
-  NowPlayingState, NowPlayingStatus, PlayerState,
-};
+use crate::command::{AppNotification, NowPlayingChanged};
 use crate::config::AppConfig;
-use crate::mpv::{MpvClient, PropertyValue};
+use crate::mpv::MpvClient;
+use crate::now_playing::{build_now_playing_state, collect_player_state, PlaybackContext};
 use tauri_specta::Event;
 
 const PREFERENCES_STORE_FILE: &str = "preferences.json";
@@ -119,89 +117,22 @@ impl SessionManager {
     self.state.read().current_item.clone()
   }
 
-  async fn player_state(mpv: &MpvClient) -> PlayerState {
-    if !mpv.is_connected() {
-      return PlayerState::default();
-    }
-
-    let (paused_res, time_pos_res, duration_res, volume_res) = tokio::join!(
-      mpv.get_property("pause"),
-      mpv.get_property("time-pos"),
-      mpv.get_property("duration"),
-      mpv.get_property("volume"),
-    );
-
-    let paused = match paused_res {
-      Ok(PropertyValue::Bool(value)) => value,
-      _ => true,
-    };
-    let time_pos = match time_pos_res {
-      Ok(PropertyValue::Number(value)) if value.is_finite() => value,
-      _ => 0.0,
-    };
-    let duration = match duration_res {
-      Ok(PropertyValue::Number(value)) if value.is_finite() => value,
-      _ => 0.0,
-    };
-    let volume = match volume_res {
-      Ok(PropertyValue::Number(value)) if value.is_finite() => value.clamp(0.0, 100.0),
-      _ => 100.0,
-    };
-
-    PlayerState {
-      connected: true,
-      paused,
-      time_pos,
-      duration,
-      volume,
-    }
-  }
-
   async fn emit_now_playing_changed(
     app_handle: &AppHandle,
     mpv: &MpvClient,
     state: &RwLock<SessionState>,
   ) {
-    let player = Self::player_state(mpv).await;
-    let current_item = state.read().current_item.clone();
-    let media = current_item.as_ref().map(|item| NowPlayingMedia {
-      item_id: item.id.clone(),
-      name: item.name.clone(),
-      item_type: item.item_type.clone(),
-      series_name: item.series_name.clone(),
-      season_number: item.parent_index_number,
-      episode_number: item.index_number,
-    });
-
-    let unavailable_reason = match current_item.as_ref() {
-      None => Some(AdjacentEpisodeUnavailableReason::NoCurrentItem),
-      Some(item) if item.item_type != "Episode" => {
-        Some(AdjacentEpisodeUnavailableReason::NotEpisode)
-      }
-      Some(_) => None,
-    };
-    let can_play_adjacent = unavailable_reason.is_none();
-    let status = if !player.connected {
-      NowPlayingStatus::Offline
-    } else if media.is_none() && player.duration <= 0.0 {
-      NowPlayingStatus::Idle
-    } else if player.paused {
-      NowPlayingStatus::Paused
-    } else {
-      NowPlayingStatus::Playing
-    };
-
-    let event = NowPlayingChanged {
-      state: NowPlayingState {
-        status,
-        player,
-        media,
-        can_play_next: can_play_adjacent,
-        can_play_previous: can_play_adjacent,
-        next_unavailable_reason: unavailable_reason.clone(),
-        previous_unavailable_reason: unavailable_reason,
+    let player = collect_player_state(mpv).await;
+    let state = state.read();
+    let now_playing = build_now_playing_state(
+      player,
+      PlaybackContext {
+        has_active_session: true,
+        current_item: state.current_item.as_ref(),
       },
-    };
+    );
+
+    let event = NowPlayingChanged { state: now_playing };
 
     if let Err(e) = event.emit(app_handle) {
       log::error!("Failed to emit Now Playing state: {}", e);
