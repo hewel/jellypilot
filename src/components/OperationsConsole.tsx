@@ -780,17 +780,7 @@ export default function OperationsConsole(props: OperationsConsoleProps) {
 
                   <Collapsible.Root
                     open={advancedOpen()}
-                    onClick={(event) => {
-                      const target = event.target;
-                      if (
-                        target instanceof HTMLElement &&
-                        target.closest(
-                          '[data-scope="collapsible"][data-part="trigger"]',
-                        )
-                      ) {
-                        setAdvancedOpen((open) => !open);
-                      }
-                    }}
+                    onOpenChange={(details) => setAdvancedOpen(details.open)}
                     lazyMount
                     unmountOnExit
                   >
@@ -964,22 +954,29 @@ export default function OperationsConsole(props: OperationsConsoleProps) {
                           <TagsInput.Label class="mb-1 block text-label-medium uppercase text-on-surface-variant">
                             Add preferred subtitle language
                           </TagsInput.Label>
-                          <TagsInput.Input
-                            type="text"
-                            value={subtitleLanguageInput()}
-                            onInput={(event) =>
-                              setSubtitleLanguageInput(
-                                event.currentTarget.value,
-                              )
-                            }
-                            onKeyDown={(event) => {
-                              if (event.key !== 'Enter') return;
-                              event.preventDefault();
-                              addPreferredSubtitleLanguages();
-                            }}
-                            class="input-filled w-full font-mono"
-                            placeholder="eng"
-                            autoComplete="off"
+                          <Combobox.Input
+                            asChild={(comboboxInputProps) => (
+                              <TagsInput.Input
+                                {...comboboxInputProps({
+                                  type: 'text',
+                                  value: subtitleLanguageInput(),
+                                  onInput: (event) =>
+                                    setSubtitleLanguageInput(
+                                      event.currentTarget.value,
+                                    ),
+                                  onKeyDown: (event) => {
+                                    if (event.key !== 'Enter') return;
+                                    event.preventDefault();
+                                    addPreferredSubtitleLanguages();
+                                  },
+                                  class: 'input-filled w-full font-mono',
+                                  placeholder: 'eng',
+                                  autoComplete: 'off',
+                                  'aria-label':
+                                    'Add preferred subtitle language',
+                                })}
+                              />
+                            )}
                           />
                         </TagsInput.Control>
                         <button
