@@ -1,3 +1,4 @@
+import { Checkbox } from '@ark-ui/solid/checkbox';
 import { listen } from '@tauri-apps/api/event';
 import {
   createEffect,
@@ -136,15 +137,21 @@ export default function DiagnosticsPanel(props: DiagnosticsPanelProps) {
           {diagnostics().length} sanitized runtime events
         </p>
         <Show when={!props.compact}>
-          <label class="flex items-center gap-2 text-label-small text-on-surface-variant">
-            <input
-              type="checkbox"
-              checked={autoScroll()}
-              onChange={(event) => setAutoScroll(event.currentTarget.checked)}
-              class="rounded border-outline-variant bg-surface-container-high text-primary focus:ring-primary/50"
-            />
-            Auto-scroll
-          </label>
+          <Checkbox.Root
+            checked={autoScroll()}
+            onCheckedChange={(details) =>
+              setAutoScroll(details.checked === true)
+            }
+            class="ark-checkbox text-label-small text-on-surface-variant"
+          >
+            <Checkbox.Control class="ark-checkbox__control">
+              <Checkbox.Indicator class="ark-checkbox__indicator">
+                ✓
+              </Checkbox.Indicator>
+            </Checkbox.Control>
+            <Checkbox.Label>Auto-scroll</Checkbox.Label>
+            <Checkbox.HiddenInput />
+          </Checkbox.Root>
         </Show>
       </div>
 

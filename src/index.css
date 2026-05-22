@@ -176,6 +176,30 @@ body {
   .select-filled {
     @apply h-14 rounded-2xl border border-outline-variant bg-surface-container-high px-4 text-on-surface outline-none transition-colors duration-200 focus:border-primary focus:ring-2 focus:ring-primary/30;
   }
+  .ark-checkbox {
+    @apply inline-flex cursor-pointer items-center gap-2 align-top select-none disabled:cursor-not-allowed disabled:opacity-50;
+  }
+
+  .ark-checkbox[data-disabled] {
+    @apply cursor-not-allowed opacity-50;
+  }
+
+  .ark-checkbox__control {
+    @apply inline-flex h-5 w-5 shrink-0 items-center justify-center rounded border border-outline-variant bg-surface-container-high text-[13px] leading-none text-on-primary transition-colors duration-200;
+  }
+
+  .ark-checkbox__control[data-state="checked"],
+  .ark-checkbox__control[data-state="indeterminate"] {
+    @apply border-primary bg-primary;
+  }
+
+  .ark-checkbox__control[data-focus-visible] {
+    @apply outline-none ring-2 ring-primary/50 ring-offset-2 ring-offset-background;
+  }
+
+  .ark-checkbox__indicator {
+    @apply flex items-center justify-center font-bold;
+  }
 
   .btn-primary {
     @apply inline-flex min-h-11 items-center justify-center gap-2 rounded-full bg-primary px-6 py-2.5 text-[14px] leading-[20px] font-semibold text-on-primary shadow-lg shadow-primary/25 transition duration-200 hover:bg-[#B91AED] focus:outline-none focus:ring-2 focus:ring-primary/50 focus:ring-offset-2 focus:ring-offset-background active:scale-[0.98] disabled:pointer-events-none disabled:opacity-50;
