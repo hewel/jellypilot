@@ -496,6 +496,71 @@ test('sign out confirms and clears saved session', async () => {
 
   cleanup();
 });
+test('sign out dialog uses Ark dialog dismissal semantics', async () => {
+  const cleanup = renderConsole();
+
+  await waitFor(() =>
+    expect(screen.getByText('Operations Console')).toBeVisible(),
+  );
+
+  fireEvent.click(screen.getByRole('button', { name: 'Sign out' }));
+  const dialog = await screen.findByRole('dialog');
+  expect(dialog).toBeVisible();
+  expect(dialog.closest('[data-scope="dialog"]')).not.toBeNull();
+
+  fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+  await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+
+  fireEvent.click(screen.getByRole('button', { name: 'Sign out' }));
+  const escapeDialog = await screen.findByRole('dialog');
+  fireEvent.keyDown(escapeDialog, { key: 'Escape', code: 'Escape' });
+  await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+
+  fireEvent.click(screen.getByRole('button', { name: 'Sign out' }));
+  await screen.findByRole('dialog');
+  const backdrop = document.querySelector(
+    '[data-scope="dialog"][data-part="backdrop"]',
+  );
+  expect(backdrop).not.toBeNull();
+  fireEvent.pointerDown(backdrop as Element);
+  fireEvent.click(backdrop as Element);
+  await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+
+  cleanup();
+});
+
+test('sign out dialog locks dismissal while signing out', async () => {
+  let resolveClearSession:
+    | ((result: Awaited<ReturnType<typeof commands.jellyfinClearSession>>) => void)
+    | undefined;
+  rstest.spyOn(commands, 'jellyfinClearSession').mockImplementation(
+    () =>
+      new Promise((resolve) => {
+        resolveClearSession = resolve;
+      }),
+  );
+  const cleanup = renderConsole();
+
+  await waitFor(() =>
+    expect(screen.getByText('Operations Console')).toBeVisible(),
+  );
+  fireEvent.click(screen.getByRole('button', { name: 'Sign out' }));
+  await screen.findByRole('dialog');
+
+  const signOutButtons = screen.getAllByRole('button', { name: 'Sign out' });
+  fireEvent.click(signOutButtons[signOutButtons.length - 1]);
+
+  await waitFor(() =>
+    expect(screen.getByRole('button', { name: 'Cancel' })).toBeDisabled(),
+  );
+  fireEvent.keyDown(document, { key: 'Escape' });
+  expect(screen.getByRole('dialog')).toBeVisible();
+
+  resolveClearSession?.({ status: 'ok', data: null });
+  await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+
+  cleanup();
+});
 
 test('settings and session actions keep shared visual semantics', async () => {
   const cleanup = renderConsole();

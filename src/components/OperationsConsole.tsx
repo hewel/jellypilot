@@ -1,3 +1,4 @@
+import { Dialog } from '@ark-ui/solid/dialog';
 import { createForm } from '@tanstack/solid-form';
 import {
   Activity,
@@ -20,6 +21,7 @@ import {
   For,
   Show,
 } from 'solid-js';
+import { Portal } from 'solid-js/web';
 import { type AppConfig, type ConnectionState, commands } from '../bindings';
 import { clearSavedSession, loadSavedSession } from '../router';
 import DiagnosticsPanel from './DiagnosticsPanel';
@@ -1076,71 +1078,95 @@ export default function OperationsConsole(props: OperationsConsoleProps) {
               </div>
             </SectionCard>
 
-            <section class="card-filled border-error/30">
-              <div class="flex items-start gap-3">
-                <ShieldAlert class="mt-1 h-5 w-5 text-error" />
-                <div>
-                  <h2 class="text-title-medium text-on-surface">Session</h2>
-                  <p class="mt-1 text-body-small text-on-surface-variant">
-                    Sign out removes the Saved Session and requires
-                    authentication before Reconnect is available.
-                  </p>
+            <Dialog.Root
+              open={confirmSignOut()}
+              onOpenChange={(details) => {
+                if (signingOut() && !details.open) return;
+                setConfirmSignOut(details.open);
+              }}
+              closeOnEscape={!signingOut()}
+              closeOnInteractOutside={!signingOut()}
+              onEscapeKeyDown={() => {
+                if (!signingOut()) setConfirmSignOut(false);
+              }}
+              onInteractOutside={() => {
+                if (!signingOut()) setConfirmSignOut(false);
+              }}
+              lazyMount
+              unmountOnExit
+              role="dialog"
+            >
+              <section class="card-filled border-error/30">
+                <div class="flex items-start gap-3">
+                  <ShieldAlert class="mt-1 h-5 w-5 text-error" />
+                  <div>
+                    <h2 class="text-title-medium text-on-surface">Session</h2>
+                    <p class="mt-1 text-body-small text-on-surface-variant">
+                      Sign out removes the Saved Session and requires
+                      authentication before Reconnect is available.
+                    </p>
+                  </div>
                 </div>
-              </div>
-              <button
-                type="button"
-                class="btn-outlined mt-5 w-full border-error/60 text-error hover:bg-error/10"
-                onClick={() => setConfirmSignOut(true)}
-              >
-                <LogOut class="h-5 w-5" />
-                Sign out
-              </button>
-            </section>
+                <Dialog.Trigger class="btn-outlined mt-5 w-full border-error/60 text-error hover:bg-error/10">
+                  <LogOut class="h-5 w-5" />
+                  Sign out
+                </Dialog.Trigger>
+              </section>
+
+              <Portal>
+                <Dialog.Backdrop
+                  class="fixed inset-0 z-50 bg-black/60"
+                  onClick={() => {
+                    if (!signingOut()) setConfirmSignOut(false);
+                  }}
+                />
+                <Dialog.Positioner class="fixed inset-0 z-50 flex items-center justify-center p-4">
+                  <Dialog.Content
+                    class="card-elevated max-w-md"
+                    onKeyDown={(event) => {
+                      if (event.key === 'Escape' && !signingOut()) {
+                        setConfirmSignOut(false);
+                      }
+                    }}
+                  >
+                    <Dialog.Title
+                      id="sign-out-title"
+                      class="text-title-large text-on-surface"
+                    >
+                      Sign out?
+                    </Dialog.Title>
+                    <Dialog.Description class="mt-3 text-body-medium text-on-surface-variant">
+                      This removes the Saved Session and you’ll need to
+                      authenticate again before reconnecting.
+                    </Dialog.Description>
+                    <div class="mt-6 flex flex-col-reverse gap-3 sm:flex-row sm:justify-end">
+                      <button
+                        type="button"
+                        class="btn-secondary"
+                        onClick={() => setConfirmSignOut(false)}
+                        disabled={signingOut()}
+                      >
+                        Cancel
+                      </button>
+                      <button
+                        type="button"
+                        class="btn-outlined border-error/60 text-error hover:bg-error/10"
+                        onClick={handleSignOut}
+                        disabled={signingOut()}
+                      >
+                        {signingOut() ? 'Signing out...' : 'Sign out'}
+                      </button>
+                    </div>
+                  </Dialog.Content>
+                </Dialog.Positioner>
+              </Portal>
+            </Dialog.Root>
 
             <PageFooter />
           </aside>
         </div>
       </div>
 
-      <Show when={confirmSignOut()}>
-        <div
-          class="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4"
-          role="presentation"
-        >
-          <div
-            class="card-elevated max-w-md"
-            role="dialog"
-            aria-modal="true"
-            aria-labelledby="sign-out-title"
-          >
-            <h2 id="sign-out-title" class="text-title-large text-on-surface">
-              Sign out?
-            </h2>
-            <p class="mt-3 text-body-medium text-on-surface-variant">
-              This removes the Saved Session and you’ll need to authenticate
-              again before reconnecting.
-            </p>
-            <div class="mt-6 flex flex-col-reverse gap-3 sm:flex-row sm:justify-end">
-              <button
-                type="button"
-                class="btn-secondary"
-                onClick={() => setConfirmSignOut(false)}
-                disabled={signingOut()}
-              >
-                Cancel
-              </button>
-              <button
-                type="button"
-                class="btn-outlined border-error/60 text-error hover:bg-error/10"
-                onClick={handleSignOut}
-                disabled={signingOut()}
-              >
-                {signingOut() ? 'Signing out...' : 'Sign out'}
-              </button>
-            </div>
-          </div>
-        </div>
-      </Show>
     </div>
   );
 }
