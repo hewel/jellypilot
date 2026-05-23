@@ -55,6 +55,8 @@ export default function LoginPage(props: LoginPageProps) {
   const [submitting, setSubmitting] = createSignal(false);
   let pollInterval: ReturnType<typeof setInterval> | undefined;
   let timeoutHandle: ReturnType<typeof setTimeout> | undefined;
+  let quickConnectRequestId = 0;
+  let quickConnectPollingRequestId: number | null = null;
 
   const form = createForm(() => ({
     defaultValues: {
@@ -113,6 +115,8 @@ export default function LoginPage(props: LoginPageProps) {
   };
 
   const resetQuickConnect = () => {
+    quickConnectRequestId += 1;
+    quickConnectPollingRequestId = null;
     stopQuickConnectPolling();
     setQuickConnectState('idle');
     setQuickConnectCode(null);
@@ -128,35 +132,77 @@ export default function LoginPage(props: LoginPageProps) {
   const checkQuickConnectApproval = async (
     serverUrlValue: string,
     secret: string,
+    requestId: number,
   ) => {
-    const result = await commands.jellyfinQuickConnectCheck(
-      serverUrlValue,
-      secret,
+    if (
+      requestId !== quickConnectRequestId ||
+      quickConnectPollingRequestId !== null
+    )
+      return;
+    quickConnectPollingRequestId = requestId;
+    const check = await Effect.runPromiseExit(
+      runTauriCommand(() =>
+        commands.jellyfinQuickConnectCheck(serverUrlValue, secret),
+      ),
     );
-    if (result.status === 'error') {
+    if (quickConnectPollingRequestId === requestId)
+      quickConnectPollingRequestId = null;
+    if (requestId !== quickConnectRequestId) return;
+    if (Exit.isFailure(check)) {
+      quickConnectRequestId += 1;
       stopQuickConnectPolling();
       setQuickConnectState('failed');
-      setError(result.error.message);
+      setError(
+        commandFailureMessage(check.cause, 'Quick Connect approval failed'),
+      );
       return;
     }
 
-    if (result.data !== 'approved') return;
+    if (quickConnectPollingRequestId === requestId)
+      quickConnectPollingRequestId = null;
+    if (check.value !== 'approved') return;
 
     stopQuickConnectPolling();
+    quickConnectRequestId += 1;
+    const authRequestId = quickConnectRequestId;
     setSubmitting(true);
-    const authResult = await commands.jellyfinQuickConnectAuthenticate(
-      serverUrlValue,
-      secret,
+    const auth = await Effect.runPromiseExit(
+      runTauriCommand(() =>
+        commands.jellyfinQuickConnectAuthenticate(serverUrlValue, secret),
+      ),
     );
-    setSubmitting(false);
+    if (authRequestId !== quickConnectRequestId) return;
 
-    if (authResult.status === 'error') {
+    if (Exit.isFailure(auth)) {
+      quickConnectRequestId += 1;
+      setSubmitting(false);
       setQuickConnectState('failed');
-      setError(authResult.error.message);
+      setError(
+        commandFailureMessage(
+          auth.cause,
+          'Quick Connect authentication failed',
+        ),
+      );
       return;
     }
 
-    await finishConnected();
+    const completion = await Effect.runPromiseExit(
+      Effect.tryPromise({
+        try: finishConnected,
+        catch: (error) =>
+          new CommandError({
+            message:
+              error instanceof Error ? error.message : 'Connection failed',
+          }),
+      }),
+    );
+    if (authRequestId !== quickConnectRequestId) return;
+    if (Exit.isFailure(completion)) {
+      quickConnectRequestId += 1;
+      setSubmitting(false);
+      setQuickConnectState('failed');
+      setError(commandFailureMessage(completion.cause, 'Connection failed'));
+    }
   };
 
   const startQuickConnect = async (value: LoginValues) => {
@@ -168,25 +214,33 @@ export default function LoginPage(props: LoginPageProps) {
     }
 
     setSubmitting(true);
+    quickConnectRequestId += 1;
+    const requestId = quickConnectRequestId;
     const serverUrlValue = validation.result.url;
-    const result = await commands.jellyfinQuickConnectStart(serverUrlValue);
+    const start = await Effect.runPromiseExit(
+      runTauriCommand(() => commands.jellyfinQuickConnectStart(serverUrlValue)),
+    );
+    if (requestId !== quickConnectRequestId) return;
     setSubmitting(false);
 
-    if (result.status === 'error') {
+    if (Exit.isFailure(start)) {
       setQuickConnectState('failed');
-      setError(result.error.message);
+      setError(commandFailureMessage(start.cause, 'Quick Connect failed'));
       return;
     }
 
-    const request = result.data;
+    const request = start.value;
     setQuickConnectCode(request.code);
     setQuickConnectState('waiting');
 
     pollInterval = setInterval(() => {
-      void checkQuickConnectApproval(serverUrlValue, request.secret);
+      void checkQuickConnectApproval(serverUrlValue, request.secret, requestId);
     }, 5000);
     timeoutHandle = setTimeout(
       () => {
+        if (requestId !== quickConnectRequestId) return;
+        quickConnectRequestId += 1;
+        quickConnectPollingRequestId = null;
         stopQuickConnectPolling();
         setQuickConnectState('failed');
         setError(
@@ -268,7 +322,11 @@ export default function LoginPage(props: LoginPageProps) {
     });
   });
 
-  onCleanup(stopQuickConnectPolling);
+  onCleanup(() => {
+    quickConnectRequestId += 1;
+    quickConnectPollingRequestId = null;
+    stopQuickConnectPolling();
+  });
 
   return (
     <div class="console-shell flex items-center justify-center">

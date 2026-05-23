@@ -42,3 +42,19 @@ test('Password Login connect command uses typed command helper', () => {
     'const result = await commands.jellyfinConnect(credentials);',
   );
 });
+test('Quick Connect commands use typed command helpers', () => {
+  const loginSource = readFileSync('src/components/LoginPage.tsx', 'utf8');
+
+  expect(loginSource).toContain(
+    'runTauriCommand(() => commands.jellyfinQuickConnectStart(serverUrlValue))',
+  );
+  expect(loginSource).toContain(
+    'commands.jellyfinQuickConnectCheck(serverUrlValue, secret)',
+  );
+  expect(loginSource).toContain(
+    'commands.jellyfinQuickConnectAuthenticate(serverUrlValue, secret)',
+  );
+  expect(loginSource).not.toContain(
+    'const result = await commands.jellyfinQuickConnectStart(serverUrlValue);',
+  );
+});
