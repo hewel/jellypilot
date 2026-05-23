@@ -9,7 +9,7 @@ test('release workflow builds a source-based Arch package with desktop integrati
   const releaseWorkflow = readText('.github/workflows/release.yml');
 
   expect(pkgbuild).toContain('pkgname=jmsr');
-  expect(pkgbuild).toContain('pkgver=1.3.2');
+  expect(pkgbuild).toContain('pkgver=1.4.0');
   expect(pkgbuild).toContain("options=('!lto')");
   expect(pkgbuild).toContain(
     '"git+https://github.com/hewel/jmsr.git#tag=v$pkgver"',

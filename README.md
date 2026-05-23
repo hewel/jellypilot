@@ -62,6 +62,12 @@ JMSR allows you to cast media from any Jellyfin client (web, mobile, TV) to your
 
 ## 📦 Release Notes
 
+### v1.4.0
+
+- Added saved-session route gating and automatic reconnect through the authenticated session access path.
+- Added mute-state visibility to the Now Playing controls.
+- Improved Player Bridge command handling, playback control sharing, and Jellyfin websocket ownership for more reliable external MPV control.
+
 ### v1.3.2
 
 - Migrated login, diagnostics, settings, subtitle priorities, session dialog, and now playing controls to headless Ark UI Solid primitives while preserving JMSR Control Room styling and behavior.
