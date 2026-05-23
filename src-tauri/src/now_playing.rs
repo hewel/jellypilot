@@ -18,11 +18,12 @@ pub async fn collect_player_state(mpv: &MpvClient) -> PlayerState {
     return PlayerState::default();
   }
 
-  let (paused_res, time_pos_res, duration_res, volume_res) = tokio::join!(
+  let (paused_res, time_pos_res, duration_res, volume_res, muted_res) = tokio::join!(
     mpv.get_property("pause"),
     mpv.get_property("time-pos"),
     mpv.get_property("duration"),
     mpv.get_property("volume"),
+    mpv.get_property("mute"),
   );
 
   let paused = match paused_res {
@@ -61,9 +62,19 @@ pub async fn collect_player_state(mpv: &MpvClient) -> PlayerState {
     }
   };
 
+  let muted = match muted_res {
+    Ok(PropertyValue::Bool(b)) => b,
+    Ok(_) => false,
+    Err(e) => {
+      log::warn!("Failed to get mute property: {}", e);
+      false
+    }
+  };
+
   PlayerState {
     connected: true,
     paused,
+    muted,
     time_pos,
     duration,
     volume,
@@ -126,6 +137,7 @@ mod tests {
     PlayerState {
       connected,
       paused,
+      muted: false,
       time_pos: 12.0,
       duration,
       volume: 80.0,

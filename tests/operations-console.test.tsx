@@ -29,6 +29,7 @@ const nowPlaying: NowPlayingState = {
   player: {
     connected: false,
     paused: true,
+    muted: false,
     timePos: 0,
     duration: 0,
     volume: 100,

@@ -130,6 +130,7 @@ export default function NowPlayingCard(props: {
   const connected = () => player()?.connected ?? false;
   const seekValue = () => seekDraft() ?? player()?.timePos ?? 0;
   const volumeValue = () => volumeDraft() ?? player()?.volume ?? 100;
+  const muted = () => player()?.muted ?? false;
   const activeTimeline = () => {
     const duration = player()?.duration ?? 0;
     return connected() && Number.isFinite(duration) && duration > 0;
@@ -328,7 +329,7 @@ export default function NowPlayingCard(props: {
         <button
           type="button"
           class="btn-icon shrink-0"
-          aria-label="Mute"
+          aria-label={muted() ? 'Unmute' : 'Mute'}
           disabled={!connected() || busy() !== null}
           onClick={() =>
             void runCommand(
@@ -338,7 +339,7 @@ export default function NowPlayingCard(props: {
             )
           }
         >
-          <Show when={connected()} fallback={<VolumeX class="h-5 w-5" />}>
+          <Show when={connected() && !muted()} fallback={<VolumeX class="h-5 w-5" />}>
             <Volume2 class="h-5 w-5" />
           </Show>
         </button>

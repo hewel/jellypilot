@@ -10,6 +10,7 @@ const offlineState: NowPlayingState = {
   player: {
     connected: false,
     paused: true,
+    muted: false,
     timePos: 0,
     duration: 0,
     volume: 100,
@@ -26,6 +27,7 @@ const playingState: NowPlayingState = {
   player: {
     connected: true,
     paused: false,
+    muted: false,
     timePos: 30,
     duration: 120,
     volume: 80,
@@ -235,4 +237,49 @@ test('paused playback remains controllable without metadata', async () => {
 
   await waitFor(() => expect(setPause).toHaveBeenCalledWith(false));
   cleanup();
+});
+
+test('clicking mute toggles icon and label after state reloads', async () => {
+  const nowPlayingGetState = rstest
+    .spyOn(commands, 'nowPlayingGetState')
+    .mockResolvedValue({ status: 'ok', data: playingState });
+  const toggleMute = rstest
+    .spyOn(commands, 'mpvToggleMute')
+    .mockImplementation(async () => {
+      nowPlayingGetState.mockResolvedValue({
+        status: 'ok',
+        data: {
+          ...playingState,
+          player: { ...playingState.player, muted: true },
+        },
+      });
+      return { status: 'ok', data: null };
+    });
+  rstest
+    .spyOn(events.nowPlayingChanged, 'listen')
+    .mockResolvedValue(() => undefined);
+  const root = document.createElement('div');
+  document.body.append(root);
+  const dispose = render(
+    () => (
+      <ToastProvider>
+        <NowPlayingCard jellyfinConnected />
+      </ToastProvider>
+    ),
+    root,
+  );
+
+  await waitFor(() => expect(screen.getByText('The Pilot')).toBeVisible());
+
+  expect(screen.getByLabelText('Mute')).toBeVisible();
+  const muteBtn = screen.getByRole('button', { name: 'Mute' });
+  fireEvent.click(muteBtn);
+
+  await waitFor(() => expect(toggleMute).toHaveBeenCalled());
+  await waitFor(() =>
+    expect(screen.getByRole('button', { name: 'Unmute' })).toBeVisible(),
+  );
+
+  dispose();
+  root.remove();
 });

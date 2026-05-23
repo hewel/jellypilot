@@ -187,6 +187,7 @@ export type NowPlayingStatus = "offline" | "idle" | "playing" | "paused" | "unkn
 export type PlayerState = {
 	connected: boolean,
 	paused: boolean,
+	muted: boolean,
 	timePos: number | null,
 	duration: number | null,
 	volume: number | null,

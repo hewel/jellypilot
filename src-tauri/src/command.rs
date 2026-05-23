@@ -201,6 +201,7 @@ fn jellyfin_err(e: JellyfinError) -> CommandError {
 pub struct PlayerState {
   pub connected: bool,
   pub paused: bool,
+  pub muted: bool,
   pub time_pos: f64,
   pub duration: f64,
   pub volume: f64,
@@ -211,6 +212,7 @@ impl Default for PlayerState {
     Self {
       connected: false,
       paused: true,
+      muted: false,
       time_pos: 0.0,
       duration: 0.0,
       volume: 100.0,
