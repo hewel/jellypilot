@@ -1,8 +1,14 @@
 import { afterEach, expect, rstest, test } from '@rstest/core';
 import { fireEvent, screen, waitFor } from '@testing-library/dom';
+import { Cause, Effect, Exit } from 'effect';
 import { render } from 'solid-js/web';
 import { commands } from '../src/bindings';
 import LoginPage from '../src/components/LoginPage';
+import { StorageParseError } from '../src/effects/errors';
+import {
+  CREDENTIALS_STORAGE_KEY,
+  loadSavedCredentials,
+} from '../src/effects/session';
 import { loadSavedSession } from '../src/sessionAccess';
 
 const sampleSession = {
@@ -21,6 +27,23 @@ function renderLoginPage(onConnected = () => undefined) {
     dispose();
     root.remove();
   };
+}
+async function fillPasswordLogin() {
+  fireEvent.input(
+    screen.getByPlaceholderText('jellyfin.local or media.example.com/jellyfin'),
+    {
+      target: { value: 'jellyfin.example.com' },
+    },
+  );
+  fireEvent.click(screen.getByRole('tab', { name: 'Password' }));
+
+  await waitFor(() => expect(screen.getByText('Username')).toBeVisible());
+  fireEvent.input(screen.getByPlaceholderText('Jellyfin username'), {
+    target: { value: 'ada' },
+  });
+  fireEvent.input(screen.getByPlaceholderText('Jellyfin password'), {
+    target: { value: 'secret' },
+  });
 }
 
 afterEach(() => {
@@ -279,13 +302,144 @@ test('password login saves the authenticated session', async () => {
 
   cleanup();
 });
+test('password login stays locked while saving the authenticated session', async () => {
+  const connect = rstest.spyOn(commands, 'jellyfinConnect').mockResolvedValue({
+    status: 'ok',
+    data: null,
+  });
+  let resolveSession: (session: typeof sampleSession) => void = () => undefined;
+  const session = new Promise<typeof sampleSession>((resolve) => {
+    resolveSession = resolve;
+  });
+  rstest.spyOn(commands, 'jellyfinGetSession').mockReturnValue(session);
+  const onConnected = rstest.fn();
+  const cleanup = renderLoginPage(onConnected);
 
-import { Cause, Effect, Exit } from 'effect';
-import { StorageParseError } from '../src/effects/errors';
-import {
-  CREDENTIALS_STORAGE_KEY,
-  loadSavedCredentials,
-} from '../src/effects/session';
+  await fillPasswordLogin();
+  fireEvent.click(screen.getByRole('button', { name: 'Connect' }));
+
+  await waitFor(() => expect(connect).toHaveBeenCalledTimes(1));
+  expect(screen.getByRole('button', { name: /Connecting/ })).toBeDisabled();
+
+  resolveSession(sampleSession);
+  await waitFor(() => expect(onConnected).toHaveBeenCalledTimes(1));
+
+  cleanup();
+});
+test('password login session-save failures show an error and unlock submit', async () => {
+  rstest.spyOn(commands, 'jellyfinConnect').mockResolvedValue({
+    status: 'ok',
+    data: null,
+  });
+  rstest
+    .spyOn(commands, 'jellyfinGetSession')
+    .mockRejectedValue(new Error('Session unavailable'));
+  const onConnected = rstest.fn();
+  const cleanup = renderLoginPage(onConnected);
+
+  await fillPasswordLogin();
+  fireEvent.click(screen.getByRole('button', { name: 'Connect' }));
+
+  await waitFor(() =>
+    expect(screen.getByText('Session unavailable')).toBeVisible(),
+  );
+  expect(screen.getByRole('button', { name: 'Connect' })).not.toBeDisabled();
+  expect(onConnected).not.toHaveBeenCalled();
+
+  cleanup();
+});
+test('password login saves remembered Login Prefill when remember me is checked', async () => {
+  rstest.spyOn(commands, 'jellyfinConnect').mockResolvedValue({
+    status: 'ok',
+    data: null,
+  });
+  rstest.spyOn(commands, 'jellyfinGetSession').mockResolvedValue(sampleSession);
+  const cleanup = renderLoginPage();
+
+  await fillPasswordLogin();
+  fireEvent.click(
+    screen.getByRole('checkbox', { name: 'Remember Server URL and username' }),
+  );
+  fireEvent.click(screen.getByRole('button', { name: 'Connect' }));
+
+  await waitFor(() =>
+    expect(Effect.runSync(loadSavedCredentials())).toEqual({
+      serverUrl: 'https://jellyfin.example.com',
+      username: 'ada',
+      rememberMe: true,
+    }),
+  );
+
+  cleanup();
+});
+
+test('password login clears Login Prefill when remember me is unchecked', async () => {
+  localStorage.setItem(
+    CREDENTIALS_STORAGE_KEY,
+    JSON.stringify({
+      serverUrl: 'https://old.example.com',
+      username: 'old',
+      rememberMe: true,
+    }),
+  );
+  rstest.spyOn(commands, 'jellyfinConnect').mockResolvedValue({
+    status: 'ok',
+    data: null,
+  });
+  rstest.spyOn(commands, 'jellyfinGetSession').mockResolvedValue(sampleSession);
+  const cleanup = renderLoginPage();
+
+  await fillPasswordLogin();
+  fireEvent.click(
+    screen.getByRole('checkbox', { name: 'Remember Server URL and username' }),
+  );
+  fireEvent.click(screen.getByRole('button', { name: 'Connect' }));
+
+  await waitFor(() =>
+    expect(Effect.runSync(loadSavedCredentials())).toBeNull(),
+  );
+
+  cleanup();
+});
+
+test('password login status errors show the command message and unlock submit', async () => {
+  rstest.spyOn(commands, 'jellyfinConnect').mockResolvedValue({
+    status: 'error',
+    error: { code: 'authFailed', message: 'Invalid username or password' },
+  });
+  const onConnected = rstest.fn();
+  const cleanup = renderLoginPage(onConnected);
+
+  await fillPasswordLogin();
+  fireEvent.click(screen.getByRole('button', { name: 'Connect' }));
+
+  await waitFor(() =>
+    expect(screen.getByText('Invalid username or password')).toBeVisible(),
+  );
+  expect(screen.getByRole('button', { name: 'Connect' })).not.toBeDisabled();
+  expect(onConnected).not.toHaveBeenCalled();
+
+  cleanup();
+});
+
+test('password login rejected commands show an error and unlock submit', async () => {
+  rstest
+    .spyOn(commands, 'jellyfinConnect')
+    .mockRejectedValue(new Error('IPC unavailable'));
+  const onConnected = rstest.fn();
+  const cleanup = renderLoginPage(onConnected);
+
+  await fillPasswordLogin();
+  fireEvent.click(screen.getByRole('button', { name: 'Connect' }));
+
+  await waitFor(() =>
+    expect(screen.getByText('IPC unavailable')).toBeVisible(),
+  );
+  expect(screen.getByRole('button', { name: 'Connect' })).not.toBeDisabled();
+  expect(onConnected).not.toHaveBeenCalled();
+
+  cleanup();
+});
 
 test('loadSavedCredentials returns StorageParseError for malformed JSON', () => {
   localStorage.setItem(CREDENTIALS_STORAGE_KEY, 'not json');

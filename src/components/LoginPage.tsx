@@ -6,6 +6,8 @@ import { Effect, Exit } from 'effect';
 import { Check, CircleAlert, LoaderCircle, RadioTower } from 'lucide-solid';
 import { createSignal, onCleanup, onMount, Show } from 'solid-js';
 import { type Credentials, commands } from '../bindings';
+import { commandFailureMessage, runTauriCommand } from '../effects/commands';
+import { CommandError } from '../effects/errors';
 import { buildServerUrlEffect } from '../effects/serverUrl';
 import {
   clearSavedCredentials,
@@ -215,21 +217,36 @@ export default function LoginPage(props: LoginPageProps) {
     };
 
     setSubmitting(true);
-    try {
-      const result = await commands.jellyfinConnect(credentials);
-      if (result.status === 'ok') {
-        if (value.rememberMe)
-          Effect.runSync(saveCredentials(finalServerUrl, value.username));
-        else Effect.runSync(clearSavedCredentials());
-        await finishConnected();
-      } else {
-        setError(result.error.message);
+    const exit = await Effect.runPromiseExit(
+      runTauriCommand(() => commands.jellyfinConnect(credentials)),
+    );
+
+    if (Exit.isSuccess(exit)) {
+      const completion = await Effect.runPromiseExit(
+        Effect.tryPromise({
+          try: async () => {
+            if (value.rememberMe)
+              Effect.runSync(saveCredentials(finalServerUrl, value.username));
+            else Effect.runSync(clearSavedCredentials());
+            await finishConnected();
+          },
+          catch: (error) =>
+            new CommandError({
+              message:
+                error instanceof Error ? error.message : 'Connection failed',
+            }),
+        }),
+      );
+
+      if (Exit.isFailure(completion)) {
+        setSubmitting(false);
+        setError(commandFailureMessage(completion.cause, 'Connection failed'));
       }
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Connection failed');
-    } finally {
-      setSubmitting(false);
+      return;
     }
+
+    setSubmitting(false);
+    setError(commandFailureMessage(exit.cause, 'Connection failed'));
   };
 
   const submit = () => {
