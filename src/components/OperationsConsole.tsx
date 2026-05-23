@@ -30,7 +30,12 @@ import {
 } from 'solid-js';
 import { Portal } from 'solid-js/web';
 import { type AppConfig, type ConnectionState, commands } from '../bindings';
-import { commandFailure, commandFailureMessage } from '../effects/commands';
+import {
+  commandFailure,
+  commandFailureMessage,
+  runTauriCommand,
+  runTauriCommandRaw,
+} from '../effects/commands';
 import { detectMpv } from '../effects/config';
 import {
   clearSavedSession,
@@ -186,12 +191,16 @@ export default function OperationsConsole(props: OperationsConsoleProps) {
   const [mpvConnected, { refetch: refetchMpv }] =
     createResource(fetchMpvStatus);
   const [initialConfig, { mutate: mutateConfig }] = createResource(async () => {
-    try {
-      return await commands.configGet();
-    } catch (error) {
-      console.error('Failed to load config:', error);
-      return null;
-    }
+    const exit = await Effect.runPromiseExit(
+      runTauriCommandRaw(() => commands.configGet()),
+    );
+    if (Exit.isSuccess(exit)) return exit.value;
+
+    console.error(
+      'Failed to load config:',
+      commandFailureMessage(exit.cause, 'Could not load configuration'),
+    );
+    return null;
   });
 
   const form = createForm(() => ({
@@ -277,17 +286,23 @@ export default function OperationsConsole(props: OperationsConsoleProps) {
         pendingSave = null;
         showPlayerBridgeStatus('saving', 'Saving…');
 
-        const result = await commands.configSet(nextSave.config);
-        if (result.status === 'ok') {
+        const exit = await Effect.runPromiseExit(
+          runTauriCommand(() => commands.configSet(nextSave.config)),
+        );
+        if (Exit.isSuccess(exit)) {
           lastSavedConfig = nextSave.config;
           mutateConfig(nextSave.config);
           refetchMpv();
           nextSave.onSuccess?.();
           showPlayerBridgeStatus('saved', 'Saved');
         } else {
-          nextSave.onError?.(result.error.message);
-          showPlayerBridgeStatus('error', result.error.message);
-          showToast('error', result.error.message);
+          const message = commandFailureMessage(
+            exit.cause,
+            'Could not save configuration',
+          );
+          nextSave.onError?.(message);
+          showPlayerBridgeStatus('error', message);
+          showToast('error', message);
         }
       }
     } catch (error) {
@@ -469,33 +484,34 @@ export default function OperationsConsole(props: OperationsConsoleProps) {
 
   const handleDisconnect = async () => {
     setDisconnecting(true);
-    try {
-      const result = await commands.jellyfinDisconnect();
-      if (result.status === 'ok') {
-        showToast('success', 'Disconnected from Jellyfin');
-        refetchConnection();
-      } else {
-        showToast('error', result.error.message);
-      }
-    } finally {
-      setDisconnecting(false);
+    const exit = await Effect.runPromiseExit(
+      runTauriCommand(() => commands.jellyfinDisconnect()),
+    );
+    if (Exit.isSuccess(exit)) {
+      showToast('success', 'Disconnected from Jellyfin');
+      refetchConnection();
+    } else {
+      showToast(
+        'error',
+        commandFailureMessage(exit.cause, 'Disconnect failed'),
+      );
     }
+    setDisconnecting(false);
   };
 
   const handleSignOut = async () => {
     setSigningOut(true);
-    try {
-      const result = await commands.jellyfinClearSession();
-      if (result.status === 'ok') {
-        clearSavedSession();
-        props.onSignedOut();
-      } else {
-        showToast('error', result.error.message);
-      }
-    } finally {
-      setSigningOut(false);
-      setConfirmSignOut(false);
+    const exit = await Effect.runPromiseExit(
+      runTauriCommand(() => commands.jellyfinClearSession()),
+    );
+    if (Exit.isSuccess(exit)) {
+      clearSavedSession();
+      props.onSignedOut();
+    } else {
+      showToast('error', commandFailureMessage(exit.cause, 'Sign out failed'));
     }
+    setSigningOut(false);
+    setConfirmSignOut(false);
   };
 
   const handleDetectMpv = async () => {

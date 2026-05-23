@@ -97,6 +97,35 @@ afterEach(() => {
   localStorage.clear();
   document.body.innerHTML = '';
 });
+test('operations console reports config load command failures', async () => {
+  mockCommon();
+  rstest
+    .spyOn(commands, 'configGet')
+    .mockRejectedValue(new Error('Config unavailable'));
+  const consoleError = rstest
+    .spyOn(console, 'error')
+    .mockImplementation(() => undefined);
+  const root = document.createElement('div');
+  document.body.append(root);
+  const dispose = render(
+    () => (
+      <ToastProvider>
+        <OperationsConsole onSignedOut={() => undefined} />
+      </ToastProvider>
+    ),
+    root,
+  );
+
+  await waitFor(() =>
+    expect(consoleError).toHaveBeenCalledWith(
+      'Failed to load config:',
+      'Config unavailable',
+    ),
+  );
+
+  dispose();
+  root.remove();
+});
 
 test('operations console loads intro skipper setting from config', async () => {
   const cleanup = renderConsole();
@@ -189,6 +218,21 @@ test('automatic intro skip rolls back and shows inline error on save failure', a
 
   cleanup();
 });
+test('automatic intro skip reports rejected save commands through status and toast', async () => {
+  rstest
+    .spyOn(commands, 'configSet')
+    .mockRejectedValue(new Error('Disk unavailable'));
+  const cleanup = renderConsole();
+
+  await screen.findByDisplayValue('JMSR Test');
+  fireEvent.click(screen.getByRole('button', { name: /Automatic Intro Skip/ }));
+
+  await waitFor(() =>
+    expect(screen.getAllByText('Disk unavailable').length).toBeGreaterThan(0),
+  );
+
+  cleanup();
+});
 
 test('operations console autosaves compact preferred subtitle language chips', async () => {
   const configSet = rstest.spyOn(commands, 'configSet').mockResolvedValue({
@@ -247,6 +291,7 @@ test('preferred subtitle language editor uses Ark tags input and combobox', asyn
     data: null,
   });
   const cleanup = renderConsole();
+  await screen.findByDisplayValue('JMSR Test');
 
   const input = await screen.findByLabelText('Add preferred subtitle language');
   expect(input.closest('[data-scope="tags-input"]')).not.toBeNull();
@@ -330,7 +375,7 @@ test('player bridge text fields autosave on valid blur and keep invalid drafts l
       }),
     ),
   );
-  expect(screen.getByText('Saved')).toBeVisible();
+  await waitFor(() => expect(screen.getByText('Saved')).toBeVisible());
 
   cleanup();
 });
@@ -426,7 +471,7 @@ test('player bridge autosave failure recovers on later save', async () => {
       mpvPath: '/broken/mpv',
     }),
   );
-  expect(screen.getByText('Saved')).toBeVisible();
+  await waitFor(() => expect(screen.getByText('Saved')).toBeVisible());
 
   cleanup();
 });
@@ -517,6 +562,50 @@ test('disconnect keeps saved session and stays on console', async () => {
 
   cleanup();
 });
+test('disconnect failure stays on console and unlocks the action', async () => {
+  rstest.spyOn(commands, 'jellyfinDisconnect').mockResolvedValue({
+    status: 'error',
+    error: { code: 'network', message: 'disconnect offline' },
+  });
+  const cleanup = renderConsole();
+
+  await waitFor(() =>
+    expect(
+      screen.getByRole('button', { name: 'Disconnect' }),
+    ).not.toBeDisabled(),
+  );
+  fireEvent.click(screen.getByRole('button', { name: 'Disconnect' }));
+
+  await waitFor(() =>
+    expect(screen.getByText('disconnect offline')).toBeVisible(),
+  );
+  expect(screen.getByRole('button', { name: 'Disconnect' })).not.toBeDisabled();
+  expect(screen.getByText('Operations Console')).toBeVisible();
+
+  cleanup();
+});
+
+test('disconnect rejected commands stay on console and unlock the action', async () => {
+  rstest
+    .spyOn(commands, 'jellyfinDisconnect')
+    .mockRejectedValue(new Error('disconnect ipc unavailable'));
+  const cleanup = renderConsole();
+
+  await waitFor(() =>
+    expect(
+      screen.getByRole('button', { name: 'Disconnect' }),
+    ).not.toBeDisabled(),
+  );
+  fireEvent.click(screen.getByRole('button', { name: 'Disconnect' }));
+
+  await waitFor(() =>
+    expect(screen.getByText('disconnect ipc unavailable')).toBeVisible(),
+  );
+  expect(screen.getByRole('button', { name: 'Disconnect' })).not.toBeDisabled();
+  expect(screen.getByText('Operations Console')).toBeVisible();
+
+  cleanup();
+});
 
 test('reconnect restores a live Jellyfin connection from a Saved Session', async () => {
   localStorage.setItem('jmsr_auth_session', JSON.stringify(validSavedSession));
@@ -588,9 +677,11 @@ test('sign out confirms and clears saved session', async () => {
   const signOutButtons = screen.getAllByRole('button', { name: 'Sign out' });
   fireEvent.click(signOutButtons[signOutButtons.length - 1]);
 
-  await waitFor(() => expect(clearSession).toHaveBeenCalledTimes(1));
-  expect(localStorage.getItem('jmsr_auth_session')).toBeNull();
-  expect(onSignedOut).toHaveBeenCalledTimes(1);
+  await waitFor(() => {
+    expect(clearSession).toHaveBeenCalledTimes(1);
+    expect(localStorage.getItem('jmsr_auth_session')).toBeNull();
+    expect(onSignedOut).toHaveBeenCalledTimes(1);
+  });
 
   cleanup();
 });
@@ -618,6 +709,31 @@ test('sign out failure preserves the Saved Session and stays on console', async 
   expect(localStorage.getItem('jmsr_auth_session')).not.toBeNull();
   expect(onSignedOut).not.toHaveBeenCalled();
   expect(screen.getByText('Operations Console')).toBeVisible();
+
+  cleanup();
+});
+test('sign out rejected commands preserve the Saved Session and close the dialog', async () => {
+  localStorage.setItem('jmsr_auth_session', JSON.stringify(validSavedSession));
+  rstest
+    .spyOn(commands, 'jellyfinClearSession')
+    .mockRejectedValue(new Error('sign out ipc unavailable'));
+  const onSignedOut = rstest.fn();
+  const cleanup = renderConsole(onSignedOut);
+
+  await waitFor(() =>
+    expect(screen.getByText('Operations Console')).toBeVisible(),
+  );
+  fireEvent.click(screen.getByRole('button', { name: 'Sign out' }));
+  await waitFor(() => expect(screen.getByRole('dialog')).toBeVisible());
+  const signOutButtons = screen.getAllByRole('button', { name: 'Sign out' });
+  fireEvent.click(signOutButtons[signOutButtons.length - 1]);
+
+  await waitFor(() =>
+    expect(screen.getByText('sign out ipc unavailable')).toBeVisible(),
+  );
+  expect(localStorage.getItem('jmsr_auth_session')).not.toBeNull();
+  expect(onSignedOut).not.toHaveBeenCalled();
+  await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
 
   cleanup();
 });

@@ -58,3 +58,30 @@ test('Quick Connect commands use typed command helpers', () => {
     'const result = await commands.jellyfinQuickConnectStart(serverUrlValue);',
   );
 });
+test('Operations Console commands use typed command helpers', () => {
+  const consoleSource = readFileSync(
+    'src/components/OperationsConsole.tsx',
+    'utf8',
+  );
+
+  expect(consoleSource).toContain('runTauriCommand,');
+  expect(consoleSource).toContain('runTauriCommandRaw,');
+  expect(consoleSource).toContain(
+    'runTauriCommandRaw(() => commands.configGet())',
+  );
+  expect(consoleSource).toContain(
+    'runTauriCommand(() => commands.configSet(nextSave.config))',
+  );
+  expect(consoleSource).toContain(
+    'runTauriCommand(() => commands.jellyfinDisconnect())',
+  );
+  expect(consoleSource).toContain(
+    'runTauriCommand(() => commands.jellyfinClearSession())',
+  );
+  expect(consoleSource).not.toContain(
+    'const result = await commands.jellyfinDisconnect();',
+  );
+  expect(consoleSource).not.toContain(
+    'const result = await commands.jellyfinClearSession();',
+  );
+});
