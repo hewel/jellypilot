@@ -6,6 +6,7 @@
   "scripts": {
     "build": "rsbuild build",
     "check": "biome check --write",
+    "typecheck": "tsc --noEmit",
     "dev": "rsbuild dev",
     "format": "biome format --write",
     "preview": "rsbuild preview",
@@ -23,6 +24,7 @@
     "@tanstack/solid-router": "^1.170.5",
     "@tauri-apps/api": "^2.11.0",
     "@tauri-apps/plugin-log": "^2.8.0",
+    "effect": "4.0.0-beta.69",
     "lucide-solid": "^1.16.0",
     "solid-js": "^1.9.13",
     "tailwindcss": "^4.3.0"

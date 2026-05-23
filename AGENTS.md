@@ -39,6 +39,7 @@ bun run build        # Production build → dist/
 bun run test         # Rstest
 bun run test:watch   # Rstest watch mode
 bun run check        # Biome check + autofix
+bun run typecheck    # TypeScript type check
 bun run format       # Biome format
 
 # Tauri (run from project root)
