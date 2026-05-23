@@ -6,17 +6,18 @@ import { Effect, Exit } from 'effect';
 import { Check, CircleAlert, LoaderCircle, RadioTower } from 'lucide-solid';
 import { createSignal, onCleanup, onMount, Show } from 'solid-js';
 import { type Credentials, commands } from '../bindings';
+import { buildServerUrlEffect } from '../effects/serverUrl';
 import {
   clearSavedCredentials,
   loadSavedCredentials,
   saveCredentials,
 } from '../effects/session';
 import {
-  buildServerUrl,
   defaultSchemeForHost,
   explicitSchemeFromInput,
   parseServerUrl,
   type ServerScheme,
+  type ServerUrlResult,
   stripServerScheme,
 } from '../serverUrl';
 import { saveCurrentSession } from '../sessionAccess';
@@ -35,6 +36,10 @@ interface LoginValues {
   password: string;
   rememberMe: boolean;
 }
+
+type ServerUrlValidation =
+  | { status: 'ok'; result: ServerUrlResult }
+  | { status: 'error'; message: string };
 
 export default function LoginPage(props: LoginPageProps) {
   const [loginMethod, setLoginMethod] =
@@ -69,15 +74,27 @@ export default function LoginPage(props: LoginPageProps) {
 
   const isQuickConnectWaiting = () => quickConnectState() === 'waiting';
 
+  const validateServerUrl = (
+    value: Pick<LoginValues, 'scheme' | 'host'>,
+  ): ServerUrlValidation =>
+    Effect.runSync(
+      buildServerUrlEffect({
+        scheme: value.scheme,
+        host: value.host,
+      }).pipe(
+        Effect.match({
+          onFailure: (err) => ({ status: 'error', message: err.message }),
+          onSuccess: (result) => ({ status: 'ok', result }),
+        }),
+      ),
+    );
+
   const serverUrlResult = () => {
-    try {
-      return buildServerUrl({
-        scheme: formValues().scheme,
-        host: formValues().host,
-      });
-    } catch {
-      return null;
-    }
+    const validation = validateServerUrl({
+      scheme: formValues().scheme,
+      host: formValues().host,
+    });
+    return validation.status === 'ok' ? validation.result : null;
   };
 
   const serverUrl = () => serverUrlResult()?.url ?? '';
@@ -104,18 +121,6 @@ export default function LoginPage(props: LoginPageProps) {
   const finishConnected = async () => {
     await saveCurrentSession();
     props.onConnected();
-  };
-
-  const validateServerUrl = (value: LoginValues): string | null => {
-    if (!value.host.trim()) return 'Server host is required';
-    try {
-      buildServerUrl({ scheme: value.scheme, host: value.host });
-      return null;
-    } catch (err) {
-      return err instanceof Error
-        ? err.message
-        : 'Enter a valid Jellyfin server host';
-    }
   };
 
   const checkQuickConnectApproval = async (
@@ -154,14 +159,14 @@ export default function LoginPage(props: LoginPageProps) {
 
   const startQuickConnect = async (value: LoginValues) => {
     setError(null);
-    const validationError = validateServerUrl(value);
-    if (validationError) {
-      setError(validationError);
+    const validation = validateServerUrl(value);
+    if (validation.status === 'error') {
+      setError(validation.message);
       return;
     }
 
     setSubmitting(true);
-    const serverUrlValue = buildServerUrl(value).url;
+    const serverUrlValue = validation.result.url;
     const result = await commands.jellyfinQuickConnectStart(serverUrlValue);
     setSubmitting(false);
 
@@ -192,9 +197,9 @@ export default function LoginPage(props: LoginPageProps) {
 
   const connectWithPassword = async (value: LoginValues) => {
     setError(null);
-    const validationError = validateServerUrl(value);
-    if (validationError) {
-      setError(validationError);
+    const validation = validateServerUrl(value);
+    if (validation.status === 'error') {
+      setError(validation.message);
       return;
     }
     if (!value.username.trim()) {
@@ -202,7 +207,7 @@ export default function LoginPage(props: LoginPageProps) {
       return;
     }
 
-    const finalServerUrl = buildServerUrl(value).url;
+    const finalServerUrl = validation.result.url;
     const credentials: Credentials = {
       serverUrl: finalServerUrl,
       username: value.username,

@@ -20,16 +20,13 @@ export function buildServerUrlEffect(
     }
 
     const candidate = `${fields.scheme}://${rawHost}`;
-    let parsed: URL;
-    try {
-      parsed = new URL(candidate);
-    } catch {
-      return yield* Effect.fail(
+    const parsed = yield* Effect.try({
+      try: () => new URL(candidate),
+      catch: () =>
         new InvalidServerUrl({
           message: 'Enter a valid Jellyfin server host',
         }),
-      );
-    }
+    });
 
     const isLocal = isLocalServerHost(parsed.host);
     const explicitPort = hasExplicitPort(rawHost);

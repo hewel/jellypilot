@@ -131,6 +131,30 @@ test('login page preserves public reverse proxy path without default jellyfin po
   cleanup();
 });
 
+test('login page rejects invalid server hosts before starting quick connect', async () => {
+  const startQuickConnect = rstest.spyOn(commands, 'jellyfinQuickConnectStart');
+  const cleanup = renderLoginPage();
+
+  fireEvent.input(
+    screen.getByPlaceholderText('jellyfin.local or media.example.com/jellyfin'),
+    {
+      target: { value: 'not a valid host?!' },
+    },
+  );
+  fireEvent.click(
+    screen.getByRole('button', { name: 'Request Quick Connect code' }),
+  );
+
+  await waitFor(() =>
+    expect(
+      screen.getByText('Enter a valid Jellyfin server host'),
+    ).toBeVisible(),
+  );
+  expect(startQuickConnect).not.toHaveBeenCalled();
+
+  cleanup();
+});
+
 test('login page locks quick connect request while waiting for approval', async () => {
   rstest.spyOn(commands, 'jellyfinQuickConnectStart').mockResolvedValue({
     status: 'ok',

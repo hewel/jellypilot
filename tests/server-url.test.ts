@@ -45,6 +45,27 @@ test('preserves explicit ports and path prefixes', () => {
   ).toBe('https://media.example.com:8080/base');
 });
 
+test('buildServerUrlEffect preserves normalized server url outputs', () => {
+  const local = Effect.runSync(
+    buildServerUrlEffect({ scheme: 'http', host: '192.168.1.20' }),
+  );
+  expect(local).toEqual({
+    url: 'http://192.168.1.20:8096',
+    isLocal: true,
+  });
+
+  const reverseProxy = Effect.runSync(
+    buildServerUrlEffect({
+      scheme: 'https',
+      host: 'media.example.com:443/jellyfin',
+    }),
+  );
+  expect(reverseProxy).toEqual({
+    url: 'https://media.example.com:443/jellyfin',
+    isLocal: false,
+  });
+});
+
 test('parses saved final urls into visible fields', () => {
   expect(parseServerUrl('http://192.168.1.20:8096')).toEqual({
     scheme: 'http',
