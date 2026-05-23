@@ -773,15 +773,17 @@ impl SessionManager {
     match request.name.as_str() {
       "SetVolume" => {
         if let Some(args) = request.arguments {
-          if let Some(volume) = args.get("Volume").and_then(|v| v.as_i64()) {
+          if let Some(volume) = parse_command_int(args.get("Volume")) {
+            // Clamp to valid player range (0-100)
+            let volume = volume.clamp(0, 100) as i32;
             // Update session state
             {
               let mut s = state.write();
               if let Some(ref mut playback) = s.playback {
-                playback.volume = volume as i32;
+                playback.volume = volume;
               }
             }
-            let _ = action_tx.send(MpvAction::SetVolume(volume as i32)).await;
+            let _ = action_tx.send(MpvAction::SetVolume(volume)).await;
           }
         }
       }
@@ -793,11 +795,7 @@ impl SessionManager {
       }
       "SetAudioStreamIndex" => {
         if let Some(args) = &request.arguments {
-          // Index can be a string or number depending on Jellyfin client
-          let index = args.get("Index").and_then(|v| {
-            v.as_i64()
-              .or_else(|| v.as_str().and_then(|s| s.parse::<i64>().ok()))
-          });
+          let index = parse_command_int(args.get("Index"));
           if let Some(index) = index {
             log::info!("SetAudioStreamIndex: {} (Jellyfin index)", index);
             // Update playback state and save series preference
@@ -840,11 +838,7 @@ impl SessionManager {
       }
       "SetSubtitleStreamIndex" => {
         if let Some(args) = &request.arguments {
-          // Index can be -1 to disable subtitles, and can be string or number
-          let index = args.get("Index").and_then(|v| {
-            v.as_i64()
-              .or_else(|| v.as_str().and_then(|s| s.parse::<i64>().ok()))
-          });
+          let index = parse_command_int(args.get("Index"));
           if let Some(index) = index {
             log::info!("SetSubtitleStreamIndex: {} (Jellyfin index)", index);
 
@@ -1470,6 +1464,16 @@ impl SessionManager {
   }
 }
 
+/// Parse a Jellyfin command argument as an integer.
+/// Accepts both JSON numbers and JSON strings containing an integer.
+/// Returns `None` for missing, non-integer, or malformed values.
+fn parse_command_int(value: Option<&serde_json::Value>) -> Option<i64> {
+  value.and_then(|v| {
+    v.as_i64()
+      .or_else(|| v.as_str().and_then(|s| s.parse::<i64>().ok()))
+  })
+}
+
 /// Convert Jellyfin stream index to MPV track index.
 /// Jellyfin uses absolute indices across all streams (video, audio, subtitle combined).
 /// MPV uses 1-based indices within each track type (audio, subtitle).
@@ -1755,5 +1759,157 @@ mod regression_tests {
 
     assert_eq!(jellyfin_to_mpv_track_index(&streams, "Audio", 2), 2);
     assert_eq!(jellyfin_to_mpv_track_index(&streams, "Subtitle", 3), 1);
+  }
+  #[test]
+  fn parse_command_int_accepts_json_number() {
+    let value = serde_json::json!(50);
+    assert_eq!(parse_command_int(Some(&value)), Some(50));
+  }
+
+  #[test]
+  fn parse_command_int_accepts_json_string_with_integer() {
+    let value = serde_json::json!("50");
+    assert_eq!(parse_command_int(Some(&value)), Some(50));
+  }
+
+  #[test]
+  fn parse_command_int_returns_none_for_none_input() {
+    assert_eq!(parse_command_int(None), None);
+  }
+
+  #[test]
+  fn parse_command_int_returns_none_for_non_integer_string() {
+    let value = serde_json::json!("abc");
+    assert_eq!(parse_command_int(Some(&value)), None);
+  }
+
+  #[test]
+  fn parse_command_int_returns_none_for_float_string() {
+    let value = serde_json::json!("50.5");
+    assert_eq!(parse_command_int(Some(&value)), None);
+  }
+
+  #[test]
+  fn parse_command_int_returns_none_for_json_float() {
+    let value = serde_json::json!(50.5);
+    assert_eq!(parse_command_int(Some(&value)), None);
+  }
+
+  #[test]
+  fn parse_command_int_returns_none_for_null() {
+    let value = serde_json::json!(null);
+    assert_eq!(parse_command_int(Some(&value)), None);
+  }
+
+  #[test]
+  fn parse_command_int_accepts_negative_index() {
+    let value = serde_json::json!("-1");
+    assert_eq!(parse_command_int(Some(&value)), Some(-1));
+  }
+
+  #[test]
+  fn parse_command_int_accepts_negative_number() {
+    let value = serde_json::json!(-1);
+    assert_eq!(parse_command_int(Some(&value)), Some(-1));
+  }
+
+  #[test]
+  fn jellyfin_general_command_volume_from_string_updates_session_and_sends_action() {
+    let state = RwLock::new(SessionState {
+      playback: Some(PlaybackSession {
+        item_id: "item-1".to_string(),
+        media_source_id: Some("source-1".to_string()),
+        play_session_id: Some("play-1".to_string()),
+        intro_skipper_ranges: vec![],
+        position_ticks: 0,
+        is_paused: false,
+        is_muted: false,
+        volume: 100,
+        audio_stream_index: None,
+        subtitle_stream_index: None,
+      }),
+      last_report_time: std::time::Instant::now(),
+      current_series_id: None,
+      current_item: None,
+      current_media_streams: Vec::new(),
+      series_preferences: HashMap::new(),
+    });
+    let (action_tx, mut action_rx) = mpsc::channel(1);
+
+    // Simulate a SetVolume command with Volume as a string (the real Jellyfin shape)
+    let args = serde_json::json!({"Volume": "50"});
+    let parsed_volume = parse_command_int(args.get("Volume"));
+    assert_eq!(parsed_volume, Some(50));
+
+    // Verify the volume would be clamped and applied
+    let volume = parsed_volume.map(|v| v.clamp(0, 100) as i32).unwrap();
+    {
+      let mut s = state.write();
+      if let Some(ref mut playback) = s.playback {
+        playback.volume = volume;
+      }
+    }
+    assert_eq!(state.read().playback.as_ref().unwrap().volume, 50);
+
+    // Verify action would be sent
+    let rt = tokio::runtime::Runtime::new().unwrap();
+    rt.block_on(async {
+      action_tx.send(MpvAction::SetVolume(volume)).await.unwrap();
+      assert!(matches!(action_rx.recv().await, Some(MpvAction::SetVolume(50))));
+    });
+  }
+
+  #[test]
+  fn jellyfin_general_command_volume_from_number_still_works() {
+    let args = serde_json::json!({"Volume": 75});
+    let parsed_volume = parse_command_int(args.get("Volume"));
+    assert_eq!(parsed_volume, Some(75));
+  }
+
+  #[test]
+  fn jellyfin_general_command_volume_out_of_range_clamps_to_valid() {
+    // Above 100
+    let parsed = parse_command_int(serde_json::json!({"Volume": "150"}).get("Volume"));
+    assert_eq!(parsed, Some(150));
+    assert_eq!(parsed.map(|v| v.clamp(0, 100) as i32), Some(100));
+
+    // Below 0
+    let parsed = parse_command_int(serde_json::json!({"Volume": "-10"}).get("Volume"));
+    assert_eq!(parsed, Some(-10));
+    assert_eq!(parsed.map(|v| v.clamp(0, 100) as i32), Some(0));
+  }
+
+  #[test]
+  fn jellyfin_general_command_volume_missing_and_malformed_ignored() {
+    // Missing Volume key
+    let args = serde_json::json!({"SomethingElse": "50"});
+    assert_eq!(parse_command_int(args.get("Volume")), None);
+
+    // Empty arguments
+    let args = serde_json::json!({});
+    assert_eq!(parse_command_int(args.get("Volume")), None);
+
+    // Non-numeric string
+    let args = serde_json::json!({"Volume": "half"});
+    assert_eq!(parse_command_int(args.get("Volume")), None);
+
+    // Null value
+    let args = serde_json::json!({"Volume": null});
+    assert_eq!(parse_command_int(args.get("Volume")), None);
+  }
+
+  #[test]
+  fn jellyfin_track_index_from_string_still_works_with_parse_command_int() {
+    // String Index
+    let args = serde_json::json!({"Index": "2"});
+    assert_eq!(parse_command_int(args.get("Index")), Some(2));
+
+    // Number Index
+    let args = serde_json::json!({"Index": 2});
+    assert_eq!(parse_command_int(args.get("Index")), Some(2));
+
+    // Negative string Index (subtitle disable)
+    let args = serde_json::json!({"Index": "-1"});
+    assert_eq!(parse_command_int(args.get("Index")), Some(-1));
   }
 }
