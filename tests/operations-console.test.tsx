@@ -6,6 +6,7 @@ import {
   commands,
   events,
   type NowPlayingState,
+  type SavedSession,
 } from '../src/bindings';
 import OperationsConsole from '../src/components/OperationsConsole';
 import { ToastProvider } from '../src/components/ToastProvider';
@@ -29,6 +30,15 @@ const config: AppConfig = {
   preferredSubtitleLanguages: [],
 };
 
+const validSavedSession: SavedSession = {
+  serverUrl: 'https://jellyfin.example.com',
+  accessToken: 'token-1',
+  userId: 'user-1',
+  userName: 'Ada',
+  serverName: 'Jellyfin Home',
+  deviceId: 'device-1',
+};
+
 const nowPlaying: NowPlayingState = {
   status: 'offline',
   player: {
@@ -46,8 +56,8 @@ const nowPlaying: NowPlayingState = {
   previousUnavailableReason: 'noCurrentItem',
 };
 
-function mockCommon(appConfig = config) {
-  rstest.spyOn(commands, 'jellyfinGetState').mockResolvedValue(connectedState);
+function mockCommon(appConfig = config, state = connectedState) {
+  rstest.spyOn(commands, 'jellyfinGetState').mockResolvedValue(state);
   rstest.spyOn(commands, 'mpvIsConnected').mockResolvedValue(false);
   rstest.spyOn(commands, 'configGet').mockResolvedValue(appConfig);
   rstest.spyOn(commands, 'nowPlayingGetState').mockResolvedValue({
@@ -59,8 +69,12 @@ function mockCommon(appConfig = config) {
     .mockResolvedValue(() => undefined);
 }
 
-function renderConsole(onSignedOut = () => undefined, appConfig = config) {
-  mockCommon(appConfig);
+function renderConsole(
+  onSignedOut = () => undefined,
+  appConfig = config,
+  state = connectedState,
+) {
+  mockCommon(appConfig, state);
   const root = document.createElement('div');
   document.body.append(root);
   const dispose = render(
@@ -504,6 +518,57 @@ test('disconnect keeps saved session and stays on console', async () => {
   cleanup();
 });
 
+test('reconnect restores a live Jellyfin connection from a Saved Session', async () => {
+  localStorage.setItem('jmsr_auth_session', JSON.stringify(validSavedSession));
+  const restore = rstest
+    .spyOn(commands, 'jellyfinRestoreSession')
+    .mockResolvedValue({
+      status: 'ok',
+      data: null,
+    });
+  const cleanup = renderConsole(() => undefined, config, {
+    connected: false,
+    serverUrl: null,
+    serverName: null,
+    userName: null,
+  });
+
+  await waitFor(() =>
+    expect(screen.getByRole('button', { name: 'Reconnect' })).toBeVisible(),
+  );
+  fireEvent.click(screen.getByRole('button', { name: 'Reconnect' }));
+
+  await waitFor(() => expect(restore).toHaveBeenCalledWith(validSavedSession));
+  expect(localStorage.getItem('jmsr_auth_session')).not.toBeNull();
+
+  cleanup();
+});
+
+test('reconnect failure clears the Saved Session and signs out', async () => {
+  localStorage.setItem('jmsr_auth_session', JSON.stringify(validSavedSession));
+  rstest.spyOn(commands, 'jellyfinRestoreSession').mockResolvedValue({
+    status: 'error',
+    error: { code: 'authFailed', message: 'expired' },
+  });
+  const onSignedOut = rstest.fn();
+  const cleanup = renderConsole(onSignedOut, config, {
+    connected: false,
+    serverUrl: null,
+    serverName: null,
+    userName: null,
+  });
+
+  await waitFor(() =>
+    expect(screen.getByRole('button', { name: 'Reconnect' })).toBeVisible(),
+  );
+  fireEvent.click(screen.getByRole('button', { name: 'Reconnect' }));
+
+  await waitFor(() => expect(onSignedOut).toHaveBeenCalledTimes(1));
+  expect(localStorage.getItem('jmsr_auth_session')).toBeNull();
+
+  cleanup();
+});
+
 test('sign out confirms and clears saved session', async () => {
   localStorage.setItem('jmsr_auth_session', JSON.stringify({ serverUrl: 'x' }));
   const clearSession = rstest
@@ -526,6 +591,33 @@ test('sign out confirms and clears saved session', async () => {
   await waitFor(() => expect(clearSession).toHaveBeenCalledTimes(1));
   expect(localStorage.getItem('jmsr_auth_session')).toBeNull();
   expect(onSignedOut).toHaveBeenCalledTimes(1);
+
+  cleanup();
+});
+
+test('sign out failure preserves the Saved Session and stays on console', async () => {
+  localStorage.setItem('jmsr_auth_session', JSON.stringify(validSavedSession));
+  const clearSession = rstest
+    .spyOn(commands, 'jellyfinClearSession')
+    .mockResolvedValue({
+      status: 'error',
+      error: { code: 'network', message: 'offline' },
+    });
+  const onSignedOut = rstest.fn();
+  const cleanup = renderConsole(onSignedOut);
+
+  await waitFor(() =>
+    expect(screen.getByText('Operations Console')).toBeVisible(),
+  );
+  fireEvent.click(screen.getByRole('button', { name: 'Sign out' }));
+  await waitFor(() => expect(screen.getByRole('dialog')).toBeVisible());
+  const signOutButtons = screen.getAllByRole('button', { name: 'Sign out' });
+  fireEvent.click(signOutButtons[signOutButtons.length - 1]);
+
+  await waitFor(() => expect(clearSession).toHaveBeenCalledTimes(1));
+  expect(localStorage.getItem('jmsr_auth_session')).not.toBeNull();
+  expect(onSignedOut).not.toHaveBeenCalled();
+  expect(screen.getByText('Operations Console')).toBeVisible();
 
   cleanup();
 });

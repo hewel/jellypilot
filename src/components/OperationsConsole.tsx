@@ -32,7 +32,11 @@ import { Portal } from 'solid-js/web';
 import { type AppConfig, type ConnectionState, commands } from '../bindings';
 import { commandFailure, commandFailureMessage } from '../effects/commands';
 import { detectMpv } from '../effects/config';
-import { clearSavedSession, loadSavedSession } from '../router';
+import {
+  clearSavedSession,
+  loadSavedSession,
+  restoreSavedSession,
+} from '../sessionAccess';
 import DiagnosticsPanel from './DiagnosticsPanel';
 import NowPlayingCard from './NowPlayingCard';
 import { useToast } from './ToastProvider';
@@ -451,12 +455,10 @@ export default function OperationsConsole(props: OperationsConsoleProps) {
 
     setReconnecting(true);
     try {
-      const result = await commands.jellyfinRestoreSession(session);
-      if (result.status === 'ok') {
+      if (await restoreSavedSession()) {
         showToast('success', 'Reconnected to Jellyfin');
         refetchConnection();
       } else {
-        clearSavedSession();
         showToast('error', 'Could not reconnect to Jellyfin. Sign in again.');
         props.onSignedOut();
       }

@@ -10,13 +10,6 @@ import LoginPage from './components/LoginPage';
 import OperationsConsole from './components/OperationsConsole';
 import { canAccessConsole, checkAuthWithRestore } from './sessionAccess';
 
-export type { SavedSession } from './bindings';
-export {
-  clearSavedSession,
-  loadSavedSession,
-  saveSession,
-} from './sessionAccess';
-
 const rootRoute = createRootRoute({
   component: () => <Outlet />,
 });
