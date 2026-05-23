@@ -8,3 +8,7 @@ export class StorageParseError extends Data.TaggedError('StorageParseError')<{
   readonly message: string;
   readonly key: string;
 }> {}
+
+export class CommandError extends Data.TaggedError('CommandError')<{
+  readonly message: string;
+}> {}

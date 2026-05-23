@@ -1,4 +1,5 @@
 import { Slider } from '@ark-ui/solid/slider';
+import { Effect, Exit } from 'effect';
 import {
   Pause,
   Play,
@@ -10,6 +11,7 @@ import {
 } from 'lucide-solid';
 import { createSignal, onCleanup, onMount, Show } from 'solid-js';
 import { commands, events, type NowPlayingState } from '../bindings';
+import { runTauriCommand } from '../effects/commands';
 import { useToast } from './ToastProvider';
 import { StatusBadge } from './ui';
 
@@ -87,17 +89,14 @@ export default function NowPlayingCard(props: {
     failure: string,
   ) => {
     setBusy(key);
-    try {
-      const result = await command();
-      if (result.status === 'error') {
-        showToast('error', result.error.message || failure);
-      }
+    const exit = await Effect.runPromiseExit(runTauriCommand(command));
+    if (Exit.isSuccess(exit)) {
       await loadState();
-    } catch (error) {
-      showToast('error', error instanceof Error ? error.message : failure);
-    } finally {
-      setBusy(null);
+    } else {
+      const error = exit.cause.reasons[0].error;
+      showToast('error', error.message || failure);
     }
+    setBusy(null);
   };
 
   onMount(() => {
@@ -339,7 +338,10 @@ export default function NowPlayingCard(props: {
             )
           }
         >
-          <Show when={connected() && !muted()} fallback={<VolumeX class="h-5 w-5" />}>
+          <Show
+            when={connected() && !muted()}
+            fallback={<VolumeX class="h-5 w-5" />}
+          >
             <Volume2 class="h-5 w-5" />
           </Show>
         </button>
