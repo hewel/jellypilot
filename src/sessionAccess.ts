@@ -5,6 +5,7 @@ import {
   loadSavedSession as loadSessionEffect,
   saveSession as saveSessionEffect,
 } from './effects/auth';
+import { runTauriCommand, runTauriCommandRaw } from './effects/commands';
 
 export function loadSavedSession(): SavedSession | null {
   const exit = Effect.runSyncExit(loadSessionEffect());
@@ -29,31 +30,30 @@ export async function restoreSavedSession(): Promise<boolean> {
   const savedSession = loadSavedSession();
   if (!savedSession) return false;
 
-  try {
-    const result = await commands.jellyfinRestoreSession(savedSession);
-    if (result.status === 'ok') return true;
-  } catch {
-    // Treat IPC errors as failed restores so stale Saved Sessions are not reused.
-  }
+  const exit = await Effect.runPromiseExit(
+    runTauriCommand(() => commands.jellyfinRestoreSession(savedSession)),
+  );
+  if (Exit.isSuccess(exit)) return true;
 
   clearSavedSession();
   return false;
 }
 
 export async function checkAuthWithRestore(): Promise<boolean> {
-  try {
-    if (await commands.jellyfinIsConnected()) return true;
-    return await restoreSavedSession();
-  } catch {
-    return false;
-  }
+  const connected = await Effect.runPromiseExit(
+    runTauriCommandRaw(() => commands.jellyfinIsConnected()),
+  );
+  if (!Exit.isSuccess(connected)) return false;
+  if (connected.value) return true;
+  return await restoreSavedSession();
 }
 
 export async function canAccessConsole(): Promise<boolean> {
-  try {
-    if (await commands.jellyfinIsConnected()) return true;
-  } catch {
-    // Fall back to Saved Session check.
-  }
-  return loadSavedSession() !== null;
+  const connected = await Effect.runPromiseExit(
+    runTauriCommandRaw(() => commands.jellyfinIsConnected()),
+  );
+  return (
+    (Exit.isSuccess(connected) && connected.value) ||
+    loadSavedSession() !== null
+  );
 }
