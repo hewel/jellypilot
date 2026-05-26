@@ -229,6 +229,12 @@ impl MpvClient {
     Ok(())
   }
 
+  /// Show text on MPV's on-screen display.
+  pub async fn show_text(&self, text: &str, duration_ms: i64) -> Result<(), MpvError> {
+    self.send(MpvCommand::show_text(text, duration_ms)).await?;
+    Ok(())
+  }
+
   /// Set pause state.
   pub async fn set_pause(&self, paused: bool) -> Result<(), MpvError> {
     self.send(MpvCommand::set_pause(paused)).await?;

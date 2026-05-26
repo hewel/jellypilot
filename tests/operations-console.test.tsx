@@ -24,9 +24,10 @@ const config: AppConfig = {
   mpvArgs: [],
   progressInterval: 5,
   startMinimized: false,
-  introSkipperEnabled: true,
+  introSkipperMode: 'automatic',
   keybindNext: 'Shift+n',
   keybindPrev: 'Shift+p',
+  keybindIntroSkip: 'g',
   preferredSubtitleLanguages: [],
 };
 
@@ -127,18 +128,19 @@ test('operations console reports config load command failures', async () => {
   root.remove();
 });
 
-test('operations console loads intro skipper setting from config', async () => {
+test('operations console loads intro skipper mode from config', async () => {
   const cleanup = renderConsole();
 
-  await waitFor(() =>
-    expect(screen.getByText('Operations Console')).toBeVisible(),
+  await screen.findByRole('heading', { name: 'Connection' });
+  expect(screen.getByRole('button', { name: /Automatic/ })).toHaveAttribute(
+    'aria-pressed',
+    'true',
   );
-  expect(screen.getByLabelText('Automatic Intro Skip')).toBeChecked();
 
   cleanup();
 });
 
-test('operations console autosaves changed intro skipper setting', async () => {
+test('operations console autosaves changed intro skipper mode', async () => {
   const configSet = rstest.spyOn(commands, 'configSet').mockResolvedValue({
     status: 'ok',
     data: null,
@@ -148,21 +150,17 @@ test('operations console autosaves changed intro skipper setting', async () => {
   await waitFor(() =>
     expect(screen.getByDisplayValue('JMSR Test')).toBeVisible(),
   );
-  const checkbox = screen.getByLabelText(
-    'Automatic Intro Skip',
-  ) as HTMLInputElement;
-  fireEvent.click(checkbox);
+  fireEvent.click(screen.getByRole('button', { name: /Manual/ }));
 
   await waitFor(() => expect(configSet).toHaveBeenCalledTimes(1));
   expect(configSet).toHaveBeenCalledWith(
-    expect.objectContaining({ introSkipperEnabled: false }),
+    expect.objectContaining({ introSkipperMode: 'manual' }),
   );
-  await waitFor(() => expect(screen.getByText('Manual')).toBeVisible());
 
   cleanup();
 });
 
-test('automatic intro skip tile toggles the synced checkbox optimistically', async () => {
+test('intro skip mode toggles optimistically', async () => {
   const configSet = rstest.spyOn(commands, 'configSet').mockResolvedValue({
     status: 'ok',
     data: null,
@@ -170,29 +168,27 @@ test('automatic intro skip tile toggles the synced checkbox optimistically', asy
   const cleanup = renderConsole();
 
   await screen.findByDisplayValue('JMSR Test');
-  const tile = screen.getByRole('button', { name: /Automatic Intro Skip/ });
-  const checkbox = screen.getByLabelText(
-    'Automatic Intro Skip',
-  ) as HTMLInputElement;
+  const automatic = screen.getByRole('button', { name: /Automatic/ });
+  const manual = screen.getByRole('button', { name: /Manual/ });
 
-  expect(tile).toHaveAttribute('aria-pressed', 'true');
-  expect(checkbox).toBeChecked();
+  expect(automatic).toHaveAttribute('aria-pressed', 'true');
+  expect(manual).toHaveAttribute('aria-pressed', 'false');
 
-  fireEvent.click(tile);
+  fireEvent.click(manual);
 
-  expect(tile).toHaveAttribute('aria-pressed', 'false');
-  expect(checkbox).not.toBeChecked();
+  expect(automatic).toHaveAttribute('aria-pressed', 'false');
+  expect(manual).toHaveAttribute('aria-pressed', 'true');
   expect(screen.getAllByText('Saving preference…').length).toBeGreaterThan(0);
   await waitFor(() =>
     expect(configSet).toHaveBeenCalledWith(
-      expect.objectContaining({ introSkipperEnabled: false }),
+      expect.objectContaining({ introSkipperMode: 'manual' }),
     ),
   );
 
   cleanup();
 });
 
-test('automatic intro skip rolls back and shows inline error on save failure', async () => {
+test('intro skip mode rolls back and shows inline error on save failure', async () => {
   rstest.spyOn(commands, 'configSet').mockResolvedValue({
     status: 'error',
     error: { code: 'internal', message: 'Config write failed' },
@@ -200,35 +196,61 @@ test('automatic intro skip rolls back and shows inline error on save failure', a
   const cleanup = renderConsole();
 
   await screen.findByDisplayValue('JMSR Test');
-  const tile = screen.getByRole('button', { name: /Automatic Intro Skip/ });
-  const checkbox = screen.getByLabelText(
-    'Automatic Intro Skip',
-  ) as HTMLInputElement;
+  const automatic = screen.getByRole('button', { name: /Automatic/ });
+  const manual = screen.getByRole('button', { name: /Manual/ });
 
-  fireEvent.click(tile);
+  fireEvent.click(manual);
 
-  expect(tile).toHaveAttribute('aria-pressed', 'false');
+  expect(manual).toHaveAttribute('aria-pressed', 'true');
   await waitFor(() =>
     expect(screen.getAllByText('Config write failed').length).toBeGreaterThan(
       0,
     ),
   );
-  expect(tile).toHaveAttribute('aria-pressed', 'true');
-  expect(checkbox).toBeChecked();
+  expect(automatic).toHaveAttribute('aria-pressed', 'true');
+  expect(manual).toHaveAttribute('aria-pressed', 'false');
 
   cleanup();
 });
-test('automatic intro skip reports rejected save commands through status and toast', async () => {
+test('intro skip mode reports rejected save commands through status and toast', async () => {
   rstest
     .spyOn(commands, 'configSet')
     .mockRejectedValue(new Error('Disk unavailable'));
   const cleanup = renderConsole();
 
   await screen.findByDisplayValue('JMSR Test');
-  fireEvent.click(screen.getByRole('button', { name: /Automatic Intro Skip/ }));
+  fireEvent.click(screen.getByRole('button', { name: /Manual/ }));
 
   await waitFor(() =>
     expect(screen.getAllByText('Disk unavailable').length).toBeGreaterThan(0),
+  );
+
+  cleanup();
+});
+
+test('operations console autosaves changed intro skip key', async () => {
+  const configSet = rstest.spyOn(commands, 'configSet').mockResolvedValue({
+    status: 'ok',
+    data: null,
+  });
+  const cleanup = renderConsole();
+
+  await screen.findByDisplayValue('JMSR Test');
+  const advancedTrigger = screen.getByRole('button', {
+    name: 'Advanced MPV options',
+  });
+  fireEvent.click(advancedTrigger);
+  await waitFor(() =>
+    expect(advancedTrigger).toHaveAttribute('aria-expanded', 'true'),
+  );
+  const key = (await screen.findByPlaceholderText('g')) as HTMLInputElement;
+  fireEvent.input(key, { target: { value: 'i' } });
+  fireEvent.blur(key);
+
+  await waitFor(() =>
+    expect(configSet).toHaveBeenCalledWith(
+      expect.objectContaining({ keybindIntroSkip: 'i' }),
+    ),
   );
 
   cleanup();
@@ -479,9 +501,7 @@ test('player bridge autosave failure recovers on later save', async () => {
 test('connection comes before now playing and hero keeps only refresh', async () => {
   const cleanup = renderConsole();
 
-  await waitFor(() =>
-    expect(screen.getByText('Operations Console')).toBeVisible(),
-  );
+  await screen.findByRole('heading', { name: 'Connection' });
 
   const headings = screen.getAllByRole('heading').map((heading) => ({
     text: heading.textContent,
@@ -514,7 +534,7 @@ test('final console structure covers all operational areas in order', async () =
       'No active playback metadata',
       'Player Bridge settings',
       'Diagnostics',
-      'Automatic Intro Skip',
+      'Intro Skip',
       'Session',
     ]),
   );
@@ -522,7 +542,7 @@ test('final console structure covers all operational areas in order', async () =
     headings.indexOf('No active playback metadata'),
   );
   expect(headings.indexOf('Diagnostics')).toBeLessThan(
-    headings.indexOf('Automatic Intro Skip'),
+    headings.indexOf('Intro Skip'),
   );
   expect(
     screen.getByRole('button', { name: 'Toggle diagnostics' }),
@@ -541,9 +561,7 @@ test('disconnect keeps saved session and stays on console', async () => {
     });
   const cleanup = renderConsole();
 
-  await waitFor(() =>
-    expect(screen.getByText('Operations Console')).toBeVisible(),
-  );
+  await screen.findByRole('heading', { name: 'Connection' });
   await waitFor(() =>
     expect(
       screen.getByRole('button', { name: 'Disconnect' }),
@@ -553,7 +571,7 @@ test('disconnect keeps saved session and stays on console', async () => {
 
   await waitFor(() => expect(disconnect).toHaveBeenCalledTimes(1));
   expect(localStorage.getItem('jmsr_auth_session')).not.toBeNull();
-  expect(screen.getByText('Operations Console')).toBeVisible();
+  expect(screen.getByRole('heading', { name: 'Connection' })).toBeVisible();
   expect(
     screen.getByText(
       /Disconnect ends the active Jellyfin connection but keeps the Saved Session available for Reconnect./,
@@ -580,7 +598,7 @@ test('disconnect failure stays on console and unlocks the action', async () => {
     expect(screen.getByText('disconnect offline')).toBeVisible(),
   );
   expect(screen.getByRole('button', { name: 'Disconnect' })).not.toBeDisabled();
-  expect(screen.getByText('Operations Console')).toBeVisible();
+  expect(screen.getByRole('heading', { name: 'Connection' })).toBeVisible();
 
   cleanup();
 });
@@ -602,7 +620,7 @@ test('disconnect rejected commands stay on console and unlock the action', async
     expect(screen.getByText('disconnect ipc unavailable')).toBeVisible(),
   );
   expect(screen.getByRole('button', { name: 'Disconnect' })).not.toBeDisabled();
-  expect(screen.getByText('Operations Console')).toBeVisible();
+  expect(screen.getByRole('heading', { name: 'Connection' })).toBeVisible();
 
   cleanup();
 });
@@ -669,9 +687,7 @@ test('sign out confirms and clears saved session', async () => {
   const onSignedOut = rstest.fn();
   const cleanup = renderConsole(onSignedOut);
 
-  await waitFor(() =>
-    expect(screen.getByText('Operations Console')).toBeVisible(),
-  );
+  await screen.findByRole('heading', { name: 'Connection' });
   fireEvent.click(screen.getByRole('button', { name: 'Sign out' }));
   await waitFor(() => expect(screen.getByRole('dialog')).toBeVisible());
   const signOutButtons = screen.getAllByRole('button', { name: 'Sign out' });
@@ -697,9 +713,7 @@ test('sign out failure preserves the Saved Session and stays on console', async 
   const onSignedOut = rstest.fn();
   const cleanup = renderConsole(onSignedOut);
 
-  await waitFor(() =>
-    expect(screen.getByText('Operations Console')).toBeVisible(),
-  );
+  await screen.findByRole('heading', { name: 'Connection' });
   fireEvent.click(screen.getByRole('button', { name: 'Sign out' }));
   await waitFor(() => expect(screen.getByRole('dialog')).toBeVisible());
   const signOutButtons = screen.getAllByRole('button', { name: 'Sign out' });
@@ -708,7 +722,7 @@ test('sign out failure preserves the Saved Session and stays on console', async 
   await waitFor(() => expect(clearSession).toHaveBeenCalledTimes(1));
   expect(localStorage.getItem('jmsr_auth_session')).not.toBeNull();
   expect(onSignedOut).not.toHaveBeenCalled();
-  expect(screen.getByText('Operations Console')).toBeVisible();
+  expect(screen.getByRole('heading', { name: 'Connection' })).toBeVisible();
 
   cleanup();
 });
@@ -720,9 +734,7 @@ test('sign out rejected commands preserve the Saved Session and close the dialog
   const onSignedOut = rstest.fn();
   const cleanup = renderConsole(onSignedOut);
 
-  await waitFor(() =>
-    expect(screen.getByText('Operations Console')).toBeVisible(),
-  );
+  await screen.findByRole('heading', { name: 'Connection' });
   fireEvent.click(screen.getByRole('button', { name: 'Sign out' }));
   await waitFor(() => expect(screen.getByRole('dialog')).toBeVisible());
   const signOutButtons = screen.getAllByRole('button', { name: 'Sign out' });
@@ -740,9 +752,7 @@ test('sign out rejected commands preserve the Saved Session and close the dialog
 test('sign out dialog uses Ark dialog dismissal semantics', async () => {
   const cleanup = renderConsole();
 
-  await waitFor(() =>
-    expect(screen.getByText('Operations Console')).toBeVisible(),
-  );
+  await screen.findByRole('heading', { name: 'Connection' });
 
   fireEvent.click(screen.getByRole('button', { name: 'Sign out' }));
   const dialog = await screen.findByRole('dialog');
@@ -784,9 +794,7 @@ test('sign out dialog locks dismissal while signing out', async () => {
   );
   const cleanup = renderConsole();
 
-  await waitFor(() =>
-    expect(screen.getByText('Operations Console')).toBeVisible(),
-  );
+  await screen.findByRole('heading', { name: 'Connection' });
   fireEvent.click(screen.getByRole('button', { name: 'Sign out' }));
   await screen.findByRole('dialog');
 
@@ -804,7 +812,7 @@ test('sign out dialog locks dismissal while signing out', async () => {
 
   cleanup();
 });
-test('player bridge settings use Ark field collapsible and checkbox primitives', async () => {
+test('player bridge settings use Ark fields and intro skip mode buttons', async () => {
   const cleanup = renderConsole();
 
   const mpvPath = await screen.findByPlaceholderText('Path to mpv executable');
@@ -827,10 +835,8 @@ test('player bridge settings use Ark field collapsible and checkbox primitives',
   expect(mpvArgs.closest('[data-scope="field"]')).not.toBeNull();
   expect(mpvArgs.closest('[data-scope="collapsible"]')).not.toBeNull();
 
-  const introSkip = screen.getByRole('checkbox', {
-    name: 'Automatic Intro Skip',
-  });
-  expect(introSkip.closest('[data-scope="checkbox"]')).not.toBeNull();
+  const manual = screen.getByRole('button', { name: /Manual/ });
+  expect(manual).toHaveAttribute('aria-pressed', 'false');
 
   cleanup();
 });

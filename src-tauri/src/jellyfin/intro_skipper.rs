@@ -6,10 +6,16 @@ use std::collections::HashMap;
 const LOOKAHEAD_SECONDS: f64 = 1.0;
 
 /// Intro Skipper segment kind supported by JMSR.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum IntroSkipKind {
   Introduction,
   Credits,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct IntroSkipDecision {
+  pub kind: IntroSkipKind,
+  pub seek_target: f64,
 }
 
 /// Active Intro Skipper range for the current playback session.
@@ -18,6 +24,7 @@ pub struct IntroSkipRange {
   pub kind: IntroSkipKind,
   pub start_seconds: f64,
   pub end_seconds: f64,
+  pub notified: bool,
   pub skipped: bool,
 }
 
@@ -35,6 +42,7 @@ impl IntroSkipRange {
       kind,
       start_seconds,
       end_seconds,
+      notified: false,
       skipped: false,
     })
   }
@@ -65,21 +73,60 @@ pub fn parse_intro_skipper_ranges(response: IntroSkipperPluginResponse) -> Vec<I
 
 /// Return the seek target when playback is inside a skippable range.
 pub fn evaluate_skip(position_seconds: f64, ranges: &mut [IntroSkipRange]) -> Option<f64> {
+  evaluate_skip_decision(position_seconds, ranges).map(|decision| decision.seek_target)
+}
+
+pub fn evaluate_skip_decision(
+  position_seconds: f64,
+  ranges: &mut [IntroSkipRange],
+) -> Option<IntroSkipDecision> {
   if !position_seconds.is_finite() {
     return None;
   }
 
   ranges
     .iter_mut()
-    .find(|range| {
-      !range.skipped
-        && position_seconds >= range.start_seconds - LOOKAHEAD_SECONDS
-        && position_seconds < range.end_seconds
-    })
+    .find(|range| is_active(position_seconds, range))
     .map(|range| {
       range.skipped = true;
-      range.end_seconds
+      range.notified = true;
+      IntroSkipDecision {
+        kind: range.kind,
+        seek_target: range.end_seconds,
+      }
     })
+}
+
+/// Return the segment kind when playback enters a skippable range that has not been prompted.
+pub fn evaluate_skip_prompt(
+  position_seconds: f64,
+  ranges: &mut [IntroSkipRange],
+) -> Option<IntroSkipKind> {
+  if !position_seconds.is_finite() {
+    return None;
+  }
+
+  ranges
+    .iter_mut()
+    .find(|range| is_active(position_seconds, range) && !range.notified)
+    .map(|range| {
+      range.notified = true;
+      range.kind
+    })
+}
+
+/// Return the skip decision for the current active segment without requiring a prior prompt.
+pub fn evaluate_manual_skip(
+  position_seconds: f64,
+  ranges: &mut [IntroSkipRange],
+) -> Option<IntroSkipDecision> {
+  evaluate_skip_decision(position_seconds, ranges)
+}
+
+fn is_active(position_seconds: f64, range: &IntroSkipRange) -> bool {
+  !range.skipped
+    && position_seconds >= range.start_seconds - LOOKAHEAD_SECONDS
+    && position_seconds < range.end_seconds
 }
 
 #[cfg(test)]
@@ -99,6 +146,7 @@ mod tests {
       kind,
       start_seconds,
       end_seconds,
+      notified: false,
       skipped: false,
     }
   }
@@ -164,6 +212,7 @@ mod tests {
     let mut ranges = vec![intro_range(10.0, 80.0)];
 
     assert_eq!(evaluate_skip(10.0, &mut ranges), Some(80.0));
+    assert!(ranges[0].notified);
     assert!(ranges[0].skipped);
     assert_eq!(evaluate_skip(10.5, &mut ranges), None);
   }
@@ -228,5 +277,33 @@ mod tests {
 
     assert_eq!(evaluate_skip(1199.0, &mut lookahead_ranges), Some(1260.0));
     assert_eq!(evaluate_skip(1200.0, &mut start_ranges), Some(1260.0));
+  }
+
+  #[test]
+  fn manual_prompt_marks_notified_without_skipping() {
+    let mut ranges = vec![intro_range(10.0, 80.0)];
+
+    assert_eq!(
+      evaluate_skip_prompt(10.0, &mut ranges),
+      Some(IntroSkipKind::Introduction)
+    );
+    assert!(ranges[0].notified);
+    assert!(!ranges[0].skipped);
+    assert_eq!(evaluate_skip_prompt(10.5, &mut ranges), None);
+  }
+
+  #[test]
+  fn manual_skip_returns_kind_and_marks_range_skipped() {
+    let mut ranges = vec![credit_range(1200.0, 1260.0)];
+
+    assert_eq!(
+      evaluate_manual_skip(1200.0, &mut ranges),
+      Some(IntroSkipDecision {
+        kind: IntroSkipKind::Credits,
+        seek_target: 1260.0
+      })
+    );
+    assert!(ranges[0].notified);
+    assert!(ranges[0].skipped);
   }
 }

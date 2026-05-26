@@ -53,6 +53,11 @@ impl MpvCommand {
     Self::new(vec!["seek".into(), time.into(), "absolute".into()])
   }
 
+  /// Show text on MPV's on-screen display.
+  pub fn show_text(text: &str, duration_ms: i64) -> Self {
+    Self::new(vec!["show-text".into(), text.into(), duration_ms.into()])
+  }
+
   /// Set pause state.
   pub fn set_pause(paused: bool) -> Self {
     Self::new(vec!["set_property".into(), "pause".into(), paused.into()])

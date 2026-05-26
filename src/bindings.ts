@@ -99,14 +99,16 @@ export type AppConfig = {
 	progressInterval?: number,
 	/**  Start minimized to system tray. */
 	startMinimized?: boolean,
-	/**  Enable automatic Intro Skipper plugin skips. */
-	introSkipperEnabled?: boolean,
+	/**  Intro Skipper plugin behavior mode. */
+	introSkipperMode?: IntroSkipperMode,
 	/**  Ordered subtitle language codes to prefer when Jellyfin does not request a track. */
 	preferredSubtitleLanguages?: string[],
 	/**  Keybinding for next episode in MPV. */
 	keybindNext?: string,
 	/**  Keybinding for previous episode in MPV. */
 	keybindPrev?: string,
+	/**  Keybinding for manual Intro Skipper seek in MPV. */
+	keybindIntroSkip?: string,
 };
 
 /**  App notification event emitted to frontend. */
@@ -150,6 +152,9 @@ export type Credentials = {
 	username: string,
 	password: string,
 };
+
+/**  Intro Skipper behavior mode. */
+export type IntroSkipperMode = "automatic" | "manual" | "off";
 
 /**  Notification level for UI display. */
 export type NotificationLevel = "error" | "warning" | "info" | "success";

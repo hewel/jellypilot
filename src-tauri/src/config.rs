@@ -1,10 +1,19 @@
 //! Application configuration with persistence.
 
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
 use specta::Type;
 
+/// Intro Skipper behavior mode.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub enum IntroSkipperMode {
+  Automatic,
+  Manual,
+  Off,
+}
+
 /// Application configuration.
-#[derive(Debug, Clone, Serialize, Deserialize, Type)]
+#[derive(Debug, Clone, Serialize, Type)]
 #[serde(rename_all = "camelCase")]
 pub struct AppConfig {
   /// Custom MPV executable path (None = auto-detect).
@@ -27,9 +36,9 @@ pub struct AppConfig {
   #[serde(default)]
   pub start_minimized: bool,
 
-  /// Enable automatic Intro Skipper plugin skips.
-  #[serde(default = "default_intro_skipper_enabled")]
-  pub intro_skipper_enabled: bool,
+  /// Intro Skipper plugin behavior mode.
+  #[serde(default = "default_intro_skipper_mode")]
+  pub intro_skipper_mode: IntroSkipperMode,
 
   /// Ordered subtitle language codes to prefer when Jellyfin does not request a track.
   #[serde(default)]
@@ -42,6 +51,66 @@ pub struct AppConfig {
   /// Keybinding for previous episode in MPV.
   #[serde(default = "default_keybind_prev")]
   pub keybind_prev: String,
+
+  /// Keybinding for manual Intro Skipper seek in MPV.
+  #[serde(default = "default_keybind_intro_skip")]
+  pub keybind_intro_skip: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct AppConfigWire {
+  #[serde(default)]
+  mpv_path: Option<String>,
+  #[serde(default)]
+  mpv_args: Vec<String>,
+  #[serde(default = "default_device_name")]
+  device_name: String,
+  #[serde(default = "default_progress_interval")]
+  progress_interval: u32,
+  #[serde(default)]
+  start_minimized: bool,
+  #[serde(default)]
+  intro_skipper_mode: Option<IntroSkipperMode>,
+  #[serde(default)]
+  intro_skipper_enabled: Option<bool>,
+  #[serde(default)]
+  preferred_subtitle_languages: Vec<String>,
+  #[serde(default = "default_keybind_next")]
+  keybind_next: String,
+  #[serde(default = "default_keybind_prev")]
+  keybind_prev: String,
+  #[serde(default = "default_keybind_intro_skip")]
+  keybind_intro_skip: String,
+}
+
+impl<'de> Deserialize<'de> for AppConfig {
+  fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+  where
+    D: Deserializer<'de>,
+  {
+    let wire = AppConfigWire::deserialize(deserializer)?;
+    let intro_skipper_mode =
+      wire
+        .intro_skipper_mode
+        .unwrap_or_else(|| match wire.intro_skipper_enabled.unwrap_or(true) {
+          true => IntroSkipperMode::Automatic,
+          false => IntroSkipperMode::Off,
+        });
+
+    Ok(Self {
+      mpv_path: wire.mpv_path,
+      mpv_args: wire.mpv_args,
+      device_name: wire.device_name,
+      progress_interval: wire.progress_interval,
+      start_minimized: wire.start_minimized,
+      intro_skipper_mode,
+      preferred_subtitle_languages: wire.preferred_subtitle_languages,
+      keybind_next: wire.keybind_next,
+      keybind_prev: wire.keybind_prev,
+      keybind_intro_skip: wire.keybind_intro_skip,
+    })
+  }
 }
 
 fn default_device_name() -> String {
@@ -60,8 +129,12 @@ fn default_keybind_prev() -> String {
   "Shift+p".to_string()
 }
 
-fn default_intro_skipper_enabled() -> bool {
-  true
+fn default_keybind_intro_skip() -> String {
+  "g".to_string()
+}
+
+fn default_intro_skipper_mode() -> IntroSkipperMode {
+  IntroSkipperMode::Automatic
 }
 
 impl Default for AppConfig {
@@ -72,10 +145,11 @@ impl Default for AppConfig {
       device_name: default_device_name(),
       progress_interval: default_progress_interval(),
       start_minimized: false,
-      intro_skipper_enabled: default_intro_skipper_enabled(),
+      intro_skipper_mode: default_intro_skipper_mode(),
       preferred_subtitle_languages: Vec::new(),
       keybind_next: default_keybind_next(),
       keybind_prev: default_keybind_prev(),
+      keybind_intro_skip: default_keybind_intro_skip(),
     }
   }
 }
@@ -95,6 +169,9 @@ impl AppConfig {
     if self.keybind_prev.trim().is_empty() {
       return Err("Previous episode keybinding cannot be empty".to_string());
     }
+    if self.keybind_intro_skip.trim().is_empty() {
+      return Err("Intro skip keybinding cannot be empty".to_string());
+    }
     if self
       .preferred_subtitle_languages
       .iter()
@@ -111,7 +188,7 @@ mod tests {
   use super::*;
 
   #[test]
-  fn older_saved_config_deserializes_with_intro_skipper_enabled() {
+  fn older_saved_config_deserializes_with_default_automatic_intro_skipper_mode() {
     let config: AppConfig = serde_json::from_str(
       r#"{
         "deviceName": "JMSR",
@@ -123,8 +200,24 @@ mod tests {
     )
     .expect("older config should deserialize");
 
-    assert!(config.intro_skipper_enabled);
+    assert_eq!(config.intro_skipper_mode, IntroSkipperMode::Automatic);
     assert!(config.preferred_subtitle_languages.is_empty());
+  }
+
+  #[test]
+  fn legacy_enabled_intro_skipper_config_deserializes_as_automatic() {
+    let config: AppConfig =
+      serde_json::from_str(r#"{"introSkipperEnabled":true}"#).expect("config should deserialize");
+
+    assert_eq!(config.intro_skipper_mode, IntroSkipperMode::Automatic);
+  }
+
+  #[test]
+  fn legacy_disabled_intro_skipper_config_deserializes_as_off() {
+    let config: AppConfig =
+      serde_json::from_str(r#"{"introSkipperEnabled":false}"#).expect("config should deserialize");
+
+    assert_eq!(config.intro_skipper_mode, IntroSkipperMode::Off);
   }
 
   #[test]

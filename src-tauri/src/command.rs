@@ -758,8 +758,9 @@ pub async fn config_set(
   // Update MPV keybindings file (blocking I/O, run in spawn_blocking)
   let keybind_next = config.keybind_next.clone();
   let keybind_prev = config.keybind_prev.clone();
+  let keybind_intro_skip = config.keybind_intro_skip.clone();
   tauri::async_runtime::spawn_blocking(move || {
-    write_input_conf(&keybind_next, &keybind_prev);
+    write_input_conf(&keybind_next, &keybind_prev, &keybind_intro_skip);
   })
   .await
   .map_err(|e| CommandError::internal(format!("Failed to write input.conf: {}", e)))?;

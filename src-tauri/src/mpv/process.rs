@@ -37,7 +37,11 @@ pub fn jmsr_input_conf_path() -> Option<PathBuf> {
 
 /// Write JMSR's input.conf with the specified keybindings.
 /// Always overwrites the file with the provided keybindings.
-pub fn write_input_conf(keybind_next: &str, keybind_prev: &str) -> Option<PathBuf> {
+pub fn write_input_conf(
+  keybind_next: &str,
+  keybind_prev: &str,
+  keybind_intro_skip: &str,
+) -> Option<PathBuf> {
   let path = jmsr_input_conf_path()?;
 
   // Create parent directory if needed
@@ -57,8 +61,9 @@ pub fn write_input_conf(keybind_next: &str, keybind_prev: &str) -> Option<PathBu
 
 {} script-message jmsr-next    # Play next episode
 {} script-message jmsr-prev    # Play previous episode
+{} script-message jmsr-skip-intro    # Skip active Intro Skipper segment
 "#,
-    keybind_next, keybind_prev
+    keybind_next, keybind_prev, keybind_intro_skip
   );
 
   if let Err(e) = std::fs::write(&path, bindings) {
@@ -76,7 +81,7 @@ fn ensure_input_conf() -> Option<PathBuf> {
 
   // Only create if it doesn't exist (preserve user customizations via config)
   if !path.exists() {
-    return write_input_conf("Shift+n", "Shift+p");
+    return write_input_conf("Shift+n", "Shift+p", "g");
   }
 
   Some(path)

@@ -1,4 +1,3 @@
-import { Checkbox } from '@ark-ui/solid/checkbox';
 import { Collapsible } from '@ark-ui/solid/collapsible';
 import { Combobox, createListCollection } from '@ark-ui/solid/combobox';
 import { Dialog } from '@ark-ui/solid/dialog';
@@ -9,12 +8,9 @@ import { Effect, Exit } from 'effect';
 import {
   Activity,
   Bot,
-  Cast,
   ChevronDown,
-  CircleCheckBig,
   ClipboardList,
   LogOut,
-  Play,
   Power,
   RefreshCw,
   Settings,
@@ -29,7 +25,12 @@ import {
   Show,
 } from 'solid-js';
 import { Portal } from 'solid-js/web';
-import { type AppConfig, type ConnectionState, commands } from '../bindings';
+import {
+  type AppConfig,
+  type ConnectionState,
+  commands,
+  type IntroSkipperMode,
+} from '../bindings';
 import {
   commandFailure,
   commandFailureMessage,
@@ -59,10 +60,6 @@ async function fetchMpvStatus(): Promise<boolean> {
   return await commands.mpvIsConnected();
 }
 
-function statusTone(connected: boolean) {
-  return connected ? 'text-secondary' : 'text-warning';
-}
-
 const COMMON_SUBTITLE_LANGUAGE_OPTIONS = [
   { code: 'eng', label: 'English' },
   { code: 'jpn', label: 'Japanese' },
@@ -74,6 +71,28 @@ const COMMON_SUBTITLE_LANGUAGE_OPTIONS = [
   { code: 'chi', label: 'Chinese' },
   { code: 'kor', label: 'Korean' },
 ] as const;
+
+const INTRO_SKIPPER_MODES: {
+  mode: IntroSkipperMode;
+  label: string;
+  description: string;
+}[] = [
+  {
+    mode: 'automatic',
+    label: 'Automatic',
+    description: 'Skip ranges as playback reaches them.',
+  },
+  {
+    mode: 'manual',
+    label: 'Manual',
+    description: 'Show an MPV prompt and wait for the shortcut.',
+  },
+  {
+    mode: 'off',
+    label: 'Off',
+    description: 'Do not fetch or apply Intro Skipper ranges.',
+  },
+];
 
 function parseSubtitleLanguageInput(value: string) {
   return value
@@ -105,34 +124,6 @@ function getSubtitleLanguageLabel(code: string) {
   );
 }
 
-function StatusTile(props: {
-  icon: typeof CircleCheckBig;
-  label: string;
-  value: string;
-  description: string;
-  tone?: string;
-}) {
-  const Icon = props.icon;
-  return (
-    <div class="status-tile">
-      <div class="mb-4 flex items-center justify-between gap-3">
-        <div class={`status-tile-icon ${props.tone ?? 'text-primary'}`}>
-          <Icon class="h-5 w-5" />
-        </div>
-        <span class="text-label-small uppercase text-on-surface-variant">
-          {props.label}
-        </span>
-      </div>
-      <p class="truncate text-title-medium text-on-surface" title={props.value}>
-        {props.value}
-      </p>
-      <p class="mt-1 text-body-small text-on-surface-variant">
-        {props.description}
-      </p>
-    </div>
-  );
-}
-
 export default function OperationsConsole(props: OperationsConsoleProps) {
   const { showToast } = useToast();
   let configHydrated = false;
@@ -158,9 +149,8 @@ export default function OperationsConsole(props: OperationsConsoleProps) {
     type: 'saving' | 'saved' | 'error';
     text: string;
   } | null>(null);
-  const [introSkipperDraft, setIntroSkipperDraft] = createSignal<
-    boolean | null
-  >(null);
+  const [introSkipperDraft, setIntroSkipperDraft] =
+    createSignal<IntroSkipperMode | null>(null);
   const [introSkipperSaving, setIntroSkipperSaving] = createSignal(false);
   const [introSkipperError, setIntroSkipperError] = createSignal<string | null>(
     null,
@@ -188,7 +178,7 @@ export default function OperationsConsole(props: OperationsConsoleProps) {
 
   const [connectionState, { refetch: refetchConnection }] =
     createResource(fetchConnectionState);
-  const [mpvConnected, { refetch: refetchMpv }] =
+  const [_mpvConnected, { refetch: refetchMpv }] =
     createResource(fetchMpvStatus);
   const [initialConfig, { mutate: mutateConfig }] = createResource(async () => {
     const exit = await Effect.runPromiseExit(
@@ -210,7 +200,8 @@ export default function OperationsConsole(props: OperationsConsoleProps) {
       mpvArgs: '',
       keybindNext: 'Shift+n',
       keybindPrev: 'Shift+p',
-      introSkipperEnabled: true,
+      keybindIntroSkip: 'g',
+      introSkipperMode: 'automatic' as IntroSkipperMode,
     },
   }));
 
@@ -223,12 +214,13 @@ export default function OperationsConsole(props: OperationsConsoleProps) {
       form.setFieldValue('mpvArgs', (cfg.mpvArgs ?? []).join('\n'));
       form.setFieldValue('keybindNext', cfg.keybindNext ?? 'Shift+n');
       form.setFieldValue('keybindPrev', cfg.keybindPrev ?? 'Shift+p');
+      form.setFieldValue('keybindIntroSkip', cfg.keybindIntroSkip ?? 'g');
       setSelectedSubtitleLanguages(
         normalizePreferredSubtitleLanguages(cfg.preferredSubtitleLanguages),
       );
       form.setFieldValue(
-        'introSkipperEnabled',
-        cfg.introSkipperEnabled ?? true,
+        'introSkipperMode',
+        cfg.introSkipperMode ?? 'automatic',
       );
       if ((cfg.mpvArgs?.length ?? 0) > 0) setAdvancedOpen(true);
       configHydrated = true;
@@ -237,8 +229,8 @@ export default function OperationsConsole(props: OperationsConsoleProps) {
 
   const state = () => connectionState();
   const config = () => initialConfig();
-  const introSkipperEnabled = () =>
-    introSkipperDraft() ?? config()?.introSkipperEnabled ?? true;
+  const introSkipperMode = () =>
+    introSkipperDraft() ?? config()?.introSkipperMode ?? 'automatic';
   const showPlayerBridgeStatus = (
     type: 'saving' | 'saved' | 'error',
     text: string,
@@ -326,7 +318,13 @@ export default function OperationsConsole(props: OperationsConsoleProps) {
   };
 
   const saveTextSetting = (
-    field: 'deviceName' | 'mpvPath' | 'mpvArgs' | 'keybindNext' | 'keybindPrev',
+    field:
+      | 'deviceName'
+      | 'mpvPath'
+      | 'mpvArgs'
+      | 'keybindNext'
+      | 'keybindPrev'
+      | 'keybindIntroSkip',
     value: string,
   ) => {
     const saved = lastSavedConfig ?? config();
@@ -336,6 +334,7 @@ export default function OperationsConsole(props: OperationsConsoleProps) {
     if (field === 'deviceName' && value.trim().length === 0) return;
     if (field === 'keybindNext' && value.trim().length === 0) return;
     if (field === 'keybindPrev' && value.trim().length === 0) return;
+    if (field === 'keybindIntroSkip' && value.trim().length === 0) return;
 
     const override =
       field === 'mpvArgs'
@@ -377,15 +376,15 @@ export default function OperationsConsole(props: OperationsConsoleProps) {
     );
   };
 
-  const saveIntroSkipperSetting = (enabled: boolean) => {
-    const previous = introSkipperEnabled();
+  const saveIntroSkipperSetting = (mode: IntroSkipperMode) => {
+    const previous = introSkipperMode();
     const desired = latestConfigSnapshot ?? lastSavedConfig ?? config();
-    if (desired?.introSkipperEnabled === enabled) return;
+    if (desired?.introSkipperMode === mode) return;
 
-    setIntroSkipperDraft(enabled);
+    setIntroSkipperDraft(mode);
     setIntroSkipperSaving(true);
     setIntroSkipperError(null);
-    queueConfigSave(buildConfigSnapshot({ introSkipperEnabled: enabled }), {
+    queueConfigSave(buildConfigSnapshot({ introSkipperMode: mode }), {
       onSuccess: () => {
         setIntroSkipperDraft(null);
         setIntroSkipperSaving(false);
@@ -394,7 +393,7 @@ export default function OperationsConsole(props: OperationsConsoleProps) {
         setIntroSkipperDraft(previous);
         setIntroSkipperSaving(false);
         setIntroSkipperError(message);
-        form.setFieldValue('introSkipperEnabled', previous);
+        form.setFieldValue('introSkipperMode', previous);
       },
     });
   };
@@ -540,99 +539,14 @@ export default function OperationsConsole(props: OperationsConsoleProps) {
     setDetectingMpv(false);
   };
 
-  const handleIntroSkipperToggle = (enabled: boolean) => {
-    form.setFieldValue('introSkipperEnabled', enabled);
-    saveIntroSkipperSetting(enabled);
+  const handleIntroSkipperModeChange = (mode: IntroSkipperMode) => {
+    form.setFieldValue('introSkipperMode', mode);
+    saveIntroSkipperSetting(mode);
   };
 
   return (
     <div class="console-shell">
       <div class="console-container">
-        <header class="hero-panel">
-          <div class="relative z-10 flex flex-col gap-6 lg:flex-row lg:items-end lg:justify-between">
-            <div class="max-w-2xl">
-              <p class="text-label-medium uppercase text-secondary">
-                JMSR Control Room
-              </p>
-              <h1 class="brand-type mt-2 text-display-small text-on-surface sm:text-display-medium">
-                Operations Console
-              </h1>
-              <p class="mt-3 text-body-large text-on-surface-variant">
-                Monitor the Jellyfin session, Playback Target, Player Bridge,
-                and Now Playing state from one desktop surface.
-              </p>
-            </div>
-            <div class="flex flex-wrap gap-3">
-              <button
-                type="button"
-                onClick={handleRefresh}
-                class="btn-icon"
-                aria-label="Refresh status"
-                title="Refresh status"
-              >
-                <RefreshCw class="h-5 w-5" />
-              </button>
-            </div>
-          </div>
-        </header>
-
-        <section class="status-grid" aria-label="Operational status">
-          <StatusTile
-            icon={CircleCheckBig}
-            label="Jellyfin"
-            value={state()?.connected ? 'Connected' : 'Disconnected'}
-            description={
-              state()?.serverName ??
-              state()?.serverUrl ??
-              'Saved Session can reconnect'
-            }
-            tone={statusTone(state()?.connected ?? false)}
-          />
-          <StatusTile
-            icon={Cast}
-            label="Playback Target"
-            value={config()?.deviceName ?? 'JMSR'}
-            description="Shown in Jellyfin cast menu"
-            tone="text-primary"
-          />
-          <StatusTile
-            icon={Play}
-            label="Player Bridge"
-            value={mpvConnected() ? 'MPV running' : 'MPV offline'}
-            description={
-              mpvConnected()
-                ? 'External player connected'
-                : 'Start MPV or cast media'
-            }
-            tone={mpvConnected() ? 'text-tertiary' : 'text-warning'}
-          />
-          <button
-            type="button"
-            class="status-tile w-full text-left transition hover:border-primary/50 hover:bg-surface-container-high focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary"
-            aria-pressed={introSkipperEnabled()}
-            onClick={() => handleIntroSkipperToggle(!introSkipperEnabled())}
-          >
-            <div class="mb-4 flex items-center justify-between gap-3">
-              <div
-                class={`status-tile-icon ${introSkipperEnabled() ? 'text-tertiary' : 'text-on-surface-variant'}`}
-              >
-                <Bot class="h-5 w-5" />
-              </div>
-              <span class="text-label-small uppercase text-on-surface-variant">
-                Automatic Intro Skip
-              </span>
-            </div>
-            <p class="truncate text-title-medium text-on-surface">
-              {introSkipperEnabled() ? 'Enabled' : 'Manual'}
-            </p>
-            <p class="mt-1 text-body-small text-on-surface-variant">
-              {introSkipperSaving()
-                ? 'Saving preference…'
-                : 'Uses Intro Skipper ranges when available'}
-            </p>
-          </button>
-        </section>
-
         <div class="console-grid">
           <div class="space-y-6">
             <SectionCard icon={<Activity class="h-6 w-6" />} title="Connection">
@@ -692,6 +606,15 @@ export default function OperationsConsole(props: OperationsConsoleProps) {
                     {reconnecting() ? 'Reconnecting...' : 'Reconnect'}
                   </button>
                 </Show>
+                <button
+                  type="button"
+                  onClick={handleRefresh}
+                  class="btn-icon ml-auto"
+                  aria-label="Refresh status"
+                  title="Refresh status"
+                >
+                  <RefreshCw class="h-5 w-5" />
+                </button>
               </div>
               <p class="mt-3 text-body-small text-on-surface-variant">
                 Disconnect ends the active Jellyfin connection but keeps the
@@ -845,7 +768,7 @@ export default function OperationsConsole(props: OperationsConsoleProps) {
                         )}
                       </form.Field>
 
-                      <div class="grid grid-cols-1 gap-4 md:grid-cols-2">
+                      <div class="grid grid-cols-1 gap-4 md:grid-cols-3">
                         <form.Field
                           name="keybindNext"
                           validators={{
@@ -922,6 +845,46 @@ export default function OperationsConsole(props: OperationsConsoleProps) {
                                 }}
                                 class="input-filled w-full font-mono"
                                 placeholder="Shift+p"
+                              />
+                            </ArkField.Root>
+                          )}
+                        </form.Field>
+                        <form.Field
+                          name="keybindIntroSkip"
+                          validators={{
+                            onBlur: ({ value }) =>
+                              !value.trim()
+                                ? 'Keybinding is required'
+                                : undefined,
+                          }}
+                        >
+                          {(field) => (
+                            <ArkField.Root
+                              class="block"
+                              invalid={field().state.meta.errors.length > 0}
+                            >
+                              <ArkField.Label class="mb-1 block text-label-medium uppercase text-on-surface-variant">
+                                Intro skip key
+                              </ArkField.Label>
+                              <ArkField.Input
+                                id={field().name}
+                                name={field().name}
+                                type="text"
+                                value={field().state.value}
+                                onInput={(event) =>
+                                  field().handleChange(
+                                    event.currentTarget.value,
+                                  )
+                                }
+                                onBlur={(event) => {
+                                  field().handleBlur();
+                                  saveTextSetting(
+                                    'keybindIntroSkip',
+                                    event.currentTarget.value,
+                                  );
+                                }}
+                                class="input-filled w-full font-mono"
+                                placeholder="g"
                               />
                             </ArkField.Root>
                           )}
@@ -1137,40 +1100,44 @@ export default function OperationsConsole(props: OperationsConsoleProps) {
               <DiagnosticsPanel compact={!diagnosticsExpanded()} />
             </SectionCard>
 
-            <SectionCard
-              icon={<Bot class="h-6 w-6" />}
-              title="Automatic Intro Skip"
-            >
+            <SectionCard icon={<Bot class="h-6 w-6" />} title="Intro Skip">
               <div class="space-y-4">
-                <Checkbox.Root
-                  ids={{ hiddenInput: 'intro-skipper-enabled' }}
-                  name="introSkipperEnabled"
-                  checked={introSkipperEnabled()}
-                  onCheckedChange={(details) =>
-                    handleIntroSkipperToggle(details.checked === true)
-                  }
-                  class="ark-checkbox flex w-full cursor-pointer items-center justify-between gap-4 rounded-2xl bg-surface-container-high px-4 py-3 text-left"
+                <fieldset
+                  class="grid grid-cols-1 gap-3"
+                  aria-label="Intro Skip Mode"
                 >
-                  <span>
-                    <Checkbox.Label class="block text-title-medium text-on-surface">
-                      Automatic Intro Skip
-                    </Checkbox.Label>
-                    <span class="text-body-small text-on-surface-variant">
-                      Use Intro Skipper ranges when available.
-                    </span>
-                  </span>
-                  <Checkbox.Control class="ark-checkbox__control h-6 w-6">
-                    <Checkbox.Indicator class="ark-checkbox__indicator">
-                      ✓
-                    </Checkbox.Indicator>
-                  </Checkbox.Control>
-                  <Checkbox.HiddenInput aria-label="Automatic Intro Skip" />
-                </Checkbox.Root>
+                  <For each={INTRO_SKIPPER_MODES}>
+                    {(option) => (
+                      <button
+                        type="button"
+                        class={`rounded-2xl border px-4 py-3 text-left transition ${
+                          introSkipperMode() === option.mode
+                            ? 'border-primary bg-primary-container text-on-primary-container'
+                            : 'border-outline-variant bg-surface-container-high text-on-surface hover:border-primary/50'
+                        }`}
+                        aria-pressed={introSkipperMode() === option.mode}
+                        onClick={() =>
+                          handleIntroSkipperModeChange(option.mode)
+                        }
+                      >
+                        <span class="block text-title-medium">
+                          {option.label}
+                        </span>
+                        <span class="mt-1 block text-body-small opacity-80">
+                          {option.description}
+                        </span>
+                      </button>
+                    )}
+                  </For>
+                </fieldset>
                 <Show when={introSkipperSaving()}>
                   <p class="text-body-small text-secondary">
                     Saving preference…
                   </p>
                 </Show>
+                <p class="text-body-small text-on-surface-variant">
+                  Changes take effect after restarting MPV.
+                </p>
                 <Show when={introSkipperError()}>
                   {(message) => (
                     <p class="rounded-2xl bg-error-container px-4 py-3 text-body-small text-on-error-container">

@@ -9,7 +9,9 @@ use tokio::sync::mpsc;
 
 use super::client::JellyfinClient;
 use super::error::JellyfinError;
-use super::intro_skipper::evaluate_skip;
+use super::intro_skipper::{
+  evaluate_manual_skip, evaluate_skip, evaluate_skip_prompt, IntroSkipKind,
+};
 use super::mpv_event::{
   apply_property_update, client_message_direction, is_natural_end, property_report_decision,
   should_report_progress, PropertyReportDecision,
@@ -18,7 +20,7 @@ use super::play_resolution::{resolve_play_request, PlayResolutionConfig};
 use super::types::*;
 use super::websocket::{JellyfinCommand, JellyfinWebSocket, JellyfinWebSocketEvent};
 use crate::command::{AppNotification, NowPlayingChanged};
-use crate::config::AppConfig;
+use crate::config::{AppConfig, IntroSkipperMode};
 use crate::mpv::MpvClient;
 use crate::now_playing::{build_now_playing_state, collect_player_state, PlaybackContext};
 use tauri_specta::Event;
@@ -45,6 +47,8 @@ pub enum MpvAction {
   Resume,
   /// Seek to position (seconds).
   Seek(f64),
+  /// Show text on MPV's on-screen display.
+  ShowText { text: String, duration_ms: i64 },
   /// Stop playback.
   Stop,
   /// Set volume (0-100).
@@ -63,6 +67,8 @@ pub enum MpvAction {
 struct SessionState {
   playback: Option<PlaybackSession>,
   last_report_time: std::time::Instant,
+  /// Intro Skipper settings captured when the current MPV process started.
+  effective_intro_skipper_config: IntroSkipperRuntimeConfig,
   /// Current series ID being played (for track preference saving).
   current_series_id: Option<String>,
   /// Current item being played (for next episode lookup).
@@ -71,6 +77,21 @@ struct SessionState {
   current_media_streams: Vec<MediaStream>,
   /// Track preferences per series (key: series_id).
   series_preferences: HashMap<String, TrackPreference>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct IntroSkipperRuntimeConfig {
+  mode: IntroSkipperMode,
+  keybind_intro_skip: String,
+}
+
+impl From<&AppConfig> for IntroSkipperRuntimeConfig {
+  fn from(config: &AppConfig) -> Self {
+    Self {
+      mode: config.intro_skipper_mode,
+      keybind_intro_skip: config.keybind_intro_skip.clone(),
+    }
+  }
 }
 
 /// Manages the session between Jellyfin and MPV.
@@ -102,11 +123,12 @@ impl SessionManager {
       client,
       websocket: Arc::new(JellyfinWebSocket::new()),
       mpv,
-      config,
+      config: config.clone(),
       app_handle,
       state: Arc::new(RwLock::new(SessionState {
         playback: None,
         last_report_time: std::time::Instant::now(),
+        effective_intro_skipper_config: IntroSkipperRuntimeConfig::from(&*config.read()),
         current_series_id: None,
         current_item: None,
         current_media_streams: Vec::new(),
@@ -264,6 +286,8 @@ impl SessionManager {
     if let Some(mut action_rx) = self.action_rx.write().take() {
       let mpv = self.mpv.clone();
       let app_handle = self.app_handle.clone();
+      let config = self.config.clone();
+      let state = self.state.clone();
 
       tokio::spawn(async move {
         log::info!("MPV action consumer started, waiting for actions...");
@@ -291,6 +315,8 @@ impl SessionManager {
                   AppNotification::error(&app_handle, format!("Failed to start MPV: {}", e));
                   continue;
                 }
+                state.write().effective_intro_skipper_config =
+                  IntroSkipperRuntimeConfig::from(&*config.read());
                 log::info!("MPV started successfully");
               }
 
@@ -344,6 +370,11 @@ impl SessionManager {
             MpvAction::Seek(position) => {
               if let Err(e) = mpv.seek(position).await {
                 log::error!("Failed to seek: {}", e);
+              }
+            }
+            MpvAction::ShowText { text, duration_ms } => {
+              if let Err(e) = mpv.show_text(&text, duration_ms).await {
+                log::warn!("Failed to show MPV text: {}", e);
               }
             }
             MpvAction::Stop => {
@@ -411,7 +442,15 @@ impl SessionManager {
   ) -> Result<(), JellyfinError> {
     match cmd {
       JellyfinCommand::Play(request) => {
-        Self::handle_play(client, state, action_tx, config, request).await?;
+        Self::handle_play(
+          client,
+          state,
+          action_tx,
+          mpv.is_connected(),
+          config,
+          request,
+        )
+        .await?;
       }
       JellyfinCommand::Playstate(request) => {
         Self::handle_playstate(client, state, action_tx, mpv, config, request).await?;
@@ -428,6 +467,7 @@ impl SessionManager {
     client: &JellyfinClient,
     state: &RwLock<SessionState>,
     action_tx: &mpsc::Sender<MpvAction>,
+    mpv_connected: bool,
     config: &RwLock<AppConfig>,
     request: PlayRequest,
   ) -> Result<(), JellyfinError> {
@@ -490,9 +530,14 @@ impl SessionManager {
 
     let (preferred_subtitle_languages, intro_skipper_enabled) = {
       let config_guard = config.read();
+      let intro_skipper_config = if mpv_connected {
+        state.read().effective_intro_skipper_config.clone()
+      } else {
+        IntroSkipperRuntimeConfig::from(&*config_guard)
+      };
       (
         config_guard.preferred_subtitle_languages.clone(),
-        config_guard.intro_skipper_enabled,
+        intro_skipper_config.mode != IntroSkipperMode::Off,
       )
     };
     let resolution = resolve_play_request(
@@ -1063,7 +1108,7 @@ impl SessionManager {
               } else {
                 Self::update_state_from_property(&state, &event);
                 if property_name == "time-pos" {
-                  Self::apply_intro_skipper(&state, &action_tx, &config, &event).await;
+                  Self::apply_intro_skipper(&state, &action_tx, &event).await;
                 }
 
                 let now = std::time::Instant::now();
@@ -1129,10 +1174,14 @@ impl SessionManager {
   async fn apply_intro_skipper(
     state: &RwLock<SessionState>,
     action_tx: &mpsc::Sender<MpvAction>,
-    config: &RwLock<AppConfig>,
     event: &crate::mpv::MpvEvent,
   ) {
-    if !config.read().intro_skipper_enabled {
+    let intro_skipper_config = {
+      let state = state.read();
+      state.effective_intro_skipper_config.clone()
+    };
+
+    if intro_skipper_config.mode == IntroSkipperMode::Off {
       return;
     }
 
@@ -1144,20 +1193,46 @@ impl SessionManager {
       return;
     };
 
-    let seek_target = {
-      let mut s = state.write();
-      s.playback
-        .as_mut()
-        .and_then(|playback| evaluate_skip(position_seconds, &mut playback.intro_skipper_ranges))
-    };
+    match intro_skipper_config.mode {
+      IntroSkipperMode::Automatic => {
+        let seek_target = {
+          let mut s = state.write();
+          s.playback.as_mut().and_then(|playback| {
+            evaluate_skip(position_seconds, &mut playback.intro_skipper_ranges)
+          })
+        };
 
-    if let Some(seek_target) = seek_target {
-      log::info!(
-        "Intro Skipper seeking from {:.3}s to {:.3}s",
-        position_seconds,
-        seek_target
-      );
-      let _ = action_tx.send(MpvAction::Seek(seek_target)).await;
+        if let Some(seek_target) = seek_target {
+          log::info!(
+            "Intro Skipper seeking from {:.3}s to {:.3}s",
+            position_seconds,
+            seek_target
+          );
+          let _ = action_tx.send(MpvAction::Seek(seek_target)).await;
+        }
+      }
+      IntroSkipperMode::Manual => {
+        let prompt_kind = {
+          let mut s = state.write();
+          s.playback.as_mut().and_then(|playback| {
+            evaluate_skip_prompt(position_seconds, &mut playback.intro_skipper_ranges)
+          })
+        };
+
+        if let Some(kind) = prompt_kind {
+          let _ = action_tx
+            .send(MpvAction::ShowText {
+              text: format!(
+                "{} available - press {} to skip",
+                intro_skipper_label(kind),
+                intro_skipper_config.keybind_intro_skip
+              ),
+              duration_ms: 3000,
+            })
+            .await;
+        }
+      }
+      IntroSkipperMode::Off => {}
     }
   }
 
@@ -1249,6 +1324,11 @@ impl SessionManager {
       _ => return,
     };
 
+    if args[0] == "jmsr-skip-intro" {
+      Self::handle_manual_intro_skip(state, action_tx).await;
+      return;
+    }
+
     let Some(direction) = client_message_direction(args) else {
       log::debug!("Unknown client-message command: {}", args[0]);
       return;
@@ -1273,6 +1353,48 @@ impl SessionManager {
       Self::play_adjacent_episode(client, state, action_tx, config, &item, next, true).await
     {
       log::warn!("Keyboard shortcut {} unavailable: {}", args[0], e);
+    }
+  }
+
+  async fn handle_manual_intro_skip(
+    state: &RwLock<SessionState>,
+    action_tx: &mpsc::Sender<MpvAction>,
+  ) {
+    if state.read().effective_intro_skipper_config.mode != IntroSkipperMode::Manual {
+      let _ = action_tx
+        .send(MpvAction::ShowText {
+          text: "No intro or credits to skip".to_string(),
+          duration_ms: 1200,
+        })
+        .await;
+      return;
+    }
+
+    let decision = {
+      let mut s = state.write();
+      s.playback.as_mut().and_then(|playback| {
+        evaluate_manual_skip(
+          ticks_to_seconds(playback.position_ticks),
+          &mut playback.intro_skipper_ranges,
+        )
+      })
+    };
+
+    if let Some(decision) = decision {
+      let _ = action_tx.send(MpvAction::Seek(decision.seek_target)).await;
+      let _ = action_tx
+        .send(MpvAction::ShowText {
+          text: format!("Skipped {}", intro_skipper_label_lower(decision.kind)),
+          duration_ms: 1500,
+        })
+        .await;
+    } else {
+      let _ = action_tx
+        .send(MpvAction::ShowText {
+          text: "No intro or credits to skip".to_string(),
+          duration_ms: 1200,
+        })
+        .await;
     }
   }
 
@@ -1349,7 +1471,7 @@ impl SessionManager {
           subtitle_stream_index: None,
         };
 
-        Self::handle_play(client, state, action_tx, config, play_request)
+        Self::handle_play(client, state, action_tx, true, config, play_request)
           .await
           .map_err(|e| {
             log::error!(
@@ -1474,6 +1596,20 @@ fn parse_command_int(value: Option<&serde_json::Value>) -> Option<i64> {
   })
 }
 
+fn intro_skipper_label(kind: IntroSkipKind) -> &'static str {
+  match kind {
+    IntroSkipKind::Introduction => "Intro",
+    IntroSkipKind::Credits => "Credits",
+  }
+}
+
+fn intro_skipper_label_lower(kind: IntroSkipKind) -> &'static str {
+  match kind {
+    IntroSkipKind::Introduction => "intro",
+    IntroSkipKind::Credits => "credits",
+  }
+}
+
 /// Convert Jellyfin stream index to MPV track index.
 /// Jellyfin uses absolute indices across all streams (video, audio, subtitle combined).
 /// MPV uses 1-based indices within each track type (audio, subtitle).
@@ -1535,6 +1671,7 @@ mod tests {
           kind,
           start_seconds,
           end_seconds,
+          notified: false,
           skipped: false,
         }],
         position_ticks: 0,
@@ -1545,6 +1682,7 @@ mod tests {
         subtitle_stream_index: None,
       }),
       last_report_time: std::time::Instant::now(),
+      effective_intro_skipper_config: IntroSkipperRuntimeConfig::from(&AppConfig::default()),
       current_series_id: None,
       current_item: None,
       current_media_streams: Vec::new(),
@@ -1556,7 +1694,6 @@ mod tests {
   async fn time_pos_update_inside_intro_range_emits_seek_action() {
     let state = test_state_with_intro_range();
     let (action_tx, mut action_rx) = mpsc::channel(1);
-    let config = RwLock::new(AppConfig::default());
     let event = crate::mpv::MpvEvent {
       event: "property-change".to_string(),
       id: Some(4),
@@ -1566,7 +1703,7 @@ mod tests {
       args: None,
     };
 
-    SessionManager::apply_intro_skipper(&state, &action_tx, &config, &event).await;
+    SessionManager::apply_intro_skipper(&state, &action_tx, &event).await;
 
     assert!(matches!(
       action_rx.recv().await,
@@ -1578,7 +1715,6 @@ mod tests {
   async fn time_pos_update_inside_already_skipped_range_emits_no_second_seek() {
     let state = test_state_with_intro_range();
     let (action_tx, mut action_rx) = mpsc::channel(2);
-    let config = RwLock::new(AppConfig::default());
     let event = crate::mpv::MpvEvent {
       event: "property-change".to_string(),
       id: Some(4),
@@ -1588,13 +1724,13 @@ mod tests {
       args: None,
     };
 
-    SessionManager::apply_intro_skipper(&state, &action_tx, &config, &event).await;
+    SessionManager::apply_intro_skipper(&state, &action_tx, &event).await;
     assert!(matches!(
       action_rx.recv().await,
       Some(MpvAction::Seek(80.0))
     ));
 
-    SessionManager::apply_intro_skipper(&state, &action_tx, &config, &event).await;
+    SessionManager::apply_intro_skipper(&state, &action_tx, &event).await;
 
     assert!(action_rx.try_recv().is_err());
   }
@@ -1603,7 +1739,6 @@ mod tests {
   async fn time_pos_update_inside_credit_range_emits_seek_not_next_episode_action() {
     let state = test_state_with_range(IntroSkipKind::Credits, 1200.0, 1260.0);
     let (action_tx, mut action_rx) = mpsc::channel(1);
-    let config = RwLock::new(AppConfig::default());
     let event = crate::mpv::MpvEvent {
       event: "property-change".to_string(),
       id: Some(4),
@@ -1613,7 +1748,7 @@ mod tests {
       args: None,
     };
 
-    SessionManager::apply_intro_skipper(&state, &action_tx, &config, &event).await;
+    SessionManager::apply_intro_skipper(&state, &action_tx, &event).await;
 
     assert!(matches!(
       action_rx.recv().await,
@@ -1626,13 +1761,13 @@ mod tests {
     let state = RwLock::new(SessionState {
       playback: None,
       last_report_time: std::time::Instant::now(),
+      effective_intro_skipper_config: IntroSkipperRuntimeConfig::from(&AppConfig::default()),
       current_series_id: None,
       current_item: None,
       current_media_streams: Vec::new(),
       series_preferences: HashMap::new(),
     });
     let (action_tx, mut action_rx) = mpsc::channel(1);
-    let config = RwLock::new(AppConfig::default());
     let event = crate::mpv::MpvEvent {
       event: "property-change".to_string(),
       id: Some(4),
@@ -1642,7 +1777,7 @@ mod tests {
       args: None,
     };
 
-    SessionManager::apply_intro_skipper(&state, &action_tx, &config, &event).await;
+    SessionManager::apply_intro_skipper(&state, &action_tx, &event).await;
 
     assert!(action_rx.try_recv().is_err());
   }
@@ -1652,10 +1787,10 @@ mod tests {
     let state = test_state_with_intro_range();
     let (action_tx, mut action_rx) = mpsc::channel(1);
     let config = AppConfig {
-      intro_skipper_enabled: false,
+      intro_skipper_mode: IntroSkipperMode::Off,
       ..Default::default()
     };
-    let config = RwLock::new(config);
+    state.write().effective_intro_skipper_config = IntroSkipperRuntimeConfig::from(&config);
     let event = crate::mpv::MpvEvent {
       event: "property-change".to_string(),
       id: Some(4),
@@ -1665,9 +1800,85 @@ mod tests {
       args: None,
     };
 
-    SessionManager::apply_intro_skipper(&state, &action_tx, &config, &event).await;
+    SessionManager::apply_intro_skipper(&state, &action_tx, &event).await;
 
     assert!(action_rx.try_recv().is_err());
+  }
+
+  #[tokio::test]
+  async fn manual_intro_skipper_time_pos_emits_prompt_without_seek() {
+    let state = test_state_with_intro_range();
+    let (action_tx, mut action_rx) = mpsc::channel(1);
+    let config = AppConfig {
+      intro_skipper_mode: IntroSkipperMode::Manual,
+      keybind_intro_skip: "g".to_string(),
+      ..Default::default()
+    };
+    state.write().effective_intro_skipper_config = IntroSkipperRuntimeConfig::from(&config);
+    let event = crate::mpv::MpvEvent {
+      event: "property-change".to_string(),
+      id: Some(4),
+      name: Some("time-pos".to_string()),
+      data: Some(serde_json::json!(10.0)),
+      reason: None,
+      args: None,
+    };
+
+    SessionManager::apply_intro_skipper(&state, &action_tx, &event).await;
+
+    assert!(matches!(
+      action_rx.recv().await,
+      Some(MpvAction::ShowText { text, duration_ms: 3000 })
+        if text == "Intro available - press g to skip"
+    ));
+    assert!(action_rx.try_recv().is_err());
+  }
+
+  #[tokio::test]
+  async fn manual_intro_skip_shortcut_emits_seek_and_confirmation() {
+    let state = test_state_with_intro_range();
+    {
+      let mut s = state.write();
+      let playback = s.playback.as_mut().unwrap();
+      playback.position_ticks = seconds_to_ticks(10.0);
+    }
+    let (action_tx, mut action_rx) = mpsc::channel(2);
+    let config = AppConfig {
+      intro_skipper_mode: IntroSkipperMode::Manual,
+      ..Default::default()
+    };
+    state.write().effective_intro_skipper_config = IntroSkipperRuntimeConfig::from(&config);
+
+    SessionManager::handle_manual_intro_skip(&state, &action_tx).await;
+
+    assert!(matches!(
+      action_rx.recv().await,
+      Some(MpvAction::Seek(80.0))
+    ));
+    assert!(matches!(
+      action_rx.recv().await,
+      Some(MpvAction::ShowText { text, duration_ms: 1500 })
+        if text == "Skipped intro"
+    ));
+  }
+
+  #[tokio::test]
+  async fn manual_intro_skip_shortcut_without_active_range_shows_unavailable_message() {
+    let state = test_state_with_intro_range();
+    let (action_tx, mut action_rx) = mpsc::channel(1);
+    let config = AppConfig {
+      intro_skipper_mode: IntroSkipperMode::Manual,
+      ..Default::default()
+    };
+    state.write().effective_intro_skipper_config = IntroSkipperRuntimeConfig::from(&config);
+
+    SessionManager::handle_manual_intro_skip(&state, &action_tx).await;
+
+    assert!(matches!(
+      action_rx.recv().await,
+      Some(MpvAction::ShowText { text, duration_ms: 1200 })
+        if text == "No intro or credits to skip"
+    ));
   }
 
   #[tokio::test]
@@ -1675,10 +1886,10 @@ mod tests {
     let state = test_state_with_range(IntroSkipKind::Credits, 1200.0, 1260.0);
     let (action_tx, mut action_rx) = mpsc::channel(1);
     let config = AppConfig {
-      intro_skipper_enabled: false,
+      intro_skipper_mode: IntroSkipperMode::Off,
       ..Default::default()
     };
-    let config = RwLock::new(config);
+    state.write().effective_intro_skipper_config = IntroSkipperRuntimeConfig::from(&config);
     let event = crate::mpv::MpvEvent {
       event: "property-change".to_string(),
       id: Some(4),
@@ -1688,7 +1899,7 @@ mod tests {
       args: None,
     };
 
-    SessionManager::apply_intro_skipper(&state, &action_tx, &config, &event).await;
+    SessionManager::apply_intro_skipper(&state, &action_tx, &event).await;
 
     assert!(action_rx.try_recv().is_err());
   }
@@ -1833,6 +2044,7 @@ mod regression_tests {
         subtitle_stream_index: None,
       }),
       last_report_time: std::time::Instant::now(),
+      effective_intro_skipper_config: IntroSkipperRuntimeConfig::from(&AppConfig::default()),
       current_series_id: None,
       current_item: None,
       current_media_streams: Vec::new(),
