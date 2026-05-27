@@ -1,10 +1,8 @@
 import { Collapsible } from '@ark-ui/solid/collapsible';
+import { createListCollection } from '@ark-ui/solid/collection';
 import { Dialog } from '@ark-ui/solid/dialog';
 import { Field as ArkField } from '@ark-ui/solid/field';
-import {
-  createListCollection as createSelectListCollection,
-  Select,
-} from '@ark-ui/solid/select';
+import { Select } from '@ark-ui/solid/select';
 import { TagsInput } from '@ark-ui/solid/tags-input';
 import { createForm } from '@tanstack/solid-form';
 import { Effect, Exit } from 'effect';
@@ -161,7 +159,7 @@ export default function OperationsConsole(props: OperationsConsoleProps) {
   const [selectedSubtitleLanguages, setSelectedSubtitleLanguages] =
     createSignal<string[]>([]);
   const [subtitleLanguageInput, setSubtitleLanguageInput] = createSignal('');
-  const subtitleLanguageSelectCollection = createSelectListCollection({
+  const subtitleLanguageSelectCollection = createListCollection({
     items: COMMON_SUBTITLE_LANGUAGE_OPTIONS.map((option) => ({
       value: option.code,
       label: `${option.code} — ${option.label}`,
@@ -828,26 +826,22 @@ export default function OperationsConsole(props: OperationsConsoleProps) {
                             </Select.Indicator>
                           </Select.Trigger>
                         </Select.Control>
-                        <Portal>
-                          <Select.Positioner>
-                            <Select.Content class="mt-2 rounded-2xl border border-outline-variant bg-surface-container-lowest p-2 shadow-lg shadow-black/30">
-                              <For
-                                each={subtitleLanguageSelectCollection.items}
-                              >
-                                {(item) => (
-                                  <Select.Item
-                                    item={item}
-                                    class="flex cursor-pointer items-center justify-between rounded-xl px-3 py-2 text-body-small text-on-surface-variant hover:bg-surface-container-high"
-                                  >
-                                    <Select.ItemText>
-                                      {item.label}
-                                    </Select.ItemText>
-                                  </Select.Item>
-                                )}
-                              </For>
-                            </Select.Content>
-                          </Select.Positioner>
-                        </Portal>
+                        <Select.Positioner>
+                          <Select.Content class="mt-2 rounded-2xl border border-outline-variant bg-surface-container-lowest p-2 shadow-lg shadow-black/30">
+                            <For each={subtitleLanguageSelectCollection.items}>
+                              {(item) => (
+                                <Select.Item
+                                  item={item}
+                                  class="flex cursor-pointer items-center justify-between rounded-xl px-3 py-2 text-body-small text-on-surface-variant hover:bg-surface-container-high"
+                                >
+                                  <Select.ItemText>
+                                    {item.label}
+                                  </Select.ItemText>
+                                </Select.Item>
+                              )}
+                            </For>
+                          </Select.Content>
+                        </Select.Positioner>
                         <Select.HiddenSelect />
                       </Select.Root>
 
