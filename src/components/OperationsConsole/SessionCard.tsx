@@ -1,29 +1,29 @@
 import { Dialog } from '@ark-ui/solid/dialog';
 import { LogOut, ShieldAlert } from 'lucide-solid';
 import { Portal } from 'solid-js/web';
+import { useOperationsConsoleStore } from './store';
 
 interface SessionCardProps {
-  open: boolean;
-  signingOut: boolean;
-  onOpenChange: (open: boolean) => void;
   onSignOut: () => void;
 }
 
 export default function SessionCard(props: SessionCardProps) {
+  const [ui, actions] = useOperationsConsoleStore();
+
   return (
     <Dialog.Root
-      open={props.open}
+      open={ui.confirmSignOut}
       onOpenChange={(details) => {
-        if (props.signingOut && !details.open) return;
-        props.onOpenChange(details.open);
+        if (ui.signingOut && !details.open) return;
+        actions.setSignOutDialogOpen(details.open);
       }}
-      closeOnEscape={!props.signingOut}
-      closeOnInteractOutside={!props.signingOut}
+      closeOnEscape={!ui.signingOut}
+      closeOnInteractOutside={!ui.signingOut}
       onEscapeKeyDown={() => {
-        if (!props.signingOut) props.onOpenChange(false);
+        if (!ui.signingOut) actions.setSignOutDialogOpen(false);
       }}
       onInteractOutside={() => {
-        if (!props.signingOut) props.onOpenChange(false);
+        if (!ui.signingOut) actions.setSignOutDialogOpen(false);
       }}
       lazyMount
       unmountOnExit
@@ -50,15 +50,15 @@ export default function SessionCard(props: SessionCardProps) {
         <Dialog.Backdrop
           class="fixed inset-0 z-50 bg-black/60"
           onClick={() => {
-            if (!props.signingOut) props.onOpenChange(false);
+            if (!ui.signingOut) actions.setSignOutDialogOpen(false);
           }}
         />
         <Dialog.Positioner class="fixed inset-0 z-50 flex items-center justify-center p-4">
           <Dialog.Content
             class="card-elevated max-w-md"
             onKeyDown={(event) => {
-              if (event.key === 'Escape' && !props.signingOut) {
-                props.onOpenChange(false);
+              if (event.key === 'Escape' && !ui.signingOut) {
+                actions.setSignOutDialogOpen(false);
               }
             }}
           >
@@ -76,8 +76,8 @@ export default function SessionCard(props: SessionCardProps) {
               <button
                 type="button"
                 class="btn-secondary"
-                onClick={() => props.onOpenChange(false)}
-                disabled={props.signingOut}
+                onClick={() => actions.setSignOutDialogOpen(false)}
+                disabled={ui.signingOut}
               >
                 Cancel
               </button>
@@ -85,9 +85,9 @@ export default function SessionCard(props: SessionCardProps) {
                 type="button"
                 class="btn-outlined border-error/60 text-error hover:bg-error/10"
                 onClick={props.onSignOut}
-                disabled={props.signingOut}
+                disabled={ui.signingOut}
               >
-                {props.signingOut ? 'Signing out...' : 'Sign out'}
+                {ui.signingOut ? 'Signing out...' : 'Sign out'}
               </button>
             </div>
           </Dialog.Content>

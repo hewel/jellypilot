@@ -6,6 +6,7 @@ import { TagsInput } from '@ark-ui/solid/tags-input';
 import { ChevronDown, Settings } from 'lucide-solid';
 import { For, Show } from 'solid-js';
 import { SectionCard } from '../ui';
+import { useOperationsConsoleStore } from './store';
 import {
   getSubtitleLanguageLabel,
   parseSubtitleLanguageInput,
@@ -14,11 +15,6 @@ import type { OperationsConsoleForm } from './types';
 
 interface PlayerBridgeSettingsCardProps {
   form: OperationsConsoleForm;
-  saveStatus: { type: 'saving' | 'saved' | 'error'; text: string } | null;
-  detectingMpv: boolean;
-  advancedOpen: boolean;
-  selectedSubtitleLanguages: string[];
-  subtitleLanguageInput: string;
   subtitleLanguageSelectCollection: ListCollection<{
     value: string;
     label: string;
@@ -28,24 +24,24 @@ interface PlayerBridgeSettingsCardProps {
     value: string,
   ) => void;
   onDetectMpv: () => void;
-  onAdvancedOpenChange: (open: boolean) => void;
   onAddSubtitleLanguageCodes: (codes: string[]) => void;
   onAddSubtitleLanguages: () => void;
   onRemoveSubtitleLanguage: (language: string) => void;
   onClearSubtitleLanguages: () => void;
   onMoveSubtitleLanguage: (index: number, direction: -1 | 1) => void;
-  onSubtitleLanguageInputChange: (value: string) => void;
 }
 
 export default function PlayerBridgeSettingsCard(
   props: PlayerBridgeSettingsCardProps,
 ) {
+  const [ui, actions] = useOperationsConsoleStore();
+
   return (
     <SectionCard
       icon={<Settings class="h-6 w-6" />}
       title="Player Bridge settings"
       trailing={
-        <Show when={props.saveStatus}>
+        <Show when={ui.playerBridgeSaveStatus}>
           {(status) => (
             <span
               class={`text-label-small font-semibold ${status().type === 'error' ? 'text-error' : 'text-secondary'}`}
@@ -130,10 +126,10 @@ export default function PlayerBridgeSettingsCard(
                 <button
                   type="button"
                   onClick={props.onDetectMpv}
-                  disabled={props.detectingMpv}
+                  disabled={ui.detectingMpv}
                   class="btn-secondary"
                 >
-                  {props.detectingMpv ? 'Detecting...' : 'Detect MPV'}
+                  {ui.detectingMpv ? 'Detecting...' : 'Detect MPV'}
                 </button>
               </div>
             </ArkField.Root>
@@ -141,15 +137,15 @@ export default function PlayerBridgeSettingsCard(
         </props.form.Field>
 
         <Collapsible.Root
-          open={props.advancedOpen}
-          onOpenChange={(details) => props.onAdvancedOpenChange(details.open)}
+          open={ui.advancedOpen}
+          onOpenChange={(details) => actions.setAdvancedOpen(details.open)}
           lazyMount
           unmountOnExit
         >
           <Collapsible.Trigger class="btn-text px-0">
             <Collapsible.Indicator>
               <ChevronDown
-                class={`h-5 w-5 transition-transform ${props.advancedOpen ? 'rotate-180' : ''}`}
+                class={`h-5 w-5 transition-transform ${ui.advancedOpen ? 'rotate-180' : ''}`}
               />
             </Collapsible.Indicator>
             Advanced MPV options
@@ -193,7 +189,7 @@ export default function PlayerBridgeSettingsCard(
           </Collapsible.Content>
         </Collapsible.Root>
         <TagsInput.Root
-          value={props.selectedSubtitleLanguages}
+          value={ui.selectedSubtitleLanguages}
           inputValue=""
           editable={false}
           class="rounded-2xl bg-surface-container-high p-4"
@@ -207,7 +203,7 @@ export default function PlayerBridgeSettingsCard(
                 Add Jellyfin language codes in fallback priority order.
               </p>
             </div>
-            <Show when={props.selectedSubtitleLanguages.length > 0}>
+            <Show when={ui.selectedSubtitleLanguages.length > 0}>
               <button
                 type="button"
                 class="btn-text min-w-0 px-3"
@@ -272,11 +268,9 @@ export default function PlayerBridgeSettingsCard(
                 <input
                   id="custom-subtitle-lang-input"
                   type="text"
-                  value={props.subtitleLanguageInput}
+                  value={ui.subtitleLanguageInput}
                   onInput={(event) =>
-                    props.onSubtitleLanguageInputChange(
-                      event.currentTarget.value,
-                    )
+                    actions.setSubtitleLanguageInput(event.currentTarget.value)
                   }
                   onKeyDown={(event) => {
                     if (event.key !== 'Enter') return;
@@ -291,7 +285,7 @@ export default function PlayerBridgeSettingsCard(
                   type="button"
                   class="inline-flex h-14 min-w-[5.5rem] items-center justify-center rounded-2xl bg-secondary-container px-4 text-[14px] leading-[20px] font-semibold text-on-secondary-container transition duration-200 hover:bg-secondary-container/80 active:scale-[0.98] disabled:pointer-events-none disabled:opacity-50"
                   disabled={
-                    parseSubtitleLanguageInput(props.subtitleLanguageInput)
+                    parseSubtitleLanguageInput(ui.subtitleLanguageInput)
                       .length === 0
                   }
                   onClick={props.onAddSubtitleLanguages}
@@ -303,7 +297,7 @@ export default function PlayerBridgeSettingsCard(
           </div>
 
           <Show
-            when={props.selectedSubtitleLanguages.length > 0}
+            when={ui.selectedSubtitleLanguages.length > 0}
             fallback={
               <p class="mt-4 rounded-2xl border border-dashed border-outline-variant px-4 py-3 text-body-small text-on-surface-variant">
                 No preferred subtitle languages selected. JMSR will use Jellyfin
@@ -315,7 +309,7 @@ export default function PlayerBridgeSettingsCard(
               class="mt-4 flex flex-wrap gap-2"
               aria-label="Selected preferred subtitle languages"
             >
-              <For each={props.selectedSubtitleLanguages}>
+              <For each={ui.selectedSubtitleLanguages}>
                 {(language, index) => (
                   <TagsInput.Item
                     index={index()}
@@ -346,7 +340,7 @@ export default function PlayerBridgeSettingsCard(
                       type="button"
                       class="btn-text min-w-0 px-1"
                       disabled={
-                        index() === props.selectedSubtitleLanguages.length - 1
+                        index() === ui.selectedSubtitleLanguages.length - 1
                       }
                       aria-label={`Move ${language} down`}
                       onClick={() => props.onMoveSubtitleLanguage(index(), 1)}

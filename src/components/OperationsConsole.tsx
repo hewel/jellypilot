@@ -2,7 +2,6 @@ import { createListCollection } from '@ark-ui/solid/collection';
 import { createForm } from '@tanstack/solid-form';
 import { Effect, Exit } from 'effect';
 import { createEffect, createResource } from 'solid-js';
-import { createStore } from 'solid-js/store';
 import {
   type AppConfig,
   type ConnectionState,
@@ -27,6 +26,7 @@ import IntroSkipCard from './OperationsConsole/IntroSkipCard';
 import PlayerBridgeSettingsCard from './OperationsConsole/PlayerBridgeSettingsCard';
 import SessionCard from './OperationsConsole/SessionCard';
 import ShortcutKeysCard from './OperationsConsole/ShortcutKeysCard';
+import { createOperationsConsoleStore } from './OperationsConsole/store';
 import {
   normalizePreferredSubtitleLanguages,
   parseSubtitleLanguageInput,
@@ -36,27 +36,6 @@ import { PageFooter } from './ui';
 
 interface OperationsConsoleProps {
   onSignedOut: () => void;
-}
-
-type PlayerBridgeSaveStatus = {
-  type: 'saving' | 'saved' | 'error';
-  text: string;
-};
-
-interface OperationsConsoleState {
-  disconnecting: boolean;
-  reconnecting: boolean;
-  signingOut: boolean;
-  confirmSignOut: boolean;
-  detectingMpv: boolean;
-  advancedOpen: boolean;
-  diagnosticsExpanded: boolean;
-  playerBridgeSaveStatus: PlayerBridgeSaveStatus | null;
-  introSkipperDraft: IntroSkipperMode | null;
-  introSkipperSaving: boolean;
-  introSkipperError: string | null;
-  selectedSubtitleLanguages: string[];
-  subtitleLanguageInput: string;
 }
 
 async function fetchConnectionState(): Promise<ConnectionState> {
@@ -69,6 +48,8 @@ async function fetchMpvStatus(): Promise<boolean> {
 
 export default function OperationsConsole(props: OperationsConsoleProps) {
   const { showToast } = useToast();
+  const { state: ui, actions, Provider } = createOperationsConsoleStore();
+
   let configHydrated = false;
   type PendingSave = {
     config: AppConfig;
@@ -81,21 +62,6 @@ export default function OperationsConsole(props: OperationsConsoleProps) {
   let latestConfigSnapshot: AppConfig | null = null;
   let clearPlayerBridgeStatusTimer: ReturnType<typeof setTimeout> | null = null;
 
-  const [ui, setUi] = createStore<OperationsConsoleState>({
-    disconnecting: false,
-    reconnecting: false,
-    signingOut: false,
-    confirmSignOut: false,
-    detectingMpv: false,
-    advancedOpen: false,
-    diagnosticsExpanded: false,
-    playerBridgeSaveStatus: null,
-    introSkipperDraft: null,
-    introSkipperSaving: false,
-    introSkipperError: null,
-    selectedSubtitleLanguages: [],
-    subtitleLanguageInput: '',
-  });
   const subtitleLanguageSelectCollection = createListCollection({
     items: [
       { code: 'eng', label: 'English' },
@@ -152,15 +118,17 @@ export default function OperationsConsole(props: OperationsConsoleProps) {
       form.setFieldValue('keybindNext', cfg.keybindNext ?? 'Shift+>');
       form.setFieldValue('keybindPrev', cfg.keybindPrev ?? 'Shift+<');
       form.setFieldValue('keybindIntroSkip', cfg.keybindIntroSkip ?? 'g');
-      setUi(
-        'selectedSubtitleLanguages',
-        normalizePreferredSubtitleLanguages(cfg.preferredSubtitleLanguages),
-      );
+      actions.hydrateFromConfig({
+        preferredSubtitleLanguages: normalizePreferredSubtitleLanguages(
+          cfg.preferredSubtitleLanguages,
+        ),
+        introSkipperMode: cfg.introSkipperMode ?? 'automatic',
+        mpvArgs: cfg.mpvArgs,
+      });
       form.setFieldValue(
         'introSkipperMode',
         cfg.introSkipperMode ?? 'automatic',
       );
-      if ((cfg.mpvArgs?.length ?? 0) > 0) setUi('advancedOpen', true);
       configHydrated = true;
     }
   });
@@ -169,6 +137,7 @@ export default function OperationsConsole(props: OperationsConsoleProps) {
   const config = () => initialConfig();
   const introSkipperMode = () =>
     ui.introSkipperDraft ?? config()?.introSkipperMode ?? 'automatic';
+
   const showPlayerBridgeStatus = (
     type: 'saving' | 'saved' | 'error',
     text: string,
@@ -177,10 +146,10 @@ export default function OperationsConsole(props: OperationsConsoleProps) {
       clearTimeout(clearPlayerBridgeStatusTimer);
       clearPlayerBridgeStatusTimer = null;
     }
-    setUi('playerBridgeSaveStatus', { type, text });
+    actions.showPlayerBridgeStatus({ type, text });
     if (type === 'saved') {
       clearPlayerBridgeStatusTimer = setTimeout(
-        () => setUi('playerBridgeSaveStatus', null),
+        () => actions.clearPlayerBridgeStatus(),
         3000,
       );
     }
@@ -319,18 +288,13 @@ export default function OperationsConsole(props: OperationsConsoleProps) {
     const desired = latestConfigSnapshot ?? lastSavedConfig ?? config();
     if (desired?.introSkipperMode === mode) return;
 
-    setUi('introSkipperDraft', mode);
-    setUi('introSkipperSaving', true);
-    setUi('introSkipperError', null);
+    actions.beginIntroSkipperSave(mode);
     queueConfigSave(buildConfigSnapshot({ introSkipperMode: mode }), {
       onSuccess: () => {
-        setUi('introSkipperDraft', null);
-        setUi('introSkipperSaving', false);
+        actions.finishIntroSkipperSave();
       },
       onError: (message) => {
-        setUi('introSkipperDraft', previous);
-        setUi('introSkipperSaving', false);
-        setUi('introSkipperError', message);
+        actions.failIntroSkipperSave(previous, message);
         form.setFieldValue('introSkipperMode', previous);
       },
     });
@@ -350,9 +314,9 @@ export default function OperationsConsole(props: OperationsConsoleProps) {
       next.push(code);
     }
 
-    setUi('selectedSubtitleLanguages', next);
+    actions.setPreferredSubtitleLanguages(next);
     savePreferredSubtitleLanguages(next);
-    setUi('subtitleLanguageInput', '');
+    actions.setSubtitleLanguageInput('');
   };
 
   const addPreferredSubtitleLanguages = () => {
@@ -364,12 +328,12 @@ export default function OperationsConsole(props: OperationsConsoleProps) {
     const next = ui.selectedSubtitleLanguages.filter(
       (selected) => selected !== language,
     );
-    setUi('selectedSubtitleLanguages', next);
+    actions.setPreferredSubtitleLanguages(next);
     savePreferredSubtitleLanguages(next);
   };
 
   const clearPreferredSubtitleLanguages = () => {
-    setUi('selectedSubtitleLanguages', []);
+    actions.setPreferredSubtitleLanguages([]);
     savePreferredSubtitleLanguages([]);
   };
 
@@ -380,7 +344,7 @@ export default function OperationsConsole(props: OperationsConsoleProps) {
 
     const next = [...current];
     [next[index], next[target]] = [next[target], next[index]];
-    setUi('selectedSubtitleLanguages', next);
+    actions.setPreferredSubtitleLanguages(next);
     savePreferredSubtitleLanguages(next);
   };
 
@@ -397,7 +361,7 @@ export default function OperationsConsole(props: OperationsConsoleProps) {
       return;
     }
 
-    setUi('reconnecting', true);
+    actions.beginReconnect();
     try {
       if (await restoreSavedSession()) {
         showToast('success', 'Reconnected to Jellyfin');
@@ -407,12 +371,12 @@ export default function OperationsConsole(props: OperationsConsoleProps) {
         props.onSignedOut();
       }
     } finally {
-      setUi('reconnecting', false);
+      actions.finishReconnect();
     }
   };
 
   const handleDisconnect = async () => {
-    setUi('disconnecting', true);
+    actions.beginDisconnect();
     const exit = await Effect.runPromiseExit(
       runTauriCommand(() => commands.jellyfinDisconnect()),
     );
@@ -425,11 +389,11 @@ export default function OperationsConsole(props: OperationsConsoleProps) {
         commandFailureMessage(exit.cause, 'Disconnect failed'),
       );
     }
-    setUi('disconnecting', false);
+    actions.finishDisconnect();
   };
 
   const handleSignOut = async () => {
-    setUi('signingOut', true);
+    actions.beginSignOut();
     const exit = await Effect.runPromiseExit(
       runTauriCommand(() => commands.jellyfinClearSession()),
     );
@@ -439,12 +403,11 @@ export default function OperationsConsole(props: OperationsConsoleProps) {
     } else {
       showToast('error', commandFailureMessage(exit.cause, 'Sign out failed'));
     }
-    setUi('signingOut', false);
-    setUi('confirmSignOut', false);
+    actions.finishSignOut();
   };
 
   const handleDetectMpv = async () => {
-    setUi('detectingMpv', true);
+    actions.beginMpvDetection();
     const exit = await Effect.runPromiseExit(detectMpv());
     if (Exit.isSuccess(exit)) {
       const path = exit.value;
@@ -465,7 +428,7 @@ export default function OperationsConsole(props: OperationsConsoleProps) {
       );
       showToast('error', 'Failed to detect MPV');
     }
-    setUi('detectingMpv', false);
+    actions.finishMpvDetection();
   };
 
   const handleIntroSkipperModeChange = (mode: IntroSkipperMode) => {
@@ -474,83 +437,67 @@ export default function OperationsConsole(props: OperationsConsoleProps) {
   };
 
   return (
-    <div class="console-shell">
-      <div class="console-container">
-        <div class="console-grid">
-          <div class="space-y-6">
-            <ConnectionCard
-              state={state()}
-              disconnecting={ui.disconnecting}
-              reconnecting={ui.reconnecting}
-              canReconnect={!!loadSavedSession()}
-              onDisconnect={handleDisconnect}
-              onReconnect={handleReconnect}
-              onRefresh={handleRefresh}
-            />
-
-            <NowPlayingCard
-              jellyfinConnected={state()?.connected ?? false}
-              onPlayerStarted={() => refetchMpv()}
-            />
-            <form class="space-y-6">
-              <PlayerBridgeSettingsCard
-                form={form}
-                saveStatus={ui.playerBridgeSaveStatus}
-                detectingMpv={ui.detectingMpv}
-                advancedOpen={ui.advancedOpen}
-                selectedSubtitleLanguages={ui.selectedSubtitleLanguages}
-                subtitleLanguageInput={ui.subtitleLanguageInput}
-                subtitleLanguageSelectCollection={
-                  subtitleLanguageSelectCollection
-                }
-                onSaveTextSetting={(field, value) => {
-                  if (
-                    field === 'deviceName' ||
-                    field === 'mpvPath' ||
-                    field === 'mpvArgs'
-                  ) {
-                    saveTextSetting(field, value);
-                  }
-                }}
-                onDetectMpv={handleDetectMpv}
-                onAdvancedOpenChange={(open) => setUi('advancedOpen', open)}
-                onAddSubtitleLanguageCodes={addPreferredSubtitleLanguageCodes}
-                onAddSubtitleLanguages={addPreferredSubtitleLanguages}
-                onRemoveSubtitleLanguage={removePreferredSubtitleLanguage}
-                onClearSubtitleLanguages={clearPreferredSubtitleLanguages}
-                onMoveSubtitleLanguage={movePreferredSubtitleLanguage}
-                onSubtitleLanguageInputChange={(value) =>
-                  setUi('subtitleLanguageInput', value)
-                }
+    <Provider>
+      <div class="console-shell">
+        <div class="console-container">
+          <div class="console-grid">
+            <div class="space-y-6">
+              <ConnectionCard
+                state={state()}
+                canReconnect={!!loadSavedSession()}
+                onDisconnect={handleDisconnect}
+                onReconnect={handleReconnect}
+                onRefresh={handleRefresh}
               />
-            </form>
+
+              <NowPlayingCard
+                jellyfinConnected={state()?.connected ?? false}
+                onPlayerStarted={() => refetchMpv()}
+              />
+              <form class="space-y-6">
+                <PlayerBridgeSettingsCard
+                  form={form}
+                  subtitleLanguageSelectCollection={
+                    subtitleLanguageSelectCollection
+                  }
+                  onSaveTextSetting={(field, value) => {
+                    if (
+                      field === 'deviceName' ||
+                      field === 'mpvPath' ||
+                      field === 'mpvArgs'
+                    ) {
+                      saveTextSetting(field, value);
+                    }
+                  }}
+                  onDetectMpv={handleDetectMpv}
+                  onAddSubtitleLanguageCodes={addPreferredSubtitleLanguageCodes}
+                  onAddSubtitleLanguages={addPreferredSubtitleLanguages}
+                  onRemoveSubtitleLanguage={removePreferredSubtitleLanguage}
+                  onClearSubtitleLanguages={clearPreferredSubtitleLanguages}
+                  onMoveSubtitleLanguage={movePreferredSubtitleLanguage}
+                />
+              </form>
+            </div>
+
+            <aside class="space-y-6">
+              <DiagnosticsCard />
+
+              <IntroSkipCard
+                currentMode={introSkipperMode()}
+                onModeChange={handleIntroSkipperModeChange}
+              />
+              <ShortcutKeysCard
+                form={form}
+                onSaveTextSetting={saveTextSetting}
+              />
+
+              <SessionCard onSignOut={handleSignOut} />
+
+              <PageFooter />
+            </aside>
           </div>
-
-          <aside class="space-y-6">
-            <DiagnosticsCard
-              expanded={ui.diagnosticsExpanded}
-              onToggle={() => setUi('diagnosticsExpanded', (prev) => !prev)}
-            />
-
-            <IntroSkipCard
-              currentMode={introSkipperMode()}
-              saving={ui.introSkipperSaving}
-              error={ui.introSkipperError}
-              onModeChange={handleIntroSkipperModeChange}
-            />
-            <ShortcutKeysCard form={form} onSaveTextSetting={saveTextSetting} />
-
-            <SessionCard
-              open={ui.confirmSignOut}
-              signingOut={ui.signingOut}
-              onOpenChange={(open) => setUi('confirmSignOut', open)}
-              onSignOut={handleSignOut}
-            />
-
-            <PageFooter />
-          </aside>
         </div>
       </div>
-    </div>
+    </Provider>
   );
 }

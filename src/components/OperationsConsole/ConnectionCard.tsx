@@ -2,11 +2,10 @@ import { Activity, Power, RefreshCw } from 'lucide-solid';
 import { Show } from 'solid-js';
 import type { ConnectionState } from '../../bindings';
 import { SectionCard } from '../ui';
+import { useOperationsConsoleStore } from './store';
 
 interface ConnectionCardProps {
   state: ConnectionState | undefined;
-  disconnecting: boolean;
-  reconnecting: boolean;
   canReconnect: boolean;
   onDisconnect: () => void;
   onReconnect: () => void;
@@ -14,6 +13,8 @@ interface ConnectionCardProps {
 }
 
 export default function ConnectionCard(props: ConnectionCardProps) {
+  const [ui] = useOperationsConsoleStore();
+
   return (
     <SectionCard icon={<Activity class="h-6 w-6" />} title="Connection">
       <div class="grid grid-cols-1 gap-4 md:grid-cols-3">
@@ -54,20 +55,20 @@ export default function ConnectionCard(props: ConnectionCardProps) {
         <button
           type="button"
           class="btn-outlined"
-          disabled={props.disconnecting || !props.state?.connected}
+          disabled={ui.disconnecting || !props.state?.connected}
           onClick={props.onDisconnect}
         >
           <Power class="h-5 w-5" />
-          {props.disconnecting ? 'Disconnecting...' : 'Disconnect'}
+          {ui.disconnecting ? 'Disconnecting...' : 'Disconnect'}
         </button>
         <Show when={!props.state?.connected && props.canReconnect}>
           <button
             type="button"
             class="btn-primary"
-            disabled={props.reconnecting}
+            disabled={ui.reconnecting}
             onClick={props.onReconnect}
           >
-            {props.reconnecting ? 'Reconnecting...' : 'Reconnect'}
+            {ui.reconnecting ? 'Reconnecting...' : 'Reconnect'}
           </button>
         </Show>
         <button
