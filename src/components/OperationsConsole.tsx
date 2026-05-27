@@ -10,6 +10,7 @@ import {
   Bot,
   ChevronDown,
   ClipboardList,
+  Keyboard,
   LogOut,
   Power,
   RefreshCw,
@@ -198,8 +199,8 @@ export default function OperationsConsole(props: OperationsConsoleProps) {
       deviceName: 'JMSR',
       mpvPath: '',
       mpvArgs: '',
-      keybindNext: 'Shift+n',
-      keybindPrev: 'Shift+p',
+      keybindNext: 'Shift+>',
+      keybindPrev: 'Shift+<',
       keybindIntroSkip: 'g',
       introSkipperMode: 'automatic' as IntroSkipperMode,
     },
@@ -212,8 +213,8 @@ export default function OperationsConsole(props: OperationsConsoleProps) {
       form.setFieldValue('deviceName', cfg.deviceName ?? 'JMSR');
       form.setFieldValue('mpvPath', cfg.mpvPath ?? '');
       form.setFieldValue('mpvArgs', (cfg.mpvArgs ?? []).join('\n'));
-      form.setFieldValue('keybindNext', cfg.keybindNext ?? 'Shift+n');
-      form.setFieldValue('keybindPrev', cfg.keybindPrev ?? 'Shift+p');
+      form.setFieldValue('keybindNext', cfg.keybindNext ?? 'Shift+>');
+      form.setFieldValue('keybindPrev', cfg.keybindPrev ?? 'Shift+<');
       form.setFieldValue('keybindIntroSkip', cfg.keybindIntroSkip ?? 'g');
       setSelectedSubtitleLanguages(
         normalizePreferredSubtitleLanguages(cfg.preferredSubtitleLanguages),
@@ -741,55 +742,25 @@ export default function OperationsConsole(props: OperationsConsoleProps) {
                       Advanced MPV options
                     </Collapsible.Trigger>
 
-                    <Collapsible.Content class="space-y-5 rounded-3xl border border-outline-variant bg-surface-container-lowest p-4">
-                      <form.Field name="mpvArgs">
-                        {(field) => (
-                          <ArkField.Root class="block">
-                            <ArkField.Label class="mb-1 block text-label-medium uppercase text-on-surface-variant">
-                              Extra arguments
-                            </ArkField.Label>
-                            <ArkField.Textarea
-                              value={field().state.value}
-                              onInput={(event) =>
-                                field().handleChange(event.currentTarget.value)
-                              }
-                              onBlur={(event) => {
-                                field().handleBlur();
-                                saveTextSetting(
-                                  'mpvArgs',
-                                  event.currentTarget.value,
-                                );
-                              }}
-                              rows={4}
-                              placeholder="--fullscreen&#10;--force-window"
-                              class="input-filled h-auto w-full py-3 font-mono text-body-small"
-                            />
-                          </ArkField.Root>
-                        )}
-                      </form.Field>
+                    <Collapsible.Content class="rounded-3xl border border-outline-variant bg-surface-container-lowest p-4">
+                      <section class="space-y-3">
+                        <div>
+                          <h3 class="text-title-small text-on-surface">
+                            MPV arguments
+                          </h3>
+                          <p class="mt-1 text-body-small text-on-surface-variant">
+                            Extra command-line flags passed to the external MPV
+                            process.
+                          </p>
+                        </div>
 
-                      <div class="grid grid-cols-1 gap-4 md:grid-cols-3">
-                        <form.Field
-                          name="keybindNext"
-                          validators={{
-                            onBlur: ({ value }) =>
-                              !value.trim()
-                                ? 'Keybinding is required'
-                                : undefined,
-                          }}
-                        >
+                        <form.Field name="mpvArgs">
                           {(field) => (
-                            <ArkField.Root
-                              class="block"
-                              invalid={field().state.meta.errors.length > 0}
-                            >
+                            <ArkField.Root class="block">
                               <ArkField.Label class="mb-1 block text-label-medium uppercase text-on-surface-variant">
-                                Next episode key
+                                Extra arguments
                               </ArkField.Label>
-                              <ArkField.Input
-                                id={field().name}
-                                name={field().name}
-                                type="text"
+                              <ArkField.Textarea
                                 value={field().state.value}
                                 onInput={(event) =>
                                   field().handleChange(
@@ -799,97 +770,18 @@ export default function OperationsConsole(props: OperationsConsoleProps) {
                                 onBlur={(event) => {
                                   field().handleBlur();
                                   saveTextSetting(
-                                    'keybindNext',
+                                    'mpvArgs',
                                     event.currentTarget.value,
                                   );
                                 }}
-                                class="input-filled w-full font-mono"
-                                placeholder="Shift+n"
+                                rows={4}
+                                placeholder="--fullscreen&#10;--force-window"
+                                class="input-filled h-auto w-full py-3 font-mono text-body-small"
                               />
                             </ArkField.Root>
                           )}
                         </form.Field>
-                        <form.Field
-                          name="keybindPrev"
-                          validators={{
-                            onBlur: ({ value }) =>
-                              !value.trim()
-                                ? 'Keybinding is required'
-                                : undefined,
-                          }}
-                        >
-                          {(field) => (
-                            <ArkField.Root
-                              class="block"
-                              invalid={field().state.meta.errors.length > 0}
-                            >
-                              <ArkField.Label class="mb-1 block text-label-medium uppercase text-on-surface-variant">
-                                Previous episode key
-                              </ArkField.Label>
-                              <ArkField.Input
-                                id={field().name}
-                                name={field().name}
-                                type="text"
-                                value={field().state.value}
-                                onInput={(event) =>
-                                  field().handleChange(
-                                    event.currentTarget.value,
-                                  )
-                                }
-                                onBlur={(event) => {
-                                  field().handleBlur();
-                                  saveTextSetting(
-                                    'keybindPrev',
-                                    event.currentTarget.value,
-                                  );
-                                }}
-                                class="input-filled w-full font-mono"
-                                placeholder="Shift+p"
-                              />
-                            </ArkField.Root>
-                          )}
-                        </form.Field>
-                        <form.Field
-                          name="keybindIntroSkip"
-                          validators={{
-                            onBlur: ({ value }) =>
-                              !value.trim()
-                                ? 'Keybinding is required'
-                                : undefined,
-                          }}
-                        >
-                          {(field) => (
-                            <ArkField.Root
-                              class="block"
-                              invalid={field().state.meta.errors.length > 0}
-                            >
-                              <ArkField.Label class="mb-1 block text-label-medium uppercase text-on-surface-variant">
-                                Intro skip key
-                              </ArkField.Label>
-                              <ArkField.Input
-                                id={field().name}
-                                name={field().name}
-                                type="text"
-                                value={field().state.value}
-                                onInput={(event) =>
-                                  field().handleChange(
-                                    event.currentTarget.value,
-                                  )
-                                }
-                                onBlur={(event) => {
-                                  field().handleBlur();
-                                  saveTextSetting(
-                                    'keybindIntroSkip',
-                                    event.currentTarget.value,
-                                  );
-                                }}
-                                class="input-filled w-full font-mono"
-                                placeholder="g"
-                              />
-                            </ArkField.Root>
-                          )}
-                        </form.Field>
-                      </div>
+                      </section>
                     </Collapsible.Content>
                   </Collapsible.Root>
                   <TagsInput.Root
@@ -1145,6 +1037,128 @@ export default function OperationsConsole(props: OperationsConsoleProps) {
                     </p>
                   )}
                 </Show>
+              </div>
+            </SectionCard>
+            <SectionCard
+              icon={<Keyboard class="h-6 w-6" />}
+              title="Shortcut keys"
+            >
+              <div class="space-y-4">
+                <p class="text-body-small text-on-surface-variant">
+                  MPV input bindings for episode navigation and manual intro
+                  skipping.
+                </p>
+
+                <form.Field
+                  name="keybindNext"
+                  validators={{
+                    onBlur: ({ value }) =>
+                      !value.trim() ? 'Keybinding is required' : undefined,
+                  }}
+                >
+                  {(field) => (
+                    <ArkField.Root
+                      class="block"
+                      invalid={field().state.meta.errors.length > 0}
+                    >
+                      <ArkField.Label class="mb-1 block text-label-medium uppercase text-on-surface-variant">
+                        Next episode key
+                      </ArkField.Label>
+                      <ArkField.Input
+                        id={field().name}
+                        name={field().name}
+                        type="text"
+                        value={field().state.value}
+                        onInput={(event) =>
+                          field().handleChange(event.currentTarget.value)
+                        }
+                        onBlur={(event) => {
+                          field().handleBlur();
+                          saveTextSetting(
+                            'keybindNext',
+                            event.currentTarget.value,
+                          );
+                        }}
+                        class="input-filled w-full font-mono"
+                        placeholder="Shift+>"
+                      />
+                    </ArkField.Root>
+                  )}
+                </form.Field>
+
+                <form.Field
+                  name="keybindPrev"
+                  validators={{
+                    onBlur: ({ value }) =>
+                      !value.trim() ? 'Keybinding is required' : undefined,
+                  }}
+                >
+                  {(field) => (
+                    <ArkField.Root
+                      class="block"
+                      invalid={field().state.meta.errors.length > 0}
+                    >
+                      <ArkField.Label class="mb-1 block text-label-medium uppercase text-on-surface-variant">
+                        Previous episode key
+                      </ArkField.Label>
+                      <ArkField.Input
+                        id={field().name}
+                        name={field().name}
+                        type="text"
+                        value={field().state.value}
+                        onInput={(event) =>
+                          field().handleChange(event.currentTarget.value)
+                        }
+                        onBlur={(event) => {
+                          field().handleBlur();
+                          saveTextSetting(
+                            'keybindPrev',
+                            event.currentTarget.value,
+                          );
+                        }}
+                        class="input-filled w-full font-mono"
+                        placeholder="Shift+<"
+                      />
+                    </ArkField.Root>
+                  )}
+                </form.Field>
+
+                <form.Field
+                  name="keybindIntroSkip"
+                  validators={{
+                    onBlur: ({ value }) =>
+                      !value.trim() ? 'Keybinding is required' : undefined,
+                  }}
+                >
+                  {(field) => (
+                    <ArkField.Root
+                      class="block"
+                      invalid={field().state.meta.errors.length > 0}
+                    >
+                      <ArkField.Label class="mb-1 block text-label-medium uppercase text-on-surface-variant">
+                        Intro skip key
+                      </ArkField.Label>
+                      <ArkField.Input
+                        id={field().name}
+                        name={field().name}
+                        type="text"
+                        value={field().state.value}
+                        onInput={(event) =>
+                          field().handleChange(event.currentTarget.value)
+                        }
+                        onBlur={(event) => {
+                          field().handleBlur();
+                          saveTextSetting(
+                            'keybindIntroSkip',
+                            event.currentTarget.value,
+                          );
+                        }}
+                        class="input-filled w-full font-mono"
+                        placeholder="g"
+                      />
+                    </ArkField.Root>
+                  )}
+                </form.Field>
               </div>
             </SectionCard>
 

@@ -25,8 +25,8 @@ const config: AppConfig = {
   progressInterval: 5,
   startMinimized: false,
   introSkipperMode: 'automatic',
-  keybindNext: 'Shift+n',
-  keybindPrev: 'Shift+p',
+  keybindNext: 'Shift+>',
+  keybindPrev: 'Shift+<',
   keybindIntroSkip: 'g',
   preferredSubtitleLanguages: [],
 };
@@ -236,14 +236,8 @@ test('operations console autosaves changed intro skip key', async () => {
   const cleanup = renderConsole();
 
   await screen.findByDisplayValue('JMSR Test');
-  const advancedTrigger = screen.getByRole('button', {
-    name: 'Advanced MPV options',
-  });
-  fireEvent.click(advancedTrigger);
-  await waitFor(() =>
-    expect(advancedTrigger).toHaveAttribute('aria-expanded', 'true'),
-  );
-  const key = (await screen.findByPlaceholderText('g')) as HTMLInputElement;
+  expect(screen.getByRole('heading', { name: 'Shortcut keys' })).toBeVisible();
+  const key = screen.getByDisplayValue('g');
   fireEvent.input(key, { target: { value: 'i' } });
   fireEvent.blur(key);
 
@@ -835,6 +829,23 @@ test('player bridge settings use Ark fields and intro skip mode buttons', async 
   expect(mpvArgs.closest('[data-scope="field"]')).not.toBeNull();
   expect(mpvArgs.closest('[data-scope="collapsible"]')).not.toBeNull();
 
+  const shortcutHeading = screen.getByRole('heading', {
+    name: 'Shortcut keys',
+  });
+  const shortcutGroup = shortcutHeading.closest('aside');
+  if (shortcutGroup === null) {
+    throw new Error('Shortcut keys aside should render');
+  }
+  expect(shortcutHeading.closest('[data-scope="collapsible"]')).toBeNull();
+  const shortcutFields = within(shortcutGroup);
+  expect(shortcutFields.getByText('Next episode key')).toBeVisible();
+  expect(shortcutFields.getByText('Previous episode key')).toBeVisible();
+  const nextKey = shortcutFields.getByDisplayValue('Shift+>');
+  const previousKey = shortcutFields.getByDisplayValue('Shift+<');
+  expect(nextKey).toHaveValue('Shift+>');
+  expect(nextKey).toHaveAttribute('placeholder', 'Shift+>');
+  expect(previousKey).toHaveValue('Shift+<');
+  expect(previousKey).toHaveAttribute('placeholder', 'Shift+<');
   const manual = screen.getByRole('button', { name: /Manual/ });
   expect(manual).toHaveAttribute('aria-pressed', 'false');
 

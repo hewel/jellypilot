@@ -81,7 +81,7 @@ fn ensure_input_conf() -> Option<PathBuf> {
 
   // Only create if it doesn't exist (preserve user customizations via config)
   if !path.exists() {
-    return write_input_conf("Shift+n", "Shift+p", "g");
+    return write_input_conf("Shift+>", "Shift+<", "g");
   }
 
   Some(path)

@@ -122,11 +122,11 @@ fn default_progress_interval() -> u32 {
 }
 
 fn default_keybind_next() -> String {
-  "Shift+n".to_string()
+  "Shift+>".to_string()
 }
 
 fn default_keybind_prev() -> String {
-  "Shift+p".to_string()
+  "Shift+<".to_string()
 }
 
 fn default_keybind_intro_skip() -> String {
@@ -186,6 +186,14 @@ impl AppConfig {
 #[cfg(test)]
 mod tests {
   use super::*;
+
+  #[test]
+  fn default_config_uses_angle_bracket_episode_keybindings() {
+    let config = AppConfig::default();
+
+    assert_eq!(config.keybind_next, "Shift+>");
+    assert_eq!(config.keybind_prev, "Shift+<");
+  }
 
   #[test]
   fn older_saved_config_deserializes_with_default_automatic_intro_skipper_mode() {
