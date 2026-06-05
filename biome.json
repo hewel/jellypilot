@@ -6,7 +6,9 @@
       "*.config.{js,json,jsonc,mjs,ts}",
       "src/**",
       "tests/**",
+      "scripts/**/*.mjs",
       "src-tauri/**/*.json",
+      "!src-tauri/openapi/jellyfin-openapi-stable.json",
       "!**/bindings.ts"
     ]
   },

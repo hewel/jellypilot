@@ -1,0 +1,9 @@
+{
+  "library": "reqwest",
+  "packageName": "jellyfin_api",
+  "packageVersion": "10.11.10",
+  "supportAsync": true,
+  "hideGenerationTimestamp": true,
+  "reqwestDefaultFeatures": "",
+  "useSingleRequestParameter": true
+}

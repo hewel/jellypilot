@@ -622,7 +622,7 @@ pub async fn jellyfin_restore_session(
     .login()
     .restore_session(&session)
     .await
-    .map_err(|e| CommandError::network(e.to_string()))?;
+    .map_err(jellyfin_err)?;
 
   // Create and start session manager
   let new_session = Arc::new(SessionManager::new(
@@ -879,6 +879,13 @@ pub fn specta_builder() -> Builder<tauri::Wry> {
 #[cfg(test)]
 mod tests {
   use super::*;
+
+  #[test]
+  fn jellyfin_err_maps_auth_failures_to_auth_failed_code() {
+    let err = jellyfin_err(JellyfinError::AuthFailed("revoked".to_string()));
+
+    assert!(matches!(err.code, CommandErrorCode::AuthFailed));
+  }
 
   #[test]
   fn export_bindings() {

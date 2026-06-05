@@ -61,27 +61,12 @@ pub struct QuickConnectRequest {
   pub secret: String,
 }
 
-/// Quick Connect request returned by Jellyfin.
-#[derive(Debug, Clone, Deserialize)]
-#[serde(rename_all = "PascalCase")]
-pub struct QuickConnectInitiateResponse {
-  pub code: String,
-  pub secret: String,
-}
-
 /// Quick Connect request status exposed to the frontend.
 #[derive(Debug, Clone, Serialize, Type, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub enum QuickConnectStatus {
   Waiting,
   Approved,
-}
-
-/// Quick Connect state returned by Jellyfin.
-#[derive(Debug, Clone, Deserialize)]
-#[serde(rename_all = "PascalCase")]
-pub struct QuickConnectState {
-  pub authenticated: bool,
 }
 
 /// WebSocket message types from Jellyfin server.

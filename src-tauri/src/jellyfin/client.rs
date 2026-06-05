@@ -97,35 +97,132 @@ impl JellyfinClient {
     header
   }
 
+  fn openapi_configuration(
+    &self,
+    server_url: &str,
+    token: Option<&str>,
+  ) -> Result<jellyfin_api::apis::configuration::Configuration, JellyfinError> {
+    let mut headers = header::HeaderMap::new();
+    let auth_header = header::HeaderValue::from_str(&self.auth_header(token)).map_err(|err| {
+      JellyfinError::HttpError(format!("Invalid Jellyfin authorization header: {err}"))
+    })?;
+    headers.insert("X-Emby-Authorization", auth_header);
+
+    let mut configuration = jellyfin_api::apis::configuration::Configuration::new();
+    configuration.base_path = server_url.to_string();
+    configuration.user_agent = Some(format!("{CLIENT_NAME}/{CLIENT_VERSION}"));
+    configuration.client = Client::builder()
+      .timeout(std::time::Duration::from_secs(30))
+      .default_headers(headers)
+      .build()?;
+
+    Ok(configuration)
+  }
+
+  fn openapi_error<T: std::fmt::Debug>(
+    context: &str,
+    err: jellyfin_api::apis::Error<T>,
+  ) -> JellyfinError {
+    match err {
+      jellyfin_api::apis::Error::Reqwest(err) => JellyfinError::Http(err),
+      jellyfin_api::apis::Error::Serde(err) => JellyfinError::Json(err),
+      jellyfin_api::apis::Error::Io(err) => {
+        JellyfinError::HttpError(format!("{context} failed: {err}"))
+      }
+      jellyfin_api::apis::Error::ResponseError(response) => JellyfinError::HttpError(format!(
+        "{context} failed: HTTP {} - {}",
+        response.status, response.content
+      )),
+    }
+  }
+
+  fn openapi_auth_error<T: std::fmt::Debug>(
+    context: &str,
+    err: jellyfin_api::apis::Error<T>,
+  ) -> JellyfinError {
+    match Self::openapi_error(context, err) {
+      JellyfinError::HttpError(message) => JellyfinError::AuthFailed(message),
+      err => err,
+    }
+  }
+
+  fn missing_openapi_field(context: &str, field: &str) -> JellyfinError {
+    JellyfinError::HttpError(format!("{context} response missing {field}"))
+  }
+
+  fn auth_response_from_openapi(
+    auth: jellyfin_api::models::AuthenticationResult,
+  ) -> Result<AuthResponse, JellyfinError> {
+    let user = auth
+      .user
+      .flatten()
+      .ok_or_else(|| Self::missing_openapi_field("Authentication", "User"))?;
+    let id = user
+      .id
+      .ok_or_else(|| Self::missing_openapi_field("Authentication", "User.Id"))?;
+    let name = user
+      .name
+      .flatten()
+      .ok_or_else(|| Self::missing_openapi_field("Authentication", "User.Name"))?;
+    let access_token = auth
+      .access_token
+      .flatten()
+      .ok_or_else(|| Self::missing_openapi_field("Authentication", "AccessToken"))?;
+    let server_id = auth
+      .server_id
+      .flatten()
+      .ok_or_else(|| Self::missing_openapi_field("Authentication", "ServerId"))?;
+
+    Ok(AuthResponse {
+      user: User {
+        id: id.to_string(),
+        name,
+      },
+      access_token,
+      server_id,
+    })
+  }
+
+  fn server_info_from_openapi(
+    info: jellyfin_api::models::PublicSystemInfo,
+  ) -> Result<ServerInfo, JellyfinError> {
+    let server_name = info
+      .server_name
+      .flatten()
+      .ok_or_else(|| Self::missing_openapi_field("System public info", "ServerName"))?;
+    let version = info
+      .version
+      .flatten()
+      .ok_or_else(|| Self::missing_openapi_field("System public info", "Version"))?;
+    let id = info
+      .id
+      .flatten()
+      .ok_or_else(|| Self::missing_openapi_field("System public info", "Id"))?;
+
+    Ok(ServerInfo {
+      server_name,
+      version,
+      id,
+    })
+  }
+
   /// Authenticate with Jellyfin server.
   pub async fn authenticate(&self, creds: &Credentials) -> Result<AuthResponse, JellyfinError> {
     let server_url = Self::normalize_server_url(&creds.server_url)?;
-    let url = format!("{}/Users/AuthenticateByName", server_url);
+    let configuration = self.openapi_configuration(&server_url, None)?;
 
-    let body = serde_json::json!({
-      "Username": creds.username,
-      "Pw": creds.password
-    });
-
-    let response = self
-      .http
-      .post(&url)
-      .header(header::CONTENT_TYPE, "application/json")
-      .header("X-Emby-Authorization", self.auth_header(None))
-      .json(&body)
-      .send()
-      .await?;
-
-    if !response.status().is_success() {
-      let status = response.status();
-      let text = response.text().await.unwrap_or_default();
-      return Err(JellyfinError::AuthFailed(format!(
-        "HTTP {}: {}",
-        status, text
-      )));
-    }
-
-    let auth: AuthResponse = response.json().await?;
+    let auth = jellyfin_api::apis::user_api::authenticate_user_by_name(
+      &configuration,
+      jellyfin_api::apis::user_api::AuthenticateUserByNameParams {
+        authenticate_user_by_name: jellyfin_api::models::AuthenticateUserByName {
+          username: Some(Some(creds.username.clone())),
+          pw: Some(Some(creds.password.clone())),
+        },
+      },
+    )
+    .await
+    .map_err(|err| Self::openapi_auth_error("Password authentication", err))
+    .and_then(Self::auth_response_from_openapi)?;
 
     // Store connection state
     {
@@ -148,32 +245,26 @@ impl JellyfinClient {
     server_url: &str,
   ) -> Result<QuickConnectRequest, JellyfinError> {
     let server_url = Self::normalize_server_url(server_url)?;
-    let url = format!("{}/QuickConnect/Initiate", server_url);
+    let configuration = self.openapi_configuration(&server_url, None)?;
 
-    let response = self
-      .http
-      .post(&url)
-      .header("X-Emby-Authorization", self.auth_header(None))
-      .send()
-      .await?;
+    let request = jellyfin_api::apis::quick_connect_api::initiate_quick_connect(&configuration)
+      .await
+      .map_err(|err| match err {
+        jellyfin_api::apis::Error::ResponseError(response)
+          if response.status == reqwest::StatusCode::UNAUTHORIZED =>
+        {
+          JellyfinError::QuickConnectUnavailable
+        }
+        err => Self::openapi_error("Quick Connect initiation", err),
+      })?;
 
-    if response.status() == reqwest::StatusCode::UNAUTHORIZED {
-      return Err(JellyfinError::QuickConnectUnavailable);
-    }
-
-    if !response.status().is_success() {
-      let status = response.status();
-      let text = response.text().await.unwrap_or_default();
-      return Err(JellyfinError::HttpError(format!(
-        "HTTP {}: {}",
-        status, text
-      )));
-    }
-
-    let request: QuickConnectInitiateResponse = response.json().await?;
     Ok(QuickConnectRequest {
-      code: request.code,
-      secret: request.secret,
+      code: request
+        .code
+        .ok_or_else(|| Self::missing_openapi_field("Quick Connect initiation", "Code"))?,
+      secret: request
+        .secret
+        .ok_or_else(|| Self::missing_openapi_field("Quick Connect initiation", "Secret"))?,
     })
   }
 
@@ -184,27 +275,18 @@ impl JellyfinClient {
     secret: &str,
   ) -> Result<QuickConnectStatus, JellyfinError> {
     let server_url = Self::normalize_server_url(server_url)?;
-    let url = format!("{}/QuickConnect/Connect", server_url);
+    let configuration = self.openapi_configuration(&server_url, None)?;
 
-    let response = self
-      .http
-      .get(&url)
-      .query(&[("secret", secret)])
-      .header("X-Emby-Authorization", self.auth_header(None))
-      .send()
-      .await?;
+    let state = jellyfin_api::apis::quick_connect_api::get_quick_connect_state(
+      &configuration,
+      jellyfin_api::apis::quick_connect_api::GetQuickConnectStateParams {
+        secret: secret.to_string(),
+      },
+    )
+    .await
+    .map_err(|err| Self::openapi_error("Quick Connect status", err))?;
 
-    if !response.status().is_success() {
-      let status = response.status();
-      let text = response.text().await.unwrap_or_default();
-      return Err(JellyfinError::HttpError(format!(
-        "HTTP {}: {}",
-        status, text
-      )));
-    }
-
-    let state: QuickConnectState = response.json().await?;
-    if state.authenticated {
+    if state.authenticated.unwrap_or(false) {
       Ok(QuickConnectStatus::Approved)
     } else {
       Ok(QuickConnectStatus::Waiting)
@@ -218,28 +300,19 @@ impl JellyfinClient {
     secret: &str,
   ) -> Result<AuthResponse, JellyfinError> {
     let server_url = Self::normalize_server_url(server_url)?;
-    let url = format!("{}/Users/AuthenticateWithQuickConnect", server_url);
-    let body = serde_json::json!({ "Secret": secret });
+    let configuration = self.openapi_configuration(&server_url, None)?;
 
-    let response = self
-      .http
-      .post(&url)
-      .header(header::CONTENT_TYPE, "application/json")
-      .header("X-Emby-Authorization", self.auth_header(None))
-      .json(&body)
-      .send()
-      .await?;
-
-    if !response.status().is_success() {
-      let status = response.status();
-      let text = response.text().await.unwrap_or_default();
-      return Err(JellyfinError::AuthFailed(format!(
-        "HTTP {}: {}",
-        status, text
-      )));
-    }
-
-    let auth: AuthResponse = response.json().await?;
+    let auth = jellyfin_api::apis::user_api::authenticate_with_quick_connect(
+      &configuration,
+      jellyfin_api::apis::user_api::AuthenticateWithQuickConnectParams {
+        quick_connect_dto: jellyfin_api::models::QuickConnectDto {
+          secret: secret.to_string(),
+        },
+      },
+    )
+    .await
+    .map_err(|err| Self::openapi_auth_error("Quick Connect authentication", err))
+    .and_then(Self::auth_response_from_openapi)?;
 
     {
       let mut state = self.state.write();
@@ -257,10 +330,12 @@ impl JellyfinClient {
   /// Fetch server public info.
   async fn fetch_server_info(&self) -> Result<ServerInfo, JellyfinError> {
     let server_url = self.server_url()?;
-    let url = format!("{}/System/Info/Public", server_url);
+    let configuration = self.openapi_configuration(&server_url, None)?;
 
-    let response = self.http.get(&url).send().await?;
-    let info: ServerInfo = response.json().await?;
+    let info = jellyfin_api::apis::system_api::get_public_system_info(&configuration)
+      .await
+      .map_err(|err| Self::openapi_error("System public info", err))
+      .and_then(Self::server_info_from_openapi)?;
 
     {
       let mut state = self.state.write();
@@ -268,6 +343,18 @@ impl JellyfinClient {
     }
 
     Ok(info)
+  }
+
+  async fn validate_saved_token(&self) -> Result<(), JellyfinError> {
+    let server_url = self.server_url()?;
+    let token = self.access_token()?;
+    let configuration = self.openapi_configuration(&server_url, Some(&token))?;
+
+    jellyfin_api::apis::user_api::get_current_user(&configuration)
+      .await
+      .map_err(|err| Self::openapi_auth_error("Saved session validation", err))?;
+
+    Ok(())
   }
 
   /// Disconnect from server.
@@ -298,9 +385,16 @@ impl JellyfinClient {
       }
     }
 
-    // Validate the token by calling /System/Info/Public
-    // If this fails, clear the state and return error
-    match self.fetch_server_info().await {
+    // Validate the token with an authenticated endpoint, then refresh public
+    // server info for connection state.
+    let validation_result = async {
+      self.validate_saved_token().await?;
+      self.fetch_server_info().await?;
+      Ok::<(), JellyfinError>(())
+    }
+    .await;
+
+    match validation_result {
       Ok(_) => Ok(()),
       Err(e) => {
         self.disconnect();
@@ -789,31 +883,26 @@ impl JellyfinClient {
     let device_id = self.device_id();
     let server_url = self.server_url()?;
     let token = self.access_token()?;
+    let configuration = self.openapi_configuration(&server_url, Some(&token))?;
 
-    // Query all sessions
-    let url = format!("{}/Sessions", server_url);
-    let response = self
-      .http
-      .get(&url)
-      .header("X-Emby-Authorization", self.auth_header(Some(&token)))
-      .send()
-      .await?;
-
-    let sessions: Vec<serde_json::Value> = response.json().await?;
+    let sessions = jellyfin_api::apis::session_api::get_sessions(
+      &configuration,
+      jellyfin_api::apis::session_api::GetSessionsParams {
+        controllable_by_user_id: None,
+        device_id: None,
+        active_within_seconds: None,
+      },
+    )
+    .await
+    .map_err(|err| Self::openapi_error("Session validation", err))?;
 
     // Look for our device in the session list
     for session in &sessions {
-      if let Some(session_device_id) = session.get("DeviceId").and_then(|v| v.as_str()) {
-        if session_device_id == device_id {
+      if let Some(session_device_id) = session.device_id.as_ref().and_then(|id| id.as_ref()) {
+        if session_device_id == &device_id {
           // Found our session! Check if it supports media control
-          let supports_media_control = session
-            .get("SupportsMediaControl")
-            .and_then(|v| v.as_bool())
-            .unwrap_or(false);
-          let supports_remote_control = session
-            .get("SupportsRemoteControl")
-            .and_then(|v| v.as_bool())
-            .unwrap_or(false);
+          let supports_media_control = session.supports_media_control.unwrap_or(false);
+          let supports_remote_control = session.supports_remote_control.unwrap_or(false);
 
           log::info!(
             "Found our session: DeviceId={}, SupportsMediaControl={}, SupportsRemoteControl={}",
@@ -822,11 +911,7 @@ impl JellyfinClient {
             supports_remote_control
           );
 
-          // Log full session for debugging
-          log::debug!(
-            "Session details: {}",
-            serde_json::to_string_pretty(session).unwrap_or_default()
-          );
+          log::debug!("Session details: {:?}", session);
 
           if supports_media_control {
             return Ok(());
@@ -845,21 +930,21 @@ impl JellyfinClient {
     );
     for (i, session) in sessions.iter().enumerate() {
       let sess_device_id = session
-        .get("DeviceId")
-        .and_then(|v| v.as_str())
+        .device_id
+        .as_ref()
+        .and_then(|id| id.as_deref())
         .unwrap_or("?");
       let sess_device_name = session
-        .get("DeviceName")
-        .and_then(|v| v.as_str())
+        .device_name
+        .as_ref()
+        .and_then(|name| name.as_deref())
         .unwrap_or("?");
       let sess_client = session
-        .get("Client")
-        .and_then(|v| v.as_str())
+        .client
+        .as_ref()
+        .and_then(|client| client.as_deref())
         .unwrap_or("?");
-      let supports_media = session
-        .get("SupportsMediaControl")
-        .and_then(|v| v.as_bool())
-        .unwrap_or(false);
+      let supports_media = session.supports_media_control.unwrap_or(false);
       log::info!(
         "Session[{}]: DeviceId={}, DeviceName={}, Client={}, SupportsMediaControl={}",
         i,
@@ -1018,27 +1103,50 @@ impl Default for JellyfinClient {
 #[cfg(test)]
 mod tests {
   use super::*;
+  use std::sync::Arc;
   use tokio::io::{AsyncReadExt, AsyncWriteExt};
   use tokio::net::TcpListener;
+
+  type RequestLog = Arc<parking_lot::Mutex<Vec<String>>>;
 
   async fn serve_once(status: &'static str, response_body: &'static str) -> String {
     serve_responses(vec![(status, response_body)]).await
   }
 
   async fn serve_responses(responses: Vec<(&'static str, &'static str)>) -> String {
+    serve_responses_with_requests(responses).await.0
+  }
+
+  async fn serve_responses_with_requests(
+    responses: Vec<(&'static str, &'static str)>,
+  ) -> (String, RequestLog) {
+    let responses = responses
+      .into_iter()
+      .map(|(status, body)| (status.to_string(), body.to_string()))
+      .collect();
+    serve_owned_responses_with_requests(responses).await
+  }
+
+  async fn serve_owned_responses_with_requests(
+    responses: Vec<(String, String)>,
+  ) -> (String, RequestLog) {
     let listener = TcpListener::bind("127.0.0.1:0")
       .await
       .expect("test server should bind");
     let addr = listener.local_addr().expect("test server should have addr");
+    let requests = Arc::new(parking_lot::Mutex::new(Vec::new()));
+    let captured_requests = Arc::clone(&requests);
 
     tokio::spawn(async move {
       for (status, response_body) in responses {
         let (mut stream, _) = listener.accept().await.expect("test server should accept");
-        let mut buffer = [0; 1024];
-        let _ = stream
+        let mut buffer = [0; 4096];
+        let bytes_read = stream
           .read(&mut buffer)
           .await
           .expect("test server should read request");
+        let request = String::from_utf8_lossy(&buffer[..bytes_read]).into_owned();
+        captured_requests.lock().push(request);
         let response = format!(
           "HTTP/1.1 {}\r\ncontent-type: application/json\r\ncontent-length: {}\r\n\r\n{}",
           status,
@@ -1052,12 +1160,122 @@ mod tests {
       }
     });
 
-    format!("http://{}", addr)
+    (format!("http://{}", addr), requests)
+  }
+
+  #[tokio::test]
+  async fn authenticate_creates_saved_session_and_stores_server_name() {
+    let (server_url, requests) = serve_responses_with_requests(vec![
+      (
+        "200 OK",
+        r#"{"User":{"Id":"00000000-0000-0000-0000-000000000001","Name":"Ada"},"AccessToken":"token-1","ServerId":"server-1"}"#,
+      ),
+      (
+        "200 OK",
+        r#"{"ServerName":"Jellyfin Home","Version":"10.10.0","Id":"server-1"}"#,
+      ),
+    ])
+    .await;
+    let client = JellyfinClient::new();
+
+    client
+      .authenticate(&Credentials {
+        server_url: server_url.clone(),
+        username: "Ada".to_string(),
+        password: "correct horse battery staple".to_string(),
+      })
+      .await
+      .expect("password authentication should succeed");
+
+    let session = client
+      .get_saved_session()
+      .expect("authentication should create saved session");
+
+    assert_eq!(session.server_name.as_deref(), Some("Jellyfin Home"));
+
+    let captured = requests.lock();
+    let auth_request = captured.first().expect("auth request should be captured");
+    assert!(auth_request.starts_with("POST /Users/AuthenticateByName "));
+    assert!(auth_request.contains("Client=\"Jellyfin MPV Shim Rust\""));
+    assert!(auth_request.contains(r#""Username":"Ada""#));
+    assert!(auth_request.contains(r#""Pw":"correct horse battery staple""#));
+    let info_request = captured
+      .get(1)
+      .expect("public info request should be captured");
+    assert!(info_request.starts_with("GET /System/Info/Public "));
+  }
+
+  #[tokio::test]
+  async fn restore_session_validates_token_and_refreshes_server_name() {
+    let (server_url, requests) = serve_responses_with_requests(vec![
+      (
+        "200 OK",
+        r#"{"Id":"00000000-0000-0000-0000-000000000001","Name":"Ada"}"#,
+      ),
+      (
+        "200 OK",
+        r#"{"ServerName":"Jellyfin Home","Version":"10.10.0","Id":"server-1"}"#,
+      ),
+    ])
+    .await;
+    let client = JellyfinClient::new();
+
+    client
+      .restore_session(&SavedSession {
+        server_url,
+        access_token: "token-1".to_string(),
+        user_id: "00000000-0000-0000-0000-000000000001".to_string(),
+        user_name: "Ada".to_string(),
+        server_name: None,
+        device_id: Some("jmsr-saved-device".to_string()),
+      })
+      .await
+      .expect("restore should validate token and refresh server info");
+
+    let session = client
+      .get_saved_session()
+      .expect("restore should keep saved session");
+    assert_eq!(session.server_name.as_deref(), Some("Jellyfin Home"));
+
+    let captured = requests.lock();
+    let validation_request = captured
+      .first()
+      .expect("token validation request should be captured");
+    assert!(validation_request.starts_with("GET /Users/Me "));
+    assert!(validation_request.contains("Token=\"token-1\""));
+  }
+
+  #[tokio::test]
+  async fn restore_session_clears_state_when_token_validation_fails() {
+    let server_url = serve_once("401 Unauthorized", r#"{"Message":"revoked"}"#).await;
+    let client = JellyfinClient::new();
+
+    let err = client
+      .restore_session(&SavedSession {
+        server_url,
+        access_token: "token-1".to_string(),
+        user_id: "00000000-0000-0000-0000-000000000001".to_string(),
+        user_name: "Ada".to_string(),
+        server_name: Some("Jellyfin Home".to_string()),
+        device_id: Some("jmsr-saved-device".to_string()),
+      })
+      .await
+      .expect_err("restore should report validation failure");
+
+    assert!(
+      matches!(err, JellyfinError::AuthFailed(_)),
+      "expected auth failure, got {err:?}"
+    );
+    assert!(!client.is_connected());
   }
 
   #[tokio::test]
   async fn quick_connect_start_returns_code_and_secret_from_server() {
-    let server_url = serve_once("200 OK", r#"{"Code":"ABCD12","Secret":"secret-123"}"#).await;
+    let (server_url, requests) = serve_responses_with_requests(vec![(
+      "200 OK",
+      r#"{"Code":"ABCD12","Secret":"secret-123"}"#,
+    )])
+    .await;
     let client = JellyfinClient::new();
 
     let request = client
@@ -1067,6 +1285,13 @@ mod tests {
 
     assert_eq!(request.code, "ABCD12");
     assert_eq!(request.secret, "secret-123");
+
+    let captured = requests.lock();
+    let request = captured
+      .first()
+      .expect("quick connect start request should be captured");
+    assert!(request.starts_with("POST /QuickConnect/Initiate "));
+    assert!(request.contains("Client=\"Jellyfin MPV Shim Rust\""));
   }
 
   #[tokio::test]
@@ -1091,10 +1316,10 @@ mod tests {
 
   #[tokio::test]
   async fn quick_connect_check_returns_approved_when_server_authenticated_request() {
-    let server_url = serve_once(
+    let (server_url, requests) = serve_responses_with_requests(vec![(
       "200 OK",
       r#"{"Authenticated":true,"Code":"ABCD12","Secret":"secret-123"}"#,
-    )
+    )])
     .await;
     let client = JellyfinClient::new();
 
@@ -1104,14 +1329,20 @@ mod tests {
       .expect("quick connect state should load");
 
     assert!(matches!(status, QuickConnectStatus::Approved));
+
+    let captured = requests.lock();
+    let request = captured
+      .first()
+      .expect("quick connect check request should be captured");
+    assert!(request.starts_with("GET /QuickConnect/Connect?secret=secret-123 "));
   }
 
   #[tokio::test]
   async fn quick_connect_authenticate_creates_saved_session() {
-    let server_url = serve_responses(vec![
+    let (server_url, requests) = serve_responses_with_requests(vec![
       (
         "200 OK",
-        r#"{"User":{"Id":"user-1","Name":"Ada"},"AccessToken":"token-1","ServerId":"server-1"}"#,
+        r#"{"User":{"Id":"00000000-0000-0000-0000-000000000001","Name":"Ada"},"AccessToken":"token-1","ServerId":"server-1"}"#,
       ),
       (
         "200 OK",
@@ -1131,13 +1362,77 @@ mod tests {
       .expect("quick connect should create saved session");
 
     assert_eq!(session.access_token, "token-1");
+
+    let captured = requests.lock();
+    let auth_request = captured
+      .first()
+      .expect("quick connect auth request should be captured");
+    assert!(auth_request.starts_with("POST /Users/AuthenticateWithQuickConnect "));
+    assert!(auth_request.contains(r#""Secret":"secret-123""#));
+    let info_request = captured
+      .get(1)
+      .expect("public info request should be captured");
+    assert!(info_request.starts_with("GET /System/Info/Public "));
   }
 
   fn connect_test_client(client: &JellyfinClient, server_url: String) {
     let mut state = client.state.write();
     state.server_url = Some(server_url);
     state.access_token = Some("token-1".to_string());
-    state.user_id = Some("user-1".to_string());
+    state.user_id = Some("00000000-0000-0000-0000-000000000001".to_string());
+  }
+
+  #[tokio::test]
+  async fn validate_session_accepts_current_device_with_media_control() {
+    let client = JellyfinClient::new();
+    let device_id = client.device_id();
+    let body = format!(
+      r#"[{{"DeviceId":"{}","DeviceName":"JMSR","Client":"Jellyfin MPV Shim Rust","SupportsMediaControl":true,"SupportsRemoteControl":true}}]"#,
+      device_id
+    );
+    let (server_url, requests) =
+      serve_owned_responses_with_requests(vec![("200 OK".to_string(), body)]).await;
+    connect_test_client(&client, server_url);
+
+    client
+      .validate_session()
+      .await
+      .expect("current session should be accepted");
+
+    let captured = requests.lock();
+    let request = captured
+      .first()
+      .expect("validation request should be captured");
+    let request_lower = request.to_ascii_lowercase();
+    assert!(request.starts_with("GET /Sessions "));
+    assert!(request_lower.contains("x-emby-authorization:"));
+    assert!(request.contains("Client=\"Jellyfin MPV Shim Rust\""));
+    assert!(request.contains("Token=\"token-1\""));
+    assert!(request.contains(&format!("DeviceId=\"{}\"", device_id)));
+  }
+
+  #[tokio::test]
+  async fn validate_session_rejects_current_device_without_media_control() {
+    let client = JellyfinClient::new();
+    let device_id = client.device_id();
+    let body = format!(
+      r#"[{{"DeviceId":"{}","DeviceName":"JMSR","Client":"Jellyfin MPV Shim Rust","SupportsMediaControl":false,"SupportsRemoteControl":true}}]"#,
+      device_id
+    );
+    let server_url = serve_owned_responses_with_requests(vec![("200 OK".to_string(), body)])
+      .await
+      .0;
+    connect_test_client(&client, server_url);
+
+    let err = client
+      .validate_session()
+      .await
+      .expect_err("session without media control should be rejected");
+
+    assert!(
+      matches!(err, JellyfinError::SessionNotFound),
+      "expected missing session, got {err:?}"
+    );
   }
 
   #[tokio::test]

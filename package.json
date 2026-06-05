@@ -14,6 +14,8 @@
     "test:watch": "rstest --watch",
     "lint-staged": "lint-staged",
     "typecheck": "tsc --noEmit",
+    "jellyfin:api:generate": "bun scripts/jellyfin-api.mjs generate",
+    "jellyfin:api:update": "bun scripts/jellyfin-api.mjs update",
     "format": "biome format --write .",
     "format:check": "biome format .",
     "lint": "biome lint .",
@@ -45,6 +47,7 @@
   },
   "devDependencies": {
     "@biomejs/biome": "^2.4.15",
+    "@openapitools/openapi-generator-cli": "^2.34.0",
     "@rsbuild/core": "^2.0.7",
     "@rsbuild/plugin-babel": "^1.1.2",
     "@rsbuild/plugin-solid": "^1.2.0",

@@ -38,3 +38,4 @@ tauri-plugin-store = "2.4.3"
 dirs = "6.0.0"
 tokio-util = "0.7.18"
 reqwest = { version = "0.13.3", features = ["json", "query", "rustls"] }
+jellyfin_api = { version = "10.11.10", path = "jellyfin-api", features = ["rustls"] }
