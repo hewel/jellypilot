@@ -13,9 +13,14 @@ interface ShortcutKeysCardProps {
 
 export default function ShortcutKeysCard(props: ShortcutKeysCardProps) {
   return (
-    <SectionCard icon={<Keyboard class="h-6 w-6" />} title="Shortcut keys">
+    <SectionCard
+      icon={
+        <Keyboard class="h-5 w-5 text-secondary drop-shadow-[0_0_8px_rgba(57,213,255,0.4)]" />
+      }
+      title="Shortcut keys"
+    >
       <div class="space-y-4">
-        <p class="text-body-small text-on-surface-variant">
+        <p class="text-body-small text-on-surface-variant/80">
           MPV input bindings for episode navigation and manual intro skipping.
         </p>
 
@@ -31,7 +36,7 @@ export default function ShortcutKeysCard(props: ShortcutKeysCardProps) {
               class="block"
               invalid={field().state.meta.errors.length > 0}
             >
-              <ArkField.Label class="mb-1 block text-label-medium uppercase text-on-surface-variant">
+              <ArkField.Label class="mb-1.5 block text-label-medium">
                 Next episode key
               </ArkField.Label>
               <ArkField.Input
@@ -49,7 +54,7 @@ export default function ShortcutKeysCard(props: ShortcutKeysCardProps) {
                     event.currentTarget.value,
                   );
                 }}
-                class="input-filled w-full font-mono"
+                class="input-filled w-full font-mono font-semibold text-secondary"
                 placeholder="Shift+>"
               />
             </ArkField.Root>
@@ -68,7 +73,7 @@ export default function ShortcutKeysCard(props: ShortcutKeysCardProps) {
               class="block"
               invalid={field().state.meta.errors.length > 0}
             >
-              <ArkField.Label class="mb-1 block text-label-medium uppercase text-on-surface-variant">
+              <ArkField.Label class="mb-1.5 block text-label-medium">
                 Previous episode key
               </ArkField.Label>
               <ArkField.Input
@@ -86,7 +91,7 @@ export default function ShortcutKeysCard(props: ShortcutKeysCardProps) {
                     event.currentTarget.value,
                   );
                 }}
-                class="input-filled w-full font-mono"
+                class="input-filled w-full font-mono font-semibold text-secondary"
                 placeholder="Shift+<"
               />
             </ArkField.Root>
@@ -105,7 +110,7 @@ export default function ShortcutKeysCard(props: ShortcutKeysCardProps) {
               class="block"
               invalid={field().state.meta.errors.length > 0}
             >
-              <ArkField.Label class="mb-1 block text-label-medium uppercase text-on-surface-variant">
+              <ArkField.Label class="mb-1.5 block text-label-medium">
                 Intro skip key
               </ArkField.Label>
               <ArkField.Input
@@ -123,7 +128,7 @@ export default function ShortcutKeysCard(props: ShortcutKeysCardProps) {
                     event.currentTarget.value,
                   );
                 }}
-                class="input-filled w-full font-mono"
+                class="input-filled w-full font-mono font-semibold text-secondary"
                 placeholder="g"
               />
             </ArkField.Root>

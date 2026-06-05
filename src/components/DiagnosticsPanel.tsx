@@ -17,6 +17,7 @@ interface BackendLogEntry {
 interface DiagnosticEntry {
   levelName: string;
   levelClass: string;
+  badgeClass: string;
   message: string;
   time: string;
 }
@@ -27,12 +28,40 @@ interface DiagnosticsPanelProps {
 
 const MAX_DIAGNOSTICS = 200;
 
-const LOG_LEVEL: Record<number, { name: string; color: string }> = {
-  1: { name: 'TRACE', color: 'text-outline' },
-  2: { name: 'DEBUG', color: 'text-on-surface-variant' },
-  3: { name: 'INFO', color: 'text-secondary' },
-  4: { name: 'WARN', color: 'text-warning' },
-  5: { name: 'ERROR', color: 'text-error' },
+const LOG_LEVEL: Record<
+  number,
+  { name: string; color: string; badge: string }
+> = {
+  1: {
+    name: 'TRACE',
+    color: 'text-outline',
+    badge:
+      'bg-surface-container-highest border-outline-variant/40 text-outline',
+  },
+  2: {
+    name: 'DEBUG',
+    color: 'text-on-surface-variant',
+    badge:
+      'bg-surface-container-highest border-outline/30 text-on-surface-variant',
+  },
+  3: {
+    name: 'INFO',
+    color: 'text-secondary',
+    badge:
+      'bg-secondary-container/30 border-secondary/30 text-secondary shadow-[0_0_6px_rgba(57,213,255,0.1)]',
+  },
+  4: {
+    name: 'WARN',
+    color: 'text-warning',
+    badge:
+      'bg-warning-container/30 border-warning/30 text-warning shadow-[0_0_6px_rgba(246,199,104,0.1)]',
+  },
+  5: {
+    name: 'ERROR',
+    color: 'text-error',
+    badge:
+      'bg-error-container/30 border-error/30 text-error shadow-[0_0_6px_rgba(255,107,122,0.1)]',
+  },
 };
 
 const SENSITIVE_QUERY_PARAM =
@@ -58,11 +87,13 @@ function toDiagnosticEntry(entry: BackendLogEntry): DiagnosticEntry {
   const level = LOG_LEVEL[entry.level] ?? {
     name: 'UNKNOWN',
     color: 'text-on-surface-variant',
+    badge: 'bg-surface-container-highest text-on-surface-variant',
   };
 
   return {
     levelName: level.name,
     levelClass: level.color,
+    badgeClass: level.badge,
     message: sanitizeDiagnosticMessage(entry.message),
     time: formatDiagnosticTime(new Date()),
   };
@@ -131,9 +162,9 @@ export default function DiagnosticsPanel(props: DiagnosticsPanelProps) {
   };
 
   return (
-    <div class="space-y-3">
-      <div class="flex items-center justify-between gap-3">
-        <p class="text-body-small text-on-surface-variant">
+    <div class="space-y-4">
+      <div class="flex items-center justify-between gap-3 px-1">
+        <p class="font-mono text-[11px] font-semibold text-on-surface-variant/80">
           {diagnostics().length} sanitized runtime events
         </p>
         <Show when={!props.compact}>
@@ -142,14 +173,16 @@ export default function DiagnosticsPanel(props: DiagnosticsPanelProps) {
             onCheckedChange={(details) =>
               setAutoScroll(details.checked === true)
             }
-            class="ark-checkbox text-label-small text-on-surface-variant"
+            class="ark-checkbox text-label-small text-on-surface-variant/95"
           >
             <Checkbox.Control class="ark-checkbox__control">
               <Checkbox.Indicator class="ark-checkbox__indicator">
                 ✓
               </Checkbox.Indicator>
             </Checkbox.Control>
-            <Checkbox.Label>Auto-scroll</Checkbox.Label>
+            <Checkbox.Label class="cursor-pointer select-none">
+              Auto-scroll
+            </Checkbox.Label>
             <Checkbox.HiddenInput />
           </Checkbox.Root>
         </Show>
@@ -157,12 +190,12 @@ export default function DiagnosticsPanel(props: DiagnosticsPanelProps) {
 
       <div
         ref={containerRef}
-        class={`${props.compact ? 'max-h-56' : 'max-h-96'} space-y-2 overflow-y-auto rounded-2xl border border-outline-variant/60 bg-surface-container-lowest p-2`}
+        class={`${props.compact ? 'max-h-56' : 'max-h-96'} space-y-2.5 overflow-y-auto rounded-2xl border border-outline-variant bg-surface-container-lowest/60 p-3 shadow-inner backdrop-blur-sm`}
       >
         <Show
           when={visibleEntries().length > 0}
           fallback={
-            <p class="py-8 text-center text-body-small text-on-surface-variant">
+            <p class="py-10 text-center font-mono text-body-small text-on-surface-variant/60">
               No diagnostics yet. Runtime events from the Rust backend will
               appear here.
             </p>
@@ -170,11 +203,17 @@ export default function DiagnosticsPanel(props: DiagnosticsPanelProps) {
         >
           <For each={visibleEntries()}>
             {(entry) => (
-              <div class="diagnostic-row">
-                <div class="flex flex-wrap gap-x-3 gap-y-1">
-                  <span class="text-outline">{entry.time}</span>
-                  <span class={entry.levelClass}>{entry.levelName}</span>
-                  <span class="break-all text-on-surface-variant">
+              <div class="diagnostic-row relative overflow-hidden">
+                <div class="flex flex-wrap items-center gap-x-3 gap-y-1.5 relative z-10">
+                  <span class="text-outline font-semibold select-none">
+                    {entry.time}
+                  </span>
+                  <span
+                    class={`px-2 py-0.5 rounded text-[10px] font-bold border tracking-wider select-none ${entry.badgeClass}`}
+                  >
+                    {entry.levelName}
+                  </span>
+                  <span class="break-all text-on-surface-variant font-medium">
                     {entry.message}
                   </span>
                 </div>
@@ -184,12 +223,12 @@ export default function DiagnosticsPanel(props: DiagnosticsPanelProps) {
         </Show>
       </div>
 
-      <div class="flex flex-wrap items-center justify-end gap-2">
+      <div class="flex flex-wrap items-center justify-end gap-3 px-1">
         <Show when={copyStatus() !== 'idle'}>
           <span
             role="status"
             aria-live="polite"
-            class={`text-label-small ${copyStatus() === 'copied' ? 'text-tertiary' : 'text-error'}`}
+            class={`text-label-small font-bold ${copyStatus() === 'copied' ? 'text-tertiary drop-shadow-[0_0_6px_rgba(79,227,177,0.2)]' : 'text-error'}`}
           >
             {copyStatus() === 'copied' ? 'Copied' : 'Copy failed'}
           </span>
@@ -198,14 +237,14 @@ export default function DiagnosticsPanel(props: DiagnosticsPanelProps) {
           type="button"
           onClick={copyDiagnostics}
           disabled={diagnostics().length === 0}
-          class="btn-text min-h-9 px-3 text-label-small"
+          class="btn-text min-h-9 px-3.5 text-label-small border border-outline-variant hover:border-secondary hover:bg-secondary/5 rounded-xl font-bold"
         >
           Copy diagnostics
         </button>
         <button
           type="button"
           onClick={clearDiagnostics}
-          class="btn-text min-h-9 px-3 text-label-small"
+          class="btn-text min-h-9 px-3.5 text-label-small border border-outline-variant hover:border-error hover:bg-error/5 rounded-xl font-bold hover:text-error"
         >
           Clear
         </button>

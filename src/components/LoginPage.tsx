@@ -329,27 +329,42 @@ export default function LoginPage(props: LoginPageProps) {
   });
 
   return (
-    <div class="console-shell flex items-center justify-center">
-      <main class="w-full max-w-5xl">
-        <div class="mb-8 text-center">
-          <p class="text-label-medium uppercase text-secondary">
-            Docking Sequence
-          </p>
-          <h1 class="brand-type mt-2 text-display-medium text-on-surface">
-            JMSR
-          </h1>
-          <p class="mt-2 text-body-large text-on-surface-variant">
+    <div class="console-shell flex items-center justify-center py-10 relative overflow-y-auto">
+      <main class="w-full max-w-3xl relative z-10">
+        <div class="mb-8 text-center relative">
+          {/* Glowing HUD hologram decoration */}
+          <div class="relative mx-auto mb-6 flex h-24 w-24 items-center justify-center rounded-full border border-primary/20 bg-primary/5 shadow-[0_0_30px_rgba(165,1,219,0.15)]">
+            <div class="absolute inset-0 rounded-full border border-primary/30 animate-ping opacity-25" />
+            <div class="absolute inset-2 rounded-full border border-secondary/25 animate-pulse" />
+            <div class="absolute inset-4 rounded-full border border-dashed border-primary/10 animate-[spin_60s_linear_infinite]" />
+            <RadioTower class="h-10 w-10 text-primary drop-shadow-[0_0_12px_rgba(165,1,219,0.65)]" />
+          </div>
+
+          <div class="inline-flex items-center gap-2.5 px-3.5 py-1 rounded-full border border-secondary/20 bg-secondary/5 mb-3.5">
+            <span class="w-1.5 h-1.5 rounded-full bg-secondary animate-pulse shadow-[0_0_8px_#39d5ff]" />
+            <p class="text-[10px] font-bold uppercase tracking-[0.18em] text-secondary">
+              Docking Sequence
+            </p>
+          </div>
+
+          <h1 class="brand-type text-display-medium text-on-surface">JMSR</h1>
+          <p class="mt-2 text-body-large text-on-surface-variant max-w-md mx-auto">
             Connect this Playback Target to a known Jellyfin server.
           </p>
         </div>
 
-        <Card variant="elevated" class="mx-auto max-w-3xl">
+        <Card
+          variant="elevated"
+          class="mx-auto shadow-2xl relative overflow-hidden"
+        >
+          <div class="absolute top-0 left-0 w-full h-[2px] bg-gradient-to-r from-transparent via-primary/55 to-transparent" />
           <div class="space-y-7">
             <div>
-              <h2 class="text-headline-small text-on-surface">
+              <h2 class="text-headline-small text-on-surface flex items-center gap-2.5">
+                <span class="w-1.5 h-5 rounded bg-primary" />
                 Server coordinates
               </h2>
-              <p class="mt-1 text-body-medium text-on-surface-variant">
+              <p class="mt-1.5 text-body-medium text-on-surface-variant">
                 Choose the protocol and host. JMSR shows the final Server URL
                 before any Login Method starts.
               </p>
@@ -359,12 +374,12 @@ export default function LoginPage(props: LoginPageProps) {
               <form.Field name="scheme">
                 {(field) => (
                   <fieldset
-                    class="grid grid-cols-2 rounded-2xl border border-outline-variant bg-surface-container-high p-1"
+                    class="grid grid-cols-2 rounded-2xl border border-outline-variant bg-surface-container-high/40 p-1"
                     aria-label="Server protocol"
                   >
                     <button
                       type="button"
-                      class={`rounded-xl px-4 py-3 text-label-large transition ${field().state.value === 'https' ? 'bg-primary text-on-primary' : 'text-on-surface-variant hover:bg-primary/10'}`}
+                      class={`rounded-xl px-4 py-3 text-label-large cursor-pointer transition-all duration-300 ${field().state.value === 'https' ? 'bg-primary bg-gradient-to-r from-primary to-[#be19fa] text-on-primary shadow-md shadow-primary/20 font-bold' : 'text-on-surface-variant hover:text-on-surface hover:bg-surface-container-highest/40'}`}
                       disabled={isQuickConnectWaiting()}
                       onClick={() => field().handleChange('https')}
                     >
@@ -372,7 +387,7 @@ export default function LoginPage(props: LoginPageProps) {
                     </button>
                     <button
                       type="button"
-                      class={`rounded-xl px-4 py-3 text-label-large transition ${field().state.value === 'http' ? 'bg-primary text-on-primary' : 'text-on-surface-variant hover:bg-primary/10'}`}
+                      class={`rounded-xl px-4 py-3 text-label-large cursor-pointer transition-all duration-300 ${field().state.value === 'http' ? 'bg-primary bg-gradient-to-r from-primary to-[#be19fa] text-on-primary shadow-md shadow-primary/20 font-bold' : 'text-on-surface-variant hover:text-on-surface hover:bg-surface-container-highest/40'}`}
                       disabled={isQuickConnectWaiting()}
                       onClick={() => field().handleChange('http')}
                     >
@@ -411,12 +426,13 @@ export default function LoginPage(props: LoginPageProps) {
               </form.Field>
             </div>
 
-            <div class="rounded-2xl border border-outline-variant bg-surface-container-lowest p-4">
-              <p class="text-label-small uppercase text-on-surface-variant">
+            <div class="rounded-2xl border border-outline-variant bg-surface-container-lowest/40 p-4 relative overflow-hidden backdrop-blur-sm">
+              <div class="absolute inset-y-0 left-0 w-[3px] bg-secondary" />
+              <p class="text-label-small uppercase text-on-surface-variant/90">
                 Server URL preview
               </p>
               <p
-                class={`mt-1 break-all font-mono text-body-medium ${serverUrl() ? 'text-secondary' : 'text-warning'}`}
+                class={`mt-1 break-all font-mono text-body-medium ${serverUrl() ? 'text-secondary font-semibold drop-shadow-[0_0_8px_rgba(57,213,255,0.15)]' : 'text-warning'}`}
               >
                 {serverUrl() || 'Enter a server host to preview the final URL'}
               </p>
@@ -435,44 +451,71 @@ export default function LoginPage(props: LoginPageProps) {
               }}
             >
               <Tabs.List
-                class="grid grid-cols-2 rounded-full border border-outline-variant bg-surface-container-high p-1"
+                class="grid grid-cols-2 rounded-2xl border border-outline-variant bg-surface-container-high/40 p-1 mb-6"
                 aria-label="Login Method"
               >
                 <Tabs.Trigger
                   value="quickConnect"
                   disabled={isQuickConnectWaiting()}
-                  class={`rounded-full px-4 py-3 text-label-large transition ${loginMethod() === 'quickConnect' ? 'bg-primary text-on-primary' : 'text-on-surface-variant hover:bg-primary/10'}`}
+                  class={`rounded-xl px-4 py-3 text-label-large cursor-pointer transition-all duration-300 ${loginMethod() === 'quickConnect' ? 'bg-gradient-to-r from-primary to-[#be19fa] text-on-primary shadow-lg shadow-primary/25 font-bold' : 'text-on-surface-variant hover:text-on-surface hover:bg-surface-container-highest/40'}`}
                 >
                   Quick Connect
                 </Tabs.Trigger>
                 <Tabs.Trigger
                   value="password"
                   disabled={isQuickConnectWaiting()}
-                  class={`rounded-full px-4 py-3 text-label-large transition ${loginMethod() === 'password' ? 'bg-primary text-on-primary' : 'text-on-surface-variant hover:bg-primary/10'}`}
+                  class={`rounded-xl px-4 py-3 text-label-large cursor-pointer transition-all duration-300 ${loginMethod() === 'password' ? 'bg-gradient-to-r from-primary to-[#be19fa] text-on-primary shadow-lg shadow-primary/25 font-bold' : 'text-on-surface-variant hover:text-on-surface hover:bg-surface-container-highest/40'}`}
                 >
                   Password
                 </Tabs.Trigger>
               </Tabs.List>
 
               <Tabs.Content value="quickConnect">
-                <div class="rounded-3xl border border-secondary/30 bg-secondary-container/60 p-5 text-center">
-                  <RadioTower class="mx-auto h-8 w-8 text-secondary" />
-                  <p class="mt-3 text-body-medium text-on-secondary-container">
+                <div class="rounded-3xl border border-secondary/25 bg-secondary-container/20 p-6 text-center backdrop-blur-sm relative overflow-hidden transition-all duration-300">
+                  <div class="absolute inset-0 bg-gradient-to-b from-secondary/5 to-transparent pointer-events-none" />
+
+                  {/* Decorative radar background */}
+                  <div class="relative mx-auto mb-4 flex h-20 w-20 items-center justify-center rounded-full border border-secondary/20 bg-secondary/5">
+                    <Show when={isQuickConnectWaiting()}>
+                      <div class="absolute inset-0 rounded-full border border-secondary/40 animate-radar-ring" />
+                      <div
+                        class="absolute inset-0 rounded-full border border-secondary/30 animate-radar-ring"
+                        style="animation-delay: 0.7s"
+                      />
+                      <div
+                        class="absolute inset-0 rounded-full border border-secondary/20 animate-radar-ring"
+                        style="animation-delay: 1.4s"
+                      />
+                    </Show>
+                    <RadioTower
+                      class={`h-9 w-9 text-secondary ${isQuickConnectWaiting() ? 'animate-pulse' : ''} drop-shadow-[0_0_8px_rgba(57,213,255,0.4)]`}
+                    />
+                  </div>
+
+                  <p class="text-body-medium text-on-secondary-container font-medium">
                     Approve this code from another signed-in Jellyfin client.
                     JMSR will finish login automatically after approval.
                   </p>
-                  <p class="mt-2 text-body-small text-on-surface-variant">
+                  <p class="mt-2 text-body-small text-on-surface-variant/80">
                     You are authorizing this Playback Target.
                   </p>
+
                   <Show when={quickConnectCode()}>
-                    <p class="mt-5 font-mono text-display-small tracking-[0.35em] text-secondary">
-                      {quickConnectCode()}
-                    </p>
+                    <div class="mt-6 inline-flex flex-col items-center justify-center px-6 py-3.5 rounded-2xl bg-surface-container-lowest/80 border border-outline-variant shadow-inner">
+                      <span class="text-[10px] uppercase tracking-[0.2em] text-on-surface-variant/80 mb-1 font-bold">
+                        Verification Code
+                      </span>
+                      <p class="font-mono text-display-small tracking-[0.25em] text-secondary drop-shadow-[0_0_10px_rgba(57,213,255,0.55)] pl-[0.25em]">
+                        {quickConnectCode()}
+                      </p>
+                    </div>
                   </Show>
+
                   <Show when={isQuickConnectWaiting()}>
-                    <p class="mt-4 text-label-medium uppercase text-secondary">
+                    <div class="mt-5 flex items-center justify-center gap-2 text-label-medium text-secondary animate-pulse">
+                      <span class="w-2 h-2 rounded-full bg-secondary shadow-[0_0_8px_#39d5ff]" />
                       Awaiting Quick Connect Approval…
-                    </p>
+                    </div>
                   </Show>
                 </div>
               </Tabs.Content>
@@ -482,7 +525,7 @@ export default function LoginPage(props: LoginPageProps) {
                   <form.Field name="username">
                     {(field) => (
                       <ArkField.Root class="block">
-                        <ArkField.Label class="mb-1 block text-label-medium uppercase text-on-surface-variant">
+                        <ArkField.Label class="mb-1.5 block text-label-medium">
                           Username
                         </ArkField.Label>
                         <ArkField.Input
@@ -499,7 +542,7 @@ export default function LoginPage(props: LoginPageProps) {
                   <form.Field name="password">
                     {(field) => (
                       <ArkField.Root class="block">
-                        <ArkField.Label class="mb-1 block text-label-medium uppercase text-on-surface-variant">
+                        <ArkField.Label class="mb-1.5 block text-label-medium">
                           Password
                         </ArkField.Label>
                         <ArkField.Input
@@ -521,14 +564,14 @@ export default function LoginPage(props: LoginPageProps) {
                         onCheckedChange={(details) =>
                           field().handleChange(details.checked === true)
                         }
-                        class="ark-checkbox text-body-medium text-on-surface"
+                        class="ark-checkbox text-body-medium text-on-surface mt-2.5"
                       >
                         <Checkbox.Control class="ark-checkbox__control">
                           <Checkbox.Indicator class="ark-checkbox__indicator">
                             <Check class="h-3.5 w-3.5" stroke-width={4} />
                           </Checkbox.Indicator>
                         </Checkbox.Control>
-                        <Checkbox.Label>
+                        <Checkbox.Label class="cursor-pointer font-medium hover:text-on-surface-variant transition-colors select-none">
                           Remember Server URL and username
                         </Checkbox.Label>
                         <Checkbox.HiddenInput />
@@ -541,13 +584,15 @@ export default function LoginPage(props: LoginPageProps) {
 
             <Show when={error()}>
               <div
-                class="flex items-start gap-3 rounded-2xl bg-error-container p-4 text-on-error-container"
+                class="flex items-start gap-3 rounded-2xl bg-error-container/20 border border-error/30 p-4 text-on-error-container"
                 role="alert"
               >
-                <CircleAlert class="mt-0.5 h-5 w-5" />
+                <CircleAlert class="mt-0.5 h-5 w-5 text-error shrink-0" />
                 <div>
-                  <p class="text-title-small">Connection needs attention</p>
-                  <p class="text-body-medium">{error()}</p>
+                  <p class="text-title-small text-error font-bold">
+                    Connection needs attention
+                  </p>
+                  <p class="text-body-medium mt-0.5">{error()}</p>
                 </div>
               </div>
             </Show>
