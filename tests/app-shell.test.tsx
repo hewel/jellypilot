@@ -1,5 +1,5 @@
 import { afterEach, expect, rstest, test } from '@rstest/core';
-import { fireEvent, screen, waitFor } from '@testing-library/dom';
+import { screen, waitFor } from '@testing-library/dom';
 import { render } from 'solid-js/web';
 import { commands, events, type NowPlayingState } from '../src/bindings';
 import AuthenticatedShell from '../src/components/AuthenticatedShell';
