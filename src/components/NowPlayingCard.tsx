@@ -388,14 +388,14 @@ export default function NowPlayingCard(props: {
         >
           <Slider.Control class="ark-slider__control">
             <Slider.Track class="ark-slider__track">
-              <Slider.Range class="ark-slider__range bg-gradient-to-r from-secondary to-[#00abff] shadow-[0_0_8px_rgba(57,213,255,0.4)]" />
+              <Slider.Range class="ark-slider__range bg-gradient-to-r from-secondary to-primary shadow-[0_0_8px_rgba(129,140,248,0.4)]" />
             </Slider.Track>
             <Slider.Thumb index={0} class="ark-slider__thumb">
               <Slider.HiddenInput />
             </Slider.Thumb>
           </Slider.Control>
         </Slider.Root>
-        <span class="w-12 text-right font-mono text-[13px] font-semibold text-secondary drop-shadow-[0_0_6px_rgba(57,213,255,0.15)]">
+        <span class="w-12 text-right font-mono text-[13px] font-semibold text-secondary drop-shadow-[0_0_6px_rgba(129,140,248,0.15)]">
           {Math.round(volumeValue())}%
         </span>
       </div>

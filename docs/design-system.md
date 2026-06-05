@@ -22,10 +22,10 @@ All components use semantic tokens. `#A501DB` is the JMSR brand seed and primary
 | On Primary | `text-on-primary` | `#ffffff` | Text/icons on primary surfaces |
 | Primary Container | `bg-primary-container` | `#2A0B38` | Purple tonal surfaces |
 | On Primary Container | `text-on-primary-container` | `#F4D7FF` | Text on purple tonal surfaces |
-| Secondary | `text-secondary`, `bg-secondary` | `#39D5FF` | Jellyfin/server/session accent |
-| On Secondary | `text-on-secondary` | `#001F2A` | Text on cyan surfaces |
-| Secondary Container | `bg-secondary-container` | `#073544` | Cyan tonal surfaces |
-| On Secondary Container | `text-on-secondary-container` | `#BDEEFF` | Text on cyan tonal surfaces |
+| Secondary | `text-secondary`, `bg-secondary` | `#818CF8` | Jellyfin/server/session accent |
+| On Secondary | `text-on-secondary` | `#0B0A24` | Text on indigo surfaces |
+| Secondary Container | `bg-secondary-container` | `#1F2152` | Indigo tonal surfaces |
+| On Secondary Container | `text-on-secondary-container` | `#E0E2FF` | Text on indigo tonal surfaces |
 | Tertiary | `text-tertiary`, `bg-tertiary` | `#4FE3B1` | Healthy/ready/success state |
 | On Tertiary | `text-on-tertiary` | `#001F16` | Text on healthy surfaces |
 | Tertiary Container | `bg-tertiary-container` | `#06382A` | Healthy tonal surfaces |
@@ -53,12 +53,11 @@ All components use semantic tokens. `#A501DB` is the JMSR brand seed and primary
 
 ## Color Semantics
 
-- Purple means JMSR identity, primary app action, and local control.
-- Cyan means Jellyfin server/session/connection.
+- Purple/Indigo means JMSR identity, primary app action, local control, and Jellyfin server/session/connection.
 - Teal/green means generic healthy or ready.
 - Amber means degraded, waiting for recovery, or retryable warning.
 - Red means failure or destructive action.
-- Quick Connect waiting is a normal state and should use purple/cyan, not amber.
+- Quick Connect waiting is a normal state and should use purple/indigo, not amber.
 
 ## Typography
 

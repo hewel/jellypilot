@@ -18,7 +18,7 @@ export default function ConnectionCard(props: ConnectionCardProps) {
   return (
     <SectionCard
       icon={
-        <Activity class="h-5 w-5 text-secondary drop-shadow-[0_0_8px_rgba(57,213,255,0.4)]" />
+        <Activity class="h-5 w-5 text-secondary drop-shadow-[0_0_8px_rgba(129,140,248,0.4)]" />
       }
       title="Connection"
     >

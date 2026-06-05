@@ -48,7 +48,7 @@ const LOG_LEVEL: Record<
     name: 'INFO',
     color: 'text-secondary',
     badge:
-      'bg-secondary-container/30 border-secondary/30 text-secondary shadow-[0_0_6px_rgba(57,213,255,0.1)]',
+      'bg-secondary-container/30 border-secondary/30 text-secondary shadow-[0_0_6px_rgba(129,140,248,0.1)]',
   },
   4: {
     name: 'WARN',

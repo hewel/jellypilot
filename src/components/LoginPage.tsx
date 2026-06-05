@@ -341,7 +341,7 @@ export default function LoginPage(props: LoginPageProps) {
           </div>
 
           <div class="inline-flex items-center gap-2.5 px-3.5 py-1 rounded-full border border-secondary/20 bg-secondary/5 mb-3.5">
-            <span class="w-1.5 h-1.5 rounded-full bg-secondary animate-pulse shadow-[0_0_8px_#39d5ff]" />
+            <span class="w-1.5 h-1.5 rounded-full bg-secondary animate-pulse shadow-[0_0_8px_#818cf8]" />
             <p class="text-[10px] font-bold uppercase tracking-[0.18em] text-secondary">
               Docking Sequence
             </p>
@@ -432,7 +432,7 @@ export default function LoginPage(props: LoginPageProps) {
                 Server URL preview
               </p>
               <p
-                class={`mt-1 break-all font-mono text-body-medium ${serverUrl() ? 'text-secondary font-semibold drop-shadow-[0_0_8px_rgba(57,213,255,0.15)]' : 'text-warning'}`}
+                class={`mt-1 break-all font-mono text-body-medium ${serverUrl() ? 'text-secondary font-semibold drop-shadow-[0_0_8px_rgba(129,140,248,0.15)]' : 'text-warning'}`}
               >
                 {serverUrl() || 'Enter a server host to preview the final URL'}
               </p>
@@ -488,7 +488,7 @@ export default function LoginPage(props: LoginPageProps) {
                       />
                     </Show>
                     <RadioTower
-                      class={`h-9 w-9 text-secondary ${isQuickConnectWaiting() ? 'animate-pulse' : ''} drop-shadow-[0_0_8px_rgba(57,213,255,0.4)]`}
+                      class={`h-9 w-9 text-secondary ${isQuickConnectWaiting() ? 'animate-pulse' : ''} drop-shadow-[0_0_8px_rgba(129,140,248,0.4)]`}
                     />
                   </div>
 
@@ -505,7 +505,7 @@ export default function LoginPage(props: LoginPageProps) {
                       <span class="text-[10px] uppercase tracking-[0.2em] text-on-surface-variant/80 mb-1 font-bold">
                         Verification Code
                       </span>
-                      <p class="font-mono text-display-small tracking-[0.25em] text-secondary drop-shadow-[0_0_10px_rgba(57,213,255,0.55)] pl-[0.25em]">
+                      <p class="font-mono text-display-small tracking-[0.25em] text-secondary drop-shadow-[0_0_10px_rgba(129,140,248,0.55)] pl-[0.25em]">
                         {quickConnectCode()}
                       </p>
                     </div>
@@ -513,7 +513,7 @@ export default function LoginPage(props: LoginPageProps) {
 
                   <Show when={isQuickConnectWaiting()}>
                     <div class="mt-5 flex items-center justify-center gap-2 text-label-medium text-secondary animate-pulse">
-                      <span class="w-2 h-2 rounded-full bg-secondary shadow-[0_0_8px_#39d5ff]" />
+                      <span class="w-2 h-2 rounded-full bg-secondary shadow-[0_0_8px_#818cf8]" />
                       Awaiting Quick Connect Approval…
                     </div>
                   </Show>

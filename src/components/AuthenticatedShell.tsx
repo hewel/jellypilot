@@ -409,30 +409,100 @@ function statusText(status?: NowPlayingState['status']) {
   }
 }
 
-function ShellNav(props: { activeArea: ShellArea }) {
+function ShellNav(props: {
+  activeArea: ShellArea;
+  connection: ConnectionState | undefined;
+}) {
   return (
-    <nav
-      aria-label="JMSR areas"
-      class="flex gap-2 overflow-x-auto rounded-2xl border border-outline-variant bg-surface-container-low/70 p-2 shadow-xl backdrop-blur-md lg:flex-col lg:overflow-visible"
-    >
-      {navItems.map(({ area, href, label, Icon }) => {
-        const active = () => props.activeArea === area;
-        return (
-          <a
-            href={href}
-            aria-current={active() ? 'page' : undefined}
-            class={`inline-flex min-h-11 shrink-0 items-center gap-2 rounded-xl px-3 text-[14px] font-bold transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-secondary/70 ${
-              active()
-                ? 'border border-primary/40 bg-primary-container/65 text-on-primary-container shadow-brand-glow-sm'
-                : 'border border-transparent text-on-surface-variant hover:border-outline-variant hover:bg-surface-container-high/60 hover:text-on-surface'
-            }`}
-          >
-            <Icon class="h-4.5 w-4.5" />
-            <span>{label}</span>
-          </a>
-        );
-      })}
-    </nav>
+    <div class="flex flex-col gap-2 rounded-2xl border border-outline-variant bg-surface-container-low/60 p-2 shadow-xl backdrop-blur-md lg:gap-4 lg:p-4 lg:h-full lg:min-h-[480px]">
+      {/* Brand Header - only visible on desktop lg */}
+      <div class="hidden lg:flex flex-col px-2 pt-2 pb-1">
+        <div class="flex items-center gap-2">
+          <span class="relative flex h-3.5 w-3.5 items-center justify-center">
+            <span class="absolute inline-flex h-full w-full animate-ping rounded-full bg-primary/40 opacity-75" />
+            <span class="relative inline-flex h-2.5 w-2.5 rounded-full bg-primary shadow-[0_0_8px_var(--color-primary)]" />
+          </span>
+          <span class="brand-type text-title-large bg-gradient-to-r from-on-surface via-on-surface to-primary bg-clip-text text-transparent">
+            JMSR
+          </span>
+          <span class="text-[9px] font-black uppercase tracking-[0.2em] px-1.5 py-0.5 rounded border border-primary/20 bg-primary/5 text-primary">
+            v2
+          </span>
+        </div>
+        <p class="text-[11px] font-bold uppercase tracking-[0.15em] text-on-surface-variant/70 mt-1">
+          Control Room
+        </p>
+      </div>
+
+      <div class="hidden lg:block border-t border-outline-variant/30 my-1" />
+
+      {/* Navigation List */}
+      <nav
+        aria-label="JMSR areas"
+        class="flex gap-2 overflow-x-auto lg:flex-col lg:overflow-visible"
+      >
+        {navItems.map(({ area, href, label, Icon }) => {
+          const active = () => props.activeArea === area;
+          return (
+            <a
+              href={href}
+              aria-current={active() ? 'page' : undefined}
+              class={`inline-flex min-h-11 shrink-0 items-center gap-2.5 rounded-xl px-3.5 text-[14px] font-bold transition-all duration-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-secondary/70 ${
+                active()
+                  ? 'border border-primary/30 bg-primary-container/45 text-on-primary-container shadow-[inset_0_1px_1px_rgba(255,255,255,0.1),0_0_12px_rgba(79,70,229,0.15)]'
+                  : 'border border-transparent text-on-surface-variant hover:border-outline-variant/50 hover:bg-surface-container-high/40 hover:text-on-surface'
+              }`}
+            >
+              <Icon class="h-4.5 w-4.5" />
+              <span>{label}</span>
+            </a>
+          );
+        })}
+      </nav>
+
+      {/* Spacer - desktop only */}
+      <div class="hidden lg:block flex-1" />
+
+      {/* Server Status Panel - desktop only */}
+      <div class="hidden lg:block border-t border-outline-variant/30 my-1" />
+
+      <div class="hidden lg:flex flex-col gap-2.5 px-2 pb-1 pt-2">
+        <Show
+          when={props.connection}
+          fallback={
+            <div class="flex items-center gap-2.5 text-on-surface-variant/60">
+              <span class="w-2 h-2 rounded-full bg-outline-variant animate-pulse" />
+              <span class="text-body-small font-semibold">Connecting...</span>
+            </div>
+          }
+        >
+          {(conn) => (
+            <div class="flex items-center justify-between gap-2">
+              <div class="flex min-w-0 items-center gap-2.5">
+                <div class="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border border-primary/20 bg-primary-container/30 text-primary font-display font-black text-xs">
+                  {conn().userName?.charAt(0).toUpperCase() || 'J'}
+                </div>
+                <div class="min-w-0">
+                  <p class="truncate text-[12px] font-bold text-on-surface">
+                    {conn().userName || 'Guest User'}
+                  </p>
+                  <p class="truncate text-[10px] font-semibold text-on-surface-variant/80">
+                    {conn().serverName || 'Jellyfin Server'}
+                  </p>
+                </div>
+              </div>
+              <span
+                class={`w-2 h-2 shrink-0 rounded-full ${
+                  conn().connected
+                    ? 'bg-tertiary shadow-[0_0_8px_var(--color-tertiary)] animate-pulse'
+                    : 'bg-error shadow-[0_0_8px_var(--color-error)]'
+                }`}
+              />
+            </div>
+          )}
+        </Show>
+      </div>
+    </div>
   );
 }
 
@@ -552,8 +622,6 @@ function LibraryLanding() {
           <span>Retry Library</span>
         </button>
       </div>
-
-      <CompactNowPlayingSummary />
 
       <LibrarySearchPanel />
 
@@ -994,8 +1062,6 @@ function LibraryBrowseView(props: {
         </a>
       </div>
 
-      <CompactNowPlayingSummary />
-
       <section class="card-filled space-y-4" aria-label="Library controls">
         <div class="grid gap-4 lg:grid-cols-[minmax(180px,240px)_1fr_auto] lg:items-end">
           <label class="space-y-2">
@@ -1313,8 +1379,6 @@ function LibraryItemDetailView(props: { itemId: string }) {
         </button>
       </div>
 
-      <CompactNowPlayingSummary />
-
       <Show
         when={detail()}
         fallback={
@@ -1544,8 +1608,6 @@ function LibraryShowDetailView(props: { seriesId: string }) {
         </button>
       </div>
 
-      <CompactNowPlayingSummary />
-
       <Show
         when={detail()}
         fallback={
@@ -1767,6 +1829,8 @@ function DiagnosticsArea() {
 }
 
 export default function AuthenticatedShell(props: AuthenticatedShellProps) {
+  const [connection] = createResource(() => commands.jellyfinGetState());
+
   const renderArea = () => {
     switch (props.activeArea) {
       case 'library':
@@ -1800,11 +1864,16 @@ export default function AuthenticatedShell(props: AuthenticatedShellProps) {
 
   return (
     <div class="console-shell">
-      <div class="mx-auto grid w-full max-w-7xl gap-5 lg:grid-cols-[220px_minmax(0,1fr)]">
+      <div class="mx-auto grid w-full max-w-7xl gap-5 lg:grid-cols-[240px_minmax(0,1fr)]">
         <div class="lg:sticky lg:top-6 lg:self-start">
-          <ShellNav activeArea={props.activeArea} />
+          <ShellNav activeArea={props.activeArea} connection={connection()} />
         </div>
-        <main class="min-w-0 animate-fade-in">{renderArea()}</main>
+        <div class="flex flex-col gap-6 min-w-0">
+          <Show when={props.activeArea !== 'now-playing'}>
+            <CompactNowPlayingSummary />
+          </Show>
+          <main class="min-w-0 animate-fade-in">{renderArea()}</main>
+        </div>
       </div>
     </div>
   );

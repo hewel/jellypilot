@@ -16,10 +16,10 @@
   --color-primary-container: #1b1c3b;
   --color-on-primary-container: #e0e2ff;
 
-  --color-secondary: #39d5ff;
-  --color-on-secondary: #001f2a;
-  --color-secondary-container: #073544;
-  --color-on-secondary-container: #bdeeff;
+  --color-secondary: #818cf8;
+  --color-on-secondary: #0b0a24;
+  --color-secondary-container: #1f2152;
+  --color-on-secondary-container: #e0e2ff;
 
   --color-tertiary: #4fe3b1;
   --color-on-tertiary: #001f16;
@@ -68,7 +68,7 @@ body {
     ),
     radial-gradient(
       circle at 90% 90%,
-      rgba(57, 213, 255, 0.03),
+      rgba(129, 140, 248, 0.03),
       transparent 28rem
     ),
     #05060a;
