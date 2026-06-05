@@ -31,6 +31,8 @@ export const commands = {
 	mpvIsConnected: () => __TAURI_INVOKE<boolean>("mpv_is_connected"),
 	/**  Get current user-facing Now Playing state. */
 	nowPlayingGetState: () => typedError<NowPlayingState, CommandError>(__TAURI_INVOKE("now_playing_get_state")),
+	/**  Load the Library Browser Video Home dashboard data. */
+	libraryVideoHome: () => typedError<VideoHome, CommandError>(__TAURI_INVOKE("library_video_home")),
 	/**  Connect to a Jellyfin server. */
 	jellyfinConnect: (credentials: Credentials) => typedError<null, CommandError>(__TAURI_INVOKE("jellyfin_connect", { credentials })),
 	/**  Disconnect from Jellyfin server. */
@@ -220,6 +222,42 @@ export type SavedSession = {
 	userName: string,
 	serverName: string | null,
 	deviceId: string | null,
+};
+
+/**  Library Browser landing data exposed to the frontend. */
+export type VideoHome = {
+	continueWatching: VideoHomeItem[],
+	nextUp: VideoHomeItem[],
+	latestMovies: VideoHomeItem[],
+	latestEpisodes: VideoHomeItem[],
+	libraryShortcuts: VideoLibraryShortcut[],
+};
+
+/**  Video item summary for Video Home rows. */
+export type VideoHomeItem = {
+	id: string,
+	name: string,
+	itemType: string,
+	seriesId: string | null,
+	seriesName: string | null,
+	seasonNumber: number | null,
+	episodeNumber: number | null,
+	productionYear: number | null,
+	runtimeSeconds: number | null,
+	resumePositionSeconds: number | null,
+	playedPercentage: number | null,
+	played: boolean,
+	favorite: boolean,
+	artworkUrl: string | null,
+};
+
+/**  Video library shortcut for drilling into Movies or Shows libraries. */
+export type VideoLibraryShortcut = {
+	id: string,
+	name: string,
+	collectionType: string,
+	itemCount: number | null,
+	artworkUrl: string | null,
 };
 
 /* Tauri Specta runtime */

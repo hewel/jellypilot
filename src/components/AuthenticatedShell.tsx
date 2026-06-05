@@ -10,6 +10,7 @@ import {
 import {
   createResource,
   createSignal,
+  For,
   onCleanup,
   onMount,
   Show,
@@ -19,8 +20,15 @@ import {
   commands,
   events,
   type NowPlayingState,
+  type VideoHome,
+  type VideoHomeItem,
+  type VideoLibraryShortcut,
 } from '../bindings';
-import { commandFailureMessage, runTauriCommandRaw } from '../effects/commands';
+import {
+  commandFailureMessage,
+  runTauriCommand,
+  runTauriCommandRaw,
+} from '../effects/commands';
 import DiagnosticsPanel from './DiagnosticsPanel';
 import NowPlayingCard from './NowPlayingCard';
 import OperationsConsole from './OperationsConsole';
@@ -33,8 +41,9 @@ interface AuthenticatedShellProps {
   onSignedOut: () => void;
 }
 
-type LibraryConnectionState =
-  | { kind: 'connected'; state: ConnectionState }
+type LibraryHomeState =
+  | { kind: 'ready'; home: VideoHome; connection: ConnectionState }
+  | { kind: 'empty'; connection: ConnectionState }
   | { kind: 'disconnected'; state: ConnectionState }
   | { kind: 'error'; message: string };
 
@@ -60,21 +69,49 @@ const navItems: Array<{
   },
 ];
 
-async function fetchLibraryConnection(): Promise<LibraryConnectionState> {
-  const exit = await Effect.runPromiseExit(
+function videoHomeIsEmpty(home: VideoHome) {
+  return (
+    home.continueWatching.length === 0 &&
+    home.nextUp.length === 0 &&
+    home.latestMovies.length === 0 &&
+    home.latestEpisodes.length === 0 &&
+    home.libraryShortcuts.length === 0
+  );
+}
+
+async function fetchLibraryHome(): Promise<LibraryHomeState> {
+  const connection = await Effect.runPromiseExit(
     runTauriCommandRaw(() => commands.jellyfinGetState()),
   );
 
-  if (Exit.isSuccess(exit)) {
-    return exit.value.connected
-      ? { kind: 'connected', state: exit.value }
-      : { kind: 'disconnected', state: exit.value };
+  if (!Exit.isSuccess(connection)) {
+    return {
+      kind: 'error',
+      message: commandFailureMessage(
+        connection.cause,
+        'Could not load Library state',
+      ),
+    };
   }
 
-  return {
-    kind: 'error',
-    message: commandFailureMessage(exit.cause, 'Could not load Library state'),
-  };
+  if (!connection.value.connected) {
+    return { kind: 'disconnected', state: connection.value };
+  }
+
+  const home = await Effect.runPromiseExit(
+    runTauriCommand(() => commands.libraryVideoHome()),
+  );
+
+  if (!Exit.isSuccess(home)) {
+    return {
+      kind: 'error',
+      message: commandFailureMessage(home.cause, 'Could not load Video Home'),
+    };
+  }
+
+  return videoHomeIsEmpty(home.value)
+    ? { kind: 'empty', connection: connection.value }
+    : { kind: 'ready', home: home.value, connection: connection.value };
 }
 
 function statusText(status?: NowPlayingState['status']) {
@@ -194,7 +231,25 @@ function CompactNowPlayingSummary() {
 }
 
 function LibraryLanding() {
-  const [connection, { refetch }] = createResource(fetchLibraryConnection);
+  const [home, { refetch }] = createResource(fetchLibraryHome);
+  const loadedHome = () => {
+    const current = home();
+    return current?.kind === 'ready' ? current.home : null;
+  };
+  const statusTitle = () => {
+    const current = home();
+    if (current?.kind === 'empty') return 'Video Home has no video rows yet';
+    if (current?.kind === 'error') return 'Could not load Library state';
+    return 'Library requires a live Jellyfin connection';
+  };
+  const statusDescription = () => {
+    const current = home();
+    if (current?.kind === 'empty') {
+      return 'Jellyfin returned no Continue Watching, Next Up, latest video rows, or video library shortcuts for this user.';
+    }
+    if (current?.kind === 'error') return current.message;
+    return 'Reconnect Jellyfin to browse video libraries. Saved Sessions remain available, but Library data is not cached offline.';
+  };
 
   return (
     <div class="space-y-6">
@@ -211,7 +266,7 @@ function LibraryLanding() {
           type="button"
           class="btn-outlined rounded-full"
           onClick={() => void refetch()}
-          disabled={connection.loading}
+          disabled={home.loading}
         >
           <RefreshCw class="h-4 w-4" />
           <span>Retry Library</span>
@@ -220,69 +275,172 @@ function LibraryLanding() {
 
       <CompactNowPlayingSummary />
 
-      <section
-        class="card-elevated space-y-5"
-        aria-labelledby="video-home-title"
+      <Show
+        when={!home.loading}
+        fallback={<LibraryStatusPanel title="Loading Video Home" />}
       >
-        <div class="flex items-start gap-4">
-          <div class="flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl border border-tertiary/30 bg-tertiary-container/25 text-tertiary">
-            <Clapperboard class="h-6 w-6" />
+        <Show
+          when={home()?.kind === 'ready'}
+          fallback={
+            <LibraryStatusPanel
+              title={statusTitle()}
+              description={statusDescription()}
+            />
+          }
+        >
+          <div class="space-y-6">
+            <VideoHomeRow
+              id="continue-watching"
+              title="Continue Watching"
+              items={loadedHome()?.continueWatching ?? []}
+            />
+            <VideoHomeRow
+              id="next-up"
+              title="Next Up"
+              items={loadedHome()?.nextUp ?? []}
+            />
+            <VideoHomeRow
+              id="latest-movies"
+              title="Latest Movies"
+              items={loadedHome()?.latestMovies ?? []}
+            />
+            <VideoHomeRow
+              id="latest-episodes"
+              title="Latest Episodes"
+              items={loadedHome()?.latestEpisodes ?? []}
+            />
+            <LibraryShortcutRow
+              shortcuts={loadedHome()?.libraryShortcuts ?? []}
+            />
           </div>
-          <div class="space-y-2">
-            <h2 id="video-home-title" class="text-headline-small">
-              <Show
-                when={!connection.loading}
-                fallback="Checking Library connection"
-              >
-                <Show
-                  when={connection()?.kind === 'connected'}
-                  fallback={
-                    connection()?.kind === 'error'
-                      ? 'Could not load Library state'
-                      : 'Library requires a live Jellyfin connection'
-                  }
-                >
-                  Video Home is ready
-                </Show>
-              </Show>
-            </h2>
-            <p class="text-body-medium">
-              <Show
-                when={!connection.loading}
-                fallback="JMSR is checking the current Jellyfin session before loading Library data."
-              >
-                <SwitchConnectionCopy connection={connection()} />
-              </Show>
-            </p>
-          </div>
-        </div>
-      </section>
+        </Show>
+      </Show>
     </div>
   );
 }
 
-function SwitchConnectionCopy(props: {
-  connection: LibraryConnectionState | undefined;
-}) {
-  if (props.connection?.kind === 'connected') {
-    return (
-      <>
-        Connected to {props.connection.state.serverName ?? 'Jellyfin'} as{' '}
-        {props.connection.state.userName ?? 'current user'}. Real Video Home
-        rows arrive in the next Library Browser slice.
-      </>
-    );
-  }
+function LibraryStatusPanel(props: { title: string; description?: string }) {
+  return (
+    <section
+      class="card-elevated space-y-5"
+      aria-labelledby="video-home-status-title"
+    >
+      <div class="flex items-start gap-4">
+        <div class="flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl border border-tertiary/30 bg-tertiary-container/25 text-tertiary">
+          <Clapperboard class="h-6 w-6" />
+        </div>
+        <div class="space-y-2">
+          <h2 id="video-home-status-title" class="text-headline-small">
+            {props.title}
+          </h2>
+          <p class="text-body-medium">
+            {props.description ??
+              'JMSR is checking the current Jellyfin session before loading Library data.'}
+          </p>
+        </div>
+      </div>
+    </section>
+  );
+}
 
-  if (props.connection?.kind === 'error') {
-    return <>{props.connection.message}</>;
-  }
+function VideoHomeRow(props: {
+  id: string;
+  title: string;
+  items: VideoHomeItem[];
+}) {
+  return (
+    <Show when={props.items.length > 0}>
+      <section class="space-y-3" aria-labelledby={`row-${props.id}`}>
+        <h2 id={`row-${props.id}`} class="text-title-large">
+          {props.title}
+        </h2>
+        <div class="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+          <For each={props.items}>
+            {(item) => <VideoHomeCard item={item} />}
+          </For>
+        </div>
+      </section>
+    </Show>
+  );
+}
+
+function VideoHomeCard(props: { item: VideoHomeItem }) {
+  const episodeLabel = () => {
+    if (!props.item.seriesName) return props.item.itemType;
+    const number =
+      props.item.seasonNumber && props.item.episodeNumber
+        ? `S${props.item.seasonNumber.toString().padStart(2, '0')}E${props.item.episodeNumber.toString().padStart(2, '0')}`
+        : props.item.itemType;
+    return `${props.item.seriesName} · ${number}`;
+  };
 
   return (
-    <>
-      Reconnect Jellyfin to browse video libraries. Saved Sessions remain
-      available, but Library data is not cached offline.
-    </>
+    <a
+      href={`/library/items/${props.item.id}`}
+      class="card-filled group block min-h-56 overflow-hidden p-0 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-secondary/70"
+    >
+      <div class="aspect-video border-b border-outline-variant bg-surface-container-lowest/60">
+        <Show
+          when={props.item.artworkUrl}
+          fallback={
+            <div class="flex h-full items-center justify-center px-4 text-center text-label-small text-on-surface-variant">
+              No artwork
+            </div>
+          }
+        >
+          {(artworkUrl) => (
+            <img
+              src={artworkUrl()}
+              alt={`${props.item.name} artwork`}
+              class="h-full w-full object-cover"
+              loading="lazy"
+            />
+          )}
+        </Show>
+      </div>
+      <div class="space-y-2 p-4">
+        <p class="line-clamp-2 text-title-medium">{props.item.name}</p>
+        <p class="text-body-small">{episodeLabel()}</p>
+        <Show when={props.item.resumePositionSeconds !== null}>
+          <p class="text-label-small text-secondary">
+            Resume at {Math.floor(props.item.resumePositionSeconds ?? 0)}s
+          </p>
+        </Show>
+      </div>
+    </a>
+  );
+}
+
+function LibraryShortcutRow(props: { shortcuts: VideoLibraryShortcut[] }) {
+  return (
+    <Show when={props.shortcuts.length > 0}>
+      <section class="space-y-3" aria-labelledby="library-shortcuts">
+        <h2 id="library-shortcuts" class="text-title-large">
+          Video Libraries
+        </h2>
+        <div class="grid gap-3 sm:grid-cols-2">
+          <For each={props.shortcuts}>
+            {(shortcut) => (
+              <a
+                href={`/library/${shortcut.collectionType}/${shortcut.id}`}
+                class="card-filled flex items-center justify-between gap-4 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-secondary/70"
+              >
+                <div>
+                  <p class="text-title-medium">{shortcut.name}</p>
+                  <p class="text-body-small">
+                    {shortcut.collectionType === 'tvshows' ? 'Shows' : 'Movies'}{' '}
+                    {shortcut.itemCount !== null
+                      ? `· ${shortcut.itemCount} items`
+                      : ''}
+                  </p>
+                </div>
+                <Library class="h-5 w-5 shrink-0 text-secondary" />
+              </a>
+            )}
+          </For>
+        </div>
+      </section>
+    </Show>
   );
 }
 

@@ -10,7 +10,7 @@ use tauri_specta::{collect_commands, collect_events, Builder, Event};
 use crate::config::AppConfig;
 use crate::jellyfin::{
   ConnectionState, Credentials, JellyfinClient, JellyfinError, QuickConnectRequest,
-  QuickConnectStatus, SavedSession, SessionManager,
+  QuickConnectStatus, SavedSession, SessionManager, VideoHome,
 };
 use crate::mpv::{write_input_conf, MpvClient, PropertyValue};
 use crate::playback_control;
@@ -600,6 +600,20 @@ pub fn jellyfin_is_connected(state: State<'_, JellyfinState>) -> bool {
   state.client.login().is_connected()
 }
 
+/// Load the Library Browser Video Home dashboard data.
+#[tauri::command]
+#[specta]
+pub async fn library_video_home(
+  state: State<'_, JellyfinState>,
+) -> Result<VideoHome, CommandError> {
+  state
+    .client
+    .library()
+    .video_home()
+    .await
+    .map_err(jellyfin_err)
+}
+
 /// Get the current session data for saving.
 #[tauri::command]
 #[specta]
@@ -842,6 +856,7 @@ pub fn specta_builder() -> Builder<tauri::Wry> {
       mpv_get_state,
       mpv_is_connected,
       now_playing_get_state,
+      library_video_home,
       // Jellyfin commands
       jellyfin_connect,
       jellyfin_disconnect,

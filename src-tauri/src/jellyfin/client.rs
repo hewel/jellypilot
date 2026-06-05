@@ -32,6 +32,11 @@ pub struct JellyfinPlayback<'a> {
   client: &'a JellyfinClient,
 }
 
+/// Library Browser interface for Jellyfin video browsing data.
+pub struct JellyfinLibrary<'a> {
+  client: &'a JellyfinClient,
+}
+
 /// Internal connection state.
 struct ClientState {
   server_url: Option<String>,
@@ -72,6 +77,11 @@ impl JellyfinClient {
   /// Playback/media operations used by the playback target session.
   pub fn playback(&self) -> JellyfinPlayback<'_> {
     JellyfinPlayback { client: self }
+  }
+
+  /// Library Browser operations used by the authenticated shell.
+  pub fn library(&self) -> JellyfinLibrary<'_> {
+    JellyfinLibrary { client: self }
   }
 
   /// Set the device name (shown in Jellyfin cast menu).
@@ -1094,6 +1104,248 @@ impl<'a> JellyfinPlayback<'a> {
     self.client.validate_session().await
   }
 }
+
+impl<'a> JellyfinLibrary<'a> {
+  pub async fn video_home(&self) -> Result<VideoHome, JellyfinError> {
+    let server_url = self.client.server_url()?;
+    let token = self.client.access_token()?;
+    let user_id = self.client.user_id()?;
+    let configuration = self
+      .client
+      .openapi_configuration(&server_url, Some(&token))?;
+
+    let continue_watching = jellyfin_api::apis::items_api::get_resume_items(
+      &configuration,
+      jellyfin_api::apis::items_api::GetResumeItemsParams {
+        user_id: Some(user_id.clone()),
+        start_index: Some(0),
+        limit: Some(12),
+        search_term: None,
+        parent_id: None,
+        fields: Some(video_home_fields()),
+        media_types: Some(vec![jellyfin_api::models::MediaType::Video]),
+        enable_user_data: Some(true),
+        image_type_limit: Some(1),
+        enable_image_types: Some(vec![jellyfin_api::models::ImageType::Primary]),
+        exclude_item_types: None,
+        include_item_types: Some(vec![
+          jellyfin_api::models::BaseItemKind::Movie,
+          jellyfin_api::models::BaseItemKind::Episode,
+        ]),
+        enable_total_record_count: Some(false),
+        enable_images: Some(true),
+        exclude_active_sessions: Some(false),
+      },
+    )
+    .await
+    .map_err(|err| JellyfinClient::openapi_error("Video Home continue watching", err))?
+    .items
+    .unwrap_or_default()
+    .into_iter()
+    .filter_map(|item| map_video_home_item(&server_url, item))
+    .collect();
+
+    let next_up = jellyfin_api::apis::tv_shows_api::get_next_up(
+      &configuration,
+      jellyfin_api::apis::tv_shows_api::GetNextUpParams {
+        user_id: Some(user_id.clone()),
+        start_index: Some(0),
+        limit: Some(12),
+        fields: Some(video_home_fields()),
+        series_id: None,
+        parent_id: None,
+        enable_images: Some(true),
+        image_type_limit: Some(1),
+        enable_image_types: Some(vec![jellyfin_api::models::ImageType::Primary]),
+        enable_user_data: Some(true),
+        next_up_date_cutoff: None,
+        enable_total_record_count: Some(false),
+        disable_first_episode: Some(false),
+        enable_resumable: Some(true),
+        enable_rewatching: Some(false),
+      },
+    )
+    .await
+    .map_err(|err| JellyfinClient::openapi_error("Video Home next up", err))?
+    .items
+    .unwrap_or_default()
+    .into_iter()
+    .filter_map(|item| map_video_home_item(&server_url, item))
+    .collect();
+
+    let latest_movies = latest_video_items(
+      &configuration,
+      &server_url,
+      &user_id,
+      jellyfin_api::models::BaseItemKind::Movie,
+      "Video Home latest movies",
+    )
+    .await?;
+
+    let latest_episodes = latest_video_items(
+      &configuration,
+      &server_url,
+      &user_id,
+      jellyfin_api::models::BaseItemKind::Episode,
+      "Video Home latest episodes",
+    )
+    .await?;
+
+    let library_shortcuts = jellyfin_api::apis::user_views_api::get_user_views(
+      &configuration,
+      jellyfin_api::apis::user_views_api::GetUserViewsParams {
+        user_id: Some(user_id),
+        include_external_content: Some(false),
+        preset_views: Some(vec![
+          jellyfin_api::models::CollectionType::Movies,
+          jellyfin_api::models::CollectionType::Tvshows,
+        ]),
+        include_hidden: Some(false),
+      },
+    )
+    .await
+    .map_err(|err| JellyfinClient::openapi_error("Video Home library shortcuts", err))?
+    .items
+    .unwrap_or_default()
+    .into_iter()
+    .filter_map(|item| map_video_library_shortcut(&server_url, item))
+    .collect();
+
+    Ok(VideoHome {
+      continue_watching,
+      next_up,
+      latest_movies,
+      latest_episodes,
+      library_shortcuts,
+    })
+  }
+}
+
+async fn latest_video_items(
+  configuration: &jellyfin_api::apis::configuration::Configuration,
+  server_url: &str,
+  user_id: &str,
+  item_type: jellyfin_api::models::BaseItemKind,
+  context: &str,
+) -> Result<Vec<VideoHomeItem>, JellyfinError> {
+  let items = jellyfin_api::apis::user_library_api::get_latest_media(
+    configuration,
+    jellyfin_api::apis::user_library_api::GetLatestMediaParams {
+      user_id: Some(user_id.to_string()),
+      parent_id: None,
+      fields: Some(video_home_fields()),
+      include_item_types: Some(vec![item_type]),
+      is_played: None,
+      enable_images: Some(true),
+      image_type_limit: Some(1),
+      enable_image_types: Some(vec![jellyfin_api::models::ImageType::Primary]),
+      enable_user_data: Some(true),
+      limit: Some(12),
+      group_items: Some(false),
+    },
+  )
+  .await
+  .map_err(|err| JellyfinClient::openapi_error(context, err))?;
+
+  Ok(
+    items
+      .into_iter()
+      .filter_map(|item| map_video_home_item(server_url, item))
+      .collect(),
+  )
+}
+
+fn video_home_fields() -> Vec<jellyfin_api::models::ItemFields> {
+  vec![
+    jellyfin_api::models::ItemFields::PrimaryImageAspectRatio,
+    jellyfin_api::models::ItemFields::Overview,
+    jellyfin_api::models::ItemFields::DateCreated,
+  ]
+}
+
+fn map_video_home_item(
+  server_url: &str,
+  item: jellyfin_api::models::BaseItemDto,
+) -> Option<VideoHomeItem> {
+  let id = item.id?.to_string();
+  let item_type = item.r#type?.to_string();
+  let user_data = item.user_data.flatten();
+  let artwork_url = primary_artwork_url(server_url, &id, item.image_tags.flatten());
+
+  Some(VideoHomeItem {
+    id,
+    name: item
+      .name
+      .flatten()
+      .unwrap_or_else(|| "Untitled".to_string()),
+    item_type,
+    series_id: item.series_id.flatten().map(|id| id.to_string()),
+    series_name: item.series_name.flatten(),
+    season_number: item.parent_index_number.flatten(),
+    episode_number: item.index_number.flatten(),
+    production_year: item.production_year.flatten(),
+    runtime_seconds: item.run_time_ticks.flatten().map(ticks_to_seconds),
+    resume_position_seconds: user_data
+      .as_ref()
+      .and_then(|data| data.playback_position_ticks)
+      .map(ticks_to_seconds),
+    played_percentage: user_data
+      .as_ref()
+      .and_then(|data| data.played_percentage.flatten()),
+    played: user_data
+      .as_ref()
+      .and_then(|data| data.played)
+      .unwrap_or(false),
+    favorite: user_data
+      .as_ref()
+      .and_then(|data| data.is_favorite)
+      .unwrap_or(false),
+    artwork_url,
+  })
+}
+
+fn map_video_library_shortcut(
+  server_url: &str,
+  item: jellyfin_api::models::BaseItemDto,
+) -> Option<VideoLibraryShortcut> {
+  let collection_type = item.collection_type.flatten()?;
+  if !matches!(
+    collection_type,
+    jellyfin_api::models::CollectionType::Movies | jellyfin_api::models::CollectionType::Tvshows
+  ) {
+    return None;
+  }
+
+  let id = item.id?.to_string();
+  let artwork_url = primary_artwork_url(server_url, &id, item.image_tags.flatten());
+
+  Some(VideoLibraryShortcut {
+    id,
+    name: item
+      .name
+      .flatten()
+      .unwrap_or_else(|| "Untitled".to_string()),
+    collection_type: collection_type.to_string(),
+    item_count: item.recursive_item_count.flatten(),
+    artwork_url,
+  })
+}
+
+fn primary_artwork_url(
+  server_url: &str,
+  item_id: &str,
+  image_tags: Option<std::collections::HashMap<String, String>>,
+) -> Option<String> {
+  let tag = image_tags?.get("Primary")?.clone();
+  Some(format!(
+    "{}/Items/{}/Images/Primary?tag={}",
+    server_url, item_id, tag
+  ))
+}
+
+fn ticks_to_seconds(ticks: i64) -> f64 {
+  ticks as f64 / 10_000_000.0
+}
 impl Default for JellyfinClient {
   fn default() -> Self {
     Self::new()
@@ -1503,6 +1755,79 @@ mod tests {
       "expected HTTP error for missing endpoint, got {err:?}"
     );
   }
+
+  #[tokio::test]
+  async fn video_home_loads_real_rows_and_video_library_shortcuts() {
+    let movie_id = "00000000-0000-0000-0000-000000000010";
+    let episode_id = "00000000-0000-0000-0000-000000000011";
+    let series_id = "00000000-0000-0000-0000-000000000012";
+    let movie_library_id = "00000000-0000-0000-0000-000000000020";
+    let shows_library_id = "00000000-0000-0000-0000-000000000021";
+    let (server_url, requests) = serve_responses_with_requests(vec![
+      (
+        "200 OK",
+        r#"{"Items":[{"Id":"00000000-0000-0000-0000-000000000010","Name":"Resume Movie","Type":"Movie","ProductionYear":2024,"RunTimeTicks":72000000000,"ImageTags":{"Primary":"poster-1"},"UserData":{"PlaybackPositionTicks":1200000000,"PlayedPercentage":25.0,"IsFavorite":true,"Played":false}}],"TotalRecordCount":1}"#,
+      ),
+      (
+        "200 OK",
+        r#"{"Items":[{"Id":"00000000-0000-0000-0000-000000000011","Name":"Next Episode","Type":"Episode","SeriesName":"Example Show","SeriesId":"00000000-0000-0000-0000-000000000012","ParentIndexNumber":1,"IndexNumber":2,"ImageTags":{"Primary":"poster-2"},"UserData":{"PlaybackPositionTicks":0,"PlayedPercentage":0.0,"IsFavorite":false,"Played":false}}],"TotalRecordCount":1}"#,
+      ),
+      (
+        "200 OK",
+        r#"[{"Id":"00000000-0000-0000-0000-000000000010","Name":"Latest Movie","Type":"Movie","ImageTags":{"Primary":"poster-3"}}]"#,
+      ),
+      (
+        "200 OK",
+        r#"[{"Id":"00000000-0000-0000-0000-000000000011","Name":"Latest Episode","Type":"Episode","SeriesName":"Example Show","ParentIndexNumber":1,"IndexNumber":3}]"#,
+      ),
+      (
+        "200 OK",
+        r#"{"Items":[{"Id":"00000000-0000-0000-0000-000000000020","Name":"Movies","Type":"CollectionFolder","CollectionType":"movies","RecursiveItemCount":8},{"Id":"00000000-0000-0000-0000-000000000021","Name":"Shows","Type":"CollectionFolder","CollectionType":"tvshows","RecursiveItemCount":5},{"Id":"00000000-0000-0000-0000-000000000022","Name":"Music","Type":"CollectionFolder","CollectionType":"music","RecursiveItemCount":99}],"TotalRecordCount":3}"#,
+      ),
+    ])
+    .await;
+    let client = JellyfinClient::new();
+    connect_test_client(&client, server_url.clone());
+
+    let home = client
+      .library()
+      .video_home()
+      .await
+      .expect("video home should load from generated Jellyfin endpoints");
+
+    assert_eq!(home.continue_watching[0].id, movie_id);
+    assert_eq!(home.continue_watching[0].name, "Resume Movie");
+    let expected_artwork = format!("{server_url}/Items/{movie_id}/Images/Primary?tag=poster-1");
+    assert_eq!(
+      home.continue_watching[0].artwork_url.as_deref(),
+      Some(expected_artwork.as_str())
+    );
+    assert_eq!(home.next_up[0].id, episode_id);
+    assert_eq!(home.next_up[0].series_id.as_deref(), Some(series_id));
+    assert_eq!(home.latest_movies[0].name, "Latest Movie");
+    assert_eq!(home.latest_episodes[0].name, "Latest Episode");
+    assert_eq!(
+      home
+        .library_shortcuts
+        .iter()
+        .map(|library| (library.id.as_str(), library.collection_type.as_str()))
+        .collect::<Vec<_>>(),
+      vec![(movie_library_id, "movies"), (shows_library_id, "tvshows")]
+    );
+
+    let captured = requests.lock();
+    assert!(captured[0].starts_with("GET /UserItems/Resume?"));
+    assert!(captured[0].contains("includeItemTypes=Movie"));
+    assert!(captured[0].contains("includeItemTypes=Episode"));
+    assert!(captured[1].starts_with("GET /Shows/NextUp?"));
+    assert!(captured[2].starts_with("GET /Items/Latest?"));
+    assert!(captured[2].contains("includeItemTypes=Movie"));
+    assert!(captured[3].contains("includeItemTypes=Episode"));
+    assert!(captured[4].starts_with("GET /UserViews?"));
+    assert!(captured[4].contains("presetViews=movies"));
+    assert!(captured[4].contains("presetViews=tvshows"));
+  }
+
   #[test]
   fn login_and_playback_interfaces_are_separate() {
     let client = JellyfinClient::new();

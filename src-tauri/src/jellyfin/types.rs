@@ -44,6 +44,48 @@ pub struct ConnectionState {
   pub user_name: Option<String>,
 }
 
+/// Library Browser landing data exposed to the frontend.
+#[derive(Debug, Clone, Serialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct VideoHome {
+  pub continue_watching: Vec<VideoHomeItem>,
+  pub next_up: Vec<VideoHomeItem>,
+  pub latest_movies: Vec<VideoHomeItem>,
+  pub latest_episodes: Vec<VideoHomeItem>,
+  pub library_shortcuts: Vec<VideoLibraryShortcut>,
+}
+
+/// Video item summary for Video Home rows.
+#[derive(Debug, Clone, Serialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct VideoHomeItem {
+  pub id: String,
+  pub name: String,
+  pub item_type: String,
+  pub series_id: Option<String>,
+  pub series_name: Option<String>,
+  pub season_number: Option<i32>,
+  pub episode_number: Option<i32>,
+  pub production_year: Option<i32>,
+  pub runtime_seconds: Option<f64>,
+  pub resume_position_seconds: Option<f64>,
+  pub played_percentage: Option<f64>,
+  pub played: bool,
+  pub favorite: bool,
+  pub artwork_url: Option<String>,
+}
+
+/// Video library shortcut for drilling into Movies or Shows libraries.
+#[derive(Debug, Clone, Serialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct VideoLibraryShortcut {
+  pub id: String,
+  pub name: String,
+  pub collection_type: String,
+  pub item_count: Option<i32>,
+  pub artwork_url: Option<String>,
+}
+
 /// Credentials for authentication.
 #[derive(Debug, Clone, Deserialize, Type)]
 #[serde(rename_all = "camelCase")]
