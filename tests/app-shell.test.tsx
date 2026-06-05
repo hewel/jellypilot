@@ -450,7 +450,7 @@ test('authenticated shell exposes peer navigation areas', async () => {
   const libraryLink = screen.getByRole('link', { name: 'Library' });
   expect(nav).toBeVisible();
   expect(nav).toHaveClass('overflow-x-auto');
-  expect(nav).toHaveClass('lg:flex-col');
+  expect(nav).toHaveClass('lg:overflow-visible');
   expect(libraryLink).toHaveAttribute('aria-current', 'page');
   expect(libraryLink).toHaveClass('focus-visible:ring-2');
   expect(screen.getByRole('link', { name: 'Now Playing' })).toBeVisible();

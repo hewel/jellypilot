@@ -404,34 +404,34 @@ function statusText(status?: NowPlayingState['status']) {
   }
 }
 
-function ShellNav(props: { connection: ConnectionState | undefined }) {
+function ShellHeader(props: { connection: ConnectionState | undefined }) {
   return (
-    <div class="flex flex-col gap-2 rounded-2xl lg:rounded-[1.75rem] border border-outline-variant bg-surface-container-low/60 p-2 shadow-xl backdrop-blur-md lg:gap-4 lg:p-4 lg:h-full lg:min-h-[480px]">
-      {/* Brand Header - only visible on desktop lg */}
-      <div class="hidden lg:flex flex-col px-2 pt-2 pb-1">
-        <div class="flex items-center gap-2">
-          <span class="relative flex h-3.5 w-3.5 items-center justify-center">
-            <span class="absolute inline-flex h-full w-full animate-ping rounded-full bg-primary/40 opacity-75" />
-            <span class="relative inline-flex h-2.5 w-2.5 rounded-full bg-primary shadow-[0_0_8px_var(--color-primary)]" />
-          </span>
-          <span class="brand-type text-title-large bg-gradient-to-r from-on-surface via-on-surface to-primary bg-clip-text text-transparent">
-            JMSR
-          </span>
-          <span class="text-[9px] font-black uppercase tracking-[0.2em] px-1.5 py-0.5 rounded border border-primary/20 bg-primary/5 text-primary">
-            v2
-          </span>
+    <header class="flex flex-col gap-3 rounded-2xl lg:rounded-[1.75rem] border border-outline-variant bg-surface-container-low/60 p-3 shadow-xl backdrop-blur-md lg:flex-row lg:items-center lg:justify-between lg:p-4">
+      {/* Brand Header */}
+      <div class="flex items-center gap-2 px-2 py-1">
+        <span class="relative flex h-3.5 w-3.5 items-center justify-center">
+          <span class="absolute inline-flex h-full w-full animate-ping rounded-full bg-primary/40 opacity-75" />
+          <span class="relative inline-flex h-2.5 w-2.5 rounded-full bg-primary shadow-[0_0_8px_var(--color-primary)]" />
+        </span>
+        <div class="flex flex-col">
+          <div class="flex items-center gap-1.5">
+            <span class="brand-type text-title-large bg-gradient-to-r from-on-surface via-on-surface to-primary bg-clip-text text-transparent">
+              JMSR
+            </span>
+            <span class="text-[9px] font-black uppercase tracking-[0.2em] px-1.5 py-0.5 rounded border border-primary/20 bg-primary/5 text-primary">
+              v2
+            </span>
+          </div>
+          <p class="text-[11px] font-bold uppercase tracking-[0.15em] text-on-surface-variant/70 -mt-0.5">
+            Control Room
+          </p>
         </div>
-        <p class="text-[11px] font-bold uppercase tracking-[0.15em] text-on-surface-variant/70 mt-1">
-          Control Room
-        </p>
       </div>
-
-      <div class="hidden lg:block border-t border-outline-variant/30 my-1" />
 
       {/* Navigation List */}
       <nav
         aria-label="JMSR areas"
-        class="flex gap-2 overflow-x-auto lg:flex-col lg:overflow-visible"
+        class="flex gap-2 overflow-x-auto lg:overflow-visible"
       >
         {navItems.map(({ href, label, Icon }) => {
           return (
@@ -449,13 +449,8 @@ function ShellNav(props: { connection: ConnectionState | undefined }) {
         })}
       </nav>
 
-      {/* Spacer - desktop only */}
-      <div class="hidden lg:block flex-1" />
-
-      {/* Server Status Panel - desktop only */}
-      <div class="hidden lg:block border-t border-outline-variant/30 my-1" />
-
-      <div class="hidden lg:flex flex-col gap-2.5 px-2 pb-1 pt-2">
+      {/* Server Status Panel */}
+      <div class="flex items-center gap-3 px-2 border-t border-outline-variant/20 pt-2 lg:border-t-0 lg:pt-0">
         <Show
           when={props.connection}
           fallback={
@@ -466,19 +461,17 @@ function ShellNav(props: { connection: ConnectionState | undefined }) {
           }
         >
           {(conn) => (
-            <div class="flex items-center justify-between gap-2">
-              <div class="flex min-w-0 items-center gap-2.5">
-                <div class="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border border-primary/20 bg-primary-container/30 text-primary font-display font-black text-xs">
-                  {conn().userName?.charAt(0).toUpperCase() || 'J'}
-                </div>
-                <div class="min-w-0">
-                  <p class="truncate text-[12px] font-bold text-on-surface">
-                    {conn().userName || 'Guest User'}
-                  </p>
-                  <p class="truncate text-[10px] font-semibold text-on-surface-variant/80">
-                    {conn().serverName || 'Jellyfin Server'}
-                  </p>
-                </div>
+            <div class="flex items-center gap-3">
+              <div class="flex flex-col text-left lg:text-right">
+                <p class="truncate text-[12px] font-bold text-on-surface leading-tight">
+                  {conn().userName || 'Guest User'}
+                </p>
+                <p class="truncate text-[10px] font-semibold text-on-surface-variant/80 leading-none mt-0.5">
+                  {conn().serverName || 'Jellyfin Server'}
+                </p>
+              </div>
+              <div class="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border border-primary/20 bg-primary-container/30 text-primary font-display font-black text-xs">
+                {conn().userName?.charAt(0).toUpperCase() || 'J'}
               </div>
               <span
                 class={`w-2 h-2 shrink-0 rounded-full ${
@@ -491,7 +484,7 @@ function ShellNav(props: { connection: ConnectionState | undefined }) {
           )}
         </Show>
       </div>
-    </div>
+    </header>
   );
 }
 
@@ -1864,10 +1857,8 @@ export default function AuthenticatedShell() {
 
   return (
     <div class="console-shell">
-      <div class="mx-auto grid w-full max-w-7xl gap-5 lg:grid-cols-[240px_minmax(0,1fr)]">
-        <div class="lg:sticky lg:top-6 lg:self-start">
-          <ShellNav connection={connection()} />
-        </div>
+      <div class="mx-auto flex w-full max-w-7xl flex-col gap-5">
+        <ShellHeader connection={connection()} />
         <div class="flex flex-col gap-6 min-w-0">
           <Show when={showCompactNowPlaying()}>
             <CompactNowPlayingSummary />
