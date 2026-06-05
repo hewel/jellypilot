@@ -37,6 +37,8 @@ export const commands = {
 	libraryBrowseVideo: (request: VideoLibraryPageRequest) => typedError<VideoLibraryPage, CommandError>(__TAURI_INVOKE("library_browse_video", { request })),
 	/**  Search Movies, Shows, and Episodes with server paging. */
 	librarySearchVideo: (request: VideoSearchRequest) => typedError<VideoSearchPage, CommandError>(__TAURI_INVOKE("library_search_video", { request })),
+	/**  Load Movie or Episode details for the Library Browser. */
+	libraryItemDetail: (itemId: string) => typedError<VideoItemDetail, CommandError>(__TAURI_INVOKE("library_item_detail", { itemId })),
 	/**  Connect to a Jellyfin server. */
 	jellyfinConnect: (credentials: Credentials) => typedError<null, CommandError>(__TAURI_INVOKE("jellyfin_connect", { credentials })),
 	/**  Disconnect from Jellyfin server. */
@@ -252,6 +254,28 @@ export type VideoHomeItem = {
 	playedPercentage: number | null,
 	played: boolean,
 	favorite: boolean,
+	artworkUrl: string | null,
+};
+
+/**  Playable Movie or Episode detail data exposed to the frontend. */
+export type VideoItemDetail = {
+	id: string,
+	name: string,
+	itemType: string,
+	overview: string | null,
+	productionYear: number | null,
+	runtimeSeconds: number | null,
+	seriesId: string | null,
+	seriesName: string | null,
+	seasonNumber: number | null,
+	episodeNumber: number | null,
+	genres: string[],
+	played: boolean,
+	favorite: boolean,
+	playedPercentage: number | null,
+	resumePositionSeconds: number | null,
+	canResume: boolean,
+	canPlay: boolean,
 	artworkUrl: string | null,
 };
 

@@ -24,6 +24,7 @@ import {
   type NowPlayingState,
   type VideoHome,
   type VideoHomeItem,
+  type VideoItemDetail,
   type VideoLibraryItem,
   type VideoLibraryKind,
   type VideoLibraryPage,
@@ -45,7 +46,8 @@ import { StatusBadge } from './ui';
 export type ShellArea = 'library' | 'now-playing' | 'settings' | 'diagnostics';
 export type LibraryView =
   | { kind: 'home' }
-  | { kind: 'browse'; collectionType: VideoLibraryKind; libraryId: string };
+  | { kind: 'browse'; collectionType: VideoLibraryKind; libraryId: string }
+  | { kind: 'detail'; itemId: string };
 
 interface AuthenticatedShellProps {
   activeArea: ShellArea;
@@ -68,6 +70,11 @@ type LibraryBrowseState =
 type LibrarySearchState =
   | { kind: 'ready'; page: VideoSearchPage; items: VideoLibraryItem[] }
   | { kind: 'empty'; page: VideoSearchPage }
+  | { kind: 'disconnected'; state: ConnectionState }
+  | { kind: 'error'; message: string };
+
+type LibraryDetailState =
+  | { kind: 'ready'; detail: VideoItemDetail }
   | { kind: 'disconnected'; state: ConnectionState }
   | { kind: 'error'; message: string };
 
@@ -240,6 +247,44 @@ async function fetchVideoSearchPage(
   return page.value.items.length === 0
     ? { kind: 'empty', page: page.value }
     : { kind: 'ready', page: page.value, items: page.value.items };
+}
+
+async function fetchVideoItemDetail(
+  itemId: string,
+): Promise<LibraryDetailState> {
+  const connection = await Effect.runPromiseExit(
+    runTauriCommandRaw(() => commands.jellyfinGetState()),
+  );
+
+  if (!Exit.isSuccess(connection)) {
+    return {
+      kind: 'error',
+      message: commandFailureMessage(
+        connection.cause,
+        'Could not load Library state',
+      ),
+    };
+  }
+
+  if (!connection.value.connected) {
+    return { kind: 'disconnected', state: connection.value };
+  }
+
+  const detail = await Effect.runPromiseExit(
+    runTauriCommand(() => commands.libraryItemDetail(itemId)),
+  );
+
+  if (!Exit.isSuccess(detail)) {
+    return {
+      kind: 'error',
+      message: commandFailureMessage(
+        detail.cause,
+        'Could not load item detail',
+      ),
+    };
+  }
+
+  return { kind: 'ready', detail: detail.value };
 }
 
 function statusText(status?: NowPlayingState['status']) {
@@ -1007,6 +1052,169 @@ function VideoLibraryCard(props: {
   );
 }
 
+function formatRuntime(seconds: number | null) {
+  if (seconds === null) return null;
+  const totalMinutes = Math.round(seconds / 60);
+  const hours = Math.floor(totalMinutes / 60);
+  const minutes = totalMinutes % 60;
+  return hours > 0 ? `${hours}h ${minutes}m` : `${minutes}m`;
+}
+
+function detailSubtitle(detail: VideoItemDetail) {
+  if (detail.itemType === 'Episode' && detail.seriesName) {
+    const episode =
+      detail.seasonNumber !== null && detail.episodeNumber !== null
+        ? `S${detail.seasonNumber.toString().padStart(2, '0')}E${detail.episodeNumber.toString().padStart(2, '0')}`
+        : 'Episode';
+    return `${detail.seriesName} · ${episode}`;
+  }
+  return detail.productionYear?.toString() ?? detail.itemType;
+}
+
+function LibraryItemDetailView(props: { itemId: string }) {
+  const [state, { refetch }] = createResource(() =>
+    fetchVideoItemDetail(props.itemId),
+  );
+  const detail = () => {
+    const current = state();
+    return current?.kind === 'ready' ? current.detail : null;
+  };
+  const statusTitle = () => {
+    const current = state();
+    if (current?.kind === 'error') return 'Could not load item detail';
+    if (current?.kind === 'disconnected') {
+      return 'Library requires a live Jellyfin connection';
+    }
+    return 'Loading item detail';
+  };
+  const statusDescription = () => {
+    const current = state();
+    if (current?.kind === 'error') return current.message;
+    if (current?.kind === 'disconnected') {
+      return 'Reconnect Jellyfin to inspect video details. Saved Sessions remain available, but Library data is not cached offline.';
+    }
+    return 'JMSR is loading Movie or Episode detail data from Jellyfin.';
+  };
+
+  return (
+    <div class="space-y-6">
+      <div class="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+        <a href="/library" class="btn-outlined rounded-full">
+          <Library class="h-4 w-4" />
+          <span>Video Home</span>
+        </a>
+        <button
+          type="button"
+          class="btn-outlined rounded-full"
+          disabled={state.loading}
+          onClick={() => void refetch()}
+        >
+          <RefreshCw class="h-4 w-4" />
+          <span>Retry Detail</span>
+        </button>
+      </div>
+
+      <CompactNowPlayingSummary />
+
+      <Show
+        when={detail()}
+        fallback={
+          <LibraryStatusPanel
+            title={statusTitle()}
+            description={statusDescription()}
+          />
+        }
+      >
+        {(item) => (
+          <article class="grid gap-6 lg:grid-cols-[minmax(240px,360px)_1fr]">
+            <div class="card-filled overflow-hidden p-0">
+              <div class="aspect-[2/3] bg-surface-container-lowest/60">
+                <Show
+                  when={item().artworkUrl}
+                  fallback={
+                    <div class="flex h-full flex-col items-center justify-center gap-3 px-6 text-center text-on-surface-variant">
+                      <Film class="h-8 w-8" />
+                      <p class="text-title-medium">{item().name}</p>
+                      <p class="text-label-small">No artwork</p>
+                    </div>
+                  }
+                >
+                  {(artworkUrl) => (
+                    <img
+                      src={artworkUrl()}
+                      alt={`${item().name} artwork`}
+                      class="h-full w-full object-cover"
+                    />
+                  )}
+                </Show>
+              </div>
+            </div>
+            <div class="space-y-5">
+              <div>
+                <p class="text-label-small text-secondary">{item().itemType}</p>
+                <h1 class="text-headline-large">{item().name}</h1>
+                <p class="mt-2 text-body-large">{detailSubtitle(item())}</p>
+              </div>
+              <div class="flex flex-wrap gap-2">
+                <StatusBadge variant={item().played ? 'success' : 'neutral'}>
+                  {item().played ? 'Played' : 'Unplayed'}
+                </StatusBadge>
+                <StatusBadge variant={item().favorite ? 'success' : 'neutral'}>
+                  {item().favorite ? 'Favorite' : 'Not favorite'}
+                </StatusBadge>
+                <Show when={formatRuntime(item().runtimeSeconds)}>
+                  {(runtime) => (
+                    <StatusBadge variant="neutral">{runtime()}</StatusBadge>
+                  )}
+                </Show>
+              </div>
+              <Show when={item().overview}>
+                {(overview) => <p class="text-body-medium">{overview()}</p>}
+              </Show>
+              <Show when={item().genres.length > 0}>
+                <div class="flex flex-wrap gap-2">
+                  <For each={item().genres}>
+                    {(genre) => (
+                      <span class="rounded-full border border-outline-variant px-3 py-1 text-label-small">
+                        {genre}
+                      </span>
+                    )}
+                  </For>
+                </div>
+              </Show>
+              <Show when={item().resumePositionSeconds !== null}>
+                <p class="text-body-small text-secondary">
+                  Resume at {Math.floor(item().resumePositionSeconds ?? 0)}s
+                  {item().playedPercentage !== null
+                    ? ` · ${Math.round(item().playedPercentage ?? 0)}% watched`
+                    : ''}
+                </p>
+              </Show>
+              <div class="flex flex-wrap gap-3">
+                <Show
+                  when={item().canResume}
+                  fallback={
+                    <button type="button" class="btn-primary rounded-full">
+                      Play
+                    </button>
+                  }
+                >
+                  <button type="button" class="btn-primary rounded-full">
+                    Resume
+                  </button>
+                  <button type="button" class="btn-secondary rounded-full">
+                    Play from beginning
+                  </button>
+                </Show>
+              </div>
+            </div>
+          </article>
+        )}
+      </Show>
+    </div>
+  );
+}
+
 function DiagnosticsArea() {
   return (
     <section
@@ -1028,14 +1236,18 @@ export default function AuthenticatedShell(props: AuthenticatedShellProps) {
   const renderArea = () => {
     switch (props.activeArea) {
       case 'library':
-        return props.libraryView?.kind === 'browse' ? (
-          <LibraryBrowseView
-            collectionType={props.libraryView.collectionType}
-            libraryId={props.libraryView.libraryId}
-          />
-        ) : (
-          <LibraryLanding />
-        );
+        if (props.libraryView?.kind === 'browse') {
+          return (
+            <LibraryBrowseView
+              collectionType={props.libraryView.collectionType}
+              libraryId={props.libraryView.libraryId}
+            />
+          );
+        }
+        if (props.libraryView?.kind === 'detail') {
+          return <LibraryItemDetailView itemId={props.libraryView.itemId} />;
+        }
+        return <LibraryLanding />;
       case 'now-playing':
         return <NowPlayingCard jellyfinConnected={true} />;
       case 'diagnostics':

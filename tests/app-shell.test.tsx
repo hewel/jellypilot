@@ -7,6 +7,7 @@ import {
   events,
   type NowPlayingState,
   type VideoHome,
+  type VideoItemDetail,
   type VideoLibraryPage,
   type VideoSearchPage,
 } from '../src/bindings';
@@ -155,6 +156,48 @@ const videoHome: VideoHome = {
   ],
 };
 
+const movieDetail: VideoItemDetail = {
+  id: 'detail-movie',
+  name: 'Detail Movie',
+  itemType: 'Movie',
+  overview: 'A movie overview.',
+  productionYear: 2024,
+  runtimeSeconds: 7200,
+  seriesId: null,
+  seriesName: null,
+  seasonNumber: null,
+  episodeNumber: null,
+  genres: ['Drama', 'Mystery'],
+  played: false,
+  favorite: true,
+  playedPercentage: 25,
+  resumePositionSeconds: 120,
+  canResume: true,
+  canPlay: true,
+  artworkUrl: 'https://jellyfin.example.com/Items/detail-movie/Images/Primary',
+};
+
+const episodeDetail: VideoItemDetail = {
+  id: 'detail-episode',
+  name: 'Detail Episode',
+  itemType: 'Episode',
+  overview: null,
+  productionYear: null,
+  runtimeSeconds: null,
+  seriesId: 'series-1',
+  seriesName: 'Example Show',
+  seasonNumber: 2,
+  episodeNumber: 3,
+  genres: ['Sci-Fi'],
+  played: true,
+  favorite: false,
+  playedPercentage: 100,
+  resumePositionSeconds: 0,
+  canResume: false,
+  canPlay: true,
+  artworkUrl: null,
+};
+
 function videoLibraryPage(startIndex: number): VideoLibraryPage {
   if (startIndex === 0) {
     return {
@@ -274,6 +317,12 @@ function mockShellCommands(state = connectedState) {
     Promise.resolve({
       status: 'ok',
       data: videoSearchPage(request.query, request.startIndex),
+    }),
+  );
+  rstest.spyOn(commands, 'libraryItemDetail').mockImplementation((itemId) =>
+    Promise.resolve({
+      status: 'ok',
+      data: itemId === 'detail-episode' ? episodeDetail : movieDetail,
     }),
   );
   rstest.spyOn(commands, 'nowPlayingGetState').mockResolvedValue({
@@ -594,6 +643,53 @@ test('library browse surfaces backend sort and filter errors', async () => {
 
   await screen.findByText('Unsupported library filter');
   expect(screen.queryByRole('link', { name: /Paged Movie/ })).toBeNull();
+
+  cleanup();
+});
+
+test('library item detail renders resume-primary movie metadata', async () => {
+  mockShellCommands();
+  const mpvStart = rstest.spyOn(commands, 'mpvStart');
+  const cleanup = renderShell('library', {
+    kind: 'detail',
+    itemId: 'detail-movie',
+  });
+
+  await screen.findByRole('heading', { name: 'Detail Movie' });
+  expect(screen.getByText('A movie overview.')).toBeVisible();
+  expect(screen.getByText('Drama')).toBeVisible();
+  expect(screen.getByText('Mystery')).toBeVisible();
+  expect(screen.getByText('Favorite')).toBeVisible();
+  expect(screen.getByText('2h 0m')).toBeVisible();
+  expect(screen.getByText('Resume at 120s · 25% watched')).toBeVisible();
+  expect(screen.getByAltText('Detail Movie artwork')).toHaveAttribute(
+    'src',
+    movieDetail.artworkUrl ?? '',
+  );
+  expect(screen.getByRole('button', { name: 'Resume' })).toBeVisible();
+  expect(
+    screen.getByRole('button', { name: 'Play from beginning' }),
+  ).toBeVisible();
+  expect(mpvStart).not.toHaveBeenCalled();
+
+  cleanup();
+});
+
+test('library item detail renders episode metadata and semantic artwork placeholder', async () => {
+  mockShellCommands();
+  const cleanup = renderShell('library', {
+    kind: 'detail',
+    itemId: 'detail-episode',
+  });
+
+  await screen.findByRole('heading', { name: 'Detail Episode' });
+  expect(screen.getByText('Example Show · S02E03')).toBeVisible();
+  expect(screen.getByText('Played')).toBeVisible();
+  expect(screen.getByText('Not favorite')).toBeVisible();
+  expect(screen.getByText('No artwork')).toBeVisible();
+  expect(screen.getByText('Sci-Fi')).toBeVisible();
+  expect(screen.queryByRole('button', { name: 'Resume' })).toBeNull();
+  expect(screen.getByRole('button', { name: 'Play' })).toBeVisible();
 
   cleanup();
 });

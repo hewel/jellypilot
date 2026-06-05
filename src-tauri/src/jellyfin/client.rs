@@ -1333,6 +1333,37 @@ impl<'a> JellyfinLibrary<'a> {
       items,
     })
   }
+
+  pub async fn item_detail(&self, item_id: String) -> Result<VideoItemDetail, JellyfinError> {
+    if item_id.trim().is_empty() {
+      return Err(JellyfinError::HttpError(
+        "Item id is required for video details".to_string(),
+      ));
+    }
+
+    let server_url = self.client.server_url()?;
+    let token = self.client.access_token()?;
+    let user_id = self.client.user_id()?;
+    let configuration = self
+      .client
+      .openapi_configuration(&server_url, Some(&token))?;
+
+    let item = jellyfin_api::apis::user_library_api::get_item(
+      &configuration,
+      jellyfin_api::apis::user_library_api::GetItemParams {
+        item_id,
+        user_id: Some(user_id),
+      },
+    )
+    .await
+    .map_err(|err| JellyfinClient::openapi_error("Video item detail", err))?;
+
+    map_video_item_detail(&server_url, item).ok_or_else(|| {
+      JellyfinError::HttpError(
+        "Only Movie and Episode details are supported by the Library Browser".to_string(),
+      )
+    })
+  }
 }
 
 async fn latest_video_items(
@@ -1600,6 +1631,59 @@ fn map_video_library_item(
       .and_then(|data| data.is_favorite)
       .unwrap_or(false),
     artwork_url,
+  })
+}
+
+fn map_video_item_detail(
+  server_url: &str,
+  item: jellyfin_api::models::BaseItemDto,
+) -> Option<VideoItemDetail> {
+  let item_kind = item.r#type?;
+  if !matches!(
+    item_kind,
+    jellyfin_api::models::BaseItemKind::Movie | jellyfin_api::models::BaseItemKind::Episode
+  ) {
+    return None;
+  }
+
+  let id = item.id?.to_string();
+  let user_data = item.user_data.flatten();
+  let resume_position_seconds = user_data
+    .as_ref()
+    .and_then(|data| data.playback_position_ticks)
+    .map(ticks_to_seconds);
+  let played = user_data
+    .as_ref()
+    .and_then(|data| data.played)
+    .unwrap_or(false);
+
+  Some(VideoItemDetail {
+    id: id.clone(),
+    name: item
+      .name
+      .flatten()
+      .unwrap_or_else(|| "Untitled".to_string()),
+    item_type: item_kind.to_string(),
+    overview: item.overview.flatten(),
+    production_year: item.production_year.flatten(),
+    runtime_seconds: item.run_time_ticks.flatten().map(ticks_to_seconds),
+    series_id: item.series_id.flatten().map(|id| id.to_string()),
+    series_name: item.series_name.flatten(),
+    season_number: item.parent_index_number.flatten(),
+    episode_number: item.index_number.flatten(),
+    genres: item.genres.flatten().unwrap_or_default(),
+    played,
+    favorite: user_data
+      .as_ref()
+      .and_then(|data| data.is_favorite)
+      .unwrap_or(false),
+    played_percentage: user_data
+      .as_ref()
+      .and_then(|data| data.played_percentage.flatten()),
+    resume_position_seconds,
+    can_resume: resume_position_seconds.unwrap_or(0.0) > 0.0 && !played,
+    can_play: true,
+    artwork_url: primary_artwork_url(server_url, &id, item.image_tags.flatten()),
   })
 }
 
@@ -2335,6 +2419,90 @@ mod tests {
     assert_eq!(
       err.to_string(),
       "HTTP error: Search text is required for video search"
+    );
+  }
+
+  #[tokio::test]
+  async fn item_detail_maps_movie_and_episode_metadata() {
+    let movie_id = "00000000-0000-0000-0000-000000000050";
+    let episode_id = "00000000-0000-0000-0000-000000000051";
+    let series_id = "00000000-0000-0000-0000-000000000052";
+    let (server_url, requests) = serve_responses_with_requests(vec![
+      (
+        "200 OK",
+        r#"{"Id":"00000000-0000-0000-0000-000000000050","Name":"Detail Movie","Type":"Movie","Overview":"A movie overview.","ProductionYear":2024,"RunTimeTicks":72000000000,"Genres":["Drama","Mystery"],"ImageTags":{"Primary":"poster-detail"},"UserData":{"PlaybackPositionTicks":1200000000,"PlayedPercentage":25.0,"IsFavorite":true,"Played":false}}"#,
+      ),
+      (
+        "200 OK",
+        r#"{"Id":"00000000-0000-0000-0000-000000000051","Name":"Detail Episode","Type":"Episode","SeriesId":"00000000-0000-0000-0000-000000000052","SeriesName":"Example Show","ParentIndexNumber":2,"IndexNumber":3,"Genres":["Sci-Fi"],"UserData":{"PlaybackPositionTicks":0,"PlayedPercentage":0.0,"IsFavorite":false,"Played":true}}"#,
+      ),
+    ])
+    .await;
+    let client = JellyfinClient::new();
+    connect_test_client(&client, server_url.clone());
+
+    let movie = client
+      .library()
+      .item_detail(movie_id.to_string())
+      .await
+      .expect("movie detail should load from generated item endpoint");
+    let episode = client
+      .library()
+      .item_detail(episode_id.to_string())
+      .await
+      .expect("episode detail should load from generated item endpoint");
+
+    assert_eq!(movie.name, "Detail Movie");
+    assert_eq!(movie.item_type, "Movie");
+    assert_eq!(movie.overview.as_deref(), Some("A movie overview."));
+    assert_eq!(movie.runtime_seconds, Some(7200.0));
+    assert_eq!(movie.genres, vec!["Drama", "Mystery"]);
+    assert_eq!(movie.resume_position_seconds, Some(120.0));
+    assert!(movie.can_resume);
+    assert!(movie.can_play);
+    assert!(movie.favorite);
+    let expected_artwork =
+      format!("{server_url}/Items/{movie_id}/Images/Primary?tag=poster-detail");
+    assert_eq!(
+      movie.artwork_url.as_deref(),
+      Some(expected_artwork.as_str())
+    );
+
+    assert_eq!(episode.item_type, "Episode");
+    assert_eq!(episode.series_id.as_deref(), Some(series_id));
+    assert_eq!(episode.series_name.as_deref(), Some("Example Show"));
+    assert_eq!(episode.season_number, Some(2));
+    assert_eq!(episode.episode_number, Some(3));
+    assert!(episode.played);
+    assert!(!episode.can_resume);
+    assert_eq!(episode.artwork_url, None);
+
+    let captured = requests.lock();
+    assert!(captured[0].starts_with("GET /Items/00000000-0000-0000-0000-000000000050?"));
+    assert!(captured[0].contains("userId=00000000-0000-0000-0000-000000000001"));
+    assert!(captured[1].starts_with("GET /Items/00000000-0000-0000-0000-000000000051?"));
+    assert!(captured[1].contains("userId=00000000-0000-0000-0000-000000000001"));
+  }
+
+  #[tokio::test]
+  async fn item_detail_rejects_unsupported_item_kinds() {
+    let (server_url, _) = serve_responses_with_requests(vec![(
+      "200 OK",
+      r#"{"Id":"00000000-0000-0000-0000-000000000053","Name":"A Show","Type":"Series"}"#,
+    )])
+    .await;
+    let client = JellyfinClient::new();
+    connect_test_client(&client, server_url);
+
+    let err = client
+      .library()
+      .item_detail("00000000-0000-0000-0000-000000000053".to_string())
+      .await
+      .expect_err("unsupported item kind should return a clear command error");
+
+    assert_eq!(
+      err.to_string(),
+      "HTTP error: Only Movie and Episode details are supported by the Library Browser"
     );
   }
 

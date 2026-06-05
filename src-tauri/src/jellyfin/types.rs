@@ -178,6 +178,30 @@ pub struct VideoSearchPage {
   pub items: Vec<VideoLibraryItem>,
 }
 
+/// Playable Movie or Episode detail data exposed to the frontend.
+#[derive(Debug, Clone, Serialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct VideoItemDetail {
+  pub id: String,
+  pub name: String,
+  pub item_type: String,
+  pub overview: Option<String>,
+  pub production_year: Option<i32>,
+  pub runtime_seconds: Option<f64>,
+  pub series_id: Option<String>,
+  pub series_name: Option<String>,
+  pub season_number: Option<i32>,
+  pub episode_number: Option<i32>,
+  pub genres: Vec<String>,
+  pub played: bool,
+  pub favorite: bool,
+  pub played_percentage: Option<f64>,
+  pub resume_position_seconds: Option<f64>,
+  pub can_resume: bool,
+  pub can_play: bool,
+  pub artwork_url: Option<String>,
+}
+
 /// Credentials for authentication.
 #[derive(Debug, Clone, Deserialize, Type)]
 #[serde(rename_all = "camelCase")]
