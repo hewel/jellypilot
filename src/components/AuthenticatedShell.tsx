@@ -1,6 +1,9 @@
+import { createListCollection } from '@ark-ui/solid/collection';
+import { Select } from '@ark-ui/solid/select';
 import { Effect, Exit } from 'effect';
 import {
   Activity,
+  ChevronDown,
   Clapperboard,
   Film,
   Library,
@@ -414,7 +417,7 @@ function ShellNav(props: {
   connection: ConnectionState | undefined;
 }) {
   return (
-    <div class="flex flex-col gap-2 rounded-2xl border border-outline-variant bg-surface-container-low/60 p-2 shadow-xl backdrop-blur-md lg:gap-4 lg:p-4 lg:h-full lg:min-h-[480px]">
+    <div class="flex flex-col gap-2 rounded-2xl lg:rounded-[1.75rem] border border-outline-variant bg-surface-container-low/60 p-2 shadow-xl backdrop-blur-md lg:gap-4 lg:p-4 lg:h-full lg:min-h-[480px]">
       {/* Brand Header - only visible on desktop lg */}
       <div class="hidden lg:flex flex-col px-2 pt-2 pb-1">
         <div class="flex items-center gap-2">
@@ -447,7 +450,7 @@ function ShellNav(props: {
             <a
               href={href}
               aria-current={active() ? 'page' : undefined}
-              class={`inline-flex min-h-11 shrink-0 items-center gap-2.5 rounded-xl px-3.5 text-[14px] font-bold transition-all duration-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-secondary/70 ${
+              class={`inline-flex min-h-11 shrink-0 items-center gap-2.5 rounded-lg lg:rounded-xl px-3.5 text-[14px] font-bold transition-all duration-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-secondary/70 ${
                 active()
                   ? 'border border-primary/30 bg-primary-container/45 text-on-primary-container shadow-[inset_0_1px_1px_rgba(255,255,255,0.1),0_0_12px_rgba(79,70,229,0.15)]'
                   : 'border border-transparent text-on-surface-variant hover:border-outline-variant/50 hover:bg-surface-container-high/40 hover:text-on-surface'
@@ -969,6 +972,14 @@ function playedFilterLabel(filter: VideoLibraryPlayedFilter) {
   }
 }
 
+const sortCollection = createListCollection({
+  items: [
+    { value: 'title', label: 'Title' },
+    { value: 'recentlyAdded', label: 'Recently added' },
+    { value: 'releaseDate', label: 'Release date' },
+  ],
+});
+
 function LibraryBrowseView(props: {
   collectionType: VideoLibraryKind;
   libraryId: string;
@@ -1064,22 +1075,51 @@ function LibraryBrowseView(props: {
 
       <section class="card-filled space-y-4" aria-label="Library controls">
         <div class="grid gap-4 lg:grid-cols-[minmax(180px,240px)_1fr_auto] lg:items-end">
-          <label class="space-y-2">
-            <span class="text-label-small">Sort</span>
-            <select
-              class="input-filled w-full"
-              value={sort()}
-              disabled={loading()}
-              onChange={(event) => {
-                setSort(event.currentTarget.value as VideoLibrarySort);
+          <Select.Root
+            collection={sortCollection}
+            closeOnSelect
+            disabled={loading()}
+            value={[sort()]}
+            onValueChange={(details) => {
+              if (details.value.length > 0) {
+                setSort(details.value[0] as VideoLibrarySort);
                 reloadFromFirstPage();
-              }}
-            >
-              <option value="title">Title</option>
-              <option value="recentlyAdded">Recently added</option>
-              <option value="releaseDate">Release date</option>
-            </select>
-          </label>
+              }
+            }}
+            class="w-full"
+          >
+            <Select.Label class="mb-1.5 block text-label-small">
+              Sort
+            </Select.Label>
+            <Select.Control class="select-filled flex w-full items-center">
+              <Select.Trigger class="flex h-14 w-full items-center justify-between gap-2 rounded-2xl border border-outline-variant/80 bg-surface-container-highest/30 px-4 text-on-surface outline-none transition-all duration-200 hover:border-secondary/50 focus:border-secondary focus:ring-4 focus:ring-secondary/15 disabled:cursor-not-allowed disabled:opacity-50">
+                <Select.ValueText
+                  placeholder="Select sort…"
+                  class="font-medium text-body-medium text-on-surface"
+                />
+                <Select.Indicator>
+                  <ChevronDown class="h-4 w-4 text-on-surface-variant/70" />
+                </Select.Indicator>
+              </Select.Trigger>
+            </Select.Control>
+            <Select.Positioner>
+              <Select.Content class="mt-2 rounded-2xl border border-outline-variant bg-surface-container-lowest p-2 shadow-2xl backdrop-blur-md max-h-60 overflow-y-auto z-50">
+                <For each={sortCollection.items}>
+                  {(item) => (
+                    <Select.Item
+                      item={item}
+                      class="flex cursor-pointer items-center justify-between rounded-xl px-3.5 py-2.5 text-body-medium text-on-surface-variant hover:bg-surface-container-high hover:text-on-surface transition-colors"
+                    >
+                      <Select.ItemText class="font-medium">
+                        {item.label}
+                      </Select.ItemText>
+                    </Select.Item>
+                  )}
+                </For>
+              </Select.Content>
+            </Select.Positioner>
+            <Select.HiddenSelect />
+          </Select.Root>
           <fieldset class="space-y-2" aria-label="Played filter">
             <legend class="text-label-small">Played filter</legend>
             <div class="flex flex-wrap gap-2">

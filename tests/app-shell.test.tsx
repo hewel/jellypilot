@@ -18,6 +18,9 @@ import AuthenticatedShell, {
 } from '../src/components/AuthenticatedShell';
 import { ToastProvider } from '../src/components/ToastProvider';
 
+// Mock scrollTo since JSDOM doesn't implement layout/scrolling APIs
+Element.prototype.scrollTo = () => {};
+
 const connectedState = {
   connected: true,
   serverUrl: 'https://jellyfin.example.com',
@@ -660,9 +663,8 @@ test('library browse controls reload paged results from the first page', async (
   });
 
   await screen.findByRole('link', { name: /Paged Movie/ });
-  fireEvent.change(screen.getByLabelText('Sort'), {
-    target: { value: 'recentlyAdded' },
-  });
+  fireEvent.click(screen.getByRole('combobox', { name: 'Sort' }));
+  fireEvent.click(screen.getByText('Recently added', { selector: 'span' }));
 
   await waitFor(() =>
     expect(browseCommand).toHaveBeenLastCalledWith({
