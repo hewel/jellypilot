@@ -2,6 +2,7 @@ import { afterEach, expect, rstest, test } from '@rstest/core';
 import { fireEvent, screen, waitFor } from '@testing-library/dom';
 import { render } from 'solid-js/web';
 import {
+  type AppConfig,
   commands,
   events,
   type NowPlayingState,
@@ -47,6 +48,19 @@ const nowPlaying: NowPlayingState = {
   canPlayPrevious: false,
   nextUnavailableReason: null,
   previousUnavailableReason: 'noCurrentItem',
+};
+
+const config: AppConfig = {
+  deviceName: 'JMSR Test',
+  mpvPath: null,
+  mpvArgs: [],
+  progressInterval: 5,
+  startMinimized: false,
+  introSkipperMode: 'automatic',
+  keybindNext: 'Shift+>',
+  keybindPrev: 'Shift+<',
+  keybindIntroSkip: 'g',
+  preferredSubtitleLanguages: [],
 };
 
 const videoHome: VideoHome = {
@@ -189,6 +203,8 @@ function videoLibraryPage(startIndex: number): VideoLibraryPage {
 
 function mockShellCommands(state = connectedState) {
   rstest.spyOn(commands, 'jellyfinGetState').mockResolvedValue(state);
+  rstest.spyOn(commands, 'mpvIsConnected').mockResolvedValue(false);
+  rstest.spyOn(commands, 'configGet').mockResolvedValue(config);
   rstest.spyOn(commands, 'libraryVideoHome').mockResolvedValue({
     status: 'ok',
     data: videoHome,
@@ -318,7 +334,9 @@ test('library browse loads paged results and opens detail links without playback
     limit: 24,
   });
 
-  fireEvent.click(screen.getByRole('link', { name: /Paged Movie/ }));
+  const movieLink = screen.getByRole('link', { name: /Paged Movie/ });
+  movieLink.addEventListener('click', (event) => event.preventDefault());
+  fireEvent.click(movieLink);
   expect(mpvStart).not.toHaveBeenCalled();
 
   fireEvent.click(screen.getByRole('button', { name: 'Load more' }));
@@ -332,6 +350,39 @@ test('library browse loads paged results and opens detail links without playback
     limit: 24,
   });
   expect(screen.queryByRole('button', { name: 'Load more' })).toBeNull();
+
+  cleanup();
+});
+
+test('settings shell area preserves session and configuration controls', async () => {
+  mockShellCommands();
+  const cleanup = renderShell('settings');
+
+  await screen.findByRole('heading', { name: 'Connection' });
+  expect(screen.getByRole('button', { name: 'Disconnect' })).toBeVisible();
+  expect(screen.getByRole('button', { name: 'Sign out' })).toBeVisible();
+  await waitFor(() =>
+    expect(screen.getByDisplayValue('JMSR Test')).toBeVisible(),
+  );
+  expect(screen.getByRole('heading', { name: 'Shortcut keys' })).toBeVisible();
+  expect(screen.getByRole('button', { name: /Automatic/ })).toHaveAttribute(
+    'aria-pressed',
+    'true',
+  );
+
+  cleanup();
+});
+
+test('diagnostics shell area preserves diagnostics panel behavior', async () => {
+  mockShellCommands();
+  const cleanup = renderShell('diagnostics');
+
+  await screen.findByRole('heading', { name: 'Diagnostics' });
+  expect(screen.getByText('0 sanitized runtime events')).toBeVisible();
+  expect(screen.getByRole('checkbox', { name: 'Auto-scroll' })).toBeChecked();
+  expect(
+    screen.getByRole('button', { name: 'Copy diagnostics' }),
+  ).toBeVisible();
 
   cleanup();
 });
