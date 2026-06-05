@@ -1219,6 +1219,66 @@ impl<'a> JellyfinLibrary<'a> {
       library_shortcuts,
     })
   }
+
+  pub async fn browse_video(
+    &self,
+    request: VideoLibraryPageRequest,
+  ) -> Result<VideoLibraryPage, JellyfinError> {
+    if request.library_id.trim().is_empty() {
+      return Err(JellyfinError::HttpError(
+        "Library id is required for video browsing".to_string(),
+      ));
+    }
+
+    let server_url = self.client.server_url()?;
+    let token = self.client.access_token()?;
+    let user_id = self.client.user_id()?;
+    let configuration = self
+      .client
+      .openapi_configuration(&server_url, Some(&token))?;
+    let start_index = request.start_index.max(0);
+    let limit = request.limit.clamp(1, 100);
+    let (include_item_types, media_types) = match request.collection_type {
+      VideoLibraryKind::Movies => (
+        vec![jellyfin_api::models::BaseItemKind::Movie],
+        Some(vec![jellyfin_api::models::MediaType::Video]),
+      ),
+      VideoLibraryKind::TvShows => (vec![jellyfin_api::models::BaseItemKind::Series], None),
+    };
+
+    let response = jellyfin_api::apis::items_api::get_items(
+      &configuration,
+      video_browse_items_params(
+        user_id,
+        request.library_id.clone(),
+        start_index,
+        limit,
+        include_item_types,
+        media_types,
+      ),
+    )
+    .await
+    .map_err(|err| JellyfinClient::openapi_error("Video library browse", err))?;
+
+    let total_record_count = response.total_record_count.unwrap_or(0).max(0);
+    let items = response
+      .items
+      .unwrap_or_default()
+      .into_iter()
+      .filter_map(|item| map_video_library_item(&server_url, item))
+      .collect::<Vec<_>>();
+    let returned_count = i32::try_from(items.len()).unwrap_or(i32::MAX);
+
+    Ok(VideoLibraryPage {
+      library_id: request.library_id,
+      collection_type: request.collection_type,
+      start_index,
+      limit,
+      total_record_count,
+      has_more: start_index.saturating_add(returned_count) < total_record_count,
+      items,
+    })
+  }
 }
 
 async fn latest_video_items(
@@ -1253,6 +1313,104 @@ async fn latest_video_items(
       .filter_map(|item| map_video_home_item(server_url, item))
       .collect(),
   )
+}
+
+fn video_browse_items_params(
+  user_id: String,
+  library_id: String,
+  start_index: i32,
+  limit: i32,
+  include_item_types: Vec<jellyfin_api::models::BaseItemKind>,
+  media_types: Option<Vec<jellyfin_api::models::MediaType>>,
+) -> jellyfin_api::apis::items_api::GetItemsParams {
+  jellyfin_api::apis::items_api::GetItemsParams {
+    user_id: Some(user_id),
+    max_official_rating: None,
+    has_theme_song: None,
+    has_theme_video: None,
+    has_subtitles: None,
+    has_special_feature: None,
+    has_trailer: None,
+    adjacent_to: None,
+    index_number: None,
+    parent_index_number: None,
+    has_parental_rating: None,
+    is_hd: None,
+    is4_k: None,
+    location_types: None,
+    exclude_location_types: None,
+    is_missing: None,
+    is_unaired: None,
+    min_community_rating: None,
+    min_critic_rating: None,
+    min_premiere_date: None,
+    min_date_last_saved: None,
+    min_date_last_saved_for_user: None,
+    max_premiere_date: None,
+    has_overview: None,
+    has_imdb_id: None,
+    has_tmdb_id: None,
+    has_tvdb_id: None,
+    is_movie: None,
+    is_series: None,
+    is_news: None,
+    is_kids: None,
+    is_sports: None,
+    exclude_item_ids: None,
+    start_index: Some(start_index),
+    limit: Some(limit),
+    recursive: Some(true),
+    search_term: None,
+    sort_order: Some(vec![jellyfin_api::models::SortOrder::Ascending]),
+    parent_id: Some(library_id),
+    fields: Some(video_home_fields()),
+    exclude_item_types: None,
+    include_item_types: Some(include_item_types),
+    filters: None,
+    is_favorite: None,
+    media_types,
+    image_types: None,
+    sort_by: Some(vec![jellyfin_api::models::ItemSortBy::SortName]),
+    is_played: None,
+    genres: None,
+    official_ratings: None,
+    tags: None,
+    years: None,
+    enable_user_data: Some(true),
+    image_type_limit: Some(1),
+    enable_image_types: Some(vec![jellyfin_api::models::ImageType::Primary]),
+    person: None,
+    person_ids: None,
+    person_types: None,
+    studios: None,
+    artists: None,
+    exclude_artist_ids: None,
+    artist_ids: None,
+    album_artist_ids: None,
+    contributing_artist_ids: None,
+    albums: None,
+    album_ids: None,
+    ids: None,
+    video_types: None,
+    min_official_rating: None,
+    is_locked: None,
+    is_place_holder: None,
+    has_official_rating: None,
+    collapse_box_set_items: Some(false),
+    min_width: None,
+    min_height: None,
+    max_width: None,
+    max_height: None,
+    is3_d: None,
+    series_status: None,
+    name_starts_with_or_greater: None,
+    name_starts_with: None,
+    name_less_than: None,
+    studio_ids: None,
+    genre_ids: None,
+    enable_total_record_count: Some(true),
+    enable_images: Some(true),
+  }
 }
 
 fn video_home_fields() -> Vec<jellyfin_api::models::ItemFields> {
@@ -1292,6 +1450,36 @@ fn map_video_home_item(
     played_percentage: user_data
       .as_ref()
       .and_then(|data| data.played_percentage.flatten()),
+    played: user_data
+      .as_ref()
+      .and_then(|data| data.played)
+      .unwrap_or(false),
+    favorite: user_data
+      .as_ref()
+      .and_then(|data| data.is_favorite)
+      .unwrap_or(false),
+    artwork_url,
+  })
+}
+
+fn map_video_library_item(
+  server_url: &str,
+  item: jellyfin_api::models::BaseItemDto,
+) -> Option<VideoLibraryItem> {
+  let id = item.id?.to_string();
+  let item_type = item.r#type?.to_string();
+  let user_data = item.user_data.flatten();
+  let artwork_url = primary_artwork_url(server_url, &id, item.image_tags.flatten());
+
+  Some(VideoLibraryItem {
+    id,
+    name: item
+      .name
+      .flatten()
+      .unwrap_or_else(|| "Untitled".to_string()),
+    item_type,
+    production_year: item.production_year.flatten(),
+    runtime_seconds: item.run_time_ticks.flatten().map(ticks_to_seconds),
     played: user_data
       .as_ref()
       .and_then(|data| data.played)
@@ -1826,6 +2014,85 @@ mod tests {
     assert!(captured[4].starts_with("GET /UserViews?"));
     assert!(captured[4].contains("presetViews=movies"));
     assert!(captured[4].contains("presetViews=tvshows"));
+  }
+
+  #[tokio::test]
+  async fn browse_video_maps_movies_and_shows_to_paged_library_queries() {
+    let movie_library_id = "00000000-0000-0000-0000-000000000020";
+    let shows_library_id = "00000000-0000-0000-0000-000000000021";
+    let movie_id = "00000000-0000-0000-0000-000000000030";
+    let show_id = "00000000-0000-0000-0000-000000000031";
+    let (server_url, requests) = serve_responses_with_requests(vec![
+      (
+        "200 OK",
+        r#"{"Items":[{"Id":"00000000-0000-0000-0000-000000000030","Name":"Paged Movie","Type":"Movie","ProductionYear":2025,"RunTimeTicks":54000000000,"ImageTags":{"Primary":"poster-movie"},"UserData":{"IsFavorite":true,"Played":false}}],"TotalRecordCount":24,"StartIndex":20}"#,
+      ),
+      (
+        "200 OK",
+        r#"{"Items":[{"Id":"00000000-0000-0000-0000-000000000031","Name":"Paged Show","Type":"Series","ImageTags":{"Primary":"poster-show"},"UserData":{"IsFavorite":false,"Played":true}}],"TotalRecordCount":1,"StartIndex":0}"#,
+      ),
+    ])
+    .await;
+    let client = JellyfinClient::new();
+    connect_test_client(&client, server_url.clone());
+
+    let movies = client
+      .library()
+      .browse_video(VideoLibraryPageRequest {
+        library_id: movie_library_id.to_string(),
+        collection_type: VideoLibraryKind::Movies,
+        start_index: 20,
+        limit: 2,
+      })
+      .await
+      .expect("movies page should load from generated item listing endpoint");
+    let shows = client
+      .library()
+      .browse_video(VideoLibraryPageRequest {
+        library_id: shows_library_id.to_string(),
+        collection_type: VideoLibraryKind::TvShows,
+        start_index: -4,
+        limit: 500,
+      })
+      .await
+      .expect("shows page should load from generated item listing endpoint");
+
+    assert_eq!(movies.start_index, 20);
+    assert_eq!(movies.limit, 2);
+    assert_eq!(movies.total_record_count, 24);
+    assert!(movies.has_more);
+    assert_eq!(movies.items[0].id, movie_id);
+    assert_eq!(movies.items[0].name, "Paged Movie");
+    assert_eq!(movies.items[0].runtime_seconds, Some(5400.0));
+    let expected_movie_artwork =
+      format!("{server_url}/Items/{movie_id}/Images/Primary?tag=poster-movie");
+    assert_eq!(
+      movies.items[0].artwork_url.as_deref(),
+      Some(expected_movie_artwork.as_str())
+    );
+
+    assert_eq!(shows.start_index, 0);
+    assert_eq!(shows.limit, 100);
+    assert_eq!(shows.total_record_count, 1);
+    assert!(!shows.has_more);
+    assert_eq!(shows.items[0].id, show_id);
+    assert_eq!(shows.items[0].item_type, "Series");
+
+    let captured = requests.lock();
+    assert!(captured[0].starts_with("GET /Items?"));
+    assert!(captured[0].contains("parentId=00000000-0000-0000-0000-000000000020"));
+    assert!(captured[0].contains("startIndex=20"));
+    assert!(captured[0].contains("limit=2"));
+    assert!(captured[0].contains("recursive=true"));
+    assert!(captured[0].contains("includeItemTypes=Movie"));
+    assert!(captured[0].contains("mediaTypes=Video"));
+    assert!(captured[0].contains("enableTotalRecordCount=true"));
+    assert!(captured[1].starts_with("GET /Items?"));
+    assert!(captured[1].contains("parentId=00000000-0000-0000-0000-000000000021"));
+    assert!(captured[1].contains("startIndex=0"));
+    assert!(captured[1].contains("limit=100"));
+    assert!(captured[1].contains("includeItemTypes=Series"));
+    assert!(!captured[1].contains("mediaTypes=Video"));
   }
 
   #[test]

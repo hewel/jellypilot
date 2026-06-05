@@ -86,6 +86,52 @@ pub struct VideoLibraryShortcut {
   pub artwork_url: Option<String>,
 }
 
+/// Supported video library browse families.
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, Type)]
+pub enum VideoLibraryKind {
+  #[serde(rename = "movies")]
+  Movies,
+  #[serde(rename = "tvshows")]
+  TvShows,
+}
+
+/// Paged Library Browser listing request.
+#[derive(Debug, Clone, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct VideoLibraryPageRequest {
+  pub library_id: String,
+  pub collection_type: VideoLibraryKind,
+  pub start_index: i32,
+  pub limit: i32,
+}
+
+/// Paged Library Browser listing result.
+#[derive(Debug, Clone, Serialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct VideoLibraryPage {
+  pub library_id: String,
+  pub collection_type: VideoLibraryKind,
+  pub start_index: i32,
+  pub limit: i32,
+  pub total_record_count: i32,
+  pub has_more: bool,
+  pub items: Vec<VideoLibraryItem>,
+}
+
+/// Media card summary for Movies and Shows browse results.
+#[derive(Debug, Clone, Serialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct VideoLibraryItem {
+  pub id: String,
+  pub name: String,
+  pub item_type: String,
+  pub production_year: Option<i32>,
+  pub runtime_seconds: Option<f64>,
+  pub played: bool,
+  pub favorite: bool,
+  pub artwork_url: Option<String>,
+}
+
 /// Credentials for authentication.
 #[derive(Debug, Clone, Deserialize, Type)]
 #[serde(rename_all = "camelCase")]

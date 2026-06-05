@@ -1,13 +1,16 @@
 import { afterEach, expect, rstest, test } from '@rstest/core';
-import { screen, waitFor } from '@testing-library/dom';
+import { fireEvent, screen, waitFor } from '@testing-library/dom';
 import { render } from 'solid-js/web';
 import {
   commands,
   events,
   type NowPlayingState,
   type VideoHome,
+  type VideoLibraryPage,
 } from '../src/bindings';
-import AuthenticatedShell from '../src/components/AuthenticatedShell';
+import AuthenticatedShell, {
+  type LibraryView,
+} from '../src/components/AuthenticatedShell';
 import { ToastProvider } from '../src/components/ToastProvider';
 
 const connectedState = {
@@ -137,12 +140,65 @@ const videoHome: VideoHome = {
   ],
 };
 
+function videoLibraryPage(startIndex: number): VideoLibraryPage {
+  if (startIndex === 0) {
+    return {
+      libraryId: 'movies',
+      collectionType: 'movies',
+      startIndex: 0,
+      limit: 24,
+      totalRecordCount: 25,
+      hasMore: true,
+      items: [
+        {
+          id: 'movie-1',
+          name: 'Paged Movie',
+          itemType: 'Movie',
+          productionYear: 2025,
+          runtimeSeconds: 5400,
+          played: false,
+          favorite: true,
+          artworkUrl:
+            'https://jellyfin.example.com/Items/movie-1/Images/Primary',
+        },
+      ],
+    };
+  }
+
+  return {
+    libraryId: 'movies',
+    collectionType: 'movies',
+    startIndex,
+    limit: 24,
+    totalRecordCount: 25,
+    hasMore: false,
+    items: [
+      {
+        id: 'movie-25',
+        name: 'Paged Movie 25',
+        itemType: 'Movie',
+        productionYear: null,
+        runtimeSeconds: null,
+        played: true,
+        favorite: false,
+        artworkUrl: null,
+      },
+    ],
+  };
+}
+
 function mockShellCommands(state = connectedState) {
   rstest.spyOn(commands, 'jellyfinGetState').mockResolvedValue(state);
   rstest.spyOn(commands, 'libraryVideoHome').mockResolvedValue({
     status: 'ok',
     data: videoHome,
   });
+  rstest.spyOn(commands, 'libraryBrowseVideo').mockImplementation((request) =>
+    Promise.resolve({
+      status: 'ok',
+      data: videoLibraryPage(request.startIndex),
+    }),
+  );
   rstest.spyOn(commands, 'nowPlayingGetState').mockResolvedValue({
     status: 'ok',
     data: nowPlaying,
@@ -158,6 +214,7 @@ function renderShell(
     | 'now-playing'
     | 'settings'
     | 'diagnostics' = 'library',
+  libraryView?: LibraryView,
 ) {
   const root = document.createElement('div');
   document.body.append(root);
@@ -166,6 +223,7 @@ function renderShell(
       <ToastProvider>
         <AuthenticatedShell
           activeArea={activeArea}
+          libraryView={libraryView}
           onSignedOut={() => undefined}
         />
       </ToastProvider>
@@ -217,7 +275,14 @@ test('library landing renders command-backed rows and compact now playing link',
   expect(screen.getByRole('link', { name: /Next Episode/ })).toBeVisible();
   expect(screen.getByRole('link', { name: /Latest Movie/ })).toBeVisible();
   expect(screen.getByRole('link', { name: /Latest Episode/ })).toBeVisible();
-  expect(screen.getByRole('link', { name: /Movies/ })).toBeVisible();
+  expect(screen.getByRole('link', { name: /Movies/ })).toHaveAttribute(
+    'href',
+    '/library/movies/movies',
+  );
+  expect(screen.getByRole('link', { name: /Shows/ })).toHaveAttribute(
+    'href',
+    '/library/tvshows/shows',
+  );
   expect(screen.getByAltText('Resume Movie artwork')).toHaveAttribute(
     'src',
     videoHome.continueWatching[0]?.artworkUrl ?? '',
@@ -227,6 +292,46 @@ test('library landing renders command-backed rows and compact now playing link',
   expect(
     screen.getByRole('link', { name: 'Open Now Playing' }),
   ).toHaveAttribute('href', '/now-playing');
+
+  cleanup();
+});
+
+test('library browse loads paged results and opens detail links without playback', async () => {
+  mockShellCommands();
+  const browseCommand = rstest.spyOn(commands, 'libraryBrowseVideo');
+  const mpvStart = rstest.spyOn(commands, 'mpvStart');
+  const cleanup = renderShell('library', {
+    kind: 'browse',
+    collectionType: 'movies',
+    libraryId: 'movies',
+  });
+
+  await screen.findByRole('heading', { name: 'Movies' });
+  expect(
+    await screen.findByRole('link', { name: /Paged Movie/ }),
+  ).toHaveAttribute('href', '/library/items/movie-1');
+  expect(screen.getByAltText('Paged Movie artwork')).toBeVisible();
+  expect(browseCommand).toHaveBeenCalledWith({
+    collectionType: 'movies',
+    libraryId: 'movies',
+    startIndex: 0,
+    limit: 24,
+  });
+
+  fireEvent.click(screen.getByRole('link', { name: /Paged Movie/ }));
+  expect(mpvStart).not.toHaveBeenCalled();
+
+  fireEvent.click(screen.getByRole('button', { name: 'Load more' }));
+  expect(
+    await screen.findByRole('link', { name: /Paged Movie 25/ }),
+  ).toHaveAttribute('href', '/library/items/movie-25');
+  expect(browseCommand).toHaveBeenLastCalledWith({
+    collectionType: 'movies',
+    libraryId: 'movies',
+    startIndex: 24,
+    limit: 24,
+  });
+  expect(screen.queryByRole('button', { name: 'Load more' })).toBeNull();
 
   cleanup();
 });

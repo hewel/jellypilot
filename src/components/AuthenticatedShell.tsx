@@ -2,10 +2,12 @@ import { Effect, Exit } from 'effect';
 import {
   Activity,
   Clapperboard,
+  Film,
   Library,
   MonitorPlay,
   RefreshCw,
   Settings,
+  Tv,
 } from 'lucide-solid';
 import {
   createResource,
@@ -22,6 +24,9 @@ import {
   type NowPlayingState,
   type VideoHome,
   type VideoHomeItem,
+  type VideoLibraryItem,
+  type VideoLibraryKind,
+  type VideoLibraryPage,
   type VideoLibraryShortcut,
 } from '../bindings';
 import {
@@ -35,9 +40,13 @@ import OperationsConsole from './OperationsConsole';
 import { StatusBadge } from './ui';
 
 export type ShellArea = 'library' | 'now-playing' | 'settings' | 'diagnostics';
+export type LibraryView =
+  | { kind: 'home' }
+  | { kind: 'browse'; collectionType: VideoLibraryKind; libraryId: string };
 
 interface AuthenticatedShellProps {
   activeArea: ShellArea;
+  libraryView?: LibraryView;
   onSignedOut: () => void;
 }
 
@@ -46,6 +55,14 @@ type LibraryHomeState =
   | { kind: 'empty'; connection: ConnectionState }
   | { kind: 'disconnected'; state: ConnectionState }
   | { kind: 'error'; message: string };
+
+type LibraryBrowseState =
+  | { kind: 'ready'; page: VideoLibraryPage; items: VideoLibraryItem[] }
+  | { kind: 'empty'; page: VideoLibraryPage }
+  | { kind: 'disconnected'; state: ConnectionState }
+  | { kind: 'error'; message: string };
+
+const LIBRARY_BROWSE_PAGE_SIZE = 24;
 
 const navItems: Array<{
   area: ShellArea;
@@ -112,6 +129,52 @@ async function fetchLibraryHome(): Promise<LibraryHomeState> {
   return videoHomeIsEmpty(home.value)
     ? { kind: 'empty', connection: connection.value }
     : { kind: 'ready', home: home.value, connection: connection.value };
+}
+
+async function fetchVideoLibraryPage(
+  collectionType: VideoLibraryKind,
+  libraryId: string,
+  startIndex: number,
+): Promise<LibraryBrowseState> {
+  const connection = await Effect.runPromiseExit(
+    runTauriCommandRaw(() => commands.jellyfinGetState()),
+  );
+
+  if (!Exit.isSuccess(connection)) {
+    return {
+      kind: 'error',
+      message: commandFailureMessage(
+        connection.cause,
+        'Could not load Library state',
+      ),
+    };
+  }
+
+  if (!connection.value.connected) {
+    return { kind: 'disconnected', state: connection.value };
+  }
+
+  const page = await Effect.runPromiseExit(
+    runTauriCommand(() =>
+      commands.libraryBrowseVideo({
+        collectionType,
+        libraryId,
+        startIndex,
+        limit: LIBRARY_BROWSE_PAGE_SIZE,
+      }),
+    ),
+  );
+
+  if (!Exit.isSuccess(page)) {
+    return {
+      kind: 'error',
+      message: commandFailureMessage(page.cause, 'Could not load Library page'),
+    };
+  }
+
+  return page.value.items.length === 0
+    ? { kind: 'empty', page: page.value }
+    : { kind: 'ready', page: page.value, items: page.value.items };
 }
 
 function statusText(status?: NowPlayingState['status']) {
@@ -444,6 +507,191 @@ function LibraryShortcutRow(props: { shortcuts: VideoLibraryShortcut[] }) {
   );
 }
 
+function libraryTitle(collectionType: VideoLibraryKind) {
+  return collectionType === 'tvshows' ? 'Shows' : 'Movies';
+}
+
+function LibraryBrowseView(props: {
+  collectionType: VideoLibraryKind;
+  libraryId: string;
+}) {
+  const [state, setState] = createSignal<LibraryBrowseState | null>(null);
+  const [loading, setLoading] = createSignal(false);
+
+  const loadPage = async (startIndex: number, replace = false) => {
+    if (loading()) return;
+    setLoading(true);
+    const result = await fetchVideoLibraryPage(
+      props.collectionType,
+      props.libraryId,
+      startIndex,
+    );
+    setState((current) => {
+      if (!replace && current?.kind === 'ready' && result.kind === 'ready') {
+        return {
+          kind: 'ready',
+          page: result.page,
+          items: [...current.items, ...result.items],
+        };
+      }
+      return result;
+    });
+    setLoading(false);
+  };
+
+  onMount(() => {
+    void loadPage(0, true);
+  });
+
+  const readyState = () => {
+    const current = state();
+    return current?.kind === 'ready' ? current : null;
+  };
+  const statusTitle = () => {
+    const current = state();
+    if (!current) return `Loading ${libraryTitle(props.collectionType)}`;
+    if (current.kind === 'empty') {
+      return `${libraryTitle(props.collectionType)} has no results`;
+    }
+    if (current.kind === 'error') return 'Could not load Library page';
+    if (current.kind === 'disconnected') {
+      return 'Library requires a live Jellyfin connection';
+    }
+    return `Loading ${libraryTitle(props.collectionType)}`;
+  };
+  const statusDescription = () => {
+    const current = state();
+    if (current?.kind === 'empty') {
+      return 'Jellyfin returned an empty server page for this video library.';
+    }
+    if (current?.kind === 'error') return current.message;
+    if (current?.kind === 'disconnected') {
+      return 'Reconnect Jellyfin to browse video libraries. Saved Sessions remain available, but Library data is not cached offline.';
+    }
+    return 'JMSR is loading a server-paged video library result set.';
+  };
+  const loadMoreStartIndex = () => {
+    const current = readyState();
+    return current ? current.page.startIndex + current.page.limit : 0;
+  };
+
+  return (
+    <div class="space-y-6">
+      <div class="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+        <div>
+          <p class="text-label-small text-secondary">Library Browser</p>
+          <h1 class="text-headline-large">
+            {libraryTitle(props.collectionType)}
+          </h1>
+          <p class="mt-2 max-w-2xl text-body-large">
+            Server-paged video results from Jellyfin.
+          </p>
+        </div>
+        <a href="/library" class="btn-outlined rounded-full">
+          <Library class="h-4 w-4" />
+          <span>Video Home</span>
+        </a>
+      </div>
+
+      <CompactNowPlayingSummary />
+
+      <Show
+        when={state()?.kind === 'ready'}
+        fallback={
+          <LibraryStatusPanel
+            title={statusTitle()}
+            description={statusDescription()}
+          />
+        }
+      >
+        <section class="space-y-4" aria-labelledby="library-browse-title">
+          <div class="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+            <h2 id="library-browse-title" class="text-title-large">
+              {libraryTitle(props.collectionType)}
+            </h2>
+            <p class="text-body-small">
+              {readyState()?.items.length ?? 0} of{' '}
+              {readyState()?.page.totalRecordCount ?? 0}
+            </p>
+          </div>
+          <div class="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+            <For each={readyState()?.items ?? []}>
+              {(item) => (
+                <VideoLibraryCard
+                  item={item}
+                  collectionType={props.collectionType}
+                />
+              )}
+            </For>
+          </div>
+          <Show when={readyState()?.page.hasMore}>
+            <div class="flex justify-center pt-2">
+              <button
+                type="button"
+                class="btn-secondary rounded-full"
+                disabled={loading()}
+                onClick={() => void loadPage(loadMoreStartIndex())}
+              >
+                <RefreshCw class="h-4 w-4" />
+                <span>{loading() ? 'Loading more' : 'Load more'}</span>
+              </button>
+            </div>
+          </Show>
+        </section>
+      </Show>
+    </div>
+  );
+}
+
+function VideoLibraryCard(props: {
+  item: VideoLibraryItem;
+  collectionType: VideoLibraryKind;
+}) {
+  const Icon = props.collectionType === 'tvshows' ? Tv : Film;
+  const subtitle = () => {
+    const year = props.item.productionYear
+      ? props.item.productionYear.toString()
+      : props.item.itemType;
+    const state = props.item.played ? 'Played' : 'Unplayed';
+    return `${year} · ${state}`;
+  };
+
+  return (
+    <a
+      href={`/library/items/${props.item.id}`}
+      class="card-filled group block min-h-56 overflow-hidden p-0 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-secondary/70"
+    >
+      <div class="aspect-video border-b border-outline-variant bg-surface-container-lowest/60">
+        <Show
+          when={props.item.artworkUrl}
+          fallback={
+            <div class="flex h-full flex-col items-center justify-center gap-2 px-4 text-center text-label-small text-on-surface-variant">
+              <Icon class="h-5 w-5" />
+              <span>No artwork</span>
+            </div>
+          }
+        >
+          {(artworkUrl) => (
+            <img
+              src={artworkUrl()}
+              alt={`${props.item.name} artwork`}
+              class="h-full w-full object-cover"
+              loading="lazy"
+            />
+          )}
+        </Show>
+      </div>
+      <div class="space-y-2 p-4">
+        <p class="line-clamp-2 text-title-medium">{props.item.name}</p>
+        <p class="text-body-small">{subtitle()}</p>
+        <Show when={props.item.favorite}>
+          <p class="text-label-small text-secondary">Favorite</p>
+        </Show>
+      </div>
+    </a>
+  );
+}
+
 function DiagnosticsArea() {
   return (
     <section
@@ -465,7 +713,14 @@ export default function AuthenticatedShell(props: AuthenticatedShellProps) {
   const renderArea = () => {
     switch (props.activeArea) {
       case 'library':
-        return <LibraryLanding />;
+        return props.libraryView?.kind === 'browse' ? (
+          <LibraryBrowseView
+            collectionType={props.libraryView.collectionType}
+            libraryId={props.libraryView.libraryId}
+          />
+        ) : (
+          <LibraryLanding />
+        );
       case 'now-playing':
         return <NowPlayingCard jellyfinConnected={true} />;
       case 'diagnostics':

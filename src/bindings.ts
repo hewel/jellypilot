@@ -33,6 +33,8 @@ export const commands = {
 	nowPlayingGetState: () => typedError<NowPlayingState, CommandError>(__TAURI_INVOKE("now_playing_get_state")),
 	/**  Load the Library Browser Video Home dashboard data. */
 	libraryVideoHome: () => typedError<VideoHome, CommandError>(__TAURI_INVOKE("library_video_home")),
+	/**  Load one server-paged Movies or Shows library result page. */
+	libraryBrowseVideo: (request: VideoLibraryPageRequest) => typedError<VideoLibraryPage, CommandError>(__TAURI_INVOKE("library_browse_video", { request })),
 	/**  Connect to a Jellyfin server. */
 	jellyfinConnect: (credentials: Credentials) => typedError<null, CommandError>(__TAURI_INVOKE("jellyfin_connect", { credentials })),
 	/**  Disconnect from Jellyfin server. */
@@ -249,6 +251,40 @@ export type VideoHomeItem = {
 	played: boolean,
 	favorite: boolean,
 	artworkUrl: string | null,
+};
+
+/**  Media card summary for Movies and Shows browse results. */
+export type VideoLibraryItem = {
+	id: string,
+	name: string,
+	itemType: string,
+	productionYear: number | null,
+	runtimeSeconds: number | null,
+	played: boolean,
+	favorite: boolean,
+	artworkUrl: string | null,
+};
+
+/**  Supported video library browse families. */
+export type VideoLibraryKind = "movies" | "tvshows";
+
+/**  Paged Library Browser listing result. */
+export type VideoLibraryPage = {
+	libraryId: string,
+	collectionType: VideoLibraryKind,
+	startIndex: number,
+	limit: number,
+	totalRecordCount: number,
+	hasMore: boolean,
+	items: VideoLibraryItem[],
+};
+
+/**  Paged Library Browser listing request. */
+export type VideoLibraryPageRequest = {
+	libraryId: string,
+	collectionType: VideoLibraryKind,
+	startIndex: number,
+	limit: number,
 };
 
 /**  Video library shortcut for drilling into Movies or Shows libraries. */

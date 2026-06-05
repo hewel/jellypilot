@@ -5,8 +5,11 @@ import {
   Outlet,
   redirect,
   useNavigate,
+  useParams,
 } from '@tanstack/solid-router';
+import type { VideoLibraryKind } from './bindings';
 import AuthenticatedShell, {
+  type LibraryView,
   type ShellArea,
 } from './components/AuthenticatedShell';
 import LoginPage from './components/LoginPage';
@@ -36,7 +39,10 @@ function LoginRouteComponent() {
   return <LoginPage onConnected={handleConnected} />;
 }
 
-function ShellRouteComponent(props: { activeArea: ShellArea }) {
+function ShellRouteComponent(props: {
+  activeArea: ShellArea;
+  libraryView?: LibraryView;
+}) {
   const navigate = useNavigate();
 
   const handleSignedOut = () => {
@@ -46,6 +52,7 @@ function ShellRouteComponent(props: { activeArea: ShellArea }) {
   return (
     <AuthenticatedShell
       activeArea={props.activeArea}
+      libraryView={props.libraryView}
       onSignedOut={handleSignedOut}
     />
   );
@@ -57,6 +64,32 @@ const libraryRoute = createRoute({
   beforeLoad: requireAuthenticatedShell,
   component: () => <ShellRouteComponent activeArea="library" />,
 });
+
+const libraryBrowseRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/library/$collectionType/$libraryId',
+  beforeLoad: requireAuthenticatedShell,
+  component: LibraryBrowseRouteComponent,
+});
+
+function libraryKindFromParam(value: string): VideoLibraryKind {
+  return value === 'tvshows' ? 'tvshows' : 'movies';
+}
+
+function LibraryBrowseRouteComponent() {
+  const params = useParams({ from: '/library/$collectionType/$libraryId' });
+
+  return (
+    <ShellRouteComponent
+      activeArea="library"
+      libraryView={{
+        kind: 'browse',
+        collectionType: libraryKindFromParam(params().collectionType),
+        libraryId: params().libraryId,
+      }}
+    />
+  );
+}
 
 const nowPlayingRoute = createRoute({
   getParentRoute: () => rootRoute,
@@ -123,6 +156,7 @@ const routeTree = rootRoute.addChildren([
   indexRoute,
   loginRoute,
   libraryRoute,
+  libraryBrowseRoute,
   nowPlayingRoute,
   settingsRoute,
   diagnosticsRoute,
