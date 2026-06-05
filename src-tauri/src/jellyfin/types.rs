@@ -103,6 +103,31 @@ pub struct VideoLibraryPageRequest {
   pub collection_type: VideoLibraryKind,
   pub start_index: i32,
   pub limit: i32,
+  pub sort: VideoLibrarySort,
+  pub played_filter: VideoLibraryPlayedFilter,
+  pub favorites_only: bool,
+}
+
+/// Supported Library Browser sort options.
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, Type)]
+pub enum VideoLibrarySort {
+  #[serde(rename = "title")]
+  Title,
+  #[serde(rename = "recentlyAdded")]
+  RecentlyAdded,
+  #[serde(rename = "releaseDate")]
+  ReleaseDate,
+}
+
+/// Supported played-state filters for Library Browser results.
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, Type)]
+pub enum VideoLibraryPlayedFilter {
+  #[serde(rename = "all")]
+  All,
+  #[serde(rename = "played")]
+  Played,
+  #[serde(rename = "unplayed")]
+  Unplayed,
 }
 
 /// Paged Library Browser listing result.

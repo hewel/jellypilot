@@ -285,7 +285,13 @@ export type VideoLibraryPageRequest = {
 	collectionType: VideoLibraryKind,
 	startIndex: number,
 	limit: number,
+	sort: VideoLibrarySort,
+	playedFilter: VideoLibraryPlayedFilter,
+	favoritesOnly: boolean,
 };
+
+/**  Supported played-state filters for Library Browser results. */
+export type VideoLibraryPlayedFilter = "all" | "played" | "unplayed";
 
 /**  Video library shortcut for drilling into Movies or Shows libraries. */
 export type VideoLibraryShortcut = {
@@ -295,6 +301,9 @@ export type VideoLibraryShortcut = {
 	itemCount: number | null,
 	artworkUrl: string | null,
 };
+
+/**  Supported Library Browser sort options. */
+export type VideoLibrarySort = "title" | "recentlyAdded" | "releaseDate";
 
 /* Tauri Specta runtime */
 async function typedError<T, E>(result: Promise<T>): Promise<{ status: "ok"; data: T } | { status: "error"; error: E }> {

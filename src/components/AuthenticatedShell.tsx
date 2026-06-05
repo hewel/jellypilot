@@ -27,7 +27,9 @@ import {
   type VideoLibraryItem,
   type VideoLibraryKind,
   type VideoLibraryPage,
+  type VideoLibraryPlayedFilter,
   type VideoLibraryShortcut,
+  type VideoLibrarySort,
 } from '../bindings';
 import {
   commandFailureMessage,
@@ -135,6 +137,9 @@ async function fetchVideoLibraryPage(
   collectionType: VideoLibraryKind,
   libraryId: string,
   startIndex: number,
+  sort: VideoLibrarySort,
+  playedFilter: VideoLibraryPlayedFilter,
+  favoritesOnly: boolean,
 ): Promise<LibraryBrowseState> {
   const connection = await Effect.runPromiseExit(
     runTauriCommandRaw(() => commands.jellyfinGetState()),
@@ -161,6 +166,9 @@ async function fetchVideoLibraryPage(
         libraryId,
         startIndex,
         limit: LIBRARY_BROWSE_PAGE_SIZE,
+        sort,
+        playedFilter,
+        favoritesOnly,
       }),
     ),
   );
@@ -511,12 +519,27 @@ function libraryTitle(collectionType: VideoLibraryKind) {
   return collectionType === 'tvshows' ? 'Shows' : 'Movies';
 }
 
+function playedFilterLabel(filter: VideoLibraryPlayedFilter) {
+  switch (filter) {
+    case 'played':
+      return 'Played';
+    case 'unplayed':
+      return 'Unplayed';
+    default:
+      return 'All';
+  }
+}
+
 function LibraryBrowseView(props: {
   collectionType: VideoLibraryKind;
   libraryId: string;
 }) {
   const [state, setState] = createSignal<LibraryBrowseState | null>(null);
   const [loading, setLoading] = createSignal(false);
+  const [sort, setSort] = createSignal<VideoLibrarySort>('title');
+  const [playedFilter, setPlayedFilter] =
+    createSignal<VideoLibraryPlayedFilter>('all');
+  const [favoritesOnly, setFavoritesOnly] = createSignal(false);
 
   const loadPage = async (startIndex: number, replace = false) => {
     if (loading()) return;
@@ -525,6 +548,9 @@ function LibraryBrowseView(props: {
       props.collectionType,
       props.libraryId,
       startIndex,
+      sort(),
+      playedFilter(),
+      favoritesOnly(),
     );
     setState((current) => {
       if (!replace && current?.kind === 'ready' && result.kind === 'ready') {
@@ -537,6 +563,10 @@ function LibraryBrowseView(props: {
       return result;
     });
     setLoading(false);
+  };
+  const reloadFromFirstPage = () => {
+    setState(null);
+    void loadPage(0, true);
   };
 
   onMount(() => {
@@ -594,6 +624,69 @@ function LibraryBrowseView(props: {
       </div>
 
       <CompactNowPlayingSummary />
+
+      <section class="card-filled space-y-4" aria-label="Library controls">
+        <div class="grid gap-4 lg:grid-cols-[minmax(180px,240px)_1fr_auto] lg:items-end">
+          <label class="space-y-2">
+            <span class="text-label-small">Sort</span>
+            <select
+              class="input-filled w-full"
+              value={sort()}
+              disabled={loading()}
+              onChange={(event) => {
+                setSort(event.currentTarget.value as VideoLibrarySort);
+                reloadFromFirstPage();
+              }}
+            >
+              <option value="title">Title</option>
+              <option value="recentlyAdded">Recently added</option>
+              <option value="releaseDate">Release date</option>
+            </select>
+          </label>
+          <fieldset class="space-y-2" aria-label="Played filter">
+            <legend class="text-label-small">Played filter</legend>
+            <div class="flex flex-wrap gap-2">
+              <For
+                each={
+                  ['all', 'played', 'unplayed'] as VideoLibraryPlayedFilter[]
+                }
+              >
+                {(filter) => (
+                  <button
+                    type="button"
+                    class={`btn-outlined rounded-full ${
+                      playedFilter() === filter
+                        ? 'border-secondary bg-secondary-container/45 text-on-secondary-container'
+                        : ''
+                    }`}
+                    aria-pressed={playedFilter() === filter}
+                    disabled={loading()}
+                    onClick={() => {
+                      setPlayedFilter(filter);
+                      reloadFromFirstPage();
+                    }}
+                  >
+                    {playedFilterLabel(filter)}
+                  </button>
+                )}
+              </For>
+            </div>
+          </fieldset>
+          <label class="inline-flex min-h-11 items-center gap-3 rounded-xl border border-outline-variant px-3 text-label-large">
+            <input
+              type="checkbox"
+              class="h-4 w-4 accent-secondary"
+              checked={favoritesOnly()}
+              disabled={loading()}
+              onChange={(event) => {
+                setFavoritesOnly(event.currentTarget.checked);
+                reloadFromFirstPage();
+              }}
+            />
+            <span>Favorites</span>
+          </label>
+        </div>
+      </section>
 
       <Show
         when={state()?.kind === 'ready'}

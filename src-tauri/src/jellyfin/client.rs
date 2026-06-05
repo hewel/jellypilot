@@ -1248,14 +1248,17 @@ impl<'a> JellyfinLibrary<'a> {
 
     let response = jellyfin_api::apis::items_api::get_items(
       &configuration,
-      video_browse_items_params(
+      video_browse_items_params(VideoBrowseItemsQuery {
         user_id,
-        request.library_id.clone(),
+        library_id: request.library_id.clone(),
         start_index,
         limit,
         include_item_types,
         media_types,
-      ),
+        sort: request.sort,
+        played_filter: request.played_filter,
+        favorites_only: request.favorites_only,
+      }),
     )
     .await
     .map_err(|err| JellyfinClient::openapi_error("Video library browse", err))?;
@@ -1315,16 +1318,43 @@ async fn latest_video_items(
   )
 }
 
-fn video_browse_items_params(
+struct VideoBrowseItemsQuery {
   user_id: String,
   library_id: String,
   start_index: i32,
   limit: i32,
   include_item_types: Vec<jellyfin_api::models::BaseItemKind>,
   media_types: Option<Vec<jellyfin_api::models::MediaType>>,
+  sort: VideoLibrarySort,
+  played_filter: VideoLibraryPlayedFilter,
+  favorites_only: bool,
+}
+
+fn video_browse_items_params(
+  query: VideoBrowseItemsQuery,
 ) -> jellyfin_api::apis::items_api::GetItemsParams {
+  let (sort_by, sort_order) = match query.sort {
+    VideoLibrarySort::Title => (
+      jellyfin_api::models::ItemSortBy::SortName,
+      jellyfin_api::models::SortOrder::Ascending,
+    ),
+    VideoLibrarySort::RecentlyAdded => (
+      jellyfin_api::models::ItemSortBy::DateCreated,
+      jellyfin_api::models::SortOrder::Descending,
+    ),
+    VideoLibrarySort::ReleaseDate => (
+      jellyfin_api::models::ItemSortBy::PremiereDate,
+      jellyfin_api::models::SortOrder::Descending,
+    ),
+  };
+  let is_played = match query.played_filter {
+    VideoLibraryPlayedFilter::All => None,
+    VideoLibraryPlayedFilter::Played => Some(true),
+    VideoLibraryPlayedFilter::Unplayed => Some(false),
+  };
+
   jellyfin_api::apis::items_api::GetItemsParams {
-    user_id: Some(user_id),
+    user_id: Some(query.user_id),
     max_official_rating: None,
     has_theme_song: None,
     has_theme_video: None,
@@ -1357,21 +1387,21 @@ fn video_browse_items_params(
     is_kids: None,
     is_sports: None,
     exclude_item_ids: None,
-    start_index: Some(start_index),
-    limit: Some(limit),
+    start_index: Some(query.start_index),
+    limit: Some(query.limit),
     recursive: Some(true),
     search_term: None,
-    sort_order: Some(vec![jellyfin_api::models::SortOrder::Ascending]),
-    parent_id: Some(library_id),
+    sort_order: Some(vec![sort_order]),
+    parent_id: Some(query.library_id),
     fields: Some(video_home_fields()),
     exclude_item_types: None,
-    include_item_types: Some(include_item_types),
+    include_item_types: Some(query.include_item_types),
     filters: None,
-    is_favorite: None,
-    media_types,
+    is_favorite: query.favorites_only.then_some(true),
+    media_types: query.media_types,
     image_types: None,
-    sort_by: Some(vec![jellyfin_api::models::ItemSortBy::SortName]),
-    is_played: None,
+    sort_by: Some(vec![sort_by]),
+    is_played,
     genres: None,
     official_ratings: None,
     tags: None,
@@ -2031,6 +2061,10 @@ mod tests {
         "200 OK",
         r#"{"Items":[{"Id":"00000000-0000-0000-0000-000000000031","Name":"Paged Show","Type":"Series","ImageTags":{"Primary":"poster-show"},"UserData":{"IsFavorite":false,"Played":true}}],"TotalRecordCount":1,"StartIndex":0}"#,
       ),
+      (
+        "200 OK",
+        r#"{"Items":[{"Id":"00000000-0000-0000-0000-000000000030","Name":"Filtered Movie","Type":"Movie","UserData":{"IsFavorite":true,"Played":true}}],"TotalRecordCount":1,"StartIndex":0}"#,
+      ),
     ])
     .await;
     let client = JellyfinClient::new();
@@ -2043,6 +2077,9 @@ mod tests {
         collection_type: VideoLibraryKind::Movies,
         start_index: 20,
         limit: 2,
+        sort: VideoLibrarySort::Title,
+        played_filter: VideoLibraryPlayedFilter::All,
+        favorites_only: false,
       })
       .await
       .expect("movies page should load from generated item listing endpoint");
@@ -2053,9 +2090,25 @@ mod tests {
         collection_type: VideoLibraryKind::TvShows,
         start_index: -4,
         limit: 500,
+        sort: VideoLibrarySort::RecentlyAdded,
+        played_filter: VideoLibraryPlayedFilter::All,
+        favorites_only: false,
       })
       .await
       .expect("shows page should load from generated item listing endpoint");
+    let filtered_movies = client
+      .library()
+      .browse_video(VideoLibraryPageRequest {
+        library_id: movie_library_id.to_string(),
+        collection_type: VideoLibraryKind::Movies,
+        start_index: 0,
+        limit: 24,
+        sort: VideoLibrarySort::ReleaseDate,
+        played_filter: VideoLibraryPlayedFilter::Played,
+        favorites_only: true,
+      })
+      .await
+      .expect("filtered movies page should load from generated item listing endpoint");
 
     assert_eq!(movies.start_index, 20);
     assert_eq!(movies.limit, 2);
@@ -2077,6 +2130,7 @@ mod tests {
     assert!(!shows.has_more);
     assert_eq!(shows.items[0].id, show_id);
     assert_eq!(shows.items[0].item_type, "Series");
+    assert_eq!(filtered_movies.items[0].name, "Filtered Movie");
 
     let captured = requests.lock();
     assert!(captured[0].starts_with("GET /Items?"));
@@ -2086,13 +2140,46 @@ mod tests {
     assert!(captured[0].contains("recursive=true"));
     assert!(captured[0].contains("includeItemTypes=Movie"));
     assert!(captured[0].contains("mediaTypes=Video"));
+    assert!(captured[0].contains("sortBy=SortName"));
+    assert!(captured[0].contains("sortOrder=Ascending"));
     assert!(captured[0].contains("enableTotalRecordCount=true"));
     assert!(captured[1].starts_with("GET /Items?"));
     assert!(captured[1].contains("parentId=00000000-0000-0000-0000-000000000021"));
     assert!(captured[1].contains("startIndex=0"));
     assert!(captured[1].contains("limit=100"));
     assert!(captured[1].contains("includeItemTypes=Series"));
+    assert!(captured[1].contains("sortBy=DateCreated"));
+    assert!(captured[1].contains("sortOrder=Descending"));
     assert!(!captured[1].contains("mediaTypes=Video"));
+    assert!(captured[2].contains("sortBy=PremiereDate"));
+    assert!(captured[2].contains("sortOrder=Descending"));
+    assert!(captured[2].contains("isPlayed=true"));
+    assert!(captured[2].contains("isFavorite=true"));
+  }
+
+  #[tokio::test]
+  async fn browse_video_rejects_missing_library_id() {
+    let client = JellyfinClient::new();
+    connect_test_client(&client, "http://127.0.0.1:8096".to_string());
+
+    let err = client
+      .library()
+      .browse_video(VideoLibraryPageRequest {
+        library_id: "  ".to_string(),
+        collection_type: VideoLibraryKind::Movies,
+        start_index: 0,
+        limit: 24,
+        sort: VideoLibrarySort::Title,
+        played_filter: VideoLibraryPlayedFilter::All,
+        favorites_only: false,
+      })
+      .await
+      .expect_err("missing library id should return a clear command error");
+
+    assert_eq!(
+      err.to_string(),
+      "HTTP error: Library id is required for video browsing"
+    );
   }
 
   #[test]

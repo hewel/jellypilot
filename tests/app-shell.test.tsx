@@ -332,6 +332,9 @@ test('library browse loads paged results and opens detail links without playback
     libraryId: 'movies',
     startIndex: 0,
     limit: 24,
+    sort: 'title',
+    playedFilter: 'all',
+    favoritesOnly: false,
   });
 
   const movieLink = screen.getByRole('link', { name: /Paged Movie/ });
@@ -348,8 +351,84 @@ test('library browse loads paged results and opens detail links without playback
     libraryId: 'movies',
     startIndex: 24,
     limit: 24,
+    sort: 'title',
+    playedFilter: 'all',
+    favoritesOnly: false,
   });
   expect(screen.queryByRole('button', { name: 'Load more' })).toBeNull();
+
+  cleanup();
+});
+
+test('library browse controls reload paged results from the first page', async () => {
+  mockShellCommands();
+  const browseCommand = rstest.spyOn(commands, 'libraryBrowseVideo');
+  const cleanup = renderShell('library', {
+    kind: 'browse',
+    collectionType: 'movies',
+    libraryId: 'movies',
+  });
+
+  await screen.findByRole('link', { name: /Paged Movie/ });
+  fireEvent.change(screen.getByLabelText('Sort'), {
+    target: { value: 'recentlyAdded' },
+  });
+
+  await waitFor(() =>
+    expect(browseCommand).toHaveBeenLastCalledWith({
+      collectionType: 'movies',
+      libraryId: 'movies',
+      startIndex: 0,
+      limit: 24,
+      sort: 'recentlyAdded',
+      playedFilter: 'all',
+      favoritesOnly: false,
+    }),
+  );
+
+  fireEvent.click(screen.getByRole('button', { name: 'Unplayed' }));
+  await waitFor(() =>
+    expect(browseCommand).toHaveBeenLastCalledWith({
+      collectionType: 'movies',
+      libraryId: 'movies',
+      startIndex: 0,
+      limit: 24,
+      sort: 'recentlyAdded',
+      playedFilter: 'unplayed',
+      favoritesOnly: false,
+    }),
+  );
+
+  fireEvent.click(screen.getByRole('checkbox', { name: 'Favorites' }));
+  await waitFor(() =>
+    expect(browseCommand).toHaveBeenLastCalledWith({
+      collectionType: 'movies',
+      libraryId: 'movies',
+      startIndex: 0,
+      limit: 24,
+      sort: 'recentlyAdded',
+      playedFilter: 'unplayed',
+      favoritesOnly: true,
+    }),
+  );
+
+  cleanup();
+});
+
+test('library browse surfaces backend sort and filter errors', async () => {
+  mockShellCommands();
+  rstest.spyOn(commands, 'libraryBrowseVideo').mockResolvedValue({
+    status: 'error',
+    error: { code: 'invalid_request', message: 'Unsupported library filter' },
+  });
+  const cleanup = renderShell('library', {
+    kind: 'browse',
+    collectionType: 'movies',
+    libraryId: 'movies',
+  });
+
+  await screen.findByText('Unsupported library filter');
+  expect(screen.queryByRole('link', { name: /Paged Movie/ })).toBeNull();
 
   cleanup();
 });
