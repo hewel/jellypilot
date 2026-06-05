@@ -28,7 +28,7 @@ export default function IntroSkipCard(props: IntroSkipCardProps) {
                 type="button"
                 class={`rounded-2xl border px-4 py-3 text-left cursor-pointer transition-all duration-300 backdrop-blur-sm ${
                   props.currentMode === option.mode
-                    ? 'border-primary bg-primary-container/35 text-on-primary-container shadow-[0_0_15px_rgba(165,1,219,0.15)] font-semibold'
+                    ? 'border-primary bg-primary-container/35 text-on-primary-container shadow-brand-glow-lg font-semibold'
                     : 'border-outline-variant bg-surface-container-high/40 text-on-surface hover:border-primary/50 hover:bg-surface-container-high/60'
                 }`}
                 aria-pressed={props.currentMode === option.mode}

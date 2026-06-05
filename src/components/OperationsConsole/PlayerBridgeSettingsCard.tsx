@@ -46,9 +46,7 @@ export default function PlayerBridgeSettingsCard(
 
   return (
     <SectionCard
-      icon={
-        <Settings class="h-5 w-5 text-primary drop-shadow-[0_0_8px_rgba(165,1,219,0.4)]" />
-      }
+      icon={<Settings class="h-5 w-5 text-primary drop-shadow-brand-glow-sm" />}
       title="Player Bridge settings"
       trailing={
         <Show when={ui.playerBridgeSaveStatus}>

@@ -246,7 +246,7 @@ export default function NowPlayingCard(props: {
           >
             <Slider.Control class="ark-slider__control">
               <Slider.Track class="ark-slider__track">
-                <Slider.Range class="ark-slider__range bg-gradient-to-r from-primary to-[#be19fa] shadow-[0_0_8px_rgba(165,1,219,0.4)]" />
+                <Slider.Range class="ark-slider__range bg-brand-gradient shadow-brand-glow-sm" />
               </Slider.Track>
               <Slider.Thumb index={0} class="ark-slider__thumb">
                 <Slider.HiddenInput />

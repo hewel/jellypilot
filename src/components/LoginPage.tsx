@@ -333,11 +333,11 @@ export default function LoginPage(props: LoginPageProps) {
       <main class="w-full max-w-3xl relative z-10">
         <div class="mb-8 text-center relative">
           {/* Glowing HUD hologram decoration */}
-          <div class="relative mx-auto mb-6 flex h-24 w-24 items-center justify-center rounded-full border border-primary/20 bg-primary/5 shadow-[0_0_30px_rgba(165,1,219,0.15)]">
+          <div class="relative mx-auto mb-6 flex h-24 w-24 items-center justify-center rounded-full border border-primary/20 bg-primary/5 shadow-brand-glow">
             <div class="absolute inset-0 rounded-full border border-primary/30 animate-ping opacity-25" />
             <div class="absolute inset-2 rounded-full border border-secondary/25 animate-pulse" />
             <div class="absolute inset-4 rounded-full border border-dashed border-primary/10 animate-[spin_60s_linear_infinite]" />
-            <RadioTower class="h-10 w-10 text-primary drop-shadow-[0_0_12px_rgba(165,1,219,0.65)]" />
+            <RadioTower class="h-10 w-10 text-primary drop-shadow-brand-glow" />
           </div>
 
           <div class="inline-flex items-center gap-2.5 px-3.5 py-1 rounded-full border border-secondary/20 bg-secondary/5 mb-3.5">
@@ -379,7 +379,7 @@ export default function LoginPage(props: LoginPageProps) {
                   >
                     <button
                       type="button"
-                      class={`rounded-xl px-4 py-3 text-label-large cursor-pointer transition-all duration-300 ${field().state.value === 'https' ? 'bg-primary bg-gradient-to-r from-primary to-[#be19fa] text-on-primary shadow-md shadow-primary/20 font-bold' : 'text-on-surface-variant hover:text-on-surface hover:bg-surface-container-highest/40'}`}
+                      class={`rounded-xl px-4 py-3 text-label-large cursor-pointer transition-all duration-300 ${field().state.value === 'https' ? 'bg-primary bg-brand-gradient text-on-primary shadow-md shadow-primary/20 font-bold' : 'text-on-surface-variant hover:text-on-surface hover:bg-surface-container-highest/40'}`}
                       disabled={isQuickConnectWaiting()}
                       onClick={() => field().handleChange('https')}
                     >
@@ -387,7 +387,7 @@ export default function LoginPage(props: LoginPageProps) {
                     </button>
                     <button
                       type="button"
-                      class={`rounded-xl px-4 py-3 text-label-large cursor-pointer transition-all duration-300 ${field().state.value === 'http' ? 'bg-primary bg-gradient-to-r from-primary to-[#be19fa] text-on-primary shadow-md shadow-primary/20 font-bold' : 'text-on-surface-variant hover:text-on-surface hover:bg-surface-container-highest/40'}`}
+                      class={`rounded-xl px-4 py-3 text-label-large cursor-pointer transition-all duration-300 ${field().state.value === 'http' ? 'bg-primary bg-brand-gradient text-on-primary shadow-md shadow-primary/20 font-bold' : 'text-on-surface-variant hover:text-on-surface hover:bg-surface-container-highest/40'}`}
                       disabled={isQuickConnectWaiting()}
                       onClick={() => field().handleChange('http')}
                     >
@@ -457,14 +457,14 @@ export default function LoginPage(props: LoginPageProps) {
                 <Tabs.Trigger
                   value="quickConnect"
                   disabled={isQuickConnectWaiting()}
-                  class={`rounded-xl px-4 py-3 text-label-large cursor-pointer transition-all duration-300 ${loginMethod() === 'quickConnect' ? 'bg-gradient-to-r from-primary to-[#be19fa] text-on-primary shadow-lg shadow-primary/25 font-bold' : 'text-on-surface-variant hover:text-on-surface hover:bg-surface-container-highest/40'}`}
+                  class={`rounded-xl px-4 py-3 text-label-large cursor-pointer transition-all duration-300 ${loginMethod() === 'quickConnect' ? 'bg-brand-gradient text-on-primary shadow-lg shadow-primary/25 font-bold' : 'text-on-surface-variant hover:text-on-surface hover:bg-surface-container-highest/40'}`}
                 >
                   Quick Connect
                 </Tabs.Trigger>
                 <Tabs.Trigger
                   value="password"
                   disabled={isQuickConnectWaiting()}
-                  class={`rounded-xl px-4 py-3 text-label-large cursor-pointer transition-all duration-300 ${loginMethod() === 'password' ? 'bg-gradient-to-r from-primary to-[#be19fa] text-on-primary shadow-lg shadow-primary/25 font-bold' : 'text-on-surface-variant hover:text-on-surface hover:bg-surface-container-highest/40'}`}
+                  class={`rounded-xl px-4 py-3 text-label-large cursor-pointer transition-all duration-300 ${loginMethod() === 'password' ? 'bg-brand-gradient text-on-primary shadow-lg shadow-primary/25 font-bold' : 'text-on-surface-variant hover:text-on-surface hover:bg-surface-container-highest/40'}`}
                 >
                   Password
                 </Tabs.Trigger>

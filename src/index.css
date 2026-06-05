@@ -1,7 +1,7 @@
 @import "tailwindcss";
 
 /* ==========================================================================\
-   JMSR Control Room - Premium OLED Glassmorphic Theme
+   JMSR Control Room - Premium OLED Glassmorphic Theme (Electric Indigo Accent)
    ========================================================================== */
 
 @theme {
@@ -11,10 +11,10 @@
     sans-serif;
   --font-mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
 
-  --color-primary: #a501db;
+  --color-primary: #4f46e5;
   --color-on-primary: #ffffff;
-  --color-primary-container: #2a0b38;
-  --color-on-primary-container: #f4d7ff;
+  --color-primary-container: #1b1c3b;
+  --color-on-primary-container: #e0e2ff;
 
   --color-secondary: #39d5ff;
   --color-on-secondary: #001f2a;
@@ -36,7 +36,7 @@
   --color-error-container: #4b1119;
   --color-on-error-container: #ffd9de;
 
-  --color-background: #05060b;
+  --color-background: #05060a;
   --color-on-background: #f3f6ff;
   --color-surface: #0b0d14;
   --color-on-surface: #f3f6ff;
@@ -48,8 +48,8 @@
   --color-surface-container: #111420;
   --color-surface-container-high: #161b2a;
   --color-surface-container-highest: #22293e;
-  --color-surface-tint: #a501db;
-  --color-brand-glow: #a501db;
+  --color-surface-tint: #4f46e5;
+  --color-brand-glow: #4f46e5;
   --color-console-grid: #1a2240;
 
   --color-outline: #5c6c8c;
@@ -63,7 +63,7 @@ body {
   background:
     radial-gradient(
       circle at 10% 10%,
-      rgba(165, 1, 219, 0.06),
+      rgba(79, 70, 229, 0.07),
       transparent 32rem
     ),
     radial-gradient(
@@ -157,7 +157,7 @@ body {
 
   .hero-panel::before {
     content: "";
-    @apply pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_20%_0%,rgb(165_1_219/0.25),transparent_40%),radial-gradient(circle_at_90%_20%,rgb(57_213_255/0.16),transparent_35%)];
+    @apply pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_20%_0%,rgb(79_70_229/0.22),transparent_40%),radial-gradient(circle_at_90%_20%,rgb(57_213_255/0.16),transparent_35%)];
   }
 
   .status-tile {
@@ -186,7 +186,7 @@ body {
 
   .ark-checkbox__control[data-state="checked"],
   .ark-checkbox__control[data-state="indeterminate"] {
-    @apply border-primary bg-gradient-to-br from-primary to-[#be19fa] shadow-[0_0_10px_rgba(165,1,219,0.35)];
+    @apply border-primary bg-gradient-to-br from-primary to-[#7a7eff] shadow-[0_0_10px_rgba(79,70,229,0.3)];
   }
 
   .ark-checkbox__control[data-focus-visible] {
@@ -218,7 +218,7 @@ body {
   }
 
   .btn-primary {
-    @apply inline-flex min-h-11 cursor-pointer items-center justify-center gap-2 rounded-2xl bg-gradient-to-r from-primary to-[#be19fa] px-6 py-2.5 text-[14px] leading-[20px] font-bold text-on-primary shadow-lg shadow-primary/20 transition-all duration-300 hover:-translate-y-0.5 hover:shadow-primary/45 hover:brightness-110 active:translate-y-0 active:scale-[0.97] disabled:pointer-events-none disabled:opacity-50;
+    @apply inline-flex min-h-11 cursor-pointer items-center justify-center gap-2 rounded-2xl bg-gradient-to-r from-primary to-[#7a7eff] px-6 py-2.5 text-[14px] leading-[20px] font-bold text-on-primary shadow-lg shadow-primary/20 transition-all duration-300 hover:-translate-y-0.5 hover:shadow-primary/45 hover:brightness-110 active:translate-y-0 active:scale-[0.97] disabled:pointer-events-none disabled:opacity-50;
   }
 
   .btn-secondary,
@@ -247,14 +247,14 @@ body {
     );
     box-shadow:
       0 25px 50px -12px rgba(0, 0, 0, 0.6),
-      0 0 40px -10px rgba(165, 1, 219, 0.12);
+      0 0 40px -10px rgba(79, 70, 229, 0.12);
   }
 
   .card-elevated:hover {
     @apply border-primary/35 bg-surface-container-low/60;
     box-shadow:
       0 30px 60px -12px rgba(0, 0, 0, 0.75),
-      0 0 50px -5px rgba(165, 1, 219, 0.22);
+      0 0 50px -5px rgba(79, 70, 229, 0.22);
   }
 
   .card-filled {
@@ -276,6 +276,26 @@ body {
 
   .diagnostic-row {
     @apply rounded-xl border border-outline-variant/40 bg-surface-container-lowest/70 px-3.5 py-2 font-mono text-[12px] leading-5 text-on-surface-variant transition-colors hover:bg-surface-container-lowest/90 hover:border-outline-variant/60;
+  }
+
+  /* Semantic Brand Utility Classes to eliminate inline hex/RGB overrides in TSX files */
+  .bg-brand-gradient {
+    @apply bg-gradient-to-r from-primary to-[#7a7eff];
+  }
+  .shadow-brand-glow {
+    box-shadow: 0 0 30px rgba(79, 70, 229, 0.2);
+  }
+  .shadow-brand-glow-sm {
+    box-shadow: 0 0 10px rgba(79, 70, 229, 0.35);
+  }
+  .shadow-brand-glow-lg {
+    box-shadow: 0 0 15px rgba(79, 70, 229, 0.25);
+  }
+  .drop-shadow-brand-glow {
+    filter: drop-shadow(0 0 12px rgba(79, 70, 229, 0.55));
+  }
+  .drop-shadow-brand-glow-sm {
+    filter: drop-shadow(0 0 8px rgba(79, 70, 229, 0.4));
   }
 }
 
