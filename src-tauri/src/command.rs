@@ -11,8 +11,8 @@ use crate::config::AppConfig;
 use crate::jellyfin::{
   ConnectionState, Credentials, JellyfinClient, JellyfinError, QuickConnectRequest,
   QuickConnectStatus, SavedSession, SessionManager, VideoHome, VideoItemDetail, VideoLibraryPage,
-  VideoLibraryPageRequest, VideoSearchPage, VideoSearchRequest, VideoSeasonEpisodes,
-  VideoSeasonEpisodesRequest, VideoShowDetail,
+  VideoLibraryPageRequest, VideoLibraryPlayRequest, VideoSearchPage, VideoSearchRequest,
+  VideoSeasonEpisodes, VideoSeasonEpisodesRequest, VideoShowDetail,
 };
 use crate::mpv::{write_input_conf, MpvClient, PropertyValue};
 use crate::playback_control;
@@ -691,6 +691,26 @@ pub async fn library_season_episodes(
     .map_err(jellyfin_err)
 }
 
+/// Start explicit Library Browser playback through the active Jellyfin session.
+#[tauri::command]
+#[specta]
+pub async fn library_play(
+  app: tauri::AppHandle,
+  state: State<'_, JellyfinState>,
+  request: VideoLibraryPlayRequest,
+) -> Result<(), CommandError> {
+  let session = state
+    .session
+    .read()
+    .clone()
+    .ok_or_else(|| CommandError::invalid_input("Library playback requires an active session"))?;
+
+  session.play_library(request).await.map_err(jellyfin_err)?;
+  playback_control::emit_now_playing_changed(&app, &state).await;
+
+  Ok(())
+}
+
 /// Get the current session data for saving.
 #[tauri::command]
 #[specta]
@@ -939,6 +959,7 @@ pub fn specta_builder() -> Builder<tauri::Wry> {
       library_item_detail,
       library_show_detail,
       library_season_episodes,
+      library_play,
       // Jellyfin commands
       jellyfin_connect,
       jellyfin_disconnect,

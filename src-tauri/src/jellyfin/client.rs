@@ -1512,6 +1512,54 @@ impl<'a> JellyfinLibrary<'a> {
       episodes,
     })
   }
+
+  pub(crate) async fn next_playable_episode(
+    &self,
+    series_id: String,
+  ) -> Result<Option<VideoPlaybackTarget>, JellyfinError> {
+    let series_id = series_id.trim().to_string();
+    if series_id.is_empty() {
+      return Err(JellyfinError::HttpError(
+        "Series id is required for show playback".to_string(),
+      ));
+    }
+
+    let server_url = self.client.server_url()?;
+    let token = self.client.access_token()?;
+    let user_id = self.client.user_id()?;
+    let configuration = self
+      .client
+      .openapi_configuration(&server_url, Some(&token))?;
+
+    Ok(
+      jellyfin_api::apis::tv_shows_api::get_next_up(
+        &configuration,
+        jellyfin_api::apis::tv_shows_api::GetNextUpParams {
+          user_id: Some(user_id),
+          start_index: Some(0),
+          limit: Some(1),
+          fields: Some(video_home_fields()),
+          series_id: Some(series_id),
+          parent_id: None,
+          enable_images: Some(true),
+          image_type_limit: Some(1),
+          enable_image_types: Some(vec![jellyfin_api::models::ImageType::Primary]),
+          enable_user_data: Some(true),
+          next_up_date_cutoff: None,
+          enable_total_record_count: Some(false),
+          disable_first_episode: Some(false),
+          enable_resumable: Some(true),
+          enable_rewatching: Some(false),
+        },
+      )
+      .await
+      .map_err(|err| JellyfinClient::openapi_error("Video show playback target", err))?
+      .items
+      .unwrap_or_default()
+      .into_iter()
+      .find_map(map_video_playback_target),
+    )
+  }
 }
 
 async fn latest_video_items(
@@ -1840,6 +1888,27 @@ fn map_video_season(
       .and_then(|data| data.is_favorite)
       .unwrap_or(false),
     artwork_url: primary_artwork_url(server_url, &id, item.image_tags.flatten()),
+  })
+}
+
+fn map_video_playback_target(
+  item: jellyfin_api::models::BaseItemDto,
+) -> Option<VideoPlaybackTarget> {
+  let item_id = item.id?.to_string();
+  let user_data = item.user_data.flatten();
+  let played = user_data
+    .as_ref()
+    .and_then(|data| data.played)
+    .unwrap_or(false);
+  let start_position_ticks = if played {
+    None
+  } else {
+    user_data.and_then(|data| data.playback_position_ticks)
+  };
+
+  Some(VideoPlaybackTarget {
+    item_id,
+    start_position_ticks,
   })
 }
 

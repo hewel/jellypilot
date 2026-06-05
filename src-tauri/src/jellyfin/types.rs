@@ -250,6 +250,32 @@ pub struct VideoSeasonEpisodes {
   pub episodes: Vec<VideoLibraryItem>,
 }
 
+/// Library Browser playback mode selected by the user.
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, Type)]
+pub enum VideoLibraryPlayMode {
+  #[serde(rename = "resume")]
+  Resume,
+  #[serde(rename = "start")]
+  Start,
+  #[serde(rename = "show")]
+  Show,
+}
+
+/// Explicit Library Browser playback launch request.
+#[derive(Debug, Clone, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct VideoLibraryPlayRequest {
+  pub item_id: String,
+  pub mode: VideoLibraryPlayMode,
+  pub start_position_seconds: Option<f64>,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct VideoPlaybackTarget {
+  pub item_id: String,
+  pub start_position_ticks: Option<i64>,
+}
+
 /// Credentials for authentication.
 #[derive(Debug, Clone, Deserialize, Type)]
 #[serde(rename_all = "camelCase")]

@@ -1509,6 +1509,91 @@ impl SessionManager {
     }
   }
 
+  async fn play_library_request(
+    client: &JellyfinClient,
+    state: &RwLock<SessionState>,
+    action_tx: &mpsc::Sender<MpvAction>,
+    mpv_connected: bool,
+    config: &RwLock<AppConfig>,
+    request: VideoLibraryPlayRequest,
+  ) -> Result<(), JellyfinError> {
+    let play_request = Self::resolve_library_play_request(client, request).await?;
+
+    Self::report_playback_stopped(client, state).await;
+    Self::handle_play(
+      client,
+      state,
+      action_tx,
+      mpv_connected,
+      config,
+      play_request,
+    )
+    .await
+  }
+
+  async fn resolve_library_play_request(
+    client: &JellyfinClient,
+    request: VideoLibraryPlayRequest,
+  ) -> Result<PlayRequest, JellyfinError> {
+    let item_id = request.item_id.trim().to_string();
+    if item_id.is_empty() {
+      return Err(JellyfinError::HttpError(
+        "Item id is required for Library playback".to_string(),
+      ));
+    }
+
+    let (item_id, start_position_ticks) = match request.mode {
+      VideoLibraryPlayMode::Resume => {
+        let ticks = request
+          .start_position_seconds
+          .map(seconds_to_ticks)
+          .unwrap_or(0)
+          .max(0);
+        if ticks == 0 {
+          return Err(JellyfinError::HttpError(
+            "Resume playback requires a saved position".to_string(),
+          ));
+        }
+        (item_id, Some(ticks))
+      }
+      VideoLibraryPlayMode::Start => (item_id, Some(0)),
+      VideoLibraryPlayMode::Show => {
+        let target = client
+          .library()
+          .next_playable_episode(item_id)
+          .await?
+          .ok_or_else(|| {
+            JellyfinError::HttpError(
+              "No playable next episode is available for this show".to_string(),
+            )
+          })?;
+        (target.item_id, target.start_position_ticks)
+      }
+    };
+
+    Ok(PlayRequest {
+      item_ids: vec![item_id],
+      start_position_ticks,
+      play_command: "PlayNow".to_string(),
+      media_source_id: None,
+      audio_stream_index: None,
+      subtitle_stream_index: None,
+    })
+  }
+
+  /// Start explicit Library Browser playback through the existing playback target path.
+  pub async fn play_library(&self, request: VideoLibraryPlayRequest) -> Result<(), JellyfinError> {
+    Self::play_library_request(
+      &self.client,
+      &self.state,
+      &self.action_tx,
+      self.mpv.is_connected(),
+      &self.config,
+      request,
+    )
+    .await
+  }
+
   /// Play the next episode. Called from system tray or UI.
   pub async fn play_next_episode(&self) -> Result<(), String> {
     let current_item = {
@@ -1652,6 +1737,114 @@ fn redact_url(url: &str) -> String {
 mod tests {
   use super::super::intro_skipper::{IntroSkipKind, IntroSkipRange};
   use super::*;
+  use std::sync::Arc;
+  use tokio::io::{AsyncReadExt, AsyncWriteExt};
+  use tokio::net::TcpListener;
+
+  type RequestLog = Arc<parking_lot::Mutex<Vec<String>>>;
+
+  async fn serve_owned_responses_with_requests(
+    responses: Vec<(String, String)>,
+  ) -> (String, RequestLog) {
+    let listener = TcpListener::bind("127.0.0.1:0")
+      .await
+      .expect("test server should bind");
+    let addr = listener.local_addr().expect("test server should have addr");
+    let requests = Arc::new(parking_lot::Mutex::new(Vec::new()));
+    let captured_requests = Arc::clone(&requests);
+
+    tokio::spawn(async move {
+      for (status, response_body) in responses {
+        let (mut stream, _) = listener.accept().await.expect("test server should accept");
+        let mut buffer = [0; 8192];
+        let bytes_read = stream
+          .read(&mut buffer)
+          .await
+          .expect("test server should read request");
+        let request = String::from_utf8_lossy(&buffer[..bytes_read]).into_owned();
+        captured_requests.lock().push(request);
+        let response = format!(
+          "HTTP/1.1 {}\r\ncontent-type: application/json\r\ncontent-length: {}\r\n\r\n{}",
+          status,
+          response_body.len(),
+          response_body
+        );
+        stream
+          .write_all(response.as_bytes())
+          .await
+          .expect("test server should write response");
+      }
+    });
+
+    (format!("http://{}", addr), requests)
+  }
+
+  async fn connected_test_client(
+    responses: Vec<(&'static str, &'static str)>,
+  ) -> (JellyfinClient, RequestLog) {
+    let responses = responses
+      .into_iter()
+      .map(|(status, body)| (status.to_string(), body.to_string()))
+      .collect();
+    let (server_url, requests) = serve_owned_responses_with_requests(responses).await;
+    let client = JellyfinClient::new();
+    client
+      .login()
+      .restore_session(&SavedSession {
+        server_url,
+        access_token: "token-1".to_string(),
+        user_id: "00000000-0000-0000-0000-000000000001".to_string(),
+        user_name: "Ada".to_string(),
+        server_name: Some("Jellyfin Home".to_string()),
+        device_id: Some("device-1".to_string()),
+      })
+      .await
+      .expect("test client should restore saved session");
+
+    (client, requests)
+  }
+
+  fn test_config() -> RwLock<AppConfig> {
+    RwLock::new(AppConfig {
+      intro_skipper_mode: IntroSkipperMode::Off,
+      ..Default::default()
+    })
+  }
+
+  fn empty_test_state() -> RwLock<SessionState> {
+    RwLock::new(SessionState {
+      playback: None,
+      last_report_time: std::time::Instant::now(),
+      effective_intro_skipper_config: IntroSkipperRuntimeConfig::from(&AppConfig::default()),
+      current_series_id: None,
+      current_item: None,
+      current_media_streams: Vec::new(),
+      series_preferences: HashMap::new(),
+    })
+  }
+
+  fn test_state_with_active_playback() -> RwLock<SessionState> {
+    RwLock::new(SessionState {
+      playback: Some(PlaybackSession {
+        item_id: "old-movie".to_string(),
+        media_source_id: Some("old-source".to_string()),
+        play_session_id: Some("old-play".to_string()),
+        intro_skipper_ranges: Vec::new(),
+        position_ticks: 420_000_000,
+        is_paused: false,
+        is_muted: false,
+        volume: 100,
+        audio_stream_index: None,
+        subtitle_stream_index: None,
+      }),
+      last_report_time: std::time::Instant::now(),
+      effective_intro_skipper_config: IntroSkipperRuntimeConfig::from(&AppConfig::default()),
+      current_series_id: None,
+      current_item: None,
+      current_media_streams: Vec::new(),
+      series_preferences: HashMap::new(),
+    })
+  }
 
   pub(super) fn test_state_with_intro_range() -> RwLock<SessionState> {
     test_state_with_range(IntroSkipKind::Introduction, 10.0, 80.0)
@@ -1688,6 +1881,156 @@ mod tests {
       current_media_streams: Vec::new(),
       series_preferences: HashMap::new(),
     })
+  }
+
+  #[tokio::test]
+  async fn library_play_replaces_active_playback_and_resumes_from_saved_position() {
+    let (client, requests) = connected_test_client(vec![
+      (
+        "200 OK",
+        r#"{"Id":"00000000-0000-0000-0000-000000000001","Name":"Ada"}"#,
+      ),
+      (
+        "200 OK",
+        r#"{"ServerName":"Jellyfin Home","Version":"10.10.0","Id":"server-1"}"#,
+      ),
+      ("204 No Content", ""),
+      (
+        "200 OK",
+        r#"{"Id":"movie-1","Name":"Detail Movie","Type":"Movie"}"#,
+      ),
+      (
+        "200 OK",
+        r#"{"MediaSources":[{"Id":"source-1","Protocol":"Http","Container":"mkv","MediaStreams":[]}],"PlaySessionId":"play-2"}"#,
+      ),
+      ("204 No Content", ""),
+    ])
+    .await;
+    let state = test_state_with_active_playback();
+    let config = test_config();
+    let (action_tx, mut action_rx) = mpsc::channel(4);
+
+    SessionManager::play_library_request(
+      &client,
+      &state,
+      &action_tx,
+      true,
+      &config,
+      VideoLibraryPlayRequest {
+        item_id: "movie-1".to_string(),
+        mode: VideoLibraryPlayMode::Resume,
+        start_position_seconds: Some(120.0),
+      },
+    )
+    .await
+    .expect("library resume should replace active playback");
+
+    let action = action_rx
+      .recv()
+      .await
+      .expect("library playback should send a play action");
+    match action {
+      MpvAction::Play {
+        start_position,
+        title,
+        ..
+      } => {
+        assert_eq!(start_position, 120.0);
+        assert_eq!(title, "Detail Movie");
+      }
+      other => panic!("expected play action, got {other:?}"),
+    }
+
+    let playback = state.read().playback.clone().expect("new playback state");
+    assert_eq!(playback.item_id, "movie-1");
+    assert_eq!(playback.position_ticks, 1_200_000_000);
+
+    let captured = requests.lock();
+    assert!(captured[2].starts_with("POST /Sessions/Playing/Stopped "));
+    assert!(captured[2].contains(r#""ItemId":"old-movie""#));
+    assert!(captured[2].contains(r#""PositionTicks":420000000"#));
+    assert!(captured[5].starts_with("POST /Sessions/Playing "));
+    assert!(captured[5].contains(r#""ItemId":"movie-1""#));
+    assert!(captured[5].contains(r#""PositionTicks":1200000000"#));
+  }
+
+  #[tokio::test]
+  async fn library_show_play_resolves_next_up_episode_before_playback() {
+    let series_id = "00000000-0000-0000-0000-000000000071";
+    let episode_id = "00000000-0000-0000-0000-000000000072";
+    let (client, requests) = connected_test_client(vec![
+      (
+        "200 OK",
+        r#"{"Id":"00000000-0000-0000-0000-000000000001","Name":"Ada"}"#,
+      ),
+      (
+        "200 OK",
+        r#"{"ServerName":"Jellyfin Home","Version":"10.10.0","Id":"server-1"}"#,
+      ),
+      (
+        "200 OK",
+        r#"{"Items":[{"Id":"00000000-0000-0000-0000-000000000072","Name":"Next Episode","Type":"Episode","UserData":{"PlaybackPositionTicks":900000000,"Played":false}}],"TotalRecordCount":1}"#,
+      ),
+      (
+        "200 OK",
+        r#"{"Id":"00000000-0000-0000-0000-000000000072","Name":"Next Episode","Type":"Episode","SeriesId":"00000000-0000-0000-0000-000000000071","SeriesName":"Example Show","ParentIndexNumber":1,"IndexNumber":2}"#,
+      ),
+      (
+        "200 OK",
+        r#"{"MediaSources":[{"Id":"source-2","Protocol":"Http","Container":"mkv","MediaStreams":[]}],"PlaySessionId":"play-3"}"#,
+      ),
+      ("204 No Content", ""),
+    ])
+    .await;
+    let state = empty_test_state();
+    let config = test_config();
+    let (action_tx, mut action_rx) = mpsc::channel(4);
+
+    SessionManager::play_library_request(
+      &client,
+      &state,
+      &action_tx,
+      false,
+      &config,
+      VideoLibraryPlayRequest {
+        item_id: series_id.to_string(),
+        mode: VideoLibraryPlayMode::Show,
+        start_position_seconds: None,
+      },
+    )
+    .await
+    .expect("show play should resolve NextUp and start playback");
+
+    let action = action_rx
+      .recv()
+      .await
+      .expect("show playback should send a play action");
+    match action {
+      MpvAction::Play {
+        start_position,
+        title,
+        ..
+      } => {
+        assert_eq!(start_position, 90.0);
+        assert_eq!(title, "Example Show - S01E02 - Next Episode");
+      }
+      other => panic!("expected play action, got {other:?}"),
+    }
+
+    let playback = state.read().playback.clone().expect("new playback state");
+    assert_eq!(playback.item_id, episode_id);
+    assert_eq!(playback.position_ticks, 900_000_000);
+
+    let captured = requests.lock();
+    assert!(captured[2].starts_with("GET /Shows/NextUp?"));
+    assert!(captured[2].contains("seriesId=00000000-0000-0000-0000-000000000071"));
+    assert!(captured[2].contains("enableResumable=true"));
+    assert!(captured[3].starts_with(
+      "GET /Users/00000000-0000-0000-0000-000000000001/Items/00000000-0000-0000-0000-000000000072 "
+    ));
+    assert!(captured[5].starts_with("POST /Sessions/Playing "));
+    assert!(captured[5].contains(r#""ItemId":"00000000-0000-0000-0000-000000000072""#));
+    assert!(captured[5].contains(r#""PositionTicks":900000000"#));
   }
 
   #[tokio::test]

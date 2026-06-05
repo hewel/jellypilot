@@ -43,6 +43,8 @@ export const commands = {
 	libraryShowDetail: (seriesId: string) => typedError<VideoShowDetail, CommandError>(__TAURI_INVOKE("library_show_detail", { seriesId })),
 	/**  Load Episodes for one Show season. */
 	librarySeasonEpisodes: (request: VideoSeasonEpisodesRequest) => typedError<VideoSeasonEpisodes, CommandError>(__TAURI_INVOKE("library_season_episodes", { request })),
+	/**  Start explicit Library Browser playback through the active Jellyfin session. */
+	libraryPlay: (request: VideoLibraryPlayRequest) => typedError<null, CommandError>(__TAURI_INVOKE("library_play", { request })),
 	/**  Connect to a Jellyfin server. */
 	jellyfinConnect: (credentials: Credentials) => typedError<null, CommandError>(__TAURI_INVOKE("jellyfin_connect", { credentials })),
 	/**  Disconnect from Jellyfin server. */
@@ -318,6 +320,16 @@ export type VideoLibraryPageRequest = {
 	sort: VideoLibrarySort,
 	playedFilter: VideoLibraryPlayedFilter,
 	favoritesOnly: boolean,
+};
+
+/**  Library Browser playback mode selected by the user. */
+export type VideoLibraryPlayMode = "resume" | "start" | "show";
+
+/**  Explicit Library Browser playback launch request. */
+export type VideoLibraryPlayRequest = {
+	itemId: string,
+	mode: VideoLibraryPlayMode,
+	startPositionSeconds: number | null,
 };
 
 /**  Supported played-state filters for Library Browser results. */

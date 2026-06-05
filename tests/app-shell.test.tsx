@@ -393,6 +393,10 @@ function mockShellCommands(state = connectedState) {
     status: 'ok',
     data: seasonEpisodes,
   });
+  rstest.spyOn(commands, 'libraryPlay').mockResolvedValue({
+    status: 'ok',
+    data: null,
+  });
   rstest.spyOn(commands, 'nowPlayingGetState').mockResolvedValue({
     status: 'ok',
     data: nowPlaying,
@@ -717,6 +721,7 @@ test('library browse surfaces backend sort and filter errors', async () => {
 
 test('library item detail renders resume-primary movie metadata', async () => {
   mockShellCommands();
+  const playCommand = rstest.spyOn(commands, 'libraryPlay');
   const mpvStart = rstest.spyOn(commands, 'mpvStart');
   const cleanup = renderShell('library', {
     kind: 'detail',
@@ -738,6 +743,27 @@ test('library item detail renders resume-primary movie metadata', async () => {
   expect(
     screen.getByRole('button', { name: 'Play from beginning' }),
   ).toBeVisible();
+  fireEvent.click(screen.getByRole('button', { name: 'Resume' }));
+  await waitFor(() =>
+    expect(playCommand).toHaveBeenCalledWith({
+      itemId: 'detail-movie',
+      mode: 'resume',
+      startPositionSeconds: 120,
+    }),
+  );
+  await waitFor(() =>
+    expect(
+      screen.getByRole('button', { name: 'Play from beginning' }),
+    ).not.toBeDisabled(),
+  );
+  fireEvent.click(screen.getByRole('button', { name: 'Play from beginning' }));
+  await waitFor(() =>
+    expect(playCommand).toHaveBeenLastCalledWith({
+      itemId: 'detail-movie',
+      mode: 'start',
+      startPositionSeconds: 0,
+    }),
+  );
   expect(mpvStart).not.toHaveBeenCalled();
 
   cleanup();
@@ -745,6 +771,7 @@ test('library item detail renders resume-primary movie metadata', async () => {
 
 test('library item detail renders episode metadata and semantic artwork placeholder', async () => {
   mockShellCommands();
+  const playCommand = rstest.spyOn(commands, 'libraryPlay');
   const cleanup = renderShell('library', {
     kind: 'detail',
     itemId: 'detail-episode',
@@ -757,7 +784,14 @@ test('library item detail renders episode metadata and semantic artwork placehol
   expect(screen.getByText('No artwork')).toBeVisible();
   expect(screen.getByText('Sci-Fi')).toBeVisible();
   expect(screen.queryByRole('button', { name: 'Resume' })).toBeNull();
-  expect(screen.getByRole('button', { name: 'Play' })).toBeVisible();
+  fireEvent.click(screen.getByRole('button', { name: 'Play' }));
+  await waitFor(() =>
+    expect(playCommand).toHaveBeenCalledWith({
+      itemId: 'detail-episode',
+      mode: 'start',
+      startPositionSeconds: 0,
+    }),
+  );
 
   cleanup();
 });
@@ -766,6 +800,7 @@ test('library show detail renders next episode and loads exact season episodes',
   mockShellCommands();
   const showCommand = rstest.spyOn(commands, 'libraryShowDetail');
   const seasonCommand = rstest.spyOn(commands, 'librarySeasonEpisodes');
+  const playCommand = rstest.spyOn(commands, 'libraryPlay');
   const mpvStart = rstest.spyOn(commands, 'mpvStart');
   const cleanup = renderShell('library', {
     kind: 'show',
@@ -777,9 +812,13 @@ test('library show detail renders next episode and loads exact season episodes',
   expect(screen.getByText('Drama')).toBeVisible();
   expect(screen.getByText('Unplayed')).toBeVisible();
   expect(screen.getByText('Not favorite')).toBeVisible();
-  expect(screen.getByRole('link', { name: 'Play' })).toHaveAttribute(
-    'href',
-    '/library/items/episode-2',
+  fireEvent.click(screen.getByRole('button', { name: 'Play' }));
+  await waitFor(() =>
+    expect(playCommand).toHaveBeenCalledWith({
+      itemId: 'series-1',
+      mode: 'show',
+      startPositionSeconds: null,
+    }),
   );
   expect(
     screen.getByRole('link', { name: 'Next: Next Episode' }),

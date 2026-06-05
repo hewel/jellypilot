@@ -29,6 +29,8 @@ import {
   type VideoLibraryKind,
   type VideoLibraryPage,
   type VideoLibraryPlayedFilter,
+  type VideoLibraryPlayMode,
+  type VideoLibraryPlayRequest,
   type VideoLibraryShortcut,
   type VideoLibrarySort,
   type VideoSearchPage,
@@ -360,6 +362,20 @@ async function fetchSeasonEpisodes(
   return page.value.episodes.length === 0
     ? { kind: 'empty', page: page.value }
     : { kind: 'ready', page: page.value };
+}
+
+async function startLibraryPlayback(
+  request: VideoLibraryPlayRequest,
+): Promise<string | null> {
+  const result = await Effect.runPromiseExit(
+    runTauriCommand(() => commands.libraryPlay(request)),
+  );
+
+  if (!Exit.isSuccess(result)) {
+    return commandFailureMessage(result.cause, 'Could not start playback');
+  }
+
+  return null;
 }
 
 function statusText(status?: NowPlayingState['status']) {
@@ -1164,9 +1180,27 @@ function LibraryItemDetailView(props: { itemId: string }) {
   const [state, { refetch }] = createResource(() =>
     fetchVideoItemDetail(props.itemId),
   );
+  const [playBusy, setPlayBusy] = createSignal<VideoLibraryPlayMode | null>(
+    null,
+  );
+  const [playError, setPlayError] = createSignal<string | null>(null);
   const detail = () => {
     const current = state();
     return current?.kind === 'ready' ? current.detail : null;
+  };
+  const playItem = async (mode: VideoLibraryPlayMode) => {
+    const item = detail();
+    if (!item || playBusy()) return;
+
+    setPlayBusy(mode);
+    setPlayError(null);
+    const message = await startLibraryPlayback({
+      itemId: item.id,
+      mode,
+      startPositionSeconds: mode === 'resume' ? item.resumePositionSeconds : 0,
+    });
+    setPlayError(message);
+    setPlayBusy(null);
   };
   const statusTitle = () => {
     const current = state();
@@ -1283,19 +1317,41 @@ function LibraryItemDetailView(props: { itemId: string }) {
                 <Show
                   when={item().canResume}
                   fallback={
-                    <button type="button" class="btn-primary rounded-full">
-                      Play
+                    <button
+                      type="button"
+                      class="btn-primary rounded-full"
+                      disabled={playBusy() !== null}
+                      onClick={() => void playItem('start')}
+                    >
+                      {playBusy() === 'start' ? 'Starting' : 'Play'}
                     </button>
                   }
                 >
-                  <button type="button" class="btn-primary rounded-full">
-                    Resume
+                  <button
+                    type="button"
+                    class="btn-primary rounded-full"
+                    disabled={playBusy() !== null}
+                    onClick={() => void playItem('resume')}
+                  >
+                    {playBusy() === 'resume' ? 'Starting' : 'Resume'}
                   </button>
-                  <button type="button" class="btn-secondary rounded-full">
-                    Play from beginning
+                  <button
+                    type="button"
+                    class="btn-secondary rounded-full"
+                    disabled={playBusy() !== null}
+                    onClick={() => void playItem('start')}
+                  >
+                    {playBusy() === 'start'
+                      ? 'Starting'
+                      : 'Play from beginning'}
                   </button>
                 </Show>
               </div>
+              <Show when={playError()}>
+                {(message) => (
+                  <p class="text-body-small text-error">{message()}</p>
+                )}
+              </Show>
             </div>
           </article>
         )}
@@ -1315,6 +1371,8 @@ function LibraryShowDetailView(props: { seriesId: string }) {
     null,
   );
   const [episodesLoading, setEpisodesLoading] = createSignal(false);
+  const [playBusy, setPlayBusy] = createSignal(false);
+  const [playError, setPlayError] = createSignal<string | null>(null);
   const detail = () => {
     const current = state();
     return current?.kind === 'ready' ? current.detail : null;
@@ -1335,6 +1393,20 @@ function LibraryShowDetailView(props: { seriesId: string }) {
     });
     setEpisodes(result);
     setEpisodesLoading(false);
+  };
+  const playShow = async () => {
+    const show = detail();
+    if (!show || playBusy()) return;
+
+    setPlayBusy(true);
+    setPlayError(null);
+    const message = await startLibraryPlayback({
+      itemId: show.id,
+      mode: 'show',
+      startPositionSeconds: null,
+    });
+    setPlayError(message);
+    setPlayBusy(false);
   };
   const statusTitle = () => {
     const current = state();
@@ -1469,12 +1541,14 @@ function LibraryShowDetailView(props: { seriesId: string }) {
                 >
                   {(nextEpisode) => (
                     <div class="flex flex-col gap-3 sm:flex-row sm:items-center">
-                      <a
-                        href={`/library/items/${nextEpisode().id}`}
+                      <button
+                        type="button"
                         class="btn-primary rounded-full"
+                        disabled={playBusy()}
+                        onClick={() => void playShow()}
                       >
-                        Play
-                      </a>
+                        {playBusy() ? 'Starting' : 'Play'}
+                      </button>
                       <a
                         href={`/library/items/${nextEpisode().id}`}
                         class="text-body-small text-secondary underline-offset-4 hover:underline"
@@ -1482,6 +1556,11 @@ function LibraryShowDetailView(props: { seriesId: string }) {
                         Next: {nextEpisode().name}
                       </a>
                     </div>
+                  )}
+                </Show>
+                <Show when={playError()}>
+                  {(message) => (
+                    <p class="text-body-small text-error">{message()}</p>
                   )}
                 </Show>
               </div>
