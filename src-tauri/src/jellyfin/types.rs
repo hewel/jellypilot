@@ -143,7 +143,7 @@ pub struct VideoLibraryPage {
   pub items: Vec<VideoLibraryItem>,
 }
 
-/// Media card summary for Movies and Shows browse results.
+/// Media card summary for Movies and Shows browse results, and episode rows.
 #[derive(Debug, Clone, Serialize, Type)]
 #[serde(rename_all = "camelCase")]
 pub struct VideoLibraryItem {
@@ -155,6 +155,18 @@ pub struct VideoLibraryItem {
   pub played: bool,
   pub favorite: bool,
   pub artwork_url: Option<String>,
+  /// Episode metadata: season number (1-based), available for Episode items.
+  pub season_number: Option<i32>,
+  /// Episode metadata: episode number within season (1-based), available for Episode items.
+  pub episode_number: Option<i32>,
+  /// Episode metadata: parent series id, available for Episode items.
+  pub series_id: Option<String>,
+  /// Episode metadata: parent series name, available for Episode items.
+  pub series_name: Option<String>,
+  /// Resume position in seconds, populated for episode rows.
+  pub resume_position_seconds: Option<f64>,
+  /// Percentage watched (0–100), populated for episode rows.
+  pub played_percentage: Option<f64>,
 }
 
 /// Paged video-only Library search request.

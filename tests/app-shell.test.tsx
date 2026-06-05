@@ -222,6 +222,12 @@ const showDetail: VideoShowDetail = {
     played: false,
     favorite: false,
     artworkUrl: null,
+    seasonNumber: 1,
+    episodeNumber: 2,
+    seriesId: 'series-1',
+    seriesName: 'Example Show',
+    resumePositionSeconds: null,
+    playedPercentage: null,
   },
   seasons: [
     {
@@ -257,6 +263,12 @@ const seasonEpisodes: VideoSeasonEpisodes = {
       played: false,
       favorite: false,
       artworkUrl: null,
+      seasonNumber: 1,
+      episodeNumber: 2,
+      seriesId: 'series-1',
+      seriesName: 'Example Show',
+      resumePositionSeconds: null,
+      playedPercentage: null,
     },
   ],
 };
@@ -281,6 +293,12 @@ function videoLibraryPage(startIndex: number): VideoLibraryPage {
           favorite: true,
           artworkUrl:
             'https://jellyfin.example.com/Items/movie-1/Images/Primary',
+          seasonNumber: null,
+          episodeNumber: null,
+          seriesId: null,
+          seriesName: null,
+          resumePositionSeconds: null,
+          playedPercentage: null,
         },
       ],
     };
@@ -303,6 +321,12 @@ function videoLibraryPage(startIndex: number): VideoLibraryPage {
         played: true,
         favorite: false,
         artworkUrl: null,
+        seasonNumber: null,
+        episodeNumber: null,
+        seriesId: null,
+        seriesName: null,
+        resumePositionSeconds: null,
+        playedPercentage: null,
       },
     ],
   };
@@ -326,6 +350,12 @@ function videoSearchPage(query: string, startIndex: number): VideoSearchPage {
           played: false,
           favorite: false,
           artworkUrl: null,
+          seasonNumber: null,
+          episodeNumber: null,
+          seriesId: null,
+          seriesName: null,
+          resumePositionSeconds: null,
+          playedPercentage: null,
         },
         {
           id: 'search-show-1',
@@ -336,6 +366,12 @@ function videoSearchPage(query: string, startIndex: number): VideoSearchPage {
           played: false,
           favorite: true,
           artworkUrl: null,
+          seasonNumber: null,
+          episodeNumber: null,
+          seriesId: null,
+          seriesName: null,
+          resumePositionSeconds: null,
+          playedPercentage: null,
         },
       ],
     };
@@ -357,6 +393,12 @@ function videoSearchPage(query: string, startIndex: number): VideoSearchPage {
         played: false,
         favorite: false,
         artworkUrl: null,
+        seasonNumber: null,
+        episodeNumber: null,
+        seriesId: null,
+        seriesName: null,
+        resumePositionSeconds: null,
+        playedPercentage: null,
       },
     ],
   };
@@ -810,7 +852,8 @@ test('library item detail renders episode metadata and semantic artwork placehol
   expect(screen.getByText('Example Show · S02E03')).toBeVisible();
   expect(screen.getByText('Played')).toBeVisible();
   expect(screen.getByText('Not favorite')).toBeVisible();
-  expect(screen.getByText('No artwork')).toBeVisible();
+  expect(screen.getByText('No episode artwork')).toBeVisible();
+  expect(screen.getByText('View series')).toBeVisible();
   expect(screen.getByText('Sci-Fi')).toBeVisible();
   expect(screen.queryByRole('button', { name: 'Resume' })).toBeNull();
   fireEvent.click(screen.getByRole('button', { name: 'Play' }));
@@ -825,7 +868,7 @@ test('library item detail renders episode metadata and semantic artwork placehol
   cleanup();
 });
 
-test('library show detail renders next episode and loads exact season episodes', async () => {
+test('library show detail auto-loads next-up season and renders episode rows', async () => {
   mockShellCommands();
   const showCommand = rstest.spyOn(commands, 'libraryShowDetail');
   const seasonCommand = rstest.spyOn(commands, 'librarySeasonEpisodes');
@@ -839,6 +882,8 @@ test('library show detail renders next episode and loads exact season episodes',
   expect(screen.getByText('Drama')).toBeVisible();
   expect(screen.getByText('Unplayed')).toBeVisible();
   expect(screen.getByText('Not favorite')).toBeVisible();
+
+  // Series user data controls
   fireEvent.click(screen.getByRole('button', { name: 'Favorite show' }));
   await waitFor(() =>
     expect(updateCommand).toHaveBeenCalledWith({
@@ -846,7 +891,9 @@ test('library show detail renders next episode and loads exact season episodes',
       action: 'favorite',
     }),
   );
-  fireEvent.click(screen.getByRole('button', { name: 'Play' }));
+
+  // Secondary "Play next episode" shortcut
+  fireEvent.click(screen.getByRole('button', { name: 'Play next episode' }));
   await waitFor(() =>
     expect(playCommand).toHaveBeenCalledWith({
       itemId: 'series-1',
@@ -854,29 +901,60 @@ test('library show detail renders next episode and loads exact season episodes',
       startPositionSeconds: null,
     }),
   );
+
+  // Next episode link
   expect(
     screen.getByRole('link', { name: 'Next: Next Episode' }),
   ).toHaveAttribute('href', '/library/items/episode-2');
+
+  // Season selector buttons
   expect(screen.getByRole('button', { name: 'Season 1' })).toBeVisible();
   expect(screen.getByRole('button', { name: 'Season 2' })).toBeVisible();
   expect(showCommand).toHaveBeenCalledWith('series-1');
 
-  fireEvent.click(screen.getByRole('button', { name: 'Season 1' }));
-  expect(
-    await screen.findByRole('link', { name: /Next Episode/ }),
-  ).toHaveAttribute('href', '/library/items/episode-2');
-  fireEvent.click(screen.getByRole('button', { name: 'Favorite season 1' }));
+  // Auto-load: nextEpisode.seasonNumber=1, so season 1 loads automatically
   await waitFor(() =>
-    expect(updateCommand).toHaveBeenLastCalledWith({
-      itemId: 'season-1',
-      action: 'favorite',
+    expect(seasonCommand).toHaveBeenCalledWith({
+      seriesId: 'series-1',
+      seasonId: 'season-1',
+      seasonNumber: 1,
     }),
   );
-  expect(seasonCommand).toHaveBeenCalledWith({
-    seriesId: 'series-1',
-    seasonId: 'season-1',
-    seasonNumber: 1,
+
+  // Wait for episodes to render with dense rows
+  await waitFor(() => {
+    expect(screen.getByText('S01E02')).toBeVisible();
+    expect(screen.getByRole('link', { name: 'Next Episode' })).toHaveAttribute(
+      'href',
+      '/library/items/episode-2',
+    );
+    expect(screen.getByText('30m')).toBeVisible();
   });
+
+  // Inline episode play button
+  await waitFor(() => {
+    const episodePlayBtn = screen.getByRole('button', { name: 'Play' });
+    expect(episodePlayBtn).toBeVisible();
+    fireEvent.click(episodePlayBtn);
+  });
+  await waitFor(() =>
+    expect(playCommand).toHaveBeenLastCalledWith({
+      itemId: 'episode-2',
+      mode: 'start',
+      startPositionSeconds: 0,
+    }),
+  );
+
+  // Manual season switch
+  fireEvent.click(screen.getByRole('button', { name: 'Season 2' }));
+  await waitFor(() =>
+    expect(seasonCommand).toHaveBeenLastCalledWith({
+      seriesId: 'series-1',
+      seasonId: 'season-2',
+      seasonNumber: 2,
+    }),
+  );
+
   expect(mpvStart).not.toHaveBeenCalled();
 
   cleanup();

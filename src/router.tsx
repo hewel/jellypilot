@@ -6,19 +6,16 @@ import {
   type RouterHistory,
   redirect,
   useNavigate,
-  useParams,
 } from '@tanstack/solid-router';
-import type { VideoLibraryKind } from './bindings';
-import AuthenticatedShell, {
-  DiagnosticsArea,
-  LibraryBrowseView,
-  LibraryItemDetailView,
-  LibraryLanding,
-  LibraryShowDetailView,
-} from './components/AuthenticatedShell';
+import AuthenticatedShell from './components/AuthenticatedShell';
 import LoginPage from './components/LoginPage';
-import NowPlayingCard from './components/NowPlayingCard';
-import OperationsConsole from './components/OperationsConsole';
+import { DiagnosticsRoute } from './routes/diagnostics';
+import { LibraryBrowseRoute } from './routes/library/browse';
+import { LibraryLanding } from './routes/library/home';
+import { LibraryItemDetailRoute } from './routes/library/item-detail';
+import { LibraryShowDetailRoute } from './routes/library/show-detail';
+import { NowPlayingRoute } from './routes/now-playing';
+import { SettingsRoute } from './routes/settings';
 import { canAccessConsole, checkAuthWithRestore } from './sessionAccess';
 
 const AUTHENTICATED_HOME_ROUTE = '/library';
@@ -61,77 +58,38 @@ const libraryRoute = createRoute({
 const libraryBrowseRoute = createRoute({
   getParentRoute: () => authenticatedRoute,
   path: '/library/$collectionType/$libraryId',
-  component: LibraryBrowseRouteComponent,
+  component: LibraryBrowseRoute,
 });
 
 const libraryItemDetailRoute = createRoute({
   getParentRoute: () => authenticatedRoute,
   path: '/library/items/$itemId',
-  component: LibraryItemDetailRouteComponent,
+  component: LibraryItemDetailRoute,
 });
 
 const libraryShowDetailRoute = createRoute({
   getParentRoute: () => authenticatedRoute,
   path: '/library/shows/$seriesId',
-  component: LibraryShowDetailRouteComponent,
+  component: LibraryShowDetailRoute,
 });
-
-function libraryKindFromParam(value: string): VideoLibraryKind {
-  return value === 'tvshows' ? 'tvshows' : 'movies';
-}
-
-function LibraryBrowseRouteComponent() {
-  const params = useParams({
-    from: '/authenticated/library/$collectionType/$libraryId',
-  });
-
-  return (
-    <LibraryBrowseView
-      collectionType={libraryKindFromParam(params().collectionType)}
-      libraryId={params().libraryId}
-    />
-  );
-}
-
-function LibraryItemDetailRouteComponent() {
-  const params = useParams({ from: '/authenticated/library/items/$itemId' });
-
-  return <LibraryItemDetailView itemId={params().itemId} />;
-}
-
-function LibraryShowDetailRouteComponent() {
-  const params = useParams({ from: '/authenticated/library/shows/$seriesId' });
-
-  return <LibraryShowDetailView seriesId={params().seriesId} />;
-}
 
 const nowPlayingRoute = createRoute({
   getParentRoute: () => authenticatedRoute,
   path: '/now-playing',
-  component: () => <NowPlayingCard jellyfinConnected={true} />,
+  component: NowPlayingRoute,
 });
 
 const settingsRoute = createRoute({
   getParentRoute: () => authenticatedRoute,
   path: '/settings',
-  component: SettingsRouteComponent,
+  component: SettingsRoute,
 });
 
 const diagnosticsRoute = createRoute({
   getParentRoute: () => authenticatedRoute,
   path: '/diagnostics',
-  component: DiagnosticsArea,
+  component: DiagnosticsRoute,
 });
-
-function SettingsRouteComponent() {
-  const navigate = useNavigate();
-
-  const handleSignedOut = () => {
-    navigate({ to: '/login' });
-  };
-
-  return <OperationsConsole onSignedOut={handleSignedOut} />;
-}
 
 const consoleRoute = createRoute({
   getParentRoute: () => rootRoute,

@@ -287,7 +287,7 @@ export type VideoItemDetail = {
 	artworkUrl: string | null,
 };
 
-/**  Media card summary for Movies and Shows browse results. */
+/**  Media card summary for Movies and Shows browse results, and episode rows. */
 export type VideoLibraryItem = {
 	id: string,
 	name: string,
@@ -297,6 +297,18 @@ export type VideoLibraryItem = {
 	played: boolean,
 	favorite: boolean,
 	artworkUrl: string | null,
+	/**  Episode metadata: season number (1-based), available for Episode items. */
+	seasonNumber: number | null,
+	/**  Episode metadata: episode number within season (1-based), available for Episode items. */
+	episodeNumber: number | null,
+	/**  Episode metadata: parent series id, available for Episode items. */
+	seriesId: string | null,
+	/**  Episode metadata: parent series name, available for Episode items. */
+	seriesName: string | null,
+	/**  Resume position in seconds, populated for episode rows. */
+	resumePositionSeconds: number | null,
+	/**  Percentage watched (0–100), populated for episode rows. */
+	playedPercentage: number | null,
 };
 
 /**  Supported video library browse families. */

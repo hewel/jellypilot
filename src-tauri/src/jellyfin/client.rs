@@ -1872,6 +1872,17 @@ fn map_video_library_item(
   let user_data = item.user_data.flatten();
   let artwork_url = primary_artwork_url(server_url, &id, item.image_tags.flatten());
 
+  let user_data_ref = user_data.as_ref();
+  let played = user_data_ref.and_then(|data| data.played).unwrap_or(false);
+  let resume_ticks = user_data_ref
+    .and_then(|data| data.playback_position_ticks)
+    .filter(|&ticks| ticks > 0);
+  let resume_position_seconds = if played {
+    None
+  } else {
+    resume_ticks.map(ticks_to_seconds)
+  };
+
   Some(VideoLibraryItem {
     id,
     name: item
@@ -1881,15 +1892,17 @@ fn map_video_library_item(
     item_type,
     production_year: item.production_year.flatten(),
     runtime_seconds: item.run_time_ticks.flatten().map(ticks_to_seconds),
-    played: user_data
-      .as_ref()
-      .and_then(|data| data.played)
-      .unwrap_or(false),
-    favorite: user_data
-      .as_ref()
+    played,
+    favorite: user_data_ref
       .and_then(|data| data.is_favorite)
       .unwrap_or(false),
     artwork_url,
+    season_number: item.parent_index_number.flatten(),
+    episode_number: item.index_number.flatten(),
+    series_id: item.series_id.flatten().map(|id| id.to_string()),
+    series_name: item.series_name.flatten(),
+    resume_position_seconds,
+    played_percentage: user_data_ref.and_then(|data| data.played_percentage.flatten()),
   })
 }
 
