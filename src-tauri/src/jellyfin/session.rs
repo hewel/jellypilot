@@ -1576,8 +1576,8 @@ impl SessionManager {
       start_position_ticks,
       play_command: "PlayNow".to_string(),
       media_source_id: None,
-      audio_stream_index: None,
-      subtitle_stream_index: None,
+      audio_stream_index: request.audio_stream_index,
+      subtitle_stream_index: request.subtitle_stream_index,
     })
   }
 
@@ -1920,6 +1920,8 @@ mod tests {
         item_id: "movie-1".to_string(),
         mode: VideoLibraryPlayMode::Resume,
         start_position_seconds: Some(120.0),
+        audio_stream_index: Some(1),
+        subtitle_stream_index: Some(2),
       },
     )
     .await
@@ -1944,6 +1946,8 @@ mod tests {
     let playback = state.read().playback.clone().expect("new playback state");
     assert_eq!(playback.item_id, "movie-1");
     assert_eq!(playback.position_ticks, 1_200_000_000);
+    assert_eq!(playback.audio_stream_index, Some(1));
+    assert_eq!(playback.subtitle_stream_index, Some(2));
 
     let captured = requests.lock();
     assert!(captured[2].starts_with("POST /Sessions/Playing/Stopped "));
@@ -1996,6 +2000,8 @@ mod tests {
         item_id: series_id.to_string(),
         mode: VideoLibraryPlayMode::Show,
         start_position_seconds: None,
+        audio_stream_index: None,
+        subtitle_stream_index: None,
       },
     )
     .await

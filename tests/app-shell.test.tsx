@@ -70,6 +70,36 @@ const config: AppConfig = {
   preferredSubtitleLanguages: [],
 };
 
+const audioStreams = [
+  {
+    index: 1,
+    label: 'English - AAC 2.0',
+    language: 'eng',
+    codec: 'aac',
+    isDefault: true,
+    isExternal: false,
+  },
+  {
+    index: 2,
+    label: 'Japanese - FLAC 5.1',
+    language: 'jpn',
+    codec: 'flac',
+    isDefault: false,
+    isExternal: false,
+  },
+];
+
+const subtitleStreams = [
+  {
+    index: 3,
+    label: 'English - SRT',
+    language: 'eng',
+    codec: 'srt',
+    isDefault: false,
+    isExternal: true,
+  },
+];
+
 const videoHome: VideoHome = {
   continueWatching: [
     {
@@ -180,6 +210,8 @@ const movieDetail: VideoItemDetail = {
   canResume: true,
   canPlay: true,
   artworkUrl: 'https://jellyfin.example.com/Items/detail-movie/Images/Primary',
+  audioStreams,
+  subtitleStreams,
 };
 
 const episodeDetail: VideoItemDetail = {
@@ -201,6 +233,20 @@ const episodeDetail: VideoItemDetail = {
   canResume: false,
   canPlay: true,
   artworkUrl: null,
+  audioStreams,
+  subtitleStreams,
+};
+
+const nextEpisodeDetail: VideoItemDetail = {
+  ...episodeDetail,
+  id: 'episode-2',
+  name: 'Next Episode',
+  seasonNumber: 1,
+  episodeNumber: 2,
+  played: false,
+  playedPercentage: null,
+  resumePositionSeconds: null,
+  canResume: false,
 };
 
 const showDetail: VideoShowDetail = {
@@ -425,12 +471,16 @@ function mockShellCommands(state = connectedState) {
       data: videoSearchPage(request.query, request.startIndex),
     }),
   );
-  rstest.spyOn(commands, 'libraryItemDetail').mockImplementation((itemId) =>
-    Promise.resolve({
-      status: 'ok',
-      data: itemId === 'detail-episode' ? episodeDetail : movieDetail,
-    }),
-  );
+  rstest.spyOn(commands, 'libraryItemDetail').mockImplementation((itemId) => {
+    const data =
+      itemId === 'detail-episode'
+        ? episodeDetail
+        : itemId === 'episode-2'
+          ? nextEpisodeDetail
+          : movieDetail;
+
+    return Promise.resolve({ status: 'ok', data });
+  });
   rstest.spyOn(commands, 'libraryShowDetail').mockResolvedValue({
     status: 'ok',
     data: showDetail,
@@ -475,6 +525,40 @@ function renderShell(path = '/library') {
     dispose();
     root.remove();
   };
+}
+
+function getArkHiddenSelect(label: string) {
+  const select = screen
+    .getAllByLabelText(label)
+    .find(
+      (element): element is HTMLSelectElement => element.tagName === 'SELECT',
+    );
+
+  if (!select) {
+    throw new Error(`Could not find hidden Ark select for ${label}`);
+  }
+
+  return select;
+}
+
+function getArkCombobox(label: string) {
+  const combobox = screen
+    .getAllByLabelText(label)
+    .find(
+      (element): element is HTMLButtonElement =>
+        element.getAttribute('role') === 'combobox',
+    );
+
+  if (!combobox) {
+    throw new Error(`Could not find Ark combobox for ${label}`);
+  }
+
+  return combobox;
+}
+
+async function selectArkOption(label: string, name: RegExp | string) {
+  fireEvent.click(getArkCombobox(label));
+  fireEvent.click(await screen.findByRole('option', { name }));
 }
 
 afterEach(() => {
@@ -769,12 +853,34 @@ test('library item detail renders resume-primary movie metadata', async () => {
   expect(
     screen.getByRole('button', { name: 'Play from beginning' }),
   ).toBeVisible();
+  expect(getArkHiddenSelect('Audio track')).toHaveValue('auto');
+  expect(getArkHiddenSelect('Subtitle track')).toHaveValue('auto');
   fireEvent.click(screen.getByRole('button', { name: 'Resume' }));
   await waitFor(() =>
     expect(playCommand).toHaveBeenCalledWith({
       itemId: 'detail-movie',
       mode: 'resume',
       startPositionSeconds: 120,
+      audioStreamIndex: null,
+      subtitleStreamIndex: null,
+    }),
+  );
+  expect(screen.queryByRole('button', { name: 'Resume playback' })).toBeNull();
+  await waitFor(() =>
+    expect(
+      screen.getByRole('button', { name: 'Play from beginning' }),
+    ).not.toBeDisabled(),
+  );
+  await selectArkOption('Audio track', /Japanese - FLAC/);
+  await selectArkOption('Subtitle track', /English - SRT/);
+  fireEvent.click(screen.getByRole('button', { name: 'Play from beginning' }));
+  await waitFor(() =>
+    expect(playCommand).toHaveBeenLastCalledWith({
+      itemId: 'detail-movie',
+      mode: 'start',
+      startPositionSeconds: 0,
+      audioStreamIndex: 2,
+      subtitleStreamIndex: 3,
     }),
   );
   await waitFor(() =>
@@ -782,12 +888,15 @@ test('library item detail renders resume-primary movie metadata', async () => {
       screen.getByRole('button', { name: 'Play from beginning' }),
     ).not.toBeDisabled(),
   );
-  fireEvent.click(screen.getByRole('button', { name: 'Play from beginning' }));
+  await selectArkOption('Subtitle track', 'Off');
+  fireEvent.click(screen.getByRole('button', { name: 'Resume' }));
   await waitFor(() =>
     expect(playCommand).toHaveBeenLastCalledWith({
       itemId: 'detail-movie',
-      mode: 'start',
-      startPositionSeconds: 0,
+      mode: 'resume',
+      startPositionSeconds: 120,
+      audioStreamIndex: 2,
+      subtitleStreamIndex: -1,
     }),
   );
   expect(mpvStart).not.toHaveBeenCalled();
@@ -852,14 +961,20 @@ test('library item detail renders episode metadata and semantic artwork placehol
   expect(screen.getByText('View series')).toBeVisible();
   expect(screen.getByText('Sci-Fi')).toBeVisible();
   expect(screen.queryByRole('button', { name: 'Resume' })).toBeNull();
+  expect(getArkHiddenSelect('Audio track')).toHaveValue('auto');
+  expect(getArkHiddenSelect('Subtitle track')).toHaveValue('auto');
+  await selectArkOption('Subtitle track', 'Off');
   fireEvent.click(screen.getByRole('button', { name: 'Play' }));
   await waitFor(() =>
     expect(playCommand).toHaveBeenCalledWith({
       itemId: 'detail-episode',
       mode: 'start',
       startPositionSeconds: 0,
+      audioStreamIndex: null,
+      subtitleStreamIndex: -1,
     }),
   );
+  expect(screen.queryByRole('button', { name: 'Start playback' })).toBeNull();
 
   cleanup();
 });
@@ -867,6 +982,7 @@ test('library item detail renders episode metadata and semantic artwork placehol
 test('library show detail auto-loads next-up season and renders episode rows', async () => {
   mockShellCommands();
   const showCommand = rstest.spyOn(commands, 'libraryShowDetail');
+  const itemCommand = rstest.spyOn(commands, 'libraryItemDetail');
   const seasonCommand = rstest.spyOn(commands, 'librarySeasonEpisodes');
   const playCommand = rstest.spyOn(commands, 'libraryPlay');
   const updateCommand = rstest.spyOn(commands, 'libraryUpdateUserData');
@@ -890,12 +1006,22 @@ test('library show detail auto-loads next-up season and renders episode rows', a
 
   // Secondary "Play next episode" shortcut
   fireEvent.click(screen.getByRole('button', { name: 'Play Next Episode' }));
+  await waitFor(() => expect(itemCommand).toHaveBeenCalledWith('episode-2'));
+  expect(playCommand).not.toHaveBeenCalled();
+  await waitFor(() => expect(getArkCombobox('Audio track')).toBeVisible());
+  await selectArkOption('Audio track', /Japanese - FLAC/);
+  fireEvent.click(screen.getByRole('button', { name: 'Start playback' }));
   await waitFor(() =>
     expect(playCommand).toHaveBeenCalledWith({
-      itemId: 'series-1',
-      mode: 'show',
-      startPositionSeconds: null,
+      itemId: 'episode-2',
+      mode: 'start',
+      startPositionSeconds: 0,
+      audioStreamIndex: 2,
+      subtitleStreamIndex: null,
     }),
+  );
+  await waitFor(() =>
+    expect(screen.queryAllByLabelText('Audio track')).toHaveLength(0),
   );
 
   // Next episode link
@@ -928,16 +1054,22 @@ test('library show detail auto-loads next-up season and renders episode rows', a
   });
 
   // Inline episode play button
-  await waitFor(() => {
-    const episodePlayBtn = screen.getByRole('button', { name: 'Play' });
-    expect(episodePlayBtn).toBeVisible();
-    fireEvent.click(episodePlayBtn);
-  });
+  const episodePlayBtn = screen.getByRole('button', { name: 'Play' });
+  expect(episodePlayBtn).toBeVisible();
+  fireEvent.click(episodePlayBtn);
+  await waitFor(() =>
+    expect(itemCommand).toHaveBeenLastCalledWith('episode-2'),
+  );
+  await waitFor(() => expect(getArkCombobox('Subtitle track')).toBeVisible());
+  await selectArkOption('Subtitle track', 'Off');
+  fireEvent.click(screen.getByRole('button', { name: 'Start playback' }));
   await waitFor(() =>
     expect(playCommand).toHaveBeenLastCalledWith({
       itemId: 'episode-2',
       mode: 'start',
       startPositionSeconds: 0,
+      audioStreamIndex: 1,
+      subtitleStreamIndex: -1,
     }),
   );
 

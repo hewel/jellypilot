@@ -212,6 +212,20 @@ pub struct VideoItemDetail {
   pub can_resume: bool,
   pub can_play: bool,
   pub artwork_url: Option<String>,
+  pub audio_streams: Vec<VideoPlaybackStreamOption>,
+  pub subtitle_streams: Vec<VideoPlaybackStreamOption>,
+}
+
+/// Selectable audio or subtitle stream exposed before Library playback starts.
+#[derive(Debug, Clone, Serialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct VideoPlaybackStreamOption {
+  pub index: i32,
+  pub label: String,
+  pub language: Option<String>,
+  pub codec: Option<String>,
+  pub is_default: bool,
+  pub is_external: bool,
 }
 
 /// Show detail data with seasons and Jellyfin next playable episode.
@@ -280,6 +294,8 @@ pub struct VideoLibraryPlayRequest {
   pub item_id: String,
   pub mode: VideoLibraryPlayMode,
   pub start_position_seconds: Option<f64>,
+  pub audio_stream_index: Option<i32>,
+  pub subtitle_stream_index: Option<i32>,
 }
 
 #[derive(Debug, Clone)]

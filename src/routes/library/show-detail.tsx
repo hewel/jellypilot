@@ -11,10 +11,16 @@ import type { VideoLibraryItem, VideoSeason } from '../../bindings';
 import { StatusBadge } from '../../components/ui';
 import {
   fetchSeasonEpisodes,
+  fetchVideoItemDetail,
   fetchVideoShowDetail,
   type SeasonEpisodesState,
   startLibraryPlayback,
 } from './data';
+import {
+  LibraryPlaybackChooser,
+  type LibraryPlaybackSelection,
+  type PendingLibraryPlayback,
+} from './playback-chooser';
 import {
   formatRuntime,
   LibraryStatusPanel,
@@ -44,6 +50,9 @@ export function LibraryShowDetailView(props: { seriesId: string }) {
   const [episodePlayBusy, setEpisodePlayBusy] = createSignal<string | null>(
     null,
   );
+  const [confirmBusy, setConfirmBusy] = createSignal(false);
+  const [pendingPlayback, setPendingPlayback] =
+    createSignal<PendingLibraryPlayback | null>(null);
   const [playError, setPlayError] = createSignal<string | null>(null);
   const [autoLoaded, setAutoLoaded] = createSignal(false);
   const detail = () => {
@@ -86,36 +95,58 @@ export function LibraryShowDetailView(props: { seriesId: string }) {
       void loadEpisodes(show.seasons[0]);
     }
   });
+  const openEpisodePlaybackChooser = async (itemId: string) => {
+    const result = await fetchVideoItemDetail(itemId);
+    if (result.kind === 'ready') {
+      const mode = result.detail.canResume ? 'resume' : 'start';
+      setPendingPlayback({
+        detail: result.detail,
+        mode,
+        startPositionSeconds:
+          mode === 'resume' ? result.detail.resumePositionSeconds : 0,
+      });
+      return;
+    }
+
+    setPlayError(
+      result.kind === 'error'
+        ? result.message
+        : 'Library requires a live Jellyfin connection',
+    );
+  };
   const playShow = async () => {
     const show = detail();
-    if (!show || playBusy()) return;
+    if (!show?.nextEpisode || playBusy() || confirmBusy()) return;
 
     setPlayBusy(true);
     setPlayError(null);
-    const message = await startLibraryPlayback({
-      itemId: show.id,
-      mode: 'show',
-      startPositionSeconds: null,
-    });
-    setPlayError(message);
+    await openEpisodePlaybackChooser(show.nextEpisode.id);
     setPlayBusy(false);
   };
   const playEpisode = async (episode: VideoLibraryItem) => {
-    if (episodePlayBusy()) return;
-    const isResume =
-      episode.resumePositionSeconds != null &&
-      episode.resumePositionSeconds > 0 &&
-      !episode.played;
+    if (episodePlayBusy() || confirmBusy()) return;
 
     setEpisodePlayBusy(episode.id);
     setPlayError(null);
+    await openEpisodePlaybackChooser(episode.id);
+    setEpisodePlayBusy(null);
+  };
+  const confirmPlayback = async (selection: LibraryPlaybackSelection) => {
+    const pending = pendingPlayback();
+    if (!pending || confirmBusy()) return;
+
+    setConfirmBusy(true);
+    setPlayError(null);
     const message = await startLibraryPlayback({
-      itemId: episode.id,
-      mode: isResume ? 'resume' : 'start',
-      startPositionSeconds: isResume ? episode.resumePositionSeconds : 0,
+      itemId: pending.detail.id,
+      mode: pending.mode,
+      startPositionSeconds: pending.startPositionSeconds,
+      audioStreamIndex: selection.audioStreamIndex,
+      subtitleStreamIndex: selection.subtitleStreamIndex,
     });
     setPlayError(message);
-    setEpisodePlayBusy(null);
+    setConfirmBusy(false);
+    if (!message) setPendingPlayback(null);
   };
   const statusTitle = () => {
     const current = state();
@@ -317,17 +348,13 @@ export function LibraryShowDetailView(props: { seriesId: string }) {
                                     !episode.played
                                   }
                                 >
-                                  <>
-                                    <span class="text-on-surface-variant/70">
-                                      ·
-                                    </span>{' '}
-                                    <span class="text-body-small text-secondary font-semibold">
-                                      {Math.round(
-                                        episode.playedPercentage ?? 0,
-                                      )}
-                                      % watched
-                                    </span>
-                                  </>
+                                  <span class="text-on-surface-variant/70">
+                                    ·
+                                  </span>{' '}
+                                  <span class="text-body-small text-secondary font-semibold">
+                                    {Math.round(episode.playedPercentage ?? 0)}%
+                                    watched
+                                  </span>
                                 </Show>
                               </div>
                               <a
@@ -350,11 +377,14 @@ export function LibraryShowDetailView(props: { seriesId: string }) {
                                   <button
                                     type="button"
                                     class="btn-primary rounded-full px-5 py-2 text-label-large"
-                                    disabled={episodePlayBusy() !== null}
+                                    disabled={
+                                      episodePlayBusy() !== null ||
+                                      confirmBusy()
+                                    }
                                     onClick={() => void playEpisode(episode)}
                                   >
                                     {episodePlayBusy() === episode.id
-                                      ? 'Starting...'
+                                      ? 'Loading...'
                                       : 'Play'}
                                   </button>
                                 }
@@ -362,11 +392,13 @@ export function LibraryShowDetailView(props: { seriesId: string }) {
                                 <button
                                   type="button"
                                   class="btn-primary rounded-full px-5 py-2 text-label-large"
-                                  disabled={episodePlayBusy() !== null}
+                                  disabled={
+                                    episodePlayBusy() !== null || confirmBusy()
+                                  }
                                   onClick={() => void playEpisode(episode)}
                                 >
                                   {episodePlayBusy() === episode.id
-                                    ? 'Starting...'
+                                    ? 'Loading...'
                                     : 'Resume'}
                                 </button>
                               </Show>
@@ -455,10 +487,10 @@ export function LibraryShowDetailView(props: { seriesId: string }) {
                       <button
                         type="button"
                         class="btn-primary rounded-full w-full"
-                        disabled={playBusy()}
+                        disabled={playBusy() || confirmBusy()}
                         onClick={() => void playShow()}
                       >
-                        {playBusy() ? 'Starting...' : 'Play Next Episode'}
+                        {playBusy() ? 'Loading...' : 'Play Next Episode'}
                       </button>
                       <a
                         href={`/library/items/${nextEpisode().id}`}
@@ -472,6 +504,16 @@ export function LibraryShowDetailView(props: { seriesId: string }) {
               </article>
             </aside>
           </div>
+        )}
+      </Show>
+      <Show when={pendingPlayback()}>
+        {(pending) => (
+          <LibraryPlaybackChooser
+            pending={pending()}
+            busy={confirmBusy()}
+            onCancel={() => setPendingPlayback(null)}
+            onConfirm={(selection) => void confirmPlayback(selection)}
+          />
         )}
       </Show>
       <Show when={playError()}>

@@ -1342,21 +1342,13 @@ impl<'a> JellyfinLibrary<'a> {
     }
 
     let server_url = self.client.server_url()?;
-    let token = self.client.access_token()?;
     let user_id = self.client.user_id()?;
-    let configuration = self
+    let item = self
       .client
-      .openapi_configuration(&server_url, Some(&token))?;
-
-    let item = jellyfin_api::apis::user_library_api::get_item(
-      &configuration,
-      jellyfin_api::apis::user_library_api::GetItemParams {
-        item_id,
-        user_id: Some(user_id),
-      },
-    )
-    .await
-    .map_err(|err| JellyfinClient::openapi_error("Video item detail", err))?;
+      .get(&format!(
+        "/Items/{item_id}?userId={user_id}&fields=MediaStreams"
+      ))
+      .await?;
 
     map_video_item_detail(&server_url, item).ok_or_else(|| {
       JellyfinError::HttpError(
@@ -2013,6 +2005,8 @@ fn map_video_item_detail(
 
   let id = item.id?.to_string();
   let user_data = item.user_data.flatten();
+  let (audio_streams, subtitle_streams) =
+    map_video_playback_streams(item.media_streams.flatten().unwrap_or_default());
   let resume_position_seconds = user_data
     .as_ref()
     .and_then(|data| data.playback_position_ticks)
@@ -2049,6 +2043,60 @@ fn map_video_item_detail(
     can_resume: resume_position_seconds.unwrap_or(0.0) > 0.0 && !played,
     can_play: true,
     artwork_url: primary_artwork_url(server_url, &id, item.image_tags.flatten()),
+    audio_streams,
+    subtitle_streams,
+  })
+}
+
+fn map_video_playback_streams(
+  streams: Vec<jellyfin_api::models::MediaStream>,
+) -> (
+  Vec<VideoPlaybackStreamOption>,
+  Vec<VideoPlaybackStreamOption>,
+) {
+  let mut audio_streams = Vec::new();
+  let mut subtitle_streams = Vec::new();
+
+  for stream in streams {
+    match stream.r#type {
+      Some(jellyfin_api::models::MediaStreamType::Audio) => {
+        if let Some(option) = map_video_playback_stream_option(stream) {
+          audio_streams.push(option);
+        }
+      }
+      Some(jellyfin_api::models::MediaStreamType::Subtitle) => {
+        if let Some(option) = map_video_playback_stream_option(stream) {
+          subtitle_streams.push(option);
+        }
+      }
+      _ => {}
+    }
+  }
+
+  (audio_streams, subtitle_streams)
+}
+
+fn map_video_playback_stream_option(
+  stream: jellyfin_api::models::MediaStream,
+) -> Option<VideoPlaybackStreamOption> {
+  let index = stream.index?;
+  let language = stream.language.flatten();
+  let codec = stream.codec.flatten();
+  let display_title = stream.display_title.flatten();
+  let fallback_label = match (language.as_deref(), codec.as_deref()) {
+    (Some(language), Some(codec)) => format!("{language} · {codec}"),
+    (Some(language), None) => language.to_string(),
+    (None, Some(codec)) => codec.to_string(),
+    (None, None) => format!("Stream {index}"),
+  };
+
+  Some(VideoPlaybackStreamOption {
+    index,
+    label: display_title.unwrap_or(fallback_label),
+    language,
+    codec,
+    is_default: stream.is_default.unwrap_or(false),
+    is_external: stream.is_external.unwrap_or(false),
   })
 }
 
@@ -2795,7 +2843,7 @@ mod tests {
     let (server_url, requests) = serve_responses_with_requests(vec![
       (
         "200 OK",
-        r#"{"Id":"00000000-0000-0000-0000-000000000050","Name":"Detail Movie","Type":"Movie","Overview":"A movie overview.","ProductionYear":2024,"RunTimeTicks":72000000000,"Genres":["Drama","Mystery"],"ImageTags":{"Primary":"poster-detail"},"UserData":{"PlaybackPositionTicks":1200000000,"PlayedPercentage":25.0,"IsFavorite":true,"Played":false}}"#,
+        r#"{"Id":"00000000-0000-0000-0000-000000000050","Name":"Detail Movie","Type":"Movie","Overview":"A movie overview.","ProductionYear":2024,"RunTimeTicks":72000000000,"Genres":["Drama","Mystery"],"ImageTags":{"Primary":"poster-detail"},"UserData":{"PlaybackPositionTicks":1200000000,"PlayedPercentage":25.0,"IsFavorite":true,"Played":false},"MediaStreams":[{"Index":0,"Type":"Video","Codec":"h264"},{"Index":1,"Type":"Audio","Language":"eng","DisplayTitle":"English - AAC 2.0","Codec":"aac","IsDefault":true},{"Index":2,"Type":"Audio","Language":"jpn","Codec":"flac"},{"Index":3,"Type":"Subtitle","Language":"eng","DisplayTitle":"English - SRT","Codec":"srt","IsExternal":true}]}"#,
       ),
       (
         "200 OK",
@@ -2832,6 +2880,16 @@ mod tests {
       movie.artwork_url.as_deref(),
       Some(expected_artwork.as_str())
     );
+    assert_eq!(movie.audio_streams.len(), 2);
+    assert_eq!(movie.audio_streams[0].index, 1);
+    assert_eq!(movie.audio_streams[0].label, "English - AAC 2.0");
+    assert_eq!(movie.audio_streams[0].language.as_deref(), Some("eng"));
+    assert!(movie.audio_streams[0].is_default);
+    assert_eq!(movie.audio_streams[1].label, "jpn · flac");
+    assert_eq!(movie.subtitle_streams.len(), 1);
+    assert_eq!(movie.subtitle_streams[0].index, 3);
+    assert_eq!(movie.subtitle_streams[0].label, "English - SRT");
+    assert!(movie.subtitle_streams[0].is_external);
 
     assert_eq!(episode.item_type, "Episode");
     assert_eq!(episode.series_id.as_deref(), Some(series_id));
@@ -2845,8 +2903,10 @@ mod tests {
     let captured = requests.lock();
     assert!(captured[0].starts_with("GET /Items/00000000-0000-0000-0000-000000000050?"));
     assert!(captured[0].contains("userId=00000000-0000-0000-0000-000000000001"));
+    assert!(captured[0].contains("fields=MediaStreams"));
     assert!(captured[1].starts_with("GET /Items/00000000-0000-0000-0000-000000000051?"));
     assert!(captured[1].contains("userId=00000000-0000-0000-0000-000000000001"));
+    assert!(captured[1].contains("fields=MediaStreams"));
   }
 
   #[tokio::test]

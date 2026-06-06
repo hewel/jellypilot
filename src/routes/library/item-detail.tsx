@@ -1,8 +1,22 @@
 import { useParams } from '@tanstack/solid-router';
 import { Film, Library, Play, RefreshCw, RotateCcw } from 'lucide-solid';
-import { createResource, createSignal, For, Show } from 'solid-js';
-import type { VideoLibraryPlayMode } from '../../bindings';
-import { StatusBadge } from '../../components/ui';
+import {
+  createEffect,
+  createMemo,
+  createResource,
+  createSignal,
+  For,
+  Show,
+} from 'solid-js';
+import type {
+  VideoLibraryPlayMode,
+  VideoPlaybackStreamOption,
+} from '../../bindings';
+import {
+  JmsrSelect,
+  type JmsrSelectItem,
+  StatusBadge,
+} from '../../components/ui';
 import { fetchVideoItemDetail, startLibraryPlayback } from './data';
 import {
   detailSubtitle,
@@ -10,6 +24,10 @@ import {
   LibraryStatusPanel,
   UserDataControls,
 } from './shared';
+
+const AUDIO_AUTO = 'auto';
+const SUBTITLE_AUTO = 'auto';
+const SUBTITLE_OFF = 'off';
 
 export function LibraryItemDetailRoute() {
   const params = useParams({ from: '/authenticated/library/items/$itemId' });
@@ -24,10 +42,44 @@ export function LibraryItemDetailView(props: { itemId: string }) {
   const [playBusy, setPlayBusy] = createSignal<VideoLibraryPlayMode | null>(
     null,
   );
+  const [audioValue, setAudioValue] = createSignal(AUDIO_AUTO);
+  const [subtitleValue, setSubtitleValue] = createSignal(SUBTITLE_AUTO);
   const [playError, setPlayError] = createSignal<string | null>(null);
   const detail = () => {
     const current = state();
     return current?.kind === 'ready' ? current.detail : null;
+  };
+  const audioItems = createMemo<JmsrSelectItem[]>(() => [
+    { value: AUDIO_AUTO, label: 'Auto (series preference)' },
+    ...(detail()?.audioStreams ?? []).map((stream) => ({
+      value: String(stream.index),
+      label: streamLabel(stream),
+    })),
+  ]);
+  const subtitleItems = createMemo<JmsrSelectItem[]>(() => [
+    { value: SUBTITLE_AUTO, label: 'Auto (preferred subtitles)' },
+    { value: SUBTITLE_OFF, label: 'Off' },
+    ...(detail()?.subtitleStreams ?? []).map((stream) => ({
+      value: String(stream.index),
+      label: streamLabel(stream),
+    })),
+  ]);
+
+  createEffect(() => {
+    const itemId = detail()?.id;
+    if (!itemId) return;
+
+    setAudioValue(AUDIO_AUTO);
+    setSubtitleValue(SUBTITLE_AUTO);
+  });
+
+  const selectedAudioStreamIndex = () =>
+    audioValue() === AUDIO_AUTO ? null : Number(audioValue());
+  const selectedSubtitleStreamIndex = () => {
+    const value = subtitleValue();
+    if (value === SUBTITLE_AUTO) return null;
+    if (value === SUBTITLE_OFF) return -1;
+    return Number(value);
   };
   const playItem = async (mode: VideoLibraryPlayMode) => {
     const item = detail();
@@ -39,6 +91,8 @@ export function LibraryItemDetailView(props: { itemId: string }) {
       itemId: item.id,
       mode,
       startPositionSeconds: mode === 'resume' ? item.resumePositionSeconds : 0,
+      audioStreamIndex: selectedAudioStreamIndex(),
+      subtitleStreamIndex: selectedSubtitleStreamIndex(),
     });
     setPlayError(message);
     setPlayBusy(null);
@@ -201,6 +255,25 @@ export function LibraryItemDetailView(props: { itemId: string }) {
                       : ''}
                   </p>
                 </Show>
+                <div class="grid gap-4 sm:grid-cols-2">
+                  <JmsrSelect
+                    label="Audio track"
+                    items={audioItems()}
+                    disabled={playBusy() !== null}
+                    value={audioValue()}
+                    size="compact"
+                    onValueChange={setAudioValue}
+                  />
+
+                  <JmsrSelect
+                    label="Subtitle track"
+                    items={subtitleItems()}
+                    disabled={playBusy() !== null}
+                    value={subtitleValue()}
+                    size="compact"
+                    onValueChange={setSubtitleValue}
+                  />
+                </div>
                 <div class="flex flex-wrap gap-3">
                   <Show
                     when={item().canResume}
@@ -271,4 +344,17 @@ export function LibraryItemDetailView(props: { itemId: string }) {
       </Show>
     </div>
   );
+}
+
+function streamLabel(stream: VideoPlaybackStreamOption) {
+  const tags = [
+    stream.language?.toUpperCase() ?? null,
+    stream.codec?.toUpperCase() ?? null,
+    stream.isExternal ? 'External' : null,
+    stream.isDefault ? 'Default' : null,
+  ].filter((tag) => tag !== null);
+
+  return tags.length > 0
+    ? `${stream.label} (${tags.join(', ')})`
+    : stream.label;
 }

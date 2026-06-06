@@ -1,7 +1,5 @@
 import { Collapsible } from '@ark-ui/solid/collapsible';
-import type { ListCollection } from '@ark-ui/solid/collection';
 import { Field as ArkField } from '@ark-ui/solid/field';
-import { Select } from '@ark-ui/solid/select';
 import { TagsInput } from '@ark-ui/solid/tags-input';
 import {
   ArrowDown,
@@ -13,7 +11,7 @@ import {
   Trash2,
 } from 'lucide-solid';
 import { For, Show } from 'solid-js';
-import { SectionCard } from '../ui';
+import { JmsrSelect, type JmsrSelectItem, SectionCard } from '../ui';
 import { useOperationsConsoleStore } from './store';
 import {
   getSubtitleLanguageLabel,
@@ -23,10 +21,7 @@ import type { OperationsConsoleForm } from './types';
 
 interface PlayerBridgeSettingsCardProps {
   form: OperationsConsoleForm;
-  subtitleLanguageSelectCollection: ListCollection<{
-    value: string;
-    label: string;
-  }>;
+  subtitleLanguageSelectItems: JmsrSelectItem[];
   onSaveTextSetting: (
     field: 'deviceName' | 'mpvPath' | 'mpvArgs',
     value: string,
@@ -233,48 +228,15 @@ export default function PlayerBridgeSettingsCard(
           </div>
 
           <div class="mt-5 grid grid-cols-1 gap-4 sm:grid-cols-2">
-            <Select.Root
-              collection={props.subtitleLanguageSelectCollection}
-              closeOnSelect
-              onValueChange={(details) => {
-                if (details.value.length > 0) {
-                  props.onAddSubtitleLanguageCodes(details.value);
-                }
+            <JmsrSelect
+              label="Predefined languages"
+              items={props.subtitleLanguageSelectItems}
+              value={null}
+              placeholder="Select a language…"
+              onValueChange={(value) => {
+                props.onAddSubtitleLanguageCodes([value]);
               }}
-              value={[]}
-            >
-              <Select.Label class="mb-1.5 block text-label-medium">
-                Predefined languages
-              </Select.Label>
-              <Select.Control class="select-filled flex w-full items-center">
-                <Select.Trigger class="flex h-14 w-full items-center justify-between gap-2 rounded-2xl border border-outline-variant/80 bg-surface-container-highest/30 px-4 text-on-surface outline-none transition-all duration-200 hover:border-secondary/50 focus:border-secondary focus:ring-4 focus:ring-secondary/15">
-                  <Select.ValueText
-                    placeholder="Select a language…"
-                    class="text-on-surface-variant/60 font-medium text-body-medium"
-                  />
-                  <Select.Indicator>
-                    <ChevronDown class="h-4 w-4 text-on-surface-variant/70" />
-                  </Select.Indicator>
-                </Select.Trigger>
-              </Select.Control>
-              <Select.Positioner>
-                <Select.Content class="mt-2 rounded-2xl border border-outline-variant bg-surface-container-lowest p-2 shadow-2xl backdrop-blur-md max-h-60 overflow-y-auto z-50">
-                  <For each={props.subtitleLanguageSelectCollection.items}>
-                    {(item) => (
-                      <Select.Item
-                        item={item}
-                        class="flex cursor-pointer items-center justify-between rounded-xl px-3.5 py-2.5 text-body-medium text-on-surface-variant hover:bg-surface-container-high hover:text-on-surface transition-colors"
-                      >
-                        <Select.ItemText class="font-medium">
-                          {item.label}
-                        </Select.ItemText>
-                      </Select.Item>
-                    )}
-                  </For>
-                </Select.Content>
-              </Select.Positioner>
-              <Select.HiddenSelect />
-            </Select.Root>
+            />
 
             <ArkField.Root class="flex min-w-0 flex-col">
               <ArkField.Label class="mb-1.5 block text-label-medium">

@@ -285,6 +285,8 @@ export type VideoItemDetail = {
 	canResume: boolean,
 	canPlay: boolean,
 	artworkUrl: string | null,
+	audioStreams: VideoPlaybackStreamOption[],
+	subtitleStreams: VideoPlaybackStreamOption[],
 };
 
 /**  Media card summary for Movies and Shows browse results, and episode rows. */
@@ -344,6 +346,8 @@ export type VideoLibraryPlayRequest = {
 	itemId: string,
 	mode: VideoLibraryPlayMode,
 	startPositionSeconds: number | null,
+	audioStreamIndex: number | null,
+	subtitleStreamIndex: number | null,
 };
 
 /**  Supported played-state filters for Library Browser results. */
@@ -360,6 +364,16 @@ export type VideoLibraryShortcut = {
 
 /**  Supported Library Browser sort options. */
 export type VideoLibrarySort = "title" | "recentlyAdded" | "releaseDate";
+
+/**  Selectable audio or subtitle stream exposed before Library playback starts. */
+export type VideoPlaybackStreamOption = {
+	index: number,
+	label: string,
+	language: string | null,
+	codec: string | null,
+	isDefault: boolean,
+	isExternal: boolean,
+};
 
 /**  Paged video-only Library search result. */
 export type VideoSearchPage = {

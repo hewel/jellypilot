@@ -1,4 +1,3 @@
-import { createListCollection } from '@ark-ui/solid/collection';
 import { createForm } from '@tanstack/solid-form';
 import { Effect, Exit } from 'effect';
 import { createEffect, createResource } from 'solid-js';
@@ -32,7 +31,7 @@ import {
   parseSubtitleLanguageInput,
 } from './OperationsConsole/subtitleLanguages';
 import { useToast } from './ToastProvider';
-import { PageFooter } from './ui';
+import { type JmsrSelectItem, PageFooter } from './ui';
 
 interface OperationsConsoleProps {
   onSignedOut: () => void;
@@ -62,22 +61,17 @@ export default function OperationsConsole(props: OperationsConsoleProps) {
   let latestConfigSnapshot: AppConfig | null = null;
   let clearPlayerBridgeStatusTimer: ReturnType<typeof setTimeout> | null = null;
 
-  const subtitleLanguageSelectCollection = createListCollection({
-    items: [
-      { code: 'eng', label: 'English' },
-      { code: 'jpn', label: 'Japanese' },
-      { code: 'spa', label: 'Spanish' },
-      { code: 'fre', label: 'French' },
-      { code: 'ger', label: 'German' },
-      { code: 'ita', label: 'Italian' },
-      { code: 'por', label: 'Portuguese' },
-      { code: 'chi', label: 'Chinese' },
-      { code: 'kor', label: 'Korean' },
-    ].map((option) => ({
-      value: option.code,
-      label: `${option.code} — ${option.label}`,
-    })),
-  });
+  const subtitleLanguageSelectItems: JmsrSelectItem[] = [
+    { value: 'eng', label: 'eng — English' },
+    { value: 'jpn', label: 'jpn — Japanese' },
+    { value: 'spa', label: 'spa — Spanish' },
+    { value: 'fre', label: 'fre — French' },
+    { value: 'ger', label: 'ger — German' },
+    { value: 'ita', label: 'ita — Italian' },
+    { value: 'por', label: 'por — Portuguese' },
+    { value: 'chi', label: 'chi — Chinese' },
+    { value: 'kor', label: 'kor — Korean' },
+  ];
 
   const [connectionState, { refetch: refetchConnection }] =
     createResource(fetchConnectionState);
@@ -457,9 +451,7 @@ export default function OperationsConsole(props: OperationsConsoleProps) {
               <form class="space-y-6">
                 <PlayerBridgeSettingsCard
                   form={form}
-                  subtitleLanguageSelectCollection={
-                    subtitleLanguageSelectCollection
-                  }
+                  subtitleLanguageSelectItems={subtitleLanguageSelectItems}
                   onSaveTextSetting={(field, value) => {
                     if (
                       field === 'deviceName' ||

@@ -1,0 +1,86 @@
+import { createListCollection } from '@ark-ui/solid/collection';
+import { Select } from '@ark-ui/solid/select';
+import { ChevronDown } from 'lucide-solid';
+import { createMemo, For } from 'solid-js';
+
+export type JmsrSelectItem<Value extends string = string> = {
+  value: Value;
+  label: string;
+  disabled?: boolean;
+};
+
+type JmsrSelectSize = 'standard' | 'compact';
+
+interface JmsrSelectProps<Value extends string = string> {
+  label: string;
+  items: JmsrSelectItem<Value>[];
+  value: Value | null;
+  onValueChange: (value: Value) => void;
+  placeholder?: string;
+  disabled?: boolean;
+  size?: JmsrSelectSize;
+  class?: string;
+}
+
+export default function JmsrSelect<Value extends string>(
+  props: JmsrSelectProps<Value>,
+) {
+  const collection = createMemo(() =>
+    createListCollection({ items: props.items }),
+  );
+  const selectedValue = () => (props.value === null ? [] : [props.value]);
+  const isCompact = () => props.size === 'compact';
+  const labelClass = () =>
+    isCompact()
+      ? 'mb-2 block text-label-medium text-on-surface-variant'
+      : 'mb-1.5 block text-label-medium';
+  const triggerClass = () =>
+    isCompact()
+      ? 'flex h-12 w-full items-center justify-between gap-2 rounded-lg border border-outline-variant bg-surface-container-low px-3 text-left text-on-surface outline-none transition-all duration-200 hover:border-secondary/50 focus:border-secondary focus:ring-2 focus:ring-secondary/25 disabled:cursor-not-allowed disabled:opacity-50'
+      : 'flex h-14 w-full items-center justify-between gap-2 rounded-2xl border border-outline-variant/80 bg-surface-container-highest/30 px-4 text-left text-on-surface outline-none transition-all duration-200 hover:border-secondary/50 focus:border-secondary focus:ring-4 focus:ring-secondary/15 disabled:cursor-not-allowed disabled:opacity-50';
+
+  return (
+    <Select.Root
+      collection={collection()}
+      closeOnSelect
+      disabled={props.disabled}
+      value={selectedValue()}
+      onValueChange={(details) => {
+        const value = details.value[0];
+        const item = props.items.find((candidate) => candidate.value === value);
+        if (item && !item.disabled) props.onValueChange(item.value);
+      }}
+      class={props.class}
+    >
+      <Select.Label class={labelClass()}>{props.label}</Select.Label>
+      <Select.Control class="select-filled flex w-full items-center">
+        <Select.Trigger class={triggerClass()}>
+          <Select.ValueText
+            placeholder={props.placeholder}
+            class="min-w-0 truncate font-medium text-body-medium text-on-surface"
+          />
+          <Select.Indicator>
+            <ChevronDown class="h-4 w-4 text-on-surface-variant/70" />
+          </Select.Indicator>
+        </Select.Trigger>
+      </Select.Control>
+      <Select.Positioner>
+        <Select.Content class="z-50 mt-2 max-h-60 overflow-y-auto rounded-2xl border border-outline-variant bg-surface-container-lowest p-2 shadow-2xl backdrop-blur-md">
+          <For each={collection().items}>
+            {(item) => (
+              <Select.Item
+                item={item}
+                class="flex cursor-pointer items-center justify-between rounded-xl px-3.5 py-2.5 text-body-medium text-on-surface-variant transition-colors hover:bg-surface-container-high hover:text-on-surface data-[disabled]:cursor-not-allowed data-[disabled]:opacity-50"
+              >
+                <Select.ItemText class="font-medium">
+                  {item.label}
+                </Select.ItemText>
+              </Select.Item>
+            )}
+          </For>
+        </Select.Content>
+      </Select.Positioner>
+      <Select.HiddenSelect />
+    </Select.Root>
+  );
+}

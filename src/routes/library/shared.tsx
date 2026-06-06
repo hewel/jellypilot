@@ -1,4 +1,3 @@
-import { createListCollection } from '@ark-ui/solid/collection';
 import {
   Check,
   Clapperboard,
@@ -16,10 +15,12 @@ import type {
   VideoLibraryKind,
   VideoLibraryPlayedFilter,
   VideoLibraryShortcut,
+  VideoLibrarySort,
   VideoSeason,
   VideoShowDetail,
   VideoUserDataAction,
 } from '../../bindings';
+import type { JmsrSelectItem } from '../../components/ui';
 import { updateLibraryUserData } from './data';
 
 export function LibraryStatusPanel(props: {
@@ -177,13 +178,11 @@ export function playedFilterLabel(filter: VideoLibraryPlayedFilter) {
   }
 }
 
-export const sortCollection = createListCollection({
-  items: [
-    { value: 'title', label: 'Title' },
-    { value: 'recentlyAdded', label: 'Recently added' },
-    { value: 'releaseDate', label: 'Release date' },
-  ],
-});
+export const sortItems: JmsrSelectItem<VideoLibrarySort>[] = [
+  { value: 'title', label: 'Title' },
+  { value: 'recentlyAdded', label: 'Recently added' },
+  { value: 'releaseDate', label: 'Release date' },
+];
 
 export function VideoLibraryCard(props: {
   item: VideoLibraryItem;
