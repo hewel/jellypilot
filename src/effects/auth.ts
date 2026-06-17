@@ -1,5 +1,6 @@
+import { commands, type SavedSession } from '@bindings';
 import { Effect } from 'effect';
-import type { SavedSession } from '../bindings';
+import { runTauriCommandRaw } from './commands';
 import { StorageParseError } from './errors';
 
 export const SESSION_STORAGE_KEY = 'jmsr_auth_session';
@@ -58,3 +59,5 @@ export function saveSession(session: SavedSession): Effect.Effect<void> {
 export function clearSavedSession(): Effect.Effect<void> {
   return Effect.sync(() => localStorage.removeItem(SESSION_STORAGE_KEY));
 }
+
+export const connection = runTauriCommandRaw(() => commands.jellyfinGetState());

@@ -1,4 +1,3 @@
-import { Effect, Exit } from 'effect';
 import {
   type ConnectionState,
   commands,
@@ -15,12 +14,15 @@ import {
   type VideoSeasonEpisodesRequest,
   type VideoShowDetail,
   type VideoUserDataUpdateRequest,
-} from '../../../bindings';
+} from '@bindings';
+import { Effect, Exit } from 'effect';
+import { connection } from '~effects/auth';
 import {
   commandFailureMessage,
   runTauriCommand,
   runTauriCommandRaw,
-} from '../../../effects/commands';
+} from '~effects/commands';
+import { CommandError } from '~effects/errors';
 
 export type LibraryHomeState =
   | { kind: 'ready'; home: VideoHome; connection: ConnectionState }
@@ -68,39 +70,26 @@ export function videoHomeIsEmpty(home: VideoHome) {
   );
 }
 
-export async function fetchLibraryHome(): Promise<LibraryHomeState> {
-  const connection = await Effect.runPromiseExit(
-    runTauriCommandRaw(() => commands.jellyfinGetState()),
-  );
-
-  if (!Exit.isSuccess(connection)) {
-    return {
-      kind: 'error',
-      message: commandFailureMessage(
-        connection.cause,
-        'Could not load Library state',
+export async function fetchLibraryHome() {
+  return connection
+    .pipe(
+      Effect.flatMap(({ connected }) =>
+        connected
+          ? runTauriCommand(() => commands.libraryVideoHome())
+          : Effect.fail(
+              new CommandError({
+                message: 'disconnected',
+              }),
+            ),
       ),
-    };
-  }
-
-  if (!connection.value.connected) {
-    return { kind: 'disconnected', state: connection.value };
-  }
-
-  const home = await Effect.runPromiseExit(
-    runTauriCommand(() => commands.libraryVideoHome()),
-  );
-
-  if (!Exit.isSuccess(home)) {
-    return {
-      kind: 'error',
-      message: commandFailureMessage(home.cause, 'Could not load Video Home'),
-    };
-  }
-
-  return videoHomeIsEmpty(home.value)
-    ? { kind: 'empty', connection: connection.value }
-    : { kind: 'ready', home: home.value, connection: connection.value };
+    )
+    .pipe(
+      Effect.mapError((error) => ({
+        kind: 'error',
+        message: error.message,
+      })),
+    )
+    .pipe(Effect.runPromiseExit);
 }
 
 export async function fetchVideoLibraryPage(

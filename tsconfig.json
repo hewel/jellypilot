@@ -21,7 +21,8 @@
     "noUnusedParameters": true,
     "paths": {
       "@components/*": ["./src/components/*"],
-      "@bindings": ["./src/bindings.ts"]
+      "@bindings": ["./src/bindings.ts"],
+      "~effects/*": ["./src/effects/*"]
     }
   },
   "include": ["src", "src/types/**/*.d.ts"]
