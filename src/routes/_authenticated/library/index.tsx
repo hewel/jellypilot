@@ -8,11 +8,14 @@ import { createFileRoute } from '@tanstack/solid-router';
 import { Exit } from 'effect';
 import { RefreshCw } from 'lucide-solid';
 import { createResource, createSignal, For, Show } from 'solid-js';
+import { commandFailureMessage } from '~effects/commands';
 import {
   fetchLibraryHome,
   fetchVideoSearchPage,
+  type LibraryExit,
   type LibrarySearchState,
-} from './-data';
+  videoHomeIsEmpty,
+} from '~effects/library';
 
 export const Route = createFileRoute('/_authenticated/library/')({
   component: LibraryLanding,
@@ -22,19 +25,29 @@ function LibraryLanding() {
   const [home, { refetch }] = createResource(fetchLibraryHome);
   const loadedHome = () => {
     const current = home();
-    if (!current) {
-      return null;
-    }
-    return Exit.match(current, {
-      onFailure: () => null,
-      onSuccess: (v) => v,
-    });
+    return current
+      ? Exit.match(current, {
+          onFailure: () => null,
+          onSuccess: (v) => v,
+        })
+      : null;
+  };
+  const homeErrorMessage = () => {
+    const current = home();
+    return current
+      ? Exit.match(current, {
+          onFailure: (cause) =>
+            commandFailureMessage(cause, 'Could not load Video Home'),
+          onSuccess: () => null,
+        })
+      : null;
   };
 
   // Lifted search state
   const [query, setQuery] = createSignal('');
   const [submittedQuery, setSubmittedQuery] = createSignal('');
-  const [state, setState] = createSignal<LibrarySearchState | null>(null);
+  const [state, setState] =
+    createSignal<LibraryExit<LibrarySearchState> | null>(null);
   const [loading, setLoading] = createSignal(false);
 
   const loadSearchPage = async (
@@ -46,12 +59,16 @@ function LibraryLanding() {
     setLoading(true);
     const result = await fetchVideoSearchPage(nextQuery, startIndex);
     setState((current) => {
-      if (!replace && current?.kind === 'ready' && result.kind === 'ready') {
-        return {
-          kind: 'ready',
-          page: result.page,
-          items: [...current.items, ...result.items],
-        };
+      if (
+        !replace &&
+        current &&
+        Exit.isSuccess(current) &&
+        Exit.isSuccess(result)
+      ) {
+        return Exit.succeed({
+          page: result.value.page,
+          items: [...current.value.items, ...result.value.items],
+        });
       }
       return result;
     });
@@ -77,7 +94,14 @@ function LibraryLanding() {
 
   const readyState = () => {
     const current = state();
-    return current?.kind === 'ready' ? current : null;
+    return current && Exit.isSuccess(current) ? current.value : null;
+  };
+
+  const searchErrorMessage = () => {
+    const current = state();
+    return current && !Exit.isSuccess(current)
+      ? commandFailureMessage(current.cause, 'Could not search Library')
+      : null;
   };
 
   const loadMoreStartIndex = () => {
@@ -88,6 +112,19 @@ function LibraryLanding() {
   const isSearchActive = () => state() !== null || loading();
   const renderHomeContent = () => {
     if (home.loading) return <LibraryStatusPanel title="Loading Video Home" />;
+    const error = homeErrorMessage();
+    if (error) {
+      return (
+        <LibraryStatusPanel
+          title="Could not load Video Home"
+          description={error}
+        />
+      );
+    }
+    const homeData = loadedHome();
+    if (homeData && videoHomeIsEmpty(homeData)) {
+      return <LibraryStatusPanel title="Video Home has no video rows yet" />;
+    }
     return (
       <div class="space-y-6">
         <VideoHomeRow
@@ -115,6 +152,35 @@ function LibraryLanding() {
   };
 
   const renderSearchContent = () => {
+    const error = searchErrorMessage();
+    if (error) {
+      return (
+        <div class="space-y-3">
+          <LibraryStatusPanel
+            title="Could not search Library"
+            description={error}
+          />
+          <Show when={submittedQuery()}>
+            <button
+              type="button"
+              class="btn-secondary rounded-full"
+              disabled={loading()}
+              onClick={() => void loadSearchPage(submittedQuery(), 0, true)}
+            >
+              <RefreshCw class="h-4 w-4" />
+              <span>Retry Search</span>
+            </button>
+          </Show>
+        </div>
+      );
+    }
+    const ready = readyState();
+    if (ready && ready.items.length === 0) {
+      return <LibraryStatusPanel title="No video search results" />;
+    }
+    if (loading() && !readyState()) {
+      return <LibraryStatusPanel title="Searching Library" />;
+    }
     return (
       <section class="space-y-4" aria-labelledby="library-search-results">
         <div class="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">

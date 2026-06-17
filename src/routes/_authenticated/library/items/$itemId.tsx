@@ -10,6 +10,7 @@ import {
 } from '@components/library/shared';
 import { JmsrSelect, type JmsrSelectItem, StatusBadge } from '@components/ui';
 import { createFileRoute } from '@tanstack/solid-router';
+import { Exit } from 'effect';
 import { Film, Library, Play, RefreshCw, RotateCcw } from 'lucide-solid';
 import {
   createEffect,
@@ -19,11 +20,12 @@ import {
   For,
   Show,
 } from 'solid-js';
+import { commandFailureMessage } from '~effects/commands';
 import {
   fetchVideoItemDetail,
   startLibraryPlayback,
   updateLibraryUserData,
-} from '../-data';
+} from '~effects/library';
 
 const AUDIO_AUTO = 'auto';
 const SUBTITLE_AUTO = 'auto';
@@ -46,7 +48,7 @@ function LibraryItemDetailRoute() {
   const [playError, setPlayError] = createSignal<string | null>(null);
   const detail = () => {
     const current = state();
-    return current?.kind === 'ready' ? current.detail : null;
+    return current && Exit.isSuccess(current) ? current.value : null;
   };
   const audioItems = createMemo<JmsrSelectItem[]>(() => [
     { value: AUDIO_AUTO, label: 'Auto (series preference)' },
@@ -86,29 +88,32 @@ function LibraryItemDetailRoute() {
 
     setPlayBusy(mode);
     setPlayError(null);
-    const message = await startLibraryPlayback({
+    const result = await startLibraryPlayback({
       itemId: item.id,
       mode,
       startPositionSeconds: mode === 'resume' ? item.resumePositionSeconds : 0,
       audioStreamIndex: selectedAudioStreamIndex(),
       subtitleStreamIndex: selectedSubtitleStreamIndex(),
     });
-    setPlayError(message);
+    setPlayError(
+      Exit.match(result, {
+        onFailure: (cause) =>
+          commandFailureMessage(cause, 'Could not start playback'),
+        onSuccess: () => null,
+      }),
+    );
     setPlayBusy(null);
   };
   const statusTitle = () => {
     const current = state();
-    if (current?.kind === 'error') return 'Could not load item detail';
-    if (current?.kind === 'disconnected') {
-      return 'Library requires a live Jellyfin connection';
-    }
+    if (current && !Exit.isSuccess(current))
+      return 'Could not load item detail';
     return 'Loading item detail';
   };
   const statusDescription = () => {
     const current = state();
-    if (current?.kind === 'error') return current.message;
-    if (current?.kind === 'disconnected') {
-      return 'Reconnect Jellyfin to inspect video details. Saved Sessions remain available, but Library data is not cached offline.';
+    if (current && !Exit.isSuccess(current)) {
+      return commandFailureMessage(current.cause, 'Could not load item detail');
     }
     return 'JMSR is loading Movie or Episode detail data from Jellyfin.';
   };

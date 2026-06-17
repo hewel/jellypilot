@@ -13,6 +13,7 @@ import {
 } from '@components/library/shared';
 import { StatusBadge } from '@components/ui';
 import { createFileRoute } from '@tanstack/solid-router';
+import { Exit } from 'effect';
 import { Film, Library, RefreshCw, Tv } from 'lucide-solid';
 import {
   createEffect,
@@ -21,14 +22,16 @@ import {
   For,
   Show,
 } from 'solid-js';
+import { commandFailureMessage } from '~effects/commands';
 import {
   fetchSeasonEpisodes,
   fetchVideoItemDetail,
   fetchVideoShowDetail,
+  type LibraryExit,
   type SeasonEpisodesState,
   startLibraryPlayback,
   updateLibraryUserData,
-} from '../-data';
+} from '~effects/library';
 
 export const Route = createFileRoute('/_authenticated/library/shows/$seriesId')(
   {
@@ -44,9 +47,8 @@ function LibraryShowDetailRoute() {
   const [selectedSeason, setSelectedSeason] = createSignal<VideoSeason | null>(
     null,
   );
-  const [episodes, setEpisodes] = createSignal<SeasonEpisodesState | null>(
-    null,
-  );
+  const [episodes, setEpisodes] =
+    createSignal<LibraryExit<SeasonEpisodesState> | null>(null);
   const [episodesLoading, setEpisodesLoading] = createSignal(false);
   const [playBusy, setPlayBusy] = createSignal(false);
   const [episodePlayBusy, setEpisodePlayBusy] = createSignal<string | null>(
@@ -58,13 +60,16 @@ function LibraryShowDetailRoute() {
   const [playError, setPlayError] = createSignal<string | null>(null);
   const [autoLoaded, setAutoLoaded] = createSignal(false);
   const detail = () => {
-    const current = state();
-    return current?.kind === 'ready' ? current.detail : null;
+    const current = state.latest;
+    return current && Exit.isSuccess(current) ? current.value : null;
   };
   const seasonEpisodes = () => {
     const current = episodes();
-    return current?.kind === 'ready' ? current.page.episodes : [];
+    return current && Exit.isSuccess(current)
+      ? current.value.page.episodes
+      : [];
   };
+  const hasSeasonEpisodes = () => seasonEpisodes().length > 0;
   const loadEpisodes = async (season: VideoSeason) => {
     if (episodesLoading()) return;
     setSelectedSeason(season);
@@ -99,22 +104,19 @@ function LibraryShowDetailRoute() {
   });
   const openEpisodePlaybackChooser = async (itemId: string) => {
     const result = await fetchVideoItemDetail(itemId);
-    if (result.kind === 'ready') {
-      const mode = result.detail.canResume ? 'resume' : 'start';
-      setPendingPlayback({
-        detail: result.detail,
-        mode,
-        startPositionSeconds:
-          mode === 'resume' ? result.detail.resumePositionSeconds : 0,
-      });
-      return;
-    }
-
-    setPlayError(
-      result.kind === 'error'
-        ? result.message
-        : 'Library requires a live Jellyfin connection',
-    );
+    Exit.match(result, {
+      onFailure: (cause) =>
+        setPlayError(commandFailureMessage(cause, 'Could not load episode')),
+      onSuccess: (episodeDetail) => {
+        const mode = episodeDetail.canResume ? 'resume' : 'start';
+        setPendingPlayback({
+          detail: episodeDetail,
+          mode,
+          startPositionSeconds:
+            mode === 'resume' ? episodeDetail.resumePositionSeconds : 0,
+        });
+      },
+    });
   };
   const playShow = async () => {
     const show = detail();
@@ -139,38 +141,48 @@ function LibraryShowDetailRoute() {
 
     setConfirmBusy(true);
     setPlayError(null);
-    const message = await startLibraryPlayback({
+    const result = await startLibraryPlayback({
       itemId: pending.detail.id,
       mode: pending.mode,
       startPositionSeconds: pending.startPositionSeconds,
       audioStreamIndex: selection.audioStreamIndex,
       subtitleStreamIndex: selection.subtitleStreamIndex,
     });
+    const message = Exit.match(result, {
+      onFailure: (cause) =>
+        commandFailureMessage(cause, 'Could not start playback'),
+      onSuccess: () => null,
+    });
     setPlayError(message);
     setConfirmBusy(false);
     if (!message) setPendingPlayback(null);
   };
   const statusTitle = () => {
-    const current = state();
-    if (current?.kind === 'error') return 'Could not load show detail';
-    if (current?.kind === 'disconnected') {
-      return 'Library requires a live Jellyfin connection';
-    }
+    const current = state.latest;
+    if (current && !Exit.isSuccess(current))
+      return 'Could not load show detail';
     return 'Loading show detail';
   };
   const statusDescription = () => {
-    const current = state();
-    if (current?.kind === 'error') return current.message;
-    if (current?.kind === 'disconnected') {
-      return 'Reconnect Jellyfin to inspect show details. Saved Sessions remain available, but Library data is not cached offline.';
+    const current = state.latest;
+    if (current && !Exit.isSuccess(current)) {
+      return commandFailureMessage(current.cause, 'Could not load show detail');
     }
     return 'JMSR is loading Show detail, seasons, and Jellyfin next-up data.';
   };
   const episodesStatusTitle = () => {
     const current = episodes();
     if (episodesLoading()) return 'Loading season episodes';
-    if (current?.kind === 'empty') return 'Season has no episodes';
-    if (current?.kind === 'error') return 'Could not load season episodes';
+    if (
+      current &&
+      Exit.isSuccess(current) &&
+      current.value.page.episodes.length === 0
+    ) {
+      return 'Season has no episodes';
+    }
+    if (current && !Exit.isSuccess(current)) {
+      return 'Could not load season episodes';
+    }
     return 'Choose a season';
   };
   const episodesStatusDescription = () => {
@@ -178,10 +190,19 @@ function LibraryShowDetailRoute() {
     if (episodesLoading()) {
       return 'JMSR is loading exact Episode cards for the selected Season.';
     }
-    if (current?.kind === 'empty') {
+    if (
+      current &&
+      Exit.isSuccess(current) &&
+      current.value.page.episodes.length === 0
+    ) {
       return 'Jellyfin returned no Episodes for the selected Season.';
     }
-    if (current?.kind === 'error') return current.message;
+    if (current && !Exit.isSuccess(current)) {
+      return commandFailureMessage(
+        current.cause,
+        'Could not load season episodes',
+      );
+    }
     return 'Season buttons keep manual episode selection available alongside Jellyfin next-up resolution.';
   };
   const episodeLabel = (ep: VideoLibraryItem) => {
@@ -271,7 +292,7 @@ function LibraryShowDetailRoute() {
                 </ul>
 
                 <Show
-                  when={episodes()?.kind === 'ready'}
+                  when={hasSeasonEpisodes()}
                   fallback={
                     <LibraryStatusPanel
                       title={episodesStatusTitle()}

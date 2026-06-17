@@ -28,7 +28,7 @@ jmsr/
 | Add Tauri command | `src-tauri/src/command.rs` | Decorate with `#[tauri::command]` + `#[specta]` |
 | Register command | `src-tauri/src/lib.rs` | Add to `collect_commands![]` |
 | Frontend page/component | `src/routes/**`, `src/components/**` | Page `.tsx` belongs in routes; reusable/non-page component `.tsx` belongs in components |
-| Route-owned Tauri data workflow | `src/routes/**/-data.ts` | Use for route-specific loaders/actions that call typed `commands.*` through Effect wrappers |
+| Frontend Tauri data workflow | `src/effects/**` | Use for loaders/actions that call typed `commands.*` through Effect wrappers |
 | Call Rust from TS | `src/bindings.ts` | Import `commands.*`, auto-generated |
 | Add test | `tests/*.test.ts` | Uses Rstest + testing-library |
 
@@ -55,16 +55,17 @@ bun tauri build     # Production desktop build
 - **Type-safe IPC**: All Rust↔TS via tauri-specta, never raw `invoke()`
 - **NO libmpv embed**: MPV spawned as external process, controlled via JSON IPC
 - **Solid.js reactivity**: Use `createSignal`, `createResource`, NOT React hooks
-- **Frontend file ownership**: Page-level `.tsx` route code belongs in the actual TanStack file-route entry under `src/routes/**`; do not split full route pages into ignored `-*.tsx` page-view modules. Reusable or non-page `.tsx` components belong under `src/components/**`; do not put frontend pages/components under `src/features/**`. Route-owned helper/data modules under `src/routes/**` may use TanStack Router's ignored `-` prefix when they are not route entries. Route-specific `.ts` data/workflow modules stay beside the owning route; reusable `.ts` helpers move to the owning shared/domain folder (`src/effects/**`, `src/components/<feature>/`, or another explicit domain module).
+- **Frontend file ownership**: Page-level `.tsx` route code belongs in the actual TanStack file-route entry under `src/routes/**`; do not split full route pages into ignored `-*.tsx` page-view modules. Reusable or non-page `.tsx` components belong under `src/components/**`; do not put frontend pages/components under `src/features/**`. Route-owned helper modules under `src/routes/**` may use TanStack Router's ignored `-` prefix when they are not route entries, but frontend Tauri data workflows belong under `src/effects/**`.
 - **Forms**: Always use `@tanstack/solid-form` with `createForm` for form handling
 - **TypeScript / Effect**: When writing TypeScript, you **must** read and follow [docs/agents/effect.md](docs/agents/effect.md) (strictly avoid raw `try/catch` inside business workflows, use Effect's typed error model)
-- **Tauri data in frontend routes**: Keep route-owned Tauri data workflows in colocated route helper modules like `src/routes/**/-data.ts`, and keep route `.tsx` files focused on Solid UI state/rendering. Wrap generated `commands.*` calls with `runTauriCommand` / `runTauriCommandRaw` from `src/effects/commands.ts`; do not call raw `commands.*` from route components for reusable business/data workflows. Reusable Tauri/Effect workflows belong under `src/effects/**`; route-only workflows stay beside the owning route. When a helper returns an Effect `Exit`, unwrap it at the Solid boundary with `Exit.match` / `Exit.isSuccess`.
+- **Tauri data in frontend routes**: Keep frontend Tauri data workflows under `src/effects/**`, and keep route `.tsx` files focused on Solid UI state/rendering. Wrap generated `commands.*` calls with `runTauriCommand` / `runTauriCommandRaw` from `src/effects/commands.ts`; do not call raw `commands.*` from route components for reusable business/data workflows. Do not write fallback data objects for failures or missing values: use Effect for failures, `Option` for nullable values, and return success values like empty arrays/pages as data. When a helper returns an Effect `Exit`, unwrap it at the Solid boundary with `Exit.match` / `Exit.isSuccess`.
 
 ## Anti-Patterns
 
 - **`bindings.ts` edits**: Auto-generated, changes will be overwritten on build
 - **React patterns in Solid**: No `useState`, `useEffect` – use Solid primitives
 - **Raw Tauri invoke**: Always use typed `commands.*` from bindings
+- **Fallback data workflows**: No raw `try/catch` in TypeScript business/data workflows, and no nullish `if` checks in `src/effects/**`; model those paths with Effect and Option.
 
 ## Agent skills
 

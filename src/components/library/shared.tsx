@@ -1,3 +1,4 @@
+import { Exit } from 'effect';
 import {
   Check,
   Clapperboard,
@@ -19,8 +20,11 @@ import type {
   VideoSeason,
   VideoShowDetail,
   VideoUserDataAction,
+  VideoUserDataUpdate,
   VideoUserDataUpdateRequest,
 } from '../../bindings';
+import { commandFailureMessage } from '../../effects/commands';
+import type { CommandError } from '../../effects/errors';
 import type { JmsrSelectItem } from '../ui';
 
 export function LibraryStatusPanel(props: {
@@ -294,7 +298,9 @@ export function UserDataControls(props: {
   played: boolean;
   favorite: boolean;
   subject: string;
-  onUpdate: (request: VideoUserDataUpdateRequest) => Promise<string | null>;
+  onUpdate: (
+    request: VideoUserDataUpdateRequest,
+  ) => Promise<Exit.Exit<VideoUserDataUpdate, CommandError>>;
   onSuccess: () => void;
 }) {
   const [busy, setBusy] = createSignal<VideoUserDataAction | null>(null);
@@ -304,9 +310,14 @@ export function UserDataControls(props: {
 
     setBusy(action);
     setError(null);
-    const message = await props.onUpdate({
+    const result = await props.onUpdate({
       itemId: props.itemId,
       action,
+    });
+    const message = Exit.match(result, {
+      onFailure: (cause) =>
+        commandFailureMessage(cause, 'Could not update user data'),
+      onSuccess: () => null,
     });
     setError(message);
     setBusy(null);

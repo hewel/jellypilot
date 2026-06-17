@@ -12,9 +12,15 @@ import {
 } from '@components/library/shared';
 import { JmsrSelect } from '@components/ui';
 import { createFileRoute } from '@tanstack/solid-router';
+import { Exit } from 'effect';
 import { Library, RefreshCw } from 'lucide-solid';
 import { createSignal, For, onMount, Show } from 'solid-js';
-import { fetchVideoLibraryPage, type LibraryBrowseState } from '../-data';
+import { commandFailureMessage } from '~effects/commands';
+import {
+  fetchVideoLibraryPage,
+  type LibraryBrowseState,
+  type LibraryExit,
+} from '~effects/library';
 
 export const Route = createFileRoute(
   '/_authenticated/library/$collectionType/$libraryId',
@@ -24,7 +30,8 @@ export const Route = createFileRoute(
 
 function LibraryBrowseRoute() {
   const params = Route.useParams();
-  const [state, setState] = createSignal<LibraryBrowseState | null>(null);
+  const [state, setState] =
+    createSignal<LibraryExit<LibraryBrowseState> | null>(null);
   const [loading, setLoading] = createSignal(false);
   const [sort, setSort] = createSignal<VideoLibrarySort>('title');
   const [playedFilter, setPlayedFilter] =
@@ -46,12 +53,16 @@ function LibraryBrowseRoute() {
       favoritesOnly(),
     );
     setState((current) => {
-      if (!replace && current?.kind === 'ready' && result.kind === 'ready') {
-        return {
-          kind: 'ready',
-          page: result.page,
-          items: [...current.items, ...result.items],
-        };
+      if (
+        !replace &&
+        current &&
+        Exit.isSuccess(current) &&
+        Exit.isSuccess(result)
+      ) {
+        return Exit.succeed({
+          page: result.value.page,
+          items: [...current.value.items, ...result.value.items],
+        });
       }
       return result;
     });
@@ -68,28 +79,31 @@ function LibraryBrowseRoute() {
 
   const readyState = () => {
     const current = state();
-    return current?.kind === 'ready' ? current : null;
+    return current && Exit.isSuccess(current) ? current.value : null;
   };
   const statusTitle = () => {
     const current = state();
     if (!current) return `Loading ${libraryTitle(collectionType)}`;
-    if (current.kind === 'empty') {
+    if (Exit.isSuccess(current) && current.value.items.length === 0) {
       return `${libraryTitle(collectionType)} has no results`;
     }
-    if (current.kind === 'error') return 'Could not load Library page';
-    if (current.kind === 'disconnected') {
-      return 'Library requires a live Jellyfin connection';
-    }
+    if (!Exit.isSuccess(current)) return 'Could not load Library page';
     return `Loading ${libraryTitle(collectionType)}`;
   };
   const statusDescription = () => {
     const current = state();
-    if (current?.kind === 'empty') {
+    if (
+      current &&
+      Exit.isSuccess(current) &&
+      current.value.items.length === 0
+    ) {
       return 'Jellyfin returned an empty server page for this video library.';
     }
-    if (current?.kind === 'error') return current.message;
-    if (current?.kind === 'disconnected') {
-      return 'Reconnect Jellyfin to browse video libraries. Saved Sessions remain available, but Library data is not cached offline.';
+    if (current && !Exit.isSuccess(current)) {
+      return commandFailureMessage(
+        current.cause,
+        'Could not load Library page',
+      );
     }
     return 'JMSR is loading a server-paged video library result set.';
   };
@@ -118,7 +132,7 @@ function LibraryBrowseRoute() {
         {/* Left Column: browse results */}
         <div class="min-w-0">
           <Show
-            when={state()?.kind === 'ready'}
+            when={readyState()}
             fallback={
               <LibraryStatusPanel
                 title={statusTitle()}
