@@ -52,6 +52,7 @@
     "@rsbuild/plugin-babel": "^1.1.2",
     "@rsbuild/plugin-solid": "^1.2.0",
     "@rstest/core": "^0.10.1",
+    "@tanstack/router-plugin": "^1.168.18",
     "@tauri-apps/cli": "^2.11.2",
     "@testing-library/dom": "^10.4.1",
     "@testing-library/jest-dom": "^6.9.1",

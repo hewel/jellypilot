@@ -1,4 +1,3 @@
-import { useParams } from '@tanstack/solid-router';
 import { Library, RefreshCw } from 'lucide-solid';
 import { createSignal, For, onMount, Show } from 'solid-js';
 import type {
@@ -16,21 +15,8 @@ import {
   VideoLibraryCard,
 } from './shared';
 
-function libraryKindFromParam(value: string): VideoLibraryKind {
+export function libraryKindFromParam(value: string): VideoLibraryKind {
   return value === 'tvshows' ? 'tvshows' : 'movies';
-}
-
-export function LibraryBrowseRoute() {
-  const params = useParams({
-    from: '/authenticated/library/$collectionType/$libraryId',
-  });
-
-  return (
-    <LibraryBrowseView
-      collectionType={libraryKindFromParam(params().collectionType)}
-      libraryId={params().libraryId}
-    />
-  );
 }
 
 export function LibraryBrowseView(props: {

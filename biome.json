@@ -9,7 +9,8 @@
       "scripts/**/*.mjs",
       "src-tauri/**/*.json",
       "!src-tauri/openapi/jellyfin-openapi-stable.json",
-      "!**/bindings.ts"
+      "!**/bindings.ts",
+      "!**/routeTree.gen.ts"
     ]
   },
   "assist": {

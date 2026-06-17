@@ -1,4 +1,3 @@
-import { useParams } from '@tanstack/solid-router';
 import { Film, Library, Play, RefreshCw, RotateCcw } from 'lucide-solid';
 import {
   createEffect,
@@ -28,12 +27,6 @@ import {
 const AUDIO_AUTO = 'auto';
 const SUBTITLE_AUTO = 'auto';
 const SUBTITLE_OFF = 'off';
-
-export function LibraryItemDetailRoute() {
-  const params = useParams({ from: '/authenticated/library/items/$itemId' });
-
-  return <LibraryItemDetailView itemId={params().itemId} />;
-}
 
 export function LibraryItemDetailView(props: { itemId: string }) {
   const [state, { refetch }] = createResource(() =>

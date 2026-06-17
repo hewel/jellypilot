@@ -1,5 +1,5 @@
 import { useNavigate } from '@tanstack/solid-router';
-import OperationsConsole from '../components/OperationsConsole';
+import OperationsConsole from '../../components/OperationsConsole';
 
 export function SettingsRoute() {
   const navigate = useNavigate();

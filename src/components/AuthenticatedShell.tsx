@@ -219,7 +219,7 @@ function CompactNowPlayingSummary() {
 export default function AuthenticatedShell() {
   const [connection] = createResource(() => commands.jellyfinGetState());
   const nowPlayingMatch = useMatch({
-    from: '/authenticated/now-playing',
+    from: '/_authenticated/now-playing',
     shouldThrow: false,
   });
   const showCompactNowPlaying = () => nowPlayingMatch() === undefined;

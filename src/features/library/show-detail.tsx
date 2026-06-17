@@ -1,4 +1,3 @@
-import { useParams } from '@tanstack/solid-router';
 import { Film, Library, RefreshCw, Tv } from 'lucide-solid';
 import {
   createEffect,
@@ -28,12 +27,6 @@ import {
   showSubtitle,
   UserDataControls,
 } from './shared';
-
-export function LibraryShowDetailRoute() {
-  const params = useParams({ from: '/authenticated/library/shows/$seriesId' });
-
-  return <LibraryShowDetailView seriesId={params().seriesId} />;
-}
 
 export function LibraryShowDetailView(props: { seriesId: string }) {
   const [state, { refetch }] = createResource(() =>

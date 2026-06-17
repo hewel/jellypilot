@@ -1,4 +1,4 @@
-import DiagnosticsPanel from '../components/DiagnosticsPanel';
+import DiagnosticsPanel from '../../components/DiagnosticsPanel';
 
 export function DiagnosticsRoute() {
   return (
