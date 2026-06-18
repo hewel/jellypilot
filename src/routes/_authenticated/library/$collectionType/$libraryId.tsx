@@ -1,3 +1,4 @@
+import { Checkbox } from '@ark-ui/solid/checkbox';
 import type {
   VideoLibraryKind,
   VideoLibraryPlayedFilter,
@@ -13,7 +14,7 @@ import {
 import { Button, JmsrSelect } from '@components/ui';
 import { createFileRoute } from '@tanstack/solid-router';
 import { Exit } from 'effect';
-import { Library, RefreshCw } from 'lucide-solid';
+import { Check, Library, RefreshCw } from 'lucide-solid';
 import { createSignal, For, onMount, Show } from 'solid-js';
 import { commandFailureMessage } from '~effects/commands';
 import {
@@ -114,99 +115,57 @@ function LibraryBrowseRoute() {
 
   return (
     <div class="space-y-6">
-      <div class="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
-        <div>
-          <p class="text-label-small text-secondary">Library Browser</p>
-          <h1 class="text-headline-large">{libraryTitle(collectionType)}</h1>
-          <p class="mt-2 max-w-2xl text-body-large">
-            Server-paged video results from Jellyfin.
-          </p>
-        </div>
-        <Button
-          href="/library"
-          variant="outlined"
-          class="rounded-full"
-          leadingIcon={<Library class="h-4 w-4" />}
-        >
-          Video Home
-        </Button>
-      </div>
+      <header class="flex flex-col gap-4 rounded-2xl border border-outline-variant bg-surface-container-low/60 p-3 shadow-xl backdrop-blur-md lg:p-4">
+        <div class="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+          <div class="flex items-center gap-3">
+            <div class="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-primary/20 bg-primary-container/30 text-primary">
+              <Library class="h-5 w-5" />
+            </div>
+            <div>
+              <h1 class="text-title-medium font-bold text-on-surface">
+                {libraryTitle(collectionType)}
+              </h1>
+              <p class="text-[10px] font-semibold text-on-surface-variant/80">
+                Library Browser
+              </p>
+            </div>
+          </div>
 
-      <div class="console-grid">
-        {/* Left Column: browse results */}
-        <div class="min-w-0">
-          <Show
-            when={readyState()}
-            fallback={
-              <LibraryStatusPanel
-                title={statusTitle()}
-                description={statusDescription()}
-              />
-            }
+          <Button
+            href="/library"
+            variant="outlined"
+            size="sm"
+            class="h-10 rounded-xl px-4 shrink-0"
+            leadingIcon={<Library class="h-4 w-4" />}
           >
-            <section class="space-y-4" aria-labelledby="library-browse-title">
-              <div class="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-                <h2 id="library-browse-title" class="text-title-large">
-                  {libraryTitle(collectionType)}
-                </h2>
-                <p class="text-body-small">
-                  {readyState()?.items.length ?? 0} of{' '}
-                  {readyState()?.page.totalRecordCount ?? 0}
-                </p>
-              </div>
-              <div class="grid gap-3 sm:grid-cols-2 xl:grid-cols-3 animate-fade-in">
-                <For each={readyState()?.items ?? []}>
-                  {(item) => (
-                    <VideoLibraryCard
-                      item={item}
-                      collectionType={collectionType}
-                    />
-                  )}
-                </For>
-              </div>
-              <Show when={readyState()?.page.hasMore}>
-                <div class="flex justify-center pt-2">
-                  <Button
-                    type="button"
-                    variant="secondary"
-                    class="rounded-full"
-                    disabled={loading()}
-                    onClick={() => void loadPage(loadMoreStartIndex())}
-                    leadingIcon={
-                      <RefreshCw
-                        class={`h-4 w-4 ${loading() ? 'animate-spin' : ''}`}
-                      />
-                    }
-                  >
-                    {loading() ? 'Loading more' : 'Load more'}
-                  </Button>
-                </div>
-              </Show>
-            </section>
-          </Show>
+            Video Home
+          </Button>
         </div>
 
-        {/* Right Column: controls sidebar */}
-        <aside class="space-y-6">
-          <section class="card-filled space-y-5" aria-label="Library controls">
-            <h2 class="text-title-medium">Filters & Sort</h2>
-
+        <nav
+          class="flex flex-col gap-3 xl:flex-row xl:items-end xl:justify-between"
+          aria-label="Library browse controls"
+        >
+          <div class="flex min-w-0 flex-col gap-3 sm:flex-row sm:items-end">
             <JmsrSelect
               label="Sort By"
               items={sortItems}
               disabled={loading()}
               value={sort()}
-              placeholder="Select sort…"
+              placeholder="Select sort..."
+              size="compact"
               onValueChange={(value) => {
                 setSort(value);
                 reloadFromFirstPage();
               }}
-              class="w-full"
+              class="min-w-[12rem] flex-1 sm:max-w-[13rem]"
             />
 
-            <fieldset class="space-y-2" aria-label="Played filter">
-              <legend class="text-label-small">Status</legend>
-              <div class="flex flex-col gap-2">
+            <fieldset class="min-w-0 space-y-2" aria-label="Played filter">
+              <legend class="text-label-medium text-on-surface-variant">
+                Status
+              </legend>
+              <div class="flex flex-wrap gap-2">
                 <For
                   each={
                     ['all', 'played', 'unplayed'] as VideoLibraryPlayedFilter[]
@@ -216,7 +175,8 @@ function LibraryBrowseRoute() {
                     <Button
                       type="button"
                       variant="outlined"
-                      class={`rounded-full w-full justify-start ${
+                      size="sm"
+                      class={`h-10 rounded-xl px-4 ${
                         playedFilter() === filter
                           ? 'border-secondary bg-secondary-container/45 text-on-secondary-container'
                           : ''
@@ -234,22 +194,80 @@ function LibraryBrowseRoute() {
                 </For>
               </div>
             </fieldset>
+          </div>
 
-            <label class="inline-flex min-h-11 w-full items-center gap-3 rounded-xl border border-outline-variant px-3 py-2 text-label-large cursor-pointer hover:border-secondary/40 transition-colors">
-              <input
-                type="checkbox"
-                class="h-4 w-4 accent-secondary"
-                checked={favoritesOnly()}
-                disabled={loading()}
-                onChange={(event) => {
-                  setFavoritesOnly(event.currentTarget.checked);
-                  reloadFromFirstPage();
-                }}
-              />
-              <span>Favorites Only</span>
-            </label>
+          <Checkbox.Root
+            checked={favoritesOnly()}
+            disabled={loading()}
+            onCheckedChange={(details) => {
+              setFavoritesOnly(details.checked === true);
+              reloadFromFirstPage();
+            }}
+            class="ark-checkbox h-10 rounded-xl border border-outline-variant bg-surface-container-high/50 px-3 text-label-large text-on-surface transition-colors hover:border-secondary/40"
+          >
+            <Checkbox.Control class="ark-checkbox__control">
+              <Checkbox.Indicator class="ark-checkbox__indicator">
+                <Check class="h-3.5 w-3.5" stroke-width={4} />
+              </Checkbox.Indicator>
+            </Checkbox.Control>
+            <Checkbox.Label class="cursor-pointer select-none">
+              Favorites Only
+            </Checkbox.Label>
+            <Checkbox.HiddenInput />
+          </Checkbox.Root>
+        </nav>
+      </header>
+
+      <div class="min-w-0">
+        <Show
+          when={readyState()}
+          fallback={
+            <LibraryStatusPanel
+              title={statusTitle()}
+              description={statusDescription()}
+            />
+          }
+        >
+          <section class="space-y-4" aria-labelledby="library-browse-title">
+            <div class="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+              <h2 id="library-browse-title" class="text-title-large">
+                {libraryTitle(collectionType)}
+              </h2>
+              <p class="text-body-small">
+                {readyState()?.items.length ?? 0} of{' '}
+                {readyState()?.page.totalRecordCount ?? 0}
+              </p>
+            </div>
+            <div class="grid gap-3 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 animate-fade-in">
+              <For each={readyState()?.items ?? []}>
+                {(item) => (
+                  <VideoLibraryCard
+                    item={item}
+                    collectionType={collectionType}
+                  />
+                )}
+              </For>
+            </div>
+            <Show when={readyState()?.page.hasMore}>
+              <div class="flex justify-center pt-2">
+                <Button
+                  type="button"
+                  variant="secondary"
+                  class="rounded-full"
+                  disabled={loading()}
+                  onClick={() => void loadPage(loadMoreStartIndex())}
+                  leadingIcon={
+                    <RefreshCw
+                      class={`h-4 w-4 ${loading() ? 'animate-spin' : ''}`}
+                    />
+                  }
+                >
+                  {loading() ? 'Loading more' : 'Load more'}
+                </Button>
+              </div>
+            </Show>
           </section>
-        </aside>
+        </Show>
       </div>
     </div>
   );

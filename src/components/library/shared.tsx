@@ -151,7 +151,7 @@ export function LibraryShortcutRow(props: {
           Video Libraries
         </h2>
         <div
-          class={isList() ? 'flex flex-col gap-3' : 'grid gap-3 sm:grid-cols-2'}
+          class={isList() ? 'flex flex-col gap-3' : 'grid gap-3 sm:grid-cols-4'}
         >
           <For each={props.shortcuts}>
             {(shortcut) => (

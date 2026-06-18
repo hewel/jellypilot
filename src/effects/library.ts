@@ -45,16 +45,6 @@ export interface SeasonEpisodesState {
 export const LIBRARY_BROWSE_PAGE_SIZE = 24;
 export const LIBRARY_SEARCH_PAGE_SIZE = 24;
 
-export function videoHomeIsEmpty(home: VideoHome) {
-  return (
-    home.continueWatching.length === 0 &&
-    home.nextUp.length === 0 &&
-    home.latestMovies.length === 0 &&
-    home.latestEpisodes.length === 0 &&
-    home.libraryShortcuts.length === 0
-  );
-}
-
 const disconnectedError = () =>
   new CommandError({
     message: 'Library requires a live Jellyfin connection',

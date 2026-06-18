@@ -1121,19 +1121,20 @@ test('diagnostics shell area preserves diagnostics panel behavior', async () => 
   cleanup();
 });
 
-test('library landing exposes disconnected and retry states', async () => {
+test('library landing keeps retry and skips video home when disconnected', async () => {
   mockShellCommands(disconnectedState);
   const videoHomeCommand = rstest.spyOn(commands, 'libraryVideoHome');
   const cleanup = renderShell();
 
-  await screen.findByText('Library requires a live Jellyfin connection');
-  expect(screen.getByRole('button', { name: 'Retry Library' })).toBeVisible();
+  expect(
+    await screen.findByRole('button', { name: 'Retry Library' }),
+  ).toBeVisible();
   expect(videoHomeCommand).not.toHaveBeenCalled();
 
   cleanup();
 });
 
-test('library landing surfaces command errors without fake content', async () => {
+test('library landing renders no fake content on command error', async () => {
   rstest.spyOn(commands, 'jellyfinIsConnected').mockResolvedValue(true);
   rstest.spyOn(commands, 'jellyfinGetState').mockResolvedValue(connectedState);
   rstest.spyOn(commands, 'libraryVideoHome').mockResolvedValue({
@@ -1149,14 +1150,15 @@ test('library landing surfaces command errors without fake content', async () =>
     .mockResolvedValue(() => undefined);
   const cleanup = renderShell();
 
-  await screen.findByText('Jellyfin unavailable');
-  expect(screen.getByRole('button', { name: 'Retry Library' })).toBeVisible();
+  expect(
+    await screen.findByRole('button', { name: 'Retry Library' }),
+  ).toBeVisible();
   expect(screen.queryByText('Continue Watching')).toBeNull();
 
   cleanup();
 });
 
-test('library landing exposes empty real-data state', async () => {
+test('library landing renders no rows for empty video home', async () => {
   mockShellCommands();
   rstest.spyOn(commands, 'libraryVideoHome').mockResolvedValue({
     status: 'ok',
@@ -1170,7 +1172,9 @@ test('library landing exposes empty real-data state', async () => {
   });
   const cleanup = renderShell();
 
-  await screen.findByText('Video Home has no video rows yet');
+  expect(
+    await screen.findByRole('button', { name: 'Retry Library' }),
+  ).toBeVisible();
   expect(screen.queryByText('No artwork')).toBeNull();
 
   cleanup();

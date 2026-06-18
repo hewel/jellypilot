@@ -2,6 +2,7 @@ import { createListCollection } from '@ark-ui/solid/collection';
 import { Select } from '@ark-ui/solid/select';
 import { ChevronDown } from 'lucide-solid';
 import { createMemo, For } from 'solid-js';
+import { Portal } from 'solid-js/web';
 
 export type JmsrSelectItem<Value extends string = string> = {
   value: Value;
@@ -64,22 +65,24 @@ export default function JmsrSelect<Value extends string>(
           </Select.Indicator>
         </Select.Trigger>
       </Select.Control>
-      <Select.Positioner>
-        <Select.Content class="z-50 mt-2 max-h-60 overflow-y-auto rounded-2xl border border-outline-variant bg-surface-container-lowest p-2 shadow-2xl backdrop-blur-md">
-          <For each={collection().items}>
-            {(item) => (
-              <Select.Item
-                item={item}
-                class="flex cursor-pointer items-center justify-between rounded-xl px-3.5 py-2.5 text-body-medium text-on-surface-variant transition-colors hover:bg-surface-container-high hover:text-on-surface data-[disabled]:cursor-not-allowed data-[disabled]:opacity-50"
-              >
-                <Select.ItemText class="font-medium">
-                  {item.label}
-                </Select.ItemText>
-              </Select.Item>
-            )}
-          </For>
-        </Select.Content>
-      </Select.Positioner>
+      <Portal>
+        <Select.Positioner class="z-100">
+          <Select.Content class="mt-2 max-h-60 overflow-y-auto rounded-2xl border border-outline-variant bg-surface-container-lowest p-2 shadow-2xl backdrop-blur-md">
+            <For each={collection().items}>
+              {(item) => (
+                <Select.Item
+                  item={item}
+                  class="flex cursor-pointer items-center justify-between rounded-xl px-3.5 py-2.5 text-body-medium text-on-surface-variant transition-colors hover:bg-surface-container-high hover:text-on-surface data-disabled:cursor-not-allowed data-disabled:opacity-50"
+                >
+                  <Select.ItemText class="font-medium">
+                    {item.label}
+                  </Select.ItemText>
+                </Select.Item>
+              )}
+            </For>
+          </Select.Content>
+        </Select.Positioner>
+      </Portal>
       <Select.HiddenSelect />
     </Select.Root>
   );
