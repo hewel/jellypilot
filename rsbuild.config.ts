@@ -3,6 +3,7 @@ import { pluginBabel } from '@rsbuild/plugin-babel';
 import { pluginSolid } from '@rsbuild/plugin-solid';
 import { pluginTailwindcss } from '@rsbuild/plugin-tailwindcss';
 import { tanstackRouter } from '@tanstack/router-plugin/rspack';
+import { VanillaExtractPlugin } from '@vanilla-extract/webpack-plugin';
 
 // Docs: https://rsbuild.rs/config/
 export default defineConfig({
@@ -25,6 +26,7 @@ export default defineConfig({
           target: 'solid',
           autoCodeSplitting: false,
         }),
+        new VanillaExtractPlugin(),
       ],
     },
   },

@@ -94,6 +94,48 @@ Use the shared text helpers: `text-display-*`, `text-headline-*`, `text-title-*`
 - `card-outlined`: panel requiring extra separation.
 - Hero surfaces may use selective gradient/glass. Diagnostics and dense text must remain solid.
 
+### Concentric Border Radius
+
+When rounded elements are nested, the inner and outer curves must stay concentric so the spacing around the corner remains visually uniform.
+
+Use this rule:
+
+```text
+inner radius = parent radius - padding
+```
+
+Examples:
+
+| Scenario | Parent Radius | Padding / Gap | Inner Radius |
+|---|---:|---:|---:|
+| Outer card corner | `16px` | `4px` | `12px` |
+| Tab transition | `12px` | `6px` | `6px` |
+| Nested button | `16px` | `8px` | `8px` |
+
+If padding is greater than or equal to the parent radius, use `0` for the inner radius. Do not use negative radius values.
+
+### Text-Icon Badge Alignment
+
+For compact badges, pills, and buttons that nest text with a trailing icon, derive horizontal padding and icon compensation from one vertical padding value. This keeps the control optically balanced across font-size and line-height changes.
+
+Define only the vertical padding:
+
+- `--py = 0.875em`
+
+Derive horizontal padding from the text line box and cap height:
+
+- `--px = --py + (1lh - 1cap) / 2`
+- `padding-block = --py`
+- `padding-inline = --px`
+
+Size the icon to the line box and compensate the trailing edge:
+
+- `icon width = 1lh`
+- `icon height = 1lh`
+- `icon trailing margin = --py - --px`
+
+Use this pattern when the component needs text and icon edges to feel equally inset. Do not hardcode separate horizontal values unless the component has a deliberate asymmetric layout.
+
 ### Status Tiles
 
 Each tile has icon, label, value, and supporting text. Status tiles are read-only unless explicitly styled as actions.
