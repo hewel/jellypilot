@@ -14,50 +14,50 @@ Do not manually rebuild controls from raw utility piles when a component class e
 
 ## Color System
 
-All components use semantic tokens. `#A501DB` is the JMSR brand seed and primary filled-action background; it is not used as small text on near-black surfaces because contrast is insufficient.
+All components use semantic tokens. `#4f46e5` is the JMSR brand seed and primary filled-action background; it is not used as small text on near-black surfaces because contrast is insufficient.
 
 | Token | Tailwind Class | Hex | Usage |
 |---|---|---:|---|
-| Primary | `text-primary`, `bg-primary` | `#A501DB` | Primary filled actions, JMSR identity |
+| Primary | `text-primary`, `bg-primary` | `#4f46e5` | Primary filled actions, JMSR identity |
 | On Primary | `text-on-primary` | `#ffffff` | Text/icons on primary surfaces |
-| Primary Container | `bg-primary-container` | `#2A0B38` | Purple tonal surfaces |
-| On Primary Container | `text-on-primary-container` | `#F4D7FF` | Text on purple tonal surfaces |
-| Secondary | `text-secondary`, `bg-secondary` | `#818CF8` | Jellyfin/server/session accent |
-| On Secondary | `text-on-secondary` | `#0B0A24` | Text on indigo surfaces |
-| Secondary Container | `bg-secondary-container` | `#1F2152` | Indigo tonal surfaces |
-| On Secondary Container | `text-on-secondary-container` | `#E0E2FF` | Text on indigo tonal surfaces |
-| Tertiary | `text-tertiary`, `bg-tertiary` | `#4FE3B1` | Healthy/ready/success state |
-| On Tertiary | `text-on-tertiary` | `#001F16` | Text on healthy surfaces |
-| Tertiary Container | `bg-tertiary-container` | `#06382A` | Healthy tonal surfaces |
-| On Tertiary Container | `text-on-tertiary-container` | `#BFFFE8` | Text on healthy tonal surfaces |
-| Warning | `text-warning`, `bg-warning` | `#F6C768` | Degraded/retryable warning state |
-| On Warning | `text-on-warning` | `#2A1A00` | Text on warning surfaces |
-| Warning Container | `bg-warning-container` | `#3F2E08` | Warning tonal surfaces |
-| On Warning Container | `text-on-warning-container` | `#FFE7A8` | Text on warning tonal surfaces |
-| Error | `text-error`, `bg-error` | `#FF6B7A` | Failure/destructive state |
+| Primary Container | `bg-primary-container` | `#1b1c3b` | Indigo tonal surfaces |
+| On Primary Container | `text-on-primary-container` | `#e0e2ff` | Text on indigo tonal surfaces |
+| Secondary | `text-secondary`, `bg-secondary` | `#818cf8` | Jellyfin/server/session accent |
+| On Secondary | `text-on-secondary` | `#0b0a24` | Text on indigo surfaces |
+| Secondary Container | `bg-secondary-container` | `#1f2152` | Indigo tonal surfaces |
+| On Secondary Container | `text-on-secondary-container` | `#e0e2ff` | Text on indigo tonal surfaces |
+| Tertiary | `text-tertiary`, `bg-tertiary` | `#4fe3b1` | Healthy/ready/success state |
+| On Tertiary | `text-on-tertiary` | `#001f16` | Text on healthy surfaces |
+| Tertiary Container | `bg-tertiary-container` | `#06382a` | Healthy tonal surfaces |
+| On Tertiary Container | `text-on-tertiary-container` | `#bfffe8` | Text on healthy tonal surfaces |
+| Warning | `text-warning`, `bg-warning` | `#f6c768` | Degraded/retryable warning state |
+| On Warning | `text-on-warning` | `#2a1a00` | Text on warning surfaces |
+| Warning Container | `bg-warning-container` | `#3f2e08` | Warning tonal surfaces |
+| On Warning Container | `text-on-warning-container` | `#ffe7a8` | Text on warning tonal surfaces |
+| Error | `text-error`, `bg-error` | `#ff6b7a` | Failure/destructive state |
 | On Error | `text-on-error` | `#330006` | Text on error surfaces |
-| Error Container | `bg-error-container` | `#4B1119` | Error tonal surfaces |
-| On Error Container | `text-on-error-container` | `#FFD9DE` | Text on error tonal surfaces |
-| Background | `bg-background` | `#07080D` | App shell background |
-| Surface | `bg-surface` | `#0B0D14` | Base surface |
-| Surface Low | `bg-surface-container-low` | `#11131C` | Low-depth cards |
-| Surface | `bg-surface-container` | `#151823` | Default cards |
-| Surface High | `bg-surface-container-high` | `#1C2030` | Inputs, inset controls |
-| Surface Highest | `bg-surface-container-highest` | `#242938` | Overlays and emphasized panels |
-| On Surface | `text-on-surface` | `#F3F6FF` | Primary text |
-| On Surface Variant | `text-on-surface-variant` | `#AEB8CC` | Secondary text, labels |
-| Outline | `border-outline` | `#738099` | Strong borders/focus support |
-| Outline Variant | `border-outline-variant` | `#30384C` | Subtle dividers |
-| Brand Glow | `bg-brand-glow` | `#A501DB` | Ambient purple glow only |
-| Console Grid | `bg-console-grid` | `#1A2240` | Subtle shell/grid accents |
+| Error Container | `bg-error-container` | `#4b1119` | Error tonal surfaces |
+| On Error Container | `text-on-error-container` | `#ffd9de` | Text on error tonal surfaces |
+| Background | `bg-background` | `#05060a` | App shell background |
+| Surface | `bg-surface` | `#0b0d14` | Base surface |
+| Surface Low | `bg-surface-container-low` | `#0a0c12` | Low-depth cards |
+| Surface | `bg-surface-container` | `#111420` | Default cards |
+| Surface High | `bg-surface-container-high` | `#161b2a` | Inputs, inset controls |
+| Surface Highest | `bg-surface-container-highest` | `#22293e` | Overlays and emphasized panels |
+| On Surface | `text-on-surface` | `#f3f6ff` | Primary text |
+| On Surface Variant | `text-on-surface-variant` | `#aeb8cc` | Secondary text, labels |
+| Outline | `border-outline` | `#5c6c8c` | Strong borders/focus support |
+| Outline Variant | `border-outline-variant` | `#262e42` | Subtle dividers |
+| Brand Glow | `bg-brand-glow` | `#4f46e5` | Ambient indigo glow only |
+| Console Grid | `bg-console-grid` | `#1a2240` | Subtle shell/grid accents |
 
 ## Color Semantics
 
-- Purple/Indigo means JMSR identity, primary app action, local control, and Jellyfin server/session/connection.
+- Indigo means JMSR identity, primary app action, local control, and Jellyfin server/session/connection.
 - Teal/green means generic healthy or ready.
 - Amber means degraded, waiting for recovery, or retryable warning.
 - Red means failure or destructive action.
-- Quick Connect waiting is a normal state and should use purple/indigo, not amber.
+- Quick Connect waiting is a normal state and should use indigo, not amber.
 
 ## Typography
 
