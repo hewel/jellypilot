@@ -223,7 +223,7 @@ export default function AuthenticatedShell() {
 
   return (
     <div class="console-shell">
-      <div class="mx-auto flex w-full max-w-7xl flex-col gap-5">
+      <div class="mx-auto flex w-full flex-col gap-5">
         <ShellHeader connection={connection()} />
         <div class="flex min-w-0 flex-col gap-6">
           <Show when={showCompactNowPlaying()}>

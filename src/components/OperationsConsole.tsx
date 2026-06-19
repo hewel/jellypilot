@@ -416,55 +416,53 @@ export default function OperationsConsole(props: OperationsConsoleProps) {
 
   return (
     <Provider>
-      <div class="console-shell">
-        <div class="console-container">
-          <div class="console-grid">
-            <div class="space-y-6">
-              <ConnectionCard
-                state={state()}
-                canReconnect={Boolean(loadSavedSession())}
-                onDisconnect={handleDisconnect}
-                onReconnect={handleReconnect}
-                onRefresh={handleRefresh}
+      <div class="console-container">
+        <div class="console-grid">
+          <div class="space-y-6">
+            <ConnectionCard
+              state={state()}
+              canReconnect={Boolean(loadSavedSession())}
+              onDisconnect={handleDisconnect}
+              onReconnect={handleReconnect}
+              onRefresh={handleRefresh}
+            />
+
+            <NowPlayingCard
+              jellyfinConnected={state()?.connected ?? false}
+              onPlayerStarted={() => refetchMpv()}
+            />
+            <form class="space-y-6">
+              <PlayerBridgeSettingsCard
+                form={form}
+                subtitleLanguageSelectItems={subtitleLanguageSelectItems}
+                onSaveTextSetting={(field, value) => {
+                  if (field === 'deviceName' || field === 'mpvPath' || field === 'mpvArgs') {
+                    saveTextSetting(field, value);
+                  }
+                }}
+                onDetectMpv={handleDetectMpv}
+                onAddSubtitleLanguageCodes={addPreferredSubtitleLanguageCodes}
+                onAddSubtitleLanguages={addPreferredSubtitleLanguages}
+                onRemoveSubtitleLanguage={removePreferredSubtitleLanguage}
+                onClearSubtitleLanguages={clearPreferredSubtitleLanguages}
+                onMoveSubtitleLanguage={movePreferredSubtitleLanguage}
               />
-
-              <NowPlayingCard
-                jellyfinConnected={state()?.connected ?? false}
-                onPlayerStarted={() => refetchMpv()}
-              />
-              <form class="space-y-6">
-                <PlayerBridgeSettingsCard
-                  form={form}
-                  subtitleLanguageSelectItems={subtitleLanguageSelectItems}
-                  onSaveTextSetting={(field, value) => {
-                    if (field === 'deviceName' || field === 'mpvPath' || field === 'mpvArgs') {
-                      saveTextSetting(field, value);
-                    }
-                  }}
-                  onDetectMpv={handleDetectMpv}
-                  onAddSubtitleLanguageCodes={addPreferredSubtitleLanguageCodes}
-                  onAddSubtitleLanguages={addPreferredSubtitleLanguages}
-                  onRemoveSubtitleLanguage={removePreferredSubtitleLanguage}
-                  onClearSubtitleLanguages={clearPreferredSubtitleLanguages}
-                  onMoveSubtitleLanguage={movePreferredSubtitleLanguage}
-                />
-              </form>
-            </div>
-
-            <aside class="space-y-6">
-              <DiagnosticsCard />
-
-              <IntroSkipCard
-                currentMode={introSkipperMode()}
-                onModeChange={handleIntroSkipperModeChange}
-              />
-              <ShortcutKeysCard form={form} onSaveTextSetting={saveTextSetting} />
-
-              <SessionCard onSignOut={handleSignOut} />
-
-              <PageFooter />
-            </aside>
+            </form>
           </div>
+
+          <aside class="space-y-6">
+            <DiagnosticsCard />
+
+            <IntroSkipCard
+              currentMode={introSkipperMode()}
+              onModeChange={handleIntroSkipperModeChange}
+            />
+            <ShortcutKeysCard form={form} onSaveTextSetting={saveTextSetting} />
+
+            <SessionCard onSignOut={handleSignOut} />
+
+            <PageFooter />
+          </aside>
         </div>
       </div>
     </Provider>

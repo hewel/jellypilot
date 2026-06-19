@@ -66,7 +66,7 @@ export function VideoHomeRow(props: {
         <h2 id={`row-${props.id}`} class="text-title-large">
           {props.title}
         </h2>
-        <div class="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+        <div class="grid gap-3 sm:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-6">
           <For each={props.items}>
             {(item) => (
               <MediaInfoHoverCard id={item.id} itemType={item.itemType}>

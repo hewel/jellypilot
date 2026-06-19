@@ -128,7 +128,7 @@ body {
   }
 
   .console-container {
-    @apply mx-auto w-full max-w-6xl space-y-6;
+    @apply mx-auto w-full space-y-6;
     animation: fadeIn 0.3s cubic-bezier(0.16, 1, 0.3, 1) forwards;
   }
 
