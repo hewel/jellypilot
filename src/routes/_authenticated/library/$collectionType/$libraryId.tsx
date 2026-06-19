@@ -7,6 +7,7 @@ import type {
 import {
   LibraryStatusPanel,
   libraryTitle,
+  MediaInfoHoverCard,
   playedFilterLabel,
   sortItems,
   VideoLibraryCard,
@@ -241,10 +242,12 @@ function LibraryBrowseRoute() {
             <div class="grid gap-3 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 animate-fade-in">
               <For each={readyState()?.items ?? []}>
                 {(item) => (
-                  <VideoLibraryCard
-                    item={item}
-                    collectionType={collectionType}
-                  />
+                  <MediaInfoHoverCard id={item.id} itemType={item.itemType}>
+                    <VideoLibraryCard
+                      item={item}
+                      collectionType={collectionType}
+                    />
+                  </MediaInfoHoverCard>
                 )}
               </For>
             </div>

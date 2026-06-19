@@ -26,8 +26,10 @@ import type {
 import { commandFailureMessage } from '../../effects/commands';
 import type { CommandError } from '../../effects/errors';
 import { Button, type JmsrSelectItem } from '../ui';
+import { MediaInfoHoverCard } from './MediaInfoHoverCard';
 import { VideoHomeCard } from './VideoHomeCard';
 
+export { MediaInfoHoverCard } from './MediaInfoHoverCard';
 export { VideoHomeCard } from './VideoHomeCard';
 
 export function LibraryStatusPanel(props: {
@@ -83,10 +85,12 @@ export function VideoHomeRow(props: {
         <div class="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
           <For each={props.items}>
             {(item) => (
-              <VideoHomeCard
-                item={item}
-                aspectClass={videoHomeAspectClass(props.kind)}
-              />
+              <MediaInfoHoverCard id={item.id} itemType={item.itemType}>
+                <VideoHomeCard
+                  item={item}
+                  aspectClass={videoHomeAspectClass(props.kind)}
+                />
+              </MediaInfoHoverCard>
             )}
           </For>
         </div>
