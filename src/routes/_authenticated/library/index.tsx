@@ -8,26 +8,33 @@ import { Button } from '@components/ui';
 import { createFileRoute } from '@tanstack/solid-router';
 import { Exit } from 'effect';
 import { Library, RefreshCw, Search, X } from 'lucide-solid';
-import { For, Show, createResource, createSignal } from 'solid-js';
+import { For, Show, createSignal, createResource, Suspense } from 'solid-js';
 import { commandFailureMessage } from '~effects/commands';
-import { fetchLibraryHome, fetchVideoSearchPage } from '~effects/library';
+import { defaultTo } from '~effects/helper';
+import { fetchLibraryHome, fetchLibraryShortcuts, fetchVideoSearchPage } from '~effects/library';
 import type { LibraryExit, LibrarySearchState } from '~effects/library';
+
+const homeSkeletonRows = [
+  { id: 'continue-watching-skeleton', aspectClass: 'aspect-video' },
+  { id: 'next-up-skeleton', aspectClass: 'aspect-video' },
+  { id: 'latest-movies-skeleton', aspectClass: 'aspect-[2/3]' },
+  { id: 'latest-episodes-skeleton', aspectClass: 'aspect-video' },
+] as const;
 
 export const Route = createFileRoute('/_authenticated/library/')({
   component: LibraryLanding,
+  loader: async () => {
+    const shortcuts = await fetchLibraryShortcuts().then(defaultTo([]));
+    const home = fetchLibraryHome().then(defaultTo(null));
+
+    return { home, shortcuts };
+  },
 });
 
 function LibraryLanding() {
-  const [home, { refetch }] = createResource(fetchLibraryHome);
-  const loadedHome = () => {
-    const current = home();
-    return current
-      ? Exit.match(current, {
-          onFailure: () => null,
-          onSuccess: (v) => v,
-        })
-      : null;
-  };
+  const loaderData = Route.useLoaderData();
+  const [home] = createResource(() => loaderData().home);
+  const libraryShortcuts = () => loaderData().shortcuts;
 
   // Lifted search state
   const [query, setQuery] = createSignal('');
@@ -88,27 +95,29 @@ function LibraryLanding() {
 
   const isSearchActive = () => state() !== null || loading();
   const renderHomeContent = () => (
-    <div class="space-y-6">
-      <VideoHomeRow
-        id="continue-watching"
-        title="Continue Watching"
-        kind="continueWatching"
-        items={loadedHome()?.continueWatching ?? []}
-      />
-      <VideoHomeRow id="next-up" title="Next Up" kind="nextUp" items={loadedHome()?.nextUp ?? []} />
-      <VideoHomeRow
-        id="latest-movies"
-        title="Latest Movies"
-        kind="latestMovies"
-        items={loadedHome()?.latestMovies ?? []}
-      />
-      <VideoHomeRow
-        id="latest-episodes"
-        title="Latest Episodes"
-        kind="latestEpisodes"
-        items={loadedHome()?.latestEpisodes ?? []}
-      />
-    </div>
+    <Suspense fallback={<VideoHomeSkeleton />}>
+      <div class="space-y-6">
+        <VideoHomeRow
+          id="continue-watching"
+          title="Continue Watching"
+          kind="continueWatching"
+          items={home()?.continueWatching ?? []}
+        />
+        <VideoHomeRow id="next-up" title="Next Up" kind="nextUp" items={home()?.nextUp ?? []} />
+        <VideoHomeRow
+          id="latest-movies"
+          title="Latest Movies"
+          kind="latestMovies"
+          items={home()?.latestMovies ?? []}
+        />
+        <VideoHomeRow
+          id="latest-episodes"
+          title="Latest Episodes"
+          kind="latestEpisodes"
+          items={home()?.latestEpisodes ?? []}
+        />
+      </div>
+    </Suspense>
   );
 
   const renderSearchContent = () => {
@@ -241,28 +250,43 @@ function LibraryLanding() {
               {loading() ? 'Searching' : 'Search'}
             </Button>
           </form>
-
-          <Button
-            type="button"
-            variant="outlined"
-            size="sm"
-            class="h-10 shrink-0 rounded-xl px-4"
-            onClick={() => void refetch()}
-            disabled={home.loading}
-            leadingIcon={<RefreshCw class={`h-4 w-4 ${home.loading ? 'animate-spin' : ''}`} />}
-          >
-            Retry Library
-          </Button>
         </div>
       </header>
 
       <div class="space-y-6">
-        <Show when={!isSearchActive() && !home.loading}>
-          <LibraryShortcutRow shortcuts={loadedHome()?.libraryShortcuts ?? []} layout="grid" />
-        </Show>
+        <LibraryShortcutRow shortcuts={libraryShortcuts()} layout="grid" />
 
         <div class="min-w-0">{isSearchActive() ? renderSearchContent() : renderHomeContent()}</div>
       </div>
+    </div>
+  );
+}
+
+function VideoHomeSkeleton() {
+  return (
+    <div class="space-y-6" aria-hidden="true">
+      <For each={homeSkeletonRows}>
+        {(row) => (
+          <section class="space-y-3">
+            <div class="bg-surface-container-high/70 h-6 w-44 animate-pulse rounded-md" />
+            <div class="grid gap-3 sm:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-6">
+              <For each={[0, 1, 2, 3]}>
+                {() => (
+                  <div class="card-filled overflow-hidden p-0">
+                    <div
+                      class={`${row.aspectClass} border-outline-variant bg-surface-container-lowest/60 animate-pulse border-b`}
+                    />
+                    <div class="space-y-2 px-4 pt-2 pb-3">
+                      <div class="bg-surface-container-high/80 h-4 w-4/5 animate-pulse rounded" />
+                      <div class="bg-surface-container-high/60 h-3 w-3/5 animate-pulse rounded" />
+                    </div>
+                  </div>
+                )}
+              </For>
+            </div>
+          </section>
+        )}
+      </For>
     </div>
   );
 }

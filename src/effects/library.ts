@@ -7,6 +7,7 @@ import type {
   VideoLibraryPage,
   VideoLibraryPlayedFilter,
   VideoLibraryPlayRequest,
+  VideoLibraryShortcut,
   VideoLibrarySort,
   VideoSearchPage,
   VideoSeasonEpisodes,
@@ -24,6 +25,7 @@ import { CommandError } from './errors';
 export type LibraryExit<T> = Exit.Exit<T, CommandError>;
 
 export type LibraryHomeState = VideoHome;
+export type LibraryShortcutsState = VideoLibraryShortcut[];
 
 export interface LibraryBrowseState {
   page: VideoLibraryPage;
@@ -76,6 +78,12 @@ function requiredSearchQuery(query: string): Effect.Effect<string, CommandError>
 
 export function fetchLibraryHome(): Promise<LibraryExit<LibraryHomeState>> {
   return withConnection(runTauriCommand(() => commands.libraryVideoHome())).pipe(
+    Effect.runPromiseExit,
+  );
+}
+
+export function fetchLibraryShortcuts(): Promise<LibraryExit<LibraryShortcutsState>> {
+  return withConnection(runTauriCommand(() => commands.libraryVideoShortcuts())).pipe(
     Effect.runPromiseExit,
   );
 }

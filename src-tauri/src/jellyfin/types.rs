@@ -52,7 +52,6 @@ pub struct VideoHome {
   pub next_up: Vec<VideoHomeItem>,
   pub latest_movies: Vec<VideoHomeItem>,
   pub latest_episodes: Vec<VideoHomeItem>,
-  pub library_shortcuts: Vec<VideoLibraryShortcut>,
 }
 
 /// Video item summary for Video Home rows.

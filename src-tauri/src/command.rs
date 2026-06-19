@@ -11,9 +11,9 @@ use crate::config::AppConfig;
 use crate::jellyfin::{
   ConnectionState, Credentials, JellyfinClient, JellyfinError, QuickConnectRequest,
   QuickConnectStatus, SavedSession, SessionManager, VideoHome, VideoItemDetail, VideoLibraryPage,
-  VideoLibraryPageRequest, VideoLibraryPlayRequest, VideoSearchPage, VideoSearchRequest,
-  VideoSeasonEpisodes, VideoSeasonEpisodesRequest, VideoShowDetail, VideoUserDataUpdate,
-  VideoUserDataUpdateRequest,
+  VideoLibraryPageRequest, VideoLibraryPlayRequest, VideoLibraryShortcut, VideoSearchPage,
+  VideoSearchRequest, VideoSeasonEpisodes, VideoSeasonEpisodesRequest, VideoShowDetail,
+  VideoUserDataUpdate, VideoUserDataUpdateRequest,
 };
 use crate::mpv::{write_input_conf, MpvClient, PropertyValue};
 use crate::playback_control;
@@ -617,6 +617,20 @@ pub async fn library_video_home(
     .map_err(jellyfin_err)
 }
 
+/// Load Movies and Shows library shortcuts for Library Browser navigation.
+#[tauri::command]
+#[specta]
+pub async fn library_video_shortcuts(
+  state: State<'_, JellyfinState>,
+) -> Result<Vec<VideoLibraryShortcut>, CommandError> {
+  state
+    .client
+    .library()
+    .library_shortcuts()
+    .await
+    .map_err(jellyfin_err)
+}
+
 /// Load one server-paged Movies or Shows library result page.
 #[tauri::command]
 #[specta]
@@ -970,6 +984,7 @@ pub fn specta_builder() -> Builder<tauri::Wry> {
       mpv_is_connected,
       now_playing_get_state,
       library_video_home,
+      library_video_shortcuts,
       library_browse_video,
       library_search_video,
       library_item_detail,

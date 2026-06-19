@@ -33,6 +33,8 @@ export const commands = {
 	nowPlayingGetState: () => typedError<NowPlayingState, CommandError>(__TAURI_INVOKE("now_playing_get_state")),
 	/**  Load the Library Browser Video Home dashboard data. */
 	libraryVideoHome: () => typedError<VideoHome, CommandError>(__TAURI_INVOKE("library_video_home")),
+	/**  Load Movies and Shows library shortcuts for Library Browser navigation. */
+	libraryVideoShortcuts: () => typedError<VideoLibraryShortcut[], CommandError>(__TAURI_INVOKE("library_video_shortcuts")),
 	/**  Load one server-paged Movies or Shows library result page. */
 	libraryBrowseVideo: (request: VideoLibraryPageRequest) => typedError<VideoLibraryPage, CommandError>(__TAURI_INVOKE("library_browse_video", { request })),
 	/**  Search Movies, Shows, and Episodes with server paging. */
@@ -244,7 +246,6 @@ export type VideoHome = {
 	nextUp: VideoHomeItem[],
 	latestMovies: VideoHomeItem[],
 	latestEpisodes: VideoHomeItem[],
-	libraryShortcuts: VideoLibraryShortcut[],
 };
 
 /**  Video item summary for Video Home rows. */

@@ -10,6 +10,7 @@ import type {
   VideoHome,
   VideoItemDetail,
   VideoLibraryPage,
+  VideoLibraryShortcut,
   VideoSearchPage,
   VideoSeasonEpisodes,
   VideoShowDetail,
@@ -155,22 +156,6 @@ const videoHome: VideoHome = {
       artworkUrl: null,
     },
   ],
-  libraryShortcuts: [
-    {
-      id: 'movies',
-      name: 'Movies',
-      collectionType: 'movies',
-      itemCount: 8,
-      artworkUrl: null,
-    },
-    {
-      id: 'shows',
-      name: 'Shows',
-      collectionType: 'tvshows',
-      itemCount: 5,
-      artworkUrl: null,
-    },
-  ],
   nextUp: [
     {
       id: 'episode-1',
@@ -190,6 +175,23 @@ const videoHome: VideoHome = {
     },
   ],
 };
+
+const videoLibraryShortcuts: VideoLibraryShortcut[] = [
+  {
+    id: 'movies',
+    name: 'Movies',
+    collectionType: 'movies',
+    itemCount: 8,
+    artworkUrl: null,
+  },
+  {
+    id: 'shows',
+    name: 'Shows',
+    collectionType: 'tvshows',
+    itemCount: 5,
+    artworkUrl: null,
+  },
+];
 
 const movieDetail: VideoItemDetail = {
   artworkUrl: 'https://jellyfin.example.com/Items/detail-movie/Images/Primary',
@@ -456,6 +458,10 @@ function mockShellCommands(state = connectedState) {
   rstest.spyOn(commands, 'configGet').mockResolvedValue(config);
   rstest.spyOn(commands, 'libraryVideoHome').mockResolvedValue({
     data: videoHome,
+    status: 'ok',
+  });
+  rstest.spyOn(commands, 'libraryVideoShortcuts').mockResolvedValue({
+    data: videoLibraryShortcuts,
     status: 'ok',
   });
   rstest.spyOn(commands, 'libraryBrowseVideo').mockImplementation((request) =>
@@ -1118,6 +1124,10 @@ test('library landing renders no fake content on command error', async () => {
     error: { code: 'network', message: 'Jellyfin unavailable' },
     status: 'error',
   });
+  rstest.spyOn(commands, 'libraryVideoShortcuts').mockResolvedValue({
+    data: [],
+    status: 'ok',
+  });
   rstest.spyOn(commands, 'nowPlayingGetState').mockResolvedValue({
     data: nowPlaying,
     status: 'ok',
@@ -1138,7 +1148,6 @@ test('library landing renders no rows for empty video home', async () => {
       continueWatching: [],
       latestEpisodes: [],
       latestMovies: [],
-      libraryShortcuts: [],
       nextUp: [],
     },
     status: 'ok',
