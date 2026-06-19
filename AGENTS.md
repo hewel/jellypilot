@@ -97,6 +97,8 @@ Single-context repo using root `CONTEXT.md` and root `docs/adr/`. See `docs/agen
 - Test setup extends expect with jest-dom matchers (rstest.setup.ts)
 - See `docs/todos.md` for current tasks and priorities
 - When major changes are completed, use @oracle to review changes. Small changes are not necessary.
-- Use @task to git commit the changes
+- Use @quick_task to git commit the changes
 - Use @explore to search and explore the code
+- Use @designer to style the client
+- Use @oracle to code rust
 - Design system at `docs/design-system.md` with predefined CSS classes based on Tailwind + JMSR Control Room
