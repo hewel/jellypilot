@@ -105,21 +105,25 @@ function LibraryLanding() {
         <VideoHomeRow
           id="continue-watching"
           title="Continue Watching"
+          kind="continueWatching"
           items={loadedHome()?.continueWatching ?? []}
         />
         <VideoHomeRow
           id="next-up"
           title="Next Up"
+          kind="nextUp"
           items={loadedHome()?.nextUp ?? []}
         />
         <VideoHomeRow
           id="latest-movies"
           title="Latest Movies"
+          kind="latestMovies"
           items={loadedHome()?.latestMovies ?? []}
         />
         <VideoHomeRow
           id="latest-episodes"
           title="Latest Episodes"
+          kind="latestEpisodes"
           items={loadedHome()?.latestEpisodes ?? []}
         />
       </div>

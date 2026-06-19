@@ -607,10 +607,17 @@ test('library landing renders command-backed rows and compact now playing link',
     'href',
     '/library/tvshows/shows',
   );
-  expect(screen.getByAltText('Resume Movie artwork')).toHaveAttribute(
+  const resumeArtwork = screen.getByAltText('Resume Movie artwork');
+  expect(resumeArtwork).toHaveAttribute(
     'src',
     videoHome.continueWatching[0]?.artworkUrl ?? '',
   );
+  expect(resumeArtwork.parentElement).toHaveClass('aspect-video');
+  fireEvent.load(resumeArtwork);
+  expect(resumeArtwork.parentElement).toHaveClass('aspect-video');
+  expect(
+    screen.getByRole('link', { name: /Latest Movie/ }).firstElementChild,
+  ).toHaveClass('aspect-[2/3]');
   expect(screen.getAllByText('No artwork')).toHaveLength(3);
   expect(await screen.findByText('The Pilot')).toBeVisible();
   expect(

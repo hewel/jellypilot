@@ -258,16 +258,12 @@ body {
   }
 
   .card-filled {
-    @apply rounded-2xl border border-outline-variant/80 bg-surface/50 p-6 shadow-xl backdrop-blur-md transition-all duration-300;
+    @apply rounded-2xl border border-outline-variant/80 bg-surface/50 p-4 shadow-xl backdrop-blur-md transition-all duration-300;
     background-image: linear-gradient(
       135deg,
       rgba(21, 24, 35, 0.5) 0%,
       rgba(11, 13, 20, 0.7) 100%
     );
-  }
-
-  .card-filled:hover {
-    @apply border-outline-variant bg-surface/65 shadow-2xl shadow-black/30;
   }
 
   .card-outlined {

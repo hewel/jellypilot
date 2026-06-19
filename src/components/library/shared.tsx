@@ -26,6 +26,9 @@ import type {
 import { commandFailureMessage } from '../../effects/commands';
 import type { CommandError } from '../../effects/errors';
 import { Button, type JmsrSelectItem } from '../ui';
+import { VideoHomeCard } from './VideoHomeCard';
+
+export { VideoHomeCard } from './VideoHomeCard';
 
 export function LibraryStatusPanel(props: {
   title: string;
@@ -54,9 +57,21 @@ export function LibraryStatusPanel(props: {
   );
 }
 
+type VideoHomeRowKind =
+  | 'continueWatching'
+  | 'nextUp'
+  | 'latestMovies'
+  | 'latestEpisodes';
+
+type VideoHomeAspectClass = 'aspect-[2/3]' | 'aspect-video';
+
+const videoHomeAspectClass = (kind: VideoHomeRowKind): VideoHomeAspectClass =>
+  kind === 'latestMovies' ? 'aspect-[2/3]' : 'aspect-video';
+
 export function VideoHomeRow(props: {
   id: string;
   title: string;
+  kind: VideoHomeRowKind;
   items: VideoHomeItem[];
 }) {
   return (
@@ -67,75 +82,16 @@ export function VideoHomeRow(props: {
         </h2>
         <div class="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
           <For each={props.items}>
-            {(item) => <VideoHomeCard item={item} />}
+            {(item) => (
+              <VideoHomeCard
+                item={item}
+                aspectClass={videoHomeAspectClass(props.kind)}
+              />
+            )}
           </For>
         </div>
       </section>
     </Show>
-  );
-}
-
-export function VideoHomeCard(props: { item: VideoHomeItem }) {
-  const episodeLabel = () => {
-    if (!props.item.seriesName) return props.item.itemType;
-    const number =
-      props.item.seasonNumber && props.item.episodeNumber
-        ? `S${props.item.seasonNumber.toString().padStart(2, '0')}E${props.item.episodeNumber.toString().padStart(2, '0')}`
-        : props.item.itemType;
-    return `${props.item.seriesName} · ${number}`;
-  };
-
-  // Default ratio before the image loads (and for the no-artwork fallback);
-  // once the image loads we adopt its real aspect ratio.
-  const defaultAspect = () =>
-    props.item.itemType === 'Movie' || props.item.itemType === 'Series'
-      ? '2 / 3'
-      : '16 / 9';
-  const [aspect, setAspect] = createSignal<string | null>(null);
-
-  return (
-    <a
-      href={`/library/items/${props.item.id}`}
-      class="card-filled group block overflow-hidden p-0 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-secondary/70 transition-all duration-300 hover:border-primary/50 hover:shadow-brand-glow-sm"
-    >
-      <div
-        class="border-b border-outline-variant bg-surface-container-lowest/60 overflow-hidden"
-        style={{ 'aspect-ratio': aspect() ?? defaultAspect() }}
-      >
-        <Show
-          when={props.item.artworkUrl}
-          fallback={
-            <div class="flex h-full items-center justify-center px-4 text-center text-label-small text-on-surface-variant">
-              No artwork
-            </div>
-          }
-        >
-          {(artworkUrl) => (
-            <img
-              src={artworkUrl()}
-              alt={`${props.item.name} artwork`}
-              class="h-full w-full object-cover transition-transform duration-300"
-              loading="lazy"
-              onLoad={(e) => {
-                const img = e.currentTarget;
-                if (img.naturalWidth && img.naturalHeight) {
-                  setAspect(`${img.naturalWidth} / ${img.naturalHeight}`);
-                }
-              }}
-            />
-          )}
-        </Show>
-      </div>
-      <div class="space-y-2 p-4">
-        <p class="line-clamp-2 text-title-medium">{props.item.name}</p>
-        <p class="text-body-small">{episodeLabel()}</p>
-        <Show when={props.item.resumePositionSeconds !== null}>
-          <p class="text-label-small text-secondary">
-            Resume at {Math.floor(props.item.resumePositionSeconds ?? 0)}s
-          </p>
-        </Show>
-      </div>
-    </a>
   );
 }
 
