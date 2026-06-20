@@ -7,6 +7,12 @@
       "skillPath": "effect-best-practices/SKILL.md",
       "computedHash": "241513d240f805e1651f86311089b521592cdf298eafaa3ba5ccc089ea0c97c6"
     },
+    "effect-ts-extensions": {
+      "source": "hewel/skills",
+      "sourceType": "github",
+      "skillPath": "effect-ts-extensions/SKILL.md",
+      "computedHash": "733a970935704e7df1818438a7476eb89709866269eba1eb0136a776c8f5f296"
+    },
     "rust-best-practices": {
       "source": "apollographql/skills",
       "sourceType": "github",
