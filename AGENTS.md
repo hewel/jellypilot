@@ -77,6 +77,7 @@ bun tauri build     # Production desktop build
 - **Thrown TypeScript errors**: Do not add `throw new Error(...)` or catch-and-rethrow paths for recoverable TypeScript failures. Model recoverable failures with Effect errors, model optional values with `Option`, and reserve thrown values only for framework-required control flow such as TanStack Router redirects or test assertion helpers.
 - **Fallback data workflows**: No raw `try/catch` in TypeScript business/data workflows, and no nullish `if` checks in `src/effects/**`; model those paths with Effect and Option.
 - **Cross-component `.css.ts` imports**: Do not import another component's `.css.ts` style exports directly; consume the component API or move the needed behavior into a shared component.
+- **Ark UI Element IDs**: Do not pass custom `id` attributes to Ark UI components or their child triggers/content wrappers. Let Ark UI manage dynamic IDs automatically via context to avoid context collisions and ensure correct accessibility links.
 
 ## Agent skills
 

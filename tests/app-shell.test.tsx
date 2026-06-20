@@ -605,7 +605,7 @@ test('library browse controls reload paged results from the first page', async (
   const cleanup = renderShell('/library/movies/movies');
 
   await screen.findByRole('link', { name: /Paged Movie/ });
-  fireEvent.click(screen.getByRole('combobox', { name: 'Sort By' }));
+  fireEvent.click(screen.getByRole('button', { name: 'Sort By' }));
   fireEvent.click(screen.getByText('Recently added', { selector: 'span' }));
 
   await waitFor(() =>
@@ -620,7 +620,8 @@ test('library browse controls reload paged results from the first page', async (
     }),
   );
 
-  fireEvent.click(screen.getByRole('button', { name: 'Unplayed' }));
+  fireEvent.click(screen.getByRole('button', { name: 'Status' }));
+  fireEvent.click(screen.getByText('Unplayed', { selector: 'span' }));
   await waitFor(() =>
     expect(browseCommand).toHaveBeenLastCalledWith({
       collectionType: 'movies',
@@ -633,7 +634,20 @@ test('library browse controls reload paged results from the first page', async (
     }),
   );
 
-  fireEvent.click(screen.getByRole('checkbox', { name: 'Favorites Only' }));
+  fireEvent.click(screen.getByRole('button', { name: 'Status' }));
+  fireEvent.click(screen.getByText('Favorites Only', { selector: 'span' }));
+  await waitFor(() =>
+    expect(browseCommand).toHaveBeenLastCalledWith({
+      collectionType: 'movies',
+      favoritesOnly: true,
+      libraryId: 'movies',
+      limit: 24,
+      playedFilter: 'unplayed',
+      sort: 'recentlyAdded',
+      startIndex: 0,
+    }),
+  );
+  fireEvent.click(screen.getByRole('button', { name: 'Sort ascending' }));
   await waitFor(() =>
     expect(browseCommand).toHaveBeenLastCalledWith({
       collectionType: 'movies',

@@ -1,4 +1,5 @@
-import { Checkbox } from '@ark-ui/solid/checkbox';
+import { Menu } from '@ark-ui/solid/menu';
+import { Toggle } from '@ark-ui/solid/toggle';
 import type { VideoLibraryKind, VideoLibraryPlayedFilter, VideoLibrarySort } from '@bindings';
 import { useLibraryNavbarControls } from '@components/library/LibraryNavbarContext';
 import {
@@ -9,10 +10,17 @@ import {
   playedFilterLabel,
   sortItems,
 } from '@components/library/shared';
-import { Button, Card, JmsrSelect } from '@components/ui';
+import { Button, Card } from '@components/ui';
 import { createFileRoute } from '@tanstack/solid-router';
 import { Exit } from 'effect';
-import { Check, RefreshCw } from 'lucide-solid';
+import {
+  Check,
+  RefreshCw,
+  ListSortAscending,
+  Funnel,
+  ArrowDownWideNarrowIcon,
+  ArrowUpWideNarrowIcon,
+} from 'lucide-solid';
 import { For, Show, Suspense, createResource, createSignal } from 'solid-js';
 import { Portal } from 'solid-js/web';
 import { commandFailureMessage } from '~effects/commands';
@@ -52,6 +60,7 @@ function LibraryBrowseRoute() {
   const [playedFilter, setPlayedFilter] =
     createSignal<VideoLibraryPlayedFilter>(INITIAL_PLAYED_FILTER);
   const [favoritesOnly, setFavoritesOnly] = createSignal(INITIAL_FAVORITES_ONLY);
+  const [sortDirection, setSortDirection] = createSignal<'asc' | 'desc'>('asc');
 
   const collectionType = () => collectionTypeFromParam(params().collectionType);
   const currentState = () => (usingLoaderPage() ? (initialPage() ?? null) : state());
@@ -91,7 +100,23 @@ function LibraryBrowseRoute() {
 
   const readyState = () => {
     const current = currentState();
-    return current && Exit.isSuccess(current) ? current.value : null;
+    if (!current || !Exit.isSuccess(current)) {
+      return null;
+    }
+    const val = current.value;
+    const isDefaultAsc = sort() === 'title';
+    const needsReverse = isDefaultAsc ? sortDirection() === 'desc' : sortDirection() === 'asc';
+
+    if (needsReverse) {
+      // Ponytail: backend lacks direction param, reverse current items array for opposite order
+      // eslint-disable-next-line unicorn/no-array-reverse
+      const reversed = [...val.items].reverse();
+      return {
+        ...val,
+        items: reversed,
+      };
+    }
+    return val;
   };
   const statusTitle = () => {
     const current = currentState();
@@ -121,84 +146,31 @@ function LibraryBrowseRoute() {
     return current ? current.page.startIndex + current.page.limit : 0;
   };
 
-  const navbarControls = useLibraryNavbarControls();
-
   return (
     <div class="min-w-0">
-      <Show when={navbarControls.portalTarget()}>
-        {(target) => (
-          <Portal mount={target()}>
-            <nav
-              class="flex flex-col gap-3 xl:flex-row xl:items-end xl:justify-between"
-              aria-label="Library browse controls"
-            >
-              <div class="flex min-w-0 flex-col gap-3 sm:flex-row sm:items-end">
-                <JmsrSelect
-                  label="Sort By"
-                  items={sortItems}
-                  disabled={loading()}
-                  value={sort()}
-                  placeholder="Select sort..."
-                  size="compact"
-                  onValueChange={(value) => {
-                    setSort(value);
-                    reloadFromFirstPage();
-                  }}
-                  class="min-w-[12rem] flex-1 sm:max-w-[13rem]"
-                />
-
-                <fieldset class="min-w-0 space-y-2" aria-label="Played filter">
-                  <legend class="text-on-surface-variant text-[12px] leading-[16px] font-bold tracking-[0.05em] uppercase">
-                    Status
-                  </legend>
-                  <div class="flex flex-wrap gap-2">
-                    <For each={['all', 'played', 'unplayed'] as VideoLibraryPlayedFilter[]}>
-                      {(filter) => (
-                        <Button
-                          type="button"
-                          variant="outlined"
-                          size="sm"
-                          class="h-10 rounded-xl px-4"
-                          classList={{
-                            'border-secondary bg-secondary-container/45 text-on-secondary-container':
-                              playedFilter() === filter,
-                          }}
-                          aria-pressed={playedFilter() === filter}
-                          disabled={loading()}
-                          onClick={() => {
-                            setPlayedFilter(filter);
-                            reloadFromFirstPage();
-                          }}
-                        >
-                          {playedFilterLabel(filter)}
-                        </Button>
-                      )}
-                    </For>
-                  </div>
-                </fieldset>
-              </div>
-
-              <Checkbox.Root
-                checked={favoritesOnly()}
-                disabled={loading()}
-                onCheckedChange={(details) => {
-                  setFavoritesOnly(details.checked === true);
-                  reloadFromFirstPage();
-                }}
-                class="border-outline-variant bg-surface-container-high/50 text-on-surface hover:border-secondary/40 inline-flex h-10 cursor-pointer items-center gap-2.5 rounded-xl border px-3 align-top text-[14px] leading-[20px] font-semibold tracking-wide uppercase transition-colors transition-opacity select-none disabled:cursor-not-allowed disabled:opacity-50"
-              >
-                <Checkbox.Control class="border-outline bg-surface-container-high text-on-primary hover:border-primary/60 data-[state=checked]:border-primary data-[state=checked]:from-primary data-[state=checked]:to-primary-gradient-end data-[state=indeterminate]:border-primary data-[state=indeterminate]:from-primary data-[state=indeterminate]:to-primary-gradient-end data-[focus-visible]:ring-primary/50 data-[focus-visible]:ring-offset-background inline-flex h-5.5 w-5.5 shrink-0 items-center justify-center rounded-lg border text-[11px] leading-none transition-all duration-200 data-[focus-visible]:ring-2 data-[focus-visible]:ring-offset-2 data-[focus-visible]:outline-none data-[state=checked]:bg-gradient-to-br data-[state=indeterminate]:bg-gradient-to-br">
-                  <Checkbox.Indicator class="flex items-center justify-center font-black">
-                    <Check class="h-3.5 w-3.5" stroke-width={4} />
-                  </Checkbox.Indicator>
-                </Checkbox.Control>
-                <Checkbox.Label class="cursor-pointer select-none">Favorites Only</Checkbox.Label>
-                <Checkbox.HiddenInput />
-              </Checkbox.Root>
-            </nav>
-          </Portal>
-        )}
-      </Show>
+      <LibraryBrowseNavbarControls
+        loading={loading}
+        sortedValue={sort}
+        sortDirection={sortDirection}
+        playedFilter={playedFilter}
+        favoritesOnly={favoritesOnly}
+        onSortChange={(value) => {
+          setSort(value);
+          reloadFromFirstPage();
+        }}
+        onSortDirectionChange={(direction) => {
+          setSortDirection(direction);
+          reloadFromFirstPage();
+        }}
+        onPlayedFilterChange={(filter) => {
+          setPlayedFilter(filter);
+          reloadFromFirstPage();
+        }}
+        onFavoritesOnlyChange={(value) => {
+          setFavoritesOnly(value);
+          reloadFromFirstPage();
+        }}
+      />
 
       <Suspense fallback={<LibraryBrowseSkeleton />}>
         <Show
@@ -250,6 +222,170 @@ function LibraryBrowseRoute() {
         </Show>
       </Suspense>
     </div>
+  );
+}
+interface LibrarySortMenuProps {
+  value: () => VideoLibrarySort;
+  onChange: (sort: VideoLibrarySort) => void;
+  disabled: () => boolean;
+}
+
+function LibrarySortMenu(props: LibrarySortMenuProps) {
+  return (
+    <Menu.Root>
+      <Menu.Trigger
+        disabled={props.disabled()}
+        aria-label="Sort By"
+        class="border-outline-variant text-on-surface hover:text-secondary flex h-12 w-full flex-1 items-center justify-between border-l px-3 text-left transition-all duration-200 outline-none disabled:cursor-not-allowed disabled:opacity-50"
+      >
+        <ListSortAscending size={14} />
+      </Menu.Trigger>
+      <Menu.Positioner>
+        <Menu.Content class="border-outline-variant bg-surface-container-lowest z-50 max-h-60 min-w-48 overflow-y-auto rounded-lg border p-2 shadow-2xl backdrop-blur-md focus:outline-none">
+          <Menu.RadioItemGroup
+            value={props.value()}
+            onValueChange={(details) => props.onChange(details.value as VideoLibrarySort)}
+          >
+            <Menu.ItemGroupLabel class="px-3.5 py-2 text-xs font-bold">Sort By</Menu.ItemGroupLabel>
+            <For each={sortItems}>
+              {(item) => (
+                <Menu.RadioItem
+                  value={item.value}
+                  class="text-on-surface-variant hover:bg-surface-container-high hover:text-on-surface flex cursor-pointer items-center justify-between rounded-xl px-3.5 py-2.5 text-[14px] leading-5 transition-colors data-disabled:cursor-not-allowed data-disabled:opacity-50"
+                >
+                  <Menu.ItemText class="font-medium">
+                    <span>{item.label}</span>
+                  </Menu.ItemText>
+                  <Menu.ItemIndicator>
+                    <Check class="text-secondary h-4 w-4" />
+                  </Menu.ItemIndicator>
+                </Menu.RadioItem>
+              )}
+            </For>
+          </Menu.RadioItemGroup>
+        </Menu.Content>
+      </Menu.Positioner>
+    </Menu.Root>
+  );
+}
+
+interface LibraryStatusMenuProps {
+  value: () => VideoLibraryPlayedFilter;
+  onChange: (filter: VideoLibraryPlayedFilter) => void;
+  favoritesOnly: () => boolean;
+  onFavoritesOnlyChange: (favoritesOnly: boolean) => void;
+  disabled: () => boolean;
+}
+
+function LibraryStatusMenu(props: LibraryStatusMenuProps) {
+  return (
+    <Menu.Root>
+      <Menu.Trigger
+        disabled={props.disabled()}
+        aria-label="Status"
+        class="border-outline-variant text-on-surface hover:text-secondary flex h-12 w-full flex-1 items-center justify-between border-l px-3 text-left transition-all duration-200 outline-none disabled:cursor-not-allowed disabled:opacity-50"
+      >
+        <Funnel size={14} />
+      </Menu.Trigger>
+      <Menu.Positioner>
+        <Menu.Content class="border-outline-variant bg-surface-container-lowest z-50 max-h-60 min-w-48 overflow-y-auto rounded-lg border p-2 shadow-2xl backdrop-blur-md focus:outline-none">
+          <Menu.RadioItemGroup
+            value={props.value()}
+            onValueChange={(details) => props.onChange(details.value as VideoLibraryPlayedFilter)}
+          >
+            <Menu.ItemGroupLabel class="px-3.5 py-2 text-xs font-bold">Status</Menu.ItemGroupLabel>
+            <For each={['all', 'played', 'unplayed'] as VideoLibraryPlayedFilter[]}>
+              {(filter) => (
+                <Menu.RadioItem
+                  value={filter}
+                  class="text-on-surface-variant hover:bg-surface-container-high hover:text-on-surface flex cursor-pointer items-center justify-between rounded-xl px-3.5 py-2.5 text-[14px] leading-5 transition-colors data-disabled:cursor-not-allowed data-disabled:opacity-50"
+                >
+                  <Menu.ItemText class="font-medium">
+                    <span>{playedFilterLabel(filter)}</span>
+                  </Menu.ItemText>
+                  <Menu.ItemIndicator>
+                    <Check class="text-secondary h-4 w-4" />
+                  </Menu.ItemIndicator>
+                </Menu.RadioItem>
+              )}
+            </For>
+          </Menu.RadioItemGroup>
+
+          <div class="border-outline-variant/60 my-1 border-t" />
+
+          <Menu.CheckboxItem
+            checked={props.favoritesOnly()}
+            onCheckedChange={(checked) => props.onFavoritesOnlyChange(checked)}
+            value="favorites"
+            class="text-on-surface-variant hover:bg-surface-container-high hover:text-on-surface flex cursor-pointer items-center justify-between rounded-xl px-3.5 py-2.5 text-[14px] leading-5 transition-colors data-disabled:cursor-not-allowed data-disabled:opacity-50"
+          >
+            <Menu.ItemText class="font-medium">
+              <span>Favorites Only</span>
+            </Menu.ItemText>
+            <Menu.ItemIndicator>
+              <Check class="text-secondary h-4 w-4" />
+            </Menu.ItemIndicator>
+          </Menu.CheckboxItem>
+        </Menu.Content>
+      </Menu.Positioner>
+    </Menu.Root>
+  );
+}
+
+interface LibraryBrowseNavbarControlsProps {
+  loading: () => boolean;
+  sortedValue: () => VideoLibrarySort;
+  sortDirection: () => 'asc' | 'desc';
+  playedFilter: () => VideoLibraryPlayedFilter;
+  favoritesOnly: () => boolean;
+  onSortChange: (sort: VideoLibrarySort) => void;
+  onSortDirectionChange: (direction: 'asc' | 'desc') => void;
+  onPlayedFilterChange: (filter: VideoLibraryPlayedFilter) => void;
+  onFavoritesOnlyChange: (favoritesOnly: boolean) => void;
+}
+
+function LibraryBrowseNavbarControls(props: LibraryBrowseNavbarControlsProps) {
+  const navbarControls = useLibraryNavbarControls();
+
+  return (
+    <Show when={navbarControls.portalTarget()}>
+      {(target) => (
+        <Portal mount={target()}>
+          <nav class="flex flex-row items-end justify-between" aria-label="Library browse controls">
+            <div class="flex min-w-0">
+              <Toggle.Root
+                pressed={props.sortDirection() === 'desc'}
+                onPressedChange={(pressed) => {
+                  props.onSortDirectionChange(pressed ? 'desc' : 'asc');
+                }}
+                disabled={props.loading()}
+                aria-label={props.sortDirection() === 'desc' ? 'Sort descending' : 'Sort ascending'}
+                class="border-outline-variant text-on-surface hover:text-secondary data-[state=on]:bg-secondary-container/45 data-[state=on]:text-on-secondary-container flex h-12 w-12 items-center justify-center border-l transition-all duration-200 outline-none disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                <Show
+                  when={props.sortDirection() === 'desc'}
+                  fallback={<ArrowUpWideNarrowIcon size={14} />}
+                >
+                  <ArrowDownWideNarrowIcon size={14} />
+                </Show>
+              </Toggle.Root>
+              <LibrarySortMenu
+                value={props.sortedValue}
+                onChange={props.onSortChange}
+                disabled={props.loading}
+              />
+              <LibraryStatusMenu
+                value={props.playedFilter}
+                onChange={props.onPlayedFilterChange}
+                favoritesOnly={props.favoritesOnly}
+                onFavoritesOnlyChange={props.onFavoritesOnlyChange}
+                disabled={props.loading}
+              />
+            </div>
+          </nav>
+        </Portal>
+      )}
+    </Show>
   );
 }
 

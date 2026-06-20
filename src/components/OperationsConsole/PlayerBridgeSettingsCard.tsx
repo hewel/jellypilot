@@ -62,7 +62,6 @@ export default function PlayerBridgeSettingsCard(props: PlayerBridgeSettingsCard
                   <FieldControl
                     {...fieldProps()}
                     variant="filled"
-                    id={field().name}
                     name={field().name}
                     type="text"
                     value={field().state.value}
@@ -100,7 +99,6 @@ export default function PlayerBridgeSettingsCard(props: PlayerBridgeSettingsCard
                     <FieldControl
                       {...fieldProps()}
                       variant="filled"
-                      id={field().name}
                       name={field().name}
                       type="text"
                       value={field().state.value}

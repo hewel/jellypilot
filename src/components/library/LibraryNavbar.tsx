@@ -48,9 +48,9 @@ export default function LibraryNavbar(props: LibraryNavbarProps) {
         <SegmentGroup.Root
           value={props.activeValue}
           onValueChange={(details) => navigateToSegment(details.value)}
-          class="bg-surface-container-high/50 relative flex min-w-0 flex-wrap gap-1 rounded-xl p-1"
+          class="relative flex min-w-0 flex-wrap gap-1 rounded-xl p-1"
         >
-          <SegmentGroup.Indicator class="bg-secondary-container/80 border-secondary/40 rounded-lg border shadow-sm" />
+          <SegmentGroup.Indicator class="bg-secondary-container righ-(--right) absolute top-(--top) bottom-(--bottom) left-(--left) h-(--height) w-(--width) rounded-lg shadow-sm" />
           <For each={items()}>
             {(item) => (
               <SegmentGroup.Item
