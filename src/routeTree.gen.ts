@@ -14,7 +14,6 @@ import { Route as ConsoleRouteImport } from './routes/console'
 import { Route as AuthenticatedRouteImport } from './routes/_authenticated'
 import { Route as IndexRouteImport } from './routes/index'
 import { Route as AuthenticatedSettingsRouteImport } from './routes/_authenticated/settings'
-import { Route as AuthenticatedNowPlayingRouteImport } from './routes/_authenticated/now-playing'
 import { Route as AuthenticatedDiagnosticsRouteImport } from './routes/_authenticated/diagnostics'
 import { Route as AuthenticatedLibraryIndexRouteImport } from './routes/_authenticated/library/index'
 import { Route as AuthenticatedLibraryShowsSeriesIdRouteImport } from './routes/_authenticated/library/shows/$seriesId'
@@ -43,11 +42,6 @@ const IndexRoute = IndexRouteImport.update({
 const AuthenticatedSettingsRoute = AuthenticatedSettingsRouteImport.update({
   id: '/settings',
   path: '/settings',
-  getParentRoute: () => AuthenticatedRoute,
-} as any)
-const AuthenticatedNowPlayingRoute = AuthenticatedNowPlayingRouteImport.update({
-  id: '/now-playing',
-  path: '/now-playing',
   getParentRoute: () => AuthenticatedRoute,
 } as any)
 const AuthenticatedDiagnosticsRoute =
@@ -86,7 +80,6 @@ export interface FileRoutesByFullPath {
   '/console': typeof ConsoleRoute
   '/login': typeof LoginRoute
   '/diagnostics': typeof AuthenticatedDiagnosticsRoute
-  '/now-playing': typeof AuthenticatedNowPlayingRoute
   '/settings': typeof AuthenticatedSettingsRoute
   '/library/': typeof AuthenticatedLibraryIndexRoute
   '/library/$collectionType/$libraryId': typeof AuthenticatedLibraryCollectionTypeLibraryIdRoute
@@ -98,7 +91,6 @@ export interface FileRoutesByTo {
   '/console': typeof ConsoleRoute
   '/login': typeof LoginRoute
   '/diagnostics': typeof AuthenticatedDiagnosticsRoute
-  '/now-playing': typeof AuthenticatedNowPlayingRoute
   '/settings': typeof AuthenticatedSettingsRoute
   '/library': typeof AuthenticatedLibraryIndexRoute
   '/library/$collectionType/$libraryId': typeof AuthenticatedLibraryCollectionTypeLibraryIdRoute
@@ -112,7 +104,6 @@ export interface FileRoutesById {
   '/console': typeof ConsoleRoute
   '/login': typeof LoginRoute
   '/_authenticated/diagnostics': typeof AuthenticatedDiagnosticsRoute
-  '/_authenticated/now-playing': typeof AuthenticatedNowPlayingRoute
   '/_authenticated/settings': typeof AuthenticatedSettingsRoute
   '/_authenticated/library/': typeof AuthenticatedLibraryIndexRoute
   '/_authenticated/library/$collectionType/$libraryId': typeof AuthenticatedLibraryCollectionTypeLibraryIdRoute
@@ -126,7 +117,6 @@ export interface FileRouteTypes {
     | '/console'
     | '/login'
     | '/diagnostics'
-    | '/now-playing'
     | '/settings'
     | '/library/'
     | '/library/$collectionType/$libraryId'
@@ -138,7 +128,6 @@ export interface FileRouteTypes {
     | '/console'
     | '/login'
     | '/diagnostics'
-    | '/now-playing'
     | '/settings'
     | '/library'
     | '/library/$collectionType/$libraryId'
@@ -151,7 +140,6 @@ export interface FileRouteTypes {
     | '/console'
     | '/login'
     | '/_authenticated/diagnostics'
-    | '/_authenticated/now-playing'
     | '/_authenticated/settings'
     | '/_authenticated/library/'
     | '/_authenticated/library/$collectionType/$libraryId'
@@ -203,13 +191,6 @@ declare module '@tanstack/solid-router' {
       preLoaderRoute: typeof AuthenticatedSettingsRouteImport
       parentRoute: typeof AuthenticatedRoute
     }
-    '/_authenticated/now-playing': {
-      id: '/_authenticated/now-playing'
-      path: '/now-playing'
-      fullPath: '/now-playing'
-      preLoaderRoute: typeof AuthenticatedNowPlayingRouteImport
-      parentRoute: typeof AuthenticatedRoute
-    }
     '/_authenticated/diagnostics': {
       id: '/_authenticated/diagnostics'
       path: '/diagnostics'
@@ -250,7 +231,6 @@ declare module '@tanstack/solid-router' {
 
 interface AuthenticatedRouteChildren {
   AuthenticatedDiagnosticsRoute: typeof AuthenticatedDiagnosticsRoute
-  AuthenticatedNowPlayingRoute: typeof AuthenticatedNowPlayingRoute
   AuthenticatedSettingsRoute: typeof AuthenticatedSettingsRoute
   AuthenticatedLibraryIndexRoute: typeof AuthenticatedLibraryIndexRoute
   AuthenticatedLibraryCollectionTypeLibraryIdRoute: typeof AuthenticatedLibraryCollectionTypeLibraryIdRoute
@@ -260,7 +240,6 @@ interface AuthenticatedRouteChildren {
 
 const AuthenticatedRouteChildren: AuthenticatedRouteChildren = {
   AuthenticatedDiagnosticsRoute: AuthenticatedDiagnosticsRoute,
-  AuthenticatedNowPlayingRoute: AuthenticatedNowPlayingRoute,
   AuthenticatedSettingsRoute: AuthenticatedSettingsRoute,
   AuthenticatedLibraryIndexRoute: AuthenticatedLibraryIndexRoute,
   AuthenticatedLibraryCollectionTypeLibraryIdRoute:

@@ -4,10 +4,10 @@ import { Pause, Play, SkipBack, SkipForward, Square, Volume2, VolumeX } from 'lu
 import { Show, createSignal, onCleanup, onMount } from 'solid-js';
 
 import { commands, events } from '../bindings';
-import type { CommandError, NowPlayingState } from '../bindings';
+import type { CommandError, NowPlayingState, PropertyValue } from '../bindings';
 import { commandFailureMessage, runTauriCommand } from '../effects/commands';
 import { useToast } from './ToastProvider';
-import { Button, Card, StatusBadge } from './ui';
+import { Button, Card, JmsrSelect, StatusBadge } from './ui';
 
 function formatTime(seconds: number): string {
   if (!Number.isFinite(seconds) || seconds <= 0) {
@@ -68,15 +68,84 @@ function statusVariant(status: NowPlayingState['status']) {
   }
 }
 
+interface MpvTrack {
+  id: number;
+  type: 'audio' | 'sub';
+  label: string;
+  selected: boolean;
+}
+
+function readStringField(value: Record<string, unknown>, key: string): string | null {
+  const field = value[key];
+  return typeof field === 'string' && field.trim().length > 0 ? field.trim() : null;
+}
+
+function trackLabel(track: Record<string, unknown>, fallback: string): string {
+  return (
+    readStringField(track, 'title') ??
+    readStringField(track, 'lang') ??
+    readStringField(track, 'codec') ??
+    fallback
+  );
+}
+
+function parseTrackList(value: PropertyValue): MpvTrack[] {
+  if (typeof value !== 'string' || value === 'Null') {
+    return [];
+  }
+
+  const parsed = Effect.runSyncExit(
+    Effect.try({
+      try: () => JSON.parse(value) as unknown,
+      catch: () => null,
+    }),
+  );
+  if (Exit.isFailure(parsed) || !Array.isArray(parsed.value)) {
+    return [];
+  }
+
+  return parsed.value.flatMap((track): MpvTrack[] => {
+    if (track === null || typeof track !== 'object') {
+      return [];
+    }
+    const value = track as Record<string, unknown>;
+    const id = value.id;
+    const type = value.type;
+    if (typeof id !== 'number' || (type !== 'audio' && type !== 'sub')) {
+      return [];
+    }
+    return [
+      {
+        id,
+        type,
+        label: trackLabel(value, `${type === 'audio' ? 'Audio' : 'Subtitle'} ${id}`),
+        selected: value.selected === true,
+      },
+    ];
+  });
+}
+
 export default function NowPlayingCard(props: {
   jellyfinConnected: boolean;
   onPlayerStarted?: () => void;
+  bare?: boolean;
+  trackSelectPortalMount?: HTMLElement;
 }) {
   const { showToast } = useToast();
   const [state, setState] = createSignal<NowPlayingState | null>(null);
   const [busy, setBusy] = createSignal<string | null>(null);
   const [seekDraft, setSeekDraft] = createSignal<number | null>(null);
   const [volumeDraft, setVolumeDraft] = createSignal<number | null>(null);
+  const [tracks, setTracks] = createSignal<MpvTrack[]>([]);
+
+  const loadTrackList = async (isConnected: boolean) => {
+    if (!isConnected) {
+      setTracks([]);
+      return;
+    }
+    const result = await commands.mpvGetProperty('track-list');
+    setTracks(result.status === 'ok' ? parseTrackList(result.data) : []);
+  };
 
   const loadState = async () => {
     const result = await commands.nowPlayingGetState();
@@ -84,6 +153,7 @@ export default function NowPlayingCard(props: {
       setState(result.data);
       setSeekDraft(null);
       setVolumeDraft(null);
+      await loadTrackList(result.data.player.connected);
     }
   };
 
@@ -112,6 +182,7 @@ export default function NowPlayingCard(props: {
         setState(event.payload.state);
         setSeekDraft(null);
         setVolumeDraft(null);
+        void loadTrackList(event.payload.state.player.connected);
       })
       .then((unlisten) => {
         if (disposed) {
@@ -158,6 +229,44 @@ export default function NowPlayingCard(props: {
     }
     return media.itemType;
   };
+  const audioTracks = () => tracks().filter((track) => track.type === 'audio');
+  const subtitleTracks = () => tracks().filter((track) => track.type === 'sub');
+  const audioTrackItems = () =>
+    audioTracks().map((track) => ({ label: track.label, value: track.id.toString() }));
+  const subtitleTrackItems = () => [
+    { label: 'Off', value: '-1' },
+    ...subtitleTracks().map((track) => ({ label: track.label, value: track.id.toString() })),
+  ];
+  const selectedAudioTrackId = () =>
+    audioTracks()
+      .find((track) => track.selected)
+      ?.id.toString() ?? null;
+  const selectedSubtitleTrackId = () =>
+    subtitleTracks()
+      .find((track) => track.selected)
+      ?.id.toString() ?? '-1';
+  const switchAudioTrack = (value: string) => {
+    const id = Number(value);
+    if (value.length === 0 || !Number.isFinite(id) || busy() !== null) {
+      return;
+    }
+    void runCommand(
+      'audio-track',
+      () => commands.mpvSetAudioTrack(id),
+      'Could not switch audio track',
+    );
+  };
+  const switchSubtitleTrack = (value: string) => {
+    const id = Number(value);
+    if (value.length === 0 || !Number.isFinite(id) || busy() !== null) {
+      return;
+    }
+    void runCommand(
+      'subtitle-track',
+      () => commands.mpvSetSubtitleTrack(id),
+      'Could not switch subtitle track',
+    );
+  };
   const commitSeek = (value: number) => {
     if (!activeTimeline() || !canControlPlayback() || busy() !== null) {
       return;
@@ -172,25 +281,29 @@ export default function NowPlayingCard(props: {
     void runCommand('volume', () => commands.mpvSetVolume(value), 'Could not set volume');
   };
 
-  return (
-    <Card
-      as="section"
-      variant="elevated"
-      class="group/card relative space-y-6 overflow-hidden"
-      aria-labelledby="now-playing-title"
-    >
-      {/* Decorative subtle ambient card glow */}
-      <div class="from-primary/5 to-secondary/5 pointer-events-none absolute inset-0 bg-gradient-to-r opacity-0 transition-opacity duration-500 group-hover/card:opacity-100" />
+  const inner = (
+    <div class={props.bare ? 'space-y-5' : 'group/card relative space-y-6 overflow-hidden'}>
+      {!props.bare && (
+        <div class="from-primary/5 to-secondary/5 pointer-events-none absolute inset-0 bg-gradient-to-r opacity-0 transition-opacity duration-500 group-hover/card:opacity-100" />
+      )}
 
-      <div class="relative z-10 flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
-        <div class="max-w-[70%] space-y-1">
-          <p class="text-secondary text-[11px] leading-[16px] font-bold tracking-[0.08em] uppercase">
-            Now Playing
-          </p>
+      <div class="relative z-10">
+        <div
+          class="space-y-1"
+          classList={{
+            'pr-36': props.bare,
+            'max-w-[70%]': !props.bare,
+          }}
+        >
+          {!props.bare && (
+            <p class="text-secondary text-[11px] leading-[16px] font-bold tracking-[0.08em] uppercase">
+              Now Playing
+            </p>
+          )}
           <div class="flex items-center gap-3">
             <h2
               id="now-playing-title"
-              class="font-display text-on-surface truncate pr-2 text-[24px] leading-[32px] font-bold tracking-tight"
+              class={`font-display text-on-surface truncate pr-2 font-bold tracking-tight ${props.bare ? 'text-[20px] leading-[28px]' : 'text-[24px] leading-[32px]'}`}
             >
               {mediaTitle()}
             </h2>
@@ -211,12 +324,14 @@ export default function NowPlayingCard(props: {
             {mediaSubtitle()}
           </p>
         </div>
-        <StatusBadge variant={statusVariant(current()?.status ?? 'unknown')}>
-          {statusLabel(current()?.status ?? 'unknown')}
-        </StatusBadge>
+        <div class="absolute top-0 right-0">
+          <StatusBadge variant={statusVariant(current()?.status ?? 'unknown')}>
+            {statusLabel(current()?.status ?? 'unknown')}
+          </StatusBadge>
+        </div>
       </div>
 
-      <div class="border-outline-variant bg-surface-container-lowest/50 relative z-10 rounded-2xl border p-4 shadow-inner backdrop-blur-sm">
+      <div class="border-outline-variant bg-surface-container-lowest/50 relative z-10 rounded-3xl border p-4 shadow-inner backdrop-blur-sm">
         <div class="text-on-surface-variant mb-2.5 flex items-center justify-between font-mono text-[11px] font-semibold">
           <span>{formatTime(seekValue())}</span>
           <span>
@@ -252,7 +367,9 @@ export default function NowPlayingCard(props: {
         </Show>
       </div>
 
-      <div class="relative z-10 flex flex-wrap items-center gap-4">
+      <div
+        class={`relative z-10 flex items-center gap-3 ${props.bare ? 'justify-center' : 'flex-wrap gap-4'}`}
+      >
         <Button
           type="button"
           variant="icon"
@@ -340,7 +457,34 @@ export default function NowPlayingCard(props: {
         </Show>
       </div>
 
-      <div class="border-outline-variant bg-surface-container-lowest/50 relative z-10 flex flex-col gap-3 rounded-2xl border p-4 shadow-inner backdrop-blur-sm sm:flex-row sm:items-center">
+      <div
+        class={`border-outline-variant bg-surface-container-lowest/50 relative grid gap-3 rounded-3xl border p-4 shadow-inner backdrop-blur-sm ${props.bare ? '' : 'sm:grid-cols-2'}`}
+      >
+        <JmsrSelect
+          label="Audio"
+          items={audioTrackItems()}
+          value={selectedAudioTrackId()}
+          placeholder="No audio tracks"
+          disabled={!connected() || audioTrackItems().length === 0 || busy() !== null}
+          size="compact"
+          portalMount={props.trackSelectPortalMount}
+          onValueChange={switchAudioTrack}
+        />
+        <JmsrSelect
+          label="Subtitles"
+          items={subtitleTrackItems()}
+          value={selectedSubtitleTrackId()}
+          placeholder="No subtitle tracks"
+          disabled={!connected() || busy() !== null}
+          size="compact"
+          portalMount={props.trackSelectPortalMount}
+          onValueChange={switchSubtitleTrack}
+        />
+      </div>
+
+      <div
+        class={`border-outline-variant bg-surface-container-lowest/50 relative flex items-center gap-3 rounded-3xl border p-4 shadow-inner backdrop-blur-sm ${props.bare ? '' : 'flex-col sm:flex-row'}`}
+      >
         <Button
           type="button"
           variant="icon"
@@ -379,6 +523,21 @@ export default function NowPlayingCard(props: {
           {Math.round(volumeValue())}%
         </span>
       </div>
+    </div>
+  );
+
+  if (props.bare) {
+    return inner;
+  }
+
+  return (
+    <Card
+      as="section"
+      variant="elevated"
+      class="group/card relative space-y-6 overflow-hidden"
+      aria-labelledby="now-playing-title"
+    >
+      {inner}
     </Card>
   );
 }

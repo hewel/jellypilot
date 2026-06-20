@@ -2,8 +2,8 @@ import { afterEach, expect, rstest, test } from '@rstest/core';
 import { fireEvent, screen, waitFor, within } from '@testing-library/dom';
 import { render } from 'solid-js/web';
 
-import { commands, events } from '../src/bindings';
-import type { AppConfig, NowPlayingState, SavedSession } from '../src/bindings';
+import { commands } from '../src/bindings';
+import type { AppConfig, SavedSession } from '../src/bindings';
 import OperationsConsole from '../src/components/OperationsConsole';
 import { ToastProvider } from '../src/components/ToastProvider';
 
@@ -36,32 +36,10 @@ const validSavedSession: SavedSession = {
   userName: 'Ada',
 };
 
-const nowPlaying: NowPlayingState = {
-  canPlayNext: false,
-  canPlayPrevious: false,
-  media: null,
-  nextUnavailableReason: 'noCurrentItem',
-  player: {
-    connected: false,
-    duration: 0,
-    muted: false,
-    paused: true,
-    timePos: 0,
-    volume: 100,
-  },
-  previousUnavailableReason: 'noCurrentItem',
-  status: 'offline',
-};
-
 function mockCommon(appConfig = config, state = connectedState) {
   rstest.spyOn(commands, 'jellyfinGetState').mockResolvedValue(state);
   rstest.spyOn(commands, 'mpvIsConnected').mockResolvedValue(false);
   rstest.spyOn(commands, 'configGet').mockResolvedValue(appConfig);
-  rstest.spyOn(commands, 'nowPlayingGetState').mockResolvedValue({
-    data: nowPlaying,
-    status: 'ok',
-  });
-  rstest.spyOn(events.nowPlayingChanged, 'listen').mockResolvedValue(() => {});
 }
 
 function renderConsole(onSignedOut = () => {}, appConfig = config, state = connectedState) {
@@ -469,7 +447,7 @@ test('player bridge autosave failure recovers on later save', async () => {
   cleanup();
 });
 
-test('connection comes before now playing and hero keeps only refresh', async () => {
+test('connection comes before player settings and hero keeps only refresh', async () => {
   const cleanup = renderConsole();
 
   await screen.findByRole('heading', { name: 'Connection' });
@@ -479,7 +457,7 @@ test('connection comes before now playing and hero keeps only refresh', async ()
     top: heading.getBoundingClientRect().top,
   }));
   expect(headings.findIndex((heading) => heading.text === 'Connection')).toBeLessThan(
-    headings.findIndex((heading) => heading.text === 'No active playback metadata'),
+    headings.findIndex((heading) => heading.text === 'Player Bridge settings'),
   );
   expect(screen.getByRole('button', { name: 'Refresh status' })).toBeVisible();
   expect(screen.queryByRole('button', { name: 'Start MPV' })).toBeNull();
@@ -496,15 +474,11 @@ test('final console structure covers all operational areas in order', async () =
   expect(headings).toEqual(
     expect.arrayContaining([
       'Connection',
-      'No active playback metadata',
       'Player Bridge settings',
       'Diagnostics',
       'Intro Skip',
       'Session',
     ]),
-  );
-  expect(headings.indexOf('Connection')).toBeLessThan(
-    headings.indexOf('No active playback metadata'),
   );
   expect(headings.indexOf('Diagnostics')).toBeLessThan(headings.indexOf('Intro Skip'));
   expect(screen.getByRole('button', { name: 'Toggle diagnostics' })).toHaveAttribute(

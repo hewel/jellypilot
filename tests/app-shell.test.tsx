@@ -58,6 +58,12 @@ const nowPlaying: NowPlayingState = {
   status: 'playing',
 };
 
+const nowPlayingTrackList = JSON.stringify([
+  { id: 1, selected: true, title: 'English Stereo', type: 'audio' },
+  { id: 2, selected: false, title: 'Japanese 5.1', type: 'audio' },
+  { id: 3, selected: true, title: 'English Subtitles', type: 'sub' },
+]);
+
 const config: AppConfig = {
   deviceName: 'JMSR Test',
   introSkipperMode: 'automatic',
@@ -506,6 +512,10 @@ function mockShellCommands(state = connectedState) {
     data: nowPlaying,
     status: 'ok',
   });
+  rstest.spyOn(commands, 'mpvGetProperty').mockResolvedValue({
+    data: nowPlayingTrackList,
+    status: 'ok',
+  });
   rstest.spyOn(events.nowPlayingChanged, 'listen').mockResolvedValue(() => {});
 }
 
@@ -575,14 +585,15 @@ test('authenticated shell exposes peer navigation areas', async () => {
   expect(nav).toHaveClass('lg:overflow-visible');
   expect(libraryLink).toHaveAttribute('aria-current', 'page');
   expect(libraryLink).toHaveClass('focus-visible:ring-2');
-  expect(screen.getByRole('link', { name: 'Now Playing' })).toBeVisible();
+  expect(screen.queryByRole('link', { name: 'Now Playing' })).toBeNull();
+  expect(screen.getByRole('button', { name: /Now Playing: Playing — The Pilot/ })).toBeVisible();
   expect(screen.getByRole('link', { name: 'Settings' })).toBeVisible();
   expect(screen.getByRole('link', { name: 'Diagnostics' })).toBeVisible();
 
   cleanup();
 });
 
-test('library landing renders command-backed rows and compact now playing link', async () => {
+test('library landing renders command-backed rows and drawer trigger', async () => {
   mockShellCommands();
   const cleanup = renderShell();
 
@@ -613,11 +624,7 @@ test('library landing renders command-backed rows and compact now playing link',
     ),
   ).toBe(true);
   expect(screen.getAllByText('No artwork')).toHaveLength(3);
-  expect(await screen.findByText('The Pilot')).toBeVisible();
-  expect(screen.getByRole('link', { name: 'Open Now Playing' })).toHaveAttribute(
-    'href',
-    '/now-playing',
-  );
+  expect(screen.getByRole('button', { name: /Now Playing: Playing — The Pilot/ })).toBeVisible();
 
   cleanup();
 });
@@ -1163,13 +1170,32 @@ test('library landing renders no rows for empty video home', async () => {
   cleanup();
 });
 
-test('now playing area exposes full playback controls', async () => {
+test('now playing drawer exposes full playback controls', async () => {
   mockShellCommands();
-  const cleanup = renderShell('/now-playing');
+  const cleanup = renderShell();
 
-  await waitFor(() => expect(screen.getByText('The Pilot')).toBeVisible());
+  await screen.findByRole('heading', { name: 'Library' });
+
+  const trigger = screen.getByRole('button', { name: /Now Playing: Playing — The Pilot/ });
+  fireEvent.click(trigger);
+
+  const dialog = await screen.findByRole('dialog', { name: 'Now Playing' });
+  expect(dialog).toBeVisible();
+  expect(screen.getByText('The Pilot')).toBeVisible();
   expect(screen.getByRole('button', { name: 'Pause' })).toBeVisible();
   expect(screen.getByRole('slider', { name: 'Seek position' })).toBeVisible();
+
+  const setAudioTrack = rstest
+    .spyOn(commands, 'mpvSetAudioTrack')
+    .mockResolvedValue({ data: null, status: 'ok' });
+  await waitFor(() => expect(screen.getAllByText('English Stereo').length).toBeGreaterThan(0));
+  fireEvent.click(screen.getAllByText('English Stereo')[0]?.closest('button') as HTMLButtonElement);
+  fireEvent.click(await screen.findByRole('option', { name: 'Japanese 5.1' }));
+  await waitFor(() => expect(setAudioTrack).toHaveBeenCalledWith(2));
+
+  expect(screen.getByRole('dialog', { name: 'Now Playing' })).toBeVisible();
+  fireEvent.click(screen.getByRole('button', { name: 'Close Now Playing' }));
+  await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Now Playing' })).toBeNull());
 
   cleanup();
 });

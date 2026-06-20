@@ -1,22 +1,18 @@
-import { Link, Outlet, useMatch } from '@tanstack/solid-router';
-import { Activity, Library, MonitorPlay, Settings } from 'lucide-solid';
-import { Show, createResource, createSignal, onCleanup, onMount } from 'solid-js';
+import { Link, Outlet } from '@tanstack/solid-router';
+import { Activity, Library, Settings } from 'lucide-solid';
+import { Show, createResource } from 'solid-js';
 
-import { commands, events } from '../bindings';
-import type { ConnectionState, NowPlayingState } from '../bindings';
-import { Button, Card, ConsoleShell, StatusBadge } from './ui';
+import { commands } from '../bindings';
+import type { ConnectionState } from '../bindings';
+import NowPlayingDrawer from './NowPlayingDrawer';
+import { ConsoleShell } from './ui';
 
 const navItems: {
-  href: '/library' | '/now-playing' | '/settings' | '/diagnostics';
+  href: '/library' | '/settings' | '/diagnostics';
   label: string;
   Icon: typeof Library;
 }[] = [
   { Icon: Library, href: '/library', label: 'Library' },
-  {
-    Icon: MonitorPlay,
-    href: '/now-playing',
-    label: 'Now Playing',
-  },
   { Icon: Settings, href: '/settings', label: 'Settings' },
   {
     Icon: Activity,
@@ -34,27 +30,10 @@ const activeNavItemClass =
 const inactiveNavItemClass =
   'border border-transparent text-on-surface-variant hover:border-outline-variant/50 hover:bg-surface-container-high/40 hover:text-on-surface';
 
-function statusText(status?: NowPlayingState['status']) {
-  switch (status) {
-    case 'playing': {
-      return 'Playing';
-    }
-    case 'paused': {
-      return 'Paused';
-    }
-    case 'idle': {
-      return 'MPV idle';
-    }
-    case 'offline': {
-      return 'Player offline';
-    }
-    default: {
-      return 'Playback unknown';
-    }
-  }
-}
-
-function ShellHeader(props: { connection: ConnectionState | undefined }) {
+function ShellHeader(props: {
+  connection: ConnectionState | undefined;
+  jellyfinConnected: boolean;
+}) {
   return (
     <header class="border-outline-variant bg-surface-container-low/60 flex flex-col gap-3 rounded-2xl border p-3 shadow-xl backdrop-blur-md lg:flex-row lg:items-center lg:justify-between lg:rounded-[1.75rem] lg:p-4">
       {/* Brand Header */}
@@ -94,8 +73,9 @@ function ShellHeader(props: { connection: ConnectionState | undefined }) {
         ))}
       </nav>
 
-      {/* Server Status Panel */}
+      {/* Status Panel */}
       <div class="border-outline-variant/20 flex items-center gap-3 border-t px-2 pt-2 lg:border-t-0 lg:pt-0">
+        <NowPlayingDrawer jellyfinConnected={props.jellyfinConnected} />
         <Show
           when={props.connection}
           fallback={
@@ -135,110 +115,19 @@ function ShellHeader(props: { connection: ConnectionState | undefined }) {
   );
 }
 
-function CompactNowPlayingSummary() {
-  const [state, setState] = createSignal<NowPlayingState | null>(null);
-
-  onMount(() => {
-    void commands.nowPlayingGetState().then((result) => {
-      if (result.status === 'ok') {
-        setState(result.data);
-      }
-    });
-
-    let disposed = false;
-    let cleanup: (() => void) | undefined;
-    events.nowPlayingChanged
-      .listen((event) => setState(event.payload.state))
-      .then((unlisten) => {
-        if (disposed) {
-          unlisten();
-        } else {
-          cleanup = unlisten;
-        }
-      });
-
-    onCleanup(() => {
-      disposed = true;
-      cleanup?.();
-    });
-  });
-
-  const title = () => state()?.media?.name ?? 'No active playback';
-  const subtitle = () => {
-    const media = state()?.media;
-    if (!media) {
-      return 'External MPV is ready for Jellyfin commands';
-    }
-    if (media.seriesName) {
-      const episode =
-        media.seasonNumber && media.episodeNumber
-          ? `S${media.seasonNumber.toString().padStart(2, '0')}E${media.episodeNumber.toString().padStart(2, '0')}`
-          : media.itemType;
-      return `${media.seriesName} · ${episode}`;
-    }
-    return media.itemType;
-  };
-
-  return (
-    <Card
-      as="aside"
-      variant="filled"
-      class="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between"
-      aria-label="Compact Now Playing"
-    >
-      <div class="flex min-w-0 items-center gap-3">
-        <div class="border-secondary/30 bg-secondary-container/25 text-secondary flex h-11 w-11 shrink-0 items-center justify-center rounded-xl border">
-          <MonitorPlay class="h-5 w-5" />
-        </div>
-        <div class="min-w-0">
-          <p class="text-on-surface-variant/90 text-[11px] leading-[16px] font-bold tracking-[0.08em] uppercase">
-            Now Playing
-          </p>
-          <p class="text-on-surface truncate text-[16px] leading-[24px] font-semibold">{title()}</p>
-          <p class="text-on-surface-variant/80 truncate text-[12px] leading-[16px]">{subtitle()}</p>
-        </div>
-      </div>
-      <div class="flex shrink-0 items-center gap-3">
-        <StatusBadge
-          variant={
-            state()?.status === 'playing' || state()?.status === 'paused' ? 'success' : 'neutral'
-          }
-        >
-          {statusText(state()?.status)}
-        </StatusBadge>
-        <Button
-          href="/now-playing"
-          variant="secondary"
-          class="rounded-full"
-          leadingIcon={<MonitorPlay class="h-4 w-4" />}
-        >
-          Open Now Playing
-        </Button>
-      </div>
-    </Card>
-  );
-}
-
 export default function AuthenticatedShell() {
   const [connection] = createResource(() => commands.jellyfinGetState());
-  const nowPlayingMatch = useMatch({
-    from: '/_authenticated/now-playing',
-    shouldThrow: false,
-  });
-  const showCompactNowPlaying = () => nowPlayingMatch() === undefined;
 
   return (
     <ConsoleShell>
       <div class="mx-auto flex w-full flex-col gap-5">
-        <ShellHeader connection={connection()} />
-        <div class="flex min-w-0 flex-col gap-6">
-          <Show when={showCompactNowPlaying()}>
-            <CompactNowPlayingSummary />
-          </Show>
-          <main class="min-w-0 animate-[fadeIn_0.3s_cubic-bezier(0.16,1,0.3,1)_forwards]">
-            <Outlet />
-          </main>
-        </div>
+        <ShellHeader
+          connection={connection()}
+          jellyfinConnected={connection()?.connected ?? false}
+        />
+        <main class="min-w-0 animate-[fadeIn_0.3s_cubic-bezier(0.16,1,0.3,1)_forwards]">
+          <Outlet />
+        </main>
       </div>
     </ConsoleShell>
   );

@@ -7,7 +7,6 @@ import type { AppConfig, ConnectionState, IntroSkipperMode } from '../bindings';
 import { commandFailureMessage, runTauriCommand, runTauriCommandRaw } from '../effects/commands';
 import { detectMpv } from '../effects/config';
 import { clearSavedSession, loadSavedSession, restoreSavedSession } from '../sessionAccess';
-import NowPlayingCard from './NowPlayingCard';
 import ConnectionCard from './OperationsConsole/ConnectionCard';
 import DiagnosticsCard from './OperationsConsole/DiagnosticsCard';
 import IntroSkipCard from './OperationsConsole/IntroSkipCard';
@@ -427,10 +426,6 @@ export default function OperationsConsole(props: OperationsConsoleProps) {
               onRefresh={handleRefresh}
             />
 
-            <NowPlayingCard
-              jellyfinConnected={state()?.connected ?? false}
-              onPlayerStarted={() => refetchMpv()}
-            />
             <form class="space-y-6">
               <PlayerBridgeSettingsCard
                 form={form}

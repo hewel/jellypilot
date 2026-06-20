@@ -21,7 +21,7 @@ export const commands = {
 	mpvToggleMute: () => typedError<null, CommandError>(__TAURI_INVOKE("mpv_toggle_mute")),
 	/**  Set audio track by ID. */
 	mpvSetAudioTrack: (id: number) => typedError<null, CommandError>(__TAURI_INVOKE("mpv_set_audio_track", { id })),
-	/**  Set subtitle track by ID. */
+	/**  Set subtitle track by ID, or disable subtitles with a negative ID. */
 	mpvSetSubtitleTrack: (id: number) => typedError<null, CommandError>(__TAURI_INVOKE("mpv_set_subtitle_track", { id })),
 	/**  Get a property value from MPV. */
 	mpvGetProperty: (name: string) => typedError<PropertyValue, CommandError>(__TAURI_INVOKE("mpv_get_property", { name })),

@@ -7,6 +7,8 @@ import type { NowPlayingState } from '../src/bindings';
 import NowPlayingCard from '../src/components/NowPlayingCard';
 import { ToastProvider } from '../src/components/ToastProvider';
 
+Element.prototype.scrollTo = () => {};
+
 const offlineState: NowPlayingState = {
   canPlayNext: false,
   canPlayPrevious: false,
@@ -72,8 +74,15 @@ const pausedWithoutMetadataState: NowPlayingState = {
   status: 'paused',
 };
 
+const trackList = JSON.stringify([
+  { id: 1, lang: 'eng', selected: true, title: 'English Stereo', type: 'audio' },
+  { id: 2, lang: 'jpn', selected: false, title: 'Japanese 5.1', type: 'audio' },
+  { id: 3, lang: 'eng', selected: true, title: 'English Subtitles', type: 'sub' },
+]);
+
 function renderCard(state: NowPlayingState = offlineState, jellyfinConnected = true) {
   rstest.spyOn(commands, 'nowPlayingGetState').mockResolvedValue({ data: state, status: 'ok' });
+  rstest.spyOn(commands, 'mpvGetProperty').mockResolvedValue({ data: trackList, status: 'ok' });
   rstest.spyOn(events.nowPlayingChanged, 'listen').mockResolvedValue(() => {});
   const root = document.createElement('div');
   document.body.append(root);
@@ -181,6 +190,34 @@ test('playing state uses Ark sliders for seek and volume', async () => {
   cleanup();
 });
 
+test('playing state exposes audio and subtitle selectors', async () => {
+  const setAudioTrack = rstest
+    .spyOn(commands, 'mpvSetAudioTrack')
+    .mockResolvedValue({ data: null, status: 'ok' });
+  const setSubtitleTrack = rstest
+    .spyOn(commands, 'mpvSetSubtitleTrack')
+    .mockResolvedValue({ data: null, status: 'ok' });
+  const cleanup = renderCard(playingState);
+
+  const audio = await screen.findByRole('combobox', { name: 'Audio' });
+  const subtitles = await screen.findByRole('combobox', { name: 'Subtitles' });
+  expect(audio).toHaveTextContent('English Stereo');
+  expect(subtitles).toHaveTextContent('English Subtitles');
+
+  fireEvent.click(audio);
+  fireEvent.click(await screen.findByRole('option', { name: 'Japanese 5.1' }));
+  await waitFor(() => expect(setAudioTrack).toHaveBeenCalledWith(2));
+
+  await waitFor(() =>
+    expect(screen.getByRole('combobox', { name: 'Subtitles' })).not.toBeDisabled(),
+  );
+  fireEvent.click(screen.getByRole('combobox', { name: 'Subtitles' }));
+  fireEvent.click(await screen.findByRole('option', { name: 'Off' }));
+  await waitFor(() => expect(setSubtitleTrack).toHaveBeenCalledWith(-1));
+
+  cleanup();
+});
+
 test('next and previous are disabled when unavailable', async () => {
   const cleanup = renderCard();
 
@@ -239,6 +276,7 @@ test('clicking mute toggles icon and label after state reloads', async () => {
     return { data: null, status: 'ok' };
   });
   rstest.spyOn(events.nowPlayingChanged, 'listen').mockResolvedValue(() => {});
+  rstest.spyOn(commands, 'mpvGetProperty').mockResolvedValue({ data: trackList, status: 'ok' });
   const root = document.createElement('div');
   document.body.append(root);
   const dispose = render(

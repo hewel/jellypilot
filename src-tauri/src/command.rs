@@ -398,13 +398,16 @@ pub async fn mpv_set_audio_track(state: State<'_, MpvState>, id: i32) -> Result<
     .map_err(internal_err)
 }
 
-/// Set subtitle track by ID.
+/// Set subtitle track by ID, or disable subtitles with a negative ID.
 #[tauri::command]
 #[specta]
 pub async fn mpv_set_subtitle_track(
   state: State<'_, MpvState>,
   id: i32,
 ) -> Result<(), CommandError> {
+  if id < 0 {
+    return state.0.disable_track("sid").await.map_err(internal_err);
+  }
   state
     .0
     .set_subtitle_track(id as i64)

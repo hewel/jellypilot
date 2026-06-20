@@ -20,6 +20,7 @@ interface JmsrSelectProps<Value extends string = string> {
   placeholder?: string;
   disabled?: boolean;
   size?: JmsrSelectSize;
+  portalMount?: HTMLElement;
   class?: string;
 }
 
@@ -35,6 +36,22 @@ export default function JmsrSelect<Value extends string>(props: JmsrSelectProps<
     isCompact()
       ? 'flex h-12 w-full items-center justify-between gap-2 rounded-lg border border-outline-variant bg-surface-container-low px-3 text-left text-on-surface outline-none transition-all duration-200 hover:border-secondary/50 focus:border-secondary focus:ring-2 focus:ring-secondary/25 disabled:cursor-not-allowed disabled:opacity-50'
       : 'flex h-14 w-full items-center justify-between gap-2 rounded-2xl border border-outline-variant/80 bg-surface-container-highest/30 px-4 text-left text-on-surface outline-none transition-all duration-200 hover:border-secondary/50 focus:border-secondary focus:ring-4 focus:ring-secondary/15 disabled:cursor-not-allowed disabled:opacity-50';
+  const SelectContent = () => (
+    <Select.Positioner>
+      <Select.Content class="border-outline-variant bg-surface-container-lowest max-h-60 overflow-y-auto rounded-lg border p-2 shadow-2xl backdrop-blur-md">
+        <For each={collection().items}>
+          {(item) => (
+            <Select.Item
+              item={item}
+              class="text-on-surface-variant hover:bg-surface-container-high hover:text-on-surface flex cursor-pointer items-center justify-between rounded-xl px-3.5 py-2.5 text-[14px] leading-[20px] transition-colors data-disabled:cursor-not-allowed data-disabled:opacity-50"
+            >
+              <Select.ItemText class="font-medium">{item.label}</Select.ItemText>
+            </Select.Item>
+          )}
+        </For>
+      </Select.Content>
+    </Select.Positioner>
+  );
 
   return (
     <Select.Root
@@ -50,6 +67,7 @@ export default function JmsrSelect<Value extends string>(props: JmsrSelectProps<
         }
       }}
       class={props.class}
+      positioning={{ sameWidth: true }}
     >
       <Select.Label class={labelClass()}>{props.label}</Select.Label>
       <Select.Control class="flex w-full items-center">
@@ -63,21 +81,8 @@ export default function JmsrSelect<Value extends string>(props: JmsrSelectProps<
           </Select.Indicator>
         </Select.Trigger>
       </Select.Control>
-      <Portal>
-        <Select.Positioner class="z-100">
-          <Select.Content class="border-outline-variant bg-surface-container-lowest mt-2 max-h-60 overflow-y-auto rounded-2xl border p-2 shadow-2xl backdrop-blur-md">
-            <For each={collection().items}>
-              {(item) => (
-                <Select.Item
-                  item={item}
-                  class="text-on-surface-variant hover:bg-surface-container-high hover:text-on-surface flex cursor-pointer items-center justify-between rounded-xl px-3.5 py-2.5 text-[14px] leading-[20px] transition-colors data-disabled:cursor-not-allowed data-disabled:opacity-50"
-                >
-                  <Select.ItemText class="font-medium">{item.label}</Select.ItemText>
-                </Select.Item>
-              )}
-            </For>
-          </Select.Content>
-        </Select.Positioner>
+      <Portal mount={props.portalMount}>
+        <SelectContent />
       </Portal>
       <Select.HiddenSelect />
     </Select.Root>
