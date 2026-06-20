@@ -6,7 +6,7 @@ import type {
   VideoLibraryPlayMode,
   VideoPlaybackStreamOption,
 } from '../../bindings';
-import { Button, JmsrSelect } from '../ui';
+import { Button, Card, JmsrSelect } from '../ui';
 import type { JmsrSelectItem } from '../ui';
 
 const SUBTITLE_AUTO = 'auto';
@@ -78,13 +78,20 @@ export function LibraryPlaybackChooser(props: {
     props.pending.mode === 'resume' ? 'Resume playback' : 'Start playback';
 
   return (
-    <section
-      class="card-filled border-secondary/40 bg-secondary-container/10 space-y-4"
+    <Card
+      as="section"
+      variant="filled"
+      class="border-secondary/40 bg-secondary-container/10 space-y-4"
       aria-labelledby="library-playback-chooser-title"
     >
       <div>
-        <p class="text-label-small text-secondary">{props.pending.detail.itemType}</p>
-        <h2 id="library-playback-chooser-title" class="text-title-large">
+        <p class="text-secondary text-[11px] leading-[16px] font-bold tracking-[0.08em] uppercase">
+          {props.pending.detail.itemType}
+        </p>
+        <h2
+          id="library-playback-chooser-title"
+          class="text-on-surface text-[22px] leading-[28px] font-bold"
+        >
           {props.pending.detail.name}
         </h2>
       </div>
@@ -137,7 +144,7 @@ export function LibraryPlaybackChooser(props: {
           {props.busy ? 'Starting...' : confirmLabel()}
         </Button>
       </div>
-    </section>
+    </Card>
   );
 }
 

@@ -30,7 +30,7 @@ export default function StatusBadge(props: StatusBadgeProps) {
 
   return (
     <span
-      class={`text-label-small inline-flex shrink-0 items-center gap-1.5 rounded-full border px-3 py-1 select-none ${variantClasses()}`}
+      class={`text-on-surface-variant/90 inline-flex shrink-0 items-center gap-1.5 rounded-full border px-3 py-1 text-[11px] leading-[16px] font-bold tracking-[0.08em] uppercase select-none ${variantClasses()}`}
     >
       <span
         class={`h-1.5 w-1.5 rounded-full ${

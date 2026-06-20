@@ -7,7 +7,7 @@ import { commands, events } from '../bindings';
 import type { CommandError, NowPlayingState } from '../bindings';
 import { commandFailureMessage, runTauriCommand } from '../effects/commands';
 import { useToast } from './ToastProvider';
-import { Button, StatusBadge } from './ui';
+import { Button, Card, StatusBadge } from './ui';
 
 function formatTime(seconds: number): string {
   if (!Number.isFinite(seconds) || seconds <= 0) {
@@ -173,8 +173,10 @@ export default function NowPlayingCard(props: {
   };
 
   return (
-    <section
-      class="card-elevated group/card relative space-y-6 overflow-hidden"
+    <Card
+      as="section"
+      variant="elevated"
+      class="group/card relative space-y-6 overflow-hidden"
       aria-labelledby="now-playing-title"
     >
       {/* Decorative subtle ambient card glow */}
@@ -182,9 +184,14 @@ export default function NowPlayingCard(props: {
 
       <div class="relative z-10 flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
         <div class="max-w-[70%] space-y-1">
-          <p class="text-label-small text-secondary font-bold">Now Playing</p>
+          <p class="text-secondary text-[11px] leading-[16px] font-bold tracking-[0.08em] uppercase">
+            Now Playing
+          </p>
           <div class="flex items-center gap-3">
-            <h2 id="now-playing-title" class="text-headline-small text-on-surface truncate pr-2">
+            <h2
+              id="now-playing-title"
+              class="font-display text-on-surface truncate pr-2 text-[24px] leading-[32px] font-bold tracking-tight"
+            >
               {mediaTitle()}
             </h2>
             <Show when={current()?.status === 'playing'}>
@@ -193,14 +200,16 @@ export default function NowPlayingCard(props: {
                 aria-hidden="true"
                 title="Playing stream"
               >
-                <span class="bg-primary wave-bar animate-wave-1 h-full w-1.5 rounded-full" />
-                <span class="bg-secondary wave-bar animate-wave-2 h-full w-1.5 rounded-full" />
-                <span class="bg-primary wave-bar animate-wave-3 h-full w-1.5 rounded-full" />
-                <span class="bg-secondary wave-bar animate-wave-4 h-full w-1.5 rounded-full" />
+                <span class="bg-primary h-full w-1.5 origin-bottom animate-[wave-bounce_0.8s_ease-in-out_infinite_alternate] rounded-full will-change-transform" />
+                <span class="bg-secondary h-full w-1.5 origin-bottom animate-[wave-bounce_0.6s_ease-in-out_infinite_alternate] rounded-full will-change-transform [animation-delay:0.15s]" />
+                <span class="bg-primary h-full w-1.5 origin-bottom animate-[wave-bounce_0.9s_ease-in-out_infinite_alternate] rounded-full will-change-transform [animation-delay:0.3s]" />
+                <span class="bg-secondary h-full w-1.5 origin-bottom animate-[wave-bounce_0.7s_ease-in-out_infinite_alternate] rounded-full will-change-transform [animation-delay:0.45s]" />
               </div>
             </Show>
           </div>
-          <p class="text-body-medium text-on-surface-variant font-medium">{mediaSubtitle()}</p>
+          <p class="text-on-surface-variant text-[14px] leading-[20px] font-medium">
+            {mediaSubtitle()}
+          </p>
         </div>
         <StatusBadge variant={statusVariant(current()?.status ?? 'unknown')}>
           {statusLabel(current()?.status ?? 'unknown')}
@@ -226,13 +235,16 @@ export default function NowPlayingCard(props: {
             disabled={!activeTimeline() || !canControlPlayback() || busy() !== null}
             onValueChange={(details) => setSeekDraft(details.value[0] ?? 0)}
             onValueChangeEnd={(details) => commitSeek(details.value[0] ?? 0)}
-            class="ark-slider"
+            class="flex w-full flex-col gap-2.5 disabled:opacity-50"
           >
-            <Slider.Control class="ark-slider__control">
-              <Slider.Track class="ark-slider__track">
-                <Slider.Range class="ark-slider__range bg-brand-gradient shadow-brand-glow-sm" />
+            <Slider.Control class="relative flex h-6 cursor-pointer items-center">
+              <Slider.Track class="bg-surface-container-highest/80 border-outline-variant/30 h-2.5 flex-1 overflow-hidden rounded-full border">
+                <Slider.Range class="from-primary to-primary-gradient-end h-full rounded-full bg-gradient-to-r shadow-[0_0_10px_rgba(79,70,229,0.35)] transition-all duration-150" />
               </Slider.Track>
-              <Slider.Thumb index={0} class="ark-slider__thumb">
+              <Slider.Thumb
+                index={0}
+                class="border-surface-container-lowest bg-on-surface data-[focus-visible]:ring-primary/50 flex h-5.5 w-5.5 cursor-grab items-center justify-center rounded-full border-2 shadow-lg shadow-black/50 transition-all duration-200 outline-none hover:scale-110 hover:shadow-[0_0_12px_rgba(255,255,255,0.4)] active:cursor-grabbing data-[focus-visible]:ring-2"
+              >
                 <Slider.HiddenInput />
               </Slider.Thumb>
             </Slider.Control>
@@ -349,13 +361,16 @@ export default function NowPlayingCard(props: {
           disabled={!connected() || busy() !== null}
           onValueChange={(details) => setVolumeDraft(details.value[0] ?? 100)}
           onValueChangeEnd={(details) => commitVolume(details.value[0] ?? 100)}
-          class="ark-slider flex-1"
+          class="flex w-full flex-1 flex-col gap-2.5 disabled:opacity-50"
         >
-          <Slider.Control class="ark-slider__control">
-            <Slider.Track class="ark-slider__track">
-              <Slider.Range class="ark-slider__range from-secondary to-primary bg-gradient-to-r shadow-[0_0_8px_rgba(129,140,248,0.4)]" />
+          <Slider.Control class="relative flex h-6 cursor-pointer items-center">
+            <Slider.Track class="bg-surface-container-highest/80 border-outline-variant/30 h-2.5 flex-1 overflow-hidden rounded-full border">
+              <Slider.Range class="from-secondary to-primary h-full rounded-full bg-gradient-to-r shadow-[0_0_8px_rgba(129,140,248,0.4)] transition-all duration-150" />
             </Slider.Track>
-            <Slider.Thumb index={0} class="ark-slider__thumb">
+            <Slider.Thumb
+              index={0}
+              class="border-surface-container-lowest bg-on-surface data-[focus-visible]:ring-primary/50 flex h-5.5 w-5.5 cursor-grab items-center justify-center rounded-full border-2 shadow-lg shadow-black/50 transition-all duration-200 outline-none hover:scale-110 hover:shadow-[0_0_12px_rgba(255,255,255,0.4)] active:cursor-grabbing data-[focus-visible]:ring-2"
+            >
               <Slider.HiddenInput />
             </Slider.Thumb>
           </Slider.Control>
@@ -364,6 +379,6 @@ export default function NowPlayingCard(props: {
           {Math.round(volumeValue())}%
         </span>
       </div>
-    </section>
+    </Card>
   );
 }

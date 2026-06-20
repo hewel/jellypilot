@@ -2,10 +2,8 @@ import { Dialog } from '@ark-ui/solid/dialog';
 import { LogOut, ShieldAlert } from 'lucide-solid';
 import { Portal } from 'solid-js/web';
 
-import { Button } from '../ui';
+import { Button, Card } from '../ui';
 import { useOperationsConsoleStore } from './store';
-
-import * as buttonStyles from '../ui/Button.css';
 
 interface SessionCardProps {
   onSignOut: () => void;
@@ -39,24 +37,35 @@ export default function SessionCard(props: SessionCardProps) {
       unmountOnExit
       role="dialog"
     >
-      <section class="card-filled border-error/20 bg-error-container/5 hover:border-error/45">
+      <Card
+        as="section"
+        variant="filled"
+        class="border-error/20 bg-error-container/5 hover:border-error/45"
+      >
         <div class="flex items-start gap-3">
           <ShieldAlert class="text-error mt-1 h-5 w-5 drop-shadow-[0_0_8px_rgba(255,107,122,0.4)]" />
           <div>
-            <h2 class="text-title-medium text-on-surface">Session</h2>
-            <p class="text-body-small text-on-surface-variant/80 mt-1">
+            <h2 class="text-on-surface text-[16px] leading-[24px] font-semibold">Session</h2>
+            <p class="text-on-surface-variant/80 mt-1 text-[12px] leading-[16px]">
               Sign out removes the Saved Session and requires authentication before Reconnect is
               available.
             </p>
           </div>
         </div>
         <Dialog.Trigger
-          class={`${buttonStyles.baseButton} ${buttonStyles.variantStyles.outlined} ${buttonStyles.sizeStyles.md} border-error/55 text-error hover:bg-error/10 hover:border-error mt-5 w-full`}
-        >
-          <LogOut class="h-4.5 w-4.5" />
-          <span>Sign out</span>
-        </Dialog.Trigger>
-      </section>
+          asChild={(triggerProps) => (
+            <Button
+              {...triggerProps()}
+              type="button"
+              variant="outlined"
+              class="border-error/55 text-error hover:bg-error/10 hover:border-error mt-5 w-full"
+            >
+              <LogOut class="h-4.5 w-4.5" />
+              <span>Sign out</span>
+            </Button>
+          )}
+        />
+      </Card>
 
       <Portal>
         <Dialog.Backdrop
@@ -69,7 +78,7 @@ export default function SessionCard(props: SessionCardProps) {
         />
         <Dialog.Positioner class="fixed inset-0 z-50 flex items-center justify-center p-4">
           <Dialog.Content
-            class="card-elevated border-error/30 animate-fade-in relative max-w-md overflow-hidden border"
+            class="border-primary/20 bg-surface-container-low/45 hover:border-primary/35 hover:bg-surface-container-low/60 border-error/30 relative max-w-md animate-[fadeIn_0.3s_cubic-bezier(0.16,1,0.3,1)_forwards] overflow-hidden rounded-[2rem] border p-6 shadow-2xl backdrop-blur-xl transition-all duration-300"
             onKeyDown={(event) => {
               if (event.key === 'Escape' && !ui.signingOut) {
                 actions.setSignOutDialogOpen(false);
@@ -81,12 +90,12 @@ export default function SessionCard(props: SessionCardProps) {
 
             <Dialog.Title
               id="sign-out-title"
-              class="text-title-large text-on-surface flex items-center gap-2"
+              class="text-on-surface flex items-center gap-2 text-[22px] leading-[28px] font-bold"
             >
               <ShieldAlert class="text-error h-6 w-6" />
               Sign out?
             </Dialog.Title>
-            <Dialog.Description class="text-body-medium text-on-surface-variant/90 mt-3">
+            <Dialog.Description class="text-on-surface-variant/90 mt-3 text-[14px] leading-[20px]">
               This removes the Saved Session and you'll need to authenticate again before
               reconnecting.
             </Dialog.Description>

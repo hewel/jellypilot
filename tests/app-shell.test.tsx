@@ -606,9 +606,12 @@ test('library landing renders command-backed rows and compact now playing link',
   expect(resumeArtwork.parentElement).toHaveClass('aspect-video');
   fireEvent.load(resumeArtwork);
   expect(resumeArtwork.parentElement).toHaveClass('aspect-video');
-  expect(screen.getByRole('link', { name: /Latest Movie/ }).firstElementChild).toHaveClass(
-    'aspect-[2/3]',
-  );
+  const latestMovieLink = screen.getByRole('link', { name: /Latest Movie/ });
+  expect(
+    [...latestMovieLink.querySelectorAll('div')].some((node) =>
+      node.className.includes('aspect-[2/3]'),
+    ),
+  ).toBe(true);
   expect(screen.getAllByText('No artwork')).toHaveLength(3);
   expect(await screen.findByText('The Pilot')).toBeVisible();
   expect(screen.getByRole('link', { name: 'Open Now Playing' })).toHaveAttribute(

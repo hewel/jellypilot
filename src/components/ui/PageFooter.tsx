@@ -11,7 +11,7 @@ interface PageFooterProps {
 export default function PageFooter(props: PageFooterProps) {
   return (
     <div class={`py-8 text-center ${props.class ?? ''}`}>
-      <p class="text-on-surface-variant/70 text-body-small">
+      <p class="text-on-surface-variant/70 text-[12px] leading-[16px]">
         {props.appName ?? 'Jellyfin MPV Shim Rust'}
       </p>
       <AppVersion />

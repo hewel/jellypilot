@@ -26,9 +26,11 @@ export default function ConnectionCard(props: ConnectionCardProps) {
           <div class="absolute top-0 right-0 p-3 opacity-5">
             <Server class="h-12 w-12" />
           </div>
-          <p class="text-label-small text-on-surface-variant uppercase">Server</p>
+          <p class="text-on-surface-variant text-[11px] leading-[16px] font-bold tracking-[0.08em] uppercase">
+            Server
+          </p>
           <p
-            class="text-title-medium text-on-surface mt-1.5 truncate font-bold"
+            class="text-on-surface mt-1.5 truncate text-[16px] leading-[24px] font-bold font-semibold"
             title={props.state?.serverName ?? ''}
           >
             {props.state?.serverName ?? 'Not connected'}
@@ -38,9 +40,11 @@ export default function ConnectionCard(props: ConnectionCardProps) {
           <div class="absolute top-0 right-0 p-3 opacity-5">
             <Link class="h-12 w-12" />
           </div>
-          <p class="text-label-small text-on-surface-variant uppercase">Server URL</p>
+          <p class="text-on-surface-variant text-[11px] leading-[16px] font-bold tracking-[0.08em] uppercase">
+            Server URL
+          </p>
           <p
-            class="text-body-medium text-secondary mt-1.5 truncate font-mono"
+            class="text-secondary mt-1.5 truncate font-mono text-[14px] leading-[20px]"
             title={props.state?.serverUrl ?? ''}
           >
             {props.state?.serverUrl ?? 'Reconnect with the Saved Session or sign in again'}
@@ -50,9 +54,11 @@ export default function ConnectionCard(props: ConnectionCardProps) {
           <div class="absolute top-0 right-0 p-3 opacity-5">
             <User class="h-12 w-12" />
           </div>
-          <p class="text-label-small text-on-surface-variant uppercase">User</p>
+          <p class="text-on-surface-variant text-[11px] leading-[16px] font-bold tracking-[0.08em] uppercase">
+            User
+          </p>
           <p
-            class="text-title-medium text-on-surface mt-1.5 truncate font-bold"
+            class="text-on-surface mt-1.5 truncate text-[16px] leading-[24px] font-bold font-semibold"
             title={props.state?.userName ?? ''}
           >
             {props.state?.userName ?? 'No active user'}
@@ -92,7 +98,7 @@ export default function ConnectionCard(props: ConnectionCardProps) {
           <RefreshCw class="h-4.5 w-4.5" />
         </Button>
       </div>
-      <p class="text-body-small text-on-surface-variant/80 mt-4">
+      <p class="text-on-surface-variant/80 mt-4 text-[12px] leading-[16px]">
         Disconnect ends the active Jellyfin connection but keeps the Saved Session available for
         Reconnect.
       </p>

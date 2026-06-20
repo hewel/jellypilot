@@ -39,15 +39,19 @@ export function MediaInfoContent(props: { detail: MediaDetail }) {
 
   return (
     <div class="space-y-2">
-      <p class="text-title-small text-on-surface line-clamp-2 font-semibold">{props.detail.name}</p>
+      <p class="text-on-surface line-clamp-2 text-[14px] leading-[20px] font-semibold">
+        {props.detail.name}
+      </p>
       <Show when={meta()}>
-        <p class="text-label-medium text-on-surface-variant">{meta()}</p>
+        <p class="text-on-surface-variant text-[12px] leading-[16px] font-bold tracking-[0.05em] uppercase">
+          {meta()}
+        </p>
       </Show>
       <Show when={props.detail.genres.length > 0}>
         <div class="flex flex-wrap gap-1">
           <For each={props.detail.genres}>
             {(genre) => (
-              <span class="bg-surface-container-highest/70 text-label-small text-on-surface-variant rounded-full px-2 py-0.5">
+              <span class="bg-surface-container-highest/70 text-on-surface-variant rounded-full px-2 py-0.5 text-[11px] leading-[16px] font-bold tracking-[0.08em] uppercase">
                 {genre}
               </span>
             )}
@@ -56,7 +60,9 @@ export function MediaInfoContent(props: { detail: MediaDetail }) {
       </Show>
       <Show when={props.detail.overview}>
         {(overview) => (
-          <p class="text-body-small text-on-surface-variant/90 line-clamp-3">{overview()}</p>
+          <p class="text-on-surface-variant/90 line-clamp-3 text-[12px] leading-[16px]">
+            {overview()}
+          </p>
         )}
       </Show>
       <Show when={props.detail.playedPercentage !== null}>
@@ -64,13 +70,13 @@ export function MediaInfoContent(props: { detail: MediaDetail }) {
           <div class="bg-surface-container-highest/70 h-1 w-full overflow-hidden rounded-full">
             <div class="bg-secondary h-full" style={{ width: `${resumePct()}%` }} />
           </div>
-          <p class="text-label-small text-on-surface-variant mt-1">
+          <p class="text-on-surface-variant mt-1 text-[11px] leading-[16px] font-bold tracking-[0.08em] uppercase">
             {Math.round(resumePct())}% watched
           </p>
         </div>
       </Show>
       <Show when={props.detail.played || props.detail.favorite}>
-        <div class="text-label-medium flex flex-wrap gap-3 pt-0.5">
+        <div class="text-on-surface-variant flex flex-wrap gap-3 pt-0.5 text-[12px] leading-[16px] font-bold tracking-[0.05em] uppercase">
           <Show when={props.detail.played}>
             <span class="text-tertiary flex items-center gap-1">
               <Check class="h-3.5 w-3.5" /> Played
@@ -117,7 +123,7 @@ export function MediaInfoHoverCard(props: { id: string; itemType: string; childr
             <Show
               when={detail.state !== 'pending' && detail()}
               fallback={
-                <div class="text-label-medium text-on-surface-variant flex items-center justify-center gap-2 py-3">
+                <div class="text-on-surface-variant flex items-center justify-center gap-2 py-3 text-[12px] leading-[16px] font-bold tracking-[0.05em] uppercase">
                   <LoaderCircle class="h-4 w-4 animate-spin" />
                   <span>Loading…</span>
                 </div>
@@ -126,7 +132,7 @@ export function MediaInfoHoverCard(props: { id: string; itemType: string; childr
               {(exit) =>
                 Exit.match(exit(), {
                   onFailure: (cause) => (
-                    <p class="text-label-medium text-error/90 py-2 text-center">
+                    <p class="text-error/90 py-2 text-center text-[12px] leading-[16px] font-bold tracking-[0.05em] uppercase">
                       {commandFailureMessage(cause, 'Could not load detail')}
                     </p>
                   ),

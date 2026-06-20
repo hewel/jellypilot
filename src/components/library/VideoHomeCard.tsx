@@ -1,6 +1,7 @@
 import { Show } from 'solid-js';
 
 import type { VideoHomeItem } from '../../bindings';
+import { CardLink } from '../ui';
 
 export function VideoHomeCard(props: {
   item: VideoHomeItem;
@@ -18,10 +19,11 @@ export function VideoHomeCard(props: {
   };
 
   return (
-    <a
+    <CardLink
+      variant="filled"
       href={`/library/items/${props.item.id}`}
       aria-label={`Open ${props.item.name}`}
-      class="card-filled focus-visible:ring-secondary/70 hover:border-primary/50 hover:shadow-brand-glow-sm block overflow-hidden p-0 transition-all duration-300 focus-visible:ring-2 focus-visible:outline-none"
+      class="focus-visible:ring-secondary/70 hover:border-primary/50 block overflow-hidden !p-0 transition-all duration-300 hover:shadow-[0_0_10px_rgba(79,70,229,0.35)] focus-visible:ring-2 focus-visible:outline-none"
     >
       <div
         class={`${props.aspectClass} border-outline-variant bg-surface-container-lowest/60 overflow-hidden border-b`}
@@ -29,7 +31,7 @@ export function VideoHomeCard(props: {
         <Show
           when={props.item.artworkUrl}
           fallback={
-            <div class="text-label-small text-on-surface-variant flex h-full items-center justify-center px-4 text-center">
+            <div class="text-on-surface-variant flex h-full items-center justify-center px-4 text-center text-[11px] leading-[16px] font-bold tracking-[0.08em] uppercase">
               No artwork
             </div>
           }
@@ -45,9 +47,11 @@ export function VideoHomeCard(props: {
         </Show>
       </div>
       <div class="space-y-1 px-4 pt-2 pb-3">
-        <p class="text-title-medium line-clamp-2">{props.item.name}</p>
-        <p class="text-body-small">{episodeLabel()}</p>
+        <p class="text-on-surface line-clamp-2 text-[16px] leading-[24px] font-semibold">
+          {props.item.name}
+        </p>
+        <p class="text-on-surface-variant/80 text-[12px] leading-[16px]">{episodeLabel()}</p>
       </div>
-    </a>
+    </CardLink>
   );
 }

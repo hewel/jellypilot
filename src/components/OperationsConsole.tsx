@@ -20,7 +20,7 @@ import {
   parseSubtitleLanguageInput,
 } from './OperationsConsole/subtitleLanguages';
 import { useToast } from './ToastProvider';
-import { PageFooter } from './ui';
+import { ConsoleContainer, ConsoleGrid, PageFooter } from './ui';
 import type { JmsrSelectItem } from './ui';
 
 interface OperationsConsoleProps {
@@ -416,8 +416,8 @@ export default function OperationsConsole(props: OperationsConsoleProps) {
 
   return (
     <Provider>
-      <div class="console-container">
-        <div class="console-grid">
+      <ConsoleContainer>
+        <ConsoleGrid>
           <div class="space-y-6">
             <ConnectionCard
               state={state()}
@@ -463,8 +463,8 @@ export default function OperationsConsole(props: OperationsConsoleProps) {
 
             <PageFooter />
           </aside>
-        </div>
-      </div>
+        </ConsoleGrid>
+      </ConsoleContainer>
     </Provider>
   );
 }

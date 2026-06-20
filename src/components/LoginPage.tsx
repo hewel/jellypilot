@@ -20,7 +20,7 @@ import {
 } from '../serverUrl';
 import type { ServerScheme, ServerUrlResult } from '../serverUrl';
 import { saveCurrentSession } from '../sessionAccess';
-import { Button, Card, PageFooter } from './ui';
+import { Button, Card, ConsoleShell, FieldControl, PageFooter } from './ui';
 
 interface LoginPageProps {
   onConnected: () => void;
@@ -328,15 +328,15 @@ export default function LoginPage(props: LoginPageProps) {
   });
 
   return (
-    <div class="console-shell relative flex items-center justify-center overflow-y-auto py-10">
+    <ConsoleShell class="relative flex items-center justify-center overflow-y-auto py-10">
       <main class="relative z-10 w-full max-w-3xl">
         <div class="relative mb-8 text-center">
           {/* Glowing HUD hologram decoration */}
-          <div class="border-primary/20 bg-primary/5 shadow-brand-glow relative mx-auto mb-6 flex h-24 w-24 items-center justify-center rounded-full border">
+          <div class="border-primary/20 bg-primary/5 relative mx-auto mb-6 flex h-24 w-24 items-center justify-center rounded-full border shadow-[0_0_30px_rgba(79,70,229,0.2)]">
             <div class="border-primary/30 absolute inset-0 animate-ping rounded-full border opacity-25" />
             <div class="border-secondary/25 absolute inset-2 animate-pulse rounded-full border" />
             <div class="border-primary/10 absolute inset-4 animate-[spin_60s_linear_infinite] rounded-full border border-dashed" />
-            <RadioTower class="text-primary drop-shadow-brand-glow h-10 w-10" />
+            <RadioTower class="text-primary h-10 w-10 drop-shadow-[0_0_12px_rgba(79,70,229,0.55)]" />
           </div>
 
           <div class="border-secondary/20 bg-secondary/5 mb-3.5 inline-flex items-center gap-2.5 rounded-full border px-3.5 py-1">
@@ -346,8 +346,10 @@ export default function LoginPage(props: LoginPageProps) {
             </p>
           </div>
 
-          <h1 class="brand-type text-display-medium text-on-surface">JMSR</h1>
-          <p class="text-body-large text-on-surface-variant mx-auto mt-2 max-w-md">
+          <h1 class="font-display text-on-surface text-[45px] leading-[52px] font-bold tracking-tight">
+            JMSR
+          </h1>
+          <p class="text-on-surface-variant mx-auto mt-2 max-w-md text-[16px] leading-[24px]">
             Connect this Playback Target to a known Jellyfin server.
           </p>
         </div>
@@ -356,11 +358,11 @@ export default function LoginPage(props: LoginPageProps) {
           <div class="via-primary/55 absolute top-0 left-0 h-[2px] w-full bg-gradient-to-r from-transparent to-transparent" />
           <div class="space-y-7">
             <div>
-              <h2 class="text-headline-small text-on-surface flex items-center gap-2.5">
+              <h2 class="font-display text-on-surface flex items-center gap-2.5 text-[24px] leading-[32px] font-bold tracking-tight">
                 <span class="bg-primary h-5 w-1.5 rounded" />
                 Server coordinates
               </h2>
-              <p class="text-body-medium text-on-surface-variant mt-1.5">
+              <p class="text-on-surface-variant mt-1.5 text-[14px] leading-[20px]">
                 Choose the protocol and host. JMSR shows the final Server URL before any Login
                 Method starts.
               </p>
@@ -375,7 +377,7 @@ export default function LoginPage(props: LoginPageProps) {
                   >
                     <button
                       type="button"
-                      class={`text-label-large cursor-pointer rounded-xl px-4 py-3 transition-all duration-300 ${field().state.value === 'https' ? 'bg-primary bg-brand-gradient text-on-primary shadow-primary/20 font-bold shadow-md' : 'text-on-surface-variant hover:text-on-surface hover:bg-surface-container-highest/40'}`}
+                      class={`cursor-pointer rounded-xl px-4 py-3 text-[14px] leading-[20px] font-semibold tracking-wide uppercase transition-all duration-300 ${field().state.value === 'https' ? 'bg-primary from-primary to-primary-gradient-end text-on-primary shadow-primary/20 bg-gradient-to-r font-bold shadow-md' : 'text-on-surface-variant hover:text-on-surface hover:bg-surface-container-highest/40'}`}
                       disabled={isQuickConnectWaiting()}
                       onClick={() => field().handleChange('https')}
                     >
@@ -383,7 +385,7 @@ export default function LoginPage(props: LoginPageProps) {
                     </button>
                     <button
                       type="button"
-                      class={`text-label-large cursor-pointer rounded-xl px-4 py-3 transition-all duration-300 ${field().state.value === 'http' ? 'bg-primary bg-brand-gradient text-on-primary shadow-primary/20 font-bold shadow-md' : 'text-on-surface-variant hover:text-on-surface hover:bg-surface-container-highest/40'}`}
+                      class={`cursor-pointer rounded-xl px-4 py-3 text-[14px] leading-[20px] font-semibold tracking-wide uppercase transition-all duration-300 ${field().state.value === 'http' ? 'bg-primary from-primary to-primary-gradient-end text-on-primary shadow-primary/20 bg-gradient-to-r font-bold shadow-md' : 'text-on-surface-variant hover:text-on-surface hover:bg-surface-container-highest/40'}`}
                       disabled={isQuickConnectWaiting()}
                       onClick={() => field().handleChange('http')}
                     >
@@ -397,17 +399,26 @@ export default function LoginPage(props: LoginPageProps) {
                   <ArkField.Root class="block" disabled={isQuickConnectWaiting()}>
                     <ArkField.Label class="sr-only">Jellyfin host</ArkField.Label>
                     <ArkField.Input
-                      type="text"
-                      value={field().state.value}
-                      onInput={(event) => {
-                        const { value } = event.currentTarget;
-                        const explicitScheme = explicitSchemeFromInput(value);
-                        const strippedHost = stripServerScheme(value);
-                        field().handleChange(strippedHost);
-                        form.setFieldValue('scheme', explicitScheme ?? defaultSchemeForHost(value));
-                      }}
-                      class="input-filled w-full"
-                      placeholder="jellyfin.local or media.example.com/jellyfin"
+                      asChild={(fieldProps) => (
+                        <FieldControl
+                          {...fieldProps()}
+                          variant="filled"
+                          type="text"
+                          value={field().state.value}
+                          onInput={(event) => {
+                            const { value } = event.currentTarget;
+                            const explicitScheme = explicitSchemeFromInput(value);
+                            const strippedHost = stripServerScheme(value);
+                            field().handleChange(strippedHost);
+                            form.setFieldValue(
+                              'scheme',
+                              explicitScheme ?? defaultSchemeForHost(value),
+                            );
+                          }}
+                          class="w-full"
+                          placeholder="jellyfin.local or media.example.com/jellyfin"
+                        />
+                      )}
                     />
                   </ArkField.Root>
                 )}
@@ -416,11 +427,11 @@ export default function LoginPage(props: LoginPageProps) {
 
             <div class="border-outline-variant bg-surface-container-lowest/40 relative overflow-hidden rounded-2xl border p-4 backdrop-blur-sm">
               <div class="bg-secondary absolute inset-y-0 left-0 w-[3px]" />
-              <p class="text-label-small text-on-surface-variant/90 uppercase">
+              <p class="text-on-surface-variant/90 text-[11px] leading-[16px] font-bold tracking-[0.08em] uppercase">
                 Server URL preview
               </p>
               <p
-                class={`text-body-medium mt-1 font-mono break-all ${serverUrl() ? 'text-secondary font-semibold drop-shadow-[0_0_8px_rgba(129,140,248,0.15)]' : 'text-warning'}`}
+                class={`text-on-surface-variant mt-1 font-mono text-[14px] leading-[20px] break-all ${serverUrl() ? 'text-secondary font-semibold drop-shadow-[0_0_8px_rgba(129,140,248,0.15)]' : 'text-warning'}`}
               >
                 {serverUrl() || 'Enter a server host to preview the final URL'}
               </p>
@@ -447,14 +458,14 @@ export default function LoginPage(props: LoginPageProps) {
                 <Tabs.Trigger
                   value="quickConnect"
                   disabled={isQuickConnectWaiting()}
-                  class={`text-label-large cursor-pointer rounded-xl px-4 py-3 transition-all duration-300 ${loginMethod() === 'quickConnect' ? 'bg-brand-gradient text-on-primary shadow-primary/25 font-bold shadow-lg' : 'text-on-surface-variant hover:text-on-surface hover:bg-surface-container-highest/40'}`}
+                  class={`cursor-pointer rounded-xl px-4 py-3 text-[14px] leading-[20px] font-semibold tracking-wide uppercase transition-all duration-300 ${loginMethod() === 'quickConnect' ? 'from-primary to-primary-gradient-end text-on-primary shadow-primary/25 bg-gradient-to-r font-bold shadow-lg' : 'text-on-surface-variant hover:text-on-surface hover:bg-surface-container-highest/40'}`}
                 >
                   Quick Connect
                 </Tabs.Trigger>
                 <Tabs.Trigger
                   value="password"
                   disabled={isQuickConnectWaiting()}
-                  class={`text-label-large cursor-pointer rounded-xl px-4 py-3 transition-all duration-300 ${loginMethod() === 'password' ? 'bg-brand-gradient text-on-primary shadow-primary/25 font-bold shadow-lg' : 'text-on-surface-variant hover:text-on-surface hover:bg-surface-container-highest/40'}`}
+                  class={`cursor-pointer rounded-xl px-4 py-3 text-[14px] leading-[20px] font-semibold tracking-wide uppercase transition-all duration-300 ${loginMethod() === 'password' ? 'from-primary to-primary-gradient-end text-on-primary shadow-primary/25 bg-gradient-to-r font-bold shadow-lg' : 'text-on-surface-variant hover:text-on-surface hover:bg-surface-container-highest/40'}`}
                 >
                   Password
                 </Tabs.Trigger>
@@ -467,13 +478,13 @@ export default function LoginPage(props: LoginPageProps) {
                   {/* Decorative radar background */}
                   <div class="border-secondary/20 bg-secondary/5 relative mx-auto mb-4 flex h-20 w-20 items-center justify-center rounded-full border">
                     <Show when={isQuickConnectWaiting()}>
-                      <div class="border-secondary/40 animate-radar-ring absolute inset-0 rounded-full border" />
+                      <div class="border-secondary/40 absolute inset-0 animate-[radar-pulse_2.2s_cubic-bezier(0.2,0.8,0.2,1)_infinite] rounded-full border" />
                       <div
-                        class="border-secondary/30 animate-radar-ring absolute inset-0 rounded-full border"
+                        class="border-secondary/30 absolute inset-0 animate-[radar-pulse_2.2s_cubic-bezier(0.2,0.8,0.2,1)_infinite] rounded-full border"
                         style="animation-delay: 0.7s"
                       />
                       <div
-                        class="border-secondary/20 animate-radar-ring absolute inset-0 rounded-full border"
+                        class="border-secondary/20 absolute inset-0 animate-[radar-pulse_2.2s_cubic-bezier(0.2,0.8,0.2,1)_infinite] rounded-full border"
                         style="animation-delay: 1.4s"
                       />
                     </Show>
@@ -482,11 +493,11 @@ export default function LoginPage(props: LoginPageProps) {
                     />
                   </div>
 
-                  <p class="text-body-medium text-on-secondary-container font-medium">
+                  <p class="text-on-secondary-container text-[14px] leading-[20px] font-medium">
                     Approve this code from another signed-in Jellyfin client. JMSR will finish login
                     automatically after approval.
                   </p>
-                  <p class="text-body-small text-on-surface-variant/80 mt-2">
+                  <p class="text-on-surface-variant/80 mt-2 text-[12px] leading-[16px]">
                     You are authorizing this Playback Target.
                   </p>
 
@@ -495,14 +506,14 @@ export default function LoginPage(props: LoginPageProps) {
                       <span class="text-on-surface-variant/80 mb-1 text-[10px] font-bold tracking-[0.2em] uppercase">
                         Verification Code
                       </span>
-                      <p class="text-display-small text-secondary pl-[0.25em] font-mono tracking-[0.25em] drop-shadow-[0_0_10px_rgba(129,140,248,0.55)]">
+                      <p class="font-display text-secondary pl-[0.25em] font-mono text-[36px] leading-[44px] font-bold tracking-[0.25em] tracking-tight drop-shadow-[0_0_10px_rgba(129,140,248,0.55)]">
                         {quickConnectCode()}
                       </p>
                     </div>
                   </Show>
 
                   <Show when={isQuickConnectWaiting()}>
-                    <div class="text-label-medium text-secondary mt-5 flex animate-pulse items-center justify-center gap-2">
+                    <div class="text-secondary mt-5 flex animate-pulse items-center justify-center gap-2 text-[12px] leading-[16px] font-bold tracking-[0.05em] uppercase">
                       <span class="bg-secondary h-2 w-2 rounded-full shadow-[0_0_8px_#818cf8]" />
                       Awaiting Quick Connect Approval…
                     </div>
@@ -515,14 +526,20 @@ export default function LoginPage(props: LoginPageProps) {
                   <form.Field name="username">
                     {(field) => (
                       <ArkField.Root class="block">
-                        <ArkField.Label class="text-label-medium mb-1.5 block">
+                        <ArkField.Label class="text-on-surface-variant mb-1.5 block text-[12px] leading-[16px] font-bold tracking-[0.05em] uppercase">
                           Username
                         </ArkField.Label>
                         <ArkField.Input
-                          class="input-filled w-full"
-                          value={field().state.value}
-                          onInput={(event) => field().handleChange(event.currentTarget.value)}
-                          placeholder="Jellyfin username"
+                          asChild={(fieldProps) => (
+                            <FieldControl
+                              {...fieldProps()}
+                              variant="filled"
+                              value={field().state.value}
+                              onInput={(event) => field().handleChange(event.currentTarget.value)}
+                              class="w-full"
+                              placeholder="Jellyfin username"
+                            />
+                          )}
                         />
                       </ArkField.Root>
                     )}
@@ -530,15 +547,21 @@ export default function LoginPage(props: LoginPageProps) {
                   <form.Field name="password">
                     {(field) => (
                       <ArkField.Root class="block">
-                        <ArkField.Label class="text-label-medium mb-1.5 block">
+                        <ArkField.Label class="text-on-surface-variant mb-1.5 block text-[12px] leading-[16px] font-bold tracking-[0.05em] uppercase">
                           Password
                         </ArkField.Label>
                         <ArkField.Input
-                          type="password"
-                          class="input-filled w-full"
-                          value={field().state.value}
-                          onInput={(event) => field().handleChange(event.currentTarget.value)}
-                          placeholder="Jellyfin password"
+                          asChild={(fieldProps) => (
+                            <FieldControl
+                              {...fieldProps()}
+                              variant="filled"
+                              type="password"
+                              value={field().state.value}
+                              onInput={(event) => field().handleChange(event.currentTarget.value)}
+                              class="w-full"
+                              placeholder="Jellyfin password"
+                            />
+                          )}
                         />
                       </ArkField.Root>
                     )}
@@ -550,10 +573,10 @@ export default function LoginPage(props: LoginPageProps) {
                         onCheckedChange={(details) =>
                           field().handleChange(details.checked === true)
                         }
-                        class="ark-checkbox text-body-medium text-on-surface mt-2.5"
+                        class="text-on-surface mt-2.5 inline-flex cursor-pointer items-center gap-2.5 align-top text-[14px] leading-[20px] transition-opacity select-none disabled:cursor-not-allowed disabled:opacity-50"
                       >
-                        <Checkbox.Control class="ark-checkbox__control">
-                          <Checkbox.Indicator class="ark-checkbox__indicator">
+                        <Checkbox.Control class="border-outline bg-surface-container-high text-on-primary hover:border-primary/60 data-[state=checked]:border-primary data-[state=checked]:from-primary data-[state=checked]:to-primary-gradient-end data-[state=indeterminate]:border-primary data-[state=indeterminate]:from-primary data-[state=indeterminate]:to-primary-gradient-end data-[focus-visible]:ring-primary/50 data-[focus-visible]:ring-offset-background inline-flex h-5.5 w-5.5 shrink-0 items-center justify-center rounded-lg border text-[11px] leading-none transition-all duration-200 data-[focus-visible]:ring-2 data-[focus-visible]:ring-offset-2 data-[focus-visible]:outline-none data-[state=checked]:bg-gradient-to-br data-[state=indeterminate]:bg-gradient-to-br">
+                          <Checkbox.Indicator class="flex items-center justify-center font-black">
                             <Check class="h-3.5 w-3.5" stroke-width={4} />
                           </Checkbox.Indicator>
                         </Checkbox.Control>
@@ -575,8 +598,10 @@ export default function LoginPage(props: LoginPageProps) {
               >
                 <CircleAlert class="text-error mt-0.5 h-5 w-5 shrink-0" />
                 <div>
-                  <p class="text-title-small text-error font-bold">Connection needs attention</p>
-                  <p class="text-body-medium mt-0.5">{error()}</p>
+                  <p class="text-error text-[14px] leading-[20px] font-bold font-semibold">
+                    Connection needs attention
+                  </p>
+                  <p class="text-on-surface-variant mt-0.5 text-[14px] leading-[20px]">{error()}</p>
                 </div>
               </div>
             </Show>
@@ -608,6 +633,6 @@ export default function LoginPage(props: LoginPageProps) {
 
         <PageFooter class="mt-8" />
       </main>
-    </div>
+    </ConsoleShell>
   );
 }

@@ -11,7 +11,7 @@ import {
   seasonLabel,
   showSubtitle,
 } from '@components/library/shared';
-import { Button, StatusBadge } from '@components/ui';
+import { Button, Card, ConsoleGrid, StatusBadge } from '@components/ui';
 import { createFileRoute } from '@tanstack/solid-router';
 import { Exit } from 'effect';
 import { Film, Library, RefreshCw, Tv } from 'lucide-solid';
@@ -277,7 +277,7 @@ function LibraryShowDetailRoute() {
           fallback={<LibraryStatusPanel title={statusTitle()} description={statusDescription()} />}
         >
           {(show) => (
-            <div class="console-grid">
+            <ConsoleGrid>
               {/* Left Column (Interactive): Seasons & Episode List */}
               <section
                 class="order-2 min-w-0 space-y-4 lg:order-1"
@@ -285,11 +285,16 @@ function LibraryShowDetailRoute() {
               >
                 <div class="flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">
                   <div>
-                    <h2 id="show-seasons-title" class="text-title-large">
+                    <h2
+                      id="show-seasons-title"
+                      class="text-on-surface text-[22px] leading-[28px] font-bold"
+                    >
                       Episodes
                     </h2>
                   </div>
-                  <p class="text-body-small">{show().seasons.length} seasons available</p>
+                  <p class="text-on-surface-variant/80 text-[12px] leading-[16px]">
+                    {show().seasons.length} seasons available
+                  </p>
                 </div>
 
                 <Show
@@ -342,19 +347,26 @@ function LibraryShowDetailRoute() {
                       }
                     >
                       <section class="space-y-3" aria-labelledby="season-episodes-title">
-                        <h3 id="season-episodes-title" class="text-title-medium">
+                        <h3
+                          id="season-episodes-title"
+                          class="text-on-surface text-[16px] leading-[24px] font-semibold"
+                        >
                           {activeSeason() ? `${activeSeason()?.name} Episodes` : 'Episodes'}
                         </h3>
-                        <div class="animate-fade-in flex flex-col gap-3">
+                        <div class="flex animate-[fadeIn_0.3s_cubic-bezier(0.16,1,0.3,1)_forwards] flex-col gap-3">
                           <For each={seasonEpisodes()}>
                             {(episode) => (
-                              <div class="card-filled grid grid-cols-1 items-center gap-4 p-3 sm:grid-cols-[160px_1fr_auto]">
+                              <Card
+                                variant="filled"
+                                surfaceTint={false}
+                                class="grid grid-cols-1 items-center gap-4 !p-3 sm:grid-cols-[160px_1fr_auto]"
+                              >
                                 {/* Episode thumbnail - landscape, episode-specific */}
                                 <div class="bg-surface-container-lowest/60 aspect-video w-full overflow-hidden rounded-lg">
                                   <Show
                                     when={episode.artworkUrl}
                                     fallback={
-                                      <div class="text-label-small text-on-surface-variant flex h-full items-center justify-center">
+                                      <div class="text-on-surface-variant flex h-full items-center justify-center text-[11px] leading-[16px] font-bold tracking-[0.08em] uppercase">
                                         <Film class="h-5 w-5" />
                                       </div>
                                     }
@@ -373,7 +385,7 @@ function LibraryShowDetailRoute() {
                                 {/* Episode metadata column */}
                                 <div class="min-w-0 space-y-1.5">
                                   <div class="flex flex-wrap items-center gap-2">
-                                    <span class="text-label-small text-secondary">
+                                    <span class="text-secondary text-[11px] leading-[16px] font-bold tracking-[0.08em] uppercase">
                                       {episodeLabel(episode)}
                                     </span>
                                     <Show when={episode.played}>
@@ -385,8 +397,7 @@ function LibraryShowDetailRoute() {
                                     <Show when={formatRuntime(episode.runtimeSeconds)}>
                                       {(runtime) => (
                                         <>
-                                          <span class="text-on-surface-variant/70">·</span>{' '}
-                                          <span class="text-body-small text-on-surface-variant/70">
+                                          <span class="text-on-surface-variant/70 text-[12px] leading-[16px]">
                                             {runtime()}
                                           </span>
                                         </>
@@ -400,14 +411,14 @@ function LibraryShowDetailRoute() {
                                       }
                                     >
                                       <span class="text-on-surface-variant/70">·</span>{' '}
-                                      <span class="text-body-small text-secondary font-semibold">
+                                      <span class="text-secondary text-[12px] leading-[16px] font-semibold">
                                         {Math.round(episode.playedPercentage ?? 0)}% watched
                                       </span>
                                     </Show>
                                   </div>
                                   <a
                                     href={`/library/items/${episode.id}`}
-                                    class="text-title-medium block truncate hover:underline"
+                                    class="text-on-surface block truncate text-[16px] leading-[24px] font-semibold hover:underline"
                                   >
                                     {episode.name}
                                   </a>
@@ -425,7 +436,7 @@ function LibraryShowDetailRoute() {
                                       <Button
                                         type="button"
                                         variant="primary"
-                                        class="text-label-large rounded-full px-5 py-2"
+                                        class="rounded-full px-5 py-2 text-[14px] leading-[20px] font-semibold tracking-wide uppercase"
                                         disabled={episodePlayBusy() !== null || confirmBusy()}
                                         onClick={() => void playEpisode(episode)}
                                       >
@@ -436,7 +447,7 @@ function LibraryShowDetailRoute() {
                                     <Button
                                       type="button"
                                       variant="primary"
-                                      class="text-label-large rounded-full px-5 py-2"
+                                      class="rounded-full px-5 py-2 text-[14px] leading-[20px] font-semibold tracking-wide uppercase"
                                       disabled={episodePlayBusy() !== null || confirmBusy()}
                                       onClick={() => void playEpisode(episode)}
                                     >
@@ -444,7 +455,7 @@ function LibraryShowDetailRoute() {
                                     </Button>
                                   </Show>
                                 </div>
-                              </div>
+                              </Card>
                             )}
                           </For>
                         </div>
@@ -456,15 +467,19 @@ function LibraryShowDetailRoute() {
 
               {/* Right Column (Sidebar): Series Info */}
               <aside class="order-1 space-y-6 lg:order-2">
-                <article class="card-filled space-y-4">
+                <Card as="article" variant="filled" class="space-y-4">
                   <div class="bg-surface-container-lowest/60 border-outline-variant aspect-[2/3] overflow-hidden rounded-2xl border">
                     <Show
                       when={show().artworkUrl}
                       fallback={
                         <div class="text-on-surface-variant flex h-full flex-col items-center justify-center gap-3 px-6 text-center">
                           <Tv class="h-8 w-8" />
-                          <p class="text-title-medium">{show().name}</p>
-                          <p class="text-label-small">No artwork</p>
+                          <p class="text-on-surface text-[16px] leading-[24px] font-semibold">
+                            {show().name}
+                          </p>
+                          <p class="text-on-surface-variant/90 text-[11px] leading-[16px] font-bold tracking-[0.08em] uppercase">
+                            No artwork
+                          </p>
                         </div>
                       }
                     >
@@ -472,15 +487,21 @@ function LibraryShowDetailRoute() {
                         <img
                           src={artworkUrl()}
                           alt={`${show().name} artwork`}
-                          class="animate-fade-in h-full w-full object-cover"
+                          class="h-full w-full animate-[fadeIn_0.3s_cubic-bezier(0.16,1,0.3,1)_forwards] object-cover"
                         />
                       )}
                     </Show>
                   </div>
                   <div>
-                    <p class="text-label-small text-secondary">Series</p>
-                    <h1 class="text-headline-medium">{show().name}</h1>
-                    <p class="text-body-medium mt-1">{showSubtitle(show())}</p>
+                    <p class="text-secondary text-[11px] leading-[16px] font-bold tracking-[0.08em] uppercase">
+                      Series
+                    </p>
+                    <h1 class="font-display text-[28px] leading-[36px] font-bold tracking-tight">
+                      {show().name}
+                    </h1>
+                    <p class="text-on-surface-variant mt-1 text-[14px] leading-[20px]">
+                      {showSubtitle(show())}
+                    </p>
                   </div>
                   <div class="flex flex-wrap gap-2">
                     <StatusBadge variant={show().played ? 'success' : 'neutral'}>
@@ -502,7 +523,7 @@ function LibraryShowDetailRoute() {
 
                   <Show when={show().overview}>
                     {(overview) => (
-                      <p class="text-body-medium border-outline-variant/30 border-t pt-3 leading-relaxed">
+                      <p class="text-on-surface-variant border-outline-variant/30 border-t pt-3 text-[14px] leading-[20px] leading-relaxed">
                         {overview()}
                       </p>
                     )}
@@ -524,7 +545,9 @@ function LibraryShowDetailRoute() {
                   <Show when={show().nextEpisode}>
                     {(nextEpisode) => (
                       <div class="border-outline-variant/30 flex flex-col gap-3 border-t pt-3">
-                        <p class="text-label-small text-secondary">Up Next</p>
+                        <p class="text-secondary text-[11px] leading-[16px] font-bold tracking-[0.08em] uppercase">
+                          Up Next
+                        </p>
                         <Button
                           type="button"
                           variant="primary"
@@ -536,16 +559,16 @@ function LibraryShowDetailRoute() {
                         </Button>
                         <a
                           href={`/library/items/${nextEpisode().id}`}
-                          class="text-body-small text-on-surface-variant hover:text-secondary block truncate text-center underline-offset-4 hover:underline"
+                          class="text-on-surface-variant hover:text-secondary block truncate text-center text-[12px] leading-[16px] underline-offset-4 hover:underline"
                         >
                           Next: {nextEpisode().name}
                         </a>
                       </div>
                     )}
                   </Show>
-                </article>
+                </Card>
               </aside>
-            </div>
+            </ConsoleGrid>
           )}
         </Show>
       </Suspense>
@@ -560,7 +583,7 @@ function LibraryShowDetailRoute() {
         )}
       </Show>
       <Show when={playError()}>
-        {(message) => <p class="text-body-small text-error">{message()}</p>}
+        {(message) => <p class="text-error text-[12px] leading-[16px]">{message()}</p>}
       </Show>
     </div>
   );
@@ -568,7 +591,7 @@ function LibraryShowDetailRoute() {
 
 function ShowDetailSkeleton() {
   return (
-    <div class="console-grid" aria-hidden="true">
+    <ConsoleGrid aria-hidden={true}>
       <section class="order-2 min-w-0 space-y-4 lg:order-1">
         <div class="flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">
           <div class="bg-surface-container-high/80 h-7 w-32 animate-pulse rounded-md" />
@@ -585,7 +608,7 @@ function ShowDetailSkeleton() {
       </section>
 
       <aside class="order-1 space-y-6 lg:order-2">
-        <article class="card-filled space-y-4">
+        <Card as="article" variant="filled" surfaceTint={false} class="space-y-4">
           <div class="bg-surface-container-lowest/60 border-outline-variant aspect-[2/3] animate-pulse rounded-2xl border" />
           <div class="space-y-3">
             <div class="bg-surface-container-high/60 h-3 w-16 animate-pulse rounded" />
@@ -608,9 +631,9 @@ function ShowDetailSkeleton() {
           <div class="border-outline-variant/30 border-t pt-3">
             <div class="bg-primary-container/40 h-11 w-full animate-pulse rounded-full" />
           </div>
-        </article>
+        </Card>
       </aside>
-    </div>
+    </ConsoleGrid>
   );
 }
 
@@ -621,7 +644,11 @@ function SeasonEpisodesSkeleton() {
       <div class="flex flex-col gap-3">
         <For each={[0, 1, 2]}>
           {() => (
-            <div class="card-filled grid grid-cols-1 items-center gap-4 p-3 sm:grid-cols-[160px_1fr_auto]">
+            <Card
+              variant="filled"
+              surfaceTint={false}
+              class="grid grid-cols-1 items-center gap-4 !p-3 sm:grid-cols-[160px_1fr_auto]"
+            >
               <div class="bg-surface-container-lowest/60 aspect-video w-full animate-pulse rounded-lg" />
               <div class="min-w-0 space-y-2">
                 <div class="flex flex-wrap items-center gap-2">
@@ -631,7 +658,7 @@ function SeasonEpisodesSkeleton() {
                 <div class="bg-surface-container-high/80 h-5 w-4/5 animate-pulse rounded" />
               </div>
               <div class="bg-primary-container/40 h-10 w-24 animate-pulse rounded-full" />
-            </div>
+            </Card>
           )}
         </For>
       </div>

@@ -17,6 +17,6 @@ TanStack Form remains the value and validation owner for forms. Ark Field only s
 ## Consequences
 
 - Interactive primitives can be migrated incrementally without importing a generic visual theme.
-- Shared CSS targets Ark data attributes while preserving Control Room styling.
+- Component-local Tailwind classes target Ark data attributes while preserving Control Room styling.
 - Tests should assert user behavior first, with small data-scope/data-part smoke checks for migrated Ark families.
 - Hand-rolled primitives should not be added where an adopted Ark primitive already fits the control semantics.

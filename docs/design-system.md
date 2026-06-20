@@ -2,7 +2,7 @@
 
 JMSR uses a desktop-first Control Room design system: dark-only, clean OLED surfaces, selective cinematic glass, and clear operational state. The interface should feel like a reliable media companion for a Jellyfin Playback Target, not a generic mobile settings app.
 
-Do not manually rebuild controls from raw utility piles when a component class exists. Use shared classes from `src/index.css` for buttons, inputs, cards, text styles, status surfaces, and diagnostics patterns.
+Apply Tailwind atomic utilities directly for styling. Design tokens live in `src/styles/vars.css.ts` (vanilla-extract) and are surfaced to Tailwind via `@theme inline` aliases in `src/index.css`; non-atomic component CSS (e.g. card gradients) lives in component-local `.css.ts` files. Reusable visual patterns are components under `src/components/ui`, not global `@layer` class APIs.
 
 ## Principles
 
@@ -14,7 +14,7 @@ Do not manually rebuild controls from raw utility piles when a component class e
 
 ## Color System
 
-All components use semantic tokens. `#4f46e5` is the JMSR brand seed and primary filled-action background; it is not used as small text on near-black surfaces because contrast is insufficient.
+All components use semantic tokens. Tailwind utility tokens (`text-primary`, `bg-surface`, etc.) are aliases backed by the vanilla-extract contract in `src/styles/vars.css.ts` and re-exported through `@theme inline` in `src/index.css`. `#4f46e5` is the JMSR brand seed and primary filled-action background; it is not used as small text on near-black surfaces because contrast is insufficient.
 
 | Token | Tailwind Class | Hex | Usage |
 |---|---|---:|---|
@@ -48,7 +48,8 @@ All components use semantic tokens. `#4f46e5` is the JMSR brand seed and primary
 | On Surface Variant | `text-on-surface-variant` | `#aeb8cc` | Secondary text, labels |
 | Outline | `border-outline` | `#5c6c8c` | Strong borders/focus support |
 | Outline Variant | `border-outline-variant` | `#262e42` | Subtle dividers |
-| Brand Glow | `bg-brand-glow` | `#4f46e5` | Ambient indigo glow only |
+| Primary Gradient End | `to-primary-gradient-end` | `#7a7eff` | Primary button/track gradient endpoint |
+| Secondary Gradient End | `to-secondary-gradient-end` | `#0b4b60` | Secondary/tonal button gradient endpoint |
 
 ## Color Semantics
 
@@ -67,29 +68,48 @@ body { font-family: 'Inter Variable', ui-sans-serif, system-ui, sans-serif; }
 h1, h2, h3, .brand-type { font-family: 'Space Grotesk Variable', 'Inter Variable', ui-sans-serif, system-ui, sans-serif; }
 .code, .diagnostic-value { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; }
 ```
+Apply typography through Tailwind atoms directly. The previous `text-display-*`, `text-headline-*`, `text-title-*`, `text-body-*`, `text-label-*` helper classes are gone; use the atomic equivalents below. Add the default color only when the element has no other base text color.
 
-Use the shared text helpers: `text-display-*`, `text-headline-*`, `text-title-*`, `text-body-*`, and `text-label-*`.
+| Style | Atoms | Default color |
+|---|---|---|
+| Display medium | `font-display text-[45px] leading-[52px] font-bold tracking-tight` | — |
+| Display small | `font-display text-[36px] leading-[44px] font-bold tracking-tight` | — |
+| Headline large | `font-display text-[32px] leading-[40px] font-bold tracking-tight` | — |
+| Headline medium | `font-display text-[28px] leading-[36px] font-bold tracking-tight` | — |
+| Headline small | `font-display text-[24px] leading-[32px] font-bold tracking-tight` | — |
+| Title large | `text-[22px] leading-[28px] font-bold` | `text-on-surface` |
+| Title medium | `text-[16px] leading-[24px] font-semibold` | `text-on-surface` |
+| Title small | `text-[14px] leading-[20px] font-semibold` | `text-on-surface` |
+| Body large | `text-[16px] leading-[24px]` | `text-on-surface-variant` |
+| Body medium | `text-[14px] leading-[20px]` | `text-on-surface-variant` |
+| Body small | `text-[12px] leading-[16px]` | `text-on-surface-variant/80` |
+| Label large | `text-[14px] leading-[20px] font-semibold tracking-wide uppercase` | — |
+| Label medium | `text-[12px] leading-[16px] font-bold tracking-[0.05em] uppercase` | `text-on-surface-variant` |
+| Label small | `text-[11px] leading-[16px] font-bold tracking-[0.08em] uppercase` | `text-on-surface-variant/90` |
 
 ## Components
 
 ### Buttons
 
 - Use the `<Button>` component (`src/components/ui/Button.tsx`) for `primary`, `secondary`, `tonal`, `outlined`, `text`, and `icon` variants. One primary action per section or state.
-- `btn-text`: inline/subtle action helper class for ad-hoc use (e.g. collapsible triggers).
-- `btn-icon`: icon-only action helper class with an accessible label.
+- For Ark triggers that should look like a button (collapsible, dialog, tags-input delete), render `<Button>` through the Ark part's `asChild` prop instead of reaching for a helper class.
 
 ### Inputs
 
-- Use filled/inset fields for Login and configuration forms.
-- Use outlined/tonal controls for compact selectors such as HTTP/HTTPS.
+- Use `<FieldControl>` / `<FieldTextarea>` (`src/components/ui/FieldControl.tsx`) with `variant="filled"` (Login and configuration) or `variant="outlined"` (compact selectors). In Ark Field parts, render them through `asChild` so Ark keeps owning ARIA/focus.
+- `<TextField>` (`src/components/ui/TextField.tsx`) wraps `FieldControl` with label, error, and hint for plain forms.
 - Every field has a visible label. Errors appear near the field.
 
 ### Cards and Surfaces
 
-- `card-filled`: default solid panel.
-- `card-elevated`: emphasized/hero or important panel.
-- `card-outlined`: panel requiring extra separation.
-- Hero surfaces may use selective gradient/glass. Diagnostics and dense text must remain solid.
+- Use `<Card>` / `<CardLink>` (`src/components/ui/Card.tsx`) with `variant="filled"` (default solid panel), `"elevated"` (hero/emphasized), or `"outlined"` (extra separation). `<CardLink>` is the card-styled anchor for navigational cards.
+- Hero surfaces may use selective gradient/glass (the non-atomic gradients live in `Card.css.ts`). Diagnostics and dense text must remain solid.
+
+### Layout helpers
+
+- `<ConsoleShell>`, `<ConsoleContainer>`, and `<ConsoleGrid>` (`src/components/ui/ConsoleLayout.tsx`) compose the authenticated shell, centered content column, and two-column console grid.
+- `<SectionCard>` wraps a `Card` with an icon + title header.
+- `<JmsrSelect>` and `<StatusBadge>` are the select and status-pill components.
 
 ### Concentric Border Radius
 

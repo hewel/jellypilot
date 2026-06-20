@@ -1,6 +1,7 @@
 import { Show, splitProps } from 'solid-js';
 
-type TextFieldVariant = 'filled' | 'outlined';
+import { FieldControl } from './FieldControl';
+import type { FieldControlVariant } from './FieldControl';
 
 interface TextFieldProps {
   name: string;
@@ -13,7 +14,7 @@ interface TextFieldProps {
   disabled?: boolean;
   error?: string;
   hint?: string;
-  variant?: TextFieldVariant;
+  variant?: FieldControlVariant;
   class?: string;
   inputClass?: string;
 }
@@ -39,17 +40,16 @@ export default function TextField(props: TextFieldProps) {
   ]);
 
   const variant = () => local.variant ?? 'filled';
-  const inputVariantClass = () => (variant() === 'outlined' ? 'input-outlined' : 'input-filled');
 
   return (
     <div class={`group ${local.class ?? ''}`}>
       <label
         for={local.name}
-        class="text-label-medium text-on-surface-variant group-focus-within:text-primary mb-1 ml-1 block tracking-wider uppercase transition-colors"
+        class="text-on-surface-variant group-focus-within:text-primary mb-1 ml-1 block text-[12px] leading-[16px] font-bold tracking-[0.05em] tracking-wider uppercase transition-colors"
       >
         {local.label}
       </label>
-      <input
+      <FieldControl
         id={local.name}
         name={local.name}
         type={local.type ?? 'text'}
@@ -58,16 +58,19 @@ export default function TextField(props: TextFieldProps) {
         onBlur={() => local.onBlur?.()}
         placeholder={local.placeholder}
         disabled={local.disabled}
-        class={`${inputVariantClass()} w-full ${local.inputClass ?? ''}`}
+        variant={variant()}
+        class={`w-full ${local.inputClass ?? ''}`}
         {...rest}
       />
       <Show when={local.error}>
-        <p class="text-error text-body-small animate-in slide-in-from-top-1 fade-in mt-1.5 ml-1 duration-200">
+        <p class="text-error animate-in slide-in-from-top-1 fade-in mt-1.5 ml-1 text-[12px] leading-[16px] duration-200">
           {local.error}
         </p>
       </Show>
       <Show when={local.hint && !local.error}>
-        <p class="text-on-surface-variant/70 text-body-small mt-1.5 ml-1">{local.hint}</p>
+        <p class="text-on-surface-variant/70 mt-1.5 ml-1 text-[12px] leading-[16px]">
+          {local.hint}
+        </p>
       </Show>
     </div>
   );

@@ -29,8 +29,8 @@ export default function JmsrSelect<Value extends string>(props: JmsrSelectProps<
   const isCompact = () => props.size === 'compact';
   const labelClass = () =>
     isCompact()
-      ? 'mb-2 block text-label-medium text-on-surface-variant'
-      : 'mb-1.5 block text-label-medium';
+      ? 'mb-2 block text-[12px] leading-[16px] font-bold tracking-[0.05em] uppercase text-on-surface-variant'
+      : 'mb-1.5 block text-on-surface-variant text-[12px] leading-[16px] font-bold tracking-[0.05em] uppercase';
   const triggerClass = () =>
     isCompact()
       ? 'flex h-12 w-full items-center justify-between gap-2 rounded-lg border border-outline-variant bg-surface-container-low px-3 text-left text-on-surface outline-none transition-all duration-200 hover:border-secondary/50 focus:border-secondary focus:ring-2 focus:ring-secondary/25 disabled:cursor-not-allowed disabled:opacity-50'
@@ -52,11 +52,11 @@ export default function JmsrSelect<Value extends string>(props: JmsrSelectProps<
       class={props.class}
     >
       <Select.Label class={labelClass()}>{props.label}</Select.Label>
-      <Select.Control class="select-filled flex w-full items-center">
+      <Select.Control class="flex w-full items-center">
         <Select.Trigger class={triggerClass()}>
           <Select.ValueText
             placeholder={props.placeholder}
-            class="text-body-medium text-on-surface min-w-0 truncate font-medium"
+            class="text-on-surface min-w-0 truncate text-[14px] leading-[20px] font-medium"
           />
           <Select.Indicator>
             <ChevronDown class="text-on-surface-variant/70 h-4 w-4" />
@@ -70,7 +70,7 @@ export default function JmsrSelect<Value extends string>(props: JmsrSelectProps<
               {(item) => (
                 <Select.Item
                   item={item}
-                  class="text-body-medium text-on-surface-variant hover:bg-surface-container-high hover:text-on-surface flex cursor-pointer items-center justify-between rounded-xl px-3.5 py-2.5 transition-colors data-disabled:cursor-not-allowed data-disabled:opacity-50"
+                  class="text-on-surface-variant hover:bg-surface-container-high hover:text-on-surface flex cursor-pointer items-center justify-between rounded-xl px-3.5 py-2.5 text-[14px] leading-[20px] transition-colors data-disabled:cursor-not-allowed data-disabled:opacity-50"
                 >
                   <Select.ItemText class="font-medium">{item.label}</Select.ItemText>
                 </Select.Item>

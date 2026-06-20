@@ -18,7 +18,7 @@ import type {
 } from '../../bindings';
 import { commandFailureMessage } from '../../effects/commands';
 import type { CommandError } from '../../effects/errors';
-import { Button } from '../ui';
+import { Button, Card, CardLink } from '../ui';
 import type { JmsrSelectItem } from '../ui';
 import { MediaInfoHoverCard } from './MediaInfoHoverCard';
 import { VideoHomeCard } from './VideoHomeCard';
@@ -28,22 +28,30 @@ export { VideoHomeCard } from './VideoHomeCard';
 
 export function LibraryStatusPanel(props: { title: string; description?: string }) {
   return (
-    <section class="card-elevated space-y-5" aria-labelledby="video-home-status-title">
+    <Card
+      as="section"
+      variant="elevated"
+      class="space-y-5"
+      aria-labelledby="video-home-status-title"
+    >
       <div class="flex items-start gap-4">
         <div class="border-tertiary/30 bg-tertiary-container/25 text-tertiary flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl border">
           <Clapperboard class="h-6 w-6" />
         </div>
         <div class="space-y-2">
-          <h2 id="video-home-status-title" class="text-headline-small">
+          <h2
+            id="video-home-status-title"
+            class="font-display text-[24px] leading-[32px] font-bold tracking-tight"
+          >
             {props.title}
           </h2>
-          <p class="text-body-medium">
+          <p class="text-on-surface-variant text-[14px] leading-[20px]">
             {props.description ??
               'JMSR is checking the current Jellyfin session before loading Library data.'}
           </p>
         </div>
       </div>
-    </section>
+    </Card>
   );
 }
 
@@ -63,7 +71,7 @@ export function VideoHomeRow(props: {
   return (
     <Show when={props.items.length > 0}>
       <section class="space-y-3" aria-labelledby={`row-${props.id}`}>
-        <h2 id={`row-${props.id}`} class="text-title-large">
+        <h2 id={`row-${props.id}`} class="text-on-surface text-[22px] leading-[28px] font-bold">
           {props.title}
         </h2>
         <div class="grid gap-3 sm:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-6">
@@ -88,25 +96,28 @@ export function LibraryShortcutRow(props: {
   return (
     <Show when={props.shortcuts.length > 0}>
       <section class="space-y-3" aria-labelledby="library-shortcuts">
-        <h2 id="library-shortcuts" class="text-title-large">
+        <h2 id="library-shortcuts" class="text-on-surface text-[22px] leading-[28px] font-bold">
           Video Libraries
         </h2>
         <div class={isList() ? 'flex flex-col gap-3' : 'grid gap-3 sm:grid-cols-4'}>
           <For each={props.shortcuts}>
             {(shortcut) => (
-              <a
+              <CardLink
+                variant="filled"
                 href={`/library/${shortcut.collectionType}/${shortcut.id}`}
-                class="card-filled focus-visible:ring-secondary/70 flex items-center justify-between gap-4 focus-visible:ring-2 focus-visible:outline-none"
+                class="focus-visible:ring-secondary/70 flex items-center justify-between gap-4 focus-visible:ring-2 focus-visible:outline-none"
               >
                 <div>
-                  <p class="text-title-medium">{shortcut.name}</p>
-                  <p class="text-body-small">
+                  <p class="text-on-surface text-[16px] leading-[24px] font-semibold">
+                    {shortcut.name}
+                  </p>
+                  <p class="text-on-surface-variant/80 text-[12px] leading-[16px]">
                     {shortcut.collectionType === 'tvshows' ? 'Shows' : 'Movies'}{' '}
                     {shortcut.itemCount !== null ? `· ${shortcut.itemCount} items` : ''}
                   </p>
                 </div>
                 <Library class="text-secondary h-5 w-5 shrink-0" />
-              </a>
+              </CardLink>
             )}
           </For>
         </div>
@@ -164,10 +175,11 @@ export function VideoLibraryCard(props: {
   const aspectClass = () => (isPoster() ? 'aspect-[2/3]' : 'aspect-video');
 
   return (
-    <a
+    <CardLink
+      variant="filled"
       href={href()}
       aria-label={`Open ${props.item.name}`}
-      class="card-filled group focus-visible:ring-secondary/70 hover:border-primary/50 hover:shadow-brand-glow-sm block overflow-hidden p-0 transition-all duration-300 focus-visible:ring-2 focus-visible:outline-none"
+      class="group focus-visible:ring-secondary/70 hover:border-primary/50 block overflow-hidden !p-0 transition-all duration-300 hover:shadow-[0_0_10px_rgba(79,70,229,0.35)] focus-visible:ring-2 focus-visible:outline-none"
     >
       <div
         class={`${aspectClass()} border-outline-variant bg-surface-container-lowest/60 overflow-hidden border-b`}
@@ -175,7 +187,7 @@ export function VideoLibraryCard(props: {
         <Show
           when={props.item.artworkUrl}
           fallback={
-            <div class="text-label-small text-on-surface-variant flex h-full flex-col items-center justify-center gap-2 px-4 text-center">
+            <div class="text-on-surface-variant flex h-full flex-col items-center justify-center gap-2 px-4 text-center text-[11px] leading-[16px] font-bold tracking-[0.08em] uppercase">
               <Icon class="h-5 w-5" />
               <span>No artwork</span>
             </div>
@@ -192,13 +204,17 @@ export function VideoLibraryCard(props: {
         </Show>
       </div>
       <div class="space-y-2 p-4">
-        <p class="text-title-medium line-clamp-2">{props.item.name}</p>
-        <p class="text-body-small">{subtitle()}</p>
+        <p class="text-on-surface line-clamp-2 text-[16px] leading-[24px] font-semibold">
+          {props.item.name}
+        </p>
+        <p class="text-on-surface-variant/80 text-[12px] leading-[16px]">{subtitle()}</p>
         <Show when={props.item.favorite}>
-          <p class="text-label-small text-secondary">Favorite</p>
+          <p class="text-secondary text-[11px] leading-[16px] font-bold tracking-[0.08em] uppercase">
+            Favorite
+          </p>
         </Show>
       </div>
-    </a>
+    </CardLink>
   );
 }
 
@@ -318,7 +334,7 @@ export function UserDataControls(props: {
         </Button>
       </div>
       <Show when={error()}>
-        {(message) => <p class="text-body-small text-error">{message()}</p>}
+        {(message) => <p class="text-error text-[12px] leading-[16px]">{message()}</p>}
       </Show>
     </div>
   );

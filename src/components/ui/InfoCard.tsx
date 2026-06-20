@@ -11,7 +11,7 @@ interface InfoCardProps {
 export default function InfoCard(props: InfoCardProps) {
   return (
     <div class="bg-surface-container-high/30 border-outline-variant/60 relative overflow-hidden rounded-2xl border p-4 shadow-inner backdrop-blur-sm">
-      <span class="text-label-small text-on-surface-variant/90 mb-1 block tracking-wider uppercase">
+      <span class="text-on-surface-variant/90 mb-1 block text-[11px] leading-[16px] font-bold tracking-[0.08em] tracking-wider uppercase">
         {props.label}
       </span>
       {props.children}

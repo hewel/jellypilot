@@ -111,8 +111,12 @@ test('media controls use shared icon buttons and primary text action', async () 
 
   await waitFor(() => expect(screen.getByText('Player bridge offline')).toBeVisible());
 
-  expect(screen.getByLabelText('Previous episode').className).toContain('variantStyles_icon');
-  expect(screen.getByLabelText('Stop playback').className).toContain('variantStyles_icon');
+  const previous = screen.getByLabelText('Previous episode');
+  expect(previous).toBeVisible();
+  expect(previous).toBeDisabled();
+  const stop = screen.getByLabelText('Stop playback');
+  expect(stop).toBeVisible();
+  expect(stop).toBeDisabled();
   const startMpv = screen.getByRole('button', { name: 'Start MPV' });
   expect(startMpv).toHaveTextContent('Start MPV');
   expect(startMpv.querySelector('svg')).not.toBeNull();

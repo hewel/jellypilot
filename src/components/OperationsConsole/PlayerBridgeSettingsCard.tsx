@@ -4,7 +4,7 @@ import { TagsInput } from '@ark-ui/solid/tags-input';
 import { ArrowDown, ArrowUp, ChevronDown, Globe, Plus, Settings, Trash2 } from 'lucide-solid';
 import { For, Show } from 'solid-js';
 
-import { Button, JmsrSelect, SectionCard } from '../ui';
+import { Button, FieldControl, FieldTextarea, JmsrSelect, SectionCard } from '../ui';
 import type { JmsrSelectItem } from '../ui';
 import { useOperationsConsoleStore } from './store';
 import { getSubtitleLanguageLabel, parseSubtitleLanguageInput } from './subtitleLanguages';
@@ -27,7 +27,7 @@ export default function PlayerBridgeSettingsCard(props: PlayerBridgeSettingsCard
 
   return (
     <SectionCard
-      icon={<Settings class="text-primary drop-shadow-brand-glow-sm h-5 w-5" />}
+      icon={<Settings class="text-primary h-5 w-5 drop-shadow-[0_0_8px_rgba(79,70,229,0.4)]" />}
       title="Player Bridge settings"
       trailing={
         <Show when={ui.playerBridgeSaveStatus}>
@@ -54,28 +54,34 @@ export default function PlayerBridgeSettingsCard(props: PlayerBridgeSettingsCard
         >
           {(field) => (
             <ArkField.Root class="block" invalid={field().state.meta.errors.length > 0}>
-              <ArkField.Label class="text-label-medium mb-1.5 block">
+              <ArkField.Label class="text-on-surface-variant mb-1.5 block text-[12px] leading-[16px] font-bold tracking-[0.05em] uppercase">
                 Playback Target name
               </ArkField.Label>
               <ArkField.Input
-                id={field().name}
-                name={field().name}
-                type="text"
-                value={field().state.value}
-                onInput={(event) => field().handleChange(event.currentTarget.value)}
-                onBlur={(event) => {
-                  field().handleBlur();
-                  props.onSaveTextSetting('deviceName', event.currentTarget.value);
-                }}
-                class="input-filled w-full"
-                placeholder="JMSR"
+                asChild={(fieldProps) => (
+                  <FieldControl
+                    {...fieldProps()}
+                    variant="filled"
+                    id={field().name}
+                    name={field().name}
+                    type="text"
+                    value={field().state.value}
+                    onInput={(event) => field().handleChange(event.currentTarget.value)}
+                    onBlur={(event) => {
+                      field().handleBlur();
+                      props.onSaveTextSetting('deviceName', event.currentTarget.value);
+                    }}
+                    class="w-full"
+                    placeholder="JMSR"
+                  />
+                )}
               />
               <Show when={field().state.meta.errors.length > 0}>
-                <ArkField.ErrorText class="text-body-small text-error mt-1.5 font-semibold">
+                <ArkField.ErrorText class="text-error mt-1.5 text-[12px] leading-[16px] font-semibold">
                   {field().state.meta.errors[0]}
                 </ArkField.ErrorText>
               </Show>
-              <ArkField.HelperText class="text-body-small text-on-surface-variant/80 mt-1.5">
+              <ArkField.HelperText class="text-on-surface-variant/80 mt-1.5 text-[12px] leading-[16px]">
                 Name displayed in Jellyfin cast menu.
               </ArkField.HelperText>
             </ArkField.Root>
@@ -85,22 +91,28 @@ export default function PlayerBridgeSettingsCard(props: PlayerBridgeSettingsCard
         <props.form.Field name="mpvPath">
           {(field) => (
             <ArkField.Root class="block">
-              <ArkField.Label class="text-label-medium mb-1.5 block">
+              <ArkField.Label class="text-on-surface-variant mb-1.5 block text-[12px] leading-[16px] font-bold tracking-[0.05em] uppercase">
                 MPV executable path
               </ArkField.Label>
               <div class="flex flex-col gap-2.5 sm:flex-row">
                 <ArkField.Input
-                  id={field().name}
-                  name={field().name}
-                  type="text"
-                  value={field().state.value}
-                  onInput={(event) => field().handleChange(event.currentTarget.value)}
-                  onBlur={(event) => {
-                    field().handleBlur();
-                    props.onSaveTextSetting('mpvPath', event.currentTarget.value);
-                  }}
-                  placeholder="Path to mpv executable"
-                  class="input-filled min-w-0 flex-1"
+                  asChild={(fieldProps) => (
+                    <FieldControl
+                      {...fieldProps()}
+                      variant="filled"
+                      id={field().name}
+                      name={field().name}
+                      type="text"
+                      value={field().state.value}
+                      onInput={(event) => field().handleChange(event.currentTarget.value)}
+                      onBlur={(event) => {
+                        field().handleBlur();
+                        props.onSaveTextSetting('mpvPath', event.currentTarget.value);
+                      }}
+                      placeholder="Path to mpv executable"
+                      class="min-w-0 flex-1"
+                    />
+                  )}
                 />
                 <Button
                   type="button"
@@ -122,7 +134,16 @@ export default function PlayerBridgeSettingsCard(props: PlayerBridgeSettingsCard
           lazyMount
           unmountOnExit
         >
-          <Collapsible.Trigger class="btn-text group hover:text-secondary flex cursor-pointer items-center gap-1 px-0 font-bold">
+          <Collapsible.Trigger
+            asChild={(triggerProps) => (
+              <Button
+                {...triggerProps()}
+                type="button"
+                variant="text"
+                class="group hover:text-secondary px-0 font-bold"
+              />
+            )}
+          >
             <Collapsible.Indicator>
               <ChevronDown
                 class={`h-4.5 w-4.5 transition-transform duration-300 ${ui.advancedOpen ? 'text-secondary rotate-180' : 'text-on-surface-variant'}`}
@@ -134,11 +155,11 @@ export default function PlayerBridgeSettingsCard(props: PlayerBridgeSettingsCard
           <Collapsible.Content class="border-outline-variant bg-surface-container-lowest/30 mt-3 rounded-2xl border p-4 backdrop-blur-sm">
             <section class="space-y-4">
               <div>
-                <h3 class="text-title-small text-on-surface flex items-center gap-2">
+                <h3 class="text-on-surface flex items-center gap-2 text-[14px] leading-[20px] font-semibold">
                   <span class="bg-secondary h-3 w-1 rounded" />
                   MPV arguments
                 </h3>
-                <p class="text-body-small text-on-surface-variant/70 mt-1">
+                <p class="text-on-surface-variant/70 mt-1 text-[12px] leading-[16px]">
                   Extra command-line flags passed to the external MPV process.
                 </p>
               </div>
@@ -146,19 +167,25 @@ export default function PlayerBridgeSettingsCard(props: PlayerBridgeSettingsCard
               <props.form.Field name="mpvArgs">
                 {(field) => (
                   <ArkField.Root class="block">
-                    <ArkField.Label class="text-label-medium mb-1.5 block">
+                    <ArkField.Label class="text-on-surface-variant mb-1.5 block text-[12px] leading-[16px] font-bold tracking-[0.05em] uppercase">
                       Extra arguments
                     </ArkField.Label>
                     <ArkField.Textarea
-                      value={field().state.value}
-                      onInput={(event) => field().handleChange(event.currentTarget.value)}
-                      onBlur={(event) => {
-                        field().handleBlur();
-                        props.onSaveTextSetting('mpvArgs', event.currentTarget.value);
-                      }}
-                      rows={4}
-                      placeholder="--fullscreen&#10;--force-window"
-                      class="input-filled text-body-small h-auto w-full py-3.5 font-mono"
+                      asChild={(fieldProps) => (
+                        <FieldTextarea
+                          {...fieldProps()}
+                          variant="filled"
+                          value={field().state.value}
+                          onInput={(event) => field().handleChange(event.currentTarget.value)}
+                          onBlur={(event) => {
+                            field().handleBlur();
+                            props.onSaveTextSetting('mpvArgs', event.currentTarget.value);
+                          }}
+                          rows={4}
+                          placeholder="--fullscreen&#10;--force-window"
+                          class="text-on-surface-variant/80 h-auto w-full py-3.5 font-mono text-[12px] leading-[16px]"
+                        />
+                      )}
                     />
                   </ArkField.Root>
                 )}
@@ -175,11 +202,11 @@ export default function PlayerBridgeSettingsCard(props: PlayerBridgeSettingsCard
         >
           <div class="flex flex-wrap items-start justify-between gap-4">
             <div>
-              <h3 class="text-title-medium text-on-surface flex items-center gap-2">
+              <h3 class="text-on-surface flex items-center gap-2 text-[16px] leading-[24px] font-semibold">
                 <Globe class="text-secondary h-4.5 w-4.5" />
                 Preferred subtitle languages
               </h3>
-              <p class="text-body-small text-on-surface-variant/80 mt-1">
+              <p class="text-on-surface-variant/80 mt-1 text-[12px] leading-[16px]">
                 Add Jellyfin language codes in fallback priority order.
               </p>
             </div>
@@ -209,23 +236,33 @@ export default function PlayerBridgeSettingsCard(props: PlayerBridgeSettingsCard
             />
 
             <ArkField.Root class="flex min-w-0 flex-col">
-              <ArkField.Label class="text-label-medium mb-1.5 block">Custom code</ArkField.Label>
+              <ArkField.Label class="text-on-surface-variant mb-1.5 block text-[12px] leading-[16px] font-bold tracking-[0.05em] uppercase">
+                Custom code
+              </ArkField.Label>
               <div class="flex gap-2">
                 <ArkField.Input
-                  id="custom-subtitle-lang-input"
-                  type="text"
-                  value={ui.subtitleLanguageInput}
-                  onInput={(event) => actions.setSubtitleLanguageInput(event.currentTarget.value)}
-                  onKeyDown={(event) => {
-                    if (event.key !== 'Enter') {
-                      return;
-                    }
-                    event.preventDefault();
-                    props.onAddSubtitleLanguages();
-                  }}
-                  class="input-filled min-w-0 flex-1 font-mono"
-                  placeholder="e.g. pol, tha"
-                  aria-label="Custom subtitle language code"
+                  asChild={(fieldProps) => (
+                    <FieldControl
+                      {...fieldProps()}
+                      variant="filled"
+                      id="custom-subtitle-lang-input"
+                      type="text"
+                      value={ui.subtitleLanguageInput}
+                      onInput={(event) =>
+                        actions.setSubtitleLanguageInput(event.currentTarget.value)
+                      }
+                      onKeyDown={(event) => {
+                        if (event.key !== 'Enter') {
+                          return;
+                        }
+                        event.preventDefault();
+                        props.onAddSubtitleLanguages();
+                      }}
+                      class="min-w-0 flex-1 font-mono"
+                      placeholder="e.g. pol, tha"
+                      aria-label="Custom subtitle language code"
+                    />
+                  )}
                 />
                 <button
                   type="button"
@@ -243,7 +280,7 @@ export default function PlayerBridgeSettingsCard(props: PlayerBridgeSettingsCard
           <Show
             when={ui.selectedSubtitleLanguages.length > 0}
             fallback={
-              <p class="border-outline-variant bg-surface-container-lowest/20 text-body-small text-on-surface-variant/80 mt-5 rounded-2xl border border-dashed px-4 py-4 text-center backdrop-blur-sm">
+              <p class="border-outline-variant bg-surface-container-lowest/20 text-on-surface-variant/80 mt-5 rounded-2xl border border-dashed px-4 py-4 text-center text-[12px] leading-[16px] backdrop-blur-sm">
                 No preferred subtitle languages selected. JMSR will use Jellyfin and media defaults.
               </p>
             }
@@ -266,7 +303,7 @@ export default function PlayerBridgeSettingsCard(props: PlayerBridgeSettingsCard
                       <TagsInput.ItemText class="text-on-surface shrink-0 font-mono text-[14px] font-bold">
                         {language}
                       </TagsInput.ItemText>
-                      <span class="text-body-small text-on-surface-variant/80 truncate">
+                      <span class="text-on-surface-variant/80 truncate text-[12px] leading-[16px]">
                         {getSubtitleLanguageLabel(language)}
                       </span>
                     </TagsInput.ItemPreview>
@@ -294,12 +331,20 @@ export default function PlayerBridgeSettingsCard(props: PlayerBridgeSettingsCard
                         <ArrowDown class="h-4 w-4" />
                       </Button>
                       <TagsInput.ItemDeleteTrigger
-                        class="btn-icon border-outline-variant/60 bg-surface-container-high/30 hover:border-error hover:text-error h-8 w-8 rounded-lg border"
-                        aria-label={`Remove ${language}`}
-                        onClick={() => props.onRemoveSubtitleLanguage(language)}
-                      >
-                        <Trash2 class="h-4 w-4" />
-                      </TagsInput.ItemDeleteTrigger>
+                        asChild={(triggerProps) => (
+                          <Button
+                            {...triggerProps()}
+                            type="button"
+                            variant="icon"
+                            size="sm"
+                            class="border-outline-variant/60 bg-surface-container-high/30 hover:border-error hover:text-error h-8 w-8 rounded-lg border"
+                            aria-label={`Remove ${language}`}
+                            onClick={() => props.onRemoveSubtitleLanguage(language)}
+                          >
+                            <Trash2 class="h-4 w-4" />
+                          </Button>
+                        )}
+                      />
                     </div>
                   </TagsInput.Item>
                 )}

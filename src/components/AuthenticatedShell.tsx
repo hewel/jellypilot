@@ -4,7 +4,7 @@ import { Show, createResource, createSignal, onCleanup, onMount } from 'solid-js
 
 import { commands, events } from '../bindings';
 import type { ConnectionState, NowPlayingState } from '../bindings';
-import { Button, StatusBadge } from './ui';
+import { Button, Card, ConsoleShell, StatusBadge } from './ui';
 
 const navItems: {
   href: '/library' | '/now-playing' | '/settings' | '/diagnostics';
@@ -65,7 +65,7 @@ function ShellHeader(props: { connection: ConnectionState | undefined }) {
         </span>
         <div class="flex flex-col">
           <div class="flex items-center gap-1.5">
-            <span class="brand-type text-title-large from-on-surface via-on-surface to-primary bg-gradient-to-r bg-clip-text text-transparent">
+            <span class="font-display from-on-surface via-on-surface to-primary bg-gradient-to-r bg-clip-text text-[22px] leading-[28px] font-bold tracking-tight text-transparent">
               JMSR
             </span>
             <span class="border-primary/20 bg-primary/5 text-primary rounded border px-1.5 py-0.5 text-[9px] font-black tracking-[0.2em] uppercase">
@@ -101,7 +101,9 @@ function ShellHeader(props: { connection: ConnectionState | undefined }) {
           fallback={
             <div class="text-on-surface-variant/60 flex items-center gap-2.5">
               <span class="bg-outline-variant h-2 w-2 animate-pulse rounded-full" />
-              <span class="text-body-small font-semibold">Connecting...</span>
+              <span class="text-on-surface-variant/80 text-[12px] leading-[16px] font-semibold">
+                Connecting...
+              </span>
             </div>
           }
         >
@@ -178,8 +180,10 @@ function CompactNowPlayingSummary() {
   };
 
   return (
-    <aside
-      class="card-filled flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between"
+    <Card
+      as="aside"
+      variant="filled"
+      class="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between"
       aria-label="Compact Now Playing"
     >
       <div class="flex min-w-0 items-center gap-3">
@@ -187,9 +191,11 @@ function CompactNowPlayingSummary() {
           <MonitorPlay class="h-5 w-5" />
         </div>
         <div class="min-w-0">
-          <p class="text-label-small">Now Playing</p>
-          <p class="text-title-medium truncate">{title()}</p>
-          <p class="text-body-small truncate">{subtitle()}</p>
+          <p class="text-on-surface-variant/90 text-[11px] leading-[16px] font-bold tracking-[0.08em] uppercase">
+            Now Playing
+          </p>
+          <p class="text-on-surface truncate text-[16px] leading-[24px] font-semibold">{title()}</p>
+          <p class="text-on-surface-variant/80 truncate text-[12px] leading-[16px]">{subtitle()}</p>
         </div>
       </div>
       <div class="flex shrink-0 items-center gap-3">
@@ -209,7 +215,7 @@ function CompactNowPlayingSummary() {
           Open Now Playing
         </Button>
       </div>
-    </aside>
+    </Card>
   );
 }
 
@@ -222,18 +228,18 @@ export default function AuthenticatedShell() {
   const showCompactNowPlaying = () => nowPlayingMatch() === undefined;
 
   return (
-    <div class="console-shell">
+    <ConsoleShell>
       <div class="mx-auto flex w-full flex-col gap-5">
         <ShellHeader connection={connection()} />
         <div class="flex min-w-0 flex-col gap-6">
           <Show when={showCompactNowPlaying()}>
             <CompactNowPlayingSummary />
           </Show>
-          <main class="animate-fade-in min-w-0">
+          <main class="min-w-0 animate-[fadeIn_0.3s_cubic-bezier(0.16,1,0.3,1)_forwards]">
             <Outlet />
           </main>
         </div>
       </div>
-    </div>
+    </ConsoleShell>
   );
 }

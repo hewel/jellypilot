@@ -152,10 +152,12 @@ export default function DiagnosticsPanel(props: DiagnosticsPanelProps) {
           <Checkbox.Root
             checked={autoScroll()}
             onCheckedChange={(details) => setAutoScroll(details.checked === true)}
-            class="ark-checkbox text-label-small text-on-surface-variant/95"
+            class="text-on-surface-variant/95 inline-flex cursor-pointer items-center gap-2.5 align-top text-[11px] leading-[16px] font-bold tracking-[0.08em] uppercase transition-opacity select-none disabled:cursor-not-allowed disabled:opacity-50"
           >
-            <Checkbox.Control class="ark-checkbox__control">
-              <Checkbox.Indicator class="ark-checkbox__indicator">✓</Checkbox.Indicator>
+            <Checkbox.Control class="border-outline bg-surface-container-high text-on-primary hover:border-primary/60 data-[state=checked]:border-primary data-[state=checked]:from-primary data-[state=checked]:to-primary-gradient-end data-[state=indeterminate]:border-primary data-[state=indeterminate]:from-primary data-[state=indeterminate]:to-primary-gradient-end data-[focus-visible]:ring-primary/50 data-[focus-visible]:ring-offset-background inline-flex h-5.5 w-5.5 shrink-0 items-center justify-center rounded-lg border text-[11px] leading-none transition-all duration-200 data-[focus-visible]:ring-2 data-[focus-visible]:ring-offset-2 data-[focus-visible]:outline-none data-[state=checked]:bg-gradient-to-br data-[state=indeterminate]:bg-gradient-to-br">
+              <Checkbox.Indicator class="flex items-center justify-center font-black">
+                ✓
+              </Checkbox.Indicator>
             </Checkbox.Control>
             <Checkbox.Label class="cursor-pointer select-none">Auto-scroll</Checkbox.Label>
             <Checkbox.HiddenInput />
@@ -170,14 +172,14 @@ export default function DiagnosticsPanel(props: DiagnosticsPanelProps) {
         <Show
           when={visibleEntries().length > 0}
           fallback={
-            <p class="text-body-small text-on-surface-variant/60 py-10 text-center font-mono">
+            <p class="text-on-surface-variant/60 py-10 text-center font-mono text-[12px] leading-[16px]">
               No diagnostics yet. Runtime events from the Rust backend will appear here.
             </p>
           }
         >
           <For each={visibleEntries()}>
             {(entry) => (
-              <div class="diagnostic-row relative overflow-hidden">
+              <div class="border-outline-variant/40 bg-surface-container-lowest/70 text-on-surface-variant hover:bg-surface-container-lowest/90 hover:border-outline-variant/60 relative overflow-hidden rounded-xl border px-3.5 py-2 font-mono text-[12px] leading-5 transition-colors">
                 <div class="relative z-10 flex flex-wrap items-center gap-x-3 gap-y-1.5">
                   <span class="text-outline font-semibold select-none">{entry.time}</span>
                   <span
@@ -198,7 +200,7 @@ export default function DiagnosticsPanel(props: DiagnosticsPanelProps) {
           <span
             role="status"
             aria-live="polite"
-            class={`text-label-small font-bold ${copyStatus() === 'copied' ? 'text-tertiary drop-shadow-[0_0_6px_rgba(79,227,177,0.2)]' : 'text-error'}`}
+            class={`text-[11px] leading-[16px] font-bold tracking-[0.08em] uppercase ${copyStatus() === 'copied' ? 'text-tertiary drop-shadow-[0_0_6px_rgba(79,227,177,0.2)]' : 'text-error'}`}
           >
             {copyStatus() === 'copied' ? 'Copied' : 'Copy failed'}
           </span>
@@ -209,7 +211,7 @@ export default function DiagnosticsPanel(props: DiagnosticsPanelProps) {
           disabled={diagnostics().length === 0}
           variant="text"
           size="sm"
-          class="border-outline-variant hover:border-secondary hover:bg-secondary/5 text-label-small rounded-xl border font-bold"
+          class="border-outline-variant hover:border-secondary hover:bg-secondary/5 text-on-surface-variant/90 rounded-xl border text-[11px] leading-[16px] font-bold tracking-[0.08em] uppercase"
         >
           Copy diagnostics
         </Button>
@@ -218,7 +220,7 @@ export default function DiagnosticsPanel(props: DiagnosticsPanelProps) {
           onClick={clearDiagnostics}
           variant="text"
           size="sm"
-          class="border-outline-variant hover:border-error hover:bg-error/5 text-label-small hover:text-error rounded-xl border font-bold"
+          class="border-outline-variant hover:border-error hover:bg-error/5 text-on-surface-variant/90 hover:text-error rounded-xl border text-[11px] leading-[16px] font-bold tracking-[0.08em] uppercase"
         >
           Clear
         </Button>

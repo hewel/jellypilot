@@ -64,6 +64,7 @@ bun tauri build     # Production desktop build
 - **Solid.js reactivity**: Use `createSignal`, `createResource`, NOT React hooks
 - **Frontend file ownership**: Page-level `.tsx` route code belongs in the actual TanStack file-route entry under `src/routes/**`; do not split full route pages into ignored `-*.tsx` page-view modules. Reusable or non-page `.tsx` components belong under `src/components/**`; do not put frontend pages/components under `src/features/**`. Route-owned helper modules under `src/routes/**` may use TanStack Router's ignored `-` prefix when they are not route entries, but frontend Tauri data workflows belong under `src/effects/**`.
 - **Forms**: Always use `@tanstack/solid-form` with `createForm` for form handling
+- **Styling**: Use Tailwind utilities directly for atomic styling. Use vanilla-extract for design tokens (`src/styles/vars.css.ts`) and component-local CSS that Tailwind utilities cannot express cleanly. Do not add global `@layer components` classes for reusable UI; create or extend a component under `src/components/ui` instead.
 - **TypeScript / Effect**: When writing TypeScript, you **must** read and follow [docs/agents/effect.md](docs/agents/effect.md) (strictly avoid raw `try/catch` inside business workflows, use Effect's typed error model)
 - **Tauri data in frontend routes**: Keep frontend Tauri data workflows under `src/effects/**`, and keep route `.tsx` files focused on Solid UI state/rendering. Wrap generated `commands.*` calls with `runTauriCommand` / `runTauriCommandRaw` from `src/effects/commands.ts`; do not call raw `commands.*` from route components for reusable business/data workflows. Do not write fallback data objects for failures or missing values: use Effect for failures, `Option` for nullable values, and return success values like empty arrays/pages as data. When a helper returns an Effect `Exit`, unwrap it at the Solid boundary with `Exit.match` / `Exit.isSuccess`.
 - **Route data loading**: When route data is synthesized from multiple sources, differentiate fast/critical data from slow/non-critical data. Await only the data needed for first useful render; return slower values as deferred promises from the TanStack Router loader and render them in the component behind `<Suspense />` with a stable skeleton/fallback. For route loader design, follow TanStack Router deferred data loading: https://tanstack.com/router/latest/docs/guide/deferred-data-loading.
@@ -75,6 +76,7 @@ bun tauri build     # Production desktop build
 - **React patterns in Solid**: No `useState`, `useEffect` – use Solid primitives
 - **Raw Tauri invoke**: Always use typed `commands.*` from bindings
 - **Fallback data workflows**: No raw `try/catch` in TypeScript business/data workflows, and no nullish `if` checks in `src/effects/**`; model those paths with Effect and Option.
+- **Cross-component `.css.ts` imports**: Do not import another component's `.css.ts` style exports directly; consume the component API or move the needed behavior into a shared component.
 - **Blocking route render on slow data**: Do not make TanStack route loaders await slow/non-critical data when the page can render useful fast data first; defer the slow data and render it through `<Suspense />` with a skeleton or other stable fallback.
 
 ## Agent skills
@@ -107,4 +109,4 @@ Single-context repo using root `CONTEXT.md` and root `docs/adr/`. See `docs/agen
 - Rust backend exports bindings to `src/bindings.ts` on debug builds only
 - Test setup extends expect with jest-dom matchers (rstest.setup.ts)
 - See `docs/todos.md` for current tasks and priorities
-- Design system at `docs/design-system.md` with predefined CSS classes based on Tailwind + JMSR Control Room
+- Design system at `docs/design-system.md` is token-backed Tailwind utilities plus UI components under `src/components/ui`

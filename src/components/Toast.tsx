@@ -67,7 +67,9 @@ export default function Toast(props: ToastProps) {
       role="alert"
     >
       <div class="inline-flex flex-shrink-0 items-center justify-center">{getIcon()}</div>
-      <div class="text-body-medium ml-3 flex-1 font-normal break-words">{props.message}</div>
+      <div class="text-on-surface-variant ml-3 flex-1 text-[14px] leading-[20px] font-normal break-words">
+        {props.message}
+      </div>
       <button
         type="button"
         class="hover:bg-on-surface/10 -mx-1.5 -my-1.5 ml-auto inline-flex h-8 w-8 items-center justify-center rounded-full p-1.5 transition-colors"

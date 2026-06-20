@@ -5,7 +5,7 @@ import {
   detailSubtitle,
   formatRuntime,
 } from '@components/library/shared';
-import { Button, JmsrSelect, StatusBadge } from '@components/ui';
+import { Button, Card, JmsrSelect, StatusBadge } from '@components/ui';
 import type { JmsrSelectItem } from '@components/ui';
 import { createFileRoute } from '@tanstack/solid-router';
 import { Exit } from 'effect';
@@ -173,15 +173,19 @@ function LibraryItemDetailRoute() {
 
             return (
               <article class="grid gap-6 lg:grid-cols-[minmax(240px,360px)_1fr]">
-                <div class="card-filled overflow-hidden p-0">
+                <Card variant="filled" surfaceTint={false} class="overflow-hidden !p-0">
                   <div class={`${artworkAspectClass()} bg-surface-container-lowest/60`}>
                     <Show
                       when={item().artworkUrl}
                       fallback={
                         <div class="text-on-surface-variant flex h-full flex-col items-center justify-center gap-3 px-6 text-center">
                           <Film class="h-8 w-8" />
-                          <p class="text-title-medium">{item().name}</p>
-                          <p class="text-label-small">{missingArtworkLabel()}</p>
+                          <p class="text-on-surface text-[16px] leading-[24px] font-semibold">
+                            {item().name}
+                          </p>
+                          <p class="text-on-surface-variant/90 text-[11px] leading-[16px] font-bold tracking-[0.08em] uppercase">
+                            {missingArtworkLabel()}
+                          </p>
                         </div>
                       }
                     >
@@ -194,16 +198,22 @@ function LibraryItemDetailRoute() {
                       )}
                     </Show>
                   </div>
-                </div>
+                </Card>
                 <div class="space-y-5">
                   <div>
-                    <p class="text-label-small text-secondary">{item().itemType}</p>
-                    <h1 class="text-headline-large">{item().name}</h1>
-                    <p class="text-body-large mt-2">{detailSubtitle(item())}</p>
+                    <p class="text-secondary text-[11px] leading-[16px] font-bold tracking-[0.08em] uppercase">
+                      {item().itemType}
+                    </p>
+                    <h1 class="font-display text-[32px] leading-[40px] font-bold tracking-tight">
+                      {item().name}
+                    </h1>
+                    <p class="text-on-surface-variant mt-2 text-[16px] leading-[24px]">
+                      {detailSubtitle(item())}
+                    </p>
                     <Show when={isEpisode() && item().seriesId}>
                       <a
                         href={`/library/shows/${item().seriesId}`}
-                        class="text-body-small text-secondary mt-1 inline-block underline-offset-4 hover:underline"
+                        class="text-secondary mt-1 inline-block text-[12px] leading-[16px] underline-offset-4 hover:underline"
                       >
                         View series
                       </a>
@@ -229,13 +239,15 @@ function LibraryItemDetailRoute() {
                     onSuccess={reloadDetail}
                   />
                   <Show when={item().overview}>
-                    {(overview) => <p class="text-body-medium">{overview()}</p>}
+                    {(overview) => (
+                      <p class="text-on-surface-variant text-[14px] leading-[20px]">{overview()}</p>
+                    )}
                   </Show>
                   <Show when={item().genres.length > 0}>
                     <div class="flex flex-wrap gap-2">
                       <For each={item().genres}>
                         {(genre) => (
-                          <span class="border-outline-variant text-label-small rounded-full border px-3 py-1">
+                          <span class="border-outline-variant text-on-surface-variant/90 rounded-full border px-3 py-1 text-[11px] leading-[16px] font-bold tracking-[0.08em] uppercase">
                             {genre}
                           </span>
                         )}
@@ -243,7 +255,7 @@ function LibraryItemDetailRoute() {
                     </div>
                   </Show>
                   <Show when={item().resumePositionSeconds !== null}>
-                    <p class="text-body-small text-secondary">
+                    <p class="text-secondary text-[12px] leading-[16px]">
                       Resume at {Math.floor(item().resumePositionSeconds ?? 0)}s
                       {item().playedPercentage !== null
                         ? ` · ${Math.round(item().playedPercentage ?? 0)}% watched`
@@ -329,7 +341,7 @@ function LibraryItemDetailRoute() {
                     </Show>
                   </div>
                   <Show when={playError()}>
-                    {(message) => <p class="text-body-small text-error">{message()}</p>}
+                    {(message) => <p class="text-error text-[12px] leading-[16px]">{message()}</p>}
                   </Show>
                 </div>
               </article>
@@ -344,9 +356,9 @@ function LibraryItemDetailRoute() {
 function ItemDetailSkeleton() {
   return (
     <article class="grid gap-6 lg:grid-cols-[minmax(240px,360px)_1fr]" aria-hidden="true">
-      <div class="card-filled overflow-hidden p-0">
+      <Card variant="filled" surfaceTint={false} class="overflow-hidden !p-0">
         <div class="bg-surface-container-lowest/60 aspect-[2/3] animate-pulse" />
-      </div>
+      </Card>
       <div class="space-y-5">
         <div class="space-y-3">
           <div class="bg-surface-container-high/60 h-3 w-20 animate-pulse rounded" />

@@ -793,11 +793,14 @@ test('settings and session actions keep shared visual semantics', async () => {
 
   await screen.findByDisplayValue('JMSR Test');
   const mpvPath = screen.getByPlaceholderText('Path to mpv executable');
-  expect(mpvPath).toHaveClass('input-filled');
+  expect(mpvPath).toBeVisible();
+  expect(mpvPath.className).toContain('border-outline-variant/80');
+  expect(mpvPath.className).not.toContain('input-filled');
   expect(mpvPath.className).not.toMatch(/mpv/);
 
   const disconnect = screen.getByRole('button', { name: 'Disconnect' });
-  expect(disconnect.className).toContain('variantStyles_outlined');
+  expect(disconnect).toBeVisible();
+  expect(disconnect).toBeEnabled();
   expect(disconnect.className).not.toContain('border-error');
 
   const signOut = screen.getByRole('button', { name: 'Sign out' });

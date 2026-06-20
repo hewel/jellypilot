@@ -4,7 +4,7 @@ import {
   VideoHomeRow,
   VideoLibraryCard,
 } from '@components/library/shared';
-import { Button } from '@components/ui';
+import { Button, Card } from '@components/ui';
 import { createFileRoute } from '@tanstack/solid-router';
 import { Exit } from 'effect';
 import { Library, RefreshCw, Search, X } from 'lucide-solid';
@@ -162,11 +162,14 @@ function LibraryLanding() {
     return (
       <section class="space-y-4" aria-labelledby="library-search-results">
         <div class="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-          <h2 id="library-search-results" class="text-title-large">
+          <h2
+            id="library-search-results"
+            class="text-on-surface text-[22px] leading-[28px] font-bold"
+          >
             Search results
           </h2>
           <div class="flex items-center gap-3">
-            <p class="text-body-small">
+            <p class="text-on-surface-variant/80 text-[12px] leading-[16px]">
               {readyState()?.items.length ?? 0} of {readyState()?.page.totalRecordCount ?? 0} for "
               {submittedQuery()}"
             </p>
@@ -181,7 +184,7 @@ function LibraryLanding() {
             </Button>
           </div>
         </div>
-        <div class="animate-fade-in grid gap-3 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5">
+        <div class="grid animate-[fadeIn_0.3s_cubic-bezier(0.16,1,0.3,1)_forwards] gap-3 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5">
           <For each={readyState()?.items ?? []}>{(item) => <VideoLibraryCard item={item} />}</For>
         </div>
         <Show when={readyState()?.page.hasMore}>
@@ -212,7 +215,9 @@ function LibraryLanding() {
             <Library class="h-5 w-5" />
           </div>
           <div>
-            <h1 class="text-title-medium text-on-surface font-bold">Library</h1>
+            <h1 class="text-on-surface text-[16px] leading-[24px] font-bold font-semibold">
+              Library
+            </h1>
             <p class="text-on-surface-variant/80 text-[10px] font-semibold">Jellyfin Media</p>
           </div>
         </div>
@@ -295,7 +300,7 @@ function VideoHomeSkeleton() {
             <div class="grid gap-3 sm:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-6">
               <For each={[0, 1, 2, 3]}>
                 {() => (
-                  <div class="card-filled overflow-hidden p-0">
+                  <Card variant="filled" surfaceTint={false} class="overflow-hidden !p-0">
                     <div
                       class={`${row.aspectClass} border-outline-variant bg-surface-container-lowest/60 animate-pulse border-b`}
                     />
@@ -303,7 +308,7 @@ function VideoHomeSkeleton() {
                       <div class="bg-surface-container-high/80 h-4 w-4/5 animate-pulse rounded" />
                       <div class="bg-surface-container-high/60 h-3 w-3/5 animate-pulse rounded" />
                     </div>
-                  </div>
+                  </Card>
                 )}
               </For>
             </div>

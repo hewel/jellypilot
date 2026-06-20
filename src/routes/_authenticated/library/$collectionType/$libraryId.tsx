@@ -8,7 +8,7 @@ import {
   playedFilterLabel,
   sortItems,
 } from '@components/library/shared';
-import { Button, JmsrSelect } from '@components/ui';
+import { Button, Card, JmsrSelect } from '@components/ui';
 import { createFileRoute } from '@tanstack/solid-router';
 import { Exit } from 'effect';
 import { Check, Library, RefreshCw } from 'lucide-solid';
@@ -128,7 +128,7 @@ function LibraryBrowseRoute() {
               <Library class="h-5 w-5" />
             </div>
             <div>
-              <h1 class="text-title-medium text-on-surface font-bold">
+              <h1 class="text-on-surface text-[16px] leading-[24px] font-bold font-semibold">
                 {libraryTitle(collectionType())}
               </h1>
               <p class="text-on-surface-variant/80 text-[10px] font-semibold">Library Browser</p>
@@ -166,7 +166,9 @@ function LibraryBrowseRoute() {
             />
 
             <fieldset class="min-w-0 space-y-2" aria-label="Played filter">
-              <legend class="text-label-medium text-on-surface-variant">Status</legend>
+              <legend class="text-on-surface-variant text-[12px] leading-[16px] font-bold tracking-[0.05em] uppercase">
+                Status
+              </legend>
               <div class="flex flex-wrap gap-2">
                 <For each={['all', 'played', 'unplayed'] as VideoLibraryPlayedFilter[]}>
                   {(filter) => (
@@ -201,10 +203,10 @@ function LibraryBrowseRoute() {
               setFavoritesOnly(details.checked === true);
               reloadFromFirstPage();
             }}
-            class="ark-checkbox border-outline-variant bg-surface-container-high/50 text-label-large text-on-surface hover:border-secondary/40 h-10 rounded-xl border px-3 transition-colors"
+            class="border-outline-variant bg-surface-container-high/50 text-on-surface hover:border-secondary/40 inline-flex h-10 cursor-pointer items-center gap-2.5 rounded-xl border px-3 align-top text-[14px] leading-[20px] font-semibold tracking-wide uppercase transition-colors transition-opacity select-none disabled:cursor-not-allowed disabled:opacity-50"
           >
-            <Checkbox.Control class="ark-checkbox__control">
-              <Checkbox.Indicator class="ark-checkbox__indicator">
+            <Checkbox.Control class="border-outline bg-surface-container-high text-on-primary hover:border-primary/60 data-[state=checked]:border-primary data-[state=checked]:from-primary data-[state=checked]:to-primary-gradient-end data-[state=indeterminate]:border-primary data-[state=indeterminate]:from-primary data-[state=indeterminate]:to-primary-gradient-end data-[focus-visible]:ring-primary/50 data-[focus-visible]:ring-offset-background inline-flex h-5.5 w-5.5 shrink-0 items-center justify-center rounded-lg border text-[11px] leading-none transition-all duration-200 data-[focus-visible]:ring-2 data-[focus-visible]:ring-offset-2 data-[focus-visible]:outline-none data-[state=checked]:bg-gradient-to-br data-[state=indeterminate]:bg-gradient-to-br">
+              <Checkbox.Indicator class="flex items-center justify-center font-black">
                 <Check class="h-3.5 w-3.5" stroke-width={4} />
               </Checkbox.Indicator>
             </Checkbox.Control>
@@ -228,14 +230,17 @@ function LibraryBrowseRoute() {
           >
             <section class="space-y-4" aria-labelledby="library-browse-title">
               <div class="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-                <h2 id="library-browse-title" class="text-title-large">
+                <h2
+                  id="library-browse-title"
+                  class="text-on-surface text-[22px] leading-[28px] font-bold"
+                >
                   {libraryTitle(collectionType())}
                 </h2>
-                <p class="text-body-small">
+                <p class="text-on-surface-variant/80 text-[12px] leading-[16px]">
                   {readyState()?.items.length ?? 0} of {readyState()?.page.totalRecordCount ?? 0}
                 </p>
               </div>
-              <div class="animate-fade-in grid gap-3 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5">
+              <div class="grid animate-[fadeIn_0.3s_cubic-bezier(0.16,1,0.3,1)_forwards] gap-3 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5">
                 <For each={readyState()?.items ?? []}>
                   {(item) => (
                     <MediaInfoHoverCard id={item.id} itemType={item.itemType}>
@@ -276,14 +281,14 @@ function LibraryBrowseSkeleton() {
       <div class="grid gap-3 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5">
         <For each={[0, 1, 2, 3, 4, 5, 6, 7, 8, 9]}>
           {() => (
-            <div class="card-filled overflow-hidden p-0">
+            <Card variant="filled" surfaceTint={false} class="overflow-hidden !p-0">
               <div class="border-outline-variant bg-surface-container-lowest/60 aspect-[2/3] animate-pulse border-b" />
               <div class="space-y-2 p-4">
                 <div class="bg-surface-container-high/80 h-4 w-4/5 animate-pulse rounded" />
                 <div class="bg-surface-container-high/60 h-3 w-3/5 animate-pulse rounded" />
                 <div class="bg-surface-container-high/50 h-3 w-1/3 animate-pulse rounded" />
               </div>
-            </div>
+            </Card>
           )}
         </For>
       </div>

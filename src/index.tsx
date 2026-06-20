@@ -3,6 +3,7 @@ import '@fontsource-variable/inter';
 import '@fontsource-variable/space-grotesk';
 import { render } from 'solid-js/web';
 
+import './styles/vars.css';
 import './index.css';
 import App from './App';
 
