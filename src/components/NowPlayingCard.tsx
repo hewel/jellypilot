@@ -3,9 +3,24 @@ import { Effect, Exit } from 'effect';
 import { Pause, Play, SkipBack, SkipForward, Square, Volume2, VolumeX } from 'lucide-solid';
 import { Show, createSignal, onCleanup, onMount } from 'solid-js';
 
-import { commands, events } from '../bindings';
-import type { CommandError, NowPlayingState, PropertyValue } from '../bindings';
-import { commandFailureMessage, runTauriCommand } from '../effects/commands';
+import type { NowPlayingState } from '../bindings';
+import { commandFailureMessage } from '../effects/commands';
+import {
+  fetchNowPlayingState,
+  fetchMpvTrackList,
+  setAudioTrack,
+  setSubtitleTrack,
+  seekPlayback,
+  setVolume,
+  playPreviousEpisode,
+  setPause,
+  stopMpv,
+  playNextEpisode,
+  startMpv,
+  toggleMute,
+  listenNowPlayingChanged,
+} from '../effects/nowPlaying';
+import type { MpvTrack, NowPlayingEffect } from '../effects/nowPlaying';
 import { useToast } from './ToastProvider';
 import { Button, Card, JmsrSelect, StatusBadge } from './ui';
 
@@ -68,63 +83,6 @@ function statusVariant(status: NowPlayingState['status']) {
   }
 }
 
-interface MpvTrack {
-  id: number;
-  type: 'audio' | 'sub';
-  label: string;
-  selected: boolean;
-}
-
-function readStringField(value: Record<string, unknown>, key: string): string | null {
-  const field = value[key];
-  return typeof field === 'string' && field.trim().length > 0 ? field.trim() : null;
-}
-
-function trackLabel(track: Record<string, unknown>, fallback: string): string {
-  return (
-    readStringField(track, 'title') ??
-    readStringField(track, 'lang') ??
-    readStringField(track, 'codec') ??
-    fallback
-  );
-}
-
-function parseTrackList(value: PropertyValue): MpvTrack[] {
-  if (typeof value !== 'string' || value === 'Null') {
-    return [];
-  }
-
-  const parsed = Effect.runSyncExit(
-    Effect.try({
-      try: () => JSON.parse(value) as unknown,
-      catch: () => null,
-    }),
-  );
-  if (Exit.isFailure(parsed) || !Array.isArray(parsed.value)) {
-    return [];
-  }
-
-  return parsed.value.flatMap((track): MpvTrack[] => {
-    if (track === null || typeof track !== 'object') {
-      return [];
-    }
-    const value = track as Record<string, unknown>;
-    const id = value.id;
-    const type = value.type;
-    if (typeof id !== 'number' || (type !== 'audio' && type !== 'sub')) {
-      return [];
-    }
-    return [
-      {
-        id,
-        type,
-        label: trackLabel(value, `${type === 'audio' ? 'Audio' : 'Subtitle'} ${id}`),
-        selected: value.selected === true,
-      },
-    ];
-  });
-}
-
 export default function NowPlayingCard(props: {
   jellyfinConnected: boolean;
   onPlayerStarted?: () => void;
@@ -139,31 +97,27 @@ export default function NowPlayingCard(props: {
   const [tracks, setTracks] = createSignal<MpvTrack[]>([]);
 
   const loadTrackList = async (isConnected: boolean) => {
-    if (!isConnected) {
-      setTracks([]);
-      return;
-    }
-    const result = await commands.mpvGetProperty('track-list');
-    setTracks(result.status === 'ok' ? parseTrackList(result.data) : []);
+    const exit = await Effect.runPromiseExit(fetchMpvTrackList(isConnected));
+    setTracks(Exit.isSuccess(exit) ? exit.value : []);
   };
 
   const loadState = async () => {
-    const result = await commands.nowPlayingGetState();
-    if (result.status === 'ok') {
-      setState(result.data);
+    const exit = await Effect.runPromiseExit(fetchNowPlayingState());
+    if (Exit.isSuccess(exit)) {
+      setState(exit.value);
       setSeekDraft(null);
       setVolumeDraft(null);
-      await loadTrackList(result.data.player.connected);
+      await loadTrackList(exit.value.player.connected);
     }
   };
 
   const runCommand = async (
     key: string,
-    command: () => Promise<{ status: 'ok'; data: null } | { status: 'error'; error: CommandError }>,
+    command: () => NowPlayingEffect<void>,
     failure: string,
   ) => {
     setBusy(key);
-    const exit = await Effect.runPromiseExit(runTauriCommand(command));
+    const exit = await Effect.runPromiseExit(command());
     if (Exit.isSuccess(exit)) {
       await loadState();
     } else {
@@ -177,20 +131,18 @@ export default function NowPlayingCard(props: {
     let disposed = false;
     let cleanup: (() => void) | undefined;
 
-    events.nowPlayingChanged
-      .listen((event) => {
-        setState(event.payload.state);
-        setSeekDraft(null);
-        setVolumeDraft(null);
-        void loadTrackList(event.payload.state.player.connected);
-      })
-      .then((unlisten) => {
-        if (disposed) {
-          unlisten();
-        } else {
-          cleanup = unlisten;
-        }
-      });
+    listenNowPlayingChanged((state) => {
+      setState(state);
+      setSeekDraft(null);
+      setVolumeDraft(null);
+      void loadTrackList(state.player.connected);
+    }).then((unlisten) => {
+      if (disposed) {
+        unlisten();
+      } else {
+        cleanup = unlisten;
+      }
+    });
 
     onCleanup(() => {
       disposed = true;
@@ -250,11 +202,7 @@ export default function NowPlayingCard(props: {
     if (value.length === 0 || !Number.isFinite(id) || busy() !== null) {
       return;
     }
-    void runCommand(
-      'audio-track',
-      () => commands.mpvSetAudioTrack(id),
-      'Could not switch audio track',
-    );
+    void runCommand('audio-track', () => setAudioTrack(id), 'Could not switch audio track');
   };
   const switchSubtitleTrack = (value: string) => {
     const id = Number(value);
@@ -263,7 +211,7 @@ export default function NowPlayingCard(props: {
     }
     void runCommand(
       'subtitle-track',
-      () => commands.mpvSetSubtitleTrack(id),
+      () => setSubtitleTrack(id),
       'Could not switch subtitle track',
     );
   };
@@ -271,14 +219,14 @@ export default function NowPlayingCard(props: {
     if (!activeTimeline() || !canControlPlayback() || busy() !== null) {
       return;
     }
-    void runCommand('seek', () => commands.mpvSeek(value), 'Could not seek playback');
+    void runCommand('seek', () => seekPlayback(value), 'Could not seek playback');
   };
 
   const commitVolume = (value: number) => {
     if (!connected() || busy() !== null) {
       return;
     }
-    void runCommand('volume', () => commands.mpvSetVolume(value), 'Could not set volume');
+    void runCommand('volume', () => setVolume(value), 'Could not set volume');
   };
 
   const inner = (
@@ -382,11 +330,7 @@ export default function NowPlayingCard(props: {
           }
           disabled={!current()?.canPlayPrevious || busy() !== null}
           onClick={() =>
-            void runCommand(
-              'previous',
-              commands.jellyfinPlayPreviousEpisode,
-              'Could not play previous episode',
-            )
+            void runCommand('previous', playPreviousEpisode, 'Could not play previous episode')
           }
         >
           <SkipBack class="h-5 w-5" />
@@ -399,7 +343,7 @@ export default function NowPlayingCard(props: {
           onClick={() =>
             void runCommand(
               'pause',
-              () => commands.mpvSetPause(!(player()?.paused ?? true)),
+              () => setPause(!(player()?.paused ?? true)),
               'Could not change playback state',
             )
           }
@@ -418,7 +362,7 @@ export default function NowPlayingCard(props: {
           class="border-outline-variant/60 bg-surface-container-high/30 hover:border-error hover:text-error hover:bg-error/5 rounded-full border"
           aria-label="Stop playback"
           disabled={!canControlPlayback() || busy() !== null}
-          onClick={() => void runCommand('stop', commands.mpvStop, 'Could not stop MPV')}
+          onClick={() => void runCommand('stop', stopMpv, 'Could not stop MPV')}
         >
           <Square class="h-4 w-4 fill-current" />
         </Button>
@@ -433,9 +377,7 @@ export default function NowPlayingCard(props: {
               : unavailableCopy(current()?.nextUnavailableReason)
           }
           disabled={!current()?.canPlayNext || busy() !== null}
-          onClick={() =>
-            void runCommand('next', commands.jellyfinPlayNextEpisode, 'Could not play next episode')
-          }
+          onClick={() => void runCommand('next', playNextEpisode, 'Could not play next episode')}
         >
           <SkipForward class="h-5 w-5" />
         </Button>
@@ -446,7 +388,7 @@ export default function NowPlayingCard(props: {
             class="rounded-full"
             disabled={!props.jellyfinConnected || busy() !== null}
             onClick={() =>
-              void runCommand('start', commands.mpvStart, 'Could not start MPV').then(() =>
+              void runCommand('start', startMpv, 'Could not start MPV').then(() =>
                 props.onPlayerStarted?.(),
               )
             }
@@ -491,7 +433,7 @@ export default function NowPlayingCard(props: {
           class="hover:bg-secondary/15 hover:text-secondary hover:border-secondary/20 shrink-0 rounded-xl border border-transparent"
           aria-label={muted() ? 'Unmute' : 'Mute'}
           disabled={!connected() || busy() !== null}
-          onClick={() => void runCommand('mute', commands.mpvToggleMute, 'Could not toggle mute')}
+          onClick={() => void runCommand('mute', toggleMute, 'Could not toggle mute')}
         >
           <Show when={connected() && !muted()} fallback={<VolumeX class="text-error h-5 w-5" />}>
             <Volume2 class="text-secondary h-5 w-5" />

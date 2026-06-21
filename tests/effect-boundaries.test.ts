@@ -51,19 +51,29 @@ test('Quick Connect commands use typed command helpers', () => {
     'const result = await commands.jellyfinQuickConnectStart(serverUrlValue);',
   );
 });
-test('Operations Console commands use typed command helpers', () => {
+test('Operations Console and Shell use refactored connection/config effects', () => {
   const consoleSource = readFileSync('src/components/OperationsConsole.tsx', 'utf8');
+  const shellSource = readFileSync('src/components/AuthenticatedShell.tsx', 'utf8');
+  const authSource = readFileSync('src/effects/auth.ts', 'utf8');
 
-  expect(consoleSource).toMatch(
-    /import \{[^}]*runTauriCommand[^}]*\} from '\.\.\/effects\/commands';/,
-  );
-  expect(consoleSource).toMatch(
-    /import \{[^}]*runTauriCommandRaw[^}]*\} from '\.\.\/effects\/commands';/,
-  );
-  expect(consoleSource).toContain('runTauriCommandRaw(() => commands.configGet())');
-  expect(consoleSource).toContain('runTauriCommand(() => commands.configSet(nextSave.config))');
-  expect(consoleSource).toContain('runTauriCommand(() => commands.jellyfinDisconnect())');
-  expect(consoleSource).toContain('runTauriCommand(() => commands.jellyfinClearSession())');
-  expect(consoleSource).not.toContain('const result = await commands.jellyfinDisconnect();');
-  expect(consoleSource).not.toContain('const result = await commands.jellyfinClearSession();');
+  // Verify OperationsConsole.tsx imports and uses the new effects
+  expect(consoleSource).toContain('fetchConfig');
+  expect(consoleSource).toContain('saveConfig');
+  expect(consoleSource).toContain('fetchConnectionState');
+  expect(consoleSource).toContain('disconnectJellyfin');
+  expect(consoleSource).toContain('clearJellyfinSession');
+
+  // Verify OperationsConsole.tsx no longer contains raw command calls or imports commands
+  expect(consoleSource).not.toContain('commands.configGet');
+  expect(consoleSource).not.toContain('commands.configSet');
+  expect(consoleSource).not.toContain('commands.mpvIsConnected');
+  expect(consoleSource).not.toContain('commands.jellyfinDisconnect');
+  expect(consoleSource).not.toContain('commands.jellyfinClearSession');
+
+  // Verify AuthenticatedShell.tsx uses fetchConnectionState and doesn't contain commands.jellyfinGetState
+  expect(shellSource).toContain('fetchConnectionState');
+  expect(shellSource).not.toContain('commands.jellyfinGetState');
+
+  // Verify src/effects/auth.ts no longer imports commands
+  expect(authSource).not.toContain("import { commands } from '@bindings';");
 });

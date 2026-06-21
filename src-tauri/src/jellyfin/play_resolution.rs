@@ -374,4 +374,50 @@ mod tests {
     assert!(!disabled.should_fetch_intro_skipper_ranges);
     assert!(!non_episode.should_fetch_intro_skipper_ranges);
   }
+
+  #[test]
+  fn jellyfin_track_selection_conversion_still_uses_type_local_mpv_indices() {
+    let streams = vec![
+      MediaStream {
+        index: 0,
+        stream_type: "Video".to_string(),
+        codec: None,
+        language: None,
+        display_title: None,
+        is_default: false,
+        is_external: false,
+      },
+      MediaStream {
+        index: 1,
+        stream_type: "Audio".to_string(),
+        codec: None,
+        language: Some("eng".to_string()),
+        display_title: None,
+        is_default: true,
+        is_external: false,
+      },
+      MediaStream {
+        index: 2,
+        stream_type: "Audio".to_string(),
+        codec: None,
+        language: Some("jpn".to_string()),
+        display_title: None,
+        is_default: false,
+        is_external: false,
+      },
+      MediaStream {
+        index: 3,
+        stream_type: "Subtitle".to_string(),
+        codec: None,
+        language: Some("eng".to_string()),
+        display_title: None,
+        is_default: false,
+        is_external: false,
+      },
+    ];
+
+    assert_eq!(jellyfin_to_mpv_track_index(&streams, "Audio", 2), 2);
+    assert_eq!(jellyfin_to_mpv_track_index(&streams, "Subtitle", 3), 1);
+    assert_eq!(jellyfin_to_mpv_track_index(&streams, "Audio", 99), 1);
+  }
 }

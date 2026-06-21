@@ -1,10 +1,11 @@
 import { Dialog } from '@ark-ui/solid/dialog';
+import { Effect, Exit } from 'effect';
 import { MonitorPlay, X } from 'lucide-solid';
 import { Show, createSignal, onCleanup, onMount } from 'solid-js';
 import { Portal } from 'solid-js/web';
 
-import { commands, events } from '../bindings';
 import type { NowPlayingState } from '../bindings';
+import { fetchNowPlayingState, listenNowPlayingChanged } from '../effects/nowPlaying';
 import NowPlayingCard from './NowPlayingCard';
 import { Button } from './ui';
 
@@ -58,23 +59,21 @@ export default function NowPlayingDrawer(props: { jellyfinConnected: boolean }) 
   const [selectPortalMount, setSelectPortalMount] = createSignal<HTMLElement>();
 
   onMount(() => {
-    void commands.nowPlayingGetState().then((result) => {
-      if (result.status === 'ok') {
-        setState(result.data);
+    void Effect.runPromiseExit(fetchNowPlayingState()).then((exit) => {
+      if (Exit.isSuccess(exit)) {
+        setState(exit.value);
       }
     });
 
     let disposed = false;
     let cleanup: (() => void) | undefined;
-    events.nowPlayingChanged
-      .listen((event) => setState(event.payload.state))
-      .then((unlisten) => {
-        if (disposed) {
-          unlisten();
-        } else {
-          cleanup = unlisten;
-        }
-      });
+    listenNowPlayingChanged((newState) => setState(newState)).then((unlisten) => {
+      if (disposed) {
+        unlisten();
+      } else {
+        cleanup = unlisten;
+      }
+    });
 
     onCleanup(() => {
       disposed = true;

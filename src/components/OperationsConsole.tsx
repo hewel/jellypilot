@@ -2,10 +2,14 @@ import { createForm } from '@tanstack/solid-form';
 import { Effect, Exit } from 'effect';
 import { createEffect, createResource } from 'solid-js';
 
-import { commands } from '../bindings';
-import type { AppConfig, ConnectionState, IntroSkipperMode } from '../bindings';
-import { commandFailureMessage, runTauriCommand, runTauriCommandRaw } from '../effects/commands';
-import { detectMpv } from '../effects/config';
+import type { AppConfig, IntroSkipperMode } from '../bindings';
+import { commandFailureMessage } from '../effects/commands';
+import { detectMpv, fetchConfig, saveConfig } from '../effects/config';
+import {
+  clearJellyfinSession,
+  disconnectJellyfin,
+  fetchConnectionState,
+} from '../effects/connection';
 import { clearSavedSession, loadSavedSession, restoreSavedSession } from '../sessionAccess';
 import ConnectionCard from './OperationsConsole/ConnectionCard';
 import DiagnosticsCard from './OperationsConsole/DiagnosticsCard';
@@ -24,14 +28,6 @@ import type { JmsrSelectItem } from './ui';
 
 interface OperationsConsoleProps {
   onSignedOut: () => void;
-}
-
-async function fetchConnectionState(): Promise<ConnectionState> {
-  return await commands.jellyfinGetState();
-}
-
-async function fetchMpvStatus(): Promise<boolean> {
-  return await commands.mpvIsConnected();
 }
 
 export default function OperationsConsole(props: OperationsConsoleProps) {
@@ -62,10 +58,12 @@ export default function OperationsConsole(props: OperationsConsoleProps) {
     { label: 'kor — Korean', value: 'kor' },
   ];
 
-  const [connectionState, { refetch: refetchConnection }] = createResource(fetchConnectionState);
-  const [_mpvConnected, { refetch: refetchMpv }] = createResource(fetchMpvStatus);
+  const [connectionState, { refetch: refetchConnection }] = createResource(async () => {
+    const exit = await Effect.runPromiseExit(fetchConnectionState());
+    return Exit.isSuccess(exit) ? exit.value : undefined;
+  });
   const [initialConfig, { mutate: mutateConfig }] = createResource(async () => {
-    const exit = await Effect.runPromiseExit(runTauriCommandRaw(() => commands.configGet()));
+    const exit = await Effect.runPromiseExit(fetchConfig());
     if (Exit.isSuccess(exit)) {
       return exit.value;
     }
@@ -156,13 +154,10 @@ export default function OperationsConsole(props: OperationsConsoleProps) {
         pendingSave = null;
         showPlayerBridgeStatus('saving', 'Saving…');
 
-        const exit = await Effect.runPromiseExit(
-          runTauriCommand(() => commands.configSet(nextSave.config)),
-        );
+        const exit = await Effect.runPromiseExit(saveConfig(nextSave.config));
         if (Exit.isSuccess(exit)) {
           lastSavedConfig = nextSave.config;
           mutateConfig(nextSave.config);
-          refetchMpv();
           nextSave.onSuccess?.();
           showPlayerBridgeStatus('saved', 'Saved');
         } else {
@@ -335,7 +330,6 @@ export default function OperationsConsole(props: OperationsConsoleProps) {
 
   const handleRefresh = () => {
     refetchConnection();
-    refetchMpv();
   };
 
   const handleReconnect = async () => {
@@ -362,7 +356,7 @@ export default function OperationsConsole(props: OperationsConsoleProps) {
 
   const handleDisconnect = async () => {
     actions.beginDisconnect();
-    const exit = await Effect.runPromiseExit(runTauriCommand(() => commands.jellyfinDisconnect()));
+    const exit = await Effect.runPromiseExit(disconnectJellyfin());
     if (Exit.isSuccess(exit)) {
       showToast('success', 'Disconnected from Jellyfin');
       refetchConnection();
@@ -374,9 +368,7 @@ export default function OperationsConsole(props: OperationsConsoleProps) {
 
   const handleSignOut = async () => {
     actions.beginSignOut();
-    const exit = await Effect.runPromiseExit(
-      runTauriCommand(() => commands.jellyfinClearSession()),
-    );
+    const exit = await Effect.runPromiseExit(clearJellyfinSession());
     if (Exit.isSuccess(exit)) {
       clearSavedSession();
       props.onSignedOut();

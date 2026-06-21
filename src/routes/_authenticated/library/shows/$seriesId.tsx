@@ -18,9 +18,11 @@ import { Film, Library, RefreshCw, Tv } from 'lucide-solid';
 import { For, Show, Suspense, createEffect, createResource, createSignal } from 'solid-js';
 import { commandFailureMessage } from '~effects/commands';
 import {
+  fetchInitialSeasonEpisodes,
   fetchSeasonEpisodes,
   fetchVideoItemDetail,
   fetchVideoShowDetail,
+  initialSeasonForShow,
   startLibraryPlayback,
   updateLibraryUserData,
 } from '~effects/library';
@@ -38,50 +40,22 @@ export const Route = createFileRoute('/_authenticated/library/shows/$seriesId')(
   component: LibraryShowDetailRoute,
 });
 
-function initialSeasonForShow(show: LibraryShowState): VideoSeason | null {
-  const nextSeasonNumber = show.nextEpisode?.seasonNumber ?? null;
-  if (nextSeasonNumber !== null) {
-    const match = show.seasons.find((season) => season.seasonNumber === nextSeasonNumber);
-    if (match) {
-      return match;
-    }
-  }
-
-  return show.seasons[0] ?? null;
-}
-
-async function fetchInitialSeasonEpisodes(
-  seriesId: string,
-  show: Promise<LibraryExit<LibraryShowState>>,
-): Promise<LibraryExit<SeasonEpisodesState> | null> {
-  const showExit = await show;
-  if (!Exit.isSuccess(showExit)) {
-    return null;
-  }
-
-  const season = initialSeasonForShow(showExit.value);
-  if (!season) {
-    return null;
-  }
-
-  return fetchSeasonEpisodes({
-    seasonId: season.id,
-    seasonNumber: season.seasonNumber,
-    seriesId,
-  });
-}
-
 function LibraryShowDetailRoute() {
   const params = Route.useParams();
   const loaderData = Route.useLoaderData();
-  const [showPromise, setShowPromise] = createSignal<Promise<LibraryExit<LibraryShowState>>>(
-    loaderData().show,
+  const [manualShowPromise, setManualShowPromise] = createSignal<Promise<
+    LibraryExit<LibraryShowState>
+  > | null>(null);
+  const [manualInitialEpisodesPromise, setManualInitialEpisodesPromise] =
+    createSignal<Promise<LibraryExit<SeasonEpisodesState> | null> | null>(null);
+  const [state] = createResource(
+    () => manualShowPromise() ?? loaderData().show,
+    (promise) => promise,
   );
-  const [initialEpisodesPromise, setInitialEpisodesPromise] = createSignal<
-    Promise<LibraryExit<SeasonEpisodesState> | null>
-  >(loaderData().initialEpisodes);
-  const [state] = createResource(showPromise, (promise) => promise);
-  const [initialEpisodes] = createResource(initialEpisodesPromise, (promise) => promise);
+  const [initialEpisodes] = createResource(
+    () => manualInitialEpisodesPromise() ?? loaderData().initialEpisodes,
+    (promise) => promise,
+  );
   const [selectedSeason, setSelectedSeason] = createSignal<VideoSeason | null>(null);
   const [episodes, setEpisodes] = createSignal<LibraryExit<SeasonEpisodesState> | null>(null);
   const [episodesLoading, setEpisodesLoading] = createSignal(false);
@@ -92,17 +66,17 @@ function LibraryShowDetailRoute() {
   const [playError, setPlayError] = createSignal<string | null>(null);
 
   createEffect(() => {
-    const data = loaderData();
-    setShowPromise(data.show);
-    setInitialEpisodesPromise(data.initialEpisodes);
+    params().seriesId;
+    setManualShowPromise(null);
+    setManualInitialEpisodesPromise(null);
     setSelectedSeason(null);
     setEpisodes(null);
   });
 
   const reloadShow = () => {
     const show = fetchVideoShowDetail(params().seriesId);
-    setShowPromise(show);
-    setInitialEpisodesPromise(fetchInitialSeasonEpisodes(params().seriesId, show));
+    setManualShowPromise(show);
+    setManualInitialEpisodesPromise(fetchInitialSeasonEpisodes(params().seriesId, show));
     setSelectedSeason(null);
     setEpisodes(null);
   };
@@ -265,7 +239,7 @@ function LibraryShowDetailRoute() {
           class="rounded-full"
           disabled={state.loading}
           onClick={reloadShow}
-          leadingIcon={<RefreshCw class={`h-4 w-4 ${state.loading ? 'animate-spin' : ''}`} />}
+          leadingIcon={<RefreshCw class="h-4 w-4" classList={{ 'animate-spin': state.loading }} />}
         >
           Retry Show
         </Button>

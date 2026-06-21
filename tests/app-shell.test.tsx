@@ -507,7 +507,9 @@ test('authenticated shell exposes peer navigation areas', async () => {
   expect(libraryLink).toHaveAttribute('aria-current', 'page');
   expect(libraryLink).toHaveClass('focus-visible:ring-2');
   expect(screen.queryByRole('link', { name: 'Now Playing' })).toBeNull();
-  expect(screen.getByRole('button', { name: /Now Playing: Playing — The Pilot/ })).toBeVisible();
+  await waitFor(() =>
+    expect(screen.getByRole('button', { name: /Now Playing: Playing — The Pilot/ })).toBeVisible(),
+  );
   expect(screen.getByRole('link', { name: 'Settings' })).toBeVisible();
   expect(screen.getByRole('link', { name: 'Diagnostics' })).toBeVisible();
 
@@ -543,7 +545,9 @@ test('library landing renders command-backed rows and drawer trigger', async () 
     ),
   ).toBe(true);
   expect(screen.getAllByText('No artwork')).toHaveLength(3);
-  expect(screen.getByRole('button', { name: /Now Playing: Playing — The Pilot/ })).toBeVisible();
+  await waitFor(() =>
+    expect(screen.getByRole('button', { name: /Now Playing: Playing — The Pilot/ })).toBeVisible(),
+  );
 
   cleanup();
 });
@@ -1013,12 +1017,12 @@ test('now playing drawer exposes full playback controls', async () => {
 
   await screen.findByRole('navigation', { name: 'Library navigation' });
 
-  const trigger = screen.getByRole('button', { name: /Now Playing: Playing — The Pilot/ });
+  const trigger = await screen.findByRole('button', { name: /Now Playing: Playing — The Pilot/ });
   fireEvent.click(trigger);
 
   const dialog = await screen.findByRole('dialog', { name: 'Now Playing' });
   expect(dialog).toBeVisible();
-  expect(screen.getByText('The Pilot')).toBeVisible();
+  expect(await screen.findByText('The Pilot')).toBeVisible();
   expect(screen.getByRole('button', { name: 'Pause' })).toBeVisible();
   expect(screen.getByRole('slider', { name: 'Seek position' })).toBeVisible();
 

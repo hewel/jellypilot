@@ -212,7 +212,9 @@ function LibraryBrowseRoute() {
                   class="rounded-full"
                   disabled={loading()}
                   onClick={() => void loadPage(loadMoreStartIndex())}
-                  leadingIcon={<RefreshCw class={`h-4 w-4 ${loading() ? 'animate-spin' : ''}`} />}
+                  leadingIcon={
+                    <RefreshCw class="h-4 w-4" classList={{ 'animate-spin': loading() }} />
+                  }
                 >
                   {loading() ? 'Loading more' : 'Load more'}
                 </Button>

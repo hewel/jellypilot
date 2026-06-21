@@ -201,8 +201,8 @@ test('playing state exposes audio and subtitle selectors', async () => {
 
   const audio = await screen.findByRole('combobox', { name: 'Audio' });
   const subtitles = await screen.findByRole('combobox', { name: 'Subtitles' });
-  expect(audio).toHaveTextContent('English Stereo');
-  expect(subtitles).toHaveTextContent('English Subtitles');
+  await waitFor(() => expect(audio).toHaveTextContent('English Stereo'));
+  await waitFor(() => expect(subtitles).toHaveTextContent('English Subtitles'));
 
   fireEvent.click(audio);
   fireEvent.click(await screen.findByRole('option', { name: 'Japanese 5.1' }));
@@ -231,14 +231,14 @@ test('idle and unknown states disable transport controls without exposing startu
   const cleanup = renderCard(idleState);
 
   await waitFor(() => expect(screen.getByText('MPV idle')).toBeVisible());
-  expect(screen.getByRole('button', { name: 'Play' })).toBeDisabled();
+  await waitFor(() => expect(screen.getByRole('button', { name: 'Play' })).toBeDisabled());
   expect(screen.getByLabelText('Stop playback')).toBeDisabled();
   expect(screen.queryByRole('button', { name: 'Start MPV' })).toBeNull();
   cleanup();
 
   const cleanupUnknown = renderCard(unknownState);
   await waitFor(() => expect(screen.getByText('Unknown')).toBeVisible());
-  expect(screen.getByRole('button', { name: 'Play' })).toBeDisabled();
+  await waitFor(() => expect(screen.getByRole('button', { name: 'Play' })).toBeDisabled());
   expect(screen.getByLabelText('Stop playback')).toBeDisabled();
   expect(screen.queryByRole('button', { name: 'Start MPV' })).toBeNull();
 

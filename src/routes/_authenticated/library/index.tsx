@@ -1,10 +1,9 @@
 import { VideoHomeRow } from '@components/library/shared';
 import { Card } from '@components/ui';
 import { createFileRoute } from '@tanstack/solid-router';
-import { For, Suspense, createEffect, createResource, createSignal } from 'solid-js';
+import { For, Suspense, createResource } from 'solid-js';
 import { defaultTo } from '~effects/helper';
 import { fetchLibraryHome } from '~effects/library';
-import type { LibraryHomeState } from '~effects/library';
 
 const homeSkeletonRows = [
   { id: 'continue-watching-skeleton', aspectClass: 'aspect-video' },
@@ -22,14 +21,10 @@ export const Route = createFileRoute('/_authenticated/library/')({
 
 function LibraryLanding() {
   const loaderData = Route.useLoaderData();
-  const [homePromise, setHomePromise] = createSignal<Promise<LibraryHomeState | null>>(
-    loaderData().home,
+  const [home] = createResource(
+    () => loaderData().home,
+    (promise) => promise,
   );
-  const [home] = createResource(homePromise, (promise) => promise);
-
-  createEffect(() => {
-    setHomePromise(loaderData().home);
-  });
 
   const renderHomeContent = () => (
     <Suspense fallback={<VideoHomeSkeleton />}>

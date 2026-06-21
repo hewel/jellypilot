@@ -16,7 +16,9 @@ use super::mpv_event::{
   apply_property_update, client_message_direction, is_natural_end, property_report_decision,
   should_report_progress, PropertyReportDecision,
 };
-use super::play_resolution::{resolve_play_request, PlayResolutionConfig};
+use super::play_resolution::{
+  jellyfin_to_mpv_track_index, resolve_play_request, PlayResolutionConfig,
+};
 use super::types::*;
 use super::websocket::{JellyfinCommand, JellyfinWebSocket, JellyfinWebSocketEvent};
 use crate::command::{AppNotification, NowPlayingChanged};
@@ -1695,28 +1697,6 @@ fn intro_skipper_label_lower(kind: IntroSkipKind) -> &'static str {
   }
 }
 
-/// Convert Jellyfin stream index to MPV track index.
-/// Jellyfin uses absolute indices across all streams (video, audio, subtitle combined).
-/// MPV uses 1-based indices within each track type (audio, subtitle).
-fn jellyfin_to_mpv_track_index(
-  streams: &[MediaStream],
-  stream_type: &str,
-  jellyfin_index: i32,
-) -> i32 {
-  // Count how many tracks of this type come before and including the target index
-  let mut mpv_index = 0;
-  for stream in streams {
-    if stream.stream_type == stream_type {
-      mpv_index += 1;
-      if stream.index == jellyfin_index {
-        return mpv_index;
-      }
-    }
-  }
-  // Fallback: return 1 (first track of type) if not found
-  1
-}
-
 /// Redact sensitive query parameters from URLs for logging.
 /// Replaces api_key=XXX with api_key=[REDACTED].
 fn redact_url(url: &str) -> String {
@@ -2280,50 +2260,6 @@ mod regression_tests {
     assert_eq!(position_ticks, Some(seconds_to_ticks(80.0)));
   }
 
-  #[test]
-  fn jellyfin_track_selection_conversion_still_uses_type_local_mpv_indices() {
-    let streams = vec![
-      MediaStream {
-        index: 0,
-        stream_type: "Video".to_string(),
-        codec: None,
-        language: None,
-        display_title: None,
-        is_default: false,
-        is_external: false,
-      },
-      MediaStream {
-        index: 1,
-        stream_type: "Audio".to_string(),
-        codec: None,
-        language: Some("eng".to_string()),
-        display_title: None,
-        is_default: true,
-        is_external: false,
-      },
-      MediaStream {
-        index: 2,
-        stream_type: "Audio".to_string(),
-        codec: None,
-        language: Some("jpn".to_string()),
-        display_title: None,
-        is_default: false,
-        is_external: false,
-      },
-      MediaStream {
-        index: 3,
-        stream_type: "Subtitle".to_string(),
-        codec: None,
-        language: Some("eng".to_string()),
-        display_title: None,
-        is_default: false,
-        is_external: false,
-      },
-    ];
-
-    assert_eq!(jellyfin_to_mpv_track_index(&streams, "Audio", 2), 2);
-    assert_eq!(jellyfin_to_mpv_track_index(&streams, "Subtitle", 3), 1);
-  }
   #[test]
   fn parse_command_int_accepts_json_number() {
     let value = serde_json::json!(50);

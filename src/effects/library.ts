@@ -11,14 +11,15 @@ import type {
   VideoLibrarySort,
   VideoSeasonEpisodes,
   VideoSeasonEpisodesRequest,
+  VideoSeason,
   VideoShowDetail,
   VideoUserDataUpdate,
   VideoUserDataUpdateRequest,
 } from '@bindings';
 import { Effect, Exit } from 'effect';
 
-import { connection } from './auth';
 import { runTauriCommand } from './commands';
+import { connection } from './connection';
 import { CommandError } from './errors';
 
 export type LibraryExit<T> = Exit.Exit<T, CommandError>;
@@ -191,5 +192,38 @@ export async function fetchMediaDetail(
     const media = toMediaDetail(detail, itemType);
     mediaDetailCache.set(id, media);
     return media;
+  });
+}
+
+export function initialSeasonForShow(show: LibraryShowState): VideoSeason | null {
+  const nextSeasonNumber = show.nextEpisode?.seasonNumber ?? null;
+  if (nextSeasonNumber !== null) {
+    const match = show.seasons.find((season) => season.seasonNumber === nextSeasonNumber);
+    if (match) {
+      return match;
+    }
+  }
+
+  return show.seasons[0] ?? null;
+}
+
+export async function fetchInitialSeasonEpisodes(
+  seriesId: string,
+  show: Promise<LibraryExit<LibraryShowState>>,
+): Promise<LibraryExit<SeasonEpisodesState> | null> {
+  const showExit = await show;
+  if (!Exit.isSuccess(showExit)) {
+    return null;
+  }
+
+  const season = initialSeasonForShow(showExit.value);
+  if (!season) {
+    return null;
+  }
+
+  return fetchSeasonEpisodes({
+    seasonId: season.id,
+    seasonNumber: season.seasonNumber,
+    seriesId,
   });
 }

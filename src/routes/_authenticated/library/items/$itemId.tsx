@@ -41,21 +41,25 @@ export const Route = createFileRoute('/_authenticated/library/items/$itemId')({
 function LibraryItemDetailRoute() {
   const params = Route.useParams();
   const loaderData = Route.useLoaderData();
-  const [detailPromise, setDetailPromise] = createSignal<Promise<LibraryExit<LibraryDetailState>>>(
-    loaderData().detail,
+  const [manualDetailPromise, setManualDetailPromise] = createSignal<Promise<
+    LibraryExit<LibraryDetailState>
+  > | null>(null);
+  const [state] = createResource(
+    () => manualDetailPromise() ?? loaderData().detail,
+    (promise) => promise,
   );
-  const [state] = createResource(detailPromise, (promise) => promise);
   const [playBusy, setPlayBusy] = createSignal<VideoLibraryPlayMode | null>(null);
   const [audioValue, setAudioValue] = createSignal(AUDIO_AUTO);
   const [subtitleValue, setSubtitleValue] = createSignal(SUBTITLE_AUTO);
   const [playError, setPlayError] = createSignal<string | null>(null);
 
   createEffect(() => {
-    setDetailPromise(loaderData().detail);
+    params().itemId;
+    setManualDetailPromise(null);
   });
 
   const reloadDetail = () => {
-    setDetailPromise(fetchVideoItemDetail(params().itemId));
+    setManualDetailPromise(fetchVideoItemDetail(params().itemId));
   };
 
   const detail = () => {
@@ -155,7 +159,7 @@ function LibraryItemDetailRoute() {
           class="rounded-full"
           disabled={state.loading}
           onClick={reloadDetail}
-          leadingIcon={<RefreshCw class={`h-4 w-4 ${state.loading ? 'animate-spin' : ''}`} />}
+          leadingIcon={<RefreshCw class="h-4 w-4" classList={{ 'animate-spin': state.loading }} />}
         >
           Retry Detail
         </Button>

@@ -1,9 +1,10 @@
 import { Link, Outlet } from '@tanstack/solid-router';
+import { Effect, Exit } from 'effect';
 import { Activity, Library, Settings } from 'lucide-solid';
 import { Show, createResource } from 'solid-js';
 
-import { commands } from '../bindings';
 import type { ConnectionState } from '../bindings';
+import { fetchConnectionState } from '../effects/connection';
 import NowPlayingDrawer from './NowPlayingDrawer';
 import { ConsoleShell } from './ui';
 
@@ -116,7 +117,10 @@ function ShellHeader(props: {
 }
 
 export default function AuthenticatedShell() {
-  const [connection] = createResource(() => commands.jellyfinGetState());
+  const [connection] = createResource(async () => {
+    const exit = await Effect.runPromiseExit(fetchConnectionState());
+    return Exit.isSuccess(exit) ? exit.value : undefined;
+  });
 
   return (
     <ConsoleShell>
