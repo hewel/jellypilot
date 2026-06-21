@@ -9,7 +9,7 @@ import { Button } from './ui';
 export default function SettingsModal() {
   const [open, setOpen] = createSignal(false);
   const navigate = useNavigate();
-
+  let backdropRef: HTMLDivElement | undefined;
   return (
     <Dialog.Root
       open={open()}
@@ -18,8 +18,7 @@ export default function SettingsModal() {
       closeOnInteractOutside
       onInteractOutside={(event) => {
         const target = event.target as HTMLElement;
-        const backdrop = document.querySelector('#settings-dialog-backdrop');
-        if (backdrop && !backdrop.contains(target) && target !== backdrop) {
+        if (backdropRef && !backdropRef.contains(target) && target !== backdropRef) {
           event.preventDefault();
         }
       }}
@@ -43,12 +42,11 @@ export default function SettingsModal() {
       />
 
       <Dialog.Backdrop
-        id="settings-dialog-backdrop"
+        ref={backdropRef}
         class="fixed inset-0 z-40 bg-black/70 backdrop-blur-sm transition-all duration-300"
       />
       <Dialog.Positioner class="fixed inset-0 z-40 flex h-full w-full flex-col overflow-hidden">
         <Dialog.Content
-          id="settings-dialog-content"
           class="border-outline-variant/30 bg-surface-container-low/60 flex h-full w-full animate-[fadeIn_0.3s_cubic-bezier(0.16,1,0.3,1)_forwards] flex-col overflow-hidden backdrop-blur-xl outline-none"
           onKeyDown={(event) => {
             if (event.key === 'Escape') {
