@@ -507,11 +507,14 @@ test('authenticated shell removes top header chrome and exposes floating control
   expect(screen.queryByText(connectedState.userName)).toBeNull();
   expect(screen.queryByText(connectedState.serverName)).toBeNull();
 
-  // Now Playing and Open Settings are reachable from the floating cluster.
+  // Now Playing and Open Settings are grouped in the floating cluster.
+  const floatingControls = screen.getByRole('group', { name: 'Floating controls' });
   await waitFor(() =>
-    expect(screen.getByRole('button', { name: /Now Playing: Playing — The Pilot/ })).toBeVisible(),
+    expect(
+      within(floatingControls).getByRole('button', { name: /Now Playing: Playing — The Pilot/ }),
+    ).toBeVisible(),
   );
-  expect(screen.getByRole('button', { name: 'Open Settings' })).toBeVisible();
+  expect(within(floatingControls).getByRole('button', { name: 'Open Settings' })).toBeVisible();
 
   // Main content reserves bottom space so the floating cluster cannot cover it.
   expect(screen.getByRole('main')).toHaveClass('pb-40');
