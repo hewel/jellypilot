@@ -38,17 +38,17 @@ test('Password Login connect command uses typed command helper', () => {
   expect(loginSource).not.toContain('const result = await commands.jellyfinConnect(credentials);');
 });
 test('Quick Connect commands use typed command helpers', () => {
-  const loginSource = readFileSync('src/components/LoginPage.tsx', 'utf8');
+  const qcSource = readFileSync('src/effects/quickConnect.ts', 'utf8');
 
-  expect(loginSource).toContain(
-    'runTauriCommand(() => commands.jellyfinQuickConnectStart(serverUrlValue))',
+  expect(qcSource).toContain(
+    'runTauriCommand(() => commands.jellyfinQuickConnectStart(serverUrl))',
   );
-  expect(loginSource).toContain('commands.jellyfinQuickConnectCheck(serverUrlValue, secret)');
-  expect(loginSource).toContain(
-    'commands.jellyfinQuickConnectAuthenticate(serverUrlValue, secret)',
+  expect(qcSource).toContain('commands.jellyfinQuickConnectCheck(serverUrl, request.secret)');
+  expect(qcSource).toContain(
+    'commands.jellyfinQuickConnectAuthenticate(serverUrl, request.secret)',
   );
-  expect(loginSource).not.toContain(
-    'const result = await commands.jellyfinQuickConnectStart(serverUrlValue);',
+  expect(qcSource).not.toContain(
+    'const result = await commands.jellyfinQuickConnectStart(serverUrl);',
   );
 });
 test('Operations Console and Shell use refactored connection/config effects', () => {
