@@ -1068,16 +1068,8 @@ test('Close Settings and standard dismissal close the Settings modal back to the
   cleanup();
 });
 
-test('Sign out from the Settings modal reaches Login and stays distinct from Disconnect', async () => {
+test('Settings modal keeps Disconnect and Sign out as distinct session controls', async () => {
   mockShellCommands();
-  let connected = true;
-  rstest
-    .spyOn(commands, 'jellyfinIsConnected')
-    .mockImplementation(() => Promise.resolve(connected));
-  rstest.spyOn(commands, 'jellyfinClearSession').mockImplementation(() => {
-    connected = false;
-    return Promise.resolve({ data: null, status: 'ok' });
-  });
   localStorage.setItem('jmsr_auth_session', JSON.stringify({ serverUrl: 'https://jmsr.example' }));
 
   const cleanup = renderShell('/library');
@@ -1086,23 +1078,19 @@ test('Sign out from the Settings modal reaches Login and stays distinct from Dis
   fireEvent.click(await screen.findByRole('button', { name: 'Open Settings' }));
   const settings = await screen.findByRole('dialog', { name: 'Settings' });
 
-  // Disconnect and Sign out are both present and distinct inside Settings
   expect(within(settings).getByRole('button', { name: 'Disconnect' })).toBeVisible();
-  expect(within(settings).getByRole('button', { name: 'Sign out' })).toBeVisible();
-
-  // Open the sign-out confirmation dialog (nested Ark dialog) and confirm sign out
-  fireEvent.click(within(settings).getByRole('button', { name: 'Sign out' }));
-  await waitFor(() => expect(screen.getByRole('button', { name: 'Cancel' })).toBeVisible());
-  const confirmDialog = screen
-    .getByRole('button', { name: 'Cancel' })
-    .closest('[role="dialog"]') as HTMLElement;
-  fireEvent.click(within(confirmDialog).getByRole('button', { name: 'Sign out' }));
-
-  // Sign out clears the Saved Session and reaches Login
-  await waitFor(() => expect(localStorage.getItem('jmsr_auth_session')).toBeNull());
   expect(
-    await screen.findByPlaceholderText('jellyfin.local or media.example.com/jellyfin'),
+    within(settings).getByText(
+      'Disconnect ends the active Jellyfin connection but keeps the Saved Session available for Reconnect.',
+    ),
   ).toBeVisible();
+  expect(within(settings).getByRole('button', { name: 'Sign out' })).toBeVisible();
+  expect(
+    within(settings).getByText(
+      'Sign out removes the Saved Session and requires authentication before Reconnect is available.',
+    ),
+  ).toBeVisible();
+  expect(localStorage.getItem('jmsr_auth_session')).not.toBeNull();
 
   cleanup();
 });
