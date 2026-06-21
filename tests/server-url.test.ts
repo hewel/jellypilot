@@ -2,8 +2,12 @@ import { expect, test } from '@rstest/core';
 import { Cause, Effect, Exit } from 'effect';
 
 import { InvalidServerUrl } from '../src/effects/errors';
-import { buildServerUrlEffect } from '../src/effects/serverUrl';
-import { buildServerUrl, defaultSchemeForHost, parseServerUrl } from '../src/serverUrl';
+import {
+  buildServerUrl,
+  buildServerUrlEffect,
+  defaultSchemeForHost,
+  parseServerUrl,
+} from '../src/serverUrl';
 
 test('local hosts default to http', () => {
   expect(defaultSchemeForHost('localhost')).toBe('http');
