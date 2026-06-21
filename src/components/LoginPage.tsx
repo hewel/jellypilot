@@ -11,9 +11,9 @@ import type { Credentials } from '../bindings';
 import { commandFailureMessage, runTauriCommand } from '../effects/commands';
 import { CommandError } from '../effects/errors';
 import { runQuickConnectWorkflow } from '../effects/quickConnect';
-import { buildServerUrlEffect } from '../effects/serverUrl';
 import { clearSavedCredentials, loadSavedCredentials, saveCredentials } from '../effects/session';
 import {
+  buildServerUrlEffect,
   defaultSchemeForHost,
   explicitSchemeFromInput,
   parseServerUrl,
