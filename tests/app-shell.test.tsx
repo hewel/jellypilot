@@ -931,32 +931,6 @@ test('library show detail auto-loads next-up season and renders episode rows', a
   cleanup();
 });
 
-test('settings shell area preserves session and configuration controls', async () => {
-  mockShellCommands();
-  const cleanup = renderShell('/settings');
-
-  await screen.findByRole('heading', { name: 'Connection' });
-  expect(screen.getByRole('button', { name: 'Disconnect' })).toBeVisible();
-  expect(screen.getByRole('button', { name: 'Sign out' })).toBeVisible();
-  await waitFor(() => expect(screen.getByDisplayValue('JMSR Test')).toBeVisible());
-  expect(screen.getByRole('heading', { name: 'Shortcut keys' })).toBeVisible();
-  expect(screen.getByRole('button', { name: /Automatic/ })).toHaveAttribute('aria-pressed', 'true');
-
-  cleanup();
-});
-
-test('diagnostics shell area preserves diagnostics panel behavior', async () => {
-  mockShellCommands();
-  const cleanup = renderShell('/diagnostics');
-
-  await screen.findByRole('heading', { name: 'Diagnostics' });
-  expect(screen.getByText('0 sanitized runtime events')).toBeVisible();
-  expect(screen.getByRole('checkbox', { name: 'Auto-scroll' })).toBeChecked();
-  expect(screen.getByRole('button', { name: 'Copy diagnostics' })).toBeVisible();
-
-  cleanup();
-});
-
 test('library landing has no retry and skips video home when disconnected', async () => {
   mockShellCommands(disconnectedState);
   const videoHomeCommand = rstest.spyOn(commands, 'libraryVideoHome');

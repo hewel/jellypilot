@@ -13,9 +13,7 @@ import { Route as LoginRouteImport } from './routes/login'
 import { Route as ConsoleRouteImport } from './routes/console'
 import { Route as AuthenticatedRouteImport } from './routes/_authenticated'
 import { Route as IndexRouteImport } from './routes/index'
-import { Route as AuthenticatedSettingsRouteImport } from './routes/_authenticated/settings'
 import { Route as AuthenticatedLibraryRouteImport } from './routes/_authenticated/library'
-import { Route as AuthenticatedDiagnosticsRouteImport } from './routes/_authenticated/diagnostics'
 import { Route as AuthenticatedLibraryIndexRouteImport } from './routes/_authenticated/library/index'
 import { Route as AuthenticatedLibraryShowsSeriesIdRouteImport } from './routes/_authenticated/library/shows/$seriesId'
 import { Route as AuthenticatedLibraryItemsItemIdRouteImport } from './routes/_authenticated/library/items/$itemId'
@@ -40,22 +38,11 @@ const IndexRoute = IndexRouteImport.update({
   path: '/',
   getParentRoute: () => rootRouteImport,
 } as any)
-const AuthenticatedSettingsRoute = AuthenticatedSettingsRouteImport.update({
-  id: '/settings',
-  path: '/settings',
-  getParentRoute: () => AuthenticatedRoute,
-} as any)
 const AuthenticatedLibraryRoute = AuthenticatedLibraryRouteImport.update({
   id: '/library',
   path: '/library',
   getParentRoute: () => AuthenticatedRoute,
 } as any)
-const AuthenticatedDiagnosticsRoute =
-  AuthenticatedDiagnosticsRouteImport.update({
-    id: '/diagnostics',
-    path: '/diagnostics',
-    getParentRoute: () => AuthenticatedRoute,
-  } as any)
 const AuthenticatedLibraryIndexRoute =
   AuthenticatedLibraryIndexRouteImport.update({
     id: '/',
@@ -85,9 +72,7 @@ export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
   '/console': typeof ConsoleRoute
   '/login': typeof LoginRoute
-  '/diagnostics': typeof AuthenticatedDiagnosticsRoute
   '/library': typeof AuthenticatedLibraryRouteWithChildren
-  '/settings': typeof AuthenticatedSettingsRoute
   '/library/': typeof AuthenticatedLibraryIndexRoute
   '/library/$collectionType/$libraryId': typeof AuthenticatedLibraryCollectionTypeLibraryIdRoute
   '/library/items/$itemId': typeof AuthenticatedLibraryItemsItemIdRoute
@@ -97,8 +82,6 @@ export interface FileRoutesByTo {
   '/': typeof IndexRoute
   '/console': typeof ConsoleRoute
   '/login': typeof LoginRoute
-  '/diagnostics': typeof AuthenticatedDiagnosticsRoute
-  '/settings': typeof AuthenticatedSettingsRoute
   '/library': typeof AuthenticatedLibraryIndexRoute
   '/library/$collectionType/$libraryId': typeof AuthenticatedLibraryCollectionTypeLibraryIdRoute
   '/library/items/$itemId': typeof AuthenticatedLibraryItemsItemIdRoute
@@ -110,9 +93,7 @@ export interface FileRoutesById {
   '/_authenticated': typeof AuthenticatedRouteWithChildren
   '/console': typeof ConsoleRoute
   '/login': typeof LoginRoute
-  '/_authenticated/diagnostics': typeof AuthenticatedDiagnosticsRoute
   '/_authenticated/library': typeof AuthenticatedLibraryRouteWithChildren
-  '/_authenticated/settings': typeof AuthenticatedSettingsRoute
   '/_authenticated/library/': typeof AuthenticatedLibraryIndexRoute
   '/_authenticated/library/$collectionType/$libraryId': typeof AuthenticatedLibraryCollectionTypeLibraryIdRoute
   '/_authenticated/library/items/$itemId': typeof AuthenticatedLibraryItemsItemIdRoute
@@ -124,9 +105,7 @@ export interface FileRouteTypes {
     | '/'
     | '/console'
     | '/login'
-    | '/diagnostics'
     | '/library'
-    | '/settings'
     | '/library/'
     | '/library/$collectionType/$libraryId'
     | '/library/items/$itemId'
@@ -136,8 +115,6 @@ export interface FileRouteTypes {
     | '/'
     | '/console'
     | '/login'
-    | '/diagnostics'
-    | '/settings'
     | '/library'
     | '/library/$collectionType/$libraryId'
     | '/library/items/$itemId'
@@ -148,9 +125,7 @@ export interface FileRouteTypes {
     | '/_authenticated'
     | '/console'
     | '/login'
-    | '/_authenticated/diagnostics'
     | '/_authenticated/library'
-    | '/_authenticated/settings'
     | '/_authenticated/library/'
     | '/_authenticated/library/$collectionType/$libraryId'
     | '/_authenticated/library/items/$itemId'
@@ -194,25 +169,11 @@ declare module '@tanstack/solid-router' {
       preLoaderRoute: typeof IndexRouteImport
       parentRoute: typeof rootRouteImport
     }
-    '/_authenticated/settings': {
-      id: '/_authenticated/settings'
-      path: '/settings'
-      fullPath: '/settings'
-      preLoaderRoute: typeof AuthenticatedSettingsRouteImport
-      parentRoute: typeof AuthenticatedRoute
-    }
     '/_authenticated/library': {
       id: '/_authenticated/library'
       path: '/library'
       fullPath: '/library'
       preLoaderRoute: typeof AuthenticatedLibraryRouteImport
-      parentRoute: typeof AuthenticatedRoute
-    }
-    '/_authenticated/diagnostics': {
-      id: '/_authenticated/diagnostics'
-      path: '/diagnostics'
-      fullPath: '/diagnostics'
-      preLoaderRoute: typeof AuthenticatedDiagnosticsRouteImport
       parentRoute: typeof AuthenticatedRoute
     }
     '/_authenticated/library/': {
@@ -266,15 +227,11 @@ const AuthenticatedLibraryRouteWithChildren =
   AuthenticatedLibraryRoute._addFileChildren(AuthenticatedLibraryRouteChildren)
 
 interface AuthenticatedRouteChildren {
-  AuthenticatedDiagnosticsRoute: typeof AuthenticatedDiagnosticsRoute
   AuthenticatedLibraryRoute: typeof AuthenticatedLibraryRouteWithChildren
-  AuthenticatedSettingsRoute: typeof AuthenticatedSettingsRoute
 }
 
 const AuthenticatedRouteChildren: AuthenticatedRouteChildren = {
-  AuthenticatedDiagnosticsRoute: AuthenticatedDiagnosticsRoute,
   AuthenticatedLibraryRoute: AuthenticatedLibraryRouteWithChildren,
-  AuthenticatedSettingsRoute: AuthenticatedSettingsRoute,
 }
 
 const AuthenticatedRouteWithChildren = AuthenticatedRoute._addFileChildren(

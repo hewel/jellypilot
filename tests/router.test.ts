@@ -3,6 +3,7 @@ import { afterEach, expect, rstest, test } from '@rstest/core';
 import { commands } from '../src/bindings';
 import type { SavedSession } from '../src/bindings';
 import {
+  createJmsrRouter,
   redirectLegacyConsoleRoute,
   redirectLoggedInUsersToLibrary,
   redirectRootRoute,
@@ -50,14 +51,21 @@ test('root guard restores a Saved Session into Library', async () => {
   await expectRedirect(redirectRootRoute, '/library');
 });
 
-test('legacy console redirects authenticated users to Settings', async () => {
+test('legacy console redirects authenticated users to Library', async () => {
   rstest.spyOn(commands, 'jellyfinIsConnected').mockResolvedValue(true);
 
-  await expectRedirect(redirectLegacyConsoleRoute, '/settings');
+  await expectRedirect(redirectLegacyConsoleRoute, '/library');
 });
 
 test('shell guard redirects unauthenticated users to Login', async () => {
   rstest.spyOn(commands, 'jellyfinIsConnected').mockResolvedValue(false);
 
   await expectRedirect(requireAuthenticatedShell, '/login');
+});
+
+test('removed Settings and Diagnostics routes are absent from the router', () => {
+  const router = createJmsrRouter();
+
+  expect(router.routesById['/_authenticated/settings']).toBeUndefined();
+  expect(router.routesById['/_authenticated/diagnostics']).toBeUndefined();
 });
