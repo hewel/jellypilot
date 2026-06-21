@@ -493,25 +493,28 @@ afterEach(() => {
   document.body.innerHTML = '';
 });
 
-test('authenticated shell exposes peer navigation areas', async () => {
+test('authenticated shell removes top header chrome and exposes floating controls', async () => {
   mockShellCommands();
   const cleanup = renderShell();
 
   await screen.findByRole('navigation', { name: 'Library navigation' });
 
-  const nav = screen.getByRole('navigation', { name: 'JMSR areas' });
-  const libraryLink = screen.getByRole('link', { name: 'Library' });
-  expect(nav).toBeVisible();
-  expect(nav).toHaveClass('overflow-x-auto');
-  expect(nav).toHaveClass('lg:overflow-visible');
-  expect(libraryLink).toHaveAttribute('aria-current', 'page');
-  expect(libraryLink).toHaveClass('focus-visible:ring-2');
-  expect(screen.queryByRole('link', { name: 'Now Playing' })).toBeNull();
+  // No shell header: no app-area navigation, brand, or user/server badge.
+  expect(screen.queryByRole('navigation', { name: 'JMSR areas' })).toBeNull();
+  expect(screen.queryByRole('link', { name: 'Settings' })).toBeNull();
+  expect(screen.queryByRole('link', { name: 'Diagnostics' })).toBeNull();
+  expect(screen.queryByText('Control Room')).toBeNull();
+  expect(screen.queryByText(connectedState.userName)).toBeNull();
+  expect(screen.queryByText(connectedState.serverName)).toBeNull();
+
+  // Now Playing and Open Settings are reachable from the floating cluster.
   await waitFor(() =>
     expect(screen.getByRole('button', { name: /Now Playing: Playing — The Pilot/ })).toBeVisible(),
   );
-  expect(screen.getByRole('link', { name: 'Settings' })).toBeVisible();
-  expect(screen.getByRole('link', { name: 'Diagnostics' })).toBeVisible();
+  expect(screen.getByRole('button', { name: 'Open Settings' })).toBeVisible();
+
+  // Main content reserves bottom space so the floating cluster cannot cover it.
+  expect(screen.getByRole('main')).toHaveClass('pb-40');
 
   cleanup();
 });
