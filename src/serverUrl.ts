@@ -12,7 +12,7 @@ export interface ServerUrlResult {
 
 import { Effect } from 'effect';
 
-import { buildServerUrlEffect } from './effects/serverUrl';
+import { InvalidServerUrl } from './effects/errors';
 
 const LOCAL_HOSTS = new Set(['localhost']);
 
@@ -76,6 +76,43 @@ export function isLocalServerHost(hostname: string): boolean {
 
 export function defaultSchemeForHost(host: string): ServerScheme {
   return isLocalServerHost(stripServerScheme(host)) ? 'http' : 'https';
+}
+
+export function buildServerUrlEffect(
+  fields: ServerUrlFields,
+): Effect.Effect<ServerUrlResult, InvalidServerUrl> {
+  return Effect.gen(function* () {
+    const rawHost = stripServerScheme(fields.host);
+    if (!rawHost) {
+      return yield* Effect.fail(new InvalidServerUrl({ message: 'Server host is required' }));
+    }
+
+    const candidate = `${fields.scheme}://${rawHost}`;
+    const parsed = yield* Effect.try({
+      catch: () =>
+        new InvalidServerUrl({
+          message: 'Enter a valid Jellyfin server host',
+        }),
+      try: () => new URL(candidate),
+    });
+
+    const isLocal = isLocalServerHost(parsed.host);
+    const explicitPort = hasExplicitPort(rawHost);
+    if (isLocal && !explicitPort) {
+      parsed.port = '8096';
+    }
+
+    parsed.hash = '';
+    parsed.search = '';
+
+    const normalized = explicitPort
+      ? `${fields.scheme}://${rawHost}`.replace(/[?#].*$/, '')
+      : parsed.toString();
+
+    const url = normalized.replace(/\/$/, parsed.pathname === '/' ? '' : '/');
+
+    return { isLocal, url };
+  });
 }
 
 export function buildServerUrl(fields: ServerUrlFields): ServerUrlResult {
