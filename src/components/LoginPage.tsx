@@ -349,6 +349,8 @@ export default function LoginPage(props: LoginPageProps) {
             <Tabs.Root
               value={loginMethod()}
               activationMode="manual"
+              lazyMount
+              unmountOnExit
               onValueChange={(details) => {
                 const value = details.value as LoginMethod;
                 if (value !== 'quickConnect' && value !== 'password') {
@@ -378,128 +380,124 @@ export default function LoginPage(props: LoginPageProps) {
                 </Tabs.Trigger>
               </Tabs.List>
 
-              <Show when={loginMethod() === 'quickConnect'}>
-                <Tabs.Content value="quickConnect">
-                  <div class="border-secondary/25 bg-secondary-container/20 relative overflow-hidden rounded-3xl border p-6 text-center backdrop-blur-sm transition-all duration-300">
-                    <div class="from-secondary/5 pointer-events-none absolute inset-0 bg-gradient-to-b to-transparent" />
+              <Tabs.Content value="quickConnect">
+                <div class="border-secondary/25 bg-secondary-container/20 relative overflow-hidden rounded-3xl border p-6 text-center backdrop-blur-sm transition-all duration-300">
+                  <div class="from-secondary/5 pointer-events-none absolute inset-0 bg-gradient-to-b to-transparent" />
 
-                    {/* Decorative radar background */}
-                    <div class="border-secondary/20 bg-secondary/5 relative mx-auto mb-4 flex h-20 w-20 items-center justify-center rounded-full border">
-                      <Show when={isQuickConnectWaiting()}>
-                        <div class="border-secondary/40 absolute inset-0 animate-[radar-pulse_2.2s_cubic-bezier(0.2,0.8,0.2,1)_infinite] rounded-full border" />
-                        <div
-                          class="border-secondary/30 absolute inset-0 animate-[radar-pulse_2.2s_cubic-bezier(0.2,0.8,0.2,1)_infinite] rounded-full border"
-                          style="animation-delay: 0.7s"
-                        />
-                        <div
-                          class="border-secondary/20 absolute inset-0 animate-[radar-pulse_2.2s_cubic-bezier(0.2,0.8,0.2,1)_infinite] rounded-full border"
-                          style="animation-delay: 1.4s"
-                        />
-                      </Show>
-                      <RadioTower
-                        class={`text-secondary h-9 w-9 ${isQuickConnectWaiting() ? 'animate-pulse' : ''} drop-shadow-[0_0_8px_rgba(129,140,248,0.4)]`}
-                      />
-                    </div>
-
-                    <p class="text-on-secondary-container text-[14px] leading-[20px] font-medium">
-                      Approve this code from another signed-in Jellyfin client. JMSR will finish
-                      login automatically after approval.
-                    </p>
-                    <p class="text-on-surface-variant/80 mt-2 text-[12px] leading-[16px]">
-                      You are authorizing this Playback Target.
-                    </p>
-
-                    <Show when={quickConnectCode()}>
-                      <div class="bg-surface-container-lowest/80 border-outline-variant mt-6 inline-flex flex-col items-center justify-center rounded-2xl border px-6 py-3.5 shadow-inner">
-                        <span class="text-on-surface-variant/80 mb-1 text-[10px] font-bold tracking-[0.2em] uppercase">
-                          Verification Code
-                        </span>
-                        <p class="font-display text-secondary pl-[0.25em] font-mono text-[36px] leading-[44px] font-bold tracking-[0.25em] tracking-tight drop-shadow-[0_0_10px_rgba(129,140,248,0.55)]">
-                          {quickConnectCode()}
-                        </p>
-                      </div>
-                    </Show>
-
+                  {/* Decorative radar background */}
+                  <div class="border-secondary/20 bg-secondary/5 relative mx-auto mb-4 flex h-20 w-20 items-center justify-center rounded-full border">
                     <Show when={isQuickConnectWaiting()}>
-                      <div class="text-secondary mt-5 flex animate-pulse items-center justify-center gap-2 text-[12px] leading-[16px] font-bold tracking-[0.05em] uppercase">
-                        <span class="bg-secondary h-2 w-2 rounded-full shadow-[0_0_8px_#818cf8]" />
-                        Awaiting Quick Connect Approval…
-                      </div>
+                      <div class="border-secondary/40 absolute inset-0 animate-[radar-pulse_2.2s_cubic-bezier(0.2,0.8,0.2,1)_infinite] rounded-full border" />
+                      <div
+                        class="border-secondary/30 absolute inset-0 animate-[radar-pulse_2.2s_cubic-bezier(0.2,0.8,0.2,1)_infinite] rounded-full border"
+                        style="animation-delay: 0.7s"
+                      />
+                      <div
+                        class="border-secondary/20 absolute inset-0 animate-[radar-pulse_2.2s_cubic-bezier(0.2,0.8,0.2,1)_infinite] rounded-full border"
+                        style="animation-delay: 1.4s"
+                      />
                     </Show>
+                    <RadioTower
+                      class={`text-secondary h-9 w-9 ${isQuickConnectWaiting() ? 'animate-pulse' : ''} drop-shadow-[0_0_8px_rgba(129,140,248,0.4)]`}
+                    />
                   </div>
-                </Tabs.Content>
-              </Show>
 
-              <Show when={loginMethod() === 'password'}>
-                <Tabs.Content value="password">
-                  <div class="space-y-4">
-                    <form.Field name="username">
-                      {(field) => (
-                        <ArkField.Root class="block">
-                          <ArkField.Label class="text-on-surface-variant mb-1.5 block text-[12px] leading-[16px] font-bold tracking-[0.05em] uppercase">
-                            Username
-                          </ArkField.Label>
-                          <ArkField.Input
-                            asChild={(fieldProps) => (
-                              <FieldControl
-                                {...fieldProps()}
-                                variant="filled"
-                                value={field().state.value}
-                                onInput={(event) => field().handleChange(event.currentTarget.value)}
-                                class="w-full"
-                                placeholder="Jellyfin username"
-                              />
-                            )}
-                          />
-                        </ArkField.Root>
-                      )}
-                    </form.Field>
-                    <form.Field name="password">
-                      {(field) => (
-                        <ArkField.Root class="block">
-                          <ArkField.Label class="text-on-surface-variant mb-1.5 block text-[12px] leading-[16px] font-bold tracking-[0.05em] uppercase">
-                            Password
-                          </ArkField.Label>
-                          <ArkField.Input
-                            asChild={(fieldProps) => (
-                              <FieldControl
-                                {...fieldProps()}
-                                variant="filled"
-                                type="password"
-                                value={field().state.value}
-                                onInput={(event) => field().handleChange(event.currentTarget.value)}
-                                class="w-full"
-                                placeholder="Jellyfin password"
-                              />
-                            )}
-                          />
-                        </ArkField.Root>
-                      )}
-                    </form.Field>
-                    <form.Field name="rememberMe">
-                      {(field) => (
-                        <Checkbox.Root
-                          checked={field().state.value}
-                          onCheckedChange={(details) =>
-                            field().handleChange(details.checked === true)
-                          }
-                          class="text-on-surface mt-2.5 inline-flex cursor-pointer items-center gap-2.5 align-top text-[14px] leading-[20px] transition-opacity select-none disabled:cursor-not-allowed disabled:opacity-50"
-                        >
-                          <Checkbox.Control class="border-outline bg-surface-container-high text-on-primary hover:border-primary/60 data-[state=checked]:border-primary data-[state=checked]:from-primary data-[state=checked]:to-primary-gradient-end data-[state=indeterminate]:border-primary data-[state=indeterminate]:from-primary data-[state=indeterminate]:to-primary-gradient-end data-[focus-visible]:ring-primary/50 data-[focus-visible]:ring-offset-background inline-flex h-5.5 w-5.5 shrink-0 items-center justify-center rounded-lg border text-[11px] leading-none transition-all duration-200 data-[focus-visible]:ring-2 data-[focus-visible]:ring-offset-2 data-[focus-visible]:outline-none data-[state=checked]:bg-gradient-to-br data-[state=indeterminate]:bg-gradient-to-br">
-                            <Checkbox.Indicator class="flex items-center justify-center font-black">
-                              <Check class="h-3.5 w-3.5" stroke-width={4} />
-                            </Checkbox.Indicator>
-                          </Checkbox.Control>
-                          <Checkbox.Label class="hover:text-on-surface-variant cursor-pointer font-medium transition-colors select-none">
-                            Remember Server URL and username
-                          </Checkbox.Label>
-                          <Checkbox.HiddenInput />
-                        </Checkbox.Root>
-                      )}
-                    </form.Field>
-                  </div>
-                </Tabs.Content>
-              </Show>
+                  <p class="text-on-secondary-container text-[14px] leading-[20px] font-medium">
+                    Approve this code from another signed-in Jellyfin client. JMSR will finish login
+                    automatically after approval.
+                  </p>
+                  <p class="text-on-surface-variant/80 mt-2 text-[12px] leading-[16px]">
+                    You are authorizing this Playback Target.
+                  </p>
+
+                  <Show when={quickConnectCode()}>
+                    <div class="bg-surface-container-lowest/80 border-outline-variant mt-6 inline-flex flex-col items-center justify-center rounded-2xl border px-6 py-3.5 shadow-inner">
+                      <span class="text-on-surface-variant/80 mb-1 text-[10px] font-bold tracking-[0.2em] uppercase">
+                        Verification Code
+                      </span>
+                      <p class="font-display text-secondary pl-[0.25em] font-mono text-[36px] leading-[44px] font-bold tracking-[0.25em] tracking-tight drop-shadow-[0_0_10px_rgba(129,140,248,0.55)]">
+                        {quickConnectCode()}
+                      </p>
+                    </div>
+                  </Show>
+
+                  <Show when={isQuickConnectWaiting()}>
+                    <div class="text-secondary mt-5 flex animate-pulse items-center justify-center gap-2 text-[12px] leading-[16px] font-bold tracking-[0.05em] uppercase">
+                      <span class="bg-secondary h-2 w-2 rounded-full shadow-[0_0_8px_#818cf8]" />
+                      Awaiting Quick Connect Approval…
+                    </div>
+                  </Show>
+                </div>
+              </Tabs.Content>
+
+              <Tabs.Content value="password">
+                <div class="space-y-4">
+                  <form.Field name="username">
+                    {(field) => (
+                      <ArkField.Root class="block">
+                        <ArkField.Label class="text-on-surface-variant mb-1.5 block text-[12px] leading-[16px] font-bold tracking-[0.05em] uppercase">
+                          Username
+                        </ArkField.Label>
+                        <ArkField.Input
+                          asChild={(fieldProps) => (
+                            <FieldControl
+                              {...fieldProps()}
+                              variant="filled"
+                              value={field().state.value}
+                              onInput={(event) => field().handleChange(event.currentTarget.value)}
+                              class="w-full"
+                              placeholder="Jellyfin username"
+                            />
+                          )}
+                        />
+                      </ArkField.Root>
+                    )}
+                  </form.Field>
+                  <form.Field name="password">
+                    {(field) => (
+                      <ArkField.Root class="block">
+                        <ArkField.Label class="text-on-surface-variant mb-1.5 block text-[12px] leading-[16px] font-bold tracking-[0.05em] uppercase">
+                          Password
+                        </ArkField.Label>
+                        <ArkField.Input
+                          asChild={(fieldProps) => (
+                            <FieldControl
+                              {...fieldProps()}
+                              variant="filled"
+                              type="password"
+                              value={field().state.value}
+                              onInput={(event) => field().handleChange(event.currentTarget.value)}
+                              class="w-full"
+                              placeholder="Jellyfin password"
+                            />
+                          )}
+                        />
+                      </ArkField.Root>
+                    )}
+                  </form.Field>
+                  <form.Field name="rememberMe">
+                    {(field) => (
+                      <Checkbox.Root
+                        checked={field().state.value}
+                        onCheckedChange={(details) =>
+                          field().handleChange(details.checked === true)
+                        }
+                        class="text-on-surface mt-2.5 inline-flex cursor-pointer items-center gap-2.5 align-top text-[14px] leading-[20px] transition-opacity select-none disabled:cursor-not-allowed disabled:opacity-50"
+                      >
+                        <Checkbox.Control class="border-outline bg-surface-container-high text-on-primary hover:border-primary/60 data-[state=checked]:border-primary data-[state=checked]:from-primary data-[state=checked]:to-primary-gradient-end data-[state=indeterminate]:border-primary data-[state=indeterminate]:from-primary data-[state=indeterminate]:to-primary-gradient-end data-[focus-visible]:ring-primary/50 data-[focus-visible]:ring-offset-background inline-flex h-5.5 w-5.5 shrink-0 items-center justify-center rounded-lg border text-[11px] leading-none transition-all duration-200 data-[focus-visible]:ring-2 data-[focus-visible]:ring-offset-2 data-[focus-visible]:outline-none data-[state=checked]:bg-gradient-to-br data-[state=indeterminate]:bg-gradient-to-br">
+                          <Checkbox.Indicator class="flex items-center justify-center font-black">
+                            <Check class="h-3.5 w-3.5" stroke-width={4} />
+                          </Checkbox.Indicator>
+                        </Checkbox.Control>
+                        <Checkbox.Label class="hover:text-on-surface-variant cursor-pointer font-medium transition-colors select-none">
+                          Remember Server URL and username
+                        </Checkbox.Label>
+                        <Checkbox.HiddenInput />
+                      </Checkbox.Root>
+                    )}
+                  </form.Field>
+                </div>
+              </Tabs.Content>
             </Tabs.Root>
 
             <Show when={error()}>

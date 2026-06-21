@@ -87,6 +87,8 @@ export default function NowPlayingDrawer(props: { jellyfinConnected: boolean }) 
       onOpenChange={(details) => setOpen(details.open)}
       closeOnEscape
       closeOnInteractOutside
+      lazyMount
+      unmountOnExit
       role="dialog"
     >
       <Dialog.Trigger
@@ -106,50 +108,48 @@ export default function NowPlayingDrawer(props: { jellyfinConnected: boolean }) 
         )}
       />
 
-      <Show when={open()}>
-        <Portal>
-          <Dialog.Backdrop class="fixed inset-0 z-50 bg-black/70 backdrop-blur-sm transition-all duration-300" />
-          <Dialog.Positioner class="fixed inset-0 z-50 flex justify-end">
-            <Dialog.Content
-              ref={setSelectPortalMount}
-              class="border-outline-variant/30 bg-surface-container-low/60 flex h-full w-full animate-[fadeIn_0.3s_cubic-bezier(0.16,1,0.3,1)_forwards] flex-col overflow-hidden rounded-l-[2rem] border-l shadow-2xl backdrop-blur-xl sm:w-[28rem]"
-            >
-              {/* Header */}
-              <div class="border-outline-variant/20 flex items-center justify-between border-b px-5 py-4">
-                <div>
-                  <Dialog.Title class="text-on-surface text-[18px] leading-[24px] font-bold">
-                    Now Playing
-                  </Dialog.Title>
-                  <Dialog.Description class="text-on-surface-variant/70 mt-0.5 text-[12px] leading-[16px]">
-                    Playback details and MPV controls
-                  </Dialog.Description>
-                </div>
-                <Button
-                  type="button"
-                  variant="icon"
-                  aria-label="Close Now Playing"
-                  onClick={() => setOpen(false)}
-                >
-                  <X class="h-5 w-5" />
-                </Button>
+      <Portal>
+        <Dialog.Backdrop class="fixed inset-0 z-50 bg-black/70 backdrop-blur-sm transition-all duration-300" />
+        <Dialog.Positioner class="fixed inset-0 z-50 flex justify-end">
+          <Dialog.Content
+            ref={setSelectPortalMount}
+            class="border-outline-variant/30 bg-surface-container-low/60 flex h-full w-full animate-[fadeIn_0.3s_cubic-bezier(0.16,1,0.3,1)_forwards] flex-col overflow-hidden rounded-l-[2rem] border-l shadow-2xl backdrop-blur-xl sm:w-[28rem]"
+          >
+            {/* Header */}
+            <div class="border-outline-variant/20 flex items-center justify-between border-b px-5 py-4">
+              <div>
+                <Dialog.Title class="text-on-surface text-[18px] leading-[24px] font-bold">
+                  Now Playing
+                </Dialog.Title>
+                <Dialog.Description class="text-on-surface-variant/70 mt-0.5 text-[12px] leading-[16px]">
+                  Playback details and MPV controls
+                </Dialog.Description>
               </div>
+              <Button
+                type="button"
+                variant="icon"
+                aria-label="Close Now Playing"
+                onClick={() => setOpen(false)}
+              >
+                <X class="h-5 w-5" />
+              </Button>
+            </div>
 
-              {/* Body */}
-              <div class="flex-1 overflow-y-auto px-5 py-4">
-                <Show when={selectPortalMount()}>
-                  {(mount) => (
-                    <NowPlayingCard
-                      jellyfinConnected={props.jellyfinConnected}
-                      bare
-                      trackSelectPortalMount={mount()}
-                    />
-                  )}
-                </Show>
-              </div>
-            </Dialog.Content>
-          </Dialog.Positioner>
-        </Portal>
-      </Show>
+            {/* Body */}
+            <div class="flex-1 overflow-y-auto px-5 py-4">
+              <Show when={selectPortalMount()}>
+                {(mount) => (
+                  <NowPlayingCard
+                    jellyfinConnected={props.jellyfinConnected}
+                    bare
+                    trackSelectPortalMount={mount()}
+                  />
+                )}
+              </Show>
+            </div>
+          </Dialog.Content>
+        </Dialog.Positioner>
+      </Portal>
     </Dialog.Root>
   );
 }

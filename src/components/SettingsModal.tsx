@@ -1,7 +1,6 @@
 import { Dialog } from '@ark-ui/solid/dialog';
 import { useNavigate } from '@tanstack/solid-router';
 import { Settings, X } from 'lucide-solid';
-import { Show } from 'solid-js';
 
 import OperationsConsole from './OperationsConsole';
 import { Button } from './ui';
@@ -10,7 +9,7 @@ export default function SettingsModal() {
   const navigate = useNavigate();
 
   return (
-    <Dialog.Root>
+    <Dialog.Root lazyMount unmountOnExit>
       <Dialog.Trigger
         asChild={(triggerProps) => (
           <Button
@@ -28,7 +27,7 @@ export default function SettingsModal() {
 
       <Dialog.Context>
         {(dialog) => (
-          <Show when={dialog().open}>
+          <>
             <Dialog.Backdrop class="fixed inset-0 z-40 bg-black/70 backdrop-blur-sm transition-all duration-300" />
             <Dialog.Positioner class="fixed inset-0 z-40 flex h-full w-full flex-col overflow-hidden">
               <Dialog.Content
@@ -66,7 +65,7 @@ export default function SettingsModal() {
                 </div>
               </Dialog.Content>
             </Dialog.Positioner>
-          </Show>
+          </>
         )}
       </Dialog.Context>
     </Dialog.Root>

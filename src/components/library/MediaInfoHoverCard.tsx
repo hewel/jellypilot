@@ -110,40 +110,39 @@ export function MediaInfoHoverCard(props: { id: string; itemType: string; childr
     <HoverCard.Root
       openDelay={500}
       closeDelay={150}
+      unmountOnExit
       positioning={{ gutter: 10, placement: 'top' }}
       onOpenChange={(details) => setOpen(details.open)}
     >
       <HoverCard.Trigger
         asChild={(triggerProps) => <div {...triggerProps()}>{props.children}</div>}
       />
-      <Show when={open()}>
-        <Portal>
-          <HoverCard.Positioner>
-            <HoverCard.Content class="border-outline-variant bg-surface-container-lowest z-100 w-80 max-w-[min(90vw,24rem)] rounded-2xl border p-4 shadow-2xl backdrop-blur-md">
-              <Show
-                when={detail.state !== 'pending' && detail()}
-                fallback={
-                  <div class="text-on-surface-variant flex items-center justify-center gap-2 py-3 text-[12px] leading-[16px] font-bold tracking-[0.05em] uppercase">
-                    <LoaderCircle class="h-4 w-4 animate-spin" />
-                    <span>Loading…</span>
-                  </div>
-                }
-              >
-                {(exit) =>
-                  Exit.match(exit(), {
-                    onFailure: (cause) => (
-                      <p class="text-error/90 py-2 text-center text-[12px] leading-[16px] font-bold tracking-[0.05em] uppercase">
-                        {commandFailureMessage(cause, 'Could not load detail')}
-                      </p>
-                    ),
-                    onSuccess: (value) => <MediaInfoContent detail={value} />,
-                  })
-                }
-              </Show>
-            </HoverCard.Content>
-          </HoverCard.Positioner>
-        </Portal>
-      </Show>
+      <Portal>
+        <HoverCard.Positioner>
+          <HoverCard.Content class="border-outline-variant bg-surface-container-lowest z-100 w-80 max-w-[min(90vw,24rem)] rounded-2xl border p-4 shadow-2xl backdrop-blur-md">
+            <Show
+              when={detail.state !== 'pending' && detail()}
+              fallback={
+                <div class="text-on-surface-variant flex items-center justify-center gap-2 py-3 text-[12px] leading-[16px] font-bold tracking-[0.05em] uppercase">
+                  <LoaderCircle class="h-4 w-4 animate-spin" />
+                  <span>Loading…</span>
+                </div>
+              }
+            >
+              {(exit) =>
+                Exit.match(exit(), {
+                  onFailure: (cause) => (
+                    <p class="text-error/90 py-2 text-center text-[12px] leading-[16px] font-bold tracking-[0.05em] uppercase">
+                      {commandFailureMessage(cause, 'Could not load detail')}
+                    </p>
+                  ),
+                  onSuccess: (value) => <MediaInfoContent detail={value} />,
+                })
+              }
+            </Show>
+          </HoverCard.Content>
+        </HoverCard.Positioner>
+      </Portal>
     </HoverCard.Root>
   );
 }

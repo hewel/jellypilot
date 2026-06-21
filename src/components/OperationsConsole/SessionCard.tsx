@@ -1,6 +1,5 @@
 import { Dialog } from '@ark-ui/solid/dialog';
 import { LogOut, ShieldAlert } from 'lucide-solid';
-import { Show } from 'solid-js';
 import { Portal } from 'solid-js/web';
 
 import { Button, Card } from '../ui';
@@ -34,6 +33,8 @@ export default function SessionCard(props: SessionCardProps) {
           actions.setSignOutDialogOpen(false);
         }
       }}
+      lazyMount
+      unmountOnExit
       role="dialog"
     >
       <Card
@@ -66,62 +67,60 @@ export default function SessionCard(props: SessionCardProps) {
         />
       </Card>
 
-      <Show when={ui.confirmSignOut}>
-        <Portal>
-          <Dialog.Backdrop
-            class="fixed inset-0 z-50 bg-black/70 backdrop-blur-sm transition-all duration-300"
-            onClick={() => {
-              if (!ui.signingOut) {
+      <Portal>
+        <Dialog.Backdrop
+          class="fixed inset-0 z-50 bg-black/70 backdrop-blur-sm transition-all duration-300"
+          onClick={() => {
+            if (!ui.signingOut) {
+              actions.setSignOutDialogOpen(false);
+            }
+          }}
+        />
+        <Dialog.Positioner class="fixed inset-0 z-50 flex items-center justify-center p-4">
+          <Dialog.Content
+            class="border-primary/20 bg-surface-container-low/45 hover:border-primary/35 hover:bg-surface-container-low/60 border-error/30 relative max-w-md animate-[fadeIn_0.3s_cubic-bezier(0.16,1,0.3,1)_forwards] overflow-hidden rounded-[2rem] border p-6 shadow-2xl backdrop-blur-xl transition-all duration-300"
+            onKeyDown={(event) => {
+              if (event.key === 'Escape' && !ui.signingOut) {
                 actions.setSignOutDialogOpen(false);
               }
             }}
-          />
-          <Dialog.Positioner class="fixed inset-0 z-50 flex items-center justify-center p-4">
-            <Dialog.Content
-              class="border-primary/20 bg-surface-container-low/45 hover:border-primary/35 hover:bg-surface-container-low/60 border-error/30 relative max-w-md animate-[fadeIn_0.3s_cubic-bezier(0.16,1,0.3,1)_forwards] overflow-hidden rounded-[2rem] border p-6 shadow-2xl backdrop-blur-xl transition-all duration-300"
-              onKeyDown={(event) => {
-                if (event.key === 'Escape' && !ui.signingOut) {
-                  actions.setSignOutDialogOpen(false);
-                }
-              }}
-            >
-              {/* Red top glow bar */}
-              <div class="via-error/60 absolute top-0 left-0 h-[3px] w-full bg-gradient-to-r from-transparent to-transparent" />
+          >
+            {/* Red top glow bar */}
+            <div class="via-error/60 absolute top-0 left-0 h-[3px] w-full bg-gradient-to-r from-transparent to-transparent" />
 
-              <Dialog.Title
-                id="sign-out-title"
-                class="text-on-surface flex items-center gap-2 text-[22px] leading-[28px] font-bold"
+            <Dialog.Title
+              id="sign-out-title"
+              class="text-on-surface flex items-center gap-2 text-[22px] leading-[28px] font-bold"
+            >
+              <ShieldAlert class="text-error h-6 w-6" />
+              Sign out?
+            </Dialog.Title>
+            <Dialog.Description class="text-on-surface-variant/90 mt-3 text-[14px] leading-[20px]">
+              This removes the Saved Session and you'll need to authenticate again before
+              reconnecting.
+            </Dialog.Description>
+            <div class="mt-6 flex flex-col-reverse gap-3 sm:flex-row sm:justify-end">
+              <Button
+                type="button"
+                variant="secondary"
+                onClick={() => actions.setSignOutDialogOpen(false)}
+                disabled={ui.signingOut}
               >
-                <ShieldAlert class="text-error h-6 w-6" />
-                Sign out?
-              </Dialog.Title>
-              <Dialog.Description class="text-on-surface-variant/90 mt-3 text-[14px] leading-[20px]">
-                This removes the Saved Session and you'll need to authenticate again before
-                reconnecting.
-              </Dialog.Description>
-              <div class="mt-6 flex flex-col-reverse gap-3 sm:flex-row sm:justify-end">
-                <Button
-                  type="button"
-                  variant="secondary"
-                  onClick={() => actions.setSignOutDialogOpen(false)}
-                  disabled={ui.signingOut}
-                >
-                  Cancel
-                </Button>
-                <Button
-                  type="button"
-                  variant="outlined"
-                  class="border-error/60 text-error hover:bg-error/10"
-                  onClick={props.onSignOut}
-                  disabled={ui.signingOut}
-                >
-                  {ui.signingOut ? 'Signing out...' : 'Sign out'}
-                </Button>
-              </div>
-            </Dialog.Content>
-          </Dialog.Positioner>
-        </Portal>
-      </Show>
+                Cancel
+              </Button>
+              <Button
+                type="button"
+                variant="outlined"
+                class="border-error/60 text-error hover:bg-error/10"
+                onClick={props.onSignOut}
+                disabled={ui.signingOut}
+              >
+                {ui.signingOut ? 'Signing out...' : 'Sign out'}
+              </Button>
+            </div>
+          </Dialog.Content>
+        </Dialog.Positioner>
+      </Portal>
     </Dialog.Root>
   );
 }

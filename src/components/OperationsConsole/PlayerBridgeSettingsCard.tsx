@@ -129,6 +129,8 @@ export default function PlayerBridgeSettingsCard(props: PlayerBridgeSettingsCard
         <Collapsible.Root
           open={ui.advancedOpen}
           onOpenChange={(details) => actions.setAdvancedOpen(details.open)}
+          lazyMount
+          unmountOnExit
         >
           <Collapsible.Trigger
             asChild={(triggerProps) => (
@@ -148,48 +150,46 @@ export default function PlayerBridgeSettingsCard(props: PlayerBridgeSettingsCard
             <span>Advanced MPV options</span>
           </Collapsible.Trigger>
 
-          <Show when={ui.advancedOpen}>
-            <Collapsible.Content class="border-outline-variant bg-surface-container-lowest/30 mt-3 rounded-2xl border p-4 backdrop-blur-sm">
-              <section class="space-y-4">
-                <div>
-                  <h3 class="text-on-surface flex items-center gap-2 text-[14px] leading-[20px] font-semibold">
-                    <span class="bg-secondary h-3 w-1 rounded" />
-                    MPV arguments
-                  </h3>
-                  <p class="text-on-surface-variant/70 mt-1 text-[12px] leading-[16px]">
-                    Extra command-line flags passed to the external MPV process.
-                  </p>
-                </div>
+          <Collapsible.Content class="border-outline-variant bg-surface-container-lowest/30 mt-3 rounded-2xl border p-4 backdrop-blur-sm">
+            <section class="space-y-4">
+              <div>
+                <h3 class="text-on-surface flex items-center gap-2 text-[14px] leading-[20px] font-semibold">
+                  <span class="bg-secondary h-3 w-1 rounded" />
+                  MPV arguments
+                </h3>
+                <p class="text-on-surface-variant/70 mt-1 text-[12px] leading-[16px]">
+                  Extra command-line flags passed to the external MPV process.
+                </p>
+              </div>
 
-                <props.form.Field name="mpvArgs">
-                  {(field) => (
-                    <ArkField.Root class="block">
-                      <ArkField.Label class="text-on-surface-variant mb-1.5 block text-[12px] leading-[16px] font-bold tracking-[0.05em] uppercase">
-                        Extra arguments
-                      </ArkField.Label>
-                      <ArkField.Textarea
-                        asChild={(fieldProps) => (
-                          <FieldTextarea
-                            {...fieldProps()}
-                            variant="filled"
-                            value={field().state.value}
-                            onInput={(event) => field().handleChange(event.currentTarget.value)}
-                            onBlur={(event) => {
-                              field().handleBlur();
-                              props.onSaveTextSetting('mpvArgs', event.currentTarget.value);
-                            }}
-                            rows={4}
-                            placeholder="--fullscreen&#10;--force-window"
-                            class="text-on-surface-variant/80 h-auto w-full py-3.5 font-mono text-[12px] leading-[16px]"
-                          />
-                        )}
-                      />
-                    </ArkField.Root>
-                  )}
-                </props.form.Field>
-              </section>
-            </Collapsible.Content>
-          </Show>
+              <props.form.Field name="mpvArgs">
+                {(field) => (
+                  <ArkField.Root class="block">
+                    <ArkField.Label class="text-on-surface-variant mb-1.5 block text-[12px] leading-[16px] font-bold tracking-[0.05em] uppercase">
+                      Extra arguments
+                    </ArkField.Label>
+                    <ArkField.Textarea
+                      asChild={(fieldProps) => (
+                        <FieldTextarea
+                          {...fieldProps()}
+                          variant="filled"
+                          value={field().state.value}
+                          onInput={(event) => field().handleChange(event.currentTarget.value)}
+                          onBlur={(event) => {
+                            field().handleBlur();
+                            props.onSaveTextSetting('mpvArgs', event.currentTarget.value);
+                          }}
+                          rows={4}
+                          placeholder="--fullscreen&#10;--force-window"
+                          class="text-on-surface-variant/80 h-auto w-full py-3.5 font-mono text-[12px] leading-[16px]"
+                        />
+                      )}
+                    />
+                  </ArkField.Root>
+                )}
+              </props.form.Field>
+            </section>
+          </Collapsible.Content>
         </Collapsible.Root>
 
         <TagsInput.Root
