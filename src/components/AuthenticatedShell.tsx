@@ -6,6 +6,7 @@ import { Show, createResource } from 'solid-js';
 import type { ConnectionState } from '../bindings';
 import { fetchConnectionState } from '../effects/connection';
 import NowPlayingDrawer from './NowPlayingDrawer';
+import SettingsModal from './SettingsModal';
 import { ConsoleShell } from './ui';
 
 const navItems: {
@@ -132,6 +133,9 @@ export default function AuthenticatedShell() {
         <main class="min-w-0 animate-[fadeIn_0.3s_cubic-bezier(0.16,1,0.3,1)_forwards]">
           <Outlet />
         </main>
+      </div>
+      <div class="fixed right-4 bottom-4 z-40 flex flex-col items-end gap-3">
+        <SettingsModal />
       </div>
     </ConsoleShell>
   );

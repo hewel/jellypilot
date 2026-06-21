@@ -1,6 +1,6 @@
 import { afterEach, expect, rstest, test } from '@rstest/core';
 import { RouterProvider, createMemoryHistory } from '@tanstack/solid-router';
-import { fireEvent, screen, waitFor } from '@testing-library/dom';
+import { fireEvent, screen, waitFor, within } from '@testing-library/dom';
 import { render } from 'solid-js/web';
 
 import { commands, events } from '../src/bindings';
@@ -1037,6 +1037,94 @@ test('now playing drawer exposes full playback controls', async () => {
   expect(screen.getByRole('dialog', { name: 'Now Playing' })).toBeVisible();
   fireEvent.click(screen.getByRole('button', { name: 'Close Now Playing' }));
   await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Now Playing' })).toBeNull());
+
+  cleanup();
+});
+
+test('floating Open Settings control opens Settings modal with operations console content', async () => {
+  mockShellCommands();
+  const cleanup = renderShell('/library');
+
+  await screen.findByRole('navigation', { name: 'Library navigation' });
+
+  const trigger = await screen.findByRole('button', { name: 'Open Settings' });
+  expect(trigger).toBeVisible();
+  fireEvent.click(trigger);
+
+  const settings = await screen.findByRole('dialog', { name: 'Settings' });
+  expect(settings).toBeVisible();
+  expect(
+    within(settings).getByText(
+      'Connection, player bridge, diagnostics, shortcuts, and session controls',
+    ),
+  ).toBeVisible();
+  expect(within(settings).getByRole('heading', { name: 'Connection' })).toBeVisible();
+  expect(within(settings).getByRole('heading', { name: 'Player Bridge settings' })).toBeVisible();
+  expect(within(settings).getByRole('heading', { name: 'Diagnostics' })).toBeVisible();
+  expect(within(settings).getByText('0 sanitized runtime events')).toBeVisible();
+
+  cleanup();
+});
+
+test('Close Settings and standard dismissal close the Settings modal back to the Library Browser', async () => {
+  mockShellCommands();
+  const cleanup = renderShell('/library');
+
+  await screen.findByRole('navigation', { name: 'Library navigation' });
+
+  fireEvent.click(await screen.findByRole('button', { name: 'Open Settings' }));
+  const settings = await screen.findByRole('dialog', { name: 'Settings' });
+  expect(settings).toBeVisible();
+  fireEvent.click(screen.getByRole('button', { name: 'Close Settings' }));
+  await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Settings' })).toBeNull());
+
+  // Standard dialog dismissal (Escape) via the headless primitive
+  fireEvent.click(screen.getByRole('button', { name: 'Open Settings' }));
+  const reopened = await screen.findByRole('dialog', { name: 'Settings' });
+  fireEvent.keyDown(reopened, { code: 'Escape', key: 'Escape' });
+  await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Settings' })).toBeNull());
+
+  // The Library Browser remains the active authenticated surface after closing
+  expect(screen.getByRole('navigation', { name: 'Library navigation' })).toBeVisible();
+
+  cleanup();
+});
+
+test('Sign out from the Settings modal reaches Login and stays distinct from Disconnect', async () => {
+  mockShellCommands();
+  let connected = true;
+  rstest
+    .spyOn(commands, 'jellyfinIsConnected')
+    .mockImplementation(() => Promise.resolve(connected));
+  rstest.spyOn(commands, 'jellyfinClearSession').mockImplementation(() => {
+    connected = false;
+    return Promise.resolve({ data: null, status: 'ok' });
+  });
+  localStorage.setItem('jmsr_auth_session', JSON.stringify({ serverUrl: 'https://jmsr.example' }));
+
+  const cleanup = renderShell('/library');
+  await screen.findByRole('navigation', { name: 'Library navigation' });
+
+  fireEvent.click(await screen.findByRole('button', { name: 'Open Settings' }));
+  const settings = await screen.findByRole('dialog', { name: 'Settings' });
+
+  // Disconnect and Sign out are both present and distinct inside Settings
+  expect(within(settings).getByRole('button', { name: 'Disconnect' })).toBeVisible();
+  expect(within(settings).getByRole('button', { name: 'Sign out' })).toBeVisible();
+
+  // Open the sign-out confirmation dialog (nested Ark dialog) and confirm sign out
+  fireEvent.click(within(settings).getByRole('button', { name: 'Sign out' }));
+  await waitFor(() => expect(screen.getByRole('button', { name: 'Cancel' })).toBeVisible());
+  const confirmDialog = screen
+    .getByRole('button', { name: 'Cancel' })
+    .closest('[role="dialog"]') as HTMLElement;
+  fireEvent.click(within(confirmDialog).getByRole('button', { name: 'Sign out' }));
+
+  // Sign out clears the Saved Session and reaches Login
+  await waitFor(() => expect(localStorage.getItem('jmsr_auth_session')).toBeNull());
+  expect(
+    await screen.findByPlaceholderText('jellyfin.local or media.example.com/jellyfin'),
+  ).toBeVisible();
 
   cleanup();
 });
