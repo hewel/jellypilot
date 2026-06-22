@@ -121,7 +121,7 @@ const videoHome: VideoHome = {
       runtimeSeconds: 7200,
       resumePositionSeconds: 120,
       playedPercentage: 25,
-      played: false,
+      played: true,
       favorite: true,
       artworkUrl: 'https://jellyfin.example.com/Items/movie-1/Images/Primary',
     },
@@ -555,18 +555,26 @@ test('library landing renders command-backed rows and drawer trigger', async () 
   expect(screen.getByRole('link', { name: /Next Episode/ })).toBeVisible();
   expect(screen.getByRole('link', { name: /Latest Movie/ })).toBeVisible();
   expect(screen.getByRole('link', { name: /Latest Episode/ })).toBeVisible();
+  const resumeMovieLink = screen.getByRole('link', { name: 'Open Resume Movie, favorite' });
+  expect(resumeMovieLink).toBeVisible();
+  expect(resumeMovieLink.querySelector('svg')).not.toBeNull();
+  expect(within(resumeMovieLink).getByRole('img', { name: 'Played' })).toBeVisible();
   const resumeArtwork = screen.getByAltText('Resume Movie artwork');
   expect(resumeArtwork).toHaveAttribute('src', videoHome.continueWatching[0]?.artworkUrl ?? '');
   expect(resumeArtwork.parentElement).toHaveClass('aspect-video');
   fireEvent.load(resumeArtwork);
   expect(resumeArtwork.parentElement).toHaveClass('aspect-video');
   const latestMovieLink = screen.getByRole('link', { name: /Latest Movie/ });
+  expect(within(latestMovieLink).getByText('Movie')).toBeVisible();
+  expect(within(latestMovieLink).queryByText('Movie · null')).toBeNull();
   expect(
     [...latestMovieLink.querySelectorAll('div')].some((node) =>
       node.className.includes('aspect-[2/3]'),
     ),
   ).toBe(true);
   expect(screen.getAllByText('No artwork')).toHaveLength(3);
+  const latestEpisodeLink = screen.getByRole('link', { name: /Latest Episode/ });
+  expect(latestEpisodeLink.querySelector('svg')).not.toBeNull();
   await waitFor(() =>
     expect(screen.getByRole('button', { name: /Now Playing: Playing — The Pilot/ })).toBeVisible(),
   );
@@ -586,10 +594,13 @@ test('library browse auto-loads paged results and opens detail links without pla
   expect(screen.getByRole('radio', { name: 'Home' })).toBeVisible();
   expect(screen.getByRole('radio', { name: 'Shows' })).toBeVisible();
   await screen.findByRole('heading', { name: 'Movies' });
-  expect(await screen.findByRole('link', { name: /Paged Movie/ })).toHaveAttribute(
-    'href',
-    '/library/items/movie-1',
-  );
+  const pagedMovieLink = await screen.findByRole('link', {
+    name: 'Open Paged Movie, favorite',
+  });
+  expect(pagedMovieLink).toHaveAttribute('href', '/library/items/movie-1');
+  expect(screen.queryByText('Favorite')).toBeNull();
+  expect(within(pagedMovieLink).queryByRole('img', { name: 'Unplayed' })).toBeNull();
+  expect(within(pagedMovieLink).queryByText('Unplayed')).toBeNull();
   expect(screen.getByAltText('Paged Movie artwork')).toBeVisible();
   expect(browseCommand).toHaveBeenCalledWith({
     collectionType: 'movies',
@@ -601,17 +612,15 @@ test('library browse auto-loads paged results and opens detail links without pla
     startIndex: 0,
   });
 
-  const movieLink = screen.getByRole('link', { name: /Paged Movie/ });
-  movieLink.addEventListener('click', (event) => event.preventDefault());
-  fireEvent.click(movieLink);
+  pagedMovieLink.addEventListener('click', (event) => event.preventDefault());
+  fireEvent.click(pagedMovieLink);
   expect(mpvStart).not.toHaveBeenCalled();
 
   expect(screen.queryByRole('button', { name: 'Load more' })).toBeNull();
   window.__TEST_INTERSECTION_OBSERVER__.trigger(true);
-  expect(await screen.findByRole('link', { name: /Paged Movie 25/ })).toHaveAttribute(
-    'href',
-    '/library/items/movie-25',
-  );
+  const pagedMovie25Link = await screen.findByRole('link', { name: /Paged Movie 25/ });
+  expect(pagedMovie25Link).toHaveAttribute('href', '/library/items/movie-25');
+  expect(within(pagedMovie25Link).getByRole('img', { name: 'Played' })).toBeVisible();
   expect(browseCommand).toHaveBeenLastCalledWith({
     collectionType: 'movies',
     favoritesOnly: false,

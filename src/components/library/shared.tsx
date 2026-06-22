@@ -1,11 +1,10 @@
 import { Exit, Match } from 'effect';
-import { Check, Clapperboard, Film, Heart, RefreshCw, Tv } from 'lucide-solid';
+import { Check, Clapperboard, Heart, RefreshCw } from 'lucide-solid';
 import { For, Show, createSignal } from 'solid-js';
 
 import type {
   VideoHomeItem,
   VideoItemDetail,
-  VideoLibraryItem,
   VideoLibraryKind,
   VideoLibraryPlayedFilter,
   VideoLibrarySort,
@@ -17,13 +16,14 @@ import type {
 } from '../../bindings';
 import { commandFailureMessage } from '../../effects/commands';
 import type { CommandError } from '../../effects/errors';
-import { Button, Card, CardLink } from '../ui';
+import { Button, Card } from '../ui';
 import type { JellyPilotSelectItem } from '../ui';
 import { MediaInfoHoverCard } from './MediaInfoHoverCard';
-import { VideoHomeCard } from './VideoHomeCard';
+import { VideoCard } from './VideoCard';
+import type { VideoCardAspectClass } from './VideoCard';
 
 export { MediaInfoHoverCard } from './MediaInfoHoverCard';
-export { VideoHomeCard } from './VideoHomeCard';
+export { VideoCard } from './VideoCard';
 
 export function LibraryStatusPanel(props: { title: string; description?: string }) {
   return (
@@ -56,9 +56,7 @@ export function LibraryStatusPanel(props: { title: string; description?: string 
 
 type VideoHomeRowKind = 'continueWatching' | 'nextUp' | 'latestMovies' | 'latestEpisodes';
 
-type VideoHomeAspectClass = 'aspect-[2/3]' | 'aspect-video';
-
-const videoHomeAspectClass = (kind: VideoHomeRowKind): VideoHomeAspectClass =>
+const videoHomeAspectClass = (kind: VideoHomeRowKind): VideoCardAspectClass =>
   kind === 'latestMovies' ? 'aspect-[2/3]' : 'aspect-video';
 
 export function VideoHomeRow(props: {
@@ -77,7 +75,7 @@ export function VideoHomeRow(props: {
           <For each={props.items}>
             {(item) => (
               <MediaInfoHoverCard id={item.id} itemType={item.itemType}>
-                <VideoHomeCard item={item} aspectClass={videoHomeAspectClass(props.kind)} />
+                <VideoCard kind="home" item={item} aspectClass={videoHomeAspectClass(props.kind)} />
               </MediaInfoHoverCard>
             )}
           </For>
@@ -103,74 +101,6 @@ export const sortItems: JellyPilotSelectItem<VideoLibrarySort>[] = [
   { label: 'Recently added', value: 'recentlyAdded' },
   { label: 'Release date', value: 'releaseDate' },
 ];
-
-export function VideoLibraryCard(props: {
-  item: VideoLibraryItem;
-  collectionType?: VideoLibraryKind;
-}) {
-  const Icon = props.collectionType === 'tvshows' || props.item.itemType === 'Series' ? Tv : Film;
-  const href = () =>
-    props.item.itemType === 'Series'
-      ? `/library/shows/${props.item.id}`
-      : `/library/items/${props.item.id}`;
-  const subtitle = () => {
-    const year = props.item.productionYear
-      ? props.item.productionYear.toString()
-      : props.item.itemType;
-    const state = props.item.played ? 'Played' : 'Unplayed';
-    return `${year} · ${state}`;
-  };
-
-  const isPoster = () =>
-    props.collectionType === 'tvshows' ||
-    props.item.itemType === 'Series' ||
-    props.item.itemType === 'Movie';
-
-  const aspectClass = () => (isPoster() ? 'aspect-[2/3]' : 'aspect-video');
-
-  return (
-    <CardLink
-      variant="filled"
-      href={href()}
-      aria-label={`Open ${props.item.name}`}
-      class="group focus-visible:ring-secondary/70 hover:border-primary/50 block overflow-hidden !p-0 transition-[border-color,box-shadow,transform] duration-300 hover:shadow-[0_0_10px_rgba(79,70,229,0.35)] focus-visible:ring-2 focus-visible:outline-none active:scale-[0.96]"
-    >
-      <div
-        class={`${aspectClass()} border-outline-variant bg-surface-container-lowest/60 overflow-hidden border-b`}
-      >
-        <Show
-          when={props.item.artworkUrl}
-          fallback={
-            <div class="text-on-surface-variant flex h-full flex-col items-center justify-center gap-2 px-4 text-center text-[11px] leading-[16px] font-bold tracking-[0.08em] uppercase">
-              <Icon class="h-5 w-5" />
-              <span>No artwork</span>
-            </div>
-          }
-        >
-          {(artworkUrl) => (
-            <img
-              src={artworkUrl()}
-              alt={`${props.item.name} artwork`}
-              class="h-full w-full object-cover outline outline-1 -outline-offset-1 outline-white/10 transition-transform duration-300 group-hover:scale-105"
-              loading="lazy"
-            />
-          )}
-        </Show>
-      </div>
-      <div class="space-y-2 p-4">
-        <p class="text-on-surface line-clamp-2 text-[16px] leading-[24px] font-semibold">
-          {props.item.name}
-        </p>
-        <p class="text-on-surface-variant/80 text-[12px] leading-[16px]">{subtitle()}</p>
-        <Show when={props.item.favorite}>
-          <p class="text-secondary text-[11px] leading-[16px] font-bold tracking-[0.08em] uppercase">
-            Favorite
-          </p>
-        </Show>
-      </div>
-    </CardLink>
-  );
-}
 
 export function formatRuntime(seconds: number | null) {
   if (seconds === null) {

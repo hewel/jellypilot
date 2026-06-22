@@ -5,7 +5,7 @@ import { useLibraryNavbarControls } from '@components/library/LibraryNavbarConte
 import {
   LibraryStatusPanel,
   MediaInfoHoverCard,
-  VideoLibraryCard,
+  VideoCard,
   libraryTitle,
   playedFilterLabel,
   sortItems,
@@ -240,7 +240,7 @@ function LibraryBrowseRoute() {
               <For each={readyState()?.items ?? []}>
                 {(item) => (
                   <MediaInfoHoverCard id={item.id} itemType={item.itemType}>
-                    <VideoLibraryCard item={item} collectionType={collectionType()} />
+                    <VideoCard kind="library" item={item} collectionType={collectionType()} />
                   </MediaInfoHoverCard>
                 )}
               </For>
