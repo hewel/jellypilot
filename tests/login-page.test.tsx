@@ -6,7 +6,11 @@ import { render } from 'solid-js/web';
 import { commands } from '../src/bindings';
 import LoginPage from '../src/components/LoginPage';
 import { StorageParseError } from '../src/effects/errors';
-import { CREDENTIALS_STORAGE_KEY, loadSavedCredentials } from '../src/effects/session';
+import {
+  CREDENTIALS_STORAGE_KEY,
+  LEGACY_CREDENTIALS_STORAGE_KEY,
+  loadSavedCredentials,
+} from '../src/effects/session';
 import { loadSavedSession } from '../src/sessionAccess';
 
 const sampleSession = {
@@ -695,4 +699,23 @@ test('loadSavedCredentials returns null for missing key', () => {
   if (Exit.isSuccess(exit)) {
     expect(exit.value).toBeNull();
   }
+});
+
+test('loadSavedCredentials migrates legacy remembered Login Prefill', () => {
+  localStorage.setItem(
+    LEGACY_CREDENTIALS_STORAGE_KEY,
+    JSON.stringify({
+      rememberMe: true,
+      serverUrl: 'https://old.example.com',
+      username: 'old',
+    }),
+  );
+
+  expect(Effect.runSync(loadSavedCredentials())).toEqual({
+    rememberMe: true,
+    serverUrl: 'https://old.example.com',
+    username: 'old',
+  });
+  expect(localStorage.getItem(LEGACY_CREDENTIALS_STORAGE_KEY)).toBeNull();
+  expect(localStorage.getItem(CREDENTIALS_STORAGE_KEY)).not.toBeNull();
 });

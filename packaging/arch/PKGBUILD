@@ -1,11 +1,11 @@
 # Maintainer: Hewel
 
-pkgname=jmsr
+pkgname=jellypilot
 pkgver=1.4.1
 pkgrel=1
 pkgdesc='Jellyfin cast receiver that controls external MPV'
 arch=('x86_64')
-url='https://github.com/hewel/jmsr'
+url='https://github.com/hewel/jellypilot'
 license=('MIT')
 options=('!lto')
 depends=(
@@ -21,12 +21,12 @@ makedepends=(
   'rust'
 )
 source=(
-  "git+https://github.com/hewel/jmsr.git#tag=v$pkgver"
-  'top.pigfun.jmsr.desktop'
+  "git+https://github.com/hewel/jellypilot.git#tag=v$pkgver"
+  'top.pigfun.jellypilot.desktop'
 )
 sha256sums=(
   'SKIP'
-  'fad7c84a15d92cefa357b4e2cf2c0877e0a97ae8da2114468d9f8c86a27bc98f'
+  '7236e1197fe9cd03f7df541f77a9710f4cf9a8c1f7de6df3a6f7def6e60d7651'
 )
 
 build() {
@@ -39,10 +39,10 @@ build() {
 package() {
   cd "$srcdir/$pkgname"
 
-  install -Dm755 "src-tauri/target/release/jmsr" "$pkgdir/usr/bin/jmsr"
-  install -Dm644 "$srcdir/top.pigfun.jmsr.desktop" \
-    "$pkgdir/usr/share/applications/top.pigfun.jmsr.desktop"
+  install -Dm755 "src-tauri/target/release/jellypilot" "$pkgdir/usr/bin/jellypilot"
+  install -Dm644 "$srcdir/top.pigfun.jellypilot.desktop" \
+    "$pkgdir/usr/share/applications/top.pigfun.jellypilot.desktop"
   install -Dm644 "src-tauri/icons/128x128.png" \
-    "$pkgdir/usr/share/icons/hicolor/128x128/apps/top.pigfun.jmsr.png"
+    "$pkgdir/usr/share/icons/hicolor/128x128/apps/top.pigfun.jellypilot.png"
   install -Dm644 "LICENSE" "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
 }

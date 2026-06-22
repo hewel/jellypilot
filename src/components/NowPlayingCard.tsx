@@ -22,7 +22,7 @@ import {
 } from '../effects/nowPlaying';
 import type { MpvTrack, NowPlayingEffect } from '../effects/nowPlaying';
 import { useToast } from './ToastProvider';
-import { Button, Card, JmsrSelect, StatusBadge } from './ui';
+import { Button, Card, JellyPilotSelect, StatusBadge } from './ui';
 
 function formatTime(seconds: number): string {
   if (!Number.isFinite(seconds) || seconds <= 0) {
@@ -402,7 +402,7 @@ export default function NowPlayingCard(props: {
       <div
         class={`border-outline-variant bg-surface-container-lowest/50 relative grid gap-3 rounded-3xl border p-4 shadow-inner backdrop-blur-sm ${props.bare ? '' : 'sm:grid-cols-2'}`}
       >
-        <JmsrSelect
+        <JellyPilotSelect
           label="Audio"
           items={audioTrackItems()}
           value={selectedAudioTrackId()}
@@ -412,7 +412,7 @@ export default function NowPlayingCard(props: {
           portalMount={props.trackSelectPortalMount}
           onValueChange={switchAudioTrack}
         />
-        <JmsrSelect
+        <JellyPilotSelect
           label="Subtitles"
           items={subtitleTrackItems()}
           value={selectedSubtitleTrackId()}

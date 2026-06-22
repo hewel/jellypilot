@@ -13,7 +13,7 @@ pub enum ProcessError {
 }
 
 /// Get the IPC socket/pipe path for MPV.
-/// Uses PID suffix to prevent collisions when multiple JMSR instances run.
+/// Uses PID suffix to prevent collisions when multiple JellyPilot instances run.
 ///
 /// On Linux, respects `XDG_RUNTIME_DIR` for AppImage/Flatpak compatibility
 /// where `/tmp` may be inaccessible inside sandboxes.
@@ -21,66 +21,97 @@ pub fn ipc_path() -> String {
   let pid = std::process::id();
   #[cfg(windows)]
   {
-    format!(r"\\.\pipe\jmsr-mpv-{}", pid)
+    format!(r"\\.\pipe\jellypilot-mpv-{}", pid)
   }
   #[cfg(not(windows))]
   {
     let base_dir = std::env::var("XDG_RUNTIME_DIR").unwrap_or_else(|_| "/tmp".to_string());
-    format!("{}/jmsr-mpv-{}.sock", base_dir, pid)
+    format!("{}/jellypilot-mpv-{}.sock", base_dir, pid)
   }
 }
 
-/// Get the path to JMSR's custom input.conf for MPV keybindings.
-pub fn jmsr_input_conf_path() -> Option<PathBuf> {
+/// Get the path to JellyPilot's custom input.conf for MPV keybindings.
+pub fn jellypilot_input_conf_path() -> Option<PathBuf> {
+  dirs::config_dir().map(|p| p.join("jellypilot").join("input.conf"))
+}
+
+fn legacy_input_conf_path() -> Option<PathBuf> {
   dirs::config_dir().map(|p| p.join("jmsr").join("input.conf"))
 }
 
-/// Write JMSR's input.conf with the specified keybindings.
+fn legacy_key_for_command(input: &str, command: &str, fallback: &str) -> String {
+  input
+    .lines()
+    .find_map(|line| {
+      line
+        .split_once(command)
+        .map(|(key, _)| key.trim().to_string())
+    })
+    .filter(|key| !key.is_empty())
+    .unwrap_or_else(|| fallback.to_string())
+}
+
+fn migrated_legacy_keybindings(input: &str) -> (String, String, String) {
+  (
+    legacy_key_for_command(input, "script-message jmsr-next", "Shift+>"),
+    legacy_key_for_command(input, "script-message jmsr-prev", "Shift+<"),
+    legacy_key_for_command(input, "script-message jmsr-skip-intro", "g"),
+  )
+}
+
+/// Write JellyPilot's input.conf with the specified keybindings.
 /// Always overwrites the file with the provided keybindings.
 pub fn write_input_conf(
   keybind_next: &str,
   keybind_prev: &str,
   keybind_intro_skip: &str,
 ) -> Option<PathBuf> {
-  let path = jmsr_input_conf_path()?;
+  let path = jellypilot_input_conf_path()?;
 
   // Create parent directory if needed
   if let Some(parent) = path.parent() {
     if !parent.exists() {
       if let Err(e) = std::fs::create_dir_all(parent) {
-        log::warn!("Failed to create JMSR config directory: {}", e);
+        log::warn!("Failed to create JellyPilot config directory: {}", e);
         return None;
       }
     }
   }
 
   let bindings = format!(
-    r#"# JMSR MPV Keybindings
-# These keybindings are used by JMSR to control episode navigation.
-# You can customize these bindings in JMSR Settings.
+    r#"# JellyPilot MPV Keybindings
+# These keybindings are used by JellyPilot to control episode navigation.
+# You can customize these bindings in JellyPilot Settings.
 
-{} script-message jmsr-next    # Play next episode
-{} script-message jmsr-prev    # Play previous episode
-{} script-message jmsr-skip-intro    # Skip active Intro Skipper segment
+{} script-message jellypilot-next    # Play next episode
+{} script-message jellypilot-prev    # Play previous episode
+{} script-message jellypilot-skip-intro    # Skip active Intro Skipper segment
 "#,
     keybind_next, keybind_prev, keybind_intro_skip
   );
 
   if let Err(e) = std::fs::write(&path, bindings) {
-    log::warn!("Failed to write JMSR input.conf: {}", e);
+    log::warn!("Failed to write JellyPilot input.conf: {}", e);
     return None;
   }
-  log::info!("Updated JMSR input.conf at {:?}", path);
+  log::info!("Updated JellyPilot input.conf at {:?}", path);
 
   Some(path)
 }
 
-/// Ensure JMSR's input.conf exists with default keybindings.
+/// Ensure JellyPilot's input.conf exists with default keybindings.
 fn ensure_input_conf() -> Option<PathBuf> {
-  let path = jmsr_input_conf_path()?;
+  let path = jellypilot_input_conf_path()?;
 
   // Only create if it doesn't exist (preserve user customizations via config)
   if !path.exists() {
+    if let Some((next, prev, intro)) = legacy_input_conf_path()
+      .filter(|legacy_path| legacy_path.exists())
+      .and_then(|legacy_path| std::fs::read_to_string(legacy_path).ok())
+      .map(|legacy| migrated_legacy_keybindings(&legacy))
+    {
+      return write_input_conf(&next, &prev, &intro);
+    }
     return write_input_conf("Shift+>", "Shift+<", "g");
   }
 
@@ -198,11 +229,11 @@ pub fn spawn_mpv(mpv_path: Option<&PathBuf>, extra_args: &[String]) -> Result<Ch
     .arg("--no-terminal")
     .arg("--osc");
 
-  // Add JMSR keybindings via input.conf
+  // Add JellyPilot keybindings via input.conf
   // Using --input-conf appends to (not replaces) the user's input.conf
   if let Some(input_conf) = ensure_input_conf() {
     cmd.arg(format!("--input-conf={}", input_conf.display()));
-    log::info!("Using JMSR input.conf: {:?}", input_conf);
+    log::info!("Using JellyPilot input.conf: {:?}", input_conf);
   }
 
   // Add user-specified extra arguments
@@ -227,4 +258,23 @@ pub fn cleanup_ipc() {
     let _ = std::fs::remove_file(&path);
   }
   // Windows named pipes are cleaned up automatically
+}
+
+#[cfg(test)]
+mod tests {
+  use super::migrated_legacy_keybindings;
+
+  #[test]
+  fn migrated_legacy_keybindings_maps_old_script_messages_to_new_writer_keys() {
+    let legacy = r#"
+Alt+n script-message jmsr-next
+Alt+p script-message jmsr-prev
+i script-message jmsr-skip-intro
+"#;
+
+    assert_eq!(
+      migrated_legacy_keybindings(legacy),
+      ("Alt+n".to_string(), "Alt+p".to_string(), "i".to_string())
+    );
+  }
 }

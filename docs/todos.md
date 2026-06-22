@@ -1,4 +1,4 @@
-# JMSR - Next Steps
+# JellyPilot - Next Steps
 
 ## High Priority
 
@@ -85,12 +85,12 @@
 ### MPV Keyboard Shortcuts for Next/Previous Episode ✅
 - [x] Added `args` field to `MpvEvent` to parse `client-message` events
 - [x] Added `handle_client_message_event()` to process MPV script messages
-- [x] Supports `jmsr-next` and `jmsr-prev` commands via MPV keybindings
+- [x] Supports `jellypilot-next` and `jellypilot-prev` commands via MPV keybindings
 - [x] Refactored event listener with helper methods for cleaner code
-- [x] **Out of the box**: JMSR auto-creates `input.conf` in config directory on first run
-  - Windows: `%APPDATA%\jmsr\input.conf`
-  - macOS: `~/Library/Application Support/jmsr/input.conf`
-  - Linux: `~/.config/jmsr/input.conf`
+- [x] **Out of the box**: JellyPilot auto-creates `input.conf` in config directory on first run
+  - Windows: `%APPDATA%\jellypilot\input.conf`
+  - macOS: `~/Library/Application Support/jellypilot/input.conf`
+  - Linux: `~/.config/jellypilot/input.conf`
 - [x] Default keybindings:
   - `Shift+n` - Next episode
   - `Shift+p` - Previous episode

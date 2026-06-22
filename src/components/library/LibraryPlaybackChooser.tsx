@@ -6,8 +6,8 @@ import type {
   VideoLibraryPlayMode,
   VideoPlaybackStreamOption,
 } from '../../bindings';
-import { Button, Card, JmsrSelect } from '../ui';
-import type { JmsrSelectItem } from '../ui';
+import { Button, Card, JellyPilotSelect } from '../ui';
+import type { JellyPilotSelectItem } from '../ui';
 
 const SUBTITLE_AUTO = 'auto';
 const SUBTITLE_OFF = 'off';
@@ -29,7 +29,7 @@ export function LibraryPlaybackChooser(props: {
   onCancel: () => void;
   onConfirm: (selection: LibraryPlaybackSelection) => void;
 }) {
-  const audioItems = createMemo<JmsrSelectItem[]>(() => {
+  const audioItems = createMemo<JellyPilotSelectItem[]>(() => {
     const streams = props.pending.detail.audioStreams;
     if (streams.length === 0) {
       return [{ disabled: true, label: 'No audio tracks', value: '' }];
@@ -40,7 +40,7 @@ export function LibraryPlaybackChooser(props: {
       value: String(stream.index),
     }));
   });
-  const subtitleItems = createMemo<JmsrSelectItem[]>(() => [
+  const subtitleItems = createMemo<JellyPilotSelectItem[]>(() => [
     { label: 'Auto', value: SUBTITLE_AUTO },
     { label: 'Off', value: SUBTITLE_OFF },
     ...props.pending.detail.subtitleStreams.map((stream) => ({
@@ -97,7 +97,7 @@ export function LibraryPlaybackChooser(props: {
       </div>
 
       <div class="grid gap-4 sm:grid-cols-2">
-        <JmsrSelect
+        <JellyPilotSelect
           label="Audio track"
           items={audioItems()}
           disabled={props.busy || props.pending.detail.audioStreams.length === 0}
@@ -107,7 +107,7 @@ export function LibraryPlaybackChooser(props: {
           onValueChange={setAudioValue}
         />
 
-        <JmsrSelect
+        <JellyPilotSelect
           label="Subtitle track"
           items={subtitleItems()}
           disabled={props.busy}

@@ -1,17 +1,17 @@
 [package]
-name = "jmsr"
+name = "jellypilot"
 version = "1.4.1"
-description = "Jellyfin MPV Shim Rust - A cast receiver for Jellyfin that controls external MPV"
+description = "JellyPilot - A cast receiver for Jellyfin that controls external MPV"
 authors = ["Hewel"]
 license = "MIT"
-repository = "https://github.com/hewel/jmsr"
+repository = "https://github.com/hewel/jellypilot"
 edition = "2021"
 rust-version = "1.85"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [lib]
-name = "jmsr_lib"
+name = "jellypilot_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
 [build-dependencies]

@@ -4,15 +4,15 @@ import { TagsInput } from '@ark-ui/solid/tags-input';
 import { ArrowDown, ArrowUp, ChevronDown, Globe, Plus, Settings, Trash2 } from 'lucide-solid';
 import { For, Show } from 'solid-js';
 
-import { Button, FieldControl, FieldTextarea, JmsrSelect, SectionCard } from '../ui';
-import type { JmsrSelectItem } from '../ui';
+import { Button, FieldControl, FieldTextarea, JellyPilotSelect, SectionCard } from '../ui';
+import type { JellyPilotSelectItem } from '../ui';
 import { useOperationsConsoleStore } from './store';
 import { getSubtitleLanguageLabel, parseSubtitleLanguageInput } from './subtitleLanguages';
 import type { OperationsConsoleForm } from './types';
 
 interface PlayerBridgeSettingsCardProps {
   form: OperationsConsoleForm;
-  subtitleLanguageSelectItems: JmsrSelectItem[];
+  subtitleLanguageSelectItems: JellyPilotSelectItem[];
   onSaveTextSetting: (field: 'deviceName' | 'mpvPath' | 'mpvArgs', value: string) => void;
   onDetectMpv: () => void;
   onAddSubtitleLanguageCodes: (codes: string[]) => void;
@@ -71,7 +71,7 @@ export default function PlayerBridgeSettingsCard(props: PlayerBridgeSettingsCard
                       props.onSaveTextSetting('deviceName', event.currentTarget.value);
                     }}
                     class="w-full"
-                    placeholder="JMSR"
+                    placeholder="JellyPilot"
                   />
                 )}
               />
@@ -223,7 +223,7 @@ export default function PlayerBridgeSettingsCard(props: PlayerBridgeSettingsCard
           </div>
 
           <div class="mt-5 grid grid-cols-1 gap-4 sm:grid-cols-2">
-            <JmsrSelect
+            <JellyPilotSelect
               label="Predefined languages"
               items={props.subtitleLanguageSelectItems}
               value={null}
@@ -279,7 +279,8 @@ export default function PlayerBridgeSettingsCard(props: PlayerBridgeSettingsCard
             when={ui.selectedSubtitleLanguages.length > 0}
             fallback={
               <p class="border-outline-variant bg-surface-container-lowest/20 text-on-surface-variant/80 mt-5 rounded-2xl border border-dashed px-4 py-4 text-center text-[12px] leading-[16px] backdrop-blur-sm">
-                No preferred subtitle languages selected. JMSR will use Jellyfin and media defaults.
+                No preferred subtitle languages selected. JellyPilot will use Jellyfin and media
+                defaults.
               </p>
             }
           >

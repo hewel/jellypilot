@@ -1,8 +1,8 @@
 [Desktop Entry]
 Type=Application
-Name=JMSR
+Name=JellyPilot
 Comment=Jellyfin cast receiver that controls external MPV
-Exec=jmsr
-Icon=top.pigfun.jmsr
+Exec=jellypilot
+Icon=top.pigfun.jellypilot
 Categories=AudioVideo;Player;
 Terminal=false

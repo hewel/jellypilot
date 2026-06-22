@@ -15,7 +15,7 @@ const connectedState = {
 };
 
 const config: AppConfig = {
-  deviceName: 'JMSR Test',
+  deviceName: 'JellyPilot Test',
   introSkipperMode: 'automatic',
   keybindIntroSkip: 'g',
   keybindNext: 'Shift+>',
@@ -105,7 +105,7 @@ test('operations console autosaves changed intro skipper mode', async () => {
   });
   const cleanup = renderConsole();
 
-  await waitFor(() => expect(screen.getByDisplayValue('JMSR Test')).toBeVisible());
+  await waitFor(() => expect(screen.getByDisplayValue('JellyPilot Test')).toBeVisible());
   fireEvent.click(screen.getByRole('button', { name: /Manual/ }));
 
   await waitFor(() => expect(configSet).toHaveBeenCalledTimes(1));
@@ -121,7 +121,7 @@ test('intro skip mode toggles optimistically', async () => {
   });
   const cleanup = renderConsole();
 
-  await screen.findByDisplayValue('JMSR Test');
+  await screen.findByDisplayValue('JellyPilot Test');
   const automatic = screen.getByRole('button', { name: /Automatic/ });
   const manual = screen.getByRole('button', { name: /Manual/ });
 
@@ -147,7 +147,7 @@ test('intro skip mode rolls back and shows inline error on save failure', async 
   });
   const cleanup = renderConsole();
 
-  await screen.findByDisplayValue('JMSR Test');
+  await screen.findByDisplayValue('JellyPilot Test');
   const automatic = screen.getByRole('button', { name: /Automatic/ });
   const manual = screen.getByRole('button', { name: /Manual/ });
 
@@ -164,7 +164,7 @@ test('intro skip mode reports rejected save commands through status and toast', 
   rstest.spyOn(commands, 'configSet').mockRejectedValue(new Error('Disk unavailable'));
   const cleanup = renderConsole();
 
-  await screen.findByDisplayValue('JMSR Test');
+  await screen.findByDisplayValue('JellyPilot Test');
   fireEvent.click(screen.getByRole('button', { name: /Manual/ }));
 
   await waitFor(() => expect(screen.getAllByText('Disk unavailable').length).toBeGreaterThan(0));
@@ -179,7 +179,7 @@ test('operations console autosaves changed intro skip key', async () => {
   });
   const cleanup = renderConsole();
 
-  await screen.findByDisplayValue('JMSR Test');
+  await screen.findByDisplayValue('JellyPilot Test');
   expect(screen.getByRole('heading', { name: 'Shortcut keys' })).toBeVisible();
   const key = screen.getByDisplayValue('g');
   fireEvent.input(key, { target: { value: 'i' } });
@@ -245,7 +245,7 @@ test('preferred subtitle language editor uses Ark tags input and select', async 
     status: 'ok',
   });
   const cleanup = renderConsole();
-  await screen.findByDisplayValue('JMSR Test');
+  await screen.findByDisplayValue('JellyPilot Test');
 
   // The custom code input lives inside the tags-input scope
   const customInput = await screen.findByLabelText('Custom subtitle language code');
@@ -311,7 +311,7 @@ test('operations console autosaves clearing preferred subtitle languages', async
   fireEvent.click(screen.getByRole('button', { name: 'Clear all' }));
   expect(
     screen.getByText(
-      /No preferred subtitle languages selected. JMSR will use Jellyfin and media defaults./,
+      /No preferred subtitle languages selected. JellyPilot will use Jellyfin and media defaults./,
     ),
   ).toBeVisible();
 
@@ -333,7 +333,7 @@ test('player bridge text fields autosave on valid blur and keep invalid drafts l
   });
   const cleanup = renderConsole();
 
-  const deviceName = (await screen.findByDisplayValue('JMSR Test')) as HTMLInputElement;
+  const deviceName = (await screen.findByDisplayValue('JellyPilot Test')) as HTMLInputElement;
   fireEvent.input(deviceName, { target: { value: '' } });
   fireEvent.blur(deviceName);
 
@@ -347,7 +347,7 @@ test('player bridge text fields autosave on valid blur and keep invalid drafts l
   await waitFor(() =>
     expect(configSet).toHaveBeenCalledWith(
       expect.objectContaining({
-        deviceName: 'JMSR Test',
+        deviceName: 'JellyPilot Test',
         mpvPath: '/usr/bin/mpv',
       }),
     ),
@@ -365,7 +365,7 @@ test('detect mpv autosaves detected path', async () => {
   });
   const cleanup = renderConsole();
 
-  await screen.findByDisplayValue('JMSR Test');
+  await screen.findByDisplayValue('JellyPilot Test');
   fireEvent.click(screen.getByRole('button', { name: 'Detect MPV' }));
 
   await waitFor(() =>
@@ -386,7 +386,7 @@ test('autosaves are serialized without overwriting newer drafts', async () => {
 
   const cleanup = renderConsole();
 
-  await screen.findByDisplayValue('JMSR Test');
+  await screen.findByDisplayValue('JellyPilot Test');
   const mpvPath = (await screen.findByPlaceholderText(
     'Path to mpv executable',
   )) as HTMLInputElement;
@@ -395,10 +395,10 @@ test('autosaves are serialized without overwriting newer drafts', async () => {
 
   await waitFor(() => expect(configSet).toHaveBeenCalledTimes(1));
 
-  const deviceName = screen.getByDisplayValue('JMSR Test') as HTMLInputElement;
-  fireEvent.input(deviceName, { target: { value: 'JMSR Bridge' } });
+  const deviceName = screen.getByDisplayValue('JellyPilot Test') as HTMLInputElement;
+  fireEvent.input(deviceName, { target: { value: 'JellyPilot Bridge' } });
   fireEvent.blur(deviceName);
-  fireEvent.input(deviceName, { target: { value: 'JMSR Test' } });
+  fireEvent.input(deviceName, { target: { value: 'JellyPilot Test' } });
   fireEvent.blur(deviceName);
 
   resolveFirstSave?.();
@@ -406,7 +406,7 @@ test('autosaves are serialized without overwriting newer drafts', async () => {
   await waitFor(() => expect(configSet).toHaveBeenCalledTimes(2));
   expect(configSet).toHaveBeenLastCalledWith(
     expect.objectContaining({
-      deviceName: 'JMSR Test',
+      deviceName: 'JellyPilot Test',
       mpvPath: '/one/mpv',
     }),
   );
@@ -424,21 +424,21 @@ test('player bridge autosave failure recovers on later save', async () => {
     .mockResolvedValueOnce({ data: null, status: 'ok' });
   const cleanup = renderConsole();
 
-  await screen.findByDisplayValue('JMSR Test');
+  await screen.findByDisplayValue('JellyPilot Test');
   const mpvPath = screen.getByPlaceholderText('Path to mpv executable') as HTMLInputElement;
   fireEvent.input(mpvPath, { target: { value: '/broken/mpv' } });
   fireEvent.blur(mpvPath);
 
   await waitFor(() => expect(screen.getAllByText('Disk unavailable').length).toBeGreaterThan(0));
 
-  const deviceName = screen.getByDisplayValue('JMSR Test') as HTMLInputElement;
-  fireEvent.input(deviceName, { target: { value: 'JMSR Recovery' } });
+  const deviceName = screen.getByDisplayValue('JellyPilot Test') as HTMLInputElement;
+  fireEvent.input(deviceName, { target: { value: 'JellyPilot Recovery' } });
   fireEvent.blur(deviceName);
 
   await waitFor(() => expect(configSet).toHaveBeenCalledTimes(2));
   expect(configSet).toHaveBeenLastCalledWith(
     expect.objectContaining({
-      deviceName: 'JMSR Recovery',
+      deviceName: 'JellyPilot Recovery',
       mpvPath: '/broken/mpv',
     }),
   );
@@ -469,7 +469,7 @@ test('connection comes before player settings and hero keeps only refresh', asyn
 test('final console structure covers all operational areas in order', async () => {
   const cleanup = renderConsole();
 
-  await screen.findByDisplayValue('JMSR Test');
+  await screen.findByDisplayValue('JellyPilot Test');
   const headings = screen.getAllByRole('heading').map((heading) => heading.textContent);
   expect(headings).toEqual(
     expect.arrayContaining([
@@ -490,7 +490,7 @@ test('final console structure covers all operational areas in order', async () =
 });
 
 test('disconnect keeps saved session and stays on console', async () => {
-  localStorage.setItem('jmsr_auth_session', JSON.stringify({ serverUrl: 'x' }));
+  localStorage.setItem('jellypilot_auth_session', JSON.stringify({ serverUrl: 'x' }));
   const disconnect = rstest.spyOn(commands, 'jellyfinDisconnect').mockResolvedValue({
     data: null,
     status: 'ok',
@@ -504,7 +504,7 @@ test('disconnect keeps saved session and stays on console', async () => {
   fireEvent.click(screen.getByRole('button', { name: 'Disconnect' }));
 
   await waitFor(() => expect(disconnect).toHaveBeenCalledTimes(1));
-  expect(localStorage.getItem('jmsr_auth_session')).not.toBeNull();
+  expect(localStorage.getItem('jellypilot_auth_session')).not.toBeNull();
   expect(screen.getByRole('heading', { name: 'Connection' })).toBeVisible();
   expect(
     screen.getByText(
@@ -552,7 +552,7 @@ test('disconnect rejected commands stay on console and unlock the action', async
 });
 
 test('reconnect restores a live Jellyfin connection from a Saved Session', async () => {
-  localStorage.setItem('jmsr_auth_session', JSON.stringify(validSavedSession));
+  localStorage.setItem('jellypilot_auth_session', JSON.stringify(validSavedSession));
   const restore = rstest.spyOn(commands, 'jellyfinRestoreSession').mockResolvedValue({
     data: null,
     status: 'ok',
@@ -568,13 +568,13 @@ test('reconnect restores a live Jellyfin connection from a Saved Session', async
   fireEvent.click(screen.getByRole('button', { name: 'Reconnect' }));
 
   await waitFor(() => expect(restore).toHaveBeenCalledWith(validSavedSession));
-  expect(localStorage.getItem('jmsr_auth_session')).not.toBeNull();
+  expect(localStorage.getItem('jellypilot_auth_session')).not.toBeNull();
 
   cleanup();
 });
 
 test('reconnect failure clears the Saved Session and signs out', async () => {
-  localStorage.setItem('jmsr_auth_session', JSON.stringify(validSavedSession));
+  localStorage.setItem('jellypilot_auth_session', JSON.stringify(validSavedSession));
   rstest.spyOn(commands, 'jellyfinRestoreSession').mockResolvedValue({
     error: { code: 'authFailed', message: 'expired' },
     status: 'error',
@@ -591,13 +591,13 @@ test('reconnect failure clears the Saved Session and signs out', async () => {
   fireEvent.click(screen.getByRole('button', { name: 'Reconnect' }));
 
   await waitFor(() => expect(onSignedOut).toHaveBeenCalledTimes(1));
-  expect(localStorage.getItem('jmsr_auth_session')).toBeNull();
+  expect(localStorage.getItem('jellypilot_auth_session')).toBeNull();
 
   cleanup();
 });
 
 test('sign out confirms and clears saved session', async () => {
-  localStorage.setItem('jmsr_auth_session', JSON.stringify({ serverUrl: 'x' }));
+  localStorage.setItem('jellypilot_auth_session', JSON.stringify({ serverUrl: 'x' }));
   const clearSession = rstest.spyOn(commands, 'jellyfinClearSession').mockResolvedValue({
     data: null,
     status: 'ok',
@@ -613,7 +613,7 @@ test('sign out confirms and clears saved session', async () => {
 
   await waitFor(() => {
     expect(clearSession).toHaveBeenCalledTimes(1);
-    expect(localStorage.getItem('jmsr_auth_session')).toBeNull();
+    expect(localStorage.getItem('jellypilot_auth_session')).toBeNull();
     expect(onSignedOut).toHaveBeenCalledTimes(1);
   });
 
@@ -621,7 +621,7 @@ test('sign out confirms and clears saved session', async () => {
 });
 
 test('sign out failure preserves the Saved Session and stays on console', async () => {
-  localStorage.setItem('jmsr_auth_session', JSON.stringify(validSavedSession));
+  localStorage.setItem('jellypilot_auth_session', JSON.stringify(validSavedSession));
   const clearSession = rstest.spyOn(commands, 'jellyfinClearSession').mockResolvedValue({
     error: { code: 'network', message: 'offline' },
     status: 'error',
@@ -636,14 +636,14 @@ test('sign out failure preserves the Saved Session and stays on console', async 
   fireEvent.click(signOutButtons.at(-1));
 
   await waitFor(() => expect(clearSession).toHaveBeenCalledTimes(1));
-  expect(localStorage.getItem('jmsr_auth_session')).not.toBeNull();
+  expect(localStorage.getItem('jellypilot_auth_session')).not.toBeNull();
   expect(onSignedOut).not.toHaveBeenCalled();
   expect(screen.getByRole('heading', { name: 'Connection' })).toBeVisible();
 
   cleanup();
 });
 test('sign out rejected commands preserve the Saved Session and close the dialog', async () => {
-  localStorage.setItem('jmsr_auth_session', JSON.stringify(validSavedSession));
+  localStorage.setItem('jellypilot_auth_session', JSON.stringify(validSavedSession));
   rstest
     .spyOn(commands, 'jellyfinClearSession')
     .mockRejectedValue(new Error('sign out ipc unavailable'));
@@ -657,7 +657,7 @@ test('sign out rejected commands preserve the Saved Session and close the dialog
   fireEvent.click(signOutButtons.at(-1));
 
   await waitFor(() => expect(screen.getByText('sign out ipc unavailable')).toBeVisible());
-  expect(localStorage.getItem('jmsr_auth_session')).not.toBeNull();
+  expect(localStorage.getItem('jellypilot_auth_session')).not.toBeNull();
   expect(onSignedOut).not.toHaveBeenCalled();
   await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
 
@@ -765,7 +765,7 @@ test('player bridge settings use Ark fields and intro skip mode buttons', async 
 test('settings and session actions keep shared visual semantics', async () => {
   const cleanup = renderConsole();
 
-  await screen.findByDisplayValue('JMSR Test');
+  await screen.findByDisplayValue('JellyPilot Test');
   const mpvPath = screen.getByPlaceholderText('Path to mpv executable');
   expect(mpvPath).toBeVisible();
   expect(mpvPath.className).toContain('border-outline-variant/80');

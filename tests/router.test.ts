@@ -3,7 +3,7 @@ import { afterEach, expect, rstest, test } from '@rstest/core';
 import { commands } from '../src/bindings';
 import type { SavedSession } from '../src/bindings';
 import {
-  createJmsrRouter,
+  createJellyPilotRouter,
   redirectLegacyConsoleRoute,
   redirectLoggedInUsersToLibrary,
   redirectRootRoute,
@@ -64,7 +64,7 @@ test('shell guard redirects unauthenticated users to Login', async () => {
 });
 
 test('removed Settings and Diagnostics routes are absent from the router', () => {
-  const router = createJmsrRouter();
+  const router = createJellyPilotRouter();
 
   expect(router.routesById['/_authenticated/settings']).toBeUndefined();
   expect(router.routesById['/_authenticated/diagnostics']).toBeUndefined();

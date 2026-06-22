@@ -5,9 +5,9 @@ For generic Effect guidance, use these skills instead of duplicating policy here
 - `effect-ts`
 - `effect-ts-extensions`
 
-This document only records JMSR-specific frontend boundaries for Solid, TanStack Router, and typed Tauri IPC.
+This document only records JellyPilot-specific frontend boundaries for Solid, TanStack Router, and typed Tauri IPC.
 
-## JMSR Effect Boundaries
+## JellyPilot Effect Boundaries
 
 - Keep reusable frontend Tauri data workflows in `src/effects/**`.
 - Wrap generated `commands.*` calls with `runTauriCommand` or `runTauriCommandRaw` from `src/effects/commands.ts`.
@@ -23,7 +23,7 @@ This document only records JMSR-specific frontend boundaries for Solid, TanStack
 - TanStack Router `throw redirect(...)` is allowed because the framework requires thrown redirect control flow.
 - Test assertion helpers may throw when the test framework requires that shape.
 
-## JMSR Review Checks
+## JellyPilot Review Checks
 
 - [ ] Reusable Tauri IPC workflows live under `src/effects/**`.
 - [ ] Route components do not call generated `commands.*` directly for reusable data workflows.

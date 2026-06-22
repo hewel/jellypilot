@@ -10,10 +10,10 @@ The styling layer had accreted three overlapping mechanisms: Tailwind atomic uti
 
 ## Decision
 
-- **vanilla-extract owns design tokens.** `src/styles/vars.css.ts` is the single source of token values, using `createGlobalThemeContract` + `createGlobalTheme(':root', ...)` with `--jmsr-*` CSS variable names. It is imported for its side effect in `src/index.tsx`.
-- **Tailwind is the utility alias layer.** `src/index.css` uses `@theme inline` to alias `--color-*` / `--font-*` utility tokens to the `--jmsr-*` variables. No token values are defined in `src/index.css`.
+- **vanilla-extract owns design tokens.** `src/styles/vars.css.ts` is the single source of token values, using `createGlobalThemeContract` + `createGlobalTheme(':root', ...)` with `--jellypilot-*` CSS variable names. It is imported for its side effect in `src/index.tsx`.
+- **Tailwind is the utility alias layer.** `src/index.css` uses `@theme inline` to alias `--color-*` / `--font-*` utility tokens to the `--jellypilot-*` variables. No token values are defined in `src/index.css`.
 - **Atomic styling is applied directly as Tailwind utilities** in components. Typography, brand gradients, glows, and animations that were global helper classes are now inline Tailwind atoms at their callsites (animations reference `@keyframes` kept in `src/index.css` via arbitrary animation utilities).
-- **Reusable visual patterns are components under `src/components/ui`**, not global `@layer` class APIs: `Button`, `Card`/`CardLink`, `FieldControl`/`FieldTextarea`/`TextField`, `ConsoleShell`/`ConsoleContainer`/`ConsoleGrid`, `SectionCard`, `JmsrSelect`, `StatusBadge`.
+- **Reusable visual patterns are components under `src/components/ui`**, not global `@layer` class APIs: `Button`, `Card`/`CardLink`, `FieldControl`/`FieldTextarea`/`TextField`, `ConsoleShell`/`ConsoleContainer`/`ConsoleGrid`, `SectionCard`, `JellyPilotSelect`, `StatusBadge`.
 - **Component-local vanilla-extract CSS is allowed only for non-atomic CSS** that Tailwind utilities cannot express cleanly (e.g. multi-stop card gradients and compound shadows in `Card.css.ts`). Atomic border/padding/radius classes stay on the component itself so callers can override them with Tailwind utilities.
 - **No global `@layer components` class APIs.** `src/index.css` keeps only the Tailwind import, `@theme inline` aliases, `body`, `@keyframes`, and scrollbar pseudo-element rules.
 

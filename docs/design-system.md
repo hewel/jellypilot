@@ -1,6 +1,6 @@
-# JMSR Control Room Design System
+# JellyPilot Control Room Design System
 
-JMSR uses a desktop-first Control Room design system: dark-only, clean OLED surfaces, selective cinematic glass, and clear operational state. The interface should feel like a reliable media companion for a Jellyfin Playback Target, not a generic mobile settings app.
+JellyPilot uses a desktop-first Control Room design system: dark-only, clean OLED surfaces, selective cinematic glass, and clear operational state. The interface should feel like a reliable media companion for a Jellyfin Playback Target, not a generic mobile settings app.
 
 Apply Tailwind atomic utilities directly for styling. Design tokens live in `src/styles/vars.css.ts` (vanilla-extract) and are surfaced to Tailwind via `@theme inline` aliases in `src/index.css`; non-atomic component CSS (e.g. card gradients) lives in component-local `.css.ts` files. Reusable visual patterns are components under `src/components/ui`, not global `@layer` class APIs.
 
@@ -14,11 +14,11 @@ Apply Tailwind atomic utilities directly for styling. Design tokens live in `src
 
 ## Color System
 
-All components use semantic tokens. Tailwind utility tokens (`text-primary`, `bg-surface`, etc.) are aliases backed by the vanilla-extract contract in `src/styles/vars.css.ts` and re-exported through `@theme inline` in `src/index.css`. `#4f46e5` is the JMSR brand seed and primary filled-action background; it is not used as small text on near-black surfaces because contrast is insufficient.
+All components use semantic tokens. Tailwind utility tokens (`text-primary`, `bg-surface`, etc.) are aliases backed by the vanilla-extract contract in `src/styles/vars.css.ts` and re-exported through `@theme inline` in `src/index.css`. `#4f46e5` is the JellyPilot brand seed and primary filled-action background; it is not used as small text on near-black surfaces because contrast is insufficient.
 
 | Token | Tailwind Class | Hex | Usage |
 |---|---|---:|---|
-| Primary | `text-primary`, `bg-primary` | `#4f46e5` | Primary filled actions, JMSR identity |
+| Primary | `text-primary`, `bg-primary` | `#4f46e5` | Primary filled actions, JellyPilot identity |
 | On Primary | `text-on-primary` | `#ffffff` | Text/icons on primary surfaces |
 | Primary Container | `bg-primary-container` | `#1b1c3b` | Indigo tonal surfaces |
 | On Primary Container | `text-on-primary-container` | `#e0e2ff` | Text on indigo tonal surfaces |
@@ -53,7 +53,7 @@ All components use semantic tokens. Tailwind utility tokens (`text-primary`, `bg
 
 ## Color Semantics
 
-- Indigo means JMSR identity, primary app action, local control, and Jellyfin server/session/connection.
+- Indigo means JellyPilot identity, primary app action, local control, and Jellyfin server/session/connection.
 - Teal/green means generic healthy or ready.
 - Amber means degraded, waiting for recovery, or retryable warning.
 - Red means failure or destructive action.
@@ -109,7 +109,7 @@ Apply typography through Tailwind atoms directly. The previous `text-display-*`,
 
 - `<ConsoleShell>`, `<ConsoleContainer>`, and `<ConsoleGrid>` (`src/components/ui/ConsoleLayout.tsx`) compose the authenticated shell, centered content column, and two-column console grid.
 - `<SectionCard>` wraps a `Card` with an icon + title header.
-- `<JmsrSelect>` and `<StatusBadge>` are the select and status-pill components.
+- `<JellyPilotSelect>` and `<StatusBadge>` are the select and status-pill components.
 
 ### Concentric Border Radius
 

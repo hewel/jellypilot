@@ -114,7 +114,7 @@ impl<'de> Deserialize<'de> for AppConfig {
 }
 
 fn default_device_name() -> String {
-  "JMSR".to_string()
+  "JellyPilot".to_string()
 }
 
 fn default_progress_interval() -> u32 {
@@ -199,7 +199,7 @@ mod tests {
   fn older_saved_config_deserializes_with_default_automatic_intro_skipper_mode() {
     let config: AppConfig = serde_json::from_str(
       r#"{
-        "deviceName": "JMSR",
+        "deviceName": "JellyPilot",
         "progressInterval": 5,
         "startMinimized": false,
         "keybindNext": "Shift+n",

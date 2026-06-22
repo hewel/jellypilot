@@ -3,7 +3,7 @@ import { fireEvent, screen, waitFor } from '@testing-library/dom';
 import { createSignal } from 'solid-js';
 import { render } from 'solid-js/web';
 
-import { JmsrSelect } from '../src/components/ui';
+import { JellyPilotSelect } from '../src/components/ui';
 
 Element.prototype.scrollTo = () => {};
 
@@ -11,7 +11,7 @@ afterEach(() => {
   document.body.innerHTML = '';
 });
 
-test('JmsrSelect renders an Ark select and emits the selected value', async () => {
+test('JellyPilotSelect renders an Ark select and emits the selected value', async () => {
   const selectedValues: string[] = [];
   const root = document.createElement('div');
   document.body.append(root);
@@ -20,7 +20,7 @@ test('JmsrSelect renders an Ark select and emits the selected value', async () =
     const [value, setValue] = createSignal('eng');
 
     return (
-      <JmsrSelect
+      <JellyPilotSelect
         label="Subtitle language"
         items={[
           { label: 'eng - English', value: 'eng' },

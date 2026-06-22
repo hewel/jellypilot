@@ -6,9 +6,9 @@ Accepted
 
 ## Context
 
-JMSR started as an Operations Console for a Jellyfin Playback Target. The app now also needs authenticated browsing flows for Video Home, Movies, Shows, item details, season/episode hierarchy, playback launch, and User Data Actions.
+JellyPilot started as an Operations Console for a Jellyfin Playback Target. The app now also needs authenticated browsing flows for Video Home, Movies, Shows, item details, season/episode hierarchy, playback launch, and User Data Actions.
 
-These flows should not redefine JMSR as a complete Jellyfin client or embedded player. Playback still runs through the existing external MPV Playback Target path, and Now Playing remains the user-facing read model for the active external player session.
+These flows should not redefine JellyPilot as a complete Jellyfin client or embedded player. Playback still runs through the existing external MPV Playback Target path, and Now Playing remains the user-facing read model for the active external player session.
 
 ## Decision
 
@@ -18,7 +18,7 @@ Library playback actions call typed Tauri commands that route through the existi
 
 ## Consequences
 
-- Users can browse and launch video playback from JMSR without leaving the Playback Target model.
+- Users can browse and launch video playback from JellyPilot without leaving the Playback Target model.
 - Operations Console behavior is preserved under Settings and Diagnostics instead of remaining the whole app surface.
 - Library Browser can grow in vertical slices while sharing Now Playing, Saved Session, and typed command boundaries.
-- Follow-up work must not describe JMSR as a full Jellyfin replacement unless embedded playback and broader client features are actually implemented.
+- Follow-up work must not describe JellyPilot as a full Jellyfin replacement unless embedded playback and broader client features are actually implemented.

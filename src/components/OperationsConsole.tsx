@@ -24,7 +24,7 @@ import {
 } from './OperationsConsole/subtitleLanguages';
 import { useToast } from './ToastProvider';
 import { ConsoleContainer, ConsoleGrid, PageFooter } from './ui';
-import type { JmsrSelectItem } from './ui';
+import type { JellyPilotSelectItem } from './ui';
 
 interface OperationsConsoleProps {
   onSignedOut: () => void;
@@ -46,7 +46,7 @@ export default function OperationsConsole(props: OperationsConsoleProps) {
   let latestConfigSnapshot: AppConfig | null = null;
   let clearPlayerBridgeStatusTimer: ReturnType<typeof setTimeout> | null = null;
 
-  const subtitleLanguageSelectItems: JmsrSelectItem[] = [
+  const subtitleLanguageSelectItems: JellyPilotSelectItem[] = [
     { label: 'eng — English', value: 'eng' },
     { label: 'jpn — Japanese', value: 'jpn' },
     { label: 'spa — Spanish', value: 'spa' },
@@ -77,7 +77,7 @@ export default function OperationsConsole(props: OperationsConsoleProps) {
 
   const form = createForm(() => ({
     defaultValues: {
-      deviceName: 'JMSR',
+      deviceName: 'JellyPilot',
       introSkipperMode: 'automatic' as IntroSkipperMode,
       keybindIntroSkip: 'g',
       keybindNext: 'Shift+>',
@@ -91,7 +91,7 @@ export default function OperationsConsole(props: OperationsConsoleProps) {
     const cfg = initialConfig();
     if (cfg && !configHydrated) {
       lastSavedConfig = cfg;
-      form.setFieldValue('deviceName', cfg.deviceName ?? 'JMSR');
+      form.setFieldValue('deviceName', cfg.deviceName ?? 'JellyPilot');
       form.setFieldValue('mpvPath', cfg.mpvPath ?? '');
       form.setFieldValue('mpvArgs', (cfg.mpvArgs ?? []).join('\n'));
       form.setFieldValue('keybindNext', cfg.keybindNext ?? 'Shift+>');

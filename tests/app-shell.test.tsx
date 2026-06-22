@@ -15,7 +15,7 @@ import type {
   VideoShowDetail,
 } from '../src/bindings';
 import { ToastProvider } from '../src/components/ToastProvider';
-import { createJmsrRouter } from '../src/router';
+import { createJellyPilotRouter } from '../src/router';
 
 // Mock scrollTo since JSDOM doesn't implement layout/scrolling APIs
 Element.prototype.scrollTo = () => {};
@@ -64,7 +64,7 @@ const nowPlayingTrackList = JSON.stringify([
 ]);
 
 const config: AppConfig = {
-  deviceName: 'JMSR Test',
+  deviceName: 'JellyPilot Test',
   introSkipperMode: 'automatic',
   keybindIntroSkip: 'g',
   keybindNext: 'Shift+>',
@@ -443,7 +443,7 @@ function mockShellCommands(state = connectedState) {
 function renderShell(path = '/library') {
   const root = document.createElement('div');
   document.body.append(root);
-  const router = createJmsrRouter(createMemoryHistory({ initialEntries: [path] }));
+  const router = createJellyPilotRouter(createMemoryHistory({ initialEntries: [path] }));
   const dispose = render(
     () => (
       <ToastProvider>
@@ -500,7 +500,7 @@ test('authenticated shell removes top header chrome and exposes floating control
   await screen.findByRole('navigation', { name: 'Library navigation' });
 
   // No shell header: no app-area navigation, brand, or user/server badge.
-  expect(screen.queryByRole('navigation', { name: 'JMSR areas' })).toBeNull();
+  expect(screen.queryByRole('navigation', { name: 'JellyPilot areas' })).toBeNull();
   expect(screen.queryByRole('link', { name: 'Settings' })).toBeNull();
   expect(screen.queryByRole('link', { name: 'Diagnostics' })).toBeNull();
   expect(screen.queryByText('Control Room')).toBeNull();
@@ -1079,7 +1079,10 @@ test('Close Settings and standard dismissal close the Settings modal back to the
 
 test('Settings modal keeps Disconnect and Sign out as distinct session controls', async () => {
   mockShellCommands();
-  localStorage.setItem('jmsr_auth_session', JSON.stringify({ serverUrl: 'https://jmsr.example' }));
+  localStorage.setItem(
+    'jellypilot_auth_session',
+    JSON.stringify({ serverUrl: 'https://jellypilot.example' }),
+  );
 
   const cleanup = renderShell('/library');
   await screen.findByRole('navigation', { name: 'Library navigation' });
@@ -1099,7 +1102,7 @@ test('Settings modal keeps Disconnect and Sign out as distinct session controls'
       'Sign out removes the Saved Session and requires authentication before Reconnect is available.',
     ),
   ).toBeVisible();
-  expect(localStorage.getItem('jmsr_auth_session')).not.toBeNull();
+  expect(localStorage.getItem('jellypilot_auth_session')).not.toBeNull();
 
   cleanup();
 });

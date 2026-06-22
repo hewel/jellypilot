@@ -1312,8 +1312,8 @@ impl SessionManager {
   /// Handle MPV client-message event for keyboard shortcuts.
   ///
   /// Users can add to their input.conf:
-  ///   Shift+> script-message jmsr-next
-  ///   Shift+< script-message jmsr-prev
+  ///   Shift+> script-message jellypilot-next
+  ///   Shift+< script-message jellypilot-prev
   async fn handle_client_message_event(
     event: &crate::mpv::MpvEvent,
     client: &JellyfinClient,
@@ -1326,7 +1326,7 @@ impl SessionManager {
       _ => return,
     };
 
-    if args[0] == "jmsr-skip-intro" {
+    if args[0] == "jellypilot-skip-intro" {
       Self::handle_manual_intro_skip(state, action_tx).await;
       return;
     }

@@ -2,6 +2,7 @@ import { afterEach, expect, rstest, test } from '@rstest/core';
 
 import { commands } from '../src/bindings';
 import type { SavedSession } from '../src/bindings';
+import { LEGACY_SESSION_STORAGE_KEY, SESSION_STORAGE_KEY } from '../src/effects/auth';
 import {
   canAccessConsole,
   checkAuthWithRestore,
@@ -105,4 +106,23 @@ test('clearSavedSession removes Saved Session state synchronously', () => {
   clearSavedSession();
 
   expect(loadSavedSession()).toBeNull();
+});
+
+test('migrates legacy Saved Session storage and clears the old key', () => {
+  localStorage.setItem(
+    LEGACY_SESSION_STORAGE_KEY,
+    JSON.stringify({ ...sampleSession, deviceId: 'jmsr-saved-device' }),
+  );
+
+  expect(loadSavedSession()).toEqual({ ...sampleSession, deviceId: null });
+  expect(localStorage.getItem(LEGACY_SESSION_STORAGE_KEY)).toBeNull();
+  expect(localStorage.getItem(SESSION_STORAGE_KEY)).not.toBeNull();
+});
+
+test('clearSavedSession clears Saved Session legacy storage', () => {
+  localStorage.setItem(LEGACY_SESSION_STORAGE_KEY, JSON.stringify(sampleSession));
+
+  clearSavedSession();
+
+  expect(localStorage.getItem(LEGACY_SESSION_STORAGE_KEY)).toBeNull();
 });

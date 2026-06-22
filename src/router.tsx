@@ -10,7 +10,7 @@ export {
   requireAuthenticatedShell,
 } from './router-guards';
 
-export function createJmsrRouter(history?: RouterHistory) {
+export function createJellyPilotRouter(history?: RouterHistory) {
   return createRouter({
     defaultPreload: 'intent',
     history,
@@ -18,7 +18,7 @@ export function createJmsrRouter(history?: RouterHistory) {
   });
 }
 
-export const router = createJmsrRouter();
+export const router = createJellyPilotRouter();
 
 declare module '@tanstack/solid-router' {
   interface Register {

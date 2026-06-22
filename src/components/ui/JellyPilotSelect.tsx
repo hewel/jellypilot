@@ -4,27 +4,29 @@ import { ChevronDown } from 'lucide-solid';
 import { For, createMemo } from 'solid-js';
 import { Portal } from 'solid-js/web';
 
-export interface JmsrSelectItem<Value extends string = string> {
+export interface JellyPilotSelectItem<Value extends string = string> {
   value: Value;
   label: string;
   disabled?: boolean;
 }
 
-type JmsrSelectSize = 'standard' | 'compact';
+type JellyPilotSelectSize = 'standard' | 'compact';
 
-interface JmsrSelectProps<Value extends string = string> {
+interface JellyPilotSelectProps<Value extends string = string> {
   label: string;
-  items: JmsrSelectItem<Value>[];
+  items: JellyPilotSelectItem<Value>[];
   value: Value | null;
   onValueChange: (value: Value) => void;
   placeholder?: string;
   disabled?: boolean;
-  size?: JmsrSelectSize;
+  size?: JellyPilotSelectSize;
   portalMount?: HTMLElement;
   class?: string;
 }
 
-export default function JmsrSelect<Value extends string>(props: JmsrSelectProps<Value>) {
+export default function JellyPilotSelect<Value extends string>(
+  props: JellyPilotSelectProps<Value>,
+) {
   const collection = createMemo(() => createListCollection({ items: props.items }));
   const selectedValue = () => (props.value === null ? [] : [props.value]);
   const isCompact = () => props.size === 'compact';

@@ -3,7 +3,7 @@
   "configVersion": 1,
   "workspaces": {
     "": {
-      "name": "jmsr",
+      "name": "jellypilot",
       "dependencies": {
         "@ark-ui/solid": "^5.37.1",
         "@fontsource-variable/inter": "^5.2.8",

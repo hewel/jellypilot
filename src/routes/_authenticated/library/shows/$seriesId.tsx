@@ -187,7 +187,7 @@ function LibraryShowDetailRoute() {
     if (current && !Exit.isSuccess(current)) {
       return commandFailureMessage(current.cause, 'Could not load show detail');
     }
-    return 'JMSR is loading Show detail, seasons, and Jellyfin next-up data.';
+    return 'JellyPilot is loading Show detail, seasons, and Jellyfin next-up data.';
   };
   const episodesStatusTitle = () => {
     const current = currentEpisodes();
@@ -205,7 +205,7 @@ function LibraryShowDetailRoute() {
   const episodesStatusDescription = () => {
     const current = currentEpisodes();
     if (episodesLoading()) {
-      return 'JMSR is loading exact Episode cards for the selected Season.';
+      return 'JellyPilot is loading exact Episode cards for the selected Season.';
     }
     if (current && Exit.isSuccess(current) && current.value.page.episodes.length === 0) {
       return 'Jellyfin returned no Episodes for the selected Season.';

@@ -1,7 +1,7 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "Default capabilities for JMSR desktop app",
+  "description": "Default capabilities for JellyPilot desktop app",
   "windows": ["main"],
   "permissions": [
     "core:default",

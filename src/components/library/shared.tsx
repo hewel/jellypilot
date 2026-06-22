@@ -18,7 +18,7 @@ import type {
 import { commandFailureMessage } from '../../effects/commands';
 import type { CommandError } from '../../effects/errors';
 import { Button, Card, CardLink } from '../ui';
-import type { JmsrSelectItem } from '../ui';
+import type { JellyPilotSelectItem } from '../ui';
 import { MediaInfoHoverCard } from './MediaInfoHoverCard';
 import { VideoHomeCard } from './VideoHomeCard';
 
@@ -46,7 +46,7 @@ export function LibraryStatusPanel(props: { title: string; description?: string 
           </h2>
           <p class="text-on-surface-variant text-[14px] leading-[20px]">
             {props.description ??
-              'JMSR is checking the current Jellyfin session before loading Library data.'}
+              'JellyPilot is checking the current Jellyfin session before loading Library data.'}
           </p>
         </div>
       </div>
@@ -105,7 +105,7 @@ export function playedFilterLabel(filter: VideoLibraryPlayedFilter) {
   }
 }
 
-export const sortItems: JmsrSelectItem<VideoLibrarySort>[] = [
+export const sortItems: JellyPilotSelectItem<VideoLibrarySort>[] = [
   { label: 'Title', value: 'title' },
   { label: 'Recently added', value: 'recentlyAdded' },
   { label: 'Release date', value: 'releaseDate' },

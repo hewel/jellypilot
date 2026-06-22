@@ -256,7 +256,7 @@ export default function LoginPage(props: LoginPageProps) {
           </div>
 
           <h1 class="font-display text-on-surface text-[45px] leading-[52px] font-bold tracking-tight">
-            JMSR
+            JellyPilot
           </h1>
           <p class="text-on-surface-variant mx-auto mt-2 max-w-md text-[16px] leading-[24px]">
             Connect this Playback Target to a known Jellyfin server.
@@ -272,7 +272,7 @@ export default function LoginPage(props: LoginPageProps) {
                 Server coordinates
               </h2>
               <p class="text-on-surface-variant mt-1.5 text-[14px] leading-[20px]">
-                Choose the protocol and host. JMSR shows the final Server URL before any Login
+                Choose the protocol and host. JellyPilot shows the final Server URL before any Login
                 Method starts.
               </p>
             </div>
@@ -403,8 +403,8 @@ export default function LoginPage(props: LoginPageProps) {
                   </div>
 
                   <p class="text-on-secondary-container text-[14px] leading-[20px] font-medium">
-                    Approve this code from another signed-in Jellyfin client. JMSR will finish login
-                    automatically after approval.
+                    Approve this code from another signed-in Jellyfin client. JellyPilot will finish
+                    login automatically after approval.
                   </p>
                   <p class="text-on-surface-variant/80 mt-2 text-[12px] leading-[16px]">
                     You are authorizing this Playback Target.

@@ -12,7 +12,7 @@ export default function PageFooter(props: PageFooterProps) {
   return (
     <div class={`py-8 text-center ${props.class ?? ''}`}>
       <p class="text-on-surface-variant/70 text-[12px] leading-[16px]">
-        {props.appName ?? 'Jellyfin MPV Shim Rust'}
+        {props.appName ?? 'JellyPilot'}
       </p>
       <AppVersion />
     </div>

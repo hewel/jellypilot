@@ -5,8 +5,8 @@ import {
   detailSubtitle,
   formatRuntime,
 } from '@components/library/shared';
-import { Button, Card, JmsrSelect, StatusBadge } from '@components/ui';
-import type { JmsrSelectItem } from '@components/ui';
+import { Button, Card, JellyPilotSelect, StatusBadge } from '@components/ui';
+import type { JellyPilotSelectItem } from '@components/ui';
 import { createFileRoute } from '@tanstack/solid-router';
 import { Exit } from 'effect';
 import { Film, Library, Play, RefreshCw, RotateCcw } from 'lucide-solid';
@@ -66,14 +66,14 @@ function LibraryItemDetailRoute() {
     const current = state.latest ?? state();
     return current && Exit.isSuccess(current) ? current.value : null;
   };
-  const audioItems = createMemo<JmsrSelectItem[]>(() => [
+  const audioItems = createMemo<JellyPilotSelectItem[]>(() => [
     { label: 'Auto (series preference)', value: AUDIO_AUTO },
     ...(detail()?.audioStreams ?? []).map((stream) => ({
       label: streamLabel(stream),
       value: String(stream.index),
     })),
   ]);
-  const subtitleItems = createMemo<JmsrSelectItem[]>(() => [
+  const subtitleItems = createMemo<JellyPilotSelectItem[]>(() => [
     { label: 'Auto (preferred subtitles)', value: SUBTITLE_AUTO },
     { label: 'Off', value: SUBTITLE_OFF },
     ...(detail()?.subtitleStreams ?? []).map((stream) => ({
@@ -139,7 +139,7 @@ function LibraryItemDetailRoute() {
     if (current && !Exit.isSuccess(current)) {
       return commandFailureMessage(current.cause, 'Could not load item detail');
     }
-    return 'JMSR is loading Movie or Episode detail data from Jellyfin.';
+    return 'JellyPilot is loading Movie or Episode detail data from Jellyfin.';
   };
 
   return (
@@ -267,7 +267,7 @@ function LibraryItemDetailRoute() {
                     </p>
                   </Show>
                   <div class="grid gap-4 sm:grid-cols-2">
-                    <JmsrSelect
+                    <JellyPilotSelect
                       label="Audio track"
                       items={audioItems()}
                       disabled={playBusy() !== null}
@@ -276,7 +276,7 @@ function LibraryItemDetailRoute() {
                       onValueChange={setAudioValue}
                     />
 
-                    <JmsrSelect
+                    <JellyPilotSelect
                       label="Subtitle track"
                       items={subtitleItems()}
                       disabled={playBusy() !== null}

@@ -1,6 +1,6 @@
 # Intro Skipper Verification Notes
 
-Manual verification target: a real Jellyfin server with the Intro Skipper plugin installed and JMSR connected as a cast target.
+Manual verification target: a real Jellyfin server with the Intro Skipper plugin installed and JellyPilot connected as a cast target.
 
 ## Scenarios
 

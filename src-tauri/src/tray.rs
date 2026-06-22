@@ -1,4 +1,4 @@
-//! System tray implementation for JMSR.
+//! System tray implementation for JellyPilot.
 //!
 //! Provides a tray icon with menu items:
 //! - Play/Pause: Toggle playback
@@ -71,7 +71,7 @@ pub fn setup_tray(app: &tauri::App) -> Result<(), Box<dyn std::error::Error>> {
   let _tray = TrayIconBuilder::new()
     .icon(app.default_window_icon().unwrap().clone())
     .menu(&menu)
-    .tooltip("JMSR - Jellyfin MPV Shim")
+    .tooltip("JellyPilot")
     .show_menu_on_left_click(false) // Left-click shows window, right-click shows menu
     .on_menu_event(|app, event| match event.id.as_ref() {
       MENU_PLAY_PAUSE => {

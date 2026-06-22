@@ -1,58 +1,58 @@
 @import 'tailwindcss';
 
 /* ==========================================================================\
-   JMSR Control Room - Premium OLED Glassmorphic Theme (Electric Indigo Accent)
+   JellyPilot Control Room - Premium OLED Glassmorphic Theme (Electric Indigo Accent)
    ========================================================================== */
 
 @theme inline {
-  --font-sans: var(--jmsr-font-sans);
-  --font-display: var(--jmsr-font-display);
-  --font-mono: var(--jmsr-font-mono);
+  --font-sans: var(--jellypilot-font-sans);
+  --font-display: var(--jellypilot-font-display);
+  --font-mono: var(--jellypilot-font-mono);
 
-  --color-primary: var(--jmsr-color-primary);
-  --color-on-primary: var(--jmsr-color-on-primary);
-  --color-primary-container: var(--jmsr-color-primary-container);
-  --color-on-primary-container: var(--jmsr-color-on-primary-container);
-  --color-primary-gradient-end: var(--jmsr-color-primary-gradient-end);
+  --color-primary: var(--jellypilot-color-primary);
+  --color-on-primary: var(--jellypilot-color-on-primary);
+  --color-primary-container: var(--jellypilot-color-primary-container);
+  --color-on-primary-container: var(--jellypilot-color-on-primary-container);
+  --color-primary-gradient-end: var(--jellypilot-color-primary-gradient-end);
 
-  --color-secondary: var(--jmsr-color-secondary);
-  --color-on-secondary: var(--jmsr-color-on-secondary);
-  --color-secondary-container: var(--jmsr-color-secondary-container);
-  --color-on-secondary-container: var(--jmsr-color-on-secondary-container);
-  --color-secondary-gradient-end: var(--jmsr-color-secondary-gradient-end);
+  --color-secondary: var(--jellypilot-color-secondary);
+  --color-on-secondary: var(--jellypilot-color-on-secondary);
+  --color-secondary-container: var(--jellypilot-color-secondary-container);
+  --color-on-secondary-container: var(--jellypilot-color-on-secondary-container);
+  --color-secondary-gradient-end: var(--jellypilot-color-secondary-gradient-end);
 
-  --color-tertiary: var(--jmsr-color-tertiary);
-  --color-on-tertiary: var(--jmsr-color-on-tertiary);
-  --color-tertiary-container: var(--jmsr-color-tertiary-container);
-  --color-on-tertiary-container: var(--jmsr-color-on-tertiary-container);
+  --color-tertiary: var(--jellypilot-color-tertiary);
+  --color-on-tertiary: var(--jellypilot-color-on-tertiary);
+  --color-tertiary-container: var(--jellypilot-color-tertiary-container);
+  --color-on-tertiary-container: var(--jellypilot-color-on-tertiary-container);
 
-  --color-warning: var(--jmsr-color-warning);
-  --color-on-warning: var(--jmsr-color-on-warning);
-  --color-warning-container: var(--jmsr-color-warning-container);
-  --color-on-warning-container: var(--jmsr-color-on-warning-container);
+  --color-warning: var(--jellypilot-color-warning);
+  --color-on-warning: var(--jellypilot-color-on-warning);
+  --color-warning-container: var(--jellypilot-color-warning-container);
+  --color-on-warning-container: var(--jellypilot-color-on-warning-container);
 
-  --color-error: var(--jmsr-color-error);
-  --color-on-error: var(--jmsr-color-on-error);
-  --color-error-container: var(--jmsr-color-error-container);
-  --color-on-error-container: var(--jmsr-color-on-error-container);
+  --color-error: var(--jellypilot-color-error);
+  --color-on-error: var(--jellypilot-color-on-error);
+  --color-error-container: var(--jellypilot-color-error-container);
+  --color-on-error-container: var(--jellypilot-color-on-error-container);
 
-  --color-background: var(--jmsr-color-background);
-  --color-on-background: var(--jmsr-color-on-background);
-  --color-surface: var(--jmsr-color-surface);
-  --color-on-surface: var(--jmsr-color-on-surface);
-  --color-surface-variant: var(--jmsr-color-surface-variant);
-  --color-on-surface-variant: var(--jmsr-color-on-surface-variant);
+  --color-background: var(--jellypilot-color-background);
+  --color-on-background: var(--jellypilot-color-on-background);
+  --color-surface: var(--jellypilot-color-surface);
+  --color-on-surface: var(--jellypilot-color-on-surface);
+  --color-surface-variant: var(--jellypilot-color-surface-variant);
+  --color-on-surface-variant: var(--jellypilot-color-on-surface-variant);
 
-  --color-surface-container-lowest: var(--jmsr-color-surface-container-lowest);
-  --color-surface-container-low: var(--jmsr-color-surface-container-low);
-  --color-surface-container: var(--jmsr-color-surface-container);
-  --color-surface-container-high: var(--jmsr-color-surface-container-high);
-  --color-surface-container-highest: var(--jmsr-color-surface-container-highest);
-  --color-surface-tint: var(--jmsr-color-surface-tint);
-  --color-brand-glow: var(--jmsr-color-brand-glow);
+  --color-surface-container-lowest: var(--jellypilot-color-surface-container-lowest);
+  --color-surface-container-low: var(--jellypilot-color-surface-container-low);
+  --color-surface-container: var(--jellypilot-color-surface-container);
+  --color-surface-container-high: var(--jellypilot-color-surface-container-high);
+  --color-surface-container-highest: var(--jellypilot-color-surface-container-highest);
+  --color-surface-tint: var(--jellypilot-color-surface-tint);
+  --color-brand-glow: var(--jellypilot-color-brand-glow);
 
-  --color-outline: var(--jmsr-color-outline);
-  --color-outline-variant: var(--jmsr-color-outline-variant);
+  --color-outline: var(--jellypilot-color-outline);
+  --color-outline-variant: var(--jellypilot-color-outline-variant);
 }
 
 body {

@@ -139,7 +139,7 @@ function LibraryBrowseRoute() {
     if (current && !Exit.isSuccess(current)) {
       return commandFailureMessage(current.cause, 'Could not load Library page');
     }
-    return 'JMSR is loading a server-paged video library result set.';
+    return 'JellyPilot is loading a server-paged video library result set.';
   };
   const loadMoreStartIndex = () => {
     const current = readyState();

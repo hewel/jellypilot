@@ -2,7 +2,7 @@
 
 ## 1. Project Overview
 
-**Name:** `jellyfin-mpv-shim-rust`
+**Name:** `JellyPilot`
 **Goal:** Develop a high-performance, memory-safe, and stable replacement for the existing Python-based `jellyfin-mpv-shim`.
 **Core Philosophy:**
 

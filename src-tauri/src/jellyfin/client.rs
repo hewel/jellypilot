@@ -12,9 +12,9 @@ use super::intro_skipper::{
 use super::types::*;
 
 /// Device info for Jellyfin client identification.
-const DEFAULT_DEVICE_NAME: &str = "JMSR";
-const DEVICE_ID_PREFIX: &str = "jmsr-";
-const CLIENT_NAME: &str = "Jellyfin MPV Shim Rust";
+const DEFAULT_DEVICE_NAME: &str = "JellyPilot";
+const DEVICE_ID_PREFIX: &str = "jellypilot-";
+const CLIENT_NAME: &str = "JellyPilot";
 const CLIENT_VERSION: &str = env!("CARGO_PKG_VERSION");
 
 /// Jellyfin HTTP API client.
@@ -2388,7 +2388,7 @@ mod tests {
     let captured = requests.lock();
     let auth_request = captured.first().expect("auth request should be captured");
     assert!(auth_request.starts_with("POST /Users/AuthenticateByName "));
-    assert!(auth_request.contains("Client=\"Jellyfin MPV Shim Rust\""));
+    assert!(auth_request.contains("Client=\"JellyPilot\""));
     assert!(auth_request.contains(r#""Username":"Ada""#));
     assert!(auth_request.contains(r#""Pw":"correct horse battery staple""#));
     let info_request = captured
@@ -2419,7 +2419,7 @@ mod tests {
         user_id: "00000000-0000-0000-0000-000000000001".to_string(),
         user_name: "Ada".to_string(),
         server_name: None,
-        device_id: Some("jmsr-saved-device".to_string()),
+        device_id: Some("jellypilot-saved-device".to_string()),
       })
       .await
       .expect("restore should validate token and refresh server info");
@@ -2449,7 +2449,7 @@ mod tests {
         user_id: "00000000-0000-0000-0000-000000000001".to_string(),
         user_name: "Ada".to_string(),
         server_name: Some("Jellyfin Home".to_string()),
-        device_id: Some("jmsr-saved-device".to_string()),
+        device_id: Some("jellypilot-saved-device".to_string()),
       })
       .await
       .expect_err("restore should report validation failure");
@@ -2483,7 +2483,7 @@ mod tests {
       .first()
       .expect("quick connect start request should be captured");
     assert!(request.starts_with("POST /QuickConnect/Initiate "));
-    assert!(request.contains("Client=\"Jellyfin MPV Shim Rust\""));
+    assert!(request.contains("Client=\"JellyPilot\""));
   }
 
   #[tokio::test]
@@ -2579,7 +2579,7 @@ mod tests {
     let client = JellyfinClient::new();
     let device_id = client.device_id();
     let body = format!(
-      r#"[{{"DeviceId":"{}","DeviceName":"JMSR","Client":"Jellyfin MPV Shim Rust","SupportsMediaControl":true,"SupportsRemoteControl":true}}]"#,
+      r#"[{{"DeviceId":"{}","DeviceName":"JellyPilot","Client":"JellyPilot","SupportsMediaControl":true,"SupportsRemoteControl":true}}]"#,
       device_id
     );
     let (server_url, requests) =
@@ -2598,7 +2598,7 @@ mod tests {
     let request_lower = request.to_ascii_lowercase();
     assert!(request.starts_with("GET /Sessions "));
     assert!(request_lower.contains("x-emby-authorization:"));
-    assert!(request.contains("Client=\"Jellyfin MPV Shim Rust\""));
+    assert!(request.contains("Client=\"JellyPilot\""));
     assert!(request.contains("Token=\"token-1\""));
     assert!(request.contains(&format!("DeviceId=\"{}\"", device_id)));
   }
@@ -2608,7 +2608,7 @@ mod tests {
     let client = JellyfinClient::new();
     let device_id = client.device_id();
     let body = format!(
-      r#"[{{"DeviceId":"{}","DeviceName":"JMSR","Client":"Jellyfin MPV Shim Rust","SupportsMediaControl":false,"SupportsRemoteControl":true}}]"#,
+      r#"[{{"DeviceId":"{}","DeviceName":"JellyPilot","Client":"JellyPilot","SupportsMediaControl":false,"SupportsRemoteControl":true}}]"#,
       device_id
     );
     let server_url = serve_owned_responses_with_requests(vec![("200 OK".to_string(), body)])
