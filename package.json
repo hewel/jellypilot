@@ -16,6 +16,8 @@
     "test:watch": "rstest --watch",
     "lint-staged": "lint-staged",
     "typecheck": "tsc --noEmit",
+    "emby:api:generate": "bun scripts/emby-api.mjs generate",
+    "emby:api:update": "bun scripts/emby-api.mjs update",
     "jellyfin:api:generate": "bun scripts/jellyfin-api.mjs generate",
     "jellyfin:api:update": "bun scripts/jellyfin-api.mjs update",
     "format": "oxfmt --write package.json tsconfig.json tests/tsconfig.json '*.config.{js,json,jsonc,mjs,ts}' 'src/**/*.{css,js,jsx,json,jsonc,ts,tsx}' 'tests/**/*.{js,jsx,json,jsonc,ts,tsx}' 'scripts/**/*.mjs' 'src-tauri/**/*.json'",

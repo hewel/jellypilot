@@ -891,6 +891,21 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4ef6b89e5b37196644d8796de5268852ff179b44e96276cf4290264843743bb7"
 
 [[package]]
+name = "emby_api"
+version = "4.9.3"
+dependencies = [
+ "chrono",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "serde_repr",
+ "serde_with",
+ "tokio",
+ "tokio-util",
+ "url",
+]
+
+[[package]]
 name = "encoding_rs"
 version = "0.8.35"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1850,6 +1865,7 @@ version = "1.4.1"
 dependencies = [
  "async-channel",
  "dirs",
+ "emby_api",
  "futures-util",
  "jellyfin_api",
  "log",

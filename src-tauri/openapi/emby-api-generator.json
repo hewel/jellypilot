@@ -1,0 +1,9 @@
+{
+  "library": "reqwest",
+  "packageName": "emby_api",
+  "packageVersion": "4.9.3",
+  "supportAsync": true,
+  "hideGenerationTimestamp": true,
+  "reqwestDefaultFeatures": "",
+  "useSingleRequestParameter": true
+}
