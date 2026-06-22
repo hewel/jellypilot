@@ -200,7 +200,7 @@ export type Credentials = {
 export type IntroSkipperMode = "automatic" | "manual" | "off";
 
 /**  Media server provider selected for a connection or saved session. */
-export type MediaServerProvider = "jellyfin";
+export type MediaServerProvider = "jellyfin" | "emby";
 
 /**  Notification level for UI display. */
 export type NotificationLevel = "error" | "warning" | "info" | "success";

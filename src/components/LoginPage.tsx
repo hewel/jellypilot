@@ -6,7 +6,7 @@ import { Effect, Exit, Fiber } from 'effect';
 import { Check, CircleAlert, LoaderCircle, RadioTower } from 'lucide-solid';
 import { Show, createSignal, onCleanup, onMount } from 'solid-js';
 
-import type { Credentials } from '../bindings';
+import type { Credentials, MediaServerProvider } from '../bindings';
 import { commandFailureMessage } from '../effects/commands';
 import { connectJellyfin } from '../effects/connection';
 import { CommandError } from '../effects/errors';
@@ -30,6 +30,7 @@ type LoginMethod = 'quickConnect' | 'password';
 type QuickConnectState = 'idle' | 'waiting' | 'failed';
 
 interface LoginValues {
+  provider: MediaServerProvider;
   scheme: ServerScheme;
   host: string;
   username: string;
@@ -53,6 +54,7 @@ export default function LoginPage(props: LoginPageProps) {
     defaultValues: {
       host: '',
       password: '',
+      provider: 'jellyfin' as MediaServerProvider,
       rememberMe: false,
       scheme: 'https' as ServerScheme,
       username: '',
@@ -171,7 +173,7 @@ export default function LoginPage(props: LoginPageProps) {
     const finalServerUrl = validation.result.url;
     const credentials: Credentials = {
       password: value.password,
-      provider: 'jellyfin',
+      provider: value.provider,
       serverUrl: finalServerUrl,
       username: value.username,
     };
@@ -187,7 +189,8 @@ export default function LoginPage(props: LoginPageProps) {
               message: error instanceof Error ? error.message : 'Connection failed',
             }),
           try: async () => {
-            if (value.rememberMe) Effect.runSync(saveCredentials(finalServerUrl, value.username));
+            if (value.rememberMe)
+              Effect.runSync(saveCredentials(finalServerUrl, value.username, value.provider));
             else Effect.runSync(clearSavedCredentials());
             await finishConnected();
           },
@@ -219,6 +222,7 @@ export default function LoginPage(props: LoginPageProps) {
     form.reset({
       host: parsed.host,
       password: '',
+      provider: saved.provider,
       rememberMe: saved.rememberMe,
       scheme: parsed.scheme,
       username: saved.username,
@@ -428,6 +432,34 @@ export default function LoginPage(props: LoginPageProps) {
 
               <Tabs.Content value="password">
                 <div class="space-y-4">
+                  <form.Field name="provider">
+                    {(field) => (
+                      <fieldset>
+                        <legend class="text-on-surface-variant mb-1.5 block text-[12px] leading-[16px] font-bold tracking-[0.05em] uppercase">
+                          Media Server
+                        </legend>
+                        <div
+                          class="border-outline-variant bg-surface-container-high/40 grid grid-cols-2 rounded-2xl border p-1"
+                          aria-label="Media server provider"
+                        >
+                          <button
+                            type="button"
+                            class={`cursor-pointer rounded-xl px-4 py-3 text-[14px] leading-[20px] font-semibold tracking-wide uppercase transition-[background-color,color,box-shadow,transform] duration-300 active:scale-[0.96] ${field().state.value === 'jellyfin' ? 'from-primary to-primary-gradient-end text-on-primary shadow-primary/25 bg-gradient-to-r font-bold shadow-lg' : 'text-on-surface-variant hover:text-on-surface hover:bg-surface-container-highest/40'}`}
+                            onClick={() => field().handleChange('jellyfin')}
+                          >
+                            Jellyfin
+                          </button>
+                          <button
+                            type="button"
+                            class={`cursor-pointer rounded-xl px-4 py-3 text-[14px] leading-[20px] font-semibold tracking-wide uppercase transition-[background-color,color,box-shadow,transform] duration-300 active:scale-[0.96] ${field().state.value === 'emby' ? 'from-primary to-primary-gradient-end text-on-primary shadow-primary/25 bg-gradient-to-r font-bold shadow-lg' : 'text-on-surface-variant hover:text-on-surface hover:bg-surface-container-highest/40'}`}
+                            onClick={() => field().handleChange('emby')}
+                          >
+                            Emby
+                          </button>
+                        </div>
+                      </fieldset>
+                    )}
+                  </form.Field>
                   <form.Field name="username">
                     {(field) => (
                       <ArkField.Root class="block">

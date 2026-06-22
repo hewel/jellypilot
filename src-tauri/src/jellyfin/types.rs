@@ -50,6 +50,7 @@ pub struct ConnectionState {
 #[serde(rename_all = "camelCase")]
 pub enum MediaServerProvider {
   Jellyfin,
+  Emby,
 }
 
 impl MediaServerProvider {

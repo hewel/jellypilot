@@ -478,7 +478,7 @@ pub async fn jellyfin_connect(
     .login()
     .authenticate(&credentials)
     .await
-    .map_err(|e| CommandError::auth_failed(e.to_string()))?;
+    .map_err(jellyfin_err)?;
 
   // Create and start session manager
   let new_session = Arc::new(SessionManager::new(
@@ -1115,6 +1115,24 @@ mod tests {
     let err = jellyfin_err(JellyfinError::AuthFailed("revoked".to_string()));
 
     assert!(matches!(err.code, CommandErrorCode::AuthFailed));
+  }
+
+  #[test]
+  fn jellyfin_err_maps_invalid_urls_to_invalid_input_code() {
+    let err = jellyfin_err(JellyfinError::InvalidUrl("bad url".to_string()));
+
+    assert!(matches!(err.code, CommandErrorCode::InvalidInput));
+    assert_eq!(err.message, "bad url");
+  }
+
+  #[test]
+  fn jellyfin_err_maps_server_response_failures_to_network_code() {
+    let err = jellyfin_err(JellyfinError::HttpError(
+      "Unable to discover Emby API base URL".to_string(),
+    ));
+
+    assert!(matches!(err.code, CommandErrorCode::Network));
+    assert!(err.message.contains("Unable to discover Emby API base URL"));
   }
 
   #[test]

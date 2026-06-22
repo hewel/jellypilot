@@ -509,7 +509,7 @@ test('quick connect authentication status errors fail and unlock request', async
 });
 
 test('password login saves the authenticated session', async () => {
-  rstest.spyOn(commands, 'serverConnect').mockResolvedValue({
+  const connect = rstest.spyOn(commands, 'serverConnect').mockResolvedValue({
     data: null,
     status: 'ok',
   });
@@ -532,7 +532,40 @@ test('password login saves the authenticated session', async () => {
   fireEvent.click(screen.getByRole('button', { name: 'Connect' }));
 
   await waitFor(() => expect(onConnected).toHaveBeenCalledTimes(1));
+  expect(connect).toHaveBeenCalledWith({
+    password: 'secret',
+    provider: 'jellyfin',
+    serverUrl: 'https://jellyfin.example.com',
+    username: 'ada',
+  });
   expect(loadSavedSession()).toEqual(sampleSession);
+
+  cleanup();
+});
+
+test('password login submits the selected Emby provider', async () => {
+  const connect = rstest.spyOn(commands, 'serverConnect').mockResolvedValue({
+    data: null,
+    status: 'ok',
+  });
+  rstest.spyOn(commands, 'serverGetSession').mockResolvedValue({
+    ...sampleSession,
+    provider: 'emby',
+  });
+  const cleanup = renderLoginPage();
+
+  await fillPasswordLogin();
+  fireEvent.click(screen.getByRole('button', { name: 'Emby' }));
+  fireEvent.click(screen.getByRole('button', { name: 'Connect' }));
+
+  await waitFor(() =>
+    expect(connect).toHaveBeenCalledWith({
+      password: 'secret',
+      provider: 'emby',
+      serverUrl: 'https://jellyfin.example.com',
+      username: 'ada',
+    }),
+  );
 
   cleanup();
 });
@@ -593,7 +626,47 @@ test('password login saves remembered Login Prefill when remember me is checked'
   await waitFor(() =>
     expect(Effect.runSync(loadSavedCredentials())).toEqual({
       rememberMe: true,
+      provider: 'jellyfin',
       serverUrl: 'https://jellyfin.example.com',
+      username: 'ada',
+    }),
+  );
+
+  cleanup();
+});
+
+test('password login restores remembered Emby provider for Login Prefill', async () => {
+  localStorage.setItem(
+    CREDENTIALS_STORAGE_KEY,
+    JSON.stringify({
+      provider: 'emby',
+      rememberMe: true,
+      serverUrl: 'https://emby.example.com',
+      username: 'ada',
+    }),
+  );
+  const connect = rstest.spyOn(commands, 'serverConnect').mockResolvedValue({
+    data: null,
+    status: 'ok',
+  });
+  rstest.spyOn(commands, 'serverGetSession').mockResolvedValue({
+    ...sampleSession,
+    provider: 'emby',
+  });
+  const cleanup = renderLoginPage();
+
+  fireEvent.click(screen.getByRole('tab', { name: 'Password' }));
+  await waitFor(() => expect(screen.getByDisplayValue('ada')).toBeVisible());
+  fireEvent.input(screen.getByPlaceholderText('Jellyfin password'), {
+    target: { value: 'secret' },
+  });
+  fireEvent.click(screen.getByRole('button', { name: 'Connect' }));
+
+  await waitFor(() =>
+    expect(connect).toHaveBeenCalledWith({
+      password: 'secret',
+      provider: 'emby',
+      serverUrl: 'https://emby.example.com',
       username: 'ada',
     }),
   );
@@ -606,6 +679,7 @@ test('password login clears Login Prefill when remember me is unchecked', async 
     CREDENTIALS_STORAGE_KEY,
     JSON.stringify({
       rememberMe: true,
+      provider: 'jellyfin',
       serverUrl: 'https://old.example.com',
       username: 'old',
     }),
@@ -724,6 +798,7 @@ test('loadSavedCredentials migrates legacy remembered Login Prefill', () => {
 
   expect(Effect.runSync(loadSavedCredentials())).toEqual({
     rememberMe: true,
+    provider: 'jellyfin',
     serverUrl: 'https://old.example.com',
     username: 'old',
   });

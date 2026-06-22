@@ -39,6 +39,7 @@ pub struct JellyfinLibrary<'a> {
 
 /// Internal connection state.
 struct ClientState {
+  provider: MediaServerProvider,
   server_url: Option<String>,
   access_token: Option<String>,
   user_id: Option<String>,
@@ -59,6 +60,7 @@ impl JellyfinClient {
         .build()
         .expect("Failed to create HTTP client"),
       state: Arc::new(RwLock::new(ClientState {
+        provider: MediaServerProvider::Jellyfin,
         server_url: None,
         access_token: None,
         user_id: None,
@@ -129,6 +131,28 @@ impl JellyfinClient {
     Ok(configuration)
   }
 
+  fn emby_openapi_configuration(
+    &self,
+    server_url: &str,
+    token: Option<&str>,
+  ) -> Result<emby_api::apis::configuration::Configuration, JellyfinError> {
+    let mut headers = header::HeaderMap::new();
+    let auth_header = header::HeaderValue::from_str(&self.auth_header(token)).map_err(|err| {
+      JellyfinError::HttpError(format!("Invalid Emby authorization header: {err}"))
+    })?;
+    headers.insert("X-Emby-Authorization", auth_header);
+
+    let mut configuration = emby_api::apis::configuration::Configuration::new();
+    configuration.base_path = server_url.to_string();
+    configuration.user_agent = Some(format!("{CLIENT_NAME}/{CLIENT_VERSION}"));
+    configuration.client = Client::builder()
+      .timeout(std::time::Duration::from_secs(30))
+      .default_headers(headers)
+      .build()?;
+
+    Ok(configuration)
+  }
+
   fn openapi_error<T: std::fmt::Debug>(
     context: &str,
     err: jellyfin_api::apis::Error<T>,
@@ -151,6 +175,35 @@ impl JellyfinClient {
     err: jellyfin_api::apis::Error<T>,
   ) -> JellyfinError {
     match Self::openapi_error(context, err) {
+      JellyfinError::HttpError(message) => JellyfinError::AuthFailed(message),
+      err => err,
+    }
+  }
+
+  fn emby_openapi_error<T: std::fmt::Debug>(
+    context: &str,
+    err: emby_api::apis::Error<T>,
+  ) -> JellyfinError {
+    match err {
+      emby_api::apis::Error::Reqwest(err) => JellyfinError::Http(err),
+      emby_api::apis::Error::Serde(err) => {
+        JellyfinError::HttpError(format!("{context} returned malformed JSON: {err}"))
+      }
+      emby_api::apis::Error::Io(err) => {
+        JellyfinError::HttpError(format!("{context} failed: {err}"))
+      }
+      emby_api::apis::Error::ResponseError(response) => JellyfinError::HttpError(format!(
+        "{context} failed: HTTP {} - {}",
+        response.status, response.content
+      )),
+    }
+  }
+
+  fn emby_openapi_auth_error<T: std::fmt::Debug>(
+    context: &str,
+    err: emby_api::apis::Error<T>,
+  ) -> JellyfinError {
+    match Self::emby_openapi_error(context, err) {
       JellyfinError::HttpError(message) => JellyfinError::AuthFailed(message),
       err => err,
     }
@@ -193,6 +246,32 @@ impl JellyfinClient {
     })
   }
 
+  fn emby_auth_response_from_openapi(
+    auth: emby_api::models::AuthenticationAuthenticationResult,
+  ) -> Result<AuthResponse, JellyfinError> {
+    let user = auth
+      .user
+      .ok_or_else(|| Self::missing_openapi_field("Authentication", "User"))?;
+    let id = user
+      .id
+      .ok_or_else(|| Self::missing_openapi_field("Authentication", "User.Id"))?;
+    let name = user
+      .name
+      .ok_or_else(|| Self::missing_openapi_field("Authentication", "User.Name"))?;
+    let access_token = auth
+      .access_token
+      .ok_or_else(|| Self::missing_openapi_field("Authentication", "AccessToken"))?;
+    let server_id = auth
+      .server_id
+      .ok_or_else(|| Self::missing_openapi_field("Authentication", "ServerId"))?;
+
+    Ok(AuthResponse {
+      user: User { id, name },
+      access_token,
+      server_id,
+    })
+  }
+
   fn server_info_from_openapi(
     info: jellyfin_api::models::PublicSystemInfo,
   ) -> Result<ServerInfo, JellyfinError> {
@@ -216,12 +295,38 @@ impl JellyfinClient {
     })
   }
 
+  fn emby_server_info_from_openapi(
+    info: emby_api::models::PublicSystemInfo,
+  ) -> Result<ServerInfo, JellyfinError> {
+    let server_name = info
+      .server_name
+      .ok_or_else(|| Self::missing_openapi_field("System public info", "ServerName"))?;
+    let version = info
+      .version
+      .ok_or_else(|| Self::missing_openapi_field("System public info", "Version"))?;
+    let id = info
+      .id
+      .ok_or_else(|| Self::missing_openapi_field("System public info", "Id"))?;
+
+    Ok(ServerInfo {
+      server_name,
+      version,
+      id,
+    })
+  }
+
   /// Authenticate with Jellyfin server.
   pub async fn authenticate(&self, creds: &Credentials) -> Result<AuthResponse, JellyfinError> {
     match creds.provider {
-      MediaServerProvider::Jellyfin => {}
+      MediaServerProvider::Jellyfin => self.authenticate_jellyfin(creds).await,
+      MediaServerProvider::Emby => self.authenticate_emby(creds).await,
     }
+  }
 
+  async fn authenticate_jellyfin(
+    &self,
+    creds: &Credentials,
+  ) -> Result<AuthResponse, JellyfinError> {
     let server_url = Self::normalize_server_url(&creds.server_url)?;
     let configuration = self.openapi_configuration(&server_url, None)?;
 
@@ -241,6 +346,7 @@ impl JellyfinClient {
     // Store connection state
     {
       let mut state = self.state.write();
+      state.provider = MediaServerProvider::Jellyfin;
       state.server_url = Some(server_url);
       state.access_token = Some(auth.access_token.clone());
       state.user_id = Some(auth.user.id.clone());
@@ -251,6 +357,62 @@ impl JellyfinClient {
     self.fetch_server_info().await.ok();
 
     Ok(auth)
+  }
+
+  async fn authenticate_emby(&self, creds: &Credentials) -> Result<AuthResponse, JellyfinError> {
+    let (server_url, info) = self.discover_emby_api_base(&creds.server_url).await?;
+    let configuration = self.emby_openapi_configuration(&server_url, None)?;
+
+    let auth = emby_api::apis::user_service_api::post_users_authenticatebyname(
+      &configuration,
+      emby_api::apis::user_service_api::PostUsersAuthenticatebynameParams {
+        x_emby_authorization: self.auth_header(None),
+        authenticate_user_by_name: emby_api::models::AuthenticateUserByName {
+          username: Some(creds.username.clone()),
+          pw: Some(creds.password.clone()),
+        },
+      },
+    )
+    .await
+    .map_err(|err| Self::emby_openapi_auth_error("Password authentication", err))
+    .and_then(Self::emby_auth_response_from_openapi)?;
+
+    {
+      let mut state = self.state.write();
+      state.provider = MediaServerProvider::Emby;
+      state.server_url = Some(server_url);
+      state.access_token = Some(auth.access_token.clone());
+      state.user_id = Some(auth.user.id.clone());
+      state.user_name = Some(auth.user.name.clone());
+      state.server_name = Some(info.server_name);
+    }
+
+    Ok(auth)
+  }
+
+  async fn discover_emby_api_base(
+    &self,
+    server_url: &str,
+  ) -> Result<(String, ServerInfo), JellyfinError> {
+    let candidates = Self::emby_api_base_candidates(server_url)?;
+    let mut failures = Vec::new();
+
+    for candidate in candidates {
+      let configuration = self.emby_openapi_configuration(&candidate, None)?;
+      match emby_api::apis::system_service_api::get_system_info_public(&configuration)
+        .await
+        .map_err(|err| Self::emby_openapi_error("System public info", err))
+        .and_then(Self::emby_server_info_from_openapi)
+      {
+        Ok(info) => return Ok((candidate, info)),
+        Err(err) => failures.push(format!("{candidate}: {err}")),
+      }
+    }
+
+    Err(JellyfinError::HttpError(format!(
+      "Unable to discover Emby API base URL. {}",
+      failures.join("; ")
+    )))
   }
 
   /// Start a Quick Connect request on a Jellyfin server.
@@ -344,12 +506,26 @@ impl JellyfinClient {
   /// Fetch server public info.
   async fn fetch_server_info(&self) -> Result<ServerInfo, JellyfinError> {
     let server_url = self.server_url()?;
-    let configuration = self.openapi_configuration(&server_url, None)?;
+    let provider = self.state.read().provider;
 
-    let info = jellyfin_api::apis::system_api::get_public_system_info(&configuration)
-      .await
-      .map_err(|err| Self::openapi_error("System public info", err))
-      .and_then(Self::server_info_from_openapi)?;
+    let info = match provider {
+      MediaServerProvider::Jellyfin => {
+        let configuration = self.openapi_configuration(&server_url, None)?;
+
+        jellyfin_api::apis::system_api::get_public_system_info(&configuration)
+          .await
+          .map_err(|err| Self::openapi_error("System public info", err))
+          .and_then(Self::server_info_from_openapi)?
+      }
+      MediaServerProvider::Emby => {
+        let configuration = self.emby_openapi_configuration(&server_url, None)?;
+
+        emby_api::apis::system_service_api::get_system_info_public(&configuration)
+          .await
+          .map_err(|err| Self::emby_openapi_error("System public info", err))
+          .and_then(Self::emby_server_info_from_openapi)?
+      }
+    };
 
     {
       let mut state = self.state.write();
@@ -362,11 +538,28 @@ impl JellyfinClient {
   async fn validate_saved_token(&self) -> Result<(), JellyfinError> {
     let server_url = self.server_url()?;
     let token = self.access_token()?;
-    let configuration = self.openapi_configuration(&server_url, Some(&token))?;
+    let provider = self.state.read().provider;
 
-    jellyfin_api::apis::user_api::get_current_user(&configuration)
-      .await
-      .map_err(|err| Self::openapi_auth_error("Saved session validation", err))?;
+    match provider {
+      MediaServerProvider::Jellyfin => {
+        let configuration = self.openapi_configuration(&server_url, Some(&token))?;
+
+        jellyfin_api::apis::user_api::get_current_user(&configuration)
+          .await
+          .map_err(|err| Self::openapi_auth_error("Saved session validation", err))?;
+      }
+      MediaServerProvider::Emby => {
+        let user_id = self.user_id()?;
+        let configuration = self.emby_openapi_configuration(&server_url, Some(&token))?;
+
+        emby_api::apis::user_service_api::get_users_by_id(
+          &configuration,
+          emby_api::apis::user_service_api::GetUsersByIdParams { id: user_id },
+        )
+        .await
+        .map_err(|err| Self::emby_openapi_auth_error("Saved session validation", err))?;
+      }
+    }
 
     Ok(())
   }
@@ -374,6 +567,7 @@ impl JellyfinClient {
   /// Disconnect from server.
   pub fn disconnect(&self) {
     let mut state = self.state.write();
+    state.provider = MediaServerProvider::Jellyfin;
     state.server_url = None;
     state.access_token = None;
     state.user_id = None;
@@ -385,13 +579,10 @@ impl JellyfinClient {
   ///
   /// Validates the token by making a test API call.
   pub async fn restore_session(&self, session: &SavedSession) -> Result<(), JellyfinError> {
-    match session.provider {
-      MediaServerProvider::Jellyfin => {}
-    }
-
     // Set the state first
     {
       let mut state = self.state.write();
+      state.provider = session.provider;
       state.server_url = Some(session.server_url.clone());
       state.access_token = Some(session.access_token.clone());
       state.user_id = Some(session.user_id.clone());
@@ -407,7 +598,9 @@ impl JellyfinClient {
     // server info for connection state.
     let validation_result = async {
       self.validate_saved_token().await?;
-      self.fetch_server_info().await?;
+      if matches!(session.provider, MediaServerProvider::Jellyfin) {
+        self.fetch_server_info().await?;
+      }
       Ok::<(), JellyfinError>(())
     }
     .await;
@@ -434,7 +627,7 @@ impl JellyfinClient {
       state.user_name.clone(),
     ) {
       Some(SavedSession {
-        provider: MediaServerProvider::Jellyfin,
+        provider: state.provider,
         server_url,
         access_token,
         user_id,
@@ -457,7 +650,7 @@ impl JellyfinClient {
   pub fn connection_state(&self) -> ConnectionState {
     let state = self.state.read();
     ConnectionState {
-      provider: MediaServerProvider::Jellyfin,
+      provider: state.provider,
       connected: state.access_token.is_some(),
       server_url: state.server_url.clone(),
       server_name: state.server_name.clone(),
@@ -477,13 +670,36 @@ impl JellyfinClient {
 
   fn normalize_server_url(server_url: &str) -> Result<String, JellyfinError> {
     let server_url = server_url.trim_end_matches('/').to_string();
-    if !server_url.starts_with("http://") && !server_url.starts_with("https://") {
+    let parsed = reqwest::Url::parse(&server_url)
+      .map_err(|err| JellyfinError::InvalidUrl(format!("URL could not be parsed: {err}")))?;
+    if parsed.scheme() != "http" && parsed.scheme() != "https" {
       return Err(JellyfinError::InvalidUrl(
         "URL must start with http:// or https://".to_string(),
       ));
     }
+    if parsed.host_str().is_none() {
+      return Err(JellyfinError::InvalidUrl(
+        "URL must include a hostname".to_string(),
+      ));
+    }
+    if parsed.query().is_some() || parsed.fragment().is_some() {
+      return Err(JellyfinError::InvalidUrl(
+        "URL must not include a query string or fragment".to_string(),
+      ));
+    }
 
     Ok(server_url)
+  }
+
+  fn emby_api_base_candidates(server_url: &str) -> Result<Vec<String>, JellyfinError> {
+    let server_url = Self::normalize_server_url(server_url)?;
+    let mut candidates = vec![server_url.clone()];
+
+    if !server_url.ends_with("/emby") {
+      candidates.push(format!("{server_url}/emby"));
+    }
+
+    Ok(candidates)
   }
 
   /// Get access token or error if not connected.
@@ -2406,6 +2622,195 @@ mod tests {
       .get(1)
       .expect("public info request should be captured");
     assert!(info_request.starts_with("GET /System/Info/Public "));
+  }
+
+  #[tokio::test]
+  async fn emby_authentication_discovers_emby_api_base_under_reverse_proxy_prefix() {
+    let (server_url, requests) = serve_route_responses_with_requests(vec![
+      (
+        "GET /proxy/System/Info/Public ",
+        "404 Not Found",
+        r#"{"Message":"missing"}"#,
+      ),
+      (
+        "GET /proxy/emby/System/Info/Public ",
+        "200 OK",
+        r#"{"ServerName":"Emby Home","Version":"4.9.3.0","Id":"emby-server"}"#,
+      ),
+      (
+        "POST /proxy/emby/Users/AuthenticateByName ",
+        "200 OK",
+        r#"{"User":{"Id":"emby-user-1","Name":"Ada"},"AccessToken":"emby-token","ServerId":"emby-server"}"#,
+      ),
+    ])
+    .await;
+    let client = JellyfinClient::new();
+
+    client
+      .authenticate(&Credentials {
+        provider: MediaServerProvider::Emby,
+        server_url: format!("{server_url}/proxy"),
+        username: "Ada".to_string(),
+        password: "correct horse battery staple".to_string(),
+      })
+      .await
+      .expect("emby password authentication should succeed");
+
+    let session = client
+      .get_saved_session()
+      .expect("authentication should create saved session");
+    assert_eq!(session.provider, MediaServerProvider::Emby);
+    assert_eq!(session.server_url, format!("{server_url}/proxy/emby"));
+    assert_eq!(session.server_name.as_deref(), Some("Emby Home"));
+    assert_eq!(session.access_token, "emby-token");
+
+    let captured = requests.lock();
+    let auth_request = captured
+      .get(2)
+      .expect("auth request should be captured after probing");
+    assert!(auth_request.contains("Client=\"JellyPilot\""));
+    assert!(auth_request.contains(r#""Username":"Ada""#));
+    assert!(auth_request.contains(r#""Pw":"correct horse battery staple""#));
+  }
+
+  #[tokio::test]
+  async fn emby_restore_session_validates_token_and_preserves_saved_device_id() {
+    let (server_url, requests) = serve_route_responses_with_requests(vec![(
+      "GET /emby/Users/emby-user-1 ",
+      "200 OK",
+      r#"{"Id":"emby-user-1","Name":"Ada"}"#,
+    )])
+    .await;
+    let client = JellyfinClient::new();
+
+    client
+      .restore_session(&SavedSession {
+        provider: MediaServerProvider::Emby,
+        server_url: format!("{server_url}/emby"),
+        access_token: "emby-token".to_string(),
+        user_id: "emby-user-1".to_string(),
+        user_name: "Ada".to_string(),
+        server_name: Some("Emby Home".to_string()),
+        device_id: Some("jellypilot-saved-emby-device".to_string()),
+      })
+      .await
+      .expect("emby restore should validate token");
+
+    let session = client
+      .get_saved_session()
+      .expect("restore should keep saved session");
+    assert_eq!(session.provider, MediaServerProvider::Emby);
+    assert_eq!(
+      session.device_id.as_deref(),
+      Some("jellypilot-saved-emby-device")
+    );
+
+    let captured = requests.lock();
+    let validation_request = captured
+      .first()
+      .expect("token validation request should be captured");
+    assert!(validation_request.starts_with("GET /emby/Users/emby-user-1 "));
+    assert!(validation_request.contains("Token=\"emby-token\""));
+    assert!(validation_request.contains("DeviceId=\"jellypilot-saved-emby-device\""));
+  }
+
+  #[tokio::test]
+  async fn emby_authentication_reports_discovery_failure_when_no_api_base_responds() {
+    let (server_url, _requests) = serve_route_responses_with_requests(vec![
+      (
+        "GET /System/Info/Public ",
+        "404 Not Found",
+        r#"{"Message":"missing"}"#,
+      ),
+      (
+        "GET /emby/System/Info/Public ",
+        "404 Not Found",
+        r#"{"Message":"missing"}"#,
+      ),
+    ])
+    .await;
+    let client = JellyfinClient::new();
+
+    let err = client
+      .authenticate(&Credentials {
+        provider: MediaServerProvider::Emby,
+        server_url,
+        username: "Ada".to_string(),
+        password: "wrong".to_string(),
+      })
+      .await
+      .expect_err("missing Emby base should fail before authentication");
+
+    assert!(
+      matches!(err, JellyfinError::HttpError(ref message) if message.contains("Unable to discover Emby API base URL")),
+      "expected Emby discovery failure, got {err:?}"
+    );
+  }
+
+  #[tokio::test]
+  async fn emby_authentication_maps_unauthorized_to_auth_failed() {
+    let (server_url, _requests) = serve_route_responses_with_requests(vec![
+      (
+        "GET /System/Info/Public ",
+        "200 OK",
+        r#"{"ServerName":"Emby Home","Version":"4.9.3.0","Id":"emby-server"}"#,
+      ),
+      (
+        "POST /Users/AuthenticateByName ",
+        "401 Unauthorized",
+        r#"{"Message":"bad credentials"}"#,
+      ),
+    ])
+    .await;
+    let client = JellyfinClient::new();
+
+    let err = client
+      .authenticate(&Credentials {
+        provider: MediaServerProvider::Emby,
+        server_url,
+        username: "Ada".to_string(),
+        password: "wrong".to_string(),
+      })
+      .await
+      .expect_err("bad Emby credentials should fail");
+
+    assert!(
+      matches!(err, JellyfinError::AuthFailed(ref message) if message.contains("Password authentication failed")),
+      "expected auth failure, got {err:?}"
+    );
+  }
+
+  #[tokio::test]
+  async fn emby_authentication_reports_malformed_response_as_http_error() {
+    let (server_url, _requests) = serve_route_responses_with_requests(vec![
+      (
+        "GET /System/Info/Public ",
+        "200 OK",
+        r#"{"ServerName":"Emby Home","Version":"4.9.3.0","Id":"emby-server"}"#,
+      ),
+      (
+        "POST /Users/AuthenticateByName ",
+        "200 OK",
+        r#"{"User":{"Id":"emby-user-1","Name":"Ada"},"ServerId":"emby-server"}"#,
+      ),
+    ])
+    .await;
+    let client = JellyfinClient::new();
+
+    let err = client
+      .authenticate(&Credentials {
+        provider: MediaServerProvider::Emby,
+        server_url,
+        username: "Ada".to_string(),
+        password: "wrong".to_string(),
+      })
+      .await
+      .expect_err("missing token should fail");
+
+    assert!(
+      matches!(err, JellyfinError::HttpError(ref message) if message.contains("Authentication response missing AccessToken")),
+      "expected malformed response error, got {err:?}"
+    );
   }
 
   #[tokio::test]

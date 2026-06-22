@@ -1,22 +1,33 @@
 import { Effect } from 'effect';
 
+import type { MediaServerProvider } from '../bindings';
 import { StorageParseError } from './errors';
 
 export const CREDENTIALS_STORAGE_KEY = 'jellypilot_saved_credentials';
 export const LEGACY_CREDENTIALS_STORAGE_KEY = 'jmsr_saved_credentials';
 
 export interface SavedCredentials {
+  readonly provider: MediaServerProvider;
   readonly serverUrl: string;
   readonly username: string;
   readonly rememberMe: boolean;
 }
 
-function isSavedCredentials(value: unknown): value is SavedCredentials {
+type PersistedSavedCredentials = Omit<SavedCredentials, 'provider'> & {
+  readonly provider?: MediaServerProvider;
+};
+
+function isMediaServerProvider(value: unknown): value is MediaServerProvider {
+  return value === 'jellyfin' || value === 'emby';
+}
+
+function isSavedCredentials(value: unknown): value is PersistedSavedCredentials {
   if (value === null || typeof value !== 'object') {
     return false;
   }
   const obj = value as Record<string, unknown>;
   return (
+    (obj.provider === undefined || isMediaServerProvider(obj.provider)) &&
     typeof obj.serverUrl === 'string' &&
     typeof obj.username === 'string' &&
     typeof obj.rememberMe === 'boolean'
@@ -46,7 +57,7 @@ function parseSavedCredentials(
       );
     }
 
-    return parsed;
+    return { ...parsed, provider: parsed.provider ?? 'jellyfin' };
   });
 }
 
@@ -73,11 +84,15 @@ export function loadSavedCredentials() {
   );
 }
 
-export function saveCredentials(serverUrl: string, username: string): Effect.Effect<void> {
+export function saveCredentials(
+  serverUrl: string,
+  username: string,
+  provider: MediaServerProvider,
+): Effect.Effect<void> {
   return Effect.sync(() => {
     localStorage.setItem(
       CREDENTIALS_STORAGE_KEY,
-      JSON.stringify({ rememberMe: true, serverUrl, username }),
+      JSON.stringify({ provider, rememberMe: true, serverUrl, username }),
     );
     localStorage.removeItem(LEGACY_CREDENTIALS_STORAGE_KEY);
   });

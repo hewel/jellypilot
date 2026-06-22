@@ -57,7 +57,7 @@ test('Quick Connect commands use typed command helpers', () => {
 test('generated bindings expose provider-neutral DTOs instead of Jellyfin OpenAPI models', () => {
   const bindingsSource = readFileSync('src/bindings.ts', 'utf8');
 
-  expect(bindingsSource).toContain('export type MediaServerProvider = "jellyfin";');
+  expect(bindingsSource).toContain('export type MediaServerProvider = "jellyfin" | "emby";');
   expect(bindingsSource).toContain('serverGetState');
   expect(bindingsSource).toContain('serverRestoreSession');
   expect(bindingsSource).not.toContain('AuthenticationResult');
