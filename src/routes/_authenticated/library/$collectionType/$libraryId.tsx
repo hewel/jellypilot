@@ -13,6 +13,7 @@ import {
 import { Button, Card } from '@components/ui';
 import { createInfiniteQuery, useQueryClient } from '@tanstack/solid-query';
 import { createFileRoute } from '@tanstack/solid-router';
+import { createVirtualizer, observeElementRect } from '@tanstack/solid-virtual';
 import { Exit } from 'effect';
 import {
   Check,
@@ -22,16 +23,36 @@ import {
   ArrowDownWideNarrowIcon,
   ArrowUpWideNarrowIcon,
 } from 'lucide-solid';
-import { For, Show, Suspense, createEffect, createSignal, onCleanup } from 'solid-js';
+import {
+  For,
+  Show,
+  Suspense,
+  createEffect,
+  createMemo,
+  createSignal,
+  onCleanup,
+  onMount,
+} from 'solid-js';
 import { Portal } from 'solid-js/web';
 import { commandFailureMessage } from '~effects/commands';
-import { fetchVideoLibraryPage } from '~effects/library';
+import { LIBRARY_BROWSE_PAGE_SIZE, fetchVideoLibraryPage } from '~effects/library';
 import type { LibraryBrowseState, LibraryExit } from '~effects/library';
 import { queryKeys, runExit } from '~effects/query';
 import { createSharedLibraryFilters } from '~utils/createSharedLibraryFilters';
 import type { LibrarySortDirection } from '~utils/createSharedLibraryFilters';
 
 const LIBRARY_BROWSE_SKELETON_CARD_KEYS = Array.from({ length: 10 }, (_, index) => index);
+const LIBRARY_VIRTUAL_TOTAL_THRESHOLD = 100;
+const LIBRARY_BROWSE_GRID_GAP_PX = 12;
+const LIBRARY_BROWSE_GRID_OVERSCAN_ROWS = 3;
+
+function libraryBrowseColumnCount(width: number): number {
+  if (width >= 1280) return 5;
+  if (width >= 1024) return 4;
+  if (width >= 768) return 3;
+  if (width >= 640) return 2;
+  return 1;
+}
 
 interface LibraryBrowseInfiniteData {
   pages: LibraryExit<LibraryBrowseState>[];
@@ -53,6 +74,98 @@ function LibraryBrowseRoute() {
   const filterSort = libraryFilters.sort;
   const [autoLoadSentinel, setAutoLoadSentinel] = createSignal<HTMLDivElement | null>(null);
   const [autoLoadSentinelVisible, setAutoLoadSentinelVisible] = createSignal(false);
+  const [virtualGrid, setVirtualGrid] = createSignal<HTMLDivElement | null>(null);
+  const [virtualGridWidth, setVirtualGridWidth] = createSignal(1280);
+  const [appScrollElement, setAppScrollElement] = createSignal<HTMLElement | null>(null);
+  const [virtualScrollMargin, setVirtualScrollMargin] = createSignal(0);
+  const [virtualPagesByStartIndex, setVirtualPagesByStartIndex] = createSignal(
+    new Map<number, LibraryExit<LibraryBrowseState>>(),
+  );
+  const [virtualPageStartsFetching, setVirtualPageStartsFetching] = createSignal(new Set<number>());
+
+  const fallbackVirtualGridWidth = () => {
+    const gridWidth = virtualGrid()?.clientWidth ?? 0;
+    if (gridWidth > 0) {
+      return gridWidth;
+    }
+
+    const viewportWidth = appScrollElement()?.clientWidth ?? 0;
+    if (viewportWidth > 0) {
+      return viewportWidth;
+    }
+
+    if (typeof window !== 'undefined' && window.innerWidth > 0) {
+      return window.innerWidth;
+    }
+
+    return 1280;
+  };
+  const fallbackVirtualGridHeight = () => {
+    const viewportHeight = appScrollElement()?.clientHeight ?? 0;
+    if (viewportHeight > 0) {
+      return viewportHeight;
+    }
+
+    if (typeof window !== 'undefined' && window.innerHeight > 0) {
+      return window.innerHeight;
+    }
+
+    return 720;
+  };
+  const measureVirtualGrid = () => {
+    setVirtualGridWidth(fallbackVirtualGridWidth());
+
+    const grid = virtualGrid();
+    const scrollElement = appScrollElement();
+    if (!grid || !scrollElement) {
+      setVirtualScrollMargin(0);
+      return;
+    }
+
+    setVirtualScrollMargin(
+      grid.getBoundingClientRect().top -
+        scrollElement.getBoundingClientRect().top +
+        scrollElement.scrollTop,
+    );
+  };
+
+  onMount(() => {
+    setAppScrollElement(
+      document.querySelector<HTMLElement>('[data-scope="scroll-area"][data-part="viewport"]'),
+    );
+    measureVirtualGrid();
+
+    if (typeof window === 'undefined') {
+      return;
+    }
+
+    window.addEventListener('resize', measureVirtualGrid);
+    onCleanup(() => window.removeEventListener('resize', measureVirtualGrid));
+  });
+
+  createEffect(() => {
+    virtualGrid();
+    appScrollElement();
+    measureVirtualGrid();
+  });
+
+  createEffect(() => {
+    const grid = virtualGrid();
+    const scrollElement = appScrollElement();
+    if (typeof ResizeObserver === 'undefined') {
+      measureVirtualGrid();
+      return;
+    }
+
+    const observer = new ResizeObserver(measureVirtualGrid);
+    if (grid) {
+      observer.observe(grid);
+    }
+    if (scrollElement) {
+      observer.observe(scrollElement);
+    }
+    onCleanup(() => observer.disconnect());
+  });
 
   const collectionType = () => collectionTypeFromParam(params().collectionType);
   const browseQueryKey = () =>
@@ -89,10 +202,32 @@ function LibraryBrowseRoute() {
       }),
   }));
 
+  let activeBrowseQueryKey = '';
+  createEffect(() => {
+    const nextBrowseQueryKey = browseQueryKey().join('\u0000');
+    if (activeBrowseQueryKey && activeBrowseQueryKey !== nextBrowseQueryKey) {
+      setVirtualPagesByStartIndex(new Map<number, LibraryExit<LibraryBrowseState>>());
+      setVirtualPageStartsFetching(new Set<number>());
+    }
+    activeBrowseQueryKey = nextBrowseQueryKey;
+  });
+
   const successfulPages = () =>
     browseQuery.data?.pages.filter(
       (page): page is LibraryExit<LibraryBrowseState> & { _tag: 'Success' } => Exit.isSuccess(page),
     ) ?? [];
+  const successfulPageMap = createMemo(() => {
+    const pages = new Map<number, LibraryBrowseState>();
+    for (const page of successfulPages()) {
+      pages.set(page.value.page.startIndex, page.value);
+    }
+    for (const page of virtualPagesByStartIndex().values()) {
+      if (Exit.isSuccess(page)) {
+        pages.set(page.value.page.startIndex, page.value);
+      }
+    }
+    return pages;
+  });
   const firstPage = () => browseQuery.data?.pages[0] ?? null;
   const laterPageFailure = () => {
     const pages = browseQuery.data?.pages ?? [];
@@ -102,6 +237,20 @@ function LibraryBrowseRoute() {
     }
     const page = pages[index];
     return page && !Exit.isSuccess(page) ? { index, page } : null;
+  };
+  const virtualPageFailure = () => {
+    for (const page of virtualPagesByStartIndex().values()) {
+      if (!Exit.isSuccess(page)) {
+        return page;
+      }
+    }
+    return null;
+  };
+  const needsReverse = () => {
+    const isDefaultAsc = filterSort() === 'title';
+    return isDefaultAsc
+      ? libraryFilters.sortDirection() === 'desc'
+      : libraryFilters.sortDirection() === 'asc';
   };
   const readyState = () => {
     const pages = successfulPages();
@@ -113,16 +262,162 @@ function LibraryBrowseRoute() {
       return null;
     }
     const items = pages.flatMap((page) => page.value.items);
-    const isDefaultAsc = filterSort() === 'title';
-    const needsReverse = isDefaultAsc
-      ? libraryFilters.sortDirection() === 'desc'
-      : libraryFilters.sortDirection() === 'asc';
 
     return {
-      items: needsReverse ? [...items].toReversed() : items,
+      items: needsReverse() ? [...items].toReversed() : items,
       page: last.page,
     };
   };
+  const totalRecordCount = () => readyState()?.page.totalRecordCount ?? 0;
+  const usesVirtualGrid = () => totalRecordCount() > LIBRARY_VIRTUAL_TOTAL_THRESHOLD;
+  const columnCount = createMemo(() => libraryBrowseColumnCount(virtualGridWidth()));
+  const virtualRowColumnIndexes = createMemo(() =>
+    Array.from({ length: columnCount() }, (_, index) => index),
+  );
+  const estimateVirtualRowHeight = () => {
+    const width = virtualGridWidth();
+    const columns = columnCount();
+    const cardWidth = Math.max(160, (width - LIBRARY_BROWSE_GRID_GAP_PX * (columns - 1)) / columns);
+    return Math.ceil(cardWidth * 1.5 + 92);
+  };
+  const serverIndexForDisplayIndex = (displayIndex: number) =>
+    needsReverse() ? totalRecordCount() - 1 - displayIndex : displayIndex;
+  const pageStartForServerIndex = (serverIndex: number) =>
+    Math.floor(serverIndex / LIBRARY_BROWSE_PAGE_SIZE) * LIBRARY_BROWSE_PAGE_SIZE;
+  const itemForDisplayIndex = (displayIndex: number) => {
+    const serverIndex = serverIndexForDisplayIndex(displayIndex);
+    const pageStart = pageStartForServerIndex(serverIndex);
+    const page = successfulPageMap().get(pageStart);
+    return page?.items[serverIndex - page.page.startIndex] ?? null;
+  };
+  const loadedDisplayItemCount = () =>
+    Math.min(
+      totalRecordCount(),
+      [...successfulPageMap().values()].reduce((count, page) => count + page.items.length, 0),
+    );
+  const rowVirtualizer = createVirtualizer<HTMLElement, HTMLDivElement>({
+    get count() {
+      return usesVirtualGrid() ? Math.ceil(totalRecordCount() / columnCount()) : 0;
+    },
+    getScrollElement: () => appScrollElement(),
+    estimateSize: estimateVirtualRowHeight,
+    overscan: LIBRARY_BROWSE_GRID_OVERSCAN_ROWS,
+    observeElementRect: (instance, callback) =>
+      observeElementRect(instance, (rect) =>
+        callback({
+          width: rect.width || fallbackVirtualGridWidth(),
+          height: rect.height || fallbackVirtualGridHeight(),
+        }),
+      ),
+    get initialRect() {
+      return { width: fallbackVirtualGridWidth(), height: fallbackVirtualGridHeight() };
+    },
+    get scrollMargin() {
+      return virtualScrollMargin();
+    },
+  });
+  const browseQueryKeyMatches = (expected: readonly unknown[]) => {
+    const current = browseQueryKey();
+    return (
+      expected.length === current.length &&
+      expected.every((value, index) => value === current[index])
+    );
+  };
+  const virtualPageStartsForCurrentWindow = () => {
+    const starts = new Set<number>();
+    const total = totalRecordCount();
+    const columns = columnCount();
+
+    for (const virtualRow of rowVirtualizer.getVirtualItems()) {
+      for (let columnIndex = 0; columnIndex < columns; columnIndex += 1) {
+        const displayIndex = virtualRow.index * columns + columnIndex;
+        if (displayIndex >= total) {
+          continue;
+        }
+
+        starts.add(pageStartForServerIndex(serverIndexForDisplayIndex(displayIndex)));
+      }
+    }
+
+    return starts;
+  };
+  const fetchVirtualPage = (startIndex: number) => {
+    const total = totalRecordCount();
+    if (
+      startIndex < 0 ||
+      startIndex >= total ||
+      successfulPageMap().has(startIndex) ||
+      virtualPagesByStartIndex().has(startIndex) ||
+      virtualPageStartsFetching().has(startIndex)
+    ) {
+      return;
+    }
+
+    const collectionTypeValue = collectionType();
+    const libraryId = params().libraryId;
+    const sort = filterSort();
+    const playedFilter = libraryFilters.playedFilter();
+    const favoritesOnly = libraryFilters.favoritesOnly();
+    const sortDirection = libraryFilters.sortDirection();
+    const expectedBrowseQueryKey = browseQueryKey();
+
+    setVirtualPageStartsFetching((current) => new Set([...current, startIndex]));
+
+    void queryClient
+      .fetchQuery({
+        queryKey: queryKeys.libraryBrowsePage(
+          collectionTypeValue,
+          libraryId,
+          sort,
+          playedFilter,
+          favoritesOnly,
+          sortDirection,
+          startIndex,
+        ),
+        queryFn: () =>
+          runExit(
+            fetchVideoLibraryPage(
+              collectionTypeValue,
+              libraryId,
+              startIndex,
+              sort,
+              playedFilter,
+              favoritesOnly,
+            ),
+          ),
+      })
+      .then((page) => {
+        if (!browseQueryKeyMatches(expectedBrowseQueryKey)) {
+          return;
+        }
+
+        setVirtualPagesByStartIndex((current) => new Map([...current, [startIndex, page]]));
+      })
+      .finally(() => {
+        if (!browseQueryKeyMatches(expectedBrowseQueryKey)) {
+          return;
+        }
+
+        setVirtualPageStartsFetching((current) => {
+          const next = new Set(current);
+          next.delete(startIndex);
+          return next;
+        });
+      });
+  };
+  const fetchVisibleVirtualPages = () => {
+    for (const startIndex of virtualPageStartsForCurrentWindow()) {
+      fetchVirtualPage(startIndex);
+    }
+  };
+
+  createEffect(() => {
+    if (!usesVirtualGrid()) {
+      return;
+    }
+
+    fetchVisibleVirtualPages();
+  });
   const statusTitle = () => {
     const current = firstPage();
     if (!current) {
@@ -146,13 +441,39 @@ function LibraryBrowseRoute() {
     }
     return 'JellyPilot is loading a server-paged video library result set.';
   };
+  const loadMoreRetryBusy = () =>
+    usesVirtualGrid() ? virtualPageStartsFetching().size > 0 : browseQuery.isFetchingNextPage;
   const loadMoreErrorDescription = () => {
+    const virtualFailure = usesVirtualGrid() ? virtualPageFailure() : null;
+    if (virtualFailure) {
+      return commandFailureMessage(virtualFailure.cause, 'Could not load Library page');
+    }
+
     const failure = laterPageFailure();
     return failure
       ? commandFailureMessage(failure.page.cause, 'Could not load Library page')
       : null;
   };
   const retryFailedPage = () => {
+    if (usesVirtualGrid()) {
+      const failedStarts = [...virtualPagesByStartIndex().entries()]
+        .filter(([, page]) => !Exit.isSuccess(page))
+        .map(([startIndex]) => startIndex);
+      if (failedStarts.length === 0 || virtualPageStartsFetching().size > 0) {
+        return;
+      }
+
+      setVirtualPagesByStartIndex((current) => {
+        const next = new Map(current);
+        for (const startIndex of failedStarts) {
+          next.delete(startIndex);
+        }
+        return next;
+      });
+      fetchVisibleVirtualPages();
+      return;
+    }
+
     const failure = laterPageFailure();
     if (!failure || browseQuery.isFetching) {
       return;
@@ -193,7 +514,12 @@ function LibraryBrowseRoute() {
     if (!autoLoadSentinelVisible()) {
       return;
     }
-    if (!browseQuery.hasNextPage || browseQuery.isFetching || laterPageFailure()) {
+    if (
+      usesVirtualGrid() ||
+      !browseQuery.hasNextPage ||
+      browseQuery.isFetching ||
+      laterPageFailure()
+    ) {
       return;
     }
     void browseQuery.fetchNextPage({ cancelRefetch: false });
@@ -226,28 +552,91 @@ function LibraryBrowseRoute() {
         >
           <section class="space-y-4" aria-labelledby="library-browse-title">
             <div class="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-              <h2
-                id="library-browse-title"
-                class="text-on-surface text-[22px] leading-[28px] font-bold"
-              >
+              <h2 id="library-browse-title" class="text-on-surface text-[22px] leading-7 font-bold">
                 {libraryTitle(collectionType())}
               </h2>
-              <p class="text-on-surface-variant/80 text-[12px] leading-[16px] tabular-nums">
-                {readyState()?.items.length ?? 0} of {readyState()?.page.totalRecordCount ?? 0}
+              <p class="text-on-surface-variant/80 text-[12px] leading-4 tabular-nums">
+                <Show
+                  when={usesVirtualGrid()}
+                  fallback={
+                    <>
+                      {readyState()?.items.length ?? 0} of {totalRecordCount()}
+                    </>
+                  }
+                >
+                  {loadedDisplayItemCount()} of {totalRecordCount()}
+                </Show>
               </p>
             </div>
-            <div class="grid animate-[fadeIn_0.3s_cubic-bezier(0.16,1,0.3,1)_forwards] gap-3 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5">
-              <For each={readyState()?.items ?? []}>
-                {(item) => (
-                  <MediaInfoHoverCard id={item.id} itemType={item.itemType}>
-                    <VideoCard kind="library" item={item} collectionType={collectionType()} />
-                  </MediaInfoHoverCard>
-                )}
-              </For>
-              <Show when={browseQuery.isFetchingNextPage}>
-                <LibraryBrowseSkeletonCards />
-              </Show>
-            </div>
+            <Show
+              when={usesVirtualGrid()}
+              fallback={
+                <div class="grid animate-[fadeIn_0.3s_cubic-bezier(0.16,1,0.3,1)_forwards] gap-3 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5">
+                  <For each={readyState()?.items ?? []}>
+                    {(item) => (
+                      <MediaInfoHoverCard id={item.id} itemType={item.itemType}>
+                        <VideoCard kind="library" item={item} collectionType={collectionType()} />
+                      </MediaInfoHoverCard>
+                    )}
+                  </For>
+                  <Show when={browseQuery.isFetchingNextPage}>
+                    <LibraryBrowseSkeletonCards />
+                  </Show>
+                </div>
+              }
+            >
+              <div
+                ref={setVirtualGrid}
+                data-testid="library-virtual-grid"
+                class="animate-[fadeIn_0.3s_cubic-bezier(0.16,1,0.3,1)_forwards]"
+              >
+                <div
+                  class="relative w-full"
+                  style={{ height: `${rowVirtualizer.getTotalSize()}px` }}
+                >
+                  <For each={rowVirtualizer.getVirtualItems()}>
+                    {(virtualRow) => (
+                      <div
+                        class="absolute top-0 left-0 w-full"
+                        style={{
+                          height: `${virtualRow.size}px`,
+                          transform: `translateY(${virtualRow.start - virtualScrollMargin()}px)`,
+                        }}
+                      >
+                        <div class="grid gap-3 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5">
+                          <For each={virtualRowColumnIndexes()}>
+                            {(columnIndex) => {
+                              const displayIndex = () =>
+                                virtualRow.index * columnCount() + columnIndex;
+                              const item = () => itemForDisplayIndex(displayIndex());
+
+                              return (
+                                <Show when={displayIndex() < totalRecordCount()}>
+                                  <Show when={item()} fallback={<LibraryBrowseSkeletonCard />}>
+                                    {(loadedItem) => (
+                                      <MediaInfoHoverCard
+                                        id={loadedItem().id}
+                                        itemType={loadedItem().itemType}
+                                      >
+                                        <VideoCard
+                                          kind="library"
+                                          item={loadedItem()}
+                                          collectionType={collectionType()}
+                                        />
+                                      </MediaInfoHoverCard>
+                                    )}
+                                  </Show>
+                                </Show>
+                              );
+                            }}
+                          </For>
+                        </div>
+                      </div>
+                    )}
+                  </For>
+                </div>
+              </div>
+            </Show>
             <Show when={loadMoreErrorDescription()}>
               {(message) => (
                 <div class="flex flex-col items-center gap-3 pt-2">
@@ -256,12 +645,12 @@ function LibraryBrowseRoute() {
                     type="button"
                     variant="secondary"
                     class="rounded-full"
-                    disabled={browseQuery.isFetchingNextPage}
+                    disabled={loadMoreRetryBusy()}
                     onClick={retryFailedPage}
                     leadingIcon={
                       <RefreshCw
                         class="h-4 w-4"
-                        classList={{ 'animate-spin': browseQuery.isFetchingNextPage }}
+                        classList={{ 'animate-spin': loadMoreRetryBusy() }}
                       />
                     }
                   >
@@ -442,21 +831,21 @@ function LibraryBrowseNavbarControls(props: LibraryBrowseNavbarControlsProps) {
   );
 }
 
-function LibraryBrowseSkeletonCards() {
+function LibraryBrowseSkeletonCard() {
   return (
-    <For each={LIBRARY_BROWSE_SKELETON_CARD_KEYS}>
-      {() => (
-        <Card variant="filled" surfaceTint={false} class="overflow-hidden !p-0">
-          <div class="border-outline-variant bg-surface-container-lowest/60 aspect-[2/3] animate-pulse border-b" />
-          <div class="space-y-2 p-4">
-            <div class="bg-surface-container-high/80 h-4 w-4/5 animate-pulse rounded" />
-            <div class="bg-surface-container-high/60 h-3 w-3/5 animate-pulse rounded" />
-            <div class="bg-surface-container-high/50 h-3 w-1/3 animate-pulse rounded" />
-          </div>
-        </Card>
-      )}
-    </For>
+    <Card variant="filled" surfaceTint={false} class="overflow-hidden !p-0">
+      <div class="border-outline-variant bg-surface-container-lowest/60 aspect-[2/3] animate-pulse border-b" />
+      <div class="space-y-2 p-4">
+        <div class="bg-surface-container-high/80 h-4 w-4/5 animate-pulse rounded" />
+        <div class="bg-surface-container-high/60 h-3 w-3/5 animate-pulse rounded" />
+        <div class="bg-surface-container-high/50 h-3 w-1/3 animate-pulse rounded" />
+      </div>
+    </Card>
   );
+}
+
+function LibraryBrowseSkeletonCards() {
+  return <For each={LIBRARY_BROWSE_SKELETON_CARD_KEYS}>{() => <LibraryBrowseSkeletonCard />}</For>;
 }
 
 function LibraryBrowseSkeleton() {

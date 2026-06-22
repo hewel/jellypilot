@@ -385,6 +385,39 @@ function videoLibraryPage(startIndex: number): VideoLibraryPage {
   };
 }
 
+function largeVideoLibraryPage(startIndex: number): VideoLibraryPage {
+  const endIndex = Math.min(startIndex + 24, 125);
+
+  return {
+    collectionType: 'movies',
+    hasMore: startIndex + 24 < 125,
+    items: Array.from({ length: endIndex - startIndex }, (_, offset) => {
+      const index = startIndex + offset;
+
+      return {
+        id: `virtual-movie-${index + 1}`,
+        name: `Virtual Movie ${index + 1}`,
+        itemType: 'Movie',
+        productionYear: null,
+        runtimeSeconds: null,
+        played: false,
+        favorite: false,
+        artworkUrl: null,
+        seasonNumber: null,
+        episodeNumber: null,
+        seriesId: null,
+        seriesName: null,
+        resumePositionSeconds: null,
+        playedPercentage: null,
+      };
+    }),
+    libraryId: 'movies',
+    limit: 24,
+    startIndex,
+    totalRecordCount: 125,
+  };
+}
+
 function mockShellCommands(state = connectedState) {
   rstest.spyOn(commands, 'jellyfinIsConnected').mockResolvedValue(true);
   rstest.spyOn(commands, 'jellyfinGetState').mockResolvedValue(state);
@@ -439,6 +472,17 @@ function mockShellCommands(state = connectedState) {
     status: 'ok',
   });
   rstest.spyOn(events.nowPlayingChanged, 'listen').mockResolvedValue(() => {});
+}
+
+function appScrollViewport(): HTMLElement {
+  const viewport = document.querySelector<HTMLElement>(
+    '[data-scope="scroll-area"][data-part="viewport"]',
+  );
+  if (viewport) {
+    return viewport;
+  }
+
+  throw new Error('App scroll viewport was not rendered');
 }
 
 function renderShell(path = '/library') {
@@ -665,6 +709,77 @@ test('library browse retries failed auto-loaded page', async () => {
 
   expect(await screen.findByRole('link', { name: /Paged Movie 25/ })).toBeVisible();
   await waitFor(() => expect(screen.queryByText('Next page failed')).toBeNull());
+
+  cleanup();
+});
+
+test('library browse virtualizes large libraries and fetches visible placeholder pages', async () => {
+  mockShellCommands();
+  const browseCommand = rstest.spyOn(commands, 'libraryBrowseVideo').mockImplementation((request) =>
+    Promise.resolve({
+      data: largeVideoLibraryPage(request.startIndex),
+      status: 'ok',
+    }),
+  );
+  const cleanup = renderShell('/library/movies/movies');
+
+  expect(await screen.findByRole('link', { name: 'Open Virtual Movie 1' })).toBeVisible();
+  expect(screen.getByTestId('library-virtual-grid')).toBeVisible();
+  expect(screen.queryByRole('link', { name: 'Open Virtual Movie 125' })).toBeNull();
+  expect(screen.getAllByRole('link', { name: /Open Virtual Movie/ }).length).toBeLessThan(125);
+
+  const viewport = appScrollViewport();
+  viewport.scrollTop = 99_999;
+  fireEvent.scroll(viewport);
+
+  await waitFor(() =>
+    expect(browseCommand).toHaveBeenCalledWith({
+      collectionType: 'movies',
+      favoritesOnly: false,
+      libraryId: 'movies',
+      limit: 24,
+      playedFilter: 'all',
+      sort: 'title',
+      startIndex: 120,
+    }),
+  );
+  expect(await screen.findByRole('link', { name: 'Open Virtual Movie 125' })).toBeVisible();
+
+  cleanup();
+});
+
+test('library browse retries failed virtual placeholder page', async () => {
+  mockShellCommands();
+  let bottomPageShouldFail = true;
+  rstest.spyOn(commands, 'libraryBrowseVideo').mockImplementation((request) => {
+    if (request.startIndex === 120 && bottomPageShouldFail) {
+      return Promise.resolve({
+        error: { code: 'internal', message: 'Virtual page failed' },
+        status: 'error',
+      });
+    }
+
+    return Promise.resolve({
+      data: largeVideoLibraryPage(request.startIndex),
+      status: 'ok',
+    });
+  });
+  const cleanup = renderShell('/library/movies/movies');
+
+  expect(await screen.findByRole('link', { name: 'Open Virtual Movie 1' })).toBeVisible();
+  const viewport = appScrollViewport();
+  viewport.scrollTop = 99_999;
+  fireEvent.scroll(viewport);
+
+  expect(await screen.findByText('Virtual page failed')).toBeVisible();
+  const retryButton = screen.getByRole('button', { name: 'Retry loading more' });
+  await waitFor(() => expect(retryButton).not.toBeDisabled());
+
+  bottomPageShouldFail = false;
+  fireEvent.click(retryButton);
+
+  expect(await screen.findByRole('link', { name: 'Open Virtual Movie 125' })).toBeVisible();
+  await waitFor(() => expect(screen.queryByText('Virtual page failed')).toBeNull());
 
   cleanup();
 });
