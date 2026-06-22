@@ -11,7 +11,7 @@
       "source": "hewel/skills",
       "sourceType": "github",
       "skillPath": "effect-ts-extensions/SKILL.md",
-      "computedHash": "e51246b218df46019b1b06279df226e402ef648a15da3e01fff1c4fc2c36c89b"
+      "computedHash": "21956a630b062c054bb29912c79bf46dddd36581aef17fb559553e7f490a0d09"
     },
     "rust-best-practices": {
       "source": "apollographql/skills",
