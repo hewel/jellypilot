@@ -16,6 +16,15 @@ const DEFAULT_DEVICE_NAME: &str = "JellyPilot";
 const DEVICE_ID_PREFIX: &str = "jellypilot-";
 const CLIENT_NAME: &str = "JellyPilot";
 const CLIENT_VERSION: &str = env!("CARGO_PKG_VERSION");
+const SUPPORTED_REMOTE_COMMANDS: &[&str] = &[
+  "Play",
+  "Playstate",
+  "SetVolume",
+  "ToggleMute",
+  "ToggleFullscreen",
+  "SetAudioStreamIndex",
+  "SetSubtitleStreamIndex",
+];
 
 /// Jellyfin HTTP API client.
 pub struct JellyfinClient {
@@ -387,8 +396,7 @@ impl JellyfinClient {
       let mut state = self.state.write();
       state.provider = MediaServerProvider::Emby;
       state.remote_control_available = false;
-      state.remote_control_warning =
-        Some("Remote control is not available for Emby connections yet.".to_string());
+      state.remote_control_warning = None;
       state.server_url = Some(server_url);
       state.access_token = Some(auth.access_token.clone());
       state.user_id = Some(auth.user.id.clone());
@@ -595,12 +603,7 @@ impl JellyfinClient {
       let mut state = self.state.write();
       state.provider = session.provider;
       state.remote_control_available = false;
-      state.remote_control_warning = match session.provider {
-        MediaServerProvider::Jellyfin => None,
-        MediaServerProvider::Emby => {
-          Some("Remote control is not available for Emby connections yet.".to_string())
-        }
-      };
+      state.remote_control_warning = None;
       state.server_url = Some(session.server_url.clone());
       state.access_token = Some(session.access_token.clone());
       state.user_id = Some(session.user_id.clone());
@@ -733,8 +736,8 @@ impl JellyfinClient {
       MediaServerProvider::Emby => ProviderCapabilities {
         quick_connect: false,
         intro_skipper: false,
-        remote_control: false,
-        remote_control_available: false,
+        remote_control: state.remote_control_warning.is_none(),
+        remote_control_available: state.remote_control_available,
         remote_control_warning: state.remote_control_warning.clone(),
       },
     }
@@ -1091,13 +1094,7 @@ impl JellyfinClient {
   pub async fn report_capabilities(&self) -> Result<(), JellyfinError> {
     let capabilities = serde_json::json!({
       "PlayableMediaTypes": ["Video", "Audio"],
-      "SupportedCommands": [
-        "MoveUp", "MoveDown", "MoveLeft", "MoveRight", "Select",
-        "Back", "ToggleFullscreen", "GoHome", "GoToSettings",
-        "VolumeUp", "VolumeDown", "ToggleMute", "Mute", "Unmute", "SetVolume",
-        "SetAudioStreamIndex", "SetSubtitleStreamIndex",
-        "DisplayContent", "Play", "Playstate", "PlayNext", "PlayMediaSource"
-      ],
+      "SupportedCommands": SUPPORTED_REMOTE_COMMANDS,
       "SupportsMediaControl": true,
       "SupportsPersistentIdentifier": true,
     });
@@ -1236,6 +1233,13 @@ impl JellyfinClient {
   /// Validate that our session appears in the Jellyfin session list.
   /// This checks if we're visible as a cast target.
   pub async fn validate_session(&self) -> Result<(), JellyfinError> {
+    match self.provider() {
+      MediaServerProvider::Jellyfin => self.validate_jellyfin_session().await,
+      MediaServerProvider::Emby => self.validate_emby_session().await,
+    }
+  }
+
+  async fn validate_jellyfin_session(&self) -> Result<(), JellyfinError> {
     let device_id = self.device_id();
     let server_url = self.server_url()?;
     let token = self.access_token()?;
@@ -1317,6 +1321,84 @@ impl JellyfinClient {
         sess_device_name,
         sess_client,
         supports_media
+      );
+    }
+    {
+      let mut state = self.state.write();
+      state.remote_control_available = false;
+      state.remote_control_warning = Some(
+        "Remote control is unavailable because the session is not visible to the server."
+          .to_string(),
+      );
+    }
+    Err(JellyfinError::SessionNotFound)
+  }
+
+  async fn validate_emby_session(&self) -> Result<(), JellyfinError> {
+    let device_id = self.device_id();
+    let server_url = self.server_url()?;
+    let token = self.access_token()?;
+    let configuration = self.emby_openapi_configuration(&server_url, Some(&token))?;
+
+    let sessions = emby_api::apis::sessions_service_api::get_sessions(
+      &configuration,
+      emby_api::apis::sessions_service_api::GetSessionsParams {
+        controllable_by_user_id: None,
+        device_id: None,
+        id: None,
+      },
+    )
+    .await
+    .map_err(|err| Self::emby_openapi_error("Emby session validation", err))?;
+
+    for session in &sessions {
+      if let Some(session_device_id) = session.device_id.as_ref() {
+        if session_device_id == &device_id {
+          let supports_remote_control = session.supports_remote_control.unwrap_or(false);
+
+          log::info!(
+            "Found our Emby session: DeviceId={}, SupportsRemoteControl={}",
+            device_id,
+            supports_remote_control
+          );
+
+          log::debug!("Emby session details: {:?}", session);
+
+          if supports_remote_control {
+            let mut state = self.state.write();
+            state.remote_control_available = true;
+            state.remote_control_warning = None;
+            return Ok(());
+          } else {
+            let mut state = self.state.write();
+            state.remote_control_available = false;
+            state.remote_control_warning = Some(
+              "Remote control is unavailable because the server did not grant remote control."
+                .to_string(),
+            );
+            return Err(JellyfinError::SessionNotFound);
+          }
+        }
+      }
+    }
+
+    log::warn!(
+      "Our Emby session not found in session list. Our DeviceId={}, Total sessions={}",
+      device_id,
+      sessions.len()
+    );
+    for (i, session) in sessions.iter().enumerate() {
+      let sess_device_id = session.device_id.as_deref().unwrap_or("?");
+      let sess_device_name = session.device_name.as_deref().unwrap_or("?");
+      let sess_client = session.client.as_deref().unwrap_or("?");
+      let supports_remote = session.supports_remote_control.unwrap_or(false);
+      log::info!(
+        "Emby Session[{}]: DeviceId={}, DeviceName={}, Client={}, SupportsRemoteControl={}",
+        i,
+        sess_device_id,
+        sess_device_name,
+        sess_client,
+        supports_remote
       );
     }
     {
@@ -3731,9 +3813,9 @@ mod tests {
     let state = client.connection_state();
     assert!(!state.capabilities.quick_connect);
     assert!(!state.capabilities.intro_skipper);
-    assert!(!state.capabilities.remote_control);
+    assert!(state.capabilities.remote_control);
     assert!(!state.capabilities.remote_control_available);
-    assert!(state.capabilities.remote_control_warning.is_some());
+    assert!(state.capabilities.remote_control_warning.is_none());
 
     let captured = requests.lock();
     let auth_request = captured
@@ -4102,6 +4184,112 @@ mod tests {
     assert!(request.contains("Client=\"JellyPilot\""));
     assert!(request.contains("Token=\"token-1\""));
     assert!(request.contains(&format!("DeviceId=\"{}\"", device_id)));
+  }
+
+  #[tokio::test]
+  async fn emby_validate_session_accepts_current_device_with_remote_control() {
+    let client = JellyfinClient::new();
+    let device_id = client.device_id();
+    let body = format!(
+      r#"[{{"DeviceId":"{}","DeviceName":"JellyPilot","Client":"JellyPilot","SupportsRemoteControl":true}}]"#,
+      device_id
+    );
+    let (server_url, requests) =
+      serve_owned_responses_with_requests(vec![("200 OK".to_string(), body)]).await;
+    connect_test_client_as_emby(&client, server_url);
+
+    client
+      .validate_session()
+      .await
+      .expect("current Emby session should be accepted");
+    let state = client.connection_state();
+    assert!(state.capabilities.remote_control);
+    assert!(state.capabilities.remote_control_available);
+    assert!(state.capabilities.remote_control_warning.is_none());
+
+    let captured = requests.lock();
+    let request = captured
+      .first()
+      .expect("Emby validation request should be captured");
+    assert!(request.starts_with("GET /Sessions "));
+    assert!(request.contains("Client=\"JellyPilot\""));
+    assert!(request.contains("Token=\"emby-token\""));
+    assert!(request.contains(&format!("DeviceId=\"{}\"", device_id)));
+  }
+
+  #[test]
+  fn emby_websocket_url_preserves_api_base_and_stable_device_id() {
+    let client = JellyfinClient::new();
+    let device_id = client.device_id();
+    {
+      let mut state = client.state.write();
+      state.provider = MediaServerProvider::Emby;
+      state.server_url = Some("https://media.example.test/emby".to_string());
+      state.access_token = Some("emby-token".to_string());
+    }
+
+    let url = client
+      .websocket_url()
+      .expect("Emby websocket URL should be built from connection state");
+
+    assert_eq!(
+      url,
+      format!("wss://media.example.test/emby/socket?api_key=emby-token&deviceId={device_id}")
+    );
+  }
+
+  #[tokio::test]
+  async fn emby_validate_session_failure_keeps_connection_alive_with_warning() {
+    let client = JellyfinClient::new();
+    let device_id = client.device_id();
+    let body = format!(
+      r#"[{{"DeviceId":"{}","DeviceName":"JellyPilot","Client":"JellyPilot","SupportsRemoteControl":false}}]"#,
+      device_id
+    );
+    let server_url = serve_owned_responses_with_requests(vec![("200 OK".to_string(), body)])
+      .await
+      .0;
+    connect_test_client_as_emby(&client, server_url);
+
+    let err = client
+      .validate_session()
+      .await
+      .expect_err("Emby session without remote control should be rejected");
+
+    assert!(
+      matches!(err, JellyfinError::SessionNotFound),
+      "expected missing session, got {err:?}"
+    );
+    assert!(client.is_connected());
+    let state = client.connection_state();
+    assert!(state.connected);
+    assert!(!state.capabilities.remote_control);
+    assert!(!state.capabilities.remote_control_available);
+    assert!(state.capabilities.remote_control_warning.is_some());
+  }
+
+  #[tokio::test]
+  async fn emby_capability_registration_advertises_only_supported_commands() {
+    let client = JellyfinClient::new();
+    let (server_url, requests) =
+      serve_owned_responses_with_requests(vec![("204 No Content".to_string(), String::new())])
+        .await;
+    connect_test_client_as_emby(&client, server_url);
+
+    client
+      .report_capabilities()
+      .await
+      .expect("Emby capability registration should post supported commands");
+
+    let captured = requests.lock();
+    let request = captured
+      .first()
+      .expect("capability registration request should be captured");
+    assert!(request.starts_with("POST /Sessions/Capabilities/Full "));
+    assert!(request.contains(r#""SupportedCommands":["Play","Playstate","SetVolume","ToggleMute","ToggleFullscreen","SetAudioStreamIndex","SetSubtitleStreamIndex"]"#));
+    assert!(!request.contains("MoveUp"));
+    assert!(!request.contains("PlayNext"));
+    assert!(!request.contains("PlayMediaSource"));
   }
 
   #[tokio::test]

@@ -480,6 +480,62 @@ mod tests {
   }
 
   #[tokio::test]
+  async fn emby_remote_control_commands_decode_to_provider_neutral_commands() {
+    let (event_tx, mut event_rx) = mpsc::channel(8);
+
+    for message in [
+      r#"{"MessageType":"Play","Data":{"ItemIds":["movie-1"],"PlayCommand":"PlayNow","StartPositionTicks":50000000,"AudioStreamIndex":1,"SubtitleStreamIndex":2}}"#,
+      r#"{"MessageType":"Playstate","Data":{"Command":"Pause"}}"#,
+      r#"{"MessageType":"Playstate","Data":{"Command":"Seek","SeekPositionTicks":1200000000}}"#,
+      r#"{"MessageType":"Playstate","Data":{"Command":"Stop"}}"#,
+      r#"{"MessageType":"GeneralCommand","Data":{"Name":"SetVolume","Arguments":{"Volume":"65"}}}"#,
+      r#"{"MessageType":"GeneralCommand","Data":{"Name":"ToggleMute"}}"#,
+      r#"{"MessageType":"GeneralCommand","Data":{"Name":"SetAudioStreamIndex","Arguments":{"Index":"1"}}}"#,
+      r#"{"MessageType":"GeneralCommand","Data":{"Name":"SetSubtitleStreamIndex","Arguments":{"Index":"2"}}}"#,
+    ] {
+      JellyfinWebSocket::handle_message(message, &event_tx)
+        .await
+        .expect("Emby command should decode");
+    }
+
+    match next_event(&mut event_rx).await {
+      JellyfinWebSocketEvent::Command(JellyfinCommand::Play(request)) => {
+        assert_eq!(request.item_ids, ["movie-1"]);
+        assert_eq!(request.play_command, "PlayNow");
+        assert_eq!(request.start_position_ticks, Some(50_000_000));
+        assert_eq!(request.audio_stream_index, Some(1));
+        assert_eq!(request.subtitle_stream_index, Some(2));
+      }
+      event => panic!("unexpected event: {event:?}"),
+    }
+
+    for expected in ["Pause", "Seek", "Stop"] {
+      match next_event(&mut event_rx).await {
+        JellyfinWebSocketEvent::Command(JellyfinCommand::Playstate(request)) => {
+          assert_eq!(request.command, expected);
+        }
+        event => panic!("unexpected event: {event:?}"),
+      }
+    }
+
+    for expected in [
+      "SetVolume",
+      "ToggleMute",
+      "SetAudioStreamIndex",
+      "SetSubtitleStreamIndex",
+    ] {
+      match next_event(&mut event_rx).await {
+        JellyfinWebSocketEvent::Command(JellyfinCommand::GeneralCommand(command)) => {
+          assert_eq!(command.name, expected);
+        }
+        event => panic!("unexpected event: {event:?}"),
+      }
+    }
+
+    assert!(event_rx.try_recv().is_err());
+  }
+
+  #[tokio::test]
   async fn command_stream_reconnects_and_delivers_lifecycle_events() {
     let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
     let url = format!("ws://{}", listener.local_addr().expect("addr"));

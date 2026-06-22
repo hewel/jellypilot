@@ -28,9 +28,9 @@ const embyConnectedState = {
   capabilities: {
     introSkipper: false,
     quickConnect: false,
-    remoteControl: false,
+    remoteControl: true,
     remoteControlAvailable: false,
-    remoteControlWarning: 'Remote control is not available for Emby connections yet.',
+    remoteControlWarning: null,
   },
   provider: 'emby' as const,
   serverName: 'Emby Home',
@@ -130,9 +130,7 @@ test('operations console renders Emby capabilities without Intro Skipper control
   const cleanup = renderConsole(() => {}, config, embyConnectedState);
 
   expect(await screen.findByText('Emby Home')).toBeVisible();
-  expect(
-    screen.getByText('Remote control is not available for Emby connections yet.'),
-  ).toBeVisible();
+  expect(screen.getByText('Pending')).toBeVisible();
   expect(screen.queryByRole('heading', { name: 'Intro Skip' })).not.toBeInTheDocument();
   expect(screen.queryByLabelText('Intro skip key')).not.toBeInTheDocument();
   expect(screen.getByLabelText('Next episode key')).toBeVisible();

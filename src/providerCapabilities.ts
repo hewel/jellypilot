@@ -4,9 +4,9 @@ export const PROVIDER_CAPABILITIES: Record<MediaServerProvider, ProviderCapabili
   emby: {
     introSkipper: false,
     quickConnect: false,
-    remoteControl: false,
+    remoteControl: true,
     remoteControlAvailable: false,
-    remoteControlWarning: 'Remote control is not available for Emby connections yet.',
+    remoteControlWarning: null,
   },
   jellyfin: {
     introSkipper: true,
