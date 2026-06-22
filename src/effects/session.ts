@@ -50,28 +50,27 @@ function parseSavedCredentials(
   });
 }
 
-export function loadSavedCredentials(): Effect.Effect<SavedCredentials | null, StorageParseError> {
-  return Effect.gen(function* () {
-    const raw = yield* Effect.sync(() => localStorage.getItem(CREDENTIALS_STORAGE_KEY));
-    if (raw !== null) {
-      return yield* parseSavedCredentials(raw, CREDENTIALS_STORAGE_KEY);
-    }
+export function loadSavedCredentials() {
+  const legacyCredentials = Effect.sync(() =>
+    localStorage.getItem(LEGACY_CREDENTIALS_STORAGE_KEY),
+  ).pipe(
+    Effect.flatMap(Effect.fromNullishOr),
+    Effect.flatMap((value) => parseSavedCredentials(value, LEGACY_CREDENTIALS_STORAGE_KEY)),
+    Effect.tap((credentials) =>
+      Effect.sync(() => {
+        localStorage.setItem(CREDENTIALS_STORAGE_KEY, JSON.stringify(credentials));
+        localStorage.removeItem(LEGACY_CREDENTIALS_STORAGE_KEY);
+      }),
+    ),
+  );
 
-    const legacyRaw = yield* Effect.sync(() =>
-      localStorage.getItem(LEGACY_CREDENTIALS_STORAGE_KEY),
-    );
-    if (legacyRaw === null) {
-      return null;
-    }
-
-    const credentials = yield* parseSavedCredentials(legacyRaw, LEGACY_CREDENTIALS_STORAGE_KEY);
-    yield* Effect.sync(() => {
-      localStorage.setItem(CREDENTIALS_STORAGE_KEY, JSON.stringify(credentials));
-      localStorage.removeItem(LEGACY_CREDENTIALS_STORAGE_KEY);
-    });
-
-    return credentials;
-  });
+  return Effect.sync(() => localStorage.getItem(CREDENTIALS_STORAGE_KEY)).pipe(
+    Effect.flatMap(Effect.fromNullishOr),
+    Effect.matchEffect({
+      onFailure: () => legacyCredentials,
+      onSuccess: (value) => parseSavedCredentials(value, CREDENTIALS_STORAGE_KEY),
+    }),
+  );
 }
 
 export function saveCredentials(serverUrl: string, username: string): Effect.Effect<void> {

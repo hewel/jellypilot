@@ -31,11 +31,9 @@ test('Saved Session restore and route checks use typed command helpers', () => {
 test('Password Login connect command uses typed command helper', () => {
   const loginSource = readFileSync('src/components/LoginPage.tsx', 'utf8');
 
-  expect(loginSource).toContain(
-    "import { commandFailureMessage, runTauriCommand } from '../effects/commands';",
-  );
-  expect(loginSource).toContain('runTauriCommand(() => commands.jellyfinConnect(credentials))');
-  expect(loginSource).not.toContain('const result = await commands.jellyfinConnect(credentials);');
+  expect(loginSource).toContain("import { connectJellyfin } from '../effects/connection';");
+  expect(loginSource).toContain('connectJellyfin(credentials)');
+  expect(loginSource).not.toContain('commands.jellyfinConnect');
 });
 test('Quick Connect commands use typed command helpers', () => {
   const qcSource = readFileSync('src/effects/quickConnect.ts', 'utf8');

@@ -620,7 +620,9 @@ test('password login clears Login Prefill when remember me is unchecked', async 
   fireEvent.click(screen.getByRole('checkbox', { name: 'Remember Server URL and username' }));
   fireEvent.click(screen.getByRole('button', { name: 'Connect' }));
 
-  await waitFor(() => expect(Effect.runSync(loadSavedCredentials())).toBeNull());
+  await waitFor(() =>
+    expect(Exit.isFailure(Effect.runSyncExit(loadSavedCredentials()))).toBe(true),
+  );
 
   cleanup();
 });
@@ -669,7 +671,9 @@ test('loadSavedCredentials returns StorageParseError for malformed JSON', () => 
     }
     const { error } = reason;
     expect(error).toBeInstanceOf(StorageParseError);
-    expect(error.key).toBe(CREDENTIALS_STORAGE_KEY);
+    if (error instanceof StorageParseError) {
+      expect(error.key).toBe(CREDENTIALS_STORAGE_KEY);
+    }
   }
 });
 test('loadSavedCredentials returns StorageParseError for empty malformed JSON', () => {
@@ -683,7 +687,9 @@ test('loadSavedCredentials returns StorageParseError for empty malformed JSON', 
     }
     const { error } = reason;
     expect(error).toBeInstanceOf(StorageParseError);
-    expect(error.key).toBe(CREDENTIALS_STORAGE_KEY);
+    if (error instanceof StorageParseError) {
+      expect(error.key).toBe(CREDENTIALS_STORAGE_KEY);
+    }
   }
 });
 
@@ -701,12 +707,8 @@ test('loadSavedCredentials returns StorageParseError for wrong shape', () => {
   }
 });
 
-test('loadSavedCredentials returns null for missing key', () => {
-  const exit = Effect.runSyncExit(loadSavedCredentials());
-  expect(Exit.isSuccess(exit)).toBe(true);
-  if (Exit.isSuccess(exit)) {
-    expect(exit.value).toBeNull();
-  }
+test('loadSavedCredentials fails when no credentials are stored', () => {
+  expect(Exit.isFailure(Effect.runSyncExit(loadSavedCredentials()))).toBe(true);
 });
 
 test('loadSavedCredentials migrates legacy remembered Login Prefill', () => {

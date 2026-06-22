@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, expect, rstest, test } from '@rstest/core';
 import { screen } from '@testing-library/dom';
-import { Exit } from 'effect';
+import { Exit, Option } from 'effect';
 import { render } from 'solid-js/web';
 
 import { commands } from '../src/bindings';
@@ -56,18 +56,18 @@ const showDetail: VideoShowDetail = {
 };
 
 const movieMediaDetail: MediaDetail = {
-  artworkUrl: 'https://example.com/movie.png',
+  artworkUrl: Option.some('https://example.com/movie.png'),
   favorite: true,
   genres: ['Drama', 'Sci-Fi'],
   id: 'movie-1',
   itemType: 'Movie',
   name: 'Test Movie',
-  overview: 'A test movie overview.',
+  overview: Option.some('A test movie overview.'),
   played: true,
-  playedPercentage: 25,
-  productionYear: 2024,
-  resumePositionSeconds: 120,
-  runtimeSeconds: 7200,
+  playedPercentage: Option.some(25),
+  productionYear: Option.some(2024),
+  resumePositionSeconds: Option.some(120),
+  runtimeSeconds: Option.some(7200),
 };
 
 function mediaValue<A, E>(exit: Exit.Exit<A, E>): A | null {
@@ -97,8 +97,8 @@ test('fetchMediaDetail routes movies to item detail', async () => {
   expect(mediaValue(result)).toMatchObject({
     genres: ['Drama', 'Sci-Fi'],
     itemType: 'Movie',
-    overview: 'A test movie overview.',
-    runtimeSeconds: 7200,
+    overview: Option.some('A test movie overview.'),
+    runtimeSeconds: Option.some(7200),
   });
 });
 
@@ -134,8 +134,8 @@ test('fetchMediaDetail routes series to show detail and nulls show-only fields',
   expect(mediaValue(result)).toMatchObject({
     genres: ['Crime', 'Thriller'],
     itemType: 'Series',
-    overview: 'A test show overview.',
-    runtimeSeconds: null,
+    overview: Option.some('A test show overview.'),
+    runtimeSeconds: Option.none(),
   });
 });
 

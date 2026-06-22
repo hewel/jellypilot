@@ -52,28 +52,25 @@ function normalizeLegacySession(session: SavedSession): SavedSession {
   return session.deviceId?.startsWith('jmsr-') ? { ...session, deviceId: null } : session;
 }
 
-export function loadSavedSession(): Effect.Effect<SavedSession | null, StorageParseError> {
-  return Effect.gen(function* () {
-    const raw = yield* Effect.sync(() => localStorage.getItem(SESSION_STORAGE_KEY));
-    if (raw !== null) {
-      return yield* parseSavedSession(raw, SESSION_STORAGE_KEY);
-    }
-
-    const legacyRaw = yield* Effect.sync(() => localStorage.getItem(LEGACY_SESSION_STORAGE_KEY));
-    if (legacyRaw === null) {
-      return null;
-    }
-
-    const session = normalizeLegacySession(
-      yield* parseSavedSession(legacyRaw, LEGACY_SESSION_STORAGE_KEY),
-    );
-    yield* Effect.sync(() => {
-      localStorage.setItem(SESSION_STORAGE_KEY, JSON.stringify(session));
-      localStorage.removeItem(LEGACY_SESSION_STORAGE_KEY);
-    });
-
-    return session;
-  });
+export function loadSavedSession() {
+  const legacySession = Effect.sync(() => localStorage.getItem(LEGACY_SESSION_STORAGE_KEY)).pipe(
+    Effect.flatMap(Effect.fromNullishOr),
+    Effect.flatMap((value) => parseSavedSession(value, LEGACY_SESSION_STORAGE_KEY)),
+    Effect.map(normalizeLegacySession),
+    Effect.tap((session) =>
+      Effect.sync(() => {
+        localStorage.setItem(SESSION_STORAGE_KEY, JSON.stringify(session));
+        localStorage.removeItem(LEGACY_SESSION_STORAGE_KEY);
+      }),
+    ),
+  );
+  return Effect.sync(() => localStorage.getItem(SESSION_STORAGE_KEY)).pipe(
+    Effect.flatMap(Effect.fromNullishOr),
+    Effect.matchEffect({
+      onFailure: () => legacySession,
+      onSuccess: (value) => parseSavedSession(value, SESSION_STORAGE_KEY),
+    }),
+  );
 }
 
 export function saveSession(session: SavedSession): Effect.Effect<void> {

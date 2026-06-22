@@ -1,13 +1,15 @@
 import { commands } from '@bindings';
 import type { AppConfig } from '@bindings';
-import { Effect } from 'effect';
+import { Effect, Option } from 'effect';
 
 import { runTauriCommand, runTauriCommandRaw } from './commands';
 import type { CommandError } from './errors';
 
-/** Detect MPV executable path. Returns the detected path or null. */
-export function detectMpv(): Effect.Effect<string | null, CommandError> {
-  return runTauriCommandRaw(() => commands.configDetectMpv());
+/** Detect MPV executable path. Returns Some(path) when found, None otherwise. */
+export function detectMpv(): Effect.Effect<Option.Option<string>, CommandError> {
+  return runTauriCommandRaw(() => commands.configDetectMpv()).pipe(
+    Effect.map(Option.fromNullishOr),
+  );
 }
 
 export function fetchConfig(): Effect.Effect<AppConfig, CommandError> {

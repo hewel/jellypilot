@@ -1,4 +1,4 @@
-import { Effect, Exit } from 'effect';
+import { Effect, Exit, Option } from 'effect';
 
 import { commands } from './bindings';
 import type { SavedSession } from './bindings';
@@ -10,11 +10,13 @@ import {
 import { runTauriCommand, runTauriCommandRaw } from './effects/commands';
 
 export function loadSavedSession(): SavedSession | null {
-  const exit = Effect.runSyncExit(loadSessionEffect());
-  if (Exit.isSuccess(exit)) {
-    return exit.value;
-  }
-  return null;
+  return loadSessionEffect().pipe(
+    Effect.runSyncExit,
+    Exit.match({
+      onFailure: () => null,
+      onSuccess: (v) => v,
+    }),
+  );
 }
 
 export function saveSession(session: SavedSession): void {
@@ -26,27 +28,30 @@ export function clearSavedSession(): void {
 }
 
 export async function saveCurrentSession(): Promise<void> {
-  const session = await commands.jellyfinGetSession();
-  if (session) {
-    saveSession(session);
-  }
+  const session = await Effect.runPromise(runTauriCommandRaw(() => commands.jellyfinGetSession()));
+  Option.match(Option.fromNullishOr(session), {
+    onNone: () => undefined,
+    onSome: (value) => saveSession(value),
+  });
 }
 
 export async function restoreSavedSession(): Promise<boolean> {
-  const savedSession = loadSavedSession();
-  if (!savedSession) {
-    return false;
-  }
-
   const exit = await Effect.runPromiseExit(
-    runTauriCommand(() => commands.jellyfinRestoreSession(savedSession)),
+    loadSessionEffect().pipe(
+      Effect.flatMap((savedSession) =>
+        runTauriCommand(() => commands.jellyfinRestoreSession(savedSession)),
+      ),
+    ),
   );
-  if (Exit.isSuccess(exit)) {
-    return true;
-  }
-
-  clearSavedSession();
-  return false;
+  return exit.pipe(
+    Exit.match({
+      onFailure: () => {
+        clearSavedSession();
+        return false;
+      },
+      onSuccess: () => true,
+    }),
+  );
 }
 
 export async function checkAuthWithRestore(): Promise<boolean> {
@@ -66,5 +71,9 @@ export async function canAccessConsole(): Promise<boolean> {
   const connected = await Effect.runPromiseExit(
     runTauriCommandRaw(() => commands.jellyfinIsConnected()),
   );
-  return (Exit.isSuccess(connected) && connected.value) || loadSavedSession() !== null;
+  if (Exit.isSuccess(connected) && connected.value) {
+    return true;
+  }
+
+  return loadSavedSession() !== null;
 }

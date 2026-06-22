@@ -1,6 +1,6 @@
 import { commands, events } from '@bindings';
 import type { NowPlayingState, PropertyValue } from '@bindings';
-import { Effect, Exit } from 'effect';
+import { Effect, Exit, Option } from 'effect';
 
 import { runTauriCommand } from './commands';
 import type { CommandError } from './errors';
@@ -14,17 +14,20 @@ export interface MpvTrack {
   selected: boolean;
 }
 
-function readStringField(value: Record<string, unknown>, key: string): string | null {
+function readStringField(value: Record<string, unknown>, key: string): Option.Option<string> {
   const field = value[key];
-  return typeof field === 'string' && field.trim().length > 0 ? field.trim() : null;
+  return typeof field === 'string' && field.trim().length > 0
+    ? Option.some(field.trim())
+    : Option.none();
 }
 
 function trackLabel(track: Record<string, unknown>, fallback: string): string {
-  return (
-    readStringField(track, 'title') ??
-    readStringField(track, 'lang') ??
-    readStringField(track, 'codec') ??
-    fallback
+  return Option.getOrElse(
+    readStringField(track, 'title').pipe(
+      Option.orElse(() => readStringField(track, 'lang')),
+      Option.orElse(() => readStringField(track, 'codec')),
+    ),
+    () => fallback,
   );
 }
 
@@ -36,7 +39,7 @@ export function parseTrackList(value: PropertyValue): MpvTrack[] {
   const parsed = Effect.runSyncExit(
     Effect.try({
       try: () => JSON.parse(value) as unknown,
-      catch: () => null,
+      catch: (cause) => cause,
     }),
   );
   if (Exit.isFailure(parsed) || !Array.isArray(parsed.value)) {

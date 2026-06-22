@@ -1,6 +1,6 @@
 import { Dialog } from '@ark-ui/solid/dialog';
 import { createQuery, useQueryClient } from '@tanstack/solid-query';
-import { Exit } from 'effect';
+import { Exit, Match } from 'effect';
 import { MonitorPlay, X } from 'lucide-solid';
 import { Show, createSignal, onCleanup, onMount } from 'solid-js';
 import { Portal } from 'solid-js/web';
@@ -11,40 +11,24 @@ import { queryKeys, runExit } from '../effects/query';
 import NowPlayingCard from './NowPlayingCard';
 import { Button } from './ui';
 
-function statusText(status?: NowPlayingState['status']): string {
-  switch (status) {
-    case 'playing': {
-      return 'Playing';
-    }
-    case 'paused': {
-      return 'Paused';
-    }
-    case 'idle': {
-      return 'MPV idle';
-    }
-    case 'offline': {
-      return 'Player offline';
-    }
-    default: {
-      return 'Playback unknown';
-    }
-  }
-}
+const statusText = Match.type<NowPlayingState['status'] | undefined>().pipe(
+  Match.withReturnType<string>(),
+  Match.when('playing', () => 'Playing'),
+  Match.when('paused', () => 'Paused'),
+  Match.when('idle', () => 'MPV idle'),
+  Match.when('offline', () => 'Player offline'),
+  Match.orElse(() => 'Playback unknown'),
+);
 
-function statusDotClass(status?: NowPlayingState['status']): string {
-  switch (status) {
-    case 'playing':
-    case 'paused': {
-      return 'bg-tertiary shadow-[0_0_8px_var(--color-tertiary)]';
-    }
-    case 'offline': {
-      return 'bg-error shadow-[0_0_8px_var(--color-error)]';
-    }
-    default: {
-      return 'bg-outline-variant';
-    }
-  }
-}
+const statusDotClass = Match.type<NowPlayingState['status'] | undefined>().pipe(
+  Match.withReturnType<string>(),
+  Match.when(
+    Match.is('playing', 'paused'),
+    () => 'bg-tertiary shadow-[0_0_8px_var(--color-tertiary)]',
+  ),
+  Match.when('offline', () => 'bg-error shadow-[0_0_8px_var(--color-error)]'),
+  Match.orElse(() => 'bg-outline-variant'),
+);
 
 function triggerLabel(state: NowPlayingState | null): string {
   const status = statusText(state?.status);

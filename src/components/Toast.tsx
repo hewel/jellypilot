@@ -1,5 +1,7 @@
+import { Match } from 'effect';
 import { Check, Info, TriangleAlert, X } from 'lucide-solid';
 import { onCleanup, onMount } from 'solid-js';
+import type { JSX } from 'solid-js';
 
 import type { NotificationLevel } from '../bindings';
 
@@ -12,6 +14,36 @@ interface ToastProps {
   exiting: boolean;
   onDismiss: (id: string) => void;
 }
+const toastStyles = Match.type<NotificationLevel>().pipe(
+  Match.withReturnType<string>(),
+  Match.when(
+    'success',
+    () =>
+      'bg-surface-container-high/90 text-on-surface border-tertiary/20 shadow-2xl backdrop-blur-md shadow-tertiary/5',
+  ),
+  Match.when(
+    'error',
+    () =>
+      'bg-error-container/85 text-on-error-container border-error/25 shadow-2xl backdrop-blur-md shadow-error/10',
+  ),
+  Match.when(
+    'warning',
+    () =>
+      'bg-warning-container/85 text-on-warning-container border-warning/25 shadow-2xl backdrop-blur-md shadow-warning/10',
+  ),
+  Match.orElse(
+    () =>
+      'bg-surface-container-high/90 text-on-surface border-outline-variant/60 shadow-2xl backdrop-blur-md',
+  ),
+);
+
+const toastIcon = Match.type<NotificationLevel>().pipe(
+  Match.withReturnType<JSX.Element>(),
+  Match.when('success', () => <Check class="text-tertiary h-5 w-5" />),
+  Match.when('error', () => <X class="text-error h-5 w-5" />),
+  Match.when('warning', () => <TriangleAlert class="text-warning h-5 w-5" />),
+  Match.orElse(() => <Info class="text-primary h-5 w-5" />),
+);
 
 export default function Toast(props: ToastProps) {
   let timer: ReturnType<typeof setTimeout>;
@@ -28,39 +60,9 @@ export default function Toast(props: ToastProps) {
     }
   });
 
-  const getStyles = () => {
-    switch (props.level) {
-      case 'success': {
-        return 'bg-surface-container-high/90 text-on-surface border-tertiary/20 shadow-2xl backdrop-blur-md shadow-tertiary/5';
-      }
-      case 'error': {
-        return 'bg-error-container/85 text-on-error-container border-error/25 shadow-2xl backdrop-blur-md shadow-error/10';
-      }
-      case 'warning': {
-        return 'bg-warning-container/85 text-on-warning-container border-warning/25 shadow-2xl backdrop-blur-md shadow-warning/10';
-      }
-      default: {
-        return 'bg-surface-container-high/90 text-on-surface border-outline-variant/60 shadow-2xl backdrop-blur-md';
-      }
-    }
-  };
+  const getStyles = () => toastStyles(props.level);
 
-  const getIcon = () => {
-    switch (props.level) {
-      case 'success': {
-        return <Check class="text-tertiary h-5 w-5" />;
-      }
-      case 'error': {
-        return <X class="text-error h-5 w-5" />;
-      }
-      case 'warning': {
-        return <TriangleAlert class="text-warning h-5 w-5" />;
-      }
-      default: {
-        return <Info class="text-primary h-5 w-5" />;
-      }
-    }
-  };
+  const getIcon = () => toastIcon(props.level);
 
   return (
     <div

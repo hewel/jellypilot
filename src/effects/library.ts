@@ -17,7 +17,7 @@ import type {
   VideoUserDataUpdateRequest,
 } from '@bindings';
 import type { Exit } from 'effect';
-import { Effect } from 'effect';
+import { Effect, Option } from 'effect';
 
 import { runTauriCommand } from './commands';
 import { connection } from './connection';
@@ -124,31 +124,35 @@ export interface MediaDetail {
   id: string;
   name: string;
   itemType: string;
-  overview: string | null;
-  productionYear: number | null;
-  runtimeSeconds: number | null;
+  overview: Option.Option<string>;
+  productionYear: Option.Option<number>;
+  runtimeSeconds: Option.Option<number>;
   genres: string[];
   played: boolean;
   favorite: boolean;
-  playedPercentage: number | null;
-  resumePositionSeconds: number | null;
-  artworkUrl: string | null;
+  playedPercentage: Option.Option<number>;
+  resumePositionSeconds: Option.Option<number>;
+  artworkUrl: Option.Option<string>;
 }
 
 function toMediaDetail(detail: VideoItemDetail | VideoShowDetail, itemType: string): MediaDetail {
   return {
-    artworkUrl: detail.artworkUrl,
+    artworkUrl: Option.fromNullishOr(detail.artworkUrl),
     favorite: detail.favorite,
     genres: detail.genres,
     id: detail.id,
     itemType,
     name: detail.name,
-    overview: detail.overview,
+    overview: Option.fromNullishOr(detail.overview),
     played: detail.played,
-    playedPercentage: 'playedPercentage' in detail ? detail.playedPercentage : null,
-    productionYear: detail.productionYear,
-    resumePositionSeconds: 'resumePositionSeconds' in detail ? detail.resumePositionSeconds : null,
-    runtimeSeconds: 'runtimeSeconds' in detail ? detail.runtimeSeconds : null,
+    playedPercentage: Option.fromNullishOr(
+      'playedPercentage' in detail ? detail.playedPercentage : null,
+    ),
+    productionYear: Option.fromNullishOr(detail.productionYear),
+    resumePositionSeconds: Option.fromNullishOr(
+      'resumePositionSeconds' in detail ? detail.resumePositionSeconds : null,
+    ),
+    runtimeSeconds: Option.fromNullishOr('runtimeSeconds' in detail ? detail.runtimeSeconds : null),
   };
 }
 
@@ -160,14 +164,18 @@ export function fetchMediaDetail(id: string, itemType: string): LibraryEffect<Me
   return fetchVideoItemDetail(id).pipe(Effect.map((value) => toMediaDetail(value, itemType)));
 }
 
-export function initialSeasonForShow(show: LibraryShowState): VideoSeason | null {
-  const nextSeasonNumber = show.nextEpisode?.seasonNumber ?? null;
-  if (nextSeasonNumber !== null) {
-    const match = show.seasons.find((season) => season.seasonNumber === nextSeasonNumber);
-    if (match) {
-      return match;
-    }
-  }
-
-  return show.seasons[0] ?? null;
+export function initialSeasonForShow(show: LibraryShowState): Option.Option<VideoSeason> {
+  return Option.match(Option.fromNullishOr(show.nextEpisode?.seasonNumber), {
+    onNone: () => Option.fromNullishOr(show.seasons[0]),
+    onSome: (nextSeasonNumber) =>
+      Option.match(
+        Option.fromNullishOr(
+          show.seasons.find((season) => season.seasonNumber === nextSeasonNumber),
+        ),
+        {
+          onNone: () => Option.fromNullishOr(show.seasons[0]),
+          onSome: (season) => Option.some(season),
+        },
+      ),
+  });
 }

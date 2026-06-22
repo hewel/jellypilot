@@ -1,6 +1,6 @@
 import { Slider } from '@ark-ui/solid/slider';
 import { createMutation, createQuery, useQueryClient } from '@tanstack/solid-query';
-import { Exit } from 'effect';
+import { Exit, Match } from 'effect';
 import { Pause, Play, SkipBack, SkipForward, Square, Volume2, VolumeX } from 'lucide-solid';
 import { Show, createSignal, onCleanup, onMount } from 'solid-js';
 
@@ -36,54 +36,30 @@ function formatTime(seconds: number): string {
   return `${minutes}:${remaining.toString().padStart(2, '0')}`;
 }
 
-function unavailableCopy(reason?: string | null): string {
-  switch (reason) {
-    case 'noSession':
-    case 'noCurrentItem':
-    case 'notEpisode': {
-      return 'Available during episode playback';
-    }
-    default: {
-      return 'Unavailable right now';
-    }
-  }
-}
+const unavailableCopy = Match.type<string | null | undefined>().pipe(
+  Match.withReturnType<string>(),
+  Match.when(
+    Match.is('noSession', 'noCurrentItem', 'notEpisode'),
+    () => 'Available during episode playback',
+  ),
+  Match.orElse(() => 'Unavailable right now'),
+);
 
-function statusLabel(status: NowPlayingState['status']): string {
-  switch (status) {
-    case 'offline': {
-      return 'Offline';
-    }
-    case 'idle': {
-      return 'MPV idle';
-    }
-    case 'playing': {
-      return 'Playing';
-    }
-    case 'paused': {
-      return 'Paused';
-    }
-    default: {
-      return 'Unknown';
-    }
-  }
-}
+const statusLabel = Match.type<NowPlayingState['status']>().pipe(
+  Match.withReturnType<string>(),
+  Match.when('offline', () => 'Offline'),
+  Match.when('idle', () => 'MPV idle'),
+  Match.when('playing', () => 'Playing'),
+  Match.when('paused', () => 'Paused'),
+  Match.orElse(() => 'Unknown'),
+);
 
-function statusVariant(status: NowPlayingState['status']) {
-  switch (status) {
-    case 'playing':
-    case 'paused': {
-      return 'success' as const;
-    }
-    case 'offline':
-    case 'unknown': {
-      return 'warning' as const;
-    }
-    default: {
-      return 'neutral' as const;
-    }
-  }
-}
+const statusVariant = Match.type<NowPlayingState['status']>().pipe(
+  Match.withReturnType<'success' | 'warning' | 'neutral'>(),
+  Match.when(Match.is('playing', 'paused'), () => 'success'),
+  Match.when(Match.is('offline', 'unknown'), () => 'warning'),
+  Match.orElse(() => 'neutral'),
+);
 
 const contextualIconClass = (visible: boolean, extra = '') =>
   `${extra} absolute h-5 w-5 transition-[filter,opacity,transform] duration-200 ease-[cubic-bezier(0.2,0,0,1)] ${

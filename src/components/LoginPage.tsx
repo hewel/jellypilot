@@ -6,9 +6,9 @@ import { Effect, Exit, Fiber } from 'effect';
 import { Check, CircleAlert, LoaderCircle, RadioTower } from 'lucide-solid';
 import { Show, createSignal, onCleanup, onMount } from 'solid-js';
 
-import { commands } from '../bindings';
 import type { Credentials } from '../bindings';
-import { commandFailureMessage, runTauriCommand } from '../effects/commands';
+import { commandFailureMessage } from '../effects/commands';
+import { connectJellyfin } from '../effects/connection';
 import { CommandError } from '../effects/errors';
 import { runQuickConnectWorkflow } from '../effects/quickConnect';
 import { clearSavedCredentials, loadSavedCredentials, saveCredentials } from '../effects/session';
@@ -176,9 +176,7 @@ export default function LoginPage(props: LoginPageProps) {
     };
 
     setSubmitting(true);
-    const exit = await Effect.runPromiseExit(
-      runTauriCommand(() => commands.jellyfinConnect(credentials)),
-    );
+    const exit = await Effect.runPromiseExit(connectJellyfin(credentials));
 
     if (Exit.isSuccess(exit)) {
       const completion = await Effect.runPromiseExit(
@@ -216,9 +214,6 @@ export default function LoginPage(props: LoginPageProps) {
       return;
     }
     const saved = exit.value;
-    if (!saved) {
-      return;
-    }
     const parsed = parseServerUrl(saved.serverUrl);
     form.reset({
       host: parsed.host,

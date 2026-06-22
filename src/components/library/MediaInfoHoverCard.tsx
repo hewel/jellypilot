@@ -1,6 +1,6 @@
 import { HoverCard } from '@ark-ui/solid/hover-card';
 import { createQuery } from '@tanstack/solid-query';
-import { Exit } from 'effect';
+import { Exit, Option } from 'effect';
 import { Check, Heart, LoaderCircle } from 'lucide-solid';
 import { createSignal, For, Show } from 'solid-js';
 import type { JSX } from 'solid-js';
@@ -13,14 +13,16 @@ import { queryKeys, runExit } from '../../effects/query';
 
 // Inlined (instead of importing from ./shared) to avoid a shared.tsx <-> card
 // Import cycle. Matches the formatRuntime shape used elsewhere.
-function formatRuntime(seconds: number | null): string | null {
-  if (seconds === null) {
-    return null;
-  }
-  const totalMinutes = Math.round(seconds / 60);
-  const hours = Math.floor(totalMinutes / 60);
-  const minutes = totalMinutes % 60;
-  return hours > 0 ? `${hours}h ${minutes}m` : `${minutes}m`;
+function formatRuntime(seconds: Option.Option<number>): Option.Option<string> {
+  return Option.match(seconds, {
+    onNone: () => Option.none(),
+    onSome: (value) => {
+      const totalMinutes = Math.round(value / 60);
+      const hours = Math.floor(totalMinutes / 60);
+      const minutes = totalMinutes % 60;
+      return Option.some(hours > 0 ? `${hours}h ${minutes}m` : `${minutes}m`);
+    },
+  });
 }
 
 /**
@@ -31,13 +33,17 @@ function formatRuntime(seconds: number | null): string | null {
 export function MediaInfoContent(props: { detail: MediaDetail }) {
   const meta = () =>
     [
-      props.detail.productionYear?.toString() ?? null,
+      Option.match(props.detail.productionYear, {
+        onNone: () => null,
+        onSome: (year) => year.toString(),
+      }),
       props.detail.itemType,
-      formatRuntime(props.detail.runtimeSeconds),
+      Option.getOrElse(formatRuntime(props.detail.runtimeSeconds), () => null),
     ]
       .filter((part): part is string => part !== null)
       .join(' · ');
-  const resumePct = () => props.detail.playedPercentage ?? 0;
+  const resumePct = () => Option.getOrElse(props.detail.playedPercentage, () => 0);
+  const overviewText = () => Option.getOrElse(props.detail.overview, () => null);
 
   return (
     <div class="space-y-2">
@@ -60,14 +66,14 @@ export function MediaInfoContent(props: { detail: MediaDetail }) {
           </For>
         </div>
       </Show>
-      <Show when={props.detail.overview}>
+      <Show when={overviewText()}>
         {(overview) => (
           <p class="text-on-surface-variant/90 line-clamp-3 text-[12px] leading-[16px]">
             {overview()}
           </p>
         )}
       </Show>
-      <Show when={props.detail.playedPercentage !== null}>
+      <Show when={Option.isSome(props.detail.playedPercentage)}>
         <div>
           <div class="bg-surface-container-highest/70 h-1 w-full overflow-hidden rounded-full">
             <div class="bg-secondary h-full" style={{ width: `${resumePct()}%` }} />

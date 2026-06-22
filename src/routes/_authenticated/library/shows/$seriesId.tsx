@@ -19,7 +19,7 @@ import {
 import { Button, Card, ConsoleGrid, StatusBadge } from '@components/ui';
 import { createMutation, createQuery, useQueryClient } from '@tanstack/solid-query';
 import { createFileRoute } from '@tanstack/solid-router';
-import { Exit } from 'effect';
+import { Exit, Option } from 'effect';
 import { Film, Library, RefreshCw, Tv } from 'lucide-solid';
 import { For, Show, Suspense, createSignal } from 'solid-js';
 import { commandFailureMessage } from '~effects/commands';
@@ -76,8 +76,10 @@ function LibraryShowDetailRoute() {
       return selected;
     }
 
-    const show = detail();
-    return show ? initialSeasonForShow(show) : null;
+    return Option.fromNullishOr(detail()).pipe(
+      Option.flatMap((show) => initialSeasonForShow(show)),
+      Option.getOrNull,
+    );
   };
   const seasonEpisodesQuery = createQuery<LibraryExit<SeasonEpisodesState> | null>(() => {
     const season = activeSeason();

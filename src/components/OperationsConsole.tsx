@@ -1,6 +1,6 @@
 import { createForm } from '@tanstack/solid-form';
 import { createMutation, createQuery, useQueryClient } from '@tanstack/solid-query';
-import { Exit } from 'effect';
+import { Exit, Option } from 'effect';
 import { createEffect } from 'solid-js';
 
 import type { AppConfig, IntroSkipperMode } from '../bindings';
@@ -405,14 +405,14 @@ export default function OperationsConsole(props: OperationsConsoleProps) {
     actions.beginMpvDetection();
     const exit = await detectMpvMutation.mutateAsync();
     if (Exit.isSuccess(exit)) {
-      const path = exit.value;
-      if (path) {
-        form.setFieldValue('mpvPath', path);
-        queueConfigSave(buildConfigSnapshot({ mpvPath: path }));
-        showToast('success', 'MPV detected successfully');
-      } else {
-        showToast('warning', 'MPV not found in PATH. Configure the path manually.');
-      }
+      Option.match(exit.value, {
+        onNone: () => showToast('warning', 'MPV not found in PATH. Configure the path manually.'),
+        onSome: (path) => {
+          form.setFieldValue('mpvPath', path);
+          queueConfigSave(buildConfigSnapshot({ mpvPath: path }));
+          showToast('success', 'MPV detected successfully');
+        },
+      });
     } else {
       console.error(
         'Failed to detect MPV:',

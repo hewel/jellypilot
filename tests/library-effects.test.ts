@@ -1,4 +1,5 @@
 import { expect, test } from '@rstest/core';
+import { Option } from 'effect';
 
 import type { VideoShowDetail } from '../src/bindings';
 import { initialSeasonForShow } from '../src/effects/library';
@@ -51,14 +52,17 @@ test('initialSeasonForShow returns season matching nextEpisode.seasonNumber', ()
   };
 
   const result = initialSeasonForShow(show);
-  expect(result).toEqual({
-    id: 'season-2',
-    name: 'Season 2',
-    seasonNumber: 2,
-    played: false,
-    favorite: false,
-    artworkUrl: null,
-  });
+  expect(Option.isSome(result)).toBe(true);
+  if (Option.isSome(result)) {
+    expect(result.value).toEqual({
+      id: 'season-2',
+      name: 'Season 2',
+      seasonNumber: 2,
+      played: false,
+      favorite: false,
+      artworkUrl: null,
+    });
+  }
 });
 
 test('initialSeasonForShow returns first season if no matching nextEpisode.seasonNumber', () => {
@@ -94,14 +98,17 @@ test('initialSeasonForShow returns first season if no matching nextEpisode.seaso
   };
 
   const result = initialSeasonForShow(show);
-  expect(result).toEqual({
-    id: 'season-1',
-    name: 'Season 1',
-    seasonNumber: 1,
-    played: false,
-    favorite: false,
-    artworkUrl: null,
-  });
+  expect(Option.isSome(result)).toBe(true);
+  if (Option.isSome(result)) {
+    expect(result.value).toEqual({
+      id: 'season-1',
+      name: 'Season 1',
+      seasonNumber: 1,
+      played: false,
+      favorite: false,
+      artworkUrl: null,
+    });
+  }
 });
 
 test('initialSeasonForShow returns null if show has no seasons', () => {
@@ -120,5 +127,5 @@ test('initialSeasonForShow returns null if show has no seasons', () => {
   };
 
   const result = initialSeasonForShow(show);
-  expect(result).toBeNull();
+  expect(Option.isNone(result)).toBe(true);
 });

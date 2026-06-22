@@ -1,4 +1,5 @@
 import { load } from '@tauri-apps/plugin-store';
+import { Effect, Exit, Match, Option } from 'effect';
 import type { Accessor, Setter } from 'solid-js';
 import { createEffect, createSignal } from 'solid-js';
 
@@ -43,27 +44,17 @@ export interface SharedLibraryFilters {
   setSortDirection: Setter<LibrarySortDirection>;
 }
 
-function parseSort(value: string | undefined): VideoLibrarySort {
-  switch (value) {
-    case 'recentlyAdded':
-    case 'releaseDate':
-    case 'title':
-      return value;
-    default:
-      return DEFAULT_SORT;
-  }
-}
+const parseSort = Match.type<string | undefined>().pipe(
+  Match.withReturnType<VideoLibrarySort>(),
+  Match.when(Match.is('recentlyAdded', 'releaseDate', 'title'), (value) => value),
+  Match.orElse(() => DEFAULT_SORT),
+);
 
-function parsePlayedFilter(value: string | undefined): VideoLibraryPlayedFilter {
-  switch (value) {
-    case 'played':
-    case 'unplayed':
-    case 'all':
-      return value;
-    default:
-      return DEFAULT_PLAYED_FILTER;
-  }
-}
+const parsePlayedFilter = Match.type<string | undefined>().pipe(
+  Match.withReturnType<VideoLibraryPlayedFilter>(),
+  Match.when(Match.is('played', 'unplayed', 'all'), (value) => value),
+  Match.orElse(() => DEFAULT_PLAYED_FILTER),
+);
 
 function parseSortDirection(value: string | undefined): LibrarySortDirection {
   return value === 'desc' ? 'desc' : DEFAULT_SORT_DIRECTION;
@@ -103,12 +94,12 @@ function applySnapshot(filters: LibraryFilterSnapshot) {
   setSortDirection(filters.sortDirection);
 }
 
-function parseStoreSnapshot(value: unknown): LibraryFilterSnapshot | null {
+function parseStoreSnapshot(value: unknown): Option.Option<LibraryFilterSnapshot> {
   if (value === null || typeof value !== 'object') {
-    return null;
+    return Option.none();
   }
   const obj = value as Record<string, unknown>;
-  return {
+  return Option.some({
     sort: parseSort(typeof obj.sort === 'string' ? obj.sort : undefined),
     playedFilter: parsePlayedFilter(
       typeof obj.playedFilter === 'string' ? obj.playedFilter : undefined,
@@ -117,80 +108,93 @@ function parseStoreSnapshot(value: unknown): LibraryFilterSnapshot | null {
     sortDirection: parseSortDirection(
       typeof obj.sortDirection === 'string' ? obj.sortDirection : undefined,
     ),
-  };
+  });
 }
 
-function readLegacySnapshot(): LibraryFilterSnapshot | null {
-  try {
-    const value = localStorage.getItem(LEGACY_STORAGE_KEY);
-    const [storedSort, storedPlayedFilter, storedFavoritesOnly, storedSortDirection] =
-      value?.split('|') ?? [];
-
-    if (value === null) {
-      return null;
-    }
-
-    return {
-      sort: parseSort(storedSort),
-      playedFilter: parsePlayedFilter(storedPlayedFilter),
-      favoritesOnly: storedFavoritesOnly === '1',
-      sortDirection: parseSortDirection(storedSortDirection),
-    };
-  } catch {
-    return null;
+function readLegacySnapshot(): Option.Option<LibraryFilterSnapshot> {
+  const stored = Effect.runSyncExit(
+    Effect.try({
+      try: () => localStorage.getItem(LEGACY_STORAGE_KEY),
+      catch: (cause) => cause,
+    }),
+  );
+  if (Exit.isFailure(stored)) {
+    return Option.none();
   }
+  return Option.match(Option.fromNullishOr(stored.value), {
+    onNone: () => Option.none(),
+    onSome: (value) => {
+      const [storedSort, storedPlayedFilter, storedFavoritesOnly, storedSortDirection] =
+        value.split('|');
+      return Option.some({
+        sort: parseSort(storedSort),
+        playedFilter: parsePlayedFilter(storedPlayedFilter),
+        favoritesOnly: storedFavoritesOnly === '1',
+        sortDirection: parseSortDirection(storedSortDirection),
+      });
+    },
+  });
 }
 
 function removeLegacySnapshot() {
-  try {
-    localStorage.removeItem(LEGACY_STORAGE_KEY);
-  } catch {
-    // Store is now authoritative; failed cleanup should not break rendering.
-  }
+  void Effect.runSyncExit(
+    Effect.try({
+      try: () => localStorage.removeItem(LEGACY_STORAGE_KEY),
+      catch: (cause) => cause,
+    }),
+  );
 }
 
 async function hydrateFilters() {
-  try {
-    await writeQueue;
-    const store = await load(PREFERENCES_STORE_FILE, { defaults: {}, autoSave: false });
-    const stored = parseStoreSnapshot(await store.get(LIBRARY_FILTERS_STORE_KEY));
+  await Effect.runPromiseExit(
+    Effect.tryPromise({
+      try: async () => {
+        await writeQueue;
+        const store = await load(PREFERENCES_STORE_FILE, { defaults: {}, autoSave: false });
+        const stored = parseStoreSnapshot(await store.get(LIBRARY_FILTERS_STORE_KEY));
 
-    if (stored) {
-      applySnapshot(stored);
-      hydratedSnapshot = stored;
-      return;
-    }
+        if (Option.isSome(stored)) {
+          applySnapshot(stored.value);
+          hydratedSnapshot = stored.value;
+          return;
+        }
 
-    const legacy = readLegacySnapshot();
-    if (!legacy) {
-      const defaults = defaultSnapshot();
-      applySnapshot(defaults);
-      hydratedSnapshot = defaults;
-      return;
-    }
+        const legacy = readLegacySnapshot();
+        const snapshot = Option.match(legacy, {
+          onNone: () => defaultSnapshot(),
+          onSome: (value) => value,
+        });
+        applySnapshot(snapshot);
+        hydratedSnapshot = snapshot;
 
-    applySnapshot(legacy);
-    hydratedSnapshot = legacy;
-    await store.set(LIBRARY_FILTERS_STORE_KEY, legacy);
-    await store.save();
-    removeLegacySnapshot();
-  } catch {
-    // Tauri Store can be unavailable in browser-only contexts; in-memory filters still work.
-  }
+        if (Option.isSome(legacy)) {
+          await store.set(LIBRARY_FILTERS_STORE_KEY, snapshot);
+          await store.save();
+          removeLegacySnapshot();
+        }
+      },
+      // Tauri Store can be unavailable in browser-only contexts; in-memory filters still work.
+      catch: (cause) => cause,
+    }),
+  );
 }
 
 function persistFilters(filters: LibraryFilterSnapshot) {
   const write = async () => {
-    try {
-      const store = await load(PREFERENCES_STORE_FILE, { defaults: {}, autoSave: false });
-      await store.set(LIBRARY_FILTERS_STORE_KEY, filters);
-      await store.save();
-    } catch {
-      // Persistence is best-effort; rendering keeps the current in-memory signals.
-    }
+    // Persistence is best-effort; rendering keeps the current in-memory signals.
+    await Effect.runPromiseExit(
+      Effect.tryPromise({
+        try: async () => {
+          const store = await load(PREFERENCES_STORE_FILE, { defaults: {}, autoSave: false });
+          await store.set(LIBRARY_FILTERS_STORE_KEY, filters);
+          await store.save();
+        },
+        catch: (cause) => cause,
+      }),
+    );
   };
 
-  writeQueue = (writeQueue ?? Promise.resolve()).then(write, write);
+  writeQueue = (writeQueue ?? Promise.resolve()).then(write, () => undefined);
 }
 
 export function createSharedLibraryFilters(): SharedLibraryFilters {

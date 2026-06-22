@@ -1,4 +1,4 @@
-import { Exit } from 'effect';
+import { Exit, Match } from 'effect';
 import { Check, Clapperboard, Film, Heart, RefreshCw, Tv } from 'lucide-solid';
 import { For, Show, createSignal } from 'solid-js';
 
@@ -91,19 +91,12 @@ export function libraryTitle(collectionType: VideoLibraryKind) {
   return collectionType === 'tvshows' ? 'Shows' : 'Movies';
 }
 
-export function playedFilterLabel(filter: VideoLibraryPlayedFilter) {
-  switch (filter) {
-    case 'played': {
-      return 'Played';
-    }
-    case 'unplayed': {
-      return 'Unplayed';
-    }
-    default: {
-      return 'All';
-    }
-  }
-}
+export const playedFilterLabel = Match.type<VideoLibraryPlayedFilter>().pipe(
+  Match.withReturnType<string>(),
+  Match.when('played', () => 'Played'),
+  Match.when('unplayed', () => 'Unplayed'),
+  Match.orElse(() => 'All'),
+);
 
 export const sortItems: JellyPilotSelectItem<VideoLibrarySort>[] = [
   { label: 'Title', value: 'title' },

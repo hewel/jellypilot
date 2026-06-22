@@ -10,7 +10,7 @@ export interface ServerUrlResult {
   isLocal: boolean;
 }
 
-import { Effect } from 'effect';
+import { Effect, Exit } from 'effect';
 
 import { InvalidServerUrl } from './effects/errors';
 
@@ -124,12 +124,13 @@ export function parseServerUrl(url: string | null | undefined): ServerUrlFields 
     return { scheme: 'https', host: '' };
   }
 
-  try {
-    const parsed = new URL(url);
-    const scheme: ServerScheme = parsed.protocol === 'http:' ? 'http' : 'https';
-    const host = `${parsed.host}${parsed.pathname === '/' ? '' : parsed.pathname}`;
-    return { host, scheme };
-  } catch {
+  const parsed = Effect.runSyncExit(
+    Effect.try({ try: () => new URL(url), catch: (cause) => cause }),
+  );
+  if (Exit.isFailure(parsed)) {
     return { host: '', scheme: 'https' };
   }
+  const scheme: ServerScheme = parsed.value.protocol === 'http:' ? 'http' : 'https';
+  const host = `${parsed.value.host}${parsed.value.pathname === '/' ? '' : parsed.value.pathname}`;
+  return { host, scheme };
 }
