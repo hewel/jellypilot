@@ -599,6 +599,7 @@ impl SessionManager {
         volume: 100,
         audio_stream_index: resolution.audio_stream_index,
         subtitle_stream_index: resolution.subtitle_stream_index,
+        play_method: resolution.play_method.to_string(),
       });
       s.last_report_time = std::time::Instant::now();
     }
@@ -1264,7 +1265,7 @@ impl SessionManager {
       volume_level: session.volume,
       audio_stream_index: session.audio_stream_index,
       subtitle_stream_index: session.subtitle_stream_index,
-      play_method: "DirectPlay".to_string(),
+      play_method: session.play_method,
       can_seek: true,
     };
 
@@ -1702,19 +1703,111 @@ fn intro_skipper_label_lower(kind: IntroSkipKind) -> &'static str {
   }
 }
 
-/// Redact sensitive query parameters from URLs for logging.
-/// Replaces api_key=XXX with api_key=[REDACTED].
+/// Redact sensitive URL/header fragments from log text.
 fn redact_url(url: &str) -> String {
-  // Use regex-like replacement for api_key parameter
-  if let Some(idx) = url.find("api_key=") {
-    let start = idx + 8; // length of "api_key="
-    let end = url[start..]
-      .find('&')
-      .map(|i| start + i)
-      .unwrap_or(url.len());
-    format!("{}[REDACTED]{}", &url[..start], &url[end..])
+  const SENSITIVE_KEYS: &[&str] = &[
+    "api_key",
+    "access_token",
+    "accesstoken",
+    "token",
+    "password",
+    "pw",
+  ];
+
+  let mut output = String::with_capacity(url.len());
+  let mut cursor = 0;
+
+  while cursor < url.len() {
+    let Some((_, key_end)) = find_sensitive_assignment(&url[cursor..], SENSITIVE_KEYS) else {
+      output.push_str(&url[cursor..]);
+      break;
+    };
+
+    let key_end = cursor + key_end;
+    let value_start = key_end + 1;
+    let quote = url[value_start..]
+      .chars()
+      .next()
+      .filter(|ch| matches!(ch, '"' | '\''));
+    let value_start = value_start + quote.map(char::len_utf8).unwrap_or(0);
+    let value_end = find_assignment_value_end(url, value_start, quote);
+
+    output.push_str(&url[cursor..value_start]);
+    output.push_str("[REDACTED]");
+    if let Some(quote) = quote {
+      if value_end < url.len() && url[value_end..].starts_with(quote) {
+        output.push(quote);
+        cursor = value_end + quote.len_utf8();
+        continue;
+      }
+    }
+    cursor = value_end;
+  }
+
+  output
+}
+
+fn find_sensitive_assignment(text: &str, sensitive_keys: &[&str]) -> Option<(usize, usize)> {
+  let bytes = text.as_bytes();
+  let mut index = 0;
+
+  while index < bytes.len() {
+    if is_key_boundary(text, index) {
+      let key_start = index + boundary_len(text, index);
+      let mut key_end = key_start;
+      while key_end < bytes.len() && is_assignment_key_byte(bytes[key_end]) {
+        key_end += 1;
+      }
+
+      if key_end < bytes.len()
+        && bytes[key_end] == b'='
+        && sensitive_keys
+          .iter()
+          .any(|key| text[key_start..key_end].eq_ignore_ascii_case(key))
+      {
+        return Some((key_start, key_end));
+      }
+
+      index = key_end.saturating_add(1);
+    } else {
+      index += 1;
+    }
+  }
+
+  None
+}
+
+fn is_key_boundary(text: &str, index: usize) -> bool {
+  index == 0
+    || matches!(
+      text.as_bytes()[index],
+      b'?' | b'&' | b',' | b' ' | b'\t' | b'\n'
+    )
+}
+
+fn boundary_len(text: &str, index: usize) -> usize {
+  if matches!(text.as_bytes()[index], b'?' | b'&') {
+    1
   } else {
-    url.to_string()
+    0
+  }
+}
+
+fn is_assignment_key_byte(byte: u8) -> bool {
+  byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-')
+}
+
+fn find_assignment_value_end(text: &str, value_start: usize, quote: Option<char>) -> usize {
+  if let Some(quote) = quote {
+    text[value_start..]
+      .find(quote)
+      .map(|offset| value_start + offset)
+      .unwrap_or(text.len())
+  } else {
+    text[value_start..]
+      .find(['&', ' ', '\t', '\n', '\r', '"', '\''])
+      .map(|offset| value_start + offset)
+      .unwrap_or(text.len())
   }
 }
 
@@ -1848,6 +1941,7 @@ mod tests {
         volume: 100,
         audio_stream_index: None,
         subtitle_stream_index: None,
+        play_method: "DirectPlay".to_string(),
       }),
       last_report_time: std::time::Instant::now(),
       effective_intro_skipper_config: IntroSkipperRuntimeConfig::from(&AppConfig::default()),
@@ -1885,6 +1979,7 @@ mod tests {
         volume: 100,
         audio_stream_index: None,
         subtitle_stream_index: None,
+        play_method: "DirectPlay".to_string(),
       }),
       last_report_time: std::time::Instant::now(),
       effective_intro_skipper_config: IntroSkipperRuntimeConfig::from(&AppConfig::default()),
@@ -2141,6 +2236,98 @@ mod tests {
     assert!(captured[2].contains(r#""SubtitleStreamIndex":2"#));
     assert!(captured[3].starts_with("POST /Sessions/Playing "));
     assert!(captured[3].contains(r#""PlayMethod":"DirectStream""#));
+  }
+
+  #[tokio::test]
+  async fn emby_playback_progress_reports_resolved_play_method_and_session_fields() {
+    let (client, requests) = connected_emby_test_client(vec![
+      (
+        "200 OK",
+        r#"{"Id":"00000000-0000-0000-0000-000000000001","Name":"Ada"}"#,
+      ),
+      ("204 No Content", ""),
+    ])
+    .await;
+    let state = RwLock::new(SessionState {
+      playback: Some(PlaybackSession {
+        item_id: "movie-emby".to_string(),
+        media_source_id: Some("source-emby".to_string()),
+        play_session_id: Some("play-emby".to_string()),
+        intro_skipper_ranges: Vec::new(),
+        position_ticks: 900_000_000,
+        is_paused: true,
+        is_muted: true,
+        volume: 65,
+        audio_stream_index: Some(1),
+        subtitle_stream_index: Some(2),
+        play_method: "DirectStream".to_string(),
+      }),
+      last_report_time: std::time::Instant::now(),
+      effective_intro_skipper_config: IntroSkipperRuntimeConfig::from(&AppConfig::default()),
+      current_series_id: None,
+      current_item: None,
+      current_media_streams: Vec::new(),
+      series_preferences: HashMap::new(),
+    });
+
+    SessionManager::report_progress(&client, &state).await;
+
+    let captured = requests.lock();
+    assert!(captured[1].starts_with("POST /Sessions/Playing/Progress "));
+    assert!(captured[1].contains(r#""ItemId":"movie-emby""#));
+    assert!(captured[1].contains(r#""MediaSourceId":"source-emby""#));
+    assert!(captured[1].contains(r#""PlaySessionId":"play-emby""#));
+    assert!(captured[1].contains(r#""PositionTicks":900000000"#));
+    assert!(captured[1].contains(r#""IsPaused":true"#));
+    assert!(captured[1].contains(r#""IsMuted":true"#));
+    assert!(captured[1].contains(r#""VolumeLevel":65"#));
+    assert!(captured[1].contains(r#""AudioStreamIndex":1"#));
+    assert!(captured[1].contains(r#""SubtitleStreamIndex":2"#));
+    assert!(captured[1].contains(r#""PlayMethod":"DirectStream""#));
+    assert!(captured[1].contains(r#""CanSeek":true"#));
+  }
+
+  #[tokio::test]
+  async fn emby_playback_stop_reports_session_identity_and_final_position() {
+    let (client, requests) = connected_emby_test_client(vec![
+      (
+        "200 OK",
+        r#"{"Id":"00000000-0000-0000-0000-000000000001","Name":"Ada"}"#,
+      ),
+      ("204 No Content", ""),
+    ])
+    .await;
+    let state = RwLock::new(SessionState {
+      playback: Some(PlaybackSession {
+        item_id: "movie-emby".to_string(),
+        media_source_id: Some("source-emby".to_string()),
+        play_session_id: Some("play-emby".to_string()),
+        intro_skipper_ranges: Vec::new(),
+        position_ticks: 1_230_000_000,
+        is_paused: false,
+        is_muted: false,
+        volume: 100,
+        audio_stream_index: Some(1),
+        subtitle_stream_index: Some(2),
+        play_method: "DirectStream".to_string(),
+      }),
+      last_report_time: std::time::Instant::now(),
+      effective_intro_skipper_config: IntroSkipperRuntimeConfig::from(&AppConfig::default()),
+      current_series_id: None,
+      current_item: None,
+      current_media_streams: Vec::new(),
+      series_preferences: HashMap::new(),
+    });
+
+    SessionManager::report_playback_stopped(&client, &state).await;
+
+    assert!(state.read().playback.is_none());
+    let captured = requests.lock();
+    assert!(captured[1].starts_with("POST /Sessions/Playing/Stopped "));
+    assert!(captured[1].contains(r#""ItemId":"movie-emby""#));
+    assert!(captured[1].contains(r#""MediaSourceId":"source-emby""#));
+    assert!(captured[1].contains(r#""PlaySessionId":"play-emby""#));
+    assert!(captured[1].contains(r#""PositionTicks":1230000000"#));
   }
 
   #[tokio::test]
@@ -2438,6 +2625,28 @@ mod regression_tests {
   }
 
   #[test]
+  fn redact_url_removes_authenticated_stream_websocket_and_login_secrets() {
+    let input = concat!(
+      "http://media.test/Videos/1/stream.mkv?MediaSourceId=source-1",
+      "&api_key=stream-token",
+      "&AccessToken=access-token",
+      "&password=login-secret",
+      " ws://media.test/socket?api_key=socket-token&deviceId=device-1"
+    );
+
+    let redacted = redact_url(input);
+
+    assert!(!redacted.contains("stream-token"));
+    assert!(!redacted.contains("access-token"));
+    assert!(!redacted.contains("login-secret"));
+    assert!(!redacted.contains("socket-token"));
+    assert!(redacted.contains("api_key=[REDACTED]"));
+    assert!(redacted.contains("AccessToken=[REDACTED]"));
+    assert!(redacted.contains("password=[REDACTED]"));
+    assert!(redacted.contains("deviceId=device-1"));
+  }
+
+  #[test]
   fn jellyfin_general_command_volume_from_string_updates_session_and_sends_action() {
     let state = RwLock::new(SessionState {
       playback: Some(PlaybackSession {
@@ -2451,6 +2660,7 @@ mod regression_tests {
         volume: 100,
         audio_stream_index: None,
         subtitle_stream_index: None,
+        play_method: "DirectPlay".to_string(),
       }),
       last_report_time: std::time::Instant::now(),
       effective_intro_skipper_config: IntroSkipperRuntimeConfig::from(&AppConfig::default()),

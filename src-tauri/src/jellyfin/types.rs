@@ -601,6 +601,7 @@ pub struct PlaybackSession {
   pub volume: i32,
   pub audio_stream_index: Option<i32>,
   pub subtitle_stream_index: Option<i32>,
+  pub play_method: String,
 }
 
 /// Ticks conversion helpers (1 tick = 100 nanoseconds).
@@ -787,6 +788,64 @@ mod tests {
     .expect("legacy credentials should deserialize");
 
     assert_eq!(credentials.provider, MediaServerProvider::Jellyfin);
+  }
+
+  #[test]
+  fn playback_progress_serializes_to_shared_server_payload_shape() {
+    let progress = PlaybackProgressInfo {
+      item_id: "movie-1".to_string(),
+      media_source_id: Some("source-1".to_string()),
+      play_session_id: Some("play-1".to_string()),
+      position_ticks: Some(900_000_000),
+      is_paused: true,
+      is_muted: false,
+      volume_level: 65,
+      audio_stream_index: Some(1),
+      subtitle_stream_index: Some(2),
+      play_method: "DirectStream".to_string(),
+      can_seek: true,
+    };
+
+    let payload = serde_json::to_value(progress).expect("progress should serialize");
+
+    assert_eq!(
+      payload,
+      serde_json::json!({
+        "ItemId": "movie-1",
+        "MediaSourceId": "source-1",
+        "PlaySessionId": "play-1",
+        "PositionTicks": 900000000,
+        "IsPaused": true,
+        "IsMuted": false,
+        "VolumeLevel": 65,
+        "AudioStreamIndex": 1,
+        "SubtitleStreamIndex": 2,
+        "PlayMethod": "DirectStream",
+        "CanSeek": true
+      })
+    );
+  }
+
+  #[test]
+  fn playback_stop_serializes_to_shared_server_payload_shape() {
+    let stopped = PlaybackStopInfo {
+      item_id: "movie-1".to_string(),
+      media_source_id: Some("source-1".to_string()),
+      play_session_id: Some("play-1".to_string()),
+      position_ticks: Some(1_230_000_000),
+    };
+
+    let payload = serde_json::to_value(stopped).expect("stop should serialize");
+
+    assert_eq!(
+      payload,
+      serde_json::json!({
+        "ItemId": "movie-1",
+        "MediaSourceId": "source-1",
+        "PlaySessionId": "play-1",
+        "PositionTicks": 1230000000
+      })
+    );
   }
 
   fn stream(index: i32, stream_type: &str, language: Option<&str>) -> MediaStream {

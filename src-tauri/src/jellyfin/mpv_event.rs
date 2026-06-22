@@ -94,6 +94,7 @@ mod tests {
       volume: 100,
       audio_stream_index: None,
       subtitle_stream_index: None,
+      play_method: "DirectPlay".into(),
     }
   }
 
