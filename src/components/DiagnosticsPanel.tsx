@@ -145,7 +145,7 @@ export default function DiagnosticsPanel(props: DiagnosticsPanelProps) {
   return (
     <div class="space-y-4">
       <div class="flex items-center justify-between gap-3 px-1">
-        <p class="text-on-surface-variant/80 font-mono text-[11px] font-semibold">
+        <p class="text-on-surface-variant/80 font-mono text-[11px] font-semibold tabular-nums">
           {diagnostics().length} sanitized runtime events
         </p>
         <Show when={!props.compact}>
@@ -154,7 +154,7 @@ export default function DiagnosticsPanel(props: DiagnosticsPanelProps) {
             onCheckedChange={(details) => setAutoScroll(details.checked === true)}
             class="text-on-surface-variant/95 inline-flex cursor-pointer items-center gap-2.5 align-top text-[11px] leading-[16px] font-bold tracking-[0.08em] uppercase transition-opacity select-none disabled:cursor-not-allowed disabled:opacity-50"
           >
-            <Checkbox.Control class="border-outline bg-surface-container-high text-on-primary hover:border-primary/60 data-[state=checked]:border-primary data-[state=checked]:from-primary data-[state=checked]:to-primary-gradient-end data-[state=indeterminate]:border-primary data-[state=indeterminate]:from-primary data-[state=indeterminate]:to-primary-gradient-end data-[focus-visible]:ring-primary/50 data-[focus-visible]:ring-offset-background inline-flex h-5.5 w-5.5 shrink-0 items-center justify-center rounded-lg border text-[11px] leading-none transition-all duration-200 data-[focus-visible]:ring-2 data-[focus-visible]:ring-offset-2 data-[focus-visible]:outline-none data-[state=checked]:bg-gradient-to-br data-[state=indeterminate]:bg-gradient-to-br">
+            <Checkbox.Control class="border-outline bg-surface-container-high text-on-primary hover:border-primary/60 data-[state=checked]:border-primary data-[state=checked]:from-primary data-[state=checked]:to-primary-gradient-end data-[state=indeterminate]:border-primary data-[state=indeterminate]:from-primary data-[state=indeterminate]:to-primary-gradient-end data-[focus-visible]:ring-primary/50 data-[focus-visible]:ring-offset-background inline-flex h-5.5 w-5.5 shrink-0 items-center justify-center rounded-lg border text-[11px] leading-none transition-[background-color,border-color,box-shadow] duration-200 data-[focus-visible]:ring-2 data-[focus-visible]:ring-offset-2 data-[focus-visible]:outline-none data-[state=checked]:bg-gradient-to-br data-[state=indeterminate]:bg-gradient-to-br">
               <Checkbox.Indicator class="flex items-center justify-center font-black">
                 ✓
               </Checkbox.Indicator>

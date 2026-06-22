@@ -232,7 +232,7 @@ function LibraryBrowseRoute() {
               >
                 {libraryTitle(collectionType())}
               </h2>
-              <p class="text-on-surface-variant/80 text-[12px] leading-[16px]">
+              <p class="text-on-surface-variant/80 text-[12px] leading-[16px] tabular-nums">
                 {readyState()?.items.length ?? 0} of {readyState()?.page.totalRecordCount ?? 0}
               </p>
             </div>
@@ -289,7 +289,7 @@ function LibrarySortMenu(props: LibrarySortMenuProps) {
       <Menu.Trigger
         disabled={props.disabled()}
         aria-label="Sort By"
-        class="border-outline-variant text-on-surface hover:text-secondary flex h-12 w-full flex-1 items-center justify-between border-l px-3 text-left transition-all duration-200 outline-none disabled:cursor-not-allowed disabled:opacity-50"
+        class="border-outline-variant text-on-surface hover:text-secondary flex h-12 w-full flex-1 items-center justify-between border-l px-3 text-left transition-colors duration-200 outline-none disabled:cursor-not-allowed disabled:opacity-50"
       >
         <ListSortAscending size={14} />
       </Menu.Trigger>
@@ -336,7 +336,7 @@ function LibraryStatusMenu(props: LibraryStatusMenuProps) {
       <Menu.Trigger
         disabled={props.disabled()}
         aria-label="Status"
-        class="border-outline-variant text-on-surface hover:text-secondary flex h-12 w-full flex-1 items-center justify-between border-l px-3 text-left transition-all duration-200 outline-none disabled:cursor-not-allowed disabled:opacity-50"
+        class="border-outline-variant text-on-surface hover:text-secondary flex h-12 w-full flex-1 items-center justify-between border-l px-3 text-left transition-colors duration-200 outline-none disabled:cursor-not-allowed disabled:opacity-50"
       >
         <Funnel size={14} />
       </Menu.Trigger>
@@ -413,7 +413,7 @@ function LibraryBrowseNavbarControls(props: LibraryBrowseNavbarControlsProps) {
                 }}
                 disabled={props.loading()}
                 aria-label={props.sortDirection() === 'desc' ? 'Sort descending' : 'Sort ascending'}
-                class="border-outline-variant text-on-surface hover:text-secondary data-[state=on]:bg-secondary-container/45 data-[state=on]:text-on-secondary-container flex h-12 w-12 items-center justify-center border-l transition-all duration-200 outline-none disabled:cursor-not-allowed disabled:opacity-50"
+                class="border-outline-variant text-on-surface hover:text-secondary data-[state=on]:bg-secondary-container/45 data-[state=on]:text-on-secondary-container flex h-12 w-12 items-center justify-center border-l transition-colors duration-200 outline-none disabled:cursor-not-allowed disabled:opacity-50"
               >
                 <Show
                   when={props.sortDirection() === 'desc'}

@@ -264,7 +264,7 @@ export default function PlayerBridgeSettingsCard(props: PlayerBridgeSettingsCard
                 />
                 <button
                   type="button"
-                  class="bg-secondary-container/40 border-secondary/20 hover:border-secondary/40 text-on-secondary-container hover:bg-secondary-container/60 inline-flex h-14 min-w-[5.5rem] items-center justify-center rounded-2xl border px-4 text-[14px] leading-[20px] font-bold transition duration-200 active:scale-[0.98] disabled:pointer-events-none disabled:opacity-50"
+                  class="bg-secondary-container/40 border-secondary/20 hover:border-secondary/40 text-on-secondary-container hover:bg-secondary-container/60 inline-flex h-14 min-w-[5.5rem] items-center justify-center rounded-2xl border px-4 text-[14px] leading-[20px] font-bold transition-[background-color,border-color,transform] duration-200 active:scale-[0.96] disabled:pointer-events-none disabled:opacity-50"
                   disabled={parseSubtitleLanguageInput(ui.subtitleLanguageInput).length === 0}
                   onClick={props.onAddSubtitleLanguages}
                 >
@@ -293,10 +293,10 @@ export default function PlayerBridgeSettingsCard(props: PlayerBridgeSettingsCard
                   <TagsInput.Item
                     index={index()}
                     value={language}
-                    class="border-outline-variant bg-surface-container-lowest/60 hover:bg-surface-container-lowest/80 flex items-center justify-between gap-3 rounded-xl border px-4 py-2.5 backdrop-blur-sm transition-all"
+                    class="border-outline-variant bg-surface-container-lowest/60 hover:bg-surface-container-lowest/80 flex items-center justify-between gap-3 rounded-xl border px-4 py-2.5 backdrop-blur-sm transition-colors"
                   >
                     <TagsInput.ItemPreview class="flex min-w-0 flex-1 items-center gap-3">
-                      <span class="bg-surface-container-high/60 border-outline-variant text-secondary flex h-6 w-6 shrink-0 items-center justify-center rounded-lg border font-mono text-[11px] font-bold shadow-inner">
+                      <span class="bg-surface-container-high/60 border-outline-variant text-secondary flex h-6 w-6 shrink-0 items-center justify-center rounded-lg border font-mono text-[11px] font-bold tabular-nums shadow-inner">
                         {index() + 1}
                       </span>
                       <TagsInput.ItemText class="text-on-surface shrink-0 font-mono text-[14px] font-bold">

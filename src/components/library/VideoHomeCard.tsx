@@ -23,7 +23,7 @@ export function VideoHomeCard(props: {
       variant="filled"
       href={`/library/items/${props.item.id}`}
       aria-label={`Open ${props.item.name}`}
-      class="focus-visible:ring-secondary/70 hover:border-primary/50 block overflow-hidden !p-0 transition-all duration-300 hover:shadow-[0_0_10px_rgba(79,70,229,0.35)] focus-visible:ring-2 focus-visible:outline-none"
+      class="focus-visible:ring-secondary/70 hover:border-primary/50 block overflow-hidden !p-0 transition-[border-color,box-shadow,transform] duration-300 hover:shadow-[0_0_10px_rgba(79,70,229,0.35)] focus-visible:ring-2 focus-visible:outline-none active:scale-[0.96]"
     >
       <div
         class={`${props.aspectClass} border-outline-variant bg-surface-container-lowest/60 overflow-hidden border-b`}
@@ -40,7 +40,7 @@ export function VideoHomeCard(props: {
             <img
               src={artworkUrl()}
               alt={`${props.item.name} artwork`}
-              class="h-full w-full object-cover"
+              class="h-full w-full object-cover outline outline-1 -outline-offset-1 outline-white/10"
               loading="lazy"
             />
           )}

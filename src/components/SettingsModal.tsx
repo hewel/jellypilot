@@ -42,11 +42,11 @@ export default function SettingsModal() {
       <Portal>
         <Dialog.Backdrop
           ref={backdropRef}
-          class="fixed inset-0 z-40 bg-black/70 backdrop-blur-sm transition-all duration-300"
+          class="fixed inset-0 z-40 bg-black/70 backdrop-blur-sm transition-[backdrop-filter,background-color,opacity] duration-300 data-[state=closed]:opacity-0 data-[state=open]:opacity-100"
         />
         <Dialog.Positioner class="fixed inset-0 z-40 flex h-full w-full flex-col overflow-hidden">
           <Dialog.Content
-            class="border-outline-variant/30 bg-surface-container-low/60 flex h-full w-full animate-[fadeIn_0.3s_cubic-bezier(0.16,1,0.3,1)_forwards] flex-col overflow-hidden backdrop-blur-xl outline-none"
+            class="border-outline-variant/30 bg-surface-container-low/60 flex h-full w-full flex-col overflow-hidden backdrop-blur-xl transition-[opacity,transform] duration-200 ease-[cubic-bezier(0.2,0,0,1)] outline-none data-[state=closed]:translate-y-1 data-[state=closed]:opacity-0 data-[state=open]:translate-y-0 data-[state=open]:opacity-100"
             onKeyDown={(event) => {
               if (event.key === 'Escape') {
                 setOpen(false);

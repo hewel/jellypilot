@@ -9,6 +9,7 @@ interface ToastProps {
   id: string;
   level: NotificationLevel;
   message: string;
+  exiting: boolean;
   onDismiss: (id: string) => void;
 }
 
@@ -63,7 +64,7 @@ export default function Toast(props: ToastProps) {
 
   return (
     <div
-      class={`animate-in slide-in-from-right pointer-events-auto mb-4 flex w-full max-w-sm items-center rounded-xl border p-4 shadow-md duration-300 ${getStyles()}`}
+      class={`pointer-events-auto mb-4 flex w-full max-w-sm items-center rounded-xl border p-4 shadow-md transition-[filter,opacity,transform] duration-200 ease-[cubic-bezier(0.2,0,0,1)] ${getStyles()} ${props.exiting ? 'translate-y-1 opacity-0 blur-[2px]' : 'blur-0 translate-y-0 animate-[fadeIn_0.2s_cubic-bezier(0.16,1,0.3,1)_forwards] opacity-100'}`}
       role="alert"
     >
       <div class="inline-flex flex-shrink-0 items-center justify-center">{getIcon()}</div>
@@ -72,7 +73,7 @@ export default function Toast(props: ToastProps) {
       </div>
       <button
         type="button"
-        class="hover:bg-on-surface/10 -mx-1.5 -my-1.5 ml-auto inline-flex h-8 w-8 items-center justify-center rounded-full p-1.5 transition-colors"
+        class="hover:bg-on-surface/10 -mx-1.5 -my-1.5 ml-auto inline-flex h-10 w-10 items-center justify-center rounded-full p-1.5 transition-colors"
         onClick={() => props.onDismiss(props.id)}
         aria-label="Close"
       >

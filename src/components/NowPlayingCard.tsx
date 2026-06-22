@@ -85,6 +85,11 @@ function statusVariant(status: NowPlayingState['status']) {
   }
 }
 
+const contextualIconClass = (visible: boolean, extra = '') =>
+  `${extra} absolute h-5 w-5 transition-[filter,opacity,transform] duration-200 ease-[cubic-bezier(0.2,0,0,1)] ${
+    visible ? 'scale-100 opacity-100 blur-0' : 'scale-[0.25] opacity-0 blur-[4px]'
+  }`;
+
 export default function NowPlayingCard(props: {
   jellyfinConnected: boolean;
   onPlayerStarted?: () => void;
@@ -282,7 +287,7 @@ export default function NowPlayingCard(props: {
       </div>
 
       <div class="border-outline-variant bg-surface-container-lowest/50 relative z-10 rounded-3xl border p-4 shadow-inner backdrop-blur-sm">
-        <div class="text-on-surface-variant mb-2.5 flex items-center justify-between font-mono text-[11px] font-semibold">
+        <div class="text-on-surface-variant mb-2.5 flex items-center justify-between font-mono text-[11px] font-semibold tabular-nums">
           <span>{formatTime(seekValue())}</span>
           <span>
             {activeTimeline() ? formatTime(player()?.duration ?? 0) : 'Timeline unavailable'}
@@ -302,13 +307,13 @@ export default function NowPlayingCard(props: {
             onValueChangeEnd={(details) => commitSeek(details.value[0] ?? 0)}
             class="flex w-full flex-col gap-2.5 disabled:opacity-50"
           >
-            <Slider.Control class="relative flex h-6 cursor-pointer items-center">
+            <Slider.Control class="relative flex h-10 cursor-pointer items-center">
               <Slider.Track class="bg-surface-container-highest/80 border-outline-variant/30 h-2.5 flex-1 overflow-hidden rounded-full border">
-                <Slider.Range class="from-primary to-primary-gradient-end h-full rounded-full bg-gradient-to-r shadow-[0_0_10px_rgba(79,70,229,0.35)] transition-all duration-150" />
+                <Slider.Range class="from-primary to-primary-gradient-end h-full rounded-full bg-gradient-to-r shadow-[0_0_10px_rgba(79,70,229,0.35)] transition-[width,transform] duration-150" />
               </Slider.Track>
               <Slider.Thumb
                 index={0}
-                class="border-surface-container-lowest bg-on-surface data-[focus-visible]:ring-primary/50 flex h-5.5 w-5.5 cursor-grab items-center justify-center rounded-full border-2 shadow-lg shadow-black/50 transition-all duration-200 outline-none hover:scale-110 hover:shadow-[0_0_12px_rgba(255,255,255,0.4)] active:cursor-grabbing data-[focus-visible]:ring-2"
+                class="border-surface-container-lowest bg-on-surface data-[focus-visible]:ring-primary/50 flex h-5.5 w-5.5 cursor-grab items-center justify-center rounded-full border-2 shadow-lg shadow-black/50 transition-[box-shadow,transform] duration-200 outline-none hover:scale-110 hover:shadow-[0_0_12px_rgba(255,255,255,0.4)] active:cursor-grabbing data-[focus-visible]:ring-2"
               >
                 <Slider.HiddenInput />
               </Slider.Thumb>
@@ -350,12 +355,20 @@ export default function NowPlayingCard(props: {
             )
           }
         >
-          <Show
-            when={player()?.paused ?? true}
-            fallback={<Pause class="h-5 w-5 drop-shadow-[0_2px_4px_rgba(0,0,0,0.3)]" />}
-          >
-            <Play class="h-5 w-5 drop-shadow-[0_2px_4px_rgba(0,0,0,0.3)]" />
-          </Show>
+          <span class="relative inline-grid h-5 w-5 place-items-center">
+            <Play
+              class={contextualIconClass(
+                player()?.paused ?? true,
+                'drop-shadow-[0_2px_4px_rgba(0,0,0,0.3)]',
+              )}
+            />
+            <Pause
+              class={contextualIconClass(
+                !(player()?.paused ?? true),
+                'drop-shadow-[0_2px_4px_rgba(0,0,0,0.3)]',
+              )}
+            />
+          </span>
           <span class="font-bold tracking-wide">{player()?.paused ? 'Play' : 'Pause'}</span>
         </Button>
         <Button
@@ -437,9 +450,10 @@ export default function NowPlayingCard(props: {
           disabled={!connected() || busy() !== null}
           onClick={() => void runCommand('mute', toggleMute, 'Could not toggle mute')}
         >
-          <Show when={connected() && !muted()} fallback={<VolumeX class="text-error h-5 w-5" />}>
-            <Volume2 class="text-secondary h-5 w-5" />
-          </Show>
+          <span class="relative inline-grid h-5 w-5 place-items-center">
+            <Volume2 class={contextualIconClass(connected() && !muted(), 'text-secondary')} />
+            <VolumeX class={contextualIconClass(!connected() || muted(), 'text-error')} />
+          </span>
         </Button>
         <Slider.Root
           aria-label={['Volume']}
@@ -451,19 +465,19 @@ export default function NowPlayingCard(props: {
           onValueChangeEnd={(details) => commitVolume(details.value[0] ?? 100)}
           class="flex w-full flex-1 flex-col gap-2.5 disabled:opacity-50"
         >
-          <Slider.Control class="relative flex h-6 cursor-pointer items-center">
+          <Slider.Control class="relative flex h-10 cursor-pointer items-center">
             <Slider.Track class="bg-surface-container-highest/80 border-outline-variant/30 h-2.5 flex-1 overflow-hidden rounded-full border">
-              <Slider.Range class="from-secondary to-primary h-full rounded-full bg-gradient-to-r shadow-[0_0_8px_rgba(129,140,248,0.4)] transition-all duration-150" />
+              <Slider.Range class="from-secondary to-primary h-full rounded-full bg-gradient-to-r shadow-[0_0_8px_rgba(129,140,248,0.4)] transition-[width,transform] duration-150" />
             </Slider.Track>
             <Slider.Thumb
               index={0}
-              class="border-surface-container-lowest bg-on-surface data-[focus-visible]:ring-primary/50 flex h-5.5 w-5.5 cursor-grab items-center justify-center rounded-full border-2 shadow-lg shadow-black/50 transition-all duration-200 outline-none hover:scale-110 hover:shadow-[0_0_12px_rgba(255,255,255,0.4)] active:cursor-grabbing data-[focus-visible]:ring-2"
+              class="border-surface-container-lowest bg-on-surface data-[focus-visible]:ring-primary/50 flex h-5.5 w-5.5 cursor-grab items-center justify-center rounded-full border-2 shadow-lg shadow-black/50 transition-[box-shadow,transform] duration-200 outline-none hover:scale-110 hover:shadow-[0_0_12px_rgba(255,255,255,0.4)] active:cursor-grabbing data-[focus-visible]:ring-2"
             >
               <Slider.HiddenInput />
             </Slider.Thumb>
           </Slider.Control>
         </Slider.Root>
-        <span class="text-secondary w-12 text-right font-mono text-[13px] font-semibold drop-shadow-[0_0_6px_rgba(129,140,248,0.15)]">
+        <span class="text-secondary w-12 text-right font-mono text-[13px] font-semibold tabular-nums drop-shadow-[0_0_6px_rgba(129,140,248,0.15)]">
           {Math.round(volumeValue())}%
         </span>
       </div>

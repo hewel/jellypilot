@@ -8,11 +8,11 @@ export type CardVariant = 'filled' | 'elevated' | 'outlined';
 
 const variantClass: Record<CardVariant, string> = {
   elevated:
-    'border-primary/20 bg-surface-container-low/45 rounded-[2rem] border p-6 shadow-2xl backdrop-blur-xl transition-all duration-300 hover:border-primary/35 hover:bg-surface-container-low/60',
+    'border-primary/20 bg-surface-container-low/45 rounded-[2rem] border p-6 shadow-2xl backdrop-blur-xl transition-[background-color,border-color,box-shadow] duration-300 hover:border-primary/35 hover:bg-surface-container-low/60',
   filled:
-    'border-outline-variant/80 bg-surface/50 rounded-2xl border p-4 shadow-xl backdrop-blur-md transition-all duration-300',
+    'border-outline-variant/80 bg-surface/50 rounded-2xl border p-4 shadow-xl backdrop-blur-md transition-[background-color,border-color,box-shadow] duration-300',
   outlined:
-    'border-outline-variant hover:border-outline/40 rounded-[1.75rem] border bg-transparent p-6 transition-all duration-300',
+    'border-outline-variant hover:border-outline/40 rounded-[1.75rem] border bg-transparent p-6 transition-[background-color,border-color,box-shadow] duration-300',
 };
 
 export interface CardProps extends JSX.HTMLAttributes<HTMLElement> {

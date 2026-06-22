@@ -36,8 +36,8 @@ export default function JellyPilotSelect<Value extends string>(
       : 'mb-1.5 block text-on-surface-variant text-[12px] leading-[16px] font-bold tracking-[0.05em] uppercase';
   const triggerClass = () =>
     isCompact()
-      ? 'flex h-12 w-full items-center justify-between gap-2 rounded-lg border border-outline-variant bg-surface-container-low px-3 text-left text-on-surface outline-none transition-all duration-200 hover:border-secondary/50 focus:border-secondary focus:ring-2 focus:ring-secondary/25 disabled:cursor-not-allowed disabled:opacity-50'
-      : 'flex h-14 w-full items-center justify-between gap-2 rounded-2xl border border-outline-variant/80 bg-surface-container-highest/30 px-4 text-left text-on-surface outline-none transition-all duration-200 hover:border-secondary/50 focus:border-secondary focus:ring-4 focus:ring-secondary/15 disabled:cursor-not-allowed disabled:opacity-50';
+      ? 'flex h-12 w-full items-center justify-between gap-2 rounded-lg border border-outline-variant bg-surface-container-low px-3 text-left text-on-surface outline-none transition-[background-color,border-color,box-shadow] duration-200 hover:border-secondary/50 focus:border-secondary focus:ring-2 focus:ring-secondary/25 disabled:cursor-not-allowed disabled:opacity-50'
+      : 'flex h-14 w-full items-center justify-between gap-2 rounded-2xl border border-outline-variant/80 bg-surface-container-highest/30 px-4 text-left text-on-surface outline-none transition-[background-color,border-color,box-shadow] duration-200 hover:border-secondary/50 focus:border-secondary focus:ring-4 focus:ring-secondary/15 disabled:cursor-not-allowed disabled:opacity-50';
   const SelectContent = () => (
     <Select.Positioner>
       <Select.Content class="border-outline-variant bg-surface-container-lowest max-h-60 overflow-y-auto rounded-lg border p-2 shadow-2xl backdrop-blur-md">
@@ -78,8 +78,8 @@ export default function JellyPilotSelect<Value extends string>(
             placeholder={props.placeholder}
             class="text-on-surface min-w-0 truncate text-[14px] leading-[20px] font-medium"
           />
-          <Select.Indicator>
-            <ChevronDown class="text-on-surface-variant/70 h-4 w-4" />
+          <Select.Indicator class="group">
+            <ChevronDown class="text-on-surface-variant/70 h-4 w-4 transition-transform duration-200 group-data-[state=open]:rotate-180" />
           </Select.Indicator>
         </Select.Trigger>
       </Select.Control>

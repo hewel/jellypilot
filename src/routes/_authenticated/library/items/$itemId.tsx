@@ -190,7 +190,7 @@ function LibraryItemDetailRoute() {
                         <img
                           src={artworkUrl()}
                           alt={`${item().name} artwork`}
-                          class="h-full w-full object-cover"
+                          class="h-full w-full object-cover outline outline-1 -outline-offset-1 outline-white/10"
                         />
                       )}
                     </Show>

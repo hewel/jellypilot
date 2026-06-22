@@ -6,6 +6,7 @@ import type { ParentProps } from 'solid-js';
 import Toast from './Toast';
 import type { NotificationLevel } from './Toast';
 
+const TOAST_EXIT_MS = 200;
 export interface ToastMessage {
   id: string;
   level: NotificationLevel;
@@ -28,6 +29,8 @@ const ToastContext = createContext<ToastContextValue>();
 export function ToastProvider(props: ParentProps) {
   const [toasts, setToasts] = createSignal<ToastMessage[]>([]);
   let unlisten: UnlistenFn | undefined;
+  const [exitingToastIds, setExitingToastIds] = createSignal<Set<string>>(new Set());
+  const dismissTimers = new Map<string, ReturnType<typeof setTimeout>>();
 
   const showToast = (level: NotificationLevel, message: string) => {
     const id = Math.random().toString(36).slice(2, 9);
@@ -35,7 +38,23 @@ export function ToastProvider(props: ParentProps) {
   };
 
   const removeToast = (id: string) => {
-    setToasts((prev) => prev.filter((t) => t.id !== id));
+    const present = toasts().some((toast) => toast.id === id);
+    if (!present || exitingToastIds().has(id)) {
+      return;
+    }
+    setExitingToastIds((current) => new Set(current).add(id));
+    dismissTimers.set(
+      id,
+      setTimeout(() => {
+        setToasts((prev) => prev.filter((toast) => toast.id !== id));
+        setExitingToastIds((current) => {
+          const next = new Set(current);
+          next.delete(id);
+          return next;
+        });
+        dismissTimers.delete(id);
+      }, TOAST_EXIT_MS),
+    );
   };
 
   // Listen for backend AppNotification events
@@ -51,6 +70,8 @@ export function ToastProvider(props: ParentProps) {
 
   onCleanup(() => {
     unlisten?.();
+    dismissTimers.forEach((timer) => clearTimeout(timer));
+    dismissTimers.clear();
   });
 
   return (
@@ -63,6 +84,7 @@ export function ToastProvider(props: ParentProps) {
               id={toast.id}
               level={toast.level}
               message={toast.message}
+              exiting={exitingToastIds().has(toast.id)}
               onDismiss={removeToast}
             />
           )}

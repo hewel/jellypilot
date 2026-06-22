@@ -286,7 +286,7 @@ export default function LoginPage(props: LoginPageProps) {
                   >
                     <button
                       type="button"
-                      class={`cursor-pointer rounded-xl px-4 py-3 text-[14px] leading-[20px] font-semibold tracking-wide uppercase transition-all duration-300 ${field().state.value === 'https' ? 'bg-primary from-primary to-primary-gradient-end text-on-primary shadow-primary/20 bg-gradient-to-r font-bold shadow-md' : 'text-on-surface-variant hover:text-on-surface hover:bg-surface-container-highest/40'}`}
+                      class={`cursor-pointer rounded-xl px-4 py-3 text-[14px] leading-[20px] font-semibold tracking-wide uppercase transition-[background-color,color,box-shadow,transform] duration-300 active:scale-[0.96] ${field().state.value === 'https' ? 'bg-primary from-primary to-primary-gradient-end text-on-primary shadow-primary/20 bg-gradient-to-r font-bold shadow-md' : 'text-on-surface-variant hover:text-on-surface hover:bg-surface-container-highest/40'}`}
                       disabled={isQuickConnectWaiting()}
                       onClick={() => field().handleChange('https')}
                     >
@@ -294,7 +294,7 @@ export default function LoginPage(props: LoginPageProps) {
                     </button>
                     <button
                       type="button"
-                      class={`cursor-pointer rounded-xl px-4 py-3 text-[14px] leading-[20px] font-semibold tracking-wide uppercase transition-all duration-300 ${field().state.value === 'http' ? 'bg-primary from-primary to-primary-gradient-end text-on-primary shadow-primary/20 bg-gradient-to-r font-bold shadow-md' : 'text-on-surface-variant hover:text-on-surface hover:bg-surface-container-highest/40'}`}
+                      class={`cursor-pointer rounded-xl px-4 py-3 text-[14px] leading-[20px] font-semibold tracking-wide uppercase transition-[background-color,color,box-shadow,transform] duration-300 active:scale-[0.96] ${field().state.value === 'http' ? 'bg-primary from-primary to-primary-gradient-end text-on-primary shadow-primary/20 bg-gradient-to-r font-bold shadow-md' : 'text-on-surface-variant hover:text-on-surface hover:bg-surface-container-highest/40'}`}
                       disabled={isQuickConnectWaiting()}
                       onClick={() => field().handleChange('http')}
                     >
@@ -367,21 +367,21 @@ export default function LoginPage(props: LoginPageProps) {
                 <Tabs.Trigger
                   value="quickConnect"
                   disabled={isQuickConnectWaiting()}
-                  class={`cursor-pointer rounded-xl px-4 py-3 text-[14px] leading-[20px] font-semibold tracking-wide uppercase transition-all duration-300 ${loginMethod() === 'quickConnect' ? 'from-primary to-primary-gradient-end text-on-primary shadow-primary/25 bg-gradient-to-r font-bold shadow-lg' : 'text-on-surface-variant hover:text-on-surface hover:bg-surface-container-highest/40'}`}
+                  class={`cursor-pointer rounded-xl px-4 py-3 text-[14px] leading-[20px] font-semibold tracking-wide uppercase transition-[background-color,color,box-shadow,transform] duration-300 active:scale-[0.96] ${loginMethod() === 'quickConnect' ? 'from-primary to-primary-gradient-end text-on-primary shadow-primary/25 bg-gradient-to-r font-bold shadow-lg' : 'text-on-surface-variant hover:text-on-surface hover:bg-surface-container-highest/40'}`}
                 >
                   Quick Connect
                 </Tabs.Trigger>
                 <Tabs.Trigger
                   value="password"
                   disabled={isQuickConnectWaiting()}
-                  class={`cursor-pointer rounded-xl px-4 py-3 text-[14px] leading-[20px] font-semibold tracking-wide uppercase transition-all duration-300 ${loginMethod() === 'password' ? 'from-primary to-primary-gradient-end text-on-primary shadow-primary/25 bg-gradient-to-r font-bold shadow-lg' : 'text-on-surface-variant hover:text-on-surface hover:bg-surface-container-highest/40'}`}
+                  class={`cursor-pointer rounded-xl px-4 py-3 text-[14px] leading-[20px] font-semibold tracking-wide uppercase transition-[background-color,color,box-shadow,transform] duration-300 active:scale-[0.96] ${loginMethod() === 'password' ? 'from-primary to-primary-gradient-end text-on-primary shadow-primary/25 bg-gradient-to-r font-bold shadow-lg' : 'text-on-surface-variant hover:text-on-surface hover:bg-surface-container-highest/40'}`}
                 >
                   Password
                 </Tabs.Trigger>
               </Tabs.List>
 
               <Tabs.Content value="quickConnect">
-                <div class="border-secondary/25 bg-secondary-container/20 relative overflow-hidden rounded-3xl border p-6 text-center backdrop-blur-sm transition-all duration-300">
+                <div class="border-secondary/25 bg-secondary-container/20 relative overflow-hidden rounded-3xl border p-6 text-center backdrop-blur-sm transition-colors">
                   <div class="from-secondary/5 pointer-events-none absolute inset-0 bg-gradient-to-b to-transparent" />
 
                   {/* Decorative radar background */}
@@ -415,7 +415,7 @@ export default function LoginPage(props: LoginPageProps) {
                       <span class="text-on-surface-variant/80 mb-1 text-[10px] font-bold tracking-[0.2em] uppercase">
                         Verification Code
                       </span>
-                      <p class="font-display text-secondary pl-[0.25em] font-mono text-[36px] leading-[44px] font-bold tracking-[0.25em] tracking-tight drop-shadow-[0_0_10px_rgba(129,140,248,0.55)]">
+                      <p class="font-display text-secondary pl-[0.25em] font-mono text-[36px] leading-[44px] font-bold tracking-[0.25em] tracking-tight tabular-nums drop-shadow-[0_0_10px_rgba(129,140,248,0.55)]">
                         {quickConnectCode()}
                       </p>
                     </div>
@@ -484,7 +484,7 @@ export default function LoginPage(props: LoginPageProps) {
                         }
                         class="text-on-surface mt-2.5 inline-flex cursor-pointer items-center gap-2.5 align-top text-[14px] leading-[20px] transition-opacity select-none disabled:cursor-not-allowed disabled:opacity-50"
                       >
-                        <Checkbox.Control class="border-outline bg-surface-container-high text-on-primary hover:border-primary/60 data-[state=checked]:border-primary data-[state=checked]:from-primary data-[state=checked]:to-primary-gradient-end data-[state=indeterminate]:border-primary data-[state=indeterminate]:from-primary data-[state=indeterminate]:to-primary-gradient-end data-[focus-visible]:ring-primary/50 data-[focus-visible]:ring-offset-background inline-flex h-5.5 w-5.5 shrink-0 items-center justify-center rounded-lg border text-[11px] leading-none transition-all duration-200 data-[focus-visible]:ring-2 data-[focus-visible]:ring-offset-2 data-[focus-visible]:outline-none data-[state=checked]:bg-gradient-to-br data-[state=indeterminate]:bg-gradient-to-br">
+                        <Checkbox.Control class="border-outline bg-surface-container-high text-on-primary hover:border-primary/60 data-[state=checked]:border-primary data-[state=checked]:from-primary data-[state=checked]:to-primary-gradient-end data-[state=indeterminate]:border-primary data-[state=indeterminate]:from-primary data-[state=indeterminate]:to-primary-gradient-end data-[focus-visible]:ring-primary/50 data-[focus-visible]:ring-offset-background inline-flex h-5.5 w-5.5 shrink-0 items-center justify-center rounded-lg border text-[11px] leading-none transition-[background-color,border-color,box-shadow] duration-200 data-[focus-visible]:ring-2 data-[focus-visible]:ring-offset-2 data-[focus-visible]:outline-none data-[state=checked]:bg-gradient-to-br data-[state=indeterminate]:bg-gradient-to-br">
                           <Checkbox.Indicator class="flex items-center justify-center font-black">
                             <Check class="h-3.5 w-3.5" stroke-width={4} />
                           </Checkbox.Indicator>

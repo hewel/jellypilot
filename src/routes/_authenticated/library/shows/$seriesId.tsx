@@ -264,7 +264,7 @@ function LibraryShowDetailRoute() {
                       Episodes
                     </h2>
                   </div>
-                  <p class="text-on-surface-variant/80 text-[12px] leading-[16px]">
+                  <p class="text-on-surface-variant/80 text-[12px] leading-[16px] tabular-nums">
                     {show().seasons.length} seasons available
                   </p>
                 </div>
@@ -347,7 +347,7 @@ function LibraryShowDetailRoute() {
                                       <img
                                         src={artworkUrl()}
                                         alt={`${episode.name} artwork`}
-                                        class="h-full w-full object-cover"
+                                        class="h-full w-full object-cover outline outline-1 -outline-offset-1 outline-white/10"
                                         loading="lazy"
                                       />
                                     )}
@@ -383,7 +383,7 @@ function LibraryShowDetailRoute() {
                                       }
                                     >
                                       <span class="text-on-surface-variant/70">·</span>{' '}
-                                      <span class="text-secondary text-[12px] leading-[16px] font-semibold">
+                                      <span class="text-secondary text-[12px] leading-[16px] font-semibold tabular-nums">
                                         {Math.round(episode.playedPercentage ?? 0)}% watched
                                       </span>
                                     </Show>
@@ -459,7 +459,7 @@ function LibraryShowDetailRoute() {
                         <img
                           src={artworkUrl()}
                           alt={`${show().name} artwork`}
-                          class="h-full w-full animate-[fadeIn_0.3s_cubic-bezier(0.16,1,0.3,1)_forwards] object-cover"
+                          class="h-full w-full animate-[fadeIn_0.3s_cubic-bezier(0.16,1,0.3,1)_forwards] object-cover outline outline-1 -outline-offset-1 outline-white/10"
                         />
                       )}
                     </Show>

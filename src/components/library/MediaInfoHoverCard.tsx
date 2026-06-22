@@ -45,7 +45,7 @@ export function MediaInfoContent(props: { detail: MediaDetail }) {
         {props.detail.name}
       </p>
       <Show when={meta()}>
-        <p class="text-on-surface-variant text-[12px] leading-[16px] font-bold tracking-[0.05em] uppercase">
+        <p class="text-on-surface-variant text-[12px] leading-[16px] font-bold tracking-[0.05em] uppercase tabular-nums">
           {meta()}
         </p>
       </Show>
@@ -72,7 +72,7 @@ export function MediaInfoContent(props: { detail: MediaDetail }) {
           <div class="bg-surface-container-highest/70 h-1 w-full overflow-hidden rounded-full">
             <div class="bg-secondary h-full" style={{ width: `${resumePct()}%` }} />
           </div>
-          <p class="text-on-surface-variant mt-1 text-[11px] leading-[16px] font-bold tracking-[0.08em] uppercase">
+          <p class="text-on-surface-variant mt-1 text-[11px] leading-[16px] font-bold tracking-[0.08em] uppercase tabular-nums">
             {Math.round(resumePct())}% watched
           </p>
         </div>

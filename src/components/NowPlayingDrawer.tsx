@@ -115,11 +115,11 @@ export default function NowPlayingDrawer(props: { jellyfinConnected: boolean }) 
       />
 
       <Portal>
-        <Dialog.Backdrop class="fixed inset-0 z-50 bg-black/70 backdrop-blur-sm transition-all duration-300" />
+        <Dialog.Backdrop class="fixed inset-0 z-50 bg-black/70 backdrop-blur-sm transition-[backdrop-filter,background-color,opacity] duration-300 data-[state=closed]:opacity-0 data-[state=open]:opacity-100" />
         <Dialog.Positioner class="fixed inset-0 z-50 flex justify-end">
           <Dialog.Content
             ref={setSelectPortalMount}
-            class="border-outline-variant/30 bg-surface-container-low/60 flex h-full w-full animate-[fadeIn_0.3s_cubic-bezier(0.16,1,0.3,1)_forwards] flex-col overflow-hidden rounded-l-[2rem] border-l shadow-2xl backdrop-blur-xl sm:w-[28rem]"
+            class="border-outline-variant/30 bg-surface-container-low/60 flex h-full w-full flex-col overflow-hidden rounded-l-[2rem] border-l shadow-2xl backdrop-blur-xl transition-[opacity,transform] duration-200 ease-[cubic-bezier(0.2,0,0,1)] data-[state=closed]:translate-x-3 data-[state=closed]:opacity-0 data-[state=open]:translate-x-0 data-[state=open]:opacity-100 sm:w-[28rem]"
           >
             {/* Header */}
             <div class="border-outline-variant/20 flex items-center justify-between border-b px-5 py-4">

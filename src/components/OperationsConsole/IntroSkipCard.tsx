@@ -25,7 +25,7 @@ export default function IntroSkipCard(props: IntroSkipCardProps) {
             {(option) => (
               <button
                 type="button"
-                class={`cursor-pointer rounded-2xl border px-4 py-3 text-left backdrop-blur-sm transition-all duration-300 ${
+                class={`cursor-pointer rounded-2xl border px-4 py-3 text-left backdrop-blur-sm transition-[background-color,border-color,box-shadow,transform] duration-300 active:scale-[0.96] ${
                   props.currentMode === option.mode
                     ? 'border-primary bg-primary-container/35 text-on-primary-container font-semibold shadow-[0_0_15px_rgba(79,70,229,0.25)]'
                     : 'border-outline-variant bg-surface-container-high/40 text-on-surface hover:border-primary/50 hover:bg-surface-container-high/60'

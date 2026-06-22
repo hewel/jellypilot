@@ -69,7 +69,7 @@ export default function SessionCard(props: SessionCardProps) {
 
       <Portal>
         <Dialog.Backdrop
-          class="fixed inset-0 z-50 bg-black/70 backdrop-blur-sm transition-all duration-300"
+          class="fixed inset-0 z-50 bg-black/70 backdrop-blur-sm transition-[backdrop-filter,background-color,opacity] duration-300 data-[state=closed]:opacity-0 data-[state=open]:opacity-100"
           onClick={() => {
             if (!ui.signingOut) {
               actions.setSignOutDialogOpen(false);
@@ -78,7 +78,7 @@ export default function SessionCard(props: SessionCardProps) {
         />
         <Dialog.Positioner class="fixed inset-0 z-50 flex items-center justify-center p-4">
           <Dialog.Content
-            class="border-primary/20 bg-surface-container-low/45 hover:border-primary/35 hover:bg-surface-container-low/60 border-error/30 relative max-w-md animate-[fadeIn_0.3s_cubic-bezier(0.16,1,0.3,1)_forwards] overflow-hidden rounded-[2rem] border p-6 shadow-2xl backdrop-blur-xl transition-all duration-300"
+            class="border-primary/20 bg-surface-container-low/45 hover:border-primary/35 hover:bg-surface-container-low/60 border-error/30 relative max-w-md overflow-hidden rounded-[2rem] border p-6 shadow-2xl backdrop-blur-xl transition-[background-color,border-color,box-shadow,opacity,transform] duration-300 data-[state=closed]:translate-y-1 data-[state=closed]:opacity-0 data-[state=open]:translate-y-0 data-[state=open]:opacity-100"
             onKeyDown={(event) => {
               if (event.key === 'Escape' && !ui.signingOut) {
                 actions.setSignOutDialogOpen(false);
