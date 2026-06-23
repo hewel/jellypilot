@@ -6,7 +6,10 @@ use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::{mpsc, oneshot};
 use tokio::task::JoinHandle;
-use tokio_tungstenite::{connect_async, tungstenite::Message};
+use tokio_tungstenite::{
+  connect_async,
+  tungstenite::{client::IntoClientRequest, http::header, Message},
+};
 use tokio_util::sync::CancellationToken;
 
 use super::error::JellyfinError;
@@ -66,7 +69,17 @@ impl JellyfinWebSocket {
   }
 
   /// Connect to Jellyfin WebSocket and own reconnects until explicit shutdown.
+  #[allow(dead_code)]
   pub async fn connect(&self, url: &str) -> Result<(), JellyfinError> {
+    self.connect_with_user_agent(url, None).await
+  }
+
+  /// Connect to Jellyfin WebSocket with an optional User-Agent override.
+  pub async fn connect_with_user_agent(
+    &self,
+    url: &str,
+    user_agent: Option<&str>,
+  ) -> Result<(), JellyfinError> {
     self.stop_task(false).await;
 
     let Some(event_tx) = self.channel.read().event_tx.clone() else {
@@ -78,10 +91,19 @@ impl JellyfinWebSocket {
 
     let connected = self.connected.clone();
     let url = url.to_string();
+    let user_agent = user_agent.map(str::to_string);
     let (initial_tx, initial_rx) = oneshot::channel();
 
     let handle = tokio::spawn(async move {
-      Self::run_command_stream(url, event_tx, connected, cancel_token, Some(initial_tx)).await;
+      Self::run_command_stream(
+        url,
+        user_agent,
+        event_tx,
+        connected,
+        cancel_token,
+        Some(initial_tx),
+      )
+      .await;
     });
     *self.task_handle.write() = Some(handle);
 
@@ -90,6 +112,7 @@ impl JellyfinWebSocket {
 
   async fn run_command_stream(
     url: String,
+    user_agent: Option<String>,
     event_tx: mpsc::Sender<JellyfinWebSocketEvent>,
     connected: Arc<RwLock<bool>>,
     cancel_token: CancellationToken,
@@ -103,9 +126,27 @@ impl JellyfinWebSocket {
         break;
       }
 
+      let request = match Self::connection_request(&url, user_agent.as_deref()) {
+        Ok(request) => request,
+        Err(error) => {
+          *connected.write() = false;
+          if let Some(initial_tx) = initial_tx.take() {
+            let _ = initial_tx.send(Err(error));
+            break;
+          }
+          log::error!("WebSocket request build failed: {}", error);
+          let delay = reconnect_delay(reconnect_attempt);
+          reconnect_attempt = reconnect_attempt.saturating_add(1);
+          if wait_for_reconnect_delay(delay, &cancel_token).await {
+            break;
+          }
+          continue;
+        }
+      };
+
       let connection = tokio::select! {
         _ = cancel_token.cancelled() => break,
-        connection = connect_async(&url) => connection,
+        connection = connect_async(request) => connection,
       };
 
       let (ws_stream, _) = match connection {
@@ -177,6 +218,19 @@ impl JellyfinWebSocket {
     }
 
     *connected.write() = false;
+  }
+
+  fn connection_request(
+    url: &str,
+    user_agent: Option<&str>,
+  ) -> Result<tokio_tungstenite::tungstenite::handshake::client::Request, JellyfinError> {
+    let mut request = url.into_client_request()?;
+    if let Some(user_agent) = user_agent {
+      let value = header::HeaderValue::from_str(user_agent)
+        .map_err(tokio_tungstenite::tungstenite::Error::from)?;
+      request.headers_mut().insert(header::USER_AGENT, value);
+    }
+    Ok(request)
   }
 
   async fn run_socket<S>(
@@ -397,7 +451,10 @@ impl Default for JellyfinWebSocket {
 #[cfg(test)]
 mod tests {
   use super::*;
-  use tokio::net::{TcpListener, TcpStream};
+  use tokio::{
+    io::{AsyncReadExt, AsyncWriteExt},
+    net::{TcpListener, TcpStream},
+  };
   use tokio_tungstenite::{accept_async, tungstenite::Message, WebSocketStream};
 
   async fn send_text(stream: &mut WebSocketStream<TcpStream>, value: serde_json::Value) {
@@ -420,6 +477,59 @@ mod tests {
       .await
       .expect("event before timeout")
       .expect("stream still open")
+  }
+
+  #[tokio::test]
+  async fn connect_with_user_agent_sends_custom_handshake_header_before_http_error() {
+    let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
+    let url = format!("ws://{}", listener.local_addr().expect("addr"));
+    let expected_user_agent =
+      "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36 JellyPilot/test";
+    let (request_tx, request_rx) = oneshot::channel();
+
+    let server = tokio::spawn(async move {
+      let (mut socket, _) = listener.accept().await.expect("accept");
+      let mut bytes = Vec::new();
+      let mut buffer = [0_u8; 1024];
+      loop {
+        let count = socket.read(&mut buffer).await.expect("read request");
+        if count == 0 {
+          break;
+        }
+        bytes.extend_from_slice(&buffer[..count]);
+        if bytes.windows(4).any(|window| window == b"\r\n\r\n") {
+          break;
+        }
+      }
+      let request = String::from_utf8_lossy(&bytes).into_owned();
+      request_tx.send(request).expect("send captured request");
+      socket
+        .write_all(b"HTTP/1.1 403 Forbidden\r\nContent-Length: 0\r\n\r\n")
+        .await
+        .expect("write response");
+    });
+
+    let websocket = JellyfinWebSocket::new();
+    let error = websocket
+      .connect_with_user_agent(&url, Some(expected_user_agent))
+      .await
+      .expect_err("server rejects websocket upgrade");
+    assert!(
+      error.to_string().contains("403"),
+      "expected HTTP 403 error, got: {error}"
+    );
+    let request = tokio::time::timeout(Duration::from_secs(2), request_rx)
+      .await
+      .expect("captured request before timeout")
+      .expect("captured request");
+    server.await.expect("server done");
+    let user_agent = request.lines().find_map(|line| {
+      line
+        .split_once(':')
+        .filter(|(name, _)| name.eq_ignore_ascii_case(header::USER_AGENT.as_str()))
+        .map(|(_, value)| value.trim())
+    });
+    assert_eq!(user_agent, Some(expected_user_agent));
   }
 
   #[tokio::test]

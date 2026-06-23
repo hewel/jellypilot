@@ -122,6 +122,24 @@ impl JellyfinClient {
     header
   }
 
+  fn app_user_agent() -> String {
+    format!("{CLIENT_NAME}/{CLIENT_VERSION}")
+  }
+
+  fn emby_chrome_user_agent() -> String {
+    format!(
+      "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36 {CLIENT_NAME}/{CLIENT_VERSION}"
+    )
+  }
+
+  fn request_user_agent(&self) -> String {
+    if self.provider() == MediaServerProvider::Emby {
+      Self::emby_chrome_user_agent()
+    } else {
+      Self::app_user_agent()
+    }
+  }
+
   fn openapi_configuration(
     &self,
     server_url: &str,
@@ -135,7 +153,7 @@ impl JellyfinClient {
 
     let mut configuration = jellyfin_api::apis::configuration::Configuration::new();
     configuration.base_path = server_url.to_string();
-    configuration.user_agent = Some(format!("{CLIENT_NAME}/{CLIENT_VERSION}"));
+    configuration.user_agent = Some(Self::app_user_agent());
     configuration.client = Client::builder()
       .timeout(std::time::Duration::from_secs(30))
       .default_headers(headers)
@@ -157,7 +175,7 @@ impl JellyfinClient {
 
     let mut configuration = emby_api::apis::configuration::Configuration::new();
     configuration.base_path = server_url.to_string();
-    configuration.user_agent = Some(format!("{CLIENT_NAME}/{CLIENT_VERSION}"));
+    configuration.user_agent = Some(Self::emby_chrome_user_agent());
     configuration.client = Client::builder()
       .timeout(std::time::Duration::from_secs(30))
       .default_headers(headers)
@@ -328,6 +346,26 @@ impl JellyfinClient {
     })
   }
 
+  fn emby_server_info_from_authenticated_openapi(
+    info: emby_api::models::SystemInfo,
+  ) -> Result<ServerInfo, JellyfinError> {
+    let server_name = info
+      .server_name
+      .ok_or_else(|| Self::missing_openapi_field("System info", "ServerName"))?;
+    let version = info
+      .version
+      .ok_or_else(|| Self::missing_openapi_field("System info", "Version"))?;
+    let id = info
+      .id
+      .ok_or_else(|| Self::missing_openapi_field("System info", "Id"))?;
+
+    Ok(ServerInfo {
+      server_name,
+      version,
+      id,
+    })
+  }
+
   /// Authenticate with Jellyfin server.
   pub async fn authenticate(&self, creds: &Credentials) -> Result<AuthResponse, JellyfinError> {
     match creds.provider {
@@ -375,10 +413,88 @@ impl JellyfinClient {
   }
 
   async fn authenticate_emby(&self, creds: &Credentials) -> Result<AuthResponse, JellyfinError> {
-    let (server_url, info) = self.discover_emby_api_base(&creds.server_url).await?;
-    let configuration = self.emby_openapi_configuration(&server_url, None)?;
+    let (server_url, auth, info) = self.authenticate_emby_with_discovery(creds).await?;
 
-    let auth = emby_api::apis::user_service_api::post_users_authenticatebyname(
+    {
+      let mut state = self.state.write();
+      state.provider = MediaServerProvider::Emby;
+      state.remote_control_available = false;
+      state.remote_control_warning = None;
+      state.server_url = Some(server_url);
+      state.access_token = Some(auth.access_token.clone());
+      state.user_id = Some(auth.user.id.clone());
+      state.user_name = Some(auth.user.name.clone());
+      state.server_name = info.map(|info| info.server_name);
+    }
+
+    Ok(auth)
+  }
+
+  async fn authenticate_emby_with_discovery(
+    &self,
+    creds: &Credentials,
+  ) -> Result<(String, AuthResponse, Option<ServerInfo>), JellyfinError> {
+    let candidates = Self::emby_api_base_candidates(&creds.server_url)?;
+    let mut public_info_failures = Vec::new();
+
+    for candidate in &candidates {
+      let configuration = self.emby_openapi_configuration(candidate, None)?;
+      match emby_api::apis::system_service_api::get_system_info_public(&configuration)
+        .await
+        .map_err(|err| Self::emby_openapi_error("System public info", err))
+        .and_then(Self::emby_server_info_from_openapi)
+      {
+        Ok(info) => {
+          let auth = self.authenticate_emby_at_base(candidate, creds).await?;
+          return Ok((candidate.clone(), auth, Some(info)));
+        }
+        Err(err) => public_info_failures.push(format!("{candidate}: {err}")),
+      }
+    }
+
+    let mut auth_failures = Vec::new();
+
+    for candidate in candidates {
+      match self.authenticate_emby_at_base(&candidate, creds).await {
+        Ok(auth) => {
+          let info = self
+            .fetch_authenticated_emby_server_info(&candidate, &auth.access_token)
+            .await
+            .ok();
+          return Ok((candidate, auth, info));
+        }
+        Err(JellyfinError::AuthFailed(message)) => {
+          auth_failures.push(format!("{candidate}: {message}"));
+        }
+        Err(err) => auth_failures.push(format!("{candidate}: {err}")),
+      }
+    }
+
+    if auth_failures
+      .iter()
+      .any(|failure| failure.contains("HTTP 401 Unauthorized"))
+    {
+      return Err(JellyfinError::AuthFailed(format!(
+        "Password authentication failed. {}",
+        auth_failures.join("; ")
+      )));
+    }
+
+    Err(JellyfinError::HttpError(format!(
+      "Unable to discover Emby API base URL. {}; authenticated fallback failed. {}",
+      public_info_failures.join("; "),
+      auth_failures.join("; ")
+    )))
+  }
+
+  async fn authenticate_emby_at_base(
+    &self,
+    server_url: &str,
+    creds: &Credentials,
+  ) -> Result<AuthResponse, JellyfinError> {
+    let configuration = self.emby_openapi_configuration(server_url, None)?;
+
+    emby_api::apis::user_service_api::post_users_authenticatebyname(
       &configuration,
       emby_api::apis::user_service_api::PostUsersAuthenticatebynameParams {
         x_emby_authorization: self.auth_header(None),
@@ -390,46 +506,20 @@ impl JellyfinClient {
     )
     .await
     .map_err(|err| Self::emby_openapi_auth_error("Password authentication", err))
-    .and_then(Self::emby_auth_response_from_openapi)?;
-
-    {
-      let mut state = self.state.write();
-      state.provider = MediaServerProvider::Emby;
-      state.remote_control_available = false;
-      state.remote_control_warning = None;
-      state.server_url = Some(server_url);
-      state.access_token = Some(auth.access_token.clone());
-      state.user_id = Some(auth.user.id.clone());
-      state.user_name = Some(auth.user.name.clone());
-      state.server_name = Some(info.server_name);
-    }
-
-    Ok(auth)
+    .and_then(Self::emby_auth_response_from_openapi)
   }
 
-  async fn discover_emby_api_base(
+  async fn fetch_authenticated_emby_server_info(
     &self,
     server_url: &str,
-  ) -> Result<(String, ServerInfo), JellyfinError> {
-    let candidates = Self::emby_api_base_candidates(server_url)?;
-    let mut failures = Vec::new();
+    token: &str,
+  ) -> Result<ServerInfo, JellyfinError> {
+    let configuration = self.emby_openapi_configuration(server_url, Some(token))?;
 
-    for candidate in candidates {
-      let configuration = self.emby_openapi_configuration(&candidate, None)?;
-      match emby_api::apis::system_service_api::get_system_info_public(&configuration)
-        .await
-        .map_err(|err| Self::emby_openapi_error("System public info", err))
-        .and_then(Self::emby_server_info_from_openapi)
-      {
-        Ok(info) => return Ok((candidate, info)),
-        Err(err) => failures.push(format!("{candidate}: {err}")),
-      }
-    }
-
-    Err(JellyfinError::HttpError(format!(
-      "Unable to discover Emby API base URL. {}",
-      failures.join("; ")
-    )))
+    emby_api::apis::system_service_api::get_system_info(&configuration)
+      .await
+      .map_err(|err| Self::emby_openapi_error("System info", err))
+      .and_then(Self::emby_server_info_from_authenticated_openapi)
   }
 
   /// Start a Quick Connect request on a Jellyfin server.
@@ -781,6 +871,7 @@ impl JellyfinClient {
     let response = self
       .http
       .get(&url)
+      .header(header::USER_AGENT, self.request_user_agent())
       .header("X-Emby-Authorization", self.auth_header(Some(&token)))
       .send()
       .await?;
@@ -809,6 +900,7 @@ impl JellyfinClient {
     let response = self
       .http
       .get(&url)
+      .header(header::USER_AGENT, self.request_user_agent())
       .header("X-Emby-Authorization", self.auth_header(Some(&token)))
       .query(query)
       .send()
@@ -838,6 +930,7 @@ impl JellyfinClient {
     let response = self
       .http
       .request(method.clone(), &url)
+      .header(header::USER_AGENT, self.request_user_agent())
       .header("X-Emby-Authorization", self.auth_header(Some(&token)))
       .send()
       .await?;
@@ -867,6 +960,7 @@ impl JellyfinClient {
     let response = self
       .http
       .post(&url)
+      .header(header::USER_AGENT, self.request_user_agent())
       .header(header::CONTENT_TYPE, "application/json")
       .header("X-Emby-Authorization", self.auth_header(Some(&token)))
       .json(body)
@@ -900,6 +994,7 @@ impl JellyfinClient {
     let response = self
       .http
       .post(&url)
+      .header(header::USER_AGENT, self.request_user_agent())
       .header(header::CONTENT_TYPE, "application/json")
       .header("X-Emby-Authorization", self.auth_header(Some(&token)))
       .json(body)
@@ -1106,6 +1201,7 @@ impl JellyfinClient {
     let response = self
       .http
       .post(&url)
+      .header(header::USER_AGENT, self.request_user_agent())
       .header(reqwest::header::CONTENT_TYPE, "application/json")
       .header("X-Emby-Authorization", self.auth_header(Some(&token)))
       .json(&capabilities)
@@ -1510,6 +1606,10 @@ impl<'a> JellyfinPlayback<'a> {
 
   pub fn websocket_url(&self) -> Result<String, JellyfinError> {
     self.client.websocket_url()
+  }
+
+  pub fn websocket_user_agent(&self) -> String {
+    self.client.request_user_agent()
   }
 
   pub async fn report_playback_start(&self, info: &PlaybackStartInfo) -> Result<(), JellyfinError> {
@@ -3620,6 +3720,15 @@ mod tests {
 
   type RequestLog = Arc<parking_lot::Mutex<Vec<String>>>;
 
+  fn assert_chrome_jellypilot_user_agent(request: &str) {
+    let request = request.to_ascii_lowercase();
+    assert!(request.contains("user-agent: mozilla/5.0"));
+    assert!(request.contains("applewebkit/537.36"));
+    assert!(request.contains("chrome/"));
+    assert!(request.contains("safari/537.36"));
+    assert!(request.contains("jellypilot/"));
+  }
+
   async fn serve_once(status: &'static str, response_body: &'static str) -> String {
     serve_responses(vec![(status, response_body)]).await
   }
@@ -3818,12 +3927,70 @@ mod tests {
     assert!(state.capabilities.remote_control_warning.is_none());
 
     let captured = requests.lock();
+    let public_info_request = captured
+      .first()
+      .expect("public info request should be captured before auth");
+    assert_chrome_jellypilot_user_agent(public_info_request);
     let auth_request = captured
       .get(2)
       .expect("auth request should be captured after probing");
     assert!(auth_request.contains("Client=\"JellyPilot\""));
+    assert_chrome_jellypilot_user_agent(auth_request);
     assert!(auth_request.contains(r#""Username":"Ada""#));
     assert!(auth_request.contains(r#""Pw":"correct horse battery staple""#));
+  }
+
+  #[tokio::test]
+  async fn emby_authentication_falls_back_to_password_when_public_info_is_forbidden() {
+    let forbidden = "<html><head><title>403 Forbidden</title></head><body><center><h1>403 Forbidden</h1></center><hr><center>nginx</center></body></html>";
+    let (server_url, requests) = serve_route_responses_with_requests(vec![
+      ("GET /System/Info/Public ", "403 Forbidden", forbidden),
+      ("GET /emby/System/Info/Public ", "403 Forbidden", forbidden),
+      ("POST /Users/AuthenticateByName ", "403 Forbidden", forbidden),
+      (
+        "POST /emby/Users/AuthenticateByName ",
+        "200 OK",
+        r#"{"User":{"Id":"emby-user-1","Name":"Ada"},"AccessToken":"emby-token","ServerId":"emby-server"}"#,
+      ),
+      (
+        "GET /emby/System/Info ",
+        "200 OK",
+        r#"{"ServerName":"Emby Home","Version":"4.9.3.0","Id":"emby-server"}"#,
+      ),
+    ])
+    .await;
+    let client = JellyfinClient::new();
+
+    client
+      .authenticate(&Credentials {
+        provider: MediaServerProvider::Emby,
+        server_url,
+        username: "Ada".to_string(),
+        password: "correct horse battery staple".to_string(),
+      })
+      .await
+      .expect("emby password authentication should succeed after public info is blocked");
+
+    let session = client
+      .get_saved_session()
+      .expect("authentication should create saved session");
+    assert_eq!(session.provider, MediaServerProvider::Emby);
+    assert!(session.server_url.ends_with("/emby"));
+    assert_eq!(session.server_name.as_deref(), Some("Emby Home"));
+
+    let captured = requests.lock();
+    let auth_request = captured
+      .get(3)
+      .expect("auth fallback should try the /emby candidate");
+    assert!(auth_request.starts_with("POST /emby/Users/AuthenticateByName "));
+    assert_chrome_jellypilot_user_agent(auth_request);
+    assert!(auth_request.contains(r#""Username":"Ada""#));
+    assert!(auth_request.contains(r#""Pw":"correct horse battery staple""#));
+    let info_request = captured
+      .get(4)
+      .expect("authenticated server info should refresh the server name");
+    assert!(info_request.starts_with("GET /emby/System/Info "));
+    assert!(info_request.contains("Token=\"emby-token\""));
   }
 
   #[tokio::test]
@@ -5121,6 +5288,7 @@ mod tests {
 
     let captured = requests.lock();
     assert!(captured[0].starts_with("GET /Users/00000000-0000-0000-0000-000000000001/Items?"));
+    assert_chrome_jellypilot_user_agent(&captured[0]);
     assert!(captured[0].contains("ParentId=00000000-0000-0000-0000-000000000220"));
     assert!(captured[0].contains("IncludeItemTypes=Movie"));
     assert!(captured[0].contains("MediaTypes=Video"));

@@ -211,7 +211,11 @@ impl SessionManager {
 
     // Connect WebSocket first
     let ws_url = self.client.playback().websocket_url()?;
-    self.websocket.connect(&ws_url).await?;
+    let ws_user_agent = self.client.playback().websocket_user_agent();
+    self
+      .websocket
+      .connect_with_user_agent(&ws_url, Some(&ws_user_agent))
+      .await?;
 
     // Then report capabilities via HTTP (must be after WebSocket is established)
     self.client.playback().report_capabilities().await?;
