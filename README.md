@@ -8,7 +8,8 @@
 [![Solid.js](https://img.shields.io/badge/Solid.js-1.x-blue?logo=solid)](https://www.solidjs.com/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 
-**A high-performance Jellyfin cast receiver that controls an external MPV player.**  
+**A high-performance Jellyfin and Emby desktop client that controls an external MPV player.**
+
 Built with Tauri v2, Solid.js, and Rust.
 
 [Features](#-features) • [Roadmap](#️-roadmap) • [Quick Start](#-quick-start) • [Architecture](#-architecture) • [Troubleshooting](#-troubleshooting)
@@ -19,7 +20,7 @@ Built with Tauri v2, Solid.js, and Rust.
 
 ## 📖 Overview
 
-JellyPilot allows you to cast media from any Jellyfin client (web, mobile, TV) to your desktop, where it plays in MPV with full support for your custom configurations, shaders, and scripts.
+JellyPilot lets you sign in to Jellyfin or Emby, browse your video libraries, and play media in MPV with full support for your custom configurations, shaders, and scripts. For Jellyfin, JellyPilot can also register as a cast target for playback from other Jellyfin clients.
 
 > **💡 Key Philosophy**
 >
@@ -29,24 +30,35 @@ JellyPilot allows you to cast media from any Jellyfin client (web, mobile, TV) t
 
 | Feature | Description |
 | :--- | :--- |
-| 📺 **Cast Target** | Appears as a controllable device in Jellyfin's cast menu |
+| 🎞️ **Jellyfin + Emby** | Connect to Jellyfin or Emby servers with saved service profiles |
+| 📚 **Library Browser** | Browse Movies and Shows, open item details, and start playback from the desktop app |
+| 📺 **Jellyfin Cast Target** | Appears as a controllable device in Jellyfin's cast menu |
 | 🚀 **External MPV** | Full compatibility with your system MPV configuration and shaders |
 | 🛡️ **Type-Safe** | 100% type-safe Rust-to-TypeScript communication via `tauri-specta` |
 | 🔒 **Persistent Auth** | Login once, stay connected with secure token storage |
-| 🔑 **Quick Connect** | Authenticate with Jellyfin by approving a one-time code on another device |
+| 🔑 **Jellyfin Quick Connect** | Authenticate with Jellyfin by approving a one-time code on another device |
 | 🔄 **Auto-Reconnect** | Resilient WebSocket connection with exponential backoff strategy |
 | ⏭️ **Smart Playback** | Automatically plays the next episode when the current one finishes |
-| ✂️ **Intro Skipper** | Automatically skips Intro Skipper plugin introduction and credit ranges |
+| ✂️ **Jellyfin Intro Skipper** | Automatically skips Intro Skipper plugin introduction and credit ranges |
 | 🧠 **Series Memory** | Remembers audio/subtitle language preferences per TV series |
 | ⌨️ **Shortcuts** | Use configurable MPV shortcuts (`Shift+>` / `Shift+<` by default) to skip episodes |
 | 🖥️ **System Tray** | Runs quietly in the background with quick access controls |
 | 🍏 **Cross-Platform** | Native support for Windows, macOS, and Linux |
 
+## 🧩 Server Support
+
+| Server | Supported | Notes |
+| :--- | :--- | :--- |
+| **Jellyfin** | ✅ | Password login, Quick Connect, saved profiles, library browsing, MPV playback, cast target registration, remote control, and Intro Skipper plugin support |
+| **Emby** | ✅ | Password login, saved profiles, library browsing, MPV playback, remote control, and playback progress reporting |
+
+Emby support uses the same library and player workflow as Jellyfin where the server APIs are compatible. Jellyfin-specific features such as Quick Connect and the Jellyfin Intro Skipper plugin are not advertised for Emby connections.
+
 ## 🗺️ Roadmap
 
 - [x] **[Quick Connect](https://jellyfin.org/docs/general/server/quick-connect/)** - Login via code from another device
 - [x] **[Intro Skipper](https://github.com/intro-skipper/intro-skipper) Integration** - Auto-skip intros/credits
-- [ ] **Full-Featured Client UI** - Browse libraries, manage media, and control playback like other Jellyfin clients
+- [ ] **Full-Featured Client UI** - Browse libraries, manage media, and control playback like other media server clients
 - [ ] **Embedded Player** - Optional built-in video player without external MPV dependency
 - [ ] **MPRIS Support** - Linux media player integration for desktop controls
 
@@ -85,7 +97,7 @@ graph LR
     end
     
     B <-->|JSON IPC| C[<b>Player</b><br>External MPV]
-    B <-->|WebSocket + REST| D[<b>Jellyfin Server</b>]
+    B <-->|WebSocket + REST| D[<b>Jellyfin / Emby Server</b>]
     
     style A fill:#00a4dc,stroke:#333,color:white
     style B fill:#dea584,stroke:#333,color:black
@@ -93,7 +105,7 @@ graph LR
     style D fill:#aa5cc3,stroke:#333,color:white
 ```
 
-1.  **Sentinel (Tauri GUI)**: Handles UI, WebSocket connection to Jellyfin, and state management.
+1.  **Sentinel (Tauri GUI)**: Handles UI, server connection, and state management.
 2.  **Bridge (Rust IPC)**: Translates commands and manages the external process.
 3.  **Player (MPV)**: The standalone media player instance running your config.
 
@@ -149,20 +161,21 @@ Binaries will be in `src-tauri/target/release/bundle/`.
 ### Usage Steps
 
 1.  **Launch JellyPilot** from your application menu or terminal.
-2.  **Authenticate** with Quick Connect or by entering your Jellyfin server URL and credentials.
-3.  **Cast Media**: JellyPilot will appear as "JellyPilot" in your Jellyfin client's cast menu.
-4.  **Optional Intro Skipper**: Install the Jellyfin Intro Skipper plugin and keep Operations Console > Automation > Automatic Intro Skip enabled to skip detected intros and credits.
-5.  **Enjoy**: Media plays in MPV on your desktop with full control syncing.
+2.  **Choose a server type**: Select Jellyfin or Emby on the login screen.
+3.  **Authenticate** with your server URL and credentials. Jellyfin also supports Quick Connect.
+4.  **Browse or Cast Media**: Start playback from JellyPilot's Library view. Jellyfin users can also cast to "JellyPilot" from another Jellyfin client.
+5.  **Optional Jellyfin Intro Skipper**: Install the Jellyfin Intro Skipper plugin and keep Operations Console > Automation > Automatic Intro Skip enabled to skip detected intros and credits.
+6.  **Enjoy**: Media plays in MPV on your desktop with full control syncing.
 
 ## 🛠️ How It Works
 
-1.  **Authentication**: User logs into Jellyfin and receives an access token.
-2.  **Registration**: JellyPilot posts capabilities to `/Sessions/Capabilities/Full`.
-3.  **WebSocket**: Connects to Jellyfin for real-time play state control.
-4.  **Cast Event**: When user casts, Jellyfin sends a `Play` command.
+1.  **Authentication**: User logs into Jellyfin or Emby and receives an access token.
+2.  **Registration**: JellyPilot posts supported capabilities to the active media server.
+3.  **WebSocket**: Connects to the server for real-time play state control when supported.
+4.  **Play Event**: Playback can start from JellyPilot's Library Browser or from Jellyfin cast commands.
 5.  **MPV Control**: JellyPilot spawns MPV (if needed) and sends JSON IPC commands.
 6.  **Progress**: Event-driven progress reporting via MPV property observation.
-7.  **Sync**: Pause/seek/volume commands flow bidirectionally (Jellyfin ↔ MPV).
+7.  **Sync**: Pause/seek/volume commands flow bidirectionally between the server and MPV where supported.
 8.  **Auto-Play**: Automatically fetches the next episode upon natural file end.
 
 ## 💻 Development
@@ -177,7 +190,7 @@ jellypilot/
 │   └── components/        # UI components
 ├── src-tauri/             # Rust backend
 │   ├── src/
-│   │   ├── jellyfin/      # Jellyfin client implementation
+│   │   ├── jellyfin/      # Jellyfin/Emby client implementation
 │   │   └── mpv/           # MPV IPC driver logic
 │   └── tauri.conf.json    # Tauri configuration
 └── docs/PRD.md            # Product requirements
@@ -223,11 +236,12 @@ jellypilot/
 ## ❓ Troubleshooting
 
 <details>
-<summary><strong>JellyPilot doesn't appear as cast target</strong></summary>
+<summary><strong>JellyPilot doesn't appear as a Jellyfin cast target</strong></summary>
 
 *   Ensure you're logged in (check Operations Console shows "Connected").
 *   Refresh the Jellyfin web page after JellyPilot connects.
 *   Check Jellyfin Dashboard > Activity for the JellyPilot session.
+*   Emby support is focused on in-app library playback and remote control, not Jellyfin-style cast discovery.
 </details>
 
 <details>
@@ -242,8 +256,8 @@ jellypilot/
 <details>
 <summary><strong>Video doesn't play</strong></summary>
 
-*   Check Jellyfin transcoding settings.
-*   Verify network connectivity to Jellyfin server.
+*   Check your Jellyfin or Emby transcoding settings.
+*   Verify network connectivity to your Jellyfin or Emby server.
 *   Check Diagnostics in the Operations Console for error messages.
 </details>
 
