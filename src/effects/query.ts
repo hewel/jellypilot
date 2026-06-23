@@ -10,6 +10,7 @@ export const queryKeys = {
   appVersion: ['app', 'version'] as const,
   appConfig: ['config', 'app'] as const,
   connectionState: ['connection', 'state'] as const,
+  savedServiceProfiles: ['connection', 'profiles'] as const,
   nowPlayingState: ['nowPlaying', 'state'] as const,
   mpvTracks: (connected: boolean) => ['mpv', 'tracks', connected] as const,
   libraryShortcuts: ['library', 'shortcuts'] as const,

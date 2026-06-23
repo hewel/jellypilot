@@ -109,7 +109,7 @@ The system is composed of three distinct actors:
 * **Tray Icon:** Menu for "Show Operations Console", "Quit".
 * **Operations Console:**
 * Player Bridge settings for MPV executable path and advanced options.
-* Connection summary for the active Jellyfin Saved Session.
+* Saved Service Profiles list with add, switch, and remove controls, plus a connection summary for the active profile.
 * Automation controls such as Automatic Intro Skip.
 * **Shader Pack Selector:** A dropdown to select glsl-shader profiles (e.g., "Anime4K", "FSR").
 

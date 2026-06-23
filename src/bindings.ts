@@ -72,8 +72,8 @@ export const commands = {
 	/**
 	 *  Clear/logout from the current session.
 	 * 
-	 *  This disconnects from the server and should be paired with
-	 *  clearing the saved session from localStorage on the frontend.
+	 *  This disconnects from the server. Saved service profile removal is handled
+	 *  by the profile-store commands.
 	 */
 	jellyfinClearSession: () => typedError<null, CommandError>(__TAURI_INVOKE("jellyfin_clear_session")),
 	/**  Play the next episode from the active Jellyfin session. */
@@ -108,6 +108,16 @@ export const commands = {
 	serverRestoreSession: (session: SavedSession) => typedError<null, CommandError>(__TAURI_INVOKE("server_restore_session", { session })),
 	/**  Clear/logout from the current media server session. */
 	serverClearSession: () => typedError<null, CommandError>(__TAURI_INVOKE("server_clear_session")),
+	/**  List saved media server profiles. */
+	serverProfilesGet: () => typedError<SavedServiceProfiles, CommandError>(__TAURI_INVOKE("server_profiles_get")),
+	/**  Import a legacy single saved session into the saved service profile store. */
+	serverProfilesImportLegacy: (session: SavedSession) => typedError<SavedServiceProfiles, CommandError>(__TAURI_INVOKE("server_profiles_import_legacy", { session })),
+	/**  Save the currently authenticated session as the active saved service profile. */
+	serverProfilesSaveCurrent: () => typedError<SavedServiceProfiles, CommandError>(__TAURI_INVOKE("server_profiles_save_current")),
+	/**  Activate a saved service profile and make it the only live media server connection. */
+	serverProfilesActivate: (key: string) => typedError<SavedServiceProfiles, CommandError>(__TAURI_INVOKE("server_profiles_activate", { key })),
+	/**  Remove a saved service profile. Removing the active profile also disconnects it. */
+	serverProfilesRemove: (key: string) => typedError<SavedServiceProfiles, CommandError>(__TAURI_INVOKE("server_profiles_remove", { key })),
 	/**  Get the current app configuration. */
 	configGet: () => __TAURI_INVOKE<AppConfig>("config_get"),
 	/**  Update the app configuration, apply changes live, and persist to disk. */
@@ -200,7 +210,7 @@ export type Credentials = {
 /**  Intro Skipper behavior mode. */
 export type IntroSkipperMode = "automatic" | "manual" | "off";
 
-/**  Media server provider selected for a connection or saved session. */
+/**  Media server provider selected for a connection or saved service profile. */
 export type MediaServerProvider = "jellyfin" | "emby";
 
 /**  Notification level for UI display. */
@@ -267,6 +277,21 @@ export type QuickConnectRequest = {
 
 /**  Quick Connect request status exposed to the frontend. */
 export type QuickConnectStatus = "waiting" | "approved";
+
+export type SavedServiceProfileSummary = {
+	key: string,
+	provider: MediaServerProvider,
+	serverUrl: string,
+	serverName: string | null,
+	userName: string,
+	active: boolean,
+	lastRestoreError: string | null,
+};
+
+export type SavedServiceProfiles = {
+	activeProfileKey: string | null,
+	profiles: SavedServiceProfileSummary[],
+};
 
 /**  Saved session data for persistence. */
 export type SavedSession = {

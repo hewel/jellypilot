@@ -7,7 +7,13 @@ import {
   loadSavedSession as loadSessionEffect,
   saveSession as saveSessionEffect,
 } from './effects/auth';
-import { runTauriCommand, runTauriCommandRaw } from './effects/commands';
+import { runTauriCommandRaw } from './effects/commands';
+import {
+  activateSavedServiceProfile,
+  fetchSavedServiceProfiles,
+  importLegacySavedSession,
+  saveCurrentServiceProfile,
+} from './effects/profiles';
 
 export function loadSavedSession(): SavedSession | null {
   return loadSessionEffect().pipe(
@@ -28,30 +34,34 @@ export function clearSavedSession(): void {
 }
 
 export async function saveCurrentSession(): Promise<void> {
-  const session = await Effect.runPromise(runTauriCommandRaw(() => commands.serverGetSession()));
-  Option.match(Option.fromNullishOr(session), {
-    onNone: () => undefined,
-    onSome: (value) => saveSession(value),
-  });
+  await Effect.runPromise(saveCurrentServiceProfile());
+  clearSavedSession();
+}
+
+async function migrateLegacySavedSession(): Promise<void> {
+  const session = loadSavedSession();
+  if (!session) {
+    return;
+  }
+
+  const exit = await Effect.runPromiseExit(importLegacySavedSession(session));
+  if (Exit.isSuccess(exit)) {
+    clearSavedSession();
+  }
 }
 
 export async function restoreSavedSession(): Promise<boolean> {
-  const exit = await Effect.runPromiseExit(
-    loadSessionEffect().pipe(
-      Effect.flatMap((savedSession) =>
-        runTauriCommand(() => commands.serverRestoreSession(savedSession)),
-      ),
-    ),
-  );
-  return exit.pipe(
-    Exit.match({
-      onFailure: () => {
-        clearSavedSession();
-        return false;
-      },
-      onSuccess: () => true,
-    }),
-  );
+  await migrateLegacySavedSession();
+  const profiles = await Effect.runPromiseExit(fetchSavedServiceProfiles());
+  if (!Exit.isSuccess(profiles)) {
+    return false;
+  }
+
+  return await Option.match(Option.fromNullishOr(profiles.value.activeProfileKey), {
+    onNone: async () => false,
+    onSome: async (key) =>
+      Exit.isSuccess(await Effect.runPromiseExit(activateSavedServiceProfile(key))),
+  });
 }
 
 export async function checkAuthWithRestore(): Promise<boolean> {
@@ -64,7 +74,20 @@ export async function checkAuthWithRestore(): Promise<boolean> {
   if (connected.value) {
     return true;
   }
-  return await restoreSavedSession();
+
+  await migrateLegacySavedSession();
+  const profiles = await Effect.runPromiseExit(fetchSavedServiceProfiles());
+  if (!Exit.isSuccess(profiles)) {
+    return false;
+  }
+
+  const activeProfileKey = Option.fromNullishOr(profiles.value.activeProfileKey);
+  if (Option.isNone(activeProfileKey)) {
+    return profiles.value.profiles.length > 0;
+  }
+
+  const restored = await Effect.runPromiseExit(activateSavedServiceProfile(activeProfileKey.value));
+  return Exit.isSuccess(restored) || profiles.value.profiles.length > 0;
 }
 
 export async function canAccessConsole(): Promise<boolean> {
@@ -75,5 +98,7 @@ export async function canAccessConsole(): Promise<boolean> {
     return true;
   }
 
-  return loadSavedSession() !== null;
+  await migrateLegacySavedSession();
+  const profiles = await Effect.runPromiseExit(fetchSavedServiceProfiles());
+  return Exit.isSuccess(profiles) && profiles.value.profiles.length > 0;
 }

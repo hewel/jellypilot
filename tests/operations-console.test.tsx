@@ -3,7 +3,7 @@ import { fireEvent, screen, waitFor, within } from '@testing-library/dom';
 import { render } from 'solid-js/web';
 
 import { commands } from '../src/bindings';
-import type { AppConfig, SavedSession } from '../src/bindings';
+import type { AppConfig, SavedServiceProfiles } from '../src/bindings';
 import OperationsConsole from '../src/components/OperationsConsole';
 import { ToastProvider } from '../src/components/ToastProvider';
 import { TestQueryProvider } from './query-client';
@@ -50,24 +50,57 @@ const config: AppConfig = {
   startMinimized: false,
 };
 
-const validSavedSession: SavedSession = {
-  accessToken: 'token-1',
-  deviceId: 'device-1',
-  provider: 'jellyfin',
-  serverName: 'Jellyfin Home',
-  serverUrl: 'https://jellyfin.example.com',
-  userId: 'user-1',
+const validSavedProfiles: SavedServiceProfiles = {
+  activeProfileKey: 'jellyfin|https://jellyfin.example.com|Ada',
+  profiles: [
+    {
+      active: true,
+      key: 'jellyfin|https://jellyfin.example.com|Ada',
+      lastRestoreError: null,
+      provider: 'jellyfin',
+      serverName: 'Jellyfin Home',
+      serverUrl: 'https://jellyfin.example.com',
+      userName: 'Ada',
+    },
+  ],
+};
+
+const embySavedProfile = {
+  active: false,
+  key: 'emby|https://media.example.com/emby|Ada',
+  lastRestoreError: null,
+  provider: 'emby' as const,
+  serverName: 'Emby Home',
+  serverUrl: 'https://media.example.com/emby',
   userName: 'Ada',
 };
 
-function mockCommon(appConfig = config, state = connectedState) {
+const multipleSavedProfiles: SavedServiceProfiles = {
+  activeProfileKey: validSavedProfiles.activeProfileKey,
+  profiles: [...validSavedProfiles.profiles, embySavedProfile],
+};
+
+function mockCommon(
+  appConfig = config,
+  state = connectedState,
+  savedProfiles: SavedServiceProfiles = validSavedProfiles,
+) {
   rstest.spyOn(commands, 'serverGetState').mockResolvedValue(state);
+  rstest.spyOn(commands, 'serverProfilesGet').mockResolvedValue({
+    data: savedProfiles,
+    status: 'ok',
+  });
   rstest.spyOn(commands, 'mpvIsConnected').mockResolvedValue(false);
   rstest.spyOn(commands, 'configGet').mockResolvedValue(appConfig);
 }
 
-function renderConsole(onSignedOut = () => {}, appConfig = config, state = connectedState) {
-  mockCommon(appConfig, state);
+function renderConsole(
+  onSignedOut = () => {},
+  appConfig = config,
+  state = connectedState,
+  savedProfiles: SavedServiceProfiles = validSavedProfiles,
+) {
+  mockCommon(appConfig, state, savedProfiles);
   const root = document.createElement('div');
   document.body.append(root);
   const dispose = render(
@@ -529,7 +562,7 @@ test('final console structure covers all operational areas in order', async () =
   cleanup();
 });
 
-test('disconnect keeps saved session and stays on console', async () => {
+test('disconnect keeps saved services and stays on console', async () => {
   localStorage.setItem('jellypilot_auth_session', JSON.stringify({ serverUrl: 'x' }));
   const disconnect = rstest.spyOn(commands, 'serverDisconnect').mockResolvedValue({
     data: null,
@@ -548,7 +581,7 @@ test('disconnect keeps saved session and stays on console', async () => {
   expect(screen.getByRole('heading', { name: 'Connection' })).toBeVisible();
   expect(
     screen.getByText(
-      /Disconnect ends the active Jellyfin connection but keeps the Saved Session available for Reconnect./,
+      /Disconnect ends the active media server connection but keeps saved services available for Reconnect./,
     ),
   ).toBeVisible();
 
@@ -591,10 +624,9 @@ test('disconnect rejected commands stay on console and unlock the action', async
   cleanup();
 });
 
-test('reconnect restores a live Jellyfin connection from a Saved Session', async () => {
-  localStorage.setItem('jellypilot_auth_session', JSON.stringify(validSavedSession));
-  const restore = rstest.spyOn(commands, 'serverRestoreSession').mockResolvedValue({
-    data: null,
+test('reconnect activates the active saved service profile', async () => {
+  const activate = rstest.spyOn(commands, 'serverProfilesActivate').mockResolvedValue({
+    data: validSavedProfiles,
     status: 'ok',
   });
   const cleanup = renderConsole(() => {}, config, {
@@ -608,15 +640,13 @@ test('reconnect restores a live Jellyfin connection from a Saved Session', async
   await waitFor(() => expect(screen.getByRole('button', { name: 'Reconnect' })).toBeVisible());
   fireEvent.click(screen.getByRole('button', { name: 'Reconnect' }));
 
-  await waitFor(() => expect(restore).toHaveBeenCalledWith(validSavedSession));
-  expect(localStorage.getItem('jellypilot_auth_session')).not.toBeNull();
+  await waitFor(() => expect(activate).toHaveBeenCalledWith(validSavedProfiles.activeProfileKey));
 
   cleanup();
 });
 
-test('reconnect failure clears the Saved Session and signs out', async () => {
-  localStorage.setItem('jellypilot_auth_session', JSON.stringify(validSavedSession));
-  rstest.spyOn(commands, 'serverRestoreSession').mockResolvedValue({
+test('reconnect failure keeps the saved service profile available', async () => {
+  rstest.spyOn(commands, 'serverProfilesActivate').mockResolvedValue({
     error: { code: 'authFailed', message: 'expired' },
     status: 'error',
   });
@@ -632,16 +662,70 @@ test('reconnect failure clears the Saved Session and signs out', async () => {
   await waitFor(() => expect(screen.getByRole('button', { name: 'Reconnect' })).toBeVisible());
   fireEvent.click(screen.getByRole('button', { name: 'Reconnect' }));
 
-  await waitFor(() => expect(onSignedOut).toHaveBeenCalledTimes(1));
-  expect(localStorage.getItem('jellypilot_auth_session')).toBeNull();
+  await waitFor(() =>
+    expect(screen.getByText('Could not reconnect to the saved service.')).toBeVisible(),
+  );
+  expect(onSignedOut).not.toHaveBeenCalled();
+  expect(screen.getByText('Jellyfin Home')).toBeVisible();
 
   cleanup();
 });
 
-test('sign out confirms and clears saved session', async () => {
-  localStorage.setItem('jellypilot_auth_session', JSON.stringify({ serverUrl: 'x' }));
-  const clearSession = rstest.spyOn(commands, 'serverClearSession').mockResolvedValue({
-    data: null,
+test('saved services card activates an inactive profile', async () => {
+  const activate = rstest.spyOn(commands, 'serverProfilesActivate').mockResolvedValue({
+    data: {
+      activeProfileKey: embySavedProfile.key,
+      profiles: [
+        { ...validSavedProfiles.profiles[0], active: false },
+        { ...embySavedProfile, active: true },
+      ],
+    },
+    status: 'ok',
+  });
+  const cleanup = renderConsole(() => {}, config, connectedState, multipleSavedProfiles);
+
+  await screen.findByText('Emby Home');
+  fireEvent.click(screen.getByRole('button', { name: 'Activate' }));
+
+  await waitFor(() => expect(activate).toHaveBeenCalledWith(embySavedProfile.key));
+
+  cleanup();
+});
+
+test('add service dialog accepts embedded login form text input', async () => {
+  const cleanup = renderConsole();
+
+  await screen.findByText('Saved Services');
+  fireEvent.click(screen.getByRole('button', { name: 'Add service' }));
+
+  const addService = await screen.findByRole('dialog', { name: 'Add saved service' });
+  fireEvent.click(within(addService).getByRole('tab', { name: 'Password' }));
+  const host = within(addService).getByPlaceholderText(
+    'jellyfin.local or media.example.com/jellyfin',
+  );
+  const username = await within(addService).findByLabelText('Username');
+  const password = await within(addService).findByPlaceholderText('Jellyfin password');
+
+  fireEvent.input(host, {
+    currentTarget: { value: 'emby.local' },
+    target: { value: 'emby.local' },
+  });
+  fireEvent.input(username, { currentTarget: { value: 'Ada' }, target: { value: 'Ada' } });
+  fireEvent.input(password, {
+    currentTarget: { value: 'secret' },
+    target: { value: 'secret' },
+  });
+
+  expect(host).toHaveValue('emby.local');
+  expect(username).toHaveValue('Ada');
+  expect(password).toHaveValue('secret');
+
+  cleanup();
+});
+
+test('sign out confirms and removes the active saved service profile', async () => {
+  const removeProfile = rstest.spyOn(commands, 'serverProfilesRemove').mockResolvedValue({
+    data: { activeProfileKey: null, profiles: [] },
     status: 'ok',
   });
   const onSignedOut = rstest.fn();
@@ -654,17 +738,15 @@ test('sign out confirms and clears saved session', async () => {
   fireEvent.click(signOutButtons.at(-1));
 
   await waitFor(() => {
-    expect(clearSession).toHaveBeenCalledTimes(1);
-    expect(localStorage.getItem('jellypilot_auth_session')).toBeNull();
+    expect(removeProfile).toHaveBeenCalledWith(validSavedProfiles.activeProfileKey);
     expect(onSignedOut).toHaveBeenCalledTimes(1);
   });
 
   cleanup();
 });
 
-test('sign out failure preserves the Saved Session and stays on console', async () => {
-  localStorage.setItem('jellypilot_auth_session', JSON.stringify(validSavedSession));
-  const clearSession = rstest.spyOn(commands, 'serverClearSession').mockResolvedValue({
+test('sign out failure preserves the active saved service profile and stays on console', async () => {
+  const removeProfile = rstest.spyOn(commands, 'serverProfilesRemove').mockResolvedValue({
     error: { code: 'network', message: 'offline' },
     status: 'error',
   });
@@ -677,17 +759,17 @@ test('sign out failure preserves the Saved Session and stays on console', async 
   const signOutButtons = screen.getAllByRole('button', { name: 'Sign out' });
   fireEvent.click(signOutButtons.at(-1));
 
-  await waitFor(() => expect(clearSession).toHaveBeenCalledTimes(1));
-  expect(localStorage.getItem('jellypilot_auth_session')).not.toBeNull();
+  await waitFor(() => expect(removeProfile).toHaveBeenCalledTimes(1));
   expect(onSignedOut).not.toHaveBeenCalled();
+  await waitFor(() => expect(screen.getByText('offline')).toBeVisible());
+  expect(screen.getAllByText('Jellyfin Home').length).toBeGreaterThan(0);
   expect(screen.getByRole('heading', { name: 'Connection' })).toBeVisible();
 
   cleanup();
 });
-test('sign out rejected commands preserve the Saved Session and close the dialog', async () => {
-  localStorage.setItem('jellypilot_auth_session', JSON.stringify(validSavedSession));
+test('sign out rejected commands preserve the saved service profile and close the dialog', async () => {
   rstest
-    .spyOn(commands, 'serverClearSession')
+    .spyOn(commands, 'serverProfilesRemove')
     .mockRejectedValue(new Error('sign out ipc unavailable'));
   const onSignedOut = rstest.fn();
   const cleanup = renderConsole(onSignedOut);
@@ -699,8 +781,8 @@ test('sign out rejected commands preserve the Saved Session and close the dialog
   fireEvent.click(signOutButtons.at(-1));
 
   await waitFor(() => expect(screen.getByText('sign out ipc unavailable')).toBeVisible());
-  expect(localStorage.getItem('jellypilot_auth_session')).not.toBeNull();
   expect(onSignedOut).not.toHaveBeenCalled();
+  expect(screen.getAllByText('Jellyfin Home').length).toBeGreaterThan(0);
   await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
 
   cleanup();
@@ -735,13 +817,13 @@ test('sign out dialog uses Ark dialog dismissal semantics', async () => {
 });
 
 test('sign out dialog locks dismissal while signing out', async () => {
-  let resolveClearSession:
-    | ((result: Awaited<ReturnType<typeof commands.serverClearSession>>) => void)
+  let resolveRemoveProfile:
+    | ((result: Awaited<ReturnType<typeof commands.serverProfilesRemove>>) => void)
     | undefined;
-  rstest.spyOn(commands, 'serverClearSession').mockImplementation(
+  rstest.spyOn(commands, 'serverProfilesRemove').mockImplementation(
     () =>
       new Promise((resolve) => {
-        resolveClearSession = resolve;
+        resolveRemoveProfile = resolve;
       }),
   );
   const cleanup = renderConsole();
@@ -757,7 +839,7 @@ test('sign out dialog locks dismissal while signing out', async () => {
   fireEvent.keyDown(document, { key: 'Escape' });
   expect(screen.getByRole('dialog')).toBeVisible();
 
-  resolveClearSession?.({ data: null, status: 'ok' });
+  resolveRemoveProfile?.({ data: { activeProfileKey: null, profiles: [] }, status: 'ok' });
   await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
 
   cleanup();

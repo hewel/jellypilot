@@ -1,6 +1,7 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
+mod auth_profiles;
 mod command;
 mod config;
 mod jellyfin;

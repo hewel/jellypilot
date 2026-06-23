@@ -20,5 +20,5 @@ Library playback actions call typed Tauri commands that route through the existi
 
 - Users can browse and launch video playback from JellyPilot without leaving the Playback Target model.
 - Operations Console behavior is preserved under Settings and Diagnostics instead of remaining the whole app surface.
-- Library Browser can grow in vertical slices while sharing Now Playing, Saved Session, and typed command boundaries.
+- Library Browser can grow in vertical slices while sharing Now Playing, Saved Service Profile, and typed command boundaries.
 - Follow-up work must not describe JellyPilot as a full Jellyfin replacement unless embedded playback and broader client features are actually implemented.

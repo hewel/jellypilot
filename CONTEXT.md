@@ -32,21 +32,21 @@ _Avoid_: Manual confirmation
 A Quick Connect Request that cannot finish because it expires, is denied, or is rejected by the server. A Quick Connect Failure keeps the user in the Quick Connect flow until they retry or choose Password Login.
 _Avoid_: Automatic password fallback
 
-**Saved Session**:
-An authenticated Jellyfin session that JellyPilot can restore after restart without asking the user to log in again. Saved Sessions are created the same way after Quick Connect and Password Login.
+**Saved Service Profile**:
+An authenticated media-server profile that JellyPilot can restore after restart without asking the user to log in again. Saved Service Profiles are created the same way after Quick Connect and Password Login, and JellyPilot keeps at most one active profile at a time.
 _Avoid_: Remembered password
 
 **Disconnect**:
-Ending JellyPilot's current live Jellyfin connection while keeping any Saved Session available for later reconnect.
+Ending JellyPilot's current live media-server connection while keeping saved service profiles available for later reconnect.
 _Avoid_: Sign out, clear session
 
 **Sign Out**:
-Ending the live Jellyfin connection and removing the Saved Session so JellyPilot requires authentication before reconnecting.
+Ending the live media-server connection and removing the active Saved Service Profile. Other saved profiles remain available for switching.
 _Avoid_: Temporary disconnect
 
 **Login Prefill**:
-Remembered unauthenticated login inputs, such as Server URL and username, used to make Password Login easier. Login Prefill is separate from a Saved Session.
-_Avoid_: Saved Session, remembered password
+Remembered unauthenticated login inputs, such as Server URL and username, used to make Password Login easier. Login Prefill is separate from a Saved Service Profile.
+_Avoid_: Saved Service Profile, remembered password
 
 **Password Login**:
 A fallback authentication method where the user signs in to a known Server URL with Jellyfin username and password.
@@ -132,11 +132,11 @@ Domain expert: "No. JellyPilot explains the Quick Connect Failure and lets the u
 
 Dev: "Is Quick Connect a temporary one-time login?"
 
-Domain expert: "No. After approval, JellyPilot creates a Saved Session just like Password Login."
+Domain expert: "No. After approval, JellyPilot creates a Saved Service Profile just like Password Login."
 
 Dev: "Does Quick Connect need a remember-me checkbox?"
 
-Domain expert: "No. Quick Connect creates a Saved Session after approval; Login Prefill only applies to Password Login."
+Domain expert: "No. Quick Connect creates a Saved Service Profile after approval; Login Prefill only applies to Password Login."
 
 Dev: "Is Intro Skipper just any Jellyfin media segment?"
 

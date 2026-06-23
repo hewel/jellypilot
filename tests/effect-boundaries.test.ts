@@ -17,16 +17,18 @@ test('Login Prefill JSON parsing uses an Effect throwing boundary', () => {
   expect(sessionSource).toContain('new StorageParseError({');
 });
 
-test('Saved Session restore and route checks use typed command helpers', () => {
+test('saved service profile restore and route checks use typed command helpers', () => {
   const sessionAccessSource = readFileSync('src/sessionAccess.ts', 'utf8');
+  const profilesSource = readFileSync('src/effects/profiles.ts', 'utf8');
 
-  expect(sessionAccessSource).toContain(
-    "import { runTauriCommand, runTauriCommandRaw } from './effects/commands';",
-  );
-  expect(sessionAccessSource).toContain(
-    'runTauriCommand(() => commands.serverRestoreSession(savedSession))',
-  );
+  expect(sessionAccessSource).toContain("import { runTauriCommandRaw } from './effects/commands';");
+  expect(sessionAccessSource).toContain('fetchSavedServiceProfiles()');
+  expect(sessionAccessSource).toContain('activateSavedServiceProfile(key)');
+  expect(profilesSource).toContain('runTauriCommand(() => commands.serverProfilesGet())');
+  expect(profilesSource).toContain('runTauriCommand(() => commands.serverProfilesActivate(key))');
+  expect(profilesSource).toContain('runTauriCommand(() => commands.serverProfilesRemove(key))');
   expect(sessionAccessSource).toContain('runTauriCommandRaw(() => commands.serverIsConnected())');
+  expect(sessionAccessSource).not.toContain('commands.serverRestoreSession');
   expect(sessionAccessSource).not.toContain('commands.jellyfinRestoreSession');
   expect(sessionAccessSource).not.toContain('commands.jellyfinIsConnected');
 });
@@ -47,10 +49,11 @@ test('Quick Connect commands use typed command helpers', () => {
   expect(qcSource).toContain(
     'commands.jellyfinQuickConnectAuthenticate(serverUrl, request.secret)',
   );
-  expect(qcSource).toContain('runTauriCommandRaw(() => commands.serverGetSession())');
+  expect(qcSource).toContain('yield* saveCurrentServiceProfile()');
   expect(qcSource).not.toContain(
     'const result = await commands.jellyfinQuickConnectStart(serverUrl);',
   );
+  expect(qcSource).not.toContain('commands.serverGetSession');
   expect(qcSource).not.toContain('commands.jellyfinGetSession');
 });
 
@@ -59,7 +62,8 @@ test('generated bindings expose provider-neutral DTOs instead of Jellyfin OpenAP
 
   expect(bindingsSource).toContain('export type MediaServerProvider = "jellyfin" | "emby";');
   expect(bindingsSource).toContain('serverGetState');
-  expect(bindingsSource).toContain('serverRestoreSession');
+  expect(bindingsSource).toContain('serverProfilesActivate');
+  expect(bindingsSource).toContain('export type SavedServiceProfiles');
   expect(bindingsSource).not.toContain('AuthenticationResult');
   expect(bindingsSource).not.toContain('BaseItemDto');
   expect(bindingsSource).not.toContain('jellyfin_api');
@@ -75,7 +79,9 @@ test('Operations Console and Shell use refactored connection/config effects', ()
   expect(consoleSource).toContain('saveConfig');
   expect(consoleSource).toContain('fetchConnectionState');
   expect(consoleSource).toContain('disconnectJellyfin');
-  expect(consoleSource).toContain('clearJellyfinSession');
+  expect(consoleSource).toContain('fetchSavedServiceProfiles');
+  expect(consoleSource).toContain('activateSavedServiceProfile');
+  expect(consoleSource).toContain('removeSavedServiceProfile');
 
   // Verify OperationsConsole.tsx no longer contains raw command calls or imports commands
   expect(consoleSource).not.toContain('commands.configGet');

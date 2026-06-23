@@ -429,6 +429,23 @@ function largeVideoLibraryPage(startIndex: number): VideoLibraryPage {
 function mockShellCommands(state = connectedState) {
   rstest.spyOn(commands, 'serverIsConnected').mockResolvedValue(true);
   rstest.spyOn(commands, 'serverGetState').mockResolvedValue(state);
+  rstest.spyOn(commands, 'serverProfilesGet').mockResolvedValue({
+    data: {
+      activeProfileKey: 'jellyfin|https://jellyfin.example.com|Ada',
+      profiles: [
+        {
+          active: true,
+          key: 'jellyfin|https://jellyfin.example.com|Ada',
+          lastRestoreError: null,
+          provider: 'jellyfin',
+          serverName: 'Jellyfin Home',
+          serverUrl: 'https://jellyfin.example.com',
+          userName: 'Ada',
+        },
+      ],
+    },
+    status: 'ok',
+  });
   rstest.spyOn(commands, 'mpvIsConnected').mockResolvedValue(false);
   rstest.spyOn(commands, 'configGet').mockResolvedValue(config);
   rstest.spyOn(commands, 'libraryVideoHome').mockResolvedValue({
@@ -1369,13 +1386,13 @@ test('Settings modal keeps Disconnect and Sign out as distinct session controls'
   expect(within(settings).getByRole('button', { name: 'Disconnect' })).toBeVisible();
   expect(
     within(settings).getByText(
-      'Disconnect ends the active Jellyfin connection but keeps the Saved Session available for Reconnect.',
+      'Disconnect ends the active media server connection but keeps saved services available for Reconnect.',
     ),
   ).toBeVisible();
   expect(within(settings).getByRole('button', { name: 'Sign out' })).toBeVisible();
   expect(
     within(settings).getByText(
-      'Sign out removes the Saved Session and requires authentication before Reconnect is available.',
+      'Sign out removes the active saved service and leaves any other saved services available.',
     ),
   ).toBeVisible();
   expect(localStorage.getItem('jellypilot_auth_session')).not.toBeNull();

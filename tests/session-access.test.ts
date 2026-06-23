@@ -1,7 +1,7 @@
 import { afterEach, expect, rstest, test } from '@rstest/core';
 
 import { commands } from '../src/bindings';
-import type { SavedSession } from '../src/bindings';
+import type { SavedServiceProfiles, SavedSession } from '../src/bindings';
 import { LEGACY_SESSION_STORAGE_KEY, SESSION_STORAGE_KEY } from '../src/effects/auth';
 import {
   canAccessConsole,
@@ -21,6 +21,21 @@ const sampleSession: SavedSession = {
   userId: 'user-1',
   userName: 'Ada',
 };
+const sampleProfileKey = 'jellyfin|https://jellyfin.example.com|Ada';
+const sampleProfiles: SavedServiceProfiles = {
+  activeProfileKey: sampleProfileKey,
+  profiles: [
+    {
+      active: true,
+      key: sampleProfileKey,
+      lastRestoreError: null,
+      provider: 'jellyfin',
+      serverName: 'Jellyfin Home',
+      serverUrl: 'https://jellyfin.example.com',
+      userName: 'Ada',
+    },
+  ],
+};
 
 afterEach(() => {
   rstest.restoreAllMocks();
@@ -33,72 +48,105 @@ test('canAccessConsole allows connected users without a Saved Session', async ()
   await expect(canAccessConsole()).resolves.toBe(true);
 });
 
-test('canAccessConsole allows disconnected users with a Saved Session', async () => {
+test('canAccessConsole allows disconnected users with a saved service profile', async () => {
   rstest.spyOn(commands, 'serverIsConnected').mockResolvedValue(false);
-  saveSession(sampleSession);
+  rstest.spyOn(commands, 'serverProfilesGet').mockResolvedValue({
+    data: sampleProfiles,
+    status: 'ok',
+  });
 
   await expect(canAccessConsole()).resolves.toBe(true);
 });
 
-test('canAccessConsole denies disconnected users without a Saved Session', async () => {
+test('canAccessConsole denies disconnected users without a saved service profile', async () => {
   rstest.spyOn(commands, 'serverIsConnected').mockResolvedValue(false);
+  rstest.spyOn(commands, 'serverProfilesGet').mockResolvedValue({
+    data: { activeProfileKey: null, profiles: [] },
+    status: 'ok',
+  });
 
   await expect(canAccessConsole()).resolves.toBe(false);
 });
 
-test('canAccessConsole falls back to Saved Session lookup when connected check throws', async () => {
+test('canAccessConsole falls back to saved profiles when connected check throws', async () => {
   rstest.spyOn(commands, 'serverIsConnected').mockRejectedValue(new Error('ipc unavailable'));
-  saveSession(sampleSession);
+  rstest.spyOn(commands, 'serverProfilesGet').mockResolvedValue({
+    data: sampleProfiles,
+    status: 'ok',
+  });
 
   await expect(canAccessConsole()).resolves.toBe(true);
 });
 
-test('restoreSavedSession restores the live connection from a Saved Session', async () => {
-  const restore = rstest
-    .spyOn(commands, 'serverRestoreSession')
-    .mockResolvedValue({ data: null, status: 'ok' });
-  saveSession(sampleSession);
+test('restoreSavedSession restores the live connection from the active saved service profile', async () => {
+  rstest.spyOn(commands, 'serverProfilesGet').mockResolvedValue({
+    data: sampleProfiles,
+    status: 'ok',
+  });
+  const activate = rstest
+    .spyOn(commands, 'serverProfilesActivate')
+    .mockResolvedValue({ data: sampleProfiles, status: 'ok' });
 
   await expect(restoreSavedSession()).resolves.toBe(true);
-  expect(restore).toHaveBeenCalledWith(sampleSession);
-  expect(loadSavedSession()).toEqual(sampleSession);
+  expect(activate).toHaveBeenCalledWith(sampleProfileKey);
 });
 
-test('restoreSavedSession clears a Saved Session after restore failure', async () => {
-  rstest.spyOn(commands, 'serverRestoreSession').mockResolvedValue({
+test('restoreSavedSession returns false after active profile restore failure', async () => {
+  rstest.spyOn(commands, 'serverProfilesGet').mockResolvedValue({
+    data: sampleProfiles,
+    status: 'ok',
+  });
+  rstest.spyOn(commands, 'serverProfilesActivate').mockResolvedValue({
     error: { code: 'authFailed', message: 'expired' },
     status: 'error',
   });
-  saveSession(sampleSession);
 
   await expect(restoreSavedSession()).resolves.toBe(false);
-  expect(loadSavedSession()).toBeNull();
 });
 
-test('restoreSavedSession clears a Saved Session after restore command throws', async () => {
-  rstest.spyOn(commands, 'serverRestoreSession').mockRejectedValue(new Error('ipc unavailable'));
-  saveSession(sampleSession);
+test('restoreSavedSession returns false after active profile restore command throws', async () => {
+  rstest.spyOn(commands, 'serverProfilesGet').mockResolvedValue({
+    data: sampleProfiles,
+    status: 'ok',
+  });
+  rstest.spyOn(commands, 'serverProfilesActivate').mockRejectedValue(new Error('ipc unavailable'));
 
   await expect(restoreSavedSession()).resolves.toBe(false);
-  expect(loadSavedSession()).toBeNull();
 });
 
-test('checkAuthWithRestore attempts restore before denying root route access', async () => {
+test('checkAuthWithRestore attempts active profile restore before denying root route access', async () => {
   rstest.spyOn(commands, 'serverIsConnected').mockResolvedValue(false);
-  const restore = rstest
-    .spyOn(commands, 'serverRestoreSession')
-    .mockResolvedValue({ data: null, status: 'ok' });
-  saveSession(sampleSession);
+  rstest.spyOn(commands, 'serverProfilesGet').mockResolvedValue({
+    data: sampleProfiles,
+    status: 'ok',
+  });
+  const activate = rstest
+    .spyOn(commands, 'serverProfilesActivate')
+    .mockResolvedValue({ data: sampleProfiles, status: 'ok' });
 
   await expect(checkAuthWithRestore()).resolves.toBe(true);
-  expect(restore).toHaveBeenCalledWith(sampleSession);
+  expect(activate).toHaveBeenCalledWith(sampleProfileKey);
 });
 
 test('checkAuthWithRestore denies access when command checks throw', async () => {
   rstest.spyOn(commands, 'serverIsConnected').mockRejectedValue(new Error('ipc unavailable'));
-  saveSession(sampleSession);
+  rstest.spyOn(commands, 'serverProfilesGet').mockRejectedValue(new Error('profiles unavailable'));
 
   await expect(checkAuthWithRestore()).resolves.toBe(false);
+});
+
+test('checkAuthWithRestore allows shell access when active profile restore fails but profiles remain', async () => {
+  rstest.spyOn(commands, 'serverIsConnected').mockResolvedValue(false);
+  rstest.spyOn(commands, 'serverProfilesGet').mockResolvedValue({
+    data: sampleProfiles,
+    status: 'ok',
+  });
+  rstest.spyOn(commands, 'serverProfilesActivate').mockResolvedValue({
+    error: { code: 'authFailed', message: 'expired' },
+    status: 'error',
+  });
+
+  await expect(checkAuthWithRestore()).resolves.toBe(true);
 });
 
 test('clearSavedSession removes Saved Session state synchronously', () => {
@@ -118,6 +166,23 @@ test('migrates legacy Saved Session storage and clears the old key', () => {
   expect(loadSavedSession()).toEqual({ ...sampleSession, deviceId: null });
   expect(localStorage.getItem(LEGACY_SESSION_STORAGE_KEY)).toBeNull();
   expect(localStorage.getItem(SESSION_STORAGE_KEY)).not.toBeNull();
+});
+
+test('canAccessConsole imports legacy Saved Session into saved profiles', async () => {
+  rstest.spyOn(commands, 'serverIsConnected').mockResolvedValue(false);
+  const importLegacy = rstest.spyOn(commands, 'serverProfilesImportLegacy').mockResolvedValue({
+    data: sampleProfiles,
+    status: 'ok',
+  });
+  rstest.spyOn(commands, 'serverProfilesGet').mockResolvedValue({
+    data: sampleProfiles,
+    status: 'ok',
+  });
+  localStorage.setItem(SESSION_STORAGE_KEY, JSON.stringify(sampleSession));
+
+  await expect(canAccessConsole()).resolves.toBe(true);
+  expect(importLegacy).toHaveBeenCalledWith(sampleSession);
+  expect(localStorage.getItem(SESSION_STORAGE_KEY)).toBeNull();
 });
 
 test('loads Saved Sessions without provider as Jellyfin sessions', () => {

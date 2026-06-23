@@ -11,17 +11,21 @@ import {
   LEGACY_CREDENTIALS_STORAGE_KEY,
   loadSavedCredentials,
 } from '../src/effects/session';
-import { loadSavedSession } from '../src/sessionAccess';
 import { TestQueryProvider } from './query-client';
 
-const sampleSession = {
-  accessToken: 'token-1',
-  deviceId: 'device-1',
-  provider: 'jellyfin' as const,
-  serverName: 'Jellyfin Home',
-  serverUrl: 'https://jellyfin.example.com',
-  userId: 'user-1',
-  userName: 'Ada',
+const sampleProfiles = {
+  activeProfileKey: 'jellyfin|https://jellyfin.example.com|Ada',
+  profiles: [
+    {
+      active: true,
+      key: 'jellyfin|https://jellyfin.example.com|Ada',
+      lastRestoreError: null,
+      provider: 'jellyfin' as const,
+      serverName: 'Jellyfin Home',
+      serverUrl: 'https://jellyfin.example.com',
+      userName: 'Ada',
+    },
+  ],
 };
 function renderLoginPage(onConnected = () => {}) {
   const root = document.createElement('div');
@@ -231,7 +235,10 @@ test('login page completes quick connect when approval is observed', async () =>
     data: null,
     status: 'ok',
   });
-  rstest.spyOn(commands, 'serverGetSession').mockResolvedValue(sampleSession);
+  const saveProfile = rstest.spyOn(commands, 'serverProfilesSaveCurrent').mockResolvedValue({
+    data: sampleProfiles,
+    status: 'ok',
+  });
   const onConnected = rstest.fn();
   const cleanup = renderLoginPage(onConnected);
 
@@ -244,7 +251,7 @@ test('login page completes quick connect when approval is observed', async () =>
   await rstest.advanceTimersByTimeAsync(5000);
 
   await waitFor(() => expect(onConnected).toHaveBeenCalledTimes(1));
-  expect(loadSavedSession()).toEqual(sampleSession);
+  expect(saveProfile).toHaveBeenCalledTimes(1);
 
   cleanup();
 });
@@ -432,7 +439,10 @@ test('quick connect can request a new code after timeout with a poll in flight',
     data: null,
     status: 'ok',
   });
-  rstest.spyOn(commands, 'serverGetSession').mockResolvedValue(sampleSession);
+  rstest.spyOn(commands, 'serverProfilesSaveCurrent').mockResolvedValue({
+    data: sampleProfiles,
+    status: 'ok',
+  });
   const onConnected = rstest.fn();
   const cleanup = renderLoginPage(onConnected);
 
@@ -528,7 +538,10 @@ test('password login saves the authenticated session', async () => {
     data: null,
     status: 'ok',
   });
-  rstest.spyOn(commands, 'serverGetSession').mockResolvedValue(sampleSession);
+  const saveProfile = rstest.spyOn(commands, 'serverProfilesSaveCurrent').mockResolvedValue({
+    data: sampleProfiles,
+    status: 'ok',
+  });
   const onConnected = rstest.fn();
   const cleanup = renderLoginPage(onConnected);
 
@@ -553,7 +566,7 @@ test('password login saves the authenticated session', async () => {
     serverUrl: 'https://jellyfin.example.com',
     username: 'ada',
   });
-  expect(loadSavedSession()).toEqual(sampleSession);
+  expect(saveProfile).toHaveBeenCalledTimes(1);
 
   cleanup();
 });
@@ -563,9 +576,9 @@ test('password login submits the selected Emby provider', async () => {
     data: null,
     status: 'ok',
   });
-  rstest.spyOn(commands, 'serverGetSession').mockResolvedValue({
-    ...sampleSession,
-    provider: 'emby',
+  rstest.spyOn(commands, 'serverProfilesSaveCurrent').mockResolvedValue({
+    data: sampleProfiles,
+    status: 'ok',
   });
   const cleanup = renderLoginPage();
 
@@ -589,11 +602,13 @@ test('password login stays locked while saving the authenticated session', async
     data: null,
     status: 'ok',
   });
-  let resolveSession: (session: typeof sampleSession) => void = () => {};
-  const session = new Promise<typeof sampleSession>((resolve) => {
-    resolveSession = resolve;
+  let resolveSave: (profiles: typeof sampleProfiles) => void = () => {};
+  const save = new Promise<typeof sampleProfiles>((resolve) => {
+    resolveSave = resolve;
   });
-  rstest.spyOn(commands, 'serverGetSession').mockReturnValue(session);
+  rstest
+    .spyOn(commands, 'serverProfilesSaveCurrent')
+    .mockReturnValue(save.then((profiles) => ({ data: profiles, status: 'ok' })));
   const onConnected = rstest.fn();
   const cleanup = renderLoginPage(onConnected);
 
@@ -603,7 +618,7 @@ test('password login stays locked while saving the authenticated session', async
   await waitFor(() => expect(connect).toHaveBeenCalledTimes(1));
   expect(screen.getByRole('button', { name: /Connecting/ })).toBeDisabled();
 
-  resolveSession(sampleSession);
+  resolveSave(sampleProfiles);
   await waitFor(() => expect(onConnected).toHaveBeenCalledTimes(1));
 
   cleanup();
@@ -613,7 +628,9 @@ test('password login session-save failures show an error and unlock submit', asy
     data: null,
     status: 'ok',
   });
-  rstest.spyOn(commands, 'serverGetSession').mockRejectedValue(new Error('Session unavailable'));
+  rstest
+    .spyOn(commands, 'serverProfilesSaveCurrent')
+    .mockRejectedValue(new Error('Session unavailable'));
   const onConnected = rstest.fn();
   const cleanup = renderLoginPage(onConnected);
 
@@ -631,7 +648,10 @@ test('password login saves remembered Login Prefill when remember me is checked'
     data: null,
     status: 'ok',
   });
-  rstest.spyOn(commands, 'serverGetSession').mockResolvedValue(sampleSession);
+  rstest.spyOn(commands, 'serverProfilesSaveCurrent').mockResolvedValue({
+    data: sampleProfiles,
+    status: 'ok',
+  });
   const cleanup = renderLoginPage();
 
   await fillPasswordLogin();
@@ -664,9 +684,9 @@ test('password login restores remembered Emby provider for Login Prefill', async
     data: null,
     status: 'ok',
   });
-  rstest.spyOn(commands, 'serverGetSession').mockResolvedValue({
-    ...sampleSession,
-    provider: 'emby',
+  rstest.spyOn(commands, 'serverProfilesSaveCurrent').mockResolvedValue({
+    data: sampleProfiles,
+    status: 'ok',
   });
   const cleanup = renderLoginPage();
 
@@ -703,7 +723,10 @@ test('password login clears Login Prefill when remember me is unchecked', async 
     data: null,
     status: 'ok',
   });
-  rstest.spyOn(commands, 'serverGetSession').mockResolvedValue(sampleSession);
+  rstest.spyOn(commands, 'serverProfilesSaveCurrent').mockResolvedValue({
+    data: sampleProfiles,
+    status: 'ok',
+  });
   const cleanup = renderLoginPage();
 
   await fillPasswordLogin();

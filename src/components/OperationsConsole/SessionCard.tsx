@@ -47,7 +47,7 @@ export default function SessionCard(props: SessionCardProps) {
           <div>
             <h2 class="text-on-surface text-[16px] leading-[24px] font-semibold">Session</h2>
             <p class="text-on-surface-variant/80 mt-1 text-[12px] leading-[16px]">
-              Sign out removes the Saved Session and requires authentication before Reconnect is
+              Sign out removes the active saved service and leaves any other saved services
               available.
             </p>
           </div>
@@ -96,8 +96,8 @@ export default function SessionCard(props: SessionCardProps) {
               Sign out?
             </Dialog.Title>
             <Dialog.Description class="text-on-surface-variant/90 mt-3 text-[14px] leading-[20px]">
-              This removes the Saved Session and you'll need to authenticate again before
-              reconnecting.
+              This removes only the active saved service profile. Other saved services remain
+              available in Settings.
             </Dialog.Description>
             <div class="mt-6 flex flex-col-reverse gap-3 sm:flex-row sm:justify-end">
               <Button

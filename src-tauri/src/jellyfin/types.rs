@@ -57,7 +57,7 @@ pub struct ProviderCapabilities {
   pub remote_control_warning: Option<String>,
 }
 
-/// Media server provider selected for a connection or saved session.
+/// Media server provider selected for a connection or saved service profile.
 #[derive(Debug, Clone, Copy, Deserialize, Serialize, Type, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub enum MediaServerProvider {

@@ -7,6 +7,7 @@ use std::sync::Arc;
 use tauri::State;
 use tauri_specta::{collect_commands, collect_events, Builder, Event};
 
+use crate::auth_profiles::{load_profiles, save_profiles, SavedServiceProfiles};
 use crate::config::AppConfig;
 use crate::jellyfin::{
   ConnectionState, Credentials, JellyfinClient, JellyfinError, QuickConnectRequest,
@@ -774,8 +775,8 @@ pub async fn jellyfin_restore_session(
 
 /// Clear/logout from the current session.
 ///
-/// This disconnects from the server and should be paired with
-/// clearing the saved session from localStorage on the frontend.
+/// This disconnects from the server. Saved service profile removal is handled
+/// by the profile-store commands.
 #[tauri::command]
 #[specta]
 pub async fn jellyfin_clear_session(
@@ -891,6 +892,124 @@ pub async fn server_clear_session(
   state: State<'_, JellyfinState>,
 ) -> Result<(), CommandError> {
   jellyfin_clear_session(app, state).await
+}
+
+/// List saved media server profiles.
+#[tauri::command]
+#[specta]
+pub fn server_profiles_get(app: tauri::AppHandle) -> Result<SavedServiceProfiles, CommandError> {
+  load_profiles(&app)
+    .map(|profiles| profiles.summary())
+    .map_err(internal_err)
+}
+
+/// Import a legacy single saved session into the saved service profile store.
+#[tauri::command]
+#[specta]
+pub fn server_profiles_import_legacy(
+  app: tauri::AppHandle,
+  session: SavedSession,
+) -> Result<SavedServiceProfiles, CommandError> {
+  let mut profiles = load_profiles(&app).map_err(internal_err)?;
+  profiles.upsert_active(session);
+  save_profiles(&app, &profiles).map_err(internal_err)?;
+  Ok(profiles.summary())
+}
+
+/// Save the currently authenticated session as the active saved service profile.
+#[tauri::command]
+#[specta]
+pub fn server_profiles_save_current(
+  app: tauri::AppHandle,
+  state: State<'_, JellyfinState>,
+) -> Result<SavedServiceProfiles, CommandError> {
+  let session = state
+    .client
+    .login()
+    .get_saved_session()
+    .ok_or_else(|| CommandError::not_connected("No active media server session to save"))?;
+  let mut profiles = load_profiles(&app).map_err(internal_err)?;
+  profiles.upsert_active(session);
+  save_profiles(&app, &profiles).map_err(internal_err)?;
+  Ok(profiles.summary())
+}
+
+/// Activate a saved service profile and make it the only live media server connection.
+#[tauri::command]
+#[specta]
+pub async fn server_profiles_activate(
+  app: tauri::AppHandle,
+  state: State<'_, JellyfinState>,
+  config_state: State<'_, ConfigState>,
+  key: String,
+) -> Result<SavedServiceProfiles, CommandError> {
+  let mut profiles = load_profiles(&app).map_err(internal_err)?;
+  let session = profiles
+    .session_for_key(&key)
+    .ok_or_else(|| CommandError::not_found("Saved service profile was not found"))?;
+
+  stop_active_media_server_session(&app, &state).await?;
+
+  let restore_result = state
+    .client
+    .login()
+    .restore_session(&session)
+    .await
+    .map_err(jellyfin_err);
+
+  if let Err(err) = restore_result {
+    profiles.mark_restore_failed(&key, err.message.clone());
+    save_profiles(&app, &profiles).map_err(internal_err)?;
+    playback_control::emit_now_playing_changed(&app, &state).await;
+    return Err(err);
+  }
+
+  if let Err(err) = start_remote_control_session_if_supported(&app, &state, &config_state).await {
+    profiles.mark_restore_failed(&key, err.message.clone());
+    save_profiles(&app, &profiles).map_err(internal_err)?;
+    return Err(err);
+  }
+
+  profiles.mark_active_restored(&key);
+  save_profiles(&app, &profiles).map_err(internal_err)?;
+  Ok(profiles.summary())
+}
+
+/// Remove a saved service profile. Removing the active profile also disconnects it.
+#[tauri::command]
+#[specta]
+pub async fn server_profiles_remove(
+  app: tauri::AppHandle,
+  state: State<'_, JellyfinState>,
+  key: String,
+) -> Result<SavedServiceProfiles, CommandError> {
+  let mut profiles = load_profiles(&app).map_err(internal_err)?;
+  if profiles.active_profile_key() == Some(key.as_str()) {
+    stop_active_media_server_session(&app, &state).await?;
+  }
+
+  if !profiles.remove_profile(&key) {
+    return Err(CommandError::not_found(
+      "Saved service profile was not found",
+    ));
+  }
+
+  save_profiles(&app, &profiles).map_err(internal_err)?;
+  Ok(profiles.summary())
+}
+
+async fn stop_active_media_server_session(
+  app: &tauri::AppHandle,
+  state: &JellyfinState,
+) -> Result<(), CommandError> {
+  let session = state.session.write().take();
+  if let Some(session) = session {
+    session.stop().await.map_err(internal_err)?;
+  }
+
+  state.client.login().disconnect();
+  playback_control::emit_now_playing_changed(app, state).await;
+  Ok(())
 }
 
 // ============================================================================
@@ -1068,6 +1187,11 @@ pub fn specta_builder() -> Builder<tauri::Wry> {
       server_get_session,
       server_restore_session,
       server_clear_session,
+      server_profiles_get,
+      server_profiles_import_legacy,
+      server_profiles_save_current,
+      server_profiles_activate,
+      server_profiles_remove,
       // Config commands
       config_get,
       config_set,

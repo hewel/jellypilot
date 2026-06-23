@@ -53,7 +53,7 @@ export default function ConnectionCard(props: ConnectionCardProps) {
             class="text-secondary mt-1.5 truncate font-mono text-[14px] leading-[20px]"
             title={props.state?.serverUrl ?? ''}
           >
-            {props.state?.serverUrl ?? 'Reconnect with the Saved Session or sign in again'}
+            {props.state?.serverUrl ?? 'Reconnect with a saved service or sign in again'}
           </p>
         </div>
         <div class="bg-surface-container-high/30 border-outline-variant/60 relative overflow-hidden rounded-2xl border p-4 backdrop-blur-sm">
@@ -124,7 +124,7 @@ export default function ConnectionCard(props: ConnectionCardProps) {
         </Button>
       </div>
       <p class="text-on-surface-variant/80 mt-4 text-[12px] leading-[16px]">
-        Disconnect ends the active Jellyfin connection but keeps the Saved Session available for
+        Disconnect ends the active media server connection but keeps saved services available for
         Reconnect.
       </p>
     </SectionCard>

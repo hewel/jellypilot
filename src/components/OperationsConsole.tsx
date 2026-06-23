@@ -1,22 +1,28 @@
+import { Dialog } from '@ark-ui/solid/dialog';
 import { createForm } from '@tanstack/solid-form';
 import { createMutation, createQuery, useQueryClient } from '@tanstack/solid-query';
 import { Exit, Option } from 'effect';
-import { Show, createEffect } from 'solid-js';
+import { X } from 'lucide-solid';
+import { Show, createEffect, createSignal } from 'solid-js';
+import { Portal } from 'solid-js/web';
 
 import type { AppConfig, IntroSkipperMode } from '../bindings';
 import { commandFailureMessage } from '../effects/commands';
 import { detectMpv, fetchConfig, saveConfig } from '../effects/config';
+import { disconnectJellyfin, fetchConnectionState } from '../effects/connection';
 import {
-  clearJellyfinSession,
-  disconnectJellyfin,
-  fetchConnectionState,
-} from '../effects/connection';
+  activateSavedServiceProfile,
+  fetchSavedServiceProfiles,
+  removeSavedServiceProfile,
+} from '../effects/profiles';
 import { queryKeys, runExit } from '../effects/query';
-import { clearSavedSession, loadSavedSession, restoreSavedSession } from '../sessionAccess';
+import { restoreSavedSession } from '../sessionAccess';
+import LoginPage from './LoginPage';
 import ConnectionCard from './OperationsConsole/ConnectionCard';
 import DiagnosticsCard from './OperationsConsole/DiagnosticsCard';
 import IntroSkipCard from './OperationsConsole/IntroSkipCard';
 import PlayerBridgeSettingsCard from './OperationsConsole/PlayerBridgeSettingsCard';
+import SavedServicesCard from './OperationsConsole/SavedServicesCard';
 import SessionCard from './OperationsConsole/SessionCard';
 import ShortcutKeysCard from './OperationsConsole/ShortcutKeysCard';
 import { createOperationsConsoleStore } from './OperationsConsole/store';
@@ -25,7 +31,7 @@ import {
   parseSubtitleLanguageInput,
 } from './OperationsConsole/subtitleLanguages';
 import { useToast } from './ToastProvider';
-import { ConsoleContainer, ConsoleGrid, PageFooter } from './ui';
+import { Button, ConsoleContainer, ConsoleGrid, PageFooter } from './ui';
 import type { JellyPilotSelectItem } from './ui';
 
 interface OperationsConsoleProps {
@@ -35,6 +41,10 @@ interface OperationsConsoleProps {
 export default function OperationsConsole(props: OperationsConsoleProps) {
   const { showToast } = useToast();
   const { state: ui, actions, Provider } = createOperationsConsoleStore();
+  const [addServiceOpen, setAddServiceOpen] = createSignal(false);
+  const [addServicePortalMount, setAddServicePortalMount] = createSignal<HTMLDivElement>();
+  const [activatingProfileKey, setActivatingProfileKey] = createSignal<string | null>(null);
+  const [removingProfileKey, setRemovingProfileKey] = createSignal<string | null>(null);
 
   let configHydrated = false;
   interface PendingSave {
@@ -65,6 +75,10 @@ export default function OperationsConsole(props: OperationsConsoleProps) {
     queryKey: queryKeys.connectionState,
     queryFn: () => runExit(fetchConnectionState()),
   }));
+  const profilesQuery = createQuery(() => ({
+    queryKey: queryKeys.savedServiceProfiles,
+    queryFn: () => runExit(fetchSavedServiceProfiles()),
+  }));
   const configQuery = createQuery(() => ({
     queryKey: queryKeys.appConfig,
     queryFn: () => runExit(fetchConfig()),
@@ -75,14 +89,17 @@ export default function OperationsConsole(props: OperationsConsoleProps) {
   const disconnectMutation = createMutation(() => ({
     mutationFn: () => runExit(disconnectJellyfin()),
   }));
-  const clearSessionMutation = createMutation(() => ({
-    mutationFn: () => runExit(clearJellyfinSession()),
-  }));
   const detectMpvMutation = createMutation(() => ({
     mutationFn: () => runExit(detectMpv()),
   }));
   const reconnectMutation = createMutation(() => ({
     mutationFn: restoreSavedSession,
+  }));
+  const activateProfileMutation = createMutation(() => ({
+    mutationFn: (key: string) => runExit(activateSavedServiceProfile(key)),
+  }));
+  const removeProfileMutation = createMutation(() => ({
+    mutationFn: (key: string) => runExit(removeSavedServiceProfile(key)),
   }));
   let loggedConfigFailure: string | null = null;
   createEffect(() => {
@@ -132,6 +149,8 @@ export default function OperationsConsole(props: OperationsConsoleProps) {
     connectionQuery.data && Exit.isSuccess(connectionQuery.data)
       ? connectionQuery.data.value
       : undefined;
+  const profiles = () =>
+    profilesQuery.data && Exit.isSuccess(profilesQuery.data) ? profilesQuery.data.value : null;
   const capabilities = () => state()?.capabilities;
   const config = () =>
     configQuery.data && Exit.isSuccess(configQuery.data) ? configQuery.data.value : null;
@@ -357,21 +376,20 @@ export default function OperationsConsole(props: OperationsConsoleProps) {
   };
 
   const handleReconnect = async () => {
-    const session = loadSavedSession();
-    if (!session) {
-      showToast('error', 'No Saved Session is available. Sign in again.');
-      props.onSignedOut();
+    if (!profiles()?.activeProfileKey) {
+      showToast('error', 'No active saved service is available. Choose a saved service.');
       return;
     }
 
     actions.beginReconnect();
     try {
       if (await reconnectMutation.mutateAsync()) {
-        showToast('success', 'Reconnected to Jellyfin');
+        showToast('success', 'Reconnected to saved service');
         void connectionQuery.refetch();
+        void profilesQuery.refetch();
       } else {
-        showToast('error', 'Could not reconnect to Jellyfin. Sign in again.');
-        props.onSignedOut();
+        showToast('error', 'Could not reconnect to the saved service.');
+        void profilesQuery.refetch();
       }
     } finally {
       actions.finishReconnect();
@@ -391,15 +409,75 @@ export default function OperationsConsole(props: OperationsConsoleProps) {
   };
 
   const handleSignOut = async () => {
-    actions.beginSignOut();
-    const exit = await clearSessionMutation.mutateAsync();
-    if (Exit.isSuccess(exit)) {
-      clearSavedSession();
+    const activeProfileKey = profiles()?.activeProfileKey;
+    if (!activeProfileKey) {
       props.onSignedOut();
-    } else {
-      showToast('error', commandFailureMessage(exit.cause, 'Sign out failed'));
+      return;
     }
-    actions.finishSignOut();
+
+    actions.beginSignOut();
+    setRemovingProfileKey(activeProfileKey);
+    try {
+      const exit = await removeProfileMutation.mutateAsync(activeProfileKey);
+      if (Exit.isSuccess(exit)) {
+        void connectionQuery.refetch();
+        void profilesQuery.refetch();
+        if (exit.value.profiles.length === 0) {
+          props.onSignedOut();
+        } else {
+          showToast('success', 'Signed out of the active service. Choose another saved service.');
+        }
+      } else {
+        showToast('error', commandFailureMessage(exit.cause, 'Sign out failed'));
+      }
+    } finally {
+      setRemovingProfileKey(null);
+      actions.finishSignOut();
+    }
+  };
+
+  const handleActivateProfile = async (key: string) => {
+    setActivatingProfileKey(key);
+    try {
+      const exit = await activateProfileMutation.mutateAsync(key);
+      if (Exit.isSuccess(exit)) {
+        showToast('success', 'Switched active service');
+        void connectionQuery.refetch();
+        void profilesQuery.refetch();
+      } else {
+        showToast('error', commandFailureMessage(exit.cause, 'Could not switch service'));
+        void profilesQuery.refetch();
+      }
+    } finally {
+      setActivatingProfileKey(null);
+    }
+  };
+
+  const handleRemoveProfile = async (key: string) => {
+    setRemovingProfileKey(key);
+    try {
+      const exit = await removeProfileMutation.mutateAsync(key);
+      if (Exit.isSuccess(exit)) {
+        void connectionQuery.refetch();
+        void profilesQuery.refetch();
+        if (exit.value.profiles.length === 0) {
+          props.onSignedOut();
+        } else {
+          showToast('success', 'Saved service removed');
+        }
+      } else {
+        showToast('error', commandFailureMessage(exit.cause, 'Could not remove saved service'));
+      }
+    } finally {
+      setRemovingProfileKey(null);
+    }
+  };
+
+  const handleAddServiceConnected = () => {
+    setAddServiceOpen(false);
+    showToast('success', 'Saved service added and activated');
+    void connectionQuery.refetch();
+    void profilesQuery.refetch();
   };
 
   const handleDetectMpv = async () => {
@@ -434,9 +512,18 @@ export default function OperationsConsole(props: OperationsConsoleProps) {
       <ConsoleContainer>
         <ConsoleGrid>
           <div class="space-y-6">
+            <SavedServicesCard
+              profiles={profiles()}
+              activatingProfileKey={activatingProfileKey()}
+              removingProfileKey={removingProfileKey()}
+              onAddService={() => setAddServiceOpen(true)}
+              onActivateProfile={handleActivateProfile}
+              onRemoveProfile={handleRemoveProfile}
+            />
+
             <ConnectionCard
               state={state()}
-              canReconnect={Boolean(loadSavedSession())}
+              canReconnect={Boolean(profiles()?.activeProfileKey)}
               onDisconnect={handleDisconnect}
               onReconnect={handleReconnect}
               onRefresh={handleRefresh}
@@ -482,6 +569,36 @@ export default function OperationsConsole(props: OperationsConsoleProps) {
           </aside>
         </ConsoleGrid>
       </ConsoleContainer>
+      <div ref={setAddServicePortalMount} />
+      <Dialog.Root
+        open={addServiceOpen()}
+        onOpenChange={(details) => setAddServiceOpen(details.open)}
+        lazyMount
+        unmountOnExit
+      >
+        <Portal mount={addServicePortalMount()}>
+          <Dialog.Backdrop class="fixed inset-0 z-60 bg-black/70 backdrop-blur-sm transition-[backdrop-filter,background-color,opacity] duration-300 data-[state=closed]:opacity-0 data-[state=open]:opacity-100" />
+          <Dialog.Positioner class="fixed inset-0 z-60 flex items-center justify-center overflow-y-auto p-4">
+            <Dialog.Content class="relative w-full max-w-3xl outline-none">
+              <Dialog.Title class="sr-only">Add saved service</Dialog.Title>
+              <Dialog.Description class="sr-only">
+                Log in to a Jellyfin or Emby service and save it for switching.
+              </Dialog.Description>
+              <Button
+                type="button"
+                variant="icon"
+                class="border-outline-variant bg-surface-container-high/80 text-on-surface-variant hover:border-secondary hover:text-secondary absolute top-4 right-4 z-10 rounded-xl border shadow-lg backdrop-blur"
+                aria-label="Close add service"
+                title="Close add service"
+                onClick={() => setAddServiceOpen(false)}
+              >
+                <X class="h-4.5 w-4.5" />
+              </Button>
+              <LoginPage embedded onConnected={handleAddServiceConnected} />
+            </Dialog.Content>
+          </Dialog.Positioner>
+        </Portal>
+      </Dialog.Root>
     </Provider>
   );
 }

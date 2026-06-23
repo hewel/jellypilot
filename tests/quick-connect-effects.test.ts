@@ -3,16 +3,20 @@ import { Cause, Effect, Exit, Fiber } from 'effect';
 
 import { commands } from '../src/bindings';
 import { runQuickConnectWorkflow } from '../src/effects/quickConnect';
-import { loadSavedSession } from '../src/sessionAccess';
 
-const sampleSession = {
-  accessToken: 'token-123',
-  deviceId: 'device-123',
-  provider: 'jellyfin' as const,
-  serverName: 'Jellyfin Home',
-  serverUrl: 'https://jellyfin.example.com',
-  userId: 'user-1',
-  userName: 'Ada',
+const sampleProfiles = {
+  activeProfileKey: 'jellyfin|https://jellyfin.example.com|Ada',
+  profiles: [
+    {
+      active: true,
+      key: 'jellyfin|https://jellyfin.example.com|Ada',
+      lastRestoreError: null,
+      provider: 'jellyfin' as const,
+      serverName: 'Jellyfin Home',
+      serverUrl: 'https://jellyfin.example.com',
+      userName: 'Ada',
+    },
+  ],
 };
 
 afterEach(() => {
@@ -70,7 +74,10 @@ test('successful approval, authentication, and session save', async () => {
     data: null,
     status: 'ok',
   });
-  const sessionMock = rstest.spyOn(commands, 'serverGetSession').mockResolvedValue(sampleSession);
+  const saveProfileMock = rstest.spyOn(commands, 'serverProfilesSaveCurrent').mockResolvedValue({
+    data: sampleProfiles,
+    status: 'ok',
+  });
 
   const onCode = rstest.fn();
   const runPromise = Effect.runPromiseExit(
@@ -90,14 +97,13 @@ test('successful approval, authentication, and session save', async () => {
   await rstest.advanceTimersByTimeAsync(5000);
   expect(checkMock).toHaveBeenCalledTimes(2);
 
-  // Let authenticate and session get resolve
+  // Let authenticate and profile save resolve
   await rstest.advanceTimersByTimeAsync(0);
   expect(authMock).toHaveBeenCalledWith('https://jellyfin.example.com', 'secret-123');
-  expect(sessionMock).toHaveBeenCalledTimes(1);
+  expect(saveProfileMock).toHaveBeenCalledTimes(1);
 
   const exit = await runPromise;
   expect(Exit.isSuccess(exit)).toBe(true);
-  expect(loadSavedSession()).toEqual(sampleSession);
 });
 
 test('timeout fail after 5 minutes', async () => {

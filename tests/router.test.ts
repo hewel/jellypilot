@@ -1,7 +1,7 @@
 import { afterEach, expect, rstest, test } from '@rstest/core';
 
 import { commands } from '../src/bindings';
-import type { SavedSession } from '../src/bindings';
+import type { SavedServiceProfiles } from '../src/bindings';
 import {
   createJellyPilotRouter,
   redirectLegacyConsoleRoute,
@@ -9,16 +9,20 @@ import {
   redirectRootRoute,
   requireAuthenticatedShell,
 } from '../src/router';
-import { saveSession } from '../src/sessionAccess';
 
-const sampleSession: SavedSession = {
-  accessToken: 'token-1',
-  deviceId: 'device-1',
-  provider: 'jellyfin',
-  serverName: 'Jellyfin Home',
-  serverUrl: 'https://jellyfin.example.com',
-  userId: 'user-1',
-  userName: 'Ada',
+const sampleProfiles: SavedServiceProfiles = {
+  activeProfileKey: 'jellyfin|https://jellyfin.example.com|Ada',
+  profiles: [
+    {
+      active: true,
+      key: 'jellyfin|https://jellyfin.example.com|Ada',
+      lastRestoreError: null,
+      provider: 'jellyfin',
+      serverName: 'Jellyfin Home',
+      serverUrl: 'https://jellyfin.example.com',
+      userName: 'Ada',
+    },
+  ],
 };
 
 async function expectRedirect(action: () => Promise<void>, expectedRoute: string) {
@@ -41,15 +45,19 @@ test('login guard redirects authenticated users to Library', async () => {
   await expectRedirect(redirectLoggedInUsersToLibrary, '/library');
 });
 
-test('root guard restores a Saved Session into Library', async () => {
+test('root guard restores the active saved service profile into Library', async () => {
   rstest.spyOn(commands, 'serverIsConnected').mockResolvedValue(false);
-  rstest.spyOn(commands, 'serverRestoreSession').mockResolvedValue({
-    data: null,
+  rstest.spyOn(commands, 'serverProfilesGet').mockResolvedValue({
+    data: sampleProfiles,
     status: 'ok',
   });
-  saveSession(sampleSession);
+  const activate = rstest.spyOn(commands, 'serverProfilesActivate').mockResolvedValue({
+    data: sampleProfiles,
+    status: 'ok',
+  });
 
   await expectRedirect(redirectRootRoute, '/library');
+  expect(activate).toHaveBeenCalledWith(sampleProfiles.activeProfileKey);
 });
 
 test('legacy console redirects authenticated users to Library', async () => {
@@ -60,6 +68,10 @@ test('legacy console redirects authenticated users to Library', async () => {
 
 test('shell guard redirects unauthenticated users to Login', async () => {
   rstest.spyOn(commands, 'serverIsConnected').mockResolvedValue(false);
+  rstest.spyOn(commands, 'serverProfilesGet').mockResolvedValue({
+    data: { activeProfileKey: null, profiles: [] },
+    status: 'ok',
+  });
 
   await expectRedirect(requireAuthenticatedShell, '/login');
 });

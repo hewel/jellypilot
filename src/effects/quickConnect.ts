@@ -1,9 +1,9 @@
 import { commands } from '@bindings';
 import { Effect } from 'effect';
 
-import { saveSession } from './auth';
-import { runTauriCommand, runTauriCommandRaw } from './commands';
+import { runTauriCommand } from './commands';
 import { CommandError } from './errors';
+import { saveCurrentServiceProfile } from './profiles';
 
 /**
  * Runs the Quick Connect workflow:
@@ -11,7 +11,7 @@ import { CommandError } from './errors';
  * 2. Emits the code via onCode callback.
  * 3. Polls the check endpoint every 5 seconds until approved or failed.
  * 4. Once approved, completes authentication.
- * 5. Fetches and saves the session.
+ * 5. Saves the authenticated session as the active service profile.
  *
  * If 5 minutes pass without approval, it fails with a code expired error.
  */
@@ -41,10 +41,7 @@ export function runQuickConnectWorkflow(
       commands.jellyfinQuickConnectAuthenticate(serverUrl, request.secret),
     );
 
-    const session = yield* runTauriCommandRaw(() => commands.serverGetSession());
-    if (session) {
-      yield* saveSession(session);
-    }
+    yield* saveCurrentServiceProfile();
   }).pipe(
     Effect.timeout('5 minutes'),
     Effect.catchTag('TimeoutError', () =>
