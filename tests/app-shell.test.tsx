@@ -2,6 +2,7 @@ import { afterEach, beforeEach, expect, rstest, test } from '@rstest/core';
 import type { QueryClient } from '@tanstack/solid-query';
 import { RouterProvider, createMemoryHistory } from '@tanstack/solid-router';
 import { fireEvent, screen, waitFor, within } from '@testing-library/dom';
+import { Exit } from 'effect';
 import { render } from 'solid-js/web';
 
 import { commands, events } from '../src/bindings';
@@ -16,6 +17,7 @@ import type {
   VideoShowDetail,
 } from '../src/bindings';
 import { ToastProvider } from '../src/components/ToastProvider';
+import { queryKeys } from '../src/effects/query';
 import { createJellyPilotRouter } from '../src/router';
 import { resetSharedLibraryFilters } from '../src/utils/createSharedLibraryFilters';
 import { createTestQueryClient, TestQueryProvider } from './query-client';
@@ -62,6 +64,14 @@ const connectedState = {
 const disconnectedState = {
   ...connectedState,
   connected: false,
+};
+
+const secondConnectedState = {
+  ...connectedState,
+  serverName: 'Second Server',
+  serverUrl: 'https://second.example.com',
+  userId: 'user-2',
+  userName: 'Grace',
 };
 
 const nowPlaying: NowPlayingState = {
@@ -738,6 +748,25 @@ test('library browse auto-loads paged results and opens detail links without pla
     startIndex: 24,
   });
   expect(screen.queryByRole('button', { name: 'Load more' })).toBeNull();
+
+  cleanup();
+});
+
+test('library browse redirects home when active server changes under stale library URL', async () => {
+  mockShellCommands();
+  const queryClient = createTestQueryClient();
+  const browseCommand = rstest.spyOn(commands, 'libraryBrowseVideo');
+  const cleanup = renderShell('/library/movies/movies', queryClient);
+
+  expect(await screen.findByRole('link', { name: /Paged Movie/ })).toBeVisible();
+  browseCommand.mockClear();
+
+  queryClient.setQueryData(queryKeys.connectionState, Exit.succeed(secondConnectedState));
+
+  expect(await screen.findByRole('heading', { name: 'Continue Watching' })).toBeVisible();
+  expect(screen.getByRole('radio', { name: 'Home' })).toBeChecked();
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  expect(browseCommand).not.toHaveBeenCalled();
 
   cleanup();
 });

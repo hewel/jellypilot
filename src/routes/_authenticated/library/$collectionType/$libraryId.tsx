@@ -12,7 +12,7 @@ import {
 } from '@components/library/shared';
 import { Button } from '@components/ui';
 import { createInfiniteQuery, createQuery, useQueryClient } from '@tanstack/solid-query';
-import { createFileRoute } from '@tanstack/solid-router';
+import { createFileRoute, useNavigate } from '@tanstack/solid-router';
 import { createVirtualizer, observeElementRect } from '@tanstack/solid-virtual';
 import { Exit } from 'effect';
 import {
@@ -72,6 +72,7 @@ export const Route = createFileRoute('/_authenticated/library/$collectionType/$l
 function LibraryBrowseRoute() {
   const params = Route.useParams();
   const queryClient = useQueryClient();
+  const navigate = useNavigate();
   const libraryFilters = createSharedLibraryFilters();
   const filterSort = libraryFilters.sort;
   const [autoLoadSentinel, setAutoLoadSentinel] = createSignal<HTMLDivElement | null>(null);
@@ -90,6 +91,47 @@ function LibraryBrowseRoute() {
     staleTime: Infinity,
   }));
   const sessionKey = createMemo(() => librarySessionKeyFromConnectionExit(connectionQuery.data));
+  const activeSessionSignature = createMemo(() => {
+    const currentSessionKey = sessionKey();
+    return isLibrarySessionKeyConnected(currentSessionKey)
+      ? `${currentSessionKey.provider}\u0000${currentSessionKey.serverUrl}\u0000${currentSessionKey.userId}`
+      : null;
+  });
+  const [redirectingForSessionChange, setRedirectingForSessionChange] = createSignal(false);
+  let mountedSessionSignature: string | null = null;
+  const isMountedSessionActive = () => {
+    const currentSessionSignature = activeSessionSignature();
+    return (
+      currentSessionSignature !== null &&
+      !redirectingForSessionChange() &&
+      (mountedSessionSignature === null || mountedSessionSignature === currentSessionSignature)
+    );
+  };
+
+  createEffect(() => {
+    if (redirectingForSessionChange()) {
+      return;
+    }
+
+    const currentSessionSignature = activeSessionSignature();
+    if (currentSessionSignature === null) {
+      if (mountedSessionSignature !== null) {
+        setRedirectingForSessionChange(true);
+        void navigate({ to: '/library', replace: true });
+      }
+      return;
+    }
+
+    if (mountedSessionSignature === null) {
+      mountedSessionSignature = currentSessionSignature;
+      return;
+    }
+
+    if (mountedSessionSignature !== currentSessionSignature) {
+      setRedirectingForSessionChange(true);
+      void navigate({ to: '/library', replace: true });
+    }
+  });
 
   const fallbackVirtualGridWidth = () => {
     const gridWidth = virtualGrid()?.clientWidth ?? 0;
@@ -185,7 +227,7 @@ function LibraryBrowseRoute() {
     );
   const browseQuery = createInfiniteQuery(() => ({
     queryKey: browseQueryKey(),
-    enabled: libraryFilters.ready() && isLibrarySessionKeyConnected(sessionKey()),
+    enabled: libraryFilters.ready() && isMountedSessionActive(),
     queryFn: ({ pageParam }) => {
       const startIndex = typeof pageParam === 'number' ? pageParam : 0;
       return runExit(
@@ -442,7 +484,7 @@ function LibraryBrowseRoute() {
 
     return (
       libraryFilters.ready() &&
-      isLibrarySessionKeyConnected(sessionKey()) &&
+      isMountedSessionActive() &&
       currentFirstPage !== null &&
       Exit.isSuccess(currentFirstPage) &&
       currentFirstPage.value.page.startIndex === 0
