@@ -2,7 +2,7 @@
 
 JellyPilot uses a desktop-first Control Room design system: dark-only, clean OLED surfaces, selective cinematic glass, and clear operational state. The interface should feel like a reliable media companion for a Jellyfin Playback Target, not a generic mobile settings app.
 
-Apply Tailwind atomic utilities directly for styling. Design tokens live in `src/styles/vars.css.ts` (vanilla-extract) and are surfaced to Tailwind via `@theme inline` aliases in `src/index.css`; non-atomic component CSS (e.g. card gradients) lives in component-local `.css.ts` files. Reusable visual patterns are components under `src/components/ui`, not global `@layer` class APIs.
+Use the typed vanilla-extract styling layer for new shared UI: design tokens in `src/styles/vars.css.ts`, atomic utilities from `src/styles/sprinkles.css.ts`, semantic component variants via Recipes, and component-local `.css.ts` files for complex CSS. Tailwind remains available only as a migration bridge for existing page and feature callsites; do not add new shared primitive styling as Tailwind class strings. Reusable visual patterns are components under `src/components/ui`, not global `@layer` class APIs.
 
 ## Principles
 
@@ -14,7 +14,7 @@ Apply Tailwind atomic utilities directly for styling. Design tokens live in `src
 
 ## Color System
 
-All components use semantic tokens. Tailwind utility tokens (`text-primary`, `bg-surface`, etc.) are aliases backed by the vanilla-extract contract in `src/styles/vars.css.ts` and re-exported through `@theme inline` in `src/index.css`. `#4f46e5` is the JellyPilot brand seed and primary filled-action background; it is not used as small text on near-black surfaces because contrast is insufficient.
+All components use semantic tokens. The source of truth is the vanilla-extract contract in `src/styles/vars.css.ts`; Tailwind utility tokens (`text-primary`, `bg-surface`, etc.) are temporary aliases backed by that same contract while migration continues. `#4f46e5` is the JellyPilot brand seed and primary filled-action background; it is not used as small text on near-black surfaces because contrast is insufficient.
 
 | Token | Tailwind Class | Hex | Usage |
 |---|---|---:|---|
@@ -68,7 +68,7 @@ body { font-family: 'Inter Variable', ui-sans-serif, system-ui, sans-serif; }
 h1, h2, h3, .brand-type { font-family: 'Space Grotesk Variable', 'Inter Variable', ui-sans-serif, system-ui, sans-serif; }
 .code, .diagnostic-value { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; }
 ```
-Apply typography through Tailwind atoms directly. The previous `text-display-*`, `text-headline-*`, `text-title-*`, `text-body-*`, `text-label-*` helper classes are gone; use the atomic equivalents below. Add the default color only when the element has no other base text color.
+Apply typography through Sprinkles, Recipes, or component-local vanilla-extract styles. The previous `text-display-*`, `text-headline-*`, `text-title-*`, `text-body-*`, `text-label-*` helper classes are gone; use the tokenized values below. Existing Tailwind callsites may remain until their owning component is migrated.
 
 | Style | Atoms | Default color |
 |---|---|---|
@@ -160,6 +160,21 @@ Each tile has icon, label, value, and supporting text. Status tiles are read-onl
 ### Diagnostics
 
 Diagnostics are a user-facing support view, not a developer console. Use normal cards with terminal-adjacent details: mono timestamps, level badges, compact rows, no fake terminal prompts or chrome.
+
+## Typed Utility Layer
+
+`src/styles/sprinkles.css.ts` is the only generic typed utility API. It intentionally covers a stable subset:
+
+- Layout: display, position, overflow, width, height, min/max width, min height.
+- Flex/Grid: direction, wrap, alignment, justification, grow/shrink, gap, row gap, column gap.
+- Spacing: margin and padding longhands plus `p`, `px`, `py`, `pt`, `pr`, `pb`, `pl`, `m`, `mx`, `my`, `mt`, `mr`, `mb`, `ml`.
+- Typography: font size, font weight, line height, text alignment.
+- Visual: semantic color, background color, border color, border radius, box shadow, opacity, z-index.
+- Conditions: `base`, `sm`, `md`, `lg`, `xl`, `2xl`, `hover`, `focus`, `active`, `disabled`, and `dark` via `[data-theme='dark'] &`.
+
+Do not make Sprinkles parse class strings. Do not add arbitrary values as a public utility feature. Temporary `legacy*` values in Sprinkles exist only to migrate current Tailwind arbitrary values and should shrink as repeated patterns become semantic tokens or Recipes. Complex selectors, Ark `data-*` state styling, gradients, transforms, filters, animations, and one-off layout math belong in Recipes or component-local `style()` blocks.
+
+UnoCSS preset-mini is a build-time reference for token scale design only. JellyPilot does not use the UnoCSS runtime engine, extractor, shortcuts, variants, icon presets, or class-to-CSS matcher.
 
 ## Layout
 

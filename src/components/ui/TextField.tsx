@@ -3,6 +3,8 @@ import { Show, splitProps } from 'solid-js';
 import { FieldControl } from './FieldControl';
 import type { FieldControlVariant } from './FieldControl';
 
+import * as styles from './TextField.css';
+
 interface TextFieldProps {
   name: string;
   label: string;
@@ -42,11 +44,8 @@ export default function TextField(props: TextFieldProps) {
   const variant = () => local.variant ?? 'filled';
 
   return (
-    <div class={`group ${local.class ?? ''}`}>
-      <label
-        for={local.name}
-        class="text-on-surface-variant group-focus-within:text-primary mb-1 ml-1 block text-[12px] leading-[16px] font-bold tracking-[0.05em] tracking-wider uppercase transition-colors"
-      >
+    <div class={`${styles.textFieldRoot} ${local.class ?? ''}`}>
+      <label for={local.name} class={styles.textFieldLabel}>
         {local.label}
       </label>
       <FieldControl
@@ -59,18 +58,14 @@ export default function TextField(props: TextFieldProps) {
         placeholder={local.placeholder}
         disabled={local.disabled}
         variant={variant()}
-        class={`w-full ${local.inputClass ?? ''}`}
+        class={`${styles.fullWidth} ${local.inputClass ?? ''}`}
         {...rest}
       />
       <Show when={local.error}>
-        <p class="text-error animate-in slide-in-from-top-1 fade-in mt-1.5 ml-1 text-[12px] leading-[16px] duration-200">
-          {local.error}
-        </p>
+        <p class={styles.textFieldError}>{local.error}</p>
       </Show>
       <Show when={local.hint && !local.error}>
-        <p class="text-on-surface-variant/70 mt-1.5 ml-1 text-[12px] leading-[16px]">
-          {local.hint}
-        </p>
+        <p class={styles.textFieldHint}>{local.hint}</p>
       </Show>
     </div>
   );

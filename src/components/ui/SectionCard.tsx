@@ -2,6 +2,8 @@ import type { JSX } from 'solid-js';
 
 import { Card } from './Card';
 
+import * as styles from './SectionCard.css';
+
 interface SectionCardProps {
   icon: JSX.Element;
   title: string;
@@ -14,9 +16,9 @@ interface SectionCardProps {
  */
 export default function SectionCard(props: SectionCardProps) {
   return (
-    <Card variant="filled" class="relative">
-      <div class="mb-6 flex items-center justify-between">
-        <h2 class="text-primary flex items-center gap-3 text-[16px] leading-[24px] font-semibold">
+    <Card variant="filled">
+      <div class={styles.header}>
+        <h2 class={styles.title}>
           {props.icon}
           {props.title}
         </h2>

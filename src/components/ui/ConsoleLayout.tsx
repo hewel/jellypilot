@@ -1,6 +1,8 @@
 import { splitProps } from 'solid-js';
 import type { JSX } from 'solid-js';
 
+import * as styles from './ConsoleLayout.css';
+
 export interface ConsoleShellProps extends JSX.HTMLAttributes<HTMLDivElement> {
   class?: string;
   children: JSX.Element;
@@ -10,10 +12,7 @@ export interface ConsoleShellProps extends JSX.HTMLAttributes<HTMLDivElement> {
 export function ConsoleShell(props: ConsoleShellProps) {
   const [local, rest] = splitProps(props, ['class', 'children']);
   return (
-    <div
-      class={`text-on-surface flex min-h-dvh flex-col justify-between px-2.5 py-2 ${local.class ?? ''}`}
-      {...rest}
-    >
+    <div class={`${styles.consoleShell} ${local.class ?? ''}`} {...rest}>
       {local.children}
     </div>
   );
@@ -28,10 +27,7 @@ export interface ConsoleContainerProps extends JSX.HTMLAttributes<HTMLDivElement
 export function ConsoleContainer(props: ConsoleContainerProps) {
   const [local, rest] = splitProps(props, ['class', 'children']);
   return (
-    <div
-      class={`mx-auto w-full animate-[fadeIn_0.3s_cubic-bezier(0.16,1,0.3,1)_forwards] space-y-6 ${local.class ?? ''}`}
-      {...rest}
-    >
+    <div class={`${styles.consoleContainer} ${local.class ?? ''}`} {...rest}>
       {local.children}
     </div>
   );
@@ -46,10 +42,7 @@ export interface ConsoleGridProps extends JSX.HTMLAttributes<HTMLDivElement> {
 export function ConsoleGrid(props: ConsoleGridProps) {
   const [local, rest] = splitProps(props, ['class', 'children']);
   return (
-    <div
-      class={`grid grid-cols-1 gap-6 lg:grid-cols-[minmax(0,1.3fr)_minmax(330px,0.7fr)] ${local.class ?? ''}`}
-      {...rest}
-    >
+    <div class={`${styles.consoleGrid} ${local.class ?? ''}`} {...rest}>
       {local.children}
     </div>
   );

@@ -50,7 +50,8 @@ bun tauri build     # Production desktop build
 
 - **Solid.js**: Use the `solidjs` skill for all Solid-specific patterns.
 - **Forms**: Always use `@tanstack/solid-form` with `createForm` for form handling.
-- **Styling**: Tailwind for atomic styling; vanilla-extract for tokens (`src/styles/vars.css.ts`) + complex CSS. No global `@layer components`; create or extend components in `src/components/ui`. Design system: `docs/design-system.md`.
+- **Styling**: Tailwind for migration-era atomic styling; vanilla-extract for tokens (`src/styles/vars.css.ts`), Sprinkles (`src/styles/sprinkles.css.ts`), component Recipes, and complex CSS. Component-owned classes live beside the component in `Component.css.ts`; do not collect unrelated UI component styles into a shared `styles.css.ts` barrel. No global `@layer components`; create or extend components in `src/components/ui`. Design system: `docs/design-system.md`.
+- **Solid classes**: Use `class` for static class strings and `classList` for conditional class maps. Do not add generic class-name merge helpers for Solid components.
 - **TypeScript / Effect**: All Effect rules live in [docs/agents/effect.md](docs/agents/effect.md). Read and follow it; do not duplicate them here.
 - **Route data loading**: Await only critical data; defer slow data as promises behind `<Suspense />` with stable skeletons. Follow [TanStack Router deferred data loading](https://tanstack.com/router/latest/docs/guide/deferred-data-loading).
 - **Ark UI Dialogs**: Use standard Ark UI Dialog primitives; no custom ARIA overlays, `onInteractOutside` handlers, or `id` attributes. Controlled dialogs require `<Portal>`; use `lazyMount` + `unmountOnExit`.
@@ -59,6 +60,7 @@ bun tauri build     # Production desktop build
 ## Anti-Patterns
 
 - **Cross-component `.css.ts` imports**: Do not import another component's `.css.ts` style exports directly; consume the component API or move the needed behavior into a shared component.
+- **Shared UI style barrels**: Do not create broad files such as `src/components/ui/styles.css.ts` that export styles for many unrelated components. Split component-owned styles into each component's own `.css.ts` file.
 
 ## Agent Skills
 

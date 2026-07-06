@@ -7,12 +7,9 @@ import * as styles from './Card.css';
 export type CardVariant = 'filled' | 'elevated' | 'outlined';
 
 const variantClass: Record<CardVariant, string> = {
-  elevated:
-    'border-primary/20 bg-surface-container-low/45 rounded-[2rem] border p-6 shadow-2xl backdrop-blur-xl transition-[background-color,border-color,box-shadow] duration-300 hover:border-primary/35 hover:bg-surface-container-low/60',
-  filled:
-    'border-outline-variant/80 bg-surface/50 rounded-2xl border p-4 shadow-xl backdrop-blur-md transition-[background-color,border-color,box-shadow] duration-300',
-  outlined:
-    'border-outline-variant hover:border-outline/40 rounded-[1.75rem] border bg-transparent p-6 transition-[background-color,border-color,box-shadow] duration-300',
+  elevated: styles.card({ variant: 'elevated' }),
+  filled: styles.card({ variant: 'filled' }),
+  outlined: styles.card({ variant: 'outlined' }),
 };
 
 export interface CardProps extends JSX.HTMLAttributes<HTMLElement> {
@@ -23,9 +20,7 @@ export interface CardProps extends JSX.HTMLAttributes<HTMLElement> {
   children: JSX.Element;
 }
 
-const tintOverlay = (
-  <div class="bg-surface-tint/[0.03] pointer-events-none absolute inset-0 rounded-[inherit]" />
-) as JSX.Element;
+const tintOverlay = (<div class={styles.tintOverlay} />) as JSX.Element;
 
 /**
  * Control Room card surface. The only card API in the app.
@@ -40,11 +35,11 @@ export function Card(props: CardProps) {
   return (
     <Dynamic
       component={local.as ?? 'div'}
-      class={`${variantClass[variant()]} ${styles.cardSurface[variant()]} relative ${local.class ?? ''}`}
+      class={`${variantClass[variant()]} ${styles.cardSurface[variant()]} ${local.class ?? ''}`}
       {...rest}
     >
       <Show when={showTint()}>{tintOverlay}</Show>
-      <div class="relative z-10">{local.children}</div>
+      <div class={styles.content}>{local.children}</div>
     </Dynamic>
   );
 }

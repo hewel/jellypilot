@@ -17,6 +17,8 @@
         "@tauri-apps/plugin-log": "^2.8.0",
         "@tauri-apps/plugin-store": "^2.4.3",
         "@vanilla-extract/css": "^1.20.1",
+        "@vanilla-extract/recipes": "^0.5.7",
+        "@vanilla-extract/sprinkles": "^1.7.0",
         "effect": "^4.0.0-beta.84",
         "lucide-solid": "^1.20.0",
         "solid-js": "^1.9.13",
@@ -37,6 +39,7 @@
         "@testing-library/jest-dom": "^6.9.1",
         "@types/bun": "^1.3.14",
         "@types/node": "^25.9.3",
+        "@unocss/preset-mini": "^66.7.4",
         "@vanilla-extract/webpack-plugin": "^2.3.27",
         "husky": "^9.1.7",
         "jsdom": "^29.1.1",
@@ -612,6 +615,14 @@
 
     "@types/ws": ["@types/ws@8.18.1", "", { "dependencies": { "@types/node": "*" } }, "sha512-ThVF6DCVhA8kUGy+aazFQ4kXQ7E1Ty7A3ypFOe0IcJV8O/M511G99AW24irKrW56Wt44yG9+ij8FaqoBGkuBXg=="],
 
+    "@unocss/core": ["@unocss/core@66.7.4", "", {}, "sha512-OGXh+RRsAgOrecTKRjUd4SepHR7W4v6zIf6pGtKyIIAIMnzcW/tU+afR1cDbhtb4efZMQhzaoAh3ncvkL8eEYA=="],
+
+    "@unocss/extractor-arbitrary-variants": ["@unocss/extractor-arbitrary-variants@66.7.4", "", { "dependencies": { "@unocss/core": "66.7.4" } }, "sha512-0yawiWzVDDBRow8kuMeNFhzYJUwYrsKc1xclzNurkisal7tTG24haDmpqneol8j3TT2blrQOIuSQPrEgv6y4oQ=="],
+
+    "@unocss/preset-mini": ["@unocss/preset-mini@66.7.4", "", { "dependencies": { "@unocss/core": "66.7.4", "@unocss/extractor-arbitrary-variants": "66.7.4", "@unocss/rule-utils": "66.7.4" } }, "sha512-aITPP3k60ya3ZMubWQfwNUjh8SzA6YRsbX37WaAMYyIrP1lilgCClJi9HxYt0/Wya09NmUrVNdyYKZfYhfvprA=="],
+
+    "@unocss/rule-utils": ["@unocss/rule-utils@66.7.4", "", { "dependencies": { "@unocss/core": "66.7.4", "magic-string": "^0.30.21" } }, "sha512-S+q2gqsWpZfW+MJV6LGH42eyKDK8xGdUPse72T8euNDagl5/OZFGSJ3TlIrlNilscbUiWM8nIu0cWeRaAmEMlA=="],
+
     "@vanilla-extract/babel-plugin-debug-ids": ["@vanilla-extract/babel-plugin-debug-ids@1.2.2", "", { "dependencies": { "@babel/core": "^7.23.9" } }, "sha512-MeDWGICAF9zA/OZLOKwhoRlsUW+fiMwnfuOAqFVohL31Agj7Q/RBWAYweqjHLgFBCsdnr6XIfwjJnmb2znEWxw=="],
 
     "@vanilla-extract/css": ["@vanilla-extract/css@1.20.1", "", { "dependencies": { "@emotion/hash": "^0.9.0", "@vanilla-extract/private": "^1.0.9", "css-what": "^6.1.0", "csstype": "^3.2.3", "dedent": "^1.5.3", "deep-object-diff": "^1.1.9", "deepmerge": "^4.2.2", "lru-cache": "^10.4.3", "media-query-parser": "^2.0.2", "modern-ahocorasick": "^1.0.0", "picocolors": "^1.0.0" } }, "sha512-5I9RNo5uZW9tsBnqrWzJqELegOqTHBrZyDFnES0gR9gJJHBB9dom1N0bwITM9tKwBcfKrTX4a6DHVeQdJ2ubQA=="],
@@ -619,6 +630,10 @@
     "@vanilla-extract/integration": ["@vanilla-extract/integration@8.0.10", "", { "dependencies": { "@babel/core": "^7.23.9", "@babel/plugin-syntax-typescript": "^7.23.3", "@vanilla-extract/babel-plugin-debug-ids": "^1.2.2", "@vanilla-extract/css": "^1.20.1", "dedent": "^1.5.3", "esbuild": "npm:esbuild@>=0.17.6 <0.29.0", "eval": "0.1.8", "find-up": "^5.0.0", "javascript-stringify": "^2.0.1", "mlly": "^1.4.2" } }, "sha512-01IB5gbrgTe8IIrtfRXXTmACl5D8Enzqp2cKbCWaMKXmnoilXXVCPbJoA96q88PXkNDXsXepCxUugMvEmL3c7A=="],
 
     "@vanilla-extract/private": ["@vanilla-extract/private@1.0.9", "", {}, "sha512-gT2jbfZuaaCLrAxwXbRgIhGhcXbRZCG3v4TTUnjw0EJ7ArdBRxkq4msNJkbuRkCgfIK5ATmprB5t9ljvLeFDEA=="],
+
+    "@vanilla-extract/recipes": ["@vanilla-extract/recipes@0.5.7", "", { "peerDependencies": { "@vanilla-extract/css": "^1.0.0" } }, "sha512-Fvr+htdyb6LVUu+PhH61UFPhwkjgDEk8L4Zq9oIdte42sntpKrgFy90MyTRtGwjVALmrJ0pwRUVr8UoByYeW8A=="],
+
+    "@vanilla-extract/sprinkles": ["@vanilla-extract/sprinkles@1.7.0", "", { "peerDependencies": { "@vanilla-extract/css": "^1.0.0" } }, "sha512-7I8rt3m1OIEMJRtpMTnPwMy+C1DHpgvenNF1P7lgFFXGzxAoW57+Qk439cJFqONaqsLsTiYOAOVnP4QigCWa1A=="],
 
     "@vanilla-extract/webpack-plugin": ["@vanilla-extract/webpack-plugin@2.3.27", "", { "dependencies": { "@vanilla-extract/integration": "^8.0.10", "debug": "^4.3.1", "loader-utils": "^2.0.0", "picocolors": "^1.0.0" }, "peerDependencies": { "webpack": "^4.30.0 || ^5.20.2" } }, "sha512-i/GFQPifTkGYXYpkVYzScBPwXB82f+5GMLg9rh9UBgTG6M/YUebIDVjVOC9Mn5VMvc8Fk2w/FmagDRLugHA09w=="],
 

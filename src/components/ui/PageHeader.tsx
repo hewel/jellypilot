@@ -1,5 +1,7 @@
 import type { JSX } from 'solid-js';
 
+import * as styles from './PageHeader.css';
+
 interface PageHeaderProps {
   title: string;
   description?: string;
@@ -11,14 +13,10 @@ interface PageHeaderProps {
  */
 export default function PageHeader(props: PageHeaderProps) {
   return (
-    <div class="flex items-center justify-between pb-4">
+    <div class={styles.root}>
       <div>
-        <h1 class="font-display text-on-surface text-[32px] leading-[40px] font-bold tracking-tight">
-          {props.title}
-        </h1>
-        {props.description && (
-          <p class="text-on-surface-variant mt-1 text-[16px] leading-[24px]">{props.description}</p>
-        )}
+        <h1 class={styles.title}>{props.title}</h1>
+        {props.description && <p class={styles.description}>{props.description}</p>}
       </div>
       {props.trailing}
     </div>
