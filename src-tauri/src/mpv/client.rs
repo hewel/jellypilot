@@ -140,8 +140,41 @@ impl MpvClient {
     log::info!("MPV client stopped");
   }
 
+  fn clear_closed_ipc(&self) {
+    let mut ipc = self.ipc.lock();
+    let is_closed = ipc.as_ref().is_some_and(|conn| conn.is_closed());
+
+    if is_closed {
+      log::info!("Dropping closed MPV IPC connection");
+      if let Some(conn) = ipc.take() {
+        conn.close();
+      }
+    }
+  }
+
+  fn reap_exited_process(&self) {
+    let mut process = self.process.lock();
+    let Some(child) = process.as_mut() else {
+      return;
+    };
+
+    match child.try_wait() {
+      Ok(Some(status)) => {
+        log::info!("Observed MPV process exit: {}", status);
+        *process = None;
+      }
+      Ok(None) => {}
+      Err(e) => {
+        log::warn!("Failed to check MPV process status: {}", e);
+      }
+    }
+  }
+
   /// Check if connected.
   pub fn is_connected(&self) -> bool {
+    self.clear_closed_ipc();
+    self.reap_exited_process();
+
     let connected = self.ipc.lock().is_some();
     let has_process = self.process.lock().is_some();
     log::debug!(
@@ -359,6 +392,7 @@ impl MpvClient {
 
   /// Get event receiver for property changes and other events.
   pub fn events(&self) -> Option<Receiver<MpvEvent>> {
+    self.clear_closed_ipc();
     let guard = self.ipc.lock();
     guard.as_ref().map(|ipc| ipc.events())
   }
@@ -373,5 +407,43 @@ impl Clone for MpvClient {
       process: self.process.clone(),
       ipc: self.ipc.clone(),
     }
+  }
+}
+
+#[cfg(test)]
+mod tests {
+  use std::sync::Arc;
+  use std::time::Duration;
+
+  use tokio::io::duplex;
+
+  use super::*;
+
+  #[tokio::test]
+  async fn is_connected_returns_false_after_ipc_eof() {
+    let client = MpvClient::new(None);
+    let (client_stream, peer_stream) = duplex(64);
+    let (reader, writer) = tokio::io::split(client_stream);
+    let ipc = MpvIpc::from_io_for_test(reader, writer)
+      .await
+      .expect("test IPC should be constructed");
+
+    *client.ipc.lock() = Some(Arc::new(ipc));
+    drop(peer_stream);
+
+    tokio::time::timeout(Duration::from_secs(1), async {
+      while client
+        .ipc
+        .lock()
+        .as_ref()
+        .is_some_and(|ipc| !ipc.is_closed())
+      {
+        tokio::time::sleep(Duration::from_millis(10)).await;
+      }
+    })
+    .await
+    .expect("IPC reader should observe EOF");
+
+    assert!(!client.is_connected());
   }
 }

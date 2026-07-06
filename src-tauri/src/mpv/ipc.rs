@@ -147,6 +147,15 @@ impl MpvIpc {
     })
   }
 
+  #[cfg(test)]
+  pub(super) async fn from_io_for_test<R, W>(reader: R, writer: W) -> Result<Self, IpcError>
+  where
+    R: tokio::io::AsyncRead + Send + Unpin + 'static,
+    W: tokio::io::AsyncWrite + Send + Unpin + 'static,
+  {
+    Self::setup(reader, writer).await
+  }
+
   async fn reader_loop<R: tokio::io::AsyncRead + Unpin>(
     reader: R,
     state: Arc<Mutex<IpcState>>,
