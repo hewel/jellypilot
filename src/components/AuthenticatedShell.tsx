@@ -8,6 +8,8 @@ import NowPlayingDrawer from './NowPlayingDrawer';
 import SettingsModal from './SettingsModal';
 import { ConsoleShell } from './ui';
 
+import * as styles from './AuthenticatedShell.css';
+
 export default function AuthenticatedShell() {
   const connectionQuery = createQuery(() => ({
     queryKey: queryKeys.connectionState,
@@ -24,14 +26,10 @@ export default function AuthenticatedShell() {
         Bottom padding reserves space so the fixed bottom-right floating cluster
         (Now Playing + Open Settings) never covers the last Library Browser items.
       */}
-      <main class="text-on-surface mx-auto flex w-full animate-[fadeIn_0.3s_cubic-bezier(0.16,1,0.3,1)_forwards] flex-col pb-40">
+      <main class={styles.main}>
         <Outlet />
       </main>
-      <div
-        role="group"
-        aria-label="Floating controls"
-        class="border-outline-variant/40 bg-surface-container-low/80 fixed right-4 bottom-4 z-100 flex flex-col items-center gap-2 rounded-3xl border p-1 shadow-2xl backdrop-blur-xl"
-      >
+      <div role="group" aria-label="Floating controls" class={styles.floatingControls}>
         <NowPlayingDrawer jellyfinConnected={jellyfinConnected()} />
         <SettingsModal />
       </div>

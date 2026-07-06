@@ -6,6 +6,8 @@ import type { ParentProps } from 'solid-js';
 import Toast from './Toast';
 import type { NotificationLevel } from './Toast';
 
+import * as styles from './ToastProvider.css';
+
 const TOAST_EXIT_MS = 200;
 export interface ToastMessage {
   id: string;
@@ -77,7 +79,7 @@ export function ToastProvider(props: ParentProps) {
   return (
     <ToastContext.Provider value={{ removeToast, showToast }}>
       {props.children}
-      <div class="pointer-events-none fixed right-4 bottom-4 z-50 flex flex-col gap-2">
+      <div class={styles.viewport}>
         <For each={toasts()}>
           {(toast) => (
             <Toast

@@ -11,6 +11,8 @@ import { queryKeys, runExit } from '../effects/query';
 import NowPlayingCard from './NowPlayingCard';
 import { Button } from './ui';
 
+import * as styles from './NowPlayingDrawer.css';
+
 const statusText = Match.type<NowPlayingState['status'] | undefined>().pipe(
   Match.withReturnType<string>(),
   Match.when('playing', () => 'Playing'),
@@ -22,12 +24,11 @@ const statusText = Match.type<NowPlayingState['status'] | undefined>().pipe(
 
 const statusDotClass = Match.type<NowPlayingState['status'] | undefined>().pipe(
   Match.withReturnType<string>(),
-  Match.when(
-    Match.is('playing', 'paused'),
-    () => 'bg-tertiary shadow-[0_0_8px_var(--color-tertiary)]',
-  ),
-  Match.when('offline', () => 'bg-error shadow-[0_0_8px_var(--color-error)]'),
-  Match.orElse(() => 'bg-outline-variant'),
+  Match.when('playing', () => styles.statusDot({ status: 'playing' })),
+  Match.when('paused', () => styles.statusDot({ status: 'paused' })),
+  Match.when('idle', () => styles.statusDot({ status: 'idle' })),
+  Match.when('offline', () => styles.statusDot({ status: 'offline' })),
+  Match.orElse(() => styles.statusDot({ status: 'unknown' })),
 );
 
 function triggerLabel(state: NowPlayingState | null): string {
@@ -88,30 +89,22 @@ export default function NowPlayingDrawer(props: { jellyfinConnected: boolean }) 
             type="button"
             variant="icon"
             aria-label={triggerLabel(state())}
-            class="relative"
+            class={styles.trigger}
           >
-            <MonitorPlay class="h-5 w-5" />
-            <span
-              class={`absolute top-1 right-1 h-2 w-2 rounded-full ${statusDotClass(state()?.status)}`}
-            />
+            <MonitorPlay class={styles.triggerIcon} />
+            <span class={statusDotClass(state()?.status)} />
           </Button>
         )}
       />
 
       <Portal>
-        <Dialog.Backdrop class="fixed inset-0 z-50 bg-black/70 backdrop-blur-sm transition-[backdrop-filter,background-color,opacity] duration-300 data-[state=closed]:opacity-0 data-[state=open]:opacity-100" />
-        <Dialog.Positioner class="fixed inset-0 z-50 flex justify-end">
-          <Dialog.Content
-            ref={setSelectPortalMount}
-            class="border-outline-variant/30 bg-surface-container-low/60 flex h-full w-full flex-col overflow-hidden rounded-l-[2rem] border-l shadow-2xl backdrop-blur-xl transition-[opacity,transform] duration-200 ease-[cubic-bezier(0.2,0,0,1)] data-[state=closed]:translate-x-3 data-[state=closed]:opacity-0 data-[state=open]:translate-x-0 data-[state=open]:opacity-100 sm:w-[28rem]"
-          >
-            {/* Header */}
-            <div class="border-outline-variant/20 flex items-center justify-between border-b px-5 py-4">
+        <Dialog.Backdrop class={styles.backdrop} />
+        <Dialog.Positioner class={styles.positioner}>
+          <Dialog.Content ref={setSelectPortalMount} class={styles.content}>
+            <div class={styles.header}>
               <div>
-                <Dialog.Title class="text-on-surface text-[18px] leading-[24px] font-bold">
-                  Now Playing
-                </Dialog.Title>
-                <Dialog.Description class="text-on-surface-variant/70 mt-0.5 text-[12px] leading-[16px]">
+                <Dialog.Title class={styles.title}>Now Playing</Dialog.Title>
+                <Dialog.Description class={styles.description}>
                   Playback details and MPV controls
                 </Dialog.Description>
               </div>
@@ -121,12 +114,11 @@ export default function NowPlayingDrawer(props: { jellyfinConnected: boolean }) 
                 aria-label="Close Now Playing"
                 onClick={() => setOpen(false)}
               >
-                <X class="h-5 w-5" />
+                <X class={styles.closeIcon} />
               </Button>
             </div>
 
-            {/* Body */}
-            <div class="flex-1 overflow-y-auto px-5 py-4">
+            <div class={styles.body}>
               <Show when={selectPortalMount()}>
                 {(mount) => (
                   <NowPlayingCard

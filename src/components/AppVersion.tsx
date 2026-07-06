@@ -3,6 +3,8 @@ import { getVersion } from '@tauri-apps/api/app';
 
 import { queryKeys } from '../effects/query';
 
+import * as styles from './AppVersion.css';
+
 interface AppVersionProps {
   class?: string;
 }
@@ -13,14 +15,5 @@ export default function AppVersion(props: AppVersionProps) {
     queryFn: getVersion,
     staleTime: Infinity,
   }));
-  return (
-    <p
-      class={
-        props.class ??
-        'text-on-surface-variant/50 mt-1 font-mono text-[11px] leading-[16px] font-bold tracking-[0.08em] tracking-wider uppercase'
-      }
-    >
-      v{versionQuery.data ?? '...'}
-    </p>
-  );
+  return <p class={props.class ?? styles.version}>v{versionQuery.data ?? '...'}</p>;
 }

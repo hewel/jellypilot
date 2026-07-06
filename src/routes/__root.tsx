@@ -6,6 +6,8 @@ import { Outlet, createRootRoute } from '@tanstack/solid-router';
 import { onCleanup } from 'solid-js';
 import type { Component } from 'solid-js';
 
+import * as styles from './__root.css';
+
 const ScrollerWrapper: Component = () => {
   const appScroll = createAppScrollAreaController();
   onCleanup(() => appScroll.setViewport(null));
@@ -16,9 +18,9 @@ const ScrollerWrapper: Component = () => {
         ref={appScroll.setViewport}
         onScroll={appScroll.handleViewportScroll}
         data-testid="app-scroll-viewport"
-        class="h-screen w-screen overflow-auto overscroll-contain"
+        class={styles.viewport}
       >
-        <div class="min-w-fit">
+        <div class={styles.content}>
           <Outlet />
         </div>
       </div>
