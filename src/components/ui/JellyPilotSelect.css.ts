@@ -96,7 +96,7 @@ export const trigger = recipe({
   },
 });
 
-export const content = [
+export const content = style([
   sprinkles({
     overflowY: 'auto',
     borderRadius: 'lg',
@@ -104,15 +104,15 @@ export const content = [
     boxShadow: '2xl',
     zIndex: '50',
   }),
-  style({
+  {
     backdropFilter: 'blur(12px)',
     background: vars.color.surfaceContainerLowest,
     border: `1px solid ${vars.color.outlineVariant}`,
     maxHeight: '15rem',
-  }),
-].join(' ');
+  },
+]);
 
-export const item = [
+export const item = style([
   sprinkles({
     display: 'flex',
     alignItems: 'center',
@@ -122,7 +122,7 @@ export const item = [
     fontSize: '14',
     lineHeight: '20',
   }),
-  style({
+  {
     cursor: 'pointer',
     padding: `${vars.space['2_5']} ${vars.space['3_5']}`,
     transitionDuration: vars.duration['200'],
@@ -137,8 +137,8 @@ export const item = [
         opacity: 0.5,
       },
     },
-  }),
-].join(' ');
+  },
+]);
 
 export const itemText = sprinkles({ fontWeight: 'medium' });
 
@@ -152,13 +152,13 @@ export const valueText = sprinkles({
 
 export const indicator = style({});
 
-export const indicatorIcon = [
+export const indicatorIcon = style([
   sprinkles({
     color: 'onSurfaceVariant',
     height: '4',
     width: '4',
   }),
-  style({
+  {
     opacity: 0.7,
     selectors: {
       [`${indicator}[data-state="open"] &`]: {
@@ -167,8 +167,8 @@ export const indicatorIcon = [
     },
     transitionDuration: vars.duration['200'],
     transitionProperty: 'transform',
-  }),
-].join(' ');
+  },
+]);
 
 export const truncate = style({
   minWidth: 0,

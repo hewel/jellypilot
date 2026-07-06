@@ -93,7 +93,7 @@ export const icon = recipe({
   },
 });
 
-export const message = [
+export const message = style([
   sprinkles({
     flexGrow: '1',
     fontSize: '14',
@@ -101,13 +101,13 @@ export const message = [
     lineHeight: '20',
     ml: '3',
   }),
-  style({
+  {
     color: vars.color.onSurfaceVariant,
     overflowWrap: 'break-word',
-  }),
-].join(' ');
+  },
+]);
 
-export const closeButton = [
+export const closeButton = style([
   sprinkles({
     alignItems: 'center',
     borderRadius: 'full',
@@ -118,7 +118,7 @@ export const closeButton = [
     p: '1_5',
     width: '10',
   }),
-  style({
+  {
     background: 'transparent',
     border: '0',
     color: 'currentColor',
@@ -134,8 +134,8 @@ export const closeButton = [
         background: mix(vars.color.onSurface, 10),
       },
     },
-  }),
-].join(' ');
+  },
+]);
 
 export const closeIcon = style({
   height: vars.space['4'],

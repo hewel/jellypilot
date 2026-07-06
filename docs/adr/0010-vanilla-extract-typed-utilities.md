@@ -15,6 +15,7 @@ ADR 0008 made vanilla-extract the owner of design tokens while Tailwind remained
 - `src/styles/vars.css.ts` remains the token owner and now includes scale tokens for spacing, type, radius, shadows, z-index, duration, easing, and breakpoints.
 - `src/styles/sprinkles.css.ts` exposes a curated typed utility subset for layout, flex/grid, spacing, typography, color, radius, shadow, and predictable conditions.
 - Shared UI primitives use Recipes and component-local vanilla-extract styles for semantic variants and complex CSS.
+- Static composition between Sprinkles and complex component CSS uses vanilla-extract `style([className, styleObject])`; manual `.join(' ')` class composition is not part of the styling convention.
 - Tailwind stays temporarily for unmigrated page and feature callsites, then can be removed after migration coverage is high enough.
 
 ## Consequences

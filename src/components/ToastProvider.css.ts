@@ -3,7 +3,7 @@ import { style } from '@vanilla-extract/css';
 import { sprinkles } from '../styles/sprinkles.css';
 import { vars } from '../styles/vars.css';
 
-export const viewport = [
+export const viewport = style([
   sprinkles({
     display: 'flex',
     flexDirection: 'column',
@@ -11,9 +11,9 @@ export const viewport = [
     position: 'fixed',
     zIndex: '50',
   }),
-  style({
+  {
     bottom: vars.space['4'],
     pointerEvents: 'none',
     right: vars.space['4'],
-  }),
-].join(' ');
+  },
+]);

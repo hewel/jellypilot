@@ -7,11 +7,11 @@ export const root = sprinkles({
   textAlign: 'center',
 });
 
-export const text = [
+export const text = style([
   sprinkles({
     color: 'onSurfaceVariant',
     fontSize: '12',
     lineHeight: '16',
   }),
-  style({ opacity: 0.7 }),
-].join(' ');
+  { opacity: 0.7 },
+]);

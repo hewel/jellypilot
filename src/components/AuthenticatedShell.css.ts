@@ -6,7 +6,7 @@ import { vars } from '../styles/vars.css';
 const mix = (color: string, amount: number) =>
   `color-mix(in srgb, ${color} ${amount}%, transparent)`;
 
-export const main = [
+export const main = style([
   sprinkles({
     color: 'onSurface',
     display: 'flex',
@@ -14,13 +14,13 @@ export const main = [
     mx: 'auto',
     width: 'full',
   }),
-  style({
+  {
     animation: `fadeIn ${vars.duration['300']} ${vars.easing.emphasized} forwards`,
     paddingBottom: '10rem',
-  }),
-].join(' ');
+  },
+]);
 
-export const floatingControls = [
+export const floatingControls = style([
   sprinkles({
     alignItems: 'center',
     borderRadius: '3xl',
@@ -32,11 +32,11 @@ export const floatingControls = [
     position: 'fixed',
     zIndex: '100',
   }),
-  style({
+  {
     backdropFilter: 'blur(24px)',
     background: mix(vars.color.surfaceContainerLow, 80),
     border: `1px solid ${mix(vars.color.outlineVariant, 40)}`,
     bottom: vars.space['4'],
     right: vars.space['4'],
-  }),
-].join(' ');
+  },
+]);

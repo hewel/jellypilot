@@ -21,25 +21,25 @@ globalStyle(`${consoleContainerMotion} > * + *`, {
   marginTop: vars.space['6'],
 });
 
-export const consoleContainer = [
+export const consoleContainer = style([
   sprinkles({
     mx: 'auto',
     width: 'full',
   }),
   consoleContainerMotion,
-].join(' ');
+]);
 
-export const consoleGrid = [
+export const consoleGrid = style([
   sprinkles({
     display: 'grid',
     gap: '6',
   }),
-  style({
+  {
     gridTemplateColumns: '1fr',
     '@media': {
       [`screen and (min-width: ${breakpoints.lg})`]: {
         gridTemplateColumns: 'minmax(0, 1.3fr) minmax(330px, 0.7fr)',
       },
     },
-  }),
-].join(' ');
+  },
+]);

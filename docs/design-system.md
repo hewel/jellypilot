@@ -2,7 +2,7 @@
 
 JellyPilot uses a desktop-first Control Room design system: dark-only, clean OLED surfaces, selective cinematic glass, and clear operational state. The interface should feel like a reliable media companion for a Jellyfin Playback Target, not a generic mobile settings app.
 
-Use the typed vanilla-extract styling layer for new shared UI: design tokens in `src/styles/vars.css.ts`, atomic utilities from `src/styles/sprinkles.css.ts`, semantic component variants via Recipes, and component-local `.css.ts` files for complex CSS. Tailwind remains available only as a migration bridge for existing page and feature callsites; do not add new shared primitive styling as Tailwind class strings. Reusable visual patterns are components under `src/components/ui`, not global `@layer` class APIs.
+Use the typed vanilla-extract styling layer for new shared UI: design tokens in `src/styles/vars.css.ts`, atomic utilities from `src/styles/sprinkles.css.ts`, semantic component variants via Recipes, and component-local `.css.ts` files for complex CSS. Compose static vanilla-extract classes with `style([sprinkles(...), { ... }])` rather than manual `.join(' ')` strings; use Solid `classList` only for runtime conditional classes in `.tsx`. Tailwind remains available only as a migration bridge for existing page and feature callsites; do not add new shared primitive styling as Tailwind class strings. Reusable visual patterns are components under `src/components/ui`, not global `@layer` class APIs.
 
 ## Principles
 
@@ -173,6 +173,17 @@ Diagnostics are a user-facing support view, not a developer console. Use normal 
 - Conditions: `base`, `sm`, `md`, `lg`, `xl`, `2xl`, `hover`, `focus`, `active`, `disabled`, and `dark` via `[data-theme='dark'] &`.
 
 Do not make Sprinkles parse class strings. Do not add arbitrary values as a public utility feature. Temporary `legacy*` values in Sprinkles exist only to migrate current Tailwind arbitrary values and should shrink as repeated patterns become semantic tokens or Recipes. Complex selectors, Ark `data-*` state styling, gradients, transforms, filters, animations, and one-off layout math belong in Recipes or component-local `style()` blocks.
+
+When a component-local class needs both Sprinkles and complex CSS, use vanilla-extract style composition:
+
+```ts
+export const panel = style([
+  sprinkles({ display: 'flex', gap: '4' }),
+  { backdropFilter: 'blur(12px)' },
+]);
+```
+
+Do not manually join generated classes in `.css.ts` files. In Solid `.tsx`, use `classList` for runtime conditional class toggles.
 
 UnoCSS preset-mini is a build-time reference for token scale design only. JellyPilot does not use the UnoCSS runtime engine, extractor, shortcuts, variants, icon presets, or class-to-CSS matcher.
 

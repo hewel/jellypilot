@@ -10,17 +10,17 @@ export const root = sprinkles({
   pb: '4',
 });
 
-export const title = [
+export const title = style([
   sprinkles({
     color: 'onSurface',
     fontSize: '32',
     fontWeight: 'bold',
     lineHeight: '40',
   }),
-  style({
+  {
     fontFamily: vars.font.display,
-  }),
-].join(' ');
+  },
+]);
 
 export const description = sprinkles({
   mt: '1',
