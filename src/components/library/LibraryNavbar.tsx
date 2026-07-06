@@ -6,6 +6,8 @@ import { For, Show } from 'solid-js';
 
 import { useLibraryNavbarControls } from './LibraryNavbarContext';
 
+import * as styles from './LibraryNavbar.css';
+
 export interface LibraryNavbarProps {
   shortcuts: VideoLibraryShortcut[];
   activeValue: string;
@@ -40,27 +42,21 @@ export default function LibraryNavbar(props: LibraryNavbarProps) {
   };
 
   return (
-    <nav
-      aria-label="Library navigation"
-      class="border-outline-variant bg-surface-container-low/75 sticky top-2 z-200 rounded-2xl border shadow-xl backdrop-blur-md"
-    >
-      <div class="flex flex-row flex-wrap items-center justify-between gap-2 sm:gap-4">
+    <nav aria-label="Library navigation" class={styles.root}>
+      <div class={styles.inner}>
         <SegmentGroup.Root
           value={props.activeValue}
           onValueChange={(details) => navigateToSegment(details.value)}
-          class="relative flex min-w-0 flex-wrap gap-1 rounded-xl p-1"
+          class={styles.segments}
         >
-          <SegmentGroup.Indicator class="bg-secondary-container righ-(--right) absolute top-(--top) bottom-(--bottom) left-(--left) h-(--height) w-(--width) rounded-lg shadow-sm" />
+          <SegmentGroup.Indicator class={styles.indicator} />
           <For each={items()}>
             {(item) => (
-              <SegmentGroup.Item
-                value={item.value}
-                class="text-on-surface-variant data-[state=checked]:text-on-secondary-container hover:text-on-surface relative z-10 inline-flex h-10 cursor-pointer items-center justify-center rounded-lg px-4 text-[14px] leading-5 font-bold transition-colors data-disabled:cursor-not-allowed data-disabled:opacity-50"
-              >
+              <SegmentGroup.Item value={item.value} class={styles.item}>
                 <SegmentGroup.ItemText>
                   <Show when={item.value === 'home'} fallback={item.label}>
-                    <House class="h-4.5 w-4.5" />
-                    <span class="sr-only">Home</span>
+                    <House class={styles.homeIcon} />
+                    <span class={styles.srOnly}>Home</span>
                   </Show>
                 </SegmentGroup.ItemText>
                 <SegmentGroup.ItemControl />
@@ -70,10 +66,7 @@ export default function LibraryNavbar(props: LibraryNavbarProps) {
           </For>
         </SegmentGroup.Root>
 
-        <div
-          ref={navbarControls.setPortalTarget}
-          class="flex min-w-0 flex-1 justify-end xl:flex-none"
-        />
+        <div ref={navbarControls.setPortalTarget} class={styles.portalTarget} />
       </div>
     </nav>
   );

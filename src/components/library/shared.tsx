@@ -23,6 +23,8 @@ import { MediaInfoHoverCard } from './MediaInfoHoverCard';
 import { VideoCard } from './VideoCard';
 import type { VideoCardAspectClass } from './VideoCard';
 
+import * as styles from './shared.css';
+
 export { MediaInfoHoverCard } from './MediaInfoHoverCard';
 export { VideoCard } from './VideoCard';
 
@@ -31,21 +33,18 @@ export function LibraryStatusPanel(props: { title: string; description?: string 
     <Card
       as="section"
       variant="elevated"
-      class="space-y-5"
+      class={styles.statusCard}
       aria-labelledby="video-home-status-title"
     >
-      <div class="flex items-start gap-4">
-        <div class="border-tertiary/30 bg-tertiary-container/25 text-tertiary flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl border">
-          <Clapperboard class="h-6 w-6" />
+      <div class={styles.statusContent}>
+        <div class={styles.statusIcon}>
+          <Clapperboard class={styles.iconMd} />
         </div>
-        <div class="space-y-2">
-          <h2
-            id="video-home-status-title"
-            class="font-display text-[24px] leading-8 font-bold tracking-tight"
-          >
+        <div class={styles.statusCopy}>
+          <h2 id="video-home-status-title" class={styles.statusTitle}>
             {props.title}
           </h2>
-          <p class="text-on-surface-variant text-[14px] leading-5">
+          <p class={styles.statusDescription}>
             {props.description ??
               'JellyPilot is checking the current Jellyfin session before loading Library data.'}
           </p>
@@ -58,7 +57,7 @@ export function LibraryStatusPanel(props: { title: string; description?: string 
 type VideoHomeRowKind = 'continueWatching' | 'nextUp' | 'latestMovies' | 'latestEpisodes';
 
 const videoHomeAspectClass = (kind: VideoHomeRowKind): VideoCardAspectClass =>
-  kind === 'latestMovies' ? 'aspect-[2/3]' : 'aspect-video';
+  kind === 'latestMovies' ? 'poster' : 'video';
 
 export function VideoHomeRow(props: {
   id: string;
@@ -68,11 +67,11 @@ export function VideoHomeRow(props: {
 }) {
   return (
     <Show when={props.items.length > 0}>
-      <section class="space-y-3" aria-labelledby={`row-${props.id}`}>
-        <h2 id={`row-${props.id}`} class="text-on-surface text-[22px] leading-7 font-bold">
+      <section class={styles.row} aria-labelledby={`row-${props.id}`}>
+        <h2 id={`row-${props.id}`} class={styles.rowTitle}>
           {props.title}
         </h2>
-        <div class="grid gap-3 sm:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-6">
+        <div class={styles.videoGrid}>
           <For each={props.items}>
             {(item) => (
               <MediaInfoHoverCard id={item.id} itemType={item.itemType}>
@@ -135,10 +134,7 @@ export function detailSubtitleElement(detail: VideoItemDetail): JSX.Element {
       <>
         <Show when={detail.seriesId} fallback={<span>{detail.seriesName}</span>}>
           {(seriesId) => (
-            <a
-              href={`/library/shows/${seriesId()}`}
-              class="text-secondary underline-offset-4 hover:underline"
-            >
+            <a href={`/library/shows/${seriesId()}`} class={styles.subtitleLink}>
               {detail.seriesName}
             </a>
           )}
@@ -197,12 +193,13 @@ export function UserDataControls(props: {
   const playedAction = () => (props.played ? 'markUnplayed' : 'markPlayed');
 
   return (
-    <div class="space-y-2">
-      <div class="flex flex-wrap gap-3">
+    <div class={styles.userDataControls}>
+      <div class={styles.userDataActions}>
         <Button
           type="button"
           variant="secondary"
-          class={`rounded-full ${props.favorite ? 'border-error/30' : ''}`}
+          class={styles.pillButton}
+          classList={{ [styles.favoriteSelected]: props.favorite }}
           disabled={busy() !== null}
           onClick={() => void runAction(favoriteAction())}
           leadingIcon={
@@ -210,11 +207,11 @@ export function UserDataControls(props: {
               when={busy() === favoriteAction()}
               fallback={
                 <Heart
-                  class={`h-4 w-4 ${props.favorite ? 'fill-error text-error' : 'text-on-surface-variant'}`}
+                  class={`${styles.iconSm} ${props.favorite ? styles.favoriteIconSelected : styles.favoriteIcon}`}
                 />
               }
             >
-              <RefreshCw class="text-secondary h-4 w-4 animate-spin" />
+              <RefreshCw class={styles.spinIcon} />
             </Show>
           }
         >
@@ -223,7 +220,8 @@ export function UserDataControls(props: {
         <Button
           type="button"
           variant="secondary"
-          class={`rounded-full ${props.played ? 'border-tertiary/30' : ''}`}
+          class={styles.pillButton}
+          classList={{ [styles.playedSelected]: props.played }}
           disabled={busy() !== null}
           onClick={() => void runAction(playedAction())}
           leadingIcon={
@@ -231,11 +229,11 @@ export function UserDataControls(props: {
               when={busy() === playedAction()}
               fallback={
                 <Check
-                  class={`h-4 w-4 ${props.played ? 'text-tertiary font-bold' : 'text-on-surface-variant'}`}
+                  class={`${styles.iconSm} ${props.played ? styles.playedIconSelected : styles.playedIcon}`}
                 />
               }
             >
-              <RefreshCw class="text-secondary h-4 w-4 animate-spin" />
+              <RefreshCw class={styles.spinIcon} />
             </Show>
           }
         >
@@ -246,9 +244,7 @@ export function UserDataControls(props: {
               : 'Mark played'}
         </Button>
       </div>
-      <Show when={error()}>
-        {(message) => <p class="text-error text-[12px] leading-4">{message()}</p>}
-      </Show>
+      <Show when={error()}>{(message) => <p class={styles.errorText}>{message()}</p>}</Show>
     </div>
   );
 }

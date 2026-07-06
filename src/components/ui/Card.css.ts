@@ -77,8 +77,15 @@ export const card = recipe({
         },
       },
     },
+    padding: {
+      default: {},
+      none: {
+        padding: 0,
+      },
+    },
   },
   defaultVariants: {
+    padding: 'default',
     variant: 'filled',
   },
 });

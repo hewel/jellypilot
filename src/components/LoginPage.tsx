@@ -26,6 +26,9 @@ import type { ServerScheme, ServerUrlResult } from '../serverUrl';
 import { saveCurrentSession } from '../sessionAccess';
 import { Button, Card, ConsoleShell, FieldControl, PageFooter } from './ui';
 
+import * as patterns from '../styles/patterns.css';
+import * as styles from './LoginPage.css';
+
 interface LoginPageProps {
   onConnected: () => void;
   embedded?: boolean;
@@ -252,31 +255,35 @@ export default function LoginPage(props: LoginPageProps) {
   });
 
   const loginCard = () => (
-    <Card variant="elevated" class="relative mx-auto overflow-hidden shadow-2xl">
-      <div class="via-primary/55 absolute top-0 left-0 h-[2px] w-full bg-gradient-to-r from-transparent to-transparent" />
-      <div class="space-y-7">
+    <Card variant="elevated" class={styles.card}>
+      <div class={styles.accent} />
+      <div class={styles.stack7}>
         <div>
-          <h2 class="font-display text-on-surface flex items-center gap-2.5 text-[24px] leading-[32px] font-bold tracking-tight">
-            <span class="bg-primary h-5 w-1.5 rounded" />
+          <h2 class={styles.sectionTitle}>
+            <span class={styles.titleBar} />
             Server coordinates
           </h2>
-          <p class="text-on-surface-variant mt-1.5 text-[14px] leading-[20px]">
+          <p class={styles.description}>
             Choose the protocol and host. JellyPilot shows the final Server URL before any Login
             Method starts.
           </p>
         </div>
 
-        <div class="grid grid-cols-1 gap-3 sm:grid-cols-[auto_minmax(0,1fr)]">
+        <div class={styles.serverGrid}>
           <form.Field name="scheme">
             {(field) => (
               <fieldset
-                class="border-outline-variant bg-surface-container-high/40 grid grid-cols-2 rounded-2xl border p-1"
+                class={`${styles.segmented} ${styles.segmented2}`}
                 aria-label="Server protocol"
               >
                 <button
                   type="button"
                   aria-pressed={field().state.value === 'https'}
-                  class={`cursor-pointer rounded-xl px-4 py-3 text-[14px] leading-[20px] font-semibold tracking-wide uppercase transition-[background-color,color,box-shadow,transform] duration-300 active:scale-[0.96] ${field().state.value === 'https' ? 'bg-primary from-primary to-primary-gradient-end text-on-primary shadow-primary/20 bg-gradient-to-r font-bold shadow-md' : 'text-on-surface-variant hover:text-on-surface hover:bg-surface-container-highest/40'}`}
+                  class={styles.segment}
+                  classList={{
+                    [styles.segmentSelected]: field().state.value === 'https',
+                    [styles.segmentIdle]: field().state.value !== 'https',
+                  }}
                   disabled={isQuickConnectWaiting()}
                   onClick={() => field().handleChange('https')}
                 >
@@ -285,7 +292,11 @@ export default function LoginPage(props: LoginPageProps) {
                 <button
                   type="button"
                   aria-pressed={field().state.value === 'http'}
-                  class={`cursor-pointer rounded-xl px-4 py-3 text-[14px] leading-[20px] font-semibold tracking-wide uppercase transition-[background-color,color,box-shadow,transform] duration-300 active:scale-[0.96] ${field().state.value === 'http' ? 'bg-primary from-primary to-primary-gradient-end text-on-primary shadow-primary/20 bg-gradient-to-r font-bold shadow-md' : 'text-on-surface-variant hover:text-on-surface hover:bg-surface-container-highest/40'}`}
+                  class={styles.segment}
+                  classList={{
+                    [styles.segmentSelected]: field().state.value === 'http',
+                    [styles.segmentIdle]: field().state.value !== 'http',
+                  }}
                   disabled={isQuickConnectWaiting()}
                   onClick={() => field().handleChange('http')}
                 >
@@ -296,8 +307,8 @@ export default function LoginPage(props: LoginPageProps) {
           </form.Field>
           <form.Field name="host">
             {(field) => (
-              <ArkField.Root class="block" disabled={isQuickConnectWaiting()}>
-                <ArkField.Label class="sr-only">Jellyfin host</ArkField.Label>
+              <ArkField.Root class={styles.fieldBlock} disabled={isQuickConnectWaiting()}>
+                <ArkField.Label class={styles.srOnly}>Jellyfin host</ArkField.Label>
                 <ArkField.Input
                   asChild={(fieldProps) => (
                     <FieldControl
@@ -312,7 +323,7 @@ export default function LoginPage(props: LoginPageProps) {
                         field().handleChange(strippedHost);
                         form.setFieldValue('scheme', explicitScheme ?? defaultSchemeForHost(value));
                       }}
-                      class="w-full"
+                      class={patterns.fullWidth}
                       placeholder="jellyfin.local or media.example.com/jellyfin"
                     />
                   )}
@@ -322,13 +333,15 @@ export default function LoginPage(props: LoginPageProps) {
           </form.Field>
         </div>
 
-        <div class="border-outline-variant bg-surface-container-lowest/40 relative overflow-hidden rounded-2xl border p-4 backdrop-blur-sm">
-          <div class="bg-secondary absolute inset-y-0 left-0 w-[3px]" />
-          <p class="text-on-surface-variant/90 text-[11px] leading-[16px] font-bold tracking-[0.08em] uppercase">
-            Server URL preview
-          </p>
+        <div class={styles.preview}>
+          <div class={styles.previewStripe} />
+          <p class={styles.overline}>Server URL preview</p>
           <p
-            class={`text-on-surface-variant mt-1 font-mono text-[14px] leading-[20px] break-all ${serverUrl() ? 'text-secondary font-semibold drop-shadow-[0_0_8px_rgba(129,140,248,0.15)]' : 'text-warning'}`}
+            class={styles.previewValue}
+            classList={{
+              [styles.previewReady]: Boolean(serverUrl()),
+              [styles.previewEmpty]: !serverUrl(),
+            }}
           >
             {serverUrl() || 'Enter a server host to preview the final URL'}
           </p>
@@ -337,16 +350,18 @@ export default function LoginPage(props: LoginPageProps) {
         <form.Field name="provider">
           {(field) => (
             <fieldset>
-              <legend class="text-on-surface-variant mb-1.5 block text-[12px] leading-[16px] font-bold tracking-[0.05em] uppercase">
-                Media Server
-              </legend>
+              <legend class={styles.label}>Media Server</legend>
               <div
-                class="border-outline-variant bg-surface-container-high/40 grid grid-cols-2 rounded-2xl border p-1"
+                class={`${styles.segmented} ${styles.segmented2}`}
                 aria-label="Media server provider"
               >
                 <button
                   type="button"
-                  class={`cursor-pointer rounded-xl px-4 py-3 text-[14px] leading-[20px] font-semibold tracking-wide uppercase transition-[background-color,color,box-shadow,transform] duration-300 active:scale-[0.96] ${field().state.value === 'jellyfin' ? 'from-primary to-primary-gradient-end text-on-primary shadow-primary/25 bg-gradient-to-r font-bold shadow-lg' : 'text-on-surface-variant hover:text-on-surface hover:bg-surface-container-highest/40'}`}
+                  class={styles.segment}
+                  classList={{
+                    [styles.segmentSelected]: field().state.value === 'jellyfin',
+                    [styles.segmentIdle]: field().state.value !== 'jellyfin',
+                  }}
                   disabled={isQuickConnectWaiting()}
                   onClick={() => field().handleChange('jellyfin')}
                 >
@@ -354,7 +369,11 @@ export default function LoginPage(props: LoginPageProps) {
                 </button>
                 <button
                   type="button"
-                  class={`cursor-pointer rounded-xl px-4 py-3 text-[14px] leading-[20px] font-semibold tracking-wide uppercase transition-[background-color,color,box-shadow,transform] duration-300 active:scale-[0.96] ${field().state.value === 'emby' ? 'from-primary to-primary-gradient-end text-on-primary shadow-primary/25 bg-gradient-to-r font-bold shadow-lg' : 'text-on-surface-variant hover:text-on-surface hover:bg-surface-container-highest/40'}`}
+                  class={styles.segment}
+                  classList={{
+                    [styles.segmentSelected]: field().state.value === 'emby',
+                    [styles.segmentIdle]: field().state.value !== 'emby',
+                  }}
                   disabled={isQuickConnectWaiting()}
                   onClick={() => field().handleChange('emby')}
                 >
@@ -380,14 +399,18 @@ export default function LoginPage(props: LoginPageProps) {
           }}
         >
           <Tabs.List
-            class={`border-outline-variant bg-surface-container-high/40 mb-6 grid rounded-2xl border p-1 ${selectedCapabilities().quickConnect ? 'grid-cols-2' : 'grid-cols-1'}`}
+            class={`${styles.segmented} ${styles.tabsList} ${selectedCapabilities().quickConnect ? styles.segmented2 : styles.segmented1}`}
             aria-label="Login Method"
           >
             <Show when={selectedCapabilities().quickConnect}>
               <Tabs.Trigger
                 value="quickConnect"
                 disabled={isQuickConnectWaiting()}
-                class={`cursor-pointer rounded-xl px-4 py-3 text-[14px] leading-[20px] font-semibold tracking-wide uppercase transition-[background-color,color,box-shadow,transform] duration-300 active:scale-[0.96] ${loginMethod() === 'quickConnect' ? 'from-primary to-primary-gradient-end text-on-primary shadow-primary/25 bg-gradient-to-r font-bold shadow-lg' : 'text-on-surface-variant hover:text-on-surface hover:bg-surface-container-highest/40'}`}
+                class={styles.segment}
+                classList={{
+                  [styles.segmentSelected]: loginMethod() === 'quickConnect',
+                  [styles.segmentIdle]: loginMethod() !== 'quickConnect',
+                }}
               >
                 Quick Connect
               </Tabs.Trigger>
@@ -395,7 +418,11 @@ export default function LoginPage(props: LoginPageProps) {
             <Tabs.Trigger
               value="password"
               disabled={isQuickConnectWaiting()}
-              class={`cursor-pointer rounded-xl px-4 py-3 text-[14px] leading-[20px] font-semibold tracking-wide uppercase transition-[background-color,color,box-shadow,transform] duration-300 active:scale-[0.96] ${loginMethod() === 'password' ? 'from-primary to-primary-gradient-end text-on-primary shadow-primary/25 bg-gradient-to-r font-bold shadow-lg' : 'text-on-surface-variant hover:text-on-surface hover:bg-surface-container-highest/40'}`}
+              class={styles.segment}
+              classList={{
+                [styles.segmentSelected]: loginMethod() === 'password',
+                [styles.segmentIdle]: loginMethod() !== 'password',
+              }}
             >
               Password
             </Tabs.Trigger>
@@ -403,49 +430,38 @@ export default function LoginPage(props: LoginPageProps) {
 
           <Show when={selectedCapabilities().quickConnect}>
             <Tabs.Content value="quickConnect">
-              <div class="border-secondary/25 bg-secondary-container/20 relative overflow-hidden rounded-3xl border p-6 text-center backdrop-blur-sm transition-colors">
-                <div class="from-secondary/5 pointer-events-none absolute inset-0 bg-gradient-to-b to-transparent" />
+              <div class={styles.quickPanel}>
+                <div class={styles.quickPanelGlow} />
 
                 {/* Decorative radar background */}
-                <div class="border-secondary/20 bg-secondary/5 relative mx-auto mb-4 flex h-20 w-20 items-center justify-center rounded-full border">
+                <div class={styles.radar}>
                   <Show when={isQuickConnectWaiting()}>
-                    <div class="border-secondary/40 absolute inset-0 animate-[radar-pulse_2.2s_cubic-bezier(0.2,0.8,0.2,1)_infinite] rounded-full border" />
-                    <div
-                      class="border-secondary/30 absolute inset-0 animate-[radar-pulse_2.2s_cubic-bezier(0.2,0.8,0.2,1)_infinite] rounded-full border"
-                      style="animation-delay: 0.7s"
-                    />
-                    <div
-                      class="border-secondary/20 absolute inset-0 animate-[radar-pulse_2.2s_cubic-bezier(0.2,0.8,0.2,1)_infinite] rounded-full border"
-                      style="animation-delay: 1.4s"
-                    />
+                    <div class={styles.radarRing} />
+                    <div class={`${styles.radarRing} ${styles.radarRing2}`} />
+                    <div class={`${styles.radarRing} ${styles.radarRing3}`} />
                   </Show>
                   <RadioTower
-                    class={`text-secondary h-9 w-9 ${isQuickConnectWaiting() ? 'animate-pulse' : ''} drop-shadow-[0_0_8px_rgba(129,140,248,0.4)]`}
+                    class={styles.towerIcon}
+                    classList={{ [styles.pulse]: isQuickConnectWaiting() }}
                   />
                 </div>
 
-                <p class="text-on-secondary-container text-[14px] leading-[20px] font-medium">
+                <p class={styles.quickText}>
                   Approve this code from another signed-in Jellyfin client. JellyPilot will finish
                   login automatically after approval.
                 </p>
-                <p class="text-on-surface-variant/80 mt-2 text-[12px] leading-[16px]">
-                  You are authorizing this Playback Target.
-                </p>
+                <p class={styles.quickHint}>You are authorizing this Playback Target.</p>
 
                 <Show when={quickConnectCode()}>
-                  <div class="bg-surface-container-lowest/80 border-outline-variant mt-6 inline-flex flex-col items-center justify-center rounded-2xl border px-6 py-3.5 shadow-inner">
-                    <span class="text-on-surface-variant/80 mb-1 text-[10px] font-bold tracking-[0.2em] uppercase">
-                      Verification Code
-                    </span>
-                    <p class="font-display text-secondary pl-[0.25em] font-mono text-[36px] leading-[44px] font-bold tracking-[0.25em] tracking-tight tabular-nums drop-shadow-[0_0_10px_rgba(129,140,248,0.55)]">
-                      {quickConnectCode()}
-                    </p>
+                  <div class={styles.codeBox}>
+                    <span class={styles.codeLabel}>Verification Code</span>
+                    <p class={styles.code}>{quickConnectCode()}</p>
                   </div>
                 </Show>
 
                 <Show when={isQuickConnectWaiting()}>
-                  <div class="text-secondary mt-5 flex animate-pulse items-center justify-center gap-2 text-[12px] leading-[16px] font-bold tracking-[0.05em] uppercase">
-                    <span class="bg-secondary h-2 w-2 rounded-full shadow-[0_0_8px_#818cf8]" />
+                  <div class={styles.waiting}>
+                    <span class={styles.waitingDot} />
                     Awaiting Quick Connect Approval…
                   </div>
                 </Show>
@@ -454,13 +470,11 @@ export default function LoginPage(props: LoginPageProps) {
           </Show>
 
           <Tabs.Content value="password">
-            <div class="space-y-4">
+            <div class={styles.stack4}>
               <form.Field name="username">
                 {(field) => (
-                  <ArkField.Root class="block">
-                    <ArkField.Label class="text-on-surface-variant mb-1.5 block text-[12px] leading-[16px] font-bold tracking-[0.05em] uppercase">
-                      Username
-                    </ArkField.Label>
+                  <ArkField.Root class={styles.fieldBlock}>
+                    <ArkField.Label class={styles.label}>Username</ArkField.Label>
                     <ArkField.Input
                       asChild={(fieldProps) => (
                         <FieldControl
@@ -468,7 +482,7 @@ export default function LoginPage(props: LoginPageProps) {
                           variant="filled"
                           value={field().state.value}
                           onInput={(event) => field().handleChange(event.currentTarget.value)}
-                          class="w-full"
+                          class={patterns.fullWidth}
                           placeholder="Jellyfin username"
                         />
                       )}
@@ -478,10 +492,8 @@ export default function LoginPage(props: LoginPageProps) {
               </form.Field>
               <form.Field name="password">
                 {(field) => (
-                  <ArkField.Root class="block">
-                    <ArkField.Label class="text-on-surface-variant mb-1.5 block text-[12px] leading-[16px] font-bold tracking-[0.05em] uppercase">
-                      Password
-                    </ArkField.Label>
+                  <ArkField.Root class={styles.fieldBlock}>
+                    <ArkField.Label class={styles.label}>Password</ArkField.Label>
                     <ArkField.Input
                       asChild={(fieldProps) => (
                         <FieldControl
@@ -490,7 +502,7 @@ export default function LoginPage(props: LoginPageProps) {
                           type="password"
                           value={field().state.value}
                           onInput={(event) => field().handleChange(event.currentTarget.value)}
-                          class="w-full"
+                          class={patterns.fullWidth}
                           placeholder="Jellyfin password"
                         />
                       )}
@@ -503,14 +515,14 @@ export default function LoginPage(props: LoginPageProps) {
                   <Checkbox.Root
                     checked={field().state.value}
                     onCheckedChange={(details) => field().handleChange(details.checked === true)}
-                    class="text-on-surface mt-2.5 inline-flex cursor-pointer items-center gap-2.5 align-top text-[14px] leading-[20px] transition-opacity select-none disabled:cursor-not-allowed disabled:opacity-50"
+                    class={styles.remember}
                   >
-                    <Checkbox.Control class="border-outline bg-surface-container-high text-on-primary hover:border-primary/60 data-[state=checked]:border-primary data-[state=checked]:from-primary data-[state=checked]:to-primary-gradient-end data-[state=indeterminate]:border-primary data-[state=indeterminate]:from-primary data-[state=indeterminate]:to-primary-gradient-end data-[focus-visible]:ring-primary/50 data-[focus-visible]:ring-offset-background inline-flex h-5.5 w-5.5 shrink-0 items-center justify-center rounded-lg border text-[11px] leading-none transition-[background-color,border-color,box-shadow] duration-200 data-[focus-visible]:ring-2 data-[focus-visible]:ring-offset-2 data-[focus-visible]:outline-none data-[state=checked]:bg-gradient-to-br data-[state=indeterminate]:bg-gradient-to-br">
-                      <Checkbox.Indicator class="flex items-center justify-center font-black">
-                        <Check class="h-3.5 w-3.5" stroke-width={4} />
+                    <Checkbox.Control class={styles.checkbox}>
+                      <Checkbox.Indicator class={styles.checkboxIndicator}>
+                        <Check class={patterns.icon3_5} stroke-width={4} />
                       </Checkbox.Indicator>
                     </Checkbox.Control>
-                    <Checkbox.Label class="hover:text-on-surface-variant cursor-pointer font-medium transition-colors select-none">
+                    <Checkbox.Label class={styles.checkboxLabel}>
                       Remember Server URL and username
                     </Checkbox.Label>
                     <Checkbox.HiddenInput />
@@ -522,22 +534,22 @@ export default function LoginPage(props: LoginPageProps) {
         </Tabs.Root>
 
         <Show when={error()}>
-          <div
-            class="bg-error-container/20 border-error/30 text-on-error-container flex items-start gap-3 rounded-2xl border p-4"
-            role="alert"
-          >
-            <CircleAlert class="text-error mt-0.5 h-5 w-5 shrink-0" />
+          <div class={styles.alert} role="alert">
+            <CircleAlert class={styles.alertIcon} />
             <div>
-              <p class="text-error text-[14px] leading-[20px] font-bold font-semibold">
-                Connection needs attention
-              </p>
-              <p class="text-on-surface-variant mt-0.5 text-[14px] leading-[20px]">{error()}</p>
+              <p class={styles.alertTitle}>Connection needs attention</p>
+              <p class={styles.alertMessage}>{error()}</p>
             </div>
           </div>
         </Show>
 
         {isQuickConnectWaiting() ? (
-          <Button type="button" variant="secondary" class="w-full" onClick={resetQuickConnect}>
+          <Button
+            type="button"
+            variant="secondary"
+            class={patterns.fullWidth}
+            onClick={resetQuickConnect}
+          >
             Cancel Request
           </Button>
         ) : (
@@ -545,12 +557,12 @@ export default function LoginPage(props: LoginPageProps) {
             type="button"
             disabled={submitting()}
             variant="primary"
-            class="w-full"
+            class={patterns.fullWidth}
             onClick={submit}
           >
             {submitting() ? (
               <>
-                <LoaderCircle class="h-5 w-5 animate-spin" />
+                <LoaderCircle class={`${patterns.icon5} ${patterns.spinner}`} />
                 {submittingButtonLabel()}
               </>
             ) : (
@@ -567,34 +579,30 @@ export default function LoginPage(props: LoginPageProps) {
   }
 
   return (
-    <ConsoleShell class="relative flex items-center justify-center overflow-y-auto py-10">
-      <main class="relative z-10 w-full max-w-3xl">
-        <div class="relative mb-8 text-center">
-          <div class="border-primary/20 bg-primary/5 relative mx-auto mb-6 flex h-24 w-24 items-center justify-center rounded-full border shadow-[0_0_30px_rgba(79,70,229,0.2)]">
-            <div class="border-primary/30 absolute inset-0 animate-ping rounded-full border opacity-25" />
-            <div class="border-secondary/25 absolute inset-2 animate-pulse rounded-full border" />
-            <div class="border-primary/10 absolute inset-4 animate-[spin_60s_linear_infinite] rounded-full border border-dashed" />
-            <RadioTower class="text-primary h-10 w-10 drop-shadow-[0_0_12px_rgba(79,70,229,0.55)]" />
+    <ConsoleShell class={styles.shell}>
+      <main class={styles.main}>
+        <div class={styles.hero}>
+          <div class={styles.heroIconWrap}>
+            <div class={styles.heroRing} />
+            <div class={styles.heroPulseRing} />
+            <div class={styles.heroOrbit} />
+            <RadioTower class={styles.heroIcon} />
           </div>
 
-          <div class="border-secondary/20 bg-secondary/5 mb-3.5 inline-flex items-center gap-2.5 rounded-full border px-3.5 py-1">
-            <span class="bg-secondary h-1.5 w-1.5 animate-pulse rounded-full shadow-[0_0_8px_#818cf8]" />
-            <p class="text-secondary text-[10px] font-bold tracking-[0.18em] uppercase">
-              Docking Sequence
-            </p>
+          <div class={styles.badge}>
+            <span class={styles.badgeDot} />
+            <p class={styles.badgeText}>Docking Sequence</p>
           </div>
 
-          <h1 class="font-display text-on-surface text-[45px] leading-[52px] font-bold tracking-tight">
-            JellyPilot
-          </h1>
-          <p class="text-on-surface-variant mx-auto mt-2 max-w-md text-[16px] leading-[24px]">
+          <h1 class={styles.appTitle}>JellyPilot</h1>
+          <p class={styles.appDescription}>
             Connect this Playback Target to a known Jellyfin server.
           </p>
         </div>
 
         {loginCard()}
 
-        <PageFooter class="mt-8" />
+        <PageFooter class={styles.footer} />
       </main>
     </ConsoleShell>
   );

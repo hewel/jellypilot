@@ -13,11 +13,13 @@ import {
   runExit,
 } from '~effects/query';
 
+import * as styles from '../library.css';
+
 const homeSkeletonRows = [
-  { id: 'continue-watching-skeleton', aspectClass: 'aspect-video' },
-  { id: 'next-up-skeleton', aspectClass: 'aspect-video' },
-  { id: 'latest-movies-skeleton', aspectClass: 'aspect-[2/3]' },
-  { id: 'latest-episodes-skeleton', aspectClass: 'aspect-video' },
+  { id: 'continue-watching-skeleton', aspectClass: 'video' },
+  { id: 'next-up-skeleton', aspectClass: 'video' },
+  { id: 'latest-movies-skeleton', aspectClass: 'poster' },
+  { id: 'latest-episodes-skeleton', aspectClass: 'video' },
 ] as const;
 
 export const Route = createFileRoute('/_authenticated/library/')({
@@ -40,11 +42,11 @@ function LibraryLanding() {
     homeQuery.data && Exit.isSuccess(homeQuery.data) ? homeQuery.data.value : null;
 
   return (
-    <div class="space-y-6">
+    <div class={styles.stack}>
       <Show when={!homeQuery.isPending} fallback={<VideoHomeSkeleton />}>
         <Show when={home()}>
           {(value) => (
-            <div class="space-y-6">
+            <div class={styles.stack}>
               <VideoHomeRow
                 id="continue-watching"
                 title="Continue Watching"
@@ -74,21 +76,21 @@ function LibraryLanding() {
 
 function VideoHomeSkeleton() {
   return (
-    <div class="space-y-6" aria-hidden="true">
+    <div class={styles.stack} aria-hidden="true">
       <For each={homeSkeletonRows}>
         {(row) => (
-          <section class="space-y-3">
-            <div class="bg-surface-container-high/70 h-6 w-44 animate-pulse rounded-md" />
-            <div class="grid gap-3 sm:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-6">
+          <section class={styles.skeletonRow}>
+            <div class={styles.skeletonTitle} />
+            <div class={styles.skeletonGrid}>
               <For each={[0, 1, 2, 3]}>
                 {() => (
-                  <Card variant="filled" surfaceTint={false} class="overflow-hidden !p-0">
+                  <Card variant="filled" surfaceTint={false} padding="none">
                     <div
-                      class={`${row.aspectClass} border-outline-variant bg-surface-container-lowest/60 animate-pulse border-b`}
+                      class={`${styles.skeletonArtwork} ${styles.skeletonAspect[row.aspectClass]}`}
                     />
-                    <div class="space-y-2 px-4 pt-2 pb-3">
-                      <div class="bg-surface-container-high/80 h-4 w-4/5 animate-pulse rounded" />
-                      <div class="bg-surface-container-high/60 h-3 w-3/5 animate-pulse rounded" />
+                    <div class={styles.skeletonBody}>
+                      <div class={styles.skeletonLine.title} />
+                      <div class={styles.skeletonLine.subtitle} />
                     </div>
                   </Card>
                 )}

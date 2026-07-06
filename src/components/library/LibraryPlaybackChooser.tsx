@@ -11,6 +11,8 @@ import type {
 import { Button, Card, JellyPilotSelect } from '../ui';
 import type { JellyPilotSelectItem } from '../ui';
 
+import * as styles from './LibraryPlaybackChooser.css';
+
 const SUBTITLE_AUTO = 'auto';
 const SUBTITLE_OFF = 'off';
 
@@ -91,24 +93,16 @@ export function LibraryPlaybackChooser(props: {
       unmountOnExit
     >
       <Portal>
-        <Dialog.Backdrop class="fixed inset-0 z-60 bg-black/70 backdrop-blur-sm transition-[backdrop-filter,background-color,opacity] duration-300 data-[state=closed]:opacity-0 data-[state=open]:opacity-100" />
-        <Dialog.Positioner class="fixed inset-0 z-60 flex items-center justify-center overflow-y-auto p-4">
-          <Dialog.Content class="relative w-full max-w-2xl outline-none">
-            <Card
-              as="section"
-              variant="filled"
-              class="border-secondary/40 bg-secondary-container/10 space-y-4"
-            >
+        <Dialog.Backdrop class={styles.backdrop} />
+        <Dialog.Positioner class={`${styles.positioner} ${styles.positionerFill}`}>
+          <Dialog.Content class={styles.content}>
+            <Card as="section" variant="filled" class={styles.card}>
               <div>
-                <p class="text-secondary text-[11px] leading-[16px] font-bold tracking-[0.08em] uppercase">
-                  {props.pending.detail.itemType}
-                </p>
-                <Dialog.Title class="text-on-surface text-[22px] leading-[28px] font-bold">
-                  {props.pending.detail.name}
-                </Dialog.Title>
+                <p class={styles.eyebrow}>{props.pending.detail.itemType}</p>
+                <Dialog.Title class={styles.title}>{props.pending.detail.name}</Dialog.Title>
               </div>
 
-              <div class="grid gap-4 sm:grid-cols-2">
+              <div class={styles.fields}>
                 <JellyPilotSelect
                   label="Audio track"
                   items={audioItems()}
@@ -129,18 +123,15 @@ export function LibraryPlaybackChooser(props: {
                 />
               </div>
 
-              <div class="flex flex-wrap justify-end gap-3">
-                <Dialog.CloseTrigger
-                  class="border-outline text-on-surface hover:border-primary hover:bg-primary/5 inline-flex min-h-11 cursor-pointer items-center justify-center gap-2 rounded-full border bg-transparent px-5 py-3 text-[14px] leading-[20px] font-bold transition-[background-color,border-color,color,transform] duration-200 select-none active:scale-[0.96] disabled:pointer-events-none disabled:opacity-50"
-                  disabled={props.busy}
-                >
-                  <X class="h-4 w-4" />
+              <div class={styles.actions}>
+                <Dialog.CloseTrigger class={styles.closeButton} disabled={props.busy}>
+                  <X class={styles.icon} />
                   Cancel
                 </Dialog.CloseTrigger>
                 <Button
                   type="button"
                   variant="primary"
-                  class="rounded-full"
+                  class={styles.pillButton}
                   disabled={props.busy}
                   onClick={() =>
                     props.onConfirm({
@@ -148,7 +139,7 @@ export function LibraryPlaybackChooser(props: {
                       subtitleStreamIndex: subtitleStreamIndex(),
                     })
                   }
-                  leadingIcon={<Play class="h-4 w-4 fill-current" />}
+                  leadingIcon={<Play class={styles.playIcon} />}
                 >
                   {props.busy ? 'Starting...' : confirmLabel()}
                 </Button>

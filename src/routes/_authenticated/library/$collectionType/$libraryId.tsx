@@ -46,11 +46,9 @@ import {
 } from '~effects/query';
 import { createSharedLibraryFilters } from '~utils/createSharedLibraryFilters';
 import type { LibrarySortDirection } from '~utils/createSharedLibraryFilters';
-import {
-  LIBRARY_BROWSE_AUTO_GRID_CLASS,
-  LIBRARY_BROWSE_GRID_GAP_PX,
-  libraryBrowseColumnCount,
-} from '~utils/libraryBrowseLayout';
+import { LIBRARY_BROWSE_GRID_GAP_PX, libraryBrowseColumnCount } from '~utils/libraryBrowseLayout';
+
+import * as styles from '../browseRoute.css';
 
 const LIBRARY_BROWSE_SKELETON_CARD_KEYS = Array.from({ length: 10 }, (_, index) => index);
 const LIBRARY_VIRTUAL_TOTAL_THRESHOLD = 100;
@@ -632,7 +630,7 @@ function LibraryBrowseRoute() {
     !readyState() && (!libraryFilters.ready() || browseQuery.isFetching);
 
   return (
-    <div class="min-w-0">
+    <div class={styles.root}>
       <LibraryBrowseNavbarControls
         loading={controlsLoading}
         sortedValue={libraryFilters.sort}
@@ -656,12 +654,12 @@ function LibraryBrowseRoute() {
             )
           }
         >
-          <section class="space-y-4" aria-labelledby="library-browse-title">
-            <div class="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-              <h2 id="library-browse-title" class="text-on-surface text-[22px] leading-7 font-bold">
+          <section class={styles.section} aria-labelledby="library-browse-title">
+            <div class={styles.header}>
+              <h2 id="library-browse-title" class={styles.title}>
                 {libraryTitle(collectionType())}
               </h2>
-              <p class="text-on-surface-variant/80 text-[12px] leading-4 tabular-nums">
+              <p class={styles.count}>
                 <Show
                   when={usesVirtualGrid()}
                   fallback={
@@ -677,9 +675,7 @@ function LibraryBrowseRoute() {
             <Show
               when={usesVirtualGrid()}
               fallback={
-                <div
-                  class={`${LIBRARY_BROWSE_AUTO_GRID_CLASS} animate-[fadeIn_0.3s_cubic-bezier(0.16,1,0.3,1)_forwards]`}
-                >
+                <div class={`${styles.grid} ${styles.fade}`}>
                   <For each={readyState()?.items ?? []}>
                     {(item) => (
                       <VideoCard kind="library" item={item} collectionType={collectionType()} />
@@ -694,22 +690,22 @@ function LibraryBrowseRoute() {
               <div
                 ref={setVirtualGrid}
                 data-testid="library-virtual-grid"
-                class="animate-[fadeIn_0.3s_cubic-bezier(0.16,1,0.3,1)_forwards]"
+                class={styles.virtualGrid}
               >
                 <div
-                  class="relative w-full"
+                  class={styles.virtualCanvas}
                   style={{ height: `${rowVirtualizer.getTotalSize()}px` }}
                 >
                   <For each={rowVirtualizer.getVirtualItems()}>
                     {(virtualRow) => (
                       <div
-                        class="absolute top-0 left-0 w-full"
+                        class={styles.virtualRow}
                         style={{
                           height: `${virtualRow.size}px`,
                           transform: `translateY(${virtualRow.start - virtualScrollMargin()}px)`,
                         }}
                       >
-                        <div class={LIBRARY_BROWSE_AUTO_GRID_CLASS}>
+                        <div class={styles.grid}>
                           <For each={virtualRowColumnIndexes()}>
                             {(columnIndex) => {
                               const displayIndex = () =>
@@ -740,18 +736,18 @@ function LibraryBrowseRoute() {
             </Show>
             <Show when={loadMoreErrorDescription()}>
               {(message) => (
-                <div class="flex flex-col items-center gap-3 pt-2">
-                  <p class="text-error text-center text-[12px] leading-[16px]">{message()}</p>
+                <div class={styles.loadMoreError}>
+                  <p class={styles.error}>{message()}</p>
                   <Button
                     type="button"
                     variant="secondary"
-                    class="rounded-full"
+                    class={styles.pillButton}
                     disabled={loadMoreRetryBusy()}
                     onClick={retryFailedPage}
                     leadingIcon={
                       <RefreshCw
-                        class="h-4 w-4"
-                        classList={{ 'animate-spin': loadMoreRetryBusy() }}
+                        class={styles.icon4}
+                        classList={{ [styles.spin]: loadMoreRetryBusy() }}
                       />
                     }
                   >
@@ -760,7 +756,7 @@ function LibraryBrowseRoute() {
                 </div>
               )}
             </Show>
-            <div ref={setAutoLoadSentinel} aria-hidden="true" class="h-px w-full" />
+            <div ref={setAutoLoadSentinel} aria-hidden="true" class={styles.sentinel} />
           </section>
         </Show>
       </Suspense>
@@ -776,31 +772,24 @@ interface LibrarySortMenuProps {
 function LibrarySortMenu(props: LibrarySortMenuProps) {
   return (
     <Menu.Root>
-      <Menu.Trigger
-        disabled={props.disabled()}
-        aria-label="Sort By"
-        class="border-outline-variant text-on-surface hover:text-secondary flex h-10 w-10 flex-none items-center justify-center border-l px-2 text-left transition-colors duration-200 outline-none disabled:cursor-not-allowed disabled:opacity-50 sm:h-12 sm:w-12"
-      >
+      <Menu.Trigger disabled={props.disabled()} aria-label="Sort By" class={styles.menuTrigger}>
         <ListSortAscending size={14} />
       </Menu.Trigger>
       <Menu.Positioner>
-        <Menu.Content class="border-outline-variant bg-surface-container-lowest z-50 max-h-60 min-w-48 overflow-y-auto rounded-lg border p-2 shadow-2xl backdrop-blur-md focus:outline-none">
+        <Menu.Content class={styles.menuContent}>
           <Menu.RadioItemGroup
             value={props.value()}
             onValueChange={(details) => props.onChange(details.value as VideoLibrarySort)}
           >
-            <Menu.ItemGroupLabel class="px-3.5 py-2 text-xs font-bold">Sort By</Menu.ItemGroupLabel>
+            <Menu.ItemGroupLabel class={styles.menuLabel}>Sort By</Menu.ItemGroupLabel>
             <For each={sortItems}>
               {(item) => (
-                <Menu.RadioItem
-                  value={item.value}
-                  class="text-on-surface-variant hover:bg-surface-container-high hover:text-on-surface flex cursor-pointer items-center justify-between rounded-xl px-3.5 py-2.5 text-[14px] leading-5 transition-colors data-disabled:cursor-not-allowed data-disabled:opacity-50"
-                >
-                  <Menu.ItemText class="font-medium">
+                <Menu.RadioItem value={item.value} class={styles.menuItem}>
+                  <Menu.ItemText class={styles.menuText}>
                     <span>{item.label}</span>
                   </Menu.ItemText>
                   <Menu.ItemIndicator>
-                    <Check class="text-secondary h-4 w-4" />
+                    <Check class={styles.menuCheck} />
                   </Menu.ItemIndicator>
                 </Menu.RadioItem>
               )}
@@ -823,50 +812,43 @@ interface LibraryStatusMenuProps {
 function LibraryStatusMenu(props: LibraryStatusMenuProps) {
   return (
     <Menu.Root>
-      <Menu.Trigger
-        disabled={props.disabled()}
-        aria-label="Status"
-        class="border-outline-variant text-on-surface hover:text-secondary flex h-10 w-10 flex-none items-center justify-center border-l px-2 text-left transition-colors duration-200 outline-none disabled:cursor-not-allowed disabled:opacity-50 sm:h-12 sm:w-12"
-      >
+      <Menu.Trigger disabled={props.disabled()} aria-label="Status" class={styles.menuTrigger}>
         <Funnel size={14} />
       </Menu.Trigger>
       <Menu.Positioner>
-        <Menu.Content class="border-outline-variant bg-surface-container-lowest z-50 max-h-60 min-w-48 overflow-y-auto rounded-lg border p-2 shadow-2xl backdrop-blur-md focus:outline-none">
+        <Menu.Content class={styles.menuContent}>
           <Menu.RadioItemGroup
             value={props.value()}
             onValueChange={(details) => props.onChange(details.value as VideoLibraryPlayedFilter)}
           >
-            <Menu.ItemGroupLabel class="px-3.5 py-2 text-xs font-bold">Status</Menu.ItemGroupLabel>
+            <Menu.ItemGroupLabel class={styles.menuLabel}>Status</Menu.ItemGroupLabel>
             <For each={['all', 'played', 'unplayed'] as VideoLibraryPlayedFilter[]}>
               {(filter) => (
-                <Menu.RadioItem
-                  value={filter}
-                  class="text-on-surface-variant hover:bg-surface-container-high hover:text-on-surface flex cursor-pointer items-center justify-between rounded-xl px-3.5 py-2.5 text-[14px] leading-5 transition-colors data-disabled:cursor-not-allowed data-disabled:opacity-50"
-                >
-                  <Menu.ItemText class="font-medium">
+                <Menu.RadioItem value={filter} class={styles.menuItem}>
+                  <Menu.ItemText class={styles.menuText}>
                     <span>{playedFilterLabel(filter)}</span>
                   </Menu.ItemText>
                   <Menu.ItemIndicator>
-                    <Check class="text-secondary h-4 w-4" />
+                    <Check class={styles.menuCheck} />
                   </Menu.ItemIndicator>
                 </Menu.RadioItem>
               )}
             </For>
           </Menu.RadioItemGroup>
 
-          <div class="border-outline-variant/60 my-1 border-t" />
+          <div class={styles.separator} />
 
           <Menu.CheckboxItem
             checked={props.favoritesOnly()}
             onCheckedChange={(checked) => props.onFavoritesOnlyChange(checked)}
             value="favorites"
-            class="text-on-surface-variant hover:bg-surface-container-high hover:text-on-surface flex cursor-pointer items-center justify-between rounded-xl px-3.5 py-2.5 text-[14px] leading-5 transition-colors data-disabled:cursor-not-allowed data-disabled:opacity-50"
+            class={styles.menuItem}
           >
-            <Menu.ItemText class="font-medium">
+            <Menu.ItemText class={styles.menuText}>
               <span>Favorites Only</span>
             </Menu.ItemText>
             <Menu.ItemIndicator>
-              <Check class="text-secondary h-4 w-4" />
+              <Check class={styles.menuCheck} />
             </Menu.ItemIndicator>
           </Menu.CheckboxItem>
         </Menu.Content>
@@ -894,8 +876,8 @@ function LibraryBrowseNavbarControls(props: LibraryBrowseNavbarControlsProps) {
     <Show when={navbarControls.portalTarget()}>
       {(target) => (
         <Portal mount={target()}>
-          <nav class="flex flex-row items-end justify-between" aria-label="Library browse controls">
-            <div class="flex min-w-0 flex-wrap justify-end overflow-hidden rounded-2xl">
+          <nav class={styles.controlsNav} aria-label="Library browse controls">
+            <div class={styles.controlGroup}>
               <Toggle.Root
                 pressed={props.sortDirection() === 'desc'}
                 onPressedChange={(pressed) => {
@@ -903,7 +885,7 @@ function LibraryBrowseNavbarControls(props: LibraryBrowseNavbarControlsProps) {
                 }}
                 disabled={props.loading()}
                 aria-label={props.sortDirection() === 'desc' ? 'Sort descending' : 'Sort ascending'}
-                class="border-outline-variant text-on-surface hover:text-secondary data-[state=on]:bg-secondary-container/45 data-[state=on]:text-on-secondary-container flex h-10 w-10 items-center justify-center border-l transition-colors duration-200 outline-none disabled:cursor-not-allowed disabled:opacity-50 sm:h-12 sm:w-12"
+                class={styles.menuTrigger}
               >
                 <Show
                   when={props.sortDirection() === 'desc'}
@@ -942,12 +924,12 @@ function LibraryBrowseSkeletonCards() {
 
 function LibraryBrowseSkeleton() {
   return (
-    <section class="space-y-4" aria-hidden="true">
-      <div class="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-        <div class="bg-surface-container-high/70 h-7 w-32 animate-pulse rounded-md" />
-        <div class="bg-surface-container-high/60 h-4 w-24 animate-pulse rounded" />
+    <section class={styles.section} aria-hidden="true">
+      <div class={styles.header}>
+        <div class={styles.skeletonTitle} />
+        <div class={styles.skeletonCount} />
       </div>
-      <div class={LIBRARY_BROWSE_AUTO_GRID_CLASS}>
+      <div class={styles.grid}>
         <LibraryBrowseSkeletonCards />
       </div>
     </section>

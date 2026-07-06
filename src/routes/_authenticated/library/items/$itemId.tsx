@@ -36,6 +36,8 @@ import {
   runExit,
 } from '~effects/query';
 
+import * as styles from '../detailRoute.css';
+
 export const Route = createFileRoute('/_authenticated/library/items/$itemId')({
   component: LibraryItemDetailRoute,
 });
@@ -130,7 +132,7 @@ function LibraryItemDetailRoute() {
   };
 
   return (
-    <div class="space-y-6">
+    <div class={styles.stack}>
       <Suspense fallback={<ItemDetailSkeleton />}>
         <Show
           when={detail()}
@@ -150,7 +152,9 @@ function LibraryItemDetailRoute() {
                   artworkImageId={item().artworkImageId ?? null}
                   artworkAspect={isEpisode() ? 'landscape' : 'poster'}
                   typeLabel={item().itemType}
-                  typeIcon={isEpisode() ? <Tv class="h-6 w-6" /> : <Film class="h-6 w-6" />}
+                  typeIcon={
+                    isEpisode() ? <Tv class={styles.icon6} /> : <Film class={styles.icon6} />
+                  }
                   onBack={closeDetail}
                   badges={
                     <>
@@ -173,10 +177,10 @@ function LibraryItemDetailRoute() {
                           <Button
                             type="button"
                             variant="primary"
-                            class="rounded-full"
+                            class={styles.pillButton}
                             disabled={!item().canPlay || confirmBusy()}
                             onClick={() => openPlaybackChooser(item(), 'start')}
-                            leadingIcon={<Play class="h-4 w-4 fill-current" />}
+                            leadingIcon={<Play class={styles.playIcon} />}
                           >
                             Play
                           </Button>
@@ -185,20 +189,20 @@ function LibraryItemDetailRoute() {
                         <Button
                           type="button"
                           variant="primary"
-                          class="rounded-full"
+                          class={styles.pillButton}
                           disabled={!item().canPlay || confirmBusy()}
                           onClick={() => openPlaybackChooser(item(), 'resume')}
-                          leadingIcon={<Play class="h-4 w-4 fill-current" />}
+                          leadingIcon={<Play class={styles.playIcon} />}
                         >
                           Resume
                         </Button>
                         <Button
                           type="button"
                           variant="secondary"
-                          class="rounded-full"
+                          class={styles.pillButton}
                           disabled={!item().canPlay || confirmBusy()}
                           onClick={() => openPlaybackChooser(item(), 'start')}
-                          leadingIcon={<RotateCcw class="h-4 w-4" />}
+                          leadingIcon={<RotateCcw class={styles.icon4} />}
                         >
                           Play from beginning
                         </Button>
@@ -234,22 +238,14 @@ function LibraryItemDetailRoute() {
                   resumeProgress={resumeProgress()}
                 />
 
-                <div class="mx-auto w-full max-w-[1400px] space-y-6 px-6 py-6 lg:px-10 xl:px-12">
+                <div class={styles.content}>
                   <Show when={item().overview}>
-                    {(overview) => (
-                      <p class="text-on-surface-variant max-w-[1100px] text-[14px] leading-[22px] text-pretty lg:text-[15px] lg:leading-[24px]">
-                        {overview()}
-                      </p>
-                    )}
+                    {(overview) => <p class={styles.overview}>{overview()}</p>}
                   </Show>
                   <Show when={item().genres.length > 0}>
-                    <div class="flex flex-wrap gap-2">
+                    <div class={styles.pillRow}>
                       <For each={item().genres}>
-                        {(genre) => (
-                          <span class="border-outline-variant text-on-surface-variant/90 rounded-full border px-3 py-1 text-[11px] leading-[16px] font-bold tracking-[0.08em] uppercase">
-                            {genre}
-                          </span>
-                        )}
+                        {(genre) => <span class={styles.genre}>{genre}</span>}
                       </For>
                     </div>
                   </Show>
@@ -269,24 +265,20 @@ function LibraryItemDetailRoute() {
           />
         )}
       </Show>
-      <Show when={playError()}>
-        {(message) => <p class="text-error px-6 text-[12px] leading-[16px]">{message()}</p>}
-      </Show>
+      <Show when={playError()}>{(message) => <p class={styles.error}>{message()}</p>}</Show>
     </div>
   );
 }
 
 function ItemDetailSkeleton() {
   return (
-    <article class="space-y-6" aria-hidden="true">
-      <div class="bg-surface-container-lowest/60 h-[clamp(280px,44vh,560px)] animate-pulse" />
-      <div class="mx-auto w-full max-w-[1400px] space-y-4 px-6 py-2 lg:px-10 xl:px-12">
-        <div class="bg-surface-container-high/60 h-4 w-full max-w-[1100px] animate-pulse rounded" />
-        <div class="bg-surface-container-high/60 h-4 w-10/12 max-w-[900px] animate-pulse rounded" />
-        <div class="flex flex-wrap gap-2">
-          <For each={[0, 1, 2]}>
-            {() => <div class="bg-surface-container-high/70 h-7 w-24 animate-pulse rounded-full" />}
-          </For>
+    <article class={styles.stack} aria-hidden="true">
+      <div class={styles.skeletonHero} />
+      <div class={styles.skeletonContent}>
+        <div class={styles.skeletonLine} />
+        <div class={`${styles.skeletonLine} ${styles.skeletonLineShort}`} />
+        <div class={styles.pillRow}>
+          <For each={[0, 1, 2]}>{() => <div class={styles.skeletonPill} />}</For>
         </div>
       </div>
     </article>

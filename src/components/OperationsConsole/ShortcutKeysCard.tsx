@@ -5,6 +5,9 @@ import { Show } from 'solid-js';
 import { FieldControl, SectionCard } from '../ui';
 import type { OperationsConsoleForm } from './types';
 
+import * as shared from './shared.css';
+import * as styles from './ShortcutKeysCard.css';
+
 interface ShortcutKeysCardProps {
   form: OperationsConsoleForm;
   showIntroSkipKey: boolean;
@@ -16,12 +19,9 @@ interface ShortcutKeysCardProps {
 
 export default function ShortcutKeysCard(props: ShortcutKeysCardProps) {
   return (
-    <SectionCard
-      icon={<Keyboard class="text-secondary h-5 w-5 drop-shadow-[0_0_8px_rgba(129,140,248,0.4)]" />}
-      title="Shortcut keys"
-    >
-      <div class="space-y-4">
-        <p class="text-on-surface-variant/80 text-[12px] leading-[16px]">
+    <SectionCard icon={<Keyboard class={shared.sectionIcon.secondary} />} title="Shortcut keys">
+      <div class={shared.stack4}>
+        <p class={styles.description}>
           {props.showIntroSkipKey
             ? 'MPV input bindings for episode navigation and manual intro skipping.'
             : 'MPV input bindings for episode navigation.'}
@@ -34,10 +34,8 @@ export default function ShortcutKeysCard(props: ShortcutKeysCardProps) {
           }}
         >
           {(field) => (
-            <ArkField.Root class="block" invalid={field().state.meta.errors.length > 0}>
-              <ArkField.Label class="text-on-surface-variant mb-1.5 block text-[12px] leading-[16px] font-bold tracking-[0.05em] uppercase">
-                Next episode key
-              </ArkField.Label>
+            <ArkField.Root class={styles.field} invalid={field().state.meta.errors.length > 0}>
+              <ArkField.Label class={shared.overline}>Next episode key</ArkField.Label>
               <ArkField.Input
                 asChild={(fieldProps) => (
                   <FieldControl
@@ -51,7 +49,7 @@ export default function ShortcutKeysCard(props: ShortcutKeysCardProps) {
                       field().handleBlur();
                       props.onSaveTextSetting('keybindNext', event.currentTarget.value);
                     }}
-                    class="text-secondary w-full font-mono font-semibold"
+                    class={styles.input}
                     placeholder="Shift+>"
                   />
                 )}
@@ -67,10 +65,8 @@ export default function ShortcutKeysCard(props: ShortcutKeysCardProps) {
           }}
         >
           {(field) => (
-            <ArkField.Root class="block" invalid={field().state.meta.errors.length > 0}>
-              <ArkField.Label class="text-on-surface-variant mb-1.5 block text-[12px] leading-[16px] font-bold tracking-[0.05em] uppercase">
-                Previous episode key
-              </ArkField.Label>
+            <ArkField.Root class={styles.field} invalid={field().state.meta.errors.length > 0}>
+              <ArkField.Label class={shared.overline}>Previous episode key</ArkField.Label>
               <ArkField.Input
                 asChild={(fieldProps) => (
                   <FieldControl
@@ -84,7 +80,7 @@ export default function ShortcutKeysCard(props: ShortcutKeysCardProps) {
                       field().handleBlur();
                       props.onSaveTextSetting('keybindPrev', event.currentTarget.value);
                     }}
-                    class="text-secondary w-full font-mono font-semibold"
+                    class={styles.input}
                     placeholder="Shift+<"
                   />
                 )}
@@ -101,10 +97,8 @@ export default function ShortcutKeysCard(props: ShortcutKeysCardProps) {
             }}
           >
             {(field) => (
-              <ArkField.Root class="block" invalid={field().state.meta.errors.length > 0}>
-                <ArkField.Label class="text-on-surface-variant mb-1.5 block text-[12px] leading-[16px] font-bold tracking-[0.05em] uppercase">
-                  Intro skip key
-                </ArkField.Label>
+              <ArkField.Root class={styles.field} invalid={field().state.meta.errors.length > 0}>
+                <ArkField.Label class={shared.overline}>Intro skip key</ArkField.Label>
                 <ArkField.Input
                   asChild={(fieldProps) => (
                     <FieldControl
@@ -118,7 +112,7 @@ export default function ShortcutKeysCard(props: ShortcutKeysCardProps) {
                         field().handleBlur();
                         props.onSaveTextSetting('keybindIntroSkip', event.currentTarget.value);
                       }}
-                      class="text-secondary w-full font-mono font-semibold"
+                      class={styles.input}
                       placeholder="g"
                     />
                   )}

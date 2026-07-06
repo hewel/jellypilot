@@ -23,6 +23,9 @@ import { resetSharedLibraryFilters } from '../src/utils/createSharedLibraryFilte
 import { imageSource } from '../src/utils/imageSource';
 import { createTestQueryClient, TestQueryProvider } from './query-client';
 
+import * as libraryNavbarStyles from '../src/components/library/LibraryNavbar.css';
+import * as videoCardStyles from '../src/components/library/VideoCard.css';
+
 interface TestIntersectionObserverController {
   trigger(isIntersecting?: boolean): void;
 }
@@ -663,7 +666,7 @@ test('library landing renders command-backed rows and drawer trigger', async () 
 
   const navigation = screen.getByRole('navigation', { name: 'Library navigation' });
   expect(navigation).toBeVisible();
-  expect(navigation).toHaveClass('sticky');
+  expect(navigation).toHaveClass(libraryNavbarStyles.root);
   expect(screen.getByRole('radio', { name: 'Home' })).toBeChecked();
   expect(screen.getByRole('radio', { name: 'Movies' })).toBeVisible();
   expect(screen.getByRole('radio', { name: 'Shows' })).toBeVisible();
@@ -681,15 +684,15 @@ test('library landing renders command-backed rows and drawer trigger', async () 
     'src',
     imageSource(videoHome.continueWatching[0]?.artworkImageId ?? ''),
   );
-  expect(resumeArtwork.parentElement).toHaveClass('aspect-video');
+  expect(resumeArtwork.parentElement).toHaveClass(videoCardStyles.aspect.video);
   fireEvent.load(resumeArtwork);
-  expect(resumeArtwork.parentElement).toHaveClass('aspect-video');
+  expect(resumeArtwork.parentElement).toHaveClass(videoCardStyles.aspect.video);
   const latestMovieLink = screen.getByRole('link', { name: /Latest Movie/ });
   expect(within(latestMovieLink).getByText('Movie')).toBeVisible();
   expect(within(latestMovieLink).queryByText('Movie · null')).toBeNull();
   expect(
     [...latestMovieLink.querySelectorAll('div')].some((node) =>
-      node.className.includes('aspect-[2/3]'),
+      node.className.includes(videoCardStyles.aspect.poster),
     ),
   ).toBe(true);
   expect(screen.getAllByText('No artwork')).toHaveLength(3);

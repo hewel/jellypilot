@@ -43,6 +43,8 @@ import {
 } from '~effects/query';
 import { imageSource } from '~utils/imageSource';
 
+import * as styles from '../detailRoute.css';
+
 export const Route = createFileRoute('/_authenticated/library/shows/$seriesId')({
   component: LibraryShowDetailRoute,
 });
@@ -256,7 +258,7 @@ function LibraryShowDetailRoute() {
   };
 
   return (
-    <div class="space-y-6">
+    <div class={styles.stack}>
       <Suspense fallback={<ShowDetailSkeleton />}>
         <Show
           when={detail()}
@@ -271,7 +273,7 @@ function LibraryShowDetailRoute() {
                 artworkImageId={show().artworkImageId ?? null}
                 artworkAspect="poster"
                 typeLabel="Series"
-                typeIcon={<Tv class="h-6 w-6" />}
+                typeIcon={<Tv class={styles.icon6} />}
                 onBack={closeDetail}
                 badges={
                   <>
@@ -288,12 +290,12 @@ function LibraryShowDetailRoute() {
                     <Button
                       type="button"
                       variant="primary"
-                      class="rounded-full"
+                      class={styles.pillButton}
                       disabled={!show().nextEpisode || playBusy() || confirmBusy()}
                       onClick={() => void playShow()}
                       leadingIcon={
-                        <Show when={playBusy()} fallback={<Play class="h-4 w-4 fill-current" />}>
-                          <RefreshCw class="h-4 w-4 animate-spin" />
+                        <Show when={playBusy()} fallback={<Play class={styles.playIcon} />}>
+                          <RefreshCw class={`${styles.icon4} ${styles.spinner}`} />
                         </Show>
                       }
                     >
@@ -334,40 +336,27 @@ function LibraryShowDetailRoute() {
                 }
               />
 
-              <div class="mx-auto w-full max-w-[1400px] space-y-6 px-6 py-6 lg:px-10 xl:px-12">
+              <div class={styles.content}>
                 <Show when={show().overview}>
-                  {(overview) => (
-                    <p class="text-on-surface-variant max-w-[1100px] text-[14px] leading-[22px] text-pretty lg:text-[15px] lg:leading-[24px]">
-                      {overview()}
-                    </p>
-                  )}
+                  {(overview) => <p class={styles.overview}>{overview()}</p>}
                 </Show>
 
                 <Show when={show().genres.length > 0}>
-                  <div class="flex flex-wrap gap-2">
+                  <div class={styles.pillRow}>
                     <For each={show().genres}>
-                      {(genre) => (
-                        <span class="border-outline-variant text-on-surface-variant/90 rounded-full border px-3 py-1 text-[11px] leading-[16px] font-bold tracking-[0.08em] uppercase">
-                          {genre}
-                        </span>
-                      )}
+                      {(genre) => <span class={styles.genre}>{genre}</span>}
                     </For>
                   </div>
                 </Show>
 
-                <section class="space-y-4" aria-labelledby="show-seasons-title">
-                  <div class="flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">
+                <section class={styles.section} aria-labelledby="show-seasons-title">
+                  <div class={styles.sectionHeader}>
                     <div>
-                      <h2
-                        id="show-seasons-title"
-                        class="text-on-surface text-[22px] leading-[28px] font-bold"
-                      >
+                      <h2 id="show-seasons-title" class={styles.sectionTitle}>
                         Episodes
                       </h2>
                     </div>
-                    <p class="text-on-surface-variant/80 text-[12px] leading-[16px] tabular-nums">
-                      {show().seasons.length} seasons available
-                    </p>
+                    <p class={styles.sectionSubtitle}>{show().seasons.length} seasons available</p>
                   </div>
 
                   <Show
@@ -400,14 +389,14 @@ function LibraryShowDetailRoute() {
                           )
                         }
                       >
-                        <section class="space-y-3" aria-labelledby="season-episodes-title">
-                          <h3
-                            id="season-episodes-title"
-                            class="text-on-surface text-[16px] leading-[24px] font-semibold"
-                          >
+                        <section
+                          class={styles.sectionCompact}
+                          aria-labelledby="season-episodes-title"
+                        >
+                          <h3 id="season-episodes-title" class={styles.titleSmall}>
                             {activeSeason() ? `${activeSeason()?.name} Episodes` : 'Episodes'}
                           </h3>
-                          <div class="flex animate-[fadeIn_0.3s_cubic-bezier(0.16,1,0.3,1)_forwards] flex-col gap-3">
+                          <div class={styles.fadeList}>
                             <For each={seasonEpisodes()}>
                               {(episode) => (
                                 <EpisodeRow
@@ -440,9 +429,7 @@ function LibraryShowDetailRoute() {
           />
         )}
       </Show>
-      <Show when={playError()}>
-        {(message) => <p class="text-error px-6 text-[12px] leading-[16px]">{message()}</p>}
-      </Show>
+      <Show when={playError()}>{(message) => <p class={styles.error}>{message()}</p>}</Show>
     </div>
   );
 }
@@ -470,21 +457,15 @@ function SeasonSelector(props: {
     <Show
       when={props.seasons.length > 6}
       fallback={
-        <ul
-          class="border-outline-variant bg-surface-container-low/70 flex gap-2 overflow-x-auto rounded-2xl border p-2"
-          aria-label="Show seasons"
-        >
+        <ul class={styles.seasonTabs} aria-label="Show seasons">
           <For each={props.seasons}>
             {(season) => (
-              <li class="shrink-0">
+              <li class={styles.seasonItem}>
                 <Button
                   type="button"
                   variant="outlined"
-                  class={`rounded-full ${
-                    props.activeSeason?.id === season.id
-                      ? 'border-secondary bg-secondary-container/45 text-on-secondary-container'
-                      : ''
-                  }`}
+                  class={styles.pillButton}
+                  classList={{ [styles.selectedSeason]: props.activeSeason?.id === season.id }}
                   aria-pressed={props.activeSeason?.id === season.id}
                   disabled={props.disabled}
                   onClick={() => props.onSelect(season)}
@@ -497,7 +478,7 @@ function SeasonSelector(props: {
         </ul>
       }
     >
-      <div class="max-w-xs">
+      <div class={styles.selectWrap}>
         <JellyPilotSelect
           label="Season"
           items={seasonItems()}
@@ -530,17 +511,13 @@ function EpisodeRow(props: {
   });
 
   return (
-    <Card
-      variant="filled"
-      surfaceTint={false}
-      class="grid grid-cols-1 items-center gap-4 !p-3 sm:grid-cols-[160px_1fr_auto] lg:grid-cols-[220px_1fr_auto]"
-    >
-      <div class="bg-surface-container-lowest/60 hidden aspect-video w-[160px] overflow-hidden rounded-lg sm:block lg:w-[220px]">
+    <Card variant="filled" surfaceTint={false} class={styles.episodeCard}>
+      <div class={styles.episodeImageWrap}>
         <Show
           when={!imageFailed() ? props.episode.artworkImageId : null}
           fallback={
-            <div class="text-on-surface-variant flex h-full items-center justify-center text-[11px] leading-[16px] font-bold tracking-[0.08em] uppercase">
-              <Film class="h-5 w-5" />
+            <div class={styles.episodeFallback}>
+              <Film class={styles.icon4} />
             </div>
           }
         >
@@ -548,7 +525,7 @@ function EpisodeRow(props: {
             <img
               src={imageSource(imageId())}
               alt={`${props.episode.name} artwork`}
-              class="h-full w-full object-cover outline outline-1 -outline-offset-1 outline-white/10"
+              class={styles.image}
               loading="lazy"
               onError={() => setImageFailed(true)}
             />
@@ -556,11 +533,9 @@ function EpisodeRow(props: {
         </Show>
       </div>
 
-      <div class="min-w-0 space-y-1.5">
-        <div class="flex flex-wrap items-center gap-2">
-          <span class="text-secondary text-[11px] leading-[16px] font-bold tracking-[0.08em] uppercase">
-            {props.label}
-          </span>
+      <div class={styles.episodeCopy}>
+        <div class={styles.episodeMeta}>
+          <span class={styles.episodeLabel}>{props.label}</span>
           <Show when={props.episode.played}>
             <StatusBadge variant="success">Played</StatusBadge>
           </Show>
@@ -568,35 +543,30 @@ function EpisodeRow(props: {
             <StatusBadge variant="success">Favorite</StatusBadge>
           </Show>
           <Show when={formatRuntime(props.episode.runtimeSeconds)}>
-            {(runtime) => (
-              <span class="text-on-surface-variant/70 text-[12px] leading-[16px]">{runtime()}</span>
-            )}
+            {(runtime) => <span class={styles.muted}>{runtime()}</span>}
           </Show>
           <Show when={hasResume()}>
-            <span class="text-on-surface-variant/70">·</span>
-            <span class="text-secondary text-[12px] leading-[16px] font-semibold tabular-nums">
+            <span class={styles.muted}>·</span>
+            <span class={styles.progressText}>
               {Math.round(props.episode.playedPercentage ?? 0)}% watched
             </span>
           </Show>
         </div>
-        <a
-          href={`/library/items/${props.episode.id}`}
-          class="text-on-surface block truncate text-[16px] leading-[24px] font-semibold hover:underline"
-        >
+        <a href={`/library/items/${props.episode.id}`} class={styles.episodeLink}>
           {props.episode.name}
         </a>
       </div>
 
-      <div class="flex shrink-0">
+      <div class={styles.actionCell}>
         <Button
           type="button"
           variant="primary"
-          class="rounded-full px-5 py-2 text-[14px] leading-[20px] font-semibold tracking-wide uppercase"
+          class={styles.episodeButton}
           disabled={props.disabled}
           onClick={props.onPlay}
           leadingIcon={
-            <Show when={props.busy} fallback={<Play class="h-4 w-4 fill-current" />}>
-              <RefreshCw class="h-4 w-4 animate-spin" />
+            <Show when={props.busy} fallback={<Play class={styles.playIcon} />}>
+              <RefreshCw class={`${styles.icon4} ${styles.spinner}`} />
             </Show>
           }
         >
@@ -609,25 +579,19 @@ function EpisodeRow(props: {
 
 function ShowDetailSkeleton() {
   return (
-    <article class="space-y-6" aria-hidden="true">
-      <div class="bg-surface-container-lowest/60 h-[clamp(280px,44vh,560px)] animate-pulse" />
-      <div class="mx-auto w-full max-w-[1400px] space-y-5 px-6 py-2 lg:px-10 xl:px-12">
-        <div class="space-y-2">
-          <div class="bg-surface-container-high/60 h-4 w-full max-w-[1100px] animate-pulse rounded" />
-          <div class="bg-surface-container-high/60 h-4 w-10/12 max-w-[900px] animate-pulse rounded" />
+    <article class={styles.stack} aria-hidden="true">
+      <div class={styles.skeletonHero} />
+      <div class={styles.skeletonContent}>
+        <div class={styles.sectionCompact}>
+          <div class={styles.skeletonLine} />
+          <div class={`${styles.skeletonLine} ${styles.skeletonLineShort}`} />
         </div>
-        <div class="flex flex-wrap gap-2">
-          <For each={[0, 1, 2]}>
-            {() => <div class="bg-surface-container-high/70 h-7 w-24 animate-pulse rounded-full" />}
-          </For>
+        <div class={styles.pillRow}>
+          <For each={[0, 1, 2]}>{() => <div class={styles.skeletonPill} />}</For>
         </div>
-        <div class="bg-surface-container-high/80 h-7 w-32 animate-pulse rounded-md" />
-        <div class="border-outline-variant bg-surface-container-low/70 flex gap-2 overflow-x-auto rounded-2xl border p-2">
-          <For each={[0, 1, 2]}>
-            {() => (
-              <div class="bg-surface-container-high/70 h-10 w-24 shrink-0 animate-pulse rounded-full" />
-            )}
-          </For>
+        <div class={styles.skeletonTitle} />
+        <div class={styles.seasonTabs}>
+          <For each={[0, 1, 2]}>{() => <div class={styles.skeletonPill} />}</For>
         </div>
         <SeasonEpisodesSkeleton />
       </div>
@@ -637,25 +601,21 @@ function ShowDetailSkeleton() {
 
 function SeasonEpisodesSkeleton() {
   return (
-    <section class="space-y-3" aria-hidden="true">
-      <div class="bg-surface-container-high/70 h-6 w-44 animate-pulse rounded-md" />
-      <div class="flex flex-col gap-3">
+    <section class={styles.sectionCompact} aria-hidden="true">
+      <div class={styles.skeletonTitle} />
+      <div class={styles.fadeList}>
         <For each={[0, 1, 2]}>
           {() => (
-            <Card
-              variant="filled"
-              surfaceTint={false}
-              class="grid grid-cols-1 items-center gap-4 !p-3 sm:grid-cols-[160px_1fr_auto] lg:grid-cols-[220px_1fr_auto]"
-            >
-              <div class="bg-surface-container-lowest/60 hidden aspect-video w-[160px] animate-pulse rounded-lg sm:block lg:w-[220px]" />
-              <div class="min-w-0 space-y-2">
-                <div class="flex flex-wrap items-center gap-2">
-                  <div class="bg-surface-container-high/70 h-3 w-14 animate-pulse rounded" />
-                  <div class="bg-surface-container-high/60 h-6 w-20 animate-pulse rounded-full" />
+            <Card variant="filled" surfaceTint={false} class={styles.episodeCard}>
+              <div class={styles.skeletonEpisodeImage} />
+              <div class={styles.episodeCopy}>
+                <div class={styles.episodeMeta}>
+                  <div class={styles.skeletonMiniLine} />
+                  <div class={styles.skeletonSmallPill} />
                 </div>
-                <div class="bg-surface-container-high/80 h-5 w-4/5 animate-pulse rounded" />
+                <div class={styles.skeletonEpisodeTitle} />
               </div>
-              <div class="bg-primary-container/40 h-10 w-24 animate-pulse rounded-full" />
+              <div class={styles.skeletonButton} />
             </Card>
           )}
         </For>

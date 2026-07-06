@@ -35,6 +35,9 @@ import { useToast } from './ToastProvider';
 import { Button, ConsoleContainer, ConsoleGrid, PageFooter } from './ui';
 import type { JellyPilotSelectItem } from './ui';
 
+import * as patterns from '../styles/patterns.css';
+import * as styles from './OperationsConsole.css';
+
 interface OperationsConsoleProps {
   onSignedOut: () => void;
 }
@@ -548,7 +551,7 @@ export default function OperationsConsole(props: OperationsConsoleProps) {
     <Provider>
       <ConsoleContainer>
         <ConsoleGrid>
-          <div class="space-y-6">
+          <div class={styles.stack}>
             <SavedServicesCard
               profiles={profiles()}
               activatingProfileKey={activatingProfileKey()}
@@ -566,7 +569,7 @@ export default function OperationsConsole(props: OperationsConsoleProps) {
               onRefresh={handleRefresh}
             />
 
-            <form class="space-y-6">
+            <form class={styles.stack}>
               <PlayerBridgeSettingsCard
                 form={form}
                 subtitleLanguageSelectItems={subtitleLanguageSelectItems}
@@ -585,7 +588,7 @@ export default function OperationsConsole(props: OperationsConsoleProps) {
             </form>
           </div>
 
-          <aside class="space-y-6">
+          <aside class={styles.stack}>
             <DiagnosticsCard />
 
             <LibrarySettingsCard
@@ -619,22 +622,22 @@ export default function OperationsConsole(props: OperationsConsoleProps) {
         unmountOnExit
       >
         <Portal mount={addServicePortalMount()}>
-          <Dialog.Backdrop class="fixed inset-0 z-60 bg-black/70 backdrop-blur-sm transition-[backdrop-filter,background-color,opacity] duration-300 data-[state=closed]:opacity-0 data-[state=open]:opacity-100" />
-          <Dialog.Positioner class="fixed inset-0 z-60 flex items-center justify-center overflow-y-auto p-4">
-            <Dialog.Content class="relative w-full max-w-3xl outline-none">
-              <Dialog.Title class="sr-only">Add saved service</Dialog.Title>
-              <Dialog.Description class="sr-only">
+          <Dialog.Backdrop class={styles.backdrop} />
+          <Dialog.Positioner class={`${styles.positioner} ${styles.positionerFill}`}>
+            <Dialog.Content class={styles.content}>
+              <Dialog.Title class={patterns.srOnly}>Add saved service</Dialog.Title>
+              <Dialog.Description class={patterns.srOnly}>
                 Log in to a Jellyfin or Emby service and save it for switching.
               </Dialog.Description>
               <Button
                 type="button"
                 variant="icon"
-                class="border-outline-variant bg-surface-container-high/80 text-on-surface-variant hover:border-secondary hover:text-secondary absolute top-4 right-4 z-10 rounded-xl border shadow-lg backdrop-blur"
+                class={styles.closeButton}
                 aria-label="Close add service"
                 title="Close add service"
                 onClick={() => setAddServiceOpen(false)}
               >
-                <X class="h-4.5 w-4.5" />
+                <X class={patterns.icon4_5} />
               </Button>
               <LoginPage embedded onConnected={handleAddServiceConnected} />
             </Dialog.Content>

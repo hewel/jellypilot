@@ -2,7 +2,7 @@
 
 JellyPilot uses a desktop-first Control Room design system: dark-only, clean OLED surfaces, selective cinematic glass, and clear operational state. The interface should feel like a reliable media companion for a Jellyfin Playback Target, not a generic mobile settings app.
 
-Use the typed vanilla-extract styling layer for new shared UI: design tokens in `src/styles/vars.css.ts`, atomic utilities from `src/styles/sprinkles.css.ts`, semantic component variants via Recipes, and component-local `.css.ts` files for complex CSS. Compose static vanilla-extract classes with `style([sprinkles(...), { ... }])` rather than manual `.join(' ')` strings; use Solid `classList` only for runtime conditional classes in `.tsx`. Tailwind remains available only as a migration bridge for existing page and feature callsites; do not add new shared primitive styling as Tailwind class strings. Reusable visual patterns are components under `src/components/ui`, not global `@layer` class APIs.
+Use the typed vanilla-extract styling layer for shared UI and application surfaces: design tokens in `src/styles/vars.css.ts`, atomic utilities from `src/styles/sprinkles.css.ts`, semantic component variants via Recipes, global styles, and component-local `.css.ts` files for complex CSS. Compose static vanilla-extract classes with `style([sprinkles(...), { ... }])` rather than manual `.join(' ')` strings; use Solid `classList` only for runtime conditional classes in `.tsx`. The former utility-CSS bridge is not installed. Reusable visual patterns are components under `src/components/ui`, not global `@layer` class APIs.
 
 ## Principles
 
@@ -14,9 +14,9 @@ Use the typed vanilla-extract styling layer for new shared UI: design tokens in 
 
 ## Color System
 
-All components use semantic tokens. The source of truth is the vanilla-extract contract in `src/styles/vars.css.ts`; Tailwind utility tokens (`text-primary`, `bg-surface`, etc.) are temporary aliases backed by that same contract while migration continues. `#4f46e5` is the JellyPilot brand seed and primary filled-action background; it is not used as small text on near-black surfaces because contrast is insufficient.
+All components use semantic tokens. The source of truth is the vanilla-extract contract in `src/styles/vars.css.ts`; Sprinkles, Recipes, and component-local CSS consume that contract directly. `#4f46e5` is the JellyPilot brand seed and primary filled-action background; it is not used as small text on near-black surfaces because contrast is insufficient.
 
-| Token | Tailwind Class | Hex | Usage |
+| Token | Former Utility Alias | Hex | Usage |
 |---|---|---:|---|
 | Primary | `text-primary`, `bg-primary` | `#4f46e5` | Primary filled actions, JellyPilot identity |
 | On Primary | `text-on-primary` | `#ffffff` | Text/icons on primary surfaces |
@@ -68,7 +68,7 @@ body { font-family: 'Inter Variable', ui-sans-serif, system-ui, sans-serif; }
 h1, h2, h3, .brand-type { font-family: 'Space Grotesk Variable', 'Inter Variable', ui-sans-serif, system-ui, sans-serif; }
 .code, .diagnostic-value { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; }
 ```
-Apply typography through Sprinkles, Recipes, or component-local vanilla-extract styles. The previous `text-display-*`, `text-headline-*`, `text-title-*`, `text-body-*`, `text-label-*` helper classes are gone; use the tokenized values below. Existing Tailwind callsites may remain until their owning component is migrated.
+Apply typography through Sprinkles, Recipes, or component-local vanilla-extract styles. The previous global helper classes are gone; use the tokenized values below.
 
 | Style | Atoms | Default color |
 |---|---|---|
@@ -172,7 +172,7 @@ Diagnostics are a user-facing support view, not a developer console. Use normal 
 - Visual: semantic color, background color, border color, border radius, box shadow, opacity, z-index.
 - Conditions: `base`, `sm`, `md`, `lg`, `xl`, `2xl`, `hover`, `focus`, `active`, `disabled`, and `dark` via `[data-theme='dark'] &`.
 
-Do not make Sprinkles parse class strings. Do not add arbitrary values as a public utility feature. Temporary `legacy*` values in Sprinkles exist only to migrate current Tailwind arbitrary values and should shrink as repeated patterns become semantic tokens or Recipes. Complex selectors, Ark `data-*` state styling, gradients, transforms, filters, animations, and one-off layout math belong in Recipes or component-local `style()` blocks.
+Do not make Sprinkles parse class strings. Do not add arbitrary values as a public utility feature. Temporary `legacy*` values in Sprinkles exist only to bridge current application needs and should shrink as repeated patterns become semantic tokens or Recipes. Complex selectors, Ark `data-*` state styling, gradients, transforms, filters, animations, and one-off layout math belong in Recipes or component-local `style()` blocks.
 
 When a component-local class needs both Sprinkles and complex CSS, use vanilla-extract style composition:
 

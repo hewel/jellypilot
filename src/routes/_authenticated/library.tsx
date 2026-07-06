@@ -13,6 +13,8 @@ import {
   runExit,
 } from '~effects/query';
 
+import * as styles from './library.css';
+
 export const Route = createFileRoute('/_authenticated/library')({
   component: LibraryLayoutRoute,
 });
@@ -46,7 +48,7 @@ function LibraryLayoutRoute() {
 
   return (
     <LibraryNavbarControlsProvider>
-      <div class="space-y-6">
+      <div class={styles.stack}>
         <Show when={showNavbar()}>
           <LibraryNavbar shortcuts={shortcuts()} activeValue={activeValue()} />
         </Show>

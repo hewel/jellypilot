@@ -47,8 +47,7 @@
     "@vanilla-extract/sprinkles": "^1.7.0",
     "effect": "^4.0.0-beta.84",
     "lucide-solid": "^1.20.0",
-    "solid-js": "^1.9.13",
-    "tailwindcss": "^4.3.1"
+    "solid-js": "^1.9.13"
   },
   "devDependencies": {
     "@effect/language-service": "^0.86.2",
@@ -56,7 +55,6 @@
     "@rsbuild/core": "^2.0.15",
     "@rsbuild/plugin-babel": "^1.2.1",
     "@rsbuild/plugin-solid": "^1.2.2",
-    "@rsbuild/plugin-tailwindcss": "^2.0.3",
     "@rsdoctor/rspack-plugin": "^1.5.15",
     "@rstest/core": "^0.10.5",
     "@tanstack/router-plugin": "^1.168.18",

@@ -12,7 +12,7 @@ Route incoming requests to the correct agent using these strict criteria:
 
 ## Stack
 
-- **Frontend**: Solid.js + TypeScript + Rsbuild + TanStack Router + TanStack Form + Ark UI + Tailwind + vanilla-extract
+- **Frontend**: Solid.js + TypeScript + Rsbuild + TanStack Router + TanStack Form + Ark UI + vanilla-extract
 - **Backend**: Rust (Tauri v2) with tauri-specta for type-safe bindings
 - **Data / Effects**: Effect-TS
 - **Tools**: Bun, Oxc (Oxlint/Oxfmt), Rstest (jsdom)
@@ -50,7 +50,7 @@ bun tauri build     # Production desktop build
 
 - **Solid.js**: Use the `solidjs` skill for all Solid-specific patterns.
 - **Forms**: Always use `@tanstack/solid-form` with `createForm` for form handling.
-- **Styling**: Tailwind for migration-era atomic styling; vanilla-extract for tokens (`src/styles/vars.css.ts`), Sprinkles (`src/styles/sprinkles.css.ts`), component Recipes, and complex CSS. Compose static vanilla-extract classes with `style([sprinkles(...), { ... }])`, not manual `.join(' ')` class strings. Component-owned classes live beside the component in `Component.css.ts`; do not collect unrelated UI component styles into a shared `styles.css.ts` barrel. No global `@layer components`; create or extend components in `src/components/ui`. Design system: `docs/design-system.md`.
+- **Styling**: Use vanilla-extract for tokens (`src/styles/vars.css.ts`), Sprinkles (`src/styles/sprinkles.css.ts`), component Recipes, global styles, and component-local CSS. The former utility-CSS bridge is not installed. Compose static vanilla-extract classes with `style([sprinkles(...), { ... }])`, not manual `.join(' ')` class strings. Component-owned classes live beside the component in `Component.css.ts`; do not collect unrelated UI component styles into a shared `styles.css.ts` barrel. No global `@layer components`; create or extend components in `src/components/ui`. Design system: `docs/design-system.md`.
 - **Solid classes**: Use `class` for static class strings and `classList` for conditional class maps. Do not add generic class-name merge helpers for Solid components.
 - **TypeScript / Effect**: All Effect rules live in [docs/agents/effect.md](docs/agents/effect.md). Read and follow it; do not duplicate them here.
 - **Route data loading**: Await only critical data; defer slow data as promises behind `<Suspense />` with stable skeletons. Follow [TanStack Router deferred data loading](https://tanstack.com/router/latest/docs/guide/deferred-data-loading).

@@ -17,6 +17,8 @@ import {
   runExit,
 } from '../../effects/query';
 
+import * as styles from './MediaInfoHoverCard.css';
+
 // Inlined (instead of importing from ./shared) to avoid a shared.tsx <-> card
 // Import cycle. Matches the formatRuntime shape used elsewhere.
 function formatRuntime(seconds: Option.Option<number>): Option.Option<string> {
@@ -52,53 +54,37 @@ export function MediaInfoContent(props: { detail: MediaDetail }) {
   const overviewText = () => Option.getOrElse(props.detail.overview, () => null);
 
   return (
-    <div class="space-y-2">
-      <p class="text-on-surface line-clamp-2 text-[14px] leading-[20px] font-semibold">
-        {props.detail.name}
-      </p>
+    <div class={styles.content}>
+      <p class={styles.title}>{props.detail.name}</p>
       <Show when={meta()}>
-        <p class="text-on-surface-variant text-[12px] leading-[16px] font-bold tracking-[0.05em] uppercase tabular-nums">
-          {meta()}
-        </p>
+        <p class={styles.meta}>{meta()}</p>
       </Show>
       <Show when={props.detail.genres.length > 0}>
-        <div class="flex flex-wrap gap-1">
+        <div class={styles.genres}>
           <For each={props.detail.genres}>
-            {(genre) => (
-              <span class="bg-surface-container-highest/70 text-on-surface-variant rounded-full px-2 py-0.5 text-[11px] leading-[16px] font-bold tracking-[0.08em] uppercase">
-                {genre}
-              </span>
-            )}
+            {(genre) => <span class={styles.genre}>{genre}</span>}
           </For>
         </div>
       </Show>
-      <Show when={overviewText()}>
-        {(overview) => (
-          <p class="text-on-surface-variant/90 line-clamp-3 text-[12px] leading-[16px]">
-            {overview()}
-          </p>
-        )}
-      </Show>
+      <Show when={overviewText()}>{(overview) => <p class={styles.overview}>{overview()}</p>}</Show>
       <Show when={Option.isSome(props.detail.playedPercentage)}>
         <div>
-          <div class="bg-surface-container-highest/70 h-1 w-full overflow-hidden rounded-full">
-            <div class="bg-secondary h-full" style={{ width: `${resumePct()}%` }} />
+          <div class={styles.progressTrack}>
+            <div class={styles.progressBar} style={{ width: `${resumePct()}%` }} />
           </div>
-          <p class="text-on-surface-variant mt-1 text-[11px] leading-[16px] font-bold tracking-[0.08em] uppercase tabular-nums">
-            {Math.round(resumePct())}% watched
-          </p>
+          <p class={styles.watchedText}>{Math.round(resumePct())}% watched</p>
         </div>
       </Show>
       <Show when={props.detail.played || props.detail.favorite}>
-        <div class="text-on-surface-variant flex flex-wrap gap-3 pt-0.5 text-[12px] leading-[16px] font-bold tracking-[0.05em] uppercase">
+        <div class={styles.states}>
           <Show when={props.detail.played}>
-            <span class="text-tertiary flex items-center gap-1">
-              <Check class="h-3.5 w-3.5" /> Played
+            <span class={`${styles.state} ${styles.played}`}>
+              <Check class={styles.icon} /> Played
             </span>
           </Show>
           <Show when={props.detail.favorite}>
-            <span class="text-secondary flex items-center gap-1">
-              <Heart class="h-3.5 w-3.5" /> Favorite
+            <span class={`${styles.state} ${styles.favorite}`}>
+              <Heart class={styles.icon} /> Favorite
             </span>
           </Show>
         </div>
@@ -140,15 +126,15 @@ export function MediaInfoHoverCard(props: { id: string; itemType: string; childr
       />
       <Portal>
         <HoverCard.Positioner>
-          <HoverCard.Content class="border-outline-variant bg-surface-container-lowest z-100 w-80 max-w-[min(90vw,24rem)] rounded-2xl border p-4 shadow-2xl backdrop-blur-md">
+          <HoverCard.Content class={styles.popover}>
             <Show
               when={
                 !(detailQuery.isPending || (detailQuery.isFetching && !detailQuery.data)) &&
                 detailQuery.data
               }
               fallback={
-                <div class="text-on-surface-variant flex items-center justify-center gap-2 py-3 text-[12px] leading-[16px] font-bold tracking-[0.05em] uppercase">
-                  <LoaderCircle class="h-4 w-4 animate-spin" />
+                <div class={styles.loading}>
+                  <LoaderCircle class={styles.spinner} />
                   <span>Loading…</span>
                 </div>
               }
@@ -156,7 +142,7 @@ export function MediaInfoHoverCard(props: { id: string; itemType: string; childr
               {(exit) =>
                 Exit.match(exit(), {
                   onFailure: (cause) => (
-                    <p class="text-error/90 py-2 text-center text-[12px] leading-[16px] font-bold tracking-[0.05em] uppercase">
+                    <p class={styles.error}>
                       {commandFailureMessage(cause, 'Could not load detail')}
                     </p>
                   ),

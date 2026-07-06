@@ -4,7 +4,9 @@ import { Show, createEffect, createSignal } from 'solid-js';
 import type { VideoHomeItem, VideoLibraryItem, VideoLibraryKind } from '../../bindings';
 import { imageSource } from '../../utils/imageSource';
 
-export type VideoCardAspectClass = 'aspect-[2/3]' | 'aspect-video';
+import * as styles from './VideoCard.css';
+
+export type VideoCardAspectClass = 'poster' | 'video';
 
 export type VideoCardProps =
   | {
@@ -31,13 +33,13 @@ export function VideoCard(props: VideoCardProps) {
       return props.aspectClass;
     }
     if (props.loading) {
-      return 'aspect-[2/3]';
+      return 'poster';
     }
     return props.collectionType === 'tvshows' ||
       props.item.itemType === 'Series' ||
       props.item.itemType === 'Movie'
-      ? 'aspect-[2/3]'
-      : 'aspect-video';
+      ? 'poster'
+      : 'video';
   };
 
   if (props.loading) {
@@ -87,20 +89,17 @@ export function VideoCard(props: VideoCardProps) {
   });
 
   return (
-    <a
-      href={href()}
-      aria-label={cardAriaLabel()}
-      class="border-outline-variant/80 bg-surface/50 focus-visible:ring-secondary/70 hover:border-primary/50 block overflow-hidden rounded-2xl border bg-[linear-gradient(135deg,rgba(21,24,35,0.5)_0%,rgba(11,13,20,0.7)_100%)] p-0! shadow-xl backdrop-blur-md transition-[background-color,border-color,box-shadow] duration-300 focus-visible:ring-2 focus-visible:outline-none active:scale-[0.96]"
-    >
-      <div
-        class={`${aspectClass()} border-outline-variant bg-surface-container-lowest/60 relative overflow-hidden border-b`}
-      >
+    <a href={href()} aria-label={cardAriaLabel()} class={styles.card}>
+      <div class={`${styles.artwork} ${styles.aspect[aspectClass()]}`}>
         <Show
           when={!imageFailed() ? artworkImageId() : null}
           fallback={
-            <div class="text-on-surface-variant flex h-full flex-col items-center justify-center gap-2 px-4 text-center text-[11px] leading-4 font-bold tracking-[0.08em] uppercase">
-              <Show when={usesTvIcon()} fallback={<Film class="h-5 w-5" aria-hidden="true" />}>
-                <Tv class="h-5 w-5" aria-hidden="true" />
+            <div class={styles.fallback}>
+              <Show
+                when={usesTvIcon()}
+                fallback={<Film class={styles.fallbackIcon} aria-hidden="true" />}
+              >
+                <Tv class={styles.fallbackIcon} aria-hidden="true" />
               </Show>
               <span>No artwork</span>
             </div>
@@ -110,35 +109,26 @@ export function VideoCard(props: VideoCardProps) {
             <img
               src={imageSource(imageId())}
               alt={`${props.item.name} artwork`}
-              class="h-full w-full object-cover outline -outline-offset-1 outline-white/10"
+              class={styles.image}
               loading="lazy"
               onError={() => setImageFailed(true)}
             />
           )}
         </Show>
         <Show when={props.item.favorite}>
-          <span
-            class="bg-secondary text-on-secondary absolute top-2 right-2 inline-flex h-7 w-7 items-center justify-center rounded-full shadow-lg"
-            aria-hidden="true"
-          >
-            <Heart class="h-4 w-4" fill="currentColor" aria-hidden="true" />
+          <span class={styles.favoriteBadge} aria-hidden="true">
+            <Heart class={styles.favoriteIcon} fill="currentColor" aria-hidden="true" />
           </span>
         </Show>
       </div>
-      <div class="flex items-center gap-2 px-4 pt-2 pb-3">
-        <div class="min-w-0 flex-1 space-y-1">
-          <p class="text-on-surface line-clamp-1 text-[16px] leading-6 font-semibold">
-            {props.item.name}
-          </p>
-          <p class="text-on-surface-variant/80 text-[12px] leading-4">{subtitle()}</p>
+      <div class={styles.body}>
+        <div class={styles.copy}>
+          <p class={styles.title}>{props.item.name}</p>
+          <p class={styles.subtitle}>{subtitle()}</p>
         </div>
         <Show when={props.item.played}>
-          <span
-            class="text-tertiary inline-flex h-5 w-5 shrink-0 items-center justify-center"
-            role="img"
-            aria-label="Played"
-          >
-            <Check class="h-4 w-4" aria-hidden="true" />
+          <span class={styles.playedBadge} role="img" aria-label="Played">
+            <Check class={styles.playedIcon} aria-hidden="true" />
           </span>
         </Show>
       </div>
@@ -148,16 +138,11 @@ export function VideoCard(props: VideoCardProps) {
 
 function VideoCardSkeleton(props: { aspectClass: VideoCardAspectClass }) {
   return (
-    <div
-      class="border-outline-variant/80 bg-surface/50 block overflow-hidden rounded-2xl border bg-[linear-gradient(135deg,rgba(21,24,35,0.5)_0%,rgba(11,13,20,0.7)_100%)] p-0! shadow-xl backdrop-blur-md"
-      aria-hidden="true"
-    >
-      <div
-        class={`${props.aspectClass} border-outline-variant bg-surface-container-lowest/60 animate-pulse border-b`}
-      />
-      <div class="space-y-2 px-4 pt-2 pb-3">
-        <div class="bg-surface-container-high/80 h-4 w-4/5 animate-pulse rounded" />
-        <div class="bg-surface-container-high/60 h-3 w-3/5 animate-pulse rounded" />
+    <div class={styles.card} aria-hidden="true">
+      <div class={`${styles.artwork} ${styles.aspect[props.aspectClass]} ${styles.skeleton}`} />
+      <div class={styles.skeletonBody}>
+        <div class={styles.skeletonTitle} />
+        <div class={styles.skeletonSubtitle} />
       </div>
     </div>
   );

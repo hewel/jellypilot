@@ -26,6 +26,9 @@ import { queryKeys, runExit } from '../effects/query';
 import { useToast } from './ToastProvider';
 import { Button, Card, JellyPilotSelect, StatusBadge } from './ui';
 
+import * as patterns from '../styles/patterns.css';
+import * as styles from './NowPlayingCard.css';
+
 function formatTime(seconds: number): string {
   if (!Number.isFinite(seconds) || seconds <= 0) {
     return '0:00';
@@ -62,9 +65,7 @@ const statusVariant = Match.type<NowPlayingState['status']>().pipe(
 );
 
 const contextualIconClass = (visible: boolean, extra = '') =>
-  `${extra} absolute h-5 w-5 transition-[filter,opacity,transform] duration-200 ease-[cubic-bezier(0.2,0,0,1)] ${
-    visible ? 'scale-100 opacity-100 blur-0' : 'scale-[0.25] opacity-0 blur-[4px]'
-  }`;
+  `${styles.contextualIcon} ${visible ? styles.iconVisible : styles.iconHidden} ${extra}`;
 
 export default function NowPlayingCard(props: {
   jellyfinConnected: boolean;
@@ -213,66 +214,55 @@ export default function NowPlayingCard(props: {
   };
 
   const inner = (
-    <div class={props.bare ? 'space-y-5' : 'group/card relative space-y-6 overflow-hidden'}>
-      {!props.bare && (
-        <div class="from-primary/5 to-secondary/5 pointer-events-none absolute inset-0 bg-gradient-to-r opacity-0 transition-opacity duration-500 group-hover/card:opacity-100" />
-      )}
+    <div class={props.bare ? styles.bareRoot : styles.root}>
+      {!props.bare && <div class={styles.hoverGlow} />}
 
-      <div class="relative z-10">
+      <div class={styles.header}>
         <div
-          class="space-y-1"
+          class={styles.headerCopy}
           classList={{
-            'pr-36': props.bare,
-            'max-w-[70%]': !props.bare,
+            [styles.headerBare]: props.bare,
+            [styles.headerFramed]: !props.bare,
           }}
         >
-          {!props.bare && (
-            <p class="text-secondary text-[11px] leading-[16px] font-bold tracking-[0.08em] uppercase">
-              Now Playing
-            </p>
-          )}
-          <div class="flex items-center gap-3">
+          {!props.bare && <p class={styles.eyebrow}>Now Playing</p>}
+          <div class={styles.titleRow}>
             <h2
               id="now-playing-title"
-              class={`font-display text-on-surface truncate pr-2 font-bold tracking-tight ${props.bare ? 'text-[20px] leading-[28px]' : 'text-[24px] leading-[32px]'}`}
+              class={styles.title}
+              classList={{
+                [styles.titleBare]: props.bare,
+                [styles.titleFramed]: !props.bare,
+              }}
             >
               {mediaTitle()}
             </h2>
             <Show when={current()?.status === 'playing'}>
-              <div
-                class="flex h-6 w-8 shrink-0 items-end gap-1.5 pb-1 select-none"
-                aria-hidden="true"
-                title="Playing stream"
-              >
-                <span class="bg-primary h-full w-1.5 origin-bottom animate-[wave-bounce_0.8s_ease-in-out_infinite_alternate] rounded-full will-change-transform" />
-                <span class="bg-secondary h-full w-1.5 origin-bottom animate-[wave-bounce_0.6s_ease-in-out_infinite_alternate] rounded-full will-change-transform [animation-delay:0.15s]" />
-                <span class="bg-primary h-full w-1.5 origin-bottom animate-[wave-bounce_0.9s_ease-in-out_infinite_alternate] rounded-full will-change-transform [animation-delay:0.3s]" />
-                <span class="bg-secondary h-full w-1.5 origin-bottom animate-[wave-bounce_0.7s_ease-in-out_infinite_alternate] rounded-full will-change-transform [animation-delay:0.45s]" />
+              <div class={styles.equalizer} aria-hidden="true" title="Playing stream">
+                <span class={`${styles.waveBar} ${styles.wavePrimary} ${styles.waveTiming.a}`} />
+                <span class={`${styles.waveBar} ${styles.waveSecondary} ${styles.waveTiming.b}`} />
+                <span class={`${styles.waveBar} ${styles.wavePrimary} ${styles.waveTiming.c}`} />
+                <span class={`${styles.waveBar} ${styles.waveSecondary} ${styles.waveTiming.d}`} />
               </div>
             </Show>
           </div>
-          <p class="text-on-surface-variant text-[14px] leading-[20px] font-medium">
-            {mediaSubtitle()}
-          </p>
+          <p class={styles.subtitle}>{mediaSubtitle()}</p>
         </div>
-        <div class="absolute top-0 right-0">
+        <div class={styles.badgePlacement}>
           <StatusBadge variant={statusVariant(current()?.status ?? 'unknown')}>
             {statusLabel(current()?.status ?? 'unknown')}
           </StatusBadge>
         </div>
       </div>
 
-      <div class="border-outline-variant bg-surface-container-lowest/50 relative z-10 rounded-3xl border p-4 shadow-inner backdrop-blur-sm">
-        <div class="text-on-surface-variant mb-2.5 flex items-center justify-between font-mono text-[11px] font-semibold tabular-nums">
+      <div class={styles.panel}>
+        <div class={styles.timeRow}>
           <span>{formatTime(seekValue())}</span>
           <span>
             {activeTimeline() ? formatTime(player()?.duration ?? 0) : 'Timeline unavailable'}
           </span>
         </div>
-        <Show
-          when={activeTimeline()}
-          fallback={<div class="bg-surface-container-high/60 h-2 rounded-full" />}
-        >
+        <Show when={activeTimeline()} fallback={<div class={styles.emptyTrack} />}>
           <Slider.Root
             aria-label={['Seek position']}
             min={0}
@@ -281,16 +271,13 @@ export default function NowPlayingCard(props: {
             disabled={!activeTimeline() || !canControlPlayback() || busy() !== null}
             onValueChange={(details) => setSeekDraft(details.value[0] ?? 0)}
             onValueChangeEnd={(details) => commitSeek(details.value[0] ?? 0)}
-            class="flex w-full flex-col gap-2.5 disabled:opacity-50"
+            class={styles.sliderRoot}
           >
-            <Slider.Control class="relative flex h-10 cursor-pointer items-center">
-              <Slider.Track class="bg-surface-container-highest/80 border-outline-variant/30 h-2.5 flex-1 overflow-hidden rounded-full border">
-                <Slider.Range class="from-primary to-primary-gradient-end h-full rounded-full bg-gradient-to-r shadow-[0_0_10px_rgba(79,70,229,0.35)] transition-[width,transform] duration-150" />
+            <Slider.Control class={styles.sliderControl}>
+              <Slider.Track class={styles.sliderTrack}>
+                <Slider.Range class={`${styles.sliderRange} ${styles.primaryRange}`} />
               </Slider.Track>
-              <Slider.Thumb
-                index={0}
-                class="border-surface-container-lowest bg-on-surface data-[focus-visible]:ring-primary/50 flex h-5.5 w-5.5 cursor-grab items-center justify-center rounded-full border-2 shadow-lg shadow-black/50 transition-[box-shadow,transform] duration-200 outline-none hover:scale-110 hover:shadow-[0_0_12px_rgba(255,255,255,0.4)] active:cursor-grabbing data-[focus-visible]:ring-2"
-              >
+              <Slider.Thumb index={0} class={styles.thumb}>
                 <Slider.HiddenInput />
               </Slider.Thumb>
             </Slider.Control>
@@ -299,12 +286,16 @@ export default function NowPlayingCard(props: {
       </div>
 
       <div
-        class={`relative z-10 flex items-center gap-3 ${props.bare ? 'justify-center' : 'flex-wrap gap-4'}`}
+        class={styles.controls}
+        classList={{
+          [styles.controlsBare]: props.bare,
+          [styles.controlsFramed]: !props.bare,
+        }}
       >
         <Button
           type="button"
           variant="icon"
-          class="border-outline-variant/60 bg-surface-container-high/30 hover:border-secondary hover:text-secondary hover:bg-secondary/5 rounded-full border"
+          class={styles.iconButton}
           aria-label="Previous episode"
           title={
             current()?.canPlayPrevious
@@ -316,12 +307,12 @@ export default function NowPlayingCard(props: {
             void runCommand('previous', playPreviousEpisode, 'Could not play previous episode')
           }
         >
-          <SkipBack class="h-5 w-5" />
+          <SkipBack class={patterns.icon5} />
         </Button>
         <Button
           type="button"
           variant="primary"
-          class="relative min-w-32 overflow-hidden rounded-full"
+          class={styles.playPauseButton}
           disabled={!canControlPlayback() || busy() !== null}
           onClick={() =>
             void runCommand(
@@ -331,36 +322,28 @@ export default function NowPlayingCard(props: {
             )
           }
         >
-          <span class="relative inline-grid h-5 w-5 place-items-center">
-            <Play
-              class={contextualIconClass(
-                player()?.paused ?? true,
-                'drop-shadow-[0_2px_4px_rgba(0,0,0,0.3)]',
-              )}
-            />
+          <span class={styles.iconSlot}>
+            <Play class={contextualIconClass(player()?.paused ?? true, styles.iconDropShadow)} />
             <Pause
-              class={contextualIconClass(
-                !(player()?.paused ?? true),
-                'drop-shadow-[0_2px_4px_rgba(0,0,0,0.3)]',
-              )}
+              class={contextualIconClass(!(player()?.paused ?? true), styles.iconDropShadow)}
             />
           </span>
-          <span class="font-bold tracking-wide">{player()?.paused ? 'Play' : 'Pause'}</span>
+          <span class={styles.actionLabel}>{player()?.paused ? 'Play' : 'Pause'}</span>
         </Button>
         <Button
           type="button"
           variant="icon"
-          class="border-outline-variant/60 bg-surface-container-high/30 hover:border-error hover:text-error hover:bg-error/5 rounded-full border"
+          class={`${styles.iconButton} ${styles.stopButton}`}
           aria-label="Stop playback"
           disabled={!canControlPlayback() || busy() !== null}
           onClick={() => void runCommand('stop', stopMpv, 'Could not stop MPV')}
         >
-          <Square class="h-4 w-4 fill-current" />
+          <Square class={styles.squareIcon} />
         </Button>
         <Button
           type="button"
           variant="icon"
-          class="border-outline-variant/60 bg-surface-container-high/30 hover:border-secondary hover:text-secondary hover:bg-secondary/5 rounded-full border"
+          class={styles.iconButton}
           aria-label="Next episode"
           title={
             current()?.canPlayNext
@@ -370,29 +353,27 @@ export default function NowPlayingCard(props: {
           disabled={!current()?.canPlayNext || busy() !== null}
           onClick={() => void runCommand('next', playNextEpisode, 'Could not play next episode')}
         >
-          <SkipForward class="h-5 w-5" />
+          <SkipForward class={patterns.icon5} />
         </Button>
         <Show when={current()?.status === 'offline' && !connected()}>
           <Button
             type="button"
             variant="secondary"
-            class="rounded-full"
+            class={styles.pillButton}
             disabled={!props.jellyfinConnected || busy() !== null}
             onClick={() =>
               void runCommand('start', startMpv, 'Could not start MPV').then(() =>
                 props.onPlayerStarted?.(),
               )
             }
-            leadingIcon={<Play class="h-4.5 w-4.5 fill-current" />}
+            leadingIcon={<Play class={styles.playIcon} />}
           >
             {props.jellyfinConnected ? 'Start MPV' : 'Reconnect Jellyfin first'}
           </Button>
         </Show>
       </div>
 
-      <div
-        class={`border-outline-variant bg-surface-container-lowest/50 relative grid gap-3 rounded-3xl border p-4 shadow-inner backdrop-blur-sm ${props.bare ? '' : 'sm:grid-cols-2'}`}
-      >
+      <div class={styles.selectPanel}>
         <JellyPilotSelect
           label="Audio"
           items={audioTrackItems()}
@@ -415,20 +396,18 @@ export default function NowPlayingCard(props: {
         />
       </div>
 
-      <div
-        class={`border-outline-variant bg-surface-container-lowest/50 relative flex items-center gap-3 rounded-3xl border p-4 shadow-inner backdrop-blur-sm ${props.bare ? '' : 'flex-col sm:flex-row'}`}
-      >
+      <div class={styles.volumePanel}>
         <Button
           type="button"
           variant="icon"
-          class="hover:bg-secondary/15 hover:text-secondary hover:border-secondary/20 shrink-0 rounded-xl border border-transparent"
+          class={styles.muteButton}
           aria-label={muted() ? 'Unmute' : 'Mute'}
           disabled={!connected() || busy() !== null}
           onClick={() => void runCommand('mute', toggleMute, 'Could not toggle mute')}
         >
-          <span class="relative inline-grid h-5 w-5 place-items-center">
-            <Volume2 class={contextualIconClass(connected() && !muted(), 'text-secondary')} />
-            <VolumeX class={contextualIconClass(!connected() || muted(), 'text-error')} />
+          <span class={styles.iconSlot}>
+            <Volume2 class={contextualIconClass(connected() && !muted(), styles.secondaryIcon)} />
+            <VolumeX class={contextualIconClass(!connected() || muted(), styles.errorIcon)} />
           </span>
         </Button>
         <Slider.Root
@@ -439,23 +418,18 @@ export default function NowPlayingCard(props: {
           disabled={!connected() || busy() !== null}
           onValueChange={(details) => setVolumeDraft(details.value[0] ?? 100)}
           onValueChangeEnd={(details) => commitVolume(details.value[0] ?? 100)}
-          class="flex w-full flex-1 flex-col gap-2.5 disabled:opacity-50"
+          class={styles.sliderRoot}
         >
-          <Slider.Control class="relative flex h-10 cursor-pointer items-center">
-            <Slider.Track class="bg-surface-container-highest/80 border-outline-variant/30 h-2.5 flex-1 overflow-hidden rounded-full border">
-              <Slider.Range class="from-secondary to-primary h-full rounded-full bg-gradient-to-r shadow-[0_0_8px_rgba(129,140,248,0.4)] transition-[width,transform] duration-150" />
+          <Slider.Control class={styles.sliderControl}>
+            <Slider.Track class={styles.sliderTrack}>
+              <Slider.Range class={`${styles.sliderRange} ${styles.secondaryRange}`} />
             </Slider.Track>
-            <Slider.Thumb
-              index={0}
-              class="border-surface-container-lowest bg-on-surface data-[focus-visible]:ring-primary/50 flex h-5.5 w-5.5 cursor-grab items-center justify-center rounded-full border-2 shadow-lg shadow-black/50 transition-[box-shadow,transform] duration-200 outline-none hover:scale-110 hover:shadow-[0_0_12px_rgba(255,255,255,0.4)] active:cursor-grabbing data-[focus-visible]:ring-2"
-            >
+            <Slider.Thumb index={0} class={styles.thumb}>
               <Slider.HiddenInput />
             </Slider.Thumb>
           </Slider.Control>
         </Slider.Root>
-        <span class="text-secondary w-12 text-right font-mono text-[13px] font-semibold tabular-nums drop-shadow-[0_0_6px_rgba(129,140,248,0.15)]">
-          {Math.round(volumeValue())}%
-        </span>
+        <span class={styles.volumeValue}>{Math.round(volumeValue())}%</span>
       </div>
     </div>
   );
@@ -465,12 +439,7 @@ export default function NowPlayingCard(props: {
   }
 
   return (
-    <Card
-      as="section"
-      variant="elevated"
-      class="group/card relative space-y-6 overflow-hidden"
-      aria-labelledby="now-playing-title"
-    >
+    <Card as="section" variant="elevated" class={styles.card} aria-labelledby="now-playing-title">
       {inner}
     </Card>
   );

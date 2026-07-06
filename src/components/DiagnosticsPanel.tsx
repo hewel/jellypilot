@@ -4,6 +4,8 @@ import { For, Show, createEffect, createSignal, onCleanup, onMount } from 'solid
 
 import { Button } from './ui';
 
+import * as styles from './DiagnosticsPanel.css';
+
 interface BackendLogEntry {
   level: number;
   message: string;
@@ -11,8 +13,7 @@ interface BackendLogEntry {
 
 interface DiagnosticEntry {
   levelName: string;
-  levelClass: string;
-  badgeClass: string;
+  levelTone: keyof typeof LOG_LEVEL_TONE_CLASS;
   message: string;
   time: string;
 }
@@ -23,34 +24,35 @@ interface DiagnosticsPanelProps {
 
 const MAX_DIAGNOSTICS = 200;
 
-const LOG_LEVEL: Record<number, { name: string; color: string; badge: string }> = {
+const LOG_LEVEL_TONE_CLASS = {
+  debug: styles.badgeDebug,
+  error: styles.badgeError,
+  info: styles.badgeInfo,
+  trace: styles.badgeTrace,
+  unknown: styles.badgeDebug,
+  warn: styles.badgeWarn,
+} as const;
+
+const LOG_LEVEL: Record<number, { name: string; tone: keyof typeof LOG_LEVEL_TONE_CLASS }> = {
   1: {
-    badge: 'bg-surface-container-highest border-outline-variant/40 text-outline',
-    color: 'text-outline',
     name: 'TRACE',
+    tone: 'trace',
   },
   2: {
-    badge: 'bg-surface-container-highest border-outline/30 text-on-surface-variant',
-    color: 'text-on-surface-variant',
     name: 'DEBUG',
+    tone: 'debug',
   },
   3: {
-    badge:
-      'bg-secondary-container/30 border-secondary/30 text-secondary shadow-[0_0_6px_rgba(129,140,248,0.1)]',
-    color: 'text-secondary',
     name: 'INFO',
+    tone: 'info',
   },
   4: {
-    badge:
-      'bg-warning-container/30 border-warning/30 text-warning shadow-[0_0_6px_rgba(246,199,104,0.1)]',
-    color: 'text-warning',
     name: 'WARN',
+    tone: 'warn',
   },
   5: {
-    badge:
-      'bg-error-container/30 border-error/30 text-error shadow-[0_0_6px_rgba(255,107,122,0.1)]',
-    color: 'text-error',
     name: 'ERROR',
+    tone: 'error',
   },
 };
 
@@ -75,15 +77,13 @@ function sanitizeDiagnosticMessage(message: string) {
 
 function toDiagnosticEntry(entry: BackendLogEntry): DiagnosticEntry {
   const level = LOG_LEVEL[entry.level] ?? {
-    badge: 'bg-surface-container-highest text-on-surface-variant',
-    color: 'text-on-surface-variant',
     name: 'UNKNOWN',
+    tone: 'unknown' as const,
   };
 
   return {
-    badgeClass: level.badge,
-    levelClass: level.color,
     levelName: level.name,
+    levelTone: level.tone,
     message: sanitizeDiagnosticMessage(entry.message),
     time: formatDiagnosticTime(new Date()),
   };
@@ -143,23 +143,19 @@ export default function DiagnosticsPanel(props: DiagnosticsPanelProps) {
   };
 
   return (
-    <div class="space-y-4">
-      <div class="flex items-center justify-between gap-3 px-1">
-        <p class="text-on-surface-variant/80 font-mono text-[11px] font-semibold tabular-nums">
-          {diagnostics().length} sanitized runtime events
-        </p>
+    <div class={styles.root}>
+      <div class={styles.header}>
+        <p class={styles.count}>{diagnostics().length} sanitized runtime events</p>
         <Show when={!props.compact}>
           <Checkbox.Root
             checked={autoScroll()}
             onCheckedChange={(details) => setAutoScroll(details.checked === true)}
-            class="text-on-surface-variant/95 inline-flex cursor-pointer items-center gap-2.5 align-top text-[11px] leading-[16px] font-bold tracking-[0.08em] uppercase transition-opacity select-none disabled:cursor-not-allowed disabled:opacity-50"
+            class={styles.checkboxRoot}
           >
-            <Checkbox.Control class="border-outline bg-surface-container-high text-on-primary hover:border-primary/60 data-[state=checked]:border-primary data-[state=checked]:from-primary data-[state=checked]:to-primary-gradient-end data-[state=indeterminate]:border-primary data-[state=indeterminate]:from-primary data-[state=indeterminate]:to-primary-gradient-end data-[focus-visible]:ring-primary/50 data-[focus-visible]:ring-offset-background inline-flex h-5.5 w-5.5 shrink-0 items-center justify-center rounded-lg border text-[11px] leading-none transition-[background-color,border-color,box-shadow] duration-200 data-[focus-visible]:ring-2 data-[focus-visible]:ring-offset-2 data-[focus-visible]:outline-none data-[state=checked]:bg-gradient-to-br data-[state=indeterminate]:bg-gradient-to-br">
-              <Checkbox.Indicator class="flex items-center justify-center font-black">
-                ✓
-              </Checkbox.Indicator>
+            <Checkbox.Control class={styles.checkbox}>
+              <Checkbox.Indicator class={styles.indicator}>✓</Checkbox.Indicator>
             </Checkbox.Control>
-            <Checkbox.Label class="cursor-pointer select-none">Auto-scroll</Checkbox.Label>
+            <Checkbox.Label class={styles.checkboxLabel}>Auto-scroll</Checkbox.Label>
             <Checkbox.HiddenInput />
           </Checkbox.Root>
         </Show>
@@ -167,27 +163,29 @@ export default function DiagnosticsPanel(props: DiagnosticsPanelProps) {
 
       <div
         ref={containerRef}
-        class={`${props.compact ? 'max-h-56' : 'max-h-96'} border-outline-variant bg-surface-container-lowest/60 space-y-2.5 overflow-y-auto rounded-2xl border p-3 shadow-inner backdrop-blur-sm`}
+        class={styles.log}
+        classList={{
+          [styles.compactLog]: props.compact,
+          [styles.expandedLog]: !props.compact,
+        }}
       >
         <Show
           when={visibleEntries().length > 0}
           fallback={
-            <p class="text-on-surface-variant/60 py-10 text-center font-mono text-[12px] leading-[16px]">
+            <p class={styles.empty}>
               No diagnostics yet. Runtime events from the Rust backend will appear here.
             </p>
           }
         >
           <For each={visibleEntries()}>
             {(entry) => (
-              <div class="border-outline-variant/40 bg-surface-container-lowest/70 text-on-surface-variant hover:bg-surface-container-lowest/90 hover:border-outline-variant/60 relative overflow-hidden rounded-xl border px-3.5 py-2 font-mono text-[12px] leading-5 transition-colors">
-                <div class="relative z-10 flex flex-wrap items-center gap-x-3 gap-y-1.5">
-                  <span class="text-outline font-semibold select-none">{entry.time}</span>
-                  <span
-                    class={`rounded border px-2 py-0.5 text-[10px] font-bold tracking-wider select-none ${entry.badgeClass}`}
-                  >
+              <div class={styles.entry}>
+                <div class={styles.entryInner}>
+                  <span class={styles.time}>{entry.time}</span>
+                  <span class={`${styles.badge} ${LOG_LEVEL_TONE_CLASS[entry.levelTone]}`}>
                     {entry.levelName}
                   </span>
-                  <span class="text-on-surface-variant font-medium break-all">{entry.message}</span>
+                  <span class={styles.message}>{entry.message}</span>
                 </div>
               </div>
             )}
@@ -195,12 +193,16 @@ export default function DiagnosticsPanel(props: DiagnosticsPanelProps) {
         </Show>
       </div>
 
-      <div class="flex flex-wrap items-center justify-end gap-3 px-1">
+      <div class={styles.actions}>
         <Show when={copyStatus() !== 'idle'}>
           <span
             role="status"
             aria-live="polite"
-            class={`text-[11px] leading-[16px] font-bold tracking-[0.08em] uppercase ${copyStatus() === 'copied' ? 'text-tertiary drop-shadow-[0_0_6px_rgba(79,227,177,0.2)]' : 'text-error'}`}
+            class={styles.status}
+            classList={{
+              [styles.statusCopied]: copyStatus() === 'copied',
+              [styles.statusFailed]: copyStatus() !== 'copied',
+            }}
           >
             {copyStatus() === 'copied' ? 'Copied' : 'Copy failed'}
           </span>
@@ -211,7 +213,7 @@ export default function DiagnosticsPanel(props: DiagnosticsPanelProps) {
           disabled={diagnostics().length === 0}
           variant="text"
           size="sm"
-          class="border-outline-variant hover:border-secondary hover:bg-secondary/5 text-on-surface-variant/90 rounded-xl border text-[11px] leading-[16px] font-bold tracking-[0.08em] uppercase"
+          class={styles.actionButton}
         >
           Copy diagnostics
         </Button>
@@ -220,7 +222,7 @@ export default function DiagnosticsPanel(props: DiagnosticsPanelProps) {
           onClick={clearDiagnostics}
           variant="text"
           size="sm"
-          class="border-outline-variant hover:border-error hover:bg-error/5 text-on-surface-variant/90 hover:text-error rounded-xl border text-[11px] leading-[16px] font-bold tracking-[0.08em] uppercase"
+          class={`${styles.actionButton} ${styles.dangerActionButton}`}
         >
           Clear
         </Button>

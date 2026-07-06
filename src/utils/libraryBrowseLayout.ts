@@ -1,7 +1,7 @@
 export const LIBRARY_BROWSE_MIN_CARD_WIDTH_PX = 160;
 export const LIBRARY_BROWSE_GRID_GAP_PX = 12;
-export const LIBRARY_BROWSE_AUTO_GRID_CLASS =
-  'grid grid-cols-[repeat(auto-fill,minmax(min(100%,160px),1fr))] gap-3';
+export const LIBRARY_BROWSE_GRID_TEMPLATE_COLUMNS =
+  'repeat(auto-fill, minmax(min(100%, 160px), 1fr))';
 
 export function libraryBrowseColumnCount(width: number): number {
   if (!Number.isFinite(width) || width <= 0) {

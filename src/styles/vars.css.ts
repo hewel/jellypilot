@@ -169,9 +169,9 @@ const tokenContract = <Token extends string>(group: string, values: Record<Token
 /**
  * JellyPilot design-token source.
  *
- * This is the single owner of design token values. Tailwind utilities consume
- * these tokens via `@theme inline` aliases in `src/index.css`; component-local
- * vanilla-extract CSS consumes them directly through `vars.*`.
+ * This is the single owner of design token values. Sprinkles, Recipes,
+ * global styles, and component-local vanilla-extract CSS consume them directly
+ * through `vars.*`.
  */
 export const vars = createGlobalThemeContract({
   color: {
