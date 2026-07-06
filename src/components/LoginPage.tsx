@@ -275,6 +275,7 @@ export default function LoginPage(props: LoginPageProps) {
               >
                 <button
                   type="button"
+                  aria-pressed={field().state.value === 'https'}
                   class={`cursor-pointer rounded-xl px-4 py-3 text-[14px] leading-[20px] font-semibold tracking-wide uppercase transition-[background-color,color,box-shadow,transform] duration-300 active:scale-[0.96] ${field().state.value === 'https' ? 'bg-primary from-primary to-primary-gradient-end text-on-primary shadow-primary/20 bg-gradient-to-r font-bold shadow-md' : 'text-on-surface-variant hover:text-on-surface hover:bg-surface-container-highest/40'}`}
                   disabled={isQuickConnectWaiting()}
                   onClick={() => field().handleChange('https')}
@@ -283,6 +284,7 @@ export default function LoginPage(props: LoginPageProps) {
                 </button>
                 <button
                   type="button"
+                  aria-pressed={field().state.value === 'http'}
                   class={`cursor-pointer rounded-xl px-4 py-3 text-[14px] leading-[20px] font-semibold tracking-wide uppercase transition-[background-color,color,box-shadow,transform] duration-300 active:scale-[0.96] ${field().state.value === 'http' ? 'bg-primary from-primary to-primary-gradient-end text-on-primary shadow-primary/20 bg-gradient-to-r font-bold shadow-md' : 'text-on-surface-variant hover:text-on-surface hover:bg-surface-container-highest/40'}`}
                   disabled={isQuickConnectWaiting()}
                   onClick={() => field().handleChange('http')}

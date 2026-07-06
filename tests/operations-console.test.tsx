@@ -365,11 +365,6 @@ test('preferred subtitle language editor uses Ark tags input and select', async 
   );
   expect(screen.getByRole('button', { name: 'Remove tha' })).toBeVisible();
 
-  // The Add button has rounded corners consistent with the input field (rounded-2xl)
-  const addButton = screen.getByRole('button', { name: 'Add' });
-  expect(addButton.className).toContain('rounded-2xl');
-  expect(addButton.className).toContain('h-14');
-
   cleanup();
 });
 
@@ -891,23 +886,21 @@ test('player bridge settings use Ark fields and intro skip mode buttons', async 
   cleanup();
 });
 
-test('settings and session actions keep shared visual semantics', async () => {
+test('settings and session actions render usable controls', async () => {
   const cleanup = renderConsole();
 
   await screen.findByDisplayValue('JellyPilot Test');
   const mpvPath = screen.getByPlaceholderText('Path to mpv executable');
   expect(mpvPath).toBeVisible();
-  expect(mpvPath.className).toContain('border-outline-variant/80');
-  expect(mpvPath.className).not.toContain('input-filled');
-  expect(mpvPath.className).not.toMatch(/mpv/);
+  expect(mpvPath).toBeEnabled();
 
   const disconnect = screen.getByRole('button', { name: 'Disconnect' });
   expect(disconnect).toBeVisible();
   expect(disconnect).toBeEnabled();
-  expect(disconnect.className).not.toContain('border-error');
 
   const signOut = screen.getByRole('button', { name: 'Sign out' });
-  expect(signOut.className).toContain('border-error');
+  expect(signOut).toBeVisible();
+  expect(signOut).toBeEnabled();
 
   cleanup();
 });

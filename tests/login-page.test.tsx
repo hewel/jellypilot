@@ -107,7 +107,7 @@ test('login page builds local http server url preview with jellyfin port', () =>
   });
 
   expect(screen.getByText('http://192.168.1.20:8096')).toBeVisible();
-  expect(screen.getByRole('button', { name: 'HTTP' })).toHaveClass('bg-primary');
+  expect(screen.getByRole('button', { name: 'HTTP' })).toHaveAttribute('aria-pressed', 'true');
 
   cleanup();
 });
@@ -119,13 +119,13 @@ test('login page preserves explicit pasted schemes', () => {
     target: { value: 'http://media.example.com' },
   });
   expect(screen.getByText('http://media.example.com')).toBeVisible();
-  expect(screen.getByRole('button', { name: 'HTTP' })).toHaveClass('bg-primary');
+  expect(screen.getByRole('button', { name: 'HTTP' })).toHaveAttribute('aria-pressed', 'true');
 
   fireEvent.input(screen.getByPlaceholderText('jellyfin.local or media.example.com/jellyfin'), {
     target: { value: 'https://192.168.1.20:8096' },
   });
   expect(screen.getByText('https://192.168.1.20:8096')).toBeVisible();
-  expect(screen.getByRole('button', { name: 'HTTPS' })).toHaveClass('bg-primary');
+  expect(screen.getByRole('button', { name: 'HTTPS' })).toHaveAttribute('aria-pressed', 'true');
 
   cleanup();
 });
