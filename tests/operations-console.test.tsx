@@ -327,17 +327,13 @@ test('preferred subtitle language editor uses Ark tags input and select', async 
   const customInput = await screen.findByLabelText('Custom subtitle language code');
   expect(customInput.closest('[data-scope="tags-input"]')).not.toBeNull();
 
-  // The Ark Select trigger is rendered with a combobox role
+  // The local select trigger is rendered with a combobox role
   const selectTrigger = await screen.findByRole('combobox', {
     name: 'Predefined languages',
   });
-  expect(selectTrigger.closest('[data-scope="select"]')).not.toBeNull();
 
   // The select trigger shows a placeholder
   expect(selectTrigger).toHaveTextContent('Select a language…');
-  // The select offers predefined language options via its collection
-  const selectRoot = selectTrigger.closest('[data-scope="select"]');
-  expect(selectRoot).not.toBeNull();
 
   // Custom code entry via text input
   fireEvent.input(customInput, { target: { value: 'jpn' } });

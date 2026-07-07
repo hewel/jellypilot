@@ -112,6 +112,11 @@ export const content = style([
   },
 ]);
 
+export const positioner = style({
+  position: 'fixed',
+  zIndex: vars.zIndex['50'],
+});
+
 export const item = style([
   sprinkles({
     display: 'flex',
@@ -175,4 +180,16 @@ export const truncate = style({
   overflow: 'hidden',
   textOverflow: 'ellipsis',
   whiteSpace: 'nowrap',
+});
+
+export const hiddenSelect = style({
+  border: 0,
+  clip: 'rect(0 0 0 0)',
+  height: '1px',
+  margin: '-1px',
+  overflow: 'hidden',
+  padding: 0,
+  position: 'absolute',
+  whiteSpace: 'nowrap',
+  width: '1px',
 });

@@ -582,32 +582,30 @@ function renderShell(path: string | string[] = '/library', client?: QueryClient)
   return cleanup;
 }
 
-function getArkHiddenSelect(label: string) {
-  const select = screen
-    .getAllByLabelText(label)
-    .find((element): element is HTMLSelectElement => element.tagName === 'SELECT');
+function getNativeSelect(label: string) {
+  const select = document.querySelector<HTMLSelectElement>(`[data-native-select="${label}"]`);
 
   if (!select) {
-    throw new Error(`Could not find hidden Ark select for ${label}`);
+    throw new Error(`Could not find native select for ${label}`);
   }
 
   return select;
 }
 
-function getArkCombobox(label: string) {
+function getCombobox(label: string) {
   const combobox = screen
     .getAllByLabelText(label)
     .find((element): element is HTMLButtonElement => element.getAttribute('role') === 'combobox');
 
   if (!combobox) {
-    throw new Error(`Could not find Ark combobox for ${label}`);
+    throw new Error(`Could not find combobox for ${label}`);
   }
 
   return combobox;
 }
 
-async function selectArkOption(label: string, name: RegExp | string) {
-  fireEvent.click(getArkCombobox(label));
+async function selectOption(label: string, name: RegExp | string) {
+  fireEvent.click(getCombobox(label));
   fireEvent.click(await screen.findByRole('option', { name }));
 }
 
@@ -1219,9 +1217,9 @@ test('library item detail renders resume-primary movie metadata', async () => {
   expect(screen.getByRole('button', { name: 'Play from beginning' })).toBeVisible();
   fireEvent.click(screen.getByRole('button', { name: 'Resume' }));
   expect(await screen.findByRole('dialog', { name: 'Detail Movie' })).toBeVisible();
-  expect(getArkHiddenSelect('Audio track')).toHaveValue('1');
-  expect(getArkHiddenSelect('Subtitle track')).toHaveValue('auto');
-  await selectArkOption('Audio track', /Japanese - FLAC/);
+  expect(getNativeSelect('Audio track')).toHaveValue('1');
+  expect(getNativeSelect('Subtitle track')).toHaveValue('auto');
+  await selectOption('Audio track', /Japanese - FLAC/);
   fireEvent.click(screen.getByRole('button', { name: 'Resume playback' }));
   await waitFor(() =>
     expect(playCommand).toHaveBeenCalledWith({
@@ -1236,8 +1234,8 @@ test('library item detail renders resume-primary movie metadata', async () => {
   expect(screen.getByRole('button', { name: 'Play from beginning' })).not.toBeDisabled();
   fireEvent.click(screen.getByRole('button', { name: 'Play from beginning' }));
   expect(await screen.findByRole('dialog', { name: 'Detail Movie' })).toBeVisible();
-  await selectArkOption('Audio track', /Japanese - FLAC/);
-  await selectArkOption('Subtitle track', /English - SRT/);
+  await selectOption('Audio track', /Japanese - FLAC/);
+  await selectOption('Subtitle track', /English - SRT/);
   fireEvent.click(screen.getByRole('button', { name: 'Start playback' }));
   await waitFor(() =>
     expect(playCommand).toHaveBeenLastCalledWith({
@@ -1253,7 +1251,7 @@ test('library item detail renders resume-primary movie metadata', async () => {
   );
   fireEvent.click(screen.getByRole('button', { name: 'Resume' }));
   expect(await screen.findByRole('dialog', { name: 'Detail Movie' })).toBeVisible();
-  await selectArkOption('Subtitle track', 'Off');
+  await selectOption('Subtitle track', 'Off');
   fireEvent.click(screen.getByRole('button', { name: 'Resume playback' }));
   await waitFor(() =>
     expect(playCommand).toHaveBeenLastCalledWith({
@@ -1357,8 +1355,8 @@ test('library item detail renders episode metadata and semantic artwork placehol
   expect(screen.queryByRole('button', { name: 'Resume' })).toBeNull();
   fireEvent.click(screen.getByRole('button', { name: 'Play' }));
   expect(await screen.findByRole('dialog', { name: 'Detail Episode' })).toBeVisible();
-  expect(getArkHiddenSelect('Audio track')).toHaveValue('1');
-  await selectArkOption('Subtitle track', 'Off');
+  expect(getNativeSelect('Audio track')).toHaveValue('1');
+  await selectOption('Subtitle track', 'Off');
   fireEvent.click(screen.getByRole('button', { name: 'Start playback' }));
   await waitFor(() =>
     expect(playCommand).toHaveBeenCalledWith({
@@ -1403,8 +1401,8 @@ test('library show detail auto-loads next-up season and renders episode rows', a
   fireEvent.click(screen.getByRole('button', { name: 'Play S01E02' }));
   await waitFor(() => expect(itemCommand).toHaveBeenCalledWith('episode-2'));
   expect(playCommand).not.toHaveBeenCalled();
-  await waitFor(() => expect(getArkCombobox('Audio track')).toBeVisible());
-  await selectArkOption('Audio track', /Japanese - FLAC/);
+  await waitFor(() => expect(getCombobox('Audio track')).toBeVisible());
+  await selectOption('Audio track', /Japanese - FLAC/);
   fireEvent.click(screen.getByRole('button', { name: 'Start playback' }));
   await waitFor(() =>
     expect(playCommand).toHaveBeenCalledWith({
@@ -1446,8 +1444,8 @@ test('library show detail auto-loads next-up season and renders episode rows', a
   expect(episodePlayBtn).toBeVisible();
   fireEvent.click(episodePlayBtn);
   await waitFor(() => expect(itemCommand).toHaveBeenLastCalledWith('episode-2'));
-  await waitFor(() => expect(getArkCombobox('Subtitle track')).toBeVisible());
-  await selectArkOption('Subtitle track', 'Off');
+  await waitFor(() => expect(getCombobox('Subtitle track')).toBeVisible());
+  await selectOption('Subtitle track', 'Off');
   fireEvent.click(screen.getByRole('button', { name: 'Start playback' }));
   await waitFor(() =>
     expect(playCommand).toHaveBeenLastCalledWith({

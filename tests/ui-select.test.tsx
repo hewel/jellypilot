@@ -11,7 +11,7 @@ afterEach(() => {
   document.body.innerHTML = '';
 });
 
-test('JellyPilotSelect renders an Ark select and emits the selected value', async () => {
+test('JellyPilotSelect renders a local select and emits the selected value', async () => {
   const selectedValues: string[] = [];
   const root = document.createElement('div');
   document.body.append(root);
@@ -39,11 +39,8 @@ test('JellyPilotSelect renders an Ark select and emits the selected value', asyn
   const trigger = screen.getByRole('combobox', {
     name: 'Subtitle language',
   });
-  expect(trigger.closest('[data-scope="select"]')).not.toBeNull();
   expect(trigger).toHaveTextContent('eng - English');
-  expect(
-    screen.getAllByLabelText('Subtitle language').find((element) => element.tagName === 'SELECT'),
-  ).toHaveValue('eng');
+  expect(document.querySelector('[data-native-select="Subtitle language"]')).toHaveValue('eng');
 
   fireEvent.click(trigger);
   fireEvent.click(await screen.findByRole('option', { name: 'jpn - Japanese' }));
