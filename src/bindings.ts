@@ -162,6 +162,8 @@ export type AppConfig = {
 	keybindPrev?: string,
 	/**  Keybinding for manual Intro Skipper seek in MPV. */
 	keybindIntroSkip?: string,
+	/**  Light, dark, or OS-following theme preference. */
+	themePreference?: ThemePreference,
 };
 
 /**  App notification event emitted to frontend. */
@@ -306,6 +308,9 @@ export type SavedSession = {
 	serverName: string | null,
 	deviceId: string | null,
 };
+
+/**  User-selected app theme preference. */
+export type ThemePreference = "system" | "light" | "dark";
 
 /**  Library Browser landing data exposed to the frontend. */
 export type VideoHome = {

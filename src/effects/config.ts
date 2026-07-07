@@ -1,5 +1,5 @@
 import { commands } from '@bindings';
-import type { AppConfig } from '@bindings';
+import type { AppConfig, ThemePreference } from '@bindings';
 import { Effect, Option } from 'effect';
 
 import { runTauriCommand, runTauriCommandRaw } from './commands';
@@ -18,4 +18,17 @@ export function fetchConfig(): Effect.Effect<AppConfig, CommandError> {
 
 export function saveConfig(config: AppConfig): Effect.Effect<void, CommandError> {
   return runTauriCommand(() => commands.configSet(config)).pipe(Effect.asVoid);
+}
+
+export function saveThemePreference(
+  themePreference: ThemePreference,
+): Effect.Effect<void, CommandError> {
+  return fetchConfig().pipe(
+    Effect.flatMap((config) =>
+      saveConfig({
+        ...config,
+        themePreference,
+      }),
+    ),
+  );
 }

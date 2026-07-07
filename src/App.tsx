@@ -3,6 +3,7 @@ import { RouterProvider } from '@tanstack/solid-router';
 
 import { ToastProvider } from './components/ToastProvider';
 import { router } from './router';
+import { ThemeSync } from './theme';
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -18,6 +19,7 @@ const queryClient = new QueryClient({
 
 const App = () => (
   <QueryClientProvider client={queryClient}>
+    <ThemeSync />
     <ToastProvider>
       <RouterProvider router={router} />
     </ToastProvider>
