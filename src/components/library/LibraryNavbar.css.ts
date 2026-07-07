@@ -37,19 +37,6 @@ export const segments = sprinkles({
   p: '1',
 });
 
-export const indicator = style({
-  background: vars.color.secondaryContainer,
-  borderRadius: vars.borderRadius.lg,
-  bottom: 'var(--bottom)',
-  boxShadow: vars.shadow.sm,
-  height: 'var(--height)',
-  left: 'var(--left)',
-  position: 'absolute',
-  right: 'var(--right)',
-  top: 'var(--top)',
-  width: 'var(--width)',
-});
-
 export const item = style([
   sprinkles({
     position: 'relative',
@@ -66,6 +53,8 @@ export const item = style([
     zIndex: '10',
   }),
   {
+    background: 'transparent',
+    border: 0,
     cursor: 'pointer',
     transitionProperty: 'color',
     selectors: {

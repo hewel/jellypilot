@@ -1,4 +1,3 @@
-import { SegmentGroup } from '@ark-ui/solid/segment-group';
 import type { VideoLibraryShortcut } from '@bindings';
 import { useNavigate } from '@tanstack/solid-router';
 import { House } from 'lucide-solid';
@@ -31,7 +30,7 @@ export default function LibraryNavbar(props: LibraryNavbarProps) {
     })),
   ];
 
-  const navigateToSegment = (value: string | null) => {
+  const navigateToSegment = (value: string) => {
     const target = items().find((item) => item.value === value)?.target;
 
     if (!target) {
@@ -44,27 +43,29 @@ export default function LibraryNavbar(props: LibraryNavbarProps) {
   return (
     <nav aria-label="Library navigation" class={styles.root}>
       <div class={styles.inner}>
-        <SegmentGroup.Root
-          value={props.activeValue}
-          onValueChange={(details) => navigateToSegment(details.value)}
-          class={styles.segments}
-        >
-          <SegmentGroup.Indicator class={styles.indicator} />
+        <div class={styles.segments} role="radiogroup" aria-label="Library sections">
           <For each={items()}>
             {(item) => (
-              <SegmentGroup.Item value={item.value} class={styles.item}>
-                <SegmentGroup.ItemText>
+              <button
+                type="button"
+                role="radio"
+                class={styles.item}
+                aria-label={item.label}
+                aria-checked={item.value === props.activeValue}
+                data-state={item.value === props.activeValue ? 'checked' : 'unchecked'}
+                aria-current={item.value === props.activeValue ? 'page' : undefined}
+                onClick={() => navigateToSegment(item.value)}
+              >
+                <span>
                   <Show when={item.value === 'home'} fallback={item.label}>
                     <House class={styles.homeIcon} />
                     <span class={styles.srOnly}>Home</span>
                   </Show>
-                </SegmentGroup.ItemText>
-                <SegmentGroup.ItemControl />
-                <SegmentGroup.ItemHiddenInput />
-              </SegmentGroup.Item>
+                </span>
+              </button>
             )}
           </For>
-        </SegmentGroup.Root>
+        </div>
 
         <div ref={navbarControls.setPortalTarget} class={styles.portalTarget} />
       </div>
