@@ -2,7 +2,7 @@
 
 ## Status
 
-Accepted
+Superseded by [0009. Adopt local Solid UI primitives](0009-local-solid-ui-primitives.md)
 
 ## Context
 
@@ -10,7 +10,7 @@ JellyPilot needs accessible, predictable interactive controls for login, setting
 
 ## Decision
 
-Use `@ark-ui/solid` as the headless primitive layer for migrated Solid controls. Ark UI owns state-machine behavior, ARIA wiring, focus management, and `data-scope` / `data-part` styling hooks. JellyPilot keeps ownership of layout, tokens, vanilla-extract classes, domain behavior, persistence, and command timing.
+Use the Ark UI Solid package as the headless primitive layer for migrated Solid controls. Ark UI owns state-machine behavior, ARIA wiring, focus management, and `data-scope` / `data-part` styling hooks. JellyPilot keeps ownership of layout, tokens, vanilla-extract classes, domain behavior, persistence, and command timing.
 
 TanStack Form remains the value and validation owner for forms. Ark Field only supplies accessible field structure.
 

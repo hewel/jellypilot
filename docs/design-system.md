@@ -78,11 +78,11 @@ Apply typography through Sprinkles, Recipes, or component-local vanilla-extract 
 ### Buttons
 
 - Use the `<Button>` component (`src/components/ui/Button.tsx`) for `primary`, `secondary`, `tonal`, `outlined`, `text`, and `icon` variants. One primary action per section or state.
-- For Ark triggers that should look like a button (collapsible, dialog, tags-input delete), render `<Button>` through the Ark part's `asChild` prop instead of reaching for a helper class.
+- For local primitive triggers that should look like a button, compose the primitive behavior with `<Button>` instead of reaching for helper classes.
 
 ### Inputs
 
-- Use `<FieldControl>` / `<FieldTextarea>` (`src/components/ui/FieldControl.tsx`) with `variant="filled"` (Login and configuration) or `variant="outlined"` (compact selectors). In Ark Field parts, render them through `asChild` so Ark keeps owning ARIA/focus.
+- Use `<Field>` with `<FieldControl>` / `<FieldTextarea>` (`src/components/ui/FieldControl.tsx`) with `variant="filled"` (Login and configuration) or `variant="outlined"` (compact selectors). Field labels, descriptions, errors, and control IDs are wired by the local primitive.
 - `<TextField>` (`src/components/ui/TextField.tsx`) wraps `FieldControl` with label, error, and hint for plain forms.
 - Every field has a visible label. Errors appear near the field.
 
@@ -158,7 +158,7 @@ Diagnostics are a user-facing support view, not a developer console. Use normal 
 - Visual: semantic color, background color, border color, border radius, box shadow, opacity, z-index.
 - Conditions: `base`, `sm`, `md`, `lg`, `xl`, `2xl`, `hover`, `focus`, `active`, `disabled`, and `dark` via `[data-theme='dark'] &`. Prefer theme-scoped token values over duplicating light/dark CSS branches.
 
-Do not make Sprinkles parse class strings. Do not add arbitrary values as a public utility feature. Temporary `legacy*` values in Sprinkles exist only to bridge current application needs and should shrink as repeated patterns become semantic tokens or Recipes. Complex selectors, Ark `data-*` state styling, gradients, transforms, filters, animations, and one-off layout math belong in Recipes or component-local `style()` blocks.
+Do not make Sprinkles parse class strings. Do not add arbitrary values as a public utility feature. Temporary `legacy*` values in Sprinkles exist only to bridge current application needs and should shrink as repeated patterns become semantic tokens or Recipes. Complex selectors, primitive `data-*` state styling, gradients, transforms, filters, animations, and one-off layout math belong in Recipes or component-local `style()` blocks.
 
 When a component-local class needs both Sprinkles and complex CSS, use vanilla-extract style composition:
 

@@ -70,6 +70,10 @@ Emby support uses the same library and player workflow as Jellyfin where the ser
 - Added mute-state visibility to the Now Playing controls.
 - Improved Player Bridge command handling, playback control sharing, and Jellyfin websocket ownership for more reliable external MPV control.
 
+### v1.3.3
+
+- Replaced the headless Ark UI dependency with local Solid UI primitives for dialogs, fields, selects, segmented navigation, menus, checkboxes, sliders, tabs, disclosure panels, tag lists, and media hover cards.
+
 ### v1.3.2
 
 - Migrated login, diagnostics, settings, subtitle priorities, session dialog, and now playing controls to headless Ark UI Solid primitives while preserving JellyPilot Control Room styling and behavior.

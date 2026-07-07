@@ -31,7 +31,6 @@
     "rust:test": "cargo test --manifest-path src-tauri/Cargo.toml"
   },
   "dependencies": {
-    "@ark-ui/solid": "^5.37.1",
     "@fontsource-variable/figtree": "^5.2.10",
     "@solid-devtools/overlay": "^0.33.5",
     "@tanstack/solid-form": "^1.33.0",

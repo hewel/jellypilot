@@ -12,7 +12,7 @@ Route incoming requests to the correct agent using these strict criteria:
 
 ## Stack
 
-- **Frontend**: Solid.js + TypeScript + Rsbuild + TanStack Router + TanStack Form + Ark UI + vanilla-extract
+- **Frontend**: Solid.js + TypeScript + Rsbuild + TanStack Router + TanStack Form + local Solid UI primitives + vanilla-extract
 - **Backend**: Rust (Tauri v2) with tauri-specta for type-safe bindings
 - **Data / Effects**: Effect-TS
 - **Tools**: Bun, Oxc (Oxlint/Oxfmt), Rstest (jsdom)
@@ -54,7 +54,7 @@ bun tauri build     # Production desktop build
 - **Solid classes**: Use `class` for static class strings and `classList` for conditional class maps. Do not add generic class-name merge helpers for Solid components.
 - **TypeScript / Effect**: All Effect rules live in [docs/agents/effect.md](docs/agents/effect.md). Read and follow it; do not duplicate them here.
 - **Route data loading**: Await only critical data; defer slow data as promises behind `<Suspense />` with stable skeletons. Follow [TanStack Router deferred data loading](https://tanstack.com/router/latest/docs/guide/deferred-data-loading).
-- **Ark UI Dialogs**: Use standard Ark UI Dialog primitives; no custom ARIA overlays, `onInteractOutside` handlers, or `id` attributes. Controlled dialogs require `<Portal>`; use `lazyMount` + `unmountOnExit`.
+- **Dialogs**: Use the local `Dialog` primitive from `src/components/ui`; controlled dialogs require `<Portal>` and must keep accessible title/description wiring.
 - **Style Tests**: Style test policy in [docs/agents/style-tests.md](docs/agents/style-tests.md); read and follow it.
 
 ## Anti-Patterns
