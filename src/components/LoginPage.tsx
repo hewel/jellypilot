@@ -1,4 +1,3 @@
-import { Tabs } from '@ark-ui/solid/tabs';
 import { createForm } from '@tanstack/solid-form';
 import { useQueryClient } from '@tanstack/solid-query';
 import { Effect, Exit, Fiber } from 'effect';
@@ -55,6 +54,10 @@ export default function LoginPage(props: LoginPageProps) {
   const [error, setError] = createSignal<string | null>(null);
   const [submitting, setSubmitting] = createSignal(false);
   let quickConnectFiber: Fiber.Fiber<void, CommandError> | undefined;
+  const selectLoginMethod = (value: LoginMethod) => {
+    resetQuickConnect();
+    setLoginMethod(value);
+  };
 
   const form = createForm(() => ({
     defaultValues: {
@@ -382,52 +385,54 @@ export default function LoginPage(props: LoginPageProps) {
           )}
         </form.Field>
 
-        <Tabs.Root
-          value={loginMethod()}
-          activationMode="manual"
-          lazyMount
-          unmountOnExit
-          onValueChange={(details) => {
-            const value = details.value as LoginMethod;
-            if (value !== 'quickConnect' && value !== 'password') {
-              return;
-            }
-            resetQuickConnect();
-            setLoginMethod(value);
-          }}
-        >
-          <Tabs.List
+        <div>
+          <div
+            role="tablist"
             class={`${styles.segmented} ${styles.tabsList} ${selectedCapabilities().quickConnect ? styles.segmented2 : styles.segmented1}`}
             aria-label="Login Method"
           >
             <Show when={selectedCapabilities().quickConnect}>
-              <Tabs.Trigger
-                value="quickConnect"
+              <button
+                type="button"
+                role="tab"
+                id="login-tab-quick-connect"
+                aria-controls="login-panel-quick-connect"
+                aria-selected={loginMethod() === 'quickConnect'}
                 disabled={isQuickConnectWaiting()}
                 class={styles.segment}
                 classList={{
                   [styles.segmentSelected]: loginMethod() === 'quickConnect',
                   [styles.segmentIdle]: loginMethod() !== 'quickConnect',
                 }}
+                onClick={() => selectLoginMethod('quickConnect')}
               >
                 Quick Connect
-              </Tabs.Trigger>
+              </button>
             </Show>
-            <Tabs.Trigger
-              value="password"
+            <button
+              type="button"
+              role="tab"
+              id="login-tab-password"
+              aria-controls="login-panel-password"
+              aria-selected={loginMethod() === 'password'}
               disabled={isQuickConnectWaiting()}
               class={styles.segment}
               classList={{
                 [styles.segmentSelected]: loginMethod() === 'password',
                 [styles.segmentIdle]: loginMethod() !== 'password',
               }}
+              onClick={() => selectLoginMethod('password')}
             >
               Password
-            </Tabs.Trigger>
-          </Tabs.List>
+            </button>
+          </div>
 
-          <Show when={selectedCapabilities().quickConnect}>
-            <Tabs.Content value="quickConnect">
+          <Show when={selectedCapabilities().quickConnect && loginMethod() === 'quickConnect'}>
+            <div
+              id="login-panel-quick-connect"
+              role="tabpanel"
+              aria-labelledby="login-tab-quick-connect"
+            >
               <div class={styles.quickPanel}>
                 <div class={styles.quickPanelGlow} />
 
@@ -464,68 +469,70 @@ export default function LoginPage(props: LoginPageProps) {
                   </div>
                 </Show>
               </div>
-            </Tabs.Content>
+            </div>
           </Show>
 
-          <Tabs.Content value="password">
-            <div class={styles.stack4}>
-              <form.Field name="username">
-                {(field) => (
-                  <Field.Root class={styles.fieldBlock}>
-                    <Field.Label class={styles.label}>Username</Field.Label>
-                    <Field.Input
-                      asChild={(fieldProps) => (
-                        <FieldControl
-                          {...fieldProps()}
-                          variant="filled"
-                          value={field().state.value}
-                          onInput={(event) => field().handleChange(event.currentTarget.value)}
-                          class={patterns.fullWidth}
-                          placeholder="Jellyfin username"
-                        />
-                      )}
-                    />
-                  </Field.Root>
-                )}
-              </form.Field>
-              <form.Field name="password">
-                {(field) => (
-                  <Field.Root class={styles.fieldBlock}>
-                    <Field.Label class={styles.label}>Password</Field.Label>
-                    <Field.Input
-                      asChild={(fieldProps) => (
-                        <FieldControl
-                          {...fieldProps()}
-                          variant="filled"
-                          type="password"
-                          value={field().state.value}
-                          onInput={(event) => field().handleChange(event.currentTarget.value)}
-                          class={patterns.fullWidth}
-                          placeholder="Jellyfin password"
-                        />
-                      )}
-                    />
-                  </Field.Root>
-                )}
-              </form.Field>
-              <form.Field name="rememberMe">
-                {(field) => (
-                  <Checkbox
-                    checked={field().state.value}
-                    onCheckedChange={(checked) => field().handleChange(checked)}
-                    class={styles.remember}
-                    controlClass={styles.checkbox}
-                    indicatorClass={styles.checkboxIndicator}
-                    labelClass={styles.checkboxLabel}
-                    indicator={<Check class={patterns.icon3_5} stroke-width={4} />}
-                  >
-                    Remember Server URL and username
-                  </Checkbox>
-                )}
-              </form.Field>
+          <Show when={loginMethod() === 'password'}>
+            <div id="login-panel-password" role="tabpanel" aria-labelledby="login-tab-password">
+              <div class={styles.stack4}>
+                <form.Field name="username">
+                  {(field) => (
+                    <Field.Root class={styles.fieldBlock}>
+                      <Field.Label class={styles.label}>Username</Field.Label>
+                      <Field.Input
+                        asChild={(fieldProps) => (
+                          <FieldControl
+                            {...fieldProps()}
+                            variant="filled"
+                            value={field().state.value}
+                            onInput={(event) => field().handleChange(event.currentTarget.value)}
+                            class={patterns.fullWidth}
+                            placeholder="Jellyfin username"
+                          />
+                        )}
+                      />
+                    </Field.Root>
+                  )}
+                </form.Field>
+                <form.Field name="password">
+                  {(field) => (
+                    <Field.Root class={styles.fieldBlock}>
+                      <Field.Label class={styles.label}>Password</Field.Label>
+                      <Field.Input
+                        asChild={(fieldProps) => (
+                          <FieldControl
+                            {...fieldProps()}
+                            variant="filled"
+                            type="password"
+                            value={field().state.value}
+                            onInput={(event) => field().handleChange(event.currentTarget.value)}
+                            class={patterns.fullWidth}
+                            placeholder="Jellyfin password"
+                          />
+                        )}
+                      />
+                    </Field.Root>
+                  )}
+                </form.Field>
+                <form.Field name="rememberMe">
+                  {(field) => (
+                    <Checkbox
+                      checked={field().state.value}
+                      onCheckedChange={(checked) => field().handleChange(checked)}
+                      class={styles.remember}
+                      controlClass={styles.checkbox}
+                      indicatorClass={styles.checkboxIndicator}
+                      labelClass={styles.checkboxLabel}
+                      indicator={<Check class={patterns.icon3_5} stroke-width={4} />}
+                    >
+                      Remember Server URL and username
+                    </Checkbox>
+                  )}
+                </form.Field>
+              </div>
             </div>
-          </Tabs.Content>
-        </Tabs.Root>
+          </Show>
+        </div>
 
         <Show when={error()}>
           <div class={styles.alert} role="alert">

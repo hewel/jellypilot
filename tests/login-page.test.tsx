@@ -81,7 +81,7 @@ test('login page uses local accessible fields and checkbox semantics', async () 
   const cleanup = renderLoginPage();
 
   const quickConnectTab = screen.getByRole('tab', { name: 'Quick Connect' });
-  expect(quickConnectTab.closest('[data-scope="tabs"]')).not.toBeNull();
+  expect(quickConnectTab.closest('[data-scope="tabs"]')).toBeNull();
 
   const serverHost = screen.getByPlaceholderText('jellyfin.local or media.example.com/jellyfin');
   expect(screen.getByLabelText('Jellyfin host')).toBe(serverHost);
