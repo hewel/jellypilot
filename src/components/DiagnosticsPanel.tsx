@@ -1,8 +1,7 @@
-import { Checkbox } from '@ark-ui/solid/checkbox';
 import { listen } from '@tauri-apps/api/event';
 import { For, Show, createEffect, createSignal, onCleanup, onMount } from 'solid-js';
 
-import { Button } from './ui';
+import { Button, Checkbox } from './ui';
 
 import * as styles from './DiagnosticsPanel.css';
 
@@ -147,17 +146,17 @@ export default function DiagnosticsPanel(props: DiagnosticsPanelProps) {
       <div class={styles.header}>
         <p class={styles.count}>{diagnostics().length} sanitized runtime events</p>
         <Show when={!props.compact}>
-          <Checkbox.Root
+          <Checkbox
             checked={autoScroll()}
-            onCheckedChange={(details) => setAutoScroll(details.checked === true)}
+            onCheckedChange={setAutoScroll}
             class={styles.checkboxRoot}
+            controlClass={styles.checkbox}
+            indicatorClass={styles.indicator}
+            labelClass={styles.checkboxLabel}
+            indicator="✓"
           >
-            <Checkbox.Control class={styles.checkbox}>
-              <Checkbox.Indicator class={styles.indicator}>✓</Checkbox.Indicator>
-            </Checkbox.Control>
-            <Checkbox.Label class={styles.checkboxLabel}>Auto-scroll</Checkbox.Label>
-            <Checkbox.HiddenInput />
-          </Checkbox.Root>
+            Auto-scroll
+          </Checkbox>
         </Show>
       </div>
 

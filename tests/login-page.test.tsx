@@ -77,7 +77,7 @@ test('login page shows quick connect as the default login method', () => {
 
   cleanup();
 });
-test('login page uses Ark tabs and checkbox with local accessible fields', async () => {
+test('login page uses local accessible fields and checkbox semantics', async () => {
   const cleanup = renderLoginPage();
 
   const quickConnectTab = screen.getByRole('tab', { name: 'Quick Connect' });
@@ -92,7 +92,7 @@ test('login page uses Ark tabs and checkbox with local accessible fields', async
   const rememberMe = screen.getByRole('checkbox', {
     name: 'Remember Server URL and username',
   });
-  expect(rememberMe.closest('[data-scope="checkbox"]')).not.toBeNull();
+  expect(rememberMe.closest('[data-scope="checkbox"]')).toBeNull();
   fireEvent.click(rememberMe);
   expect(rememberMe).toBeChecked();
 

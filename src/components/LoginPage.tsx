@@ -1,4 +1,3 @@
-import { Checkbox } from '@ark-ui/solid/checkbox';
 import { Tabs } from '@ark-ui/solid/tabs';
 import { createForm } from '@tanstack/solid-form';
 import { useQueryClient } from '@tanstack/solid-query';
@@ -23,7 +22,7 @@ import {
 } from '../serverUrl';
 import type { ServerScheme, ServerUrlResult } from '../serverUrl';
 import { saveCurrentSession } from '../sessionAccess';
-import { Button, Card, ConsoleShell, Field, FieldControl, PageFooter } from './ui';
+import { Button, Card, Checkbox, ConsoleShell, Field, FieldControl, PageFooter } from './ui';
 
 import * as patterns from '../styles/patterns.css';
 import * as styles from './LoginPage.css';
@@ -511,21 +510,17 @@ export default function LoginPage(props: LoginPageProps) {
               </form.Field>
               <form.Field name="rememberMe">
                 {(field) => (
-                  <Checkbox.Root
+                  <Checkbox
                     checked={field().state.value}
-                    onCheckedChange={(details) => field().handleChange(details.checked === true)}
+                    onCheckedChange={(checked) => field().handleChange(checked)}
                     class={styles.remember}
+                    controlClass={styles.checkbox}
+                    indicatorClass={styles.checkboxIndicator}
+                    labelClass={styles.checkboxLabel}
+                    indicator={<Check class={patterns.icon3_5} stroke-width={4} />}
                   >
-                    <Checkbox.Control class={styles.checkbox}>
-                      <Checkbox.Indicator class={styles.checkboxIndicator}>
-                        <Check class={patterns.icon3_5} stroke-width={4} />
-                      </Checkbox.Indicator>
-                    </Checkbox.Control>
-                    <Checkbox.Label class={styles.checkboxLabel}>
-                      Remember Server URL and username
-                    </Checkbox.Label>
-                    <Checkbox.HiddenInput />
-                  </Checkbox.Root>
+                    Remember Server URL and username
+                  </Checkbox>
                 )}
               </form.Field>
             </div>

@@ -4,6 +4,8 @@ export type { ButtonProps } from './Button';
 export { default as Button } from './Button';
 export { Card } from './Card';
 export type { CardVariant } from './Card';
+export { default as Checkbox } from './Checkbox';
+export type { CheckboxProps } from './Checkbox';
 export { Dialog } from './Dialog';
 export { default as InfoCard } from './InfoCard';
 export type { JellyPilotSelectItem } from './JellyPilotSelect';
