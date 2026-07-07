@@ -198,10 +198,6 @@ export const clearButton = style({
   },
 });
 
-export const hidden = style({
-  display: 'none',
-});
-
 export const languageGrid = style({
   display: 'grid',
   gap: vars.space['4'],

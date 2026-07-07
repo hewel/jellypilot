@@ -315,7 +315,7 @@ test('operations console autosaves compact preferred subtitle language chips', a
 
   cleanup();
 });
-test('preferred subtitle language editor uses Ark tags input and select', async () => {
+test('preferred subtitle language editor uses local list and select', async () => {
   const configSet = rstest.spyOn(commands, 'configSet').mockResolvedValue({
     data: null,
     status: 'ok',
@@ -323,9 +323,8 @@ test('preferred subtitle language editor uses Ark tags input and select', async 
   const cleanup = renderConsole();
   await screen.findByDisplayValue('JellyPilot Test');
 
-  // The custom code input lives inside the tags-input scope
   const customInput = await screen.findByLabelText('Custom subtitle language code');
-  expect(customInput.closest('[data-scope="tags-input"]')).not.toBeNull();
+  expect(customInput.closest('[data-scope="tags-input"]')).toBeNull();
 
   // The local select trigger is rendered with a combobox role
   const selectTrigger = await screen.findByRole('combobox', {
@@ -855,12 +854,12 @@ test('player bridge settings use local fields and intro skip mode buttons', asyn
   const advancedTrigger = screen.getByRole('button', {
     name: 'Advanced MPV options',
   });
-  expect(advancedTrigger.closest('[data-scope="collapsible"]')).not.toBeNull();
+  expect(advancedTrigger.closest('[data-scope="collapsible"]')).toBeNull();
 
   fireEvent.click(advancedTrigger);
   await waitFor(() => expect(advancedTrigger).toHaveAttribute('aria-expanded', 'true'));
   const mpvArgs = await screen.findByLabelText('Extra arguments');
-  expect(mpvArgs.closest('[data-scope="collapsible"]')).not.toBeNull();
+  expect(mpvArgs.closest('[data-scope="collapsible"]')).toBeNull();
 
   const shortcutHeading = screen.getByRole('heading', {
     name: 'Shortcut keys',

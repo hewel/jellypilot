@@ -1,5 +1,3 @@
-import { Collapsible } from '@ark-ui/solid/collapsible';
-import { TagsInput } from '@ark-ui/solid/tags-input';
 import { ArrowDown, ArrowUp, ChevronDown, Globe, Plus, Settings, Trash2 } from 'lucide-solid';
 import { For, Show } from 'solid-js';
 
@@ -125,77 +123,65 @@ export default function PlayerBridgeSettingsCard(props: PlayerBridgeSettingsCard
           )}
         </props.form.Field>
 
-        <Collapsible.Root
-          open={ui.advancedOpen}
-          onOpenChange={(details) => actions.setAdvancedOpen(details.open)}
-          lazyMount
-          unmountOnExit
-        >
-          <Collapsible.Trigger
-            asChild={(triggerProps) => (
-              <Button
-                {...triggerProps()}
-                type="button"
-                variant="text"
-                class={styles.advancedTrigger}
-              />
-            )}
+        <div>
+          <Button
+            type="button"
+            variant="text"
+            class={styles.advancedTrigger}
+            aria-expanded={ui.advancedOpen}
+            aria-controls="player-bridge-advanced-options"
+            onClick={() => actions.setAdvancedOpen(!ui.advancedOpen)}
           >
-            <Collapsible.Indicator>
-              <ChevronDown
-                class={styles.chevron}
-                classList={{ [styles.chevronOpen]: ui.advancedOpen }}
-              />
-            </Collapsible.Indicator>
+            <ChevronDown
+              class={styles.chevron}
+              classList={{ [styles.chevronOpen]: ui.advancedOpen }}
+            />
             <span>Advanced MPV options</span>
-          </Collapsible.Trigger>
+          </Button>
 
-          <Collapsible.Content class={styles.advancedPanel}>
-            <section class={shared.stack4}>
-              <div>
-                <h3 class={styles.subheading}>
-                  <span class={styles.subheadingAccent} />
-                  MPV arguments
-                </h3>
-                <p class={styles.helper}>
-                  Extra command-line flags passed to the external MPV process.
-                </p>
+          <Show when={ui.advancedOpen}>
+            <section id="player-bridge-advanced-options" class={styles.advancedPanel}>
+              <div class={shared.stack4}>
+                <div>
+                  <h3 class={styles.subheading}>
+                    <span class={styles.subheadingAccent} />
+                    MPV arguments
+                  </h3>
+                  <p class={styles.helper}>
+                    Extra command-line flags passed to the external MPV process.
+                  </p>
+                </div>
+
+                <props.form.Field name="mpvArgs">
+                  {(field) => (
+                    <Field.Root class={styles.field}>
+                      <Field.Label class={shared.overline}>Extra arguments</Field.Label>
+                      <Field.Textarea
+                        asChild={(fieldProps) => (
+                          <FieldTextarea
+                            {...fieldProps()}
+                            variant="filled"
+                            value={field().state.value}
+                            onInput={(event) => field().handleChange(event.currentTarget.value)}
+                            onBlur={(event) => {
+                              field().handleBlur();
+                              props.onSaveTextSetting('mpvArgs', event.currentTarget.value);
+                            }}
+                            rows={4}
+                            placeholder="--fullscreen&#10;--force-window"
+                            class={styles.textarea}
+                          />
+                        )}
+                      />
+                    </Field.Root>
+                  )}
+                </props.form.Field>
               </div>
-
-              <props.form.Field name="mpvArgs">
-                {(field) => (
-                  <Field.Root class={styles.field}>
-                    <Field.Label class={shared.overline}>Extra arguments</Field.Label>
-                    <Field.Textarea
-                      asChild={(fieldProps) => (
-                        <FieldTextarea
-                          {...fieldProps()}
-                          variant="filled"
-                          value={field().state.value}
-                          onInput={(event) => field().handleChange(event.currentTarget.value)}
-                          onBlur={(event) => {
-                            field().handleBlur();
-                            props.onSaveTextSetting('mpvArgs', event.currentTarget.value);
-                          }}
-                          rows={4}
-                          placeholder="--fullscreen&#10;--force-window"
-                          class={styles.textarea}
-                        />
-                      )}
-                    />
-                  </Field.Root>
-                )}
-              </props.form.Field>
             </section>
-          </Collapsible.Content>
-        </Collapsible.Root>
+          </Show>
+        </div>
 
-        <TagsInput.Root
-          value={ui.selectedSubtitleLanguages}
-          inputValue=""
-          editable={false}
-          class={styles.languagePanel}
-        >
+        <div class={styles.languagePanel}>
           <div class={styles.panelHeader}>
             <div>
               <h3 class={styles.languageTitle}>
@@ -214,7 +200,6 @@ export default function PlayerBridgeSettingsCard(props: PlayerBridgeSettingsCard
               >
                 Clear all
               </Button>
-              <TagsInput.ClearTrigger class={styles.hidden} />
             </Show>
           </div>
 
@@ -281,12 +266,12 @@ export default function PlayerBridgeSettingsCard(props: PlayerBridgeSettingsCard
             <ol class={styles.list} aria-label="Selected preferred subtitle languages">
               <For each={ui.selectedSubtitleLanguages}>
                 {(language, index) => (
-                  <TagsInput.Item index={index()} value={language} class={styles.item}>
-                    <TagsInput.ItemPreview class={styles.itemPreview}>
+                  <li class={styles.item}>
+                    <div class={styles.itemPreview}>
                       <span class={styles.indexBadge}>{index() + 1}</span>
-                      <TagsInput.ItemText class={styles.code}>{language}</TagsInput.ItemText>
+                      <span class={styles.code}>{language}</span>
                       <span class={styles.itemLabel}>{getSubtitleLanguageLabel(language)}</span>
-                    </TagsInput.ItemPreview>
+                    </div>
                     <div class={styles.itemActions}>
                       <Button
                         type="button"
@@ -310,29 +295,23 @@ export default function PlayerBridgeSettingsCard(props: PlayerBridgeSettingsCard
                       >
                         <ArrowDown class={patterns.icon4} />
                       </Button>
-                      <TagsInput.ItemDeleteTrigger
-                        asChild={(triggerProps) => (
-                          <Button
-                            {...triggerProps()}
-                            type="button"
-                            variant="icon"
-                            size="sm"
-                            class={`${styles.smallIconButton} ${styles.deleteButton}`}
-                            aria-label={`Remove ${language}`}
-                            onClick={() => props.onRemoveSubtitleLanguage(language)}
-                          >
-                            <Trash2 class={patterns.icon4} />
-                          </Button>
-                        )}
-                      />
+                      <Button
+                        type="button"
+                        variant="icon"
+                        size="sm"
+                        class={`${styles.smallIconButton} ${styles.deleteButton}`}
+                        aria-label={`Remove ${language}`}
+                        onClick={() => props.onRemoveSubtitleLanguage(language)}
+                      >
+                        <Trash2 class={patterns.icon4} />
+                      </Button>
                     </div>
-                  </TagsInput.Item>
+                  </li>
                 )}
               </For>
             </ol>
           </Show>
-          <TagsInput.HiddenInput />
-        </TagsInput.Root>
+        </div>
       </div>
     </SectionCard>
   );
