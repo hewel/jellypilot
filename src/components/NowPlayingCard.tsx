@@ -1,4 +1,3 @@
-import { Slider } from '@ark-ui/solid/slider';
 import { createMutation, createQuery, useQueryClient } from '@tanstack/solid-query';
 import { Exit, Match } from 'effect';
 import { Pause, Play, SkipBack, SkipForward, Square, Volume2, VolumeX } from 'lucide-solid';
@@ -24,7 +23,7 @@ import {
 import type { NowPlayingEffect } from '../effects/nowPlaying';
 import { queryKeys, runExit } from '../effects/query';
 import { useToast } from './ToastProvider';
-import { Button, Card, JellyPilotSelect, StatusBadge } from './ui';
+import { Button, Card, JellyPilotSelect, Slider, StatusBadge } from './ui';
 
 import * as patterns from '../styles/patterns.css';
 import * as styles from './NowPlayingCard.css';
@@ -263,25 +262,20 @@ export default function NowPlayingCard(props: {
           </span>
         </div>
         <Show when={activeTimeline()} fallback={<div class={styles.emptyTrack} />}>
-          <Slider.Root
-            aria-label={['Seek position']}
+          <Slider
+            label="Seek position"
             min={0}
             max={player()?.duration ?? 0}
-            value={[seekValue()]}
+            value={seekValue()}
             disabled={!activeTimeline() || !canControlPlayback() || busy() !== null}
-            onValueChange={(details) => setSeekDraft(details.value[0] ?? 0)}
-            onValueChangeEnd={(details) => commitSeek(details.value[0] ?? 0)}
+            onValueChange={setSeekDraft}
+            onValueCommit={commitSeek}
             class={styles.sliderRoot}
-          >
-            <Slider.Control class={styles.sliderControl}>
-              <Slider.Track class={styles.sliderTrack}>
-                <Slider.Range class={`${styles.sliderRange} ${styles.primaryRange}`} />
-              </Slider.Track>
-              <Slider.Thumb index={0} class={styles.thumb}>
-                <Slider.HiddenInput />
-              </Slider.Thumb>
-            </Slider.Control>
-          </Slider.Root>
+            controlClass={styles.sliderControl}
+            trackClass={styles.sliderTrack}
+            rangeClass={`${styles.sliderRange} ${styles.primaryRange}`}
+            thumbClass={styles.thumb}
+          />
         </Show>
       </div>
 
@@ -410,25 +404,20 @@ export default function NowPlayingCard(props: {
             <VolumeX class={contextualIconClass(!connected() || muted(), styles.errorIcon)} />
           </span>
         </Button>
-        <Slider.Root
-          aria-label={['Volume']}
+        <Slider
+          label="Volume"
           min={0}
           max={100}
-          value={[volumeValue()]}
+          value={volumeValue()}
           disabled={!connected() || busy() !== null}
-          onValueChange={(details) => setVolumeDraft(details.value[0] ?? 100)}
-          onValueChangeEnd={(details) => commitVolume(details.value[0] ?? 100)}
+          onValueChange={setVolumeDraft}
+          onValueCommit={commitVolume}
           class={styles.sliderRoot}
-        >
-          <Slider.Control class={styles.sliderControl}>
-            <Slider.Track class={styles.sliderTrack}>
-              <Slider.Range class={`${styles.sliderRange} ${styles.secondaryRange}`} />
-            </Slider.Track>
-            <Slider.Thumb index={0} class={styles.thumb}>
-              <Slider.HiddenInput />
-            </Slider.Thumb>
-          </Slider.Control>
-        </Slider.Root>
+          controlClass={styles.sliderControl}
+          trackClass={styles.sliderTrack}
+          rangeClass={`${styles.sliderRange} ${styles.secondaryRange}`}
+          thumbClass={styles.thumb}
+        />
         <span class={styles.volumeValue}>{Math.round(volumeValue())}%</span>
       </div>
     </div>

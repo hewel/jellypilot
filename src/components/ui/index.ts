@@ -18,6 +18,8 @@ export { FieldControl, FieldTextarea } from './FieldControl';
 export type { FieldControlProps, FieldControlVariant, FieldTextareaProps } from './FieldControl';
 export { Field } from './Field';
 export { default as SectionCard } from './SectionCard';
+export { default as Slider } from './Slider';
+export type { SliderProps } from './Slider';
 export { default as StatusBadge } from './StatusBadge';
 export { default as StatusIndicator } from './StatusIndicator';
 export { default as TextField } from './TextField';

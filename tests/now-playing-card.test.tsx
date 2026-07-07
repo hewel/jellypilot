@@ -168,7 +168,7 @@ test('playing state exposes transport controls and media metadata', async () => 
   await waitFor(() => expect(setPause).toHaveBeenCalledWith(true));
   cleanup();
 });
-test('playing state uses Ark sliders for seek and volume', async () => {
+test('playing state uses local sliders for seek and volume', async () => {
   const seek = rstest.spyOn(commands, 'mpvSeek').mockResolvedValue({ data: null, status: 'ok' });
   const setVolume = rstest
     .spyOn(commands, 'mpvSetVolume')
@@ -180,8 +180,8 @@ test('playing state uses Ark sliders for seek and volume', async () => {
   const seekSlider = screen.getByRole('slider', { name: 'Seek position' });
   const volumeSlider = screen.getByRole('slider', { name: 'Volume' });
 
-  expect(seekSlider.closest('[data-scope="slider"]')).not.toBeNull();
-  expect(volumeSlider.closest('[data-scope="slider"]')).not.toBeNull();
+  expect(seekSlider.closest('[data-scope="slider"]')).toBeNull();
+  expect(volumeSlider.closest('[data-scope="slider"]')).toBeNull();
 
   expect(seekSlider).toHaveAttribute('aria-valuemin', '0');
   expect(seekSlider).toHaveAttribute('aria-valuemax', '120');
