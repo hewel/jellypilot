@@ -158,6 +158,14 @@ export const popover = style([
   },
 ]);
 
+export const positioner = style({
+  left: 0,
+  position: 'fixed',
+  top: 0,
+  transform: 'translateY(-100%)',
+  zIndex: 100,
+});
+
 export const loading = style([
   sprinkles({
     display: 'flex',

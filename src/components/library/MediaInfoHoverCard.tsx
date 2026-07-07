@@ -1,8 +1,7 @@
-import { HoverCard } from '@ark-ui/solid/hover-card';
 import { createQuery } from '@tanstack/solid-query';
 import { Exit, Option } from 'effect';
 import { Check, Heart, LoaderCircle } from 'lucide-solid';
-import { createMemo, createSignal, For, Show } from 'solid-js';
+import { createMemo, createSignal, createUniqueId, For, onCleanup, Show } from 'solid-js';
 import type { JSX } from 'solid-js';
 import { Portal } from 'solid-js/web';
 
@@ -100,7 +99,11 @@ export function MediaInfoContent(props: { detail: MediaDetail }) {
  * open and cached by Solid Query.
  */
 export function MediaInfoHoverCard(props: { id: string; itemType: string; children: JSX.Element }) {
+  const popoverId = createUniqueId();
   const [open, setOpen] = createSignal(false);
+  const [triggerElement, setTriggerElement] = createSignal<HTMLDivElement | null>(null);
+  const [position, setPosition] = createSignal({ left: 0, top: 0 });
+  let closeTimer: ReturnType<typeof setTimeout> | undefined;
   const connectionQuery = createQuery(() => ({
     queryKey: queryKeys.connectionState,
     queryFn: () => runExit(fetchConnectionState()),
@@ -113,46 +116,85 @@ export function MediaInfoHoverCard(props: { id: string; itemType: string; childr
     enabled: open() && isLibrarySessionKeyConnected(sessionKey()),
     staleTime: Infinity,
   }));
+  const clearCloseTimer = () => {
+    if (closeTimer) {
+      clearTimeout(closeTimer);
+      closeTimer = undefined;
+    }
+  };
+  const updatePosition = () => {
+    const trigger = triggerElement();
+
+    if (!trigger || typeof window === 'undefined') {
+      return;
+    }
+
+    const rect = trigger.getBoundingClientRect();
+    setPosition({
+      left: Math.max(8, Math.min(rect.left, window.innerWidth - 340)),
+      top: Math.max(8, rect.top - 10),
+    });
+  };
+  const show = () => {
+    clearCloseTimer();
+    updatePosition();
+    setOpen(true);
+  };
+  const scheduleClose = () => {
+    clearCloseTimer();
+    closeTimer = setTimeout(() => setOpen(false), 120);
+  };
+
+  onCleanup(clearCloseTimer);
 
   return (
-    <HoverCard.Root
-      lazyMount
-      unmountOnExit
-      positioning={{ gutter: 10, placement: 'top' }}
-      onOpenChange={(details) => setOpen(details.open)}
-    >
-      <HoverCard.Trigger
-        asChild={(triggerProps) => <div {...triggerProps()}>{props.children}</div>}
-      />
-      <Portal>
-        <HoverCard.Positioner>
-          <HoverCard.Content class={styles.popover}>
-            <Show
-              when={
-                !(detailQuery.isPending || (detailQuery.isFetching && !detailQuery.data)) &&
-                detailQuery.data
-              }
-              fallback={
-                <div class={styles.loading}>
-                  <LoaderCircle class={styles.spinner} />
-                  <span>Loading…</span>
-                </div>
-              }
-            >
-              {(exit) =>
-                Exit.match(exit(), {
-                  onFailure: (cause) => (
-                    <p class={styles.error}>
-                      {commandFailureMessage(cause, 'Could not load detail')}
-                    </p>
-                  ),
-                  onSuccess: (value) => <MediaInfoContent detail={value} />,
-                })
-              }
-            </Show>
-          </HoverCard.Content>
-        </HoverCard.Positioner>
-      </Portal>
-    </HoverCard.Root>
+    <>
+      <div
+        ref={setTriggerElement}
+        aria-describedby={open() ? popoverId : undefined}
+        onPointerEnter={show}
+        onPointerLeave={scheduleClose}
+        onFocusIn={show}
+        onFocusOut={scheduleClose}
+      >
+        {props.children}
+      </div>
+      <Show when={open()}>
+        <Portal>
+          <div
+            class={styles.positioner}
+            style={{ left: `${position().left}px`, top: `${position().top}px` }}
+            onPointerEnter={clearCloseTimer}
+            onPointerLeave={scheduleClose}
+          >
+            <div id={popoverId} role="tooltip" class={styles.popover}>
+              <Show
+                when={
+                  !(detailQuery.isPending || (detailQuery.isFetching && !detailQuery.data)) &&
+                  detailQuery.data
+                }
+                fallback={
+                  <div class={styles.loading}>
+                    <LoaderCircle class={styles.spinner} />
+                    <span>Loading…</span>
+                  </div>
+                }
+              >
+                {(exit) =>
+                  Exit.match(exit(), {
+                    onFailure: (cause) => (
+                      <p class={styles.error}>
+                        {commandFailureMessage(cause, 'Could not load detail')}
+                      </p>
+                    ),
+                    onSuccess: (value) => <MediaInfoContent detail={value} />,
+                  })
+                }
+              </Show>
+            </div>
+          </div>
+        </Portal>
+      </Show>
+    </>
   );
 }
