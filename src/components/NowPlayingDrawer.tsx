@@ -1,4 +1,3 @@
-import { Dialog } from '@ark-ui/solid/dialog';
 import { createQuery, useQueryClient } from '@tanstack/solid-query';
 import { Exit, Match } from 'effect';
 import { MonitorPlay, X } from 'lucide-solid';
@@ -9,7 +8,7 @@ import type { NowPlayingState } from '../bindings';
 import { fetchNowPlayingState, listenNowPlayingChanged } from '../effects/nowPlaying';
 import { queryKeys, runExit } from '../effects/query';
 import NowPlayingCard from './NowPlayingCard';
-import { Button } from './ui';
+import { Button, Dialog } from './ui';
 
 import * as styles from './NowPlayingDrawer.css';
 

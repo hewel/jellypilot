@@ -1,4 +1,3 @@
-import { Dialog } from '@ark-ui/solid/dialog';
 import { Play, X } from 'lucide-solid';
 import { createEffect, createMemo, createSignal } from 'solid-js';
 import { Portal } from 'solid-js/web';
@@ -8,7 +7,7 @@ import type {
   VideoLibraryPlayMode,
   VideoPlaybackStreamOption,
 } from '../../bindings';
-import { Button, Card, JellyPilotSelect } from '../ui';
+import { Button, Card, Dialog, JellyPilotSelect } from '../ui';
 import type { JellyPilotSelectItem } from '../ui';
 
 import * as styles from './LibraryPlaybackChooser.css';

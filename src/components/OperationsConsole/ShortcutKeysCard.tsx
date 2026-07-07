@@ -1,8 +1,7 @@
-import { Field as ArkField } from '@ark-ui/solid/field';
 import { Keyboard } from 'lucide-solid';
 import { Show } from 'solid-js';
 
-import { FieldControl, SectionCard } from '../ui';
+import { Field, FieldControl, SectionCard } from '../ui';
 import type { OperationsConsoleForm } from './types';
 
 import * as shared from './shared.css';
@@ -34,9 +33,9 @@ export default function ShortcutKeysCard(props: ShortcutKeysCardProps) {
           }}
         >
           {(field) => (
-            <ArkField.Root class={styles.field} invalid={field().state.meta.errors.length > 0}>
-              <ArkField.Label class={shared.overline}>Next episode key</ArkField.Label>
-              <ArkField.Input
+            <Field.Root class={styles.field} invalid={field().state.meta.errors.length > 0}>
+              <Field.Label class={shared.overline}>Next episode key</Field.Label>
+              <Field.Input
                 asChild={(fieldProps) => (
                   <FieldControl
                     {...fieldProps()}
@@ -54,7 +53,7 @@ export default function ShortcutKeysCard(props: ShortcutKeysCardProps) {
                   />
                 )}
               />
-            </ArkField.Root>
+            </Field.Root>
           )}
         </props.form.Field>
 
@@ -65,9 +64,9 @@ export default function ShortcutKeysCard(props: ShortcutKeysCardProps) {
           }}
         >
           {(field) => (
-            <ArkField.Root class={styles.field} invalid={field().state.meta.errors.length > 0}>
-              <ArkField.Label class={shared.overline}>Previous episode key</ArkField.Label>
-              <ArkField.Input
+            <Field.Root class={styles.field} invalid={field().state.meta.errors.length > 0}>
+              <Field.Label class={shared.overline}>Previous episode key</Field.Label>
+              <Field.Input
                 asChild={(fieldProps) => (
                   <FieldControl
                     {...fieldProps()}
@@ -85,7 +84,7 @@ export default function ShortcutKeysCard(props: ShortcutKeysCardProps) {
                   />
                 )}
               />
-            </ArkField.Root>
+            </Field.Root>
           )}
         </props.form.Field>
 
@@ -97,9 +96,9 @@ export default function ShortcutKeysCard(props: ShortcutKeysCardProps) {
             }}
           >
             {(field) => (
-              <ArkField.Root class={styles.field} invalid={field().state.meta.errors.length > 0}>
-                <ArkField.Label class={shared.overline}>Intro skip key</ArkField.Label>
-                <ArkField.Input
+              <Field.Root class={styles.field} invalid={field().state.meta.errors.length > 0}>
+                <Field.Label class={shared.overline}>Intro skip key</Field.Label>
+                <Field.Input
                   asChild={(fieldProps) => (
                     <FieldControl
                       {...fieldProps()}
@@ -117,7 +116,7 @@ export default function ShortcutKeysCard(props: ShortcutKeysCardProps) {
                     />
                   )}
                 />
-              </ArkField.Root>
+              </Field.Root>
             )}
           </props.form.Field>
         </Show>

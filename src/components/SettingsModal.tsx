@@ -1,11 +1,10 @@
-import { Dialog } from '@ark-ui/solid/dialog';
 import { useNavigate } from '@tanstack/solid-router';
 import { Settings, X } from 'lucide-solid';
 import { createSignal } from 'solid-js';
 import { Portal } from 'solid-js/web';
 
 import OperationsConsole from './OperationsConsole';
-import { Button } from './ui';
+import { Button, Dialog } from './ui';
 
 import * as styles from './SettingsModal.css';
 
@@ -32,14 +31,7 @@ export default function SettingsModal() {
       <Portal>
         <Dialog.Backdrop class={styles.backdrop} />
         <Dialog.Positioner class={styles.positioner}>
-          <Dialog.Content
-            class={styles.content}
-            onKeyDown={(event) => {
-              if (event.key === 'Escape') {
-                setOpen(false);
-              }
-            }}
-          >
+          <Dialog.Content class={styles.content}>
             <header class={styles.header}>
               <div>
                 <Dialog.Title class={styles.title}>Settings</Dialog.Title>

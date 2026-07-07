@@ -1,4 +1,3 @@
-import { Dialog } from '@ark-ui/solid/dialog';
 import { createForm } from '@tanstack/solid-form';
 import { createMutation, createQuery, useQueryClient } from '@tanstack/solid-query';
 import { Exit, Option } from 'effect';
@@ -32,7 +31,7 @@ import {
   parseSubtitleLanguageInput,
 } from './OperationsConsole/subtitleLanguages';
 import { useToast } from './ToastProvider';
-import { Button, ConsoleContainer, ConsoleGrid, PageFooter } from './ui';
+import { Button, ConsoleContainer, ConsoleGrid, Dialog, PageFooter } from './ui';
 import type { JellyPilotSelectItem } from './ui';
 
 import * as patterns from '../styles/patterns.css';

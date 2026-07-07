@@ -732,6 +732,7 @@ test('sign out confirms and removes the active saved service profile', async () 
   const cleanup = renderConsole(onSignedOut);
 
   await screen.findByRole('heading', { name: 'Connection' });
+  await screen.findByText('Jellyfin Home');
   fireEvent.click(screen.getByRole('button', { name: 'Sign out' }));
   await waitFor(() => expect(screen.getByRole('dialog')).toBeVisible());
   const signOutButtons = screen.getAllByRole('button', { name: 'Sign out' });
@@ -754,6 +755,7 @@ test('sign out failure preserves the active saved service profile and stays on c
   const cleanup = renderConsole(onSignedOut);
 
   await screen.findByRole('heading', { name: 'Connection' });
+  await screen.findByText('Jellyfin Home');
   fireEvent.click(screen.getByRole('button', { name: 'Sign out' }));
   await waitFor(() => expect(screen.getByRole('dialog')).toBeVisible());
   const signOutButtons = screen.getAllByRole('button', { name: 'Sign out' });
@@ -775,6 +777,7 @@ test('sign out rejected commands preserve the saved service profile and close th
   const cleanup = renderConsole(onSignedOut);
 
   await screen.findByRole('heading', { name: 'Connection' });
+  await screen.findByText('Jellyfin Home');
   fireEvent.click(screen.getByRole('button', { name: 'Sign out' }));
   await waitFor(() => expect(screen.getByRole('dialog')).toBeVisible());
   const signOutButtons = screen.getAllByRole('button', { name: 'Sign out' });
@@ -787,7 +790,7 @@ test('sign out rejected commands preserve the saved service profile and close th
 
   cleanup();
 });
-test('sign out dialog uses Ark dialog dismissal semantics', async () => {
+test('sign out dialog uses local dialog dismissal semantics', async () => {
   const cleanup = renderConsole();
 
   await screen.findByRole('heading', { name: 'Connection' });
@@ -795,7 +798,7 @@ test('sign out dialog uses Ark dialog dismissal semantics', async () => {
   fireEvent.click(screen.getByRole('button', { name: 'Sign out' }));
   const dialog = await screen.findByRole('dialog');
   expect(dialog).toBeVisible();
-  expect(dialog.closest('[data-scope="dialog"]')).not.toBeNull();
+  expect(dialog).toHaveAccessibleName('Sign out?');
 
   fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
   await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
@@ -807,7 +810,7 @@ test('sign out dialog uses Ark dialog dismissal semantics', async () => {
 
   fireEvent.click(screen.getByRole('button', { name: 'Sign out' }));
   await screen.findByRole('dialog');
-  const backdrop = document.querySelector('[data-scope="dialog"][data-part="backdrop"]');
+  const backdrop = document.querySelector('[data-dialog-backdrop]');
   expect(backdrop).not.toBeNull();
   fireEvent.pointerDown(backdrop as Element);
   fireEvent.click(backdrop as Element);
@@ -829,6 +832,7 @@ test('sign out dialog locks dismissal while signing out', async () => {
   const cleanup = renderConsole();
 
   await screen.findByRole('heading', { name: 'Connection' });
+  await screen.findByText('Jellyfin Home');
   fireEvent.click(screen.getByRole('button', { name: 'Sign out' }));
   await screen.findByRole('dialog');
 
@@ -844,11 +848,11 @@ test('sign out dialog locks dismissal while signing out', async () => {
 
   cleanup();
 });
-test('player bridge settings use Ark fields and intro skip mode buttons', async () => {
+test('player bridge settings use local fields and intro skip mode buttons', async () => {
   const cleanup = renderConsole();
 
   const mpvPath = await screen.findByPlaceholderText('Path to mpv executable');
-  expect(mpvPath.closest('[data-scope="field"]')).not.toBeNull();
+  expect(screen.getByLabelText('MPV executable path')).toBe(mpvPath);
 
   expect(screen.queryByPlaceholderText('--fullscreen&#10;--force-window')).toBeNull();
 
@@ -860,7 +864,6 @@ test('player bridge settings use Ark fields and intro skip mode buttons', async 
   fireEvent.click(advancedTrigger);
   await waitFor(() => expect(advancedTrigger).toHaveAttribute('aria-expanded', 'true'));
   const mpvArgs = await screen.findByLabelText('Extra arguments');
-  expect(mpvArgs.closest('[data-scope="field"]')).not.toBeNull();
   expect(mpvArgs.closest('[data-scope="collapsible"]')).not.toBeNull();
 
   const shortcutHeading = screen.getByRole('heading', {

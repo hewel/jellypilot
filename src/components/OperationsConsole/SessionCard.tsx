@@ -1,8 +1,7 @@
-import { Dialog } from '@ark-ui/solid/dialog';
 import { LogOut, ShieldAlert } from 'lucide-solid';
 import { Portal } from 'solid-js/web';
 
-import { Button, Card } from '../ui';
+import { Button, Card, Dialog } from '../ui';
 import { useOperationsConsoleStore } from './store';
 
 import * as patterns from '../../styles/patterns.css';
@@ -76,14 +75,7 @@ export default function SessionCard(props: SessionCardProps) {
           }}
         />
         <Dialog.Positioner class={`${styles.positioner} ${styles.positionerFill}`}>
-          <Dialog.Content
-            class={styles.content}
-            onKeyDown={(event) => {
-              if (event.key === 'Escape' && !ui.signingOut) {
-                actions.setSignOutDialogOpen(false);
-              }
-            }}
-          >
+          <Dialog.Content class={styles.content}>
             {/* Red top glow bar */}
             <div class={styles.glow} />
 

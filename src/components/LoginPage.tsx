@@ -1,5 +1,4 @@
 import { Checkbox } from '@ark-ui/solid/checkbox';
-import { Field as ArkField } from '@ark-ui/solid/field';
 import { Tabs } from '@ark-ui/solid/tabs';
 import { createForm } from '@tanstack/solid-form';
 import { useQueryClient } from '@tanstack/solid-query';
@@ -24,7 +23,7 @@ import {
 } from '../serverUrl';
 import type { ServerScheme, ServerUrlResult } from '../serverUrl';
 import { saveCurrentSession } from '../sessionAccess';
-import { Button, Card, ConsoleShell, FieldControl, PageFooter } from './ui';
+import { Button, Card, ConsoleShell, Field, FieldControl, PageFooter } from './ui';
 
 import * as patterns from '../styles/patterns.css';
 import * as styles from './LoginPage.css';
@@ -307,9 +306,9 @@ export default function LoginPage(props: LoginPageProps) {
           </form.Field>
           <form.Field name="host">
             {(field) => (
-              <ArkField.Root class={styles.fieldBlock} disabled={isQuickConnectWaiting()}>
-                <ArkField.Label class={styles.srOnly}>Jellyfin host</ArkField.Label>
-                <ArkField.Input
+              <Field.Root class={styles.fieldBlock} disabled={isQuickConnectWaiting()}>
+                <Field.Label class={styles.srOnly}>Jellyfin host</Field.Label>
+                <Field.Input
                   asChild={(fieldProps) => (
                     <FieldControl
                       {...fieldProps()}
@@ -328,7 +327,7 @@ export default function LoginPage(props: LoginPageProps) {
                     />
                   )}
                 />
-              </ArkField.Root>
+              </Field.Root>
             )}
           </form.Field>
         </div>
@@ -473,9 +472,9 @@ export default function LoginPage(props: LoginPageProps) {
             <div class={styles.stack4}>
               <form.Field name="username">
                 {(field) => (
-                  <ArkField.Root class={styles.fieldBlock}>
-                    <ArkField.Label class={styles.label}>Username</ArkField.Label>
-                    <ArkField.Input
+                  <Field.Root class={styles.fieldBlock}>
+                    <Field.Label class={styles.label}>Username</Field.Label>
+                    <Field.Input
                       asChild={(fieldProps) => (
                         <FieldControl
                           {...fieldProps()}
@@ -487,14 +486,14 @@ export default function LoginPage(props: LoginPageProps) {
                         />
                       )}
                     />
-                  </ArkField.Root>
+                  </Field.Root>
                 )}
               </form.Field>
               <form.Field name="password">
                 {(field) => (
-                  <ArkField.Root class={styles.fieldBlock}>
-                    <ArkField.Label class={styles.label}>Password</ArkField.Label>
-                    <ArkField.Input
+                  <Field.Root class={styles.fieldBlock}>
+                    <Field.Label class={styles.label}>Password</Field.Label>
+                    <Field.Input
                       asChild={(fieldProps) => (
                         <FieldControl
                           {...fieldProps()}
@@ -507,7 +506,7 @@ export default function LoginPage(props: LoginPageProps) {
                         />
                       )}
                     />
-                  </ArkField.Root>
+                  </Field.Root>
                 )}
               </form.Field>
               <form.Field name="rememberMe">

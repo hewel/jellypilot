@@ -1,10 +1,9 @@
 import { Collapsible } from '@ark-ui/solid/collapsible';
-import { Field as ArkField } from '@ark-ui/solid/field';
 import { TagsInput } from '@ark-ui/solid/tags-input';
 import { ArrowDown, ArrowUp, ChevronDown, Globe, Plus, Settings, Trash2 } from 'lucide-solid';
 import { For, Show } from 'solid-js';
 
-import { Button, FieldControl, FieldTextarea, JellyPilotSelect, SectionCard } from '../ui';
+import { Button, Field, FieldControl, FieldTextarea, JellyPilotSelect, SectionCard } from '../ui';
 import type { JellyPilotSelectItem } from '../ui';
 import { useOperationsConsoleStore } from './store';
 import { getSubtitleLanguageLabel, parseSubtitleLanguageInput } from './subtitleLanguages';
@@ -57,9 +56,9 @@ export default function PlayerBridgeSettingsCard(props: PlayerBridgeSettingsCard
           }}
         >
           {(field) => (
-            <ArkField.Root class={styles.field} invalid={field().state.meta.errors.length > 0}>
-              <ArkField.Label class={shared.overline}>Playback Target name</ArkField.Label>
-              <ArkField.Input
+            <Field.Root class={styles.field} invalid={field().state.meta.errors.length > 0}>
+              <Field.Label class={shared.overline}>Playback Target name</Field.Label>
+              <Field.Input
                 asChild={(fieldProps) => (
                   <FieldControl
                     {...fieldProps()}
@@ -78,23 +77,23 @@ export default function PlayerBridgeSettingsCard(props: PlayerBridgeSettingsCard
                 )}
               />
               <Show when={field().state.meta.errors.length > 0}>
-                <ArkField.ErrorText class={styles.error}>
+                <Field.ErrorText class={styles.error}>
                   {field().state.meta.errors[0]}
-                </ArkField.ErrorText>
+                </Field.ErrorText>
               </Show>
-              <ArkField.HelperText class={styles.helper}>
+              <Field.HelperText class={styles.helper}>
                 Name displayed in Jellyfin cast menu.
-              </ArkField.HelperText>
-            </ArkField.Root>
+              </Field.HelperText>
+            </Field.Root>
           )}
         </props.form.Field>
 
         <props.form.Field name="mpvPath">
           {(field) => (
-            <ArkField.Root class={styles.field}>
-              <ArkField.Label class={shared.overline}>MPV executable path</ArkField.Label>
+            <Field.Root class={styles.field}>
+              <Field.Label class={shared.overline}>MPV executable path</Field.Label>
               <div class={styles.detectRow}>
-                <ArkField.Input
+                <Field.Input
                   asChild={(fieldProps) => (
                     <FieldControl
                       {...fieldProps()}
@@ -122,7 +121,7 @@ export default function PlayerBridgeSettingsCard(props: PlayerBridgeSettingsCard
                   {ui.detectingMpv ? 'Detecting...' : 'Detect MPV'}
                 </Button>
               </div>
-            </ArkField.Root>
+            </Field.Root>
           )}
         </props.form.Field>
 
@@ -165,9 +164,9 @@ export default function PlayerBridgeSettingsCard(props: PlayerBridgeSettingsCard
 
               <props.form.Field name="mpvArgs">
                 {(field) => (
-                  <ArkField.Root class={styles.field}>
-                    <ArkField.Label class={shared.overline}>Extra arguments</ArkField.Label>
-                    <ArkField.Textarea
+                  <Field.Root class={styles.field}>
+                    <Field.Label class={shared.overline}>Extra arguments</Field.Label>
+                    <Field.Textarea
                       asChild={(fieldProps) => (
                         <FieldTextarea
                           {...fieldProps()}
@@ -184,7 +183,7 @@ export default function PlayerBridgeSettingsCard(props: PlayerBridgeSettingsCard
                         />
                       )}
                     />
-                  </ArkField.Root>
+                  </Field.Root>
                 )}
               </props.form.Field>
             </section>
@@ -230,10 +229,10 @@ export default function PlayerBridgeSettingsCard(props: PlayerBridgeSettingsCard
               }}
             />
 
-            <ArkField.Root class={styles.customField}>
-              <ArkField.Label class={shared.overline}>Custom code</ArkField.Label>
+            <Field.Root class={styles.customField}>
+              <Field.Label class={shared.overline}>Custom code</Field.Label>
               <div class={styles.addRow}>
-                <ArkField.Input
+                <Field.Input
                   asChild={(fieldProps) => (
                     <FieldControl
                       {...fieldProps()}
@@ -267,7 +266,7 @@ export default function PlayerBridgeSettingsCard(props: PlayerBridgeSettingsCard
                   <span>Add</span>
                 </button>
               </div>
-            </ArkField.Root>
+            </Field.Root>
           </div>
 
           <Show
