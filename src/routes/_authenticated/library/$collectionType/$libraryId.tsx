@@ -1,5 +1,3 @@
-import { Menu } from '@ark-ui/solid/menu';
-import { Toggle } from '@ark-ui/solid/toggle';
 import type { VideoLibraryKind, VideoLibraryPlayedFilter, VideoLibrarySort } from '@bindings';
 import { useAppScrollArea } from '@components/AppScrollAreaContext';
 import { useLibraryNavbarControls } from '@components/library/LibraryNavbarContext';
@@ -30,9 +28,11 @@ import {
   createEffect,
   createMemo,
   createSignal,
+  createUniqueId,
   onCleanup,
   onMount,
 } from 'solid-js';
+import type { JSX } from 'solid-js';
 import { Portal } from 'solid-js/web';
 import { commandFailureMessage } from '~effects/commands';
 import { fetchConnectionState } from '~effects/connection';
@@ -769,35 +769,151 @@ interface LibrarySortMenuProps {
   disabled: () => boolean;
 }
 
+interface LibraryMenuFrameProps {
+  label: string;
+  disabled: () => boolean;
+  icon: JSX.Element;
+  children: (close: () => void) => JSX.Element;
+}
+
+function LibraryMenuFrame(props: LibraryMenuFrameProps) {
+  const menuId = createUniqueId();
+  const [open, setOpen] = createSignal(false);
+  const [triggerElement, setTriggerElement] = createSignal<HTMLButtonElement | null>(null);
+  const [menuElement, setMenuElement] = createSignal<HTMLDivElement | null>(null);
+  const [position, setPosition] = createSignal({ left: 0, top: 0 });
+  const close = () => setOpen(false);
+  const updatePosition = () => {
+    const trigger = triggerElement();
+
+    if (!trigger || typeof window === 'undefined') {
+      return;
+    }
+
+    const rect = trigger.getBoundingClientRect();
+    setPosition({
+      left: Math.max(8, Math.min(rect.left, window.innerWidth - 200)),
+      top: rect.bottom + 6,
+    });
+  };
+
+  createEffect(() => {
+    if (props.disabled()) {
+      close();
+    }
+  });
+
+  createEffect(() => {
+    if (!open() || typeof document === 'undefined' || typeof window === 'undefined') {
+      return;
+    }
+
+    updatePosition();
+
+    const handlePointerDown = (event: PointerEvent) => {
+      const target = event.target;
+
+      if (
+        target instanceof Node &&
+        (triggerElement()?.contains(target) || menuElement()?.contains(target))
+      ) {
+        return;
+      }
+
+      close();
+    };
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape') {
+        return;
+      }
+
+      event.preventDefault();
+      close();
+      triggerElement()?.focus();
+    };
+
+    document.addEventListener('pointerdown', handlePointerDown);
+    document.addEventListener('keydown', handleKeyDown);
+    window.addEventListener('resize', updatePosition);
+    onCleanup(() => {
+      document.removeEventListener('pointerdown', handlePointerDown);
+      document.removeEventListener('keydown', handleKeyDown);
+      window.removeEventListener('resize', updatePosition);
+    });
+  });
+
+  return (
+    <>
+      <button
+        ref={setTriggerElement}
+        type="button"
+        disabled={props.disabled()}
+        aria-label={props.label}
+        aria-haspopup="menu"
+        aria-expanded={open()}
+        aria-controls={open() ? menuId : undefined}
+        class={styles.menuTrigger}
+        data-state={open() ? 'open' : 'closed'}
+        onClick={() => {
+          updatePosition();
+          setOpen((value) => !value);
+        }}
+      >
+        {props.icon}
+      </button>
+      <Show when={open()}>
+        <Portal>
+          <div
+            class={styles.menuPositioner}
+            style={{
+              left: `${position().left}px`,
+              top: `${position().top}px`,
+            }}
+          >
+            <div id={menuId} ref={setMenuElement} role="menu" class={styles.menuContent}>
+              {props.children(close)}
+            </div>
+          </div>
+        </Portal>
+      </Show>
+    </>
+  );
+}
+
 function LibrarySortMenu(props: LibrarySortMenuProps) {
   return (
-    <Menu.Root>
-      <Menu.Trigger disabled={props.disabled()} aria-label="Sort By" class={styles.menuTrigger}>
-        <ListSortAscending size={14} />
-      </Menu.Trigger>
-      <Menu.Positioner>
-        <Menu.Content class={styles.menuContent}>
-          <Menu.RadioItemGroup
-            value={props.value()}
-            onValueChange={(details) => props.onChange(details.value as VideoLibrarySort)}
-          >
-            <Menu.ItemGroupLabel class={styles.menuLabel}>Sort By</Menu.ItemGroupLabel>
-            <For each={sortItems}>
-              {(item) => (
-                <Menu.RadioItem value={item.value} class={styles.menuItem}>
-                  <Menu.ItemText class={styles.menuText}>
-                    <span>{item.label}</span>
-                  </Menu.ItemText>
-                  <Menu.ItemIndicator>
-                    <Check class={styles.menuCheck} />
-                  </Menu.ItemIndicator>
-                </Menu.RadioItem>
-              )}
-            </For>
-          </Menu.RadioItemGroup>
-        </Menu.Content>
-      </Menu.Positioner>
-    </Menu.Root>
+    <LibraryMenuFrame
+      label="Sort By"
+      disabled={props.disabled}
+      icon={<ListSortAscending size={14} />}
+    >
+      {(close) => (
+        <>
+          <div class={styles.menuLabel}>Sort By</div>
+          <For each={sortItems}>
+            {(item) => (
+              <button
+                type="button"
+                role="menuitemradio"
+                aria-checked={props.value() === item.value}
+                class={styles.menuItem}
+                onClick={() => {
+                  props.onChange(item.value);
+                  close();
+                }}
+              >
+                <span class={styles.menuText}>
+                  <span>{item.label}</span>
+                </span>
+                <Show when={props.value() === item.value}>
+                  <Check class={styles.menuCheck} />
+                </Show>
+              </button>
+            )}
+          </For>
+        </>
+      )}
+    </LibraryMenuFrame>
   );
 }
 
@@ -811,49 +927,54 @@ interface LibraryStatusMenuProps {
 
 function LibraryStatusMenu(props: LibraryStatusMenuProps) {
   return (
-    <Menu.Root>
-      <Menu.Trigger disabled={props.disabled()} aria-label="Status" class={styles.menuTrigger}>
-        <Funnel size={14} />
-      </Menu.Trigger>
-      <Menu.Positioner>
-        <Menu.Content class={styles.menuContent}>
-          <Menu.RadioItemGroup
-            value={props.value()}
-            onValueChange={(details) => props.onChange(details.value as VideoLibraryPlayedFilter)}
-          >
-            <Menu.ItemGroupLabel class={styles.menuLabel}>Status</Menu.ItemGroupLabel>
-            <For each={['all', 'played', 'unplayed'] as VideoLibraryPlayedFilter[]}>
-              {(filter) => (
-                <Menu.RadioItem value={filter} class={styles.menuItem}>
-                  <Menu.ItemText class={styles.menuText}>
-                    <span>{playedFilterLabel(filter)}</span>
-                  </Menu.ItemText>
-                  <Menu.ItemIndicator>
-                    <Check class={styles.menuCheck} />
-                  </Menu.ItemIndicator>
-                </Menu.RadioItem>
-              )}
-            </For>
-          </Menu.RadioItemGroup>
+    <LibraryMenuFrame label="Status" disabled={props.disabled} icon={<Funnel size={14} />}>
+      {(close) => (
+        <>
+          <div class={styles.menuLabel}>Status</div>
+          <For each={['all', 'played', 'unplayed'] as VideoLibraryPlayedFilter[]}>
+            {(filter) => (
+              <button
+                type="button"
+                role="menuitemradio"
+                aria-checked={props.value() === filter}
+                class={styles.menuItem}
+                onClick={() => {
+                  props.onChange(filter);
+                  close();
+                }}
+              >
+                <span class={styles.menuText}>
+                  <span>{playedFilterLabel(filter)}</span>
+                </span>
+                <Show when={props.value() === filter}>
+                  <Check class={styles.menuCheck} />
+                </Show>
+              </button>
+            )}
+          </For>
 
           <div class={styles.separator} />
 
-          <Menu.CheckboxItem
-            checked={props.favoritesOnly()}
-            onCheckedChange={(checked) => props.onFavoritesOnlyChange(checked)}
-            value="favorites"
+          <button
+            type="button"
+            role="menuitemcheckbox"
+            aria-checked={props.favoritesOnly()}
             class={styles.menuItem}
+            onClick={() => {
+              props.onFavoritesOnlyChange(!props.favoritesOnly());
+              close();
+            }}
           >
-            <Menu.ItemText class={styles.menuText}>
+            <span class={styles.menuText}>
               <span>Favorites Only</span>
-            </Menu.ItemText>
-            <Menu.ItemIndicator>
+            </span>
+            <Show when={props.favoritesOnly()}>
               <Check class={styles.menuCheck} />
-            </Menu.ItemIndicator>
-          </Menu.CheckboxItem>
-        </Menu.Content>
-      </Menu.Positioner>
-    </Menu.Root>
+            </Show>
+          </button>
+        </>
+      )}
+    </LibraryMenuFrame>
   );
 }
 
@@ -878,14 +999,16 @@ function LibraryBrowseNavbarControls(props: LibraryBrowseNavbarControlsProps) {
         <Portal mount={target()}>
           <nav class={styles.controlsNav} aria-label="Library browse controls">
             <div class={styles.controlGroup}>
-              <Toggle.Root
-                pressed={props.sortDirection() === 'desc'}
-                onPressedChange={(pressed) => {
-                  props.onSortDirectionChange(pressed ? 'desc' : 'asc');
-                }}
+              <button
+                type="button"
+                aria-pressed={props.sortDirection() === 'desc'}
                 disabled={props.loading()}
                 aria-label={props.sortDirection() === 'desc' ? 'Sort descending' : 'Sort ascending'}
                 class={styles.menuTrigger}
+                data-state={props.sortDirection() === 'desc' ? 'on' : 'off'}
+                onClick={() => {
+                  props.onSortDirectionChange(props.sortDirection() === 'desc' ? 'asc' : 'desc');
+                }}
               >
                 <Show
                   when={props.sortDirection() === 'desc'}
@@ -893,7 +1016,7 @@ function LibraryBrowseNavbarControls(props: LibraryBrowseNavbarControlsProps) {
                 >
                   <ArrowDownWideNarrowIcon size={14} />
                 </Show>
-              </Toggle.Root>
+              </button>
               <LibrarySortMenu
                 value={props.sortedValue}
                 onChange={props.onSortChange}

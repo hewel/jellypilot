@@ -1047,10 +1047,15 @@ test('library browse controls are shared across libraries', async () => {
   await screen.findByRole('link', { name: /Paged Movie/ });
   fireEvent.click(screen.getByRole('button', { name: 'Sort By' }));
   fireEvent.click(screen.getByText('Recently added', { selector: 'span' }));
+  await waitFor(() => expect(screen.getByRole('button', { name: 'Status' })).not.toBeDisabled());
   fireEvent.click(screen.getByRole('button', { name: 'Status' }));
   fireEvent.click(screen.getByText('Unplayed', { selector: 'span' }));
+  await waitFor(() => expect(screen.getByRole('button', { name: 'Status' })).not.toBeDisabled());
   fireEvent.click(screen.getByRole('button', { name: 'Status' }));
   fireEvent.click(screen.getByText('Favorites Only', { selector: 'span' }));
+  await waitFor(() =>
+    expect(screen.getByRole('button', { name: 'Sort ascending' })).not.toBeDisabled(),
+  );
   fireEvent.click(screen.getByRole('button', { name: 'Sort ascending' }));
 
   await waitFor(() =>

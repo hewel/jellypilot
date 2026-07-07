@@ -152,6 +152,11 @@ export const menuContent = style({
   zIndex: 50,
 });
 
+export const menuPositioner = style({
+  position: 'fixed',
+  zIndex: 50,
+});
+
 export const menuLabel = style({
   fontSize: vars.fontSize['12'],
   fontWeight: vars.fontWeight.bold,
@@ -160,6 +165,8 @@ export const menuLabel = style({
 
 export const menuItem = style({
   alignItems: 'center',
+  background: 'transparent',
+  border: 0,
   borderRadius: vars.borderRadius.xl,
   color: vars.color.onSurfaceVariant,
   cursor: 'pointer',
@@ -168,10 +175,15 @@ export const menuItem = style({
   justifyContent: 'space-between',
   lineHeight: vars.lineHeight['20'],
   padding: `${vars.space['2_5']} ${vars.space['3_5']}`,
+  textAlign: 'left',
   transitionProperty: 'background-color, color',
+  width: '100%',
   selectors: {
     '&:hover': {
       background: vars.color.surfaceContainerHigh,
+      color: vars.color.onSurface,
+    },
+    '&[aria-checked="true"]': {
       color: vars.color.onSurface,
     },
     '&[data-disabled]': {
