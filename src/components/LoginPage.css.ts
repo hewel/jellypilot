@@ -69,6 +69,13 @@ export const serverGrid = style({
   },
 });
 
+export const fieldsetReset = style({
+  border: 0,
+  margin: 0,
+  minInlineSize: 0,
+  padding: 0,
+});
+
 export const segmented = style([
   sprinkles({
     display: 'grid',

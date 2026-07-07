@@ -274,7 +274,7 @@ export default function LoginPage(props: LoginPageProps) {
           <form.Field name="scheme">
             {(field) => (
               <fieldset
-                class={`${styles.segmented} ${styles.segmented2}`}
+                class={`${styles.fieldsetReset} ${styles.segmented} ${styles.segmented2}`}
                 aria-label="Server protocol"
               >
                 <button
@@ -350,7 +350,7 @@ export default function LoginPage(props: LoginPageProps) {
 
         <form.Field name="provider">
           {(field) => (
-            <fieldset>
+            <fieldset class={styles.fieldsetReset}>
               <legend class={styles.label}>Media Server</legend>
               <div
                 class={`${styles.segmented} ${styles.segmented2}`}
