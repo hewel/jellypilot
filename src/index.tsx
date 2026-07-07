@@ -1,6 +1,5 @@
 import { attachDevtoolsOverlay } from '@solid-devtools/overlay';
-import '@fontsource-variable/inter';
-import '@fontsource-variable/space-grotesk';
+import '@fontsource-variable/figtree';
 import { render } from 'solid-js/web';
 
 import './styles/vars.css';

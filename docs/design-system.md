@@ -1,59 +1,45 @@
-# JellyPilot Control Room Design System
+# JellyPilot Design System
 
-JellyPilot uses a desktop-first Control Room design system: dark-only, clean OLED surfaces, selective cinematic glass, and clear operational state. The interface should feel like a reliable media companion for a Jellyfin Playback Target, not a generic mobile settings app.
+JellyPilot uses a desktop-first media companion design system with first-class Light, Dark, and System themes. The interface should feel deliberate, quiet, and reliable for browsing media, configuring playback, and operating MPV. Astryx is a token and visual reference only: JellyPilot does not install Astryx packages, StyleX, React UI, or another headless UI runtime.
 
 Use the typed vanilla-extract styling layer for shared UI and application surfaces: design tokens in `src/styles/vars.css.ts`, atomic utilities from `src/styles/sprinkles.css.ts`, semantic component variants via Recipes, global styles, and component-local `.css.ts` files for complex CSS. Compose static vanilla-extract classes with `style([sprinkles(...), { ... }])` rather than manual `.join(' ')` strings; use Solid `classList` only for runtime conditional classes in `.tsx`. The former utility-CSS bridge is not installed. Reusable visual patterns are components under `src/components/ui`, not global `@layer` class APIs.
 
 ## Principles
 
 - **Desktop-first media control**: optimize for the default 800×600 Tauri window while remaining usable down to 360px width without horizontal scroll.
-- **Clean OLED first**: default surfaces are solid and high-contrast. Glass, gradients, and glow are reserved for app shell and hero/brand moments.
+- **Solid surfaces first**: default surfaces are calm, readable, and theme-aware. Decorative glass, radial gradients, and glow are not part of the default visual language.
 - **Operational clarity**: every status uses text and icon, not color alone.
 - **No fake state**: never show fake media artwork, fake playback progress, or pretend controls.
 - **Accessible by default**: normal text contrast must be at least 4.5:1. Large text and meaningful icons must be at least 3:1.
 
-## Color System
+## Token Contract
 
-All components use semantic tokens. The source of truth is the vanilla-extract contract in `src/styles/vars.css.ts`; Sprinkles, Recipes, and component-local CSS consume that contract directly. `#4f46e5` is the JellyPilot brand seed and primary filled-action background; it is not used as small text on near-black surfaces because contrast is insufficient.
+All components use semantic tokens. The source of truth is the vanilla-extract contract in `src/styles/vars.css.ts`; Sprinkles, Recipes, and component-local CSS consume that contract directly. `:root` defines the light theme and `[data-theme='dark']` defines the dark theme. System mode resolves to one of those two document states.
 
-| Token | Former Utility Alias | Hex | Usage |
-|---|---|---:|---|
-| Primary | `text-primary`, `bg-primary` | `#4f46e5` | Primary filled actions, JellyPilot identity |
-| On Primary | `text-on-primary` | `#ffffff` | Text/icons on primary surfaces |
-| Primary Container | `bg-primary-container` | `#1b1c3b` | Indigo tonal surfaces |
-| On Primary Container | `text-on-primary-container` | `#e0e2ff` | Text on indigo tonal surfaces |
-| Secondary | `text-secondary`, `bg-secondary` | `#818cf8` | Jellyfin/server/session accent |
-| On Secondary | `text-on-secondary` | `#0b0a24` | Text on indigo surfaces |
-| Secondary Container | `bg-secondary-container` | `#1f2152` | Indigo tonal surfaces |
-| On Secondary Container | `text-on-secondary-container` | `#e0e2ff` | Text on indigo tonal surfaces |
-| Tertiary | `text-tertiary`, `bg-tertiary` | `#4fe3b1` | Healthy/ready/success state |
-| On Tertiary | `text-on-tertiary` | `#001f16` | Text on healthy surfaces |
-| Tertiary Container | `bg-tertiary-container` | `#06382a` | Healthy tonal surfaces |
-| On Tertiary Container | `text-on-tertiary-container` | `#bfffe8` | Text on healthy tonal surfaces |
-| Warning | `text-warning`, `bg-warning` | `#f6c768` | Degraded/retryable warning state |
-| On Warning | `text-on-warning` | `#2a1a00` | Text on warning surfaces |
-| Warning Container | `bg-warning-container` | `#3f2e08` | Warning tonal surfaces |
-| On Warning Container | `text-on-warning-container` | `#ffe7a8` | Text on warning tonal surfaces |
-| Error | `text-error`, `bg-error` | `#ff6b7a` | Failure/destructive state |
-| On Error | `text-on-error` | `#330006` | Text on error surfaces |
-| Error Container | `bg-error-container` | `#4b1119` | Error tonal surfaces |
-| On Error Container | `text-on-error-container` | `#ffd9de` | Text on error tonal surfaces |
-| Background | `bg-background` | `#05060a` | App shell background |
-| Surface | `bg-surface` | `#0b0d14` | Base surface |
-| Surface Low | `bg-surface-container-low` | `#0a0c12` | Low-depth cards |
-| Surface | `bg-surface-container` | `#111420` | Default cards |
-| Surface High | `bg-surface-container-high` | `#161b2a` | Inputs, inset controls |
-| Surface Highest | `bg-surface-container-highest` | `#22293e` | Overlays and emphasized panels |
-| On Surface | `text-on-surface` | `#f3f6ff` | Primary text |
-| On Surface Variant | `text-on-surface-variant` | `#aeb8cc` | Secondary text, labels |
-| Outline | `border-outline` | `#5c6c8c` | Strong borders/focus support |
-| Outline Variant | `border-outline-variant` | `#262e42` | Subtle dividers |
-| Primary Gradient End | `to-primary-gradient-end` | `#7a7eff` | Primary button/track gradient endpoint |
-| Secondary Gradient End | `to-secondary-gradient-end` | `#0b4b60` | Secondary/tonal button gradient endpoint |
+The token contract is organized around these groups:
+
+| Group | Usage |
+|---|---|
+| `background` | App, page, panel, raised, inset, overlay, and scrim surfaces. |
+| `text` | Primary, secondary, muted, inverse, accent, and status text. |
+| `icon` | Icon colors that track text and status semantics. |
+| `border` | Subtle, default, strong, focus, and status borders. |
+| `accent` | Primary and secondary interactive fills, hover/pressed states, subtle fills, and borders. |
+| `status` | Success, warning, danger, and info backgrounds, text, and borders. |
+| `data` | Distinct colors for charts, counts, and dense comparison UI. |
+| `space` | Shared spacing scale. |
+| `size` | Control, icon, sidebar, and drawer dimensions. |
+| `radius` | Semantic radius scale. |
+| `shadow` | Elevation shadows without glow-as-state. |
+| `motion` | Duration and easing tokens. |
+| `font` | Figtree body/heading family plus monospace fallback. |
+| `typeScale` | Named size and line-height values for display, headline, title, body, and label text. |
+
+The legacy `vars.color.*`, `fontSize`, `lineHeight`, `borderRadius`, `duration`, and `easing` aliases remain temporarily so existing components compile during the migration. New styling should prefer the semantic groups above.
 
 ## Color Semantics
 
-- Indigo means JellyPilot identity, primary app action, local control, and Jellyfin server/session/connection.
+- Indigo means JellyPilot identity, primary app action, local control, and active media-server/session connection.
 - Teal/green means generic healthy or ready.
 - Amber means degraded, waiting for recovery, or retryable warning.
 - Red means failure or destructive action.
@@ -61,11 +47,11 @@ All components use semantic tokens. The source of truth is the vanilla-extract c
 
 ## Typography
 
-Bundled local Fontsource variable fonts are used. No network font imports.
+Bundled local Fontsource variable fonts are used. No network font imports. Body text and headings use Figtree.
 
 ```css
-body { font-family: 'Inter Variable', ui-sans-serif, system-ui, sans-serif; }
-h1, h2, h3, .brand-type { font-family: 'Space Grotesk Variable', 'Inter Variable', ui-sans-serif, system-ui, sans-serif; }
+body { font-family: 'Figtree Variable', ui-sans-serif, system-ui, sans-serif; }
+h1, h2, h3, .brand-type { font-family: 'Figtree Variable', ui-sans-serif, system-ui, sans-serif; }
 .code, .diagnostic-value { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; }
 ```
 Apply typography through Sprinkles, Recipes, or component-local vanilla-extract styles. The previous global helper classes are gone; use the tokenized values below.
@@ -103,7 +89,7 @@ Apply typography through Sprinkles, Recipes, or component-local vanilla-extract 
 ### Cards and Surfaces
 
 - Use `<Card>` / `<CardLink>` (`src/components/ui/Card.tsx`) with `variant="filled"` (default solid panel), `"elevated"` (hero/emphasized), or `"outlined"` (extra separation). `<CardLink>` is the card-styled anchor for navigational cards.
-- Hero surfaces may use selective gradient/glass (the non-atomic gradients live in `Card.css.ts`). Diagnostics and dense text must remain solid.
+- Hero surfaces should use real media, solid panels, and tokenized scrims. Diagnostics and dense text remain solid.
 
 ### Layout helpers
 
@@ -170,7 +156,7 @@ Diagnostics are a user-facing support view, not a developer console. Use normal 
 - Spacing: margin and padding longhands plus `p`, `px`, `py`, `pt`, `pr`, `pb`, `pl`, `m`, `mx`, `my`, `mt`, `mr`, `mb`, `ml`.
 - Typography: font size, font weight, line height, text alignment.
 - Visual: semantic color, background color, border color, border radius, box shadow, opacity, z-index.
-- Conditions: `base`, `sm`, `md`, `lg`, `xl`, `2xl`, `hover`, `focus`, `active`, `disabled`, and `dark` via `[data-theme='dark'] &`.
+- Conditions: `base`, `sm`, `md`, `lg`, `xl`, `2xl`, `hover`, `focus`, `active`, `disabled`, and `dark` via `[data-theme='dark'] &`. Prefer theme-scoped token values over duplicating light/dark CSS branches.
 
 Do not make Sprinkles parse class strings. Do not add arbitrary values as a public utility feature. Temporary `legacy*` values in Sprinkles exist only to bridge current application needs and should shrink as repeated patterns become semantic tokens or Recipes. Complex selectors, Ark `data-*` state styling, gradients, transforms, filters, animations, and one-off layout math belong in Recipes or component-local `style()` blocks.
 
@@ -208,7 +194,6 @@ Use Lucide Solid only for structural icons. Do not use emoji as icons. Standard 
 
 ## Out of Scope
 
-- Light mode.
 - UI sounds or haptics.
 - Raw URL playback controls.
 - Fake artwork or fake playback state.
