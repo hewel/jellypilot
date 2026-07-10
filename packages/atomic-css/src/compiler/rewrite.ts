@@ -1,6 +1,6 @@
-import { createHash } from 'node:crypto'
 import { extractAtomicCalls } from './extract.js'
 import type { AtomicDeclaration } from './extract.js'
+import { canonicalRuleId } from './manifest.js'
 
 export type RewriteResult = {
   code: string
@@ -43,10 +43,4 @@ export function rewriteAtomicSource(source: string): RewriteResult {
   return { code, rules }
 }
 
-function canonicalRuleId(declarations: AtomicDeclaration[]): string {
-  const payload = declarations
-    .map((declaration) => `${declaration.property}:${declaration.value}`)
-    .sort()
-    .join('|')
-  return createHash('sha256').update(payload).digest('hex').slice(0, 12)
-}
+

@@ -1,3 +1,4 @@
+import { resolveConflicts } from './conflicts.js'
 import { buildAtomicSchema, resolveDeclaration } from '../schema/schema.js'
 import type { AtomicSchema } from '../schema/schema.js'
 
@@ -31,7 +32,7 @@ export function extractAtomicCalls(source: string): ExtractedAtomicCall[] {
     const full = match[0]
     const objectLiteral = match[1]
     if (objectLiteral === undefined || match.index === undefined) continue
-    const declarations = parseStaticObject(objectLiteral)
+    const declarations = resolveConflicts(parseStaticObject(objectLiteral))
     if (declarations.length === 0) {
       throw new Error('atomic() calls must declare at least one property')
     }

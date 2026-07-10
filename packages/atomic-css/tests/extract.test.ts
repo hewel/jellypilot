@@ -32,7 +32,7 @@ test('rewrites atomic() to style() and imports style when missing', () => {
   expect(code).toContain("import { style } from '@vanilla-extract/css'")
   expect(code).toContain('style({"display":"flex"})')
   expect(rules).toHaveLength(1)
-  expect(rules[0]?.id).toMatch(/^[a-f0-9]{12}$/)
+  expect(rules[0]?.id).toMatch(/^[a-f0-9]{16}$/)
 })
 
 test('host version drift fails closed', () => {
