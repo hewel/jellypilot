@@ -91,5 +91,47 @@ export const familyRegistry = [
     path: './components/ProgressBar.tsx',
     catalogTitle: 'ProgressBar',
   },
+  {
+    name: 'text-input',
+    exportName: 'TextInput',
+    path: './components/TextInput.tsx',
+    catalogTitle: 'TextInput',
+  },
+  {
+    name: 'text-area',
+    exportName: 'TextArea',
+    path: './components/TextArea.tsx',
+    catalogTitle: 'TextArea',
+  },
+  {
+    name: 'checkbox-input',
+    exportName: 'CheckboxInput',
+    path: './components/CheckboxInput.tsx',
+    catalogTitle: 'CheckboxInput',
+  },
+  {
+    name: 'switch',
+    exportName: 'Switch',
+    path: './components/Switch.tsx',
+    catalogTitle: 'Switch',
+  },
+  {
+    name: 'slider',
+    exportName: 'Slider',
+    path: './components/Slider.tsx',
+    catalogTitle: 'Slider',
+  },
+  {
+    name: 'segmented-control',
+    exportName: 'SegmentedControl',
+    path: './components/SegmentedControl.tsx',
+    catalogTitle: 'SegmentedControl',
+  },
+  {
+    name: 'tabs',
+    exportName: 'Tabs',
+    path: './components/Tabs.tsx',
+    catalogTitle: 'Tabs',
+  },
 ] as const satisfies readonly FamilyRegistryEntry[]
 export type FamilyName = (typeof familyRegistry)[number]['exportName']
