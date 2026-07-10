@@ -39,6 +39,7 @@
         "@testing-library/jest-dom": "^6.9.1",
         "@types/bun": "^1.3.14",
         "@types/node": "^25.9.3",
+        "@unocss/core": "66.7.4",
         "@unocss/preset-mini": "66.7.4",
         "@vanilla-extract/webpack-plugin": "2.3.27",
         "husky": "^9.1.7",
@@ -56,6 +57,7 @@
         "atomic-css": "./dist/cli.js",
       },
       "dependencies": {
+        "@unocss/core": "66.7.4",
         "@unocss/preset-mini": "66.7.4",
       },
       "devDependencies": {

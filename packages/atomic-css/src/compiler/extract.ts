@@ -1,3 +1,6 @@
+import { buildAtomicSchema, resolveDeclaration } from '../schema/schema.js'
+import type { AtomicSchema } from '../schema/schema.js'
+
 export type AtomicDeclaration = {
   property: string
   value: string
@@ -9,10 +12,19 @@ export type ExtractedAtomicCall = {
   declarations: AtomicDeclaration[]
 }
 
-const ATOMIC_CALL =
-  /atomic\s*\(\s*(\{[\s\S]*?\})\s*\)/g
+const ATOMIC_CALL = /atomic\s*\(\s*(\{[\s\S]*?\})\s*\)/g
 
-/** Minimal static parser for object-literal atomic() calls (tracer for #133). */
+let activeSchema: AtomicSchema = buildAtomicSchema({ preset: 'preset-mini' })
+
+export function setActiveSchema(schema: AtomicSchema): void {
+  activeSchema = schema
+}
+
+export function getActiveSchema(): AtomicSchema {
+  return activeSchema
+}
+
+/** Minimal static parser for object-literal atomic() calls. */
 export function extractAtomicCalls(source: string): ExtractedAtomicCall[] {
   const calls: ExtractedAtomicCall[] = []
   for (const match of source.matchAll(ATOMIC_CALL)) {
@@ -33,7 +45,7 @@ export function extractAtomicCalls(source: string): ExtractedAtomicCall[] {
 }
 
 function parseStaticObject(objectLiteral: string): AtomicDeclaration[] {
-  // ponytail: only bare identifiers + string/number literals for #133 tracer
+  // ponytail: only bare identifiers + string/number literals for this slice
   const body = objectLiteral.trim().replace(/^\{|\}$/g, '')
   if (body.trim().length === 0) {
     throw new Error('atomic() calls must not be empty')
@@ -51,25 +63,24 @@ function parseStaticObject(objectLiteral: string): AtomicDeclaration[] {
     if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(rawKey)) {
       throw new Error(`unsupported atomic() key: ${rawKey}`)
     }
-    let value: string
+    let value: string | number
     if (
       (rawValue.startsWith("'") && rawValue.endsWith("'")) ||
       (rawValue.startsWith('"') && rawValue.endsWith('"'))
     ) {
       value = rawValue.slice(1, -1)
     } else if (/^-?\d+(\.\d+)?$/.test(rawValue)) {
-      value = rawValue
+      value = Number(rawValue)
     } else {
       throw new Error(`unsupported atomic() value: ${rawValue}`)
     }
-    declarations.push({
-      property: camelToKebab(rawKey),
-      value,
-    })
+    const resolved = resolveDeclaration(activeSchema, rawKey, value)
+    for (const declaration of resolved) {
+      declarations.push({
+        property: declaration.cssProperty,
+        value: declaration.value,
+      })
+    }
   }
   return declarations
-}
-
-function camelToKebab(property: string): string {
-  return property.replace(/[A-Z]/g, (char) => `-${char.toLowerCase()}`)
 }

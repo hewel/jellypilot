@@ -117,3 +117,27 @@ test('npm pack --dry-run only includes public package files', () => {
   expect(output).not.toContain('src/')
   expect(output).not.toContain('.atomic-css')
 })
+
+test('layout slice fixture compiles display/items/gap/padding/width', () => {
+  const fixtureDir = join(fixturesRoot, 'layout')
+  const distDir = join(fixtureDir, 'dist')
+  if (existsSync(distDir)) {
+    rmSync(distDir, { recursive: true, force: true })
+  }
+  const result = spawnSync(
+    'bunx',
+    ['rsbuild', 'build', '-c', 'rsbuild.config.ts'],
+    {
+      cwd: fixtureDir,
+      encoding: 'utf8',
+      env: process.env,
+    },
+  )
+  expect(result.status ?? 1, result.stderr || result.stdout).toBe(0)
+  const assets = collectTextFiles(distDir).join('\n')
+  expect(assets).toMatch(/display\s*:\s*flex/)
+  expect(assets).toMatch(/align-items\s*:\s*center/)
+  expect(assets).toMatch(/gap\s*:\s*1rem/)
+  expect(assets).toMatch(/padding\s*:\s*1rem/)
+  expect(assets).toMatch(/width\s*:\s*100\s*%/)
+})

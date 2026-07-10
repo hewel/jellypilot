@@ -11,12 +11,12 @@ test('uncompiled atomic marker throws exact message', () => {
 })
 
 test('extracts a minimal static object call', () => {
-  const source = `export const box = atomic({ display: 'flex', gap: '8px' })`
+  const source = `export const box = atomic({ display: 'flex', gap: 4 })`
   const calls = extractAtomicCalls(source)
   expect(calls).toHaveLength(1)
   expect(calls[0]?.declarations).toEqual([
     { property: 'display', value: 'flex' },
-    { property: 'gap', value: '8px' },
+    { property: 'gap', value: '1rem' },
   ])
 })
 

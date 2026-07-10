@@ -24,6 +24,11 @@
       "import": "./dist/rsbuild.js",
       "default": "./dist/rsbuild.js"
     },
+    "./config": {
+      "types": "./dist/config.d.ts",
+      "import": "./dist/config.js",
+      "default": "./dist/config.js"
+    },
     "./package.json": "./package.json"
   },
   "bin": {
@@ -42,6 +47,7 @@
     "prepare": "tsc -p tsconfig.build.json"
   },
   "dependencies": {
+    "@unocss/core": "66.7.4",
     "@unocss/preset-mini": "66.7.4"
   },
   "peerDependencies": {
