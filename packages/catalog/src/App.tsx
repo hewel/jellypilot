@@ -1,5 +1,8 @@
-import { createSignal, For } from 'solid-js'
+import { createMemo, createSignal, For, Show } from 'solid-js'
 import {
+  Badge,
+  Button,
+  Card,
   familyRegistry,
   Heading,
   jellypilotTheme,
@@ -10,48 +13,140 @@ import {
   UIRoot,
   VisuallyHidden,
 } from '@jellypilot/ui'
-import { pageStyle, sectionStyle } from './App.css'
+import type { ThemePreference } from '@jellypilot/ui'
+import { pageStyle, searchStyle, sectionStyle, shellStyle } from './App.css'
+
+function hashFamily(): string | null {
+  const hash = globalThis.location?.hash?.replace(/^#/, '') ?? ''
+  return hash.length > 0 ? hash : null
+}
 
 export function App() {
   const [preset, setPreset] = createSignal<'neutral' | 'jellypilot'>('neutral')
-  const [mode, setMode] = createSignal<'light' | 'dark'>('light')
+  const [preference, setPreference] = createSignal<ThemePreference>('system')
+  const [query, setQuery] = createSignal('')
+  const [active, setActive] = createSignal<string | null>(hashFamily())
+
   const theme = () =>
     preset() === 'jellypilot' ? jellypilotTheme : neutralTheme
 
+  const filtered = createMemo(() => {
+    const q = query().trim().toLowerCase()
+    if (!q) return [...familyRegistry]
+    return familyRegistry.filter((entry) => {
+      const haystack = [
+        entry.name,
+        entry.exportName,
+        entry.catalogTitle,
+        entry.path,
+      ]
+        .join(' ')
+        .toLowerCase()
+      return haystack.includes(q)
+    })
+  })
+
+  const selected = createMemo(() => {
+    const id = active()
+    if (!id) return filtered()[0] ?? null
+    return familyRegistry.find((entry) => entry.name === id) ?? null
+  })
+
+  const selectFamily = (name: string) => {
+    setActive(name)
+    if (globalThis.history?.replaceState) {
+      globalThis.history.replaceState(null, '', `#${name}`)
+    } else if (globalThis.location) {
+      globalThis.location.hash = name
+    }
+  }
+
+  if (typeof globalThis.addEventListener === 'function') {
+    globalThis.addEventListener('hashchange', () => setActive(hashFamily()))
+  }
+
   return (
-    <UIRoot preference={mode()} theme={theme()}>
-      <main class={pageStyle}>
-        <Heading level={1}>JellyPilot UI Catalog</Heading>
-        <Text size="md">Registry-driven foundations with UIRoot theme control.</Text>
-        <VisuallyHidden>Accessible catalog landmark</VisuallyHidden>
-        <div class={sectionStyle}>
-          <button type="button" onClick={() => setPreset('neutral')}>
-            Neutral
-          </button>
-          <button type="button" onClick={() => setPreset('jellypilot')}>
-            JellyPilot
-          </button>
-          <button type="button" onClick={() => setMode('light')}>
-            Light
-          </button>
-          <button type="button" onClick={() => setMode('dark')}>
-            Dark
-          </button>
-          <Link href="#text">Jump to Text</Link>
-        </div>
-        <Theme descriptor={theme()} mode={mode()}>
-          <ul class={sectionStyle}>
-            <For each={[...familyRegistry]}>
+    <UIRoot preference={preference()} theme={theme()}>
+      <div class={shellStyle}>
+        <aside class={sectionStyle}>
+          <Heading level={1}>UI Catalog</Heading>
+          <Text size="sm">Searchable registry of selected v1 families.</Text>
+          <VisuallyHidden>Catalog navigation</VisuallyHidden>
+          <input
+            class={searchStyle}
+            type="search"
+            placeholder="Search families, aliases, paths"
+            value={query()}
+            onInput={(event) => setQuery(event.currentTarget.value)}
+            aria-label="Search catalog"
+          />
+          <div class={sectionStyle}>
+            <Text size="sm">Preset</Text>
+            <Button
+              size="sm"
+              variant={preset() === 'neutral' ? 'primary' : 'outline'}
+              onClick={() => setPreset('neutral')}
+            >
+              Neutral
+            </Button>
+            <Button
+              size="sm"
+              variant={preset() === 'jellypilot' ? 'primary' : 'outline'}
+              onClick={() => setPreset('jellypilot')}
+            >
+              JellyPilot
+            </Button>
+            <Text size="sm">Mode</Text>
+            <Button size="sm" variant="outline" onClick={() => setPreference('system')}>
+              System
+            </Button>
+            <Button size="sm" variant="outline" onClick={() => setPreference('light')}>
+              Light
+            </Button>
+            <Button size="sm" variant="outline" onClick={() => setPreference('dark')}>
+              Dark
+            </Button>
+          </div>
+          <nav class={sectionStyle} aria-label="Families">
+            <For each={filtered()}>
               {(entry) => (
-                <li data-family={entry.name} id={entry.name}>
-                  <Heading level={2}>{entry.catalogTitle}</Heading>
-                  <Text size="sm">Export: {entry.exportName}</Text>
-                </li>
+                <Link
+                  href={`#${entry.name}`}
+                  class={active() === entry.name ? 'is-active' : undefined}
+                  onClick={() => selectFamily(entry.name)}
+                >
+                  {entry.catalogTitle}
+                </Link>
               )}
             </For>
-          </ul>
-        </Theme>
-      </main>
+          </nav>
+        </aside>
+        <main class={pageStyle}>
+          <Show
+            when={selected()}
+            fallback={<Text>No matching families.</Text>}
+          >
+            {(entry) => (
+              <Card>
+                <Badge>{entry().exportName}</Badge>
+                <Heading level={2}>{entry().catalogTitle}</Heading>
+                <Text size="sm">Hash: #{entry().name}</Text>
+                <Text size="sm">Source: {entry().path}</Text>
+                <Text size="sm">
+                  Public import: @jellypilot/ui or @jellypilot/ui/
+                  {entry().exportName}
+                </Text>
+                <Text size="sm">
+                  Documented states: default, disabled where applicable, focus,
+                  keyboard, and controlled props. Interaction states use real
+                  controls rather than force-state APIs.
+                </Text>
+              </Card>
+            )}
+          </Show>
+        </main>
+      </div>
+      <Theme descriptor={theme()} />
     </UIRoot>
   )
 }
