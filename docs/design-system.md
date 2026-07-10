@@ -2,7 +2,6 @@
 
 JellyPilot’s durable design contract is **UI Core** (`@jellypilot/ui`) plus **Atomic CSS** (`@jellypilot/atomic-css`). App Composition owns product routes and media workflows; it does not invent parallel primitives or utility owners.
 
-During migration, existing app tokens/Sprinkles under `src/styles/` remain temporary inputs. After contraction they are removed.
 
 Authoritative domain terms live in `CONTEXT.md`. Architecture decisions: ADR 0011 (UI Core), ADR 0012 (Atomic CSS), ADR 0013 (theme).
 
@@ -84,11 +83,11 @@ Unsupported in v1: full preset-mini surface, arbitrary selectors, group/peer/par
 | `@jellypilot/atomic-css` | pinned host peers, preset-mini (adapter), compile-time tooling | Browser runtime CSS machinery, UI Core components |
 | App Composition | public UI Core and Atomic CSS entrypoints | UI Core private modules, compiler internals |
 
-## Migration note
+## Completed cutover
 
-- Legacy app paths may still use `src/styles/vars.css.ts`, Sprinkles, and Ark until family cutover and contraction complete.
-- Do not expand Ark usage or add a second utility owner.
-- Contraction (#127) removes legacy tokens, aliases, local generic primitives, and Ark after every consumer migrates.
+- UI Core owns the Project Theme through the public `@jellypilot/ui/theme/project` style entrypoint.
+- Atomic CSS owns the only low-level utility compiler; its private preset adapter is the sole `@unocss/preset-mini` consumer.
+- App Composition imports public UI Core primitives or style entrypoints only. Ark, Sprinkles, local generic primitives, and app-local theme owners are removed.
 
 ## Out of scope
 

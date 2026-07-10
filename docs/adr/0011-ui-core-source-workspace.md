@@ -25,5 +25,5 @@ JellyPilot currently owns application-local Solid primitives, design tokens, and
 
 - Component, keyboard, and accessibility work lands in UI Core; domain workflows stay in App Composition.
 - Catalog and package tests import public entrypoints only.
-- ADR 0005 (Ark UI primitives) is superseded for new work; remaining Ark usage is migration debt until contraction.
+- ADR 0005 records the superseded Ark strategy; Ark has no remaining dependency or migration-debt role.
 - ADR 0003 dark-only Control Room identity is superseded by Theme Preference / Resolved Theme and Theme Presets.

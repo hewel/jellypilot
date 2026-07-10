@@ -19,8 +19,8 @@ The curated Sprinkles surface cannot faithfully represent preset-derived utility
 - Pin exact Rsbuild, Rspack, vanilla-extract Webpack plugin, and vanilla-extract CSS host versions; resolved-version drift fails with a specified diagnostic.
 - Emit cascade layers `atomic.preflight` then `atomic.utilities`. Semantic component-local vanilla-extract declarations remain unlayered and override utilities.
 - Real-file transport is the deterministic baseline. Virtual transport is released only when cold-build and watch fixtures match that baseline.
-- UI Core remains the semantic Theme Preset and Recipe owner. Atomic CSS owns only low-level preset normalization and static utility generation.
-- Legacy `src/styles/vars.css.ts` / Sprinkles remain migration inputs until contraction removes them after every consumer migrates.
+- UI Core owns the semantic Project Theme and Recipe APIs; Atomic CSS owns low-level preset normalization and static utility generation.
+- The completed contraction removed app-local tokens, Sprinkles, Ark, and generic primitives. App Composition consumes UI Core only through public primitive and style entrypoints.
 
 ## Consequences
 
