@@ -1,0 +1,37 @@
+{
+  "name": "@jellypilot/ui",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "license": "MIT",
+  "exports": {
+    ".": "./src/index.ts",
+    "./Text": "./src/components/Text.tsx",
+    "./Heading": "./src/components/Heading.tsx",
+    "./VisuallyHidden": "./src/components/VisuallyHidden.tsx",
+    "./theme/neutral": "./src/theme/neutral.css.ts",
+    "./reset.css": "./src/styles/reset.css",
+    "./registry": "./src/registry/index.ts",
+    "./package.json": "./package.json"
+  },
+  "scripts": {
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "rstest -c rstest.config.ts",
+    "check:registry": "bun ./scripts/check-registry.ts"
+  },
+  "peerDependencies": {
+    "solid-js": "^1.9.13",
+    "@vanilla-extract/css": "1.20.1",
+    "@jellypilot/atomic-css": "0.1.0"
+  },
+  "devDependencies": {
+    "@jellypilot/atomic-css": "workspace:*",
+    "@rstest/core": "^0.10.5",
+    "@testing-library/dom": "^10.4.1",
+    "@types/node": "^25.9.3",
+    "@vanilla-extract/css": "1.20.1",
+    "jsdom": "^29.1.1",
+    "solid-js": "^1.9.13",
+    "typescript": "^6.0.3"
+  }
+}

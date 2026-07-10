@@ -1,0 +1,24 @@
+{
+  "name": "@jellypilot/catalog",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "rsbuild dev",
+    "build": "rsbuild build",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "@jellypilot/atomic-css": "workspace:*",
+    "@jellypilot/ui": "workspace:*",
+    "solid-js": "^1.9.13"
+  },
+  "devDependencies": {
+    "@rsbuild/core": "2.0.15",
+    "@rsbuild/plugin-babel": "^1.2.1",
+    "@rsbuild/plugin-solid": "^1.2.2",
+    "@vanilla-extract/css": "1.20.1",
+    "@vanilla-extract/webpack-plugin": "2.3.27",
+    "typescript": "^6.0.3"
+  }
+}
