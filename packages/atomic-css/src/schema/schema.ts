@@ -1,6 +1,7 @@
 import { presetMini } from '../preset-mini.js'
 import type { AtomicConfig, ThemeTokenRef } from '../config/types.js'
 import type { FamilyDescriptor } from './families.js'
+import { validateCssValue } from './validate.js'
 
 export type AtomicSchema = {
   version: '0.1.0'
@@ -23,9 +24,11 @@ export function buildAtomicSchema(
   const source = presetMini()
   const families = new Map<string, FamilyDescriptor>()
   for (const family of source.families) {
-    families.set(family.property, cloneFamily(family))
+    const cloned = cloneFamily(family)
+    families.set(family.property, cloned)
     for (const alias of family.aliases ?? []) {
-      families.set(alias, cloneFamily({ ...family, property: alias }))
+      // Share tokens so overrideToken on canonical name applies to aliases.
+      families.set(alias, { ...cloned, property: alias })
     }
   }
 
@@ -135,9 +138,21 @@ function resolveValue(
   rawValue: string | number,
 ): string {
   if (typeof rawValue === 'number') {
+    if (family.categories.includes('numeric-opacity')) {
+      if (rawValue < 0 || rawValue > 100 || !Number.isInteger(rawValue)) {
+        throw new Error(
+          `opacity must be integer 0..100, received ${rawValue}`,
+        )
+      }
+      return String(rawValue / 100)
+    }
     if (family.categories.includes('numeric-spacing')) {
       if (rawValue < 0 && !family.allowNegativeNumeric) {
         throw new Error(`negative numeric not allowed for ${family.property}`)
+      }
+      // line-height numeric spacing uses rem only for length-like families
+      if (family.cssProperty === 'line-height') {
+        return String(rawValue)
       }
       return `${rawValue * 0.25}rem`
     }
@@ -152,7 +167,10 @@ function resolveValue(
 
   const value = rawValue
 
-  if (value === 'full') return '100%'
+  if (value === 'full' && family.cssProperty !== 'border-radius') return '100%'
+  if (value === 'full' && family.cssProperty === 'border-radius') {
+    if (family.tokens?.full) return family.tokens.full
+  }
   if (value === 'screen') {
     if (family.cssProperty.includes('height') || family.property === 'height') {
       return '100vh'
@@ -181,20 +199,40 @@ function resolveValue(
     return family.tokens[value]!
   }
 
+  // Token-intent misspellings: hyphenated color-like names fail as invalid tokens.
+  if (
+    family.categories.includes('token') &&
+    family.tokens &&
+    /^[a-z]+(-\d{2,3}|-\w+)?$/i.test(value) &&
+    !(value in family.tokens)
+  ) {
+    throw new Error(`invalid-theme-token for ${family.property}: ${value}`)
+  }
+
   if (family.categories.includes('fraction') && /^\d+\/\d+$/.test(value)) {
     const [a, b] = value.split('/').map(Number)
     if (!a || !b) throw new Error(`invalid fraction: ${value}`)
     return `${(a / b) * 100}%`
   }
 
-  if (family.categories.includes('arbitrary-length') && isCssLength(value)) {
+  if (family.categories.includes('arbitrary-color')) {
+    validateCssValue(family.cssProperty, value, 'color')
     return value
   }
-
-  if (
-    family.categories.includes('arbitrary-number') &&
-    /^-?\d+(\.\d+)?$/.test(value)
-  ) {
+  if (family.categories.includes('arbitrary-shadow')) {
+    validateCssValue(family.cssProperty, value, 'shadow')
+    return value
+  }
+  if (family.categories.includes('arbitrary-grid')) {
+    validateCssValue(family.cssProperty, value, 'grid')
+    return value
+  }
+  if (family.categories.includes('arbitrary-length')) {
+    validateCssValue(family.cssProperty, value, 'length')
+    return value
+  }
+  if (family.categories.includes('arbitrary-number')) {
+    validateCssValue(family.cssProperty, value, 'number')
     return value
   }
 
@@ -219,15 +257,6 @@ function mapNative(property: string, value: string): string {
   return value
 }
 
-function isCssLength(value: string): boolean {
-  return (
-    value === '0' ||
-    /^-?\d+(\.\d+)?(px|rem|em|%|vh|vw|vmin|vmax|ch|ex|cm|mm|in|pt|pc)$/.test(
-      value,
-    ) ||
-    /^calc\(.+\)$/.test(value)
-  )
-}
 
 function cloneFamily(family: FamilyDescriptor): FamilyDescriptor {
   return {

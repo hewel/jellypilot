@@ -80,17 +80,29 @@ function valueUnion(
       parts.push(JSON.stringify(key))
     }
   }
-  if (categories.includes('numeric-spacing') || categories.includes('numeric-z')) {
+  if (
+    categories.includes('numeric-spacing') ||
+    categories.includes('numeric-z') ||
+    categories.includes('numeric-opacity')
+  ) {
     parts.push('number')
   }
   if (categories.includes('fraction')) {
     parts.push('`${number}/${number}`')
   }
   if (
-    categories.includes('arbitrary-length') ||
-    categories.includes('arbitrary-number')
+    categories.includes('arbitrary-shadow') ||
+    categories.includes('arbitrary-grid')
   ) {
     parts.push('string')
+  } else if (
+    categories.includes('arbitrary-length') ||
+    categories.includes('arbitrary-number') ||
+    categories.includes('arbitrary-color')
+  ) {
+    if (!categories.includes('token')) {
+      parts.push('string')
+    }
   }
   if (parts.length === 0) return 'string'
   const seen: Record<string, true> = {}

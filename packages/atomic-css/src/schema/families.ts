@@ -3,9 +3,13 @@ export type ValueCategory =
   | 'native'
   | 'numeric-spacing'
   | 'numeric-z'
+  | 'numeric-opacity'
   | 'fraction'
   | 'arbitrary-length'
   | 'arbitrary-number'
+  | 'arbitrary-color'
+  | 'arbitrary-shadow'
+  | 'arbitrary-grid'
 
 export type FamilyDescriptor = {
   property: string
@@ -83,7 +87,7 @@ const nextOrder = (): number => {
   return order
 }
 
-export function createLayoutFamilyTable(tokens: {
+export function createFamilyTable(tokens: {
   spacing: Record<string, string>
   width: Record<string, string>
   height: Record<string, string>
@@ -92,6 +96,13 @@ export function createLayoutFamilyTable(tokens: {
   minWidth: Record<string, string>
   minHeight: Record<string, string>
   zIndex: Record<string, string>
+  colors: Record<string, string>
+  fontSize: Record<string, string>
+  fontWeight: Record<string, string>
+  lineHeight: Record<string, string>
+  borderRadius: Record<string, string>
+  /** Project Theme shadows only — preset shared-variable shadows unsupported. */
+  boxShadow: Record<string, string>
 }): FamilyDescriptor[] {
   const spacingTokens = { ...tokens.spacing }
   const sizeWidth = { ...tokens.width }
@@ -320,6 +331,94 @@ export function createLayoutFamilyTable(tokens: {
       native: ['auto'],
       categories: ['token', 'native', 'numeric-z', 'arbitrary-number'],
       allowNegativeNumeric: true,
+      order: nextOrder(),
+    },
+    {
+      property: 'color',
+      cssProperty: 'color',
+      aliases: ['text'],
+      tokens: { ...tokens.colors },
+      categories: ['token', 'arbitrary-color'],
+      order: nextOrder(),
+    },
+    {
+      property: 'backgroundColor',
+      cssProperty: 'background-color',
+      aliases: ['bg'],
+      tokens: { ...tokens.colors },
+      categories: ['token', 'arbitrary-color'],
+      order: nextOrder(),
+    },
+    {
+      property: 'borderColor',
+      cssProperty: 'border-color',
+      tokens: { ...tokens.colors },
+      categories: ['token', 'arbitrary-color'],
+      order: nextOrder(),
+    },
+    {
+      property: 'fontSize',
+      cssProperty: 'font-size',
+      tokens: { ...tokens.fontSize },
+      categories: ['token', 'arbitrary-length'],
+      order: nextOrder(),
+    },
+    {
+      property: 'fontWeight',
+      cssProperty: 'font-weight',
+      tokens: { ...tokens.fontWeight },
+      categories: ['token', 'numeric-z', 'arbitrary-number'],
+      order: nextOrder(),
+    },
+    {
+      property: 'lineHeight',
+      cssProperty: 'line-height',
+      aliases: ['leading'],
+      tokens: { ...tokens.lineHeight },
+      categories: ['token', 'numeric-spacing', 'arbitrary-number', 'arbitrary-length'],
+      order: nextOrder(),
+    },
+    {
+      property: 'textAlign',
+      cssProperty: 'text-align',
+      native: ['left', 'center', 'right', 'justify', 'start', 'end'],
+      categories: ['native'],
+      order: nextOrder(),
+    },
+    {
+      property: 'borderRadius',
+      cssProperty: 'border-radius',
+      aliases: ['rounded'],
+      tokens: { ...tokens.borderRadius },
+      categories: ['token', 'arbitrary-length'],
+      order: nextOrder(),
+    },
+    {
+      property: 'boxShadow',
+      cssProperty: 'box-shadow',
+      aliases: ['shadow'],
+      tokens: { ...tokens.boxShadow },
+      categories: ['token', 'arbitrary-shadow'],
+      order: nextOrder(),
+    },
+    {
+      property: 'opacity',
+      cssProperty: 'opacity',
+      categories: ['numeric-opacity', 'arbitrary-number'],
+      order: nextOrder(),
+    },
+    {
+      property: 'gridTemplateColumns',
+      cssProperty: 'grid-template-columns',
+      aliases: ['gridCols'],
+      categories: ['arbitrary-grid'],
+      order: nextOrder(),
+    },
+    {
+      property: 'gridTemplateRows',
+      cssProperty: 'grid-template-rows',
+      aliases: ['gridRows'],
+      categories: ['arbitrary-grid'],
       order: nextOrder(),
     },
   ]
