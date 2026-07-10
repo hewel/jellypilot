@@ -8,7 +8,10 @@ const barrel = readFileSync(join(root, 'src/index.ts'), 'utf8')
 
 let failed = false
 for (const entry of familyRegistry) {
-  if (!barrel.includes(`export { ${entry.exportName} }`)) {
+  const exportPattern = new RegExp(
+    `export\\s*\\{[^}]*\\b${entry.exportName}\\b[^}]*\\}`,
+  )
+  if (!exportPattern.test(barrel)) {
     console.error(`registry drift: barrel missing export ${entry.exportName}`)
     failed = true
   }
