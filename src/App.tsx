@@ -1,6 +1,7 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/solid-query';
 import { RouterProvider } from '@tanstack/solid-router';
 
+import { ConfigGate } from './components/ConfigGate';
 import { ToastProvider } from './components/ToastProvider';
 import { router } from './router';
 
@@ -19,7 +20,9 @@ const queryClient = new QueryClient({
 const App = () => (
   <QueryClientProvider client={queryClient}>
     <ToastProvider>
-      <RouterProvider router={router} />
+      <ConfigGate>
+        <RouterProvider router={router} />
+      </ConfigGate>
     </ToastProvider>
   </QueryClientProvider>
 );

@@ -4,12 +4,23 @@ use serde::{Deserialize, Deserializer, Serialize};
 use specta::Type;
 
 /// Intro Skipper behavior mode.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Type)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Type, Default)]
 #[serde(rename_all = "camelCase")]
 pub enum IntroSkipperMode {
+  #[default]
   Automatic,
   Manual,
   Off,
+}
+
+/// Durable appearance preference.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Type, Default)]
+#[serde(rename_all = "camelCase")]
+pub enum ThemePreference {
+  #[default]
+  System,
+  Light,
+  Dark,
 }
 
 /// Application configuration.
@@ -59,6 +70,10 @@ pub struct AppConfig {
   /// Keybinding for manual Intro Skipper seek in MPV.
   #[serde(default = "default_keybind_intro_skip")]
   pub keybind_intro_skip: String,
+
+  /// Theme preference: system, light, or dark.
+  #[serde(default)]
+  pub theme_preference: ThemePreference,
 }
 
 #[derive(Debug, Deserialize)]
@@ -88,6 +103,8 @@ struct AppConfigWire {
   keybind_prev: String,
   #[serde(default = "default_keybind_intro_skip")]
   keybind_intro_skip: String,
+  #[serde(default)]
+  theme_preference: ThemePreference,
 }
 
 impl<'de> Deserialize<'de> for AppConfig {
@@ -116,6 +133,7 @@ impl<'de> Deserialize<'de> for AppConfig {
       keybind_next: wire.keybind_next,
       keybind_prev: wire.keybind_prev,
       keybind_intro_skip: wire.keybind_intro_skip,
+      theme_preference: wire.theme_preference,
     })
   }
 }
@@ -162,6 +180,7 @@ impl Default for AppConfig {
       keybind_next: default_keybind_next(),
       keybind_prev: default_keybind_prev(),
       keybind_intro_skip: default_keybind_intro_skip(),
+      theme_preference: ThemePreference::System,
     }
   }
 }
@@ -252,5 +271,23 @@ mod tests {
       err,
       "Preferred subtitle languages cannot contain empty entries"
     );
+  }
+
+  #[test]
+  fn default_theme_preference_is_system() {
+    let config = AppConfig::default();
+    assert_eq!(config.theme_preference, ThemePreference::System);
+  }
+
+  #[test]
+  fn older_saved_config_defaults_theme_preference_to_system() {
+    let config: AppConfig = serde_json::from_str(
+      r#"{
+        "deviceName": "JellyPilot",
+        "progressInterval": 5
+      }"#,
+    )
+    .expect("older config should deserialize");
+    assert_eq!(config.theme_preference, ThemePreference::System);
   }
 }
