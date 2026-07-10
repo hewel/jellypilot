@@ -3,11 +3,9 @@ import { familyRegistry } from '../src/registry/index'
 import { neutralBreakpoints, neutralTokenValues } from '../src/theme/tokens'
 
 test('registry lists foundation families', () => {
-  expect(familyRegistry.map((entry) => entry.exportName).sort()).toEqual([
-    'Heading',
-    'Text',
-    'VisuallyHidden',
-  ])
+  expect(familyRegistry.map((entry) => entry.exportName).sort()).toEqual(
+    ['Heading', 'Link', 'Text', 'Theme', 'UIRoot', 'VisuallyHidden'].sort(),
+  )
 })
 
 test('neutral breakpoints are plain build-time values', () => {

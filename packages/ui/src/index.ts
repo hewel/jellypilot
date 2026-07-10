@@ -4,7 +4,23 @@ export { Heading } from './components/Heading'
 export type { HeadingProps } from './components/Heading'
 export { VisuallyHidden } from './components/VisuallyHidden'
 export type { VisuallyHiddenProps } from './components/VisuallyHidden'
+export { UIRoot } from './components/UIRoot'
+export type { UIRootProps } from './components/UIRoot'
+export { Theme } from './components/Theme'
+export type { ThemeProps } from './components/Theme'
+export { Link } from './components/Link'
+export type { LinkProps } from './components/Link'
 export { familyRegistry } from './registry/index'
 export type { FamilyRegistryEntry, FamilyName } from './registry/index'
 export { neutralTokens, neutralBreakpoints } from './theme/neutral.css'
 export { neutralTokenValues } from './theme/tokens'
+export { neutralTheme } from './theme/neutral'
+export { jellypilotTheme } from './theme/jellypilot'
+export { defineTheme } from './theme/defineTheme'
+export { useTheme } from './theme/context'
+export { UIInvariantError } from './runtime/invariant'
+export type {
+  ThemeDescriptor,
+  ThemeMode,
+  ThemePreference,
+} from './theme/types'

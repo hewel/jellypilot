@@ -8,6 +8,24 @@ export type FamilyRegistryEntry = {
 /** Single source for public exports, catalog navigation, and drift checks. */
 export const familyRegistry = [
   {
+    name: 'uiroot',
+    exportName: 'UIRoot',
+    path: './components/UIRoot.tsx',
+    catalogTitle: 'UIRoot',
+  },
+  {
+    name: 'theme',
+    exportName: 'Theme',
+    path: './components/Theme.tsx',
+    catalogTitle: 'Theme',
+  },
+  {
+    name: 'link',
+    exportName: 'Link',
+    path: './components/Link.tsx',
+    catalogTitle: 'Link',
+  },
+  {
     name: 'text',
     exportName: 'Text',
     path: './components/Text.tsx',
@@ -26,5 +44,4 @@ export const familyRegistry = [
     catalogTitle: 'VisuallyHidden',
   },
 ] as const satisfies readonly FamilyRegistryEntry[]
-
 export type FamilyName = (typeof familyRegistry)[number]['exportName']
