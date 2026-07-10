@@ -133,5 +133,29 @@ export const familyRegistry = [
     path: './components/Tabs.tsx',
     catalogTitle: 'Tabs',
   },
+  {
+    name: 'collapsible',
+    exportName: 'Collapsible',
+    path: './components/Collapsible.tsx',
+    catalogTitle: 'Collapsible',
+  },
+  {
+    name: 'dialog',
+    exportName: 'Dialog',
+    path: './components/Dialog.tsx',
+    catalogTitle: 'Dialog',
+  },
+  {
+    name: 'alert-dialog',
+    exportName: 'AlertDialog',
+    path: './components/AlertDialog.tsx',
+    catalogTitle: 'AlertDialog',
+  },
+  {
+    name: 'popover',
+    exportName: 'Popover',
+    path: './components/Popover.tsx',
+    catalogTitle: 'Popover',
+  },
 ] as const satisfies readonly FamilyRegistryEntry[]
 export type FamilyName = (typeof familyRegistry)[number]['exportName']
