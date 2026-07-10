@@ -1,12 +1,13 @@
+import { pluginAtomic } from '@jellypilot/atomic-css/rsbuild';
 import { defineConfig } from '@rsbuild/core';
 import { pluginBabel } from '@rsbuild/plugin-babel';
 import { pluginSolid } from '@rsbuild/plugin-solid';
 import { tanstackRouter } from '@tanstack/router-plugin/rspack';
-import { VanillaExtractPlugin } from '@vanilla-extract/webpack-plugin';
 
 // Docs: https://rsbuild.rs/config/
 export default defineConfig({
   plugins: [
+    pluginAtomic(),
     pluginBabel({
       include: /\.(?:jsx|tsx)$/,
     }),
@@ -25,7 +26,6 @@ export default defineConfig({
           routeFileIgnorePattern: '\\.css\\.ts$',
           target: 'solid',
         }),
-        new VanillaExtractPlugin(),
       ],
     },
   },

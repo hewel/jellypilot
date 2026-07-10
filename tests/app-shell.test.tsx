@@ -17,6 +17,7 @@ import type {
   VideoShowDetail,
 } from '../src/bindings';
 import { ToastProvider } from '../src/components/ToastProvider';
+import { ConfigCoordinatorProvider } from '../src/effects/configContext';
 import { queryKeys } from '../src/effects/query';
 import { createJellyPilotRouter } from '../src/router';
 import { resetSharedLibraryFilters } from '../src/utils/createSharedLibraryFilters';
@@ -119,6 +120,7 @@ const config: AppConfig = {
   preferredSubtitleLanguages: [],
   progressInterval: 5,
   startMinimized: false,
+  themePreference: 'system',
 };
 
 const shellCleanups: (() => void)[] = [];
@@ -489,6 +491,7 @@ function mockShellCommands(state = connectedState) {
   });
   rstest.spyOn(commands, 'mpvIsConnected').mockResolvedValue(false);
   rstest.spyOn(commands, 'configGet').mockResolvedValue(config);
+  rstest.spyOn(commands, 'configSet').mockResolvedValue(null);
   rstest.spyOn(commands, 'libraryVideoHome').mockResolvedValue({
     data: videoHome,
     status: 'ok',
@@ -563,7 +566,9 @@ function renderShell(path: string | string[] = '/library', client?: QueryClient)
     () => (
       <TestQueryProvider client={client}>
         <ToastProvider>
-          <RouterProvider router={router} />
+          <ConfigCoordinatorProvider>
+            <RouterProvider router={router} />
+          </ConfigCoordinatorProvider>
         </ToastProvider>
       </TestQueryProvider>
     ),

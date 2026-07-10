@@ -138,3 +138,11 @@ export const body = style({
   overflowY: 'auto',
   padding: `${vars.space['4']} ${vars.space['5']}`,
 });
+
+export const srOnlyClose = style({
+  position: 'absolute',
+  width: '1px',
+  height: '1px',
+  overflow: 'hidden',
+  clip: 'rect(0 0 0 0)',
+});

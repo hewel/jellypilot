@@ -115,7 +115,10 @@ export class ConfigCoordinator {
   }
 }
 
-function withThemeDefault(config: AppConfig): AppConfig {
+function withThemeDefault(config: AppConfig | null | undefined): AppConfig {
+  if (!config) {
+    return { themePreference: 'system' };
+  }
   return {
     ...config,
     themePreference: config.themePreference ?? 'system',

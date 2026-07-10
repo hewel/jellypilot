@@ -1,6 +1,6 @@
-import { createEffect, createSignal, onCleanup, type ParentProps, Show } from 'solid-js';
+import { type ParentProps, Show } from 'solid-js';
 
-import { createConfigCoordinator, type ConfigCoordinatorState } from '../effects/configCoordinator';
+import { ConfigCoordinatorProvider, useConfigCoordinator } from '../effects/configContext';
 
 const bootStyle = {
   minHeight: '100vh',
@@ -12,15 +12,8 @@ const bootStyle = {
   fontFamily: 'system-ui, sans-serif',
 } as const;
 
-export function ConfigGate(props: ParentProps) {
-  const coordinator = createConfigCoordinator();
-  const [state, setState] = createSignal<ConfigCoordinatorState>(coordinator.getState());
-
-  createEffect(() => {
-    const unsubscribe = coordinator.subscribe(setState);
-    void coordinator.bootstrap();
-    onCleanup(unsubscribe);
-  });
+function ConfigGateInner(props: ParentProps) {
+  const { coordinator, state } = useConfigCoordinator();
 
   return (
     <Show
@@ -53,5 +46,13 @@ export function ConfigGate(props: ParentProps) {
         {props.children}
       </div>
     </Show>
+  );
+}
+
+export function ConfigGate(props: ParentProps) {
+  return (
+    <ConfigCoordinatorProvider>
+      <ConfigGateInner>{props.children}</ConfigGateInner>
+    </ConfigCoordinatorProvider>
   );
 }

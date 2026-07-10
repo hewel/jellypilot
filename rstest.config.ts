@@ -1,11 +1,12 @@
+import { pluginAtomic } from '@jellypilot/atomic-css/rsbuild';
 import { pluginBabel } from '@rsbuild/plugin-babel';
 import { pluginSolid } from '@rsbuild/plugin-solid';
 import { defineConfig } from '@rstest/core';
-import { VanillaExtractPlugin } from '@vanilla-extract/webpack-plugin';
 
 // Docs: https://rstest.rs/config/
 export default defineConfig({
   plugins: [
+    pluginAtomic(),
     pluginBabel({
       include: /\.(?:jsx|tsx)$/,
     }),
@@ -22,9 +23,4 @@ export default defineConfig({
   testEnvironment: 'jsdom',
   // Package suites run under packages/*/rstest.config.ts with pluginAtomic.
   exclude: ['**/node_modules/**', '**/dist/**', 'packages/**'],
-  tools: {
-    rspack: {
-      plugins: [new VanillaExtractPlugin()],
-    },
-  },
 });

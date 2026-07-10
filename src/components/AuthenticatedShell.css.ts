@@ -1,42 +1,29 @@
 import { style } from '@vanilla-extract/css';
 
-import { sprinkles } from '../styles/sprinkles.css';
 import { vars } from '../styles/vars.css';
 
-const mix = (color: string, amount: number) =>
-  `color-mix(in srgb, ${color} ${amount}%, transparent)`;
+export const main = style({
+  color: vars.color.onSurface,
+  display: 'flex',
+  flexDirection: 'column',
+  marginInline: 'auto',
+  width: '100%',
+  // Reserve space for Now Playing + Theme + Settings cluster.
+  paddingBottom: '11rem',
+});
 
-export const main = style([
-  sprinkles({
-    color: 'onSurface',
-    display: 'flex',
-    flexDirection: 'column',
-    mx: 'auto',
-    width: 'full',
-  }),
-  {
-    animation: `fadeIn ${vars.duration['300']} ${vars.easing.emphasized} forwards`,
-    paddingBottom: '10rem',
-  },
-]);
-
-export const floatingControls = style([
-  sprinkles({
-    alignItems: 'center',
-    borderRadius: '3xl',
-    boxShadow: '2xl',
-    display: 'flex',
-    flexDirection: 'column',
-    gap: '2',
-    p: '1',
-    position: 'fixed',
-    zIndex: '100',
-  }),
-  {
-    backdropFilter: 'blur(24px)',
-    background: mix(vars.color.surfaceContainerLow, 80),
-    border: `1px solid ${mix(vars.color.outlineVariant, 40)}`,
-    bottom: vars.space['4'],
-    right: vars.space['4'],
-  },
-]);
+export const floatingControls = style({
+  alignItems: 'center',
+  borderRadius: vars.borderRadius['3xl'],
+  boxShadow: vars.shadow.lg,
+  display: 'flex',
+  flexDirection: 'column',
+  gap: vars.space['2'],
+  padding: vars.space['1'],
+  position: 'fixed',
+  zIndex: vars.zIndex['100'],
+  background: vars.color.surfaceContainerLow,
+  border: `1px solid ${vars.color.outlineVariant}`,
+  bottom: `max(${vars.space['4']}, env(safe-area-inset-bottom))`,
+  right: `max(${vars.space['4']}, env(safe-area-inset-right))`,
+});

@@ -1,9 +1,8 @@
-import { Dialog } from '@ark-ui/solid/dialog';
+import { Dialog } from '@jellypilot/ui';
 import { createQuery, useQueryClient } from '@tanstack/solid-query';
 import { Exit, Match } from 'effect';
 import { MonitorPlay, X } from 'lucide-solid';
 import { Show, createSignal, onCleanup, onMount } from 'solid-js';
-import { Portal } from 'solid-js/web';
 
 import type { NowPlayingState } from '../bindings';
 import { fetchNowPlayingState, listenNowPlayingChanged } from '../effects/nowPlaying';
@@ -73,65 +72,44 @@ export default function NowPlayingDrawer(props: { jellyfinConnected: boolean }) 
   });
 
   return (
-    <Dialog.Root
-      open={open()}
-      onOpenChange={(details) => setOpen(details.open)}
-      closeOnEscape
-      closeOnInteractOutside
-      lazyMount
-      unmountOnExit
-      role="dialog"
-    >
-      <Dialog.Trigger
-        asChild={(triggerProps) => (
-          <Button
-            {...triggerProps()}
-            type="button"
-            variant="icon"
-            aria-label={triggerLabel(state())}
-            class={styles.trigger}
-          >
-            <MonitorPlay class={styles.triggerIcon} />
-            <span class={statusDotClass(state()?.status)} />
-          </Button>
-        )}
-      />
-
-      <Portal>
-        <Dialog.Backdrop class={styles.backdrop} />
-        <Dialog.Positioner class={styles.positioner}>
-          <Dialog.Content ref={setSelectPortalMount} class={styles.content}>
-            <div class={styles.header}>
-              <div>
-                <Dialog.Title class={styles.title}>Now Playing</Dialog.Title>
-                <Dialog.Description class={styles.description}>
-                  Playback details and MPV controls
-                </Dialog.Description>
-              </div>
-              <Button
-                type="button"
-                variant="icon"
-                aria-label="Close Now Playing"
-                onClick={() => setOpen(false)}
-              >
-                <X class={styles.closeIcon} />
-              </Button>
-            </div>
-
-            <div class={styles.body}>
-              <Show when={selectPortalMount()}>
-                {(mount) => (
-                  <NowPlayingCard
-                    jellyfinConnected={props.jellyfinConnected}
-                    bare
-                    trackSelectPortalMount={mount()}
-                  />
-                )}
-              </Show>
-            </div>
-          </Dialog.Content>
-        </Dialog.Positioner>
-      </Portal>
-    </Dialog.Root>
+    <>
+      <Button
+        type="button"
+        variant="icon"
+        aria-label={triggerLabel(state())}
+        class={styles.trigger}
+        onClick={() => setOpen(true)}
+      >
+        <MonitorPlay class={styles.triggerIcon} />
+        <span class={statusDotClass(state()?.status)} />
+      </Button>
+      <Dialog
+        open={open()}
+        title="Now Playing"
+        description="Playback details and MPV controls"
+        onOpenChange={(next: boolean) => setOpen(next)}
+        class={styles.content}
+      >
+        <div ref={setSelectPortalMount} class={styles.body}>
+          <Show when={selectPortalMount()}>
+            {(mount) => (
+              <NowPlayingCard
+                jellyfinConnected={props.jellyfinConnected}
+                bare
+                trackSelectPortalMount={mount()}
+              />
+            )}
+          </Show>
+        </div>
+        <button
+          type="button"
+          class={styles.srOnlyClose}
+          aria-label="Close Now Playing"
+          onClick={() => setOpen(false)}
+        >
+          <X />
+        </button>
+      </Dialog>
+    </>
   );
 }

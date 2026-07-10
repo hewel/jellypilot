@@ -8,6 +8,7 @@
         "@ark-ui/solid": "^5.37.1",
         "@fontsource-variable/inter": "^5.2.8",
         "@fontsource-variable/space-grotesk": "^5.2.10",
+        "@jellypilot/ui": "workspace:*",
         "@solid-devtools/overlay": "^0.33.5",
         "@tanstack/solid-form": "^1.33.0",
         "@tanstack/solid-query": "^5.101.0",

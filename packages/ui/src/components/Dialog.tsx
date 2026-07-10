@@ -62,12 +62,24 @@ export function Dialog(props: DialogProps) {
             data-part="content"
             role="dialog"
             aria-modal="true"
+            aria-labelledby="jp-dialog-title"
+            aria-describedby={local.description ? 'jp-dialog-description' : undefined}
             tabindex="-1"
             class={[dialogContent, local.class].filter(Boolean).join(' ')}
+            onKeyDown={(event) => {
+              if (event.key === 'Escape') {
+                event.stopPropagation()
+                close('escape', event)
+              }
+            }}
           >
-            <h2 data-part="title">{local.title}</h2>
+            <h2 data-part="title" id="jp-dialog-title">
+              {local.title}
+            </h2>
             <Show when={local.description}>
-              <p data-part="description">{local.description}</p>
+              <p data-part="description" id="jp-dialog-description">
+                {local.description}
+              </p>
             </Show>
             <div data-part="body">{local.children}</div>
             <button

@@ -6,6 +6,7 @@ import { fetchConnectionState } from '../effects/connection';
 import { queryKeys, runExit } from '../effects/query';
 import NowPlayingDrawer from './NowPlayingDrawer';
 import SettingsModal from './SettingsModal';
+import ThemeCycleControl from './ThemeCycleControl';
 import { ConsoleShell } from './ui';
 
 import * as styles from './AuthenticatedShell.css';
@@ -22,15 +23,12 @@ export default function AuthenticatedShell() {
 
   return (
     <ConsoleShell>
-      {/*
-        Bottom padding reserves space so the fixed bottom-right floating cluster
-        (Now Playing + Open Settings) never covers the last Library Browser items.
-      */}
       <main class={styles.main}>
         <Outlet />
       </main>
       <div role="group" aria-label="Floating controls" class={styles.floatingControls}>
         <NowPlayingDrawer jellyfinConnected={jellyfinConnected()} />
+        <ThemeCycleControl />
         <SettingsModal />
       </div>
     </ConsoleShell>

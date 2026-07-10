@@ -1,10 +1,9 @@
-import { Checkbox } from '@ark-ui/solid/checkbox';
 import { Field as ArkField } from '@ark-ui/solid/field';
-import { Tabs } from '@ark-ui/solid/tabs';
+import { CheckboxInput, SegmentedControl } from '@jellypilot/ui';
 import { createForm } from '@tanstack/solid-form';
 import { useQueryClient } from '@tanstack/solid-query';
 import { Effect, Exit, Fiber } from 'effect';
-import { Check, CircleAlert, LoaderCircle, RadioTower } from 'lucide-solid';
+import { CircleAlert, LoaderCircle, RadioTower } from 'lucide-solid';
 import { Show, createEffect, createSignal, onCleanup, onMount } from 'solid-js';
 
 import type { Credentials, MediaServerProvider } from '../bindings';
@@ -384,154 +383,114 @@ export default function LoginPage(props: LoginPageProps) {
           )}
         </form.Field>
 
-        <Tabs.Root
+        <SegmentedControl
           value={loginMethod()}
-          activationMode="manual"
-          lazyMount
-          unmountOnExit
-          onValueChange={(details) => {
-            const value = details.value as LoginMethod;
-            if (value !== 'quickConnect' && value !== 'password') {
-              return;
-            }
+          aria-label="Login Method"
+          disabled={isQuickConnectWaiting()}
+          items={[
+            ...(selectedCapabilities().quickConnect
+              ? [{ value: 'quickConnect', label: 'Quick Connect' }]
+              : []),
+            { value: 'password', label: 'Password' },
+          ]}
+          onValueChange={(value) => {
+            if (value !== 'quickConnect' && value !== 'password') return;
             resetQuickConnect();
             setLoginMethod(value);
           }}
-        >
-          <Tabs.List
-            class={`${styles.segmented} ${styles.tabsList} ${selectedCapabilities().quickConnect ? styles.segmented2 : styles.segmented1}`}
-            aria-label="Login Method"
-          >
-            <Show when={selectedCapabilities().quickConnect}>
-              <Tabs.Trigger
-                value="quickConnect"
-                disabled={isQuickConnectWaiting()}
-                class={styles.segment}
-                classList={{
-                  [styles.segmentSelected]: loginMethod() === 'quickConnect',
-                  [styles.segmentIdle]: loginMethod() !== 'quickConnect',
-                }}
-              >
-                Quick Connect
-              </Tabs.Trigger>
-            </Show>
-            <Tabs.Trigger
-              value="password"
-              disabled={isQuickConnectWaiting()}
-              class={styles.segment}
-              classList={{
-                [styles.segmentSelected]: loginMethod() === 'password',
-                [styles.segmentIdle]: loginMethod() !== 'password',
-              }}
-            >
-              Password
-            </Tabs.Trigger>
-          </Tabs.List>
+        />
 
-          <Show when={selectedCapabilities().quickConnect}>
-            <Tabs.Content value="quickConnect">
-              <div class={styles.quickPanel}>
-                <div class={styles.quickPanelGlow} />
+        <Show when={selectedCapabilities().quickConnect && loginMethod() === 'quickConnect'}>
+          <div class={styles.quickPanel}>
+            <div class={styles.quickPanelGlow} />
 
-                {/* Decorative radar background */}
-                <div class={styles.radar}>
-                  <Show when={isQuickConnectWaiting()}>
-                    <div class={styles.radarRing} />
-                    <div class={`${styles.radarRing} ${styles.radarRing2}`} />
-                    <div class={`${styles.radarRing} ${styles.radarRing3}`} />
-                  </Show>
-                  <RadioTower
-                    class={styles.towerIcon}
-                    classList={{ [styles.pulse]: isQuickConnectWaiting() }}
-                  />
-                </div>
-
-                <p class={styles.quickText}>
-                  Approve this code from another signed-in Jellyfin client. JellyPilot will finish
-                  login automatically after approval.
-                </p>
-                <p class={styles.quickHint}>You are authorizing this Playback Target.</p>
-
-                <Show when={quickConnectCode()}>
-                  <div class={styles.codeBox}>
-                    <span class={styles.codeLabel}>Verification Code</span>
-                    <p class={styles.code}>{quickConnectCode()}</p>
-                  </div>
-                </Show>
-
-                <Show when={isQuickConnectWaiting()}>
-                  <div class={styles.waiting}>
-                    <span class={styles.waitingDot} />
-                    Awaiting Quick Connect Approval…
-                  </div>
-                </Show>
-              </div>
-            </Tabs.Content>
-          </Show>
-
-          <Tabs.Content value="password">
-            <div class={styles.stack4}>
-              <form.Field name="username">
-                {(field) => (
-                  <ArkField.Root class={styles.fieldBlock}>
-                    <ArkField.Label class={styles.label}>Username</ArkField.Label>
-                    <ArkField.Input
-                      asChild={(fieldProps) => (
-                        <FieldControl
-                          {...fieldProps()}
-                          variant="filled"
-                          value={field().state.value}
-                          onInput={(event) => field().handleChange(event.currentTarget.value)}
-                          class={patterns.fullWidth}
-                          placeholder="Jellyfin username"
-                        />
-                      )}
-                    />
-                  </ArkField.Root>
-                )}
-              </form.Field>
-              <form.Field name="password">
-                {(field) => (
-                  <ArkField.Root class={styles.fieldBlock}>
-                    <ArkField.Label class={styles.label}>Password</ArkField.Label>
-                    <ArkField.Input
-                      asChild={(fieldProps) => (
-                        <FieldControl
-                          {...fieldProps()}
-                          variant="filled"
-                          type="password"
-                          value={field().state.value}
-                          onInput={(event) => field().handleChange(event.currentTarget.value)}
-                          class={patterns.fullWidth}
-                          placeholder="Jellyfin password"
-                        />
-                      )}
-                    />
-                  </ArkField.Root>
-                )}
-              </form.Field>
-              <form.Field name="rememberMe">
-                {(field) => (
-                  <Checkbox.Root
-                    checked={field().state.value}
-                    onCheckedChange={(details) => field().handleChange(details.checked === true)}
-                    class={styles.remember}
-                  >
-                    <Checkbox.Control class={styles.checkbox}>
-                      <Checkbox.Indicator class={styles.checkboxIndicator}>
-                        <Check class={patterns.icon3_5} stroke-width={4} />
-                      </Checkbox.Indicator>
-                    </Checkbox.Control>
-                    <Checkbox.Label class={styles.checkboxLabel}>
-                      Remember Server URL and username
-                    </Checkbox.Label>
-                    <Checkbox.HiddenInput />
-                  </Checkbox.Root>
-                )}
-              </form.Field>
+            <div class={styles.radar}>
+              <Show when={isQuickConnectWaiting()}>
+                <div class={styles.radarRing} />
+                <div class={`${styles.radarRing} ${styles.radarRing2}`} />
+                <div class={`${styles.radarRing} ${styles.radarRing3}`} />
+              </Show>
+              <RadioTower
+                class={styles.towerIcon}
+                classList={{ [styles.pulse]: isQuickConnectWaiting() }}
+              />
             </div>
-          </Tabs.Content>
-        </Tabs.Root>
+
+            <p class={styles.quickText}>
+              Approve this code from another signed-in Jellyfin client. JellyPilot will finish login
+              automatically after approval.
+            </p>
+            <p class={styles.quickHint}>You are authorizing this Playback Target.</p>
+
+            <Show when={quickConnectCode()}>
+              <div class={styles.codeBox}>
+                <span class={styles.codeLabel}>Verification Code</span>
+                <p class={styles.code}>{quickConnectCode()}</p>
+              </div>
+            </Show>
+
+            <Show when={isQuickConnectWaiting()}>
+              <div class={styles.waiting}>
+                <span class={styles.waitingDot} />
+                Awaiting Quick Connect Approval…
+              </div>
+            </Show>
+          </div>
+        </Show>
+
+        <Show when={loginMethod() === 'password'}>
+          <div class={styles.stack4}>
+            <form.Field name="username">
+              {(field) => (
+                <ArkField.Root class={styles.fieldBlock}>
+                  <ArkField.Label class={styles.label}>Username</ArkField.Label>
+                  <ArkField.Input
+                    asChild={(fieldProps) => (
+                      <FieldControl
+                        {...fieldProps()}
+                        variant="filled"
+                        value={field().state.value}
+                        onInput={(event) => field().handleChange(event.currentTarget.value)}
+                        class={patterns.fullWidth}
+                        placeholder="Jellyfin username"
+                      />
+                    )}
+                  />
+                </ArkField.Root>
+              )}
+            </form.Field>
+            <form.Field name="password">
+              {(field) => (
+                <ArkField.Root class={styles.fieldBlock}>
+                  <ArkField.Label class={styles.label}>Password</ArkField.Label>
+                  <ArkField.Input
+                    asChild={(fieldProps) => (
+                      <FieldControl
+                        {...fieldProps()}
+                        variant="filled"
+                        type="password"
+                        value={field().state.value}
+                        onInput={(event) => field().handleChange(event.currentTarget.value)}
+                        class={patterns.fullWidth}
+                        placeholder="Jellyfin password"
+                      />
+                    )}
+                  />
+                </ArkField.Root>
+              )}
+            </form.Field>
+            <form.Field name="rememberMe">
+              {(field) => (
+                <CheckboxInput
+                  checked={field().state.value}
+                  label="Remember Server URL and username"
+                  onCheckedChange={(next) => field().handleChange(next === true)}
+                  class={styles.remember}
+                />
+              )}
+            </form.Field>
+          </div>
+        </Show>
 
         <Show when={error()}>
           <div class={styles.alert} role="alert">
