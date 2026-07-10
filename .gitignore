@@ -20,3 +20,8 @@ dist/
 *.tmp
 
 .agents
+
+# Atomic CSS generated modules
+.atomic-css/
+packages/**/.atomic-css/
+packages/**/tests/fixtures/**/dist/

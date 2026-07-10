@@ -1,0 +1,65 @@
+{
+  "name": "@jellypilot/atomic-css",
+  "version": "0.1.0",
+  "private": false,
+  "description": "Preset-driven typed atomic CSS compiler for vanilla-extract",
+  "license": "MIT",
+  "type": "module",
+  "engines": {
+    "node": ">=20.17"
+  },
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "default": "./dist/index.js"
+    },
+    "./preset-mini": {
+      "types": "./dist/preset-mini.d.ts",
+      "import": "./dist/preset-mini.js",
+      "default": "./dist/preset-mini.js"
+    },
+    "./rsbuild": {
+      "types": "./dist/rsbuild.d.ts",
+      "import": "./dist/rsbuild.js",
+      "default": "./dist/rsbuild.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "bin": {
+    "atomic-css": "./dist/cli.js"
+  },
+  "files": [
+    "dist",
+    "LICENSE",
+    "README.md"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "rstest -c rstest.config.ts",
+    "pack:check": "npm pack --dry-run",
+    "prepare": "tsc -p tsconfig.build.json"
+  },
+  "dependencies": {
+    "@unocss/preset-mini": "66.7.4"
+  },
+  "peerDependencies": {
+    "@rsbuild/core": "2.0.15",
+    "@rspack/core": "2.0.8",
+    "@vanilla-extract/css": "1.20.1",
+    "@vanilla-extract/webpack-plugin": "2.3.27"
+  },
+  "devDependencies": {
+    "@rsbuild/core": "2.0.15",
+    "@rspack/core": "2.0.8",
+    "@rstest/core": "^0.10.5",
+    "@types/node": "^25.9.3",
+    "@vanilla-extract/css": "1.20.1",
+    "@vanilla-extract/webpack-plugin": "2.3.27",
+    "typescript": "^6.0.3"
+  },
+  "publishConfig": {
+    "access": "public"
+  }
+}

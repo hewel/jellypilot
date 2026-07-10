@@ -6,6 +6,9 @@
   "engines": {
     "node": ">=20.17"
   },
+  "workspaces": [
+    "packages/*"
+  ],
   "scripts": {
     "dev": "rsbuild dev",
     "build": "rsbuild build",
@@ -23,6 +26,8 @@
     "lint:fix": "oxlint --fix --deny-warnings --no-error-on-unmatched-pattern src tests scripts rsbuild.config.ts rstest.config.ts rstest.setup.ts lint-staged.config.mjs",
     "check": "bun run format:check && bun run lint && bun run typecheck && bun run rust:fmt:check && bun run rust:clippy",
     "test:all": "bun run test && bun run rust:test",
+    "atomic:build": "bun run --filter @jellypilot/atomic-css build",
+    "atomic:test": "bun run --filter @jellypilot/atomic-css test",
     "prepare": "husky",
     "rust:fmt": "cargo fmt --manifest-path src-tauri/Cargo.toml",
     "rust:fmt:check": "cargo fmt --manifest-path src-tauri/Cargo.toml -- --check",
@@ -42,7 +47,7 @@
     "@tauri-apps/api": "^2.11.0",
     "@tauri-apps/plugin-log": "^2.8.0",
     "@tauri-apps/plugin-store": "^2.4.3",
-    "@vanilla-extract/css": "^1.20.1",
+    "@vanilla-extract/css": "1.20.1",
     "@vanilla-extract/recipes": "^0.5.7",
     "@vanilla-extract/sprinkles": "^1.7.0",
     "effect": "^4.0.0-beta.84",
@@ -51,11 +56,13 @@
   },
   "devDependencies": {
     "@effect/language-service": "^0.86.2",
+    "@jellypilot/atomic-css": "workspace:*",
     "@openapitools/openapi-generator-cli": "^2.38.0",
-    "@rsbuild/core": "^2.0.15",
+    "@rsbuild/core": "2.0.15",
     "@rsbuild/plugin-babel": "^1.2.1",
     "@rsbuild/plugin-solid": "^1.2.2",
     "@rsdoctor/rspack-plugin": "^1.5.15",
+    "@rspack/core": "2.0.8",
     "@rstest/core": "^0.10.5",
     "@tanstack/router-plugin": "^1.168.18",
     "@tauri-apps/cli": "^2.11.2",
@@ -63,8 +70,8 @@
     "@testing-library/jest-dom": "^6.9.1",
     "@types/bun": "^1.3.14",
     "@types/node": "^25.9.3",
-    "@unocss/preset-mini": "^66.7.4",
-    "@vanilla-extract/webpack-plugin": "^2.3.27",
+    "@unocss/preset-mini": "66.7.4",
+    "@vanilla-extract/webpack-plugin": "2.3.27",
     "husky": "^9.1.7",
     "jsdom": "^29.1.1",
     "lint-staged": "^17.0.7",
