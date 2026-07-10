@@ -19,6 +19,7 @@ import {
   LinkAdapterContext,
   type LinkAdapter,
 } from '../runtime/link-adapter'
+import { LayerProvider } from '../runtime/layers'
 
 const OWNER_KEY = '__jellypilotUIRootOwner'
 
@@ -69,8 +70,8 @@ export function UIRoot(props: UIRootProps) {
     }
 
     const host = ownerDoc.createElement('div')
-    host.setAttribute('data-jp-portal-host', '')
-    ownerDoc.body.appendChild(host)
+    host.dataset.jpPortalHost = ''
+    ownerDoc.body.append(host)
     setPortalHost(host)
 
     onCleanup(() => {
@@ -78,18 +79,15 @@ export function UIRoot(props: UIRootProps) {
         delete ownerDoc[OWNER_KEY]
       }
       host.remove()
-      ownerDoc.documentElement.removeAttribute('data-theme')
-      ownerDoc.documentElement.removeAttribute('data-theme-id')
+      delete ownerDoc.documentElement.dataset.theme
+      delete ownerDoc.documentElement.dataset.themeId
     })
   })
 
   createEffect(() => {
     const ownerDoc = doc()
-    ownerDoc.documentElement.setAttribute('data-theme', resolved())
-    ownerDoc.documentElement.setAttribute(
-      'data-theme-id',
-      descriptor().id,
-    )
+    ownerDoc.documentElement.dataset.theme = resolved()
+    ownerDoc.documentElement.dataset.themeId = descriptor().id
   })
 
   const themeValue = createMemo(() => ({
@@ -101,14 +99,16 @@ export function UIRoot(props: UIRootProps) {
   return (
     <LinkAdapterContext.Provider value={props.linkAdapter}>
       <ThemeContext.Provider value={themeValue()}>
-        <div data-jp-uiroot="" data-theme={resolved()}>
-          {props.children}
-          {portalHost() ? (
-            <Portal mount={portalHost()!}>
-              <span data-jp-portal-root="" hidden />
-            </Portal>
-          ) : null}
-        </div>
+        <LayerProvider portalHost={portalHost}>
+          <div data-jp-uiroot="" data-theme={resolved()}>
+            {props.children}
+            {portalHost() ? (
+              <Portal mount={portalHost()!}>
+                <span data-jp-portal-root="" hidden />
+              </Portal>
+            ) : null}
+          </div>
+        </LayerProvider>
       </ThemeContext.Provider>
     </LinkAdapterContext.Provider>
   )

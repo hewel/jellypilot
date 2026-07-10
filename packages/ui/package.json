@@ -10,6 +10,7 @@
     "./Heading": "./src/components/Heading.tsx",
     "./VisuallyHidden": "./src/components/VisuallyHidden.tsx",
     "./theme/neutral": "./src/theme/neutral.css.ts",
+    "./theme/jellypilot-font": "./src/theme/jellypilot-font.ts",
     "./theme/project": "./src/theme/project.css.ts",
     "./reset.css": "./src/styles/reset.css",
     "./registry": "./src/registry/index.ts",
@@ -19,6 +20,9 @@
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "rstest -c rstest.config.ts",
     "check:registry": "bun ./scripts/check-registry.ts"
+  },
+  "dependencies": {
+    "@fontsource-variable/figtree": "^5.2.8"
   },
   "peerDependencies": {
     "solid-js": "^1.9.13",

@@ -1,3 +1,4 @@
+import { UIRoot } from '@jellypilot/ui';
 import { afterEach, beforeEach, expect, rstest, test } from '@rstest/core';
 import { fireEvent, screen, waitFor } from '@testing-library/dom';
 import { Exit, Option } from 'effect';
@@ -171,7 +172,14 @@ test('fetchMediaDetail passes failures through without caching them', async () =
 test('MediaInfoContent renders overview, genres, runtime, resume, and user-data state', () => {
   const root = document.createElement('div');
   document.body.append(root);
-  const dispose = render(() => <MediaInfoContent detail={movieMediaDetail} />, root);
+  const dispose = render(
+    () => (
+      <UIRoot>
+        <MediaInfoContent detail={movieMediaDetail} />
+      </UIRoot>
+    ),
+    root,
+  );
 
   expect(screen.getByText('A test movie overview.')).toBeInTheDocument();
   expect(screen.getByText('Drama')).toBeInTheDocument();
@@ -197,11 +205,13 @@ test('MediaInfoHoverCard opens on hover and renders media detail', async () => {
   document.body.append(root);
   const dispose = render(
     () => (
-      <TestQueryProvider>
-        <MediaInfoHoverCard id="movie-1" itemType="Movie">
-          <a href="/library/items/movie-1">Test Movie card</a>
-        </MediaInfoHoverCard>
-      </TestQueryProvider>
+      <UIRoot>
+        <TestQueryProvider>
+          <MediaInfoHoverCard id="movie-1" itemType="Movie">
+            <a href="/library/items/movie-1">Test Movie card</a>
+          </MediaInfoHoverCard>
+        </TestQueryProvider>
+      </UIRoot>
     ),
     root,
   );
@@ -209,9 +219,7 @@ test('MediaInfoHoverCard opens on hover and renders media detail', async () => {
   try {
     const trigger = screen.getByRole('link', { name: 'Test Movie card' });
     expect(itemDetail).not.toHaveBeenCalled();
-    const hoverRoot = trigger.closest('[data-part="root"]');
-    expect(hoverRoot).not.toBeNull();
-    fireEvent.mouseEnter(hoverRoot!);
+    trigger.focus();
 
     await waitFor(() => expect(itemDetail).toHaveBeenCalledWith('movie-1'));
     expect(await screen.findByText('A test movie overview.')).toBeInTheDocument();
@@ -232,11 +240,13 @@ test('MediaInfoHoverCard opens on focus and closes on Escape', async () => {
   document.body.append(root);
   const dispose = render(
     () => (
-      <TestQueryProvider>
-        <MediaInfoHoverCard id="movie-1" itemType="Movie">
-          <a href="/library/items/movie-1">Test Movie card</a>
-        </MediaInfoHoverCard>
-      </TestQueryProvider>
+      <UIRoot>
+        <TestQueryProvider>
+          <MediaInfoHoverCard id="movie-1" itemType="Movie">
+            <a href="/library/items/movie-1">Test Movie card</a>
+          </MediaInfoHoverCard>
+        </TestQueryProvider>
+      </UIRoot>
     ),
     root,
   );
@@ -265,20 +275,20 @@ test('MediaInfoHoverCard shows an error state when detail loading fails', async 
   document.body.append(root);
   const dispose = render(
     () => (
-      <TestQueryProvider>
-        <MediaInfoHoverCard id="movie-1" itemType="Movie">
-          <a href="/library/items/movie-1">Test Movie card</a>
-        </MediaInfoHoverCard>
-      </TestQueryProvider>
+      <UIRoot>
+        <TestQueryProvider>
+          <MediaInfoHoverCard id="movie-1" itemType="Movie">
+            <a href="/library/items/movie-1">Test Movie card</a>
+          </MediaInfoHoverCard>
+        </TestQueryProvider>
+      </UIRoot>
     ),
     root,
   );
 
   try {
     const trigger = screen.getByRole('link', { name: 'Test Movie card' });
-    const hoverRoot = trigger.closest('[data-part="root"]');
-    expect(hoverRoot).not.toBeNull();
-    fireEvent.mouseEnter(hoverRoot!);
+    trigger.focus();
 
     expect(await screen.findByText('Could not load detail')).toBeInTheDocument();
   } finally {
@@ -293,11 +303,13 @@ test('MediaInfoHoverCard renders trigger children and does not fetch before open
   document.body.append(root);
   const dispose = render(
     () => (
-      <TestQueryProvider>
-        <MediaInfoHoverCard id="movie-1" itemType="Movie">
-          <a href="/library/items/movie-1">Test Movie card</a>
-        </MediaInfoHoverCard>
-      </TestQueryProvider>
+      <UIRoot>
+        <TestQueryProvider>
+          <MediaInfoHoverCard id="movie-1" itemType="Movie">
+            <a href="/library/items/movie-1">Test Movie card</a>
+          </MediaInfoHoverCard>
+        </TestQueryProvider>
+      </UIRoot>
     ),
     root,
   );

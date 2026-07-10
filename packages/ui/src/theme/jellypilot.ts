@@ -1,10 +1,10 @@
-import { defineTheme } from './defineTheme'
+import { defineTheme } from './defineTheme';
 
 /** JellyPilot preset owns Figtree + independent geometry/color/motion values. */
 export const jellypilotTheme = defineTheme({
   id: 'jellypilot',
   fonts: {
-    sans: 'Figtree, ui-sans-serif, system-ui, sans-serif',
+    sans: "'Figtree Variable', ui-sans-serif, system-ui, sans-serif",
     mono: 'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace',
   },
   colors: {
@@ -25,4 +25,4 @@ export const jellypilotTheme = defineTheme({
     lg: '0.75rem',
     full: '9999px',
   },
-})
+});

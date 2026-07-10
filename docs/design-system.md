@@ -41,6 +41,8 @@ One typed registry drives public exports, catalog navigation, and parity trackin
 ## Stable selectors
 
 - Public tests and catalog automation use **documented `data-*` attributes** only.
+- Layer backdrops expose `data-ui="dialog-backdrop"` and `data-ui="alert-dialog-backdrop"` for outside-dismissal automation.
+- Portaled layers expose `data-jp-layer-portal` with the active `data-theme` and `data-theme-id` contract.
 - Generated Atomic CSS classes and private DOM nesting are not part of the public contract.
 - Prefer user-observable roles, names, state, focus, and callbacks over CSS implementation details.
 

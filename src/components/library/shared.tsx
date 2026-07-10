@@ -201,7 +201,11 @@ export function UserDataControls(props: {
             when={busy() === favoriteAction()}
             fallback={
               <Heart
-                class={`${styles.iconSm} ${props.favorite ? styles.favoriteIconSelected : styles.favoriteIcon}`}
+                class={styles.iconSm}
+                classList={{
+                  [styles.favoriteIconSelected]: props.favorite,
+                  [styles.favoriteIcon]: !props.favorite,
+                }}
               />
             }
           >
@@ -221,7 +225,11 @@ export function UserDataControls(props: {
             when={busy() === playedAction()}
             fallback={
               <Check
-                class={`${styles.iconSm} ${props.played ? styles.playedIconSelected : styles.playedIcon}`}
+                class={styles.iconSm}
+                classList={{
+                  [styles.playedIconSelected]: props.played,
+                  [styles.playedIcon]: !props.played,
+                }}
               />
             }
           >

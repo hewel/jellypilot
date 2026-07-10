@@ -8,7 +8,7 @@ import {
   buttonPrimary,
   buttonSecondary,
   iconButton,
-} from './Button.css'
+} from './ActionControl.css'
 import type { ButtonVariant } from './Button'
 
 export type IconButtonProps = ParentProps<{

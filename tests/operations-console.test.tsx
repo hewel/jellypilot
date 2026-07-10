@@ -1,3 +1,4 @@
+import { UIRoot } from '@jellypilot/ui';
 import { afterEach, expect, rstest, test } from '@rstest/core';
 import { fireEvent, screen, waitFor, within } from '@testing-library/dom';
 import { render } from 'solid-js/web';
@@ -109,13 +110,15 @@ function renderConsole(
   document.body.append(root);
   const dispose = render(
     () => (
-      <ConfigCoordinatorProvider>
-        <TestQueryProvider>
-          <ToastProvider>
-            <OperationsConsole onSignedOut={onSignedOut} />
-          </ToastProvider>
-        </TestQueryProvider>
-      </ConfigCoordinatorProvider>
+      <UIRoot>
+        <ConfigCoordinatorProvider>
+          <TestQueryProvider>
+            <ToastProvider>
+              <OperationsConsole onSignedOut={onSignedOut} />
+            </ToastProvider>
+          </TestQueryProvider>
+        </ConfigCoordinatorProvider>
+      </UIRoot>
     ),
     root,
   );
@@ -139,13 +142,15 @@ test('operations console reports config load command failures', async () => {
   document.body.append(root);
   const dispose = render(
     () => (
-      <ConfigCoordinatorProvider>
-        <TestQueryProvider>
-          <ToastProvider>
-            <OperationsConsole onSignedOut={() => {}} />
-          </ToastProvider>
-        </TestQueryProvider>
-      </ConfigCoordinatorProvider>
+      <UIRoot>
+        <ConfigCoordinatorProvider>
+          <TestQueryProvider>
+            <ToastProvider>
+              <OperationsConsole onSignedOut={() => {}} />
+            </ToastProvider>
+          </TestQueryProvider>
+        </ConfigCoordinatorProvider>
+      </UIRoot>
     ),
     root,
   );
@@ -830,7 +835,7 @@ test('sign out confirmation uses public AlertDialog dismissal semantics', async 
 
   fireEvent.click(screen.getByRole('button', { name: 'Sign out' }));
   await screen.findByRole('alertdialog');
-  const backdrop = document.querySelector('[data-ui="alert-dialog"] [data-part="backdrop"]');
+  const backdrop = document.querySelector('[data-ui="alert-dialog-backdrop"]');
   expect(backdrop).not.toBeNull();
   fireEvent.click(backdrop as Element);
   await waitFor(() => expect(screen.queryByRole('alertdialog')).toBeNull());

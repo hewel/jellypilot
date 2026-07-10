@@ -1309,8 +1309,8 @@ test('library item detail renders resume-primary movie metadata', async () => {
   expect(document.activeElement).toBe(resumeButton);
 
   fireEvent.click(resumeButton);
-  const secondDialog = await screen.findByRole('dialog', { name: 'Detail Movie' });
-  const secondDialogBackdrop = secondDialog.parentElement?.querySelector('[data-part="backdrop"]');
+  await screen.findByRole('dialog', { name: 'Detail Movie' });
+  const secondDialogBackdrop = document.querySelector('[data-ui="dialog-backdrop"]');
   expect(secondDialogBackdrop).not.toBeNull();
   fireEvent.click(secondDialogBackdrop!);
   await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Detail Movie' })).toBeNull());
@@ -1458,7 +1458,7 @@ test('library item detail renders episode metadata and semantic artwork placehol
   const episodeDialog = await screen.findByRole('dialog', { name: 'Detail Episode' });
   expect(episodeDialog).toBeVisible();
   expect(screen.getByText('Choose playback target audio and subtitle tracks.')).toBeVisible();
-  const episodeBackdrop = episodeDialog.parentElement?.querySelector('[data-part="backdrop"]');
+  const episodeBackdrop = document.querySelector('[data-ui="dialog-backdrop"]');
   expect(episodeBackdrop).not.toBeNull();
   fireEvent.click(episodeBackdrop!);
   await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Detail Episode' })).toBeNull());

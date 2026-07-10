@@ -5,7 +5,7 @@ import {
   buttonOutline,
   buttonMd,
   togglePressed,
-} from './Button.css'
+} from './ActionControl.css'
 
 export type ToggleButtonChangeDetails = {
   reason: 'pointer' | 'keyboard'
@@ -44,15 +44,10 @@ export function ToggleButton(props: ToggleButtonProps) {
       type="button"
       aria-pressed={local.pressed}
       disabled={local.disabled}
-      class={[
-        buttonBase,
-        buttonOutline,
-        buttonMd,
-        local.pressed ? togglePressed : '',
-        local.class,
-      ]
+      class={[buttonBase, buttonOutline, buttonMd, local.class]
         .filter(Boolean)
         .join(' ')}
+      classList={{ [togglePressed]: local.pressed }}
       onClick={(event) => {
         if (local.disabled) return
         emit(!local.pressed, 'pointer', event)

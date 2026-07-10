@@ -11,7 +11,7 @@
   ],
   "scripts": {
     "dev": "rsbuild dev",
-    "build": "rsbuild build",
+    "build": "rsbuild build && bun scripts/check-project-theme.mjs && bun scripts/check-production-boundary.mjs",
     "dev:rsdoctor": "RSDOCTOR=true rsbuild",
     "build:rsdoctor": "RSDOCTOR=true rsbuild build",
     "preview": "rsbuild preview",
@@ -44,8 +44,6 @@
     "rust:test": "cargo test --manifest-path src-tauri/Cargo.toml"
   },
   "dependencies": {
-    "@fontsource-variable/inter": "^5.2.8",
-    "@fontsource-variable/space-grotesk": "^5.2.10",
     "@jellypilot/ui": "workspace:*",
     "@solid-devtools/overlay": "^0.33.5",
     "@tanstack/solid-form": "^1.33.0",

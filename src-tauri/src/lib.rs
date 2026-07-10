@@ -1,3 +1,6 @@
+#[cfg(all(feature = "webdriver", not(debug_assertions)))]
+compile_error!("The WebDriver feature is debug-only and must not be enabled in release builds");
+
 use std::path::PathBuf;
 use std::sync::Arc;
 

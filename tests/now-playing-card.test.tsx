@@ -1,3 +1,4 @@
+import { UIRoot } from '@jellypilot/ui';
 import { afterEach, expect, rstest, test } from '@rstest/core';
 import { fireEvent, screen, waitFor } from '@testing-library/dom';
 import { render } from 'solid-js/web';
@@ -89,11 +90,13 @@ function renderCard(state: NowPlayingState = offlineState, jellyfinConnected = t
   document.body.append(root);
   const dispose = render(
     () => (
-      <TestQueryProvider>
-        <ToastProvider>
-          <NowPlayingCard jellyfinConnected={jellyfinConnected} />
-        </ToastProvider>
-      </TestQueryProvider>
+      <UIRoot>
+        <TestQueryProvider>
+          <ToastProvider>
+            <NowPlayingCard jellyfinConnected={jellyfinConnected} />
+          </ToastProvider>
+        </TestQueryProvider>
+      </UIRoot>
     ),
     root,
   );
@@ -282,11 +285,13 @@ test('clicking mute toggles icon and label after state reloads', async () => {
   document.body.append(root);
   const dispose = render(
     () => (
-      <TestQueryProvider>
-        <ToastProvider>
-          <NowPlayingCard jellyfinConnected />
-        </ToastProvider>
-      </TestQueryProvider>
+      <UIRoot>
+        <TestQueryProvider>
+          <ToastProvider>
+            <NowPlayingCard jellyfinConnected />
+          </ToastProvider>
+        </TestQueryProvider>
+      </UIRoot>
     ),
     root,
   );

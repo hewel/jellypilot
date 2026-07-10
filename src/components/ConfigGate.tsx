@@ -1,5 +1,6 @@
 import { UIRoot, jellypilotTheme } from '@jellypilot/ui';
 import type { UIRootProps } from '@jellypilot/ui';
+import '@jellypilot/ui/theme/jellypilot-font';
 import { type ParentProps, Show } from 'solid-js';
 
 import { ConfigCoordinatorProvider, useConfigCoordinator } from '../effects/configContext';
@@ -9,9 +10,9 @@ const bootStyle = {
   display: 'grid',
   placeItems: 'center',
   padding: '1.5rem',
-  background: '#0b0d14',
-  color: '#f3f6ff',
-  fontFamily: 'system-ui, sans-serif',
+  background: 'var(--jellypilot-color-surface)',
+  color: 'var(--jellypilot-color-on-surface)',
+  fontFamily: 'var(--jellypilot-font-sans)',
 } as const;
 
 type ConfigGateProps = ParentProps<{
@@ -30,7 +31,7 @@ function ConfigGateInner(props: ConfigGateProps) {
       <Show
         when={state().status === 'ready' || state().status === 'saving'}
         fallback={
-          <div style={bootStyle} data-theme="system" data-testid="config-boot">
+          <div style={bootStyle} data-testid="config-boot">
             <div>
               <p>
                 {state().status === 'loading'

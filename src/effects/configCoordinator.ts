@@ -102,7 +102,10 @@ export class ConfigCoordinator {
         });
         return;
       }
-      if (this.pendingDesired) continue;
+      if (this.pendingDesired) {
+        this.setState({ confirmed: snapshot });
+        continue;
+      }
       this.setState({
         status: 'ready',
         confirmed: snapshot,

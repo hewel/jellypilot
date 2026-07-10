@@ -1,5 +1,7 @@
 import type { JSX, ParentProps } from 'solid-js'
-import { createSignal, Show, splitProps } from 'solid-js'
+import { createSignal, onCleanup, Show, splitProps } from 'solid-js'
+import { AnchoredLayerPortal } from '../runtime/AnchoredLayerPortal'
+import { createLayerRegistration } from '../runtime/layers'
 import { tooltipContent, tooltipRoot } from './Tooltip.css'
 
 export type TooltipProps = ParentProps<{
@@ -16,7 +18,10 @@ export function Tooltip(props: TooltipProps) {
     'openDelayMs',
   ])
   const [open, setOpen] = createSignal(false)
+  const layer = createLayerRegistration()
+  let root: HTMLSpanElement | undefined
   let timer: ReturnType<typeof setTimeout> | undefined
+  onCleanup(() => clearTimeout(timer))
 
   const show = () => {
     clearTimeout(timer)
@@ -29,6 +34,7 @@ export function Tooltip(props: TooltipProps) {
 
   return (
     <span
+      ref={root}
       data-ui="tooltip"
       data-part="root"
       data-state={open() ? 'open' : 'closed'}
@@ -37,13 +43,28 @@ export function Tooltip(props: TooltipProps) {
       onMouseLeave={hide}
       onFocusIn={show}
       onFocusOut={hide}
+      onKeyDown={(event) => {
+        if (event.key === 'Escape' && layer.isTopmost()) setOpen(false)
+      }}
       {...rest}
     >
       <span data-part="trigger">{local.children}</span>
-      <Show when={open()}>
-        <span data-part="content" role="tooltip" class={tooltipContent}>
-          {local.content}
-        </span>
+      <Show when={open() && layer.portalHost()}>
+        <AnchoredLayerPortal
+          mount={layer.portalHost()!}
+          anchor={() => root}
+          placement="top-center"
+        >
+          <span
+            ref={layer.mount}
+            data-part="content"
+            role="tooltip"
+            class={tooltipContent}
+            style={{ position: 'static', transform: 'none' }}
+          >
+            {local.content}
+          </span>
+        </AnchoredLayerPortal>
       </Show>
     </span>
   )

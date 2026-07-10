@@ -1,4 +1,4 @@
-import { style } from '@vanilla-extract/css'
+import { style } from '@vanilla-extract/css';
 
 export const dialogRoot = style({
   position: 'fixed',
@@ -6,13 +6,15 @@ export const dialogRoot = style({
   zIndex: 50,
   display: 'grid',
   placeItems: 'center',
-})
+});
 
 export const dialogBackdrop = style({
   position: 'absolute',
   inset: 0,
+  border: 0,
+  padding: 0,
   background: 'rgb(0 0 0 / 0.45)',
-})
+});
 
 export const dialogContent = style({
   position: 'relative',
@@ -25,4 +27,4 @@ export const dialogContent = style({
   color: 'var(--colors-foreground, #0a0a0a)',
   padding: '1rem',
   boxShadow: '0 10px 30px rgb(0 0 0 / 0.2)',
-})
+});

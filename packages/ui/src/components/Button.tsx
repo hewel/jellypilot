@@ -9,7 +9,7 @@ import {
   buttonPrimary,
   buttonSecondary,
   buttonSm,
-} from './Button.css'
+} from './ActionControl.css'
 
 export type ButtonVariant = 'primary' | 'secondary' | 'outline' | 'ghost'
 export type ButtonSize = 'sm' | 'md' | 'lg'

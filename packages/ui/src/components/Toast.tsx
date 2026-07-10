@@ -7,8 +7,9 @@ import {
   Show,
   useContext,
 } from 'solid-js'
-import { Portal } from 'solid-js/web'
 import { uiInvariant } from '../runtime/invariant'
+import { LayerPortal } from '../runtime/LayerPortal'
+import { createLayerRegistration } from '../runtime/layers'
 import { toastItem, toastViewport } from './Toast.css'
 
 export type ToastTone = 'info' | 'success' | 'warning' | 'danger'
@@ -41,6 +42,7 @@ let toastUid = 0
 export type ToastProviderProps = ParentProps
 
 export function ToastProvider(props: ToastProviderProps) {
+  const layer = createLayerRegistration()
   const [items, setItems] = createSignal<ToastRecord[]>([])
   const timers = new Map<string, ReturnType<typeof setTimeout>>()
 
@@ -88,7 +90,8 @@ export function ToastProvider(props: ToastProviderProps) {
   return (
     <ToastContext.Provider value={api}>
       {props.children}
-      <Portal>
+      <Show when={layer.portalHost()}>
+      <LayerPortal mount={layer.portalHost()!}>
         <div data-ui="toast" data-part="viewport" class={toastViewport}>
           <For each={items()}>
             {(item) => (
@@ -113,7 +116,8 @@ export function ToastProvider(props: ToastProviderProps) {
             )}
           </For>
         </div>
-      </Portal>
+      </LayerPortal>
+      </Show>
     </ToastContext.Provider>
   )
 }

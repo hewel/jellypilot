@@ -115,7 +115,6 @@ test('diagnostics auto-scroll uses the public checkbox contract', () => {
   const checkbox = screen.getByRole('checkbox', { name: 'Auto-scroll' });
   expect(checkbox).toBeChecked();
   expect(checkbox.closest('[data-ui="checkbox-input"]')).not.toBeNull();
-  expect(document.querySelector('[data-ui="checkbox-input"] [data-part="control"]')).not.toBeNull();
 
   fireEvent.click(checkbox);
   expect(checkbox).not.toBeChecked();

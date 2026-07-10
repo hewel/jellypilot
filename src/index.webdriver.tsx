@@ -1,6 +1,4 @@
 import { attachDevtoolsOverlay } from '@solid-devtools/overlay';
-import '@fontsource-variable/inter';
-import '@fontsource-variable/space-grotesk';
 import '@wdio/tauri-plugin';
 import { render } from 'solid-js/web';
 

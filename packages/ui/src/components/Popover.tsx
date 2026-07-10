@@ -1,6 +1,7 @@
 import type { JSX, ParentProps } from 'solid-js'
 import { createEffect, onCleanup, Show, splitProps } from 'solid-js'
-import { Portal } from 'solid-js/web'
+import { AnchoredLayerPortal } from '../runtime/AnchoredLayerPortal'
+import { createLayerRegistration } from '../runtime/layers'
 import { popoverContent, popoverRoot } from './Popover.css'
 
 export type PopoverChangeDetails = {
@@ -23,7 +24,10 @@ export function Popover(props: PopoverProps) {
     'children',
     'onOpenChange',
   ])
+  const layer = createLayerRegistration()
   let root: HTMLDivElement | undefined
+  let trigger: HTMLButtonElement | undefined
+  let content: HTMLDivElement | undefined
 
   const setOpen = (
     next: boolean,
@@ -36,10 +40,14 @@ export function Popover(props: PopoverProps) {
   createEffect(() => {
     if (!local.open) return
     const onKey = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') setOpen(false, 'escape', event)
+      if (event.key === 'Escape' && layer.isTopmost()) setOpen(false, 'escape', event)
     }
     const onPointer = (event: MouseEvent) => {
-      if (!root?.contains(event.target as Node)) {
+      if (
+        layer.isTopmost() &&
+        !root?.contains(event.target as Node) &&
+        !content?.contains(event.target as Node)
+      ) {
         setOpen(false, 'outside', event)
       }
     }
@@ -61,6 +69,7 @@ export function Popover(props: PopoverProps) {
       {...rest}
     >
       <button
+        ref={trigger}
         data-part="trigger"
         type="button"
         aria-expanded={local.open}
@@ -69,12 +78,21 @@ export function Popover(props: PopoverProps) {
       >
         {local.trigger}
       </button>
-      <Show when={local.open}>
-        <Portal>
-          <div data-part="content" role="dialog" class={popoverContent}>
+      <Show when={local.open && layer.portalHost()}>
+        <AnchoredLayerPortal mount={layer.portalHost()!} anchor={() => trigger}>
+          <div
+            ref={(element) => {
+              content = element
+              layer.mount()
+            }}
+            data-part="content"
+            role="dialog"
+            class={popoverContent}
+            style={{ position: 'static' }}
+          >
             {local.children}
           </div>
-        </Portal>
+        </AnchoredLayerPortal>
       </Show>
     </div>
   )

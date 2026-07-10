@@ -1,3 +1,4 @@
+import { UIRoot } from '@jellypilot/ui';
 import { afterEach, expect, test } from '@rstest/core';
 import { fireEvent, screen } from '@testing-library/dom';
 import { render } from 'solid-js/web';
@@ -19,9 +20,11 @@ test('app toast adapter renders and dismisses UI Core feedback', () => {
   document.body.append(root);
   const dispose = render(
     () => (
-      <ToastProvider>
-        <ToastTrigger />
-      </ToastProvider>
+      <UIRoot>
+        <ToastProvider>
+          <ToastTrigger />
+        </ToastProvider>
+      </UIRoot>
     ),
     root,
   );
