@@ -4,7 +4,7 @@ JellyPilot moved from string-authored utility styling to a typed vanilla-extract
 
 ## Status
 
-Accepted
+Accepted (historical migration). Target architecture is ADR 0012; Sprinkles owner is removed at contraction (#127).
 
 ## Context
 

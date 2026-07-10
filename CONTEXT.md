@@ -2,6 +2,14 @@
 
 JellyPilot is a Jellyfin companion app that presents itself as a controllable playback target while delegating media playback to an external player.
 
+## Context Map
+
+| Context | Owns | Does not own |
+|---|---|---|
+| **App Composition** | Routes, Tauri commands, Effect programs, media-provider workflows, Saved Service Profiles, Library Browser, Playback Target, Diagnostics, application configuration coordination | Reusable component interaction policy, Theme Preset tokens, Atomic Schema generation |
+| **UI Core** (`@jellypilot/ui`) | Solid component families, Theme Presets, Recipes, stable selectors, accessibility/interaction runtime, catalog contract | Tauri, Effect, TanStack Router, Jellyfin/Emby domain behavior, low-level utility compilation |
+| **Atomic CSS** (`@jellypilot/atomic-css`) | Preset normalization, typed low-level utility semantics, static extraction, conflict handling, generated rule identity, Rsbuild/Rspack integration | Semantic component APIs, Theme Preset ownership, application workflows |
+
 ## Language
 
 **Server URL**:
@@ -92,6 +100,82 @@ _Avoid_: Automation, Playback automation, Plugin install state, server setting
 A user-facing support view that shows sanitized JellyPilot runtime events useful for understanding Jellyfin connection, Playback Target, and external player problems. Diagnostics are not a developer console and should not expose arbitrary frontend console output or secret-bearing values.
 _Avoid_: Frontend logs, debug console, telemetry
 
+### UI Core
+
+**UI Core**:
+The private source-workspace package `@jellypilot/ui` that owns reusable Solid component families, Theme Presets, Recipes, stable selectors, accessibility behavior, and the portable interaction runtime. UI Core is package-neutral: no Tauri, Effect, router, or media-provider dependencies.
+_Avoid_: App Composition, local route primitives, headless third-party component kits
+
+**App Composition**:
+The JellyPilot application root that owns routes, Tauri commands, Effect programs, media-provider workflows, configuration coordination, and product-specific compositions that consume public UI Core APIs.
+_Avoid_: UI Core, package-internal modules
+
+**Astryx Baseline**:
+The pinned Astryx v0.1.4 semantic reference at commit `7b76c68ae07cbc798e3b7f4125eb99ec596f0779`. Selected visual, interaction, keyboard, and accessibility behavior is adapted under Astryx's MIT license; React APIs and pixel parity are out of scope.
+_Avoid_: Live upstream tracking, Astryx package install, StyleX
+
+**Component Family**:
+One public UI Core control surface (for example Button, Dialog, Menu) with its variants, states, keyboard rules, stable selectors, and catalog examples. Family exports are registry-driven.
+_Avoid_: Private compound modules as public API, ad-hoc local primitives
+
+**Theme Preset**:
+A complete build-time theme descriptor (Neutral or JellyPilot) owning grouped tokens, breakpoints, typography, color, radius, shadow, and motion. Presets compile to opaque runtime descriptors; runtime CSS injection is forbidden.
+_Avoid_: Runtime theme construction, legacy token aliases
+
+**Theme Preference**:
+The durable user choice `system | light | dark` stored in application configuration. Default is `system`.
+_Avoid_: Resolved Theme, browser-only preference storage
+
+**Resolved Theme**:
+The concrete `light | dark` mode applied to the document after resolving Theme Preference against OS preference when the choice is `system`.
+_Avoid_: Theme Preference, Theme Preset
+
+**Layer**:
+A portaled UI surface managed by UIRoot (dialog, alert dialog, popover, menu, tooltip, hover card, toast host) with owned focus, dismissal, inertness, scroll lock, nesting, and z-order behavior.
+_Avoid_: Native browser dialog/popover APIs as the product contract
+
+### Atomic CSS
+
+**Atomic CSS**:
+The publishable package `@jellypilot/atomic-css` that compiles a typed `atomic()` object marker into deduplicated vanilla-extract Atomic Rules and Atomic Compositions. It is the low-level styling engine beneath UI Core and App Composition.
+_Avoid_: Sprinkles owner, semantic component API, runtime class generation
+
+**Source Preset**:
+An upstream utility-semantics source adapted into the Atomic Schema. The first release pins `@unocss/preset-mini` `66.7.4` as the only Source Preset.
+_Avoid_: Full preset-mini parity, Tailwind adapter
+
+**Preset Adapter**:
+Internal normalization that maps a Source Preset into the versioned Atomic Schema. Adapters are private; there is no public adapter authoring SDK in v1.
+_Avoid_: Public adapter SDK, second adapter surface
+
+**Atomic Schema**:
+The versioned, normalized utility contract produced from the Preset Adapter plus consumer Project Theme merge. It drives typed `atomic()` completion, conflicts, order, and preflight dependencies.
+_Avoid_: Sprinkles matrix, runtime utility registry
+
+**Project Theme**:
+Consumer-owned semantic tokens and conditions (from UI Core Theme Presets) merged into the Atomic Schema through one workspace configuration seam. Project Theme references point at existing vanilla-extract exports.
+_Avoid_: Duplicate token owners, silent override of preset names
+
+**Atomic Rule**:
+One canonical generated utility declaration identity (property + value + condition chain) shared across source modules. Canonical IDs exclude source location and discovery order.
+_Avoid_: Per-file class identity, order-dependent naming
+
+**Atomic Composition**:
+One authored `atomic()` call site rewritten to a vanilla-extract class that composes one or more Atomic Rules.
+_Avoid_: Multiple `atomic()` calls in one class composition
+
+**Project Snapshot**:
+The complete set of configured style sources scanned in one build so cross-file deduplication and diagnostics are complete.
+_Avoid_: Per-entry reachability pruning (out of scope for v1)
+
+**Preflight Dependency**:
+Preset infrastructure CSS activated only when a dependent Atomic Rule exists (for example structured transform variables).
+_Avoid_: Emitting full-preset preflight unconditionally
+
+**Build-Time Arbitrary Value**:
+A static, property-validated one-off CSS value accepted inside `atomic()` after token and native-value classification. Runtime-only values stay outside `atomic()`.
+_Avoid_: Runtime arbitrary values, arbitrary property names, `!important`
+
 ## Example Dialogue
 
 Dev: "Can Quick Connect find my Jellyfin server?"
@@ -157,3 +241,15 @@ Domain expert: "No. Credit Skip advances past the credit range; next-episode pla
 Dev: "If the server has Intro Skipper ranges, are skips mandatory?"
 
 Domain expert: "No. The Intro Skipper Setting lets the user turn automatic skipping off in JellyPilot."
+
+Dev: "Should UI Core depend on Tauri or Effect?"
+
+Domain expert: "No. UI Core is package-neutral. App Composition owns Tauri, Effect, router, and media workflows."
+
+Dev: "Is Atomic CSS the component library?"
+
+Domain expert: "No. Atomic CSS owns low-level typed utility compilation. UI Core owns Theme Presets, Recipes, components, and accessibility."
+
+Dev: "Can I keep Sprinkles as a second utility owner after cutover?"
+
+Domain expert: "No. The legacy Sprinkles surface is a migration input only. Contraction removes it after every consumer migrates to Atomic Schema."
