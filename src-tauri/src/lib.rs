@@ -45,7 +45,9 @@ pub fn run() {
   let jellyfin_state = JellyfinState::new(jellyfin_client, mpv_client);
   let config_for_protocol = config.clone();
 
-  tauri::Builder::default()
+  let app_builder = tauri::Builder::default();
+
+  let app_builder = app_builder
     .register_asynchronous_uri_scheme_protocol(
       "jellypilot-image",
       move |_ctx, request, responder| {
@@ -66,18 +68,23 @@ pub fn run() {
     .manage(jellyfin_state)
     .invoke_handler(builder.invoke_handler())
     .plugin(tauri_plugin_store::Builder::new().build())
-    .setup(move |app| {
-      // Setup logging with webview target for in-app log viewing
-      app.handle().plugin(
-        tauri_plugin_log::Builder::default()
-          .level(log::LevelFilter::Info)
-          .targets([
-            Target::new(TargetKind::Stdout),
-            Target::new(TargetKind::Webview),
-          ])
-          .build(),
-      )?;
+    .plugin(
+      tauri_plugin_log::Builder::default()
+        .level(log::LevelFilter::Info)
+        .targets([
+          Target::new(TargetKind::Stdout),
+          Target::new(TargetKind::Webview),
+        ])
+        .build(),
+    );
 
+  #[cfg(feature = "webdriver")]
+  let app_builder = app_builder
+    .plugin(tauri_plugin_wdio::init())
+    .plugin(tauri_plugin_wdio_webdriver::init());
+
+  app_builder
+    .setup(move |app| {
       // Load config from disk (store plugin is now available)
       let loaded_config = command::load_config_from_store(app.handle());
       match app.path().app_cache_dir() {

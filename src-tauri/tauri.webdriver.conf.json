@@ -1,0 +1,11 @@
+{
+  "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
+  "productName": "JellyPilot WebDriver",
+  "identifier": "top.pigfun.jellypilot.webdriver",
+  "app": {
+    "withGlobalTauri": true
+  },
+  "bundle": {
+    "active": false
+  }
+}

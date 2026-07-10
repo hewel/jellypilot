@@ -1,7 +1,14 @@
 {
   "extends": "../tsconfig.json",
   "compilerOptions": {
-    "types": ["@testing-library/jest-dom"]
+    "types": [
+      "@testing-library/jest-dom",
+      "@wdio/globals",
+      "@wdio/mocha-framework",
+      "@wdio/native-types",
+      "@wdio/tauri-service",
+      "webdriverio"
+    ]
   },
   "include": ["./"]
 }

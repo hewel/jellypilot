@@ -14,6 +14,9 @@ rust-version = "1.85"
 name = "jellypilot_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
+[features]
+webdriver = ["dep:tauri-plugin-wdio", "dep:tauri-plugin-wdio-webdriver"]
+
 [build-dependencies]
 tauri-build = { version = "2.6.2", features = [] }
 
@@ -42,3 +45,5 @@ tokio-util = "0.7.18"
 reqwest = { version = "0.13.3", features = ["json", "query", "rustls"] }
 jellyfin_api = { version = "10.11.10", path = "media-server-api/jellyfin", features = ["rustls"] }
 emby_api = { version = "4.9.3", path = "media-server-api/emby", features = ["rustls"] }
+tauri-plugin-wdio = { version = "1.2.0", optional = true }
+tauri-plugin-wdio-webdriver = { version = "1.2.0", optional = true }
