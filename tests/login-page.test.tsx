@@ -47,9 +47,9 @@ async function fillPasswordLogin() {
   fireEvent.input(screen.getByPlaceholderText('jellyfin.local or media.example.com/jellyfin'), {
     target: { value: 'jellyfin.example.com' },
   });
-  fireEvent.click(screen.getByRole('tab', { name: 'Password' }));
+  fireEvent.click(screen.getByRole('radio', { name: 'Password' }));
 
-  await waitFor(() => expect(screen.getByText('Username')).toBeVisible());
+  await waitFor(() => expect(screen.getByPlaceholderText('Jellyfin username')).toBeVisible());
   fireEvent.input(screen.getByPlaceholderText('Jellyfin username'), {
     target: { value: 'ada' },
   });
@@ -69,30 +69,30 @@ test('login page shows quick connect as the default login method', () => {
   const cleanup = renderLoginPage();
 
   expect(screen.getByRole('button', { name: 'Request Quick Connect code' })).toBeVisible();
-  expect(screen.getByRole('tab', { name: 'Quick Connect' })).toHaveAttribute(
-    'aria-selected',
+  expect(screen.getByRole('radio', { name: 'Quick Connect' })).toHaveAttribute(
+    'aria-checked',
     'true',
   );
   expect(screen.queryByText('Username')).not.toBeInTheDocument();
 
   cleanup();
 });
-test('login page uses Ark tabs, fields, and checkbox primitives', async () => {
+test('login page uses SegmentedControl and checkbox primitives', async () => {
   const cleanup = renderLoginPage();
 
-  const quickConnectTab = screen.getByRole('tab', { name: 'Quick Connect' });
-  expect(quickConnectTab.closest('[data-scope="tabs"]')).not.toBeNull();
+  const quickConnectTab = screen.getByRole('radio', { name: 'Quick Connect' });
+  expect(quickConnectTab.closest('[data-ui="segmented-control"]')).not.toBeNull();
 
   const serverHost = screen.getByPlaceholderText('jellyfin.local or media.example.com/jellyfin');
   expect(serverHost.closest('[data-scope="field"]')).not.toBeNull();
 
-  fireEvent.click(screen.getByRole('tab', { name: 'Password' }));
+  fireEvent.click(screen.getByRole('radio', { name: 'Password' }));
 
   await waitFor(() => expect(screen.getByText('Remember Server URL and username')).toBeVisible());
   const rememberMe = screen.getByRole('checkbox', {
     name: 'Remember Server URL and username',
   });
-  expect(rememberMe.closest('[data-scope="checkbox"]')).not.toBeNull();
+  expect(rememberMe.closest('[data-ui="checkbox-input"]')).not.toBeNull();
   fireEvent.click(rememberMe);
   expect(rememberMe).toBeChecked();
 
@@ -177,7 +177,7 @@ test('login page locks quick connect request while waiting for approval', async 
   expect(
     screen.getByPlaceholderText('jellyfin.local or media.example.com/jellyfin'),
   ).toBeDisabled();
-  expect(screen.getByRole('tab', { name: 'Password' })).toBeDisabled();
+  expect(screen.getByRole('radio', { name: 'Password' })).toBeDisabled();
   expect(screen.getByRole('button', { name: 'Cancel Request' })).toBeVisible();
 
   fireEvent.click(screen.getByRole('button', { name: 'Cancel Request' }));
@@ -194,9 +194,9 @@ test('login page locks quick connect request while waiting for approval', async 
 test('login page shows password login after method selection', async () => {
   const cleanup = renderLoginPage();
 
-  fireEvent.click(screen.getByRole('tab', { name: 'Password' }));
+  fireEvent.click(screen.getByRole('radio', { name: 'Password' }));
 
-  await waitFor(() => expect(screen.getByText('Username')).toBeVisible());
+  await waitFor(() => expect(screen.getByPlaceholderText('Jellyfin username')).toBeVisible());
   expect(screen.getByPlaceholderText('Jellyfin password')).toBeVisible();
   expect(screen.getByText('Remember Server URL and username')).toBeVisible();
   expect(
@@ -211,7 +211,7 @@ test('login page shows only password login for Emby', async () => {
 
   fireEvent.click(screen.getByRole('button', { name: 'Emby' }));
 
-  await waitFor(() => expect(screen.getByText('Username')).toBeVisible());
+  await waitFor(() => expect(screen.getByPlaceholderText('Jellyfin username')).toBeVisible());
   expect(screen.queryByRole('tab', { name: 'Quick Connect' })).not.toBeInTheDocument();
   expect(
     screen.queryByRole('button', { name: 'Request Quick Connect code' }),
@@ -308,8 +308,8 @@ test('quick connect ignores a start result after switching login methods', async
   fireEvent.click(screen.getByRole('button', { name: 'Request Quick Connect code' }));
   await waitFor(() => expect(screen.getByRole('button', { name: /Requesting/ })).toBeDisabled());
 
-  fireEvent.click(screen.getByRole('tab', { name: 'Password' }));
-  await waitFor(() => expect(screen.getByText('Username')).toBeVisible());
+  fireEvent.click(screen.getByRole('radio', { name: 'Password' }));
+  await waitFor(() => expect(screen.getByPlaceholderText('Jellyfin username')).toBeVisible());
 
   resolveStart({
     data: { code: 'ABCD12', secret: 'secret-123' },
@@ -548,9 +548,9 @@ test('password login saves the authenticated session', async () => {
   fireEvent.input(screen.getByPlaceholderText('jellyfin.local or media.example.com/jellyfin'), {
     target: { value: 'jellyfin.example.com' },
   });
-  fireEvent.click(screen.getByRole('tab', { name: 'Password' }));
+  fireEvent.click(screen.getByRole('radio', { name: 'Password' }));
 
-  await waitFor(() => expect(screen.getByText('Username')).toBeVisible());
+  await waitFor(() => expect(screen.getByPlaceholderText('Jellyfin username')).toBeVisible());
   fireEvent.input(screen.getByPlaceholderText('Jellyfin username'), {
     target: { value: 'ada' },
   });
@@ -690,7 +690,7 @@ test('password login restores remembered Emby provider for Login Prefill', async
   });
   const cleanup = renderLoginPage();
 
-  fireEvent.click(screen.getByRole('tab', { name: 'Password' }));
+  fireEvent.click(screen.getByRole('radio', { name: 'Password' }));
   await waitFor(() => expect(screen.getByDisplayValue('ada')).toBeVisible());
   fireEvent.input(screen.getByPlaceholderText('Jellyfin password'), {
     target: { value: 'secret' },

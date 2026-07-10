@@ -699,11 +699,11 @@ test('add service dialog accepts embedded login form text input', async () => {
   fireEvent.click(screen.getByRole('button', { name: 'Add service' }));
 
   const addService = await screen.findByRole('dialog', { name: 'Add saved service' });
-  fireEvent.click(within(addService).getByRole('tab', { name: 'Password' }));
+  fireEvent.click(within(addService).getByRole('radio', { name: 'Password' }));
   const host = within(addService).getByPlaceholderText(
     'jellyfin.local or media.example.com/jellyfin',
   );
-  const username = await within(addService).findByLabelText('Username');
+  const username = await within(addService).findByPlaceholderText('Jellyfin username');
   const password = await within(addService).findByPlaceholderText('Jellyfin password');
 
   fireEvent.input(host, {

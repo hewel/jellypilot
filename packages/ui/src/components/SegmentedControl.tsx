@@ -111,7 +111,7 @@ export function SegmentedControl(props: SegmentedControlProps) {
       {...rest}
     >
       <For each={local.items}>
-        {(item) => {
+        {(item, index) => {
           const selected = () => item.value === local.value
           return (
             <button
@@ -125,9 +125,7 @@ export function SegmentedControl(props: SegmentedControlProps) {
               tabIndex={selected() ? 0 : -1}
               class={segmentedItem}
               id={`${groupId}-${item.value}`}
-              onClick={(event) =>
-                selectIndex(local.items.indexOf(item), 'pointer', event)
-              }
+              onClick={(event) => selectIndex(index(), 'pointer', event)}
             >
               {item.icon}
               <span data-part="label">{item.label}</span>

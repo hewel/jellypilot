@@ -386,12 +386,21 @@ export default function LoginPage(props: LoginPageProps) {
         <SegmentedControl
           value={loginMethod()}
           aria-label="Login Method"
-          disabled={isQuickConnectWaiting()}
           items={[
             ...(selectedCapabilities().quickConnect
-              ? [{ value: 'quickConnect', label: 'Quick Connect' }]
+              ? [
+                  {
+                    value: 'quickConnect',
+                    label: 'Quick Connect',
+                    disabled: isQuickConnectWaiting(),
+                  },
+                ]
               : []),
-            { value: 'password', label: 'Password' },
+            {
+              value: 'password',
+              label: 'Password',
+              disabled: isQuickConnectWaiting(),
+            },
           ]}
           onValueChange={(value) => {
             if (value !== 'quickConnect' && value !== 'password') return;
