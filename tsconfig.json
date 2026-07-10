@@ -33,5 +33,5 @@
       }
     ]
   },
-  "include": ["src", "src/types/**/*.d.ts"]
+  "include": ["src", "src/types/**/*.d.ts", "packages/ui/src/theme/project.css.ts"]
 }

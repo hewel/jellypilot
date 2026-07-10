@@ -1,5 +1,5 @@
 import type { AppConfig, ThemePreference } from '@bindings';
-import type { Cause} from 'effect';
+import type { Cause } from 'effect';
 import { Option } from 'effect';
 
 import { commandFailure } from './commands';

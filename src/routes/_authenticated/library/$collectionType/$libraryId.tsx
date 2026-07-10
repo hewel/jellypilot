@@ -1,5 +1,3 @@
-import { Menu } from '@ark-ui/solid/menu';
-import { Toggle } from '@ark-ui/solid/toggle';
 import type { VideoLibraryKind, VideoLibraryPlayedFilter, VideoLibrarySort } from '@bindings';
 import { useAppScrollArea } from '@components/AppScrollAreaContext';
 import { useLibraryNavbarControls } from '@components/library/LibraryNavbarContext';
@@ -10,7 +8,8 @@ import {
   playedFilterLabel,
   sortItems,
 } from '@components/library/shared';
-import { Button } from '@components/ui';
+import { Button, Menu, ToggleButton } from '@jellypilot/ui';
+import type { MenuSelectDetails, ToggleButtonChangeDetails } from '@jellypilot/ui';
 import { createInfiniteQuery, createQuery, useQueryClient } from '@tanstack/solid-query';
 import { createFileRoute, useNavigate } from '@tanstack/solid-router';
 import { createVirtualizer, observeElementRect } from '@tanstack/solid-virtual';
@@ -24,6 +23,7 @@ import {
   ArrowUpWideNarrowIcon,
 } from 'lucide-solid';
 import {
+  type JSX,
   For,
   Show,
   Suspense,
@@ -53,6 +53,96 @@ import * as styles from '../browseRoute.css';
 const LIBRARY_BROWSE_SKELETON_CARD_KEYS = Array.from({ length: 10 }, (_, index) => index);
 const LIBRARY_VIRTUAL_TOTAL_THRESHOLD = 100;
 const LIBRARY_BROWSE_GRID_OVERSCAN_ROWS = 3;
+const LIBRARY_SORT_MENU_LABEL_VALUE = '__library-sort-menu-label';
+const LIBRARY_STATUS_MENU_LABEL_VALUE = '__library-status-menu-label';
+const LIBRARY_STATUS_FAVORITES_VALUE = 'favorites-only';
+const menuControlLabelStyle: JSX.CSSProperties = {
+  border: 0,
+  'clip-path': 'inset(50%)',
+  height: '1px',
+  margin: '-1px',
+  overflow: 'hidden',
+  padding: 0,
+  position: 'absolute',
+  'white-space': 'nowrap',
+  width: '1px',
+};
+
+const isPlayedFilterValue = (value: string): value is VideoLibraryPlayedFilter =>
+  value === 'all' || value === 'played' || value === 'unplayed';
+
+const restoreMenuFocus = (event: Event | undefined) => {
+  if (!(event?.target instanceof Element)) {
+    return;
+  }
+
+  const menuRoot = event.target.closest('[data-ui="menu"]');
+  const trigger = menuRoot?.querySelector<HTMLButtonElement>('[data-part="trigger"]');
+  trigger?.focus();
+};
+
+const focusMenuItemWithDirection = (menuRoot: HTMLElement, direction: number) => {
+  const enabledItems = [
+    ...menuRoot.querySelectorAll<HTMLButtonElement>('[data-part="item"]'),
+  ].filter((item) => !item.disabled);
+
+  if (enabledItems.length === 0) {
+    return;
+  }
+
+  const focusedItemIndex = enabledItems.indexOf(
+    menuRoot.ownerDocument.activeElement as HTMLButtonElement,
+  );
+  let nextItemIndex = 0;
+  if (focusedItemIndex === -1) {
+    nextItemIndex = direction > 0 ? 0 : enabledItems.length - 1;
+  } else {
+    nextItemIndex = (focusedItemIndex + direction + enabledItems.length) % enabledItems.length;
+  }
+
+  enabledItems[nextItemIndex]?.focus();
+};
+
+const handleMenuKeyDown = (event: KeyboardEvent) => {
+  const menuRoot =
+    event.target instanceof Element
+      ? (event.target.closest('[data-ui="menu"]') as HTMLElement | null)
+      : null;
+  if (!menuRoot || menuRoot.dataset.state !== 'open') {
+    return;
+  }
+
+  if (event.key === 'ArrowDown') {
+    event.preventDefault();
+    focusMenuItemWithDirection(menuRoot, 1);
+    return;
+  }
+
+  if (event.key === 'ArrowUp') {
+    event.preventDefault();
+    focusMenuItemWithDirection(menuRoot, -1);
+    return;
+  }
+
+  if (event.key === 'Escape') {
+    queueMicrotask(() => {
+      const trigger = menuRoot.querySelector<HTMLButtonElement>('[data-part="trigger"]');
+      trigger?.focus();
+    });
+  }
+};
+
+const useMenuKeyboardNavigation = () => {
+  onMount(() => {
+    const listener = (event: KeyboardEvent) => {
+      handleMenuKeyDown(event);
+    };
+    document.addEventListener('keydown', listener);
+    onCleanup(() => {
+      document.removeEventListener('keydown', listener);
+    });
+  });
+};
 
 interface LibraryBrowseInfiniteData {
   pages: LibraryExit<LibraryBrowseState>[];
@@ -744,13 +834,11 @@ function LibraryBrowseRoute() {
                     class={styles.pillButton}
                     disabled={loadMoreRetryBusy()}
                     onClick={retryFailedPage}
-                    leadingIcon={
-                      <RefreshCw
-                        class={styles.icon4}
-                        classList={{ [styles.spin]: loadMoreRetryBusy() }}
-                      />
-                    }
                   >
+                    <RefreshCw
+                      class={styles.icon4}
+                      classList={{ [styles.spin]: loadMoreRetryBusy() }}
+                    />
                     Retry loading more
                   </Button>
                 </div>
@@ -770,34 +858,45 @@ interface LibrarySortMenuProps {
 }
 
 function LibrarySortMenu(props: LibrarySortMenuProps) {
+  const items = () => [
+    {
+      value: LIBRARY_SORT_MENU_LABEL_VALUE,
+      label: <span class={styles.menuLabel}>Sort By</span>,
+      disabled: true,
+    },
+    ...sortItems.map((item) => ({
+      value: item.value,
+      label: (
+        <span class={styles.menuItem}>
+          <span class={styles.menuText}>
+            <span>{item.label}</span>
+          </span>
+          <Show when={props.value() === item.value}>
+            <Check class={styles.menuCheck} />
+          </Show>
+        </span>
+      ),
+    })),
+  ];
+
   return (
-    <Menu.Root>
-      <Menu.Trigger disabled={props.disabled()} aria-label="Sort By" class={styles.menuTrigger}>
-        <ListSortAscending size={14} />
-      </Menu.Trigger>
-      <Menu.Positioner>
-        <Menu.Content class={styles.menuContent}>
-          <Menu.RadioItemGroup
-            value={props.value()}
-            onValueChange={(details) => props.onChange(details.value as VideoLibrarySort)}
-          >
-            <Menu.ItemGroupLabel class={styles.menuLabel}>Sort By</Menu.ItemGroupLabel>
-            <For each={sortItems}>
-              {(item) => (
-                <Menu.RadioItem value={item.value} class={styles.menuItem}>
-                  <Menu.ItemText class={styles.menuText}>
-                    <span>{item.label}</span>
-                  </Menu.ItemText>
-                  <Menu.ItemIndicator>
-                    <Check class={styles.menuCheck} />
-                  </Menu.ItemIndicator>
-                </Menu.RadioItem>
-              )}
-            </For>
-          </Menu.RadioItemGroup>
-        </Menu.Content>
-      </Menu.Positioner>
-    </Menu.Root>
+    <Menu
+      items={items()}
+      disabled={props.disabled()}
+      trigger={
+        <>
+          <ListSortAscending size={14} />
+          <span style={menuControlLabelStyle}>Sort By</span>
+        </>
+      }
+      onSelect={(value, details: MenuSelectDetails) => {
+        if (value === LIBRARY_SORT_MENU_LABEL_VALUE) {
+          return;
+        }
+        props.onChange(value as VideoLibrarySort);
+        restoreMenuFocus(details.event);
+      }}
+    />
   );
 }
 
@@ -810,50 +909,63 @@ interface LibraryStatusMenuProps {
 }
 
 function LibraryStatusMenu(props: LibraryStatusMenuProps) {
+  const playedFilters: VideoLibraryPlayedFilter[] = ['all', 'played', 'unplayed'];
+  const items = () => [
+    {
+      value: LIBRARY_STATUS_MENU_LABEL_VALUE,
+      label: <span class={styles.menuLabel}>Status</span>,
+      disabled: true,
+    },
+    ...playedFilters.map((filter) => ({
+      value: filter,
+      label: (
+        <span class={styles.menuItem}>
+          <span class={styles.menuText}>
+            <span>{playedFilterLabel(filter)}</span>
+          </span>
+          <Show when={props.value() === filter}>
+            <Check class={styles.menuCheck} />
+          </Show>
+        </span>
+      ),
+    })),
+    {
+      value: LIBRARY_STATUS_FAVORITES_VALUE,
+      label: (
+        <span class={styles.menuItem}>
+          <span class={styles.menuText}>
+            <span>Favorites Only</span>
+          </span>
+          <Show when={props.favoritesOnly()}>
+            <Check class={styles.menuCheck} />
+          </Show>
+        </span>
+      ),
+    },
+  ];
+
   return (
-    <Menu.Root>
-      <Menu.Trigger disabled={props.disabled()} aria-label="Status" class={styles.menuTrigger}>
-        <Funnel size={14} />
-      </Menu.Trigger>
-      <Menu.Positioner>
-        <Menu.Content class={styles.menuContent}>
-          <Menu.RadioItemGroup
-            value={props.value()}
-            onValueChange={(details) => props.onChange(details.value as VideoLibraryPlayedFilter)}
-          >
-            <Menu.ItemGroupLabel class={styles.menuLabel}>Status</Menu.ItemGroupLabel>
-            <For each={['all', 'played', 'unplayed'] as VideoLibraryPlayedFilter[]}>
-              {(filter) => (
-                <Menu.RadioItem value={filter} class={styles.menuItem}>
-                  <Menu.ItemText class={styles.menuText}>
-                    <span>{playedFilterLabel(filter)}</span>
-                  </Menu.ItemText>
-                  <Menu.ItemIndicator>
-                    <Check class={styles.menuCheck} />
-                  </Menu.ItemIndicator>
-                </Menu.RadioItem>
-              )}
-            </For>
-          </Menu.RadioItemGroup>
-
-          <div class={styles.separator} />
-
-          <Menu.CheckboxItem
-            checked={props.favoritesOnly()}
-            onCheckedChange={(checked) => props.onFavoritesOnlyChange(checked)}
-            value="favorites"
-            class={styles.menuItem}
-          >
-            <Menu.ItemText class={styles.menuText}>
-              <span>Favorites Only</span>
-            </Menu.ItemText>
-            <Menu.ItemIndicator>
-              <Check class={styles.menuCheck} />
-            </Menu.ItemIndicator>
-          </Menu.CheckboxItem>
-        </Menu.Content>
-      </Menu.Positioner>
-    </Menu.Root>
+    <Menu
+      items={items()}
+      disabled={props.disabled()}
+      trigger={
+        <>
+          <Funnel size={14} />
+          <span style={menuControlLabelStyle}>Status</span>
+        </>
+      }
+      onSelect={(value, details: MenuSelectDetails) => {
+        if (value === LIBRARY_STATUS_MENU_LABEL_VALUE) {
+          return;
+        }
+        if (value === LIBRARY_STATUS_FAVORITES_VALUE) {
+          props.onFavoritesOnlyChange(!props.favoritesOnly());
+        } else if (isPlayedFilterValue(value)) {
+          props.onChange(value);
+        }
+        restoreMenuFocus(details.event);
+      }}
+    />
   );
 }
 
@@ -870,6 +982,7 @@ interface LibraryBrowseNavbarControlsProps {
 }
 
 function LibraryBrowseNavbarControls(props: LibraryBrowseNavbarControlsProps) {
+  useMenuKeyboardNavigation();
   const navbarControls = useLibraryNavbarControls();
 
   return (
@@ -878,14 +991,15 @@ function LibraryBrowseNavbarControls(props: LibraryBrowseNavbarControlsProps) {
         <Portal mount={target()}>
           <nav class={styles.controlsNav} aria-label="Library browse controls">
             <div class={styles.controlGroup}>
-              <Toggle.Root
+              <ToggleButton
                 pressed={props.sortDirection() === 'desc'}
-                onPressedChange={(pressed) => {
+                onPressedChange={(pressed: boolean, _details: ToggleButtonChangeDetails) => {
                   props.onSortDirectionChange(pressed ? 'desc' : 'asc');
                 }}
                 disabled={props.loading()}
                 aria-label={props.sortDirection() === 'desc' ? 'Sort descending' : 'Sort ascending'}
                 class={styles.menuTrigger}
+                data-state={props.sortDirection() === 'desc' ? 'on' : 'off'}
               >
                 <Show
                   when={props.sortDirection() === 'desc'}
@@ -893,7 +1007,7 @@ function LibraryBrowseNavbarControls(props: LibraryBrowseNavbarControlsProps) {
                 >
                   <ArrowDownWideNarrowIcon size={14} />
                 </Show>
-              </Toggle.Root>
+              </ToggleButton>
               <LibrarySortMenu
                 value={props.sortedValue}
                 onChange={props.onSortChange}

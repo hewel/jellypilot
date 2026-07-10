@@ -1,3 +1,5 @@
+import { Button, Card, Link } from '@jellypilot/ui';
+import type { SelectorItem } from '@jellypilot/ui';
 import { Exit, Match } from 'effect';
 import { Check, Clapperboard, Heart, RefreshCw } from 'lucide-solid';
 import { For, Show, createSignal } from 'solid-js';
@@ -8,7 +10,6 @@ import type {
   VideoItemDetail,
   VideoLibraryKind,
   VideoLibraryPlayedFilter,
-  VideoLibrarySort,
   VideoSeason,
   VideoShowDetail,
   VideoUserDataAction,
@@ -17,8 +18,6 @@ import type {
 } from '../../bindings';
 import { commandFailureMessage } from '../../effects/commands';
 import type { CommandError } from '../../effects/errors';
-import { Button, Card } from '../ui';
-import type { JellyPilotSelectItem } from '../ui';
 import { MediaInfoHoverCard } from './MediaInfoHoverCard';
 import { VideoCard } from './VideoCard';
 import type { VideoCardAspectClass } from './VideoCard';
@@ -30,12 +29,7 @@ export { VideoCard } from './VideoCard';
 
 export function LibraryStatusPanel(props: { title: string; description?: string }) {
   return (
-    <Card
-      as="section"
-      variant="elevated"
-      class={styles.statusCard}
-      aria-labelledby="video-home-status-title"
-    >
+    <Card variant="filled" class={styles.statusCard} aria-labelledby="video-home-status-title">
       <div class={styles.statusContent}>
         <div class={styles.statusIcon}>
           <Clapperboard class={styles.iconMd} />
@@ -96,7 +90,7 @@ export const playedFilterLabel = Match.type<VideoLibraryPlayedFilter>().pipe(
   Match.orElse(() => 'All'),
 );
 
-export const sortItems: JellyPilotSelectItem<VideoLibrarySort>[] = [
+export const sortItems: SelectorItem[] = [
   { label: 'Title', value: 'title' },
   { label: 'Recently added', value: 'recentlyAdded' },
   { label: 'Release date', value: 'releaseDate' },
@@ -134,9 +128,9 @@ export function detailSubtitleElement(detail: VideoItemDetail): JSX.Element {
       <>
         <Show when={detail.seriesId} fallback={<span>{detail.seriesName}</span>}>
           {(seriesId) => (
-            <a href={`/library/shows/${seriesId()}`} class={styles.subtitleLink}>
+            <Link href={`/library/shows/${seriesId()}`} class={styles.subtitleLink}>
               {detail.seriesName}
-            </a>
+            </Link>
           )}
         </Show>
         {' · '}
@@ -202,19 +196,17 @@ export function UserDataControls(props: {
           classList={{ [styles.favoriteSelected]: props.favorite }}
           disabled={busy() !== null}
           onClick={() => void runAction(favoriteAction())}
-          leadingIcon={
-            <Show
-              when={busy() === favoriteAction()}
-              fallback={
-                <Heart
-                  class={`${styles.iconSm} ${props.favorite ? styles.favoriteIconSelected : styles.favoriteIcon}`}
-                />
-              }
-            >
-              <RefreshCw class={styles.spinIcon} />
-            </Show>
-          }
         >
+          <Show
+            when={busy() === favoriteAction()}
+            fallback={
+              <Heart
+                class={`${styles.iconSm} ${props.favorite ? styles.favoriteIconSelected : styles.favoriteIcon}`}
+              />
+            }
+          >
+            <RefreshCw class={styles.spinIcon} />
+          </Show>
           {busy() === favoriteAction() ? 'Updating...' : props.favorite ? 'Unfavorite' : 'Favorite'}
         </Button>
         <Button
@@ -224,19 +216,17 @@ export function UserDataControls(props: {
           classList={{ [styles.playedSelected]: props.played }}
           disabled={busy() !== null}
           onClick={() => void runAction(playedAction())}
-          leadingIcon={
-            <Show
-              when={busy() === playedAction()}
-              fallback={
-                <Check
-                  class={`${styles.iconSm} ${props.played ? styles.playedIconSelected : styles.playedIcon}`}
-                />
-              }
-            >
-              <RefreshCw class={styles.spinIcon} />
-            </Show>
-          }
         >
+          <Show
+            when={busy() === playedAction()}
+            fallback={
+              <Check
+                class={`${styles.iconSm} ${props.played ? styles.playedIconSelected : styles.playedIcon}`}
+              />
+            }
+          >
+            <RefreshCw class={styles.spinIcon} />
+          </Show>
           {busy() === playedAction()
             ? 'Updating...'
             : props.played

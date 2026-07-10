@@ -1,15 +1,13 @@
-import { Dialog } from '@ark-ui/solid/dialog';
+import { Button, Card, Dialog, Selector } from '@jellypilot/ui';
+import type { SelectorItem } from '@jellypilot/ui';
 import { Play, X } from 'lucide-solid';
 import { createEffect, createMemo, createSignal } from 'solid-js';
-import { Portal } from 'solid-js/web';
 
 import type {
   VideoItemDetail,
   VideoLibraryPlayMode,
   VideoPlaybackStreamOption,
 } from '../../bindings';
-import { Button, Card, JellyPilotSelect } from '../ui';
-import type { JellyPilotSelectItem } from '../ui';
 
 import * as styles from './LibraryPlaybackChooser.css';
 
@@ -33,10 +31,10 @@ export function LibraryPlaybackChooser(props: {
   onCancel: () => void;
   onConfirm: (selection: LibraryPlaybackSelection) => void;
 }) {
-  const audioItems = createMemo<JellyPilotSelectItem[]>(() => {
+  const audioItems = createMemo<SelectorItem[]>(() => {
     const streams = props.pending.detail.audioStreams;
     if (streams.length === 0) {
-      return [{ disabled: true, label: 'No audio tracks', value: '' }];
+      return [];
     }
 
     return streams.map((stream) => ({
@@ -44,7 +42,7 @@ export function LibraryPlaybackChooser(props: {
       value: String(stream.index),
     }));
   });
-  const subtitleItems = createMemo<JellyPilotSelectItem[]>(() => [
+  const subtitleItems = createMemo<SelectorItem[]>(() => [
     { label: 'Auto', value: SUBTITLE_AUTO },
     { label: 'Off', value: SUBTITLE_OFF },
     ...props.pending.detail.subtitleStreams.map((stream) => ({
@@ -52,13 +50,17 @@ export function LibraryPlaybackChooser(props: {
       value: String(stream.index),
     })),
   ]);
-  const defaultAudioValue = createMemo(() => {
+  const defaultAudioValue = () => {
     const streams = props.pending.detail.audioStreams;
+    if (streams.length === 0) {
+      return null;
+    }
+
     const preferred = streams.find((stream) => stream.isDefault) ?? streams[0];
-    return preferred ? String(preferred.index) : '';
-  });
-  const [audioValue, setAudioValue] = createSignal(defaultAudioValue());
-  const [subtitleValue, setSubtitleValue] = createSignal(SUBTITLE_AUTO);
+    return preferred ? String(preferred.index) : null;
+  };
+  const [audioValue, setAudioValue] = createSignal<string | null>(defaultAudioValue());
+  const [subtitleValue, setSubtitleValue] = createSignal<string>(SUBTITLE_AUTO);
 
   createEffect(() => {
     props.pending.detail.id;
@@ -67,7 +69,10 @@ export function LibraryPlaybackChooser(props: {
     setSubtitleValue(SUBTITLE_AUTO);
   });
 
-  const audioStreamIndex = () => (audioValue() === '' ? null : Number(audioValue()));
+  const audioStreamIndex = () => {
+    const value = audioValue();
+    return value === null ? null : Number(value);
+  };
   const subtitleStreamIndex = () => {
     const value = subtitleValue();
     if (value === SUBTITLE_AUTO) {
@@ -82,73 +87,78 @@ export function LibraryPlaybackChooser(props: {
     props.pending.mode === 'resume' ? 'Resume playback' : 'Start playback';
 
   return (
-    <Dialog.Root
+    <Dialog
       open={true}
-      onOpenChange={(event) => {
-        if (!event.open) {
+      title={props.pending.detail.name}
+      description="Choose playback target audio and subtitle tracks."
+      onOpenChange={(next, _details) => {
+        if (!next) {
           props.onCancel();
         }
       }}
-      lazyMount
-      unmountOnExit
+      class={styles.content}
     >
-      <Portal>
-        <Dialog.Backdrop class={styles.backdrop} />
-        <Dialog.Positioner class={`${styles.positioner} ${styles.positionerFill}`}>
-          <Dialog.Content class={styles.content}>
-            <Card as="section" variant="filled" class={styles.card}>
-              <div>
-                <p class={styles.eyebrow}>{props.pending.detail.itemType}</p>
-                <Dialog.Title class={styles.title}>{props.pending.detail.name}</Dialog.Title>
-              </div>
+      <Card variant="outlined" class={styles.card}>
+        <div>
+          <p class={styles.eyebrow}>{props.pending.detail.itemType}</p>
+        </div>
 
-              <div class={styles.fields}>
-                <JellyPilotSelect
-                  label="Audio track"
-                  items={audioItems()}
-                  disabled={props.busy || props.pending.detail.audioStreams.length === 0}
-                  value={audioValue()}
-                  placeholder="No audio tracks"
-                  size="compact"
-                  onValueChange={setAudioValue}
-                />
+        <div class={styles.fields}>
+          <div>
+            <span>Audio track</span>
+            <Selector
+              aria-label="Audio track"
+              items={audioItems()}
+              value={audioValue()}
+              disabled={props.busy || props.pending.detail.audioStreams.length === 0}
+              placeholder="No audio tracks"
+              onValueChange={(value) => setAudioValue(value)}
+            />
+          </div>
 
-                <JellyPilotSelect
-                  label="Subtitle track"
-                  items={subtitleItems()}
-                  disabled={props.busy}
-                  value={subtitleValue()}
-                  size="compact"
-                  onValueChange={setSubtitleValue}
-                />
-              </div>
+          <div>
+            <span>Subtitle track</span>
+            <Selector
+              aria-label="Subtitle track"
+              items={subtitleItems()}
+              value={subtitleValue()}
+              disabled={props.busy}
+              onValueChange={(value) => {
+                if (value) setSubtitleValue(value);
+              }}
+            />
+          </div>
+        </div>
 
-              <div class={styles.actions}>
-                <Dialog.CloseTrigger class={styles.closeButton} disabled={props.busy}>
-                  <X class={styles.icon} />
-                  Cancel
-                </Dialog.CloseTrigger>
-                <Button
-                  type="button"
-                  variant="primary"
-                  class={styles.pillButton}
-                  disabled={props.busy}
-                  onClick={() =>
-                    props.onConfirm({
-                      audioStreamIndex: audioStreamIndex(),
-                      subtitleStreamIndex: subtitleStreamIndex(),
-                    })
-                  }
-                  leadingIcon={<Play class={styles.playIcon} />}
-                >
-                  {props.busy ? 'Starting...' : confirmLabel()}
-                </Button>
-              </div>
-            </Card>
-          </Dialog.Content>
-        </Dialog.Positioner>
-      </Portal>
-    </Dialog.Root>
+        <div class={styles.actions}>
+          <Button
+            type="button"
+            variant="outline"
+            class={styles.pillButton}
+            disabled={props.busy}
+            onClick={props.onCancel}
+          >
+            <X class={styles.icon} />
+            Cancel
+          </Button>
+          <Button
+            type="button"
+            variant="primary"
+            class={styles.pillButton}
+            disabled={props.busy}
+            onClick={() =>
+              props.onConfirm({
+                audioStreamIndex: audioStreamIndex(),
+                subtitleStreamIndex: subtitleStreamIndex(),
+              })
+            }
+          >
+            <Play class={styles.playIcon} />
+            {props.busy ? 'Starting...' : confirmLabel()}
+          </Button>
+        </div>
+      </Card>
+    </Dialog>
   );
 }
 

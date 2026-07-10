@@ -1,4 +1,4 @@
-import { Dialog } from '@jellypilot/ui';
+import { Dialog, IconButton } from '@jellypilot/ui';
 import { createQuery, useQueryClient } from '@tanstack/solid-query';
 import { Exit, Match } from 'effect';
 import { MonitorPlay, X } from 'lucide-solid';
@@ -8,7 +8,6 @@ import type { NowPlayingState } from '../bindings';
 import { fetchNowPlayingState, listenNowPlayingChanged } from '../effects/nowPlaying';
 import { queryKeys, runExit } from '../effects/query';
 import NowPlayingCard from './NowPlayingCard';
-import { Button } from './ui';
 
 import * as styles from './NowPlayingDrawer.css';
 
@@ -73,16 +72,16 @@ export default function NowPlayingDrawer(props: { jellyfinConnected: boolean }) 
 
   return (
     <>
-      <Button
+      <IconButton
         type="button"
-        variant="icon"
+        variant="ghost"
         aria-label={triggerLabel(state())}
         class={styles.trigger}
         onClick={() => setOpen(true)}
       >
         <MonitorPlay class={styles.triggerIcon} />
         <span class={statusDotClass(state()?.status)} />
-      </Button>
+      </IconButton>
       <Dialog
         open={open()}
         title="Now Playing"

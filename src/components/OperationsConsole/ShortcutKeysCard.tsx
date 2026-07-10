@@ -1,8 +1,8 @@
-import { Field as ArkField } from '@ark-ui/solid/field';
+import { TextInput } from '@jellypilot/ui';
 import { Keyboard } from 'lucide-solid';
 import { Show } from 'solid-js';
 
-import { FieldControl, SectionCard } from '../ui';
+import ConsoleSection from './ConsoleSection';
 import type { OperationsConsoleForm } from './types';
 
 import * as shared from './shared.css';
@@ -19,7 +19,7 @@ interface ShortcutKeysCardProps {
 
 export default function ShortcutKeysCard(props: ShortcutKeysCardProps) {
   return (
-    <SectionCard icon={<Keyboard class={shared.sectionIcon.secondary} />} title="Shortcut keys">
+    <ConsoleSection icon={<Keyboard class={shared.sectionIcon.secondary} />} title="Shortcut keys">
       <div class={shared.stack4}>
         <p class={styles.description}>
           {props.showIntroSkipKey
@@ -34,27 +34,19 @@ export default function ShortcutKeysCard(props: ShortcutKeysCardProps) {
           }}
         >
           {(field) => (
-            <ArkField.Root class={styles.field} invalid={field().state.meta.errors.length > 0}>
-              <ArkField.Label class={shared.overline}>Next episode key</ArkField.Label>
-              <ArkField.Input
-                asChild={(fieldProps) => (
-                  <FieldControl
-                    {...fieldProps()}
-                    variant="filled"
-                    name={field().name}
-                    type="text"
-                    value={field().state.value}
-                    onInput={(event) => field().handleChange(event.currentTarget.value)}
-                    onBlur={(event) => {
-                      field().handleBlur();
-                      props.onSaveTextSetting('keybindNext', event.currentTarget.value);
-                    }}
-                    class={styles.input}
-                    placeholder="Shift+>"
-                  />
-                )}
-              />
-            </ArkField.Root>
+            <TextInput
+              name={field().name}
+              label="Next episode key"
+              error={field().state.meta.errors[0]}
+              value={field().state.value}
+              onValueChange={(value) => field().handleChange(value)}
+              onBlur={(event) => {
+                field().handleBlur();
+                props.onSaveTextSetting('keybindNext', event.currentTarget.value);
+              }}
+              class={styles.input}
+              placeholder="Shift+>"
+            />
           )}
         </props.form.Field>
 
@@ -65,27 +57,19 @@ export default function ShortcutKeysCard(props: ShortcutKeysCardProps) {
           }}
         >
           {(field) => (
-            <ArkField.Root class={styles.field} invalid={field().state.meta.errors.length > 0}>
-              <ArkField.Label class={shared.overline}>Previous episode key</ArkField.Label>
-              <ArkField.Input
-                asChild={(fieldProps) => (
-                  <FieldControl
-                    {...fieldProps()}
-                    variant="filled"
-                    name={field().name}
-                    type="text"
-                    value={field().state.value}
-                    onInput={(event) => field().handleChange(event.currentTarget.value)}
-                    onBlur={(event) => {
-                      field().handleBlur();
-                      props.onSaveTextSetting('keybindPrev', event.currentTarget.value);
-                    }}
-                    class={styles.input}
-                    placeholder="Shift+<"
-                  />
-                )}
-              />
-            </ArkField.Root>
+            <TextInput
+              name={field().name}
+              label="Previous episode key"
+              error={field().state.meta.errors[0]}
+              value={field().state.value}
+              onValueChange={(value) => field().handleChange(value)}
+              onBlur={(event) => {
+                field().handleBlur();
+                props.onSaveTextSetting('keybindPrev', event.currentTarget.value);
+              }}
+              class={styles.input}
+              placeholder="Shift+<"
+            />
           )}
         </props.form.Field>
 
@@ -97,31 +81,23 @@ export default function ShortcutKeysCard(props: ShortcutKeysCardProps) {
             }}
           >
             {(field) => (
-              <ArkField.Root class={styles.field} invalid={field().state.meta.errors.length > 0}>
-                <ArkField.Label class={shared.overline}>Intro skip key</ArkField.Label>
-                <ArkField.Input
-                  asChild={(fieldProps) => (
-                    <FieldControl
-                      {...fieldProps()}
-                      variant="filled"
-                      name={field().name}
-                      type="text"
-                      value={field().state.value}
-                      onInput={(event) => field().handleChange(event.currentTarget.value)}
-                      onBlur={(event) => {
-                        field().handleBlur();
-                        props.onSaveTextSetting('keybindIntroSkip', event.currentTarget.value);
-                      }}
-                      class={styles.input}
-                      placeholder="g"
-                    />
-                  )}
-                />
-              </ArkField.Root>
+              <TextInput
+                name={field().name}
+                label="Intro skip key"
+                error={field().state.meta.errors[0]}
+                value={field().state.value}
+                onValueChange={(value) => field().handleChange(value)}
+                onBlur={(event) => {
+                  field().handleBlur();
+                  props.onSaveTextSetting('keybindIntroSkip', event.currentTarget.value);
+                }}
+                class={styles.input}
+                placeholder="g"
+              />
             )}
           </props.form.Field>
         </Show>
       </div>
-    </SectionCard>
+    </ConsoleSection>
   );
 }

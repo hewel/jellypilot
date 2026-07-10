@@ -1,8 +1,9 @@
+import { Button, IconButton } from '@jellypilot/ui';
 import { Activity, AlertTriangle, Link, Power, RefreshCw, Server, User } from 'lucide-solid';
 import { Show } from 'solid-js';
 
 import type { ConnectionState } from '../../bindings';
-import { Button, SectionCard } from '../ui';
+import ConsoleSection from './ConsoleSection';
 import { useOperationsConsoleStore } from './store';
 
 import * as patterns from '../../styles/patterns.css';
@@ -26,7 +27,7 @@ export default function ConnectionCard(props: ConnectionCardProps) {
   };
 
   return (
-    <SectionCard icon={<Activity class={styles.sectionIcon.secondary} />} title="Connection">
+    <ConsoleSection icon={<Activity class={styles.sectionIcon.secondary} />} title="Connection">
       <div class={styles.grid3}>
         <div class={styles.tile}>
           <div class={styles.tileWatermark}>
@@ -75,12 +76,12 @@ export default function ConnectionCard(props: ConnectionCardProps) {
       <div class={styles.actionRow}>
         <Button
           type="button"
-          variant="outlined"
+          variant="outline"
           class={styles.mutedOutlinedButton}
           disabled={ui.disconnecting || !props.state?.connected}
           onClick={props.onDisconnect}
-          leadingIcon={<Power class={patterns.icon4_5} />}
         >
+          <Power class={patterns.icon4_5} />
           {ui.disconnecting ? 'Disconnecting...' : 'Disconnect'}
         </Button>
         <Show when={!props.state?.connected && props.canReconnect}>
@@ -93,21 +94,19 @@ export default function ConnectionCard(props: ConnectionCardProps) {
             {ui.reconnecting ? 'Reconnecting...' : 'Reconnect'}
           </Button>
         </Show>
-        <Button
-          type="button"
-          variant="icon"
+        <IconButton
+          variant="outline"
           onClick={props.onRefresh}
           class={styles.refreshButton}
           aria-label="Refresh status"
-          title="Refresh status"
         >
           <RefreshCw class={patterns.icon4_5} />
-        </Button>
+        </IconButton>
       </div>
       <p class={styles.bodyText}>
         Disconnect ends the active media server connection but keeps saved services available for
         Reconnect.
       </p>
-    </SectionCard>
+    </ConsoleSection>
   );
 }

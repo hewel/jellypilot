@@ -1,8 +1,7 @@
+import { atomic } from '@jellypilot/atomic-css';
 import { style } from '@vanilla-extract/css';
 
 import { LIBRARY_BROWSE_GRID_TEMPLATE_COLUMNS } from '../../../utils/libraryBrowseLayout';
-
-import { vars } from '../../../styles/vars.css';
 
 const mix = (color: string, opacity: number) =>
   `color-mix(in srgb, ${color} ${Math.round(opacity * 100)}%, transparent)`;
@@ -11,43 +10,51 @@ export const root = style({
   minWidth: 0,
 });
 
-export const section = style({
+export const section = atomic({
   display: 'grid',
-  gap: vars.space['4'],
+  gap: 4,
 });
 
-export const header = style({
-  display: 'flex',
-  flexDirection: 'column',
-  gap: vars.space['2'],
-  '@media': {
-    'screen and (min-width: 640px)': {
-      alignItems: 'center',
-      flexDirection: 'row',
-      justifyContent: 'space-between',
+export const header = style([
+  atomic({
+    display: 'flex',
+    gap: 2,
+  }),
+  {
+    flexDirection: 'column',
+    '@media': {
+      'screen and (min-width: 640px)': {
+        alignItems: 'center',
+        flexDirection: 'row',
+        justifyContent: 'space-between',
+      },
     },
   },
-});
+]);
 
 export const title = style({
-  color: vars.color.onSurface,
-  fontSize: vars.fontSize['22'],
-  fontWeight: vars.fontWeight.bold,
-  lineHeight: vars.lineHeight['28'],
+  color: 'var(--jellypilot-color-on-surface)',
+  fontSize: 'var(--jellypilot-font-size-22)',
+  fontWeight: 'var(--jellypilot-font-weight-bold)',
+  lineHeight: 'var(--jellypilot-line-height-28)',
 });
 
 export const count = style({
-  color: mix(vars.color.onSurfaceVariant, 0.8),
-  fontSize: vars.fontSize['12'],
+  color: mix('var(--jellypilot-color-on-surface-variant)', 0.8),
+  fontSize: 'var(--jellypilot-font-size-12)',
   fontVariantNumeric: 'tabular-nums',
-  lineHeight: vars.lineHeight['16'],
+  lineHeight: 'var(--jellypilot-line-height-16)',
 });
 
-export const grid = style({
-  display: 'grid',
-  gap: vars.space['3'],
-  gridTemplateColumns: LIBRARY_BROWSE_GRID_TEMPLATE_COLUMNS,
-});
+export const grid = style([
+  atomic({
+    display: 'grid',
+    gap: 3,
+  }),
+  {
+    gridTemplateColumns: LIBRARY_BROWSE_GRID_TEMPLATE_COLUMNS,
+  },
+]);
 
 export const fade = style({
   animation: 'fadeIn 0.3s cubic-bezier(0.16, 1, 0.3, 1) forwards',
@@ -69,28 +76,32 @@ export const virtualRow = style({
   width: '100%',
 });
 
-export const loadMoreError = style({
-  alignItems: 'center',
-  display: 'flex',
-  flexDirection: 'column',
-  gap: vars.space['3'],
-  paddingTop: vars.space['2'],
-});
+export const loadMoreError = style([
+  atomic({
+    display: 'flex',
+    gap: 3,
+  }),
+  {
+    flexDirection: 'column',
+    paddingTop: 'var(--jellypilot-space-2)',
+    alignItems: 'center',
+  },
+]);
 
 export const error = style({
-  color: vars.color.error,
-  fontSize: vars.fontSize['12'],
-  lineHeight: vars.lineHeight['16'],
+  color: 'var(--jellypilot-color-error)',
+  fontSize: 'var(--jellypilot-font-size-12)',
+  lineHeight: 'var(--jellypilot-line-height-16)',
   textAlign: 'center',
 });
 
 export const pillButton = style({
-  borderRadius: vars.borderRadius.full,
+  borderRadius: 'var(--jellypilot-border-radius-full)',
 });
 
 export const icon4 = style({
-  height: vars.space['4'],
-  width: vars.space['4'],
+  height: 'var(--jellypilot-space-4)',
+  width: 'var(--jellypilot-space-4)',
 });
 
 export const spin = style({
@@ -102,98 +113,107 @@ export const sentinel = style({
   width: '100%',
 });
 
-export const menuTrigger = style({
-  alignItems: 'center',
-  border: 0,
-  borderLeft: `1px solid ${vars.color.outlineVariant}`,
-  color: vars.color.onSurface,
-  display: 'flex',
-  flex: 'none',
-  height: vars.space['10'],
-  justifyContent: 'center',
-  outline: 'none',
-  paddingInline: vars.space['2'],
-  textAlign: 'left',
-  transitionDuration: vars.duration['200'],
-  transitionProperty: 'color',
-  width: vars.space['10'],
-  selectors: {
-    '&:hover': {
-      color: vars.color.secondary,
+export const menuTrigger = style([
+  atomic({
+    items: 'center',
+    justify: 'center',
+    display: 'flex',
+  }),
+  {
+    alignItems: 'center',
+    border: 'none',
+    borderLeft: '1px solid var(--jellypilot-color-outline-variant)',
+    color: 'var(--jellypilot-color-on-surface)',
+    flex: 'none',
+    height: 'var(--jellypilot-space-10)',
+    outline: 'none',
+    paddingInline: 'var(--jellypilot-space-2)',
+    textAlign: 'left',
+    transitionDuration: 'var(--jellypilot-duration-200)',
+    transitionProperty: 'color',
+    width: 'var(--jellypilot-space-10)',
+    selectors: {
+      '&:hover': {
+        color: 'var(--jellypilot-color-secondary)',
+      },
+      '&:disabled': {
+        cursor: 'not-allowed',
+        opacity: 0.5,
+      },
+      '&[data-state="on"]': {
+        background: mix('var(--jellypilot-color-secondary-container)', 0.45),
+        color: 'var(--jellypilot-color-on-secondary-container)',
+      },
     },
-    '&:disabled': {
-      cursor: 'not-allowed',
-      opacity: 0.5,
-    },
-    '&[data-state="on"]': {
-      background: mix(vars.color.secondaryContainer, 0.45),
-      color: vars.color.onSecondaryContainer,
+    '@media': {
+      'screen and (min-width: 640px)': {
+        height: 'var(--jellypilot-space-12)',
+        width: 'var(--jellypilot-space-12)',
+      },
     },
   },
-  '@media': {
-    'screen and (min-width: 640px)': {
-      height: vars.space['12'],
-      width: vars.space['12'],
-    },
-  },
-});
+]);
 
 export const menuContent = style({
-  backdropFilter: 'blur(12px)',
-  background: vars.color.surfaceContainerLowest,
-  border: `1px solid ${vars.color.outlineVariant}`,
-  borderRadius: vars.borderRadius.lg,
-  boxShadow: vars.shadow['2xl'],
+  background: 'var(--jellypilot-color-surface-container-lowest)',
+  border: `1px solid var(--jellypilot-color-outline-variant)`,
+  borderRadius: 'var(--jellypilot-radius-lg)',
+  boxShadow: 'var(--jellypilot-shadow-2xl)',
   maxHeight: '15rem',
   minWidth: '12rem',
   outline: 'none',
   overflowY: 'auto',
-  padding: vars.space['2'],
+  padding: 'var(--jellypilot-space-2)',
   zIndex: 50,
 });
 
 export const menuLabel = style({
-  fontSize: vars.fontSize['12'],
-  fontWeight: vars.fontWeight.bold,
-  padding: `${vars.space['2']} ${vars.space['3_5']}`,
+  fontSize: 'var(--jellypilot-font-size-12)',
+  fontWeight: 'var(--jellypilot-font-weight-bold)',
+  padding: 'var(--jellypilot-space-2) var(--jellypilot-space-3_5)',
 });
 
-export const menuItem = style({
-  alignItems: 'center',
-  borderRadius: vars.borderRadius.xl,
-  color: vars.color.onSurfaceVariant,
-  cursor: 'pointer',
-  display: 'flex',
-  fontSize: vars.fontSize['14'],
-  justifyContent: 'space-between',
-  lineHeight: vars.lineHeight['20'],
-  padding: `${vars.space['2_5']} ${vars.space['3_5']}`,
-  transitionProperty: 'background-color, color',
-  selectors: {
-    '&:hover': {
-      background: vars.color.surfaceContainerHigh,
-      color: vars.color.onSurface,
-    },
-    '&[data-disabled]': {
-      cursor: 'not-allowed',
-      opacity: 0.5,
+export const menuItem = style([
+  atomic({
+    display: 'flex',
+    items: 'center',
+    justify: 'between',
+    rounded: 'xl',
+  }),
+  {
+    color: 'var(--jellypilot-color-on-surface-variant)',
+    cursor: 'pointer',
+    fontSize: 'var(--jellypilot-font-size-14)',
+    lineHeight: 'var(--jellypilot-line-height-20)',
+    padding: 'var(--jellypilot-space-2_5) var(--jellypilot-space-3_5)',
+    transitionProperty: 'background-color, color',
+    border: 0,
+    selectors: {
+      '&:hover': {
+        background: 'var(--jellypilot-color-surface-container-high)',
+        color: 'var(--jellypilot-color-on-surface)',
+      },
+      '&[data-disabled]': {
+        cursor: 'not-allowed',
+        opacity: 0.5,
+      },
     },
   },
-});
+]);
 
 export const menuText = style({
-  fontWeight: vars.fontWeight.medium,
+  fontWeight: 'var(--jellypilot-font-weight-medium)',
 });
 
 export const menuCheck = style({
-  color: vars.color.secondary,
-  height: vars.space['4'],
-  width: vars.space['4'],
+  color: 'var(--jellypilot-color-secondary)',
+  height: 'var(--jellypilot-space-4)',
+  width: 'var(--jellypilot-space-4)',
 });
 
 export const separator = style({
-  borderTop: `1px solid ${mix(vars.color.outlineVariant, 0.6)}`,
-  marginBlock: vars.space['1'],
+  borderTop: `1px solid ${mix('var(--jellypilot-color-outline-variant)', 0.6)}`,
+  marginBlock: 'var(--jellypilot-space-1)',
 });
 
 export const controlsNav = style({
@@ -203,27 +223,31 @@ export const controlsNav = style({
   justifyContent: 'space-between',
 });
 
-export const controlGroup = style({
-  borderRadius: vars.borderRadius['2xl'],
-  display: 'flex',
-  flexWrap: 'wrap',
-  justifyContent: 'flex-end',
-  minWidth: 0,
-  overflow: 'hidden',
-});
+export const controlGroup = style([
+  atomic({
+    display: 'flex',
+    wrap: 'wrap',
+    justify: 'flex-end',
+  }),
+  {
+    borderRadius: 'var(--jellypilot-radius-2xl)',
+    minWidth: 0,
+    overflow: 'hidden',
+  },
+]);
 
 export const skeletonTitle = style({
   animation: 'pulse 1.8s cubic-bezier(0.4, 0, 0.6, 1) infinite',
-  background: mix(vars.color.surfaceContainerHigh, 0.7),
-  borderRadius: vars.borderRadius.md,
-  height: vars.space['7'],
+  background: mix('var(--jellypilot-color-surface-container-high)', 0.7),
+  borderRadius: 'var(--jellypilot-radius-md)',
+  height: 'var(--jellypilot-space-7)',
   width: '8rem',
 });
 
 export const skeletonCount = style({
   animation: 'pulse 1.8s cubic-bezier(0.4, 0, 0.6, 1) infinite',
-  background: mix(vars.color.surfaceContainerHigh, 0.6),
-  borderRadius: vars.borderRadius.md,
-  height: vars.space['4'],
-  width: vars.space['24'],
+  background: mix('var(--jellypilot-color-surface-container-high)', 0.6),
+  borderRadius: 'var(--jellypilot-radius-md)',
+  height: 'var(--jellypilot-space-4)',
+  width: 'var(--jellypilot-space-24)',
 });

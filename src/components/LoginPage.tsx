@@ -1,5 +1,4 @@
-import { Field as ArkField } from '@ark-ui/solid/field';
-import { CheckboxInput, SegmentedControl } from '@jellypilot/ui';
+import { Button, Card, CheckboxInput, SegmentedControl, TextInput } from '@jellypilot/ui';
 import { createForm } from '@tanstack/solid-form';
 import { useQueryClient } from '@tanstack/solid-query';
 import { Effect, Exit, Fiber } from 'effect';
@@ -23,9 +22,9 @@ import {
 } from '../serverUrl';
 import type { ServerScheme, ServerUrlResult } from '../serverUrl';
 import { saveCurrentSession } from '../sessionAccess';
-import { Button, Card, ConsoleShell, FieldControl, PageFooter } from './ui';
+import { ConsoleShell } from './AppConsoleLayout';
+import PageFooter from './AppPageFooter';
 
-import * as patterns from '../styles/patterns.css';
 import * as styles from './LoginPage.css';
 
 interface LoginPageProps {
@@ -254,7 +253,7 @@ export default function LoginPage(props: LoginPageProps) {
   });
 
   const loginCard = () => (
-    <Card variant="elevated" class={styles.card}>
+    <Card variant="filled" class={styles.card}>
       <div class={styles.accent} />
       <div class={styles.stack7}>
         <div>
@@ -306,28 +305,22 @@ export default function LoginPage(props: LoginPageProps) {
           </form.Field>
           <form.Field name="host">
             {(field) => (
-              <ArkField.Root class={styles.fieldBlock} disabled={isQuickConnectWaiting()}>
-                <ArkField.Label class={styles.srOnly}>Jellyfin host</ArkField.Label>
-                <ArkField.Input
-                  asChild={(fieldProps) => (
-                    <FieldControl
-                      {...fieldProps()}
-                      variant="filled"
-                      type="text"
-                      value={field().state.value}
-                      onInput={(event) => {
-                        const { value } = event.currentTarget;
-                        const explicitScheme = explicitSchemeFromInput(value);
-                        const strippedHost = stripServerScheme(value);
-                        field().handleChange(strippedHost);
-                        form.setFieldValue('scheme', explicitScheme ?? defaultSchemeForHost(value));
-                      }}
-                      class={patterns.fullWidth}
-                      placeholder="jellyfin.local or media.example.com/jellyfin"
-                    />
-                  )}
-                />
-              </ArkField.Root>
+              <TextInput
+                name={field().name}
+                label="Jellyfin host"
+                placeholder="jellyfin.local or media.example.com/jellyfin"
+                value={field().state.value}
+                disabled={isQuickConnectWaiting()}
+                class={styles.textInput}
+                error={field().state.meta.errors[0]}
+                onValueChange={(value) => {
+                  const explicitScheme = explicitSchemeFromInput(value);
+                  const strippedHost = stripServerScheme(value);
+                  field().handleChange(strippedHost);
+                  form.setFieldValue('scheme', explicitScheme ?? defaultSchemeForHost(value));
+                }}
+                onBlur={() => field().handleBlur()}
+              />
             )}
           </form.Field>
         </div>
@@ -451,41 +444,31 @@ export default function LoginPage(props: LoginPageProps) {
           <div class={styles.stack4}>
             <form.Field name="username">
               {(field) => (
-                <ArkField.Root class={styles.fieldBlock}>
-                  <ArkField.Label class={styles.label}>Username</ArkField.Label>
-                  <ArkField.Input
-                    asChild={(fieldProps) => (
-                      <FieldControl
-                        {...fieldProps()}
-                        variant="filled"
-                        value={field().state.value}
-                        onInput={(event) => field().handleChange(event.currentTarget.value)}
-                        class={patterns.fullWidth}
-                        placeholder="Jellyfin username"
-                      />
-                    )}
-                  />
-                </ArkField.Root>
+                <TextInput
+                  name={field().name}
+                  label="Username"
+                  placeholder="Jellyfin username"
+                  value={field().state.value}
+                  class={styles.textInput}
+                  error={field().state.meta.errors[0]}
+                  onValueChange={(value) => field().handleChange(value)}
+                  onBlur={() => field().handleBlur()}
+                />
               )}
             </form.Field>
             <form.Field name="password">
               {(field) => (
-                <ArkField.Root class={styles.fieldBlock}>
-                  <ArkField.Label class={styles.label}>Password</ArkField.Label>
-                  <ArkField.Input
-                    asChild={(fieldProps) => (
-                      <FieldControl
-                        {...fieldProps()}
-                        variant="filled"
-                        type="password"
-                        value={field().state.value}
-                        onInput={(event) => field().handleChange(event.currentTarget.value)}
-                        class={patterns.fullWidth}
-                        placeholder="Jellyfin password"
-                      />
-                    )}
-                  />
-                </ArkField.Root>
+                <TextInput
+                  name={field().name}
+                  label="Password"
+                  type="password"
+                  placeholder="Jellyfin password"
+                  value={field().state.value}
+                  class={styles.textInput}
+                  error={field().state.meta.errors[0]}
+                  onValueChange={(value) => field().handleChange(value)}
+                  onBlur={() => field().handleBlur()}
+                />
               )}
             </form.Field>
             <form.Field name="rememberMe">
@@ -515,7 +498,7 @@ export default function LoginPage(props: LoginPageProps) {
           <Button
             type="button"
             variant="secondary"
-            class={patterns.fullWidth}
+            class={styles.fullWidth}
             onClick={resetQuickConnect}
           >
             Cancel Request
@@ -525,12 +508,12 @@ export default function LoginPage(props: LoginPageProps) {
             type="button"
             disabled={submitting()}
             variant="primary"
-            class={patterns.fullWidth}
+            class={styles.fullWidth}
             onClick={submit}
           >
             {submitting() ? (
               <>
-                <LoaderCircle class={`${patterns.icon5} ${patterns.spinner}`} />
+                <LoaderCircle class={`${styles.icon5} ${styles.spinner}`} />
                 {submittingButtonLabel()}
               </>
             ) : (

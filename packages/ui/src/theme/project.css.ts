@@ -1,24 +1,7 @@
-import {
-  borderRadius as miniBorderRadius,
-  breakpoints as miniBreakpoints,
-  duration as miniDuration,
-  fontSize as miniFontSize,
-  fontWeight as miniFontWeight,
-  lineHeight as miniLineHeight,
-  spacing as miniSpacing,
-} from '@unocss/preset-mini/theme';
 import { createGlobalTheme, createGlobalThemeContract } from '@vanilla-extract/css';
 
-const unoSpacing = miniSpacing as Record<string, string>;
-const unoFontSize = miniFontSize as Record<string, readonly [string, string]>;
-const unoFontWeight = miniFontWeight as Record<string, string>;
-const unoLineHeight = miniLineHeight as Record<string, string>;
-const unoBorderRadius = miniBorderRadius as Record<string, string>;
-const unoDuration = miniDuration as Record<string, string>;
-const unoBreakpoints = miniBreakpoints as Record<string, string>;
-
 const spaceValue = {
-  '0': unoSpacing.none,
+  '0': '0',
   px: '1px',
   '0_5': '0.125rem',
   '1': '0.25rem',
@@ -40,46 +23,46 @@ const spaceValue = {
   '16': '4rem',
   '20': '5rem',
   '24': '6rem',
-  xs: unoSpacing.xs,
-  sm: unoSpacing.sm,
-  md: unoSpacing.DEFAULT,
-  lg: unoSpacing.lg,
-  xl: unoSpacing.xl,
-  '2xl': unoSpacing['2xl'],
-  '3xl': unoSpacing['3xl'],
-  '4xl': unoSpacing['4xl'],
-  '5xl': unoSpacing['5xl'],
-  '6xl': unoSpacing['6xl'],
-  '7xl': unoSpacing['7xl'],
-  '8xl': unoSpacing['8xl'],
-  '9xl': unoSpacing['9xl'],
+  xs: '0.75rem',
+  sm: '0.875rem',
+  md: '1rem',
+  lg: '1.25rem',
+  xl: '1.5rem',
+  '2xl': '2rem',
+  '3xl': '3rem',
+  '4xl': '4rem',
+  '5xl': '5rem',
+  '6xl': '6rem',
+  '7xl': '7rem',
+  '8xl': '8rem',
+  '9xl': '9rem',
 };
 
 const fontSizeValue = {
   '10': '0.625rem',
   '11': '0.6875rem',
-  '12': unoFontSize.xs[0],
+  '12': '0.75rem',
   '13': '0.8125rem',
-  '14': unoFontSize.sm[0],
+  '14': '0.875rem',
   '15': '0.9375rem',
-  '16': unoFontSize.base[0],
-  '18': unoFontSize.lg[0],
-  '20': unoFontSize.xl[0],
+  '16': '1rem',
+  '18': '1.125rem',
+  '20': '1.25rem',
   '22': '1.375rem',
-  '24': unoFontSize['2xl'][0],
+  '24': '1.5rem',
   '28': '1.75rem',
   '32': '2rem',
-  '36': unoFontSize['4xl'][0],
+  '36': '2.25rem',
   '45': '2.8125rem',
 };
 
 const lineHeightValue = {
-  none: unoLineHeight.none,
-  tight: unoLineHeight.tight,
-  snug: unoLineHeight.snug,
-  normal: unoLineHeight.normal,
-  relaxed: unoLineHeight.relaxed,
-  loose: unoLineHeight.loose,
+  none: '1',
+  tight: '1.25',
+  snug: '1.375',
+  normal: '1.5',
+  relaxed: '1.625',
+  loose: '2',
   '14': '0.875rem',
   '16': '1rem',
   '20': '1.25rem',
@@ -93,24 +76,24 @@ const lineHeightValue = {
 };
 
 const fontWeightValue = {
-  normal: unoFontWeight.normal,
-  medium: unoFontWeight.medium,
-  semibold: unoFontWeight.semibold,
-  bold: unoFontWeight.bold,
-  extrabold: unoFontWeight.extrabold,
-  black: unoFontWeight.black,
+  normal: '400',
+  medium: '500',
+  semibold: '600',
+  bold: '700',
+  extrabold: '800',
+  black: '900',
 };
 
 const borderRadiusValue = {
-  none: unoBorderRadius.none,
-  sm: unoBorderRadius.sm,
-  md: unoBorderRadius.md,
-  lg: unoBorderRadius.lg,
-  xl: unoBorderRadius.xl,
-  '2xl': unoBorderRadius['2xl'],
-  '3xl': unoBorderRadius['3xl'],
+  none: '0',
+  sm: '0.125rem',
+  md: '0.375rem',
+  lg: '0.5rem',
+  xl: '0.75rem',
+  '2xl': '1rem',
+  '3xl': '1.5rem',
   '4xl': '2rem',
-  full: unoBorderRadius.full,
+  full: '9999px',
 };
 
 const shadowValue = {
@@ -134,15 +117,15 @@ const zIndexValue = {
 };
 
 const durationValue = {
-  none: unoDuration.none,
-  '75': unoDuration['75'],
-  '100': unoDuration['100'],
-  '150': unoDuration['150'],
-  '200': unoDuration['200'],
-  '300': unoDuration['300'],
-  '500': unoDuration['500'],
-  '700': unoDuration['700'],
-  '1000': unoDuration['1000'],
+  none: '0ms',
+  '75': '75ms',
+  '100': '100ms',
+  '150': '150ms',
+  '200': '200ms',
+  '300': '300ms',
+  '500': '500ms',
+  '700': '700ms',
+  '1000': '1000ms',
 };
 
 const easingValue = {
@@ -152,14 +135,14 @@ const easingValue = {
 };
 
 const breakpointValue = {
-  sm: unoBreakpoints.sm,
-  md: unoBreakpoints.md,
-  lg: unoBreakpoints.lg,
-  xl: unoBreakpoints.xl,
-  '2xl': unoBreakpoints['2xl'],
+  sm: '640px',
+  md: '768px',
+  lg: '1024px',
+  xl: '1280px',
+  '2xl': '1536px',
 };
 
-export const breakpoints = breakpointValue;
+export const projectBreakpoints = breakpointValue;
 
 const tokenContract = <Token extends string>(group: string, values: Record<Token, string>) =>
   Object.fromEntries(
@@ -167,13 +150,12 @@ const tokenContract = <Token extends string>(group: string, values: Record<Token
   ) as Record<Token, string>;
 
 /**
- * JellyPilot design-token source.
+ * JellyPilot Project Theme.
  *
- * This is the single owner of design token values. Sprinkles, Recipes,
- * global styles, and component-local vanilla-extract CSS consume them directly
- * through `vars.*`.
+ * UI Core is the single owner of these semantic values. Consumers import this
+ * public style entrypoint when component-local vanilla-extract CSS needs them.
  */
-export const vars = createGlobalThemeContract({
+export const projectTheme = createGlobalThemeContract({
   color: {
     background: '--jellypilot-color-background',
     brandGlow: '--jellypilot-color-brand-glow',
@@ -230,7 +212,7 @@ export const vars = createGlobalThemeContract({
   breakpoint: tokenContract('breakpoint', breakpointValue),
 });
 
-createGlobalTheme(':root', vars, {
+createGlobalTheme(':root', projectTheme, {
   color: {
     background: '#05060a',
     brandGlow: '#4f46e5',

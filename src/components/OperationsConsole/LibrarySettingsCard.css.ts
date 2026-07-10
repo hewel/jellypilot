@@ -1,29 +1,22 @@
+import { atomic } from '@jellypilot/atomic-css';
 import { style } from '@vanilla-extract/css';
 
-import { sprinkles } from '../../styles/sprinkles.css';
-import { vars } from '../../styles/vars.css';
-
-const mix = (color: string, opacity: number) =>
-  `color-mix(in srgb, ${color} ${Math.round(opacity * 100)}%, transparent)`;
-
 export const toggle = style([
-  sprinkles({
+  atomic({
     display: 'flex',
-    alignItems: 'flex-start',
-    gap: '3',
-    borderRadius: '2xl',
-    p: '4',
+    items: 'flex-start',
+    gap: 3,
+    rounded: '2xl',
+    p: 4,
     textAlign: 'left',
   }),
   {
-    backdropFilter: 'blur(4px)',
-    background: mix(vars.color.surfaceContainerHigh, 0.3),
-    border: `1px solid ${mix(vars.color.outlineVariant, 0.6)}`,
-    boxShadow: vars.shadow.inner,
+    background: 'var(--jellypilot-color-surface-container-high)',
+    border: `1px solid var(--jellypilot-color-outline-variant)`,
     cursor: 'pointer',
     selectors: {
       '&:focus-visible': {
-        outline: `2px solid ${vars.color.primary}`,
+        outline: '2px solid var(--jellypilot-color-primary)',
         outlineOffset: '2px',
       },
     },
@@ -31,56 +24,63 @@ export const toggle = style([
 ]);
 
 export const checkbox = style([
-  sprinkles({
-    display: 'inlineFlex',
-    alignItems: 'center',
-    justifyContent: 'center',
-    flexShrink: '0',
-    color: 'onPrimary',
-    fontSize: '11',
-    lineHeight: 'none',
-    borderRadius: 'lg',
+  atomic({
+    display: 'inline-flex',
+    items: 'center',
+    justify: 'center',
+    flexShrink: 0,
+    rounded: 'lg',
   }),
   {
-    background: vars.color.surfaceContainerHigh,
-    border: `1px solid ${vars.color.outline}`,
+    background: 'var(--jellypilot-color-surface-container-high)',
+    border: `1px solid var(--jellypilot-color-outline)`,
+    color: 'var(--jellypilot-color-on-primary)',
+    fontSize: '0.6875rem',
+    lineHeight: 'var(--jellypilot-line-height-none)',
     height: '1.375rem',
-    marginTop: vars.space['0_5'],
-    transitionDuration: vars.duration['200'],
-    transitionProperty: 'background-color, border-color, box-shadow',
+    marginTop: 'var(--jellypilot-space-0_5)',
+    transitionDuration: 'var(--jellypilot-duration-200)',
+    transitionProperty: 'background-color, border-color',
     width: '1.375rem',
     selectors: {
       '&:hover': {
-        borderColor: mix(vars.color.primary, 0.6),
+        borderColor: 'var(--jellypilot-color-primary)',
       },
     },
   },
 ]);
 
 export const checkboxChecked = style({
-  background: `linear-gradient(135deg, ${vars.color.primary}, ${vars.color.primaryGradientEnd})`,
-  borderColor: vars.color.primary,
+  background: 'var(--jellypilot-color-primary)',
+  borderColor: 'var(--jellypilot-color-primary)',
 });
 
-export const copy = sprinkles({
-  minWidth: '0',
-});
+export const copy = style([
+  atomic({
+    minWidth: 0,
+  }),
+]);
 
-export const title = sprinkles({
-  display: 'block',
-  color: 'onSurface',
-  fontSize: '14',
-  lineHeight: '20',
-  fontWeight: 'semibold',
-});
-
-export const description = style([
-  sprinkles({
-    mt: '1',
-    fontSize: '12',
-    lineHeight: '16',
+export const title = style([
+  atomic({
+    display: 'block',
+    fontWeight: 'semibold',
   }),
   {
-    color: mix(vars.color.onSurfaceVariant, 0.8),
+    color: 'var(--jellypilot-color-on-surface)',
+    fontSize: 'var(--jellypilot-font-size-14)',
+    lineHeight: 'var(--jellypilot-line-height-20)',
+  },
+]);
+
+export const description = style([
+  atomic({
+    mt: 1,
+  }),
+  {
+    color: 'var(--jellypilot-color-on-surface-variant)',
+    fontSize: 'var(--jellypilot-font-size-12)',
+    lineHeight: 'var(--jellypilot-line-height-16)',
+    opacity: 0.8,
   },
 ]);

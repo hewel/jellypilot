@@ -1,11 +1,12 @@
-import type { ParentProps } from 'solid-js'
+import type { JSX, ParentProps } from 'solid-js'
 import { splitProps } from 'solid-js'
 import { cardStyle } from './Card.css'
 
 export type CardProps = ParentProps<{
   class?: string
   variant?: 'filled' | 'outlined'
-}>
+}> &
+  JSX.HTMLAttributes<HTMLDivElement>
 
 export function Card(props: CardProps) {
   const [local, rest] = splitProps(props, ['class', 'children', 'variant'])

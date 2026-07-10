@@ -1,7 +1,8 @@
+import { Button } from '@jellypilot/ui';
 import { ClipboardList } from 'lucide-solid';
 
 import DiagnosticsPanel from '../DiagnosticsPanel';
-import { Button, SectionCard } from '../ui';
+import ConsoleSection from './ConsoleSection';
 import { useOperationsConsoleStore } from './store';
 
 import * as styles from './DiagnosticsCard.css';
@@ -11,13 +12,13 @@ export default function DiagnosticsCard() {
   const [ui, actions] = useOperationsConsoleStore();
 
   return (
-    <SectionCard
+    <ConsoleSection
       icon={<ClipboardList class={shared.sectionIcon.plain} />}
       title="Diagnostics"
       trailing={
         <Button
           type="button"
-          variant="text"
+          variant="ghost"
           class={styles.toggleButton}
           onClick={actions.toggleDiagnostics}
           aria-expanded={ui.diagnosticsExpanded}
@@ -28,6 +29,6 @@ export default function DiagnosticsCard() {
       }
     >
       <DiagnosticsPanel compact={!ui.diagnosticsExpanded} />
-    </SectionCard>
+    </ConsoleSection>
   );
 }

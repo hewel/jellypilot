@@ -1,4 +1,4 @@
-import { Button, StatusBadge } from '@components/ui';
+import { Badge, Button, ProgressBar } from '@jellypilot/ui';
 import { ArrowLeft } from 'lucide-solid';
 import { Show, createEffect, createSignal } from 'solid-js';
 import type { JSX } from 'solid-js';
@@ -60,12 +60,12 @@ export function DetailHero(props: DetailHeroProps) {
       <Show when={props.onBack}>
         <Button
           type="button"
-          variant="outlined"
+          variant="outline"
           size="sm"
           class={styles.backButton}
-          leadingIcon={<ArrowLeft class={styles.backIcon} />}
           onClick={() => props.onBack?.()}
         >
+          <ArrowLeft class={styles.backIcon} />
           {props.backLabel ?? 'Back'}
         </Button>
       </Show>
@@ -93,14 +93,16 @@ export function DetailHero(props: DetailHeroProps) {
             )}
           </Show>
           <Show when={props.resumeProgress != null}>
-            <div class={styles.progressTrack}>
-              <div class={styles.progressBar} style={{ width: `${progressPercent()}%` }} />
-            </div>
+            <ProgressBar
+              value={progressPercent()}
+              label={`${props.title} watch progress`}
+              class={styles.progressTrack}
+            />
           </Show>
         </div>
 
         <div class={styles.copy}>
-          <StatusBadge variant="neutral">{props.typeLabel}</StatusBadge>
+          <Badge tone="neutral">{props.typeLabel}</Badge>
           <div class={styles.titleBlock}>
             <h1 class={styles.title}>{props.title}</h1>
             <p class={styles.subtitle}>{props.subtitle}</p>

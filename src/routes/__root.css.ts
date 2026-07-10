@@ -1,18 +1,17 @@
+import { atomic } from '@jellypilot/atomic-css';
 import { style } from '@vanilla-extract/css';
 
-import { sprinkles } from '../styles/sprinkles.css';
-
 export const viewport = style([
-  sprinkles({
-    height: 'screenHeight',
+  atomic({
+    height: '100vh',
     overflow: 'auto',
-    width: 'screen',
+    width: '100%',
   }),
   {
     overscrollBehavior: 'contain',
   },
 ]);
 
-export const content = sprinkles({
-  minWidth: 'fit',
+export const content = atomic({
+  minWidth: '0',
 });

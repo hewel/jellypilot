@@ -1,7 +1,6 @@
+import { atomic } from '@jellypilot/atomic-css';
+import { projectTheme } from '@jellypilot/ui/theme/project';
 import { style } from '@vanilla-extract/css';
-
-import { sprinkles } from './sprinkles.css';
-import { vars } from './vars.css';
 
 export const srOnly = style({
   border: 0,
@@ -15,18 +14,18 @@ export const srOnly = style({
   width: '1px',
 });
 
-export const fullWidth = sprinkles({
-  width: 'full',
+export const fullWidth = atomic({
+  width: '100%',
 });
 
 export const icon3_5 = style({
-  height: vars.space['3_5'],
-  width: vars.space['3_5'],
+  height: projectTheme.space['3_5'],
+  width: projectTheme.space['3_5'],
 });
 
-export const icon4 = sprinkles({
-  height: '4',
-  width: '4',
+export const icon4 = atomic({
+  height: '1rem',
+  width: '1rem',
 });
 
 export const icon4_5 = style({
@@ -34,14 +33,14 @@ export const icon4_5 = style({
   width: '1.125rem',
 });
 
-export const icon5 = sprinkles({
-  height: '5',
-  width: '5',
+export const icon5 = atomic({
+  height: '1.25rem',
+  width: '1.25rem',
 });
 
-export const icon6 = sprinkles({
-  height: '6',
-  width: '6',
+export const icon6 = atomic({
+  height: '1.5rem',
+  width: '1.5rem',
 });
 
 export const spinner = style({
@@ -53,9 +52,9 @@ export const currentFill = style({
 });
 
 export const pill = style({
-  borderRadius: vars.borderRadius.full,
+  borderRadius: projectTheme.borderRadius.full,
 });
 
 export const mono = style({
-  fontFamily: vars.font.mono,
+  fontFamily: projectTheme.font.mono,
 });

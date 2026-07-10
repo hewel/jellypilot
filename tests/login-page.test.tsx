@@ -77,14 +77,15 @@ test('login page shows quick connect as the default login method', () => {
 
   cleanup();
 });
-test('login page uses SegmentedControl and checkbox primitives', async () => {
+
+test('login page uses SegmentedControl and text input primitives', async () => {
   const cleanup = renderLoginPage();
 
   const quickConnectTab = screen.getByRole('radio', { name: 'Quick Connect' });
   expect(quickConnectTab.closest('[data-ui="segmented-control"]')).not.toBeNull();
 
-  const serverHost = screen.getByPlaceholderText('jellyfin.local or media.example.com/jellyfin');
-  expect(serverHost.closest('[data-scope="field"]')).not.toBeNull();
+  const serverHost = screen.getByRole('textbox', { name: 'Jellyfin host' });
+  expect(serverHost.closest('[data-ui="text-input"]')).not.toBeNull();
 
   fireEvent.click(screen.getByRole('radio', { name: 'Password' }));
 

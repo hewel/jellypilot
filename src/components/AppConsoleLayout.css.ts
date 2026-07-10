@@ -1,43 +1,42 @@
+import { atomic } from '@jellypilot/atomic-css';
+import { projectBreakpoints, projectTheme } from '@jellypilot/ui/theme/project';
 import { globalStyle, style } from '@vanilla-extract/css';
 
-import { sprinkles } from '../../styles/sprinkles.css';
-import { breakpoints, vars } from '../../styles/vars.css';
-
-export const consoleShell = sprinkles({
+export const consoleShell = atomic({
   display: 'flex',
-  minHeight: 'dynamicScreenHeight',
+  minHeight: '100vh',
   flexDirection: 'column',
   justifyContent: 'space-between',
-  color: 'onSurface',
-  px: '2_5',
-  py: '2',
+  color: 'var(--jellypilot-color-on-surface)',
+  px: '0.625rem',
+  py: '0.5rem',
 });
 
 const consoleContainerMotion = style({
-  animation: `fadeIn ${vars.duration['300']} ${vars.easing.emphasized} forwards`,
+  animation: `fadeIn ${projectTheme.duration['300']} ${projectTheme.easing.emphasized} forwards`,
 });
 
 globalStyle(`${consoleContainerMotion} > * + *`, {
-  marginTop: vars.space['6'],
+  marginTop: projectTheme.space['6'],
 });
 
 export const consoleContainer = style([
-  sprinkles({
+  atomic({
     mx: 'auto',
-    width: 'full',
+    width: '100%',
   }),
   consoleContainerMotion,
 ]);
 
 export const consoleGrid = style([
-  sprinkles({
+  atomic({
     display: 'grid',
-    gap: '6',
+    gap: '1.5rem',
   }),
   {
     gridTemplateColumns: '1fr',
     '@media': {
-      [`screen and (min-width: ${breakpoints.lg})`]: {
+      [`screen and (min-width: ${projectBreakpoints.lg})`]: {
         gridTemplateColumns: 'minmax(0, 1.3fr) minmax(330px, 0.7fr)',
       },
     },

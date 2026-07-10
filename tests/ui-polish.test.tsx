@@ -2,48 +2,39 @@ import { afterEach, expect, test } from '@rstest/core';
 import { fireEvent, screen } from '@testing-library/dom';
 import { render } from 'solid-js/web';
 
-import Toast from '../src/components/Toast';
-import Button from '../src/components/ui/Button';
+import { ToastProvider, useToast } from '../src/components/ToastProvider';
 
-test('Button icon variant preserves accessible button behavior', () => {
+function ToastTrigger() {
+  const { showToast } = useToast();
+
+  return (
+    <button type="button" onClick={() => showToast('error', 'Save failed')}>
+      Show toast
+    </button>
+  );
+}
+
+test('app toast adapter renders and dismisses UI Core feedback', () => {
   const root = document.createElement('div');
   document.body.append(root);
   const dispose = render(
     () => (
-      <Button variant="icon" aria-label="Close panel">
-        <span aria-hidden="true">x</span>
-      </Button>
+      <ToastProvider>
+        <ToastTrigger />
+      </ToastProvider>
     ),
     root,
   );
 
-  expect(screen.getByRole('button', { name: 'Close panel' })).toBeEnabled();
+  fireEvent.click(screen.getByRole('button', { name: 'Show toast' }));
 
-  dispose();
-  root.remove();
-});
+  const toast = screen.getByRole('status');
+  expect(toast).toHaveTextContent('Save failed');
+  expect(toast.closest('[data-ui="toast"]')).not.toBeNull();
+  expect(toast).toHaveAttribute('data-tone', 'danger');
 
-test('Toast exposes alert content and dismisses from the close button', () => {
-  const root = document.createElement('div');
-  document.body.append(root);
-  const dismissed: string[] = [];
-  const dispose = render(
-    () => (
-      <Toast
-        id="toast-1"
-        level="info"
-        message="Saved"
-        exiting={false}
-        onDismiss={(id) => dismissed.push(id)}
-      />
-    ),
-    root,
-  );
-
-  expect(screen.getByRole('alert')).toHaveTextContent('Saved');
-
-  fireEvent.click(screen.getByRole('button', { name: 'Close' }));
-  expect(dismissed).toEqual(['toast-1']);
+  fireEvent.click(screen.getByRole('button', { name: 'Dismiss' }));
+  expect(screen.queryByRole('status')).toBeNull();
 
   dispose();
   root.remove();

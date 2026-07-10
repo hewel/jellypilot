@@ -1,6 +1,6 @@
-import AppVersion from '../AppVersion';
+import AppVersion from './AppVersion';
 
-import * as styles from './PageFooter.css';
+import * as styles from './AppPageFooter.css';
 
 interface PageFooterProps {
   appName?: string;

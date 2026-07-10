@@ -16,7 +16,7 @@ import {
   detailSubtitleElement,
   formatRuntime,
 } from '@components/library/shared';
-import { Button, StatusBadge } from '@components/ui';
+import { Badge, Button } from '@jellypilot/ui';
 import { createMutation, createQuery, useQueryClient } from '@tanstack/solid-query';
 import { createFileRoute, useCanGoBack, useNavigate, useRouter } from '@tanstack/solid-router';
 import { Exit } from 'effect';
@@ -158,14 +158,14 @@ function LibraryItemDetailRoute() {
                   onBack={closeDetail}
                   badges={
                     <>
-                      <StatusBadge variant={item().played ? 'success' : 'neutral'}>
+                      <Badge tone={item().played ? 'success' : 'neutral'}>
                         {item().played ? 'Played' : 'Unplayed'}
-                      </StatusBadge>
-                      <StatusBadge variant={item().favorite ? 'success' : 'neutral'}>
+                      </Badge>
+                      <Badge tone={item().favorite ? 'success' : 'neutral'}>
                         {item().favorite ? 'Favorite' : 'Not favorite'}
-                      </StatusBadge>
+                      </Badge>
                       <Show when={formatRuntime(item().runtimeSeconds)}>
-                        {(runtime) => <StatusBadge variant="neutral">{runtime()}</StatusBadge>}
+                        {(runtime) => <Badge tone="neutral">{runtime()}</Badge>}
                       </Show>
                     </>
                   }
@@ -180,8 +180,8 @@ function LibraryItemDetailRoute() {
                             class={styles.pillButton}
                             disabled={!item().canPlay || confirmBusy()}
                             onClick={() => openPlaybackChooser(item(), 'start')}
-                            leadingIcon={<Play class={styles.playIcon} />}
                           >
+                            <Play class={styles.playIcon} />
                             Play
                           </Button>
                         }
@@ -192,8 +192,8 @@ function LibraryItemDetailRoute() {
                           class={styles.pillButton}
                           disabled={!item().canPlay || confirmBusy()}
                           onClick={() => openPlaybackChooser(item(), 'resume')}
-                          leadingIcon={<Play class={styles.playIcon} />}
                         >
+                          <Play class={styles.playIcon} />
                           Resume
                         </Button>
                         <Button
@@ -202,8 +202,8 @@ function LibraryItemDetailRoute() {
                           class={styles.pillButton}
                           disabled={!item().canPlay || confirmBusy()}
                           onClick={() => openPlaybackChooser(item(), 'start')}
-                          leadingIcon={<RotateCcw class={styles.icon4} />}
                         >
+                          <RotateCcw class={styles.icon4} />
                           Play from beginning
                         </Button>
                       </Show>

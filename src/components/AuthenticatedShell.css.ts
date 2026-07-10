@@ -1,9 +1,8 @@
+import { projectTheme } from '@jellypilot/ui/theme/project';
 import { style } from '@vanilla-extract/css';
 
-import { vars } from '../styles/vars.css';
-
 export const main = style({
-  color: vars.color.onSurface,
+  color: projectTheme.color.onSurface,
   display: 'flex',
   flexDirection: 'column',
   marginInline: 'auto',
@@ -14,16 +13,16 @@ export const main = style({
 
 export const floatingControls = style({
   alignItems: 'center',
-  borderRadius: vars.borderRadius['3xl'],
-  boxShadow: vars.shadow.lg,
+  borderRadius: projectTheme.borderRadius['3xl'],
+  boxShadow: projectTheme.shadow.lg,
   display: 'flex',
   flexDirection: 'column',
-  gap: vars.space['2'],
-  padding: vars.space['1'],
+  gap: projectTheme.space['2'],
+  padding: projectTheme.space['1'],
   position: 'fixed',
-  zIndex: vars.zIndex['100'],
-  background: vars.color.surfaceContainerLow,
-  border: `1px solid ${vars.color.outlineVariant}`,
-  bottom: `max(${vars.space['4']}, env(safe-area-inset-bottom))`,
-  right: `max(${vars.space['4']}, env(safe-area-inset-right))`,
+  zIndex: projectTheme.zIndex['100'],
+  background: projectTheme.color.surfaceContainerLow,
+  border: `1px solid ${projectTheme.color.outlineVariant}`,
+  bottom: `max(${projectTheme.space['4']}, env(safe-area-inset-bottom))`,
+  right: `max(${projectTheme.space['4']}, env(safe-area-inset-right))`,
 });

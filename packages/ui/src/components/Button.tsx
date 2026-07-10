@@ -24,7 +24,8 @@ export type ButtonProps = ParentProps<{
   id?: string
   'aria-label'?: string
   onClick?: JSX.EventHandlerUnion<HTMLButtonElement, MouseEvent>
-}>
+}> &
+  JSX.HTMLAttributes<HTMLButtonElement>
 
 const variantClass: Record<ButtonVariant, string> = {
   primary: buttonPrimary,

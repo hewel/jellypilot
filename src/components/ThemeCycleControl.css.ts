@@ -1,6 +1,5 @@
+import { projectTheme } from '@jellypilot/ui/theme/project';
 import { style } from '@vanilla-extract/css';
-
-import { vars } from '../styles/vars.css';
 
 export const control = style({
   width: '2.75rem',
@@ -10,14 +9,14 @@ export const control = style({
   display: 'inline-flex',
   alignItems: 'center',
   justifyContent: 'center',
-  borderRadius: vars.borderRadius.full,
-  border: `1px solid ${vars.color.outlineVariant}`,
-  background: vars.color.surfaceContainer,
-  color: vars.color.onSurface,
+  borderRadius: projectTheme.borderRadius.full,
+  border: `1px solid ${projectTheme.color.outlineVariant}`,
+  background: projectTheme.color.surfaceContainer,
+  color: projectTheme.color.onSurface,
   cursor: 'pointer',
   selectors: {
     '&:focus-visible': {
-      outline: `2px solid ${vars.color.primary}`,
+      outline: `2px solid ${projectTheme.color.primary}`,
       outlineOffset: '2px',
     },
   },

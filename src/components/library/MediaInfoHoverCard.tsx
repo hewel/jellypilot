@@ -1,10 +1,9 @@
-import { HoverCard } from '@ark-ui/solid/hover-card';
+import { HoverCard, ProgressBar, Spinner } from '@jellypilot/ui';
 import { createQuery } from '@tanstack/solid-query';
 import { Exit, Option } from 'effect';
-import { Check, Heart, LoaderCircle } from 'lucide-solid';
-import { createMemo, createSignal, For, Show } from 'solid-js';
+import { Check, Heart } from 'lucide-solid';
+import { createMemo, createSignal, For, onCleanup, onMount, Show } from 'solid-js';
 import type { JSX } from 'solid-js';
-import { Portal } from 'solid-js/web';
 
 import { commandFailureMessage } from '../../effects/commands';
 import { fetchConnectionState } from '../../effects/connection';
@@ -18,6 +17,8 @@ import {
 } from '../../effects/query';
 
 import * as styles from './MediaInfoHoverCard.css';
+
+const HOVERCARD_OPEN_DELAY_MS = 250;
 
 // Inlined (instead of importing from ./shared) to avoid a shared.tsx <-> card
 // Import cycle. Matches the formatRuntime shape used elsewhere.
@@ -69,9 +70,11 @@ export function MediaInfoContent(props: { detail: MediaDetail }) {
       <Show when={overviewText()}>{(overview) => <p class={styles.overview}>{overview()}</p>}</Show>
       <Show when={Option.isSome(props.detail.playedPercentage)}>
         <div>
-          <div class={styles.progressTrack}>
-            <div class={styles.progressBar} style={{ width: `${resumePct()}%` }} />
-          </div>
+          <ProgressBar
+            value={resumePct()}
+            label={`${props.detail.name} watch progress`}
+            class={styles.progressTrack}
+          />
           <p class={styles.watchedText}>{Math.round(resumePct())}% watched</p>
         </div>
       </Show>
@@ -100,7 +103,48 @@ export function MediaInfoContent(props: { detail: MediaDetail }) {
  * open and cached by Solid Query.
  */
 export function MediaInfoHoverCard(props: { id: string; itemType: string; children: JSX.Element }) {
-  const [open, setOpen] = createSignal(false);
+  const [isOpen, setIsOpen] = createSignal(false);
+  let hoverCardRoot: HTMLSpanElement | undefined;
+
+  const syncOpenState = () => {
+    const state = hoverCardRoot?.dataset.state;
+    setIsOpen(state === 'open');
+  };
+
+  const closeRoot = () => {
+    if (!hoverCardRoot) {
+      return;
+    }
+    hoverCardRoot.dispatchEvent(new FocusEvent('focusout', { bubbles: true }));
+    hoverCardRoot.dispatchEvent(new MouseEvent('mouseleave', { bubbles: true }));
+  };
+
+  const hideOnEscape = (event: KeyboardEvent) => {
+    if (event.key !== 'Escape') {
+      return;
+    }
+    event.preventDefault();
+    closeRoot();
+    const active = document.activeElement as HTMLElement | null;
+    active?.blur();
+  };
+
+  onMount(() => {
+    syncOpenState();
+    if (!hoverCardRoot) {
+      return;
+    }
+    const observer = new MutationObserver(syncOpenState);
+    observer.observe(hoverCardRoot, {
+      attributes: true,
+      attributeFilter: ['data-state'],
+    });
+
+    onCleanup(() => observer.disconnect());
+  });
+
+  onCleanup(() => setIsOpen(false));
+
   const connectionQuery = createQuery(() => ({
     queryKey: queryKeys.connectionState,
     queryFn: () => runExit(fetchConnectionState()),
@@ -110,49 +154,47 @@ export function MediaInfoHoverCard(props: { id: string; itemType: string; childr
   const detailQuery = createQuery(() => ({
     queryKey: queryKeys.libraryMediaDetail(sessionKey(), props.itemType, props.id),
     queryFn: () => runExit(fetchMediaDetail(props.id, props.itemType)),
-    enabled: open() && isLibrarySessionKeyConnected(sessionKey()),
+    enabled: isOpen() && isLibrarySessionKeyConnected(sessionKey()),
     staleTime: Infinity,
   }));
 
   return (
-    <HoverCard.Root
-      lazyMount
-      unmountOnExit
-      positioning={{ gutter: 10, placement: 'top' }}
-      onOpenChange={(details) => setOpen(details.open)}
+    <HoverCard
+      ref={(node) => {
+        hoverCardRoot = node;
+      }}
+      openDelayMs={HOVERCARD_OPEN_DELAY_MS}
+      class={styles.hoverRoot}
+      onKeyDown={hideOnEscape}
+      content={
+        <div class={styles.popover}>
+          <Show
+            when={
+              !(detailQuery.isPending || (detailQuery.isFetching && !detailQuery.data)) &&
+              detailQuery.data
+            }
+            fallback={
+              <div class={styles.loading}>
+                <Spinner class={styles.spinner} />
+                <span>Loading…</span>
+              </div>
+            }
+          >
+            {(exit) =>
+              Exit.match(exit(), {
+                onFailure: (cause) => (
+                  <p class={styles.error}>
+                    {commandFailureMessage(cause, 'Could not load detail')}
+                  </p>
+                ),
+                onSuccess: (value) => <MediaInfoContent detail={value} />,
+              })
+            }
+          </Show>
+        </div>
+      }
     >
-      <HoverCard.Trigger
-        asChild={(triggerProps) => <div {...triggerProps()}>{props.children}</div>}
-      />
-      <Portal>
-        <HoverCard.Positioner>
-          <HoverCard.Content class={styles.popover}>
-            <Show
-              when={
-                !(detailQuery.isPending || (detailQuery.isFetching && !detailQuery.data)) &&
-                detailQuery.data
-              }
-              fallback={
-                <div class={styles.loading}>
-                  <LoaderCircle class={styles.spinner} />
-                  <span>Loading…</span>
-                </div>
-              }
-            >
-              {(exit) =>
-                Exit.match(exit(), {
-                  onFailure: (cause) => (
-                    <p class={styles.error}>
-                      {commandFailureMessage(cause, 'Could not load detail')}
-                    </p>
-                  ),
-                  onSuccess: (value) => <MediaInfoContent detail={value} />,
-                })
-              }
-            </Show>
-          </HoverCard.Content>
-        </HoverCard.Positioner>
-      </Portal>
-    </HoverCard.Root>
+      {props.children}
+    </HoverCard>
   );
 }

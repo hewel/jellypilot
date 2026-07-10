@@ -6,7 +6,8 @@ export type HoverCardProps = ParentProps<{
   content: JSX.Element
   class?: string
   openDelayMs?: number
-}>
+}> &
+  JSX.HTMLAttributes<HTMLSpanElement>
 
 export function HoverCard(props: HoverCardProps) {
   const [local, rest] = splitProps(props, [

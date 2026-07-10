@@ -1,8 +1,6 @@
-import { Checkbox } from '@ark-ui/solid/checkbox';
+import { Button, CheckboxInput } from '@jellypilot/ui';
 import { listen } from '@tauri-apps/api/event';
 import { For, Show, createEffect, createSignal, onCleanup, onMount } from 'solid-js';
-
-import { Button } from './ui';
 
 import * as styles from './DiagnosticsPanel.css';
 
@@ -147,17 +145,12 @@ export default function DiagnosticsPanel(props: DiagnosticsPanelProps) {
       <div class={styles.header}>
         <p class={styles.count}>{diagnostics().length} sanitized runtime events</p>
         <Show when={!props.compact}>
-          <Checkbox.Root
+          <CheckboxInput
             checked={autoScroll()}
-            onCheckedChange={(details) => setAutoScroll(details.checked === true)}
+            label="Auto-scroll"
             class={styles.checkboxRoot}
-          >
-            <Checkbox.Control class={styles.checkbox}>
-              <Checkbox.Indicator class={styles.indicator}>✓</Checkbox.Indicator>
-            </Checkbox.Control>
-            <Checkbox.Label class={styles.checkboxLabel}>Auto-scroll</Checkbox.Label>
-            <Checkbox.HiddenInput />
-          </Checkbox.Root>
+            onCheckedChange={(next) => setAutoScroll(next === true)}
+          />
         </Show>
       </div>
 
@@ -211,7 +204,7 @@ export default function DiagnosticsPanel(props: DiagnosticsPanelProps) {
           type="button"
           onClick={copyDiagnostics}
           disabled={diagnostics().length === 0}
-          variant="text"
+          variant="ghost"
           size="sm"
           class={styles.actionButton}
         >
@@ -220,9 +213,9 @@ export default function DiagnosticsPanel(props: DiagnosticsPanelProps) {
         <Button
           type="button"
           onClick={clearDiagnostics}
-          variant="text"
+          variant="ghost"
           size="sm"
-          class={`${styles.actionButton} ${styles.dangerActionButton}`}
+          class={styles.dangerActionButton}
         >
           Clear
         </Button>

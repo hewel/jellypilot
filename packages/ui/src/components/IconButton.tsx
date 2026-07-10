@@ -19,7 +19,8 @@ export type IconButtonProps = ParentProps<{
   type?: 'button' | 'submit' | 'reset'
   class?: string
   onClick?: JSX.EventHandlerUnion<HTMLButtonElement, MouseEvent>
-}>
+}> &
+  JSX.HTMLAttributes<HTMLButtonElement>
 
 const variantClass: Record<ButtonVariant, string> = {
   primary: buttonPrimary,

@@ -1,5 +1,5 @@
 import { VideoHomeRow } from '@components/library/shared';
-import { Card } from '@components/ui';
+import { Card } from '@jellypilot/ui';
 import { createQuery } from '@tanstack/solid-query';
 import { createFileRoute } from '@tanstack/solid-router';
 import { Exit } from 'effect';
@@ -84,7 +84,7 @@ function VideoHomeSkeleton() {
             <div class={styles.skeletonGrid}>
               <For each={[0, 1, 2, 3]}>
                 {() => (
-                  <Card variant="filled" surfaceTint={false} padding="none">
+                  <Card variant="filled">
                     <div
                       class={`${styles.skeletonArtwork} ${styles.skeletonAspect[row.aspectClass]}`}
                     />

@@ -1,151 +1,205 @@
+import { atomic } from '@jellypilot/atomic-css';
 import { style } from '@vanilla-extract/css';
 
-import { sprinkles } from '../../styles/sprinkles.css';
-import { vars } from '../../styles/vars.css';
+const color = {
+  error: 'var(--jellypilot-color-error)',
+  onSurface: 'var(--jellypilot-color-on-surface)',
+  onSurfaceVariant: 'var(--jellypilot-color-on-surface-variant)',
+  onSecondaryContainer: 'var(--jellypilot-color-on-secondary-container)',
+  outlineVariant: 'var(--jellypilot-color-outline-variant)',
+  secondary: 'var(--jellypilot-color-secondary)',
+  surfaceContainerHigh: 'var(--jellypilot-color-surface-container-high)',
+  warning: 'var(--jellypilot-color-warning)',
+  warningContainer: 'var(--jellypilot-color-warning-container)',
+};
 
-const mix = (color: string, opacity: number) =>
-  `color-mix(in srgb, ${color} ${Math.round(opacity * 100)}%, transparent)`;
-
-export const stack = style({
-  display: 'grid',
-  gap: vars.space['3'],
-});
+export const stack = style([
+  atomic({
+    display: 'grid',
+    gap: 3,
+  }),
+]);
 
 export const profile = style([
-  sprinkles({
+  atomic({
     borderRadius: '2xl',
-    p: '4',
+    p: 4,
   }),
   {
-    background: mix(vars.color.surfaceContainerHigh, 0.3),
-    border: `1px solid ${vars.color.outlineVariant}`,
+    backgroundColor: color.surfaceContainerHigh,
+    border: `1px solid ${color.outlineVariant}`,
   },
 ]);
 
-export const activeProfile = style({
-  borderColor: mix(vars.color.secondary, 0.7),
-  boxShadow: '0 0 0 1px rgba(129, 140, 248, 0.25)',
-});
+export const activeProfile = style([
+  atomic({
+    display: 'block',
+  }),
+  {
+    borderColor: color.secondary,
+  },
+]);
 
-export const warningProfile = style({
-  borderColor: mix(vars.color.warning, 0.6),
-});
+export const warningProfile = style([
+  atomic({
+    display: 'block',
+  }),
+  {
+    borderColor: color.warningContainer,
+  },
+]);
 
-export const profileInner = style({
-  display: 'flex',
-  flexDirection: 'column',
-  gap: vars.space['3'],
-  '@media': {
-    'screen and (min-width: 640px)': {
-      alignItems: 'flex-start',
-      flexDirection: 'row',
-      justifyContent: 'space-between',
+export const profileInner = style([
+  atomic({
+    display: 'flex',
+    flexDirection: 'column',
+    gap: 3,
+  }),
+  {
+    '@media': {
+      'screen and (min-width: 640px)': {
+        alignItems: 'flex-start',
+        flexDirection: 'row',
+        justifyContent: 'space-between',
+      },
     },
   },
-});
+]);
 
-export const copy = sprinkles({
-  minWidth: '0',
-});
+export const copy = style([
+  atomic({
+    minWidth: 0,
+  }),
+]);
 
-export const titleRow = sprinkles({
-  display: 'flex',
-  flexWrap: 'wrap',
-  alignItems: 'center',
-  gap: '2',
-});
+export const titleRow = style([
+  atomic({
+    display: 'flex',
+    alignItems: 'center',
+    flexWrap: 'wrap',
+    gap: 2,
+  }),
+]);
 
-export const name = sprinkles({
-  color: 'onSurface',
-  fontSize: '15',
-  lineHeight: '22',
-  fontWeight: 'bold',
-});
-
-export const pill = style([
-  sprinkles({
-    borderRadius: 'full',
-    px: '2',
-    py: '0_5',
-    fontSize: '10',
-    lineHeight: '14',
+export const name = style([
+  atomic({
     fontWeight: 'bold',
   }),
   {
-    border: `1px solid ${vars.color.outlineVariant}`,
-    color: vars.color.onSurfaceVariant,
+    color: color.onSurface,
+    fontSize: '15px',
+    lineHeight: '22px',
+  },
+]);
+
+export const pill = style([
+  atomic({
+    borderRadius: 'full',
+    fontWeight: 'bold',
+    px: 2,
+    py: 0.5,
+  }),
+  {
+    border: `1px solid ${color.outlineVariant}`,
+    color: color.onSurfaceVariant,
+    fontSize: '10px',
+    lineHeight: '14px',
     letterSpacing: '0.08em',
     textTransform: 'uppercase',
   },
 ]);
 
-export const activePill = style({
-  background: mix(vars.color.secondary, 0.15),
-  borderColor: 'transparent',
-  color: vars.color.secondary,
-});
-
-export const url = style([
-  sprinkles({
-    mt: '1',
-    color: 'secondary',
-    fontSize: '12',
-    lineHeight: '16',
+export const activePill = style([
+  atomic({
+    display: 'inline-flex',
   }),
   {
-    fontFamily: vars.font.mono,
+    background: color.secondary,
+    borderColor: 'transparent',
+    color: color.onSecondaryContainer,
+  },
+]);
+
+export const url = style([
+  atomic({
+    marginTop: 1,
+  }),
+  {
+    color: color.secondary,
+    fontSize: '12px',
+    lineHeight: '16px',
+    fontFamily: 'var(--jellypilot-font-mono)',
     overflow: 'hidden',
     textOverflow: 'ellipsis',
     whiteSpace: 'nowrap',
   },
 ]);
 
-export const user = sprinkles({
-  mt: '1',
-  display: 'flex',
-  alignItems: 'center',
-  gap: '1_5',
-  color: 'onSurfaceVariant',
-  fontSize: '12',
-  lineHeight: '16',
-});
+export const user = style([
+  atomic({
+    alignItems: 'center',
+    display: 'flex',
+    gap: 1.5,
+  }),
+  {
+    color: color.onSurfaceVariant,
+    fontSize: '12px',
+    lineHeight: '16px',
+    marginTop: 1,
+  },
+]);
 
-export const warning = sprinkles({
-  mt: '2',
-  display: 'flex',
-  alignItems: 'flex-start',
-  gap: '1_5',
-  color: 'warning',
-  fontSize: '12',
-  lineHeight: '16',
-  fontWeight: 'semibold',
-});
+export const warning = style([
+  atomic({
+    alignItems: 'flex-start',
+    display: 'flex',
+    gap: 1.5,
+    fontWeight: 'semibold',
+  }),
+  {
+    color: color.warning,
+    fontSize: '12px',
+    lineHeight: '16px',
+    marginTop: 2,
+  },
+]);
 
-export const warningIcon = style({
-  flexShrink: 0,
-  height: vars.space['3_5'],
-  marginTop: vars.space['0_5'],
-  width: vars.space['3_5'],
-});
+export const warningIcon = style([
+  atomic({
+    flexShrink: 0,
+    marginTop: 0.5,
+    width: 3.5,
+    height: 3.5,
+  }),
+]);
 
-export const actions = sprinkles({
-  display: 'flex',
-  flexShrink: '0',
-  flexWrap: 'wrap',
-  gap: '2',
-});
+export const actions = style([
+  atomic({
+    display: 'flex',
+    flexShrink: 0,
+    flexWrap: 'wrap',
+    gap: 2,
+  }),
+]);
 
-export const dangerButton = style({
-  borderColor: mix(vars.color.error, 0.55),
-  color: vars.color.error,
-  selectors: {
-    '&:hover': {
-      background: mix(vars.color.error, 0.1),
-      borderColor: vars.color.error,
+export const dangerButton = style([
+  atomic({
+    display: 'inline-flex',
+  }),
+  {
+    borderColor: color.error,
+    color: color.error,
+    selectors: {
+      '&:hover': {
+        background: 'color-mix(in srgb, var(--jellypilot-color-error) 12%, transparent)',
+        borderColor: color.error,
+      },
     },
   },
-});
+]);
 
-export const footer = sprinkles({
-  mt: '5',
-});
+export const footer = style([
+  atomic({
+    marginTop: 5,
+  }),
+]);

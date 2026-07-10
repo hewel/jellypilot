@@ -1,8 +1,9 @@
+import { Button } from '@jellypilot/ui';
 import { CircleAlert, Plus, Server, UserRound } from 'lucide-solid';
 import { For, Show } from 'solid-js';
 
 import type { SavedServiceProfiles } from '../../bindings';
-import { Button, SectionCard } from '../ui';
+import ConsoleSection from './ConsoleSection';
 
 import * as patterns from '../../styles/patterns.css';
 import * as styles from './SavedServicesCard.css';
@@ -21,7 +22,7 @@ export default function SavedServicesCard(props: SavedServicesCardProps) {
   const profiles = () => props.profiles?.profiles ?? [];
 
   return (
-    <SectionCard icon={<Server class={shared.sectionIcon.secondary} />} title="Saved Services">
+    <ConsoleSection icon={<Server class={shared.sectionIcon.secondary} />} title="Saved Services">
       <div class={styles.stack}>
         <Show
           when={profiles().length > 0}
@@ -79,7 +80,7 @@ export default function SavedServicesCard(props: SavedServicesCardProps) {
                     </Show>
                     <Button
                       type="button"
-                      variant="outlined"
+                      variant="outline"
                       class={styles.dangerButton}
                       disabled={props.removingProfileKey === profile.key}
                       onClick={() => props.onRemoveProfile(profile.key)}
@@ -95,15 +96,11 @@ export default function SavedServicesCard(props: SavedServicesCardProps) {
       </div>
 
       <div class={styles.footer}>
-        <Button
-          type="button"
-          variant="primary"
-          onClick={props.onAddService}
-          leadingIcon={<Plus class={patterns.icon4_5} />}
-        >
+        <Button type="button" variant="primary" onClick={props.onAddService}>
+          <Plus class={patterns.icon4_5} />
           Add service
         </Button>
       </div>
-    </SectionCard>
+    </ConsoleSection>
   );
 }

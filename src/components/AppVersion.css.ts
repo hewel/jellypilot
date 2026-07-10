@@ -1,18 +1,17 @@
+import { atomic } from '@jellypilot/atomic-css';
+import { projectTheme } from '@jellypilot/ui/theme/project';
 import { style } from '@vanilla-extract/css';
 
-import { sprinkles } from '../styles/sprinkles.css';
-import { vars } from '../styles/vars.css';
-
 export const version = style([
-  sprinkles({
-    color: 'onSurfaceVariant',
-    fontSize: '11',
-    fontWeight: 'bold',
-    lineHeight: '16',
-    mt: '1',
+  atomic({
+    color: 'var(--jellypilot-color-on-surface-variant)',
+    fontSize: 'var(--jellypilot-font-size-11)',
+    fontWeight: '700',
+    lineHeight: 'var(--jellypilot-line-height-16)',
+    marginTop: '0.25rem',
   }),
   {
-    fontFamily: vars.font.mono,
+    fontFamily: projectTheme.font.mono,
     letterSpacing: '0.08em',
     opacity: 0.5,
     textTransform: 'uppercase',

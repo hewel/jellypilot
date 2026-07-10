@@ -1,30 +1,29 @@
+import { atomic } from '@jellypilot/atomic-css';
+import { projectTheme } from '@jellypilot/ui/theme/project';
 import { style, styleVariants } from '@vanilla-extract/css';
-
-import { sprinkles } from '../styles/sprinkles.css';
-import { vars } from '../styles/vars.css';
 
 const mix = (color: string, opacity: number) =>
   `color-mix(in srgb, ${color} ${Math.round(opacity * 100)}%, transparent)`;
 
 export const root = style({
   display: 'grid',
-  gap: vars.space['6'],
+  gap: projectTheme.space['6'],
   overflow: 'hidden',
   position: 'relative',
 });
 
 export const bareRoot = style({
   display: 'grid',
-  gap: vars.space['5'],
+  gap: projectTheme.space['5'],
 });
 
 export const hoverGlow = style({
-  background: `linear-gradient(90deg, ${mix(vars.color.primary, 0.05)}, ${mix(vars.color.secondary, 0.05)})`,
+  background: `linear-gradient(90deg, ${mix(projectTheme.color.primary, 0.05)}, ${mix(projectTheme.color.secondary, 0.05)})`,
   inset: 0,
   opacity: 0,
   pointerEvents: 'none',
   position: 'absolute',
-  transitionDuration: vars.duration['500'],
+  transitionDuration: projectTheme.duration['500'],
   transitionProperty: 'opacity',
   selectors: {
     [`${root}:hover &`]: {
@@ -40,7 +39,7 @@ export const header = style({
 
 export const headerCopy = style({
   display: 'grid',
-  gap: vars.space['1'],
+  gap: projectTheme.space['1'],
 });
 
 export const headerBare = style({
@@ -52,11 +51,11 @@ export const headerFramed = style({
 });
 
 export const eyebrow = style([
-  sprinkles({
-    color: 'secondary',
-    fontSize: '11',
-    lineHeight: '16',
-    fontWeight: 'bold',
+  atomic({
+    color: 'var(--jellypilot-color-secondary)',
+    fontSize: 'var(--jellypilot-font-size-11)',
+    lineHeight: 'var(--jellypilot-line-height-16)',
+    fontWeight: '700',
   }),
   {
     letterSpacing: '0.08em',
@@ -64,42 +63,42 @@ export const eyebrow = style([
   },
 ]);
 
-export const titleRow = sprinkles({
+export const titleRow = atomic({
   display: 'flex',
   alignItems: 'center',
-  gap: '3',
+  gap: 3,
 });
 
 export const title = style({
-  color: vars.color.onSurface,
-  fontFamily: vars.font.display,
-  fontWeight: vars.fontWeight.bold,
+  color: projectTheme.color.onSurface,
+  fontFamily: projectTheme.font.display,
+  fontWeight: projectTheme.fontWeight.bold,
   letterSpacing: 0,
   overflow: 'hidden',
-  paddingRight: vars.space['2'],
+  paddingRight: projectTheme.space['2'],
   textOverflow: 'ellipsis',
   whiteSpace: 'nowrap',
 });
 
-export const titleBare = sprinkles({
-  fontSize: '20',
-  lineHeight: '28',
+export const titleBare = atomic({
+  fontSize: 'var(--jellypilot-font-size-20)',
+  lineHeight: 'var(--jellypilot-line-height-28)',
 });
 
-export const titleFramed = sprinkles({
-  fontSize: '24',
-  lineHeight: '32',
+export const titleFramed = atomic({
+  fontSize: 'var(--jellypilot-font-size-24)',
+  lineHeight: 'var(--jellypilot-line-height-32)',
 });
 
 export const equalizer = style([
-  sprinkles({
+  atomic({
     display: 'flex',
-    height: '6',
-    width: '8',
+    height: 6,
+    width: 8,
     flexShrink: '0',
     alignItems: 'flex-end',
-    gap: '1_5',
-    pb: '1',
+    gap: 1.5,
+    pb: 1,
   }),
   {
     userSelect: 'none',
@@ -111,19 +110,19 @@ export const waveBar = style({
   animationIterationCount: 'infinite',
   animationName: 'wave-bounce',
   animationTimingFunction: 'ease-in-out',
-  borderRadius: vars.borderRadius.full,
+  borderRadius: projectTheme.borderRadius.full,
   height: '100%',
   transformOrigin: 'bottom',
-  width: vars.space['1_5'],
+  width: projectTheme.space['1_5'],
   willChange: 'transform',
 });
 
 export const wavePrimary = style({
-  background: vars.color.primary,
+  background: projectTheme.color.primary,
 });
 
 export const waveSecondary = style({
-  background: vars.color.secondary,
+  background: projectTheme.color.secondary,
 });
 
 export const waveTiming = styleVariants({
@@ -133,11 +132,11 @@ export const waveTiming = styleVariants({
   d: { animationDelay: '0.45s', animationDuration: '0.7s' },
 });
 
-export const subtitle = sprinkles({
-  color: 'onSurfaceVariant',
-  fontSize: '14',
-  lineHeight: '20',
-  fontWeight: 'medium',
+export const subtitle = atomic({
+  color: 'var(--jellypilot-color-on-surface-variant)',
+  fontSize: 'var(--jellypilot-font-size-14)',
+  lineHeight: 'var(--jellypilot-line-height-20)',
+  fontWeight: '500',
 });
 
 export const badgePlacement = style({
@@ -147,48 +146,47 @@ export const badgePlacement = style({
 });
 
 export const panel = style([
-  sprinkles({
+  atomic({
     position: 'relative',
     borderRadius: '3xl',
-    p: '4',
-    boxShadow: 'inner',
-    zIndex: '10',
+    p: 4,
+    zIndex: 10,
   }),
   {
     backdropFilter: 'blur(4px)',
-    background: mix(vars.color.surfaceContainerLowest, 0.5),
-    border: `1px solid ${vars.color.outlineVariant}`,
+    background: mix(projectTheme.color.surfaceContainerLowest, 0.5),
+    border: `1px solid ${projectTheme.color.outlineVariant}`,
   },
 ]);
 
 export const timeRow = style([
-  sprinkles({
+  atomic({
     display: 'flex',
     alignItems: 'center',
     justifyContent: 'space-between',
-    mb: '2_5',
-    color: 'onSurfaceVariant',
-    fontSize: '11',
-    fontWeight: 'semibold',
+    mb: 2.5,
+    color: 'var(--jellypilot-color-on-surface-variant)',
+    fontSize: 'var(--jellypilot-font-size-11)',
+    fontWeight: '600',
   }),
   {
-    fontFamily: vars.font.mono,
+    fontFamily: projectTheme.font.mono,
     fontVariantNumeric: 'tabular-nums',
   },
 ]);
 
 export const emptyTrack = style({
-  background: mix(vars.color.surfaceContainerHigh, 0.6),
-  borderRadius: vars.borderRadius.full,
-  height: vars.space['2'],
+  background: mix(projectTheme.color.surfaceContainerHigh, 0.6),
+  borderRadius: projectTheme.borderRadius.full,
+  height: projectTheme.space['2'],
 });
 
 export const sliderRoot = style([
-  sprinkles({
+  atomic({
     display: 'flex',
     width: 'full',
     flexDirection: 'column',
-    gap: '2_5',
+    gap: 2.5,
   }),
   {
     selectors: {
@@ -200,10 +198,10 @@ export const sliderRoot = style([
 ]);
 
 export const sliderControl = style([
-  sprinkles({
+  atomic({
     position: 'relative',
     display: 'flex',
-    height: '10',
+    height: 10,
     alignItems: 'center',
   }),
   {
@@ -212,51 +210,50 @@ export const sliderControl = style([
 ]);
 
 export const sliderTrack = style([
-  sprinkles({
+  atomic({
     flexGrow: '1',
     overflow: 'hidden',
     borderRadius: 'full',
   }),
   {
-    background: mix(vars.color.surfaceContainerHighest, 0.8),
-    border: `1px solid ${mix(vars.color.outlineVariant, 0.3)}`,
-    height: vars.space['2_5'],
+    background: mix(projectTheme.color.surfaceContainerHighest, 0.8),
+    border: `1px solid ${mix(projectTheme.color.outlineVariant, 0.3)}`,
+    height: projectTheme.space['2_5'],
   },
 ]);
 
 export const sliderRange = style({
-  borderRadius: vars.borderRadius.full,
+  borderRadius: projectTheme.borderRadius.full,
   height: '100%',
-  transitionDuration: vars.duration['150'],
+  transitionDuration: projectTheme.duration['150'],
   transitionProperty: 'width, transform',
 });
 
 export const primaryRange = style({
-  background: `linear-gradient(90deg, ${vars.color.primary}, ${vars.color.primaryGradientEnd})`,
+  background: `linear-gradient(90deg, ${projectTheme.color.primary}, ${projectTheme.color.primaryGradientEnd})`,
   boxShadow: '0 0 10px rgba(79, 70, 229, 0.35)',
 });
 
 export const secondaryRange = style({
-  background: `linear-gradient(90deg, ${vars.color.secondary}, ${vars.color.primary})`,
+  background: `linear-gradient(90deg, ${projectTheme.color.secondary}, ${projectTheme.color.primary})`,
   boxShadow: '0 0 8px rgba(129, 140, 248, 0.4)',
 });
 
 export const thumb = style([
-  sprinkles({
+  atomic({
     display: 'flex',
     alignItems: 'center',
     justifyContent: 'center',
     borderRadius: 'full',
-    boxShadow: 'lg',
   }),
   {
-    background: vars.color.onSurface,
-    border: `2px solid ${vars.color.surfaceContainerLowest}`,
+    background: projectTheme.color.onSurface,
+    border: `2px solid ${projectTheme.color.surfaceContainerLowest}`,
     boxShadow: '0 10px 15px -3px rgb(0 0 0 / 0.5)',
     cursor: 'grab',
     height: '1.375rem',
     outline: 'none',
-    transitionDuration: vars.duration['200'],
+    transitionDuration: projectTheme.duration['200'],
     transitionProperty: 'box-shadow, transform',
     width: '1.375rem',
     selectors: {
@@ -268,40 +265,40 @@ export const thumb = style([
         cursor: 'grabbing',
       },
       '&[data-focus-visible]': {
-        boxShadow: `0 0 0 2px ${mix(vars.color.primary, 0.5)}`,
+        boxShadow: `0 0 0 2px ${mix(projectTheme.color.primary, 0.5)}`,
       },
     },
   },
 ]);
 
 export const controls = style([
-  sprinkles({
+  atomic({
     position: 'relative',
     display: 'flex',
     alignItems: 'center',
-    gap: '3',
-    zIndex: '10',
+    gap: 3,
+    zIndex: 10,
   }),
 ]);
 
-export const controlsBare = sprinkles({
+export const controlsBare = atomic({
   justifyContent: 'center',
 });
 
-export const controlsFramed = sprinkles({
+export const controlsFramed = atomic({
   flexWrap: 'wrap',
-  gap: '4',
+  gap: 4,
 });
 
 export const iconButton = style({
-  background: mix(vars.color.surfaceContainerHigh, 0.3),
-  border: `1px solid ${mix(vars.color.outlineVariant, 0.6)}`,
-  borderRadius: vars.borderRadius.full,
+  background: mix(projectTheme.color.surfaceContainerHigh, 0.3),
+  border: `1px solid ${mix(projectTheme.color.outlineVariant, 0.6)}`,
+  borderRadius: projectTheme.borderRadius.full,
   selectors: {
     '&:hover': {
-      background: mix(vars.color.secondary, 0.05),
-      borderColor: vars.color.secondary,
-      color: vars.color.secondary,
+      background: mix(projectTheme.color.secondary, 0.05),
+      borderColor: projectTheme.color.secondary,
+      color: projectTheme.color.secondary,
     },
   },
 });
@@ -309,15 +306,15 @@ export const iconButton = style({
 export const stopButton = style({
   selectors: {
     '&:hover': {
-      background: mix(vars.color.error, 0.05),
-      borderColor: vars.color.error,
-      color: vars.color.error,
+      background: mix(projectTheme.color.error, 0.05),
+      borderColor: projectTheme.color.error,
+      color: projectTheme.color.error,
     },
   },
 });
 
 export const playPauseButton = style({
-  borderRadius: vars.borderRadius.full,
+  borderRadius: projectTheme.borderRadius.full,
   minWidth: '8rem',
   overflow: 'hidden',
   position: 'relative',
@@ -325,19 +322,19 @@ export const playPauseButton = style({
 
 export const iconSlot = style({
   display: 'inline-grid',
-  height: vars.space['5'],
+  height: projectTheme.space['5'],
   placeItems: 'center',
   position: 'relative',
-  width: vars.space['5'],
+  width: projectTheme.space['5'],
 });
 
 export const contextualIcon = style({
-  height: vars.space['5'],
+  height: projectTheme.space['5'],
   position: 'absolute',
-  transitionDuration: vars.duration['200'],
+  transitionDuration: projectTheme.duration['200'],
   transitionProperty: 'filter, opacity, transform',
-  transitionTimingFunction: vars.easing.standard,
-  width: vars.space['5'],
+  transitionTimingFunction: projectTheme.easing.standard,
+  width: projectTheme.space['5'],
 });
 
 export const iconVisible = style({
@@ -357,26 +354,26 @@ export const iconDropShadow = style({
 });
 
 export const secondaryIcon = style({
-  color: vars.color.secondary,
+  color: projectTheme.color.secondary,
 });
 
 export const errorIcon = style({
-  color: vars.color.error,
+  color: projectTheme.color.error,
 });
 
 export const actionLabel = style({
-  fontWeight: vars.fontWeight.bold,
+  fontWeight: projectTheme.fontWeight.bold,
   letterSpacing: 0,
 });
 
 export const squareIcon = style({
   fill: 'currentColor',
-  height: vars.space['4'],
-  width: vars.space['4'],
+  height: projectTheme.space['4'],
+  width: projectTheme.space['4'],
 });
 
 export const pillButton = style({
-  borderRadius: vars.borderRadius.full,
+  borderRadius: projectTheme.borderRadius.full,
 });
 
 export const playIcon = style({
@@ -389,7 +386,7 @@ export const selectPanel = style([
   panel,
   {
     display: 'grid',
-    gap: vars.space['3'],
+    gap: projectTheme.space['3'],
     '@media': {
       'screen and (min-width: 640px)': {
         gridTemplateColumns: 'repeat(2, minmax(0, 1fr))',
@@ -400,10 +397,10 @@ export const selectPanel = style([
 
 export const volumePanel = style([
   panel,
-  sprinkles({
+  atomic({
     display: 'flex',
     alignItems: 'center',
-    gap: '3',
+    gap: 3,
   }),
   {
     '@media': {
@@ -416,31 +413,31 @@ export const volumePanel = style([
 
 export const muteButton = style({
   border: '1px solid transparent',
-  borderRadius: vars.borderRadius.xl,
+  borderRadius: projectTheme.borderRadius.xl,
   flexShrink: 0,
   selectors: {
     '&:hover': {
-      background: mix(vars.color.secondary, 0.15),
-      borderColor: mix(vars.color.secondary, 0.2),
-      color: vars.color.secondary,
+      background: mix(projectTheme.color.secondary, 0.15),
+      borderColor: mix(projectTheme.color.secondary, 0.2),
+      color: projectTheme.color.secondary,
     },
   },
 });
 
 export const volumeValue = style({
-  color: vars.color.secondary,
+  color: projectTheme.color.secondary,
   filter: 'drop-shadow(0 0 6px rgba(129, 140, 248, 0.15))',
-  fontFamily: vars.font.mono,
-  fontSize: vars.fontSize['13'],
+  fontFamily: projectTheme.font.mono,
+  fontSize: projectTheme.fontSize['13'],
   fontVariantNumeric: 'tabular-nums',
-  fontWeight: vars.fontWeight.semibold,
+  fontWeight: projectTheme.fontWeight.semibold,
   textAlign: 'right',
-  width: vars.space['12'],
+  width: projectTheme.space['12'],
 });
 
 export const card = style({
   display: 'grid',
-  gap: vars.space['6'],
+  gap: projectTheme.space['6'],
   overflow: 'hidden',
   position: 'relative',
 });

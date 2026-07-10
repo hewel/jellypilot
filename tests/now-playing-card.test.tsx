@@ -168,7 +168,7 @@ test('playing state exposes transport controls and media metadata', async () => 
   await waitFor(() => expect(setPause).toHaveBeenCalledWith(true));
   cleanup();
 });
-test('playing state uses Ark sliders for seek and volume', async () => {
+test('playing state exposes public seek and volume sliders', async () => {
   const seek = rstest.spyOn(commands, 'mpvSeek').mockResolvedValue({ data: null, status: 'ok' });
   const setVolume = rstest
     .spyOn(commands, 'mpvSetVolume')
@@ -180,8 +180,8 @@ test('playing state uses Ark sliders for seek and volume', async () => {
   const seekSlider = screen.getByRole('slider', { name: 'Seek position' });
   const volumeSlider = screen.getByRole('slider', { name: 'Volume' });
 
-  expect(seekSlider.closest('[data-scope="slider"]')).not.toBeNull();
-  expect(volumeSlider.closest('[data-scope="slider"]')).not.toBeNull();
+  expect(seekSlider.closest('[data-ui="slider"]')).not.toBeNull();
+  expect(volumeSlider.closest('[data-ui="slider"]')).not.toBeNull();
 
   expect(seekSlider).toHaveAttribute('aria-valuemin', '0');
   expect(seekSlider).toHaveAttribute('aria-valuemax', '120');
@@ -202,8 +202,8 @@ test('playing state exposes audio and subtitle selectors', async () => {
     .mockResolvedValue({ data: null, status: 'ok' });
   const cleanup = renderCard(playingState);
 
-  const audio = await screen.findByRole('combobox', { name: 'Audio' });
-  const subtitles = await screen.findByRole('combobox', { name: 'Subtitles' });
+  const audio = await screen.findByRole('button', { name: 'Audio' });
+  const subtitles = await screen.findByRole('button', { name: 'Subtitles' });
   await waitFor(() => expect(audio).toHaveTextContent('English Stereo'));
   await waitFor(() => expect(subtitles).toHaveTextContent('English Subtitles'));
 
@@ -211,10 +211,8 @@ test('playing state exposes audio and subtitle selectors', async () => {
   fireEvent.click(await screen.findByRole('option', { name: 'Japanese 5.1' }));
   await waitFor(() => expect(setAudioTrack).toHaveBeenCalledWith(2));
 
-  await waitFor(() =>
-    expect(screen.getByRole('combobox', { name: 'Subtitles' })).not.toBeDisabled(),
-  );
-  fireEvent.click(screen.getByRole('combobox', { name: 'Subtitles' }));
+  await waitFor(() => expect(screen.getByRole('button', { name: 'Subtitles' })).not.toBeDisabled());
+  fireEvent.click(screen.getByRole('button', { name: 'Subtitles' }));
   fireEvent.click(await screen.findByRole('option', { name: 'Off' }));
   await waitFor(() => expect(setSubtitleTrack).toHaveBeenCalledWith(-1));
 

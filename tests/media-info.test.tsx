@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, expect, rstest, test } from '@rstest/core';
-import { screen } from '@testing-library/dom';
+import { fireEvent, screen, waitFor } from '@testing-library/dom';
 import { Exit, Option } from 'effect';
 import { render } from 'solid-js/web';
 
@@ -178,11 +178,113 @@ test('MediaInfoContent renders overview, genres, runtime, resume, and user-data 
   expect(screen.getByText('Sci-Fi')).toBeInTheDocument();
   expect(screen.getByText(/2h 0m/)).toBeInTheDocument();
   expect(screen.getByText(/25% watched/)).toBeInTheDocument();
+  expect(screen.getByRole('progressbar', { name: 'Test Movie watch progress' })).toHaveAttribute(
+    'aria-valuenow',
+    '25',
+  );
   expect(screen.getByText(/Played/)).toBeInTheDocument();
   expect(screen.getByText(/Favorite/)).toBeInTheDocument();
 
   dispose();
   root.remove();
+});
+
+test('MediaInfoHoverCard opens on hover and renders media detail', async () => {
+  const itemDetail = rstest
+    .spyOn(commands, 'libraryItemDetail')
+    .mockResolvedValue({ data: movieDetail, status: 'ok' });
+  const root = document.createElement('div');
+  document.body.append(root);
+  const dispose = render(
+    () => (
+      <TestQueryProvider>
+        <MediaInfoHoverCard id="movie-1" itemType="Movie">
+          <a href="/library/items/movie-1">Test Movie card</a>
+        </MediaInfoHoverCard>
+      </TestQueryProvider>
+    ),
+    root,
+  );
+
+  try {
+    const trigger = screen.getByRole('link', { name: 'Test Movie card' });
+    expect(itemDetail).not.toHaveBeenCalled();
+    const hoverRoot = trigger.closest('[data-part="root"]');
+    expect(hoverRoot).not.toBeNull();
+    fireEvent.mouseEnter(hoverRoot!);
+
+    await waitFor(() => expect(itemDetail).toHaveBeenCalledWith('movie-1'));
+    expect(await screen.findByText('A test movie overview.')).toBeInTheDocument();
+    expect(screen.getByText('Drama')).toBeVisible();
+    expect(screen.getByText(/2h 0m/)).toBeVisible();
+    expect(screen.getByText('25% watched')).toBeVisible();
+  } finally {
+    dispose();
+    root.remove();
+  }
+});
+
+test('MediaInfoHoverCard opens on focus and closes on Escape', async () => {
+  const itemDetail = rstest
+    .spyOn(commands, 'libraryItemDetail')
+    .mockResolvedValue({ data: movieDetail, status: 'ok' });
+  const root = document.createElement('div');
+  document.body.append(root);
+  const dispose = render(
+    () => (
+      <TestQueryProvider>
+        <MediaInfoHoverCard id="movie-1" itemType="Movie">
+          <a href="/library/items/movie-1">Test Movie card</a>
+        </MediaInfoHoverCard>
+      </TestQueryProvider>
+    ),
+    root,
+  );
+
+  try {
+    const trigger = screen.getByRole('link', { name: 'Test Movie card' });
+    fireEvent.focusIn(trigger);
+
+    await waitFor(() => expect(itemDetail).toHaveBeenCalledWith('movie-1'));
+    expect(await screen.findByText('A test movie overview.')).toBeVisible();
+    fireEvent.keyDown(trigger, { key: 'Escape' });
+
+    await waitFor(() => expect(screen.queryByText('A test movie overview.')).toBeNull());
+  } finally {
+    dispose();
+    root.remove();
+  }
+});
+
+test('MediaInfoHoverCard shows an error state when detail loading fails', async () => {
+  rstest.spyOn(commands, 'libraryItemDetail').mockResolvedValueOnce({
+    error: { code: 'network', message: 'Could not load detail' },
+    status: 'error',
+  });
+  const root = document.createElement('div');
+  document.body.append(root);
+  const dispose = render(
+    () => (
+      <TestQueryProvider>
+        <MediaInfoHoverCard id="movie-1" itemType="Movie">
+          <a href="/library/items/movie-1">Test Movie card</a>
+        </MediaInfoHoverCard>
+      </TestQueryProvider>
+    ),
+    root,
+  );
+
+  try {
+    const trigger = screen.getByRole('link', { name: 'Test Movie card' });
+    const hoverRoot = trigger.closest('[data-part="root"]');
+    expect(hoverRoot).not.toBeNull();
+    fireEvent.mouseEnter(hoverRoot!);
+
+    expect(await screen.findByText('Could not load detail')).toBeInTheDocument();
+  } finally {
+    dispose();
+    root.remove();
+  }
 });
 
 test('MediaInfoHoverCard renders trigger children and does not fetch before opening', () => {
@@ -200,9 +302,11 @@ test('MediaInfoHoverCard renders trigger children and does not fetch before open
     root,
   );
 
-  expect(screen.getByText('Test Movie card')).toBeInTheDocument();
-  expect(itemDetail).not.toHaveBeenCalled();
-
-  dispose();
-  root.remove();
+  try {
+    expect(screen.getByText('Test Movie card')).toBeInTheDocument();
+    expect(itemDetail).not.toHaveBeenCalled();
+  } finally {
+    dispose();
+    root.remove();
+  }
 });

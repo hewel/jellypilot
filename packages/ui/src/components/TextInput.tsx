@@ -1,4 +1,4 @@
-import type { ParentProps } from 'solid-js'
+import type { JSX, ParentProps } from 'solid-js'
 import { Show, splitProps } from 'solid-js'
 import {
   fieldControl,
@@ -29,6 +29,9 @@ export type TextInputProps = ParentProps<{
   type?: string
   class?: string
   id?: string
+  'aria-label'?: string
+  onBlur?: JSX.EventHandlerUnion<HTMLInputElement, FocusEvent>
+  onKeyDown?: JSX.EventHandlerUnion<HTMLInputElement, KeyboardEvent>
   onValueChange?: (next: string, details: TextInputChangeDetails) => void
 }>
 

@@ -1,3 +1,5 @@
+import { UIRoot, jellypilotTheme } from '@jellypilot/ui';
+import type { UIRootProps } from '@jellypilot/ui';
 import { type ParentProps, Show } from 'solid-js';
 
 import { ConfigCoordinatorProvider, useConfigCoordinator } from '../effects/configContext';
@@ -12,47 +14,50 @@ const bootStyle = {
   fontFamily: 'system-ui, sans-serif',
 } as const;
 
-function ConfigGateInner(props: ParentProps) {
+type ConfigGateProps = ParentProps<{
+  linkAdapter?: UIRootProps['linkAdapter'];
+}>;
+
+function ConfigGateInner(props: ConfigGateProps) {
   const { coordinator, state } = useConfigCoordinator();
 
   return (
-    <Show
-      when={state().status === 'ready' || state().status === 'saving'}
-      fallback={
-        <div style={bootStyle} data-theme="system" data-testid="config-boot">
-          <div>
-            <p>
-              {state().status === 'loading'
-                ? 'Loading configuration…'
-                : (state().error?.message ?? 'Configuration failed to load.')}
-            </p>
-            <Show when={state().status === 'error'}>
-              <button type="button" onClick={() => void coordinator.retry()}>
-                Retry
-              </button>
-            </Show>
-          </div>
-        </div>
-      }
+    <UIRoot
+      preference={state().desired?.themePreference ?? 'system'}
+      theme={jellypilotTheme}
+      linkAdapter={props.linkAdapter}
     >
-      <div
-        data-theme={
-          state().desired?.themePreference === 'system'
-            ? undefined
-            : state().desired?.themePreference
+      <Show
+        when={state().status === 'ready' || state().status === 'saving'}
+        fallback={
+          <div style={bootStyle} data-theme="system" data-testid="config-boot">
+            <div>
+              <p>
+                {state().status === 'loading'
+                  ? 'Loading configuration…'
+                  : (state().error?.message ?? 'Configuration failed to load.')}
+              </p>
+              <Show when={state().status === 'error'}>
+                <button type="button" onClick={() => void coordinator.retry()}>
+                  Retry
+                </button>
+              </Show>
+            </div>
+          </div>
         }
-        data-theme-preference={state().desired?.themePreference ?? 'system'}
       >
-        {props.children}
-      </div>
-    </Show>
+        <div data-theme-preference={state().desired?.themePreference ?? 'system'}>
+          {props.children}
+        </div>
+      </Show>
+    </UIRoot>
   );
 }
 
-export function ConfigGate(props: ParentProps) {
+export function ConfigGate(props: ConfigGateProps) {
   return (
     <ConfigCoordinatorProvider>
-      <ConfigGateInner>{props.children}</ConfigGateInner>
+      <ConfigGateInner linkAdapter={props.linkAdapter}>{props.children}</ConfigGateInner>
     </ConfigCoordinatorProvider>
   );
 }

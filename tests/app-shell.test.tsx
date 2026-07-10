@@ -16,16 +16,13 @@ import type {
   VideoSeasonEpisodes,
   VideoShowDetail,
 } from '../src/bindings';
+import { ConfigGate } from '../src/components/ConfigGate';
 import { ToastProvider } from '../src/components/ToastProvider';
-import { ConfigCoordinatorProvider } from '../src/effects/configContext';
 import { queryKeys } from '../src/effects/query';
-import { createJellyPilotRouter } from '../src/router';
+import { appLinkAdapter, createJellyPilotRouter } from '../src/router';
 import { resetSharedLibraryFilters } from '../src/utils/createSharedLibraryFilters';
 import { imageSource } from '../src/utils/imageSource';
 import { createTestQueryClient, TestQueryProvider } from './query-client';
-
-import * as libraryNavbarStyles from '../src/components/library/LibraryNavbar.css';
-import * as videoCardStyles from '../src/components/library/VideoCard.css';
 
 interface TestIntersectionObserverController {
   trigger(isIntersecting?: boolean): void;
@@ -69,6 +66,20 @@ const connectedState = {
 const disconnectedState = {
   ...connectedState,
   connected: false,
+};
+
+const embyConnectedState = {
+  ...connectedState,
+  capabilities: {
+    introSkipper: false,
+    quickConnect: false,
+    remoteControl: true,
+    remoteControlAvailable: true,
+    remoteControlWarning: null,
+  },
+  provider: 'emby' as const,
+  serverName: 'Emby Home',
+  serverUrl: 'https://emby.example.com',
 };
 
 const secondConnectedState = {
@@ -565,11 +576,11 @@ function renderShell(path: string | string[] = '/library', client?: QueryClient)
   const dispose = render(
     () => (
       <TestQueryProvider client={client}>
-        <ToastProvider>
-          <ConfigCoordinatorProvider>
+        <ConfigGate linkAdapter={appLinkAdapter}>
+          <ToastProvider>
             <RouterProvider router={router} />
-          </ConfigCoordinatorProvider>
-        </ToastProvider>
+          </ToastProvider>
+        </ConfigGate>
       </TestQueryProvider>
     ),
     root,
@@ -587,32 +598,12 @@ function renderShell(path: string | string[] = '/library', client?: QueryClient)
   return cleanup;
 }
 
-function getArkHiddenSelect(label: string) {
-  const select = screen
-    .getAllByLabelText(label)
-    .find((element): element is HTMLSelectElement => element.tagName === 'SELECT');
-
-  if (!select) {
-    throw new Error(`Could not find hidden Ark select for ${label}`);
-  }
-
-  return select;
+function getSelectorTrigger(label: string) {
+  return screen.getByRole('button', { name: label });
 }
 
-function getArkCombobox(label: string) {
-  const combobox = screen
-    .getAllByLabelText(label)
-    .find((element): element is HTMLButtonElement => element.getAttribute('role') === 'combobox');
-
-  if (!combobox) {
-    throw new Error(`Could not find Ark combobox for ${label}`);
-  }
-
-  return combobox;
-}
-
-async function selectArkOption(label: string, name: RegExp | string) {
-  fireEvent.click(getArkCombobox(label));
+async function selectSelectorOption(label: string, name: RegExp | string) {
+  fireEvent.click(getSelectorTrigger(label));
   fireEvent.click(await screen.findByRole('option', { name }));
 }
 
@@ -656,7 +647,6 @@ test('authenticated shell removes top header chrome and exposes floating control
   );
   expect(within(floatingControls).getByRole('button', { name: 'Open Settings' })).toBeVisible();
 
-  expect(document.querySelector('[data-scope="scroll-area"][data-part="root"]')).toBeNull();
   expect(appScrollViewport()).toBeVisible();
   expect(screen.getByRole('main')).toBeVisible();
 
@@ -667,12 +657,13 @@ test('library landing renders command-backed rows and drawer trigger', async () 
   mockShellCommands();
   const cleanup = renderShell();
 
-  await screen.findByRole('navigation', { name: 'Library navigation' });
-
-  const navigation = screen.getByRole('navigation', { name: 'Library navigation' });
+  const navigation = await screen.findByRole('navigation', { name: 'Library navigation' });
+  const navigationChoices = within(navigation).getByRole('radiogroup', {
+    name: 'Library navigation',
+  });
   expect(navigation).toBeVisible();
-  expect(navigation).toHaveClass(libraryNavbarStyles.root);
-  expect(screen.getByRole('radio', { name: 'Home' })).toBeChecked();
+  expect(navigationChoices).toBeVisible();
+  expect(screen.getByRole('radio', { name: 'Home' })).toHaveAttribute('aria-checked', 'true');
   expect(screen.getByRole('radio', { name: 'Movies' })).toBeVisible();
   expect(screen.getByRole('radio', { name: 'Shows' })).toBeVisible();
   expect(await screen.findByRole('heading', { name: 'Continue Watching' })).toBeVisible();
@@ -689,23 +680,54 @@ test('library landing renders command-backed rows and drawer trigger', async () 
     'src',
     imageSource(videoHome.continueWatching[0]?.artworkImageId ?? ''),
   );
-  expect(resumeArtwork.parentElement).toHaveClass(videoCardStyles.aspect.video);
   fireEvent.load(resumeArtwork);
-  expect(resumeArtwork.parentElement).toHaveClass(videoCardStyles.aspect.video);
   const latestMovieLink = screen.getByRole('link', { name: /Latest Movie/ });
   expect(within(latestMovieLink).getByText('Movie')).toBeVisible();
   expect(within(latestMovieLink).queryByText('Movie · null')).toBeNull();
-  expect(
-    [...latestMovieLink.querySelectorAll('div')].some((node) =>
-      node.className.includes(videoCardStyles.aspect.poster),
-    ),
-  ).toBe(true);
   expect(screen.getAllByText('No artwork')).toHaveLength(3);
   const latestEpisodeLink = screen.getByRole('link', { name: /Latest Episode/ });
   expect(latestEpisodeLink.querySelector('svg')).not.toBeNull();
   await waitFor(() =>
     expect(screen.getByRole('button', { name: /Now Playing: Playing — The Pilot/ })).toBeVisible(),
   );
+
+  cleanup();
+});
+
+test('library landing preserves provider-neutral behavior for Emby capabilities', async () => {
+  mockShellCommands(embyConnectedState);
+  const cleanup = renderShell('/library');
+
+  expect(await screen.findByRole('heading', { name: 'Continue Watching' })).toBeVisible();
+  expect(screen.getByRole('link', { name: /Resume Movie/ })).toBeVisible();
+  expect(commands.libraryVideoHome).toHaveBeenCalledTimes(1);
+
+  cleanup();
+});
+
+test('library navigation behaves as a segmented control and drives single callbacks', async () => {
+  mockShellCommands();
+  const browseCommand = rstest.spyOn(commands, 'libraryBrowseVideo').mockResolvedValue({
+    data: videoLibraryPage(0),
+    status: 'ok',
+  } as const);
+
+  const cleanup = renderShell('/library');
+
+  const navigation = await screen.findByRole('navigation', { name: 'Library navigation' });
+  const radioGroup = within(navigation).getByRole('radiogroup', { name: 'Library navigation' });
+  const home = within(radioGroup).getByRole('radio', { name: 'Home' });
+  const movies = within(radioGroup).getByRole('radio', { name: 'Movies' });
+
+  expect(radioGroup).toBeVisible();
+  expect(home).toHaveAttribute('aria-checked', 'true');
+  expect(movies).toHaveAttribute('aria-checked', 'false');
+
+  fireEvent.click(movies);
+  await waitFor(() => expect(movies).toHaveAttribute('aria-checked', 'true'));
+  expect(home).toHaveAttribute('aria-checked', 'false');
+  expect(await screen.findByRole('heading', { name: 'Movies' })).toBeVisible();
+  expect(browseCommand).toHaveBeenCalledTimes(1);
 
   cleanup();
 });
@@ -762,6 +784,22 @@ test('library browse auto-loads paged results and opens detail links without pla
     startIndex: 24,
   });
   expect(screen.queryByRole('button', { name: 'Load more' })).toBeNull();
+
+  cleanup();
+});
+
+test('media links navigate through the application UI root adapter', async () => {
+  mockShellCommands();
+  const cleanup = renderShell('/library/movies/movies');
+
+  expect(document.querySelector('[data-jp-uiroot]')).not.toBeNull();
+  fireEvent.click(
+    await screen.findByRole('link', {
+      name: 'Open Paged Movie, favorite',
+    }),
+  );
+
+  expect(await screen.findByRole('heading', { name: 'Detail Movie' })).toBeVisible();
 
   cleanup();
 });
@@ -983,9 +1021,19 @@ test('library browse controls reload paged results from the first page', async (
   const cleanup = renderShell('/library/movies/movies');
 
   await screen.findByRole('link', { name: /Paged Movie/ });
-  fireEvent.click(screen.getByRole('button', { name: 'Sort By' }));
-  fireEvent.click(screen.getByText('Recently added', { selector: 'span' }));
+  const sortByTrigger = screen.getByRole('button', { name: 'Sort By' });
+  const statusTrigger = screen.getByRole('button', { name: 'Status' });
+  const sortDirectionToggle = screen.getByRole('button', { name: 'Sort ascending' });
 
+  expect(sortByTrigger).toHaveAttribute('aria-expanded', 'false');
+  expect(statusTrigger).toHaveAttribute('aria-expanded', 'false');
+  expect(sortDirectionToggle).toHaveAttribute('aria-pressed', 'false');
+
+  fireEvent.click(sortByTrigger);
+  expect(sortByTrigger).toHaveAttribute('aria-expanded', 'true');
+  fireEvent.click(screen.getByRole('menuitem', { name: 'Recently added' }));
+  await waitFor(() => expect(sortByTrigger).toHaveAttribute('aria-expanded', 'false'));
+  await waitFor(() => expect(sortByTrigger).toHaveFocus());
   await waitFor(() =>
     expect(browseCommand).toHaveBeenCalledWith({
       collectionType: 'movies',
@@ -998,9 +1046,12 @@ test('library browse controls reload paged results from the first page', async (
     }),
   );
 
-  await waitFor(() => expect(screen.getByRole('button', { name: 'Status' })).not.toBeDisabled());
-  fireEvent.click(screen.getByRole('button', { name: 'Status' }));
-  fireEvent.click(screen.getByText('Unplayed', { selector: 'span' }));
+  await waitFor(() => expect(statusTrigger).not.toBeDisabled());
+  fireEvent.click(statusTrigger);
+  expect(statusTrigger).toHaveAttribute('aria-expanded', 'true');
+  fireEvent.click(screen.getByRole('menuitem', { name: 'Unplayed' }));
+  await waitFor(() => expect(statusTrigger).toHaveAttribute('aria-expanded', 'false'));
+  await waitFor(() => expect(statusTrigger).toHaveFocus());
   await waitFor(() =>
     expect(browseCommand).toHaveBeenCalledWith({
       collectionType: 'movies',
@@ -1013,9 +1064,12 @@ test('library browse controls reload paged results from the first page', async (
     }),
   );
 
-  await waitFor(() => expect(screen.getByRole('button', { name: 'Status' })).not.toBeDisabled());
-  fireEvent.click(screen.getByRole('button', { name: 'Status' }));
-  fireEvent.click(screen.getByText('Favorites Only', { selector: 'span' }));
+  await waitFor(() => expect(statusTrigger).not.toBeDisabled());
+  fireEvent.click(statusTrigger);
+  expect(statusTrigger).toHaveAttribute('aria-expanded', 'true');
+  fireEvent.click(screen.getByRole('menuitem', { name: 'Favorites Only' }));
+  await waitFor(() => expect(statusTrigger).toHaveAttribute('aria-expanded', 'false'));
+  await waitFor(() => expect(statusTrigger).toHaveFocus());
   await waitFor(() =>
     expect(browseCommand).toHaveBeenCalledWith({
       collectionType: 'movies',
@@ -1027,10 +1081,19 @@ test('library browse controls reload paged results from the first page', async (
       startIndex: 0,
     }),
   );
+
   await waitFor(() =>
     expect(screen.getByRole('button', { name: 'Sort ascending' })).not.toBeDisabled(),
   );
-  fireEvent.click(screen.getByRole('button', { name: 'Sort ascending' }));
+  const currentSortDirectionToggle = screen.getByRole('button', { name: 'Sort ascending' });
+  expect(currentSortDirectionToggle).toHaveAttribute('aria-pressed', 'false');
+  fireEvent.click(currentSortDirectionToggle);
+  await waitFor(() =>
+    expect(screen.getByRole('button', { name: 'Sort descending' })).toHaveAttribute(
+      'aria-pressed',
+      'true',
+    ),
+  );
   await waitFor(() =>
     expect(browseCommand).toHaveBeenCalledWith({
       collectionType: 'movies',
@@ -1053,11 +1116,16 @@ test('library browse controls are shared across libraries', async () => {
 
   await screen.findByRole('link', { name: /Paged Movie/ });
   fireEvent.click(screen.getByRole('button', { name: 'Sort By' }));
-  fireEvent.click(screen.getByText('Recently added', { selector: 'span' }));
+  fireEvent.click(screen.getByRole('menuitem', { name: 'Recently added' }));
+  await waitFor(() => expect(screen.getByRole('button', { name: 'Status' })).not.toBeDisabled());
   fireEvent.click(screen.getByRole('button', { name: 'Status' }));
-  fireEvent.click(screen.getByText('Unplayed', { selector: 'span' }));
+  fireEvent.click(screen.getByRole('menuitem', { name: 'Unplayed' }));
+  await waitFor(() => expect(screen.getByRole('button', { name: 'Status' })).not.toBeDisabled());
   fireEvent.click(screen.getByRole('button', { name: 'Status' }));
-  fireEvent.click(screen.getByText('Favorites Only', { selector: 'span' }));
+  fireEvent.click(screen.getByRole('menuitem', { name: 'Favorites Only' }));
+  await waitFor(() =>
+    expect(screen.getByRole('button', { name: 'Sort ascending' })).not.toBeDisabled(),
+  );
   fireEvent.click(screen.getByRole('button', { name: 'Sort ascending' }));
 
   await waitFor(() =>
@@ -1216,17 +1284,41 @@ test('library item detail renders resume-primary movie metadata', async () => {
   expect(screen.getByText('Mystery')).toBeVisible();
   expect(screen.getByText('Favorite')).toBeVisible();
   expect(screen.getByText('2h 0m')).toBeVisible();
+  expect(screen.getByRole('progressbar', { name: 'Detail Movie watch progress' })).toHaveAttribute(
+    'aria-valuenow',
+    '25',
+  );
   expect(screen.getByAltText('Detail Movie artwork')).toHaveAttribute(
     'src',
     imageSource(movieDetail.artworkImageId ?? ''),
   );
-  expect(screen.getByRole('button', { name: 'Resume' })).toBeVisible();
-  expect(screen.getByRole('button', { name: 'Play from beginning' })).toBeVisible();
-  fireEvent.click(screen.getByRole('button', { name: 'Resume' }));
+  const resumeButton = screen.getByRole('button', { name: 'Resume' });
+  resumeButton.focus();
+  fireEvent.click(resumeButton);
+  const firstDialog = await screen.findByRole('dialog', { name: 'Detail Movie' });
+  expect(firstDialog).toBeVisible();
+  expect(screen.getByText('Choose playback target audio and subtitle tracks.')).toBeVisible();
+  expect(getSelectorTrigger('Audio track')).toBeVisible();
+  expect(getSelectorTrigger('Subtitle track')).toBeVisible();
+  expect(within(firstDialog).getByRole('button', { name: 'Cancel' })).toHaveAttribute(
+    'data-ui',
+    'button',
+  );
+  fireEvent.keyDown(firstDialog, { code: 'Escape', key: 'Escape' });
+  await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Detail Movie' })).toBeNull());
+  expect(document.activeElement).toBe(resumeButton);
+
+  fireEvent.click(resumeButton);
+  const secondDialog = await screen.findByRole('dialog', { name: 'Detail Movie' });
+  const secondDialogBackdrop = secondDialog.parentElement?.querySelector('[data-part="backdrop"]');
+  expect(secondDialogBackdrop).not.toBeNull();
+  fireEvent.click(secondDialogBackdrop!);
+  await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Detail Movie' })).toBeNull());
+  expect(document.activeElement).toBe(resumeButton);
+
+  fireEvent.click(resumeButton);
   expect(await screen.findByRole('dialog', { name: 'Detail Movie' })).toBeVisible();
-  expect(getArkHiddenSelect('Audio track')).toHaveValue('1');
-  expect(getArkHiddenSelect('Subtitle track')).toHaveValue('auto');
-  await selectArkOption('Audio track', /Japanese - FLAC/);
+  await selectSelectorOption('Audio track', /Japanese - FLAC/);
   fireEvent.click(screen.getByRole('button', { name: 'Resume playback' }));
   await waitFor(() =>
     expect(playCommand).toHaveBeenCalledWith({
@@ -1241,8 +1333,8 @@ test('library item detail renders resume-primary movie metadata', async () => {
   expect(screen.getByRole('button', { name: 'Play from beginning' })).not.toBeDisabled();
   fireEvent.click(screen.getByRole('button', { name: 'Play from beginning' }));
   expect(await screen.findByRole('dialog', { name: 'Detail Movie' })).toBeVisible();
-  await selectArkOption('Audio track', /Japanese - FLAC/);
-  await selectArkOption('Subtitle track', /English - SRT/);
+  await selectSelectorOption('Audio track', /Japanese - FLAC/);
+  await selectSelectorOption('Subtitle track', /English - SRT/);
   fireEvent.click(screen.getByRole('button', { name: 'Start playback' }));
   await waitFor(() =>
     expect(playCommand).toHaveBeenLastCalledWith({
@@ -1258,7 +1350,7 @@ test('library item detail renders resume-primary movie metadata', async () => {
   );
   fireEvent.click(screen.getByRole('button', { name: 'Resume' }));
   expect(await screen.findByRole('dialog', { name: 'Detail Movie' })).toBeVisible();
-  await selectArkOption('Subtitle track', 'Off');
+  await selectSelectorOption('Subtitle track', 'Off');
   fireEvent.click(screen.getByRole('button', { name: 'Resume playback' }));
   await waitFor(() =>
     expect(playCommand).toHaveBeenLastCalledWith({
@@ -1360,10 +1452,21 @@ test('library item detail renders episode metadata and semantic artwork placehol
   expect(screen.getByText('Not favorite')).toBeVisible();
   expect(screen.getByText('Sci-Fi')).toBeVisible();
   expect(screen.queryByRole('button', { name: 'Resume' })).toBeNull();
-  fireEvent.click(screen.getByRole('button', { name: 'Play' }));
+  const playButton = screen.getByRole('button', { name: 'Play' });
+  playButton.focus();
+  fireEvent.click(playButton);
+  const episodeDialog = await screen.findByRole('dialog', { name: 'Detail Episode' });
+  expect(episodeDialog).toBeVisible();
+  expect(screen.getByText('Choose playback target audio and subtitle tracks.')).toBeVisible();
+  const episodeBackdrop = episodeDialog.parentElement?.querySelector('[data-part="backdrop"]');
+  expect(episodeBackdrop).not.toBeNull();
+  fireEvent.click(episodeBackdrop!);
+  await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Detail Episode' })).toBeNull());
+  expect(document.activeElement).toBe(playButton);
+  fireEvent.click(playButton);
   expect(await screen.findByRole('dialog', { name: 'Detail Episode' })).toBeVisible();
-  expect(getArkHiddenSelect('Audio track')).toHaveValue('1');
-  await selectArkOption('Subtitle track', 'Off');
+  expect(getSelectorTrigger('Audio track')).toBeVisible();
+  await selectSelectorOption('Subtitle track', 'Off');
   fireEvent.click(screen.getByRole('button', { name: 'Start playback' }));
   await waitFor(() =>
     expect(playCommand).toHaveBeenCalledWith({
@@ -1408,8 +1511,8 @@ test('library show detail auto-loads next-up season and renders episode rows', a
   fireEvent.click(screen.getByRole('button', { name: 'Play S01E02' }));
   await waitFor(() => expect(itemCommand).toHaveBeenCalledWith('episode-2'));
   expect(playCommand).not.toHaveBeenCalled();
-  await waitFor(() => expect(getArkCombobox('Audio track')).toBeVisible());
-  await selectArkOption('Audio track', /Japanese - FLAC/);
+  await waitFor(() => expect(getSelectorTrigger('Audio track')).toBeVisible());
+  await selectSelectorOption('Audio track', /Japanese - FLAC/);
   fireEvent.click(screen.getByRole('button', { name: 'Start playback' }));
   await waitFor(() =>
     expect(playCommand).toHaveBeenCalledWith({
@@ -1451,8 +1554,8 @@ test('library show detail auto-loads next-up season and renders episode rows', a
   expect(episodePlayBtn).toBeVisible();
   fireEvent.click(episodePlayBtn);
   await waitFor(() => expect(itemCommand).toHaveBeenLastCalledWith('episode-2'));
-  await waitFor(() => expect(getArkCombobox('Subtitle track')).toBeVisible());
-  await selectArkOption('Subtitle track', 'Off');
+  await waitFor(() => expect(getSelectorTrigger('Subtitle track')).toBeVisible());
+  await selectSelectorOption('Subtitle track', 'Off');
   fireEvent.click(screen.getByRole('button', { name: 'Start playback' }));
   await waitFor(() =>
     expect(playCommand).toHaveBeenLastCalledWith({

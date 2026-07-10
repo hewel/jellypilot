@@ -1,4 +1,5 @@
 import type { ParentProps } from 'solid-js'
+import { Dynamic } from 'solid-js/web'
 import { splitProps } from 'solid-js'
 import { headingStyle } from './Heading.css'
 
@@ -10,16 +11,15 @@ export type HeadingProps = ParentProps<{
 
 export function Heading(props: HeadingProps) {
   const [local, rest] = splitProps(props, ['level', 'class', 'children'])
-  const level = local.level ?? 2
-  const Tag = `h${level}` as 'h2'
   return (
-    <Tag
+    <Dynamic
+      component={`h${local.level ?? 2}`}
       data-jp-heading=""
-      data-level={String(level)}
+      data-level={String(local.level ?? 2)}
       class={[headingStyle, local.class].filter(Boolean).join(' ')}
       {...rest}
     >
       {local.children}
-    </Tag>
+    </Dynamic>
   )
 }

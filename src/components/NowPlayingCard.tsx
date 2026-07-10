@@ -1,4 +1,4 @@
-import { Slider } from '@ark-ui/solid/slider';
+import { Badge, Button, Card, IconButton, Selector, Slider } from '@jellypilot/ui';
 import { createMutation, createQuery, useQueryClient } from '@tanstack/solid-query';
 import { Exit, Match } from 'effect';
 import { Pause, Play, SkipBack, SkipForward, Square, Volume2, VolumeX } from 'lucide-solid';
@@ -24,7 +24,6 @@ import {
 import type { NowPlayingEffect } from '../effects/nowPlaying';
 import { queryKeys, runExit } from '../effects/query';
 import { useToast } from './ToastProvider';
-import { Button, Card, JellyPilotSelect, StatusBadge } from './ui';
 
 import * as patterns from '../styles/patterns.css';
 import * as styles from './NowPlayingCard.css';
@@ -38,6 +37,8 @@ function formatTime(seconds: number): string {
   const remaining = total % 60;
   return `${minutes}:${remaining.toString().padStart(2, '0')}`;
 }
+
+const sliderValue = (value: number | [number, number]) => (Array.isArray(value) ? value[0] : value);
 
 const unavailableCopy = Match.type<string | null | undefined>().pipe(
   Match.withReturnType<string>(),
@@ -249,9 +250,9 @@ export default function NowPlayingCard(props: {
           <p class={styles.subtitle}>{mediaSubtitle()}</p>
         </div>
         <div class={styles.badgePlacement}>
-          <StatusBadge variant={statusVariant(current()?.status ?? 'unknown')}>
+          <Badge tone={statusVariant(current()?.status ?? 'unknown')}>
             {statusLabel(current()?.status ?? 'unknown')}
-          </StatusBadge>
+          </Badge>
         </div>
       </div>
 
@@ -263,25 +264,16 @@ export default function NowPlayingCard(props: {
           </span>
         </div>
         <Show when={activeTimeline()} fallback={<div class={styles.emptyTrack} />}>
-          <Slider.Root
-            aria-label={['Seek position']}
+          <Slider
+            label="Seek position"
             min={0}
             max={player()?.duration ?? 0}
-            value={[seekValue()]}
+            value={seekValue()}
             disabled={!activeTimeline() || !canControlPlayback() || busy() !== null}
-            onValueChange={(details) => setSeekDraft(details.value[0] ?? 0)}
-            onValueChangeEnd={(details) => commitSeek(details.value[0] ?? 0)}
+            onValueChange={(value) => setSeekDraft(sliderValue(value))}
+            onValueChangeEnd={(value) => commitSeek(sliderValue(value))}
             class={styles.sliderRoot}
-          >
-            <Slider.Control class={styles.sliderControl}>
-              <Slider.Track class={styles.sliderTrack}>
-                <Slider.Range class={`${styles.sliderRange} ${styles.primaryRange}`} />
-              </Slider.Track>
-              <Slider.Thumb index={0} class={styles.thumb}>
-                <Slider.HiddenInput />
-              </Slider.Thumb>
-            </Slider.Control>
-          </Slider.Root>
+          />
         </Show>
       </div>
 
@@ -292,9 +284,9 @@ export default function NowPlayingCard(props: {
           [styles.controlsFramed]: !props.bare,
         }}
       >
-        <Button
+        <IconButton
           type="button"
-          variant="icon"
+          variant="ghost"
           class={styles.iconButton}
           aria-label="Previous episode"
           title={
@@ -308,7 +300,7 @@ export default function NowPlayingCard(props: {
           }
         >
           <SkipBack class={patterns.icon5} />
-        </Button>
+        </IconButton>
         <Button
           type="button"
           variant="primary"
@@ -330,19 +322,19 @@ export default function NowPlayingCard(props: {
           </span>
           <span class={styles.actionLabel}>{player()?.paused ? 'Play' : 'Pause'}</span>
         </Button>
-        <Button
+        <IconButton
           type="button"
-          variant="icon"
-          class={`${styles.iconButton} ${styles.stopButton}`}
+          variant="ghost"
+          class={styles.iconButton}
           aria-label="Stop playback"
           disabled={!canControlPlayback() || busy() !== null}
           onClick={() => void runCommand('stop', stopMpv, 'Could not stop MPV')}
         >
           <Square class={styles.squareIcon} />
-        </Button>
-        <Button
+        </IconButton>
+        <IconButton
           type="button"
-          variant="icon"
+          variant="ghost"
           class={styles.iconButton}
           aria-label="Next episode"
           title={
@@ -354,7 +346,7 @@ export default function NowPlayingCard(props: {
           onClick={() => void runCommand('next', playNextEpisode, 'Could not play next episode')}
         >
           <SkipForward class={patterns.icon5} />
-        </Button>
+        </IconButton>
         <Show when={current()?.status === 'offline' && !connected()}>
           <Button
             type="button"
@@ -366,40 +358,46 @@ export default function NowPlayingCard(props: {
                 props.onPlayerStarted?.(),
               )
             }
-            leadingIcon={<Play class={styles.playIcon} />}
           >
+            <Play class={styles.playIcon} />
             {props.jellyfinConnected ? 'Start MPV' : 'Reconnect Jellyfin first'}
           </Button>
         </Show>
       </div>
 
       <div class={styles.selectPanel}>
-        <JellyPilotSelect
-          label="Audio"
-          items={audioTrackItems()}
-          value={selectedAudioTrackId()}
-          placeholder="No audio tracks"
-          disabled={!connected() || audioTrackItems().length === 0 || busy() !== null}
-          size="compact"
-          portalMount={props.trackSelectPortalMount}
-          onValueChange={switchAudioTrack}
-        />
-        <JellyPilotSelect
-          label="Subtitles"
-          items={subtitleTrackItems()}
-          value={selectedSubtitleTrackId()}
-          placeholder="No subtitle tracks"
-          disabled={!connected() || busy() !== null}
-          size="compact"
-          portalMount={props.trackSelectPortalMount}
-          onValueChange={switchSubtitleTrack}
-        />
+        <div>
+          <span>Audio</span>
+          <Selector
+            aria-label="Audio"
+            items={audioTrackItems()}
+            value={selectedAudioTrackId()}
+            placeholder="No audio tracks"
+            disabled={!connected() || audioTrackItems().length === 0 || busy() !== null}
+            onValueChange={(value) => {
+              if (value) switchAudioTrack(value);
+            }}
+          />
+        </div>
+        <div>
+          <span>Subtitles</span>
+          <Selector
+            aria-label="Subtitles"
+            items={subtitleTrackItems()}
+            value={selectedSubtitleTrackId()}
+            placeholder="No subtitle tracks"
+            disabled={!connected() || busy() !== null}
+            onValueChange={(value) => {
+              if (value) switchSubtitleTrack(value);
+            }}
+          />
+        </div>
       </div>
 
       <div class={styles.volumePanel}>
-        <Button
+        <IconButton
           type="button"
-          variant="icon"
+          variant="ghost"
           class={styles.muteButton}
           aria-label={muted() ? 'Unmute' : 'Mute'}
           disabled={!connected() || busy() !== null}
@@ -409,26 +407,17 @@ export default function NowPlayingCard(props: {
             <Volume2 class={contextualIconClass(connected() && !muted(), styles.secondaryIcon)} />
             <VolumeX class={contextualIconClass(!connected() || muted(), styles.errorIcon)} />
           </span>
-        </Button>
-        <Slider.Root
-          aria-label={['Volume']}
+        </IconButton>
+        <Slider
+          label="Volume"
           min={0}
           max={100}
-          value={[volumeValue()]}
+          value={volumeValue()}
           disabled={!connected() || busy() !== null}
-          onValueChange={(details) => setVolumeDraft(details.value[0] ?? 100)}
-          onValueChangeEnd={(details) => commitVolume(details.value[0] ?? 100)}
+          onValueChange={(value) => setVolumeDraft(sliderValue(value))}
+          onValueChangeEnd={(value) => commitVolume(sliderValue(value))}
           class={styles.sliderRoot}
-        >
-          <Slider.Control class={styles.sliderControl}>
-            <Slider.Track class={styles.sliderTrack}>
-              <Slider.Range class={`${styles.sliderRange} ${styles.secondaryRange}`} />
-            </Slider.Track>
-            <Slider.Thumb index={0} class={styles.thumb}>
-              <Slider.HiddenInput />
-            </Slider.Thumb>
-          </Slider.Control>
-        </Slider.Root>
+        />
         <span class={styles.volumeValue}>{Math.round(volumeValue())}%</span>
       </div>
     </div>
@@ -439,7 +428,7 @@ export default function NowPlayingCard(props: {
   }
 
   return (
-    <Card as="section" variant="elevated" class={styles.card} aria-labelledby="now-playing-title">
+    <Card variant="filled" class={styles.card} aria-labelledby="now-playing-title">
       {inner}
     </Card>
   );

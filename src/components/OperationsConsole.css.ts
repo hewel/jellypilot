@@ -1,66 +1,82 @@
+import { atomic } from '@jellypilot/atomic-css';
 import { style } from '@vanilla-extract/css';
 
-import { sprinkles } from '../styles/sprinkles.css';
-import { vars } from '../styles/vars.css';
-
-const mix = (color: string, opacity: number) =>
-  `color-mix(in srgb, ${color} ${Math.round(opacity * 100)}%, transparent)`;
-
-export const stack = style({
-  display: 'grid',
-  gap: vars.space['6'],
-});
-
-export const backdrop = style({
-  backdropFilter: 'blur(4px)',
-  background: 'rgb(0 0 0 / 0.7)',
-  inset: 0,
-  position: 'fixed',
-  transitionDuration: vars.duration['300'],
-  transitionProperty: 'backdrop-filter, background-color, opacity',
-  zIndex: 60,
-  selectors: {
-    '&[data-state="closed"]': { opacity: 0 },
-    '&[data-state="open"]': { opacity: 1 },
+export const stack = style([
+  atomic({
+    display: 'grid',
+  }),
+  {
+    gap: 'var(--jellypilot-space-6)',
   },
-});
+]);
 
-export const positioner = sprinkles({
-  position: 'fixed',
-  display: 'flex',
-  alignItems: 'center',
-  justifyContent: 'center',
-  overflowY: 'auto',
-  p: '4',
-  zIndex: '60',
-});
+export const backdrop = style([
+  atomic({
+    inset: 0,
+    position: 'fixed',
+    z: 60,
+  }),
+  {
+    background: 'var(--jellypilot-color-background)',
+    transitionDuration: 'var(--jellypilot-duration-300)',
+    transitionProperty: 'opacity',
+    selectors: {
+      '&[data-state="closed"]': { opacity: 0 },
+      '&[data-state="open"]': { opacity: 1 },
+    },
+  },
+]);
+
+export const positioner = style([
+  atomic({
+    alignItems: 'center',
+    display: 'flex',
+    justify: 'center',
+    overflowY: 'auto',
+    position: 'fixed',
+    z: 60,
+  }),
+  {
+    padding: 'var(--jellypilot-space-4)',
+  },
+]);
 
 export const positionerFill = style({
   inset: 0,
 });
 
-export const content = style({
-  maxWidth: '48rem',
-  outline: 'none',
-  position: 'relative',
-  width: '100%',
-});
+export const content = style([
+  atomic({
+    position: 'relative',
+    width: 'full',
+  }),
+  {
+    maxWidth: '48rem',
+    outline: 'none',
+  },
+]);
 
-export const closeButton = style({
-  backdropFilter: 'blur(8px)',
-  background: mix(vars.color.surfaceContainerHigh, 0.8),
-  border: `1px solid ${vars.color.outlineVariant}`,
-  borderRadius: vars.borderRadius.xl,
-  boxShadow: vars.shadow.lg,
-  color: vars.color.onSurfaceVariant,
-  position: 'absolute',
-  right: vars.space['4'],
-  top: vars.space['4'],
-  zIndex: 10,
-  selectors: {
-    '&:hover': {
-      borderColor: vars.color.secondary,
-      color: vars.color.secondary,
+export const closeButton = style([
+  atomic({
+    position: 'absolute',
+    rounded: 'xl',
+  }),
+  {
+    right: 'var(--jellypilot-space-4)',
+    top: 'var(--jellypilot-space-4)',
+    background: 'var(--jellypilot-color-surface-container-high)',
+    border: '1px solid var(--jellypilot-color-outline-variant)',
+    color: 'var(--jellypilot-color-on-surface-variant)',
+    cursor: 'pointer',
+    zIndex: 10,
+    selectors: {
+      '&:hover': {
+        borderColor: 'var(--jellypilot-color-secondary)',
+        color: 'var(--jellypilot-color-secondary)',
+      },
+      '&:focus-visible': {
+        outline: 'none',
+      },
     },
   },
-});
+]);

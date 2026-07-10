@@ -1,3 +1,4 @@
+import { Link } from '@jellypilot/ui';
 import { Check, Film, Heart, Tv } from 'lucide-solid';
 import { Show, createEffect, createSignal } from 'solid-js';
 
@@ -89,7 +90,7 @@ export function VideoCard(props: VideoCardProps) {
   });
 
   return (
-    <a href={href()} aria-label={cardAriaLabel()} class={styles.card}>
+    <Link href={href()} aria-label={cardAriaLabel()} class={styles.card}>
       <div class={`${styles.artwork} ${styles.aspect[aspectClass()]}`}>
         <Show
           when={!imageFailed() ? artworkImageId() : null}
@@ -132,7 +133,7 @@ export function VideoCard(props: VideoCardProps) {
           </span>
         </Show>
       </div>
-    </a>
+    </Link>
   );
 }
 

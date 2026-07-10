@@ -1,7 +1,7 @@
 import { splitProps } from 'solid-js';
 import type { JSX } from 'solid-js';
 
-import * as styles from './ConsoleLayout.css';
+import * as styles from './AppConsoleLayout.css';
 
 export interface ConsoleShellProps extends JSX.HTMLAttributes<HTMLDivElement> {
   class?: string;

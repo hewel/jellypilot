@@ -1,28 +1,32 @@
+import { atomic } from '@jellypilot/atomic-css';
 import { style } from '@vanilla-extract/css';
 
-import { sprinkles } from '../../styles/sprinkles.css';
-import { vars } from '../../styles/vars.css';
+const color = {
+  onSurfaceVariant: 'var(--jellypilot-color-on-surface-variant)',
+  secondary: 'var(--jellypilot-color-secondary)',
+};
 
-const mix = (color: string, opacity: number) =>
-  `color-mix(in srgb, ${color} ${Math.round(opacity * 100)}%, transparent)`;
+export const field = style([
+  atomic({
+    display: 'block',
+  }),
+]);
 
-export const field = style({
-  display: 'block',
-});
-
-export const input = style({
-  color: vars.color.secondary,
-  fontFamily: vars.font.mono,
-  fontWeight: vars.fontWeight.semibold,
-  width: '100%',
-});
-
-export const description = style([
-  sprinkles({
-    fontSize: '12',
-    lineHeight: '16',
+export const input = style([
+  atomic({
+    fontWeight: 'semibold',
+    width: 'full',
   }),
   {
-    color: mix(vars.color.onSurfaceVariant, 0.8),
+    color: color.secondary,
+    fontFamily: 'var(--jellypilot-font-mono)',
+  },
+]);
+
+export const description = style([
+  {
+    color: color.onSurfaceVariant,
+    fontSize: '12px',
+    lineHeight: '16px',
   },
 ]);

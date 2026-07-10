@@ -155,6 +155,7 @@ export function Slider(props: SliderProps) {
               aria-valuemax={max()}
               aria-valuenow={local.value as number}
               aria-orientation={orientation()}
+              aria-labelledby={local.label ? `${rootId()}-label` : undefined}
               disabled={local.disabled}
               onKeyDown={(event) => onThumbKey('single', event)}
               onPointerUp={(event) =>
@@ -176,6 +177,7 @@ export function Slider(props: SliderProps) {
             aria-valuemax={(local.value as [number, number])[1]}
             aria-valuenow={(local.value as [number, number])[0]}
             aria-orientation={orientation()}
+            aria-labelledby={local.label ? `${rootId()}-label` : undefined}
             disabled={local.disabled}
             onKeyDown={(event) => onThumbKey(0, event)}
           />
@@ -189,6 +191,7 @@ export function Slider(props: SliderProps) {
             aria-valuemax={max()}
             aria-valuenow={(local.value as [number, number])[1]}
             aria-orientation={orientation()}
+            aria-labelledby={local.label ? `${rootId()}-label` : undefined}
             disabled={local.disabled}
             onKeyDown={(event) => onThumbKey(1, event)}
           />

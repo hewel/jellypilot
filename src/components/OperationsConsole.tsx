@@ -1,4 +1,5 @@
 import { Dialog, IconButton } from '@jellypilot/ui';
+import type { SelectorItem } from '@jellypilot/ui';
 import { createForm } from '@tanstack/solid-form';
 import { createMutation, createQuery, useQueryClient } from '@tanstack/solid-query';
 import { Exit, Option } from 'effect';
@@ -17,6 +18,8 @@ import {
 } from '../effects/profiles';
 import { queryKeys, runExit } from '../effects/query';
 import { restoreSavedSession } from '../sessionAccess';
+import { ConsoleContainer, ConsoleGrid } from './AppConsoleLayout';
+import PageFooter from './AppPageFooter';
 import LoginPage from './LoginPage';
 import ConnectionCard from './OperationsConsole/ConnectionCard';
 import DiagnosticsCard from './OperationsConsole/DiagnosticsCard';
@@ -32,8 +35,6 @@ import {
   parseSubtitleLanguageInput,
 } from './OperationsConsole/subtitleLanguages';
 import { useToast } from './ToastProvider';
-import { ConsoleContainer, ConsoleGrid, PageFooter } from './ui';
-import type { JellyPilotSelectItem } from './ui';
 
 import * as patterns from '../styles/patterns.css';
 import * as styles from './OperationsConsole.css';
@@ -57,7 +58,7 @@ export default function OperationsConsole(props: OperationsConsoleProps) {
   let loggedSaveFailure: string | null = null;
   let clearPlayerBridgeStatusTimer: ReturnType<typeof setTimeout> | null = null;
 
-  const subtitleLanguageSelectItems: JellyPilotSelectItem[] = [
+  const subtitleLanguageSelectItems: SelectorItem[] = [
     { label: 'eng — English', value: 'eng' },
     { label: 'jpn — Japanese', value: 'jpn' },
     { label: 'spa — Spanish', value: 'spa' },
@@ -391,7 +392,13 @@ export default function OperationsConsole(props: OperationsConsoleProps) {
   };
 
   const handleSignOut = async () => {
-    const activeProfileKey = profiles()?.activeProfileKey;
+    const profileResult = await profilesQuery.refetch();
+    const profileExit = profilesQuery.data ?? profileResult.data;
+    if (!profileExit || !Exit.isSuccess(profileExit)) {
+      showToast('error', 'Could not load saved services');
+      return;
+    }
+    const activeProfileKey = profileExit.value.activeProfileKey;
     if (!activeProfileKey) {
       props.onSignedOut();
       return;
@@ -413,6 +420,8 @@ export default function OperationsConsole(props: OperationsConsoleProps) {
       } else {
         showToast('error', commandFailureMessage(exit.cause, 'Sign out failed'));
       }
+    } catch (error) {
+      showToast('error', error instanceof Error ? error.message : 'Sign out failed');
     } finally {
       setRemovingProfileKey(null);
       actions.finishSignOut();

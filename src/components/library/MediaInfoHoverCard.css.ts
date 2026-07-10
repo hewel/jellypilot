@@ -1,21 +1,31 @@
-import { style } from '@vanilla-extract/css';
+import { atomic } from '@jellypilot/atomic-css';
+import { globalStyle, style } from '@vanilla-extract/css';
 
-import { sprinkles } from '../../styles/sprinkles.css';
-import { vars } from '../../styles/vars.css';
+export const hoverRoot = style({});
 
-export const content = style({
-  display: 'grid',
-  gap: vars.space['2'],
+globalStyle(`${hoverRoot} [data-part="content"]`, {
+  top: 'auto',
+  bottom: 'calc(100% + var(--jellypilot-space-2_5))',
+  left: '0',
 });
 
+export const content = style([
+  atomic({
+    display: 'grid',
+    gap: 2,
+  }),
+]);
+
 export const title = style([
-  sprinkles({
-    color: 'onSurface',
-    fontSize: '14',
-    lineHeight: '20',
-    fontWeight: 'semibold',
+  atomic({
+    display: 'grid',
+    gap: 0,
   }),
   {
+    color: 'var(--jellypilot-color-on-surface)',
+    fontSize: 'var(--jellypilot-font-size-14)',
+    lineHeight: 'var(--jellypilot-line-height-20)',
+    fontWeight: 'var(--jellypilot-font-weight-semibold)',
     display: '-webkit-box',
     overflow: 'hidden',
     WebkitBoxOrient: 'vertical',
@@ -24,49 +34,51 @@ export const title = style([
 ]);
 
 export const meta = style([
-  sprinkles({
-    color: 'onSurfaceVariant',
-    fontSize: '12',
-    lineHeight: '16',
-    fontWeight: 'bold',
+  atomic({
+    color: 'var(--jellypilot-color-on-surface-variant)',
   }),
   {
+    color: 'var(--jellypilot-color-on-surface-variant)',
+    fontSize: 'var(--jellypilot-font-size-12)',
+    lineHeight: 'var(--jellypilot-line-height-16)',
+    fontWeight: 'var(--jellypilot-font-weight-bold)',
     fontVariantNumeric: 'tabular-nums',
     letterSpacing: '0.05em',
     textTransform: 'uppercase',
   },
 ]);
 
-export const genres = sprinkles({
+export const genres = atomic({
   display: 'flex',
   flexWrap: 'wrap',
-  gap: '1',
+  gap: 1,
 });
 
 export const genre = style([
-  sprinkles({
+  atomic({
     borderRadius: 'full',
-    px: '2',
-    py: '0_5',
-    color: 'onSurfaceVariant',
-    fontSize: '11',
-    lineHeight: '16',
-    fontWeight: 'bold',
+    px: 2,
+    py: 0.5,
   }),
   {
-    background: `color-mix(in srgb, ${vars.color.surfaceContainerHighest} 70%, transparent)`,
+    color: 'var(--jellypilot-color-on-surface-variant)',
+    background: 'var(--jellypilot-color-surface-container-highest)',
+    fontSize: 'var(--jellypilot-font-size-11)',
+    lineHeight: 'var(--jellypilot-line-height-16)',
+    fontWeight: 'var(--jellypilot-font-weight-bold)',
     letterSpacing: '0.08em',
     textTransform: 'uppercase',
   },
 ]);
 
 export const overview = style([
-  sprinkles({
-    fontSize: '12',
-    lineHeight: '16',
+  atomic({
+    display: 'block',
   }),
   {
-    color: `color-mix(in srgb, ${vars.color.onSurfaceVariant} 90%, transparent)`,
+    color: 'var(--jellypilot-color-on-surface-variant)',
+    fontSize: 'var(--jellypilot-font-size-12)',
+    lineHeight: 'var(--jellypilot-line-height-16)',
     display: '-webkit-box',
     overflow: 'hidden',
     WebkitBoxOrient: 'vertical',
@@ -75,31 +87,30 @@ export const overview = style([
 ]);
 
 export const progressTrack = style([
-  sprinkles({
+  atomic({
     overflow: 'hidden',
     width: 'full',
-    height: '1',
+    height: 1,
     borderRadius: 'full',
   }),
   {
-    background: `color-mix(in srgb, ${vars.color.surfaceContainerHighest} 70%, transparent)`,
+    background: 'var(--jellypilot-color-surface-container-highest)',
   },
 ]);
 
-export const progressBar = style({
-  background: vars.color.secondary,
-  height: '100%',
+globalStyle(`${progressTrack} [data-part="fill"]`, {
+  background: 'var(--jellypilot-color-secondary)',
 });
 
 export const watchedText = style([
-  sprinkles({
-    mt: '1',
-    color: 'onSurfaceVariant',
-    fontSize: '11',
-    lineHeight: '16',
-    fontWeight: 'bold',
+  atomic({
+    mt: 1,
   }),
   {
+    color: 'var(--jellypilot-color-on-surface-variant)',
+    fontSize: 'var(--jellypilot-font-size-11)',
+    lineHeight: 'var(--jellypilot-line-height-16)',
+    fontWeight: 'var(--jellypilot-font-weight-bold)',
     fontVariantNumeric: 'tabular-nums',
     letterSpacing: '0.08em',
     textTransform: 'uppercase',
@@ -107,93 +118,92 @@ export const watchedText = style([
 ]);
 
 export const states = style([
-  sprinkles({
+  atomic({
     display: 'flex',
     flexWrap: 'wrap',
-    gap: '3',
-    color: 'onSurfaceVariant',
-    fontSize: '12',
-    lineHeight: '16',
-    fontWeight: 'bold',
+    gap: 3,
+    fontSize: 'var(--jellypilot-font-size-12)',
+    lineHeight: 'var(--jellypilot-line-height-16)',
   }),
   {
+    color: 'var(--jellypilot-color-on-surface-variant)',
+    alignItems: 'flex-start',
     letterSpacing: '0.05em',
-    paddingTop: vars.space['0_5'],
+    paddingTop: 'var(--jellypilot-space-0_5)',
+    fontWeight: 'var(--jellypilot-font-weight-bold)',
     textTransform: 'uppercase',
   },
 ]);
 
-export const state = sprinkles({
+export const state = atomic({
   display: 'flex',
   alignItems: 'center',
-  gap: '1',
+  gap: 1,
 });
 
-export const played = sprinkles({
-  color: 'tertiary',
+export const played = style({
+  color: 'var(--jellypilot-color-tertiary)',
 });
 
-export const favorite = sprinkles({
-  color: 'secondary',
+export const favorite = style({
+  color: 'var(--jellypilot-color-secondary)',
 });
 
 export const icon = style({
-  height: vars.space['3_5'],
-  width: vars.space['3_5'],
+  height: 'var(--jellypilot-space-3_5)',
+  width: 'var(--jellypilot-space-3_5)',
 });
 
 export const popover = style([
-  sprinkles({
-    zIndex: '100',
+  atomic({
     borderRadius: '2xl',
-    p: '4',
-    boxShadow: '2xl',
+    p: 4,
   }),
   {
-    backdropFilter: 'blur(12px)',
-    background: vars.color.surfaceContainerLowest,
-    border: `1px solid ${vars.color.outlineVariant}`,
+    background: 'var(--jellypilot-color-surface-container-low)',
+    border: '1px solid var(--jellypilot-color-outline-variant)',
+    boxShadow: '0 12px 36px rgb(0 0 0 / 0.16)',
+    display: 'grid',
+    gap: 'var(--jellypilot-space-2)',
     maxWidth: 'min(90vw, 24rem)',
     width: '20rem',
+    zIndex: 100,
   },
 ]);
 
 export const loading = style([
-  sprinkles({
+  atomic({
     display: 'flex',
     alignItems: 'center',
     justifyContent: 'center',
-    gap: '2',
-    py: '3',
-    color: 'onSurfaceVariant',
-    fontSize: '12',
-    lineHeight: '16',
-    fontWeight: 'bold',
+    gap: 2,
+    py: 3,
   }),
   {
+    color: 'var(--jellypilot-color-on-surface-variant)',
+    fontSize: 'var(--jellypilot-font-size-12)',
+    lineHeight: 'var(--jellypilot-line-height-16)',
+    fontWeight: 'var(--jellypilot-font-weight-bold)',
     letterSpacing: '0.05em',
     textTransform: 'uppercase',
   },
 ]);
 
-export const spinner = style([
-  {
-    animation: 'spin 1s linear infinite',
-    height: vars.space['4'],
-    width: vars.space['4'],
-  },
-]);
+export const spinner = style({
+  height: 'var(--jellypilot-space-4)',
+  width: 'var(--jellypilot-space-4)',
+});
 
 export const error = style([
-  sprinkles({
-    py: '2',
+  atomic({
+    py: 2,
     textAlign: 'center',
-    fontSize: '12',
-    lineHeight: '16',
-    fontWeight: 'bold',
   }),
   {
-    color: `color-mix(in srgb, ${vars.color.error} 90%, transparent)`,
+    color: 'var(--jellypilot-color-error)',
+    fontSize: 'var(--jellypilot-font-size-12)',
+    lineHeight: 'var(--jellypilot-line-height-16)',
+    fontWeight: 'var(--jellypilot-font-weight-bold)',
     letterSpacing: '0.05em',
     textTransform: 'uppercase',
   },

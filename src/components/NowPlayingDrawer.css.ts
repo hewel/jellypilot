@@ -1,7 +1,6 @@
+import { projectBreakpoints, projectTheme } from '@jellypilot/ui/theme/project';
 import { style } from '@vanilla-extract/css';
 import { recipe } from '@vanilla-extract/recipes';
-
-import { breakpoints, vars } from '../styles/vars.css';
 
 const mix = (color: string, amount: number) =>
   `color-mix(in srgb, ${color} ${amount}%, transparent)`;
@@ -11,38 +10,38 @@ export const trigger = style({
 });
 
 export const triggerIcon = style({
-  height: vars.space['5'],
-  width: vars.space['5'],
+  height: projectTheme.space['5'],
+  width: projectTheme.space['5'],
 });
 
 export const statusDot = recipe({
   base: style({
-    borderRadius: vars.borderRadius.full,
-    height: vars.space['2'],
+    borderRadius: projectTheme.borderRadius.full,
+    height: projectTheme.space['2'],
     position: 'absolute',
-    right: vars.space['1'],
-    top: vars.space['1'],
-    width: vars.space['2'],
+    right: projectTheme.space['1'],
+    top: projectTheme.space['1'],
+    width: projectTheme.space['2'],
   }),
   variants: {
     status: {
       idle: {
-        background: vars.color.outlineVariant,
+        background: projectTheme.color.outlineVariant,
       },
       offline: {
-        background: vars.color.error,
-        boxShadow: `0 0 8px ${vars.color.error}`,
+        background: projectTheme.color.error,
+        boxShadow: `0 0 8px ${projectTheme.color.error}`,
       },
       paused: {
-        background: vars.color.tertiary,
-        boxShadow: `0 0 8px ${vars.color.tertiary}`,
+        background: projectTheme.color.tertiary,
+        boxShadow: `0 0 8px ${projectTheme.color.tertiary}`,
       },
       playing: {
-        background: vars.color.tertiary,
-        boxShadow: `0 0 8px ${vars.color.tertiary}`,
+        background: projectTheme.color.tertiary,
+        boxShadow: `0 0 8px ${projectTheme.color.tertiary}`,
       },
       unknown: {
-        background: vars.color.outlineVariant,
+        background: projectTheme.color.outlineVariant,
       },
     },
   },
@@ -53,9 +52,9 @@ export const backdrop = style({
   backdropFilter: 'blur(4px)',
   inset: 0,
   position: 'fixed',
-  transitionDuration: vars.duration['300'],
+  transitionDuration: projectTheme.duration['300'],
   transitionProperty: 'backdrop-filter, background-color, opacity',
-  zIndex: vars.zIndex['50'],
+  zIndex: projectTheme.zIndex['50'],
   selectors: {
     '&[data-state="closed"]': {
       opacity: 0,
@@ -71,28 +70,28 @@ export const positioner = style({
   inset: 0,
   justifyContent: 'flex-end',
   position: 'fixed',
-  zIndex: vars.zIndex['50'],
+  zIndex: projectTheme.zIndex['50'],
 });
 
 export const content = style({
   backdropFilter: 'blur(24px)',
-  background: mix(vars.color.surfaceContainerLow, 60),
-  borderLeft: `1px solid ${mix(vars.color.outlineVariant, 30)}`,
+  background: mix(projectTheme.color.surfaceContainerLow, 60),
+  borderLeft: `1px solid ${mix(projectTheme.color.outlineVariant, 30)}`,
   borderTopLeftRadius: '2rem',
   borderBottomLeftRadius: '2rem',
-  boxShadow: vars.shadow['2xl'],
+  boxShadow: projectTheme.shadow['2xl'],
   display: 'flex',
   flexDirection: 'column',
   height: '100%',
   overflow: 'hidden',
-  transitionDuration: vars.duration['200'],
+  transitionDuration: projectTheme.duration['200'],
   transitionProperty: 'opacity, transform',
-  transitionTimingFunction: vars.easing.standard,
+  transitionTimingFunction: projectTheme.easing.standard,
   width: '100%',
   selectors: {
     '&[data-state="closed"]': {
       opacity: 0,
-      transform: `translateX(${vars.space['3']})`,
+      transform: `translateX(${projectTheme.space['3']})`,
     },
     '&[data-state="open"]': {
       opacity: 1,
@@ -100,7 +99,7 @@ export const content = style({
     },
   },
   '@media': {
-    [`screen and (min-width: ${breakpoints.sm})`]: {
+    [`screen and (min-width: ${projectBreakpoints.sm})`]: {
       width: '28rem',
     },
   },
@@ -108,35 +107,35 @@ export const content = style({
 
 export const header = style({
   alignItems: 'center',
-  borderBottom: `1px solid ${mix(vars.color.outlineVariant, 20)}`,
+  borderBottom: `1px solid ${mix(projectTheme.color.outlineVariant, 20)}`,
   display: 'flex',
   justifyContent: 'space-between',
-  padding: `${vars.space['4']} ${vars.space['5']}`,
+  padding: `${projectTheme.space['4']} ${projectTheme.space['5']}`,
 });
 
 export const title = style({
-  color: vars.color.onSurface,
-  fontSize: vars.fontSize['18'],
-  fontWeight: vars.fontWeight.bold,
-  lineHeight: vars.lineHeight['24'],
+  color: projectTheme.color.onSurface,
+  fontSize: projectTheme.fontSize['18'],
+  fontWeight: projectTheme.fontWeight.bold,
+  lineHeight: projectTheme.lineHeight['24'],
 });
 
 export const description = style({
-  color: mix(vars.color.onSurfaceVariant, 70),
-  fontSize: vars.fontSize['12'],
-  lineHeight: vars.lineHeight['16'],
-  marginTop: vars.space['0_5'],
+  color: mix(projectTheme.color.onSurfaceVariant, 70),
+  fontSize: projectTheme.fontSize['12'],
+  lineHeight: projectTheme.lineHeight['16'],
+  marginTop: projectTheme.space['0_5'],
 });
 
 export const closeIcon = style({
-  height: vars.space['5'],
-  width: vars.space['5'],
+  height: projectTheme.space['5'],
+  width: projectTheme.space['5'],
 });
 
 export const body = style({
   flex: 1,
   overflowY: 'auto',
-  padding: `${vars.space['4']} ${vars.space['5']}`,
+  padding: `${projectTheme.space['4']} ${projectTheme.space['5']}`,
 });
 
 export const srOnlyClose = style({

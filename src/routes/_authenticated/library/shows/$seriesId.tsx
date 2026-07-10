@@ -17,8 +17,8 @@ import {
   seasonLabel,
   showSubtitle,
 } from '@components/library/shared';
-import { Button, Card, JellyPilotSelect, StatusBadge } from '@components/ui';
-import type { JellyPilotSelectItem } from '@components/ui';
+import { Badge, Button, Card, Link, Selector } from '@jellypilot/ui';
+import type { SelectorItem } from '@jellypilot/ui';
 import { createMutation, createQuery, useQueryClient } from '@tanstack/solid-query';
 import { createFileRoute, useCanGoBack, useNavigate, useRouter } from '@tanstack/solid-router';
 import { Exit, Option } from 'effect';
@@ -277,12 +277,12 @@ function LibraryShowDetailRoute() {
                 onBack={closeDetail}
                 badges={
                   <>
-                    <StatusBadge variant={show().played ? 'success' : 'neutral'}>
+                    <Badge tone={show().played ? 'success' : 'neutral'}>
                       {show().played ? 'Played' : 'Unplayed'}
-                    </StatusBadge>
-                    <StatusBadge variant={show().favorite ? 'success' : 'neutral'}>
+                    </Badge>
+                    <Badge tone={show().favorite ? 'success' : 'neutral'}>
                       {show().favorite ? 'Favorite' : 'Not favorite'}
-                    </StatusBadge>
+                    </Badge>
                   </>
                 }
                 actions={
@@ -293,12 +293,10 @@ function LibraryShowDetailRoute() {
                       class={styles.pillButton}
                       disabled={!show().nextEpisode || playBusy() || confirmBusy()}
                       onClick={() => void playShow()}
-                      leadingIcon={
-                        <Show when={playBusy()} fallback={<Play class={styles.playIcon} />}>
-                          <RefreshCw class={`${styles.icon4} ${styles.spinner}`} />
-                        </Show>
-                      }
                     >
+                      <Show when={playBusy()} fallback={<Play class={styles.playIcon} />}>
+                        <RefreshCw class={`${styles.icon4} ${styles.spinner}`} />
+                      </Show>
                       {playBusy() ? 'Loading...' : playShowLabel()}
                     </Button>
                     <UserDataControls
@@ -440,7 +438,7 @@ function SeasonSelector(props: {
   disabled: boolean;
   onSelect: (season: VideoSeason) => void;
 }) {
-  const seasonItems = createMemo<JellyPilotSelectItem[]>(() =>
+  const seasonItems = createMemo<SelectorItem[]>(() =>
     props.seasons.map((season) => ({
       label: seasonLabel(season),
       value: season.id,
@@ -463,7 +461,7 @@ function SeasonSelector(props: {
               <li class={styles.seasonItem}>
                 <Button
                   type="button"
-                  variant="outlined"
+                  variant="outline"
                   class={styles.pillButton}
                   classList={{ [styles.selectedSeason]: props.activeSeason?.id === season.id }}
                   aria-pressed={props.activeSeason?.id === season.id}
@@ -479,13 +477,15 @@ function SeasonSelector(props: {
       }
     >
       <div class={styles.selectWrap}>
-        <JellyPilotSelect
-          label="Season"
+        <span>Season</span>
+        <Selector
+          aria-label="Season"
           items={seasonItems()}
           disabled={props.disabled}
-          value={props.activeSeason?.id ?? ''}
-          size="compact"
-          onValueChange={selectSeason}
+          value={props.activeSeason?.id ?? null}
+          onValueChange={(seasonId) => {
+            if (seasonId) selectSeason(seasonId);
+          }}
         />
       </div>
     </Show>
@@ -511,7 +511,7 @@ function EpisodeRow(props: {
   });
 
   return (
-    <Card variant="filled" surfaceTint={false} class={styles.episodeCard}>
+    <Card variant="filled" class={styles.episodeCard}>
       <div class={styles.episodeImageWrap}>
         <Show
           when={!imageFailed() ? props.episode.artworkImageId : null}
@@ -537,10 +537,10 @@ function EpisodeRow(props: {
         <div class={styles.episodeMeta}>
           <span class={styles.episodeLabel}>{props.label}</span>
           <Show when={props.episode.played}>
-            <StatusBadge variant="success">Played</StatusBadge>
+            <Badge tone="success">Played</Badge>
           </Show>
           <Show when={props.episode.favorite}>
-            <StatusBadge variant="success">Favorite</StatusBadge>
+            <Badge tone="success">Favorite</Badge>
           </Show>
           <Show when={formatRuntime(props.episode.runtimeSeconds)}>
             {(runtime) => <span class={styles.muted}>{runtime()}</span>}
@@ -552,9 +552,9 @@ function EpisodeRow(props: {
             </span>
           </Show>
         </div>
-        <a href={`/library/items/${props.episode.id}`} class={styles.episodeLink}>
+        <Link href={`/library/items/${props.episode.id}`} class={styles.episodeLink}>
           {props.episode.name}
-        </a>
+        </Link>
       </div>
 
       <div class={styles.actionCell}>
@@ -564,12 +564,10 @@ function EpisodeRow(props: {
           class={styles.episodeButton}
           disabled={props.disabled}
           onClick={props.onPlay}
-          leadingIcon={
-            <Show when={props.busy} fallback={<Play class={styles.playIcon} />}>
-              <RefreshCw class={`${styles.icon4} ${styles.spinner}`} />
-            </Show>
-          }
         >
+          <Show when={props.busy} fallback={<Play class={styles.playIcon} />}>
+            <RefreshCw class={`${styles.icon4} ${styles.spinner}`} />
+          </Show>
           {props.busy ? 'Loading...' : hasResume() ? 'Resume' : 'Play'}
         </Button>
       </div>
@@ -606,7 +604,7 @@ function SeasonEpisodesSkeleton() {
       <div class={styles.fadeList}>
         <For each={[0, 1, 2]}>
           {() => (
-            <Card variant="filled" surfaceTint={false} class={styles.episodeCard}>
+            <Card variant="filled" class={styles.episodeCard}>
               <div class={styles.skeletonEpisodeImage} />
               <div class={styles.episodeCopy}>
                 <div class={styles.episodeMeta}>

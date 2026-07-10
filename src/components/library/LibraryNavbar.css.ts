@@ -1,87 +1,103 @@
-import { style } from '@vanilla-extract/css';
-
-import { sprinkles } from '../../styles/sprinkles.css';
-import { vars } from '../../styles/vars.css';
+import { atomic } from '@jellypilot/atomic-css';
+import { globalStyle, style } from '@vanilla-extract/css';
 
 export const root = style([
-  sprinkles({
+  atomic({
     position: 'sticky',
-    borderRadius: '2xl',
-    boxShadow: 'xl',
-    zIndex: '100',
+    rounded: '2xl',
+    z: '100',
   }),
   {
     backdropFilter: 'blur(12px)',
-    background: `color-mix(in srgb, ${vars.color.surfaceContainerLow} 75%, transparent)`,
-    border: `1px solid ${vars.color.outlineVariant}`,
-    top: vars.space['2'],
+    boxShadow: 'var(--jellypilot-shadow-xl)',
+    background:
+      'color-mix(in srgb, var(--jellypilot-color-surface-container-low) 75%, transparent)',
+    border: `1px solid var(--jellypilot-color-outline-variant)`,
+    top: 'var(--jellypilot-space-2)',
   },
 ]);
 
-export const inner = sprinkles({
-  display: 'flex',
-  flexDirection: 'row',
-  flexWrap: 'wrap',
-  alignItems: 'center',
-  justifyContent: 'space-between',
-  gap: { base: '2', sm: '4' },
-});
-
-export const segments = sprinkles({
-  position: 'relative',
-  display: 'flex',
-  minWidth: '0',
-  flexWrap: 'wrap',
-  gap: '1',
-  borderRadius: 'xl',
-  p: '1',
-});
-
-export const indicator = style({
-  background: vars.color.secondaryContainer,
-  borderRadius: vars.borderRadius.lg,
-  bottom: 'var(--bottom)',
-  boxShadow: vars.shadow.sm,
-  height: 'var(--height)',
-  left: 'var(--left)',
-  position: 'absolute',
-  right: 'var(--right)',
-  top: 'var(--top)',
-  width: 'var(--width)',
-});
-
-export const item = style([
-  sprinkles({
-    position: 'relative',
-    display: 'inlineFlex',
-    height: '10',
-    alignItems: 'center',
-    justifyContent: 'center',
-    borderRadius: 'lg',
-    px: '4',
-    color: 'onSurfaceVariant',
-    fontSize: '14',
-    lineHeight: '20',
-    fontWeight: 'bold',
-    zIndex: '10',
+export const inner = style([
+  atomic({
+    display: 'flex',
+    items: 'center',
+    justify: 'between',
+    wrap: 'wrap',
   }),
   {
-    cursor: 'pointer',
-    transitionProperty: 'color',
-    selectors: {
-      '&:hover': {
-        color: vars.color.onSurface,
-      },
-      '&[data-state="checked"]': {
-        color: vars.color.onSecondaryContainer,
-      },
-      '&[data-disabled]': {
-        cursor: 'not-allowed',
-        opacity: 0.5,
+    flexDirection: 'row',
+    gap: 'var(--jellypilot-space-2)',
+    '@media': {
+      'screen and (min-width: 640px)': {
+        gap: 'var(--jellypilot-space-4)',
       },
     },
   },
 ]);
+
+export const segments = style([
+  atomic({
+    position: 'relative',
+    display: 'flex',
+    rounded: 'xl',
+  }),
+  {
+    gap: 'var(--jellypilot-space-1)',
+    minWidth: '0',
+    flexWrap: 'wrap',
+    padding: 'var(--jellypilot-space-1)',
+  },
+]);
+
+globalStyle(`${segments} [data-part="item"]`, {
+  position: 'relative',
+  display: 'inline-flex',
+  minHeight: 'var(--jellypilot-space-10)',
+  alignItems: 'center',
+  justifyContent: 'center',
+  borderRadius: 'var(--jellypilot-radius-lg)',
+  paddingInline: 'var(--jellypilot-space-4)',
+  color: 'var(--jellypilot-color-on-surface-variant)',
+  fontSize: 'var(--jellypilot-font-size-14)',
+  lineHeight: 'var(--jellypilot-line-height-20)',
+  fontWeight: 'var(--jellypilot-font-weight-bold)',
+  cursor: 'pointer',
+  transitionProperty: 'background-color, color',
+});
+
+globalStyle(`${segments} [data-part="item"]:hover`, {
+  color: 'var(--jellypilot-color-on-surface)',
+});
+
+globalStyle(`${segments} [data-part="item"][data-selected="true"]`, {
+  color: 'var(--jellypilot-color-on-secondary-container)',
+  background: 'var(--jellypilot-color-surface-container-low)',
+  boxShadow: 'var(--jellypilot-shadow-sm)',
+});
+
+globalStyle(`${segments} [data-part="item"][data-disabled="true"]`, {
+  cursor: 'not-allowed',
+  opacity: 0.5,
+});
+
+globalStyle(`${segments} [data-part="item"]:focus-visible`, {
+  outline: '2px solid var(--jellypilot-color-secondary)',
+  outlineOffset: '2px',
+});
+
+globalStyle(`${segments} [data-part="item"][data-selected="true"]:focus-visible`, {
+  outline: '2px solid var(--jellypilot-color-secondary)',
+});
+
+export const indicator = style({});
+
+export const item = style({
+  selectors: {
+    '&[data-state="checked"]': {
+      color: 'var(--jellypilot-color-on-secondary-container)',
+    },
+  },
+});
 
 export const homeIcon = style({
   height: '1.125rem',
@@ -100,9 +116,11 @@ export const srOnly = style({
   width: '1px',
 });
 
-export const portalTarget = sprinkles({
-  display: 'flex',
-  minWidth: '0',
-  flexGrow: '1',
-  justifyContent: 'flex-end',
-});
+export const portalTarget = style([
+  atomic({
+    display: 'flex',
+    minWidth: '0',
+    flexGrow: '1',
+    justify: 'flex-end',
+  }),
+]);

@@ -1,5 +1,5 @@
 import type { ThemePreference } from '@bindings';
-import { Dialog } from '@jellypilot/ui';
+import { Button, Dialog } from '@jellypilot/ui';
 import { useNavigate } from '@tanstack/solid-router';
 import { Settings, X } from 'lucide-solid';
 import { createSignal } from 'solid-js';
@@ -7,7 +7,6 @@ import { createSignal } from 'solid-js';
 import { useConfigCoordinator } from '../effects/configContext';
 import OperationsConsole from './OperationsConsole';
 import { useToast } from './ToastProvider';
-import { Button } from './ui';
 
 import * as styles from './SettingsModal.css';
 

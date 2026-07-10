@@ -1,83 +1,100 @@
+import { atomic } from '@jellypilot/atomic-css';
 import { style } from '@vanilla-extract/css';
 
-import { sprinkles } from '../styles/sprinkles.css';
-import { vars } from '../styles/vars.css';
-
-const mix = (color: string, opacity: number) =>
-  `color-mix(in srgb, ${color} ${Math.round(opacity * 100)}%, transparent)`;
+const colors = {
+  background: 'var(--jellypilot-color-surface-container)',
+  backgroundRaised: 'var(--jellypilot-color-surface-container-low)',
+  border: 'var(--jellypilot-color-outline-variant)',
+  borderStrong: 'var(--jellypilot-color-outline)',
+  onSurface: 'var(--jellypilot-color-on-surface)',
+  onSurfaceVariant: 'var(--jellypilot-color-on-surface-variant)',
+  primary: 'var(--jellypilot-color-primary)',
+  secondary: 'var(--jellypilot-color-secondary)',
+  secondaryContainer: 'var(--jellypilot-color-secondary-container)',
+  error: 'var(--jellypilot-color-error)',
+  errorContainer: 'var(--jellypilot-color-error-container)',
+};
 
 export const card = style([
-  sprinkles({
-    position: 'relative',
+  atomic({
     mx: 'auto',
+    position: 'relative',
     overflow: 'hidden',
-    boxShadow: '2xl',
+    rounded: '3xl',
   }),
+  {
+    boxShadow: 'var(--jellypilot-shadow-2xl)',
+    background: colors.background,
+    border: `1px solid ${colors.border}`,
+  },
 ]);
 
 export const accent = style({
-  background: `linear-gradient(90deg, transparent, ${mix(vars.color.primary, 0.55)}, transparent)`,
-  height: '2px',
+  background: colors.primary,
+  height: '0.125rem',
   left: 0,
   position: 'absolute',
   top: 0,
   width: '100%',
 });
 
-export const stack7 = style({
+export const stack7 = atomic({
   display: 'grid',
-  gap: vars.space['7'],
+  gap: 7,
 });
 
 export const sectionTitle = style([
-  sprinkles({
+  atomic({
     display: 'flex',
     alignItems: 'center',
-    gap: '2_5',
-    color: 'onSurface',
-    fontSize: '24',
-    lineHeight: '32',
+    color: 'var(--jellypilot-color-on-surface)',
+    fontSize: 'var(--jellypilot-font-size-24)',
+    lineHeight: 32,
     fontWeight: 'bold',
   }),
   {
-    fontFamily: vars.font.display,
+    fontFamily: 'var(--jellypilot-font-display)',
   },
 ]);
 
 export const titleBar = style({
-  background: vars.color.primary,
-  borderRadius: vars.borderRadius.md,
-  height: vars.space['5'],
-  width: vars.space['1_5'],
+  background: colors.primary,
+  borderRadius: 'var(--jellypilot-radius-md)',
+  height: 'var(--jellypilot-space-5)',
+  width: 'var(--jellypilot-space-1_5)',
 });
 
-export const description = sprinkles({
-  mt: '1_5',
-  color: 'onSurfaceVariant',
-  fontSize: '14',
-  lineHeight: '20',
+export const description = atomic({
+  marginTop: 1.5,
+  color: 'var(--jellypilot-color-on-surface-variant)',
+  fontSize: 'var(--jellypilot-font-size-14)',
+  lineHeight: 20,
 });
 
-export const serverGrid = style({
-  display: 'grid',
-  gap: vars.space['3'],
-  gridTemplateColumns: '1fr',
-  '@media': {
-    'screen and (min-width: 640px)': {
-      gridTemplateColumns: 'auto minmax(0, 1fr)',
-    },
-  },
-});
-
-export const segmented = style([
-  sprinkles({
+export const serverGrid = style([
+  atomic({
     display: 'grid',
-    borderRadius: '2xl',
-    p: '1',
+    gap: 3,
+    gridTemplateColumns: '1fr',
   }),
   {
-    background: mix(vars.color.surfaceContainerHigh, 0.4),
-    border: `1px solid ${vars.color.outlineVariant}`,
+    '@media': {
+      'screen and (min-width: 640px)': {
+        gridTemplateColumns: 'auto minmax(0, 1fr)',
+      },
+    },
+  },
+]);
+
+export const segmented = style([
+  atomic({
+    display: 'grid',
+    rounded: '2xl',
+    p: 1,
+  }),
+  {
+    background: colors.backgroundRaised,
+    border: `1px solid ${colors.border}`,
   },
 ]);
 
@@ -85,17 +102,13 @@ export const segmented2 = style({
   gridTemplateColumns: 'repeat(2, minmax(0, 1fr))',
 });
 
-export const segmented1 = style({
-  gridTemplateColumns: '1fr',
-});
-
 export const segment = style([
-  sprinkles({
+  atomic({
     borderRadius: 'xl',
-    px: '4',
-    py: '3',
-    fontSize: '14',
-    lineHeight: '20',
+    px: 4,
+    py: 3,
+    fontSize: 'var(--jellypilot-font-size-14)',
+    lineHeight: 20,
     fontWeight: 'semibold',
   }),
   {
@@ -104,16 +117,7 @@ export const segment = style([
     cursor: 'pointer',
     letterSpacing: 0,
     textTransform: 'uppercase',
-    transitionDuration: vars.duration['300'],
-    transitionProperty: 'background-color, color, box-shadow, transform',
     selectors: {
-      '&:hover': {
-        background: mix(vars.color.surfaceContainerHighest, 0.4),
-        color: vars.color.onSurface,
-      },
-      '&:active': {
-        transform: 'scale(0.96)',
-      },
       '&:disabled': {
         cursor: 'not-allowed',
         opacity: 0.5,
@@ -123,14 +127,12 @@ export const segment = style([
 ]);
 
 export const segmentIdle = style({
-  color: vars.color.onSurfaceVariant,
+  color: colors.onSurfaceVariant,
 });
 
 export const segmentSelected = style({
-  background: `linear-gradient(90deg, ${vars.color.primary}, ${vars.color.primaryGradientEnd})`,
-  boxShadow: `0 4px 8px ${mix(vars.color.primary, 0.25)}`,
-  color: vars.color.onPrimary,
-  fontWeight: vars.fontWeight.bold,
+  background: colors.primary,
+  color: 'var(--jellypilot-color-on-primary)',
 });
 
 export const srOnly = style({
@@ -146,371 +148,304 @@ export const srOnly = style({
 });
 
 export const preview = style([
-  sprinkles({
+  atomic({
     position: 'relative',
     overflow: 'hidden',
     borderRadius: '2xl',
-    p: '4',
+    p: 4,
   }),
   {
-    backdropFilter: 'blur(4px)',
-    background: mix(vars.color.surfaceContainerLowest, 0.4),
-    border: `1px solid ${vars.color.outlineVariant}`,
+    background: colors.backgroundRaised,
+    border: `1px solid ${colors.border}`,
   },
 ]);
 
 export const previewStripe = style({
-  background: vars.color.secondary,
+  background: colors.secondary,
   bottom: 0,
   left: 0,
   position: 'absolute',
   top: 0,
-  width: '3px',
+  width: '0.1875rem',
 });
 
 export const overline = style([
-  sprinkles({
-    fontSize: '11',
-    lineHeight: '16',
+  atomic({
+    fontSize: 'var(--jellypilot-font-size-11)',
+    lineHeight: 16,
     fontWeight: 'bold',
   }),
   {
-    color: mix(vars.color.onSurfaceVariant, 0.9),
+    color: colors.onSurfaceVariant,
     letterSpacing: '0.08em',
     textTransform: 'uppercase',
   },
 ]);
 
 export const previewValue = style([
-  sprinkles({
-    mt: '1',
-    color: 'onSurfaceVariant',
-    fontSize: '14',
-    lineHeight: '20',
+  atomic({
+    marginTop: 1,
+    color: 'var(--jellypilot-color-on-surface-variant)',
+    fontSize: 'var(--jellypilot-font-size-14)',
+    lineHeight: 20,
   }),
   {
-    fontFamily: vars.font.mono,
+    fontFamily: 'var(--jellypilot-font-mono)',
     overflowWrap: 'anywhere',
   },
 ]);
 
 export const previewReady = style({
-  color: vars.color.secondary,
-  filter: 'drop-shadow(0 0 8px rgba(129, 140, 248, 0.15))',
-  fontWeight: vars.fontWeight.semibold,
+  color: colors.secondary,
+  fontWeight: 'var(--jellypilot-font-weight-semibold)',
 });
 
 export const previewEmpty = style({
-  color: vars.color.warning,
-});
-
-export const fieldBlock = style({
-  display: 'block',
+  color: 'var(--jellypilot-color-warning)',
 });
 
 export const label = style([
-  sprinkles({
+  atomic({
     display: 'block',
-    mb: '1_5',
-    color: 'onSurfaceVariant',
-    fontSize: '12',
-    lineHeight: '16',
+    marginBottom: 1.5,
+    color: 'var(--jellypilot-color-on-surface-variant)',
+    fontSize: 'var(--jellypilot-font-size-12)',
+    lineHeight: 16,
     fontWeight: 'bold',
   }),
-  {
-    letterSpacing: '0.05em',
-    textTransform: 'uppercase',
-  },
 ]);
 
-export const tabsList = style({
-  marginBottom: vars.space['6'],
-});
-
 export const quickPanel = style([
-  sprinkles({
+  atomic({
     position: 'relative',
-    overflow: 'hidden',
     borderRadius: '3xl',
-    p: '6',
+    p: 6,
     textAlign: 'center',
+    marginTop: 2,
+    display: 'grid',
+    gap: 3,
   }),
   {
-    backdropFilter: 'blur(4px)',
-    background: mix(vars.color.secondaryContainer, 0.2),
-    border: `1px solid ${mix(vars.color.secondary, 0.25)}`,
-    transitionProperty: 'color',
+    background: colors.secondaryContainer,
+    border: `1px solid ${colors.border}`,
   },
 ]);
 
 export const quickPanelGlow = style({
-  background: `linear-gradient(to bottom, ${mix(vars.color.secondary, 0.05)}, transparent)`,
-  inset: 0,
-  pointerEvents: 'none',
-  position: 'absolute',
+  display: 'none',
 });
 
 export const radar = style([
-  sprinkles({
+  atomic({
     position: 'relative',
     display: 'flex',
     alignItems: 'center',
     justifyContent: 'center',
     mx: 'auto',
-    mb: '4',
-    width: '20',
-    height: '20',
+    mb: 4,
+    width: 20,
+    height: 20,
     borderRadius: 'full',
   }),
   {
-    background: mix(vars.color.secondary, 0.05),
-    border: `1px solid ${mix(vars.color.secondary, 0.2)}`,
+    border: `1px solid ${colors.borderStrong}`,
   },
 ]);
 
 export const radarRing = style({
-  animation: 'radar-pulse 2.2s cubic-bezier(0.2, 0.8, 0.2, 1) infinite',
-  border: `1px solid ${mix(vars.color.secondary, 0.4)}`,
-  borderRadius: vars.borderRadius.full,
-  inset: 0,
   position: 'absolute',
+  inset: 0,
+  borderRadius: '50%',
+  border: `1px solid ${colors.borderStrong}`,
 });
 
 export const radarRing2 = style({
-  animationDelay: '0.7s',
-  borderColor: mix(vars.color.secondary, 0.3),
+  inset: '0.25rem',
+  opacity: 0.65,
 });
 
 export const radarRing3 = style({
-  animationDelay: '1.4s',
-  borderColor: mix(vars.color.secondary, 0.2),
+  inset: '0.5rem',
+  opacity: 0.4,
 });
 
 export const towerIcon = style({
-  color: vars.color.secondary,
-  filter: 'drop-shadow(0 0 8px rgba(129, 140, 248, 0.4))',
-  height: vars.space['9'],
-  width: vars.space['9'],
+  color: colors.secondary,
+  height: 'var(--jellypilot-space-9)',
+  width: 'var(--jellypilot-space-9)',
 });
 
 export const pulse = style({
-  animation: 'pulse 1.8s cubic-bezier(0.4, 0, 0.6, 1) infinite',
+  opacity: 0.85,
 });
 
-export const quickText = sprinkles({
-  color: 'onSecondaryContainer',
-  fontSize: '14',
-  lineHeight: '20',
+export const quickText = atomic({
+  color: 'var(--jellypilot-color-on-secondary-container)',
+  fontSize: 'var(--jellypilot-font-size-14)',
+  lineHeight: 20,
   fontWeight: 'medium',
 });
 
 export const quickHint = style([
-  sprinkles({
-    mt: '2',
-    fontSize: '12',
-    lineHeight: '16',
+  atomic({
+    marginTop: 2,
+    fontSize: 'var(--jellypilot-font-size-12)',
+    lineHeight: 16,
   }),
   {
-    color: mix(vars.color.onSurfaceVariant, 0.8),
+    color: colors.onSurfaceVariant,
   },
 ]);
 
 export const codeBox = style([
-  sprinkles({
-    display: 'inlineFlex',
+  atomic({
+    display: 'inline-flex',
     flexDirection: 'column',
     alignItems: 'center',
     justifyContent: 'center',
-    mt: '6',
+    marginTop: 6,
     borderRadius: '2xl',
-    px: '6',
-    py: '3_5',
-    boxShadow: 'inner',
+    px: 6,
+    py: 3.5,
+    lineHeight: 'none',
   }),
   {
-    background: mix(vars.color.surfaceContainerLowest, 0.8),
-    border: `1px solid ${vars.color.outlineVariant}`,
+    border: `1px solid ${colors.border}`,
+    background: colors.background,
   },
 ]);
 
 export const codeLabel = style([
-  sprinkles({
-    mb: '1',
-    fontSize: '10',
+  atomic({
+    marginBottom: 1,
+    fontSize: 'var(--jellypilot-font-size-10)',
+    lineHeight: 1.2,
     fontWeight: 'bold',
   }),
   {
-    color: mix(vars.color.onSurfaceVariant, 0.8),
+    color: colors.onSurfaceVariant,
     letterSpacing: '0.2em',
     textTransform: 'uppercase',
   },
 ]);
 
 export const code = style({
-  color: vars.color.secondary,
-  filter: 'drop-shadow(0 0 10px rgba(129, 140, 248, 0.55))',
-  fontFamily: vars.font.mono,
-  fontSize: vars.fontSize['36'],
+  color: colors.secondary,
+  fontFamily: 'var(--jellypilot-font-mono)',
+  fontSize: 'var(--jellypilot-font-size-36)',
   fontVariantNumeric: 'tabular-nums',
-  fontWeight: vars.fontWeight.bold,
+  fontWeight: 'var(--jellypilot-font-weight-bold)',
   letterSpacing: '0.25em',
-  lineHeight: vars.lineHeight['44'],
-  paddingLeft: '0.25em',
+  lineHeight: 'var(--jellypilot-line-height-44)',
+  paddingLeft: '0.25rem',
 });
 
 export const waiting = style([
-  sprinkles({
+  atomic({
     display: 'flex',
     alignItems: 'center',
     justifyContent: 'center',
-    gap: '2',
-    mt: '5',
-    color: 'secondary',
-    fontSize: '12',
-    lineHeight: '16',
+    gap: 2,
+    marginTop: 5,
+    color: 'var(--jellypilot-color-secondary)',
+    fontSize: 'var(--jellypilot-font-size-12)',
+    lineHeight: 16,
     fontWeight: 'bold',
   }),
   {
-    animation: 'pulse 1.8s cubic-bezier(0.4, 0, 0.6, 1) infinite',
-    letterSpacing: '0.05em',
     textTransform: 'uppercase',
+    letterSpacing: '0.05em',
   },
 ]);
 
 export const waitingDot = style({
-  background: vars.color.secondary,
-  borderRadius: vars.borderRadius.full,
-  boxShadow: '0 0 8px #818cf8',
-  height: vars.space['2'],
-  width: vars.space['2'],
+  background: colors.secondary,
+  borderRadius: 'var(--jellypilot-radius-full)',
+  height: 'var(--jellypilot-space-2)',
+  width: 'var(--jellypilot-space-2)',
 });
 
-export const stack4 = style({
+export const stack4 = atomic({
   display: 'grid',
-  gap: vars.space['4'],
+  gap: 4,
 });
 
 export const remember = style([
-  sprinkles({
-    display: 'inlineFlex',
+  atomic({
+    display: 'inline-flex',
     alignItems: 'center',
-    gap: '2_5',
-    mt: '2_5',
-    color: 'onSurface',
-    fontSize: '14',
-    lineHeight: '20',
+    gap: 2.5,
+    marginTop: 2.5,
+    color: 'var(--jellypilot-color-on-surface)',
+    fontSize: 'var(--jellypilot-font-size-14)',
+    lineHeight: 20,
   }),
   {
-    cursor: 'pointer',
-    transitionProperty: 'opacity',
     userSelect: 'none',
-    verticalAlign: 'top',
-    selectors: {
-      '&:disabled': {
-        cursor: 'not-allowed',
-        opacity: 0.5,
-      },
-    },
   },
 ]);
 
-export const checkbox = style([
-  sprinkles({
-    display: 'inlineFlex',
-    alignItems: 'center',
-    justifyContent: 'center',
-    flexShrink: '0',
-    color: 'onPrimary',
-    fontSize: '11',
-    lineHeight: 'none',
-    borderRadius: 'lg',
-  }),
-  {
-    background: vars.color.surfaceContainerHigh,
-    border: `1px solid ${vars.color.outline}`,
-    height: '1.375rem',
-    transitionDuration: vars.duration['200'],
-    transitionProperty: 'background-color, border-color, box-shadow',
-    width: '1.375rem',
-    selectors: {
-      '&:hover': {
-        borderColor: mix(vars.color.primary, 0.6),
-      },
-      '&[data-state="checked"], &[data-state="indeterminate"]': {
-        background: `linear-gradient(135deg, ${vars.color.primary}, ${vars.color.primaryGradientEnd})`,
-        borderColor: vars.color.primary,
-      },
-      '&[data-focus-visible]': {
-        boxShadow: `0 0 0 2px ${mix(vars.color.primary, 0.5)}`,
-        outline: 'none',
-      },
-    },
-  },
-]);
-
-export const checkboxIndicator = sprinkles({
-  display: 'flex',
-  alignItems: 'center',
-  justifyContent: 'center',
-  fontWeight: 'black',
+export const textInput = atomic({
+  width: 'full',
 });
 
-export const checkboxLabel = style({
-  cursor: 'pointer',
-  fontWeight: vars.fontWeight.medium,
-  transitionProperty: 'color',
-  userSelect: 'none',
-  selectors: {
-    '&:hover': {
-      color: vars.color.onSurfaceVariant,
-    },
-  },
+export const fullWidth = atomic({
+  width: 'full',
+});
+
+export const icon5 = style({
+  height: 'var(--jellypilot-space-5)',
+  width: 'var(--jellypilot-space-5)',
+});
+
+export const spinner = style({
+  animation: 'spin 1s linear infinite',
 });
 
 export const alert = style([
-  sprinkles({
+  atomic({
     display: 'flex',
     alignItems: 'flex-start',
-    gap: '3',
+    gap: 3,
     borderRadius: '2xl',
-    p: '4',
-    color: 'onErrorContainer',
+    p: 4,
+    color: 'var(--jellypilot-color-on-error)',
   }),
   {
-    background: mix(vars.color.errorContainer, 0.2),
-    border: `1px solid ${mix(vars.color.error, 0.3)}`,
+    background: colors.errorContainer,
+    border: `1px solid ${colors.error}`,
   },
 ]);
 
-export const alertIcon = sprinkles({
-  mt: '0_5',
-  width: '5',
-  height: '5',
-  flexShrink: '0',
-  color: 'error',
+export const alertIcon = atomic({
+  marginTop: 0.5,
+  width: 5,
+  height: 5,
+  flexShrink: 0,
+  color: 'var(--jellypilot-color-error)',
 });
 
-export const alertTitle = sprinkles({
-  color: 'error',
-  fontSize: '14',
-  lineHeight: '20',
+export const alertTitle = atomic({
+  color: 'var(--jellypilot-color-error)',
+  fontSize: 'var(--jellypilot-font-size-14)',
+  lineHeight: 20,
   fontWeight: 'bold',
 });
 
-export const alertMessage = sprinkles({
-  mt: '0_5',
-  color: 'onSurfaceVariant',
-  fontSize: '14',
-  lineHeight: '20',
+export const alertMessage = atomic({
+  marginTop: 0.5,
+  color: 'var(--jellypilot-color-on-surface-variant)',
+  fontSize: 'var(--jellypilot-font-size-14)',
+  lineHeight: 20,
 });
 
-export const shell = sprinkles({
+export const shell = atomic({
   position: 'relative',
   display: 'flex',
   alignItems: 'center',
   justifyContent: 'center',
   overflowY: 'auto',
-  py: '10',
+  paddingY: 10,
 });
 
 export const main = style({
@@ -521,94 +456,88 @@ export const main = style({
 });
 
 export const hero = style([
-  sprinkles({
+  atomic({
     position: 'relative',
-    mb: '8',
+    marginBottom: 8,
     textAlign: 'center',
   }),
 ]);
 
 export const heroIconWrap = style([
-  sprinkles({
+  atomic({
     position: 'relative',
     display: 'flex',
     alignItems: 'center',
     justifyContent: 'center',
-    mx: 'auto',
-    mb: '6',
-    width: '24',
-    height: '24',
+    marginX: 'auto',
+    marginBottom: 6,
+    width: 24,
+    height: 24,
     borderRadius: 'full',
   }),
   {
-    background: mix(vars.color.primary, 0.05),
-    border: `1px solid ${mix(vars.color.primary, 0.2)}`,
-    boxShadow: '0 0 30px rgba(79, 70, 229, 0.2)',
+    border: `1px solid ${colors.borderStrong}`,
+    background: colors.background,
   },
 ]);
 
 export const heroRing = style({
-  animation: 'ping 1s cubic-bezier(0, 0, 0.2, 1) infinite',
-  border: `1px solid ${mix(vars.color.primary, 0.3)}`,
-  borderRadius: vars.borderRadius.full,
+  border: `1px solid ${colors.border}`,
+  borderRadius: 'var(--jellypilot-radius-full)',
   inset: 0,
-  opacity: 0.25,
   position: 'absolute',
 });
 
 export const heroPulseRing = style({
-  animation: 'pulse 1.8s cubic-bezier(0.4, 0, 0.6, 1) infinite',
-  border: `1px solid ${mix(vars.color.secondary, 0.25)}`,
-  borderRadius: vars.borderRadius.full,
-  inset: vars.space['2'],
+  border: `1px solid ${colors.border}`,
+  borderRadius: 'var(--jellypilot-radius-full)',
+  inset: 'var(--jellypilot-space-2)',
   position: 'absolute',
 });
 
 export const heroOrbit = style({
-  animation: 'spin 60s linear infinite',
-  border: `1px dashed ${mix(vars.color.primary, 0.1)}`,
-  borderRadius: vars.borderRadius.full,
-  inset: vars.space['4'],
+  border: `1px dashed ${colors.border}`,
+  borderRadius: 'var(--jellypilot-radius-full)',
+  inset: 'var(--jellypilot-space-4)',
   position: 'absolute',
 });
 
 export const heroIcon = style({
-  color: vars.color.primary,
-  filter: 'drop-shadow(0 0 12px rgba(79, 70, 229, 0.55))',
-  height: vars.space['10'],
-  width: vars.space['10'],
+  color: colors.primary,
+  height: 'var(--jellypilot-space-10)',
+  width: 'var(--jellypilot-space-10)',
 });
 
 export const badge = style([
-  sprinkles({
-    display: 'inlineFlex',
+  atomic({
+    display: 'inline-flex',
     alignItems: 'center',
-    gap: '2_5',
-    mb: '3_5',
+    gap: 2.5,
+    marginBottom: 3.5,
     borderRadius: 'full',
-    px: '3_5',
-    py: '1',
+    px: 3.5,
+    py: 1,
   }),
   {
-    background: mix(vars.color.secondary, 0.05),
-    border: `1px solid ${mix(vars.color.secondary, 0.2)}`,
+    background: colors.secondaryContainer,
+    border: `1px solid ${colors.border}`,
   },
 ]);
 
 export const badgeDot = style({
   animation: 'pulse 1.8s cubic-bezier(0.4, 0, 0.6, 1) infinite',
-  background: vars.color.secondary,
-  borderRadius: vars.borderRadius.full,
-  boxShadow: '0 0 8px #818cf8',
-  height: vars.space['1_5'],
-  width: vars.space['1_5'],
+  background: colors.secondary,
+  borderRadius: 'var(--jellypilot-radius-full)',
+  height: 'var(--jellypilot-space-1_5)',
+  width: 'var(--jellypilot-space-1_5)',
 });
 
 export const badgeText = style([
-  sprinkles({
-    color: 'secondary',
-    fontSize: '10',
+  atomic({
+    color: 'var(--jellypilot-color-secondary)',
+    fontSize: 'var(--jellypilot-font-size-10)',
     fontWeight: 'bold',
+    gap: 2,
   }),
   {
     letterSpacing: '0.18em',
@@ -617,27 +546,26 @@ export const badgeText = style([
 ]);
 
 export const appTitle = style({
-  color: vars.color.onSurface,
-  fontFamily: vars.font.display,
-  fontSize: vars.fontSize['45'],
-  fontWeight: vars.fontWeight.bold,
-  letterSpacing: 0,
-  lineHeight: vars.lineHeight['52'],
+  color: colors.onSurface,
+  fontFamily: 'var(--jellypilot-font-display)',
+  fontSize: 'var(--jellypilot-font-size-45)',
+  fontWeight: 'var(--jellypilot-font-weight-bold)',
+  lineHeight: 'var(--jellypilot-line-height-52)',
 });
 
 export const appDescription = style([
-  sprinkles({
-    mx: 'auto',
-    mt: '2',
-    color: 'onSurfaceVariant',
-    fontSize: '16',
-    lineHeight: '24',
+  atomic({
+    marginX: 'auto',
+    marginTop: 2,
+    color: 'var(--jellypilot-color-on-surface-variant)',
+    fontSize: 'var(--jellypilot-font-size-16)',
+    lineHeight: 24,
   }),
   {
     maxWidth: '28rem',
   },
 ]);
 
-export const footer = sprinkles({
-  mt: '8',
+export const footer = atomic({
+  marginTop: 8,
 });

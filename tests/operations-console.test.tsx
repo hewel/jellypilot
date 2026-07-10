@@ -162,7 +162,7 @@ test('operations console loads intro skipper mode from config', async () => {
   const cleanup = renderConsole();
 
   await screen.findByRole('heading', { name: 'Connection' });
-  expect(screen.getByRole('button', { name: /Automatic/ })).toHaveAttribute('aria-pressed', 'true');
+  expect(screen.getByRole('radio', { name: /Automatic/ })).toHaveAttribute('aria-checked', 'true');
 
   cleanup();
 });
@@ -187,7 +187,7 @@ test('operations console autosaves changed intro skipper mode', async () => {
   const cleanup = renderConsole();
 
   await waitFor(() => expect(screen.getByDisplayValue('JellyPilot Test')).toBeVisible());
-  fireEvent.click(screen.getByRole('button', { name: /Manual/ }));
+  fireEvent.click(screen.getByRole('radio', { name: /Manual/ }));
 
   await waitFor(() => expect(configSet).toHaveBeenCalledTimes(1));
   expect(configSet).toHaveBeenCalledWith(expect.objectContaining({ introSkipperMode: 'manual' }));
@@ -203,16 +203,16 @@ test('intro skip mode toggles optimistically', async () => {
   const cleanup = renderConsole();
 
   await screen.findByDisplayValue('JellyPilot Test');
-  const automatic = screen.getByRole('button', { name: /Automatic/ });
-  const manual = screen.getByRole('button', { name: /Manual/ });
+  const automatic = screen.getByRole('radio', { name: /Automatic/ });
+  const manual = screen.getByRole('radio', { name: /Manual/ });
 
-  expect(automatic).toHaveAttribute('aria-pressed', 'true');
-  expect(manual).toHaveAttribute('aria-pressed', 'false');
+  expect(automatic).toHaveAttribute('aria-checked', 'true');
+  expect(manual).toHaveAttribute('aria-checked', 'false');
 
   fireEvent.click(manual);
 
-  expect(automatic).toHaveAttribute('aria-pressed', 'false');
-  expect(manual).toHaveAttribute('aria-pressed', 'true');
+  expect(automatic).toHaveAttribute('aria-checked', 'false');
+  expect(manual).toHaveAttribute('aria-checked', 'true');
   expect(screen.getAllByText('Saving preference…').length).toBeGreaterThan(0);
   await waitFor(() =>
     expect(configSet).toHaveBeenCalledWith(expect.objectContaining({ introSkipperMode: 'manual' })),
@@ -229,15 +229,15 @@ test('intro skip mode rolls back and shows inline error on save failure', async 
   const cleanup = renderConsole();
 
   await screen.findByDisplayValue('JellyPilot Test');
-  const automatic = screen.getByRole('button', { name: /Automatic/ });
-  const manual = screen.getByRole('button', { name: /Manual/ });
+  const automatic = screen.getByRole('radio', { name: /Automatic/ });
+  const manual = screen.getByRole('radio', { name: /Manual/ });
 
   fireEvent.click(manual);
 
-  expect(manual).toHaveAttribute('aria-pressed', 'true');
+  expect(manual).toHaveAttribute('aria-checked', 'true');
   await waitFor(() => expect(screen.getAllByText('Config write failed').length).toBeGreaterThan(0));
-  expect(automatic).toHaveAttribute('aria-pressed', 'true');
-  expect(manual).toHaveAttribute('aria-pressed', 'false');
+  expect(automatic).toHaveAttribute('aria-checked', 'true');
+  expect(manual).toHaveAttribute('aria-checked', 'false');
 
   cleanup();
 });
@@ -246,14 +246,14 @@ test('intro skip mode reports rejected save commands through status and toast', 
   const cleanup = renderConsole();
 
   await screen.findByDisplayValue('JellyPilot Test');
-  fireEvent.click(screen.getByRole('button', { name: /Manual/ }));
+  fireEvent.click(screen.getByRole('radio', { name: /Manual/ }));
 
   await waitFor(() => expect(screen.getAllByText('Disk unavailable').length).toBeGreaterThan(0));
 
   cleanup();
 });
 
-test('operations console autosaves changed intro skip key', async () => {
+test('operations console autosaves all shortcut keys', async () => {
   const configSet = rstest.spyOn(commands, 'configSet').mockResolvedValue({
     data: null,
     status: 'ok',
@@ -268,6 +268,20 @@ test('operations console autosaves changed intro skip key', async () => {
 
   await waitFor(() =>
     expect(configSet).toHaveBeenCalledWith(expect.objectContaining({ keybindIntroSkip: 'i' })),
+  );
+
+  const nextKey = screen.getByDisplayValue('Shift+>');
+  fireEvent.input(nextKey, { target: { value: 'Alt+N' } });
+  fireEvent.blur(nextKey);
+  await waitFor(() =>
+    expect(configSet).toHaveBeenLastCalledWith(expect.objectContaining({ keybindNext: 'Alt+N' })),
+  );
+
+  const previousKey = screen.getByDisplayValue('Shift+<');
+  fireEvent.input(previousKey, { target: { value: 'Alt+P' } });
+  fireEvent.blur(previousKey);
+  await waitFor(() =>
+    expect(configSet).toHaveBeenLastCalledWith(expect.objectContaining({ keybindPrev: 'Alt+P' })),
   );
 
   cleanup();
@@ -300,7 +314,7 @@ test('operations console autosaves compact preferred subtitle language chips', a
   ).toEqual(['jpn', 'eng']);
 
   fireEvent.click(screen.getByRole('button', { name: 'Move jpn down' }));
-  const input = screen.getByLabelText('Custom subtitle language code') as HTMLInputElement;
+  const input = screen.getByLabelText('Custom code') as HTMLInputElement;
   fireEvent.input(input, { target: { value: ' SWE ' } });
   fireEvent.keyDown(input, { key: 'Enter' });
   fireEvent.click(screen.getByRole('button', { name: 'Move swe up' }));
@@ -320,7 +334,7 @@ test('operations console autosaves compact preferred subtitle language chips', a
 
   cleanup();
 });
-test('preferred subtitle language editor uses Ark tags input and select', async () => {
+test('preferred subtitle language editor uses public text and selector controls', async () => {
   const configSet = rstest.spyOn(commands, 'configSet').mockResolvedValue({
     data: null,
     status: 'ok',
@@ -328,21 +342,14 @@ test('preferred subtitle language editor uses Ark tags input and select', async 
   const cleanup = renderConsole();
   await screen.findByDisplayValue('JellyPilot Test');
 
-  // The custom code input lives inside the tags-input scope
-  const customInput = await screen.findByLabelText('Custom subtitle language code');
-  expect(customInput.closest('[data-scope="tags-input"]')).not.toBeNull();
+  const customInput = await screen.findByLabelText('Custom code');
+  expect(customInput.closest('[data-ui="text-input"]')).not.toBeNull();
 
-  // The Ark Select trigger is rendered with a combobox role
-  const selectTrigger = await screen.findByRole('combobox', {
+  const selectTrigger = await screen.findByRole('button', {
     name: 'Predefined languages',
   });
-  expect(selectTrigger.closest('[data-scope="select"]')).not.toBeNull();
-
-  // The select trigger shows a placeholder
+  expect(selectTrigger.closest('[data-ui="selector"]')).not.toBeNull();
   expect(selectTrigger).toHaveTextContent('Select a language…');
-  // The select offers predefined language options via its collection
-  const selectRoot = selectTrigger.closest('[data-scope="select"]');
-  expect(selectRoot).not.toBeNull();
 
   // Custom code entry via text input
   fireEvent.input(customInput, { target: { value: 'jpn' } });
@@ -402,7 +409,7 @@ test('operations console autosaves clearing preferred subtitle languages', async
   cleanup();
 });
 
-test('player bridge text fields autosave on valid blur and keep invalid drafts local', async () => {
+test('player bridge text fields serialize MPV arguments and keep invalid drafts local', async () => {
   const configSet = rstest.spyOn(commands, 'configSet').mockResolvedValue({
     data: null,
     status: 'ok',
@@ -429,6 +436,16 @@ test('player bridge text fields autosave on valid blur and keep invalid drafts l
     ),
   );
   await waitFor(() => expect(screen.getByText('Saved')).toBeVisible());
+
+  fireEvent.click(screen.getByRole('button', { name: 'Advanced MPV options' }));
+  const mpvArgs = await screen.findByLabelText('Extra arguments');
+  fireEvent.input(mpvArgs, { target: { value: '--fullscreen\n--force-window' } });
+  fireEvent.blur(mpvArgs);
+  await waitFor(() =>
+    expect(configSet).toHaveBeenLastCalledWith(
+      expect.objectContaining({ mpvArgs: ['--fullscreen', '--force-window'] }),
+    ),
+  );
 
   cleanup();
 });
@@ -739,7 +756,7 @@ test('sign out confirms and removes the active saved service profile', async () 
 
   await screen.findByRole('heading', { name: 'Connection' });
   fireEvent.click(screen.getByRole('button', { name: 'Sign out' }));
-  await waitFor(() => expect(screen.getByRole('dialog')).toBeVisible());
+  await waitFor(() => expect(screen.getByRole('alertdialog')).toBeVisible());
   const signOutButtons = screen.getAllByRole('button', { name: 'Sign out' });
   fireEvent.click(signOutButtons.at(-1));
 
@@ -761,7 +778,7 @@ test('sign out failure preserves the active saved service profile and stays on c
 
   await screen.findByRole('heading', { name: 'Connection' });
   fireEvent.click(screen.getByRole('button', { name: 'Sign out' }));
-  await waitFor(() => expect(screen.getByRole('dialog')).toBeVisible());
+  await waitFor(() => expect(screen.getByRole('alertdialog')).toBeVisible());
   const signOutButtons = screen.getAllByRole('button', { name: 'Sign out' });
   fireEvent.click(signOutButtons.at(-1));
 
@@ -782,42 +799,41 @@ test('sign out rejected commands preserve the saved service profile and close th
 
   await screen.findByRole('heading', { name: 'Connection' });
   fireEvent.click(screen.getByRole('button', { name: 'Sign out' }));
-  await waitFor(() => expect(screen.getByRole('dialog')).toBeVisible());
+  await waitFor(() => expect(screen.getByRole('alertdialog')).toBeVisible());
   const signOutButtons = screen.getAllByRole('button', { name: 'Sign out' });
   fireEvent.click(signOutButtons.at(-1));
 
   await waitFor(() => expect(screen.getByText('sign out ipc unavailable')).toBeVisible());
   expect(onSignedOut).not.toHaveBeenCalled();
   expect(screen.getAllByText('Jellyfin Home').length).toBeGreaterThan(0);
-  await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+  await waitFor(() => expect(screen.queryByRole('alertdialog')).toBeNull());
 
   cleanup();
 });
-test('sign out dialog uses Ark dialog dismissal semantics', async () => {
+test('sign out confirmation uses public AlertDialog dismissal semantics', async () => {
   const cleanup = renderConsole();
 
   await screen.findByRole('heading', { name: 'Connection' });
 
   fireEvent.click(screen.getByRole('button', { name: 'Sign out' }));
-  const dialog = await screen.findByRole('dialog');
+  const dialog = await screen.findByRole('alertdialog', { name: 'Sign out?' });
   expect(dialog).toBeVisible();
-  expect(dialog.closest('[data-scope="dialog"]')).not.toBeNull();
+  expect(dialog.closest('[data-ui="alert-dialog"]')).not.toBeNull();
 
   fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
-  await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+  await waitFor(() => expect(screen.queryByRole('alertdialog')).toBeNull());
 
   fireEvent.click(screen.getByRole('button', { name: 'Sign out' }));
-  const escapeDialog = await screen.findByRole('dialog');
+  const escapeDialog = await screen.findByRole('alertdialog', { name: 'Sign out?' });
   fireEvent.keyDown(escapeDialog, { code: 'Escape', key: 'Escape' });
-  await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+  await waitFor(() => expect(screen.queryByRole('alertdialog')).toBeNull());
 
   fireEvent.click(screen.getByRole('button', { name: 'Sign out' }));
-  await screen.findByRole('dialog');
-  const backdrop = document.querySelector('[data-scope="dialog"][data-part="backdrop"]');
+  await screen.findByRole('alertdialog');
+  const backdrop = document.querySelector('[data-ui="alert-dialog"] [data-part="backdrop"]');
   expect(backdrop).not.toBeNull();
-  fireEvent.pointerDown(backdrop as Element);
   fireEvent.click(backdrop as Element);
-  await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+  await waitFor(() => expect(screen.queryByRole('alertdialog')).toBeNull());
 
   cleanup();
 });
@@ -836,38 +852,38 @@ test('sign out dialog locks dismissal while signing out', async () => {
 
   await screen.findByRole('heading', { name: 'Connection' });
   fireEvent.click(screen.getByRole('button', { name: 'Sign out' }));
-  await screen.findByRole('dialog');
+  await screen.findByRole('alertdialog');
 
   const signOutButtons = screen.getAllByRole('button', { name: 'Sign out' });
   fireEvent.click(signOutButtons.at(-1));
 
   await waitFor(() => expect(screen.getByRole('button', { name: 'Cancel' })).toBeDisabled());
   fireEvent.keyDown(document, { key: 'Escape' });
-  expect(screen.getByRole('dialog')).toBeVisible();
+  expect(screen.getByRole('alertdialog')).toBeVisible();
 
   resolveRemoveProfile?.({ data: { activeProfileKey: null, profiles: [] }, status: 'ok' });
-  await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+  await waitFor(() => expect(screen.queryByRole('alertdialog')).toBeNull());
 
   cleanup();
 });
-test('player bridge settings use Ark fields and intro skip mode buttons', async () => {
+test('player bridge settings use public form and selection controls', async () => {
   const cleanup = renderConsole();
 
   const mpvPath = await screen.findByPlaceholderText('Path to mpv executable');
-  expect(mpvPath.closest('[data-scope="field"]')).not.toBeNull();
+  expect(mpvPath.closest('[data-ui="text-input"]')).not.toBeNull();
 
-  expect(screen.queryByPlaceholderText('--fullscreen&#10;--force-window')).toBeNull();
+  expect(screen.queryByPlaceholderText('--fullscreen\n--force-window')).toBeNull();
 
   const advancedTrigger = screen.getByRole('button', {
     name: 'Advanced MPV options',
   });
-  expect(advancedTrigger.closest('[data-scope="collapsible"]')).not.toBeNull();
+  expect(advancedTrigger.closest('[data-ui="collapsible"]')).not.toBeNull();
 
   fireEvent.click(advancedTrigger);
   await waitFor(() => expect(advancedTrigger).toHaveAttribute('aria-expanded', 'true'));
   const mpvArgs = await screen.findByLabelText('Extra arguments');
-  expect(mpvArgs.closest('[data-scope="field"]')).not.toBeNull();
-  expect(mpvArgs.closest('[data-scope="collapsible"]')).not.toBeNull();
+  expect(mpvArgs.closest('[data-ui="text-area"]')).not.toBeNull();
+  expect(mpvArgs.closest('[data-ui="collapsible"]')).not.toBeNull();
 
   const shortcutHeading = screen.getByRole('heading', {
     name: 'Shortcut keys',
@@ -876,7 +892,7 @@ test('player bridge settings use Ark fields and intro skip mode buttons', async 
   if (shortcutGroup === null) {
     throw new Error('Shortcut keys aside should render');
   }
-  expect(shortcutHeading.closest('[data-scope="collapsible"]')).toBeNull();
+  expect(shortcutHeading.closest('[data-ui="collapsible"]')).toBeNull();
   const shortcutFields = within(shortcutGroup);
   expect(shortcutFields.getByText('Next episode key')).toBeVisible();
   expect(shortcutFields.getByText('Previous episode key')).toBeVisible();
@@ -886,8 +902,8 @@ test('player bridge settings use Ark fields and intro skip mode buttons', async 
   expect(nextKey).toHaveAttribute('placeholder', 'Shift+>');
   expect(previousKey).toHaveValue('Shift+<');
   expect(previousKey).toHaveAttribute('placeholder', 'Shift+<');
-  const manual = screen.getByRole('button', { name: /Manual/ });
-  expect(manual).toHaveAttribute('aria-pressed', 'false');
+  const manual = screen.getByRole('radio', { name: /Manual/ });
+  expect(manual).toHaveAttribute('aria-checked', 'false');
 
   cleanup();
 });

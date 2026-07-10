@@ -40,6 +40,7 @@ export function Menu(props: MenuProps) {
   ])
   const [open, setOpen] = createSignal(false)
   let root: HTMLDivElement | undefined
+  let trigger: HTMLButtonElement | undefined
 
   uiInvariant(
     new Set(local.items.map((item) => item.value)).size === local.items.length,
@@ -73,6 +74,7 @@ export function Menu(props: MenuProps) {
       {...rest}
     >
       <button
+        ref={trigger}
         data-part="trigger"
         type="button"
         class={menuTrigger}
@@ -94,8 +96,9 @@ export function Menu(props: MenuProps) {
                 disabled={item.disabled || local.disabled}
                 onClick={(event) => {
                   if (item.disabled) return
-                  local.onSelect?.(item.value, { reason: 'pointer', event })
                   setOpen(false)
+                  trigger?.focus()
+                  local.onSelect?.(item.value, { reason: 'pointer', event })
                 }}
               >
                 {item.label}

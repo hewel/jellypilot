@@ -1,8 +1,7 @@
-import { SegmentGroup } from '@ark-ui/solid/segment-group';
 import type { VideoLibraryShortcut } from '@bindings';
+import { SegmentedControl } from '@jellypilot/ui';
 import { useNavigate } from '@tanstack/solid-router';
 import { House } from 'lucide-solid';
-import { For, Show } from 'solid-js';
 
 import { useLibraryNavbarControls } from './LibraryNavbarContext';
 
@@ -31,9 +30,11 @@ export default function LibraryNavbar(props: LibraryNavbarProps) {
     })),
   ];
 
+  const selectedValue = () =>
+    items().some((item) => item.value === props.activeValue) ? props.activeValue : 'home';
+
   const navigateToSegment = (value: string | null) => {
     const target = items().find((item) => item.value === value)?.target;
-
     if (!target) {
       return;
     }
@@ -44,27 +45,28 @@ export default function LibraryNavbar(props: LibraryNavbarProps) {
   return (
     <nav aria-label="Library navigation" class={styles.root}>
       <div class={styles.inner}>
-        <SegmentGroup.Root
-          value={props.activeValue}
-          onValueChange={(details) => navigateToSegment(details.value)}
+        <SegmentedControl
+          aria-label="Library navigation"
           class={styles.segments}
-        >
-          <SegmentGroup.Indicator class={styles.indicator} />
-          <For each={items()}>
-            {(item) => (
-              <SegmentGroup.Item value={item.value} class={styles.item}>
-                <SegmentGroup.ItemText>
-                  <Show when={item.value === 'home'} fallback={item.label}>
-                    <House class={styles.homeIcon} />
-                    <span class={styles.srOnly}>Home</span>
-                  </Show>
-                </SegmentGroup.ItemText>
-                <SegmentGroup.ItemControl />
-                <SegmentGroup.ItemHiddenInput />
-              </SegmentGroup.Item>
-            )}
-          </For>
-        </SegmentGroup.Root>
+          value={selectedValue()}
+          items={items().map((item) =>
+            item.value === 'home'
+              ? {
+                  value: item.value,
+                  label: (
+                    <>
+                      <House class={styles.homeIcon} />
+                      <span class={styles.srOnly}>Home</span>
+                    </>
+                  ),
+                }
+              : {
+                  value: item.value,
+                  label: item.label,
+                },
+          )}
+          onValueChange={navigateToSegment}
+        />
 
         <div ref={navbarControls.setPortalTarget} class={styles.portalTarget} />
       </div>

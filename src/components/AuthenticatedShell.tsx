@@ -4,10 +4,10 @@ import { Exit } from 'effect';
 
 import { fetchConnectionState } from '../effects/connection';
 import { queryKeys, runExit } from '../effects/query';
+import { ConsoleShell } from './AppConsoleLayout';
 import NowPlayingDrawer from './NowPlayingDrawer';
 import SettingsModal from './SettingsModal';
 import ThemeCycleControl from './ThemeCycleControl';
-import { ConsoleShell } from './ui';
 
 import * as styles from './AuthenticatedShell.css';
 

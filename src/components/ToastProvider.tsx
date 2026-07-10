@@ -1,21 +1,13 @@
+import { ToastProvider as UIToastProvider, useToast as useUIToast } from '@jellypilot/ui';
+import type { ToastTone } from '@jellypilot/ui';
 import { listen } from '@tauri-apps/api/event';
 import type { UnlistenFn } from '@tauri-apps/api/event';
-import { createContext, createSignal, For, onCleanup, onMount, useContext } from 'solid-js';
+import { createContext, onCleanup, onMount, useContext } from 'solid-js';
 import type { ParentProps } from 'solid-js';
 
-import Toast from './Toast';
-import type { NotificationLevel } from './Toast';
+import type { NotificationLevel } from '../bindings';
 
-import * as styles from './ToastProvider.css';
-
-const TOAST_EXIT_MS = 200;
-export interface ToastMessage {
-  id: string;
-  level: NotificationLevel;
-  message: string;
-}
-
-/** Payload from backend AppNotification event */
+/** Payload from backend AppNotification event. */
 interface AppNotificationPayload {
   level: NotificationLevel;
   message: string;
@@ -23,43 +15,28 @@ interface AppNotificationPayload {
 
 interface ToastContextValue {
   showToast: (level: NotificationLevel, message: string) => void;
-  removeToast: (id: string) => void;
 }
 
 const ToastContext = createContext<ToastContextValue>();
 
-export function ToastProvider(props: ParentProps) {
-  const [toasts, setToasts] = createSignal<ToastMessage[]>([]);
+const toastTones = {
+  error: 'danger',
+  info: 'info',
+  success: 'success',
+  warning: 'warning',
+} satisfies Record<NotificationLevel, ToastTone>;
+
+function AppToastAdapter(props: ParentProps) {
+  const uiToast = useUIToast();
   let unlisten: UnlistenFn | undefined;
-  const [exitingToastIds, setExitingToastIds] = createSignal<Set<string>>(new Set());
-  const dismissTimers = new Map<string, ReturnType<typeof setTimeout>>();
 
   const showToast = (level: NotificationLevel, message: string) => {
-    const id = Math.random().toString(36).slice(2, 9);
-    setToasts((prev) => [...prev, { id, level, message }]);
+    uiToast.toast({
+      title: message,
+      tone: toastTones[level],
+    });
   };
 
-  const removeToast = (id: string) => {
-    const present = toasts().some((toast) => toast.id === id);
-    if (!present || exitingToastIds().has(id)) {
-      return;
-    }
-    setExitingToastIds((current) => new Set(current).add(id));
-    dismissTimers.set(
-      id,
-      setTimeout(() => {
-        setToasts((prev) => prev.filter((toast) => toast.id !== id));
-        setExitingToastIds((current) => {
-          const next = new Set(current);
-          next.delete(id);
-          return next;
-        });
-        dismissTimers.delete(id);
-      }, TOAST_EXIT_MS),
-    );
-  };
-
-  // Listen for backend AppNotification events
   onMount(async () => {
     try {
       unlisten = await listen<AppNotificationPayload>('app-notification', (event) => {
@@ -70,29 +47,16 @@ export function ToastProvider(props: ParentProps) {
     }
   });
 
-  onCleanup(() => {
-    unlisten?.();
-    dismissTimers.forEach((timer) => clearTimeout(timer));
-    dismissTimers.clear();
-  });
+  onCleanup(() => unlisten?.());
 
+  return <ToastContext.Provider value={{ showToast }}>{props.children}</ToastContext.Provider>;
+}
+
+export function ToastProvider(props: ParentProps) {
   return (
-    <ToastContext.Provider value={{ removeToast, showToast }}>
-      {props.children}
-      <div class={styles.viewport}>
-        <For each={toasts()}>
-          {(toast) => (
-            <Toast
-              id={toast.id}
-              level={toast.level}
-              message={toast.message}
-              exiting={exitingToastIds().has(toast.id)}
-              onDismiss={removeToast}
-            />
-          )}
-        </For>
-      </div>
-    </ToastContext.Provider>
+    <UIToastProvider>
+      <AppToastAdapter>{props.children}</AppToastAdapter>
+    </UIToastProvider>
   );
 }
 
