@@ -43,5 +43,23 @@ export const familyRegistry = [
     path: './components/VisuallyHidden.tsx',
     catalogTitle: 'VisuallyHidden',
   },
+  {
+    name: 'button',
+    exportName: 'Button',
+    path: './components/Button.tsx',
+    catalogTitle: 'Button',
+  },
+  {
+    name: 'icon-button',
+    exportName: 'IconButton',
+    path: './components/IconButton.tsx',
+    catalogTitle: 'IconButton',
+  },
+  {
+    name: 'toggle-button',
+    exportName: 'ToggleButton',
+    path: './components/ToggleButton.tsx',
+    catalogTitle: 'ToggleButton',
+  },
 ] as const satisfies readonly FamilyRegistryEntry[]
 export type FamilyName = (typeof familyRegistry)[number]['exportName']

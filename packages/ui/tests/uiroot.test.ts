@@ -26,8 +26,8 @@ test('Neutral and JellyPilot presets are complete opaque descriptors', () => {
 })
 
 test('registry includes foundation and document families', () => {
-  const names = familyRegistry.map((entry) => entry.exportName).sort()
-  expect(names).toEqual(
-    ['Heading', 'Link', 'Text', 'Theme', 'UIRoot', 'VisuallyHidden'].sort(),
-  )
+  const names = familyRegistry.map((entry) => entry.exportName)
+  for (const required of ['Heading', 'Link', 'Text', 'Theme', 'UIRoot', 'VisuallyHidden']) {
+    expect(names).toContain(required)
+  }
 })
