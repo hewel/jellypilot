@@ -1,14 +1,14 @@
-import { Dialog } from '@ark-ui/solid/dialog';
+import { Dialog, IconButton } from '@jellypilot/ui';
 import { createForm } from '@tanstack/solid-form';
 import { createMutation, createQuery, useQueryClient } from '@tanstack/solid-query';
 import { Exit, Option } from 'effect';
 import { X } from 'lucide-solid';
-import { Show, createEffect, createSignal } from 'solid-js';
-import { Portal } from 'solid-js/web';
+import { Show, createEffect, createSignal, onCleanup } from 'solid-js';
 
 import type { AppConfig, IntroSkipperMode } from '../bindings';
 import { commandFailureMessage } from '../effects/commands';
-import { detectMpv, fetchConfig, saveConfig } from '../effects/config';
+import { detectMpv } from '../effects/config';
+import { useConfigCoordinator } from '../effects/configContext';
 import { disconnectJellyfin, fetchConnectionState } from '../effects/connection';
 import {
   activateSavedServiceProfile,
@@ -32,7 +32,7 @@ import {
   parseSubtitleLanguageInput,
 } from './OperationsConsole/subtitleLanguages';
 import { useToast } from './ToastProvider';
-import { Button, ConsoleContainer, ConsoleGrid, PageFooter } from './ui';
+import { ConsoleContainer, ConsoleGrid, PageFooter } from './ui';
 import type { JellyPilotSelectItem } from './ui';
 
 import * as patterns from '../styles/patterns.css';
@@ -44,23 +44,17 @@ interface OperationsConsoleProps {
 
 export default function OperationsConsole(props: OperationsConsoleProps) {
   const { showToast } = useToast();
+  const { coordinator, state: configState } = useConfigCoordinator();
   const { state: ui, actions, Provider } = createOperationsConsoleStore();
   const [addServiceOpen, setAddServiceOpen] = createSignal(false);
-  const [addServicePortalMount, setAddServicePortalMount] = createSignal<HTMLDivElement>();
   const [activatingProfileKey, setActivatingProfileKey] = createSignal<string | null>(null);
   const [removingProfileKey, setRemovingProfileKey] = createSignal<string | null>(null);
-  const [imageCacheEnabledDraft, setImageCacheEnabledDraft] = createSignal<boolean | null>(null);
 
   let configHydrated = false;
-  interface PendingSave {
-    config: AppConfig;
-    onSuccess?: () => void;
-    onError?: (message: string) => void;
-  }
-  let lastSavedConfig: AppConfig | null = null;
-  let saveInFlight = false;
-  let pendingSave: PendingSave | null = null;
-  let latestConfigSnapshot: AppConfig | null = null;
+  let configSavePending = false;
+  let pendingIntroSkipperMode: IntroSkipperMode | null = null;
+  let loggedConfigFailure: string | null = null;
+  let loggedSaveFailure: string | null = null;
   let clearPlayerBridgeStatusTimer: ReturnType<typeof setTimeout> | null = null;
 
   const subtitleLanguageSelectItems: JellyPilotSelectItem[] = [
@@ -84,13 +78,6 @@ export default function OperationsConsole(props: OperationsConsoleProps) {
     queryKey: queryKeys.savedServiceProfiles,
     queryFn: () => runExit(fetchSavedServiceProfiles()),
   }));
-  const configQuery = createQuery(() => ({
-    queryKey: queryKeys.appConfig,
-    queryFn: () => runExit(fetchConfig()),
-  }));
-  const saveConfigMutation = createMutation(() => ({
-    mutationFn: (config: AppConfig) => runExit(saveConfig(config)),
-  }));
   const disconnectMutation = createMutation(() => ({
     mutationFn: () => runExit(disconnectJellyfin()),
   }));
@@ -109,14 +96,11 @@ export default function OperationsConsole(props: OperationsConsoleProps) {
   const clearLibraryQueries = () => {
     queryClient.removeQueries({ queryKey: queryKeys.libraryRoot });
   };
-  let loggedConfigFailure: string | null = null;
   createEffect(() => {
-    const result = configQuery.data;
-    if (!result || Exit.isSuccess(result)) return;
-    const message = commandFailureMessage(result.cause, 'Could not load configuration');
-    if (message === loggedConfigFailure) return;
-    loggedConfigFailure = message;
-    console.error('Failed to load config:', message);
+    const error = configState().error;
+    if (configHydrated || !error || error.message === loggedConfigFailure) return;
+    loggedConfigFailure = error.message;
+    console.error('Failed to load config:', error.message);
   });
 
   const form = createForm(() => ({
@@ -131,25 +115,27 @@ export default function OperationsConsole(props: OperationsConsoleProps) {
     },
   }));
 
+  const hydrateConfigFields = (config: AppConfig) => {
+    form.setFieldValue('deviceName', config.deviceName ?? 'JellyPilot');
+    form.setFieldValue('mpvPath', config.mpvPath ?? '');
+    form.setFieldValue('mpvArgs', (config.mpvArgs ?? []).join('\n'));
+    form.setFieldValue('keybindNext', config.keybindNext ?? 'Shift+>');
+    form.setFieldValue('keybindPrev', config.keybindPrev ?? 'Shift+<');
+    form.setFieldValue('keybindIntroSkip', config.keybindIntroSkip ?? 'g');
+    actions.hydrateFromConfig({
+      introSkipperMode: config.introSkipperMode ?? 'automatic',
+      mpvArgs: config.mpvArgs,
+      preferredSubtitleLanguages: normalizePreferredSubtitleLanguages(
+        config.preferredSubtitleLanguages,
+      ),
+    });
+    form.setFieldValue('introSkipperMode', config.introSkipperMode ?? 'automatic');
+  };
+
   createEffect(() => {
     const cfg = config();
     if (cfg && !configHydrated) {
-      lastSavedConfig = cfg;
-      form.setFieldValue('deviceName', cfg.deviceName ?? 'JellyPilot');
-      form.setFieldValue('mpvPath', cfg.mpvPath ?? '');
-      form.setFieldValue('mpvArgs', (cfg.mpvArgs ?? []).join('\n'));
-      form.setFieldValue('keybindNext', cfg.keybindNext ?? 'Shift+>');
-      form.setFieldValue('keybindPrev', cfg.keybindPrev ?? 'Shift+<');
-      form.setFieldValue('keybindIntroSkip', cfg.keybindIntroSkip ?? 'g');
-      actions.hydrateFromConfig({
-        introSkipperMode: cfg.introSkipperMode ?? 'automatic',
-        mpvArgs: cfg.mpvArgs,
-        preferredSubtitleLanguages: normalizePreferredSubtitleLanguages(
-          cfg.preferredSubtitleLanguages,
-        ),
-      });
-      setImageCacheEnabledDraft(null);
-      form.setFieldValue('introSkipperMode', cfg.introSkipperMode ?? 'automatic');
+      hydrateConfigFields(cfg);
       configHydrated = true;
     }
   });
@@ -161,14 +147,9 @@ export default function OperationsConsole(props: OperationsConsoleProps) {
   const profiles = () =>
     profilesQuery.data && Exit.isSuccess(profilesQuery.data) ? profilesQuery.data.value : null;
   const capabilities = () => state()?.capabilities;
-  const config = () =>
-    configQuery.data && Exit.isSuccess(configQuery.data) ? configQuery.data.value : null;
+  const config = () => configState().desired;
   const introSkipperMode = () => ui.introSkipperDraft ?? config()?.introSkipperMode ?? 'automatic';
-  const imageDiskCacheEnabled = () =>
-    imageCacheEnabledDraft() ??
-    latestConfigSnapshot?.imageDiskCacheEnabled ??
-    config()?.imageDiskCacheEnabled ??
-    true;
+  const imageDiskCacheEnabled = () => config()?.imageDiskCacheEnabled ?? true;
 
   const showPlayerBridgeStatus = (type: 'saving' | 'saved' | 'error', text: string) => {
     if (clearPlayerBridgeStatusTimer) {
@@ -181,71 +162,55 @@ export default function OperationsConsole(props: OperationsConsoleProps) {
     }
   };
 
+  const unsubscribeConfigSaves = coordinator.subscribe((snapshot) => {
+    if (!configHydrated) return;
+    if (snapshot.status === 'saving') {
+      configSavePending = true;
+      loggedSaveFailure = null;
+      showPlayerBridgeStatus('saving', 'Saving…');
+      return;
+    }
+    if (!configSavePending) return;
+
+    configSavePending = false;
+    if (snapshot.status === 'ready') {
+      pendingIntroSkipperMode = null;
+      actions.finishIntroSkipperSave();
+      showPlayerBridgeStatus('saved', 'Saved');
+      return;
+    }
+    if (snapshot.status === 'error') {
+      const message = snapshot.error?.message ?? 'Could not save configuration';
+      if (snapshot.confirmed) {
+        hydrateConfigFields(snapshot.confirmed);
+      }
+      if (pendingIntroSkipperMode) {
+        const restored = snapshot.confirmed?.introSkipperMode ?? 'automatic';
+        actions.failIntroSkipperSave(restored, message);
+        pendingIntroSkipperMode = null;
+      }
+      showPlayerBridgeStatus('error', message);
+      if (message !== loggedSaveFailure) {
+        loggedSaveFailure = message;
+        showToast('error', message);
+      }
+    }
+  });
+  onCleanup(unsubscribeConfigSaves);
+
   const parseMpvArgs = (value: string) =>
     value
       .split('\n')
       .map((arg) => arg.trim())
       .filter((arg) => arg.length > 0);
 
-  const buildConfigSnapshot = (overrides: Partial<AppConfig>) => {
-    const saved = pendingSave?.config ?? latestConfigSnapshot ?? lastSavedConfig ?? config();
-    if (!saved) {
-      return null;
-    }
-
-    return {
-      ...saved,
-      ...overrides,
-    };
-  };
-
-  const processConfigSaveQueue = async () => {
-    if (saveInFlight) {
-      return;
-    }
-    saveInFlight = true;
-
-    try {
-      while (pendingSave) {
-        const nextSave = pendingSave;
-        pendingSave = null;
-        showPlayerBridgeStatus('saving', 'Saving…');
-
-        const exit = await saveConfigMutation.mutateAsync(nextSave.config);
-        if (Exit.isSuccess(exit)) {
-          lastSavedConfig = nextSave.config;
-          queryClient.setQueryData(queryKeys.appConfig, Exit.succeed(nextSave.config));
-          nextSave.onSuccess?.();
-          showPlayerBridgeStatus('saved', 'Saved');
-        } else {
-          const message = commandFailureMessage(exit.cause, 'Could not save configuration');
-          nextSave.onError?.(message);
-          showPlayerBridgeStatus('error', message);
-          showToast('error', message);
-        }
-      }
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      showPlayerBridgeStatus('error', message);
-      showToast('error', message);
-    } finally {
-      saveInFlight = false;
-      if (pendingSave) {
-        void processConfigSaveQueue();
-      }
-    }
-  };
-
-  const queueConfigSave = (
-    snapshot: AppConfig | null,
-    callbacks: Omit<PendingSave, 'config'> = {},
-  ) => {
-    if (!snapshot) {
-      return;
-    }
-    latestConfigSnapshot = snapshot;
-    pendingSave = { config: snapshot, ...callbacks };
-    void processConfigSaveQueue();
+  const patchConfig = (overrides: Partial<AppConfig>) => {
+    const desired = config();
+    if (!desired) return;
+    configSavePending = true;
+    loggedSaveFailure = null;
+    showPlayerBridgeStatus('saving', 'Saving…');
+    coordinator.patch({ ...desired, ...overrides });
   };
 
   const saveTextSetting = (
@@ -258,9 +223,8 @@ export default function OperationsConsole(props: OperationsConsoleProps) {
       | 'keybindIntroSkip',
     value: string,
   ) => {
-    const saved = lastSavedConfig ?? config();
-    const desired = latestConfigSnapshot ?? saved;
-    if (!saved || !desired) {
+    const desired = config();
+    if (!desired) {
       return;
     }
 
@@ -300,11 +264,11 @@ export default function OperationsConsole(props: OperationsConsoleProps) {
       return;
     }
 
-    queueConfigSave(buildConfigSnapshot(override));
+    patchConfig(override);
   };
 
   const savePreferredSubtitleLanguages = (languages: string[]) => {
-    const desired = latestConfigSnapshot ?? lastSavedConfig ?? config();
+    const desired = config();
     if (
       desired &&
       languages.length === (desired.preferredSubtitleLanguages?.length ?? 0) &&
@@ -313,44 +277,28 @@ export default function OperationsConsole(props: OperationsConsoleProps) {
       return;
     }
 
-    queueConfigSave(buildConfigSnapshot({ preferredSubtitleLanguages: languages }));
+    patchConfig({ preferredSubtitleLanguages: languages });
   };
 
   const saveIntroSkipperSetting = (mode: IntroSkipperMode) => {
     const previous = introSkipperMode();
-    const desired = latestConfigSnapshot ?? lastSavedConfig ?? config();
+    const desired = config();
     if (desired?.introSkipperMode === mode) {
       return;
     }
 
+    pendingIntroSkipperMode = previous;
     actions.beginIntroSkipperSave(mode);
-    queueConfigSave(buildConfigSnapshot({ introSkipperMode: mode }), {
-      onError: (message) => {
-        actions.failIntroSkipperSave(previous, message);
-        form.setFieldValue('introSkipperMode', previous);
-      },
-      onSuccess: () => {
-        actions.finishIntroSkipperSave();
-      },
-    });
+    patchConfig({ introSkipperMode: mode });
   };
 
   const saveImageDiskCacheEnabled = (enabled: boolean) => {
-    const previous = imageDiskCacheEnabled();
-    const desired = latestConfigSnapshot ?? lastSavedConfig ?? config();
+    const desired = config();
     if (desired?.imageDiskCacheEnabled === enabled) {
       return;
     }
 
-    setImageCacheEnabledDraft(enabled);
-    queueConfigSave(buildConfigSnapshot({ imageDiskCacheEnabled: enabled }), {
-      onError: () => {
-        setImageCacheEnabledDraft(previous);
-      },
-      onSuccess: () => {
-        setImageCacheEnabledDraft(null);
-      },
-    });
+    patchConfig({ imageDiskCacheEnabled: enabled });
   };
 
   const addPreferredSubtitleLanguageCodes = (languages: string[]) => {
@@ -528,7 +476,7 @@ export default function OperationsConsole(props: OperationsConsoleProps) {
         onNone: () => showToast('warning', 'MPV not found in PATH. Configure the path manually.'),
         onSome: (path) => {
           form.setFieldValue('mpvPath', path);
-          queueConfigSave(buildConfigSnapshot({ mpvPath: path }));
+          patchConfig({ mpvPath: path });
           showToast('success', 'MPV detected successfully');
         },
       });
@@ -614,36 +562,23 @@ export default function OperationsConsole(props: OperationsConsoleProps) {
           </aside>
         </ConsoleGrid>
       </ConsoleContainer>
-      <div ref={setAddServicePortalMount} />
-      <Dialog.Root
+      <Dialog
         open={addServiceOpen()}
-        onOpenChange={(details) => setAddServiceOpen(details.open)}
-        lazyMount
-        unmountOnExit
+        title="Add saved service"
+        description="Log in to a Jellyfin or Emby service and save it for switching."
+        class={styles.content}
+        onOpenChange={(next) => setAddServiceOpen(next)}
       >
-        <Portal mount={addServicePortalMount()}>
-          <Dialog.Backdrop class={styles.backdrop} />
-          <Dialog.Positioner class={`${styles.positioner} ${styles.positionerFill}`}>
-            <Dialog.Content class={styles.content}>
-              <Dialog.Title class={patterns.srOnly}>Add saved service</Dialog.Title>
-              <Dialog.Description class={patterns.srOnly}>
-                Log in to a Jellyfin or Emby service and save it for switching.
-              </Dialog.Description>
-              <Button
-                type="button"
-                variant="icon"
-                class={styles.closeButton}
-                aria-label="Close add service"
-                title="Close add service"
-                onClick={() => setAddServiceOpen(false)}
-              >
-                <X class={patterns.icon4_5} />
-              </Button>
-              <LoginPage embedded onConnected={handleAddServiceConnected} />
-            </Dialog.Content>
-          </Dialog.Positioner>
-        </Portal>
-      </Dialog.Root>
+        <IconButton
+          variant="outline"
+          class={styles.closeButton}
+          aria-label="Close add service"
+          onClick={() => setAddServiceOpen(false)}
+        >
+          <X class={patterns.icon4_5} />
+        </IconButton>
+        <LoginPage embedded onConnected={handleAddServiceConnected} />
+      </Dialog>
     </Provider>
   );
 }

@@ -1,5 +1,8 @@
 import type { AppConfig, ThemePreference } from '@bindings';
+import type { Cause} from 'effect';
+import { Option } from 'effect';
 
+import { commandFailure } from './commands';
 import { fetchConfig, saveConfig } from './config';
 import { CommandError } from './errors';
 import { runExit } from './query';
@@ -125,26 +128,14 @@ function withThemeDefault(config: AppConfig | null | undefined): AppConfig {
   };
 }
 
-function toCommandError(cause: unknown): CommandError {
-  if (cause instanceof CommandError) return cause;
-  if (
-    cause &&
-    typeof cause === 'object' &&
-    'message' in cause &&
-    typeof (cause as { message: unknown }).message === 'string'
-  ) {
-    const code =
-      'code' in cause
-        ? ((cause as { code?: CommandError['code'] }).code ?? 'internal')
-        : 'internal';
-    return new CommandError({
-      code,
-      message: (cause as { message: string }).message,
-    });
-  }
-  return new CommandError({
-    code: 'internal',
-    message: cause instanceof Error ? cause.message : String(cause),
+function toCommandError(cause: Cause.Cause<CommandError>): CommandError {
+  return Option.match(commandFailure(cause), {
+    onNone: () =>
+      new CommandError({
+        code: 'internal',
+        message: 'Configuration command failed',
+      }),
+    onSome: (error) => error,
   });
 }
 

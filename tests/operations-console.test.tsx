@@ -6,6 +6,7 @@ import { commands } from '../src/bindings';
 import type { AppConfig, SavedServiceProfiles } from '../src/bindings';
 import OperationsConsole from '../src/components/OperationsConsole';
 import { ToastProvider } from '../src/components/ToastProvider';
+import { ConfigCoordinatorProvider } from '../src/effects/configContext';
 import { TestQueryProvider } from './query-client';
 
 const connectedState = {
@@ -108,11 +109,13 @@ function renderConsole(
   document.body.append(root);
   const dispose = render(
     () => (
-      <TestQueryProvider>
-        <ToastProvider>
-          <OperationsConsole onSignedOut={onSignedOut} />
-        </ToastProvider>
-      </TestQueryProvider>
+      <ConfigCoordinatorProvider>
+        <TestQueryProvider>
+          <ToastProvider>
+            <OperationsConsole onSignedOut={onSignedOut} />
+          </ToastProvider>
+        </TestQueryProvider>
+      </ConfigCoordinatorProvider>
     ),
     root,
   );
@@ -136,11 +139,13 @@ test('operations console reports config load command failures', async () => {
   document.body.append(root);
   const dispose = render(
     () => (
-      <TestQueryProvider>
-        <ToastProvider>
-          <OperationsConsole onSignedOut={() => {}} />
-        </ToastProvider>
-      </TestQueryProvider>
+      <ConfigCoordinatorProvider>
+        <TestQueryProvider>
+          <ToastProvider>
+            <OperationsConsole onSignedOut={() => {}} />
+          </ToastProvider>
+        </TestQueryProvider>
+      </ConfigCoordinatorProvider>
     ),
     root,
   );
@@ -501,6 +506,7 @@ test('player bridge autosave failure recovers on later save', async () => {
   fireEvent.blur(mpvPath);
 
   await waitFor(() => expect(screen.getAllByText('Disk unavailable').length).toBeGreaterThan(0));
+  await waitFor(() => expect(mpvPath).toHaveValue(''));
 
   const deviceName = screen.getByDisplayValue('JellyPilot Test') as HTMLInputElement;
   fireEvent.input(deviceName, { target: { value: 'JellyPilot Recovery' } });
@@ -510,7 +516,7 @@ test('player bridge autosave failure recovers on later save', async () => {
   expect(configSet).toHaveBeenLastCalledWith(
     expect.objectContaining({
       deviceName: 'JellyPilot Recovery',
-      mpvPath: '/broken/mpv',
+      mpvPath: null,
     }),
   );
   await waitFor(() => expect(screen.getByText('Saved')).toBeVisible());
