@@ -9,7 +9,6 @@ import {
   Link,
   neutralTheme,
   Text,
-  Theme,
   UIRoot,
   VisuallyHidden,
 } from '@jellypilot/ui'
@@ -52,15 +51,6 @@ export function App() {
     return familyRegistry.find((entry) => entry.name === id) ?? null
   })
 
-  const selectFamily = (name: string) => {
-    setActive(name)
-    if (globalThis.history?.replaceState) {
-      globalThis.history.replaceState(null, '', `#${name}`)
-    } else if (globalThis.location) {
-      globalThis.location.hash = name
-    }
-  }
-
   if (typeof globalThis.addEventListener === 'function') {
     globalThis.addEventListener('hashchange', () => setActive(hashFamily()))
   }
@@ -97,35 +87,38 @@ export function App() {
               JellyPilot
             </Button>
             <Text size="sm">Mode</Text>
-            <Button size="sm" variant="outline" onClick={() => setPreference('system')}>
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={() => setPreference('system')}
+            >
               System
             </Button>
-            <Button size="sm" variant="outline" onClick={() => setPreference('light')}>
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={() => setPreference('light')}
+            >
               Light
             </Button>
-            <Button size="sm" variant="outline" onClick={() => setPreference('dark')}>
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={() => setPreference('dark')}
+            >
               Dark
             </Button>
           </div>
           <nav class={sectionStyle} aria-label="Families">
             <For each={filtered()}>
               {(entry) => (
-                <Link
-                  href={`#${entry.name}`}
-                  class={active() === entry.name ? 'is-active' : undefined}
-                  onClick={() => selectFamily(entry.name)}
-                >
-                  {entry.catalogTitle}
-                </Link>
+                <Link href={`#${entry.name}`}>{entry.catalogTitle}</Link>
               )}
             </For>
           </nav>
         </aside>
         <main class={pageStyle}>
-          <Show
-            when={selected()}
-            fallback={<Text>No matching families.</Text>}
-          >
+          <Show when={selected()} fallback={<Text>No matching families.</Text>}>
             {(entry) => (
               <Card>
                 <Badge>{entry().exportName}</Badge>
@@ -146,7 +139,6 @@ export function App() {
           </Show>
         </main>
       </div>
-      <Theme descriptor={theme()} />
     </UIRoot>
   )
 }

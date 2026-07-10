@@ -38,7 +38,9 @@ export const switchThumb = style({
     [`${switchControl}[aria-checked="true"] &`]: {
       transform: 'translateX(1rem)',
     },
-    '@media (prefers-reduced-motion: reduce)': {
+  },
+  '@media': {
+    '(prefers-reduced-motion: reduce)': {
       transition: 'none',
     },
   },
