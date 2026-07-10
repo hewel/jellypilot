@@ -20,6 +20,8 @@ export default defineConfig({
   },
   setupFiles: ['./rstest.setup.ts'],
   testEnvironment: 'jsdom',
+  // Package fixtures run under their own package configs.
+  exclude: ['**/node_modules/**', '**/dist/**', 'packages/**/tests/fixtures/**'],
   tools: {
     rspack: {
       plugins: [new VanillaExtractPlugin()],
