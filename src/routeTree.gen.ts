@@ -9,7 +9,6 @@
 // Additionally, you should also exclude this file from your linter and/or formatter to prevent it from being checked or modified.
 
 import { Route as rootRouteImport } from './routes/__root'
-import { Route as PandaPrototypeRouteImport } from './routes/panda-prototype'
 import { Route as LoginRouteImport } from './routes/login'
 import { Route as ConsoleRouteImport } from './routes/console'
 import { Route as AuthenticatedRouteImport } from './routes/_authenticated'
@@ -20,11 +19,6 @@ import { Route as AuthenticatedLibraryShowsSeriesIdRouteImport } from './routes/
 import { Route as AuthenticatedLibraryItemsItemIdRouteImport } from './routes/_authenticated/library/items/$itemId'
 import { Route as AuthenticatedLibraryCollectionTypeLibraryIdRouteImport } from './routes/_authenticated/library/$collectionType/$libraryId'
 
-const PandaPrototypeRoute = PandaPrototypeRouteImport.update({
-  id: '/panda-prototype',
-  path: '/panda-prototype',
-  getParentRoute: () => rootRouteImport,
-} as any)
 const LoginRoute = LoginRouteImport.update({
   id: '/login',
   path: '/login',
@@ -78,7 +72,6 @@ export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
   '/console': typeof ConsoleRoute
   '/login': typeof LoginRoute
-  '/panda-prototype': typeof PandaPrototypeRoute
   '/library': typeof AuthenticatedLibraryRouteWithChildren
   '/library/': typeof AuthenticatedLibraryIndexRoute
   '/library/$collectionType/$libraryId': typeof AuthenticatedLibraryCollectionTypeLibraryIdRoute
@@ -89,7 +82,6 @@ export interface FileRoutesByTo {
   '/': typeof IndexRoute
   '/console': typeof ConsoleRoute
   '/login': typeof LoginRoute
-  '/panda-prototype': typeof PandaPrototypeRoute
   '/library': typeof AuthenticatedLibraryIndexRoute
   '/library/$collectionType/$libraryId': typeof AuthenticatedLibraryCollectionTypeLibraryIdRoute
   '/library/items/$itemId': typeof AuthenticatedLibraryItemsItemIdRoute
@@ -101,7 +93,6 @@ export interface FileRoutesById {
   '/_authenticated': typeof AuthenticatedRouteWithChildren
   '/console': typeof ConsoleRoute
   '/login': typeof LoginRoute
-  '/panda-prototype': typeof PandaPrototypeRoute
   '/_authenticated/library': typeof AuthenticatedLibraryRouteWithChildren
   '/_authenticated/library/': typeof AuthenticatedLibraryIndexRoute
   '/_authenticated/library/$collectionType/$libraryId': typeof AuthenticatedLibraryCollectionTypeLibraryIdRoute
@@ -114,7 +105,6 @@ export interface FileRouteTypes {
     | '/'
     | '/console'
     | '/login'
-    | '/panda-prototype'
     | '/library'
     | '/library/'
     | '/library/$collectionType/$libraryId'
@@ -125,7 +115,6 @@ export interface FileRouteTypes {
     | '/'
     | '/console'
     | '/login'
-    | '/panda-prototype'
     | '/library'
     | '/library/$collectionType/$libraryId'
     | '/library/items/$itemId'
@@ -136,7 +125,6 @@ export interface FileRouteTypes {
     | '/_authenticated'
     | '/console'
     | '/login'
-    | '/panda-prototype'
     | '/_authenticated/library'
     | '/_authenticated/library/'
     | '/_authenticated/library/$collectionType/$libraryId'
@@ -149,18 +137,10 @@ export interface RootRouteChildren {
   AuthenticatedRoute: typeof AuthenticatedRouteWithChildren
   ConsoleRoute: typeof ConsoleRoute
   LoginRoute: typeof LoginRoute
-  PandaPrototypeRoute: typeof PandaPrototypeRoute
 }
 
 declare module '@tanstack/solid-router' {
   interface FileRoutesByPath {
-    '/panda-prototype': {
-      id: '/panda-prototype'
-      path: '/panda-prototype'
-      fullPath: '/panda-prototype'
-      preLoaderRoute: typeof PandaPrototypeRouteImport
-      parentRoute: typeof rootRouteImport
-    }
     '/login': {
       id: '/login'
       path: '/login'
@@ -263,7 +243,6 @@ const rootRouteChildren: RootRouteChildren = {
   AuthenticatedRoute: AuthenticatedRouteWithChildren,
   ConsoleRoute: ConsoleRoute,
   LoginRoute: LoginRoute,
-  PandaPrototypeRoute: PandaPrototypeRoute,
 }
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)
