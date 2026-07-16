@@ -3,10 +3,9 @@ import { Keyboard } from 'lucide-solid';
 import { Show } from 'solid-js';
 
 import { FieldControl, SectionCard } from '../ui';
+import * as shared from './shared.styles';
+import * as styles from './ShortcutKeysCard.styles';
 import type { OperationsConsoleForm } from './types';
-
-import * as shared from './shared.css';
-import * as styles from './ShortcutKeysCard.css';
 
 interface ShortcutKeysCardProps {
   form: OperationsConsoleForm;

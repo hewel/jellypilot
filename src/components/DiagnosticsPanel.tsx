@@ -2,9 +2,8 @@ import { Checkbox } from '@ark-ui/solid/checkbox';
 import { listen } from '@tauri-apps/api/event';
 import { For, Show, createEffect, createSignal, onCleanup, onMount } from 'solid-js';
 
+import * as styles from './DiagnosticsPanel.styles';
 import { Button } from './ui';
-
-import * as styles from './DiagnosticsPanel.css';
 
 interface BackendLogEntry {
   level: number;

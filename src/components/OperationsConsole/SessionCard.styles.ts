@@ -1,5 +1,133 @@
 import { css } from '@styled-system/css';
 
+export const header = css({
+  display: 'flex',
+  alignItems: 'flex-start',
+  gap: '3',
+});
+
+export const cardIcon = css({
+  color: 'error',
+  filter: '[drop-shadow(0 0 8px {colors.error/40})]',
+  height: '5',
+  mt: '1',
+  width: '5',
+});
+
+export const title = css({
+  color: 'onSurface',
+  fontSize: '16',
+  lineHeight: '24',
+  fontWeight: 'semibold',
+});
+
+export const description = css({
+  mt: '1',
+  color: 'onSurfaceVariant/80',
+  fontSize: '12',
+  lineHeight: '16',
+});
+
+export const backdrop = css({
+  backdropFilter: '[blur(4px)]',
+  bg: '[rgb(0 0 0 / 0.7)]',
+  inset: '0',
+  position: 'fixed',
+  transitionDuration: '300',
+  transitionProperty: '[backdrop-filter, background-color, opacity]',
+  zIndex: '50',
+  '&[data-state="closed"]': {
+    opacity: '[0]',
+  },
+  '&[data-state="open"]': {
+    opacity: '[1]',
+  },
+});
+
+export const positioner = css({
+  position: 'fixed',
+  display: 'flex',
+  alignItems: 'center',
+  justifyContent: 'center',
+  p: '4',
+  zIndex: '50',
+});
+
+export const positionerFill = css({
+  inset: '0',
+});
+
+export const content = css({
+  position: 'relative',
+  overflow: 'hidden',
+  p: '6',
+  boxShadow: '2xl',
+  backdropFilter: '[blur(24px)]',
+  bg: 'surfaceContainerLow/45',
+  borderWidth: '1px',
+  borderStyle: 'solid',
+  borderColor: 'error/30',
+  borderRadius: '4xl',
+  maxWidth: '[28rem]',
+  transitionDuration: '300',
+  transitionProperty: '[background-color, border-color, box-shadow, opacity, transform]',
+  _hover: {
+    bg: 'surfaceContainerLow/60',
+    borderColor: 'primary/35',
+  },
+  '&[data-state="closed"]': {
+    opacity: '[0]',
+    transform: '[translateY(0.25rem)]',
+  },
+  '&[data-state="open"]': {
+    opacity: '[1]',
+    transform: '[translateY(0)]',
+  },
+});
+
+export const glow = css({
+  backgroundImage: '[linear-gradient(90deg, transparent, {colors.error/60}, transparent)]',
+  height: '[3px]',
+  left: '0',
+  position: 'absolute',
+  top: '0',
+  width: 'full',
+});
+
+export const dialogTitle = css({
+  display: 'flex',
+  alignItems: 'center',
+  gap: '2',
+  color: 'onSurface',
+  fontSize: '22',
+  lineHeight: '28',
+  fontWeight: 'bold',
+});
+
+export const dialogIcon = css({
+  width: '6',
+  height: '6',
+  color: 'error',
+});
+
+export const dialogDescription = css({
+  mt: '3',
+  color: 'onSurfaceVariant/90',
+  fontSize: '14',
+  lineHeight: '20',
+});
+
+export const actions = css({
+  display: 'flex',
+  flexDirection: 'column-reverse',
+  gap: '3',
+  mt: '6',
+  sm: {
+    flexDirection: 'row',
+    justifyContent: 'flex-end',
+  },
+});
+
 export const card = css({
   bg: 'errorContainer/5',
   borderColor: 'error/20',
@@ -25,4 +153,9 @@ export const dangerButton = css({
   _hover: {
     bg: 'error/10',
   },
+});
+
+export const icon4_5 = css({
+  height: '[1.125rem]',
+  width: '[1.125rem]',
 });

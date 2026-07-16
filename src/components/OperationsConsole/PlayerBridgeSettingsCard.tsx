@@ -6,14 +6,11 @@ import { For, Show } from 'solid-js';
 
 import { Button, FieldControl, FieldTextarea, JellyPilotSelect, SectionCard } from '../ui';
 import type { JellyPilotSelectItem } from '../ui';
-import * as rootStyles from './PlayerBridgeSettingsCard.styles';
+import * as styles from './PlayerBridgeSettingsCard.styles';
+import * as shared from './shared.styles';
 import { useOperationsConsoleStore } from './store';
 import { getSubtitleLanguageLabel, parseSubtitleLanguageInput } from './subtitleLanguages';
 import type { OperationsConsoleForm } from './types';
-
-import * as patterns from '../../styles/patterns.css';
-import * as styles from './PlayerBridgeSettingsCard.css';
-import * as shared from './shared.css';
 
 interface PlayerBridgeSettingsCardProps {
   form: OperationsConsoleForm;
@@ -73,7 +70,7 @@ export default function PlayerBridgeSettingsCard(props: PlayerBridgeSettingsCard
                       field().handleBlur();
                       props.onSaveTextSetting('deviceName', event.currentTarget.value);
                     }}
-                    class={patterns.fullWidth}
+                    class={styles.fullWidth}
                     placeholder="JellyPilot"
                   />
                 )}
@@ -118,7 +115,7 @@ export default function PlayerBridgeSettingsCard(props: PlayerBridgeSettingsCard
                   onClick={props.onDetectMpv}
                   disabled={ui.detectingMpv}
                   variant="secondary"
-                  class={rootStyles.detectButton}
+                  class={styles.detectButton}
                 >
                   {ui.detectingMpv ? 'Detecting...' : 'Detect MPV'}
                 </Button>
@@ -139,7 +136,7 @@ export default function PlayerBridgeSettingsCard(props: PlayerBridgeSettingsCard
                 {...triggerProps()}
                 type="button"
                 variant="text"
-                class={rootStyles.advancedTrigger}
+                class={styles.advancedTrigger}
               />
             )}
           >
@@ -211,7 +208,7 @@ export default function PlayerBridgeSettingsCard(props: PlayerBridgeSettingsCard
                 type="button"
                 variant="text"
                 size="sm"
-                class={rootStyles.clearButton}
+                class={styles.clearButton}
                 onClick={props.onClearSubtitleLanguages}
               >
                 Clear all
@@ -252,7 +249,7 @@ export default function PlayerBridgeSettingsCard(props: PlayerBridgeSettingsCard
                         event.preventDefault();
                         props.onAddSubtitleLanguages();
                       }}
-                      class={`${styles.flexInput} ${patterns.mono}`}
+                      class={`${styles.flexInput} ${styles.mono}`}
                       placeholder="e.g. pol, tha"
                       aria-label="Custom subtitle language code"
                     />
@@ -294,23 +291,23 @@ export default function PlayerBridgeSettingsCard(props: PlayerBridgeSettingsCard
                         type="button"
                         variant="icon"
                         size="sm"
-                        class={rootStyles.smallIconButton}
+                        class={styles.smallIconButton}
                         disabled={index() === 0}
                         aria-label={`Move ${language} up`}
                         onClick={() => props.onMoveSubtitleLanguage(index(), -1)}
                       >
-                        <ArrowUp class={patterns.icon4} />
+                        <ArrowUp class={styles.icon4} />
                       </Button>
                       <Button
                         type="button"
                         variant="icon"
                         size="sm"
-                        class={rootStyles.smallIconButton}
+                        class={styles.smallIconButton}
                         disabled={index() === ui.selectedSubtitleLanguages.length - 1}
                         aria-label={`Move ${language} down`}
                         onClick={() => props.onMoveSubtitleLanguage(index(), 1)}
                       >
-                        <ArrowDown class={patterns.icon4} />
+                        <ArrowDown class={styles.icon4} />
                       </Button>
                       <TagsInput.ItemDeleteTrigger
                         asChild={(triggerProps) => (
@@ -319,11 +316,11 @@ export default function PlayerBridgeSettingsCard(props: PlayerBridgeSettingsCard
                             type="button"
                             variant="icon"
                             size="sm"
-                            class={`${rootStyles.smallIconButton} ${rootStyles.deleteButton}`}
+                            class={`${styles.smallIconButton} ${styles.deleteButton}`}
                             aria-label={`Remove ${language}`}
                             onClick={() => props.onRemoveSubtitleLanguage(language)}
                           >
-                            <Trash2 class={patterns.icon4} />
+                            <Trash2 class={styles.icon4} />
                           </Button>
                         )}
                       />

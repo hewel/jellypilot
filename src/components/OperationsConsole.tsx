@@ -18,6 +18,7 @@ import {
 import { queryKeys, runExit } from '../effects/query';
 import { restoreSavedSession } from '../sessionAccess';
 import LoginPage from './LoginPage';
+import * as styles from './OperationsConsole.styles';
 import ConnectionCard from './OperationsConsole/ConnectionCard';
 import DiagnosticsCard from './OperationsConsole/DiagnosticsCard';
 import IntroSkipCard from './OperationsConsole/IntroSkipCard';
@@ -34,9 +35,6 @@ import {
 import { useToast } from './ToastProvider';
 import { Button, ConsoleContainer, ConsoleGrid, PageFooter } from './ui';
 import type { JellyPilotSelectItem } from './ui';
-
-import * as patterns from '../styles/patterns.css';
-import * as styles from './OperationsConsole.css';
 
 interface OperationsConsoleProps {
   onSignedOut: () => void;
@@ -625,8 +623,8 @@ export default function OperationsConsole(props: OperationsConsoleProps) {
           <Dialog.Backdrop class={styles.backdrop} />
           <Dialog.Positioner class={`${styles.positioner} ${styles.positionerFill}`}>
             <Dialog.Content class={styles.content}>
-              <Dialog.Title class={patterns.srOnly}>Add saved service</Dialog.Title>
-              <Dialog.Description class={patterns.srOnly}>
+              <Dialog.Title class={styles.srOnly}>Add saved service</Dialog.Title>
+              <Dialog.Description class={styles.srOnly}>
                 Log in to a Jellyfin or Emby service and save it for switching.
               </Dialog.Description>
               <Button
@@ -637,7 +635,7 @@ export default function OperationsConsole(props: OperationsConsoleProps) {
                 title="Close add service"
                 onClick={() => setAddServiceOpen(false)}
               >
-                <X class={patterns.icon4_5} />
+                <X class={styles.icon4_5} />
               </Button>
               <LoginPage embedded onConnected={handleAddServiceConnected} />
             </Dialog.Content>

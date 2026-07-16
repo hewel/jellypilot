@@ -3,11 +3,8 @@ import { For, Show } from 'solid-js';
 
 import type { SavedServiceProfiles } from '../../bindings';
 import { Button, SectionCard } from '../ui';
-import * as rootStyles from './SavedServicesCard.styles';
-
-import * as patterns from '../../styles/patterns.css';
-import * as styles from './SavedServicesCard.css';
-import * as shared from './shared.css';
+import * as styles from './SavedServicesCard.styles';
+import * as shared from './shared.styles';
 
 interface SavedServicesCardProps {
   profiles: SavedServiceProfiles | null;
@@ -55,7 +52,7 @@ export default function SavedServicesCard(props: SavedServicesCardProps) {
                     </div>
                     <p class={styles.url}>{profile.serverUrl}</p>
                     <p class={styles.user}>
-                      <UserRound class={patterns.icon3_5} />
+                      <UserRound class={styles.icon3_5} />
                       {profile.userName}
                     </p>
                     <Show when={profile.lastRestoreError}>
@@ -81,7 +78,7 @@ export default function SavedServicesCard(props: SavedServicesCardProps) {
                     <Button
                       type="button"
                       variant="outlined"
-                      class={rootStyles.dangerButton}
+                      class={styles.dangerButton}
                       disabled={props.removingProfileKey === profile.key}
                       onClick={() => props.onRemoveProfile(profile.key)}
                     >
@@ -100,7 +97,7 @@ export default function SavedServicesCard(props: SavedServicesCardProps) {
           type="button"
           variant="primary"
           onClick={props.onAddService}
-          leadingIcon={<Plus class={patterns.icon4_5} />}
+          leadingIcon={<Plus class={styles.icon4_5} />}
         >
           Add service
         </Button>

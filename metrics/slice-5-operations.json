@@ -1,0 +1,25 @@
+{
+  "label": "operations",
+  "capturedAt": "2026-07-16T10:44:05.872Z",
+  "command": "bun run build (clean dist, 3 runs)",
+  "runs": [
+    {
+      "wallMs": 5627,
+      "cssRawBytes": 633607,
+      "cssGzipBytes": 51519
+    },
+    {
+      "wallMs": 5191,
+      "cssRawBytes": 633607,
+      "cssGzipBytes": 51519
+    },
+    {
+      "wallMs": 5100,
+      "cssRawBytes": 633607,
+      "cssGzipBytes": 51519
+    }
+  ],
+  "medianWallMs": 5191,
+  "cssRawBytes": 633607,
+  "cssGzipBytes": 51519
+}
