@@ -22,7 +22,7 @@ export default defineConfig({
       plugins: [
         tanstackRouter({
           autoCodeSplitting: false,
-          routeFileIgnorePattern: '\\.css\\.ts$',
+          routeFileIgnorePattern: '\\.(?:css|styles)\\.ts$',
           target: 'solid',
         }),
         new VanillaExtractPlugin(),

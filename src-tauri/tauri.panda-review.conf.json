@@ -1,0 +1,16 @@
+{
+  "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
+  "app": {
+    "windows": [
+      {
+        "title": "JellyPilot — Panda Review",
+        "width": 800,
+        "height": 600,
+        "minWidth": 360,
+        "minHeight": 540,
+        "resizable": true,
+        "fullscreen": false
+      }
+    ]
+  }
+}

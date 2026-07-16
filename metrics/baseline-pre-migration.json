@@ -1,0 +1,15 @@
+{
+  "capturedAt": "2026-07-16",
+  "branch": "refactor/panda-css-migration",
+  "commit": "634e5a3",
+  "environment": "linux local",
+  "command": "bun run build (clean dist, 3 runs)",
+  "runs": [
+    { "wallMs": 9016, "cssRawBytes": 622503, "cssGzipBytes": 66610 },
+    { "wallMs": 8772, "cssRawBytes": 622503, "cssGzipBytes": 66721 },
+    { "wallMs": 8553, "cssRawBytes": 622503, "cssGzipBytes": 66721 }
+  ],
+  "medianWallMs": 8772,
+  "cssRawBytes": 622503,
+  "cssGzipBytes": 66721
+}
