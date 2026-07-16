@@ -4,8 +4,7 @@ import { onCleanup, onMount } from 'solid-js';
 import type { JSX } from 'solid-js';
 
 import type { NotificationLevel } from '../bindings';
-
-import * as styles from './Toast.css';
+import * as styles from './Toast.styles';
 
 export type { NotificationLevel };
 

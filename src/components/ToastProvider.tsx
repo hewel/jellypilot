@@ -5,8 +5,7 @@ import type { ParentProps } from 'solid-js';
 
 import Toast from './Toast';
 import type { NotificationLevel } from './Toast';
-
-import * as styles from './ToastProvider.css';
+import * as styles from './ToastProvider.styles';
 
 const TOAST_EXIT_MS = 200;
 export interface ToastMessage {
