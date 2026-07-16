@@ -4,7 +4,6 @@ import { defineConfig } from '@rsbuild/core';
 import { pluginBabel } from '@rsbuild/plugin-babel';
 import { pluginSolid } from '@rsbuild/plugin-solid';
 import { tanstackRouter } from '@tanstack/router-plugin/rspack';
-import { VanillaExtractPlugin } from '@vanilla-extract/webpack-plugin';
 
 const rootDir = import.meta.dirname;
 
@@ -31,10 +30,9 @@ export default defineConfig({
       plugins: [
         tanstackRouter({
           autoCodeSplitting: false,
-          routeFileIgnorePattern: '\\.(?:css|styles)\\.ts$',
+          routeFileIgnorePattern: '\\.styles\\.ts$',
           target: 'solid',
         }),
-        new VanillaExtractPlugin(),
       ],
     },
   },

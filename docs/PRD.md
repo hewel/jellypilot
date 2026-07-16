@@ -13,7 +13,7 @@
 
 * **Language:** Rust (Latest Stable).
 * **Code Formatting:** `rustfmt` configured with `tab_spaces = 2`.
-* **GUI Framework:** Tauri v2 (Frontend: Solid.js/TypeScript + vanilla-extract).
+* **GUI Framework:** Tauri v2 (Frontend: Solid.js/TypeScript + Panda CSS).
 * **Type Sync:** `tauri-specta` v2 (with `specta-typescript`) for generating frontend bindings from Rust types.
 * **Async Runtime:** Tokio.
 * **Communication:**

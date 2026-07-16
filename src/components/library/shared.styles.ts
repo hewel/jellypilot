@@ -90,13 +90,34 @@ export const userDataControls = css({
 });
 
 export const userDataActions = css({
+  // Match DetailHero actions: column stack under sm, row wrap on sm+.
+  alignItems: 'stretch',
   display: 'flex',
-  flexWrap: 'wrap',
+  flexDirection: 'column',
   gap: '3',
+  maxWidth: '[100%]',
+  minWidth: '[0]',
+  width: 'full',
+  '& > *': {
+    boxSizing: 'border-box',
+    maxWidth: '[100%]',
+    minWidth: '[0]',
+    width: 'full',
+  },
+  sm: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    '& > *': {
+      width: 'auto',
+    },
+  },
 });
 
 export const pillButton = css({
   borderRadius: 'full',
+  boxSizing: 'border-box',
+  maxWidth: '[100%]',
 });
 
 export const favoriteSelected = css({

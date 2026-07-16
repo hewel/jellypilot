@@ -273,28 +273,11 @@ export const easings = {
   linear: 'linear',
 } as const;
 
-/** Compile-time breakpoints for Sprinkles media queries and Panda. */
+/** Compile-time breakpoints for Panda responsive conditions. */
 export const breakpoints = {
   sm: '640px',
   md: '768px',
   lg: '1024px',
   xl: '1280px',
   '2xl': '1536px',
-} as const;
-
-/** Map token-group keys to legacy --jellypilot-* CSS variable names. */
-export const legacyVarName = (group: string, key: string) =>
-  `--jellypilot-${group}-${key.replaceAll('_', '-')}`;
-
-export const legacyColorVarNames = Object.fromEntries(
-  (Object.keys(semanticColorHex) as (keyof typeof semanticColorHex)[]).map((key) => [
-    key,
-    `--jellypilot-color-${key.replaceAll(/([a-z0-9])([A-Z])/g, '$1-$2').toLowerCase()}`,
-  ]),
-) as Record<keyof typeof semanticColorHex, string>;
-
-export const legacyFontVarNames = {
-  display: '--jellypilot-font-display',
-  mono: '--jellypilot-font-mono',
-  sans: '--jellypilot-font-sans',
 } as const;

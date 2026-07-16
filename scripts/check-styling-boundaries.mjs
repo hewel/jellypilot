@@ -1,11 +1,10 @@
 #!/usr/bin/env bun
 /**
- * Styling-boundary checker for the Panda migration.
+ * Styling-boundary checker for Panda CSS.
  * Rejects:
  *  - raw palette token paths outside the theme
  *  - cross-component private-style imports
- *  - style modules importing both engines (except the documented VE token bridge)
- *  - direct mixed-engine class composition in one module
+ *  - legacy vanilla-extract imports and `.css.ts` modules
  */
 import { readdirSync, readFileSync, statSync } from 'node:fs';
 import { join, relative } from 'node:path';
@@ -13,14 +12,11 @@ import { join, relative } from 'node:path';
 const root = process.cwd();
 const srcRoot = join(root, 'src');
 const themeFiles = new Set(['src/styles/theme-tokens.ts', 'panda.config.ts']);
-// Explicit coexistence bridge: aliases Panda vars into the legacy VE contract.
-const BRIDGE_FILES = new Set(['src/styles/vars.css.ts']);
 
 const RAW_PALETTE =
   /\b(?:colors\.)?(?:neutral|indigo|teal|amber|red|cyan)\.(?:0|50|300|400|500|600|700|750|800|850|900|925|950|975|1000)\b/g;
 const VE_IMPORT = /from\s+['"]@vanilla-extract\/[^'"]+['"]/;
-const PANDA_IMPORT = /from\s+['"]@styled-system\/[^'"]+['"]/;
-const PRIVATE_STYLE_IMPORT = /from\s+['"]((?:\.\.?\/)+[^'"]+\.(?:css|styles)(?:\.ts)?)['"]/g;
+const PRIVATE_STYLE_IMPORT = /from\s+['"]((?:\.\.?\/)+[^'"]+\.styles(?:\.ts)?)['"]/g;
 
 /** @type {string[]} */
 const errors = [];
@@ -54,17 +50,11 @@ function checkRawPalette(fileRel, source) {
 }
 
 function checkEngineImports(fileRel, source) {
-  if (BRIDGE_FILES.has(fileRel)) return;
-  const hasVe = VE_IMPORT.test(source);
-  const hasPanda = PANDA_IMPORT.test(source);
-  if (hasVe && hasPanda) {
-    errors.push(`${fileRel}: style module imports both vanilla-extract and @styled-system`);
+  if (VE_IMPORT.test(source)) {
+    errors.push(`${fileRel}: vanilla-extract imports are forbidden; use @styled-system`);
   }
-  if (fileRel.endsWith('.css.ts') && hasPanda) {
-    errors.push(`${fileRel}: .css.ts must remain vanilla-extract only`);
-  }
-  if (fileRel.endsWith('.styles.ts') && hasVe) {
-    errors.push(`${fileRel}: .styles.ts must remain Panda only`);
+  if (fileRel.endsWith('.css.ts')) {
+    errors.push(`${fileRel}: legacy .css.ts modules are forbidden; use .styles.ts`);
   }
 }
 
@@ -80,22 +70,13 @@ function checkPrivateStyleImports(fileRel, source) {
     const spec = match[1];
     if (!spec) continue;
 
-    // Shared styles/* modules remain public during coexistence.
+    // Shared style infrastructure remains public.
     if (spec.includes('/styles/') || /(^|\/)styles\//.test(spec)) continue;
 
     // Adjacent owner style module: Button.tsx -> ./Button.css or ./Button.styles
     if (spec.startsWith('./') && !spec.slice(2).includes('/')) {
       const importedBase = spec.replace(/^\.\//, '').replace(/\.(?:css|styles)(?:\.ts)?$/, '');
       if (importedBase === fileBase) continue;
-    }
-
-    // Route-family style owners (library.css / browseRoute.css / detailRoute.css)
-    // Remain shared until the library migration slice replaces them.
-    if (
-      fileRel.startsWith('src/routes/') &&
-      /(library|browseRoute|detailRoute|__root)\.css/.test(spec)
-    ) {
-      continue;
     }
 
     // Same-folder OperationsConsole shared.css and similar local owners.

@@ -1,5 +1,18 @@
 import { css, cva } from '@styled-system/css';
 
+/**
+ * Narrow (360 stress) contracts for the Now Playing drawer shell.
+ * Drawer is a flex child of the positioner — minWidth must be 0 so
+ * intrinsic transport controls cannot expand past the viewport.
+ */
+export const nowPlayingDrawerNarrowLayout = {
+  contentWidth: 'full',
+  contentMaxWidth: '[100%]',
+  contentMinWidth: '[0]',
+  bodyMinWidth: '[0]',
+  smWidth: '[28rem]',
+} as const;
+
 export const trigger = css({
   position: 'relative',
 });
@@ -62,7 +75,9 @@ export const positioner = css({
   display: 'flex',
   inset: '0',
   justifyContent: 'flex-end',
+  minWidth: '[0]',
   position: 'fixed',
+  width: 'full',
   zIndex: '50',
 });
 
@@ -75,14 +90,17 @@ export const content = css({
   borderTopLeftRadius: '4xl',
   borderBottomLeftRadius: '4xl',
   boxShadow: '2xl',
+  boxSizing: 'border-box',
   display: 'flex',
   flexDirection: 'column',
   height: 'full',
+  maxWidth: nowPlayingDrawerNarrowLayout.contentMaxWidth,
+  minWidth: nowPlayingDrawerNarrowLayout.contentMinWidth,
   overflow: 'hidden',
   transitionDuration: '200',
   transitionProperty: '[opacity, transform]',
   transitionTimingFunction: 'standard',
-  width: 'full',
+  width: nowPlayingDrawerNarrowLayout.contentWidth,
   '&[data-state="closed"]': {
     opacity: '[0]',
     transform: '[translateX({spacing.3})]',
@@ -92,7 +110,7 @@ export const content = css({
     transform: '[translateX(0)]',
   },
   sm: {
-    width: '[28rem]',
+    width: nowPlayingDrawerNarrowLayout.smWidth,
   },
 });
 
@@ -101,10 +119,18 @@ export const header = css({
   borderBottomWidth: '1px',
   borderBottomStyle: 'solid',
   borderBottomColor: 'outlineVariant/20',
+  boxSizing: 'border-box',
   display: 'flex',
+  gap: '3',
   justifyContent: 'space-between',
-  px: '5',
+  maxWidth: '[100%]',
+  minWidth: '[0]',
+  px: '4',
   py: '4',
+  width: 'full',
+  sm: {
+    px: '5',
+  },
 });
 
 export const title = css({
@@ -127,8 +153,16 @@ export const closeIcon = css({
 });
 
 export const body = css({
+  boxSizing: 'border-box',
   flex: '[1]',
+  maxWidth: '[100%]',
+  minWidth: nowPlayingDrawerNarrowLayout.bodyMinWidth,
+  overflowX: 'auto',
   overflowY: 'auto',
-  px: '5',
+  px: '4',
   py: '4',
+  width: 'full',
+  sm: {
+    px: '5',
+  },
 });

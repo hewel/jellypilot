@@ -1,10 +1,27 @@
 import { css } from '@styled-system/css';
 
+/**
+ * Narrow contracts for Now Playing transport/timeline rows.
+ * Base: wrap controls and allow play button to shrink; sm+ keeps denser desktop row.
+ */
+export const nowPlayingCardNarrowLayout = {
+  rootMaxWidth: '[100%]',
+  rootMinWidth: '[0]',
+  controlsBaseWrap: 'wrap',
+  controlsBaseGap: '2',
+  playMinWidthBase: '[0]',
+  playMinWidthSm: '[8rem]',
+  timeLabelMinWidth: '[0]',
+} as const;
+
 export const root = css({
   display: 'grid',
   gap: '6',
+  maxWidth: nowPlayingCardNarrowLayout.rootMaxWidth,
+  minWidth: nowPlayingCardNarrowLayout.rootMinWidth,
   overflow: 'hidden',
   position: 'relative',
+  width: 'full',
   '&:hover > [data-part="hover-glow"]': {
     opacity: '[1]',
   },
@@ -13,6 +30,9 @@ export const root = css({
 export const bareRoot = css({
   display: 'grid',
   gap: '5',
+  maxWidth: nowPlayingCardNarrowLayout.rootMaxWidth,
+  minWidth: nowPlayingCardNarrowLayout.rootMinWidth,
+  width: 'full',
 });
 
 export const hoverGlow = css({
@@ -26,13 +46,18 @@ export const hoverGlow = css({
 });
 
 export const header = css({
+  maxWidth: '[100%]',
+  minWidth: '[0]',
   position: 'relative',
+  width: 'full',
   zIndex: '10',
 });
 
 export const headerCopy = css({
   display: 'grid',
   gap: '1',
+  maxWidth: '[100%]',
+  minWidth: '[0]',
 });
 
 export const headerBare = css({
@@ -133,8 +158,12 @@ export const badgePlacement = css({
 const panelBase = {
   position: 'relative',
   borderRadius: '3xl',
+  boxSizing: 'border-box',
+  maxWidth: '[100%]',
+  minWidth: '[0]',
   p: '4',
   boxShadow: 'inner',
+  width: 'full',
   zIndex: '10',
   backdropFilter: '[blur(4px)]',
   bg: 'surfaceContainerLowest/50',
@@ -148,6 +177,7 @@ export const panel = css(panelBase);
 export const timeRow = css({
   display: 'flex',
   alignItems: 'center',
+  gap: '2',
   justifyContent: 'space-between',
   mb: '2_5',
   color: 'onSurfaceVariant',
@@ -155,6 +185,15 @@ export const timeRow = css({
   fontSize: '11',
   fontVariantNumeric: 'tabular-nums',
   fontWeight: 'semibold',
+  maxWidth: '[100%]',
+  minWidth: '[0]',
+  width: 'full',
+  '& > *': {
+    minWidth: nowPlayingCardNarrowLayout.timeLabelMinWidth,
+    overflow: 'hidden',
+    textOverflow: 'ellipsis',
+    whiteSpace: 'nowrap',
+  },
 });
 
 export const emptyTrack = css({
@@ -241,7 +280,12 @@ export const controls = css({
   position: 'relative',
   display: 'flex',
   alignItems: 'center',
-  gap: '3',
+  flexWrap: nowPlayingCardNarrowLayout.controlsBaseWrap,
+  gap: nowPlayingCardNarrowLayout.controlsBaseGap,
+  justifyContent: 'center',
+  maxWidth: '[100%]',
+  minWidth: '[0]',
+  width: 'full',
   zIndex: '10',
 });
 
@@ -250,8 +294,10 @@ export const controlsBare = css({
 });
 
 export const controlsFramed = css({
-  flexWrap: 'wrap',
-  gap: '4',
+  // Sm+ can open spacing; base already wraps.
+  sm: {
+    gap: '4',
+  },
 });
 
 export const iconButton = css({
@@ -277,9 +323,15 @@ export const stopButton = css({
 
 export const playPauseButton = css({
   borderRadius: 'full',
-  minWidth: '[8rem]',
+  flex: '[1 1 auto]',
+  maxWidth: '[100%]',
+  minWidth: nowPlayingCardNarrowLayout.playMinWidthBase,
   overflow: 'hidden',
   position: 'relative',
+  sm: {
+    flex: 'none',
+    minWidth: nowPlayingCardNarrowLayout.playMinWidthSm,
+  },
 });
 
 export const iconSlot = css({

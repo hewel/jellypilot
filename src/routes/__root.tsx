@@ -6,7 +6,7 @@ import { Outlet, createRootRoute } from '@tanstack/solid-router';
 import { onCleanup } from 'solid-js';
 import type { Component } from 'solid-js';
 
-import * as styles from './__root.css';
+import * as styles from './__root.styles';
 
 const ScrollerWrapper: Component = () => {
   const appScroll = createAppScrollAreaController();
