@@ -1,0 +1,25 @@
+{
+  "label": "foundation",
+  "capturedAt": "2026-07-16T10:12:58.689Z",
+  "command": "bun run build (clean dist, 3 runs)",
+  "runs": [
+    {
+      "wallMs": 10141,
+      "cssRawBytes": 631981,
+      "cssGzipBytes": 51519
+    },
+    {
+      "wallMs": 10746,
+      "cssRawBytes": 631981,
+      "cssGzipBytes": 51519
+    },
+    {
+      "wallMs": 8794,
+      "cssRawBytes": 631981,
+      "cssGzipBytes": 51519
+    }
+  ],
+  "medianWallMs": 10141,
+  "cssRawBytes": 631981,
+  "cssGzipBytes": 51519
+}

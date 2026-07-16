@@ -16,6 +16,7 @@ export default defineConfig({
       'solid-js$': 'solid-js/dist/solid.js',
       'solid-js/store': 'solid-js/store/dist/store.js',
       'solid-js/web': 'solid-js/web/dist/web.js',
+      '@styled-system': './styled-system',
     },
   },
   setupFiles: ['./rstest.setup.ts'],

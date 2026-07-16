@@ -24,6 +24,7 @@
     "paths": {
       "@components/*": ["./src/components/*"],
       "@bindings": ["./src/bindings.ts"],
+      "@styled-system/*": ["./styled-system/*"],
       "~effects/*": ["./src/effects/*"],
       "~utils/*": ["./src/utils/*"]
     },
@@ -33,5 +34,5 @@
       }
     ]
   },
-  "include": ["src", "src/types/**/*.d.ts"]
+  "include": ["src", "src/types/**/*.d.ts", "styled-system"]
 }

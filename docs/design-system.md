@@ -2,7 +2,11 @@
 
 JellyPilot uses a desktop-first Control Room design system: dark-only, clean OLED surfaces, selective cinematic glass, and clear operational state. The interface should feel like a reliable media companion for a Jellyfin Playback Target, not a generic mobile settings app.
 
-Use the typed vanilla-extract styling layer for shared UI and application surfaces: design tokens in `src/styles/vars.css.ts`, atomic utilities from `src/styles/sprinkles.css.ts`, semantic component variants via Recipes, global styles, and component-local `.css.ts` files for complex CSS. Compose static vanilla-extract classes with `style([sprinkles(...), { ... }])` rather than manual `.join(' ')` strings; use Solid `classList` only for runtime conditional classes in `.tsx`. The former utility-CSS bridge is not installed. Reusable visual patterns are components under `src/components/ui`, not global `@layer` class APIs.
+**Migration note:** Panda CSS is the active styling system ([ADR 0011](adr/0011-panda-css-styling.md)). New and migrated surfaces use owner-local `.styles.ts` modules and Panda tokens. Unmigrated surfaces may still use vanilla-extract `.css.ts` / Sprinkles until their slice lands; do not mix engines on one element.
+
+**Viewports:** Supported production Tauri sizes are **1280×720** (minimum) and **1600×900** (default). **800×600**, **640×720**, and **360×720** are responsive stress targets exercised with the review-only Tauri config, not production window sizes.
+
+Reusable visual patterns are components under `src/components/ui`, not global `@layer` class APIs. Compose Panda classes with Solid `class` / `classList` (and `cx` when needed).
 
 ## Principles
 
@@ -14,7 +18,7 @@ Use the typed vanilla-extract styling layer for shared UI and application surfac
 
 ## Color System
 
-All components use semantic tokens. The source of truth is the vanilla-extract contract in `src/styles/vars.css.ts`; Sprinkles, Recipes, and component-local CSS consume that contract directly. `#4f46e5` is the JellyPilot brand seed and primary filled-action background; it is not used as small text on near-black surfaces because contrast is insufficient.
+All components use semantic tokens. Panda owns token values (`panda.config.ts` / `src/styles/theme-tokens.ts`). During coexistence the vanilla-extract bridge re-exports legacy `--jellypilot-*` aliases to Panda variables for unmigrated modules. `#4f46e5` is the JellyPilot brand seed and primary filled-action background; it is not used as small text on near-black surfaces because contrast is insufficient.
 
 | Token | Former Utility Alias | Hex | Usage |
 |---|---|---:|---|

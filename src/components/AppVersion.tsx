@@ -2,8 +2,7 @@ import { createQuery } from '@tanstack/solid-query';
 import { getVersion } from '@tauri-apps/api/app';
 
 import { queryKeys } from '../effects/query';
-
-import * as styles from './AppVersion.css';
+import * as styles from './AppVersion.styles';
 
 interface AppVersionProps {
   class?: string;

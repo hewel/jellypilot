@@ -4,7 +4,7 @@ JellyPilot moved from string-authored utility styling to a typed vanilla-extract
 
 ## Status
 
-Accepted
+Superseded by [ADR 0011](./0011-panda-css-styling.md)
 
 ## Context
 
@@ -23,3 +23,7 @@ ADR 0008 made vanilla-extract the owner of design tokens while a utility alias l
 - New reusable styling should use Sprinkles, Recipes, or component-local `style()` instead of utility class strings.
 - Arbitrary values are not a public utility feature. One-off values must become semantic tokens/Recipes or remain local component CSS.
 - UnoCSS remains a reference/input dependency only; adding UnoCSS runtime extraction, shortcuts, variants, icons, or rule matching requires a new decision.
+
+## Supersession
+
+Active styling guidance is now [ADR 0011 — Panda CSS styling](./0011-panda-css-styling.md). This ADR is preserved as historical context for the vanilla-extract intermediate layer. During the staged Panda migration, vanilla-extract modules may remain only until their owning slice migrates; they are not the preferred authoring path for new work.
