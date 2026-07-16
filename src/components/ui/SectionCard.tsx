@@ -1,8 +1,7 @@
 import type { JSX } from 'solid-js';
 
 import { Card } from './Card';
-
-import * as styles from './SectionCard.css';
+import * as styles from './SectionCard.styles';
 
 interface SectionCardProps {
   icon: JSX.Element;

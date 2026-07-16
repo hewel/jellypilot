@@ -504,15 +504,6 @@ export const alertMessage = sprinkles({
   lineHeight: '20',
 });
 
-export const shell = sprinkles({
-  position: 'relative',
-  display: 'flex',
-  alignItems: 'center',
-  justifyContent: 'center',
-  overflowY: 'auto',
-  py: '10',
-});
-
 export const main = style({
   maxWidth: '48rem',
   position: 'relative',
@@ -637,7 +628,3 @@ export const appDescription = style([
     maxWidth: '28rem',
   },
 ]);
-
-export const footer = sprinkles({
-  mt: '8',
-});

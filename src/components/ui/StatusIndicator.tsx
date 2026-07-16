@@ -1,4 +1,4 @@
-import * as styles from './StatusIndicator.css';
+import * as styles from './StatusIndicator.styles';
 
 interface StatusIndicatorProps {
   connected: boolean;

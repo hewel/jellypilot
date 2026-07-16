@@ -1,4 +1,4 @@
-import * as styles from './StatusBadge.css';
+import * as styles from './StatusBadge.styles';
 
 type StatusBadgeVariant = 'success' | 'warning' | 'error' | 'neutral';
 

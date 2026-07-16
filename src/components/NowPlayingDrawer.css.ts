@@ -6,10 +6,6 @@ import { breakpoints, vars } from '../styles/vars.css';
 const mix = (color: string, amount: number) =>
   `color-mix(in srgb, ${color} ${amount}%, transparent)`;
 
-export const trigger = style({
-  position: 'relative',
-});
-
 export const triggerIcon = style({
   height: vars.space['5'],
   width: vars.space['5'],

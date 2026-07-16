@@ -3,11 +3,6 @@ import { style } from '@vanilla-extract/css';
 import { sprinkles } from '../../styles/sprinkles.css';
 import { vars } from '../../styles/vars.css';
 
-export const statusCard = style({
-  display: 'grid',
-  gap: vars.space['5'],
-});
-
 export const statusContent = sprinkles({
   display: 'flex',
   alignItems: 'flex-start',
@@ -106,10 +101,6 @@ export const userDataActions = sprinkles({
   display: 'flex',
   flexWrap: 'wrap',
   gap: '3',
-});
-
-export const pillButton = style({
-  borderRadius: vars.borderRadius.full,
 });
 
 export const favoriteSelected = style({

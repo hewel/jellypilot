@@ -8,6 +8,6 @@ export const version = css({
   mt: '1',
   fontFamily: 'mono',
   letterSpacing: '0.08em',
-  opacity: 0.5,
+  opacity: '[0.5]',
   textTransform: 'uppercase',
 });

@@ -1,6 +1,6 @@
 import type { JSX } from 'solid-js';
 
-import * as styles from './InfoCard.css';
+import * as styles from './InfoCard.styles';
 
 interface InfoCardProps {
   label: string;

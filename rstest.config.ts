@@ -1,7 +1,11 @@
+import path from 'node:path';
+
 import { pluginBabel } from '@rsbuild/plugin-babel';
 import { pluginSolid } from '@rsbuild/plugin-solid';
 import { defineConfig } from '@rstest/core';
 import { VanillaExtractPlugin } from '@vanilla-extract/webpack-plugin';
+
+const rootDir = import.meta.dirname;
 
 // Docs: https://rstest.rs/config/
 export default defineConfig({
@@ -16,7 +20,7 @@ export default defineConfig({
       'solid-js$': 'solid-js/dist/solid.js',
       'solid-js/store': 'solid-js/store/dist/store.js',
       'solid-js/web': 'solid-js/web/dist/web.js',
-      '@styled-system': './styled-system',
+      '@styled-system': path.join(rootDir, 'styled-system'),
     },
   },
   setupFiles: ['./rstest.setup.ts'],

@@ -6,6 +6,7 @@ import { For, Show } from 'solid-js';
 
 import { Button, FieldControl, FieldTextarea, JellyPilotSelect, SectionCard } from '../ui';
 import type { JellyPilotSelectItem } from '../ui';
+import * as rootStyles from './PlayerBridgeSettingsCard.styles';
 import { useOperationsConsoleStore } from './store';
 import { getSubtitleLanguageLabel, parseSubtitleLanguageInput } from './subtitleLanguages';
 import type { OperationsConsoleForm } from './types';
@@ -117,7 +118,7 @@ export default function PlayerBridgeSettingsCard(props: PlayerBridgeSettingsCard
                   onClick={props.onDetectMpv}
                   disabled={ui.detectingMpv}
                   variant="secondary"
-                  class={styles.detectButton}
+                  class={rootStyles.detectButton}
                 >
                   {ui.detectingMpv ? 'Detecting...' : 'Detect MPV'}
                 </Button>
@@ -138,7 +139,7 @@ export default function PlayerBridgeSettingsCard(props: PlayerBridgeSettingsCard
                 {...triggerProps()}
                 type="button"
                 variant="text"
-                class={styles.advancedTrigger}
+                class={rootStyles.advancedTrigger}
               />
             )}
           >
@@ -210,7 +211,7 @@ export default function PlayerBridgeSettingsCard(props: PlayerBridgeSettingsCard
                 type="button"
                 variant="text"
                 size="sm"
-                class={styles.clearButton}
+                class={rootStyles.clearButton}
                 onClick={props.onClearSubtitleLanguages}
               >
                 Clear all
@@ -293,7 +294,7 @@ export default function PlayerBridgeSettingsCard(props: PlayerBridgeSettingsCard
                         type="button"
                         variant="icon"
                         size="sm"
-                        class={styles.smallIconButton}
+                        class={rootStyles.smallIconButton}
                         disabled={index() === 0}
                         aria-label={`Move ${language} up`}
                         onClick={() => props.onMoveSubtitleLanguage(index(), -1)}
@@ -304,7 +305,7 @@ export default function PlayerBridgeSettingsCard(props: PlayerBridgeSettingsCard
                         type="button"
                         variant="icon"
                         size="sm"
-                        class={styles.smallIconButton}
+                        class={rootStyles.smallIconButton}
                         disabled={index() === ui.selectedSubtitleLanguages.length - 1}
                         aria-label={`Move ${language} down`}
                         onClick={() => props.onMoveSubtitleLanguage(index(), 1)}
@@ -318,7 +319,7 @@ export default function PlayerBridgeSettingsCard(props: PlayerBridgeSettingsCard
                             type="button"
                             variant="icon"
                             size="sm"
-                            class={`${styles.smallIconButton} ${styles.deleteButton}`}
+                            class={`${rootStyles.smallIconButton} ${rootStyles.deleteButton}`}
                             aria-label={`Remove ${language}`}
                             onClick={() => props.onRemoveSubtitleLanguage(language)}
                           >

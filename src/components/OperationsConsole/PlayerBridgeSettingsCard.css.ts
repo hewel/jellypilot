@@ -73,25 +73,6 @@ export const flexInput = style({
   minWidth: 0,
 });
 
-export const detectButton = style({
-  minHeight: vars.space['14'],
-  '@media': {
-    'screen and (min-width: 640px)': {
-      minHeight: 0,
-    },
-  },
-});
-
-export const advancedTrigger = style({
-  fontWeight: vars.fontWeight.bold,
-  paddingInline: 0,
-  selectors: {
-    '&:hover': {
-      color: vars.color.secondary,
-    },
-  },
-});
-
 export const chevron = style({
   color: vars.color.onSurfaceVariant,
   height: '1.125rem',
@@ -181,21 +162,6 @@ export const languageIcon = style({
   color: vars.color.secondary,
   height: '1.125rem',
   width: '1.125rem',
-});
-
-export const clearButton = style({
-  border: `1px solid ${vars.color.outlineVariant}`,
-  borderRadius: vars.borderRadius.xl,
-  fontSize: vars.fontSize['13'],
-  fontWeight: vars.fontWeight.bold,
-  minWidth: 0,
-  padding: `${vars.space['1']} ${vars.space['3']}`,
-  selectors: {
-    '&:hover': {
-      background: mix(vars.color.secondary, 0.05),
-      borderColor: vars.color.secondary,
-    },
-  },
 });
 
 export const hidden = style({
@@ -373,27 +339,4 @@ export const itemActions = sprinkles({
   flexShrink: '0',
   alignItems: 'center',
   gap: '1_5',
-});
-
-export const smallIconButton = style({
-  background: mix(vars.color.surfaceContainerHigh, 0.3),
-  border: `1px solid ${mix(vars.color.outlineVariant, 0.6)}`,
-  borderRadius: vars.borderRadius.lg,
-  height: vars.space['8'],
-  width: vars.space['8'],
-  selectors: {
-    '&:hover': {
-      borderColor: vars.color.secondary,
-      color: vars.color.secondary,
-    },
-  },
-});
-
-export const deleteButton = style({
-  selectors: {
-    '&:hover': {
-      borderColor: vars.color.error,
-      color: vars.color.error,
-    },
-  },
 });

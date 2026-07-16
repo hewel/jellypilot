@@ -135,17 +135,6 @@ export const actions = sprinkles({
   gap: '2',
 });
 
-export const dangerButton = style({
-  borderColor: mix(vars.color.error, 0.55),
-  color: vars.color.error,
-  selectors: {
-    '&:hover': {
-      background: mix(vars.color.error, 0.1),
-      borderColor: vars.color.error,
-    },
-  },
-});
-
 export const footer = sprinkles({
   mt: '5',
 });

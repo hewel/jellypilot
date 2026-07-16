@@ -42,13 +42,6 @@ export const content = style({
   width: '100%',
 });
 
-export const card = style({
-  background: `color-mix(in srgb, ${vars.color.secondaryContainer} 10%, transparent)`,
-  borderColor: `color-mix(in srgb, ${vars.color.secondary} 40%, transparent)`,
-  display: 'grid',
-  gap: vars.space['4'],
-});
-
 export const eyebrow = style([
   sprinkles({
     color: 'secondary',
@@ -127,10 +120,6 @@ export const closeButton = style([
 export const icon = sprinkles({
   width: '4',
   height: '4',
-});
-
-export const pillButton = style({
-  borderRadius: vars.borderRadius.full,
 });
 
 export const playIcon = style([

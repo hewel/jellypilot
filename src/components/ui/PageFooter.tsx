@@ -1,6 +1,7 @@
-import AppVersion from '../AppVersion';
+import { cx } from '@styled-system/css';
 
-import * as styles from './PageFooter.css';
+import AppVersion from '../AppVersion';
+import * as styles from './PageFooter.styles';
 
 interface PageFooterProps {
   appName?: string;
@@ -12,7 +13,7 @@ interface PageFooterProps {
  */
 export default function PageFooter(props: PageFooterProps) {
   return (
-    <div class={`${styles.root} ${props.class ?? ''}`}>
+    <div class={cx(styles.root, props.class)}>
       <p class={styles.text}>{props.appName ?? 'JellyPilot'}</p>
       <AppVersion />
     </div>

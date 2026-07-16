@@ -3,6 +3,7 @@ import { LogOut, ShieldAlert } from 'lucide-solid';
 import { Portal } from 'solid-js/web';
 
 import { Button, Card } from '../ui';
+import * as rootStyles from './SessionCard.styles';
 import { useOperationsConsoleStore } from './store';
 
 import * as patterns from '../../styles/patterns.css';
@@ -40,7 +41,7 @@ export default function SessionCard(props: SessionCardProps) {
       unmountOnExit
       role="dialog"
     >
-      <Card as="section" variant="filled" class={styles.card}>
+      <Card as="section" variant="filled" class={rootStyles.card}>
         <div class={styles.header}>
           <ShieldAlert class={styles.cardIcon} />
           <div>
@@ -57,7 +58,7 @@ export default function SessionCard(props: SessionCardProps) {
               {...triggerProps()}
               type="button"
               variant="outlined"
-              class={styles.signOutButton}
+              class={rootStyles.signOutButton}
             >
               <LogOut class={patterns.icon4_5} />
               <span>Sign out</span>
@@ -107,7 +108,7 @@ export default function SessionCard(props: SessionCardProps) {
               <Button
                 type="button"
                 variant="outlined"
-                class={styles.dangerButton}
+                class={rootStyles.dangerButton}
                 onClick={props.onSignOut}
                 disabled={ui.signingOut}
               >

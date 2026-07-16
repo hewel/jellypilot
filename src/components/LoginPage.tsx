@@ -24,6 +24,7 @@ import {
 } from '../serverUrl';
 import type { ServerScheme, ServerUrlResult } from '../serverUrl';
 import { saveCurrentSession } from '../sessionAccess';
+import * as rootStyles from './LoginPage.styles';
 import { Button, Card, ConsoleShell, FieldControl, PageFooter } from './ui';
 
 import * as patterns from '../styles/patterns.css';
@@ -579,7 +580,7 @@ export default function LoginPage(props: LoginPageProps) {
   }
 
   return (
-    <ConsoleShell class={styles.shell}>
+    <ConsoleShell class={rootStyles.shell}>
       <main class={styles.main}>
         <div class={styles.hero}>
           <div class={styles.heroIconWrap}>
@@ -602,7 +603,7 @@ export default function LoginPage(props: LoginPageProps) {
 
         {loginCard()}
 
-        <PageFooter class={styles.footer} />
+        <PageFooter class={rootStyles.footer} />
       </main>
     </ConsoleShell>
   );

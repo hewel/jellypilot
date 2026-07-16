@@ -20,6 +20,7 @@ import type { CommandError } from '../../effects/errors';
 import { Button, Card } from '../ui';
 import type { JellyPilotSelectItem } from '../ui';
 import { MediaInfoHoverCard } from './MediaInfoHoverCard';
+import * as rootStyles from './shared.styles';
 import { VideoCard } from './VideoCard';
 import type { VideoCardAspectClass } from './VideoCard';
 
@@ -33,7 +34,7 @@ export function LibraryStatusPanel(props: { title: string; description?: string 
     <Card
       as="section"
       variant="elevated"
-      class={styles.statusCard}
+      class={rootStyles.statusCard}
       aria-labelledby="video-home-status-title"
     >
       <div class={styles.statusContent}>
@@ -198,7 +199,7 @@ export function UserDataControls(props: {
         <Button
           type="button"
           variant="secondary"
-          class={styles.pillButton}
+          class={rootStyles.pillButton}
           classList={{ [styles.favoriteSelected]: props.favorite }}
           disabled={busy() !== null}
           onClick={() => void runAction(favoriteAction())}
@@ -220,7 +221,7 @@ export function UserDataControls(props: {
         <Button
           type="button"
           variant="secondary"
-          class={styles.pillButton}
+          class={rootStyles.pillButton}
           classList={{ [styles.playedSelected]: props.played }}
           disabled={busy() !== null}
           onClick={() => void runAction(playedAction())}

@@ -1,6 +1,6 @@
 import type { JSX } from 'solid-js';
 
-import * as styles from './PageHeader.css';
+import * as styles from './PageHeader.styles';
 
 interface PageHeaderProps {
   title: string;

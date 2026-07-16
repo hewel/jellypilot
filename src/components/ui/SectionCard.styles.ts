@@ -1,13 +1,13 @@
-import { sprinkles } from '../../styles/sprinkles.css';
+import { css } from '@styled-system/css';
 
-export const header = sprinkles({
+export const header = css({
   mb: '6',
   display: 'flex',
   alignItems: 'center',
   justifyContent: 'space-between',
 });
 
-export const title = sprinkles({
+export const title = css({
   display: 'flex',
   alignItems: 'center',
   gap: '3',

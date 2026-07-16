@@ -150,29 +150,6 @@ export const actionRow = sprinkles({
   gap: '3',
 });
 
-export const refreshButton = style({
-  background: mix(vars.color.surfaceContainerHigh, 0.2),
-  border: `1px solid ${vars.color.outlineVariant}`,
-  borderRadius: vars.borderRadius.xl,
-  marginLeft: 'auto',
-  selectors: {
-    '&:hover': {
-      borderColor: vars.color.secondary,
-      color: vars.color.secondary,
-    },
-  },
-});
-
-export const mutedOutlinedButton = style({
-  color: vars.color.onSurfaceVariant,
-  selectors: {
-    '&:hover': {
-      borderColor: mix(vars.color.primary, 0.5),
-      color: vars.color.onSurface,
-    },
-  },
-});
-
 export const stack4 = style({
   display: 'grid',
   gap: vars.space['4'],

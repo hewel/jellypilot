@@ -3,6 +3,7 @@ import { Show } from 'solid-js';
 
 import type { ConnectionState } from '../../bindings';
 import { Button, SectionCard } from '../ui';
+import * as rootStyles from './shared.styles';
 import { useOperationsConsoleStore } from './store';
 
 import * as patterns from '../../styles/patterns.css';
@@ -76,7 +77,7 @@ export default function ConnectionCard(props: ConnectionCardProps) {
         <Button
           type="button"
           variant="outlined"
-          class={styles.mutedOutlinedButton}
+          class={rootStyles.mutedOutlinedButton}
           disabled={ui.disconnecting || !props.state?.connected}
           onClick={props.onDisconnect}
           leadingIcon={<Power class={patterns.icon4_5} />}
@@ -97,7 +98,7 @@ export default function ConnectionCard(props: ConnectionCardProps) {
           type="button"
           variant="icon"
           onClick={props.onRefresh}
-          class={styles.refreshButton}
+          class={rootStyles.refreshButton}
           aria-label="Refresh status"
           title="Refresh status"
         >

@@ -1,7 +1,7 @@
 import { Show, splitProps } from 'solid-js';
 import type { JSX } from 'solid-js';
 
-import * as styles from './Button.css';
+import * as styles from './Button.styles';
 
 export interface ButtonProps extends JSX.ButtonHTMLAttributes<HTMLButtonElement> {
   variant?: 'primary' | 'secondary' | 'tonal' | 'outlined' | 'text' | 'icon';
@@ -13,7 +13,7 @@ export interface ButtonProps extends JSX.ButtonHTMLAttributes<HTMLButtonElement>
 }
 
 /**
- * Control Room Button component styled with vanilla-extract Recipes.
+ * Control Room Button component styled with Panda recipes.
  * Supports design system variants (primary, secondary, tonal, outlined, text, icon), sizes,
  * and automatically renders as an `<a>` element if an `href` prop is supplied.
  */
@@ -35,9 +35,9 @@ export default function Button(props: ButtonProps) {
   const buttonClass = () => {
     const currentVariant = variant();
     if (currentVariant === 'icon') {
-      return `${styles.iconButton({ size: size() })} ${local.class ?? ''}`;
+      return styles.cx(styles.iconButton({ size: size() }), local.class);
     }
-    return `${styles.button({ variant: currentVariant, size: size() })} ${local.class ?? ''}`;
+    return styles.cx(styles.button({ variant: currentVariant, size: size() }), local.class);
   };
 
   return (
