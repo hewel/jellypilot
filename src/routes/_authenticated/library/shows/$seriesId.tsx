@@ -43,7 +43,7 @@ import {
 } from '~effects/query';
 import { imageSource } from '~utils/imageSource';
 
-import * as styles from '../detailRoute.css';
+import * as styles from '../detailRoute.styles';
 
 export const Route = createFileRoute('/_authenticated/library/shows/$seriesId')({
   component: LibraryShowDetailRoute,

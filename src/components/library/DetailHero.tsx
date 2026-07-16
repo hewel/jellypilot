@@ -4,9 +4,7 @@ import { Show, createEffect, createSignal } from 'solid-js';
 import type { JSX } from 'solid-js';
 import { imageSource } from '~utils/imageSource';
 
-import * as rootStyles from './DetailHero.styles';
-
-import * as styles from './DetailHero.css';
+import * as styles from './DetailHero.styles';
 
 export interface DetailHeroProps {
   title: string;
@@ -64,7 +62,7 @@ export function DetailHero(props: DetailHeroProps) {
           type="button"
           variant="outlined"
           size="sm"
-          class={rootStyles.backButton}
+          class={styles.backButton}
           leadingIcon={<ArrowLeft class={styles.backIcon} />}
           onClick={() => props.onBack?.()}
         >

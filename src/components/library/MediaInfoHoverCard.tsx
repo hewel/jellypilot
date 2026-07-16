@@ -16,8 +16,7 @@ import {
   queryKeys,
   runExit,
 } from '../../effects/query';
-
-import * as styles from './MediaInfoHoverCard.css';
+import * as styles from './MediaInfoHoverCard.styles';
 
 // Inlined (instead of importing from ./shared) to avoid a shared.tsx <-> card
 // Import cycle. Matches the formatRuntime shape used elsewhere.

@@ -1,0 +1,25 @@
+{
+  "label": "library",
+  "capturedAt": "2026-07-16T11:11:02.565Z",
+  "command": "bun run build (clean dist, 3 runs)",
+  "runs": [
+    {
+      "wallMs": 4280,
+      "cssRawBytes": 616490,
+      "cssGzipBytes": 51519
+    },
+    {
+      "wallMs": 3991,
+      "cssRawBytes": 616490,
+      "cssGzipBytes": 51519
+    },
+    {
+      "wallMs": 3852,
+      "cssRawBytes": 616490,
+      "cssGzipBytes": 51519
+    }
+  ],
+  "medianWallMs": 3991,
+  "cssRawBytes": 616490,
+  "cssGzipBytes": 51519
+}
