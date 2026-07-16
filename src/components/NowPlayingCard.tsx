@@ -23,11 +23,9 @@ import {
 } from '../effects/nowPlaying';
 import type { NowPlayingEffect } from '../effects/nowPlaying';
 import { queryKeys, runExit } from '../effects/query';
+import * as styles from './NowPlayingCard.styles';
 import { useToast } from './ToastProvider';
 import { Button, Card, JellyPilotSelect, StatusBadge } from './ui';
-
-import * as patterns from '../styles/patterns.css';
-import * as styles from './NowPlayingCard.css';
 
 function formatTime(seconds: number): string {
   if (!Number.isFinite(seconds) || seconds <= 0) {
@@ -215,7 +213,7 @@ export default function NowPlayingCard(props: {
 
   const inner = (
     <div class={props.bare ? styles.bareRoot : styles.root}>
-      {!props.bare && <div class={styles.hoverGlow} />}
+      {!props.bare && <div class={styles.hoverGlow} data-part="hover-glow" />}
 
       <div class={styles.header}>
         <div
@@ -307,7 +305,7 @@ export default function NowPlayingCard(props: {
             void runCommand('previous', playPreviousEpisode, 'Could not play previous episode')
           }
         >
-          <SkipBack class={patterns.icon5} />
+          <SkipBack class={styles.icon5} />
         </Button>
         <Button
           type="button"
@@ -353,7 +351,7 @@ export default function NowPlayingCard(props: {
           disabled={!current()?.canPlayNext || busy() !== null}
           onClick={() => void runCommand('next', playNextEpisode, 'Could not play next episode')}
         >
-          <SkipForward class={patterns.icon5} />
+          <SkipForward class={styles.icon5} />
         </Button>
         <Show when={current()?.status === 'offline' && !connected()}>
           <Button
