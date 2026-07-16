@@ -1,0 +1,25 @@
+{
+  "label": "now-playing",
+  "capturedAt": "2026-07-16T10:53:18.347Z",
+  "command": "bun run build (clean dist, 3 runs)",
+  "runs": [
+    {
+      "wallMs": 6237,
+      "cssRawBytes": 631373,
+      "cssGzipBytes": 51519
+    },
+    {
+      "wallMs": 4942,
+      "cssRawBytes": 631373,
+      "cssGzipBytes": 51519
+    },
+    {
+      "wallMs": 4729,
+      "cssRawBytes": 631373,
+      "cssGzipBytes": 51519
+    }
+  ],
+  "medianWallMs": 4942,
+  "cssRawBytes": 631373,
+  "cssGzipBytes": 51519
+}

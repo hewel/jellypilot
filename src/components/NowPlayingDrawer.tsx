@@ -9,10 +9,8 @@ import type { NowPlayingState } from '../bindings';
 import { fetchNowPlayingState, listenNowPlayingChanged } from '../effects/nowPlaying';
 import { queryKeys, runExit } from '../effects/query';
 import NowPlayingCard from './NowPlayingCard';
-import * as rootStyles from './NowPlayingDrawer.styles';
+import * as styles from './NowPlayingDrawer.styles';
 import { Button } from './ui';
-
-import * as styles from './NowPlayingDrawer.css';
 
 const statusText = Match.type<NowPlayingState['status'] | undefined>().pipe(
   Match.withReturnType<string>(),
@@ -90,7 +88,7 @@ export default function NowPlayingDrawer(props: { jellyfinConnected: boolean }) 
             type="button"
             variant="icon"
             aria-label={triggerLabel(state())}
-            class={rootStyles.trigger}
+            class={styles.trigger}
           >
             <MonitorPlay class={styles.triggerIcon} />
             <span class={statusDotClass(state()?.status)} />
