@@ -5,6 +5,12 @@ export const stack = css({
   gap: '6',
 });
 
+export const addServiceDialogOverflowLayout = {
+  contentMarginBlock: 'auto',
+  positionerAlignItems: 'flex-start',
+  positionerOverflowY: 'auto',
+} as const;
+
 export const backdrop = css({
   backdropFilter: '[blur(4px)]',
   bg: '[rgb(0 0 0 / 0.7)]',
@@ -20,9 +26,9 @@ export const backdrop = css({
 export const positioner = css({
   position: 'fixed',
   display: 'flex',
-  alignItems: 'center',
+  alignItems: addServiceDialogOverflowLayout.positionerAlignItems,
   justifyContent: 'center',
-  overflowY: 'auto',
+  overflowY: addServiceDialogOverflowLayout.positionerOverflowY,
   p: '4',
   zIndex: '60',
 });
@@ -32,6 +38,7 @@ export const positionerFill = css({
 });
 
 export const content = css({
+  my: addServiceDialogOverflowLayout.contentMarginBlock,
   maxWidth: '[48rem]',
   outline: 'none',
   position: 'relative',
