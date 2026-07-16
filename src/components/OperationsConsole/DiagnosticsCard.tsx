@@ -3,9 +3,8 @@ import { ClipboardList } from 'lucide-solid';
 import DiagnosticsPanel from '../DiagnosticsPanel';
 import { Button, SectionCard } from '../ui';
 import * as rootStyles from './DiagnosticsCard.styles';
+import * as shared from './shared.styles';
 import { useOperationsConsoleStore } from './store';
-
-import * as shared from './shared.css';
 
 export default function DiagnosticsCard() {
   const [ui, actions] = useOperationsConsoleStore();

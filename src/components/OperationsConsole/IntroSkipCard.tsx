@@ -4,9 +4,8 @@ import { For, Show } from 'solid-js';
 import type { IntroSkipperMode } from '../../bindings';
 import { SectionCard } from '../ui';
 import { INTRO_SKIPPER_MODES } from './introSkipperModes';
+import * as styles from './shared.styles';
 import { useOperationsConsoleStore } from './store';
-
-import * as styles from './shared.css';
 
 interface IntroSkipCardProps {
   currentMode: IntroSkipperMode;

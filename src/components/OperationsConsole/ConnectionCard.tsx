@@ -3,11 +3,8 @@ import { Show } from 'solid-js';
 
 import type { ConnectionState } from '../../bindings';
 import { Button, SectionCard } from '../ui';
-import * as rootStyles from './shared.styles';
+import * as styles from './shared.styles';
 import { useOperationsConsoleStore } from './store';
-
-import * as patterns from '../../styles/patterns.css';
-import * as styles from './shared.css';
 
 interface ConnectionCardProps {
   state: ConnectionState | undefined;
@@ -77,10 +74,10 @@ export default function ConnectionCard(props: ConnectionCardProps) {
         <Button
           type="button"
           variant="outlined"
-          class={rootStyles.mutedOutlinedButton}
+          class={styles.mutedOutlinedButton}
           disabled={ui.disconnecting || !props.state?.connected}
           onClick={props.onDisconnect}
-          leadingIcon={<Power class={patterns.icon4_5} />}
+          leadingIcon={<Power class={styles.icon4_5} />}
         >
           {ui.disconnecting ? 'Disconnecting...' : 'Disconnect'}
         </Button>
@@ -98,11 +95,11 @@ export default function ConnectionCard(props: ConnectionCardProps) {
           type="button"
           variant="icon"
           onClick={props.onRefresh}
-          class={rootStyles.refreshButton}
+          class={styles.refreshButton}
           aria-label="Refresh status"
           title="Refresh status"
         >
-          <RefreshCw class={patterns.icon4_5} />
+          <RefreshCw class={styles.icon4_5} />
         </Button>
       </div>
       <p class={styles.bodyText}>

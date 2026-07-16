@@ -2,10 +2,8 @@ import { Check, Images } from 'lucide-solid';
 import { Show } from 'solid-js';
 
 import { SectionCard } from '../ui';
-
-import * as patterns from '../../styles/patterns.css';
-import * as styles from './LibrarySettingsCard.css';
-import * as shared from './shared.css';
+import * as styles from './LibrarySettingsCard.styles';
+import * as shared from './shared.styles';
 
 interface LibrarySettingsCardProps {
   imageDiskCacheEnabled: boolean;
@@ -29,7 +27,7 @@ export default function LibrarySettingsCard(props: LibrarySettingsCardProps) {
           classList={{ [styles.checkboxChecked]: props.imageDiskCacheEnabled }}
         >
           <Show when={props.imageDiskCacheEnabled}>
-            <Check class={patterns.icon3_5} stroke-width={3} />
+            <Check class={styles.icon3_5} stroke-width={3} />
           </Show>
         </span>
         <div class={styles.copy}>
