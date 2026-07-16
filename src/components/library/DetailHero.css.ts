@@ -38,38 +38,6 @@ export const scrim = style({
   position: 'absolute',
 });
 
-export const backButton = style({
-  background: 'rgb(0 0 0 / 0.35)',
-  backdropFilter: 'blur(12px)',
-  borderColor: 'rgb(255 255 255 / 0.15)',
-  borderRadius: vars.borderRadius.full,
-  boxShadow: vars.shadow['2xl'],
-  color: '#fff',
-  left: vars.space['4'],
-  position: 'absolute',
-  top: vars.space['4'],
-  transitionProperty: 'background-color, border-color, transform',
-  zIndex: 20,
-  selectors: {
-    '&:hover': {
-      background: 'rgb(0 0 0 / 0.5)',
-      borderColor: 'rgb(255 255 255 / 0.3)',
-    },
-    '&:active': {
-      transform: 'scale(0.96)',
-    },
-  },
-  '@media': {
-    'screen and (min-width: 1024px)': {
-      left: vars.space['8'],
-      top: vars.space['6'],
-    },
-    'screen and (min-width: 1280px)': {
-      left: vars.space['10'],
-    },
-  },
-});
-
 export const backIcon = sprinkles({
   width: '4',
   height: '4',

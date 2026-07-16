@@ -6,16 +6,6 @@ import { vars } from '../../styles/vars.css';
 const mix = (color: string, opacity: number) =>
   `color-mix(in srgb, ${color} ${Math.round(opacity * 100)}%, transparent)`;
 
-export const card = style({
-  background: mix(vars.color.errorContainer, 0.05),
-  borderColor: mix(vars.color.error, 0.2),
-  selectors: {
-    '&:hover': {
-      borderColor: mix(vars.color.error, 0.45),
-    },
-  },
-});
-
 export const header = sprinkles({
   display: 'flex',
   alignItems: 'flex-start',
@@ -47,19 +37,6 @@ export const description = style([
     color: mix(vars.color.onSurfaceVariant, 0.8),
   },
 ]);
-
-export const signOutButton = style({
-  borderColor: mix(vars.color.error, 0.55),
-  color: vars.color.error,
-  marginTop: vars.space['5'],
-  width: '100%',
-  selectors: {
-    '&:hover': {
-      background: mix(vars.color.error, 0.1),
-      borderColor: vars.color.error,
-    },
-  },
-});
 
 export const backdrop = style({
   backdropFilter: 'blur(4px)',
@@ -169,16 +146,6 @@ export const actions = style({
     'screen and (min-width: 640px)': {
       flexDirection: 'row',
       justifyContent: 'flex-end',
-    },
-  },
-});
-
-export const dangerButton = style({
-  borderColor: mix(vars.color.error, 0.6),
-  color: vars.color.error,
-  selectors: {
-    '&:hover': {
-      background: mix(vars.color.error, 0.1),
     },
   },
 });

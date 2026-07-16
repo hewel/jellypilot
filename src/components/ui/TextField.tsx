@@ -2,8 +2,7 @@ import { Show, splitProps } from 'solid-js';
 
 import { FieldControl } from './FieldControl';
 import type { FieldControlVariant } from './FieldControl';
-
-import * as styles from './TextField.css';
+import * as styles from './TextField.styles';
 
 interface TextFieldProps {
   name: string;
@@ -44,7 +43,7 @@ export default function TextField(props: TextFieldProps) {
   const variant = () => local.variant ?? 'filled';
 
   return (
-    <div class={`${styles.textFieldRoot} ${local.class ?? ''}`}>
+    <div class={styles.cx(styles.textFieldRoot, 'group', local.class)}>
       <label for={local.name} class={styles.textFieldLabel}>
         {local.label}
       </label>
@@ -58,7 +57,7 @@ export default function TextField(props: TextFieldProps) {
         placeholder={local.placeholder}
         disabled={local.disabled}
         variant={variant()}
-        class={`${styles.fullWidth} ${local.inputClass ?? ''}`}
+        class={styles.cx(styles.fullWidth, local.inputClass)}
         {...rest}
       />
       <Show when={local.error}>

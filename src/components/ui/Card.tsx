@@ -2,7 +2,7 @@ import { Show, splitProps } from 'solid-js';
 import type { JSX } from 'solid-js';
 import { Dynamic } from 'solid-js/web';
 
-import * as styles from './Card.css';
+import * as styles from './Card.styles';
 
 export type CardVariant = 'filled' | 'elevated' | 'outlined';
 
@@ -38,7 +38,7 @@ export function Card(props: CardProps) {
   return (
     <Dynamic
       component={local.as ?? 'div'}
-      class={`${styles.card({ variant: variant(), padding: padding() })} ${styles.cardSurface[variant()]} ${local.class ?? ''}`}
+      class={styles.cx(styles.card({ variant: variant(), padding: padding() }), local.class)}
       {...rest}
     >
       <Show when={showTint()}>{tintOverlay}</Show>

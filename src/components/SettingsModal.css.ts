@@ -5,13 +5,6 @@ import { vars } from '../styles/vars.css';
 const mix = (color: string, amount: number) =>
   `color-mix(in srgb, ${color} ${amount}%, transparent)`;
 
-export const trigger = style({
-  boxShadow: `${vars.shadow['2xl']}, 0 25px 50px -12px ${mix(vars.color.secondary, 45)}`,
-  height: '3.25rem',
-  padding: '0 !important',
-  width: '3.25rem',
-});
-
 export const triggerIcon = style({
   height: vars.space['5'],
   width: vars.space['5'],

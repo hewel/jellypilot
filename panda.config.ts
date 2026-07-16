@@ -122,6 +122,13 @@ export default defineConfig({
       fonts: tokenEntries(fonts),
       spacing: tokenEntries(spacing),
       fontSizes: tokenEntries(fontSizes),
+      sizes: tokenEntries({
+        ...spacing,
+        full: '100%',
+        min: 'min-content',
+        max: 'max-content',
+        fit: 'fit-content',
+      }),
       fontWeights: tokenEntries(fontWeights),
       lineHeights: tokenEntries(lineHeights),
       radii: tokenEntries(radii),

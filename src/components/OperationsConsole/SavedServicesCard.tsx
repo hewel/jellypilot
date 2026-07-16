@@ -3,6 +3,7 @@ import { For, Show } from 'solid-js';
 
 import type { SavedServiceProfiles } from '../../bindings';
 import { Button, SectionCard } from '../ui';
+import * as rootStyles from './SavedServicesCard.styles';
 
 import * as patterns from '../../styles/patterns.css';
 import * as styles from './SavedServicesCard.css';
@@ -80,7 +81,7 @@ export default function SavedServicesCard(props: SavedServicesCardProps) {
                     <Button
                       type="button"
                       variant="outlined"
-                      class={styles.dangerButton}
+                      class={rootStyles.dangerButton}
                       disabled={props.removingProfileKey === profile.key}
                       onClick={() => props.onRemoveProfile(profile.key)}
                     >

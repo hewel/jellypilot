@@ -10,6 +10,7 @@ import type {
 } from '../../bindings';
 import { Button, Card, JellyPilotSelect } from '../ui';
 import type { JellyPilotSelectItem } from '../ui';
+import * as rootStyles from './LibraryPlaybackChooser.styles';
 
 import * as styles from './LibraryPlaybackChooser.css';
 
@@ -96,7 +97,7 @@ export function LibraryPlaybackChooser(props: {
         <Dialog.Backdrop class={styles.backdrop} />
         <Dialog.Positioner class={`${styles.positioner} ${styles.positionerFill}`}>
           <Dialog.Content class={styles.content}>
-            <Card as="section" variant="filled" class={styles.card}>
+            <Card as="section" variant="filled" class={rootStyles.card}>
               <div>
                 <p class={styles.eyebrow}>{props.pending.detail.itemType}</p>
                 <Dialog.Title class={styles.title}>{props.pending.detail.name}</Dialog.Title>
@@ -131,7 +132,7 @@ export function LibraryPlaybackChooser(props: {
                 <Button
                   type="button"
                   variant="primary"
-                  class={styles.pillButton}
+                  class={rootStyles.pillButton}
                   disabled={props.busy}
                   onClick={() =>
                     props.onConfirm({

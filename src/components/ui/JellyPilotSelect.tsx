@@ -4,7 +4,7 @@ import { ChevronDown } from 'lucide-solid';
 import { For, createMemo } from 'solid-js';
 import { Portal } from 'solid-js/web';
 
-import * as styles from './JellyPilotSelect.css';
+import * as styles from './JellyPilotSelect.styles';
 
 export interface JellyPilotSelectItem<Value extends string = string> {
   value: Value;
@@ -69,7 +69,7 @@ export default function JellyPilotSelect<Value extends string>(
         <Select.Trigger class={styles.trigger({ size: isCompact() ? 'compact' : 'standard' })}>
           <Select.ValueText
             placeholder={props.placeholder}
-            class={`${styles.valueText} ${styles.truncate}`}
+            class={styles.cx(styles.valueText, styles.truncate)}
           />
           <Select.Indicator class={styles.indicator}>
             <ChevronDown class={styles.indicatorIcon} />
