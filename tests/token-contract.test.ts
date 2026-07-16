@@ -7,7 +7,6 @@ import {
   fontSizes,
   fontWeights,
   fonts,
-  legacyColorVarNames,
   lineHeights,
   radii,
   rawColors,
@@ -16,8 +15,6 @@ import {
   spacing,
   zIndex,
 } from '../src/styles/theme-tokens';
-
-import { breakpoints as exportedBreakpoints, vars } from '../src/styles/vars.css';
 
 test('raw palette values match the Control Room contract', () => {
   expect(rawColors.neutral['975']).toBe('#05060a');
@@ -50,16 +47,4 @@ test('scale tokens preserve prior keys and values', () => {
   expect(easings.standard).toBe('cubic-bezier(0.2, 0, 0, 1)');
   expect(breakpoints.sm).toBe('640px');
   expect(fonts.sans).toContain('Inter Variable');
-});
-
-test('legacy color variable names keep the --jellypilot-color-* contract', () => {
-  expect(legacyColorVarNames.primary).toBe('--jellypilot-color-primary');
-  expect(legacyColorVarNames.onSurfaceVariant).toBe('--jellypilot-color-on-surface-variant');
-  expect(legacyColorVarNames.surfaceContainerHigh).toBe(
-    '--jellypilot-color-surface-container-high',
-  );
-  expect(vars.color.primary).toBe('var(--jellypilot-color-primary)');
-  expect(vars.font.sans).toBe('var(--jellypilot-font-sans)');
-  expect(vars.space['4']).toBe('var(--jellypilot-space-4)');
-  expect(exportedBreakpoints).toEqual(breakpoints);
 });

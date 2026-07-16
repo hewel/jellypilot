@@ -24,6 +24,9 @@ import * as styles from './shared.styles';
 import { VideoCard } from './VideoCard';
 import type { VideoCardAspectClass } from './VideoCard';
 
+export { MediaInfoHoverCard } from './MediaInfoHoverCard';
+export { VideoCard } from './VideoCard';
+
 export function LibraryStatusPanel(props: { title: string; description?: string }) {
   return (
     <Card

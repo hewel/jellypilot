@@ -9,17 +9,16 @@
  */
 import { spawnSync } from 'node:child_process';
 import {
-  createReadStream,
   existsSync,
   mkdirSync,
   readdirSync,
+  readFileSync,
   rmSync,
   statSync,
   writeFileSync,
 } from 'node:fs';
 import { join, resolve } from 'node:path';
-import { pipeline } from 'node:stream/promises';
-import { createGzip } from 'node:zlib';
+import { gzipSync } from 'node:zlib';
 
 const args = process.argv.slice(2);
 const labelIdx = args.indexOf('--label');
@@ -41,23 +40,17 @@ function listCssFiles(dir) {
   return out;
 }
 
-async function gzipSize(filePath) {
-  let size = 0;
-  const gzip = createGzip();
-  gzip.on('data', (chunk) => {
-    size += chunk.length;
-  });
-  await pipeline(createReadStream(filePath), gzip);
-  return size;
+function gzipSize(filePath) {
+  return gzipSync(readFileSync(filePath)).byteLength;
 }
 
-async function measureCss() {
+function measureCss() {
   const files = listCssFiles(distDir);
   let raw = 0;
   let gzip = 0;
   for (const file of files) {
     raw += statSync(file).size;
-    gzip += await gzipSize(file);
+    gzip += gzipSize(file);
   }
   return { raw, gzip, files: files.map((f) => f.replace(`${root}/`, '')) };
 }

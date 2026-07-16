@@ -6,10 +6,32 @@ const artworkTitleClamp = {
   WebkitLineClamp: '[3]',
 } satisfies Record<string, string>;
 
+/**
+ * Explicit narrow (360px stress) layout contracts for DetailHero.
+ * Base: stacked full-width action column; sm+: row wrap (supported desktop parity).
+ * Does not rely on overflow-x clipping.
+ */
+export const detailHeroNarrowLayout = {
+  contentBox: 'border-box',
+  contentWidth: 'full',
+  contentMaxWidth: '[100%]',
+  contentMinWidth: '[0]',
+  contentPaddingXBase: '4',
+  contentPaddingTopBase: '14',
+  rootMinHeight: '[clamp(280px, 44vh, 560px)]',
+  actionsBaseDirection: 'column',
+  actionsSmDirection: 'row',
+  actionBaseWidth: 'full',
+  actionSmWidth: 'auto',
+  titleOverflowWrap: 'anywhere',
+} as const;
+
 export const root = css({
-  height: '[clamp(280px, 44vh, 560px)]',
+  minHeight: detailHeroNarrowLayout.rootMinHeight,
   overflow: 'hidden',
   position: 'relative',
+  width: 'full',
+  maxWidth: '[100%]',
 });
 
 export const mediaLayer = css({
@@ -74,16 +96,26 @@ export const backIcon = css({
 
 export const content = css({
   alignItems: 'flex-end',
+  boxSizing: 'border-box',
   display: 'flex',
-  gap: '6',
-  height: 'full',
+  gap: '4',
+  maxWidth: detailHeroNarrowLayout.contentMaxWidth,
+  minHeight: detailHeroNarrowLayout.rootMinHeight,
+  minWidth: detailHeroNarrowLayout.contentMinWidth,
+  pt: detailHeroNarrowLayout.contentPaddingTopBase,
   pb: '6',
-  px: '6',
+  px: detailHeroNarrowLayout.contentPaddingXBase,
   position: 'relative',
+  width: detailHeroNarrowLayout.contentWidth,
   zIndex: '10',
+  sm: {
+    gap: '6',
+    px: '6',
+  },
   lg: {
     gap: '8',
     pb: '8',
+    pt: '16',
     px: '10',
   },
   xl: {
@@ -182,7 +214,9 @@ export const copy = css({
   display: 'grid',
   flex: '[1]',
   gap: '3',
+  maxWidth: '[100%]',
   minWidth: '[0]',
+  width: 'full',
   lg: {
     gap: '4',
   },
@@ -191,6 +225,8 @@ export const copy = css({
 export const titleBlock = css({
   display: 'grid',
   gap: '1',
+  maxWidth: '[100%]',
+  minWidth: '[0]',
 });
 
 export const title = css({
@@ -200,6 +236,10 @@ export const title = css({
   fontWeight: 'bold',
   letterSpacing: '[0]',
   lineHeight: '40',
+  maxWidth: '[100%]',
+  minWidth: '[0]',
+  overflowWrap: detailHeroNarrowLayout.titleOverflowWrap,
+  wordBreak: 'break-word',
   lg: {
     fontSize: '[2.625rem]',
     lineHeight: '[3.125rem]',
@@ -214,6 +254,9 @@ export const subtitle = css({
   color: 'onSurfaceVariant',
   fontSize: '14',
   lineHeight: '20',
+  maxWidth: '[100%]',
+  minWidth: '[0]',
+  overflowWrap: 'anywhere',
   lg: {
     fontSize: '16',
     lineHeight: '24',
@@ -225,11 +268,39 @@ export const badges = css({
   display: 'flex',
   flexWrap: 'wrap',
   gap: '2',
+  maxWidth: '[100%]',
+  minWidth: '[0]',
+  width: 'full',
+  // Badges are discrete chips; keep them whole and wrap to next line.
+  '& > *': {
+    flex: '[0 1 auto]',
+    maxWidth: '[100%]',
+    minWidth: '[0]',
+  },
 });
 
 export const actions = css({
-  alignItems: 'center',
+  // Base (incl. 360 stress): stack full-width controls so long labels never clip.
+  alignItems: 'stretch',
   display: 'flex',
-  flexWrap: 'wrap',
+  flexDirection: detailHeroNarrowLayout.actionsBaseDirection,
   gap: '3',
+  maxWidth: '[100%]',
+  minWidth: '[0]',
+  width: 'full',
+  '& > *': {
+    boxSizing: 'border-box',
+    maxWidth: '[100%]',
+    minWidth: '[0]',
+    width: detailHeroNarrowLayout.actionBaseWidth,
+  },
+  // Sm+ restores side-by-side wrapping used at supported desktop sizes.
+  sm: {
+    alignItems: 'center',
+    flexDirection: detailHeroNarrowLayout.actionsSmDirection,
+    flexWrap: 'wrap',
+    '& > *': {
+      width: detailHeroNarrowLayout.actionSmWidth,
+    },
+  },
 });

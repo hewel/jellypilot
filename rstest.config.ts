@@ -3,7 +3,6 @@ import path from 'node:path';
 import { pluginBabel } from '@rsbuild/plugin-babel';
 import { pluginSolid } from '@rsbuild/plugin-solid';
 import { defineConfig } from '@rstest/core';
-import { VanillaExtractPlugin } from '@vanilla-extract/webpack-plugin';
 
 const rootDir = import.meta.dirname;
 
@@ -25,9 +24,4 @@ export default defineConfig({
   },
   setupFiles: ['./rstest.setup.ts'],
   testEnvironment: 'jsdom',
-  tools: {
-    rspack: {
-      plugins: [new VanillaExtractPlugin()],
-    },
-  },
 });

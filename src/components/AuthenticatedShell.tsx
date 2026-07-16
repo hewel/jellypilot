@@ -4,11 +4,10 @@ import { Exit } from 'effect';
 
 import { fetchConnectionState } from '../effects/connection';
 import { queryKeys, runExit } from '../effects/query';
+import * as styles from './AuthenticatedShell.styles';
 import NowPlayingDrawer from './NowPlayingDrawer';
 import SettingsModal from './SettingsModal';
 import { ConsoleShell } from './ui';
-
-import * as styles from './AuthenticatedShell.css';
 
 export default function AuthenticatedShell() {
   const connectionQuery = createQuery(() => ({

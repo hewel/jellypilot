@@ -5,16 +5,22 @@ const pulse = '[pulse 1.8s cubic-bezier(0.4, 0, 0.6, 1) infinite]';
 export const stack = css({
   display: 'grid',
   gap: '6',
+  maxWidth: '[100%]',
+  minWidth: '[0]',
 });
 
 export const content = css({
   display: 'grid',
   gap: '6',
   marginInline: 'auto',
-  maxWidth: '[1400px]',
-  px: '6',
+  maxWidth: '[min(1400px, 100%)]',
+  minWidth: '[0]',
+  px: '4',
   py: '6',
   width: 'full',
+  sm: {
+    px: '6',
+  },
   lg: {
     px: '10',
   },
@@ -22,7 +28,6 @@ export const content = css({
     px: '12',
   },
 });
-
 export const overview = css({
   color: 'onSurfaceVariant',
   fontSize: '14',
@@ -57,6 +62,8 @@ export const genre = css({
 
 export const pillButton = css({
   borderRadius: 'full',
+  boxSizing: 'border-box',
+  maxWidth: '[100%]',
 });
 
 export const playIcon = css({

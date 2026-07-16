@@ -5,10 +5,8 @@ import { createSignal } from 'solid-js';
 import { Portal } from 'solid-js/web';
 
 import OperationsConsole from './OperationsConsole';
-import * as rootStyles from './SettingsModal.styles';
+import * as styles from './SettingsModal.styles';
 import { Button } from './ui';
-
-import * as styles from './SettingsModal.css';
 
 export default function SettingsModal() {
   const navigate = useNavigate();
@@ -24,7 +22,7 @@ export default function SettingsModal() {
             variant="primary"
             size="lg"
             aria-label="Open Settings"
-            class={rootStyles.trigger}
+            class={styles.trigger}
           >
             <Settings class={styles.triggerIcon} />
           </Button>

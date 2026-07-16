@@ -40,7 +40,6 @@ export default defineConfig({
   cssVarRoot: ':root',
   importMap: '@styled-system',
   include: ['./src/**/*.{js,jsx,ts,tsx}'],
-  exclude: ['./src/**/*.css.ts'],
   jsxFramework: 'solid',
   outdir: 'styled-system',
   conditions: {
@@ -50,7 +49,11 @@ export default defineConfig({
     },
   },
   globalCss: {
+    '*, *::before, *::after': {
+      boxSizing: 'border-box',
+    },
     body: {
+      margin: '0',
       minHeight: '100dvh',
       position: 'relative',
       color: 'onSurface',

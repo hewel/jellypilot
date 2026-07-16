@@ -12,7 +12,7 @@ Route incoming requests to the correct agent using these strict criteria:
 
 ## Stack
 
-- **Frontend**: Solid.js + TypeScript + Rsbuild + TanStack Router + TanStack Form + Ark UI + Panda CSS (vanilla-extract coexistence during migration)
+- **Frontend**: Solid.js + TypeScript + Rsbuild + TanStack Router + TanStack Form + Ark UI + Panda CSS
 - **Backend**: Rust (Tauri v2) with tauri-specta for type-safe bindings
 - **Data / Effects**: Effect-TS
 - **Tools**: Bun, Oxc (Oxlint/Oxfmt), Rstest (jsdom)
@@ -26,7 +26,7 @@ Route incoming requests to the correct agent using these strict criteria:
 | Frontend page | `src/routes/**` | Page-level `.tsx` route code; never split into `-*.tsx` modules |
 | Reusable component | `src/components/**` | Non-page `.tsx` components; never in `src/features/**` |
 | Tauri data workflow | `src/effects/**` | Reusable loaders/actions via Effect wrappers |
-| Design tokens | `panda.config.ts` + `src/styles/theme-tokens.ts` | Panda owns values; VE bridge aliases until cutover |
+| Design tokens | `panda.config.ts` + `src/styles/theme-tokens.ts` | Panda owns all styling values |
 | UI primitives | `src/components/ui/**` | Shared design-system components |
 | Rust↔TS bindings | `src/bindings.ts` | Auto-generated (debug builds only); use typed `commands.*`, never raw `invoke()` |
 | Add test | `tests/*.test.ts` | Rstest + @testing-library |
@@ -50,7 +50,7 @@ bun tauri build     # Production desktop build
 
 - **Solid.js**: Use the `solidjs` skill for all Solid-specific patterns.
 - **Forms**: Always use `@tanstack/solid-form` with `createForm` for form handling.
-- **Styling**: Panda CSS is the active styling system ([ADR 0011](docs/adr/0011-panda-css-styling.md)). Author owner-local `Component.styles.ts` / route `*.styles.ts` modules via `@styled-system/*`. During coexistence, unmigrated owners may still use vanilla-extract `.css.ts` + Sprinkles; never mix engines on one DOM element. Tokens live in `panda.config.ts` / `src/styles/theme-tokens.ts`; the VE bridge only aliases Panda variables. Supported Tauri sizes: 1280×720 min, 1600×900 default. Stress review widths (review config only): 800×600, 640×720, 360×720. Design system: `docs/design-system.md`.
+- **Styling**: Panda CSS is the only styling system ([ADR 0011](docs/adr/0011-panda-css-styling.md)). Author owner-local `Component.styles.ts` / route `*.styles.ts` modules via `@styled-system/*`; use semantic Panda tokens and colocated `css` / `cva` / `sva`. Supported Tauri sizes: 1280×720 min, 1600×900 default. Stress review widths (review config only): 800×600, 640×720, 360×720. Design system: `docs/design-system.md`.
 - **Solid classes**: Use `class` for static class strings and `classList` for conditional class maps. Do not add generic class-name merge helpers for Solid components.
 - **TypeScript / Effect**: All Effect rules live in [docs/agents/effect.md](docs/agents/effect.md). Read and follow it; do not duplicate them here.
 - **Route data loading**: Await only critical data; defer slow data as promises behind `<Suspense />` with stable skeletons. Follow [TanStack Router deferred data loading](https://tanstack.com/router/latest/docs/guide/deferred-data-loading).
@@ -59,9 +59,9 @@ bun tauri build     # Production desktop build
 
 ## Anti-Patterns
 
-- **Cross-component private style imports**: Do not import another component's `.css.ts` / `.styles.ts` exports; consume the component API or move the needed behavior into a shared component.
+- **Cross-component private style imports**: Do not import another component's `.styles.ts` exports; consume the component API or move the needed behavior into a shared component.
 - **Shared UI style barrels**: Do not create broad style barrels for unrelated components. Keep owner-local style modules beside their component or route.
-- **Mixed engines**: A module is either vanilla-extract (`.css.ts`) or Panda (`.styles.ts`); never both, and never both class sources on one element.
+- **Legacy styling**: Do not add `.css.ts`, vanilla-extract, Sprinkles, Recipes, UnoCSS, or authored `--jellypilot-*` variables.
 
 ## Agent Skills
 

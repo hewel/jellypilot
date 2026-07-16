@@ -2,7 +2,7 @@
 
 JellyPilot uses a desktop-first Control Room design system: dark-only, clean OLED surfaces, selective cinematic glass, and clear operational state. The interface should feel like a reliable media companion for a Jellyfin Playback Target, not a generic mobile settings app.
 
-**Migration note:** Panda CSS is the active styling system ([ADR 0011](adr/0011-panda-css-styling.md)). New and migrated surfaces use owner-local `.styles.ts` modules and Panda tokens. Unmigrated surfaces may still use vanilla-extract `.css.ts` / Sprinkles until their slice lands; do not mix engines on one element.
+Panda CSS is the sole styling system ([ADR 0011](adr/0011-panda-css-styling.md)). Application styles live in owner-local `.styles.ts` modules and use semantic Panda tokens.
 
 **Viewports:** Supported production Tauri sizes are **1280×720** (minimum) and **1600×900** (default). **800×600**, **640×720**, and **360×720** are responsive stress targets exercised with the review-only Tauri config, not production window sizes.
 
@@ -10,7 +10,7 @@ Reusable visual patterns are components under `src/components/ui`, not global `@
 
 ## Principles
 
-- **Desktop-first media control**: optimize for the default 800×600 Tauri window while remaining usable down to 360px width without horizontal scroll.
+- **Desktop-first media control**: optimize for the production default **1600×900** Tauri window (minimum **1280×720**) while remaining resilient at review stress widths **800×600**, **640×720**, and **360×720** without horizontal scroll.
 - **Clean OLED first**: default surfaces are solid and high-contrast. Glass, gradients, and glow are reserved for app shell and hero/brand moments.
 - **Operational clarity**: every status uses text and icon, not color alone.
 - **No fake state**: never show fake media artwork, fake playback progress, or pretend controls.
@@ -18,42 +18,42 @@ Reusable visual patterns are components under `src/components/ui`, not global `@
 
 ## Color System
 
-All components use semantic tokens. Panda owns token values (`panda.config.ts` / `src/styles/theme-tokens.ts`). During coexistence the vanilla-extract bridge re-exports legacy `--jellypilot-*` aliases to Panda variables for unmigrated modules. `#4f46e5` is the JellyPilot brand seed and primary filled-action background; it is not used as small text on near-black surfaces because contrast is insufficient.
+All components use semantic tokens. Panda owns token values in `panda.config.ts` and `src/styles/theme-tokens.ts`. `#4f46e5` is the JellyPilot brand seed and primary filled-action background; it is not used as small text on near-black surfaces because contrast is insufficient.
 
-| Token | Former Utility Alias | Hex | Usage |
-|---|---|---:|---|
-| Primary | `text-primary`, `bg-primary` | `#4f46e5` | Primary filled actions, JellyPilot identity |
-| On Primary | `text-on-primary` | `#ffffff` | Text/icons on primary surfaces |
-| Primary Container | `bg-primary-container` | `#1b1c3b` | Indigo tonal surfaces |
-| On Primary Container | `text-on-primary-container` | `#e0e2ff` | Text on indigo tonal surfaces |
-| Secondary | `text-secondary`, `bg-secondary` | `#818cf8` | Jellyfin/server/session accent |
-| On Secondary | `text-on-secondary` | `#0b0a24` | Text on indigo surfaces |
-| Secondary Container | `bg-secondary-container` | `#1f2152` | Indigo tonal surfaces |
-| On Secondary Container | `text-on-secondary-container` | `#e0e2ff` | Text on indigo tonal surfaces |
-| Tertiary | `text-tertiary`, `bg-tertiary` | `#4fe3b1` | Healthy/ready/success state |
-| On Tertiary | `text-on-tertiary` | `#001f16` | Text on healthy surfaces |
-| Tertiary Container | `bg-tertiary-container` | `#06382a` | Healthy tonal surfaces |
-| On Tertiary Container | `text-on-tertiary-container` | `#bfffe8` | Text on healthy tonal surfaces |
-| Warning | `text-warning`, `bg-warning` | `#f6c768` | Degraded/retryable warning state |
-| On Warning | `text-on-warning` | `#2a1a00` | Text on warning surfaces |
-| Warning Container | `bg-warning-container` | `#3f2e08` | Warning tonal surfaces |
-| On Warning Container | `text-on-warning-container` | `#ffe7a8` | Text on warning tonal surfaces |
-| Error | `text-error`, `bg-error` | `#ff6b7a` | Failure/destructive state |
-| On Error | `text-on-error` | `#330006` | Text on error surfaces |
-| Error Container | `bg-error-container` | `#4b1119` | Error tonal surfaces |
-| On Error Container | `text-on-error-container` | `#ffd9de` | Text on error tonal surfaces |
-| Background | `bg-background` | `#05060a` | App shell background |
-| Surface | `bg-surface` | `#0b0d14` | Base surface |
-| Surface Low | `bg-surface-container-low` | `#0a0c12` | Low-depth cards |
-| Surface | `bg-surface-container` | `#111420` | Default cards |
-| Surface High | `bg-surface-container-high` | `#161b2a` | Inputs, inset controls |
-| Surface Highest | `bg-surface-container-highest` | `#22293e` | Overlays and emphasized panels |
-| On Surface | `text-on-surface` | `#f3f6ff` | Primary text |
-| On Surface Variant | `text-on-surface-variant` | `#aeb8cc` | Secondary text, labels |
-| Outline | `border-outline` | `#5c6c8c` | Strong borders/focus support |
-| Outline Variant | `border-outline-variant` | `#262e42` | Subtle dividers |
-| Primary Gradient End | `to-primary-gradient-end` | `#7a7eff` | Primary button/track gradient endpoint |
-| Secondary Gradient End | `to-secondary-gradient-end` | `#0b4b60` | Secondary/tonal button gradient endpoint |
+| Token | Hex | Usage |
+|---|---:|---|
+| Primary | `#4f46e5` | Primary filled actions, JellyPilot identity |
+| On Primary | `#ffffff` | Text/icons on primary surfaces |
+| Primary Container | `#1b1c3b` | Indigo tonal surfaces |
+| On Primary Container | `#e0e2ff` | Text on indigo tonal surfaces |
+| Secondary | `#818cf8` | Jellyfin/server/session accent |
+| On Secondary | `#0b0a24` | Text on indigo surfaces |
+| Secondary Container | `#1f2152` | Indigo tonal surfaces |
+| On Secondary Container | `#e0e2ff` | Text on indigo tonal surfaces |
+| Tertiary | `#4fe3b1` | Healthy/ready/success state |
+| On Tertiary | `#001f16` | Text on healthy surfaces |
+| Tertiary Container | `#06382a` | Healthy tonal surfaces |
+| On Tertiary Container | `#bfffe8` | Text on healthy tonal surfaces |
+| Warning | `#f6c768` | Degraded/retryable warning state |
+| On Warning | `#2a1a00` | Text on warning surfaces |
+| Warning Container | `#3f2e08` | Warning tonal surfaces |
+| On Warning Container | `#ffe7a8` | Text on warning surfaces |
+| Error | `#ff6b7a` | Failure/destructive state |
+| On Error | `#330006` | Text on error surfaces |
+| Error Container | `#4b1119` | Error tonal surfaces |
+| On Error Container | `#ffd9de` | Text on error surfaces |
+| Background | `#05060a` | App shell background |
+| Surface | `#0b0d14` | Base surface |
+| Surface Low | `#0a0c12` | Low-depth cards |
+| Surface Container | `#111420` | Default cards |
+| Surface High | `#161b2a` | Inputs, inset controls |
+| Surface Highest | `#22293e` | Overlays and emphasized panels |
+| On Surface | `#f3f6ff` | Primary text |
+| On Surface Variant | `#aeb8cc` | Secondary text, labels |
+| Outline | `#5c6c8c` | Strong borders/focus support |
+| Outline Variant | `#262e42` | Subtle dividers |
+| Primary Gradient End | `#7a7eff` | Primary button/track gradient endpoint |
+| Secondary Gradient End | `#0b4b60` | Secondary/tonal button gradient endpoint |
 
 ## Color Semantics
 
@@ -72,24 +72,24 @@ body { font-family: 'Inter Variable', ui-sans-serif, system-ui, sans-serif; }
 h1, h2, h3, .brand-type { font-family: 'Space Grotesk Variable', 'Inter Variable', ui-sans-serif, system-ui, sans-serif; }
 .code, .diagnostic-value { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; }
 ```
-Apply typography through Sprinkles, Recipes, or component-local vanilla-extract styles. The previous global helper classes are gone; use the tokenized values below.
+Apply typography in owner-local Panda styles with the tokenized properties below.
 
-| Style | Atoms | Default color |
+| Style | Panda properties | Default color |
 |---|---|---|
-| Display medium | `font-display text-[45px] leading-[52px] font-bold tracking-tight` | — |
-| Display small | `font-display text-[36px] leading-[44px] font-bold tracking-tight` | — |
-| Headline large | `font-display text-[32px] leading-[40px] font-bold tracking-tight` | — |
-| Headline medium | `font-display text-[28px] leading-[36px] font-bold tracking-tight` | — |
-| Headline small | `font-display text-[24px] leading-[32px] font-bold tracking-tight` | — |
-| Title large | `text-[22px] leading-[28px] font-bold` | `text-on-surface` |
-| Title medium | `text-[16px] leading-[24px] font-semibold` | `text-on-surface` |
-| Title small | `text-[14px] leading-[20px] font-semibold` | `text-on-surface` |
-| Body large | `text-[16px] leading-[24px]` | `text-on-surface-variant` |
-| Body medium | `text-[14px] leading-[20px]` | `text-on-surface-variant` |
-| Body small | `text-[12px] leading-[16px]` | `text-on-surface-variant/80` |
-| Label large | `text-[14px] leading-[20px] font-semibold tracking-wide uppercase` | — |
-| Label medium | `text-[12px] leading-[16px] font-bold tracking-[0.05em] uppercase` | `text-on-surface-variant` |
-| Label small | `text-[11px] leading-[16px] font-bold tracking-[0.08em] uppercase` | `text-on-surface-variant/90` |
+| Display medium | `fontFamily: 'display'`, `fontSize: '45'`, `lineHeight: '52'`, `fontWeight: 'bold'` | — |
+| Display small | `fontFamily: 'display'`, `fontSize: '36'`, `lineHeight: '44'`, `fontWeight: 'bold'` | — |
+| Headline large | `fontFamily: 'display'`, `fontSize: '32'`, `lineHeight: '40'`, `fontWeight: 'bold'` | — |
+| Headline medium | `fontFamily: 'display'`, `fontSize: '28'`, `lineHeight: '36'`, `fontWeight: 'bold'` | — |
+| Headline small | `fontFamily: 'display'`, `fontSize: '24'`, `lineHeight: '32'`, `fontWeight: 'bold'` | — |
+| Title large | `fontSize: '22'`, `lineHeight: '28'`, `fontWeight: 'bold'` | `onSurface` |
+| Title medium | `fontSize: '16'`, `lineHeight: '24'`, `fontWeight: 'semibold'` | `onSurface` |
+| Title small | `fontSize: '14'`, `lineHeight: '20'`, `fontWeight: 'semibold'` | `onSurface` |
+| Body large | `fontSize: '16'`, `lineHeight: '24'` | `onSurfaceVariant` |
+| Body medium | `fontSize: '14'`, `lineHeight: '20'` | `onSurfaceVariant` |
+| Body small | `fontSize: '12'`, `lineHeight: '16'` | `onSurfaceVariant/80` |
+| Label large | `fontSize: '14'`, `lineHeight: '20'`, `fontWeight: 'semibold'` | — |
+| Label medium | `fontSize: '12'`, `lineHeight: '16'`, `fontWeight: 'bold'` | `onSurfaceVariant` |
+| Label small | `fontSize: '11'`, `lineHeight: '16'`, `fontWeight: 'bold'` | `onSurfaceVariant/90` |
 
 ## Components
 
@@ -107,7 +107,7 @@ Apply typography through Sprinkles, Recipes, or component-local vanilla-extract 
 ### Cards and Surfaces
 
 - Use `<Card>` / `<CardLink>` (`src/components/ui/Card.tsx`) with `variant="filled"` (default solid panel), `"elevated"` (hero/emphasized), or `"outlined"` (extra separation). `<CardLink>` is the card-styled anchor for navigational cards.
-- Hero surfaces may use selective gradient/glass (the non-atomic gradients live in `Card.css.ts`). Diagnostics and dense text must remain solid.
+- Hero surfaces may use selective gradient/glass (the non-atomic gradients live in `Card.styles.ts`). Diagnostics and dense text must remain solid.
 
 ### Layout helpers
 
@@ -165,31 +165,23 @@ Each tile has icon, label, value, and supporting text. Status tiles are read-onl
 
 Diagnostics are a user-facing support view, not a developer console. Use normal cards with terminal-adjacent details: mono timestamps, level badges, compact rows, no fake terminal prompts or chrome.
 
-## Typed Utility Layer
+## Panda CSS Authoring
 
-`src/styles/sprinkles.css.ts` is the only generic typed utility API. It intentionally covers a stable subset:
-
-- Layout: display, position, overflow, width, height, min/max width, min height.
-- Flex/Grid: direction, wrap, alignment, justification, grow/shrink, gap, row gap, column gap.
-- Spacing: margin and padding longhands plus `p`, `px`, `py`, `pt`, `pr`, `pb`, `pl`, `m`, `mx`, `my`, `mt`, `mr`, `mb`, `ml`.
-- Typography: font size, font weight, line height, text alignment.
-- Visual: semantic color, background color, border color, border radius, box shadow, opacity, z-index.
-- Conditions: `base`, `sm`, `md`, `lg`, `xl`, `2xl`, `hover`, `focus`, `active`, `disabled`, and `dark` via `[data-theme='dark'] &`.
-
-Do not make Sprinkles parse class strings. Do not add arbitrary values as a public utility feature. Temporary `legacy*` values in Sprinkles exist only to bridge current application needs and should shrink as repeated patterns become semantic tokens or Recipes. Complex selectors, Ark `data-*` state styling, gradients, transforms, filters, animations, and one-off layout math belong in Recipes or component-local `style()` blocks.
-
-When a component-local class needs both Sprinkles and complex CSS, use vanilla-extract style composition:
+- Keep styles beside their owner in `Component.styles.ts` or route `*.styles.ts` modules.
+- Import `css`, `cva`, `sva`, or `cx` from `@styled-system/css`; use patterns from `@styled-system/patterns` only when they reduce repetition.
+- Use semantic color, spacing, typography, radius, shadow, duration, easing, and z-index tokens. Add a reusable token before introducing a repeated literal.
+- Use Panda conditions and nested selectors for responsive rules, interaction states, and Ark `data-*` states.
+- In Solid `.tsx`, use `class` for static classes, `classList` for conditional maps, and `cx` for generated class composition.
 
 ```ts
-export const panel = style([
-  sprinkles({ display: 'flex', gap: '4' }),
-  { backdropFilter: 'blur(12px)' },
-]);
+import { css } from '@styled-system/css';
+
+export const panel = css({
+  backdropFilter: '[blur(12px)]',
+  display: 'flex',
+  gap: '4',
+});
 ```
-
-Do not manually join generated classes in `.css.ts` files. In Solid `.tsx`, use `classList` for runtime conditional class toggles.
-
-UnoCSS preset-mini is a build-time reference for token scale design only. JellyPilot does not use the UnoCSS runtime engine, extractor, shortcuts, variants, icon presets, or class-to-CSS matcher.
 
 ## Layout
 

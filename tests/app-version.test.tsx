@@ -4,10 +4,9 @@ import { screen } from '@testing-library/dom';
 import { render } from 'solid-js/web';
 
 import AppVersion from '../src/components/AppVersion';
-import * as styles from '../src/components/AppVersion.styles';
 import { TestQueryProvider } from './query-client';
 
-test('AppVersion renders the package version with the Panda canary class', async () => {
+test('AppVersion renders the package version', async () => {
   rstest.spyOn(tauriApp, 'getVersion').mockResolvedValue('1.4.1');
   const root = document.createElement('div');
   document.body.append(root);
@@ -22,7 +21,6 @@ test('AppVersion renders the package version with the Panda canary class', async
 
   const label = await screen.findByText('v1.4.1');
   expect(label.tagName).toBe('P');
-  expect(label.className).toContain(styles.version);
 
   dispose();
   root.remove();
@@ -42,7 +40,7 @@ test('AppVersion accepts an external class override without changing the API', a
   );
 
   const label = await screen.findByText('v9.9.9');
-  expect(label.className).toBe('external-class');
+  expect(label).toHaveClass('external-class');
 
   dispose();
   root.remove();
