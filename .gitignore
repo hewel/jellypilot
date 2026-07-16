@@ -19,5 +19,6 @@ styled-system/
 
 # Temp
 *.tmp
+.artifacts/
 
 .agents
