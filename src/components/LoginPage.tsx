@@ -24,11 +24,8 @@ import {
 } from '../serverUrl';
 import type { ServerScheme, ServerUrlResult } from '../serverUrl';
 import { saveCurrentSession } from '../sessionAccess';
-import * as rootStyles from './LoginPage.styles';
+import * as styles from './LoginPage.styles';
 import { Button, Card, ConsoleShell, FieldControl, PageFooter } from './ui';
-
-import * as patterns from '../styles/patterns.css';
-import * as styles from './LoginPage.css';
 
 interface LoginPageProps {
   onConnected: () => void;
@@ -274,7 +271,7 @@ export default function LoginPage(props: LoginPageProps) {
           <form.Field name="scheme">
             {(field) => (
               <fieldset
-                class={`${styles.segmented} ${styles.segmented2}`}
+                class={styles.cx(styles.segmented, styles.segmented2)}
                 aria-label="Server protocol"
               >
                 <button
@@ -324,7 +321,7 @@ export default function LoginPage(props: LoginPageProps) {
                         field().handleChange(strippedHost);
                         form.setFieldValue('scheme', explicitScheme ?? defaultSchemeForHost(value));
                       }}
-                      class={patterns.fullWidth}
+                      class={styles.fullWidth}
                       placeholder="jellyfin.local or media.example.com/jellyfin"
                     />
                   )}
@@ -353,7 +350,7 @@ export default function LoginPage(props: LoginPageProps) {
             <fieldset>
               <legend class={styles.label}>Media Server</legend>
               <div
-                class={`${styles.segmented} ${styles.segmented2}`}
+                class={styles.cx(styles.segmented, styles.segmented2)}
                 aria-label="Media server provider"
               >
                 <button
@@ -400,7 +397,11 @@ export default function LoginPage(props: LoginPageProps) {
           }}
         >
           <Tabs.List
-            class={`${styles.segmented} ${styles.tabsList} ${selectedCapabilities().quickConnect ? styles.segmented2 : styles.segmented1}`}
+            class={styles.cx(
+              styles.segmented,
+              styles.tabsList,
+              selectedCapabilities().quickConnect ? styles.segmented2 : styles.segmented1,
+            )}
             aria-label="Login Method"
           >
             <Show when={selectedCapabilities().quickConnect}>
@@ -438,8 +439,8 @@ export default function LoginPage(props: LoginPageProps) {
                 <div class={styles.radar}>
                   <Show when={isQuickConnectWaiting()}>
                     <div class={styles.radarRing} />
-                    <div class={`${styles.radarRing} ${styles.radarRing2}`} />
-                    <div class={`${styles.radarRing} ${styles.radarRing3}`} />
+                    <div class={styles.cx(styles.radarRing, styles.radarRing2)} />
+                    <div class={styles.cx(styles.radarRing, styles.radarRing3)} />
                   </Show>
                   <RadioTower
                     class={styles.towerIcon}
@@ -483,7 +484,7 @@ export default function LoginPage(props: LoginPageProps) {
                           variant="filled"
                           value={field().state.value}
                           onInput={(event) => field().handleChange(event.currentTarget.value)}
-                          class={patterns.fullWidth}
+                          class={styles.fullWidth}
                           placeholder="Jellyfin username"
                         />
                       )}
@@ -503,7 +504,7 @@ export default function LoginPage(props: LoginPageProps) {
                           type="password"
                           value={field().state.value}
                           onInput={(event) => field().handleChange(event.currentTarget.value)}
-                          class={patterns.fullWidth}
+                          class={styles.fullWidth}
                           placeholder="Jellyfin password"
                         />
                       )}
@@ -520,7 +521,7 @@ export default function LoginPage(props: LoginPageProps) {
                   >
                     <Checkbox.Control class={styles.checkbox}>
                       <Checkbox.Indicator class={styles.checkboxIndicator}>
-                        <Check class={patterns.icon3_5} stroke-width={4} />
+                        <Check class={styles.icon3_5} stroke-width={4} />
                       </Checkbox.Indicator>
                     </Checkbox.Control>
                     <Checkbox.Label class={styles.checkboxLabel}>
@@ -548,7 +549,7 @@ export default function LoginPage(props: LoginPageProps) {
           <Button
             type="button"
             variant="secondary"
-            class={patterns.fullWidth}
+            class={styles.fullWidth}
             onClick={resetQuickConnect}
           >
             Cancel Request
@@ -558,12 +559,12 @@ export default function LoginPage(props: LoginPageProps) {
             type="button"
             disabled={submitting()}
             variant="primary"
-            class={patterns.fullWidth}
+            class={styles.fullWidth}
             onClick={submit}
           >
             {submitting() ? (
               <>
-                <LoaderCircle class={`${patterns.icon5} ${patterns.spinner}`} />
+                <LoaderCircle class={styles.cx(styles.icon5, styles.spinner)} />
                 {submittingButtonLabel()}
               </>
             ) : (
@@ -580,7 +581,7 @@ export default function LoginPage(props: LoginPageProps) {
   }
 
   return (
-    <ConsoleShell class={rootStyles.shell}>
+    <ConsoleShell class={styles.shell}>
       <main class={styles.main}>
         <div class={styles.hero}>
           <div class={styles.heroIconWrap}>
@@ -603,7 +604,7 @@ export default function LoginPage(props: LoginPageProps) {
 
         {loginCard()}
 
-        <PageFooter class={rootStyles.footer} />
+        <PageFooter class={styles.footer} />
       </main>
     </ConsoleShell>
   );
