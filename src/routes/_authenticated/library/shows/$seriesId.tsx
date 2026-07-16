@@ -57,7 +57,7 @@ function LibraryShowDetailRoute() {
   const queryClient = useQueryClient();
   const connectionQuery = createQuery(() => ({
     queryKey: queryKeys.connectionState,
-    queryFn: () => runExit(fetchConnectionState()),
+    queryFn: () => runExit(fetchConnectionState),
     staleTime: Infinity,
   }));
   const sessionKey = createMemo(() => librarySessionKeyFromConnectionExit(connectionQuery.data));

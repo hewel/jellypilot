@@ -43,7 +43,7 @@ export default function NowPlayingDrawer(props: { jellyfinConnected: boolean }) 
   const queryClient = useQueryClient();
   const nowPlayingQuery = createQuery(() => ({
     queryKey: queryKeys.nowPlayingState,
-    queryFn: () => runExit(fetchNowPlayingState()),
+    queryFn: () => runExit(fetchNowPlayingState),
   }));
   const state = () =>
     nowPlayingQuery.data && Exit.isSuccess(nowPlayingQuery.data)

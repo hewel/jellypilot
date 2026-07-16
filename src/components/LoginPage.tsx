@@ -200,7 +200,7 @@ export default function LoginPage(props: LoginPageProps) {
           try: async () => {
             if (value.rememberMe)
               Effect.runSync(saveCredentials(finalServerUrl, value.username, value.provider));
-            else Effect.runSync(clearSavedCredentials());
+            else Effect.runSync(clearSavedCredentials);
             await finishConnected();
           },
         }),
@@ -229,7 +229,7 @@ export default function LoginPage(props: LoginPageProps) {
   });
 
   onMount(() => {
-    const exit = Effect.runSyncExit(loadSavedCredentials());
+    const exit = Effect.runSyncExit(loadSavedCredentials);
     if (!Exit.isSuccess(exit)) {
       return;
     }

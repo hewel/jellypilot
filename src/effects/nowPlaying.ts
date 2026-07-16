@@ -37,9 +37,9 @@ export function parseTrackList(value: PropertyValue): MpvTrack[] {
   }
 
   const parsed = Effect.runSyncExit(
-    Effect.try({
-      try: () => JSON.parse(value) as unknown,
-      catch: (cause) => cause,
+    Effect.try(() => {
+      const parsed: unknown = JSON.parse(value);
+      return parsed;
     }),
   );
   if (Exit.isFailure(parsed) || !Array.isArray(parsed.value)) {
@@ -67,9 +67,9 @@ export function parseTrackList(value: PropertyValue): MpvTrack[] {
   });
 }
 
-export function fetchNowPlayingState(): NowPlayingEffect<NowPlayingState> {
-  return runTauriCommand(() => commands.nowPlayingGetState());
-}
+export const fetchNowPlayingState: NowPlayingEffect<NowPlayingState> = runTauriCommand(() =>
+  commands.nowPlayingGetState(),
+);
 
 export function fetchMpvTrackList(connected: boolean): NowPlayingEffect<MpvTrack[]> {
   if (!connected) {
@@ -96,29 +96,23 @@ export function setVolume(volume: number): NowPlayingEffect<void> {
   return runTauriCommand(() => commands.mpvSetVolume(volume)).pipe(Effect.asVoid);
 }
 
-export function playPreviousEpisode(): NowPlayingEffect<void> {
-  return runTauriCommand(() => commands.jellyfinPlayPreviousEpisode()).pipe(Effect.asVoid);
-}
+export const playPreviousEpisode = runTauriCommand(() =>
+  commands.jellyfinPlayPreviousEpisode(),
+).pipe(Effect.asVoid);
 
 export function setPause(paused: boolean): NowPlayingEffect<void> {
   return runTauriCommand(() => commands.mpvSetPause(paused)).pipe(Effect.asVoid);
 }
 
-export function stopMpv(): NowPlayingEffect<void> {
-  return runTauriCommand(() => commands.mpvStop()).pipe(Effect.asVoid);
-}
+export const stopMpv = runTauriCommand(() => commands.mpvStop()).pipe(Effect.asVoid);
 
-export function playNextEpisode(): NowPlayingEffect<void> {
-  return runTauriCommand(() => commands.jellyfinPlayNextEpisode()).pipe(Effect.asVoid);
-}
+export const playNextEpisode = runTauriCommand(() => commands.jellyfinPlayNextEpisode()).pipe(
+  Effect.asVoid,
+);
 
-export function startMpv(): NowPlayingEffect<void> {
-  return runTauriCommand(() => commands.mpvStart()).pipe(Effect.asVoid);
-}
+export const startMpv = runTauriCommand(() => commands.mpvStart()).pipe(Effect.asVoid);
 
-export function toggleMute(): NowPlayingEffect<void> {
-  return runTauriCommand(() => commands.mpvToggleMute()).pipe(Effect.asVoid);
-}
+export const toggleMute = runTauriCommand(() => commands.mpvToggleMute()).pipe(Effect.asVoid);
 
 export function listenNowPlayingChanged(
   onState: (state: NowPlayingState) => void,

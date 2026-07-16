@@ -41,12 +41,10 @@ function parseSavedSession(
     });
 
     if (!isSavedSession(parsed)) {
-      return yield* Effect.fail(
-        new StorageParseError({
-          key,
-          message: 'Saved session has an unexpected shape',
-        }),
-      );
+      return yield* new StorageParseError({
+        key,
+        message: 'Saved session has an unexpected shape',
+      });
     }
 
     return parsed;
@@ -61,7 +59,7 @@ function normalizeSavedSession(session: PersistedSavedSession): SavedSession {
   };
 }
 
-export function loadSavedSession() {
+export const loadSavedSession = Effect.gen(function* () {
   const legacySession = Effect.sync(() => localStorage.getItem(LEGACY_SESSION_STORAGE_KEY)).pipe(
     Effect.flatMap(Effect.fromNullishOr),
     Effect.flatMap((value) => parseSavedSession(value, LEGACY_SESSION_STORAGE_KEY)),
@@ -73,7 +71,7 @@ export function loadSavedSession() {
       }),
     ),
   );
-  return Effect.sync(() => localStorage.getItem(SESSION_STORAGE_KEY)).pipe(
+  return yield* Effect.sync(() => localStorage.getItem(SESSION_STORAGE_KEY)).pipe(
     Effect.flatMap(Effect.fromNullishOr),
     Effect.matchEffect({
       onFailure: () => legacySession,
@@ -81,7 +79,7 @@ export function loadSavedSession() {
         parseSavedSession(value, SESSION_STORAGE_KEY).pipe(Effect.map(normalizeSavedSession)),
     }),
   );
-}
+});
 
 export function saveSession(session: SavedSession): Effect.Effect<void> {
   return Effect.sync(() => {
@@ -90,9 +88,7 @@ export function saveSession(session: SavedSession): Effect.Effect<void> {
   });
 }
 
-export function clearSavedSession(): Effect.Effect<void> {
-  return Effect.sync(() => {
-    localStorage.removeItem(SESSION_STORAGE_KEY);
-    localStorage.removeItem(LEGACY_SESSION_STORAGE_KEY);
-  });
-}
+export const clearSavedSession = Effect.sync(() => {
+  localStorage.removeItem(SESSION_STORAGE_KEY);
+  localStorage.removeItem(LEGACY_SESSION_STORAGE_KEY);
+});

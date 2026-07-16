@@ -76,24 +76,24 @@ export default function OperationsConsole(props: OperationsConsoleProps) {
   const queryClient = useQueryClient();
   const connectionQuery = createQuery(() => ({
     queryKey: queryKeys.connectionState,
-    queryFn: () => runExit(fetchConnectionState()),
+    queryFn: () => runExit(fetchConnectionState),
   }));
   const profilesQuery = createQuery(() => ({
     queryKey: queryKeys.savedServiceProfiles,
-    queryFn: () => runExit(fetchSavedServiceProfiles()),
+    queryFn: () => runExit(fetchSavedServiceProfiles),
   }));
   const configQuery = createQuery(() => ({
     queryKey: queryKeys.appConfig,
-    queryFn: () => runExit(fetchConfig()),
+    queryFn: () => runExit(fetchConfig),
   }));
   const saveConfigMutation = createMutation(() => ({
     mutationFn: (config: AppConfig) => runExit(saveConfig(config)),
   }));
   const disconnectMutation = createMutation(() => ({
-    mutationFn: () => runExit(disconnectJellyfin()),
+    mutationFn: () => runExit(disconnectJellyfin),
   }));
   const detectMpvMutation = createMutation(() => ({
-    mutationFn: () => runExit(detectMpv()),
+    mutationFn: () => runExit(detectMpv),
   }));
   const reconnectMutation = createMutation(() => ({
     mutationFn: restoreSavedSession,

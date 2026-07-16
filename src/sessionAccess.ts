@@ -16,7 +16,7 @@ import {
 } from './effects/profiles';
 
 export function loadSavedSession(): SavedSession | null {
-  return loadSessionEffect().pipe(
+  return loadSessionEffect.pipe(
     Effect.runSyncExit,
     Exit.match({
       onFailure: () => null,
@@ -30,11 +30,11 @@ export function saveSession(session: SavedSession): void {
 }
 
 export function clearSavedSession(): void {
-  Effect.runSync(clearSessionEffect());
+  Effect.runSync(clearSessionEffect);
 }
 
 export async function saveCurrentSession(): Promise<void> {
-  await Effect.runPromise(saveCurrentServiceProfile());
+  await Effect.runPromise(saveCurrentServiceProfile);
   clearSavedSession();
 }
 
@@ -52,7 +52,7 @@ async function migrateLegacySavedSession(): Promise<void> {
 
 export async function restoreSavedSession(): Promise<boolean> {
   await migrateLegacySavedSession();
-  const profiles = await Effect.runPromiseExit(fetchSavedServiceProfiles());
+  const profiles = await Effect.runPromiseExit(fetchSavedServiceProfiles);
   if (!Exit.isSuccess(profiles)) {
     return false;
   }
@@ -76,7 +76,7 @@ export async function checkAuthWithRestore(): Promise<boolean> {
   }
 
   await migrateLegacySavedSession();
-  const profiles = await Effect.runPromiseExit(fetchSavedServiceProfiles());
+  const profiles = await Effect.runPromiseExit(fetchSavedServiceProfiles);
   if (!Exit.isSuccess(profiles)) {
     return false;
   }
@@ -99,6 +99,6 @@ export async function canAccessConsole(): Promise<boolean> {
   }
 
   await migrateLegacySavedSession();
-  const profiles = await Effect.runPromiseExit(fetchSavedServiceProfiles());
+  const profiles = await Effect.runPromiseExit(fetchSavedServiceProfiles);
   return Exit.isSuccess(profiles) && profiles.value.profiles.length > 0;
 }

@@ -56,13 +56,13 @@ function withConnection<T>(effect: Effect.Effect<T, CommandError>): Effect.Effec
   return requireConnection.pipe(Effect.flatMap(() => effect));
 }
 
-export function fetchLibraryHome(): LibraryEffect<LibraryHomeState> {
-  return withConnection(runTauriCommand(() => commands.libraryVideoHome()));
-}
+export const fetchLibraryHome: LibraryEffect<LibraryHomeState> = withConnection(
+  runTauriCommand(() => commands.libraryVideoHome()),
+);
 
-export function fetchLibraryShortcuts(): LibraryEffect<LibraryShortcutsState> {
-  return withConnection(runTauriCommand(() => commands.libraryVideoShortcuts()));
-}
+export const fetchLibraryShortcuts: LibraryEffect<LibraryShortcutsState> = withConnection(
+  runTauriCommand(() => commands.libraryVideoShortcuts()),
+);
 
 export function fetchVideoLibraryPage(
   collectionType: VideoLibraryKind,

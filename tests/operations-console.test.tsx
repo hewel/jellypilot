@@ -947,18 +947,18 @@ const sampleSession = {
 
 test('session save and load round-trips through Effect', () => {
   Effect.runSync(saveSession(sampleSession));
-  expect(Effect.runSync(loadSavedSession())).toEqual(sampleSession);
+  expect(Effect.runSync(loadSavedSession)).toEqual(sampleSession);
 });
 
 test('clearSavedSession removes the stored session', () => {
   Effect.runSync(saveSession(sampleSession));
-  Effect.runSync(clearSavedSession());
-  expect(Exit.isFailure(Effect.runSyncExit(loadSavedSession()))).toBe(true);
+  Effect.runSync(clearSavedSession);
+  expect(Exit.isFailure(Effect.runSyncExit(loadSavedSession))).toBe(true);
 });
 
 test('loadSavedSession returns StorageParseError for malformed JSON', () => {
   localStorage.setItem(SESSION_STORAGE_KEY, '{bad');
-  const exit = Effect.runSyncExit(loadSavedSession());
+  const exit = Effect.runSyncExit(loadSavedSession);
   expect(Exit.isFailure(exit)).toBe(true);
   if (Exit.isFailure(exit)) {
     const reason = exit.cause.reasons[0];
@@ -972,5 +972,5 @@ test('loadSavedSession returns StorageParseError for malformed JSON', () => {
 });
 
 test('loadSavedSession fails when no session is stored', () => {
-  expect(Exit.isFailure(Effect.runSyncExit(loadSavedSession()))).toBe(true);
+  expect(Exit.isFailure(Effect.runSyncExit(loadSavedSession))).toBe(true);
 });

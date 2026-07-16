@@ -49,19 +49,17 @@ function parseSavedCredentials(
     });
 
     if (!isSavedCredentials(parsed)) {
-      return yield* Effect.fail(
-        new StorageParseError({
-          key,
-          message: 'Stored credentials have an unexpected shape',
-        }),
-      );
+      return yield* new StorageParseError({
+        key,
+        message: 'Stored credentials have an unexpected shape',
+      });
     }
 
     return { ...parsed, provider: parsed.provider ?? 'jellyfin' };
   });
 }
 
-export function loadSavedCredentials() {
+export const loadSavedCredentials = Effect.gen(function* () {
   const legacyCredentials = Effect.sync(() =>
     localStorage.getItem(LEGACY_CREDENTIALS_STORAGE_KEY),
   ).pipe(
@@ -75,14 +73,14 @@ export function loadSavedCredentials() {
     ),
   );
 
-  return Effect.sync(() => localStorage.getItem(CREDENTIALS_STORAGE_KEY)).pipe(
+  return yield* Effect.sync(() => localStorage.getItem(CREDENTIALS_STORAGE_KEY)).pipe(
     Effect.flatMap(Effect.fromNullishOr),
     Effect.matchEffect({
       onFailure: () => legacyCredentials,
       onSuccess: (value) => parseSavedCredentials(value, CREDENTIALS_STORAGE_KEY),
     }),
   );
-}
+});
 
 export function saveCredentials(
   serverUrl: string,
@@ -98,9 +96,7 @@ export function saveCredentials(
   });
 }
 
-export function clearSavedCredentials(): Effect.Effect<void> {
-  return Effect.sync(() => {
-    localStorage.removeItem(CREDENTIALS_STORAGE_KEY);
-    localStorage.removeItem(LEGACY_CREDENTIALS_STORAGE_KEY);
-  });
-}
+export const clearSavedCredentials = Effect.sync(() => {
+  localStorage.removeItem(CREDENTIALS_STORAGE_KEY);
+  localStorage.removeItem(LEGACY_CREDENTIALS_STORAGE_KEY);
+});

@@ -114,12 +114,7 @@ function parseStoreSnapshot(value: unknown): Option.Option<LibraryFilterSnapshot
 }
 
 function readLegacySnapshot(): Option.Option<LibraryFilterSnapshot> {
-  const stored = Effect.runSyncExit(
-    Effect.try({
-      try: () => localStorage.getItem(LEGACY_STORAGE_KEY),
-      catch: (cause) => cause,
-    }),
-  );
+  const stored = Effect.runSyncExit(Effect.try(() => localStorage.getItem(LEGACY_STORAGE_KEY)));
   if (Exit.isFailure(stored)) {
     return Option.none();
   }
@@ -139,12 +134,7 @@ function readLegacySnapshot(): Option.Option<LibraryFilterSnapshot> {
 }
 
 function removeLegacySnapshot() {
-  void Effect.runSyncExit(
-    Effect.try({
-      try: () => localStorage.removeItem(LEGACY_STORAGE_KEY),
-      catch: (cause) => cause,
-    }),
-  );
+  void Effect.runSyncExit(Effect.try(() => localStorage.removeItem(LEGACY_STORAGE_KEY)));
 }
 
 function applyHydratedSnapshot(filters: LibraryFilterSnapshot, generation: number) {
@@ -159,37 +149,34 @@ function applyHydratedSnapshot(filters: LibraryFilterSnapshot, generation: numbe
 
 async function hydrateFilters(generation: number) {
   await Effect.runPromiseExit(
-    Effect.tryPromise({
-      try: async () => {
-        await writeQueue;
-        if (generation !== hydrateGeneration) {
-          return;
-        }
-        const store = await load(PREFERENCES_STORE_FILE, { defaults: {}, autoSave: false });
-        const stored = parseStoreSnapshot(await store.get(LIBRARY_FILTERS_STORE_KEY));
+    Effect.tryPromise(async () => {
+      await writeQueue;
+      if (generation !== hydrateGeneration) {
+        return;
+      }
+      const store = await load(PREFERENCES_STORE_FILE, { defaults: {}, autoSave: false });
+      const stored = parseStoreSnapshot(await store.get(LIBRARY_FILTERS_STORE_KEY));
 
-        if (Option.isSome(stored)) {
-          applyHydratedSnapshot(stored.value, generation);
-          return;
-        }
+      if (Option.isSome(stored)) {
+        applyHydratedSnapshot(stored.value, generation);
+        return;
+      }
 
-        const legacy = readLegacySnapshot();
-        const snapshot = Option.match(legacy, {
-          onNone: () => defaultSnapshot(),
-          onSome: (value) => value,
-        });
-        if (!applyHydratedSnapshot(snapshot, generation)) {
-          return;
-        }
+      const legacy = readLegacySnapshot();
+      const snapshot = Option.match(legacy, {
+        onNone: () => defaultSnapshot(),
+        onSome: (value) => value,
+      });
+      if (!applyHydratedSnapshot(snapshot, generation)) {
+        return;
+      }
 
-        if (Option.isSome(legacy)) {
-          await store.set(LIBRARY_FILTERS_STORE_KEY, snapshot);
-          await store.save();
-          removeLegacySnapshot();
-        }
-      },
+      if (Option.isSome(legacy)) {
+        await store.set(LIBRARY_FILTERS_STORE_KEY, snapshot);
+        await store.save();
+        removeLegacySnapshot();
+      }
       // Tauri Store can be unavailable in browser-only contexts; in-memory filters still work.
-      catch: (cause) => cause,
     }),
   );
 }
@@ -201,16 +188,13 @@ function persistFilters(filters: LibraryFilterSnapshot, generation: number) {
     }
     // Persistence is best-effort; rendering keeps the current in-memory signals.
     await Effect.runPromiseExit(
-      Effect.tryPromise({
-        try: async () => {
-          const store = await load(PREFERENCES_STORE_FILE, { defaults: {}, autoSave: false });
-          if (generation !== hydrateGeneration) {
-            return;
-          }
-          await store.set(LIBRARY_FILTERS_STORE_KEY, filters);
-          await store.save();
-        },
-        catch: (cause) => cause,
+      Effect.tryPromise(async () => {
+        const store = await load(PREFERENCES_STORE_FILE, { defaults: {}, autoSave: false });
+        if (generation !== hydrateGeneration) {
+          return;
+        }
+        await store.set(LIBRARY_FILTERS_STORE_KEY, filters);
+        await store.save();
       }),
     );
   };

@@ -84,7 +84,7 @@ export function buildServerUrlEffect(
   return Effect.gen(function* () {
     const rawHost = stripServerScheme(fields.host);
     if (!rawHost) {
-      return yield* Effect.fail(new InvalidServerUrl({ message: 'Server host is required' }));
+      return yield* new InvalidServerUrl({ message: 'Server host is required' });
     }
 
     const candidate = `${fields.scheme}://${rawHost}`;
@@ -124,9 +124,7 @@ export function parseServerUrl(url: string | null | undefined): ServerUrlFields 
     return { scheme: 'https', host: '' };
   }
 
-  const parsed = Effect.runSyncExit(
-    Effect.try({ try: () => new URL(url), catch: (cause) => cause }),
-  );
+  const parsed = Effect.runSyncExit(Effect.try(() => new URL(url)));
   if (Exit.isFailure(parsed)) {
     return { host: '', scheme: 'https' };
   }

@@ -5,9 +5,8 @@ import type { Effect } from 'effect';
 import { runTauriCommand } from './commands';
 import type { CommandError } from './errors';
 
-export function fetchSavedServiceProfiles(): Effect.Effect<SavedServiceProfiles, CommandError> {
-  return runTauriCommand(() => commands.serverProfilesGet());
-}
+export const fetchSavedServiceProfiles: Effect.Effect<SavedServiceProfiles, CommandError> =
+  runTauriCommand(() => commands.serverProfilesGet());
 
 export function importLegacySavedSession(
   session: SavedSession,
@@ -15,9 +14,8 @@ export function importLegacySavedSession(
   return runTauriCommand(() => commands.serverProfilesImportLegacy(session));
 }
 
-export function saveCurrentServiceProfile(): Effect.Effect<SavedServiceProfiles, CommandError> {
-  return runTauriCommand(() => commands.serverProfilesSaveCurrent());
-}
+export const saveCurrentServiceProfile: Effect.Effect<SavedServiceProfiles, CommandError> =
+  runTauriCommand(() => commands.serverProfilesSaveCurrent());
 
 export function activateSavedServiceProfile(
   key: string,

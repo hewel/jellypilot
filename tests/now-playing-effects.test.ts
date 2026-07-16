@@ -84,7 +84,7 @@ test('fetchNowPlayingState runs successfully when mocked', async () => {
     },
   });
 
-  const exit = await Effect.runPromiseExit(fetchNowPlayingState());
+  const exit = await Effect.runPromiseExit(fetchNowPlayingState);
   expect(Exit.isSuccess(exit)).toBe(true);
   if (Exit.isSuccess(exit)) {
     expect(exit.value.status).toBe('playing');

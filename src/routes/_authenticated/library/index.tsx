@@ -29,14 +29,14 @@ export const Route = createFileRoute('/_authenticated/library/')({
 function LibraryLanding() {
   const connectionQuery = createQuery(() => ({
     queryKey: queryKeys.connectionState,
-    queryFn: () => runExit(fetchConnectionState()),
+    queryFn: () => runExit(fetchConnectionState),
     staleTime: Infinity,
   }));
   const sessionKey = createMemo(() => librarySessionKeyFromConnectionExit(connectionQuery.data));
   const homeQuery = createQuery(() => ({
     queryKey: queryKeys.libraryHome(sessionKey()),
     enabled: isLibrarySessionKeyConnected(sessionKey()),
-    queryFn: () => runExit(fetchLibraryHome()),
+    queryFn: () => runExit(fetchLibraryHome),
   }));
   const home = () =>
     homeQuery.data && Exit.isSuccess(homeQuery.data) ? homeQuery.data.value : null;

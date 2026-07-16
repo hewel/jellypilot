@@ -659,7 +659,7 @@ test('password login saves remembered Login Prefill when remember me is checked'
   fireEvent.click(screen.getByRole('button', { name: 'Connect' }));
 
   await waitFor(() =>
-    expect(Effect.runSync(loadSavedCredentials())).toEqual({
+    expect(Effect.runSync(loadSavedCredentials)).toEqual({
       rememberMe: true,
       provider: 'jellyfin',
       serverUrl: 'https://jellyfin.example.com',
@@ -733,9 +733,7 @@ test('password login clears Login Prefill when remember me is unchecked', async 
   fireEvent.click(screen.getByRole('checkbox', { name: 'Remember Server URL and username' }));
   fireEvent.click(screen.getByRole('button', { name: 'Connect' }));
 
-  await waitFor(() =>
-    expect(Exit.isFailure(Effect.runSyncExit(loadSavedCredentials()))).toBe(true),
-  );
+  await waitFor(() => expect(Exit.isFailure(Effect.runSyncExit(loadSavedCredentials))).toBe(true));
 
   cleanup();
 });
@@ -775,7 +773,7 @@ test('password login rejected commands show an error and unlock submit', async (
 
 test('loadSavedCredentials returns StorageParseError for malformed JSON', () => {
   localStorage.setItem(CREDENTIALS_STORAGE_KEY, 'not json');
-  const exit = Effect.runSyncExit(loadSavedCredentials());
+  const exit = Effect.runSyncExit(loadSavedCredentials);
   expect(Exit.isFailure(exit)).toBe(true);
   if (Exit.isFailure(exit)) {
     const reason = exit.cause.reasons[0];
@@ -791,7 +789,7 @@ test('loadSavedCredentials returns StorageParseError for malformed JSON', () => 
 });
 test('loadSavedCredentials returns StorageParseError for empty malformed JSON', () => {
   localStorage.setItem(CREDENTIALS_STORAGE_KEY, '');
-  const exit = Effect.runSyncExit(loadSavedCredentials());
+  const exit = Effect.runSyncExit(loadSavedCredentials);
   expect(Exit.isFailure(exit)).toBe(true);
   if (Exit.isFailure(exit)) {
     const reason = exit.cause.reasons[0];
@@ -808,7 +806,7 @@ test('loadSavedCredentials returns StorageParseError for empty malformed JSON', 
 
 test('loadSavedCredentials returns StorageParseError for wrong shape', () => {
   localStorage.setItem(CREDENTIALS_STORAGE_KEY, JSON.stringify({ notServerUrl: true }));
-  const exit = Effect.runSyncExit(loadSavedCredentials());
+  const exit = Effect.runSyncExit(loadSavedCredentials);
   expect(Exit.isFailure(exit)).toBe(true);
   if (Exit.isFailure(exit)) {
     const reason = exit.cause.reasons[0];
@@ -821,7 +819,7 @@ test('loadSavedCredentials returns StorageParseError for wrong shape', () => {
 });
 
 test('loadSavedCredentials fails when no credentials are stored', () => {
-  expect(Exit.isFailure(Effect.runSyncExit(loadSavedCredentials()))).toBe(true);
+  expect(Exit.isFailure(Effect.runSyncExit(loadSavedCredentials))).toBe(true);
 });
 
 test('loadSavedCredentials migrates legacy remembered Login Prefill', () => {
@@ -834,7 +832,7 @@ test('loadSavedCredentials migrates legacy remembered Login Prefill', () => {
     }),
   );
 
-  expect(Effect.runSync(loadSavedCredentials())).toEqual({
+  expect(Effect.runSync(loadSavedCredentials)).toEqual({
     rememberMe: true,
     provider: 'jellyfin',
     serverUrl: 'https://old.example.com',

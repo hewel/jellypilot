@@ -23,7 +23,7 @@
     "lint:fix": "oxlint --fix --deny-warnings --no-error-on-unmatched-pattern src tests scripts rsbuild.config.ts rstest.config.ts rstest.setup.ts panda.config.ts postcss.config.mjs lint-staged.config.mjs",
     "check": "bun run format:check && bun run lint && bun run check:styling-boundaries && bun run typecheck && bun run rust:fmt:check && bun run rust:clippy",
     "test:all": "bun run test && bun run rust:test",
-    "prepare": "husky && bun run panda:codegen",
+    "prepare": "husky && bun run panda:codegen && effect-tsgo patch",
     "rust:fmt": "cargo fmt --manifest-path src-tauri/Cargo.toml",
     "rust:fmt:check": "cargo fmt --manifest-path src-tauri/Cargo.toml -- --check",
     "rust:check": "cargo check --manifest-path src-tauri/Cargo.toml",
@@ -59,7 +59,7 @@
     "solid-js": "^1.9.13"
   },
   "devDependencies": {
-    "@effect/language-service": "^0.86.2",
+    "@effect/tsgo": "0.23.0",
     "@openapitools/openapi-generator-cli": "^2.38.0",
     "@pandacss/dev": "1.11.4",
     "@rsbuild/core": "^2.0.15",
@@ -78,6 +78,6 @@
     "lint-staged": "^17.0.7",
     "oxfmt": "^0.55.0",
     "oxlint": "^1.70.0",
-    "typescript": "^6.0.3"
+    "typescript": "7.0.2"
   }
 }

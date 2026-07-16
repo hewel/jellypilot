@@ -75,7 +75,7 @@ export default function NowPlayingCard(props: {
   const queryClient = useQueryClient();
   const nowPlayingQuery = createQuery(() => ({
     queryKey: queryKeys.nowPlayingState,
-    queryFn: () => runExit(fetchNowPlayingState()),
+    queryFn: () => runExit(fetchNowPlayingState),
   }));
   const [busy, setBusy] = createSignal<string | null>(null);
   const [seekDraft, setSeekDraft] = createSignal<number | null>(null);
@@ -91,16 +91,12 @@ export default function NowPlayingCard(props: {
     queryFn: () => runExit(fetchMpvTrackList(connected())),
   }));
   const playerCommandMutation = createMutation(() => ({
-    mutationFn: (command: () => NowPlayingEffect<void>) => runExit(command()),
+    mutationFn: (command: NowPlayingEffect<void>) => runExit(command),
   }));
   const tracks = () =>
     tracksQuery.data && Exit.isSuccess(tracksQuery.data) ? tracksQuery.data.value : [];
 
-  const runCommand = async (
-    key: string,
-    command: () => NowPlayingEffect<void>,
-    failure: string,
-  ) => {
+  const runCommand = async (key: string, command: NowPlayingEffect<void>, failure: string) => {
     setBusy(key);
     const exit = await playerCommandMutation.mutateAsync(command);
     if (Exit.isSuccess(exit)) {
@@ -184,31 +180,27 @@ export default function NowPlayingCard(props: {
     if (value.length === 0 || !Number.isFinite(id) || busy() !== null) {
       return;
     }
-    void runCommand('audio-track', () => setAudioTrack(id), 'Could not switch audio track');
+    void runCommand('audio-track', setAudioTrack(id), 'Could not switch audio track');
   };
   const switchSubtitleTrack = (value: string) => {
     const id = Number(value);
     if (value.length === 0 || !Number.isFinite(id) || busy() !== null) {
       return;
     }
-    void runCommand(
-      'subtitle-track',
-      () => setSubtitleTrack(id),
-      'Could not switch subtitle track',
-    );
+    void runCommand('subtitle-track', setSubtitleTrack(id), 'Could not switch subtitle track');
   };
   const commitSeek = (value: number) => {
     if (!activeTimeline() || !canControlPlayback() || busy() !== null) {
       return;
     }
-    void runCommand('seek', () => seekPlayback(value), 'Could not seek playback');
+    void runCommand('seek', seekPlayback(value), 'Could not seek playback');
   };
 
   const commitVolume = (value: number) => {
     if (!connected() || busy() !== null) {
       return;
     }
-    void runCommand('volume', () => setVolume(value), 'Could not set volume');
+    void runCommand('volume', setVolume(value), 'Could not set volume');
   };
 
   const inner = (
@@ -315,7 +307,7 @@ export default function NowPlayingCard(props: {
           onClick={() =>
             void runCommand(
               'pause',
-              () => setPause(!(player()?.paused ?? true)),
+              setPause(!(player()?.paused ?? true)),
               'Could not change playback state',
             )
           }

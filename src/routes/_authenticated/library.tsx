@@ -22,14 +22,14 @@ export const Route = createFileRoute('/_authenticated/library')({
 function LibraryLayoutRoute() {
   const connectionQuery = createQuery(() => ({
     queryKey: queryKeys.connectionState,
-    queryFn: () => runExit(fetchConnectionState()),
+    queryFn: () => runExit(fetchConnectionState),
     staleTime: Infinity,
   }));
   const sessionKey = createMemo(() => librarySessionKeyFromConnectionExit(connectionQuery.data));
   const shortcutsQuery = createQuery(() => ({
     queryKey: queryKeys.libraryShortcuts(sessionKey()),
     enabled: isLibrarySessionKeyConnected(sessionKey()),
-    queryFn: () => runExit(fetchLibraryShortcuts()),
+    queryFn: () => runExit(fetchLibraryShortcuts),
   }));
   const shortcuts = () =>
     shortcutsQuery.data && Exit.isSuccess(shortcutsQuery.data) ? shortcutsQuery.data.value : [];

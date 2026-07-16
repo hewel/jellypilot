@@ -12,7 +12,7 @@ import { ConsoleShell } from './ui';
 export default function AuthenticatedShell() {
   const connectionQuery = createQuery(() => ({
     queryKey: queryKeys.connectionState,
-    queryFn: () => runExit(fetchConnectionState()),
+    queryFn: () => runExit(fetchConnectionState),
   }));
   const jellyfinConnected = () =>
     connectionQuery.data && Exit.isSuccess(connectionQuery.data)

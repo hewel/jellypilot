@@ -41,7 +41,7 @@ export function runQuickConnectWorkflow(
       commands.jellyfinQuickConnectAuthenticate(serverUrl, request.secret),
     );
 
-    yield* saveCurrentServiceProfile();
+    yield* saveCurrentServiceProfile;
   }).pipe(
     Effect.timeout('5 minutes'),
     Effect.catchTag('TimeoutError', () =>

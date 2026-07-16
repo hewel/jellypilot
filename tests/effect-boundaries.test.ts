@@ -22,7 +22,7 @@ test('saved service profile restore and route checks use typed command helpers',
   const profilesSource = readFileSync('src/effects/profiles.ts', 'utf8');
 
   expect(sessionAccessSource).toContain("import { runTauriCommandRaw } from './effects/commands';");
-  expect(sessionAccessSource).toContain('fetchSavedServiceProfiles()');
+  expect(sessionAccessSource).toContain('fetchSavedServiceProfiles);');
   expect(sessionAccessSource).toContain('activateSavedServiceProfile(key)');
   expect(profilesSource).toContain('runTauriCommand(() => commands.serverProfilesGet())');
   expect(profilesSource).toContain('runTauriCommand(() => commands.serverProfilesActivate(key))');
@@ -49,7 +49,7 @@ test('Quick Connect commands use typed command helpers', () => {
   expect(qcSource).toContain(
     'commands.jellyfinQuickConnectAuthenticate(serverUrl, request.secret)',
   );
-  expect(qcSource).toContain('yield* saveCurrentServiceProfile()');
+  expect(qcSource).toContain('yield* saveCurrentServiceProfile;');
   expect(qcSource).not.toContain(
     'const result = await commands.jellyfinQuickConnectStart(serverUrl);',
   );

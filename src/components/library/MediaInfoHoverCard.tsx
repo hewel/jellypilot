@@ -102,7 +102,7 @@ export function MediaInfoHoverCard(props: { id: string; itemType: string; childr
   const [open, setOpen] = createSignal(false);
   const connectionQuery = createQuery(() => ({
     queryKey: queryKeys.connectionState,
-    queryFn: () => runExit(fetchConnectionState()),
+    queryFn: () => runExit(fetchConnectionState),
     staleTime: Infinity,
   }));
   const sessionKey = createMemo(() => librarySessionKeyFromConnectionExit(connectionQuery.data));
