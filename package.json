@@ -39,7 +39,8 @@
     "pretypecheck": "bun run panda:codegen",
     "metrics:css": "bun scripts/measure-css-build.mjs",
     "check:styling-boundaries": "bun scripts/check-styling-boundaries.mjs",
-    "review:panda:tauri": "bun tauri dev --config src-tauri/tauri.panda-review.conf.json"
+    "review:panda:tauri": "bun tauri dev --config src-tauri/tauri.panda-review.conf.json",
+    "review:parity": "bun scripts/tauri-parity-review.mjs"
   },
   "dependencies": {
     "@ark-ui/solid": "^5.37.1",
