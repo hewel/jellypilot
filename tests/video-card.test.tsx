@@ -38,6 +38,10 @@ test('VideoCard renders image IDs through the JellyPilot image protocol', () => 
     'src',
     imageSource('signed-card-image'),
   );
+  expect(screen.getByAltText('Protocol Movie artwork').parentElement).toHaveAttribute(
+    'data-aspect',
+    'poster',
+  );
 
   dispose();
   root.remove();

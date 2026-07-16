@@ -3,8 +3,7 @@ import { Show, createEffect, createSignal } from 'solid-js';
 
 import type { VideoHomeItem, VideoLibraryItem, VideoLibraryKind } from '../../bindings';
 import { imageSource } from '../../utils/imageSource';
-
-import * as styles from './VideoCard.css';
+import * as styles from './VideoCard.styles';
 
 export type VideoCardAspectClass = 'poster' | 'video';
 
@@ -90,7 +89,7 @@ export function VideoCard(props: VideoCardProps) {
 
   return (
     <a href={href()} aria-label={cardAriaLabel()} class={styles.card}>
-      <div class={`${styles.artwork} ${styles.aspect[aspectClass()]}`}>
+      <div class={`${styles.artwork} ${styles.aspect[aspectClass()]}`} data-aspect={aspectClass()}>
         <Show
           when={!imageFailed() ? artworkImageId() : null}
           fallback={
@@ -139,7 +138,10 @@ export function VideoCard(props: VideoCardProps) {
 function VideoCardSkeleton(props: { aspectClass: VideoCardAspectClass }) {
   return (
     <div class={styles.card} aria-hidden="true">
-      <div class={`${styles.artwork} ${styles.aspect[props.aspectClass]} ${styles.skeleton}`} />
+      <div
+        class={`${styles.artwork} ${styles.aspect[props.aspectClass]} ${styles.skeleton}`}
+        data-aspect={props.aspectClass}
+      />
       <div class={styles.skeletonBody}>
         <div class={styles.skeletonTitle} />
         <div class={styles.skeletonSubtitle} />

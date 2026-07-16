@@ -5,11 +5,11 @@ import { useAppScrollArea } from '@components/AppScrollAreaContext';
 import { useLibraryNavbarControls } from '@components/library/LibraryNavbarContext';
 import {
   LibraryStatusPanel,
-  VideoCard,
   libraryTitle,
   playedFilterLabel,
   sortItems,
 } from '@components/library/shared';
+import { VideoCard } from '@components/library/VideoCard';
 import { Button } from '@components/ui';
 import { createInfiniteQuery, createQuery, useQueryClient } from '@tanstack/solid-query';
 import { createFileRoute, useNavigate } from '@tanstack/solid-router';
@@ -48,7 +48,7 @@ import { createSharedLibraryFilters } from '~utils/createSharedLibraryFilters';
 import type { LibrarySortDirection } from '~utils/createSharedLibraryFilters';
 import { LIBRARY_BROWSE_GRID_GAP_PX, libraryBrowseColumnCount } from '~utils/libraryBrowseLayout';
 
-import * as styles from '../browseRoute.css';
+import * as styles from '../browseRoute.styles';
 
 const LIBRARY_BROWSE_SKELETON_CARD_KEYS = Array.from({ length: 10 }, (_, index) => index);
 const LIBRARY_VIRTUAL_TOTAL_THRESHOLD = 100;

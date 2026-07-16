@@ -13,7 +13,7 @@ import {
   runExit,
 } from '~effects/query';
 
-import * as styles from '../library.css';
+import * as styles from '../library.styles';
 
 const homeSkeletonRows = [
   { id: 'continue-watching-skeleton', aspectClass: 'video' },

@@ -36,7 +36,7 @@ import {
   runExit,
 } from '~effects/query';
 
-import * as styles from '../detailRoute.css';
+import * as styles from '../detailRoute.styles';
 
 export const Route = createFileRoute('/_authenticated/library/items/$itemId')({
   component: LibraryItemDetailRoute,

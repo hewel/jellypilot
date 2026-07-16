@@ -4,9 +4,8 @@ import { useNavigate } from '@tanstack/solid-router';
 import { House } from 'lucide-solid';
 import { For, Show } from 'solid-js';
 
+import * as styles from './LibraryNavbar.styles';
 import { useLibraryNavbarControls } from './LibraryNavbarContext';
-
-import * as styles from './LibraryNavbar.css';
 
 export interface LibraryNavbarProps {
   shortcuts: VideoLibraryShortcut[];
