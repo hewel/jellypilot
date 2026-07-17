@@ -45,7 +45,6 @@
     "pretest": "bun run panda:codegen",
     "pretest:watch": "bun run panda:codegen",
     "pretypecheck": "bun run panda:codegen",
-    "metrics:css": "bun scripts/measure-css-build.mjs",
     "check:styling-boundaries": "bun scripts/check-styling-boundaries.mjs",
     "review:panda:tauri": "bun tauri dev --config src-tauri/tauri.panda-review.conf.json",
     "review:parity": "bun scripts/tauri-parity-review.mjs"
