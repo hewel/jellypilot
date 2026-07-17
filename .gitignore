@@ -21,4 +21,8 @@ styled-system/
 *.tmp
 .artifacts/
 
-.agents
+.agents/*
+!.agents/skills/
+.agents/skills/*
+!.agents/skills/delegate-to-omp/
+!.agents/skills/delegate-to-omp/**

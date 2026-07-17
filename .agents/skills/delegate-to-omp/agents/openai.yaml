@@ -1,0 +1,4 @@
+interface:
+  display_name: 'Delegate to OMP'
+  short_description: 'Run bounded OMP tasks through Herdr'
+  default_prompt: 'Use $delegate-to-omp to hand this bounded, verifiable task to OMP and review its report.'
