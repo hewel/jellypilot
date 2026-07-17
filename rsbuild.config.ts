@@ -6,20 +6,40 @@ import { pluginSolid } from '@rsbuild/plugin-solid';
 import { tanstackRouter } from '@tanstack/router-plugin/rspack';
 
 const rootDir = import.meta.dirname;
+const webdriverBuild = process.env.PUBLIC_WEBDRIVER === '1';
 
 // Docs: https://rsbuild.rs/config/
 export default defineConfig({
+  source: {
+    alias: {
+      '@styled-system': path.join(rootDir, 'styled-system'),
+    },
+    entry: webdriverBuild
+      ? {
+          index: './e2e/app/index.tsx',
+        }
+      : undefined,
+  },
+  resolve: webdriverBuild
+    ? {
+        alias: {
+          '@tauri-apps/api/core$': path.join(rootDir, 'e2e/app/tauri-core.ts'),
+        },
+      }
+    : undefined,
+  output: webdriverBuild
+    ? {
+        distPath: {
+          root: '.artifacts/e2e/build/frontend',
+        },
+      }
+    : undefined,
   plugins: [
     pluginBabel({
       include: /\.(?:jsx|tsx)$/,
     }),
     pluginSolid(),
   ],
-  source: {
-    alias: {
-      '@styled-system': path.join(rootDir, 'styled-system'),
-    },
-  },
   tools: {
     bundlerChain: (chain) => {
       chain.watchOptions({

@@ -10,6 +10,11 @@ export default {
   ],
   'src-tauri/**/*.json': 'oxfmt --write --no-error-on-unmatched-pattern',
   'src-tauri/**/*.rs': () => 'cargo fmt --manifest-path src-tauri/Cargo.toml',
+  'e2e/**/*.{js,jsx,ts,tsx}': [
+    'oxfmt --write --no-error-on-unmatched-pattern',
+    'oxlint --fix --deny-warnings --no-error-on-unmatched-pattern',
+  ],
+  'e2e/**/*.{json,jsonc}': 'oxfmt --write --no-error-on-unmatched-pattern',
   'src/**/*.{css,json,jsonc}': 'oxfmt --write --no-error-on-unmatched-pattern',
   'src/**/*.{js,jsx,ts,tsx}': [
     'oxfmt --write --no-error-on-unmatched-pattern',

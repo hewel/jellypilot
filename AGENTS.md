@@ -42,6 +42,8 @@ bun run build        # Production build → dist/
 bun run test         # Rstest
 bun run test:watch   # Rstest watch mode
 bun run check        # Oxfmt/Oxlint + type/Rust checks (includes format + typecheck)
+bun run test:e2e     # Reuse an existing native E2E build
+bun run e2e:verify  # Full native path plus production-isolation proof
 
 # Tauri (run from project root)
 bun tauri dev       # Dev mode with hot reload
@@ -58,6 +60,7 @@ bun tauri build     # Production desktop build
 - **Route data loading**: Await only critical data; defer slow data as promises behind `<Suspense />` with stable skeletons. Follow [TanStack Router deferred data loading](https://tanstack.com/router/latest/docs/guide/deferred-data-loading).
 - **Ark UI Dialogs**: Use standard Ark UI Dialog primitives; no custom ARIA overlays, `onInteractOutside` handlers, or `id` attributes. Controlled dialogs require `<Portal>`; use `lazyMount` + `unmountOnExit`.
 - **Style Tests**: Style test policy in [docs/agents/style-tests.md](docs/agents/style-tests.md); read and follow it.
+- **Native E2E**: Agent policy and command contract in [docs/agents/e2e.md](docs/agents/e2e.md). Use focused native E2E whenever acceptance crosses Tauri startup, IPC, post-mount routing, desktop interaction, or sandboxed persistence.
 
 ## Anti-Patterns
 

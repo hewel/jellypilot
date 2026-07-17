@@ -10,6 +10,7 @@
     "beforeBuildCommand": "bun run build"
   },
   "app": {
+    "withGlobalTauri": false,
     "windows": [
       {
         "title": "JellyPilot",
@@ -22,6 +23,7 @@
       }
     ],
     "security": {
+      "capabilities": ["default"],
       "assetProtocol": {
         "enable": true,
         "scope": ["$APPCACHE/**/*"]

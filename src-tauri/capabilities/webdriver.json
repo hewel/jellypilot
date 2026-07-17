@@ -1,0 +1,8 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "webdriver",
+  "description": "Linux-only capability for the isolated JellyPilot WebDriver test application",
+  "platforms": ["linux"],
+  "windows": ["main"],
+  "permissions": ["core:window:allow-close", "wdio:default"]
+}

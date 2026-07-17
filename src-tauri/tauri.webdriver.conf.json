@@ -1,0 +1,16 @@
+{
+  "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
+  "identifier": "top.pigfun.jellypilot.webdriver",
+  "build": {
+    "frontendDist": "../.artifacts/e2e/build/frontend"
+  },
+  "app": {
+    "withGlobalTauri": true,
+    "security": {
+      "capabilities": ["default", "webdriver"]
+    }
+  },
+  "bundle": {
+    "active": false
+  }
+}
