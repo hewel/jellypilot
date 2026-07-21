@@ -1,4 +1,4 @@
-import { css, cva, cx } from '@styled-system/css';
+import { css, cva } from '@styled-system/css';
 
 const focusRing = {
   outline: '[2px solid {colors.primary}]',
@@ -189,5 +189,3 @@ export const buttonIcon = css({
   justifyContent: 'center',
   width: '[1lh]',
 });
-
-export { cx };

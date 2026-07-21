@@ -1,3 +1,4 @@
+import { cx } from '@styled-system/css';
 import { Show, splitProps } from 'solid-js';
 import type { JSX } from 'solid-js';
 
@@ -35,9 +36,9 @@ export default function Button(props: ButtonProps) {
   const buttonClass = () => {
     const currentVariant = variant();
     if (currentVariant === 'icon') {
-      return styles.cx(styles.iconButton({ size: size() }), local.class);
+      return cx(styles.iconButton({ size: size() }), local.class);
     }
-    return styles.cx(styles.button({ variant: currentVariant, size: size() }), local.class);
+    return cx(styles.button({ variant: currentVariant, size: size() }), local.class);
   };
 
   return (
