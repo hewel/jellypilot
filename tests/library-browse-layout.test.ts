@@ -3,6 +3,7 @@ import { expect, test } from '@rstest/core';
 import {
   LIBRARY_BROWSE_GRID_TEMPLATE_COLUMNS,
   libraryBrowseColumnCount,
+  libraryBrowseVirtualRowHeight,
 } from '../src/utils/libraryBrowseLayout';
 
 test('library browse column count auto-fits by available width', () => {
@@ -19,4 +20,15 @@ test('library browse column count falls back to one column for unknown widths', 
 test('library browse grid preserves empty tracks so the last row does not stretch', () => {
   expect(LIBRARY_BROWSE_GRID_TEMPLATE_COLUMNS).toContain('repeat(auto-fill');
   expect(LIBRARY_BROWSE_GRID_TEMPLATE_COLUMNS).not.toContain('repeat(auto-fit');
+});
+
+test('library browse virtual row height matches rendered card height plus one grid gap', () => {
+  expect(libraryBrowseVirtualRowHeight(1280)).toBe(334);
+  expect(libraryBrowseVirtualRowHeight(800)).toBe(362);
+  expect(libraryBrowseVirtualRowHeight(360)).toBe(336);
+});
+
+test('library browse virtual row height falls back to the minimum card width for unknown widths', () => {
+  expect(libraryBrowseVirtualRowHeight(0)).toBe(315);
+  expect(libraryBrowseVirtualRowHeight(Number.NaN)).toBe(315);
 });

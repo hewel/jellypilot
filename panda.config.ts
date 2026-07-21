@@ -68,6 +68,7 @@ export default defineConfig({
     },
     p: {
       textWrap: 'pretty',
+      my: 0,
     },
     '@media (prefers-reduced-motion: reduce)': {
       '*, ::before, ::after': {

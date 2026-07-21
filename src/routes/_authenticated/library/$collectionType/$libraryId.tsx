@@ -46,7 +46,10 @@ import {
 } from '~effects/query';
 import { createSharedLibraryFilters } from '~utils/createSharedLibraryFilters';
 import type { LibrarySortDirection } from '~utils/createSharedLibraryFilters';
-import { LIBRARY_BROWSE_GRID_GAP_PX, libraryBrowseColumnCount } from '~utils/libraryBrowseLayout';
+import {
+  libraryBrowseColumnCount,
+  libraryBrowseVirtualRowHeight,
+} from '~utils/libraryBrowseLayout';
 
 import * as styles from '../browseRoute.styles';
 
@@ -339,12 +342,7 @@ function LibraryBrowseRoute() {
   const virtualRowColumnIndexes = createMemo(() =>
     Array.from({ length: columnCount() }, (_, index) => index),
   );
-  const estimateVirtualRowHeight = () => {
-    const width = virtualGridWidth();
-    const columns = columnCount();
-    const cardWidth = Math.max(160, (width - LIBRARY_BROWSE_GRID_GAP_PX * (columns - 1)) / columns);
-    return Math.ceil(cardWidth * 1.5 + 92);
-  };
+  const estimateVirtualRowHeight = () => libraryBrowseVirtualRowHeight(virtualGridWidth());
   const serverIndexForDisplayIndex = (displayIndex: number) =>
     needsReverse() ? totalRecordCount() - 1 - displayIndex : displayIndex;
   const pageStartForServerIndex = (serverIndex: number) =>
