@@ -15,12 +15,14 @@ import { createFileRoute, useNavigate } from '@tanstack/solid-router';
 import { createVirtualizer, observeElementRect } from '@tanstack/solid-virtual';
 import { Exit } from 'effect';
 import {
-  Check,
-  RefreshCw,
-  ListSortAscending,
-  Funnel,
   ArrowDownWideNarrowIcon,
   ArrowUpWideNarrowIcon,
+  Check,
+  ChevronDown,
+  Funnel,
+  Heart,
+  ListSortAscending,
+  RefreshCw,
 } from 'lucide-solid';
 import {
   For,
@@ -766,10 +768,24 @@ interface LibrarySortMenuProps {
 }
 
 function LibrarySortMenu(props: LibrarySortMenuProps) {
+  const [open, setOpen] = createSignal(false);
+  const currentLabel = () => sortItems.find((item) => item.value === props.value())?.label ?? '';
+
   return (
-    <Menu.Root>
-      <Menu.Trigger disabled={props.disabled()} aria-label="Sort By" class={styles.menuTrigger}>
-        <ListSortAscending size={14} />
+    <Menu.Root onOpenChange={(details) => setOpen(details.open)}>
+      <Menu.Trigger disabled={props.disabled()} aria-label="Sort By" class={styles.sortTrigger}>
+        <ListSortAscending size={16} class={styles.sortTriggerIcon} />
+        <span class={styles.sortTriggerText}>
+          <span class={styles.sortSizer} aria-hidden="true">
+            {sortItems.map((item) => item.label).join('\n')}
+          </span>
+          <span class={styles.sortValue}>{currentLabel()}</span>
+        </span>
+        <ChevronDown
+          size={14}
+          class={styles.chevron}
+          classList={{ [styles.chevronOpen]: open() }}
+        />
       </Menu.Trigger>
       <Menu.Positioner>
         <Menu.Content class={styles.menuContent}>
@@ -806,10 +822,28 @@ interface LibraryStatusMenuProps {
 }
 
 function LibraryStatusMenu(props: LibraryStatusMenuProps) {
+  const activeFilterCount = () =>
+    (props.value() === 'all' ? 0 : 1) + (props.favoritesOnly() ? 1 : 0);
+
   return (
     <Menu.Root>
-      <Menu.Trigger disabled={props.disabled()} aria-label="Status" class={styles.menuTrigger}>
-        <Funnel size={14} />
+      <Menu.Trigger
+        disabled={props.disabled()}
+        aria-label={
+          activeFilterCount() === 0
+            ? 'Status'
+            : `Status, ${activeFilterCount()} ${activeFilterCount() === 1 ? 'filter' : 'filters'} active`
+        }
+        class={styles.statusTrigger}
+        classList={{ [styles.statusTriggerActive]: activeFilterCount() > 0 }}
+      >
+        <Funnel size={14} class={styles.statusTriggerIcon} />
+        <span class={styles.statusTriggerText}>Status</span>
+        <Show when={activeFilterCount() > 0}>
+          <span class={styles.statusBadge} aria-hidden="true">
+            {activeFilterCount()}
+          </span>
+        </Show>
       </Menu.Trigger>
       <Menu.Positioner>
         <Menu.Content class={styles.menuContent}>
@@ -841,7 +875,10 @@ function LibraryStatusMenu(props: LibraryStatusMenuProps) {
             class={styles.menuItem}
           >
             <Menu.ItemText class={styles.menuText}>
-              <span>Favorites Only</span>
+              <span class={styles.menuItemRow}>
+                <Heart size={14} class={styles.menuItemIcon} />
+                Favorites Only
+              </span>
             </Menu.ItemText>
             <Menu.ItemIndicator>
               <Check class={styles.menuCheck} />
@@ -866,9 +903,17 @@ interface LibraryBrowseToolbarProps {
 }
 
 function LibraryBrowseToolbar(props: LibraryBrowseToolbarProps) {
+  const appScroll = useAppScrollArea();
+  const pinned = () => appScroll.snapshot().scrollTop > 4;
+
   return (
-    <nav class={styles.controlsNav} aria-label="Library browse controls">
-      <div class={styles.controlGroup}>
+    <nav class={styles.toolbar} aria-label="Library browse controls">
+      <div
+        class={styles.toolbarChrome}
+        data-pinned={pinned() ? '' : undefined}
+        aria-hidden="true"
+      />
+      <div class={styles.controlCapsule} data-disabled={props.loading() ? '' : undefined}>
         <Toggle.Root
           pressed={props.sortDirection() === 'desc'}
           onPressedChange={(pressed) => {
@@ -876,28 +921,29 @@ function LibraryBrowseToolbar(props: LibraryBrowseToolbarProps) {
           }}
           disabled={props.loading()}
           aria-label={props.sortDirection() === 'desc' ? 'Sort descending' : 'Sort ascending'}
-          class={styles.menuTrigger}
+          class={styles.directionToggle}
         >
           <Show
             when={props.sortDirection() === 'desc'}
-            fallback={<ArrowUpWideNarrowIcon size={14} />}
+            fallback={<ArrowUpWideNarrowIcon size={16} />}
           >
-            <ArrowDownWideNarrowIcon size={14} />
+            <ArrowDownWideNarrowIcon size={16} />
           </Show>
         </Toggle.Root>
+        <div class={styles.controlDivider} aria-hidden="true" />
         <LibrarySortMenu
           value={props.sortedValue}
           onChange={props.onSortChange}
           disabled={props.loading}
         />
-        <LibraryStatusMenu
-          value={props.playedFilter}
-          onChange={props.onPlayedFilterChange}
-          favoritesOnly={props.favoritesOnly}
-          onFavoritesOnlyChange={props.onFavoritesOnlyChange}
-          disabled={props.loading}
-        />
       </div>
+      <LibraryStatusMenu
+        value={props.playedFilter}
+        onChange={props.onPlayedFilterChange}
+        favoritesOnly={props.favoritesOnly}
+        onFavoritesOnlyChange={props.onFavoritesOnlyChange}
+        disabled={props.loading}
+      />
     </nav>
   );
 }

@@ -114,6 +114,10 @@ export default defineConfig({
       ping: {
         '75%, 100%': { transform: 'scale(2)', opacity: '0' },
       },
+      menuIn: {
+        from: { opacity: '0', transform: 'translateY(-4px) scale(0.98)' },
+        to: { opacity: '1', transform: 'translateY(0) scale(1)' },
+      },
     },
     tokens: {
       colors: rawColorTokens,

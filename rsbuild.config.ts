@@ -11,9 +11,6 @@ const webdriverBuild = process.env.PUBLIC_WEBDRIVER === '1';
 // Docs: https://rsbuild.rs/config/
 export default defineConfig({
   source: {
-    alias: {
-      '@styled-system': path.join(rootDir, 'styled-system'),
-    },
     entry: webdriverBuild
       ? {
           index: './e2e/app/index.tsx',
@@ -24,6 +21,7 @@ export default defineConfig({
     ? {
         alias: {
           '@tauri-apps/api/core$': path.join(rootDir, 'e2e/app/tauri-core.ts'),
+          '@styled-system': path.join(rootDir, 'styled-system'),
         },
       }
     : undefined,

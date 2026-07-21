@@ -37,7 +37,7 @@
     "rust:check": "cargo check --manifest-path src-tauri/Cargo.toml",
     "rust:clippy": "cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets --all-features -- -D warnings",
     "rust:test": "cargo test --manifest-path src-tauri/Cargo.toml",
-    "panda:codegen": "panda codegen --clean",
+    "panda:codegen": "panda codegen",
     "predev:rsdoctor": "bun run panda:codegen",
     "prebuild": "bun run panda:codegen",
     "prebuild:rsdoctor": "bun run panda:codegen",

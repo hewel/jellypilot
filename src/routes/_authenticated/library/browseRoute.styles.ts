@@ -95,45 +95,244 @@ export const sentinel = css({
   width: 'full',
 });
 
-export const menuTrigger = css({
+export const toolbar = css({
   alignItems: 'center',
-  border: '[0]',
-  borderLeftColor: 'outlineVariant',
-  borderLeftStyle: 'solid',
-  borderLeftWidth: '1px',
-  color: 'onSurface',
   display: 'flex',
-  flex: 'none',
-  height: '10',
-  justifyContent: 'center',
-  outline: 'none',
-  px: '2',
-  textAlign: 'left',
+  flexWrap: 'wrap',
+  gap: '3',
+  justifyContent: 'flex-end',
+  mb: '6',
+  position: 'sticky',
+  top: '0',
+  zIndex: '40',
+});
+
+export const toolbarChrome = css({
+  backdropFilter: '[blur(12px)]',
+  bg: 'surface/85',
+  borderColor: 'outlineVariant/50',
+  borderRadius: '2xl',
+  borderStyle: 'solid',
+  borderWidth: '1px',
+  bottom: '[-6px]',
+  boxShadow: 'lg',
+  left: '[-16px]',
+  opacity: '[0]',
+  '&[data-pinned]': {
+    opacity: '[1]',
+  },
+  pointerEvents: 'none',
+  position: 'absolute',
+  right: '[-16px]',
+  top: '[-6px]',
   transitionDuration: '200',
-  transitionProperty: '[color]',
-  width: '10',
+  transitionProperty: '[opacity]',
+  zIndex: '[-1]',
+});
+
+export const controlCapsule = css({
+  alignItems: 'stretch',
+  bg: 'surfaceContainerHigh/70',
+  borderColor: 'outlineVariant',
+  borderRadius: 'full',
+  borderStyle: 'solid',
+  borderWidth: '1px',
+  display: 'inline-flex',
+  height: '10',
+  p: '0_5',
+  transitionDuration: '200',
+  transitionProperty: '[border-color, background-color]',
   _hover: {
-    color: 'secondary',
+    borderColor: 'outline',
   },
-  _disabled: {
-    cursor: 'not-allowed',
+  _groupDisabled: {
     opacity: '[0.5]',
-  },
-  '&[data-state="on"]': {
-    bg: 'secondaryContainer/45',
-    color: 'onSecondaryContainer',
   },
   sm: {
     height: '12',
-    width: '12',
   },
 });
 
+export const controlDivider = css({
+  bg: 'outlineVariant',
+  my: '1_5',
+  width: '[1px]',
+});
+
+export const directionToggle = css({
+  alignItems: 'center',
+  bg: '[transparent]',
+  border: '[0]',
+  borderRadius: 'full',
+  color: 'onSurfaceVariant',
+  cursor: 'pointer',
+  display: 'inline-flex',
+  height: 'full',
+  justifyContent: 'center',
+  outline: 'none',
+  transitionDuration: '200',
+  transitionProperty: '[background-color, color]',
+  width: '9',
+  _hover: {
+    bg: 'surfaceContainerHighest/70',
+    color: 'onSurface',
+  },
+  '&[data-state="on"]': {
+    bg: 'secondaryContainer',
+    color: 'onSecondaryContainer',
+  },
+  sm: {
+    width: '10',
+  },
+  _disabled: {
+    cursor: 'not-allowed',
+  },
+});
+
+export const sortTrigger = css({
+  alignItems: 'center',
+  bg: '[transparent]',
+  border: '[0]',
+  borderRadius: 'full',
+  color: 'onSurface',
+  cursor: 'pointer',
+  display: 'inline-flex',
+  gap: '2',
+  height: 'full',
+  outline: 'none',
+  pl: '3',
+  pr: '2_5',
+  transitionDuration: '200',
+  transitionProperty: '[background-color]',
+  _hover: {
+    bg: 'surfaceContainerHighest/70',
+  },
+  '&[data-state="open"]': {
+    bg: 'surfaceContainerHighest/70',
+  },
+  _disabled: {
+    cursor: 'not-allowed',
+  },
+});
+
+export const sortTriggerIcon = css({
+  color: 'secondary',
+  flex: 'none',
+});
+
+export const sortTriggerText = css({
+  display: 'grid',
+  fontSize: '14',
+  fontWeight: 'semibold',
+  justifyItems: 'start',
+  lineHeight: '20',
+  maxWidth: '[10rem]',
+});
+
+export const sortSizer = css({
+  gridArea: '1 / 1',
+  height: '0',
+  overflow: 'hidden',
+  visibility: 'hidden',
+  whiteSpace: 'pre',
+});
+
+export const sortValue = css({
+  gridArea: '1 / 1',
+  overflow: 'hidden',
+  textOverflow: 'ellipsis',
+  whiteSpace: 'nowrap',
+});
+
+export const chevron = css({
+  color: 'onSurfaceVariant',
+  flex: 'none',
+  transitionDuration: '200',
+  transitionProperty: '[transform]',
+});
+
+export const chevronOpen = css({
+  transform: 'rotate(180deg)',
+});
+
+export const statusTrigger = css({
+  alignItems: 'center',
+  bg: '[transparent]',
+  border: '[0]',
+  borderColor: 'outlineVariant',
+  borderRadius: 'full',
+  borderStyle: 'solid',
+  borderWidth: '1px',
+  color: 'onSurfaceVariant',
+  cursor: 'pointer',
+  display: 'inline-flex',
+  gap: '2',
+  height: '10',
+  outline: 'none',
+  px: '4',
+  transitionDuration: '200',
+  transitionProperty: '[background-color, border-color, color]',
+  _hover: {
+    borderColor: 'outline',
+    color: 'onSurface',
+  },
+  '&[data-state="open"]': {
+    borderColor: 'outline',
+    color: 'onSurface',
+  },
+  _disabled: {
+    cursor: 'not-allowed',
+  },
+  sm: {
+    height: '11',
+  },
+});
+
+export const statusTriggerActive = css({
+  bg: 'secondaryContainer/60',
+  borderColor: 'secondary/50',
+  color: 'onSecondaryContainer',
+  _hover: {
+    borderColor: 'secondary/70',
+    color: 'onSecondaryContainer',
+  },
+  '&[data-state="open"]': {
+    borderColor: 'secondary/70',
+    color: 'onSecondaryContainer',
+  },
+});
+
+export const statusTriggerIcon = css({
+  flex: 'none',
+});
+
+export const statusTriggerText = css({
+  fontSize: '14',
+  fontWeight: 'semibold',
+  lineHeight: '20',
+});
+
+export const statusBadge = css({
+  alignItems: 'center',
+  bg: 'secondary',
+  borderRadius: 'full',
+  color: 'onSecondary',
+  display: 'inline-flex',
+  fontSize: '11',
+  fontWeight: 'bold',
+  height: '4',
+  justifyContent: 'center',
+  lineHeight: '16',
+  minWidth: '4',
+  px: '1',
+});
+
 export const menuContent = css({
+  animation: '[menuIn 0.18s {easings.emphasized}]',
   backdropFilter: '[blur(12px)]',
   bg: 'surfaceContainerLowest',
   borderColor: 'outlineVariant',
-  borderRadius: 'lg',
+  borderRadius: 'xl',
   borderStyle: 'solid',
   borderWidth: '1px',
   boxShadow: '2xl',
@@ -141,37 +340,62 @@ export const menuContent = css({
   minWidth: '[12rem]',
   outline: 'none',
   overflowY: 'auto',
-  p: '2',
+  p: '1_5',
+  transformOrigin: 'top right',
   zIndex: '50',
 });
 
 export const menuLabel = css({
-  fontSize: '12',
+  color: 'onSurfaceVariant/80',
+  fontSize: '11',
   fontWeight: 'bold',
-  px: '3_5',
-  py: '2',
+  letterSpacing: '[0.08em]',
+  px: '3',
+  pb: '1_5',
+  pt: '2',
+  textTransform: 'uppercase',
 });
 
 export const menuItem = css({
   alignItems: 'center',
-  borderRadius: 'xl',
+  borderRadius: 'lg',
   color: 'onSurfaceVariant',
   cursor: 'pointer',
   display: 'flex',
   fontSize: '14',
   justifyContent: 'space-between',
   lineHeight: '20',
-  px: '3_5',
-  py: '2_5',
+  outline: 'none',
+  px: '3',
+  py: '2',
+  transitionDuration: '150',
   transitionProperty: '[background-color, color]',
   _hover: {
     bg: 'surfaceContainerHigh',
+    color: 'onSurface',
+  },
+  '&[data-highlighted]': {
+    bg: 'surfaceContainerHigh',
+    color: 'onSurface',
+  },
+  '&[data-state="checked"]': {
     color: 'onSurface',
   },
   '&[data-disabled]': {
     cursor: 'not-allowed',
     opacity: '[0.5]',
   },
+});
+
+export const menuItemRow = css({
+  alignItems: 'center',
+  display: 'inline-flex',
+  gap: '2',
+});
+
+export const menuItemIcon = css({
+  color: 'secondary',
+  flex: 'none',
 });
 
 export const menuText = css({
@@ -189,23 +413,6 @@ export const separator = css({
   borderTopStyle: 'solid',
   borderTopWidth: '1px',
   my: '1',
-});
-
-export const controlsNav = css({
-  alignItems: 'flex-end',
-  display: 'flex',
-  flexDirection: 'row',
-  justifyContent: 'flex-end',
-  mb: '6',
-});
-
-export const controlGroup = css({
-  borderRadius: '2xl',
-  display: 'flex',
-  flexWrap: 'wrap',
-  justifyContent: 'flex-end',
-  minWidth: '[0]',
-  overflow: 'hidden',
 });
 
 export const skeletonTitle = css({
