@@ -119,20 +119,6 @@ export const icon = css({
   width: '3_5',
 });
 
-export const popover = css({
-  backdropFilter: '[blur(12px)]',
-  bg: 'surfaceContainerLowest',
-  borderColor: 'outlineVariant',
-  borderRadius: '2xl',
-  borderStyle: 'solid',
-  borderWidth: '1px',
-  boxShadow: '2xl',
-  maxWidth: '[min(90vw, 24rem)]',
-  p: '4',
-  width: '[20rem]',
-  zIndex: '100',
-});
-
 export const loading = css({
   alignItems: 'center',
   color: 'onSurfaceVariant',

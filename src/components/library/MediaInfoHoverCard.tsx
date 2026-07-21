@@ -1,21 +1,20 @@
-import { HoverCard } from '@ark-ui/solid/hover-card';
+import { HoverCard } from '@components/ui';
 import { createQuery } from '@tanstack/solid-query';
 import { Exit, Option } from 'effect';
 import { Check, Heart, LoaderCircle } from 'lucide-solid';
 import { createMemo, createSignal, For, Show } from 'solid-js';
 import type { JSX } from 'solid-js';
-import { Portal } from 'solid-js/web';
-
-import { commandFailureMessage } from '../../effects/commands';
-import { fetchConnectionState } from '../../effects/connection';
-import { fetchMediaDetail } from '../../effects/library';
-import type { MediaDetail } from '../../effects/library';
+import { commandFailureMessage } from '~effects/commands';
+import { fetchConnectionState } from '~effects/connection';
+import { fetchMediaDetail } from '~effects/library';
+import type { MediaDetail } from '~effects/library';
 import {
   isLibrarySessionKeyConnected,
   librarySessionKeyFromConnectionExit,
   queryKeys,
   runExit,
-} from '../../effects/query';
+} from '~effects/query';
+
 import * as styles from './MediaInfoHoverCard.styles';
 
 // Inlined (instead of importing from ./shared) to avoid a shared.tsx <-> card
@@ -114,44 +113,33 @@ export function MediaInfoHoverCard(props: { id: string; itemType: string; childr
   }));
 
   return (
-    <HoverCard.Root
-      lazyMount
-      unmountOnExit
-      positioning={{ gutter: 10, placement: 'top' }}
-      onOpenChange={(details) => setOpen(details.open)}
+    <HoverCard
+      onOpenChange={setOpen}
+      content={() => (
+        <Show
+          when={
+            !(detailQuery.isPending || (detailQuery.isFetching && !detailQuery.data)) &&
+            detailQuery.data
+          }
+          fallback={
+            <div class={styles.loading}>
+              <LoaderCircle class={styles.spinner} />
+              <span>Loading…</span>
+            </div>
+          }
+        >
+          {(exit) =>
+            Exit.match(exit(), {
+              onFailure: (cause) => (
+                <p class={styles.error}>{commandFailureMessage(cause, 'Could not load detail')}</p>
+              ),
+              onSuccess: (value) => <MediaInfoContent detail={value} />,
+            })
+          }
+        </Show>
+      )}
     >
-      <HoverCard.Trigger
-        asChild={(triggerProps) => <div {...triggerProps()}>{props.children}</div>}
-      />
-      <Portal>
-        <HoverCard.Positioner>
-          <HoverCard.Content class={styles.popover}>
-            <Show
-              when={
-                !(detailQuery.isPending || (detailQuery.isFetching && !detailQuery.data)) &&
-                detailQuery.data
-              }
-              fallback={
-                <div class={styles.loading}>
-                  <LoaderCircle class={styles.spinner} />
-                  <span>Loading…</span>
-                </div>
-              }
-            >
-              {(exit) =>
-                Exit.match(exit(), {
-                  onFailure: (cause) => (
-                    <p class={styles.error}>
-                      {commandFailureMessage(cause, 'Could not load detail')}
-                    </p>
-                  ),
-                  onSuccess: (value) => <MediaInfoContent detail={value} />,
-                })
-              }
-            </Show>
-          </HoverCard.Content>
-        </HoverCard.Positioner>
-      </Portal>
-    </HoverCard.Root>
+      {props.children}
+    </HoverCard>
   );
 }

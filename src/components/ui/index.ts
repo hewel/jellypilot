@@ -13,6 +13,8 @@ export { ConsoleContainer, ConsoleGrid, ConsoleShell } from './ConsoleLayout';
 export type { ConsoleContainerProps, ConsoleGridProps, ConsoleShellProps } from './ConsoleLayout';
 export { FieldControl, FieldTextarea } from './FieldControl';
 export type { FieldControlProps, FieldControlVariant, FieldTextareaProps } from './FieldControl';
+export { HoverCard } from './HoverCard';
+export type { HoverCardProps } from './HoverCard';
 export { default as SectionCard } from './SectionCard';
 export { default as StatusBadge } from './StatusBadge';
 export { default as StatusIndicator } from './StatusIndicator';
