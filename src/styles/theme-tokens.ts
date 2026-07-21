@@ -23,7 +23,6 @@ export const rawColors = {
   indigo: {
     '50': '#e0e2ff',
     '300': '#818cf8',
-    '400': '#7a7eff',
     '600': '#4f46e5',
     '900': '#1f2152',
     '950': '#1b1c3b',
@@ -47,15 +46,11 @@ export const rawColors = {
     '900': '#4b1119',
     '1000': '#330006',
   },
-  cyan: {
-    '900': '#0b4b60',
-  },
 } as const;
 
 /** Semantic roles → raw palette path (Panda token reference). */
 export const semanticColorRefs = {
   background: 'colors.neutral.975',
-  brandGlow: 'colors.indigo.600',
   error: 'colors.red.400',
   errorContainer: 'colors.red.900',
   onBackground: 'colors.neutral.50',
@@ -75,10 +70,8 @@ export const semanticColorRefs = {
   outlineVariant: 'colors.neutral.700',
   primary: 'colors.indigo.600',
   primaryContainer: 'colors.indigo.950',
-  primaryGradientEnd: 'colors.indigo.400',
   secondary: 'colors.indigo.300',
   secondaryContainer: 'colors.indigo.900',
-  secondaryGradientEnd: 'colors.cyan.900',
   surface: 'colors.neutral.925',
   surfaceContainer: 'colors.neutral.900',
   surfaceContainerHigh: 'colors.neutral.850',
@@ -95,7 +88,6 @@ export const semanticColorRefs = {
 
 export const semanticColorHex = {
   background: rawColors.neutral['975'],
-  brandGlow: rawColors.indigo['600'],
   error: rawColors.red['400'],
   errorContainer: rawColors.red['900'],
   onBackground: rawColors.neutral['50'],
@@ -115,10 +107,8 @@ export const semanticColorHex = {
   outlineVariant: rawColors.neutral['700'],
   primary: rawColors.indigo['600'],
   primaryContainer: rawColors.indigo['950'],
-  primaryGradientEnd: rawColors.indigo['400'],
   secondary: rawColors.indigo['300'],
   secondaryContainer: rawColors.indigo['900'],
-  secondaryGradientEnd: rawColors.cyan['900'],
   surface: rawColors.neutral['925'],
   surfaceContainer: rawColors.neutral['900'],
   surfaceContainerHigh: rawColors.neutral['850'],

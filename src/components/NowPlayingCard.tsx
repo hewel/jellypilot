@@ -205,8 +205,6 @@ export default function NowPlayingCard(props: {
 
   const inner = (
     <div class={props.bare ? styles.bareRoot : styles.root}>
-      {!props.bare && <div class={styles.hoverGlow} data-part="hover-glow" />}
-
       <div class={styles.header}>
         <div
           class={styles.headerCopy}

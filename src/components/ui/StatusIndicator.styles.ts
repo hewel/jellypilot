@@ -17,11 +17,9 @@ export const statusDot = cva({
     connected: {
       true: {
         bg: 'tertiary',
-        boxShadow: '[0 0 8px {colors.tertiary/50}]',
       },
       false: {
         bg: 'error',
-        boxShadow: '[0 0 8px {colors.error/50}]',
       },
     },
   },

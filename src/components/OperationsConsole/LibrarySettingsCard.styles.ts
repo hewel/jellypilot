@@ -7,7 +7,6 @@ export const toggle = css({
   borderRadius: '2xl',
   p: '4',
   textAlign: 'left',
-  backdropFilter: '[blur(4px)]',
   bg: 'surfaceContainerHigh/30',
   borderWidth: '1px',
   borderStyle: 'solid',
@@ -44,7 +43,7 @@ export const checkbox = css({
 });
 
 export const checkboxChecked = css({
-  backgroundImage: '[linear-gradient(135deg, {colors.primary}, {colors.primaryGradientEnd})]',
+  bg: 'primary',
   borderColor: 'primary',
 });
 

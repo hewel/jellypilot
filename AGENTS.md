@@ -65,6 +65,7 @@ bun tauri build     # Production desktop build
 
 ## Anti-Patterns
 
+- **Treating the project as a web app**: This is cross-platform desktop software (Tauri: Windows, macOS, Linux), not a website. Do not open the Rsbuild dev server in a browser or use web/browser tooling for verification. Verify through the native app (`bun tauri dev`) and the native E2E path in [docs/agents/e2e.md](docs/agents/e2e.md).
 - **Cross-component private style imports**: Do not import another component's `.styles.ts` exports; consume the component API or move the needed behavior into a shared component.
 - **Shared UI style barrels**: Do not create broad style barrels for unrelated components. Keep owner-local style modules beside their component or route.
 - **Legacy styling**: Do not add `.css.ts`, vanilla-extract, Sprinkles, Recipes, UnoCSS, or authored `--jellypilot-*` variables.

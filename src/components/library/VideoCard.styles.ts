@@ -9,9 +9,7 @@ const titleClamp = {
 } satisfies Record<string, string>;
 
 export const card = css({
-  backdropFilter: '[blur(12px)]',
-  backgroundImage:
-    '[linear-gradient(135deg, color-mix(in srgb, {colors.surfaceContainerLow} 50%, transparent) 0%, color-mix(in srgb, {colors.surface} 70%, transparent) 100%)]',
+  bg: 'surface',
   borderColor: 'outlineVariant/80',
   borderRadius: '2xl',
   borderStyle: 'solid',

@@ -23,19 +23,16 @@ export const statusBadge = cva({
       success: {
         bg: 'tertiaryContainer/20',
         borderColor: 'tertiary/30',
-        boxShadow: '[0 0 8px {colors.tertiary/12}]',
         color: 'tertiary',
       },
       warning: {
         bg: 'warningContainer/20',
         borderColor: 'warning/30',
-        boxShadow: '[0 0 8px {colors.warning/12}]',
         color: 'warning',
       },
       error: {
         bg: 'errorContainer/20',
         borderColor: 'error/30',
-        boxShadow: '[0 0 8px {colors.error/12}]',
         color: 'error',
       },
       neutral: {

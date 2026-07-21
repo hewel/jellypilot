@@ -20,16 +20,6 @@ export const card = css({
   boxShadow: '2xl',
 });
 
-export const accent = css({
-  backgroundImage:
-    '[linear-gradient(90deg, transparent, color-mix(in srgb, {colors.primary} 55%, transparent), transparent)]',
-  height: '0_5',
-  left: '0',
-  position: 'absolute',
-  top: '0',
-  width: 'full',
-});
-
 export const stack7 = css({
   display: 'grid',
   gap: '7',
@@ -119,8 +109,7 @@ export const segmentIdle = css({
 });
 
 export const segmentSelected = css({
-  backgroundImage: '[linear-gradient(90deg, {colors.primary}, {colors.primaryGradientEnd})]',
-  boxShadow: '[0 4px 8px {colors.primary/25}]',
+  bg: 'primary',
   color: 'onPrimary',
   fontWeight: 'bold',
 });
@@ -142,7 +131,6 @@ export const preview = css({
   overflow: 'hidden',
   borderRadius: '2xl',
   p: '4',
-  backdropFilter: '[blur(4px)]',
   bg: 'surfaceContainerLowest/40',
   borderWidth: '1px',
   borderStyle: 'solid',
@@ -178,7 +166,6 @@ export const previewValue = css({
 
 export const previewReady = css({
   color: 'secondary',
-  filter: '[drop-shadow(0 0 8px {colors.secondary/15})]',
   fontWeight: 'semibold',
 });
 
@@ -211,19 +198,11 @@ export const quickPanel = css({
   borderRadius: '3xl',
   p: '6',
   textAlign: 'center',
-  backdropFilter: '[blur(4px)]',
   bg: 'secondaryContainer/20',
   borderWidth: '1px',
   borderStyle: 'solid',
   borderColor: 'secondary/25',
   transitionProperty: '[color]',
-});
-
-export const quickPanelGlow = css({
-  backgroundImage: '[linear-gradient(to bottom, {colors.secondary/5}, transparent)]',
-  inset: '0',
-  pointerEvents: 'none',
-  position: 'absolute',
 });
 
 export const radar = css({
@@ -242,29 +221,8 @@ export const radar = css({
   borderColor: 'secondary/20',
 });
 
-export const radarRing = css({
-  animation: '[radar-pulse 2.2s cubic-bezier(0.2, 0.8, 0.2, 1) infinite]',
-  borderWidth: '1px',
-  borderStyle: 'solid',
-  borderColor: 'secondary/40',
-  borderRadius: 'full',
-  inset: '0',
-  position: 'absolute',
-});
-
-export const radarRing2 = css({
-  animationDelay: '[0.7s]',
-  borderColor: 'secondary/30',
-});
-
-export const radarRing3 = css({
-  animationDelay: '[1.4s]',
-  borderColor: 'secondary/20',
-});
-
 export const towerIcon = css({
   color: 'secondary',
-  filter: '[drop-shadow(0 0 8px {colors.secondary/40})]',
   height: '9',
   width: '9',
 });
@@ -314,7 +272,6 @@ export const codeLabel = css({
 
 export const code = css({
   color: 'secondary',
-  filter: '[drop-shadow(0 0 10px {colors.secondary/55})]',
   fontFamily: 'mono',
   fontSize: '36',
   fontVariantNumeric: 'tabular-nums',
@@ -342,7 +299,6 @@ export const waiting = css({
 export const waitingDot = css({
   bg: 'secondary',
   borderRadius: 'full',
-  boxShadow: '[0 0 8px {colors.secondary}]',
   height: '2',
   width: '2',
 });
@@ -391,7 +347,7 @@ export const checkbox = css({
     borderColor: 'primary/60',
   },
   '&[data-state="checked"], &[data-state="indeterminate"]': {
-    backgroundImage: '[linear-gradient(135deg, {colors.primary}, {colors.primaryGradientEnd})]',
+    bg: 'primary',
     borderColor: 'primary',
   },
   '&[data-focus-visible]': {
@@ -479,43 +435,10 @@ export const heroIconWrap = css({
   borderWidth: '1px',
   borderStyle: 'solid',
   borderColor: 'primary/20',
-  boxShadow: '[0 0 30px {colors.primary/20}]',
-});
-
-export const heroRing = css({
-  animation: '[ping 1s cubic-bezier(0, 0, 0.2, 1) infinite]',
-  borderWidth: '1px',
-  borderStyle: 'solid',
-  borderColor: 'primary/30',
-  borderRadius: 'full',
-  inset: '0',
-  opacity: '[0.25]',
-  position: 'absolute',
-});
-
-export const heroPulseRing = css({
-  animation: '[pulse 1.8s cubic-bezier(0.4, 0, 0.6, 1) infinite]',
-  borderWidth: '1px',
-  borderStyle: 'solid',
-  borderColor: 'secondary/25',
-  borderRadius: 'full',
-  inset: '2',
-  position: 'absolute',
-});
-
-export const heroOrbit = css({
-  animation: '[spin 60s linear infinite]',
-  borderWidth: '1px',
-  borderStyle: 'dashed',
-  borderColor: 'primary/10',
-  borderRadius: 'full',
-  inset: '4',
-  position: 'absolute',
 });
 
 export const heroIcon = css({
   color: 'primary',
-  filter: '[drop-shadow(0 0 12px {colors.primary/55})]',
   height: '10',
   width: '10',
 });
@@ -535,10 +458,8 @@ export const badge = css({
 });
 
 export const badgeDot = css({
-  animation: '[pulse 1.8s cubic-bezier(0.4, 0, 0.6, 1) infinite]',
   bg: 'secondary',
   borderRadius: 'full',
-  boxShadow: '[0 0 8px {colors.secondary}]',
   height: '1_5',
   width: '1_5',
 });

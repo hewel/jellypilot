@@ -53,11 +53,9 @@ export const button = cva({
     },
     variant: {
       primary: {
-        backgroundImage: '[linear-gradient(90deg, {colors.primary}, {colors.primaryGradientEnd})]',
-        boxShadow: '[0 10px 20px -10px {colors.primary/45}]',
+        bg: 'primary',
         color: 'onPrimary',
         _hover: {
-          boxShadow: '[0 14px 26px -10px {colors.primary/70}]',
           filter: '[brightness(1.1)]',
           transform: '[translateY(-2px)]',
         },
@@ -66,8 +64,7 @@ export const button = cva({
         },
       },
       secondary: {
-        backgroundImage:
-          '[linear-gradient(90deg, {colors.secondaryContainer}, {colors.secondaryGradientEnd})]',
+        bg: 'secondaryContainer',
         borderWidth: '1px',
         borderStyle: 'solid',
         borderColor: 'outlineVariant',
@@ -82,8 +79,7 @@ export const button = cva({
         },
       },
       tonal: {
-        backgroundImage:
-          '[linear-gradient(90deg, {colors.secondaryContainer}, {colors.secondaryGradientEnd})]',
+        bg: 'secondaryContainer',
         borderWidth: '1px',
         borderStyle: 'solid',
         borderColor: 'outlineVariant',

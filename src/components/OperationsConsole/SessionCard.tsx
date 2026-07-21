@@ -82,9 +82,6 @@ export default function SessionCard(props: SessionCardProps) {
               }
             }}
           >
-            {/* Red top glow bar */}
-            <div class={styles.glow} />
-
             <Dialog.Title id="sign-out-title" class={styles.dialogTitle}>
               <ShieldAlert class={styles.dialogIcon} />
               Sign out?

@@ -22,7 +22,6 @@ export const fieldControl = cva({
   variants: {
     variant: {
       filled: {
-        backdropFilter: '[blur(4px)]',
         bg: 'surfaceContainerHighest/30',
         borderColor: 'outlineVariant/80',
         _hover: {

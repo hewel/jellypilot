@@ -22,9 +22,6 @@ export const root = css({
   overflow: 'hidden',
   position: 'relative',
   width: 'full',
-  '&:hover > [data-part="hover-glow"]': {
-    opacity: '[1]',
-  },
 });
 
 export const bareRoot = css({
@@ -33,16 +30,6 @@ export const bareRoot = css({
   maxWidth: nowPlayingCardNarrowLayout.rootMaxWidth,
   minWidth: nowPlayingCardNarrowLayout.rootMinWidth,
   width: 'full',
-});
-
-export const hoverGlow = css({
-  backgroundImage: '[linear-gradient(90deg, {colors.primary/5}, {colors.secondary/5})]',
-  inset: '0',
-  opacity: '[0]',
-  pointerEvents: 'none',
-  position: 'absolute',
-  transitionDuration: '500',
-  transitionProperty: '[opacity]',
 });
 
 export const header = css({
@@ -165,7 +152,6 @@ const panelBase = {
   boxShadow: 'inner',
   width: 'full',
   zIndex: '10',
-  backdropFilter: '[blur(4px)]',
   bg: 'surfaceContainerLowest/50',
   borderWidth: '1px',
   borderStyle: 'solid',
@@ -239,13 +225,11 @@ export const sliderRange = css({
 });
 
 export const primaryRange = css({
-  backgroundImage: '[linear-gradient(90deg, {colors.primary}, {colors.primaryGradientEnd})]',
-  boxShadow: '[0 0 10px {colors.primary/35}]',
+  bg: 'primary',
 });
 
 export const secondaryRange = css({
-  backgroundImage: '[linear-gradient(90deg, {colors.secondary}, {colors.primary})]',
-  boxShadow: '[0 0 8px {colors.secondary/40}]',
+  bg: 'secondary',
 });
 
 export const thumb = css({
@@ -265,7 +249,6 @@ export const thumb = css({
   transitionProperty: '[box-shadow, transform]',
   width: '[1.375rem]',
   _hover: {
-    boxShadow: '[0 0 12px {colors.onSurface/40}]',
     transform: '[scale(1.1)]',
   },
   _active: {
@@ -436,7 +419,6 @@ export const muteButton = css({
 
 export const volumeValue = css({
   color: 'secondary',
-  filter: '[drop-shadow(0 0 6px {colors.secondary/15})]',
   fontFamily: 'mono',
   fontSize: '13',
   fontVariantNumeric: 'tabular-nums',

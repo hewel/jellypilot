@@ -22,7 +22,6 @@ test('raw palette values match the Control Room contract', () => {
   expect(rawColors.teal['400']).toBe('#4fe3b1');
   expect(rawColors.amber['400']).toBe('#f6c768');
   expect(rawColors.red['400']).toBe('#ff6b7a');
-  expect(rawColors.cyan['900']).toBe('#0b4b60');
 });
 
 test('semantic colors resolve to the same hex values as before', () => {
@@ -30,7 +29,6 @@ test('semantic colors resolve to the same hex values as before', () => {
   expect(semanticColorHex.background).toBe('#05060a');
   expect(semanticColorHex.onSurface).toBe('#f3f6ff');
   expect(semanticColorHex.surfaceContainerLowest).toBe('#040508');
-  expect(semanticColorHex.brandGlow).toBe(semanticColorHex.primary);
   expect(semanticColorHex.surfaceTint).toBe(semanticColorHex.primary);
 });
 

@@ -46,7 +46,6 @@ export const content = css({
 });
 
 export const closeButton = css({
-  backdropFilter: '[blur(8px)]',
   bg: 'surfaceContainerHigh/80',
   borderWidth: '1px',
   borderStyle: 'solid',

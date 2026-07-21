@@ -11,7 +11,7 @@ Reusable visual patterns are components under `src/components/ui`, not global `@
 ## Principles
 
 - **Desktop-first media control**: optimize for the production default **1600×900** Tauri window (minimum **1280×720**) while remaining resilient at review stress widths **800×600**, **640×720**, and **360×720** without horizontal scroll.
-- **Clean OLED first**: default surfaces are solid and high-contrast. Glass, gradients, and glow are reserved for app shell and hero/brand moments.
+- **Clean OLED first**: surfaces are flat, solid, and high-contrast with neutral token shadows only. Glass blur is reserved for overlays over real content (dialog backdrops, drawers, floating chrome).
 - **Operational clarity**: every status uses text and icon, not color alone.
 - **No fake state**: never show fake media artwork, fake playback progress, or pretend controls.
 - **Accessible by default**: normal text contrast must be at least 4.5:1. Large text and meaningful icons must be at least 3:1.
@@ -52,8 +52,6 @@ All components use semantic tokens. Panda owns token values in `panda.config.ts`
 | On Surface Variant | `#aeb8cc` | Secondary text, labels |
 | Outline | `#5c6c8c` | Strong borders/focus support |
 | Outline Variant | `#262e42` | Subtle dividers |
-| Primary Gradient End | `#7a7eff` | Primary button/track gradient endpoint |
-| Secondary Gradient End | `#0b4b60` | Secondary/tonal button gradient endpoint |
 
 ## Color Semantics
 

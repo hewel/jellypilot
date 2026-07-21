@@ -60,8 +60,7 @@ export default defineConfig({
       fontFamily: 'sans',
       WebkitFontSmoothing: 'antialiased',
       MozOsxFontSmoothing: 'grayscale',
-      background:
-        'radial-gradient(circle at 10% 10%, rgba(79, 70, 229, 0.07), transparent 32rem), radial-gradient(circle at 90% 90%, rgba(129, 140, 248, 0.03), transparent 28rem), {colors.background}',
+      background: '{colors.background}',
     },
     'h1, h2, h3, h4, h5, h6': {
       textWrap: 'balance',
@@ -105,11 +104,6 @@ export default defineConfig({
       'wave-bounce': {
         '0%': { transform: 'scaleY(0.25)' },
         '100%': { transform: 'scaleY(1)' },
-      },
-      'radar-pulse': {
-        '0%': { transform: 'scale(0.9)', opacity: '0.9' },
-        '50%': { opacity: '0.4' },
-        '100%': { transform: 'scale(1.6)', opacity: '0' },
       },
       pulse: {
         '50%': { opacity: '0.5' },

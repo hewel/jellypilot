@@ -254,7 +254,6 @@ export default function LoginPage(props: LoginPageProps) {
 
   const loginCard = () => (
     <Card variant="elevated" class={styles.card}>
-      <div class={styles.accent} />
       <div class={styles.stack7}>
         <div>
           <h2 class={styles.sectionTitle}>
@@ -433,15 +432,7 @@ export default function LoginPage(props: LoginPageProps) {
           <Show when={selectedCapabilities().quickConnect}>
             <Tabs.Content value="quickConnect">
               <div class={styles.quickPanel}>
-                <div class={styles.quickPanelGlow} />
-
-                {/* Decorative radar background */}
                 <div class={styles.radar}>
-                  <Show when={isQuickConnectWaiting()}>
-                    <div class={styles.radarRing} />
-                    <div class={styles.cx(styles.radarRing, styles.radarRing2)} />
-                    <div class={styles.cx(styles.radarRing, styles.radarRing3)} />
-                  </Show>
                   <RadioTower
                     class={styles.towerIcon}
                     classList={{ [styles.pulse]: isQuickConnectWaiting() }}
@@ -585,9 +576,6 @@ export default function LoginPage(props: LoginPageProps) {
       <main class={styles.main}>
         <div class={styles.hero}>
           <div class={styles.heroIconWrap}>
-            <div class={styles.heroRing} />
-            <div class={styles.heroPulseRing} />
-            <div class={styles.heroOrbit} />
             <RadioTower class={styles.heroIcon} />
           </div>
 

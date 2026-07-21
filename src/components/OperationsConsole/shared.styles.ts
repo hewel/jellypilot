@@ -3,13 +3,11 @@ import { css } from '@styled-system/css';
 export const sectionIcon = {
   primary: css({
     color: 'primary',
-    filter: '[drop-shadow(0 0 8px {colors.primary/40})]',
     height: '5',
     width: '5',
   }),
   secondary: css({
     color: 'secondary',
-    filter: '[drop-shadow(0 0 8px {colors.secondary/40})]',
     height: '5',
     width: '5',
   }),
@@ -33,7 +31,6 @@ export const tile = css({
   overflow: 'hidden',
   borderRadius: '2xl',
   p: '4',
-  backdropFilter: '[blur(4px)]',
   bg: 'surfaceContainerHigh/30',
   borderWidth: '1px',
   borderStyle: 'solid',
@@ -141,7 +138,6 @@ export const choice = css({
   px: '4',
   py: '3',
   textAlign: 'left',
-  backdropFilter: '[blur(4px)]',
   borderWidth: '1px',
   borderStyle: 'solid',
   borderColor: 'outlineVariant',
@@ -165,7 +161,6 @@ export const choiceIdle = css({
 export const choiceSelected = css({
   bg: 'primaryContainer/35',
   borderColor: 'primary',
-  boxShadow: '[0 0 15px {colors.primary/25}]',
   color: 'onPrimaryContainer',
   fontWeight: 'semibold',
 });
@@ -202,7 +197,6 @@ export const pingDot = css({
   animation: '[ping 1s cubic-bezier(0, 0, 0.2, 1) infinite]',
   bg: 'secondary',
   borderRadius: 'full',
-  boxShadow: '[0 0 8px {colors.secondary}]',
   height: '1_5',
   width: '1_5',
 });

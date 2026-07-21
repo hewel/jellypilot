@@ -8,7 +8,6 @@ export const header = css({
 
 export const cardIcon = css({
   color: 'error',
-  filter: '[drop-shadow(0 0 8px {colors.error/40})]',
   height: '5',
   mt: '1',
   width: '5',
@@ -83,15 +82,6 @@ export const content = css({
     opacity: '[1]',
     transform: '[translateY(0)]',
   },
-});
-
-export const glow = css({
-  backgroundImage: '[linear-gradient(90deg, transparent, {colors.error/60}, transparent)]',
-  height: '[3px]',
-  left: '0',
-  position: 'absolute',
-  top: '0',
-  width: 'full',
 });
 
 export const dialogTitle = css({

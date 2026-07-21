@@ -62,7 +62,7 @@ export const checkbox = css({
     borderColor: 'primary/60',
   },
   '&[data-state="checked"], &[data-state="indeterminate"]': {
-    backgroundImage: '[linear-gradient(135deg, {colors.primary}, {colors.primaryGradientEnd})]',
+    bg: 'primary',
     borderColor: 'primary',
   },
   '&[data-focus-visible]': {
@@ -88,7 +88,6 @@ export const log = css({
   borderRadius: '2xl',
   p: '3',
   boxShadow: 'inner',
-  backdropFilter: '[blur(4px)]',
   bg: 'surfaceContainerLowest/60',
   borderWidth: '1px',
   borderStyle: 'solid',
@@ -179,21 +178,18 @@ export const badgeDebug = css({
 export const badgeInfo = css({
   bg: 'secondaryContainer/30',
   borderColor: 'secondary/30',
-  boxShadow: '[0 0 6px {colors.secondary/10}]',
   color: 'secondary',
 });
 
 export const badgeWarn = css({
   bg: 'warningContainer/30',
   borderColor: 'warning/30',
-  boxShadow: '[0 0 6px {colors.warning/10}]',
   color: 'warning',
 });
 
 export const badgeError = css({
   bg: 'errorContainer/30',
   borderColor: 'error/30',
-  boxShadow: '[0 0 6px {colors.error/10}]',
   color: 'error',
 });
 
@@ -222,7 +218,6 @@ export const status = css({
 
 export const statusCopied = css({
   color: 'tertiary',
-  filter: '[drop-shadow(0 0 6px {colors.tertiary/20})]',
 });
 
 export const statusFailed = css({

@@ -38,15 +38,12 @@ export const statusDot = cva({
       },
       offline: {
         bg: 'error',
-        boxShadow: '[0 0 8px {colors.error}]',
       },
       paused: {
         bg: 'tertiary',
-        boxShadow: '[0 0 8px {colors.tertiary}]',
       },
       playing: {
         bg: 'tertiary',
-        boxShadow: '[0 0 8px {colors.tertiary}]',
       },
       unknown: {
         bg: 'outlineVariant',

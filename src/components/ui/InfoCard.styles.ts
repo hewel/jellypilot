@@ -6,7 +6,6 @@ export const root = css({
   borderRadius: '2xl',
   p: '4',
   boxShadow: 'inner',
-  backdropFilter: '[blur(4px)]',
   bg: 'surfaceContainerHigh/30',
   borderWidth: '1px',
   borderStyle: 'solid',
