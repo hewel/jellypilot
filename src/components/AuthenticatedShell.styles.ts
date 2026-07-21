@@ -1,30 +1,21 @@
 import { css } from '@styled-system/css';
 
+export const shell = css({
+  color: 'onSurface',
+  display: 'flex',
+  minHeight: '[100dvh]',
+});
+
 export const main = css({
   animation: '[fadeIn 300ms {easings.emphasized} forwards]',
   color: 'onSurface',
   display: 'flex',
+  flex: '1',
   flexDirection: 'column',
+  minWidth: '[0]',
   mx: 'auto',
-  pb: '[10rem]',
+  pb: '8',
+  pt: '2',
+  px: '2_5',
   width: 'full',
-});
-
-export const floatingControls = css({
-  alignItems: 'center',
-  backdropFilter: '[blur(24px)]',
-  bg: 'surfaceContainerLow/80',
-  borderWidth: '1px',
-  borderStyle: 'solid',
-  borderColor: 'outlineVariant/40',
-  borderRadius: '3xl',
-  bottom: '4',
-  boxShadow: '2xl',
-  display: 'flex',
-  flexDirection: 'column',
-  gap: '2',
-  p: '1',
-  position: 'fixed',
-  right: '4',
-  zIndex: '100',
 });

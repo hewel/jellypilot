@@ -636,6 +636,21 @@ pub async fn library_video_shortcuts(
     .map_err(jellyfin_err)
 }
 
+/// Resolve the Movies or Shows library shortcut containing the given item, if any.
+#[tauri::command]
+#[specta]
+pub async fn library_item_shortcut(
+  state: State<'_, JellyfinState>,
+  item_id: String,
+) -> Result<Option<VideoLibraryShortcut>, CommandError> {
+  state
+    .client
+    .library()
+    .item_shortcut(item_id)
+    .await
+    .map_err(jellyfin_err)
+}
+
 /// Load one server-paged Movies or Shows library result page.
 #[tauri::command]
 #[specta]
@@ -1159,6 +1174,7 @@ pub fn specta_builder() -> Builder<tauri::Wry> {
       now_playing_get_state,
       library_video_home,
       library_video_shortcuts,
+      library_item_shortcut,
       library_browse_video,
       library_search_video,
       library_item_detail,

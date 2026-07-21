@@ -1,15 +1,24 @@
 import { css } from '@styled-system/css';
 
 export const trigger = css({
-  boxShadow: '[var(--shadows-2xl), 0 25px 50px -12px {colors.secondary/45}]',
-  height: '[3.25rem]',
-  padding: '[0 !important]',
-  width: '[3.25rem]',
+  lg: {
+    justifyContent: 'flex-start',
+  },
 });
 
 export const triggerIcon = css({
   height: '5',
   width: '5',
+});
+
+export const triggerLabel = css({
+  display: 'none',
+  fontSize: '14',
+  lineHeight: '20',
+  truncate: true,
+  lg: {
+    display: 'inline',
+  },
 });
 
 export const backdrop = css({

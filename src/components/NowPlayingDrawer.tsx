@@ -87,11 +87,15 @@ export default function NowPlayingDrawer(props: { jellyfinConnected: boolean }) 
             {...triggerProps()}
             type="button"
             variant="icon"
+            size="row"
             aria-label={triggerLabel(state())}
             class={styles.trigger}
           >
-            <MonitorPlay class={styles.triggerIcon} />
-            <span class={statusDotClass(state()?.status)} />
+            <span class={styles.triggerIconWrap}>
+              <MonitorPlay class={styles.triggerIcon} />
+              <span class={statusDotClass(state()?.status)} />
+            </span>
+            <span class={styles.triggerLabel}>Now Playing</span>
           </Button>
         )}
       />

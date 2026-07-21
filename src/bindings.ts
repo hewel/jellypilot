@@ -35,6 +35,14 @@ export const commands = {
 	libraryVideoHome: () => typedError<VideoHome, CommandError>(__TAURI_INVOKE("library_video_home")),
 	/**  Load Movies and Shows library shortcuts for Library Browser navigation. */
 	libraryVideoShortcuts: () => typedError<VideoLibraryShortcut[], CommandError>(__TAURI_INVOKE("library_video_shortcuts")),
+	/**  Resolve the Movies or Shows library shortcut containing the given item, if any. */
+	libraryItemShortcut: (itemId: string) => typedError<{
+	id: string,
+	name: string,
+	collectionType: string,
+	itemCount: number | null,
+	artworkImageId: string | null,
+} | null, CommandError>(__TAURI_INVOKE("library_item_shortcut", { itemId })),
 	/**  Load one server-paged Movies or Shows library result page. */
 	libraryBrowseVideo: (request: VideoLibraryPageRequest) => typedError<VideoLibraryPage, CommandError>(__TAURI_INVOKE("library_browse_video", { request })),
 	/**  Search Movies, Shows, and Episodes with server paging. */

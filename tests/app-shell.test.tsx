@@ -494,6 +494,10 @@ function mockShellCommands(state = connectedState) {
     data: videoLibraryShortcuts,
     status: 'ok',
   });
+  rstest.spyOn(commands, 'libraryItemShortcut').mockResolvedValue({
+    data: null,
+    status: 'ok',
+  });
   rstest.spyOn(commands, 'libraryBrowseVideo').mockImplementation((request) =>
     Promise.resolve({
       data: videoLibraryPage(request.startIndex),
@@ -625,11 +629,11 @@ afterEach(() => {
   window.__TEST_TAURI_STORE__.reset();
 });
 
-test('authenticated shell removes top header chrome and exposes floating controls', async () => {
+test('authenticated shell renders the persistent Sidebar and drops floating controls', async () => {
   mockShellCommands();
   const cleanup = renderShell();
 
-  await screen.findByRole('navigation', { name: 'Library navigation' });
+  await screen.findByRole('navigation', { name: 'Sidebar' });
 
   // No shell header: no app-area navigation, brand, or user/server badge.
   expect(screen.queryByRole('navigation', { name: 'JellyPilot areas' })).toBeNull();
@@ -639,14 +643,15 @@ test('authenticated shell removes top header chrome and exposes floating control
   expect(screen.queryByText(connectedState.userName)).toBeNull();
   expect(screen.queryByText(connectedState.serverName)).toBeNull();
 
-  // Now Playing and Open Settings are grouped in the floating cluster.
-  const floatingControls = screen.getByRole('group', { name: 'Floating controls' });
+  // The floating cluster is gone; Now Playing and Open Settings live in the Sidebar.
+  expect(screen.queryByRole('group', { name: 'Floating controls' })).toBeNull();
+  const sidebar = screen.getByRole('navigation', { name: 'Sidebar' });
   await waitFor(() =>
     expect(
-      within(floatingControls).getByRole('button', { name: /Now Playing: Playing — The Pilot/ }),
+      within(sidebar).getByRole('button', { name: /Now Playing: Playing — The Pilot/ }),
     ).toBeVisible(),
   );
-  expect(within(floatingControls).getByRole('button', { name: 'Open Settings' })).toBeVisible();
+  expect(within(sidebar).getByRole('button', { name: 'Open Settings' })).toBeVisible();
 
   expect(document.querySelector('[data-scope="scroll-area"][data-part="root"]')).toBeNull();
   expect(appScrollViewport()).toBeVisible();
@@ -659,13 +664,13 @@ test('library landing renders command-backed rows and drawer trigger', async () 
   mockShellCommands();
   const cleanup = renderShell();
 
-  await screen.findByRole('navigation', { name: 'Library navigation' });
+  await screen.findByRole('navigation', { name: 'Sidebar' });
 
-  const navigation = screen.getByRole('navigation', { name: 'Library navigation' });
+  const navigation = screen.getByRole('navigation', { name: 'Sidebar' });
   expect(navigation).toBeVisible();
-  expect(screen.getByRole('radio', { name: 'Home' })).toBeChecked();
-  expect(screen.getByRole('radio', { name: 'Movies' })).toBeVisible();
-  expect(screen.getByRole('radio', { name: 'Shows' })).toBeVisible();
+  expect(screen.getByRole('link', { name: 'Home' })).toHaveAttribute('aria-current', 'page');
+  expect(screen.getByRole('link', { name: 'Movies' })).toBeVisible();
+  expect(screen.getByRole('link', { name: 'Shows' })).toBeVisible();
   expect(await screen.findByRole('heading', { name: 'Continue Watching' })).toBeVisible();
   expect(screen.getByRole('link', { name: /Resume Movie/ })).toBeVisible();
   expect(screen.getByRole('link', { name: /Next Episode/ })).toBeVisible();
@@ -703,14 +708,15 @@ test('library browse auto-loads paged results and opens detail links without pla
   const mpvStart = rstest.spyOn(commands, 'mpvStart');
   const cleanup = renderShell('/library/movies/movies');
 
-  const navigation = await screen.findByRole('navigation', { name: 'Library navigation' });
+  const navigation = await screen.findByRole('navigation', { name: 'Sidebar' });
   expect(navigation).toBeVisible();
-  expect(screen.getByRole('radio', { name: 'Movies' })).toBeChecked();
-  expect(screen.getByRole('radio', { name: 'Home' })).toBeVisible();
-  expect(screen.getByRole('radio', { name: 'Shows' })).toBeVisible();
-  expect(within(navigation).getByRole('button', { name: 'Sort By' })).toBeVisible();
-  expect(within(navigation).getByRole('button', { name: 'Status' })).toBeVisible();
-  expect(within(navigation).getByRole('button', { name: 'Sort ascending' })).toBeVisible();
+  expect(screen.getByRole('link', { name: 'Movies' })).toHaveAttribute('aria-current', 'page');
+  expect(screen.getByRole('link', { name: 'Home' })).toBeVisible();
+  expect(screen.getByRole('link', { name: 'Shows' })).toBeVisible();
+  const controls = await screen.findByRole('navigation', { name: 'Library browse controls' });
+  expect(within(controls).getByRole('button', { name: 'Sort By' })).toBeVisible();
+  expect(within(controls).getByRole('button', { name: 'Status' })).toBeVisible();
+  expect(within(controls).getByRole('button', { name: 'Sort ascending' })).toBeVisible();
   await screen.findByRole('heading', { name: 'Movies' });
   const pagedMovieLink = await screen.findByRole('link', {
     name: 'Open Paged Movie, favorite',
@@ -752,6 +758,49 @@ test('library browse auto-loads paged results and opens detail links without pla
 
   cleanup();
 });
+test('detail page highlights parent library in Sidebar', async () => {
+  mockShellCommands();
+  rstest.spyOn(commands, 'libraryItemShortcut').mockResolvedValue({
+    data: {
+      id: 'movies',
+      name: 'Movies',
+      collectionType: 'movies',
+      itemCount: 1,
+      artworkImageId: null,
+    },
+    status: 'ok',
+  });
+  const cleanup = renderShell('/library/items/detail-movie');
+
+  await screen.findByRole('heading', { name: 'Detail Movie' });
+  await waitFor(() =>
+    expect(screen.getByRole('link', { name: 'Movies' })).toHaveAttribute('aria-current', 'page'),
+  );
+  expect(screen.getByRole('link', { name: 'Home' })).not.toHaveAttribute('aria-current');
+
+  cleanup();
+});
+
+test('sidebar shows library artwork with icon fallback', async () => {
+  mockShellCommands();
+  rstest.spyOn(commands, 'libraryVideoShortcuts').mockResolvedValue({
+    data: [
+      { ...videoLibraryShortcuts[0]!, artworkImageId: 'movies-art' },
+      videoLibraryShortcuts[1]!,
+    ],
+    status: 'ok',
+  });
+  const cleanup = renderShell();
+
+  await screen.findByRole('navigation', { name: 'Sidebar' });
+  const moviesLink = await screen.findByRole('link', { name: 'Movies' });
+  expect(moviesLink.querySelector('img')).toHaveAttribute('src', imageSource('movies-art'));
+  const showsLink = screen.getByRole('link', { name: 'Shows' });
+  expect(showsLink.querySelector('img')).toBeNull();
+  expect(showsLink.querySelector('svg')).not.toBeNull();
+
+  cleanup();
+});
 
 test('library browse redirects home when active server changes under stale library URL', async () => {
   mockShellCommands();
@@ -765,7 +814,7 @@ test('library browse redirects home when active server changes under stale libra
   queryClient.setQueryData(queryKeys.connectionState, Exit.succeed(secondConnectedState));
 
   expect(await screen.findByRole('heading', { name: 'Continue Watching' })).toBeVisible();
-  expect(screen.getByRole('radio', { name: 'Home' })).toBeChecked();
+  expect(screen.getByRole('link', { name: 'Home' })).toHaveAttribute('aria-current', 'page');
   await new Promise((resolve) => setTimeout(resolve, 0));
   expect(browseCommand).not.toHaveBeenCalled();
 
@@ -897,7 +946,7 @@ test('library browse reuses cached switched library pages before virtual pages',
   const cleanup = renderShell('/library/movies/movies');
 
   expect(await screen.findByRole('link', { name: 'Open Virtual Movie 1' })).toBeVisible();
-  fireEvent.click(screen.getByRole('radio', { name: 'Shows' }));
+  fireEvent.click(screen.getByRole('link', { name: 'Shows' }));
   await waitFor(() =>
     expect(browseCommand).toHaveBeenCalledWith({
       collectionType: 'tvshows',
@@ -915,7 +964,7 @@ test('library browse reuses cached switched library pages before virtual pages',
   fireEvent.scroll(viewport);
   browseCommand.mockClear();
 
-  fireEvent.click(screen.getByRole('radio', { name: 'Movies' }));
+  fireEvent.click(screen.getByRole('link', { name: 'Movies' }));
   expect(await screen.findByRole('link', { name: 'Open Virtual Movie 1' })).toBeVisible();
   await new Promise((resolve) => setTimeout(resolve, 0));
 
@@ -1058,7 +1107,7 @@ test('library browse controls are shared across libraries', async () => {
       sortDirection: 'desc',
     }),
   );
-  fireEvent.click(screen.getByRole('radio', { name: 'Shows' }));
+  fireEvent.click(screen.getByRole('link', { name: 'Shows' }));
 
   await waitFor(() =>
     expect(browseCommand).toHaveBeenLastCalledWith({
@@ -1101,7 +1150,7 @@ test('library browse hydrates shared filters once across route remounts', async 
   expect(window.__TEST_TAURI_STORE__.loadCount('preferences.json')).toBe(1);
   expect(window.__TEST_TAURI_STORE__.getCount('preferences.json', 'library_filters')).toBe(1);
 
-  fireEvent.click(screen.getByRole('radio', { name: 'Movies' }));
+  fireEvent.click(screen.getByRole('link', { name: 'Movies' }));
 
   await waitFor(() =>
     expect(browseCommand).toHaveBeenCalledWith({
@@ -1471,7 +1520,7 @@ test('library landing has no retry and skips video home when disconnected', asyn
   const videoHomeCommand = rstest.spyOn(commands, 'libraryVideoHome');
   const cleanup = renderShell();
 
-  await screen.findByRole('navigation', { name: 'Library navigation' });
+  await screen.findByRole('navigation', { name: 'Sidebar' });
   expect(screen.queryByRole('button', { name: 'Retry Library' })).toBeNull();
   expect(videoHomeCommand).not.toHaveBeenCalled();
 
@@ -1496,7 +1545,7 @@ test('library landing renders no fake content on command error', async () => {
   rstest.spyOn(events.nowPlayingChanged, 'listen').mockResolvedValue(() => {});
   const cleanup = renderShell();
 
-  await screen.findByRole('navigation', { name: 'Library navigation' });
+  await screen.findByRole('navigation', { name: 'Sidebar' });
   expect(screen.queryByRole('button', { name: 'Retry Library' })).toBeNull();
   expect(screen.queryByText('Continue Watching')).toBeNull();
 
@@ -1516,7 +1565,7 @@ test('library landing renders no rows for empty video home', async () => {
   });
   const cleanup = renderShell();
 
-  await screen.findByRole('navigation', { name: 'Library navigation' });
+  await screen.findByRole('navigation', { name: 'Sidebar' });
   expect(screen.queryByRole('button', { name: 'Retry Library' })).toBeNull();
   expect(screen.queryByText('No artwork')).toBeNull();
 
@@ -1527,7 +1576,7 @@ test('now playing drawer exposes full playback controls', async () => {
   mockShellCommands();
   const cleanup = renderShell();
 
-  await screen.findByRole('navigation', { name: 'Library navigation' });
+  await screen.findByRole('navigation', { name: 'Sidebar' });
 
   const trigger = await screen.findByRole('button', { name: /Now Playing: Playing — The Pilot/ });
   fireEvent.click(trigger);
@@ -1553,11 +1602,11 @@ test('now playing drawer exposes full playback controls', async () => {
   cleanup();
 });
 
-test('floating Open Settings control opens Settings modal with operations console content', async () => {
+test('Sidebar Open Settings control opens Settings modal with operations console content', async () => {
   mockShellCommands();
   const cleanup = renderShell('/library');
 
-  await screen.findByRole('navigation', { name: 'Library navigation' });
+  await screen.findByRole('navigation', { name: 'Sidebar' });
 
   const trigger = await screen.findByRole('button', { name: 'Open Settings' });
   expect(trigger).toBeVisible();
@@ -1582,7 +1631,7 @@ test('Close Settings and standard dismissal close the Settings modal back to the
   mockShellCommands();
   const cleanup = renderShell('/library');
 
-  await screen.findByRole('navigation', { name: 'Library navigation' });
+  await screen.findByRole('navigation', { name: 'Sidebar' });
 
   fireEvent.click(await screen.findByRole('button', { name: 'Open Settings' }));
   const settings = await screen.findByRole('dialog', { name: 'Settings' });
@@ -1598,7 +1647,7 @@ test('Close Settings and standard dismissal close the Settings modal back to the
   await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Settings' })).toBeNull());
 
   // The Library Browser remains the active authenticated surface after closing
-  expect(screen.getByRole('navigation', { name: 'Library navigation' })).toBeVisible();
+  expect(screen.getByRole('navigation', { name: 'Sidebar' })).toBeVisible();
 
   cleanup();
 });
@@ -1611,7 +1660,7 @@ test('Settings modal keeps Disconnect and Sign out as distinct session controls'
   );
 
   const cleanup = renderShell('/library');
-  await screen.findByRole('navigation', { name: 'Library navigation' });
+  await screen.findByRole('navigation', { name: 'Sidebar' });
 
   fireEvent.click(await screen.findByRole('button', { name: 'Open Settings' }));
   const settings = await screen.findByRole('dialog', { name: 'Settings' });

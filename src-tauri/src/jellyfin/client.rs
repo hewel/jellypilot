@@ -1738,6 +1738,46 @@ impl<'a> JellyfinLibrary<'a> {
     video_library_shortcuts(&configuration, &server_url, &user_id).await
   }
 
+  pub async fn item_shortcut(
+    &self,
+    item_id: String,
+  ) -> Result<Option<VideoLibraryShortcut>, JellyfinError> {
+    if self.client.provider() == MediaServerProvider::Emby {
+      return self.emby_item_shortcut(item_id).await;
+    }
+
+    let item_id = item_id.trim().to_string();
+    if item_id.is_empty() {
+      return Err(JellyfinError::HttpError(
+        "Item id is required for library lookup".to_string(),
+      ));
+    }
+
+    let server_url = self.client.server_url()?;
+    let token = self.client.access_token()?;
+    let user_id = self.client.user_id()?;
+    let configuration = self
+      .client
+      .openapi_configuration(&server_url, Some(&token))?;
+
+    let ancestors = jellyfin_api::apis::library_api::get_ancestors(
+      &configuration,
+      jellyfin_api::apis::library_api::GetAncestorsParams {
+        item_id,
+        user_id: Some(user_id),
+      },
+    )
+    .await
+    .map_err(|err| JellyfinClient::openapi_error("Library item shortcut", err))?;
+
+    Ok(
+      ancestors
+        .into_iter()
+        .filter_map(|item| map_video_library_shortcut(&server_url, item))
+        .next(),
+    )
+  }
+
   pub async fn browse_video(
     &self,
     request: VideoLibraryPageRequest,
@@ -2198,6 +2238,42 @@ impl<'a> JellyfinLibrary<'a> {
         .into_iter()
         .filter_map(|item| map_emby_video_library_shortcut(&server_url, item))
         .collect(),
+    )
+  }
+
+  async fn emby_item_shortcut(
+    &self,
+    item_id: String,
+  ) -> Result<Option<VideoLibraryShortcut>, JellyfinError> {
+    let item_id = item_id.trim().to_string();
+    if item_id.is_empty() {
+      return Err(JellyfinError::HttpError(
+        "Item id is required for library lookup".to_string(),
+      ));
+    }
+
+    let server_url = self.client.server_url()?;
+    let token = self.client.access_token()?;
+    let user_id = self.client.user_id()?;
+    let configuration = self
+      .client
+      .emby_openapi_configuration(&server_url, Some(&token))?;
+
+    let ancestors = emby_api::apis::library_service_api::get_items_by_id_ancestors(
+      &configuration,
+      emby_api::apis::library_service_api::GetItemsByIdAncestorsParams {
+        id: item_id,
+        user_id: Some(user_id),
+      },
+    )
+    .await
+    .map_err(|err| JellyfinClient::emby_openapi_error("Library item shortcut", err))?;
+
+    Ok(
+      ancestors
+        .into_iter()
+        .filter_map(|item| map_emby_video_library_shortcut(&server_url, item))
+        .next(),
     )
   }
 

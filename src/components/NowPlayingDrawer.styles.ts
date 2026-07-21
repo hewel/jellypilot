@@ -14,12 +14,29 @@ export const nowPlayingDrawerNarrowLayout = {
 } as const;
 
 export const trigger = css({
-  position: 'relative',
+  lg: {
+    justifyContent: 'flex-start',
+  },
 });
 
 export const triggerIcon = css({
   height: '5',
   width: '5',
+});
+
+export const triggerIconWrap = css({
+  display: 'inline-flex',
+  position: 'relative',
+});
+
+export const triggerLabel = css({
+  display: 'none',
+  fontSize: '14',
+  lineHeight: '20',
+  truncate: true,
+  lg: {
+    display: 'inline',
+  },
 });
 
 export const statusDot = cva({

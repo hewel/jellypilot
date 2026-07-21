@@ -2,7 +2,6 @@ import { Menu } from '@ark-ui/solid/menu';
 import { Toggle } from '@ark-ui/solid/toggle';
 import type { VideoLibraryKind, VideoLibraryPlayedFilter, VideoLibrarySort } from '@bindings';
 import { useAppScrollArea } from '@components/AppScrollAreaContext';
-import { useLibraryNavbarControls } from '@components/library/LibraryNavbarContext';
 import {
   LibraryStatusPanel,
   libraryTitle,
@@ -33,7 +32,6 @@ import {
   onCleanup,
   onMount,
 } from 'solid-js';
-import { Portal } from 'solid-js/web';
 import { commandFailureMessage } from '~effects/commands';
 import { fetchConnectionState } from '~effects/connection';
 import { LIBRARY_BROWSE_PAGE_SIZE, fetchVideoLibraryPage } from '~effects/library';
@@ -629,7 +627,7 @@ function LibraryBrowseRoute() {
 
   return (
     <div class={styles.root}>
-      <LibraryBrowseNavbarControls
+      <LibraryBrowseToolbar
         loading={controlsLoading}
         sortedValue={libraryFilters.sort}
         sortDirection={libraryFilters.sortDirection}
@@ -855,7 +853,7 @@ function LibraryStatusMenu(props: LibraryStatusMenuProps) {
   );
 }
 
-interface LibraryBrowseNavbarControlsProps {
+interface LibraryBrowseToolbarProps {
   loading: () => boolean;
   sortedValue: () => VideoLibrarySort;
   sortDirection: () => LibrarySortDirection;
@@ -867,48 +865,40 @@ interface LibraryBrowseNavbarControlsProps {
   onFavoritesOnlyChange: (favoritesOnly: boolean) => void;
 }
 
-function LibraryBrowseNavbarControls(props: LibraryBrowseNavbarControlsProps) {
-  const navbarControls = useLibraryNavbarControls();
-
+function LibraryBrowseToolbar(props: LibraryBrowseToolbarProps) {
   return (
-    <Show when={navbarControls.portalTarget()}>
-      {(target) => (
-        <Portal mount={target()}>
-          <nav class={styles.controlsNav} aria-label="Library browse controls">
-            <div class={styles.controlGroup}>
-              <Toggle.Root
-                pressed={props.sortDirection() === 'desc'}
-                onPressedChange={(pressed) => {
-                  props.onSortDirectionChange(pressed ? 'desc' : 'asc');
-                }}
-                disabled={props.loading()}
-                aria-label={props.sortDirection() === 'desc' ? 'Sort descending' : 'Sort ascending'}
-                class={styles.menuTrigger}
-              >
-                <Show
-                  when={props.sortDirection() === 'desc'}
-                  fallback={<ArrowUpWideNarrowIcon size={14} />}
-                >
-                  <ArrowDownWideNarrowIcon size={14} />
-                </Show>
-              </Toggle.Root>
-              <LibrarySortMenu
-                value={props.sortedValue}
-                onChange={props.onSortChange}
-                disabled={props.loading}
-              />
-              <LibraryStatusMenu
-                value={props.playedFilter}
-                onChange={props.onPlayedFilterChange}
-                favoritesOnly={props.favoritesOnly}
-                onFavoritesOnlyChange={props.onFavoritesOnlyChange}
-                disabled={props.loading}
-              />
-            </div>
-          </nav>
-        </Portal>
-      )}
-    </Show>
+    <nav class={styles.controlsNav} aria-label="Library browse controls">
+      <div class={styles.controlGroup}>
+        <Toggle.Root
+          pressed={props.sortDirection() === 'desc'}
+          onPressedChange={(pressed) => {
+            props.onSortDirectionChange(pressed ? 'desc' : 'asc');
+          }}
+          disabled={props.loading()}
+          aria-label={props.sortDirection() === 'desc' ? 'Sort descending' : 'Sort ascending'}
+          class={styles.menuTrigger}
+        >
+          <Show
+            when={props.sortDirection() === 'desc'}
+            fallback={<ArrowUpWideNarrowIcon size={14} />}
+          >
+            <ArrowDownWideNarrowIcon size={14} />
+          </Show>
+        </Toggle.Root>
+        <LibrarySortMenu
+          value={props.sortedValue}
+          onChange={props.onSortChange}
+          disabled={props.loading}
+        />
+        <LibraryStatusMenu
+          value={props.playedFilter}
+          onChange={props.onPlayedFilterChange}
+          favoritesOnly={props.favoritesOnly}
+          onFavoritesOnlyChange={props.onFavoritesOnlyChange}
+          disabled={props.loading}
+        />
+      </div>
+    </nav>
   );
 }
 

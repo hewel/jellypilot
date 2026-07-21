@@ -19,12 +19,13 @@ export default function SettingsModal() {
           <Button
             {...triggerProps()}
             type="button"
-            variant="primary"
-            size="lg"
+            variant="icon"
+            size="row"
             aria-label="Open Settings"
             class={styles.trigger}
           >
             <Settings class={styles.triggerIcon} />
+            <span class={styles.triggerLabel}>Settings</span>
           </Button>
         )}
       />

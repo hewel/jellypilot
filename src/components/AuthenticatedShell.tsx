@@ -4,10 +4,8 @@ import { Exit } from 'effect';
 
 import { fetchConnectionState } from '../effects/connection';
 import { queryKeys, runExit } from '../effects/query';
+import AppSidebar from './AppSidebar';
 import * as styles from './AuthenticatedShell.styles';
-import NowPlayingDrawer from './NowPlayingDrawer';
-import SettingsModal from './SettingsModal';
-import { ConsoleShell } from './ui';
 
 export default function AuthenticatedShell() {
   const connectionQuery = createQuery(() => ({
@@ -20,18 +18,11 @@ export default function AuthenticatedShell() {
       : false;
 
   return (
-    <ConsoleShell>
-      {/*
-        Bottom padding reserves space so the fixed bottom-right floating cluster
-        (Now Playing + Open Settings) never covers the last Library Browser items.
-      */}
+    <div class={styles.shell}>
+      <AppSidebar jellyfinConnected={jellyfinConnected()} />
       <main class={styles.main}>
         <Outlet />
       </main>
-      <div role="group" aria-label="Floating controls" class={styles.floatingControls}>
-        <NowPlayingDrawer jellyfinConnected={jellyfinConnected()} />
-        <SettingsModal />
-      </div>
-    </ConsoleShell>
+    </div>
   );
 }

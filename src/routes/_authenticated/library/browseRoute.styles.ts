@@ -195,7 +195,8 @@ export const controlsNav = css({
   alignItems: 'flex-end',
   display: 'flex',
   flexDirection: 'row',
-  justifyContent: 'space-between',
+  justifyContent: 'flex-end',
+  mb: '6',
 });
 
 export const controlGroup = css({

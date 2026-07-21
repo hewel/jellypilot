@@ -174,6 +174,24 @@ export const iconButton = cva({
         minWidth: '[3.25rem]',
         width: '[3.25rem]',
       },
+      /*
+       * Full-width row chrome for rail/footer triggers. The variant wins over
+       * base padding and hover via recipe merge; owners must not re-declare
+       * them in a local class (atomic emission order would not guarantee a win).
+       */
+      row: {
+        borderRadius: 'xl',
+        gap: '2',
+        height: 'auto',
+        minHeight: '10',
+        minWidth: '[0]',
+        padding: '2',
+        width: 'full',
+        _hover: {
+          bg: 'surfaceContainerHigh',
+          color: 'onSurfaceVariant',
+        },
+      },
     },
   },
   defaultVariants: {

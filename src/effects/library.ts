@@ -89,6 +89,10 @@ export function fetchVideoItemDetail(itemId: string): LibraryEffect<LibraryDetai
   return withConnection(runTauriCommand(() => commands.libraryItemDetail(itemId)));
 }
 
+export function fetchVideoItemShortcut(itemId: string): LibraryEffect<VideoLibraryShortcut | null> {
+  return withConnection(runTauriCommand(() => commands.libraryItemShortcut(itemId)));
+}
+
 export function fetchVideoShowDetail(seriesId: string): LibraryEffect<LibraryShowState> {
   return withConnection(runTauriCommand(() => commands.libraryShowDetail(seriesId)));
 }

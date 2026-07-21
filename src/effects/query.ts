@@ -109,6 +109,8 @@ export const queryKeys = {
     ] as const,
   libraryItemDetail: (sessionKey: LibrarySessionKey, itemId: string) =>
     [...queryKeys.librarySessionRoot(sessionKey), 'itemDetail', itemId] as const,
+  libraryItemShortcut: (sessionKey: LibrarySessionKey, itemId: string) =>
+    [...queryKeys.librarySessionRoot(sessionKey), 'itemShortcut', itemId] as const,
   libraryShowDetail: (sessionKey: LibrarySessionKey, seriesId: string) =>
     [...queryKeys.librarySessionRoot(sessionKey), 'showDetail', seriesId] as const,
   librarySeasonEpisodes: (sessionKey: LibrarySessionKey, seriesId: string, seasonId: string) =>
