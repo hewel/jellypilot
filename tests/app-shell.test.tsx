@@ -767,7 +767,8 @@ test('library browse auto-loads paged results and opens detail links without pla
   expect(within(controls).getByRole('button', { name: 'Sort By' })).toBeVisible();
   expect(within(controls).getByRole('button', { name: 'Status' })).toBeVisible();
   expect(within(controls).getByRole('button', { name: 'Sort ascending' })).toBeVisible();
-  await screen.findByRole('heading', { name: 'Movies' });
+  expect(within(controls).getByRole('heading', { name: 'Movies' })).toBeVisible();
+  expect(within(controls).getByText(/\d+ of \d+/)).toBeVisible();
   const pagedMovieLink = await screen.findByRole('link', {
     name: 'Open Paged Movie, favorite',
   });

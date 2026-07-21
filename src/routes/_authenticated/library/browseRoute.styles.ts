@@ -1,7 +1,5 @@
 import { css } from '@styled-system/css';
 
-const pulse = '[pulse 1.8s cubic-bezier(0.4, 0, 0.6, 1) infinite]';
-
 export const root = css({
   minWidth: '[0]',
 });
@@ -11,25 +9,14 @@ export const section = css({
   gap: '4',
 });
 
-export const header = css({
-  display: 'flex',
-  flexDirection: 'column',
-  gap: '2',
-  sm: {
-    alignItems: 'center',
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-  },
-});
-
-export const title = css({
+export const toolbarTitle = css({
   color: 'onSurface',
   fontSize: '22',
   fontWeight: 'bold',
   lineHeight: '28',
 });
 
-export const count = css({
+export const toolbarCount = css({
   color: 'onSurfaceVariant/80',
   fontSize: '12',
   fontVariantNumeric: 'tabular-nums',
@@ -95,6 +82,15 @@ export const sentinel = css({
   width: 'full',
 });
 
+export const toolbarHeadingGroup = css({
+  alignItems: 'baseline',
+  columnGap: '3',
+  display: 'flex',
+  flexWrap: 'wrap',
+  mr: 'auto',
+  rowGap: '1',
+});
+
 export const toolbar = css({
   alignItems: 'center',
   display: 'flex',
@@ -102,6 +98,7 @@ export const toolbar = css({
   gap: '3',
   justifyContent: 'flex-end',
   mb: '6',
+  py: '1',
   position: 'sticky',
   top: '0',
   zIndex: '40',
@@ -413,20 +410,4 @@ export const separator = css({
   borderTopStyle: 'solid',
   borderTopWidth: '1px',
   my: '1',
-});
-
-export const skeletonTitle = css({
-  animation: pulse,
-  bg: 'surfaceContainerHigh/70',
-  borderRadius: 'md',
-  height: '7',
-  width: '[8rem]',
-});
-
-export const skeletonCount = css({
-  animation: pulse,
-  bg: 'surfaceContainerHigh/60',
-  borderRadius: 'md',
-  height: '4',
-  width: '24',
 });

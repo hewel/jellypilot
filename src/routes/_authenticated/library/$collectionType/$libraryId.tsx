@@ -627,9 +627,20 @@ function LibraryBrowseRoute() {
   const controlsLoading = () =>
     !readyState() && (!libraryFilters.ready() || browseQuery.isFetching);
 
+  const toolbarCount = () => {
+    const state = readyState();
+    if (!state) {
+      return null;
+    }
+    const loaded = usesVirtualGrid() ? loadedDisplayItemCount() : state.items.length;
+    return `${loaded} of ${totalRecordCount()}`;
+  };
+
   return (
     <div class={styles.root}>
       <LibraryBrowseToolbar
+        title={() => libraryTitle(collectionType())}
+        count={toolbarCount}
         loading={controlsLoading}
         sortedValue={libraryFilters.sort}
         sortDirection={libraryFilters.sortDirection}
@@ -652,24 +663,7 @@ function LibraryBrowseRoute() {
             )
           }
         >
-          <section class={styles.section} aria-labelledby="library-browse-title">
-            <div class={styles.header}>
-              <h2 id="library-browse-title" class={styles.title}>
-                {libraryTitle(collectionType())}
-              </h2>
-              <p class={styles.count}>
-                <Show
-                  when={usesVirtualGrid()}
-                  fallback={
-                    <>
-                      {readyState()?.items.length ?? 0} of {totalRecordCount()}
-                    </>
-                  }
-                >
-                  {loadedDisplayItemCount()} of {totalRecordCount()}
-                </Show>
-              </p>
-            </div>
+          <section class={styles.section} aria-label={libraryTitle(collectionType())}>
             <Show
               when={usesVirtualGrid()}
               fallback={
@@ -891,6 +885,8 @@ function LibraryStatusMenu(props: LibraryStatusMenuProps) {
 }
 
 interface LibraryBrowseToolbarProps {
+  title: () => string;
+  count: () => string | null;
   loading: () => boolean;
   sortedValue: () => VideoLibrarySort;
   sortDirection: () => LibrarySortDirection;
@@ -913,6 +909,12 @@ function LibraryBrowseToolbar(props: LibraryBrowseToolbarProps) {
         data-pinned={pinned() ? '' : undefined}
         aria-hidden="true"
       />
+      <div class={styles.toolbarHeadingGroup}>
+        <h2 id="library-browse-title" class={styles.toolbarTitle}>
+          {props.title()}
+        </h2>
+        <Show when={props.count()}>{(count) => <p class={styles.toolbarCount}>{count()}</p>}</Show>
+      </div>
       <div class={styles.controlCapsule} data-disabled={props.loading() ? '' : undefined}>
         <Toggle.Root
           pressed={props.sortDirection() === 'desc'}
@@ -959,10 +961,6 @@ function LibraryBrowseSkeletonCards() {
 function LibraryBrowseSkeleton() {
   return (
     <section class={styles.section} aria-hidden="true">
-      <div class={styles.header}>
-        <div class={styles.skeletonTitle} />
-        <div class={styles.skeletonCount} />
-      </div>
       <div class={styles.grid}>
         <LibraryBrowseSkeletonCards />
       </div>
