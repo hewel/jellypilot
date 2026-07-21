@@ -1028,6 +1028,62 @@ test('library browse reuses cached switched library pages before virtual pages',
   cleanup();
 });
 
+test('library browse resets scroll to top when the sort direction changes', async () => {
+  mockShellCommands();
+  const browseCommand = rstest.spyOn(commands, 'libraryBrowseVideo').mockImplementation((request) =>
+    Promise.resolve({
+      data: largeVideoLibraryPage(request.startIndex),
+      status: 'ok',
+    }),
+  );
+  const cleanup = renderShell('/library/movies/movies');
+
+  expect(await screen.findByRole('link', { name: 'Open Virtual Movie 1' })).toBeVisible();
+  const viewport = appScrollViewport();
+  viewport.scrollTop = 99_999;
+  fireEvent.scroll(viewport);
+  expect(await screen.findByRole('link', { name: 'Open Virtual Movie 125' })).toBeVisible();
+
+  const scrollToSpy = rstest.spyOn(Element.prototype, 'scrollTo');
+  browseCommand.mockClear();
+  fireEvent.click(screen.getByRole('button', { name: 'Sort ascending' }));
+
+  await waitFor(() => expect(scrollToSpy).toHaveBeenCalledWith({ top: 0 }));
+  await waitFor(() =>
+    expect(browseCommand).toHaveBeenCalledWith({
+      collectionType: 'movies',
+      favoritesOnly: false,
+      libraryId: 'movies',
+      limit: 24,
+      playedFilter: 'all',
+      sort: 'title',
+      startIndex: 0,
+    }),
+  );
+
+  scrollToSpy.mockRestore();
+  cleanup();
+});
+
+test('library browse prefetches one page beyond the visible virtual window', async () => {
+  mockShellCommands();
+  const browseCommand = rstest.spyOn(commands, 'libraryBrowseVideo').mockImplementation((request) =>
+    Promise.resolve({
+      data: largeVideoLibraryPage(request.startIndex),
+      status: 'ok',
+    }),
+  );
+  const cleanup = renderShell('/library/movies/movies');
+
+  expect(await screen.findByRole('link', { name: 'Open Virtual Movie 1' })).toBeVisible();
+
+  await waitFor(() =>
+    expect(browseCommand.mock.calls.some(([request]) => request.startIndex > 24)).toBe(true),
+  );
+
+  cleanup();
+});
+
 test('library browse retries failed virtual placeholder page', async () => {
   mockShellCommands();
   let bottomPageShouldFail = true;

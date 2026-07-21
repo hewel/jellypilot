@@ -4,8 +4,19 @@ import * as jestDomMatchers from '@testing-library/jest-dom/matchers';
 expect.extend(jestDomMatchers);
 
 class TestResizeObserver {
-  observe() {}
+  readonly #callback: ResizeObserverCallback;
+
+  constructor(callback: ResizeObserverCallback) {
+    this.#callback = callback;
+  }
+
+  observe() {
+    // Real ResizeObserver fires an initial notification on observe(); mount measurement depends on it.
+    this.#callback([], this);
+  }
+
   unobserve() {}
+
   disconnect() {}
 }
 

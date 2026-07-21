@@ -24,16 +24,7 @@ import {
   ListSortAscending,
   RefreshCw,
 } from 'lucide-solid';
-import {
-  For,
-  Show,
-  Suspense,
-  createEffect,
-  createMemo,
-  createSignal,
-  onCleanup,
-  onMount,
-} from 'solid-js';
+import { For, Show, Suspense, createEffect, createMemo, createSignal, onCleanup } from 'solid-js';
 import { commandFailureMessage } from '~effects/commands';
 import { fetchConnectionState } from '~effects/connection';
 import { LIBRARY_BROWSE_PAGE_SIZE, fetchVideoLibraryPage } from '~effects/library';
@@ -179,29 +170,15 @@ function LibraryBrowseRoute() {
         scrollElement.scrollTop,
     );
   };
-
-  onMount(() => {
-    measureVirtualGrid();
-
-    if (typeof window === 'undefined') {
-      return;
-    }
-
-    window.addEventListener('resize', measureVirtualGrid);
-    onCleanup(() => window.removeEventListener('resize', measureVirtualGrid));
-  });
-
-  createEffect(() => {
-    virtualGrid();
-    appScroll.viewport();
-    measureVirtualGrid();
-  });
-
   createEffect(() => {
     const grid = virtualGrid();
     const scrollElement = appScroll.viewport();
     if (typeof ResizeObserver === 'undefined') {
       measureVirtualGrid();
+      if (typeof window !== 'undefined') {
+        window.addEventListener('resize', measureVirtualGrid);
+        onCleanup(() => window.removeEventListener('resize', measureVirtualGrid));
+      }
       return;
     }
 
@@ -226,6 +203,7 @@ function LibraryBrowseRoute() {
       libraryFilters.favoritesOnly(),
       libraryFilters.sortDirection(),
     );
+  const browseQuerySignature = createMemo(() => JSON.stringify(browseQueryKey()));
   const browseQuery = createInfiniteQuery(() => ({
     queryKey: browseQueryKey(),
     enabled: libraryFilters.ready() && isMountedSessionActive(),
@@ -263,14 +241,15 @@ function LibraryBrowseRoute() {
       startIndex,
     );
 
-  let activeBrowseQueryKey = '';
+  let activeBrowseQuerySignature = '';
   createEffect(() => {
-    const nextBrowseQueryKey = browseQueryKey().join('\u0000');
-    if (activeBrowseQueryKey && activeBrowseQueryKey !== nextBrowseQueryKey) {
+    const nextSignature = browseQuerySignature();
+    if (activeBrowseQuerySignature && activeBrowseQuerySignature !== nextSignature) {
       setVirtualPagesByStartIndex(new Map<number, LibraryExit<LibraryBrowseState>>());
       setVirtualPageStartsFetching(new Set<number>());
+      appScroll.scrollTo({ top: 0 });
     }
-    activeBrowseQueryKey = nextBrowseQueryKey;
+    activeBrowseQuerySignature = nextSignature;
   });
 
   const successfulPages = () =>
@@ -403,13 +382,6 @@ function LibraryBrowseRoute() {
       return virtualScrollMargin();
     },
   });
-  const browseQueryKeyMatches = (expected: readonly unknown[]) => {
-    const current = browseQueryKey();
-    return (
-      expected.length === current.length &&
-      expected.every((value, index) => value === current[index])
-    );
-  };
   const virtualPageStartsForCurrentWindow = () => {
     const starts = new Set<number>();
     const total = totalRecordCount();
@@ -423,6 +395,14 @@ function LibraryBrowseRoute() {
         }
 
         starts.add(pageStartForServerIndex(serverIndexForDisplayIndex(displayIndex)));
+      }
+    }
+
+    if (starts.size > 0) {
+      const lastValidStart = pageStartForServerIndex(total - 1);
+      const lookAheadStart = Math.max(...starts) + LIBRARY_BROWSE_PAGE_SIZE;
+      if (lookAheadStart <= lastValidStart) {
+        starts.add(lookAheadStart);
       }
     }
 
@@ -445,7 +425,7 @@ function LibraryBrowseRoute() {
     const sort = filterSort();
     const playedFilter = libraryFilters.playedFilter();
     const favoritesOnly = libraryFilters.favoritesOnly();
-    const expectedBrowseQueryKey = browseQueryKey();
+    const expectedSignature = browseQuerySignature();
     const virtualPageQueryKey = browsePageQueryKey(startIndex);
     const cachedPage =
       queryClient.getQueryData<LibraryExit<LibraryBrowseState>>(virtualPageQueryKey);
@@ -476,14 +456,14 @@ function LibraryBrowseRoute() {
           ),
       })
       .then((page) => {
-        if (!browseQueryKeyMatches(expectedBrowseQueryKey)) {
+        if (browseQuerySignature() !== expectedSignature) {
           return;
         }
 
         setVirtualPagesByStartIndex((current) => new Map([...current, [startIndex, page]]));
       })
       .finally(() => {
-        if (!browseQueryKeyMatches(expectedBrowseQueryKey)) {
+        if (browseQuerySignature() !== expectedSignature) {
           return;
         }
 
