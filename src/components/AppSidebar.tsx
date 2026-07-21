@@ -2,7 +2,7 @@ import type { VideoLibraryShortcut } from '@bindings';
 import { createQuery } from '@tanstack/solid-query';
 import { Link, useLocation } from '@tanstack/solid-router';
 import { Exit } from 'effect';
-import { Film, House, Tv } from 'lucide-solid';
+import { Film, House, PanelLeftClose, PanelLeftOpen, Tv } from 'lucide-solid';
 import { For, Show, createEffect, createMemo, createSignal, type JSX } from 'solid-js';
 import { fetchConnectionState } from '~effects/connection';
 import { fetchLibraryShortcuts, fetchVideoItemShortcut } from '~effects/library';
@@ -13,10 +13,12 @@ import {
   runExit,
 } from '~effects/query';
 import { imageSource } from '~utils/imageSource';
+import { createSidebarPreferences } from '~utils/sidebarPreferences';
 
 import * as styles from './AppSidebar.styles';
 import NowPlayingDrawer from './NowPlayingDrawer';
 import SettingsModal from './SettingsModal';
+import { Button } from './ui';
 
 export interface AppSidebarProps {
   jellyfinConnected: boolean;
@@ -31,6 +33,7 @@ interface SidebarItem {
 }
 
 export default function AppSidebar(props: AppSidebarProps) {
+  const { collapsed, setCollapsed } = createSidebarPreferences();
   const connectionQuery = createQuery(() => ({
     queryKey: queryKeys.connectionState,
     queryFn: () => runExit(fetchConnectionState),
@@ -94,8 +97,28 @@ export default function AppSidebar(props: AppSidebarProps) {
   ];
 
   return (
-    <nav aria-label="Sidebar" class={styles.nav}>
-      <p class={styles.sectionLabel}>Library</p>
+    <nav aria-label="Sidebar" class={styles.nav({ collapsed: collapsed() })}>
+      <div class={styles.header}>
+        <Button
+          type="button"
+          variant="icon"
+          size="row"
+          aria-label={collapsed() ? 'Expand sidebar' : 'Collapse sidebar'}
+          aria-expanded={!collapsed()}
+          onClick={() => setCollapsed((value) => !value)}
+          class={styles.collapseToggle({ collapsed: collapsed() })}
+        >
+          <Show when={collapsed()} fallback={<PanelLeftClose class={styles.collapseToggleIcon} />}>
+            <PanelLeftOpen class={styles.collapseToggleIcon} />
+          </Show>
+          <span class={styles.collapseToggleLabel({ collapsed: collapsed() })}>
+            <Show when={collapsed()} fallback="Collapse">
+              Expand
+            </Show>
+          </span>
+        </Button>
+      </div>
+      <p class={styles.sectionLabel({ collapsed: collapsed() })}>Library</p>
       <ul class={styles.list}>
         <For each={items()}>
           {(item) => (
@@ -103,20 +126,20 @@ export default function AppSidebar(props: AppSidebarProps) {
               <Link
                 to={item.target}
                 activeOptions={{ exact: true, includeSearch: false, includeHash: false }}
-                class={styles.item}
+                class={styles.item({ collapsed: collapsed() })}
                 data-active={activeValue() === item.value ? '' : undefined}
                 aria-current={activeValue() === item.value ? 'page' : undefined}
               >
                 <SidebarItemThumb artworkImageId={item.artworkImageId} fallbackIcon={item.icon} />
-                <span class={styles.itemLabel}>{item.label}</span>
+                <span class={styles.itemLabel({ collapsed: collapsed() })}>{item.label}</span>
               </Link>
             </li>
           )}
         </For>
       </ul>
       <div class={styles.footer}>
-        <NowPlayingDrawer jellyfinConnected={props.jellyfinConnected} />
-        <SettingsModal />
+        <NowPlayingDrawer jellyfinConnected={props.jellyfinConnected} collapsed={collapsed()} />
+        <SettingsModal collapsed={collapsed()} />
       </div>
     </nav>
   );

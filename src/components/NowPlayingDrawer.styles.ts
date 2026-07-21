@@ -13,9 +13,20 @@ export const nowPlayingDrawerNarrowLayout = {
   smWidth: '[28rem]',
 } as const;
 
-export const trigger = css({
-  lg: {
-    justifyContent: 'flex-start',
+export const trigger = cva({
+  base: {
+    lg: {
+      justifyContent: 'flex-start',
+    },
+  },
+  variants: {
+    collapsed: {
+      true: {
+        lg: {
+          justifyContent: 'center',
+        },
+      },
+    },
   },
 });
 
@@ -29,13 +40,24 @@ export const triggerIconWrap = css({
   position: 'relative',
 });
 
-export const triggerLabel = css({
-  display: 'none',
-  fontSize: '14',
-  lineHeight: '20',
-  truncate: true,
-  lg: {
-    display: 'inline',
+export const triggerLabel = cva({
+  base: {
+    display: 'none',
+    fontSize: '14',
+    lineHeight: '20',
+    truncate: true,
+    lg: {
+      display: 'inline',
+    },
+  },
+  variants: {
+    collapsed: {
+      true: {
+        lg: {
+          display: 'none',
+        },
+      },
+    },
   },
 });
 

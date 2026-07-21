@@ -8,7 +8,7 @@ import OperationsConsole from './OperationsConsole';
 import * as styles from './SettingsModal.styles';
 import { Button } from './ui';
 
-export default function SettingsModal() {
+export default function SettingsModal(props: { collapsed: boolean }) {
   const navigate = useNavigate();
   const [open, setOpen] = createSignal(false);
 
@@ -22,10 +22,10 @@ export default function SettingsModal() {
             variant="icon"
             size="row"
             aria-label="Open Settings"
-            class={styles.trigger}
+            class={styles.trigger({ collapsed: props.collapsed })}
           >
             <Settings class={styles.triggerIcon} />
-            <span class={styles.triggerLabel}>Settings</span>
+            <span class={styles.triggerLabel({ collapsed: props.collapsed })}>Settings</span>
           </Button>
         )}
       />

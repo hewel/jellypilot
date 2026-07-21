@@ -39,7 +39,10 @@ function triggerLabel(state: NowPlayingState | null): string {
   return `Now Playing: ${status}`;
 }
 
-export default function NowPlayingDrawer(props: { jellyfinConnected: boolean }) {
+export default function NowPlayingDrawer(props: {
+  jellyfinConnected: boolean;
+  collapsed: boolean;
+}) {
   const queryClient = useQueryClient();
   const nowPlayingQuery = createQuery(() => ({
     queryKey: queryKeys.nowPlayingState,
@@ -89,13 +92,13 @@ export default function NowPlayingDrawer(props: { jellyfinConnected: boolean }) 
             variant="icon"
             size="row"
             aria-label={triggerLabel(state())}
-            class={styles.trigger}
+            class={styles.trigger({ collapsed: props.collapsed })}
           >
             <span class={styles.triggerIconWrap}>
               <MonitorPlay class={styles.triggerIcon} />
               <span class={statusDotClass(state()?.status)} />
             </span>
-            <span class={styles.triggerLabel}>Now Playing</span>
+            <span class={styles.triggerLabel({ collapsed: props.collapsed })}>Now Playing</span>
           </Button>
         )}
       />

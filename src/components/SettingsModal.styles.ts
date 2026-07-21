@@ -1,8 +1,19 @@
-import { css } from '@styled-system/css';
+import { css, cva } from '@styled-system/css';
 
-export const trigger = css({
-  lg: {
-    justifyContent: 'flex-start',
+export const trigger = cva({
+  base: {
+    lg: {
+      justifyContent: 'flex-start',
+    },
+  },
+  variants: {
+    collapsed: {
+      true: {
+        lg: {
+          justifyContent: 'center',
+        },
+      },
+    },
   },
 });
 
@@ -11,13 +22,24 @@ export const triggerIcon = css({
   width: '5',
 });
 
-export const triggerLabel = css({
-  display: 'none',
-  fontSize: '14',
-  lineHeight: '20',
-  truncate: true,
-  lg: {
-    display: 'inline',
+export const triggerLabel = cva({
+  base: {
+    display: 'none',
+    fontSize: '14',
+    lineHeight: '20',
+    truncate: true,
+    lg: {
+      display: 'inline',
+    },
+  },
+  variants: {
+    collapsed: {
+      true: {
+        lg: {
+          display: 'none',
+        },
+      },
+    },
   },
 });
 

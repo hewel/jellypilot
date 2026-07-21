@@ -21,6 +21,7 @@ import { queryKeys } from '../src/effects/query';
 import { createJellyPilotRouter } from '../src/router';
 import { resetSharedLibraryFilters } from '../src/utils/createSharedLibraryFilters';
 import { imageSource } from '../src/utils/imageSource';
+import { resetSidebarPreferences } from '../src/utils/sidebarPreferences';
 import { createTestQueryClient, TestQueryProvider } from './query-client';
 
 interface TestIntersectionObserverController {
@@ -615,6 +616,7 @@ async function selectArkOption(label: string, name: RegExp | string) {
 beforeEach(async () => {
   await new Promise((resolve) => setTimeout(resolve, 0));
   resetSharedLibraryFilters();
+  resetSidebarPreferences();
   window.__TEST_TAURI_STORE__.reset();
 });
 
@@ -624,6 +626,7 @@ afterEach(() => {
   }
   rstest.restoreAllMocks();
   resetSharedLibraryFilters();
+  resetSidebarPreferences();
   document.body.innerHTML = '';
   localStorage.clear();
   window.__TEST_TAURI_STORE__.reset();
@@ -656,6 +659,53 @@ test('authenticated shell renders the persistent Sidebar and drops floating cont
   expect(document.querySelector('[data-scope="scroll-area"][data-part="root"]')).toBeNull();
   expect(appScrollViewport()).toBeVisible();
   expect(screen.getByRole('main')).toBeVisible();
+
+  cleanup();
+});
+
+test('Sidebar collapse toggle collapses the rail and persists the preference', async () => {
+  mockShellCommands();
+  const cleanup = renderShell('/library');
+
+  await screen.findByRole('navigation', { name: 'Sidebar' });
+
+  const toggle = await screen.findByRole('button', { name: 'Collapse sidebar' });
+  expect(toggle).toHaveAttribute('aria-expanded', 'true');
+  // The toggle sits at the top of the sidebar, before the navigation links.
+  const firstNavLink = screen.getByRole('link', { name: 'Home' });
+  expect(
+    toggle.compareDocumentPosition(firstNavLink) & Node.DOCUMENT_POSITION_FOLLOWING,
+  ).toBeTruthy();
+
+  fireEvent.click(toggle);
+
+  const expandToggle = await screen.findByRole('button', { name: 'Expand sidebar' });
+  expect(expandToggle).toHaveAttribute('aria-expanded', 'false');
+  await waitFor(() =>
+    expect(window.__TEST_TAURI_STORE__.get('preferences.json', 'sidebar_collapsed')).toBe(true),
+  );
+
+  fireEvent.click(expandToggle);
+
+  const restored = await screen.findByRole('button', { name: 'Collapse sidebar' });
+  expect(restored).toHaveAttribute('aria-expanded', 'true');
+  await waitFor(() =>
+    expect(window.__TEST_TAURI_STORE__.get('preferences.json', 'sidebar_collapsed')).toBe(false),
+  );
+
+  cleanup();
+});
+
+test('Sidebar restores the collapsed preference from the Tauri Store', async () => {
+  mockShellCommands();
+  window.__TEST_TAURI_STORE__.set('preferences.json', 'sidebar_collapsed', true);
+
+  const cleanup = renderShell('/library');
+
+  await screen.findByRole('navigation', { name: 'Sidebar' });
+
+  const toggle = await screen.findByRole('button', { name: 'Expand sidebar' });
+  expect(toggle).toHaveAttribute('aria-expanded', 'false');
 
   cleanup();
 });
@@ -1147,7 +1197,13 @@ test('library browse hydrates shared filters once across route remounts', async 
       startIndex: 0,
     }),
   );
-  expect(window.__TEST_TAURI_STORE__.loadCount('preferences.json')).toBe(1);
+  // Filters and the sidebar preference both hydrate from the same store on mount.
+  // Wait for both before asserting load counts stay stable across remounts.
+  await waitFor(() =>
+    expect(window.__TEST_TAURI_STORE__.getCount('preferences.json', 'sidebar_collapsed')).toBe(1),
+  );
+  const loadsAfterFirstHydration = window.__TEST_TAURI_STORE__.loadCount('preferences.json');
+  expect(loadsAfterFirstHydration).toBeGreaterThanOrEqual(1);
   expect(window.__TEST_TAURI_STORE__.getCount('preferences.json', 'library_filters')).toBe(1);
 
   fireEvent.click(screen.getByRole('link', { name: 'Movies' }));
@@ -1163,7 +1219,7 @@ test('library browse hydrates shared filters once across route remounts', async 
       startIndex: 0,
     }),
   );
-  expect(window.__TEST_TAURI_STORE__.loadCount('preferences.json')).toBe(1);
+  expect(window.__TEST_TAURI_STORE__.loadCount('preferences.json')).toBe(loadsAfterFirstHydration);
   expect(window.__TEST_TAURI_STORE__.getCount('preferences.json', 'library_filters')).toBe(1);
 
   cleanup();
