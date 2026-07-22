@@ -20,7 +20,13 @@ import {
 import { Button, Card, JellyPilotSelect, StatusBadge } from '@components/ui';
 import type { JellyPilotSelectItem } from '@components/ui';
 import { createMutation, createQuery, useQueryClient } from '@tanstack/solid-query';
-import { createFileRoute, useCanGoBack, useNavigate, useRouter } from '@tanstack/solid-router';
+import {
+  Link,
+  createFileRoute,
+  useCanGoBack,
+  useNavigate,
+  useRouter,
+} from '@tanstack/solid-router';
 import { Exit, Option } from 'effect';
 import { Film, Play, RefreshCw, Tv } from 'lucide-solid';
 import { For, Show, Suspense, createEffect, createMemo, createSignal } from 'solid-js';
@@ -552,9 +558,13 @@ function EpisodeRow(props: {
             </span>
           </Show>
         </div>
-        <a href={`/library/items/${props.episode.id}`} class={styles.episodeLink}>
+        <Link
+          to="/library/items/$itemId"
+          params={{ itemId: props.episode.id }}
+          class={styles.episodeLink}
+        >
           {props.episode.name}
-        </a>
+        </Link>
       </div>
 
       <div class={styles.actionCell}>

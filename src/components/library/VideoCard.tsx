@@ -1,3 +1,4 @@
+import { Link } from '@tanstack/solid-router';
 import { Check, Film, Heart, Tv } from 'lucide-solid';
 import { Show, createEffect, createSignal } from 'solid-js';
 
@@ -90,7 +91,7 @@ export function VideoCard(props: VideoCardProps) {
   const isPoster = () => aspectClass() === 'poster';
 
   return (
-    <a href={href()} aria-label={cardAriaLabel()} class={styles.card}>
+    <Link to={href()} aria-label={cardAriaLabel()} class={styles.card}>
       <div class={`${styles.artwork} ${styles.aspect[aspectClass()]}`} data-aspect={aspectClass()}>
         <Show
           when={!imageFailed() ? artworkImageId() : null}
@@ -146,7 +147,7 @@ export function VideoCard(props: VideoCardProps) {
           </Show>
         </div>
       </Show>
-    </a>
+    </Link>
   );
 }
 

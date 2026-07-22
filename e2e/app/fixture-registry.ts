@@ -1,4 +1,14 @@
-import type { CommandError, Credentials, SavedServiceProfiles } from '../../src/bindings';
+import type {
+  CommandError,
+  ConnectionState,
+  Credentials,
+  NowPlayingState,
+  SavedServiceProfiles,
+  VideoHome,
+  VideoItemDetail,
+  VideoLibraryPage,
+  VideoLibraryShortcut,
+} from '../../src/bindings';
 
 export const FIXTURE_PASSWORD = 'not-a-secret';
 export const FIXTURE_NETWORK_ERROR = {
@@ -15,7 +25,14 @@ export const EXPECTED_CREDENTIALS = {
 
 interface RawCommandMap {
   config_default: unknown;
+  library_browse_video: VideoLibraryPage;
+  library_item_detail: VideoItemDetail;
+  library_item_shortcut: VideoLibraryShortcut | null;
+  library_video_home: VideoHome;
+  library_video_shortcuts: VideoLibraryShortcut[];
+  now_playing_get_state: NowPlayingState;
   server_connect: null;
+  server_get_state: ConnectionState;
   server_is_connected: boolean;
   server_profiles_get: SavedServiceProfiles;
 }
@@ -44,7 +61,14 @@ const calls = new Map<FixtureCommand, InvokeArgs[]>();
 function parseFixtureCommand(command: string): FixtureCommand | undefined {
   if (
     command === 'config_default' ||
+    command === 'library_browse_video' ||
+    command === 'library_item_detail' ||
+    command === 'library_item_shortcut' ||
+    command === 'library_video_home' ||
+    command === 'library_video_shortcuts' ||
+    command === 'now_playing_get_state' ||
     command === 'server_connect' ||
+    command === 'server_get_state' ||
     command === 'server_is_connected' ||
     command === 'server_profiles_get'
   ) {

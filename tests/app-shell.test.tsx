@@ -44,7 +44,20 @@ declare global {
 }
 
 // Mock scrollTo since JSDOM doesn't implement layout/scrolling APIs
-Element.prototype.scrollTo = () => {};
+Element.prototype.scrollTo = function (this: Element, arg?: ScrollToOptions | number, y?: number) {
+  if (typeof arg === 'number') {
+    this.scrollLeft = arg;
+    this.scrollTop = y ?? 0;
+    return;
+  }
+
+  if (arg?.left != null) {
+    this.scrollLeft = arg.left;
+  }
+  if (arg?.top != null) {
+    this.scrollTop = arg.top;
+  }
+};
 window.scrollTo = () => {};
 
 const connectedState = {
@@ -629,6 +642,7 @@ afterEach(() => {
   resetSidebarPreferences();
   document.body.innerHTML = '';
   localStorage.clear();
+  sessionStorage.clear();
   window.__TEST_TAURI_STORE__.reset();
 });
 
@@ -1438,14 +1452,62 @@ test('library item detail back falls back to library home without route history'
 
 test('library item detail back returns to the previous library route when history exists', async () => {
   mockShellCommands();
-  const cleanup = renderShell(['/library/movies/movies', '/library/items/detail-movie']);
+  const cleanup = renderShell('/library/movies/movies');
 
-  await screen.findByRole('heading', { name: 'Detail Movie' });
+  const pagedMovieLink = await screen.findByRole('link', { name: 'Open Paged Movie, favorite' });
+  const viewport = appScrollViewport();
+  viewport.scrollTop = 432;
+  fireEvent.scroll(viewport);
+
+  fireEvent.click(pagedMovieLink);
+
+  expect(await screen.findByRole('heading', { name: 'Detail Movie' })).toBeVisible();
+  await waitFor(() => expect(viewport.scrollTop).toBe(0));
+
   fireEvent.click(screen.getByRole('button', { name: 'Back' }));
 
   expect(await screen.findByRole('heading', { name: 'Movies' })).toBeVisible();
   expect(await screen.findByRole('link', { name: 'Open Paged Movie, favorite' })).toBeVisible();
   await waitFor(() => expect(screen.queryByRole('heading', { name: 'Detail Movie' })).toBeNull());
+  await waitFor(() => expect(viewport.scrollTop).toBe(432));
+
+  cleanup();
+});
+
+test('library item detail back returns home when opened from the library landing', async () => {
+  mockShellCommands();
+  const cleanup = renderShell('/library');
+
+  const resumeMovieLink = await screen.findByRole('link', { name: 'Open Resume Movie, favorite' });
+  fireEvent.click(resumeMovieLink);
+
+  expect(await screen.findByRole('heading', { name: 'Detail Movie' })).toBeVisible();
+
+  fireEvent.click(screen.getByRole('button', { name: 'Back' }));
+
+  expect(await screen.findByRole('heading', { name: 'Continue Watching' })).toBeVisible();
+  expect(screen.getByRole('link', { name: 'Home' })).toHaveAttribute('aria-current', 'page');
+  await waitFor(() => expect(screen.queryByRole('heading', { name: 'Detail Movie' })).toBeNull());
+
+  cleanup();
+});
+
+test('library show episode link back returns to the show detail origin', async () => {
+  mockShellCommands();
+  const cleanup = renderShell('/library/shows/series-1');
+
+  await screen.findByRole('heading', { name: 'Example Show' });
+  const episodeLink = await screen.findByRole('link', { name: 'Next Episode' });
+  expect(episodeLink).toHaveAttribute('href', '/library/items/episode-2');
+
+  fireEvent.click(episodeLink);
+
+  expect(await screen.findByRole('heading', { name: 'Next Episode' })).toBeVisible();
+
+  fireEvent.click(screen.getByRole('button', { name: 'Back' }));
+
+  expect(await screen.findByRole('heading', { name: 'Example Show' })).toBeVisible();
+  await waitFor(() => expect(screen.queryByRole('heading', { name: 'Next Episode' })).toBeNull());
 
   cleanup();
 });

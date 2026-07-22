@@ -15,6 +15,8 @@ export function createJellyPilotRouter(history?: RouterHistory) {
     defaultPreload: 'intent',
     history,
     routeTree,
+    scrollRestoration: true,
+    scrollToTopSelectors: ['[data-scroll-restoration-id="app-scroll-viewport"]'],
   });
 }
 

@@ -56,7 +56,7 @@
     "@solid-devtools/overlay": "^0.33.5",
     "@tanstack/solid-form": "^1.33.0",
     "@tanstack/solid-query": "^5.101.0",
-    "@tanstack/solid-router": "^1.170.16",
+    "@tanstack/solid-router": "1.170.18",
     "@tanstack/solid-virtual": "^3.13.29",
     "@tauri-apps/api": "^2.11.0",
     "@tauri-apps/plugin-log": "^2.8.0",
