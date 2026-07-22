@@ -21,7 +21,7 @@ import { createMutation, createQuery, useQueryClient } from '@tanstack/solid-que
 import { createFileRoute, useCanGoBack, useNavigate, useRouter } from '@tanstack/solid-router';
 import { Exit } from 'effect';
 import { Film, Play, RotateCcw, Tv } from 'lucide-solid';
-import { For, Show, Suspense, createMemo, createSignal } from 'solid-js';
+import { For, Show, createMemo, createSignal } from 'solid-js';
 import { commandFailureMessage } from '~effects/commands';
 import { fetchConnectionState } from '~effects/connection';
 import {
@@ -77,17 +77,20 @@ function LibraryItemDetailRoute() {
 
     void navigate({ to: '/library' });
   };
-  const detail = () =>
-    detailQuery.data && Exit.isSuccess(detailQuery.data) ? detailQuery.data.value : null;
+  const detailResult = () => (detailQuery.isFetched ? detailQuery.data : undefined);
+  const detail = () => {
+    const current = detailResult();
+    return current && Exit.isSuccess(current) ? current.value : null;
+  };
   const statusTitle = () => {
-    const current = detailQuery.data;
+    const current = detailResult();
     if (current && !Exit.isSuccess(current)) {
       return 'Could not load item detail';
     }
     return 'Loading item detail';
   };
   const statusDescription = () => {
-    const current = detailQuery.data;
+    const current = detailResult();
     if (current && !Exit.isSuccess(current)) {
       return commandFailureMessage(current.cause, 'Could not load item detail');
     }
@@ -133,7 +136,10 @@ function LibraryItemDetailRoute() {
 
   return (
     <div class={styles.stack}>
-      <Suspense fallback={<ItemDetailSkeleton />}>
+      <Show
+        when={!(connectionQuery.isPending || (detailQuery.isFetching && !detailQuery.isFetched))}
+        fallback={<ItemDetailSkeleton />}
+      >
         <Show
           when={detail()}
           fallback={<LibraryStatusPanel title={statusTitle()} description={statusDescription()} />}
@@ -254,7 +260,7 @@ function LibraryItemDetailRoute() {
             );
           }}
         </Show>
-      </Suspense>
+      </Show>
       <Show when={pendingPlayback()}>
         {(pending) => (
           <LibraryPlaybackChooser

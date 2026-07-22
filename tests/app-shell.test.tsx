@@ -8,6 +8,7 @@ import { render } from 'solid-js/web';
 import { commands, events } from '../src/bindings';
 import type {
   AppConfig,
+  CommandError,
   NowPlayingState,
   VideoHome,
   VideoItemDetail,
@@ -23,6 +24,10 @@ import { resetSharedLibraryFilters } from '../src/utils/createSharedLibraryFilte
 import { imageSource } from '../src/utils/imageSource';
 import { resetSidebarPreferences } from '../src/utils/sidebarPreferences';
 import { createTestQueryClient, TestQueryProvider } from './query-client';
+
+type LibraryItemDetailResult =
+  | { status: 'ok'; data: VideoItemDetail }
+  | { status: 'error'; error: CommandError };
 
 interface TestIntersectionObserverController {
   trigger(isIntersecting?: boolean): void;
@@ -1488,6 +1493,32 @@ test('library item detail back returns home when opened from the library landing
   expect(await screen.findByRole('heading', { name: 'Continue Watching' })).toBeVisible();
   expect(screen.getByRole('link', { name: 'Home' })).toHaveAttribute('aria-current', 'page');
   await waitFor(() => expect(screen.queryByRole('heading', { name: 'Detail Movie' })).toBeNull());
+
+  cleanup();
+});
+
+test('library item detail leaves the skeleton after an asynchronous detail response', async () => {
+  mockShellCommands();
+  let resolveDetail!: (result: LibraryItemDetailResult) => void;
+  const detailCommand = rstest.spyOn(commands, 'libraryItemDetail').mockImplementation(
+    () =>
+      new Promise<LibraryItemDetailResult>((resolve) => {
+        resolveDetail = resolve;
+      }),
+  );
+  const cleanup = renderShell('/library');
+
+  const resumeMovieLink = await screen.findByRole('link', { name: 'Open Resume Movie, favorite' });
+  fireEvent.click(resumeMovieLink);
+
+  await waitFor(() => expect(detailCommand).toHaveBeenCalledWith('movie-1'));
+  expect(screen.queryByRole('heading', { name: 'Detail Movie' })).toBeNull();
+
+  resolveDetail({ data: movieDetail, status: 'ok' });
+
+  expect(await screen.findByRole('heading', { name: 'Detail Movie' })).toBeVisible();
+  expect(screen.getByText('A movie overview.')).toBeVisible();
+  expect(detailCommand).toHaveBeenCalledTimes(1);
 
   cleanup();
 });
