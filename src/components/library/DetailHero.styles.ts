@@ -72,7 +72,7 @@ export const backButton = css({
   position: 'absolute',
   top: '4',
   transitionProperty: '[background-color, border-color, transform]',
-  zIndex: '[20]',
+  zIndex: '20',
   _hover: {
     bg: '[rgb(0 0 0 / 0.5)]',
     borderColor: '[rgb(255 255 255 / 0.3)]',
@@ -234,7 +234,7 @@ export const title = css({
   fontFamily: 'display',
   fontSize: '28',
   fontWeight: 'bold',
-  letterSpacing: '[0]',
+  letterSpacing: '0',
   lineHeight: '40',
   maxWidth: '[100%]',
   minWidth: '[0]',

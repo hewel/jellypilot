@@ -1,4 +1,4 @@
-import { css, cx } from '@styled-system/css';
+import { css, cva } from '@styled-system/css';
 
 export const shell = css({
   position: 'relative',
@@ -77,53 +77,45 @@ export const segmented1 = css({
   gridTemplateColumns: '[1fr]',
 });
 
-export const segment = css({
-  borderRadius: 'xl',
-  px: '4',
-  py: '3',
-  fontSize: '14',
-  lineHeight: '20',
-  fontWeight: 'semibold',
-  bg: '[transparent]',
-  border: 0,
-  cursor: 'pointer',
-  letterSpacing: '[0]',
-  textTransform: 'uppercase',
-  transitionDuration: '300',
-  transitionProperty: '[background-color, color, box-shadow, transform]',
-  _hover: {
-    bg: 'surfaceContainerHighest/40',
-    color: 'onSurface',
+export const segment = cva({
+  base: {
+    borderRadius: 'xl',
+    px: '4',
+    py: '3',
+    fontSize: '14',
+    lineHeight: '20',
+    fontWeight: 'semibold',
+    bg: '[transparent]',
+    border: 0,
+    cursor: 'pointer',
+    letterSpacing: '0',
+    textTransform: 'uppercase',
+    transitionDuration: '300',
+    transitionProperty: '[background-color, color, box-shadow, transform]',
+    _hover: {
+      bg: 'surfaceContainerHighest/40',
+      color: 'onSurface',
+    },
+    _active: {
+      transform: '[scale(0.96)]',
+    },
+    _disabled: {
+      cursor: 'not-allowed',
+      opacity: '[0.5]',
+    },
   },
-  _active: {
-    transform: '[scale(0.96)]',
+  variants: {
+    selected: {
+      true: {
+        bg: 'primary',
+        color: 'onPrimary',
+        fontWeight: 'bold',
+      },
+      false: {
+        color: 'onSurfaceVariant',
+      },
+    },
   },
-  _disabled: {
-    cursor: 'not-allowed',
-    opacity: '[0.5]',
-  },
-});
-
-export const segmentIdle = css({
-  color: 'onSurfaceVariant',
-});
-
-export const segmentSelected = css({
-  bg: 'primary',
-  color: 'onPrimary',
-  fontWeight: 'bold',
-});
-
-export const srOnly = css({
-  border: 0,
-  clip: '[rect(0 0 0 0)]',
-  height: 'px',
-  margin: '[-1px]',
-  overflow: 'hidden',
-  padding: '0',
-  position: 'absolute',
-  whiteSpace: 'nowrap',
-  width: 'px',
 });
 
 export const preview = css({
@@ -151,26 +143,30 @@ export const overline = css({
   lineHeight: '16',
   fontWeight: 'bold',
   color: 'onSurfaceVariant/90',
-  letterSpacing: '[0.08em]',
+  letterSpacing: '8',
   textTransform: 'uppercase',
 });
 
-export const previewValue = css({
-  mt: '1',
-  color: 'onSurfaceVariant',
-  fontFamily: 'mono',
-  fontSize: '14',
-  lineHeight: '20',
-  overflowWrap: 'anywhere',
-});
-
-export const previewReady = css({
-  color: 'secondary',
-  fontWeight: 'semibold',
-});
-
-export const previewEmpty = css({
-  color: 'warning',
+export const previewValue = cva({
+  base: {
+    mt: '1',
+    color: 'onSurfaceVariant',
+    fontFamily: 'mono',
+    fontSize: '14',
+    lineHeight: '20',
+    overflowWrap: 'anywhere',
+  },
+  variants: {
+    ready: {
+      true: {
+        color: 'secondary',
+        fontWeight: 'semibold',
+      },
+      false: {
+        color: 'warning',
+      },
+    },
+  },
 });
 
 export const fieldBlock = css({
@@ -184,7 +180,7 @@ export const label = css({
   fontSize: '12',
   lineHeight: '16',
   fontWeight: 'bold',
-  letterSpacing: '[0.05em]',
+  letterSpacing: '5',
   textTransform: 'uppercase',
 });
 
@@ -228,7 +224,7 @@ export const towerIcon = css({
 });
 
 export const pulse = css({
-  animation: '[pulse 1.8s cubic-bezier(0.4, 0, 0.6, 1) infinite]',
+  animation: '[pulse 1.8s {easings.inOut} infinite]',
 });
 
 export const quickText = css({
@@ -266,7 +262,7 @@ export const codeLabel = css({
   color: 'onSurfaceVariant/80',
   fontSize: '10',
   fontWeight: 'bold',
-  letterSpacing: '[0.2em]',
+  letterSpacing: '20',
   textTransform: 'uppercase',
 });
 
@@ -276,7 +272,7 @@ export const code = css({
   fontSize: '36',
   fontVariantNumeric: 'tabular-nums',
   fontWeight: 'bold',
-  letterSpacing: '[0.25em]',
+  letterSpacing: '25',
   lineHeight: '44',
   paddingLeft: '[0.25em]',
 });
@@ -291,8 +287,8 @@ export const waiting = css({
   fontSize: '12',
   lineHeight: '16',
   fontWeight: 'bold',
-  animation: '[pulse 1.8s cubic-bezier(0.4, 0, 0.6, 1) infinite]',
-  letterSpacing: '[0.05em]',
+  animation: '[pulse 1.8s {easings.inOut} infinite]',
+  letterSpacing: '5',
   textTransform: 'uppercase',
 });
 
@@ -324,43 +320,6 @@ export const remember = css({
     cursor: 'not-allowed',
     opacity: '[0.5]',
   },
-});
-
-export const checkbox = css({
-  display: 'inline-flex',
-  alignItems: 'center',
-  justifyContent: 'center',
-  flexShrink: '[0]',
-  color: 'onPrimary',
-  fontSize: '11',
-  lineHeight: 'none',
-  borderRadius: 'lg',
-  bg: 'surfaceContainerHigh',
-  borderWidth: '1px',
-  borderStyle: 'solid',
-  borderColor: 'outline',
-  height: '[1.375rem]',
-  transitionDuration: '200',
-  transitionProperty: '[background-color, border-color, box-shadow]',
-  width: '[1.375rem]',
-  _hover: {
-    borderColor: 'primary/60',
-  },
-  '&[data-state="checked"], &[data-state="indeterminate"]': {
-    bg: 'primary',
-    borderColor: 'primary',
-  },
-  '&[data-focus-visible]': {
-    boxShadow: '[0 0 0 2px {colors.primary/50}]',
-    outline: 'none',
-  },
-});
-
-export const checkboxIndicator = css({
-  display: 'flex',
-  alignItems: 'center',
-  justifyContent: 'center',
-  fontWeight: 'black',
 });
 
 export const checkboxLabel = css({
@@ -468,7 +427,7 @@ export const badgeText = css({
   color: 'secondary',
   fontSize: '10',
   fontWeight: 'bold',
-  letterSpacing: '[0.18em]',
+  letterSpacing: '18',
   textTransform: 'uppercase',
 });
 
@@ -477,7 +436,7 @@ export const appTitle = css({
   fontFamily: 'display',
   fontSize: '45',
   fontWeight: 'bold',
-  letterSpacing: '[0]',
+  letterSpacing: '0',
   lineHeight: '52',
 });
 
@@ -505,7 +464,5 @@ export const icon5 = css({
 });
 
 export const spinner = css({
-  animation: '[spin 1s linear infinite]',
+  animation: '[spin 1s {easings.linear} infinite]',
 });
-
-export { cx };

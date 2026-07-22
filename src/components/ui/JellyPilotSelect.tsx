@@ -1,5 +1,6 @@
 import { createListCollection } from '@ark-ui/solid/collection';
 import { Select } from '@ark-ui/solid/select';
+import { cx } from '@styled-system/css';
 import { ChevronDown } from 'lucide-solid';
 import { For, createMemo } from 'solid-js';
 import { Portal } from 'solid-js/web';
@@ -69,7 +70,7 @@ export default function JellyPilotSelect<Value extends string>(
         <Select.Trigger class={styles.trigger({ size: isCompact() ? 'compact' : 'standard' })}>
           <Select.ValueText
             placeholder={props.placeholder}
-            class={styles.cx(styles.valueText, styles.truncate)}
+            class={cx(styles.valueText, styles.truncate)}
           />
           <Select.Indicator class={styles.indicator}>
             <ChevronDown class={styles.indicatorIcon} />

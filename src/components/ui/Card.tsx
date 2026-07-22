@@ -1,3 +1,4 @@
+import { cx } from '@styled-system/css';
 import { Show, splitProps } from 'solid-js';
 import type { JSX } from 'solid-js';
 import { Dynamic } from 'solid-js/web';
@@ -38,7 +39,7 @@ export function Card(props: CardProps) {
   return (
     <Dynamic
       component={local.as ?? 'div'}
-      class={styles.cx(styles.card({ variant: variant(), padding: padding() }), local.class)}
+      class={cx(styles.card({ variant: variant(), padding: padding() }), local.class)}
       {...rest}
     >
       <Show when={showTint()}>{tintOverlay}</Show>

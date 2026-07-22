@@ -2,6 +2,7 @@ import { Dialog } from '@ark-ui/solid/dialog';
 import { Play, X } from 'lucide-solid';
 import { createEffect, createMemo, createSignal } from 'solid-js';
 import { Portal } from 'solid-js/web';
+import * as recipes from '~styles/recipes';
 
 import type {
   VideoItemDetail,
@@ -92,8 +93,10 @@ export function LibraryPlaybackChooser(props: {
       unmountOnExit
     >
       <Portal>
-        <Dialog.Backdrop class={styles.backdrop} />
-        <Dialog.Positioner class={`${styles.positioner} ${styles.positionerFill}`}>
+        <Dialog.Backdrop class={recipes.scrim({ tone: 'dark', z: '60' })} />
+        <Dialog.Positioner
+          class={recipes.modalPositioner({ align: 'center', scroll: true, z: '60' })}
+        >
           <Dialog.Content class={styles.content}>
             <Card as="section" variant="filled" class={styles.card}>
               <div>
@@ -130,7 +133,7 @@ export function LibraryPlaybackChooser(props: {
                 <Button
                   type="button"
                   variant="primary"
-                  class={styles.pillButton}
+                  class={recipes.pillButton}
                   disabled={props.busy}
                   onClick={() =>
                     props.onConfirm({

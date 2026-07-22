@@ -61,7 +61,7 @@ export const overline = css({
   fontSize: '11',
   lineHeight: '16',
   fontWeight: 'bold',
-  letterSpacing: '[0.08em]',
+  letterSpacing: '8',
   textTransform: 'uppercase',
 });
 
@@ -190,7 +190,7 @@ export const saving = css({
   fontSize: '14',
   lineHeight: '20',
   fontWeight: 'semibold',
-  animation: '[pulse 1.8s cubic-bezier(0.4, 0, 0.6, 1) infinite]',
+  animation: '[pulse 1.8s {easings.inOut} infinite]',
 });
 
 export const pingDot = css({
@@ -237,6 +237,6 @@ export const refreshButton = css({
 });
 
 export const icon4_5 = css({
-  height: '[1.125rem]',
-  width: '[1.125rem]',
+  height: 'lg',
+  width: 'lg',
 });

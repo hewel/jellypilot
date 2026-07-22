@@ -1,4 +1,4 @@
-import { css } from '@styled-system/css';
+import { css, cva } from '@styled-system/css';
 
 /**
  * Narrow contracts for Now Playing transport/timeline rows.
@@ -14,22 +14,25 @@ export const nowPlayingCardNarrowLayout = {
   timeLabelMinWidth: '[0]',
 } as const;
 
-export const root = css({
-  display: 'grid',
-  gap: '6',
-  maxWidth: nowPlayingCardNarrowLayout.rootMaxWidth,
-  minWidth: nowPlayingCardNarrowLayout.rootMinWidth,
-  overflow: 'hidden',
-  position: 'relative',
-  width: 'full',
-});
-
-export const bareRoot = css({
-  display: 'grid',
-  gap: '5',
-  maxWidth: nowPlayingCardNarrowLayout.rootMaxWidth,
-  minWidth: nowPlayingCardNarrowLayout.rootMinWidth,
-  width: 'full',
+export const root = cva({
+  base: {
+    display: 'grid',
+    maxWidth: nowPlayingCardNarrowLayout.rootMaxWidth,
+    minWidth: nowPlayingCardNarrowLayout.rootMinWidth,
+    width: 'full',
+  },
+  variants: {
+    bare: {
+      true: {
+        gap: '5',
+      },
+      false: {
+        gap: '6',
+        overflow: 'hidden',
+        position: 'relative',
+      },
+    },
+  },
 });
 
 export const header = css({
@@ -40,19 +43,23 @@ export const header = css({
   zIndex: '10',
 });
 
-export const headerCopy = css({
-  display: 'grid',
-  gap: '1',
-  maxWidth: '[100%]',
-  minWidth: '[0]',
-});
-
-export const headerBare = css({
-  paddingRight: '[9rem]',
-});
-
-export const headerFramed = css({
-  maxWidth: '[70%]',
+export const headerCopy = cva({
+  base: {
+    display: 'grid',
+    gap: '1',
+    maxWidth: '[100%]',
+    minWidth: '[0]',
+  },
+  variants: {
+    bare: {
+      true: {
+        paddingRight: '[9rem]',
+      },
+      false: {
+        maxWidth: '[70%]',
+      },
+    },
+  },
 });
 
 export const eyebrow = css({
@@ -60,7 +67,7 @@ export const eyebrow = css({
   fontSize: '11',
   lineHeight: '16',
   fontWeight: 'bold',
-  letterSpacing: '[0.08em]',
+  letterSpacing: '8',
   textTransform: 'uppercase',
 });
 
@@ -70,25 +77,29 @@ export const titleRow = css({
   gap: '3',
 });
 
-export const title = css({
-  color: 'onSurface',
-  fontFamily: 'display',
-  fontWeight: 'bold',
-  letterSpacing: '[0]',
-  overflow: 'hidden',
-  paddingRight: '2',
-  textOverflow: 'ellipsis',
-  whiteSpace: 'nowrap',
-});
-
-export const titleBare = css({
-  fontSize: '20',
-  lineHeight: '28',
-});
-
-export const titleFramed = css({
-  fontSize: '24',
-  lineHeight: '32',
+export const title = cva({
+  base: {
+    color: 'onSurface',
+    fontFamily: 'display',
+    fontWeight: 'bold',
+    letterSpacing: '0',
+    overflow: 'hidden',
+    paddingRight: '2',
+    textOverflow: 'ellipsis',
+    whiteSpace: 'nowrap',
+  },
+  variants: {
+    bare: {
+      true: {
+        fontSize: '20',
+        lineHeight: '28',
+      },
+      false: {
+        fontSize: '24',
+        lineHeight: '32',
+      },
+    },
+  },
 });
 
 export const equalizer = css({
@@ -259,27 +270,31 @@ export const thumb = css({
   },
 });
 
-export const controls = css({
-  position: 'relative',
-  display: 'flex',
-  alignItems: 'center',
-  flexWrap: nowPlayingCardNarrowLayout.controlsBaseWrap,
-  gap: nowPlayingCardNarrowLayout.controlsBaseGap,
-  justifyContent: 'center',
-  maxWidth: '[100%]',
-  minWidth: '[0]',
-  width: 'full',
-  zIndex: '10',
-});
-
-export const controlsBare = css({
-  justifyContent: 'center',
-});
-
-export const controlsFramed = css({
-  // Sm+ can open spacing; base already wraps.
-  sm: {
-    gap: '4',
+export const controls = cva({
+  base: {
+    position: 'relative',
+    display: 'flex',
+    alignItems: 'center',
+    flexWrap: nowPlayingCardNarrowLayout.controlsBaseWrap,
+    gap: nowPlayingCardNarrowLayout.controlsBaseGap,
+    justifyContent: 'center',
+    maxWidth: '[100%]',
+    minWidth: '[0]',
+    width: 'full',
+    zIndex: '10',
+  },
+  variants: {
+    bare: {
+      true: {
+        justifyContent: 'center',
+      },
+      false: {
+        // Sm+ can open spacing; base already wraps.
+        sm: {
+          gap: '4',
+        },
+      },
+    },
   },
 });
 
@@ -325,25 +340,29 @@ export const iconSlot = css({
   width: '5',
 });
 
-export const contextualIcon = css({
-  height: '5',
-  position: 'absolute',
-  transitionDuration: '200',
-  transitionProperty: '[filter, opacity, transform]',
-  transitionTimingFunction: 'standard',
-  width: '5',
-});
-
-export const iconVisible = css({
-  filter: '[blur(0)]',
-  opacity: '[1]',
-  transform: '[scale(1)]',
-});
-
-export const iconHidden = css({
-  filter: '[blur(4px)]',
-  opacity: '[0]',
-  transform: '[scale(0.25)]',
+export const contextualIcon = cva({
+  base: {
+    height: '5',
+    position: 'absolute',
+    transitionDuration: '200',
+    transitionProperty: '[filter, opacity, transform]',
+    transitionTimingFunction: 'standard',
+    width: '5',
+  },
+  variants: {
+    visible: {
+      true: {
+        filter: '[blur(0)]',
+        opacity: '[1]',
+        transform: '[scale(1)]',
+      },
+      false: {
+        filter: '[blur(4px)]',
+        opacity: '[0]',
+        transform: '[scale(0.25)]',
+      },
+    },
+  },
 });
 
 export const iconDropShadow = css({
@@ -360,7 +379,7 @@ export const errorIcon = css({
 
 export const actionLabel = css({
   fontWeight: 'bold',
-  letterSpacing: '[0]',
+  letterSpacing: '0',
 });
 
 export const icon5 = css({
@@ -374,14 +393,10 @@ export const squareIcon = css({
   width: '4',
 });
 
-export const pillButton = css({
-  borderRadius: 'full',
-});
-
 export const playIcon = css({
   fill: '[currentColor]',
-  height: '[1.125rem]',
-  width: '[1.125rem]',
+  height: 'lg',
+  width: 'lg',
 });
 
 export const selectPanel = css({

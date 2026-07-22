@@ -1,6 +1,8 @@
 import { Checkbox } from '@ark-ui/solid/checkbox';
+import { cx } from '@styled-system/css';
 import { listen } from '@tauri-apps/api/event';
 import { For, Show, createEffect, createSignal, onCleanup, onMount } from 'solid-js';
+import * as recipes from '~styles/recipes';
 
 import * as styles from './DiagnosticsPanel.styles';
 import { Button } from './ui';
@@ -151,8 +153,8 @@ export default function DiagnosticsPanel(props: DiagnosticsPanelProps) {
             onCheckedChange={(details) => setAutoScroll(details.checked === true)}
             class={styles.checkboxRoot}
           >
-            <Checkbox.Control class={styles.checkbox}>
-              <Checkbox.Indicator class={styles.indicator}>✓</Checkbox.Indicator>
+            <Checkbox.Control class={recipes.checkboxBox}>
+              <Checkbox.Indicator class={recipes.checkboxIndicator}>✓</Checkbox.Indicator>
             </Checkbox.Control>
             <Checkbox.Label class={styles.checkboxLabel}>Auto-scroll</Checkbox.Label>
             <Checkbox.HiddenInput />
@@ -162,11 +164,8 @@ export default function DiagnosticsPanel(props: DiagnosticsPanelProps) {
 
       <div
         ref={containerRef}
-        class={styles.log}
-        classList={{
-          [styles.compactLog]: props.compact,
-          [styles.expandedLog]: !props.compact,
-        }}
+        class={styles.log({ size: props.compact ? 'compact' : 'expanded' })}
+        role="log"
       >
         <Show
           when={visibleEntries().length > 0}
@@ -181,7 +180,7 @@ export default function DiagnosticsPanel(props: DiagnosticsPanelProps) {
               <div class={styles.entry}>
                 <div class={styles.entryInner}>
                   <span class={styles.time}>{entry.time}</span>
-                  <span class={`${styles.badge} ${LOG_LEVEL_TONE_CLASS[entry.levelTone]}`}>
+                  <span class={cx(styles.badge, LOG_LEVEL_TONE_CLASS[entry.levelTone])}>
                     {entry.levelName}
                   </span>
                   <span class={styles.message}>{entry.message}</span>
@@ -197,11 +196,7 @@ export default function DiagnosticsPanel(props: DiagnosticsPanelProps) {
           <span
             role="status"
             aria-live="polite"
-            class={styles.status}
-            classList={{
-              [styles.statusCopied]: copyStatus() === 'copied',
-              [styles.statusFailed]: copyStatus() !== 'copied',
-            }}
+            class={styles.status({ tone: copyStatus() === 'copied' ? 'copied' : 'failed' })}
           >
             {copyStatus() === 'copied' ? 'Copied' : 'Copy failed'}
           </span>
@@ -221,7 +216,7 @@ export default function DiagnosticsPanel(props: DiagnosticsPanelProps) {
           onClick={clearDiagnostics}
           variant="text"
           size="sm"
-          class={`${styles.actionButton} ${styles.dangerActionButton}`}
+          class={cx(styles.actionButton, styles.dangerActionButton)}
         >
           Clear
         </Button>

@@ -1,3 +1,4 @@
+import { cx } from '@styled-system/css';
 import { Activity, AlertTriangle, Link, Power, RefreshCw, Server, User } from 'lucide-solid';
 import { Show } from 'solid-js';
 
@@ -35,7 +36,7 @@ export default function ConnectionCard(props: ConnectionCardProps) {
             {props.state?.serverName ?? 'Not connected'}
           </p>
         </div>
-        <div class={`${styles.tile} ${styles.span2}`}>
+        <div class={cx(styles.tile, styles.span2)}>
           <div class={styles.tileWatermark}>
             <Link class={styles.watermarkIcon} />
           </div>
@@ -53,7 +54,7 @@ export default function ConnectionCard(props: ConnectionCardProps) {
             {props.state?.userName ?? 'No active user'}
           </p>
         </div>
-        <div class={`${styles.tile} ${styles.span2}`}>
+        <div class={cx(styles.tile, styles.span2)}>
           <div class={styles.tileWatermark}>
             <Activity class={styles.watermarkIcon} />
           </div>

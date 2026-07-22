@@ -1,4 +1,4 @@
-import { css, cva, cx } from '@styled-system/css';
+import { css, cva } from '@styled-system/css';
 
 export const toast = cva({
   base: {
@@ -45,20 +45,20 @@ export const toast = cva({
         color: 'onWarningContainer',
       },
     },
+    state: {
+      visible: {
+        animation: '[fadeIn 200ms {easings.emphasized} forwards]',
+        filter: '[blur(0)]',
+        opacity: '[1]',
+        transform: '[translateY(0)]',
+      },
+      exiting: {
+        filter: '[blur(2px)]',
+        opacity: '[0]',
+        transform: '[translateY({spacing.1})]',
+      },
+    },
   },
-});
-
-export const visible = css({
-  animation: '[fadeIn 200ms {easings.emphasized} forwards]',
-  filter: '[blur(0)]',
-  opacity: '[1]',
-  transform: '[translateY(0)]',
-});
-
-export const exiting = css({
-  filter: '[blur(2px)]',
-  opacity: '[0]',
-  transform: '[translateY({spacing.1})]',
 });
 
 export const iconWrap = css({
@@ -121,17 +121,3 @@ export const closeIcon = css({
   height: '4',
   width: '4',
 });
-
-export const srOnly = css({
-  border: '0',
-  clip: '[rect(0, 0, 0, 0)]',
-  height: '[1px]',
-  margin: '[-1px]',
-  overflow: 'hidden',
-  padding: '0',
-  position: 'absolute',
-  whiteSpace: 'nowrap',
-  width: '[1px]',
-});
-
-export { cx };

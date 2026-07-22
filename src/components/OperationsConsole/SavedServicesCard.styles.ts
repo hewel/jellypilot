@@ -63,7 +63,7 @@ export const pill = css({
   borderStyle: 'solid',
   borderColor: 'outlineVariant',
   color: 'onSurfaceVariant',
-  letterSpacing: '[0.08em]',
+  letterSpacing: '8',
   textTransform: 'uppercase',
 });
 
@@ -138,6 +138,6 @@ export const icon3_5 = css({
 });
 
 export const icon4_5 = css({
-  height: '[1.125rem]',
-  width: '[1.125rem]',
+  height: 'lg',
+  width: 'lg',
 });

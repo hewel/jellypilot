@@ -11,12 +11,15 @@ import type {
   PendingLibraryPlayback,
 } from '@components/library/LibraryPlaybackChooser';
 import {
+  GenrePills,
   LibraryStatusPanel,
   UserDataControls,
   detailSubtitleElement,
   formatRuntime,
 } from '@components/library/shared';
+import * as libraryStyles from '@components/library/shared.styles';
 import { Button, StatusBadge } from '@components/ui';
+import { cx } from '@styled-system/css';
 import { createMutation, createQuery, useQueryClient } from '@tanstack/solid-query';
 import { createFileRoute, useCanGoBack, useNavigate, useRouter } from '@tanstack/solid-router';
 import { Exit } from 'effect';
@@ -249,13 +252,7 @@ function LibraryItemDetailRoute() {
                   <Show when={item().overview}>
                     {(overview) => <p class={styles.overview}>{overview()}</p>}
                   </Show>
-                  <Show when={item().genres.length > 0}>
-                    <div class={styles.pillRow}>
-                      <For each={item().genres}>
-                        {(genre) => <span class={styles.genre}>{genre}</span>}
-                      </For>
-                    </div>
-                  </Show>
+                  <GenrePills genres={item().genres} />
                 </div>
               </>
             );
@@ -283,8 +280,8 @@ function ItemDetailSkeleton() {
       <div class={styles.skeletonHero} />
       <div class={styles.skeletonContent}>
         <div class={styles.skeletonLine} />
-        <div class={`${styles.skeletonLine} ${styles.skeletonLineShort}`} />
-        <div class={styles.pillRow}>
+        <div class={cx(styles.skeletonLine, styles.skeletonLineShort)} />
+        <div class={libraryStyles.pillRow}>
           <For each={[0, 1, 2]}>{() => <div class={styles.skeletonPill} />}</For>
         </div>
       </div>

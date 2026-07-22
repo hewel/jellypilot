@@ -1,8 +1,10 @@
 import { Slider } from '@ark-ui/solid/slider';
+import { cx } from '@styled-system/css';
 import { createMutation, createQuery, useQueryClient } from '@tanstack/solid-query';
 import { Exit, Match } from 'effect';
 import { Pause, Play, SkipBack, SkipForward, Square, Volume2, VolumeX } from 'lucide-solid';
 import { Show, createSignal, onCleanup, onMount } from 'solid-js';
+import * as recipes from '~styles/recipes';
 
 import type { NowPlayingState } from '../bindings';
 import { commandFailureMessage } from '../effects/commands';
@@ -61,9 +63,6 @@ const statusVariant = Match.type<NowPlayingState['status']>().pipe(
   Match.when(Match.is('offline', 'unknown'), () => 'warning'),
   Match.orElse(() => 'neutral'),
 );
-
-const contextualIconClass = (visible: boolean, extra = '') =>
-  `${styles.contextualIcon} ${visible ? styles.iconVisible : styles.iconHidden} ${extra}`;
 
 export default function NowPlayingCard(props: {
   jellyfinConnected: boolean;
@@ -204,33 +203,20 @@ export default function NowPlayingCard(props: {
   };
 
   const inner = (
-    <div class={props.bare ? styles.bareRoot : styles.root}>
+    <div class={styles.root({ bare: props.bare ?? false })}>
       <div class={styles.header}>
-        <div
-          class={styles.headerCopy}
-          classList={{
-            [styles.headerBare]: props.bare,
-            [styles.headerFramed]: !props.bare,
-          }}
-        >
+        <div class={styles.headerCopy({ bare: props.bare ?? false })}>
           {!props.bare && <p class={styles.eyebrow}>Now Playing</p>}
           <div class={styles.titleRow}>
-            <h2
-              id="now-playing-title"
-              class={styles.title}
-              classList={{
-                [styles.titleBare]: props.bare,
-                [styles.titleFramed]: !props.bare,
-              }}
-            >
+            <h2 id="now-playing-title" class={styles.title({ bare: props.bare ?? false })}>
               {mediaTitle()}
             </h2>
             <Show when={current()?.status === 'playing'}>
               <div class={styles.equalizer} aria-hidden="true" title="Playing stream">
-                <span class={`${styles.waveBar} ${styles.wavePrimary} ${styles.waveTiming.a}`} />
-                <span class={`${styles.waveBar} ${styles.waveSecondary} ${styles.waveTiming.b}`} />
-                <span class={`${styles.waveBar} ${styles.wavePrimary} ${styles.waveTiming.c}`} />
-                <span class={`${styles.waveBar} ${styles.waveSecondary} ${styles.waveTiming.d}`} />
+                <span class={cx(styles.waveBar, styles.wavePrimary, styles.waveTiming.a)} />
+                <span class={cx(styles.waveBar, styles.waveSecondary, styles.waveTiming.b)} />
+                <span class={cx(styles.waveBar, styles.wavePrimary, styles.waveTiming.c)} />
+                <span class={cx(styles.waveBar, styles.waveSecondary, styles.waveTiming.d)} />
               </div>
             </Show>
           </div>
@@ -263,7 +249,7 @@ export default function NowPlayingCard(props: {
           >
             <Slider.Control class={styles.sliderControl}>
               <Slider.Track class={styles.sliderTrack}>
-                <Slider.Range class={`${styles.sliderRange} ${styles.primaryRange}`} />
+                <Slider.Range class={cx(styles.sliderRange, styles.primaryRange)} />
               </Slider.Track>
               <Slider.Thumb index={0} class={styles.thumb}>
                 <Slider.HiddenInput />
@@ -273,13 +259,7 @@ export default function NowPlayingCard(props: {
         </Show>
       </div>
 
-      <div
-        class={styles.controls}
-        classList={{
-          [styles.controlsBare]: props.bare,
-          [styles.controlsFramed]: !props.bare,
-        }}
-      >
+      <div class={styles.controls({ bare: props.bare ?? false })}>
         <Button
           type="button"
           variant="icon"
@@ -311,9 +291,17 @@ export default function NowPlayingCard(props: {
           }
         >
           <span class={styles.iconSlot}>
-            <Play class={contextualIconClass(player()?.paused ?? true, styles.iconDropShadow)} />
+            <Play
+              class={cx(
+                styles.contextualIcon({ visible: player()?.paused ?? true }),
+                styles.iconDropShadow,
+              )}
+            />
             <Pause
-              class={contextualIconClass(!(player()?.paused ?? true), styles.iconDropShadow)}
+              class={cx(
+                styles.contextualIcon({ visible: !(player()?.paused ?? true) }),
+                styles.iconDropShadow,
+              )}
             />
           </span>
           <span class={styles.actionLabel}>{player()?.paused ? 'Play' : 'Pause'}</span>
@@ -321,7 +309,7 @@ export default function NowPlayingCard(props: {
         <Button
           type="button"
           variant="icon"
-          class={`${styles.iconButton} ${styles.stopButton}`}
+          class={cx(styles.iconButton, styles.stopButton)}
           aria-label="Stop playback"
           disabled={!canControlPlayback() || busy() !== null}
           onClick={() => void runCommand('stop', stopMpv, 'Could not stop MPV')}
@@ -347,7 +335,7 @@ export default function NowPlayingCard(props: {
           <Button
             type="button"
             variant="secondary"
-            class={styles.pillButton}
+            class={recipes.pillButton}
             disabled={!props.jellyfinConnected || busy() !== null}
             onClick={() =>
               void runCommand('start', startMpv, 'Could not start MPV').then(() =>
@@ -394,8 +382,18 @@ export default function NowPlayingCard(props: {
           onClick={() => void runCommand('mute', toggleMute, 'Could not toggle mute')}
         >
           <span class={styles.iconSlot}>
-            <Volume2 class={contextualIconClass(connected() && !muted(), styles.secondaryIcon)} />
-            <VolumeX class={contextualIconClass(!connected() || muted(), styles.errorIcon)} />
+            <Volume2
+              class={cx(
+                styles.contextualIcon({ visible: connected() && !muted() }),
+                styles.secondaryIcon,
+              )}
+            />
+            <VolumeX
+              class={cx(
+                styles.contextualIcon({ visible: !connected() || muted() }),
+                styles.errorIcon,
+              )}
+            />
           </span>
         </Button>
         <Slider.Root
@@ -410,7 +408,7 @@ export default function NowPlayingCard(props: {
         >
           <Slider.Control class={styles.sliderControl}>
             <Slider.Track class={styles.sliderTrack}>
-              <Slider.Range class={`${styles.sliderRange} ${styles.secondaryRange}`} />
+              <Slider.Range class={cx(styles.sliderRange, styles.secondaryRange)} />
             </Slider.Track>
             <Slider.Thumb index={0} class={styles.thumb}>
               <Slider.HiddenInput />

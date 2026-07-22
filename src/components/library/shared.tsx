@@ -1,6 +1,7 @@
+import { cx } from '@styled-system/css';
 import { Exit, Match } from 'effect';
 import { Check, Clapperboard, Heart, RefreshCw } from 'lucide-solid';
-import { For, Show, createSignal } from 'solid-js';
+import { For, Show, createSignal, createUniqueId } from 'solid-js';
 import type { JSX } from 'solid-js';
 
 import type {
@@ -28,19 +29,15 @@ export { MediaInfoHoverCard } from './MediaInfoHoverCard';
 export { VideoCard } from './VideoCard';
 
 export function LibraryStatusPanel(props: { title: string; description?: string }) {
+  const titleId = createUniqueId();
   return (
-    <Card
-      as="section"
-      variant="elevated"
-      class={styles.statusCard}
-      aria-labelledby="video-home-status-title"
-    >
+    <Card as="section" variant="elevated" class={styles.statusCard} aria-labelledby={titleId}>
       <div class={styles.statusContent}>
         <div class={styles.statusIcon}>
           <Clapperboard class={styles.iconMd} />
         </div>
         <div class={styles.statusCopy}>
-          <h2 id="video-home-status-title" class={styles.statusTitle}>
+          <h2 id={titleId} class={styles.statusTitle}>
             {props.title}
           </h2>
           <p class={styles.statusDescription}>
@@ -50,6 +47,22 @@ export function LibraryStatusPanel(props: { title: string; description?: string 
         </div>
       </div>
     </Card>
+  );
+}
+
+export function GenrePills(props: { genres: string[] }) {
+  return (
+    <Show when={props.genres.length > 0}>
+      <div class={styles.pillRow} role="list">
+        <For each={props.genres}>
+          {(genre) => (
+            <span class={styles.genre} role="listitem">
+              {genre}
+            </span>
+          )}
+        </For>
+      </div>
+    </Show>
   );
 }
 
@@ -206,7 +219,10 @@ export function UserDataControls(props: {
               when={busy() === favoriteAction()}
               fallback={
                 <Heart
-                  class={`${styles.iconSm} ${props.favorite ? styles.favoriteIconSelected : styles.favoriteIcon}`}
+                  class={cx(
+                    styles.iconSm,
+                    props.favorite ? styles.favoriteIconSelected : styles.favoriteIcon,
+                  )}
                 />
               }
             >
@@ -228,7 +244,10 @@ export function UserDataControls(props: {
               when={busy() === playedAction()}
               fallback={
                 <Check
-                  class={`${styles.iconSm} ${props.played ? styles.playedIconSelected : styles.playedIcon}`}
+                  class={cx(
+                    styles.iconSm,
+                    props.played ? styles.playedIconSelected : styles.playedIcon,
+                  )}
                 />
               }
             >

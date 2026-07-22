@@ -19,27 +19,8 @@ export const toggle = css({
   },
 });
 
-export const checkbox = css({
-  display: 'inline-flex',
-  alignItems: 'center',
-  justifyContent: 'center',
-  flexShrink: '[0]',
-  color: 'onPrimary',
-  fontSize: '11',
-  lineHeight: 'none',
-  borderRadius: 'lg',
-  bg: 'surfaceContainerHigh',
-  borderWidth: '1px',
-  borderStyle: 'solid',
-  borderColor: 'outline',
-  height: '[1.375rem]',
+export const checkboxOffset = css({
   mt: '0_5',
-  transitionDuration: '200',
-  transitionProperty: '[background-color, border-color, box-shadow]',
-  width: '[1.375rem]',
-  _hover: {
-    borderColor: 'primary/60',
-  },
 });
 
 export const checkboxChecked = css({

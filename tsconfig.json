@@ -26,6 +26,7 @@
       "@bindings": ["./src/bindings.ts"],
       "@styled-system/*": ["./styled-system/*"],
       "~effects/*": ["./src/effects/*"],
+      "~styles/*": ["./src/styles/*"],
       "~utils/*": ["./src/utils/*"]
     },
     "plugins": [

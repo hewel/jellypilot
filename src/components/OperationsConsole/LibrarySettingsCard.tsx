@@ -1,5 +1,7 @@
+import { cx } from '@styled-system/css';
 import { Check, Images } from 'lucide-solid';
 import { Show } from 'solid-js';
+import * as recipes from '~styles/recipes';
 
 import { SectionCard } from '../ui';
 import * as styles from './LibrarySettingsCard.styles';
@@ -23,7 +25,7 @@ export default function LibrarySettingsCard(props: LibrarySettingsCardProps) {
       >
         <span
           aria-hidden="true"
-          class={styles.checkbox}
+          class={cx(recipes.checkboxBox, styles.checkboxOffset)}
           classList={{ [styles.checkboxChecked]: props.imageDiskCacheEnabled }}
         >
           <Show when={props.imageDiskCacheEnabled}>

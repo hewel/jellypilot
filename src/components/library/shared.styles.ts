@@ -117,7 +117,6 @@ export const userDataActions = css({
 
 export const pillButton = css({
   borderRadius: 'full',
-  boxSizing: 'border-box',
   maxWidth: '[100%]',
 });
 
@@ -153,7 +152,7 @@ export const playedIconSelected = css({
 });
 
 export const spinIcon = css({
-  animation: '[spin 1s linear infinite]',
+  animation: '[spin 1s {easings.linear} infinite]',
   color: 'secondary',
   height: '4',
   width: '4',
@@ -163,4 +162,25 @@ export const errorText = css({
   color: 'error',
   fontSize: '12',
   lineHeight: '16',
+});
+
+export const pillRow = css({
+  display: 'flex',
+  flexWrap: 'wrap',
+  gap: '2',
+});
+
+export const genre = css({
+  borderColor: 'outlineVariant',
+  borderRadius: 'full',
+  borderStyle: 'solid',
+  borderWidth: '1px',
+  color: 'onSurfaceVariant/90',
+  fontSize: '11',
+  fontWeight: 'bold',
+  letterSpacing: '8',
+  lineHeight: '16',
+  px: '3',
+  py: '1',
+  textTransform: 'uppercase',
 });

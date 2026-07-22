@@ -11,14 +11,17 @@ import type {
   PendingLibraryPlayback,
 } from '@components/library/LibraryPlaybackChooser';
 import {
+  GenrePills,
   LibraryStatusPanel,
   UserDataControls,
   formatRuntime,
   seasonLabel,
   showSubtitle,
 } from '@components/library/shared';
+import * as libraryStyles from '@components/library/shared.styles';
 import { Button, Card, JellyPilotSelect, StatusBadge } from '@components/ui';
 import type { JellyPilotSelectItem } from '@components/ui';
+import { cx } from '@styled-system/css';
 import { createMutation, createQuery, useQueryClient } from '@tanstack/solid-query';
 import {
   Link,
@@ -302,7 +305,7 @@ function LibraryShowDetailRoute() {
                       onClick={() => void playShow()}
                       leadingIcon={
                         <Show when={playBusy()} fallback={<Play class={styles.playIcon} />}>
-                          <RefreshCw class={`${styles.icon4} ${styles.spinner}`} />
+                          <RefreshCw class={cx(styles.icon4, styles.spinner)} />
                         </Show>
                       }
                     >
@@ -348,13 +351,7 @@ function LibraryShowDetailRoute() {
                   {(overview) => <p class={styles.overview}>{overview()}</p>}
                 </Show>
 
-                <Show when={show().genres.length > 0}>
-                  <div class={styles.pillRow}>
-                    <For each={show().genres}>
-                      {(genre) => <span class={styles.genre}>{genre}</span>}
-                    </For>
-                  </div>
-                </Show>
+                <GenrePills genres={show().genres} />
 
                 <section class={styles.section} aria-labelledby="show-seasons-title">
                   <div class={styles.sectionHeader}>
@@ -577,7 +574,7 @@ function EpisodeRow(props: {
           onClick={props.onPlay}
           leadingIcon={
             <Show when={props.busy} fallback={<Play class={styles.playIcon} />}>
-              <RefreshCw class={`${styles.icon4} ${styles.spinner}`} />
+              <RefreshCw class={cx(styles.icon4, styles.spinner)} />
             </Show>
           }
         >
@@ -595,9 +592,9 @@ function ShowDetailSkeleton() {
       <div class={styles.skeletonContent}>
         <div class={styles.sectionCompact}>
           <div class={styles.skeletonLine} />
-          <div class={`${styles.skeletonLine} ${styles.skeletonLineShort}`} />
+          <div class={cx(styles.skeletonLine, styles.skeletonLineShort)} />
         </div>
-        <div class={styles.pillRow}>
+        <div class={libraryStyles.pillRow}>
           <For each={[0, 1, 2]}>{() => <div class={styles.skeletonPill} />}</For>
         </div>
         <div class={styles.skeletonTitle} />

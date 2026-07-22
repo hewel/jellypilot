@@ -14,7 +14,7 @@ export const statusBadge = cva({
     lineHeight: '16',
     borderStyle: 'solid',
     borderWidth: '1px',
-    letterSpacing: '[0.08em]',
+    letterSpacing: '8',
     textTransform: 'uppercase',
     userSelect: 'none',
   },
@@ -57,15 +57,15 @@ export const statusDot = cva({
   variants: {
     variant: {
       success: {
-        animation: '[pulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite]',
+        animation: '[pulse 2s {easings.inOut} infinite]',
         bg: 'tertiary',
       },
       warning: {
-        animation: '[pulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite]',
+        animation: '[pulse 2s {easings.inOut} infinite]',
         bg: 'warning',
       },
       error: {
-        animation: '[pulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite]',
+        animation: '[pulse 2s {easings.inOut} infinite]',
         bg: 'error',
       },
       neutral: {

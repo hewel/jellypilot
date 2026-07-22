@@ -239,10 +239,21 @@ export const zIndex = {
   auto: 'auto',
   '0': '0',
   '10': '10',
+  '20': '20',
   '40': '40',
   '50': '50',
   '60': '60',
   '100': '100',
+  behind: '-1',
+} as const;
+
+export const letterSpacings = {
+  '0': '0',
+  '5': '0.05em',
+  '8': '0.08em',
+  '18': '0.18em',
+  '20': '0.2em',
+  '25': '0.25em',
 } as const;
 
 export const durations = {
@@ -260,6 +271,7 @@ export const durations = {
 export const easings = {
   standard: 'cubic-bezier(0.2, 0, 0, 1)',
   emphasized: 'cubic-bezier(0.16, 1, 0.3, 1)',
+  inOut: 'cubic-bezier(0.4, 0, 0.6, 1)',
   linear: 'linear',
 } as const;
 

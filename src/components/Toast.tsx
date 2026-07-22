@@ -43,8 +43,7 @@ export default function Toast(props: ToastProps) {
 
   return (
     <div
-      class={styles.toast({ level: props.level })}
-      classList={{ [styles.exiting]: props.exiting, [styles.visible]: !props.exiting }}
+      class={styles.toast({ level: props.level, state: props.exiting ? 'exiting' : 'visible' })}
       role="alert"
     >
       <div class={styles.iconWrap}>{getIcon()}</div>
@@ -55,7 +54,6 @@ export default function Toast(props: ToastProps) {
         onClick={() => props.onDismiss(props.id)}
         aria-label="Close"
       >
-        <span class={styles.srOnly}>Close</span>
         <X class={styles.closeIcon} />
       </button>
     </div>

@@ -47,7 +47,7 @@ export const sectionLabel = cva({
     display: 'none',
     fontSize: '11',
     fontWeight: 'bold',
-    letterSpacing: '[0.08em]',
+    letterSpacing: '8',
     px: '2',
     py: '1',
     textTransform: 'uppercase',

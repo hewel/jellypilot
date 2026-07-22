@@ -1,3 +1,4 @@
+import { cx } from '@styled-system/css';
 import { splitProps } from 'solid-js';
 import type { JSX } from 'solid-js';
 
@@ -14,9 +15,7 @@ export interface FieldControlProps extends JSX.InputHTMLAttributes<HTMLInputElem
 export function FieldControl(props: FieldControlProps) {
   const [local, rest] = splitProps(props, ['variant', 'class']);
   const variant = () => local.variant ?? 'filled';
-  return (
-    <input class={styles.cx(styles.fieldControl({ variant: variant() }), local.class)} {...rest} />
-  );
+  return <input class={cx(styles.fieldControl({ variant: variant() }), local.class)} {...rest} />;
 }
 
 export interface FieldTextareaProps extends JSX.TextareaHTMLAttributes<HTMLTextAreaElement> {
@@ -29,9 +28,6 @@ export function FieldTextarea(props: FieldTextareaProps) {
   const [local, rest] = splitProps(props, ['variant', 'class']);
   const variant = () => local.variant ?? 'filled';
   return (
-    <textarea
-      class={styles.cx(styles.fieldControl({ variant: variant() }), local.class)}
-      {...rest}
-    />
+    <textarea class={cx(styles.fieldControl({ variant: variant() }), local.class)} {...rest} />
   );
 }

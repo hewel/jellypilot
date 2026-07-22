@@ -1,4 +1,5 @@
 import { HoverCard } from '@components/ui';
+import { cx } from '@styled-system/css';
 import { createQuery } from '@tanstack/solid-query';
 import { Exit, Option } from 'effect';
 import { Check, Heart, LoaderCircle } from 'lucide-solid';
@@ -76,12 +77,12 @@ export function MediaInfoContent(props: { detail: MediaDetail }) {
       <Show when={props.detail.played || props.detail.favorite}>
         <div class={styles.states}>
           <Show when={props.detail.played}>
-            <span class={`${styles.state} ${styles.played}`}>
+            <span class={cx(styles.state, styles.played)}>
               <Check class={styles.icon} /> Played
             </span>
           </Show>
           <Show when={props.detail.favorite}>
-            <span class={`${styles.state} ${styles.favorite}`}>
+            <span class={cx(styles.state, styles.favorite)}>
               <Heart class={styles.icon} /> Favorite
             </span>
           </Show>

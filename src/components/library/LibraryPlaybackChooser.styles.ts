@@ -1,35 +1,5 @@
 import { css } from '@styled-system/css';
 
-export const backdrop = css({
-  backdropFilter: '[blur(4px)]',
-  bg: '[rgb(0 0 0 / 0.7)]',
-  inset: '0',
-  position: 'fixed',
-  transitionDuration: '300',
-  transitionProperty: '[backdrop-filter, background-color, opacity]',
-  zIndex: '60',
-  '&[data-state="closed"]': {
-    opacity: '[0]',
-  },
-  '&[data-state="open"]': {
-    opacity: '[1]',
-  },
-});
-
-export const positioner = css({
-  alignItems: 'center',
-  display: 'flex',
-  justifyContent: 'center',
-  overflowY: 'auto',
-  p: '4',
-  position: 'fixed',
-  zIndex: '60',
-});
-
-export const positionerFill = css({
-  inset: '0',
-});
-
 export const content = css({
   maxWidth: '[42rem]',
   outline: 'none',
@@ -48,7 +18,7 @@ export const eyebrow = css({
   color: 'secondary',
   fontSize: '11',
   fontWeight: 'bold',
-  letterSpacing: '[0.08em]',
+  letterSpacing: '8',
   lineHeight: '16',
   textTransform: 'uppercase',
 });
@@ -107,10 +77,6 @@ export const closeButton = css({
     opacity: '[0.5]',
     pointerEvents: 'none',
   },
-});
-
-export const pillButton = css({
-  borderRadius: 'full',
 });
 
 export const icon = css({

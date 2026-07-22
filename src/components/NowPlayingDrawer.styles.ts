@@ -91,22 +91,6 @@ export const statusDot = cva({
   },
 });
 
-export const backdrop = css({
-  bg: 'surfaceContainerLowest/70',
-  backdropFilter: '[blur(4px)]',
-  inset: '0',
-  position: 'fixed',
-  transitionDuration: '300',
-  transitionProperty: '[backdrop-filter, background-color, opacity]',
-  zIndex: '50',
-  '&[data-state="closed"]': {
-    opacity: '[0]',
-  },
-  '&[data-state="open"]': {
-    opacity: '[1]',
-  },
-});
-
 export const positioner = css({
   display: 'flex',
   inset: '0',

@@ -7,7 +7,7 @@ export const version = css({
   lineHeight: '16',
   mt: '1',
   fontFamily: 'mono',
-  letterSpacing: '0.08em',
+  letterSpacing: '8',
   opacity: '[0.5]',
   textTransform: 'uppercase',
 });

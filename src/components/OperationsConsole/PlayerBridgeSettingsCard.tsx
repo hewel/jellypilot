@@ -1,6 +1,7 @@
 import { Collapsible } from '@ark-ui/solid/collapsible';
 import { Field as ArkField } from '@ark-ui/solid/field';
 import { TagsInput } from '@ark-ui/solid/tags-input';
+import { cx } from '@styled-system/css';
 import { ArrowDown, ArrowUp, ChevronDown, Globe, Plus, Settings, Trash2 } from 'lucide-solid';
 import { For, Show } from 'solid-js';
 
@@ -249,7 +250,7 @@ export default function PlayerBridgeSettingsCard(props: PlayerBridgeSettingsCard
                         event.preventDefault();
                         props.onAddSubtitleLanguages();
                       }}
-                      class={`${styles.flexInput} ${styles.mono}`}
+                      class={cx(styles.flexInput, styles.mono)}
                       placeholder="e.g. pol, tha"
                       aria-label="Custom subtitle language code"
                     />
@@ -316,7 +317,7 @@ export default function PlayerBridgeSettingsCard(props: PlayerBridgeSettingsCard
                             type="button"
                             variant="icon"
                             size="sm"
-                            class={`${styles.smallIconButton} ${styles.deleteButton}`}
+                            class={cx(styles.smallIconButton, styles.deleteButton)}
                             aria-label={`Remove ${language}`}
                             onClick={() => props.onRemoveSubtitleLanguage(language)}
                           >

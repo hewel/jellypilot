@@ -1,3 +1,4 @@
+import { cx } from '@styled-system/css';
 import { CircleAlert, Plus, Server, UserRound } from 'lucide-solid';
 import { For, Show } from 'solid-js';
 
@@ -47,7 +48,7 @@ export default function SavedServicesCard(props: SavedServicesCardProps) {
                       <p class={styles.name}>{profile.serverName ?? profile.serverUrl}</p>
                       <span class={styles.pill}>{profile.provider}</span>
                       <Show when={profile.active}>
-                        <span class={`${styles.pill} ${styles.activePill}`}>Active</span>
+                        <span class={cx(styles.pill, styles.activePill)}>Active</span>
                       </Show>
                     </div>
                     <p class={styles.url}>{profile.serverUrl}</p>

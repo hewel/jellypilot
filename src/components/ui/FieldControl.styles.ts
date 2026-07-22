@@ -1,4 +1,4 @@
-import { cva, cx } from '@styled-system/css';
+import { cva } from '@styled-system/css';
 
 export const fieldControl = cva({
   base: {
@@ -48,5 +48,3 @@ export const fieldControl = cva({
     variant: 'filled',
   },
 });
-
-export { cx };

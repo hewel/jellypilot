@@ -4,6 +4,7 @@ import { Exit, Match } from 'effect';
 import { MonitorPlay, X } from 'lucide-solid';
 import { Show, createSignal, onCleanup, onMount } from 'solid-js';
 import { Portal } from 'solid-js/web';
+import * as recipes from '~styles/recipes';
 
 import type { NowPlayingState } from '../bindings';
 import { fetchNowPlayingState, listenNowPlayingChanged } from '../effects/nowPlaying';
@@ -104,7 +105,7 @@ export default function NowPlayingDrawer(props: {
       />
 
       <Portal>
-        <Dialog.Backdrop class={styles.backdrop} />
+        <Dialog.Backdrop class={recipes.scrim({ tone: 'surface', z: '50' })} />
         <Dialog.Positioner class={styles.positioner}>
           <Dialog.Content ref={setSelectPortalMount} class={styles.content}>
             <div class={styles.header}>

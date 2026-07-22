@@ -1,4 +1,4 @@
-import { css } from '@styled-system/css';
+import { css, cva } from '@styled-system/css';
 
 export const root = css({
   display: 'grid',
@@ -29,7 +29,7 @@ export const checkboxRoot = css({
   cursor: 'pointer',
   fontSize: '11',
   fontWeight: 'bold',
-  letterSpacing: '[0.08em]',
+  letterSpacing: '8',
   lineHeight: '16',
   textTransform: 'uppercase',
   transitionProperty: '[opacity]',
@@ -41,67 +41,34 @@ export const checkboxRoot = css({
   },
 });
 
-export const checkbox = css({
-  display: 'inline-flex',
-  alignItems: 'center',
-  justifyContent: 'center',
-  flexShrink: '[0]',
-  color: 'onPrimary',
-  borderRadius: 'lg',
-  fontSize: '11',
-  lineHeight: 'none',
-  bg: 'surfaceContainerHigh',
-  borderWidth: '1px',
-  borderStyle: 'solid',
-  borderColor: 'outline',
-  height: '[1.375rem]',
-  transitionDuration: '200',
-  transitionProperty: '[background-color, border-color, box-shadow]',
-  width: '[1.375rem]',
-  _hover: {
-    borderColor: 'primary/60',
-  },
-  '&[data-state="checked"], &[data-state="indeterminate"]': {
-    bg: 'primary',
-    borderColor: 'primary',
-  },
-  '&[data-focus-visible]': {
-    boxShadow: '[0 0 0 2px {colors.primary/50}]',
-    outline: 'none',
-  },
-});
-
-export const indicator = css({
-  display: 'flex',
-  alignItems: 'center',
-  justifyContent: 'center',
-  fontWeight: 'black',
-});
-
 export const checkboxLabel = css({
   cursor: 'pointer',
   userSelect: 'none',
 });
 
-export const log = css({
-  overflowY: 'auto',
-  borderRadius: '2xl',
-  p: '3',
-  boxShadow: 'inner',
-  bg: 'surfaceContainerLowest/60',
-  borderWidth: '1px',
-  borderStyle: 'solid',
-  borderColor: 'outlineVariant',
-  display: 'grid',
-  gap: '2_5',
-});
-
-export const compactLog = css({
-  maxHeight: '[14rem]',
-});
-
-export const expandedLog = css({
-  maxHeight: '[24rem]',
+export const log = cva({
+  base: {
+    overflowY: 'auto',
+    borderRadius: '2xl',
+    p: '3',
+    boxShadow: 'inner',
+    bg: 'surfaceContainerLowest/60',
+    borderWidth: '1px',
+    borderStyle: 'solid',
+    borderColor: 'outlineVariant',
+    display: 'grid',
+    gap: '2_5',
+  },
+  variants: {
+    size: {
+      compact: {
+        maxHeight: '[14rem]',
+      },
+      expanded: {
+        maxHeight: '[24rem]',
+      },
+    },
+  },
 });
 
 export const empty = css({
@@ -157,7 +124,7 @@ export const badge = css({
   borderRadius: 'md',
   fontSize: '10',
   fontWeight: 'bold',
-  letterSpacing: '[0.05em]',
+  letterSpacing: '5',
   px: '2',
   py: '0_5',
   userSelect: 'none',
@@ -208,20 +175,24 @@ export const actions = css({
   px: '1',
 });
 
-export const status = css({
-  fontSize: '11',
-  lineHeight: '16',
-  fontWeight: 'bold',
-  letterSpacing: '[0.08em]',
-  textTransform: 'uppercase',
-});
-
-export const statusCopied = css({
-  color: 'tertiary',
-});
-
-export const statusFailed = css({
-  color: 'error',
+export const status = cva({
+  base: {
+    fontSize: '11',
+    lineHeight: '16',
+    fontWeight: 'bold',
+    letterSpacing: '8',
+    textTransform: 'uppercase',
+  },
+  variants: {
+    tone: {
+      copied: {
+        color: 'tertiary',
+      },
+      failed: {
+        color: 'error',
+      },
+    },
+  },
 });
 
 export const actionButton = css({
@@ -232,7 +203,7 @@ export const actionButton = css({
   color: 'onSurfaceVariant/90',
   fontSize: '11',
   fontWeight: 'bold',
-  letterSpacing: '[0.08em]',
+  letterSpacing: '8',
   lineHeight: '16',
   textTransform: 'uppercase',
   _hover: {

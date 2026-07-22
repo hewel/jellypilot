@@ -1,5 +1,6 @@
 import { VideoHomeRow } from '@components/library/shared';
 import { Card } from '@components/ui';
+import { cx } from '@styled-system/css';
 import { createQuery } from '@tanstack/solid-query';
 import { createFileRoute } from '@tanstack/solid-router';
 import { Exit } from 'effect';
@@ -42,35 +43,33 @@ function LibraryLanding() {
     homeQuery.data && Exit.isSuccess(homeQuery.data) ? homeQuery.data.value : null;
 
   return (
-    <div class={styles.stack}>
-      <Show when={!homeQuery.isPending} fallback={<VideoHomeSkeleton />}>
-        <Show when={home()}>
-          {(value) => (
-            <div class={styles.stack}>
-              <VideoHomeRow
-                id="continue-watching"
-                title="Continue Watching"
-                kind="continueWatching"
-                items={value().continueWatching}
-              />
-              <VideoHomeRow id="next-up" title="Next Up" kind="nextUp" items={value().nextUp} />
-              <VideoHomeRow
-                id="latest-movies"
-                title="Latest Movies"
-                kind="latestMovies"
-                items={value().latestMovies}
-              />
-              <VideoHomeRow
-                id="latest-episodes"
-                title="Latest Episodes"
-                kind="latestEpisodes"
-                items={value().latestEpisodes}
-              />
-            </div>
-          )}
-        </Show>
+    <Show when={!homeQuery.isPending} fallback={<VideoHomeSkeleton />}>
+      <Show when={home()}>
+        {(value) => (
+          <div class={styles.stack}>
+            <VideoHomeRow
+              id="continue-watching"
+              title="Continue Watching"
+              kind="continueWatching"
+              items={value().continueWatching}
+            />
+            <VideoHomeRow id="next-up" title="Next Up" kind="nextUp" items={value().nextUp} />
+            <VideoHomeRow
+              id="latest-movies"
+              title="Latest Movies"
+              kind="latestMovies"
+              items={value().latestMovies}
+            />
+            <VideoHomeRow
+              id="latest-episodes"
+              title="Latest Episodes"
+              kind="latestEpisodes"
+              items={value().latestEpisodes}
+            />
+          </div>
+        )}
       </Show>
-    </div>
+    </Show>
   );
 }
 
@@ -86,7 +85,7 @@ function VideoHomeSkeleton() {
                 {() => (
                   <Card variant="filled" surfaceTint={false} padding="none">
                     <div
-                      class={`${styles.skeletonArtwork} ${styles.skeletonAspect[row.aspectClass]}`}
+                      class={cx(styles.skeletonArtwork, styles.skeletonAspect[row.aspectClass])}
                     />
                     <Show when={row.aspectClass === 'video'}>
                       <div class={styles.skeletonBody}>

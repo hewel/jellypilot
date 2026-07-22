@@ -1,4 +1,5 @@
 import { Button, StatusBadge } from '@components/ui';
+import { cx } from '@styled-system/css';
 import { ArrowLeft } from 'lucide-solid';
 import { Show, createEffect, createSignal } from 'solid-js';
 import type { JSX } from 'solid-js';
@@ -72,7 +73,11 @@ export function DetailHero(props: DetailHeroProps) {
 
       <div class={styles.content}>
         <div
-          class={`${styles.artwork} ${styles.artworkWidth[props.artworkAspect]} ${styles.artworkAspect[props.artworkAspect]}`}
+          class={cx(
+            styles.artwork,
+            styles.artworkWidth[props.artworkAspect],
+            styles.artworkAspect[props.artworkAspect],
+          )}
         >
           <Show
             when={!artworkImageFailed() ? props.artworkImageId : null}

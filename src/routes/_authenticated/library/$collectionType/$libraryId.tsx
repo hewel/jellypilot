@@ -10,6 +10,7 @@ import {
 } from '@components/library/shared';
 import { VideoCard } from '@components/library/VideoCard';
 import { Button } from '@components/ui';
+import { cx } from '@styled-system/css';
 import { createInfiniteQuery, createQuery, useQueryClient } from '@tanstack/solid-query';
 import { createFileRoute, redirect, useNavigate } from '@tanstack/solid-router';
 import { createVirtualizer, observeElementRect } from '@tanstack/solid-virtual';
@@ -35,6 +36,7 @@ import {
   queryKeys,
   runExit,
 } from '~effects/query';
+import * as recipes from '~styles/recipes';
 import { createSharedLibraryFilters } from '~utils/createSharedLibraryFilters';
 import type { LibrarySortDirection } from '~utils/createSharedLibraryFilters';
 import {
@@ -653,7 +655,7 @@ function LibraryBrowseRoute() {
             <Show
               when={usesVirtualGrid()}
               fallback={
-                <div class={`${styles.grid} ${styles.fade}`}>
+                <div class={cx(styles.grid, styles.fade)}>
                   <For each={readyState()?.items ?? []}>
                     {(item) => (
                       <VideoCard kind="library" item={item} collectionType={collectionType()} />
@@ -665,11 +667,7 @@ function LibraryBrowseRoute() {
                 </div>
               }
             >
-              <div
-                ref={setVirtualGrid}
-                data-testid="library-virtual-grid"
-                class={styles.virtualGrid}
-              >
+              <div ref={setVirtualGrid} data-testid="library-virtual-grid" class={styles.fade}>
                 <div
                   class={styles.virtualCanvas}
                   style={{ height: `${rowVirtualizer.getTotalSize()}px` }}
@@ -719,7 +717,7 @@ function LibraryBrowseRoute() {
                   <Button
                     type="button"
                     variant="secondary"
-                    class={styles.pillButton}
+                    class={recipes.pillButton}
                     disabled={loadMoreRetryBusy()}
                     onClick={retryFailedPage}
                     leadingIcon={

@@ -1,11 +1,13 @@
 import { Checkbox } from '@ark-ui/solid/checkbox';
 import { Field as ArkField } from '@ark-ui/solid/field';
 import { Tabs } from '@ark-ui/solid/tabs';
+import { cx } from '@styled-system/css';
 import { createForm } from '@tanstack/solid-form';
 import { useQueryClient } from '@tanstack/solid-query';
 import { Effect, Exit, Fiber } from 'effect';
 import { Check, CircleAlert, LoaderCircle, RadioTower } from 'lucide-solid';
 import { Show, createEffect, createSignal, onCleanup, onMount } from 'solid-js';
+import * as recipes from '~styles/recipes';
 
 import type { Credentials, MediaServerProvider } from '../bindings';
 import { commandFailureMessage } from '../effects/commands';
@@ -270,17 +272,13 @@ export default function LoginPage(props: LoginPageProps) {
           <form.Field name="scheme">
             {(field) => (
               <fieldset
-                class={styles.cx(styles.segmented, styles.segmented2)}
+                class={cx(styles.segmented, styles.segmented2)}
                 aria-label="Server protocol"
               >
                 <button
                   type="button"
                   aria-pressed={field().state.value === 'https'}
-                  class={styles.segment}
-                  classList={{
-                    [styles.segmentSelected]: field().state.value === 'https',
-                    [styles.segmentIdle]: field().state.value !== 'https',
-                  }}
+                  class={styles.segment({ selected: field().state.value === 'https' })}
                   disabled={isQuickConnectWaiting()}
                   onClick={() => field().handleChange('https')}
                 >
@@ -289,11 +287,7 @@ export default function LoginPage(props: LoginPageProps) {
                 <button
                   type="button"
                   aria-pressed={field().state.value === 'http'}
-                  class={styles.segment}
-                  classList={{
-                    [styles.segmentSelected]: field().state.value === 'http',
-                    [styles.segmentIdle]: field().state.value !== 'http',
-                  }}
+                  class={styles.segment({ selected: field().state.value === 'http' })}
                   disabled={isQuickConnectWaiting()}
                   onClick={() => field().handleChange('http')}
                 >
@@ -305,7 +299,7 @@ export default function LoginPage(props: LoginPageProps) {
           <form.Field name="host">
             {(field) => (
               <ArkField.Root class={styles.fieldBlock} disabled={isQuickConnectWaiting()}>
-                <ArkField.Label class={styles.srOnly}>Jellyfin host</ArkField.Label>
+                <ArkField.Label class={recipes.srOnly}>Jellyfin host</ArkField.Label>
                 <ArkField.Input
                   asChild={(fieldProps) => (
                     <FieldControl
@@ -333,13 +327,7 @@ export default function LoginPage(props: LoginPageProps) {
         <div class={styles.preview}>
           <div class={styles.previewStripe} />
           <p class={styles.overline}>Server URL preview</p>
-          <p
-            class={styles.previewValue}
-            classList={{
-              [styles.previewReady]: Boolean(serverUrl()),
-              [styles.previewEmpty]: !serverUrl(),
-            }}
-          >
+          <p class={styles.previewValue({ ready: Boolean(serverUrl()) })}>
             {serverUrl() || 'Enter a server host to preview the final URL'}
           </p>
         </div>
@@ -349,16 +337,12 @@ export default function LoginPage(props: LoginPageProps) {
             <fieldset>
               <legend class={styles.label}>Media Server</legend>
               <div
-                class={styles.cx(styles.segmented, styles.segmented2)}
+                class={cx(styles.segmented, styles.segmented2)}
                 aria-label="Media server provider"
               >
                 <button
                   type="button"
-                  class={styles.segment}
-                  classList={{
-                    [styles.segmentSelected]: field().state.value === 'jellyfin',
-                    [styles.segmentIdle]: field().state.value !== 'jellyfin',
-                  }}
+                  class={styles.segment({ selected: field().state.value === 'jellyfin' })}
                   disabled={isQuickConnectWaiting()}
                   onClick={() => field().handleChange('jellyfin')}
                 >
@@ -366,11 +350,7 @@ export default function LoginPage(props: LoginPageProps) {
                 </button>
                 <button
                   type="button"
-                  class={styles.segment}
-                  classList={{
-                    [styles.segmentSelected]: field().state.value === 'emby',
-                    [styles.segmentIdle]: field().state.value !== 'emby',
-                  }}
+                  class={styles.segment({ selected: field().state.value === 'emby' })}
                   disabled={isQuickConnectWaiting()}
                   onClick={() => field().handleChange('emby')}
                 >
@@ -396,7 +376,7 @@ export default function LoginPage(props: LoginPageProps) {
           }}
         >
           <Tabs.List
-            class={styles.cx(
+            class={cx(
               styles.segmented,
               styles.tabsList,
               selectedCapabilities().quickConnect ? styles.segmented2 : styles.segmented1,
@@ -407,11 +387,7 @@ export default function LoginPage(props: LoginPageProps) {
               <Tabs.Trigger
                 value="quickConnect"
                 disabled={isQuickConnectWaiting()}
-                class={styles.segment}
-                classList={{
-                  [styles.segmentSelected]: loginMethod() === 'quickConnect',
-                  [styles.segmentIdle]: loginMethod() !== 'quickConnect',
-                }}
+                class={styles.segment({ selected: loginMethod() === 'quickConnect' })}
               >
                 Quick Connect
               </Tabs.Trigger>
@@ -419,11 +395,7 @@ export default function LoginPage(props: LoginPageProps) {
             <Tabs.Trigger
               value="password"
               disabled={isQuickConnectWaiting()}
-              class={styles.segment}
-              classList={{
-                [styles.segmentSelected]: loginMethod() === 'password',
-                [styles.segmentIdle]: loginMethod() !== 'password',
-              }}
+              class={styles.segment({ selected: loginMethod() === 'password' })}
             >
               Password
             </Tabs.Trigger>
@@ -510,8 +482,8 @@ export default function LoginPage(props: LoginPageProps) {
                     onCheckedChange={(details) => field().handleChange(details.checked === true)}
                     class={styles.remember}
                   >
-                    <Checkbox.Control class={styles.checkbox}>
-                      <Checkbox.Indicator class={styles.checkboxIndicator}>
+                    <Checkbox.Control class={recipes.checkboxBox}>
+                      <Checkbox.Indicator class={recipes.checkboxIndicator}>
                         <Check class={styles.icon3_5} stroke-width={4} />
                       </Checkbox.Indicator>
                     </Checkbox.Control>
@@ -555,7 +527,7 @@ export default function LoginPage(props: LoginPageProps) {
           >
             {submitting() ? (
               <>
-                <LoaderCircle class={styles.cx(styles.icon5, styles.spinner)} />
+                <LoaderCircle class={cx(styles.icon5, styles.spinner)} />
                 {submittingButtonLabel()}
               </>
             ) : (

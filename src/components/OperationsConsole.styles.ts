@@ -11,18 +11,6 @@ export const addServiceDialogOverflowLayout = {
   positionerOverflowY: 'auto',
 } as const;
 
-export const backdrop = css({
-  backdropFilter: '[blur(4px)]',
-  bg: '[rgb(0 0 0 / 0.7)]',
-  inset: '0',
-  position: 'fixed',
-  transitionDuration: '300',
-  transitionProperty: '[backdrop-filter, background-color, opacity]',
-  zIndex: '60',
-  '&[data-state="closed"]': { opacity: '[0]' },
-  '&[data-state="open"]': { opacity: '[1]' },
-});
-
 export const positioner = css({
   position: 'fixed',
   display: 'flex',
@@ -31,10 +19,6 @@ export const positioner = css({
   overflowY: addServiceDialogOverflowLayout.positionerOverflowY,
   p: '4',
   zIndex: '60',
-});
-
-export const positionerFill = css({
-  inset: '0',
 });
 
 export const content = css({
@@ -63,19 +47,7 @@ export const closeButton = css({
   },
 });
 
-export const srOnly = css({
-  border: 0,
-  clip: '[rect(0 0 0 0)]',
-  height: 'px',
-  margin: '[-1px]',
-  overflow: 'hidden',
-  padding: '0',
-  position: 'absolute',
-  whiteSpace: 'nowrap',
-  width: 'px',
-});
-
 export const icon4_5 = css({
-  height: '[1.125rem]',
-  width: '[1.125rem]',
+  height: 'lg',
+  width: 'lg',
 });

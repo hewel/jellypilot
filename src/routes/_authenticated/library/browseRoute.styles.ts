@@ -31,11 +31,7 @@ export const grid = css({
 });
 
 export const fade = css({
-  animation: '[fadeIn 0.3s cubic-bezier(0.16, 1, 0.3, 1) forwards]',
-});
-
-export const virtualGrid = css({
-  animation: '[fadeIn 0.3s cubic-bezier(0.16, 1, 0.3, 1) forwards]',
+  animation: '[fadeIn 300ms {easings.emphasized} forwards]',
 });
 
 export const virtualCanvas = css({
@@ -65,17 +61,13 @@ export const error = css({
   textAlign: 'center',
 });
 
-export const pillButton = css({
-  borderRadius: 'full',
-});
-
 export const icon4 = css({
   height: '4',
   width: '4',
 });
 
 export const spin = css({
-  animation: '[spin 1s linear infinite]',
+  animation: '[spin 1s {easings.linear} infinite]',
 });
 
 export const sentinel = css({
@@ -125,7 +117,7 @@ export const toolbarChrome = css({
   top: '[-6px]',
   transitionDuration: '200',
   transitionProperty: '[opacity]',
-  zIndex: '[-1]',
+  zIndex: 'behind',
 });
 
 export const controlCapsule = css({
@@ -347,7 +339,7 @@ export const menuLabel = css({
   color: 'onSurfaceVariant/80',
   fontSize: '11',
   fontWeight: 'bold',
-  letterSpacing: '[0.08em]',
+  letterSpacing: '8',
   px: '3',
   pb: '1_5',
   pt: '2',

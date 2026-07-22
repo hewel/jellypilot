@@ -27,35 +27,6 @@ export const description = css({
   lineHeight: '16',
 });
 
-export const backdrop = css({
-  backdropFilter: '[blur(4px)]',
-  bg: '[rgb(0 0 0 / 0.7)]',
-  inset: '0',
-  position: 'fixed',
-  transitionDuration: '300',
-  transitionProperty: '[backdrop-filter, background-color, opacity]',
-  zIndex: '50',
-  '&[data-state="closed"]': {
-    opacity: '[0]',
-  },
-  '&[data-state="open"]': {
-    opacity: '[1]',
-  },
-});
-
-export const positioner = css({
-  position: 'fixed',
-  display: 'flex',
-  alignItems: 'center',
-  justifyContent: 'center',
-  p: '4',
-  zIndex: '50',
-});
-
-export const positionerFill = css({
-  inset: '0',
-});
-
 export const content = css({
   position: 'relative',
   overflow: 'hidden',
@@ -146,6 +117,6 @@ export const dangerButton = css({
 });
 
 export const icon4_5 = css({
-  height: '[1.125rem]',
-  width: '[1.125rem]',
+  height: 'lg',
+  width: 'lg',
 });

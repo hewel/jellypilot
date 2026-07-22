@@ -1,4 +1,4 @@
-import { css, cva, cx } from '@styled-system/css';
+import { css, cva } from '@styled-system/css';
 
 export const card = cva({
   base: {
@@ -65,5 +65,3 @@ export const content = css({
   position: 'relative',
   zIndex: '10',
 });
-
-export { cx };

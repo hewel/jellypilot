@@ -3,6 +3,7 @@ import { useNavigate } from '@tanstack/solid-router';
 import { Settings, X } from 'lucide-solid';
 import { createSignal } from 'solid-js';
 import { Portal } from 'solid-js/web';
+import * as recipes from '~styles/recipes';
 
 import OperationsConsole from './OperationsConsole';
 import * as styles from './SettingsModal.styles';
@@ -30,7 +31,7 @@ export default function SettingsModal(props: { collapsed: boolean }) {
         )}
       />
       <Portal>
-        <Dialog.Backdrop class={styles.backdrop} />
+        <Dialog.Backdrop class={recipes.scrim({ tone: 'surface', z: '100' })} />
         <Dialog.Positioner class={styles.positioner}>
           <Dialog.Content
             class={styles.content}

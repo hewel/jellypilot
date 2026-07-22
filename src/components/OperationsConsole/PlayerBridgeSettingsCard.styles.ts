@@ -9,7 +9,7 @@ export const saveBadge = css({
   borderWidth: '1px',
   borderStyle: 'solid',
   borderColor: '[transparent]',
-  letterSpacing: '[0.05em]',
+  letterSpacing: '5',
   textTransform: 'uppercase',
 });
 
@@ -20,7 +20,7 @@ export const saveOk = css({
 });
 
 export const saveError = css({
-  animation: '[pulse 1.8s cubic-bezier(0.4, 0, 0.6, 1) infinite]',
+  animation: '[pulse 1.8s {easings.inOut} infinite]',
   bg: 'errorContainer/20',
   borderColor: 'error/20',
   color: 'error',
@@ -61,10 +61,10 @@ export const flexInput = css({
 
 export const chevron = css({
   color: 'onSurfaceVariant',
-  height: '[1.125rem]',
+  height: 'lg',
   transitionDuration: '300',
   transitionProperty: '[color, transform]',
-  width: '[1.125rem]',
+  width: 'lg',
 });
 
 export const chevronOpen = css({
@@ -140,8 +140,8 @@ export const languageTitle = css({
 
 export const languageIcon = css({
   color: 'secondary',
-  height: '[1.125rem]',
-  width: '[1.125rem]',
+  height: 'lg',
+  width: 'lg',
 });
 
 export const hidden = css({

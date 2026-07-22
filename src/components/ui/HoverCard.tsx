@@ -177,7 +177,6 @@ export function HoverCard(props: HoverCardProps) {
           <div
             ref={positionContent}
             class={styles.card}
-            style={{ left: '0', position: 'absolute', top: '0' }}
             onPointerEnter={onContentPointerEnter}
             onPointerLeave={onContentPointerLeave}
           >

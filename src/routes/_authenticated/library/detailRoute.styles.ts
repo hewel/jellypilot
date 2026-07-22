@@ -1,6 +1,6 @@
 import { css } from '@styled-system/css';
 
-const pulse = '[pulse 1.8s cubic-bezier(0.4, 0, 0.6, 1) infinite]';
+const pulse = '[pulse 1.8s {easings.inOut} infinite]';
 
 export const stack = css({
   display: 'grid',
@@ -39,30 +39,8 @@ export const overview = css({
   },
 });
 
-export const pillRow = css({
-  display: 'flex',
-  flexWrap: 'wrap',
-  gap: '2',
-});
-
-export const genre = css({
-  borderColor: 'outlineVariant',
-  borderRadius: 'full',
-  borderStyle: 'solid',
-  borderWidth: '1px',
-  color: 'onSurfaceVariant/90',
-  fontSize: '11',
-  fontWeight: 'bold',
-  letterSpacing: '[0.08em]',
-  lineHeight: '16',
-  px: '3',
-  py: '1',
-  textTransform: 'uppercase',
-});
-
 export const pillButton = css({
   borderRadius: 'full',
-  boxSizing: 'border-box',
   maxWidth: '[100%]',
 });
 
@@ -83,7 +61,7 @@ export const icon6 = css({
 });
 
 export const spinner = css({
-  animation: '[spin 1s linear infinite]',
+  animation: '[spin 1s {easings.linear} infinite]',
 });
 
 export const error = css({
@@ -181,7 +159,7 @@ export const sectionSubtitle = css({
 });
 
 export const fadeList = css({
-  animation: '[fadeIn 0.3s cubic-bezier(0.16, 1, 0.3, 1) forwards]',
+  animation: '[fadeIn 300ms {easings.emphasized} forwards]',
   display: 'flex',
   flexDirection: 'column',
   gap: '3',
@@ -250,7 +228,7 @@ export const episodeFallback = css({
   fontWeight: 'bold',
   height: 'full',
   justifyContent: 'center',
-  letterSpacing: '[0.08em]',
+  letterSpacing: '8',
   lineHeight: '16',
   textTransform: 'uppercase',
 });
@@ -280,7 +258,7 @@ export const episodeLabel = css({
   color: 'secondary',
   fontSize: '11',
   fontWeight: 'bold',
-  letterSpacing: '[0.08em]',
+  letterSpacing: '8',
   lineHeight: '16',
   textTransform: 'uppercase',
 });
@@ -323,7 +301,7 @@ export const episodeButton = css({
   borderRadius: 'full',
   fontSize: '14',
   fontWeight: 'semibold',
-  letterSpacing: '[0]',
+  letterSpacing: '0',
   lineHeight: '20',
   px: '5',
   py: '2',

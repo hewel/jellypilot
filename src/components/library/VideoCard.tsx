@@ -1,3 +1,4 @@
+import { cx } from '@styled-system/css';
 import { Link } from '@tanstack/solid-router';
 import { Check, Film, Heart, Tv } from 'lucide-solid';
 import { Show, createEffect, createSignal } from 'solid-js';
@@ -88,7 +89,7 @@ export function VideoCard(props: VideoCardProps) {
 
   return (
     <Link {...linkTarget()} aria-label={cardAriaLabel()} class={styles.card}>
-      <div class={`${styles.artwork} ${styles.aspect[aspectClass()]}`} data-aspect={aspectClass()}>
+      <div class={cx(styles.artwork, styles.aspect[aspectClass()])} data-aspect={aspectClass()}>
         <Show
           when={!imageFailed() ? artworkImageId() : null}
           fallback={
@@ -151,7 +152,7 @@ function VideoCardSkeleton(props: { aspectClass: VideoCardAspectClass }) {
   return (
     <div class={styles.card} aria-hidden="true">
       <div
-        class={`${styles.artwork} ${styles.aspect[props.aspectClass]} ${styles.skeleton}`}
+        class={cx(styles.artwork, styles.aspect[props.aspectClass], styles.skeleton)}
         data-aspect={props.aspectClass}
       />
       <Show when={props.aspectClass === 'video'}>

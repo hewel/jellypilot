@@ -1,6 +1,6 @@
 import { css } from '@styled-system/css';
 
-const pulse = '[pulse 1.8s cubic-bezier(0.4, 0, 0.6, 1) infinite]';
+const pulse = '[pulse 1.8s {easings.inOut} infinite]';
 
 export const stack = css({
   display: 'grid',

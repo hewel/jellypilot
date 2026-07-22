@@ -1,6 +1,7 @@
 import { Dialog } from '@ark-ui/solid/dialog';
 import { LogOut, ShieldAlert } from 'lucide-solid';
 import { Portal } from 'solid-js/web';
+import * as recipes from '~styles/recipes';
 
 import { Button, Card } from '../ui';
 import * as styles from './SessionCard.styles';
@@ -66,14 +67,14 @@ export default function SessionCard(props: SessionCardProps) {
 
       <Portal>
         <Dialog.Backdrop
-          class={styles.backdrop}
+          class={recipes.scrim({ tone: 'dark', z: '50' })}
           onClick={() => {
             if (!ui.signingOut) {
               actions.setSignOutDialogOpen(false);
             }
           }}
         />
-        <Dialog.Positioner class={`${styles.positioner} ${styles.positionerFill}`}>
+        <Dialog.Positioner class={recipes.modalPositioner({ align: 'center', z: '50' })}>
           <Dialog.Content
             class={styles.content}
             onKeyDown={(event) => {

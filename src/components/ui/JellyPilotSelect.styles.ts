@@ -1,4 +1,4 @@
-import { css, cva, cx } from '@styled-system/css';
+import { css, cva } from '@styled-system/css';
 
 export const label = cva({
   base: {
@@ -7,7 +7,7 @@ export const label = cva({
     fontSize: '12',
     fontWeight: 'bold',
     lineHeight: '16',
-    letterSpacing: '[0.05em]',
+    letterSpacing: '5',
     textTransform: 'uppercase',
   },
   variants: {
@@ -144,5 +144,3 @@ export const truncate = css({
   textOverflow: 'ellipsis',
   whiteSpace: 'nowrap',
 });
-
-export { cx };

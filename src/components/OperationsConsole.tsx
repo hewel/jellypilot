@@ -5,6 +5,7 @@ import { Exit, Option } from 'effect';
 import { X } from 'lucide-solid';
 import { Show, createEffect, createSignal } from 'solid-js';
 import { Portal } from 'solid-js/web';
+import * as recipes from '~styles/recipes';
 
 import type { AppConfig, IntroSkipperMode } from '../bindings';
 import { commandFailureMessage } from '../effects/commands';
@@ -620,11 +621,11 @@ export default function OperationsConsole(props: OperationsConsoleProps) {
         unmountOnExit
       >
         <Portal mount={addServicePortalMount()}>
-          <Dialog.Backdrop class={styles.backdrop} />
-          <Dialog.Positioner class={`${styles.positioner} ${styles.positionerFill}`}>
+          <Dialog.Backdrop class={recipes.scrim({ tone: 'dark', z: '60' })} />
+          <Dialog.Positioner class={styles.positioner}>
             <Dialog.Content class={styles.content}>
-              <Dialog.Title class={styles.srOnly}>Add saved service</Dialog.Title>
-              <Dialog.Description class={styles.srOnly}>
+              <Dialog.Title class={recipes.srOnly}>Add saved service</Dialog.Title>
+              <Dialog.Description class={recipes.srOnly}>
                 Log in to a Jellyfin or Emby service and save it for switching.
               </Dialog.Description>
               <Button

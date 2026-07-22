@@ -1,6 +1,6 @@
 import { css } from '@styled-system/css';
 
-const pulse = '[pulse 1.8s cubic-bezier(0.4, 0, 0.6, 1) infinite]';
+const pulse = '[pulse 1.8s {easings.inOut} infinite]';
 
 const titleClamp = {
   display: '[-webkit-box]',
@@ -55,7 +55,7 @@ export const fallback = css({
   gap: '2',
   height: 'full',
   justifyContent: 'center',
-  letterSpacing: '[0.08em]',
+  letterSpacing: '8',
   lineHeight: '16',
   px: '4',
   textAlign: 'center',
