@@ -2,6 +2,10 @@ import { css, cva } from '@styled-system/css';
 
 export const nav = cva({
   base: {
+    '&[data-wiping]': {
+      bg: '[transparent]',
+      borderRightColor: '[transparent]',
+    },
     bg: 'surfaceContainerLow',
     borderRightColor: 'outlineVariant/40',
     borderRightStyle: 'solid',
@@ -16,10 +20,8 @@ export const nav = cva({
     px: '2',
     py: '2',
     top: '0',
-    transitionDuration: '300',
-    transitionProperty: '[width]',
-    transitionTimingFunction: 'emphasized',
     width: '[4rem]',
+    zIndex: '40',
     lg: {
       width: '[16rem]',
     },
@@ -37,6 +39,10 @@ export const nav = cva({
 
 export const sectionLabel = cva({
   base: {
+    _motionReduce: {
+      animation: '[none]',
+    },
+    animation: '[sidebarLabelIn 150ms {easings.standard} both]',
     color: 'onSurfaceVariant',
     display: 'none',
     fontSize: '11',
@@ -148,6 +154,10 @@ export const itemThumb = css({
 
 export const itemLabel = cva({
   base: {
+    _motionReduce: {
+      animation: '[none]',
+    },
+    animation: '[sidebarLabelIn 150ms {easings.standard} both]',
     display: 'none',
     fontSize: '14',
     lineHeight: '20',
@@ -209,12 +219,20 @@ export const collapseToggle = cva({
 });
 
 export const collapseToggleIcon = css({
+  _motionReduce: {
+    animation: '[none]',
+  },
+  animation: '[iconSwapIn 200ms {easings.standard} both]',
   height: '5',
   width: '5',
 });
 
 export const collapseToggleLabel = cva({
   base: {
+    _motionReduce: {
+      animation: '[none]',
+    },
+    animation: '[sidebarLabelIn 150ms {easings.standard} both]',
     display: 'none',
     fontSize: '14',
     lineHeight: '20',

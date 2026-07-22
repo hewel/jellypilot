@@ -1,6 +1,8 @@
 import { createQuery } from '@tanstack/solid-query';
 import { Outlet } from '@tanstack/solid-router';
 import { Exit } from 'effect';
+import { Show } from 'solid-js';
+import { createSidebarWipe } from '~utils/sidebarWipe';
 
 import { fetchConnectionState } from '../effects/connection';
 import { queryKeys, runExit } from '../effects/query';
@@ -16,12 +18,24 @@ export default function AuthenticatedShell() {
     connectionQuery.data && Exit.isSuccess(connectionQuery.data)
       ? connectionQuery.data.value.connected
       : false;
+  const { wipe } = createSidebarWipe();
 
   return (
     <div class={styles.shell}>
       <AppSidebar jellyfinConnected={jellyfinConnected()} />
-      <main class={styles.main}>
-        <Outlet />
+      <Show when={wipe()} keyed>
+        {(direction) => (
+          <div
+            aria-hidden="true"
+            data-testid="sidebar-wipe"
+            class={styles.sidebarWipe({ direction })}
+          />
+        )}
+      </Show>
+      <main class={styles.main({ glide: wipe() ?? undefined })}>
+        <div class={styles.enter}>
+          <Outlet />
+        </div>
       </main>
     </div>
   );

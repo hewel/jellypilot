@@ -118,6 +118,30 @@ export default defineConfig({
         from: { opacity: '0', transform: 'translateY(-4px) scale(0.98)' },
         to: { opacity: '1', transform: 'translateY(0) scale(1)' },
       },
+      sidebarLabelIn: {
+        from: { opacity: '0', transform: 'translateX(-4px)' },
+        to: { opacity: '1', transform: 'translateX(0)' },
+      },
+      iconSwapIn: {
+        from: { opacity: '0', transform: 'scale(0.25)', filter: 'blur(4px)' },
+        to: { opacity: '1', transform: 'scale(1)', filter: 'blur(0)' },
+      },
+      sidebarWipeExpand: {
+        from: { transform: 'scaleX(0.28125)' },
+        to: { transform: 'scaleX(1)' },
+      },
+      sidebarWipeCollapse: {
+        from: { transform: 'scaleX(1)' },
+        to: { transform: 'scaleX(0.28125)' },
+      },
+      sidebarGlideExpand: {
+        from: { transform: 'translateX(-11.5rem)' },
+        to: { transform: 'translateX(0)' },
+      },
+      sidebarGlideCollapse: {
+        from: { transform: 'translateX(11.5rem)' },
+        to: { transform: 'translateX(0)' },
+      },
     },
     tokens: {
       colors: rawColorTokens,

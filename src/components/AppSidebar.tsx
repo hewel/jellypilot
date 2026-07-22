@@ -14,6 +14,7 @@ import {
 } from '~effects/query';
 import { imageSource } from '~utils/imageSource';
 import { createSidebarPreferences } from '~utils/sidebarPreferences';
+import { createSidebarWipe, startSidebarWipe } from '~utils/sidebarWipe';
 
 import * as styles from './AppSidebar.styles';
 import NowPlayingDrawer from './NowPlayingDrawer';
@@ -34,6 +35,7 @@ interface SidebarItem {
 
 export default function AppSidebar(props: AppSidebarProps) {
   const { collapsed, setCollapsed } = createSidebarPreferences();
+  const { wipe } = createSidebarWipe();
   const connectionQuery = createQuery(() => ({
     queryKey: queryKeys.connectionState,
     queryFn: () => runExit(fetchConnectionState),
@@ -97,7 +99,11 @@ export default function AppSidebar(props: AppSidebarProps) {
   ];
 
   return (
-    <nav aria-label="Sidebar" class={styles.nav({ collapsed: collapsed() })}>
+    <nav
+      aria-label="Sidebar"
+      class={styles.nav({ collapsed: collapsed() })}
+      data-wiping={wipe() === null ? undefined : 'true'}
+    >
       <div class={styles.header}>
         <Button
           type="button"
@@ -105,7 +111,11 @@ export default function AppSidebar(props: AppSidebarProps) {
           size="row"
           aria-label={collapsed() ? 'Expand sidebar' : 'Collapse sidebar'}
           aria-expanded={!collapsed()}
-          onClick={() => setCollapsed((value) => !value)}
+          onClick={() => {
+            const next = !collapsed();
+            setCollapsed(next);
+            startSidebarWipe(next);
+          }}
           class={styles.collapseToggle({ collapsed: collapsed() })}
         >
           <Show when={collapsed()} fallback={<PanelLeftClose class={styles.collapseToggleIcon} />}>

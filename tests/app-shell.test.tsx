@@ -23,6 +23,7 @@ import { createJellyPilotRouter } from '../src/router';
 import { resetSharedLibraryFilters } from '../src/utils/createSharedLibraryFilters';
 import { imageSource } from '../src/utils/imageSource';
 import { resetSidebarPreferences } from '../src/utils/sidebarPreferences';
+import { resetSidebarWipe } from '../src/utils/sidebarWipe';
 import { createTestQueryClient, TestQueryProvider } from './query-client';
 
 type LibraryItemDetailResult =
@@ -635,6 +636,7 @@ beforeEach(async () => {
   await new Promise((resolve) => setTimeout(resolve, 0));
   resetSharedLibraryFilters();
   resetSidebarPreferences();
+  resetSidebarWipe();
   window.__TEST_TAURI_STORE__.reset();
 });
 
@@ -645,6 +647,7 @@ afterEach(() => {
   rstest.restoreAllMocks();
   resetSharedLibraryFilters();
   resetSidebarPreferences();
+  resetSidebarWipe();
   document.body.innerHTML = '';
   localStorage.clear();
   sessionStorage.clear();
@@ -711,6 +714,27 @@ test('Sidebar collapse toggle collapses the rail and persists the preference', a
   await waitFor(() =>
     expect(window.__TEST_TAURI_STORE__.get('preferences.json', 'sidebar_collapsed')).toBe(false),
   );
+
+  cleanup();
+});
+
+test('Sidebar collapse plays the wipe overlay and clears it after the animation', async () => {
+  mockShellCommands();
+  const cleanup = renderShell('/library');
+
+  const toggle = await screen.findByRole('button', { name: 'Collapse sidebar' });
+  expect(screen.queryByTestId('sidebar-wipe')).toBeNull();
+
+  fireEvent.click(toggle);
+
+  expect(await screen.findByTestId('sidebar-wipe')).toBeVisible();
+  expect(screen.getByRole('navigation', { name: 'Sidebar' })).toHaveAttribute(
+    'data-wiping',
+    'true',
+  );
+
+  await waitFor(() => expect(screen.queryByTestId('sidebar-wipe')).toBeNull());
+  expect(screen.getByRole('navigation', { name: 'Sidebar' })).not.toHaveAttribute('data-wiping');
 
   cleanup();
 });
