@@ -1,6 +1,6 @@
 import type { VideoLibraryShortcut } from '@bindings';
 import { createQuery } from '@tanstack/solid-query';
-import { Link, useLocation } from '@tanstack/solid-router';
+import { Link, useLocation, useParams } from '@tanstack/solid-router';
 import { Exit } from 'effect';
 import { Film, House, PanelLeftClose, PanelLeftOpen, Tv } from 'lucide-solid';
 import { For, Show, createEffect, createMemo, createSignal, type JSX } from 'solid-js';
@@ -25,10 +25,11 @@ export interface AppSidebarProps {
   jellyfinConnected: boolean;
 }
 
-interface SidebarItem {
+interface SidebarShortcutItem {
   value: string;
   label: string;
-  target: string;
+  collectionType: string;
+  libraryId: string;
   icon: JSX.Element;
   artworkImageId: string | null;
 }
@@ -52,12 +53,14 @@ export default function AppSidebar(props: AppSidebarProps) {
 
   const pathname = useLocation({ select: (location) => location.pathname });
   const normalizedPathname = createMemo(() => pathname().replace(/\/$/, '') || '/');
-  const browsePathMatch = createMemo(() =>
-    /^\/library\/(movies|tvshows)\/([^/]+)$/.exec(normalizedPathname()),
-  );
-  const detailItemId = createMemo(
-    () => /^\/library\/(?:items|shows)\/([^/]+)$/.exec(normalizedPathname())?.[1] ?? null,
-  );
+  const routeParams = useParams({ strict: false });
+  const browseParams = createMemo(() => {
+    const { collectionType, libraryId } = routeParams();
+    return collectionType !== undefined && libraryId !== undefined
+      ? { collectionType, libraryId }
+      : null;
+  });
+  const detailItemId = createMemo(() => routeParams().itemId ?? routeParams().seriesId ?? null);
   const itemShortcutQuery = createQuery(() => ({
     queryKey: queryKeys.libraryItemShortcut(sessionKey(), detailItemId() ?? ''),
     enabled: isLibrarySessionKeyConnected(sessionKey()) && detailItemId() !== null,
@@ -70,24 +73,18 @@ export default function AppSidebar(props: AppSidebarProps) {
 
   const activeValue = createMemo((): string | null => {
     if (normalizedPathname() === '/library') return 'home';
-    const browse = browsePathMatch();
-    if (browse) return `${browse[1]}:${browse[2]}`;
+    const browse = browseParams();
+    if (browse) return `${browse.collectionType}:${browse.libraryId}`;
     const shortcut = detailShortcut();
     return shortcut ? `${shortcut.collectionType}:${shortcut.id}` : null;
   });
 
-  const items = (): SidebarItem[] => [
-    {
-      value: 'home',
-      label: 'Home',
-      target: '/library',
-      icon: <House class={styles.itemIcon} />,
-      artworkImageId: null,
-    },
-    ...shortcuts().map((shortcut: VideoLibraryShortcut) => ({
+  const shortcutItems = (): SidebarShortcutItem[] =>
+    shortcuts().map((shortcut: VideoLibraryShortcut) => ({
       value: `${shortcut.collectionType}:${shortcut.id}`,
       label: shortcut.name,
-      target: `/library/${shortcut.collectionType}/${shortcut.id}`,
+      collectionType: shortcut.collectionType,
+      libraryId: shortcut.id,
       artworkImageId: shortcut.artworkImageId,
       icon:
         shortcut.collectionType === 'tvshows' ? (
@@ -95,8 +92,7 @@ export default function AppSidebar(props: AppSidebarProps) {
         ) : (
           <Film class={styles.itemIcon} />
         ),
-    })),
-  ];
+    }));
 
   return (
     <nav
@@ -130,11 +126,27 @@ export default function AppSidebar(props: AppSidebarProps) {
       </div>
       <p class={styles.sectionLabel({ collapsed: collapsed() })}>Library</p>
       <ul class={styles.list}>
-        <For each={items()}>
+        <li>
+          <Link
+            to="/library"
+            activeOptions={{ exact: true, includeSearch: false, includeHash: false }}
+            class={styles.item({ collapsed: collapsed() })}
+            data-active={activeValue() === 'home' ? '' : undefined}
+            aria-current={activeValue() === 'home' ? 'page' : undefined}
+          >
+            <SidebarItemThumb
+              artworkImageId={null}
+              fallbackIcon={<House class={styles.itemIcon} />}
+            />
+            <span class={styles.itemLabel({ collapsed: collapsed() })}>Home</span>
+          </Link>
+        </li>
+        <For each={shortcutItems()}>
           {(item) => (
             <li>
               <Link
-                to={item.target}
+                to="/library/$collectionType/$libraryId"
+                params={{ collectionType: item.collectionType, libraryId: item.libraryId }}
                 activeOptions={{ exact: true, includeSearch: false, includeHash: false }}
                 class={styles.item({ collapsed: collapsed() })}
                 data-active={activeValue() === item.value ? '' : undefined}

@@ -10,7 +10,6 @@
 
 import { Route as rootRouteImport } from './routes/__root'
 import { Route as LoginRouteImport } from './routes/login'
-import { Route as ConsoleRouteImport } from './routes/console'
 import { Route as AuthenticatedRouteImport } from './routes/_authenticated'
 import { Route as IndexRouteImport } from './routes/index'
 import { Route as AuthenticatedLibraryRouteImport } from './routes/_authenticated/library'
@@ -22,11 +21,6 @@ import { Route as AuthenticatedLibraryCollectionTypeLibraryIdRouteImport } from 
 const LoginRoute = LoginRouteImport.update({
   id: '/login',
   path: '/login',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const ConsoleRoute = ConsoleRouteImport.update({
-  id: '/console',
-  path: '/console',
   getParentRoute: () => rootRouteImport,
 } as any)
 const AuthenticatedRoute = AuthenticatedRouteImport.update({
@@ -70,7 +64,6 @@ const AuthenticatedLibraryCollectionTypeLibraryIdRoute =
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
-  '/console': typeof ConsoleRoute
   '/login': typeof LoginRoute
   '/library': typeof AuthenticatedLibraryRouteWithChildren
   '/library/': typeof AuthenticatedLibraryIndexRoute
@@ -80,7 +73,6 @@ export interface FileRoutesByFullPath {
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
-  '/console': typeof ConsoleRoute
   '/login': typeof LoginRoute
   '/library': typeof AuthenticatedLibraryIndexRoute
   '/library/$collectionType/$libraryId': typeof AuthenticatedLibraryCollectionTypeLibraryIdRoute
@@ -91,7 +83,6 @@ export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/': typeof IndexRoute
   '/_authenticated': typeof AuthenticatedRouteWithChildren
-  '/console': typeof ConsoleRoute
   '/login': typeof LoginRoute
   '/_authenticated/library': typeof AuthenticatedLibraryRouteWithChildren
   '/_authenticated/library/': typeof AuthenticatedLibraryIndexRoute
@@ -103,7 +94,6 @@ export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
   fullPaths:
     | '/'
-    | '/console'
     | '/login'
     | '/library'
     | '/library/'
@@ -113,7 +103,6 @@ export interface FileRouteTypes {
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/'
-    | '/console'
     | '/login'
     | '/library'
     | '/library/$collectionType/$libraryId'
@@ -123,7 +112,6 @@ export interface FileRouteTypes {
     | '__root__'
     | '/'
     | '/_authenticated'
-    | '/console'
     | '/login'
     | '/_authenticated/library'
     | '/_authenticated/library/'
@@ -135,7 +123,6 @@ export interface FileRouteTypes {
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
   AuthenticatedRoute: typeof AuthenticatedRouteWithChildren
-  ConsoleRoute: typeof ConsoleRoute
   LoginRoute: typeof LoginRoute
 }
 
@@ -146,13 +133,6 @@ declare module '@tanstack/solid-router' {
       path: '/login'
       fullPath: '/login'
       preLoaderRoute: typeof LoginRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/console': {
-      id: '/console'
-      path: '/console'
-      fullPath: '/console'
-      preLoaderRoute: typeof ConsoleRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/_authenticated': {
@@ -241,7 +221,6 @@ const AuthenticatedRouteWithChildren = AuthenticatedRoute._addFileChildren(
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
   AuthenticatedRoute: AuthenticatedRouteWithChildren,
-  ConsoleRoute: ConsoleRoute,
   LoginRoute: LoginRoute,
 }
 export const routeTree = rootRouteImport

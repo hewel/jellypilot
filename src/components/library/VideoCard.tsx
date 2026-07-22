@@ -46,14 +46,10 @@ export function VideoCard(props: VideoCardProps) {
     return <VideoCardSkeleton aspectClass={aspectClass()} />;
   }
 
-  const href = () => {
-    if (props.kind === 'home') {
-      return `/library/items/${props.item.id}`;
-    }
-    return props.item.itemType === 'Series'
-      ? `/library/shows/${props.item.id}`
-      : `/library/items/${props.item.id}`;
-  };
+  const linkTarget = () =>
+    props.kind === 'library' && props.item.itemType === 'Series'
+      ? ({ to: '/library/shows/$seriesId', params: { seriesId: props.item.id } } as const)
+      : ({ to: '/library/items/$itemId', params: { itemId: props.item.id } } as const);
 
   const subtitle = () => {
     if (props.kind === 'home') {
@@ -91,7 +87,7 @@ export function VideoCard(props: VideoCardProps) {
   const isPoster = () => aspectClass() === 'poster';
 
   return (
-    <Link to={href()} aria-label={cardAriaLabel()} class={styles.card}>
+    <Link {...linkTarget()} aria-label={cardAriaLabel()} class={styles.card}>
       <div class={`${styles.artwork} ${styles.aspect[aspectClass()]}`} data-aspect={aspectClass()}>
         <Show
           when={!imageFailed() ? artworkImageId() : null}

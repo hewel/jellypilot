@@ -11,7 +11,7 @@ import {
 import { VideoCard } from '@components/library/VideoCard';
 import { Button } from '@components/ui';
 import { createInfiniteQuery, createQuery, useQueryClient } from '@tanstack/solid-query';
-import { createFileRoute, useNavigate } from '@tanstack/solid-router';
+import { createFileRoute, redirect, useNavigate } from '@tanstack/solid-router';
 import { createVirtualizer, observeElementRect } from '@tanstack/solid-virtual';
 import { Exit } from 'effect';
 import {
@@ -42,6 +42,7 @@ import {
   libraryBrowseVirtualRowHeight,
 } from '~utils/libraryBrowseLayout';
 
+import { AUTHENTICATED_HOME_ROUTE } from '../../../../router-guards';
 import * as styles from '../browseRoute.styles';
 
 const LIBRARY_BROWSE_SKELETON_CARD_KEYS = Array.from({ length: 10 }, (_, index) => index);
@@ -58,6 +59,11 @@ function collectionTypeFromParam(collectionType: string): VideoLibraryKind {
 }
 
 export const Route = createFileRoute('/_authenticated/library/$collectionType/$libraryId')({
+  beforeLoad: ({ params }) => {
+    if (params.collectionType !== 'movies' && params.collectionType !== 'tvshows') {
+      throw redirect({ to: AUTHENTICATED_HOME_ROUTE });
+    }
+  },
   component: LibraryBrowseRoute,
 });
 
@@ -109,7 +115,7 @@ function LibraryBrowseRoute() {
     if (currentSessionSignature === null) {
       if (mountedSessionSignature !== null) {
         setRedirectingForSessionChange(true);
-        void navigate({ to: '/library', replace: true });
+        void navigate({ to: AUTHENTICATED_HOME_ROUTE, replace: true });
       }
       return;
     }
@@ -121,7 +127,7 @@ function LibraryBrowseRoute() {
 
     if (mountedSessionSignature !== currentSessionSignature) {
       setRedirectingForSessionChange(true);
-      void navigate({ to: '/library', replace: true });
+      void navigate({ to: AUTHENTICATED_HOME_ROUTE, replace: true });
     }
   });
 

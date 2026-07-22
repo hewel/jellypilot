@@ -16,13 +16,6 @@ export async function requireAuthenticatedShell() {
   }
 }
 
-export async function redirectLegacyConsoleRoute() {
-  if (!(await canAccessConsole())) {
-    throw redirect({ to: '/login' });
-  }
-  throw redirect({ to: AUTHENTICATED_HOME_ROUTE });
-}
-
 export async function redirectRootRoute() {
   if (await checkAuthWithRestore()) {
     throw redirect({ to: AUTHENTICATED_HOME_ROUTE });

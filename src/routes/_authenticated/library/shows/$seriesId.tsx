@@ -49,6 +49,7 @@ import {
 } from '~effects/query';
 import { imageSource } from '~utils/imageSource';
 
+import { AUTHENTICATED_HOME_ROUTE } from '../../../../router-guards';
 import * as styles from '../detailRoute.styles';
 
 export const Route = createFileRoute('/_authenticated/library/shows/$seriesId')({
@@ -91,7 +92,7 @@ function LibraryShowDetailRoute() {
       return;
     }
 
-    void navigate({ to: '/library' });
+    void navigate({ to: AUTHENTICATED_HOME_ROUTE });
   };
   const detail = () =>
     showQuery.data && Exit.isSuccess(showQuery.data) ? showQuery.data.value : null;

@@ -1,10 +1,10 @@
 import { afterEach, expect, rstest, test } from '@rstest/core';
+import { createMemoryHistory } from '@tanstack/solid-router';
 
 import { commands } from '../src/bindings';
 import type { SavedServiceProfiles } from '../src/bindings';
 import {
   createJellyPilotRouter,
-  redirectLegacyConsoleRoute,
   redirectLoggedInUsersToLibrary,
   redirectRootRoute,
   requireAuthenticatedShell,
@@ -60,12 +60,6 @@ test('root guard restores the active saved service profile into Library', async 
   expect(activate).toHaveBeenCalledWith(sampleProfiles.activeProfileKey);
 });
 
-test('legacy console redirects authenticated users to Library', async () => {
-  rstest.spyOn(commands, 'serverIsConnected').mockResolvedValue(true);
-
-  await expectRedirect(redirectLegacyConsoleRoute, '/library');
-});
-
 test('shell guard redirects unauthenticated users to Login', async () => {
   rstest.spyOn(commands, 'serverIsConnected').mockResolvedValue(false);
   rstest.spyOn(commands, 'serverProfilesGet').mockResolvedValue({
@@ -76,9 +70,21 @@ test('shell guard redirects unauthenticated users to Login', async () => {
   await expectRedirect(requireAuthenticatedShell, '/login');
 });
 
-test('removed Settings and Diagnostics routes are absent from the router', () => {
+test('browse route redirects unknown collection types to Library', async () => {
+  rstest.spyOn(commands, 'serverIsConnected').mockResolvedValue(true);
+  const router = createJellyPilotRouter(
+    createMemoryHistory({ initialEntries: ['/library/books/abc'] }),
+  );
+
+  await router.load();
+
+  expect(router.state.location.pathname).toBe('/library');
+});
+
+test('removed Settings, Diagnostics, and Console routes are absent from the router', () => {
   const router = createJellyPilotRouter();
 
   expect(router.routesById['/_authenticated/settings']).toBeUndefined();
   expect(router.routesById['/_authenticated/diagnostics']).toBeUndefined();
+  expect(router.routesById['/console']).toBeUndefined();
 });

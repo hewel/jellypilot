@@ -4,7 +4,6 @@ import type { RouterHistory } from '@tanstack/solid-router';
 import { routeTree } from './routeTree.gen';
 
 export {
-  redirectLegacyConsoleRoute,
   redirectLoggedInUsersToLibrary,
   redirectRootRoute,
   requireAuthenticatedShell,
