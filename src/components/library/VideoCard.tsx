@@ -87,6 +87,8 @@ export function VideoCard(props: VideoCardProps) {
     setImageFailed(false);
   });
 
+  const isPoster = () => aspectClass() === 'poster';
+
   return (
     <a href={href()} aria-label={cardAriaLabel()} class={styles.card}>
       <div class={`${styles.artwork} ${styles.aspect[aspectClass()]}`} data-aspect={aspectClass()}>
@@ -119,18 +121,31 @@ export function VideoCard(props: VideoCardProps) {
             <Heart class={styles.favoriteIcon} fill="currentColor" aria-hidden="true" />
           </span>
         </Show>
-      </div>
-      <div class={styles.body}>
-        <div class={styles.copy}>
-          <p class={styles.title}>{props.item.name}</p>
-          <p class={styles.subtitle}>{subtitle()}</p>
-        </div>
-        <Show when={props.item.played}>
-          <span class={styles.playedBadge} role="img" aria-label="Played">
-            <Check class={styles.playedIcon} aria-hidden="true" />
-          </span>
+        <Show when={isPoster()}>
+          <Show when={props.item.played}>
+            <span class={styles.overlayPlayedBadge} role="img" aria-label="Played">
+              <Check class={styles.playedIcon} aria-hidden="true" />
+            </span>
+          </Show>
+          <div class={styles.overlay}>
+            <p class={styles.title}>{props.item.name}</p>
+            <p class={styles.subtitle}>{subtitle()}</p>
+          </div>
         </Show>
       </div>
+      <Show when={!isPoster()}>
+        <div class={styles.body}>
+          <div class={styles.copy}>
+            <p class={styles.title}>{props.item.name}</p>
+            <p class={styles.subtitle}>{subtitle()}</p>
+          </div>
+          <Show when={props.item.played}>
+            <span class={styles.playedBadge} role="img" aria-label="Played">
+              <Check class={styles.playedIcon} aria-hidden="true" />
+            </span>
+          </Show>
+        </div>
+      </Show>
     </a>
   );
 }
@@ -142,10 +157,12 @@ function VideoCardSkeleton(props: { aspectClass: VideoCardAspectClass }) {
         class={`${styles.artwork} ${styles.aspect[props.aspectClass]} ${styles.skeleton}`}
         data-aspect={props.aspectClass}
       />
-      <div class={styles.skeletonBody}>
-        <div class={styles.skeletonTitle} />
-        <div class={styles.skeletonSubtitle} />
-      </div>
+      <Show when={props.aspectClass === 'video'}>
+        <div class={styles.skeletonBody}>
+          <div class={styles.skeletonTitle} />
+          <div class={styles.skeletonSubtitle} />
+        </div>
+      </Show>
     </div>
   );
 }

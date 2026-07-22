@@ -36,9 +36,6 @@ export const card = css({
 
 export const artwork = css({
   bg: 'surfaceContainerLowest',
-  borderBottomColor: 'outlineVariant',
-  borderBottomStyle: 'solid',
-  borderBottomWidth: '1px',
   overflow: 'hidden',
   position: 'relative',
 });
@@ -78,6 +75,35 @@ export const image = css({
   width: 'full',
 });
 
+export const overlay = css({
+  backgroundImage:
+    '[linear-gradient(to top, {colors.surface} 0%, color-mix(in srgb, {colors.surface} 80%, transparent) 55%, transparent 100%)]',
+  bottom: '0',
+  display: 'grid',
+  gap: '0_5',
+  left: '0',
+  pb: '2_5',
+  position: 'absolute',
+  pt: '10',
+  px: '3',
+  right: '0',
+});
+
+export const overlayPlayedBadge = css({
+  alignItems: 'center',
+  bg: 'tertiary',
+  borderRadius: 'full',
+  boxShadow: 'lg',
+  color: 'onTertiary',
+  display: 'inline-flex',
+  height: '7',
+  justifyContent: 'center',
+  left: '2',
+  position: 'absolute',
+  top: '2',
+  width: '7',
+});
+
 export const favoriteBadge = css({
   alignItems: 'center',
   bg: 'secondary',
@@ -100,6 +126,9 @@ export const favoriteIcon = css({
 
 export const body = css({
   alignItems: 'center',
+  borderTopColor: 'outlineVariant',
+  borderTopStyle: 'solid',
+  borderTopWidth: '1px',
   display: 'flex',
   gap: '2',
   pb: '3',

@@ -18,10 +18,10 @@ export function libraryBrowseColumnCount(width: number): number {
 }
 
 export const LIBRARY_BROWSE_CARD_ASPECT_RATIO = 1.5;
-// Card chrome around the artwork, in px: 1px card top border + 64px body
-// (8px pt + 24px title + 4px gap + 16px subtitle + 12px pb) + 1px card bottom border.
-// Mirrors VideoCard.styles.ts body/aspect values; update when the card styles change.
-export const LIBRARY_BROWSE_CARD_CHROME_HEIGHT_PX = 66;
+// Card chrome around the artwork, in px: 1px card top border + 1px card bottom border.
+// Poster cards overlay their text on the artwork, so there is no body block.
+// Mirrors VideoCard.styles.ts; update when the card styles change.
+export const LIBRARY_BROWSE_CARD_CHROME_HEIGHT_PX = 2;
 // Card left + right 1px borders shrink the artwork below the grid track width.
 const LIBRARY_BROWSE_CARD_SIDE_BORDERS_PX = 2;
 

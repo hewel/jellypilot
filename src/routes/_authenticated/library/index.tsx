@@ -88,10 +88,12 @@ function VideoHomeSkeleton() {
                     <div
                       class={`${styles.skeletonArtwork} ${styles.skeletonAspect[row.aspectClass]}`}
                     />
-                    <div class={styles.skeletonBody}>
-                      <div class={styles.skeletonLine.title} />
-                      <div class={styles.skeletonLine.subtitle} />
-                    </div>
+                    <Show when={row.aspectClass === 'video'}>
+                      <div class={styles.skeletonBody}>
+                        <div class={styles.skeletonLine.title} />
+                        <div class={styles.skeletonLine.subtitle} />
+                      </div>
+                    </Show>
                   </Card>
                 )}
               </For>
