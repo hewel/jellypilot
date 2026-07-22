@@ -22,7 +22,8 @@ export const skeletonTitle = css({
 
 export const skeletonGrid = css({
   display: 'grid',
-  gap: '3',
+  columnGap: '3',
+  rowGap: '4',
   sm: {
     gridTemplateColumns: '[repeat(3, minmax(0, 1fr))]',
   },

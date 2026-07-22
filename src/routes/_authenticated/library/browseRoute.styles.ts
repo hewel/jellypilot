@@ -25,7 +25,8 @@ export const toolbarCount = css({
 
 export const grid = css({
   display: 'grid',
-  gap: '3',
+  columnGap: '3',
+  rowGap: '4',
   gridTemplateColumns: '[repeat(auto-fill, minmax(min(100%, 160px), 1fr))]',
 });
 

@@ -1,5 +1,7 @@
 export const LIBRARY_BROWSE_MIN_CARD_WIDTH_PX = 160;
-export const LIBRARY_BROWSE_GRID_GAP_PX = 12;
+// Mirrors browseRoute.styles.ts grid: columnGap '3' (12px), rowGap '4' (16px).
+export const LIBRARY_BROWSE_GRID_COLUMN_GAP_PX = 12;
+export const LIBRARY_BROWSE_GRID_ROW_GAP_PX = 16;
 export const LIBRARY_BROWSE_GRID_TEMPLATE_COLUMNS =
   'repeat(auto-fill, minmax(min(100%, 160px), 1fr))';
 
@@ -11,8 +13,8 @@ export function libraryBrowseColumnCount(width: number): number {
   return Math.max(
     1,
     Math.floor(
-      (width + LIBRARY_BROWSE_GRID_GAP_PX) /
-        (LIBRARY_BROWSE_MIN_CARD_WIDTH_PX + LIBRARY_BROWSE_GRID_GAP_PX),
+      (width + LIBRARY_BROWSE_GRID_COLUMN_GAP_PX) /
+        (LIBRARY_BROWSE_MIN_CARD_WIDTH_PX + LIBRARY_BROWSE_GRID_COLUMN_GAP_PX),
     ),
   );
 }
@@ -29,10 +31,10 @@ export function libraryBrowseVirtualRowHeight(width: number): number {
   const columns = libraryBrowseColumnCount(width);
   const usableWidth =
     Number.isFinite(width) && width > 0 ? width : LIBRARY_BROWSE_MIN_CARD_WIDTH_PX;
-  const cardWidth = (usableWidth - LIBRARY_BROWSE_GRID_GAP_PX * (columns - 1)) / columns;
+  const cardWidth = (usableWidth - LIBRARY_BROWSE_GRID_COLUMN_GAP_PX * (columns - 1)) / columns;
   return Math.ceil(
     (cardWidth - LIBRARY_BROWSE_CARD_SIDE_BORDERS_PX) * LIBRARY_BROWSE_CARD_ASPECT_RATIO +
       LIBRARY_BROWSE_CARD_CHROME_HEIGHT_PX +
-      LIBRARY_BROWSE_GRID_GAP_PX,
+      LIBRARY_BROWSE_GRID_ROW_GAP_PX,
   );
 }

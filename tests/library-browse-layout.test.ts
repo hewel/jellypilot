@@ -23,12 +23,12 @@ test('library browse grid preserves empty tracks so the last row does not stretc
 });
 
 test('library browse virtual row height matches rendered card height plus one grid gap', () => {
-  expect(libraryBrowseVirtualRowHeight(1280)).toBe(270);
-  expect(libraryBrowseVirtualRowHeight(800)).toBe(298);
-  expect(libraryBrowseVirtualRowHeight(360)).toBe(272);
+  expect(libraryBrowseVirtualRowHeight(1280)).toBe(274);
+  expect(libraryBrowseVirtualRowHeight(800)).toBe(302);
+  expect(libraryBrowseVirtualRowHeight(360)).toBe(276);
 });
 
 test('library browse virtual row height falls back to the minimum card width for unknown widths', () => {
-  expect(libraryBrowseVirtualRowHeight(0)).toBe(251);
-  expect(libraryBrowseVirtualRowHeight(Number.NaN)).toBe(251);
+  expect(libraryBrowseVirtualRowHeight(0)).toBe(255);
+  expect(libraryBrowseVirtualRowHeight(Number.NaN)).toBe(255);
 });
