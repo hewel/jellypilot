@@ -1,7 +1,7 @@
 {
   "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
   "productName": "JellyPilot",
-  "version": "1.4.1",
+  "version": "1.4.2",
   "identifier": "top.pigfun.jellypilot",
   "build": {
     "frontendDist": "../dist",

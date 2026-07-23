@@ -2015,7 +2015,7 @@ dependencies = [
 
 [[package]]
 name = "jellypilot"
-version = "1.4.1"
+version = "1.4.2"
 dependencies = [
  "async-channel",
  "base64 0.22.1",

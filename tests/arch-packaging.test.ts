@@ -10,7 +10,7 @@ test('release workflow builds a source-based Arch package with desktop integrati
   const releaseWorkflow = readText('.github/workflows/release.yml');
 
   expect(pkgbuild).toContain('pkgname=jellypilot');
-  expect(pkgbuild).toContain('pkgver=1.4.1');
+  expect(pkgbuild).toContain('pkgver=1.4.2');
   expect(pkgbuild).toContain("options=('!lto')");
   expect(pkgbuild).toContain('"git+https://github.com/hewel/jellypilot.git#tag=v$pkgver"');
   expect(pkgbuild).toContain("'top.pigfun.jellypilot.desktop'");
