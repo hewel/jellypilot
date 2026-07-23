@@ -145,7 +145,6 @@ export const controlCapsule = css({
 
 export const controlDivider = css({
   bg: 'outlineVariant',
-  my: '1_5',
   width: '[1px]',
 });
 
@@ -153,7 +152,7 @@ export const directionToggle = css({
   alignItems: 'center',
   bg: '[transparent]',
   border: '[0]',
-  borderRadius: 'full',
+  roundedLeft: 'full',
   color: 'onSurfaceVariant',
   cursor: 'pointer',
   display: 'inline-flex',
@@ -183,7 +182,7 @@ export const sortTrigger = css({
   alignItems: 'center',
   bg: '[transparent]',
   border: '[0]',
-  borderRadius: 'full',
+  roundedRight: 'full',
   color: 'onSurface',
   cursor: 'pointer',
   display: 'inline-flex',

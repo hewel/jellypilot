@@ -23,7 +23,12 @@ export default function AuthenticatedShell() {
   const { wipe } = createSidebarWipe();
 
   return (
-    <div class={styles.shell({ collapsed: collapsed() })}>
+    <div class={styles.shell({ collapsed: collapsed() })} data-shell="">
+      <div aria-hidden="true" class={styles.ambient}>
+        <div class={styles.ambientGlow}>
+          <div class={styles.ambientCore} />
+        </div>
+      </div>
       <AppSidebar jellyfinConnected={jellyfinConnected()} />
       <Show when={wipe()} keyed>
         {(direction) => (

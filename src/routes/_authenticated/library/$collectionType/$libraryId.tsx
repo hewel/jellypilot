@@ -887,7 +887,7 @@ function LibraryBrowseToolbar(props: LibraryBrowseToolbarProps) {
   const pinned = () => appScroll.snapshot().scrollTop > 4;
 
   return (
-    <nav class={styles.toolbar} aria-label="Library browse controls">
+    <nav class={styles.toolbar} aria-label="Library browse controls" data-toolbar="">
       <div
         class={styles.toolbarChrome}
         data-pinned={pinned() ? '' : undefined}

@@ -1,9 +1,12 @@
 import { commands, events } from '@bindings';
 import type { NowPlayingState, PropertyValue } from '@bindings';
+import { createQuery, useQueryClient } from '@tanstack/solid-query';
 import { Effect, Exit, Option } from 'effect';
+import { onCleanup, onMount } from 'solid-js';
 
 import { runTauriCommand } from './commands';
 import type { CommandError } from './errors';
+import { queryKeys, runExit } from './query';
 
 export type NowPlayingEffect<T> = Effect.Effect<T, CommandError>;
 
@@ -118,4 +121,43 @@ export function listenNowPlayingChanged(
   onState: (state: NowPlayingState) => void,
 ): Promise<() => void> {
   return events.nowPlayingChanged.listen((event) => onState(event.payload.state));
+}
+
+/**
+ * Shared Now Playing state source: one query cache entry plus the Tauri change
+ * listener that keeps it fresh. Consumers read `state()`; `onExternalChange`
+ * lets owners clear local drafts or invalidate dependent queries on push.
+ */
+export function createNowPlayingState(options?: {
+  onExternalChange?: (state: NowPlayingState) => void;
+}) {
+  const queryClient = useQueryClient();
+  const query = createQuery(() => ({
+    queryKey: queryKeys.nowPlayingState,
+    queryFn: () => runExit(fetchNowPlayingState),
+  }));
+
+  onMount(() => {
+    let disposed = false;
+    let cleanup: (() => void) | undefined;
+    listenNowPlayingChanged((state) => {
+      queryClient.setQueryData(queryKeys.nowPlayingState, Exit.succeed(state));
+      options?.onExternalChange?.(state);
+    }).then((unlisten) => {
+      if (disposed) {
+        unlisten();
+      } else {
+        cleanup = unlisten;
+      }
+    });
+
+    onCleanup(() => {
+      disposed = true;
+      cleanup?.();
+    });
+  });
+
+  const state = () => (query.data && Exit.isSuccess(query.data) ? query.data.value : null);
+
+  return { query, state };
 }

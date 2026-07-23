@@ -75,6 +75,14 @@ const pausedWithoutMetadataState: NowPlayingState = {
   status: 'paused',
 };
 
+const pausedWithoutAdjacentState: NowPlayingState = {
+  ...pausedWithoutMetadataState,
+  canPlayNext: false,
+  canPlayPrevious: false,
+  nextUnavailableReason: 'noCurrentItem',
+  previousUnavailableReason: 'noCurrentItem',
+};
+
 const trackList = JSON.stringify([
   { id: 1, lang: 'eng', selected: true, title: 'English Stereo', type: 'audio' },
   { id: 2, lang: 'jpn', selected: false, title: 'Japanese 5.1', type: 'audio' },
@@ -112,26 +120,27 @@ test('offline now playing offers start mpv when Jellyfin is connected', async ()
   const cleanup = renderCard();
 
   await waitFor(() => expect(screen.getByText('Offline')).toBeVisible());
-  expect(screen.getByRole('button', { name: 'Play' })).toBeDisabled();
+  expect(screen.getByText('Player is offline')).toBeVisible();
+  expect(screen.queryByRole('button', { name: 'Play' })).toBeNull();
   expect(screen.getByRole('button', { name: 'Start MPV' })).toBeVisible();
 
   cleanup();
 });
 
-test('media controls use shared icon buttons and primary text action', async () => {
-  const cleanup = renderCard();
+test('playing transport uses shared icon buttons without exposing startup', async () => {
+  const cleanup = renderCard(playingState);
 
-  await waitFor(() => expect(screen.getByText('Offline')).toBeVisible());
+  await waitFor(() => expect(screen.getByText('The Pilot')).toBeVisible());
 
   const previous = screen.getByLabelText('Previous episode');
   expect(previous).toBeVisible();
-  expect(previous).toBeDisabled();
+  expect(previous).not.toBeDisabled();
+  expect(previous.querySelector('svg')).not.toBeNull();
   const stop = screen.getByLabelText('Stop playback');
   expect(stop).toBeVisible();
-  expect(stop).toBeDisabled();
-  const startMpv = screen.getByRole('button', { name: 'Start MPV' });
-  expect(startMpv).toHaveTextContent('Start MPV');
-  expect(startMpv.querySelector('svg')).not.toBeNull();
+  expect(stop).not.toBeDisabled();
+  expect(stop.querySelector('svg')).not.toBeNull();
+  expect(screen.queryByRole('button', { name: 'Start MPV' })).toBeNull();
 
   cleanup();
 });
@@ -222,28 +231,33 @@ test('playing state exposes audio and subtitle selectors', async () => {
 });
 
 test('next and previous are disabled when unavailable', async () => {
-  const cleanup = renderCard();
+  const cleanup = renderCard(pausedWithoutAdjacentState);
 
+  await waitFor(() => expect(screen.getByText('Paused')).toBeVisible());
   await waitFor(() => expect(screen.getByLabelText('Next episode')).toBeDisabled());
   expect(screen.getByLabelText('Previous episode')).toBeDisabled();
 
   cleanup();
 });
 
-test('idle and unknown states disable transport controls without exposing startup', async () => {
+test('idle and unknown states show state panels without transport or startup', async () => {
   const cleanup = renderCard(idleState);
 
   await waitFor(() => expect(screen.getByText('MPV idle')).toBeVisible());
-  await waitFor(() => expect(screen.getByRole('button', { name: 'Play' })).toBeDisabled());
-  expect(screen.getByLabelText('Stop playback')).toBeDisabled();
+  expect(screen.getByText('MPV is idle')).toBeVisible();
+  expect(screen.queryByRole('button', { name: 'Play' })).toBeNull();
+  expect(screen.queryByLabelText('Stop playback')).toBeNull();
   expect(screen.queryByRole('button', { name: 'Start MPV' })).toBeNull();
+  expect(screen.getByRole('slider', { name: 'Volume' })).toBeVisible();
   cleanup();
 
   const cleanupUnknown = renderCard(unknownState);
   await waitFor(() => expect(screen.getByText('Unknown')).toBeVisible());
-  await waitFor(() => expect(screen.getByRole('button', { name: 'Play' })).toBeDisabled());
-  expect(screen.getByLabelText('Stop playback')).toBeDisabled();
+  expect(screen.getByText('Playback state unknown')).toBeVisible();
+  expect(screen.queryByRole('button', { name: 'Play' })).toBeNull();
+  expect(screen.queryByLabelText('Stop playback')).toBeNull();
   expect(screen.queryByRole('button', { name: 'Start MPV' })).toBeNull();
+  expect(screen.queryByRole('slider', { name: 'Volume' })).toBeNull();
 
   cleanupUnknown();
 });

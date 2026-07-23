@@ -14,25 +14,12 @@ export const nowPlayingCardNarrowLayout = {
   timeLabelMinWidth: '[0]',
 } as const;
 
-export const root = cva({
-  base: {
-    display: 'grid',
-    maxWidth: nowPlayingCardNarrowLayout.rootMaxWidth,
-    minWidth: nowPlayingCardNarrowLayout.rootMinWidth,
-    width: 'full',
-  },
-  variants: {
-    bare: {
-      true: {
-        gap: '5',
-      },
-      false: {
-        gap: '6',
-        overflow: 'hidden',
-        position: 'relative',
-      },
-    },
-  },
+export const root = css({
+  display: 'grid',
+  gap: '5',
+  maxWidth: nowPlayingCardNarrowLayout.rootMaxWidth,
+  minWidth: nowPlayingCardNarrowLayout.rootMinWidth,
+  width: 'full',
 });
 
 export const header = css({
@@ -43,32 +30,12 @@ export const header = css({
   zIndex: '10',
 });
 
-export const headerCopy = cva({
-  base: {
-    display: 'grid',
-    gap: '1',
-    maxWidth: '[100%]',
-    minWidth: '[0]',
-  },
-  variants: {
-    bare: {
-      true: {
-        paddingRight: '[9rem]',
-      },
-      false: {
-        maxWidth: '[70%]',
-      },
-    },
-  },
-});
-
-export const eyebrow = css({
-  color: 'secondary',
-  fontSize: '11',
-  lineHeight: '16',
-  fontWeight: 'bold',
-  letterSpacing: '8',
-  textTransform: 'uppercase',
+export const headerCopy = css({
+  display: 'grid',
+  gap: '1',
+  maxWidth: '[100%]',
+  minWidth: '[0]',
+  paddingRight: '[9rem]',
 });
 
 export const titleRow = css({
@@ -77,29 +44,17 @@ export const titleRow = css({
   gap: '3',
 });
 
-export const title = cva({
-  base: {
-    color: 'onSurface',
-    fontFamily: 'display',
-    fontWeight: 'bold',
-    letterSpacing: '0',
-    overflow: 'hidden',
-    paddingRight: '2',
-    textOverflow: 'ellipsis',
-    whiteSpace: 'nowrap',
-  },
-  variants: {
-    bare: {
-      true: {
-        fontSize: '20',
-        lineHeight: '28',
-      },
-      false: {
-        fontSize: '24',
-        lineHeight: '32',
-      },
-    },
-  },
+export const title = css({
+  color: 'onSurface',
+  fontFamily: 'display',
+  fontSize: '20',
+  lineHeight: '28',
+  fontWeight: 'bold',
+  letterSpacing: '0',
+  overflow: 'hidden',
+  paddingRight: '2',
+  textOverflow: 'ellipsis',
+  whiteSpace: 'nowrap',
 });
 
 export const equalizer = css({
@@ -193,10 +148,36 @@ export const timeRow = css({
   },
 });
 
-export const emptyTrack = css({
-  bg: 'surfaceContainerHigh/60',
-  borderRadius: 'full',
-  height: '2',
+export const statePanel = css({
+  ...panelBase,
+  display: 'grid',
+  gap: '2',
+  justifyItems: 'center',
+  py: '8',
+  textAlign: 'center',
+});
+
+export const stateIcon = css({
+  color: 'onSurfaceVariant',
+  display: 'inline-flex',
+  '& svg': {
+    height: '8',
+    width: '8',
+  },
+});
+
+export const stateTitle = css({
+  color: 'onSurface',
+  fontSize: '16',
+  lineHeight: '24',
+  fontWeight: 'semibold',
+});
+
+export const stateMessage = css({
+  color: 'onSurfaceVariant',
+  fontSize: '14',
+  lineHeight: '20',
+  maxWidth: '[24rem]',
 });
 
 export const sliderRoot = css({
@@ -270,32 +251,17 @@ export const thumb = css({
   },
 });
 
-export const controls = cva({
-  base: {
-    position: 'relative',
-    display: 'flex',
-    alignItems: 'center',
-    flexWrap: nowPlayingCardNarrowLayout.controlsBaseWrap,
-    gap: nowPlayingCardNarrowLayout.controlsBaseGap,
-    justifyContent: 'center',
-    maxWidth: '[100%]',
-    minWidth: '[0]',
-    width: 'full',
-    zIndex: '10',
-  },
-  variants: {
-    bare: {
-      true: {
-        justifyContent: 'center',
-      },
-      false: {
-        // Sm+ can open spacing; base already wraps.
-        sm: {
-          gap: '4',
-        },
-      },
-    },
-  },
+export const controls = css({
+  position: 'relative',
+  display: 'flex',
+  alignItems: 'center',
+  flexWrap: nowPlayingCardNarrowLayout.controlsBaseWrap,
+  gap: nowPlayingCardNarrowLayout.controlsBaseGap,
+  justifyContent: 'center',
+  maxWidth: '[100%]',
+  minWidth: '[0]',
+  width: 'full',
+  zIndex: '10',
 });
 
 export const iconButton = css({
@@ -440,11 +406,4 @@ export const volumeValue = css({
   fontWeight: 'semibold',
   textAlign: 'right',
   width: '12',
-});
-
-export const card = css({
-  display: 'grid',
-  gap: '6',
-  overflow: 'hidden',
-  position: 'relative',
 });

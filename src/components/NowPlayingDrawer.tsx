@@ -1,14 +1,12 @@
 import { Dialog } from '@ark-ui/solid/dialog';
-import { createQuery, useQueryClient } from '@tanstack/solid-query';
-import { Exit, Match } from 'effect';
+import { Match } from 'effect';
 import { MonitorPlay, X } from 'lucide-solid';
-import { Show, createSignal, onCleanup, onMount } from 'solid-js';
+import { Show, createSignal } from 'solid-js';
 import { Portal } from 'solid-js/web';
 import * as recipes from '~styles/recipes';
 
 import type { NowPlayingState } from '../bindings';
-import { fetchNowPlayingState, listenNowPlayingChanged } from '../effects/nowPlaying';
-import { queryKeys, runExit } from '../effects/query';
+import { createNowPlayingState } from '../effects/nowPlaying';
 import NowPlayingCard from './NowPlayingCard';
 import * as styles from './NowPlayingDrawer.styles';
 import { Button } from './ui';
@@ -44,36 +42,9 @@ export default function NowPlayingDrawer(props: {
   jellyfinConnected: boolean;
   collapsed: boolean;
 }) {
-  const queryClient = useQueryClient();
-  const nowPlayingQuery = createQuery(() => ({
-    queryKey: queryKeys.nowPlayingState,
-    queryFn: () => runExit(fetchNowPlayingState),
-  }));
-  const state = () =>
-    nowPlayingQuery.data && Exit.isSuccess(nowPlayingQuery.data)
-      ? nowPlayingQuery.data.value
-      : null;
+  const { state } = createNowPlayingState();
   const [open, setOpen] = createSignal(false);
   const [selectPortalMount, setSelectPortalMount] = createSignal<HTMLElement>();
-
-  onMount(() => {
-    let disposed = false;
-    let cleanup: (() => void) | undefined;
-    listenNowPlayingChanged((newState) =>
-      queryClient.setQueryData(queryKeys.nowPlayingState, Exit.succeed(newState)),
-    ).then((unlisten) => {
-      if (disposed) {
-        unlisten();
-      } else {
-        cleanup = unlisten;
-      }
-    });
-
-    onCleanup(() => {
-      disposed = true;
-      cleanup?.();
-    });
-  });
 
   return (
     <Dialog.Root
@@ -130,7 +101,6 @@ export default function NowPlayingDrawer(props: {
                 {(mount) => (
                   <NowPlayingCard
                     jellyfinConnected={props.jellyfinConnected}
-                    bare
                     trackSelectPortalMount={mount()}
                   />
                 )}

@@ -18,6 +18,52 @@ export const authenticatedShellCollapsedTrackLayout = {
   },
 } as const;
 
+/** Layer 0 ambient contract: pinned to the window, inert, clipped, below main. */
+export const authenticatedShellAmbientLayout = {
+  height: '[100dvh]',
+  left: '0',
+  overflow: 'hidden',
+  pointerEvents: 'none',
+  position: 'fixed',
+  top: '0',
+  width: 'full',
+  zIndex: '0',
+} as const;
+
+/* Shared ambient layer: one static gradient blob spanning sidebar and main.
+ * Hover on the sidebar or browse toolbar is promoted via :has() so the core
+ * lifts uniformly. */
+export const ambient = css(authenticatedShellAmbientLayout);
+
+export const ambientGlow = css({
+  borderRadius: 'full',
+  height: '[55vmax]',
+  left: '[40vw]',
+  position: 'absolute',
+  top: '[28vh]',
+  transform: '[translate(-50%, -50%)]',
+  width: '[55vmax]',
+});
+
+export const ambientCore = css({
+  backgroundImage:
+    '[radial-gradient(closest-side, {colors.primary/16}, {colors.secondary/7} 48%, transparent 72%)]',
+  borderRadius: 'full',
+  height: 'full',
+  opacity: '[0.75]',
+  transitionDuration: '300',
+  transitionProperty: '[opacity, transform]',
+  transitionTimingFunction: 'standard',
+  width: 'full',
+  _motionReduce: {
+    transition: '[none]',
+  },
+  '[data-shell]:has([data-sidebar]:hover) &, [data-shell]:has([data-toolbar]:hover) &': {
+    opacity: '[1]',
+    transform: '[scale(1.06)]',
+  },
+});
+
 export const shell = cva({
   base: authenticatedShellLayout,
   variants: {
@@ -35,11 +81,10 @@ export const main = cva({
     flexDirection: 'column',
     gridColumn: '2',
     minWidth: '[0]',
-    mx: 'auto',
-    pb: '8',
-    pt: '2',
-    px: '2_5',
+    position: 'relative',
+    pl: '2',
     width: 'full',
+    zIndex: '0',
   },
   variants: {
     glide: {
@@ -67,7 +112,8 @@ export const enter = css({
  * layout. 0.28125 = 4.5rem collapsed rail / 16rem expanded sidebar. */
 export const sidebarWipe = cva({
   base: {
-    bg: 'surfaceContainerLow',
+    backdropFilter: '[blur(20px)]',
+    bg: 'surfaceContainerLow/70',
     borderRightColor: 'outlineVariant/40',
     borderRightStyle: 'solid',
     borderRightWidth: '1px',

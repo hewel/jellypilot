@@ -2,6 +2,7 @@ import { expect, test } from '@rstest/core';
 
 import { appSidebarViewportLayout } from '../src/components/AppSidebar.styles';
 import {
+  authenticatedShellAmbientLayout,
   authenticatedShellCollapsedTrackLayout,
   authenticatedShellLayout,
 } from '../src/components/AuthenticatedShell.styles';
@@ -34,4 +35,11 @@ test('authenticated shell isolates the Sidebar from virtual scrolling', () => {
   expect(authenticatedShellCollapsedTrackLayout.lg.gridTemplateColumns).toBe(
     '[4.5rem minmax(0, 1fr)]',
   );
+});
+
+test('ambient layer stays pinned, inert, and below shell content', () => {
+  expect(authenticatedShellAmbientLayout.position).toBe('fixed');
+  expect(authenticatedShellAmbientLayout.pointerEvents).toBe('none');
+  expect(authenticatedShellAmbientLayout.overflow).toBe('hidden');
+  expect(authenticatedShellAmbientLayout.zIndex).toBe('0');
 });

@@ -12,10 +12,12 @@ export const nav = cva({
   base: {
     ...appSidebarViewportLayout,
     '&[data-wiping]': {
+      backdropFilter: '[none]',
       bg: '[transparent]',
       borderRightColor: '[transparent]',
     },
-    bg: 'surfaceContainerLow',
+    backdropFilter: '[blur(20px)]',
+    bg: 'surfaceContainerLow/70',
     borderRightColor: 'outlineVariant/40',
     borderRightStyle: 'solid',
     borderRightWidth: '1px',
@@ -90,41 +92,20 @@ export const item = cva({
     justifyContent: 'center',
     minHeight: '10',
     p: '2',
-    position: 'relative',
     textDecoration: 'none',
     transitionDuration: '200',
-    transitionProperty: '[background-color, color, transform]',
+    transitionProperty: '[background-color, color]',
     transitionTimingFunction: 'standard',
-    _active: {
-      transform: '[scale(0.96)]',
-    },
     _focusVisible: {
       outline: '[2px solid {colors.primary}]',
       outlineOffset: '[2px]',
     },
     _hover: {
-      bg: 'surfaceContainerHigh',
-    },
-    '&::before': {
-      bg: 'secondary',
-      borderRadius: 'full',
-      content: '""',
-      height: '[60%]',
-      left: '[-8px]',
-      position: 'absolute',
-      top: '[50%]',
-      transform: '[translateY(-50%) scaleY(0)]',
-      transitionDuration: '200',
-      transitionProperty: '[transform]',
-      transitionTimingFunction: 'standard',
-      width: '[3px]',
+      bg: 'surfaceContainerHigh/55',
     },
     '&[data-active]': {
       bg: 'secondaryContainer',
       color: 'onSecondaryContainer',
-    },
-    '&[data-active]::before': {
-      transform: '[translateY(-50%) scaleY(1)]',
     },
     lg: {
       justifyContent: 'flex-start',
@@ -145,6 +126,16 @@ export const itemIcon = css({
   flexShrink: '0',
   height: '5',
   width: '5',
+});
+
+/* Fixed 24px leading slot so icon-only rows align with artwork rows. */
+export const itemIconSlot = css({
+  alignItems: 'center',
+  display: 'inline-flex',
+  flexShrink: '0',
+  height: '6',
+  justifyContent: 'center',
+  width: '6',
 });
 
 export const itemThumb = css({

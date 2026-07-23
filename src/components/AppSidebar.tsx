@@ -98,6 +98,7 @@ export default function AppSidebar(props: AppSidebarProps) {
     <nav
       aria-label="Sidebar"
       class={styles.nav({ collapsed: collapsed() })}
+      data-sidebar=""
       data-wiping={wipe() === null ? undefined : 'true'}
     >
       <div class={styles.header}>
@@ -124,7 +125,6 @@ export default function AppSidebar(props: AppSidebarProps) {
           </span>
         </Button>
       </div>
-      <p class={styles.sectionLabel({ collapsed: collapsed() })}>Library</p>
       <ul class={styles.list}>
         <li>
           <Link
@@ -141,6 +141,9 @@ export default function AppSidebar(props: AppSidebarProps) {
             <span class={styles.itemLabel({ collapsed: collapsed() })}>Home</span>
           </Link>
         </li>
+      </ul>
+      <p class={styles.sectionLabel({ collapsed: collapsed() })}>Library</p>
+      <ul class={styles.list}>
         <For each={shortcutItems()}>
           {(item) => (
             <li>
@@ -174,7 +177,10 @@ function SidebarItemThumb(props: { artworkImageId: string | null; fallbackIcon: 
     setImageFailed(false);
   });
   return (
-    <Show when={!imageFailed() ? props.artworkImageId : null} fallback={props.fallbackIcon}>
+    <Show
+      when={!imageFailed() ? props.artworkImageId : null}
+      fallback={<span class={styles.itemIconSlot}>{props.fallbackIcon}</span>}
+    >
       {(imageId) => (
         <img
           src={imageSource(imageId())}
