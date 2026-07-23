@@ -1,7 +1,16 @@
 import { css, cva } from '@styled-system/css';
 
+export const appSidebarViewportLayout = {
+  height: '[100dvh]',
+  left: '0',
+  overflowY: 'auto',
+  position: 'fixed',
+  top: '0',
+} as const;
+
 export const nav = cva({
   base: {
+    ...appSidebarViewportLayout,
     '&[data-wiping]': {
       bg: '[transparent]',
       borderRightColor: '[transparent]',
@@ -14,12 +23,8 @@ export const nav = cva({
     flexDirection: 'column',
     flexShrink: '0',
     gap: '1',
-    height: '[100dvh]',
-    overflowY: 'auto',
-    position: 'sticky',
     px: '2',
     py: '2',
-    top: '0',
     width: '[4rem]',
     zIndex: '40',
     lg: {

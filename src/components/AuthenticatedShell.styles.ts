@@ -1,11 +1,30 @@
 import { css, cva } from '@styled-system/css';
 
-export const shell = css({
+export const authenticatedShellLayout = {
   color: 'onSurface',
-  display: 'flex',
+  display: 'grid',
+  gridTemplateColumns: '[4rem minmax(0, 1fr)]',
   minHeight: '[100dvh]',
   overflowX: 'clip',
   position: 'relative',
+  lg: {
+    gridTemplateColumns: '[16rem minmax(0, 1fr)]',
+  },
+} as const;
+
+export const authenticatedShellCollapsedTrackLayout = {
+  lg: {
+    gridTemplateColumns: '[4.5rem minmax(0, 1fr)]',
+  },
+} as const;
+
+export const shell = cva({
+  base: authenticatedShellLayout,
+  variants: {
+    collapsed: {
+      true: authenticatedShellCollapsedTrackLayout,
+    },
+  },
 });
 
 export const main = cva({
@@ -14,6 +33,7 @@ export const main = cva({
     display: 'flex',
     flex: '1',
     flexDirection: 'column',
+    gridColumn: '2',
     minWidth: '[0]',
     mx: 'auto',
     pb: '8',

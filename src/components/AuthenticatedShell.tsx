@@ -2,6 +2,7 @@ import { createQuery } from '@tanstack/solid-query';
 import { Outlet } from '@tanstack/solid-router';
 import { Exit } from 'effect';
 import { Show } from 'solid-js';
+import { createSidebarPreferences } from '~utils/sidebarPreferences';
 import { createSidebarWipe } from '~utils/sidebarWipe';
 
 import { fetchConnectionState } from '../effects/connection';
@@ -18,10 +19,11 @@ export default function AuthenticatedShell() {
     connectionQuery.data && Exit.isSuccess(connectionQuery.data)
       ? connectionQuery.data.value.connected
       : false;
+  const { collapsed } = createSidebarPreferences();
   const { wipe } = createSidebarWipe();
 
   return (
-    <div class={styles.shell}>
+    <div class={styles.shell({ collapsed: collapsed() })}>
       <AppSidebar jellyfinConnected={jellyfinConnected()} />
       <Show when={wipe()} keyed>
         {(direction) => (
