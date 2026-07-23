@@ -7,6 +7,7 @@
 [![Tauri](https://img.shields.io/badge/Tauri-v2-blue?logo=tauri)](https://v2.tauri.app/)
 [![Solid.js](https://img.shields.io/badge/Solid.js-1.x-blue?logo=solid)](https://www.solidjs.com/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
+[![AUR](https://img.shields.io/aur/version/jellypilot?label=AUR&logo=archlinux)](https://aur.archlinux.org/packages/jellypilot)
 
 **A high-performance Jellyfin and Emby desktop client that controls an external MPV player.**
 
@@ -63,6 +64,22 @@ Emby support uses the same library and player workflow as Jellyfin where the ser
 - [ ] **MPRIS Support** - Linux media player integration for desktop controls
 
 ## 📦 Release Notes
+
+### v1.4.2
+
+- Added Emby media server support: login, library browsing, playback, and progress reporting.
+- Completed full Panda CSS styling cutover across all application surfaces.
+- Added collapsible sidebar with compositor-animated FLIP transitions.
+- Virtualized large browse grids with prefetched paging and persisted filter state.
+- Redesigned item detail pages for desktop with back navigation and scroll restore.
+- Published to the AUR as [`jellypilot`](https://aur.archlinux.org/packages/jellypilot).
+
+### v1.4.1
+
+- Migrated navigation and layout architecture to TanStack Router file-based nested routing.
+- Adopted vanilla-extract for design tokens and component-specific styling.
+- Added media info hover-cards, playback stream selection, and Intro Skipper manual skip prompt.
+- Migrated from Biome to Oxc linting/formatting.
 
 ### v1.4.0
 
@@ -127,7 +144,25 @@ Download the latest release for your platform from the [Releases page](https://g
 | **macOS** | `.dmg` |
 | **Linux** | `.deb`, `.AppImage`, or Arch Linux `.pkg.tar.zst` |
 
-Install the Arch Linux package from a release asset with:
+#### Arch Linux (AUR)
+
+Install from the [AUR](https://aur.archlinux.org/packages/jellypilot) with any AUR helper:
+
+```bash
+yay -S jellypilot
+# or
+paru -S jellypilot
+```
+
+Or build manually:
+
+```bash
+git clone https://aur.archlinux.org/jellypilot.git
+cd jellypilot
+makepkg -si
+```
+
+Install a pre-built Arch package from a release asset with:
 
 ```bash
 sudo pacman -U jellypilot-<version>-1-x86_64.pkg.tar.zst
@@ -228,7 +263,7 @@ jellypilot/
 | **Frontend** | [Solid.js](https://www.solidjs.com) + TypeScript |
 | **Backend** | Rust |
 | **Bundler** | Rsbuild |
-| **Styling** | TailwindCSS |
+| **Styling** | Panda CSS |
 | **IPC** | tauri-specta |
 | **Linting** | Oxlint |
 | **Testing** | Rstest |
