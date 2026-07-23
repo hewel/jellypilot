@@ -64,10 +64,11 @@ export const triggerLabel = cva({
 export const statusDot = cva({
   base: {
     borderRadius: 'full',
+    boxShadow: '[0 0 0 2px {colors.surfaceContainerLow}]',
     height: '2',
     position: 'absolute',
-    right: '1',
-    top: '1',
+    right: '[-2px]',
+    top: '[-2px]',
     width: '2',
   },
   variants: {
