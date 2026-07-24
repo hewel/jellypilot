@@ -96,6 +96,10 @@ _Avoid_: Automation, Playback automation, Plugin install state, server setting
 A user-facing support view that shows sanitized JellyPilot runtime events useful for understanding Jellyfin connection, Playback Target, and external player problems. Diagnostics are not a developer console and should not expose arbitrary frontend console output or secret-bearing values.
 _Avoid_: Frontend logs, debug console, telemetry
 
+**Direct Playback**:
+Launching playback of a Library Browser item immediately when the user presses Play, Resume, or Play from beginning, without an intermediate track-selection dialog. JellyPilot sends null audio and subtitle stream indices so the backend applies its own preference resolution (series preferences, global language preferences, defaults). Track switching during an active session remains available through the Now Playing controls.
+_Avoid_: Track chooser dialog, pre-playback modal, stream picker
+
 ## Example Dialogue
 
 Dev: "Can Quick Connect find my Jellyfin server?"
@@ -161,3 +165,7 @@ Domain expert: "No. Credit Skip advances past the credit range; next-episode pla
 Dev: "If the server has Intro Skipper ranges, are skips mandatory?"
 
 Domain expert: "No. The Intro Skipper Setting lets the user turn automatic skipping off in JellyPilot."
+
+Dev: "Should JellyPilot ask which audio track to use before starting playback?"
+
+Domain expert: "No. Direct Playback starts immediately with backend preference resolution; the user can switch tracks from Now Playing while the session is active."

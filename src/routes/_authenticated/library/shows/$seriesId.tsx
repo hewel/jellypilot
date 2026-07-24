@@ -5,11 +5,6 @@ import type {
   VideoUserDataUpdateRequest,
 } from '@bindings';
 import { DetailHero } from '@components/library/DetailHero';
-import { LibraryPlaybackChooser } from '@components/library/LibraryPlaybackChooser';
-import type {
-  LibraryPlaybackSelection,
-  PendingLibraryPlayback,
-} from '@components/library/LibraryPlaybackChooser';
 import {
   GenrePills,
   LibraryStatusPanel,
@@ -85,8 +80,6 @@ function LibraryShowDetailRoute() {
   }));
   const [playBusy, setPlayBusy] = createSignal(false);
   const [episodePlayBusy, setEpisodePlayBusy] = createSignal<string | null>(null);
-  const [confirmBusy, setConfirmBusy] = createSignal(false);
-  const [pendingPlayback, setPendingPlayback] = createSignal<PendingLibraryPlayback | null>(null);
   const [playError, setPlayError] = createSignal<string | null>(null);
 
   const closeDetail = () => {
@@ -143,68 +136,52 @@ function LibraryShowDetailRoute() {
   const loadEpisodes = (season: VideoSeason) => {
     setSelectedSeason(season);
   };
-  const openEpisodePlaybackChooser = async (itemId: string) => {
+  const startEpisodePlayback = async (itemId: string) => {
     const result = await queryClient.fetchQuery({
       queryKey: queryKeys.libraryItemDetail(sessionKey(), itemId),
       queryFn: () => runExit(fetchVideoItemDetail(itemId)),
     });
-    Exit.match(result, {
-      onFailure: (cause) => setPlayError(commandFailureMessage(cause, 'Could not load episode')),
-      onSuccess: (episodeDetail) => {
-        const mode = episodeDetail.canResume ? 'resume' : 'start';
-        setPendingPlayback({
-          detail: episodeDetail,
-          mode,
-          startPositionSeconds: mode === 'resume' ? episodeDetail.resumePositionSeconds : 0,
-        });
-      },
+    if (Exit.isFailure(result)) {
+      setPlayError(commandFailureMessage(result.cause, 'Could not load episode'));
+      return;
+    }
+
+    const episodeDetail = result.value;
+    const mode = episodeDetail.canResume ? 'resume' : 'start';
+    const playResult = await playbackMutation.mutateAsync({
+      audioStreamIndex: null,
+      itemId: episodeDetail.id,
+      mode,
+      startPositionSeconds: mode === 'resume' ? episodeDetail.resumePositionSeconds : 0,
+      subtitleStreamIndex: null,
     });
+    setPlayError(
+      Exit.match(playResult, {
+        onFailure: (cause) => commandFailureMessage(cause, 'Could not start playback'),
+        onSuccess: () => null,
+      }),
+    );
   };
   const playShow = async () => {
     const show = detail();
-    if (!show?.nextEpisode || playBusy() || confirmBusy()) {
+    if (!show?.nextEpisode || playBusy()) {
       return;
     }
 
     setPlayBusy(true);
     setPlayError(null);
-    await openEpisodePlaybackChooser(show.nextEpisode.id);
+    await startEpisodePlayback(show.nextEpisode.id);
     setPlayBusy(false);
   };
   const playEpisode = async (episode: VideoLibraryItem) => {
-    if (episodePlayBusy() || confirmBusy()) {
+    if (episodePlayBusy()) {
       return;
     }
 
     setEpisodePlayBusy(episode.id);
     setPlayError(null);
-    await openEpisodePlaybackChooser(episode.id);
+    await startEpisodePlayback(episode.id);
     setEpisodePlayBusy(null);
-  };
-  const confirmPlayback = async (selection: LibraryPlaybackSelection) => {
-    const pending = pendingPlayback();
-    if (!pending || confirmBusy()) {
-      return;
-    }
-
-    setConfirmBusy(true);
-    setPlayError(null);
-    const result = await playbackMutation.mutateAsync({
-      audioStreamIndex: selection.audioStreamIndex,
-      itemId: pending.detail.id,
-      mode: pending.mode,
-      startPositionSeconds: pending.startPositionSeconds,
-      subtitleStreamIndex: selection.subtitleStreamIndex,
-    });
-    const message = Exit.match(result, {
-      onFailure: (cause) => commandFailureMessage(cause, 'Could not start playback'),
-      onSuccess: () => null,
-    });
-    setPlayError(message);
-    setConfirmBusy(false);
-    if (!message) {
-      setPendingPlayback(null);
-    }
   };
   const statusTitle = () => {
     const current = showQuery.data;
@@ -301,7 +278,7 @@ function LibraryShowDetailRoute() {
                       type="button"
                       variant="primary"
                       class={styles.pillButton}
-                      disabled={!show().nextEpisode || playBusy() || confirmBusy()}
+                      disabled={!show().nextEpisode || playBusy()}
                       onClick={() => void playShow()}
                       leadingIcon={
                         <Show when={playBusy()} fallback={<Play class={styles.playIcon} />}>
@@ -407,7 +384,7 @@ function LibraryShowDetailRoute() {
                                   episode={episode}
                                   label={episodeLabel(episode)}
                                   busy={episodePlayBusy() === episode.id}
-                                  disabled={episodePlayBusy() !== null || confirmBusy()}
+                                  disabled={episodePlayBusy() !== null}
                                   onPlay={() => void playEpisode(episode)}
                                 />
                               )}
@@ -423,16 +400,6 @@ function LibraryShowDetailRoute() {
           )}
         </Show>
       </Suspense>
-      <Show when={pendingPlayback()}>
-        {(pending) => (
-          <LibraryPlaybackChooser
-            pending={pending()}
-            busy={confirmBusy()}
-            onCancel={() => setPendingPlayback(null)}
-            onConfirm={(selection) => void confirmPlayback(selection)}
-          />
-        )}
-      </Show>
       <Show when={playError()}>{(message) => <p class={styles.error}>{message()}</p>}</Show>
     </div>
   );

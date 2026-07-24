@@ -49,9 +49,6 @@ export const homeCard = css({
   transitionDuration: '200',
   transitionProperty: '[transform]',
   width: 'full',
-  _hover: {
-    transform: '[translateY(-2px)]',
-  },
   _focusVisible: {
     outline: '[2px solid {colors.secondary}]',
     outlineOffset: '1',

@@ -57,7 +57,6 @@ export const button = cva({
         color: 'onPrimary',
         _hover: {
           filter: '[brightness(1.1)]',
-          transform: '[translateY(-2px)]',
         },
         _active: {
           transform: '[translateY(0) scale(0.96)]',
@@ -72,7 +71,6 @@ export const button = cva({
         color: 'onSecondaryContainer',
         _hover: {
           borderColor: 'outline',
-          transform: '[translateY(-2px)]',
         },
         _active: {
           transform: '[translateY(0) scale(0.96)]',
@@ -87,7 +85,6 @@ export const button = cva({
         color: 'onSecondaryContainer',
         _hover: {
           borderColor: 'outline',
-          transform: '[translateY(-2px)]',
         },
         _active: {
           transform: '[translateY(0) scale(0.96)]',

@@ -5,11 +5,6 @@ import type {
   VideoUserDataUpdateRequest,
 } from '@bindings';
 import { DetailHero } from '@components/library/DetailHero';
-import { LibraryPlaybackChooser } from '@components/library/LibraryPlaybackChooser';
-import type {
-  LibraryPlaybackSelection,
-  PendingLibraryPlayback,
-} from '@components/library/LibraryPlaybackChooser';
 import {
   GenrePills,
   LibraryStatusPanel,
@@ -69,8 +64,7 @@ function LibraryItemDetailRoute() {
   const userDataMutation = createMutation(() => ({
     mutationFn: (request: VideoUserDataUpdateRequest) => runExit(updateLibraryUserData(request)),
   }));
-  const [confirmBusy, setConfirmBusy] = createSignal(false);
-  const [pendingPlayback, setPendingPlayback] = createSignal<PendingLibraryPlayback | null>(null);
+  const [playBusy, setPlayBusy] = createSignal(false);
   const [playError, setPlayError] = createSignal<string | null>(null);
 
   const closeDetail = () => {
@@ -100,42 +94,26 @@ function LibraryItemDetailRoute() {
     }
     return 'JellyPilot is loading Movie or Episode detail data from Jellyfin.';
   };
-  const openPlaybackChooser = (item: VideoItemDetail, mode: VideoLibraryPlayMode) => {
-    if (confirmBusy()) {
+  const startPlayback = async (item: VideoItemDetail, mode: VideoLibraryPlayMode) => {
+    if (!item.canPlay || playBusy()) {
       return;
     }
 
-    setPlayError(null);
-    setPendingPlayback({
-      detail: item,
-      mode,
-      startPositionSeconds: mode === 'resume' ? item.resumePositionSeconds : 0,
-    });
-  };
-  const confirmPlayback = async (selection: LibraryPlaybackSelection) => {
-    const pending = pendingPlayback();
-    if (!pending || confirmBusy()) {
-      return;
-    }
-
-    setConfirmBusy(true);
+    setPlayBusy(true);
     setPlayError(null);
     const result = await playbackMutation.mutateAsync({
-      audioStreamIndex: selection.audioStreamIndex,
-      itemId: pending.detail.id,
-      mode: pending.mode,
-      startPositionSeconds: pending.startPositionSeconds,
-      subtitleStreamIndex: selection.subtitleStreamIndex,
+      audioStreamIndex: null,
+      itemId: item.id,
+      mode,
+      startPositionSeconds: mode === 'resume' ? item.resumePositionSeconds : 0,
+      subtitleStreamIndex: null,
     });
     const message = Exit.match(result, {
       onFailure: (cause) => commandFailureMessage(cause, 'Could not start playback'),
       onSuccess: () => null,
     });
     setPlayError(message);
-    setConfirmBusy(false);
-    if (!message) {
-      setPendingPlayback(null);
-    }
+    setPlayBusy(false);
   };
 
   return (
@@ -188,8 +166,8 @@ function LibraryItemDetailRoute() {
                             type="button"
                             variant="primary"
                             class={styles.pillButton}
-                            disabled={!item().canPlay || confirmBusy()}
-                            onClick={() => openPlaybackChooser(item(), 'start')}
+                            disabled={!item().canPlay || playBusy()}
+                            onClick={() => void startPlayback(item(), 'start')}
                             leadingIcon={<Play class={styles.playIcon} />}
                           >
                             Play
@@ -200,8 +178,8 @@ function LibraryItemDetailRoute() {
                           type="button"
                           variant="primary"
                           class={styles.pillButton}
-                          disabled={!item().canPlay || confirmBusy()}
-                          onClick={() => openPlaybackChooser(item(), 'resume')}
+                          disabled={!item().canPlay || playBusy()}
+                          onClick={() => void startPlayback(item(), 'resume')}
                           leadingIcon={<Play class={styles.playIcon} />}
                         >
                           Resume
@@ -210,8 +188,8 @@ function LibraryItemDetailRoute() {
                           type="button"
                           variant="secondary"
                           class={styles.pillButton}
-                          disabled={!item().canPlay || confirmBusy()}
-                          onClick={() => openPlaybackChooser(item(), 'start')}
+                          disabled={!item().canPlay || playBusy()}
+                          onClick={() => void startPlayback(item(), 'start')}
                           leadingIcon={<RotateCcw class={styles.icon4} />}
                         >
                           Play from beginning
@@ -258,16 +236,6 @@ function LibraryItemDetailRoute() {
             );
           }}
         </Show>
-      </Show>
-      <Show when={pendingPlayback()}>
-        {(pending) => (
-          <LibraryPlaybackChooser
-            pending={pending()}
-            busy={confirmBusy()}
-            onCancel={() => setPendingPlayback(null)}
-            onConfirm={(selection) => void confirmPlayback(selection)}
-          />
-        )}
       </Show>
       <Show when={playError()}>{(message) => <p class={styles.error}>{message()}</p>}</Show>
     </div>
