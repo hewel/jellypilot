@@ -2,7 +2,10 @@ import { afterEach, expect, rstest, test } from '@rstest/core';
 import { Cause, Effect, Exit, Fiber } from 'effect';
 
 import { commands } from '../src/bindings';
-import { runQuickConnectWorkflow } from '../src/effects/quickConnect';
+import {
+  runQuickConnectWorkflow,
+  runSavedProfileQuickConnectWorkflow,
+} from '../src/effects/quickConnect';
 
 const sampleProfiles = {
   activeProfileKey: 'jellyfin|https://jellyfin.example.com|Ada',
@@ -11,6 +14,7 @@ const sampleProfiles = {
       active: true,
       key: 'jellyfin|https://jellyfin.example.com|Ada',
       lastRestoreError: null,
+      reauthRequired: false,
       provider: 'jellyfin' as const,
       serverName: 'Jellyfin Home',
       serverUrl: 'https://jellyfin.example.com',
@@ -206,6 +210,53 @@ test('polling failure propagation', async () => {
 
   const exit = await runPromise;
   expect(Exit.isFailure(exit)).toBe(true);
+});
+
+test('saved profile workflow uses profile-scoped commands without saving a new profile', async () => {
+  rstest.useFakeTimers();
+
+  const start = rstest
+    .spyOn(commands, 'serverProfilesReauthenticateQuickConnectStart')
+    .mockResolvedValue({
+      data: { code: 'ABCD12', secret: 'secret-123' },
+      status: 'ok',
+    });
+  const check = rstest
+    .spyOn(commands, 'serverProfilesReauthenticateQuickConnectCheck')
+    .mockResolvedValue({
+      data: 'approved',
+      status: 'ok',
+    });
+  const authenticate = rstest
+    .spyOn(commands, 'serverProfilesReauthenticateQuickConnectAuthenticate')
+    .mockResolvedValue({
+      data: sampleProfiles,
+      status: 'ok',
+    });
+  const saveCurrent = rstest.spyOn(commands, 'serverProfilesSaveCurrent');
+
+  const onCode = rstest.fn();
+  const runPromise = Effect.runPromiseExit(
+    runSavedProfileQuickConnectWorkflow('jellyfin|https://jellyfin.example.com|Ada', onCode),
+  );
+
+  await rstest.advanceTimersByTimeAsync(0);
+  expect(onCode).toHaveBeenCalledWith('ABCD12');
+  expect(start).toHaveBeenCalledWith('jellyfin|https://jellyfin.example.com|Ada');
+
+  await rstest.advanceTimersByTimeAsync(5000);
+
+  const exit = await runPromise;
+  expect(Exit.isSuccess(exit)).toBe(true);
+  if (Exit.isSuccess(exit)) {
+    expect(exit.value).toEqual(sampleProfiles);
+  }
+  expect(check).toHaveBeenCalledWith('jellyfin|https://jellyfin.example.com|Ada', 'secret-123');
+  expect(authenticate).toHaveBeenCalledWith(
+    'jellyfin|https://jellyfin.example.com|Ada',
+    'secret-123',
+  );
+  expect(saveCurrent).not.toHaveBeenCalled();
 });
 
 test('authentication failure propagation', async () => {

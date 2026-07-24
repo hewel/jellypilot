@@ -495,6 +495,7 @@ function mockShellCommands(state = connectedState) {
           active: true,
           key: 'jellyfin|https://jellyfin.example.com|Ada',
           lastRestoreError: null,
+          reauthRequired: false,
           provider: 'jellyfin',
           serverName: 'Jellyfin Home',
           serverUrl: 'https://jellyfin.example.com',

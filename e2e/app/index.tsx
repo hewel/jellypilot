@@ -12,6 +12,7 @@ import {
   fixtureCallCount,
   fixtureSummary,
   hasExpectedLibraryPlayCall,
+  hasExpectedReauthenticatePasswordCall,
   hasExpectedServerConnectCall,
   installFixture,
   installStartupFixtures,
@@ -24,6 +25,7 @@ declare global {
       callCount: typeof fixtureCallCount;
       fixtureSummary: typeof fixtureSummary;
       hasExpectedLibraryPlayCall: typeof hasExpectedLibraryPlayCall;
+      hasExpectedReauthenticatePasswordCall: typeof hasExpectedReauthenticatePasswordCall;
       hasExpectedServerConnectCall: typeof hasExpectedServerConnectCall;
       installFixture: typeof installFixture;
       installStartupFixtures: typeof installStartupFixtures;
@@ -45,6 +47,7 @@ const controller: NonNullable<Window['__JELLYPILOT_E2E__']> = {
   callCount: fixtureCallCount,
   fixtureSummary,
   hasExpectedLibraryPlayCall,
+  hasExpectedReauthenticatePasswordCall,
   hasExpectedServerConnectCall,
   installFixture,
   installStartupFixtures,

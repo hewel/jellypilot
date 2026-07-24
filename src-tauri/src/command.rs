@@ -7,14 +7,16 @@ use std::sync::Arc;
 use tauri::State;
 use tauri_specta::{collect_commands, collect_events, Builder, Event};
 
-use crate::auth_profiles::{load_profiles, save_profiles, SavedServiceProfiles};
+use crate::auth_profiles::{
+  load_profiles, save_profiles, SavedServiceProfileStore, SavedServiceProfiles,
+};
 use crate::config::AppConfig;
 use crate::jellyfin::{
-  ConnectionState, Credentials, JellyfinClient, JellyfinError, QuickConnectRequest,
-  QuickConnectStatus, SavedSession, SessionManager, VideoHome, VideoItemDetail, VideoLibraryPage,
-  VideoLibraryPageRequest, VideoLibraryPlayRequest, VideoLibraryShortcut, VideoSearchPage,
-  VideoSearchRequest, VideoSeasonEpisodes, VideoSeasonEpisodesRequest, VideoShowDetail,
-  VideoUserDataUpdate, VideoUserDataUpdateRequest,
+  AuthResponse, ConnectionState, Credentials, JellyfinClient, JellyfinError, MediaServerProvider,
+  QuickConnectRequest, QuickConnectStatus, SavedSession, SessionManager, VideoHome,
+  VideoItemDetail, VideoLibraryPage, VideoLibraryPageRequest, VideoLibraryPlayRequest,
+  VideoLibraryShortcut, VideoSearchPage, VideoSearchRequest, VideoSeasonEpisodes,
+  VideoSeasonEpisodesRequest, VideoShowDetail, VideoUserDataUpdate, VideoUserDataUpdateRequest,
 };
 use crate::mpv::{write_input_conf, MpvClient, PropertyValue};
 use crate::playback_control;
@@ -963,31 +965,200 @@ pub async fn server_profiles_activate(
     .session_for_key(&key)
     .ok_or_else(|| CommandError::not_found("Saved service profile was not found"))?;
 
-  stop_active_media_server_session(&app, &state).await?;
+  // Validate the target on a temporary client first so an invalid target
+  // cannot alter the current client or remote-control session.
+  let candidate = profile_auth_client(&session, &config_state);
+  let restore_result = candidate.login().restore_session(&session).await;
 
-  let restore_result = state
-    .client
-    .login()
-    .restore_session(&session)
-    .await
-    .map_err(jellyfin_err);
+  let validated = match restore_result {
+    Ok(()) => candidate
+      .login()
+      .get_saved_session()
+      .ok_or_else(|| CommandError::internal("Validated session could not be saved"))?,
+    Err(err) => {
+      let command_error = jellyfin_err(err);
+      profiles.mark_restore_failed(
+        &key,
+        command_error.message.clone(),
+        matches!(command_error.code, CommandErrorCode::AuthFailed),
+      );
+      save_profiles(&app, &profiles).map_err(internal_err)?;
+      return Err(command_error);
+    }
+  };
 
-  if let Err(err) = restore_result {
-    profiles.mark_restore_failed(&key, err.message.clone());
-    save_profiles(&app, &profiles).map_err(internal_err)?;
-    playback_control::emit_now_playing_changed(&app, &state).await;
+  activate_validated_profile(&app, &state, &config_state, &mut profiles, &key, validated).await
+}
+
+/// Commit a session that already passed validation/authentication on a
+/// temporary client: stop the current session, adopt the session, replace
+/// the stored profile, and start the remote-control/local session.
+async fn activate_validated_profile(
+  app: &tauri::AppHandle,
+  state: &JellyfinState,
+  config_state: &ConfigState,
+  profiles: &mut SavedServiceProfileStore,
+  key: &str,
+  session: SavedSession,
+) -> Result<SavedServiceProfiles, CommandError> {
+  stop_active_media_server_session(app, state).await?;
+  state.client.login().adopt_validated_session(&session);
+
+  let new_key = profiles
+    .replace_and_mark_active(key, session)
+    .ok_or_else(|| CommandError::not_found("Saved service profile was not found"))?;
+  save_profiles(app, profiles).map_err(internal_err)?;
+
+  if let Err(err) = start_remote_control_session_if_supported(app, state, config_state).await {
+    // Keep the refreshed token; this is an operational failure, not an
+    // authentication failure, so do not ask for credentials again.
+    profiles.mark_restore_failed(&new_key, err.message.clone(), false);
+    save_profiles(app, profiles).map_err(internal_err)?;
     return Err(err);
   }
 
-  if let Err(err) = start_remote_control_session_if_supported(&app, &state, &config_state).await {
-    profiles.mark_restore_failed(&key, err.message.clone());
-    save_profiles(&app, &profiles).map_err(internal_err)?;
-    return Err(err);
-  }
-
-  profiles.mark_active_restored(&key);
-  save_profiles(&app, &profiles).map_err(internal_err)?;
   Ok(profiles.summary())
+}
+
+/// Reauthenticate a saved service profile with its stored account and a new password.
+#[tauri::command]
+#[specta]
+pub async fn server_profiles_reauthenticate_password(
+  app: tauri::AppHandle,
+  state: State<'_, JellyfinState>,
+  config_state: State<'_, ConfigState>,
+  key: String,
+  password: String,
+) -> Result<SavedServiceProfiles, CommandError> {
+  let mut profiles = load_profiles(&app).map_err(internal_err)?;
+  let stored = profiles
+    .session_for_key(&key)
+    .ok_or_else(|| CommandError::not_found("Saved service profile was not found"))?;
+
+  let candidate = profile_auth_client(&stored, &config_state);
+  let auth = candidate
+    .login()
+    .authenticate(&Credentials {
+      provider: stored.provider,
+      server_url: stored.server_url.clone(),
+      username: stored.user_name.clone(),
+      password,
+    })
+    .await
+    .map_err(jellyfin_err)?;
+
+  let validated = match_profile_user(&candidate, &stored, &auth)?;
+
+  activate_validated_profile(&app, &state, &config_state, &mut profiles, &key, validated).await
+}
+
+/// Start a Quick Connect reauthentication request for a saved Jellyfin profile.
+#[tauri::command]
+#[specta]
+pub async fn server_profiles_reauthenticate_quick_connect_start(
+  app: tauri::AppHandle,
+  config_state: State<'_, ConfigState>,
+  key: String,
+) -> Result<QuickConnectRequest, CommandError> {
+  let profiles = load_profiles(&app).map_err(internal_err)?;
+  let stored = profiles
+    .session_for_key(&key)
+    .ok_or_else(|| CommandError::not_found("Saved service profile was not found"))?;
+  require_jellyfin_profile(&stored)?;
+
+  let candidate = profile_auth_client(&stored, &config_state);
+  candidate
+    .login()
+    .quick_connect_start(&stored.server_url)
+    .await
+    .map_err(jellyfin_err)
+}
+
+/// Check whether a Quick Connect reauthentication request has been approved.
+#[tauri::command]
+#[specta]
+pub async fn server_profiles_reauthenticate_quick_connect_check(
+  app: tauri::AppHandle,
+  config_state: State<'_, ConfigState>,
+  key: String,
+  secret: String,
+) -> Result<QuickConnectStatus, CommandError> {
+  let profiles = load_profiles(&app).map_err(internal_err)?;
+  let stored = profiles
+    .session_for_key(&key)
+    .ok_or_else(|| CommandError::not_found("Saved service profile was not found"))?;
+  require_jellyfin_profile(&stored)?;
+
+  let candidate = profile_auth_client(&stored, &config_state);
+  candidate
+    .login()
+    .quick_connect_check(&stored.server_url, &secret)
+    .await
+    .map_err(jellyfin_err)
+}
+
+/// Complete Quick Connect reauthentication for a saved Jellyfin profile.
+#[tauri::command]
+#[specta]
+pub async fn server_profiles_reauthenticate_quick_connect_authenticate(
+  app: tauri::AppHandle,
+  state: State<'_, JellyfinState>,
+  config_state: State<'_, ConfigState>,
+  key: String,
+  secret: String,
+) -> Result<SavedServiceProfiles, CommandError> {
+  let mut profiles = load_profiles(&app).map_err(internal_err)?;
+  let stored = profiles
+    .session_for_key(&key)
+    .ok_or_else(|| CommandError::not_found("Saved service profile was not found"))?;
+  require_jellyfin_profile(&stored)?;
+
+  let candidate = profile_auth_client(&stored, &config_state);
+  let auth = candidate
+    .login()
+    .quick_connect_authenticate(&stored.server_url, &secret)
+    .await
+    .map_err(jellyfin_err)?;
+
+  let validated = match_profile_user(&candidate, &stored, &auth)?;
+
+  activate_validated_profile(&app, &state, &config_state, &mut profiles, &key, validated).await
+}
+
+/// Build a throwaway client for validating or re-authenticating a saved
+/// profile without touching the live client.
+fn profile_auth_client(session: &SavedSession, config_state: &ConfigState) -> JellyfinClient {
+  let client = JellyfinClient::for_saved_profile(session);
+  client.set_device_name(config_state.0.read().device_name.clone());
+  client
+}
+
+/// Quick Connect is a Jellyfin-only capability.
+fn require_jellyfin_profile(stored: &SavedSession) -> Result<(), CommandError> {
+  if !matches!(stored.provider, MediaServerProvider::Jellyfin) {
+    return Err(CommandError::invalid_input(
+      "Quick Connect is not supported for this saved service",
+    ));
+  }
+  Ok(())
+}
+
+/// Guard that a candidate authentication produced the same immutable user as
+/// the stored profile, then hand back the candidate's refreshed session.
+fn match_profile_user(
+  candidate: &JellyfinClient,
+  stored: &SavedSession,
+  auth: &AuthResponse,
+) -> Result<SavedSession, CommandError> {
+  if auth.user.id != stored.user_id {
+    return Err(CommandError::auth_failed(
+      "Authenticated account does not match this saved service",
+    ));
+  }
+  candidate
+    .login()
+    .get_saved_session()
+    .ok_or_else(|| CommandError::internal("Authenticated session could not be saved"))
 }
 
 /// Remove a saved service profile. Removing the active profile also disconnects it.
@@ -1208,6 +1379,10 @@ pub fn specta_builder() -> Builder<tauri::Wry> {
       server_profiles_save_current,
       server_profiles_activate,
       server_profiles_remove,
+      server_profiles_reauthenticate_password,
+      server_profiles_reauthenticate_quick_connect_start,
+      server_profiles_reauthenticate_quick_connect_check,
+      server_profiles_reauthenticate_quick_connect_authenticate,
       // Config commands
       config_get,
       config_set,
@@ -1256,6 +1431,101 @@ mod tests {
 
     assert!(matches!(err.code, CommandErrorCode::Network));
     assert!(err.message.contains("Unable to discover Emby API base URL"));
+  }
+
+  #[test]
+  fn match_profile_user_rejects_different_user_id() {
+    let stored = SavedSession {
+      provider: MediaServerProvider::Jellyfin,
+      server_url: "https://media.example.com".to_string(),
+      access_token: "expired-token".to_string(),
+      user_id: "user-Ada".to_string(),
+      user_name: "Ada".to_string(),
+      server_name: None,
+      device_id: Some("device-1".to_string()),
+    };
+    let auth = AuthResponse {
+      user: crate::jellyfin::User {
+        id: "user-Mallory".to_string(),
+        name: "Mallory".to_string(),
+      },
+      access_token: "fresh-token".to_string(),
+      server_id: "server-1".to_string(),
+    };
+
+    let err = match_profile_user(&JellyfinClient::new(), &stored, &auth)
+      .expect_err("different user must be rejected");
+
+    assert!(matches!(err.code, CommandErrorCode::AuthFailed));
+    assert_eq!(
+      err.message,
+      "Authenticated account does not match this saved service"
+    );
+  }
+
+  #[test]
+  fn match_profile_user_accepts_exact_user_id_and_returns_refreshed_session() {
+    let stored = SavedSession {
+      provider: MediaServerProvider::Jellyfin,
+      server_url: "https://media.example.com".to_string(),
+      access_token: "expired-token".to_string(),
+      user_id: "user-Ada".to_string(),
+      user_name: "Ada".to_string(),
+      server_name: None,
+      device_id: Some("device-1".to_string()),
+    };
+    let auth = AuthResponse {
+      user: crate::jellyfin::User {
+        id: "user-Ada".to_string(),
+        name: "Ada Lovelace".to_string(),
+      },
+      access_token: "fresh-token".to_string(),
+      server_id: "server-1".to_string(),
+    };
+    let candidate = JellyfinClient::new();
+    candidate.login().adopt_validated_session(&SavedSession {
+      provider: MediaServerProvider::Jellyfin,
+      server_url: "https://media.example.com".to_string(),
+      access_token: "fresh-token".to_string(),
+      user_id: "user-Ada".to_string(),
+      user_name: "Ada Lovelace".to_string(),
+      server_name: Some("Jellyfin Home".to_string()),
+      device_id: Some("device-1".to_string()),
+    });
+
+    let validated =
+      match_profile_user(&candidate, &stored, &auth).expect("matching user id should be accepted");
+
+    assert_eq!(validated.user_id, "user-Ada");
+    assert_eq!(validated.user_name, "Ada Lovelace");
+    assert_eq!(validated.access_token, "fresh-token");
+  }
+
+  #[test]
+  fn require_jellyfin_profile_rejects_emby_profiles() {
+    let emby = SavedSession {
+      provider: MediaServerProvider::Emby,
+      server_url: "https://emby.example.com".to_string(),
+      access_token: "token".to_string(),
+      user_id: "user-1".to_string(),
+      user_name: "Grace".to_string(),
+      server_name: None,
+      device_id: None,
+    };
+
+    let err = require_jellyfin_profile(&emby).expect_err("emby profile must be rejected");
+
+    assert!(matches!(err.code, CommandErrorCode::InvalidInput));
+    assert_eq!(
+      err.message,
+      "Quick Connect is not supported for this saved service"
+    );
+
+    let jellyfin = SavedSession {
+      provider: MediaServerProvider::Jellyfin,
+      ..emby
+    };
+    assert!(require_jellyfin_profile(&jellyfin).is_ok());
   }
 
   #[test]

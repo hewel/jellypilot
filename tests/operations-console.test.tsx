@@ -60,6 +60,7 @@ const validSavedProfiles: SavedServiceProfiles = {
       active: true,
       key: 'jellyfin|https://jellyfin.example.com|Ada',
       lastRestoreError: null,
+      reauthRequired: false,
       provider: 'jellyfin',
       serverName: 'Jellyfin Home',
       serverUrl: 'https://jellyfin.example.com',
@@ -72,6 +73,7 @@ const embySavedProfile = {
   active: false,
   key: 'emby|https://media.example.com/emby|Ada',
   lastRestoreError: null,
+  reauthRequired: false,
   provider: 'emby' as const,
   serverName: 'Emby Home',
   serverUrl: 'https://media.example.com/emby',
@@ -688,6 +690,188 @@ test('saved services card activates an inactive profile', async () => {
   fireEvent.click(screen.getByRole('button', { name: 'Activate' }));
 
   await waitFor(() => expect(activate).toHaveBeenCalledWith(embySavedProfile.key));
+
+  cleanup();
+});
+
+test('auth-failed activate opens the locked sign in again dialog without an error toast', async () => {
+  rstest.spyOn(commands, 'serverProfilesActivate').mockResolvedValue({
+    error: { code: 'authFailed', message: 'expired' },
+    status: 'error',
+  });
+  const cleanup = renderConsole(() => {}, config, connectedState, multipleSavedProfiles);
+
+  await screen.findByText('Emby Home');
+  fireEvent.click(screen.getByRole('button', { name: 'Activate' }));
+
+  const dialog = await screen.findByRole('dialog', { name: 'Sign in again' });
+  expect(
+    within(dialog).getByText(
+      'Your saved session expired. Sign in again to switch to this service.',
+    ),
+  ).toBeVisible();
+  expect(within(dialog).getByText('Emby Home')).toBeVisible();
+  expect(within(dialog).getByText('Ada')).toBeVisible();
+  expect(screen.queryByText('expired')).not.toBeInTheDocument();
+
+  cleanup();
+});
+
+test('non-auth activate failure keeps the toast and opens no dialog', async () => {
+  rstest.spyOn(commands, 'serverProfilesActivate').mockResolvedValue({
+    error: { code: 'network', message: 'offline' },
+    status: 'error',
+  });
+  const cleanup = renderConsole(() => {}, config, connectedState, multipleSavedProfiles);
+
+  await screen.findByText('Emby Home');
+  fireEvent.click(screen.getByRole('button', { name: 'Activate' }));
+
+  await waitFor(() => expect(screen.getByText('offline')).toBeVisible());
+  expect(screen.queryByRole('dialog', { name: 'Sign in again' })).not.toBeInTheDocument();
+
+  cleanup();
+});
+
+test('persisted reauthRequired renders Sign in again and skips serverProfilesActivate', async () => {
+  const activate = rstest.spyOn(commands, 'serverProfilesActivate').mockResolvedValue({
+    data: multipleSavedProfiles,
+    status: 'ok',
+  });
+  const reauthProfiles: SavedServiceProfiles = {
+    activeProfileKey: validSavedProfiles.activeProfileKey,
+    profiles: [
+      validSavedProfiles.profiles[0],
+      {
+        ...embySavedProfile,
+        lastRestoreError: 'expired',
+        reauthRequired: true,
+      },
+    ],
+  };
+  const cleanup = renderConsole(() => {}, config, connectedState, reauthProfiles);
+
+  const signInAgain = await screen.findByRole('button', { name: 'Sign in again' });
+  fireEvent.click(signInAgain);
+
+  await screen.findByRole('dialog', { name: 'Sign in again' });
+  expect(activate).not.toHaveBeenCalled();
+
+  cleanup();
+});
+
+test('emby recovery exposes only password and sends only key and password', async () => {
+  const reauthenticate = rstest
+    .spyOn(commands, 'serverProfilesReauthenticatePassword')
+    .mockResolvedValue({
+      data: {
+        activeProfileKey: embySavedProfile.key,
+        profiles: [
+          { ...validSavedProfiles.profiles[0], active: false },
+          { ...embySavedProfile, active: true, lastRestoreError: null, reauthRequired: false },
+        ],
+      },
+      status: 'ok',
+    });
+  const reauthProfiles: SavedServiceProfiles = {
+    activeProfileKey: validSavedProfiles.activeProfileKey,
+    profiles: [
+      validSavedProfiles.profiles[0],
+      { ...embySavedProfile, lastRestoreError: 'expired', reauthRequired: true },
+    ],
+  };
+  const cleanup = renderConsole(() => {}, config, connectedState, reauthProfiles);
+
+  fireEvent.click(await screen.findByRole('button', { name: 'Sign in again' }));
+  const dialog = await screen.findByRole('dialog', { name: 'Sign in again' });
+
+  expect(within(dialog).queryByRole('tab', { name: 'Quick Connect' })).not.toBeInTheDocument();
+  expect(within(dialog).queryByLabelText('Username')).not.toBeInTheDocument();
+  expect(within(dialog).queryByText('Remember Server URL and username')).not.toBeInTheDocument();
+
+  fireEvent.input(await within(dialog).findByPlaceholderText('Jellyfin password'), {
+    currentTarget: { value: 'fixture-password' },
+    target: { value: 'fixture-password' },
+  });
+  fireEvent.click(within(dialog).getByRole('button', { name: 'Sign in and switch' }));
+
+  await waitFor(() =>
+    expect(reauthenticate).toHaveBeenCalledWith(embySavedProfile.key, 'fixture-password'),
+  );
+
+  cleanup();
+});
+
+test('reauthentication success closes the dialog and shows the switched toast', async () => {
+  rstest.spyOn(commands, 'serverProfilesReauthenticatePassword').mockResolvedValue({
+    data: {
+      activeProfileKey: embySavedProfile.key,
+      profiles: [
+        { ...validSavedProfiles.profiles[0], active: false },
+        { ...embySavedProfile, active: true, lastRestoreError: null, reauthRequired: false },
+      ],
+    },
+    status: 'ok',
+  });
+  const reauthProfiles: SavedServiceProfiles = {
+    activeProfileKey: validSavedProfiles.activeProfileKey,
+    profiles: [
+      validSavedProfiles.profiles[0],
+      { ...embySavedProfile, lastRestoreError: 'expired', reauthRequired: true },
+    ],
+  };
+  const cleanup = renderConsole(() => {}, config, connectedState, reauthProfiles);
+
+  fireEvent.click(await screen.findByRole('button', { name: 'Sign in again' }));
+  const dialog = await screen.findByRole('dialog', { name: 'Sign in again' });
+
+  fireEvent.input(await within(dialog).findByPlaceholderText('Jellyfin password'), {
+    currentTarget: { value: 'fixture-password' },
+    target: { value: 'fixture-password' },
+  });
+  fireEvent.click(within(dialog).getByRole('button', { name: 'Sign in and switch' }));
+
+  await waitFor(() =>
+    expect(screen.queryByRole('dialog', { name: 'Sign in again' })).not.toBeInTheDocument(),
+  );
+  await waitFor(() => expect(screen.getByText('Signed in and switched service')).toBeVisible());
+
+  cleanup();
+});
+
+test('reauthentication failure stays retryable inside the dialog', async () => {
+  rstest.spyOn(commands, 'serverProfilesReauthenticatePassword').mockResolvedValue({
+    error: {
+      code: 'authFailed',
+      message: 'Authenticated account does not match this saved service',
+    },
+    status: 'error',
+  });
+  const reauthProfiles: SavedServiceProfiles = {
+    activeProfileKey: validSavedProfiles.activeProfileKey,
+    profiles: [
+      validSavedProfiles.profiles[0],
+      { ...embySavedProfile, lastRestoreError: 'expired', reauthRequired: true },
+    ],
+  };
+  const cleanup = renderConsole(() => {}, config, connectedState, reauthProfiles);
+
+  fireEvent.click(await screen.findByRole('button', { name: 'Sign in again' }));
+  const dialog = await screen.findByRole('dialog', { name: 'Sign in again' });
+
+  fireEvent.input(await within(dialog).findByPlaceholderText('Jellyfin password'), {
+    currentTarget: { value: 'wrong-password' },
+    target: { value: 'wrong-password' },
+  });
+  fireEvent.click(within(dialog).getByRole('button', { name: 'Sign in and switch' }));
+
+  await waitFor(() =>
+    expect(
+      within(dialog).getByText('Authenticated account does not match this saved service'),
+    ).toBeVisible(),
+  );
+  expect(screen.getByRole('dialog', { name: 'Sign in again' })).toBeVisible();
+  expect(within(dialog).getByRole('button', { name: 'Sign in and switch' })).not.toBeDisabled();
 
   cleanup();
 });

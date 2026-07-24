@@ -20,6 +20,7 @@ const sampleProfiles = {
       active: true,
       key: 'jellyfin|https://jellyfin.example.com|Ada',
       lastRestoreError: null,
+      reauthRequired: false,
       provider: 'jellyfin' as const,
       serverName: 'Jellyfin Home',
       serverUrl: 'https://jellyfin.example.com',
@@ -840,4 +841,123 @@ test('loadSavedCredentials migrates legacy remembered Login Prefill', () => {
   });
   expect(localStorage.getItem(LEGACY_CREDENTIALS_STORAGE_KEY)).toBeNull();
   expect(localStorage.getItem(CREDENTIALS_STORAGE_KEY)).not.toBeNull();
+});
+
+const reauthJellyfinProfile = {
+  active: false,
+  key: 'jellyfin|https://jellyfin.example.com|Ada',
+  lastRestoreError: 'expired',
+  provider: 'jellyfin' as const,
+  reauthRequired: true,
+  serverName: 'Jellyfin Home',
+  serverUrl: 'https://jellyfin.example.com',
+  userName: 'Ada',
+};
+
+function renderReauthLoginPage(onConnected = () => {}) {
+  const root = document.createElement('div');
+  document.body.append(root);
+  const dispose = render(
+    () => (
+      <TestQueryProvider>
+        <LoginPage
+          embedded
+          onConnected={onConnected}
+          reauthenticateProfile={reauthJellyfinProfile}
+        />
+      </TestQueryProvider>
+    ),
+    root,
+  );
+  return () => {
+    dispose();
+    root.remove();
+  };
+}
+
+test('reauthentication mode locks identity to the saved profile', () => {
+  const cleanup = renderReauthLoginPage();
+
+  expect(screen.getByRole('heading', { name: 'Sign in again' })).toBeVisible();
+  expect(
+    screen.getByText('Your saved session expired. Sign in again to switch to this service.'),
+  ).toBeVisible();
+  expect(screen.getByText('Jellyfin')).toBeVisible();
+  expect(screen.getByText('Jellyfin Home')).toBeVisible();
+  expect(screen.getByText('Ada')).toBeVisible();
+
+  expect(
+    screen.queryByPlaceholderText('jellyfin.local or media.example.com/jellyfin'),
+  ).not.toBeInTheDocument();
+  expect(screen.queryByText('Media Server')).not.toBeInTheDocument();
+  expect(screen.queryByText('Remember Server URL and username')).not.toBeInTheDocument();
+
+  cleanup();
+});
+
+test('jellyfin recovery quick connect uses profile-scoped commands and saves no new profile', async () => {
+  rstest.useFakeTimers();
+  const start = rstest
+    .spyOn(commands, 'serverProfilesReauthenticateQuickConnectStart')
+    .mockResolvedValue({
+      data: { code: 'ABCD12', secret: 'secret-123' },
+      status: 'ok',
+    });
+  const check = rstest
+    .spyOn(commands, 'serverProfilesReauthenticateQuickConnectCheck')
+    .mockResolvedValue({
+      data: 'approved',
+      status: 'ok',
+    });
+  const authenticate = rstest
+    .spyOn(commands, 'serverProfilesReauthenticateQuickConnectAuthenticate')
+    .mockResolvedValue({
+      data: sampleProfiles,
+      status: 'ok',
+    });
+  const saveProfile = rstest.spyOn(commands, 'serverProfilesSaveCurrent');
+  const standaloneStart = rstest.spyOn(commands, 'jellyfinQuickConnectStart');
+  const onConnected = rstest.fn();
+  const cleanup = renderReauthLoginPage(onConnected);
+
+  fireEvent.click(screen.getByRole('button', { name: 'Request Quick Connect code' }));
+
+  await waitFor(() => expect(screen.getByText('ABCD12')).toBeVisible());
+  expect(start).toHaveBeenCalledWith(reauthJellyfinProfile.key);
+
+  await rstest.advanceTimersByTimeAsync(5000);
+
+  await waitFor(() => expect(onConnected).toHaveBeenCalledTimes(1));
+  expect(check).toHaveBeenCalledWith(reauthJellyfinProfile.key, 'secret-123');
+  expect(authenticate).toHaveBeenCalledWith(reauthJellyfinProfile.key, 'secret-123');
+  expect(saveProfile).not.toHaveBeenCalled();
+  expect(standaloneStart).not.toHaveBeenCalled();
+
+  cleanup();
+});
+
+test('reauthentication password sign in sends only the profile key and password', async () => {
+  const reauthenticate = rstest
+    .spyOn(commands, 'serverProfilesReauthenticatePassword')
+    .mockResolvedValue({
+      data: sampleProfiles,
+      status: 'ok',
+    });
+  const connect = rstest.spyOn(commands, 'serverConnect');
+  const saveProfile = rstest.spyOn(commands, 'serverProfilesSaveCurrent');
+  const onConnected = rstest.fn();
+  const cleanup = renderReauthLoginPage(onConnected);
+
+  fireEvent.click(screen.getByRole('tab', { name: 'Password' }));
+  fireEvent.input(await screen.findByPlaceholderText('Jellyfin password'), {
+    target: { value: 'fixture-password' },
+  });
+  fireEvent.click(screen.getByRole('button', { name: 'Sign in and switch' }));
+
+  await waitFor(() => expect(onConnected).toHaveBeenCalledTimes(1));
+  expect(reauthenticate).toHaveBeenCalledWith(reauthJellyfinProfile.key, 'fixture-password');
+  expect(connect).not.toHaveBeenCalled();
+  expect(saveProfile).not.toHaveBeenCalled();
+
+  cleanup();
 });

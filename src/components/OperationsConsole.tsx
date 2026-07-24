@@ -7,8 +7,8 @@ import { Show, createEffect, createSignal } from 'solid-js';
 import { Portal } from 'solid-js/web';
 import * as recipes from '~styles/recipes';
 
-import type { AppConfig, IntroSkipperMode } from '../bindings';
-import { commandFailureMessage } from '../effects/commands';
+import type { AppConfig, IntroSkipperMode, SavedServiceProfileSummary } from '../bindings';
+import { commandFailure, commandFailureMessage } from '../effects/commands';
 import { detectMpv, fetchConfig, saveConfig } from '../effects/config';
 import { disconnectJellyfin, fetchConnectionState } from '../effects/connection';
 import {
@@ -41,10 +41,21 @@ interface OperationsConsoleProps {
   onSignedOut: () => void;
 }
 
+type ServiceDialogState =
+  | { kind: 'add' }
+  | { kind: 'reauthenticate'; profile: SavedServiceProfileSummary };
+
 export default function OperationsConsole(props: OperationsConsoleProps) {
   const { showToast } = useToast();
   const { state: ui, actions, Provider } = createOperationsConsoleStore();
-  const [addServiceOpen, setAddServiceOpen] = createSignal(false);
+  const [serviceDialog, setServiceDialog] = createSignal<ServiceDialogState | null>(null);
+  const [serviceDialogOpen, setServiceDialogOpen] = createSignal(false);
+
+  const openServiceDialog = (dialog: ServiceDialogState) => {
+    setServiceDialog(dialog);
+    setServiceDialogOpen(true);
+  };
+  const closeServiceDialog = () => setServiceDialogOpen(false);
   const [addServicePortalMount, setAddServicePortalMount] = createSignal<HTMLDivElement>();
   const [activatingProfileKey, setActivatingProfileKey] = createSignal<string | null>(null);
   const [removingProfileKey, setRemovingProfileKey] = createSignal<string | null>(null);
@@ -479,12 +490,38 @@ export default function OperationsConsole(props: OperationsConsoleProps) {
         showToast('success', 'Switched active service');
         void connectionQuery.refetch();
         void profilesQuery.refetch();
-      } else {
-        showToast('error', commandFailureMessage(exit.cause, 'Could not switch service'));
-        void profilesQuery.refetch();
+        return;
       }
+
+      const failure = commandFailure(exit.cause);
+      if (Option.isSome(failure) && failure.value.code === 'authFailed') {
+        await profilesQuery.refetch();
+        const profile = profiles()?.profiles.find((candidate) => candidate.key === key);
+        if (profile) {
+          openServiceDialog({ kind: 'reauthenticate', profile });
+        } else {
+          showToast('error', 'Saved service profile is no longer available');
+        }
+        return;
+      }
+
+      showToast('error', commandFailureMessage(exit.cause, 'Could not switch service'));
+      void profilesQuery.refetch();
     } finally {
       setActivatingProfileKey(null);
+    }
+  };
+
+  const handleReauthenticateProfile = async (key: string) => {
+    let profile = profiles()?.profiles.find((candidate) => candidate.key === key);
+    if (!profile) {
+      await profilesQuery.refetch();
+      profile = profiles()?.profiles.find((candidate) => candidate.key === key);
+    }
+    if (profile) {
+      openServiceDialog({ kind: 'reauthenticate', profile });
+    } else {
+      showToast('error', 'Saved service profile is no longer available');
     }
   };
 
@@ -513,8 +550,16 @@ export default function OperationsConsole(props: OperationsConsoleProps) {
 
   const handleAddServiceConnected = () => {
     clearLibraryQueries();
-    setAddServiceOpen(false);
+    closeServiceDialog();
     showToast('success', 'Saved service added and activated');
+    void connectionQuery.refetch();
+    void profilesQuery.refetch();
+  };
+
+  const handleReauthenticated = () => {
+    clearLibraryQueries();
+    closeServiceDialog();
+    showToast('success', 'Signed in and switched service');
     void connectionQuery.refetch();
     void profilesQuery.refetch();
   };
@@ -555,8 +600,9 @@ export default function OperationsConsole(props: OperationsConsoleProps) {
               profiles={profiles()}
               activatingProfileKey={activatingProfileKey()}
               removingProfileKey={removingProfileKey()}
-              onAddService={() => setAddServiceOpen(true)}
+              onAddService={() => openServiceDialog({ kind: 'add' })}
               onActivateProfile={handleActivateProfile}
+              onReauthenticateProfile={handleReauthenticateProfile}
               onRemoveProfile={handleRemoveProfile}
             />
 
@@ -615,8 +661,8 @@ export default function OperationsConsole(props: OperationsConsoleProps) {
       </ConsoleContainer>
       <div ref={setAddServicePortalMount} />
       <Dialog.Root
-        open={addServiceOpen()}
-        onOpenChange={(details) => setAddServiceOpen(details.open)}
+        open={serviceDialogOpen()}
+        onOpenChange={(details) => setServiceDialogOpen(details.open)}
         lazyMount
         unmountOnExit
       >
@@ -624,21 +670,54 @@ export default function OperationsConsole(props: OperationsConsoleProps) {
           <Dialog.Backdrop class={recipes.scrim({ tone: 'dark', z: '60' })} />
           <Dialog.Positioner class={styles.positioner}>
             <Dialog.Content class={styles.content}>
-              <Dialog.Title class={recipes.srOnly}>Add saved service</Dialog.Title>
-              <Dialog.Description class={recipes.srOnly}>
-                Log in to a Jellyfin or Emby service and save it for switching.
-              </Dialog.Description>
-              <Button
-                type="button"
-                variant="icon"
-                class={styles.closeButton}
-                aria-label="Close add service"
-                title="Close add service"
-                onClick={() => setAddServiceOpen(false)}
-              >
-                <X class={styles.icon4_5} />
-              </Button>
-              <LoginPage embedded onConnected={handleAddServiceConnected} />
+              <Show when={serviceDialog()} keyed>
+                {(dialog) => (
+                  <>
+                    {dialog.kind === 'reauthenticate' ? (
+                      <>
+                        <Dialog.Title class={recipes.srOnly}>Sign in again</Dialog.Title>
+                        <Dialog.Description class={recipes.srOnly}>
+                          Sign in again to switch to this saved service.
+                        </Dialog.Description>
+                      </>
+                    ) : (
+                      <>
+                        <Dialog.Title class={recipes.srOnly}>Add saved service</Dialog.Title>
+                        <Dialog.Description class={recipes.srOnly}>
+                          Log in to a Jellyfin or Emby service and save it for switching.
+                        </Dialog.Description>
+                      </>
+                    )}
+                    <Button
+                      type="button"
+                      variant="icon"
+                      class={styles.closeButton}
+                      aria-label={
+                        dialog.kind === 'reauthenticate'
+                          ? 'Close sign in again'
+                          : 'Close add service'
+                      }
+                      title={
+                        dialog.kind === 'reauthenticate'
+                          ? 'Close sign in again'
+                          : 'Close add service'
+                      }
+                      onClick={closeServiceDialog}
+                    >
+                      <X class={styles.icon4_5} />
+                    </Button>
+                    {dialog.kind === 'reauthenticate' ? (
+                      <LoginPage
+                        embedded
+                        reauthenticateProfile={dialog.profile}
+                        onConnected={handleReauthenticated}
+                      />
+                    ) : (
+                      <LoginPage embedded onConnected={handleAddServiceConnected} />
+                    )}
+                  </>
+                )}
+              </Show>
             </Dialog.Content>
           </Dialog.Positioner>
         </Portal>

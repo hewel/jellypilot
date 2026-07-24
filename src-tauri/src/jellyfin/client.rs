@@ -87,6 +87,21 @@ impl JellyfinClient {
       })),
     }
   }
+
+  /// Create a client pre-seeded with a saved profile's identity for
+  /// validation or re-authentication that must not touch the live client.
+  pub fn for_saved_profile(session: &SavedSession) -> Self {
+    let client = Self::new();
+    {
+      let mut state = client.state.write();
+      state.provider = session.provider;
+      if let Some(saved_device_id) = &session.device_id {
+        state.device_id = saved_device_id.clone();
+      }
+    }
+    client
+  }
+
   /// Login/session lifecycle operations.
   pub fn login(&self) -> JellyfinLogin<'_> {
     JellyfinLogin { client: self }
@@ -237,9 +252,19 @@ impl JellyfinClient {
     context: &str,
     err: jellyfin_api::apis::Error<T>,
   ) -> JellyfinError {
-    match Self::openapi_error(context, err) {
-      JellyfinError::HttpError(message) => JellyfinError::AuthFailed(message),
-      err => err,
+    match err {
+      jellyfin_api::apis::Error::ResponseError(response)
+        if matches!(
+          response.status,
+          reqwest::StatusCode::UNAUTHORIZED | reqwest::StatusCode::FORBIDDEN
+        ) =>
+      {
+        JellyfinError::AuthFailed(format!(
+          "{context} failed: HTTP {} - {}",
+          response.status, response.content
+        ))
+      }
+      err => Self::openapi_error(context, err),
     }
   }
 
@@ -266,9 +291,19 @@ impl JellyfinClient {
     context: &str,
     err: emby_api::apis::Error<T>,
   ) -> JellyfinError {
-    match Self::emby_openapi_error(context, err) {
-      JellyfinError::HttpError(message) => JellyfinError::AuthFailed(message),
-      err => err,
+    match err {
+      emby_api::apis::Error::ResponseError(response)
+        if matches!(
+          response.status,
+          reqwest::StatusCode::UNAUTHORIZED | reqwest::StatusCode::FORBIDDEN
+        ) =>
+      {
+        JellyfinError::AuthFailed(format!(
+          "{context} failed: HTTP {} - {}",
+          response.status, response.content
+        ))
+      }
+      err => Self::emby_openapi_error(context, err),
     }
   }
 
@@ -752,10 +787,7 @@ impl JellyfinClient {
       Ok(_) => Ok(()),
       Err(e) => {
         self.disconnect();
-        Err(JellyfinError::AuthFailed(format!(
-          "Session validation failed: {}",
-          e
-        )))
+        Err(e)
       }
     }
   }
@@ -1575,6 +1607,24 @@ impl<'a> JellyfinLogin<'a> {
 
   pub async fn restore_session(&self, session: &SavedSession) -> Result<(), JellyfinError> {
     self.client.restore_session(session).await
+  }
+
+  /// Adopt a session that a separate client already validated or
+  /// authenticated. This is a non-networking state copy; callers must prove
+  /// the session on a separate client before adopting it here.
+  pub fn adopt_validated_session(&self, session: &SavedSession) {
+    let mut state = self.client.state.write();
+    state.provider = session.provider;
+    state.remote_control_available = false;
+    state.remote_control_warning = None;
+    state.server_url = Some(session.server_url.clone());
+    state.access_token = Some(session.access_token.clone());
+    state.user_id = Some(session.user_id.clone());
+    state.user_name = Some(session.user_name.clone());
+    state.server_name = session.server_name.clone();
+    if let Some(saved_device_id) = &session.device_id {
+      state.device_id = saved_device_id.clone();
+    }
   }
 
   pub fn disconnect(&self) {
@@ -4471,6 +4521,163 @@ mod tests {
       "expected auth failure, got {err:?}"
     );
     assert!(!client.is_connected());
+  }
+
+  #[tokio::test]
+  async fn restore_session_reports_forbidden_as_auth_failure() {
+    let server_url = serve_once("403 Forbidden", r#"{"Message":"forbidden"}"#).await;
+    let client = JellyfinClient::new();
+
+    let err = client
+      .restore_session(&SavedSession {
+        provider: MediaServerProvider::Jellyfin,
+        server_url,
+        access_token: "token-1".to_string(),
+        user_id: "00000000-0000-0000-0000-000000000001".to_string(),
+        user_name: "Ada".to_string(),
+        server_name: None,
+        device_id: Some("jellypilot-saved-device".to_string()),
+      })
+      .await
+      .expect_err("restore should report forbidden as auth failure");
+
+    assert!(
+      matches!(err, JellyfinError::AuthFailed(_)),
+      "expected auth failure, got {err:?}"
+    );
+  }
+
+  #[tokio::test]
+  async fn restore_session_keeps_server_errors_as_non_auth_failures() {
+    let server_url = serve_once("500 Internal Server Error", r#"{"Message":"boom"}"#).await;
+    let client = JellyfinClient::new();
+
+    let err = client
+      .restore_session(&SavedSession {
+        provider: MediaServerProvider::Jellyfin,
+        server_url,
+        access_token: "token-1".to_string(),
+        user_id: "00000000-0000-0000-0000-000000000001".to_string(),
+        user_name: "Ada".to_string(),
+        server_name: None,
+        device_id: Some("jellypilot-saved-device".to_string()),
+      })
+      .await
+      .expect_err("restore should report server error");
+
+    assert!(
+      matches!(err, JellyfinError::HttpError(_)),
+      "expected non-auth HTTP error, got {err:?}"
+    );
+  }
+
+  #[tokio::test]
+  async fn restore_session_keeps_network_failures_as_non_auth_failures() {
+    let client = JellyfinClient::new();
+
+    let err = client
+      .restore_session(&SavedSession {
+        provider: MediaServerProvider::Jellyfin,
+        server_url: "http://127.0.0.1:1".to_string(),
+        access_token: "token-1".to_string(),
+        user_id: "00000000-0000-0000-0000-000000000001".to_string(),
+        user_name: "Ada".to_string(),
+        server_name: None,
+        device_id: Some("jellypilot-saved-device".to_string()),
+      })
+      .await
+      .expect_err("restore should report network failure");
+
+    assert!(
+      matches!(err, JellyfinError::Http(_)),
+      "expected request failure, got {err:?}"
+    );
+  }
+
+  #[tokio::test]
+  async fn candidate_restore_failure_leaves_independent_live_client_connected() {
+    let live = JellyfinClient::new();
+    connect_test_client(&live, "http://live.example.com".to_string());
+    live.state.write().user_name = Some("Ada".to_string());
+
+    let failing_url = serve_once("401 Unauthorized", r#"{"Message":"revoked"}"#).await;
+    let candidate = JellyfinClient::for_saved_profile(&SavedSession {
+      provider: MediaServerProvider::Jellyfin,
+      server_url: failing_url.clone(),
+      access_token: "expired-token".to_string(),
+      user_id: "00000000-0000-0000-0000-000000000001".to_string(),
+      user_name: "Ada".to_string(),
+      server_name: None,
+      device_id: Some("jellypilot-saved-device".to_string()),
+    });
+
+    let err = candidate
+      .login()
+      .restore_session(&SavedSession {
+        provider: MediaServerProvider::Jellyfin,
+        server_url: failing_url,
+        access_token: "expired-token".to_string(),
+        user_id: "00000000-0000-0000-0000-000000000001".to_string(),
+        user_name: "Ada".to_string(),
+        server_name: None,
+        device_id: Some("jellypilot-saved-device".to_string()),
+      })
+      .await
+      .expect_err("candidate restore should fail");
+
+    assert!(matches!(err, JellyfinError::AuthFailed(_)));
+    assert!(live.login().is_connected());
+    assert_eq!(
+      live.login().get_saved_session().map(|s| s.access_token),
+      Some("token-1".to_string())
+    );
+  }
+
+  #[test]
+  fn for_saved_profile_reuses_saved_device_id_and_generates_when_missing() {
+    let with_id = JellyfinClient::for_saved_profile(&SavedSession {
+      provider: MediaServerProvider::Emby,
+      server_url: "https://emby.example.com".to_string(),
+      access_token: "token-1".to_string(),
+      user_id: "user-1".to_string(),
+      user_name: "Grace".to_string(),
+      server_name: None,
+      device_id: Some("saved-device".to_string()),
+    });
+    assert_eq!(with_id.device_id(), "saved-device");
+
+    let without_id = JellyfinClient::for_saved_profile(&SavedSession {
+      provider: MediaServerProvider::Jellyfin,
+      server_url: "https://media.example.com".to_string(),
+      access_token: "token-2".to_string(),
+      user_id: "user-2".to_string(),
+      user_name: "Ada".to_string(),
+      server_name: None,
+      device_id: None,
+    });
+    assert!(without_id.device_id().starts_with("jellypilot-"));
+  }
+
+  #[test]
+  fn adopt_validated_session_copies_session_state_without_network() {
+    let live = JellyfinClient::new();
+    let session = SavedSession {
+      provider: MediaServerProvider::Emby,
+      server_url: "https://emby.example.com".to_string(),
+      access_token: "refreshed-token".to_string(),
+      user_id: "user-1".to_string(),
+      user_name: "Grace".to_string(),
+      server_name: Some("Emby Home".to_string()),
+      device_id: Some("saved-device".to_string()),
+    };
+
+    live.login().adopt_validated_session(&session);
+
+    let adopted = live.login().get_saved_session().expect("session adopted");
+    assert_eq!(adopted.access_token, "refreshed-token");
+    assert_eq!(adopted.provider, MediaServerProvider::Emby);
+    assert_eq!(adopted.server_name.as_deref(), Some("Emby Home"));
+    assert_eq!(live.device_id(), "saved-device");
   }
 
   #[tokio::test]

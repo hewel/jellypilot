@@ -13,6 +13,7 @@ interface SavedServicesCardProps {
   removingProfileKey: string | null;
   onAddService: () => void;
   onActivateProfile: (key: string) => void;
+  onReauthenticateProfile: (key: string) => void;
   onRemoveProfile: (key: string) => void;
 }
 
@@ -66,16 +67,26 @@ export default function SavedServicesCard(props: SavedServicesCardProps) {
                     </Show>
                   </div>
                   <div class={styles.actions}>
-                    <Show when={!profile.active}>
+                    {profile.reauthRequired ? (
                       <Button
                         type="button"
                         variant="secondary"
-                        disabled={props.activatingProfileKey === profile.key}
-                        onClick={() => props.onActivateProfile(profile.key)}
+                        onClick={() => props.onReauthenticateProfile(profile.key)}
                       >
-                        {props.activatingProfileKey === profile.key ? 'Switching...' : 'Activate'}
+                        Sign in again
                       </Button>
-                    </Show>
+                    ) : (
+                      <Show when={!profile.active}>
+                        <Button
+                          type="button"
+                          variant="secondary"
+                          disabled={props.activatingProfileKey === profile.key}
+                          onClick={() => props.onActivateProfile(profile.key)}
+                        >
+                          {props.activatingProfileKey === profile.key ? 'Switching...' : 'Activate'}
+                        </Button>
+                      </Show>
+                    )}
                     <Button
                       type="button"
                       variant="outlined"

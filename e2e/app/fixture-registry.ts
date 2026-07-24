@@ -1,4 +1,5 @@
 import type {
+  AppConfig,
   CommandError,
   ConnectionState,
   Credentials,
@@ -25,17 +26,21 @@ export const EXPECTED_CREDENTIALS = {
 
 interface RawCommandMap {
   config_default: unknown;
+  config_get: AppConfig;
   library_browse_video: VideoLibraryPage;
   library_item_detail: VideoItemDetail;
   library_item_shortcut: VideoLibraryShortcut | null;
   library_play: null;
   library_video_home: VideoHome;
   library_video_shortcuts: VideoLibraryShortcut[];
+  mpv_is_connected: boolean;
   now_playing_get_state: NowPlayingState;
   server_connect: null;
   server_get_state: ConnectionState;
   server_is_connected: boolean;
+  server_profiles_activate: SavedServiceProfiles;
   server_profiles_get: SavedServiceProfiles;
+  server_profiles_reauthenticate_password: SavedServiceProfiles;
 }
 
 export type FixtureCommand = keyof RawCommandMap;
@@ -62,17 +67,21 @@ const calls = new Map<FixtureCommand, InvokeArgs[]>();
 function parseFixtureCommand(command: string): FixtureCommand | undefined {
   if (
     command === 'config_default' ||
+    command === 'config_get' ||
     command === 'library_browse_video' ||
     command === 'library_item_detail' ||
     command === 'library_item_shortcut' ||
     command === 'library_play' ||
     command === 'library_video_home' ||
     command === 'library_video_shortcuts' ||
+    command === 'mpv_is_connected' ||
     command === 'now_playing_get_state' ||
     command === 'server_connect' ||
     command === 'server_get_state' ||
     command === 'server_is_connected' ||
-    command === 'server_profiles_get'
+    command === 'server_profiles_activate' ||
+    command === 'server_profiles_get' ||
+    command === 'server_profiles_reauthenticate_password'
   ) {
     return command;
   }
@@ -152,6 +161,21 @@ export function hasExpectedLibraryPlayCall(): boolean {
     request.audioStreamIndex === null &&
     'subtitleStreamIndex' in request &&
     request.subtitleStreamIndex === null
+  );
+}
+
+export function hasExpectedReauthenticatePasswordCall(expectedKey: string): boolean {
+  const commandCalls = calls.get('server_profiles_reauthenticate_password');
+  if (!commandCalls || commandCalls.length !== 1) return false;
+
+  const args = commandCalls[0];
+  if (!args || typeof args !== 'object') return false;
+
+  return (
+    'key' in args &&
+    args.key === expectedKey &&
+    'password' in args &&
+    args.password === FIXTURE_PASSWORD
   );
 }
 

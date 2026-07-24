@@ -29,6 +29,7 @@ const sampleProfiles: SavedServiceProfiles = {
       active: true,
       key: sampleProfileKey,
       lastRestoreError: null,
+      reauthRequired: false,
       provider: 'jellyfin',
       serverName: 'Jellyfin Home',
       serverUrl: 'https://jellyfin.example.com',

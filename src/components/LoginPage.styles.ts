@@ -173,6 +173,11 @@ export const fieldBlock = css({
   display: 'block',
 });
 
+export const reauthRows = css({
+  display: 'grid',
+  gap: '3',
+});
+
 export const label = css({
   display: 'block',
   mb: '1_5',

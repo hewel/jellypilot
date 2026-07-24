@@ -28,3 +28,10 @@ export function removeSavedServiceProfile(
 ): Effect.Effect<SavedServiceProfiles, CommandError> {
   return runTauriCommand(() => commands.serverProfilesRemove(key));
 }
+
+export function reauthenticateSavedServiceProfileWithPassword(
+  key: string,
+  password: string,
+): Effect.Effect<SavedServiceProfiles, CommandError> {
+  return runTauriCommand(() => commands.serverProfilesReauthenticatePassword(key, password));
+}

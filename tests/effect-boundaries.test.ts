@@ -45,11 +45,16 @@ test('Quick Connect commands use typed command helpers', () => {
   expect(qcSource).toContain(
     'runTauriCommand(() => commands.jellyfinQuickConnectStart(serverUrl))',
   );
-  expect(qcSource).toContain('commands.jellyfinQuickConnectCheck(serverUrl, request.secret)');
-  expect(qcSource).toContain(
-    'commands.jellyfinQuickConnectAuthenticate(serverUrl, request.secret)',
-  );
+  expect(qcSource).toContain('commands.jellyfinQuickConnectCheck(serverUrl, secret)');
+  expect(qcSource).toContain('commands.jellyfinQuickConnectAuthenticate(serverUrl, secret)');
   expect(qcSource).toContain('yield* saveCurrentServiceProfile;');
+  expect(qcSource).toContain(
+    'runTauriCommand(() => commands.serverProfilesReauthenticateQuickConnectStart(key))',
+  );
+  expect(qcSource).toContain('commands.serverProfilesReauthenticateQuickConnectCheck(key, secret)');
+  expect(qcSource).toContain(
+    'commands.serverProfilesReauthenticateQuickConnectAuthenticate(key, secret)',
+  );
   expect(qcSource).not.toContain(
     'const result = await commands.jellyfinQuickConnectStart(serverUrl);',
   );

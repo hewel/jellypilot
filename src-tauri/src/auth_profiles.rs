@@ -24,6 +24,7 @@ pub struct SavedServiceProfileSummary {
   pub user_name: String,
   pub active: bool,
   pub last_restore_error: Option<String>,
+  pub reauth_required: bool,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -38,6 +39,8 @@ pub(crate) struct SavedServiceProfileStore {
 pub(crate) struct StoredSavedServiceProfile {
   pub session: SavedSession,
   pub last_restore_error: Option<String>,
+  #[serde(default)]
+  pub reauth_required: bool,
 }
 
 pub(crate) fn profile_key(session: &SavedSession) -> String {
@@ -77,10 +80,12 @@ impl SavedServiceProfileStore {
     {
       profile.session = session;
       profile.last_restore_error = None;
+      profile.reauth_required = false;
     } else {
       self.profiles.push(StoredSavedServiceProfile {
         session,
         last_restore_error: None,
+        reauth_required: false,
       });
     }
     self.active_profile_key = Some(key.clone());
@@ -95,20 +100,15 @@ impl SavedServiceProfileStore {
       .map(|profile| profile.session.clone())
   }
 
-  pub(crate) fn mark_active_restored(&mut self, key: &str) -> bool {
-    let Some(profile) = self
-      .profiles
-      .iter_mut()
-      .find(|profile| profile_key(&profile.session) == key)
-    else {
-      return false;
-    };
-    profile.last_restore_error = None;
-    self.active_profile_key = Some(key.to_string());
-    true
-  }
-
-  pub(crate) fn mark_restore_failed(&mut self, key: &str, message: String) -> bool {
+  /// Record a restore failure for the target profile. The active profile
+  /// key is left untouched so a failed target never replaces the previously
+  /// active profile.
+  pub(crate) fn mark_restore_failed(
+    &mut self,
+    key: &str,
+    message: String,
+    reauth_required: bool,
+  ) -> bool {
     let Some(profile) = self
       .profiles
       .iter_mut()
@@ -117,8 +117,31 @@ impl SavedServiceProfileStore {
       return false;
     };
     profile.last_restore_error = Some(message);
-    self.active_profile_key = Some(key.to_string());
+    profile.reauth_required = reauth_required;
     true
+  }
+
+  /// Replace the profile identified by `key` with a freshly validated
+  /// session, recompute its key from the refreshed session, and mark it
+  /// active. A renamed user therefore updates the existing entry instead of
+  /// creating a duplicate profile.
+  pub(crate) fn replace_and_mark_active(
+    &mut self,
+    key: &str,
+    session: SavedSession,
+  ) -> Option<String> {
+    let new_key = profile_key(&session);
+    let position = self
+      .profiles
+      .iter()
+      .position(|profile| profile_key(&profile.session) == key)?;
+    self.profiles[position] = StoredSavedServiceProfile {
+      session,
+      last_restore_error: None,
+      reauth_required: false,
+    };
+    self.active_profile_key = Some(new_key.clone());
+    Some(new_key)
   }
 
   pub(crate) fn remove_profile(&mut self, key: &str) -> bool {
@@ -149,6 +172,7 @@ impl StoredSavedServiceProfile {
       server_url: self.session.server_url.clone(),
       user_name: self.session.user_name.clone(),
       last_restore_error: self.last_restore_error.clone(),
+      reauth_required: self.reauth_required,
     }
   }
 }
@@ -248,7 +272,7 @@ mod tests {
       "token-1",
     ));
 
-    assert!(store.mark_restore_failed(&key, "expired".to_string()));
+    assert!(store.mark_restore_failed(&key, "expired".to_string(), true));
 
     let summary = store.summary();
     assert_eq!(summary.active_profile_key, Some(key));
@@ -256,6 +280,100 @@ mod tests {
       summary.profiles[0].last_restore_error.as_deref(),
       Some("expired")
     );
+    assert!(summary.profiles[0].reauth_required);
+  }
+
+  #[test]
+  fn legacy_store_without_reauth_required_defaults_to_false() {
+    let legacy = serde_json::json!({
+      "activeProfileKey": null,
+      "profiles": [{
+        "session": {
+          "provider": "jellyfin",
+          "serverUrl": "https://media.example.com",
+          "accessToken": "token-1",
+          "userId": "user-Ada",
+          "userName": "Ada",
+          "serverName": "Media Home",
+          "deviceId": "device-1"
+        },
+        "lastRestoreError": "Session validation failed: revoked"
+      }]
+    });
+
+    let store: SavedServiceProfileStore =
+      serde_json::from_value(legacy).expect("legacy store should deserialize");
+
+    assert!(!store.profiles[0].reauth_required);
+  }
+
+  #[test]
+  fn mark_restore_failed_flags_auth_and_non_auth_without_reassigning_active_key() {
+    let mut store = SavedServiceProfileStore::default();
+    let active_key = store.upsert_active(session(
+      MediaServerProvider::Jellyfin,
+      "https://media.example.com",
+      "Ada",
+      "token-1",
+    ));
+    store.upsert_active(session(
+      MediaServerProvider::Emby,
+      "https://emby.example.com",
+      "Grace",
+      "token-2",
+    ));
+    store.active_profile_key = Some(active_key.clone());
+    let emby_key = "emby|https://emby.example.com|Grace";
+
+    assert!(store.mark_restore_failed(emby_key, "expired".to_string(), true));
+
+    let summary = store.summary();
+    assert_eq!(summary.active_profile_key, Some(active_key.clone()));
+    assert!(summary.profiles[1].reauth_required);
+
+    assert!(store.mark_restore_failed(emby_key, "offline".to_string(), false));
+
+    let summary = store.summary();
+    assert_eq!(summary.active_profile_key, Some(active_key));
+    assert!(!summary.profiles[1].reauth_required);
+    assert_eq!(
+      summary.profiles[1].last_restore_error.as_deref(),
+      Some("offline")
+    );
+  }
+
+  #[test]
+  fn replace_and_mark_active_replaces_renamed_same_user_profile_without_duplication() {
+    let mut store = SavedServiceProfileStore::default();
+    let old_key = store.upsert_active(session(
+      MediaServerProvider::Jellyfin,
+      "https://media.example.com",
+      "Ada",
+      "token-1",
+    ));
+    assert!(store.mark_restore_failed(&old_key, "expired".to_string(), true));
+
+    let mut refreshed = session(
+      MediaServerProvider::Jellyfin,
+      "https://media.example.com",
+      "Ada Lovelace",
+      "token-2",
+    );
+    refreshed.user_id = "user-Ada".to_string();
+
+    let new_key = store
+      .replace_and_mark_active(&old_key, refreshed)
+      .expect("profile should be replaced");
+
+    assert_eq!(new_key, "jellyfin|https://media.example.com|Ada Lovelace");
+    assert_eq!(store.profiles.len(), 1);
+    assert_eq!(store.active_profile_key(), Some(new_key.as_str()));
+
+    let summary = store.summary();
+    assert_eq!(summary.profiles[0].user_name, "Ada Lovelace");
+    assert_eq!(summary.profiles[0].last_restore_error, None);
+    assert!(!summary.profiles[0].reauth_required);
+    assert!(summary.profiles[0].active);
   }
 
   #[test]

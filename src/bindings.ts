@@ -126,6 +126,14 @@ export const commands = {
 	serverProfilesActivate: (key: string) => typedError<SavedServiceProfiles, CommandError>(__TAURI_INVOKE("server_profiles_activate", { key })),
 	/**  Remove a saved service profile. Removing the active profile also disconnects it. */
 	serverProfilesRemove: (key: string) => typedError<SavedServiceProfiles, CommandError>(__TAURI_INVOKE("server_profiles_remove", { key })),
+	/**  Reauthenticate a saved service profile with its stored account and a new password. */
+	serverProfilesReauthenticatePassword: (key: string, password: string) => typedError<SavedServiceProfiles, CommandError>(__TAURI_INVOKE("server_profiles_reauthenticate_password", { key, password })),
+	/**  Start a Quick Connect reauthentication request for a saved Jellyfin profile. */
+	serverProfilesReauthenticateQuickConnectStart: (key: string) => typedError<QuickConnectRequest, CommandError>(__TAURI_INVOKE("server_profiles_reauthenticate_quick_connect_start", { key })),
+	/**  Check whether a Quick Connect reauthentication request has been approved. */
+	serverProfilesReauthenticateQuickConnectCheck: (key: string, secret: string) => typedError<QuickConnectStatus, CommandError>(__TAURI_INVOKE("server_profiles_reauthenticate_quick_connect_check", { key, secret })),
+	/**  Complete Quick Connect reauthentication for a saved Jellyfin profile. */
+	serverProfilesReauthenticateQuickConnectAuthenticate: (key: string, secret: string) => typedError<SavedServiceProfiles, CommandError>(__TAURI_INVOKE("server_profiles_reauthenticate_quick_connect_authenticate", { key, secret })),
 	/**  Get the current app configuration. */
 	configGet: () => __TAURI_INVOKE<AppConfig>("config_get"),
 	/**  Update the app configuration, apply changes live, and persist to disk. */
@@ -297,6 +305,7 @@ export type SavedServiceProfileSummary = {
 	userName: string,
 	active: boolean,
 	lastRestoreError: string | null,
+	reauthRequired: boolean,
 };
 
 export type SavedServiceProfiles = {

@@ -4,17 +4,21 @@ import { Tabs } from '@ark-ui/solid/tabs';
 import { cx } from '@styled-system/css';
 import { createForm } from '@tanstack/solid-form';
 import { useQueryClient } from '@tanstack/solid-query';
-import { Effect, Exit, Fiber } from 'effect';
+import { Effect, Exit, Fiber, Match } from 'effect';
 import { Check, CircleAlert, LoaderCircle, RadioTower } from 'lucide-solid';
 import { Show, createEffect, createSignal, onCleanup, onMount } from 'solid-js';
 import * as recipes from '~styles/recipes';
 
-import type { Credentials, MediaServerProvider } from '../bindings';
+import type { Credentials, MediaServerProvider, SavedServiceProfileSummary } from '../bindings';
 import { commandFailureMessage } from '../effects/commands';
 import { connectJellyfin } from '../effects/connection';
 import { CommandError } from '../effects/errors';
+import { reauthenticateSavedServiceProfileWithPassword } from '../effects/profiles';
 import { queryKeys } from '../effects/query';
-import { runQuickConnectWorkflow } from '../effects/quickConnect';
+import {
+  runQuickConnectWorkflow,
+  runSavedProfileQuickConnectWorkflow,
+} from '../effects/quickConnect';
 import { clearSavedCredentials, loadSavedCredentials, saveCredentials } from '../effects/session';
 import { capabilitiesForProvider } from '../providerCapabilities';
 import {
@@ -32,6 +36,7 @@ import { Button, Card, ConsoleShell, FieldControl, PageFooter } from './ui';
 interface LoginPageProps {
   onConnected: () => void;
   embedded?: boolean;
+  reauthenticateProfile?: SavedServiceProfileSummary;
 }
 type LoginMethod = 'quickConnect' | 'password';
 type QuickConnectState = 'idle' | 'waiting' | 'failed';
@@ -49,14 +54,29 @@ type ServerUrlValidation =
   | { status: 'ok'; result: ServerUrlResult }
   | { status: 'error'; message: string };
 
+const providerLabel = Match.type<MediaServerProvider>().pipe(
+  Match.withReturnType<string>(),
+  Match.when('jellyfin', () => 'Jellyfin'),
+  Match.when('emby', () => 'Emby'),
+  Match.exhaustive,
+);
+
 export default function LoginPage(props: LoginPageProps) {
   const queryClient = useQueryClient();
-  const [loginMethod, setLoginMethod] = createSignal<LoginMethod>('quickConnect');
+  const [loginMethod, setLoginMethod] = createSignal<LoginMethod>(
+    props.reauthenticateProfile &&
+      !capabilitiesForProvider(props.reauthenticateProfile.provider).quickConnect
+      ? 'password'
+      : 'quickConnect',
+  );
   const [quickConnectState, setQuickConnectState] = createSignal<QuickConnectState>('idle');
   const [quickConnectCode, setQuickConnectCode] = createSignal<string | null>(null);
   const [error, setError] = createSignal<string | null>(null);
   const [submitting, setSubmitting] = createSignal(false);
-  let quickConnectFiber: Fiber.Fiber<void, CommandError> | undefined;
+  let quickConnectFiber: Fiber.Fiber<unknown, CommandError> | undefined;
+
+  const reauthProfile = () => props.reauthenticateProfile;
+  const isReauthMode = () => reauthProfile() !== undefined;
 
   const form = createForm(() => ({
     defaultValues: {
@@ -68,6 +88,14 @@ export default function LoginPage(props: LoginPageProps) {
       username: '',
     },
     onSubmit: async ({ value }) => {
+      if (isReauthMode()) {
+        if (loginMethod() === 'quickConnect') {
+          await startReauthQuickConnect();
+        } else {
+          await reauthenticateWithPassword(value);
+        }
+        return;
+      }
       if (loginMethod() === 'quickConnect') {
         await startQuickConnect(value);
       } else {
@@ -78,15 +106,20 @@ export default function LoginPage(props: LoginPageProps) {
   const formValues = form.useStore((state) => state.values);
 
   const isQuickConnectWaiting = () => quickConnectState() === 'waiting';
-  const selectedCapabilities = () => capabilitiesForProvider(formValues().provider);
+  const selectedCapabilities = () =>
+    capabilitiesForProvider(reauthProfile()?.provider ?? formValues().provider);
   const submitButtonLabel = () => {
     if (loginMethod() !== 'quickConnect') {
-      return 'Connect';
+      return isReauthMode() ? 'Sign in and switch' : 'Connect';
     }
     return quickConnectState() === 'failed' ? 'Request a new code' : 'Request Quick Connect code';
   };
   const submittingButtonLabel = () =>
-    loginMethod() === 'quickConnect' ? 'Requesting...' : 'Connecting...';
+    loginMethod() === 'quickConnect'
+      ? 'Requesting...'
+      : isReauthMode()
+        ? 'Signing in...'
+        : 'Connecting...';
 
   const validateServerUrl = (value: Pick<LoginValues, 'scheme' | 'host'>): ServerUrlValidation =>
     Effect.runSync(
@@ -128,6 +161,11 @@ export default function LoginPage(props: LoginPageProps) {
     props.onConnected();
   };
 
+  const finishReauthenticated = () => {
+    queryClient.removeQueries({ queryKey: queryKeys.libraryRoot });
+    props.onConnected();
+  };
+
   const startQuickConnect = async (value: LoginValues) => {
     setError(null);
     const validation = validateServerUrl(value);
@@ -163,6 +201,44 @@ export default function LoginPage(props: LoginPageProps) {
     if (Exit.isSuccess(exit)) {
       queryClient.removeQueries({ queryKey: queryKeys.libraryRoot });
       props.onConnected();
+    } else {
+      setQuickConnectState('failed');
+      setError(commandFailureMessage(exit.cause, 'Quick Connect failed'));
+    }
+  };
+
+  const startReauthQuickConnect = async () => {
+    const profile = reauthProfile();
+    if (!profile) {
+      return;
+    }
+
+    setError(null);
+    setSubmitting(true);
+
+    if (quickConnectFiber) {
+      await Effect.runPromise(Fiber.interrupt(quickConnectFiber));
+    }
+
+    const fiber = Effect.runFork(
+      runSavedProfileQuickConnectWorkflow(profile.key, (code) => {
+        setQuickConnectCode(code);
+        setQuickConnectState('waiting');
+        setSubmitting(false);
+      }),
+    );
+    quickConnectFiber = fiber;
+
+    const exit = await Effect.runPromiseExit(Fiber.join(fiber));
+
+    if (quickConnectFiber !== fiber) {
+      return;
+    }
+    quickConnectFiber = undefined;
+    setSubmitting(false);
+
+    if (Exit.isSuccess(exit)) {
+      finishReauthenticated();
     } else {
       setQuickConnectState('failed');
       setError(commandFailureMessage(exit.cause, 'Quick Connect failed'));
@@ -219,6 +295,26 @@ export default function LoginPage(props: LoginPageProps) {
     setError(commandFailureMessage(exit.cause, 'Connection failed'));
   };
 
+  const reauthenticateWithPassword = async (value: LoginValues) => {
+    const profile = reauthProfile();
+    if (!profile) {
+      return;
+    }
+
+    setError(null);
+    setSubmitting(true);
+    const exit = await Effect.runPromiseExit(
+      reauthenticateSavedServiceProfileWithPassword(profile.key, value.password),
+    );
+    setSubmitting(false);
+
+    if (Exit.isSuccess(exit)) {
+      finishReauthenticated();
+    } else {
+      setError(commandFailureMessage(exit.cause, 'Sign in failed'));
+    }
+  };
+
   const submit = () => {
     void form.handleSubmit();
   };
@@ -231,6 +327,9 @@ export default function LoginPage(props: LoginPageProps) {
   });
 
   onMount(() => {
+    if (isReauthMode()) {
+      return;
+    }
     const exit = Effect.runSyncExit(loadSavedCredentials);
     if (!Exit.isSuccess(exit)) {
       return;
@@ -257,109 +356,156 @@ export default function LoginPage(props: LoginPageProps) {
   const loginCard = () => (
     <Card variant="elevated" class={styles.card}>
       <div class={styles.stack7}>
-        <div>
-          <h2 class={styles.sectionTitle}>
-            <span class={styles.titleBar} />
-            Server coordinates
-          </h2>
-          <p class={styles.description}>
-            Choose the protocol and host. JellyPilot shows the final Server URL before any Login
-            Method starts.
-          </p>
-        </div>
-
-        <div class={styles.serverGrid}>
-          <form.Field name="scheme">
-            {(field) => (
-              <fieldset
-                class={cx(styles.segmented, styles.segmented2)}
-                aria-label="Server protocol"
-              >
-                <button
-                  type="button"
-                  aria-pressed={field().state.value === 'https'}
-                  class={styles.segment({ selected: field().state.value === 'https' })}
-                  disabled={isQuickConnectWaiting()}
-                  onClick={() => field().handleChange('https')}
-                >
-                  HTTPS
-                </button>
-                <button
-                  type="button"
-                  aria-pressed={field().state.value === 'http'}
-                  class={styles.segment({ selected: field().state.value === 'http' })}
-                  disabled={isQuickConnectWaiting()}
-                  onClick={() => field().handleChange('http')}
-                >
-                  HTTP
-                </button>
-              </fieldset>
-            )}
-          </form.Field>
-          <form.Field name="host">
-            {(field) => (
-              <ArkField.Root class={styles.fieldBlock} disabled={isQuickConnectWaiting()}>
-                <ArkField.Label class={recipes.srOnly}>Jellyfin host</ArkField.Label>
-                <ArkField.Input
-                  asChild={(fieldProps) => (
-                    <FieldControl
-                      {...fieldProps()}
-                      variant="filled"
-                      type="text"
-                      value={field().state.value}
-                      onInput={(event) => {
-                        const { value } = event.currentTarget;
-                        const explicitScheme = explicitSchemeFromInput(value);
-                        const strippedHost = stripServerScheme(value);
-                        field().handleChange(strippedHost);
-                        form.setFieldValue('scheme', explicitScheme ?? defaultSchemeForHost(value));
-                      }}
-                      class={styles.fullWidth}
-                      placeholder="jellyfin.local or media.example.com/jellyfin"
-                    />
-                  )}
-                />
-              </ArkField.Root>
-            )}
-          </form.Field>
-        </div>
-
-        <div class={styles.preview}>
-          <div class={styles.previewStripe} />
-          <p class={styles.overline}>Server URL preview</p>
-          <p class={styles.previewValue({ ready: Boolean(serverUrl()) })}>
-            {serverUrl() || 'Enter a server host to preview the final URL'}
-          </p>
-        </div>
-
-        <form.Field name="provider">
-          {(field) => (
-            <fieldset>
-              <legend class={styles.label}>Media Server</legend>
-              <div
-                class={cx(styles.segmented, styles.segmented2)}
-                aria-label="Media server provider"
-              >
-                <button
-                  type="button"
-                  class={styles.segment({ selected: field().state.value === 'jellyfin' })}
-                  disabled={isQuickConnectWaiting()}
-                  onClick={() => field().handleChange('jellyfin')}
-                >
-                  Jellyfin
-                </button>
-                <button
-                  type="button"
-                  class={styles.segment({ selected: field().state.value === 'emby' })}
-                  disabled={isQuickConnectWaiting()}
-                  onClick={() => field().handleChange('emby')}
-                >
-                  Emby
-                </button>
+        <Show
+          when={reauthProfile()}
+          keyed
+          fallback={
+            <>
+              <div>
+                <h2 class={styles.sectionTitle}>
+                  <span class={styles.titleBar} />
+                  Server coordinates
+                </h2>
+                <p class={styles.description}>
+                  Choose the protocol and host. JellyPilot shows the final Server URL before any
+                  Login Method starts.
+                </p>
               </div>
-            </fieldset>
+
+              <div class={styles.serverGrid}>
+                <form.Field name="scheme">
+                  {(field) => (
+                    <fieldset
+                      class={cx(styles.segmented, styles.segmented2)}
+                      aria-label="Server protocol"
+                    >
+                      <button
+                        type="button"
+                        aria-pressed={field().state.value === 'https'}
+                        class={styles.segment({ selected: field().state.value === 'https' })}
+                        disabled={isQuickConnectWaiting()}
+                        onClick={() => field().handleChange('https')}
+                      >
+                        HTTPS
+                      </button>
+                      <button
+                        type="button"
+                        aria-pressed={field().state.value === 'http'}
+                        class={styles.segment({ selected: field().state.value === 'http' })}
+                        disabled={isQuickConnectWaiting()}
+                        onClick={() => field().handleChange('http')}
+                      >
+                        HTTP
+                      </button>
+                    </fieldset>
+                  )}
+                </form.Field>
+                <form.Field name="host">
+                  {(field) => (
+                    <ArkField.Root class={styles.fieldBlock} disabled={isQuickConnectWaiting()}>
+                      <ArkField.Label class={recipes.srOnly}>Jellyfin host</ArkField.Label>
+                      <ArkField.Input
+                        asChild={(fieldProps) => (
+                          <FieldControl
+                            {...fieldProps()}
+                            variant="filled"
+                            type="text"
+                            value={field().state.value}
+                            onInput={(event) => {
+                              const { value } = event.currentTarget;
+                              const explicitScheme = explicitSchemeFromInput(value);
+                              const strippedHost = stripServerScheme(value);
+                              field().handleChange(strippedHost);
+                              form.setFieldValue(
+                                'scheme',
+                                explicitScheme ?? defaultSchemeForHost(value),
+                              );
+                            }}
+                            class={styles.fullWidth}
+                            placeholder="jellyfin.local or media.example.com/jellyfin"
+                          />
+                        )}
+                      />
+                    </ArkField.Root>
+                  )}
+                </form.Field>
+              </div>
+
+              <div class={styles.preview}>
+                <div class={styles.previewStripe} />
+                <p class={styles.overline}>Server URL preview</p>
+                <p class={styles.previewValue({ ready: Boolean(serverUrl()) })}>
+                  {serverUrl() || 'Enter a server host to preview the final URL'}
+                </p>
+              </div>
+
+              <form.Field name="provider">
+                {(field) => (
+                  <fieldset>
+                    <legend class={styles.label}>Media Server</legend>
+                    <div
+                      class={cx(styles.segmented, styles.segmented2)}
+                      aria-label="Media server provider"
+                    >
+                      <button
+                        type="button"
+                        class={styles.segment({ selected: field().state.value === 'jellyfin' })}
+                        disabled={isQuickConnectWaiting()}
+                        onClick={() => field().handleChange('jellyfin')}
+                      >
+                        Jellyfin
+                      </button>
+                      <button
+                        type="button"
+                        class={styles.segment({ selected: field().state.value === 'emby' })}
+                        disabled={isQuickConnectWaiting()}
+                        onClick={() => field().handleChange('emby')}
+                      >
+                        Emby
+                      </button>
+                    </div>
+                  </fieldset>
+                )}
+              </form.Field>
+            </>
+          }
+        >
+          {(profile) => (
+            <>
+              <div>
+                <h2 class={styles.sectionTitle}>
+                  <span class={styles.titleBar} />
+                  Sign in again
+                </h2>
+                <p class={styles.description}>
+                  Your saved session expired. Sign in again to switch to this service.
+                </p>
+              </div>
+
+              <div class={styles.preview}>
+                <div class={styles.previewStripe} />
+                <div class={styles.reauthRows}>
+                  <div>
+                    <p class={styles.overline}>Service</p>
+                    <p class={styles.previewValue({ ready: true })}>
+                      {providerLabel(profile.provider)}
+                    </p>
+                  </div>
+                  <div>
+                    <p class={styles.overline}>Server</p>
+                    <p class={styles.previewValue({ ready: true })}>
+                      {profile.serverName ?? profile.serverUrl}
+                    </p>
+                  </div>
+                  <div>
+                    <p class={styles.overline}>Account</p>
+                    <p class={styles.previewValue({ ready: true })}>{profile.userName}</p>
+                  </div>
+                </div>
+              </div>
+            </>
           )}
-        </form.Field>
+        </Show>
 
         <Tabs.Root
           value={loginMethod()}
@@ -436,25 +582,27 @@ export default function LoginPage(props: LoginPageProps) {
 
           <Tabs.Content value="password">
             <div class={styles.stack4}>
-              <form.Field name="username">
-                {(field) => (
-                  <ArkField.Root class={styles.fieldBlock}>
-                    <ArkField.Label class={styles.label}>Username</ArkField.Label>
-                    <ArkField.Input
-                      asChild={(fieldProps) => (
-                        <FieldControl
-                          {...fieldProps()}
-                          variant="filled"
-                          value={field().state.value}
-                          onInput={(event) => field().handleChange(event.currentTarget.value)}
-                          class={styles.fullWidth}
-                          placeholder="Jellyfin username"
-                        />
-                      )}
-                    />
-                  </ArkField.Root>
-                )}
-              </form.Field>
+              <Show when={!isReauthMode()}>
+                <form.Field name="username">
+                  {(field) => (
+                    <ArkField.Root class={styles.fieldBlock}>
+                      <ArkField.Label class={styles.label}>Username</ArkField.Label>
+                      <ArkField.Input
+                        asChild={(fieldProps) => (
+                          <FieldControl
+                            {...fieldProps()}
+                            variant="filled"
+                            value={field().state.value}
+                            onInput={(event) => field().handleChange(event.currentTarget.value)}
+                            class={styles.fullWidth}
+                            placeholder="Jellyfin username"
+                          />
+                        )}
+                      />
+                    </ArkField.Root>
+                  )}
+                </form.Field>
+              </Show>
               <form.Field name="password">
                 {(field) => (
                   <ArkField.Root class={styles.fieldBlock}>
@@ -475,25 +623,27 @@ export default function LoginPage(props: LoginPageProps) {
                   </ArkField.Root>
                 )}
               </form.Field>
-              <form.Field name="rememberMe">
-                {(field) => (
-                  <Checkbox.Root
-                    checked={field().state.value}
-                    onCheckedChange={(details) => field().handleChange(details.checked === true)}
-                    class={styles.remember}
-                  >
-                    <Checkbox.Control class={recipes.checkboxBox}>
-                      <Checkbox.Indicator class={recipes.checkboxIndicator}>
-                        <Check class={styles.icon3_5} stroke-width={4} />
-                      </Checkbox.Indicator>
-                    </Checkbox.Control>
-                    <Checkbox.Label class={styles.checkboxLabel}>
-                      Remember Server URL and username
-                    </Checkbox.Label>
-                    <Checkbox.HiddenInput />
-                  </Checkbox.Root>
-                )}
-              </form.Field>
+              <Show when={!isReauthMode()}>
+                <form.Field name="rememberMe">
+                  {(field) => (
+                    <Checkbox.Root
+                      checked={field().state.value}
+                      onCheckedChange={(details) => field().handleChange(details.checked === true)}
+                      class={styles.remember}
+                    >
+                      <Checkbox.Control class={recipes.checkboxBox}>
+                        <Checkbox.Indicator class={recipes.checkboxIndicator}>
+                          <Check class={styles.icon3_5} stroke-width={4} />
+                        </Checkbox.Indicator>
+                      </Checkbox.Control>
+                      <Checkbox.Label class={styles.checkboxLabel}>
+                        Remember Server URL and username
+                      </Checkbox.Label>
+                      <Checkbox.HiddenInput />
+                    </Checkbox.Root>
+                  )}
+                </form.Field>
+              </Show>
             </div>
           </Tabs.Content>
         </Tabs.Root>
