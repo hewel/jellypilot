@@ -13,6 +13,7 @@ export const addServiceDialogOverflowLayout = {
 
 export const positioner = css({
   position: 'fixed',
+  inset: '0',
   display: 'flex',
   alignItems: addServiceDialogOverflowLayout.positionerAlignItems,
   justifyContent: 'center',
