@@ -685,26 +685,58 @@ async function prepareHerdr(socketPath, callerPaneId) {
   return workspaceId;
 }
 
+function parseHerdrCliResult(stdout, command) {
+  try {
+    const frame = JSON.parse(stdout.trim());
+    if (frame.error) {
+      throw new WorkflowError(
+        `Herdr ${command} failed: ${frame.error.code ?? 'error'}: ${frame.error.message ?? 'unknown error'}`,
+        3,
+      );
+    }
+    return frame.result;
+  } catch (error) {
+    if (error instanceof WorkflowError) throw error;
+    throw new WorkflowError(`Herdr ${command} returned invalid JSON: ${error.message}`, 3);
+  }
+}
+
 async function startOmpAgent(
   herdrSocketPath,
   packet,
   repoRoot,
-  workspaceId,
+  callerPaneId,
   bridgePath,
   manifestPath,
   nonce,
 ) {
-  const result = await herdrRequest(herdrSocketPath, 'agent.start', {
-    name: `omp-${packet.task_id}-${nonce.slice(0, 8)}`,
-    argv: [process.execPath, bridgePath, manifestPath],
-    cwd: repoRoot,
-    workspace_id: workspaceId,
-    focus: false,
-  });
-  const paneId = result?.agent?.pane_id;
+  const name = `omp-${packet.task_id}-${nonce.slice(0, 8)}`;
+  const split = await runCommand('herdr', [
+    'pane',
+    'split',
+    '--pane',
+    callerPaneId,
+    '--direction',
+    'right',
+    '--ratio',
+    '0.5',
+    '--cwd',
+    repoRoot,
+    '--no-focus',
+  ]);
+  const paneId = parseHerdrCliResult(split.stdout, 'pane split')?.pane?.pane_id;
   if (typeof paneId !== 'string') {
-    throw new WorkflowError('Herdr agent.start did not return a pane id', 3);
+    throw new WorkflowError('Herdr pane split did not return a pane id', 3);
   }
+
+  try {
+    await runCommand('herdr', ['pane', 'rename', paneId, name]);
+    await runCommand('herdr', ['pane', 'run', paneId, process.execPath, bridgePath, manifestPath]);
+  } catch (error) {
+    await herdrRequest(herdrSocketPath, 'pane.close', { pane_id: paneId }).catch(() => {});
+    throw error;
+  }
+
   return paneId;
 }
 
@@ -958,12 +990,12 @@ async function execute(packetPath, keepPane) {
     const prompt = buildPrompt(packet, before, nonce);
     await writeFile(promptPath, prompt.text, { mode: 0o600 });
     const bridge = await createOmpBridge(runDirectory, ompBin, buildOmpArgs(packet, repoRoot));
-    const workspaceId = await prepareHerdr(herdrSocketPath, callerPaneId);
+    await prepareHerdr(herdrSocketPath, callerPaneId);
     paneId = await startOmpAgent(
       herdrSocketPath,
       packet,
       repoRoot,
-      workspaceId,
+      callerPaneId,
       bridge.bridgePath,
       bridge.manifestPath,
       nonce,

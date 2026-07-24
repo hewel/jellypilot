@@ -11,6 +11,7 @@ import {
   createControlledInvoke,
   fixtureCallCount,
   fixtureSummary,
+  hasExpectedLibraryPlayCall,
   hasExpectedServerConnectCall,
   installFixture,
   installStartupFixtures,
@@ -22,6 +23,7 @@ declare global {
       readonly ready: true;
       callCount: typeof fixtureCallCount;
       fixtureSummary: typeof fixtureSummary;
+      hasExpectedLibraryPlayCall: typeof hasExpectedLibraryPlayCall;
       hasExpectedServerConnectCall: typeof hasExpectedServerConnectCall;
       installFixture: typeof installFixture;
       installStartupFixtures: typeof installStartupFixtures;
@@ -42,6 +44,7 @@ const controller: NonNullable<Window['__JELLYPILOT_E2E__']> = {
   ready: true,
   callCount: fixtureCallCount,
   fixtureSummary,
+  hasExpectedLibraryPlayCall,
   hasExpectedServerConnectCall,
   installFixture,
   installStartupFixtures,

@@ -62,7 +62,7 @@ bun .agents/skills/delegate-to-omp/scripts/run-omp-task.mjs \
 
 Add `--keep-pane` only when the successful bridge lifecycle needs inspection. The runner:
 
-- starts a fresh named agent through the Herdr socket API and drives `omp --mode rpc` over a private Unix socket;
+- creates a fresh named Herdr pane through the current pane CLI and drives `omp --mode rpc` over a private Unix socket;
 - auto-approves the closed task while excluding OMP's `task` and `ask` tools;
 - serializes edit tasks with a repository-specific lock;
 - fingerprints HEAD, index state, and tracked or untracked non-ignored files;

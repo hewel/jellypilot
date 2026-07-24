@@ -145,13 +145,15 @@ test('repository guards detect actual deltas without reverting them', () => {
   ).toThrow('verify task changed repository files');
 });
 
-test('runner uses Herdr socket calls and structured OMP RPC instead of pane scraping', () => {
+test('runner uses the current Herdr pane lifecycle and structured OMP RPC', () => {
   const runner = readFileSync('.agents/skills/delegate-to-omp/scripts/run-omp-task.mjs', 'utf8');
-  expect(runner).toContain("'agent.start'");
+  expect(runner).toMatch(/'pane',\s*'split'/);
+  expect(runner).toMatch(/'pane',\s*'run'/);
   expect(runner).toContain("'pane.report_agent'");
   expect(runner).toContain("'pane.close'");
   expect(runner).toContain("type: 'get_last_assistant_text'");
   expect(runner).toContain("frame.type === 'agent_end'");
+  expect(runner).not.toContain("'agent.start'");
   expect(runner).not.toContain("['pane', 'read'");
   expect(runner).not.toContain("['wait', 'output'");
 });

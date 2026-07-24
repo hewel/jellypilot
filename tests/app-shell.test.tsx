@@ -755,6 +755,7 @@ test('Sidebar restores the collapsed preference from the Tauri Store', async () 
 
 test('library landing renders command-backed rows and drawer trigger', async () => {
   mockShellCommands();
+  const playCommand = rstest.spyOn(commands, 'libraryPlay');
   const cleanup = renderShell();
 
   await screen.findByRole('navigation', { name: 'Sidebar' });
@@ -765,14 +766,15 @@ test('library landing renders command-backed rows and drawer trigger', async () 
   expect(screen.getByRole('link', { name: 'Movies' })).toBeVisible();
   expect(screen.getByRole('link', { name: 'Shows' })).toBeVisible();
   expect(await screen.findByRole('heading', { name: 'Continue Watching' })).toBeVisible();
-  expect(screen.getByRole('link', { name: /Resume Movie/ })).toBeVisible();
+  expect(screen.getByRole('button', { name: 'Resume Resume Movie' })).toBeVisible();
   expect(screen.getByRole('link', { name: /Next Episode/ })).toBeVisible();
   expect(screen.getByRole('link', { name: /Latest Movie/ })).toBeVisible();
   expect(screen.getByRole('link', { name: /Latest Episode/ })).toBeVisible();
-  const resumeMovieLink = screen.getByRole('link', { name: 'Open Resume Movie, favorite' });
-  expect(resumeMovieLink).toBeVisible();
-  expect(resumeMovieLink.querySelector('svg')).not.toBeNull();
-  expect(within(resumeMovieLink).getByRole('img', { name: 'Played' })).toBeVisible();
+  const resumeMovieButton = screen.getByRole('button', { name: 'Resume Resume Movie' });
+  expect(resumeMovieButton).toBeVisible();
+  expect(within(resumeMovieButton).queryByRole('img', { name: 'Played' })).toBeNull();
+  expect(within(resumeMovieButton).getByRole('progressbar')).toHaveAttribute('aria-valuenow', '25');
+  expect(within(resumeMovieButton).getByText('118 mins remaining')).toBeVisible();
   const resumeArtwork = screen.getByAltText('Resume Movie artwork');
   expect(resumeArtwork).toHaveAttribute(
     'src',
@@ -782,14 +784,169 @@ test('library landing renders command-backed rows and drawer trigger', async () 
   fireEvent.load(resumeArtwork);
   expect(resumeArtwork.parentElement).toHaveAttribute('data-aspect', 'video');
   const latestMovieLink = screen.getByRole('link', { name: /Latest Movie/ });
-  expect(within(latestMovieLink).getByText('Movie')).toBeVisible();
+  expect(within(latestMovieLink).getByText('Latest Movie • Movie')).toBeVisible();
   expect(within(latestMovieLink).queryByText('Movie · null')).toBeNull();
   expect(latestMovieLink.querySelector('[data-aspect="poster"]')).not.toBeNull();
   expect(screen.getAllByText('No artwork')).toHaveLength(3);
   const latestEpisodeLink = screen.getByRole('link', { name: /Latest Episode/ });
   expect(latestEpisodeLink.querySelector('svg')).not.toBeNull();
+  fireEvent.click(resumeMovieButton);
+  await waitFor(() =>
+    expect(playCommand).toHaveBeenCalledWith({
+      audioStreamIndex: null,
+      itemId: 'movie-1',
+      mode: 'resume',
+      startPositionSeconds: 120,
+      subtitleStreamIndex: null,
+    }),
+  );
   await waitFor(() =>
     expect(screen.getByRole('button', { name: /Now Playing: Playing — The Pilot/ })).toBeVisible(),
+  );
+
+  cleanup();
+});
+
+test('library landing expands rows independently from measured capacity', async () => {
+  mockShellCommands();
+  rstest.spyOn(commands, 'libraryVideoHome').mockResolvedValue({
+    data: {
+      ...videoHome,
+      continueWatching: Array.from({ length: 4 }, (_, index) => ({
+        ...videoHome.continueWatching[0]!,
+        id: `resume-${index + 1}`,
+        name: `Resume ${index + 1}`,
+      })),
+      nextUp: Array.from({ length: 4 }, (_, index) => ({
+        ...videoHome.nextUp[0]!,
+        id: `next-${index + 1}`,
+        name: `Next ${index + 1}`,
+      })),
+    },
+    status: 'ok',
+  });
+  const cleanup = renderShell();
+
+  await screen.findByRole('heading', { name: 'Continue Watching' });
+  await screen.findByRole('button', { name: /Now Playing: Playing — The Pilot/ });
+  const continueHeading = screen.getByRole('heading', { name: 'Continue Watching' });
+  const continueSection = continueHeading.closest('section');
+  const nextSection = screen.getByRole('heading', { name: 'Next Up' }).closest('section');
+  expect(continueSection).not.toBeNull();
+  expect(nextSection).not.toBeNull();
+  expect(within(continueSection!).getAllByRole('button', { name: /^Resume Resume/ })).toHaveLength(
+    3,
+  );
+  expect(within(nextSection!).getAllByRole('link', { name: /^Open Next/ })).toHaveLength(3);
+
+  const continueDisclosure = within(continueSection!).getByRole('button', { name: 'See All' });
+  expect(continueDisclosure).toHaveAttribute('aria-expanded', 'false');
+  const controlledGridId = continueDisclosure.getAttribute('aria-controls') ?? '';
+  expect(document.querySelector(`[id="${controlledGridId}"]`)).not.toBeNull();
+
+  fireEvent.click(continueDisclosure);
+  const expandedContinueHeading = await screen.findByRole('heading', {
+    name: 'Continue Watching',
+  });
+  const expandedContinueSection = expandedContinueHeading.closest('section');
+  expect(
+    within(expandedContinueSection!).getAllByRole('button', { name: /^Resume Resume/ }),
+  ).toHaveLength(4);
+  expect(
+    within(expandedContinueSection!).getByRole('button', { name: 'Show Less' }),
+  ).toHaveAttribute('aria-expanded', 'true');
+  expect(
+    within(screen.getByRole('heading', { name: 'Next Up' }).closest('section')!).getByRole(
+      'button',
+      { name: 'See All' },
+    ),
+  ).toHaveAttribute('aria-expanded', 'false');
+  expect(
+    within(screen.getByRole('heading', { name: 'Next Up' }).closest('section')!).getAllByRole(
+      'link',
+      { name: /^Open Next/ },
+    ),
+  ).toHaveLength(3);
+
+  fireEvent.click(
+    within(expandedContinueSection!).getByRole('button', {
+      name: 'Show Less',
+    }),
+  );
+  await waitFor(() =>
+    expect(
+      within(
+        screen.getByRole('heading', { name: 'Continue Watching' }).closest('section')!,
+      ).getByRole('button', { name: 'See All' }),
+    ).toHaveAttribute('aria-expanded', 'false'),
+  );
+  await waitFor(() =>
+    expect(
+      within(
+        screen.getByRole('heading', { name: 'Continue Watching' }).closest('section')!,
+      ).getAllByRole('button', { name: /^Resume Resume/ }),
+    ).toHaveLength(3),
+  );
+
+  cleanup();
+});
+
+test('library landing blocks concurrent resume requests and shows selected-card progress', async () => {
+  mockShellCommands();
+  rstest.spyOn(commands, 'libraryVideoHome').mockResolvedValue({
+    data: {
+      ...videoHome,
+      continueWatching: [
+        videoHome.continueWatching[0]!,
+        {
+          ...videoHome.continueWatching[0]!,
+          id: 'movie-2-resume',
+          name: 'Second Resume',
+        },
+      ],
+    },
+    status: 'ok',
+  });
+  let finishPlayback!: (value: { data: null; status: 'ok' }) => void;
+  const playCommand = rstest.spyOn(commands, 'libraryPlay').mockImplementation(
+    () =>
+      new Promise((resolve) => {
+        finishPlayback = resolve;
+      }),
+  );
+  const cleanup = renderShell();
+
+  const first = await screen.findByRole('button', { name: 'Resume Resume Movie' });
+  const second = screen.getByRole('button', { name: 'Resume Second Resume' });
+  fireEvent.click(first);
+
+  expect(await screen.findByRole('button', { name: 'Starting Resume Movie' })).toBeDisabled();
+  expect(second).toBeDisabled();
+  await waitFor(() => expect(playCommand).toHaveBeenCalledTimes(1));
+  fireEvent.click(second);
+  expect(playCommand).toHaveBeenCalledTimes(1);
+
+  finishPlayback({ data: null, status: 'ok' });
+  await waitFor(() =>
+    expect(screen.getByRole('button', { name: 'Resume Resume Movie' })).not.toBeDisabled(),
+  );
+
+  cleanup();
+});
+
+test('library landing reports direct resume failures through the existing toast', async () => {
+  mockShellCommands();
+  rstest.spyOn(commands, 'libraryPlay').mockResolvedValue({
+    error: { code: 'network', message: 'Resume failed' },
+    status: 'error',
+  });
+  const cleanup = renderShell();
+
+  fireEvent.click(await screen.findByRole('button', { name: 'Resume Resume Movie' }));
+
+  expect(await screen.findByText('Resume failed')).toBeVisible();
+  await waitFor(() =>
+    expect(screen.getByRole('button', { name: 'Resume Resume Movie' })).not.toBeDisabled(),
   );
 
   cleanup();
@@ -1507,8 +1664,8 @@ test('library item detail back returns home when opened from the library landing
   mockShellCommands();
   const cleanup = renderShell('/library');
 
-  const resumeMovieLink = await screen.findByRole('link', { name: 'Open Resume Movie, favorite' });
-  fireEvent.click(resumeMovieLink);
+  const latestMovieLink = await screen.findByRole('link', { name: 'Open Latest Movie' });
+  fireEvent.click(latestMovieLink);
 
   expect(await screen.findByRole('heading', { name: 'Detail Movie' })).toBeVisible();
 
@@ -1532,10 +1689,10 @@ test('library item detail leaves the skeleton after an asynchronous detail respo
   );
   const cleanup = renderShell('/library');
 
-  const resumeMovieLink = await screen.findByRole('link', { name: 'Open Resume Movie, favorite' });
-  fireEvent.click(resumeMovieLink);
+  const latestMovieLink = await screen.findByRole('link', { name: 'Open Latest Movie' });
+  fireEvent.click(latestMovieLink);
 
-  await waitFor(() => expect(detailCommand).toHaveBeenCalledWith('movie-1'));
+  await waitFor(() => expect(detailCommand).toHaveBeenCalledWith('movie-2'));
   expect(screen.queryByRole('heading', { name: 'Detail Movie' })).toBeNull();
 
   resolveDetail({ data: movieDetail, status: 'ok' });

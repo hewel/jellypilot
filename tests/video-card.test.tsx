@@ -1,4 +1,4 @@
-import { expect, test } from '@rstest/core';
+import { expect, rstest, test } from '@rstest/core';
 import { RouterContextProvider, createMemoryHistory } from '@tanstack/solid-router';
 import { fireEvent, screen } from '@testing-library/dom';
 import type { JSX } from 'solid-js';
@@ -114,7 +114,7 @@ test('VideoCard overlays copy on poster artwork and keeps copy below video artwo
       />
       <VideoCard
         kind="home"
-        aspectClass="video"
+        rowKind="latestEpisodes"
         item={{
           artworkImageId: null,
           episodeNumber: 2,
@@ -141,6 +141,143 @@ test('VideoCard overlays copy on poster artwork and keeps copy below video artwo
   expect(screen.getByText('2024').closest('[data-aspect="poster"]')).not.toBeNull();
   expect(screen.getByText('Overlay Episode').closest('[data-aspect]')).toBeNull();
   expect(screen.getByRole('img', { name: 'Played' })).toBeVisible();
+
+  dispose();
+  root.remove();
+});
+
+test('VideoCard renders reference-first Continue Watching metadata and direct resume', () => {
+  const onResume = rstest.fn();
+  const { dispose, root } = renderWithRouter(() => (
+    <VideoCard
+      kind="home"
+      rowKind="continueWatching"
+      onResume={onResume}
+      item={{
+        artworkImageId: null,
+        episodeNumber: 4,
+        favorite: true,
+        id: 'episode-4',
+        itemType: 'Episode',
+        name: 'A Quiet Return',
+        played: true,
+        playedPercentage: 25,
+        productionYear: 2024,
+        resumePositionSeconds: 120,
+        runtimeSeconds: 3600,
+        seasonNumber: 1,
+        seriesId: 'series-1',
+        seriesName: 'Silent Echoes',
+      }}
+    />
+  ));
+
+  expect(screen.getByText('Silent Echoes • S1 E4')).toBeVisible();
+  expect(screen.getByText('58 mins remaining')).toBeVisible();
+  expect(screen.queryByRole('img', { name: 'Played' })).toBeNull();
+  expect(
+    screen.getByRole('progressbar', { name: 'A Quiet Return watch progress' }),
+  ).toHaveAttribute('aria-valuenow', '25');
+
+  fireEvent.click(screen.getByRole('button', { name: 'Resume A Quiet Return' }));
+  expect(onResume).toHaveBeenCalledTimes(1);
+
+  dispose();
+  root.remove();
+});
+
+test('VideoCard derives progress and falls back to detail without a saved resume position', () => {
+  const { dispose, root } = renderWithRouter(() => (
+    <>
+      <VideoCard
+        kind="home"
+        rowKind="continueWatching"
+        onResume={() => undefined}
+        item={{
+          artworkImageId: null,
+          episodeNumber: null,
+          favorite: false,
+          id: 'movie-derived',
+          itemType: 'Movie',
+          name: 'Derived Progress',
+          played: false,
+          playedPercentage: null,
+          productionYear: 2024,
+          resumePositionSeconds: 900,
+          runtimeSeconds: 3600,
+          seasonNumber: null,
+          seriesId: null,
+          seriesName: null,
+        }}
+      />
+      <VideoCard
+        kind="home"
+        rowKind="continueWatching"
+        onResume={() => undefined}
+        item={{
+          artworkImageId: null,
+          episodeNumber: null,
+          favorite: false,
+          id: 'movie-no-resume',
+          itemType: 'Movie',
+          name: 'No Resume',
+          played: false,
+          playedPercentage: null,
+          productionYear: 2024,
+          resumePositionSeconds: null,
+          runtimeSeconds: 3600,
+          seasonNumber: null,
+          seriesId: null,
+          seriesName: null,
+        }}
+      />
+    </>
+  ));
+
+  expect(
+    screen.getByRole('progressbar', { name: 'Derived Progress watch progress' }),
+  ).toHaveAttribute('aria-valuenow', '25');
+  expect(screen.getByRole('link', { name: 'Open No Resume' })).toHaveAttribute(
+    'href',
+    '/library/items/movie-no-resume',
+  );
+  expect(screen.queryByRole('button', { name: 'Resume No Resume' })).toBeNull();
+
+  dispose();
+  root.remove();
+});
+
+test('VideoCard exposes a disabled busy state while resume starts', () => {
+  const { dispose, root } = renderWithRouter(() => (
+    <VideoCard
+      kind="home"
+      rowKind="continueWatching"
+      busy
+      resumeDisabled
+      onResume={() => undefined}
+      item={{
+        artworkImageId: null,
+        episodeNumber: null,
+        favorite: false,
+        id: 'movie-busy',
+        itemType: 'Movie',
+        name: 'Busy Movie',
+        played: false,
+        playedPercentage: 40,
+        productionYear: 2024,
+        resumePositionSeconds: 120,
+        runtimeSeconds: 3600,
+        seasonNumber: null,
+        seriesId: null,
+        seriesName: null,
+      }}
+    />
+  ));
+
+  const button = screen.getByRole('button', { name: 'Starting Busy Movie' });
+  expect(button).toBeDisabled();
+  expect(button).toHaveAttribute('aria-busy', 'true');
+  expect(screen.getByText('Starting…')).toBeVisible();
 
   dispose();
   root.remove();

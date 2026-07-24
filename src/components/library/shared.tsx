@@ -1,8 +1,13 @@
 import { cx } from '@styled-system/css';
 import { Exit, Match } from 'effect';
 import { Check, Clapperboard, Heart, RefreshCw } from 'lucide-solid';
-import { For, Show, createSignal, createUniqueId } from 'solid-js';
+import { For, Show, createSignal, createUniqueId, onCleanup, onMount } from 'solid-js';
 import type { JSX } from 'solid-js';
+import {
+  videoHomeAspect,
+  videoHomeColumnCount,
+  type VideoHomeRowKind,
+} from '~utils/videoHomeLayout';
 
 import type {
   VideoHomeItem,
@@ -23,7 +28,6 @@ import type { JellyPilotSelectItem } from '../ui';
 import { MediaInfoHoverCard } from './MediaInfoHoverCard';
 import * as styles from './shared.styles';
 import { VideoCard } from './VideoCard';
-import type { VideoCardAspectClass } from './VideoCard';
 
 export { MediaInfoHoverCard } from './MediaInfoHoverCard';
 export { VideoCard } from './VideoCard';
@@ -66,29 +70,85 @@ export function GenrePills(props: { genres: string[] }) {
   );
 }
 
-type VideoHomeRowKind = 'continueWatching' | 'nextUp' | 'latestMovies' | 'latestEpisodes';
-
-const videoHomeAspectClass = (kind: VideoHomeRowKind): VideoCardAspectClass =>
-  kind === 'latestMovies' ? 'poster' : 'video';
-
 export function VideoHomeRow(props: {
   id: string;
   title: string;
   kind: VideoHomeRowKind;
   items: VideoHomeItem[];
+  resumeBusyId?: string | null;
+  onResume?: (item: VideoHomeItem) => void;
 }) {
+  const titleId = `row-${props.id}`;
+  const gridId = createUniqueId();
+  const [expanded, setExpanded] = createSignal(false);
+  const [availableWidth, setAvailableWidth] = createSignal(0);
+  let rowElement: HTMLElement | undefined;
+
+  const measure = () => {
+    const rowWidth = rowElement?.clientWidth ?? 0;
+    const fallbackWidth =
+      typeof window !== 'undefined' && window.innerWidth > 0 ? window.innerWidth : 0;
+    setAvailableWidth(rowWidth > 0 ? rowWidth : fallbackWidth);
+  };
+
+  onMount(() => {
+    measure();
+    if (typeof ResizeObserver === 'undefined') {
+      window.addEventListener('resize', measure);
+      onCleanup(() => window.removeEventListener('resize', measure));
+      return;
+    }
+
+    const observer = new ResizeObserver(measure);
+    if (rowElement) {
+      observer.observe(rowElement);
+    }
+    onCleanup(() => observer.disconnect());
+  });
+
+  const aspect = () => videoHomeAspect(props.kind);
+  const columns = () => videoHomeColumnCount(aspect(), availableWidth());
+  const hasOverflow = () => props.items.length > columns();
+
   return (
     <Show when={props.items.length > 0}>
-      <section class={styles.row} aria-labelledby={`row-${props.id}`}>
-        <h2 id={`row-${props.id}`} class={styles.rowTitle}>
-          {props.title}
-        </h2>
-        <div class={styles.videoGrid}>
+      <section ref={rowElement} class={styles.row} aria-labelledby={titleId}>
+        <div class={styles.rowHeader}>
+          <h2 id={titleId} class={styles.rowTitle}>
+            {props.title}
+          </h2>
+          <Show when={hasOverflow()}>
+            <Button
+              type="button"
+              variant="text"
+              class={styles.rowDisclosure}
+              aria-controls={gridId}
+              aria-expanded={expanded()}
+              onClick={() => setExpanded((current) => !current)}
+            >
+              {expanded() ? 'Show Less' : 'See All'}
+            </Button>
+          </Show>
+        </div>
+        <div id={gridId} class={cx(styles.videoGrid[columns()], styles.videoGridGap[aspect()])}>
           <For each={props.items}>
-            {(item) => (
-              <MediaInfoHoverCard id={item.id} itemType={item.itemType}>
-                <VideoCard kind="home" item={item} aspectClass={videoHomeAspectClass(props.kind)} />
-              </MediaInfoHoverCard>
+            {(item, index) => (
+              <Show when={expanded() || index() < columns()}>
+                <MediaInfoHoverCard id={item.id} itemType={item.itemType}>
+                  <VideoCard
+                    kind="home"
+                    item={item}
+                    rowKind={props.kind}
+                    busy={props.resumeBusyId === item.id}
+                    resumeDisabled={props.resumeBusyId !== null && props.resumeBusyId !== undefined}
+                    onResume={
+                      props.kind === 'continueWatching' && props.onResume
+                        ? () => props.onResume?.(item)
+                        : undefined
+                    }
+                  />
+                </MediaInfoHoverCard>
+              </Show>
             )}
           </For>
         </div>

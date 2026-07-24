@@ -51,30 +51,79 @@ export const statusDescription = css({
 
 export const row = css({
   display: 'grid',
-  gap: '3',
+  gap: '4',
+  minWidth: '[0]',
+});
+
+export const rowHeader = css({
+  alignItems: 'center',
+  display: 'flex',
+  gap: '4',
+  justifyContent: 'space-between',
 });
 
 export const rowTitle = css({
   color: 'onSurface',
-  fontSize: '22',
+  fontFamily: 'display',
+  fontSize: '24',
   fontWeight: 'bold',
-  lineHeight: '28',
+  lineHeight: '32',
+  lg: {
+    fontSize: '28',
+    lineHeight: '40',
+  },
 });
 
-export const videoGrid = css({
-  display: 'grid',
-  columnGap: '3',
-  rowGap: '4',
-  sm: {
-    gridTemplateColumns: '[repeat(3, minmax(0, 1fr))]',
-  },
-  xl: {
-    gridTemplateColumns: '[repeat(4, minmax(0, 1fr))]',
-  },
-  '2xl': {
-    gridTemplateColumns: '[repeat(6, minmax(0, 1fr))]',
-  },
+export const rowDisclosure = css({
+  flexShrink: '[0]',
+  minHeight: '11',
 });
+
+const videoGridBase = {
+  display: 'grid',
+  minWidth: '[0]',
+  rowGap: '6',
+} as const;
+
+export const videoGrid = {
+  1: css({
+    ...videoGridBase,
+    gridTemplateColumns: '[minmax(0, 1fr)]',
+  }),
+  2: css({
+    ...videoGridBase,
+    gridTemplateColumns: '[repeat(2, minmax(0, 1fr))]',
+  }),
+  3: css({
+    ...videoGridBase,
+    gridTemplateColumns: '[repeat(3, minmax(0, 1fr))]',
+  }),
+  4: css({
+    ...videoGridBase,
+    gridTemplateColumns: '[repeat(4, minmax(0, 1fr))]',
+  }),
+  5: css({
+    ...videoGridBase,
+    gridTemplateColumns: '[repeat(5, minmax(0, 1fr))]',
+  }),
+  6: css({
+    ...videoGridBase,
+    gridTemplateColumns: '[repeat(6, minmax(0, 1fr))]',
+  }),
+  7: css({
+    ...videoGridBase,
+    gridTemplateColumns: '[repeat(7, minmax(0, 1fr))]',
+  }),
+};
+
+export const videoGridGap = {
+  poster: css({
+    columnGap: '4',
+  }),
+  video: css({
+    columnGap: '6',
+  }),
+};
 
 export const subtitleLink = css({
   color: 'secondary',

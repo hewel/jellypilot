@@ -54,7 +54,24 @@ const videoHome = {
     },
   ],
   nextUp: [],
-  latestMovies: [],
+  latestMovies: [
+    {
+      id: 'e2e-latest-movie',
+      name: 'E2E Latest Movie',
+      itemType: 'Movie',
+      seriesId: null,
+      seriesName: null,
+      seasonNumber: null,
+      episodeNumber: null,
+      productionYear: 2025,
+      runtimeSeconds: 6600,
+      resumePositionSeconds: null,
+      playedPercentage: null,
+      played: false,
+      favorite: false,
+      artworkImageId: null,
+    },
+  ],
   latestEpisodes: [],
 } as const satisfies VideoHome;
 
@@ -197,13 +214,13 @@ describe('library item detail Back restores origin and scroll', () => {
     expect(await browser.execute(() => window.location.pathname)).toBe('/library');
 
     // Home origin: Back returns to the library landing.
-    const homeCard = await $('aria/Open E2E Home Movie');
+    const homeCard = await $('aria/Open E2E Latest Movie');
     await homeCard.waitForDisplayed({ timeout: 30_000 });
     await homeCard.click();
     const detailHeading = await $('aria/E2E Detail Movie');
     await detailHeading.waitForDisplayed({ timeout: 30_000 });
     expect(await browser.execute(() => window.location.pathname)).toBe(
-      '/library/items/e2e-home-movie',
+      '/library/items/e2e-latest-movie',
     );
 
     const backFromHome = await $('aria/Back');

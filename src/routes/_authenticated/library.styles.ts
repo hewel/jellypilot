@@ -4,43 +4,77 @@ const pulse = '[pulse 1.8s {easings.inOut} infinite]';
 
 export const stack = css({
   display: 'grid',
-  gap: '6',
+  gap: '8',
 });
 
 export const skeletonRow = css({
   display: 'grid',
-  gap: '3',
+  gap: '4',
+});
+
+export const skeletonHeader = css({
+  alignItems: 'center',
+  display: 'flex',
+  justifyContent: 'space-between',
 });
 
 export const skeletonTitle = css({
   animation: pulse,
   bg: 'surfaceContainerHigh/70',
   borderRadius: 'md',
-  height: '6',
-  width: '[11rem]',
+  height: '7',
+  width: '[14rem]',
 });
 
-export const skeletonGrid = css({
-  display: 'grid',
-  columnGap: '3',
-  rowGap: '4',
-  sm: {
-    gridTemplateColumns: '[repeat(3, minmax(0, 1fr))]',
-  },
-  xl: {
-    gridTemplateColumns: '[repeat(4, minmax(0, 1fr))]',
-  },
-  '2xl': {
-    gridTemplateColumns: '[repeat(6, minmax(0, 1fr))]',
-  },
+export const skeletonAction = css({
+  animation: pulse,
+  bg: 'surfaceContainerHigh/55',
+  borderRadius: 'md',
+  height: '5',
+  width: '14',
+});
+
+export const skeletonGrid = {
+  poster: css({
+    columnGap: '4',
+    display: 'grid',
+    gridTemplateColumns: '[repeat(2, minmax(0, 1fr))]',
+    rowGap: '6',
+    sm: {
+      gridTemplateColumns: '[repeat(3, minmax(0, 1fr))]',
+    },
+    xl: {
+      gridTemplateColumns: '[repeat(4, minmax(0, 1fr))]',
+    },
+    '2xl': {
+      gridTemplateColumns: '[repeat(5, minmax(0, 1fr))]',
+    },
+  }),
+  video: css({
+    columnGap: '6',
+    display: 'grid',
+    gridTemplateColumns: '[minmax(0, 1fr)]',
+    rowGap: '6',
+    sm: {
+      gridTemplateColumns: '[repeat(2, minmax(0, 1fr))]',
+    },
+    xl: {
+      gridTemplateColumns: '[repeat(3, minmax(0, 1fr))]',
+    },
+  }),
+};
+
+export const skeletonCard = css({
+  minWidth: '[0]',
 });
 
 export const skeletonArtwork = css({
   animation: pulse,
   bg: 'surfaceContainerLowest/60',
-  borderBottomColor: 'outlineVariant',
-  borderBottomStyle: 'solid',
-  borderBottomWidth: '1px',
+  borderRadius: '2xl',
+  boxShadow: 'md',
+  outline: '[1px solid rgb(255 255 255 / 0.1)]',
+  outlineOffset: '[-1px]',
 });
 
 export const skeletonAspect = {
@@ -50,10 +84,8 @@ export const skeletonAspect = {
 
 export const skeletonBody = css({
   display: 'grid',
-  gap: '2',
-  pb: '3',
-  pt: '2',
-  px: '4',
+  gap: '1',
+  pt: '3',
 });
 
 export const skeletonLine = {

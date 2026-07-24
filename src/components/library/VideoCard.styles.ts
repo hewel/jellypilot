@@ -34,10 +34,47 @@ export const card = css({
   },
 });
 
+export const homeCard = css({
+  appearance: 'none',
+  bg: '[transparent]',
+  border: 'none',
+  borderRadius: '2xl',
+  color: '[inherit]',
+  cursor: 'pointer',
+  display: 'block',
+  fontFamily: 'sans',
+  p: '0',
+  textAlign: 'left',
+  textDecoration: 'none',
+  transitionDuration: '200',
+  transitionProperty: '[transform]',
+  width: 'full',
+  _hover: {
+    transform: '[translateY(-2px)]',
+  },
+  _focusVisible: {
+    outline: '[2px solid {colors.secondary}]',
+    outlineOffset: '1',
+  },
+  _active: {
+    transform: '[scale(0.96)]',
+  },
+  _disabled: {
+    cursor: 'wait',
+  },
+});
+
 export const artwork = css({
   bg: 'surfaceContainerLowest',
   overflow: 'hidden',
   position: 'relative',
+});
+
+export const homeArtwork = css({
+  borderRadius: '2xl',
+  boxShadow: 'md',
+  outline: '[1px solid rgb(255 255 255 / 0.1)]',
+  outlineOffset: '[-1px]',
 });
 
 export const aspect = {
@@ -70,9 +107,49 @@ export const fallbackIcon = css({
 export const image = css({
   height: 'full',
   objectFit: 'cover',
-  outline: '[1px solid rgb(255 255 255 / 0.1)]',
-  outlineOffset: '[-1px]',
   width: 'full',
+});
+
+export const homeImage = css({
+  outline: 'none',
+});
+
+export const homeProgressTrack = css({
+  bg: 'surfaceContainerHighest/75',
+  bottom: '0',
+  height: '1',
+  left: '0',
+  overflow: 'hidden',
+  position: 'absolute',
+  right: '0',
+  zIndex: '10',
+});
+
+export const homeProgressBar = css({
+  bg: 'secondary',
+  height: 'full',
+});
+
+export const homeBusyOverlay = css({
+  alignItems: 'center',
+  backdropFilter: '[blur(4px)]',
+  bg: 'surface/70',
+  color: 'onSurface',
+  display: 'flex',
+  fontSize: '14',
+  fontWeight: 'semibold',
+  gap: '2',
+  inset: '[0]',
+  justifyContent: 'center',
+  lineHeight: '20',
+  position: 'absolute',
+  zIndex: '20',
+});
+
+export const homeBusyIcon = css({
+  animation: '[spin 1s {easings.linear} infinite]',
+  height: '4',
+  width: '4',
 });
 
 export const overlay = css({
@@ -136,6 +213,13 @@ export const body = css({
   px: '4',
 });
 
+export const homeBody = css({
+  display: 'grid',
+  gap: '0_5',
+  minWidth: '[0]',
+  pt: '3',
+});
+
 export const copy = css({
   display: 'grid',
   flexGrow: '[1]',
@@ -152,10 +236,26 @@ export const title = css({
   overflow: 'hidden',
 });
 
+export const homeTitle = css({
+  color: 'onSurface',
+  ...titleClamp,
+  fontSize: '16',
+  fontWeight: 'semibold',
+  lineHeight: '24',
+  overflow: 'hidden',
+});
+
 export const subtitle = css({
   color: 'onSurfaceVariant/80',
   fontSize: '12',
   lineHeight: '16',
+});
+
+export const homeSubtitle = css({
+  color: 'onSurfaceVariant',
+  fontSize: '14',
+  fontVariantNumeric: 'tabular-nums',
+  lineHeight: '20',
 });
 
 export const playedBadge = css({

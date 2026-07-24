@@ -28,6 +28,7 @@ interface RawCommandMap {
   library_browse_video: VideoLibraryPage;
   library_item_detail: VideoItemDetail;
   library_item_shortcut: VideoLibraryShortcut | null;
+  library_play: null;
   library_video_home: VideoHome;
   library_video_shortcuts: VideoLibraryShortcut[];
   now_playing_get_state: NowPlayingState;
@@ -64,6 +65,7 @@ function parseFixtureCommand(command: string): FixtureCommand | undefined {
     command === 'library_browse_video' ||
     command === 'library_item_detail' ||
     command === 'library_item_shortcut' ||
+    command === 'library_play' ||
     command === 'library_video_home' ||
     command === 'library_video_shortcuts' ||
     command === 'now_playing_get_state' ||
@@ -130,6 +132,27 @@ export function fixtureCallCount(command: FixtureCommand): number {
 
 export function fixtureSummary(): readonly { command: FixtureCommand; count: number }[] {
   return [...fixtures.keys()].map((command) => ({ command, count: fixtureCallCount(command) }));
+}
+
+export function hasExpectedLibraryPlayCall(): boolean {
+  const commandCalls = calls.get('library_play');
+  if (!commandCalls || commandCalls.length !== 1) return false;
+
+  const request = commandCalls[0]?.request;
+  if (!request || typeof request !== 'object') return false;
+
+  return (
+    'itemId' in request &&
+    request.itemId === 'e2e-home-movie' &&
+    'mode' in request &&
+    request.mode === 'resume' &&
+    'startPositionSeconds' in request &&
+    request.startPositionSeconds === 120 &&
+    'audioStreamIndex' in request &&
+    request.audioStreamIndex === null &&
+    'subtitleStreamIndex' in request &&
+    request.subtitleStreamIndex === null
+  );
 }
 
 export function hasExpectedServerConnectCall(): boolean {
