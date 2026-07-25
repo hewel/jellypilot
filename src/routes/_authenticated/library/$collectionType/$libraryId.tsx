@@ -9,6 +9,7 @@ import {
   sortItems,
 } from '@components/library/shared';
 import { VideoCard } from '@components/library/VideoCard';
+import LibrarySearchBar from '@components/LibrarySearchBar';
 import { Button } from '@components/ui';
 import { cx } from '@styled-system/css';
 import { createInfiniteQuery, createQuery, useQueryClient } from '@tanstack/solid-query';
@@ -36,6 +37,7 @@ import {
   queryKeys,
   runExit,
 } from '~effects/query';
+import type { LibrarySessionKey } from '~effects/query';
 import * as recipes from '~styles/recipes';
 import { createSharedLibraryFilters } from '~utils/createSharedLibraryFilters';
 import type { LibrarySortDirection } from '~utils/createSharedLibraryFilters';
@@ -630,6 +632,7 @@ function LibraryBrowseRoute() {
         title={() => libraryTitle(collectionType())}
         count={toolbarCount}
         loading={controlsLoading}
+        sessionKey={sessionKey}
         sortedValue={libraryFilters.sort}
         sortDirection={libraryFilters.sortDirection}
         playedFilter={libraryFilters.playedFilter}
@@ -872,6 +875,7 @@ interface LibraryBrowseToolbarProps {
   title: () => string;
   count: () => string | null;
   loading: () => boolean;
+  sessionKey: () => LibrarySessionKey;
   sortedValue: () => VideoLibrarySort;
   sortDirection: () => LibrarySortDirection;
   playedFilter: () => VideoLibraryPlayedFilter;
@@ -898,6 +902,9 @@ function LibraryBrowseToolbar(props: LibraryBrowseToolbarProps) {
           {props.title()}
         </h2>
         <Show when={props.count()}>{(count) => <p class={styles.toolbarCount}>{count()}</p>}</Show>
+      </div>
+      <div class={styles.toolbarSearch}>
+        <LibrarySearchBar sessionKey={props.sessionKey()} />
       </div>
       <div class={styles.controlCapsule} data-disabled={props.loading() ? '' : undefined}>
         <Toggle.Root

@@ -2,8 +2,17 @@ import { afterEach, expect, rstest, test } from '@rstest/core';
 import { Effect, Exit, Option } from 'effect';
 
 import { commands } from '../src/bindings';
-import type { ConnectionState, VideoLibraryPage, VideoShowDetail } from '../src/bindings';
-import { fetchVideoLibraryPage, initialSeasonForShow } from '../src/effects/library';
+import type {
+  ConnectionState,
+  VideoLibraryPage,
+  VideoSearchPage,
+  VideoShowDetail,
+} from '../src/bindings';
+import {
+  fetchVideoLibraryPage,
+  fetchVideoSearchPage,
+  initialSeasonForShow,
+} from '../src/effects/library';
 
 const connectedState: ConnectionState = {
   capabilities: {
@@ -162,6 +171,28 @@ test('initialSeasonForShow returns null if show has no seasons', () => {
 
   const result = initialSeasonForShow(show);
   expect(Option.isNone(result)).toBe(true);
+});
+
+test('fetchVideoSearchPage sends the paged query without a connection preflight', async () => {
+  const serverGetState = rstest.spyOn(commands, 'serverGetState').mockResolvedValue(connectedState);
+  const searchPage: VideoSearchPage = {
+    query: 'alien',
+    startIndex: 0,
+    limit: 24,
+    totalRecordCount: 0,
+    hasMore: false,
+    items: [],
+  };
+  const search = rstest.spyOn(commands, 'librarySearchVideo').mockResolvedValue({
+    data: searchPage,
+    status: 'ok',
+  });
+
+  const exit = await Effect.runPromiseExit(fetchVideoSearchPage('alien', 0));
+
+  expect(Exit.isSuccess(exit)).toBe(true);
+  expect(serverGetState).not.toHaveBeenCalled();
+  expect(search).toHaveBeenCalledWith({ query: 'alien', startIndex: 0, limit: 24 });
 });
 
 test('fetchVideoLibraryPage does not preflight connection state per page', async () => {

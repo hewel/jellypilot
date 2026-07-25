@@ -97,6 +97,13 @@ export const toolbar = css({
   zIndex: '40',
 });
 
+export const toolbarSearch = css({
+  display: 'flex',
+  flex: '1',
+  justifyContent: 'center',
+  minWidth: '[14rem]',
+});
+
 export const toolbarChrome = css({
   backdropFilter: '[blur(12px)]',
   bg: 'surface/85',

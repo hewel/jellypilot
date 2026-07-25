@@ -9,6 +9,7 @@ import type {
   VideoItemDetail,
   VideoLibraryPage,
   VideoLibraryShortcut,
+  VideoSearchPage,
 } from '../../src/bindings';
 
 export const FIXTURE_PASSWORD = 'not-a-secret';
@@ -31,6 +32,7 @@ interface RawCommandMap {
   library_item_detail: VideoItemDetail;
   library_item_shortcut: VideoLibraryShortcut | null;
   library_play: null;
+  library_search_video: VideoSearchPage;
   library_video_home: VideoHome;
   library_video_shortcuts: VideoLibraryShortcut[];
   mpv_is_connected: boolean;
@@ -72,6 +74,7 @@ function parseFixtureCommand(command: string): FixtureCommand | undefined {
     command === 'library_item_detail' ||
     command === 'library_item_shortcut' ||
     command === 'library_play' ||
+    command === 'library_search_video' ||
     command === 'library_video_home' ||
     command === 'library_video_shortcuts' ||
     command === 'mpv_is_connected' ||

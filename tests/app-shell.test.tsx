@@ -12,8 +12,10 @@ import type {
   NowPlayingState,
   VideoHome,
   VideoItemDetail,
+  VideoLibraryItem,
   VideoLibraryPage,
   VideoLibraryShortcut,
+  VideoSearchPage,
   VideoSeasonEpisodes,
   VideoShowDetail,
 } from '../src/bindings';
@@ -484,6 +486,100 @@ function largeVideoLibraryPage(startIndex: number): VideoLibraryPage {
   };
 }
 
+const searchResultPool: VideoLibraryItem[] = [
+  {
+    id: 'alien-movie',
+    name: 'Alien',
+    itemType: 'Movie',
+    productionYear: 1979,
+    runtimeSeconds: 7020,
+    played: true,
+    favorite: true,
+    artworkImageId: 'alien-movie-art',
+    seasonNumber: null,
+    episodeNumber: null,
+    seriesId: null,
+    seriesName: null,
+    resumePositionSeconds: null,
+    playedPercentage: null,
+  },
+  {
+    id: 'alien-episode',
+    name: 'Alien Covenant: Homecoming',
+    itemType: 'Episode',
+    productionYear: 2025,
+    runtimeSeconds: 3000,
+    played: true,
+    favorite: false,
+    artworkImageId: null,
+    seasonNumber: 1,
+    episodeNumber: 2,
+    seriesId: 'alien-show',
+    seriesName: 'Alien Earth',
+    resumePositionSeconds: null,
+    playedPercentage: null,
+  },
+  {
+    id: 'alien-show',
+    name: 'Alien Earth',
+    itemType: 'Series',
+    productionYear: 2025,
+    runtimeSeconds: null,
+    played: false,
+    favorite: false,
+    artworkImageId: null,
+    seasonNumber: null,
+    episodeNumber: null,
+    seriesId: null,
+    seriesName: null,
+    resumePositionSeconds: null,
+    playedPercentage: null,
+  },
+  ...Array.from({ length: 21 }, (_, index) => ({
+    id: `alien-extra-${index + 1}`,
+    name: `Alien Extra ${String(index + 1).padStart(2, '0')}`,
+    itemType: 'Movie',
+    productionYear: null,
+    runtimeSeconds: null,
+    played: false,
+    favorite: false,
+    artworkImageId: null,
+    seasonNumber: null,
+    episodeNumber: null,
+    seriesId: null,
+    seriesName: null,
+    resumePositionSeconds: null,
+    playedPercentage: null,
+  })),
+  {
+    id: 'alien-rematch',
+    name: 'Alien Rematch',
+    itemType: 'Movie',
+    productionYear: null,
+    runtimeSeconds: null,
+    played: false,
+    favorite: false,
+    artworkImageId: null,
+    seasonNumber: null,
+    episodeNumber: null,
+    seriesId: null,
+    seriesName: null,
+    resumePositionSeconds: null,
+    playedPercentage: null,
+  },
+];
+
+function videoSearchPage(startIndex: number): VideoSearchPage {
+  return {
+    query: 'alien',
+    startIndex,
+    limit: 24,
+    totalRecordCount: searchResultPool.length,
+    hasMore: startIndex + 24 < searchResultPool.length,
+    items: searchResultPool.slice(startIndex, startIndex + 24),
+  };
+}
+
 function mockShellCommands(state = connectedState) {
   rstest.spyOn(commands, 'serverIsConnected').mockResolvedValue(true);
   rstest.spyOn(commands, 'serverGetState').mockResolvedValue(state);
@@ -522,6 +618,12 @@ function mockShellCommands(state = connectedState) {
   rstest.spyOn(commands, 'libraryBrowseVideo').mockImplementation((request) =>
     Promise.resolve({
       data: videoLibraryPage(request.startIndex),
+      status: 'ok',
+    }),
+  );
+  rstest.spyOn(commands, 'librarySearchVideo').mockImplementation((request) =>
+    Promise.resolve({
+      data: videoSearchPage(request.startIndex),
       status: 'ok',
     }),
   );
@@ -2001,6 +2103,280 @@ test('Settings modal keeps Disconnect and Sign out as distinct session controls'
     ),
   ).toBeVisible();
   expect(localStorage.getItem('jellypilot_auth_session')).not.toBeNull();
+
+  cleanup();
+});
+
+test('shell search bar stays disabled while disconnected', async () => {
+  mockShellCommands(disconnectedState);
+  const cleanup = renderShell('/library/movies/movies');
+
+  const input = await screen.findByRole('searchbox', { name: 'Search library' });
+  expect(input).toBeDisabled();
+  expect(input).toHaveAttribute('placeholder', 'Connect to search');
+  expect(screen.getByRole('button', { name: 'Search library' })).toBeDisabled();
+
+  fireEvent.keyDown(document.body, { key: '/' });
+  expect(input).not.toHaveFocus();
+
+  cleanup();
+});
+
+test('shell search submit stays disabled until the draft has a non-whitespace query', async () => {
+  mockShellCommands();
+  const cleanup = renderShell('/library/movies/movies');
+
+  await screen.findByRole('heading', { name: 'Movies' });
+  const input = (await screen.findByRole('searchbox', {
+    name: 'Search library',
+  })) as HTMLInputElement;
+  const submit = screen.getByRole('button', { name: 'Search library' });
+
+  expect(submit).toBeDisabled();
+
+  fireEvent.input(input, { target: { value: '   ' } });
+  expect(submit).toBeDisabled();
+
+  fireEvent.input(input, { target: { value: 'alien' } });
+  expect(submit).toBeEnabled();
+
+  fireEvent.click(screen.getByRole('button', { name: 'Clear search' }));
+  expect(input).toHaveValue('');
+  expect(submit).toBeDisabled();
+
+  cleanup();
+});
+
+test('shell search slash shortcut focuses and selects the retained draft', async () => {
+  mockShellCommands();
+  const cleanup = renderShell('/library/movies/movies');
+
+  await screen.findByRole('heading', { name: 'Movies' });
+  const input = (await screen.findByRole('searchbox', {
+    name: 'Search library',
+  })) as HTMLInputElement;
+  fireEvent.input(input, { target: { value: 'alien' } });
+  expect(commands.librarySearchVideo).not.toHaveBeenCalled();
+
+  const prevented = fireEvent.keyDown(document.body, { key: '/' });
+
+  expect(prevented).toBe(false);
+  expect(input).toHaveFocus();
+  expect(input).toHaveValue('alien');
+  expect(input.selectionStart).toBe(0);
+  expect(input.selectionEnd).toBe('alien'.length);
+  expect(commands.librarySearchVideo).not.toHaveBeenCalled();
+
+  cleanup();
+});
+
+test('shell search slash shortcut stays inert inside editable controls', async () => {
+  mockShellCommands();
+  const cleanup = renderShell('/library/movies/movies');
+
+  const input = (await screen.findByRole('searchbox', {
+    name: 'Search library',
+  })) as HTMLInputElement;
+  input.focus();
+  const notPrevented = fireEvent.keyDown(input, { key: '/' });
+
+  expect(notPrevented).toBe(true);
+  expect(input).toHaveValue('');
+
+  cleanup();
+});
+
+test('shell search submit trims the query and loads the first page', async () => {
+  mockShellCommands();
+  const cleanup = renderShell('/library/movies/movies');
+
+  const input = (await screen.findByRole('searchbox', {
+    name: 'Search library',
+  })) as HTMLInputElement;
+  const form = input.closest('form') as HTMLFormElement;
+
+  fireEvent.input(input, { target: { value: '   ' } });
+  fireEvent.submit(form);
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  expect(commands.librarySearchVideo).not.toHaveBeenCalled();
+
+  fireEvent.input(input, { target: { value: '  alien  ' } });
+  expect(commands.librarySearchVideo).not.toHaveBeenCalled();
+
+  fireEvent.submit(form);
+
+  await waitFor(() =>
+    expect(commands.librarySearchVideo).toHaveBeenCalledWith({
+      limit: 24,
+      query: 'alien',
+      startIndex: 0,
+    }),
+  );
+  expect(await screen.findByRole('heading', { name: 'Search results for “alien”' })).toBeVisible();
+  expect(screen.getByText('25 results')).toBeVisible();
+  expect(await screen.findByRole('link', { name: 'Open Alien, favorite' })).toBeVisible();
+
+  cleanup();
+});
+
+test('library home displays the search bar and submits to the results page', async () => {
+  mockShellCommands();
+  const cleanup = renderShell('/library');
+
+  const input = (await screen.findByRole('searchbox', {
+    name: 'Search library',
+  })) as HTMLInputElement;
+  expect(input).toBeEnabled();
+
+  fireEvent.input(input, { target: { value: 'alien' } });
+  fireEvent.submit(input.closest('form') as HTMLFormElement);
+
+  await waitFor(() =>
+    expect(commands.librarySearchVideo).toHaveBeenCalledWith({
+      limit: 24,
+      query: 'alien',
+      startIndex: 0,
+    }),
+  );
+  expect(await screen.findByRole('heading', { name: 'Search results for “alien”' })).toBeVisible();
+
+  cleanup();
+});
+
+test('library search renders compact rows with metadata and status text', async () => {
+  mockShellCommands();
+  const cleanup = renderShell('/library/search?q=alien');
+
+  await screen.findByRole('heading', { name: 'Search results for “alien”' });
+
+  const movieRow = await screen.findByRole('link', { name: 'Open Alien, favorite' });
+  expect(movieRow).toHaveAttribute('href', '/library/items/alien-movie');
+  expect(within(movieRow).getByText('Movie • 1979')).toBeVisible();
+  expect(within(movieRow).getByText('Played')).toBeVisible();
+  expect(within(movieRow).getByText('Favorite')).toBeVisible();
+
+  const episodeRow = screen.getByRole('link', { name: 'Open Alien Covenant: Homecoming' });
+  expect(episodeRow).toHaveAttribute('href', '/library/items/alien-episode');
+  expect(within(episodeRow).getByText('Alien Earth • S01E02')).toBeVisible();
+  expect(within(episodeRow).getByText('Played')).toBeVisible();
+
+  const showRow = screen.getByRole('link', { name: 'Open Alien Earth' });
+  expect(showRow).toHaveAttribute('href', '/library/shows/alien-show');
+  expect(within(showRow).getByText('Series • 2025')).toBeVisible();
+
+  cleanup();
+});
+
+test('library search auto-loads the next page and retries a failed page', async () => {
+  mockShellCommands();
+  let nextPageShouldFail = true;
+  const searchCommand = rstest
+    .spyOn(commands, 'librarySearchVideo')
+    .mockImplementation((request) => {
+      if (request.startIndex === 24 && nextPageShouldFail) {
+        return Promise.resolve({
+          error: { code: 'internal', message: 'Search page failed' },
+          status: 'error',
+        });
+      }
+
+      return Promise.resolve({
+        data: videoSearchPage(request.startIndex),
+        status: 'ok',
+      });
+    });
+  const cleanup = renderShell('/library/search?q=alien');
+
+  await screen.findByRole('link', { name: 'Open Alien, favorite' });
+  window.__TEST_INTERSECTION_OBSERVER__.trigger(true);
+
+  await waitFor(() =>
+    expect(searchCommand).toHaveBeenCalledWith({ limit: 24, query: 'alien', startIndex: 24 }),
+  );
+  expect(await screen.findByText('Search page failed')).toBeVisible();
+  expect(screen.getByRole('link', { name: 'Open Alien, favorite' })).toBeVisible();
+
+  nextPageShouldFail = false;
+  fireEvent.click(screen.getByRole('button', { name: 'Retry loading more' }));
+
+  expect(await screen.findByRole('link', { name: 'Open Alien Rematch' })).toBeVisible();
+  await waitFor(() => expect(screen.queryByText('Search page failed')).toBeNull());
+
+  cleanup();
+});
+
+test('shell search clear only empties the draft without navigating or searching', async () => {
+  mockShellCommands();
+  const searchCommand = rstest.spyOn(commands, 'librarySearchVideo');
+  const cleanup = renderShell('/library/movies/movies');
+
+  const input = (await screen.findByRole('searchbox', {
+    name: 'Search library',
+  })) as HTMLInputElement;
+  await screen.findByRole('heading', { name: 'Movies' });
+
+  fireEvent.input(input, { target: { value: 'alien' } });
+  fireEvent.click(screen.getByRole('button', { name: 'Clear search' }));
+
+  expect(input).toHaveValue('');
+  expect(input).toHaveFocus();
+  expect(screen.getByRole('heading', { name: 'Movies' })).toBeVisible();
+  expect(searchCommand).not.toHaveBeenCalled();
+
+  fireEvent.input(input, { target: { value: '  alien  ' } });
+  fireEvent.submit(input.closest('form') as HTMLFormElement);
+
+  await waitFor(() =>
+    expect(searchCommand).toHaveBeenCalledWith({ limit: 24, query: 'alien', startIndex: 0 }),
+  );
+  expect(await screen.findByRole('heading', { name: 'Search results for “alien”' })).toBeVisible();
+
+  cleanup();
+});
+
+test('library search back restores cached pages and scroll offset', async () => {
+  mockShellCommands();
+  const cleanup = renderShell('/library/search?q=alien');
+
+  const movieRow = await screen.findByRole('link', { name: 'Open Alien, favorite' });
+  const viewport = appScrollViewport();
+  viewport.scrollTop = 432;
+  fireEvent.scroll(viewport);
+
+  fireEvent.click(movieRow);
+
+  expect(await screen.findByRole('heading', { name: 'Detail Movie' })).toBeVisible();
+  await waitFor(() => expect(viewport.scrollTop).toBe(0));
+
+  fireEvent.click(screen.getByRole('button', { name: 'Back' }));
+
+  expect(await screen.findByRole('heading', { name: 'Search results for “alien”' })).toBeVisible();
+  expect(await screen.findByRole('link', { name: 'Open Alien, favorite' })).toBeVisible();
+  expect(screen.queryByText('Searching library')).toBeNull();
+  await waitFor(() => expect(screen.queryByRole('heading', { name: 'Detail Movie' })).toBeNull());
+  await waitFor(() => expect(viewport.scrollTop).toBe(432));
+
+  cleanup();
+});
+
+test('library search redirects a missing query to library home without searching', async () => {
+  mockShellCommands();
+  const cleanup = renderShell('/library/search');
+
+  expect(await screen.findByRole('heading', { name: 'Continue Watching' })).toBeVisible();
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  expect(commands.librarySearchVideo).not.toHaveBeenCalled();
+
+  cleanup();
+});
+
+test('library search redirects a whitespace-only query to library home without searching', async () => {
+  mockShellCommands();
+  const cleanup = renderShell('/library/search?q=%20%20');
+
+  expect(await screen.findByRole('heading', { name: 'Continue Watching' })).toBeVisible();
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  expect(commands.librarySearchVideo).not.toHaveBeenCalled();
 
   cleanup();
 });

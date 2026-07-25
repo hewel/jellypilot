@@ -14,6 +14,7 @@ import { Route as AuthenticatedRouteImport } from './routes/_authenticated'
 import { Route as IndexRouteImport } from './routes/index'
 import { Route as AuthenticatedLibraryRouteImport } from './routes/_authenticated/library'
 import { Route as AuthenticatedLibraryIndexRouteImport } from './routes/_authenticated/library/index'
+import { Route as AuthenticatedLibrarySearchRouteImport } from './routes/_authenticated/library/search'
 import { Route as AuthenticatedLibraryShowsSeriesIdRouteImport } from './routes/_authenticated/library/shows/$seriesId'
 import { Route as AuthenticatedLibraryItemsItemIdRouteImport } from './routes/_authenticated/library/items/$itemId'
 import { Route as AuthenticatedLibraryCollectionTypeLibraryIdRouteImport } from './routes/_authenticated/library/$collectionType/$libraryId'
@@ -43,6 +44,12 @@ const AuthenticatedLibraryIndexRoute =
     path: '/',
     getParentRoute: () => AuthenticatedLibraryRoute,
   } as any)
+const AuthenticatedLibrarySearchRoute =
+  AuthenticatedLibrarySearchRouteImport.update({
+    id: '/search',
+    path: '/search',
+    getParentRoute: () => AuthenticatedLibraryRoute,
+  } as any)
 const AuthenticatedLibraryShowsSeriesIdRoute =
   AuthenticatedLibraryShowsSeriesIdRouteImport.update({
     id: '/shows/$seriesId',
@@ -66,6 +73,7 @@ export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
   '/login': typeof LoginRoute
   '/library': typeof AuthenticatedLibraryRouteWithChildren
+  '/library/search': typeof AuthenticatedLibrarySearchRoute
   '/library/': typeof AuthenticatedLibraryIndexRoute
   '/library/$collectionType/$libraryId': typeof AuthenticatedLibraryCollectionTypeLibraryIdRoute
   '/library/items/$itemId': typeof AuthenticatedLibraryItemsItemIdRoute
@@ -74,6 +82,7 @@ export interface FileRoutesByFullPath {
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
   '/login': typeof LoginRoute
+  '/library/search': typeof AuthenticatedLibrarySearchRoute
   '/library': typeof AuthenticatedLibraryIndexRoute
   '/library/$collectionType/$libraryId': typeof AuthenticatedLibraryCollectionTypeLibraryIdRoute
   '/library/items/$itemId': typeof AuthenticatedLibraryItemsItemIdRoute
@@ -85,6 +94,7 @@ export interface FileRoutesById {
   '/_authenticated': typeof AuthenticatedRouteWithChildren
   '/login': typeof LoginRoute
   '/_authenticated/library': typeof AuthenticatedLibraryRouteWithChildren
+  '/_authenticated/library/search': typeof AuthenticatedLibrarySearchRoute
   '/_authenticated/library/': typeof AuthenticatedLibraryIndexRoute
   '/_authenticated/library/$collectionType/$libraryId': typeof AuthenticatedLibraryCollectionTypeLibraryIdRoute
   '/_authenticated/library/items/$itemId': typeof AuthenticatedLibraryItemsItemIdRoute
@@ -96,6 +106,7 @@ export interface FileRouteTypes {
     | '/'
     | '/login'
     | '/library'
+    | '/library/search'
     | '/library/'
     | '/library/$collectionType/$libraryId'
     | '/library/items/$itemId'
@@ -104,6 +115,7 @@ export interface FileRouteTypes {
   to:
     | '/'
     | '/login'
+    | '/library/search'
     | '/library'
     | '/library/$collectionType/$libraryId'
     | '/library/items/$itemId'
@@ -114,6 +126,7 @@ export interface FileRouteTypes {
     | '/_authenticated'
     | '/login'
     | '/_authenticated/library'
+    | '/_authenticated/library/search'
     | '/_authenticated/library/'
     | '/_authenticated/library/$collectionType/$libraryId'
     | '/_authenticated/library/items/$itemId'
@@ -163,6 +176,13 @@ declare module '@tanstack/solid-router' {
       preLoaderRoute: typeof AuthenticatedLibraryIndexRouteImport
       parentRoute: typeof AuthenticatedLibraryRoute
     }
+    '/_authenticated/library/search': {
+      id: '/_authenticated/library/search'
+      path: '/search'
+      fullPath: '/library/search'
+      preLoaderRoute: typeof AuthenticatedLibrarySearchRouteImport
+      parentRoute: typeof AuthenticatedLibraryRoute
+    }
     '/_authenticated/library/shows/$seriesId': {
       id: '/_authenticated/library/shows/$seriesId'
       path: '/shows/$seriesId'
@@ -188,6 +208,7 @@ declare module '@tanstack/solid-router' {
 }
 
 interface AuthenticatedLibraryRouteChildren {
+  AuthenticatedLibrarySearchRoute: typeof AuthenticatedLibrarySearchRoute
   AuthenticatedLibraryIndexRoute: typeof AuthenticatedLibraryIndexRoute
   AuthenticatedLibraryCollectionTypeLibraryIdRoute: typeof AuthenticatedLibraryCollectionTypeLibraryIdRoute
   AuthenticatedLibraryItemsItemIdRoute: typeof AuthenticatedLibraryItemsItemIdRoute
@@ -195,6 +216,7 @@ interface AuthenticatedLibraryRouteChildren {
 }
 
 const AuthenticatedLibraryRouteChildren: AuthenticatedLibraryRouteChildren = {
+  AuthenticatedLibrarySearchRoute: AuthenticatedLibrarySearchRoute,
   AuthenticatedLibraryIndexRoute: AuthenticatedLibraryIndexRoute,
   AuthenticatedLibraryCollectionTypeLibraryIdRoute:
     AuthenticatedLibraryCollectionTypeLibraryIdRoute,

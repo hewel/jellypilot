@@ -7,6 +7,23 @@ export const stack = css({
   gap: '8',
 });
 
+/* Sticky Home search chrome. The glass capsule belongs to the search bar
+ * itself; this host is only a positioning rail plus a top-fade scrim, so the
+ * row is invisible over the ambient background at rest and scrolled rows
+ * dissolve beneath the control instead of clipping against a bordered strip. */
+export const homeSearch = css({
+  alignItems: 'center',
+  backgroundImage: '[linear-gradient(to bottom, {colors.background/90} 30%, transparent)]',
+  display: 'flex',
+  justifyContent: 'center',
+  mb: '6',
+  pb: '3',
+  position: 'sticky',
+  pt: '2',
+  top: '0',
+  zIndex: '40',
+});
+
 export const skeletonRow = css({
   display: 'grid',
   gap: '4',

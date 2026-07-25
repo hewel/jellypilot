@@ -12,6 +12,7 @@ import type {
   VideoSeasonEpisodes,
   VideoSeasonEpisodesRequest,
   VideoSeason,
+  VideoSearchPage,
   VideoShowDetail,
   VideoUserDataUpdate,
   VideoUserDataUpdateRequest,
@@ -36,12 +37,14 @@ export interface LibraryBrowseState {
 
 export type LibraryDetailState = VideoItemDetail;
 export type LibraryShowState = VideoShowDetail;
+export type LibrarySearchState = VideoSearchPage;
 
 export interface SeasonEpisodesState {
   page: VideoSeasonEpisodes;
 }
 
 export const LIBRARY_BROWSE_PAGE_SIZE = 24;
+export const LIBRARY_SEARCH_PAGE_SIZE = 24;
 
 const disconnectedError = () =>
   new CommandError({
@@ -87,6 +90,15 @@ export function fetchVideoLibraryPage(
 
 export function fetchVideoItemDetail(itemId: string): LibraryEffect<LibraryDetailState> {
   return withConnection(runTauriCommand(() => commands.libraryItemDetail(itemId)));
+}
+
+export function fetchVideoSearchPage(
+  query: string,
+  startIndex: number,
+): LibraryEffect<LibrarySearchState> {
+  return runTauriCommand(() =>
+    commands.librarySearchVideo({ query, startIndex, limit: LIBRARY_SEARCH_PAGE_SIZE }),
+  );
 }
 
 export function fetchVideoItemShortcut(itemId: string): LibraryEffect<VideoLibraryShortcut | null> {

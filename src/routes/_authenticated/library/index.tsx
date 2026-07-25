@@ -1,5 +1,6 @@
 import type { VideoHomeItem, VideoLibraryPlayRequest } from '@bindings';
 import { VideoHomeRow } from '@components/library/shared';
+import LibrarySearchBar from '@components/LibrarySearchBar';
 import { useToast } from '@components/ToastProvider';
 import { cx } from '@styled-system/css';
 import { createMutation, createQuery } from '@tanstack/solid-query';
@@ -78,35 +79,40 @@ function LibraryLanding() {
   };
 
   return (
-    <Show when={!homeQuery.isPending} fallback={<VideoHomeSkeleton />}>
-      <Show when={home()}>
-        {(value) => (
-          <div class={styles.stack}>
-            <VideoHomeRow
-              id="continue-watching"
-              title="Continue Watching"
-              kind="continueWatching"
-              items={value().continueWatching}
-              resumeBusyId={resumeBusyId()}
-              onResume={(item) => void resumeItem(item)}
-            />
-            <VideoHomeRow id="next-up" title="Next Up" kind="nextUp" items={value().nextUp} />
-            <VideoHomeRow
-              id="latest-movies"
-              title="Latest Movies"
-              kind="latestMovies"
-              items={value().latestMovies}
-            />
-            <VideoHomeRow
-              id="latest-episodes"
-              title="Latest Episodes"
-              kind="latestEpisodes"
-              items={value().latestEpisodes}
-            />
-          </div>
-        )}
+    <>
+      <nav class={styles.homeSearch} aria-label="Library search" data-toolbar="">
+        <LibrarySearchBar sessionKey={sessionKey()} />
+      </nav>
+      <Show when={!homeQuery.isPending} fallback={<VideoHomeSkeleton />}>
+        <Show when={home()}>
+          {(value) => (
+            <div class={styles.stack}>
+              <VideoHomeRow
+                id="continue-watching"
+                title="Continue Watching"
+                kind="continueWatching"
+                items={value().continueWatching}
+                resumeBusyId={resumeBusyId()}
+                onResume={(item) => void resumeItem(item)}
+              />
+              <VideoHomeRow id="next-up" title="Next Up" kind="nextUp" items={value().nextUp} />
+              <VideoHomeRow
+                id="latest-movies"
+                title="Latest Movies"
+                kind="latestMovies"
+                items={value().latestMovies}
+              />
+              <VideoHomeRow
+                id="latest-episodes"
+                title="Latest Episodes"
+                kind="latestEpisodes"
+                items={value().latestEpisodes}
+              />
+            </div>
+          )}
+        </Show>
       </Show>
-    </Show>
+    </>
   );
 }
 

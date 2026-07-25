@@ -62,6 +62,8 @@ export const queryKeys = {
   librarySessionRoot: (sessionKey: LibrarySessionKey) => ['library', sessionKey] as const,
   libraryShortcuts: (sessionKey: LibrarySessionKey) =>
     [...queryKeys.librarySessionRoot(sessionKey), 'shortcuts'] as const,
+  librarySearch: (sessionKey: LibrarySessionKey, query: string) =>
+    [...queryKeys.librarySessionRoot(sessionKey), 'search', query] as const,
   libraryHome: (sessionKey: LibrarySessionKey) =>
     [...queryKeys.librarySessionRoot(sessionKey), 'home'] as const,
   libraryBrowseRoot: (sessionKey: LibrarySessionKey) =>
