@@ -12,6 +12,8 @@ export const card = css({
   left: '0',
   maxWidth: '[min(90vw, 24rem)]',
   p: '4',
+  /** Parent PopupRoot uses pointer-events: none; content must opt back in. */
+  pointerEvents: 'auto',
   position: 'absolute',
   top: '0',
   width: '[20rem]',

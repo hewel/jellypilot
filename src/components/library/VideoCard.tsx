@@ -2,8 +2,9 @@ import type { VideoHomeItem, VideoLibraryItem, VideoLibraryKind } from '@binding
 import { cx } from '@styled-system/css';
 import { Link } from '@tanstack/solid-router';
 import { Match } from 'effect';
-import { Check, Film, Heart, LoaderCircle, Tv } from 'lucide-solid';
+import { Check, Film, Heart, LoaderCircle, Play, Tv } from 'lucide-solid';
 import { Show, createEffect, createSignal } from 'solid-js';
+import type { JSX } from 'solid-js';
 import { imageSource } from '~utils/imageSource';
 import {
   isValidVideoHomeResumePosition,
@@ -12,6 +13,7 @@ import {
   type VideoHomeRowKind,
 } from '~utils/videoHomeLayout';
 
+import { MediaInfoHoverCard } from './MediaInfoHoverCard';
 import * as styles from './VideoCard.styles';
 
 export type VideoCardAspectClass = VideoHomeAspect;
@@ -100,6 +102,25 @@ function homeTitle(item: VideoHomeItem): string {
   return `${item.name} • ${item.itemType}`;
 }
 
+function CardTitle(props: { id: string; itemType: string; class: string; children: JSX.Element }) {
+  return (
+    <MediaInfoHoverCard id={props.id} itemType={props.itemType} class={styles.titleHoverTrigger}>
+      <p class={props.class}>{props.children}</p>
+    </MediaInfoHoverCard>
+  );
+}
+
+function isDirectResumeCard(props: VideoCardProps): props is HomeVideoCardProps & {
+  onResume: () => void;
+} {
+  return (
+    props.kind === 'home' &&
+    props.rowKind === 'continueWatching' &&
+    props.onResume !== undefined &&
+    isValidVideoHomeResumePosition(props.item.resumePositionSeconds, props.item.runtimeSeconds)
+  );
+}
+
 export function VideoCard(props: VideoCardProps) {
   const aspectClass = (): VideoCardAspectClass => {
     if (props.kind === 'home') {
@@ -140,6 +161,7 @@ export function VideoCard(props: VideoCardProps) {
     `Open ${props.item.name}${props.item.favorite ? ', favorite' : ''}`;
   const [imageFailed, setImageFailed] = createSignal(false);
   const artworkImageId = () => props.item.artworkImageId;
+  const showPlayBadge = () => isDirectResumeCard(props) && !props.busy;
 
   createEffect(() => {
     artworkImageId();
@@ -156,132 +178,154 @@ export function VideoCard(props: VideoCardProps) {
       ? homeSecondary({ item: props.item, rowKind: props.rowKind })
       : librarySubtitle();
 
-  const renderContents = () => (
-    <>
-      <div
-        class={cx(
-          styles.artwork,
-          styles.aspect[aspectClass()],
-          props.kind === 'home' && styles.homeArtwork,
-        )}
-        data-aspect={aspectClass()}
-      >
-        <Show
-          when={!imageFailed() ? artworkImageId() : null}
-          fallback={
-            <div class={styles.fallback}>
-              <Show
-                when={usesTvIcon()}
-                fallback={<Film class={styles.fallbackIcon} aria-hidden="true" />}
-              >
-                <Tv class={styles.fallbackIcon} aria-hidden="true" />
-              </Show>
-              <span>No artwork</span>
-            </div>
-          }
-        >
-          {(imageId) => (
-            <img
-              src={imageSource(imageId())}
-              alt={`${props.item.name} artwork`}
-              class={cx(styles.image, props.kind === 'home' && styles.homeImage)}
-              onError={() => setImageFailed(true)}
-            />
-          )}
-        </Show>
-
-        <Show when={props.kind === 'library' && props.item.favorite}>
-          <span class={styles.favoriteBadge} aria-hidden="true">
-            <Heart class={styles.favoriteIcon} fill="currentColor" aria-hidden="true" />
-          </span>
-        </Show>
-
-        <Show when={props.kind === 'library' && isPoster()}>
-          <Show when={props.item.played}>
-            <span class={styles.overlayPlayedBadge} role="img" aria-label="Played">
-              <Check class={styles.playedIcon} aria-hidden="true" />
-            </span>
-          </Show>
-          <div class={styles.overlay}>
-            <p class={styles.title}>{props.item.name}</p>
-            <p class={styles.subtitle}>{librarySubtitle()}</p>
-          </div>
-        </Show>
-
-        <Show when={props.kind === 'home' && progress() !== null}>
-          <div
-            class={styles.homeProgressTrack}
-            role="progressbar"
-            aria-label={`${props.item.name} watch progress`}
-            aria-valuemin="0"
-            aria-valuemax="100"
-            aria-valuenow={Math.round(progress() ?? 0)}
-          >
-            <div class={styles.homeProgressBar} style={{ width: `${progress() ?? 0}%` }} />
-          </div>
-        </Show>
-
-        <Show when={props.kind === 'home' && props.busy}>
-          <div class={styles.homeBusyOverlay} aria-live="polite">
-            <LoaderCircle class={styles.homeBusyIcon} aria-hidden="true" />
-            <span>Starting…</span>
-          </div>
-        </Show>
-      </div>
-
+  const renderArtwork = (options?: { includeLibraryOverlay?: boolean }) => (
+    <div
+      class={cx(
+        styles.artwork,
+        styles.aspect[aspectClass()],
+        props.kind === 'home' && styles.homeArtwork,
+      )}
+      data-aspect={aspectClass()}
+    >
       <Show
-        when={props.kind === 'home'}
+        when={!imageFailed() ? artworkImageId() : null}
         fallback={
-          <Show when={!isPoster()}>
-            <div class={styles.body}>
-              <div class={styles.copy}>
-                <p class={styles.title}>{props.item.name}</p>
-                <p class={styles.subtitle}>{librarySubtitle()}</p>
+          <Show
+            when={showPlayBadge()}
+            fallback={
+              <div class={styles.fallback}>
+                <Show
+                  when={usesTvIcon()}
+                  fallback={<Film class={styles.fallbackIcon} aria-hidden="true" />}
+                >
+                  <Tv class={styles.fallbackIcon} aria-hidden="true" />
+                </Show>
+                <span>No artwork</span>
               </div>
-              <Show when={props.item.played}>
-                <span class={styles.playedBadge} role="img" aria-label="Played">
-                  <Check class={styles.playedIcon} aria-hidden="true" />
-                </span>
-              </Show>
-            </div>
+            }
+          >
+            <div class={styles.directResumeFallback} aria-hidden="true" />
           </Show>
         }
       >
-        <div class={styles.homeBody}>
-          <p class={styles.homeTitle}>{homeTitle(props.item)}</p>
-          <Show when={secondary()}>{(value) => <p class={styles.homeSubtitle}>{value()}</p>}</Show>
+        {(imageId) => (
+          <img
+            src={imageSource(imageId())}
+            alt={`${props.item.name} artwork`}
+            class={cx(styles.image, props.kind === 'home' && styles.homeImage)}
+            onError={() => setImageFailed(true)}
+          />
+        )}
+      </Show>
+
+      <Show when={props.kind === 'library' && props.item.favorite}>
+        <span class={styles.favoriteBadge} aria-hidden="true">
+          <Heart class={styles.favoriteIcon} fill="currentColor" aria-hidden="true" />
+        </span>
+      </Show>
+
+      <Show when={options?.includeLibraryOverlay && props.kind === 'library' && isPoster()}>
+        <Show when={props.item.played}>
+          <span class={styles.overlayPlayedBadge} role="img" aria-label="Played">
+            <Check class={styles.playedIcon} aria-hidden="true" />
+          </span>
+        </Show>
+        <div class={styles.overlay}>
+          <CardTitle id={props.item.id} itemType={props.item.itemType} class={styles.title}>
+            {props.item.name}
+          </CardTitle>
+          <p class={styles.subtitle}>{librarySubtitle()}</p>
         </div>
       </Show>
-    </>
+
+      <Show when={props.kind === 'home' && progress() !== null}>
+        <div
+          class={styles.homeProgressTrack}
+          role="progressbar"
+          aria-label={`${props.item.name} watch progress`}
+          aria-valuemin="0"
+          aria-valuemax="100"
+          aria-valuenow={Math.round(progress() ?? 0)}
+        >
+          <div class={styles.homeProgressBar} style={{ width: `${progress() ?? 0}%` }} />
+        </div>
+      </Show>
+
+      <Show when={showPlayBadge()}>
+        <span class={styles.playBadge} data-play-badge aria-hidden="true">
+          <Play class={styles.playIcon} aria-hidden="true" />
+        </span>
+      </Show>
+
+      <Show when={props.kind === 'home' && props.busy}>
+        <div class={styles.homeBusyOverlay} aria-live="polite">
+          <LoaderCircle class={styles.homeBusyIcon} aria-hidden="true" />
+          <span>Starting…</span>
+        </div>
+      </Show>
+    </div>
   );
 
-  if (
-    props.kind === 'home' &&
-    props.rowKind === 'continueWatching' &&
-    isValidVideoHomeResumePosition(props.item.resumePositionSeconds, props.item.runtimeSeconds) &&
-    props.onResume
-  ) {
+  const renderHomeMeta = () => (
+    <div class={styles.homeBody}>
+      <CardTitle id={props.item.id} itemType={props.item.itemType} class={styles.homeTitle}>
+        {homeTitle(props.item)}
+      </CardTitle>
+      <Show when={secondary()}>{(value) => <p class={styles.homeSubtitle}>{value()}</p>}</Show>
+    </div>
+  );
+
+  if (isDirectResumeCard(props)) {
     return (
-      <button
-        type="button"
-        class={styles.homeCard}
-        aria-label={props.busy ? `Starting ${props.item.name}` : `Resume ${props.item.name}`}
-        aria-busy={props.busy}
-        disabled={props.resumeDisabled}
-        onClick={props.onResume}
-      >
-        {renderContents()}
-      </button>
+      <div class={styles.homeCard}>
+        <button
+          type="button"
+          class={styles.homeCardAction}
+          aria-label={props.busy ? `Starting ${props.item.name}` : `Resume ${props.item.name}`}
+          aria-busy={props.busy}
+          disabled={props.resumeDisabled}
+          onClick={props.onResume}
+        >
+          {renderArtwork()}
+        </button>
+        {renderHomeMeta()}
+      </div>
+    );
+  }
+
+  if (props.kind === 'home') {
+    return (
+      <div class={styles.homeCard}>
+        <Link
+          {...linkTarget()}
+          aria-label={`Open ${props.item.name}`}
+          class={styles.homeCardAction}
+        >
+          {renderArtwork()}
+        </Link>
+        {renderHomeMeta()}
+      </div>
     );
   }
 
   return (
-    <Link
-      {...linkTarget()}
-      aria-label={props.kind === 'home' ? `Open ${props.item.name}` : libraryCardAriaLabel()}
-      class={props.kind === 'home' ? styles.homeCard : styles.card}
-    >
-      {renderContents()}
+    <Link {...linkTarget()} aria-label={libraryCardAriaLabel()} class={styles.card}>
+      {renderArtwork({ includeLibraryOverlay: true })}
+      <Show when={!isPoster()}>
+        <div class={styles.body}>
+          <div class={styles.copy}>
+            <CardTitle id={props.item.id} itemType={props.item.itemType} class={styles.title}>
+              {props.item.name}
+            </CardTitle>
+            <p class={styles.subtitle}>{librarySubtitle()}</p>
+          </div>
+          <Show when={props.item.played}>
+            <span class={styles.playedBadge} role="img" aria-label="Played">
+              <Check class={styles.playedIcon} aria-hidden="true" />
+            </span>
+          </Show>
+        </div>
+      </Show>
     </Link>
   );
 }

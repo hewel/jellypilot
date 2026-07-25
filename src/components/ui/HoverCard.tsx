@@ -5,6 +5,7 @@ import type { JSX } from 'solid-js';
 import { Portal } from 'solid-js/web';
 
 import * as styles from './HoverCard.styles';
+import { usePopupRootMount } from './PopupRoot';
 
 export interface HoverCardProps {
   /** Delay before hover opens the card. Defaults to 250ms. */
@@ -15,6 +16,8 @@ export interface HoverCardProps {
   placement?: Placement;
   /** Gap between trigger and card in pixels. Defaults to 10. */
   gutter?: number;
+  /** Optional class on the trigger wrapper (e.g. title layout constraints). */
+  triggerClass?: string;
   /** Called on every open/close transition; use it to gate lazy data fetching. */
   onOpenChange?: (open: boolean) => void;
   /** Card body. Rendered inside a Portal only while the card is open. */
@@ -34,9 +37,11 @@ export interface HoverCardProps {
  * - moving the pointer from trigger into the card keeps it open
  * - Escape closes immediately; any scroll in the document closes immediately
  * - content only mounts while open, so `onOpenChange` can gate fetching
+ * - content portals into the app PopupRoot (or document.body when absent)
  */
 export function HoverCard(props: HoverCardProps) {
   const [open, setOpen] = createSignal(false);
+  const popupMount = usePopupRootMount();
 
   let triggerEl: HTMLDivElement | undefined;
   let pointerInside = false;
@@ -119,10 +124,11 @@ export function HoverCard(props: HoverCardProps) {
     focusInside = false;
     scheduleClose();
   };
+
   /**
     Global dismiss listeners exist only while the card is open. Scroll uses
     capture phase because scroll events do not bubble; this catches the
-    app scroll area viewport as well as any nested scroller. 
+    app scroll area viewport as well as any nested scroller.
   **/
   createEffect(() => {
     if (!open()) return;
@@ -161,10 +167,13 @@ export function HoverCard(props: HoverCardProps) {
     });
   };
 
+  const resolveMount = () => popupMount?.() ?? document.body;
+
   return (
     <>
       <div
         ref={triggerEl}
+        class={props.triggerClass}
         onPointerEnter={onTriggerPointerEnter}
         onPointerLeave={onTriggerPointerLeave}
         onFocusIn={onTriggerFocusIn}
@@ -173,7 +182,7 @@ export function HoverCard(props: HoverCardProps) {
         {props.children}
       </div>
       <Show when={open()}>
-        <Portal>
+        <Portal mount={resolveMount()}>
           <div
             ref={positionContent}
             class={styles.card}

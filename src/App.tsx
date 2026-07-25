@@ -1,3 +1,4 @@
+import { PopupRoot } from '@components/ui';
 import { QueryClient, QueryClientProvider } from '@tanstack/solid-query';
 import { RouterProvider } from '@tanstack/solid-router';
 
@@ -19,7 +20,9 @@ const queryClient = new QueryClient({
 const App = () => (
   <QueryClientProvider client={queryClient}>
     <ToastProvider>
-      <RouterProvider router={router} />
+      <PopupRoot>
+        <RouterProvider router={router} />
+      </PopupRoot>
     </ToastProvider>
   </QueryClientProvider>
 );

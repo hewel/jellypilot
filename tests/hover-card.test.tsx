@@ -3,6 +3,7 @@ import { fireEvent, screen } from '@testing-library/dom';
 import { render } from 'solid-js/web';
 
 import { HoverCard } from '../src/components/ui/HoverCard';
+import { PopupRoot } from '../src/components/ui/PopupRoot';
 
 const mounted: (() => void)[] = [];
 
@@ -11,9 +12,11 @@ function renderCard(props: { onOpenChange?: (open: boolean) => void } = {}) {
   document.body.append(root);
   const dispose = render(
     () => (
-      <HoverCard onOpenChange={props.onOpenChange} content={() => <p>Card body</p>}>
-        <button type="button">Trigger</button>
-      </HoverCard>
+      <PopupRoot>
+        <HoverCard onOpenChange={props.onOpenChange} content={() => <p>Card body</p>}>
+          <button type="button">Trigger</button>
+        </HoverCard>
+      </PopupRoot>
     ),
     root,
   );
@@ -21,7 +24,8 @@ function renderCard(props: { onOpenChange?: (open: boolean) => void } = {}) {
     dispose();
     root.remove();
   });
-  return { root, wrapper: root.firstElementChild as HTMLElement };
+  const wrapper = root.querySelector('button')?.parentElement as HTMLElement;
+  return { root, wrapper };
 }
 
 beforeEach(() => {
@@ -110,4 +114,17 @@ test('reports open transitions through onOpenChange', () => {
   rstest.advanceTimersByTime(300);
 
   expect(transitions).toEqual([true, false]);
+});
+
+test('renders open content inside the global popup root', () => {
+  const { root, wrapper } = renderCard();
+
+  fireEvent.pointerEnter(wrapper);
+  rstest.advanceTimersByTime(250);
+
+  const popupRoot = root.querySelector('[data-popup-root]');
+  const body = screen.getByText('Card body');
+  expect(popupRoot).not.toBeNull();
+  expect(popupRoot?.contains(body)).toBe(true);
+  expect(wrapper.contains(body)).toBe(false);
 });

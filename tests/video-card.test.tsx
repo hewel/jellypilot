@@ -5,15 +5,23 @@ import type { JSX } from 'solid-js';
 import { render } from 'solid-js/web';
 
 import { VideoCard } from '../src/components/library/VideoCard';
+import { PopupRoot } from '../src/components/ui/PopupRoot';
 import { createJellyPilotRouter } from '../src/router';
 import { imageSource } from '../src/utils/imageSource';
+import { TestQueryProvider } from './query-client';
 
 function renderWithRouter(content: () => JSX.Element) {
   const root = document.createElement('div');
   document.body.append(root);
   const router = createJellyPilotRouter(createMemoryHistory({ initialEntries: ['/library'] }));
   const dispose = render(
-    () => <RouterContextProvider router={router}>{content}</RouterContextProvider>,
+    () => (
+      <TestQueryProvider>
+        <PopupRoot>
+          <RouterContextProvider router={router}>{content}</RouterContextProvider>
+        </PopupRoot>
+      </TestQueryProvider>
+    ),
     root,
   );
 
@@ -172,14 +180,21 @@ test('VideoCard renders reference-first Continue Watching metadata and direct re
     />
   ));
 
-  expect(screen.getByText('Silent Echoes • S1 E4')).toBeVisible();
+  const title = screen.getByText('Silent Echoes • S1 E4');
+  const resumeButton = screen.getByRole('button', { name: 'Resume A Quiet Return' });
+  expect(title).toBeVisible();
   expect(screen.getByText('58 mins remaining')).toBeVisible();
   expect(screen.queryByRole('img', { name: 'Played' })).toBeNull();
   expect(
     screen.getByRole('progressbar', { name: 'A Quiet Return watch progress' }),
   ).toHaveAttribute('aria-valuenow', '25');
+  expect(root.querySelector('[data-play-badge]')).not.toBeNull();
+  expect(screen.queryByText('No artwork')).toBeNull();
+  expect(resumeButton.contains(title)).toBe(false);
 
-  fireEvent.click(screen.getByRole('button', { name: 'Resume A Quiet Return' }));
+  fireEvent.click(title);
+  expect(onResume).not.toHaveBeenCalled();
+  fireEvent.click(resumeButton);
   expect(onResume).toHaveBeenCalledTimes(1);
 
   dispose();
@@ -242,6 +257,10 @@ test('VideoCard derives progress and falls back to detail without a saved resume
     '/library/items/movie-no-resume',
   );
   expect(screen.queryByRole('button', { name: 'Resume No Resume' })).toBeNull();
+  expect(
+    screen.getByRole('link', { name: 'Open No Resume' }).querySelector('[data-play-badge]'),
+  ).toBeNull();
+  expect(screen.getByText('No artwork')).toBeVisible();
 
   dispose();
   root.remove();
@@ -278,6 +297,7 @@ test('VideoCard exposes a disabled busy state while resume starts', () => {
   expect(button).toBeDisabled();
   expect(button).toHaveAttribute('aria-busy', 'true');
   expect(screen.getByText('Starting…')).toBeVisible();
+  expect(root.querySelector('[data-play-badge]')).toBeNull();
 
   dispose();
   root.remove();

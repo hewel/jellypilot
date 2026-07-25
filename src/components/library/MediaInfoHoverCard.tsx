@@ -93,12 +93,16 @@ export function MediaInfoContent(props: { detail: MediaDetail }) {
 }
 
 /**
- * Wraps a media card so hovering it reveals a popover with the item's full
- * detail (overview, genres, runtime, resume, user-data state). The card is
- * rendered untouched inside the hover-card trigger; detail is fetched on first
- * open and cached by Solid Query.
+ * Wraps a media title (or other compact trigger) so hovering it reveals a
+ * popover with the item's full detail. Detail is fetched on first open and
+ * cached by Solid Query.
  */
-export function MediaInfoHoverCard(props: { id: string; itemType: string; children: JSX.Element }) {
+export function MediaInfoHoverCard(props: {
+  id: string;
+  itemType: string;
+  class?: string;
+  children: JSX.Element;
+}) {
   const [open, setOpen] = createSignal(false);
   const connectionQuery = createQuery(() => ({
     queryKey: queryKeys.connectionState,
@@ -115,6 +119,8 @@ export function MediaInfoHoverCard(props: { id: string; itemType: string; childr
 
   return (
     <HoverCard
+      placement="bottom-start"
+      triggerClass={props.class}
       onOpenChange={setOpen}
       content={() => (
         <Show

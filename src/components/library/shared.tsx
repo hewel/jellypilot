@@ -25,7 +25,6 @@ import { commandFailureMessage } from '../../effects/commands';
 import type { CommandError } from '../../effects/errors';
 import { Button, Card } from '../ui';
 import type { JellyPilotSelectItem } from '../ui';
-import { MediaInfoHoverCard } from './MediaInfoHoverCard';
 import * as styles from './shared.styles';
 import { VideoCard } from './VideoCard';
 
@@ -134,20 +133,18 @@ export function VideoHomeRow(props: {
           <For each={props.items}>
             {(item, index) => (
               <Show when={expanded() || index() < columns()}>
-                <MediaInfoHoverCard id={item.id} itemType={item.itemType}>
-                  <VideoCard
-                    kind="home"
-                    item={item}
-                    rowKind={props.kind}
-                    busy={props.resumeBusyId === item.id}
-                    resumeDisabled={props.resumeBusyId !== null && props.resumeBusyId !== undefined}
-                    onResume={
-                      props.kind === 'continueWatching' && props.onResume
-                        ? () => props.onResume?.(item)
-                        : undefined
-                    }
-                  />
-                </MediaInfoHoverCard>
+                <VideoCard
+                  kind="home"
+                  item={item}
+                  rowKind={props.kind}
+                  busy={props.resumeBusyId === item.id}
+                  resumeDisabled={props.resumeBusyId !== null && props.resumeBusyId !== undefined}
+                  onResume={
+                    props.kind === 'continueWatching' && props.onResume
+                      ? () => props.onResume?.(item)
+                      : undefined
+                  }
+                />
               </Show>
             )}
           </For>

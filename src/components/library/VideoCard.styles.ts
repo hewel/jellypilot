@@ -35,6 +35,14 @@ export const card = css({
 });
 
 export const homeCard = css({
+  color: '[inherit]',
+  display: 'block',
+  minWidth: '[0]',
+  width: 'full',
+});
+
+/** Artwork-only control so titles/hover cards stay outside resume/open actions. */
+export const homeCardAction = css({
   appearance: 'none',
   bg: '[transparent]',
   border: 'none',
@@ -49,15 +57,39 @@ export const homeCard = css({
   transitionDuration: '200',
   transitionProperty: '[transform]',
   width: 'full',
+  _hover: {
+    '& [data-play-badge]': {
+      bg: 'surface/85',
+      boxShadow: 'xl',
+      transform: '[translate(-50%, -50%) scale(1.06)]',
+    },
+  },
   _focusVisible: {
     outline: '[2px solid {colors.secondary}]',
     outlineOffset: '1',
+    '& [data-play-badge]': {
+      bg: 'surface/85',
+      boxShadow: 'xl',
+      transform: '[translate(-50%, -50%) scale(1.06)]',
+    },
   },
   _active: {
     transform: '[scale(0.96)]',
   },
   _disabled: {
     cursor: 'wait',
+  },
+  '@media (prefers-reduced-motion: reduce)': {
+    _hover: {
+      '& [data-play-badge]': {
+        transform: '[translate(-50%, -50%)]',
+      },
+    },
+    _focusVisible: {
+      '& [data-play-badge]': {
+        transform: '[translate(-50%, -50%)]',
+      },
+    },
   },
 });
 
@@ -96,8 +128,46 @@ export const fallback = css({
   textTransform: 'uppercase',
 });
 
+export const directResumeFallback = css({
+  height: 'full',
+  width: 'full',
+});
+
 export const fallbackIcon = css({
   height: '5',
+  width: '5',
+});
+
+export const playBadge = css({
+  alignItems: 'center',
+  backdropFilter: '[blur(8px)]',
+  bg: 'surface/70',
+  borderRadius: 'full',
+  boxShadow: 'lg',
+  color: 'onSurface',
+  display: 'inline-flex',
+  height: '12',
+  justifyContent: 'center',
+  left: '[50%]',
+  pointerEvents: 'none',
+  position: 'absolute',
+  top: '[50%]',
+  transform: '[translate(-50%, -50%)]',
+  transitionDuration: '200',
+  transitionProperty: '[background-color, box-shadow, transform]',
+  transitionTimingFunction: 'standard',
+  width: '12',
+  zIndex: '10',
+  '@media (prefers-reduced-motion: reduce)': {
+    transitionProperty: '[background-color, box-shadow]',
+  },
+});
+
+export const playIcon = css({
+  fill: '[currentColor]',
+  height: '5',
+  // Optical centering for the asymmetric play triangle.
+  ml: '0_5',
   width: '5',
 });
 
@@ -240,6 +310,13 @@ export const homeTitle = css({
   fontWeight: 'semibold',
   lineHeight: '24',
   overflow: 'hidden',
+});
+
+export const titleHoverTrigger = css({
+  display: 'block',
+  minWidth: '[0]',
+  width: 'full',
+  cursor: 'pointer',
 });
 
 export const subtitle = css({
