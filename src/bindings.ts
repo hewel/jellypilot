@@ -148,6 +148,15 @@ export const commands = {
 	 *  Idempotent: subsequent matching calls are no-ops. Mismatched appearance fails safely.
 	 */
 	appearanceReady: (request: AppearanceReadyRequest) => typedError<null, CommandError>(__TAURI_INVOKE("appearance_ready", { request })),
+	/**
+	 *  Persist and apply a runtime Appearance selection transactionally.
+	 *
+	 *  Serializes with readiness through the shared appearance lock. On failure, restores
+	 *  prior persisted/in-memory config and prior native theme/canvas before returning.
+	 *  Runtime switching never shows or hides the window. Only Color Mode updates the
+	 *  native theme hint; Design Theme alone leaves OS chrome construction unchanged.
+	 */
+	appearanceSet: (request: AppearanceSetRequest) => typedError<null, CommandError>(__TAURI_INVOKE("appearance_set", { request })),
 };
 
 /** Events */
@@ -233,6 +242,12 @@ export type Appearance = {
 
 /**  Payload accepted by `appearance_ready`. */
 export type AppearanceReadyRequest = {
+	appearance: Appearance,
+	canvas: OpaqueCanvasRgb,
+};
+
+/**  Payload accepted by `appearance_set`. */
+export type AppearanceSetRequest = {
 	appearance: Appearance,
 	canvas: OpaqueCanvasRgb,
 };

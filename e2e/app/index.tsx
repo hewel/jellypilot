@@ -10,10 +10,12 @@ import { invoke as realInvoke } from '../../node_modules/@tauri-apps/api/core.js
 import '../../src/index.css';
 import { mountApplication } from '../../src/mountApplication';
 import {
+  appearanceSetCalls,
   createControlledInvoke,
   fixtureCallCount,
   fixtureSummary,
   hasExpectedAppearanceReadyCall,
+  hasExpectedAppearanceSetCall,
   hasExpectedLibraryPlayCall,
   hasExpectedReauthenticatePasswordCall,
   hasExpectedServerConnectCall,
@@ -27,7 +29,9 @@ declare global {
       readonly ready: true;
       callCount: typeof fixtureCallCount;
       fixtureSummary: typeof fixtureSummary;
+      appearanceSetCalls: typeof appearanceSetCalls;
       hasExpectedAppearanceReadyCall: typeof hasExpectedAppearanceReadyCall;
+      hasExpectedAppearanceSetCall: typeof hasExpectedAppearanceSetCall;
       hasExpectedLibraryPlayCall: typeof hasExpectedLibraryPlayCall;
       hasExpectedReauthenticatePasswordCall: typeof hasExpectedReauthenticatePasswordCall;
       hasExpectedServerConnectCall: typeof hasExpectedServerConnectCall;
@@ -50,7 +54,9 @@ const controller: NonNullable<Window['__JELLYPILOT_E2E__']> = {
   ready: true,
   callCount: fixtureCallCount,
   fixtureSummary,
+  appearanceSetCalls,
   hasExpectedAppearanceReadyCall,
+  hasExpectedAppearanceSetCall,
   hasExpectedLibraryPlayCall,
   hasExpectedReauthenticatePasswordCall,
   hasExpectedServerConnectCall,

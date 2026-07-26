@@ -30,6 +30,7 @@ export const EXPECTED_CREDENTIALS = {
 interface RawCommandMap {
   appearance_get: Appearance;
   appearance_ready: null;
+  appearance_set: null;
   config_default: unknown;
   config_get: AppConfig;
   library_browse_video: VideoLibraryPage;
@@ -55,6 +56,7 @@ export type FixtureCommand = keyof RawCommandMap;
 export type SafeRealCommand =
   | 'appearance_get'
   | 'appearance_ready'
+  | 'appearance_set'
   | 'config_default'
   | 'plugin:window|is_visible'
   | 'plugin:window|theme';
@@ -87,6 +89,7 @@ export const DEFAULT_APPEARANCE_CANVAS = {
 const safeRealCommands = new Set<SafeRealCommand>([
   'appearance_get',
   'appearance_ready',
+  'appearance_set',
   'config_default',
   'plugin:window|is_visible',
   'plugin:window|theme',
@@ -98,6 +101,7 @@ function parseFixtureCommand(command: string): FixtureCommand | undefined {
   if (
     command === 'appearance_get' ||
     command === 'appearance_ready' ||
+    command === 'appearance_set' ||
     command === 'config_default' ||
     command === 'config_get' ||
     command === 'library_browse_video' ||
@@ -141,6 +145,7 @@ export function installStartupFixtures(): void {
   fixtures.set('config_default', { kind: 'real' });
   fixtures.set('appearance_get', { kind: 'return', value: DEFAULT_APPEARANCE });
   fixtures.set('appearance_ready', { kind: 'real' });
+  fixtures.set('appearance_set', { kind: 'real' });
   fixtures.set('plugin:window|is_visible', { kind: 'real' });
   fixtures.set('plugin:window|theme', { kind: 'real' });
 }
@@ -263,6 +268,43 @@ export function hasExpectedAppearanceReadyCall(
     'blue' in canvas &&
     canvas.blue === expectedCanvas.blue
   );
+}
+
+export function hasExpectedAppearanceSetCall(
+  expectedAppearance: Appearance,
+  expectedCanvas: OpaqueCanvasRgb,
+  options: { readonly exactlyOnce?: boolean } = {},
+): boolean {
+  const commandCalls = calls.get('appearance_set');
+  if (!commandCalls || commandCalls.length === 0) return false;
+  if (options.exactlyOnce && commandCalls.length !== 1) return false;
+
+  return commandCalls.some((args) => {
+    const request = args?.request;
+    if (!request || typeof request !== 'object') return false;
+
+    const appearance = 'appearance' in request ? request.appearance : undefined;
+    const canvas = 'canvas' in request ? request.canvas : undefined;
+    if (!appearance || typeof appearance !== 'object') return false;
+    if (!canvas || typeof canvas !== 'object') return false;
+
+    return (
+      'designTheme' in appearance &&
+      appearance.designTheme === expectedAppearance.designTheme &&
+      'colorMode' in appearance &&
+      appearance.colorMode === expectedAppearance.colorMode &&
+      'red' in canvas &&
+      canvas.red === expectedCanvas.red &&
+      'green' in canvas &&
+      canvas.green === expectedCanvas.green &&
+      'blue' in canvas &&
+      canvas.blue === expectedCanvas.blue
+    );
+  });
+}
+
+export function appearanceSetCalls(): readonly InvokeArgs[] {
+  return calls.get('appearance_set') ?? [];
 }
 
 installStartupFixtures();

@@ -1,8 +1,10 @@
+import { AppearanceProvider } from '@components/AppearanceProvider';
+import { ToastProvider } from '@components/ToastProvider';
 import { PopupRoot } from '@components/ui';
 import { QueryClient, QueryClientProvider } from '@tanstack/solid-query';
 import { RouterProvider } from '@tanstack/solid-router';
+import type { BootstrappedAppearance } from '~effects/appearance';
 
-import { ToastProvider } from './components/ToastProvider';
 import { router } from './router';
 
 const queryClient = new QueryClient({
@@ -17,12 +19,14 @@ const queryClient = new QueryClient({
   },
 });
 
-const App = () => (
+const App = (props: { readonly initialAppearance: BootstrappedAppearance }) => (
   <QueryClientProvider client={queryClient}>
     <ToastProvider>
-      <PopupRoot>
-        <RouterProvider router={router} />
-      </PopupRoot>
+      <AppearanceProvider initial={props.initialAppearance}>
+        <PopupRoot>
+          <RouterProvider router={router} />
+        </PopupRoot>
+      </AppearanceProvider>
     </ToastProvider>
   </QueryClientProvider>
 );

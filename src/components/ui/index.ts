@@ -15,4 +15,6 @@ export { HoverCard } from './HoverCard';
 export type { HoverCardProps } from './HoverCard';
 export { PopupRoot, usePopupRootMount } from './PopupRoot';
 export { default as SectionCard } from './SectionCard';
+export { default as SegmentedControl } from './SegmentedControl';
+export type { SegmentedControlItem } from './SegmentedControl';
 export { default as StatusBadge } from './StatusBadge';

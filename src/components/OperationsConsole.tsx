@@ -1,4 +1,5 @@
 import { Dialog } from '@ark-ui/solid/dialog';
+import AppearanceSettingsCard from '@components/OperationsConsole/AppearanceSettingsCard';
 import { createForm } from '@tanstack/solid-form';
 import { createMutation, createQuery, useQueryClient } from '@tanstack/solid-query';
 import { Exit, Option } from 'effect';
@@ -634,6 +635,8 @@ export default function OperationsConsole(props: OperationsConsoleProps) {
           </div>
 
           <aside class={styles.stack}>
+            <AppearanceSettingsCard />
+
             <DiagnosticsCard />
 
             <LibrarySettingsCard

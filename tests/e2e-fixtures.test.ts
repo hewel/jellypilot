@@ -7,6 +7,7 @@ import {
   createControlledInvoke,
   fixtureCallCount,
   hasExpectedAppearanceReadyCall,
+  hasExpectedAppearanceSetCall,
   hasExpectedServerConnectCall,
   installFixture,
   installStartupFixtures,
@@ -57,6 +58,7 @@ describe('native E2E fixture registry', () => {
     const invoke = createControlledInvoke(async (command) => {
       if (command === 'config_default') return defaults;
       if (command === 'appearance_ready') return null;
+      if (command === 'appearance_set') return null;
       if (command === 'appearance_get') {
         return { designTheme: 'braun', colorMode: 'light' };
       }
@@ -73,6 +75,14 @@ describe('native E2E fixture registry', () => {
         request: {
           appearance: { designTheme: 'controlRoom', colorMode: 'dark' },
           canvas: { red: 5, green: 6, blue: 10 },
+        },
+      }),
+    ).resolves.toBeNull();
+    await expect(
+      invoke('appearance_set', {
+        request: {
+          appearance: { designTheme: 'braun', colorMode: 'light' },
+          canvas: { red: 252, green: 248, blue: 248 },
         },
       }),
     ).resolves.toBeNull();
@@ -158,5 +168,35 @@ describe('native E2E fixture registry', () => {
       },
     });
     expect(hasExpectedAppearanceReadyCall(expectedAppearance, expectedCanvas)).toBe(false);
+  });
+
+  test('matches appearance_set payloads including multi-call newest selection', async () => {
+    const invoke = createControlledInvoke(async () => null as never);
+    const expectedAppearance = { designTheme: 'braun' as const, colorMode: 'light' as const };
+    const expectedCanvas = { red: 252, green: 248, blue: 248 };
+
+    await invoke('appearance_set', {
+      request: {
+        appearance: { designTheme: 'controlRoom', colorMode: 'dark' },
+        canvas: DEFAULT_APPEARANCE_CANVAS,
+      },
+    });
+    await invoke('appearance_set', {
+      request: {
+        appearance: expectedAppearance,
+        canvas: expectedCanvas,
+      },
+    });
+
+    expect(hasExpectedAppearanceSetCall(expectedAppearance, expectedCanvas)).toBe(true);
+    expect(
+      hasExpectedAppearanceSetCall(expectedAppearance, expectedCanvas, { exactlyOnce: true }),
+    ).toBe(false);
+    expect(
+      hasExpectedAppearanceSetCall(
+        { designTheme: 'controlRoom', colorMode: 'light' },
+        expectedCanvas,
+      ),
+    ).toBe(false);
   });
 });

@@ -1202,14 +1202,40 @@ async fn stop_active_media_server_session(
 // Appearance Commands
 // ============================================================================
 
-/// Tracks whether the frontend has completed first-paint appearance readiness.
+/// Tracks first-paint readiness and the last confirmed native Appearance/canvas.
+#[derive(Debug, Clone)]
+pub struct AppearanceAppliedState {
+  pub ready: bool,
+  pub appearance: Appearance,
+  pub canvas: OpaqueCanvasRgb,
+}
+
+impl Default for AppearanceAppliedState {
+  fn default() -> Self {
+    Self {
+      ready: false,
+      appearance: Appearance::control_room_dark(),
+      canvas: OpaqueCanvasRgb::control_room_dark(),
+    }
+  }
+}
+
+/// Shared appearance readiness and last confirmed native snapshot.
 #[derive(Default)]
-pub struct AppearanceReadyState(pub Mutex<bool>);
+pub struct AppearanceReadyState(pub Mutex<AppearanceAppliedState>);
 
 /// Payload accepted by `appearance_ready`.
 #[derive(Debug, Clone, Serialize, Deserialize, specta::Type)]
 #[serde(rename_all = "camelCase")]
 pub struct AppearanceReadyRequest {
+  pub appearance: Appearance,
+  pub canvas: OpaqueCanvasRgb,
+}
+
+/// Payload accepted by `appearance_set`.
+#[derive(Debug, Clone, Serialize, Deserialize, specta::Type)]
+#[serde(rename_all = "camelCase")]
+pub struct AppearanceSetRequest {
   pub appearance: Appearance,
   pub canvas: OpaqueCanvasRgb,
 }
@@ -1225,6 +1251,152 @@ pub(crate) fn native_theme_for(appearance: Appearance) -> Theme {
 
 pub(crate) fn canvas_to_native_color(canvas: OpaqueCanvasRgb) -> tauri::window::Color {
   tauri::window::Color(canvas.red, canvas.green, canvas.blue, 255)
+}
+
+/// Pure snapshot used by readiness, runtime set, and unit tests.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct AppearanceSnapshot {
+  pub appearance: Appearance,
+  pub canvas: OpaqueCanvasRgb,
+}
+
+/// Deterministic runtime appearance transaction plan.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct AppearanceSetTransaction {
+  pub previous: AppearanceSnapshot,
+  pub next: AppearanceSnapshot,
+  /// `Some` only when Color Mode changes; Design Theme alone leaves native theme untouched.
+  pub next_native_theme: Option<Theme>,
+  pub previous_native_theme: Theme,
+}
+
+pub(crate) fn build_appearance_set_transaction(
+  previous: AppearanceSnapshot,
+  next_appearance: Appearance,
+  next_canvas: OpaqueCanvasRgb,
+) -> AppearanceSetTransaction {
+  let next_native_theme = if previous.appearance.color_mode != next_appearance.color_mode {
+    Some(native_theme_for(next_appearance))
+  } else {
+    None
+  };
+  AppearanceSetTransaction {
+    previous,
+    next: AppearanceSnapshot {
+      appearance: next_appearance,
+      canvas: next_canvas,
+    },
+    next_native_theme,
+    previous_native_theme: native_theme_for(previous.appearance),
+  }
+}
+/// Failure injection points for appearance-set transaction unit tests.
+#[cfg(test)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum AppearanceSetFailurePoint {
+  Persist,
+  Native,
+  PersistRollback,
+  NativeThemeRollback,
+  NativeCanvasRollback,
+}
+
+/// Side-effect operations used by the shared appearance-set orchestrator.
+///
+/// Production wires these to the store / ConfigState / native window. Unit tests
+/// inject the same decision flow with pure in-memory operations so rollback
+/// coverage exercises production orchestration, not a separate simulator.
+pub(crate) struct AppearanceSetOps<'a> {
+  pub persist: &'a mut dyn FnMut(&AppConfig) -> Result<(), CommandError>,
+  pub apply_native: &'a mut dyn FnMut(&AppearanceSetTransaction) -> Result<(), CommandError>,
+  pub restore_native_theme:
+    &'a mut dyn FnMut(&AppearanceSetTransaction) -> Result<(), CommandError>,
+  pub restore_native_canvas:
+    &'a mut dyn FnMut(&AppearanceSetTransaction) -> Result<(), CommandError>,
+}
+
+/// Result of a completed appearance-set orchestration attempt.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum AppearanceSetOutcome {
+  /// No surfaces needed updating.
+  NoOp,
+  /// Persist + native apply succeeded; caller should commit ready-state.
+  Applied,
+}
+
+fn join_error_messages(
+  primary: impl std::fmt::Display,
+  rollback: impl std::fmt::Display,
+) -> String {
+  format!("{primary}; rollback failed: {rollback}")
+}
+
+/// Shared appearance-set decision/orchestration helper.
+///
+/// Sequence:
+/// 1. no-op short-circuit when appearance+canvas already match config
+/// 2. update ConfigState appearance
+/// 3. persist full config (store in-memory + disk)
+/// 4. apply native theme/canvas
+/// 5. on any failure, restore prior store/config and prior native surfaces,
+///    attempting every restoration step and surfacing combined failure context
+pub(crate) fn run_appearance_set_transaction(
+  config_state: &ConfigState,
+  tx: &AppearanceSetTransaction,
+  ops: &mut AppearanceSetOps<'_>,
+) -> Result<AppearanceSetOutcome, CommandError> {
+  let previous_config = {
+    let config = config_state.0.read();
+    if tx.previous.appearance == tx.next.appearance
+      && tx.previous.canvas == tx.next.canvas
+      && config.appearance == tx.next.appearance
+    {
+      return Ok(AppearanceSetOutcome::NoOp);
+    }
+    config.clone()
+  };
+
+  {
+    let mut config = config_state.0.write();
+    config.appearance = tx.next.appearance;
+  }
+
+  let next_config = config_state.0.read().clone();
+  if let Err(error) = (ops.persist)(&next_config) {
+    *config_state.0.write() = previous_config.clone();
+    if let Err(rollback_error) = (ops.persist)(&previous_config) {
+      return Err(CommandError::internal(join_error_messages(
+        &error,
+        rollback_error,
+      )));
+    }
+    return Err(error);
+  }
+
+  if let Err(error) = (ops.apply_native)(tx) {
+    let mut messages = vec![error.to_string()];
+
+    *config_state.0.write() = previous_config.clone();
+    if let Err(rollback_error) = (ops.persist)(&previous_config) {
+      messages.push(format!("persist rollback failed: {rollback_error}"));
+    }
+    // Attempt every native restoration step independently: a theme-restore
+    // failure must not prevent the canvas restore, and a canvas-restore
+    // failure must not erase the theme failure.
+    if let Err(rollback_error) = (ops.restore_native_theme)(tx) {
+      messages.push(format!("native theme rollback failed: {rollback_error}"));
+    }
+    if let Err(rollback_error) = (ops.restore_native_canvas)(tx) {
+      messages.push(format!("native canvas rollback failed: {rollback_error}"));
+    }
+
+    if messages.len() == 1 {
+      return Err(error);
+    }
+    return Err(CommandError::internal(messages.join("; ")));
+  }
+
+  Ok(AppearanceSetOutcome::Applied)
 }
 
 fn show_main_window_if_allowed(
@@ -1251,6 +1423,72 @@ fn apply_native_appearance(
     .set_background_color(Some(canvas_to_native_color(canvas)))
     .map_err(internal_err)?;
   show_main_window_if_allowed(window, start_minimized)?;
+  Ok(())
+}
+
+fn apply_runtime_native_appearance(
+  window: &tauri::WebviewWindow,
+  tx: &AppearanceSetTransaction,
+) -> Result<(), CommandError> {
+  if let Some(theme) = tx.next_native_theme {
+    window.set_theme(Some(theme)).map_err(internal_err)?;
+  }
+  window
+    .set_background_color(Some(canvas_to_native_color(tx.next.canvas)))
+    .map_err(internal_err)?;
+  Ok(())
+}
+
+fn restore_runtime_native_theme(
+  window: &tauri::WebviewWindow,
+  tx: &AppearanceSetTransaction,
+) -> Result<(), CommandError> {
+  if tx.next_native_theme.is_some() {
+    window
+      .set_theme(Some(tx.previous_native_theme))
+      .map_err(internal_err)?;
+  }
+  Ok(())
+}
+
+fn restore_runtime_native_canvas(
+  window: &tauri::WebviewWindow,
+  tx: &AppearanceSetTransaction,
+) -> Result<(), CommandError> {
+  window
+    .set_background_color(Some(canvas_to_native_color(tx.previous.canvas)))
+    .map_err(internal_err)
+}
+
+/// Snapshot the store entry, mutate to `config`, then `save()`.
+/// On save failure, restore the prior in-memory store entry (set/delete) and
+/// attempt to save the restoration so the store object never keeps the failed value.
+fn persist_app_config(app: &tauri::AppHandle, config: &AppConfig) -> Result<(), CommandError> {
+  use tauri_plugin_store::StoreExt;
+
+  let store = app.store(CONFIG_STORE_FILE).map_err(internal_err)?;
+  let previous = store.get(CONFIG_STORE_KEY);
+  let encoded = serde_json::to_value(config).map_err(internal_err)?;
+  store.set(CONFIG_STORE_KEY.to_string(), encoded);
+
+  if let Err(error) = store.save() {
+    match previous {
+      Some(value) => {
+        store.set(CONFIG_STORE_KEY.to_string(), value);
+      }
+      None => {
+        let _ = store.delete(CONFIG_STORE_KEY);
+      }
+    }
+    if let Err(rollback_error) = store.save() {
+      return Err(CommandError::internal(join_error_messages(
+        error,
+        rollback_error,
+      )));
+    }
+    return Err(internal_err(error));
+  }
+
   Ok(())
 }
 
@@ -1308,7 +1546,7 @@ pub fn appearance_ready(
     let config = config_state.0.read();
     (config.appearance, config.start_minimized)
   };
-  let should_apply = evaluate_appearance_ready(current, *ready_guard, &request)?;
+  let should_apply = evaluate_appearance_ready(current, ready_guard.ready, &request)?;
   if !should_apply {
     return Ok(());
   }
@@ -1318,13 +1556,75 @@ pub fn appearance_ready(
     .ok_or_else(|| CommandError::internal("Main window not found"))?;
 
   apply_native_appearance(&window, request.appearance, request.canvas, start_minimized)?;
-  *ready_guard = true;
+  ready_guard.ready = true;
+  ready_guard.appearance = request.appearance;
+  ready_guard.canvas = request.canvas;
   log::info!(
     "Appearance ready: theme={:?} mode={:?}",
     request.appearance.design_theme,
     request.appearance.color_mode
   );
   Ok(())
+}
+
+/// Persist and apply a runtime Appearance selection transactionally.
+///
+/// Serializes with readiness through the shared appearance lock. On failure, restores
+/// prior persisted/in-memory config and prior native theme/canvas before returning.
+/// Runtime switching never shows or hides the window. Only Color Mode updates the
+/// native theme hint; Design Theme alone leaves OS chrome construction unchanged.
+#[tauri::command]
+#[specta]
+pub fn appearance_set(
+  app: tauri::AppHandle,
+  config_state: State<'_, ConfigState>,
+  ready_state: State<'_, AppearanceReadyState>,
+  request: AppearanceSetRequest,
+) -> Result<(), CommandError> {
+  let mut ready_guard = ready_state.0.lock();
+  if !ready_guard.ready {
+    return Err(CommandError::invalid_input(
+      "appearanceSet requires appearance readiness to complete first",
+    ));
+  }
+
+  let previous = AppearanceSnapshot {
+    appearance: ready_guard.appearance,
+    canvas: ready_guard.canvas,
+  };
+  let tx = build_appearance_set_transaction(previous, request.appearance, request.canvas);
+
+  let window = app
+    .get_webview_window("main")
+    .ok_or_else(|| CommandError::internal("Main window not found"))?;
+
+  let mut persist = |config: &AppConfig| persist_app_config(&app, config);
+  let mut apply_native =
+    |transaction: &AppearanceSetTransaction| apply_runtime_native_appearance(&window, transaction);
+  let mut restore_native_theme =
+    |transaction: &AppearanceSetTransaction| restore_runtime_native_theme(&window, transaction);
+  let mut restore_native_canvas =
+    |transaction: &AppearanceSetTransaction| restore_runtime_native_canvas(&window, transaction);
+  let mut ops = AppearanceSetOps {
+    persist: &mut persist,
+    apply_native: &mut apply_native,
+    restore_native_theme: &mut restore_native_theme,
+    restore_native_canvas: &mut restore_native_canvas,
+  };
+
+  match run_appearance_set_transaction(&config_state, &tx, &mut ops)? {
+    AppearanceSetOutcome::NoOp => Ok(()),
+    AppearanceSetOutcome::Applied => {
+      ready_guard.appearance = tx.next.appearance;
+      ready_guard.canvas = tx.next.canvas;
+      log::info!(
+        "Appearance set: theme={:?} mode={:?}",
+        tx.next.appearance.design_theme,
+        tx.next.appearance.color_mode
+      );
+      Ok(())
+    }
+  }
 }
 
 /// Start the 10-second readiness watchdog after setup.
@@ -1338,7 +1638,7 @@ pub fn spawn_appearance_ready_watchdog(app: tauri::AppHandle) {
     let start_minimized = config_state.0.read().start_minimized;
 
     let Some((appearance, canvas, start_minimized)) =
-      evaluate_appearance_watchdog(*ready_guard, start_minimized)
+      evaluate_appearance_watchdog(ready_guard.ready, start_minimized)
     else {
       return;
     };
@@ -1352,7 +1652,9 @@ pub fn spawn_appearance_ready_watchdog(app: tauri::AppHandle) {
       if let Err(error) = apply_native_appearance(&window, appearance, canvas, start_minimized) {
         log::error!("Failed to apply appearance watchdog recovery: {error}");
       } else {
-        *ready_guard = true;
+        ready_guard.ready = true;
+        ready_guard.appearance = appearance;
+        ready_guard.canvas = canvas;
       }
     }
   });
@@ -1375,23 +1677,37 @@ pub fn config_get(state: State<'_, ConfigState>) -> AppConfig {
   state.0.read().clone()
 }
 
+/// Merge a whole-config save into the live config state while preserving the
+/// backend's current dedicated Appearance, so a stale whole-config snapshot can
+/// never overwrite a newer selection. Returns the merged config for persistence.
+///
+/// Callers must hold the appearance lock so this commit stays serialized with
+/// `appearance_set`.
+fn commit_config_preserving_appearance(state: &ConfigState, mut config: AppConfig) -> AppConfig {
+  config.appearance = state.0.read().appearance;
+  *state.0.write() = config.clone();
+  config
+}
+
 /// Update the app configuration, apply changes live, and persist to disk.
+///
+/// Whole-config saves never overwrite the dedicated Appearance selection. A stale
+/// AppConfig snapshot submitted here keeps the backend's current Appearance. The
+/// final config-state/store commit is serialized with `appearance_set` through the
+/// shared appearance lock.
 #[tauri::command]
 #[specta]
 pub async fn config_set(
   app: tauri::AppHandle,
   state: State<'_, ConfigState>,
+  ready_state: State<'_, AppearanceReadyState>,
   mpv_state: State<'_, MpvState>,
   jellyfin_state: State<'_, JellyfinState>,
   config: AppConfig,
 ) -> Result<(), CommandError> {
   use std::path::PathBuf;
-  use tauri_plugin_store::StoreExt;
 
   config.validate().map_err(CommandError::invalid_input)?;
-
-  // Update in-memory state
-  *state.0.write() = config.clone();
 
   // Apply MPV config changes (takes effect on next MPV spawn)
   let mpv_path = config
@@ -1426,15 +1742,14 @@ pub async fn config_set(
   .await
   .map_err(|e| CommandError::internal(format!("Failed to write input.conf: {}", e)))?;
 
-  // Persist to disk
-  let store = app.store(CONFIG_STORE_FILE).map_err(internal_err)?;
-  store.set(
-    CONFIG_STORE_KEY.to_string(),
-    serde_json::to_value(&config).map_err(internal_err)?,
-  );
-  // Note: store.save() is synchronous but typically fast for small configs.
-  // For larger data, consider spawn_blocking.
-  store.save().map_err(internal_err)?;
+  // Serialize the final config-state/store commit with appearance_set. Preserve the
+  // backend's current dedicated Appearance so a stale whole-config snapshot cannot
+  // overwrite a newer selection.
+  {
+    let _appearance_guard = ready_state.0.lock();
+    let committed = commit_config_preserving_appearance(&state, config);
+    persist_app_config(&app, &committed)?;
+  }
 
   log::info!("Config saved to disk");
   Ok(())
@@ -1551,6 +1866,7 @@ pub fn specta_builder() -> Builder<tauri::Wry> {
       // Appearance commands
       appearance_get,
       appearance_ready,
+      appearance_set,
     ])
     .events(collect_events![AppNotification, NowPlayingChanged]);
 
@@ -1769,14 +2085,18 @@ mod tests {
 
     {
       let mut ready = ready_state.0.lock();
-      assert!(evaluate_appearance_ready(current, *ready, &request).expect("first apply"));
-      *ready = true;
+      assert!(evaluate_appearance_ready(current, ready.ready, &request).expect("first apply"));
+      ready.ready = true;
+      ready.appearance = request.appearance;
+      ready.canvas = request.canvas;
     }
 
     {
       let ready = ready_state.0.lock();
-      assert!(!evaluate_appearance_ready(current, *ready, &request).expect("second is no-op"));
-      assert!(evaluate_appearance_watchdog(*ready, false).is_none());
+      assert!(!evaluate_appearance_ready(current, ready.ready, &request).expect("second is no-op"));
+      assert!(evaluate_appearance_watchdog(ready.ready, false).is_none());
+      assert_eq!(ready.appearance, current);
+      assert_eq!(ready.canvas, request.canvas);
     }
   }
 
@@ -1793,6 +2113,547 @@ mod tests {
       native_theme_for(Appearance::control_room_dark()),
       Theme::Dark
     );
+  }
+
+  #[test]
+  fn appearance_set_transaction_maps_color_mode_only_native_theme() {
+    let previous = AppearanceSnapshot {
+      appearance: Appearance {
+        design_theme: crate::config::DesignTheme::ControlRoom,
+        color_mode: ColorMode::Dark,
+      },
+      canvas: OpaqueCanvasRgb::control_room_dark(),
+    };
+    let design_only = build_appearance_set_transaction(
+      previous,
+      Appearance {
+        design_theme: crate::config::DesignTheme::Braun,
+        color_mode: ColorMode::Dark,
+      },
+      OpaqueCanvasRgb {
+        red: 12,
+        green: 14,
+        blue: 18,
+      },
+    );
+    assert_eq!(design_only.next_native_theme, None);
+    assert_eq!(design_only.previous_native_theme, Theme::Dark);
+
+    let color_mode = build_appearance_set_transaction(
+      previous,
+      Appearance {
+        design_theme: crate::config::DesignTheme::ControlRoom,
+        color_mode: ColorMode::Light,
+      },
+      OpaqueCanvasRgb {
+        red: 246,
+        green: 247,
+        blue: 255,
+      },
+    );
+    assert_eq!(color_mode.next_native_theme, Some(Theme::Light));
+  }
+
+  #[derive(Debug, Clone, PartialEq, Eq)]
+  struct AppearanceHarnessState {
+    persisted: Appearance,
+    theme: Theme,
+    canvas: OpaqueCanvasRgb,
+    applied: AppearanceSnapshot,
+  }
+
+  fn appearance_config(appearance: Appearance) -> AppConfig {
+    AppConfig {
+      appearance,
+      ..AppConfig::default()
+    }
+  }
+
+  fn run_harness_appearance_set(
+    config_state: &ConfigState,
+    harness: &std::cell::RefCell<AppearanceHarnessState>,
+    tx: &AppearanceSetTransaction,
+    fail_at: Option<AppearanceSetFailurePoint>,
+  ) -> Result<AppearanceSetOutcome, CommandError> {
+    let persist_calls = std::cell::Cell::new(0usize);
+
+    let mut persist = |config: &AppConfig| -> Result<(), CommandError> {
+      let call = persist_calls.get() + 1;
+      persist_calls.set(call);
+      // First persist is the forward write; a second call is rollback restore.
+      if call == 1 {
+        if fail_at == Some(AppearanceSetFailurePoint::Persist) {
+          // Production persist_app_config rolls the store entry back before
+          // returning; mirror that so the harness never keeps a failed value.
+          return Err(CommandError::internal("persist failed"));
+        }
+        harness.borrow_mut().persisted = config.appearance;
+        return Ok(());
+      }
+
+      if fail_at == Some(AppearanceSetFailurePoint::PersistRollback) {
+        return Err(CommandError::internal("persist rollback failed"));
+      }
+      harness.borrow_mut().persisted = config.appearance;
+      Ok(())
+    };
+
+    let mut apply_native = |transaction: &AppearanceSetTransaction| -> Result<(), CommandError> {
+      if fail_at == Some(AppearanceSetFailurePoint::Native) {
+        return Err(CommandError::internal("native failed"));
+      }
+      // For rollback-failure scenarios, land the forward native change first so
+      // the restoration steps have real work to undo, then report failure to
+      // force the rollback path.
+      let fail_after_apply = fail_at == Some(AppearanceSetFailurePoint::NativeThemeRollback)
+        || fail_at == Some(AppearanceSetFailurePoint::NativeCanvasRollback);
+      {
+        let mut state = harness.borrow_mut();
+        if let Some(theme) = transaction.next_native_theme {
+          state.theme = theme;
+        }
+        state.canvas = transaction.next.canvas;
+        state.applied = transaction.next;
+      }
+      if fail_after_apply {
+        return Err(CommandError::internal("native failed"));
+      }
+      Ok(())
+    };
+
+    let mut restore_native_theme =
+      |transaction: &AppearanceSetTransaction| -> Result<(), CommandError> {
+        if fail_at == Some(AppearanceSetFailurePoint::NativeThemeRollback) {
+          return Err(CommandError::internal("native theme rollback failed"));
+        }
+        let mut state = harness.borrow_mut();
+        if transaction.next_native_theme.is_some() {
+          state.theme = transaction.previous_native_theme;
+        }
+        state.applied.appearance = transaction.previous.appearance;
+        Ok(())
+      };
+
+    let mut restore_native_canvas =
+      |transaction: &AppearanceSetTransaction| -> Result<(), CommandError> {
+        if fail_at == Some(AppearanceSetFailurePoint::NativeCanvasRollback) {
+          return Err(CommandError::internal("native canvas rollback failed"));
+        }
+        let mut state = harness.borrow_mut();
+        state.canvas = transaction.previous.canvas;
+        state.applied.canvas = transaction.previous.canvas;
+        Ok(())
+      };
+
+    let mut ops = AppearanceSetOps {
+      persist: &mut persist,
+      apply_native: &mut apply_native,
+      restore_native_theme: &mut restore_native_theme,
+      restore_native_canvas: &mut restore_native_canvas,
+    };
+    run_appearance_set_transaction(config_state, tx, &mut ops)
+  }
+
+  #[test]
+  fn appearance_set_transaction_success_updates_all_surfaces() {
+    let previous = AppearanceSnapshot {
+      appearance: Appearance::control_room_dark(),
+      canvas: OpaqueCanvasRgb::control_room_dark(),
+    };
+    let next_appearance = Appearance {
+      design_theme: crate::config::DesignTheme::Braun,
+      color_mode: ColorMode::Light,
+    };
+    let next_canvas = OpaqueCanvasRgb {
+      red: 252,
+      green: 248,
+      blue: 248,
+    };
+    let tx = build_appearance_set_transaction(previous, next_appearance, next_canvas);
+    let config_state = ConfigState(Arc::new(RwLock::new(appearance_config(
+      previous.appearance,
+    ))));
+    let harness = std::cell::RefCell::new(AppearanceHarnessState {
+      persisted: previous.appearance,
+      theme: Theme::Dark,
+      canvas: previous.canvas,
+      applied: previous,
+    });
+
+    let outcome =
+      run_harness_appearance_set(&config_state, &harness, &tx, None).expect("success path");
+    assert_eq!(outcome, AppearanceSetOutcome::Applied);
+    assert_eq!(config_state.0.read().appearance, next_appearance);
+    let state = harness.borrow();
+    assert_eq!(state.persisted, next_appearance);
+    assert_eq!(state.theme, Theme::Light);
+    assert_eq!(state.canvas, next_canvas);
+    assert_eq!(state.applied.appearance, next_appearance);
+    assert_eq!(state.applied.canvas, next_canvas);
+  }
+
+  #[test]
+  fn appearance_set_transaction_rolls_back_on_persist_failure() {
+    let previous = AppearanceSnapshot {
+      appearance: Appearance::control_room_dark(),
+      canvas: OpaqueCanvasRgb::control_room_dark(),
+    };
+    let tx = build_appearance_set_transaction(
+      previous,
+      Appearance {
+        design_theme: crate::config::DesignTheme::Braun,
+        color_mode: ColorMode::Light,
+      },
+      OpaqueCanvasRgb {
+        red: 252,
+        green: 248,
+        blue: 248,
+      },
+    );
+    let config_state = ConfigState(Arc::new(RwLock::new(appearance_config(
+      previous.appearance,
+    ))));
+    let harness = std::cell::RefCell::new(AppearanceHarnessState {
+      persisted: previous.appearance,
+      theme: Theme::Dark,
+      canvas: previous.canvas,
+      applied: previous,
+    });
+
+    let err = run_harness_appearance_set(
+      &config_state,
+      &harness,
+      &tx,
+      Some(AppearanceSetFailurePoint::Persist),
+    )
+    .expect_err("persist failure");
+    assert!(err.message.contains("persist failed"));
+    assert_eq!(config_state.0.read().appearance, previous.appearance);
+    let state = harness.borrow();
+    assert_eq!(state.persisted, previous.appearance);
+    assert_eq!(state.theme, Theme::Dark);
+    assert_eq!(state.canvas, previous.canvas);
+    assert_eq!(state.applied, previous);
+  }
+
+  #[test]
+  fn appearance_set_transaction_rolls_back_on_native_failure() {
+    let previous = AppearanceSnapshot {
+      appearance: Appearance {
+        design_theme: crate::config::DesignTheme::ControlRoom,
+        color_mode: ColorMode::Dark,
+      },
+      canvas: OpaqueCanvasRgb::control_room_dark(),
+    };
+    let tx = build_appearance_set_transaction(
+      previous,
+      Appearance {
+        design_theme: crate::config::DesignTheme::ControlRoom,
+        color_mode: ColorMode::Light,
+      },
+      OpaqueCanvasRgb {
+        red: 246,
+        green: 247,
+        blue: 255,
+      },
+    );
+    let config_state = ConfigState(Arc::new(RwLock::new(appearance_config(
+      previous.appearance,
+    ))));
+    let harness = std::cell::RefCell::new(AppearanceHarnessState {
+      persisted: previous.appearance,
+      theme: Theme::Dark,
+      canvas: previous.canvas,
+      applied: previous,
+    });
+
+    let err = run_harness_appearance_set(
+      &config_state,
+      &harness,
+      &tx,
+      Some(AppearanceSetFailurePoint::Native),
+    )
+    .expect_err("native failure");
+    assert!(err.message.contains("native failed"));
+    assert_eq!(config_state.0.read().appearance, previous.appearance);
+    let state = harness.borrow();
+    assert_eq!(state.persisted, previous.appearance);
+    assert_eq!(state.theme, Theme::Dark);
+    assert_eq!(state.canvas, previous.canvas);
+    assert_eq!(state.applied, previous);
+  }
+
+  #[test]
+  fn appearance_set_transaction_reports_persist_rollback_failure() {
+    let previous = AppearanceSnapshot {
+      appearance: Appearance::control_room_dark(),
+      canvas: OpaqueCanvasRgb::control_room_dark(),
+    };
+    let tx = build_appearance_set_transaction(
+      previous,
+      Appearance {
+        design_theme: crate::config::DesignTheme::Braun,
+        color_mode: ColorMode::Light,
+      },
+      OpaqueCanvasRgb {
+        red: 252,
+        green: 248,
+        blue: 248,
+      },
+    );
+    let config_state = ConfigState(Arc::new(RwLock::new(appearance_config(
+      previous.appearance,
+    ))));
+    let harness = std::cell::RefCell::new(AppearanceHarnessState {
+      persisted: previous.appearance,
+      theme: Theme::Dark,
+      canvas: previous.canvas,
+      applied: previous,
+    });
+
+    // Force native failure so orchestrator attempts persist rollback, then fail that.
+    let persist_calls = std::cell::Cell::new(0usize);
+    let mut persist = |config: &AppConfig| -> Result<(), CommandError> {
+      let call = persist_calls.get() + 1;
+      persist_calls.set(call);
+      if call == 1 {
+        harness.borrow_mut().persisted = config.appearance;
+        return Ok(());
+      }
+      Err(CommandError::internal("persist rollback failed"))
+    };
+    let mut apply_native = |_: &AppearanceSetTransaction| -> Result<(), CommandError> {
+      Err(CommandError::internal("native failed"))
+    };
+    let mut restore_native_theme =
+      |transaction: &AppearanceSetTransaction| -> Result<(), CommandError> {
+        let mut state = harness.borrow_mut();
+        if transaction.next_native_theme.is_some() {
+          state.theme = transaction.previous_native_theme;
+        }
+        state.applied.appearance = transaction.previous.appearance;
+        Ok(())
+      };
+    let mut restore_native_canvas =
+      |transaction: &AppearanceSetTransaction| -> Result<(), CommandError> {
+        let mut state = harness.borrow_mut();
+        state.canvas = transaction.previous.canvas;
+        state.applied.canvas = transaction.previous.canvas;
+        Ok(())
+      };
+    let mut ops = AppearanceSetOps {
+      persist: &mut persist,
+      apply_native: &mut apply_native,
+      restore_native_theme: &mut restore_native_theme,
+      restore_native_canvas: &mut restore_native_canvas,
+    };
+    let err = run_appearance_set_transaction(&config_state, &tx, &mut ops)
+      .expect_err("combined rollback failure");
+    assert!(err.message.contains("native failed"));
+    assert!(err.message.contains("persist rollback failed"));
+    assert_eq!(config_state.0.read().appearance, previous.appearance);
+  }
+
+  #[test]
+  fn appearance_set_transaction_attempts_canvas_restore_after_theme_restore_failure() {
+    let previous = AppearanceSnapshot {
+      appearance: Appearance {
+        design_theme: crate::config::DesignTheme::ControlRoom,
+        color_mode: ColorMode::Dark,
+      },
+      canvas: OpaqueCanvasRgb::control_room_dark(),
+    };
+    let tx = build_appearance_set_transaction(
+      previous,
+      Appearance {
+        design_theme: crate::config::DesignTheme::ControlRoom,
+        color_mode: ColorMode::Light,
+      },
+      OpaqueCanvasRgb {
+        red: 246,
+        green: 247,
+        blue: 255,
+      },
+    );
+    let config_state = ConfigState(Arc::new(RwLock::new(appearance_config(
+      previous.appearance,
+    ))));
+    let harness = std::cell::RefCell::new(AppearanceHarnessState {
+      persisted: previous.appearance,
+      theme: Theme::Dark,
+      canvas: previous.canvas,
+      applied: previous,
+    });
+
+    // Theme restoration fails, but the orchestrator must still attempt the
+    // canvas restoration step.
+    let err = run_harness_appearance_set(
+      &config_state,
+      &harness,
+      &tx,
+      Some(AppearanceSetFailurePoint::NativeThemeRollback),
+    )
+    .expect_err("theme rollback failure");
+    assert!(err.message.contains("native failed"));
+    assert!(err.message.contains("native theme rollback failed"));
+    assert!(!err.message.contains("native canvas rollback failed"));
+    assert_eq!(config_state.0.read().appearance, previous.appearance);
+    let state = harness.borrow();
+    // Canvas restoration still ran despite the theme-restore failure.
+    assert_eq!(state.canvas, previous.canvas);
+    assert_eq!(state.applied.canvas, previous.canvas);
+    // Theme could not be restored, so the harness keeps the failed value.
+    assert_eq!(state.theme, Theme::Light);
+    assert_eq!(state.persisted, previous.appearance);
+  }
+
+  #[test]
+  fn appearance_set_transaction_reports_combined_native_rollback_failure() {
+    let previous = AppearanceSnapshot {
+      appearance: Appearance {
+        design_theme: crate::config::DesignTheme::ControlRoom,
+        color_mode: ColorMode::Dark,
+      },
+      canvas: OpaqueCanvasRgb::control_room_dark(),
+    };
+    let tx = build_appearance_set_transaction(
+      previous,
+      Appearance {
+        design_theme: crate::config::DesignTheme::ControlRoom,
+        color_mode: ColorMode::Light,
+      },
+      OpaqueCanvasRgb {
+        red: 246,
+        green: 247,
+        blue: 255,
+      },
+    );
+    let config_state = ConfigState(Arc::new(RwLock::new(appearance_config(
+      previous.appearance,
+    ))));
+    let harness = std::cell::RefCell::new(AppearanceHarnessState {
+      persisted: previous.appearance,
+      theme: Theme::Dark,
+      canvas: previous.canvas,
+      applied: previous,
+    });
+
+    // Both native restoration steps fail; the error must surface both.
+    let persist_calls = std::cell::Cell::new(0usize);
+    let mut persist = |config: &AppConfig| -> Result<(), CommandError> {
+      let call = persist_calls.get() + 1;
+      persist_calls.set(call);
+      if call == 1 {
+        harness.borrow_mut().persisted = config.appearance;
+        return Ok(());
+      }
+      harness.borrow_mut().persisted = config.appearance;
+      Ok(())
+    };
+    let mut apply_native = |_: &AppearanceSetTransaction| -> Result<(), CommandError> {
+      Err(CommandError::internal("native failed"))
+    };
+    let mut restore_native_theme = |_: &AppearanceSetTransaction| -> Result<(), CommandError> {
+      Err(CommandError::internal("native theme rollback failed"))
+    };
+    let mut restore_native_canvas = |_: &AppearanceSetTransaction| -> Result<(), CommandError> {
+      Err(CommandError::internal("native canvas rollback failed"))
+    };
+    let mut ops = AppearanceSetOps {
+      persist: &mut persist,
+      apply_native: &mut apply_native,
+      restore_native_theme: &mut restore_native_theme,
+      restore_native_canvas: &mut restore_native_canvas,
+    };
+    let err = run_appearance_set_transaction(&config_state, &tx, &mut ops)
+      .expect_err("combined native rollback failure");
+    assert!(err.message.contains("native failed"));
+    assert!(err.message.contains("native theme rollback failed"));
+    assert!(err.message.contains("native canvas rollback failed"));
+    assert_eq!(config_state.0.read().appearance, previous.appearance);
+  }
+
+  #[test]
+  fn appearance_set_design_theme_only_keeps_native_theme() {
+    let previous = AppearanceSnapshot {
+      appearance: Appearance {
+        design_theme: crate::config::DesignTheme::ControlRoom,
+        color_mode: ColorMode::Light,
+      },
+      canvas: OpaqueCanvasRgb {
+        red: 246,
+        green: 247,
+        blue: 255,
+      },
+    };
+    let tx = build_appearance_set_transaction(
+      previous,
+      Appearance {
+        design_theme: crate::config::DesignTheme::Braun,
+        color_mode: ColorMode::Light,
+      },
+      OpaqueCanvasRgb {
+        red: 252,
+        green: 248,
+        blue: 248,
+      },
+    );
+    let config_state = ConfigState(Arc::new(RwLock::new(appearance_config(
+      previous.appearance,
+    ))));
+    let harness = std::cell::RefCell::new(AppearanceHarnessState {
+      persisted: previous.appearance,
+      theme: Theme::Light,
+      canvas: previous.canvas,
+      applied: previous,
+    });
+
+    run_harness_appearance_set(&config_state, &harness, &tx, None).expect("design-only success");
+    assert_eq!(harness.borrow().theme, Theme::Light);
+    assert_eq!(tx.next_native_theme, None);
+    assert_eq!(
+      config_state.0.read().appearance,
+      Appearance {
+        design_theme: crate::config::DesignTheme::Braun,
+        color_mode: ColorMode::Light,
+      }
+    );
+  }
+
+  #[test]
+  fn config_set_preserves_current_appearance_from_stale_snapshot() {
+    let current = Appearance {
+      design_theme: crate::config::DesignTheme::Braun,
+      color_mode: ColorMode::Light,
+    };
+    let stale = Appearance {
+      design_theme: crate::config::DesignTheme::ControlRoom,
+      color_mode: ColorMode::Dark,
+    };
+    let config_state = ConfigState(Arc::new(RwLock::new(appearance_config(current))));
+    let ready_state = AppearanceReadyState::default();
+    {
+      let mut ready = ready_state.0.lock();
+      ready.ready = true;
+      ready.appearance = current;
+    }
+
+    let incoming = AppConfig {
+      device_name: "Stale Client".into(),
+      appearance: stale,
+      ..AppConfig::default()
+    };
+
+    // Execute the exact production merge helper inside the appearance-lock
+    // critical section used by config_set.
+    {
+      let _appearance_guard = ready_state.0.lock();
+      commit_config_preserving_appearance(&config_state, incoming);
+    }
+
+    assert_eq!(config_state.0.read().appearance, current);
+    assert_eq!(config_state.0.read().device_name, "Stale Client");
+    assert_ne!(config_state.0.read().appearance, stale);
   }
 
   #[test]

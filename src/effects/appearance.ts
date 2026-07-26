@@ -1,5 +1,5 @@
 import { commands } from '@bindings';
-import type { Appearance, OpaqueCanvasRgb } from '@bindings';
+import type { Appearance, AppearanceSetRequest, OpaqueCanvasRgb } from '@bindings';
 import { Effect } from 'effect';
 
 import { runTauriCommand, runTauriCommandRaw } from './commands';
@@ -153,6 +153,16 @@ export function notifyAppearanceReady(
       canvas,
     }),
   ).pipe(Effect.asVoid);
+}
+
+export function appearancesEqual(left: Appearance, right: Appearance): boolean {
+  return left.designTheme === right.designTheme && left.colorMode === right.colorMode;
+}
+
+export function persistAppearanceSelection(
+  request: AppearanceSetRequest,
+): Effect.Effect<void, CommandError> {
+  return runTauriCommand(() => commands.appearanceSet(request)).pipe(Effect.asVoid);
 }
 
 /** Fetch Appearance and resolve the hydrated opaque canvas without fabricating fallbacks. */

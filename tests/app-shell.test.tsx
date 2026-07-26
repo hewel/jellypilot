@@ -19,7 +19,9 @@ import type {
   VideoSeasonEpisodes,
   VideoShowDetail,
 } from '../src/bindings';
+import { AppearanceProvider } from '../src/components/AppearanceProvider';
 import { ToastProvider } from '../src/components/ToastProvider';
+import { CONTROL_ROOM_DARK_APPEARANCE, CONTROL_ROOM_DARK_CANVAS } from '../src/effects/appearance';
 import { queryKeys } from '../src/effects/query';
 import { createJellyPilotRouter } from '../src/router';
 import { resetSharedLibraryFilters } from '../src/utils/createSharedLibraryFilters';
@@ -687,7 +689,14 @@ function renderShell(path: string | string[] = '/library', client?: QueryClient)
     () => (
       <TestQueryProvider client={client}>
         <ToastProvider>
-          <RouterProvider router={router} />
+          <AppearanceProvider
+            initial={{
+              appearance: CONTROL_ROOM_DARK_APPEARANCE,
+              canvas: CONTROL_ROOM_DARK_CANVAS,
+            }}
+          >
+            <RouterProvider router={router} />
+          </AppearanceProvider>
         </ToastProvider>
       </TestQueryProvider>
     ),

@@ -39,7 +39,7 @@ export async function mountApplication(): Promise<void> {
     onSuccess: (value) => value,
   });
 
-  render(() => <App />, root);
+  render(() => <App initialAppearance={hydrated} />, root);
 
   await Effect.runPromise(
     notifyAppearanceReady(hydrated.appearance, hydrated.canvas).pipe(Effect.ignore),

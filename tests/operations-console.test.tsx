@@ -4,8 +4,10 @@ import { render } from 'solid-js/web';
 
 import { commands } from '../src/bindings';
 import type { AppConfig, SavedServiceProfiles } from '../src/bindings';
+import { AppearanceProvider } from '../src/components/AppearanceProvider';
 import OperationsConsole from '../src/components/OperationsConsole';
 import { ToastProvider } from '../src/components/ToastProvider';
+import { CONTROL_ROOM_DARK_APPEARANCE, CONTROL_ROOM_DARK_CANVAS } from '../src/effects/appearance';
 import { TestQueryProvider } from './query-client';
 
 const connectedState = {
@@ -112,7 +114,14 @@ function renderConsole(
     () => (
       <TestQueryProvider>
         <ToastProvider>
-          <OperationsConsole onSignedOut={onSignedOut} />
+          <AppearanceProvider
+            initial={{
+              appearance: CONTROL_ROOM_DARK_APPEARANCE,
+              canvas: CONTROL_ROOM_DARK_CANVAS,
+            }}
+          >
+            <OperationsConsole onSignedOut={onSignedOut} />
+          </AppearanceProvider>
         </ToastProvider>
       </TestQueryProvider>
     ),
@@ -140,7 +149,14 @@ test('operations console reports config load command failures', async () => {
     () => (
       <TestQueryProvider>
         <ToastProvider>
-          <OperationsConsole onSignedOut={() => {}} />
+          <AppearanceProvider
+            initial={{
+              appearance: CONTROL_ROOM_DARK_APPEARANCE,
+              canvas: CONTROL_ROOM_DARK_CANVAS,
+            }}
+          >
+            <OperationsConsole onSignedOut={() => {}} />
+          </AppearanceProvider>
         </ToastProvider>
       </TestQueryProvider>
     ),
@@ -546,6 +562,7 @@ test('final console structure covers all operational areas in order', async () =
   const headings = screen.getAllByRole('heading').map((heading) => heading.textContent);
   expect(headings).toEqual(
     expect.arrayContaining([
+      'Appearance',
       'Connection',
       'Player Bridge settings',
       'Diagnostics',
@@ -553,6 +570,7 @@ test('final console structure covers all operational areas in order', async () =
       'Session',
     ]),
   );
+  expect(headings.indexOf('Appearance')).toBeLessThan(headings.indexOf('Diagnostics'));
   expect(headings.indexOf('Diagnostics')).toBeLessThan(headings.indexOf('Intro Skip'));
   expect(screen.getByRole('button', { name: 'Toggle diagnostics' })).toHaveAttribute(
     'aria-expanded',
