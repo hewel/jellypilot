@@ -25,11 +25,12 @@ import { commandFailureMessage } from '../../effects/commands';
 import type { CommandError } from '../../effects/errors';
 import { Button, Card } from '../ui';
 import type { JellyPilotSelectItem } from '../ui';
+import { HomeVideoCard } from './HomeVideoCard';
 import * as styles from './shared.styles';
-import { VideoCard } from './VideoCard';
 
 export { MediaInfoHoverCard } from './MediaInfoHoverCard';
-export { VideoCard } from './VideoCard';
+export { HomeVideoCard } from './HomeVideoCard';
+export { LibraryVideoCard } from './LibraryVideoCard';
 
 export function LibraryStatusPanel(props: { title: string; description?: string }) {
   const titleId = createUniqueId();
@@ -133,8 +134,7 @@ export function VideoHomeRow(props: {
           <For each={props.items}>
             {(item, index) => (
               <Show when={expanded() || index() < columns()}>
-                <VideoCard
-                  kind="home"
+                <HomeVideoCard
                   item={item}
                   rowKind={props.kind}
                   busy={props.resumeBusyId === item.id}

@@ -1,46 +1,26 @@
-import type { VideoHomeItem, VideoLibraryItem, VideoLibraryKind } from '@bindings';
+import type { VideoHomeItem } from '@bindings';
 import { cx } from '@styled-system/css';
 import { Link } from '@tanstack/solid-router';
 import { Match } from 'effect';
-import { Check, Film, Heart, LoaderCircle, Play, Tv } from 'lucide-solid';
+import { Film, LoaderCircle, Play, Tv } from 'lucide-solid';
 import { Show, createEffect, createSignal } from 'solid-js';
-import type { JSX } from 'solid-js';
 import { imageSource } from '~utils/imageSource';
 import {
   isValidVideoHomeResumePosition,
   videoHomeAspect,
-  type VideoHomeAspect,
   type VideoHomeRowKind,
 } from '~utils/videoHomeLayout';
 
-import { MediaInfoHoverCard } from './MediaInfoHoverCard';
 import * as styles from './VideoCard.styles';
+import { CardTitle, type VideoCardAspectClass } from './videoCardShared';
 
-export type VideoCardAspectClass = VideoHomeAspect;
-
-interface HomeVideoCardProps {
-  kind: 'home';
+export interface HomeVideoCardProps {
   item: VideoHomeItem;
   rowKind: VideoHomeRowKind;
   busy?: boolean;
   resumeDisabled?: boolean;
   onResume?: () => void;
-  loading?: false;
 }
-
-export type VideoCardProps =
-  | HomeVideoCardProps
-  | {
-      kind: 'library';
-      item: VideoLibraryItem;
-      collectionType?: VideoLibraryKind;
-      loading?: false;
-    }
-  | {
-      kind: 'library';
-      collectionType?: VideoLibraryKind;
-      loading: true;
-    };
 
 const homeSecondary = Match.type<{
   item: VideoHomeItem;
@@ -102,63 +82,19 @@ function homeTitle(item: VideoHomeItem): string {
   return `${item.name} • ${item.itemType}`;
 }
 
-function CardTitle(props: { id: string; itemType: string; class: string; children: JSX.Element }) {
-  return (
-    <MediaInfoHoverCard id={props.id} itemType={props.itemType} class={styles.titleHoverTrigger}>
-      <p class={props.class}>{props.children}</p>
-    </MediaInfoHoverCard>
-  );
-}
-
-function isDirectResumeCard(props: VideoCardProps): props is HomeVideoCardProps & {
+function isDirectResumeCard(props: HomeVideoCardProps): props is HomeVideoCardProps & {
   onResume: () => void;
 } {
   return (
-    props.kind === 'home' &&
     props.rowKind === 'continueWatching' &&
     props.onResume !== undefined &&
     isValidVideoHomeResumePosition(props.item.resumePositionSeconds, props.item.runtimeSeconds)
   );
 }
 
-export function VideoCard(props: VideoCardProps) {
-  const aspectClass = (): VideoCardAspectClass => {
-    if (props.kind === 'home') {
-      return videoHomeAspect(props.rowKind);
-    }
-    if (props.loading) {
-      return 'poster';
-    }
-    return props.collectionType === 'tvshows' ||
-      props.item.itemType === 'Series' ||
-      props.item.itemType === 'Movie'
-      ? 'poster'
-      : 'video';
-  };
+export function HomeVideoCard(props: HomeVideoCardProps) {
+  const aspectClass = (): VideoCardAspectClass => videoHomeAspect(props.rowKind);
 
-  if (props.kind === 'library' && props.loading) {
-    return <VideoCardSkeleton aspectClass={aspectClass()} />;
-  }
-
-  const linkTarget = () =>
-    props.kind === 'library' && props.item.itemType === 'Series'
-      ? ({ to: '/library/shows/$seriesId', params: { seriesId: props.item.id } } as const)
-      : ({ to: '/library/items/$itemId', params: { itemId: props.item.id } } as const);
-
-  const librarySubtitle = () => {
-    if (props.kind === 'home') {
-      return null;
-    }
-    return props.item.productionYear ? props.item.productionYear.toString() : props.item.itemType;
-  };
-
-  const usesTvIcon = () =>
-    (props.kind === 'library' && props.collectionType === 'tvshows') ||
-    props.item.itemType === 'Series' ||
-    props.item.itemType === 'Episode';
-
-  const libraryCardAriaLabel = () =>
-    `Open ${props.item.name}${props.item.favorite ? ', favorite' : ''}`;
   const [imageFailed, setImageFailed] = createSignal(false);
   const artworkImageId = () => props.item.artworkImageId;
   const showPlayBadge = () => isDirectResumeCard(props) && !props.busy;
@@ -168,23 +104,15 @@ export function VideoCard(props: VideoCardProps) {
     setImageFailed(false);
   });
 
-  const isPoster = () => aspectClass() === 'poster';
-  const progress = () =>
-    props.kind === 'home' && props.rowKind === 'continueWatching'
-      ? videoHomeProgress(props.item)
-      : null;
-  const secondary = () =>
-    props.kind === 'home'
-      ? homeSecondary({ item: props.item, rowKind: props.rowKind })
-      : librarySubtitle();
+  const usesTvIcon = () => props.item.itemType === 'Series' || props.item.itemType === 'Episode';
 
-  const renderArtwork = (options?: { includeLibraryOverlay?: boolean }) => (
+  const progress = () =>
+    props.rowKind === 'continueWatching' ? videoHomeProgress(props.item) : null;
+  const secondary = () => homeSecondary({ item: props.item, rowKind: props.rowKind });
+
+  const renderArtwork = () => (
     <div
-      class={cx(
-        styles.artwork,
-        styles.aspect[aspectClass()],
-        props.kind === 'home' && styles.homeArtwork,
-      )}
+      class={cx(styles.artwork, styles.aspect[aspectClass()], styles.homeArtwork)}
       data-aspect={aspectClass()}
     >
       <Show
@@ -212,33 +140,13 @@ export function VideoCard(props: VideoCardProps) {
           <img
             src={imageSource(imageId())}
             alt={`${props.item.name} artwork`}
-            class={cx(styles.image, props.kind === 'home' && styles.homeImage)}
+            class={cx(styles.image, styles.homeImage)}
             onError={() => setImageFailed(true)}
           />
         )}
       </Show>
 
-      <Show when={props.kind === 'library' && props.item.favorite}>
-        <span class={styles.favoriteBadge} aria-hidden="true">
-          <Heart class={styles.favoriteIcon} fill="currentColor" aria-hidden="true" />
-        </span>
-      </Show>
-
-      <Show when={options?.includeLibraryOverlay && props.kind === 'library' && isPoster()}>
-        <Show when={props.item.played}>
-          <span class={styles.overlayPlayedBadge} role="img" aria-label="Played">
-            <Check class={styles.playedIcon} aria-hidden="true" />
-          </span>
-        </Show>
-        <div class={styles.overlay}>
-          <CardTitle id={props.item.id} itemType={props.item.itemType} class={styles.title}>
-            {props.item.name}
-          </CardTitle>
-          <p class={styles.subtitle}>{librarySubtitle()}</p>
-        </div>
-      </Show>
-
-      <Show when={props.kind === 'home' && progress() !== null}>
+      <Show when={progress() !== null}>
         <div
           class={styles.homeProgressTrack}
           role="progressbar"
@@ -257,7 +165,7 @@ export function VideoCard(props: VideoCardProps) {
         </span>
       </Show>
 
-      <Show when={props.kind === 'home' && props.busy}>
+      <Show when={props.busy}>
         <div class={styles.homeBusyOverlay} aria-live="polite">
           <LoaderCircle class={styles.homeBusyIcon} aria-hidden="true" />
           <span>Starting…</span>
@@ -293,56 +201,17 @@ export function VideoCard(props: VideoCardProps) {
     );
   }
 
-  if (props.kind === 'home') {
-    return (
-      <div class={styles.homeCard}>
-        <Link
-          {...linkTarget()}
-          aria-label={`Open ${props.item.name}`}
-          class={styles.homeCardAction}
-        >
-          {renderArtwork()}
-        </Link>
-        {renderHomeMeta()}
-      </div>
-    );
-  }
-
   return (
-    <Link {...linkTarget()} aria-label={libraryCardAriaLabel()} class={styles.card}>
-      {renderArtwork({ includeLibraryOverlay: true })}
-      <Show when={!isPoster()}>
-        <div class={styles.body}>
-          <div class={styles.copy}>
-            <CardTitle id={props.item.id} itemType={props.item.itemType} class={styles.title}>
-              {props.item.name}
-            </CardTitle>
-            <p class={styles.subtitle}>{librarySubtitle()}</p>
-          </div>
-          <Show when={props.item.played}>
-            <span class={styles.playedBadge} role="img" aria-label="Played">
-              <Check class={styles.playedIcon} aria-hidden="true" />
-            </span>
-          </Show>
-        </div>
-      </Show>
-    </Link>
-  );
-}
-
-function VideoCardSkeleton(props: { aspectClass: VideoCardAspectClass }) {
-  return (
-    <div class={styles.card} aria-hidden="true">
-      <div
-        class={cx(styles.artwork, styles.aspect[props.aspectClass], styles.skeleton)}
-        data-aspect={props.aspectClass}
-      />
-      <Show when={props.aspectClass === 'video'}>
-        <div class={styles.skeletonBody}>
-          <div class={styles.skeletonTitle} />
-          <div class={styles.skeletonSubtitle} />
-        </div>
-      </Show>
+    <div class={styles.homeCard}>
+      <Link
+        to="/library/items/$itemId"
+        params={{ itemId: props.item.id }}
+        aria-label={`Open ${props.item.name}`}
+        class={styles.homeCardAction}
+      >
+        {renderArtwork()}
+      </Link>
+      {renderHomeMeta()}
     </div>
   );
 }

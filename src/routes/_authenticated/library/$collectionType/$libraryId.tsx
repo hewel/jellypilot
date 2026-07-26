@@ -2,13 +2,13 @@ import { Menu } from '@ark-ui/solid/menu';
 import { Toggle } from '@ark-ui/solid/toggle';
 import type { VideoLibraryKind, VideoLibraryPlayedFilter, VideoLibrarySort } from '@bindings';
 import { useAppScrollArea } from '@components/AppScrollAreaContext';
+import { LibraryVideoCard } from '@components/library/LibraryVideoCard';
 import {
   LibraryStatusPanel,
   libraryTitle,
   playedFilterLabel,
   sortItems,
 } from '@components/library/shared';
-import { VideoCard } from '@components/library/VideoCard';
 import LibrarySearchBar from '@components/LibrarySearchBar';
 import { Button } from '@components/ui';
 import { cx } from '@styled-system/css';
@@ -660,9 +660,7 @@ function LibraryBrowseRoute() {
               fallback={
                 <div class={cx(styles.grid, styles.fade)}>
                   <For each={readyState()?.items ?? []}>
-                    {(item) => (
-                      <VideoCard kind="library" item={item} collectionType={collectionType()} />
-                    )}
+                    {(item) => <LibraryVideoCard item={item} collectionType={collectionType()} />}
                   </For>
                   <Show when={browseQuery.isFetchingNextPage}>
                     <LibraryBrowseSkeletonCards />
@@ -695,8 +693,7 @@ function LibraryBrowseRoute() {
                                 <Show when={displayIndex() < totalRecordCount()}>
                                   <Show when={item()} fallback={<LibraryBrowseSkeletonCard />}>
                                     {(loadedItem) => (
-                                      <VideoCard
-                                        kind="library"
+                                      <LibraryVideoCard
                                         item={loadedItem()}
                                         collectionType={collectionType()}
                                       />
@@ -942,7 +939,7 @@ function LibraryBrowseToolbar(props: LibraryBrowseToolbarProps) {
 }
 
 function LibraryBrowseSkeletonCard() {
-  return <VideoCard kind="library" collectionType="movies" loading />;
+  return <LibraryVideoCard collectionType="movies" loading />;
 }
 
 function LibraryBrowseSkeletonCards() {

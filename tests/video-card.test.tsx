@@ -4,7 +4,8 @@ import { fireEvent, screen } from '@testing-library/dom';
 import type { JSX } from 'solid-js';
 import { render } from 'solid-js/web';
 
-import { VideoCard } from '../src/components/library/VideoCard';
+import { HomeVideoCard } from '../src/components/library/HomeVideoCard';
+import { LibraryVideoCard } from '../src/components/library/LibraryVideoCard';
 import { PopupRoot } from '../src/components/ui/PopupRoot';
 import { createJellyPilotRouter } from '../src/router';
 import { imageSource } from '../src/utils/imageSource';
@@ -28,10 +29,9 @@ function renderWithRouter(content: () => JSX.Element) {
   return { dispose, root };
 }
 
-test('VideoCard renders image IDs through the JellyPilot image protocol', () => {
+test('LibraryVideoCard renders image IDs through the JellyPilot image protocol', () => {
   const { dispose, root } = renderWithRouter(() => (
-    <VideoCard
-      kind="library"
+    <LibraryVideoCard
       collectionType="movies"
       item={{
         artworkImageId: 'signed-card-image',
@@ -65,10 +65,9 @@ test('VideoCard renders image IDs through the JellyPilot image protocol', () => 
   root.remove();
 });
 
-test('VideoCard falls back when the image protocol load fails', () => {
+test('LibraryVideoCard falls back when the image protocol load fails', () => {
   const { dispose, root } = renderWithRouter(() => (
-    <VideoCard
-      kind="library"
+    <LibraryVideoCard
       collectionType="movies"
       item={{
         artworkImageId: 'broken-card-image',
@@ -97,11 +96,10 @@ test('VideoCard falls back when the image protocol load fails', () => {
   root.remove();
 });
 
-test('VideoCard overlays copy on poster artwork and keeps copy below video artwork', () => {
+test('LibraryVideoCard overlays copy on poster artwork and HomeVideoCard keeps copy below video artwork', () => {
   const { dispose, root } = renderWithRouter(() => (
     <>
-      <VideoCard
-        kind="library"
+      <LibraryVideoCard
         collectionType="movies"
         item={{
           artworkImageId: null,
@@ -120,8 +118,7 @@ test('VideoCard overlays copy on poster artwork and keeps copy below video artwo
           seriesName: null,
         }}
       />
-      <VideoCard
-        kind="home"
+      <HomeVideoCard
         rowKind="latestEpisodes"
         item={{
           artworkImageId: null,
@@ -154,11 +151,10 @@ test('VideoCard overlays copy on poster artwork and keeps copy below video artwo
   root.remove();
 });
 
-test('VideoCard renders reference-first Continue Watching metadata and direct resume', () => {
+test('HomeVideoCard renders reference-first Continue Watching metadata and direct resume', () => {
   const onResume = rstest.fn();
   const { dispose, root } = renderWithRouter(() => (
-    <VideoCard
-      kind="home"
+    <HomeVideoCard
       rowKind="continueWatching"
       onResume={onResume}
       item={{
@@ -201,11 +197,10 @@ test('VideoCard renders reference-first Continue Watching metadata and direct re
   root.remove();
 });
 
-test('VideoCard derives progress and falls back to detail without a saved resume position', () => {
+test('HomeVideoCard derives progress and falls back to detail without a saved resume position', () => {
   const { dispose, root } = renderWithRouter(() => (
     <>
-      <VideoCard
-        kind="home"
+      <HomeVideoCard
         rowKind="continueWatching"
         onResume={() => undefined}
         item={{
@@ -225,8 +220,7 @@ test('VideoCard derives progress and falls back to detail without a saved resume
           seriesName: null,
         }}
       />
-      <VideoCard
-        kind="home"
+      <HomeVideoCard
         rowKind="continueWatching"
         onResume={() => undefined}
         item={{
@@ -266,10 +260,9 @@ test('VideoCard derives progress and falls back to detail without a saved resume
   root.remove();
 });
 
-test('VideoCard exposes a disabled busy state while resume starts', () => {
+test('HomeVideoCard exposes a disabled busy state while resume starts', () => {
   const { dispose, root } = renderWithRouter(() => (
-    <VideoCard
-      kind="home"
+    <HomeVideoCard
       rowKind="continueWatching"
       busy
       resumeDisabled

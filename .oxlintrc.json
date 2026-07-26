@@ -14,6 +14,7 @@
     "pedantic": "error"
   },
   "rules": {
+    "capitalized-comments": "off",
     "eslint/func-style": "off",
     "eslint/curly": "off",
     "eslint/eqeqeq": "off",

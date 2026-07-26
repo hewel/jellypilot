@@ -1,11 +1,12 @@
 import { expect, test } from '@rstest/core';
 
+import { HomeVideoCard as DirectHomeVideoCard } from '../src/components/library/HomeVideoCard';
+import { LibraryVideoCard as DirectLibraryVideoCard } from '../src/components/library/LibraryVideoCard';
 import { MediaInfoHoverCard as DirectHoverCard } from '../src/components/library/MediaInfoHoverCard';
 import * as libraryShared from '../src/components/library/shared';
-import { VideoCard as DirectVideoCard } from '../src/components/library/VideoCard';
 
-test('library shared module re-exports VideoCard and MediaInfoHoverCard', () => {
-  // Pre-migration public barrel surface — preserve for existing import paths.
-  expect(libraryShared.VideoCard).toBe(DirectVideoCard);
+test('library shared module re-exports HomeVideoCard, LibraryVideoCard, and MediaInfoHoverCard', () => {
+  expect(libraryShared.HomeVideoCard).toBe(DirectHomeVideoCard);
+  expect(libraryShared.LibraryVideoCard).toBe(DirectLibraryVideoCard);
   expect(libraryShared.MediaInfoHoverCard).toBe(DirectHoverCard);
 });

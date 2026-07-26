@@ -848,7 +848,10 @@ test('library landing renders command-backed rows and drawer trigger', async () 
   expect(resumeMovieButton).toBeVisible();
   expect(within(resumeMovieButton).queryByRole('img', { name: 'Played' })).toBeNull();
   expect(within(resumeMovieButton).getByRole('progressbar')).toHaveAttribute('aria-valuenow', '25');
-  expect(within(resumeMovieButton).getByText('118 mins remaining')).toBeVisible();
+  // Title/subtitle sit outside the action control so hover popups do not steal resume clicks.
+  const remainingLabel = screen.getByText('118 mins remaining');
+  expect(remainingLabel).toBeVisible();
+  expect(resumeMovieButton.contains(remainingLabel)).toBe(false);
   const resumeArtwork = screen.getByAltText('Resume Movie artwork');
   expect(resumeArtwork).toHaveAttribute(
     'src',
@@ -858,8 +861,10 @@ test('library landing renders command-backed rows and drawer trigger', async () 
   fireEvent.load(resumeArtwork);
   expect(resumeArtwork.parentElement).toHaveAttribute('data-aspect', 'video');
   const latestMovieLink = screen.getByRole('link', { name: /Latest Movie/ });
-  expect(within(latestMovieLink).getByText('Latest Movie • Movie')).toBeVisible();
-  expect(within(latestMovieLink).queryByText('Movie · null')).toBeNull();
+  const latestMovieTitle = screen.getByText('Latest Movie • Movie');
+  expect(latestMovieTitle).toBeVisible();
+  expect(latestMovieLink.contains(latestMovieTitle)).toBe(false);
+  expect(screen.queryByText('Movie · null')).toBeNull();
   expect(latestMovieLink.querySelector('[data-aspect="poster"]')).not.toBeNull();
   expect(screen.getAllByText('No artwork')).toHaveLength(3);
   const latestEpisodeLink = screen.getByRole('link', { name: /Latest Episode/ });
@@ -1236,11 +1241,17 @@ test('library browse reuses cached virtual pages on route re-entry', async () =>
   browseCommand.mockClear();
   const secondCleanup = renderShell('/library/movies/movies', queryClient);
 
-  expect(await screen.findByRole('link', { name: 'Open Virtual Movie 1' })).toBeVisible();
+  // Re-query inside waitFor: cached re-entry remounts virtual rows after measure,
+  // so a one-shot findByRole node can detach before toBeVisible runs.
+  await waitFor(() => {
+    expect(screen.getByRole('link', { name: 'Open Virtual Movie 1' })).toBeVisible();
+  });
   const secondViewport = appScrollViewport();
   secondViewport.scrollTop = 99_999;
   fireEvent.scroll(secondViewport);
-  expect(screen.getByRole('link', { name: 'Open Virtual Movie 125' })).toBeVisible();
+  await waitFor(() => {
+    expect(screen.getByRole('link', { name: 'Open Virtual Movie 125' })).toBeVisible();
+  });
   await new Promise((resolve) => setTimeout(resolve, 0));
   expect(browseCommand).toHaveBeenCalledTimes(1);
   expect(browseCommand).toHaveBeenCalledWith({
