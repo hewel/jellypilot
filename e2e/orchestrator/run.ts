@@ -13,6 +13,14 @@ import {
   SPEC_PROCESS_TIMEOUT_MS,
   SPEC_TIMEOUT_MS,
 } from '../constants';
+import {
+  APPEARANCE_STARTUP_ENV,
+  appearanceStartupCaseById,
+  appearanceStoreDocument,
+  expandAppearanceStartupRuns,
+  linuxAppearanceStorePath,
+  type AppearanceStartupCaseId,
+} from '../support/appearance-startup';
 import { E2eRunError } from '../support/errors';
 import type { E2eProcessError } from '../support/errors';
 import { retainFailureEvidence } from '../support/evidence';
@@ -155,6 +163,7 @@ function sandboxEnvironment(
   sandbox: RunSandbox,
   display: string,
   port: number,
+  appearanceCaseId?: AppearanceStartupCaseId,
 ): NodeJS.ProcessEnv {
   return {
     ...baseEnv,
@@ -170,6 +179,11 @@ function sandboxEnvironment(
     JELLYPILOT_E2E_LOG_DIR: sandbox.logs,
     JELLYPILOT_E2E_PORT: String(port),
     TAURI_WEBDRIVER_PORT: String(port),
+    ...(appearanceCaseId
+      ? {
+          [APPEARANCE_STARTUP_ENV]: appearanceCaseId,
+        }
+      : {}),
   };
 }
 
@@ -218,6 +232,7 @@ const runOneSpec = Effect.fn('e2e.runOneSpec')(function* (
   options: TestOptions,
   manifest: BuildManifest,
   baseEnv: NodeJS.ProcessEnv,
+  appearanceCaseId?: AppearanceStartupCaseId,
 ) {
   const sandbox = createRunSandboxLayout(spec);
   const scopedRun = Effect.scoped(
@@ -228,6 +243,25 @@ const runOneSpec = Effect.fn('e2e.runOneSpec')(function* (
     ).pipe(
       Effect.flatMap(() =>
         Effect.gen(function* () {
+          if (appearanceCaseId) {
+            const appearanceCase = appearanceStartupCaseById(appearanceCaseId);
+            const storePath = linuxAppearanceStorePath(sandbox.xdg.data);
+            yield* Effect.tryPromise({
+              try: async () => {
+                await mkdir(path.dirname(storePath), { recursive: true });
+                await writeFile(
+                  storePath,
+                  `${JSON.stringify(appearanceStoreDocument(appearanceCase.appearance), null, 2)}\n`,
+                );
+              },
+              catch: (cause) =>
+                new E2eRunError({
+                  message: `Could not seed appearance store for ${appearanceCaseId}.`,
+                  cause,
+                }),
+            });
+          }
+
           const port = yield* Effect.tryPromise({
             try: freePort,
             catch: (cause) =>
@@ -251,7 +285,13 @@ const runOneSpec = Effect.fn('e2e.runOneSpec')(function* (
                   command: path.join(REPO_ROOT, 'node_modules/.bin/wdio'),
                   args: ['run', 'e2e/wdio.conf.ts', '--spec', spec],
                   cwd: REPO_ROOT,
-                  env: sandboxEnvironment(baseEnv, sandbox, display.display, port),
+                  env: sandboxEnvironment(
+                    baseEnv,
+                    sandbox,
+                    display.display,
+                    port,
+                    appearanceCaseId,
+                  ),
                   timeoutMs: SPEC_PROCESS_TIMEOUT_MS,
                   logPath: path.join(sandbox.logs, 'runner.log'),
                   onSpawn: (pid) => processGroupPids.push(pid),
@@ -272,6 +312,7 @@ const runOneSpec = Effect.fn('e2e.runOneSpec')(function* (
             port,
             display: displayName,
             processGroupPids,
+            appearanceCaseId,
             message: Exit.isFailure(finalExit) ? Cause.pretty(finalExit.cause) : undefined,
           });
           if (Exit.isFailure(finalExit)) {
@@ -323,5 +364,8 @@ export const runE2eSpecs = Effect.fn('e2e.runSpecs')(function* (
     try: () => discoverSpecs(options.spec),
     catch: (cause) => new E2eRunError({ message: 'Could not select native E2E specs.', cause }),
   });
-  for (const spec of specs) yield* runOneSpec(spec, options, manifest, baseEnv);
+  const runs = expandAppearanceStartupRuns(specs);
+  for (const run of runs) {
+    yield* runOneSpec(run.spec, options, manifest, baseEnv, run.appearanceCaseId);
+  }
 });

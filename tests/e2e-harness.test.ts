@@ -9,6 +9,13 @@ import { Effect, Exit, Fiber } from 'effect';
 import { displayResource } from '../e2e/orchestrator/display';
 import { createRunSandboxLayout, verifyTeardownTargets } from '../e2e/orchestrator/run';
 import {
+  APPEARANCE_STARTUP_CASES,
+  APPEARANCE_STARTUP_ENV,
+  appearanceStoreDocument,
+  expandAppearanceStartupRuns,
+  linuxAppearanceStorePath,
+} from '../e2e/support/appearance-startup';
+import {
   evidenceTextIsSafe,
   isRetainableEvidenceFile,
   redactEvidenceText,
@@ -119,6 +126,40 @@ test('creates distinct storage layouts for sequential native specs', () => {
   expect(second.home).not.toBe(first.home);
   expect(second.temporary).not.toBe(first.temporary);
   expect(second.xdg).not.toEqual(first.xdg);
+});
+
+test('expands appearance startup into four seeded sandbox cases', () => {
+  const specs = [
+    '/repo/e2e/specs/login-smoke.e2e.ts',
+    '/repo/e2e/specs/appearance-startup.e2e.ts',
+    '/repo/e2e/specs/library-search.e2e.ts',
+  ];
+  const runs = expandAppearanceStartupRuns(specs);
+
+  expect(runs).toHaveLength(6);
+  expect(runs.filter((run) => run.spec.endsWith('login-smoke.e2e.ts'))).toEqual([
+    { spec: '/repo/e2e/specs/login-smoke.e2e.ts' },
+  ]);
+  expect(runs.filter((run) => run.spec.endsWith('library-search.e2e.ts'))).toEqual([
+    { spec: '/repo/e2e/specs/library-search.e2e.ts' },
+  ]);
+
+  const appearanceRuns = runs.filter((run) => run.spec.endsWith('appearance-startup.e2e.ts'));
+  expect(appearanceRuns.map((run) => run.appearanceCaseId)).toEqual(
+    APPEARANCE_STARTUP_CASES.map((entry) => entry.id),
+  );
+  expect(APPEARANCE_STARTUP_ENV).toBe('JELLYPILOT_E2E_APPEARANCE_CASE');
+
+  const storePath = linuxAppearanceStorePath('/tmp/sandbox/xdg/data');
+  expect(storePath).toBe('/tmp/sandbox/xdg/data/top.pigfun.jellypilot.webdriver/config.json');
+  expect(appearanceStoreDocument(APPEARANCE_STARTUP_CASES[0]!.appearance)).toEqual({
+    app_config: {
+      appearance: {
+        designTheme: 'controlRoom',
+        colorMode: 'dark',
+      },
+    },
+  });
 });
 
 test('ownership guards refuse unrelated directories and removal is idempotent', async () => {

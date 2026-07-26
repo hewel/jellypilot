@@ -12,8 +12,8 @@ mod now_playing;
 mod playback_control;
 mod tray;
 
-use command::{ConfigState, JellyfinState, MpvState};
-pub use config::AppConfig;
+use command::{AppearanceReadyState, ConfigState, JellyfinState, MpvState};
+pub use config::{AppConfig, Appearance, ColorMode, DesignTheme, OpaqueCanvasRgb};
 use image_cache::{ImageCache, ImageCacheState};
 use jellyfin::JellyfinClient;
 use mpv::MpvClient;
@@ -74,6 +74,7 @@ pub fn run() {
       },
     )
     .manage(config_state)
+    .manage(AppearanceReadyState::default())
     .manage(image_cache_state)
     .manage(mpv_state)
     .manage(jellyfin_state)
@@ -117,6 +118,19 @@ pub fn run() {
       // Apply loaded config to Jellyfin client
       jellyfin_for_setup.set_device_name(loaded_config.device_name.clone());
 
+      // Apply native Color Mode before first show and retain Appearance in memory.
+      if let Some(window) = app.get_webview_window("main") {
+        let theme = command::native_theme_for(loaded_config.appearance);
+        if let Err(error) = window.set_theme(Some(theme)) {
+          log::warn!("Failed to apply native theme before first paint: {error}");
+        }
+        if let Err(error) = window.set_background_color(Some(command::canvas_to_native_color(
+          OpaqueCanvasRgb::control_room_dark(),
+        ))) {
+          log::warn!("Failed to apply recovery canvas before first paint: {error}");
+        }
+      }
+
       // Store config in state
       *config_for_setup.write() = loaded_config;
 
@@ -126,6 +140,7 @@ pub fn run() {
       }
 
       builder.mount_events(app);
+      command::spawn_appearance_ready_watchdog(app.handle().clone());
       Ok(())
     })
     .on_window_event(|window, event| {

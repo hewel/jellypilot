@@ -79,7 +79,6 @@ export const commands = {
 	jellyfinRestoreSession: (session: SavedSession) => typedError<null, CommandError>(__TAURI_INVOKE("jellyfin_restore_session", { session })),
 	/**
 	 *  Clear/logout from the current session.
-	 * 
 	 *  This disconnects from the server. Saved service profile removal is handled
 	 *  by the profile-store commands.
 	 */
@@ -135,13 +134,20 @@ export const commands = {
 	/**  Complete Quick Connect reauthentication for a saved Jellyfin profile. */
 	serverProfilesReauthenticateQuickConnectAuthenticate: (key: string, secret: string) => typedError<SavedServiceProfiles, CommandError>(__TAURI_INVOKE("server_profiles_reauthenticate_quick_connect_authenticate", { key, secret })),
 	/**  Get the current app configuration. */
-	configGet: () => __TAURI_INVOKE<AppConfig>("config_get"),
+	configGet: () => __TAURI_INVOKE<AppConfig_Serialize>("config_get"),
 	/**  Update the app configuration, apply changes live, and persist to disk. */
-	configSet: (config: AppConfig) => typedError<null, CommandError>(__TAURI_INVOKE("config_set", { config })),
+	configSet: (config: AppConfig_Deserialize) => typedError<null, CommandError>(__TAURI_INVOKE("config_set", { config })),
 	/**  Get the default configuration. */
-	configDefault: () => __TAURI_INVOKE<AppConfig>("config_default"),
+	configDefault: () => __TAURI_INVOKE<AppConfig_Serialize>("config_default"),
 	/**  Detect MPV path automatically. */
 	configDetectMpv: () => __TAURI_INVOKE<string | null>("config_detect_mpv"),
+	/**  Get the current in-memory Appearance. */
+	appearanceGet: () => __TAURI_INVOKE<Appearance>("appearance_get"),
+	/**
+	 *  Apply native theme/canvas after frontend hydration and show the main window.
+	 *  Idempotent: subsequent matching calls are no-ops. Mismatched appearance fails safely.
+	 */
+	appearanceReady: (request: AppearanceReadyRequest) => typedError<null, CommandError>(__TAURI_INVOKE("appearance_ready", { request })),
 };
 
 /** Events */
@@ -155,7 +161,10 @@ export const events = {
 export type AdjacentEpisodeUnavailableReason = "noSession" | "noCurrentItem" | "notEpisode" | "unknown";
 
 /**  Application configuration. */
-export type AppConfig = {
+export type AppConfig = AppConfig_Serialize | AppConfig_Deserialize;
+
+/**  Application configuration. */
+export type AppConfig_Deserialize = {
 	/**  Custom MPV executable path (None = auto-detect). */
 	mpvPath?: string | null,
 	/**  Additional MPV command-line arguments. */
@@ -178,6 +187,36 @@ export type AppConfig = {
 	keybindPrev?: string,
 	/**  Keybinding for manual Intro Skipper seek in MPV. */
 	keybindIntroSkip?: string,
+	/**  Persisted Design Theme and Color Mode selection. */
+	appearance?: Appearance,
+};
+
+/**  Application configuration. */
+export type AppConfig_Serialize = {
+	/**  Custom MPV executable path (None = auto-detect). */
+	mpvPath: string | null,
+	/**  Additional MPV command-line arguments. */
+	mpvArgs: string[],
+	/**  Device name shown in Jellyfin cast menu. */
+	deviceName: string,
+	/**  Progress reporting interval in seconds. */
+	progressInterval: number,
+	/**  Start minimized to system tray. */
+	startMinimized: boolean,
+	/**  Intro Skipper plugin behavior mode. */
+	introSkipperMode: IntroSkipperMode,
+	/**  Ordered subtitle language codes to prefer when Jellyfin does not request a track. */
+	preferredSubtitleLanguages: string[],
+	/**  Cache Library Browser images on disk for faster repeat browsing. */
+	imageDiskCacheEnabled: boolean,
+	/**  Keybinding for next episode in MPV. */
+	keybindNext: string,
+	/**  Keybinding for previous episode in MPV. */
+	keybindPrev: string,
+	/**  Keybinding for manual Intro Skipper seek in MPV. */
+	keybindIntroSkip: string,
+	/**  Persisted Design Theme and Color Mode selection. */
+	appearance?: Appearance,
 };
 
 /**  App notification event emitted to frontend. */
@@ -185,6 +224,21 @@ export type AppNotification = {
 	level: NotificationLevel,
 	message: string,
 };
+
+/**  Persisted appearance selection. */
+export type Appearance = {
+	designTheme: DesignTheme,
+	colorMode: ColorMode,
+};
+
+/**  Payload accepted by `appearance_ready`. */
+export type AppearanceReadyRequest = {
+	appearance: Appearance,
+	canvas: OpaqueCanvasRgb,
+};
+
+/**  Light or dark color mode selected by Appearance. */
+export type ColorMode = "light" | "dark";
 
 /**  Typed command error for better frontend error handling. */
 export type CommandError = {
@@ -226,6 +280,9 @@ export type Credentials = {
 	password: string,
 };
 
+/**  Design theme family selected by Appearance. */
+export type DesignTheme = "controlRoom" | "braun";
+
 /**  Intro Skipper behavior mode. */
 export type IntroSkipperMode = "automatic" | "manual" | "off";
 
@@ -263,6 +320,13 @@ export type NowPlayingState = {
 
 /**  User-facing Now Playing status. */
 export type NowPlayingStatus = "offline" | "idle" | "playing" | "paused" | "unknown";
+
+/**  Opaque RGB canvas resolved from the hydrated Panda background. */
+export type OpaqueCanvasRgb = {
+	red: number,
+	green: number,
+	blue: number,
+};
 
 /**  Player transport state returned to frontend. */
 export type PlayerState = {

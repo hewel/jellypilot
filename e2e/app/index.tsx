@@ -1,5 +1,7 @@
 import { attachDevtoolsOverlay } from '@solid-devtools/overlay';
+import '@fontsource-variable/archivo';
 import '@fontsource-variable/inter';
+import '@fontsource-variable/jetbrains-mono';
 import '@fontsource-variable/space-grotesk';
 import { init as initializeWdio, waitForInit } from '@wdio/tauri-plugin';
 
@@ -11,6 +13,7 @@ import {
   createControlledInvoke,
   fixtureCallCount,
   fixtureSummary,
+  hasExpectedAppearanceReadyCall,
   hasExpectedLibraryPlayCall,
   hasExpectedReauthenticatePasswordCall,
   hasExpectedServerConnectCall,
@@ -24,6 +27,7 @@ declare global {
       readonly ready: true;
       callCount: typeof fixtureCallCount;
       fixtureSummary: typeof fixtureSummary;
+      hasExpectedAppearanceReadyCall: typeof hasExpectedAppearanceReadyCall;
       hasExpectedLibraryPlayCall: typeof hasExpectedLibraryPlayCall;
       hasExpectedReauthenticatePasswordCall: typeof hasExpectedReauthenticatePasswordCall;
       hasExpectedServerConnectCall: typeof hasExpectedServerConnectCall;
@@ -46,6 +50,7 @@ const controller: NonNullable<Window['__JELLYPILOT_E2E__']> = {
   ready: true,
   callCount: fixtureCallCount,
   fixtureSummary,
+  hasExpectedAppearanceReadyCall,
   hasExpectedLibraryPlayCall,
   hasExpectedReauthenticatePasswordCall,
   hasExpectedServerConnectCall,
@@ -54,7 +59,7 @@ const controller: NonNullable<Window['__JELLYPILOT_E2E__']> = {
   invokeForTest,
   mount: () => {
     controller.mount = undefined;
-    mountApplication();
+    void mountApplication();
   },
 };
 

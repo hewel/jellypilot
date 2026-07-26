@@ -1,16 +1,17 @@
-use parking_lot::RwLock;
+use parking_lot::{Mutex, RwLock};
 use serde::{Deserialize, Serialize};
 use specta::specta;
 #[cfg(debug_assertions)]
 use specta_typescript::Typescript;
 use std::sync::Arc;
-use tauri::State;
+use std::time::Duration;
+use tauri::{Manager, State, Theme};
 use tauri_specta::{collect_commands, collect_events, Builder, Event};
 
 use crate::auth_profiles::{
   load_profiles, save_profiles, SavedServiceProfileStore, SavedServiceProfiles,
 };
-use crate::config::AppConfig;
+use crate::config::{AppConfig, Appearance, ColorMode, OpaqueCanvasRgb};
 use crate::jellyfin::{
   AuthResponse, ConnectionState, Credentials, JellyfinClient, JellyfinError, MediaServerProvider,
   QuickConnectRequest, QuickConnectStatus, SavedSession, SessionManager, VideoHome,
@@ -791,7 +792,6 @@ pub async fn jellyfin_restore_session(
 }
 
 /// Clear/logout from the current session.
-///
 /// This disconnects from the server. Saved service profile removal is handled
 /// by the profile-store commands.
 #[tauri::command]
@@ -1199,6 +1199,166 @@ async fn stop_active_media_server_session(
 }
 
 // ============================================================================
+// Appearance Commands
+// ============================================================================
+
+/// Tracks whether the frontend has completed first-paint appearance readiness.
+#[derive(Default)]
+pub struct AppearanceReadyState(pub Mutex<bool>);
+
+/// Payload accepted by `appearance_ready`.
+#[derive(Debug, Clone, Serialize, Deserialize, specta::Type)]
+#[serde(rename_all = "camelCase")]
+pub struct AppearanceReadyRequest {
+  pub appearance: Appearance,
+  pub canvas: OpaqueCanvasRgb,
+}
+
+const APPEARANCE_READY_TIMEOUT: Duration = Duration::from_secs(10);
+
+pub(crate) fn native_theme_for(appearance: Appearance) -> Theme {
+  match appearance.color_mode {
+    ColorMode::Light => Theme::Light,
+    ColorMode::Dark => Theme::Dark,
+  }
+}
+
+pub(crate) fn canvas_to_native_color(canvas: OpaqueCanvasRgb) -> tauri::window::Color {
+  tauri::window::Color(canvas.red, canvas.green, canvas.blue, 255)
+}
+
+fn show_main_window_if_allowed(
+  window: &tauri::WebviewWindow,
+  start_minimized: bool,
+) -> Result<(), CommandError> {
+  if start_minimized {
+    return Ok(());
+  }
+  window.show().map_err(internal_err)?;
+  Ok(())
+}
+
+fn apply_native_appearance(
+  window: &tauri::WebviewWindow,
+  appearance: Appearance,
+  canvas: OpaqueCanvasRgb,
+  start_minimized: bool,
+) -> Result<(), CommandError> {
+  window
+    .set_theme(Some(native_theme_for(appearance)))
+    .map_err(internal_err)?;
+  window
+    .set_background_color(Some(canvas_to_native_color(canvas)))
+    .map_err(internal_err)?;
+  show_main_window_if_allowed(window, start_minimized)?;
+  Ok(())
+}
+
+/// Pure readiness decision used by the command and deterministic unit tests.
+pub(crate) fn evaluate_appearance_ready(
+  current: Appearance,
+  already_ready: bool,
+  request: &AppearanceReadyRequest,
+) -> Result<bool, CommandError> {
+  if request.appearance != current {
+    return Err(CommandError::invalid_input(
+      "appearanceReady payload does not match the current appearance",
+    ));
+  }
+  if already_ready {
+    return Ok(false);
+  }
+  Ok(true)
+}
+
+/// Pure watchdog decision used by setup and deterministic unit tests.
+pub(crate) fn evaluate_appearance_watchdog(
+  already_ready: bool,
+  start_minimized: bool,
+) -> Option<(Appearance, OpaqueCanvasRgb, bool)> {
+  if already_ready {
+    return None;
+  }
+  Some((
+    Appearance::control_room_dark(),
+    OpaqueCanvasRgb::control_room_dark(),
+    start_minimized,
+  ))
+}
+
+/// Get the current in-memory Appearance.
+#[tauri::command]
+#[specta]
+pub fn appearance_get(state: State<'_, ConfigState>) -> Appearance {
+  state.0.read().appearance
+}
+
+/// Apply native theme/canvas after frontend hydration and show the main window.
+/// Idempotent: subsequent matching calls are no-ops. Mismatched appearance fails safely.
+#[tauri::command]
+#[specta]
+pub fn appearance_ready(
+  app: tauri::AppHandle,
+  config_state: State<'_, ConfigState>,
+  ready_state: State<'_, AppearanceReadyState>,
+  request: AppearanceReadyRequest,
+) -> Result<(), CommandError> {
+  let mut ready_guard = ready_state.0.lock();
+  let (current, start_minimized) = {
+    let config = config_state.0.read();
+    (config.appearance, config.start_minimized)
+  };
+  let should_apply = evaluate_appearance_ready(current, *ready_guard, &request)?;
+  if !should_apply {
+    return Ok(());
+  }
+
+  let window = app
+    .get_webview_window("main")
+    .ok_or_else(|| CommandError::internal("Main window not found"))?;
+
+  apply_native_appearance(&window, request.appearance, request.canvas, start_minimized)?;
+  *ready_guard = true;
+  log::info!(
+    "Appearance ready: theme={:?} mode={:?}",
+    request.appearance.design_theme,
+    request.appearance.color_mode
+  );
+  Ok(())
+}
+
+/// Start the 10-second readiness watchdog after setup.
+pub fn spawn_appearance_ready_watchdog(app: tauri::AppHandle) {
+  tauri::async_runtime::spawn(async move {
+    tokio::time::sleep(APPEARANCE_READY_TIMEOUT).await;
+
+    let ready_state = app.state::<AppearanceReadyState>();
+    let config_state = app.state::<ConfigState>();
+    let mut ready_guard = ready_state.0.lock();
+    let start_minimized = config_state.0.read().start_minimized;
+
+    let Some((appearance, canvas, start_minimized)) =
+      evaluate_appearance_watchdog(*ready_guard, start_minimized)
+    else {
+      return;
+    };
+
+    log::warn!(
+      "Appearance readiness timed out after {}s; failing open on Control Room Dark",
+      APPEARANCE_READY_TIMEOUT.as_secs()
+    );
+
+    if let Some(window) = app.get_webview_window("main") {
+      if let Err(error) = apply_native_appearance(&window, appearance, canvas, start_minimized) {
+        log::error!("Failed to apply appearance watchdog recovery: {error}");
+      } else {
+        *ready_guard = true;
+      }
+    }
+  });
+}
+
+// ============================================================================
 // Config Commands
 // ============================================================================
 
@@ -1388,6 +1548,9 @@ pub fn specta_builder() -> Builder<tauri::Wry> {
       config_set,
       config_default,
       config_detect_mpv,
+      // Appearance commands
+      appearance_get,
+      appearance_ready,
     ])
     .events(collect_events![AppNotification, NowPlayingChanged]);
 
@@ -1526,6 +1689,110 @@ mod tests {
       ..emby
     };
     assert!(require_jellyfin_profile(&jellyfin).is_ok());
+  }
+
+  #[test]
+  fn appearance_ready_rejects_mismatched_appearance() {
+    let current = Appearance::control_room_dark();
+    let request = AppearanceReadyRequest {
+      appearance: Appearance {
+        design_theme: crate::config::DesignTheme::Braun,
+        color_mode: ColorMode::Light,
+      },
+      canvas: OpaqueCanvasRgb::control_room_dark(),
+    };
+
+    let err = evaluate_appearance_ready(current, false, &request)
+      .expect_err("mismatched appearance must fail");
+
+    assert!(matches!(err.code, CommandErrorCode::InvalidInput));
+    assert!(err.message.contains("does not match"));
+  }
+
+  #[test]
+  fn appearance_ready_is_idempotent_for_matching_payload() {
+    let current = Appearance {
+      design_theme: crate::config::DesignTheme::Braun,
+      color_mode: ColorMode::Dark,
+    };
+    let request = AppearanceReadyRequest {
+      appearance: current,
+      canvas: OpaqueCanvasRgb {
+        red: 12,
+        green: 14,
+        blue: 18,
+      },
+    };
+
+    assert!(evaluate_appearance_ready(current, false, &request).expect("first ready applies"));
+    assert!(!evaluate_appearance_ready(current, true, &request).expect("second ready is no-op"));
+  }
+
+  #[test]
+  fn appearance_watchdog_fails_open_on_control_room_dark() {
+    let decision = evaluate_appearance_watchdog(false, false)
+      .expect("watchdog should fire when readiness is missing");
+
+    assert_eq!(decision.0, Appearance::control_room_dark());
+    assert_eq!(decision.1, OpaqueCanvasRgb::control_room_dark());
+    assert!(!decision.2);
+  }
+
+  #[test]
+  fn appearance_watchdog_respects_start_minimized() {
+    let decision = evaluate_appearance_watchdog(false, true)
+      .expect("watchdog should still recover while minimized");
+
+    assert!(decision.2);
+  }
+
+  #[test]
+  fn appearance_watchdog_skips_when_already_ready() {
+    assert!(evaluate_appearance_watchdog(true, false).is_none());
+  }
+
+  #[test]
+  fn appearance_ready_state_serializes_decision_and_update() {
+    let ready_state = AppearanceReadyState::default();
+    let current = Appearance {
+      design_theme: crate::config::DesignTheme::Braun,
+      color_mode: ColorMode::Dark,
+    };
+    let request = AppearanceReadyRequest {
+      appearance: current,
+      canvas: OpaqueCanvasRgb {
+        red: 12,
+        green: 14,
+        blue: 18,
+      },
+    };
+
+    {
+      let mut ready = ready_state.0.lock();
+      assert!(evaluate_appearance_ready(current, *ready, &request).expect("first apply"));
+      *ready = true;
+    }
+
+    {
+      let ready = ready_state.0.lock();
+      assert!(!evaluate_appearance_ready(current, *ready, &request).expect("second is no-op"));
+      assert!(evaluate_appearance_watchdog(*ready, false).is_none());
+    }
+  }
+
+  #[test]
+  fn native_theme_follows_color_mode_only() {
+    assert_eq!(
+      native_theme_for(Appearance {
+        design_theme: crate::config::DesignTheme::Braun,
+        color_mode: ColorMode::Light,
+      }),
+      Theme::Light
+    );
+    assert_eq!(
+      native_theme_for(Appearance::control_room_dark()),
+      Theme::Dark
+    );
   }
 
   #[test]

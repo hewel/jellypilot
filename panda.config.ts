@@ -1,6 +1,9 @@
 import { defineConfig } from '@pandacss/dev';
 
 import {
+  appearanceSemanticColors,
+  braunFonts,
+  braunRadii,
   breakpoints,
   durations,
   easings,
@@ -15,6 +18,7 @@ import {
   shadows,
   spacing,
   zIndex,
+  type SemanticColorRole,
 } from './src/styles/theme-tokens';
 
 const tokenEntries = <T extends Record<string, string>>(values: T) =>
@@ -33,6 +37,22 @@ const semanticColorTokens = Object.fromEntries(
   Object.entries(semanticColorRefs).map(([role, ref]) => [role, { value: `{${ref}}` }]),
 );
 
+const modeAwareSemanticColors = (
+  darkValues: Record<SemanticColorRole, string>,
+  lightValues: Record<SemanticColorRole, string>,
+) =>
+  Object.fromEntries(
+    (Object.keys(darkValues) as SemanticColorRole[]).map((role) => [
+      role,
+      {
+        value: {
+          base: darkValues[role],
+          _light: lightValues[role],
+        },
+      },
+    ]),
+  );
+
 export default defineConfig({
   // Empty presets drop opinionated default tokens while keeping base utilities.
   presets: [],
@@ -47,7 +67,12 @@ export default defineConfig({
     extend: {
       // Ark select open indicator (used by shared select styling later).
       selectOpen: '[data-scope="select"][data-part="indicator"][data-state="open"] &',
+      light: '[data-color-mode=light] &',
+      dark: '[data-color-mode=dark] &',
     },
+  },
+  staticCss: {
+    themes: ['control-room', 'braun'],
   },
   globalCss: {
     '*, *::before, *::after': {
@@ -58,7 +83,7 @@ export default defineConfig({
       minHeight: '100dvh',
       position: 'relative',
       color: 'onSurface',
-      fontFamily: 'sans',
+      fontFamily: 'body',
       WebkitFontSmoothing: 'antialiased',
       MozOsxFontSmoothing: 'grayscale',
       background: '{colors.background}',
@@ -93,6 +118,34 @@ export default defineConfig({
     },
     '::-webkit-scrollbar-thumb:hover': {
       background: 'outline',
+    },
+  },
+  themes: {
+    'control-room': {
+      semanticTokens: {
+        colors: modeAwareSemanticColors(
+          appearanceSemanticColors['control-room'].dark,
+          appearanceSemanticColors['control-room'].light,
+        ),
+        fonts: tokenEntries(fonts),
+        radii: tokenEntries(radii),
+        durations: tokenEntries(durations),
+      },
+    },
+    braun: {
+      tokens: {
+        fonts: tokenEntries(braunFonts),
+        radii: tokenEntries(braunRadii),
+      },
+      semanticTokens: {
+        colors: modeAwareSemanticColors(
+          appearanceSemanticColors.braun.dark,
+          appearanceSemanticColors.braun.light,
+        ),
+        fonts: tokenEntries(braunFonts),
+        radii: tokenEntries(braunRadii),
+        durations: tokenEntries(durations),
+      },
     },
   },
   theme: {
@@ -166,7 +219,69 @@ export default defineConfig({
       easings: tokenEntries(easings),
     },
     semanticTokens: {
-      colors: semanticColorTokens,
+      colors: {
+        ...semanticColorTokens,
+        success: { value: '{colors.teal.400}' },
+        onSuccess: { value: '{colors.teal.1000}' },
+        successContainer: { value: '{colors.teal.900}' },
+        onSuccessContainer: { value: '{colors.teal.50}' },
+        successIndicator: { value: '{colors.teal.400}' },
+        info: { value: '{colors.indigo.300}' },
+        onInfo: { value: '{colors.indigo.1000}' },
+        infoContainer: { value: '{colors.indigo.900}' },
+        onInfoContainer: { value: '{colors.indigo.50}' },
+        infoIndicator: { value: '{colors.indigo.300}' },
+        neutral: { value: '{colors.neutral.300}' },
+        onNeutral: { value: '{colors.neutral.975}' },
+        neutralContainer: { value: '{colors.neutral.800}' },
+        onNeutralContainer: { value: '{colors.neutral.50}' },
+        neutralIndicator: { value: '{colors.neutral.300}' },
+        warningIndicator: { value: '{colors.amber.400}' },
+        errorIndicator: { value: '{colors.red.400}' },
+        focusRing: { value: '{colors.indigo.300}' },
+        artworkOutline: { value: '{colors.neutral.0}' },
+        artworkShadow: { value: '{colors.neutral.1000}' },
+        materialSurfaceRaised: { value: '{colors.neutral.900}' },
+        materialSurfaceRecessed: { value: '{colors.neutral.950}' },
+        materialSurfaceAcrylic: { value: '{colors.neutral.900}' },
+        materialSurfaceGlass: { value: '{colors.neutral.850}' },
+        materialSurfaceKey: { value: '{colors.neutral.850}' },
+        materialSurfaceKeyHover: { value: '{colors.neutral.800}' },
+        materialSurfacePressed: { value: '{colors.neutral.750}' },
+        materialEdgeSubtle: { value: '{colors.neutral.700}' },
+        materialEdgeNormal: { value: '{colors.neutral.500}' },
+        materialEdgeStrong: { value: '{colors.neutral.300}' },
+        materialEdgeSpecular: { value: '{colors.neutral.50}' },
+        materialDepthAmbient: { value: '{colors.neutral.1000}' },
+        materialDepthRaised: { value: '{colors.neutral.1000}' },
+        materialDepthRecessed: { value: '{colors.neutral.1000}' },
+        materialDepthOverlay: { value: '{colors.neutral.1000}' },
+        materialDepthKeycap: { value: '{colors.neutral.1000}' },
+        materialDepthPressed: { value: '{colors.neutral.1000}' },
+        materialDepthIndicator: { value: '{colors.teal.400}' },
+      },
+      fonts: {
+        body: { value: "'Inter Variable', ui-sans-serif, system-ui, sans-serif" },
+        display: {
+          value: "'Space Grotesk Variable', 'Inter Variable', ui-sans-serif, system-ui, sans-serif",
+        },
+        readout: {
+          value: 'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace',
+        },
+      },
+      radii: {
+        panel: { value: '{radii.2xl}' },
+        control: { value: '{radii.xl}' },
+        overlay: { value: '{radii.3xl}' },
+        artwork: { value: '{radii.xl}' },
+        indicator: { value: '{radii.full}' },
+      },
+      durations: {
+        interaction: { value: '{durations.150}' },
+        overlay: { value: '{durations.200}' },
+        appearance: { value: '{durations.200}' },
+        mechanical: { value: '{durations.100}' },
+      },
     },
   },
 });

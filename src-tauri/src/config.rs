@@ -12,6 +12,101 @@ pub enum IntroSkipperMode {
   Off,
 }
 
+/// Design theme family selected by Appearance.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub enum DesignTheme {
+  ControlRoom,
+  Braun,
+}
+
+/// Light or dark color mode selected by Appearance.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub enum ColorMode {
+  Light,
+  Dark,
+}
+
+/// Persisted appearance selection.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct Appearance {
+  pub design_theme: DesignTheme,
+  pub color_mode: ColorMode,
+}
+
+impl Appearance {
+  /// Control Room Dark recovery and default appearance.
+  pub const fn control_room_dark() -> Self {
+    Self {
+      design_theme: DesignTheme::ControlRoom,
+      color_mode: ColorMode::Dark,
+    }
+  }
+
+  /// Whether this is the Control Room Dark recovery appearance.
+  pub const fn is_control_room_dark(self) -> bool {
+    matches!(
+      (self.design_theme, self.color_mode),
+      (DesignTheme::ControlRoom, ColorMode::Dark)
+    )
+  }
+}
+
+impl Default for Appearance {
+  fn default() -> Self {
+    Self::control_room_dark()
+  }
+}
+
+/// Opaque RGB canvas resolved from the hydrated Panda background.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct OpaqueCanvasRgb {
+  pub red: u8,
+  pub green: u8,
+  pub blue: u8,
+}
+
+impl OpaqueCanvasRgb {
+  /// Control Room Dark recovery canvas `#05060a`.
+  pub const fn control_room_dark() -> Self {
+    Self {
+      red: 0x05,
+      green: 0x06,
+      blue: 0x0a,
+    }
+  }
+}
+
+#[allow(dead_code)] // referenced by serde(default) on AppConfig::appearance
+fn default_appearance() -> Appearance {
+  Appearance::control_room_dark()
+}
+
+fn is_default_appearance(appearance: &Appearance) -> bool {
+  appearance.is_control_room_dark()
+}
+
+/// Decode nested appearance without failing the surrounding AppConfig.
+///
+/// Missing values default silently. Malformed or unknown values log a warning
+/// and fall back to Control Room Dark.
+pub fn decode_appearance_value(value: Option<&serde_json::Value>) -> Appearance {
+  let Some(value) = value else {
+    return Appearance::control_room_dark();
+  };
+
+  match serde_json::from_value::<Appearance>(value.clone()) {
+    Ok(appearance) => appearance,
+    Err(error) => {
+      log::warn!("Invalid appearance configuration, falling back to Control Room Dark: {error}");
+      Appearance::control_room_dark()
+    }
+  }
+}
+
 /// Application configuration.
 #[derive(Debug, Clone, Serialize, Type)]
 #[serde(rename_all = "camelCase")]
@@ -59,6 +154,13 @@ pub struct AppConfig {
   /// Keybinding for manual Intro Skipper seek in MPV.
   #[serde(default = "default_keybind_intro_skip")]
   pub keybind_intro_skip: String,
+
+  /// Persisted Design Theme and Color Mode selection.
+  #[serde(
+    default = "default_appearance",
+    skip_serializing_if = "is_default_appearance"
+  )]
+  pub appearance: Appearance,
 }
 
 #[derive(Debug, Deserialize)]
@@ -88,6 +190,8 @@ struct AppConfigWire {
   keybind_prev: String,
   #[serde(default = "default_keybind_intro_skip")]
   keybind_intro_skip: String,
+  #[serde(default)]
+  appearance: Option<serde_json::Value>,
 }
 
 impl<'de> Deserialize<'de> for AppConfig {
@@ -116,6 +220,7 @@ impl<'de> Deserialize<'de> for AppConfig {
       keybind_next: wire.keybind_next,
       keybind_prev: wire.keybind_prev,
       keybind_intro_skip: wire.keybind_intro_skip,
+      appearance: decode_appearance_value(wire.appearance.as_ref()),
     })
   }
 }
@@ -162,6 +267,7 @@ impl Default for AppConfig {
       keybind_next: default_keybind_next(),
       keybind_prev: default_keybind_prev(),
       keybind_intro_skip: default_keybind_intro_skip(),
+      appearance: Appearance::control_room_dark(),
     }
   }
 }
@@ -208,6 +314,13 @@ mod tests {
   }
 
   #[test]
+  fn default_config_uses_control_room_dark_appearance() {
+    let config = AppConfig::default();
+
+    assert_eq!(config.appearance, Appearance::control_room_dark());
+  }
+
+  #[test]
   fn older_saved_config_deserializes_with_default_automatic_intro_skipper_mode() {
     let config: AppConfig = serde_json::from_str(
       r#"{
@@ -223,6 +336,80 @@ mod tests {
     assert_eq!(config.intro_skipper_mode, IntroSkipperMode::Automatic);
     assert!(config.preferred_subtitle_languages.is_empty());
     assert!(config.image_disk_cache_enabled);
+    assert_eq!(config.appearance, Appearance::control_room_dark());
+  }
+
+  #[test]
+  fn missing_appearance_defaults_to_control_room_dark_silently() {
+    let config: AppConfig = serde_json::from_str(
+      r#"{
+        "deviceName": "Living Room",
+        "progressInterval": 7,
+        "startMinimized": true,
+        "keybindNext": "Shift+n",
+        "keybindPrev": "Shift+p"
+      }"#,
+    )
+    .expect("config without appearance should deserialize");
+
+    assert_eq!(config.device_name, "Living Room");
+    assert_eq!(config.progress_interval, 7);
+    assert!(config.start_minimized);
+    assert_eq!(config.appearance, Appearance::control_room_dark());
+  }
+
+  #[test]
+  fn invalid_appearance_falls_back_while_preserving_unrelated_fields() {
+    let config: AppConfig = serde_json::from_str(
+      r#"{
+        "deviceName": "Living Room",
+        "progressInterval": 9,
+        "startMinimized": true,
+        "introSkipperMode": "manual",
+        "preferredSubtitleLanguages": ["eng"],
+        "imageDiskCacheEnabled": false,
+        "keybindNext": "n",
+        "keybindPrev": "p",
+        "keybindIntroSkip": "i",
+        "appearance": {
+          "designTheme": "not-a-theme",
+          "colorMode": "dark"
+        }
+      }"#,
+    )
+    .expect("invalid appearance must not discard the config");
+
+    assert_eq!(config.device_name, "Living Room");
+    assert_eq!(config.progress_interval, 9);
+    assert!(config.start_minimized);
+    assert_eq!(config.intro_skipper_mode, IntroSkipperMode::Manual);
+    assert_eq!(config.preferred_subtitle_languages, vec!["eng".to_string()]);
+    assert!(!config.image_disk_cache_enabled);
+    assert_eq!(config.keybind_next, "n");
+    assert_eq!(config.keybind_prev, "p");
+    assert_eq!(config.keybind_intro_skip, "i");
+    assert_eq!(config.appearance, Appearance::control_room_dark());
+  }
+
+  #[test]
+  fn valid_appearance_combinations_deserialize() {
+    let config: AppConfig = serde_json::from_str(
+      r#"{
+        "appearance": {
+          "designTheme": "braun",
+          "colorMode": "light"
+        }
+      }"#,
+    )
+    .expect("valid appearance should deserialize");
+
+    assert_eq!(
+      config.appearance,
+      Appearance {
+        design_theme: DesignTheme::Braun,
+        color_mode: ColorMode::Light,
+      }
+    );
   }
 
   #[test]
@@ -252,5 +439,11 @@ mod tests {
       err,
       "Preferred subtitle languages cannot contain empty entries"
     );
+  }
+
+  #[test]
+  fn default_appearance_is_omitted_from_serialized_config() {
+    let json = serde_json::to_value(AppConfig::default()).expect("serialize default config");
+    assert!(json.get("appearance").is_none());
   }
 }

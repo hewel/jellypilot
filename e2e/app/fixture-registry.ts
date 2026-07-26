@@ -1,9 +1,11 @@
 import type {
+  Appearance,
   AppConfig,
   CommandError,
   ConnectionState,
   Credentials,
   NowPlayingState,
+  OpaqueCanvasRgb,
   SavedServiceProfiles,
   VideoHome,
   VideoItemDetail,
@@ -26,6 +28,8 @@ export const EXPECTED_CREDENTIALS = {
 } as const satisfies Credentials;
 
 interface RawCommandMap {
+  appearance_get: Appearance;
+  appearance_ready: null;
   config_default: unknown;
   config_get: AppConfig;
   library_browse_video: VideoLibraryPage;
@@ -37,6 +41,8 @@ interface RawCommandMap {
   library_video_shortcuts: VideoLibraryShortcut[];
   mpv_is_connected: boolean;
   now_playing_get_state: NowPlayingState;
+  'plugin:window|is_visible': boolean;
+  'plugin:window|theme': string | null;
   server_connect: null;
   server_get_state: ConnectionState;
   server_is_connected: boolean;
@@ -46,7 +52,12 @@ interface RawCommandMap {
 }
 
 export type FixtureCommand = keyof RawCommandMap;
-export type SafeRealCommand = 'config_default';
+export type SafeRealCommand =
+  | 'appearance_get'
+  | 'appearance_ready'
+  | 'config_default'
+  | 'plugin:window|is_visible'
+  | 'plugin:window|theme';
 
 export type FixtureOutcome<C extends FixtureCommand = FixtureCommand> =
   | { readonly kind: 'return'; readonly value: RawCommandMap[C] }
@@ -62,12 +73,31 @@ type StoredFixtureOutcome =
       [C in FixtureCommand]: { readonly kind: 'return'; readonly value: RawCommandMap[C] };
     }[FixtureCommand];
 
-const safeRealCommands = new Set<SafeRealCommand>(['config_default']);
+export const DEFAULT_APPEARANCE = {
+  designTheme: 'controlRoom',
+  colorMode: 'dark',
+} as const satisfies Appearance;
+
+export const DEFAULT_APPEARANCE_CANVAS = {
+  red: 5,
+  green: 6,
+  blue: 10,
+} as const satisfies OpaqueCanvasRgb;
+
+const safeRealCommands = new Set<SafeRealCommand>([
+  'appearance_get',
+  'appearance_ready',
+  'config_default',
+  'plugin:window|is_visible',
+  'plugin:window|theme',
+]);
 const fixtures = new Map<FixtureCommand, StoredFixtureOutcome>();
 const calls = new Map<FixtureCommand, InvokeArgs[]>();
 
 function parseFixtureCommand(command: string): FixtureCommand | undefined {
   if (
+    command === 'appearance_get' ||
+    command === 'appearance_ready' ||
     command === 'config_default' ||
     command === 'config_get' ||
     command === 'library_browse_video' ||
@@ -79,6 +109,8 @@ function parseFixtureCommand(command: string): FixtureCommand | undefined {
     command === 'library_video_shortcuts' ||
     command === 'mpv_is_connected' ||
     command === 'now_playing_get_state' ||
+    command === 'plugin:window|is_visible' ||
+    command === 'plugin:window|theme' ||
     command === 'server_connect' ||
     command === 'server_get_state' ||
     command === 'server_is_connected' ||
@@ -107,6 +139,10 @@ export function installStartupFixtures(): void {
   });
   fixtures.set('server_connect', { kind: 'error', error: FIXTURE_NETWORK_ERROR });
   fixtures.set('config_default', { kind: 'real' });
+  fixtures.set('appearance_get', { kind: 'return', value: DEFAULT_APPEARANCE });
+  fixtures.set('appearance_ready', { kind: 'real' });
+  fixtures.set('plugin:window|is_visible', { kind: 'real' });
+  fixtures.set('plugin:window|theme', { kind: 'real' });
 }
 
 export function installFixture<C extends FixtureCommand>(
@@ -130,7 +166,7 @@ export function createControlledInvoke(realInvoke: RealInvoke): RealInvoke {
 
     if (outcome.kind === 'return') return outcome.value as T;
     if (outcome.kind === 'error') throw outcome.error;
-    if (fixtureCommand !== 'config_default' || !safeRealCommands.has(fixtureCommand)) {
+    if (!safeRealCommands.has(fixtureCommand as SafeRealCommand)) {
       throw new Error(`Rejected unsafe real E2E IPC command: ${command}`);
     }
 
@@ -197,6 +233,35 @@ export function hasExpectedServerConnectCall(): boolean {
     credentials.username === EXPECTED_CREDENTIALS.username &&
     'password' in credentials &&
     credentials.password === EXPECTED_CREDENTIALS.password
+  );
+}
+
+export function hasExpectedAppearanceReadyCall(
+  expectedAppearance: Appearance,
+  expectedCanvas: OpaqueCanvasRgb,
+): boolean {
+  const commandCalls = calls.get('appearance_ready');
+  if (!commandCalls || commandCalls.length !== 1) return false;
+
+  const request = commandCalls[0]?.request;
+  if (!request || typeof request !== 'object') return false;
+
+  const appearance = 'appearance' in request ? request.appearance : undefined;
+  const canvas = 'canvas' in request ? request.canvas : undefined;
+  if (!appearance || typeof appearance !== 'object') return false;
+  if (!canvas || typeof canvas !== 'object') return false;
+
+  return (
+    'designTheme' in appearance &&
+    appearance.designTheme === expectedAppearance.designTheme &&
+    'colorMode' in appearance &&
+    appearance.colorMode === expectedAppearance.colorMode &&
+    'red' in canvas &&
+    canvas.red === expectedCanvas.red &&
+    'green' in canvas &&
+    canvas.green === expectedCanvas.green &&
+    'blue' in canvas &&
+    canvas.blue === expectedCanvas.blue
   );
 }
 

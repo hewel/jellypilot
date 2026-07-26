@@ -15,3 +15,7 @@ export class CommandError extends Data.TaggedError('CommandError')<{
   readonly code?: CommandErrorCode;
   readonly message: string;
 }> {}
+
+export class AppearanceCanvasError extends Data.TaggedError('AppearanceCanvasError')<{
+  readonly message: string;
+}> {}
