@@ -4,44 +4,45 @@ export const toast = cva({
   base: {
     alignItems: 'center',
     borderRadius: 'xl',
-    boxShadow: 'md',
+    boxShadow: '[0 10px 18px -6px {colors.materialDepthOverlay}]',
     display: 'flex',
     mb: '4',
     p: '4',
     width: 'full',
-    backdropFilter: '[blur(12px)]',
     borderWidth: '1px',
     borderStyle: 'solid',
-    maxWidth: '[24rem]',
+    maxWidth: '[min(24rem, calc(100vw - 2rem))]',
     pointerEvents: 'auto',
     transitionDuration: '200',
     transitionProperty: '[filter, opacity, transform]',
     transitionTimingFunction: 'standard',
+    _motionReduce: {
+      animation: '[none]',
+      filter: '[none]',
+      transform: '[none]',
+      transitionDuration: '100',
+    },
   },
   variants: {
     level: {
       error: {
-        bg: 'errorContainer/85',
-        borderColor: 'error/25',
-        boxShadow: '[var(--shadows-2xl), 0 25px 50px -12px {colors.error/10}]',
+        bg: 'errorContainer',
+        borderColor: 'error',
         color: 'onErrorContainer',
       },
       info: {
-        bg: 'surfaceContainerHigh/90',
-        borderColor: 'outlineVariant/60',
-        boxShadow: '2xl',
-        color: 'onSurface',
+        bg: 'infoContainer',
+        borderColor: 'info',
+        color: 'onInfoContainer',
       },
       success: {
-        bg: 'surfaceContainerHigh/90',
-        borderColor: 'tertiary/20',
-        boxShadow: '[var(--shadows-2xl), 0 25px 50px -12px {colors.tertiary/5}]',
-        color: 'onSurface',
+        bg: 'successContainer',
+        borderColor: 'success',
+        color: 'onSuccessContainer',
       },
       warning: {
-        bg: 'warningContainer/85',
-        borderColor: 'warning/25',
-        boxShadow: '[var(--shadows-2xl), 0 25px 50px -12px {colors.warning/10}]',
+        bg: 'warningContainer',
+        borderColor: 'warning',
         color: 'onWarningContainer',
       },
     },
@@ -114,6 +115,13 @@ export const closeButton = css({
   transitionTimingFunction: 'standard',
   _hover: {
     bg: 'onSurface/10',
+  },
+  _focusVisible: {
+    outline: '[2px solid {colors.focusRing}]',
+    outlineOffset: '[2px]',
+  },
+  _motionReduce: {
+    transitionDuration: '100',
   },
 });
 

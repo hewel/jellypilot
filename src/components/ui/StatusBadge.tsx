@@ -1,6 +1,5 @@
+import type { StatusBadgeVariant } from './StatusBadge.styles';
 import * as styles from './StatusBadge.styles';
-
-type StatusBadgeVariant = 'success' | 'warning' | 'error' | 'neutral';
 
 interface StatusBadgeProps {
   variant?: StatusBadgeVariant;
@@ -9,6 +8,7 @@ interface StatusBadgeProps {
 
 /**
  * Control Room status badge for displaying state indicators.
+ * Text always accompanies the LED so color is never the only status signal.
  */
 export default function StatusBadge(props: StatusBadgeProps) {
   const variant = () => props.variant ?? 'neutral';

@@ -26,8 +26,8 @@ export const card = css({
     borderColor: 'primary/50',
   },
   _focusVisible: {
-    boxShadow: '[0 0 0 2px color-mix(in srgb, {colors.secondary} 70%, transparent), {shadows.xl}]',
-    outline: 'none',
+    outline: '[2px solid {colors.focusRing}]',
+    outlineOffset: '[2px]',
   },
   _active: {
     transform: '[scale(0.96)]',
@@ -65,7 +65,7 @@ export const homeCardAction = css({
     },
   },
   _focusVisible: {
-    outline: '[2px solid {colors.secondary}]',
+    outline: '[2px solid {colors.focusRing}]',
     outlineOffset: '1',
     '& [data-play-badge]': {
       bg: 'surface/85',
@@ -101,8 +101,8 @@ export const artwork = css({
 
 export const homeArtwork = css({
   borderRadius: '2xl',
-  boxShadow: 'md',
-  outline: '[1px solid rgb(255 255 255 / 0.1)]',
+  boxShadow: '[0 4px 8px -2px {colors.artworkShadow}]',
+  outline: '[1px solid {colors.artworkOutline}/10]',
   outlineOffset: '[-1px]',
 });
 

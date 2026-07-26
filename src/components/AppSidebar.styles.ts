@@ -16,9 +16,8 @@ export const nav = cva({
       bg: '[transparent]',
       borderRightColor: '[transparent]',
     },
-    backdropFilter: '[blur(20px)]',
-    bg: 'surfaceContainerLow/70',
-    borderRightColor: 'outlineVariant/40',
+    bg: 'materialSurfaceRaised',
+    borderRightColor: 'materialEdgeSubtle',
     borderRightStyle: 'solid',
     borderRightWidth: '1px',
     display: 'flex',
@@ -29,6 +28,11 @@ export const nav = cva({
     py: '2',
     width: '[4rem]',
     zIndex: '40',
+    boxShadow: '[0 1px 2px 0 {colors.materialDepthRaised}]',
+    '@supports (backdrop-filter: blur(1px))': {
+      backdropFilter: '[blur(20px)]',
+      bg: 'materialSurfaceAcrylic/85',
+    },
     lg: {
       width: '[16rem]',
     },
@@ -96,8 +100,11 @@ export const item = cva({
     transitionDuration: '200',
     transitionProperty: '[background-color, color]',
     transitionTimingFunction: 'standard',
+    _motionReduce: {
+      transitionDuration: '100',
+    },
     _focusVisible: {
-      outline: '[2px solid {colors.primary}]',
+      outline: '[2px solid {colors.focusRing}]',
       outlineOffset: '[2px]',
     },
     _hover: {
@@ -139,11 +146,12 @@ export const itemIconSlot = css({
 });
 
 export const itemThumb = css({
-  borderRadius: 'md',
+  borderRadius: 'artwork',
   flexShrink: '0',
   height: '6',
   objectFit: 'cover',
-  outline: '[1px solid rgba(255, 255, 255, 0.1)]',
+  boxShadow: '[0 4px 8px -2px {colors.artworkShadow}]',
+  outline: '[1px solid {colors.artworkOutline}/10]',
   outlineOffset: '[-1px]',
   width: '6',
 });

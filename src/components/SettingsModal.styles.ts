@@ -55,11 +55,10 @@ export const positioner = css({
 });
 
 export const content = css({
-  backdropFilter: '[blur(24px)]',
-  bg: 'surfaceContainerLow/60',
+  bg: 'materialSurfaceRaised',
   borderWidth: '1px',
   borderStyle: 'solid',
-  borderColor: 'outlineVariant/30',
+  borderColor: 'materialEdgeSubtle',
   display: 'flex',
   flexDirection: 'column',
   height: 'full',
@@ -69,6 +68,15 @@ export const content = css({
   transitionProperty: '[opacity, transform]',
   transitionTimingFunction: 'standard',
   width: 'full',
+  '@supports (backdrop-filter: blur(1px))': {
+    backdropFilter: '[blur(24px)]',
+    bg: 'materialSurfaceAcrylic/85',
+  },
+  _motionReduce: {
+    backdropFilter: '[none]',
+    transitionDuration: '100',
+    transform: '[none]',
+  },
   '&[data-state="closed"]': {
     opacity: '[0]',
     transform: '[translateY({spacing.1})]',
@@ -81,11 +89,10 @@ export const content = css({
 
 export const header = css({
   alignItems: 'center',
-  backdropFilter: '[blur(24px)]',
-  bg: 'surfaceContainerLow/70',
+  bg: 'materialSurfaceRaised',
   borderBottomWidth: '1px',
   borderBottomStyle: 'solid',
-  borderBottomColor: 'outlineVariant/40',
+  borderBottomColor: 'materialEdgeSubtle',
   display: 'flex',
   gap: '3',
   justifyContent: 'space-between',

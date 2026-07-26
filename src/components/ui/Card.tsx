@@ -1,5 +1,5 @@
 import { cx } from '@styled-system/css';
-import { Show, splitProps } from 'solid-js';
+import { splitProps } from 'solid-js';
 import type { JSX } from 'solid-js';
 import { Dynamic } from 'solid-js/web';
 
@@ -11,30 +11,18 @@ export interface CardProps extends JSX.HTMLAttributes<HTMLElement> {
   as?: 'div' | 'section' | 'article' | 'aside';
   variant?: CardVariant;
   padding?: 'default' | 'none';
-  surfaceTint?: boolean;
   class?: string;
   children: JSX.Element;
 }
 
-const tintOverlay = (<div class={styles.tintOverlay} />) as JSX.Element;
-
 /**
  * Control Room card surface. The only card API in the app.
  * @param variant - 'filled' (default), 'elevated', or 'outlined'
- * @param surfaceTint - render the subtle brand tint overlay (default true)
  */
 export function Card(props: CardProps) {
-  const [local, rest] = splitProps(props, [
-    'as',
-    'variant',
-    'padding',
-    'surfaceTint',
-    'class',
-    'children',
-  ]);
+  const [local, rest] = splitProps(props, ['as', 'variant', 'padding', 'class', 'children']);
   const variant = () => local.variant ?? 'filled';
   const padding = () => local.padding ?? 'default';
-  const showTint = () => local.surfaceTint ?? true;
 
   return (
     <Dynamic
@@ -42,7 +30,6 @@ export function Card(props: CardProps) {
       class={cx(styles.card({ variant: variant(), padding: padding() }), local.class)}
       {...rest}
     >
-      <Show when={showTint()}>{tintOverlay}</Show>
       <div class={styles.content}>{local.children}</div>
     </Dynamic>
   );

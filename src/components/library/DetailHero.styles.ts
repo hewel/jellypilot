@@ -131,7 +131,7 @@ export const artwork = css({
   boxShadow: '2xl',
   display: 'none',
   flexShrink: '[0]',
-  outline: '[1px solid rgb(255 255 255 / 0.1)]',
+  outline: '[1px solid {colors.artworkOutline}/10]',
   outlineOffset: '[-1px]',
   overflow: 'hidden',
   position: 'relative',

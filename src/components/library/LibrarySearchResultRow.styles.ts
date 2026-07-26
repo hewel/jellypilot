@@ -14,7 +14,7 @@ export const row = css({
   transitionDuration: '200',
   transitionProperty: '[background-color]',
   _focusVisible: {
-    outline: '[2px solid {colors.primary}]',
+    outline: '[2px solid {colors.focusRing}]',
     outlineOffset: '[2px]',
   },
   _hover: {

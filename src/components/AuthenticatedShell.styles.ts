@@ -1,6 +1,7 @@
 import { css, cva } from '@styled-system/css';
 
 export const authenticatedShellLayout = {
+  bg: 'background',
   color: 'onSurface',
   display: 'grid',
   gridTemplateColumns: '[4rem minmax(0, 1fr)]',
@@ -56,7 +57,8 @@ export const ambientCore = css({
   transitionTimingFunction: 'standard',
   width: 'full',
   _motionReduce: {
-    transition: '[none]',
+    transitionDuration: '100',
+    transform: '[none]',
   },
   '[data-shell]:has([data-sidebar]:hover) &, [data-shell]:has([data-toolbar]:hover) &': {
     opacity: '[1]',
@@ -75,6 +77,10 @@ export const shell = cva({
 
 export const main = cva({
   base: {
+    bg: 'materialSurfaceRaised',
+    borderLeftColor: 'materialEdgeSubtle',
+    borderLeftStyle: 'solid',
+    borderLeftWidth: '1px',
     color: 'onSurface',
     display: 'flex',
     flex: '1',
@@ -90,9 +96,11 @@ export const main = cva({
     glide: {
       expand: {
         animation: '[sidebarGlideExpand 200ms {easings.emphasized}]',
+        _motionReduce: { animation: '[none]' },
       },
       collapse: {
         animation: '[sidebarGlideCollapse 200ms {easings.emphasized}]',
+        _motionReduce: { animation: '[none]' },
       },
     },
   },
@@ -100,6 +108,9 @@ export const main = cva({
 
 export const enter = css({
   animation: '[fadeIn 300ms {easings.emphasized} forwards]',
+  _motionReduce: {
+    animation: '[none]',
+  },
   display: 'flex',
   flex: '1',
   flexDirection: 'column',
@@ -112,9 +123,8 @@ export const enter = css({
  * layout. 0.28125 = 4.5rem collapsed rail / 16rem expanded sidebar. */
 export const sidebarWipe = cva({
   base: {
-    backdropFilter: '[blur(20px)]',
-    bg: 'surfaceContainerLow/70',
-    borderRightColor: 'outlineVariant/40',
+    bg: 'materialSurfaceRaised',
+    borderRightColor: 'materialEdgeSubtle',
     borderRightStyle: 'solid',
     borderRightWidth: '1px',
     height: '[100dvh]',
@@ -125,14 +135,23 @@ export const sidebarWipe = cva({
     transformOrigin: '[left center]',
     width: '[16rem]',
     zIndex: '10',
+    '@supports (backdrop-filter: blur(1px))': {
+      backdropFilter: '[blur(20px)]',
+      bg: 'materialSurfaceAcrylic/85',
+    },
+    _motionReduce: {
+      backdropFilter: '[none]',
+    },
   },
   variants: {
     direction: {
       expand: {
         animation: '[sidebarWipeExpand 200ms {easings.emphasized}]',
+        _motionReduce: { animation: '[none]' },
       },
       collapse: {
         animation: '[sidebarWipeCollapse 200ms {easings.emphasized}]',
+        _motionReduce: { animation: '[none]' },
       },
     },
   },

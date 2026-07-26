@@ -4,6 +4,9 @@ import { render } from 'solid-js/web';
 
 import Toast from '../src/components/Toast';
 import Button from '../src/components/ui/Button';
+import { indicatorStyles } from '../src/components/ui/SegmentedControl.styles';
+import StatusBadge from '../src/components/ui/StatusBadge';
+import { reducedMotionFeedback } from '../src/styles/recipes';
 
 test('Button icon variant preserves accessible button behavior', () => {
   const root = document.createElement('div');
@@ -47,6 +50,32 @@ test('Toast exposes alert content and dismisses from the close button', () => {
 
   dispose();
   root.remove();
+});
+
+test('StatusBadge accepts info and renders visible text plus its indicator', () => {
+  const root = document.createElement('div');
+  document.body.append(root);
+  const dispose = render(() => <StatusBadge variant="info">Connected</StatusBadge>, root);
+
+  const badge = screen.getByText('Connected');
+  expect(badge).toBeVisible();
+  // The LED dot renders alongside the text; color is never the only signal.
+  expect(badge.querySelector('span')).not.toBeNull();
+
+  dispose();
+  root.remove();
+});
+
+test('reduced motion disables spatial feedback and caps remaining transitions at 100ms', () => {
+  expect(reducedMotionFeedback.transform).toBe('[none]');
+  expect(reducedMotionFeedback.transitionDuration).toBe('100');
+
+  // The segmented indicator stops sliding; only color feedback may remain, capped at 100ms.
+  expect(indicatorStyles._motionReduce).toEqual({
+    transitionDuration: '100',
+    transitionProperty: '[background-color, border-color, box-shadow]',
+  });
+  expect(String(indicatorStyles.transitionProperty)).toContain('top');
 });
 
 afterEach(() => {

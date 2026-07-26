@@ -14,7 +14,7 @@ export const toggle = css({
   boxShadow: 'inner',
   cursor: 'pointer',
   _focusVisible: {
-    outline: '[2px solid {colors.primary}]',
+    outline: '[2px solid {colors.focusRing}]',
     outlineOffset: '[2px]',
   },
 });

@@ -101,7 +101,7 @@ export default function SegmentedControl<Value extends string>(
             <SegmentGroup.Item
               value={item.value}
               disabled={Boolean(item.disabled || props.disabled)}
-              class={styles.item()}
+              class={styles.item({ checked: props.value === item.value })}
             >
               <SegmentGroup.ItemText class={styles.itemText}>{item.label}</SegmentGroup.ItemText>
               <SegmentGroup.ItemControl class={styles.itemControl} />

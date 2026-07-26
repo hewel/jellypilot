@@ -103,14 +103,13 @@ export const positioner = css({
 });
 
 export const content = css({
-  backdropFilter: '[blur(24px)]',
-  bg: 'surfaceContainerLow/60',
+  bg: 'materialSurfaceRaised',
   borderLeftWidth: '1px',
   borderLeftStyle: 'solid',
-  borderLeftColor: 'outlineVariant/30',
-  borderTopLeftRadius: '4xl',
-  borderBottomLeftRadius: '4xl',
-  boxShadow: '2xl',
+  borderLeftColor: 'materialEdgeSubtle',
+  borderTopLeftRadius: 'overlay',
+  borderBottomLeftRadius: 'overlay',
+  boxShadow: '[0 25px 50px -12px {colors.materialDepthOverlay}]',
   boxSizing: 'border-box',
   display: 'flex',
   flexDirection: 'column',
@@ -122,6 +121,15 @@ export const content = css({
   transitionProperty: '[opacity, transform]',
   transitionTimingFunction: 'standard',
   width: nowPlayingDrawerNarrowLayout.contentWidth,
+  '@supports (backdrop-filter: blur(1px))': {
+    backdropFilter: '[blur(24px)]',
+    bg: 'materialSurfaceAcrylic/85',
+  },
+  _motionReduce: {
+    backdropFilter: '[none]',
+    transitionDuration: '100',
+    transform: '[none]',
+  },
   '&[data-state="closed"]': {
     opacity: '[0]',
     transform: '[translateX({spacing.3})]',

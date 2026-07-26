@@ -2,6 +2,7 @@ import { readFileSync } from 'node:fs';
 
 import { expect, test } from '@rstest/core';
 
+import { material } from '../src/styles/recipes';
 import {
   appearanceSemanticColors,
   braunDarkCanvasHex,
@@ -409,6 +410,62 @@ test('status indicators meet 3:1 contrast against adjacent surfaces', () => {
           ).toBeGreaterThanOrEqual(3);
         }
       }
+    }
+  }
+});
+
+test('shared material recipe exposes exactly the eight required treatments', () => {
+  expect(Object.keys(material.config.variants.treatment).toSorted()).toEqual([
+    'acrylic',
+    'flat',
+    'glass',
+    'indicator',
+    'keycap',
+    'pressed',
+    'raised',
+    'recessed',
+  ]);
+});
+
+test('acrylic and glass materials keep an opaque base with translucency only under @supports', () => {
+  const supportsKey = '@supports (backdrop-filter: blur(1px))';
+  for (const treatment of ['acrylic', 'glass'] as const) {
+    const styles = material.raw({ treatment });
+    // Unconditional base: the opaque raised surface token — the translucent
+    // acrylic/glass tokens cannot be the fallback because they are alpha
+    // colors outside Control Room Dark.
+    expect(styles.bg, `${treatment} opaque base`).toBe('materialSurfaceRaised');
+    expect(styles.backdropFilter, `${treatment} base must not blur`).toBeUndefined();
+    // Distinct bounded semantic shadows keep overlay hierarchy without blur.
+    expect(String(styles.boxShadow), `${treatment} bounded shadow`).toContain(
+      treatment === 'acrylic' ? 'materialDepthAmbient' : 'materialDepthOverlay',
+    );
+    // Translucency and blur live only inside the @supports enhancement, and
+    // that is the only place the translucent material tokens may appear.
+    const supports = styles[supportsKey] as Record<string, string>;
+    expect(supports.backdropFilter, `${treatment} supports blur`).toContain('blur');
+    expect(supports.bg, `${treatment} supports translucency`).toBe(
+      treatment === 'acrylic' ? 'materialSurfaceAcrylic/85' : 'materialSurfaceGlass/80',
+    );
+    expect(JSON.stringify(styles), `${treatment} raw recipe`).not.toMatch(
+      /materialSurface(Acrylic|Glass)(?!\/)/u,
+    );
+  }
+  // The raised base is genuinely opaque in every appearance, including Braun.
+  for (const theme of Object.keys(
+    appearanceSemanticColors,
+  ) as (keyof typeof appearanceSemanticColors)[]) {
+    for (const mode of ['light', 'dark'] as const) {
+      const base = parseCssColor(appearanceSemanticColors[theme][mode].materialSurfaceRaised);
+      expect(base.a, `${theme}/${mode} materialSurfaceRaised opacity`).toBe(1);
+    }
+  }
+  // The enhancement tokens stay translucent in Braun, where the raw palette
+  // has no neutral surface alpha equivalents.
+  for (const mode of ['light', 'dark'] as const) {
+    const table = appearanceSemanticColors.braun[mode];
+    for (const role of TRANSLUCENT_MATERIAL_ROLES) {
+      expect(parseCssColor(table[role]).a, `braun/${mode} ${role} translucency`).toBeLessThan(1);
     }
   }
 });

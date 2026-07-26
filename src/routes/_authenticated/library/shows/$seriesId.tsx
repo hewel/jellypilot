@@ -482,7 +482,7 @@ function EpisodeRow(props: {
   });
 
   return (
-    <Card variant="filled" surfaceTint={false} class={styles.episodeCard}>
+    <Card variant="filled" class={styles.episodeCard}>
       <div class={styles.episodeImageWrap}>
         <Show
           when={!imageFailed() ? props.episode.artworkImageId : null}
@@ -581,7 +581,7 @@ function SeasonEpisodesSkeleton() {
       <div class={styles.fadeList}>
         <For each={[0, 1, 2]}>
           {() => (
-            <Card variant="filled" surfaceTint={false} class={styles.episodeCard}>
+            <Card variant="filled" class={styles.episodeCard}>
               <div class={styles.skeletonEpisodeImage} />
               <div class={styles.episodeCopy}>
                 <div class={styles.episodeMeta}>

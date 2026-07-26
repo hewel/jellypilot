@@ -14,6 +14,9 @@ export const consoleContainer = css({
   mx: 'auto',
   width: 'full',
   animation: '[fadeIn 300ms {easings.emphasized} forwards]',
+  _motionReduce: {
+    animation: '[none]',
+  },
   '& > * + *': {
     marginTop: '6',
   },

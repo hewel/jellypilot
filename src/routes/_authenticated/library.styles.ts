@@ -90,7 +90,7 @@ export const skeletonArtwork = css({
   bg: 'surfaceContainerLowest/60',
   borderRadius: '2xl',
   boxShadow: 'md',
-  outline: '[1px solid rgb(255 255 255 / 0.1)]',
+  outline: '[1px solid {colors.artworkOutline}/10]',
   outlineOffset: '[-1px]',
 });
 

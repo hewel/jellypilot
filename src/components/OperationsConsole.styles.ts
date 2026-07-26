@@ -23,11 +23,21 @@ export const positioner = css({
 });
 
 export const content = css({
+  bg: 'materialSurfaceRaised',
+  borderColor: 'materialEdgeNormal',
+  borderRadius: 'overlay',
+  borderStyle: 'solid',
+  borderWidth: '1px',
+  boxShadow: '[0 25px 50px -12px {colors.materialDepthOverlay}]',
   my: addServiceDialogOverflowLayout.contentMarginBlock,
   maxWidth: '[48rem]',
   outline: 'none',
   position: 'relative',
   width: 'full',
+  '@supports (backdrop-filter: blur(1px))': {
+    backdropFilter: '[blur(16px)]',
+    bg: 'materialSurfaceGlass/80',
+  },
 });
 
 export const closeButton = css({
