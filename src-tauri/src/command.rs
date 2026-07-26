@@ -1568,7 +1568,6 @@ pub fn appearance_ready(
 }
 
 /// Persist and apply a runtime Appearance selection transactionally.
-///
 /// Serializes with readiness through the shared appearance lock. On failure, restores
 /// prior persisted/in-memory config and prior native theme/canvas before returning.
 /// Runtime switching never shows or hides the window. Only Color Mode updates the
@@ -1690,7 +1689,6 @@ fn commit_config_preserving_appearance(state: &ConfigState, mut config: AppConfi
 }
 
 /// Update the app configuration, apply changes live, and persist to disk.
-///
 /// Whole-config saves never overwrite the dedicated Appearance selection. A stale
 /// AppConfig snapshot submitted here keeps the backend's current Appearance. The
 /// final config-state/store commit is serialized with `appearance_set` through the

@@ -135,7 +135,13 @@ export const commands = {
 	serverProfilesReauthenticateQuickConnectAuthenticate: (key: string, secret: string) => typedError<SavedServiceProfiles, CommandError>(__TAURI_INVOKE("server_profiles_reauthenticate_quick_connect_authenticate", { key, secret })),
 	/**  Get the current app configuration. */
 	configGet: () => __TAURI_INVOKE<AppConfig_Serialize>("config_get"),
-	/**  Update the app configuration, apply changes live, and persist to disk. */
+	/**
+	 *  Update the app configuration, apply changes live, and persist to disk.
+	 *  Whole-config saves never overwrite the dedicated Appearance selection. A stale
+	 *  AppConfig snapshot submitted here keeps the backend's current Appearance. The
+	 *  final config-state/store commit is serialized with `appearance_set` through the
+	 *  shared appearance lock.
+	 */
 	configSet: (config: AppConfig_Deserialize) => typedError<null, CommandError>(__TAURI_INVOKE("config_set", { config })),
 	/**  Get the default configuration. */
 	configDefault: () => __TAURI_INVOKE<AppConfig_Serialize>("config_default"),
@@ -150,7 +156,6 @@ export const commands = {
 	appearanceReady: (request: AppearanceReadyRequest) => typedError<null, CommandError>(__TAURI_INVOKE("appearance_ready", { request })),
 	/**
 	 *  Persist and apply a runtime Appearance selection transactionally.
-	 *
 	 *  Serializes with readiness through the shared appearance lock. On failure, restores
 	 *  prior persisted/in-memory config and prior native theme/canvas before returning.
 	 *  Runtime switching never shows or hides the window. Only Color Mode updates the
