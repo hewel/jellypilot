@@ -2,14 +2,11 @@
 
 Tauri v2 Jellyfin MPV Shim rewrite; external MPV controlled via JSON IPC (no libmpv embed).
 
-## Role: Codex Planner + OMP Executor
+## Role: Codex
 
-- Keep Codex responsible for user intent, major direction, architecture, task decomposition, verification design, report review, and final user communication.
-- For every repetitive, reversible, objectively verifiable slice with a closed write scope and exact checks, use the local `delegate-to-omp` skill to run a one-shot OMP worker through Herdr.
-- OMP may edit only the assigned scope and run the verification methods selected by Codex. It must report blocked instead of widening scope, changing interfaces, or making a new major decision.
-- Run at most one editing OMP task per repository. Parallelize read-only verification only when its evidence is independent of active edits.
-- Treat native `@quick_task`, `@designer`, and `@oracle` agents as exceptional advisory or major-review lanes, not the default implementation path when a task qualifies for OMP delegation.
-- After OMP reports, inspect its evidence and the resulting diff. Never recover, revert, or normalize user changes automatically.
+- Keep Codex responsible for user intent, major direction, architecture, implementation, verification, review, and final user communication.
+- Use native `@quick_task`, `@designer`, and `@oracle` agents only when a clearly separable advisory, review, or execution lane benefits from delegation.
+- Keep shared-file coordination and final verification in the main Codex thread. Never recover, revert, or normalize user changes automatically.
 
 ## Stack
 
@@ -32,7 +29,6 @@ Tauri v2 Jellyfin MPV Shim rewrite; external MPV controlled via JSON IPC (no lib
 | Rust↔TS bindings | `src/bindings.ts` | Auto-generated (debug builds only); use typed `commands.*`, never raw `invoke()` |
 | Add test | `tests/*.test.ts` | Rstest + @testing-library |
 | Rust backend | `src-tauri/` | See `src-tauri/AGENTS.md` |
-| Delegated OMP task | `.agents/skills/delegate-to-omp/` | Codex packet → Herdr socket → OMP RPC report |
 
 ## Commands
 
@@ -72,7 +68,6 @@ bun tauri build     # Production desktop build
 
 ## Agent Skills
 
-- **OMP delegation**: Use `delegate-to-omp` for bounded implementation and verification tasks after Codex fixes scope, requirements, and exact checks.
 - **Issue tracker**: GitHub Issues for `hewel/jmsr` — see [docs/agents/issue-tracker.md](docs/agents/issue-tracker.md)
 - **Triage labels**: Five-label vocabulary — see [docs/agents/triage-labels.md](docs/agents/triage-labels.md)
 - **Domain docs**: Root `CONTEXT.md` + `docs/adr/` — see [docs/agents/domain.md](docs/agents/domain.md)
