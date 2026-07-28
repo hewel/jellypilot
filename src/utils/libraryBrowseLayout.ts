@@ -4,6 +4,8 @@ export const LIBRARY_BROWSE_GRID_COLUMN_GAP_PX = 12;
 export const LIBRARY_BROWSE_GRID_ROW_GAP_PX = 16;
 export const LIBRARY_BROWSE_GRID_TEMPLATE_COLUMNS =
   'repeat(auto-fill, minmax(min(100%, 160px), 1fr))';
+const LIBRARY_BROWSE_MIN_OVERSCAN_ROWS = 6;
+const LIBRARY_BROWSE_MAX_OVERSCAN_ROWS = 18;
 
 export function libraryBrowseColumnCount(width: number): number {
   if (!Number.isFinite(width) || width <= 0) {
@@ -36,5 +38,25 @@ export function libraryBrowseVirtualRowHeight(width: number): number {
     (cardWidth - LIBRARY_BROWSE_CARD_SIDE_BORDERS_PX) * LIBRARY_BROWSE_CARD_ASPECT_RATIO +
       LIBRARY_BROWSE_CARD_CHROME_HEIGHT_PX +
       LIBRARY_BROWSE_GRID_ROW_GAP_PX,
+  );
+}
+
+export function libraryBrowseVirtualOverscanRows(
+  viewportHeight: number,
+  rowHeight: number,
+): number {
+  if (
+    !Number.isFinite(viewportHeight) ||
+    viewportHeight <= 0 ||
+    !Number.isFinite(rowHeight) ||
+    rowHeight <= 0
+  ) {
+    return LIBRARY_BROWSE_MIN_OVERSCAN_ROWS;
+  }
+
+  const visibleRows = Math.ceil(viewportHeight / rowHeight);
+  return Math.min(
+    LIBRARY_BROWSE_MAX_OVERSCAN_ROWS,
+    Math.max(LIBRARY_BROWSE_MIN_OVERSCAN_ROWS, visibleRows * 2),
   );
 }

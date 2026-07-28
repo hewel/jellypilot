@@ -22,6 +22,7 @@ import type {
 import { ToastProvider } from '../src/components/ToastProvider';
 import { queryKeys } from '../src/effects/query';
 import { createJellyPilotRouter } from '../src/router';
+import * as browseRouteStyles from '../src/routes/_authenticated/library/browseRoute.styles';
 import { resetSharedLibraryFilters } from '../src/utils/createSharedLibraryFilters';
 import { imageSource } from '../src/utils/imageSource';
 import { resetSidebarPreferences } from '../src/utils/sidebarPreferences';
@@ -665,12 +666,46 @@ function mockShellCommands(state = connectedState) {
 }
 
 function appScrollViewport(): HTMLElement {
-  const viewport = document.querySelector<HTMLElement>('[data-testid="app-scroll-viewport"]');
+  const viewport = screen.queryByRole('region', { name: 'Application content' });
   if (viewport) {
     return viewport;
   }
 
   throw new Error('App scroll viewport was not rendered');
+}
+
+function scrollVirtualGridToEnd(viewport: HTMLElement) {
+  const canvas = screen.getByTestId('library-virtual-grid').firstElementChild as HTMLElement | null;
+  if (!canvas) {
+    throw new Error('Library virtual canvas was not rendered');
+  }
+
+  const totalHeight = Number.parseFloat(canvas.style.height);
+  viewport.scrollTop = Math.max(totalHeight - window.innerHeight, 0);
+  fireEvent.scroll(viewport);
+}
+
+function observeVirtualGridBlanking(virtualGrid: HTMLElement) {
+  const canvas = virtualGrid.firstElementChild as HTMLElement | null;
+  if (!canvas) {
+    throw new Error('Library virtual canvas was not rendered');
+  }
+
+  let observedBlankWindow = canvas.childElementCount === 0;
+  const sample = () => {
+    observedBlankWindow ||= canvas.childElementCount === 0;
+  };
+  const observer = new MutationObserver(sample);
+  observer.observe(canvas, { childList: true });
+
+  return {
+    sample,
+    stop: () => {
+      observer.disconnect();
+      sample();
+      return observedBlankWindow;
+    },
+  };
 }
 
 function renderShell(path: string | string[] = '/library', client?: QueryClient) {
@@ -1196,13 +1231,42 @@ test('library browse virtualizes large libraries and fetches visible placeholder
   const cleanup = renderShell('/library/movies/movies');
 
   expect(await screen.findByRole('link', { name: 'Open Virtual Movie 1' })).toBeVisible();
-  expect(screen.getByTestId('library-virtual-grid')).toBeVisible();
+  const virtualGrid = screen.getByTestId('library-virtual-grid');
+  expect(virtualGrid).toBeVisible();
+  // A persistent entrance animation restarts when virtual rows churn, fading
+  // the whole grid back to transparent during scroll and pointer transitions.
+  expect(virtualGrid).not.toHaveClass(browseRouteStyles.fade);
+  expect(screen.getByRole('grid', { name: 'Movies library items' })).toBe(
+    virtualGrid.firstElementChild,
+  );
   expect(screen.queryByRole('link', { name: 'Open Virtual Movie 125' })).toBeNull();
   expect(screen.getAllByRole('link', { name: /Open Virtual Movie/ }).length).toBeLessThan(125);
 
   const viewport = appScrollViewport();
-  viewport.scrollTop = 99_999;
-  fireEvent.scroll(viewport);
+  const virtualCanvas = virtualGrid.firstElementChild;
+  expect(virtualCanvas).not.toBeNull();
+  await new Promise((resolve) => setTimeout(resolve, 0));
+
+  const totalVirtualHeight = Number.parseFloat((virtualCanvas as HTMLElement).style.height);
+  expect(totalVirtualHeight).toBeGreaterThan(window.innerHeight);
+  const lastViewportOffset = Math.max(totalVirtualHeight - window.innerHeight, 0);
+  const blankingObserver = observeVirtualGridBlanking(virtualGrid);
+  for (const scrollTop of [
+    totalVirtualHeight * 0.4,
+    totalVirtualHeight * 0.75,
+    totalVirtualHeight * 0.2,
+    lastViewportOffset,
+  ]) {
+    viewport.scrollTop = scrollTop;
+    fireEvent.scroll(viewport);
+
+    blankingObserver.sample();
+    await Promise.resolve();
+    blankingObserver.sample();
+    await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+    blankingObserver.sample();
+  }
+  expect(blankingObserver.stop()).toBe(false);
 
   await waitFor(() =>
     expect(browseCommand).toHaveBeenCalledWith({
@@ -1233,10 +1297,12 @@ test('library browse reuses cached virtual pages on route re-entry', async () =>
 
   expect(await screen.findByRole('link', { name: 'Open Virtual Movie 1' })).toBeVisible();
   const firstViewport = appScrollViewport();
-  firstViewport.scrollTop = 99_999;
-  fireEvent.scroll(firstViewport);
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  scrollVirtualGridToEnd(firstViewport);
   expect(await screen.findByRole('link', { name: 'Open Virtual Movie 125' })).toBeVisible();
 
+  firstViewport.scrollTop = 0;
+  fireEvent.scroll(firstViewport);
   firstCleanup();
   browseCommand.mockClear();
   const secondCleanup = renderShell('/library/movies/movies', queryClient);
@@ -1247,8 +1313,8 @@ test('library browse reuses cached virtual pages on route re-entry', async () =>
     expect(screen.getByRole('link', { name: 'Open Virtual Movie 1' })).toBeVisible();
   });
   const secondViewport = appScrollViewport();
-  secondViewport.scrollTop = 99_999;
-  fireEvent.scroll(secondViewport);
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  scrollVirtualGridToEnd(secondViewport);
   await waitFor(() => {
     expect(screen.getByRole('link', { name: 'Open Virtual Movie 125' })).toBeVisible();
   });
@@ -1296,8 +1362,7 @@ test('library browse reuses cached switched library pages before virtual pages',
   );
 
   const viewport = appScrollViewport();
-  viewport.scrollTop = 99_999;
-  fireEvent.scroll(viewport);
+  scrollVirtualGridToEnd(viewport);
   browseCommand.mockClear();
 
   fireEvent.click(screen.getByRole('link', { name: 'Movies' }));
@@ -1325,8 +1390,7 @@ test('library browse resets scroll to top when the sort direction changes', asyn
 
   expect(await screen.findByRole('link', { name: 'Open Virtual Movie 1' })).toBeVisible();
   const viewport = appScrollViewport();
-  viewport.scrollTop = 99_999;
-  fireEvent.scroll(viewport);
+  scrollVirtualGridToEnd(viewport);
   expect(await screen.findByRole('link', { name: 'Open Virtual Movie 125' })).toBeVisible();
 
   const scrollToSpy = rstest.spyOn(Element.prototype, 'scrollTo');
@@ -1389,8 +1453,7 @@ test('library browse retries failed virtual placeholder page', async () => {
 
   expect(await screen.findByRole('link', { name: 'Open Virtual Movie 1' })).toBeVisible();
   const viewport = appScrollViewport();
-  viewport.scrollTop = 99_999;
-  fireEvent.scroll(viewport);
+  scrollVirtualGridToEnd(viewport);
 
   expect(await screen.findByText('Virtual page failed')).toBeVisible();
   const retryButton = screen.getByRole('button', { name: 'Retry loading more' });

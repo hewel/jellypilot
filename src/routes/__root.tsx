@@ -44,11 +44,13 @@ const ScrollerWrapper: Component = () => {
   return (
     <AppScrollAreaProvider value={appScroll}>
       <div
+        aria-label="Application content"
         ref={appScroll.setViewport}
         onScroll={appScroll.handleViewportScroll}
         data-testid="app-scroll-viewport"
         data-scroll-restoration-id="app-scroll-viewport"
         class={styles.viewport}
+        role="region"
       >
         <div class={styles.content}>
           <Outlet />

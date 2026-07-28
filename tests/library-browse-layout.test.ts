@@ -3,6 +3,7 @@ import { expect, test } from '@rstest/core';
 import {
   LIBRARY_BROWSE_GRID_TEMPLATE_COLUMNS,
   libraryBrowseColumnCount,
+  libraryBrowseVirtualOverscanRows,
   libraryBrowseVirtualRowHeight,
 } from '../src/utils/libraryBrowseLayout';
 
@@ -31,4 +32,15 @@ test('library browse virtual row height matches rendered card height plus one gr
 test('library browse virtual row height falls back to the minimum card width for unknown widths', () => {
   expect(libraryBrowseVirtualRowHeight(0)).toBe(255);
   expect(libraryBrowseVirtualRowHeight(Number.NaN)).toBe(255);
+});
+
+test('library browse virtual overscan covers two viewports within safe bounds', () => {
+  expect(libraryBrowseVirtualOverscanRows(720, 274)).toBe(6);
+  expect(libraryBrowseVirtualOverscanRows(900, 274)).toBe(8);
+  expect(libraryBrowseVirtualOverscanRows(2468, 274)).toBe(18);
+});
+
+test('library browse virtual overscan falls back safely for unknown dimensions', () => {
+  expect(libraryBrowseVirtualOverscanRows(0, 274)).toBe(6);
+  expect(libraryBrowseVirtualOverscanRows(720, Number.NaN)).toBe(6);
 });

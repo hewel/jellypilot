@@ -26,7 +26,16 @@ import {
   ListSortAscending,
   RefreshCw,
 } from 'lucide-solid';
-import { For, Show, Suspense, createEffect, createMemo, createSignal, onCleanup } from 'solid-js';
+import {
+  For,
+  Show,
+  Suspense,
+  createEffect,
+  createMemo,
+  createSignal,
+  onCleanup,
+  onMount,
+} from 'solid-js';
 import { commandFailureMessage } from '~effects/commands';
 import { fetchConnectionState } from '~effects/connection';
 import { LIBRARY_BROWSE_PAGE_SIZE, fetchVideoLibraryPage } from '~effects/library';
@@ -43,6 +52,7 @@ import { createSharedLibraryFilters } from '~utils/createSharedLibraryFilters';
 import type { LibrarySortDirection } from '~utils/createSharedLibraryFilters';
 import {
   libraryBrowseColumnCount,
+  libraryBrowseVirtualOverscanRows,
   libraryBrowseVirtualRowHeight,
 } from '~utils/libraryBrowseLayout';
 
@@ -51,7 +61,6 @@ import * as styles from '../browseRoute.styles';
 
 const LIBRARY_BROWSE_SKELETON_CARD_KEYS = Array.from({ length: 10 }, (_, index) => index);
 const LIBRARY_VIRTUAL_TOTAL_THRESHOLD = 100;
-const LIBRARY_BROWSE_GRID_OVERSCAN_ROWS = 3;
 
 interface LibraryBrowseInfiniteData {
   pages: LibraryExit<LibraryBrowseState>[];
@@ -81,12 +90,15 @@ function LibraryBrowseRoute() {
   const [autoLoadSentinelVisible, setAutoLoadSentinelVisible] = createSignal(false);
   const [virtualGrid, setVirtualGrid] = createSignal<HTMLDivElement | null>(null);
   const [virtualGridWidth, setVirtualGridWidth] = createSignal(1280);
+  const [virtualViewportHeight, setVirtualViewportHeight] = createSignal(720);
+  const [virtualizerMounted, setVirtualizerMounted] = createSignal(false);
   const appScroll = useAppScrollArea();
   const [virtualScrollMargin, setVirtualScrollMargin] = createSignal(0);
   const [virtualPagesByStartIndex, setVirtualPagesByStartIndex] = createSignal(
     new Map<number, LibraryExit<LibraryBrowseState>>(),
   );
   const [virtualPageStartsFetching, setVirtualPageStartsFetching] = createSignal(new Set<number>());
+  onMount(() => setVirtualizerMounted(true));
   const connectionQuery = createQuery(() => ({
     queryKey: queryKeys.connectionState,
     queryFn: () => runExit(fetchConnectionState),
@@ -166,6 +178,7 @@ function LibraryBrowseRoute() {
   };
   const measureVirtualGrid = () => {
     setVirtualGridWidth(fallbackVirtualGridWidth());
+    setVirtualViewportHeight(fallbackVirtualGridHeight());
 
     const grid = virtualGrid();
     const scrollElement = appScroll.viewport();
@@ -351,42 +364,23 @@ function LibraryBrowseRoute() {
     get count() {
       return usesVirtualGrid() ? Math.ceil(totalRecordCount() / columnCount()) : 0;
     },
+    get enabled() {
+      return virtualizerMounted() && usesVirtualGrid() && appScroll.viewport() !== null;
+    },
     getScrollElement: () => appScroll.viewport(),
     estimateSize: estimateVirtualRowHeight,
-    overscan: LIBRARY_BROWSE_GRID_OVERSCAN_ROWS,
-    observeElementOffset: (_instance, callback) => {
-      callback(appScroll.snapshot().scrollTop, false);
-
-      let scrollEndTimer: ReturnType<typeof setTimeout> | undefined;
-      const unsubscribe = appScroll.subscribe((snapshot, event) => {
-        const isScrolling = event !== null;
-        callback(snapshot.scrollTop, isScrolling);
-        if (!isScrolling) {
-          return;
-        }
-
-        if (scrollEndTimer) {
-          clearTimeout(scrollEndTimer);
-        }
-        scrollEndTimer = setTimeout(() => callback(snapshot.scrollTop, false), 150);
-      });
-
-      return () => {
-        if (scrollEndTimer) {
-          clearTimeout(scrollEndTimer);
-        }
-        unsubscribe();
-      };
+    get overscan() {
+      return libraryBrowseVirtualOverscanRows(virtualViewportHeight(), estimateVirtualRowHeight());
     },
     observeElementRect: (instance, callback) =>
       observeElementRect(instance, (rect) =>
         callback({
-          width: rect.width || fallbackVirtualGridWidth(),
-          height: rect.height || fallbackVirtualGridHeight(),
+          width: rect.width || virtualGridWidth(),
+          height: rect.height || virtualViewportHeight(),
         }),
       ),
     get initialRect() {
-      return { width: fallbackVirtualGridWidth(), height: fallbackVirtualGridHeight() };
+      return { width: virtualGridWidth(), height: virtualViewportHeight() };
     },
     get scrollMargin() {
       return virtualScrollMargin();
@@ -668,21 +662,26 @@ function LibraryBrowseRoute() {
                 </div>
               }
             >
-              <div ref={setVirtualGrid} data-testid="library-virtual-grid" class={styles.fade}>
+              <div ref={setVirtualGrid} data-testid="library-virtual-grid">
                 <div
+                  aria-label={`${libraryTitle(collectionType())} library items`}
+                  aria-rowcount={Math.ceil(totalRecordCount() / columnCount())}
                   class={styles.virtualCanvas}
+                  role="grid"
                   style={{ height: `${rowVirtualizer.getTotalSize()}px` }}
                 >
                   <For each={rowVirtualizer.getVirtualItems()}>
                     {(virtualRow) => (
                       <div
+                        aria-rowindex={virtualRow.index + 1}
                         class={styles.virtualRow}
+                        role="row"
                         style={{
                           height: `${virtualRow.size}px`,
                           transform: `translateY(${virtualRow.start - virtualScrollMargin()}px)`,
                         }}
                       >
-                        <div class={styles.grid}>
+                        <div class={styles.grid} role="presentation">
                           <For each={virtualRowColumnIndexes()}>
                             {(columnIndex) => {
                               const displayIndex = () =>
@@ -691,14 +690,16 @@ function LibraryBrowseRoute() {
 
                               return (
                                 <Show when={displayIndex() < totalRecordCount()}>
-                                  <Show when={item()} fallback={<LibraryBrowseSkeletonCard />}>
-                                    {(loadedItem) => (
-                                      <LibraryVideoCard
-                                        item={loadedItem()}
-                                        collectionType={collectionType()}
-                                      />
-                                    )}
-                                  </Show>
+                                  <div role="gridcell">
+                                    <Show when={item()} fallback={<LibraryBrowseSkeletonCard />}>
+                                      {(loadedItem) => (
+                                        <LibraryVideoCard
+                                          item={loadedItem()}
+                                          collectionType={collectionType()}
+                                        />
+                                      )}
+                                    </Show>
+                                  </div>
                                 </Show>
                               );
                             }}
