@@ -110,6 +110,16 @@ export function HomeVideoCard(props: HomeVideoCardProps) {
     props.rowKind === 'continueWatching' ? videoHomeProgress(props.item) : null;
   const secondary = () => homeSecondary({ item: props.item, rowKind: props.rowKind });
 
+  const titleLinkTarget = () => {
+    if (props.item.itemType === 'Series') {
+      return { to: '/library/shows/$seriesId', params: { seriesId: props.item.id } } as const;
+    }
+    if (props.item.itemType === 'Episode' && props.item.seriesId !== null) {
+      return { to: '/library/shows/$seriesId', params: { seriesId: props.item.seriesId } } as const;
+    }
+    return { to: '/library/items/$itemId', params: { itemId: props.item.id } } as const;
+  };
+
   const renderArtwork = () => (
     <div
       class={cx(styles.artwork, styles.aspect[aspectClass()], styles.homeArtwork)}
@@ -176,9 +186,15 @@ export function HomeVideoCard(props: HomeVideoCardProps) {
 
   const renderHomeMeta = () => (
     <div class={styles.homeBody}>
-      <CardTitle id={props.item.id} itemType={props.item.itemType} class={styles.homeTitle}>
-        {homeTitle(props.item)}
-      </CardTitle>
+      <Link
+        {...titleLinkTarget()}
+        aria-label={`Open details for ${props.item.name}`}
+        class={styles.homeTitleLink}
+      >
+        <CardTitle id={props.item.id} itemType={props.item.itemType} class={styles.homeTitle}>
+          {homeTitle(props.item)}
+        </CardTitle>
+      </Link>
       <Show when={secondary()}>{(value) => <p class={styles.homeSubtitle}>{value()}</p>}</Show>
     </div>
   );

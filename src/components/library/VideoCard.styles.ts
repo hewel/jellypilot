@@ -312,6 +312,23 @@ export const homeTitle = css({
   overflow: 'hidden',
 });
 
+/** Title link to the item detail page; wraps the hover-card trigger. */
+export const homeTitleLink = css({
+  borderRadius: 'md',
+  color: '[inherit]',
+  display: 'block',
+  minWidth: '[0]',
+  textDecoration: 'none',
+  width: 'full',
+  _hover: {
+    textDecoration: 'underline',
+  },
+  _focusVisible: {
+    outline: '[2px solid {colors.secondary}]',
+    outlineOffset: '1',
+  },
+});
+
 export const titleHoverTrigger = css({
   display: 'block',
   minWidth: '[0]',

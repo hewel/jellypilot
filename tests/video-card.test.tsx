@@ -197,6 +197,63 @@ test('HomeVideoCard renders reference-first Continue Watching metadata and direc
   root.remove();
 });
 
+test('HomeVideoCard title links episodes to series detail and movies to movie detail', () => {
+  const { dispose, root } = renderWithRouter(() => (
+    <>
+      <HomeVideoCard
+        rowKind="continueWatching"
+        onResume={() => undefined}
+        item={{
+          artworkImageId: null,
+          episodeNumber: 4,
+          favorite: false,
+          id: 'episode-4',
+          itemType: 'Episode',
+          name: 'A Quiet Return',
+          played: false,
+          playedPercentage: null,
+          productionYear: 2024,
+          resumePositionSeconds: 120,
+          runtimeSeconds: 3600,
+          seasonNumber: 1,
+          seriesId: 'series-1',
+          seriesName: 'Silent Echoes',
+        }}
+      />
+      <HomeVideoCard
+        rowKind="latestMovies"
+        item={{
+          artworkImageId: null,
+          episodeNumber: null,
+          favorite: false,
+          id: 'movie-1',
+          itemType: 'Movie',
+          name: 'Linked Movie',
+          played: false,
+          playedPercentage: null,
+          productionYear: 2024,
+          resumePositionSeconds: null,
+          runtimeSeconds: 7200,
+          seasonNumber: null,
+          seriesId: null,
+          seriesName: null,
+        }}
+      />
+    </>
+  ));
+
+  const resumeTitleLink = screen.getByRole('link', { name: 'Open details for A Quiet Return' });
+  expect(resumeTitleLink).toHaveAttribute('href', '/library/shows/series-1');
+  expect(resumeTitleLink.contains(screen.getByText('Silent Echoes • S1 E4'))).toBe(true);
+
+  const movieTitleLink = screen.getByRole('link', { name: 'Open details for Linked Movie' });
+  expect(movieTitleLink).toHaveAttribute('href', '/library/items/movie-1');
+  expect(movieTitleLink.contains(screen.getByText('Linked Movie • Movie'))).toBe(true);
+
+  dispose();
+  root.remove();
+});
+
 test('HomeVideoCard derives progress and falls back to detail without a saved resume position', () => {
   const { dispose, root } = renderWithRouter(() => (
     <>
