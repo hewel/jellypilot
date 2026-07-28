@@ -127,7 +127,8 @@ test('ownership guards refuse unrelated directories and removal is idempotent', 
   const owned = path.join(root, 'owned');
   try {
     await mkdir(unowned);
-    expect(Exit.isFailure(await Effect.runPromiseExit(ensureOwnedDirectory(unowned)))).toBe(true);
+    const exitResult = await Effect.runPromiseExit(ensureOwnedDirectory(unowned));
+    expect(Exit.isFailure(exitResult)).toBe(true);
     await Effect.runPromise(ensureOwnedDirectory(owned));
     await Effect.runPromise(removeOwnedDirectory(owned));
     await Effect.runPromise(removeOwnedDirectory(owned));
@@ -253,14 +254,15 @@ test('interrupts scoped process, display, port, and storage resources in cleanup
 
     await Effect.runPromise(Fiber.interrupt(fiber));
     await expect(access(owned)).rejects.toMatchObject({ code: 'ENOENT' });
+    const processGroupPids = [runnerPid, displayPid].filter(
+      (pid): pid is number => pid !== undefined,
+    );
     await expect(
       Effect.runPromise(
         verifyTeardownTargets({
           displayNumber,
           port,
-          processGroupPids: [runnerPid, displayPid].filter(
-            (pid): pid is number => pid !== undefined,
-          ),
+          processGroupPids,
         }),
       ),
     ).resolves.toEqual({ portClosed: true });

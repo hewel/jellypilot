@@ -680,7 +680,7 @@ function scrollVirtualGridToEnd(viewport: HTMLElement) {
     throw new Error('Library virtual canvas was not rendered');
   }
 
-  const totalHeight = Number.parseFloat(canvas.style.height);
+  const totalHeight = Number(canvas.style.height.replace('px', ''));
   viewport.scrollTop = Math.max(totalHeight - window.innerHeight, 0);
   fireEvent.scroll(viewport);
 }
@@ -1247,7 +1247,7 @@ test('library browse virtualizes large libraries and fetches visible placeholder
   expect(virtualCanvas).not.toBeNull();
   await new Promise((resolve) => setTimeout(resolve, 0));
 
-  const totalVirtualHeight = Number.parseFloat((virtualCanvas as HTMLElement).style.height);
+  const totalVirtualHeight = Number((virtualCanvas as HTMLElement).style.height.replace('px', ''));
   expect(totalVirtualHeight).toBeGreaterThan(window.innerHeight);
   const lastViewportOffset = Math.max(totalVirtualHeight - window.innerHeight, 0);
   const blankingObserver = observeVirtualGridBlanking(virtualGrid);

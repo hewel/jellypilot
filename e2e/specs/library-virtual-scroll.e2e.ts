@@ -155,7 +155,7 @@ describe('library virtual scrolling', () => {
         throw new Error('The Movies virtual grid was not rendered.');
       }
 
-      const totalHeight = Number.parseFloat(virtualGrid.style.height);
+      const totalHeight = Number(virtualGrid.style.height.replace('px', ''));
       const lastOffset = Math.max(totalHeight - viewport.clientHeight, 0);
       const offsets = [0, totalHeight * 0.4, totalHeight * 0.75, totalHeight * 0.2, lastOffset];
       const results: {

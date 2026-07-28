@@ -9,28 +9,28 @@
 // Additionally, you should also exclude this file from your linter and/or formatter to prevent it from being checked or modified.
 
 import { Route as rootRouteImport } from './routes/__root'
-import { Route as LoginRouteImport } from './routes/login'
-import { Route as AuthenticatedRouteImport } from './routes/_authenticated'
 import { Route as IndexRouteImport } from './routes/index'
+import { Route as AuthenticatedRouteImport } from './routes/_authenticated'
+import { Route as LoginRouteImport } from './routes/login'
 import { Route as AuthenticatedLibraryRouteImport } from './routes/_authenticated/library'
 import { Route as AuthenticatedLibraryIndexRouteImport } from './routes/_authenticated/library/index'
 import { Route as AuthenticatedLibrarySearchRouteImport } from './routes/_authenticated/library/search'
-import { Route as AuthenticatedLibraryShowsSeriesIdRouteImport } from './routes/_authenticated/library/shows/$seriesId'
-import { Route as AuthenticatedLibraryItemsItemIdRouteImport } from './routes/_authenticated/library/items/$itemId'
 import { Route as AuthenticatedLibraryCollectionTypeLibraryIdRouteImport } from './routes/_authenticated/library/$collectionType/$libraryId'
+import { Route as AuthenticatedLibraryItemsItemIdRouteImport } from './routes/_authenticated/library/items/$itemId'
+import { Route as AuthenticatedLibraryShowsSeriesIdRouteImport } from './routes/_authenticated/library/shows/$seriesId'
 
-const LoginRoute = LoginRouteImport.update({
-  id: '/login',
-  path: '/login',
+const IndexRoute = IndexRouteImport.update({
+  id: '/',
+  path: '/',
   getParentRoute: () => rootRouteImport,
 } as any)
 const AuthenticatedRoute = AuthenticatedRouteImport.update({
   id: '/_authenticated',
   getParentRoute: () => rootRouteImport,
 } as any)
-const IndexRoute = IndexRouteImport.update({
-  id: '/',
-  path: '/',
+const LoginRoute = LoginRouteImport.update({
+  id: '/login',
+  path: '/login',
   getParentRoute: () => rootRouteImport,
 } as any)
 const AuthenticatedLibraryRoute = AuthenticatedLibraryRouteImport.update({
@@ -50,10 +50,10 @@ const AuthenticatedLibrarySearchRoute =
     path: '/search',
     getParentRoute: () => AuthenticatedLibraryRoute,
   } as any)
-const AuthenticatedLibraryShowsSeriesIdRoute =
-  AuthenticatedLibraryShowsSeriesIdRouteImport.update({
-    id: '/shows/$seriesId',
-    path: '/shows/$seriesId',
+const AuthenticatedLibraryCollectionTypeLibraryIdRoute =
+  AuthenticatedLibraryCollectionTypeLibraryIdRouteImport.update({
+    id: '/$collectionType/$libraryId',
+    path: '/$collectionType/$libraryId',
     getParentRoute: () => AuthenticatedLibraryRoute,
   } as any)
 const AuthenticatedLibraryItemsItemIdRoute =
@@ -62,10 +62,10 @@ const AuthenticatedLibraryItemsItemIdRoute =
     path: '/items/$itemId',
     getParentRoute: () => AuthenticatedLibraryRoute,
   } as any)
-const AuthenticatedLibraryCollectionTypeLibraryIdRoute =
-  AuthenticatedLibraryCollectionTypeLibraryIdRouteImport.update({
-    id: '/$collectionType/$libraryId',
-    path: '/$collectionType/$libraryId',
+const AuthenticatedLibraryShowsSeriesIdRoute =
+  AuthenticatedLibraryShowsSeriesIdRouteImport.update({
+    id: '/shows/$seriesId',
+    path: '/shows/$seriesId',
     getParentRoute: () => AuthenticatedLibraryRoute,
   } as any)
 
@@ -141,11 +141,11 @@ export interface RootRouteChildren {
 
 declare module '@tanstack/solid-router' {
   interface FileRoutesByPath {
-    '/login': {
-      id: '/login'
-      path: '/login'
-      fullPath: '/login'
-      preLoaderRoute: typeof LoginRouteImport
+    '/': {
+      id: '/'
+      path: '/'
+      fullPath: '/'
+      preLoaderRoute: typeof IndexRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/_authenticated': {
@@ -155,11 +155,11 @@ declare module '@tanstack/solid-router' {
       preLoaderRoute: typeof AuthenticatedRouteImport
       parentRoute: typeof rootRouteImport
     }
-    '/': {
-      id: '/'
-      path: '/'
-      fullPath: '/'
-      preLoaderRoute: typeof IndexRouteImport
+    '/login': {
+      id: '/login'
+      path: '/login'
+      fullPath: '/login'
+      preLoaderRoute: typeof LoginRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/_authenticated/library': {
@@ -183,11 +183,11 @@ declare module '@tanstack/solid-router' {
       preLoaderRoute: typeof AuthenticatedLibrarySearchRouteImport
       parentRoute: typeof AuthenticatedLibraryRoute
     }
-    '/_authenticated/library/shows/$seriesId': {
-      id: '/_authenticated/library/shows/$seriesId'
-      path: '/shows/$seriesId'
-      fullPath: '/library/shows/$seriesId'
-      preLoaderRoute: typeof AuthenticatedLibraryShowsSeriesIdRouteImport
+    '/_authenticated/library/$collectionType/$libraryId': {
+      id: '/_authenticated/library/$collectionType/$libraryId'
+      path: '/$collectionType/$libraryId'
+      fullPath: '/library/$collectionType/$libraryId'
+      preLoaderRoute: typeof AuthenticatedLibraryCollectionTypeLibraryIdRouteImport
       parentRoute: typeof AuthenticatedLibraryRoute
     }
     '/_authenticated/library/items/$itemId': {
@@ -197,11 +197,11 @@ declare module '@tanstack/solid-router' {
       preLoaderRoute: typeof AuthenticatedLibraryItemsItemIdRouteImport
       parentRoute: typeof AuthenticatedLibraryRoute
     }
-    '/_authenticated/library/$collectionType/$libraryId': {
-      id: '/_authenticated/library/$collectionType/$libraryId'
-      path: '/$collectionType/$libraryId'
-      fullPath: '/library/$collectionType/$libraryId'
-      preLoaderRoute: typeof AuthenticatedLibraryCollectionTypeLibraryIdRouteImport
+    '/_authenticated/library/shows/$seriesId': {
+      id: '/_authenticated/library/shows/$seriesId'
+      path: '/shows/$seriesId'
+      fullPath: '/library/shows/$seriesId'
+      preLoaderRoute: typeof AuthenticatedLibraryShowsSeriesIdRouteImport
       parentRoute: typeof AuthenticatedLibraryRoute
     }
   }

@@ -9,10 +9,12 @@ import { ensureOwnedDirectory, removeOwnedDirectory } from '../support/ownership
 import { preflight } from '../support/preflight';
 import { runCommand } from '../support/process';
 
+const SecuritySchema = Schema.Struct({ capabilities: Schema.Array(Schema.String) });
+
 const ProductionConfigSchema = Schema.Struct({
   app: Schema.Struct({
     withGlobalTauri: Schema.Boolean,
-    security: Schema.Struct({ capabilities: Schema.Array(Schema.String) }),
+    security: SecuritySchema,
   }),
 });
 
