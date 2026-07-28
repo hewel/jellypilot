@@ -55,6 +55,10 @@ import {
   libraryBrowseVirtualOverscanRows,
   libraryBrowseVirtualRowHeight,
 } from '~utils/libraryBrowseLayout';
+import {
+  libraryBrowsePageLocationForDisplayIndex,
+  libraryBrowsePageStartsForRows,
+} from '~utils/libraryBrowsePageSelection';
 
 import { AUTHENTICATED_HOME_ROUTE } from '../../../../router-guards';
 import * as styles from '../browseRoute.styles';
@@ -345,15 +349,19 @@ function LibraryBrowseRoute() {
     Array.from({ length: columnCount() }, (_, index) => index),
   );
   const estimateVirtualRowHeight = () => libraryBrowseVirtualRowHeight(virtualGridWidth());
-  const serverIndexForDisplayIndex = (displayIndex: number) =>
-    needsReverse() ? totalRecordCount() - 1 - displayIndex : displayIndex;
-  const pageStartForServerIndex = (serverIndex: number) =>
-    Math.floor(serverIndex / LIBRARY_BROWSE_PAGE_SIZE) * LIBRARY_BROWSE_PAGE_SIZE;
   const itemForDisplayIndex = (displayIndex: number) => {
-    const serverIndex = serverIndexForDisplayIndex(displayIndex);
-    const pageStart = pageStartForServerIndex(serverIndex);
-    const page = successfulPageMap().get(pageStart);
-    return page?.items[serverIndex - page.page.startIndex] ?? null;
+    const location = libraryBrowsePageLocationForDisplayIndex({
+      displayIndex,
+      totalRecordCount: totalRecordCount(),
+      pageSize: LIBRARY_BROWSE_PAGE_SIZE,
+      reverse: needsReverse(),
+    });
+    if (!location) {
+      return null;
+    }
+
+    const page = successfulPageMap().get(location.pageStart);
+    return page?.items[location.indexWithinPage] ?? null;
   };
   const loadedDisplayItemCount = () =>
     Math.min(
@@ -386,32 +394,14 @@ function LibraryBrowseRoute() {
       return virtualScrollMargin();
     },
   });
-  const virtualPageStartsForCurrentWindow = () => {
-    const starts = new Set<number>();
-    const total = totalRecordCount();
-    const columns = columnCount();
-
-    for (const virtualRow of rowVirtualizer.getVirtualItems()) {
-      for (let columnIndex = 0; columnIndex < columns; columnIndex += 1) {
-        const displayIndex = virtualRow.index * columns + columnIndex;
-        if (displayIndex >= total) {
-          continue;
-        }
-
-        starts.add(pageStartForServerIndex(serverIndexForDisplayIndex(displayIndex)));
-      }
-    }
-
-    if (starts.size > 0) {
-      const lastValidStart = pageStartForServerIndex(total - 1);
-      const lookAheadStart = Math.max(...starts) + LIBRARY_BROWSE_PAGE_SIZE;
-      if (lookAheadStart <= lastValidStart) {
-        starts.add(lookAheadStart);
-      }
-    }
-
-    return starts;
-  };
+  const virtualPageStartsForCurrentWindow = () =>
+    libraryBrowsePageStartsForRows({
+      rowIndexes: rowVirtualizer.getVirtualItems().map((virtualRow) => virtualRow.index),
+      columnCount: columnCount(),
+      totalRecordCount: totalRecordCount(),
+      pageSize: LIBRARY_BROWSE_PAGE_SIZE,
+      reverse: needsReverse(),
+    });
   const fetchVirtualPage = (startIndex: number, allowNetworkFetch: boolean) => {
     const total = totalRecordCount();
     if (

@@ -1433,6 +1433,39 @@ test('library browse prefetches one page beyond the visible virtual window', asy
   cleanup();
 });
 
+test('library browse reverse order prefetches the lower look-ahead page', async () => {
+  mockShellCommands();
+  const browseCommand = rstest.spyOn(commands, 'libraryBrowseVideo').mockImplementation((request) =>
+    Promise.resolve({
+      data: largeVideoLibraryPage(request.startIndex),
+      status: 'ok',
+    }),
+  );
+  const cleanup = renderShell('/library/movies/movies');
+
+  expect(await screen.findByRole('link', { name: 'Open Virtual Movie 1' })).toBeVisible();
+  // Ascending phase settles: required pages 0/24/48 plus the forward look-ahead 72.
+  await waitFor(() =>
+    expect(browseCommand.mock.calls.some(([request]) => request.startIndex === 72)).toBe(true),
+  );
+
+  fireEvent.click(screen.getByRole('button', { name: 'Sort ascending' }));
+
+  await waitFor(() => {
+    const startIndexes = browseCommand.mock.calls.map(([request]) => request.startIndex);
+    // Page zero remains the infinite-query bootstrap in descending order too.
+    const descendingBootstrapIndex = startIndexes.lastIndexOf(0);
+    expect(descendingBootstrapIndex).toBeGreaterThan(0);
+    const descendingRequests = startIndexes.slice(descendingBootstrapIndex + 1);
+    // Reverse display order walks the window toward lower server page starts in
+    // encounter order and requests the speculative page 24 after required page 48.
+    expect(descendingRequests.slice(0, 4)).toEqual([120, 96, 72, 48]);
+    expect(descendingRequests.indexOf(24)).toBeGreaterThan(descendingRequests.indexOf(48));
+  });
+
+  cleanup();
+});
+
 test('library browse retries failed virtual placeholder page', async () => {
   mockShellCommands();
   let bottomPageShouldFail = true;
