@@ -876,9 +876,9 @@ test('library landing renders command-backed rows and drawer trigger', async () 
   expect(screen.getByRole('link', { name: 'Shows' })).toBeVisible();
   expect(await screen.findByRole('heading', { name: 'Continue Watching' })).toBeVisible();
   expect(screen.getByRole('button', { name: 'Resume Resume Movie' })).toBeVisible();
-  expect(screen.getByRole('link', { name: /Next Episode/ })).toBeVisible();
-  expect(screen.getByRole('link', { name: /Latest Movie/ })).toBeVisible();
-  expect(screen.getByRole('link', { name: /Latest Episode/ })).toBeVisible();
+  expect(screen.getByRole('link', { name: 'Open Next Episode' })).toBeVisible();
+  expect(screen.getByRole('link', { name: 'Open Latest Movie' })).toBeVisible();
+  expect(screen.getByRole('link', { name: 'Open Latest Episode' })).toBeVisible();
   const resumeMovieButton = screen.getByRole('button', { name: 'Resume Resume Movie' });
   expect(resumeMovieButton).toBeVisible();
   expect(within(resumeMovieButton).queryByRole('img', { name: 'Played' })).toBeNull();
@@ -895,14 +895,14 @@ test('library landing renders command-backed rows and drawer trigger', async () 
   expect(resumeArtwork.parentElement).toHaveAttribute('data-aspect', 'video');
   fireEvent.load(resumeArtwork);
   expect(resumeArtwork.parentElement).toHaveAttribute('data-aspect', 'video');
-  const latestMovieLink = screen.getByRole('link', { name: /Latest Movie/ });
+  const latestMovieLink = screen.getByRole('link', { name: 'Open Latest Movie' });
   const latestMovieTitle = screen.getByText('Latest Movie • Movie');
   expect(latestMovieTitle).toBeVisible();
   expect(latestMovieLink.contains(latestMovieTitle)).toBe(false);
   expect(screen.queryByText('Movie · null')).toBeNull();
   expect(latestMovieLink.querySelector('[data-aspect="poster"]')).not.toBeNull();
   expect(screen.getAllByText('No artwork')).toHaveLength(3);
-  const latestEpisodeLink = screen.getByRole('link', { name: /Latest Episode/ });
+  const latestEpisodeLink = screen.getByRole('link', { name: 'Open Latest Episode' });
   expect(latestEpisodeLink.querySelector('svg')).not.toBeNull();
   fireEvent.click(resumeMovieButton);
   await waitFor(() =>

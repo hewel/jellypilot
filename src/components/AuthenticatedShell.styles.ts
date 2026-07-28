@@ -82,7 +82,7 @@ export const main = cva({
     gridColumn: '2',
     minWidth: '[0]',
     position: 'relative',
-    pl: '2',
+    px: '4',
     width: 'full',
     zIndex: '0',
   },

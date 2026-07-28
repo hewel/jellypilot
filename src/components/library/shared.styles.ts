@@ -125,22 +125,13 @@ export const videoGridGap = {
   }),
 };
 
-export const subtitleLink = css({
-  color: 'secondary',
-  textDecoration: 'none',
-  textUnderlineOffset: '1',
-  _hover: {
-    textDecoration: 'underline',
-  },
-});
-
 export const userDataControls = css({
   display: 'grid',
   gap: '2',
 });
 
 export const userDataActions = css({
-  // Match DetailHero actions: column stack under sm, row wrap on sm+.
+  // Match detail hero actions: column stack under sm, row wrap on sm+.
   alignItems: 'stretch',
   display: 'flex',
   flexDirection: 'column',
@@ -211,25 +202,4 @@ export const errorText = css({
   color: 'error',
   fontSize: '12',
   lineHeight: '16',
-});
-
-export const pillRow = css({
-  display: 'flex',
-  flexWrap: 'wrap',
-  gap: '2',
-});
-
-export const genre = css({
-  borderColor: 'outlineVariant',
-  borderRadius: 'full',
-  borderStyle: 'solid',
-  borderWidth: '1px',
-  color: 'onSurfaceVariant/90',
-  fontSize: '11',
-  fontWeight: 'bold',
-  letterSpacing: '8',
-  lineHeight: '16',
-  px: '3',
-  py: '1',
-  textTransform: 'uppercase',
 });

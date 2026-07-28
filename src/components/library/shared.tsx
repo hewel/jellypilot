@@ -2,7 +2,6 @@ import { cx } from '@styled-system/css';
 import { Exit, Match } from 'effect';
 import { Check, Clapperboard, Heart, RefreshCw } from 'lucide-solid';
 import { For, Show, createSignal, createUniqueId, onCleanup, onMount } from 'solid-js';
-import type { JSX } from 'solid-js';
 import {
   videoHomeAspect,
   videoHomeColumnCount,
@@ -11,12 +10,10 @@ import {
 
 import type {
   VideoHomeItem,
-  VideoItemDetail,
   VideoLibraryKind,
   VideoLibraryPlayedFilter,
   VideoLibrarySort,
   VideoSeason,
-  VideoShowDetail,
   VideoUserDataAction,
   VideoUserDataUpdate,
   VideoUserDataUpdateRequest,
@@ -51,22 +48,6 @@ export function LibraryStatusPanel(props: { title: string; description?: string 
         </div>
       </div>
     </Card>
-  );
-}
-
-export function GenrePills(props: { genres: string[] }) {
-  return (
-    <Show when={props.genres.length > 0}>
-      <div class={styles.pillRow} role="list">
-        <For each={props.genres}>
-          {(genre) => (
-            <span class={styles.genre} role="listitem">
-              {genre}
-            </span>
-          )}
-        </For>
-      </div>
-    </Show>
   );
 }
 
@@ -179,46 +160,6 @@ export function formatRuntime(seconds: number | null) {
   const hours = Math.floor(totalMinutes / 60);
   const minutes = totalMinutes % 60;
   return hours > 0 ? `${hours}h ${minutes}m` : `${minutes}m`;
-}
-
-export function detailSubtitle(detail: VideoItemDetail) {
-  if (detail.itemType === 'Episode' && detail.seriesName) {
-    const episode =
-      detail.seasonNumber !== null && detail.episodeNumber !== null
-        ? `S${detail.seasonNumber.toString().padStart(2, '0')}E${detail.episodeNumber.toString().padStart(2, '0')}`
-        : 'Episode';
-    return `${detail.seriesName} · ${episode}`;
-  }
-  return detail.productionYear?.toString() ?? detail.itemType;
-}
-
-export function detailSubtitleElement(detail: VideoItemDetail): JSX.Element {
-  if (detail.itemType === 'Episode' && detail.seriesName) {
-    const episode =
-      detail.seasonNumber !== null && detail.episodeNumber !== null
-        ? `S${detail.seasonNumber.toString().padStart(2, '0')}E${detail.episodeNumber.toString().padStart(2, '0')}`
-        : 'Episode';
-
-    return (
-      <>
-        <Show when={detail.seriesId} fallback={<span>{detail.seriesName}</span>}>
-          {(seriesId) => (
-            <a href={`/library/shows/${seriesId()}`} class={styles.subtitleLink}>
-              {detail.seriesName}
-            </a>
-          )}
-        </Show>
-        {' · '}
-        {episode}
-      </>
-    );
-  }
-
-  return detail.productionYear?.toString() ?? detail.itemType;
-}
-
-export function showSubtitle(detail: VideoShowDetail) {
-  return detail.productionYear?.toString() ?? 'Series';
 }
 
 export function seasonLabel(season: VideoSeason) {

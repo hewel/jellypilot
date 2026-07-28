@@ -9,34 +9,222 @@ export const stack = css({
   minWidth: '[0]',
 });
 
-export const content = css({
+export const page = css({
   display: 'grid',
   gap: '6',
   marginInline: 'auto',
   maxWidth: '[min(1400px, 100%)]',
   minWidth: '[0]',
-  px: '4',
   py: '6',
   width: 'full',
-  sm: {
-    px: '6',
+});
+
+export const backLink = css({
+  alignItems: 'center',
+  appearance: 'none',
+  bg: '[transparent]',
+  border: 'none',
+  borderRadius: 'md',
+  color: 'onSurfaceVariant',
+  cursor: 'pointer',
+  display: 'inline-flex',
+  fontSize: '14',
+  gap: '1',
+  justifySelf: 'start',
+  lineHeight: '20',
+  p: '1',
+  _hover: {
+    color: 'onSurface',
   },
-  lg: {
-    px: '10',
-  },
-  xl: {
-    px: '12',
+  _focusVisible: {
+    outline: '[2px solid {colors.secondary}]',
+    outlineOffset: '1',
   },
 });
-export const overview = css({
+
+export const hero = css({
+  bg: 'surfaceContainerLow/60',
+  borderColor: 'outlineVariant/60',
+  borderRadius: '2xl',
+  borderStyle: 'solid',
+  borderWidth: '1px',
+  display: 'grid',
+  gridTemplateColumns: '[minmax(0, 1fr)]',
+  overflow: 'hidden',
+  lg: {
+    gridTemplateColumns: '[minmax(0, 1.8fr) minmax(0, 1fr)]',
+  },
+});
+
+export const heroInfo = css({
+  alignContent: 'start',
+  display: 'grid',
+  gap: '4',
+  minWidth: '[0]',
+  p: '6',
+  sm: {
+    p: '8',
+  },
+  lg: {
+    p: '10',
+  },
+});
+
+export const badgeRow = css({
+  alignItems: 'center',
+  display: 'flex',
+  flexWrap: 'wrap',
+  gap: '2',
+});
+
+export const typeBadge = css({
+  alignItems: 'center',
+  bg: 'secondaryContainer/45',
+  borderColor: 'secondary/50',
+  borderRadius: 'full',
+  borderStyle: 'solid',
+  borderWidth: '1px',
+  color: 'onSecondaryContainer',
+  display: 'inline-flex',
+  fontSize: '12',
+  fontWeight: 'semibold',
+  gap: '1_5',
+  lineHeight: '16',
+  px: '3',
+  py: '1',
+});
+
+export const badge = css({
+  borderColor: 'outlineVariant',
+  borderRadius: 'full',
+  borderStyle: 'solid',
+  borderWidth: '1px',
+  color: 'onSurfaceVariant',
+  display: 'inline-flex',
+  fontSize: '12',
+  lineHeight: '16',
+  px: '3',
+  py: '1',
+});
+
+export const heroTitle = css({
+  color: 'onSurface',
+  fontSize: '32',
+  fontWeight: 'bold',
+  lineHeight: '40',
+  overflowWrap: 'break-word',
+  sm: {
+    fontSize: '[40px]',
+    lineHeight: '[48px]',
+  },
+});
+
+export const heroMeta = css({
+  alignItems: 'baseline',
+  color: 'onSurfaceVariant',
+  display: 'flex',
+  flexWrap: 'wrap',
+  fontSize: '14',
+  fontVariantNumeric: 'tabular-nums',
+  gap: '1_5',
+  lineHeight: '20',
+});
+
+export const heroMetaLink = css({
+  color: 'secondary',
+  textDecoration: 'none',
+  _hover: {
+    textDecoration: 'underline',
+  },
+});
+
+export const heroOverview = css({
   color: 'onSurfaceVariant',
   fontSize: '14',
+  lineClamp: '2',
   lineHeight: '22',
-  maxWidth: '[1100px]',
+  maxWidth: '[64ch]',
   lg: {
     fontSize: '15',
     lineHeight: '24',
   },
+});
+
+export const accentBar = css({
+  bg: '[linear-gradient(90deg, {colors.primary}, {colors.primary/0})]',
+  borderRadius: 'full',
+  height: '[3px]',
+  width: '[240px]',
+});
+
+export const heroActions = css({
+  alignItems: 'center',
+  display: 'flex',
+  flexWrap: 'wrap',
+  gap: '3',
+  mt: '2',
+});
+
+export const heroArt = css({
+  bg: 'surfaceContainer/80',
+  borderColor: 'outlineVariant/60',
+  borderTopStyle: 'solid',
+  borderTopWidth: '1px',
+  minHeight: '[220px]',
+  overflow: 'hidden',
+  position: 'relative',
+  lg: {
+    borderLeftStyle: 'solid',
+    borderLeftWidth: '1px',
+    borderTopWidth: '[0]',
+    minHeight: '[320px]',
+  },
+});
+
+export const heroArtImage = css({
+  height: 'full',
+  inset: '[0]',
+  objectFit: 'cover',
+  position: 'absolute',
+  width: 'full',
+});
+
+export const heroArtFallback = css({
+  alignItems: 'flex-end',
+  color: 'onSurface/12',
+  display: 'flex',
+  fontSize: '[10rem]',
+  fontWeight: 'bold',
+  height: 'full',
+  inset: '[0]',
+  lineHeight: '[1]',
+  p: '6',
+  position: 'absolute',
+  userSelect: 'none',
+});
+
+export const heroArtYear = css({
+  bottom: '4',
+  color: 'onSurfaceVariant/70',
+  fontSize: '12',
+  fontVariantNumeric: 'tabular-nums',
+  lineHeight: '16',
+  position: 'absolute',
+  right: '5',
+});
+
+export const heroArtProgress = css({
+  bg: 'surfaceContainerLowest/70',
+  bottom: '0',
+  height: '[4px]',
+  left: '0',
+  position: 'absolute',
+  right: '0',
+});
+
+export const heroArtProgressBar = css({
+  bg: 'primary',
+  height: 'full',
 });
 
 export const pillButton = css({
@@ -55,11 +243,6 @@ export const icon4 = css({
   width: '4',
 });
 
-export const icon6 = css({
-  height: '6',
-  width: '6',
-});
-
 export const spinner = css({
   animation: '[spin 1s {easings.linear} infinite]',
 });
@@ -73,293 +256,15 @@ export const error = css({
 
 export const skeletonHero = css({
   animation: pulse,
-  bg: 'surfaceContainerLowest/60',
-  height: '[clamp(280px, 44vh, 560px)]',
-});
-
-export const skeletonContent = css({
-  display: 'grid',
-  gap: '4',
-  marginInline: 'auto',
-  maxWidth: '[1400px]',
-  pb: '2',
-  px: '6',
-  pt: '2',
-  width: 'full',
-  lg: {
-    px: '10',
-  },
-  xl: {
-    px: '12',
-  },
-});
-
-export const skeletonLine = css({
-  animation: pulse,
-  bg: 'surfaceContainerHigh/60',
-  borderRadius: 'md',
-  height: '4',
-  maxWidth: '[1100px]',
-  width: 'full',
-});
-
-export const skeletonLineShort = css({
-  maxWidth: '[900px]',
-  width: '[83.333%]',
-});
-
-export const skeletonPill = css({
-  animation: pulse,
-  bg: 'surfaceContainerHigh/70',
-  borderRadius: 'full',
-  height: '7',
-  width: '24',
-});
-
-export const section = css({
-  display: 'grid',
-  gap: '4',
-});
-
-export const sectionCompact = css({
-  display: 'grid',
-  gap: '3',
-});
-
-export const sectionHeader = css({
-  display: 'flex',
-  flexDirection: 'column',
-  gap: '2',
-  sm: {
-    alignItems: 'flex-end',
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-  },
-});
-
-export const sectionTitle = css({
-  color: 'onSurface',
-  fontSize: '22',
-  fontWeight: 'bold',
-  lineHeight: '28',
-});
-
-export const titleSmall = css({
-  color: 'onSurface',
-  fontSize: '16',
-  fontWeight: 'semibold',
-  lineHeight: '24',
-});
-
-export const sectionSubtitle = css({
-  color: 'onSurfaceVariant/80',
-  fontSize: '12',
-  fontVariantNumeric: 'tabular-nums',
-  lineHeight: '16',
-});
-
-export const fadeList = css({
-  animation: '[fadeIn 300ms {easings.emphasized} forwards]',
-  display: 'flex',
-  flexDirection: 'column',
-  gap: '3',
-});
-
-export const seasonTabs = css({
-  bg: 'surfaceContainerLow/70',
-  borderColor: 'outlineVariant',
+  bg: 'surfaceContainerLow/60',
   borderRadius: '2xl',
-  borderStyle: 'solid',
-  borderWidth: '1px',
-  display: 'flex',
-  gap: '2',
-  overflowX: 'auto',
-  p: '2',
+  height: '[320px]',
 });
 
-export const seasonItem = css({
-  flexShrink: '[0]',
-});
-
-export const selectedSeason = css({
-  bg: 'secondaryContainer/45',
-  borderColor: 'secondary',
-  color: 'onSecondaryContainer',
-});
-
-export const selectWrap = css({
-  maxWidth: '[20rem]',
-});
-
-export const episodeCard = css({
-  alignItems: 'center',
-  display: 'grid',
-  gap: '4',
-  gridTemplateColumns: '[1fr]',
-  padding: '[{spacing.3} !important]',
-  sm: {
-    gridTemplateColumns: '[160px minmax(0, 1fr) auto]',
-  },
-  lg: {
-    gridTemplateColumns: '[220px minmax(0, 1fr) auto]',
-  },
-});
-
-export const episodeImageWrap = css({
-  aspectRatio: '[16 / 9]',
-  bg: 'surfaceContainerLowest/60',
-  borderRadius: 'lg',
-  display: 'none',
-  overflow: 'hidden',
-  width: '[160px]',
-  sm: {
-    display: 'block',
-  },
-  lg: {
-    width: '[220px]',
-  },
-});
-
-export const episodeFallback = css({
-  alignItems: 'center',
-  color: 'onSurfaceVariant',
-  display: 'flex',
-  fontSize: '11',
-  fontWeight: 'bold',
-  height: 'full',
-  justifyContent: 'center',
-  letterSpacing: '8',
-  lineHeight: '16',
-  textTransform: 'uppercase',
-});
-
-export const image = css({
-  height: 'full',
-  objectFit: 'cover',
-  outline: '[1px solid rgb(255 255 255 / 0.1)]',
-  outlineOffset: '[-1px]',
-  width: 'full',
-});
-
-export const episodeCopy = css({
-  display: 'grid',
-  gap: '1_5',
-  minWidth: '[0]',
-});
-
-export const episodeMeta = css({
-  alignItems: 'center',
-  display: 'flex',
-  flexWrap: 'wrap',
-  gap: '2',
-});
-
-export const episodeLabel = css({
-  color: 'secondary',
-  fontSize: '11',
-  fontWeight: 'bold',
-  letterSpacing: '8',
-  lineHeight: '16',
-  textTransform: 'uppercase',
-});
-
-export const muted = css({
-  color: 'onSurfaceVariant/70',
-  fontSize: '12',
-  lineHeight: '16',
-});
-
-export const progressText = css({
-  color: 'secondary',
-  fontSize: '12',
-  fontVariantNumeric: 'tabular-nums',
-  fontWeight: 'semibold',
-  lineHeight: '16',
-});
-
-export const episodeLink = css({
-  color: 'onSurface',
-  display: 'block',
-  fontSize: '16',
-  fontWeight: 'semibold',
-  lineHeight: '24',
-  overflow: 'hidden',
-  textDecoration: 'none',
-  textOverflow: 'ellipsis',
-  whiteSpace: 'nowrap',
-  _hover: {
-    textDecoration: 'underline',
-  },
-});
-
-export const actionCell = css({
-  display: 'flex',
-  flexShrink: '[0]',
-});
-
-export const episodeButton = css({
-  borderRadius: 'full',
-  fontSize: '14',
-  fontWeight: 'semibold',
-  letterSpacing: '0',
-  lineHeight: '20',
-  px: '5',
-  py: '2',
-  textTransform: 'uppercase',
-});
-
-export const skeletonTitle = css({
+export const skeletonBar = css({
   animation: pulse,
   bg: 'surfaceContainerHigh/70',
-  borderRadius: 'md',
-  height: '6',
-  width: '[11rem]',
-});
-
-export const skeletonEpisodeImage = css({
-  animation: pulse,
-  aspectRatio: '[16 / 9]',
-  bg: 'surfaceContainerLowest/60',
-  borderRadius: 'lg',
-  display: 'none',
-  overflow: 'hidden',
-  width: '[160px]',
-  sm: {
-    display: 'block',
-  },
-  lg: {
-    width: '[220px]',
-  },
-});
-
-export const skeletonButton = css({
-  animation: pulse,
-  bg: 'primaryContainer/40',
   borderRadius: 'full',
-  height: '10',
-  width: '24',
-});
-
-export const skeletonMiniLine = css({
-  animation: pulse,
-  bg: 'surfaceContainerHigh/70',
-  borderRadius: 'md',
-  height: '3',
-  width: '14',
-});
-
-export const skeletonSmallPill = css({
-  animation: pulse,
-  bg: 'surfaceContainerHigh/60',
-  borderRadius: 'full',
-  height: '6',
-  width: '20',
-});
-
-export const skeletonEpisodeTitle = css({
-  animation: pulse,
-  bg: 'surfaceContainerHigh/80',
-  borderRadius: 'md',
-  height: '5',
-  width: '[80%]',
+  height: '9',
+  width: '[16rem]',
 });

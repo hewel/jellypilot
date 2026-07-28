@@ -4,17 +4,13 @@ import type {
   VideoSeason,
   VideoUserDataUpdateRequest,
 } from '@bindings';
-import { DetailHero } from '@components/library/DetailHero';
 import {
-  GenrePills,
   LibraryStatusPanel,
   UserDataControls,
   formatRuntime,
   seasonLabel,
-  showSubtitle,
 } from '@components/library/shared';
-import * as libraryStyles from '@components/library/shared.styles';
-import { Button, Card, JellyPilotSelect, StatusBadge } from '@components/ui';
+import { Button, JellyPilotSelect, StatusBadge } from '@components/ui';
 import type { JellyPilotSelectItem } from '@components/ui';
 import { cx } from '@styled-system/css';
 import { createMutation, createQuery, useQueryClient } from '@tanstack/solid-query';
@@ -26,8 +22,8 @@ import {
   useRouter,
 } from '@tanstack/solid-router';
 import { Exit, Option } from 'effect';
-import { Film, Play, RefreshCw, Tv } from 'lucide-solid';
-import { For, Show, Suspense, createEffect, createMemo, createSignal } from 'solid-js';
+import { ChevronLeft, Play, RefreshCw, Tv } from 'lucide-solid';
+import { For, Show, Suspense, createMemo, createSignal } from 'solid-js';
 import { commandFailureMessage } from '~effects/commands';
 import { fetchConnectionState } from '~effects/connection';
 import {
@@ -49,6 +45,7 @@ import { imageSource } from '~utils/imageSource';
 
 import { AUTHENTICATED_HOME_ROUTE } from '../../../../router-guards';
 import * as styles from '../detailRoute.styles';
+import * as showStyles from './showDetail.styles';
 
 export const Route = createFileRoute('/_authenticated/library/shows/$seriesId')({
   component: LibraryShowDetailRoute,
@@ -243,6 +240,30 @@ function LibraryShowDetailRoute() {
         : 'Play';
     return `${prefix} ${episodeLabel(nextEpisode)}`;
   };
+  const heroMeta = () => {
+    const show = detail();
+    if (!show) {
+      return '';
+    }
+    const parts: string[] = [];
+    if (show.productionYear !== null) {
+      parts.push(show.productionYear.toString());
+    }
+    if (show.seasons.length > 0) {
+      parts.push(`${show.seasons.length} ${show.seasons.length === 1 ? 'season' : 'seasons'}`);
+    }
+    return parts.join(' · ');
+  };
+  const seasonMeta = () => {
+    const episodes = seasonEpisodes();
+    if (episodes.length === 0) {
+      return null;
+    }
+    const totalSeconds = episodes.reduce((sum, ep) => sum + (ep.runtimeSeconds ?? 0), 0);
+    const total = totalSeconds > 0 ? formatRuntime(totalSeconds) : null;
+    const count = `${episodes.length} ${episodes.length === 1 ? 'episode' : 'episodes'}`;
+    return total ? `${count} · ${total} total` : count;
+  };
 
   return (
     <div class={styles.stack}>
@@ -252,28 +273,46 @@ function LibraryShowDetailRoute() {
           fallback={<LibraryStatusPanel title={statusTitle()} description={statusDescription()} />}
         >
           {(show) => (
-            <>
-              <DetailHero
-                title={show().name}
-                subtitle={showSubtitle(show())}
-                backdropImageId={show().backdropImageId ?? null}
-                artworkImageId={show().artworkImageId ?? null}
-                artworkAspect="poster"
-                typeLabel="Series"
-                typeIcon={<Tv class={styles.icon6} />}
-                onBack={closeDetail}
-                badges={
-                  <>
+            <div class={styles.page}>
+              <button type="button" class={styles.backLink} aria-label="Back" onClick={closeDetail}>
+                <ChevronLeft class={styles.icon4} aria-hidden="true" />
+                Back to library
+              </button>
+
+              <section class={styles.hero} aria-labelledby="show-detail-title">
+                <div class={styles.heroInfo}>
+                  <div class={styles.badgeRow}>
+                    <span class={styles.typeBadge}>
+                      <Tv class={styles.icon4} aria-hidden="true" />
+                      Series
+                    </span>
+                    <Show when={show().productionYear}>
+                      {(year) => <span class={styles.badge}>{year()}</span>}
+                    </Show>
+                    <For each={show().genres.slice(0, 3)}>
+                      {(genre) => <span class={styles.badge}>{genre}</span>}
+                    </For>
                     <StatusBadge variant={show().played ? 'success' : 'neutral'}>
                       {show().played ? 'Played' : 'Unplayed'}
                     </StatusBadge>
                     <StatusBadge variant={show().favorite ? 'success' : 'neutral'}>
                       {show().favorite ? 'Favorite' : 'Not favorite'}
                     </StatusBadge>
-                  </>
-                }
-                actions={
-                  <>
+                  </div>
+
+                  <h1 id="show-detail-title" class={styles.heroTitle}>
+                    {show().name}
+                  </h1>
+
+                  <Show when={heroMeta()}>{(meta) => <p class={styles.heroMeta}>{meta()}</p>}</Show>
+
+                  <Show when={show().overview}>
+                    {(overview) => <p class={styles.heroOverview}>{overview()}</p>}
+                  </Show>
+
+                  <div class={styles.accentBar} aria-hidden="true" />
+
+                  <div class={styles.heroActions}>
                     <Button
                       type="button"
                       variant="primary"
@@ -319,84 +358,84 @@ function LibraryShowDetailRoute() {
                         });
                       }}
                     />
-                  </>
-                }
-              />
-
-              <div class={styles.content}>
-                <Show when={show().overview}>
-                  {(overview) => <p class={styles.overview}>{overview()}</p>}
-                </Show>
-
-                <GenrePills genres={show().genres} />
-
-                <section class={styles.section} aria-labelledby="show-seasons-title">
-                  <div class={styles.sectionHeader}>
-                    <div>
-                      <h2 id="show-seasons-title" class={styles.sectionTitle}>
-                        Episodes
-                      </h2>
-                    </div>
-                    <p class={styles.sectionSubtitle}>{show().seasons.length} seasons available</p>
                   </div>
+                </div>
 
+                <div class={styles.heroArt}>
                   <Show
-                    when={show().seasons.length > 0}
+                    when={show().artworkImageId}
                     fallback={
-                      <LibraryStatusPanel
-                        title="No seasons available"
-                        description="Jellyfin returned no seasons for this show."
-                      />
+                      <div class={styles.heroArtFallback} aria-hidden="true">
+                        {show().name.charAt(0)}
+                      </div>
                     }
                   >
-                    <SeasonSelector
-                      seasons={show().seasons}
-                      activeSeason={activeSeason()}
-                      disabled={episodesLoading()}
-                      onSelect={loadEpisodes}
-                    />
-
-                    <Suspense fallback={<SeasonEpisodesSkeleton />}>
-                      <Show
-                        when={hasSeasonEpisodes()}
-                        fallback={
-                          episodesLoading() ? (
-                            <SeasonEpisodesSkeleton />
-                          ) : (
-                            <LibraryStatusPanel
-                              title={episodesStatusTitle()}
-                              description={episodesStatusDescription()}
-                            />
-                          )
-                        }
-                      >
-                        <section
-                          class={styles.sectionCompact}
-                          aria-labelledby="season-episodes-title"
-                        >
-                          <h3 id="season-episodes-title" class={styles.titleSmall}>
-                            {activeSeason() ? `${activeSeason()?.name} Episodes` : 'Episodes'}
-                          </h3>
-                          <div class={styles.fadeList}>
-                            <For each={seasonEpisodes()}>
-                              {(episode) => (
-                                <EpisodeRow
-                                  episode={episode}
-                                  label={episodeLabel(episode)}
-                                  busy={episodePlayBusy() === episode.id}
-                                  disabled={episodePlayBusy() !== null}
-                                  onPlay={() => void playEpisode(episode)}
-                                />
-                              )}
-                            </For>
-                          </div>
-                        </section>
-                      </Show>
-                    </Suspense>
+                    {(imageId) => (
+                      <img
+                        src={imageSource(imageId())}
+                        alt={`${show().name} artwork`}
+                        class={styles.heroArtImage}
+                      />
+                    )}
                   </Show>
-                </section>
-              </div>
-            </>
+                  <Show when={show().productionYear}>
+                    {(year) => <span class={styles.heroArtYear}>{year()}</span>}
+                  </Show>
+                </div>
+              </section>
+
+              <Show
+                when={show().seasons.length > 0}
+                fallback={
+                  <LibraryStatusPanel
+                    title="No seasons available"
+                    description="Jellyfin returned no seasons for this show."
+                  />
+                }
+              >
+                <div class={showStyles.seasonBar}>
+                  <SeasonSelector
+                    seasons={show().seasons}
+                    activeSeason={activeSeason()}
+                    disabled={episodesLoading()}
+                    onSelect={loadEpisodes}
+                  />
+                  <Show when={seasonMeta()}>
+                    {(meta) => <p class={showStyles.seasonMeta}>{meta()}</p>}
+                  </Show>
+                </div>
+
+                <Suspense fallback={<SeasonEpisodesSkeleton />}>
+                  <Show
+                    when={hasSeasonEpisodes()}
+                    fallback={
+                      episodesLoading() ? (
+                        <SeasonEpisodesSkeleton />
+                      ) : (
+                        <LibraryStatusPanel
+                          title={episodesStatusTitle()}
+                          description={episodesStatusDescription()}
+                        />
+                      )
+                    }
+                  >
+                    <section aria-label="Season episodes" class={showStyles.episodeList}>
+                      <For each={seasonEpisodes()}>
+                        {(episode) => (
+                          <EpisodeRow
+                            episode={episode}
+                            label={episodeLabel(episode)}
+                            busy={episodePlayBusy() === episode.id}
+                            disabled={episodePlayBusy() !== null}
+                            onPlay={() => void playEpisode(episode)}
+                          />
+                        )}
+                      </For>
+                    </section>
+                  </Show>
+                </Suspense>
+              </Show>
+            </div>
           )}
         </Show>
       </Suspense>
@@ -428,28 +467,27 @@ function SeasonSelector(props: {
     <Show
       when={props.seasons.length > 6}
       fallback={
-        <ul class={styles.seasonTabs} aria-label="Show seasons">
+        <ul class={showStyles.seasonTabs} aria-label="Show seasons">
           <For each={props.seasons}>
             {(season) => (
-              <li class={styles.seasonItem}>
-                <Button
+              <li>
+                <button
                   type="button"
-                  variant="outlined"
-                  class={styles.pillButton}
-                  classList={{ [styles.selectedSeason]: props.activeSeason?.id === season.id }}
+                  class={showStyles.seasonTab}
+                  classList={{ [showStyles.activeSeasonTab]: props.activeSeason?.id === season.id }}
                   aria-pressed={props.activeSeason?.id === season.id}
                   disabled={props.disabled}
                   onClick={() => props.onSelect(season)}
                 >
                   {seasonLabel(season)}
-                </Button>
+                </button>
               </li>
             )}
           </For>
         </ul>
       }
     >
-      <div class={styles.selectWrap}>
+      <div class={showStyles.seasonSelectWrap}>
         <JellyPilotSelect
           label="Season"
           items={seasonItems()}
@@ -470,131 +508,79 @@ function EpisodeRow(props: {
   disabled: boolean;
   onPlay: () => void;
 }) {
-  const [imageFailed, setImageFailed] = createSignal(false);
   const hasResume = () =>
     props.episode.resumePositionSeconds != null &&
     props.episode.resumePositionSeconds > 0 &&
     !props.episode.played;
 
-  createEffect(() => {
-    props.episode.artworkImageId;
-    setImageFailed(false);
-  });
+  const number =
+    props.episode.episodeNumber !== null
+      ? props.episode.episodeNumber.toString().padStart(2, '0')
+      : '–';
 
   return (
-    <Card variant="filled" surfaceTint={false} class={styles.episodeCard}>
-      <div class={styles.episodeImageWrap}>
-        <Show
-          when={!imageFailed() ? props.episode.artworkImageId : null}
-          fallback={
-            <div class={styles.episodeFallback}>
-              <Film class={styles.icon4} />
-            </div>
-          }
-        >
-          {(imageId) => (
-            <img
-              src={imageSource(imageId())}
-              alt={`${props.episode.name} artwork`}
-              class={styles.image}
-              loading="lazy"
-              onError={() => setImageFailed(true)}
-            />
-          )}
-        </Show>
-      </div>
+    <div class={showStyles.episodeRow}>
+      <span class={showStyles.episodeNumber} aria-hidden="true">
+        {number}
+      </span>
 
-      <div class={styles.episodeCopy}>
-        <div class={styles.episodeMeta}>
-          <span class={styles.episodeLabel}>{props.label}</span>
-          <Show when={props.episode.played}>
-            <StatusBadge variant="success">Played</StatusBadge>
-          </Show>
-          <Show when={props.episode.favorite}>
-            <StatusBadge variant="success">Favorite</StatusBadge>
-          </Show>
-          <Show when={formatRuntime(props.episode.runtimeSeconds)}>
-            {(runtime) => <span class={styles.muted}>{runtime()}</span>}
-          </Show>
-          <Show when={hasResume()}>
-            <span class={styles.muted}>·</span>
-            <span class={styles.progressText}>
-              {Math.round(props.episode.playedPercentage ?? 0)}% watched
-            </span>
-          </Show>
-        </div>
+      <div class={showStyles.episodeCopy}>
         <Link
           to="/library/items/$itemId"
           params={{ itemId: props.episode.id }}
-          class={styles.episodeLink}
+          class={showStyles.episodeTitle}
         >
           {props.episode.name}
         </Link>
+        <div class={showStyles.episodeSub}>
+          <span>{props.label}</span>
+          <Show when={props.episode.played}>
+            <span aria-hidden="true">·</span>
+            <span>Played</span>
+          </Show>
+          <Show when={hasResume()}>
+            <span aria-hidden="true">·</span>
+            <span>{Math.round(props.episode.playedPercentage ?? 0)}% watched</span>
+          </Show>
+        </div>
       </div>
 
-      <div class={styles.actionCell}>
-        <Button
-          type="button"
-          variant="primary"
-          class={styles.episodeButton}
-          disabled={props.disabled}
-          onClick={props.onPlay}
-          leadingIcon={
-            <Show when={props.busy} fallback={<Play class={styles.playIcon} />}>
-              <RefreshCw class={cx(styles.icon4, styles.spinner)} />
-            </Show>
-          }
-        >
-          {props.busy ? 'Loading...' : hasResume() ? 'Resume' : 'Play'}
-        </Button>
-      </div>
-    </Card>
+      <Show when={formatRuntime(props.episode.runtimeSeconds)}>
+        {(runtime) => <span class={showStyles.episodeRuntime}>{runtime()}</span>}
+      </Show>
+
+      <Button
+        type="button"
+        variant="outlined"
+        class={styles.pillButton}
+        disabled={props.disabled}
+        onClick={props.onPlay}
+        leadingIcon={
+          <Show when={props.busy} fallback={<Play class={styles.playIcon} />}>
+            <RefreshCw class={cx(styles.icon4, styles.spinner)} />
+          </Show>
+        }
+      >
+        {props.busy ? 'Loading...' : hasResume() ? 'Resume' : 'Play'}
+      </Button>
+    </div>
   );
 }
 
 function ShowDetailSkeleton() {
   return (
-    <article class={styles.stack} aria-hidden="true">
+    <div class={styles.page} aria-hidden="true">
       <div class={styles.skeletonHero} />
-      <div class={styles.skeletonContent}>
-        <div class={styles.sectionCompact}>
-          <div class={styles.skeletonLine} />
-          <div class={cx(styles.skeletonLine, styles.skeletonLineShort)} />
-        </div>
-        <div class={libraryStyles.pillRow}>
-          <For each={[0, 1, 2]}>{() => <div class={styles.skeletonPill} />}</For>
-        </div>
-        <div class={styles.skeletonTitle} />
-        <div class={styles.seasonTabs}>
-          <For each={[0, 1, 2]}>{() => <div class={styles.skeletonPill} />}</For>
-        </div>
-        <SeasonEpisodesSkeleton />
-      </div>
-    </article>
+      <div class={styles.skeletonBar} />
+      <SeasonEpisodesSkeleton />
+    </div>
   );
 }
 
 function SeasonEpisodesSkeleton() {
   return (
-    <section class={styles.sectionCompact} aria-hidden="true">
-      <div class={styles.skeletonTitle} />
-      <div class={styles.fadeList}>
-        <For each={[0, 1, 2]}>
-          {() => (
-            <Card variant="filled" surfaceTint={false} class={styles.episodeCard}>
-              <div class={styles.skeletonEpisodeImage} />
-              <div class={styles.episodeCopy}>
-                <div class={styles.episodeMeta}>
-                  <div class={styles.skeletonMiniLine} />
-                  <div class={styles.skeletonSmallPill} />
-                </div>
-                <div class={styles.skeletonEpisodeTitle} />
-              </div>
-              <div class={styles.skeletonButton} />
-            </Card>
-          )}
-        </For>
-      </div>
-    </section>
+    <div class={showStyles.episodeList} aria-hidden="true">
+      <For each={[0, 1, 2]}>{() => <div class={showStyles.skeletonRow} />}</For>
+    </div>
   );
 }

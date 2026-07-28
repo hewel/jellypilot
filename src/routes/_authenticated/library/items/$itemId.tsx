@@ -4,21 +4,18 @@ import type {
   VideoLibraryPlayRequest,
   VideoUserDataUpdateRequest,
 } from '@bindings';
-import { DetailHero } from '@components/library/DetailHero';
-import {
-  GenrePills,
-  LibraryStatusPanel,
-  UserDataControls,
-  detailSubtitleElement,
-  formatRuntime,
-} from '@components/library/shared';
-import * as libraryStyles from '@components/library/shared.styles';
+import { LibraryStatusPanel, UserDataControls, formatRuntime } from '@components/library/shared';
 import { Button, StatusBadge } from '@components/ui';
-import { cx } from '@styled-system/css';
 import { createMutation, createQuery, useQueryClient } from '@tanstack/solid-query';
-import { createFileRoute, useCanGoBack, useNavigate, useRouter } from '@tanstack/solid-router';
+import {
+  Link,
+  createFileRoute,
+  useCanGoBack,
+  useNavigate,
+  useRouter,
+} from '@tanstack/solid-router';
 import { Exit } from 'effect';
-import { Film, Play, RotateCcw, Tv } from 'lucide-solid';
+import { ChevronLeft, Film, Play, RotateCcw, Tv } from 'lucide-solid';
 import { For, Show, createMemo, createSignal } from 'solid-js';
 import { commandFailureMessage } from '~effects/commands';
 import { fetchConnectionState } from '~effects/connection';
@@ -33,6 +30,7 @@ import {
   queryKeys,
   runExit,
 } from '~effects/query';
+import { imageSource } from '~utils/imageSource';
 
 import { AUTHENTICATED_HOME_ROUTE } from '../../../../router-guards';
 import * as styles from '../detailRoute.styles';
@@ -128,37 +126,103 @@ function LibraryItemDetailRoute() {
         >
           {(item) => {
             const isEpisode = () => item().itemType === 'Episode';
-            const resumeProgress = () =>
-              item().canResume ? (item().playedPercentage ?? 0) / 100 : null;
+            const episodeCode = () => {
+              const { seasonNumber, episodeNumber } = item();
+              return seasonNumber !== null && episodeNumber !== null
+                ? `S${seasonNumber.toString().padStart(2, '0')}E${episodeNumber.toString().padStart(2, '0')}`
+                : 'Episode';
+            };
+            const watchedPercent = () => {
+              const { canResume, playedPercentage } = item();
+              return canResume && playedPercentage !== null ? Math.round(playedPercentage) : null;
+            };
 
             return (
-              <>
-                <DetailHero
-                  title={item().name}
-                  subtitle={detailSubtitleElement(item())}
-                  backdropImageId={item().backdropImageId ?? null}
-                  artworkImageId={item().artworkImageId ?? null}
-                  artworkAspect={isEpisode() ? 'landscape' : 'poster'}
-                  typeLabel={item().itemType}
-                  typeIcon={
-                    isEpisode() ? <Tv class={styles.icon6} /> : <Film class={styles.icon6} />
-                  }
-                  onBack={closeDetail}
-                  badges={
-                    <>
+              <div class={styles.page}>
+                <button
+                  type="button"
+                  class={styles.backLink}
+                  aria-label="Back"
+                  onClick={closeDetail}
+                >
+                  <ChevronLeft class={styles.icon4} aria-hidden="true" />
+                  Back to library
+                </button>
+
+                <section class={styles.hero} aria-labelledby="item-detail-title">
+                  <div class={styles.heroInfo}>
+                    <div class={styles.badgeRow}>
+                      <span class={styles.typeBadge}>
+                        <Show
+                          when={isEpisode()}
+                          fallback={<Film class={styles.icon4} aria-hidden="true" />}
+                        >
+                          <Tv class={styles.icon4} aria-hidden="true" />
+                        </Show>
+                        {item().itemType}
+                      </span>
+                      <Show when={item().productionYear}>
+                        {(year) => <span class={styles.badge}>{year()}</span>}
+                      </Show>
+                      <For each={item().genres.slice(0, 3)}>
+                        {(genre) => <span class={styles.badge}>{genre}</span>}
+                      </For>
                       <StatusBadge variant={item().played ? 'success' : 'neutral'}>
                         {item().played ? 'Played' : 'Unplayed'}
                       </StatusBadge>
                       <StatusBadge variant={item().favorite ? 'success' : 'neutral'}>
                         {item().favorite ? 'Favorite' : 'Not favorite'}
                       </StatusBadge>
-                      <Show when={formatRuntime(item().runtimeSeconds)}>
-                        {(runtime) => <StatusBadge variant="neutral">{runtime()}</StatusBadge>}
+                    </div>
+
+                    <h1 id="item-detail-title" class={styles.heroTitle}>
+                      {item().name}
+                    </h1>
+
+                    <p class={styles.heroMeta}>
+                      <Show when={isEpisode() && item().seriesName}>
+                        <Show when={item().seriesId} fallback={<span>{item().seriesName}</span>}>
+                          {(seriesId) => (
+                            <Link
+                              to="/library/shows/$seriesId"
+                              params={{ seriesId: seriesId() }}
+                              class={styles.heroMetaLink}
+                            >
+                              {item().seriesName}
+                            </Link>
+                          )}
+                        </Show>
+                        <span aria-hidden="true">·</span>
+                        <span>{episodeCode()}</span>
                       </Show>
-                    </>
-                  }
-                  actions={
-                    <>
+                      <Show when={!isEpisode() && item().productionYear !== null}>
+                        <span>{item().productionYear}</span>
+                      </Show>
+                      <Show when={formatRuntime(item().runtimeSeconds)}>
+                        {(runtime) => (
+                          <>
+                            <span aria-hidden="true">·</span>
+                            <span>{runtime()}</span>
+                          </>
+                        )}
+                      </Show>
+                      <Show when={watchedPercent()}>
+                        {(percent) => (
+                          <>
+                            <span aria-hidden="true">·</span>
+                            <span>{percent()}% watched</span>
+                          </>
+                        )}
+                      </Show>
+                    </p>
+
+                    <Show when={item().overview}>
+                      {(overview) => <p class={styles.heroOverview}>{overview()}</p>}
+                    </Show>
+
+                    <div class={styles.accentBar} aria-hidden="true" />
+
+                    <div class={styles.heroActions}>
                       <Show
                         when={item().canResume}
                         fallback={
@@ -221,18 +285,49 @@ function LibraryItemDetailRoute() {
                           });
                         }}
                       />
-                    </>
-                  }
-                  resumeProgress={resumeProgress()}
-                />
+                    </div>
+                  </div>
 
-                <div class={styles.content}>
-                  <Show when={item().overview}>
-                    {(overview) => <p class={styles.overview}>{overview()}</p>}
-                  </Show>
-                  <GenrePills genres={item().genres} />
-                </div>
-              </>
+                  <div class={styles.heroArt}>
+                    <Show
+                      when={item().artworkImageId}
+                      fallback={
+                        <div class={styles.heroArtFallback} aria-hidden="true">
+                          {item().name.charAt(0)}
+                        </div>
+                      }
+                    >
+                      {(imageId) => (
+                        <img
+                          src={imageSource(imageId())}
+                          alt={`${item().name} artwork`}
+                          class={styles.heroArtImage}
+                        />
+                      )}
+                    </Show>
+                    <Show when={item().productionYear}>
+                      {(year) => <span class={styles.heroArtYear}>{year()}</span>}
+                    </Show>
+                    <Show when={watchedPercent()}>
+                      {(percent) => (
+                        <div
+                          class={styles.heroArtProgress}
+                          role="progressbar"
+                          aria-label={`${item().name} watch progress`}
+                          aria-valuemin={0}
+                          aria-valuemax={100}
+                          aria-valuenow={percent()}
+                        >
+                          <div
+                            class={styles.heroArtProgressBar}
+                            style={{ width: `${percent()}%` }}
+                          />
+                        </div>
+                      )}
+                    </Show>
+                  </div>
+                </section>
+              </div>
             );
           }}
         </Show>
@@ -244,15 +339,8 @@ function LibraryItemDetailRoute() {
 
 function ItemDetailSkeleton() {
   return (
-    <article class={styles.stack} aria-hidden="true">
+    <div class={styles.page} aria-hidden="true">
       <div class={styles.skeletonHero} />
-      <div class={styles.skeletonContent}>
-        <div class={styles.skeletonLine} />
-        <div class={cx(styles.skeletonLine, styles.skeletonLineShort)} />
-        <div class={libraryStyles.pillRow}>
-          <For each={[0, 1, 2]}>{() => <div class={styles.skeletonPill} />}</For>
-        </div>
-      </div>
-    </article>
+    </div>
   );
 }
