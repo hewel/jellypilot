@@ -87,6 +87,11 @@ export const main = cva({
     zIndex: '0',
   },
   variants: {
+    flush: {
+      true: {
+        px: '0',
+      },
+    },
     glide: {
       expand: {
         animation: '[sidebarGlideExpand 200ms {easings.emphasized}]',

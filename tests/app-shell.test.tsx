@@ -1746,9 +1746,9 @@ test('library item detail renders resume-primary movie metadata', async () => {
   expect(screen.getByText('Mystery')).toBeVisible();
   expect(screen.getByText('Favorite')).toBeVisible();
   expect(screen.getByText('2h 0m')).toBeVisible();
-  expect(screen.getByAltText('Detail Movie artwork')).toHaveAttribute(
+  expect(screen.getByAltText('Detail Movie backdrop')).toHaveAttribute(
     'src',
-    imageSource(movieDetail.artworkImageId ?? ''),
+    imageSource(movieDetail.backdropImageId ?? ''),
   );
   expect(screen.getByRole('button', { name: 'Resume' })).toBeVisible();
   expect(screen.getByRole('button', { name: 'Play from beginning' })).toBeVisible();

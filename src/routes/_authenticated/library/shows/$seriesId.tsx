@@ -5,12 +5,15 @@ import type {
   VideoUserDataUpdateRequest,
 } from '@bindings';
 import {
+  DetailHero,
+  type DetailHeroInfoRow,
+  DetailHeroSkeleton,
   LibraryStatusPanel,
   UserDataControls,
   formatRuntime,
   seasonLabel,
 } from '@components/library/shared';
-import { Button, JellyPilotSelect, StatusBadge } from '@components/ui';
+import { Button, JellyPilotSelect } from '@components/ui';
 import type { JellyPilotSelectItem } from '@components/ui';
 import { cx } from '@styled-system/css';
 import { createMutation, createQuery, useQueryClient } from '@tanstack/solid-query';
@@ -22,7 +25,7 @@ import {
   useRouter,
 } from '@tanstack/solid-router';
 import { Exit, Option } from 'effect';
-import { ChevronLeft, Play, RefreshCw, Tv } from 'lucide-solid';
+import { Play, RefreshCw, Tv } from 'lucide-solid';
 import { For, Show, Suspense, createMemo, createSignal } from 'solid-js';
 import { commandFailureMessage } from '~effects/commands';
 import { fetchConnectionState } from '~effects/connection';
@@ -41,7 +44,6 @@ import {
   queryKeys,
   runExit,
 } from '~effects/query';
-import { imageSource } from '~utils/imageSource';
 
 import { AUTHENTICATED_HOME_ROUTE } from '../../../../router-guards';
 import * as styles from '../detailRoute.styles';
@@ -240,19 +242,25 @@ function LibraryShowDetailRoute() {
         : 'Play';
     return `${prefix} ${episodeLabel(nextEpisode)}`;
   };
-  const heroMeta = () => {
+  const infoRows = (): DetailHeroInfoRow[] => {
     const show = detail();
     if (!show) {
-      return '';
+      return [];
     }
-    const parts: string[] = [];
-    if (show.productionYear !== null) {
-      parts.push(show.productionYear.toString());
-    }
+    const rows: DetailHeroInfoRow[] = [{ label: 'Type', value: 'Series' }];
     if (show.seasons.length > 0) {
-      parts.push(`${show.seasons.length} ${show.seasons.length === 1 ? 'season' : 'seasons'}`);
+      rows.push({
+        label: 'Seasons',
+        value: `${show.seasons.length} ${show.seasons.length === 1 ? 'season' : 'seasons'}`,
+      });
     }
-    return parts.join(' · ');
+    if (show.nextEpisode) {
+      rows.push({
+        label: 'Next up',
+        value: `${episodeLabel(show.nextEpisode)} · ${show.nextEpisode.name}`,
+      });
+    }
+    return rows;
   };
   const seasonMeta = () => {
     const episodes = seasonEpisodes();
@@ -274,49 +282,27 @@ function LibraryShowDetailRoute() {
         >
           {(show) => (
             <div class={styles.page}>
-              <button type="button" class={styles.backLink} aria-label="Back" onClick={closeDetail}>
-                <ChevronLeft class={styles.icon4} aria-hidden="true" />
-                Back to library
-              </button>
-
-              <section class={styles.hero} aria-labelledby="show-detail-title">
-                <div class={styles.heroInfo}>
-                  <div class={styles.badgeRow}>
-                    <span class={styles.typeBadge}>
-                      <Tv class={styles.icon4} aria-hidden="true" />
-                      Series
-                    </span>
-                    <Show when={show().productionYear}>
-                      {(year) => <span class={styles.badge}>{year()}</span>}
-                    </Show>
-                    <For each={show().genres.slice(0, 3)}>
-                      {(genre) => <span class={styles.badge}>{genre}</span>}
-                    </For>
-                    <StatusBadge variant={show().played ? 'success' : 'neutral'}>
-                      {show().played ? 'Played' : 'Unplayed'}
-                    </StatusBadge>
-                    <StatusBadge variant={show().favorite ? 'success' : 'neutral'}>
-                      {show().favorite ? 'Favorite' : 'Not favorite'}
-                    </StatusBadge>
-                  </div>
-
-                  <h1 id="show-detail-title" class={styles.heroTitle}>
-                    {show().name}
-                  </h1>
-
-                  <Show when={heroMeta()}>{(meta) => <p class={styles.heroMeta}>{meta()}</p>}</Show>
-
-                  <Show when={show().overview}>
-                    {(overview) => <p class={styles.heroOverview}>{overview()}</p>}
-                  </Show>
-
-                  <div class={styles.accentBar} aria-hidden="true" />
-
-                  <div class={styles.heroActions}>
+              <DetailHero
+                titleId="show-detail-title"
+                name={show().name}
+                typeLabel="Series"
+                typeIcon={<Tv class={styles.icon4} aria-hidden="true" />}
+                imageId={show().backdropImageId ?? show().artworkImageId}
+                year={show().productionYear}
+                runtime={null}
+                watchedPercent={null}
+                played={show().played}
+                favorite={show().favorite}
+                genres={show().genres}
+                overview={show().overview}
+                infoRows={infoRows()}
+                onBack={closeDetail}
+                actions={
+                  <>
                     <Button
                       type="button"
                       variant="primary"
-                      class={styles.pillButton}
+                      class={cx(styles.pillButton, styles.playGlow)}
                       disabled={!show().nextEpisode || playBusy()}
                       onClick={() => void playShow()}
                       leadingIcon={
@@ -358,83 +344,63 @@ function LibraryShowDetailRoute() {
                         });
                       }}
                     />
-                  </div>
-                </div>
-
-                <div class={styles.heroArt}>
-                  <Show
-                    when={show().artworkImageId}
-                    fallback={
-                      <div class={styles.heroArtFallback} aria-hidden="true">
-                        {show().name.charAt(0)}
-                      </div>
-                    }
-                  >
-                    {(imageId) => (
-                      <img
-                        src={imageSource(imageId())}
-                        alt={`${show().name} artwork`}
-                        class={styles.heroArtImage}
-                      />
-                    )}
-                  </Show>
-                  <Show when={show().productionYear}>
-                    {(year) => <span class={styles.heroArtYear}>{year()}</span>}
-                  </Show>
-                </div>
-              </section>
-
-              <Show
-                when={show().seasons.length > 0}
-                fallback={
-                  <LibraryStatusPanel
-                    title="No seasons available"
-                    description="Jellyfin returned no seasons for this show."
-                  />
+                  </>
                 }
-              >
-                <div class={showStyles.seasonBar}>
-                  <SeasonSelector
-                    seasons={show().seasons}
-                    activeSeason={activeSeason()}
-                    disabled={episodesLoading()}
-                    onSelect={loadEpisodes}
-                  />
-                  <Show when={seasonMeta()}>
-                    {(meta) => <p class={showStyles.seasonMeta}>{meta()}</p>}
-                  </Show>
-                </div>
+              />
 
-                <Suspense fallback={<SeasonEpisodesSkeleton />}>
-                  <Show
-                    when={hasSeasonEpisodes()}
-                    fallback={
-                      episodesLoading() ? (
-                        <SeasonEpisodesSkeleton />
-                      ) : (
-                        <LibraryStatusPanel
-                          title={episodesStatusTitle()}
-                          description={episodesStatusDescription()}
-                        />
-                      )
-                    }
-                  >
-                    <section aria-label="Season episodes" class={showStyles.episodeList}>
-                      <For each={seasonEpisodes()}>
-                        {(episode) => (
-                          <EpisodeRow
-                            episode={episode}
-                            label={episodeLabel(episode)}
-                            busy={episodePlayBusy() === episode.id}
-                            disabled={episodePlayBusy() !== null}
-                            onPlay={() => void playEpisode(episode)}
+              <div class={styles.contentSection}>
+                <Show
+                  when={show().seasons.length > 0}
+                  fallback={
+                    <LibraryStatusPanel
+                      title="No seasons available"
+                      description="Jellyfin returned no seasons for this show."
+                    />
+                  }
+                >
+                  <div class={showStyles.seasonBar}>
+                    <SeasonSelector
+                      seasons={show().seasons}
+                      activeSeason={activeSeason()}
+                      disabled={episodesLoading()}
+                      onSelect={loadEpisodes}
+                    />
+                    <Show when={seasonMeta()}>
+                      {(meta) => <p class={showStyles.seasonMeta}>{meta()}</p>}
+                    </Show>
+                  </div>
+
+                  <Suspense fallback={<SeasonEpisodesSkeleton />}>
+                    <Show
+                      when={hasSeasonEpisodes()}
+                      fallback={
+                        episodesLoading() ? (
+                          <SeasonEpisodesSkeleton />
+                        ) : (
+                          <LibraryStatusPanel
+                            title={episodesStatusTitle()}
+                            description={episodesStatusDescription()}
                           />
-                        )}
-                      </For>
-                    </section>
-                  </Show>
-                </Suspense>
-              </Show>
+                        )
+                      }
+                    >
+                      <section aria-label="Season episodes" class={showStyles.episodeList}>
+                        <For each={seasonEpisodes()}>
+                          {(episode) => (
+                            <EpisodeRow
+                              episode={episode}
+                              label={episodeLabel(episode)}
+                              busy={episodePlayBusy() === episode.id}
+                              disabled={episodePlayBusy() !== null}
+                              onPlay={() => void playEpisode(episode)}
+                            />
+                          )}
+                        </For>
+                      </section>
+                    </Show>
+                  </Suspense>
+                </Show>
+              </div>
             </div>
           )}
         </Show>
@@ -570,9 +536,11 @@ function EpisodeRow(props: {
 function ShowDetailSkeleton() {
   return (
     <div class={styles.page} aria-hidden="true">
-      <div class={styles.skeletonHero} />
-      <div class={styles.skeletonBar} />
-      <SeasonEpisodesSkeleton />
+      <DetailHeroSkeleton />
+      <div class={styles.contentSection}>
+        <div class={styles.skeletonBar} />
+        <SeasonEpisodesSkeleton />
+      </div>
     </div>
   );
 }

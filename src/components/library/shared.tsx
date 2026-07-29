@@ -26,6 +26,8 @@ import { HomeVideoCard } from './HomeVideoCard';
 import * as styles from './shared.styles';
 
 export { MediaInfoHoverCard } from './MediaInfoHoverCard';
+export { DetailHero, DetailHeroSkeleton } from './DetailHero';
+export type { DetailHeroInfoRow } from './DetailHero';
 export { HomeVideoCard } from './HomeVideoCard';
 export { LibraryVideoCard } from './LibraryVideoCard';
 

@@ -76,7 +76,7 @@ test('generated bindings expose provider-neutral DTOs instead of Jellyfin OpenAP
 
 test('Operations Console and Shell use refactored connection/config effects', () => {
   const consoleSource = readFileSync('src/components/OperationsConsole.tsx', 'utf8');
-  const shellSource = readFileSync('src/components/AuthenticatedShell.tsx', 'utf8');
+  const shellSource = readFileSync('src/routes/_authenticated.tsx', 'utf8');
   const authSource = readFileSync('src/effects/auth.ts', 'utf8');
 
   // Verify OperationsConsole.tsx imports and uses the new effects

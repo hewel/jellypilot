@@ -1,12 +1,12 @@
 import { expect, test } from '@rstest/core';
 
 import { appSidebarViewportLayout } from '../src/components/AppSidebar.styles';
+import { appScrollContentLayout, appScrollViewportLayout } from '../src/routes/__root.styles';
 import {
   authenticatedShellAmbientLayout,
   authenticatedShellCollapsedTrackLayout,
   authenticatedShellLayout,
-} from '../src/components/AuthenticatedShell.styles';
-import { appScrollContentLayout, appScrollViewportLayout } from '../src/routes/__root.styles';
+} from '../src/routes/_authenticated.styles';
 
 test('app scroll viewport avoids 100vw and fit-content growth', () => {
   expect(appScrollViewportLayout.width).toBe('full');
