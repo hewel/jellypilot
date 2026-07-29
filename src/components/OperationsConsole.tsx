@@ -614,7 +614,12 @@ export default function OperationsConsole(props: OperationsConsoleProps) {
               onRefresh={handleRefresh}
             />
 
-            <form class={styles.stack}>
+            <form
+              class={styles.stack}
+              onSubmit={(event) => {
+                event.preventDefault();
+              }}
+            >
               <PlayerBridgeSettingsCard
                 form={form}
                 subtitleLanguageSelectItems={subtitleLanguageSelectItems}

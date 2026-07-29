@@ -131,17 +131,8 @@ export default function PlayerBridgeSettingsCard(props: PlayerBridgeSettingsCard
           lazyMount
           unmountOnExit
         >
-          <Collapsible.Trigger
-            asChild={(triggerProps) => (
-              <Button
-                {...triggerProps()}
-                type="button"
-                variant="text"
-                class={styles.advancedTrigger}
-              />
-            )}
-          >
-            <Collapsible.Indicator>
+          <Collapsible.Trigger type="button" class={styles.advancedTrigger}>
+            <Collapsible.Indicator class={styles.chevronWrap}>
               <ChevronDown
                 class={styles.chevron}
                 classList={{ [styles.chevronOpen]: ui.advancedOpen }}

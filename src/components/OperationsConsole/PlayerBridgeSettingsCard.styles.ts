@@ -67,6 +67,12 @@ export const chevron = css({
   width: 'lg',
 });
 
+export const chevronWrap = css({
+  display: 'inline-flex',
+  alignItems: 'center',
+  justifyContent: 'center',
+});
+
 export const chevronOpen = css({
   color: 'secondary',
   transform: '[rotate(180deg)]',
@@ -80,6 +86,7 @@ export const advancedPanel = css({
   borderWidth: '1px',
   borderStyle: 'solid',
   borderColor: 'outlineVariant',
+  overflow: 'hidden',
 });
 
 export const subheading = css({
@@ -309,10 +316,26 @@ export const detectButton = css({
 });
 
 export const advancedTrigger = css({
+  display: 'inline-flex',
+  alignItems: 'center',
+  gap: '2',
+  borderWidth: '0',
+  bg: '[transparent]',
+  color: 'secondary',
+  cursor: 'pointer',
+  fontSize: '14',
   fontWeight: 'bold',
+  lineHeight: '20',
   px: '0',
+  py: '2',
+  textAlign: 'start',
   _hover: {
     color: 'secondary',
+    opacity: '[0.9]',
+  },
+  _focusVisible: {
+    outline: '[2px solid {colors.primary}]',
+    outlineOffset: '[2px]',
   },
 });
 
