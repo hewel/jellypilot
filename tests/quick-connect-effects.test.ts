@@ -1,3 +1,4 @@
+// @rstest-environment jsdom
 import { afterEach, expect, rstest, test } from '@rstest/core';
 import { Cause, Effect, Exit, Fiber } from 'effect';
 

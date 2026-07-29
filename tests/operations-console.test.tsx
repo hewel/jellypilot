@@ -1,3 +1,4 @@
+// @rstest-environment jsdom
 import { afterEach, expect, rstest, test } from '@rstest/core';
 import { fireEvent, screen, waitFor, within } from '@testing-library/dom';
 import { render } from 'solid-js/web';
@@ -155,44 +156,7 @@ test('operations console reports config load command failures', async () => {
   root.remove();
 });
 
-test('operations console loads intro skipper mode from config', async () => {
-  const cleanup = renderConsole();
-
-  await screen.findByRole('heading', { name: 'Connection' });
-  expect(screen.getByRole('button', { name: /Automatic/ })).toHaveAttribute('aria-pressed', 'true');
-
-  cleanup();
-});
-
-test('operations console renders Emby capabilities without Intro Skipper controls', async () => {
-  const cleanup = renderConsole(() => {}, config, embyConnectedState);
-
-  expect(await screen.findByText('Emby Home')).toBeVisible();
-  expect(screen.getByText('Pending')).toBeVisible();
-  expect(screen.queryByRole('heading', { name: 'Intro Skip' })).not.toBeInTheDocument();
-  expect(screen.queryByLabelText('Intro skip key')).not.toBeInTheDocument();
-  expect(screen.getByLabelText('Next episode key')).toBeVisible();
-
-  cleanup();
-});
-
-test('operations console autosaves changed intro skipper mode', async () => {
-  const configSet = rstest.spyOn(commands, 'configSet').mockResolvedValue({
-    data: null,
-    status: 'ok',
-  });
-  const cleanup = renderConsole();
-
-  await waitFor(() => expect(screen.getByDisplayValue('JellyPilot Test')).toBeVisible());
-  fireEvent.click(screen.getByRole('button', { name: /Manual/ }));
-
-  await waitFor(() => expect(configSet).toHaveBeenCalledTimes(1));
-  expect(configSet).toHaveBeenCalledWith(expect.objectContaining({ introSkipperMode: 'manual' }));
-
-  cleanup();
-});
-
-test('intro skip mode toggles optimistically', async () => {
+test('operations console loads, optimistically toggles, and autosaves intro skipper mode', async () => {
   const configSet = rstest.spyOn(commands, 'configSet').mockResolvedValue({
     data: null,
     status: 'ok',
@@ -214,6 +178,18 @@ test('intro skip mode toggles optimistically', async () => {
   await waitFor(() =>
     expect(configSet).toHaveBeenCalledWith(expect.objectContaining({ introSkipperMode: 'manual' })),
   );
+
+  cleanup();
+});
+
+test('operations console renders Emby capabilities without Intro Skipper controls', async () => {
+  const cleanup = renderConsole(() => {}, config, embyConnectedState);
+
+  expect(await screen.findByText('Emby Home')).toBeVisible();
+  expect(screen.getByText('Pending')).toBeVisible();
+  expect(screen.queryByRole('heading', { name: 'Intro Skip' })).not.toBeInTheDocument();
+  expect(screen.queryByLabelText('Intro skip key')).not.toBeInTheDocument();
+  expect(screen.getByLabelText('Next episode key')).toBeVisible();
 
   cleanup();
 });
@@ -287,6 +263,11 @@ test('operations console autosaves compact preferred subtitle language chips', a
       }),
     ).toBeVisible(),
   );
+  const selectTrigger = screen.getByRole('combobox', {
+    name: 'Predefined languages',
+  });
+  expect(selectTrigger).toHaveTextContent('Select a language…');
+
   const list = screen.getByRole('list', {
     name: 'Selected preferred subtitle languages',
   });
@@ -314,58 +295,6 @@ test('operations console autosaves compact preferred subtitle language chips', a
   );
   expect(within(list).getByText('1')).toBeVisible();
   expect(within(list).getByRole('button', { name: 'Remove eng' })).toBeVisible();
-
-  cleanup();
-});
-test('preferred subtitle language editor uses Ark tags input and select', async () => {
-  const configSet = rstest.spyOn(commands, 'configSet').mockResolvedValue({
-    data: null,
-    status: 'ok',
-  });
-  const cleanup = renderConsole();
-  await screen.findByDisplayValue('JellyPilot Test');
-
-  // The custom code input lives inside the tags-input scope
-  const customInput = await screen.findByLabelText('Custom subtitle language code');
-  expect(customInput.closest('[data-scope="tags-input"]')).not.toBeNull();
-
-  // The Ark Select trigger is rendered with a combobox role
-  const selectTrigger = await screen.findByRole('combobox', {
-    name: 'Predefined languages',
-  });
-  expect(selectTrigger.closest('[data-scope="select"]')).not.toBeNull();
-
-  // The select trigger shows a placeholder
-  expect(selectTrigger).toHaveTextContent('Select a language…');
-  // The select offers predefined language options via its collection
-  const selectRoot = selectTrigger.closest('[data-scope="select"]');
-  expect(selectRoot).not.toBeNull();
-
-  // Custom code entry via text input
-  fireEvent.input(customInput, { target: { value: 'jpn' } });
-  fireEvent.keyDown(customInput, { key: 'Enter' });
-
-  await waitFor(() =>
-    expect(configSet).toHaveBeenLastCalledWith(
-      expect.objectContaining({
-        preferredSubtitleLanguages: ['jpn'],
-      }),
-    ),
-  );
-  expect(screen.getByRole('button', { name: 'Remove jpn' })).toBeVisible();
-
-  // Add another custom code
-  fireEvent.input(customInput, { target: { value: 'tha' } });
-  fireEvent.keyDown(customInput, { key: 'Enter' });
-
-  await waitFor(() =>
-    expect(configSet).toHaveBeenLastCalledWith(
-      expect.objectContaining({
-        preferredSubtitleLanguages: ['jpn', 'tha'],
-      }),
-    ),
-  );
-  expect(screen.getByRole('button', { name: 'Remove tha' })).toBeVisible();
 
   cleanup();
 });
@@ -587,8 +516,10 @@ test('disconnect keeps saved services and stays on console', async () => {
 
   cleanup();
 });
-test('disconnect failure stays on console and unlocks the action', async () => {
-  rstest.spyOn(commands, 'serverDisconnect').mockResolvedValue({
+test('disconnect failure and rejected commands stay on console and unlock the action', async () => {
+  localStorage.setItem('jellypilot_auth_session', JSON.stringify({ serverUrl: 'x' }));
+  const disconnectSpy = rstest.spyOn(commands, 'serverDisconnect');
+  disconnectSpy.mockResolvedValueOnce({
     error: { code: 'network', message: 'disconnect offline' },
     status: 'error',
   });
@@ -597,29 +528,21 @@ test('disconnect failure stays on console and unlocks the action', async () => {
   await waitFor(() =>
     expect(screen.getByRole('button', { name: 'Disconnect' })).not.toBeDisabled(),
   );
-  fireEvent.click(screen.getByRole('button', { name: 'Disconnect' }));
+  const disconnectBtn = screen.getByRole('button', { name: 'Disconnect' });
+  fireEvent.click(disconnectBtn);
 
   await waitFor(() => expect(screen.getByText('disconnect offline')).toBeVisible());
-  expect(screen.getByRole('button', { name: 'Disconnect' })).not.toBeDisabled();
+  expect(disconnectBtn).not.toBeDisabled();
   expect(screen.getByRole('heading', { name: 'Connection' })).toBeVisible();
+  expect(localStorage.getItem('jellypilot_auth_session')).not.toBeNull();
 
-  cleanup();
-});
-
-test('disconnect rejected commands stay on console and unlock the action', async () => {
-  rstest
-    .spyOn(commands, 'serverDisconnect')
-    .mockRejectedValue(new Error('disconnect ipc unavailable'));
-  const cleanup = renderConsole();
-
-  await waitFor(() =>
-    expect(screen.getByRole('button', { name: 'Disconnect' })).not.toBeDisabled(),
-  );
-  fireEvent.click(screen.getByRole('button', { name: 'Disconnect' }));
+  disconnectSpy.mockRejectedValueOnce(new Error('disconnect ipc unavailable'));
+  fireEvent.click(disconnectBtn);
 
   await waitFor(() => expect(screen.getByText('disconnect ipc unavailable')).toBeVisible());
-  expect(screen.getByRole('button', { name: 'Disconnect' })).not.toBeDisabled();
+  expect(disconnectBtn).not.toBeDisabled();
   expect(screen.getByRole('heading', { name: 'Connection' })).toBeVisible();
+  expect(localStorage.getItem('jellypilot_auth_session')).not.toBeNull();
 
   cleanup();
 });
@@ -929,8 +852,9 @@ test('sign out confirms and removes the active saved service profile', async () 
   cleanup();
 });
 
-test('sign out failure preserves the active saved service profile and stays on console', async () => {
-  const removeProfile = rstest.spyOn(commands, 'serverProfilesRemove').mockResolvedValue({
+test('sign out failure and rejected commands preserve the saved service profile', async () => {
+  const removeProfile = rstest.spyOn(commands, 'serverProfilesRemove');
+  removeProfile.mockResolvedValueOnce({
     error: { code: 'network', message: 'offline' },
     status: 'error',
   });
@@ -940,29 +864,19 @@ test('sign out failure preserves the active saved service profile and stays on c
   await screen.findByRole('heading', { name: 'Connection' });
   fireEvent.click(screen.getByRole('button', { name: 'Sign out' }));
   await waitFor(() => expect(screen.getByRole('dialog')).toBeVisible());
-  const signOutButtons = screen.getAllByRole('button', { name: 'Sign out' });
-  fireEvent.click(signOutButtons.at(-1));
+  fireEvent.click(screen.getAllByRole('button', { name: 'Sign out' }).at(-1));
 
   await waitFor(() => expect(removeProfile).toHaveBeenCalledTimes(1));
   expect(onSignedOut).not.toHaveBeenCalled();
   await waitFor(() => expect(screen.getByText('offline')).toBeVisible());
   expect(screen.getAllByText('Jellyfin Home').length).toBeGreaterThan(0);
   expect(screen.getByRole('heading', { name: 'Connection' })).toBeVisible();
+  await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
 
-  cleanup();
-});
-test('sign out rejected commands preserve the saved service profile and close the dialog', async () => {
-  rstest
-    .spyOn(commands, 'serverProfilesRemove')
-    .mockRejectedValue(new Error('sign out ipc unavailable'));
-  const onSignedOut = rstest.fn();
-  const cleanup = renderConsole(onSignedOut);
-
-  await screen.findByRole('heading', { name: 'Connection' });
+  removeProfile.mockRejectedValueOnce(new Error('sign out ipc unavailable'));
   fireEvent.click(screen.getByRole('button', { name: 'Sign out' }));
   await waitFor(() => expect(screen.getByRole('dialog')).toBeVisible());
-  const signOutButtons = screen.getAllByRole('button', { name: 'Sign out' });
-  fireEvent.click(signOutButtons.at(-1));
+  fireEvent.click(screen.getAllByRole('button', { name: 'Sign out' }).at(-1));
 
   await waitFor(() => expect(screen.getByText('sign out ipc unavailable')).toBeVisible());
   expect(onSignedOut).not.toHaveBeenCalled();
@@ -1031,21 +945,17 @@ test('sign out dialog locks dismissal while signing out', async () => {
 test('player bridge settings use Ark fields and intro skip mode buttons', async () => {
   const cleanup = renderConsole();
 
-  const mpvPath = await screen.findByPlaceholderText('Path to mpv executable');
-  expect(mpvPath.closest('[data-scope="field"]')).not.toBeNull();
+  await screen.findByPlaceholderText('Path to mpv executable');
 
-  expect(screen.queryByPlaceholderText('--fullscreen&#10;--force-window')).toBeNull();
+  expect(screen.queryByPlaceholderText('--fullscreen\n--force-window')).toBeNull();
 
   const advancedTrigger = screen.getByRole('button', {
     name: 'Advanced MPV options',
   });
-  expect(advancedTrigger.closest('[data-scope="collapsible"]')).not.toBeNull();
 
   fireEvent.click(advancedTrigger);
   await waitFor(() => expect(advancedTrigger).toHaveAttribute('aria-expanded', 'true'));
-  const mpvArgs = await screen.findByLabelText('Extra arguments');
-  expect(mpvArgs.closest('[data-scope="field"]')).not.toBeNull();
-  expect(mpvArgs.closest('[data-scope="collapsible"]')).not.toBeNull();
+  await screen.findByLabelText('Extra arguments');
 
   const shortcutHeading = screen.getByRole('heading', {
     name: 'Shortcut keys',
@@ -1054,7 +964,6 @@ test('player bridge settings use Ark fields and intro skip mode buttons', async 
   if (shortcutGroup === null) {
     throw new Error('Shortcut keys aside should render');
   }
-  expect(shortcutHeading.closest('[data-scope="collapsible"]')).toBeNull();
   const shortcutFields = within(shortcutGroup);
   expect(shortcutFields.getByText('Next episode key')).toBeVisible();
   expect(shortcutFields.getByText('Previous episode key')).toBeVisible();

@@ -1,3 +1,4 @@
+// @rstest-environment jsdom
 import { afterEach, beforeEach, expect, rstest, test } from '@rstest/core';
 import { fireEvent, screen } from '@testing-library/dom';
 import { render } from 'solid-js/web';

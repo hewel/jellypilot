@@ -1,3 +1,4 @@
+// @rstest-environment jsdom
 import { afterEach, beforeEach, expect, rstest, test } from '@rstest/core';
 import { screen } from '@testing-library/dom';
 import { Exit, Option } from 'effect';

@@ -1,3 +1,4 @@
+// @rstest-environment jsdom
 import { afterEach, expect, rstest, test } from '@rstest/core';
 import { createMemoryHistory } from '@tanstack/solid-router';
 

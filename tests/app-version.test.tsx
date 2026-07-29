@@ -1,3 +1,4 @@
+// @rstest-environment jsdom
 import { afterEach, expect, rstest, test } from '@rstest/core';
 import * as tauriApp from '@tauri-apps/api/app';
 import { screen } from '@testing-library/dom';

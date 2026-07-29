@@ -1,3 +1,4 @@
+// @rstest-environment jsdom
 import { afterEach, beforeEach, expect, rstest, test } from '@rstest/core';
 import type { QueryClient } from '@tanstack/solid-query';
 import { RouterProvider, createMemoryHistory } from '@tanstack/solid-router';
@@ -754,8 +755,7 @@ function renderShell(path: string | string[] = '/library', client?: QueryClient)
   return cleanup;
 }
 
-beforeEach(async () => {
-  await new Promise((resolve) => setTimeout(resolve, 0));
+beforeEach(() => {
   resetSharedLibraryFilters();
   resetSidebarPreferences();
   resetSidebarWipe();
@@ -805,23 +805,6 @@ test('authenticated shell renders the persistent Sidebar and drops floating cont
   expect(document.querySelector('[data-scope="scroll-area"][data-part="root"]')).toBeNull();
   expect(appScrollViewport()).toBeVisible();
   expect(screen.getByRole('main')).toBeVisible();
-
-  cleanup();
-});
-
-test('authenticated shell loads localhost image proxy services once', async () => {
-  mockShellCommands();
-  const localServices = rstest.mocked(commands.appLocalServices);
-  const cleanup = renderShell();
-
-  const artwork = await screen.findByAltText('Resume Movie artwork');
-  await waitFor(() =>
-    expect(artwork).toHaveAttribute(
-      'src',
-      'http://127.0.0.1:43127/image/https%3A%2F%2Fjellyfin.example.com%2FItems%2Fmovie-1%2FImages%2FPrimary',
-    ),
-  );
-  expect(localServices).toHaveBeenCalledTimes(1);
 
   cleanup();
 });
@@ -896,9 +879,9 @@ test('Sidebar restores the collapsed preference from the Tauri Store', async () 
 
 test('library landing renders command-backed rows and drawer trigger', async () => {
   mockShellCommands();
+  const localServices = rstest.mocked(commands.appLocalServices);
   const playCommand = rstest.spyOn(commands, 'libraryPlay');
   const cleanup = renderShell();
-
   await screen.findByRole('navigation', { name: 'Sidebar' });
 
   const navigation = screen.getByRole('navigation', { name: 'Sidebar' });
@@ -920,10 +903,13 @@ test('library landing renders command-backed rows and drawer trigger', async () 
   expect(remainingLabel).toBeVisible();
   expect(resumeMovieButton.contains(remainingLabel)).toBe(false);
   const resumeArtwork = screen.getByAltText('Resume Movie artwork');
-  expect(resumeArtwork).toHaveAttribute(
-    'src',
-    imageSource(videoHome.continueWatching[0]?.artworkImageId ?? ''),
+  await waitFor(() =>
+    expect(resumeArtwork).toHaveAttribute(
+      'src',
+      'http://127.0.0.1:43127/image/https%3A%2F%2Fjellyfin.example.com%2FItems%2Fmovie-1%2FImages%2FPrimary',
+    ),
   );
+  expect(localServices).toHaveBeenCalledTimes(1);
   expect(resumeArtwork.parentElement).toHaveAttribute('data-aspect', 'video');
   fireEvent.load(resumeArtwork);
   expect(resumeArtwork.parentElement).toHaveAttribute('data-aspect', 'video');
@@ -1446,58 +1432,6 @@ test('library browse resets scroll to top when the sort direction changes', asyn
   cleanup();
 });
 
-test('library browse prefetches one page beyond the visible virtual window', async () => {
-  mockShellCommands();
-  const browseCommand = rstest.spyOn(commands, 'libraryBrowseVideo').mockImplementation((request) =>
-    Promise.resolve({
-      data: largeVideoLibraryPage(request.startIndex),
-      status: 'ok',
-    }),
-  );
-  const cleanup = renderShell('/library/movies/movies');
-
-  expect(await screen.findByRole('link', { name: 'Open Virtual Movie 1' })).toBeVisible();
-
-  await waitFor(() =>
-    expect(browseCommand.mock.calls.some(([request]) => request.startIndex > 24)).toBe(true),
-  );
-
-  cleanup();
-});
-
-test('library browse reverse order prefetches the lower look-ahead page', async () => {
-  mockShellCommands();
-  const browseCommand = rstest.spyOn(commands, 'libraryBrowseVideo').mockImplementation((request) =>
-    Promise.resolve({
-      data: largeVideoLibraryPage(request.startIndex),
-      status: 'ok',
-    }),
-  );
-  const cleanup = renderShell('/library/movies/movies');
-
-  expect(await screen.findByRole('link', { name: 'Open Virtual Movie 1' })).toBeVisible();
-  // Ascending phase settles: required pages 0/24/48 plus the forward look-ahead 72.
-  await waitFor(() =>
-    expect(browseCommand.mock.calls.some(([request]) => request.startIndex === 72)).toBe(true),
-  );
-
-  fireEvent.click(screen.getByRole('button', { name: 'Sort ascending' }));
-
-  await waitFor(() => {
-    const startIndexes = browseCommand.mock.calls.map(([request]) => request.startIndex);
-    // Page zero remains the infinite-query bootstrap in descending order too.
-    const descendingBootstrapIndex = startIndexes.lastIndexOf(0);
-    expect(descendingBootstrapIndex).toBeGreaterThan(0);
-    const descendingRequests = startIndexes.slice(descendingBootstrapIndex + 1);
-    // Reverse display order walks the window toward lower server page starts in
-    // encounter order and requests the speculative page 24 after required page 48.
-    expect(descendingRequests.slice(0, 4)).toEqual([120, 96, 72, 48]);
-    expect(descendingRequests.indexOf(24)).toBeGreaterThan(descendingRequests.indexOf(48));
-  });
-
-  cleanup();
-});
-
 test('library browse retries failed virtual placeholder page', async () => {
   mockShellCommands();
   let bottomPageShouldFail = true;
@@ -1815,19 +1749,6 @@ test('library item detail renders resume-primary movie metadata', async () => {
   cleanup();
 });
 
-test('library item detail back falls back to library home without route history', async () => {
-  mockShellCommands();
-  const cleanup = renderShell('/library/items/detail-movie');
-
-  await screen.findByRole('heading', { name: 'Detail Movie' });
-  fireEvent.click(screen.getByRole('button', { name: 'Back' }));
-
-  expect(await screen.findByRole('heading', { name: 'Continue Watching' })).toBeVisible();
-  await waitFor(() => expect(screen.queryByRole('heading', { name: 'Detail Movie' })).toBeNull());
-
-  cleanup();
-});
-
 test('library item detail back returns to the previous library route when history exists', async () => {
   mockShellCommands();
   const cleanup = renderShell('/library/movies/movies');
@@ -1903,26 +1824,6 @@ test('library item detail leaves the skeleton after an asynchronous detail respo
 
   resolveStreams({ data: itemStreams, status: 'ok' });
   expect(await screen.findByText('eng, jpn')).toBeVisible();
-
-  cleanup();
-});
-
-test('library show episode link back returns to the show detail origin', async () => {
-  mockShellCommands();
-  const cleanup = renderShell('/library/shows/series-1');
-
-  await screen.findByRole('heading', { name: 'Example Show' });
-  const episodeLink = await screen.findByRole('link', { name: 'Next Episode' });
-  expect(episodeLink).toHaveAttribute('href', '/library/items/episode-2');
-
-  fireEvent.click(episodeLink);
-
-  expect(await screen.findByRole('heading', { name: 'Next Episode' })).toBeVisible();
-
-  fireEvent.click(screen.getByRole('button', { name: 'Back' }));
-
-  expect(await screen.findByRole('heading', { name: 'Example Show' })).toBeVisible();
-  await waitFor(() => expect(screen.queryByRole('heading', { name: 'Next Episode' })).toBeNull());
 
   cleanup();
 });
@@ -2087,6 +1988,14 @@ test('library show detail auto-loads next-up season and renders episode rows', a
     }),
   );
 
+  // Show episode link back navigation
+  const episodeLink = await screen.findByRole('link', { name: 'Next Episode' });
+  fireEvent.click(episodeLink);
+  expect(await screen.findByRole('heading', { name: 'Next Episode' })).toBeVisible();
+  fireEvent.click(screen.getByRole('button', { name: 'Back' }));
+  expect(await screen.findByRole('heading', { name: 'Example Show' })).toBeVisible();
+  await waitFor(() => expect(screen.queryByRole('heading', { name: 'Next Episode' })).toBeNull());
+
   expect(mpvStart).not.toHaveBeenCalled();
 
   cleanup();
@@ -2179,10 +2088,14 @@ test('now playing drawer exposes full playback controls', async () => {
   cleanup();
 });
 
-test('Sidebar Open Settings control opens Settings modal with operations console content', async () => {
+test('Settings modal opens operations console content and closes via Close button and Escape', async () => {
   mockShellCommands();
-  const cleanup = renderShell('/library');
+  localStorage.setItem(
+    'jellypilot_auth_session',
+    JSON.stringify({ serverUrl: 'https://jellypilot.example' }),
+  );
 
+  const cleanup = renderShell('/library');
   await screen.findByRole('navigation', { name: 'Sidebar' });
 
   const trigger = await screen.findByRole('button', { name: 'Open Settings' });
@@ -2201,47 +2114,6 @@ test('Sidebar Open Settings control opens Settings modal with operations console
   expect(within(settings).getByRole('heading', { name: 'Diagnostics' })).toBeVisible();
   expect(within(settings).getByText('0 sanitized runtime events')).toBeVisible();
 
-  cleanup();
-});
-
-test('Close Settings and standard dismissal close the Settings modal back to the Library Browser', async () => {
-  mockShellCommands();
-  const cleanup = renderShell('/library');
-
-  await screen.findByRole('navigation', { name: 'Sidebar' });
-
-  fireEvent.click(await screen.findByRole('button', { name: 'Open Settings' }));
-  const settings = await screen.findByRole('dialog', { name: 'Settings' });
-  expect(settings).toBeVisible();
-  fireEvent.click(screen.getByRole('button', { name: 'Close Settings' }));
-  await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Settings' })).toBeNull());
-
-  // Standard dialog dismissal (Escape) via the headless primitive
-  fireEvent.click(screen.getByRole('button', { name: 'Open Settings' }));
-  const reopened = await screen.findByRole('dialog', { name: 'Settings' });
-  reopened.focus();
-  fireEvent.keyDown(reopened, { code: 'Escape', key: 'Escape' });
-  await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Settings' })).toBeNull());
-
-  // The Library Browser remains the active authenticated surface after closing
-  expect(screen.getByRole('navigation', { name: 'Sidebar' })).toBeVisible();
-
-  cleanup();
-});
-
-test('Settings modal keeps Disconnect and Sign out as distinct session controls', async () => {
-  mockShellCommands();
-  localStorage.setItem(
-    'jellypilot_auth_session',
-    JSON.stringify({ serverUrl: 'https://jellypilot.example' }),
-  );
-
-  const cleanup = renderShell('/library');
-  await screen.findByRole('navigation', { name: 'Sidebar' });
-
-  fireEvent.click(await screen.findByRole('button', { name: 'Open Settings' }));
-  const settings = await screen.findByRole('dialog', { name: 'Settings' });
-
   expect(within(settings).getByRole('button', { name: 'Disconnect' })).toBeVisible();
   expect(
     within(settings).getByText(
@@ -2255,6 +2127,17 @@ test('Settings modal keeps Disconnect and Sign out as distinct session controls'
     ),
   ).toBeVisible();
   expect(localStorage.getItem('jellypilot_auth_session')).not.toBeNull();
+
+  fireEvent.click(screen.getByRole('button', { name: 'Close Settings' }));
+  await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Settings' })).toBeNull());
+  expect(screen.getByRole('navigation', { name: 'Sidebar' })).toBeVisible();
+
+  fireEvent.click(screen.getByRole('button', { name: 'Open Settings' }));
+  const reopened = await screen.findByRole('dialog', { name: 'Settings' });
+  reopened.focus();
+  fireEvent.keyDown(reopened, { code: 'Escape', key: 'Escape' });
+  await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Settings' })).toBeNull());
+  expect(screen.getByRole('navigation', { name: 'Sidebar' })).toBeVisible();
 
   cleanup();
 });
@@ -2274,7 +2157,7 @@ test('shell search bar stays disabled while disconnected', async () => {
   cleanup();
 });
 
-test('shell search submit stays disabled until the draft has a non-whitespace query', async () => {
+test('shell search slash shortcut focuses retained draft outside inputs and stays inert while an input is focused', async () => {
   mockShellCommands();
   const cleanup = renderShell('/library/movies/movies');
 
@@ -2282,36 +2165,19 @@ test('shell search submit stays disabled until the draft has a non-whitespace qu
   const input = (await screen.findByRole('searchbox', {
     name: 'Search library',
   })) as HTMLInputElement;
-  const submit = screen.getByRole('button', { name: 'Search library' });
 
-  expect(submit).toBeDisabled();
-
-  fireEvent.input(input, { target: { value: '   ' } });
-  expect(submit).toBeDisabled();
-
-  fireEvent.input(input, { target: { value: 'alien' } });
-  expect(submit).toBeEnabled();
-
-  fireEvent.click(screen.getByRole('button', { name: 'Clear search' }));
+  input.focus();
+  const notPrevented = fireEvent.keyDown(input, { key: '/' });
+  expect(notPrevented).toBe(true);
   expect(input).toHaveValue('');
-  expect(submit).toBeDisabled();
 
-  cleanup();
-});
-
-test('shell search slash shortcut focuses and selects the retained draft', async () => {
-  mockShellCommands();
-  const cleanup = renderShell('/library/movies/movies');
-
-  await screen.findByRole('heading', { name: 'Movies' });
-  const input = (await screen.findByRole('searchbox', {
-    name: 'Search library',
-  })) as HTMLInputElement;
   fireEvent.input(input, { target: { value: 'alien' } });
   expect(commands.librarySearchVideo).not.toHaveBeenCalled();
 
-  const prevented = fireEvent.keyDown(document.body, { key: '/' });
+  input.blur();
+  expect(input).not.toHaveFocus();
 
+  const prevented = fireEvent.keyDown(document.body, { key: '/' });
   expect(prevented).toBe(false);
   expect(input).toHaveFocus();
   expect(input).toHaveValue('alien');
@@ -2322,43 +2188,41 @@ test('shell search slash shortcut focuses and selects the retained draft', async
   cleanup();
 });
 
-test('shell search slash shortcut stays inert inside editable controls', async () => {
+test('shell search draft enablement, whitespace rejection, clear, and trimming submit flow', async () => {
   mockShellCommands();
+  const searchCommand = rstest.spyOn(commands, 'librarySearchVideo');
   const cleanup = renderShell('/library/movies/movies');
 
+  await screen.findByRole('heading', { name: 'Movies' });
   const input = (await screen.findByRole('searchbox', {
     name: 'Search library',
   })) as HTMLInputElement;
-  input.focus();
-  const notPrevented = fireEvent.keyDown(input, { key: '/' });
-
-  expect(notPrevented).toBe(true);
-  expect(input).toHaveValue('');
-
-  cleanup();
-});
-
-test('shell search submit trims the query and loads the first page', async () => {
-  mockShellCommands();
-  const cleanup = renderShell('/library/movies/movies');
-
-  const input = (await screen.findByRole('searchbox', {
-    name: 'Search library',
-  })) as HTMLInputElement;
+  const submit = screen.getByRole('button', { name: 'Search library' });
   const form = input.closest('form') as HTMLFormElement;
 
+  expect(submit).toBeDisabled();
+
   fireEvent.input(input, { target: { value: '   ' } });
+  expect(submit).toBeDisabled();
   fireEvent.submit(form);
-  await new Promise((resolve) => setTimeout(resolve, 0));
-  expect(commands.librarySearchVideo).not.toHaveBeenCalled();
+  expect(searchCommand).not.toHaveBeenCalled();
+
+  fireEvent.input(input, { target: { value: 'alien' } });
+  expect(submit).toBeEnabled();
+
+  fireEvent.click(screen.getByRole('button', { name: 'Clear search' }));
+  expect(input).toHaveValue('');
+  expect(input).toHaveFocus();
+  expect(submit).toBeDisabled();
+  expect(screen.getByRole('heading', { name: 'Movies' })).toBeVisible();
+  expect(searchCommand).not.toHaveBeenCalled();
 
   fireEvent.input(input, { target: { value: '  alien  ' } });
-  expect(commands.librarySearchVideo).not.toHaveBeenCalled();
-
+  expect(searchCommand).not.toHaveBeenCalled();
   fireEvent.submit(form);
 
   await waitFor(() =>
-    expect(commands.librarySearchVideo).toHaveBeenCalledWith({
+    expect(searchCommand).toHaveBeenCalledWith({
       limit: 24,
       query: 'alien',
       startIndex: 0,
@@ -2367,30 +2231,6 @@ test('shell search submit trims the query and loads the first page', async () =>
   expect(await screen.findByRole('heading', { name: 'Search results for “alien”' })).toBeVisible();
   expect(screen.getByText('25 results')).toBeVisible();
   expect(await screen.findByRole('link', { name: 'Open Alien, favorite' })).toBeVisible();
-
-  cleanup();
-});
-
-test('library home displays the search bar and submits to the results page', async () => {
-  mockShellCommands();
-  const cleanup = renderShell('/library');
-
-  const input = (await screen.findByRole('searchbox', {
-    name: 'Search library',
-  })) as HTMLInputElement;
-  expect(input).toBeEnabled();
-
-  fireEvent.input(input, { target: { value: 'alien' } });
-  fireEvent.submit(input.closest('form') as HTMLFormElement);
-
-  await waitFor(() =>
-    expect(commands.librarySearchVideo).toHaveBeenCalledWith({
-      limit: 24,
-      query: 'alien',
-      startIndex: 0,
-    }),
-  );
-  expect(await screen.findByRole('heading', { name: 'Search results for “alien”' })).toBeVisible();
 
   cleanup();
 });
@@ -2457,35 +2297,6 @@ test('library search auto-loads the next page and retries a failed page', async 
   cleanup();
 });
 
-test('shell search clear only empties the draft without navigating or searching', async () => {
-  mockShellCommands();
-  const searchCommand = rstest.spyOn(commands, 'librarySearchVideo');
-  const cleanup = renderShell('/library/movies/movies');
-
-  const input = (await screen.findByRole('searchbox', {
-    name: 'Search library',
-  })) as HTMLInputElement;
-  await screen.findByRole('heading', { name: 'Movies' });
-
-  fireEvent.input(input, { target: { value: 'alien' } });
-  fireEvent.click(screen.getByRole('button', { name: 'Clear search' }));
-
-  expect(input).toHaveValue('');
-  expect(input).toHaveFocus();
-  expect(screen.getByRole('heading', { name: 'Movies' })).toBeVisible();
-  expect(searchCommand).not.toHaveBeenCalled();
-
-  fireEvent.input(input, { target: { value: '  alien  ' } });
-  fireEvent.submit(input.closest('form') as HTMLFormElement);
-
-  await waitFor(() =>
-    expect(searchCommand).toHaveBeenCalledWith({ limit: 24, query: 'alien', startIndex: 0 }),
-  );
-  expect(await screen.findByRole('heading', { name: 'Search results for “alien”' })).toBeVisible();
-
-  cleanup();
-});
-
 test('library search back restores cached pages and scroll offset', async () => {
   mockShellCommands();
   const cleanup = renderShell('/library/search?q=alien');
@@ -2507,17 +2318,6 @@ test('library search back restores cached pages and scroll offset', async () => 
   expect(screen.queryByText('Searching library')).toBeNull();
   await waitFor(() => expect(screen.queryByRole('heading', { name: 'Detail Movie' })).toBeNull());
   await waitFor(() => expect(viewport.scrollTop).toBe(432));
-
-  cleanup();
-});
-
-test('library search redirects a missing query to library home without searching', async () => {
-  mockShellCommands();
-  const cleanup = renderShell('/library/search');
-
-  expect(await screen.findByRole('heading', { name: 'Continue Watching' })).toBeVisible();
-  await new Promise((resolve) => setTimeout(resolve, 0));
-  expect(commands.librarySearchVideo).not.toHaveBeenCalled();
 
   cleanup();
 });

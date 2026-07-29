@@ -39,9 +39,15 @@ export const terminateProcessGroup = async (pid: number | undefined): Promise<vo
     return;
   }
 
-  await new Promise((resolve) => setTimeout(resolve, 1000));
+  const deadline = Date.now() + 1000;
+  while (Date.now() < deadline) {
+    if (processGroupIsGone(pid)) {
+      return;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  }
+
   try {
-    process.kill(-pid, 0);
     process.kill(-pid, 'SIGKILL');
   } catch {
     // The exact owned process group already exited.

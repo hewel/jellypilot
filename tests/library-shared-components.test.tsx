@@ -1,3 +1,4 @@
+// @rstest-environment jsdom
 import { expect, test } from '@rstest/core';
 import { render } from 'solid-js/web';
 

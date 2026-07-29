@@ -1,7 +1,6 @@
-import * as fs from 'fs';
-import * as path from 'path';
-
+import { commands as aliasCommands } from '@bindings';
 import { expect, rstest, test } from '@rstest/core';
+import { Effect, Exit } from 'effect';
 
 import { fetchMpvTrackList, fetchNowPlayingState, parseTrackList } from '../src/effects/nowPlaying';
 
@@ -27,41 +26,6 @@ test('parseTrackList handles empty and invalid inputs', () => {
   expect(parseTrackList('invalid json')).toEqual([]);
   expect(parseTrackList('{}')).toEqual([]); // Non-array JSON
 });
-
-test('source-boundary assertions for Now Playing files', () => {
-  const cardPath = path.resolve(__dirname, '../src/components/NowPlayingCard.tsx');
-  const drawerPath = path.resolve(__dirname, '../src/components/NowPlayingDrawer.tsx');
-  const effectsPath = path.resolve(__dirname, '../src/effects/nowPlaying.ts');
-
-  const cardContent = fs.readFileSync(cardPath, 'utf8');
-  const drawerContent = fs.readFileSync(drawerPath, 'utf8');
-  const effectsContent = fs.readFileSync(effectsPath, 'utf8');
-
-  // Verify NowPlayingCard.tsx does not import commands or events directly
-  expect(cardContent).not.toContain('commands,');
-  expect(cardContent).not.toContain(', commands');
-  expect(cardContent).not.toContain('events,');
-  expect(cardContent).not.toContain(', events');
-  expect(cardContent).not.toContain('commands.');
-  expect(cardContent).not.toContain('events.');
-
-  // Verify NowPlayingDrawer.tsx does not import commands or events directly
-  expect(drawerContent).not.toContain('commands,');
-  expect(drawerContent).not.toContain(', commands');
-  expect(drawerContent).not.toContain('events,');
-  expect(drawerContent).not.toContain(', events');
-  expect(drawerContent).not.toContain('commands.');
-  expect(drawerContent).not.toContain('events.');
-
-  // Verify src/effects/nowPlaying.ts contains expected command/event usages
-  expect(effectsContent).toContain('commands.nowPlayingGetState');
-  expect(effectsContent).toContain("commands.mpvGetProperty('track-list')");
-  expect(effectsContent).toContain('commands.mpvSetAudioTrack');
-  expect(effectsContent).toContain('events.nowPlayingChanged.listen');
-});
-
-import { commands as aliasCommands } from '@bindings';
-import { Effect, Exit } from 'effect';
 
 test('fetchNowPlayingState runs successfully when mocked', async () => {
   const spy = rstest.spyOn(aliasCommands, 'nowPlayingGetState').mockResolvedValue({

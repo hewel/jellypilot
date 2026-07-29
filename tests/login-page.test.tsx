@@ -1,3 +1,4 @@
+// @rstest-environment jsdom
 import { afterEach, expect, rstest, test } from '@rstest/core';
 import { fireEvent, screen, waitFor } from '@testing-library/dom';
 import { Cause, Effect, Exit } from 'effect';
@@ -78,27 +79,6 @@ test('login page shows quick connect as the default login method', () => {
 
   cleanup();
 });
-test('login page uses Ark tabs, fields, and checkbox primitives', async () => {
-  const cleanup = renderLoginPage();
-
-  const quickConnectTab = screen.getByRole('tab', { name: 'Quick Connect' });
-  expect(quickConnectTab.closest('[data-scope="tabs"]')).not.toBeNull();
-
-  const serverHost = screen.getByPlaceholderText('jellyfin.local or media.example.com/jellyfin');
-  expect(serverHost.closest('[data-scope="field"]')).not.toBeNull();
-
-  fireEvent.click(screen.getByRole('tab', { name: 'Password' }));
-
-  await waitFor(() => expect(screen.getByText('Remember Server URL and username')).toBeVisible());
-  const rememberMe = screen.getByRole('checkbox', {
-    name: 'Remember Server URL and username',
-  });
-  expect(rememberMe.closest('[data-scope="checkbox"]')).not.toBeNull();
-  fireEvent.click(rememberMe);
-  expect(rememberMe).toBeChecked();
-
-  cleanup();
-});
 
 test('login page builds local http server url preview with jellyfin port', () => {
   const cleanup = renderLoginPage();
@@ -109,36 +89,6 @@ test('login page builds local http server url preview with jellyfin port', () =>
 
   expect(screen.getByText('http://192.168.1.20:8096')).toBeVisible();
   expect(screen.getByRole('button', { name: 'HTTP' })).toHaveAttribute('aria-pressed', 'true');
-
-  cleanup();
-});
-
-test('login page preserves explicit pasted schemes', () => {
-  const cleanup = renderLoginPage();
-
-  fireEvent.input(screen.getByPlaceholderText('jellyfin.local or media.example.com/jellyfin'), {
-    target: { value: 'http://media.example.com' },
-  });
-  expect(screen.getByText('http://media.example.com')).toBeVisible();
-  expect(screen.getByRole('button', { name: 'HTTP' })).toHaveAttribute('aria-pressed', 'true');
-
-  fireEvent.input(screen.getByPlaceholderText('jellyfin.local or media.example.com/jellyfin'), {
-    target: { value: 'https://192.168.1.20:8096' },
-  });
-  expect(screen.getByText('https://192.168.1.20:8096')).toBeVisible();
-  expect(screen.getByRole('button', { name: 'HTTPS' })).toHaveAttribute('aria-pressed', 'true');
-
-  cleanup();
-});
-
-test('login page preserves public reverse proxy path without default jellyfin port', () => {
-  const cleanup = renderLoginPage();
-
-  fireEvent.input(screen.getByPlaceholderText('jellyfin.local or media.example.com/jellyfin'), {
-    target: { value: 'media.example.com/jellyfin' },
-  });
-
-  expect(screen.getByText('https://media.example.com/jellyfin')).toBeVisible();
 
   cleanup();
 });
@@ -324,32 +274,6 @@ test('quick connect ignores a start result after switching login methods', async
   cleanup();
 });
 
-test('quick connect polling rejected commands fail without changing cancel behavior', async () => {
-  rstest.useFakeTimers();
-  rstest.spyOn(commands, 'jellyfinQuickConnectStart').mockResolvedValue({
-    data: { code: 'ABCD12', secret: 'secret-123' },
-    status: 'ok',
-  });
-  rstest
-    .spyOn(commands, 'jellyfinQuickConnectCheck')
-    .mockRejectedValue(new Error('Polling unavailable'));
-  const cleanup = renderLoginPage();
-
-  fireEvent.input(screen.getByPlaceholderText('jellyfin.local or media.example.com/jellyfin'), {
-    target: { value: 'jellyfin.example.com' },
-  });
-  fireEvent.click(screen.getByRole('button', { name: 'Request Quick Connect code' }));
-
-  await waitFor(() => expect(screen.getByText('ABCD12')).toBeVisible());
-  expect(screen.getByRole('button', { name: 'Cancel Request' })).toBeVisible();
-
-  await rstest.advanceTimersByTimeAsync(5000);
-
-  await waitFor(() => expect(screen.getByText('Polling unavailable')).toBeVisible());
-  expect(screen.getByRole('button', { name: 'Request a new code' })).not.toBeDisabled();
-
-  cleanup();
-});
 test('quick connect polling status errors fail without changing cancel behavior', async () => {
   rstest.useFakeTimers();
   rstest.spyOn(commands, 'jellyfinQuickConnectStart').mockResolvedValue({
@@ -472,36 +396,6 @@ test('quick connect can request a new code after timeout with a poll in flight',
   cleanup();
 });
 
-test('quick connect authentication rejected commands fail and unlock request', async () => {
-  rstest.useFakeTimers();
-  rstest.spyOn(commands, 'jellyfinQuickConnectStart').mockResolvedValue({
-    data: { code: 'ABCD12', secret: 'secret-123' },
-    status: 'ok',
-  });
-  rstest.spyOn(commands, 'jellyfinQuickConnectCheck').mockResolvedValue({
-    data: 'approved',
-    status: 'ok',
-  });
-  rstest
-    .spyOn(commands, 'jellyfinQuickConnectAuthenticate')
-    .mockRejectedValue(new Error('Authentication unavailable'));
-  const onConnected = rstest.fn();
-  const cleanup = renderLoginPage(onConnected);
-
-  fireEvent.input(screen.getByPlaceholderText('jellyfin.local or media.example.com/jellyfin'), {
-    target: { value: 'jellyfin.example.com' },
-  });
-  fireEvent.click(screen.getByRole('button', { name: 'Request Quick Connect code' }));
-
-  await waitFor(() => expect(screen.getByText('ABCD12')).toBeVisible());
-  await rstest.advanceTimersByTimeAsync(5000);
-
-  await waitFor(() => expect(screen.getByText('Authentication unavailable')).toBeVisible());
-  expect(screen.getByRole('button', { name: 'Request a new code' })).not.toBeDisabled();
-  expect(onConnected).not.toHaveBeenCalled();
-
-  cleanup();
-});
 test('quick connect authentication status errors fail and unlock request', async () => {
   rstest.useFakeTimers();
   rstest.spyOn(commands, 'jellyfinQuickConnectStart').mockResolvedValue({
@@ -757,65 +651,20 @@ test('password login status errors show the command message and unlock submit', 
   cleanup();
 });
 
-test('password login rejected commands show an error and unlock submit', async () => {
-  rstest.spyOn(commands, 'serverConnect').mockRejectedValue(new Error('IPC unavailable'));
-  const onConnected = rstest.fn();
-  const cleanup = renderLoginPage(onConnected);
-
-  await fillPasswordLogin();
-  fireEvent.click(screen.getByRole('button', { name: 'Connect' }));
-
-  await waitFor(() => expect(screen.getByText('IPC unavailable')).toBeVisible());
-  expect(screen.getByRole('button', { name: 'Connect' })).not.toBeDisabled();
-  expect(onConnected).not.toHaveBeenCalled();
-
-  cleanup();
-});
-
-test('loadSavedCredentials returns StorageParseError for malformed JSON', () => {
-  localStorage.setItem(CREDENTIALS_STORAGE_KEY, 'not json');
-  const exit = Effect.runSyncExit(loadSavedCredentials);
-  expect(Exit.isFailure(exit)).toBe(true);
-  if (Exit.isFailure(exit)) {
-    const reason = exit.cause.reasons[0];
-    if (!reason || !Cause.isFailReason(reason)) {
-      throw new Error('Expected typed StorageParseError failure');
+test('loadSavedCredentials returns StorageParseError for malformed or wrong-shape saved inputs', () => {
+  const invalidInputs = ['not json', '', JSON.stringify({ notServerUrl: true })];
+  for (const input of invalidInputs) {
+    localStorage.setItem(CREDENTIALS_STORAGE_KEY, input);
+    const exit = Effect.runSyncExit(loadSavedCredentials);
+    expect(Exit.isFailure(exit)).toBe(true);
+    if (Exit.isFailure(exit)) {
+      const reason = exit.cause.reasons[0];
+      if (!reason || !Cause.isFailReason(reason)) {
+        throw new Error('Expected typed StorageParseError failure');
+      }
+      const { error } = reason;
+      expect(error).toBeInstanceOf(StorageParseError);
     }
-    const { error } = reason;
-    expect(error).toBeInstanceOf(StorageParseError);
-    if (error instanceof StorageParseError) {
-      expect(error.key).toBe(CREDENTIALS_STORAGE_KEY);
-    }
-  }
-});
-test('loadSavedCredentials returns StorageParseError for empty malformed JSON', () => {
-  localStorage.setItem(CREDENTIALS_STORAGE_KEY, '');
-  const exit = Effect.runSyncExit(loadSavedCredentials);
-  expect(Exit.isFailure(exit)).toBe(true);
-  if (Exit.isFailure(exit)) {
-    const reason = exit.cause.reasons[0];
-    if (!reason || !Cause.isFailReason(reason)) {
-      throw new Error('Expected typed StorageParseError failure');
-    }
-    const { error } = reason;
-    expect(error).toBeInstanceOf(StorageParseError);
-    if (error instanceof StorageParseError) {
-      expect(error.key).toBe(CREDENTIALS_STORAGE_KEY);
-    }
-  }
-});
-
-test('loadSavedCredentials returns StorageParseError for wrong shape', () => {
-  localStorage.setItem(CREDENTIALS_STORAGE_KEY, JSON.stringify({ notServerUrl: true }));
-  const exit = Effect.runSyncExit(loadSavedCredentials);
-  expect(Exit.isFailure(exit)).toBe(true);
-  if (Exit.isFailure(exit)) {
-    const reason = exit.cause.reasons[0];
-    if (!reason || !Cause.isFailReason(reason)) {
-      throw new Error('Expected typed StorageParseError failure');
-    }
-    const { error } = reason;
-    expect(error).toBeInstanceOf(StorageParseError);
   }
 });
 

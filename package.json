@@ -29,7 +29,7 @@
     "format:check": "oxfmt --check package.json tsconfig.json tests/tsconfig.json e2e/tsconfig.json '*.config.{js,json,jsonc,mjs,ts}' 'src/**/*.{css,js,jsx,json,jsonc,ts,tsx}' 'tests/**/*.{js,jsx,json,jsonc,ts,tsx}' 'e2e/**/*.{js,jsx,json,jsonc,ts,tsx}' 'scripts/**/*.mjs' 'src-tauri/**/*.json'",
     "lint": "oxlint --deny-warnings --no-error-on-unmatched-pattern src tests e2e scripts rsbuild.config.ts rstest.config.ts rstest.setup.ts panda.config.ts postcss.config.mjs lint-staged.config.mjs",
     "lint:fix": "oxlint --fix --deny-warnings --no-error-on-unmatched-pattern src tests e2e scripts rsbuild.config.ts rstest.config.ts rstest.setup.ts panda.config.ts postcss.config.mjs lint-staged.config.mjs",
-    "check": "bun run format:check && bun run lint && bun run check:styling-boundaries && bun run typecheck && bun run rust:fmt:check && bun run rust:clippy",
+    "check": "bun run format:check && bun run lint && bun run check:effect-rules && bun run check:styling-boundaries && bun run typecheck && bun run rust:fmt:check && bun run rust:clippy",
     "test:all": "bun run test && bun run rust:test",
     "prepare": "husky && bun run panda:codegen && effect-tsgo patch",
     "rust:fmt": "cargo fmt --manifest-path src-tauri/Cargo.toml",
@@ -41,12 +41,11 @@
     "predev:rsdoctor": "bun run panda:codegen",
     "prebuild": "bun run panda:codegen",
     "prebuild:rsdoctor": "bun run panda:codegen",
-    "pretest": "bun run panda:codegen",
-    "pretest:watch": "bun run panda:codegen",
     "pretypecheck": "bun run panda:codegen",
     "check:styling-boundaries": "bun scripts/check-styling-boundaries.mjs",
     "review:panda:tauri": "bun tauri dev --config src-tauri/tauri.panda-review.conf.json",
-    "review:parity": "bun scripts/tauri-parity-review.mjs"
+    "review:parity": "bun scripts/tauri-parity-review.mjs",
+    "check:effect-rules": "bun scripts/check-no-switch.mjs"
   },
   "dependencies": {
     "@ark-ui/solid": "^5.37.1",

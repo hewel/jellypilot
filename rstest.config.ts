@@ -23,5 +23,5 @@ export default defineConfig({
     },
   },
   setupFiles: ['./rstest.setup.ts'],
-  testEnvironment: 'jsdom',
+  testEnvironment: 'node',
 });

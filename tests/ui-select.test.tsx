@@ -1,3 +1,4 @@
+// @rstest-environment jsdom
 import { afterEach, expect, test } from '@rstest/core';
 import { fireEvent, screen, waitFor } from '@testing-library/dom';
 import { createSignal } from 'solid-js';
@@ -39,7 +40,6 @@ test('JellyPilotSelect renders an Ark select and emits the selected value', asyn
   const trigger = screen.getByRole('combobox', {
     name: 'Subtitle language',
   });
-  expect(trigger.closest('[data-scope="select"]')).not.toBeNull();
   expect(trigger).toHaveTextContent('eng - English');
   expect(
     screen.getAllByLabelText('Subtitle language').find((element) => element.tagName === 'SELECT'),

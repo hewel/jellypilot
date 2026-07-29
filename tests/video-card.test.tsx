@@ -1,3 +1,4 @@
+// @rstest-environment jsdom
 import { afterEach, beforeEach, expect, rstest, test } from '@rstest/core';
 import { RouterContextProvider, createMemoryHistory } from '@tanstack/solid-router';
 import { fireEvent, screen } from '@testing-library/dom';
