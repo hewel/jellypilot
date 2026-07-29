@@ -2,7 +2,7 @@ import type { VideoLibraryItem, VideoLibraryKind } from '@bindings';
 import { cx } from '@styled-system/css';
 import { Link } from '@tanstack/solid-router';
 import { Check, Film, Heart, Tv } from 'lucide-solid';
-import { Show, createEffect, createSignal } from 'solid-js';
+import { Show, createEffect, createMemo, createSignal } from 'solid-js';
 import { imageSource } from '~utils/imageSource';
 
 import * as styles from './VideoCard.styles';
@@ -53,9 +53,13 @@ export function LibraryVideoCard(props: LibraryVideoCardProps) {
 
   const [imageFailed, setImageFailed] = createSignal(false);
   const artworkImageId = () => props.item.artworkImageId;
+  const artworkUrl = createMemo(() => {
+    const imageId = artworkImageId();
+    return imageId ? imageSource(imageId) : '';
+  });
 
   createEffect(() => {
-    artworkImageId();
+    artworkUrl();
     setImageFailed(false);
   });
 
@@ -65,7 +69,7 @@ export function LibraryVideoCard(props: LibraryVideoCardProps) {
     <Link {...linkTarget()} aria-label={libraryCardAriaLabel()} class={styles.card}>
       <div class={cx(styles.artwork, styles.aspect[aspectClass()])} data-aspect={aspectClass()}>
         <Show
-          when={!imageFailed() ? artworkImageId() : null}
+          when={!imageFailed() ? artworkUrl() : null}
           fallback={
             <div class={styles.fallback}>
               <Show
@@ -78,9 +82,9 @@ export function LibraryVideoCard(props: LibraryVideoCardProps) {
             </div>
           }
         >
-          {(imageId) => (
+          {(imageUrl) => (
             <img
-              src={imageSource(imageId())}
+              src={imageUrl()}
               alt={`${props.item.name} artwork`}
               class={styles.image}
               onError={() => setImageFailed(true)}

@@ -142,6 +142,8 @@ export const commands = {
 	configDefault: () => __TAURI_INVOKE<AppConfig>("config_default"),
 	/**  Detect MPV path automatically. */
 	configDetectMpv: () => __TAURI_INVOKE<string | null>("config_detect_mpv"),
+	/**  Get state of application local services (such as image proxy). */
+	appLocalServices: () => __TAURI_INVOKE<AppLocalServices>("app_local_services"),
 };
 
 /** Events */
@@ -178,6 +180,11 @@ export type AppConfig = {
 	keybindPrev?: string,
 	/**  Keybinding for manual Intro Skipper seek in MPV. */
 	keybindIntroSkip?: string,
+};
+
+/**  App local services state reported to frontend. */
+export type AppLocalServices = {
+	imageProxyBase: string | null,
 };
 
 /**  App notification event emitted to frontend. */

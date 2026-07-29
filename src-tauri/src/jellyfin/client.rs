@@ -5,7 +5,6 @@ use reqwest::{header, Client, Method};
 use std::sync::Arc;
 use uuid::Uuid;
 
-use crate::image_cache::ImageDownload;
 use crate::image_ref::{image_id_for_url, ImageRefKind};
 
 use super::error::JellyfinError;
@@ -127,7 +126,10 @@ impl JellyfinClient {
     self.state.read().device_id.clone()
   }
 
-  pub async fn download_image(&self, url: &str) -> Result<ImageDownload, JellyfinError> {
+  pub(crate) async fn fetch_origin_image(
+    &self,
+    url: &str,
+  ) -> Result<reqwest::Response, JellyfinError> {
     let token = self.state.read().access_token.clone();
     let response = self
       .http
@@ -136,24 +138,7 @@ impl JellyfinClient {
       .header(header::USER_AGENT, self.request_user_agent())
       .send()
       .await?;
-    let status = response.status();
-    if !status.is_success() {
-      return Err(JellyfinError::HttpError(format!(
-        "Image download failed with HTTP {}",
-        status
-      )));
-    }
-    let content_type = response
-      .headers()
-      .get(header::CONTENT_TYPE)
-      .and_then(|value| value.to_str().ok())
-      .map(str::to_string);
-    let bytes = response.bytes().await?.to_vec();
-
-    Ok(ImageDownload {
-      bytes,
-      content_type,
-    })
+    Ok(response)
   }
 
   /// Build authorization header value.

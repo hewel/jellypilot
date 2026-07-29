@@ -1,4 +1,4 @@
-import { expect, rstest, test } from '@rstest/core';
+import { afterEach, beforeEach, expect, rstest, test } from '@rstest/core';
 import { RouterContextProvider, createMemoryHistory } from '@tanstack/solid-router';
 import { fireEvent, screen } from '@testing-library/dom';
 import type { JSX } from 'solid-js';
@@ -8,8 +8,11 @@ import { HomeVideoCard } from '../src/components/library/HomeVideoCard';
 import { LibraryVideoCard } from '../src/components/library/LibraryVideoCard';
 import { PopupRoot } from '../src/components/ui/PopupRoot';
 import { createJellyPilotRouter } from '../src/router';
-import { imageSource } from '../src/utils/imageSource';
+import { imageSource, resetImageProxyBase, setImageProxyBase } from '../src/utils/imageSource';
 import { TestQueryProvider } from './query-client';
+
+beforeEach(() => setImageProxyBase('http://127.0.0.1:43127'));
+afterEach(resetImageProxyBase);
 
 function renderWithRouter(content: () => JSX.Element) {
   const root = document.createElement('div');
@@ -29,7 +32,7 @@ function renderWithRouter(content: () => JSX.Element) {
   return { dispose, root };
 }
 
-test('LibraryVideoCard renders image IDs through the JellyPilot image protocol', () => {
+test('LibraryVideoCard renders image IDs through the localhost image proxy', () => {
   const { dispose, root } = renderWithRouter(() => (
     <LibraryVideoCard
       collectionType="movies"
@@ -65,7 +68,45 @@ test('LibraryVideoCard renders image IDs through the JellyPilot image protocol',
   root.remove();
 });
 
-test('LibraryVideoCard falls back when the image protocol load fails', () => {
+test('LibraryVideoCard waits for the image proxy before rendering artwork', () => {
+  resetImageProxyBase();
+  const { dispose, root } = renderWithRouter(() => (
+    <LibraryVideoCard
+      collectionType="movies"
+      item={{
+        artworkImageId: 'delayed-card-image',
+        episodeNumber: null,
+        favorite: false,
+        id: 'movie-delayed',
+        itemType: 'Movie',
+        name: 'Delayed Movie',
+        played: false,
+        playedPercentage: null,
+        productionYear: 2024,
+        resumePositionSeconds: null,
+        runtimeSeconds: 7200,
+        seasonNumber: null,
+        seriesId: null,
+        seriesName: null,
+      }}
+    />
+  ));
+
+  expect(screen.queryByAltText('Delayed Movie artwork')).toBeNull();
+  expect(screen.getByText('No artwork')).toBeVisible();
+
+  setImageProxyBase('http://127.0.0.1:43127');
+
+  expect(screen.getByAltText('Delayed Movie artwork')).toHaveAttribute(
+    'src',
+    'http://127.0.0.1:43127/image/delayed-card-image',
+  );
+
+  dispose();
+  root.remove();
+});
+
+test('LibraryVideoCard falls back when the proxy image load fails', () => {
   const { dispose, root } = renderWithRouter(() => (
     <LibraryVideoCard
       collectionType="movies"

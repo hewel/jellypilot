@@ -24,7 +24,7 @@ import { queryKeys } from '../src/effects/query';
 import { createJellyPilotRouter } from '../src/router';
 import * as browseRouteStyles from '../src/routes/_authenticated/library/browseRoute.styles';
 import { resetSharedLibraryFilters } from '../src/utils/createSharedLibraryFilters';
-import { imageSource } from '../src/utils/imageSource';
+import { imageSource, resetImageProxyBase } from '../src/utils/imageSource';
 import { resetSidebarPreferences } from '../src/utils/sidebarPreferences';
 import { resetSidebarWipe } from '../src/utils/sidebarWipe';
 import { createTestQueryClient, TestQueryProvider } from './query-client';
@@ -582,6 +582,9 @@ function videoSearchPage(startIndex: number): VideoSearchPage {
 }
 
 function mockShellCommands(state = connectedState) {
+  rstest.spyOn(commands, 'appLocalServices').mockResolvedValue({
+    imageProxyBase: 'http://127.0.0.1:43127',
+  });
   rstest.spyOn(commands, 'serverIsConnected').mockResolvedValue(true);
   rstest.spyOn(commands, 'serverGetState').mockResolvedValue(state);
   rstest.spyOn(commands, 'serverProfilesGet').mockResolvedValue({
@@ -746,6 +749,7 @@ beforeEach(async () => {
   resetSharedLibraryFilters();
   resetSidebarPreferences();
   resetSidebarWipe();
+  resetImageProxyBase();
   window.__TEST_TAURI_STORE__.reset();
 });
 
@@ -757,6 +761,7 @@ afterEach(() => {
   resetSharedLibraryFilters();
   resetSidebarPreferences();
   resetSidebarWipe();
+  resetImageProxyBase();
   document.body.innerHTML = '';
   localStorage.clear();
   sessionStorage.clear();
@@ -790,6 +795,23 @@ test('authenticated shell renders the persistent Sidebar and drops floating cont
   expect(document.querySelector('[data-scope="scroll-area"][data-part="root"]')).toBeNull();
   expect(appScrollViewport()).toBeVisible();
   expect(screen.getByRole('main')).toBeVisible();
+
+  cleanup();
+});
+
+test('authenticated shell loads localhost image proxy services once', async () => {
+  mockShellCommands();
+  const localServices = rstest.mocked(commands.appLocalServices);
+  const cleanup = renderShell();
+
+  const artwork = await screen.findByAltText('Resume Movie artwork');
+  await waitFor(() =>
+    expect(artwork).toHaveAttribute(
+      'src',
+      'http://127.0.0.1:43127/image/https%3A%2F%2Fjellyfin.example.com%2FItems%2Fmovie-1%2FImages%2FPrimary',
+    ),
+  );
+  expect(localServices).toHaveBeenCalledTimes(1);
 
   cleanup();
 });
@@ -1746,7 +1768,7 @@ test('library item detail renders resume-primary movie metadata', async () => {
   expect(screen.getByText('Mystery')).toBeVisible();
   expect(screen.getByText('Favorite')).toBeVisible();
   expect(screen.getByText('2h 0m')).toBeVisible();
-  expect(screen.getByAltText('Detail Movie backdrop')).toHaveAttribute(
+  expect(await screen.findByAltText('Detail Movie backdrop')).toHaveAttribute(
     'src',
     imageSource(movieDetail.backdropImageId ?? ''),
   );

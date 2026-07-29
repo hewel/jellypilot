@@ -1,6 +1,6 @@
 import { Link } from '@tanstack/solid-router';
 import { ChevronLeft } from 'lucide-solid';
-import { For, type JSX, Show } from 'solid-js';
+import { For, type JSX, Show, createMemo } from 'solid-js';
 import { imageSource } from '~utils/imageSource';
 
 import { StatusBadge } from '../ui';
@@ -37,25 +37,20 @@ export function DetailHero(props: {
   onBack: () => void;
 }) {
   const hasSeriesMeta = () => Boolean(props.seriesName) || Boolean(props.episodeCode);
+  const imageUrl = createMemo(() => (props.imageId ? imageSource(props.imageId) : ''));
 
   return (
     <section class={styles.hero} aria-labelledby={props.titleId}>
       <div class={styles.backdrop}>
         <Show
-          when={props.imageId}
+          when={imageUrl()}
           fallback={
             <div class={styles.backdropFallback} aria-hidden="true">
               {props.name.charAt(0)}
             </div>
           }
         >
-          {(imageId) => (
-            <img
-              src={imageSource(imageId())}
-              alt={`${props.name} backdrop`}
-              class={styles.backdropImage}
-            />
-          )}
+          {(url) => <img src={url()} alt={`${props.name} backdrop`} class={styles.backdropImage} />}
         </Show>
         <div class={styles.scrim} aria-hidden="true" />
       </div>

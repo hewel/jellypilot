@@ -1,4 +1,5 @@
 import type {
+  AppLocalServices,
   AppConfig,
   CommandError,
   ConnectionState,
@@ -26,6 +27,7 @@ export const EXPECTED_CREDENTIALS = {
 } as const satisfies Credentials;
 
 interface RawCommandMap {
+  app_local_services: AppLocalServices;
   config_default: unknown;
   config_get: AppConfig;
   library_browse_video: VideoLibraryPage;
@@ -46,7 +48,7 @@ interface RawCommandMap {
 }
 
 export type FixtureCommand = keyof RawCommandMap;
-export type SafeRealCommand = 'config_default';
+export type SafeRealCommand = 'app_local_services' | 'config_default';
 
 export type FixtureOutcome<C extends FixtureCommand = FixtureCommand> =
   | { readonly kind: 'return'; readonly value: RawCommandMap[C] }
@@ -62,12 +64,13 @@ type StoredFixtureOutcome =
       [C in FixtureCommand]: { readonly kind: 'return'; readonly value: RawCommandMap[C] };
     }[FixtureCommand];
 
-const safeRealCommands = new Set<SafeRealCommand>(['config_default']);
+const safeRealCommands = new Set<SafeRealCommand>(['app_local_services', 'config_default']);
 const fixtures = new Map<FixtureCommand, StoredFixtureOutcome>();
 const calls = new Map<FixtureCommand, InvokeArgs[]>();
 
 function parseFixtureCommand(command: string): FixtureCommand | undefined {
   if (
+    command === 'app_local_services' ||
     command === 'config_default' ||
     command === 'config_get' ||
     command === 'library_browse_video' ||
@@ -101,6 +104,7 @@ export function installStartupFixtures(): void {
   fixtures.clear();
   calls.clear();
   fixtures.set('server_is_connected', { kind: 'return', value: false });
+  fixtures.set('app_local_services', { kind: 'real' });
   fixtures.set('server_profiles_get', {
     kind: 'return',
     value: { activeProfileKey: null, profiles: [] },
@@ -130,7 +134,10 @@ export function createControlledInvoke(realInvoke: RealInvoke): RealInvoke {
 
     if (outcome.kind === 'return') return outcome.value as T;
     if (outcome.kind === 'error') throw outcome.error;
-    if (fixtureCommand !== 'config_default' || !safeRealCommands.has(fixtureCommand)) {
+    if (
+      (fixtureCommand !== 'app_local_services' && fixtureCommand !== 'config_default') ||
+      !safeRealCommands.has(fixtureCommand)
+    ) {
       throw new Error(`Rejected unsafe real E2E IPC command: ${command}`);
     }
 

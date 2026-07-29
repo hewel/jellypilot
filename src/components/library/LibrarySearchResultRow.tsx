@@ -2,7 +2,7 @@ import type { VideoLibraryItem } from '@bindings';
 import { cx } from '@styled-system/css';
 import { Link } from '@tanstack/solid-router';
 import { Check, Film, Heart, Tv } from 'lucide-solid';
-import { Show, createEffect, createSignal } from 'solid-js';
+import { Show, createEffect, createMemo, createSignal } from 'solid-js';
 import type { JSX } from 'solid-js';
 import { imageSource } from '~utils/imageSource';
 
@@ -39,9 +39,13 @@ function metadataLine(item: VideoLibraryItem): string {
 export function LibrarySearchResultRow(props: LibrarySearchResultRowProps): JSX.Element {
   const [imageFailed, setImageFailed] = createSignal(false);
   const artworkImageId = () => props.item.artworkImageId;
+  const artworkUrl = createMemo(() => {
+    const imageId = artworkImageId();
+    return imageId ? imageSource(imageId) : '';
+  });
 
   createEffect(() => {
-    artworkImageId();
+    artworkUrl();
     setImageFailed(false);
   });
 
@@ -58,7 +62,7 @@ export function LibrarySearchResultRow(props: LibrarySearchResultRowProps): JSX.
     <Link {...linkTarget()} aria-label={rowAriaLabel()} class={styles.row}>
       <div class={styles.thumb}>
         <Show
-          when={!imageFailed() ? artworkImageId() : null}
+          when={!imageFailed() ? artworkUrl() : null}
           fallback={
             <div class={styles.thumbFallback}>
               <Show
@@ -70,9 +74,9 @@ export function LibrarySearchResultRow(props: LibrarySearchResultRowProps): JSX.
             </div>
           }
         >
-          {(imageId) => (
+          {(imageUrl) => (
             <img
-              src={imageSource(imageId())}
+              src={imageUrl()}
               alt=""
               class={styles.thumbImage}
               loading="lazy"

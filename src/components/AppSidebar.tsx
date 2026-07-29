@@ -172,18 +172,21 @@ export default function AppSidebar(props: AppSidebarProps) {
 
 function SidebarItemThumb(props: { artworkImageId: string | null; fallbackIcon: JSX.Element }) {
   const [imageFailed, setImageFailed] = createSignal(false);
+  const artworkUrl = createMemo(() =>
+    props.artworkImageId ? imageSource(props.artworkImageId) : '',
+  );
   createEffect(() => {
-    props.artworkImageId;
+    artworkUrl();
     setImageFailed(false);
   });
   return (
     <Show
-      when={!imageFailed() ? props.artworkImageId : null}
+      when={!imageFailed() ? artworkUrl() : null}
       fallback={<span class={styles.itemIconSlot}>{props.fallbackIcon}</span>}
     >
-      {(imageId) => (
+      {(imageUrl) => (
         <img
-          src={imageSource(imageId())}
+          src={imageUrl()}
           alt=""
           aria-hidden="true"
           class={styles.itemThumb}

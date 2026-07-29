@@ -3,7 +3,7 @@ import { cx } from '@styled-system/css';
 import { Link } from '@tanstack/solid-router';
 import { Match } from 'effect';
 import { Film, LoaderCircle, Play, Tv } from 'lucide-solid';
-import { Show, createEffect, createSignal } from 'solid-js';
+import { Show, createEffect, createMemo, createSignal } from 'solid-js';
 import { imageSource } from '~utils/imageSource';
 import {
   isValidVideoHomeResumePosition,
@@ -97,10 +97,14 @@ export function HomeVideoCard(props: HomeVideoCardProps) {
 
   const [imageFailed, setImageFailed] = createSignal(false);
   const artworkImageId = () => props.item.artworkImageId;
+  const artworkUrl = createMemo(() => {
+    const imageId = artworkImageId();
+    return imageId ? imageSource(imageId) : '';
+  });
   const showPlayBadge = () => isDirectResumeCard(props) && !props.busy;
 
   createEffect(() => {
-    artworkImageId();
+    artworkUrl();
     setImageFailed(false);
   });
 
@@ -126,7 +130,7 @@ export function HomeVideoCard(props: HomeVideoCardProps) {
       data-aspect={aspectClass()}
     >
       <Show
-        when={!imageFailed() ? artworkImageId() : null}
+        when={!imageFailed() ? artworkUrl() : null}
         fallback={
           <Show
             when={showPlayBadge()}
@@ -146,9 +150,9 @@ export function HomeVideoCard(props: HomeVideoCardProps) {
           </Show>
         }
       >
-        {(imageId) => (
+        {(imageUrl) => (
           <img
-            src={imageSource(imageId())}
+            src={imageUrl()}
             alt={`${props.item.name} artwork`}
             class={cx(styles.image, styles.homeImage)}
             onError={() => setImageFailed(true)}

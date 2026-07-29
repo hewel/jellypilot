@@ -11,6 +11,7 @@ use crate::auth_profiles::{
   load_profiles, save_profiles, SavedServiceProfileStore, SavedServiceProfiles,
 };
 use crate::config::AppConfig;
+use crate::image_proxy::{AppLocalServices, ImageProxyState};
 use crate::jellyfin::{
   AuthResponse, ConnectionState, Credentials, JellyfinClient, JellyfinError, MediaServerProvider,
   QuickConnectRequest, QuickConnectStatus, SavedSession, SessionManager, VideoHome,
@@ -1305,6 +1306,13 @@ pub fn config_detect_mpv() -> Option<String> {
   })
 }
 
+/// Get state of application local services (such as image proxy).
+#[tauri::command]
+#[specta]
+pub fn app_local_services(state: State<'_, ImageProxyState>) -> AppLocalServices {
+  state.local_services()
+}
+
 /// Load config from disk. Called internally during app setup.
 pub fn load_config_from_store(app: &tauri::AppHandle) -> AppConfig {
   use tauri_plugin_store::StoreExt;
@@ -1395,6 +1403,8 @@ pub fn specta_builder() -> Builder<tauri::Wry> {
       config_set,
       config_default,
       config_detect_mpv,
+      // Service commands
+      app_local_services,
     ])
     .events(collect_events![AppNotification, NowPlayingChanged]);
 

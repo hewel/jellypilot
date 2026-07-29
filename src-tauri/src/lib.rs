@@ -5,7 +5,9 @@ mod auth_profiles;
 mod command;
 mod config;
 mod hls_proxy;
+#[expect(dead_code, reason = "prefactored for image proxy write-through")]
 mod image_cache;
+mod image_proxy;
 mod image_ref;
 mod jellyfin;
 mod mpv;
@@ -17,6 +19,7 @@ use command::{ConfigState, JellyfinState, MpvState};
 pub use config::AppConfig;
 use hls_proxy::{HlsProxy, HlsProxyState};
 use image_cache::{ImageCache, ImageCacheState};
+use image_proxy::{ImageProxy, ImageProxyState};
 use jellyfin::JellyfinClient;
 use mpv::MpvClient;
 use parking_lot::RwLock;
@@ -46,9 +49,10 @@ pub fn run() {
   let config_for_setup = config.clone();
   let image_cache_state = ImageCacheState::empty();
   let image_cache_for_setup = image_cache_state.0.clone();
-  let image_cache_for_protocol = image_cache_state.clone();
   let hls_proxy_state = HlsProxyState::default();
   let hls_proxy_for_setup = hls_proxy_state.clone();
+  let image_proxy_state = ImageProxyState::new();
+  let image_proxy_for_setup = image_proxy_state.clone();
 
   // Create MPV client state
   let mpv_client = Arc::new(MpvClient::new(None));
@@ -58,27 +62,12 @@ pub fn run() {
   // Create Jellyfin client state
   let jellyfin_client = Arc::new(JellyfinClient::new());
   let jellyfin_for_setup = jellyfin_client.clone();
-  let jellyfin_for_protocol = jellyfin_client.clone();
   let jellyfin_state = JellyfinState::new(jellyfin_client, mpv_client, hls_proxy_state);
-  let config_for_protocol = config.clone();
 
   let app_builder = tauri::Builder::default()
-    .register_asynchronous_uri_scheme_protocol(
-      "jellypilot-image",
-      move |_ctx, request, responder| {
-        let client = jellyfin_for_protocol.clone();
-        let config = config_for_protocol.clone();
-        let image_cache_state = image_cache_for_protocol.clone();
-        let token = request.uri().path().trim_start_matches('/').to_string();
-        tauri::async_runtime::spawn(async move {
-          responder.respond(
-            image_cache::image_response_for_token(client, config, image_cache_state, token).await,
-          );
-        });
-      },
-    )
     .manage(config_state)
     .manage(image_cache_state)
+    .manage(image_proxy_state)
     .manage(mpv_state)
     .manage(jellyfin_state)
     .invoke_handler(builder.invoke_handler())
@@ -110,6 +99,11 @@ pub fn run() {
           hls_proxy_for_setup.install(HlsProxy::start(None));
         }
       }
+      let image_proxy_res = ImageProxy::start(jellyfin_for_setup.clone());
+      if let Err(e) = &image_proxy_res {
+        log::warn!("Failed to start localhost image proxy: {}", e);
+      }
+      image_proxy_for_setup.install(image_proxy_res);
 
       // Apply loaded config to MPV client
       let mpv_path = loaded_config
