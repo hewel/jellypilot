@@ -1,5 +1,5 @@
 import { createQuery } from '@tanstack/solid-query';
-import { Outlet, createFileRoute, useLocation } from '@tanstack/solid-router';
+import { Outlet, createFileRoute } from '@tanstack/solid-router';
 import { Exit } from 'effect';
 import { Show } from 'solid-js';
 import { createSidebarPreferences } from '~utils/sidebarPreferences';
@@ -16,10 +16,6 @@ export const Route = createFileRoute('/_authenticated')({
   component: AuthenticatedShell,
 });
 
-/* Media detail pages own their gutters (full-bleed hero, padded sections), so
- * the shell drops its horizontal padding there. */
-const DETAIL_PATH = /^\/library\/(items|shows)\//;
-
 function AuthenticatedShell() {
   const connectionQuery = createQuery(() => ({
     queryKey: queryKeys.connectionState,
@@ -31,8 +27,6 @@ function AuthenticatedShell() {
       : false;
   const { collapsed } = createSidebarPreferences();
   const { wipe } = createSidebarWipe();
-  const pathname = useLocation({ select: (location) => location.pathname });
-  const detailPage = () => DETAIL_PATH.test(pathname());
 
   return (
     <div class={styles.shell({ collapsed: collapsed() })} data-shell="">
@@ -51,7 +45,7 @@ function AuthenticatedShell() {
           />
         )}
       </Show>
-      <main class={styles.main({ glide: wipe() ?? undefined, flush: detailPage() })}>
+      <main class={styles.main({ glide: wipe() ?? undefined })}>
         <div class={styles.enter}>
           <Outlet />
         </div>

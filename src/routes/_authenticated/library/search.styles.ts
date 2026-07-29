@@ -7,6 +7,10 @@ export const root = css({
   minWidth: '[0]',
 });
 
+export const pageGutter = css({
+  px: '4',
+});
+
 export const header = css({
   alignItems: 'baseline',
   columnGap: '3',

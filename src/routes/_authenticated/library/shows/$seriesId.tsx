@@ -278,7 +278,11 @@ function LibraryShowDetailRoute() {
       <Suspense fallback={<ShowDetailSkeleton />}>
         <Show
           when={detail()}
-          fallback={<LibraryStatusPanel title={statusTitle()} description={statusDescription()} />}
+          fallback={
+            <div class={styles.contentSection}>
+              <LibraryStatusPanel title={statusTitle()} description={statusDescription()} />
+            </div>
+          }
         >
           {(show) => (
             <div class={styles.page}>

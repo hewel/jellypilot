@@ -82,16 +82,10 @@ export const main = cva({
     gridColumn: '2',
     minWidth: '[0]',
     position: 'relative',
-    px: '4',
     width: 'full',
     zIndex: '0',
   },
   variants: {
-    flush: {
-      true: {
-        px: '0',
-      },
-    },
     glide: {
       expand: {
         animation: '[sidebarGlideExpand 200ms {easings.emphasized}]',

@@ -80,13 +80,17 @@ function LibraryLanding() {
 
   return (
     <>
-      <nav class={styles.homeSearch} aria-label="Library search" data-toolbar="">
+      <nav
+        class={cx(styles.homeSearch, styles.pageGutter)}
+        aria-label="Library search"
+        data-toolbar=""
+      >
         <LibrarySearchBar sessionKey={sessionKey()} />
       </nav>
       <Show when={!homeQuery.isPending} fallback={<VideoHomeSkeleton />}>
         <Show when={home()}>
           {(value) => (
-            <div class={styles.stack}>
+            <div class={cx(styles.stack, styles.pageGutter)}>
               <VideoHomeRow
                 id="continue-watching"
                 title="Continue Watching"
@@ -118,7 +122,7 @@ function LibraryLanding() {
 
 function VideoHomeSkeleton() {
   return (
-    <div class={styles.stack} aria-hidden="true">
+    <div class={cx(styles.stack, styles.pageGutter)} aria-hidden="true">
       <For each={homeSkeletonRows}>
         {(row) => (
           <section class={styles.skeletonRow}>

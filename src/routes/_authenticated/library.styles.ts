@@ -7,6 +7,12 @@ export const stack = css({
   gap: '8',
 });
 
+/* Leaf pages own the horizontal gutter now that the shell main is unpadded;
+ * the layout stack above stays bare so detail pages can run full-bleed. */
+export const pageGutter = css({
+  px: '4',
+});
+
 /* Sticky Home search chrome. The glass capsule belongs to the search bar
  * itself; this host is only a positioning rail plus a top-fade scrim, so the
  * row is invisible over the ambient background at rest and scrolled rows

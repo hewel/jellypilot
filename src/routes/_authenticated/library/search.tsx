@@ -2,6 +2,7 @@ import { useAppScrollArea } from '@components/AppScrollAreaContext';
 import { LibrarySearchResultRow } from '@components/library/LibrarySearchResultRow';
 import { LibraryStatusPanel } from '@components/library/shared';
 import { Button } from '@components/ui';
+import { cx } from '@styled-system/css';
 import { createInfiniteQuery, createQuery, useQueryClient } from '@tanstack/solid-query';
 import { createFileRoute, redirect } from '@tanstack/solid-router';
 import { Exit } from 'effect';
@@ -174,7 +175,7 @@ function LibrarySearchRoute() {
   };
 
   return (
-    <div class={styles.root}>
+    <div class={cx(styles.root, styles.pageGutter)}>
       <header class={styles.header}>
         <h1 class={styles.heading}>Search results for “{q()}”</h1>
         <Show when={firstPageState()}>

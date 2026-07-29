@@ -2,6 +2,7 @@ import { css } from '@styled-system/css';
 
 export const root = css({
   minWidth: '[0]',
+  px: '4',
 });
 
 export const section = css({
