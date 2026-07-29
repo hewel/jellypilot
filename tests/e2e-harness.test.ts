@@ -205,6 +205,8 @@ test('teardown verification rejects an occupied port and passes after release', 
   ).resolves.toEqual({ portClosed: true });
 });
 
+// Spawns Xvfb plus two detached processes and pays two fixed 1s SIGTERM grace
+// waits during interruption; shared CI runners exceed the 5s default.
 test('interrupts scoped process, display, port, and storage resources in cleanup order', async () => {
   const parent = await mkdtemp(path.join(tmpdir(), 'jellypilot-interrupt-'));
   const owned = path.join(parent, 'owned');
@@ -269,4 +271,4 @@ test('interrupts scoped process, display, port, and storage resources in cleanup
   } finally {
     await rm(parent, { force: true, recursive: true });
   }
-});
+}, 30_000);
