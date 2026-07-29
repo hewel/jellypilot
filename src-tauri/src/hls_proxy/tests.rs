@@ -225,8 +225,8 @@ async fn streams_before_origin_completion_and_reuses_disk_file() {
   let chunk1 = seg_resp.chunk().await.unwrap().unwrap();
   assert_eq!(&chunk1[..], b"CHUNK1");
 
-  // Release origin barrier
-  origin_barrier.notify_waiters();
+  // Store a permit even if the origin task has not polled `notified()` yet.
+  origin_barrier.notify_one();
 
   let chunk2 = seg_resp.chunk().await.unwrap().unwrap();
   assert_eq!(&chunk2[..], b"CHUNK2");
