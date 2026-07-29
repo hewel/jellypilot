@@ -15,9 +15,10 @@ use crate::image_proxy::{AppLocalServices, ImageProxyState};
 use crate::jellyfin::{
   AuthResponse, ConnectionState, Credentials, JellyfinClient, JellyfinError, MediaServerProvider,
   QuickConnectRequest, QuickConnectStatus, SavedSession, SessionManager, VideoHome,
-  VideoItemDetail, VideoLibraryPage, VideoLibraryPageRequest, VideoLibraryPlayRequest,
-  VideoLibraryShortcut, VideoSearchPage, VideoSearchRequest, VideoSeasonEpisodes,
-  VideoSeasonEpisodesRequest, VideoShowDetail, VideoUserDataUpdate, VideoUserDataUpdateRequest,
+  VideoItemDetail, VideoItemStreams, VideoLibraryPage, VideoLibraryPageRequest,
+  VideoLibraryPlayRequest, VideoLibraryShortcut, VideoSearchPage, VideoSearchRequest,
+  VideoSeasonEpisodes, VideoSeasonEpisodesRequest, VideoShowDetail, VideoUserDataUpdate,
+  VideoUserDataUpdateRequest,
 };
 use crate::mpv::{write_input_conf, MpvClient, PropertyValue};
 use crate::playback_control;
@@ -706,6 +707,21 @@ pub async fn library_item_detail(
     .map_err(jellyfin_err)
 }
 
+/// Load slower audio and subtitle metadata after critical item detail.
+#[tauri::command]
+#[specta]
+pub async fn library_item_streams(
+  state: State<'_, JellyfinState>,
+  item_id: String,
+) -> Result<VideoItemStreams, CommandError> {
+  state
+    .client
+    .library()
+    .item_streams(item_id)
+    .await
+    .map_err(jellyfin_err)
+}
+
 /// Load Show details with seasons and the Jellyfin next playable episode.
 #[tauri::command]
 #[specta]
@@ -1364,6 +1380,7 @@ pub fn specta_builder() -> Builder<tauri::Wry> {
       library_browse_video,
       library_search_video,
       library_item_detail,
+      library_item_streams,
       library_show_detail,
       library_season_episodes,
       library_play,

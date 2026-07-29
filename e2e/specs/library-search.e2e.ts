@@ -153,8 +153,6 @@ const finaleDetail = {
   canPlay: false,
   artworkImageId: null,
   backdropImageId: null,
-  audioStreams: [],
-  subtitleStreams: [],
 } as const satisfies VideoItemDetail;
 
 const offlineState = {
@@ -182,6 +180,7 @@ const fixtures = {
   library_browse_video: browsePage,
   library_search_video: searchPage,
   library_item_detail: finaleDetail,
+  library_item_streams: { audioStreams: [], subtitleStreams: [] },
   library_item_shortcut: moviesShortcut,
   now_playing_get_state: offlineState,
 } as const;
@@ -231,6 +230,13 @@ describe('library search finds results beyond home rows and restores them on Bac
       controller.installFixture('library_item_detail', {
         kind: 'return',
         value: values.library_item_detail,
+      });
+      controller.installFixture('library_item_streams', {
+        kind: 'return',
+        value: {
+          audioStreams: [...values.library_item_streams.audioStreams],
+          subtitleStreams: [...values.library_item_streams.subtitleStreams],
+        },
       });
       controller.installFixture('library_item_shortcut', {
         kind: 'return',

@@ -122,8 +122,6 @@ const itemDetail = {
   canPlay: false,
   artworkImageId: null,
   backdropImageId: null,
-  audioStreams: [],
-  subtitleStreams: [],
 } as const satisfies VideoItemDetail;
 
 const offlineState = {
@@ -150,6 +148,7 @@ const fixtures = {
   library_video_shortcuts: [moviesShortcut],
   library_browse_video: browsePage,
   library_item_detail: itemDetail,
+  library_item_streams: { audioStreams: [], subtitleStreams: [] },
   library_item_shortcut: moviesShortcut,
   now_playing_get_state: offlineState,
 } as const;
@@ -195,6 +194,13 @@ describe('library item detail Back restores origin and scroll', () => {
       controller.installFixture('library_item_detail', {
         kind: 'return',
         value: values.library_item_detail,
+      });
+      controller.installFixture('library_item_streams', {
+        kind: 'return',
+        value: {
+          audioStreams: [...values.library_item_streams.audioStreams],
+          subtitleStreams: [...values.library_item_streams.subtitleStreams],
+        },
       });
       controller.installFixture('library_item_shortcut', {
         kind: 'return',

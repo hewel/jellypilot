@@ -49,6 +49,8 @@ export const commands = {
 	librarySearchVideo: (request: VideoSearchRequest) => typedError<VideoSearchPage, CommandError>(__TAURI_INVOKE("library_search_video", { request })),
 	/**  Load Movie or Episode details for the Library Browser. */
 	libraryItemDetail: (itemId: string) => typedError<VideoItemDetail, CommandError>(__TAURI_INVOKE("library_item_detail", { itemId })),
+	/**  Load slower audio and subtitle metadata after critical item detail. */
+	libraryItemStreams: (itemId: string) => typedError<VideoItemStreams, CommandError>(__TAURI_INVOKE("library_item_streams", { itemId })),
 	/**  Load Show details with seasons and the Jellyfin next playable episode. */
 	libraryShowDetail: (seriesId: string) => typedError<VideoShowDetail, CommandError>(__TAURI_INVOKE("library_show_detail", { seriesId })),
 	/**  Load Episodes for one Show season. */
@@ -378,6 +380,10 @@ export type VideoItemDetail = {
 	canPlay: boolean,
 	artworkImageId: string | null,
 	backdropImageId: string | null,
+};
+
+/**  Audio and subtitle metadata loaded after the critical item detail. */
+export type VideoItemStreams = {
 	audioStreams: VideoPlaybackStreamOption[],
 	subtitleStreams: VideoPlaybackStreamOption[],
 };

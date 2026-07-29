@@ -2,6 +2,7 @@ import { commands } from '@bindings';
 import type {
   VideoHome,
   VideoItemDetail,
+  VideoItemStreams,
   VideoLibraryItem,
   VideoLibraryKind,
   VideoLibraryPage,
@@ -36,6 +37,7 @@ export interface LibraryBrowseState {
 }
 
 export type LibraryDetailState = VideoItemDetail;
+export type LibraryItemStreamsState = VideoItemStreams;
 export type LibraryShowState = VideoShowDetail;
 export type LibrarySearchState = VideoSearchPage;
 
@@ -90,6 +92,10 @@ export function fetchVideoLibraryPage(
 
 export function fetchVideoItemDetail(itemId: string): LibraryEffect<LibraryDetailState> {
   return withConnection(runTauriCommand(() => commands.libraryItemDetail(itemId)));
+}
+
+export function fetchVideoItemStreams(itemId: string): LibraryEffect<LibraryItemStreamsState> {
+  return withConnection(runTauriCommand(() => commands.libraryItemStreams(itemId)));
 }
 
 export function fetchVideoSearchPage(

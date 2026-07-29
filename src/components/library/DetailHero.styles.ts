@@ -246,10 +246,71 @@ export const icon4 = css({
 });
 
 export const skeletonHero = css({
-  animation: pulse,
-  bg: 'surfaceContainerLow/60',
+  bg: 'surfaceContainerLow',
+  display: 'flex',
   minHeight: '[540px]',
+  overflow: 'hidden',
+  position: 'relative',
   lg: {
     minHeight: '[660px]',
   },
+});
+
+export const skeletonBackdrop = css({
+  animation: pulse,
+  bg: 'surfaceContainer/55',
+  inset: '[0]',
+  position: 'absolute',
+});
+
+export const skeletonContent = css({
+  alignSelf: 'flex-end',
+  display: 'grid',
+  gap: '4',
+  pb: '8',
+  position: 'relative',
+  px: '4',
+  width: 'full',
+  zIndex: '[1]',
+});
+
+export const skeletonLabel = css({
+  color: 'onSurfaceVariant',
+  fontSize: '14',
+  fontWeight: 'semibold',
+  lineHeight: '20',
+});
+
+export const skeletonBadge = css({
+  animation: pulse,
+  bg: 'onSurface/10',
+  borderRadius: 'full',
+  height: '8',
+  width: '24',
+});
+
+export const skeletonTitle = css({
+  animation: pulse,
+  bg: 'onSurface/15',
+  borderRadius: 'lg',
+  height: '14',
+  maxWidth: '[36rem]',
+  width: '[65%]',
+});
+
+export const skeletonLine = css({
+  animation: pulse,
+  bg: 'onSurface/10',
+  borderRadius: 'md',
+  height: '5',
+  maxWidth: '[28rem]',
+  width: '[48%]',
+});
+
+export const skeletonActions = css({
+  animation: pulse,
+  bg: 'onSurface/10',
+  borderRadius: 'full',
+  height: '11',
+  width: '[10rem]',
 });

@@ -12,6 +12,7 @@ import type {
   NowPlayingState,
   VideoHome,
   VideoItemDetail,
+  VideoItemStreams,
   VideoLibraryItem,
   VideoLibraryPage,
   VideoLibraryShortcut,
@@ -31,6 +32,9 @@ import { createTestQueryClient, TestQueryProvider } from './query-client';
 
 type LibraryItemDetailResult =
   | { status: 'ok'; data: VideoItemDetail }
+  | { status: 'error'; error: CommandError };
+type LibraryItemStreamsResult =
+  | { status: 'ok'; data: VideoItemStreams }
   | { status: 'error'; error: CommandError };
 
 interface TestIntersectionObserverController {
@@ -268,7 +272,6 @@ const videoLibraryShortcuts: VideoLibraryShortcut[] = [
 const movieDetail: VideoItemDetail = {
   artworkImageId: 'https://jellyfin.example.com/Items/detail-movie/Images/Primary',
   backdropImageId: 'https://jellyfin.example.com/Items/detail-movie/Images/Backdrop/0',
-  audioStreams,
   canPlay: true,
   canResume: true,
   episodeNumber: null,
@@ -286,13 +289,11 @@ const movieDetail: VideoItemDetail = {
   seasonNumber: null,
   seriesId: null,
   seriesName: null,
-  subtitleStreams,
 };
 
 const episodeDetail: VideoItemDetail = {
   artworkImageId: null,
   backdropImageId: null,
-  audioStreams,
   canPlay: true,
   canResume: false,
   episodeNumber: 3,
@@ -310,6 +311,11 @@ const episodeDetail: VideoItemDetail = {
   seasonNumber: 2,
   seriesId: 'series-1',
   seriesName: 'Example Show',
+  subtitleStreams,
+};
+
+const itemStreams: VideoItemStreams = {
+  audioStreams,
   subtitleStreams,
 };
 
@@ -640,6 +646,10 @@ function mockShellCommands(state = connectedState) {
           : movieDetail;
 
     return Promise.resolve({ data, status: 'ok' });
+  });
+  rstest.spyOn(commands, 'libraryItemStreams').mockResolvedValue({
+    data: itemStreams,
+    status: 'ok',
   });
   rstest.spyOn(commands, 'libraryShowDetail').mockResolvedValue({
     data: showDetail,
@@ -1784,7 +1794,9 @@ test('library item detail renders resume-primary movie metadata', async () => {
       subtitleStreamIndex: null,
     }),
   );
-  expect(screen.getByRole('button', { name: 'Play from beginning' })).not.toBeDisabled();
+  await waitFor(() =>
+    expect(screen.getByRole('button', { name: 'Play from beginning' })).not.toBeDisabled(),
+  );
   fireEvent.click(screen.getByRole('button', { name: 'Play from beginning' }));
   await waitFor(() =>
     expect(playCommand).toHaveBeenLastCalledWith({
@@ -1867,6 +1879,11 @@ test('library item detail leaves the skeleton after an asynchronous detail respo
         resolveDetail = resolve;
       }),
   );
+  const { promise: streamsPromise, resolve: resolveStreams } =
+    Promise.withResolvers<LibraryItemStreamsResult>();
+  const streamsCommand = rstest
+    .spyOn(commands, 'libraryItemStreams')
+    .mockImplementation(() => streamsPromise);
   const cleanup = renderShell('/library');
 
   const latestMovieLink = await screen.findByRole('link', { name: 'Open Latest Movie' });
@@ -1874,12 +1891,18 @@ test('library item detail leaves the skeleton after an asynchronous detail respo
 
   await waitFor(() => expect(detailCommand).toHaveBeenCalledWith('movie-2'));
   expect(screen.queryByRole('heading', { name: 'Detail Movie' })).toBeNull();
+  expect(screen.getByRole('status', { name: 'Loading item detail' })).toBeVisible();
 
   resolveDetail({ data: movieDetail, status: 'ok' });
 
   expect(await screen.findByRole('heading', { name: 'Detail Movie' })).toBeVisible();
   expect(screen.getByText('A movie overview.')).toBeVisible();
   expect(detailCommand).toHaveBeenCalledTimes(1);
+  await waitFor(() => expect(streamsCommand).toHaveBeenCalledWith('movie-2'));
+  expect(screen.queryByText('eng, jpn')).toBeNull();
+
+  resolveStreams({ data: itemStreams, status: 'ok' });
+  expect(await screen.findByText('eng, jpn')).toBeVisible();
 
   cleanup();
 });

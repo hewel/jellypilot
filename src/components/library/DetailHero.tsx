@@ -151,5 +151,16 @@ export function DetailHero(props: {
 }
 
 export function DetailHeroSkeleton() {
-  return <div class={styles.skeletonHero} aria-hidden="true" />;
+  return (
+    <section class={styles.skeletonHero} role="status" aria-label="Loading item detail">
+      <div class={styles.skeletonBackdrop} aria-hidden="true" />
+      <div class={styles.skeletonContent}>
+        <span class={styles.skeletonLabel}>Loading details…</span>
+        <div class={styles.skeletonBadge} aria-hidden="true" />
+        <div class={styles.skeletonTitle} aria-hidden="true" />
+        <div class={styles.skeletonLine} aria-hidden="true" />
+        <div class={styles.skeletonActions} aria-hidden="true" />
+      </div>
+    </section>
+  );
 }

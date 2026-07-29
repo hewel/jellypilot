@@ -24,6 +24,7 @@ import { commandFailureMessage } from '~effects/commands';
 import { fetchConnectionState } from '~effects/connection';
 import {
   fetchVideoItemDetail,
+  fetchVideoItemStreams,
   startLibraryPlayback,
   updateLibraryUserData,
 } from '~effects/library';
@@ -62,6 +63,15 @@ function LibraryItemDetailRoute() {
     enabled: isLibrarySessionKeyConnected(sessionKey()),
     queryFn: () => runExit(fetchVideoItemDetail(params().itemId)),
   }));
+  const streamsQuery = createQuery(() => ({
+    queryKey: queryKeys.libraryItemStreams(sessionKey(), params().itemId),
+    enabled:
+      isLibrarySessionKeyConnected(sessionKey()) &&
+      detailQuery.isSuccess &&
+      detailQuery.data !== undefined &&
+      Exit.isSuccess(detailQuery.data),
+    queryFn: () => runExit(fetchVideoItemStreams(params().itemId)),
+  }));
   const playbackMutation = createMutation(() => ({
     mutationFn: (request: VideoLibraryPlayRequest) => runExit(startLibraryPlayback(request)),
   }));
@@ -84,6 +94,16 @@ function LibraryItemDetailRoute() {
     const current = detailResult();
     return current && Exit.isSuccess(current) ? current.value : null;
   };
+  const itemStreams = () => {
+    if (!streamsQuery.isSuccess) {
+      return null;
+    }
+    const current = streamsQuery.data;
+    return current && Exit.isSuccess(current) ? current.value : null;
+  };
+  const detailPending = () =>
+    connectionQuery.isPending ||
+    (isLibrarySessionKeyConnected(sessionKey()) && detailQuery.isPending);
   const statusTitle = () => {
     const current = detailResult();
     if (current && !Exit.isSuccess(current)) {
@@ -122,10 +142,7 @@ function LibraryItemDetailRoute() {
 
   return (
     <div class={styles.stack}>
-      <Show
-        when={!(connectionQuery.isPending || (detailQuery.isFetching && !detailQuery.isFetched))}
-        fallback={<ItemDetailSkeleton />}
-      >
+      <Show when={!detailPending()} fallback={<ItemDetailSkeleton />}>
         <Show
           when={detail()}
           fallback={
@@ -151,11 +168,11 @@ function LibraryItemDetailRoute() {
               if (isEpisode() && item().seriesName) {
                 rows.push({ label: 'Series', value: item().seriesName ?? '' });
               }
-              const audio = streamLanguages(item().audioStreams);
+              const audio = streamLanguages(itemStreams()?.audioStreams ?? []);
               if (audio) {
                 rows.push({ label: 'Audio', value: audio });
               }
-              const subtitles = streamLanguages(item().subtitleStreams);
+              const subtitles = streamLanguages(itemStreams()?.subtitleStreams ?? []);
               if (subtitles) {
                 rows.push({ label: 'Subtitles', value: subtitles });
               }
@@ -268,7 +285,7 @@ function LibraryItemDetailRoute() {
 
 function ItemDetailSkeleton() {
   return (
-    <div class={styles.page} aria-hidden="true">
+    <div class={styles.page}>
       <DetailHeroSkeleton />
     </div>
   );

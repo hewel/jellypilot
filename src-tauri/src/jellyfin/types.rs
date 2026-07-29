@@ -240,8 +240,6 @@ pub struct VideoItemDetail {
   pub can_play: bool,
   pub artwork_image_id: Option<String>,
   pub backdrop_image_id: Option<String>,
-  pub audio_streams: Vec<VideoPlaybackStreamOption>,
-  pub subtitle_streams: Vec<VideoPlaybackStreamOption>,
 }
 
 /// Selectable audio or subtitle stream exposed before Library playback starts.
@@ -254,6 +252,14 @@ pub struct VideoPlaybackStreamOption {
   pub codec: Option<String>,
   pub is_default: bool,
   pub is_external: bool,
+}
+
+/// Audio and subtitle metadata loaded after the critical item detail.
+#[derive(Debug, Clone, Serialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct VideoItemStreams {
+  pub audio_streams: Vec<VideoPlaybackStreamOption>,
+  pub subtitle_streams: Vec<VideoPlaybackStreamOption>,
 }
 
 /// Show detail data with seasons and Jellyfin next playable episode.

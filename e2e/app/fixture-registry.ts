@@ -8,6 +8,7 @@ import type {
   SavedServiceProfiles,
   VideoHome,
   VideoItemDetail,
+  VideoItemStreams,
   VideoLibraryPage,
   VideoLibraryShortcut,
   VideoSearchPage,
@@ -32,6 +33,7 @@ interface RawCommandMap {
   config_get: AppConfig;
   library_browse_video: VideoLibraryPage;
   library_item_detail: VideoItemDetail;
+  library_item_streams: VideoItemStreams;
   library_item_shortcut: VideoLibraryShortcut | null;
   library_play: null;
   library_search_video: VideoSearchPage;
@@ -50,19 +52,20 @@ interface RawCommandMap {
 export type FixtureCommand = keyof RawCommandMap;
 export type SafeRealCommand = 'app_local_services' | 'config_default';
 
-export type FixtureOutcome<C extends FixtureCommand = FixtureCommand> =
-  | { readonly kind: 'return'; readonly value: RawCommandMap[C] }
-  | { readonly kind: 'error'; readonly error: CommandError }
-  | { readonly kind: 'real' };
+interface FixtureDelay {
+  readonly delayMs?: number;
+}
 
+export type FixtureOutcome<C extends FixtureCommand = FixtureCommand> = FixtureDelay &
+  (
+    | { readonly kind: 'return'; readonly value: RawCommandMap[C] }
+    | { readonly kind: 'error'; readonly error: CommandError }
+    | { readonly kind: 'real' }
+  );
+
+type StoredFixtureOutcome = FixtureOutcome;
 type InvokeArgs = Record<string, unknown> | undefined;
 type RealInvoke = <T>(command: string, args?: InvokeArgs) => Promise<T>;
-type StoredFixtureOutcome =
-  | { readonly kind: 'real' }
-  | { readonly kind: 'error'; readonly error: CommandError }
-  | {
-      [C in FixtureCommand]: { readonly kind: 'return'; readonly value: RawCommandMap[C] };
-    }[FixtureCommand];
 
 const safeRealCommands = new Set<SafeRealCommand>(['app_local_services', 'config_default']);
 const fixtures = new Map<FixtureCommand, StoredFixtureOutcome>();
@@ -75,6 +78,7 @@ function parseFixtureCommand(command: string): FixtureCommand | undefined {
     command === 'config_get' ||
     command === 'library_browse_video' ||
     command === 'library_item_detail' ||
+    command === 'library_item_streams' ||
     command === 'library_item_shortcut' ||
     command === 'library_play' ||
     command === 'library_search_video' ||
@@ -131,6 +135,12 @@ export function createControlledInvoke(realInvoke: RealInvoke): RealInvoke {
     recordCall(fixtureCommand, args);
     const outcome = fixtures.get(fixtureCommand);
     if (!outcome) throw new Error(`Missing E2E fixture outcome: ${command}`);
+
+    if (outcome.delayMs !== undefined) {
+      const { promise, resolve } = Promise.withResolvers<void>();
+      setTimeout(resolve, outcome.delayMs);
+      await promise;
+    }
 
     if (outcome.kind === 'return') return outcome.value as T;
     if (outcome.kind === 'error') throw outcome.error;

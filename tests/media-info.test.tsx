@@ -30,7 +30,6 @@ const connectedState = {
 const movieDetail: VideoItemDetail = {
   artworkImageId: 'https://example.com/movie.png',
   backdropImageId: null,
-  audioStreams: [],
   canPlay: true,
   canResume: true,
   episodeNumber: null,
@@ -48,7 +47,6 @@ const movieDetail: VideoItemDetail = {
   seasonNumber: null,
   seriesId: null,
   seriesName: null,
-  subtitleStreams: [],
 };
 
 const showDetail: VideoShowDetail = {

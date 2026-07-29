@@ -67,8 +67,6 @@ const itemDetail = {
   canPlay: true,
   artworkImageId: null,
   backdropImageId: null,
-  audioStreams: [],
-  subtitleStreams: [],
 } as const satisfies VideoItemDetail;
 
 const offlineState = {
@@ -94,12 +92,25 @@ const fixtures = {
   library_video_home: videoHome,
   library_video_shortcuts: [],
   library_item_detail: itemDetail,
+  library_item_streams: {
+    audioStreams: [
+      {
+        codec: 'aac',
+        index: 1,
+        isDefault: true,
+        isExternal: false,
+        label: 'English AAC',
+        language: 'eng',
+      },
+    ],
+    subtitleStreams: [],
+  },
   library_play: null,
   now_playing_get_state: offlineState,
 } as const;
 
 describe('Video Home direct resume', () => {
-  it('sends the saved position through the controlled typed IPC boundary', async () => {
+  it('sends saved resume state and keeps the first detail load visible', async () => {
     await browser.waitUntil(
       () => browser.execute(() => window.__JELLYPILOT_E2E__?.ready === true),
       {
@@ -130,6 +141,14 @@ describe('Video Home direct resume', () => {
         kind: 'return',
         value: values.library_item_detail,
       });
+      controller.installFixture('library_item_streams', {
+        kind: 'return',
+        delayMs: 3000,
+        value: {
+          audioStreams: [...values.library_item_streams.audioStreams],
+          subtitleStreams: [...values.library_item_streams.subtitleStreams],
+        },
+      });
       controller.installFixture('library_play', {
         kind: 'return',
         value: values.library_play,
@@ -156,5 +175,30 @@ describe('Video Home direct resume', () => {
       await browser.execute(() => window.__JELLYPILOT_E2E__?.hasExpectedLibraryPlayCall()),
     ).toBe(true);
     expect(await browser.execute(() => window.location.pathname)).toBe('/library');
+
+    const detailLink = await $('a[href="/library/items/e2e-home-movie"]');
+    await detailLink.click();
+    const detailHeading = await $('aria/E2E Home Movie');
+    await detailHeading.waitForDisplayed({ timeout: 1000 });
+
+    await browser.waitUntil(
+      () => browser.execute(() => document.body.textContent?.includes('eng') === true),
+      {
+        timeout: 5000,
+        timeoutMsg: 'Deferred audio metadata did not render after the detail page became usable.',
+      },
+    );
+
+    const back = await $('aria/Back');
+    await back.click();
+    await browser.waitUntil(
+      async () => (await browser.execute(() => window.location.pathname)) === '/library',
+      { timeout: 5000, timeoutMsg: 'Detail back navigation did not return to the library.' },
+    );
+
+    const cachedDetailLink = await $('a[href="/library/items/e2e-home-movie"]');
+    await cachedDetailLink.click();
+    const cachedDetailHeading = await $('aria/E2E Home Movie');
+    await cachedDetailHeading.waitForDisplayed({ timeout: 5000 });
   });
 });

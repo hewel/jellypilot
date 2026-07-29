@@ -539,9 +539,9 @@ function EpisodeRow(props: {
 
 function ShowDetailSkeleton() {
   return (
-    <div class={styles.page} aria-hidden="true">
+    <div class={styles.page}>
       <DetailHeroSkeleton />
-      <div class={styles.contentSection}>
+      <div class={styles.contentSection} aria-hidden="true">
         <div class={styles.skeletonBar} />
         <SeasonEpisodesSkeleton />
       </div>

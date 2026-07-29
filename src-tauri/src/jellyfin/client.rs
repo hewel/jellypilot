@@ -1964,15 +1964,41 @@ impl<'a> JellyfinLibrary<'a> {
     let user_id = self.client.user_id()?;
     let item = self
       .client
-      .get(&format!(
-        "/Items/{item_id}?userId={user_id}&fields=MediaStreams"
-      ))
+      .get(&format!("/Items/{item_id}?userId={user_id}"))
       .await?;
 
     map_video_item_detail(&server_url, item).ok_or_else(|| {
       JellyfinError::HttpError(
         "Only Movie and Episode details are supported by the Library Browser".to_string(),
       )
+    })
+  }
+
+  pub async fn item_streams(&self, item_id: String) -> Result<VideoItemStreams, JellyfinError> {
+    if self.client.provider() == MediaServerProvider::Emby {
+      return self.emby_item_streams(item_id).await;
+    }
+
+    let item_id = item_id.trim();
+    if item_id.is_empty() {
+      return Err(JellyfinError::HttpError(
+        "Item id is required for video stream details".to_string(),
+      ));
+    }
+
+    let user_id = self.client.user_id()?;
+    let item: jellyfin_api::models::BaseItemDto = self
+      .client
+      .get(&format!(
+        "/Items/{item_id}?userId={user_id}&fields=MediaStreams"
+      ))
+      .await?;
+    let (audio_streams, subtitle_streams) =
+      map_video_playback_streams(item.media_streams.flatten().unwrap_or_default());
+
+    Ok(VideoItemStreams {
+      audio_streams,
+      subtitle_streams,
     })
   }
 
@@ -2445,6 +2471,31 @@ impl<'a> JellyfinLibrary<'a> {
       JellyfinError::HttpError(
         "Only Movie and Episode details are supported by the Library Browser".to_string(),
       )
+    })
+  }
+
+  async fn emby_item_streams(&self, item_id: String) -> Result<VideoItemStreams, JellyfinError> {
+    let item_id = item_id.trim();
+    if item_id.is_empty() {
+      return Err(JellyfinError::HttpError(
+        "Item id is required for video stream details".to_string(),
+      ));
+    }
+
+    let user_id = self.client.user_id()?;
+    let item = self
+      .client
+      .get_with_query::<emby_api::models::BaseItemDto>(
+        &format!("/Users/{user_id}/Items/{item_id}"),
+        &emby_streams_query(),
+      )
+      .await?;
+    let (audio_streams, subtitle_streams) =
+      map_emby_video_playback_streams(item.media_streams.unwrap_or_default());
+
+    Ok(VideoItemStreams {
+      audio_streams,
+      subtitle_streams,
     })
   }
 
@@ -3149,8 +3200,6 @@ fn map_video_item_detail(
 
   let id = item.id?.to_string();
   let user_data = item.user_data.flatten();
-  let (audio_streams, subtitle_streams) =
-    map_video_playback_streams(item.media_streams.flatten().unwrap_or_default());
   let resume_position_seconds = user_data
     .as_ref()
     .and_then(|data| data.playback_position_ticks)
@@ -3214,8 +3263,6 @@ fn map_video_item_detail(
     can_play: true,
     artwork_image_id,
     backdrop_image_id,
-    audio_streams,
-    subtitle_streams,
   })
 }
 
@@ -3573,13 +3620,17 @@ fn emby_detail_query() -> Vec<(&'static str, String)> {
   vec![
     (
       "Fields",
-      "MediaStreams,Overview,Genres,PrimaryImageAspectRatio".to_string(),
+      "Overview,Genres,PrimaryImageAspectRatio".to_string(),
     ),
     ("EnableUserData", "true".to_string()),
     ("EnableImages", "true".to_string()),
     ("ImageTypeLimit", "1".to_string()),
     ("EnableImageTypes", "Primary".to_string()),
   ]
+}
+
+fn emby_streams_query() -> Vec<(&'static str, String)> {
+  vec![("Fields", "MediaStreams".to_string())]
 }
 
 fn emby_season_query(user_id: &str) -> Vec<(&'static str, String)> {
@@ -3822,8 +3873,6 @@ fn map_emby_video_item_detail(
 
   let id = item.id?;
   let user_data = item.user_data.as_deref();
-  let (audio_streams, subtitle_streams) =
-    map_emby_video_playback_streams(item.media_streams.unwrap_or_default());
   let resume_position_seconds = user_data
     .and_then(|data| data.playback_position_ticks)
     .map(ticks_to_seconds);
@@ -3874,8 +3923,6 @@ fn map_emby_video_item_detail(
     can_play: true,
     artwork_image_id,
     backdrop_image_id,
-    audio_streams,
-    subtitle_streams,
   })
 }
 
@@ -5377,6 +5424,10 @@ mod tests {
         "200 OK",
         r#"{"Id":"00000000-0000-0000-0000-000000000051","Name":"Detail Episode","Type":"Episode","SeriesId":"00000000-0000-0000-0000-000000000052","SeriesName":"Example Show","ParentIndexNumber":2,"IndexNumber":3,"Genres":["Sci-Fi"],"UserData":{"PlaybackPositionTicks":0,"PlayedPercentage":0.0,"IsFavorite":false,"Played":true}}"#,
       ),
+      (
+        "200 OK",
+        r#"{"Id":"00000000-0000-0000-0000-000000000050","Type":"Movie","MediaStreams":[{"Index":0,"Type":"Video","Codec":"h264"},{"Index":1,"Type":"Audio","Language":"eng","DisplayTitle":"English - AAC 2.0","Codec":"aac","IsDefault":true},{"Index":2,"Type":"Audio","Language":"jpn","Codec":"flac"},{"Index":3,"Type":"Subtitle","Language":"eng","DisplayTitle":"English - SRT","Codec":"srt","IsExternal":true}]}"#,
+      ),
     ])
     .await;
     let client = JellyfinClient::new();
@@ -5392,6 +5443,11 @@ mod tests {
       .item_detail(episode_id.to_string())
       .await
       .expect("episode detail should load from generated item endpoint");
+    let streams = client
+      .library()
+      .item_streams(movie_id.to_string())
+      .await
+      .expect("stream details should load independently");
 
     assert_eq!(movie.name, "Detail Movie");
     assert_eq!(movie.item_type, "Movie");
@@ -5405,16 +5461,16 @@ mod tests {
     let expected_artwork =
       format!("{server_url}/Items/{movie_id}/Images/Primary?tag=poster-detail");
     assert_image_ref_url(movie.artwork_image_id.as_ref(), &expected_artwork);
-    assert_eq!(movie.audio_streams.len(), 2);
-    assert_eq!(movie.audio_streams[0].index, 1);
-    assert_eq!(movie.audio_streams[0].label, "English - AAC 2.0");
-    assert_eq!(movie.audio_streams[0].language.as_deref(), Some("eng"));
-    assert!(movie.audio_streams[0].is_default);
-    assert_eq!(movie.audio_streams[1].label, "jpn · flac");
-    assert_eq!(movie.subtitle_streams.len(), 1);
-    assert_eq!(movie.subtitle_streams[0].index, 3);
-    assert_eq!(movie.subtitle_streams[0].label, "English - SRT");
-    assert!(movie.subtitle_streams[0].is_external);
+    assert_eq!(streams.audio_streams.len(), 2);
+    assert_eq!(streams.audio_streams[0].index, 1);
+    assert_eq!(streams.audio_streams[0].label, "English - AAC 2.0");
+    assert_eq!(streams.audio_streams[0].language.as_deref(), Some("eng"));
+    assert!(streams.audio_streams[0].is_default);
+    assert_eq!(streams.audio_streams[1].label, "jpn · flac");
+    assert_eq!(streams.subtitle_streams.len(), 1);
+    assert_eq!(streams.subtitle_streams[0].index, 3);
+    assert_eq!(streams.subtitle_streams[0].label, "English - SRT");
+    assert!(streams.subtitle_streams[0].is_external);
 
     assert_eq!(episode.item_type, "Episode");
     assert_eq!(episode.series_id.as_deref(), Some(series_id));
@@ -5428,10 +5484,12 @@ mod tests {
     let captured = requests.lock();
     assert!(captured[0].starts_with("GET /Items/00000000-0000-0000-0000-000000000050?"));
     assert!(captured[0].contains("userId=00000000-0000-0000-0000-000000000001"));
-    assert!(captured[0].contains("fields=MediaStreams"));
+    assert!(!captured[0].contains("fields=MediaStreams"));
     assert!(captured[1].starts_with("GET /Items/00000000-0000-0000-0000-000000000051?"));
     assert!(captured[1].contains("userId=00000000-0000-0000-0000-000000000001"));
-    assert!(captured[1].contains("fields=MediaStreams"));
+    assert!(!captured[1].contains("fields=MediaStreams"));
+    assert!(captured[2].starts_with("GET /Items/00000000-0000-0000-0000-000000000050?"));
+    assert!(captured[2].contains("fields=MediaStreams"));
   }
 
   #[tokio::test]
@@ -5787,6 +5845,10 @@ mod tests {
       ),
       (
         "200 OK",
+        r#"{"Id":"00000000-0000-0000-0000-000000000250","Type":"Movie","MediaStreams":[{"Index":1,"Type":"Audio","Language":"eng","Codec":"aac","IsDefault":true},{"Index":2,"Type":"Subtitle","Codec":"srt","IsExternal":true}]}"#,
+      ),
+      (
+        "200 OK",
         r#"{"Id":"00000000-0000-0000-0000-000000000260","Name":"Emby Show","Type":"Series","ImageTags":{"Primary":"show-primary"},"UserData":{"IsFavorite":true}}"#,
       ),
       (
@@ -5811,6 +5873,11 @@ mod tests {
       .item_detail(movie_id.to_string())
       .await
       .expect("Emby movie detail should map playable metadata");
+    let streams = client
+      .library()
+      .item_streams(movie_id.to_string())
+      .await
+      .expect("Emby stream details should load independently");
     let show = client
       .library()
       .show_detail(series_id.to_string())
@@ -5829,8 +5896,8 @@ mod tests {
     assert_eq!(movie.name, "Emby Detail Movie");
     assert_eq!(movie.resume_position_seconds, Some(60.0));
     assert!(movie.can_resume);
-    assert_eq!(movie.audio_streams[0].label, "eng · aac");
-    assert_eq!(movie.subtitle_streams[0].label, "srt");
+    assert_eq!(streams.audio_streams[0].label, "eng · aac");
+    assert_eq!(streams.subtitle_streams[0].label, "srt");
     assert_eq!(show.id, series_id);
     assert!(show.favorite);
     assert!(show.can_play);
@@ -5847,13 +5914,14 @@ mod tests {
     assert!(captured[0].starts_with(
       "GET /Users/00000000-0000-0000-0000-000000000001/Items/00000000-0000-0000-0000-000000000250?"
     ));
-    assert!(captured[0].contains("Fields=MediaStreams"));
-    assert!(captured[2].contains("IncludeItemTypes=Season"));
-    assert!(captured[3].starts_with("GET /Shows/NextUp?"));
-    assert!(captured[3].contains("SeriesId=00000000-0000-0000-0000-000000000260"));
-    assert!(captured[3].contains("EnableResumable=true"));
-    assert!(captured[4].contains("ParentId=00000000-0000-0000-0000-000000000261"));
-    assert!(captured[4].contains("IncludeItemTypes=Episode"));
+    assert!(!captured[0].contains("MediaStreams"));
+    assert!(captured[1].contains("Fields=MediaStreams"));
+    assert!(captured[3].contains("IncludeItemTypes=Season"));
+    assert!(captured[4].starts_with("GET /Shows/NextUp?"));
+    assert!(captured[4].contains("SeriesId=00000000-0000-0000-0000-000000000260"));
+    assert!(captured[4].contains("EnableResumable=true"));
+    assert!(captured[5].contains("ParentId=00000000-0000-0000-0000-000000000261"));
+    assert!(captured[5].contains("IncludeItemTypes=Episode"));
   }
 
   #[tokio::test]
