@@ -23,12 +23,53 @@ use super::types::*;
 use super::websocket::{JellyfinCommand, JellyfinWebSocket, JellyfinWebSocketEvent};
 use crate::command::{AppNotification, NowPlayingChanged};
 use crate::config::{AppConfig, IntroSkipperMode};
+use crate::hls_proxy::{ActivatedHls, HlsProxyError, HlsProxyEvent, HlsProxyState};
 use crate::mpv::MpvClient;
 use crate::now_playing::{build_now_playing_state, collect_player_state, PlaybackContext};
 use tauri_specta::Event;
 
 const PREFERENCES_STORE_FILE: &str = "preferences.json";
 const SERIES_PREFERENCES_KEY: &str = "series_track_preferences";
+
+const HLS_PROXY_UNAVAILABLE_WARNING: &str =
+  "HLS proxy is unavailable; streaming directly from Emby.";
+const HLS_CACHE_UNAVAILABLE_WARNING: &str =
+  "HLS cache is unavailable; streaming this transcode without disk caching.";
+const HLS_PROXY_FAILED_ERROR: &str =
+  "HLS proxy could not process the Emby stream. Restart playback to continue.";
+const HLS_RECOVERY_FAILED_ERROR: &str =
+  "The Emby transcode session expired again. Restart playback to continue.";
+
+/// Playback URL choice after optional HLS proxy activation.
+struct PlaybackUrlDecision {
+  url: String,
+  activated: Option<ActivatedHls>,
+  warning: Option<&'static str>,
+}
+
+/// Snapshot of an expired Emby transcode generation used during recovery.
+struct RecoverySnapshot {
+  item_id: String,
+  media_source_id: Option<String>,
+  play_session_id: Option<String>,
+  position_ticks: i64,
+  audio_stream_index: Option<i32>,
+  subtitle_stream_index: Option<i32>,
+  is_paused: bool,
+  is_muted: bool,
+  volume: i32,
+}
+
+/// Shared playback orchestration context threaded through play command handlers.
+#[derive(Clone)]
+struct PlayContext {
+  client: Arc<JellyfinClient>,
+  state: Arc<RwLock<SessionState>>,
+  action_tx: mpsc::Sender<MpvAction>,
+  hls: HlsProxyState,
+  app: Option<AppHandle>,
+  config: Arc<RwLock<AppConfig>>,
+}
 
 /// Actions to perform on MPV.
 #[derive(Debug, Clone)]
@@ -79,6 +120,8 @@ struct SessionState {
   current_media_streams: Vec<MediaStream>,
   /// Track preferences per series (key: series_id).
   series_preferences: HashMap<String, TrackPreference>,
+  /// Notifications captured when no AppHandle is available (request-capture tests).
+  recorded_notifications: Vec<(String, String)>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -103,6 +146,7 @@ pub struct SessionManager {
   mpv: Arc<MpvClient>,
   config: Arc<RwLock<AppConfig>>,
   app_handle: AppHandle,
+  hls_proxy: HlsProxyState,
   state: Arc<RwLock<SessionState>>,
   action_tx: mpsc::Sender<MpvAction>,
   action_rx: Arc<RwLock<Option<mpsc::Receiver<MpvAction>>>>,
@@ -115,6 +159,7 @@ impl SessionManager {
     mpv: Arc<MpvClient>,
     config: Arc<RwLock<AppConfig>>,
     app_handle: AppHandle,
+    hls_proxy: HlsProxyState,
   ) -> Self {
     let (action_tx, action_rx) = mpsc::channel(32);
 
@@ -127,6 +172,7 @@ impl SessionManager {
       mpv,
       config: config.clone(),
       app_handle,
+      hls_proxy,
       state: Arc::new(RwLock::new(SessionState {
         playback: None,
         last_report_time: std::time::Instant::now(),
@@ -135,9 +181,22 @@ impl SessionManager {
         current_item: None,
         current_media_streams: Vec::new(),
         series_preferences,
+        recorded_notifications: Vec::new(),
       })),
       action_tx,
       action_rx: Arc::new(RwLock::new(Some(action_rx))),
+    }
+  }
+
+  /// Bundle the shared orchestration context for command handlers.
+  fn play_context(&self) -> PlayContext {
+    PlayContext {
+      client: self.client.clone(),
+      state: self.state.clone(),
+      action_tx: self.action_tx.clone(),
+      hls: self.hls_proxy.clone(),
+      app: Some(self.app_handle.clone()),
+      config: self.config.clone(),
     }
   }
 
@@ -252,11 +311,21 @@ impl SessionManager {
     let app_handle = self.app_handle.clone();
     let mpv = self.mpv.clone();
     let config = self.config.clone();
+    let hls = self.hls_proxy.clone();
 
     tokio::spawn(async move {
       let Some(mut event_rx) = websocket.take_event_receiver() else {
         log::warn!("No WebSocket event receiver available");
         return;
+      };
+
+      let ctx = PlayContext {
+        client,
+        state,
+        action_tx,
+        hls,
+        app: Some(app_handle.clone()),
+        config,
       };
 
       log::info!("WebSocket command stream consumer started");
@@ -267,22 +336,19 @@ impl SessionManager {
           }
           JellyfinWebSocketEvent::ConnectionLost => {
             log::warn!("Jellyfin WebSocket connection lost");
-            Self::clear_playback_context(&client, &state).await;
+            Self::clear_playback_context(&ctx.client, &ctx.state, &ctx.hls).await;
             AppNotification::warning(&app_handle, "Connection lost. Reconnecting...");
           }
           JellyfinWebSocketEvent::Reconnected => {
             log::info!("WebSocket reconnected successfully");
             AppNotification::info(&app_handle, "Reconnected to Jellyfin");
 
-            if let Err(e) = client.playback().report_capabilities().await {
+            if let Err(e) = ctx.client.playback().report_capabilities().await {
               log::error!("Failed to report capabilities after reconnect: {}", e);
             }
           }
           JellyfinWebSocketEvent::Command(cmd) => {
-            if let Err(e) =
-              Self::handle_command(&client, &state, &action_tx, &app_handle, &mpv, &config, cmd)
-                .await
-            {
+            if let Err(e) = Self::handle_command(&ctx, &mpv, cmd).await {
               log::error!("Failed to handle Jellyfin command: {}", e);
               AppNotification::error(&app_handle, format!("Command failed: {}", e));
             }
@@ -443,43 +509,378 @@ impl SessionManager {
 
   /// Handle a Jellyfin command.
   async fn handle_command(
-    client: &JellyfinClient,
-    state: &RwLock<SessionState>,
-    action_tx: &mpsc::Sender<MpvAction>,
-    app_handle: &AppHandle,
+    ctx: &PlayContext,
     mpv: &MpvClient,
-    config: &RwLock<AppConfig>,
     cmd: JellyfinCommand,
   ) -> Result<(), JellyfinError> {
     match cmd {
       JellyfinCommand::Play(request) => {
-        Self::handle_play(
-          client,
-          state,
-          action_tx,
-          mpv.is_connected(),
-          config,
+        Self::handle_play(ctx, mpv.is_connected(), request).await?;
+      }
+      JellyfinCommand::Playstate(request) => {
+        Self::handle_playstate(ctx, mpv, request).await?;
+      }
+      JellyfinCommand::GeneralCommand(request) => {
+        Self::handle_general_command(
+          &ctx.client,
+          &ctx.state,
+          &ctx.action_tx,
+          ctx.app.as_ref(),
           request,
         )
         .await?;
-      }
-      JellyfinCommand::Playstate(request) => {
-        Self::handle_playstate(client, state, action_tx, mpv, config, request).await?;
-      }
-      JellyfinCommand::GeneralCommand(request) => {
-        Self::handle_general_command(client, state, action_tx, app_handle, request).await?;
       }
     }
     Ok(())
   }
 
+  /// Emit a user-facing notification, or record it when no AppHandle is available.
+  fn notify(app: Option<&AppHandle>, state: &RwLock<SessionState>, level: &str, message: &str) {
+    match app {
+      Some(app) if level == "error" => AppNotification::error(app, message),
+      Some(app) => AppNotification::warning(app, message),
+      None => state
+        .write()
+        .recorded_notifications
+        .push((level.to_string(), message.to_string())),
+    }
+  }
+
+  /// Choose the playback URL, activating the HLS proxy for finite Emby HLS transcodes.
+  async fn resolve_playback_url(
+    client: &JellyfinClient,
+    hls: &HlsProxyState,
+    item: &MediaItem,
+    play_method: &str,
+    remote_url: String,
+  ) -> PlaybackUrlDecision {
+    fn bypass(remote_url: String, warning: Option<&'static str>) -> PlaybackUrlDecision {
+      PlaybackUrlDecision {
+        url: remote_url,
+        activated: None,
+        warning,
+      }
+    }
+    let eligible = client.provider() == MediaServerProvider::Emby
+      && play_method == "Transcode"
+      && item.run_time_ticks.is_some();
+    if !eligible {
+      return bypass(remote_url, None);
+    }
+
+    let proxy = match hls.current() {
+      Ok(proxy) => proxy,
+      Err(e) => {
+        log::warn!("HLS proxy unavailable, streaming directly: {}", e);
+        return bypass(remote_url, Some(HLS_PROXY_UNAVAILABLE_WARNING));
+      }
+    };
+    let origin = match url::Url::parse(&remote_url) {
+      Ok(origin) => origin,
+      Err(e) => {
+        log::warn!("Failed to parse Emby stream URL for HLS proxy: {}", e);
+        return bypass(remote_url, Some(HLS_PROXY_UNAVAILABLE_WARNING));
+      }
+    };
+
+    match proxy.activate(origin).await {
+      Ok(activated) => {
+        let warning = (!activated.cache_enabled).then_some(HLS_CACHE_UNAVAILABLE_WARNING);
+        PlaybackUrlDecision {
+          url: activated.playlist_url.clone(),
+          activated: Some(activated),
+          warning,
+        }
+      }
+      Err(HlsProxyError::UnsupportedContent) => {
+        log::info!("Emby transcode is not HLS; streaming the original URL");
+        bypass(remote_url, None)
+      }
+      Err(e) => {
+        log::warn!("HLS proxy activation failed, streaming directly: {}", e);
+        bypass(remote_url, Some(HLS_PROXY_UNAVAILABLE_WARNING))
+      }
+    }
+  }
+
+  /// Consume events from one HLS proxy activation until its channel closes.
+  fn start_hls_event_consumer(activated: ActivatedHls, ctx: PlayContext) {
+    let session_id = activated.session_id.clone();
+    tokio::spawn(async move {
+      while let Ok(event) = activated.events.recv().await {
+        let current = {
+          let s = ctx.state.read();
+          s.playback.as_ref().map(|playback| {
+            (
+              playback.hls_proxy_session_id.clone(),
+              playback.hls_recovery_attempted,
+            )
+          })
+        };
+        let Some((current_id, recovery_attempted)) = current else {
+          continue;
+        };
+        // Stale generations may still deliver events; ignore them
+        if current_id.as_deref() != Some(session_id.as_str()) {
+          continue;
+        }
+        match event {
+          HlsProxyEvent::CacheDisabled => {
+            Self::notify(
+              ctx.app.as_ref(),
+              &ctx.state,
+              "warning",
+              HLS_CACHE_UNAVAILABLE_WARNING,
+            );
+          }
+          HlsProxyEvent::PlaybackFailed => {
+            Self::notify(
+              ctx.app.as_ref(),
+              &ctx.state,
+              "error",
+              HLS_PROXY_FAILED_ERROR,
+            );
+          }
+          HlsProxyEvent::OriginExpired => {
+            if recovery_attempted {
+              // The replacement generation expired again; never loop recovery
+              Self::enter_hls_terminal_state(&ctx.state, ctx.app.as_ref());
+            } else {
+              Self::recover_expired_transcode(&session_id, &ctx).await;
+            }
+          }
+        }
+      }
+    });
+  }
+
+  /// Move an unrecoverable transcode session into its terminal state.
+  fn enter_hls_terminal_state(state: &RwLock<SessionState>, app: Option<&AppHandle>) {
+    {
+      let mut s = state.write();
+      if let Some(playback) = s.playback.as_mut() {
+        // No active play session: suppresses progress and duplicate stop reports
+        playback.play_session_id = None;
+        playback.hls_recovering = true;
+      }
+    }
+    Self::notify(app, state, "error", HLS_RECOVERY_FAILED_ERROR);
+  }
+
+  /// Recover an expired Emby transcode session once, at the current position.
+  async fn recover_expired_transcode(old_proxy_session_id: &str, ctx: &PlayContext) {
+    // Mark the one-shot attempt and capture the old generation atomically
+    let snapshot = {
+      let mut s = ctx.state.write();
+      let Some(playback) = s.playback.as_mut() else {
+        return;
+      };
+      playback.hls_recovery_attempted = true;
+      playback.hls_recovering = true;
+      RecoverySnapshot {
+        item_id: playback.item_id.clone(),
+        media_source_id: playback.media_source_id.clone(),
+        // Clearing the stored ID here guarantees no duplicate stop report later
+        play_session_id: playback.play_session_id.take(),
+        position_ticks: playback.position_ticks,
+        audio_stream_index: playback.audio_stream_index,
+        subtitle_stream_index: playback.subtitle_stream_index,
+        is_paused: playback.is_paused,
+        is_muted: playback.is_muted,
+        volume: playback.volume,
+      }
+    };
+
+    // 1. Stop the old Emby play session without clearing the current item
+    if let Some(play_session_id) = snapshot.play_session_id.clone() {
+      let stop_info = PlaybackStopInfo {
+        item_id: snapshot.item_id.clone(),
+        media_source_id: snapshot.media_source_id.clone(),
+        play_session_id: Some(play_session_id),
+        position_ticks: Some(snapshot.position_ticks),
+      };
+      if let Err(e) = ctx.client.playback().report_playback_stop(&stop_info).await {
+        log::error!("Failed to stop expired Emby transcode session: {}", e);
+        Self::enter_hls_terminal_state(&ctx.state, ctx.app.as_ref());
+        return;
+      }
+    }
+
+    // 2. Request fresh playback info at the current position and selected streams
+    let playback_info = match ctx
+      .client
+      .playback()
+      .get_playback_info(
+        &snapshot.item_id,
+        Some(snapshot.position_ticks),
+        snapshot.audio_stream_index,
+        snapshot.subtitle_stream_index,
+      )
+      .await
+    {
+      Ok(info) => info,
+      Err(e) => {
+        log::error!("Failed to refresh Emby playback info after expiry: {}", e);
+        Self::enter_hls_terminal_state(&ctx.state, ctx.app.as_ref());
+        return;
+      }
+    };
+
+    // 3. Prefer the prior media source, falling back to the first one
+    let media_source = playback_info
+      .media_sources
+      .iter()
+      .find(|source| Some(&source.id) == snapshot.media_source_id.as_ref())
+      .or_else(|| playback_info.media_sources.first());
+    let Some(media_source) = media_source else {
+      log::error!("Fresh Emby playback info has no media sources");
+      Self::enter_hls_terminal_state(&ctx.state, ctx.app.as_ref());
+      return;
+    };
+
+    // 4. Resolve tracks and play method for the fresh media source
+    let (item, series_preference, preferred_subtitle_languages) = {
+      let s = ctx.state.read();
+      let item = s.current_item.clone();
+      let series_preference = item
+        .as_ref()
+        .and_then(|item| item.series_id.as_ref())
+        .and_then(|series_id| s.series_preferences.get(series_id).cloned());
+      let languages = ctx.config.read().preferred_subtitle_languages.clone();
+      (item, series_preference, languages)
+    };
+    let Some(item) = item else {
+      log::error!("No current item during Emby transcode recovery");
+      Self::enter_hls_terminal_state(&ctx.state, ctx.app.as_ref());
+      return;
+    };
+    let play_request = PlayRequest {
+      item_ids: vec![snapshot.item_id.clone()],
+      start_position_ticks: Some(snapshot.position_ticks),
+      play_command: "PlayNow".to_string(),
+      media_source_id: Some(media_source.id.clone()),
+      audio_stream_index: snapshot.audio_stream_index,
+      subtitle_stream_index: snapshot.subtitle_stream_index,
+    };
+    let resolution = resolve_play_request(
+      &play_request,
+      &item,
+      &playback_info,
+      media_source,
+      series_preference.as_ref(),
+      PlayResolutionConfig {
+        preferred_subtitle_languages: &preferred_subtitle_languages,
+        // Existing intro ranges survive the recovery; nothing new is fetched
+        intro_skipper_enabled: false,
+      },
+    );
+
+    let remote_url = match ctx
+      .client
+      .playback()
+      .build_stream_url(&snapshot.item_id, media_source)
+    {
+      Some(url) => url,
+      None => {
+        log::error!("Failed to build fresh Emby stream URL after expiry");
+        Self::enter_hls_terminal_state(&ctx.state, ctx.app.as_ref());
+        return;
+      }
+    };
+
+    // 5. Retire the old proxy generation before activating a fresh one
+    if let Ok(proxy) = ctx.hls.current() {
+      proxy.deactivate(old_proxy_session_id);
+    }
+    let decision = Self::resolve_playback_url(
+      &ctx.client,
+      &ctx.hls,
+      &item,
+      resolution.play_method,
+      remote_url,
+    )
+    .await;
+    if let Some(warning) = decision.warning {
+      Self::notify(ctx.app.as_ref(), &ctx.state, "warning", warning);
+    }
+
+    // 6. Report the fresh play session, then swap stored identifiers atomically
+    let start_info = PlaybackStartInfo {
+      item_id: snapshot.item_id.clone(),
+      media_source_id: Some(media_source.id.clone()),
+      play_session_id: playback_info.play_session_id.clone(),
+      position_ticks: Some(snapshot.position_ticks),
+      is_paused: snapshot.is_paused,
+      is_muted: snapshot.is_muted,
+      volume_level: snapshot.volume,
+      audio_stream_index: resolution.audio_stream_index,
+      subtitle_stream_index: resolution.subtitle_stream_index,
+      play_method: resolution.play_method.to_string(),
+      can_seek: true,
+    };
+    if let Err(e) = ctx
+      .client
+      .playback()
+      .report_playback_start(&start_info)
+      .await
+    {
+      log::error!("Failed to report fresh Emby playback start: {}", e);
+      Self::enter_hls_terminal_state(&ctx.state, ctx.app.as_ref());
+      return;
+    }
+
+    {
+      let mut s = ctx.state.write();
+      if let Some(playback) = s.playback.as_mut() {
+        playback.media_source_id = Some(media_source.id.clone());
+        playback.play_session_id = playback_info.play_session_id.clone();
+        playback.hls_proxy_session_id = decision
+          .activated
+          .as_ref()
+          .map(|activated| activated.session_id.clone());
+        playback.audio_stream_index = resolution.audio_stream_index;
+        playback.subtitle_stream_index = resolution.subtitle_stream_index;
+        playback.play_method = resolution.play_method.to_string();
+        playback.hls_recovery_attempted = true;
+        playback.hls_recovering = false;
+      }
+      s.current_media_streams = media_source.media_streams.clone();
+    }
+
+    // Resume playback at the recovered position
+    let _ = ctx
+      .action_tx
+      .send(MpvAction::Play {
+        url: decision.url,
+        start_position: ticks_to_seconds(snapshot.position_ticks),
+        title: Self::format_title(&item),
+        audio_index: resolution.mpv_audio_index,
+        subtitle_index: resolution.mpv_subtitle_index,
+      })
+      .await;
+    if let Some(ext_sub_stream) = resolution.external_subtitle_stream {
+      if let Some(sub_url) = ctx.client.playback().build_subtitle_url(
+        &snapshot.item_id,
+        &media_source.id,
+        ext_sub_stream,
+      ) {
+        let _ = ctx
+          .action_tx
+          .send(MpvAction::AddExternalSubtitle(sub_url))
+          .await;
+      }
+    }
+
+    // The replacement consumer starts only after the new session ID is stored
+    if let Some(activated) = decision.activated {
+      Self::start_hls_event_consumer(activated, ctx.clone());
+    }
+  }
+
   /// Handle Play command.
   async fn handle_play(
-    client: &JellyfinClient,
-    state: &RwLock<SessionState>,
-    action_tx: &mpsc::Sender<MpvAction>,
+    ctx: &PlayContext,
     mpv_connected: bool,
-    config: &RwLock<AppConfig>,
     request: PlayRequest,
   ) -> Result<(), JellyfinError> {
     log::info!("handle_play called with request: {:?}", request);
@@ -492,15 +893,22 @@ impl SessionManager {
     log::info!("Playing item_id: {}", item_id);
 
     // Fetch media item metadata for title
-    let item = client.playback().get_item(item_id).await?;
+    let item = ctx.client.playback().get_item(item_id).await?;
     let title = Self::format_title(&item);
     log::info!("Media title: {}", title);
 
     // Get playback info
-    let playback_info = client
+    let start_time_ticks = if ctx.client.provider() == MediaServerProvider::Emby {
+      request.start_position_ticks
+    } else {
+      None
+    };
+    let playback_info = ctx
+      .client
       .playback()
       .get_playback_info(
         item_id,
+        start_time_ticks,
         request.audio_stream_index,
         request.subtitle_stream_index,
       )
@@ -522,7 +930,7 @@ impl SessionManager {
     );
 
     let series_preference = item.series_id.as_ref().and_then(|series_id| {
-      let s = state.read();
+      let s = ctx.state.read();
       log::info!(
         "Looking up preferences for series_id={}, preference_count={}, has_preference={}",
         series_id,
@@ -540,15 +948,16 @@ impl SessionManager {
     }
 
     let (preferred_subtitle_languages, intro_skipper_enabled) = {
-      let config_guard = config.read();
+      let config_guard = ctx.config.read();
       let intro_skipper_config = if mpv_connected {
-        state.read().effective_intro_skipper_config.clone()
+        ctx.state.read().effective_intro_skipper_config.clone()
       } else {
         IntroSkipperRuntimeConfig::from(&*config_guard)
       };
       (
         config_guard.preferred_subtitle_languages.clone(),
-        intro_skipper_config.mode != IntroSkipperMode::Off,
+        // The Intro Skipper segments endpoint only exists on Jellyfin
+        ctx.client.supports_intro_skipper() && intro_skipper_config.mode != IntroSkipperMode::Off,
       )
     };
     let resolution = resolve_play_request(
@@ -564,14 +973,28 @@ impl SessionManager {
     );
 
     // Build stream URL
-    let url = client
+    let url = ctx
+      .client
       .playback()
       .build_stream_url(item_id, media_source)
       .ok_or(JellyfinError::NotConnected)?;
     log::info!("Built stream URL: {}", redact_url(&url));
 
+    // Route finite Emby HLS transcodes through the local proxy when available
+    let decision =
+      Self::resolve_playback_url(&ctx.client, &ctx.hls, &item, resolution.play_method, url).await;
+    if let Some(warning) = decision.warning {
+      Self::notify(ctx.app.as_ref(), &ctx.state, "warning", warning);
+    }
+    let url = decision.url;
+
     let intro_skipper_ranges = if resolution.should_fetch_intro_skipper_ranges {
-      match client.playback().get_intro_skipper_ranges(item_id).await {
+      match ctx
+        .client
+        .playback()
+        .get_intro_skipper_ranges(item_id)
+        .await
+      {
         Ok(ranges) => {
           log::info!("Loaded {} Intro Skipper ranges", ranges.len());
           ranges
@@ -587,8 +1010,12 @@ impl SessionManager {
     };
 
     // Store playback session and current series
-    {
-      let mut s = state.write();
+    let replaced_hls_session_id = {
+      let mut s = ctx.state.write();
+      let replaced = s
+        .playback
+        .as_ref()
+        .and_then(|playback| playback.hls_proxy_session_id.clone());
       s.current_series_id = item.series_id.clone();
       s.current_item = Some(item.clone());
       s.current_media_streams = media_source.media_streams.clone();
@@ -604,8 +1031,27 @@ impl SessionManager {
         audio_stream_index: resolution.audio_stream_index,
         subtitle_stream_index: resolution.subtitle_stream_index,
         play_method: resolution.play_method.to_string(),
+        hls_proxy_session_id: decision
+          .activated
+          .as_ref()
+          .map(|activated| activated.session_id.clone()),
+        hls_recovery_attempted: false,
+        hls_recovering: false,
       });
       s.last_report_time = std::time::Instant::now();
+      replaced
+    };
+
+    // Deactivate the replaced proxy generation only after the new session is stored
+    if let Some(replaced_id) = replaced_hls_session_id {
+      if let Ok(proxy) = ctx.hls.current() {
+        proxy.deactivate(&replaced_id);
+      }
+    }
+
+    // Consume proxy events for the new activation once its session ID is stored
+    if let Some(activated) = decision.activated {
+      Self::start_hls_event_consumer(activated, ctx.clone());
     }
 
     // Report playback started
@@ -622,7 +1068,11 @@ impl SessionManager {
       play_method: resolution.play_method.to_string(),
       can_seek: true,
     };
-    client.playback().report_playback_start(&start_info).await?;
+    ctx
+      .client
+      .playback()
+      .report_playback_start(&start_info)
+      .await?;
 
     // Send action to MPV with converted indices
     log::info!(
@@ -632,7 +1082,8 @@ impl SessionManager {
       resolution.subtitle_stream_index,
       resolution.mpv_subtitle_index
     );
-    let _ = action_tx
+    let _ = ctx
+      .action_tx
       .send(MpvAction::Play {
         url,
         start_position: resolution.start_position,
@@ -646,7 +1097,8 @@ impl SessionManager {
     // Load external subtitle if the selected subtitle is external
     if let Some(ext_sub_stream) = resolution.external_subtitle_stream {
       if let Some(sub_url) =
-        client
+        ctx
+          .client
           .playback()
           .build_subtitle_url(item_id, &media_source.id, ext_sub_stream)
       {
@@ -655,7 +1107,8 @@ impl SessionManager {
           ext_sub_stream.codec,
           redact_url(&sub_url)
         );
-        let _ = action_tx
+        let _ = ctx
+          .action_tx
           .send(MpvAction::AddExternalSubtitle(sub_url))
           .await;
       } else {
@@ -681,11 +1134,8 @@ impl SessionManager {
 
   /// Handle Playstate command.
   async fn handle_playstate(
-    client: &JellyfinClient,
-    state: &RwLock<SessionState>,
-    action_tx: &mpsc::Sender<MpvAction>,
+    ctx: &PlayContext,
     mpv: &MpvClient,
-    config: &RwLock<AppConfig>,
     request: PlaystateRequest,
   ) -> Result<(), JellyfinError> {
     log::info!("handle_playstate: command={}", request.command);
@@ -693,22 +1143,22 @@ impl SessionManager {
       "Pause" => {
         log::info!("Processing Pause command");
         {
-          let mut s = state.write();
-          if let Some(ref mut playback) = s.playback {
+          let mut s = ctx.state.write();
+          if let Some(playback) = s.playback.as_mut() {
             playback.is_paused = true;
           }
         }
-        let _ = action_tx.send(MpvAction::Pause).await;
+        let _ = ctx.action_tx.send(MpvAction::Pause).await;
       }
       "Unpause" => {
         log::info!("Processing Unpause command");
         {
-          let mut s = state.write();
-          if let Some(ref mut playback) = s.playback {
+          let mut s = ctx.state.write();
+          if let Some(playback) = s.playback.as_mut() {
             playback.is_paused = false;
           }
         }
-        let _ = action_tx.send(MpvAction::Resume).await;
+        let _ = ctx.action_tx.send(MpvAction::Resume).await;
       }
       "PlayPause" => {
         // Query actual MPV state to handle cases where user paused via MPV keyboard
@@ -719,74 +1169,57 @@ impl SessionManager {
               "Failed to get pause state from MPV: {}, using internal state",
               e
             );
-            let s = state.read();
+            let s = ctx.state.read();
             s.playback.as_ref().map(|p| p.is_paused).unwrap_or(false)
           }
         };
         log::info!("Processing PlayPause command, MPV paused={}", is_paused);
         if is_paused {
           {
-            let mut s = state.write();
-            if let Some(ref mut playback) = s.playback {
+            let mut s = ctx.state.write();
+            if let Some(playback) = s.playback.as_mut() {
               playback.is_paused = false;
             }
           }
-          let _ = action_tx.send(MpvAction::Resume).await;
+          let _ = ctx.action_tx.send(MpvAction::Resume).await;
         } else {
           {
-            let mut s = state.write();
-            if let Some(ref mut playback) = s.playback {
+            let mut s = ctx.state.write();
+            if let Some(playback) = s.playback.as_mut() {
               playback.is_paused = true;
             }
           }
-          let _ = action_tx.send(MpvAction::Pause).await;
+          let _ = ctx.action_tx.send(MpvAction::Pause).await;
         }
       }
       "Seek" => {
         if let Some(ticks) = request.seek_position_ticks {
           let position = ticks_to_seconds(ticks);
           {
-            let mut s = state.write();
-            if let Some(ref mut playback) = s.playback {
+            let mut s = ctx.state.write();
+            if let Some(playback) = s.playback.as_mut() {
               playback.position_ticks = ticks;
             }
           }
-          let _ = action_tx.send(MpvAction::Seek(position)).await;
+          let _ = ctx.action_tx.send(MpvAction::Seek(position)).await;
         }
       }
       "Stop" => {
         log::info!("Processing Stop command");
         // Take the playback session and report stop to Jellyfin
-        let session = {
-          let mut s = state.write();
-          s.playback.take()
-        };
+        Self::report_playback_stopped(&ctx.client, &ctx.state, &ctx.hls).await;
 
-        if let Some(session) = session {
-          let stop_info = PlaybackStopInfo {
-            item_id: session.item_id,
-            media_source_id: session.media_source_id,
-            play_session_id: session.play_session_id,
-            position_ticks: Some(session.position_ticks),
-          };
-          if let Err(e) = client.playback().report_playback_stop(&stop_info).await {
-            log::error!("Failed to report playback stop: {}", e);
-          }
-        }
-
-        let _ = action_tx.send(MpvAction::Stop).await;
+        let _ = ctx.action_tx.send(MpvAction::Stop).await;
       }
       "NextTrack" => {
         log::info!("Processing NextTrack command");
         let current_item = {
-          let s = state.read();
+          let s = ctx.state.read();
           s.current_item.clone()
         };
 
         if let Some(item) = current_item {
-          if let Err(e) =
-            Self::play_adjacent_episode(client, state, action_tx, config, &item, true, true).await
-          {
+          if let Err(e) = Self::play_adjacent_episode(ctx, &item, true, true).await {
             log::warn!("NextTrack unavailable: {}", e);
           }
         } else {
@@ -796,14 +1229,12 @@ impl SessionManager {
       "PreviousTrack" => {
         log::info!("Processing PreviousTrack command");
         let current_item = {
-          let s = state.read();
+          let s = ctx.state.read();
           s.current_item.clone()
         };
 
         if let Some(item) = current_item {
-          if let Err(e) =
-            Self::play_adjacent_episode(client, state, action_tx, config, &item, false, true).await
-          {
+          if let Err(e) = Self::play_adjacent_episode(ctx, &item, false, true).await {
             log::warn!("PreviousTrack unavailable: {}", e);
           }
         } else {
@@ -822,7 +1253,7 @@ impl SessionManager {
     client: &JellyfinClient,
     state: &RwLock<SessionState>,
     action_tx: &mpsc::Sender<MpvAction>,
-    app_handle: &AppHandle,
+    app: Option<&AppHandle>,
     request: GeneralCommand,
   ) -> Result<(), JellyfinError> {
     let mut should_save_prefs = false;
@@ -1017,7 +1448,9 @@ impl SessionManager {
 
     // Persist preferences to disk if changed
     if should_save_prefs {
-      Self::save_preferences_static(state, app_handle);
+      if let Some(app) = app {
+        Self::save_preferences_static(state, app);
+      }
     }
 
     Ok(())
@@ -1063,12 +1496,22 @@ impl SessionManager {
     let action_tx = self.action_tx.clone();
     let config = self.config.clone();
     let app_handle = self.app_handle.clone();
+    let hls = self.hls_proxy.clone();
 
     tokio::spawn(async move {
       log::info!("MPV event listener started");
 
       // Wait a bit for MPV to connect before trying to get events
       tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+
+      let ctx = PlayContext {
+        client: client.clone(),
+        state: state.clone(),
+        action_tx: action_tx.clone(),
+        hls: hls.clone(),
+        app: Some(app_handle.clone()),
+        config: config.clone(),
+      };
 
       loop {
         // Try to get the event receiver
@@ -1142,12 +1585,26 @@ impl SessionManager {
               }
             }
             "end-file" => {
-              Self::handle_end_file_event(&event, &client, &state, &action_tx, &config).await;
+              Self::handle_end_file_event(&event, &ctx).await;
               Self::emit_now_playing_changed(&app_handle, &mpv, &state).await;
             }
             "client-message" => {
-              Self::handle_client_message_event(&event, &client, &state, &action_tx, &config).await;
+              Self::handle_client_message_event(&event, &ctx).await;
               Self::emit_now_playing_changed(&app_handle, &mpv, &state).await;
+            }
+            "seek" => {
+              // A seek invalidates every prefetched lookahead window
+              let proxy_session_id = {
+                let s = state.read();
+                s.playback
+                  .as_ref()
+                  .and_then(|playback| playback.hls_proxy_session_id.clone())
+              };
+              if let Some(proxy_session_id) = proxy_session_id {
+                if let Ok(proxy) = hls.current() {
+                  proxy.cancel_prefetch(&proxy_session_id);
+                }
+              }
             }
             _ => {
               // Ignore other events
@@ -1158,7 +1615,7 @@ impl SessionManager {
         // MPV event receiver closed - this means MPV died or disconnected
         // Clear playback context and notify Jellyfin
         log::warn!("MPV event receiver closed, clearing playback context...");
-        Self::clear_playback_context(&client, &state).await;
+        Self::clear_playback_context(&client, &state, &hls).await;
         Self::emit_now_playing_changed(&app_handle, &mpv, &state).await;
         tokio::time::sleep(std::time::Duration::from_secs(2)).await;
       }
@@ -1259,6 +1716,11 @@ impl SessionManager {
       return;
     };
 
+    if session.hls_recovering {
+      // Progress belongs to the old transcode generation during recovery
+      return;
+    }
+
     let progress = PlaybackProgressInfo {
       item_id: session.item_id.clone(),
       media_source_id: session.media_source_id.clone(),
@@ -1281,13 +1743,7 @@ impl SessionManager {
   }
 
   /// Handle MPV end-file event for auto-play next episode.
-  async fn handle_end_file_event(
-    event: &crate::mpv::MpvEvent,
-    client: &JellyfinClient,
-    state: &RwLock<SessionState>,
-    action_tx: &mpsc::Sender<MpvAction>,
-    config: &RwLock<AppConfig>,
-  ) {
+  async fn handle_end_file_event(event: &crate::mpv::MpvEvent, ctx: &PlayContext) {
     let reason = event.reason.as_deref().unwrap_or("");
     log::info!("MPV end-file event, reason: {}", reason);
 
@@ -1298,7 +1754,7 @@ impl SessionManager {
 
     // Get current item for next episode lookup
     let current_item = {
-      let s = state.read();
+      let s = ctx.state.read();
       s.current_item.clone()
     };
 
@@ -1309,12 +1765,10 @@ impl SessionManager {
     log::info!("Playback ended naturally, checking for next episode...");
 
     // Report playback stopped to Jellyfin
-    Self::report_playback_stopped(client, state).await;
+    Self::report_playback_stopped(&ctx.client, &ctx.state, &ctx.hls).await;
 
     // Try to get next episode
-    if let Err(e) =
-      Self::play_adjacent_episode(client, state, action_tx, config, &item, true, false).await
-    {
+    if let Err(e) = Self::play_adjacent_episode(ctx, &item, true, false).await {
       log::info!("Natural end did not start an adjacent episode: {}", e);
     }
   }
@@ -1324,20 +1778,14 @@ impl SessionManager {
   /// Users can add to their input.conf:
   ///   Shift+> script-message jellypilot-next
   ///   Shift+< script-message jellypilot-prev
-  async fn handle_client_message_event(
-    event: &crate::mpv::MpvEvent,
-    client: &JellyfinClient,
-    state: &RwLock<SessionState>,
-    action_tx: &mpsc::Sender<MpvAction>,
-    config: &RwLock<AppConfig>,
-  ) {
+  async fn handle_client_message_event(event: &crate::mpv::MpvEvent, ctx: &PlayContext) {
     let args = match &event.args {
       Some(args) if !args.is_empty() => args,
       _ => return,
     };
 
     if args[0] == "jellypilot-skip-intro" {
-      Self::handle_manual_intro_skip(state, action_tx).await;
+      Self::handle_manual_intro_skip(&ctx.state, &ctx.action_tx).await;
       return;
     }
 
@@ -1347,7 +1795,7 @@ impl SessionManager {
     };
 
     let current_item = {
-      let s = state.read();
+      let s = ctx.state.read();
       s.current_item.clone()
     };
 
@@ -1361,9 +1809,7 @@ impl SessionManager {
       "Keyboard shortcut: playing {} episode",
       if next { "next" } else { "previous" }
     );
-    if let Err(e) =
-      Self::play_adjacent_episode(client, state, action_tx, config, &item, next, true).await
-    {
+    if let Err(e) = Self::play_adjacent_episode(ctx, &item, next, true).await {
       log::warn!("Keyboard shortcut {} unavailable: {}", args[0], e);
     }
   }
@@ -1411,13 +1857,28 @@ impl SessionManager {
   }
 
   /// Report playback stopped to Jellyfin and clear session.
-  async fn report_playback_stopped(client: &JellyfinClient, state: &RwLock<SessionState>) {
+  async fn report_playback_stopped(
+    client: &JellyfinClient,
+    state: &RwLock<SessionState>,
+    hls: &HlsProxyState,
+  ) {
     let session = {
       let mut s = state.write();
       s.playback.take()
     };
 
     if let Some(session) = session {
+      if let Some(proxy_session_id) = session.hls_proxy_session_id.clone() {
+        if let Ok(proxy) = hls.current() {
+          proxy.deactivate(&proxy_session_id);
+        }
+      }
+      if session.hls_recovering && session.play_session_id.is_none() {
+        // An unrecovered Emby transcode already reported (or terminally failed)
+        // its stop; never report the same generation twice.
+        log::info!("Skipping remote stop for unrecovered Emby transcode session");
+        return;
+      }
       let stop_info = PlaybackStopInfo {
         item_id: session.item_id,
         media_source_id: session.media_source_id,
@@ -1432,9 +1893,13 @@ impl SessionManager {
 
   /// Clear all playback context - reports stop to Jellyfin and clears all state.
   /// Call this when MPV dies unexpectedly or WebSocket disconnects during playback.
-  async fn clear_playback_context(client: &JellyfinClient, state: &RwLock<SessionState>) {
+  async fn clear_playback_context(
+    client: &JellyfinClient,
+    state: &RwLock<SessionState>,
+    hls: &HlsProxyState,
+  ) {
     // First report stopped to Jellyfin
-    Self::report_playback_stopped(client, state).await;
+    Self::report_playback_stopped(client, state, hls).await;
 
     // Then clear all related state
     let mut s = state.write();
@@ -1446,18 +1911,19 @@ impl SessionManager {
 
   /// Play the next or previous episode.
   async fn play_adjacent_episode(
-    client: &JellyfinClient,
-    state: &RwLock<SessionState>,
-    action_tx: &mpsc::Sender<MpvAction>,
-    config: &RwLock<AppConfig>,
+    ctx: &PlayContext,
     current_item: &MediaItem,
     next: bool,
     report_current_stopped: bool,
   ) -> Result<(), String> {
     let result = if next {
-      client.playback().get_next_episode(current_item).await
+      ctx.client.playback().get_next_episode(current_item).await
     } else {
-      client.playback().get_previous_episode(current_item).await
+      ctx
+        .client
+        .playback()
+        .get_previous_episode(current_item)
+        .await
     };
 
     match result {
@@ -1471,7 +1937,7 @@ impl SessionManager {
         );
 
         if report_current_stopped {
-          Self::report_playback_stopped(client, state).await;
+          Self::report_playback_stopped(&ctx.client, &ctx.state, &ctx.hls).await;
         }
 
         let play_request = PlayRequest {
@@ -1483,7 +1949,7 @@ impl SessionManager {
           subtitle_stream_index: None,
         };
 
-        Self::handle_play(client, state, action_tx, true, config, play_request)
+        Self::handle_play(ctx, true, play_request)
           .await
           .map_err(|e| {
             log::error!(
@@ -1522,25 +1988,14 @@ impl SessionManager {
   }
 
   async fn play_library_request(
-    client: &JellyfinClient,
-    state: &RwLock<SessionState>,
-    action_tx: &mpsc::Sender<MpvAction>,
+    ctx: &PlayContext,
     mpv_connected: bool,
-    config: &RwLock<AppConfig>,
     request: VideoLibraryPlayRequest,
   ) -> Result<(), JellyfinError> {
-    let play_request = Self::resolve_library_play_request(client, request).await?;
+    let play_request = Self::resolve_library_play_request(&ctx.client, request).await?;
 
-    Self::report_playback_stopped(client, state).await;
-    Self::handle_play(
-      client,
-      state,
-      action_tx,
-      mpv_connected,
-      config,
-      play_request,
-    )
-    .await
+    Self::report_playback_stopped(&ctx.client, &ctx.state, &ctx.hls).await;
+    Self::handle_play(ctx, mpv_connected, play_request).await
   }
 
   async fn resolve_library_play_request(
@@ -1595,15 +2050,7 @@ impl SessionManager {
 
   /// Start explicit Library Browser playback through the existing playback target path.
   pub async fn play_library(&self, request: VideoLibraryPlayRequest) -> Result<(), JellyfinError> {
-    Self::play_library_request(
-      &self.client,
-      &self.state,
-      &self.action_tx,
-      self.mpv.is_connected(),
-      &self.config,
-      request,
-    )
-    .await
+    Self::play_library_request(&self.play_context(), self.mpv.is_connected(), request).await
   }
 
   /// Play the next episode. Called from system tray or UI.
@@ -1615,16 +2062,7 @@ impl SessionManager {
 
     if let Some(item) = current_item {
       log::info!("Tray/UI: playing next episode");
-      Self::play_adjacent_episode(
-        &self.client,
-        &self.state,
-        &self.action_tx,
-        &self.config,
-        &item,
-        true,
-        true,
-      )
-      .await
+      Self::play_adjacent_episode(&self.play_context(), &item, true, true).await
     } else {
       log::warn!("play_next_episode: No current item");
       Err("Next episode is available during episode playback".to_string())
@@ -1640,16 +2078,7 @@ impl SessionManager {
 
     if let Some(item) = current_item {
       log::info!("Tray/UI: playing previous episode");
-      Self::play_adjacent_episode(
-        &self.client,
-        &self.state,
-        &self.action_tx,
-        &self.config,
-        &item,
-        false,
-        true,
-      )
-      .await
+      Self::play_adjacent_episode(&self.play_context(), &item, false, true).await
     } else {
       log::warn!("play_previous_episode: No current item");
       Err("Previous episode is available during episode playback".to_string())
@@ -1665,17 +2094,24 @@ impl SessionManager {
     };
 
     if let Some(session) = session {
-      let stop_info = PlaybackStopInfo {
-        item_id: session.item_id,
-        media_source_id: session.media_source_id,
-        play_session_id: session.play_session_id,
-        position_ticks: Some(session.position_ticks),
-      };
-      self
-        .client
-        .playback()
-        .report_playback_stop(&stop_info)
-        .await?;
+      if let Some(proxy_session_id) = session.hls_proxy_session_id.clone() {
+        if let Ok(proxy) = self.hls_proxy.current() {
+          proxy.deactivate(&proxy_session_id);
+        }
+      }
+      if !(session.hls_recovering && session.play_session_id.is_none()) {
+        let stop_info = PlaybackStopInfo {
+          item_id: session.item_id,
+          media_source_id: session.media_source_id,
+          play_session_id: session.play_session_id,
+          position_ticks: Some(session.position_ticks),
+        };
+        self
+          .client
+          .playback()
+          .report_playback_stop(&stop_info)
+          .await?;
+      }
     }
 
     self.websocket.disconnect().await;
@@ -1861,12 +2297,12 @@ mod tests {
     (format!("http://{}", addr), requests)
   }
 
-  async fn connected_test_client(
-    responses: Vec<(&'static str, &'static str)>,
+  pub(super) async fn connected_test_client<S: Into<String>, B: Into<String>>(
+    responses: Vec<(S, B)>,
   ) -> (JellyfinClient, RequestLog) {
     let responses = responses
       .into_iter()
-      .map(|(status, body)| (status.to_string(), body.to_string()))
+      .map(|(status, body)| (status.into(), body.into()))
       .collect();
     let (server_url, requests) = serve_owned_responses_with_requests(responses).await;
     let client = JellyfinClient::new();
@@ -1913,22 +2349,26 @@ mod tests {
     (client, requests)
   }
 
-  fn test_config() -> RwLock<AppConfig> {
+  pub(super) fn test_config() -> RwLock<AppConfig> {
     RwLock::new(AppConfig {
       intro_skipper_mode: IntroSkipperMode::Off,
       ..Default::default()
     })
   }
 
-  fn empty_test_state() -> RwLock<SessionState> {
+  pub(super) fn empty_test_state() -> RwLock<SessionState> {
     RwLock::new(SessionState {
       playback: None,
       last_report_time: std::time::Instant::now(),
-      effective_intro_skipper_config: IntroSkipperRuntimeConfig::from(&AppConfig::default()),
+      effective_intro_skipper_config: IntroSkipperRuntimeConfig {
+        mode: IntroSkipperMode::Off,
+        keybind_intro_skip: String::new(),
+      },
       current_series_id: None,
       current_item: None,
       current_media_streams: Vec::new(),
       series_preferences: HashMap::new(),
+      recorded_notifications: Vec::new(),
     })
   }
 
@@ -1946,6 +2386,9 @@ mod tests {
         audio_stream_index: None,
         subtitle_stream_index: None,
         play_method: "DirectPlay".to_string(),
+        hls_proxy_session_id: None,
+        hls_recovery_attempted: false,
+        hls_recovering: false,
       }),
       last_report_time: std::time::Instant::now(),
       effective_intro_skipper_config: IntroSkipperRuntimeConfig::from(&AppConfig::default()),
@@ -1953,6 +2396,7 @@ mod tests {
       current_item: None,
       current_media_streams: Vec::new(),
       series_preferences: HashMap::new(),
+      recorded_notifications: Vec::new(),
     })
   }
 
@@ -1984,6 +2428,9 @@ mod tests {
         audio_stream_index: None,
         subtitle_stream_index: None,
         play_method: "DirectPlay".to_string(),
+        hls_proxy_session_id: None,
+        hls_recovery_attempted: false,
+        hls_recovering: false,
       }),
       last_report_time: std::time::Instant::now(),
       effective_intro_skipper_config: IntroSkipperRuntimeConfig::from(&AppConfig::default()),
@@ -1991,6 +2438,7 @@ mod tests {
       current_item: None,
       current_media_streams: Vec::new(),
       series_preferences: HashMap::new(),
+      recorded_notifications: Vec::new(),
     })
   }
 
@@ -2017,16 +2465,23 @@ mod tests {
       ("204 No Content", ""),
     ])
     .await;
-    let state = test_state_with_active_playback();
-    let config = test_config();
+    let client = Arc::new(client);
+    let state = Arc::new(test_state_with_active_playback());
+    let config = Arc::new(test_config());
+    let hls = HlsProxyState::default();
     let (action_tx, mut action_rx) = mpsc::channel(4);
+    let ctx = PlayContext {
+      client,
+      state: state.clone(),
+      action_tx,
+      hls,
+      app: None,
+      config,
+    };
 
     SessionManager::play_library_request(
-      &client,
-      &state,
-      &action_tx,
+      &ctx,
       true,
-      &config,
       VideoLibraryPlayRequest {
         item_id: "movie-1".to_string(),
         mode: VideoLibraryPlayMode::Resume,
@@ -2097,16 +2552,23 @@ mod tests {
       ("204 No Content", ""),
     ])
     .await;
-    let state = empty_test_state();
-    let config = test_config();
+    let client = Arc::new(client);
+    let state = Arc::new(empty_test_state());
+    let config = Arc::new(test_config());
+    let hls = HlsProxyState::default();
     let (action_tx, mut action_rx) = mpsc::channel(4);
+    let ctx = PlayContext {
+      client,
+      state: state.clone(),
+      action_tx,
+      hls,
+      app: None,
+      config,
+    };
 
     SessionManager::play_library_request(
-      &client,
-      &state,
-      &action_tx,
+      &ctx,
       false,
-      &config,
       VideoLibraryPlayRequest {
         item_id: series_id.to_string(),
         mode: VideoLibraryPlayMode::Show,
@@ -2168,16 +2630,23 @@ mod tests {
       ("204 No Content", ""),
     ])
     .await;
-    let state = empty_test_state();
-    let config = test_config();
+    let client = Arc::new(client);
+    let state = Arc::new(empty_test_state());
+    let config = Arc::new(test_config());
+    let hls = HlsProxyState::default();
     let (action_tx, mut action_rx) = mpsc::channel(4);
+    let ctx = PlayContext {
+      client,
+      state: state.clone(),
+      action_tx,
+      hls,
+      app: None,
+      config,
+    };
 
     SessionManager::play_library_request(
-      &client,
-      &state,
-      &action_tx,
+      &ctx,
       false,
-      &config,
       VideoLibraryPlayRequest {
         item_id: "movie-emby".to_string(),
         mode: VideoLibraryPlayMode::Start,
@@ -2265,6 +2734,9 @@ mod tests {
         audio_stream_index: Some(1),
         subtitle_stream_index: Some(2),
         play_method: "DirectStream".to_string(),
+        hls_proxy_session_id: None,
+        hls_recovery_attempted: false,
+        hls_recovering: false,
       }),
       last_report_time: std::time::Instant::now(),
       effective_intro_skipper_config: IntroSkipperRuntimeConfig::from(&AppConfig::default()),
@@ -2272,6 +2744,7 @@ mod tests {
       current_item: None,
       current_media_streams: Vec::new(),
       series_preferences: HashMap::new(),
+      recorded_notifications: Vec::new(),
     });
 
     SessionManager::report_progress(&client, &state).await;
@@ -2314,6 +2787,9 @@ mod tests {
         audio_stream_index: Some(1),
         subtitle_stream_index: Some(2),
         play_method: "DirectStream".to_string(),
+        hls_proxy_session_id: None,
+        hls_recovery_attempted: false,
+        hls_recovering: false,
       }),
       last_report_time: std::time::Instant::now(),
       effective_intro_skipper_config: IntroSkipperRuntimeConfig::from(&AppConfig::default()),
@@ -2321,9 +2797,10 @@ mod tests {
       current_item: None,
       current_media_streams: Vec::new(),
       series_preferences: HashMap::new(),
+      recorded_notifications: Vec::new(),
     });
 
-    SessionManager::report_playback_stopped(&client, &state).await;
+    SessionManager::report_playback_stopped(&client, &state, &HlsProxyState::default()).await;
 
     assert!(state.read().playback.is_none());
     let captured = requests.lock();
@@ -2410,6 +2887,7 @@ mod tests {
       current_item: None,
       current_media_streams: Vec::new(),
       series_preferences: HashMap::new(),
+      recorded_notifications: Vec::new(),
     });
     let (action_tx, mut action_rx) = mpsc::channel(1);
     let event = crate::mpv::MpvEvent {
@@ -2550,6 +3028,680 @@ mod tests {
 }
 
 #[cfg(test)]
+mod emby_hls_tests {
+  use super::tests::{connected_test_client, empty_test_state, test_config};
+  use super::*;
+  use crate::hls_proxy::{HlsProxy, HlsProxyState};
+  use std::time::Duration;
+  use tokio::io::{AsyncReadExt, AsyncWriteExt};
+  use tokio::net::TcpListener;
+
+  type RequestLog = Arc<parking_lot::Mutex<Vec<String>>>;
+
+  const EMBY_USER_JSON: &str = r#"{"Id":"00000000-0000-0000-0000-000000000001","Name":"Ada"}"#;
+  const HLS_CONTENT_TYPE: &str = "application/vnd.apple.mpegurl";
+  const JSON_CONTENT_TYPE: &str = "application/json";
+
+  const MEDIA_PLAYLIST_1: &str = "#EXTM3U\n#EXT-X-VERSION:3\n#EXT-X-TARGETDURATION:8\n#EXT-X-MEDIA-SEQUENCE:0\n#EXTINF:8.0,\nseg1.ts\n#EXT-X-ENDLIST\n";
+  const MEDIA_PLAYLIST_2: &str = "#EXTM3U\n#EXT-X-VERSION:3\n#EXT-X-TARGETDURATION:8\n#EXT-X-MEDIA-SEQUENCE:0\n#EXTINF:8.0,\nseg2.ts\n#EXT-X-ENDLIST\n";
+
+  async fn serve_typed_responses_with_requests(
+    responses: Vec<(String, String, String)>,
+  ) -> (String, RequestLog) {
+    let listener = TcpListener::bind("127.0.0.1:0")
+      .await
+      .expect("test server should bind");
+    let addr = listener.local_addr().expect("test server should have addr");
+    let requests = Arc::new(parking_lot::Mutex::new(Vec::new()));
+    let captured_requests = Arc::clone(&requests);
+
+    tokio::spawn(async move {
+      for (status, content_type, response_body) in responses {
+        let (mut stream, _) = listener.accept().await.expect("test server should accept");
+        let mut buffer = [0; 8192];
+        let bytes_read = stream
+          .read(&mut buffer)
+          .await
+          .expect("test server should read request");
+        let request = String::from_utf8_lossy(&buffer[..bytes_read]).into_owned();
+        captured_requests.lock().push(request);
+        let response = format!(
+          "HTTP/1.1 {}\r\ncontent-type: {}\r\ncontent-length: {}\r\n\r\n{}",
+          status,
+          content_type,
+          response_body.len(),
+          response_body
+        );
+        stream
+          .write_all(response.as_bytes())
+          .await
+          .expect("test server should write response");
+      }
+    });
+
+    (format!("http://{}", addr), requests)
+  }
+
+  async fn connected_emby_client_typed(
+    responses: Vec<(String, String, String)>,
+  ) -> (JellyfinClient, RequestLog) {
+    let (server_url, requests) = serve_typed_responses_with_requests(responses).await;
+    let client = JellyfinClient::new();
+    client
+      .login()
+      .restore_session(&SavedSession {
+        provider: MediaServerProvider::Emby,
+        server_url,
+        access_token: "emby-token".to_string(),
+        user_id: "00000000-0000-0000-0000-000000000001".to_string(),
+        user_name: "Ada".to_string(),
+        server_name: Some("Emby Home".to_string()),
+        device_id: Some("device-1".to_string()),
+      })
+      .await
+      .expect("test Emby client should restore saved session");
+
+    (client, requests)
+  }
+
+  fn started_hls_state() -> HlsProxyState {
+    let cache_root =
+      std::env::temp_dir().join(format!("jellypilot-hls-test-{}", uuid::Uuid::new_v4()));
+    let state = HlsProxyState::default();
+    state.install(HlsProxy::start(Some(cache_root)));
+    state.current().expect("HLS proxy should start for tests");
+    state
+  }
+
+  async fn wait_until(description: &str, condition: impl Fn() -> bool) {
+    for _ in 0..400 {
+      if condition() {
+        return;
+      }
+      tokio::time::sleep(Duration::from_millis(25)).await;
+    }
+    panic!("timed out waiting for {}", description);
+  }
+
+  fn hls_playback_info(source_id: &str, transcoding_url: &str, play_session_id: &str) -> String {
+    format!(
+      r#"{{"MediaSources":[{{"Id":"{}","Protocol":"Http","Container":"ts","SupportsDirectPlay":false,"SupportsDirectStream":false,"SupportsTranscoding":true,"TranscodingUrl":"{}","MediaStreams":[{{"Index":1,"Type":"Audio","Language":"eng","DisplayTitle":"English AAC","Codec":"aac","IsDefault":true}}]}}],"PlaySessionId":"{}"}}"#,
+      source_id, transcoding_url, play_session_id
+    )
+  }
+
+  fn default_playback_info(source: &str) -> String {
+    hls_playback_info(source, "/videos/transcode.m3u8", "play-hls-1")
+  }
+
+  async fn http_get(url: &str) -> (reqwest::StatusCode, String) {
+    let response = reqwest::Client::new()
+      .get(url)
+      .send()
+      .await
+      .expect("local proxy request should complete");
+    let status = response.status();
+    let body = response.text().await.expect("response body should read");
+    (status, body)
+  }
+
+  fn first_segment_url(playlist_body: &str) -> String {
+    playlist_body
+      .lines()
+      .map(str::trim)
+      .find(|line| !line.is_empty() && !line.starts_with('#'))
+      .expect("rewritten playlist should contain a segment URI")
+      .to_string()
+  }
+
+  async fn recv_play_action(
+    action_rx: &mut mpsc::Receiver<MpvAction>,
+    description: &str,
+  ) -> (String, f64) {
+    let action = tokio::time::timeout(Duration::from_secs(10), action_rx.recv())
+      .await
+      .unwrap_or_else(|_| panic!("timed out waiting for {}", description))
+      .expect("action channel should stay open");
+    match action {
+      MpvAction::Play {
+        url,
+        start_position,
+        ..
+      } => (url, start_position),
+      other => panic!("expected play action for {}, got {:?}", description, other),
+    }
+  }
+
+  struct PlayHarness {
+    client: Arc<JellyfinClient>,
+    state: Arc<RwLock<SessionState>>,
+    config: Arc<RwLock<AppConfig>>,
+    hls: HlsProxyState,
+    action_tx: mpsc::Sender<MpvAction>,
+    action_rx: mpsc::Receiver<MpvAction>,
+  }
+
+  impl PlayHarness {
+    fn new(client: JellyfinClient) -> Self {
+      let (action_tx, action_rx) = mpsc::channel(8);
+      Self {
+        client: Arc::new(client),
+        state: Arc::new(empty_test_state()),
+        config: Arc::new(test_config()),
+        hls: started_hls_state(),
+        action_tx,
+        action_rx,
+      }
+    }
+
+    async fn play_start(&mut self, item_id: &str) -> (String, f64) {
+      let ctx = PlayContext {
+        client: self.client.clone(),
+        state: self.state.clone(),
+        action_tx: self.action_tx.clone(),
+        hls: self.hls.clone(),
+        app: None,
+        config: self.config.clone(),
+      };
+      SessionManager::play_library_request(
+        &ctx,
+        false,
+        VideoLibraryPlayRequest {
+          item_id: item_id.to_string(),
+          mode: VideoLibraryPlayMode::Start,
+          start_position_seconds: None,
+          audio_stream_index: Some(1),
+          subtitle_stream_index: None,
+        },
+      )
+      .await
+      .unwrap_or_else(|e| panic!("Emby HLS playback should start for {}: {}", item_id, e));
+      recv_play_action(&mut self.action_rx, "initial play action").await
+    }
+  }
+
+  fn assert_local_playlist_url(url: &str) {
+    assert!(
+      url.starts_with("http://127.0.0.1:"),
+      "local URL expected, got {}",
+      url
+    );
+    assert!(url.contains("/hls/"), "proxy route expected, got {}", url);
+    assert!(
+      url.ends_with(".m3u8"),
+      "playlist route expected, got {}",
+      url
+    );
+    assert!(
+      !url.contains("emby-token") && !url.contains("api_key"),
+      "local URL must not carry credentials: {}",
+      url
+    );
+  }
+
+  #[tokio::test]
+  async fn emby_hls_transcode_uses_local_proxy_without_token() {
+    let playback_info = default_playback_info("source-hls");
+    let (client, requests) = connected_emby_client_typed(vec![
+      (
+        "200 OK".to_string(),
+        JSON_CONTENT_TYPE.to_string(),
+        EMBY_USER_JSON.to_string(),
+      ),
+      (
+        "200 OK".to_string(),
+        JSON_CONTENT_TYPE.to_string(),
+        r#"{"Id":"movie-hls","Name":"HLS Movie","Type":"Movie","RunTimeTicks":72000000000}"#
+          .to_string(),
+      ),
+      (
+        "200 OK".to_string(),
+        JSON_CONTENT_TYPE.to_string(),
+        playback_info,
+      ),
+      (
+        "200 OK".to_string(),
+        HLS_CONTENT_TYPE.to_string(),
+        MEDIA_PLAYLIST_1.to_string(),
+      ),
+      (
+        "204 No Content".to_string(),
+        JSON_CONTENT_TYPE.to_string(),
+        String::new(),
+      ),
+    ])
+    .await;
+    let mut harness = PlayHarness::new(client);
+
+    let (url, _) = harness.play_start("movie-hls").await;
+
+    assert_local_playlist_url(&url);
+    let playback = harness
+      .state
+      .read()
+      .playback
+      .clone()
+      .expect("playback state");
+    assert_eq!(playback.play_method, "Transcode");
+    assert!(playback.hls_proxy_session_id.is_some());
+    assert!(harness.state.read().recorded_notifications.is_empty());
+
+    let (status, rewritten) = http_get(&url).await;
+    assert!(status.is_success());
+    let segment_url = first_segment_url(&rewritten);
+    assert!(segment_url.starts_with("http://127.0.0.1:"));
+    assert!(segment_url.contains("/resource/"));
+    assert!(!rewritten.contains("emby-token"));
+    assert!(!segment_url.contains("emby-token"));
+
+    let captured = requests.lock();
+    assert!(captured[3].starts_with("GET /videos/transcode.m3u8?"));
+    assert!(captured[3].contains("api_key=emby-token"));
+    assert!(captured[4].starts_with("POST /Sessions/Playing "));
+    assert!(captured[4].contains(r#""PlayMethod":"Transcode""#));
+  }
+
+  #[tokio::test]
+  async fn emby_hls_expiry_restarts_once_at_current_position() {
+    let playback_info = default_playback_info("source-hls");
+    let fresh_playback_info =
+      hls_playback_info("source-hls", "/videos/transcode2.m3u8", "play-hls-2");
+    let responses = vec![
+      ("200 OK", JSON_CONTENT_TYPE, EMBY_USER_JSON),
+      (
+        "200 OK",
+        JSON_CONTENT_TYPE,
+        r#"{"Id":"movie-hls","Name":"HLS Movie","Type":"Movie","RunTimeTicks":72000000000}"#,
+      ),
+      ("200 OK", JSON_CONTENT_TYPE, playback_info.as_str()),
+      ("200 OK", HLS_CONTENT_TYPE, MEDIA_PLAYLIST_1),
+      ("204 No Content", JSON_CONTENT_TYPE, ""),
+      // The old generation's segment suddenly expires
+      ("401 Unauthorized", JSON_CONTENT_TYPE, ""),
+      // Recovery: stop old, refresh playback info, activate fresh proxy, start new
+      ("204 No Content", JSON_CONTENT_TYPE, ""),
+      ("200 OK", JSON_CONTENT_TYPE, fresh_playback_info.as_str()),
+      ("200 OK", HLS_CONTENT_TYPE, MEDIA_PLAYLIST_2),
+      ("204 No Content", JSON_CONTENT_TYPE, ""),
+      // The replacement generation expires as well: terminal, no third attempt
+      ("401 Unauthorized", JSON_CONTENT_TYPE, ""),
+    ]
+    .into_iter()
+    .map(|(status, content_type, body)| {
+      (
+        status.to_string(),
+        content_type.to_string(),
+        body.to_string(),
+      )
+    })
+    .collect();
+    let (client, requests) = connected_emby_client_typed(responses).await;
+    let mut harness = PlayHarness::new(client);
+
+    let (first_url, _) = harness.play_start("movie-hls").await;
+    assert_local_playlist_url(&first_url);
+
+    // Reach a known position before the origin session expires
+    {
+      let mut s = harness.state.write();
+      s.playback.as_mut().expect("playback state").position_ticks = 950_000_000;
+    }
+
+    let (_, rewritten) = http_get(&first_url).await;
+    let segment_url = first_segment_url(&rewritten);
+    let (segment_status, _) = http_get(&segment_url).await;
+    assert!(!segment_status.is_success());
+
+    // Recovery must replace playback exactly once at the captured position
+    let (second_url, second_start) =
+      recv_play_action(&mut harness.action_rx, "recovery play action").await;
+    assert_local_playlist_url(&second_url);
+    assert_ne!(first_url, second_url);
+    assert_eq!(second_start, 95.0);
+
+    let playback = harness
+      .state
+      .read()
+      .playback
+      .clone()
+      .expect("playback state after recovery");
+    assert_eq!(playback.play_session_id.as_deref(), Some("play-hls-2"));
+    assert!(playback.hls_recovery_attempted);
+    assert!(!playback.hls_recovering);
+    assert!(playback.hls_proxy_session_id.is_some());
+
+    wait_until("recovery requests to complete", || {
+      requests.lock().len() >= 10
+    })
+    .await;
+    {
+      let captured = requests.lock();
+      assert!(captured[5].starts_with("GET /videos/seg1.ts?"));
+      assert!(captured[6].starts_with("POST /Sessions/Playing/Stopped "));
+      assert!(captured[6].contains(r#""PlaySessionId":"play-hls-1""#));
+      assert!(captured[6].contains(r#""PositionTicks":950000000"#));
+      assert!(captured[7].starts_with("POST /Items/movie-hls/PlaybackInfo "));
+      assert!(captured[7].contains(r#""StartTimeTicks":950000000"#));
+      assert!(captured[7].contains(r#""AudioStreamIndex":1"#));
+      assert!(captured[8].starts_with("GET /videos/transcode2.m3u8?"));
+      assert!(captured[9].starts_with("POST /Sessions/Playing "));
+      assert!(captured[9].contains(r#""PlaySessionId":"play-hls-2""#));
+      assert!(captured[9].contains(r#""PositionTicks":950000000"#));
+    }
+
+    // Expire the replacement generation: terminal notification, no third attempt
+    let (_, second_rewritten) = http_get(&second_url).await;
+    let second_segment_url = first_segment_url(&second_rewritten);
+    let (expired_status, _) = http_get(&second_segment_url).await;
+    assert!(!expired_status.is_success());
+
+    wait_until("terminal recovery notification", || {
+      harness
+        .state
+        .read()
+        .recorded_notifications
+        .iter()
+        .any(|(level, message)| {
+          level == "error"
+            && message == "The Emby transcode session expired again. Restart playback to continue."
+        })
+    })
+    .await;
+
+    let playback = harness
+      .state
+      .read()
+      .playback
+      .clone()
+      .expect("playback state after terminal expiry");
+    assert!(playback.hls_recovering);
+    assert_eq!(playback.play_session_id, None);
+
+    // No third playback-info request may ever be issued
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    let captured = requests.lock();
+    assert_eq!(captured.len(), 11);
+    assert!(
+      captured
+        .iter()
+        .filter(|request| request.starts_with("POST /Items/movie-hls/PlaybackInfo "))
+        .count()
+        == 2
+    );
+  }
+
+  #[tokio::test]
+  async fn emby_hls_non_hls_transcode_bypasses_proxy_silently() {
+    let playback_info = default_playback_info("source-hls");
+    let (client, requests) = connected_emby_client_typed(vec![
+      (
+        "200 OK".to_string(),
+        JSON_CONTENT_TYPE.to_string(),
+        EMBY_USER_JSON.to_string(),
+      ),
+      (
+        "200 OK".to_string(),
+        JSON_CONTENT_TYPE.to_string(),
+        r#"{"Id":"movie-mp4","Name":"MP4 Movie","Type":"Movie","RunTimeTicks":72000000000}"#
+          .to_string(),
+      ),
+      (
+        "200 OK".to_string(),
+        JSON_CONTENT_TYPE.to_string(),
+        playback_info,
+      ),
+      // The transcode endpoint returns progressive MP4, not HLS
+      (
+        "200 OK".to_string(),
+        "video/mp4".to_string(),
+        "not a playlist".to_string(),
+      ),
+      (
+        "204 No Content".to_string(),
+        JSON_CONTENT_TYPE.to_string(),
+        String::new(),
+      ),
+    ])
+    .await;
+    let mut harness = PlayHarness::new(client);
+
+    let (url, _) = harness.play_start("movie-mp4").await;
+
+    assert!(url.ends_with("/videos/transcode.m3u8?api_key=emby-token"));
+    let playback = harness
+      .state
+      .read()
+      .playback
+      .clone()
+      .expect("playback state");
+    assert_eq!(playback.play_method, "Transcode");
+    assert_eq!(playback.hls_proxy_session_id, None);
+    assert!(harness.state.read().recorded_notifications.is_empty());
+    let captured = requests.lock();
+    assert!(captured[3].starts_with("GET /videos/transcode.m3u8?"));
+    assert!(captured[4].starts_with("POST /Sessions/Playing "));
+  }
+
+  #[tokio::test]
+  async fn emby_hls_transcode_without_runtime_bypasses_proxy() {
+    let playback_info = default_playback_info("source-hls");
+    let (client, requests) = connected_emby_client_typed(vec![
+      (
+        "200 OK".to_string(),
+        JSON_CONTENT_TYPE.to_string(),
+        EMBY_USER_JSON.to_string(),
+      ),
+      (
+        "200 OK".to_string(),
+        JSON_CONTENT_TYPE.to_string(),
+        r#"{"Id":"movie-live","Name":"Live Movie","Type":"Movie"}"#.to_string(),
+      ),
+      (
+        "200 OK".to_string(),
+        JSON_CONTENT_TYPE.to_string(),
+        playback_info,
+      ),
+      (
+        "204 No Content".to_string(),
+        JSON_CONTENT_TYPE.to_string(),
+        String::new(),
+      ),
+    ])
+    .await;
+    let mut harness = PlayHarness::new(client);
+
+    let (url, _) = harness.play_start("movie-live").await;
+
+    assert!(url.ends_with("/videos/transcode.m3u8?api_key=emby-token"));
+    let playback = harness
+      .state
+      .read()
+      .playback
+      .clone()
+      .expect("playback state");
+    assert_eq!(playback.hls_proxy_session_id, None);
+    let captured = requests.lock();
+    assert_eq!(captured.len(), 4);
+    assert!(captured[3].starts_with("POST /Sessions/Playing "));
+  }
+
+  #[tokio::test]
+  async fn jellyfin_transcode_bypasses_proxy() {
+    let playback_info = default_playback_info("source-hls");
+    let (client, requests) = connected_test_client(vec![
+      (
+        "200 OK",
+        r#"{"Id":"00000000-0000-0000-0000-000000000001","Name":"Ada"}"#,
+      ),
+      (
+        "200 OK",
+        r#"{"ServerName":"Jellyfin Home","Version":"10.10.0","Id":"server-1"}"#,
+      ),
+      (
+        "200 OK",
+        r#"{"Id":"movie-jf","Name":"JF Movie","Type":"Movie","RunTimeTicks":72000000000}"#,
+      ),
+      ("200 OK", playback_info.as_str()),
+      ("204 No Content", ""),
+    ])
+    .await;
+    let mut harness = PlayHarness::new(client);
+
+    let (url, _) = harness.play_start("movie-jf").await;
+
+    assert!(url.contains("/videos/transcode.m3u8"));
+    assert!(url.contains("api_key=token-1"));
+    assert!(
+      !url.contains("/hls/"),
+      "Jellyfin playback must not enter the HLS proxy: {}",
+      url
+    );
+    let playback = harness
+      .state
+      .read()
+      .playback
+      .clone()
+      .expect("playback state");
+    assert_eq!(playback.play_method, "Transcode");
+    assert_eq!(playback.hls_proxy_session_id, None);
+    let captured = requests.lock();
+    assert_eq!(captured.len(), 5);
+    assert!(captured[4].starts_with("POST /Sessions/Playing "));
+  }
+
+  #[tokio::test]
+  async fn emby_hls_cleanup_deactivates_proxy_sessions_on_every_exit() {
+    let playback_info = default_playback_info("source-hls");
+    let episode_info = hls_playback_info("source-ep", "/videos/episode.m3u8", "play-ep-2");
+    let next_episode_info = hls_playback_info("source-ep3", "/videos/episode3.m3u8", "play-ep-3");
+    let final_info = hls_playback_info("source-final", "/videos/final.m3u8", "play-final");
+    let responses = vec![
+      ("200 OK", JSON_CONTENT_TYPE, EMBY_USER_JSON),
+      // First playback: a movie
+      (
+        "200 OK",
+        JSON_CONTENT_TYPE,
+        r#"{"Id":"movie-hls","Name":"HLS Movie","Type":"Movie","RunTimeTicks":72000000000}"#,
+      ),
+      ("200 OK", JSON_CONTENT_TYPE, playback_info.as_str()),
+      ("200 OK", HLS_CONTENT_TYPE, MEDIA_PLAYLIST_1),
+      ("204 No Content", JSON_CONTENT_TYPE, ""),
+      // Explicit replacement: stop report then an episode
+      ("204 No Content", JSON_CONTENT_TYPE, ""),
+      (
+        "200 OK",
+        JSON_CONTENT_TYPE,
+        r#"{"Id":"ep-2","Name":"Episode 2","Type":"Episode","SeriesId":"series-hls","SeriesName":"HLS Show","ParentIndexNumber":1,"IndexNumber":2,"RunTimeTicks":36000000000}"#,
+      ),
+      ("200 OK", JSON_CONTENT_TYPE, episode_info.as_str()),
+      ("200 OK", HLS_CONTENT_TYPE, MEDIA_PLAYLIST_1),
+      ("204 No Content", JSON_CONTENT_TYPE, ""),
+      // Natural end: stop report, adjacent-episode lookup, then it plays
+      ("204 No Content", JSON_CONTENT_TYPE, ""),
+      (
+        "200 OK",
+        JSON_CONTENT_TYPE,
+        r#"{"Items":[{"Id":"ep-2","Name":"Episode 2","Type":"Episode","SeriesId":"series-hls","SeriesName":"HLS Show","ParentIndexNumber":1,"IndexNumber":2,"RunTimeTicks":36000000000},{"Id":"ep-3","Name":"Episode 3","Type":"Episode","SeriesId":"series-hls","SeriesName":"HLS Show","ParentIndexNumber":1,"IndexNumber":3,"RunTimeTicks":36000000000,"UserData":{"PlaybackPositionTicks":0,"Played":false}}],"TotalRecordCount":2}"#,
+      ),
+      (
+        "200 OK",
+        JSON_CONTENT_TYPE,
+        r#"{"Id":"ep-3","Name":"Episode 3","Type":"Episode","SeriesId":"series-hls","SeriesName":"HLS Show","ParentIndexNumber":1,"IndexNumber":3,"RunTimeTicks":36000000000}"#,
+      ),
+      ("200 OK", JSON_CONTENT_TYPE, next_episode_info.as_str()),
+      ("200 OK", HLS_CONTENT_TYPE, MEDIA_PLAYLIST_2),
+      ("204 No Content", JSON_CONTENT_TYPE, ""),
+      // MPV disconnect: stop report while clearing the context
+      ("204 No Content", JSON_CONTENT_TYPE, ""),
+      // Final playback, ended by an explicit stop
+      (
+        "200 OK",
+        JSON_CONTENT_TYPE,
+        r#"{"Id":"movie-final","Name":"Final Movie","Type":"Movie","RunTimeTicks":72000000000}"#,
+      ),
+      ("200 OK", JSON_CONTENT_TYPE, final_info.as_str()),
+      ("200 OK", HLS_CONTENT_TYPE, MEDIA_PLAYLIST_1),
+      ("204 No Content", JSON_CONTENT_TYPE, ""),
+      ("204 No Content", JSON_CONTENT_TYPE, ""),
+    ]
+    .into_iter()
+    .map(|(status, content_type, body)| {
+      (
+        status.to_string(),
+        content_type.to_string(),
+        body.to_string(),
+      )
+    })
+    .collect();
+    let (client, requests) = connected_emby_client_typed(responses).await;
+    let mut harness = PlayHarness::new(client);
+
+    // Even in Automatic mode, Emby must never call the Jellyfin-only
+    // Intro Skipper plugin endpoint (it 404s on every episode)
+    harness.config.write().intro_skipper_mode = IntroSkipperMode::Automatic;
+    harness.state.write().effective_intro_skipper_config = IntroSkipperRuntimeConfig {
+      mode: IntroSkipperMode::Automatic,
+      keybind_intro_skip: "i".to_string(),
+    };
+
+    // 1. Explicit replacement deactivates the first proxy session
+    let (url_a, _) = harness.play_start("movie-hls").await;
+    let (url_b, _) = harness.play_start("ep-2").await;
+    assert_ne!(url_a, url_b);
+    let (status_a, _) = http_get(&url_a).await;
+    assert_eq!(status_a, reqwest::StatusCode::NOT_FOUND);
+
+    // 2. Natural end plays the adjacent episode and deactivates its predecessor
+    let end_event = crate::mpv::MpvEvent {
+      event: "end-file".to_string(),
+      id: None,
+      name: None,
+      data: None,
+      reason: Some("eof".to_string()),
+      args: None,
+    };
+    let end_ctx = PlayContext {
+      client: harness.client.clone(),
+      state: harness.state.clone(),
+      action_tx: harness.action_tx.clone(),
+      hls: harness.hls.clone(),
+      app: None,
+      config: harness.config.clone(),
+    };
+    SessionManager::handle_end_file_event(&end_event, &end_ctx).await;
+    let (url_c, _) = recv_play_action(&mut harness.action_rx, "adjacent episode play action").await;
+    assert_ne!(url_b, url_c);
+    let (status_b, _) = http_get(&url_b).await;
+    assert_eq!(status_b, reqwest::StatusCode::NOT_FOUND);
+
+    // 3. MPV disconnect clears the context and deactivates the proxy session
+    SessionManager::clear_playback_context(&harness.client, &harness.state, &harness.hls).await;
+    let (status_c, _) = http_get(&url_c).await;
+    assert_eq!(status_c, reqwest::StatusCode::NOT_FOUND);
+
+    // 4. Explicit stop deactivates the final proxy session
+    let (url_d, _) = harness.play_start("movie-final").await;
+    SessionManager::report_playback_stopped(&harness.client, &harness.state, &harness.hls).await;
+    let (status_d, _) = http_get(&url_d).await;
+    assert_eq!(status_d, reqwest::StatusCode::NOT_FOUND);
+
+    // Replacement, natural end, MPV disconnect, and explicit stop each report once
+    let captured = requests.lock();
+    let stopped_reports = captured
+      .iter()
+      .filter(|request| request.starts_with("POST /Sessions/Playing/Stopped "))
+      .count();
+    assert_eq!(stopped_reports, 4);
+    assert!(
+      !captured
+        .iter()
+        .any(|request| request.contains("IntroSkipperSegments")),
+      "Emby playback must not query the Intro Skipper plugin endpoint"
+    );
+  }
+}
+
+#[cfg(test)]
 mod regression_tests {
   use super::*;
 
@@ -2665,6 +3817,9 @@ mod regression_tests {
         audio_stream_index: None,
         subtitle_stream_index: None,
         play_method: "DirectPlay".to_string(),
+        hls_proxy_session_id: None,
+        hls_recovery_attempted: false,
+        hls_recovering: false,
       }),
       last_report_time: std::time::Instant::now(),
       effective_intro_skipper_config: IntroSkipperRuntimeConfig::from(&AppConfig::default()),
@@ -2672,6 +3827,7 @@ mod regression_tests {
       current_item: None,
       current_media_streams: Vec::new(),
       series_preferences: HashMap::new(),
+      recorded_notifications: Vec::new(),
     });
     let (action_tx, mut action_rx) = mpsc::channel(1);
 

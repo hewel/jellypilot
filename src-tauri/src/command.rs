@@ -207,6 +207,7 @@ async fn start_remote_control_session_if_supported(
     state.mpv.clone(),
     config_state.0.clone(),
     app.clone(),
+    state.hls_proxy.clone(),
   ));
 
   if !state.client.supports_remote_control() {
@@ -324,14 +325,20 @@ pub struct JellyfinState {
   pub client: Arc<JellyfinClient>,
   pub mpv: Arc<MpvClient>,
   pub session: RwLock<Option<Arc<SessionManager>>>,
+  pub hls_proxy: crate::hls_proxy::HlsProxyState,
 }
 
 impl JellyfinState {
-  pub fn new(client: Arc<JellyfinClient>, mpv: Arc<MpvClient>) -> Self {
+  pub fn new(
+    client: Arc<JellyfinClient>,
+    mpv: Arc<MpvClient>,
+    hls_proxy: crate::hls_proxy::HlsProxyState,
+  ) -> Self {
     Self {
       client,
       mpv,
       session: RwLock::new(None),
+      hls_proxy,
     }
   }
 }

@@ -95,6 +95,9 @@ mod tests {
       audio_stream_index: None,
       subtitle_stream_index: None,
       play_method: "DirectPlay".into(),
+      hls_proxy_session_id: None,
+      hls_recovery_attempted: false,
+      hls_recovering: false,
     }
   }
 

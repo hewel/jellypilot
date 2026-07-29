@@ -4,6 +4,7 @@ use std::sync::Arc;
 mod auth_profiles;
 mod command;
 mod config;
+mod hls_proxy;
 mod image_cache;
 mod image_ref;
 mod jellyfin;
@@ -14,6 +15,7 @@ mod tray;
 
 use command::{ConfigState, JellyfinState, MpvState};
 pub use config::AppConfig;
+use hls_proxy::{HlsProxy, HlsProxyState};
 use image_cache::{ImageCache, ImageCacheState};
 use jellyfin::JellyfinClient;
 use mpv::MpvClient;
@@ -45,6 +47,8 @@ pub fn run() {
   let image_cache_state = ImageCacheState::empty();
   let image_cache_for_setup = image_cache_state.0.clone();
   let image_cache_for_protocol = image_cache_state.clone();
+  let hls_proxy_state = HlsProxyState::default();
+  let hls_proxy_for_setup = hls_proxy_state.clone();
 
   // Create MPV client state
   let mpv_client = Arc::new(MpvClient::new(None));
@@ -55,7 +59,7 @@ pub fn run() {
   let jellyfin_client = Arc::new(JellyfinClient::new());
   let jellyfin_for_setup = jellyfin_client.clone();
   let jellyfin_for_protocol = jellyfin_client.clone();
-  let jellyfin_state = JellyfinState::new(jellyfin_client, mpv_client);
+  let jellyfin_state = JellyfinState::new(jellyfin_client, mpv_client, hls_proxy_state);
   let config_for_protocol = config.clone();
 
   let app_builder = tauri::Builder::default()
@@ -95,13 +99,15 @@ pub fn run() {
       let loaded_config = command::load_config_from_store(app.handle());
       match app.path().app_cache_dir() {
         Ok(cache_dir) => {
-          *image_cache_for_setup.write() = Some(Arc::new(ImageCache::new(cache_dir)));
+          *image_cache_for_setup.write() = Some(Arc::new(ImageCache::new(cache_dir.clone())));
+          hls_proxy_for_setup.install(HlsProxy::start(Some(cache_dir.join("hls"))));
         }
         Err(e) => {
           log::warn!(
             "Failed to resolve app cache directory for image cache: {}",
             e
           );
+          hls_proxy_for_setup.install(HlsProxy::start(None));
         }
       }
 

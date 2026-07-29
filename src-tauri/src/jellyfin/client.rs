@@ -903,7 +903,14 @@ impl JellyfinClient {
     Self::provider_capabilities(&state).remote_control
   }
 
-  fn provider(&self) -> MediaServerProvider {
+  /// Whether the connected server offers the Intro Skipper plugin endpoint.
+  pub fn supports_intro_skipper(&self) -> bool {
+    let state = self.state.read();
+    Self::provider_capabilities(&state).intro_skipper
+  }
+
+  /// Active media server provider for the connected session.
+  pub fn provider(&self) -> MediaServerProvider {
     self.state.read().provider
   }
 
@@ -1091,6 +1098,7 @@ impl JellyfinClient {
   pub async fn get_playback_info(
     &self,
     item_id: &str,
+    start_time_ticks: Option<i64>,
     audio_stream_index: Option<i32>,
     subtitle_stream_index: Option<i32>,
   ) -> Result<PlaybackInfoResponse, JellyfinError> {
@@ -1101,7 +1109,7 @@ impl JellyfinClient {
       user_id,
       device_id: self.device_id(),
       max_streaming_bitrate: Some(140_000_000), // 140 Mbps
-      start_time_ticks: None,
+      start_time_ticks,
       audio_stream_index,
       subtitle_stream_index,
       enable_direct_play: true,
@@ -1656,12 +1664,18 @@ impl<'a> JellyfinPlayback<'a> {
   pub async fn get_playback_info(
     &self,
     item_id: &str,
+    start_time_ticks: Option<i64>,
     audio_stream_index: Option<i32>,
     subtitle_stream_index: Option<i32>,
   ) -> Result<PlaybackInfoResponse, JellyfinError> {
     self
       .client
-      .get_playback_info(item_id, audio_stream_index, subtitle_stream_index)
+      .get_playback_info(
+        item_id,
+        start_time_ticks,
+        audio_stream_index,
+        subtitle_stream_index,
+      )
       .await
   }
 

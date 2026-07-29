@@ -57,6 +57,7 @@ bun tauri build     # Production desktop build
 - **Route data loading**: Await only critical data; defer slow data as promises behind `<Suspense />` with stable skeletons. Follow [TanStack Router deferred data loading](https://tanstack.com/router/latest/docs/guide/deferred-data-loading).
 - **Ark UI Dialogs**: Use standard Ark UI Dialog primitives; no custom ARIA overlays, `onInteractOutside` handlers, or `id` attributes. Controlled dialogs require `<Portal>`; use `lazyMount` + `unmountOnExit`.
 - **Style Tests**: Style test policy in [docs/agents/style-tests.md](docs/agents/style-tests.md); read and follow it.
+- **Validation**: Proportionate verification policy in [docs/agents/validation.md](docs/agents/validation.md); scale test scope to the change's blast radius and never skip verification.
 - **Native E2E**: Agent policy and command contract in [docs/agents/e2e.md](docs/agents/e2e.md). Use focused native E2E whenever acceptance crosses Tauri startup, IPC, post-mount routing, desktop interaction, or sandboxed persistence.
 
 ## Anti-Patterns

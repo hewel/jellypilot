@@ -605,6 +605,12 @@ pub struct PlaybackSession {
   pub audio_stream_index: Option<i32>,
   pub subtitle_stream_index: Option<i32>,
   pub play_method: String,
+  /// Active HLS proxy generation for Emby VOD transcodes.
+  pub hls_proxy_session_id: Option<String>,
+  /// Whether a one-shot Emby transcode expiry recovery was already attempted.
+  pub hls_recovery_attempted: bool,
+  /// True while a transcode expiry recovery is in flight; suppresses progress reports.
+  pub hls_recovering: bool,
 }
 
 /// Ticks conversion helpers (1 tick = 100 nanoseconds).
