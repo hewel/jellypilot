@@ -57,6 +57,7 @@ pub enum ImageCacheError {
 pub struct CacheReaderGuard {
   path: PathBuf,
   content_type: Option<String>,
+  content_digest: Option<String>,
   size_bytes: u64,
   _guard: ReaderGuard,
   _file_lock: std::fs::File,
@@ -69,6 +70,11 @@ impl CacheReaderGuard {
 
   pub fn content_type(&self) -> Option<&str> {
     self.content_type.as_deref()
+  }
+
+  /// SHA-256 digest of the active representation's bytes, when recorded.
+  pub fn content_digest(&self) -> Option<&str> {
+    self.content_digest.as_deref()
   }
 
   pub fn size_bytes(&self) -> u64 {
@@ -136,6 +142,7 @@ async fn acquire_reader_guard(
   active_readers: &ActiveReaders,
   path: PathBuf,
   content_type: Option<String>,
+  content_digest: Option<String>,
   size_bytes: u64,
 ) -> Result<CacheReaderGuard, ImageCacheError> {
   let path_for_file = path.clone();
@@ -153,6 +160,7 @@ async fn acquire_reader_guard(
   Ok(CacheReaderGuard {
     path,
     content_type,
+    content_digest,
     size_bytes,
     _guard: guard,
     _file_lock: file_lock,
@@ -164,6 +172,7 @@ struct EntryRow {
   file_name: String,
   size_bytes: i64,
   content_type: Option<String>,
+  content_digest: Option<String>,
 }
 
 /// SQLite-backed global Library Image cache.
@@ -231,13 +240,14 @@ impl ImageCache {
     sqlx::query(
       r#"
       CREATE TABLE IF NOT EXISTS entries (
-        cache_key    TEXT PRIMARY KEY,
-        scope        TEXT NOT NULL,
-        file_name    TEXT NOT NULL,
-        size_bytes   INTEGER NOT NULL,
-        content_type TEXT,
-        accessed_at  INTEGER NOT NULL,
-        created_at   INTEGER NOT NULL
+        cache_key     TEXT PRIMARY KEY,
+        scope         TEXT NOT NULL,
+        file_name     TEXT NOT NULL,
+        size_bytes    INTEGER NOT NULL,
+        content_type  TEXT,
+        content_digest TEXT,
+        accessed_at   INTEGER NOT NULL,
+        created_at    INTEGER NOT NULL
       )
       "#,
     )
@@ -250,6 +260,25 @@ impl ImageCache {
     sqlx::query("CREATE INDEX IF NOT EXISTS idx_entries_scope ON entries (scope)")
       .execute(pool)
       .await?;
+
+    // Versioned migrations for catalogs created by earlier builds.
+    let version: i64 = sqlx::query_scalar("PRAGMA user_version")
+      .fetch_one(pool)
+      .await?;
+    if version < 1 {
+      // v1 adds the active-representation content digest used for ETags.
+      let has_digest: bool = sqlx::query_scalar(
+        "SELECT EXISTS (SELECT 1 FROM pragma_table_info('entries') WHERE name = 'content_digest')",
+      )
+      .fetch_one(pool)
+      .await?;
+      if !has_digest {
+        sqlx::query("ALTER TABLE entries ADD COLUMN content_digest TEXT")
+          .execute(pool)
+          .await?;
+      }
+      sqlx::query("PRAGMA user_version = 1").execute(pool).await?;
+    }
     Ok(())
   }
 
@@ -311,12 +340,13 @@ impl ImageCache {
     remote_url: &str,
   ) -> Option<CacheReaderGuard> {
     let cache_key = Self::cache_key(partition, remote_url);
-    let row: Option<EntryRow> =
-      sqlx::query_as("SELECT file_name, size_bytes, content_type FROM entries WHERE cache_key = ?")
-        .bind(&cache_key)
-        .fetch_optional(&self.pool)
-        .await
-        .ok()?;
+    let row: Option<EntryRow> = sqlx::query_as(
+      "SELECT file_name, size_bytes, content_type, content_digest FROM entries WHERE cache_key = ?",
+    )
+    .bind(&cache_key)
+    .fetch_optional(&self.pool)
+    .await
+    .ok()?;
 
     let row = row?;
     let path = self.entry_path(&row.file_name);
@@ -343,6 +373,7 @@ impl ImageCache {
       &self.active_readers,
       path,
       row.content_type,
+      row.content_digest,
       row.size_bytes.max(0) as u64,
     )
     .await
@@ -424,6 +455,7 @@ impl ImageCache {
 
     let mut written: u64 = 0;
     let mut completed = false;
+    let mut hasher = Sha256::new();
 
     while let Some(msg) = rx.recv().await {
       match msg {
@@ -439,6 +471,7 @@ impl ImageCache {
             log::debug!("Image cache write failed: {err}");
             break;
           }
+          hasher.update(&chunk);
           written += chunk.len() as u64;
           drop(permit);
         }
@@ -468,6 +501,7 @@ impl ImageCache {
     }
     drop(file);
 
+    let content_digest = format!("{:x}", hasher.finalize());
     if let Err(err) = self
       .commit(
         &temp_path,
@@ -475,6 +509,7 @@ impl ImageCache {
         &cache_key,
         &partition,
         content_type,
+        content_digest,
         written,
       )
       .await
@@ -485,6 +520,7 @@ impl ImageCache {
   }
 
   /// Atomically publish a completed temp file if the global budget can hold it.
+  #[allow(clippy::too_many_arguments)]
   async fn commit(
     &self,
     temp_path: &Path,
@@ -492,6 +528,7 @@ impl ImageCache {
     cache_key: &str,
     partition: &ImageCachePartition,
     content_type: Option<String>,
+    content_digest: String,
     size_bytes: u64,
   ) -> Result<(), ImageCacheError> {
     if size_bytes > IMAGE_CACHE_MAX_ENTRY_BYTES {
@@ -516,12 +553,13 @@ impl ImageCache {
     let now = now_ms()? as i64;
     sqlx::query(
       r#"
-      INSERT INTO entries (cache_key, scope, file_name, size_bytes, content_type, accessed_at, created_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?)
+      INSERT INTO entries (cache_key, scope, file_name, size_bytes, content_type, content_digest, accessed_at, created_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT(cache_key) DO UPDATE SET
         file_name = excluded.file_name,
         size_bytes = excluded.size_bytes,
         content_type = excluded.content_type,
+        content_digest = excluded.content_digest,
         accessed_at = excluded.accessed_at
       "#,
     )
@@ -530,6 +568,7 @@ impl ImageCache {
     .bind(file_name)
     .bind(size_bytes as i64)
     .bind(content_type)
+    .bind(content_digest)
     .bind(now)
     .bind(now)
     .execute(&self.pool)

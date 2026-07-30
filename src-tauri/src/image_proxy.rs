@@ -204,6 +204,7 @@ async fn handle_not_found() -> Response {
 async fn handle_image(
   State(inner): State<Arc<ImageProxyInner>>,
   Path(token): Path<String>,
+  headers: axum::http::HeaderMap,
 ) -> Response {
   let raw_token = token.trim_start_matches('/');
   if raw_token.is_empty() {
@@ -229,8 +230,16 @@ async fn handle_image(
     return text_response(StatusCode::FORBIDDEN, "image reference server mismatch");
   }
 
+  let if_none_match = headers
+    .get(header::IF_NONE_MATCH)
+    .and_then(|v| v.to_str().ok())
+    .map(str::trim)
+    .map(ToString::to_string);
+
   let partition = ImageCache::partition(payload.provider, server_url);
-  inner.serve_image(&payload.remote_url, partition).await
+  inner
+    .serve_image(&payload.remote_url, partition, if_none_match)
+    .await
 }
 
 impl ImageProxyInner {
@@ -238,12 +247,17 @@ impl ImageProxyInner {
     self.config.read().image_disk_cache_enabled
   }
 
-  async fn serve_image(&self, remote_url: &str, partition: ImageCachePartition) -> Response {
+  async fn serve_image(
+    &self,
+    remote_url: &str,
+    partition: ImageCachePartition,
+    if_none_match: Option<String>,
+  ) -> Response {
     // Cache hit: serve from disk without touching the origin.
     if self.cache_enabled() {
       if let Some(cache) = &self.cache {
         if let Some(reader) = cache.open_reader(&partition, remote_url).await {
-          return serve_cached_file(reader).await;
+          return serve_cached_file(reader, if_none_match).await;
         }
       }
     }
@@ -476,14 +490,31 @@ impl ImageProxyInner {
   }
 }
 
-/// Serve a cache-hit file as a streaming response.
-async fn serve_cached_file(reader: crate::image_cache::CacheReaderGuard) -> Response {
+/// Serve a cache-hit file as a streaming response, honoring `If-None-Match`.
+///
+/// The ETag identifies the active representation: it is derived from the
+/// recorded content digest, so an original and a later AVIF produce distinct
+/// validators and a stale original validator never yields a false `304`.
+async fn serve_cached_file(
+  reader: crate::image_cache::CacheReaderGuard,
+  if_none_match: Option<String>,
+) -> Response {
   let content_type = reader
     .content_type()
     .unwrap_or("application/octet-stream")
     .to_string();
   let size = reader.size_bytes();
   let path = reader.path().to_path_buf();
+  let etag = reader.content_digest().map(representation_etag);
+
+  if let (Some(etag), Some(if_none_match)) = (&etag, &if_none_match) {
+    if etag_matches(etag, if_none_match) {
+      return response_builder(StatusCode::NOT_MODIFIED)
+        .header(header::ETAG, etag.clone())
+        .body(Body::empty())
+        .unwrap_or_else(|_| Response::new(Body::empty()));
+    }
+  }
 
   let file = match tokio::fs::File::open(&path).await {
     Ok(f) => f,
@@ -493,17 +524,37 @@ async fn serve_cached_file(reader: crate::image_cache::CacheReaderGuard) -> Resp
   let stream = tokio_util::io::ReaderStream::new(file);
   let body = Body::from_stream(stream);
 
-  response_builder(StatusCode::OK)
+  let mut builder = response_builder(StatusCode::OK)
     .header(header::CONTENT_TYPE, content_type)
-    .header(header::CONTENT_LENGTH, size)
+    .header(header::CONTENT_LENGTH, size);
+  if let Some(etag) = etag {
+    builder = builder.header(header::ETAG, etag);
+  }
+  builder
     .body(body)
     .unwrap_or_else(|_| Response::new(Body::empty()))
+}
+
+/// Build a strong, representation-specific ETag from a content digest.
+fn representation_etag(digest: &str) -> String {
+  format!("\"v1-{digest}\"")
+}
+
+/// Compare a strong ETag against an `If-None-Match` header value (`*` or a
+/// comma-separated list of validators).
+fn etag_matches(etag: &str, if_none_match: &str) -> bool {
+  if if_none_match.trim() == "*" {
+    return true;
+  }
+  if_none_match
+    .split(',')
+    .any(|candidate| candidate.trim() == etag)
 }
 
 fn response_builder(status: StatusCode) -> axum::http::response::Builder {
   Response::builder()
     .status(status)
-    .header(header::CACHE_CONTROL, "public, max-age=31536000, immutable")
+    .header(header::CACHE_CONTROL, "public, max-age=0, must-revalidate")
     .header(header::ACCESS_CONTROL_ALLOW_ORIGIN, "*")
     .header(header::ACCESS_CONTROL_ALLOW_METHODS, "GET, OPTIONS")
     .header(header::ACCESS_CONTROL_ALLOW_HEADERS, "*")
@@ -731,7 +782,7 @@ mod tests {
         .unwrap()
         .to_str()
         .unwrap(),
-      "public, max-age=31536000, immutable"
+      "public, max-age=0, must-revalidate"
     );
     assert_eq!(
       single_resp
@@ -939,5 +990,158 @@ mod tests {
     );
 
     let _ = std::fs::remove_dir_all(&dir);
+  }
+
+  #[tokio::test]
+  async fn test_etag_revalidation_304_and_stale_validator() {
+    let dir = std::env::temp_dir().join(format!("proxy_etag_test_{}", uuid::Uuid::new_v4()));
+    let _ = std::fs::create_dir_all(&dir);
+
+    let listener = TokioTcpListener::bind("127.0.0.1:0")
+      .await
+      .expect("bind mock server");
+    let origin_port = listener.local_addr().expect("port").port();
+    let origin_base = format!("http://127.0.0.1:{origin_port}");
+
+    let mock_app = Router::new().route(
+      "/Items/etag/Images/Primary",
+      get(|| async { ([(header::CONTENT_TYPE, "image/png")], "etag-png-bytes") }),
+    );
+    tokio::spawn(async move {
+      let _ = axum::serve(listener, mock_app).await;
+    });
+
+    let client = Arc::new(JellyfinClient::new());
+    client
+      .login()
+      .adopt_validated_session(&crate::jellyfin::SavedSession {
+        provider: MediaServerProvider::Jellyfin,
+        server_url: origin_base.clone(),
+        access_token: "test-token".to_string(),
+        user_id: "user-1".to_string(),
+        user_name: "Test".to_string(),
+        server_name: Some("Mock Server".to_string()),
+        device_id: None,
+      });
+
+    let cache =
+      crate::image_cache::ImageCache::init(dir.clone(), crate::image_cache::IMAGE_CACHE_MAX_BYTES)
+        .await
+        .expect("init cache");
+    let proxy = ImageProxy::start(client, Some(cache), test_config()).expect("start proxy");
+
+    let remote_url = format!("{origin_base}/Items/etag/Images/Primary");
+    let signed_token = image_id_for_url(
+      MediaServerProvider::Jellyfin,
+      &origin_base,
+      remote_url,
+      ImageRefKind::Artwork,
+    )
+    .expect("sign token");
+    let proxy_req_url = format!("{}/image/{}", proxy.base_url, signed_token);
+    let http = ReqwestClient::new();
+
+    // Prime the cache (miss -> origin -> commit).
+    let prime = http.get(&proxy_req_url).send().await.expect("prime");
+    assert_eq!(prime.status(), StatusCode::OK);
+    let _ = prime.text().await;
+    tokio::time::sleep(Duration::from_millis(200)).await;
+
+    // Cache hit: 200 with a strong, representation-specific ETag and CORS.
+    let hit = http.get(&proxy_req_url).send().await.expect("hit");
+    assert_eq!(hit.status(), StatusCode::OK);
+    assert_eq!(
+      hit
+        .headers()
+        .get(header::ACCESS_CONTROL_ALLOW_ORIGIN)
+        .unwrap(),
+      "*"
+    );
+    let etag = hit
+      .headers()
+      .get(header::ETAG)
+      .expect("cache hit must carry an ETag")
+      .to_str()
+      .unwrap()
+      .to_string();
+    assert!(
+      etag.starts_with("\"v1-"),
+      "ETag must be strong and versioned: {etag}"
+    );
+    let body = hit.text().await.expect("hit body");
+    assert_eq!(body, "etag-png-bytes");
+
+    // Matching If-None-Match -> 304 with no body but ETag + CORS intact.
+    let not_modified = http
+      .get(&proxy_req_url)
+      .header(header::IF_NONE_MATCH, &etag)
+      .send()
+      .await
+      .expect("conditional");
+    assert_eq!(not_modified.status(), StatusCode::NOT_MODIFIED);
+    assert_eq!(
+      not_modified
+        .headers()
+        .get(header::ETAG)
+        .unwrap()
+        .to_str()
+        .unwrap(),
+      etag
+    );
+    assert_eq!(
+      not_modified
+        .headers()
+        .get(header::ACCESS_CONTROL_ALLOW_ORIGIN)
+        .unwrap(),
+      "*"
+    );
+    let nm_body = not_modified.text().await.expect("304 body");
+    assert!(nm_body.is_empty(), "304 must not carry a body");
+
+    // A stale validator (different digest) must NOT 304; it returns the bytes.
+    let stale = "\"v1-0000000000000000000000000000000000000000000000000000000000000000\"";
+    let stale_resp = http
+      .get(&proxy_req_url)
+      .header(header::IF_NONE_MATCH, stale)
+      .send()
+      .await
+      .expect("stale conditional");
+    assert_eq!(stale_resp.status(), StatusCode::OK);
+    assert_eq!(
+      stale_resp
+        .headers()
+        .get(header::ETAG)
+        .unwrap()
+        .to_str()
+        .unwrap(),
+      etag,
+      "stale validator must return the current representation's ETag"
+    );
+    let stale_body = stale_resp.text().await.expect("stale body");
+    assert_eq!(stale_body, "etag-png-bytes");
+
+    let _ = std::fs::remove_dir_all(&dir);
+  }
+
+  #[test]
+  fn representation_etag_is_digest_specific() {
+    let a = representation_etag("aaaa");
+    let b = representation_etag("bbbb");
+    assert_ne!(a, b, "distinct digests must yield distinct validators");
+    assert!(
+      a.starts_with('"') && a.ends_with('"'),
+      "ETag must be strong (quoted)"
+    );
+    assert!(!a.contains("W/"), "ETag must not be weak");
+  }
+
+  #[test]
+  fn etag_matches_handles_wildcard_list_and_mismatch() {
+    let etag = "\"v1-abc\"";
+    assert!(etag_matches(etag, "*"));
+    assert!(etag_matches(etag, "\"v1-abc\""));
+    assert!(etag_matches(etag, "\"v1-zzz\", \"v1-abc\""));
+    assert!(!etag_matches(etag, "\"v1-other\""));
+    assert!(!etag_matches(etag, ""));
   }
 }
