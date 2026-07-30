@@ -1,4 +1,5 @@
-import { commands } from '@bindings';
+import { reportAvifCapability } from '~effects/library';
+import { runExit } from '~effects/query';
 
 // Minimal valid 1x1 AVIF for capability probing.
 const AVIF_PROBE =
@@ -23,9 +24,6 @@ export async function probeAvifCapability(): Promise<void> {
   } catch {
     supported = false;
   }
-  try {
-    await commands.imageReportAvifCapability(supported);
-  } catch {
-    // Ignore; the worker simply stays gated off.
-  }
+  // Best-effort report: on failure the worker simply stays gated off.
+  await runExit(reportAvifCapability(supported));
 }

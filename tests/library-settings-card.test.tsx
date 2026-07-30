@@ -82,6 +82,16 @@ test('clear requires confirmation and cancel does not invoke the clear command',
   dispose();
 });
 
+test('clear stays disabled while a clearing epoch is in progress', async () => {
+  mockStatus({ ...populatedStatus, clearing: true });
+  const { dispose } = renderCard(true);
+
+  const trigger = await screen.findByRole('button', { name: 'Clear cache' });
+  await waitFor(() => expect(screen.getByTestId('image-cache-usage')).toHaveTextContent('5.0 MB'));
+  expect(trigger).toBeDisabled();
+  dispose();
+});
+
 test('confirming clear invokes the clear command once', async () => {
   mockStatus();
   const clearCommand = rstest

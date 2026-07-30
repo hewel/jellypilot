@@ -1,5 +1,6 @@
-import { commands } from '@bindings';
 import { createEffect, createMemo, createSignal, Show, type JSX } from 'solid-js';
+import { rejectImageAvif } from '~effects/library';
+import { runExit } from '~effects/query';
 import { imageSource } from '~utils/imageSource';
 
 export interface LibraryImageProps {
@@ -42,10 +43,11 @@ export function LibraryImage(props: LibraryImageProps) {
   const handleError = () => {
     const currentAttempt = attempt();
     if (currentAttempt === 0) {
-      // First failure: report AVIF rejection (fire-and-forget) and retry once.
+      // First failure: report AVIF rejection (fire-and-forget; the retry below
+      // is the recovery, so the outcome is intentionally unobserved) and retry.
       const imageId = props.imageId;
       if (imageId) {
-        commands.imageRejectAvif(imageId).catch(() => {});
+        void runExit(rejectImageAvif(imageId));
       }
       setAttempt(1);
     } else {
