@@ -12,7 +12,7 @@ use crate::auth_profiles::{
 };
 use crate::avif_worker::AvifCapability;
 use crate::config::AppConfig;
-use crate::image_cache::{ImageCache, ImageCacheState};
+use crate::image_cache::{ImageCache, ImageCacheState, ImageCacheStatus};
 use crate::image_proxy::{AppLocalServices, ImageProxyState};
 use crate::image_ref::decode_image_id;
 use crate::jellyfin::{
@@ -1393,6 +1393,64 @@ pub fn image_report_avif_capability(capability: State<'_, AvifCapability>, suppo
   capability.set_supported(supported);
 }
 
+/// Current Library Image cache status for Library settings.
+#[tauri::command]
+#[specta]
+pub async fn image_cache_status(
+  cache_state: State<'_, ImageCacheState>,
+  config_state: State<'_, ConfigState>,
+) -> Result<ImageCacheStatus, CommandError> {
+  let enabled = config_state.0.read().image_disk_cache_enabled;
+  let cache = cache_state.0.read().clone();
+  let status = match cache {
+    Some(cache) => cache
+      .status(enabled)
+      .await
+      .map_err(|e| CommandError::internal(e.to_string()))?,
+    None => ImageCacheStatus {
+      committed_bytes: 0,
+      pending_count: 0,
+      estimated_savings: 0,
+      terminal_failures: 0,
+      enabled,
+      clearing: false,
+    },
+  };
+  Ok(status)
+}
+
+/// Clear the entire Library Image cache across every saved server, returning
+/// the post-clear status. Pre-Clear writers/encoders cannot republish across
+/// the destructive epoch; in-flight reads are not broken.
+#[tauri::command]
+#[specta]
+pub async fn image_cache_clear(
+  cache_state: State<'_, ImageCacheState>,
+  config_state: State<'_, ConfigState>,
+) -> Result<ImageCacheStatus, CommandError> {
+  let enabled = config_state.0.read().image_disk_cache_enabled;
+  let cache = cache_state.0.read().clone();
+  let Some(cache) = cache else {
+    return Ok(ImageCacheStatus {
+      committed_bytes: 0,
+      pending_count: 0,
+      estimated_savings: 0,
+      terminal_failures: 0,
+      enabled,
+      clearing: false,
+    });
+  };
+  cache
+    .clear()
+    .await
+    .map_err(|e| CommandError::internal(e.to_string()))?;
+  let status = cache
+    .status(enabled)
+    .await
+    .map_err(|e| CommandError::internal(e.to_string()))?;
+  Ok(status)
+}
+
 pub fn specta_builder() -> Builder<tauri::Wry> {
   let builder = Builder::<tauri::Wry>::new()
     .commands(collect_commands![
@@ -1460,6 +1518,8 @@ pub fn specta_builder() -> Builder<tauri::Wry> {
       app_local_services,
       image_reject_avif,
       image_report_avif_capability,
+      image_cache_status,
+      image_cache_clear,
     ])
     .events(collect_events![AppNotification, NowPlayingChanged]);
 

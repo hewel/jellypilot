@@ -846,3 +846,168 @@ async fn epoch_guard_blocks_stale_activate_but_allows_fresh() {
   let reader = cache.open_reader(&partition(), url).await.unwrap();
   assert_eq!(reader.content_type(), Some("image/avif"));
 }
+
+async fn set_conv_full(
+  cache: &Arc<ImageCache>,
+  cache_key: &str,
+  state: &str,
+  attempts: i64,
+  next_at: i64,
+) {
+  sqlx::query(
+    "UPDATE entries SET conv_state = ?, conv_attempts = ?, conv_next_at = ? WHERE cache_key = ?",
+  )
+  .bind(state)
+  .bind(attempts)
+  .bind(next_at)
+  .bind(cache_key)
+  .execute(&cache.pool)
+  .await
+  .unwrap();
+}
+
+#[tokio::test]
+async fn status_reports_committed_pending_savings_and_failures() {
+  let dir = TempDirGuard::new();
+  let cache = ImageCache::init(dir.path(), IMAGE_CACHE_MAX_BYTES)
+    .await
+    .expect("init");
+
+  // A: pending origin of 500 bytes.
+  let url_a = "https://media.example.com/Items/a/Images/Primary";
+  write_entry(&cache, url_a, &[0u8; 500]).await;
+
+  // B: accepted AVIF; original 1000 -> avif 100, so 900 saved.
+  let url_b = "https://media.example.com/Items/b/Images/Primary";
+  write_entry(&cache, url_b, &[0u8; 1000]).await;
+  let key_b = ImageCache::cache_key(&partition(), url_b);
+  let reader = cache.open_reader(&partition(), url_b).await.unwrap();
+  let orig_b = reader
+    .path()
+    .file_name()
+    .unwrap()
+    .to_str()
+    .unwrap()
+    .to_string();
+  drop(reader);
+  let avif_b = ImageCache::avif_file_name_for(&orig_b);
+  tokio::fs::write(cache.path_for(&avif_b), &[0u8; 100])
+    .await
+    .unwrap();
+  cache
+    .activate_avif(
+      &key_b,
+      &avif_b,
+      100,
+      "d",
+      "image/avif",
+      cache.current_epoch(),
+    )
+    .await
+    .unwrap();
+
+  // C: terminal failure (attempts exhausted) of 200 bytes.
+  let url_c = "https://media.example.com/Items/c/Images/Primary";
+  write_entry(&cache, url_c, &[0u8; 200]).await;
+  let key_c = ImageCache::cache_key(&partition(), url_c);
+  set_conv_full(&cache, &key_c, "failed", MAX_CONVERSION_ATTEMPTS as i64, 0).await;
+
+  // D: delayed retry (failed, attempts left, future next_at) of 50 bytes.
+  let url_d = "https://media.example.com/Items/d/Images/Primary";
+  write_entry(&cache, url_d, &[0u8; 50]).await;
+  let key_d = ImageCache::cache_key(&partition(), url_d);
+  set_conv_full(&cache, &key_d, "failed", 2, 9_999_999_999).await;
+
+  let status = cache.status(true).await.expect("status");
+  assert_eq!(status.committed_bytes, 500 + 100 + 200 + 50);
+  assert_eq!(
+    status.pending_count, 2,
+    "pending must include A and the delayed retry D"
+  );
+  assert_eq!(
+    status.estimated_savings, 900,
+    "current-only accepted savings"
+  );
+  assert_eq!(status.terminal_failures, 1);
+  assert!(status.enabled);
+  assert!(!status.clearing);
+}
+
+#[tokio::test]
+async fn clear_removes_unpinned_and_defers_pinned() {
+  let dir = TempDirGuard::new();
+  let cache = ImageCache::init(dir.path(), IMAGE_CACHE_MAX_BYTES)
+    .await
+    .expect("init");
+
+  let url_unpinned = "https://media.example.com/Items/unpinned/Images/Primary";
+  write_entry(&cache, url_unpinned, &[0u8; 400]).await;
+  let unpinned_path = cache
+    .open_reader(&partition(), url_unpinned)
+    .await
+    .unwrap()
+    .path()
+    .to_path_buf();
+
+  let url_pinned = "https://media.example.com/Items/pinned/Images/Primary";
+  write_entry(&cache, url_pinned, &[0u8; 300]).await;
+  // Hold a reader on the pinned entry so Clear must defer it.
+  let pinned_reader = cache.open_reader(&partition(), url_pinned).await.unwrap();
+  let pinned_path = pinned_reader.path().to_path_buf();
+
+  cache.clear().await.expect("clear");
+
+  // Unpinned entry is fully removed (row and file).
+  assert!(
+    cache
+      .open_reader(&partition(), url_unpinned)
+      .await
+      .is_none(),
+    "unpinned entry must be removed"
+  );
+  assert!(tokio::fs::metadata(&unpinned_path).await.is_err());
+
+  // Pinned entry is deferred: row and file remain and the read is not broken.
+  assert!(tokio::fs::metadata(&pinned_path).await.is_ok());
+  assert!(
+    cache.open_reader(&partition(), url_pinned).await.is_some(),
+    "pinned entry must remain available"
+  );
+
+  // Metrics reach the remaining locked state (only the pinned entry counts).
+  let status = cache.status(true).await.expect("status");
+  assert_eq!(status.committed_bytes, 300);
+  assert!(!status.clearing, "clearing must clear after completion");
+
+  drop(pinned_reader);
+}
+
+#[tokio::test]
+async fn clear_blocks_stale_writer_and_resumes_caching() {
+  let dir = TempDirGuard::new();
+  let cache = ImageCache::init(dir.path(), IMAGE_CACHE_MAX_BYTES)
+    .await
+    .expect("init");
+  let url = "https://media.example.com/Items/stale/Images/Primary";
+
+  // A writer started before Clear must not republish across the epoch.
+  let mut writer = cache
+    .try_begin_writer(&partition(), url, Some("image/jpeg"), Some(4))
+    .await
+    .expect("writer");
+  assert!(writer.try_push(bytes::Bytes::from_static(b"jpeg")));
+  cache.clear().await.expect("clear");
+  writer.finish();
+  tokio::time::sleep(Duration::from_millis(200)).await;
+  assert!(
+    cache.open_reader(&partition(), url).await.is_none(),
+    "pre-clear writer must not republish"
+  );
+
+  // Normal caching resumes after Clear when still enabled.
+  write_entry(&cache, url, b"fresh").await;
+  assert!(
+    cache.open_reader(&partition(), url).await.is_some(),
+    "caching must resume after clear"
+  );
+}
