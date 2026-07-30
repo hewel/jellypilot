@@ -58,6 +58,7 @@ export const queryKeys = {
   savedServiceProfiles: ['connection', 'profiles'] as const,
   nowPlayingState: ['nowPlaying', 'state'] as const,
   mpvTracks: (connected: boolean) => ['mpv', 'tracks', connected] as const,
+  imageCacheStatus: ['imageCache', 'status'] as const,
   libraryRoot: ['library'] as const,
   librarySessionRoot: (sessionKey: LibrarySessionKey) => ['library', sessionKey] as const,
   libraryShortcuts: (sessionKey: LibrarySessionKey) =>

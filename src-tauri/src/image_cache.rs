@@ -24,7 +24,9 @@ use std::{
 
 use fs2::FileExt;
 use parking_lot::{Mutex as StdMutex, RwLock};
+use serde::Serialize;
 use sha2::{Digest, Sha256};
+use specta::Type;
 use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions, SqliteSynchronous};
 use sqlx::{FromRow, SqlitePool};
 use tokio::sync::{mpsc, Mutex as TokioMutex, OwnedSemaphorePermit, Semaphore};
@@ -199,6 +201,29 @@ pub struct ImageCache {
   /// Destructive-maintenance epoch. Bumped by Clear so writers/encoders that
   /// started before it cannot publish across the reset.
   epoch: AtomicU64,
+  /// Set while a Clear is in progress so status can report the clearing state.
+  clearing: std::sync::atomic::AtomicBool,
+}
+
+/// Point-in-time Library Image cache status reported to the frontend.
+///
+/// Byte counts and counts use `u32` because Specta forbids `u64` exports and
+/// every value here is far below 4 GiB.
+#[derive(Debug, Clone, Serialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct ImageCacheStatus {
+  /// Bytes currently committed to disk across every saved server.
+  pub committed_bytes: u32,
+  /// Pending conversion work, including delayed (backoff-scheduled) retries.
+  pub pending_count: u32,
+  /// Estimated bytes saved by retained accepted AVIFs (original minus AVIF).
+  pub estimated_savings: u32,
+  /// Terminal conversion failures currently recorded.
+  pub terminal_failures: u32,
+  /// Whether image disk caching is currently enabled.
+  pub enabled: bool,
+  /// Whether a Clear is currently in progress.
+  pub clearing: bool,
 }
 
 #[derive(Clone)]
@@ -384,6 +409,7 @@ impl ImageCache {
       commit_lock: TokioMutex::new(()),
       work_notify: StdMutex::new(None),
       epoch: AtomicU64::new(0),
+      clearing: std::sync::atomic::AtomicBool::new(false),
     })
   }
 
@@ -404,11 +430,91 @@ impl ImageCache {
   }
 
   /// Begin a destructive epoch: invalidates the right of any writer or encoder
-  /// that started earlier to publish across it. Triggered by the Clear action
-  /// (#194); exercised today by the epoch-guard tests.
-  #[allow(dead_code)]
+  /// that started earlier to publish across it. Triggered by the Clear action.
   pub fn bump_epoch(&self) -> u64 {
     self.epoch.fetch_add(1, Ordering::SeqCst) + 1
+  }
+
+  /// True while a Clear is in progress.
+  pub fn is_clearing(&self) -> bool {
+    self.clearing.load(Ordering::SeqCst)
+  }
+
+  /// Current cache status for the frontend. `enabled` is supplied by the
+  /// caller (config); everything else is derived from the catalog.
+  pub async fn status(&self, enabled: bool) -> Result<ImageCacheStatus, ImageCacheError> {
+    let committed_bytes = self.total_bytes().await?;
+    let savings: Option<i64> = sqlx::query_scalar(
+      "SELECT COALESCE(SUM(original_size_bytes - avif_size_bytes), 0) \
+       FROM entries \
+       WHERE active_kind = 'avif' AND original_size_bytes IS NOT NULL AND avif_size_bytes IS NOT NULL",
+    )
+    .fetch_one(&self.pool)
+    .await?;
+    // Pending includes delayed retries (failed rows that are still retryable).
+    let pending: i64 = sqlx::query_scalar(
+      "SELECT COUNT(*) FROM entries \
+       WHERE conv_state = 'pending' OR (conv_state = 'failed' AND conv_attempts < ?)",
+    )
+    .bind(MAX_CONVERSION_ATTEMPTS as i64)
+    .fetch_one(&self.pool)
+    .await?;
+    let failures: i64 = sqlx::query_scalar(
+      "SELECT COUNT(*) FROM entries WHERE conv_state = 'failed' AND conv_attempts >= ?",
+    )
+    .bind(MAX_CONVERSION_ATTEMPTS as i64)
+    .fetch_one(&self.pool)
+    .await?;
+    Ok(ImageCacheStatus {
+      committed_bytes: u32::try_from(committed_bytes).unwrap_or(u32::MAX),
+      pending_count: u32::try_from(pending.max(0)).unwrap_or(u32::MAX),
+      estimated_savings: u32::try_from(savings.unwrap_or(0).max(0)).unwrap_or(u32::MAX),
+      terminal_failures: u32::try_from(failures.max(0)).unwrap_or(u32::MAX),
+      enabled,
+      clearing: self.is_clearing(),
+    })
+  }
+
+  /// Clear the entire Library Image cache across every saved server. Establishes
+  /// a destructive maintenance epoch (so pre-Clear writers/encoders cannot
+  /// republish), removes every unpinned entry, and defers pinned (active-reader
+  /// or cross-process-locked) files without breaking their in-flight response.
+  pub async fn clear(&self) -> Result<(), ImageCacheError> {
+    self.clearing.store(true, Ordering::SeqCst);
+    self.bump_epoch();
+    let result = self.clear_inner().await;
+    self.clearing.store(false, Ordering::SeqCst);
+    result
+  }
+
+  async fn clear_inner(&self) -> Result<(), ImageCacheError> {
+    // Serialize against commits, activation, and eviction.
+    let _commit = self.commit_lock.lock().await;
+    let rows: Vec<(String, String, Option<String>, Option<String>)> = sqlx::query_as(
+      "SELECT cache_key, file_name, original_file_name, avif_file_name FROM entries",
+    )
+    .fetch_all(&self.pool)
+    .await?;
+    for (cache_key, file_name, original_file_name, avif_file_name) in rows {
+      let active_path = self.entry_path(&file_name);
+      if self.active_readers.is_active(&active_path) || is_file_locked(&active_path).await {
+        // Pinned by an in-flight read: keep the row and file so the response is
+        // not broken; cleanup is deferred until the reader releases.
+        continue;
+      }
+      let _ = tokio::fs::remove_file(&active_path).await;
+      for other in [original_file_name, avif_file_name].into_iter().flatten() {
+        let path = self.entry_path(&other);
+        if path != active_path {
+          let _ = tokio::fs::remove_file(&path).await;
+        }
+      }
+      sqlx::query("DELETE FROM entries WHERE cache_key = ?")
+        .bind(&cache_key)
+        .execute(&self.pool)
+        .await?;
+    }
+    Ok(())
   }
 
   fn notify_work(&self) {

@@ -150,6 +150,14 @@ export const commands = {
 	imageRejectAvif: (imageId: string) => typedError<null, CommandError>(__TAURI_INVOKE("image_reject_avif", { imageId })),
 	/**  Report the WebView's AVIF decode capability from the frontend probe. */
 	imageReportAvifCapability: (supported: boolean) => __TAURI_INVOKE<void>("image_report_avif_capability", { supported }),
+	/**  Current Library Image cache status for Library settings. */
+	imageCacheStatus: () => typedError<ImageCacheStatus, CommandError>(__TAURI_INVOKE("image_cache_status")),
+	/**
+	 *  Clear the entire Library Image cache across every saved server, returning
+	 *  the post-clear status. Pre-Clear writers/encoders cannot republish across
+	 *  the destructive epoch; in-flight reads are not broken.
+	 */
+	imageCacheClear: () => typedError<ImageCacheStatus, CommandError>(__TAURI_INVOKE("image_cache_clear")),
 };
 
 /** Events */
@@ -237,6 +245,27 @@ export type Credentials = {
 	serverUrl: string,
 	username: string,
 	password: string,
+};
+
+/**
+ *  Point-in-time Library Image cache status reported to the frontend.
+ * 
+ *  Byte counts and counts use `u32` because Specta forbids `u64` exports and
+ *  every value here is far below 4 GiB.
+ */
+export type ImageCacheStatus = {
+	/**  Bytes currently committed to disk across every saved server. */
+	committedBytes: number,
+	/**  Pending conversion work, including delayed (backoff-scheduled) retries. */
+	pendingCount: number,
+	/**  Estimated bytes saved by retained accepted AVIFs (original minus AVIF). */
+	estimatedSavings: number,
+	/**  Terminal conversion failures currently recorded. */
+	terminalFailures: number,
+	/**  Whether image disk caching is currently enabled. */
+	enabled: boolean,
+	/**  Whether a Clear is currently in progress. */
+	clearing: boolean,
 };
 
 /**  Intro Skipper behavior mode. */

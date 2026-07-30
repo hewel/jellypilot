@@ -1,5 +1,6 @@
 import { commands } from '@bindings';
 import type {
+  ImageCacheStatus,
   VideoHome,
   VideoItemDetail,
   VideoItemStreams,
@@ -63,6 +64,15 @@ function withConnection<T>(effect: Effect.Effect<T, CommandError>): Effect.Effec
 
 export const fetchLibraryHome: LibraryEffect<LibraryHomeState> = withConnection(
   runTauriCommand(() => commands.libraryVideoHome()),
+);
+
+// Local Library Image cache status; independent of a live connection.
+export const fetchImageCacheStatus: LibraryEffect<ImageCacheStatus> = runTauriCommand(() =>
+  commands.imageCacheStatus(),
+);
+
+export const clearImageCache: LibraryEffect<ImageCacheStatus> = runTauriCommand(() =>
+  commands.imageCacheClear(),
 );
 
 export const fetchLibraryShortcuts: LibraryEffect<LibraryShortcutsState> = withConnection(
