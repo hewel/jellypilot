@@ -5,7 +5,6 @@ mod auth_profiles;
 mod command;
 mod config;
 mod hls_proxy;
-#[expect(dead_code, reason = "prefactored for image proxy write-through")]
 mod image_cache;
 mod image_proxy;
 mod image_ref;
@@ -86,11 +85,26 @@ pub fn run() {
 
       // Load config from disk (store plugin is now available)
       let loaded_config = command::load_config_from_store(app.handle());
-      match app.path().app_cache_dir() {
+      let image_cache = match app.path().app_cache_dir() {
         Ok(cache_dir) => {
-          *image_cache_for_setup.write() = Some(Arc::new(ImageCache::new(cache_dir.clone())));
           mpv_for_setup.set_demuxer_cache_dir(cache_dir.clone());
           hls_proxy_for_setup.install(HlsProxy::start(Some(cache_dir.join("hls"))));
+          match tauri::async_runtime::block_on(ImageCache::init(
+            cache_dir,
+            image_cache::IMAGE_CACHE_MAX_BYTES,
+          )) {
+            Ok(cache) => {
+              image_cache_for_setup.write().replace(Arc::clone(&cache));
+              Some(cache)
+            }
+            Err(e) => {
+              log::warn!(
+                "Image cache unavailable ({}); serving images from origin",
+                e
+              );
+              None
+            }
+          }
         }
         Err(e) => {
           log::warn!(
@@ -98,9 +112,11 @@ pub fn run() {
             e
           );
           hls_proxy_for_setup.install(HlsProxy::start(None));
+          None
         }
-      }
-      let image_proxy_res = ImageProxy::start(jellyfin_for_setup.clone());
+      };
+      let image_proxy_res =
+        ImageProxy::start(jellyfin_for_setup.clone(), image_cache, config.clone());
       if let Err(e) = &image_proxy_res {
         log::warn!("Failed to start localhost image proxy: {}", e);
       }
