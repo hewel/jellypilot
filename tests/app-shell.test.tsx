@@ -21,6 +21,7 @@ import type {
   VideoSeasonEpisodes,
   VideoShowDetail,
 } from '../src/bindings';
+import { itemThumb } from '../src/components/AppSidebar.styles';
 import { ToastProvider } from '../src/components/ToastProvider';
 import { queryKeys } from '../src/effects/query';
 import { createJellyPilotRouter } from '../src/router';
@@ -1177,7 +1178,11 @@ test('sidebar shows library artwork with icon fallback', async () => {
 
   await screen.findByRole('navigation', { name: 'Sidebar' });
   const moviesLink = await screen.findByRole('link', { name: 'Movies' });
-  expect(moviesLink.querySelector('img')).toHaveAttribute('src', imageSource('movies-art'));
+  const moviesArtwork = moviesLink.querySelector('img');
+  expect(moviesArtwork).toHaveAttribute('src', imageSource('movies-art'));
+  // Contractual fixed 24px thumb slot: without it the artwork renders at natural
+  // size and pushes the row labels out of the sidebar.
+  expect(moviesArtwork).toHaveClass(itemThumb);
   const showsLink = screen.getByRole('link', { name: 'Shows' });
   expect(showsLink.querySelector('img')).toBeNull();
   expect(showsLink.querySelector('svg')).not.toBeNull();

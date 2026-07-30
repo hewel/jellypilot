@@ -176,6 +176,7 @@ function SidebarItemThumb(props: { artworkImageId: string | null; fallbackIcon: 
       imageId={props.artworkImageId}
       alt=""
       aria-hidden={true}
+      class={styles.itemThumb}
       fallback={<span class={styles.itemIconSlot}>{props.fallbackIcon}</span>}
     />
   );
