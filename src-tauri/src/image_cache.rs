@@ -873,6 +873,25 @@ impl ImageCache {
     Ok(())
   }
 
+  /// Record a deterministic, terminal conversion failure (e.g. corrupt source)
+  /// that keeps the origin active and is never retried. Distinct from
+  /// `not_eligible` (a policy exclusion) so statistics can tell them apart.
+  pub async fn record_conversion_failed_terminal(
+    &self,
+    cache_key: &str,
+    error: &str,
+  ) -> Result<(), ImageCacheError> {
+    sqlx::query(
+      "UPDATE entries SET conv_state = 'failed', conv_attempts = ?, conv_next_at = 0, conv_error = ? WHERE cache_key = ?",
+    )
+    .bind(MAX_CONVERSION_ATTEMPTS as i64)
+    .bind(error)
+    .bind(cache_key)
+    .execute(&self.pool)
+    .await?;
+    Ok(())
+  }
+
   /// Record a transient failure, scheduling the next retry attempt (or marking
   /// terminal `failed` once attempts are exhausted).
   pub async fn record_conversion_failure(
