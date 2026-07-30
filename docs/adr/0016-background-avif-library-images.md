@@ -1,3 +1,5 @@
 # Optimize Library Images to AVIF outside the serving path
 
+_Superseded by [ADR 0017](0017-origin-encoded-library-image-cache.md)._
+
 JellyPilot will stream uncached origin Library Images to the viewer while caching them best-effort, then let one cache-directory-wide, foreground-gated worker convert eligible static JPEG, PNG, and WebP originals to AVIF; encoding never runs in the image-serving path. Only normalized, structurally valid output at least 15% smaller becomes active through same-directory atomic publication and a SQLite state transition, after which the original is removed when readers release it; stable logical image references revalidate the active variant, and a WebView rejection quarantines AVIF and restores the origin. This favors immediate viewing, bounded cross-platform resource use, and crash recovery over inline conversion, multi-worker throughput, and immutable representation URLs.

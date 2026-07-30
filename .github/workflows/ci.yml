@@ -58,8 +58,8 @@ jobs:
       - uses: swatinem/rust-cache@v2
         with:
           workspaces: 'src-tauri'
-      # Production feature set = default features (SQLite catalog + image/ravif
-      # codec). Deliberately not --all-features so the dav1d benchmark decoder
-      # and the webdriver harness stay out of the production compile gate.
-      - name: Compile Tauri backend (production SQLite + codec)
+      # Production feature set = default features (SQLite Library Image Cache).
+      # Deliberately not --all-features so the webdriver harness stays out of
+      # the production compile gate.
+      - name: Compile Tauri backend (production SQLite cache)
         run: cargo check --locked --manifest-path src-tauri/Cargo.toml

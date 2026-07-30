@@ -43,13 +43,7 @@ pub const IMAGE_CACHE_MAX_ENTRY_BYTES: u64 = 64 * 1024 * 1024;
 pub const WRITER_BUFFER_BYTES: usize = 1024 * 1024;
 /// Maximum number of concurrent disk writers process-wide.
 pub const MAX_CONCURRENT_WRITERS: usize = 8;
-/// Current conversion-policy version. Bumping this requeues terminal entries
-/// whose originals still exist so they are re-evaluated under the new policy.
-pub const CONVERSION_POLICY_VERSION: i64 = 1;
-/// Total conversion attempts for transient failures (initial + 3 retries).
-pub const MAX_CONVERSION_ATTEMPTS: u32 = 4;
-/// Retry delays after attempt 1, 2, 3: 10s, 1m, 10m.
-pub const RETRY_DELAYS_MS: [i64; 3] = [10_000, 60_000, 600_000];
+const CATALOG_SCHEMA_VERSION: i64 = 4;
 
 const CATALOG_FILE: &str = "catalog.sqlite3";
 
@@ -187,19 +181,17 @@ struct EntryRow {
   content_digest: Option<String>,
 }
 
-/// SQLite-backed global Library Image cache.
+/// SQLite-backed global Library Image Cache.
 pub struct ImageCache {
   root: PathBuf,
   pool: SqlitePool,
   max_bytes: u64,
   active_readers: ActiveReaders,
   writer_permits: Arc<Semaphore>,
-  /// Serializes admission/eviction so budget accounting stays consistent.
+  /// Serializes admission, eviction, and destructive maintenance.
   commit_lock: TokioMutex<()>,
-  /// Wakes the background conversion worker when new work is committed.
-  work_notify: StdMutex<Option<Arc<tokio::sync::Notify>>>,
-  /// Destructive-maintenance epoch. Bumped by Clear so writers/encoders that
-  /// started before it cannot publish across the reset.
+  /// Destructive-maintenance epoch. Bumped by Clear so older writers cannot
+  /// publish across the reset.
   epoch: AtomicU64,
   /// Set while a Clear is in progress so status can report the clearing state.
   clearing: std::sync::atomic::AtomicBool,
@@ -214,12 +206,8 @@ pub struct ImageCache {
 pub struct ImageCacheStatus {
   /// Bytes currently committed to disk across every saved server.
   pub committed_bytes: u32,
-  /// Pending conversion work, including delayed (backoff-scheduled) retries.
-  pub pending_count: u32,
-  /// Estimated bytes saved by retained accepted AVIFs (original minus AVIF).
-  pub estimated_savings: u32,
-  /// Terminal conversion failures currently recorded.
-  pub terminal_failures: u32,
+  /// Number of committed Library Images across every saved server.
+  pub entry_count: u32,
   /// Whether image disk caching is currently enabled.
   pub enabled: bool,
   /// Whether a Clear is currently in progress.
@@ -272,11 +260,39 @@ impl ImageCache {
       .connect_with(options)
       .await?;
 
-    Self::migrate(&pool).await?;
+    Self::migrate(&pool, &images_dir).await?;
     Ok(pool)
   }
 
-  async fn migrate(pool: &SqlitePool) -> Result<(), sqlx::Error> {
+  async fn migrate(pool: &SqlitePool, images_dir: &Path) -> Result<(), ImageCacheError> {
+    let version: i64 = sqlx::query_scalar("PRAGMA user_version")
+      .fetch_one(pool)
+      .await?;
+
+    if version < CATALOG_SCHEMA_VERSION {
+      Self::remove_legacy_cache_files(images_dir).await?;
+
+      let mut transaction = pool.begin().await?;
+      sqlx::query("DROP TABLE IF EXISTS entries")
+        .execute(&mut *transaction)
+        .await?;
+      Self::create_schema(&mut transaction).await?;
+      sqlx::query("PRAGMA user_version = 4")
+        .execute(&mut *transaction)
+        .await?;
+      transaction.commit().await?;
+      return Ok(());
+    }
+
+    let mut transaction = pool.begin().await?;
+    Self::create_schema(&mut transaction).await?;
+    transaction.commit().await?;
+    Ok(())
+  }
+
+  async fn create_schema(
+    transaction: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
+  ) -> Result<(), sqlx::Error> {
     sqlx::query(
       r#"
       CREATE TABLE IF NOT EXISTS entries (
@@ -287,114 +303,40 @@ impl ImageCache {
         content_type   TEXT,
         content_digest TEXT,
         accessed_at    INTEGER NOT NULL,
-        created_at     INTEGER NOT NULL,
-        active_kind    TEXT NOT NULL DEFAULT 'origin',
-        original_file_name TEXT,
-        original_size_bytes INTEGER,
-        original_content_type TEXT,
-        original_content_digest TEXT,
-        avif_file_name TEXT,
-        avif_size_bytes INTEGER,
-        avif_content_digest TEXT,
-        conv_state     TEXT NOT NULL DEFAULT 'pending',
-        conv_attempts  INTEGER NOT NULL DEFAULT 0,
-        conv_next_at   INTEGER NOT NULL DEFAULT 0,
-        conv_policy_version INTEGER NOT NULL DEFAULT 0,
-        conv_error     TEXT
+        created_at     INTEGER NOT NULL
       )
       "#,
     )
-    .execute(pool)
+    .execute(&mut **transaction)
     .await?;
-
     sqlx::query("CREATE INDEX IF NOT EXISTS idx_entries_accessed ON entries (accessed_at)")
-      .execute(pool)
+      .execute(&mut **transaction)
       .await?;
     sqlx::query("CREATE INDEX IF NOT EXISTS idx_entries_scope ON entries (scope)")
-      .execute(pool)
+      .execute(&mut **transaction)
       .await?;
-
-    // Versioned migrations for catalogs created by earlier builds.
-    let version: i64 = sqlx::query_scalar("PRAGMA user_version")
-      .fetch_one(pool)
-      .await?;
-    if version < 1 {
-      // v1 adds the active-representation content digest used for ETags.
-      Self::add_column_if_missing(pool, "entries", "content_digest", "TEXT").await?;
-      sqlx::query("PRAGMA user_version = 1").execute(pool).await?;
-    }
-    if version < 2 {
-      // v2 adds serving state (active representation) and durable conversion
-      // state for the background AVIF worker.
-      Self::add_column_if_missing(
-        pool,
-        "entries",
-        "active_kind",
-        "TEXT NOT NULL DEFAULT 'origin'",
-      )
-      .await?;
-      Self::add_column_if_missing(pool, "entries", "original_file_name", "TEXT").await?;
-      Self::add_column_if_missing(pool, "entries", "original_size_bytes", "INTEGER").await?;
-      Self::add_column_if_missing(pool, "entries", "avif_file_name", "TEXT").await?;
-      Self::add_column_if_missing(pool, "entries", "avif_size_bytes", "INTEGER").await?;
-      Self::add_column_if_missing(pool, "entries", "avif_content_digest", "TEXT").await?;
-      Self::add_column_if_missing(
-        pool,
-        "entries",
-        "conv_state",
-        "TEXT NOT NULL DEFAULT 'pending'",
-      )
-      .await?;
-      Self::add_column_if_missing(
-        pool,
-        "entries",
-        "conv_attempts",
-        "INTEGER NOT NULL DEFAULT 0",
-      )
-      .await?;
-      Self::add_column_if_missing(
-        pool,
-        "entries",
-        "conv_next_at",
-        "INTEGER NOT NULL DEFAULT 0",
-      )
-      .await?;
-      Self::add_column_if_missing(
-        pool,
-        "entries",
-        "conv_policy_version",
-        "INTEGER NOT NULL DEFAULT 0",
-      )
-      .await?;
-      Self::add_column_if_missing(pool, "entries", "conv_error", "TEXT").await?;
-      sqlx::query("PRAGMA user_version = 2").execute(pool).await?;
-    }
-    if version < 3 {
-      // v3 adds original content metadata for AVIF rejection recovery.
-      Self::add_column_if_missing(pool, "entries", "original_content_type", "TEXT").await?;
-      Self::add_column_if_missing(pool, "entries", "original_content_digest", "TEXT").await?;
-      sqlx::query("PRAGMA user_version = 3").execute(pool).await?;
-    }
     Ok(())
   }
 
-  async fn add_column_if_missing(
-    pool: &SqlitePool,
-    table: &str,
-    column: &str,
-    definition: &str,
-  ) -> Result<(), sqlx::Error> {
-    let exists: bool = sqlx::query_scalar(&format!(
-      "SELECT EXISTS (SELECT 1 FROM pragma_table_info('{table}') WHERE name = '{column}')"
-    ))
-    .fetch_one(pool)
-    .await?;
-    if !exists {
-      sqlx::query(&format!(
-        "ALTER TABLE {table} ADD COLUMN {column} {definition}"
-      ))
-      .execute(pool)
-      .await?;
+  async fn remove_legacy_cache_files(images_dir: &Path) -> Result<(), ImageCacheError> {
+    let mut entries = tokio::fs::read_dir(images_dir).await?;
+    while let Some(entry) = entries.next_entry().await? {
+      let name = entry.file_name();
+      let name = name.to_string_lossy();
+      if matches!(
+        name.as_ref(),
+        CATALOG_FILE | "catalog.sqlite3-wal" | "catalog.sqlite3-shm"
+      ) || name.starts_with(".corrupt-")
+      {
+        continue;
+      }
+
+      let file_type = entry.file_type().await?;
+      if file_type.is_dir() {
+        tokio::fs::remove_dir_all(entry.path()).await?;
+      } else {
+        tokio::fs::remove_file(entry.path()).await?;
+      }
     }
     Ok(())
   }
@@ -407,15 +349,9 @@ impl ImageCache {
       active_readers: ActiveReaders::default(),
       writer_permits: Arc::new(Semaphore::new(MAX_CONCURRENT_WRITERS)),
       commit_lock: TokioMutex::new(()),
-      work_notify: StdMutex::new(None),
       epoch: AtomicU64::new(0),
       clearing: std::sync::atomic::AtomicBool::new(false),
     })
-  }
-
-  /// Register the notifier the conversion worker waits on for same-process work.
-  pub fn set_work_notify(&self, notify: Arc<tokio::sync::Notify>) {
-    *self.work_notify.lock() = Some(notify);
   }
 
   /// Current destructive-maintenance epoch.
@@ -423,14 +359,8 @@ impl ImageCache {
     self.epoch.load(Ordering::SeqCst)
   }
 
-  /// Test-only access to the catalog pool for assertions.
-  #[cfg(test)]
-  pub fn pool_for_test(&self) -> &SqlitePool {
-    &self.pool
-  }
-
-  /// Begin a destructive epoch: invalidates the right of any writer or encoder
-  /// that started earlier to publish across it. Triggered by the Clear action.
+  /// Begin a destructive epoch: invalidates any writer that started earlier.
+  /// Triggered by the Clear action.
   pub fn bump_epoch(&self) -> u64 {
     self.epoch.fetch_add(1, Ordering::SeqCst) + 1
   }
@@ -444,41 +374,21 @@ impl ImageCache {
   /// caller (config); everything else is derived from the catalog.
   pub async fn status(&self, enabled: bool) -> Result<ImageCacheStatus, ImageCacheError> {
     let committed_bytes = self.total_bytes().await?;
-    let savings: Option<i64> = sqlx::query_scalar(
-      "SELECT COALESCE(SUM(original_size_bytes - avif_size_bytes), 0) \
-       FROM entries \
-       WHERE active_kind = 'avif' AND original_size_bytes IS NOT NULL AND avif_size_bytes IS NOT NULL",
-    )
-    .fetch_one(&self.pool)
-    .await?;
-    // Pending includes delayed retries (failed rows that are still retryable).
-    let pending: i64 = sqlx::query_scalar(
-      "SELECT COUNT(*) FROM entries \
-       WHERE conv_state = 'pending' OR (conv_state = 'failed' AND conv_attempts < ?)",
-    )
-    .bind(MAX_CONVERSION_ATTEMPTS as i64)
-    .fetch_one(&self.pool)
-    .await?;
-    let failures: i64 = sqlx::query_scalar(
-      "SELECT COUNT(*) FROM entries WHERE conv_state = 'failed' AND conv_attempts >= ?",
-    )
-    .bind(MAX_CONVERSION_ATTEMPTS as i64)
-    .fetch_one(&self.pool)
-    .await?;
+    let entry_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM entries")
+      .fetch_one(&self.pool)
+      .await?;
     Ok(ImageCacheStatus {
       committed_bytes: u32::try_from(committed_bytes).unwrap_or(u32::MAX),
-      pending_count: u32::try_from(pending.max(0)).unwrap_or(u32::MAX),
-      estimated_savings: u32::try_from(savings.unwrap_or(0).max(0)).unwrap_or(u32::MAX),
-      terminal_failures: u32::try_from(failures.max(0)).unwrap_or(u32::MAX),
+      entry_count: u32::try_from(entry_count.max(0)).unwrap_or(u32::MAX),
       enabled,
       clearing: self.is_clearing(),
     })
   }
 
-  /// Clear the entire Library Image cache across every saved server. Establishes
-  /// a destructive maintenance epoch (so pre-Clear writers/encoders cannot
-  /// republish), removes every unpinned entry, and defers pinned (active-reader
-  /// or cross-process-locked) files without breaking their in-flight response.
+  /// Clear the entire Library Image Cache across every saved server. Establishes
+  /// a destructive maintenance epoch so pre-Clear writers cannot republish,
+  /// removes every unpinned entry, and defers pinned files without breaking
+  /// their in-flight response.
   pub async fn clear(&self) -> Result<(), ImageCacheError> {
     self.clearing.store(true, Ordering::SeqCst);
     self.bump_epoch();
@@ -488,39 +398,24 @@ impl ImageCache {
   }
 
   async fn clear_inner(&self) -> Result<(), ImageCacheError> {
-    // Serialize against commits, activation, and eviction.
     let _commit = self.commit_lock.lock().await;
-    let rows: Vec<(String, String, Option<String>, Option<String>)> = sqlx::query_as(
-      "SELECT cache_key, file_name, original_file_name, avif_file_name FROM entries",
-    )
-    .fetch_all(&self.pool)
-    .await?;
-    for (cache_key, file_name, original_file_name, avif_file_name) in rows {
-      let active_path = self.entry_path(&file_name);
-      if self.active_readers.is_active(&active_path) || is_file_locked(&active_path).await {
+    let rows: Vec<(String, String)> = sqlx::query_as("SELECT cache_key, file_name FROM entries")
+      .fetch_all(&self.pool)
+      .await?;
+    for (cache_key, file_name) in rows {
+      let path = self.entry_path(&file_name);
+      if self.active_readers.is_active(&path) || is_file_locked(&path).await {
         // Pinned by an in-flight read: keep the row and file so the response is
         // not broken; cleanup is deferred until the reader releases.
         continue;
       }
-      let _ = tokio::fs::remove_file(&active_path).await;
-      for other in [original_file_name, avif_file_name].into_iter().flatten() {
-        let path = self.entry_path(&other);
-        if path != active_path {
-          let _ = tokio::fs::remove_file(&path).await;
-        }
-      }
+      let _ = tokio::fs::remove_file(&path).await;
       sqlx::query("DELETE FROM entries WHERE cache_key = ?")
         .bind(&cache_key)
         .execute(&self.pool)
         .await?;
     }
     Ok(())
-  }
-
-  fn notify_work(&self) {
-    if let Some(notify) = self.work_notify.lock().as_ref() {
-      notify.notify_one();
-    }
   }
 
   /// Move a corrupt catalog aside without touching image files.
@@ -797,26 +692,15 @@ impl ImageCache {
       r#"
       INSERT INTO entries (
         cache_key, scope, file_name, size_bytes, content_type, content_digest,
-        accessed_at, created_at, active_kind, original_file_name, original_size_bytes,
-        original_content_type, original_content_digest,
-        conv_state, conv_attempts, conv_next_at, conv_policy_version
+        accessed_at, created_at
       )
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'origin', ?, ?, ?, ?, 'pending', 0, 0, ?)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT(cache_key) DO UPDATE SET
         file_name = excluded.file_name,
         size_bytes = excluded.size_bytes,
         content_type = excluded.content_type,
         content_digest = excluded.content_digest,
-        accessed_at = excluded.accessed_at,
-        active_kind = 'origin',
-        original_file_name = excluded.original_file_name,
-        original_size_bytes = excluded.original_size_bytes,
-        original_content_type = excluded.original_content_type,
-        original_content_digest = excluded.original_content_digest,
-        conv_state = 'pending',
-        conv_attempts = 0,
-        conv_next_at = 0,
-        conv_policy_version = excluded.conv_policy_version
+        accessed_at = excluded.accessed_at
       "#,
     )
     .bind(cache_key)
@@ -827,15 +711,8 @@ impl ImageCache {
     .bind(&content_digest)
     .bind(now)
     .bind(now)
-    .bind(file_name)
-    .bind(size_bytes as i64)
-    .bind(&content_type)
-    .bind(&content_digest)
-    .bind(CONVERSION_POLICY_VERSION)
     .execute(&self.pool)
     .await?;
-
-    self.notify_work();
     Ok(())
   }
 
@@ -909,466 +786,6 @@ impl ImageCache {
 
     Ok(total.saturating_add(incoming) <= self.max_bytes)
   }
-
-  // ---- Background AVIF conversion worker catalog API ----
-
-  /// Claim the oldest due pending/failed-retryable row for conversion.
-  ///
-  /// The claim is atomic (a conditional UPDATE) so only one process owns a row.
-  /// Returns `None` when no work is due.
-  pub async fn claim_work(&self, now_ms: i64) -> Result<Option<WorkClaim>, ImageCacheError> {
-    let claimed: Option<(String,)> = sqlx::query_as(
-      r#"
-      UPDATE entries
-      SET conv_state = 'encoding'
-      WHERE cache_key = (
-        SELECT cache_key FROM entries
-        WHERE conv_state IN ('pending', 'failed')
-          AND conv_attempts < ?
-          AND conv_next_at <= ?
-        ORDER BY created_at ASC
-        LIMIT 1
-      )
-      RETURNING cache_key
-      "#,
-    )
-    .bind(MAX_CONVERSION_ATTEMPTS as i64)
-    .bind(now_ms)
-    .fetch_optional(&self.pool)
-    .await?;
-
-    let Some((cache_key,)) = claimed else {
-      return Ok(None);
-    };
-
-    let row: Option<WorkRow> = sqlx::query_as(
-      r#"
-      SELECT cache_key, original_file_name, original_size_bytes
-      FROM entries WHERE cache_key = ?
-      "#,
-    )
-    .bind(&cache_key)
-    .fetch_optional(&self.pool)
-    .await?;
-
-    Ok(row.map(|r| WorkClaim {
-      cache_key: r.cache_key,
-      original_file_name: r.original_file_name.unwrap_or_default(),
-      original_size_bytes: r.original_size_bytes.unwrap_or(0).max(0) as u64,
-    }))
-  }
-
-  /// Record a terminal, non-retrying conversion outcome that keeps the origin
-  /// active (`not_eligible` or `evaluated` insufficient savings).
-  pub async fn record_conversion_skipped(
-    &self,
-    cache_key: &str,
-    state: &str,
-  ) -> Result<(), ImageCacheError> {
-    sqlx::query(
-      r#"
-      UPDATE entries
-      SET conv_state = ?, conv_error = NULL
-      WHERE cache_key = ?
-      "#,
-    )
-    .bind(state)
-    .bind(cache_key)
-    .execute(&self.pool)
-    .await?;
-    Ok(())
-  }
-
-  /// Record a deterministic, terminal conversion failure (e.g. corrupt source)
-  /// that keeps the origin active and is never retried. Distinct from
-  /// `not_eligible` (a policy exclusion) so statistics can tell them apart.
-  pub async fn record_conversion_failed_terminal(
-    &self,
-    cache_key: &str,
-    error: &str,
-  ) -> Result<(), ImageCacheError> {
-    sqlx::query(
-      "UPDATE entries SET conv_state = 'failed', conv_attempts = ?, conv_next_at = 0, conv_error = ? WHERE cache_key = ?",
-    )
-    .bind(MAX_CONVERSION_ATTEMPTS as i64)
-    .bind(error)
-    .bind(cache_key)
-    .execute(&self.pool)
-    .await?;
-    Ok(())
-  }
-
-  /// Record a transient failure, scheduling the next retry attempt (or marking
-  /// terminal `failed` once attempts are exhausted).
-  pub async fn record_conversion_failure(
-    &self,
-    cache_key: &str,
-    error: &str,
-    now_ms: i64,
-  ) -> Result<(), ImageCacheError> {
-    let attempts: Option<(i64,)> =
-      sqlx::query_as("SELECT conv_attempts FROM entries WHERE cache_key = ?")
-        .bind(cache_key)
-        .fetch_optional(&self.pool)
-        .await?;
-    let Some((attempts,)) = attempts else {
-      return Ok(());
-    };
-    let attempts = attempts + 1;
-    let (state, next_at) = if attempts >= MAX_CONVERSION_ATTEMPTS as i64 {
-      ("failed", 0)
-    } else {
-      let delay = RETRY_DELAYS_MS
-        .get(attempts as usize - 1)
-        .copied()
-        .unwrap_or(RETRY_DELAYS_MS[RETRY_DELAYS_MS.len() - 1]);
-      ("failed", now_ms + delay)
-    };
-    sqlx::query(
-      "UPDATE entries SET conv_state = ?, conv_attempts = ?, conv_next_at = ?, conv_error = ? WHERE cache_key = ?",
-    )
-    .bind(state)
-    .bind(attempts)
-    .bind(next_at)
-    .bind(error)
-    .bind(cache_key)
-    .execute(&self.pool)
-    .await?;
-    Ok(())
-  }
-
-  /// Publish a generated AVIF as the active representation. The AVIF file must
-  /// already be durably renamed to its final path by the caller.
-  #[allow(clippy::too_many_arguments)]
-  pub async fn activate_avif(
-    &self,
-    cache_key: &str,
-    avif_file_name: &str,
-    avif_size_bytes: u64,
-    avif_digest: &str,
-    avif_content_type: &str,
-    expected_epoch: u64,
-  ) -> Result<(), ImageCacheError> {
-    let _commit = self.commit_lock.lock().await;
-    // Epoch guard: an encode started before a destructive epoch must not
-    // publish across it.
-    if self.current_epoch() != expected_epoch {
-      return Err(ImageCacheError::WriterClosed);
-    }
-    sqlx::query(
-      r#"
-      UPDATE entries
-      SET active_kind = 'avif',
-          file_name = ?,
-          size_bytes = ?,
-          content_type = ?,
-          content_digest = ?,
-          avif_file_name = ?,
-          avif_size_bytes = ?,
-          avif_content_digest = ?,
-          conv_state = 'accepted',
-          conv_error = NULL
-      WHERE cache_key = ?
-      "#,
-    )
-    .bind(avif_file_name)
-    .bind(avif_size_bytes as i64)
-    .bind(avif_content_type)
-    .bind(avif_digest)
-    .bind(avif_file_name)
-    .bind(avif_size_bytes as i64)
-    .bind(avif_digest)
-    .bind(cache_key)
-    .execute(&self.pool)
-    .await?;
-    Ok(())
-  }
-
-  /// Remove the original file after AVIF activation, deferring while readers
-  /// hold it. Returns `true` if the original was removed (or already gone).
-  pub async fn remove_original_if_idle(&self, cache_key: &str) -> Result<bool, ImageCacheError> {
-    let row: Option<(Option<String>,)> =
-      sqlx::query_as("SELECT original_file_name FROM entries WHERE cache_key = ?")
-        .bind(cache_key)
-        .fetch_optional(&self.pool)
-        .await?;
-    let Some((Some(original_file_name),)) = row else {
-      return Ok(true);
-    };
-    let path = self.entry_path(&original_file_name);
-    if self.active_readers.is_active(&path) || is_file_locked(&path).await {
-      return Ok(false);
-    }
-    match tokio::fs::remove_file(&path).await {
-      Ok(()) => Ok(true),
-      Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(true),
-      Err(err) => Err(err.into()),
-    }
-  }
-
-  /// Reject an AVIF that the WebView cannot display. Restores the original as
-  /// active, deletes the AVIF file, and marks conversion as failed.
-  pub async fn reject_avif(&self, cache_key: &str) -> Result<(), ImageCacheError> {
-    let row: Option<RejectRow> = sqlx::query_as(
-      r#"
-        SELECT active_kind, original_file_name, original_size_bytes,
-               original_content_type, original_content_digest
-        FROM entries WHERE cache_key = ?
-        "#,
-    )
-    .bind(cache_key)
-    .fetch_optional(&self.pool)
-    .await?;
-
-    let Some(row) = row else {
-      return Ok(());
-    };
-    let RejectRow {
-      active_kind,
-      original_file_name,
-      original_size_bytes,
-      original_content_type,
-      original_content_digest,
-    } = row;
-
-    // Only act if AVIF is currently active.
-    if active_kind != "avif" {
-      return Ok(());
-    }
-
-    let Some(original_file_name) = original_file_name else {
-      // No original to restore; mark failed.
-      sqlx::query("UPDATE entries SET conv_state = 'failed', conv_error = 'rejected_no_original' WHERE cache_key = ?")
-        .bind(cache_key)
-        .execute(&self.pool)
-        .await?;
-      return Ok(());
-    };
-
-    let _commit = self.commit_lock.lock().await;
-
-    // Restore original as active.
-    sqlx::query(
-      r#"
-      UPDATE entries
-      SET active_kind = 'origin',
-          file_name = ?,
-          size_bytes = ?,
-          content_type = ?,
-          content_digest = ?,
-          conv_state = 'failed',
-          conv_error = 'rejected_by_webview'
-      WHERE cache_key = ?
-      "#,
-    )
-    .bind(&original_file_name)
-    .bind(original_size_bytes)
-    .bind(original_content_type)
-    .bind(original_content_digest)
-    .bind(cache_key)
-    .execute(&self.pool)
-    .await?;
-
-    // Delete the AVIF file.
-    let avif_file_name = Self::avif_file_name_for(&original_file_name);
-    let avif_path = self.entry_path(&avif_file_name);
-    match tokio::fs::remove_file(&avif_path).await {
-      Ok(()) => {}
-      Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
-      Err(err) => return Err(err.into()),
-    }
-
-    Ok(())
-  }
-
-  /// Recovery-on-adopt: reconcile durable state left by a crashed or upgraded
-  /// prior owner. Runs once by the worker immediately after it acquires the
-  /// cache-directory lock, so no live process can be mid-claim on any row it
-  /// touches.
-  pub async fn recover_on_adopt(&self) -> Result<(), ImageCacheError> {
-    self.reset_abandoned_claims().await?;
-    self.cleanup_stale_temps().await?;
-    self.requeue_policy_changed().await?;
-    self.recover_orphan_avifs().await?;
-    self.finish_deferred_origin_cleanup().await?;
-    Ok(())
-  }
-
-  /// Rows left in `encoding` by a crashed owner are reset to `pending` so the
-  /// new owner retries them. Safe because the exclusive worker lock proves no
-  /// live process can be encoding them.
-  async fn reset_abandoned_claims(&self) -> Result<(), ImageCacheError> {
-    sqlx::query(
-      "UPDATE entries SET conv_state='pending', conv_next_at=0 WHERE conv_state='encoding'",
-    )
-    .execute(&self.pool)
-    .await?;
-    Ok(())
-  }
-
-  /// Remove abandoned `.tmp-*` writer files, but only when a cross-process
-  /// exclusive lock proves no live writer still owns them.
-  async fn cleanup_stale_temps(&self) -> Result<(), ImageCacheError> {
-    let mut entries = match tokio::fs::read_dir(self.images_dir()).await {
-      Ok(entries) => entries,
-      Err(_) => return Ok(()),
-    };
-    while let Some(entry) = entries.next_entry().await? {
-      let name = entry.file_name();
-      let Some(name) = name.to_str() else { continue };
-      if !name.starts_with(".tmp-") {
-        continue;
-      }
-      let path = entry.path();
-      let lock_path = path.clone();
-      let removable = tokio::task::spawn_blocking(move || {
-        let file = std::fs::OpenOptions::new()
-          .read(true)
-          .write(true)
-          .open(&lock_path)
-          .ok()?;
-        // Non-blocking: acquiring the exclusive lock proves no writer owns it.
-        FileExt::try_lock_exclusive(&file).ok()?;
-        Some(())
-      })
-      .await
-      .map(|v| v.is_some())
-      .unwrap_or(false);
-      if removable {
-        let _ = tokio::fs::remove_file(&path).await;
-      }
-    }
-    Ok(())
-  }
-
-  /// Requeue terminal entries recorded under an older conversion policy whose
-  /// originals still exist. Active AVIF representations are left unchanged.
-  async fn requeue_policy_changed(&self) -> Result<(), ImageCacheError> {
-    let rows: Vec<(String, String)> = sqlx::query_as(
-      "SELECT cache_key, original_file_name FROM entries \
-       WHERE conv_policy_version != ? AND active_kind = 'origin' \
-         AND conv_state IN ('failed','not_eligible','evaluated') AND original_file_name IS NOT NULL",
-    )
-    .bind(CONVERSION_POLICY_VERSION)
-    .fetch_all(&self.pool)
-    .await?;
-    for (cache_key, original_file_name) in rows {
-      // Only requeue when the original bytes are still available to re-encode.
-      if tokio::fs::metadata(self.entry_path(&original_file_name))
-        .await
-        .is_err()
-      {
-        continue;
-      }
-      sqlx::query(
-        "UPDATE entries SET conv_state='pending', conv_attempts=0, conv_next_at=0, \
-         conv_error=NULL, conv_policy_version=? WHERE cache_key=?",
-      )
-      .bind(CONVERSION_POLICY_VERSION)
-      .bind(&cache_key)
-      .execute(&self.pool)
-      .await?;
-    }
-    Ok(())
-  }
-
-  /// Adopt final AVIF files that were renamed into place before a crash but
-  /// never activated in SQLite. Each candidate is structurally and economically
-  /// revalidated; valid files are activated, invalid files are deleted and the
-  /// row is requeued for a fresh encode.
-  async fn recover_orphan_avifs(&self) -> Result<(), ImageCacheError> {
-    let rows: Vec<(String, String, i64)> = sqlx::query_as(
-      "SELECT cache_key, original_file_name, original_size_bytes FROM entries \
-       WHERE active_kind = 'origin' AND original_file_name IS NOT NULL AND original_size_bytes IS NOT NULL",
-    )
-    .fetch_all(&self.pool)
-    .await?;
-    for (cache_key, original_file_name, original_size_bytes) in rows {
-      let avif_name = Self::avif_file_name_for(&original_file_name);
-      let avif_path = self.entry_path(&avif_name);
-      let Ok(avif_bytes) = tokio::fs::read(&avif_path).await else {
-        continue;
-      };
-      let avif_size = avif_bytes.len() as u64;
-      let structurally_valid = crate::avif_encode::parse_avif_dimensions(&avif_bytes).is_some();
-      let economically_valid =
-        crate::avif_encode::has_sufficient_saving(original_size_bytes.max(0) as u64, avif_size);
-      if structurally_valid && economically_valid {
-        let digest = format!("{:x}", Sha256::digest(&avif_bytes));
-        self
-          .activate_avif(
-            &cache_key,
-            &avif_name,
-            avif_size,
-            &digest,
-            "image/avif",
-            self.current_epoch(),
-          )
-          .await?;
-      } else {
-        // Invalid orphan: delete it and requeue the row for a fresh encode.
-        let _ = tokio::fs::remove_file(&avif_path).await;
-        sqlx::query("UPDATE entries SET conv_state='pending', conv_next_at=0 WHERE cache_key=?")
-          .bind(&cache_key)
-          .execute(&self.pool)
-          .await?;
-      }
-    }
-    Ok(())
-  }
-
-  /// Finish removing originals for rows that activated an AVIF but crashed
-  /// before the original was deleted. Retains the active AVIF and defers to
-  /// any active readers via the shared removal path.
-  async fn finish_deferred_origin_cleanup(&self) -> Result<(), ImageCacheError> {
-    let rows: Vec<(String,)> = sqlx::query_as(
-      "SELECT cache_key FROM entries WHERE active_kind = 'avif' AND original_file_name IS NOT NULL",
-    )
-    .fetch_all(&self.pool)
-    .await?;
-    for (cache_key,) in rows {
-      let _ = self.remove_original_if_idle(&cache_key).await?;
-    }
-    Ok(())
-  }
-
-  /// Path to a cache entry file by name.
-  pub fn path_for(&self, file_name: &str) -> PathBuf {
-    self.entry_path(file_name)
-  }
-
-  /// Derive the AVIF filename for an original entry file.
-  pub fn avif_file_name_for(original_file_name: &str) -> String {
-    let stem = original_file_name
-      .rsplit('.')
-      .nth(1)
-      .unwrap_or(original_file_name);
-    format!("{stem}.avif")
-  }
-}
-
-/// A row claimed by the conversion worker.
-#[derive(Debug, Clone)]
-pub struct WorkClaim {
-  pub cache_key: String,
-  pub original_file_name: String,
-  pub original_size_bytes: u64,
-}
-
-#[derive(FromRow)]
-struct WorkRow {
-  cache_key: String,
-  original_file_name: Option<String>,
-  original_size_bytes: Option<i64>,
-}
-
-#[derive(FromRow)]
-struct RejectRow {
-  active_kind: String,
-  original_file_name: Option<String>,
-  original_size_bytes: Option<i64>,
-  original_content_type: Option<String>,
-  original_content_digest: Option<String>,
 }
 
 /// Message sent from the serving path to an elected disk writer.

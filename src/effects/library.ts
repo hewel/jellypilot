@@ -22,7 +22,7 @@ import type {
 import type { Exit } from 'effect';
 import { Effect, Option } from 'effect';
 
-import { runTauriCommand, runTauriCommandRaw } from './commands';
+import { runTauriCommand } from './commands';
 import { connection } from './connection';
 import { CommandError } from './errors';
 
@@ -74,16 +74,6 @@ export const fetchImageCacheStatus: LibraryEffect<ImageCacheStatus> = runTauriCo
 export const clearImageCache: LibraryEffect<ImageCacheStatus> = runTauriCommand(() =>
   commands.imageCacheClear(),
 );
-
-// WebView AVIF rejection for one Library Image; best-effort recovery signal.
-export function rejectImageAvif(imageId: string): LibraryEffect<null> {
-  return runTauriCommand(() => commands.imageRejectAvif(imageId));
-}
-
-// One-time WebView AVIF decode capability report; gates background optimization.
-export function reportAvifCapability(supported: boolean): LibraryEffect<void> {
-  return runTauriCommandRaw(() => commands.imageReportAvifCapability(supported));
-}
 
 export const fetchLibraryShortcuts: LibraryEffect<LibraryShortcutsState> = withConnection(
   runTauriCommand(() => commands.libraryVideoShortcuts()),

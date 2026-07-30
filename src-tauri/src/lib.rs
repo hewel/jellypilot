@@ -2,8 +2,6 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 mod auth_profiles;
-pub mod avif_encode;
-mod avif_worker;
 mod command;
 mod config;
 mod hls_proxy;
@@ -54,8 +52,6 @@ pub fn run() {
   let hls_proxy_for_setup = hls_proxy_state.clone();
   let image_proxy_state = ImageProxyState::new();
   let image_proxy_for_setup = image_proxy_state.clone();
-  let foreground_gate = Arc::new(avif_worker::ForegroundGate::new());
-  let avif_capability = avif_worker::AvifCapability::new();
 
   // Create MPV client state
   let mpv_client = Arc::new(MpvClient::new(None));
@@ -73,7 +69,6 @@ pub fn run() {
     .manage(image_proxy_state)
     .manage(mpv_state)
     .manage(jellyfin_state)
-    .manage(avif_capability.clone())
     .invoke_handler(builder.invoke_handler())
     .plugin(tauri_plugin_store::Builder::new().build());
 
@@ -95,24 +90,11 @@ pub fn run() {
           mpv_for_setup.set_demuxer_cache_dir(cache_dir.clone());
           hls_proxy_for_setup.install(HlsProxy::start(Some(cache_dir.join("hls"))));
           match tauri::async_runtime::block_on(ImageCache::init(
-            cache_dir.clone(),
+            cache_dir,
             image_cache::IMAGE_CACHE_MAX_BYTES,
           )) {
             Ok(cache) => {
               image_cache_for_setup.write().replace(Arc::clone(&cache));
-              // Start the background AVIF conversion worker for this cache dir.
-              // The loop owns/releases the cache-dir lock itself: it yields to
-              // another enabled process when disabled and recovers durable
-              // state when it (re)acquires the lock.
-              let _worker = avif_worker::ConversionWorker::start(
-                Arc::clone(&cache),
-                cache_dir,
-                Arc::clone(&foreground_gate),
-                avif_capability.clone(),
-                config.clone(),
-              );
-              // Keep the worker alive for the app lifetime.
-              std::mem::forget(_worker);
               Some(cache)
             }
             Err(e) => {
@@ -133,13 +115,8 @@ pub fn run() {
           None
         }
       };
-      let image_proxy_res = ImageProxy::start(
-        jellyfin_for_setup.clone(),
-        image_cache,
-        config.clone(),
-        Arc::clone(&foreground_gate),
-        avif_capability.clone(),
-      );
+      let image_proxy_res =
+        ImageProxy::start(jellyfin_for_setup.clone(), image_cache, config.clone());
       if let Err(e) = &image_proxy_res {
         log::warn!("Failed to start localhost image proxy: {}", e);
       }

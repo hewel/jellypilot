@@ -68,6 +68,10 @@ _Avoid_: Full Jellyfin replacement, embedded player
 A still image shown in the Library Browser for media content. Library Images include Artwork and Backdrop and are not limited to portrait posters.
 _Avoid_: Poster as the umbrella term, thumbnail
 
+**Library Image Cache**:
+A best-effort disk copy of a media server's original Library Image response bytes, shared by Saved Service Profiles that refer to the same server. The Library Image Cache accelerates repeat browsing but is never a transformed representation or an offline source of truth.
+_Avoid_: Image optimizer, offline artwork library, Saved Service Profile cache
+
 **Sidebar**:
 The persistent left navigation area of the authenticated JellyPilot shell. The Sidebar lists Video Home, the user's video libraries, Now Playing, and Settings, and is always visible while JellyPilot is authenticated. At narrow window widths the Sidebar shows icons only.
 _Avoid_: Navigation rail, app drawer, floating controls
