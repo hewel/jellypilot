@@ -3,7 +3,7 @@ import { cx } from '@styled-system/css';
 import { Link } from '@tanstack/solid-router';
 import { Match } from 'effect';
 import { Film, LoaderCircle, Play, Tv } from 'lucide-solid';
-import { Show, createEffect, createMemo, createSignal } from 'solid-js';
+import { Show, createEffect, createMemo } from 'solid-js';
 import { imageSource } from '~utils/imageSource';
 import {
   isValidVideoHomeResumePosition,
@@ -11,6 +11,7 @@ import {
   type VideoHomeRowKind,
 } from '~utils/videoHomeLayout';
 
+import { LibraryImage } from './LibraryImage';
 import * as styles from './VideoCard.styles';
 import { CardTitle, type VideoCardAspectClass } from './videoCardShared';
 
@@ -95,7 +96,6 @@ function isDirectResumeCard(props: HomeVideoCardProps): props is HomeVideoCardPr
 export function HomeVideoCard(props: HomeVideoCardProps) {
   const aspectClass = (): VideoCardAspectClass => videoHomeAspect(props.rowKind);
 
-  const [imageFailed, setImageFailed] = createSignal(false);
   const artworkImageId = () => props.item.artworkImageId;
   const artworkUrl = createMemo(() => {
     const imageId = artworkImageId();
@@ -105,7 +105,6 @@ export function HomeVideoCard(props: HomeVideoCardProps) {
 
   createEffect(() => {
     artworkUrl();
-    setImageFailed(false);
   });
 
   const usesTvIcon = () => props.item.itemType === 'Series' || props.item.itemType === 'Episode';
@@ -129,36 +128,26 @@ export function HomeVideoCard(props: HomeVideoCardProps) {
       class={cx(styles.artwork, styles.aspect[aspectClass()], styles.homeArtwork)}
       data-aspect={aspectClass()}
     >
-      <Show
-        when={!imageFailed() ? artworkUrl() : null}
+      <LibraryImage
+        imageId={artworkImageId()}
+        alt={`${props.item.name} artwork`}
+        class={cx(styles.image, styles.homeImage)}
         fallback={
-          <Show
-            when={showPlayBadge()}
-            fallback={
-              <div class={styles.fallback}>
-                <Show
-                  when={usesTvIcon()}
-                  fallback={<Film class={styles.fallbackIcon} aria-hidden="true" />}
-                >
-                  <Tv class={styles.fallbackIcon} aria-hidden="true" />
-                </Show>
-                <span>No artwork</span>
-              </div>
-            }
-          >
+          showPlayBadge() ? (
             <div class={styles.directResumeFallback} aria-hidden="true" />
-          </Show>
+          ) : (
+            <div class={styles.fallback}>
+              <Show
+                when={usesTvIcon()}
+                fallback={<Film class={styles.fallbackIcon} aria-hidden="true" />}
+              >
+                <Tv class={styles.fallbackIcon} aria-hidden="true" />
+              </Show>
+              <span>No artwork</span>
+            </div>
+          )
         }
-      >
-        {(imageUrl) => (
-          <img
-            src={imageUrl()}
-            alt={`${props.item.name} artwork`}
-            class={cx(styles.image, styles.homeImage)}
-            onError={() => setImageFailed(true)}
-          />
-        )}
-      </Show>
+      />
 
       <Show when={progress() !== null}>
         <div

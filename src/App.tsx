@@ -4,6 +4,10 @@ import { RouterProvider } from '@tanstack/solid-router';
 
 import { ToastProvider } from './components/ToastProvider';
 import { router } from './router';
+import { probeAvifCapability } from './utils/avifCapability';
+
+// Probe AVIF capability once at startup.
+probeAvifCapability();
 
 const queryClient = new QueryClient({
   defaultOptions: {

@@ -93,6 +93,22 @@ struct InflightFetch {
   header_tx: watch::Sender<Option<FetchResult>>,
   body_tx: broadcast::Sender<BodyChunk>,
 }
+/// RAII guard that marks an active origin image fetch for the conversion
+/// worker's foreground gate.
+struct FetchGateGuard(Arc<crate::avif_worker::ForegroundGate>);
+
+impl FetchGateGuard {
+  fn new(gate: Arc<crate::avif_worker::ForegroundGate>) -> Self {
+    gate.image_fetch_started();
+    Self(gate)
+  }
+}
+
+impl Drop for FetchGateGuard {
+  fn drop(&mut self) {
+    self.0.image_fetch_finished();
+  }
+}
 
 pub struct ImageProxyInner {
   pub port: u16,
@@ -100,6 +116,8 @@ pub struct ImageProxyInner {
   pub client: Arc<JellyfinClient>,
   cache: Option<Arc<ImageCache>>,
   config: Arc<RwLock<AppConfig>>,
+  gate: Arc<crate::avif_worker::ForegroundGate>,
+  capability: crate::avif_worker::AvifCapability,
   coalescer: Arc<TokioMutex<HashMap<String, Arc<InflightFetch>>>>,
 }
 
@@ -119,8 +137,10 @@ impl ImageProxy {
     client: Arc<JellyfinClient>,
     cache: Option<Arc<ImageCache>>,
     config: Arc<RwLock<AppConfig>>,
+    gate: Arc<crate::avif_worker::ForegroundGate>,
+    capability: crate::avif_worker::AvifCapability,
   ) -> Result<Arc<Self>, ImageProxyError> {
-    Self::start_on_addr("127.0.0.1:0", client, cache, config)
+    Self::start_on_addr("127.0.0.1:0", client, cache, config, gate, capability)
   }
 
   pub fn start_on_addr(
@@ -128,6 +148,8 @@ impl ImageProxy {
     client: Arc<JellyfinClient>,
     cache: Option<Arc<ImageCache>>,
     config: Arc<RwLock<AppConfig>>,
+    gate: Arc<crate::avif_worker::ForegroundGate>,
+    capability: crate::avif_worker::AvifCapability,
   ) -> Result<Arc<Self>, ImageProxyError> {
     let std_listener = TcpListener::bind(addr)?;
     let port = std_listener.local_addr()?.port();
@@ -135,13 +157,14 @@ impl ImageProxy {
 
     let base_url = format!("http://127.0.0.1:{port}");
     let shutdown_token = CancellationToken::new();
-
     let inner = Arc::new(ImageProxyInner {
       port,
       base_url: base_url.clone(),
       client,
       cache,
       config,
+      gate,
+      capability,
       coalescer: Arc::new(TokioMutex::new(HashMap::new())),
     });
 
@@ -253,11 +276,21 @@ impl ImageProxyInner {
     partition: ImageCachePartition,
     if_none_match: Option<String>,
   ) -> Response {
-    // Cache hit: serve from disk without touching the origin.
+    // Cache hit: serve from disk without touching the origin, unless the
+    // active representation is AVIF and this platform's WebView cannot decode
+    // it. In that case we drop the reader and fall through to re-fetch the
+    // origin, which re-activates it (the worker stays gated off until a
+    // positive capability probe, so no encode loop forms).
     if self.cache_enabled() {
       if let Some(cache) = &self.cache {
         if let Some(reader) = cache.open_reader(&partition, remote_url).await {
-          return serve_cached_file(reader, if_none_match).await;
+          let avif_unsupported =
+            reader.content_type() == Some("image/avif") && !self.capability.is_supported();
+          if avif_unsupported {
+            drop(reader);
+          } else {
+            return serve_cached_file(reader, if_none_match).await;
+          }
         }
       }
     }
@@ -350,11 +383,15 @@ impl ImageProxyInner {
       client: self.client.clone(),
       cache: self.cache.clone(),
       config: self.config.clone(),
+      gate: self.gate.clone(),
+      capability: self.capability.clone(),
       coalescer: self.coalescer.clone(),
     })
   }
 
   async fn perform_origin_fetch(&self, remote_url: &str, partition: ImageCachePartition) {
+    // Mark an active origin image fetch so the conversion worker yields.
+    let _fetch_guard = FetchGateGuard::new(self.gate.clone());
     let client = self.client.clone();
     let remote_url_owned = remote_url.to_string();
 
@@ -585,10 +622,18 @@ mod tests {
     Arc::new(RwLock::new(AppConfig::default()))
   }
 
+  fn test_gate() -> Arc<crate::avif_worker::ForegroundGate> {
+    Arc::new(crate::avif_worker::ForegroundGate::new())
+  }
+  fn test_capability() -> crate::avif_worker::AvifCapability {
+    crate::avif_worker::AvifCapability::new()
+  }
+
   #[tokio::test]
   async fn test_bind_and_base_url_surface() {
     let client = Arc::new(JellyfinClient::new());
-    let proxy = ImageProxy::start(client, None, test_config()).expect("should bind port");
+    let proxy = ImageProxy::start(client, None, test_config(), test_gate(), test_capability())
+      .expect("should bind port");
     assert!(proxy.base_url.starts_with("http://127.0.0.1:"));
 
     let state = ImageProxyState::new();
@@ -608,6 +653,8 @@ mod tests {
       client,
       None,
       test_config(),
+      test_gate(),
+      test_capability(),
     );
     assert!(bind_res.is_err());
 
@@ -620,7 +667,8 @@ mod tests {
   #[tokio::test]
   async fn test_bad_token_route_and_method() {
     let client = Arc::new(JellyfinClient::new());
-    let proxy = ImageProxy::start(client, None, test_config()).expect("start proxy");
+    let proxy = ImageProxy::start(client, None, test_config(), test_gate(), test_capability())
+      .expect("start proxy");
 
     let http = ReqwestClient::new();
     let bad_url = format!("{}/image/invalid-token-12345", proxy.base_url);
@@ -647,7 +695,14 @@ mod tests {
   #[tokio::test]
   async fn test_auth_mismatch_and_provider_server_mismatch() {
     let client = Arc::new(JellyfinClient::new());
-    let proxy = ImageProxy::start(client.clone(), None, test_config()).expect("start proxy");
+    let proxy = ImageProxy::start(
+      client.clone(),
+      None,
+      test_config(),
+      test_gate(),
+      test_capability(),
+    )
+    .expect("start proxy");
 
     let server_url = "http://127.0.0.1:9999";
     let token = image_id_for_url(
@@ -749,7 +804,8 @@ mod tests {
         device_id: None,
       });
 
-    let proxy = ImageProxy::start(client, None, test_config()).expect("start proxy");
+    let proxy = ImageProxy::start(client, None, test_config(), test_gate(), test_capability())
+      .expect("start proxy");
 
     let remote_url = format!("{origin_base}/Items/img1/Images/Primary");
     let signed_token = image_id_for_url(
@@ -867,7 +923,14 @@ mod tests {
         .await
         .expect("init cache");
 
-    let proxy = ImageProxy::start(client, Some(cache), test_config()).expect("start proxy");
+    let proxy = ImageProxy::start(
+      client,
+      Some(cache),
+      test_config(),
+      test_gate(),
+      test_capability(),
+    )
+    .expect("start proxy");
 
     let remote_url = format!("{origin_base}/Items/cached/Images/Primary");
     let signed_token = image_id_for_url(
@@ -958,7 +1021,8 @@ mod tests {
     let config = test_config();
     config.write().image_disk_cache_enabled = false;
 
-    let proxy = ImageProxy::start(client, Some(cache), config).expect("start proxy");
+    let proxy = ImageProxy::start(client, Some(cache), config, test_gate(), test_capability())
+      .expect("start proxy");
 
     let remote_url = format!("{origin_base}/Items/disabled/Images/Primary");
     let signed_token = image_id_for_url(
@@ -1028,7 +1092,14 @@ mod tests {
       crate::image_cache::ImageCache::init(dir.clone(), crate::image_cache::IMAGE_CACHE_MAX_BYTES)
         .await
         .expect("init cache");
-    let proxy = ImageProxy::start(client, Some(cache), test_config()).expect("start proxy");
+    let proxy = ImageProxy::start(
+      client,
+      Some(cache),
+      test_config(),
+      test_gate(),
+      test_capability(),
+    )
+    .expect("start proxy");
 
     let remote_url = format!("{origin_base}/Items/etag/Images/Primary");
     let signed_token = image_id_for_url(
@@ -1119,6 +1190,242 @@ mod tests {
     );
     let stale_body = stale_resp.text().await.expect("stale body");
     assert_eq!(stale_body, "etag-png-bytes");
+
+    let _ = std::fs::remove_dir_all(&dir);
+  }
+
+  fn test_capability_supported() -> crate::avif_worker::AvifCapability {
+    let cap = crate::avif_worker::AvifCapability::new();
+    cap.set_supported(true);
+    cap
+  }
+
+  // Seed an entry whose active representation is AVIF (file on disk + catalog
+  // switched), mirroring a completed background conversion.
+  async fn seed_avif_active(
+    cache: &Arc<crate::image_cache::ImageCache>,
+    server_url: &str,
+    url: &str,
+  ) -> (String, Vec<u8>) {
+    let partition =
+      crate::image_cache::ImageCache::partition(MediaServerProvider::Jellyfin, server_url);
+    let origin_body = b"original-jpeg-bytes".to_vec();
+    let mut writer = cache
+      .try_begin_writer(
+        &partition,
+        url,
+        Some("image/jpeg"),
+        Some(origin_body.len() as u64),
+      )
+      .await
+      .expect("writer admitted");
+    assert!(writer.try_push(bytes::Bytes::copy_from_slice(&origin_body)));
+    writer.finish();
+    let reader = loop {
+      if let Some(r) = cache.open_reader(&partition, url).await {
+        break r;
+      }
+      tokio::time::sleep(Duration::from_millis(10)).await;
+    };
+    let original_name = reader
+      .path()
+      .file_name()
+      .unwrap()
+      .to_str()
+      .unwrap()
+      .to_string();
+    drop(reader);
+
+    let avif_name = crate::image_cache::ImageCache::avif_file_name_for(&original_name);
+    let avif_bytes = b"fake-avif-bytes-for-proxy".to_vec();
+    tokio::fs::write(cache.path_for(&avif_name), &avif_bytes)
+      .await
+      .unwrap();
+    let cache_key = crate::image_cache::ImageCache::cache_key(&partition, url);
+    cache
+      .activate_avif(
+        &cache_key,
+        &avif_name,
+        avif_bytes.len() as u64,
+        "abc123",
+        "image/avif",
+      )
+      .await
+      .unwrap();
+    (cache_key, avif_bytes)
+  }
+
+  #[tokio::test]
+  async fn test_unsupported_capability_refetches_avif_only_entry() {
+    let dir = std::env::temp_dir().join(format!("proxy_cap_unsup_{}", uuid::Uuid::new_v4()));
+    let _ = std::fs::create_dir_all(&dir);
+
+    let listener = TokioTcpListener::bind("127.0.0.1:0")
+      .await
+      .expect("bind mock");
+    let origin_port = listener.local_addr().expect("port").port();
+    let origin_base = format!("http://127.0.0.1:{origin_port}");
+    let origin_hits = Arc::new(AtomicUsize::new(0));
+    let hits = origin_hits.clone();
+    let mock_app = Router::new().route(
+      "/Items/cap/Images/Primary",
+      get(move || {
+        let hits = hits.clone();
+        async move {
+          hits.fetch_add(1, Ordering::SeqCst);
+          (
+            [(header::CONTENT_TYPE, "image/jpeg")],
+            "refetched-origin-bytes",
+          )
+        }
+      }),
+    );
+    tokio::spawn(async move {
+      let _ = axum::serve(listener, mock_app).await;
+    });
+
+    let client = Arc::new(JellyfinClient::new());
+    client
+      .login()
+      .adopt_validated_session(&crate::jellyfin::SavedSession {
+        provider: MediaServerProvider::Jellyfin,
+        server_url: origin_base.clone(),
+        access_token: "t".into(),
+        user_id: "u".into(),
+        user_name: "T".into(),
+        server_name: None,
+        device_id: None,
+      });
+
+    let cache =
+      crate::image_cache::ImageCache::init(dir.clone(), crate::image_cache::IMAGE_CACHE_MAX_BYTES)
+        .await
+        .expect("init cache");
+    let remote_url = format!("{origin_base}/Items/cap/Images/Primary");
+    let _ = seed_avif_active(&cache, &origin_base, &remote_url).await;
+
+    // Capability defaults to unsupported: an AVIF-active entry must NOT be
+    // served; the proxy re-fetches the origin instead.
+    let proxy = ImageProxy::start(
+      client,
+      Some(cache),
+      test_config(),
+      test_gate(),
+      test_capability(),
+    )
+    .expect("start proxy");
+
+    let signed = image_id_for_url(
+      MediaServerProvider::Jellyfin,
+      &origin_base,
+      remote_url.clone(),
+      ImageRefKind::Artwork,
+    )
+    .expect("sign");
+    let url = format!("{}/image/{}", proxy.base_url, signed);
+    let http = ReqwestClient::new();
+    let resp = http.get(&url).send().await.expect("req");
+    assert_eq!(resp.status(), StatusCode::OK);
+    assert_eq!(
+      resp
+        .headers()
+        .get(header::CONTENT_TYPE)
+        .and_then(|v| v.to_str().ok()),
+      Some("image/jpeg"),
+      "unsupported platform must receive the re-fetched origin, not AVIF"
+    );
+    let body = resp.text().await.expect("body");
+    assert_eq!(body, "refetched-origin-bytes");
+    assert_eq!(
+      origin_hits.load(Ordering::SeqCst),
+      1,
+      "unsupported capability must trigger an origin re-fetch"
+    );
+
+    let _ = std::fs::remove_dir_all(&dir);
+  }
+
+  #[tokio::test]
+  async fn test_supported_capability_serves_cached_avif() {
+    let dir = std::env::temp_dir().join(format!("proxy_cap_sup_{}", uuid::Uuid::new_v4()));
+    let _ = std::fs::create_dir_all(&dir);
+
+    let listener = TokioTcpListener::bind("127.0.0.1:0")
+      .await
+      .expect("bind mock");
+    let origin_port = listener.local_addr().expect("port").port();
+    let origin_base = format!("http://127.0.0.1:{origin_port}");
+    let origin_hits = Arc::new(AtomicUsize::new(0));
+    let hits = origin_hits.clone();
+    let mock_app = Router::new().route(
+      "/Items/cap2/Images/Primary",
+      get(move || {
+        let hits = hits.clone();
+        async move {
+          hits.fetch_add(1, Ordering::SeqCst);
+          ([(header::CONTENT_TYPE, "image/jpeg")], "should-not-serve")
+        }
+      }),
+    );
+    tokio::spawn(async move {
+      let _ = axum::serve(listener, mock_app).await;
+    });
+
+    let client = Arc::new(JellyfinClient::new());
+    client
+      .login()
+      .adopt_validated_session(&crate::jellyfin::SavedSession {
+        provider: MediaServerProvider::Jellyfin,
+        server_url: origin_base.clone(),
+        access_token: "t".into(),
+        user_id: "u".into(),
+        user_name: "T".into(),
+        server_name: None,
+        device_id: None,
+      });
+
+    let cache =
+      crate::image_cache::ImageCache::init(dir.clone(), crate::image_cache::IMAGE_CACHE_MAX_BYTES)
+        .await
+        .expect("init cache");
+    let remote_url = format!("{origin_base}/Items/cap2/Images/Primary");
+    let (_key, avif_bytes) = seed_avif_active(&cache, &origin_base, &remote_url).await;
+
+    let proxy = ImageProxy::start(
+      client,
+      Some(cache),
+      test_config(),
+      test_gate(),
+      test_capability_supported(),
+    )
+    .expect("start proxy");
+
+    let signed = image_id_for_url(
+      MediaServerProvider::Jellyfin,
+      &origin_base,
+      remote_url.clone(),
+      ImageRefKind::Artwork,
+    )
+    .expect("sign");
+    let url = format!("{}/image/{}", proxy.base_url, signed);
+    let http = ReqwestClient::new();
+    let resp = http.get(&url).send().await.expect("req");
+    assert_eq!(resp.status(), StatusCode::OK);
+    assert_eq!(
+      resp
+        .headers()
+        .get(header::CONTENT_TYPE)
+        .and_then(|v| v.to_str().ok()),
+      Some("image/avif"),
+      "supported platform must receive the cached AVIF"
+    );
+    let body = resp.bytes().await.expect("body");
+    assert_eq!(body.as_ref(), avif_bytes.as_slice());
+    assert_eq!(
+      origin_hits.load(Ordering::SeqCst),
+      0,
+      "supported capability must serve from cache without origin"
+    );
 
     let _ = std::fs::remove_dir_all(&dir);
   }

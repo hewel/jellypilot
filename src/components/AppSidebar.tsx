@@ -3,7 +3,7 @@ import { createQuery } from '@tanstack/solid-query';
 import { Link, useLocation, useParams } from '@tanstack/solid-router';
 import { Exit } from 'effect';
 import { Film, House, PanelLeftClose, PanelLeftOpen, Tv } from 'lucide-solid';
-import { For, Show, createEffect, createMemo, createSignal, type JSX } from 'solid-js';
+import { For, Show, createMemo, type JSX } from 'solid-js';
 import { fetchConnectionState } from '~effects/connection';
 import { fetchLibraryShortcuts, fetchVideoItemShortcut } from '~effects/library';
 import {
@@ -12,11 +12,11 @@ import {
   queryKeys,
   runExit,
 } from '~effects/query';
-import { imageSource } from '~utils/imageSource';
 import { createSidebarPreferences } from '~utils/sidebarPreferences';
 import { createSidebarWipe, startSidebarWipe } from '~utils/sidebarWipe';
 
 import * as styles from './AppSidebar.styles';
+import { LibraryImage } from './library/LibraryImage';
 import NowPlayingDrawer from './NowPlayingDrawer';
 import SettingsModal from './SettingsModal';
 import { Button } from './ui';
@@ -171,28 +171,12 @@ export default function AppSidebar(props: AppSidebarProps) {
 }
 
 function SidebarItemThumb(props: { artworkImageId: string | null; fallbackIcon: JSX.Element }) {
-  const [imageFailed, setImageFailed] = createSignal(false);
-  const artworkUrl = createMemo(() =>
-    props.artworkImageId ? imageSource(props.artworkImageId) : '',
-  );
-  createEffect(() => {
-    artworkUrl();
-    setImageFailed(false);
-  });
   return (
-    <Show
-      when={!imageFailed() ? artworkUrl() : null}
+    <LibraryImage
+      imageId={props.artworkImageId}
+      alt=""
+      aria-hidden={true}
       fallback={<span class={styles.itemIconSlot}>{props.fallbackIcon}</span>}
-    >
-      {(imageUrl) => (
-        <img
-          src={imageUrl()}
-          alt=""
-          aria-hidden="true"
-          class={styles.itemThumb}
-          onError={() => setImageFailed(true)}
-        />
-      )}
-    </Show>
+    />
   );
 }

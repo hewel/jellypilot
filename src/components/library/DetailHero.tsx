@@ -1,10 +1,10 @@
 import { Link } from '@tanstack/solid-router';
 import { ChevronLeft } from 'lucide-solid';
-import { For, type JSX, Show, createMemo } from 'solid-js';
-import { imageSource } from '~utils/imageSource';
+import { For, type JSX, Show } from 'solid-js';
 
 import { StatusBadge } from '../ui';
 import * as styles from './DetailHero.styles';
+import { LibraryImage } from './LibraryImage';
 
 export interface DetailHeroInfoRow {
   label: string;
@@ -37,21 +37,20 @@ export function DetailHero(props: {
   onBack: () => void;
 }) {
   const hasSeriesMeta = () => Boolean(props.seriesName) || Boolean(props.episodeCode);
-  const imageUrl = createMemo(() => (props.imageId ? imageSource(props.imageId) : ''));
 
   return (
     <section class={styles.hero} aria-labelledby={props.titleId}>
       <div class={styles.backdrop}>
-        <Show
-          when={imageUrl()}
+        <LibraryImage
+          imageId={props.imageId}
+          alt={`${props.name} backdrop`}
+          class={styles.backdropImage}
           fallback={
             <div class={styles.backdropFallback} aria-hidden="true">
               {props.name.charAt(0)}
             </div>
           }
-        >
-          {(url) => <img src={url()} alt={`${props.name} backdrop`} class={styles.backdropImage} />}
-        </Show>
+        />
         <div class={styles.scrim} aria-hidden="true" />
       </div>
 

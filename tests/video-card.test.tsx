@@ -13,7 +13,10 @@ import { imageSource, resetImageProxyBase, setImageProxyBase } from '../src/util
 import { TestQueryProvider } from './query-client';
 
 beforeEach(() => setImageProxyBase('http://127.0.0.1:43127'));
-afterEach(resetImageProxyBase);
+afterEach(() => {
+  resetImageProxyBase();
+  document.body.innerHTML = '';
+});
 
 function renderWithRouter(content: () => JSX.Element) {
   const root = document.createElement('div');
@@ -130,8 +133,9 @@ test('LibraryVideoCard falls back when the proxy image load fails', () => {
     />
   ));
 
+  // First error triggers one-shot retry; second error shows the fallback.
   fireEvent.error(screen.getByAltText('Broken Movie artwork'));
-
+  fireEvent.error(screen.getByAltText('Broken Movie artwork'));
   expect(screen.getByText('No artwork')).toBeVisible();
 
   dispose();

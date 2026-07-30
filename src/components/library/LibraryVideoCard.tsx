@@ -2,9 +2,10 @@ import type { VideoLibraryItem, VideoLibraryKind } from '@bindings';
 import { cx } from '@styled-system/css';
 import { Link } from '@tanstack/solid-router';
 import { Check, Film, Heart, Tv } from 'lucide-solid';
-import { Show, createEffect, createMemo, createSignal } from 'solid-js';
+import { Show, createEffect, createMemo } from 'solid-js';
 import { imageSource } from '~utils/imageSource';
 
+import { LibraryImage } from './LibraryImage';
 import * as styles from './VideoCard.styles';
 import { CardTitle, VideoCardSkeleton, type VideoCardAspectClass } from './videoCardShared';
 
@@ -51,7 +52,6 @@ export function LibraryVideoCard(props: LibraryVideoCardProps) {
   const libraryCardAriaLabel = () =>
     `Open ${props.item.name}${props.item.favorite ? ', favorite' : ''}`;
 
-  const [imageFailed, setImageFailed] = createSignal(false);
   const artworkImageId = () => props.item.artworkImageId;
   const artworkUrl = createMemo(() => {
     const imageId = artworkImageId();
@@ -60,7 +60,6 @@ export function LibraryVideoCard(props: LibraryVideoCardProps) {
 
   createEffect(() => {
     artworkUrl();
-    setImageFailed(false);
   });
 
   const isPoster = () => aspectClass() === 'poster';
@@ -68,8 +67,10 @@ export function LibraryVideoCard(props: LibraryVideoCardProps) {
   return (
     <Link {...linkTarget()} aria-label={libraryCardAriaLabel()} class={styles.card}>
       <div class={cx(styles.artwork, styles.aspect[aspectClass()])} data-aspect={aspectClass()}>
-        <Show
-          when={!imageFailed() ? artworkUrl() : null}
+        <LibraryImage
+          imageId={artworkImageId()}
+          alt={`${props.item.name} artwork`}
+          class={styles.image}
           fallback={
             <div class={styles.fallback}>
               <Show
@@ -81,16 +82,7 @@ export function LibraryVideoCard(props: LibraryVideoCardProps) {
               <span>No artwork</span>
             </div>
           }
-        >
-          {(imageUrl) => (
-            <img
-              src={imageUrl()}
-              alt={`${props.item.name} artwork`}
-              class={styles.image}
-              onError={() => setImageFailed(true)}
-            />
-          )}
-        </Show>
+        />
 
         <Show when={props.item.favorite}>
           <span class={styles.favoriteBadge} aria-hidden="true">
