@@ -3,8 +3,7 @@ import { cx } from '@styled-system/css';
 import { Link } from '@tanstack/solid-router';
 import { Match } from 'effect';
 import { Film, LoaderCircle, Play, Tv } from 'lucide-solid';
-import { Show, createEffect, createMemo } from 'solid-js';
-import { imageSource } from '~utils/imageSource';
+import { Show } from 'solid-js';
 import {
   isValidVideoHomeResumePosition,
   videoHomeAspect,
@@ -96,16 +95,7 @@ function isDirectResumeCard(props: HomeVideoCardProps): props is HomeVideoCardPr
 export function HomeVideoCard(props: HomeVideoCardProps) {
   const aspectClass = (): VideoCardAspectClass => videoHomeAspect(props.rowKind);
 
-  const artworkImageId = () => props.item.artworkImageId;
-  const artworkUrl = createMemo(() => {
-    const imageId = artworkImageId();
-    return imageId ? imageSource(imageId) : '';
-  });
   const showPlayBadge = () => isDirectResumeCard(props) && !props.busy;
-
-  createEffect(() => {
-    artworkUrl();
-  });
 
   const usesTvIcon = () => props.item.itemType === 'Series' || props.item.itemType === 'Episode';
 
@@ -129,7 +119,7 @@ export function HomeVideoCard(props: HomeVideoCardProps) {
       data-aspect={aspectClass()}
     >
       <LibraryImage
-        imageId={artworkImageId()}
+        imageId={props.item.artworkImageId}
         alt={`${props.item.name} artwork`}
         class={cx(styles.image, styles.homeImage)}
         fallback={
