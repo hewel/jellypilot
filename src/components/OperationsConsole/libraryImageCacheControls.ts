@@ -48,7 +48,7 @@ export function createLibraryImageCacheControls() {
     clearing: () => status()?.clearing ?? false,
     clearable: () => {
       const current = status();
-      return Boolean(current && (current.committedBytes > 0 || current.pendingCount > 0));
+      return Boolean(current && (current.committedBytes > 0 || current.entryCount > 0));
     },
     clearPending: () => clearMutation.isPending,
     /** Run the clear; `onSettled` fires after success or failure (e.g. to close a dialog). */

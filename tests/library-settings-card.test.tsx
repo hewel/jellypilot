@@ -10,9 +10,7 @@ import { TestQueryProvider } from './query-client';
 
 const populatedStatus = {
   committedBytes: 5 * 1024 * 1024,
-  pendingCount: 2,
-  estimatedSavings: 1024 * 1024,
-  terminalFailures: 1,
+  entryCount: 42,
   enabled: true,
   clearing: false,
 };
@@ -49,26 +47,25 @@ test('disabled state explains bypass while cached artwork is retained', () => {
   mockStatus({ ...populatedStatus, enabled: false });
   const { dispose } = renderCard(false);
 
-  expect(screen.getByTestId('image-cache-disabled-copy').textContent).toMatch(/bypassed.*kept/i);
+  expect(screen.getByTestId('image-cache-disabled-copy').textContent).toMatch(/bypass.*kept/i);
   dispose();
 });
 
-test('shows current cache usage, savings, pending, and failures from status', async () => {
+test('shows current cache usage and image count from status', async () => {
   mockStatus();
   const { dispose } = renderCard(true);
 
   await waitFor(() => expect(screen.getByTestId('image-cache-usage')).toHaveTextContent('5.0 MB'));
-  expect(screen.getByTestId('image-cache-savings')).toHaveTextContent('1.0 MB');
-  expect(screen.getByTestId('image-cache-pending')).toHaveTextContent('2');
-  expect(screen.getByTestId('image-cache-failures')).toHaveTextContent('1');
+  expect(screen.getByTestId('image-cache-count')).toHaveTextContent('42');
   dispose();
 });
 
 test('clear requires confirmation and cancel does not invoke the clear command', async () => {
   mockStatus();
-  const clearCommand = rstest
-    .spyOn(commands, 'imageCacheClear')
-    .mockResolvedValue({ status: 'ok', data: { ...populatedStatus, committedBytes: 0 } });
+  const clearCommand = rstest.spyOn(commands, 'imageCacheClear').mockResolvedValue({
+    status: 'ok',
+    data: { ...populatedStatus, committedBytes: 0, entryCount: 0 },
+  });
   const { dispose } = renderCard(true);
 
   const trigger = await screen.findByRole('button', { name: 'Clear cache' });
@@ -94,9 +91,10 @@ test('clear stays disabled while a clearing epoch is in progress', async () => {
 
 test('confirming clear invokes the clear command once', async () => {
   mockStatus();
-  const clearCommand = rstest
-    .spyOn(commands, 'imageCacheClear')
-    .mockResolvedValue({ status: 'ok', data: { ...populatedStatus, committedBytes: 0 } });
+  const clearCommand = rstest.spyOn(commands, 'imageCacheClear').mockResolvedValue({
+    status: 'ok',
+    data: { ...populatedStatus, committedBytes: 0, entryCount: 0 },
+  });
   const { dispose } = renderCard(true);
 
   const trigger = await screen.findByRole('button', { name: 'Clear cache' });

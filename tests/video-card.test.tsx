@@ -131,8 +131,6 @@ test('LibraryVideoCard falls back when the proxy image load fails', () => {
     />
   ));
 
-  // First error triggers one-shot retry; second error shows the fallback.
-  fireEvent.error(screen.getByAltText('Broken Movie artwork'));
   fireEvent.error(screen.getByAltText('Broken Movie artwork'));
   expect(screen.getByText('No artwork')).toBeVisible();
 

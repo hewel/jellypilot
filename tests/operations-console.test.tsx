@@ -1007,7 +1007,7 @@ test('library image disk cache toggle persists in config', async () => {
 
   await screen.findByDisplayValue('JellyPilot Test');
   await screen.findByRole('heading', { name: 'Library' });
-  const checkbox = screen.getByRole('checkbox', { name: 'Image disk cache' });
+  const checkbox = screen.getByRole('checkbox', { name: 'Library Image cache' });
   expect(checkbox).toBeChecked();
 
   fireEvent.click(checkbox);

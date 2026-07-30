@@ -39,7 +39,7 @@ export default function LibrarySettingsCard(props: LibrarySettingsCardProps) {
       <button
         type="button"
         role="checkbox"
-        aria-label="Image disk cache"
+        aria-label="Library Image cache"
         aria-checked={props.imageDiskCacheEnabled}
         onClick={() => props.onImageDiskCacheEnabledChange(!props.imageDiskCacheEnabled)}
         class={styles.toggle}
@@ -54,14 +54,14 @@ export default function LibrarySettingsCard(props: LibrarySettingsCardProps) {
           </Show>
         </span>
         <div class={styles.copy}>
-          <span class={styles.title}>Image disk cache</span>
+          <span class={styles.title}>Library Image cache</span>
           <p class={styles.description}>
             Cache Library artwork locally for faster repeat browsing.
           </p>
           <Show when={!props.imageDiskCacheEnabled}>
             <p class={styles.description} data-testid="image-cache-disabled-copy">
-              Off: artwork reads/writes and background optimization are bypassed; existing cached
-              artwork is kept until you clear it.
+              Off: artwork reads and writes bypass the cache; existing cached artwork is kept until
+              you clear it.
             </p>
           </Show>
         </div>
@@ -90,21 +90,9 @@ export default function LibrarySettingsCard(props: LibrarySettingsCardProps) {
                 </span>
               </div>
               <div class={styles.stat}>
-                <span class={styles.statLabel}>Saved</span>
-                <span class={styles.statValue} data-testid="image-cache-savings">
-                  {formatBytes(current().estimatedSavings)}
-                </span>
-              </div>
-              <div class={styles.stat}>
-                <span class={styles.statLabel}>Pending</span>
-                <span class={styles.statValue} data-testid="image-cache-pending">
-                  {current().pendingCount}
-                </span>
-              </div>
-              <div class={styles.stat}>
-                <span class={styles.statLabel}>Failed</span>
-                <span class={styles.statValue} data-testid="image-cache-failures">
-                  {current().terminalFailures}
+                <span class={styles.statLabel}>Images</span>
+                <span class={styles.statValue} data-testid="image-cache-count">
+                  {current().entryCount}
                 </span>
               </div>
             </>

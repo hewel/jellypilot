@@ -146,16 +146,12 @@ export const commands = {
 	configDetectMpv: () => __TAURI_INVOKE<string | null>("config_detect_mpv"),
 	/**  Get state of application local services (such as image proxy). */
 	appLocalServices: () => __TAURI_INVOKE<AppLocalServices>("app_local_services"),
-	/**  Reject an AVIF that the WebView cannot display. */
-	imageRejectAvif: (imageId: string) => typedError<null, CommandError>(__TAURI_INVOKE("image_reject_avif", { imageId })),
-	/**  Report the WebView's AVIF decode capability from the frontend probe. */
-	imageReportAvifCapability: (supported: boolean) => __TAURI_INVOKE<void>("image_report_avif_capability", { supported }),
 	/**  Current Library Image cache status for Library settings. */
 	imageCacheStatus: () => typedError<ImageCacheStatus, CommandError>(__TAURI_INVOKE("image_cache_status")),
 	/**
-	 *  Clear the entire Library Image cache across every saved server, returning
-	 *  the post-clear status. Pre-Clear writers/encoders cannot republish across
-	 *  the destructive epoch; in-flight reads are not broken.
+	 *  Clear the entire Library Image Cache across every saved server, returning
+	 *  the post-clear status. Pre-Clear writers cannot republish across the
+	 *  destructive epoch; in-flight reads are not broken.
 	 */
 	imageCacheClear: () => typedError<ImageCacheStatus, CommandError>(__TAURI_INVOKE("image_cache_clear")),
 };
@@ -256,12 +252,8 @@ export type Credentials = {
 export type ImageCacheStatus = {
 	/**  Bytes currently committed to disk across every saved server. */
 	committedBytes: number,
-	/**  Pending conversion work, including delayed (backoff-scheduled) retries. */
-	pendingCount: number,
-	/**  Estimated bytes saved by retained accepted AVIFs (original minus AVIF). */
-	estimatedSavings: number,
-	/**  Terminal conversion failures currently recorded. */
-	terminalFailures: number,
+	/**  Number of committed Library Images across every saved server. */
+	entryCount: number,
 	/**  Whether image disk caching is currently enabled. */
 	enabled: boolean,
 	/**  Whether a Clear is currently in progress. */
