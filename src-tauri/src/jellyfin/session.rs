@@ -24,7 +24,7 @@ use super::websocket::{JellyfinCommand, JellyfinWebSocket, JellyfinWebSocketEven
 use crate::command::{AppNotification, NowPlayingChanged};
 use crate::config::{AppConfig, IntroSkipperMode};
 use crate::hls_proxy::{ActivatedHls, HlsProxyError, HlsProxyEvent, HlsProxyState};
-use crate::mpv::MpvClient;
+use crate::mpv::{has_mpv_option, MpvClient};
 use crate::now_playing::{build_now_playing_state, collect_player_state, PlaybackContext};
 use tauri_specta::Event;
 
@@ -81,6 +81,7 @@ pub enum MpvAction {
     title: String,
     audio_index: Option<i32>,
     subtitle_index: Option<i32>,
+    play_method: &'static str,
   },
   /// Add an external subtitle file.
   AddExternalSubtitle(String),
@@ -104,6 +105,29 @@ pub enum MpvAction {
   SetAudioTrack(i32),
   /// Set subtitle track by stream index (-1 to disable).
   SetSubtitleTrack(i32),
+}
+
+const DIRECT_PLAYBACK_CACHE_OPTIONS: [(&str, &str); 8] = [
+  ("cache", "cache=yes"),
+  ("cache-on-disk", "cache-on-disk=yes"),
+  ("demuxer-max-bytes", "demuxer-max-bytes=256MiB"),
+  ("demuxer-max-back-bytes", "demuxer-max-back-bytes=128MiB"),
+  ("demuxer-seekable-cache", "demuxer-seekable-cache=yes"),
+  ("cache-pause", "cache-pause=yes"),
+  ("cache-pause-initial", "cache-pause-initial=yes"),
+  ("cache-pause-wait", "cache-pause-wait=3"),
+];
+
+fn direct_playback_file_options(play_method: &str, configured_args: &[String]) -> Vec<String> {
+  if !matches!(play_method, "DirectPlay" | "DirectStream") {
+    return Vec::new();
+  }
+
+  DIRECT_PLAYBACK_CACHE_OPTIONS
+    .iter()
+    .filter(|(name, _)| !has_mpv_option(configured_args, name))
+    .map(|(_, setting)| (*setting).to_owned())
+    .collect()
 }
 
 /// Session manager state.
@@ -378,6 +402,7 @@ impl SessionManager {
               title,
               audio_index,
               subtitle_index,
+              play_method,
             } => {
               log::info!(
                 "MpvAction::Play received, url={}, title={}",
@@ -397,14 +422,21 @@ impl SessionManager {
                 log::info!("MPV started successfully");
               }
 
+              let file_options = {
+                let config = config.read();
+                direct_playback_file_options(play_method, &config.mpv_args)
+              };
+
               // Load the file with all options (start position, audio/subtitle tracks)
               // This ensures tracks are set atomically with the file load, avoiding race conditions
               log::info!(
-                "Loading file into MPV: {} (start={}, aid={:?}, sid={:?})",
+                "Loading file into MPV: {} (start={}, aid={:?}, sid={:?}, play_method={}, file_options={:?})",
                 redact_url(&url),
                 start_position,
                 audio_index,
-                subtitle_index
+                subtitle_index,
+                play_method,
+                file_options
               );
               if let Err(e) = mpv
                 .loadfile_with_options(
@@ -412,6 +444,7 @@ impl SessionManager {
                   Some(start_position),
                   audio_index.map(|i| i as i64),
                   subtitle_index.map(|i| i as i64),
+                  file_options,
                 )
                 .await
               {
@@ -852,6 +885,7 @@ impl SessionManager {
       .action_tx
       .send(MpvAction::Play {
         url: decision.url,
+        play_method: resolution.play_method,
         start_position: ticks_to_seconds(snapshot.position_ticks),
         title: Self::format_title(&item),
         audio_index: resolution.mpv_audio_index,
@@ -1086,6 +1120,7 @@ impl SessionManager {
       .action_tx
       .send(MpvAction::Play {
         url,
+        play_method: resolution.play_method,
         start_position: resolution.start_position,
         title,
         audio_index: resolution.mpv_audio_index,
@@ -2258,6 +2293,62 @@ mod tests {
   use std::sync::Arc;
   use tokio::io::{AsyncReadExt, AsyncWriteExt};
   use tokio::net::TcpListener;
+
+  #[test]
+  fn direct_play_adds_cache_profile_when_user_has_no_overrides() {
+    assert_eq!(
+      direct_playback_file_options("DirectPlay", &[]),
+      vec![
+        "cache=yes",
+        "cache-on-disk=yes",
+        "demuxer-max-bytes=256MiB",
+        "demuxer-max-back-bytes=128MiB",
+        "demuxer-seekable-cache=yes",
+        "cache-pause=yes",
+        "cache-pause-initial=yes",
+        "cache-pause-wait=3",
+      ]
+    );
+  }
+
+  #[test]
+  fn direct_stream_adds_cache_profile_when_user_has_no_overrides() {
+    assert_eq!(
+      direct_playback_file_options("DirectStream", &[]),
+      vec![
+        "cache=yes",
+        "cache-on-disk=yes",
+        "demuxer-max-bytes=256MiB",
+        "demuxer-max-back-bytes=128MiB",
+        "demuxer-seekable-cache=yes",
+        "cache-pause=yes",
+        "cache-pause-initial=yes",
+        "cache-pause-wait=3",
+      ]
+    );
+  }
+
+  #[test]
+  fn direct_cache_profile_preserves_explicit_user_options() {
+    let configured_args = vec![
+      "--cache=no".to_string(),
+      "--cache-on-disk=no".to_string(),
+      "--demuxer-max-bytes=512MiB".to_string(),
+      "--demuxer-seekable-cache=no".to_string(),
+      "--no-cache-pause".to_string(),
+      "--no-cache-pause-initial".to_string(),
+    ];
+
+    assert_eq!(
+      direct_playback_file_options("DirectPlay", &configured_args),
+      vec!["demuxer-max-back-bytes=128MiB", "cache-pause-wait=3",]
+    );
+  }
+
+  #[test]
+  fn transcode_does_not_add_direct_cache_profile() {
+    assert!(direct_playback_file_options("Transcode", &[]).is_empty());
+  }
 
   type RequestLog = Arc<parking_lot::Mutex<Vec<String>>>;
 

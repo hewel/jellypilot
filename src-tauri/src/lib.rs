@@ -89,11 +89,12 @@ pub fn run() {
       match app.path().app_cache_dir() {
         Ok(cache_dir) => {
           *image_cache_for_setup.write() = Some(Arc::new(ImageCache::new(cache_dir.clone())));
+          mpv_for_setup.set_demuxer_cache_dir(cache_dir.clone());
           hls_proxy_for_setup.install(HlsProxy::start(Some(cache_dir.join("hls"))));
         }
         Err(e) => {
           log::warn!(
-            "Failed to resolve app cache directory for image cache: {}",
+            "Failed to resolve app cache directory for media caches: {}",
             e
           );
           hls_proxy_for_setup.install(HlsProxy::start(None));

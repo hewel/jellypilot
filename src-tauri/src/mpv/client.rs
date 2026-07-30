@@ -1,6 +1,6 @@
 //! High-level MPV client with command methods.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::Child;
 use std::sync::Arc;
 use std::time::Duration;
@@ -25,10 +25,37 @@ pub enum MpvError {
   NotConnected,
 }
 
+pub(crate) fn has_mpv_option(configured_args: &[String], option_name: &str) -> bool {
+  configured_args.iter().any(|arg| {
+    let Some(raw) = arg.trim().strip_prefix("--") else {
+      return false;
+    };
+    let normalized = raw.strip_prefix("no-").unwrap_or(raw);
+    let configured_name = normalized
+      .split(|character: char| character == '=' || character.is_ascii_whitespace())
+      .next()
+      .unwrap_or(normalized);
+    configured_name == option_name
+  })
+}
+
+fn mpv_spawn_args(configured_args: &[String], demuxer_cache_dir: Option<&Path>) -> Vec<String> {
+  let mut args =
+    Vec::with_capacity(configured_args.len() + usize::from(demuxer_cache_dir.is_some()));
+  if let Some(cache_dir) =
+    demuxer_cache_dir.filter(|_| !has_mpv_option(configured_args, "demuxer-cache-dir"))
+  {
+    args.push(format!("--demuxer-cache-dir={}", cache_dir.display()));
+  }
+  args.extend_from_slice(configured_args);
+  args
+}
+
 /// High-level MPV client.
 pub struct MpvClient {
   mpv_path: Arc<Mutex<Option<PathBuf>>>,
   extra_args: Arc<Mutex<Vec<String>>>,
+  demuxer_cache_dir: Arc<Mutex<Option<PathBuf>>>,
   process: Arc<Mutex<Option<Child>>>,
   ipc: Arc<Mutex<Option<Arc<MpvIpc>>>>,
 }
@@ -39,6 +66,7 @@ impl MpvClient {
     Self {
       mpv_path: Arc::new(Mutex::new(mpv_path)),
       extra_args: Arc::new(Mutex::new(Vec::new())),
+      demuxer_cache_dir: Arc::new(Mutex::new(None)),
       process: Arc::new(Mutex::new(None)),
       ipc: Arc::new(Mutex::new(None)),
     }
@@ -54,6 +82,11 @@ impl MpvClient {
     *self.extra_args.lock() = args;
   }
 
+  /// Set Tauri's application cache directory for MPV's temporary demuxer cache files.
+  pub fn set_demuxer_cache_dir(&self, path: PathBuf) {
+    *self.demuxer_cache_dir.lock() = Some(path);
+  }
+
   /// Start MPV and connect to IPC.
   pub async fn start(&self) -> Result<(), MpvError> {
     // Cleanup any existing socket
@@ -61,10 +94,12 @@ impl MpvClient {
 
     // Get current config
     let mpv_path = self.mpv_path.lock().clone();
-    let extra_args = self.extra_args.lock().clone();
+    let configured_args = self.extra_args.lock().clone();
+    let demuxer_cache_dir = self.demuxer_cache_dir.lock().clone();
+    let spawn_args = mpv_spawn_args(&configured_args, demuxer_cache_dir.as_deref());
 
     // Spawn MPV process
-    let child = spawn_mpv(mpv_path.as_ref(), &extra_args)?;
+    let child = spawn_mpv(mpv_path.as_ref(), &spawn_args)?;
     {
       let mut process = self.process.lock();
       *process = Some(child);
@@ -218,6 +253,7 @@ impl MpvClient {
     start: Option<f64>,
     audio_index: Option<i64>,
     subtitle_index: Option<i64>,
+    file_options: Vec<String>,
   ) -> Result<(), MpvError> {
     let mut options = Vec::new();
 
@@ -241,6 +277,8 @@ impl MpvClient {
       }
       None => {}
     }
+
+    options.extend(file_options);
 
     if options.is_empty() {
       log::info!("Loading file: {}", url);
@@ -404,6 +442,7 @@ impl Clone for MpvClient {
     Self {
       mpv_path: self.mpv_path.clone(),
       extra_args: self.extra_args.clone(),
+      demuxer_cache_dir: self.demuxer_cache_dir.clone(),
       process: self.process.clone(),
       ipc: self.ipc.clone(),
     }
@@ -418,6 +457,28 @@ mod tests {
   use tokio::io::duplex;
 
   use super::*;
+
+  #[test]
+  fn spawn_args_use_tauri_cache_dir_when_user_has_no_override() {
+    assert_eq!(
+      mpv_spawn_args(&["--fullscreen".to_string()], Some(Path::new("app-cache"))),
+      vec![
+        "--demuxer-cache-dir=app-cache".to_string(),
+        "--fullscreen".to_string(),
+      ]
+    );
+  }
+
+  #[test]
+  fn spawn_args_preserve_explicit_user_cache_dir() {
+    assert_eq!(
+      mpv_spawn_args(
+        &["--demuxer-cache-dir=user-cache".to_string()],
+        Some(Path::new("app-cache")),
+      ),
+      vec!["--demuxer-cache-dir=user-cache".to_string()]
+    );
+  }
 
   #[tokio::test]
   async fn is_connected_returns_false_after_ipc_eof() {
