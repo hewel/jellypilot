@@ -1,4 +1,9 @@
 //! Localhost image proxy server for decoupled media artwork loading.
+//!
+//! Uncached images stream from the matching media-server origin immediately
+//! while an elected, bounded, best-effort writer persists the completed
+//! original to the SQLite-backed disk cache. Later requests reuse the file
+//! through the global catalog. Every failure mode fails open to origin.
 
 use axum::{
   body::Body,
@@ -17,6 +22,8 @@ use std::{collections::HashMap, net::TcpListener, sync::Arc, time::Duration};
 use tokio::sync::{broadcast, watch, Mutex as TokioMutex};
 use tokio_util::sync::CancellationToken;
 
+use crate::config::AppConfig;
+use crate::image_cache::{ImageCache, ImageCachePartition, StreamWriter};
 use crate::image_ref::{decode_image_id, normalize_server_url};
 use crate::jellyfin::JellyfinClient;
 
@@ -91,6 +98,8 @@ pub struct ImageProxyInner {
   pub port: u16,
   pub base_url: String,
   pub client: Arc<JellyfinClient>,
+  cache: Option<Arc<ImageCache>>,
+  config: Arc<RwLock<AppConfig>>,
   coalescer: Arc<TokioMutex<HashMap<String, Arc<InflightFetch>>>>,
 }
 
@@ -106,13 +115,19 @@ impl Drop for ImageProxy {
 }
 
 impl ImageProxy {
-  pub fn start(client: Arc<JellyfinClient>) -> Result<Arc<Self>, ImageProxyError> {
-    Self::start_on_addr("127.0.0.1:0", client)
+  pub fn start(
+    client: Arc<JellyfinClient>,
+    cache: Option<Arc<ImageCache>>,
+    config: Arc<RwLock<AppConfig>>,
+  ) -> Result<Arc<Self>, ImageProxyError> {
+    Self::start_on_addr("127.0.0.1:0", client, cache, config)
   }
 
   pub fn start_on_addr(
     addr: &str,
     client: Arc<JellyfinClient>,
+    cache: Option<Arc<ImageCache>>,
+    config: Arc<RwLock<AppConfig>>,
   ) -> Result<Arc<Self>, ImageProxyError> {
     let std_listener = TcpListener::bind(addr)?;
     let port = std_listener.local_addr()?.port();
@@ -125,6 +140,8 @@ impl ImageProxy {
       port,
       base_url: base_url.clone(),
       client,
+      cache,
+      config,
       coalescer: Arc::new(TokioMutex::new(HashMap::new())),
     });
 
@@ -212,11 +229,29 @@ async fn handle_image(
     return text_response(StatusCode::FORBIDDEN, "image reference server mismatch");
   }
 
-  inner.coalesce_and_fetch(&payload.remote_url).await
+  let partition = ImageCache::partition(payload.provider, server_url);
+  inner.serve_image(&payload.remote_url, partition).await
 }
 
 impl ImageProxyInner {
-  async fn coalesce_and_fetch(&self, remote_url: &str) -> Response {
+  fn cache_enabled(&self) -> bool {
+    self.config.read().image_disk_cache_enabled
+  }
+
+  async fn serve_image(&self, remote_url: &str, partition: ImageCachePartition) -> Response {
+    // Cache hit: serve from disk without touching the origin.
+    if self.cache_enabled() {
+      if let Some(cache) = &self.cache {
+        if let Some(reader) = cache.open_reader(&partition, remote_url).await {
+          return serve_cached_file(reader).await;
+        }
+      }
+    }
+
+    self.coalesce_and_fetch(remote_url, partition).await
+  }
+
+  async fn coalesce_and_fetch(&self, remote_url: &str, partition: ImageCachePartition) -> Response {
     let (body_rx, header_rx, is_initiator) = {
       let mut map = self.coalescer.lock().await;
       if let Some(inflight) = map.get(remote_url) {
@@ -238,7 +273,9 @@ impl ImageProxyInner {
       let inner_self = self.clone_self();
       let remote_url_owned = remote_url.to_string();
       tokio::spawn(async move {
-        inner_self.perform_origin_fetch(&remote_url_owned).await;
+        inner_self
+          .perform_origin_fetch(&remote_url_owned, partition)
+          .await;
       });
     }
 
@@ -297,11 +334,13 @@ impl ImageProxyInner {
       port: self.port,
       base_url: self.base_url.clone(),
       client: self.client.clone(),
+      cache: self.cache.clone(),
+      config: self.config.clone(),
       coalescer: self.coalescer.clone(),
     })
   }
 
-  async fn perform_origin_fetch(&self, remote_url: &str) {
+  async fn perform_origin_fetch(&self, remote_url: &str, partition: ImageCachePartition) {
     let client = self.client.clone();
     let remote_url_owned = remote_url.to_string();
 
@@ -376,6 +415,24 @@ impl ImageProxyInner {
       }
     };
 
+    // Elect a disk writer for this miss (best-effort, non-blocking).
+    let mut writer: Option<StreamWriter> = if self.cache_enabled() {
+      if let Some(cache) = &self.cache {
+        cache
+          .try_begin_writer(
+            &partition,
+            remote_url,
+            headers.content_type.as_deref(),
+            headers.content_length,
+          )
+          .await
+      } else {
+        None
+      }
+    } else {
+      None
+    };
+
     // Close registration in coalescer map BEFORE broadcasting headers and first chunk.
     // This guarantees that any late-joining request will start its own fresh request from byte 0.
     let inflight = self.coalescer.lock().await.remove(remote_url);
@@ -386,6 +443,9 @@ impl ImageProxyInner {
 
     // Broadcast chunks without allowing a slow client to block other waiters.
     if let Some(bytes) = first_chunk {
+      if let Some(w) = writer.as_mut() {
+        w.try_push(bytes.clone());
+      }
       if inflight.body_tx.send(Ok(bytes)).is_err() {
         return;
       }
@@ -395,6 +455,9 @@ impl ImageProxyInner {
     while let Some(chunk_res) = stream.next().await {
       match chunk_res {
         Ok(bytes) => {
+          if let Some(w) = writer.as_mut() {
+            w.try_push(bytes.clone());
+          }
           if inflight.body_tx.send(Ok(bytes)).is_err() {
             break;
           }
@@ -405,7 +468,36 @@ impl ImageProxyInner {
         }
       }
     }
+
+    // Signal clean completion to the writer so it commits.
+    if let Some(w) = writer.take() {
+      w.finish();
+    }
   }
+}
+
+/// Serve a cache-hit file as a streaming response.
+async fn serve_cached_file(reader: crate::image_cache::CacheReaderGuard) -> Response {
+  let content_type = reader
+    .content_type()
+    .unwrap_or("application/octet-stream")
+    .to_string();
+  let size = reader.size_bytes();
+  let path = reader.path().to_path_buf();
+
+  let file = match tokio::fs::File::open(&path).await {
+    Ok(f) => f,
+    Err(_) => return text_response(StatusCode::INTERNAL_SERVER_ERROR, "cache file unreadable"),
+  };
+
+  let stream = tokio_util::io::ReaderStream::new(file);
+  let body = Body::from_stream(stream);
+
+  response_builder(StatusCode::OK)
+    .header(header::CONTENT_TYPE, content_type)
+    .header(header::CONTENT_LENGTH, size)
+    .body(body)
+    .unwrap_or_else(|_| Response::new(Body::empty()))
 }
 
 fn response_builder(status: StatusCode) -> axum::http::response::Builder {
@@ -438,10 +530,14 @@ mod tests {
   use std::sync::atomic::{AtomicUsize, Ordering};
   use tokio::net::TcpListener as TokioTcpListener;
 
+  fn test_config() -> Arc<RwLock<AppConfig>> {
+    Arc::new(RwLock::new(AppConfig::default()))
+  }
+
   #[tokio::test]
   async fn test_bind_and_base_url_surface() {
     let client = Arc::new(JellyfinClient::new());
-    let proxy = ImageProxy::start(client).expect("should bind port");
+    let proxy = ImageProxy::start(client, None, test_config()).expect("should bind port");
     assert!(proxy.base_url.starts_with("http://127.0.0.1:"));
 
     let state = ImageProxyState::new();
@@ -456,7 +552,12 @@ mod tests {
     let held_port = held_listener.local_addr().expect("addr").port();
 
     let client = Arc::new(JellyfinClient::new());
-    let bind_res = ImageProxy::start_on_addr(&format!("127.0.0.1:{held_port}"), client);
+    let bind_res = ImageProxy::start_on_addr(
+      &format!("127.0.0.1:{held_port}"),
+      client,
+      None,
+      test_config(),
+    );
     assert!(bind_res.is_err());
 
     let state_failed = ImageProxyState::new();
@@ -468,7 +569,7 @@ mod tests {
   #[tokio::test]
   async fn test_bad_token_route_and_method() {
     let client = Arc::new(JellyfinClient::new());
-    let proxy = ImageProxy::start(client).expect("start proxy");
+    let proxy = ImageProxy::start(client, None, test_config()).expect("start proxy");
 
     let http = ReqwestClient::new();
     let bad_url = format!("{}/image/invalid-token-12345", proxy.base_url);
@@ -495,7 +596,7 @@ mod tests {
   #[tokio::test]
   async fn test_auth_mismatch_and_provider_server_mismatch() {
     let client = Arc::new(JellyfinClient::new());
-    let proxy = ImageProxy::start(client.clone()).expect("start proxy");
+    let proxy = ImageProxy::start(client.clone(), None, test_config()).expect("start proxy");
 
     let server_url = "http://127.0.0.1:9999";
     let token = image_id_for_url(
@@ -597,7 +698,7 @@ mod tests {
         device_id: None,
       });
 
-    let proxy = ImageProxy::start(client).expect("start proxy");
+    let proxy = ImageProxy::start(client, None, test_config()).expect("start proxy");
 
     let remote_url = format!("{origin_base}/Items/img1/Images/Primary");
     let signed_token = image_id_for_url(
@@ -666,5 +767,177 @@ mod tests {
 
     // Coalescing assertion: 5 concurrent requests hit origin exactly 1 time!
     assert_eq!(origin_hits.load(Ordering::SeqCst), 1);
+  }
+
+  #[tokio::test]
+  async fn test_cache_miss_then_hit_serves_from_disk() {
+    let dir = std::env::temp_dir().join(format!("proxy_cache_test_{}", uuid::Uuid::new_v4()));
+    let _ = std::fs::create_dir_all(&dir);
+
+    let listener = TokioTcpListener::bind("127.0.0.1:0")
+      .await
+      .expect("bind mock server");
+    let origin_port = listener.local_addr().expect("port").port();
+    let origin_base = format!("http://127.0.0.1:{origin_port}");
+
+    let origin_hits = Arc::new(AtomicUsize::new(0));
+    let hits_clone = origin_hits.clone();
+
+    let mock_app = Router::new().route(
+      "/Items/cached/Images/Primary",
+      get(move || {
+        let hits = hits_clone.clone();
+        async move {
+          hits.fetch_add(1, Ordering::SeqCst);
+          ([(header::CONTENT_TYPE, "image/png")], "cached-png-bytes")
+        }
+      }),
+    );
+
+    tokio::spawn(async move {
+      let _ = axum::serve(listener, mock_app).await;
+    });
+
+    let client = Arc::new(JellyfinClient::new());
+    client
+      .login()
+      .adopt_validated_session(&crate::jellyfin::SavedSession {
+        provider: MediaServerProvider::Jellyfin,
+        server_url: origin_base.clone(),
+        access_token: "test-token".to_string(),
+        user_id: "user-1".to_string(),
+        user_name: "Test".to_string(),
+        server_name: Some("Mock Server".to_string()),
+        device_id: None,
+      });
+
+    let cache =
+      crate::image_cache::ImageCache::init(dir.clone(), crate::image_cache::IMAGE_CACHE_MAX_BYTES)
+        .await
+        .expect("init cache");
+
+    let proxy = ImageProxy::start(client, Some(cache), test_config()).expect("start proxy");
+
+    let remote_url = format!("{origin_base}/Items/cached/Images/Primary");
+    let signed_token = image_id_for_url(
+      MediaServerProvider::Jellyfin,
+      &origin_base,
+      remote_url,
+      ImageRefKind::Artwork,
+    )
+    .expect("sign token");
+
+    let proxy_req_url = format!("{}/image/{}", proxy.base_url, signed_token);
+    let http = ReqwestClient::new();
+
+    // First request: miss, streams from origin, writes to cache.
+    let resp1 = http.get(&proxy_req_url).send().await.expect("first req");
+    assert_eq!(resp1.status(), StatusCode::OK);
+    let body1 = resp1.text().await.expect("body1");
+    assert_eq!(body1, "cached-png-bytes");
+    assert_eq!(origin_hits.load(Ordering::SeqCst), 1);
+
+    // Wait for the background writer to commit.
+    tokio::time::sleep(Duration::from_millis(200)).await;
+
+    // Second request: hit, served from disk without touching origin.
+    let resp2 = http.get(&proxy_req_url).send().await.expect("second req");
+    assert_eq!(resp2.status(), StatusCode::OK);
+    let body2 = resp2.text().await.expect("body2");
+    assert_eq!(body2, "cached-png-bytes");
+    assert_eq!(
+      origin_hits.load(Ordering::SeqCst),
+      1,
+      "cache hit must not touch origin"
+    );
+
+    let _ = std::fs::remove_dir_all(&dir);
+  }
+
+  #[tokio::test]
+  async fn test_disabled_cache_bypasses_reads_and_writes() {
+    let dir = std::env::temp_dir().join(format!("proxy_disabled_test_{}", uuid::Uuid::new_v4()));
+    let _ = std::fs::create_dir_all(&dir);
+
+    let listener = TokioTcpListener::bind("127.0.0.1:0")
+      .await
+      .expect("bind mock server");
+    let origin_port = listener.local_addr().expect("port").port();
+    let origin_base = format!("http://127.0.0.1:{origin_port}");
+
+    let origin_hits = Arc::new(AtomicUsize::new(0));
+    let hits_clone = origin_hits.clone();
+
+    let mock_app = Router::new().route(
+      "/Items/disabled/Images/Primary",
+      get(move || {
+        let hits = hits_clone.clone();
+        async move {
+          hits.fetch_add(1, Ordering::SeqCst);
+          (
+            [(header::CONTENT_TYPE, "image/jpeg")],
+            "disabled-cache-bytes",
+          )
+        }
+      }),
+    );
+
+    tokio::spawn(async move {
+      let _ = axum::serve(listener, mock_app).await;
+    });
+
+    let client = Arc::new(JellyfinClient::new());
+    client
+      .login()
+      .adopt_validated_session(&crate::jellyfin::SavedSession {
+        provider: MediaServerProvider::Jellyfin,
+        server_url: origin_base.clone(),
+        access_token: "test-token".to_string(),
+        user_id: "user-1".to_string(),
+        user_name: "Test".to_string(),
+        server_name: Some("Mock Server".to_string()),
+        device_id: None,
+      });
+
+    let cache =
+      crate::image_cache::ImageCache::init(dir.clone(), crate::image_cache::IMAGE_CACHE_MAX_BYTES)
+        .await
+        .expect("init cache");
+
+    let config = test_config();
+    config.write().image_disk_cache_enabled = false;
+
+    let proxy = ImageProxy::start(client, Some(cache), config).expect("start proxy");
+
+    let remote_url = format!("{origin_base}/Items/disabled/Images/Primary");
+    let signed_token = image_id_for_url(
+      MediaServerProvider::Jellyfin,
+      &origin_base,
+      remote_url,
+      ImageRefKind::Artwork,
+    )
+    .expect("sign token");
+
+    let proxy_req_url = format!("{}/image/{}", proxy.base_url, signed_token);
+    let http = ReqwestClient::new();
+
+    // Both requests hit origin because cache is disabled.
+    let resp1 = http.get(&proxy_req_url).send().await.expect("req1");
+    assert_eq!(resp1.status(), StatusCode::OK);
+    let _ = resp1.text().await;
+
+    tokio::time::sleep(Duration::from_millis(100)).await;
+
+    let resp2 = http.get(&proxy_req_url).send().await.expect("req2");
+    assert_eq!(resp2.status(), StatusCode::OK);
+    let _ = resp2.text().await;
+
+    assert_eq!(
+      origin_hits.load(Ordering::SeqCst),
+      2,
+      "disabled cache must not serve from disk"
+    );
+
+    let _ = std::fs::remove_dir_all(&dir);
   }
 }

@@ -1,8 +1,19 @@
-//! Disk-backed cache for media server artwork.
+//! Disk-backed write-through cache for media server artwork.
+//!
+//! One global SQLite catalog (via SQLx) is the single durable source of truth
+//! for cached Library Image entries, replacing the former per-partition JSON
+//! index. The catalog is an optional optimization: initialization, migration,
+//! and reconciliation run asynchronously and every failure mode fails open to
+//! streaming the image from its origin.
+//!
+//! Cache identity is `provider + normalized server URL + full origin URL`,
+//! hashed into a collision-resistant relative filename so entries never
+//! collide across servers. Committed files live within one global byte budget;
+//! eviction is LRU over unlocked entries and is safe against active readers
+//! through in-process reference counts plus cross-process file locks.
 
 use std::{
   collections::HashMap,
-  future::Future,
   path::{Path, PathBuf},
   sync::Arc,
   time::{SystemTime, UNIX_EPOCH},
@@ -10,55 +21,72 @@ use std::{
 
 use fs2::FileExt;
 use parking_lot::{Mutex as StdMutex, RwLock};
-use serde::{Deserialize, Serialize};
-
-use tokio::io::AsyncWriteExt;
-use tokio::sync::Mutex as TokioMutex;
+use sha2::{Digest, Sha256};
+use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions, SqliteSynchronous};
+use sqlx::{FromRow, SqlitePool};
+use tokio::sync::{mpsc, Mutex as TokioMutex, OwnedSemaphorePermit, Semaphore};
 use uuid::Uuid;
 
 use crate::image_ref::normalize_server_url;
 use crate::jellyfin::MediaServerProvider;
 
+/// Global committed-byte budget shared by every cached server.
 pub const IMAGE_CACHE_MAX_BYTES: u64 = 1024 * 1024 * 1024;
-pub const IMAGE_CACHE_DOWNLOAD_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(2);
+/// Origins larger than this stream to the client without being cached.
+pub const IMAGE_CACHE_MAX_ENTRY_BYTES: u64 = 64 * 1024 * 1024;
+/// Maximum in-flight tee buffer per elected writer.
+pub const WRITER_BUFFER_BYTES: usize = 1024 * 1024;
+/// Maximum number of concurrent disk writers process-wide.
+pub const MAX_CONCURRENT_WRITERS: usize = 8;
+
+const CATALOG_FILE: &str = "catalog.sqlite3";
 
 #[derive(Debug, thiserror::Error)]
 pub enum ImageCacheError {
   #[error("I/O error: {0}")]
   Io(#[from] std::io::Error),
-  #[error("JSON error: {0}")]
-  Json(#[from] serde_json::Error),
-  #[error("image download failed: {0}")]
-  Download(String),
+  #[error("catalog error: {0}")]
+  Catalog(#[from] sqlx::Error),
   #[error("system clock is before unix epoch")]
   Clock,
   #[error("cache writer already committed or aborted")]
   WriterClosed,
 }
 
-#[derive(Debug, Clone)]
-pub struct ImageDownload {
-  pub bytes: Vec<u8>,
-  pub content_type: Option<String>,
+/// One cached representation on disk, guarded against eviction for its lifetime.
+pub struct CacheReaderGuard {
+  path: PathBuf,
+  content_type: Option<String>,
+  size_bytes: u64,
+  _guard: ReaderGuard,
+  _file_lock: std::fs::File,
+}
+
+impl CacheReaderGuard {
+  pub fn path(&self) -> &Path {
+    &self.path
+  }
+
+  pub fn content_type(&self) -> Option<&str> {
+    self.content_type.as_deref()
+  }
+
+  pub fn size_bytes(&self) -> u64 {
+    self.size_bytes
+  }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ImageCachePartition {
-  id: String,
+  provider_slug: &'static str,
+  server_hash: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-struct CacheEntry {
-  file_name: String,
-  size_bytes: u64,
-  accessed_at_ms: u128,
-  #[serde(default)]
-  content_type: Option<String>,
-}
-
-#[derive(Debug, Default, Serialize, Deserialize)]
-struct CacheIndex {
-  entries: HashMap<String, CacheEntry>,
+impl ImageCachePartition {
+  /// Stable identity prefix used to scope filenames and catalog rows.
+  fn scope(&self) -> String {
+    format!("{}-{}", self.provider_slug, self.server_hash)
+  }
 }
 
 #[derive(Clone, Default)]
@@ -104,14 +132,6 @@ impl Drop for ReaderGuard {
   }
 }
 
-pub struct CacheReaderGuard {
-  path: PathBuf,
-  content_type: Option<String>,
-  size_bytes: u64,
-  _guard: ReaderGuard,
-  _file_lock: std::fs::File,
-}
-
 async fn acquire_reader_guard(
   active_readers: &ActiveReaders,
   path: PathBuf,
@@ -139,29 +159,22 @@ async fn acquire_reader_guard(
   })
 }
 
-impl CacheReaderGuard {
-  pub fn path(&self) -> &Path {
-    &self.path
-  }
-
-  pub fn content_type(&self) -> Option<&str> {
-    self.content_type.as_deref()
-  }
-
-  pub fn size_bytes(&self) -> u64 {
-    self.size_bytes
-  }
-
-  pub async fn read_to_vec(&self) -> Result<Vec<u8>, ImageCacheError> {
-    Ok(tokio::fs::read(&self.path).await?)
-  }
+#[derive(FromRow)]
+struct EntryRow {
+  file_name: String,
+  size_bytes: i64,
+  content_type: Option<String>,
 }
 
+/// SQLite-backed global Library Image cache.
 pub struct ImageCache {
   root: PathBuf,
+  pool: SqlitePool,
   max_bytes: u64,
-  index_lock: TokioMutex<()>,
   active_readers: ActiveReaders,
+  writer_permits: Arc<Semaphore>,
+  /// Serializes admission/eviction so budget accounting stays consistent.
+  commit_lock: TokioMutex<()>,
 }
 
 #[derive(Clone)]
@@ -171,407 +184,504 @@ impl ImageCacheState {
   pub fn empty() -> Self {
     Self(Arc::new(RwLock::new(None)))
   }
-
-  pub fn get(&self) -> Option<Arc<ImageCache>> {
-    self.0.read().clone()
-  }
-}
-
-struct PartitionLockGuard<'a> {
-  _tokio_guard: tokio::sync::MutexGuard<'a, ()>,
-  lock_file: std::fs::File,
-}
-
-impl<'a> Drop for PartitionLockGuard<'a> {
-  fn drop(&mut self) {
-    let _ = FileExt::unlock(&self.lock_file);
-  }
-}
-
-pub struct CacheWriter<'a> {
-  cache: &'a ImageCache,
-  partition: ImageCachePartition,
-  content_type: Option<String>,
-  temp_path: PathBuf,
-  file_name: String,
-  key: String,
-  file: Option<tokio::fs::File>,
-  written_bytes: u64,
-  committed: bool,
-}
-
-impl<'a> CacheWriter<'a> {
-  pub async fn write_all(&mut self, buf: &[u8]) -> Result<(), ImageCacheError> {
-    let Some(file) = self.file.as_mut() else {
-      return Err(ImageCacheError::WriterClosed);
-    };
-    file.write_all(buf).await?;
-    self.written_bytes += buf.len() as u64;
-    Ok(())
-  }
-
-  pub async fn commit(mut self) -> Result<CacheReaderGuard, ImageCacheError> {
-    let Some(mut file) = self.file.take() else {
-      return Err(ImageCacheError::WriterClosed);
-    };
-    file.flush().await?;
-    file.sync_all().await?;
-    drop(file);
-
-    let partition_dir = self.cache.partition_dir(&self.partition);
-    let final_path = partition_dir.join(&self.file_name);
-
-    let _lock = self.cache.lock_partition(&self.partition).await?;
-
-    tokio::fs::rename(&self.temp_path, &final_path).await?;
-    self.committed = true;
-
-    let reader = acquire_reader_guard(
-      &self.cache.active_readers,
-      final_path,
-      self.content_type.clone(),
-      self.written_bytes,
-    )
-    .await?;
-
-    let mut index = self.cache.load_index(&self.partition).await?;
-    index.entries.insert(
-      self.key.clone(),
-      CacheEntry {
-        file_name: self.file_name.clone(),
-        size_bytes: self.written_bytes,
-        accessed_at_ms: now_ms()?,
-        content_type: self.content_type.clone(),
-      },
-    );
-
-    self
-      .cache
-      .prune_with_lock(&self.partition, &mut index)
-      .await?;
-    self.cache.save_index(&self.partition, &index).await?;
-
-    Ok(reader)
-  }
-
-  pub async fn abort(mut self) -> Result<(), ImageCacheError> {
-    if let Some(file) = self.file.take() {
-      drop(file);
-    }
-    if !self.committed {
-      let _ = tokio::fs::remove_file(&self.temp_path).await;
-      self.committed = true;
-    }
-    Ok(())
-  }
-
-  pub fn temp_path(&self) -> &Path {
-    &self.temp_path
-  }
-}
-
-impl<'a> Drop for CacheWriter<'a> {
-  fn drop(&mut self) {
-    if !self.committed {
-      let temp_path = self.temp_path.clone();
-      self.file.take();
-      let _ = std::fs::remove_file(temp_path);
-    }
-  }
-}
-
-impl<'a> tokio::io::AsyncWrite for CacheWriter<'a> {
-  fn poll_write(
-    mut self: std::pin::Pin<&mut Self>,
-    cx: &mut std::task::Context<'_>,
-    buf: &[u8],
-  ) -> std::task::Poll<Result<usize, std::io::Error>> {
-    let Some(file) = self.file.as_mut() else {
-      return std::task::Poll::Ready(Err(std::io::Error::other("writer closed or committed")));
-    };
-    let res = std::pin::Pin::new(file).poll_write(cx, buf);
-    if let std::task::Poll::Ready(Ok(n)) = res {
-      self.written_bytes += n as u64;
-    }
-    res
-  }
-
-  fn poll_flush(
-    mut self: std::pin::Pin<&mut Self>,
-    cx: &mut std::task::Context<'_>,
-  ) -> std::task::Poll<Result<(), std::io::Error>> {
-    let Some(file) = self.file.as_mut() else {
-      return std::task::Poll::Ready(Ok(()));
-    };
-    std::pin::Pin::new(file).poll_flush(cx)
-  }
-
-  fn poll_shutdown(
-    mut self: std::pin::Pin<&mut Self>,
-    cx: &mut std::task::Context<'_>,
-  ) -> std::task::Poll<Result<(), std::io::Error>> {
-    let Some(file) = self.file.as_mut() else {
-      return std::task::Poll::Ready(Ok(()));
-    };
-    std::pin::Pin::new(file).poll_shutdown(cx)
-  }
 }
 
 impl ImageCache {
-  pub fn new(root: PathBuf) -> Self {
-    Self::with_max_bytes(root, IMAGE_CACHE_MAX_BYTES)
+  /// Open (or create) the global catalog, migrating and reconciling it.
+  ///
+  /// A corrupt or unmigratable catalog is quarantined and rebuilt once. Any
+  /// unrecoverable failure is reported so the caller can fail open.
+  pub async fn init(root: PathBuf, max_bytes: u64) -> Result<Arc<Self>, ImageCacheError> {
+    match Self::open_pool(&root).await {
+      Ok(pool) => Ok(Self::from_pool(root, pool, max_bytes)),
+      Err(err) => {
+        log::warn!(
+          "Image cache catalog unusable ({}); quarantining and rebuilding",
+          err
+        );
+        Self::quarantine(&root).await;
+        let pool = Self::open_pool(&root).await?;
+        Ok(Self::from_pool(root, pool, max_bytes))
+      }
+    }
   }
 
-  pub fn with_max_bytes(root: PathBuf, max_bytes: u64) -> Self {
-    Self {
+  async fn open_pool(root: &Path) -> Result<SqlitePool, ImageCacheError> {
+    let images_dir = root.join("images");
+    tokio::fs::create_dir_all(&images_dir).await?;
+    let db_path = images_dir.join(CATALOG_FILE);
+
+    let options = SqliteConnectOptions::new()
+      .filename(&db_path)
+      .create_if_missing(true)
+      .journal_mode(SqliteJournalMode::Wal)
+      .synchronous(SqliteSynchronous::Normal)
+      .busy_timeout(std::time::Duration::from_secs(5));
+
+    let pool = SqlitePoolOptions::new()
+      .max_connections(4)
+      .connect_with(options)
+      .await?;
+
+    Self::migrate(&pool).await?;
+    Ok(pool)
+  }
+
+  async fn migrate(pool: &SqlitePool) -> Result<(), sqlx::Error> {
+    sqlx::query(
+      r#"
+      CREATE TABLE IF NOT EXISTS entries (
+        cache_key    TEXT PRIMARY KEY,
+        scope        TEXT NOT NULL,
+        file_name    TEXT NOT NULL,
+        size_bytes   INTEGER NOT NULL,
+        content_type TEXT,
+        accessed_at  INTEGER NOT NULL,
+        created_at   INTEGER NOT NULL
+      )
+      "#,
+    )
+    .execute(pool)
+    .await?;
+
+    sqlx::query("CREATE INDEX IF NOT EXISTS idx_entries_accessed ON entries (accessed_at)")
+      .execute(pool)
+      .await?;
+    sqlx::query("CREATE INDEX IF NOT EXISTS idx_entries_scope ON entries (scope)")
+      .execute(pool)
+      .await?;
+    Ok(())
+  }
+
+  fn from_pool(root: PathBuf, pool: SqlitePool, max_bytes: u64) -> Arc<Self> {
+    Arc::new(Self {
       root,
+      pool,
       max_bytes,
-      index_lock: TokioMutex::new(()),
       active_readers: ActiveReaders::default(),
+      writer_permits: Arc::new(Semaphore::new(MAX_CONCURRENT_WRITERS)),
+      commit_lock: TokioMutex::new(()),
+    })
+  }
+
+  /// Move a corrupt catalog aside without touching image files.
+  async fn quarantine(root: &Path) {
+    let images_dir = root.join("images");
+    for name in [
+      CATALOG_FILE.to_string(),
+      format!("{CATALOG_FILE}-wal"),
+      format!("{CATALOG_FILE}-shm"),
+    ] {
+      let src = images_dir.join(&name);
+      let dst = images_dir.join(format!(".corrupt-{}-{name}", Uuid::new_v4()));
+      let _ = tokio::fs::rename(&src, &dst).await;
     }
   }
 
   pub fn partition(provider: MediaServerProvider, server_url: &str) -> ImageCachePartition {
-    let provider = provider_slug(provider);
-    let normalized_url = normalize_server_url(server_url);
+    let provider_slug = provider_slug(provider);
+    let normalized = normalize_server_url(server_url);
     ImageCachePartition {
-      id: format!("{provider}-{:016x}", stable_hash(normalized_url.as_bytes())),
+      provider_slug,
+      server_hash: short_hash(normalized.as_bytes()),
     }
   }
 
+  fn cache_key(partition: &ImageCachePartition, remote_url: &str) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(partition.scope().as_bytes());
+    hasher.update([0u8]);
+    hasher.update(remote_url.as_bytes());
+    format!("{:x}", hasher.finalize())
+  }
+
+  fn images_dir(&self) -> PathBuf {
+    self.root.join("images")
+  }
+
+  fn entry_path(&self, file_name: &str) -> PathBuf {
+    self.images_dir().join(file_name)
+  }
+
+  /// Look up a cached entry, refreshing its LRU recency. Returns `None` on a
+  /// miss, a missing file (which is reconciled away), or any catalog error.
   pub async fn open_reader(
     &self,
     partition: &ImageCachePartition,
     remote_url: &str,
-  ) -> Result<Option<CacheReaderGuard>, ImageCacheError> {
-    let _lock = self.lock_partition(partition).await?;
-    let mut index = self.load_index(partition).await?;
-    let key = cache_key(remote_url);
-    let Some(entry) = index.entries.get_mut(&key) else {
-      return Ok(None);
-    };
+  ) -> Option<CacheReaderGuard> {
+    let cache_key = Self::cache_key(partition, remote_url);
+    let row: Option<EntryRow> =
+      sqlx::query_as("SELECT file_name, size_bytes, content_type FROM entries WHERE cache_key = ?")
+        .bind(&cache_key)
+        .fetch_optional(&self.pool)
+        .await
+        .ok()?;
 
-    let path = self.partition_dir(partition).join(&entry.file_name);
+    let row = row?;
+    let path = self.entry_path(&row.file_name);
+
     if tokio::fs::metadata(&path).await.is_err() {
-      index.entries.remove(&key);
-      self.save_index(partition, &index).await?;
-      return Ok(None);
+      // Dangling row: reconcile it away and treat as a miss.
+      let _ = sqlx::query("DELETE FROM entries WHERE cache_key = ?")
+        .bind(&cache_key)
+        .execute(&self.pool)
+        .await;
+      return None;
     }
 
-    entry.accessed_at_ms = now_ms()?;
-    let content_type = entry.content_type.clone();
-    let size_bytes = entry.size_bytes;
-    self.save_index(partition, &index).await?;
+    // Best-effort LRU touch; never delay the response on it.
+    if let Ok(now) = now_ms() {
+      let _ = sqlx::query("UPDATE entries SET accessed_at = ? WHERE cache_key = ?")
+        .bind(now as i64)
+        .bind(&cache_key)
+        .execute(&self.pool)
+        .await;
+    }
 
-    Ok(Some(
-      acquire_reader_guard(&self.active_readers, path, content_type, size_bytes).await?,
-    ))
+    acquire_reader_guard(
+      &self.active_readers,
+      path,
+      row.content_type,
+      row.size_bytes.max(0) as u64,
+    )
+    .await
+    .ok()
   }
 
-  pub async fn begin_write<'a>(
-    &'a self,
+  /// Try to elect a streaming writer for a miss. Returns `None` when caching is
+  /// not admitted (writer slots full, oversized origin, or setup failure); the
+  /// caller then streams from origin without caching.
+  pub async fn try_begin_writer(
+    self: &Arc<Self>,
     partition: &ImageCachePartition,
     remote_url: &str,
     content_type: Option<&str>,
-  ) -> Result<CacheWriter<'a>, ImageCacheError> {
-    let partition_dir = self.partition_dir(partition);
-    tokio::fs::create_dir_all(&partition_dir).await?;
-
-    let key = cache_key(remote_url);
-    let extension = cache_extension(remote_url, content_type);
-    let file_name = format!("{key}.{extension}");
-    let temp_name = format!(".tmp-{key}-{}", Uuid::new_v4());
-    let temp_path = partition_dir.join(temp_name);
-
-    let file = tokio::fs::File::create(&temp_path).await?;
-
-    Ok(CacheWriter {
-      cache: self,
-      partition: partition.clone(),
-      content_type: content_type.map(String::from),
-      temp_path,
-      file_name,
-      key,
-      file: Some(file),
-      written_bytes: 0,
-      committed: false,
-    })
-  }
-
-  pub async fn resolve_image_download<Fut>(
-    &self,
-    partition: &ImageCachePartition,
-    remote_url: &str,
-    fetch: Fut,
-  ) -> Result<ImageDownload, ImageCacheError>
-  where
-    Fut: Future<Output = Result<ImageDownload, ImageCacheError>>,
-  {
-    if let Some(reader) = self.open_reader(partition, remote_url).await? {
-      let bytes = reader.read_to_vec().await?;
-      return Ok(ImageDownload {
-        bytes,
-        content_type: reader.content_type().map(String::from),
-      });
+    declared_len: Option<u64>,
+  ) -> Option<StreamWriter> {
+    if declared_len.is_some_and(|len| len > IMAGE_CACHE_MAX_ENTRY_BYTES) {
+      return None;
     }
 
-    let download = tokio::time::timeout(IMAGE_CACHE_DOWNLOAD_TIMEOUT, fetch)
-      .await
-      .map_err(|_| ImageCacheError::Download("download timed out".to_string()))??;
+    let permit = self.writer_permits.clone().try_acquire_owned().ok()?;
 
-    let mut writer = self
-      .begin_write(partition, remote_url, download.content_type.as_deref())
-      .await?;
-    writer.write_all(&download.bytes).await?;
-    let _reader = writer.commit().await?;
+    let cache_key = Self::cache_key(partition, remote_url);
+    let extension = cache_extension(remote_url, content_type);
+    let file_name = format!("{}.{}", short_hash(cache_key.as_bytes()), extension);
+    let temp_name = format!(".tmp-{}-{}", file_name, Uuid::new_v4());
+    let temp_path = self.entry_path(&temp_name);
 
-    Ok(download)
+    if tokio::fs::create_dir_all(self.images_dir()).await.is_err() {
+      return None;
+    }
+    let file = match tokio::fs::File::create(&temp_path).await {
+      Ok(file) => file,
+      Err(_) => return None,
+    };
+
+    let (tx, rx) = mpsc::channel::<WriterMsg>(32);
+    let cache = Arc::clone(self);
+    let partition = partition.clone();
+    let content_type = content_type.map(String::from);
+    let cache_key_clone = cache_key.clone();
+    let file_name_clone = file_name.clone();
+
+    let done = tokio::spawn(async move {
+      cache
+        .run_writer(
+          rx,
+          file,
+          temp_path,
+          file_name_clone,
+          cache_key_clone,
+          partition,
+          content_type,
+        )
+        .await;
+    });
+
+    Some(StreamWriter {
+      tx: Some(tx),
+      buffer_permits: Arc::new(Semaphore::new(WRITER_BUFFER_BYTES)),
+      oversized: false,
+      _permit: permit,
+      _done: done,
+    })
   }
 
-  async fn lock_partition<'a>(
-    &'a self,
-    partition: &ImageCachePartition,
-  ) -> Result<PartitionLockGuard<'a>, ImageCacheError> {
-    let tokio_guard = self.index_lock.lock().await;
-    let partition_dir = self.partition_dir(partition);
-    tokio::fs::create_dir_all(&partition_dir).await?;
-    let lock_path = partition_dir.join(".lock");
-
-    let lock_file = tokio::task::spawn_blocking(move || -> std::io::Result<std::fs::File> {
-      let file = std::fs::OpenOptions::new()
-        .read(true)
-        .write(true)
-        .create(true)
-        .truncate(false)
-        .open(&lock_path)?;
-      FileExt::lock_exclusive(&file)?;
-      Ok(file)
-    })
-    .await
-    .map_err(|e| ImageCacheError::Io(std::io::Error::other(e)))??;
-
-    Ok(PartitionLockGuard {
-      _tokio_guard: tokio_guard,
-      lock_file,
-    })
-  }
-
-  async fn prune_with_lock(
+  #[allow(clippy::too_many_arguments)]
+  async fn run_writer(
     &self,
-    partition: &ImageCachePartition,
-    index: &mut CacheIndex,
-  ) -> Result<(), ImageCacheError> {
-    let partition_dir = self.partition_dir(partition);
-    let mut total = 0_u64;
-    let mut missing = Vec::new();
+    mut rx: mpsc::Receiver<WriterMsg>,
+    mut file: tokio::fs::File,
+    temp_path: PathBuf,
+    file_name: String,
+    cache_key: String,
+    partition: ImageCachePartition,
+    content_type: Option<String>,
+  ) {
+    use tokio::io::AsyncWriteExt;
 
-    for (key, entry) in &index.entries {
-      let path = partition_dir.join(&entry.file_name);
-      match tokio::fs::metadata(&path).await {
-        Ok(metadata) => total = total.saturating_add(metadata.len()),
-        Err(_) => missing.push(key.clone()),
+    let mut written: u64 = 0;
+    let mut completed = false;
+
+    while let Some(msg) = rx.recv().await {
+      match msg {
+        WriterMsg::Done => {
+          completed = true;
+          break;
+        }
+        WriterMsg::Chunk(chunk, permit) => {
+          if written.saturating_add(chunk.len() as u64) > IMAGE_CACHE_MAX_ENTRY_BYTES {
+            break;
+          }
+          if let Err(err) = file.write_all(&chunk).await {
+            log::debug!("Image cache write failed: {err}");
+            break;
+          }
+          written += chunk.len() as u64;
+          drop(permit);
+        }
       }
     }
+    drop(rx);
 
-    for key in missing {
-      index.entries.remove(&key);
+    // Only a clean end-of-stream marker commits. A dropped sender (abandonment,
+    // client disconnect, oversized, buffer overflow) leaves `completed` false.
+    if !completed {
+      drop(file);
+      let _ = tokio::fs::remove_file(&temp_path).await;
+      return;
     }
 
-    if total <= self.max_bytes {
-      return Ok(());
+    if let Err(err) = file.flush().await {
+      log::debug!("Image cache flush failed: {err}");
+      drop(file);
+      let _ = tokio::fs::remove_file(&temp_path).await;
+      return;
+    }
+    if let Err(err) = file.sync_all().await {
+      log::debug!("Image cache sync failed: {err}");
+      drop(file);
+      let _ = tokio::fs::remove_file(&temp_path).await;
+      return;
+    }
+    drop(file);
+
+    if let Err(err) = self
+      .commit(
+        &temp_path,
+        &file_name,
+        &cache_key,
+        &partition,
+        content_type,
+        written,
+      )
+      .await
+    {
+      log::debug!("Image cache commit abandoned: {err}");
+      let _ = tokio::fs::remove_file(&temp_path).await;
+    }
+  }
+
+  /// Atomically publish a completed temp file if the global budget can hold it.
+  async fn commit(
+    &self,
+    temp_path: &Path,
+    file_name: &str,
+    cache_key: &str,
+    partition: &ImageCachePartition,
+    content_type: Option<String>,
+    size_bytes: u64,
+  ) -> Result<(), ImageCacheError> {
+    if size_bytes > IMAGE_CACHE_MAX_ENTRY_BYTES {
+      return Err(ImageCacheError::WriterClosed);
+    }
+    if size_bytes > self.max_bytes {
+      return Err(ImageCacheError::WriterClosed);
     }
 
-    let mut entries = index
-      .entries
-      .iter()
-      .map(|(key, entry)| {
-        (
-          key.clone(),
-          entry.file_name.clone(),
-          entry.size_bytes,
-          entry.accessed_at_ms,
-        )
-      })
-      .collect::<Vec<_>>();
-    entries.sort_by_key(|(_, _, _, accessed_at_ms)| *accessed_at_ms);
+    let _commit = self.commit_lock.lock().await;
 
-    for (key, file_name, size_bytes, _) in entries {
-      if total <= self.max_bytes {
+    self.reconcile_missing().await?;
+    if !self.make_room(size_bytes).await? {
+      // Budget cannot accommodate even after evicting every unlocked entry.
+      return Err(ImageCacheError::WriterClosed);
+    }
+
+    let final_path = self.entry_path(file_name);
+    tokio::fs::rename(temp_path, &final_path).await?;
+    sync_parent_dir(&final_path).await;
+
+    let now = now_ms()? as i64;
+    sqlx::query(
+      r#"
+      INSERT INTO entries (cache_key, scope, file_name, size_bytes, content_type, accessed_at, created_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(cache_key) DO UPDATE SET
+        file_name = excluded.file_name,
+        size_bytes = excluded.size_bytes,
+        content_type = excluded.content_type,
+        accessed_at = excluded.accessed_at
+      "#,
+    )
+    .bind(cache_key)
+    .bind(partition.scope())
+    .bind(file_name)
+    .bind(size_bytes as i64)
+    .bind(content_type)
+    .bind(now)
+    .bind(now)
+    .execute(&self.pool)
+    .await?;
+
+    Ok(())
+  }
+
+  /// Sum committed bytes currently recorded in the catalog.
+  async fn total_bytes(&self) -> Result<u64, ImageCacheError> {
+    let total: Option<i64> = sqlx::query_scalar("SELECT COALESCE(SUM(size_bytes), 0) FROM entries")
+      .fetch_one(&self.pool)
+      .await?;
+    Ok(total.unwrap_or(0).max(0) as u64)
+  }
+
+  /// Drop catalog rows whose files no longer exist, returning freed bytes.
+  async fn reconcile_missing(&self) -> Result<(), ImageCacheError> {
+    let rows: Vec<(String, String)> = sqlx::query_as("SELECT cache_key, file_name FROM entries")
+      .fetch_all(&self.pool)
+      .await?;
+    let mut missing = Vec::new();
+    for (cache_key, file_name) in rows {
+      if tokio::fs::metadata(self.entry_path(&file_name))
+        .await
+        .is_err()
+      {
+        missing.push(cache_key);
+      }
+    }
+    for cache_key in missing {
+      let _ = sqlx::query("DELETE FROM entries WHERE cache_key = ?")
+        .bind(cache_key)
+        .execute(&self.pool)
+        .await;
+    }
+    Ok(())
+  }
+
+  /// Evict unlocked LRU entries until `incoming` bytes fit under the budget.
+  /// Returns `false` when locked readers prevent making enough room.
+  async fn make_room(&self, incoming: u64) -> Result<bool, ImageCacheError> {
+    let mut total = self.total_bytes().await?;
+    if total.saturating_add(incoming) <= self.max_bytes {
+      return Ok(true);
+    }
+
+    let rows: Vec<(String, String, i64, i64)> = sqlx::query_as(
+      "SELECT cache_key, file_name, size_bytes, accessed_at FROM entries ORDER BY accessed_at ASC",
+    )
+    .fetch_all(&self.pool)
+    .await?;
+
+    for (cache_key, file_name, size_bytes, _) in rows {
+      if total.saturating_add(incoming) <= self.max_bytes {
         break;
       }
-      let path = partition_dir.join(file_name);
+      let path = self.entry_path(&file_name);
       if self.active_readers.is_active(&path) {
         continue;
       }
-      let path_for_lock = path.clone();
-      let is_locked = tokio::task::spawn_blocking(move || {
-        if let Ok(file) = std::fs::OpenOptions::new()
-          .read(true)
-          .write(true)
-          .open(&path_for_lock)
-        {
-          FileExt::try_lock_exclusive(&file).is_err()
-        } else {
-          false
-        }
-      })
-      .await
-      .unwrap_or(false);
-
-      if is_locked {
+      if is_file_locked(&path).await {
         continue;
       }
-      if let Err(err) = tokio::fs::remove_file(&path).await {
-        if err.kind() != std::io::ErrorKind::NotFound {
-          return Err(err.into());
-        }
+      match tokio::fs::remove_file(&path).await {
+        Ok(()) => {}
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
+        Err(err) => return Err(err.into()),
       }
-      total = total.saturating_sub(size_bytes);
-      index.entries.remove(&key);
+      let _ = sqlx::query("DELETE FROM entries WHERE cache_key = ?")
+        .bind(&cache_key)
+        .execute(&self.pool)
+        .await;
+      total = total.saturating_sub(size_bytes.max(0) as u64);
     }
 
-    Ok(())
+    Ok(total.saturating_add(incoming) <= self.max_bytes)
   }
+}
 
-  async fn load_index(
-    &self,
-    partition: &ImageCachePartition,
-  ) -> Result<CacheIndex, ImageCacheError> {
-    let path = self.index_path(partition);
-    match tokio::fs::read(&path).await {
-      Ok(bytes) => Ok(serde_json::from_slice(&bytes)?),
-      Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(CacheIndex::default()),
-      Err(err) => Err(err.into()),
+/// Message sent from the serving path to an elected disk writer.
+enum WriterMsg {
+  /// A body chunk plus the buffer permit that bounds it; the writer releases
+  /// the permit once the chunk is on disk.
+  Chunk(bytes::Bytes, OwnedSemaphorePermit),
+  /// Clean end-of-stream: the transfer completed and may be committed.
+  Done,
+}
+
+/// Handle returned by an elected writer. Feed origin chunks with `try_push`;
+/// a `false` return means the cache branch was abandoned and the caller should
+/// stop pushing. Only `finish` commits; dropping without it aborts and removes
+/// the temp file.
+pub struct StreamWriter {
+  tx: Option<mpsc::Sender<WriterMsg>>,
+  buffer_permits: Arc<Semaphore>,
+  oversized: bool,
+  _permit: OwnedSemaphorePermit,
+  _done: tokio::task::JoinHandle<()>,
+}
+
+impl StreamWriter {
+  /// Offer a chunk to the disk writer without blocking the client stream.
+  /// Returns `false` when the buffer is full or the entry grew oversized; the
+  /// cache branch is abandoned and the client stream is unaffected.
+  pub fn try_push(&mut self, chunk: bytes::Bytes) -> bool {
+    if self.oversized || self.tx.is_none() {
+      return false;
+    }
+    let permit = match self
+      .buffer_permits
+      .clone()
+      .try_acquire_many_owned(chunk.len() as u32)
+    {
+      Ok(permit) => permit,
+      Err(_) => {
+        self.abandon();
+        return false;
+      }
+    };
+    let Some(tx) = self.tx.as_ref() else {
+      return false;
+    };
+    match tx.try_send(WriterMsg::Chunk(chunk, permit)) {
+      Ok(()) => true,
+      Err(_) => {
+        self.abandon();
+        false
+      }
     }
   }
 
-  async fn save_index(
-    &self,
-    partition: &ImageCachePartition,
-    index: &CacheIndex,
-  ) -> Result<(), ImageCacheError> {
-    let partition_dir = self.partition_dir(partition);
-    tokio::fs::create_dir_all(&partition_dir).await?;
-    let index_path = self.index_path(partition);
-    let temp_index_path = partition_dir.join(format!(".index.json.tmp.{}", Uuid::new_v4()));
+  fn abandon(&mut self) {
+    self.oversized = true;
+    self.tx.take();
+  }
 
-    let bytes = serde_json::to_vec_pretty(index)?;
-    tokio::fs::write(&temp_index_path, &bytes).await?;
-
-    if let Ok(file) = tokio::fs::File::open(&temp_index_path).await {
-      let _ = file.sync_all().await;
+  /// Signal a completed transfer and let the background task commit. Consumes
+  /// self so the sender cannot be reused afterward.
+  pub fn finish(mut self) {
+    if let Some(tx) = self.tx.take() {
+      let _ = tx.try_send(WriterMsg::Done);
     }
-
-    tokio::fs::rename(&temp_index_path, &index_path).await?;
-    Ok(())
   }
+}
 
-  fn partition_dir(&self, partition: &ImageCachePartition) -> PathBuf {
-    self.root.join("images").join(&partition.id)
-  }
-
-  fn index_path(&self, partition: &ImageCachePartition) -> PathBuf {
-    self.partition_dir(partition).join("index.json")
+impl Drop for StreamWriter {
+  fn drop(&mut self) {
+    // Dropping without `finish` ends the writer loop without a `Done` marker,
+    // so the background task treats the transfer as incomplete and removes its
+    // temp file.
+    self.tx.take();
   }
 }
 
@@ -582,17 +692,16 @@ fn provider_slug(provider: MediaServerProvider) -> &'static str {
   }
 }
 
-fn cache_key(remote_url: &str) -> String {
-  format!("{:016x}", stable_hash(remote_url.as_bytes()))
-}
-
-fn stable_hash(bytes: &[u8]) -> u64 {
-  let mut hash = 0xcbf29ce484222325_u64;
-  for byte in bytes {
-    hash ^= u64::from(*byte);
-    hash = hash.wrapping_mul(0x100000001b3);
+fn short_hash(bytes: &[u8]) -> String {
+  let mut hasher = Sha256::new();
+  hasher.update(bytes);
+  let digest = hasher.finalize();
+  let mut out = String::with_capacity(32);
+  for byte in &digest[..16] {
+    use std::fmt::Write;
+    let _ = write!(&mut out, "{byte:02x}");
   }
-  hash
+  out
 }
 
 fn cache_extension(remote_url: &str, content_type: Option<&str>) -> &'static str {
@@ -627,6 +736,36 @@ fn extension_from_url(remote_url: &str) -> Option<&'static str> {
   }
 }
 
+async fn is_file_locked(path: &Path) -> bool {
+  let path = path.to_path_buf();
+  tokio::task::spawn_blocking(move || {
+    if let Ok(file) = std::fs::OpenOptions::new()
+      .read(true)
+      .write(true)
+      .open(&path)
+    {
+      FileExt::try_lock_exclusive(&file).is_err()
+    } else {
+      // Missing/unopenable files are not "locked"; callers handle absence.
+      false
+    }
+  })
+  .await
+  .unwrap_or(false)
+}
+
+async fn sync_parent_dir(path: &Path) {
+  if let Some(parent) = path.parent() {
+    let parent = parent.to_path_buf();
+    let _ = tokio::task::spawn_blocking(move || {
+      if let Ok(dir) = std::fs::File::open(&parent) {
+        let _ = dir.sync_all();
+      }
+    })
+    .await;
+  }
+}
+
 fn now_ms() -> Result<u128, ImageCacheError> {
   SystemTime::now()
     .duration_since(UNIX_EPOCH)
@@ -635,366 +774,4 @@ fn now_ms() -> Result<u128, ImageCacheError> {
 }
 
 #[cfg(test)]
-mod tests {
-  use super::*;
-  use std::sync::atomic::{AtomicUsize, Ordering};
-
-  fn temp_cache_dir() -> PathBuf {
-    std::env::temp_dir().join(format!("jellypilot-image-cache-test-{}", Uuid::new_v4()))
-  }
-
-  fn partition() -> ImageCachePartition {
-    ImageCache::partition(MediaServerProvider::Jellyfin, "https://media.example.com/")
-  }
-
-  #[tokio::test]
-  async fn partition_ignores_trailing_server_slash() {
-    let a = ImageCache::partition(MediaServerProvider::Jellyfin, "https://media.example.com");
-    let b = ImageCache::partition(MediaServerProvider::Jellyfin, "https://media.example.com/");
-
-    assert_eq!(a.id, b.id);
-  }
-
-  #[tokio::test]
-  async fn resolve_image_download_reuses_cached_file_after_first_download() {
-    let root = temp_cache_dir();
-    let cache = ImageCache::with_max_bytes(root.clone(), 1024 * 1024);
-    let calls = Arc::new(AtomicUsize::new(0));
-    let calls_for_fetch = calls.clone();
-
-    let first = cache
-      .resolve_image_download(
-        &partition(),
-        "https://media.example.com/Items/1/Images/Primary?tag=a",
-        async move {
-          calls_for_fetch.fetch_add(1, Ordering::SeqCst);
-          Ok(ImageDownload {
-            bytes: b"image".to_vec(),
-            content_type: Some("image/png".to_string()),
-          })
-        },
-      )
-      .await
-      .expect("first image should cache");
-    let second = cache
-      .resolve_image_download(
-        &partition(),
-        "https://media.example.com/Items/1/Images/Primary?tag=a",
-        async {
-          Ok(ImageDownload {
-            bytes: b"changed".to_vec(),
-            content_type: Some("image/png".to_string()),
-          })
-        },
-      )
-      .await
-      .expect("second image should hit cache");
-
-    assert_eq!(first.bytes, b"image");
-    assert_eq!(second.bytes, b"image");
-    assert_eq!(calls.load(Ordering::SeqCst), 1);
-    let _ = std::fs::remove_dir_all(root);
-  }
-
-  #[tokio::test]
-  async fn resolve_image_download_evicts_least_recently_used_files_over_limit() {
-    let root = temp_cache_dir();
-    let cache = ImageCache::with_max_bytes(root.clone(), 7);
-    let partition = partition();
-    let first_url = "https://media.example.com/a.png?tag=1";
-    let second_url = "https://media.example.com/b.png?tag=2";
-
-    cache
-      .resolve_image_download(&partition, first_url, async {
-        Ok(ImageDownload {
-          bytes: b"12345".to_vec(),
-          content_type: Some("image/png".to_string()),
-        })
-      })
-      .await
-      .expect("first image should cache");
-    tokio::time::sleep(std::time::Duration::from_millis(2)).await;
-    cache
-      .resolve_image_download(&partition, second_url, async {
-        Ok(ImageDownload {
-          bytes: b"67890".to_vec(),
-          content_type: Some("image/png".to_string()),
-        })
-      })
-      .await
-      .expect("second image should cache");
-    let first = cache
-      .partition_dir(&partition)
-      .join(format!("{}.png", cache_key(first_url)));
-    let second = cache
-      .partition_dir(&partition)
-      .join(format!("{}.png", cache_key(second_url)));
-
-    assert!(!first.exists());
-    assert!(second.exists());
-    let _ = std::fs::remove_dir_all(root);
-  }
-
-  #[tokio::test]
-  async fn resolve_image_download_returns_error_when_download_fails() {
-    let root = temp_cache_dir();
-    let cache = ImageCache::with_max_bytes(root.clone(), 1024 * 1024);
-    let remote_url = "https://media.example.com/Items/1/Images/Primary?tag=a".to_string();
-
-    let err = cache
-      .resolve_image_download(&partition(), &remote_url, async {
-        Err(ImageCacheError::Download("no route".to_string()))
-      })
-      .await
-      .expect_err("failed download should propagate");
-
-    assert_eq!(err.to_string(), "image download failed: no route");
-    let _ = std::fs::remove_dir_all(root);
-  }
-
-  #[tokio::test]
-  async fn stream_write_commit_atomically_creates_cache_hit() {
-    let root = temp_cache_dir();
-    let cache = ImageCache::with_max_bytes(root.clone(), 1024 * 1024);
-    let partition = partition();
-    let remote_url = "https://media.example.com/stream1.png";
-
-    let mut writer = cache
-      .begin_write(&partition, remote_url, Some("image/png"))
-      .await
-      .expect("should begin write");
-    writer
-      .write_all(b"streamed bytes")
-      .await
-      .expect("should write bytes");
-
-    let temp_path = writer.temp_path().to_path_buf();
-    assert!(temp_path.exists());
-    assert!(cache
-      .open_reader(&partition, remote_url)
-      .await
-      .expect("reader check")
-      .is_none());
-
-    let reader = writer.commit().await.expect("commit should succeed");
-    assert!(!temp_path.exists());
-    assert_eq!(reader.content_type(), Some("image/png"));
-
-    let opened = cache
-      .open_reader(&partition, remote_url)
-      .await
-      .expect("should open reader")
-      .expect("cache hit expected");
-    assert_eq!(
-      opened.read_to_vec().await.expect("read bytes"),
-      b"streamed bytes"
-    );
-
-    let _ = std::fs::remove_dir_all(root);
-  }
-
-  #[tokio::test]
-  async fn stream_write_abort_or_drop_cleans_temp_file_and_no_cache_hit() {
-    let root = temp_cache_dir();
-    let cache = ImageCache::with_max_bytes(root.clone(), 1024 * 1024);
-    let partition = partition();
-    let remote_url = "https://media.example.com/stream_aborted.png";
-
-    let temp_path = {
-      let mut writer = cache
-        .begin_write(&partition, remote_url, Some("image/png"))
-        .await
-        .expect("should begin write");
-      writer
-        .write_all(b"partial content")
-        .await
-        .expect("should write");
-      let temp = writer.temp_path().to_path_buf();
-      assert!(temp.exists());
-      // writer drops here without committing
-      temp
-    };
-
-    assert!(!temp_path.exists());
-    assert!(cache
-      .open_reader(&partition, remote_url)
-      .await
-      .expect("reader check")
-      .is_none());
-
-    let _ = std::fs::remove_dir_all(root);
-  }
-
-  #[tokio::test]
-  async fn active_reader_prevents_lru_eviction() {
-    let root = temp_cache_dir();
-    let cache = ImageCache::with_max_bytes(root.clone(), 10);
-    let partition = partition();
-
-    let first_url = "https://media.example.com/first.png";
-    let second_url = "https://media.example.com/second.png";
-
-    let mut w1 = cache
-      .begin_write(&partition, first_url, Some("image/png"))
-      .await
-      .unwrap();
-    w1.write_all(b"1234567").await.unwrap(); // 7 bytes
-    let r1 = w1.commit().await.unwrap();
-
-    tokio::time::sleep(std::time::Duration::from_millis(2)).await;
-
-    // Writing second entry pushes the cache over its limit. Both committed
-    // readers remain protected until their guards are released.
-    let mut w2 = cache
-      .begin_write(&partition, second_url, Some("image/png"))
-      .await
-      .unwrap();
-    w2.write_all(b"8901234").await.unwrap(); // 7 bytes
-    let _r2 = w2.commit().await.unwrap();
-
-    // r1 is still held!
-    let first_reader = cache.open_reader(&partition, first_url).await.unwrap();
-    assert!(
-      first_reader.is_some(),
-      "active reader path must survive eviction"
-    );
-
-    drop(r1);
-    drop(first_reader);
-
-    tokio::time::sleep(std::time::Duration::from_millis(2)).await;
-
-    // Now write third entry (7 bytes) when r1 is no longer held.
-    let third_url = "https://media.example.com/third.png";
-    let mut w3 = cache
-      .begin_write(&partition, third_url, Some("image/png"))
-      .await
-      .unwrap();
-    w3.write_all(b"5678901").await.unwrap();
-    let _r3 = w3.commit().await.unwrap();
-
-    // Now first entry can be evicted.
-    let first_after_release = cache.open_reader(&partition, first_url).await.unwrap();
-    assert!(
-      first_after_release.is_none(),
-      "first entry should be evicted after reader dropped"
-    );
-
-    let _ = std::fs::remove_dir_all(root);
-  }
-
-  #[tokio::test]
-  async fn concurrent_instances_lock_guarded_index_updates() {
-    let root = temp_cache_dir();
-    let cache_a = Arc::new(ImageCache::with_max_bytes(root.clone(), 1024 * 1024));
-    let cache_b = Arc::new(ImageCache::with_max_bytes(root.clone(), 1024 * 1024));
-    let partition = partition();
-
-    let barrier = Arc::new(tokio::sync::Barrier::new(2));
-
-    let ca = cache_a.clone();
-    let part_a = partition.clone();
-    let bar_a = barrier.clone();
-    let task_a = tokio::spawn(async move {
-      let url_a = "https://media.example.com/instance_a.png";
-      let mut wa = ca
-        .begin_write(&part_a, url_a, Some("image/png"))
-        .await
-        .unwrap();
-      wa.write_all(b"data_a").await.unwrap();
-      bar_a.wait().await;
-      wa.commit().await.unwrap();
-    });
-
-    let cb = cache_b.clone();
-    let part_b = partition.clone();
-    let bar_b = barrier.clone();
-    let task_b = tokio::spawn(async move {
-      let url_b = "https://media.example.com/instance_b.png";
-      let mut wb = cb
-        .begin_write(&part_b, url_b, Some("image/png"))
-        .await
-        .unwrap();
-      wb.write_all(b"data_b").await.unwrap();
-      bar_b.wait().await;
-      wb.commit().await.unwrap();
-    });
-
-    let (res_a, res_b) = tokio::join!(task_a, task_b);
-    res_a.unwrap();
-    res_b.unwrap();
-
-    let url_a = "https://media.example.com/instance_a.png";
-    let url_b = "https://media.example.com/instance_b.png";
-
-    let read_b_from_a = cache_a.open_reader(&partition, url_b).await.unwrap();
-    assert!(
-      read_b_from_a.is_some(),
-      "cache_a should see write from cache_b"
-    );
-
-    let read_a_from_b = cache_b.open_reader(&partition, url_a).await.unwrap();
-    assert!(
-      read_a_from_b.is_some(),
-      "cache_b should see write from cache_a"
-    );
-
-    let _ = std::fs::remove_dir_all(root);
-  }
-  #[tokio::test]
-  async fn cross_instance_active_reader_prevents_eviction() {
-    let root = temp_cache_dir();
-    let cache_a = ImageCache::with_max_bytes(root.clone(), 10);
-    let cache_b = ImageCache::with_max_bytes(root.clone(), 10);
-    let partition = partition();
-
-    let url1 = "https://media.example.com/shared_1.png";
-    let url2 = "https://media.example.com/shared_2.png";
-
-    let mut w1 = cache_a
-      .begin_write(&partition, url1, Some("image/png"))
-      .await
-      .unwrap();
-    w1.write_all(b"1234567").await.unwrap(); // 7 bytes
-    let r1 = w1.commit().await.unwrap();
-
-    tokio::time::sleep(std::time::Duration::from_millis(2)).await;
-
-    // cache_b writes url2 (7 bytes) -> total 14 > 10.
-    // cache_b prune tries to evict url1, but cache_a holds a shared file lock (r1).
-    // Therefore, cache_b must skip evicting url1.
-    let mut w2 = cache_b
-      .begin_write(&partition, url2, Some("image/png"))
-      .await
-      .unwrap();
-    w2.write_all(b"8901234").await.unwrap(); // 7 bytes
-    let _r2 = w2.commit().await.unwrap();
-
-    let r1_check = cache_a.open_reader(&partition, url1).await.unwrap();
-    assert!(
-      r1_check.is_some(),
-      "url1 must survive cross-instance eviction while r1 is active"
-    );
-
-    drop(r1);
-    drop(r1_check);
-
-    tokio::time::sleep(std::time::Duration::from_millis(2)).await;
-
-    let url3 = "https://media.example.com/shared_3.png";
-    let mut w3 = cache_b
-      .begin_write(&partition, url3, Some("image/png"))
-      .await
-      .unwrap();
-    w3.write_all(b"5678901").await.unwrap();
-    let _r3 = w3.commit().await.unwrap();
-
-    let r1_after = cache_a.open_reader(&partition, url1).await.unwrap();
-    assert!(
-      r1_after.is_none(),
-      "url1 should be evictable after reader guard is dropped across instances"
-    );
-
-    let _ = std::fs::remove_dir_all(root);
-  }
-}
+mod tests;
