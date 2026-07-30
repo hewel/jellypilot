@@ -15,7 +15,10 @@
 use std::{
   collections::HashMap,
   path::{Path, PathBuf},
-  sync::Arc,
+  sync::{
+    atomic::{AtomicU64, Ordering},
+    Arc,
+  },
   time::{SystemTime, UNIX_EPOCH},
 };
 
@@ -193,6 +196,9 @@ pub struct ImageCache {
   commit_lock: TokioMutex<()>,
   /// Wakes the background conversion worker when new work is committed.
   work_notify: StdMutex<Option<Arc<tokio::sync::Notify>>>,
+  /// Destructive-maintenance epoch. Bumped by Clear so writers/encoders that
+  /// started before it cannot publish across the reset.
+  epoch: AtomicU64,
 }
 
 #[derive(Clone)]
@@ -377,12 +383,32 @@ impl ImageCache {
       writer_permits: Arc::new(Semaphore::new(MAX_CONCURRENT_WRITERS)),
       commit_lock: TokioMutex::new(()),
       work_notify: StdMutex::new(None),
+      epoch: AtomicU64::new(0),
     })
   }
 
   /// Register the notifier the conversion worker waits on for same-process work.
   pub fn set_work_notify(&self, notify: Arc<tokio::sync::Notify>) {
     *self.work_notify.lock() = Some(notify);
+  }
+
+  /// Current destructive-maintenance epoch.
+  pub fn current_epoch(&self) -> u64 {
+    self.epoch.load(Ordering::SeqCst)
+  }
+
+  /// Test-only access to the catalog pool for assertions.
+  #[cfg(test)]
+  pub fn pool_for_test(&self) -> &SqlitePool {
+    &self.pool
+  }
+
+  /// Begin a destructive epoch: invalidates the right of any writer or encoder
+  /// that started earlier to publish across it. Triggered by the Clear action
+  /// (#194); exercised today by the epoch-guard tests.
+  #[allow(dead_code)]
+  pub fn bump_epoch(&self) -> u64 {
+    self.epoch.fetch_add(1, Ordering::SeqCst) + 1
   }
 
   fn notify_work(&self) {
@@ -514,6 +540,7 @@ impl ImageCache {
     let content_type = content_type.map(String::from);
     let cache_key_clone = cache_key.clone();
     let file_name_clone = file_name.clone();
+    let expected_epoch = self.current_epoch();
 
     let done = tokio::spawn(async move {
       cache
@@ -525,6 +552,7 @@ impl ImageCache {
           cache_key_clone,
           partition,
           content_type,
+          expected_epoch,
         )
         .await;
     });
@@ -548,6 +576,7 @@ impl ImageCache {
     cache_key: String,
     partition: ImageCachePartition,
     content_type: Option<String>,
+    expected_epoch: u64,
   ) {
     use tokio::io::AsyncWriteExt;
 
@@ -609,6 +638,7 @@ impl ImageCache {
         content_type,
         content_digest,
         written,
+        expected_epoch,
       )
       .await
     {
@@ -628,6 +658,7 @@ impl ImageCache {
     content_type: Option<String>,
     content_digest: String,
     size_bytes: u64,
+    expected_epoch: u64,
   ) -> Result<(), ImageCacheError> {
     if size_bytes > IMAGE_CACHE_MAX_ENTRY_BYTES {
       return Err(ImageCacheError::WriterClosed);
@@ -637,6 +668,13 @@ impl ImageCache {
     }
 
     let _commit = self.commit_lock.lock().await;
+
+    // Epoch guard, taken under the same lock that destructive maintenance uses:
+    // a writer that started before the epoch changed must not republish across
+    // it.
+    if self.current_epoch() != expected_epoch {
+      return Err(ImageCacheError::WriterClosed);
+    }
 
     self.reconcile_missing().await?;
     if !self.make_room(size_bytes).await? {
@@ -884,8 +922,14 @@ impl ImageCache {
     avif_size_bytes: u64,
     avif_digest: &str,
     avif_content_type: &str,
+    expected_epoch: u64,
   ) -> Result<(), ImageCacheError> {
     let _commit = self.commit_lock.lock().await;
+    // Epoch guard: an encode started before a destructive epoch must not
+    // publish across it.
+    if self.current_epoch() != expected_epoch {
+      return Err(ImageCacheError::WriterClosed);
+    }
     sqlx::query(
       r#"
       UPDATE entries
@@ -1009,6 +1053,157 @@ impl ImageCache {
       Err(err) => return Err(err.into()),
     }
 
+    Ok(())
+  }
+
+  /// Recovery-on-adopt: reconcile durable state left by a crashed or upgraded
+  /// prior owner. Runs once by the worker immediately after it acquires the
+  /// cache-directory lock, so no live process can be mid-claim on any row it
+  /// touches.
+  pub async fn recover_on_adopt(&self) -> Result<(), ImageCacheError> {
+    self.reset_abandoned_claims().await?;
+    self.cleanup_stale_temps().await?;
+    self.requeue_policy_changed().await?;
+    self.recover_orphan_avifs().await?;
+    self.finish_deferred_origin_cleanup().await?;
+    Ok(())
+  }
+
+  /// Rows left in `encoding` by a crashed owner are reset to `pending` so the
+  /// new owner retries them. Safe because the exclusive worker lock proves no
+  /// live process can be encoding them.
+  async fn reset_abandoned_claims(&self) -> Result<(), ImageCacheError> {
+    sqlx::query(
+      "UPDATE entries SET conv_state='pending', conv_next_at=0 WHERE conv_state='encoding'",
+    )
+    .execute(&self.pool)
+    .await?;
+    Ok(())
+  }
+
+  /// Remove abandoned `.tmp-*` writer files, but only when a cross-process
+  /// exclusive lock proves no live writer still owns them.
+  async fn cleanup_stale_temps(&self) -> Result<(), ImageCacheError> {
+    let mut entries = match tokio::fs::read_dir(self.images_dir()).await {
+      Ok(entries) => entries,
+      Err(_) => return Ok(()),
+    };
+    while let Some(entry) = entries.next_entry().await? {
+      let name = entry.file_name();
+      let Some(name) = name.to_str() else { continue };
+      if !name.starts_with(".tmp-") {
+        continue;
+      }
+      let path = entry.path();
+      let lock_path = path.clone();
+      let removable = tokio::task::spawn_blocking(move || {
+        let file = std::fs::OpenOptions::new()
+          .read(true)
+          .write(true)
+          .open(&lock_path)
+          .ok()?;
+        // Non-blocking: acquiring the exclusive lock proves no writer owns it.
+        FileExt::try_lock_exclusive(&file).ok()?;
+        Some(())
+      })
+      .await
+      .map(|v| v.is_some())
+      .unwrap_or(false);
+      if removable {
+        let _ = tokio::fs::remove_file(&path).await;
+      }
+    }
+    Ok(())
+  }
+
+  /// Requeue terminal entries recorded under an older conversion policy whose
+  /// originals still exist. Active AVIF representations are left unchanged.
+  async fn requeue_policy_changed(&self) -> Result<(), ImageCacheError> {
+    let rows: Vec<(String, String)> = sqlx::query_as(
+      "SELECT cache_key, original_file_name FROM entries \
+       WHERE conv_policy_version != ? AND active_kind = 'origin' \
+         AND conv_state IN ('failed','not_eligible','evaluated') AND original_file_name IS NOT NULL",
+    )
+    .bind(CONVERSION_POLICY_VERSION)
+    .fetch_all(&self.pool)
+    .await?;
+    for (cache_key, original_file_name) in rows {
+      // Only requeue when the original bytes are still available to re-encode.
+      if tokio::fs::metadata(self.entry_path(&original_file_name))
+        .await
+        .is_err()
+      {
+        continue;
+      }
+      sqlx::query(
+        "UPDATE entries SET conv_state='pending', conv_attempts=0, conv_next_at=0, \
+         conv_error=NULL, conv_policy_version=? WHERE cache_key=?",
+      )
+      .bind(CONVERSION_POLICY_VERSION)
+      .bind(&cache_key)
+      .execute(&self.pool)
+      .await?;
+    }
+    Ok(())
+  }
+
+  /// Adopt final AVIF files that were renamed into place before a crash but
+  /// never activated in SQLite. Each candidate is structurally and economically
+  /// revalidated; valid files are activated, invalid files are deleted and the
+  /// row is requeued for a fresh encode.
+  async fn recover_orphan_avifs(&self) -> Result<(), ImageCacheError> {
+    let rows: Vec<(String, String, i64)> = sqlx::query_as(
+      "SELECT cache_key, original_file_name, original_size_bytes FROM entries \
+       WHERE active_kind = 'origin' AND original_file_name IS NOT NULL AND original_size_bytes IS NOT NULL",
+    )
+    .fetch_all(&self.pool)
+    .await?;
+    for (cache_key, original_file_name, original_size_bytes) in rows {
+      let avif_name = Self::avif_file_name_for(&original_file_name);
+      let avif_path = self.entry_path(&avif_name);
+      let Ok(avif_bytes) = tokio::fs::read(&avif_path).await else {
+        continue;
+      };
+      let avif_size = avif_bytes.len() as u64;
+      let structurally_valid = crate::avif_encode::parse_avif_dimensions(&avif_bytes).is_some();
+      let economically_valid =
+        crate::avif_encode::has_sufficient_saving(original_size_bytes.max(0) as u64, avif_size);
+      if structurally_valid && economically_valid {
+        let digest = format!("{:x}", Sha256::digest(&avif_bytes));
+        self
+          .activate_avif(
+            &cache_key,
+            &avif_name,
+            avif_size,
+            &digest,
+            "image/avif",
+            self.current_epoch(),
+          )
+          .await?;
+      } else {
+        // Invalid orphan: delete it and requeue the row for a fresh encode.
+        let _ = tokio::fs::remove_file(&avif_path).await;
+        sqlx::query("UPDATE entries SET conv_state='pending', conv_next_at=0 WHERE cache_key=?")
+          .bind(&cache_key)
+          .execute(&self.pool)
+          .await?;
+      }
+    }
+    Ok(())
+  }
+
+  /// Finish removing originals for rows that activated an AVIF but crashed
+  /// before the original was deleted. Retains the active AVIF and defers to
+  /// any active readers via the shared removal path.
+  async fn finish_deferred_origin_cleanup(&self) -> Result<(), ImageCacheError> {
+    let rows: Vec<(String,)> = sqlx::query_as(
+      "SELECT cache_key FROM entries WHERE active_kind = 'avif' AND original_file_name IS NOT NULL",
+    )
+    .fetch_all(&self.pool)
+    .await?;
+    for (cache_key,) in rows {
+      let _ = self.remove_original_if_idle(&cache_key).await?;
+    }
     Ok(())
   }
 

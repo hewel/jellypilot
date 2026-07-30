@@ -101,16 +101,18 @@ pub fn run() {
             Ok(cache) => {
               image_cache_for_setup.write().replace(Arc::clone(&cache));
               // Start the background AVIF conversion worker for this cache dir.
-              if avif_worker::ConversionWorker::start(
+              // The loop owns/releases the cache-dir lock itself: it yields to
+              // another enabled process when disabled and recovers durable
+              // state when it (re)acquires the lock.
+              let _worker = avif_worker::ConversionWorker::start(
                 Arc::clone(&cache),
                 cache_dir,
                 Arc::clone(&foreground_gate),
                 avif_capability.clone(),
-              )
-              .is_none()
-              {
-                log::info!("AVIF worker lock held by another process; standing down");
-              }
+                config.clone(),
+              );
+              // Keep the worker alive for the app lifetime.
+              std::mem::forget(_worker);
               Some(cache)
             }
             Err(e) => {

@@ -1249,6 +1249,7 @@ mod tests {
         avif_bytes.len() as u64,
         "abc123",
         "image/avif",
+        cache.current_epoch(),
       )
       .await
       .unwrap();

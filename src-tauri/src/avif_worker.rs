@@ -101,24 +101,35 @@ pub struct ConversionWorker {
 }
 
 impl ConversionWorker {
-  /// Spawn the worker. Returns `None` if another process already owns the
-  /// cache-directory worker lock.
+  /// Spawn the worker. The loop acquires the cache-directory worker lock and
+  /// releases it whenever the cache is disabled so another enabled process can
+  /// own conversion. It polls periodically so it also takes over when a live
+  /// owner exits.
   pub fn start(
     cache: Arc<ImageCache>,
     cache_dir: PathBuf,
     gate: Arc<ForegroundGate>,
     capability: AvifCapability,
-  ) -> Option<Self> {
+    config: Arc<parking_lot::RwLock<crate::config::AppConfig>>,
+  ) -> Self {
     let lock_path = cache_dir.join("images").join(".worker.lock");
-    let lock_file = acquire_worker_lock(&lock_path)?;
     let cancel = CancellationToken::new();
     let worker_cancel = cancel.clone();
 
     tauri::async_runtime::spawn(async move {
-      run_worker(cache, gate, capability, worker_cancel, lock_file).await;
+      run_worker(
+        cache,
+        gate,
+        capability,
+        config,
+        worker_cancel,
+        lock_path,
+        CROSS_PROCESS_POLL,
+      )
+      .await;
     });
 
-    Some(Self { cancel })
+    Self { cancel }
   }
 }
 
@@ -148,23 +159,54 @@ async fn run_worker(
   cache: Arc<ImageCache>,
   gate: Arc<ForegroundGate>,
   capability: AvifCapability,
+  config: Arc<parking_lot::RwLock<crate::config::AppConfig>>,
   cancel: CancellationToken,
-  _lock_file: std::fs::File,
+  lock_path: PathBuf,
+  poll: Duration,
 ) {
   let notify = Arc::new(Notify::new());
   // Expose the notifier so commit can wake the worker for same-process work.
   cache.set_work_notify(Arc::clone(&notify));
+  let mut lock_file: Option<std::fs::File> = None;
+  // Trigger an immediate first pass so lock acquisition and recovery-on-adopt
+  // happen promptly instead of waiting for the cross-process poll interval.
+  notify.notify_one();
 
   loop {
     // Wait for a wake-up, the cross-process poll interval, or shutdown.
     tokio::select! {
       _ = cancel.cancelled() => break,
       _ = notify.notified() => {}
-      _ = tokio::time::sleep(CROSS_PROCESS_POLL) => {}
+      _ = tokio::time::sleep(poll) => {}
     }
 
     if cancel.is_cancelled() {
       break;
+    }
+
+    // Disabled-cache gate: stop new claims and release the lock so another
+    // enabled process can own the worker. Existing files/rows are retained.
+    if !config.read().image_disk_cache_enabled {
+      if lock_file.take().is_some() {
+        log::info!("Image disk cache disabled; released AVIF worker lock");
+      }
+      continue;
+    }
+
+    // Ensure ownership of the cache-directory lock. On a fresh acquisition the
+    // new owner reconciles durable state left by a crashed/upgraded prior
+    // owner before claiming anything.
+    if lock_file.is_none() {
+      match acquire_worker_lock(&lock_path) {
+        Some(file) => {
+          lock_file = Some(file);
+          if let Err(err) = cache.recover_on_adopt().await {
+            log::debug!("AVIF worker adopt recovery failed: {err}");
+          }
+        }
+        // Another enabled process owns the worker; keep polling.
+        None => continue,
+      }
     }
 
     // Capability gate: unknown or unsupported leaves origins active.
@@ -194,6 +236,9 @@ async fn run_worker(
 }
 
 async fn process_claim(cache: &Arc<ImageCache>, claim: &crate::image_cache::WorkClaim) {
+  // Capture the epoch before encoding so a destructive epoch that lands while
+  // we work (e.g. a Clear) prevents publication of the now-stale result.
+  let epoch = cache.current_epoch();
   let original_path = cache.path_for(&claim.original_file_name);
 
   let original = match tokio::fs::read(&original_path).await {
@@ -274,6 +319,7 @@ async fn process_claim(cache: &Arc<ImageCache>, claim: &crate::image_cache::Work
       encoded.bytes.len() as u64,
       &digest,
       "image/avif",
+      epoch,
     )
     .await
   {
@@ -345,5 +391,160 @@ mod tests {
       !cap.is_supported(),
       "unknown capability must not start work"
     );
+  }
+
+  fn enabled_config() -> Arc<parking_lot::RwLock<crate::config::AppConfig>> {
+    Arc::new(parking_lot::RwLock::new(crate::config::AppConfig::default()))
+  }
+
+  fn temp_cache_dir() -> PathBuf {
+    let dir = std::env::temp_dir().join(format!("worker_test_{}", uuid::Uuid::new_v4()));
+    std::fs::create_dir_all(&dir).unwrap();
+    dir
+  }
+
+  // Wait until the worker holds the lock (an external acquisition fails), or
+  // panic after a bounded number of polls.
+  async fn wait_worker_owns_lock(lock_path: &std::path::Path) {
+    for _ in 0..200 {
+      match acquire_worker_lock(lock_path) {
+        // Acquisition failed: the worker owns it.
+        None => return,
+        // We grabbed it first; release immediately and retry shortly.
+        Some(file) => {
+          drop(file);
+          tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+      }
+    }
+    panic!("worker did not acquire the lock in time");
+  }
+
+  // Wait until the lock is free (an external acquisition succeeds). Returns the
+  // held file so the caller can release it deliberately.
+  async fn wait_lock_free(lock_path: &std::path::Path) -> std::fs::File {
+    for _ in 0..200 {
+      if let Some(file) = acquire_worker_lock(lock_path) {
+        return file;
+      }
+      tokio::time::sleep(Duration::from_millis(5)).await;
+    }
+    panic!("worker did not release the lock in time");
+  }
+
+  #[tokio::test]
+  async fn disabled_cache_releases_lock_and_recovers_on_reacquire() {
+    let dir = temp_cache_dir();
+    let cache =
+      crate::image_cache::ImageCache::init(dir.clone(), crate::image_cache::IMAGE_CACHE_MAX_BYTES)
+        .await
+        .expect("init cache");
+
+    // Seed an abandoned encoding claim so recovery-on-adopt has work to do.
+    let partition = crate::image_cache::ImageCache::partition(
+      crate::jellyfin::MediaServerProvider::Jellyfin,
+      "https://media.example.com",
+    );
+    let url = "https://media.example.com/Items/owned/Images/Primary";
+    let cache_key = crate::image_cache::ImageCache::cache_key(&partition, url);
+    sqlx::query(
+      "INSERT INTO entries (cache_key, scope, file_name, size_bytes, accessed_at, created_at, conv_state) \
+       VALUES (?, 'scope', 'f.jpg', 3, 0, 0, 'encoding')",
+    )
+    .bind(&cache_key)
+    .execute(cache.pool_for_test())
+    .await
+    .unwrap();
+
+    let config = enabled_config();
+    let cancel = CancellationToken::new();
+    let lock_path = dir.join("images").join(".worker.lock");
+
+    let worker_cache = Arc::clone(&cache);
+    let worker_config = Arc::clone(&config);
+    let worker_cancel = cancel.clone();
+    let worker_lock_path = lock_path.clone();
+    let handle = tokio::spawn(async move {
+      run_worker(
+        worker_cache,
+        Arc::new(ForegroundGate::new()),
+        AvifCapability::new(),
+        worker_config,
+        worker_cancel,
+        worker_lock_path,
+        Duration::from_millis(15),
+      )
+      .await;
+    });
+
+    // Worker acquires the lock promptly and recovers the abandoned claim.
+    wait_worker_owns_lock(&lock_path).await;
+    for _ in 0..100 {
+      let state: (String,) = sqlx::query_as("SELECT conv_state FROM entries WHERE cache_key = ?")
+        .bind(&cache_key)
+        .fetch_one(cache.pool_for_test())
+        .await
+        .unwrap();
+      if state.0 == "pending" {
+        break;
+      }
+      tokio::time::sleep(Duration::from_millis(5)).await;
+    }
+    let state: (String,) = sqlx::query_as("SELECT conv_state FROM entries WHERE cache_key = ?")
+      .bind(&cache_key)
+      .fetch_one(cache.pool_for_test())
+      .await
+      .unwrap();
+    assert_eq!(state.0, "pending", "adopt must reset abandoned claim");
+
+    // Disabling releases the lock so another enabled process can own it.
+    config.write().image_disk_cache_enabled = false;
+    let free = wait_lock_free(&lock_path).await;
+    drop(free);
+
+    // Re-enabling lets this worker re-acquire the lock.
+    config.write().image_disk_cache_enabled = true;
+    wait_worker_owns_lock(&lock_path).await;
+
+    cancel.cancel();
+    tokio::time::timeout(Duration::from_secs(2), handle)
+      .await
+      .expect("worker must stop promptly on shutdown")
+      .expect("worker task");
+
+    let _ = std::fs::remove_dir_all(&dir);
+  }
+
+  #[tokio::test]
+  async fn worker_shutdown_is_prompt() {
+    let dir = temp_cache_dir();
+    let cache =
+      crate::image_cache::ImageCache::init(dir.clone(), crate::image_cache::IMAGE_CACHE_MAX_BYTES)
+        .await
+        .expect("init cache");
+    let cancel = CancellationToken::new();
+    let worker_cache = Arc::clone(&cache);
+    let worker_cancel = cancel.clone();
+    let lock_path = dir.join("images").join(".worker.lock");
+    let handle = tokio::spawn(async move {
+      run_worker(
+        worker_cache,
+        Arc::new(ForegroundGate::new()),
+        AvifCapability::new(),
+        enabled_config(),
+        worker_cancel,
+        lock_path,
+        Duration::from_millis(15),
+      )
+      .await;
+    });
+
+    cancel.cancel();
+    tokio::time::timeout(Duration::from_secs(2), handle)
+      .await
+      .expect("shutdown must be prompt")
+      .expect("worker task");
+
+    let _ = std::fs::remove_dir_all(&dir);
   }
 }

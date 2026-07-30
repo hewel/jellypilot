@@ -301,7 +301,14 @@ async fn reject_avif_restores_origin_and_marks_failed() {
     .await
     .unwrap();
   cache
-    .activate_avif(&cache_key, &avif_name, 15, "deadbeef", "image/avif")
+    .activate_avif(
+      &cache_key,
+      &avif_name,
+      15,
+      "deadbeef",
+      "image/avif",
+      cache.current_epoch(),
+    )
     .await
     .unwrap();
 
@@ -361,4 +368,481 @@ async fn reject_avif_noop_when_origin_active() {
 
   let reader = cache.open_reader(&partition(), url).await.unwrap();
   assert_eq!(reader.content_type(), Some("image/jpeg"));
+}
+
+fn make_jpeg(width: u32, height: u32) -> Vec<u8> {
+  let mut rgb = vec![0u8; (width * height * 3) as usize];
+  for (i, chunk) in rgb.chunks_exact_mut(3).enumerate() {
+    let x = (i as u32 % width) as u8;
+    let y = (i as u32 / width) as u8;
+    chunk[0] = x.wrapping_mul(8);
+    chunk[1] = y.wrapping_mul(8);
+    chunk[2] = 128;
+  }
+  let mut jpeg = Vec::new();
+  image::write_buffer_with_format(
+    &mut std::io::Cursor::new(&mut jpeg),
+    &rgb,
+    width,
+    height,
+    image::ColorType::Rgb8,
+    image::ImageFormat::Jpeg,
+  )
+  .expect("encode jpeg");
+  jpeg
+}
+
+fn make_avif() -> Vec<u8> {
+  crate::avif_encode::encode_jpeg_to_avif(&make_jpeg(32, 32))
+    .expect("opaque jpeg must encode")
+    .bytes
+}
+
+async fn set_conv(cache: &Arc<ImageCache>, cache_key: &str, state: &str, attempts: i64) {
+  sqlx::query("UPDATE entries SET conv_state = ?, conv_attempts = ? WHERE cache_key = ?")
+    .bind(state)
+    .bind(attempts)
+    .bind(cache_key)
+    .execute(&cache.pool)
+    .await
+    .unwrap();
+}
+
+async fn get_row(cache: &Arc<ImageCache>, cache_key: &str) -> (String, i64, i64, i64) {
+  let row: (String, i64, i64, i64) = sqlx::query_as(
+    "SELECT conv_state, conv_attempts, conv_next_at, conv_policy_version FROM entries WHERE cache_key = ?",
+  )
+  .bind(cache_key)
+  .fetch_one(&cache.pool)
+  .await
+  .unwrap();
+  row
+}
+
+#[tokio::test]
+async fn recover_resets_abandoned_encoding_claims() {
+  let dir = TempDirGuard::new();
+  let cache = ImageCache::init(dir.path(), IMAGE_CACHE_MAX_BYTES)
+    .await
+    .expect("init");
+  let url = "https://media.example.com/Items/abandoned/Images/Primary";
+  write_entry(&cache, url, b"jpeg").await;
+  let cache_key = ImageCache::cache_key(&partition(), url);
+
+  // Simulate a crashed owner leaving a row mid-claim.
+  set_conv(&cache, &cache_key, "encoding", 0).await;
+
+  cache.recover_on_adopt().await.expect("recover");
+
+  let (state, _attempts, next_at, _ver) = get_row(&cache, &cache_key).await;
+  assert_eq!(state, "pending", "abandoned claim must reset to pending");
+  assert_eq!(next_at, 0, "reset claim must be immediately due");
+}
+
+#[tokio::test]
+async fn recover_removes_stale_temp_but_keeps_locked_temp() {
+  let dir = TempDirGuard::new();
+  let cache = ImageCache::init(dir.path(), IMAGE_CACHE_MAX_BYTES)
+    .await
+    .expect("init");
+  let images = dir.path().join("images");
+
+  // An abandoned temp with no live writer lock must be removed.
+  let abandoned = images.join(".tmp-abandoned-1");
+  tokio::fs::write(&abandoned, b"partial").await.unwrap();
+
+  // A temp whose exclusive lock is held (live writer) must be preserved.
+  let owned = images.join(".tmp-owned-2");
+  let owned_file = std::fs::OpenOptions::new()
+    .read(true)
+    .write(true)
+    .create(true)
+    .truncate(true)
+    .open(&owned)
+    .unwrap();
+  fs2::FileExt::lock_exclusive(&owned_file).unwrap();
+
+  cache.recover_on_adopt().await.expect("recover");
+
+  assert!(
+    tokio::fs::metadata(&abandoned).await.is_err(),
+    "unlocked stale temp must be removed"
+  );
+  assert!(
+    tokio::fs::metadata(&owned).await.is_ok(),
+    "locked temp owned by a live writer must be preserved"
+  );
+
+  fs2::FileExt::unlock(&owned_file).unwrap();
+}
+
+#[tokio::test]
+async fn recover_requeues_old_policy_terminal_but_keeps_active_avif() {
+  let dir = TempDirGuard::new();
+  let cache = ImageCache::init(dir.path(), IMAGE_CACHE_MAX_BYTES)
+    .await
+    .expect("init");
+  let url = "https://media.example.com/Items/policy/Images/Primary";
+  write_entry(&cache, url, b"jpeg").await;
+  let cache_key = ImageCache::cache_key(&partition(), url);
+
+  // Terminal failure under an older policy version.
+  sqlx::query("UPDATE entries SET conv_state='failed', conv_policy_version=0 WHERE cache_key=?")
+    .bind(&cache_key)
+    .execute(&cache.pool)
+    .await
+    .unwrap();
+
+  // A second entry that is AVIF-active under the old policy must be untouched.
+  let url2 = "https://media.example.com/Items/policy-avif/Images/Primary";
+  write_entry(&cache, url2, b"jpeg").await;
+  let cache_key2 = ImageCache::cache_key(&partition(), url2);
+  let reader = cache.open_reader(&partition(), url2).await.unwrap();
+  let orig2 = reader
+    .path()
+    .file_name()
+    .unwrap()
+    .to_str()
+    .unwrap()
+    .to_string();
+  drop(reader);
+  let avif2 = ImageCache::avif_file_name_for(&orig2);
+  let avif_bytes = make_avif();
+  tokio::fs::write(cache.path_for(&avif2), &avif_bytes)
+    .await
+    .unwrap();
+  cache
+    .activate_avif(
+      &cache_key2,
+      &avif2,
+      avif_bytes.len() as u64,
+      "d",
+      "image/avif",
+      cache.current_epoch(),
+    )
+    .await
+    .unwrap();
+  sqlx::query("UPDATE entries SET conv_policy_version=0 WHERE cache_key=?")
+    .bind(&cache_key2)
+    .execute(&cache.pool)
+    .await
+    .unwrap();
+
+  cache.recover_on_adopt().await.expect("recover");
+
+  // Terminal old-policy origin-active row is requeued with the current version.
+  let (state, attempts, _next, ver) = get_row(&cache, &cache_key).await;
+  assert_eq!(state, "pending", "old-policy terminal row must be requeued");
+  assert_eq!(attempts, 0);
+  assert_eq!(
+    ver, CONVERSION_POLICY_VERSION,
+    "requeued row must take the current policy version"
+  );
+
+  // AVIF-active row is left unchanged even though its version is old.
+  let reader = cache.open_reader(&partition(), url2).await.unwrap();
+  assert_eq!(
+    reader.content_type(),
+    Some("image/avif"),
+    "active AVIF must remain active across policy requeue"
+  );
+}
+
+#[tokio::test]
+async fn recover_adopts_valid_orphan_avif_and_deletes_invalid() {
+  let dir = TempDirGuard::new();
+  let cache = ImageCache::init(dir.path(), IMAGE_CACHE_MAX_BYTES)
+    .await
+    .expect("init");
+
+  // Valid orphan: a real AVIF renamed into place but never activated.
+  let url = "https://media.example.com/Items/orphan-good/Images/Primary";
+  write_entry(&cache, url, &make_jpeg(32, 32)).await;
+  let cache_key = ImageCache::cache_key(&partition(), url);
+  let reader = cache.open_reader(&partition(), url).await.unwrap();
+  let orig = reader
+    .path()
+    .file_name()
+    .unwrap()
+    .to_str()
+    .unwrap()
+    .to_string();
+  drop(reader);
+  let avif_name = ImageCache::avif_file_name_for(&orig);
+  let avif_bytes = make_avif();
+  // Ensure the economic gate passes regardless of tiny synthetic sizes.
+  sqlx::query("UPDATE entries SET original_size_bytes = ? WHERE cache_key = ?")
+    .bind((avif_bytes.len() as i64) * 3)
+    .bind(&cache_key)
+    .execute(&cache.pool)
+    .await
+    .unwrap();
+  tokio::fs::write(cache.path_for(&avif_name), &avif_bytes)
+    .await
+    .unwrap();
+
+  // Invalid orphan: garbage at the AVIF path.
+  let url_bad = "https://media.example.com/Items/orphan-bad/Images/Primary";
+  write_entry(&cache, url_bad, b"jpeg").await;
+  let cache_key_bad = ImageCache::cache_key(&partition(), url_bad);
+  let reader = cache.open_reader(&partition(), url_bad).await.unwrap();
+  let orig_bad = reader
+    .path()
+    .file_name()
+    .unwrap()
+    .to_str()
+    .unwrap()
+    .to_string();
+  drop(reader);
+  let avif_bad = ImageCache::avif_file_name_for(&orig_bad);
+  let avif_bad_path = cache.path_for(&avif_bad);
+  tokio::fs::write(&avif_bad_path, b"not-an-avif")
+    .await
+    .unwrap();
+
+  cache.recover_on_adopt().await.expect("recover");
+
+  // Valid orphan is adopted: it becomes the active representation.
+  let reader = cache.open_reader(&partition(), url).await.unwrap();
+  assert_eq!(
+    reader.content_type(),
+    Some("image/avif"),
+    "valid orphan AVIF must be adopted"
+  );
+  drop(reader);
+
+  // Invalid orphan is deleted and the row requeued for a fresh encode.
+  assert!(
+    tokio::fs::metadata(&avif_bad_path).await.is_err(),
+    "invalid orphan AVIF must be deleted"
+  );
+  let (state, _a, _n, _v) = get_row(&cache, &cache_key_bad).await;
+  assert_eq!(state, "pending", "invalid orphan row must be requeued");
+}
+
+#[tokio::test]
+async fn recover_finishes_deferred_origin_cleanup() {
+  let dir = TempDirGuard::new();
+  let cache = ImageCache::init(dir.path(), IMAGE_CACHE_MAX_BYTES)
+    .await
+    .expect("init");
+  let url = "https://media.example.com/Items/deferred/Images/Primary";
+  write_entry(&cache, url, &make_jpeg(32, 32)).await;
+  let cache_key = ImageCache::cache_key(&partition(), url);
+  let reader = cache.open_reader(&partition(), url).await.unwrap();
+  let orig_path = reader.path().to_path_buf();
+  let orig = orig_path.file_name().unwrap().to_str().unwrap().to_string();
+  drop(reader);
+  let avif_name = ImageCache::avif_file_name_for(&orig);
+  let avif_bytes = make_avif();
+  tokio::fs::write(cache.path_for(&avif_name), &avif_bytes)
+    .await
+    .unwrap();
+  cache
+    .activate_avif(
+      &cache_key,
+      &avif_name,
+      avif_bytes.len() as u64,
+      "d",
+      "image/avif",
+      cache.current_epoch(),
+    )
+    .await
+    .unwrap();
+
+  // Simulate a crash between activation and origin deletion.
+  assert!(tokio::fs::metadata(&orig_path).await.is_ok());
+
+  cache.recover_on_adopt().await.expect("recover");
+
+  // Original is removed; AVIF stays active.
+  assert!(
+    tokio::fs::metadata(&orig_path).await.is_err(),
+    "deferred origin must be removed on recovery"
+  );
+  let reader = cache.open_reader(&partition(), url).await.unwrap();
+  assert_eq!(reader.content_type(), Some("image/avif"));
+}
+
+#[tokio::test]
+async fn retry_schedule_is_10s_1m_10m_and_terminal_after_four() {
+  let dir = TempDirGuard::new();
+  let cache = ImageCache::init(dir.path(), IMAGE_CACHE_MAX_BYTES)
+    .await
+    .expect("init");
+  let url = "https://media.example.com/Items/retry/Images/Primary";
+  write_entry(&cache, url, b"jpeg").await;
+  let cache_key = ImageCache::cache_key(&partition(), url);
+
+  cache
+    .record_conversion_failure(&cache_key, "t", 1_000)
+    .await
+    .unwrap();
+  let (s, a, n, _v) = get_row(&cache, &cache_key).await;
+  assert_eq!((s.as_str(), a, n), ("failed", 1, 11_000));
+
+  cache
+    .record_conversion_failure(&cache_key, "t", 11_000)
+    .await
+    .unwrap();
+  let (s, a, n, _v) = get_row(&cache, &cache_key).await;
+  assert_eq!((s.as_str(), a, n), ("failed", 2, 71_000));
+
+  cache
+    .record_conversion_failure(&cache_key, "t", 71_000)
+    .await
+    .unwrap();
+  let (s, a, n, _v) = get_row(&cache, &cache_key).await;
+  assert_eq!((s.as_str(), a, n), ("failed", 3, 671_000));
+
+  cache
+    .record_conversion_failure(&cache_key, "t", 671_000)
+    .await
+    .unwrap();
+  let (s, a, n, _v) = get_row(&cache, &cache_key).await;
+  assert_eq!(
+    a, MAX_CONVERSION_ATTEMPTS as i64,
+    "must use all four attempts"
+  );
+  assert_eq!((s.as_str(), n), ("failed", 0), "terminal after exhaustion");
+}
+
+#[tokio::test]
+async fn claim_is_due_only_and_oldest_first() {
+  let dir = TempDirGuard::new();
+  let cache = ImageCache::init(dir.path(), IMAGE_CACHE_MAX_BYTES)
+    .await
+    .expect("init");
+  let url_a = "https://media.example.com/Items/a/Images/Primary";
+  let url_b = "https://media.example.com/Items/b/Images/Primary";
+  write_entry(&cache, url_a, b"a").await;
+  write_entry(&cache, url_b, b"b").await;
+  let key_a = ImageCache::cache_key(&partition(), url_a);
+  let key_b = ImageCache::cache_key(&partition(), url_b);
+
+  // Force deterministic enqueue order: A older than B.
+  sqlx::query("UPDATE entries SET created_at = 1 WHERE cache_key = ?")
+    .bind(&key_a)
+    .execute(&cache.pool)
+    .await
+    .unwrap();
+  sqlx::query("UPDATE entries SET created_at = 2 WHERE cache_key = ?")
+    .bind(&key_b)
+    .execute(&cache.pool)
+    .await
+    .unwrap();
+
+  // Make A not yet due; only B is due.
+  sqlx::query("UPDATE entries SET conv_next_at = 1_000 WHERE cache_key = ?")
+    .bind(&key_a)
+    .execute(&cache.pool)
+    .await
+    .unwrap();
+
+  let claim = cache.claim_work(500).await.unwrap().expect("due claim");
+  assert_eq!(claim.cache_key, key_b, "not-yet-due A must not be claimed");
+
+  // Once A is due, it is claimed first because it was enqueued first.
+  set_conv(&cache, &key_b, "pending", 0).await;
+  sqlx::query("UPDATE entries SET conv_next_at = 0 WHERE cache_key = ?")
+    .bind(&key_b)
+    .execute(&cache.pool)
+    .await
+    .unwrap();
+  sqlx::query("UPDATE entries SET conv_next_at = 0 WHERE cache_key = ?")
+    .bind(&key_a)
+    .execute(&cache.pool)
+    .await
+    .unwrap();
+  let claim = cache.claim_work(1_000).await.unwrap().expect("claim");
+  assert_eq!(
+    claim.cache_key, key_a,
+    "oldest-enqueued row must be claimed"
+  );
+}
+
+#[tokio::test]
+async fn epoch_guard_blocks_stale_writer_commit() {
+  let dir = TempDirGuard::new();
+  let cache = ImageCache::init(dir.path(), IMAGE_CACHE_MAX_BYTES)
+    .await
+    .expect("init");
+  let url = "https://media.example.com/Items/epoch-w/Images/Primary";
+
+  // Begin a writer (captures epoch), then bump the epoch before finishing.
+  let mut writer = cache
+    .try_begin_writer(&partition(), url, Some("image/jpeg"), Some(4))
+    .await
+    .expect("writer");
+  assert!(writer.try_push(bytes::Bytes::from_static(b"jpeg")));
+
+  cache.bump_epoch();
+  writer.finish();
+
+  // Wait for the background commit attempt to settle.
+  tokio::time::sleep(Duration::from_millis(200)).await;
+
+  assert!(
+    cache.open_reader(&partition(), url).await.is_none(),
+    "a writer started before the epoch change must not republish"
+  );
+}
+
+#[tokio::test]
+async fn epoch_guard_blocks_stale_activate_but_allows_fresh() {
+  let dir = TempDirGuard::new();
+  let cache = ImageCache::init(dir.path(), IMAGE_CACHE_MAX_BYTES)
+    .await
+    .expect("init");
+  let url = "https://media.example.com/Items/epoch-a/Images/Primary";
+  write_entry(&cache, url, &make_jpeg(32, 32)).await;
+  let cache_key = ImageCache::cache_key(&partition(), url);
+  let reader = cache.open_reader(&partition(), url).await.unwrap();
+  let orig = reader
+    .path()
+    .file_name()
+    .unwrap()
+    .to_str()
+    .unwrap()
+    .to_string();
+  drop(reader);
+  let avif_name = ImageCache::avif_file_name_for(&orig);
+  let avif_bytes = make_avif();
+  tokio::fs::write(cache.path_for(&avif_name), &avif_bytes)
+    .await
+    .unwrap();
+
+  let stale_epoch = cache.current_epoch();
+  cache.bump_epoch();
+
+  // Stale-epoch activation is rejected.
+  let err = cache
+    .activate_avif(
+      &cache_key,
+      &avif_name,
+      avif_bytes.len() as u64,
+      "d",
+      "image/avif",
+      stale_epoch,
+    )
+    .await;
+  assert!(err.is_err(), "stale-epoch activation must fail");
+  let reader = cache.open_reader(&partition(), url).await.unwrap();
+  assert_eq!(reader.content_type(), Some("image/jpeg"), "still origin");
+  drop(reader);
+
+  // A fresh-epoch activation succeeds.
+  cache
+    .activate_avif(
+      &cache_key,
+      &avif_name,
+      avif_bytes.len() as u64,
+      "d",
+      "image/avif",
+      cache.current_epoch(),
+    )
+    .await
+    .expect("fresh activation");
+  let reader = cache.open_reader(&partition(), url).await.unwrap();
+  assert_eq!(reader.content_type(), Some("image/avif"));
 }
