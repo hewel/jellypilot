@@ -64,6 +64,10 @@ _Avoid_: MPV state, playback session internals
 The authenticated JellyPilot shell area for browsing Jellyfin video libraries, inspecting item details, launching playback through JellyPilot's Playback Target, and applying user-scoped media state. Library Browser complements the Playback Target; it is not a goal to replace every Jellyfin client feature.
 _Avoid_: Full Jellyfin replacement, embedded player
 
+**Library Image**:
+A still image shown in the Library Browser for media content. Library Images include Artwork and Backdrop and are not limited to portrait posters.
+_Avoid_: Poster as the umbrella term, thumbnail
+
 **Sidebar**:
 The persistent left navigation area of the authenticated JellyPilot shell. The Sidebar lists Video Home, the user's video libraries, Now Playing, and Settings, and is always visible while JellyPilot is authenticated. At narrow window widths the Sidebar shows icons only.
 _Avoid_: Navigation rail, app drawer, floating controls

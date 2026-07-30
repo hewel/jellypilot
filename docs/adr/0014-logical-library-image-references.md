@@ -1,0 +1,3 @@
+# Keep Library Image references logical and revalidated
+
+A Library Image reference identifies one version of the server image, not one local byte encoding; JellyPilot may therefore serve the original representation first and AVIF later from the same reference. The localhost image proxy will use active-variant ETags and revalidation instead of long-lived `immutable` responses, avoiding frontend invalidation machinery while allowing later loads to adopt a completed optimization.
