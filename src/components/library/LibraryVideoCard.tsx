@@ -2,8 +2,7 @@ import type { VideoLibraryItem, VideoLibraryKind } from '@bindings';
 import { cx } from '@styled-system/css';
 import { Link } from '@tanstack/solid-router';
 import { Check, Film, Heart, Tv } from 'lucide-solid';
-import { Show, createEffect, createMemo } from 'solid-js';
-import { imageSource } from '~utils/imageSource';
+import { Show } from 'solid-js';
 
 import { LibraryImage } from './LibraryImage';
 import * as styles from './VideoCard.styles';
@@ -52,23 +51,13 @@ export function LibraryVideoCard(props: LibraryVideoCardProps) {
   const libraryCardAriaLabel = () =>
     `Open ${props.item.name}${props.item.favorite ? ', favorite' : ''}`;
 
-  const artworkImageId = () => props.item.artworkImageId;
-  const artworkUrl = createMemo(() => {
-    const imageId = artworkImageId();
-    return imageId ? imageSource(imageId) : '';
-  });
-
-  createEffect(() => {
-    artworkUrl();
-  });
-
   const isPoster = () => aspectClass() === 'poster';
 
   return (
     <Link {...linkTarget()} aria-label={libraryCardAriaLabel()} class={styles.card}>
       <div class={cx(styles.artwork, styles.aspect[aspectClass()])} data-aspect={aspectClass()}>
         <LibraryImage
-          imageId={artworkImageId()}
+          imageId={props.item.artworkImageId}
           alt={`${props.item.name} artwork`}
           class={styles.image}
           fallback={
