@@ -2,10 +2,10 @@ import type { VideoLibraryItem } from '@bindings';
 import { cx } from '@styled-system/css';
 import { Link } from '@tanstack/solid-router';
 import { Check, Film, Heart, Tv } from 'lucide-solid';
-import { Show, createEffect, createMemo, createSignal } from 'solid-js';
+import { Show } from 'solid-js';
 import type { JSX } from 'solid-js';
-import { imageSource } from '~utils/imageSource';
 
+import { LibraryImage } from './LibraryImage';
 import * as styles from './LibrarySearchResultRow.styles';
 
 export interface LibrarySearchResultRowProps {
@@ -37,17 +37,7 @@ function metadataLine(item: VideoLibraryItem): string {
  * The whole row is a single link to the matching detail route.
  */
 export function LibrarySearchResultRow(props: LibrarySearchResultRowProps): JSX.Element {
-  const [imageFailed, setImageFailed] = createSignal(false);
   const artworkImageId = () => props.item.artworkImageId;
-  const artworkUrl = createMemo(() => {
-    const imageId = artworkImageId();
-    return imageId ? imageSource(imageId) : '';
-  });
-
-  createEffect(() => {
-    artworkUrl();
-    setImageFailed(false);
-  });
 
   const linkTarget = () =>
     props.item.itemType === 'Series'
@@ -61,8 +51,11 @@ export function LibrarySearchResultRow(props: LibrarySearchResultRowProps): JSX.
   return (
     <Link {...linkTarget()} aria-label={rowAriaLabel()} class={styles.row}>
       <div class={styles.thumb}>
-        <Show
-          when={!imageFailed() ? artworkUrl() : null}
+        <LibraryImage
+          imageId={artworkImageId()}
+          alt=""
+          class={styles.thumbImage}
+          loading="lazy"
           fallback={
             <div class={styles.thumbFallback}>
               <Show
@@ -73,17 +66,7 @@ export function LibrarySearchResultRow(props: LibrarySearchResultRowProps): JSX.
               </Show>
             </div>
           }
-        >
-          {(imageUrl) => (
-            <img
-              src={imageUrl()}
-              alt=""
-              class={styles.thumbImage}
-              loading="lazy"
-              onError={() => setImageFailed(true)}
-            />
-          )}
-        </Show>
+        />
       </div>
       <div class={styles.copy}>
         <p class={styles.title}>{props.item.name}</p>

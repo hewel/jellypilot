@@ -271,3 +271,94 @@ async fn dangling_row_is_reconciled_to_miss() {
     "missing file must reconcile to a miss"
   );
 }
+
+#[tokio::test]
+async fn reject_avif_restores_origin_and_marks_failed() {
+  let dir = TempDirGuard::new();
+  let cache = ImageCache::init(dir.path(), IMAGE_CACHE_MAX_BYTES)
+    .await
+    .expect("init");
+  let url = "https://media.example.com/Items/reject/Images/Primary";
+  let body = b"original-jpeg-bytes".to_vec();
+  write_entry(&cache, url, &body).await;
+
+  let cache_key = ImageCache::cache_key(&partition(), url);
+
+  // Simulate a successful AVIF activation.
+  let avif_name = ImageCache::avif_file_name_for(
+    cache
+      .open_reader(&partition(), url)
+      .await
+      .unwrap()
+      .path()
+      .file_name()
+      .unwrap()
+      .to_str()
+      .unwrap(),
+  );
+  let avif_path = cache.path_for(&avif_name);
+  tokio::fs::write(&avif_path, b"fake-avif-bytes")
+    .await
+    .unwrap();
+  cache
+    .activate_avif(&cache_key, &avif_name, 15, "deadbeef", "image/avif")
+    .await
+    .unwrap();
+
+  // Confirm AVIF is now active.
+  let reader = cache.open_reader(&partition(), url).await.unwrap();
+  assert_eq!(reader.content_type(), Some("image/avif"));
+  drop(reader);
+
+  // Reject: must restore origin and mark failed.
+  cache.reject_avif(&cache_key).await.unwrap();
+
+  let reader = cache.open_reader(&partition(), url).await.unwrap();
+  assert_eq!(
+    reader.content_type(),
+    Some("image/jpeg"),
+    "reject must restore origin content type"
+  );
+  assert_eq!(
+    tokio::fs::read(reader.path()).await.unwrap(),
+    body,
+    "reject must restore original bytes"
+  );
+  drop(reader);
+
+  // AVIF file must be deleted.
+  assert!(
+    tokio::fs::metadata(&avif_path).await.is_err(),
+    "rejected AVIF file must be removed"
+  );
+
+  // conv_state must be 'failed'.
+  let state: Option<(String,)> =
+    sqlx::query_as("SELECT conv_state FROM entries WHERE cache_key = ?")
+      .bind(&cache_key)
+      .fetch_optional(&cache.pool)
+      .await
+      .unwrap();
+  assert_eq!(
+    state.unwrap().0,
+    "failed",
+    "reject must mark conversion as failed"
+  );
+}
+
+#[tokio::test]
+async fn reject_avif_noop_when_origin_active() {
+  let dir = TempDirGuard::new();
+  let cache = ImageCache::init(dir.path(), IMAGE_CACHE_MAX_BYTES)
+    .await
+    .expect("init");
+  let url = "https://media.example.com/Items/noop/Images/Primary";
+  write_entry(&cache, url, b"jpeg").await;
+
+  let cache_key = ImageCache::cache_key(&partition(), url);
+  // Rejecting when origin is already active must be a no-op.
+  cache.reject_avif(&cache_key).await.unwrap();
+
+  let reader = cache.open_reader(&partition(), url).await.unwrap();
+  assert_eq!(reader.content_type(), Some("image/jpeg"));
+}

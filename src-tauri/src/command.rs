@@ -10,8 +10,11 @@ use tauri_specta::{collect_commands, collect_events, Builder, Event};
 use crate::auth_profiles::{
   load_profiles, save_profiles, SavedServiceProfileStore, SavedServiceProfiles,
 };
+use crate::avif_worker::AvifCapability;
 use crate::config::AppConfig;
+use crate::image_cache::{ImageCache, ImageCacheState};
 use crate::image_proxy::{AppLocalServices, ImageProxyState};
+use crate::image_ref::decode_image_id;
 use crate::jellyfin::{
   AuthResponse, ConnectionState, Credentials, JellyfinClient, JellyfinError, MediaServerProvider,
   QuickConnectRequest, QuickConnectStatus, SavedSession, SessionManager, VideoHome,
@@ -1357,6 +1360,39 @@ pub fn load_config_from_store(app: &tauri::AppHandle) -> AppConfig {
   AppConfig::default()
 }
 
+/// Reject an AVIF that the WebView cannot display.
+#[tauri::command]
+#[specta]
+pub async fn image_reject_avif(
+  cache_state: State<'_, ImageCacheState>,
+  image_id: String,
+) -> Result<(), CommandError> {
+  let cache = cache_state
+    .0
+    .read()
+    .clone()
+    .ok_or_else(|| CommandError::internal("image cache not initialized"))?;
+
+  let payload = decode_image_id(&image_id).map_err(|e| CommandError::internal(e.to_string()))?;
+
+  let partition = ImageCache::partition(payload.provider, &payload.server_url);
+  let cache_key = ImageCache::cache_key(&partition, &payload.remote_url);
+
+  cache
+    .reject_avif(&cache_key)
+    .await
+    .map_err(|e| CommandError::internal(e.to_string()))?;
+
+  Ok(())
+}
+
+/// Report the WebView's AVIF decode capability from the frontend probe.
+#[tauri::command]
+#[specta]
+pub fn image_report_avif_capability(capability: State<'_, AvifCapability>, supported: bool) {
+  capability.set_supported(supported);
+}
+
 pub fn specta_builder() -> Builder<tauri::Wry> {
   let builder = Builder::<tauri::Wry>::new()
     .commands(collect_commands![
@@ -1422,6 +1458,8 @@ pub fn specta_builder() -> Builder<tauri::Wry> {
       config_detect_mpv,
       // Service commands
       app_local_services,
+      image_reject_avif,
+      image_report_avif_capability,
     ])
     .events(collect_events![AppNotification, NowPlayingChanged]);
 

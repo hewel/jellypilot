@@ -146,6 +146,10 @@ export const commands = {
 	configDetectMpv: () => __TAURI_INVOKE<string | null>("config_detect_mpv"),
 	/**  Get state of application local services (such as image proxy). */
 	appLocalServices: () => __TAURI_INVOKE<AppLocalServices>("app_local_services"),
+	/**  Reject an AVIF that the WebView cannot display. */
+	imageRejectAvif: (imageId: string) => typedError<null, CommandError>(__TAURI_INVOKE("image_reject_avif", { imageId })),
+	/**  Report the WebView's AVIF decode capability from the frontend probe. */
+	imageReportAvifCapability: (supported: boolean) => __TAURI_INVOKE<void>("image_report_avif_capability", { supported }),
 };
 
 /** Events */
