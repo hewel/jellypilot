@@ -55,3 +55,7 @@ ravif = { version = "0.13.0", default-features = false }
 
 [features]
 webdriver = ["dep:tauri-plugin-wdio", "dep:tauri-plugin-wdio-webdriver"]
+# Opt-in: enables AVIF *decoding* (dav1d) so the benchmark example can measure
+# PSNR. Off by default so it never burdens the shipped binary, tests, or the
+# cross-platform release compile.
+bench = ["image/avif-native"]

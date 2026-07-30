@@ -2,7 +2,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 mod auth_profiles;
-mod avif_encode;
+pub mod avif_encode;
 mod avif_worker;
 mod command;
 mod config;
