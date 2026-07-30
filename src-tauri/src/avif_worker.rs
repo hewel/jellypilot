@@ -254,7 +254,7 @@ async fn process_claim(cache: &Arc<ImageCache>, claim: &crate::image_cache::Work
 
   // Encode off the async runtime on a single dedicated thread.
   let result =
-    tokio::task::spawn_blocking(move || avif_encode::encode_jpeg_to_avif(&original)).await;
+    tokio::task::spawn_blocking(move || avif_encode::encode_image_to_avif(&original)).await;
 
   let encoded = match result {
     Ok(Ok(encoded)) => encoded,
@@ -265,8 +265,10 @@ async fn process_claim(cache: &Arc<ImageCache>, claim: &crate::image_cache::Work
       return;
     }
     Ok(Err(EncodeReject::Corrupt)) => {
+      // Invalid source data is a terminal, non-retrying failure (distinct from
+      // a policy exclusion), so statistics can tell corrupt from ineligible.
       let _ = cache
-        .record_conversion_skipped(&claim.cache_key, "not_eligible")
+        .record_conversion_failed_terminal(&claim.cache_key, "corrupt source")
         .await;
       return;
     }
@@ -278,9 +280,13 @@ async fn process_claim(cache: &Arc<ImageCache>, claim: &crate::image_cache::Work
     }
   };
 
-  // Structural validation: parse as an AVIF container and confirm dimensions.
+  // Structural validation: parse as an AVIF container and confirm the
+  // normalized dimensions and alpha expectation before activation.
   match avif_encode::parse_avif_dimensions(&encoded.bytes) {
-    Some((w, h)) if w == encoded.width && h == encoded.height => {}
+    Some((w, h))
+      if w == encoded.width
+        && h == encoded.height
+        && avif_encode::avif_has_alpha(&encoded.bytes) == encoded.has_alpha => {}
     _ => {
       let _ = cache
         .record_conversion_skipped(&claim.cache_key, "not_eligible")

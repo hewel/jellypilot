@@ -393,7 +393,7 @@ fn make_jpeg(width: u32, height: u32) -> Vec<u8> {
 }
 
 fn make_avif() -> Vec<u8> {
-  crate::avif_encode::encode_jpeg_to_avif(&make_jpeg(32, 32))
+  crate::avif_encode::encode_image_to_avif(&make_jpeg(32, 32))
     .expect("opaque jpeg must encode")
     .bytes
 }
