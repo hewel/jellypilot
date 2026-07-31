@@ -6,9 +6,9 @@ import type { SavedServiceProfiles, SavedSession } from '../src/bindings';
 import { LEGACY_SESSION_STORAGE_KEY, SESSION_STORAGE_KEY } from '../src/effects/auth';
 import {
   canAccessConsole,
-  checkAuthWithRestore,
   clearSavedSession,
   loadSavedSession,
+  resolveAuthenticatedEntry,
   restoreSavedSession,
   saveSession,
 } from '../src/sessionAccess';
@@ -116,7 +116,7 @@ test('restoreSavedSession returns false after active profile restore command thr
   await expect(restoreSavedSession()).resolves.toBe(false);
 });
 
-test('checkAuthWithRestore attempts active profile restore before denying root route access', async () => {
+test('resolveAuthenticatedEntry attempts active profile restore before denying root route access', async () => {
   rstest.spyOn(commands, 'serverIsConnected').mockResolvedValue(false);
   rstest.spyOn(commands, 'serverProfilesGet').mockResolvedValue({
     data: sampleProfiles,
@@ -126,18 +126,30 @@ test('checkAuthWithRestore attempts active profile restore before denying root r
     .spyOn(commands, 'serverProfilesActivate')
     .mockResolvedValue({ data: sampleProfiles, status: 'ok' });
 
-  await expect(checkAuthWithRestore()).resolves.toBe(true);
+  await expect(resolveAuthenticatedEntry()).resolves.toBe(true);
   expect(activate).toHaveBeenCalledWith(sampleProfileKey);
 });
 
-test('checkAuthWithRestore denies access when command checks throw', async () => {
+test('resolveAuthenticatedEntry denies access when command checks throw', async () => {
   rstest.spyOn(commands, 'serverIsConnected').mockRejectedValue(new Error('ipc unavailable'));
   rstest.spyOn(commands, 'serverProfilesGet').mockRejectedValue(new Error('profiles unavailable'));
 
-  await expect(checkAuthWithRestore()).resolves.toBe(false);
+  await expect(resolveAuthenticatedEntry()).resolves.toBe(false);
 });
 
-test('checkAuthWithRestore allows shell access when active profile restore fails but profiles remain', async () => {
+test('resolveAuthenticatedEntry denies access without activating when no profiles are saved', async () => {
+  rstest.spyOn(commands, 'serverIsConnected').mockResolvedValue(false);
+  rstest.spyOn(commands, 'serverProfilesGet').mockResolvedValue({
+    data: { activeProfileKey: null, profiles: [] },
+    status: 'ok',
+  });
+  const activate = rstest.spyOn(commands, 'serverProfilesActivate');
+
+  await expect(resolveAuthenticatedEntry()).resolves.toBe(false);
+  expect(activate).not.toHaveBeenCalled();
+});
+
+test('resolveAuthenticatedEntry allows shell access when active profile restore fails but profiles remain', async () => {
   rstest.spyOn(commands, 'serverIsConnected').mockResolvedValue(false);
   rstest.spyOn(commands, 'serverProfilesGet').mockResolvedValue({
     data: sampleProfiles,
@@ -148,7 +160,27 @@ test('checkAuthWithRestore allows shell access when active profile restore fails
     status: 'error',
   });
 
-  await expect(checkAuthWithRestore()).resolves.toBe(true);
+  await expect(resolveAuthenticatedEntry()).resolves.toBe(true);
+});
+
+test('resolveAuthenticatedEntry shares one restore decision across concurrent entries', async () => {
+  rstest.spyOn(commands, 'serverIsConnected').mockResolvedValue(false);
+  rstest.spyOn(commands, 'serverProfilesGet').mockResolvedValue({
+    data: sampleProfiles,
+    status: 'ok',
+  });
+  const activate = rstest
+    .spyOn(commands, 'serverProfilesActivate')
+    .mockResolvedValue({ data: sampleProfiles, status: 'ok' });
+
+  const [first, second] = await Promise.all([
+    resolveAuthenticatedEntry(),
+    resolveAuthenticatedEntry(),
+  ]);
+
+  expect(first).toBe(true);
+  expect(second).toBe(true);
+  expect(activate).toHaveBeenCalledTimes(1);
 });
 
 test('clearSavedSession removes Saved Session state synchronously', () => {
