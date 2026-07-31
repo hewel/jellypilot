@@ -6,9 +6,9 @@ import { Portal } from 'solid-js/web';
 import * as recipes from '~styles/recipes';
 
 import type { NowPlayingState } from '../bindings';
-import { createNowPlayingState } from '../effects/nowPlaying';
 import NowPlayingCard from './NowPlayingCard';
 import * as styles from './NowPlayingDrawer.styles';
+import { useNowPlaying } from './NowPlayingProvider';
 import { Button } from './ui';
 
 const statusText = Match.type<NowPlayingState['status'] | undefined>().pipe(
@@ -42,7 +42,7 @@ export default function NowPlayingDrawer(props: {
   jellyfinConnected: boolean;
   collapsed: boolean;
 }) {
-  const { state } = createNowPlayingState();
+  const { state } = useNowPlaying();
   const [open, setOpen] = createSignal(false);
   const [selectPortalMount, setSelectPortalMount] = createSignal<HTMLElement>();
 

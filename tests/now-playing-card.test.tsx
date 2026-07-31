@@ -6,6 +6,7 @@ import { render } from 'solid-js/web';
 import { commands, events } from '../src/bindings';
 import type { NowPlayingState } from '../src/bindings';
 import NowPlayingCard from '../src/components/NowPlayingCard';
+import { NowPlayingProvider } from '../src/components/NowPlayingProvider';
 import { ToastProvider } from '../src/components/ToastProvider';
 import { TestQueryProvider } from './query-client';
 
@@ -100,7 +101,9 @@ function renderCard(state: NowPlayingState = offlineState, jellyfinConnected = t
     () => (
       <TestQueryProvider>
         <ToastProvider>
-          <NowPlayingCard jellyfinConnected={jellyfinConnected} />
+          <NowPlayingProvider>
+            <NowPlayingCard jellyfinConnected={jellyfinConnected} />
+          </NowPlayingProvider>
         </ToastProvider>
       </TestQueryProvider>
     ),
@@ -298,7 +301,9 @@ test('clicking mute toggles icon and label after state reloads', async () => {
     () => (
       <TestQueryProvider>
         <ToastProvider>
-          <NowPlayingCard jellyfinConnected />
+          <NowPlayingProvider>
+            <NowPlayingCard jellyfinConnected />
+          </NowPlayingProvider>
         </ToastProvider>
       </TestQueryProvider>
     ),
@@ -313,6 +318,67 @@ test('clicking mute toggles icon and label after state reloads', async () => {
 
   await waitFor(() => expect(toggleMute).toHaveBeenCalled());
   await waitFor(() => expect(screen.getByRole('button', { name: 'Unmute' })).toBeVisible());
+
+  dispose();
+  root.remove();
+});
+
+test('pushed change clears seek and volume drafts and invalidates track data', async () => {
+  rstest.spyOn(commands, 'nowPlayingGetState').mockResolvedValue({
+    data: playingState,
+    status: 'ok',
+  });
+  const getProperty = rstest
+    .spyOn(commands, 'mpvGetProperty')
+    .mockResolvedValue({ data: trackList, status: 'ok' });
+  rstest.spyOn(commands, 'mpvSeek').mockResolvedValue({ data: null, status: 'ok' });
+  rstest.spyOn(commands, 'mpvSetVolume').mockResolvedValue({ data: null, status: 'ok' });
+  let pushState: ((state: NowPlayingState) => void) | null = null;
+  rstest.spyOn(events.nowPlayingChanged, 'listen').mockImplementation((handler) => {
+    pushState = (state) => handler({ event: 'now-playing-changed', id: 0, payload: { state } });
+    return Promise.resolve(() => {});
+  });
+  const root = document.createElement('div');
+  document.body.append(root);
+  const dispose = render(
+    () => (
+      <TestQueryProvider>
+        <ToastProvider>
+          <NowPlayingProvider>
+            <NowPlayingCard jellyfinConnected />
+          </NowPlayingProvider>
+        </ToastProvider>
+      </TestQueryProvider>
+    ),
+    root,
+  );
+
+  const seekSlider = await screen.findByRole('slider', { name: 'Seek position' });
+  await waitFor(() => expect(seekSlider).toHaveAttribute('aria-valuenow', '30'));
+  const volumeSlider = screen.getByRole('slider', { name: 'Volume' });
+  await waitFor(() => expect(volumeSlider).toHaveAttribute('aria-valuenow', '80'));
+
+  seekSlider.focus();
+  fireEvent.keyDown(seekSlider, { key: 'ArrowRight' });
+  await waitFor(() => expect(seekSlider).toHaveAttribute('aria-valuenow', '31'));
+  await waitFor(() => expect(rstest.mocked(commands.mpvSeek)).toHaveBeenCalledWith(31));
+  const volumeThumb = screen.getByRole('slider', { name: 'Volume' });
+  await waitFor(() => expect(volumeThumb).not.toHaveAttribute('data-disabled'));
+  volumeThumb.focus();
+  fireEvent.keyDown(volumeThumb, { key: 'ArrowLeft' });
+  await waitFor(() => expect(volumeThumb).toHaveAttribute('aria-valuenow', '79'));
+
+  const trackFetchesBeforePush = getProperty.mock.calls.length;
+  pushState?.({
+    ...playingState,
+    player: { ...playingState.player, timePos: 45, volume: 55 },
+  });
+
+  await waitFor(() => expect(seekSlider).toHaveAttribute('aria-valuenow', '45'));
+  expect(screen.getByRole('slider', { name: 'Volume' })).toHaveAttribute('aria-valuenow', '55');
+  await waitFor(() =>
+    expect(getProperty.mock.calls.length).toBeGreaterThan(trackFetchesBeforePush),
+  );
 
   dispose();
   root.remove();
