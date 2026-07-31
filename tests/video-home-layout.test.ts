@@ -4,6 +4,7 @@ import {
   isValidVideoHomeResumePosition,
   videoHomeAspect,
   videoHomeColumnCount,
+  videoHomePlaybackDecision,
 } from '../src/utils/videoHomeLayout';
 
 test('Video Home maps row kinds to media-appropriate artwork', () => {
@@ -16,25 +17,25 @@ test('Video Home maps row kinds to media-appropriate artwork', () => {
 test('Video Home landscape capacity follows measured row width', () => {
   expect(videoHomeColumnCount('video', 559)).toBe(1);
   expect(videoHomeColumnCount('video', 560)).toBe(2);
-  expect(videoHomeColumnCount('video', 899)).toBe(2);
-  expect(videoHomeColumnCount('video', 900)).toBe(3);
-  expect(videoHomeColumnCount('video', 1399)).toBe(3);
-  expect(videoHomeColumnCount('video', 1400)).toBe(4);
-  expect(videoHomeColumnCount('video', 2199)).toBe(4);
-  expect(videoHomeColumnCount('video', 2200)).toBe(5);
+  expect(videoHomeColumnCount('video', 819)).toBe(2);
+  expect(videoHomeColumnCount('video', 820)).toBe(3);
+  expect(videoHomeColumnCount('video', 1119)).toBe(3);
+  expect(videoHomeColumnCount('video', 1120)).toBe(4);
+  expect(videoHomeColumnCount('video', 1379)).toBe(4);
+  expect(videoHomeColumnCount('video', 1380)).toBe(5);
 });
 
 test('Video Home poster capacity follows measured row width', () => {
   expect(videoHomeColumnCount('poster', 559)).toBe(2);
   expect(videoHomeColumnCount('poster', 560)).toBe(3);
-  expect(videoHomeColumnCount('poster', 839)).toBe(3);
-  expect(videoHomeColumnCount('poster', 840)).toBe(4);
-  expect(videoHomeColumnCount('poster', 1099)).toBe(4);
-  expect(videoHomeColumnCount('poster', 1100)).toBe(5);
-  expect(videoHomeColumnCount('poster', 1399)).toBe(5);
-  expect(videoHomeColumnCount('poster', 1400)).toBe(6);
-  expect(videoHomeColumnCount('poster', 1699)).toBe(6);
-  expect(videoHomeColumnCount('poster', 1700)).toBe(7);
+  expect(videoHomeColumnCount('poster', 699)).toBe(3);
+  expect(videoHomeColumnCount('poster', 700)).toBe(4);
+  expect(videoHomeColumnCount('poster', 949)).toBe(4);
+  expect(videoHomeColumnCount('poster', 950)).toBe(5);
+  expect(videoHomeColumnCount('poster', 1159)).toBe(5);
+  expect(videoHomeColumnCount('poster', 1160)).toBe(6);
+  expect(videoHomeColumnCount('poster', 1389)).toBe(6);
+  expect(videoHomeColumnCount('poster', 1390)).toBe(7);
 });
 
 test('Video Home capacity uses conservative fallbacks for unknown widths', () => {
@@ -51,4 +52,61 @@ test('Video Home resumes only from finite positions inside a known runtime', () 
   expect(isValidVideoHomeResumePosition(Number.NaN, 3600)).toBe(false);
   expect(isValidVideoHomeResumePosition(3600, 3600)).toBe(false);
   expect(isValidVideoHomeResumePosition(3601, 3600)).toBe(false);
+});
+
+test('Video Home playback decision resumes positive in-range offsets', () => {
+  expect(videoHomePlaybackDecision({ resumePositionSeconds: 120, runtimeSeconds: 3600 })).toEqual({
+    mode: 'resume',
+    startPositionSeconds: 120,
+  });
+});
+
+test('Video Home playback decision resumes positive offsets with unknown runtime', () => {
+  expect(videoHomePlaybackDecision({ resumePositionSeconds: 120, runtimeSeconds: null })).toEqual({
+    mode: 'resume',
+    startPositionSeconds: 120,
+  });
+  expect(videoHomePlaybackDecision({ resumePositionSeconds: 120, runtimeSeconds: 0 })).toEqual({
+    mode: 'resume',
+    startPositionSeconds: 120,
+  });
+  expect(videoHomePlaybackDecision({ resumePositionSeconds: 120, runtimeSeconds: -5 })).toEqual({
+    mode: 'resume',
+    startPositionSeconds: 120,
+  });
+});
+
+test('Video Home playback decision starts null, zero, negative, and non-finite offsets', () => {
+  expect(videoHomePlaybackDecision({ resumePositionSeconds: null, runtimeSeconds: 3600 })).toEqual({
+    mode: 'start',
+    startPositionSeconds: null,
+  });
+  expect(videoHomePlaybackDecision({ resumePositionSeconds: 0, runtimeSeconds: 3600 })).toEqual({
+    mode: 'start',
+    startPositionSeconds: null,
+  });
+  expect(videoHomePlaybackDecision({ resumePositionSeconds: -30, runtimeSeconds: 3600 })).toEqual({
+    mode: 'start',
+    startPositionSeconds: null,
+  });
+  expect(
+    videoHomePlaybackDecision({ resumePositionSeconds: Number.NaN, runtimeSeconds: 3600 }),
+  ).toEqual({ mode: 'start', startPositionSeconds: null });
+  expect(
+    videoHomePlaybackDecision({
+      resumePositionSeconds: Number.POSITIVE_INFINITY,
+      runtimeSeconds: 3600,
+    }),
+  ).toEqual({ mode: 'start', startPositionSeconds: null });
+});
+
+test('Video Home playback decision starts offsets at or past the runtime', () => {
+  expect(videoHomePlaybackDecision({ resumePositionSeconds: 3600, runtimeSeconds: 3600 })).toEqual({
+    mode: 'start',
+    startPositionSeconds: null,
+  });
+  expect(videoHomePlaybackDecision({ resumePositionSeconds: 3601, runtimeSeconds: 3600 })).toEqual({
+    mode: 'start',
+    startPositionSeconds: null,
+  });
 });

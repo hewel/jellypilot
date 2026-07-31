@@ -41,7 +41,7 @@ export const homeCard = css({
   width: 'full',
 });
 
-/** Artwork-only control so titles/hover cards stay outside resume/open actions. */
+/** Artwork-only control so titles/hover cards stay outside playback/open actions. */
 export const homeCardAction = css({
   appearance: 'none',
   bg: '[transparent]',
@@ -56,21 +56,33 @@ export const homeCardAction = css({
   textDecoration: 'none',
   transitionDuration: '200',
   transitionProperty: '[transform]',
+  transitionTimingFunction: 'standard',
   width: 'full',
+  '& img': {
+    transform: '[scale(1)]',
+  },
   _hover: {
+    boxShadow: 'xl',
     '& [data-play-badge]': {
       bg: 'surface/85',
       boxShadow: 'xl',
-      transform: '[translate(-50%, -50%) scale(1.06)]',
+      transform: '[translate(-50%, -50%) scale(1.02)]',
+    },
+    '& img': {
+      transform: '[scale(1.06)]',
     },
   },
   _focusVisible: {
     outline: '[2px solid {colors.secondary}]',
     outlineOffset: '1',
+    boxShadow: 'xl',
     '& [data-play-badge]': {
       bg: 'surface/85',
       boxShadow: 'xl',
-      transform: '[translate(-50%, -50%) scale(1.06)]',
+      transform: '[translate(-50%, -50%) scale(1.02)]',
+    },
+    '& img': {
+      transform: '[scale(1.06)]',
     },
   },
   _active: {
@@ -78,16 +90,25 @@ export const homeCardAction = css({
   },
   _disabled: {
     cursor: 'wait',
+    '& [data-play-badge]': {
+      opacity: '[0.55]',
+    },
   },
   '@media (prefers-reduced-motion: reduce)': {
     _hover: {
       '& [data-play-badge]': {
         transform: '[translate(-50%, -50%)]',
       },
+      '& img': {
+        transform: '[none]',
+      },
     },
     _focusVisible: {
       '& [data-play-badge]': {
         transform: '[translate(-50%, -50%)]',
+      },
+      '& img': {
+        transform: '[none]',
       },
     },
   },
@@ -128,7 +149,7 @@ export const fallback = css({
   textTransform: 'uppercase',
 });
 
-export const directResumeFallback = css({
+export const directPlaybackFallback = css({
   height: 'full',
   width: 'full',
 });
@@ -174,7 +195,12 @@ export const playIcon = css({
 export const image = css({
   height: 'full',
   objectFit: 'cover',
+  transitionDuration: '200',
+  transitionProperty: '[transform]',
   width: 'full',
+  '@media (prefers-reduced-motion: reduce)': {
+    transitionProperty: '[none]',
+  },
 });
 
 export const homeImage = css({

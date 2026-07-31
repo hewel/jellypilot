@@ -41,6 +41,13 @@ export const nav = cva({
         },
       },
     },
+    /* Temporary narrow-width search expansion: the fixed rail widens over the
+     * main canvas without moving the shell's 4rem grid track. */
+    searchExpanded: {
+      true: {
+        width: '[16rem]',
+      },
+    },
   },
 });
 
@@ -138,16 +145,6 @@ export const itemIconSlot = css({
   width: '6',
 });
 
-export const itemThumb = css({
-  borderRadius: 'md',
-  flexShrink: '0',
-  height: '6',
-  objectFit: 'cover',
-  outline: '[1px solid rgba(255, 255, 255, 0.1)]',
-  outlineOffset: '[-1px]',
-  width: '6',
-});
-
 export const itemLabel = cva({
   base: {
     _motionReduce: {
@@ -183,6 +180,11 @@ export const header = css({
   gap: '1',
   mb: '1',
   pb: '2',
+});
+
+export const searchSlot = css({
+  display: 'flex',
+  minWidth: '[0]',
 });
 
 export const footer = css({

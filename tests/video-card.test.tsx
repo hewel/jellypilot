@@ -219,11 +219,11 @@ test('LibraryVideoCard overlays copy on poster artwork and HomeVideoCard keeps c
 });
 
 test('HomeVideoCard renders reference-first Continue Watching metadata and direct resume', () => {
-  const onResume = rstest.fn();
+  const onPlay = rstest.fn();
   const { dispose, root } = renderWithRouter(() => (
     <HomeVideoCard
       rowKind="continueWatching"
-      onResume={onResume}
+      onPlay={onPlay}
       item={{
         artworkImageId: null,
         episodeNumber: 4,
@@ -256,9 +256,9 @@ test('HomeVideoCard renders reference-first Continue Watching metadata and direc
   expect(resumeButton.contains(title)).toBe(false);
 
   fireEvent.click(title);
-  expect(onResume).not.toHaveBeenCalled();
+  expect(onPlay).not.toHaveBeenCalled();
   fireEvent.click(resumeButton);
-  expect(onResume).toHaveBeenCalledTimes(1);
+  expect(onPlay).toHaveBeenCalledTimes(1);
 
   dispose();
   root.remove();
@@ -269,7 +269,7 @@ test('HomeVideoCard title links episodes to series detail and movies to movie de
     <>
       <HomeVideoCard
         rowKind="continueWatching"
-        onResume={() => undefined}
+        onPlay={() => undefined}
         item={{
           artworkImageId: null,
           episodeNumber: 4,
@@ -321,12 +321,12 @@ test('HomeVideoCard title links episodes to series detail and movies to movie de
   root.remove();
 });
 
-test('HomeVideoCard derives progress and falls back to detail without a saved resume position', () => {
+test('HomeVideoCard derives progress and plays from zero without a saved resume position', () => {
   const { dispose, root } = renderWithRouter(() => (
     <>
       <HomeVideoCard
         rowKind="continueWatching"
-        onResume={() => undefined}
+        onPlay={() => undefined}
         item={{
           artworkImageId: null,
           episodeNumber: null,
@@ -346,7 +346,7 @@ test('HomeVideoCard derives progress and falls back to detail without a saved re
       />
       <HomeVideoCard
         rowKind="continueWatching"
-        onResume={() => undefined}
+        onPlay={() => undefined}
         item={{
           artworkImageId: null,
           episodeNumber: null,
@@ -355,9 +355,29 @@ test('HomeVideoCard derives progress and falls back to detail without a saved re
           itemType: 'Movie',
           name: 'No Resume',
           played: false,
-          playedPercentage: null,
+          playedPercentage: 25,
           productionYear: 2024,
           resumePositionSeconds: null,
+          runtimeSeconds: 3600,
+          seasonNumber: null,
+          seriesId: null,
+          seriesName: null,
+        }}
+      />
+      <HomeVideoCard
+        rowKind="continueWatching"
+        onPlay={() => undefined}
+        item={{
+          artworkImageId: null,
+          episodeNumber: null,
+          favorite: false,
+          id: 'movie-zero-resume',
+          itemType: 'Movie',
+          name: 'Zero Resume',
+          played: false,
+          playedPercentage: 40,
+          productionYear: 2024,
+          resumePositionSeconds: 0,
           runtimeSeconds: 3600,
           seasonNumber: null,
           seriesId: null,
@@ -370,51 +390,169 @@ test('HomeVideoCard derives progress and falls back to detail without a saved re
   expect(
     screen.getByRole('progressbar', { name: 'Derived Progress watch progress' }),
   ).toHaveAttribute('aria-valuenow', '25');
-  expect(screen.getByRole('link', { name: 'Open No Resume' })).toHaveAttribute(
-    'href',
-    '/library/items/movie-no-resume',
+
+  // No saved offset: the card stays directly actionable as Play, keeps the
+  // server-supplied percentage text/progress, and is not a Details-only link.
+  const playButton = screen.getByRole('button', { name: 'Play No Resume' });
+  expect(playButton).toBeVisible();
+  expect(screen.queryByRole('link', { name: 'Open No Resume' })).toBeNull();
+  expect(screen.getByText('25% watched')).toBeVisible();
+  expect(screen.getByRole('progressbar', { name: 'No Resume watch progress' })).toHaveAttribute(
+    'aria-valuenow',
+    '25',
   );
-  expect(screen.queryByRole('button', { name: 'Resume No Resume' })).toBeNull();
-  expect(
-    screen.getByRole('link', { name: 'Open No Resume' }).querySelector('[data-play-badge]'),
-  ).toBeNull();
-  expect(screen.getByText('No artwork')).toBeVisible();
+  expect(playButton.querySelector('[data-play-badge]')).not.toBeNull();
+
+  // Zero offset behaves like a missing offset: Play with preserved progress.
+  const zeroPlayButton = screen.getByRole('button', { name: 'Play Zero Resume' });
+  expect(zeroPlayButton).toBeVisible();
+  expect(screen.getByText('40% watched')).toBeVisible();
+  expect(screen.getByRole('progressbar', { name: 'Zero Resume watch progress' })).toHaveAttribute(
+    'aria-valuenow',
+    '40',
+  );
+  expect(screen.queryAllByText('No artwork')).toHaveLength(0);
 
   dispose();
   root.remove();
 });
 
-test('HomeVideoCard exposes a disabled busy state while resume starts', () => {
+test('HomeVideoCard resumes Next Up episodes while keeping the episode subtitle', () => {
+  const onPlay = rstest.fn();
   const { dispose, root } = renderWithRouter(() => (
     <HomeVideoCard
-      rowKind="continueWatching"
-      busy
-      resumeDisabled
-      onResume={() => undefined}
+      rowKind="nextUp"
+      onPlay={onPlay}
       item={{
         artworkImageId: null,
-        episodeNumber: null,
+        episodeNumber: 5,
         favorite: false,
-        id: 'movie-busy',
-        itemType: 'Movie',
-        name: 'Busy Movie',
+        id: 'episode-5',
+        itemType: 'Episode',
+        name: 'The Crossing',
         played: false,
-        playedPercentage: 40,
+        playedPercentage: null,
         productionYear: 2024,
-        resumePositionSeconds: 120,
+        resumePositionSeconds: 900,
         runtimeSeconds: 3600,
-        seasonNumber: null,
-        seriesId: null,
-        seriesName: null,
+        seasonNumber: 2,
+        seriesId: 'series-1',
+        seriesName: 'Harbor Line',
       }}
     />
+  ));
+
+  const resumeButton = screen.getByRole('button', { name: 'Resume The Crossing' });
+  expect(resumeButton).toBeVisible();
+  // Next Up keeps the episode-name subtitle; remaining time never replaces it.
+  expect(screen.getByText('The Crossing')).toBeVisible();
+  expect(screen.queryByText(/remaining/)).toBeNull();
+  expect(screen.getByRole('progressbar', { name: 'The Crossing watch progress' })).toHaveAttribute(
+    'aria-valuenow',
+    '25',
+  );
+  expect(root.querySelector('[data-play-badge]')).not.toBeNull();
+
+  fireEvent.click(resumeButton);
+  expect(onPlay).toHaveBeenCalledTimes(1);
+
+  dispose();
+  root.remove();
+});
+
+test('HomeVideoCard plays Next Up episodes from zero without a resume offset', () => {
+  const { dispose, root } = renderWithRouter(() => (
+    <HomeVideoCard
+      rowKind="nextUp"
+      onPlay={() => undefined}
+      item={{
+        artworkImageId: null,
+        episodeNumber: 5,
+        favorite: false,
+        id: 'episode-5',
+        itemType: 'Episode',
+        name: 'The Crossing',
+        played: false,
+        playedPercentage: null,
+        productionYear: 2024,
+        resumePositionSeconds: null,
+        runtimeSeconds: 3600,
+        seasonNumber: 2,
+        seriesId: 'series-1',
+        seriesName: 'Harbor Line',
+      }}
+    />
+  ));
+
+  expect(screen.getByRole('button', { name: 'Play The Crossing' })).toBeVisible();
+  expect(screen.getByText('The Crossing')).toBeVisible();
+  // Start-mode Next Up cards do not invent a progress bar.
+  expect(screen.queryByRole('progressbar')).toBeNull();
+  expect(root.querySelector('[data-play-badge]')).not.toBeNull();
+
+  dispose();
+  root.remove();
+});
+
+test('HomeVideoCard exposes a disabled busy state while playback starts', () => {
+  const { dispose, root } = renderWithRouter(() => (
+    <>
+      <HomeVideoCard
+        rowKind="continueWatching"
+        busy
+        playbackDisabled
+        onPlay={() => undefined}
+        item={{
+          artworkImageId: null,
+          episodeNumber: null,
+          favorite: false,
+          id: 'movie-busy',
+          itemType: 'Movie',
+          name: 'Busy Movie',
+          played: false,
+          playedPercentage: 40,
+          productionYear: 2024,
+          resumePositionSeconds: 120,
+          runtimeSeconds: 3600,
+          seasonNumber: null,
+          seriesId: null,
+          seriesName: null,
+        }}
+      />
+      <HomeVideoCard
+        rowKind="nextUp"
+        playbackDisabled
+        onPlay={() => undefined}
+        item={{
+          artworkImageId: null,
+          episodeNumber: 2,
+          favorite: false,
+          id: 'episode-waiting',
+          itemType: 'Episode',
+          name: 'Waiting Episode',
+          played: false,
+          playedPercentage: null,
+          productionYear: 2024,
+          resumePositionSeconds: 60,
+          runtimeSeconds: 1800,
+          seasonNumber: 1,
+          seriesId: 'series-1',
+          seriesName: 'Waiting Show',
+        }}
+      />
+    </>
   ));
 
   const button = screen.getByRole('button', { name: 'Starting Busy Movie' });
   expect(button).toBeDisabled();
   expect(button).toHaveAttribute('aria-busy', 'true');
   expect(screen.getByText('Starting…')).toBeVisible();
-  expect(root.querySelector('[data-play-badge]')).toBeNull();
+  expect(button.querySelector('[data-play-badge]')).toBeNull();
+
+  // Another direct card disabled by the same launch keeps its resting badge.
+  const waiting = screen.getByRole('button', { name: 'Resume Waiting Episode' });
+  expect(waiting).toBeDisabled();
+  expect(waiting.querySelector('[data-play-badge]')).not.toBeNull();
 
   dispose();
   root.remove();

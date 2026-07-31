@@ -193,6 +193,7 @@ export const panel = css({
 
 - 150–220ms transitions for hover, focus, and state changes.
 - Animate opacity and transform only; do not animate layout dimensions.
+- Hover/focus feedback must never change a component's own layout box: no translate/scale on the card or control itself. Layout changes during pointer-over-scroll retrigger paint for every row passing under the cursor (scroll flash). Apply transforms to inner, composited elements instead (artwork image, badge) — transforms do not alter layout.
 - Avoid decorative looping animation except subtle indeterminate waiting indicators.
 - Respect `prefers-reduced-motion`.
 

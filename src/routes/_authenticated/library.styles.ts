@@ -13,21 +13,17 @@ export const pageGutter = css({
   px: '4',
 });
 
-/* Sticky Home search chrome. The glass capsule belongs to the search bar
- * itself; this host is only a positioning rail plus a top-fade scrim, so the
- * row is invisible over the ambient background at rest and scrolled rows
- * dissolve beneath the control instead of clipping against a bordered strip. */
-export const homeSearch = css({
-  alignItems: 'center',
-  backgroundImage: '[linear-gradient(to bottom, {colors.background/90} 30%, transparent)]',
-  display: 'flex',
-  justifyContent: 'center',
-  mb: '6',
-  pb: '3',
-  position: 'sticky',
-  pt: '2',
-  top: '0',
-  zIndex: '40',
+/* Home hero-plus-rows composition: one vertical rhythm with the shared page
+ * gutter folded in so the hero and every row align on the same edges. */
+export const homeContent = css({
+  display: 'grid',
+  gap: '8',
+  pt: '4',
+  pb: '8',
+  px: '4',
+  lg: {
+    px: '6',
+  },
 });
 
 export const skeletonRow = css({
@@ -66,11 +62,14 @@ export const skeletonGrid = {
     sm: {
       gridTemplateColumns: '[repeat(3, minmax(0, 1fr))]',
     },
-    xl: {
+    lg: {
       gridTemplateColumns: '[repeat(4, minmax(0, 1fr))]',
     },
-    '2xl': {
+    xl: {
       gridTemplateColumns: '[repeat(5, minmax(0, 1fr))]',
+    },
+    '2xl': {
+      gridTemplateColumns: '[repeat(6, minmax(0, 1fr))]',
     },
   }),
   video: css({
@@ -81,8 +80,11 @@ export const skeletonGrid = {
     sm: {
       gridTemplateColumns: '[repeat(2, minmax(0, 1fr))]',
     },
-    xl: {
+    lg: {
       gridTemplateColumns: '[repeat(3, minmax(0, 1fr))]',
+    },
+    '2xl': {
+      gridTemplateColumns: '[repeat(4, minmax(0, 1fr))]',
     },
   }),
 };

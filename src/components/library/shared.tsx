@@ -58,8 +58,8 @@ export function VideoHomeRow(props: {
   title: string;
   kind: VideoHomeRowKind;
   items: VideoHomeItem[];
-  resumeBusyId?: string | null;
-  onResume?: (item: VideoHomeItem) => void;
+  playbackBusyId?: string | null;
+  onPlay?: (item: VideoHomeItem) => void;
 }) {
   const titleId = `row-${props.id}`;
   const gridId = createUniqueId();
@@ -120,11 +120,13 @@ export function VideoHomeRow(props: {
                 <HomeVideoCard
                   item={item}
                   rowKind={props.kind}
-                  busy={props.resumeBusyId === item.id}
-                  resumeDisabled={props.resumeBusyId !== null && props.resumeBusyId !== undefined}
-                  onResume={
-                    props.kind === 'continueWatching' && props.onResume
-                      ? () => props.onResume?.(item)
+                  busy={props.playbackBusyId === item.id}
+                  playbackDisabled={
+                    props.playbackBusyId !== null && props.playbackBusyId !== undefined
+                  }
+                  onPlay={
+                    (props.kind === 'continueWatching' || props.kind === 'nextUp') && props.onPlay
+                      ? () => props.onPlay?.(item)
                       : undefined
                   }
                 />

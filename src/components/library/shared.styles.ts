@@ -65,12 +65,12 @@ export const rowHeader = css({
 export const rowTitle = css({
   color: 'onSurface',
   fontFamily: 'display',
-  fontSize: '24',
+  fontSize: '20',
   fontWeight: 'bold',
-  lineHeight: '32',
+  lineHeight: '28',
   lg: {
-    fontSize: '28',
-    lineHeight: '40',
+    fontSize: '24',
+    lineHeight: '32',
   },
 });
 

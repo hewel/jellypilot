@@ -3,7 +3,8 @@ import { createQuery } from '@tanstack/solid-query';
 import { Link, useLocation, useParams } from '@tanstack/solid-router';
 import { Exit } from 'effect';
 import { Film, House, PanelLeftClose, PanelLeftOpen, Tv } from 'lucide-solid';
-import { For, Show, createMemo, type JSX } from 'solid-js';
+import { For, Show, createEffect, createMemo, createSignal, onCleanup, onMount } from 'solid-js';
+import type { JSX } from 'solid-js';
 import { fetchLibraryShortcuts, fetchVideoItemShortcut } from '~effects/library';
 import { isLibrarySessionKeyConnected, queryKeys, runExit } from '~effects/query';
 import { createSidebarPreferences } from '~utils/sidebarPreferences';
@@ -11,7 +12,7 @@ import { createSidebarWipe, startSidebarWipe } from '~utils/sidebarWipe';
 
 import * as styles from './AppSidebar.styles';
 import { useAuthenticatedBootstrap } from './AuthenticatedBootstrap';
-import { LibraryImage } from './library/LibraryImage';
+import LibrarySearchBar from './LibrarySearchBar';
 import NowPlayingDrawer from './NowPlayingDrawer';
 import SettingsModal from './SettingsModal';
 import { Button } from './ui';
@@ -26,8 +27,9 @@ interface SidebarShortcutItem {
   collectionType: string;
   libraryId: string;
   icon: JSX.Element;
-  artworkImageId: string | null;
 }
+
+const DESKTOP_MEDIA_QUERY = '(min-width: 64rem)';
 
 export default function AppSidebar(props: AppSidebarProps) {
   const { collapsed, setCollapsed } = createSidebarPreferences();
@@ -76,7 +78,6 @@ export default function AppSidebar(props: AppSidebarProps) {
       label: shortcut.name,
       collectionType: shortcut.collectionType,
       libraryId: shortcut.id,
-      artworkImageId: shortcut.artworkImageId,
       icon:
         shortcut.collectionType === 'tvshows' ? (
           <Tv class={styles.itemIcon} />
@@ -85,10 +86,48 @@ export default function AppSidebar(props: AppSidebarProps) {
         ),
     }));
 
+  const [desktop, setDesktop] = createSignal(false);
+  const [searchExpanded, setSearchExpanded] = createSignal(false);
+
+  onMount(() => {
+    if (typeof window.matchMedia !== 'function') {
+      return;
+    }
+    const query = window.matchMedia(DESKTOP_MEDIA_QUERY);
+    setDesktop(query.matches);
+    const handleChange = (event: MediaQueryListEvent) => setDesktop(event.matches);
+    query.addEventListener('change', handleChange);
+    onCleanup(() => query.removeEventListener('change', handleChange));
+  });
+
+  // Navigation always closes the temporary narrow search expansion.
+  createEffect(() => {
+    pathname();
+    setSearchExpanded(false);
+  });
+
+  const searchCollapsed = () => (collapsed() || !desktop()) && !searchExpanded();
+
+  const handleSearchExpand = () => {
+    if (desktop()) {
+      // Durable preference change: the desktop sidebar stays expanded.
+      if (collapsed()) {
+        setCollapsed(false);
+        startSidebarWipe(false);
+      }
+      return;
+    }
+    setSearchExpanded(true);
+  };
+
+  const handleSearchCollapse = () => {
+    setSearchExpanded(false);
+  };
+
   return (
     <nav
       aria-label="Sidebar"
-      class={styles.nav({ collapsed: collapsed() })}
+      class={styles.nav({ collapsed: collapsed(), searchExpanded: searchExpanded() })}
       data-sidebar=""
       data-wiping={wipe() === null ? undefined : 'true'}
     >
@@ -116,6 +155,14 @@ export default function AppSidebar(props: AppSidebarProps) {
           </span>
         </Button>
       </div>
+      <div class={styles.searchSlot}>
+        <LibrarySearchBar
+          sessionKey={sessionKey()}
+          collapsed={searchCollapsed()}
+          onRequestExpand={handleSearchExpand}
+          onRequestCollapse={handleSearchCollapse}
+        />
+      </div>
       <ul class={styles.list}>
         <li>
           <Link
@@ -125,10 +172,9 @@ export default function AppSidebar(props: AppSidebarProps) {
             data-active={activeValue() === 'home' ? '' : undefined}
             aria-current={activeValue() === 'home' ? 'page' : undefined}
           >
-            <SidebarItemThumb
-              artworkImageId={null}
-              fallbackIcon={<House class={styles.itemIcon} />}
-            />
+            <span class={styles.itemIconSlot}>
+              <House class={styles.itemIcon} />
+            </span>
             <span class={styles.itemLabel({ collapsed: collapsed() })}>Home</span>
           </Link>
         </li>
@@ -146,7 +192,7 @@ export default function AppSidebar(props: AppSidebarProps) {
                 data-active={activeValue() === item.value ? '' : undefined}
                 aria-current={activeValue() === item.value ? 'page' : undefined}
               >
-                <SidebarItemThumb artworkImageId={item.artworkImageId} fallbackIcon={item.icon} />
+                <span class={styles.itemIconSlot}>{item.icon}</span>
                 <span class={styles.itemLabel({ collapsed: collapsed() })}>{item.label}</span>
               </Link>
             </li>
@@ -158,17 +204,5 @@ export default function AppSidebar(props: AppSidebarProps) {
         <SettingsModal collapsed={collapsed()} />
       </div>
     </nav>
-  );
-}
-
-function SidebarItemThumb(props: { artworkImageId: string | null; fallbackIcon: JSX.Element }) {
-  return (
-    <LibraryImage
-      imageId={props.artworkImageId}
-      alt=""
-      aria-hidden={true}
-      class={styles.itemThumb}
-      fallback={<span class={styles.itemIconSlot}>{props.fallbackIcon}</span>}
-    />
   );
 }

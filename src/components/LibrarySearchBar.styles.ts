@@ -2,25 +2,22 @@ import { css } from '@styled-system/css';
 
 export const form = css({
   display: 'flex',
-  maxWidth: '[32rem]',
   width: 'full',
 });
 
-/* The control owns its own glass capsule (same material as the browse
- * toolbar chrome) so every host can stay quiet: Home only adds a top-fade
- * scrim, the browse toolbar only adds its pinned backdrop. */
+/* Compact 40px sidebar capsule: the control owns its glass material so the
+ * sidebar host only supplies placement. */
 export const control = css({
   alignItems: 'center',
   backdropFilter: '[blur(12px)]',
   bg: 'surface/85',
   borderColor: 'outlineVariant/70',
-  borderRadius: '2xl',
+  borderRadius: 'xl',
   borderStyle: 'solid',
   borderWidth: '1px',
-  boxShadow: 'lg',
   display: 'flex',
   flex: '1',
-  height: '11',
+  height: '10',
   minWidth: '[0]',
   transitionDuration: '200',
   transitionProperty: '[background-color, border-color, box-shadow]',
@@ -35,15 +32,11 @@ export const control = css({
       color: 'secondary',
     },
   },
-  sm: {
-    height: '12',
-  },
 });
 
 export const leadingIcon = css({
   color: 'onSurfaceVariant',
   flexShrink: '[0]',
-  hideBelow: 'sm',
   marginLeft: '3',
   marginRight: '2_5',
   pointerEvents: 'none',
@@ -62,12 +55,9 @@ export const input = css({
   lineHeight: '20',
   minHeight: '[0 !important]',
   minWidth: '[0]',
+  outline: '[none !important]',
   paddingInlineEnd: '1',
-  paddingInlineStart: '3',
-  sm: {
-    paddingInlineEnd: '0',
-    paddingInlineStart: '0',
-  },
+  paddingInlineStart: '0',
   '&::-webkit-search-cancel-button': {
     appearance: 'none',
     display: 'none',
@@ -80,7 +70,7 @@ export const trailingAffordance = css({
   flexShrink: '[0]',
   height: 'full',
   justifyContent: 'center',
-  paddingInline: '2',
+  paddingInline: '1',
   pointerEvents: 'none',
 });
 
@@ -104,33 +94,32 @@ export const keycap = css({
   fontSize: '11',
   fontWeight: 'semibold',
   height: '5',
-  hideBelow: 'sm',
   justifyContent: 'center',
   lineHeight: '[1]',
   minWidth: '5',
   pointerEvents: 'none',
 });
 
-/* Flush end-cap: the control no longer clips overflow, so the cap carries its
- * own right-hand radii and an inset focus ring that never gets cut off. */
+/* Compact icon-only submit flush with the capsule end: full-height 40px hit
+ * area with its own right-hand radii and an inset focus ring. */
 export const submitButton = css({
   alignSelf: 'stretch',
   borderBottomLeftRadius: '[0 !important]',
-  borderBottomRightRadius: '[{radii.2xl} !important]',
+  borderBottomRightRadius: '[{radii.xl} !important]',
   borderLeftColor: '[{colors.outlineVariant} !important]',
   borderLeftStyle: 'solid',
   borderLeftWidth: '1px',
   borderRightWidth: '[0 !important]',
   borderTopLeftRadius: '[0 !important]',
-  borderTopRightRadius: '[{radii.2xl} !important]',
+  borderTopRightRadius: '[{radii.xl} !important]',
   borderTopWidth: '[0 !important]',
   borderBottomWidth: '[0 !important]',
   boxShadow: '[none !important]',
   flexShrink: '[0]',
   height: '[100% !important]',
   minHeight: '[0 !important]',
-  minWidth: '11',
-  px: '3',
+  minWidth: '10',
+  px: '0',
   _active: {
     transform: '[none !important]',
   },
@@ -138,16 +127,15 @@ export const submitButton = css({
     boxShadow: '[inset 0 0 0 2px {colors.secondary} !important]',
     outline: '[none !important]',
   },
-  sm: {
-    minWidth: '[5.25rem]',
-    px: '4',
-  },
 });
 
-export const submitLabel = css({
-  hideBelow: 'sm',
+/* Row-aligned collapsed trigger: one centered 40×40 Search action matching
+ * the sidebar rail rows. */
+export const collapsedTrigger = css({
+  justifyContent: 'center',
 });
 
-export const submitIcon = css({
-  hideFrom: 'sm',
+export const collapsedTriggerIcon = css({
+  height: '5',
+  width: '5',
 });
