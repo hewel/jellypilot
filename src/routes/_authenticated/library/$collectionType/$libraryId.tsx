@@ -13,7 +13,6 @@ import {
 import LibrarySearchBar from '@components/LibrarySearchBar';
 import { Button } from '@components/ui';
 import { cx } from '@styled-system/css';
-import { createInfiniteQuery, useQueryClient } from '@tanstack/solid-query';
 import { createFileRoute, redirect } from '@tanstack/solid-router';
 import { createVirtualizer, observeElementRect } from '@tanstack/solid-virtual';
 import { Exit } from 'effect';
@@ -38,11 +37,11 @@ import {
   onMount,
 } from 'solid-js';
 import { commandFailureMessage } from '~effects/commands';
-import { LIBRARY_BROWSE_PAGE_SIZE, fetchVideoLibraryPage } from '~effects/library';
-import type { LibraryBrowseState, LibraryExit } from '~effects/library';
-import { librarySessionSignature, queryKeys, runExit } from '~effects/query';
+import { LIBRARY_BROWSE_PAGE_SIZE } from '~effects/library';
+import { librarySessionSignature } from '~effects/query';
 import type { LibrarySessionKey } from '~effects/query';
 import * as recipes from '~styles/recipes';
+import { createLibraryBrowseWindow } from '~utils/createLibraryBrowseWindow';
 import { createSharedLibraryFilters } from '~utils/createSharedLibraryFilters';
 import type { LibrarySortDirection } from '~utils/createSharedLibraryFilters';
 import {
@@ -50,21 +49,12 @@ import {
   libraryBrowseVirtualOverscanRows,
   libraryBrowseVirtualRowHeight,
 } from '~utils/libraryBrowseLayout';
-import {
-  libraryBrowsePageLocationForDisplayIndex,
-  libraryBrowsePageStartsForRows,
-} from '~utils/libraryBrowsePageSelection';
+import { libraryBrowsePageStartsForRows } from '~utils/libraryBrowsePageSelection';
 
 import { AUTHENTICATED_HOME_ROUTE } from '../../../../router-guards';
 import * as styles from '../browseRoute.styles';
 
 const LIBRARY_BROWSE_SKELETON_CARD_KEYS = Array.from({ length: 10 }, (_, index) => index);
-const LIBRARY_VIRTUAL_TOTAL_THRESHOLD = 100;
-
-interface LibraryBrowseInfiniteData {
-  pages: LibraryExit<LibraryBrowseState>[];
-  pageParams: number[];
-}
 
 function collectionTypeFromParam(collectionType: string): VideoLibraryKind {
   return collectionType === 'tvshows' ? 'tvshows' : 'movies';
@@ -81,9 +71,7 @@ export const Route = createFileRoute('/_authenticated/library/$collectionType/$l
 
 function LibraryBrowseRoute() {
   const params = Route.useParams();
-  const queryClient = useQueryClient();
   const libraryFilters = createSharedLibraryFilters();
-  const filterSort = libraryFilters.sort;
   const [autoLoadSentinel, setAutoLoadSentinel] = createSignal<HTMLDivElement | null>(null);
   const [autoLoadSentinelVisible, setAutoLoadSentinelVisible] = createSignal(false);
   const [virtualGrid, setVirtualGrid] = createSignal<HTMLDivElement | null>(null);
@@ -92,10 +80,6 @@ function LibraryBrowseRoute() {
   const [virtualizerMounted, setVirtualizerMounted] = createSignal(false);
   const appScroll = useAppScrollArea();
   const [virtualScrollMargin, setVirtualScrollMargin] = createSignal(0);
-  const [virtualPagesByStartIndex, setVirtualPagesByStartIndex] = createSignal(
-    new Map<number, LibraryExit<LibraryBrowseState>>(),
-  );
-  const [virtualPageStartsFetching, setVirtualPageStartsFetching] = createSignal(new Set<number>());
   onMount(() => setVirtualizerMounted(true));
   const bootstrap = useAuthenticatedBootstrap();
   const sessionKey = bootstrap.sessionKey;
@@ -114,6 +98,24 @@ function LibraryBrowseRoute() {
     if (currentSessionSignature !== null && mountedSessionSignature === null) {
       mountedSessionSignature = currentSessionSignature;
     }
+  });
+
+  const collectionType = () => collectionTypeFromParam(params().collectionType);
+  const filterSort = libraryFilters.sort;
+  const browseWindow = createLibraryBrowseWindow({
+    request: () => ({
+      sessionKey: sessionKey(),
+      collectionType: collectionType(),
+      libraryId: params().libraryId,
+      sort: filterSort(),
+      playedFilter: libraryFilters.playedFilter(),
+      favoritesOnly: libraryFilters.favoritesOnly(),
+      sortDirection: libraryFilters.sortDirection(),
+    }),
+    filtersReady: libraryFilters.ready,
+    sessionActive: isMountedSessionActive,
+    virtualPageStartsForCurrentWindow: () => virtualPageStartsForCurrentWindow(),
+    onIdentityReset: () => appScroll.scrollTo({ top: 0 }),
   });
 
   const fallbackVirtualGridWidth = () => {
@@ -184,161 +186,21 @@ function LibraryBrowseRoute() {
     onCleanup(() => observer.disconnect());
   });
 
-  const collectionType = () => collectionTypeFromParam(params().collectionType);
-  const browseQueryKey = () =>
-    queryKeys.libraryBrowse(
-      sessionKey(),
-      collectionType(),
-      params().libraryId,
-      filterSort(),
-      libraryFilters.playedFilter(),
-      libraryFilters.favoritesOnly(),
-      libraryFilters.sortDirection(),
-    );
-  const browseQuerySignature = createMemo(() => JSON.stringify(browseQueryKey()));
-  const browseQuery = createInfiniteQuery(() => ({
-    queryKey: browseQueryKey(),
-    enabled: libraryFilters.ready() && isMountedSessionActive(),
-    queryFn: ({ pageParam }) => {
-      const startIndex = typeof pageParam === 'number' ? pageParam : 0;
-      return runExit(
-        fetchVideoLibraryPage(
-          collectionType(),
-          params().libraryId,
-          startIndex,
-          filterSort(),
-          libraryFilters.playedFilter(),
-          libraryFilters.favoritesOnly(),
-        ),
-      );
-    },
-    initialPageParam: 0,
-    getNextPageParam: (lastPage) =>
-      Exit.match(lastPage, {
-        onFailure: () => undefined,
-        onSuccess: (value) =>
-          value.page.hasMore ? value.page.startIndex + value.page.limit : undefined,
-      }),
-  }));
-
-  const browsePageQueryKey = (startIndex: number) =>
-    queryKeys.libraryBrowsePage(
-      sessionKey(),
-      collectionType(),
-      params().libraryId,
-      filterSort(),
-      libraryFilters.playedFilter(),
-      libraryFilters.favoritesOnly(),
-      libraryFilters.sortDirection(),
-      startIndex,
-    );
-
-  let activeBrowseQuerySignature = '';
-  createEffect(() => {
-    const nextSignature = browseQuerySignature();
-    if (activeBrowseQuerySignature && activeBrowseQuerySignature !== nextSignature) {
-      setVirtualPagesByStartIndex(new Map<number, LibraryExit<LibraryBrowseState>>());
-      setVirtualPageStartsFetching(new Set<number>());
-      appScroll.scrollTo({ top: 0 });
-    }
-    activeBrowseQuerySignature = nextSignature;
-  });
-
-  const successfulPages = () =>
-    browseQuery.data?.pages.filter(
-      (page): page is LibraryExit<LibraryBrowseState> & { _tag: 'Success' } => Exit.isSuccess(page),
-    ) ?? [];
-
-  createEffect(() => {
-    for (const page of successfulPages()) {
-      queryClient.setQueryData(browsePageQueryKey(page.value.page.startIndex), page);
-    }
-  });
-
-  const successfulPageMap = createMemo(() => {
-    const pages = new Map<number, LibraryBrowseState>();
-    for (const page of successfulPages()) {
-      pages.set(page.value.page.startIndex, page.value);
-    }
-    for (const page of virtualPagesByStartIndex().values()) {
-      if (Exit.isSuccess(page)) {
-        pages.set(page.value.page.startIndex, page.value);
-      }
-    }
-    return pages;
-  });
-  const firstPage = () => browseQuery.data?.pages[0] ?? null;
-  const laterPageFailure = () => {
-    const pages = browseQuery.data?.pages ?? [];
-    const index = pages.findIndex((page, pageIndex) => pageIndex > 0 && !Exit.isSuccess(page));
-    if (index === -1) {
-      return null;
-    }
-    const page = pages[index];
-    return page && !Exit.isSuccess(page) ? { index, page } : null;
-  };
-  const virtualPageFailure = () => {
-    for (const page of virtualPagesByStartIndex().values()) {
-      if (!Exit.isSuccess(page)) {
-        return page;
-      }
-    }
-    return null;
-  };
-  const needsReverse = () => {
-    const isDefaultAsc = filterSort() === 'title';
-    return isDefaultAsc
-      ? libraryFilters.sortDirection() === 'desc'
-      : libraryFilters.sortDirection() === 'asc';
-  };
-  const readyState = () => {
-    const pages = successfulPages();
-    if (pages.length === 0) {
-      return null;
-    }
-    const last = pages[pages.length - 1]?.value;
-    if (!last) {
-      return null;
-    }
-    const items = pages.flatMap((page) => page.value.items);
-
-    return {
-      items: needsReverse() ? [...items].toReversed() : items,
-      page: last.page,
-    };
-  };
-  const totalRecordCount = () => readyState()?.page.totalRecordCount ?? 0;
-  const usesVirtualGrid = () => totalRecordCount() > LIBRARY_VIRTUAL_TOTAL_THRESHOLD;
   const columnCount = createMemo(() => libraryBrowseColumnCount(virtualGridWidth()));
   const virtualRowColumnIndexes = createMemo(() =>
     Array.from({ length: columnCount() }, (_, index) => index),
   );
   const estimateVirtualRowHeight = () => libraryBrowseVirtualRowHeight(virtualGridWidth());
-  const itemForDisplayIndex = (displayIndex: number) => {
-    const location = libraryBrowsePageLocationForDisplayIndex({
-      displayIndex,
-      totalRecordCount: totalRecordCount(),
-      pageSize: LIBRARY_BROWSE_PAGE_SIZE,
-      reverse: needsReverse(),
-    });
-    if (!location) {
-      return null;
-    }
-
-    const page = successfulPageMap().get(location.pageStart);
-    return page?.items[location.indexWithinPage] ?? null;
-  };
-  const loadedDisplayItemCount = () =>
-    Math.min(
-      totalRecordCount(),
-      [...successfulPageMap().values()].reduce((count, page) => count + page.items.length, 0),
-    );
   const rowVirtualizer = createVirtualizer<HTMLElement, HTMLDivElement>({
     get count() {
-      return usesVirtualGrid() ? Math.ceil(totalRecordCount() / columnCount()) : 0;
+      return browseWindow.usesVirtualGrid()
+        ? Math.ceil(browseWindow.totalRecordCount() / columnCount())
+        : 0;
     },
     get enabled() {
-      return virtualizerMounted() && usesVirtualGrid() && appScroll.viewport() !== null;
+      return (
+        virtualizerMounted() && browseWindow.usesVirtualGrid() && appScroll.viewport() !== null
+      );
     },
     getScrollElement: () => appScroll.viewport(),
     estimateSize: estimateVirtualRowHeight,
@@ -363,102 +225,12 @@ function LibraryBrowseRoute() {
     libraryBrowsePageStartsForRows({
       rowIndexes: rowVirtualizer.getVirtualItems().map((virtualRow) => virtualRow.index),
       columnCount: columnCount(),
-      totalRecordCount: totalRecordCount(),
+      totalRecordCount: browseWindow.totalRecordCount(),
       pageSize: LIBRARY_BROWSE_PAGE_SIZE,
-      reverse: needsReverse(),
+      reverse: browseWindow.needsReverse(),
     });
-  const fetchVirtualPage = (startIndex: number, allowNetworkFetch: boolean) => {
-    const total = totalRecordCount();
-    if (
-      startIndex < 0 ||
-      startIndex >= total ||
-      successfulPageMap().has(startIndex) ||
-      virtualPagesByStartIndex().has(startIndex) ||
-      virtualPageStartsFetching().has(startIndex)
-    ) {
-      return;
-    }
-
-    const collectionTypeValue = collectionType();
-    const libraryId = params().libraryId;
-    const sort = filterSort();
-    const playedFilter = libraryFilters.playedFilter();
-    const favoritesOnly = libraryFilters.favoritesOnly();
-    const expectedSignature = browseQuerySignature();
-    const virtualPageQueryKey = browsePageQueryKey(startIndex);
-    const cachedPage =
-      queryClient.getQueryData<LibraryExit<LibraryBrowseState>>(virtualPageQueryKey);
-    if (cachedPage && Exit.isSuccess(cachedPage)) {
-      setVirtualPagesByStartIndex((current) => new Map([...current, [startIndex, cachedPage]]));
-      return;
-    }
-
-    if (!allowNetworkFetch) {
-      return;
-    }
-
-    setVirtualPageStartsFetching((current) => new Set([...current, startIndex]));
-
-    void queryClient
-      .fetchQuery({
-        queryKey: virtualPageQueryKey,
-        queryFn: () =>
-          runExit(
-            fetchVideoLibraryPage(
-              collectionTypeValue,
-              libraryId,
-              startIndex,
-              sort,
-              playedFilter,
-              favoritesOnly,
-            ),
-          ),
-      })
-      .then((page) => {
-        if (browseQuerySignature() !== expectedSignature) {
-          return;
-        }
-
-        setVirtualPagesByStartIndex((current) => new Map([...current, [startIndex, page]]));
-      })
-      .finally(() => {
-        if (browseQuerySignature() !== expectedSignature) {
-          return;
-        }
-
-        setVirtualPageStartsFetching((current) => {
-          const next = new Set(current);
-          next.delete(startIndex);
-          return next;
-        });
-      });
-  };
-  const fetchVisibleVirtualPages = (allowNetworkFetch: boolean) => {
-    for (const startIndex of virtualPageStartsForCurrentWindow()) {
-      fetchVirtualPage(startIndex, allowNetworkFetch);
-    }
-  };
-  const canUseVirtualPages = () => {
-    const currentFirstPage = firstPage();
-
-    return (
-      libraryFilters.ready() &&
-      isMountedSessionActive() &&
-      currentFirstPage !== null &&
-      Exit.isSuccess(currentFirstPage) &&
-      currentFirstPage.value.page.startIndex === 0
-    );
-  };
-
-  createEffect(() => {
-    if (!usesVirtualGrid() || !canUseVirtualPages()) {
-      return;
-    }
-
-    fetchVisibleVirtualPages(!browseQuery.isFetching);
-  });
   const statusTitle = () => {
-    const current = firstPage();
+    const current = browseWindow.firstPage();
     if (!current) {
       return `Loading ${libraryTitle(collectionType())}`;
     }
@@ -471,7 +243,7 @@ function LibraryBrowseRoute() {
     return `Loading ${libraryTitle(collectionType())}`;
   };
   const statusDescription = () => {
-    const current = firstPage();
+    const current = browseWindow.firstPage();
     if (current && Exit.isSuccess(current) && current.value.items.length === 0) {
       return 'Jellyfin returned an empty server page for this video library.';
     }
@@ -480,55 +252,6 @@ function LibraryBrowseRoute() {
     }
     return 'JellyPilot is loading a server-paged video library result set.';
   };
-  const loadMoreRetryBusy = () =>
-    usesVirtualGrid() ? virtualPageStartsFetching().size > 0 : browseQuery.isFetchingNextPage;
-  const loadMoreErrorDescription = () => {
-    const virtualFailure = usesVirtualGrid() ? virtualPageFailure() : null;
-    if (virtualFailure) {
-      return commandFailureMessage(virtualFailure.cause, 'Could not load Library page');
-    }
-
-    const failure = laterPageFailure();
-    return failure
-      ? commandFailureMessage(failure.page.cause, 'Could not load Library page')
-      : null;
-  };
-  const retryFailedPage = () => {
-    if (usesVirtualGrid()) {
-      const failedStarts = [...virtualPagesByStartIndex().entries()]
-        .filter(([, page]) => !Exit.isSuccess(page))
-        .map(([startIndex]) => startIndex);
-      if (failedStarts.length === 0 || virtualPageStartsFetching().size > 0) {
-        return;
-      }
-
-      setVirtualPagesByStartIndex((current) => {
-        const next = new Map(current);
-        for (const startIndex of failedStarts) {
-          next.delete(startIndex);
-        }
-        return next;
-      });
-      fetchVisibleVirtualPages(true);
-      return;
-    }
-
-    const failure = laterPageFailure();
-    if (!failure || browseQuery.isFetching) {
-      return;
-    }
-    queryClient.setQueryData<LibraryBrowseInfiniteData>(browseQueryKey(), (data) => {
-      if (!data) {
-        return data;
-      }
-      return {
-        pages: data.pages.filter((_, index) => index !== failure.index),
-        pageParams: data.pageParams.filter((_, index) => index !== failure.index),
-      };
-    });
-    void browseQuery.fetchNextPage({ cancelRefetch: false });
-  };
-
   createEffect(() => {
     const sentinel = autoLoadSentinel();
     if (!sentinel || typeof IntersectionObserver === 'undefined') {
@@ -554,25 +277,27 @@ function LibraryBrowseRoute() {
       return;
     }
     if (
-      usesVirtualGrid() ||
-      !browseQuery.hasNextPage ||
-      browseQuery.isFetching ||
-      laterPageFailure()
+      browseWindow.usesVirtualGrid() ||
+      !browseWindow.hasNextPage() ||
+      browseWindow.isFetching() ||
+      browseWindow.laterPageFailure()
     ) {
       return;
     }
-    void browseQuery.fetchNextPage({ cancelRefetch: false });
+    browseWindow.fetchNextPage();
   });
   const controlsLoading = () =>
-    !readyState() && (!libraryFilters.ready() || browseQuery.isFetching);
+    !browseWindow.readyState() && (!libraryFilters.ready() || browseWindow.isFetching());
 
   const toolbarCount = () => {
-    const state = readyState();
+    const state = browseWindow.readyState();
     if (!state) {
       return null;
     }
-    const loaded = usesVirtualGrid() ? loadedDisplayItemCount() : state.items.length;
-    return `${loaded} of ${totalRecordCount()}`;
+    const loaded = browseWindow.usesVirtualGrid()
+      ? browseWindow.loadedDisplayItemCount()
+      : state.items.length;
+    return `${loaded} of ${browseWindow.totalRecordCount()}`;
   };
 
   return (
@@ -594,9 +319,9 @@ function LibraryBrowseRoute() {
 
       <Suspense fallback={<LibraryBrowseSkeleton />}>
         <Show
-          when={readyState()}
+          when={browseWindow.readyState()}
           fallback={
-            !libraryFilters.ready() || browseQuery.isPending ? (
+            !libraryFilters.ready() || browseWindow.isPending() ? (
               <LibraryBrowseSkeleton />
             ) : (
               <LibraryStatusPanel title={statusTitle()} description={statusDescription()} />
@@ -605,13 +330,13 @@ function LibraryBrowseRoute() {
         >
           <section class={styles.section} aria-label={libraryTitle(collectionType())}>
             <Show
-              when={usesVirtualGrid()}
+              when={browseWindow.usesVirtualGrid()}
               fallback={
                 <div class={cx(styles.grid, styles.fade)}>
-                  <For each={readyState()?.items ?? []}>
+                  <For each={browseWindow.readyState()?.items ?? []}>
                     {(item) => <LibraryVideoCard item={item} collectionType={collectionType()} />}
                   </For>
-                  <Show when={browseQuery.isFetchingNextPage}>
+                  <Show when={browseWindow.isFetchingNextPage()}>
                     <LibraryBrowseSkeletonCards />
                   </Show>
                 </div>
@@ -620,7 +345,7 @@ function LibraryBrowseRoute() {
               <div ref={setVirtualGrid} data-testid="library-virtual-grid">
                 <div
                   aria-label={`${libraryTitle(collectionType())} library items`}
-                  aria-rowcount={Math.ceil(totalRecordCount() / columnCount())}
+                  aria-rowcount={Math.ceil(browseWindow.totalRecordCount() / columnCount())}
                   class={styles.virtualCanvas}
                   role="grid"
                   style={{ height: `${rowVirtualizer.getTotalSize()}px` }}
@@ -641,10 +366,10 @@ function LibraryBrowseRoute() {
                             {(columnIndex) => {
                               const displayIndex = () =>
                                 virtualRow.index * columnCount() + columnIndex;
-                              const item = () => itemForDisplayIndex(displayIndex());
+                              const item = () => browseWindow.itemForDisplayIndex(displayIndex());
 
                               return (
-                                <Show when={displayIndex() < totalRecordCount()}>
+                                <Show when={displayIndex() < browseWindow.totalRecordCount()}>
                                   <div role="gridcell">
                                     <Show when={item()} fallback={<LibraryBrowseSkeletonCard />}>
                                       {(loadedItem) => (
@@ -666,7 +391,7 @@ function LibraryBrowseRoute() {
                 </div>
               </div>
             </Show>
-            <Show when={loadMoreErrorDescription()}>
+            <Show when={browseWindow.loadMoreErrorDescription()}>
               {(message) => (
                 <div class={styles.loadMoreError}>
                   <p class={styles.error}>{message()}</p>
@@ -674,12 +399,12 @@ function LibraryBrowseRoute() {
                     type="button"
                     variant="secondary"
                     class={recipes.pillButton}
-                    disabled={loadMoreRetryBusy()}
-                    onClick={retryFailedPage}
+                    disabled={browseWindow.loadMoreRetryBusy()}
+                    onClick={browseWindow.retryFailedPage}
                     leadingIcon={
                       <RefreshCw
                         class={styles.icon4}
-                        classList={{ [styles.spin]: loadMoreRetryBusy() }}
+                        classList={{ [styles.spin]: browseWindow.loadMoreRetryBusy() }}
                       />
                     }
                   >
