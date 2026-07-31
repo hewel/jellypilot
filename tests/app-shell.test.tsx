@@ -925,7 +925,7 @@ test('library landing renders command-backed rows and drawer trigger', async () 
   fireEvent.load(resumeArtwork);
   expect(resumeArtwork.parentElement).toHaveAttribute('data-aspect', 'video');
   const latestMovieLink = screen.getByRole('link', { name: 'Open Latest Movie' });
-  const latestMovieTitle = screen.getByText('Latest Movie • Movie');
+  const latestMovieTitle = screen.getByText('Latest Movie');
   expect(latestMovieTitle).toBeVisible();
   expect(latestMovieLink.contains(latestMovieTitle)).toBe(false);
   expect(screen.queryByText('Movie · null')).toBeNull();
