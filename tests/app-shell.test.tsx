@@ -21,7 +21,6 @@ import type {
   VideoSeasonEpisodes,
   VideoShowDetail,
 } from '../src/bindings';
-import { itemThumb } from '../src/components/AppSidebar.styles';
 import { ToastProvider } from '../src/components/ToastProvider';
 import { librarySessionKey, queryKeys } from '../src/effects/query';
 import { createJellyPilotRouter } from '../src/router';
@@ -294,6 +293,14 @@ const movieDetail: VideoItemDetail = {
   seriesName: null,
 };
 
+const resumeMovieDetail: VideoItemDetail = {
+  ...movieDetail,
+  backdropImageId: 'resume-movie-backdrop',
+  id: 'movie-1',
+  name: 'Resume Movie',
+  overview: 'A resume movie overview.',
+};
+
 const episodeDetail: VideoItemDetail = {
   artworkImageId: null,
   backdropImageId: null,
@@ -412,14 +419,14 @@ function videoLibraryPage(startIndex: number): VideoLibraryPage {
       hasMore: true,
       items: [
         {
-          id: 'movie-1',
+          id: 'paged-movie-1',
           name: 'Paged Movie',
           itemType: 'Movie',
           productionYear: 2025,
           runtimeSeconds: 5400,
           played: false,
           favorite: true,
-          artworkImageId: 'https://jellyfin.example.com/Items/movie-1/Images/Primary',
+          artworkImageId: 'https://jellyfin.example.com/Items/paged-movie-1/Images/Primary',
           seasonNumber: null,
           episodeNumber: null,
           seriesId: null,
@@ -646,7 +653,9 @@ function mockShellCommands(state = connectedState) {
         ? episodeDetail
         : itemId === 'episode-2'
           ? nextEpisodeDetail
-          : movieDetail;
+          : itemId === 'movie-1'
+            ? resumeMovieDetail
+            : movieDetail;
 
     return Promise.resolve({ data, status: 'ok' });
   });
@@ -893,7 +902,7 @@ test('library landing renders command-backed rows and drawer trigger', async () 
   expect(screen.getByRole('link', { name: 'Shows' })).toBeVisible();
   expect(await screen.findByRole('heading', { name: 'Continue Watching' })).toBeVisible();
   expect(screen.getByRole('button', { name: 'Resume Resume Movie' })).toBeVisible();
-  expect(screen.getByRole('link', { name: 'Open Next Episode' })).toBeVisible();
+  expect(screen.getByRole('button', { name: 'Play Next Episode' })).toBeVisible();
   expect(screen.getByRole('link', { name: 'Open Latest Movie' })).toBeVisible();
   expect(screen.getByRole('link', { name: 'Open Latest Episode' })).toBeVisible();
   const resumeMovieButton = screen.getByRole('button', { name: 'Resume Resume Movie' });
@@ -921,7 +930,7 @@ test('library landing renders command-backed rows and drawer trigger', async () 
   expect(latestMovieLink.contains(latestMovieTitle)).toBe(false);
   expect(screen.queryByText('Movie · null')).toBeNull();
   expect(latestMovieLink.querySelector('[data-aspect="poster"]')).not.toBeNull();
-  expect(screen.getAllByText('No artwork')).toHaveLength(3);
+  expect(screen.getAllByText('No artwork')).toHaveLength(2);
   const latestEpisodeLink = screen.getByRole('link', { name: 'Open Latest Episode' });
   expect(latestEpisodeLink.querySelector('svg')).not.toBeNull();
   fireEvent.click(resumeMovieButton);
@@ -971,7 +980,7 @@ test('library landing expands rows independently from measured capacity', async 
   expect(within(continueSection!).getAllByRole('button', { name: /^Resume Resume/ })).toHaveLength(
     3,
   );
-  expect(within(nextSection!).getAllByRole('link', { name: /^Open Next/ })).toHaveLength(3);
+  expect(within(nextSection!).getAllByRole('button', { name: /^Play Next/ })).toHaveLength(3);
 
   const continueDisclosure = within(continueSection!).getByRole('button', { name: 'See All' });
   expect(continueDisclosure).toHaveAttribute('aria-expanded', 'false');
@@ -997,8 +1006,8 @@ test('library landing expands rows independently from measured capacity', async 
   ).toHaveAttribute('aria-expanded', 'false');
   expect(
     within(screen.getByRole('heading', { name: 'Next Up' }).closest('section')!).getAllByRole(
-      'link',
-      { name: /^Open Next/ },
+      'button',
+      { name: /^Play Next/ },
     ),
   ).toHaveLength(3);
 
@@ -1052,10 +1061,15 @@ test('library landing blocks concurrent resume requests and shows selected-card 
 
   const first = await screen.findByRole('button', { name: 'Resume Resume Movie' });
   const second = screen.getByRole('button', { name: 'Resume Second Resume' });
+  const nextUpAction = screen.getByRole('button', { name: 'Play Next Episode' });
+  await screen.findByRole('button', { name: 'Resume featured Resume Movie' });
   fireEvent.click(first);
 
   expect(await screen.findByRole('button', { name: 'Starting Resume Movie' })).toBeDisabled();
+  // One unresolved launch locks direct actions in both rows and the hero.
   expect(second).toBeDisabled();
+  expect(nextUpAction).toBeDisabled();
+  expect(screen.getByRole('button', { name: 'Starting featured Resume Movie' })).toBeDisabled();
   await waitFor(() => expect(playCommand).toHaveBeenCalledTimes(1));
   fireEvent.click(second);
   expect(playCommand).toHaveBeenCalledTimes(1);
@@ -1068,9 +1082,98 @@ test('library landing blocks concurrent resume requests and shows selected-card 
   cleanup();
 });
 
+test('library landing orders rows continue, latest movies, next up, latest episodes', async () => {
+  mockShellCommands();
+  const cleanup = renderShell();
+
+  const orderedHeadings = [
+    await screen.findByRole('heading', { name: 'Continue Watching' }),
+    screen.getByRole('heading', { name: 'Latest Movies' }),
+    screen.getByRole('heading', { name: 'Next Up' }),
+    screen.getByRole('heading', { name: 'Latest Episodes' }),
+  ];
+  for (let index = 0; index < orderedHeadings.length - 1; index += 1) {
+    expect(
+      orderedHeadings[index]!.compareDocumentPosition(orderedHeadings[index + 1]!) &
+        Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+  }
+
+  cleanup();
+});
+
+test('library landing keeps rows usable while the featured detail loads', async () => {
+  mockShellCommands();
+  let resolveDetail!: (result: LibraryItemDetailResult) => void;
+  rstest.spyOn(commands, 'libraryItemDetail').mockImplementation(
+    () =>
+      new Promise<LibraryItemDetailResult>((resolve) => {
+        resolveDetail = resolve;
+      }),
+  );
+  const cleanup = renderShell();
+
+  // The fixed-size hero skeleton holds its slot while every row is usable.
+  expect(await screen.findByRole('status', { name: 'Loading featured item' })).toBeVisible();
+  expect(screen.getByRole('heading', { name: 'Continue Watching' })).toBeVisible();
+  expect(screen.getByRole('heading', { name: 'Latest Movies' })).toBeVisible();
+  expect(screen.getByRole('heading', { name: 'Next Up' })).toBeVisible();
+  expect(screen.getByRole('heading', { name: 'Latest Episodes' })).toBeVisible();
+
+  resolveDetail({ data: resumeMovieDetail, status: 'ok' });
+
+  expect(await screen.findByRole('heading', { name: 'Resume Movie' })).toBeVisible();
+  expect(screen.getByText('A resume movie overview.')).toBeVisible();
+  expect(screen.getByRole('button', { name: 'Resume featured Resume Movie' })).toBeEnabled();
+  expect(screen.queryByRole('status', { name: 'Loading featured item' })).toBeNull();
+
+  cleanup();
+});
+
+test('library landing falls back to the summary hero when the featured detail fails', async () => {
+  mockShellCommands();
+  rstest.spyOn(commands, 'libraryItemDetail').mockResolvedValue({
+    error: { code: 'network', message: 'Detail failed' },
+    status: 'error',
+  });
+  const cleanup = renderShell();
+
+  // Summary metadata and row artwork fill the hero without toasts or hidden rows.
+  expect(await screen.findByRole('heading', { name: 'Resume Movie' })).toBeVisible();
+  expect(screen.getByRole('button', { name: 'Resume featured Resume Movie' })).toBeEnabled();
+  expect(screen.getByRole('link', { name: 'Details' })).toHaveAttribute(
+    'href',
+    '/library/items/movie-1',
+  );
+  expect(screen.getByRole('heading', { name: 'Continue Watching' })).toBeVisible();
+  expect(screen.queryByText('Detail failed')).toBeNull();
+
+  cleanup();
+});
+
+test('library landing starts Next Up from zero when the server omits a resume offset', async () => {
+  mockShellCommands();
+  const playCommand = rstest.spyOn(commands, 'libraryPlay');
+  const cleanup = renderShell();
+
+  fireEvent.click(await screen.findByRole('button', { name: 'Play Next Episode' }));
+
+  await waitFor(() =>
+    expect(playCommand).toHaveBeenCalledWith({
+      audioStreamIndex: null,
+      itemId: 'episode-1',
+      mode: 'start',
+      startPositionSeconds: null,
+      subtitleStreamIndex: null,
+    }),
+  );
+
+  cleanup();
+});
+
 test('library landing reports direct resume failures through the existing toast', async () => {
   mockShellCommands();
-  rstest.spyOn(commands, 'libraryPlay').mockResolvedValue({
+  const playCommand = rstest.spyOn(commands, 'libraryPlay').mockResolvedValue({
     error: { code: 'network', message: 'Resume failed' },
     status: 'error',
   });
@@ -1078,7 +1181,9 @@ test('library landing reports direct resume failures through the existing toast'
 
   fireEvent.click(await screen.findByRole('button', { name: 'Resume Resume Movie' }));
 
+  // A failed Resume makes exactly one call; it never retries as Start.
   expect(await screen.findByText('Resume failed')).toBeVisible();
+  await waitFor(() => expect(playCommand).toHaveBeenCalledTimes(1));
   await waitFor(() =>
     expect(screen.getByRole('button', { name: 'Resume Resume Movie' })).not.toBeDisabled(),
   );
@@ -1106,7 +1211,7 @@ test('library browse auto-loads paged results and opens detail links without pla
   const pagedMovieLink = await screen.findByRole('link', {
     name: 'Open Paged Movie, favorite',
   });
-  expect(pagedMovieLink).toHaveAttribute('href', '/library/items/movie-1');
+  expect(pagedMovieLink).toHaveAttribute('href', '/library/items/paged-movie-1');
   expect(screen.queryByText('Favorite')).toBeNull();
   expect(within(pagedMovieLink).queryByRole('img', { name: 'Unplayed' })).toBeNull();
   expect(within(pagedMovieLink).queryByText('Unplayed')).toBeNull();
@@ -1166,7 +1271,7 @@ test('detail page highlights parent library in Sidebar', async () => {
   cleanup();
 });
 
-test('sidebar shows library artwork with icon fallback', async () => {
+test('sidebar shows monochrome library icons without artwork images', async () => {
   mockShellCommands();
   rstest.spyOn(commands, 'libraryVideoShortcuts').mockResolvedValue({
     data: [
@@ -1179,11 +1284,8 @@ test('sidebar shows library artwork with icon fallback', async () => {
 
   await screen.findByRole('navigation', { name: 'Sidebar' });
   const moviesLink = await screen.findByRole('link', { name: 'Movies' });
-  const moviesArtwork = moviesLink.querySelector('img');
-  expect(moviesArtwork).toHaveAttribute('src', imageSource('movies-art'));
-  // Contractual fixed 24px thumb slot: without it the artwork renders at natural
-  // size and pushes the row labels out of the sidebar.
-  expect(moviesArtwork).toHaveClass(itemThumb);
+  expect(moviesLink.querySelector('img')).toBeNull();
+  expect(moviesLink.querySelector('svg')).not.toBeNull();
   const showsLink = screen.getByRole('link', { name: 'Shows' });
   expect(showsLink.querySelector('img')).toBeNull();
   expect(showsLink.querySelector('svg')).not.toBeNull();
@@ -1801,6 +1903,16 @@ test('library item detail back returns home when opened from the library landing
 
 test('library item detail leaves the skeleton after an asynchronous detail response', async () => {
   mockShellCommands();
+  // Feature precedence lands on Latest Movies, so the hero and the detail
+  // page share one deduped movie-2 detail query.
+  rstest.spyOn(commands, 'libraryVideoHome').mockResolvedValue({
+    data: {
+      ...videoHome,
+      continueWatching: [],
+      nextUp: [],
+    },
+    status: 'ok',
+  });
   let resolveDetail!: (result: LibraryItemDetailResult) => void;
   const detailCommand = rstest.spyOn(commands, 'libraryItemDetail').mockImplementation(
     () =>
@@ -1818,9 +1930,11 @@ test('library item detail leaves the skeleton after an asynchronous detail respo
   const latestMovieLink = await screen.findByRole('link', { name: 'Open Latest Movie' });
   fireEvent.click(latestMovieLink);
 
+  // The hero already holds the pending movie-2 detail query; the detail page
+  // subscribes to it and waits in its skeleton.
+  expect(await screen.findByRole('status', { name: 'Loading item detail' })).toBeVisible();
   await waitFor(() => expect(detailCommand).toHaveBeenCalledWith('movie-2'));
   expect(screen.queryByRole('heading', { name: 'Detail Movie' })).toBeNull();
-  expect(screen.getByRole('status', { name: 'Loading item detail' })).toBeVisible();
 
   resolveDetail({ data: movieDetail, status: 'ok' });
 
@@ -2239,6 +2353,9 @@ test('shell search bar stays disabled while disconnected', async () => {
   mockShellCommands(disconnectedState);
   const cleanup = renderShell('/library/movies/movies');
 
+  const sidebar = await screen.findByRole('navigation', { name: 'Sidebar' });
+  fireEvent.click(within(sidebar).getByRole('button', { name: 'Search library' }));
+
   const input = await screen.findByRole('searchbox', { name: 'Search library' });
   expect(input).toBeDisabled();
   expect(input).toHaveAttribute('placeholder', 'Connect to search');
@@ -2250,19 +2367,51 @@ test('shell search bar stays disabled while disconnected', async () => {
   cleanup();
 });
 
-test('shell search slash shortcut focuses retained draft outside inputs and stays inert while an input is focused', async () => {
+test('shell search expands from the collapsed trigger with click and slash while keeping focus rules', async () => {
   mockShellCommands();
   const cleanup = renderShell('/library/movies/movies');
 
   await screen.findByRole('heading', { name: 'Movies' });
+  const sidebar = screen.getByRole('navigation', { name: 'Sidebar' });
+
+  // Click expansion focuses the mounted input.
+  fireEvent.click(within(sidebar).getByRole('button', { name: 'Search library' }));
   const input = (await screen.findByRole('searchbox', {
     name: 'Search library',
   })) as HTMLInputElement;
+  expect(input).toHaveFocus();
 
-  input.focus();
+  // Slash stays inert while an interactive element owns focus.
   const notPrevented = fireEvent.keyDown(input, { key: '/' });
   expect(notPrevented).toBe(true);
   expect(input).toHaveValue('');
+
+  // Escape from an empty field collapses back to the trigger.
+  fireEvent.keyDown(input, { key: 'Escape' });
+  expect(screen.queryByRole('searchbox', { name: 'Search library' })).toBeNull();
+
+  // Slash expansion restores the field focused.
+  input.blur();
+  const prevented = fireEvent.keyDown(document.body, { key: '/' });
+  expect(prevented).toBe(false);
+  const reopened = (await screen.findByRole('searchbox', {
+    name: 'Search library',
+  })) as HTMLInputElement;
+  expect(reopened).toHaveFocus();
+
+  cleanup();
+});
+
+test('shell search slash shortcut focuses retained draft outside inputs', async () => {
+  mockShellCommands();
+  const cleanup = renderShell('/library/movies/movies');
+
+  await screen.findByRole('heading', { name: 'Movies' });
+  const sidebar = screen.getByRole('navigation', { name: 'Sidebar' });
+  fireEvent.click(within(sidebar).getByRole('button', { name: 'Search library' }));
+  const input = (await screen.findByRole('searchbox', {
+    name: 'Search library',
+  })) as HTMLInputElement;
 
   fireEvent.input(input, { target: { value: 'alien' } });
   expect(commands.librarySearchVideo).not.toHaveBeenCalled();
@@ -2287,6 +2436,8 @@ test('shell search draft enablement, whitespace rejection, clear, and trimming s
   const cleanup = renderShell('/library/movies/movies');
 
   await screen.findByRole('heading', { name: 'Movies' });
+  const sidebar = screen.getByRole('navigation', { name: 'Sidebar' });
+  fireEvent.click(within(sidebar).getByRole('button', { name: 'Search library' }));
   const input = (await screen.findByRole('searchbox', {
     name: 'Search library',
   })) as HTMLInputElement;
@@ -2307,7 +2458,7 @@ test('shell search draft enablement, whitespace rejection, clear, and trimming s
   expect(input).toHaveValue('');
   expect(input).toHaveFocus();
   expect(submit).toBeDisabled();
-  expect(screen.getByRole('heading', { name: 'Movies' })).toBeVisible();
+  expect(await screen.findByRole('heading', { name: 'Movies' })).toBeVisible();
   expect(searchCommand).not.toHaveBeenCalled();
 
   fireEvent.input(input, { target: { value: '  alien  ' } });

@@ -192,7 +192,7 @@ function appScrollViewportTop(): number {
 }
 
 describe('library search finds results beyond home rows and restores them on Back', () => {
-  it('submits from the shell bar, opens the final result, and restores row and scroll', async () => {
+  it('submits from the collapsible sidebar search, opens the final result, and restores row and scroll', async () => {
     await browser.waitUntil(
       () => browser.execute(() => window.__JELLYPILOT_E2E__?.ready === true),
       {
@@ -253,21 +253,31 @@ describe('library search finds results beyond home rows and restores them on Bac
     await sidebar.waitForDisplayed({ timeout: 30_000 });
     expect(await browser.execute(() => window.location.pathname)).toBe('/library');
 
-    // The shell search bar lives inside the Library browse toolbar.
-    const moviesLink = await sidebar.$('aria/Movies');
-    await moviesLink.click();
+    // The shell search lives in the collapsible sidebar; collapse the rail to
+    // reach the icon-only Search trigger.
+    const collapseToggle = await $('aria/Collapse sidebar');
+    await collapseToggle.click();
+    const searchTrigger = await $('button[aria-label="Search library"]');
+    await searchTrigger.waitForDisplayed({ timeout: 30_000 });
+    await searchTrigger.click();
+
+    // Expanding the sidebar search focuses the mounted field.
+    const searchInput = await $('form[role="search"] input[aria-label="Search library"]');
+    await searchInput.waitForDisplayed({ timeout: 30_000 });
     await browser.waitUntil(
-      () => browser.execute(() => window.location.pathname === '/library/movies/movies'),
+      () =>
+        browser.execute(
+          () =>
+            document.activeElement ===
+            document.querySelector('form[role="search"] input[aria-label="Search library"]'),
+        ),
       {
-        timeout: 30_000,
-        timeoutMsg: 'Movies browse route did not load.',
+        timeout: 5000,
+        timeoutMsg: 'The sidebar search field was not focused after expansion.',
       },
     );
 
-    // Submit the query from the browse toolbar search bar.
-    const searchInput = await $('form[role="search"] input[aria-label="Search library"]');
-    await searchInput.waitForDisplayed({ timeout: 30_000 });
-    await searchInput.click();
+    // Submit the query from the sidebar search.
     await searchInput.setValue(SEARCH_QUERY);
     const submitSearch = await $('form[role="search"] button[type="submit"]');
     await submitSearch.click();

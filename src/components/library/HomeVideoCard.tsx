@@ -7,6 +7,7 @@ import { Show } from 'solid-js';
 import {
   isValidVideoHomeResumePosition,
   videoHomeAspect,
+  videoHomePlaybackDecision,
   type VideoHomeRowKind,
 } from '~utils/videoHomeLayout';
 
@@ -18,8 +19,8 @@ export interface HomeVideoCardProps {
   item: VideoHomeItem;
   rowKind: VideoHomeRowKind;
   busy?: boolean;
-  resumeDisabled?: boolean;
-  onResume?: () => void;
+  playbackDisabled?: boolean;
+  onPlay?: () => void;
 }
 
 const homeSecondary = Match.type<{
@@ -57,16 +58,18 @@ export function videoHomeProgress(item: VideoHomeItem): number | null {
 
 export function continueWatchingLabel(item: VideoHomeItem): string {
   if (
-    finiteNumber(item.runtimeSeconds) &&
-    finiteNumber(item.resumePositionSeconds) &&
-    item.runtimeSeconds > item.resumePositionSeconds
+    isValidVideoHomeResumePosition(item.resumePositionSeconds, item.runtimeSeconds) &&
+    finiteNumber(item.runtimeSeconds)
   ) {
     const minutes = Math.max(1, Math.ceil((item.runtimeSeconds - item.resumePositionSeconds) / 60));
     return `${minutes} ${minutes === 1 ? 'min' : 'mins'} remaining`;
   }
 
   const progress = videoHomeProgress(item);
-  return progress === null ? 'Resume' : `${Math.round(progress)}% watched`;
+  if (progress !== null) {
+    return `${Math.round(progress)}% watched`;
+  }
+  return videoHomePlaybackDecision(item).mode === 'resume' ? 'Resume' : 'Play';
 }
 
 function homeTitle(item: VideoHomeItem): string {
@@ -82,26 +85,41 @@ function homeTitle(item: VideoHomeItem): string {
   return `${item.name} • ${item.itemType}`;
 }
 
-function isDirectResumeCard(props: HomeVideoCardProps): props is HomeVideoCardProps & {
-  onResume: () => void;
+function isDirectPlaybackCard(props: HomeVideoCardProps): props is HomeVideoCardProps & {
+  onPlay: () => void;
 } {
   return (
-    props.rowKind === 'continueWatching' &&
-    props.onResume !== undefined &&
-    isValidVideoHomeResumePosition(props.item.resumePositionSeconds, props.item.runtimeSeconds)
+    (props.rowKind === 'continueWatching' || props.rowKind === 'nextUp') &&
+    props.onPlay !== undefined
   );
 }
 
 export function HomeVideoCard(props: HomeVideoCardProps) {
   const aspectClass = (): VideoCardAspectClass => videoHomeAspect(props.rowKind);
 
-  const showPlayBadge = () => isDirectResumeCard(props) && !props.busy;
+  const showPlayBadge = () => isDirectPlaybackCard(props) && !props.busy;
 
   const usesTvIcon = () => props.item.itemType === 'Series' || props.item.itemType === 'Episode';
 
-  const progress = () =>
-    props.rowKind === 'continueWatching' ? videoHomeProgress(props.item) : null;
+  const progress = () => {
+    if (props.rowKind === 'continueWatching') {
+      return videoHomeProgress(props.item);
+    }
+    if (props.rowKind === 'nextUp' && videoHomePlaybackDecision(props.item).mode === 'resume') {
+      return videoHomeProgress(props.item);
+    }
+    return null;
+  };
   const secondary = () => homeSecondary({ item: props.item, rowKind: props.rowKind });
+
+  const actionLabel = () => {
+    if (props.busy) {
+      return `Starting ${props.item.name}`;
+    }
+    return videoHomePlaybackDecision(props.item).mode === 'resume'
+      ? `Resume ${props.item.name}`
+      : `Play ${props.item.name}`;
+  };
 
   const titleLinkTarget = () => {
     if (props.item.itemType === 'Series') {
@@ -124,7 +142,7 @@ export function HomeVideoCard(props: HomeVideoCardProps) {
         class={cx(styles.image, styles.homeImage)}
         fallback={
           showPlayBadge() ? (
-            <div class={styles.directResumeFallback} aria-hidden="true" />
+            <div class={styles.directPlaybackFallback} aria-hidden="true" />
           ) : (
             <div class={styles.fallback}>
               <Show
@@ -182,16 +200,16 @@ export function HomeVideoCard(props: HomeVideoCardProps) {
     </div>
   );
 
-  if (isDirectResumeCard(props)) {
+  if (isDirectPlaybackCard(props)) {
     return (
       <div class={styles.homeCard}>
         <button
           type="button"
           class={styles.homeCardAction}
-          aria-label={props.busy ? `Starting ${props.item.name}` : `Resume ${props.item.name}`}
+          aria-label={actionLabel()}
           aria-busy={props.busy}
-          disabled={props.resumeDisabled}
-          onClick={props.onResume}
+          disabled={props.busy || props.playbackDisabled}
+          onClick={props.onPlay}
         >
           {renderArtwork()}
         </button>

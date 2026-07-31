@@ -50,7 +50,7 @@ export const ambientCore = css({
     '[radial-gradient(closest-side, {colors.primary/16}, {colors.secondary/7} 48%, transparent 72%)]',
   borderRadius: 'full',
   height: 'full',
-  opacity: '[0.75]',
+  opacity: '[0.45]',
   transitionDuration: '300',
   transitionProperty: '[opacity, transform]',
   transitionTimingFunction: 'standard',
@@ -59,7 +59,7 @@ export const ambientCore = css({
     transition: '[none]',
   },
   '[data-shell]:has([data-sidebar]:hover) &, [data-shell]:has([data-toolbar]:hover) &': {
-    opacity: '[1]',
+    opacity: '[0.65]',
     transform: '[scale(1.06)]',
   },
 });

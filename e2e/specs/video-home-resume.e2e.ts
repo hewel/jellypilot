@@ -43,7 +43,24 @@ const videoHome = {
     },
   ],
   nextUp: [],
-  latestMovies: [],
+  latestMovies: [
+    {
+      id: 'e2e-latest-movie',
+      name: 'E2E Latest Movie',
+      itemType: 'Movie',
+      seriesId: null,
+      seriesName: null,
+      seasonNumber: null,
+      episodeNumber: null,
+      productionYear: 2025,
+      runtimeSeconds: null,
+      resumePositionSeconds: null,
+      playedPercentage: null,
+      played: false,
+      favorite: false,
+      artworkImageId: null,
+    },
+  ],
   latestEpisodes: [],
 } as const satisfies VideoHome;
 
@@ -51,7 +68,7 @@ const itemDetail = {
   id: 'e2e-home-movie',
   name: 'E2E Home Movie',
   itemType: 'Movie',
-  overview: null,
+  overview: 'E2E Home Movie overview.',
   productionYear: 2024,
   runtimeSeconds: 7200,
   seriesId: null,
@@ -160,7 +177,21 @@ describe('Video Home direct resume', () => {
       controller.mount();
     }, fixtures);
 
-    const resume = await $('aria/Resume E2E Home Movie');
+    // The resume-first hero fills from the matching item detail fixture.
+    const featuredHeading = await $('aria/E2E Home Movie');
+    await featuredHeading.waitForDisplayed({ timeout: 30_000 });
+    await browser.waitUntil(
+      () =>
+        browser.execute(
+          () => document.body.textContent?.includes('E2E Home Movie overview.') === true,
+        ),
+      {
+        timeout: 30_000,
+        timeoutMsg: 'The featured hero overview did not render from the item detail fixture.',
+      },
+    );
+
+    const resume = await $('aria/Resume featured E2E Home Movie');
     await resume.waitForDisplayed({ timeout: 30_000 });
     await resume.click();
 
@@ -176,8 +207,17 @@ describe('Video Home direct resume', () => {
     ).toBe(true);
     expect(await browser.execute(() => window.location.pathname)).toBe('/library');
 
-    const detailLink = await $('a[href="/library/items/e2e-home-movie"]');
-    await detailLink.click();
+    const heroDetails = await $('aria/Details');
+    await heroDetails.click();
+    await browser.waitUntil(
+      async () =>
+        (await browser.execute(() => window.location.pathname)) === '/library/items/e2e-home-movie',
+      {
+        timeout: 30_000,
+        timeoutMsg: 'Hero Details did not navigate to the item detail route.',
+      },
+    );
+
     const detailHeading = await $('aria/E2E Home Movie');
     await detailHeading.waitForDisplayed({ timeout: 1000 });
 
@@ -200,5 +240,101 @@ describe('Video Home direct resume', () => {
     await cachedDetailLink.click();
     const cachedDetailHeading = await $('aria/E2E Home Movie');
     await cachedDetailHeading.waitForDisplayed({ timeout: 5000 });
+
+    const backToHome = await $('aria/Back');
+    await backToHome.click();
+    await browser.waitUntil(
+      async () => (await browser.execute(() => window.location.pathname)) === '/library',
+      { timeout: 5000, timeoutMsg: 'Detail back navigation did not return to the library.' },
+    );
+
+    // Reference density: row track counts follow the measured row width
+    // through the tuned landscape/poster ladders (4 landscape + 6 poster at
+    // the isolated 1600×900 default, 3 + 5 at 1280×720).
+    const expectedTracks = (aspect: 'video' | 'poster', width: number): number => {
+      const ladder: readonly (readonly [number, number])[] =
+        aspect === 'video'
+          ? [
+              [560, 2],
+              [820, 3],
+              [1120, 4],
+              [1380, 5],
+            ]
+          : [
+              [560, 3],
+              [700, 4],
+              [950, 5],
+              [1160, 6],
+              [1390, 7],
+            ];
+      let expected = aspect === 'video' ? 1 : 2;
+      for (const [minimum, count] of ladder) {
+        if (width >= minimum) {
+          expected = count;
+        }
+      }
+      return expected;
+    };
+    const measureRow = (rowId: string): Promise<{ tracks: number; width: number } | null> =>
+      browser.execute((id: string) => {
+        const section = document.querySelector(`section[aria-labelledby="row-${id}"]`);
+        const grid = section?.querySelector<HTMLElement>(':scope > div:nth-of-type(2)');
+        if (!grid) return null;
+        return {
+          tracks: getComputedStyle(grid).gridTemplateColumns.split(' ').length,
+          width: grid.clientWidth,
+        };
+      }, rowId);
+    const continueSection = await $('section[aria-labelledby="row-continue-watching"]');
+    await continueSection.waitForDisplayed({ timeout: 30_000 });
+
+    const findOverflowOffenders = (): Promise<string[]> =>
+      browser.execute(() => {
+        const offenders: string[] = [];
+        for (const element of document.querySelectorAll<HTMLElement>('body *')) {
+          const rect = element.getBoundingClientRect();
+          if (rect.right > window.innerWidth + 1 || rect.left < -1) {
+            offenders.push(
+              `${element.tagName} ${element.className.toString().slice(0, 60)} left=${Math.round(rect.left)} right=${Math.round(rect.right)}`,
+            );
+          }
+        }
+        return offenders.slice(0, 8);
+      });
+
+    const defaultContinue = await measureRow('continue-watching');
+    const defaultMovies = await measureRow('latest-movies');
+    expect(defaultContinue).not.toBeNull();
+    expect(defaultMovies).not.toBeNull();
+    expect(defaultContinue!.tracks).toBe(expectedTracks('video', defaultContinue!.width));
+    expect(defaultMovies!.tracks).toBe(expectedTracks('poster', defaultMovies!.width));
+    expect(await findOverflowOffenders()).toEqual([]);
+
+    await browser.setWindowSize(1280, 720);
+    await browser.waitUntil(
+      async () => {
+        const measured = await measureRow('continue-watching');
+        return measured !== null && measured.tracks === expectedTracks('video', measured.width);
+      },
+      {
+        timeout: 5000,
+        timeoutMsg: 'Continue Watching tracks did not follow the ladder at 1280×720.',
+      },
+    );
+    const resizedContinue = (await measureRow('continue-watching'))!;
+    const resizedMovies = (await measureRow('latest-movies'))!;
+    expect(resizedMovies.tracks).toBe(expectedTracks('poster', resizedMovies.width));
+    expect(resizedContinue.tracks).toBeLessThanOrEqual(defaultContinue!.tracks);
+    expect(resizedMovies.tracks).toBeLessThanOrEqual(defaultMovies!.tracks);
+    await browser.waitUntil(
+      async () => {
+        const offenders = await findOverflowOffenders();
+        return offenders.length === 0;
+      },
+      {
+        timeout: 5000,
+        timeoutMsg: 'Home content overflowed horizontally at 1280×720.',
+      },
+    );
   });
 });

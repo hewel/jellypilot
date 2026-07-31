@@ -1,3 +1,4 @@
+import type { VideoHomeItem } from '@bindings';
 import { Match } from 'effect';
 
 export type VideoHomeRowKind = 'continueWatching' | 'nextUp' | 'latestMovies' | 'latestEpisodes';
@@ -23,28 +24,28 @@ export function videoHomeColumnCount(
   }
 
   if (aspect === 'video') {
-    if (availableWidth >= 2200) {
+    if (availableWidth >= 1380) {
       return 5;
     }
-    if (availableWidth >= 1400) {
+    if (availableWidth >= 1120) {
       return 4;
     }
-    if (availableWidth >= 900) {
+    if (availableWidth >= 820) {
       return 3;
     }
     return availableWidth >= 560 ? 2 : 1;
   }
 
-  if (availableWidth >= 1700) {
+  if (availableWidth >= 1390) {
     return 7;
   }
-  if (availableWidth >= 1400) {
+  if (availableWidth >= 1160) {
     return 6;
   }
-  if (availableWidth >= 1100) {
+  if (availableWidth >= 950) {
     return 5;
   }
-  if (availableWidth >= 840) {
+  if (availableWidth >= 700) {
     return 4;
   }
   return availableWidth >= 560 ? 3 : 2;
@@ -61,4 +62,23 @@ export function isValidVideoHomeResumePosition(
   return (
     !finiteNumber(runtimeSeconds) || runtimeSeconds <= 0 || resumePositionSeconds < runtimeSeconds
   );
+}
+
+export type VideoHomePlaybackDecision =
+  | { readonly mode: 'resume'; readonly startPositionSeconds: number }
+  | { readonly mode: 'start'; readonly startPositionSeconds: null };
+
+/**
+ * Single Resume-or-Start authority for Home rows and the featured hero. Any
+ * finite positive offset strictly inside a positive runtime (or with an
+ * unknown runtime) resumes; every other shape starts from zero. `played` and
+ * `playedPercentage` never imply an offset.
+ */
+export function videoHomePlaybackDecision(
+  item: Pick<VideoHomeItem, 'resumePositionSeconds' | 'runtimeSeconds'>,
+): VideoHomePlaybackDecision {
+  if (isValidVideoHomeResumePosition(item.resumePositionSeconds, item.runtimeSeconds)) {
+    return { mode: 'resume', startPositionSeconds: item.resumePositionSeconds };
+  }
+  return { mode: 'start', startPositionSeconds: null };
 }

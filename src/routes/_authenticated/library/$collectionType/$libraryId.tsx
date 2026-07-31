@@ -10,7 +10,6 @@ import {
   playedFilterLabel,
   sortItems,
 } from '@components/library/shared';
-import LibrarySearchBar from '@components/LibrarySearchBar';
 import { Button } from '@components/ui';
 import { cx } from '@styled-system/css';
 import { createFileRoute, redirect } from '@tanstack/solid-router';
@@ -28,7 +27,6 @@ import {
 import { For, Show, Suspense, createEffect, createMemo, createSignal, onCleanup } from 'solid-js';
 import { commandFailureMessage } from '~effects/commands';
 import { librarySessionSignature } from '~effects/query';
-import type { LibrarySessionKey } from '~effects/query';
 import * as recipes from '~styles/recipes';
 import { createLibraryBrowseWindow } from '~utils/createLibraryBrowseWindow';
 import { createSharedLibraryFilters } from '~utils/createSharedLibraryFilters';
@@ -169,7 +167,6 @@ function LibraryBrowseRoute() {
         title={() => libraryTitle(collectionType())}
         count={toolbarCount}
         loading={controlsLoading}
-        sessionKey={sessionKey}
         sortedValue={libraryFilters.sort}
         sortDirection={libraryFilters.sortDirection}
         playedFilter={libraryFilters.playedFilter}
@@ -418,7 +415,6 @@ interface LibraryBrowseToolbarProps {
   title: () => string;
   count: () => string | null;
   loading: () => boolean;
-  sessionKey: () => LibrarySessionKey;
   sortedValue: () => VideoLibrarySort;
   sortDirection: () => LibrarySortDirection;
   playedFilter: () => VideoLibraryPlayedFilter;
@@ -445,9 +441,6 @@ function LibraryBrowseToolbar(props: LibraryBrowseToolbarProps) {
           {props.title()}
         </h2>
         <Show when={props.count()}>{(count) => <p class={styles.toolbarCount}>{count()}</p>}</Show>
-      </div>
-      <div class={styles.toolbarSearch}>
-        <LibrarySearchBar sessionKey={props.sessionKey()} />
       </div>
       <div class={styles.controlCapsule} data-disabled={props.loading() ? '' : undefined}>
         <Toggle.Root

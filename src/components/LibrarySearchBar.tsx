@@ -1,7 +1,7 @@
 import { useAppScrollArea } from '@components/AppScrollAreaContext';
 import { useQueryClient } from '@tanstack/solid-query';
 import { useLocation, useNavigate } from '@tanstack/solid-router';
-import { Search, X } from 'lucide-solid';
+import { ArrowRight, Search, X } from 'lucide-solid';
 import { Show, createEffect, createSignal, onCleanup, onMount } from 'solid-js';
 import type { JSX } from 'solid-js';
 import { isLibrarySessionKeyConnected, queryKeys } from '~effects/query';
@@ -12,6 +12,9 @@ import { Button, FieldControl } from './ui';
 
 export interface LibrarySearchBarProps {
   sessionKey: LibrarySessionKey;
+  collapsed: boolean;
+  onRequestExpand: () => void;
+  onRequestCollapse: () => void;
 }
 
 const INTERACTIVE_TARGET_SELECTOR = 'input, textarea, select, button, a, [contenteditable]';
@@ -21,9 +24,11 @@ function isInteractiveTarget(target: EventTarget | null): boolean {
 }
 
 /**
- * Persistent shell search control. Keeps one retained draft for the mounted
+ * Persistent sidebar search control. Keeps one retained draft for the mounted
  * authenticated shell, navigates to `/library/search?q=…` on submit, resets
- * the active query on repeat submit, and focuses the input on unmodified `/`.
+ * the active query on repeat submit, and expands/focuses on unmodified `/`.
+ * Collapsed it renders a single Search trigger; expansion and collapse are
+ * owned by the sidebar through `onRequestExpand`/`onRequestCollapse`.
  */
 export default function LibrarySearchBar(props: LibrarySearchBarProps): JSX.Element {
   const navigate = useNavigate();
@@ -31,6 +36,7 @@ export default function LibrarySearchBar(props: LibrarySearchBarProps): JSX.Elem
   const appScroll = useAppScrollArea();
   const [draft, setDraft] = createSignal('');
   const [inputElement, setInputElement] = createSignal<HTMLInputElement | null>(null);
+  const [focusOnExpand, setFocusOnExpand] = createSignal(false);
 
   const connected = () => isLibrarySessionKeyConnected(props.sessionKey);
   const canSubmit = () => connected() && draft().trim() !== '';
@@ -45,7 +51,7 @@ export default function LibrarySearchBar(props: LibrarySearchBarProps): JSX.Elem
   });
 
   // Resynchronize the draft whenever history activates the search route; on
-  // Every other child route the last submitted/draft value is retained.
+  // every other child route the last submitted/draft value is retained.
   createEffect(() => {
     const q = routeQuery();
     if (q !== null) {
@@ -63,6 +69,18 @@ export default function LibrarySearchBar(props: LibrarySearchBarProps): JSX.Elem
     return true;
   };
 
+  const requestExpand = () => {
+    setFocusOnExpand(true);
+    props.onRequestExpand();
+  };
+
+  // Focus and select only after the expanded form has mounted its input.
+  createEffect(() => {
+    if (!props.collapsed && focusOnExpand() && focusInput()) {
+      setFocusOnExpand(false);
+    }
+  });
+
   onMount(() => {
     const handleKeydown = (event: KeyboardEvent) => {
       if (event.key !== '/' || event.ctrlKey || event.metaKey || event.altKey) {
@@ -71,9 +89,12 @@ export default function LibrarySearchBar(props: LibrarySearchBarProps): JSX.Elem
       if (!connected() || isInteractiveTarget(event.target)) {
         return;
       }
-      if (focusInput()) {
-        event.preventDefault();
+      event.preventDefault();
+      if (props.collapsed) {
+        requestExpand();
+        return;
       }
+      focusInput();
     };
     document.addEventListener('keydown', handleKeydown);
     onCleanup(() => document.removeEventListener('keydown', handleKeydown));
@@ -93,6 +114,7 @@ export default function LibrarySearchBar(props: LibrarySearchBarProps): JSX.Elem
       });
       return;
     }
+    inputElement()?.blur();
     void navigate({ search: { q: trimmedQuery }, to: '/library/search' });
   };
 
@@ -101,54 +123,76 @@ export default function LibrarySearchBar(props: LibrarySearchBarProps): JSX.Elem
     inputElement()?.focus();
   };
 
+  const handleKeyDown: JSX.EventHandler<HTMLInputElement, KeyboardEvent> = (event) => {
+    if (event.key === 'Escape' && draft().trim() === '') {
+      props.onRequestCollapse();
+    }
+  };
+
   return (
-    <form aria-label="Search library" class={styles.form} onSubmit={handleSubmit} role="search">
-      <div class={styles.control}>
-        <Search aria-hidden="true" class={styles.leadingIcon} size={16} />
-        <FieldControl
-          ref={setInputElement}
-          aria-label="Search library"
-          class={styles.input}
-          disabled={!connected()}
-          onInput={(event) => setDraft(event.currentTarget.value)}
-          placeholder={connected() ? 'Search movies, shows, and episodes' : 'Connect to search'}
-          type="search"
-          value={draft()}
-        />
-        <div class={styles.trailingAffordance}>
-          <Show
-            when={draft().length > 0}
-            fallback={
-              <span aria-hidden="true" class={styles.keycap}>
-                /
-              </span>
-            }
-          >
-            <Button
-              aria-label="Clear search"
-              class={styles.clearButton}
-              disabled={!connected()}
-              onClick={handleClear}
-              size="sm"
-              type="button"
-              variant="icon"
-            >
-              <X aria-hidden="true" size={16} />
-            </Button>
-          </Show>
-        </div>
+    <Show
+      when={!props.collapsed}
+      fallback={
         <Button
           aria-label="Search library"
-          class={styles.submitButton}
-          disabled={!canSubmit()}
-          size="sm"
-          type="submit"
-          variant="secondary"
+          class={styles.collapsedTrigger}
+          onClick={requestExpand}
+          size="row"
+          type="button"
+          variant="icon"
         >
-          <Search aria-hidden="true" class={styles.submitIcon} size={16} />
-          <span class={styles.submitLabel}>Search</span>
+          <Search aria-hidden="true" class={styles.collapsedTriggerIcon} />
         </Button>
-      </div>
-    </form>
+      }
+    >
+      <form aria-label="Search library" class={styles.form} onSubmit={handleSubmit} role="search">
+        <div class={styles.control}>
+          <Search aria-hidden="true" class={styles.leadingIcon} size={16} />
+          <FieldControl
+            ref={setInputElement}
+            aria-label="Search library"
+            class={styles.input}
+            disabled={!connected()}
+            onInput={(event) => setDraft(event.currentTarget.value)}
+            onKeyDown={handleKeyDown}
+            placeholder={connected() ? 'Search movies, shows, and episodes' : 'Connect to search'}
+            type="search"
+            value={draft()}
+          />
+          <div class={styles.trailingAffordance}>
+            <Show
+              when={draft().length > 0}
+              fallback={
+                <span aria-hidden="true" class={styles.keycap}>
+                  /
+                </span>
+              }
+            >
+              <Button
+                aria-label="Clear search"
+                class={styles.clearButton}
+                disabled={!connected()}
+                onClick={handleClear}
+                size="sm"
+                type="button"
+                variant="icon"
+              >
+                <X aria-hidden="true" size={16} />
+              </Button>
+            </Show>
+          </div>
+          <Button
+            aria-label="Search library"
+            class={styles.submitButton}
+            disabled={!canSubmit()}
+            size="sm"
+            type="submit"
+            variant="secondary"
+          >
+            <ArrowRight aria-hidden="true" size={16} />
+          </Button>
+        </div>
+      </form>
+    </Show>
   );
 }
