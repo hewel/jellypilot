@@ -21,13 +21,11 @@ use super::play_resolution::{
 };
 use super::types::*;
 use super::websocket::{JellyfinCommand, JellyfinWebSocket, JellyfinWebSocketEvent};
-use crate::command::{AppNotification, NowPlayingChanged};
+use crate::command::{AppNotification, NowPlayingChanged, NowPlayingState};
 use crate::config::{AppConfig, IntroSkipperMode};
 use crate::hls_proxy::{ActivatedHls, HlsProxyError, HlsProxyEvent, HlsProxyState};
 use crate::mpv::{has_mpv_option, MpvClient};
-use crate::now_playing::{
-  build_now_playing_state, collect_player_state, PlaybackContext, TransportSnapshot,
-};
+use crate::now_playing::{build_now_playing_state, PlaybackContext, TransportSnapshot};
 use tauri_specta::Event;
 
 const PREFERENCES_STORE_FILE: &str = "preferences.json";
@@ -234,26 +232,48 @@ impl SessionManager {
     self.state.read().current_item.clone()
   }
 
-  async fn emit_now_playing_changed(
-    app_handle: &AppHandle,
-    mpv: &MpvClient,
-    state: &RwLock<SessionState>,
-  ) {
-    let player = collect_player_state(mpv).await;
-    let state = state.read();
-    let now_playing = build_now_playing_state(
+  /// Project the current Now Playing state from the maintained transport
+  /// snapshot. This is the single projection owner for every emission path;
+  /// it never issues MPV property queries.
+  fn project_now_playing(state: &RwLock<SessionState>) -> NowPlayingState {
+    let s = state.read();
+    let media_runtime_seconds = s
+      .current_item
+      .as_ref()
+      .and_then(|item| item.run_time_ticks)
+      .map(ticks_to_seconds);
+    let player = s.transport.project(media_runtime_seconds);
+    build_now_playing_state(
       player,
       PlaybackContext {
-        has_active_session: true,
-        current_item: state.current_item.as_ref(),
+        has_active_session: s.playback.is_some(),
+        current_item: s.current_item.as_ref(),
       },
-    );
+    )
+  }
 
-    let event = NowPlayingChanged { state: now_playing };
+  /// Shared emission owner for Now Playing changes: projects from the
+  /// transport snapshot and emits without resampling MPV properties.
+  async fn emit_now_playing_changed(app_handle: &AppHandle, state: &RwLock<SessionState>) {
+    let event = NowPlayingChanged {
+      state: Self::project_now_playing(state),
+    };
 
     if let Err(e) = event.emit(app_handle) {
       log::error!("Failed to emit Now Playing state: {}", e);
     }
+  }
+
+  /// Command/tray entry point into the shared emission owner.
+  pub async fn emit_now_playing_snapshot(&self) {
+    Self::emit_now_playing_changed(&self.app_handle, &self.state).await;
+  }
+
+  /// Record a command-driven transport mutation so command-path emission
+  /// reflects it before the corresponding MPV observation lands.
+  pub fn seed_transport(&self, update: impl FnOnce(&mut TransportSnapshot)) {
+    let mut s = self.state.write();
+    update(&mut s.transport);
   }
 
   /// Load series preferences from disk.
@@ -1058,6 +1078,10 @@ impl SessionManager {
       s.current_series_id = item.series_id.clone();
       s.current_item = Some(item.clone());
       s.current_media_streams = media_source.media_streams.clone();
+      // Re-seed Now Playing transport for the new session so stale per-item
+      // state never leaks across sessions; observations reconcile the rest.
+      s.transport
+        .reset_for_new_session(ticks_to_seconds(resolution.position_ticks));
       s.playback = Some(PlaybackSession {
         item_id: item_id.clone(),
         media_source_id: Some(media_source.id.clone()),
@@ -1628,16 +1652,16 @@ impl SessionManager {
 
               if should_report {
                 Self::report_progress(&client, &state).await;
-                Self::emit_now_playing_changed(&app_handle, &mpv, &state).await;
+                Self::emit_now_playing_changed(&app_handle, &state).await;
               }
             }
             "end-file" => {
               Self::handle_end_file_event(&event, &ctx).await;
-              Self::emit_now_playing_changed(&app_handle, &mpv, &state).await;
+              Self::emit_now_playing_changed(&app_handle, &state).await;
             }
             "client-message" => {
               Self::handle_client_message_event(&event, &ctx).await;
-              Self::emit_now_playing_changed(&app_handle, &mpv, &state).await;
+              Self::emit_now_playing_changed(&app_handle, &state).await;
             }
             "seek" => {
               // A seek invalidates every prefetched lookahead window
@@ -1663,7 +1687,7 @@ impl SessionManager {
         // Clear playback context and notify Jellyfin
         log::warn!("MPV event receiver closed, clearing playback context...");
         Self::clear_playback_context(&client, &state, &hls).await;
-        Self::emit_now_playing_changed(&app_handle, &mpv, &state).await;
+        Self::emit_now_playing_changed(&app_handle, &state).await;
         tokio::time::sleep(std::time::Duration::from_secs(2)).await;
       }
     });
@@ -1921,8 +1945,6 @@ impl SessionManager {
   ) {
     let session = {
       let mut s = state.write();
-      // Playback is idle until a new session starts; drop stale transport state.
-      s.transport.clear();
       s.playback.take()
     };
 
@@ -4032,5 +4054,164 @@ mod regression_tests {
     // Negative string Index (subtitle disable)
     let args = serde_json::json!({"Index": "-1"});
     assert_eq!(parse_command_int(args.get("Index")), Some(-1));
+  }
+
+  fn transport_observation(name: &str, data: serde_json::Value) -> crate::mpv::MpvEvent {
+    crate::mpv::MpvEvent {
+      event: "property-change".to_string(),
+      id: Some(1),
+      name: Some(name.to_string()),
+      data: Some(data),
+      reason: None,
+      args: None,
+    }
+  }
+
+  fn test_state_with_episode_playback() -> RwLock<SessionState> {
+    RwLock::new(SessionState {
+      playback: Some(PlaybackSession {
+        item_id: "episode-1".to_string(),
+        media_source_id: Some("source-1".to_string()),
+        play_session_id: Some("play-1".to_string()),
+        intro_skipper_ranges: Vec::new(),
+        position_ticks: seconds_to_ticks(42.5),
+        is_paused: true,
+        is_muted: true,
+        volume: 64,
+        audio_stream_index: None,
+        subtitle_stream_index: None,
+        play_method: "DirectPlay".to_string(),
+        hls_proxy_session_id: None,
+        hls_recovery_attempted: false,
+        hls_recovering: false,
+      }),
+      transport: TransportSnapshot::default(),
+      last_report_time: std::time::Instant::now(),
+      effective_intro_skipper_config: IntroSkipperRuntimeConfig::from(&AppConfig::default()),
+      current_series_id: Some("series-1".to_string()),
+      current_item: Some(MediaItem {
+        id: "episode-1".to_string(),
+        name: "The Pilot".to_string(),
+        item_type: "Episode".to_string(),
+        series_id: Some("series-1".to_string()),
+        series_name: Some("Example Show".to_string()),
+        season_name: Some("Season 1".to_string()),
+        index_number: Some(1),
+        parent_index_number: Some(1),
+        run_time_ticks: Some(15_000_000_000),
+        overview: None,
+      }),
+      current_media_streams: Vec::new(),
+      series_preferences: HashMap::new(),
+      recorded_notifications: Vec::new(),
+    })
+  }
+
+  #[tokio::test]
+  async fn snapshot_projection_emits_full_state_without_mpv_property_queries() {
+    use crate::command::NowPlayingStatus;
+    use crate::mpv::MpvIpc;
+    use crate::now_playing::collect_player_state;
+    use tokio::io::{duplex, AsyncBufReadExt, AsyncWriteExt, BufReader};
+
+    // MPV test seam: in-memory duplex IPC with a recording peer that answers
+    // every command so property queries would succeed if any were issued.
+    let mpv = MpvClient::new(None);
+    let (client_stream, peer_stream) = duplex(64 * 1024);
+    let (reader, writer) = tokio::io::split(client_stream);
+    let ipc = MpvIpc::from_io_for_test(reader, writer)
+      .await
+      .expect("test IPC should be constructed");
+    mpv.install_ipc_for_test(ipc);
+
+    let wire_log = Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
+    let peer_log = Arc::clone(&wire_log);
+    let (peer_reader, mut peer_writer) = tokio::io::split(peer_stream);
+    let peer = tokio::spawn(async move {
+      let mut lines = BufReader::new(peer_reader).lines();
+      while let Ok(Some(line)) = lines.next_line().await {
+        peer_log.lock().expect("wire log").push(line.clone());
+        let request_id = serde_json::from_str::<serde_json::Value>(&line)
+          .ok()
+          .and_then(|value| value.get("request_id").and_then(|id| id.as_i64()));
+        if let Some(request_id) = request_id {
+          let _ = peer_writer
+            .write_all(
+              format!(
+                r#"{{"request_id":{},"error":"success","data":null}}"#,
+                request_id
+              )
+              .as_bytes(),
+            )
+            .await;
+          let _ = peer_writer.write_all(b"\n").await;
+        }
+      }
+    });
+
+    // Vacuity check: the legacy live collection fans out five property
+    // queries, proving the recording peer would observe any query.
+    let _ = collect_player_state(&mpv).await;
+    let live_queries = wire_log
+      .lock()
+      .expect("wire log")
+      .iter()
+      .filter(|line| line.contains("get_property"))
+      .count();
+    assert_eq!(live_queries, 5);
+    wire_log.lock().expect("wire log").clear();
+
+    // Hot path: MPV observations feed the snapshot, then emission projects it.
+    let state = test_state_with_episode_playback();
+    for (name, data) in [
+      ("pause", serde_json::json!(true)),
+      ("volume", serde_json::json!(64.0)),
+      ("mute", serde_json::json!(true)),
+      ("time-pos", serde_json::json!(42.5)),
+      ("duration", serde_json::json!(1420.0)),
+    ] {
+      SessionManager::update_transport_from_property(&state, &transport_observation(name, data));
+    }
+
+    let projected = SessionManager::project_now_playing(&state);
+
+    let hot_queries = wire_log
+      .lock()
+      .expect("wire log")
+      .iter()
+      .filter(|line| line.contains("get_property"))
+      .count();
+    assert_eq!(hot_queries, 0);
+
+    assert!(matches!(projected.status, NowPlayingStatus::Paused));
+    assert!(projected.player.connected);
+    assert!(projected.player.paused);
+    assert!(projected.player.muted);
+    assert_eq!(projected.player.volume, 64.0);
+    assert_eq!(projected.player.time_pos, 42.5);
+    assert_eq!(projected.player.duration, 1420.0);
+    let media = projected.media.expect("episode media");
+    assert_eq!(media.item_id, "episode-1");
+    assert_eq!(media.name, "The Pilot");
+    assert!(projected.can_play_next);
+    assert!(projected.can_play_previous);
+
+    // Missing observed duration falls back to the current media runtime,
+    // still without property queries.
+    SessionManager::update_transport_from_property(
+      &state,
+      &transport_observation("duration", serde_json::json!(null)),
+    );
+    let fallback = SessionManager::project_now_playing(&state);
+    assert_eq!(fallback.player.duration, 1500.0);
+    let fallback_queries = wire_log
+      .lock()
+      .expect("wire log")
+      .iter()
+      .filter(|line| line.contains("get_property"))
+      .count();
+    assert_eq!(fallback_queries, 0);
+
+    peer.abort();
   }
 }

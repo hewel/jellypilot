@@ -359,6 +359,9 @@ pub async fn mpv_start(
   jellyfin_state: State<'_, JellyfinState>,
 ) -> Result<(), CommandError> {
   state.0.start().await.map_err(internal_err)?;
+  if let Some(session) = jellyfin_state.session.read().clone() {
+    session.seed_transport(|transport| transport.mark_connected());
+  }
   playback_control::emit_now_playing_changed(&app, &jellyfin_state).await;
   Ok(())
 }
@@ -372,6 +375,9 @@ pub async fn mpv_stop(
   jellyfin_state: State<'_, JellyfinState>,
 ) -> Result<(), CommandError> {
   state.0.stop().await;
+  if let Some(session) = jellyfin_state.session.read().clone() {
+    session.seed_transport(|transport| transport.clear());
+  }
   playback_control::emit_now_playing_changed(&app, &jellyfin_state).await;
   Ok(())
 }
@@ -402,6 +408,11 @@ pub async fn mpv_seek(
     return Err(CommandError::invalid_input("Seek time cannot be negative"));
   }
   state.0.seek(time).await.map_err(internal_err)?;
+  if let Some(session) = jellyfin_state.session.read().clone() {
+    session.seed_transport(|transport| {
+      transport.apply_property("time-pos", &serde_json::json!(time));
+    });
+  }
   playback_control::emit_now_playing_changed(&app, &jellyfin_state).await;
   Ok(())
 }
@@ -433,6 +444,11 @@ pub async fn mpv_set_volume(
     ));
   }
   state.0.set_volume(volume).await.map_err(internal_err)?;
+  if let Some(session) = jellyfin_state.session.read().clone() {
+    session.seed_transport(|transport| {
+      transport.apply_property("volume", &serde_json::json!(volume));
+    });
+  }
   playback_control::emit_now_playing_changed(&app, &jellyfin_state).await;
   Ok(())
 }

@@ -434,6 +434,12 @@ impl MpvClient {
     let guard = self.ipc.lock();
     guard.as_ref().map(|ipc| ipc.events())
   }
+
+  /// Install an already-established IPC connection (MPV test seam).
+  #[cfg(test)]
+  pub(crate) fn install_ipc_for_test(&self, ipc: MpvIpc) {
+    *self.ipc.lock() = Some(Arc::new(ipc));
+  }
 }
 
 // Need to implement Clone manually because Child doesn't implement Clone

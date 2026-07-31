@@ -36,11 +36,20 @@ pub async fn collect_now_playing_state(state: &JellyfinState) -> NowPlayingState
 }
 
 pub async fn emit_now_playing_changed(app: &tauri::AppHandle, state: &JellyfinState) {
-  let event = NowPlayingChanged {
-    state: collect_now_playing_state(state).await,
-  };
-  if let Err(e) = event.emit(app) {
-    log::error!("Failed to emit now playing state: {}", e);
+  let session = state.session.read().clone();
+  match session {
+    // Every session-backed path emits through the shared snapshot owner.
+    Some(session) => session.emit_now_playing_snapshot().await,
+    // Without a session there is no snapshot owner; keep the cold
+    // live-collection reconciliation for the disconnected projection.
+    None => {
+      let event = NowPlayingChanged {
+        state: collect_now_playing_state(state).await,
+      };
+      if let Err(e) = event.emit(app) {
+        log::error!("Failed to emit now playing state: {}", e);
+      }
+    }
   }
 }
 
@@ -54,6 +63,11 @@ pub async fn set_pause(
     .set_pause(paused)
     .await
     .map_err(|e| CommandError::internal(e.to_string()))?;
+  if let Some(session) = jellyfin_state.session.read().clone() {
+    session.seed_transport(|transport| {
+      transport.apply_property("pause", &serde_json::json!(paused));
+    });
+  }
   emit_now_playing_changed(app, jellyfin_state).await;
   Ok(())
 }
@@ -79,6 +93,12 @@ pub async fn toggle_mute(
     .toggle_mute()
     .await
     .map_err(|e| CommandError::internal(e.to_string()))?;
+  if let Some(session) = jellyfin_state.session.read().clone() {
+    session.seed_transport(|transport| {
+      let muted = !transport.muted();
+      transport.apply_property("mute", &serde_json::json!(muted));
+    });
+  }
   emit_now_playing_changed(app, jellyfin_state).await;
   Ok(())
 }
