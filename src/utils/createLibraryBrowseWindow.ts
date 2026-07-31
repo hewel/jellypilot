@@ -1,10 +1,12 @@
 /**
- * Route-owned Library Browser paging and cache module for both browse modes.
+ * Route-owned Library Browser virtual window module for both browse modes.
  *
  * Owns page-zero bootstrap, the normal-grid/virtual-mode decision,
  * random-access virtual window fetching, per-page cache bridging, identity
- * reset, and failed-page retry. The pure layout and page-selection utilities
- * remain internal seams; the route keeps rendering and (for now) geometry.
+ * reset, failed-page retry, and the virtual geometry: shared-viewport
+ * measurement, enablement, overscan, canvas height, and row placement. The
+ * pure layout and page-selection utilities remain internal seams; the route
+ * stays the rendering adapter.
  */
 import type {
   VideoLibraryItem,
@@ -13,15 +15,26 @@ import type {
   VideoLibraryPlayedFilter,
   VideoLibrarySort,
 } from '@bindings';
+import { useAppScrollArea } from '@components/AppScrollAreaContext';
 import { createInfiniteQuery, useQueryClient } from '@tanstack/solid-query';
+import { createVirtualizer, observeElementRect } from '@tanstack/solid-virtual';
+import type { VirtualItem } from '@tanstack/solid-virtual';
 import { Exit } from 'effect';
-import { createEffect, createMemo, createSignal } from 'solid-js';
+import { createEffect, createMemo, createSignal, onCleanup, onMount } from 'solid-js';
 import { commandFailureMessage } from '~effects/commands';
 import { LIBRARY_BROWSE_PAGE_SIZE, fetchVideoLibraryPage } from '~effects/library';
 import type { LibraryBrowseState, LibraryExit } from '~effects/library';
 import { queryKeys, runExit } from '~effects/query';
 import type { LibrarySessionKey } from '~effects/query';
-import { libraryBrowsePageLocationForDisplayIndex } from '~utils/libraryBrowsePageSelection';
+import {
+  libraryBrowseColumnCount,
+  libraryBrowseVirtualOverscanRows,
+  libraryBrowseVirtualRowHeight,
+} from '~utils/libraryBrowseLayout';
+import {
+  libraryBrowsePageLocationForDisplayIndex,
+  libraryBrowsePageStartsForRows,
+} from '~utils/libraryBrowsePageSelection';
 
 export const LIBRARY_VIRTUAL_TOTAL_THRESHOLD = 100;
 
@@ -48,10 +61,6 @@ export interface LibraryBrowseWindowOptions {
   readonly filtersReady: () => boolean;
   /** The mounted session still matches the current connection identity. */
   readonly sessionActive: () => boolean;
-  /** Page starts covering the current virtual window plus look-ahead. */
-  readonly virtualPageStartsForCurrentWindow: () => readonly number[];
-  /** Route-level reaction to identity changes (scroll reset). */
-  readonly onIdentityReset: () => void;
 }
 
 type LibraryBrowsePageFailure = LibraryExit<LibraryBrowseState> & { _tag: 'Failure' };
@@ -74,6 +83,21 @@ export interface LibraryBrowseWindow {
   readonly loadMoreErrorDescription: () => string | null;
   readonly loadMoreRetryBusy: () => boolean;
   readonly retryFailedPage: () => void;
+  /** Virtual geometry owned behind one interface; the route only renders it. */
+  readonly virtual: LibraryBrowseVirtualGeometry;
+}
+
+export interface LibraryBrowseVirtualGeometry {
+  /** Ref callback for the virtual root element. */
+  readonly ref: (element: HTMLDivElement | null) => void;
+  /** Rows currently rendered by the virtualizer. */
+  readonly items: () => VirtualItem[];
+  /** Full virtual canvas height in px. */
+  readonly totalSize: () => number;
+  /** Scroll offset of the virtual root inside the shared viewport. */
+  readonly scrollMargin: () => number;
+  readonly columnCount: () => number;
+  readonly rowColumnIndexes: () => readonly number[];
 }
 
 export function createLibraryBrowseWindow(
@@ -138,6 +162,8 @@ export function createLibraryBrowseWindow(
       }),
   }));
 
+  const appScroll = useAppScrollArea();
+
   // Identity reset: sort/filter/library/session changes clear virtual state,
   // reject in-flight completions via the signature check, and reset scroll.
   let activeBrowseQuerySignature = '';
@@ -146,7 +172,7 @@ export function createLibraryBrowseWindow(
     if (activeBrowseQuerySignature && activeBrowseQuerySignature !== nextSignature) {
       setVirtualPagesByStartIndex(new Map<number, LibraryExit<LibraryBrowseState>>());
       setVirtualPageStartsFetching(new Set<number>());
-      options.onIdentityReset();
+      appScroll.scrollTo({ top: 0 });
     }
     activeBrowseQuerySignature = nextSignature;
   });
@@ -300,7 +326,7 @@ export function createLibraryBrowseWindow(
       });
   };
   const fetchVisibleVirtualPages = (allowNetworkFetch: boolean) => {
-    for (const startIndex of options.virtualPageStartsForCurrentWindow()) {
+    for (const startIndex of virtualPageStartsForCurrentWindow()) {
       fetchVirtualPage(startIndex, allowNetworkFetch);
     }
   };
@@ -373,6 +399,132 @@ export function createLibraryBrowseWindow(
     void browseQuery.fetchNextPage({ cancelRefetch: false });
   };
 
+  // Virtual geometry: shared-viewport measurement, enablement, overscan,
+  // canvas height, and row placement behind one interface.
+  const [virtualGrid, setVirtualGrid] = createSignal<HTMLDivElement | null>(null);
+  const [virtualGridWidth, setVirtualGridWidth] = createSignal(1280);
+  const [virtualViewportHeight, setVirtualViewportHeight] = createSignal(720);
+  const [virtualizerMounted, setVirtualizerMounted] = createSignal(false);
+  const [virtualScrollMargin, setVirtualScrollMargin] = createSignal(0);
+  onMount(() => setVirtualizerMounted(true));
+
+  const fallbackVirtualGridWidth = () => {
+    const gridWidth = virtualGrid()?.clientWidth ?? 0;
+    if (gridWidth > 0) {
+      return gridWidth;
+    }
+
+    const viewportWidth = appScroll.viewport()?.clientWidth ?? 0;
+    if (viewportWidth > 0) {
+      return viewportWidth;
+    }
+
+    if (typeof window !== 'undefined' && window.innerWidth > 0) {
+      return window.innerWidth;
+    }
+
+    return 1280;
+  };
+  const fallbackVirtualGridHeight = () => {
+    const viewportHeight = appScroll.viewport()?.clientHeight ?? 0;
+    if (viewportHeight > 0) {
+      return viewportHeight;
+    }
+
+    if (typeof window !== 'undefined' && window.innerHeight > 0) {
+      return window.innerHeight;
+    }
+
+    return 720;
+  };
+  const measureVirtualGrid = () => {
+    setVirtualGridWidth(fallbackVirtualGridWidth());
+    setVirtualViewportHeight(fallbackVirtualGridHeight());
+
+    const grid = virtualGrid();
+    const scrollElement = appScroll.viewport();
+    if (!grid || !scrollElement) {
+      setVirtualScrollMargin(0);
+      return;
+    }
+
+    setVirtualScrollMargin(
+      grid.getBoundingClientRect().top -
+        scrollElement.getBoundingClientRect().top +
+        scrollElement.scrollTop,
+    );
+  };
+  createEffect(() => {
+    const grid = virtualGrid();
+    const scrollElement = appScroll.viewport();
+    if (typeof ResizeObserver === 'undefined') {
+      measureVirtualGrid();
+      if (typeof window !== 'undefined') {
+        window.addEventListener('resize', measureVirtualGrid);
+        onCleanup(() => window.removeEventListener('resize', measureVirtualGrid));
+      }
+      return;
+    }
+
+    const observer = new ResizeObserver(measureVirtualGrid);
+    if (grid) {
+      observer.observe(grid);
+    }
+    if (scrollElement) {
+      observer.observe(scrollElement);
+    }
+    onCleanup(() => observer.disconnect());
+  });
+
+  const columnCount = createMemo(() => libraryBrowseColumnCount(virtualGridWidth()));
+  const virtualRowColumnIndexes = createMemo(() =>
+    Array.from({ length: columnCount() }, (_, index) => index),
+  );
+  const estimateVirtualRowHeight = () => libraryBrowseVirtualRowHeight(virtualGridWidth());
+  const rowVirtualizer = createVirtualizer<HTMLElement, HTMLDivElement>({
+    get count() {
+      return usesVirtualGrid() ? Math.ceil(totalRecordCount() / columnCount()) : 0;
+    },
+    get enabled() {
+      return virtualizerMounted() && usesVirtualGrid() && appScroll.viewport() !== null;
+    },
+    getScrollElement: () => appScroll.viewport(),
+    estimateSize: estimateVirtualRowHeight,
+    get overscan() {
+      return libraryBrowseVirtualOverscanRows(virtualViewportHeight(), estimateVirtualRowHeight());
+    },
+    observeElementRect: (instance, callback) =>
+      observeElementRect(instance, (rect) =>
+        callback({
+          width: rect.width || virtualGridWidth(),
+          height: rect.height || virtualViewportHeight(),
+        }),
+      ),
+    get initialRect() {
+      return { width: virtualGridWidth(), height: virtualViewportHeight() };
+    },
+    get scrollMargin() {
+      return virtualScrollMargin();
+    },
+  });
+  const virtualPageStartsForCurrentWindow = () =>
+    libraryBrowsePageStartsForRows({
+      rowIndexes: rowVirtualizer.getVirtualItems().map((virtualRow) => virtualRow.index),
+      columnCount: columnCount(),
+      totalRecordCount: totalRecordCount(),
+      pageSize: LIBRARY_BROWSE_PAGE_SIZE,
+      reverse: needsReverse(),
+    });
+
+  const virtual: LibraryBrowseVirtualGeometry = {
+    ref: setVirtualGrid,
+    items: () => rowVirtualizer.getVirtualItems(),
+    totalSize: () => rowVirtualizer.getTotalSize(),
+    scrollMargin: virtualScrollMargin,
+    columnCount,
+    rowColumnIndexes: virtualRowColumnIndexes,
+  };
+
   return {
     readyState,
     totalRecordCount,
@@ -390,5 +542,6 @@ export function createLibraryBrowseWindow(
     loadMoreErrorDescription,
     loadMoreRetryBusy,
     retryFailedPage,
+    virtual,
   };
 }
