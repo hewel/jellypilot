@@ -12,6 +12,91 @@ pub struct PlaybackContext<'a> {
   pub current_item: Option<&'a MediaItem>,
 }
 
+/// Authoritative Now Playing transport snapshot maintained from MPV property
+/// observations. The session event loop feeds every observed property change
+/// into this snapshot so Now Playing projections never resample MPV properties
+/// on the emit path.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct TransportSnapshot {
+  connected: bool,
+  paused: bool,
+  muted: bool,
+  time_pos: f64,
+  volume: f64,
+  observed_duration: Option<f64>,
+}
+
+impl TransportSnapshot {
+  /// Record one observed MPV property change. Unknown properties and invalid
+  /// values are ignored; any recognized observation marks transport connected.
+  pub fn apply_property(&mut self, property_name: &str, data: &serde_json::Value) {
+    match property_name {
+      "pause" => {
+        if let Some(paused) = data.as_bool() {
+          self.paused = paused;
+          self.connected = true;
+        }
+      }
+      "volume" => {
+        if let Some(volume) = data.as_f64() {
+          if volume.is_finite() {
+            self.volume = volume.clamp(0.0, 100.0);
+            self.connected = true;
+          }
+        }
+      }
+      "mute" => {
+        if let Some(muted) = data.as_bool() {
+          self.muted = muted;
+          self.connected = true;
+        }
+      }
+      "time-pos" => {
+        if let Some(position) = data.as_f64() {
+          if position.is_finite() {
+            self.time_pos = position;
+            self.connected = true;
+          }
+        }
+      }
+      "duration" => {
+        self.observed_duration = match data.as_f64() {
+          Some(duration) if duration.is_finite() && duration >= 0.0 => Some(duration),
+          _ => None,
+        };
+        self.connected = true;
+      }
+      _ => {}
+    }
+  }
+
+  /// Drop stale transport state when playback disconnects or goes idle.
+  pub fn clear(&mut self) {
+    *self = Self::default();
+  }
+
+  /// Project the snapshot into the Now Playing player state. Duration falls
+  /// back to the current media runtime, then zero, so the projection always
+  /// carries a finite non-negative duration.
+  #[allow(dead_code)] // Consumed by snapshot-based Now Playing emission (#205).
+  pub fn project(&self, media_runtime_seconds: Option<f64>) -> PlayerState {
+    let duration = self
+      .observed_duration
+      .filter(|duration| duration.is_finite() && *duration >= 0.0)
+      .or_else(|| media_runtime_seconds.filter(|runtime| runtime.is_finite() && *runtime >= 0.0))
+      .unwrap_or(0.0);
+
+    PlayerState {
+      connected: self.connected,
+      paused: self.paused,
+      muted: self.muted,
+      time_pos: self.time_pos,
+      duration,
+      volume: self.volume,
+    }
+  }
+}
+
 /// Collect the current MPV player state used by the Now Playing read model.
 pub async fn collect_player_state(mpv: &MpvClient) -> PlayerState {
   if !mpv.is_connected() {
@@ -253,5 +338,130 @@ mod tests {
     assert!(state.can_play_previous);
     assert!(state.next_unavailable_reason.is_none());
     assert!(state.previous_unavailable_reason.is_none());
+  }
+
+  fn observed(properties: &[(&str, serde_json::Value)]) -> TransportSnapshot {
+    let mut snapshot = TransportSnapshot::default();
+    for (name, data) in properties {
+      snapshot.apply_property(name, data);
+    }
+    snapshot
+  }
+
+  #[test]
+  fn snapshot_projects_pause_observation() {
+    let snapshot = observed(&[("pause", serde_json::json!(true))]);
+    let player = snapshot.project(None);
+
+    assert!(player.connected);
+    assert!(player.paused);
+  }
+
+  #[test]
+  fn snapshot_projects_volume_observation_clamped_to_player_range() {
+    let loud = observed(&[("volume", serde_json::json!(130.0))]);
+    assert_eq!(loud.project(None).volume, 100.0);
+
+    let negative = observed(&[("volume", serde_json::json!(-5.0))]);
+    assert_eq!(negative.project(None).volume, 0.0);
+
+    let normal = observed(&[("volume", serde_json::json!(64.0))]);
+    assert_eq!(normal.project(None).volume, 64.0);
+  }
+
+  #[test]
+  fn snapshot_projects_mute_observation() {
+    let snapshot = observed(&[("mute", serde_json::json!(true))]);
+
+    assert!(snapshot.project(None).muted);
+  }
+
+  #[test]
+  fn snapshot_projects_position_observation() {
+    let snapshot = observed(&[("time-pos", serde_json::json!(42.5))]);
+
+    assert_eq!(snapshot.project(None).time_pos, 42.5);
+  }
+
+  #[test]
+  fn snapshot_projects_duration_observation() {
+    let snapshot = observed(&[("duration", serde_json::json!(1420.0))]);
+
+    assert_eq!(snapshot.project(Some(60.0)).duration, 1420.0);
+  }
+
+  #[test]
+  fn snapshot_duration_falls_back_to_media_runtime_when_observation_missing() {
+    let snapshot = observed(&[("pause", serde_json::json!(false))]);
+
+    assert_eq!(snapshot.project(Some(1500.0)).duration, 1500.0);
+  }
+
+  #[test]
+  fn snapshot_duration_falls_back_to_media_runtime_when_observation_invalid() {
+    for invalid in [
+      serde_json::json!(-1.0),
+      serde_json::json!(f64::NAN),
+      serde_json::json!(f64::INFINITY),
+      serde_json::json!(null),
+    ] {
+      let snapshot = observed(&[("duration", invalid)]);
+      assert_eq!(snapshot.project(Some(1500.0)).duration, 1500.0);
+    }
+  }
+
+  #[test]
+  fn snapshot_duration_falls_back_to_zero_without_observation_or_runtime() {
+    let snapshot = observed(&[("pause", serde_json::json!(false))]);
+    let player = snapshot.project(None);
+
+    assert_eq!(player.duration, 0.0);
+    assert!(player.duration.is_finite());
+    assert!(player.duration >= 0.0);
+  }
+
+  #[test]
+  fn snapshot_ignores_invalid_property_values() {
+    let snapshot = observed(&[
+      ("pause", serde_json::json!(true)),
+      ("pause", serde_json::json!(null)),
+      ("time-pos", serde_json::json!(42.5)),
+      ("time-pos", serde_json::json!("later")),
+      ("volume", serde_json::json!(64.0)),
+      ("volume", serde_json::json!(f64::NAN)),
+    ]);
+    let player = snapshot.project(None);
+
+    assert!(player.paused);
+    assert_eq!(player.time_pos, 42.5);
+    assert_eq!(player.volume, 64.0);
+  }
+
+  #[test]
+  fn snapshot_ignores_unknown_properties_without_marking_connected() {
+    let snapshot = observed(&[("chapter", serde_json::json!(3))]);
+
+    assert!(!snapshot.project(None).connected);
+  }
+
+  #[test]
+  fn cleared_snapshot_projects_disconnected_zeroed_transport() {
+    let mut snapshot = observed(&[
+      ("pause", serde_json::json!(true)),
+      ("volume", serde_json::json!(64.0)),
+      ("mute", serde_json::json!(true)),
+      ("time-pos", serde_json::json!(42.5)),
+      ("duration", serde_json::json!(1420.0)),
+    ]);
+
+    snapshot.clear();
+    let player = snapshot.project(Some(1500.0));
+
+    assert!(!player.connected);
+    assert!(!player.paused);
+    assert!(!player.muted);
+    assert_eq!(player.time_pos, 0.0);
+    assert_eq!(player.volume, 0.0);
+    assert_eq!(player.duration, 1500.0);
   }
 }

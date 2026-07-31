@@ -25,7 +25,9 @@ use crate::command::{AppNotification, NowPlayingChanged};
 use crate::config::{AppConfig, IntroSkipperMode};
 use crate::hls_proxy::{ActivatedHls, HlsProxyError, HlsProxyEvent, HlsProxyState};
 use crate::mpv::{has_mpv_option, MpvClient};
-use crate::now_playing::{build_now_playing_state, collect_player_state, PlaybackContext};
+use crate::now_playing::{
+  build_now_playing_state, collect_player_state, PlaybackContext, TransportSnapshot,
+};
 use tauri_specta::Event;
 
 const PREFERENCES_STORE_FILE: &str = "preferences.json";
@@ -133,6 +135,8 @@ fn direct_playback_file_options(play_method: &str, configured_args: &[String]) -
 /// Session manager state.
 struct SessionState {
   playback: Option<PlaybackSession>,
+  /// Now Playing transport snapshot maintained from MPV property observations.
+  transport: TransportSnapshot,
   last_report_time: std::time::Instant,
   /// Intro Skipper settings captured when the current MPV process started.
   effective_intro_skipper_config: IntroSkipperRuntimeConfig,
@@ -199,6 +203,7 @@ impl SessionManager {
       hls_proxy,
       state: Arc::new(RwLock::new(SessionState {
         playback: None,
+        transport: TransportSnapshot::default(),
         last_report_time: std::time::Instant::now(),
         effective_intro_skipper_config: IntroSkipperRuntimeConfig::from(&*config.read()),
         current_series_id: None,
@@ -1566,6 +1571,7 @@ impl SessionManager {
         const OBS_VOLUME: i64 = 2;
         const OBS_MUTE: i64 = 3;
         const OBS_TIME_POS: i64 = 4;
+        const OBS_DURATION: i64 = 5;
 
         // Set up property observations
         if let Err(e) = mpv.observe_property(OBS_PAUSE, "pause").await {
@@ -1580,6 +1586,9 @@ impl SessionManager {
         if let Err(e) = mpv.observe_property(OBS_TIME_POS, "time-pos").await {
           log::warn!("Failed to observe time-pos: {}", e);
         }
+        if let Err(e) = mpv.observe_property(OBS_DURATION, "duration").await {
+          log::warn!("Failed to observe duration: {}", e);
+        }
 
         log::info!("Property observations set up, listening for events...");
 
@@ -1592,6 +1601,9 @@ impl SessionManager {
           match event.event.as_str() {
             "property-change" => {
               let property_name = event.name.as_deref().unwrap_or("");
+              // Every observed property feeds the Now Playing transport
+              // snapshot, including ones that never trigger a report.
+              Self::update_transport_from_property(&state, &event);
               let decision = property_report_decision(property_name);
               let should_report = if decision == PropertyReportDecision::Ignore {
                 false
@@ -1655,6 +1667,16 @@ impl SessionManager {
         tokio::time::sleep(std::time::Duration::from_secs(2)).await;
       }
     });
+  }
+
+  /// Update the Now Playing transport snapshot from a property-change event.
+  fn update_transport_from_property(state: &RwLock<SessionState>, event: &crate::mpv::MpvEvent) {
+    let property_name = event.name.as_deref().unwrap_or("");
+    let Some(data) = event.data.as_ref() else {
+      return;
+    };
+
+    state.write().transport.apply_property(property_name, data);
   }
 
   /// Update session state from a property-change event.
@@ -1899,6 +1921,8 @@ impl SessionManager {
   ) {
     let session = {
       let mut s = state.write();
+      // Playback is idle until a new session starts; drop stale transport state.
+      s.transport.clear();
       s.playback.take()
     };
 
@@ -1941,6 +1965,7 @@ impl SessionManager {
     s.current_item = None;
     s.current_series_id = None;
     s.current_media_streams.clear();
+    s.transport.clear();
     log::info!("Playback context cleared");
   }
 
@@ -2450,6 +2475,7 @@ mod tests {
   pub(super) fn empty_test_state() -> RwLock<SessionState> {
     RwLock::new(SessionState {
       playback: None,
+      transport: TransportSnapshot::default(),
       last_report_time: std::time::Instant::now(),
       effective_intro_skipper_config: IntroSkipperRuntimeConfig {
         mode: IntroSkipperMode::Off,
@@ -2481,6 +2507,7 @@ mod tests {
         hls_recovery_attempted: false,
         hls_recovering: false,
       }),
+      transport: TransportSnapshot::default(),
       last_report_time: std::time::Instant::now(),
       effective_intro_skipper_config: IntroSkipperRuntimeConfig::from(&AppConfig::default()),
       current_series_id: None,
@@ -2523,6 +2550,7 @@ mod tests {
         hls_recovery_attempted: false,
         hls_recovering: false,
       }),
+      transport: TransportSnapshot::default(),
       last_report_time: std::time::Instant::now(),
       effective_intro_skipper_config: IntroSkipperRuntimeConfig::from(&AppConfig::default()),
       current_series_id: None,
@@ -2829,6 +2857,7 @@ mod tests {
         hls_recovery_attempted: false,
         hls_recovering: false,
       }),
+      transport: TransportSnapshot::default(),
       last_report_time: std::time::Instant::now(),
       effective_intro_skipper_config: IntroSkipperRuntimeConfig::from(&AppConfig::default()),
       current_series_id: None,
@@ -2882,6 +2911,7 @@ mod tests {
         hls_recovery_attempted: false,
         hls_recovering: false,
       }),
+      transport: TransportSnapshot::default(),
       last_report_time: std::time::Instant::now(),
       effective_intro_skipper_config: IntroSkipperRuntimeConfig::from(&AppConfig::default()),
       current_series_id: None,
@@ -2972,6 +3002,7 @@ mod tests {
   async fn time_pos_update_without_active_ranges_emits_no_seek_action() {
     let state = RwLock::new(SessionState {
       playback: None,
+      transport: TransportSnapshot::default(),
       last_report_time: std::time::Instant::now(),
       effective_intro_skipper_config: IntroSkipperRuntimeConfig::from(&AppConfig::default()),
       current_series_id: None,
@@ -3912,6 +3943,7 @@ mod regression_tests {
         hls_recovery_attempted: false,
         hls_recovering: false,
       }),
+      transport: TransportSnapshot::default(),
       last_report_time: std::time::Instant::now(),
       effective_intro_skipper_config: IntroSkipperRuntimeConfig::from(&AppConfig::default()),
       current_series_id: None,
