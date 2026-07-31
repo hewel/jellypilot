@@ -6,6 +6,7 @@ mod client;
 #[cfg(test)]
 mod client_facade;
 mod error;
+mod hls_lifecycle;
 mod intro_skipper;
 mod mpv_action;
 mod mpv_event;
