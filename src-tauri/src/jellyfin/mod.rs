@@ -7,6 +7,7 @@ mod client;
 mod client_facade;
 mod error;
 mod intro_skipper;
+mod mpv_action;
 mod mpv_event;
 mod play_resolution;
 mod session;
