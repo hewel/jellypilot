@@ -75,10 +75,38 @@ impl TransportSnapshot {
     *self = Self::default();
   }
 
+  /// Mark transport connected when a command path starts the MPV process
+  /// before any property observation has landed.
+  pub fn mark_connected(&mut self) {
+    self.connected = true;
+  }
+
+  /// Current muted state, for command paths that toggle mute and need the
+  /// resulting value before the observation lands.
+  pub fn muted(&self) -> bool {
+    self.muted
+  }
+
+  /// Re-seed transport for a newly started playback session: per-item
+  /// position/duration reset while process-level volume and mute persist.
+  pub fn reset_for_new_session(&mut self, start_position_seconds: f64) {
+    *self = Self {
+      connected: true,
+      paused: false,
+      muted: self.muted,
+      time_pos: if start_position_seconds.is_finite() {
+        start_position_seconds.max(0.0)
+      } else {
+        0.0
+      },
+      volume: self.volume,
+      observed_duration: None,
+    };
+  }
+
   /// Project the snapshot into the Now Playing player state. Duration falls
   /// back to the current media runtime, then zero, so the projection always
   /// carries a finite non-negative duration.
-  #[allow(dead_code)] // Consumed by snapshot-based Now Playing emission (#205).
   pub fn project(&self, media_runtime_seconds: Option<f64>) -> PlayerState {
     let duration = self
       .observed_duration
@@ -463,5 +491,47 @@ mod tests {
     assert_eq!(player.time_pos, 0.0);
     assert_eq!(player.volume, 0.0);
     assert_eq!(player.duration, 1500.0);
+  }
+
+  #[test]
+  fn new_session_reseed_preserves_volume_and_mute() {
+    let mut snapshot = observed(&[
+      ("pause", serde_json::json!(true)),
+      ("volume", serde_json::json!(64.0)),
+      ("mute", serde_json::json!(true)),
+      ("time-pos", serde_json::json!(42.5)),
+      ("duration", serde_json::json!(1420.0)),
+    ]);
+
+    snapshot.reset_for_new_session(120.0);
+    let player = snapshot.project(Some(1500.0));
+
+    assert!(player.connected);
+    assert!(!player.paused);
+    assert!(player.muted);
+    assert_eq!(player.time_pos, 120.0);
+    assert_eq!(player.volume, 64.0);
+    assert_eq!(player.duration, 1500.0);
+  }
+
+  #[test]
+  fn new_session_reseed_sanitizes_invalid_start_position() {
+    let mut snapshot = observed(&[("pause", serde_json::json!(true))]);
+
+    snapshot.reset_for_new_session(f64::NAN);
+    assert_eq!(snapshot.project(None).time_pos, 0.0);
+
+    snapshot.reset_for_new_session(-5.0);
+    assert_eq!(snapshot.project(None).time_pos, 0.0);
+  }
+
+  #[test]
+  fn mark_connected_projects_idle_connected_transport() {
+    let mut snapshot = TransportSnapshot::default();
+    snapshot.mark_connected();
+    let player = snapshot.project(None);
+
+    assert!(player.connected);
+    assert_eq!(player.duration, 0.0);
   }
 }

@@ -13,5 +13,7 @@ mod protocol;
 
 pub(crate) use client::has_mpv_option;
 pub use client::MpvClient;
+#[cfg(test)]
+pub(crate) use ipc::MpvIpc;
 pub use process::{find_mpv, write_input_conf};
 pub use protocol::{MpvEvent, PropertyValue};
