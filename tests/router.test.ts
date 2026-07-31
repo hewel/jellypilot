@@ -72,6 +72,55 @@ test('shell guard redirects unauthenticated users to Login', async () => {
   await expectRedirect(requireAuthenticatedShell, '/login');
 });
 
+test('shell guard restores the active saved service profile on deep links', async () => {
+  rstest.spyOn(commands, 'serverIsConnected').mockResolvedValue(false);
+  rstest.spyOn(commands, 'serverProfilesGet').mockResolvedValue({
+    data: sampleProfiles,
+    status: 'ok',
+  });
+  const activate = rstest.spyOn(commands, 'serverProfilesActivate').mockResolvedValue({
+    data: sampleProfiles,
+    status: 'ok',
+  });
+
+  await requireAuthenticatedShell();
+
+  expect(activate).toHaveBeenCalledWith(sampleProfiles.activeProfileKey);
+});
+
+test('shell guard admits retained profiles when active profile restore fails', async () => {
+  rstest.spyOn(commands, 'serverIsConnected').mockResolvedValue(false);
+  rstest.spyOn(commands, 'serverProfilesGet').mockResolvedValue({
+    data: sampleProfiles,
+    status: 'ok',
+  });
+  rstest.spyOn(commands, 'serverProfilesActivate').mockResolvedValue({
+    error: { code: 'authFailed', message: 'expired' },
+    status: 'error',
+  });
+
+  await requireAuthenticatedShell();
+});
+
+test('shell guard makes one restore decision and does not double-activate', async () => {
+  const connected = rstest.spyOn(commands, 'serverIsConnected').mockResolvedValue(false);
+  rstest.spyOn(commands, 'serverProfilesGet').mockResolvedValue({
+    data: sampleProfiles,
+    status: 'ok',
+  });
+  const activate = rstest.spyOn(commands, 'serverProfilesActivate').mockResolvedValue({
+    data: sampleProfiles,
+    status: 'ok',
+  });
+
+  await Promise.all([requireAuthenticatedShell(), requireAuthenticatedShell()]);
+  expect(activate).toHaveBeenCalledTimes(1);
+
+  connected.mockResolvedValue(true);
+  await requireAuthenticatedShell();
+  expect(activate).toHaveBeenCalledTimes(1);
+});
+
 test('browse route redirects unknown collection types to Library', async () => {
   rstest.spyOn(commands, 'serverIsConnected').mockResolvedValue(true);
   const router = createJellyPilotRouter(

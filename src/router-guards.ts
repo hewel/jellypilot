@@ -1,6 +1,6 @@
 import { redirect } from '@tanstack/solid-router';
 
-import { canAccessConsole, checkAuthWithRestore } from './sessionAccess';
+import { canAccessConsole, resolveAuthenticatedEntry } from './sessionAccess';
 
 export const AUTHENTICATED_HOME_ROUTE = '/library';
 
@@ -11,13 +11,13 @@ export async function redirectLoggedInUsersToLibrary() {
 }
 
 export async function requireAuthenticatedShell() {
-  if (!(await canAccessConsole())) {
+  if (!(await resolveAuthenticatedEntry())) {
     throw redirect({ to: '/login' });
   }
 }
 
 export async function redirectRootRoute() {
-  if (await checkAuthWithRestore()) {
+  if (await resolveAuthenticatedEntry()) {
     throw redirect({ to: AUTHENTICATED_HOME_ROUTE });
   }
   throw redirect({ to: '/login' });

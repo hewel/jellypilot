@@ -64,7 +64,38 @@ export async function restoreSavedSession(): Promise<boolean> {
   });
 }
 
-export async function checkAuthWithRestore(): Promise<boolean> {
+interface ProfileRestoreDecision {
+  readonly restored: boolean;
+  readonly profilesRetained: boolean;
+}
+
+async function decideProfileRestore(): Promise<ProfileRestoreDecision> {
+  await migrateLegacySavedSession();
+  const profiles = await Effect.runPromiseExit(fetchSavedServiceProfiles);
+  if (!Exit.isSuccess(profiles)) {
+    return { restored: false, profilesRetained: false };
+  }
+
+  const profilesRetained = profiles.value.profiles.length > 0;
+  const activeProfileKey = Option.fromNullishOr(profiles.value.activeProfileKey);
+  if (Option.isNone(activeProfileKey)) {
+    return { restored: false, profilesRetained };
+  }
+
+  const restored = await Effect.runPromiseExit(activateSavedServiceProfile(activeProfileKey.value));
+  return { restored: Exit.isSuccess(restored), profilesRetained };
+}
+
+let profileRestoreInFlight: Promise<ProfileRestoreDecision> | null = null;
+
+function restoreActiveServiceProfileOnce(): Promise<ProfileRestoreDecision> {
+  profileRestoreInFlight ??= decideProfileRestore().finally(() => {
+    profileRestoreInFlight = null;
+  });
+  return profileRestoreInFlight;
+}
+
+export async function resolveAuthenticatedEntry(): Promise<boolean> {
   const connected = await Effect.runPromiseExit(
     runTauriCommandRaw(() => commands.serverIsConnected()),
   );
@@ -75,19 +106,8 @@ export async function checkAuthWithRestore(): Promise<boolean> {
     return true;
   }
 
-  await migrateLegacySavedSession();
-  const profiles = await Effect.runPromiseExit(fetchSavedServiceProfiles);
-  if (!Exit.isSuccess(profiles)) {
-    return false;
-  }
-
-  const activeProfileKey = Option.fromNullishOr(profiles.value.activeProfileKey);
-  if (Option.isNone(activeProfileKey)) {
-    return profiles.value.profiles.length > 0;
-  }
-
-  const restored = await Effect.runPromiseExit(activateSavedServiceProfile(activeProfileKey.value));
-  return Exit.isSuccess(restored) || profiles.value.profiles.length > 0;
+  const { restored, profilesRetained } = await restoreActiveServiceProfileOnce();
+  return restored || profilesRetained;
 }
 
 export async function canAccessConsole(): Promise<boolean> {
