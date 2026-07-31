@@ -1,23 +1,18 @@
 import { useAppScrollArea } from '@components/AppScrollAreaContext';
+import { useAuthenticatedBootstrap } from '@components/AuthenticatedBootstrap';
 import { LibrarySearchResultRow } from '@components/library/LibrarySearchResultRow';
 import { LibraryStatusPanel } from '@components/library/shared';
 import { Button } from '@components/ui';
 import { cx } from '@styled-system/css';
-import { createInfiniteQuery, createQuery, useQueryClient } from '@tanstack/solid-query';
+import { createInfiniteQuery, useQueryClient } from '@tanstack/solid-query';
 import { createFileRoute, redirect } from '@tanstack/solid-router';
 import { Exit } from 'effect';
 import { RefreshCw } from 'lucide-solid';
 import { For, Show, createEffect, createMemo, createSignal, onCleanup } from 'solid-js';
 import { commandFailureMessage } from '~effects/commands';
-import { fetchConnectionState } from '~effects/connection';
 import { fetchVideoSearchPage } from '~effects/library';
 import type { LibraryExit, LibrarySearchState } from '~effects/library';
-import {
-  isLibrarySessionKeyConnected,
-  librarySessionKeyFromConnectionExit,
-  queryKeys,
-  runExit,
-} from '~effects/query';
+import { queryKeys, runExit } from '~effects/query';
 import * as recipes from '~styles/recipes';
 
 import * as styles from './search.styles';
@@ -46,13 +41,9 @@ function LibrarySearchRoute() {
   const appScroll = useAppScrollArea();
   const [autoLoadSentinel, setAutoLoadSentinel] = createSignal<HTMLDivElement | null>(null);
   const [autoLoadSentinelVisible, setAutoLoadSentinelVisible] = createSignal(false);
-  const connectionQuery = createQuery(() => ({
-    queryKey: queryKeys.connectionState,
-    queryFn: () => runExit(fetchConnectionState),
-    staleTime: Infinity,
-  }));
-  const sessionKey = createMemo(() => librarySessionKeyFromConnectionExit(connectionQuery.data));
-  const connected = () => isLibrarySessionKeyConnected(sessionKey());
+  const bootstrap = useAuthenticatedBootstrap();
+  const sessionKey = bootstrap.sessionKey;
+  const connected = bootstrap.connected;
 
   const searchQueryKey = () => queryKeys.librarySearch(sessionKey(), q());
   const searchQuery = createInfiniteQuery(() => ({

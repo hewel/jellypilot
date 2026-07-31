@@ -5,6 +5,7 @@ import type {
   VideoPlaybackStreamOption,
   VideoUserDataUpdateRequest,
 } from '@bindings';
+import { useAuthenticatedBootstrap } from '@components/AuthenticatedBootstrap';
 import {
   DetailHero,
   type DetailHeroInfoRow,
@@ -19,21 +20,15 @@ import { createMutation, createQuery, useQueryClient } from '@tanstack/solid-que
 import { createFileRoute, useCanGoBack, useNavigate, useRouter } from '@tanstack/solid-router';
 import { Exit } from 'effect';
 import { Film, Play, RotateCcw, Tv } from 'lucide-solid';
-import { Show, createMemo, createSignal } from 'solid-js';
+import { Show, createSignal } from 'solid-js';
 import { commandFailureMessage } from '~effects/commands';
-import { fetchConnectionState } from '~effects/connection';
 import {
   fetchVideoItemDetail,
   fetchVideoItemStreams,
   startLibraryPlayback,
   updateLibraryUserData,
 } from '~effects/library';
-import {
-  isLibrarySessionKeyConnected,
-  librarySessionKeyFromConnectionExit,
-  queryKeys,
-  runExit,
-} from '~effects/query';
+import { isLibrarySessionKeyConnected, queryKeys, runExit } from '~effects/query';
 
 import { AUTHENTICATED_HOME_ROUTE } from '../../../../router-guards';
 import * as styles from '../detailRoute.styles';
@@ -52,12 +47,8 @@ function LibraryItemDetailRoute() {
   const navigate = useNavigate();
   const canGoBack = useCanGoBack();
   const queryClient = useQueryClient();
-  const connectionQuery = createQuery(() => ({
-    queryKey: queryKeys.connectionState,
-    queryFn: () => runExit(fetchConnectionState),
-    staleTime: Infinity,
-  }));
-  const sessionKey = createMemo(() => librarySessionKeyFromConnectionExit(connectionQuery.data));
+  const bootstrap = useAuthenticatedBootstrap();
+  const sessionKey = bootstrap.sessionKey;
   const detailQuery = createQuery(() => ({
     queryKey: queryKeys.libraryItemDetail(sessionKey(), params().itemId),
     enabled: isLibrarySessionKeyConnected(sessionKey()),
@@ -102,8 +93,7 @@ function LibraryItemDetailRoute() {
     return current && Exit.isSuccess(current) ? current.value : null;
   };
   const detailPending = () =>
-    connectionQuery.isPending ||
-    (isLibrarySessionKeyConnected(sessionKey()) && detailQuery.isPending);
+    !bootstrap.connected() || (isLibrarySessionKeyConnected(sessionKey()) && detailQuery.isPending);
   const statusTitle = () => {
     const current = detailResult();
     if (current && !Exit.isSuccess(current)) {

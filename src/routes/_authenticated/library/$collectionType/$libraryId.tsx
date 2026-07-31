@@ -2,6 +2,7 @@ import { Menu } from '@ark-ui/solid/menu';
 import { Toggle } from '@ark-ui/solid/toggle';
 import type { VideoLibraryKind, VideoLibraryPlayedFilter, VideoLibrarySort } from '@bindings';
 import { useAppScrollArea } from '@components/AppScrollAreaContext';
+import { useAuthenticatedBootstrap } from '@components/AuthenticatedBootstrap';
 import { LibraryVideoCard } from '@components/library/LibraryVideoCard';
 import {
   LibraryStatusPanel,
@@ -12,8 +13,8 @@ import {
 import LibrarySearchBar from '@components/LibrarySearchBar';
 import { Button } from '@components/ui';
 import { cx } from '@styled-system/css';
-import { createInfiniteQuery, createQuery, useQueryClient } from '@tanstack/solid-query';
-import { createFileRoute, redirect, useNavigate } from '@tanstack/solid-router';
+import { createInfiniteQuery, useQueryClient } from '@tanstack/solid-query';
+import { createFileRoute, redirect } from '@tanstack/solid-router';
 import { createVirtualizer, observeElementRect } from '@tanstack/solid-virtual';
 import { Exit } from 'effect';
 import {
@@ -37,15 +38,9 @@ import {
   onMount,
 } from 'solid-js';
 import { commandFailureMessage } from '~effects/commands';
-import { fetchConnectionState } from '~effects/connection';
 import { LIBRARY_BROWSE_PAGE_SIZE, fetchVideoLibraryPage } from '~effects/library';
 import type { LibraryBrowseState, LibraryExit } from '~effects/library';
-import {
-  isLibrarySessionKeyConnected,
-  librarySessionKeyFromConnectionExit,
-  queryKeys,
-  runExit,
-} from '~effects/query';
+import { librarySessionSignature, queryKeys, runExit } from '~effects/query';
 import type { LibrarySessionKey } from '~effects/query';
 import * as recipes from '~styles/recipes';
 import { createSharedLibraryFilters } from '~utils/createSharedLibraryFilters';
@@ -87,7 +82,6 @@ export const Route = createFileRoute('/_authenticated/library/$collectionType/$l
 function LibraryBrowseRoute() {
   const params = Route.useParams();
   const queryClient = useQueryClient();
-  const navigate = useNavigate();
   const libraryFilters = createSharedLibraryFilters();
   const filterSort = libraryFilters.sort;
   const [autoLoadSentinel, setAutoLoadSentinel] = createSignal<HTMLDivElement | null>(null);
@@ -103,51 +97,22 @@ function LibraryBrowseRoute() {
   );
   const [virtualPageStartsFetching, setVirtualPageStartsFetching] = createSignal(new Set<number>());
   onMount(() => setVirtualizerMounted(true));
-  const connectionQuery = createQuery(() => ({
-    queryKey: queryKeys.connectionState,
-    queryFn: () => runExit(fetchConnectionState),
-    staleTime: Infinity,
-  }));
-  const sessionKey = createMemo(() => librarySessionKeyFromConnectionExit(connectionQuery.data));
-  const activeSessionSignature = createMemo(() => {
-    const currentSessionKey = sessionKey();
-    return isLibrarySessionKeyConnected(currentSessionKey)
-      ? `${currentSessionKey.provider}\u0000${currentSessionKey.serverUrl}\u0000${currentSessionKey.userId}`
-      : null;
-  });
-  const [redirectingForSessionChange, setRedirectingForSessionChange] = createSignal(false);
+  const bootstrap = useAuthenticatedBootstrap();
+  const sessionKey = bootstrap.sessionKey;
+  const activeSessionSignature = createMemo(() => librarySessionSignature(sessionKey()));
   let mountedSessionSignature: string | null = null;
   const isMountedSessionActive = () => {
     const currentSessionSignature = activeSessionSignature();
     return (
       currentSessionSignature !== null &&
-      !redirectingForSessionChange() &&
       (mountedSessionSignature === null || mountedSessionSignature === currentSessionSignature)
     );
   };
 
   createEffect(() => {
-    if (redirectingForSessionChange()) {
-      return;
-    }
-
     const currentSessionSignature = activeSessionSignature();
-    if (currentSessionSignature === null) {
-      if (mountedSessionSignature !== null) {
-        setRedirectingForSessionChange(true);
-        void navigate({ to: AUTHENTICATED_HOME_ROUTE, replace: true });
-      }
-      return;
-    }
-
-    if (mountedSessionSignature === null) {
+    if (currentSessionSignature !== null && mountedSessionSignature === null) {
       mountedSessionSignature = currentSessionSignature;
-      return;
-    }
-
-    if (mountedSessionSignature !== currentSessionSignature) {
-      setRedirectingForSessionChange(true);
-      void navigate({ to: AUTHENTICATED_HOME_ROUTE, replace: true });
     }
   });
 

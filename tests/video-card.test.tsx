@@ -5,6 +5,8 @@ import { fireEvent, screen } from '@testing-library/dom';
 import type { JSX } from 'solid-js';
 import { render } from 'solid-js/web';
 
+import { commands } from '../src/bindings';
+import { AuthenticatedBootstrapProvider } from '../src/components/AuthenticatedBootstrap';
 import { HomeVideoCard } from '../src/components/library/HomeVideoCard';
 import { LibraryVideoCard } from '../src/components/library/LibraryVideoCard';
 import { PopupRoot } from '../src/components/ui/PopupRoot';
@@ -12,8 +14,29 @@ import { createJellyPilotRouter } from '../src/router';
 import { resetImageProxyBase, setImageProxyBase } from '../src/utils/imageSource';
 import { TestQueryProvider } from './query-client';
 
-beforeEach(() => setImageProxyBase('http://127.0.0.1:43127'));
+beforeEach(() => {
+  setImageProxyBase('http://127.0.0.1:43127');
+  rstest.spyOn(commands, 'serverGetState').mockResolvedValue({
+    capabilities: {
+      introSkipper: true,
+      quickConnect: true,
+      remoteControl: true,
+      remoteControlAvailable: true,
+      remoteControlWarning: null,
+    },
+    connected: true,
+    provider: 'jellyfin',
+    serverName: 'Jellyfin Home',
+    serverUrl: 'https://jellyfin.example.com',
+    userId: 'user-1',
+    userName: 'Ada',
+  });
+  rstest.spyOn(commands, 'appLocalServices').mockResolvedValue({
+    imageProxyBase: 'http://127.0.0.1:43127',
+  });
+});
 afterEach(() => {
+  rstest.restoreAllMocks();
   resetImageProxyBase();
   document.body.innerHTML = '';
 });
@@ -26,7 +49,9 @@ function renderWithRouter(content: () => JSX.Element) {
     () => (
       <TestQueryProvider>
         <PopupRoot>
-          <RouterContextProvider router={router}>{content}</RouterContextProvider>
+          <RouterContextProvider router={router}>
+            {() => <AuthenticatedBootstrapProvider>{content()}</AuthenticatedBootstrapProvider>}
+          </RouterContextProvider>
         </PopupRoot>
       </TestQueryProvider>
     ),
