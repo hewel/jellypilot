@@ -169,6 +169,26 @@ fn new_placeholder_transfer() -> Arc<InFlightTransfer> {
   })
 }
 
+/// Wait for an in-flight key fetch led by another request. The cache is
+/// re-checked after enabling because `notify_waiters()` stores no permit:
+/// a leader that completed between attach and enable has already fired its
+/// only notification, and the latched cache entry is the only way out.
+/// Returns the cached bytes when present, otherwise None after the wake so
+/// the caller can loop and re-evaluate leadership.
+async fn await_key_follower(
+  session_state: &SessionDownloadState,
+  transfer: &InFlightTransfer,
+  resource_id: &str,
+) -> Option<Bytes> {
+  let mut notified = std::pin::pin!(transfer.notify.notified());
+  notified.as_mut().enable();
+  if let Some(b) = session_state.keys_cache.lock().get(resource_id).cloned() {
+    return Some(b);
+  }
+  notified.await;
+  None
+}
+
 pub async fn handle_resource_request(
   store: Arc<StoreManager>,
   session_state: Arc<SessionDownloadState>,
@@ -202,9 +222,6 @@ pub async fn handle_resource_request(
           (t, true)
         }
       };
-
-      let mut notified = std::pin::pin!(transfer.notify.notified());
-      notified.as_mut().enable();
 
       if is_first {
         let resp = match execute_origin_request_with_retries(
@@ -248,8 +265,10 @@ pub async fn handle_resource_request(
         session_state.in_flight.lock().remove(&res_info.resource_id);
         transfer.notify.notify_waiters();
         break b;
-      } else {
-        notified.await;
+      } else if let Some(b) =
+        await_key_follower(&session_state, &transfer, &res_info.resource_id).await
+      {
+        break b;
       }
     };
 
@@ -309,6 +328,7 @@ pub async fn handle_resource_request(
       Ok(r) => r,
       Err(err) => {
         check_and_emit_origin_expired(&session_state, &err);
+        *transfer.failed.lock() = Some("Origin request failed".to_string());
         session_state.in_flight.lock().remove(&res_info.resource_id);
         transfer.notify.notify_waiters();
         let status = match err {
@@ -649,9 +669,14 @@ fn make_in_flight_stream(
             pos += c_len;
           }
         } else {
-          let part_path = state.transfer.config.lock().part_path.clone();
-          if let Some(ref part_path) = part_path {
-            if let Ok(mut file) = File::open(part_path).await {
+          let (part_path, bin_path) = {
+            let cfg = state.transfer.config.lock();
+            (cfg.part_path.clone(), cfg.bin_path.clone())
+          };
+          // The leader renames part→bin on completion; a lagging follower
+          // must fall back to the bin path or it parks forever below.
+          for path in [part_path, bin_path].into_iter().flatten() {
+            if let Ok(mut file) = File::open(&path).await {
               let _ = file.seek(SeekFrom::Start(state.current_offset)).await;
               let mut buf = vec![0u8; 64 * 1024];
               let to_read = if let Some(rem) = state.remaining {
@@ -663,13 +688,21 @@ fn make_in_flight_stream(
                 if n > 0 {
                   let bytes = Bytes::copy_from_slice(&buf[..n]);
                   state.current_offset += n as u64;
-                  if let Some(ref mut rem) = state.remaining {
+                  if let Some(rem) = &mut state.remaining {
                     *rem -= n as u64;
                   }
                   return Some((Ok(bytes), state));
                 }
               }
             }
+          }
+          // Bytes are owed but neither path produced a chunk: never park on
+          // a terminal transfer — no further notifications will ever come.
+          if state.transfer.failed.lock().is_some() {
+            return Some((Err(std::io::Error::other("Download failed")), state));
+          }
+          if state.transfer.completed.load(Ordering::SeqCst) {
+            return Some((Err(std::io::Error::other("Download incomplete")), state));
           }
         }
       } else if state.transfer.completed.load(Ordering::SeqCst) {
@@ -701,5 +734,192 @@ fn parse_bytes_range(header_val: &str, total_len: u64) -> Option<(u64, u64)> {
     Some((start, end))
   } else {
     None
+  }
+}
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+  use crate::hls_proxy::playlist::ResourceKind;
+  use crate::hls_proxy::store::HlsProxyConfig;
+  use axum::{routing::get, Router};
+
+  fn test_download_state() -> Arc<SessionDownloadState> {
+    let (events_tx, _rx) = async_channel::unbounded();
+    Arc::new(SessionDownloadState {
+      session_nonce: "test-nonce".to_string(),
+      origin_expired_emitted: AtomicBool::new(false),
+      cache_disabled_emitted: AtomicBool::new(false),
+      playback_failed_emitted: AtomicBool::new(false),
+      stream_through_only: AtomicBool::new(false),
+      events_tx,
+      in_flight: Mutex::new(std::collections::HashMap::new()),
+      keys_cache: Mutex::new(std::collections::HashMap::new()),
+    })
+  }
+
+  // Discriminates the key-follower lost-wake fix without any thread race:
+  // the leader has already completed (cache latched) and the transfer was
+  // never notified, so only the post-enable cache re-check can return bytes.
+  #[tokio::test]
+  async fn key_follower_returns_cached_bytes_without_notification() {
+    let state = test_download_state();
+    state
+      .keys_cache
+      .lock()
+      .insert("key-1".to_string(), Bytes::from_static(b"SECRET_KEY_BYTES"));
+    let transfer = new_placeholder_transfer();
+
+    let result = tokio::time::timeout(
+      Duration::from_secs(1),
+      await_key_follower(&state, &transfer, "key-1"),
+    )
+    .await
+    .expect("key follower stranded: lost wake after leader completion");
+    assert_eq!(result.unwrap(), Bytes::from_static(b"SECRET_KEY_BYTES"));
+  }
+
+  // Discriminates the segment-follower stranded-wake fix deterministically:
+  // a gated origin keeps the leader inside its request until the follower
+  // has attached; when the leader's origin call then fails, the follower
+  // must see the latched `failed` state and error its stream.
+  #[tokio::test]
+  async fn segment_follower_errors_when_leader_origin_fails() {
+    let temp_dir = std::env::temp_dir().join(format!("hls_proxy_test_{}", uuid::Uuid::new_v4()));
+    std::fs::create_dir_all(&temp_dir).unwrap();
+
+    let (gate_tx, gate_rx) = tokio::sync::watch::channel(false);
+    let origin_router = Router::new().route(
+      "/seg-1",
+      get(move || {
+        let mut rx = gate_rx.clone();
+        async move {
+          rx.wait_for(|open| *open).await.unwrap();
+          (StatusCode::INTERNAL_SERVER_ERROR, "boom")
+        }
+      }),
+    );
+
+    let std_listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = std_listener.local_addr().unwrap().port();
+    std_listener.set_nonblocking(true).unwrap();
+    let tokio_listener = tokio::net::TcpListener::from_std(std_listener).unwrap();
+    tokio::spawn(async move {
+      let _ = axum::serve(tokio_listener, origin_router).await;
+    });
+
+    let store = StoreManager::new(
+      Some(temp_dir.clone()),
+      HlsProxyConfig {
+        origin_retries: 0,
+        ..Default::default()
+      },
+    )
+    .unwrap();
+    let state = test_download_state();
+    let client = make_reqwest_client();
+    let res_info = ResourceInfo {
+      resource_id: "seg-1".to_string(),
+      kind: ResourceKind::Segment,
+      upstream_url: Url::parse(&format!("http://127.0.0.1:{}/seg-1", port)).unwrap(),
+      effective_byte_range: None,
+      is_key: false,
+      segment_index: None,
+    };
+
+    let leader = tokio::spawn(handle_resource_request(
+      store.clone(),
+      state.clone(),
+      client.clone(),
+      res_info.clone(),
+      Method::GET,
+      None,
+      Vec::new(),
+    ));
+
+    let mut attached = false;
+    for _ in 0..1000 {
+      tokio::task::yield_now().await;
+      if state.in_flight.lock().contains_key("seg-1") {
+        attached = true;
+        break;
+      }
+    }
+    assert!(attached, "leader never registered the in-flight transfer");
+
+    let follower = tokio::spawn({
+      let store = store.clone();
+      let state = state.clone();
+      let client = client.clone();
+      let res_info = res_info.clone();
+      async move {
+        let resp = handle_resource_request(
+          store,
+          state,
+          client,
+          res_info,
+          Method::GET,
+          None,
+          Vec::new(),
+        )
+        .await;
+        axum::body::to_bytes(resp.into_body(), usize::MAX).await
+      }
+    });
+
+    tokio::task::yield_now().await;
+    gate_tx.send(true).unwrap();
+
+    let leader_resp = tokio::time::timeout(Duration::from_secs(5), leader)
+      .await
+      .expect("leader request timed out")
+      .unwrap();
+    assert_eq!(leader_resp.status(), StatusCode::INTERNAL_SERVER_ERROR);
+
+    let follower_res = tokio::time::timeout(Duration::from_secs(5), follower)
+      .await
+      .expect("segment follower stranded after leader origin failure")
+      .unwrap();
+    assert!(follower_res.is_err());
+
+    let _ = std::fs::remove_dir_all(&temp_dir);
+  }
+
+  // Discriminates the part→bin rename race without any thread race: the
+  // transfer is already completed and only the bin file exists, exactly the
+  // state a lagging follower sees after the leader's rename. Without the bin
+  // fallback + terminal re-check the stream parks forever and the 1 s timeout
+  // fires deterministically.
+  #[tokio::test]
+  async fn segment_follower_reads_from_bin_after_part_rename() {
+    let temp_dir = std::env::temp_dir().join(format!("hls_proxy_test_{}", uuid::Uuid::new_v4()));
+    std::fs::create_dir_all(&temp_dir).unwrap();
+    let part_path = temp_dir.join("seg-1.part");
+    let bin_path = temp_dir.join("seg-1.bin");
+    std::fs::write(&bin_path, b"SEGMENT_BYTES").unwrap();
+
+    let transfer = new_placeholder_transfer();
+    {
+      let mut cfg = transfer.config.lock();
+      cfg.part_path = Some(part_path);
+      cfg.bin_path = Some(bin_path);
+      cfg.total_length = Some(13);
+    }
+    transfer.bytes_written.store(13, Ordering::SeqCst);
+    transfer.completed.store(true, Ordering::SeqCst);
+
+    let stream = make_in_flight_stream(transfer, 0, 0);
+    let collected = tokio::time::timeout(
+      Duration::from_secs(1),
+      stream.fold(Vec::new(), |mut acc, item| async move {
+        acc.extend_from_slice(&item.unwrap());
+        acc
+      }),
+    )
+    .await
+    .expect("segment follower stranded reading renamed part file");
+    assert_eq!(&collected[..], b"SEGMENT_BYTES");
+
+    let _ = std::fs::remove_dir_all(&temp_dir);
   }
 }

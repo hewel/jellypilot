@@ -340,26 +340,30 @@ async fn deduplicates_concurrent_demand_and_key_fetches() {
   let key_url1 = key_url.clone();
   let key_url2 = key_url.clone();
 
-  let (res_k1, res_k2) = tokio::join!(
-    async move {
-      c1.get(&key_url1)
-        .send()
-        .await
-        .unwrap()
-        .bytes()
-        .await
-        .unwrap()
-    },
-    async move {
-      c2.get(&key_url2)
-        .send()
-        .await
-        .unwrap()
-        .bytes()
-        .await
-        .unwrap()
-    }
-  );
+  let (res_k1, res_k2) = tokio::time::timeout(Duration::from_secs(10), async move {
+    tokio::join!(
+      async move {
+        c1.get(&key_url1)
+          .send()
+          .await
+          .unwrap()
+          .bytes()
+          .await
+          .unwrap()
+      },
+      async move {
+        c2.get(&key_url2)
+          .send()
+          .await
+          .unwrap()
+          .bytes()
+          .await
+          .unwrap()
+      }
+    )
+  })
+  .await
+  .expect("concurrent key fetches timed out");
 
   assert_eq!(&res_k1[..], b"SECRET_KEY_BYTES");
   assert_eq!(&res_k2[..], b"SECRET_KEY_BYTES");
@@ -370,26 +374,30 @@ async fn deduplicates_concurrent_demand_and_key_fetches() {
   let seg_url1 = seg_url.clone();
   let seg_url2 = seg_url.clone();
 
-  let (res_s1, res_s2) = tokio::join!(
-    async move {
-      c3.get(&seg_url1)
-        .send()
-        .await
-        .unwrap()
-        .bytes()
-        .await
-        .unwrap()
-    },
-    async move {
-      c4.get(&seg_url2)
-        .send()
-        .await
-        .unwrap()
-        .bytes()
-        .await
-        .unwrap()
-    }
-  );
+  let (res_s1, res_s2) = tokio::time::timeout(Duration::from_secs(10), async move {
+    tokio::join!(
+      async move {
+        c3.get(&seg_url1)
+          .send()
+          .await
+          .unwrap()
+          .bytes()
+          .await
+          .unwrap()
+      },
+      async move {
+        c4.get(&seg_url2)
+          .send()
+          .await
+          .unwrap()
+          .bytes()
+          .await
+          .unwrap()
+      }
+    )
+  })
+  .await
+  .expect("concurrent segment fetches timed out");
 
   assert_eq!(&res_s1[..], b"SEGMENT_BYTES");
   assert_eq!(&res_s2[..], b"SEGMENT_BYTES");
