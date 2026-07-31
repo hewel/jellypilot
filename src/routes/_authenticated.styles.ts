@@ -51,6 +51,7 @@ export const ambientCore = css({
   borderRadius: 'full',
   height: 'full',
   opacity: '[0.45]',
+  transform: '[scale(1)]',
   transitionDuration: '300',
   transitionProperty: '[opacity, transform]',
   transitionTimingFunction: 'standard',

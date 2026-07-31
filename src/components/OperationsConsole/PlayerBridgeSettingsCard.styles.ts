@@ -62,6 +62,7 @@ export const flexInput = css({
 export const chevron = css({
   color: 'onSurfaceVariant',
   height: 'lg',
+  transform: '[rotate(0deg)]',
   transitionDuration: '300',
   transitionProperty: '[color, transform]',
   width: 'lg',
@@ -193,6 +194,7 @@ export const addButton = css({
   borderColor: 'secondary/20',
   cursor: 'pointer',
   minWidth: '[5.5rem]',
+  transform: '[scale(1)]',
   transitionDuration: '200',
   transitionProperty: '[background-color, border-color, transform]',
   _hover: {

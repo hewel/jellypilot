@@ -237,6 +237,7 @@ export const sortValue = css({
 export const chevron = css({
   color: 'onSurfaceVariant',
   flex: 'none',
+  transform: '[rotate(0deg)]',
   transitionDuration: '200',
   transitionProperty: '[transform]',
 });

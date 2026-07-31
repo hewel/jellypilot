@@ -154,6 +154,7 @@ export const detailsLink = css({
   minHeight: '11',
   padding: '[0.875em 1.125em]',
   textDecoration: 'none',
+  transform: '[scale(1)]',
   transitionDuration: '200',
   transitionProperty: '[background-color, border-color, color, box-shadow, transform]',
   userSelect: 'none',
