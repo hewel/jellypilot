@@ -11,6 +11,7 @@ mod intro_skipper;
 mod mpv_action;
 mod mpv_event;
 mod play_resolution;
+mod playback_events;
 mod session;
 mod types;
 mod websocket;
