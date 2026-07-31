@@ -142,6 +142,7 @@ export const choice = css({
   borderStyle: 'solid',
   borderColor: 'outlineVariant',
   cursor: 'pointer',
+  transform: '[scale(1)]',
   transitionDuration: '300',
   transitionProperty: '[background-color, border-color, box-shadow, transform]',
   _active: {

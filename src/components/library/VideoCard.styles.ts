@@ -20,6 +20,7 @@ export const card = css({
   overflow: 'hidden',
   p: '0',
   textDecoration: 'none',
+  transform: '[scale(1)]',
   transitionDuration: '300',
   transitionProperty: '[background-color, border-color, box-shadow, transform]',
   _hover: {
@@ -54,6 +55,7 @@ export const homeCardAction = css({
   p: '0',
   textAlign: 'left',
   textDecoration: 'none',
+  transform: '[scale(1)]',
   transitionDuration: '200',
   transitionProperty: '[transform]',
   transitionTimingFunction: 'standard',

@@ -212,8 +212,6 @@ export const sliderTrack = css({
 export const sliderRange = css({
   borderRadius: 'full',
   height: 'full',
-  transitionDuration: '150',
-  transitionProperty: '[width, transform]',
 });
 
 export const primaryRange = css({
@@ -237,6 +235,7 @@ export const thumb = css({
   cursor: 'grab',
   height: '[1.375rem]',
   outline: 'none',
+  transform: '[scale(1)]',
   transitionDuration: '200',
   transitionProperty: '[box-shadow, transform]',
   width: '[1.375rem]',

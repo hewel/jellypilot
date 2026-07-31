@@ -131,6 +131,7 @@ export const indicatorIcon = css({
   height: '4',
   width: '4',
   opacity: '[0.7]',
+  transform: '[rotate(0deg)]',
   transitionDuration: '200',
   transitionProperty: '[transform]',
   '[data-state=open] &': {

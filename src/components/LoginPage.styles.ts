@@ -90,6 +90,7 @@ export const segment = cva({
     cursor: 'pointer',
     letterSpacing: '0',
     textTransform: 'uppercase',
+    transform: '[scale(1)]',
     transitionDuration: '300',
     transitionProperty: '[background-color, color, box-shadow, transform]',
     _hover: {
