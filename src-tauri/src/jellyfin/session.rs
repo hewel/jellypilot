@@ -12,6 +12,7 @@ use super::error::JellyfinError;
 use super::intro_skipper::{
   evaluate_manual_skip, evaluate_skip, evaluate_skip_prompt, IntroSkipKind,
 };
+use super::mpv_action::{MpvAction, MpvActionExecutor};
 use super::mpv_event::{
   apply_property_update, client_message_direction, is_natural_end, property_report_decision,
   should_report_progress, PropertyReportDecision,
@@ -24,7 +25,7 @@ use super::websocket::{JellyfinCommand, JellyfinWebSocket, JellyfinWebSocketEven
 use crate::command::{AppNotification, NowPlayingChanged, NowPlayingState};
 use crate::config::{AppConfig, IntroSkipperMode};
 use crate::hls_proxy::{ActivatedHls, HlsProxyError, HlsProxyEvent, HlsProxyState};
-use crate::mpv::{has_mpv_option, MpvClient};
+use crate::mpv::MpvClient;
 use crate::now_playing::{build_now_playing_state, PlaybackContext, TransportSnapshot};
 use tauri_specta::Event;
 
@@ -69,65 +70,6 @@ struct PlayContext {
   hls: HlsProxyState,
   app: Option<AppHandle>,
   config: Arc<RwLock<AppConfig>>,
-}
-
-/// Actions to perform on MPV.
-#[derive(Debug, Clone)]
-pub enum MpvAction {
-  /// Load and play a URL.
-  Play {
-    url: String,
-    start_position: f64,
-    title: String,
-    audio_index: Option<i32>,
-    subtitle_index: Option<i32>,
-    play_method: &'static str,
-  },
-  /// Add an external subtitle file.
-  AddExternalSubtitle(String),
-  /// Pause playback.
-  Pause,
-  /// Resume playback.
-  Resume,
-  /// Seek to position (seconds).
-  Seek(f64),
-  /// Show text on MPV's on-screen display.
-  ShowText { text: String, duration_ms: i64 },
-  /// Stop playback.
-  Stop,
-  /// Set volume (0-100).
-  SetVolume(i32),
-  /// Toggle mute.
-  ToggleMute,
-  /// Toggle fullscreen.
-  ToggleFullscreen,
-  /// Set audio track by stream index.
-  SetAudioTrack(i32),
-  /// Set subtitle track by stream index (-1 to disable).
-  SetSubtitleTrack(i32),
-}
-
-const DIRECT_PLAYBACK_CACHE_OPTIONS: [(&str, &str); 8] = [
-  ("cache", "cache=yes"),
-  ("cache-on-disk", "cache-on-disk=yes"),
-  ("demuxer-max-bytes", "demuxer-max-bytes=256MiB"),
-  ("demuxer-max-back-bytes", "demuxer-max-back-bytes=128MiB"),
-  ("demuxer-seekable-cache", "demuxer-seekable-cache=yes"),
-  ("cache-pause", "cache-pause=yes"),
-  ("cache-pause-initial", "cache-pause-initial=yes"),
-  ("cache-pause-wait", "cache-pause-wait=3"),
-];
-
-fn direct_playback_file_options(play_method: &str, configured_args: &[String]) -> Vec<String> {
-  if !matches!(play_method, "DirectPlay" | "DirectStream") {
-    return Vec::new();
-  }
-
-  DIRECT_PLAYBACK_CACHE_OPTIONS
-    .iter()
-    .filter(|(name, _)| !has_mpv_option(configured_args, name))
-    .map(|(_, setting)| (*setting).to_owned())
-    .collect()
 }
 
 /// Session manager state.
@@ -410,156 +352,25 @@ impl SessionManager {
   /// Start the MPV action consumer task.
   fn start_action_consumer(&self) {
     if let Some(mut action_rx) = self.action_rx.write().take() {
-      let mpv = self.mpv.clone();
-      let app_handle = self.app_handle.clone();
-      let config = self.config.clone();
-      let state = self.state.clone();
+      let executor = MpvActionExecutor::from_session(
+        self.mpv.as_ref().clone(),
+        self.config.clone(),
+        self.app_handle.clone(),
+        {
+          let state = self.state.clone();
+          let config = self.config.clone();
+          move || {
+            state.write().effective_intro_skipper_config =
+              IntroSkipperRuntimeConfig::from(&*config.read());
+          }
+        },
+      );
 
       tokio::spawn(async move {
         log::info!("MPV action consumer started, waiting for actions...");
         while let Some(action) = action_rx.recv().await {
           log::info!("Processing MPV action: {:?}", action);
-
-          match action {
-            MpvAction::Play {
-              url,
-              start_position,
-              title,
-              audio_index,
-              subtitle_index,
-              play_method,
-            } => {
-              log::info!(
-                "MpvAction::Play received, url={}, title={}",
-                redact_url(&url),
-                title
-              );
-              // Start MPV if not already running
-              if !mpv.is_connected() {
-                log::info!("MPV not connected, starting...");
-                if let Err(e) = mpv.start().await {
-                  log::error!("Failed to start MPV: {}", e);
-                  AppNotification::error(&app_handle, format!("Failed to start MPV: {}", e));
-                  continue;
-                }
-                state.write().effective_intro_skipper_config =
-                  IntroSkipperRuntimeConfig::from(&*config.read());
-                log::info!("MPV started successfully");
-              }
-
-              let file_options = {
-                let config = config.read();
-                direct_playback_file_options(play_method, &config.mpv_args)
-              };
-
-              // Load the file with all options (start position, audio/subtitle tracks)
-              // This ensures tracks are set atomically with the file load, avoiding race conditions
-              log::info!(
-                "Loading file into MPV: {} (start={}, aid={:?}, sid={:?}, play_method={}, file_options={:?})",
-                redact_url(&url),
-                start_position,
-                audio_index,
-                subtitle_index,
-                play_method,
-                file_options
-              );
-              if let Err(e) = mpv
-                .loadfile_with_options(
-                  &url,
-                  Some(start_position),
-                  audio_index.map(|i| i as i64),
-                  subtitle_index.map(|i| i as i64),
-                  file_options,
-                )
-                .await
-              {
-                log::error!("Failed to load file: {}", e);
-                AppNotification::error(&app_handle, format!("Failed to load media: {}", e));
-                continue;
-              }
-              log::info!("File loaded successfully");
-
-              // Set the media title (shown in MPV window)
-              if let Err(e) = mpv.set_property_string("force-media-title", &title).await {
-                log::warn!("Failed to set media title: {}", e);
-              }
-
-              log::info!("Started playback: {} - {}", title, redact_url(&url));
-            }
-            MpvAction::Pause => {
-              log::info!("MpvAction::Pause - setting pause=true");
-              if let Err(e) = mpv.set_pause(true).await {
-                log::error!("Failed to pause: {}", e);
-              } else {
-                log::info!("MPV paused successfully");
-              }
-            }
-            MpvAction::Resume => {
-              log::info!("MpvAction::Resume - setting pause=false");
-              if let Err(e) = mpv.set_pause(false).await {
-                log::error!("Failed to resume: {}", e);
-              } else {
-                log::info!("MPV resumed successfully");
-              }
-            }
-            MpvAction::Seek(position) => {
-              if let Err(e) = mpv.seek(position).await {
-                log::error!("Failed to seek: {}", e);
-              }
-            }
-            MpvAction::ShowText { text, duration_ms } => {
-              if let Err(e) = mpv.show_text(&text, duration_ms).await {
-                log::warn!("Failed to show MPV text: {}", e);
-              }
-            }
-            MpvAction::Stop => {
-              log::info!("MpvAction::Stop - quitting MPV gracefully");
-              if let Err(e) = mpv.quit().await {
-                log::warn!("Failed to quit MPV gracefully: {}, forcing stop", e);
-                mpv.stop().await;
-              }
-            }
-            MpvAction::SetVolume(volume) => {
-              if let Err(e) = mpv.set_volume(volume as f64).await {
-                log::error!("Failed to set volume: {}", e);
-              }
-            }
-            MpvAction::ToggleMute => {
-              if let Err(e) = mpv.toggle_mute().await {
-                log::error!("Failed to toggle mute: {}", e);
-              }
-            }
-            MpvAction::ToggleFullscreen => {
-              if let Err(e) = mpv.toggle_fullscreen().await {
-                log::error!("Failed to toggle fullscreen: {}", e);
-              }
-            }
-            MpvAction::SetAudioTrack(index) => {
-              // index is already MPV's 1-based track ID
-              if let Err(e) = mpv.set_audio_track(index as i64).await {
-                log::error!("Failed to set audio track: {}", e);
-              }
-            }
-            MpvAction::SetSubtitleTrack(index) => {
-              if index == -1 {
-                // Disable subtitles
-                if let Err(e) = mpv.disable_track("sid").await {
-                  log::error!("Failed to disable subtitles: {}", e);
-                }
-              } else {
-                // index is already MPV's 1-based track ID
-                if let Err(e) = mpv.set_subtitle_track(index as i64).await {
-                  log::error!("Failed to set subtitle track: {}", e);
-                }
-              }
-            }
-            MpvAction::AddExternalSubtitle(url) => {
-              log::info!("MpvAction::AddExternalSubtitle: {}", redact_url(&url));
-              if let Err(e) = mpv.sub_add(&url, true).await {
-                log::error!("Failed to add external subtitle: {}", e);
-              }
-            }
-          }
+          executor.execute(action).await;
         }
       });
     }
@@ -2226,7 +2037,7 @@ fn intro_skipper_label_lower(kind: IntroSkipKind) -> &'static str {
 }
 
 /// Redact sensitive URL/header fragments from log text.
-fn redact_url(url: &str) -> String {
+pub(super) fn redact_url(url: &str) -> String {
   const SENSITIVE_KEYS: &[&str] = &[
     "api_key",
     "access_token",
@@ -2340,62 +2151,6 @@ mod tests {
   use std::sync::Arc;
   use tokio::io::{AsyncReadExt, AsyncWriteExt};
   use tokio::net::TcpListener;
-
-  #[test]
-  fn direct_play_adds_cache_profile_when_user_has_no_overrides() {
-    assert_eq!(
-      direct_playback_file_options("DirectPlay", &[]),
-      vec![
-        "cache=yes",
-        "cache-on-disk=yes",
-        "demuxer-max-bytes=256MiB",
-        "demuxer-max-back-bytes=128MiB",
-        "demuxer-seekable-cache=yes",
-        "cache-pause=yes",
-        "cache-pause-initial=yes",
-        "cache-pause-wait=3",
-      ]
-    );
-  }
-
-  #[test]
-  fn direct_stream_adds_cache_profile_when_user_has_no_overrides() {
-    assert_eq!(
-      direct_playback_file_options("DirectStream", &[]),
-      vec![
-        "cache=yes",
-        "cache-on-disk=yes",
-        "demuxer-max-bytes=256MiB",
-        "demuxer-max-back-bytes=128MiB",
-        "demuxer-seekable-cache=yes",
-        "cache-pause=yes",
-        "cache-pause-initial=yes",
-        "cache-pause-wait=3",
-      ]
-    );
-  }
-
-  #[test]
-  fn direct_cache_profile_preserves_explicit_user_options() {
-    let configured_args = vec![
-      "--cache=no".to_string(),
-      "--cache-on-disk=no".to_string(),
-      "--demuxer-max-bytes=512MiB".to_string(),
-      "--demuxer-seekable-cache=no".to_string(),
-      "--no-cache-pause".to_string(),
-      "--no-cache-pause-initial".to_string(),
-    ];
-
-    assert_eq!(
-      direct_playback_file_options("DirectPlay", &configured_args),
-      vec!["demuxer-max-back-bytes=128MiB", "cache-pause-wait=3",]
-    );
-  }
-
-  #[test]
-  fn transcode_does_not_add_direct_cache_profile() {
-    assert!(direct_playback_file_options("Transcode", &[]).is_empty());
-  }
 
   type RequestLog = Arc<parking_lot::Mutex<Vec<String>>>;
 
