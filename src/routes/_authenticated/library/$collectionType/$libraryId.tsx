@@ -14,7 +14,6 @@ import LibrarySearchBar from '@components/LibrarySearchBar';
 import { Button } from '@components/ui';
 import { cx } from '@styled-system/css';
 import { createFileRoute, redirect } from '@tanstack/solid-router';
-import { createVirtualizer, observeElementRect } from '@tanstack/solid-virtual';
 import { Exit } from 'effect';
 import {
   ArrowDownWideNarrowIcon,
@@ -26,30 +25,14 @@ import {
   ListSortAscending,
   RefreshCw,
 } from 'lucide-solid';
-import {
-  For,
-  Show,
-  Suspense,
-  createEffect,
-  createMemo,
-  createSignal,
-  onCleanup,
-  onMount,
-} from 'solid-js';
+import { For, Show, Suspense, createEffect, createMemo, createSignal, onCleanup } from 'solid-js';
 import { commandFailureMessage } from '~effects/commands';
-import { LIBRARY_BROWSE_PAGE_SIZE } from '~effects/library';
 import { librarySessionSignature } from '~effects/query';
 import type { LibrarySessionKey } from '~effects/query';
 import * as recipes from '~styles/recipes';
 import { createLibraryBrowseWindow } from '~utils/createLibraryBrowseWindow';
 import { createSharedLibraryFilters } from '~utils/createSharedLibraryFilters';
 import type { LibrarySortDirection } from '~utils/createSharedLibraryFilters';
-import {
-  libraryBrowseColumnCount,
-  libraryBrowseVirtualOverscanRows,
-  libraryBrowseVirtualRowHeight,
-} from '~utils/libraryBrowseLayout';
-import { libraryBrowsePageStartsForRows } from '~utils/libraryBrowsePageSelection';
 
 import { AUTHENTICATED_HOME_ROUTE } from '../../../../router-guards';
 import * as styles from '../browseRoute.styles';
@@ -74,13 +57,6 @@ function LibraryBrowseRoute() {
   const libraryFilters = createSharedLibraryFilters();
   const [autoLoadSentinel, setAutoLoadSentinel] = createSignal<HTMLDivElement | null>(null);
   const [autoLoadSentinelVisible, setAutoLoadSentinelVisible] = createSignal(false);
-  const [virtualGrid, setVirtualGrid] = createSignal<HTMLDivElement | null>(null);
-  const [virtualGridWidth, setVirtualGridWidth] = createSignal(1280);
-  const [virtualViewportHeight, setVirtualViewportHeight] = createSignal(720);
-  const [virtualizerMounted, setVirtualizerMounted] = createSignal(false);
-  const appScroll = useAppScrollArea();
-  const [virtualScrollMargin, setVirtualScrollMargin] = createSignal(0);
-  onMount(() => setVirtualizerMounted(true));
   const bootstrap = useAuthenticatedBootstrap();
   const sessionKey = bootstrap.sessionKey;
   const activeSessionSignature = createMemo(() => librarySessionSignature(sessionKey()));
@@ -114,121 +90,8 @@ function LibraryBrowseRoute() {
     }),
     filtersReady: libraryFilters.ready,
     sessionActive: isMountedSessionActive,
-    virtualPageStartsForCurrentWindow: () => virtualPageStartsForCurrentWindow(),
-    onIdentityReset: () => appScroll.scrollTo({ top: 0 }),
   });
 
-  const fallbackVirtualGridWidth = () => {
-    const gridWidth = virtualGrid()?.clientWidth ?? 0;
-    if (gridWidth > 0) {
-      return gridWidth;
-    }
-
-    const viewportWidth = appScroll.viewport()?.clientWidth ?? 0;
-    if (viewportWidth > 0) {
-      return viewportWidth;
-    }
-
-    if (typeof window !== 'undefined' && window.innerWidth > 0) {
-      return window.innerWidth;
-    }
-
-    return 1280;
-  };
-  const fallbackVirtualGridHeight = () => {
-    const viewportHeight = appScroll.viewport()?.clientHeight ?? 0;
-    if (viewportHeight > 0) {
-      return viewportHeight;
-    }
-
-    if (typeof window !== 'undefined' && window.innerHeight > 0) {
-      return window.innerHeight;
-    }
-
-    return 720;
-  };
-  const measureVirtualGrid = () => {
-    setVirtualGridWidth(fallbackVirtualGridWidth());
-    setVirtualViewportHeight(fallbackVirtualGridHeight());
-
-    const grid = virtualGrid();
-    const scrollElement = appScroll.viewport();
-    if (!grid || !scrollElement) {
-      setVirtualScrollMargin(0);
-      return;
-    }
-
-    setVirtualScrollMargin(
-      grid.getBoundingClientRect().top -
-        scrollElement.getBoundingClientRect().top +
-        scrollElement.scrollTop,
-    );
-  };
-  createEffect(() => {
-    const grid = virtualGrid();
-    const scrollElement = appScroll.viewport();
-    if (typeof ResizeObserver === 'undefined') {
-      measureVirtualGrid();
-      if (typeof window !== 'undefined') {
-        window.addEventListener('resize', measureVirtualGrid);
-        onCleanup(() => window.removeEventListener('resize', measureVirtualGrid));
-      }
-      return;
-    }
-
-    const observer = new ResizeObserver(measureVirtualGrid);
-    if (grid) {
-      observer.observe(grid);
-    }
-    if (scrollElement) {
-      observer.observe(scrollElement);
-    }
-    onCleanup(() => observer.disconnect());
-  });
-
-  const columnCount = createMemo(() => libraryBrowseColumnCount(virtualGridWidth()));
-  const virtualRowColumnIndexes = createMemo(() =>
-    Array.from({ length: columnCount() }, (_, index) => index),
-  );
-  const estimateVirtualRowHeight = () => libraryBrowseVirtualRowHeight(virtualGridWidth());
-  const rowVirtualizer = createVirtualizer<HTMLElement, HTMLDivElement>({
-    get count() {
-      return browseWindow.usesVirtualGrid()
-        ? Math.ceil(browseWindow.totalRecordCount() / columnCount())
-        : 0;
-    },
-    get enabled() {
-      return (
-        virtualizerMounted() && browseWindow.usesVirtualGrid() && appScroll.viewport() !== null
-      );
-    },
-    getScrollElement: () => appScroll.viewport(),
-    estimateSize: estimateVirtualRowHeight,
-    get overscan() {
-      return libraryBrowseVirtualOverscanRows(virtualViewportHeight(), estimateVirtualRowHeight());
-    },
-    observeElementRect: (instance, callback) =>
-      observeElementRect(instance, (rect) =>
-        callback({
-          width: rect.width || virtualGridWidth(),
-          height: rect.height || virtualViewportHeight(),
-        }),
-      ),
-    get initialRect() {
-      return { width: virtualGridWidth(), height: virtualViewportHeight() };
-    },
-    get scrollMargin() {
-      return virtualScrollMargin();
-    },
-  });
-  const virtualPageStartsForCurrentWindow = () =>
-    libraryBrowsePageStartsForRows({
-      rowIndexes: rowVirtualizer.getVirtualItems().map((virtualRow) => virtualRow.index),
-      columnCount: columnCount(),
-      totalRecordCount: browseWindow.totalRecordCount(),
-      pageSize: LIBRARY_BROWSE_PAGE_SIZE,
-      reverse: browseWindow.needsReverse(),
-    });
   const statusTitle = () => {
     const current = browseWindow.firstPage();
     if (!current) {
@@ -342,15 +205,17 @@ function LibraryBrowseRoute() {
                 </div>
               }
             >
-              <div ref={setVirtualGrid} data-testid="library-virtual-grid">
+              <div ref={browseWindow.virtual.ref} data-testid="library-virtual-grid">
                 <div
                   aria-label={`${libraryTitle(collectionType())} library items`}
-                  aria-rowcount={Math.ceil(browseWindow.totalRecordCount() / columnCount())}
+                  aria-rowcount={Math.ceil(
+                    browseWindow.totalRecordCount() / browseWindow.virtual.columnCount(),
+                  )}
                   class={styles.virtualCanvas}
                   role="grid"
-                  style={{ height: `${rowVirtualizer.getTotalSize()}px` }}
+                  style={{ height: `${browseWindow.virtual.totalSize()}px` }}
                 >
-                  <For each={rowVirtualizer.getVirtualItems()}>
+                  <For each={browseWindow.virtual.items()}>
                     {(virtualRow) => (
                       <div
                         aria-rowindex={virtualRow.index + 1}
@@ -358,14 +223,14 @@ function LibraryBrowseRoute() {
                         role="row"
                         style={{
                           height: `${virtualRow.size}px`,
-                          transform: `translateY(${virtualRow.start - virtualScrollMargin()}px)`,
+                          transform: `translateY(${virtualRow.start - browseWindow.virtual.scrollMargin()}px)`,
                         }}
                       >
                         <div class={styles.grid} role="presentation">
-                          <For each={virtualRowColumnIndexes()}>
+                          <For each={browseWindow.virtual.rowColumnIndexes()}>
                             {(columnIndex) => {
                               const displayIndex = () =>
-                                virtualRow.index * columnCount() + columnIndex;
+                                virtualRow.index * browseWindow.virtual.columnCount() + columnIndex;
                               const item = () => browseWindow.itemForDisplayIndex(displayIndex());
 
                               return (
