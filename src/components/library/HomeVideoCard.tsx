@@ -27,12 +27,16 @@ const homeSecondary = Match.type<{
   item: VideoHomeItem;
   rowKind: VideoHomeRowKind;
 }>().pipe(
-  Match.when({ rowKind: 'continueWatching' }, ({ item }) => continueWatchingLabel(item)),
+  Match.when({ rowKind: 'continueWatching' }, ({ item }) =>
+    item.itemType === 'Episode'
+      ? `${continueWatchingLabel(item)} · ${episodeCode(item)}`
+      : continueWatchingLabel(item),
+  ),
   Match.when({ rowKind: 'latestMovies' }, ({ item }) =>
     item.productionYear === null ? null : item.productionYear.toString(),
   ),
   Match.when({ rowKind: Match.is('nextUp', 'latestEpisodes') }, ({ item }) =>
-    item.seriesName === null ? null : item.name,
+    item.itemType === 'Episode' ? episodeCode(item) : null,
   ),
   Match.exhaustive,
 );
@@ -74,15 +78,16 @@ export function continueWatchingLabel(item: VideoHomeItem): string {
 
 function homeTitle(item: VideoHomeItem): string {
   if (item.itemType === 'Episode') {
-    const identity = item.seriesName ?? item.name;
-    const episode =
-      item.seasonNumber !== null && item.episodeNumber !== null
-        ? `S${item.seasonNumber} E${item.episodeNumber}`
-        : 'Episode';
-    return `${identity} • ${episode}`;
+    return item.seriesName === null ? item.name : `${item.seriesName} • ${item.name}`;
   }
 
-  return `${item.name} • ${item.itemType}`;
+  return item.name;
+}
+
+function episodeCode(item: VideoHomeItem): string {
+  return item.seasonNumber !== null && item.episodeNumber !== null
+    ? `S${item.seasonNumber} E${item.episodeNumber}`
+    : 'Episode';
 }
 
 function isDirectPlaybackCard(props: HomeVideoCardProps): props is HomeVideoCardProps & {

@@ -211,7 +211,7 @@ test('LibraryVideoCard overlays copy on poster artwork and HomeVideoCard keeps c
   expect(posterTitle).toBeVisible();
   expect(posterTitle.closest('[data-aspect="poster"]')).not.toBeNull();
   expect(screen.getByText('2024').closest('[data-aspect="poster"]')).not.toBeNull();
-  expect(screen.getByText('Overlay Episode').closest('[data-aspect]')).toBeNull();
+  expect(screen.getByText('Overlay Series • Overlay Episode').closest('[data-aspect]')).toBeNull();
   expect(screen.getByRole('img', { name: 'Played' })).toBeVisible();
 
   dispose();
@@ -243,10 +243,10 @@ test('HomeVideoCard renders reference-first Continue Watching metadata and direc
     />
   ));
 
-  const title = screen.getByText('Silent Echoes • S1 E4');
+  const title = screen.getByText('Silent Echoes • A Quiet Return');
   const resumeButton = screen.getByRole('button', { name: 'Resume A Quiet Return' });
   expect(title).toBeVisible();
-  expect(screen.getByText('58 mins remaining')).toBeVisible();
+  expect(screen.getByText('58 mins remaining · S1 E4')).toBeVisible();
   expect(screen.queryByRole('img', { name: 'Played' })).toBeNull();
   expect(
     screen.getByRole('progressbar', { name: 'A Quiet Return watch progress' }),
@@ -311,11 +311,11 @@ test('HomeVideoCard title links episodes to series detail and movies to movie de
 
   const resumeTitleLink = screen.getByRole('link', { name: 'Open details for A Quiet Return' });
   expect(resumeTitleLink).toHaveAttribute('href', '/library/shows/series-1');
-  expect(resumeTitleLink.contains(screen.getByText('Silent Echoes • S1 E4'))).toBe(true);
+  expect(resumeTitleLink.contains(screen.getByText('Silent Echoes • A Quiet Return'))).toBe(true);
 
   const movieTitleLink = screen.getByRole('link', { name: 'Open details for Linked Movie' });
   expect(movieTitleLink).toHaveAttribute('href', '/library/items/movie-1');
-  expect(movieTitleLink.contains(screen.getByText('Linked Movie • Movie'))).toBe(true);
+  expect(movieTitleLink.contains(screen.getByText('Linked Movie'))).toBe(true);
 
   dispose();
   root.remove();
@@ -444,8 +444,10 @@ test('HomeVideoCard resumes Next Up episodes while keeping the episode subtitle'
 
   const resumeButton = screen.getByRole('button', { name: 'Resume The Crossing' });
   expect(resumeButton).toBeVisible();
-  // Next Up keeps the episode-name subtitle; remaining time never replaces it.
-  expect(screen.getByText('The Crossing')).toBeVisible();
+  // Next Up titles carry series plus episode name; the episode code moves to
+  // the subtitle and remaining time never appears here.
+  expect(screen.getByText('Harbor Line • The Crossing')).toBeVisible();
+  expect(screen.getByText('S2 E5')).toBeVisible();
   expect(screen.queryByText(/remaining/)).toBeNull();
   expect(screen.getByRole('progressbar', { name: 'The Crossing watch progress' })).toHaveAttribute(
     'aria-valuenow',
@@ -485,7 +487,8 @@ test('HomeVideoCard plays Next Up episodes from zero without a resume offset', (
   ));
 
   expect(screen.getByRole('button', { name: 'Play The Crossing' })).toBeVisible();
-  expect(screen.getByText('The Crossing')).toBeVisible();
+  expect(screen.getByText('Harbor Line • The Crossing')).toBeVisible();
+  expect(screen.getByText('S2 E5')).toBeVisible();
   // Start-mode Next Up cards do not invent a progress bar.
   expect(screen.queryByRole('progressbar')).toBeNull();
   expect(root.querySelector('[data-play-badge]')).not.toBeNull();
