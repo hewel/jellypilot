@@ -7,7 +7,7 @@ import {
   progressSummary,
   recordResult,
   renderMarkdownReport,
-} from '../scripts/tauri-parity-review.mjs';
+} from '../scripts/tauri-parity-review.ts';
 
 test('encodes the complete issue 141 screen and viewport matrix', () => {
   const entries = matrixEntries();

@@ -23,10 +23,10 @@
     "e2e:verify": "tsx e2e/cli.ts verify",
     "e2e:clean": "tsx e2e/cli.ts clean",
     "lint-staged": "lint-staged",
-    "typecheck": "tsc --noEmit",
-    "api": "bun scripts/media-server-api.mjs",
-    "format": "oxfmt --write package.json tsconfig.json tests/tsconfig.json e2e/tsconfig.json '*.config.{js,json,jsonc,mjs,ts}' 'src/**/*.{css,js,jsx,json,jsonc,ts,tsx}' 'tests/**/*.{js,jsx,json,jsonc,ts,tsx}' 'e2e/**/*.{js,jsx,json,jsonc,ts,tsx}' 'scripts/**/*.mjs' 'src-tauri/**/*.json'",
-    "format:check": "oxfmt --check package.json tsconfig.json tests/tsconfig.json e2e/tsconfig.json '*.config.{js,json,jsonc,mjs,ts}' 'src/**/*.{css,js,jsx,json,jsonc,ts,tsx}' 'tests/**/*.{js,jsx,json,jsonc,ts,tsx}' 'e2e/**/*.{js,jsx,json,jsonc,ts,tsx}' 'scripts/**/*.mjs' 'src-tauri/**/*.json'",
+    "typecheck": "tsc --noEmit && tsc --noEmit -p scripts",
+    "api": "bun scripts/media-server-api.ts",
+    "format": "oxfmt --write package.json tsconfig.json tests/tsconfig.json e2e/tsconfig.json '*.config.{js,json,jsonc,mjs,ts}' 'src/**/*.{css,js,jsx,json,jsonc,ts,tsx}' 'tests/**/*.{js,jsx,json,jsonc,ts,tsx}' 'e2e/**/*.{js,jsx,json,jsonc,ts,tsx}' 'scripts/**/*.ts' 'src-tauri/**/*.json'",
+    "format:check": "oxfmt --check package.json tsconfig.json tests/tsconfig.json e2e/tsconfig.json '*.config.{js,json,jsonc,mjs,ts}' 'src/**/*.{css,js,jsx,json,jsonc,ts,tsx}' 'tests/**/*.{js,jsx,json,jsonc,ts,tsx}' 'e2e/**/*.{js,jsx,json,jsonc,ts,tsx}' 'scripts/**/*.ts' 'src-tauri/**/*.json'",
     "lint": "oxlint --deny-warnings --no-error-on-unmatched-pattern src tests e2e scripts rsbuild.config.ts rstest.config.ts rstest.setup.ts panda.config.ts postcss.config.mjs lint-staged.config.mjs",
     "lint:fix": "oxlint --fix --deny-warnings --no-error-on-unmatched-pattern src tests e2e scripts rsbuild.config.ts rstest.config.ts rstest.setup.ts panda.config.ts postcss.config.mjs lint-staged.config.mjs",
     "check": "bun run format:check && bun run lint && bun run check:effect-rules && bun run check:styling-boundaries && bun run typecheck && bun run rust:fmt:check && bun run rust:clippy",
@@ -42,10 +42,10 @@
     "prebuild": "bun run panda:codegen",
     "prebuild:rsdoctor": "bun run panda:codegen",
     "pretypecheck": "bun run panda:codegen",
-    "check:styling-boundaries": "bun scripts/check-styling-boundaries.mjs",
+    "check:styling-boundaries": "bun scripts/check-styling-boundaries.ts",
     "review:panda:tauri": "bun tauri dev --config src-tauri/tauri.panda-review.conf.json",
-    "review:parity": "bun scripts/tauri-parity-review.mjs",
-    "check:effect-rules": "bun scripts/check-no-switch.mjs"
+    "review:parity": "bun scripts/tauri-parity-review.ts",
+    "check:effect-rules": "bun scripts/check-no-switch.ts"
   },
   "dependencies": {
     "@ark-ui/solid": "^5.37.1",
