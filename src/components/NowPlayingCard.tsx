@@ -21,7 +21,6 @@ import * as recipes from '~styles/recipes';
 import type { NowPlayingState } from '../bindings';
 import { commandFailureMessage } from '../effects/commands';
 import {
-  createNowPlayingState,
   fetchMpvTrackList,
   setAudioTrack,
   setSubtitleTrack,
@@ -37,6 +36,7 @@ import {
 import type { NowPlayingEffect } from '../effects/nowPlaying';
 import { queryKeys, runExit } from '../effects/query';
 import * as styles from './NowPlayingCard.styles';
+import { useNowPlaying } from './NowPlayingProvider';
 import { useToast } from './ToastProvider';
 import { Button, JellyPilotSelect, StatusBadge } from './ui';
 
@@ -131,15 +131,15 @@ export default function NowPlayingCard(props: {
   const [busy, setBusy] = createSignal<string | null>(null);
   const [seekDraft, setSeekDraft] = createSignal<number | null>(null);
   const [volumeDraft, setVolumeDraft] = createSignal<number | null>(null);
-  const { query: nowPlayingQuery, state: current } = createNowPlayingState({
-    onExternalChange: (state) => {
-      setSeekDraft(null);
-      setVolumeDraft(null);
-      void queryClient.invalidateQueries({
-        queryKey: queryKeys.mpvTracks(state.player.connected),
-      });
-    },
+  const nowPlaying = useNowPlaying();
+  nowPlaying.onExternalChange((state) => {
+    setSeekDraft(null);
+    setVolumeDraft(null);
+    void queryClient.invalidateQueries({
+      queryKey: queryKeys.mpvTracks(state.player.connected),
+    });
   });
+  const current = nowPlaying.state;
   const player = () => current()?.player;
   const connected = () => player()?.connected ?? false;
   const status = () => current()?.status ?? 'unknown';
@@ -161,7 +161,7 @@ export default function NowPlayingCard(props: {
     setBusy(key);
     const exit = await playerCommandMutation.mutateAsync(command);
     if (Exit.isSuccess(exit)) {
-      await nowPlayingQuery.refetch();
+      await nowPlaying.refresh();
       await tracksQuery.refetch();
     } else {
       showToast('error', commandFailureMessage(exit.cause, failure));

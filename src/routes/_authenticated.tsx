@@ -8,6 +8,7 @@ import {
   AuthenticatedBootstrapProvider,
   useAuthenticatedBootstrap,
 } from '../components/AuthenticatedBootstrap';
+import { NowPlayingProvider } from '../components/NowPlayingProvider';
 import { AUTHENTICATED_HOME_ROUTE, requireAuthenticatedShell } from '../router-guards';
 import * as styles from './_authenticated.styles';
 
@@ -22,7 +23,9 @@ function AuthenticatedShell() {
     <AuthenticatedBootstrapProvider
       onSessionChange={() => void navigate({ to: AUTHENTICATED_HOME_ROUTE, replace: true })}
     >
-      <AuthenticatedShellContent />
+      <NowPlayingProvider>
+        <AuthenticatedShellContent />
+      </NowPlayingProvider>
     </AuthenticatedBootstrapProvider>
   );
 }

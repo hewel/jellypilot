@@ -2126,6 +2126,61 @@ test('now playing drawer exposes full playback controls', async () => {
   cleanup();
 });
 
+test('now playing trigger and controls share one change listener across drawer reopen', async () => {
+  mockShellCommands();
+  const unlisten = rstest.fn();
+  const listen = rstest.spyOn(events.nowPlayingChanged, 'listen').mockResolvedValue(unlisten);
+  const cleanup = renderShell();
+
+  const trigger = await screen.findByRole('button', { name: /Now Playing: Playing — The Pilot/ });
+  expect(listen).toHaveBeenCalledTimes(1);
+
+  fireEvent.click(trigger);
+  await screen.findByRole('dialog', { name: 'Now Playing' });
+  expect(listen).toHaveBeenCalledTimes(1);
+
+  fireEvent.click(screen.getByRole('button', { name: 'Close Now Playing' }));
+  await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Now Playing' })).toBeNull());
+
+  fireEvent.click(await screen.findByRole('button', { name: /Now Playing: Playing — The Pilot/ }));
+  await screen.findByRole('dialog', { name: 'Now Playing' });
+
+  expect(listen).toHaveBeenCalledTimes(1);
+  expect(unlisten).not.toHaveBeenCalled();
+
+  cleanup();
+});
+
+test('now playing trigger and controls update from the same pushed state', async () => {
+  mockShellCommands();
+  let pushState: ((state: NowPlayingState) => void) | null = null;
+  rstest.spyOn(events.nowPlayingChanged, 'listen').mockImplementation((handler) => {
+    pushState = (state) => handler({ event: 'now-playing-changed', id: 0, payload: { state } });
+    return Promise.resolve(() => {});
+  });
+  const cleanup = renderShell();
+
+  const trigger = await screen.findByRole('button', { name: /Now Playing: Playing — The Pilot/ });
+  fireEvent.click(trigger);
+  await screen.findByRole('dialog', { name: 'Now Playing' });
+
+  const pausedState: NowPlayingState = {
+    ...nowPlaying,
+    player: { ...nowPlaying.player, paused: true },
+    status: 'paused',
+  };
+  pushState?.(pausedState);
+
+  await waitFor(() =>
+    expect(screen.getByRole('button', { name: 'Now Playing: Paused — The Pilot' })).toBeVisible(),
+  );
+  const dialog = screen.getByRole('dialog', { name: 'Now Playing' });
+  expect(within(dialog).getByText('Paused')).toBeVisible();
+  expect(within(dialog).getByRole('button', { name: 'Play' })).toBeVisible();
+
+  cleanup();
+});
+
 test('Settings modal opens operations console content and closes via Close button and Escape', async () => {
   mockShellCommands();
   localStorage.setItem(
