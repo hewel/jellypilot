@@ -20,7 +20,9 @@ export const VIEWPORTS = Object.freeze({
   supported1600: Object.freeze({ height: 900, label: '1600x900', width: 1600 }),
 });
 
-const VIEWPORT_ORDER = [
+type Viewport = (typeof VIEWPORTS)[keyof typeof VIEWPORTS];
+
+const VIEWPORT_ORDER: readonly Viewport[] = [
   VIEWPORTS.stress360,
   VIEWPORTS.stress640,
   VIEWPORTS.stress800,
@@ -37,6 +39,8 @@ export const SCREENS = Object.freeze({
   'series-detail': Object.freeze({ label: 'Series detail', stress: false }),
 });
 
+type ScreenId = keyof typeof SCREENS;
+
 export const EVIDENCE_CHECKS = Object.freeze({
   focus: 'Keyboard focus',
   states: 'Disabled, selected, and error states',
@@ -47,14 +51,44 @@ export const EVIDENCE_CHECKS = Object.freeze({
   'data-states': 'Connected/disconnected and loaded/empty/error states',
 });
 
-function requiredViewports(screen) {
+type CheckId = keyof typeof EVIDENCE_CHECKS;
+
+export interface MatrixEntry {
+  id: string;
+  screen: ScreenId;
+  screenLabel: string;
+  viewport: string;
+  width: number;
+  height: number;
+}
+
+type Verdict = 'pass' | 'fail' | 'pending';
+
+interface EntryResult {
+  checks: string[];
+  evidence: string | null;
+  notes: string;
+  reviewedAt: string | null;
+  states: string[];
+  verdict: Verdict;
+}
+
+export interface ReviewState {
+  version: number;
+  issue: number;
+  pr: number;
+  updatedAt: string | null;
+  entries: Record<string, EntryResult>;
+}
+
+function requiredViewports(screen: ScreenId): readonly Viewport[] {
   const supported = [VIEWPORTS.supported1280, VIEWPORTS.supported1600];
   if (!SCREENS[screen]?.stress) return supported;
   return [...VIEWPORT_ORDER.slice(0, 3), ...supported];
 }
 
-export function matrixEntries() {
-  return Object.keys(SCREENS).flatMap((screen) =>
+export function matrixEntries(): MatrixEntry[] {
+  return (Object.keys(SCREENS) as ScreenId[]).flatMap((screen) =>
     requiredViewports(screen).map((viewport) => ({
       id: `${screen}@${viewport.label}`,
       screen,
@@ -66,7 +100,7 @@ export function matrixEntries() {
   );
 }
 
-export function createInitialState() {
+export function createInitialState(): ReviewState {
   return {
     version: 1,
     issue: 141,
@@ -88,7 +122,7 @@ export function createInitialState() {
   };
 }
 
-export function parseViewport(value) {
+export function parseViewport(value: string): Viewport {
   const viewport = VIEWPORT_ORDER.find((candidate) => candidate.label === value);
   if (!viewport) {
     throw new Error(
@@ -98,8 +132,8 @@ export function parseViewport(value) {
   return viewport;
 }
 
-export function getMatrixEntry(screen, viewport) {
-  if (!SCREENS[screen]) {
+export function getMatrixEntry(screen: string, viewport: string): MatrixEntry {
+  if (!SCREENS[screen as ScreenId]) {
     throw new Error(`Unknown screen '${screen}'. Use ${Object.keys(SCREENS).join(', ')}.`);
   }
   parseViewport(viewport);
@@ -107,12 +141,14 @@ export function getMatrixEntry(screen, viewport) {
     (candidate) => candidate.screen === screen && candidate.viewport === viewport,
   );
   if (!entry) {
-    throw new Error(`${SCREENS[screen].label} does not require review at ${viewport} under #141.`);
+    throw new Error(
+      `${SCREENS[screen as ScreenId].label} does not require review at ${viewport} under #141.`,
+    );
   }
   return entry;
 }
 
-function normalizeList(value) {
+function normalizeList(value: string | undefined): string[] {
   if (!value) return [];
   return [
     ...new Set(
@@ -124,7 +160,20 @@ function normalizeList(value) {
   ];
 }
 
-export function recordResult(state, screen, viewport, options) {
+interface RecordOptions {
+  verdict: string;
+  checks?: string;
+  states?: string;
+  evidence?: string;
+  notes?: string;
+}
+
+export function recordResult(
+  state: ReviewState,
+  screen: string,
+  viewport: string,
+  options: RecordOptions,
+): ReviewState {
   const matrixEntry = getMatrixEntry(screen, viewport);
   const verdict = options.verdict;
   if (!['pass', 'fail', 'pending'].includes(verdict)) {
@@ -137,7 +186,7 @@ export function recordResult(state, screen, viewport, options) {
   const evidence = options.evidence ?? current.evidence;
 
   for (const check of checks) {
-    if (!EVIDENCE_CHECKS[check]) {
+    if (!EVIDENCE_CHECKS[check as CheckId]) {
       throw new Error(`Unknown check '${check}'. Use ${Object.keys(EVIDENCE_CHECKS).join(', ')}.`);
     }
   }
@@ -160,13 +209,18 @@ export function recordResult(state, screen, viewport, options) {
         notes: options.notes ?? current.notes,
         reviewedAt: verdict === 'pending' ? null : new Date().toISOString(),
         states,
-        verdict,
+        verdict: verdict as Verdict,
       },
     },
   };
 }
 
-export function progressSummary(state) {
+export function progressSummary(state: ReviewState): {
+  failed: number;
+  passed: number;
+  pending: number;
+  total: number;
+} {
   const values = matrixEntries().map((entry) => state.entries[entry.id]);
   return {
     failed: values.filter((entry) => entry?.verdict === 'fail').length,
@@ -176,23 +230,23 @@ export function progressSummary(state) {
   };
 }
 
-export function nextPendingEntry(state) {
+export function nextPendingEntry(state: ReviewState): MatrixEntry | null {
   return matrixEntries().find((entry) => state.entries[entry.id]?.verdict !== 'pass') ?? null;
 }
 
-function markdownEscape(value) {
+function markdownEscape(value: string | undefined | null): string {
   return String(value ?? '')
     .replaceAll('|', String.raw`\|`)
     .replaceAll('\n', '<br>');
 }
 
-function evidenceLink(evidence) {
+function evidenceLink(evidence: string | null | undefined): string {
   if (!evidence) return '—';
   if (/^https?:\/\//.test(evidence)) return `[link](${evidence})`;
   return `\`${evidence}\``;
 }
 
-export function renderMarkdownReport(state) {
+export function renderMarkdownReport(state: ReviewState): string {
   const summary = progressSummary(state);
   const lines = [
     '## Tauri/WebKit parity matrix — issue #141',
@@ -225,21 +279,25 @@ export function renderMarkdownReport(state) {
   return lines.join('\n');
 }
 
-function readState(artifactDir) {
+function readState(artifactDir: string): ReviewState {
   const statePath = resolve(artifactDir, 'state.json');
   if (!existsSync(statePath)) return createInitialState();
-  const parsed = JSON.parse(readFileSync(statePath, 'utf8'));
+  const parsed = JSON.parse(readFileSync(statePath, 'utf8')) as Partial<ReviewState>;
   if (parsed.version !== 1) throw new Error(`Unsupported state version ${parsed.version}.`);
   const initial = createInitialState();
   return { ...initial, ...parsed, entries: { ...initial.entries, ...parsed.entries } };
 }
 
-function writeState(artifactDir, state) {
+function writeState(artifactDir: string, state: ReviewState): void {
   mkdirSync(artifactDir, { recursive: true });
   writeFileSync(resolve(artifactDir, 'state.json'), `${JSON.stringify(state, null, 2)}\n`);
 }
 
-function run(command, args, options = {}) {
+interface RunOptions {
+  capture?: boolean;
+}
+
+function run(command: string, args: string[], options: RunOptions = {}): string {
   const result = spawnSync(command, args, {
     encoding: 'utf8',
     stdio: options.capture ? 'pipe' : 'inherit',
@@ -252,9 +310,17 @@ function run(command, args, options = {}) {
   return result.stdout ?? '';
 }
 
-function reviewWindow() {
+interface NiriWindow {
+  id: number;
+  title: string;
+  app_id: string;
+  is_floating: boolean;
+  layout?: { window_size?: [number, number] };
+}
+
+function reviewWindow(): NiriWindow {
   const output = run('niri', ['msg', '--json', 'windows'], { capture: true });
-  const windows = JSON.parse(output);
+  const windows = JSON.parse(output) as NiriWindow[];
   const matches = windows.filter(
     (window) => window.title === REVIEW_WINDOW_TITLE || window.app_id === 'jellypilot',
   );
@@ -266,7 +332,7 @@ function reviewWindow() {
   return matches.find((window) => window.title === REVIEW_WINDOW_TITLE) ?? matches[0];
 }
 
-function waitForWindowSize(entry) {
+function waitForWindowSize(entry: MatrixEntry): NiriWindow {
   const waitBuffer = new Int32Array(new SharedArrayBuffer(4));
   let resized = reviewWindow();
   for (let attempt = 0; attempt < 20; attempt += 1) {
@@ -281,7 +347,7 @@ function waitForWindowSize(entry) {
   );
 }
 
-function resizeWindow(entry) {
+function resizeWindow(entry: MatrixEntry): number {
   const window = reviewWindow();
   if (!window.is_floating) {
     run('niri', ['msg', 'action', 'toggle-window-floating', '--id', String(window.id)]);
@@ -318,18 +384,18 @@ function resizeWindow(entry) {
   return window.id;
 }
 
-function timestamp() {
+function timestamp(): string {
   return new Date().toISOString().replaceAll(':', '-').replaceAll('.', '-');
 }
 
-function sanitize(value) {
+function sanitize(value: string): string {
   return value
     .toLowerCase()
     .replaceAll(/[^a-z0-9]+/g, '-')
     .replaceAll(/^-|-$/g, '');
 }
 
-function captureWindow(artifactDir, entry, stateLabel) {
+function captureWindow(artifactDir: string, entry: MatrixEntry, stateLabel: string): string {
   const windowId = resizeWindow(entry);
   // Niri can report the requested size before WebKit has painted the new viewport.
   // Give the webview one frame budget plus headroom.
@@ -347,9 +413,14 @@ function captureWindow(artifactDir, entry, stateLabel) {
   return relative(process.cwd(), absolute).replaceAll('\\', '/');
 }
 
-function parseArguments(args) {
-  const positional = [];
-  const flags = {};
+interface ParsedArguments {
+  flags: Record<string, string | boolean>;
+  positional: string[];
+}
+
+function parseArguments(args: string[]): ParsedArguments {
+  const positional: string[] = [];
+  const flags: Record<string, string | boolean> = {};
   for (let index = 0; index < args.length; index += 1) {
     const value = args[index];
     if (!value.startsWith('--')) {
@@ -367,7 +438,7 @@ function parseArguments(args) {
   return { flags, positional };
 }
 
-function statusTable(state) {
+function statusTable(state: ReviewState): string {
   const summary = progressSummary(state);
   const rows = matrixEntries().map((entry) => {
     const verdict = state.entries[entry.id]?.verdict ?? 'pending';
@@ -380,7 +451,7 @@ function statusTable(state) {
   ].join('\n');
 }
 
-function help() {
+function help(): string {
   return `Tauri/WebKit parity review assistant (#141)
 
 Usage:
@@ -402,7 +473,7 @@ Checks: ${Object.keys(EVIDENCE_CHECKS).join(', ')}
 Artifacts default to ${DEFAULT_ARTIFACT_DIR}; override with --artifact-dir <path>.`;
 }
 
-async function main(argv) {
+async function main(argv: string[]): Promise<void> {
   const { flags, positional } = parseArguments(argv);
   const command = positional[0] ?? 'help';
   const artifactDir = resolve(String(flags['artifact-dir'] ?? DEFAULT_ARTIFACT_DIR));

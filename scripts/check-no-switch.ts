@@ -8,14 +8,8 @@ import { join, relative } from 'node:path';
 
 const root = process.cwd();
 
-/**
- * @param {string} source
- * @param {string} relativePath
- * @returns {string[]}
- */
-export function findValueSwitches(source, relativePath) {
-  /** @type {string[]} */
-  const hits = [];
+export function findValueSwitches(source: string, relativePath: string): string[] {
+  const hits: string[] = [];
   const lines = source.split('\n');
   for (let index = 0; index < lines.length; index += 1) {
     const line = lines[index];
@@ -26,13 +20,8 @@ export function findValueSwitches(source, relativePath) {
   return hits;
 }
 
-/**
- * @param {string} dir
- * @returns {string[]}
- */
-function walk(dir) {
-  /** @type {string[]} */
-  const files = [];
+function walk(dir: string): string[] {
+  const files: string[] = [];
   for (const entry of readdirSync(dir, { withFileTypes: true })) {
     const full = join(dir, entry.name);
     if (entry.isDirectory()) files.push(...walk(full));
@@ -41,11 +30,7 @@ function walk(dir) {
   return files;
 }
 
-/**
- * @param {string} file
- * @param {string} base
- */
-function relTo(file, base) {
+function relTo(file: string, base: string): string {
   return relative(base, file).replaceAll('\\', '/');
 }
 
@@ -55,8 +40,7 @@ if (import.meta.main) {
   const scanStat = statSync(scanRoot);
   const files = scanStat.isDirectory() ? walk(scanRoot) : [scanRoot];
 
-  /** @type {string[]} */
-  const offenders = [];
+  const offenders: string[] = [];
   for (const file of files) {
     const relativePath = relTo(file, scanRoot);
     if (relativePath === 'bindings.ts') {

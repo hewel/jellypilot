@@ -4,7 +4,7 @@ export default {
     'oxlint --fix --deny-warnings --no-error-on-unmatched-pattern',
   ],
   '.ox{fmt,lint}rc.json': 'oxfmt --write --no-error-on-unmatched-pattern',
-  'scripts/**/*.mjs': [
+  'scripts/**/*.ts': [
     'oxfmt --write --no-error-on-unmatched-pattern',
     'oxlint --fix --deny-warnings --no-error-on-unmatched-pattern',
   ],

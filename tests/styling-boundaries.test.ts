@@ -1,6 +1,6 @@
 import { expect, test } from '@rstest/core';
 
-import { collectMotionInvariantErrors } from '../scripts/check-styling-boundaries.mjs';
+import { collectMotionInvariantErrors } from '../scripts/check-styling-boundaries.ts';
 
 test('layout property in transitionProperty is flagged', () => {
   const source = `

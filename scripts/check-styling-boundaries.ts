@@ -18,12 +18,10 @@ const RAW_PALETTE =
 const VE_IMPORT = /from\s+['"]@vanilla-extract\/[^'"]+['"]/;
 const PRIVATE_STYLE_IMPORT = /from\s+['"]((?:\.\.?\/)+[^'"]+\.styles(?:\.ts)?)['"]/g;
 
-/** @type {string[]} */
-const errors = [];
+const errors: string[] = [];
 
-function walk(dir) {
-  /** @type {string[]} */
-  const files = [];
+function walk(dir: string): string[] {
+  const files: string[] = [];
   for (const entry of readdirSync(dir, { withFileTypes: true })) {
     const full = join(dir, entry.name);
     if (entry.isDirectory()) files.push(...walk(full));
@@ -32,15 +30,15 @@ function walk(dir) {
   return files;
 }
 
-function rel(file) {
+function rel(file: string): string {
   return relative(root, file).replaceAll('\\', '/');
 }
 
-function isThemeDefinition(fileRel) {
+function isThemeDefinition(fileRel: string): boolean {
   return themeFiles.has(fileRel) || fileRel.endsWith('/theme-tokens.ts');
 }
 
-function checkRawPalette(fileRel, source) {
+function checkRawPalette(fileRel: string, source: string): void {
   if (isThemeDefinition(fileRel)) return;
   const matches = source.match(RAW_PALETTE);
   if (!matches) return;
@@ -49,7 +47,7 @@ function checkRawPalette(fileRel, source) {
   }
 }
 
-function checkEngineImports(fileRel, source) {
+function checkEngineImports(fileRel: string, source: string): void {
   if (VE_IMPORT.test(source)) {
     errors.push(`${fileRel}: vanilla-extract imports are forbidden; use @styled-system`);
   }
@@ -58,7 +56,7 @@ function checkEngineImports(fileRel, source) {
   }
 }
 
-function checkPrivateStyleImports(fileRel, source) {
+function checkPrivateStyleImports(fileRel: string, source: string): void {
   if (!fileRel.startsWith('src/')) return;
   const fileBase =
     fileRel
@@ -98,7 +96,7 @@ function checkPrivateStyleImports(fileRel, source) {
   }
 }
 
-function existsAsFile(path) {
+function existsAsFile(path: string): boolean {
   try {
     return statSync(path).isFile();
   } catch {
@@ -138,7 +136,7 @@ const BREAKPOINT_KEYS = new Set(['sm', 'md', 'lg', 'xl', '2xl']);
 const PSEUDO_KEYS = new Set(['_hover', '_active', '_focus', '_focusVisible', '_focusWithin']);
 const MOTION_BLOCK_RE = /export const (\w+) = (?:css|cva)\(\{/g;
 
-function skipString(source, start) {
+function skipString(source: string, start: number): number {
   const quote = source[start];
   let i = start + 1;
   const n = source.length;
@@ -159,7 +157,7 @@ function skipString(source, start) {
   return n;
 }
 
-function matchBrace(source, openIdx) {
+function matchBrace(source: string, openIdx: number): number {
   let depth = 0;
   let i = openIdx;
   const n = source.length;
@@ -189,7 +187,7 @@ function matchBrace(source, openIdx) {
   return -1;
 }
 
-function skipValue(body, start) {
+function skipValue(body: string, start: number): number {
   let i = start;
   const n = body.length;
   let paren = 0;
@@ -229,7 +227,13 @@ function skipValue(body, start) {
   return i;
 }
 
-function scanObject(body, path, acc) {
+interface StyleProperty {
+  key: string;
+  path: string[];
+  value: string;
+}
+
+function scanObject(body: string, path: string[], acc: StyleProperty[]): void {
   let i = 0;
   const n = body.length;
   while (i < n) {
@@ -248,7 +252,7 @@ function scanObject(body, path, acc) {
       i = end === -1 ? n : end + 2;
       continue;
     }
-    let key;
+    let key: string;
     if (c === "'" || c === '"' || c === '`') {
       const end = skipString(body, i);
       key = body.slice(i + 1, end - 1);
@@ -285,7 +289,7 @@ function scanObject(body, path, acc) {
   }
 }
 
-function isConditionalKey(key) {
+function isConditionalKey(key: string): boolean {
   if (key.startsWith('_')) return true;
   if (key === 'variants' || key === 'compoundVariants') return true;
   if (BREAKPOINT_KEYS.has(key)) return true;
@@ -294,7 +298,7 @@ function isConditionalKey(key) {
   return false;
 }
 
-function isInteractivePath(path) {
+function isInteractivePath(path: string[]): boolean {
   return path.some(
     (key) =>
       PSEUDO_KEYS.has(key) ||
@@ -304,13 +308,13 @@ function isInteractivePath(path) {
   );
 }
 
-function dataStateValue(key) {
+function dataStateValue(key: string): string | null {
   const match = key.match(/data-state=(?:"([^"]*)"|'([^']*)'|([^\]"'\s,]+))/);
   if (!match) return null;
   return match[1] ?? match[2] ?? match[3] ?? null;
 }
 
-function parseTransitionItems(value) {
+function parseTransitionItems(value: string): string[] {
   return value
     .replaceAll(/[[\]'"]/g, '')
     .split(',')
@@ -318,15 +322,14 @@ function parseTransitionItems(value) {
     .filter(Boolean);
 }
 
-export function collectMotionInvariantErrors(fileRel, source) {
-  const result = [];
+export function collectMotionInvariantErrors(fileRel: string, source: string): string[] {
+  const result: string[] = [];
   for (const match of source.matchAll(MOTION_BLOCK_RE)) {
     const name = match[1];
     const openIdx = match.index + match[0].length - 1;
     const closeIdx = matchBrace(source, openIdx);
     if (closeIdx === -1) continue;
-    /** @type {Array<{ key: string, path: string[], value: string }>} */
-    const acc = [];
+    const acc: StyleProperty[] = [];
     scanObject(source.slice(openIdx + 1, closeIdx), [], acc);
 
     const transforms = acc.filter((entry) => entry.key === 'transform');
@@ -355,7 +358,7 @@ export function collectMotionInvariantErrors(fileRel, source) {
       continue;
     }
 
-    const dataStateValues = new Set();
+    const dataStateValues = new Set<string>();
     for (const entry of transforms) {
       for (const key of entry.path) {
         const value = dataStateValue(key);
@@ -369,7 +372,7 @@ export function collectMotionInvariantErrors(fileRel, source) {
   return result;
 }
 
-function main() {
+function main(): void {
   const files = [...walk(srcRoot), join(root, 'panda.config.ts')].filter((f) => existsAsFile(f));
 
   for (const file of files) {

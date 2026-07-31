@@ -6,7 +6,18 @@ import { join } from 'node:path';
 const EMBY_SDK_TAG = '4.9.3.0';
 const GLOBAL_PROPERTY = 'apiTests=false,modelTests=false,apiDocs=false,modelDocs=false';
 
-const providers = {
+interface Provider {
+  specUrl: string;
+  snapshotPath: string;
+  configPath: string;
+  outputDir: string;
+  userAgent: string;
+  fetchError: string;
+  afterGenerate?: () => Promise<void>;
+  createGeneratorSpec?: () => Promise<string>;
+}
+
+const providers: Record<'jellyfin' | 'emby', Provider> = {
   jellyfin: {
     specUrl: 'https://api.jellyfin.org/openapi/jellyfin-openapi-stable.json',
     snapshotPath: 'src-tauri/openapi/jellyfin-openapi-stable.json',
@@ -29,9 +40,9 @@ const providers = {
 
 const providerName = process.argv[2];
 const command = process.argv[3];
-const provider = providers[providerName];
+const provider = providers[providerName as 'jellyfin' | 'emby'];
 
-async function updateSnapshot() {
+async function updateSnapshot(): Promise<void> {
   const response = await fetch(provider.specUrl, {
     headers: { 'User-Agent': provider.userAgent },
   });
@@ -43,20 +54,29 @@ async function updateSnapshot() {
   await writeFile(provider.snapshotPath, await response.text());
 }
 
-async function createPatchedEmbyGeneratorSpec() {
+interface OpenApiParameter {
+  name?: string;
+  in?: string;
+}
+
+async function createPatchedEmbyGeneratorSpec(): Promise<string> {
   const patchedSpecPath = join(tmpdir(), 'jellypilot-emby-openapi-4.9.3.0-generator.json');
   const spec = JSON.parse(await readFile(provider.snapshotPath, 'utf8'));
   const imagePath = spec.paths?.['/Users/{Id}/Images/{Type}/{Index}'];
-  const indexParameter = imagePath?.delete?.parameters?.find(
-    (parameter) => parameter?.name === 'Index' && parameter?.in === 'path',
+  const indexParameter: OpenApiParameter | undefined = imagePath?.delete?.parameters?.find(
+    (parameter: OpenApiParameter) => parameter?.name === 'Index' && parameter?.in === 'path',
   );
-  const postParameters = imagePath?.post?.parameters;
+  const postParameters: OpenApiParameter[] | undefined = imagePath?.post?.parameters;
 
   if (!indexParameter || !Array.isArray(postParameters)) {
     throw new Error('Emby OpenAPI image path patch target was not found');
   }
 
-  if (postParameters.some((parameter) => parameter?.name === 'Index' && parameter?.in === 'path')) {
+  if (
+    postParameters.some(
+      (parameter: OpenApiParameter) => parameter?.name === 'Index' && parameter?.in === 'path',
+    )
+  ) {
     throw new Error('Emby OpenAPI image path patch already applied upstream');
   }
 
@@ -65,7 +85,7 @@ async function createPatchedEmbyGeneratorSpec() {
   return patchedSpecPath;
 }
 
-async function patchJellyfinGeneratedClient() {
+async function patchJellyfinGeneratedClient(): Promise<void> {
   const path = `${provider.outputDir}/src/models/transcoding_info.rs`;
   const source = await readFile(path, 'utf8');
   const patched = source.replace(
@@ -96,14 +116,14 @@ impl Default for TranscodeReasons {
   await writeFile(path, patched);
 }
 
-async function runGenerator() {
+async function runGenerator(): Promise<void> {
   await rm(provider.outputDir, { force: true, recursive: true });
   const generatorSpecPath = provider.createGeneratorSpec
     ? await provider.createGeneratorSpec()
     : provider.snapshotPath;
 
   try {
-    await new Promise((resolve, reject) => {
+    await new Promise<void>((resolve, reject) => {
       const child = spawn(
         'openapi-generator-cli',
         [
@@ -141,8 +161,8 @@ async function runGenerator() {
   await provider.afterGenerate?.();
 }
 
-function printUsage() {
-  console.error('Usage: bun scripts/media-server-api.mjs <jellyfin|emby> <generate|update>');
+function printUsage(): void {
+  console.error('Usage: bun scripts/media-server-api.ts <jellyfin|emby> <generate|update>');
 }
 
 if (!provider || (command !== 'generate' && command !== 'update')) {
