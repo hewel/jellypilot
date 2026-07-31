@@ -23,8 +23,9 @@ import type {
 } from '../src/bindings';
 import { itemThumb } from '../src/components/AppSidebar.styles';
 import { ToastProvider } from '../src/components/ToastProvider';
-import { queryKeys } from '../src/effects/query';
+import { librarySessionKey, queryKeys } from '../src/effects/query';
 import { createJellyPilotRouter } from '../src/router';
+import * as libraryStyles from '../src/routes/_authenticated/library.styles';
 import * as browseRouteStyles from '../src/routes/_authenticated/library/browseRoute.styles';
 import { resetSharedLibraryFilters } from '../src/utils/createSharedLibraryFilters';
 import { imageSource, resetImageProxyBase } from '../src/utils/imageSource';
@@ -1205,6 +1206,8 @@ test('library browse redirects home when active server changes under stale libra
   expect(screen.getByRole('link', { name: 'Home' })).toHaveAttribute('aria-current', 'page');
   await new Promise((resolve) => setTimeout(resolve, 0));
   expect(browseCommand).not.toHaveBeenCalled();
+  const previousSessionKey = librarySessionKey(connectedState);
+  expect(queryClient.getQueryData(queryKeys.libraryHome(previousSessionKey))).toBeUndefined();
 
   cleanup();
 });
@@ -2014,6 +2017,36 @@ test('library landing has no retry and skips video home when disconnected', asyn
   await screen.findByRole('navigation', { name: 'Sidebar' });
   expect(screen.queryByRole('button', { name: 'Retry Library' })).toBeNull();
   expect(videoHomeCommand).not.toHaveBeenCalled();
+
+  cleanup();
+});
+
+test('authenticated shell fetches connection identity once for all shell consumers', async () => {
+  mockShellCommands(disconnectedState);
+  const connectionStateCommand = rstest.spyOn(commands, 'serverGetState');
+  const cleanup = renderShell();
+
+  await screen.findByRole('navigation', { name: 'Sidebar' });
+  const settled = Promise.withResolvers<void>();
+  setTimeout(settled.resolve, 0);
+  await settled.promise;
+
+  expect(connectionStateCommand).toHaveBeenCalledTimes(1);
+
+  cleanup();
+});
+
+test('library landing stays empty without skeleton rows when disconnected', async () => {
+  mockShellCommands(disconnectedState);
+  const cleanup = renderShell();
+
+  await screen.findByRole('navigation', { name: 'Sidebar' });
+  const settled = Promise.withResolvers<void>();
+  setTimeout(settled.resolve, 0);
+  await settled.promise;
+
+  expect(screen.queryByRole('heading', { name: 'Continue Watching' })).toBeNull();
+  expect(document.querySelector(`.${libraryStyles.skeletonRow}`)).toBeNull();
 
   cleanup();
 });

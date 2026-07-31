@@ -4,6 +4,7 @@ import type {
   VideoSeason,
   VideoUserDataUpdateRequest,
 } from '@bindings';
+import { useAuthenticatedBootstrap } from '@components/AuthenticatedBootstrap';
 import {
   DetailHero,
   type DetailHeroInfoRow,
@@ -28,7 +29,6 @@ import { Exit, Option } from 'effect';
 import { Play, RefreshCw, Tv } from 'lucide-solid';
 import { For, Show, Suspense, createMemo, createSignal } from 'solid-js';
 import { commandFailureMessage } from '~effects/commands';
-import { fetchConnectionState } from '~effects/connection';
 import {
   fetchSeasonEpisodes,
   fetchVideoItemDetail,
@@ -38,12 +38,7 @@ import {
   updateLibraryUserData,
 } from '~effects/library';
 import type { LibraryExit, SeasonEpisodesState } from '~effects/library';
-import {
-  isLibrarySessionKeyConnected,
-  librarySessionKeyFromConnectionExit,
-  queryKeys,
-  runExit,
-} from '~effects/query';
+import { isLibrarySessionKeyConnected, queryKeys, runExit } from '~effects/query';
 
 import { AUTHENTICATED_HOME_ROUTE } from '../../../../router-guards';
 import * as styles from '../detailRoute.styles';
@@ -59,12 +54,8 @@ function LibraryShowDetailRoute() {
   const navigate = useNavigate();
   const canGoBack = useCanGoBack();
   const queryClient = useQueryClient();
-  const connectionQuery = createQuery(() => ({
-    queryKey: queryKeys.connectionState,
-    queryFn: () => runExit(fetchConnectionState),
-    staleTime: Infinity,
-  }));
-  const sessionKey = createMemo(() => librarySessionKeyFromConnectionExit(connectionQuery.data));
+  const bootstrap = useAuthenticatedBootstrap();
+  const sessionKey = bootstrap.sessionKey;
   const showQuery = createQuery(() => ({
     queryKey: queryKeys.libraryShowDetail(sessionKey(), params().seriesId),
     enabled: isLibrarySessionKeyConnected(sessionKey()),

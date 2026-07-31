@@ -6,6 +6,7 @@ import { render } from 'solid-js/web';
 
 import { commands } from '../src/bindings';
 import type { VideoItemDetail, VideoShowDetail } from '../src/bindings';
+import { AuthenticatedBootstrapProvider } from '../src/components/AuthenticatedBootstrap';
 import { MediaInfoContent, MediaInfoHoverCard } from '../src/components/library/MediaInfoHoverCard';
 import { fetchMediaDetail } from '../src/effects/library';
 import type { MediaDetail } from '../src/effects/library';
@@ -89,6 +90,7 @@ function mediaValue<A, E>(exit: Exit.Exit<A, E>): A | null {
 
 beforeEach(() => {
   rstest.spyOn(commands, 'serverGetState').mockResolvedValue(connectedState);
+  rstest.spyOn(commands, 'appLocalServices').mockResolvedValue({ imageProxyBase: null });
 });
 
 afterEach(() => {
@@ -191,9 +193,11 @@ test('MediaInfoHoverCard renders trigger children and does not fetch before open
   const dispose = render(
     () => (
       <TestQueryProvider>
-        <MediaInfoHoverCard id="movie-1" itemType="Movie">
-          <a href="/library/items/movie-1">Test Movie card</a>
-        </MediaInfoHoverCard>
+        <AuthenticatedBootstrapProvider>
+          <MediaInfoHoverCard id="movie-1" itemType="Movie">
+            <a href="/library/items/movie-1">Test Movie card</a>
+          </MediaInfoHoverCard>
+        </AuthenticatedBootstrapProvider>
       </TestQueryProvider>
     ),
     root,

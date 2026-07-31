@@ -4,18 +4,13 @@ import { Link, useLocation, useParams } from '@tanstack/solid-router';
 import { Exit } from 'effect';
 import { Film, House, PanelLeftClose, PanelLeftOpen, Tv } from 'lucide-solid';
 import { For, Show, createMemo, type JSX } from 'solid-js';
-import { fetchConnectionState } from '~effects/connection';
 import { fetchLibraryShortcuts, fetchVideoItemShortcut } from '~effects/library';
-import {
-  isLibrarySessionKeyConnected,
-  librarySessionKeyFromConnectionExit,
-  queryKeys,
-  runExit,
-} from '~effects/query';
+import { isLibrarySessionKeyConnected, queryKeys, runExit } from '~effects/query';
 import { createSidebarPreferences } from '~utils/sidebarPreferences';
 import { createSidebarWipe, startSidebarWipe } from '~utils/sidebarWipe';
 
 import * as styles from './AppSidebar.styles';
+import { useAuthenticatedBootstrap } from './AuthenticatedBootstrap';
 import { LibraryImage } from './library/LibraryImage';
 import NowPlayingDrawer from './NowPlayingDrawer';
 import SettingsModal from './SettingsModal';
@@ -37,12 +32,8 @@ interface SidebarShortcutItem {
 export default function AppSidebar(props: AppSidebarProps) {
   const { collapsed, setCollapsed } = createSidebarPreferences();
   const { wipe } = createSidebarWipe();
-  const connectionQuery = createQuery(() => ({
-    queryKey: queryKeys.connectionState,
-    queryFn: () => runExit(fetchConnectionState),
-    staleTime: Infinity,
-  }));
-  const sessionKey = createMemo(() => librarySessionKeyFromConnectionExit(connectionQuery.data));
+  const bootstrap = useAuthenticatedBootstrap();
+  const sessionKey = bootstrap.sessionKey;
   const shortcutsQuery = createQuery(() => ({
     queryKey: queryKeys.libraryShortcuts(sessionKey()),
     enabled: isLibrarySessionKeyConnected(sessionKey()),

@@ -1,16 +1,14 @@
-import { createQuery } from '@tanstack/solid-query';
-import { Outlet, createFileRoute } from '@tanstack/solid-router';
-import { Effect, Exit } from 'effect';
-import { Show, onMount } from 'solid-js';
-import { setImageProxyBase } from '~utils/imageSource';
+import { Outlet, createFileRoute, useNavigate } from '@tanstack/solid-router';
+import { Show } from 'solid-js';
 import { createSidebarPreferences } from '~utils/sidebarPreferences';
 import { createSidebarWipe } from '~utils/sidebarWipe';
 
 import AppSidebar from '../components/AppSidebar';
-import { fetchConnectionState } from '../effects/connection';
-import { fetchAppLocalServices } from '../effects/localServices';
-import { queryKeys, runExit } from '../effects/query';
-import { requireAuthenticatedShell } from '../router-guards';
+import {
+  AuthenticatedBootstrapProvider,
+  useAuthenticatedBootstrap,
+} from '../components/AuthenticatedBootstrap';
+import { AUTHENTICATED_HOME_ROUTE, requireAuthenticatedShell } from '../router-guards';
 import * as styles from './_authenticated.styles';
 
 export const Route = createFileRoute('/_authenticated')({
@@ -19,23 +17,18 @@ export const Route = createFileRoute('/_authenticated')({
 });
 
 function AuthenticatedShell() {
-  onMount(() => {
-    void Effect.runPromiseExit(fetchAppLocalServices).then((exit) =>
-      Exit.match(exit, {
-        onFailure: () => setImageProxyBase(null),
-        onSuccess: (services) => setImageProxyBase(services?.imageProxyBase ?? null),
-      }),
-    );
-  });
+  const navigate = useNavigate();
+  return (
+    <AuthenticatedBootstrapProvider
+      onSessionChange={() => void navigate({ to: AUTHENTICATED_HOME_ROUTE, replace: true })}
+    >
+      <AuthenticatedShellContent />
+    </AuthenticatedBootstrapProvider>
+  );
+}
 
-  const connectionQuery = createQuery(() => ({
-    queryKey: queryKeys.connectionState,
-    queryFn: () => runExit(fetchConnectionState),
-  }));
-  const jellyfinConnected = () =>
-    connectionQuery.data && Exit.isSuccess(connectionQuery.data)
-      ? connectionQuery.data.value.connected
-      : false;
+function AuthenticatedShellContent() {
+  const bootstrap = useAuthenticatedBootstrap();
   const { collapsed } = createSidebarPreferences();
   const { wipe } = createSidebarWipe();
 
@@ -46,7 +39,7 @@ function AuthenticatedShell() {
           <div class={styles.ambientCore} />
         </div>
       </div>
-      <AppSidebar jellyfinConnected={jellyfinConnected()} />
+      <AppSidebar jellyfinConnected={bootstrap.connected()} />
       <Show when={wipe()} keyed>
         {(direction) => (
           <div

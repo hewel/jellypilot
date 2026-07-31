@@ -1,20 +1,15 @@
+import { useAuthenticatedBootstrap } from '@components/AuthenticatedBootstrap';
 import { HoverCard } from '@components/ui';
 import { cx } from '@styled-system/css';
 import { createQuery } from '@tanstack/solid-query';
 import { Exit, Option } from 'effect';
 import { Check, Heart, LoaderCircle } from 'lucide-solid';
-import { createMemo, createSignal, For, Show } from 'solid-js';
+import { createSignal, For, Show } from 'solid-js';
 import type { JSX } from 'solid-js';
 import { commandFailureMessage } from '~effects/commands';
-import { fetchConnectionState } from '~effects/connection';
 import { fetchMediaDetail } from '~effects/library';
 import type { MediaDetail } from '~effects/library';
-import {
-  isLibrarySessionKeyConnected,
-  librarySessionKeyFromConnectionExit,
-  queryKeys,
-  runExit,
-} from '~effects/query';
+import { queryKeys, runExit } from '~effects/query';
 
 import * as styles from './MediaInfoHoverCard.styles';
 
@@ -104,16 +99,12 @@ export function MediaInfoHoverCard(props: {
   children: JSX.Element;
 }) {
   const [open, setOpen] = createSignal(false);
-  const connectionQuery = createQuery(() => ({
-    queryKey: queryKeys.connectionState,
-    queryFn: () => runExit(fetchConnectionState),
-    staleTime: Infinity,
-  }));
-  const sessionKey = createMemo(() => librarySessionKeyFromConnectionExit(connectionQuery.data));
+  const bootstrap = useAuthenticatedBootstrap();
+  const sessionKey = bootstrap.sessionKey;
   const detailQuery = createQuery(() => ({
     queryKey: queryKeys.libraryMediaDetail(sessionKey(), props.itemType, props.id),
     queryFn: () => runExit(fetchMediaDetail(props.id, props.itemType)),
-    enabled: open() && isLibrarySessionKeyConnected(sessionKey()),
+    enabled: open() && bootstrap.connected(),
     staleTime: Infinity,
   }));
 

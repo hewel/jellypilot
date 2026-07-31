@@ -1,4 +1,5 @@
 import type { VideoHomeItem, VideoLibraryPlayRequest } from '@bindings';
+import { useAuthenticatedBootstrap } from '@components/AuthenticatedBootstrap';
 import { VideoHomeRow } from '@components/library/shared';
 import LibrarySearchBar from '@components/LibrarySearchBar';
 import { useToast } from '@components/ToastProvider';
@@ -6,16 +7,10 @@ import { cx } from '@styled-system/css';
 import { createMutation, createQuery } from '@tanstack/solid-query';
 import { createFileRoute } from '@tanstack/solid-router';
 import { Exit } from 'effect';
-import { For, Show, createMemo, createSignal } from 'solid-js';
+import { For, Show, createSignal } from 'solid-js';
 import { commandFailureMessage } from '~effects/commands';
-import { fetchConnectionState } from '~effects/connection';
 import { fetchLibraryHome, startLibraryPlayback } from '~effects/library';
-import {
-  isLibrarySessionKeyConnected,
-  librarySessionKeyFromConnectionExit,
-  queryKeys,
-  runExit,
-} from '~effects/query';
+import { queryKeys, runExit } from '~effects/query';
 import { isValidVideoHomeResumePosition } from '~utils/videoHomeLayout';
 
 import * as styles from '../library.styles';
@@ -33,15 +28,11 @@ export const Route = createFileRoute('/_authenticated/library/')({
 
 function LibraryLanding() {
   const { showToast } = useToast();
-  const connectionQuery = createQuery(() => ({
-    queryKey: queryKeys.connectionState,
-    queryFn: () => runExit(fetchConnectionState),
-    staleTime: Infinity,
-  }));
-  const sessionKey = createMemo(() => librarySessionKeyFromConnectionExit(connectionQuery.data));
+  const bootstrap = useAuthenticatedBootstrap();
+  const sessionKey = bootstrap.sessionKey;
   const homeQuery = createQuery(() => ({
     queryKey: queryKeys.libraryHome(sessionKey()),
-    enabled: isLibrarySessionKeyConnected(sessionKey()),
+    enabled: bootstrap.connected(),
     queryFn: () => runExit(fetchLibraryHome),
   }));
   const home = () =>
@@ -87,33 +78,35 @@ function LibraryLanding() {
       >
         <LibrarySearchBar sessionKey={sessionKey()} />
       </nav>
-      <Show when={!homeQuery.isPending} fallback={<VideoHomeSkeleton />}>
-        <Show when={home()}>
-          {(value) => (
-            <div class={cx(styles.stack, styles.pageGutter)}>
-              <VideoHomeRow
-                id="continue-watching"
-                title="Continue Watching"
-                kind="continueWatching"
-                items={value().continueWatching}
-                resumeBusyId={resumeBusyId()}
-                onResume={(item) => void resumeItem(item)}
-              />
-              <VideoHomeRow id="next-up" title="Next Up" kind="nextUp" items={value().nextUp} />
-              <VideoHomeRow
-                id="latest-movies"
-                title="Latest Movies"
-                kind="latestMovies"
-                items={value().latestMovies}
-              />
-              <VideoHomeRow
-                id="latest-episodes"
-                title="Latest Episodes"
-                kind="latestEpisodes"
-                items={value().latestEpisodes}
-              />
-            </div>
-          )}
+      <Show when={bootstrap.connected()}>
+        <Show when={!homeQuery.isPending} fallback={<VideoHomeSkeleton />}>
+          <Show when={home()}>
+            {(value) => (
+              <div class={cx(styles.stack, styles.pageGutter)}>
+                <VideoHomeRow
+                  id="continue-watching"
+                  title="Continue Watching"
+                  kind="continueWatching"
+                  items={value().continueWatching}
+                  resumeBusyId={resumeBusyId()}
+                  onResume={(item) => void resumeItem(item)}
+                />
+                <VideoHomeRow id="next-up" title="Next Up" kind="nextUp" items={value().nextUp} />
+                <VideoHomeRow
+                  id="latest-movies"
+                  title="Latest Movies"
+                  kind="latestMovies"
+                  items={value().latestMovies}
+                />
+                <VideoHomeRow
+                  id="latest-episodes"
+                  title="Latest Episodes"
+                  kind="latestEpisodes"
+                  items={value().latestEpisodes}
+                />
+              </div>
+            )}
+          </Show>
         </Show>
       </Show>
     </>

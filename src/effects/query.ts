@@ -51,6 +51,12 @@ export function isLibrarySessionKeyConnected(sessionKey: LibrarySessionKey) {
   );
 }
 
+export function librarySessionSignature(sessionKey: LibrarySessionKey) {
+  return isLibrarySessionKeyConnected(sessionKey)
+    ? `${sessionKey.provider}\u0000${sessionKey.serverUrl}\u0000${sessionKey.userId}`
+    : null;
+}
+
 export const queryKeys = {
   appVersion: ['app', 'version'] as const,
   appConfig: ['config', 'app'] as const,
