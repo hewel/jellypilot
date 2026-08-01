@@ -5,6 +5,7 @@ import { css } from '@styled-system/css';
  * layers over the button background without competing with Button layout. */
 export const root = css({
   borderRadius: 'full',
+  justifyContent: 'flex-start',
   maxWidth: '[100%]',
   overflow: 'hidden',
 });
