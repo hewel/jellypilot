@@ -1,10 +1,10 @@
-import type { VideoHomeItem, VideoLibraryPlayRequest } from '@bindings';
+import type { VideoLibraryItem, VideoLibraryPlayRequest } from '@bindings';
 import { useAuthenticatedBootstrap } from '@components/AuthenticatedBootstrap';
 import { HomeFeaturedHero, HomeFeaturedHeroSkeleton } from '@components/library/HomeFeaturedHero';
 import type { HomeFeaturedSource } from '@components/library/HomeFeaturedHero';
 import { VideoHomeRow } from '@components/library/shared';
+import { VideoCardSkeleton } from '@components/library/videoCardShared';
 import { useToast } from '@components/ToastProvider';
-import { cx } from '@styled-system/css';
 import { createMutation, createQuery } from '@tanstack/solid-query';
 import { createFileRoute } from '@tanstack/solid-router';
 import { Exit } from 'effect';
@@ -29,7 +29,7 @@ export const Route = createFileRoute('/_authenticated/library/')({
 
 interface HomeFeature {
   source: HomeFeaturedSource;
-  item: VideoHomeItem;
+  item: VideoLibraryItem;
 }
 
 function LibraryLanding() {
@@ -83,7 +83,7 @@ function LibraryLanding() {
     return data && Exit.isSuccess(data) ? data.value : null;
   };
 
-  const playHomeItem = async (item: VideoHomeItem) => {
+  const playHomeItem = async (item: VideoLibraryItem) => {
     if (playbackBusyId() !== null) {
       return;
     }
@@ -182,17 +182,7 @@ function VideoHomeSkeleton() {
             </div>
             <div class={styles.skeletonGrid[row.aspectClass]}>
               <For each={Array.from({ length: row.cardCount }, (_, index) => index)}>
-                {() => (
-                  <div class={styles.skeletonCard}>
-                    <div
-                      class={cx(styles.skeletonArtwork, styles.skeletonAspect[row.aspectClass])}
-                    />
-                    <div class={styles.skeletonBody}>
-                      <div class={styles.skeletonLine.title} />
-                      <div class={styles.skeletonLine.subtitle} />
-                    </div>
-                  </div>
-                )}
+                {() => <VideoCardSkeleton aspectClass={row.aspectClass} body />}
               </For>
             </div>
           </section>

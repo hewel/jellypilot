@@ -1,17 +1,19 @@
 import { Carousel } from '@ark-ui/solid/carousel';
 import type { VideoLibraryItem } from '@bindings';
 import { Link } from '@tanstack/solid-router';
-import { ChevronLeft, ChevronRight } from 'lucide-solid';
+import { ChevronLeft, ChevronRight, Film, Tv } from 'lucide-solid';
 import { For, type JSX, Show, createSignal } from 'solid-js';
 
 import { Button } from '../ui';
 import * as styles from './DetailRecommendationShelf.styles';
 import { LibraryImage } from './LibraryImage';
 import { LibraryStatusPanel } from './shared';
+import { videoCardDetailsTarget, videoCardIcon, videoCardSubtitle } from './videoCardModel';
+import { CardTitle, VideoCardSkeleton } from './videoCardShared';
 
 function RecommendationCard(props: { item: VideoLibraryItem }): JSX.Element {
-  const body = (
-    <>
+  return (
+    <Link {...videoCardDetailsTarget(props.item)} class={styles.card} aria-label={props.item.name}>
       <div class={styles.poster}>
         <LibraryImage
           imageId={props.item.artworkImageId}
@@ -20,14 +22,22 @@ function RecommendationCard(props: { item: VideoLibraryItem }): JSX.Element {
           loading="lazy"
           fallback={
             <div class={styles.posterFallback} aria-hidden="true">
-              {props.item.name.charAt(0)}
+              <Show
+                when={videoCardIcon(props.item) === 'tv'}
+                fallback={<Film class={styles.posterFallbackIcon} aria-hidden="true" />}
+              >
+                <Tv class={styles.posterFallbackIcon} aria-hidden="true" />
+              </Show>
+              <span>No artwork</span>
             </div>
           }
         />
       </div>
-      <p class={styles.cardTitle}>{props.item.name}</p>
+      <CardTitle id={props.item.id} itemType={props.item.itemType} class={styles.cardTitle}>
+        {props.item.name}
+      </CardTitle>
       <div class={styles.cardMeta}>
-        <span>{cardMeta(props.item)}</span>
+        <span>{videoCardSubtitle(props.item, { kind: 'browse' })}</span>
         <Show when={props.item.played}>
           <span class={styles.cardMetaSeparator} aria-hidden="true">
             ·
@@ -41,40 +51,8 @@ function RecommendationCard(props: { item: VideoLibraryItem }): JSX.Element {
           <span class={styles.cardFavorite}>Favorite</span>
         </Show>
       </div>
-    </>
+    </Link>
   );
-
-  return (
-    <Show
-      when={props.item.itemType === 'Series'}
-      fallback={
-        <Link
-          to="/library/items/$itemId"
-          params={{ itemId: props.item.id }}
-          class={styles.card}
-          aria-label={props.item.name}
-        >
-          {body}
-        </Link>
-      }
-    >
-      <Link
-        to="/library/shows/$seriesId"
-        params={{ seriesId: props.item.id }}
-        class={styles.card}
-        aria-label={props.item.name}
-      >
-        {body}
-      </Link>
-    </Show>
-  );
-}
-
-function cardMeta(item: VideoLibraryItem): string {
-  if (item.productionYear !== null) {
-    return item.productionYear.toString();
-  }
-  return item.itemType;
 }
 
 /**
@@ -168,7 +146,13 @@ export function DetailRecommendationShelfSkeleton(props: { title: string }): JSX
     <section class={styles.skeletonSection} role="status" aria-label={`Loading ${props.title}`}>
       <div class={styles.skeletonHeading} aria-hidden="true" />
       <div class={styles.skeletonRow} aria-hidden="true">
-        <For each={[0, 1, 2, 3, 4]}>{() => <div class={styles.skeletonCard} />}</For>
+        <For each={[0, 1, 2, 3, 4]}>
+          {() => (
+            <div class={styles.skeletonCard}>
+              <VideoCardSkeleton aspectClass="poster" />
+            </div>
+          )}
+        </For>
       </div>
     </section>
   );

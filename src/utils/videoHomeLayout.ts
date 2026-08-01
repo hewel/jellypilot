@@ -1,4 +1,4 @@
-import type { VideoHomeItem } from '@bindings';
+import type { VideoLibraryItem } from '@bindings';
 import { Match } from 'effect';
 
 export type VideoHomeRowKind = 'continueWatching' | 'nextUp' | 'latestMovies' | 'latestEpisodes';
@@ -75,7 +75,7 @@ export type VideoHomePlaybackDecision =
  * `playedPercentage` never imply an offset.
  */
 export function videoHomePlaybackDecision(
-  item: Pick<VideoHomeItem, 'resumePositionSeconds' | 'runtimeSeconds'>,
+  item: Pick<VideoLibraryItem, 'resumePositionSeconds' | 'runtimeSeconds'>,
 ): VideoHomePlaybackDecision {
   if (isValidVideoHomeResumePosition(item.resumePositionSeconds, item.runtimeSeconds)) {
     return { mode: 'resume', startPositionSeconds: item.resumePositionSeconds };

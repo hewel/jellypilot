@@ -7,11 +7,12 @@ import { Portal } from 'solid-js/web';
 import {
   videoHomeAspect,
   videoHomeColumnCount,
+  videoHomePlaybackDecision,
   type VideoHomeRowKind,
 } from '~utils/videoHomeLayout';
 
 import type {
-  VideoHomeItem,
+  VideoLibraryItem,
   VideoLibraryKind,
   VideoLibraryPlayedFilter,
   VideoLibrarySort,
@@ -24,14 +25,13 @@ import { commandFailureMessage } from '../../effects/commands';
 import type { CommandError } from '../../effects/errors';
 import { Button, Card } from '../ui';
 import type { JellyPilotSelectItem } from '../ui';
-import { HomeVideoCard } from './HomeVideoCard';
 import * as styles from './shared.styles';
+import { VideoCard } from './VideoCard';
+import { videoCardProgress, videoCardSubtitle } from './videoCardModel';
 
 export { MediaInfoHoverCard } from './MediaInfoHoverCard';
 export { DetailHero, DetailHeroSkeleton } from './DetailHero';
 export type { DetailHeroInfoRow, DetailHeroModel } from './DetailHero';
-export { HomeVideoCard } from './HomeVideoCard';
-export { LibraryVideoCard } from './LibraryVideoCard';
 
 export function LibraryStatusPanel(props: { title: string; description?: string }) {
   const titleId = createUniqueId();
@@ -59,9 +59,9 @@ export function VideoHomeRow(props: {
   id: string;
   title: string;
   kind: VideoHomeRowKind;
-  items: VideoHomeItem[];
+  items: VideoLibraryItem[];
   playbackBusyId?: string | null;
-  onPlay?: (item: VideoHomeItem) => void;
+  onPlay?: (item: VideoLibraryItem) => void;
 }) {
   const titleId = `row-${props.id}`;
   const gridId = createUniqueId();
@@ -119,17 +119,28 @@ export function VideoHomeRow(props: {
           <For each={props.items}>
             {(item, index) => (
               <Show when={expanded() || index() < columns()}>
-                <HomeVideoCard
+                <VideoCard
                   item={item}
-                  rowKind={props.kind}
-                  busy={props.playbackBusyId === item.id}
-                  playbackDisabled={
-                    props.playbackBusyId !== null && props.playbackBusyId !== undefined
-                  }
-                  onPlay={
+                  aspect={videoHomeAspect(props.kind)}
+                  copy="below"
+                  subtitle={videoCardSubtitle(item, { kind: 'homeRow', rowKind: props.kind })}
+                  action={
                     (props.kind === 'continueWatching' || props.kind === 'nextUp') && props.onPlay
-                      ? () => props.onPlay?.(item)
-                      : undefined
+                      ? {
+                          kind: 'play',
+                          busy: props.playbackBusyId === item.id,
+                          disabled:
+                            props.playbackBusyId !== null && props.playbackBusyId !== undefined,
+                          onPlay: () => props.onPlay?.(item),
+                        }
+                      : { kind: 'open' }
+                  }
+                  progress={
+                    props.kind === 'continueWatching'
+                      ? videoCardProgress(item)
+                      : props.kind === 'nextUp' && videoHomePlaybackDecision(item).mode === 'resume'
+                        ? videoCardProgress(item)
+                        : null
                   }
                 />
               </Show>

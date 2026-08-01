@@ -2584,8 +2584,7 @@ impl<'a> JellyfinLibrary<'a> {
       emby_next_up_items(self.client, &server_url, &user_id, Some(&series_id), 1)
         .await?
         .into_iter()
-        .next()
-        .map(video_home_item_to_library_item);
+        .next();
 
     detail.can_play = detail.next_episode.is_some();
 
@@ -2702,7 +2701,7 @@ async fn continue_watching_items(
   configuration: &jellyfin_api::apis::configuration::Configuration,
   server_url: &str,
   user_id: &str,
-) -> Result<Vec<VideoHomeItem>, JellyfinError> {
+) -> Result<Vec<VideoLibraryItem>, JellyfinError> {
   let response = jellyfin_api::apis::items_api::get_resume_items(
     configuration,
     jellyfin_api::apis::items_api::GetResumeItemsParams {
@@ -2746,7 +2745,7 @@ async fn next_up_items(
   configuration: &jellyfin_api::apis::configuration::Configuration,
   server_url: &str,
   user_id: &str,
-) -> Result<Vec<VideoHomeItem>, JellyfinError> {
+) -> Result<Vec<VideoLibraryItem>, JellyfinError> {
   let response = jellyfin_api::apis::tv_shows_api::get_next_up(
     configuration,
     jellyfin_api::apis::tv_shows_api::GetNextUpParams {
@@ -2788,7 +2787,7 @@ async fn latest_video_items(
   user_id: &str,
   item_type: jellyfin_api::models::BaseItemKind,
   context: &str,
-) -> Result<Vec<VideoHomeItem>, JellyfinError> {
+) -> Result<Vec<VideoLibraryItem>, JellyfinError> {
   let items = jellyfin_api::apis::user_library_api::get_latest_media(
     configuration,
     jellyfin_api::apis::user_library_api::GetLatestMediaParams {
@@ -3014,7 +3013,7 @@ fn video_home_fields() -> Vec<jellyfin_api::models::ItemFields> {
 fn map_continue_watching_item(
   server_url: &str,
   item: jellyfin_api::models::BaseItemDto,
-) -> Option<VideoHomeItem> {
+) -> Option<VideoLibraryItem> {
   let image_type = match item.r#type? {
     jellyfin_api::models::BaseItemKind::Episode | jellyfin_api::models::BaseItemKind::Series => {
       jellyfin_api::models::ImageType::Primary
@@ -3029,7 +3028,7 @@ fn map_video_home_item(
   server_url: &str,
   item: jellyfin_api::models::BaseItemDto,
   image_type: jellyfin_api::models::ImageType,
-) -> Option<VideoHomeItem> {
+) -> Option<VideoLibraryItem> {
   let id = item.id?.to_string();
   let item_type = item.r#type?.to_string();
   let user_data = item.user_data.flatten();
@@ -3040,7 +3039,7 @@ fn map_video_home_item(
     ImageRefKind::Artwork,
   );
 
-  Some(VideoHomeItem {
+  Some(VideoLibraryItem {
     id,
     name: item
       .name
@@ -3069,6 +3068,7 @@ fn map_video_home_item(
       .and_then(|data| data.is_favorite)
       .unwrap_or(false),
     artwork_image_id,
+    overview: None,
   })
 }
 
@@ -3545,7 +3545,7 @@ async fn emby_continue_watching_items(
   client: &JellyfinClient,
   server_url: &str,
   user_id: &str,
-) -> Result<Vec<VideoHomeItem>, JellyfinError> {
+) -> Result<Vec<VideoLibraryItem>, JellyfinError> {
   let query = vec![
     ("StartIndex", "0".to_string()),
     ("Limit", "12".to_string()),
@@ -3580,7 +3580,7 @@ async fn emby_next_up_items(
   user_id: &str,
   series_id: Option<&str>,
   limit: i32,
-) -> Result<Vec<VideoHomeItem>, JellyfinError> {
+) -> Result<Vec<VideoLibraryItem>, JellyfinError> {
   let mut query = vec![
     ("UserId", user_id.to_string()),
     ("StartIndex", "0".to_string()),
@@ -3616,7 +3616,7 @@ async fn emby_latest_video_items(
   server_url: &str,
   user_id: &str,
   item_type: &str,
-) -> Result<Vec<VideoHomeItem>, JellyfinError> {
+) -> Result<Vec<VideoLibraryItem>, JellyfinError> {
   let query = vec![
     ("Limit", "12".to_string()),
     ("Fields", emby_home_fields()),
@@ -3856,7 +3856,7 @@ fn dedupe_preserving_order<'a>(names: impl Iterator<Item = &'a String>) -> Vec<S
 fn map_emby_continue_watching_item(
   server_url: &str,
   item: emby_api::models::BaseItemDto,
-) -> Option<VideoHomeItem> {
+) -> Option<VideoLibraryItem> {
   let image_type = match item.r#type.as_deref()? {
     "Episode" | "Series" => "Primary",
     _ => "Thumb",
@@ -3869,7 +3869,7 @@ fn map_emby_video_home_item(
   server_url: &str,
   item: emby_api::models::BaseItemDto,
   image_type: &str,
-) -> Option<VideoHomeItem> {
+) -> Option<VideoLibraryItem> {
   let id = item.id?;
   let item_type = item.r#type?;
   let user_data = item.user_data.as_deref();
@@ -3887,7 +3887,7 @@ fn map_emby_video_home_item(
     ImageRefKind::Artwork,
   );
 
-  Some(VideoHomeItem {
+  Some(VideoLibraryItem {
     id,
     name: item.name.unwrap_or_else(|| "Untitled".to_string()),
     item_type,
@@ -3904,6 +3904,7 @@ fn map_emby_video_home_item(
     played: user_data.and_then(|data| data.played).unwrap_or(false),
     favorite: user_data.and_then(|data| data.is_favorite).unwrap_or(false),
     artwork_image_id,
+    overview: None,
   })
 }
 
@@ -4235,25 +4236,6 @@ fn emby_artwork_url(
   ))
 }
 
-fn video_home_item_to_library_item(item: VideoHomeItem) -> VideoLibraryItem {
-  VideoLibraryItem {
-    id: item.id,
-    name: item.name,
-    item_type: item.item_type,
-    production_year: item.production_year,
-    runtime_seconds: item.runtime_seconds,
-    played: item.played,
-    favorite: item.favorite,
-    artwork_image_id: item.artwork_image_id,
-    season_number: item.season_number,
-    episode_number: item.episode_number,
-    series_id: item.series_id,
-    series_name: item.series_name,
-    resume_position_seconds: item.resume_position_seconds,
-    played_percentage: item.played_percentage,
-    overview: None,
-  }
-}
 impl Default for JellyfinClient {
   fn default() -> Self {
     Self::new()

@@ -55,6 +55,7 @@ const videoHome = {
       played: false,
       favorite: false,
       artworkImageId: null,
+      overview: null,
     },
   ],
   nextUp: [],

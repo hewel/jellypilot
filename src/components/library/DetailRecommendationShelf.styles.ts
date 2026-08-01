@@ -109,14 +109,22 @@ export const posterImage = css({
 export const posterFallback = css({
   alignItems: 'center',
   bg: 'surfaceContainerHigh',
-  color: 'onSurface/20',
+  color: 'onSurfaceVariant',
   display: 'flex',
-  fontFamily: 'display',
-  fontSize: '[2rem]',
-  fontWeight: 'extrabold',
+  flexDirection: 'column',
+  fontSize: '11',
+  fontWeight: 'bold',
+  gap: '2',
   height: 'full',
   justifyContent: 'center',
-  width: 'full',
+  letterSpacing: '8',
+  lineHeight: '16',
+  textTransform: 'uppercase',
+});
+
+export const posterFallbackIcon = css({
+  height: '5',
+  width: '5',
 });
 
 export const cardTitle = css({
@@ -189,10 +197,6 @@ export const skeletonRow = css({
 });
 
 export const skeletonCard = css({
-  animation: pulse,
-  aspectRatio: '[2 / 3]',
-  bg: 'onSurface/10',
-  borderRadius: 'xl',
   flex: '[1 1 0]',
   minWidth: '[0]',
 });
