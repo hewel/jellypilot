@@ -23,7 +23,7 @@ export const card = css({
   transitionDuration: '200',
   transitionProperty: '[transform]',
   _hover: {
-    transform: '[scale(1.06)]',
+    transform: '[scale3d(1.06, 1.06, 1)]',
   },
 });
 `;
@@ -36,11 +36,11 @@ export const card = css({
 test('interactive transform with resting value passes', () => {
   const source = `
 export const card = css({
-  transform: '[scale(1)]',
+  transform: '[scale3d(1, 1, 1)]',
   transitionDuration: '200',
   transitionProperty: '[transform]',
   _hover: {
-    transform: '[scale(1.06)]',
+    transform: '[scale3d(1.06, 1.06, 1)]',
   },
 });
 `;
@@ -51,14 +51,14 @@ test('cva variant transform with base resting value passes; without it fails', (
   const passing = `
 export const button = cva({
   base: {
-    transform: '[scale(1)]',
+    transform: '[scale3d(1, 1, 1)]',
     transitionProperty: '[background-color, transform]',
   },
   variants: {
     variant: {
       primary: {
         _active: {
-          transform: '[scale(0.96)]',
+          transform: '[scale3d(0.96, 0.96, 1)]',
         },
       },
     },
@@ -76,7 +76,7 @@ export const button = cva({
     variant: {
       primary: {
         _active: {
-          transform: '[scale(0.96)]',
+          transform: '[scale3d(0.96, 0.96, 1)]',
         },
       },
     },
@@ -123,14 +123,31 @@ test('token-string braces do not break depth tracking', () => {
   const source = `
 export const thumb = css({
   boxShadow: '[0 10px 15px -3px {colors.secondary/15}]',
-  transform: '[scale(1)]',
+  transform: '[scale3d(1, 1, 1)]',
   transitionProperty: '[box-shadow, transform]',
   _hover: {
-    transform: '[scale(1.1)]',
+    transform: '[scale3d(1.1, 1.1, 1)]',
   },
 });
 `;
   expect(collectMotionInvariantErrors('test.styles.ts', source)).toEqual([]);
+});
+
+test('2D translate/scale functions are flagged', () => {
+  const source = `
+export const badge = css({
+  transform: '[translate(-50%, -50%) scale(1)]',
+  transitionDuration: '200',
+  transitionProperty: '[transform]',
+  _hover: {
+    transform: '[translate(-50%, -50%) scale(1.1)]',
+  },
+});
+`;
+  expect(collectMotionInvariantErrors('test.styles.ts', source)).toEqual([
+    "test.styles.ts: 2D transform function 'translate()' must not be used; use 'translate3d()' (badge)",
+    "test.styles.ts: 2D transform function 'scale()' must not be used; use 'scale3d()' (badge)",
+  ]);
 });
 
 test('paint-only transition properties pass', () => {

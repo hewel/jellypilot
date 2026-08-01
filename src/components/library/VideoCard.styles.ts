@@ -20,18 +20,39 @@ export const card = css({
   overflow: 'hidden',
   p: '0',
   textDecoration: 'none',
-  transform: '[scale(1)]',
+  transform: '[scale3d(1, 1, 1)]',
   transitionDuration: '300',
   transitionProperty: '[background-color, border-color, box-shadow, transform]',
+  '& img': {
+    transform: '[scale3d(1, 1, 1)]',
+  },
   _hover: {
     borderColor: 'primary/50',
+    '& img': {
+      transform: '[translate3d(0, -2px, 0) scale3d(1.04, 1.04, 1)]',
+    },
   },
   _focusVisible: {
     boxShadow: '[0 0 0 2px color-mix(in srgb, {colors.secondary} 70%, transparent), {shadows.xl}]',
     outline: 'none',
+    '& img': {
+      transform: '[translate3d(0, -2px, 0) scale3d(1.04, 1.04, 1)]',
+    },
   },
   _active: {
-    transform: '[scale(0.96)]',
+    transform: '[scale3d(0.96, 0.96, 1)]',
+  },
+  '@media (prefers-reduced-motion: reduce)': {
+    _hover: {
+      '& img': {
+        transform: '[scale3d(1, 1, 1)]',
+      },
+    },
+    _focusVisible: {
+      '& img': {
+        transform: '[scale3d(1, 1, 1)]',
+      },
+    },
   },
 });
 
@@ -55,23 +76,23 @@ export const homeCardAction = css({
   p: '0',
   textAlign: 'left',
   textDecoration: 'none',
-  transform: '[scale(1)]',
+  transform: '[scale3d(1, 1, 1)]',
   transitionDuration: '200',
   transitionProperty: '[transform]',
   transitionTimingFunction: 'standard',
   width: 'full',
   '& img': {
-    transform: '[scale(1)]',
+    transform: '[scale3d(1, 1, 1)]',
   },
   _hover: {
     boxShadow: 'xl',
     '& [data-play-badge]': {
       bg: 'surface/85',
       boxShadow: 'xl',
-      transform: '[translate(-50%, -50%) scale(1.02)]',
+      transform: '[translate3d(-50%, -50%, 0) scale3d(1.02, 1.02, 1)]',
     },
     '& img': {
-      transform: '[scale(1.06)]',
+      transform: '[scale3d(1.06, 1.06, 1)]',
     },
   },
   _focusVisible: {
@@ -81,14 +102,14 @@ export const homeCardAction = css({
     '& [data-play-badge]': {
       bg: 'surface/85',
       boxShadow: 'xl',
-      transform: '[translate(-50%, -50%) scale(1.02)]',
+      transform: '[translate3d(-50%, -50%, 0) scale3d(1.02, 1.02, 1)]',
     },
     '& img': {
-      transform: '[scale(1.06)]',
+      transform: '[scale3d(1.06, 1.06, 1)]',
     },
   },
   _active: {
-    transform: '[scale(0.96)]',
+    transform: '[scale3d(0.96, 0.96, 1)]',
   },
   _disabled: {
     cursor: 'wait',
@@ -99,7 +120,7 @@ export const homeCardAction = css({
   '@media (prefers-reduced-motion: reduce)': {
     _hover: {
       '& [data-play-badge]': {
-        transform: '[translate(-50%, -50%)]',
+        transform: '[translate3d(-50%, -50%, 0)]',
       },
       '& img': {
         transform: '[none]',
@@ -107,7 +128,7 @@ export const homeCardAction = css({
     },
     _focusVisible: {
       '& [data-play-badge]': {
-        transform: '[translate(-50%, -50%)]',
+        transform: '[translate3d(-50%, -50%, 0)]',
       },
       '& img': {
         transform: '[none]',
@@ -175,7 +196,7 @@ export const playBadge = css({
   pointerEvents: 'none',
   position: 'absolute',
   top: '[50%]',
-  transform: '[translate(-50%, -50%)]',
+  transform: '[translate3d(-50%, -50%, 0)]',
   transitionDuration: '200',
   transitionProperty: '[background-color, box-shadow, transform]',
   transitionTimingFunction: 'standard',

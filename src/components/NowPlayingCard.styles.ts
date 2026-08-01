@@ -235,12 +235,12 @@ export const thumb = css({
   cursor: 'grab',
   height: '[1.375rem]',
   outline: 'none',
-  transform: '[scale(1)]',
+  transform: '[scale3d(1, 1, 1)]',
   transitionDuration: '200',
   transitionProperty: '[box-shadow, transform]',
   width: '[1.375rem]',
   _hover: {
-    transform: '[scale(1.1)]',
+    transform: '[scale3d(1.1, 1.1, 1)]',
   },
   _active: {
     cursor: 'grabbing',
@@ -319,12 +319,12 @@ export const contextualIcon = cva({
       true: {
         filter: '[blur(0)]',
         opacity: '[1]',
-        transform: '[scale(1)]',
+        transform: '[scale3d(1, 1, 1)]',
       },
       false: {
         filter: '[blur(4px)]',
         opacity: '[0]',
-        transform: '[scale(0.25)]',
+        transform: '[scale3d(0.25, 0.25, 1)]',
       },
     },
     shadow: {

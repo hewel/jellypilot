@@ -90,7 +90,7 @@ export const segment = cva({
     cursor: 'pointer',
     letterSpacing: '0',
     textTransform: 'uppercase',
-    transform: '[scale(1)]',
+    transform: '[scale3d(1, 1, 1)]',
     transitionDuration: '300',
     transitionProperty: '[background-color, color, box-shadow, transform]',
     _hover: {
@@ -98,7 +98,7 @@ export const segment = cva({
       color: 'onSurface',
     },
     _active: {
-      transform: '[scale(0.96)]',
+      transform: '[scale3d(0.96, 0.96, 1)]',
     },
     _disabled: {
       cursor: 'not-allowed',

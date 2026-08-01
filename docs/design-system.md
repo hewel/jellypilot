@@ -211,7 +211,8 @@ export const seasonTab = css({
 
 - 150–220ms transitions for hover, focus, and state changes.
 - Animate opacity and transform only; do not animate layout dimensions.
-- Hover/focus feedback must never change a component's own layout box: no translate/scale on the card or control itself. Layout changes during pointer-over-scroll retrigger paint for every row passing under the cursor (scroll flash). Apply transforms to inner, composited elements instead (artwork image, badge) — transforms do not alter layout.
+- Animated transforms must use the 3D functions (`translate3d`, `scale3d`), never bare `translate()`/`scale()`. 2D transforms get no guaranteed composited layer, so every animation frame repaints on the main thread; 3D transforms force GPU compositing and animate repaint-free. Enforced by `bun scripts/check-styling-boundaries.ts`.
+- Hover/focus feedback must never transform the card or control itself: no translate/scale on the component's own box. Transforming the hovered element moves it under the cursor, which cancels and re-fires `:hover` (oscillation), and pointer-over-scroll retriggers the effect for every row passing beneath the cursor (scroll flash). Apply transforms to inner, composited elements instead (artwork image, badge).
 - Avoid decorative looping animation except subtle indeterminate waiting indicators.
 - Respect `prefers-reduced-motion`.
 

@@ -154,7 +154,7 @@ export const detailsLink = css({
   minHeight: '11',
   padding: '[0.875em 1.125em]',
   textDecoration: 'none',
-  transform: '[scale(1)]',
+  transform: '[scale3d(1, 1, 1)]',
   transitionDuration: '200',
   transitionProperty: '[background-color, border-color, color, box-shadow, transform]',
   userSelect: 'none',
@@ -163,7 +163,7 @@ export const detailsLink = css({
     borderColor: 'primary',
   },
   _active: {
-    transform: '[scale(0.96)]',
+    transform: '[scale3d(0.96, 0.96, 1)]',
   },
   _focusVisible: {
     outline: '[2px solid {colors.primary}]',

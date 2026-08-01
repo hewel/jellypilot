@@ -193,7 +193,7 @@ export const addButton = css({
   borderColor: 'secondary/20',
   cursor: 'pointer',
   minWidth: '[5.5rem]',
-  transform: '[scale(1)]',
+  transform: '[scale3d(1, 1, 1)]',
   transitionDuration: '200',
   transitionProperty: '[background-color, border-color, transform]',
   _hover: {
@@ -201,7 +201,7 @@ export const addButton = css({
     borderColor: 'secondary/40',
   },
   _active: {
-    transform: '[scale(0.96)]',
+    transform: '[scale3d(0.96, 0.96, 1)]',
   },
   _disabled: {
     opacity: '[0.5]',
