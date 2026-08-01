@@ -2,12 +2,18 @@ import { css } from '@styled-system/css';
 
 /* Primary play action with an optional watched-progress fill. The fill is a
  * background gradient driven by the --play-progress custom property so it
- * layers over the button background without competing with Button layout. */
+ * layers over the button background without competing with Button layout.
+ * Sizing lands between Button sm and md — a hero-specific intermediate that
+ * does not belong on the shared recipe. */
 export const root = css({
   borderRadius: 'full',
+  fontSize: '13',
   justifyContent: 'flex-start',
+  lineHeight: '[1.125rem]',
   maxWidth: '[100%]',
+  minHeight: '[2.625rem]',
   overflow: 'hidden',
+  padding: '[0.7em 1em]',
 });
 
 export const glow = css({
