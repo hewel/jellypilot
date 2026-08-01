@@ -16,6 +16,7 @@ import {
   DetailRecommendationShelf,
   DetailRecommendationShelfSkeleton,
 } from '@components/library/DetailRecommendationShelf';
+import { ProgressPlayButton } from '@components/library/ProgressPlayButton';
 import {
   DetailHero,
   type DetailHeroInfoRow,
@@ -25,8 +26,6 @@ import {
   UserDataControls,
   formatRuntime,
 } from '@components/library/shared';
-import { Button } from '@components/ui';
-import { cx } from '@styled-system/css';
 import { createMutation, createQuery, useQueryClient } from '@tanstack/solid-query';
 import { createFileRoute, useCanGoBack, useNavigate, useRouter } from '@tanstack/solid-router';
 import { Exit } from 'effect';
@@ -84,11 +83,6 @@ function buildHeroModel(item: VideoItemDetail): DetailHeroModel {
     seriesName: isEpisode ? item.seriesName : null,
     seriesId: isEpisode ? item.seriesId : null,
     episodeCode: isEpisode ? episodeCode(item) : null,
-    progress: detailPlaybackProgress(
-      item.runtimeSeconds,
-      item.resumePositionSeconds,
-      item.playedPercentage,
-    ),
   };
 }
 
@@ -299,6 +293,20 @@ function LibraryItemDetailRoute() {
     const item = detail();
     return item ? buildHeroModel(item) : null;
   });
+  const playbackProgress = () => {
+    const item = detail();
+    return item
+      ? detailPlaybackProgress(
+          item.runtimeSeconds,
+          item.resumePositionSeconds,
+          item.playedPercentage,
+        )
+      : null;
+  };
+  const progressRemainingLabel = () => {
+    const progress = playbackProgress();
+    return progress ? `${progress.minutesRemaining} min remaining` : null;
+  };
 
   return (
     <div class={styles.stack}>
@@ -326,28 +334,22 @@ function LibraryItemDetailRoute() {
                       <Show
                         when={item().canResume}
                         fallback={
-                          <Button
-                            type="button"
-                            variant="primary"
-                            class={cx(styles.pillButton, styles.playGlow)}
+                          <ProgressPlayButton
+                            label="Play"
                             disabled={!item().canPlay || playBusy()}
                             onClick={() => void startPlayback(item(), 'start')}
                             leadingIcon={<Play class={styles.playIcon} />}
-                          >
-                            Play
-                          </Button>
+                          />
                         }
                       >
-                        <Button
-                          type="button"
-                          variant="primary"
-                          class={cx(styles.pillButton, styles.playGlow)}
+                        <ProgressPlayButton
+                          label="Resume"
+                          percent={playbackProgress()?.percent ?? null}
+                          remainingLabel={progressRemainingLabel()}
                           disabled={!item().canPlay || playBusy()}
                           onClick={() => void startPlayback(item(), 'resume')}
                           leadingIcon={<Play class={styles.playIcon} />}
-                        >
-                          Resume
-                        </Button>
+                        />
                       </Show>
                       <UserDataControls
                         itemId={item().id}

@@ -2,10 +2,11 @@ import type { VideoLibraryItem } from '@bindings';
 import { Link } from '@tanstack/solid-router';
 import { Film, Play, RefreshCw } from 'lucide-solid';
 import { For, type JSX, Show } from 'solid-js';
+import { detailPlaybackProgress } from '~utils/libraryDetail';
 
-import { Button } from '../ui';
 import * as styles from './DetailEpisodeList.styles';
 import { LibraryImage } from './LibraryImage';
+import { ProgressPlayButton } from './ProgressPlayButton';
 import { formatRuntime } from './shared';
 
 function episodeCode(episode: VideoLibraryItem): string {
@@ -93,9 +94,18 @@ export function DetailEpisodeList(props: {
                 </div>
               </div>
 
-              <Button
-                type="button"
+              <ProgressPlayButton
                 variant="outlined"
+                label={busy() ? 'Loading…' : resumable() ? 'Resume' : 'Play'}
+                percent={
+                  resumable()
+                    ? (detailPlaybackProgress(
+                        episode.runtimeSeconds,
+                        episode.resumePositionSeconds,
+                        episode.playedPercentage,
+                      )?.percent ?? null)
+                    : null
+                }
                 class={styles.playButton}
                 disabled={props.disabled || busy()}
                 aria-label={`${resumable() ? 'Resume' : 'Play'} ${episode.name}`}
@@ -105,9 +115,7 @@ export function DetailEpisodeList(props: {
                     <RefreshCw class={styles.spinner} />
                   </Show>
                 }
-              >
-                {busy() ? 'Loading…' : resumable() ? 'Resume' : 'Play'}
-              </Button>
+              />
             </div>
           );
         }}

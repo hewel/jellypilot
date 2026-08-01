@@ -1,7 +1,6 @@
 import { Link } from '@tanstack/solid-router';
 import { ChevronLeft, Film, Star, Tv } from 'lucide-solid';
 import { For, type JSX, Show, createEffect, createSignal, onCleanup, onMount } from 'solid-js';
-import type { DetailPlaybackProgress } from '~utils/libraryDetail';
 
 import * as styles from './DetailHero.styles';
 import { LibraryImage } from './LibraryImage';
@@ -28,7 +27,6 @@ export interface DetailHeroModel {
   seriesName: string | null;
   seriesId: string | null;
   episodeCode: string | null;
-  progress: DetailPlaybackProgress | null;
 }
 
 const MAX_CREATORS = 2;
@@ -43,10 +41,10 @@ function communityRatingLabel(rating: number) {
 }
 
 /**
- * Compact cinematic detail hero shared by the item and show detail routes: a
- * full-bleed backdrop carries identity, a separate portrait poster and an
- * elevated glass copy panel hold the metadata, and a summary surface below
- * lists Genres / Creators / Cast plus a deferred technical row.
+ * Cinematic detail hero shared by the item and show detail routes: a full-bleed
+ * backdrop carries identity while a portrait poster and the copy column sit
+ * directly on a deep theme scrim, and a summary surface below lists Genres /
+ * Creators / Cast plus a deferred technical row.
  */
 export function DetailHero(props: {
   titleId: string;
@@ -138,7 +136,7 @@ export function DetailHero(props: {
             />
           </div>
 
-          <div class={styles.glassPanel}>
+          <div class={styles.copy}>
             <div class={styles.metaRow}>
               <span class={styles.chip}>
                 <Show
@@ -215,26 +213,6 @@ export function DetailHero(props: {
                       {expanded() ? 'Less' : 'More'}
                     </button>
                   </Show>
-                </div>
-              )}
-            </Show>
-
-            <Show when={props.model.progress}>
-              {(progress) => (
-                <div class={styles.progressWrap}>
-                  <div
-                    class={styles.progressBar}
-                    role="progressbar"
-                    aria-label="Playback progress"
-                    aria-valuemin={0}
-                    aria-valuemax={100}
-                    aria-valuenow={Math.round(progress().percent)}
-                  >
-                    <div class={styles.progressFill} style={{ width: `${progress().percent}%` }} />
-                  </div>
-                  <span class={styles.progressLabel}>
-                    {progress().minutesRemaining} min remaining
-                  </span>
                 </div>
               )}
             </Show>
