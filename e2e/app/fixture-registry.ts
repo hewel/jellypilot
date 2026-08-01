@@ -14,6 +14,7 @@ import type {
   VideoLibraryShortcut,
   VideoSearchPage,
   VideoSeasonEpisodes,
+  VideoShowDetail,
   VideoUserDataUpdate,
 } from '../../src/bindings';
 
@@ -40,6 +41,7 @@ interface RawCommandMap {
   library_item_shortcut: VideoLibraryShortcut | null;
   library_play: null;
   library_season_episodes: VideoSeasonEpisodes;
+  library_show_detail: VideoShowDetail;
   library_similar_video: VideoLibraryItem[];
   library_update_user_data: VideoUserDataUpdate;
   library_search_video: VideoSearchPage;
@@ -89,6 +91,7 @@ function parseFixtureCommand(command: string): FixtureCommand | undefined {
     command === 'library_play' ||
     command === 'library_search_video' ||
     command === 'library_season_episodes' ||
+    command === 'library_show_detail' ||
     command === 'library_similar_video' ||
     command === 'library_update_user_data' ||
     command === 'library_video_home' ||

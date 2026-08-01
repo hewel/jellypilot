@@ -1,4 +1,4 @@
-import { cx } from '@styled-system/css';
+import { css, cx } from '@styled-system/css';
 import { CircleAlert, Plus, Server, UserRound } from 'lucide-solid';
 import { For, Show } from 'solid-js';
 
@@ -26,7 +26,7 @@ export default function SavedServicesCard(props: SavedServicesCardProps) {
         <Show
           when={profiles().length > 0}
           fallback={
-            <div class={styles.profile}>
+            <div class={css(styles.profile)}>
               <p class={styles.name}>No saved services yet</p>
               <p class={shared.bodyText}>
                 Add a Jellyfin or Emby service to keep it available for switching.
@@ -37,11 +37,11 @@ export default function SavedServicesCard(props: SavedServicesCardProps) {
           <For each={profiles()}>
             {(profile) => (
               <div
-                class={styles.profile}
-                classList={{
-                  [styles.activeProfile]: profile.active,
-                  [styles.warningProfile]: Boolean(profile.lastRestoreError),
-                }}
+                class={css(
+                  styles.profile,
+                  profile.active && styles.activeProfile,
+                  Boolean(profile.lastRestoreError) && styles.warningProfile,
+                )}
               >
                 <div class={styles.profileInner}>
                   <div class={styles.copy}>

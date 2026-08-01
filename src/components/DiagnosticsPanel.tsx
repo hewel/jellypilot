@@ -12,9 +12,11 @@ interface BackendLogEntry {
   message: string;
 }
 
+type BadgeTone = 'trace' | 'debug' | 'info' | 'warn' | 'error' | 'unknown';
+
 interface DiagnosticEntry {
   levelName: string;
-  levelTone: keyof typeof LOG_LEVEL_TONE_CLASS;
+  levelTone: BadgeTone;
   message: string;
   time: string;
 }
@@ -25,16 +27,7 @@ interface DiagnosticsPanelProps {
 
 const MAX_DIAGNOSTICS = 200;
 
-const LOG_LEVEL_TONE_CLASS = {
-  debug: styles.badgeDebug,
-  error: styles.badgeError,
-  info: styles.badgeInfo,
-  trace: styles.badgeTrace,
-  unknown: styles.badgeDebug,
-  warn: styles.badgeWarn,
-} as const;
-
-const LOG_LEVEL: Record<number, { name: string; tone: keyof typeof LOG_LEVEL_TONE_CLASS }> = {
+const LOG_LEVEL: Record<number, { name: string; tone: BadgeTone }> = {
   1: {
     name: 'TRACE',
     tone: 'trace',
@@ -180,9 +173,7 @@ export default function DiagnosticsPanel(props: DiagnosticsPanelProps) {
               <div class={styles.entry}>
                 <div class={styles.entryInner}>
                   <span class={styles.time}>{entry.time}</span>
-                  <span class={cx(styles.badge, LOG_LEVEL_TONE_CLASS[entry.levelTone])}>
-                    {entry.levelName}
-                  </span>
+                  <span class={styles.badge({ tone: entry.levelTone })}>{entry.levelName}</span>
                   <span class={styles.message}>{entry.message}</span>
                 </div>
               </div>

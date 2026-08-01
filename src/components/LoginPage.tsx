@@ -108,6 +108,7 @@ export default function LoginPage(props: LoginPageProps) {
   const isQuickConnectWaiting = () => quickConnectState() === 'waiting';
   const selectedCapabilities = () =>
     capabilitiesForProvider(reauthProfile()?.provider ?? formValues().provider);
+  const tabsColumns = (): 1 | 2 => (selectedCapabilities().quickConnect ? 2 : 1);
   const submitButtonLabel = () => {
     if (loginMethod() !== 'quickConnect') {
       return isReauthMode() ? 'Sign in and switch' : 'Connect';
@@ -375,10 +376,7 @@ export default function LoginPage(props: LoginPageProps) {
               <div class={styles.serverGrid}>
                 <form.Field name="scheme">
                   {(field) => (
-                    <fieldset
-                      class={cx(styles.segmented, styles.segmented2)}
-                      aria-label="Server protocol"
-                    >
+                    <fieldset class={styles.segmented({ columns: 2 })} aria-label="Server protocol">
                       <button
                         type="button"
                         aria-pressed={field().state.value === 'https'}
@@ -444,7 +442,7 @@ export default function LoginPage(props: LoginPageProps) {
                   <fieldset>
                     <legend class={styles.label}>Media Server</legend>
                     <div
-                      class={cx(styles.segmented, styles.segmented2)}
+                      class={styles.segmented({ columns: 2 })}
                       aria-label="Media server provider"
                     >
                       <button
@@ -522,11 +520,7 @@ export default function LoginPage(props: LoginPageProps) {
           }}
         >
           <Tabs.List
-            class={cx(
-              styles.segmented,
-              styles.tabsList,
-              selectedCapabilities().quickConnect ? styles.segmented2 : styles.segmented1,
-            )}
+            class={cx(styles.segmented({ columns: tabsColumns() }), styles.tabsList)}
             aria-label="Login Method"
           >
             <Show when={selectedCapabilities().quickConnect}>

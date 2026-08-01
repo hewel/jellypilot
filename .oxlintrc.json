@@ -75,6 +75,7 @@
     "unicorn/prefer-export-from": "off",
     "unicorn/prefer-global-this": "off",
     "unicorn/prefer-ternary": "off",
+    "unicorn/prefer-spread": "warn",
     "unicorn/switch-case-braces": "off"
   },
   "ignorePatterns": [

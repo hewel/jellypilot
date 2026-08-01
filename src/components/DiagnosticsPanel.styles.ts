@@ -117,47 +117,52 @@ export const time = css({
   userSelect: 'none',
 });
 
-export const badge = css({
-  borderWidth: '1px',
-  borderStyle: 'solid',
-  borderColor: '[currentColor]',
-  borderRadius: 'md',
-  fontSize: '10',
-  fontWeight: 'bold',
-  letterSpacing: '5',
-  px: '2',
-  py: '0_5',
-  userSelect: 'none',
-});
-
-export const badgeTrace = css({
-  bg: 'surfaceContainerHighest',
-  borderColor: 'outlineVariant/40',
-  color: 'outline',
-});
-
-export const badgeDebug = css({
-  bg: 'surfaceContainerHighest',
-  borderColor: 'outline/30',
-  color: 'onSurfaceVariant',
-});
-
-export const badgeInfo = css({
-  bg: 'secondaryContainer/30',
-  borderColor: 'secondary/30',
-  color: 'secondary',
-});
-
-export const badgeWarn = css({
-  bg: 'warningContainer/30',
-  borderColor: 'warning/30',
-  color: 'warning',
-});
-
-export const badgeError = css({
-  bg: 'errorContainer/30',
-  borderColor: 'error/30',
-  color: 'error',
+export const badge = cva({
+  base: {
+    borderWidth: '1px',
+    borderStyle: 'solid',
+    borderRadius: 'md',
+    fontSize: '10',
+    fontWeight: 'bold',
+    letterSpacing: '5',
+    px: '2',
+    py: '0_5',
+    userSelect: 'none',
+  },
+  variants: {
+    tone: {
+      trace: {
+        bg: 'surfaceContainerHighest',
+        borderColor: 'outlineVariant/40',
+        color: 'outline',
+      },
+      debug: {
+        bg: 'surfaceContainerHighest',
+        borderColor: 'outline/30',
+        color: 'onSurfaceVariant',
+      },
+      info: {
+        bg: 'secondaryContainer/30',
+        borderColor: 'secondary/30',
+        color: 'secondary',
+      },
+      warn: {
+        bg: 'warningContainer/30',
+        borderColor: 'warning/30',
+        color: 'warning',
+      },
+      error: {
+        bg: 'errorContainer/30',
+        borderColor: 'error/30',
+        color: 'error',
+      },
+      unknown: {
+        bg: 'surfaceContainerHighest',
+        borderColor: 'outline/30',
+        color: 'onSurfaceVariant',
+      },
+    },
+  },
 });
 
 export const message = css({

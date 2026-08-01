@@ -289,11 +289,10 @@ interface LibrarySortMenuProps {
 }
 
 function LibrarySortMenu(props: LibrarySortMenuProps) {
-  const [open, setOpen] = createSignal(false);
   const currentLabel = () => sortItems.find((item) => item.value === props.value())?.label ?? '';
 
   return (
-    <Menu.Root onOpenChange={(details) => setOpen(details.open)}>
+    <Menu.Root>
       <Menu.Trigger disabled={props.disabled()} aria-label="Sort By" class={styles.sortTrigger}>
         <ListSortAscending size={16} class={styles.sortTriggerIcon} />
         <span class={styles.sortTriggerText}>
@@ -302,11 +301,7 @@ function LibrarySortMenu(props: LibrarySortMenuProps) {
           </span>
           <span class={styles.sortValue}>{currentLabel()}</span>
         </span>
-        <ChevronDown
-          size={14}
-          class={styles.chevron}
-          classList={{ [styles.chevronOpen]: open() }}
-        />
+        <ChevronDown size={14} class={styles.chevron} />
       </Menu.Trigger>
       <Menu.Positioner>
         <Menu.Content class={styles.menuContent}>
@@ -355,8 +350,7 @@ function LibraryStatusMenu(props: LibraryStatusMenuProps) {
             ? 'Status'
             : `Status, ${activeFilterCount()} ${activeFilterCount() === 1 ? 'filter' : 'filters'} active`
         }
-        class={styles.statusTrigger}
-        classList={{ [styles.statusTriggerActive]: activeFilterCount() > 0 }}
+        class={styles.statusTrigger({ active: activeFilterCount() > 0 })}
       >
         <Funnel size={14} class={styles.statusTriggerIcon} />
         <span class={styles.statusTriggerText}>Status</span>

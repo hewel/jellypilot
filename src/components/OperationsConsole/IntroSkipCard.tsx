@@ -24,10 +24,6 @@ export default function IntroSkipCard(props: IntroSkipCardProps) {
               <button
                 type="button"
                 class={styles.choice}
-                classList={{
-                  [styles.choiceSelected]: props.currentMode === option.mode,
-                  [styles.choiceIdle]: props.currentMode !== option.mode,
-                }}
                 aria-pressed={props.currentMode === option.mode}
                 onClick={() => props.onModeChange(option.mode)}
               >

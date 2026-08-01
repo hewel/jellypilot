@@ -59,22 +59,22 @@ export const serverGrid = css({
   },
 });
 
-export const segmented = css({
-  display: 'grid',
-  borderRadius: '2xl',
-  p: '1',
-  bg: 'surfaceContainerHigh/40',
-  borderWidth: '1px',
-  borderStyle: 'solid',
-  borderColor: 'outlineVariant',
-});
-
-export const segmented2 = css({
-  gridTemplateColumns: '[repeat(2, minmax(0, 1fr))]',
-});
-
-export const segmented1 = css({
-  gridTemplateColumns: '[1fr]',
+export const segmented = cva({
+  base: {
+    display: 'grid',
+    borderRadius: '2xl',
+    p: '1',
+    bg: 'surfaceContainerHigh/40',
+    borderWidth: '1px',
+    borderStyle: 'solid',
+    borderColor: 'outlineVariant',
+  },
+  variants: {
+    columns: {
+      1: { gridTemplateColumns: '[1fr]' },
+      2: { gridTemplateColumns: '[repeat(2, minmax(0, 1fr))]' },
+    },
+  },
 });
 
 export const segment = cva({

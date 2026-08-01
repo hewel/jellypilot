@@ -479,7 +479,6 @@ function SeasonSelector(props: {
                 <button
                   type="button"
                   class={showStyles.seasonTab}
-                  classList={{ [showStyles.activeSeasonTab]: props.activeSeason?.id === season.id }}
                   aria-pressed={props.activeSeason?.id === season.id}
                   disabled={props.disabled}
                   onClick={() => props.onSelect(season)}

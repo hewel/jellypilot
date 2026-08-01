@@ -134,6 +134,8 @@ export const fieldset = css({
 });
 
 export const choice = css({
+  bg: 'surfaceContainerHigh/40',
+  color: 'onSurface',
   borderRadius: '2xl',
   px: '4',
   py: '3',
@@ -152,18 +154,13 @@ export const choice = css({
     bg: 'surfaceContainerHigh/60',
     borderColor: 'primary/50',
   },
-});
-
-export const choiceIdle = css({
-  bg: 'surfaceContainerHigh/40',
-  color: 'onSurface',
-});
-
-export const choiceSelected = css({
-  bg: 'primaryContainer/35',
-  borderColor: 'primary',
-  color: 'onPrimaryContainer',
-  fontWeight: 'semibold',
+  _pressed: {
+    bg: 'primaryContainer/35',
+    borderColor: 'primary',
+    color: 'onPrimaryContainer',
+    fontWeight: 'semibold',
+    _hover: { bg: 'surfaceContainerHigh/60', borderColor: 'primary/50' },
+  },
 });
 
 export const choiceTitle = css({

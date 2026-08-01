@@ -1,29 +1,33 @@
-import { css } from '@styled-system/css';
+import { css, cva } from '@styled-system/css';
 
-export const saveBadge = css({
-  borderRadius: 'sm',
-  px: '2_5',
-  py: '0_5',
-  fontSize: '11',
-  fontWeight: 'bold',
-  borderWidth: '1px',
-  borderStyle: 'solid',
-  borderColor: '[transparent]',
-  letterSpacing: '5',
-  textTransform: 'uppercase',
-});
-
-export const saveOk = css({
-  bg: 'secondaryContainer/20',
-  borderColor: 'secondary/20',
-  color: 'secondary',
-});
-
-export const saveError = css({
-  animation: '[pulse 1.8s {easings.inOut} infinite]',
-  bg: 'errorContainer/20',
-  borderColor: 'error/20',
-  color: 'error',
+export const saveBadge = cva({
+  base: {
+    borderRadius: 'sm',
+    px: '2_5',
+    py: '0_5',
+    fontSize: '11',
+    fontWeight: 'bold',
+    borderWidth: '1px',
+    borderStyle: 'solid',
+    borderColor: '[transparent]',
+    letterSpacing: '5',
+    textTransform: 'uppercase',
+  },
+  variants: {
+    tone: {
+      ok: {
+        bg: 'secondaryContainer/20',
+        borderColor: 'secondary/20',
+        color: 'secondary',
+      },
+      error: {
+        animation: '[pulse 1.8s {easings.inOut} infinite]',
+        bg: 'errorContainer/20',
+        borderColor: 'error/20',
+        color: 'error',
+      },
+    },
+  },
 });
 
 export const field = css({
@@ -72,11 +76,6 @@ export const chevronWrap = css({
   display: 'inline-flex',
   alignItems: 'center',
   justifyContent: 'center',
-});
-
-export const chevronOpen = css({
-  color: 'secondary',
-  transform: '[rotate(180deg)]',
 });
 
 export const advancedPanel = css({
@@ -338,6 +337,12 @@ export const advancedTrigger = css({
   _focusVisible: {
     outline: '[2px solid {colors.primary}]',
     outlineOffset: '[2px]',
+  },
+  // Scoped to this trigger's data-state: a bare `[data-state=open] &` on the
+  // chevron would also match the enclosing Dialog's open state.
+  '&[data-state=open] svg': {
+    color: 'secondary',
+    transform: '[rotate(180deg)]',
   },
 });
 

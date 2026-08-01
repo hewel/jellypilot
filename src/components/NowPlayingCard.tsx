@@ -317,16 +317,13 @@ export default function NowPlayingCard(props: {
           >
             <span class={styles.iconSlot}>
               <Play
-                class={cx(
-                  styles.contextualIcon({ visible: player()?.paused ?? true }),
-                  styles.iconDropShadow,
-                )}
+                class={styles.contextualIcon({ visible: player()?.paused ?? true, shadow: true })}
               />
               <Pause
-                class={cx(
-                  styles.contextualIcon({ visible: !(player()?.paused ?? true) }),
-                  styles.iconDropShadow,
-                )}
+                class={styles.contextualIcon({
+                  visible: !(player()?.paused ?? true),
+                  shadow: true,
+                })}
               />
             </span>
             <span class={styles.actionLabel}>{player()?.paused ? 'Play' : 'Pause'}</span>
