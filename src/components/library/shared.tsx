@@ -213,42 +213,62 @@ export function UserDataControls(props: {
   return (
     <div class={styles.userDataControls}>
       <div class={styles.userDataActions}>
-        <Button
+        <button
           type="button"
-          variant="secondary"
-          class={styles.pillButton}
+          class={styles.iconAction}
           classList={{ [styles.favoriteSelected]: props.favorite }}
           disabled={anyBusy()}
           aria-label={props.favorite ? 'Remove from favorites' : 'Add to favorites'}
           onClick={() => void runAction(favoriteAction())}
-          leadingIcon={
-            <Show
-              when={busy() === favoriteAction()}
-              fallback={
-                <Heart
-                  class={cx(
-                    styles.iconSm,
-                    props.favorite ? styles.favoriteIconSelected : styles.favoriteIcon,
-                  )}
-                />
-              }
-            >
-              <RefreshCw class={styles.spinIcon} />
-            </Show>
-          }
         >
-          {busy() === favoriteAction() ? 'Updating...' : props.favorite ? 'Favorited' : 'Favorite'}
-        </Button>
+          <Show
+            when={busy() === favoriteAction()}
+            fallback={
+              <Heart
+                class={cx(
+                  styles.iconSm,
+                  props.favorite ? styles.favoriteIconSelected : styles.favoriteIcon,
+                )}
+              />
+            }
+          >
+            <RefreshCw class={styles.spinIcon} />
+          </Show>
+        </button>
 
-        <Menu.Root>
-          <Menu.Trigger class={styles.moreTrigger} disabled={anyBusy()} aria-label="More actions">
-            <MoreVertical class={styles.iconSm} aria-hidden="true" />
-          </Menu.Trigger>
-          <Portal mount={document.body}>
-            <Menu.Positioner>
-              <Menu.Content class={styles.menuContent}>
-                <Show when={props.playFromBeginning}>
-                  {(startOver) => (
+        <button
+          type="button"
+          class={styles.iconAction}
+          disabled={anyBusy()}
+          aria-label={props.played ? 'Mark unplayed' : 'Mark played'}
+          onClick={() => void runAction(playedAction())}
+        >
+          <Show
+            when={busy() === playedAction()}
+            fallback={
+              <Check
+                class={cx(styles.iconSm, props.played && styles.playedIconSelected)}
+                aria-hidden="true"
+              />
+            }
+          >
+            <RefreshCw class={styles.spinIcon} />
+          </Show>
+        </button>
+
+        <Show when={props.playFromBeginning}>
+          {(startOver) => (
+            <Menu.Root>
+              <Menu.Trigger
+                class={styles.iconAction}
+                disabled={anyBusy()}
+                aria-label="More actions"
+              >
+                <MoreVertical class={styles.iconSm} aria-hidden="true" />
+              </Menu.Trigger>
+              <Portal mount={document.body}>
+                <Menu.Positioner>
+                  <Menu.Content class={styles.menuContent}>
                     <Menu.Item
                       class={styles.menuItem}
                       value="play-from-beginning"
@@ -262,24 +282,12 @@ export function UserDataControls(props: {
                         </span>
                       </Menu.ItemText>
                     </Menu.Item>
-                  )}
-                </Show>
-                <Menu.Item
-                  class={styles.menuItem}
-                  value="toggle-played"
-                  onSelect={() => void runAction(playedAction())}
-                >
-                  <Menu.ItemText class={styles.menuText}>
-                    <span class={styles.menuItemRow}>
-                      <Check class={styles.menuItemIcon} aria-hidden="true" />
-                      {props.played ? 'Mark unplayed' : 'Mark played'}
-                    </span>
-                  </Menu.ItemText>
-                </Menu.Item>
-              </Menu.Content>
-            </Menu.Positioner>
-          </Portal>
-        </Menu.Root>
+                  </Menu.Content>
+                </Menu.Positioner>
+              </Portal>
+            </Menu.Root>
+          )}
+        </Show>
       </div>
       <Show when={error()}>{(message) => <p class={styles.errorText}>{message()}</p>}</Show>
     </div>
