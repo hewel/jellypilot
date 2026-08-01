@@ -18,7 +18,7 @@ export const hero = css({
   display: 'flex',
   flexDirection: 'column',
   justifyContent: 'flex-end',
-  minHeight: '[clamp(24rem, 50vh, 30rem)]',
+  minHeight: '[clamp(28rem, 62vh, 38rem)]',
   overflow: 'hidden',
   position: 'relative',
 });
@@ -51,7 +51,7 @@ export const backdropFallback = css({
 
 export const scrim = css({
   backgroundImage:
-    '[linear-gradient(to top, {colors.background} 4%, {colors.background/72} 38%, transparent 74%), linear-gradient(to right, {colors.background/82} 0%, transparent 58%), linear-gradient(to bottom, {colors.background/62} 0%, transparent 26%)]',
+    '[linear-gradient(to top, {colors.background} 2%, {colors.background/85} 32%, {colors.background/35} 58%, transparent 82%), linear-gradient(to right, {colors.background/88} 0%, {colors.background/40} 38%, transparent 68%), linear-gradient(to bottom, {colors.background/62} 0%, transparent 26%)]',
   inset: '[0]',
   position: 'absolute',
 });
@@ -93,8 +93,8 @@ export const backLink = css({
   },
 });
 
-/* Content column: poster + glass copy panel sit side by side on desktop and
- * collapse to a single full-width panel below 800px. */
+/* Content column: poster + copy sit side by side on desktop and collapse to a
+ * single full-width column below 800px. */
 export const content = css({
   alignItems: 'flex-end',
   display: 'flex',
@@ -119,7 +119,7 @@ export const poster = css({
   objectFit: 'cover',
   outline: '[1px solid rgb(255 255 255 / 0.1)]',
   overflow: 'hidden',
-  width: '[clamp(10rem, 15vw, 13rem)]',
+  width: '[clamp(12rem, 17vw, 16rem)]',
   _belowPoster: {
     display: 'none',
   },
@@ -138,19 +138,11 @@ export const posterFallback = css({
   width: 'full',
 });
 
-export const glassPanel = css({
-  backdropFilter: '[blur(12px)]',
-  bg: 'surface/72',
-  borderColor: 'onSurface/10',
-  borderRadius: '3xl',
-  borderStyle: 'solid',
-  borderWidth: '1px',
-  boxShadow: '2xl',
+export const copy = css({
   display: 'grid',
   gap: '4',
   maxWidth: '[46rem]',
   minWidth: '[0]',
-  p: '6',
   width: 'full',
 });
 
@@ -202,6 +194,7 @@ export const title = css({
   lineHeight: '[1.08]',
   m: '0',
   overflowWrap: 'break-word',
+  textShadow: '[0 2px 18px rgb(0 0 0 / 0.45)]',
   sm: {
     fontSize: '[44px]',
   },
@@ -267,33 +260,6 @@ export const overviewToggle = css({
     outline: '[2px solid {colors.secondary}]',
     outlineOffset: '1',
   },
-});
-
-export const progressWrap = css({
-  display: 'grid',
-  gap: '1_5',
-});
-
-export const progressBar = css({
-  bg: 'onSurface/15',
-  borderRadius: 'full',
-  height: '1_5',
-  overflow: 'hidden',
-  width: 'full',
-});
-
-export const progressFill = css({
-  bg: 'secondary',
-  borderRadius: 'full',
-  height: 'full',
-});
-
-export const progressLabel = css({
-  color: 'onSurfaceVariant',
-  fontSize: '13',
-  fontVariantNumeric: 'tabular-nums',
-  fontWeight: 'semibold',
-  lineHeight: '20',
 });
 
 export const actions = css({
@@ -410,14 +376,14 @@ export const technicalLoading = css({
   lineHeight: '20',
 });
 
-/* Skeleton reserves the poster, glass panel, summary, and technical geometry
+/* Skeleton reserves the poster, copy column, summary, and technical geometry
  * so late core/stream data does not shift the page. */
 export const skeletonHero = css({
   bg: 'surfaceContainerLow',
   display: 'flex',
   flexDirection: 'column',
   justifyContent: 'flex-end',
-  minHeight: '[clamp(24rem, 50vh, 30rem)]',
+  minHeight: '[clamp(28rem, 62vh, 38rem)]',
   overflow: 'hidden',
   position: 'relative',
 });
@@ -451,7 +417,7 @@ export const skeletonPoster = css({
   bg: 'onSurface/10',
   borderRadius: '2xl',
   flex: 'none',
-  width: '[clamp(10rem, 15vw, 13rem)]',
+  width: '[clamp(12rem, 17vw, 16rem)]',
   _belowPoster: {
     display: 'none',
   },

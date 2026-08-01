@@ -1843,7 +1843,7 @@ test('library item detail renders resume-primary movie metadata', async () => {
     'src',
     imageSource(movieDetail.backdropImageId ?? ''),
   );
-  expect(screen.getByRole('button', { name: 'Resume' })).toBeVisible();
+  expect(screen.getByRole('button', { name: 'Resume 118 min remaining' })).toBeVisible();
   // Play from beginning lives in the More actions overflow menu.
   fireEvent.click(screen.getByRole('button', { name: 'More actions' }));
   const startOver = await screen.findByRole('menuitem', { name: 'Play from beginning' });
@@ -1860,7 +1860,7 @@ test('library item detail renders resume-primary movie metadata', async () => {
     }),
   );
   // Resume remains the primary action.
-  fireEvent.click(screen.getByRole('button', { name: 'Resume' }));
+  fireEvent.click(screen.getByRole('button', { name: 'Resume 118 min remaining' }));
   await waitFor(() =>
     expect(playCommand).toHaveBeenLastCalledWith({
       audioStreamIndex: null,
@@ -2171,9 +2171,8 @@ test('library item detail shows rich credits, rating chips, and resume progress'
   expect(screen.getByText('Actor 4')).toBeVisible();
   expect(screen.queryByText('Actor 5')).toBeNull();
   expect(screen.getByText('+2 more')).toBeVisible();
-  // Resume progress bar with remaining minutes (90 of 120 minutes left).
-  const progress = screen.getByRole('progressbar', { name: 'Playback progress' });
-  expect(progress).toHaveAttribute('aria-valuenow', '25');
+  // Resume play button carries watched progress (90 of 120 minutes left).
+  expect(screen.getByRole('button', { name: 'Resume 90 min remaining' })).toBeVisible();
   expect(screen.getByText('90 min remaining')).toBeVisible();
 
   cleanup();
@@ -2315,7 +2314,7 @@ test('library item detail recommendation failure keeps the hero usable with retr
 
   await screen.findByRole('heading', { name: 'Detail Movie' });
   // Hero stays usable while the recommendation shelf reports its own failure.
-  expect(screen.getByRole('button', { name: 'Resume' })).toBeVisible();
+  expect(screen.getByRole('button', { name: 'Resume 118 min remaining' })).toBeVisible();
   expect(await screen.findByText('Recommendations failed')).toBeVisible();
   const retry = screen.getByRole('button', { name: 'Retry' });
   expect(similarCommand).toHaveBeenCalledTimes(1);

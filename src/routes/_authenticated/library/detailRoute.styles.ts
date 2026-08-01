@@ -24,6 +24,9 @@ export const contentSection = css({
   minWidth: '[0]',
   px: '4',
   width: 'full',
+  lg: {
+    px: '8',
+  },
 });
 
 export const sectionHeading = css({
@@ -39,10 +42,6 @@ export const sectionHeading = css({
 export const pillButton = css({
   borderRadius: 'full',
   maxWidth: '[100%]',
-});
-
-export const playGlow = css({
-  boxShadow: '[0 8px 24px {colors.primary/40}]',
 });
 
 export const playIcon = css({

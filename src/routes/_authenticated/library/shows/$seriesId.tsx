@@ -15,6 +15,7 @@ import {
   DetailRecommendationShelf,
   DetailRecommendationShelfSkeleton,
 } from '@components/library/DetailRecommendationShelf';
+import { ProgressPlayButton } from '@components/library/ProgressPlayButton';
 import {
   DetailHero,
   type DetailHeroModel,
@@ -24,7 +25,7 @@ import {
   formatRuntime,
   seasonLabel,
 } from '@components/library/shared';
-import { Button, JellyPilotSelect } from '@components/ui';
+import { JellyPilotSelect } from '@components/ui';
 import type { JellyPilotSelectItem } from '@components/ui';
 import { cx } from '@styled-system/css';
 import { createMutation, createQuery, useQueryClient } from '@tanstack/solid-query';
@@ -63,7 +64,6 @@ function episodeLabel(episode: VideoLibraryItem): string {
 }
 
 function buildShowHeroModel(show: VideoShowDetail): DetailHeroModel {
-  const next = show.nextEpisode;
   return {
     itemId: show.id,
     name: show.name,
@@ -81,13 +81,6 @@ function buildShowHeroModel(show: VideoShowDetail): DetailHeroModel {
     seriesName: null,
     seriesId: null,
     episodeCode: null,
-    progress: next
-      ? detailPlaybackProgress(
-          next.runtimeSeconds,
-          next.resumePositionSeconds,
-          next.playedPercentage,
-        )
-      : null,
   };
 }
 
@@ -263,6 +256,20 @@ function LibraryShowDetailRoute() {
         : 'Play';
     return `${prefix} ${episodeLabel(nextEpisode)}`;
   };
+  const playbackProgress = () => {
+    const next = detail()?.nextEpisode;
+    return next
+      ? detailPlaybackProgress(
+          next.runtimeSeconds,
+          next.resumePositionSeconds,
+          next.playedPercentage,
+        )
+      : null;
+  };
+  const progressRemainingLabel = () => {
+    const progress = playbackProgress();
+    return progress ? `${progress.minutesRemaining} min remaining` : null;
+  };
   const seasonMeta = () => {
     const episodes = seasonEpisodes();
     if (episodes.length === 0) {
@@ -325,10 +332,10 @@ function LibraryShowDetailRoute() {
                   onBack={closeDetail}
                   actions={() => (
                     <>
-                      <Button
-                        type="button"
-                        variant="primary"
-                        class={cx(styles.pillButton, styles.playGlow)}
+                      <ProgressPlayButton
+                        label={playBusy() ? 'Loading...' : playShowLabel()}
+                        percent={playbackProgress()?.percent ?? null}
+                        remainingLabel={progressRemainingLabel()}
                         disabled={!show().nextEpisode || playBusy()}
                         onClick={() => void playShow()}
                         leadingIcon={
@@ -336,9 +343,7 @@ function LibraryShowDetailRoute() {
                             <RefreshCw class={cx(styles.icon4, styles.spinner)} />
                           </Show>
                         }
-                      >
-                        {playBusy() ? 'Loading...' : playShowLabel()}
-                      </Button>
+                      />
                       <UserDataControls
                         itemId={show().id}
                         played={show().played}
