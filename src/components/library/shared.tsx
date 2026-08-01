@@ -1,7 +1,9 @@
+import { Menu } from '@ark-ui/solid/menu';
 import { cx } from '@styled-system/css';
 import { Exit, Match } from 'effect';
-import { Check, Clapperboard, Heart, RefreshCw } from 'lucide-solid';
+import { Check, Clapperboard, Heart, MoreVertical, RefreshCw, RotateCcw } from 'lucide-solid';
 import { For, Show, createSignal, createUniqueId, onCleanup, onMount } from 'solid-js';
+import { Portal } from 'solid-js/web';
 import {
   videoHomeAspect,
   videoHomeColumnCount,
@@ -27,7 +29,7 @@ import * as styles from './shared.styles';
 
 export { MediaInfoHoverCard } from './MediaInfoHoverCard';
 export { DetailHero, DetailHeroSkeleton } from './DetailHero';
-export type { DetailHeroInfoRow } from './DetailHero';
+export type { DetailHeroInfoRow, DetailHeroModel } from './DetailHero';
 export { HomeVideoCard } from './HomeVideoCard';
 export { LibraryVideoCard } from './LibraryVideoCard';
 
@@ -175,6 +177,7 @@ export function UserDataControls(props: {
   played: boolean;
   favorite: boolean;
   subject: string;
+  playFromBeginning?: { disabled: boolean; onSelect: () => void };
   onUpdate: (
     request: VideoUserDataUpdateRequest,
   ) => Promise<Exit.Exit<VideoUserDataUpdate, CommandError>>;
@@ -205,6 +208,7 @@ export function UserDataControls(props: {
   };
   const favoriteAction = () => (props.favorite ? 'unfavorite' : 'favorite');
   const playedAction = () => (props.played ? 'markUnplayed' : 'markPlayed');
+  const anyBusy = () => busy() !== null;
 
   return (
     <div class={styles.userDataControls}>
@@ -214,7 +218,8 @@ export function UserDataControls(props: {
           variant="secondary"
           class={styles.pillButton}
           classList={{ [styles.favoriteSelected]: props.favorite }}
-          disabled={busy() !== null}
+          disabled={anyBusy()}
+          aria-label={props.favorite ? 'Remove from favorites' : 'Add to favorites'}
           onClick={() => void runAction(favoriteAction())}
           leadingIcon={
             <Show
@@ -232,37 +237,49 @@ export function UserDataControls(props: {
             </Show>
           }
         >
-          {busy() === favoriteAction() ? 'Updating...' : props.favorite ? 'Unfavorite' : 'Favorite'}
+          {busy() === favoriteAction() ? 'Updating...' : props.favorite ? 'Favorited' : 'Favorite'}
         </Button>
-        <Button
-          type="button"
-          variant="secondary"
-          class={styles.pillButton}
-          classList={{ [styles.playedSelected]: props.played }}
-          disabled={busy() !== null}
-          onClick={() => void runAction(playedAction())}
-          leadingIcon={
-            <Show
-              when={busy() === playedAction()}
-              fallback={
-                <Check
-                  class={cx(
-                    styles.iconSm,
-                    props.played ? styles.playedIconSelected : styles.playedIcon,
+
+        <Menu.Root>
+          <Menu.Trigger class={styles.moreTrigger} disabled={anyBusy()} aria-label="More actions">
+            <MoreVertical class={styles.iconSm} aria-hidden="true" />
+          </Menu.Trigger>
+          <Portal mount={document.body}>
+            <Menu.Positioner>
+              <Menu.Content class={styles.menuContent}>
+                <Show when={props.playFromBeginning}>
+                  {(startOver) => (
+                    <Menu.Item
+                      class={styles.menuItem}
+                      value="play-from-beginning"
+                      disabled={startOver().disabled}
+                      onSelect={() => startOver().onSelect()}
+                    >
+                      <Menu.ItemText class={styles.menuText}>
+                        <span class={styles.menuItemRow}>
+                          <RotateCcw class={styles.menuItemIcon} aria-hidden="true" />
+                          Play from beginning
+                        </span>
+                      </Menu.ItemText>
+                    </Menu.Item>
                   )}
-                />
-              }
-            >
-              <RefreshCw class={styles.spinIcon} />
-            </Show>
-          }
-        >
-          {busy() === playedAction()
-            ? 'Updating...'
-            : props.played
-              ? 'Mark unplayed'
-              : 'Mark played'}
-        </Button>
+                </Show>
+                <Menu.Item
+                  class={styles.menuItem}
+                  value="toggle-played"
+                  onSelect={() => void runAction(playedAction())}
+                >
+                  <Menu.ItemText class={styles.menuText}>
+                    <span class={styles.menuItemRow}>
+                      <Check class={styles.menuItemIcon} aria-hidden="true" />
+                      {props.played ? 'Mark unplayed' : 'Mark played'}
+                    </span>
+                  </Menu.ItemText>
+                </Menu.Item>
+              </Menu.Content>
+            </Menu.Positioner>
+          </Portal>
+        </Menu.Root>
       </div>
       <Show when={error()}>{(message) => <p class={styles.errorText}>{message()}</p>}</Show>
     </div>

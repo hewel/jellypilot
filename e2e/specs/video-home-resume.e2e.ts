@@ -84,6 +84,7 @@ const itemDetail = {
   canPlay: true,
   artworkImageId: null,
   backdropImageId: null,
+  metadata: { communityRating: null, officialRating: null, creators: [], cast: [] },
 } as const satisfies VideoItemDetail;
 
 const offlineState = {
@@ -122,6 +123,7 @@ const fixtures = {
     ],
     subtitleStreams: [],
   },
+  library_similar_video: [],
   library_play: null,
   now_playing_get_state: offlineState,
 } as const;
@@ -165,6 +167,10 @@ describe('Video Home direct resume', () => {
           audioStreams: [...values.library_item_streams.audioStreams],
           subtitleStreams: [...values.library_item_streams.subtitleStreams],
         },
+      });
+      controller.installFixture('library_similar_video', {
+        kind: 'return',
+        value: [...values.library_similar_video],
       });
       controller.installFixture('library_play', {
         kind: 'return',

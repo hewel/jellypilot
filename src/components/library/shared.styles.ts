@@ -164,10 +164,6 @@ export const favoriteSelected = css({
   borderColor: 'error/30',
 });
 
-export const playedSelected = css({
-  borderColor: 'tertiary/30',
-});
-
 export const iconSm = css({
   height: '4',
   width: '4',
@@ -182,15 +178,6 @@ export const favoriteIconSelected = css({
   fill: 'error',
 });
 
-export const playedIcon = css({
-  color: 'onSurfaceVariant',
-});
-
-export const playedIconSelected = css({
-  color: 'tertiary',
-  fontWeight: 'bold',
-});
-
 export const spinIcon = css({
   animation: '[spin 1s {easings.linear} infinite]',
   color: 'secondary',
@@ -202,4 +189,94 @@ export const errorText = css({
   color: 'error',
   fontSize: '12',
   lineHeight: '16',
+});
+
+export const moreTrigger = css({
+  alignItems: 'center',
+  appearance: 'none',
+  bg: 'onSurface/10',
+  borderColor: 'onSurface/15',
+  borderRadius: 'full',
+  borderStyle: 'solid',
+  borderWidth: '1px',
+  color: 'onSurfaceVariant',
+  cursor: 'pointer',
+  display: 'inline-flex',
+  height: '10',
+  justifyContent: 'center',
+  transitionDuration: '150',
+  transitionProperty: '[background-color, color]',
+  width: '10',
+  _hover: {
+    bg: 'onSurface/15',
+    color: 'onSurface',
+  },
+  _focusVisible: {
+    outline: '[2px solid {colors.secondary}]',
+    outlineOffset: '1',
+  },
+  '&[data-disabled]': {
+    cursor: 'not-allowed',
+    opacity: '[0.5]',
+  },
+});
+
+export const menuContent = css({
+  animation: '[menuIn 0.18s {easings.emphasized}]',
+  backdropFilter: '[blur(12px)]',
+  bg: 'surfaceContainerLowest',
+  borderColor: 'outlineVariant',
+  borderRadius: 'xl',
+  borderStyle: 'solid',
+  borderWidth: '1px',
+  boxShadow: '2xl',
+  minWidth: '[13rem]',
+  outline: 'none',
+  p: '1_5',
+  transformOrigin: 'top right',
+  zIndex: '50',
+});
+
+export const menuItem = css({
+  alignItems: 'center',
+  borderRadius: 'lg',
+  color: 'onSurfaceVariant',
+  cursor: 'pointer',
+  display: 'flex',
+  fontSize: '14',
+  lineHeight: '20',
+  outline: 'none',
+  px: '3',
+  py: '2',
+  transitionDuration: '150',
+  transitionProperty: '[background-color, color]',
+  _hover: {
+    bg: 'surfaceContainerHigh',
+    color: 'onSurface',
+  },
+  '&[data-highlighted]': {
+    bg: 'surfaceContainerHigh',
+    color: 'onSurface',
+  },
+  '&[data-disabled]': {
+    cursor: 'not-allowed',
+    opacity: '[0.5]',
+  },
+});
+
+export const menuItemRow = css({
+  alignItems: 'center',
+  display: 'inline-flex',
+  gap: '2',
+});
+
+export const menuItemIcon = css({
+  color: 'secondary',
+  flex: 'none',
+  height: '4',
+  width: '4',
+});
+
+export const menuText = css({
+  fontWeight: 'medium',
 });

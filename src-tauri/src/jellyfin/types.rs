@@ -194,6 +194,8 @@ pub struct VideoLibraryItem {
   pub resume_position_seconds: Option<f64>,
   /// Percentage watched (0–100), populated for episode rows.
   pub played_percentage: Option<f64>,
+  /// Synopsis text for rich detail rows and recommendation cards.
+  pub overview: Option<String>,
 }
 
 /// Paged video-only Library search request.
@@ -215,6 +217,16 @@ pub struct VideoSearchPage {
   pub total_record_count: i32,
   pub has_more: bool,
   pub items: Vec<VideoLibraryItem>,
+}
+
+/// Provider-neutral credits and ratings shared by item and show detail views.
+#[derive(Debug, Clone, Default, Serialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct VideoDetailMetadata {
+  pub community_rating: Option<f32>,
+  pub official_rating: Option<String>,
+  pub creators: Vec<String>,
+  pub cast: Vec<String>,
 }
 
 /// Playable Movie or Episode detail data exposed to the frontend.
@@ -240,6 +252,7 @@ pub struct VideoItemDetail {
   pub can_play: bool,
   pub artwork_image_id: Option<String>,
   pub backdrop_image_id: Option<String>,
+  pub metadata: VideoDetailMetadata,
 }
 
 /// Selectable audio or subtitle stream exposed before Library playback starts.
@@ -278,6 +291,7 @@ pub struct VideoShowDetail {
   pub backdrop_image_id: Option<String>,
   pub next_episode: Option<VideoLibraryItem>,
   pub seasons: Vec<VideoSeason>,
+  pub metadata: VideoDetailMetadata,
 }
 
 /// Season summary for a Show detail page.

@@ -2158,6 +2158,51 @@ impl<'a> JellyfinLibrary<'a> {
     })
   }
 
+  pub async fn similar_video(
+    &self,
+    item_id: String,
+  ) -> Result<Vec<VideoLibraryItem>, JellyfinError> {
+    let item_id = item_id.trim().to_string();
+    if item_id.is_empty() {
+      return Err(JellyfinError::HttpError(
+        "Item id is required for similar video".to_string(),
+      ));
+    }
+
+    if self.client.provider() == MediaServerProvider::Emby {
+      return self.emby_similar_video(item_id).await;
+    }
+
+    let server_url = self.client.server_url()?;
+    let token = self.client.access_token()?;
+    let user_id = self.client.user_id()?;
+    let configuration = self
+      .client
+      .openapi_configuration(&server_url, Some(&token))?;
+
+    let response = jellyfin_api::apis::library_api::get_similar_items(
+      &configuration,
+      jellyfin_api::apis::library_api::GetSimilarItemsParams {
+        item_id: item_id.clone(),
+        exclude_artist_ids: None,
+        user_id: Some(user_id),
+        limit: Some(12),
+        fields: Some(video_home_fields()),
+      },
+    )
+    .await
+    .map_err(|err| JellyfinClient::openapi_error("Similar video items", err))?;
+
+    let items = response
+      .items
+      .unwrap_or_default()
+      .into_iter()
+      .filter_map(|item| map_video_library_item(&server_url, item))
+      .collect::<Vec<_>>();
+
+    Ok(filter_similar_video_items(items, &item_id))
+  }
+
   pub(crate) async fn next_playable_episode(
     &self,
     series_id: String,
@@ -2588,6 +2633,30 @@ impl<'a> JellyfinLibrary<'a> {
       season_number: request.season_number,
       episodes,
     })
+  }
+
+  async fn emby_similar_video(
+    &self,
+    item_id: String,
+  ) -> Result<Vec<VideoLibraryItem>, JellyfinError> {
+    let server_url = self.client.server_url()?;
+    let user_id = self.client.user_id()?;
+    let response = self
+      .client
+      .get_with_query::<emby_api::models::QueryResultBaseItemDto>(
+        &format!("/Items/{item_id}/Similar"),
+        &emby_similar_video_query(&user_id),
+      )
+      .await?;
+
+    let items = response
+      .items
+      .unwrap_or_default()
+      .into_iter()
+      .filter_map(|item| map_emby_video_library_item(&server_url, item))
+      .collect::<Vec<_>>();
+
+    Ok(filter_similar_video_items(items, &item_id))
   }
 
   async fn emby_update_user_data(
@@ -3033,6 +3102,8 @@ fn map_video_library_item(
     resume_ticks.map(ticks_to_seconds)
   };
 
+  let overview = item.overview.flatten();
+
   Some(VideoLibraryItem {
     id,
     name: item
@@ -3053,7 +3124,20 @@ fn map_video_library_item(
     series_name: item.series_name.flatten(),
     resume_position_seconds,
     played_percentage: user_data_ref.and_then(|data| data.played_percentage.flatten()),
+    overview,
   })
+}
+
+fn filter_similar_video_items(
+  items: Vec<VideoLibraryItem>,
+  current_item_id: &str,
+) -> Vec<VideoLibraryItem> {
+  items
+    .into_iter()
+    .filter(|item| matches!(item.item_type.as_str(), "Movie" | "Series" | "Episode"))
+    .filter(|item| item.id != current_item_id)
+    .take(12)
+    .collect()
 }
 
 fn map_video_show_detail(
@@ -3063,6 +3147,8 @@ fn map_video_show_detail(
   if !matches!(item.r#type?, jellyfin_api::models::BaseItemKind::Series) {
     return None;
   }
+
+  let metadata = jellyfin_detail_metadata(&item);
 
   let id = item.id?.to_string();
   let user_data = item.user_data.flatten();
@@ -3115,6 +3201,7 @@ fn map_video_show_detail(
     backdrop_image_id,
     next_episode: None,
     seasons: Vec::new(),
+    metadata,
   })
 }
 
@@ -3198,6 +3285,8 @@ fn map_video_item_detail(
     return None;
   }
 
+  let metadata = jellyfin_detail_metadata(&item);
+
   let id = item.id?.to_string();
   let user_data = item.user_data.flatten();
   let resume_position_seconds = user_data
@@ -3263,6 +3352,7 @@ fn map_video_item_detail(
     can_play: true,
     artwork_image_id,
     backdrop_image_id,
+    metadata,
   })
 }
 
@@ -3620,7 +3710,7 @@ fn emby_detail_query() -> Vec<(&'static str, String)> {
   vec![
     (
       "Fields",
-      "Overview,Genres,PrimaryImageAspectRatio".to_string(),
+      "Overview,Genres,PrimaryImageAspectRatio,People".to_string(),
     ),
     ("EnableUserData", "true".to_string()),
     ("EnableImages", "true".to_string()),
@@ -3673,8 +3763,94 @@ fn emby_episodes_query(
   params
 }
 
+fn emby_similar_video_query(user_id: &str) -> Vec<(&'static str, String)> {
+  vec![
+    ("Limit", "12".to_string()),
+    ("Fields", emby_home_fields()),
+    ("UserId", user_id.to_string()),
+    ("EnableUserData", "true".to_string()),
+    ("EnableImages", "true".to_string()),
+    ("ImageTypeLimit", "1".to_string()),
+    ("EnableImageTypes", "Primary".to_string()),
+  ]
+}
+
 fn emby_home_fields() -> String {
   "PrimaryImageAspectRatio,Overview,DateCreated".to_string()
+}
+
+fn jellyfin_detail_metadata(item: &jellyfin_api::models::BaseItemDto) -> VideoDetailMetadata {
+  let people = item
+    .people
+    .as_ref()
+    .and_then(|people| people.as_ref())
+    .map(|people| people.as_slice())
+    .unwrap_or_default();
+
+  VideoDetailMetadata {
+    community_rating: item.community_rating.flatten(),
+    official_rating: item
+      .official_rating
+      .as_ref()
+      .and_then(|rating| rating.as_ref())
+      .map(|rating| rating.trim().to_string())
+      .filter(|rating| !rating.is_empty()),
+    creators: dedupe_preserving_order(
+      people
+        .iter()
+        .filter(|person| {
+          matches!(
+            person.r#type,
+            Some(
+              jellyfin_api::models::PersonKind::Director
+                | jellyfin_api::models::PersonKind::Creator
+            )
+          )
+        })
+        .filter_map(|person| person.name.as_ref().and_then(|name| name.as_ref())),
+    ),
+    cast: dedupe_preserving_order(
+      people
+        .iter()
+        .filter(|person| matches!(person.r#type, Some(jellyfin_api::models::PersonKind::Actor)))
+        .filter_map(|person| person.name.as_ref().and_then(|name| name.as_ref())),
+    ),
+  }
+}
+
+fn emby_detail_metadata(item: &emby_api::models::BaseItemDto) -> VideoDetailMetadata {
+  let people = item.people.as_deref().unwrap_or_default();
+
+  VideoDetailMetadata {
+    community_rating: item.community_rating.flatten(),
+    official_rating: item
+      .official_rating
+      .as_ref()
+      .map(|rating| rating.trim().to_string())
+      .filter(|rating| !rating.is_empty()),
+    creators: dedupe_preserving_order(
+      people
+        .iter()
+        .filter(|person| matches!(person.r#type, Some(emby_api::models::PersonType::Director)))
+        .filter_map(|person| person.name.as_ref()),
+    ),
+    cast: dedupe_preserving_order(
+      people
+        .iter()
+        .filter(|person| matches!(person.r#type, Some(emby_api::models::PersonType::Actor)))
+        .filter_map(|person| person.name.as_ref()),
+    ),
+  }
+}
+
+fn dedupe_preserving_order<'a>(names: impl Iterator<Item = &'a String>) -> Vec<String> {
+  let mut seen = std::collections::HashSet::new();
+  names
+    .map(|name| name.trim())
+    .filter(|name| !name.is_empty())
+    .filter(|name| seen.insert(*name))
+    .map(ToOwned::to_owned)
+    .collect()
 }
 
 fn map_emby_continue_watching_item(
@@ -3762,6 +3938,8 @@ fn map_emby_video_library_item(
     resume_ticks.map(ticks_to_seconds)
   };
 
+  let overview = item.overview;
+
   Some(VideoLibraryItem {
     id,
     name: item.name.unwrap_or_else(|| "Untitled".to_string()),
@@ -3777,6 +3955,7 @@ fn map_emby_video_library_item(
     series_name: item.series_name,
     resume_position_seconds,
     played_percentage: user_data.and_then(|data| data.played_percentage.flatten()),
+    overview,
   })
 }
 
@@ -3787,6 +3966,8 @@ fn map_emby_video_show_detail(
   if item.r#type.as_deref()? != "Series" {
     return None;
   }
+
+  let metadata = emby_detail_metadata(&item);
 
   let id = item.id?;
   let user_data = item.user_data.as_deref();
@@ -3829,6 +4010,7 @@ fn map_emby_video_show_detail(
     backdrop_image_id,
     next_episode: None,
     seasons: Vec::new(),
+    metadata,
   })
 }
 
@@ -3866,10 +4048,12 @@ fn map_emby_video_item_detail(
   server_url: &str,
   item: emby_api::models::BaseItemDto,
 ) -> Option<VideoItemDetail> {
-  let item_type = item.r#type?;
-  if !matches!(item_type.as_str(), "Movie" | "Episode") {
+  if !matches!(item.r#type.as_deref()?, "Movie" | "Episode") {
     return None;
   }
+
+  let metadata = emby_detail_metadata(&item);
+  let item_type = item.r#type?;
 
   let id = item.id?;
   let user_data = item.user_data.as_deref();
@@ -3923,6 +4107,7 @@ fn map_emby_video_item_detail(
     can_play: true,
     artwork_image_id,
     backdrop_image_id,
+    metadata,
   })
 }
 
@@ -4066,6 +4251,7 @@ fn video_home_item_to_library_item(item: VideoHomeItem) -> VideoLibraryItem {
     series_name: item.series_name,
     resume_position_seconds: item.resume_position_seconds,
     played_percentage: item.played_percentage,
+    overview: None,
   }
 }
 impl Default for JellyfinClient {
@@ -5418,11 +5604,11 @@ mod tests {
     let (server_url, requests) = serve_responses_with_requests(vec![
       (
         "200 OK",
-        r#"{"Id":"00000000-0000-0000-0000-000000000050","Name":"Detail Movie","Type":"Movie","Overview":"A movie overview.","ProductionYear":2024,"RunTimeTicks":72000000000,"Genres":["Drama","Mystery"],"ImageTags":{"Primary":"poster-detail"},"UserData":{"PlaybackPositionTicks":1200000000,"PlayedPercentage":25.0,"IsFavorite":true,"Played":false},"MediaStreams":[{"Index":0,"Type":"Video","Codec":"h264"},{"Index":1,"Type":"Audio","Language":"eng","DisplayTitle":"English - AAC 2.0","Codec":"aac","IsDefault":true},{"Index":2,"Type":"Audio","Language":"jpn","Codec":"flac"},{"Index":3,"Type":"Subtitle","Language":"eng","DisplayTitle":"English - SRT","Codec":"srt","IsExternal":true}]}"#,
+        r#"{"Id":"00000000-0000-0000-0000-000000000050","Name":"Detail Movie","Type":"Movie","Overview":"A movie overview.","ProductionYear":2024,"RunTimeTicks":72000000000,"Genres":["Drama","Mystery"],"CommunityRating":8.7,"OfficialRating":"PG-13","People":[{"Name":"  Director A  ","Type":"Director"},{"Name":"Director A","Type":"Creator"},{"Name":"Actor One","Type":"Actor"},{"Name":"Actor Two","Type":"Actor"},{"Name":"Actor One","Type":"Actor"},{"Name":" ","Type":"Actor"},{"Name":"Writer W","Type":"Writer"}],"ImageTags":{"Primary":"poster-detail"},"UserData":{"PlaybackPositionTicks":1200000000,"PlayedPercentage":25.0,"IsFavorite":true,"Played":false},"MediaStreams":[{"Index":0,"Type":"Video","Codec":"h264"},{"Index":1,"Type":"Audio","Language":"eng","DisplayTitle":"English - AAC 2.0","Codec":"aac","IsDefault":true},{"Index":2,"Type":"Audio","Language":"jpn","Codec":"flac"},{"Index":3,"Type":"Subtitle","Language":"eng","DisplayTitle":"English - SRT","Codec":"srt","IsExternal":true}]}"#,
       ),
       (
         "200 OK",
-        r#"{"Id":"00000000-0000-0000-0000-000000000051","Name":"Detail Episode","Type":"Episode","SeriesId":"00000000-0000-0000-0000-000000000052","SeriesName":"Example Show","ParentIndexNumber":2,"IndexNumber":3,"Genres":["Sci-Fi"],"UserData":{"PlaybackPositionTicks":0,"PlayedPercentage":0.0,"IsFavorite":false,"Played":true}}"#,
+        r#"{"Id":"00000000-0000-0000-0000-000000000051","Name":"Detail Episode","Type":"Episode","SeriesId":"00000000-0000-0000-0000-000000000052","SeriesName":"Example Show","ParentIndexNumber":2,"IndexNumber":3,"Genres":["Sci-Fi"],"CommunityRating":9.1,"OfficialRating":"TV-14","People":[{"Name":"Episode Director","Type":"Director"},{"Name":"Guest Actor","Type":"Actor"}],"UserData":{"PlaybackPositionTicks":0,"PlayedPercentage":0.0,"IsFavorite":false,"Played":true}}"#,
       ),
       (
         "200 OK",
@@ -5458,6 +5644,10 @@ mod tests {
     assert!(movie.can_resume);
     assert!(movie.can_play);
     assert!(movie.favorite);
+    assert_eq!(movie.metadata.community_rating, Some(8.7));
+    assert_eq!(movie.metadata.official_rating.as_deref(), Some("PG-13"));
+    assert_eq!(movie.metadata.creators, vec!["Director A"]);
+    assert_eq!(movie.metadata.cast, vec!["Actor One", "Actor Two"]);
     let expected_artwork =
       format!("{server_url}/Items/{movie_id}/Images/Primary?tag=poster-detail");
     assert_image_ref_url(movie.artwork_image_id.as_ref(), &expected_artwork);
@@ -5480,6 +5670,10 @@ mod tests {
     assert!(episode.played);
     assert!(!episode.can_resume);
     assert_eq!(episode.artwork_image_id, None);
+    assert_eq!(episode.metadata.community_rating, Some(9.1));
+    assert_eq!(episode.metadata.official_rating.as_deref(), Some("TV-14"));
+    assert_eq!(episode.metadata.creators, vec!["Episode Director"]);
+    assert_eq!(episode.metadata.cast, vec!["Guest Actor"]);
 
     let captured = requests.lock();
     assert!(captured[0].starts_with("GET /Items/00000000-0000-0000-0000-000000000050?"));
@@ -5522,7 +5716,7 @@ mod tests {
     let (server_url, requests) = serve_responses_with_requests(vec![
       (
         "200 OK",
-        r#"{"Id":"00000000-0000-0000-0000-000000000060","Name":"Example Show","Type":"Series","Overview":"A show overview.","ProductionYear":2023,"Genres":["Drama"],"ImageTags":{"Primary":"poster-show"},"UserData":{"IsFavorite":true,"Played":false}}"#,
+        r#"{"Id":"00000000-0000-0000-0000-000000000060","Name":"Example Show","Type":"Series","Overview":"A show overview.","ProductionYear":2023,"Genres":["Drama"],"CommunityRating":8.2,"OfficialRating":"TV-MA","People":[{"Name":"Show Creator","Type":"Creator"},{"Name":"Pilot Director","Type":"Director"},{"Name":"Series Actor","Type":"Actor"}],"ImageTags":{"Primary":"poster-show"},"UserData":{"IsFavorite":true,"Played":false}}"#,
       ),
       (
         "200 OK",
@@ -5549,6 +5743,13 @@ mod tests {
     assert_eq!(detail.genres, vec!["Drama"]);
     assert!(detail.favorite);
     assert!(detail.can_play);
+    assert_eq!(detail.metadata.community_rating, Some(8.2));
+    assert_eq!(detail.metadata.official_rating.as_deref(), Some("TV-MA"));
+    assert_eq!(
+      detail.metadata.creators,
+      vec!["Show Creator", "Pilot Director"]
+    );
+    assert_eq!(detail.metadata.cast, vec!["Series Actor"]);
     assert_eq!(detail.seasons.len(), 1);
     assert_eq!(detail.seasons[0].id, season_id);
     assert_eq!(detail.seasons[0].season_number, Some(1));
@@ -5582,7 +5783,7 @@ mod tests {
     let episode_id = "00000000-0000-0000-0000-000000000072";
     let (server_url, requests) = serve_responses_with_requests(vec![(
       "200 OK",
-      r#"{"Items":[{"Id":"00000000-0000-0000-0000-000000000072","Name":"Exact Episode","Type":"Episode","RunTimeTicks":18000000000,"ImageTags":{"Primary":"poster-episode"},"UserData":{"IsFavorite":false,"Played":false}}],"TotalRecordCount":1}"#,
+      r#"{"Items":[{"Id":"00000000-0000-0000-0000-000000000072","Name":"Exact Episode","Type":"Episode","Overview":"Episode synopsis.","RunTimeTicks":18000000000,"ImageTags":{"Primary":"poster-episode"},"UserData":{"IsFavorite":false,"Played":false}}],"TotalRecordCount":1}"#,
     )])
     .await;
     let client = JellyfinClient::new();
@@ -5605,6 +5806,10 @@ mod tests {
     assert_eq!(page.episodes[0].id, episode_id);
     assert_eq!(page.episodes[0].name, "Exact Episode");
     assert_eq!(page.episodes[0].runtime_seconds, Some(1800.0));
+    assert_eq!(
+      page.episodes[0].overview.as_deref(),
+      Some("Episode synopsis.")
+    );
     let expected_artwork =
       format!("{server_url}/Items/{episode_id}/Images/Primary?tag=poster-episode");
     assert_image_ref_url(
@@ -5841,7 +6046,7 @@ mod tests {
     let (server_url, requests) = serve_responses_with_requests(vec![
       (
         "200 OK",
-        r#"{"Id":"00000000-0000-0000-0000-000000000250","Name":"Emby Detail Movie","Type":"Movie","RunTimeTicks":72000000000,"UserData":{"PlaybackPositionTicks":600000000,"Played":false},"MediaStreams":[{"Index":1,"Type":"Audio","Language":"eng","Codec":"aac","IsDefault":true},{"Index":2,"Type":"Subtitle","Codec":"srt","IsExternal":true}]}"#,
+        r#"{"Id":"00000000-0000-0000-0000-000000000250","Name":"Emby Detail Movie","Type":"Movie","RunTimeTicks":72000000000,"CommunityRating":7.5,"OfficialRating":"R","People":[{"Name":"Emby Director","Type":"Director"},{"Name":"Emby Actor","Type":"Actor"}],"UserData":{"PlaybackPositionTicks":600000000,"Played":false},"MediaStreams":[{"Index":1,"Type":"Audio","Language":"eng","Codec":"aac","IsDefault":true},{"Index":2,"Type":"Subtitle","Codec":"srt","IsExternal":true}]}"#,
       ),
       (
         "200 OK",
@@ -5849,7 +6054,7 @@ mod tests {
       ),
       (
         "200 OK",
-        r#"{"Id":"00000000-0000-0000-0000-000000000260","Name":"Emby Show","Type":"Series","ImageTags":{"Primary":"show-primary"},"UserData":{"IsFavorite":true}}"#,
+        r#"{"Id":"00000000-0000-0000-0000-000000000260","Name":"Emby Show","Type":"Series","People":[{"Name":"Emby Show Creator","Type":"Director"}],"ImageTags":{"Primary":"show-primary"},"UserData":{"IsFavorite":true}}"#,
       ),
       (
         "200 OK",
@@ -5861,7 +6066,7 @@ mod tests {
       ),
       (
         "200 OK",
-        r#"{"Items":[{"Id":"00000000-0000-0000-0000-000000000262","Name":"Episode One","Type":"Episode","RunTimeTicks":18000000000,"ParentIndexNumber":1,"IndexNumber":1}],"TotalRecordCount":1}"#,
+        r#"{"Items":[{"Id":"00000000-0000-0000-0000-000000000262","Name":"Episode One","Type":"Episode","Overview":"Emby episode synopsis.","RunTimeTicks":18000000000,"ParentIndexNumber":1,"IndexNumber":1}],"TotalRecordCount":1}"#,
       ),
     ])
     .await;
@@ -5909,12 +6114,22 @@ mod tests {
     assert_eq!(episodes.episodes[0].id, episode_id);
     assert_eq!(episodes.episodes[0].season_number, Some(1));
     assert_eq!(episodes.episodes[0].episode_number, Some(1));
+    assert_eq!(movie.metadata.community_rating, Some(7.5));
+    assert_eq!(movie.metadata.official_rating.as_deref(), Some("R"));
+    assert_eq!(movie.metadata.creators, vec!["Emby Director"]);
+    assert_eq!(movie.metadata.cast, vec!["Emby Actor"]);
+    assert_eq!(show.metadata.creators, vec!["Emby Show Creator"]);
+    assert_eq!(
+      episodes.episodes[0].overview.as_deref(),
+      Some("Emby episode synopsis.")
+    );
 
     let captured = requests.lock();
     assert!(captured[0].starts_with(
       "GET /Users/00000000-0000-0000-0000-000000000001/Items/00000000-0000-0000-0000-000000000250?"
     ));
     assert!(!captured[0].contains("MediaStreams"));
+    assert!(captured[0].contains("Fields=Overview%2CGenres%2CPrimaryImageAspectRatio%2CPeople"));
     assert!(captured[1].contains("Fields=MediaStreams"));
     assert!(captured[3].contains("IncludeItemTypes=Season"));
     assert!(captured[4].starts_with("GET /Shows/NextUp?"));
@@ -5922,6 +6137,136 @@ mod tests {
     assert!(captured[4].contains("EnableResumable=true"));
     assert!(captured[5].contains("ParentId=00000000-0000-0000-0000-000000000261"));
     assert!(captured[5].contains("IncludeItemTypes=Episode"));
+  }
+
+  #[tokio::test]
+  async fn similar_video_filters_non_video_and_current_items_in_provider_order() {
+    let current_id = "00000000-0000-0000-0000-000000000090";
+    let (server_url, requests) = serve_responses_with_requests(vec![(
+      "200 OK",
+      r#"{"Items":[{"Id":"00000000-0000-0000-0000-000000000091","Name":"Similar Movie","Type":"Movie","UserData":{"IsFavorite":true,"Played":false}},{"Id":"00000000-0000-0000-0000-000000000090","Name":"Current Movie","Type":"Movie"},{"Id":"00000000-0000-0000-0000-000000000092","Name":"Similar Show","Type":"Series","UserData":{"Played":true}},{"Id":"00000000-0000-0000-0000-000000000093","Name":"Similar Episode","Type":"Episode"},{"Id":"00000000-0000-0000-0000-000000000094","Name":"Similar Book","Type":"Book"},{"Id":"00000000-0000-0000-0000-000000000095","Name":"Similar Trailer","Type":"Trailer"}],"TotalRecordCount":6}"#,
+    )])
+    .await;
+    let client = JellyfinClient::new();
+    connect_test_client(&client, server_url);
+
+    let similar = client
+      .library()
+      .similar_video(current_id.to_string())
+      .await
+      .expect("similar items should load from the provider");
+
+    let ids: Vec<&str> = similar.iter().map(|item| item.id.as_str()).collect();
+    assert_eq!(
+      ids,
+      vec![
+        "00000000-0000-0000-0000-000000000091",
+        "00000000-0000-0000-0000-000000000092",
+        "00000000-0000-0000-0000-000000000093",
+      ]
+    );
+    assert!(similar[0].favorite, "favorite state is preserved");
+    assert!(!similar[0].played);
+    assert!(similar[1].played, "played state is preserved");
+
+    let captured = requests.lock();
+    assert!(captured[0].starts_with("GET /Items/00000000-0000-0000-0000-000000000090/Similar?"));
+    assert!(captured[0].contains("limit=12"));
+    assert!(captured[0].contains("userId=00000000-0000-0000-0000-000000000001"));
+  }
+
+  #[tokio::test]
+  async fn similar_video_caps_results_at_twelve() {
+    let (server_url, _) = serve_responses_with_requests(vec![(
+      "200 OK",
+      r#"{"Items":[{"Id":"00000000-0000-0000-0000-0000000000a0","Name":"Similar 0","Type":"Movie"},{"Id":"00000000-0000-0000-0000-0000000000a1","Name":"Similar 1","Type":"Movie"},{"Id":"00000000-0000-0000-0000-0000000000a2","Name":"Similar 2","Type":"Movie"},{"Id":"00000000-0000-0000-0000-0000000000a3","Name":"Similar 3","Type":"Movie"},{"Id":"00000000-0000-0000-0000-0000000000a4","Name":"Similar 4","Type":"Movie"},{"Id":"00000000-0000-0000-0000-0000000000a5","Name":"Similar 5","Type":"Movie"},{"Id":"00000000-0000-0000-0000-0000000000a6","Name":"Similar 6","Type":"Movie"},{"Id":"00000000-0000-0000-0000-0000000000a7","Name":"Similar 7","Type":"Movie"},{"Id":"00000000-0000-0000-0000-0000000000a8","Name":"Similar 8","Type":"Movie"},{"Id":"00000000-0000-0000-0000-0000000000a9","Name":"Similar 9","Type":"Movie"},{"Id":"00000000-0000-0000-0000-0000000000aa","Name":"Similar 10","Type":"Movie"},{"Id":"00000000-0000-0000-0000-0000000000ab","Name":"Similar 11","Type":"Movie"},{"Id":"00000000-0000-0000-0000-0000000000ac","Name":"Similar 12","Type":"Movie"},{"Id":"00000000-0000-0000-0000-0000000000ad","Name":"Similar 13","Type":"Movie"}],"TotalRecordCount":14}"#,
+    )])
+    .await;
+    let client = JellyfinClient::new();
+    connect_test_client(&client, server_url);
+
+    let similar = client
+      .library()
+      .similar_video("00000000-0000-0000-0000-0000000000ff".to_string())
+      .await
+      .expect("similar items should load from the provider");
+
+    assert_eq!(similar.len(), 12);
+    assert_eq!(similar[0].id, "00000000-0000-0000-0000-0000000000a0");
+    assert_eq!(similar[11].id, "00000000-0000-0000-0000-0000000000ab");
+  }
+
+  #[tokio::test]
+  async fn similar_video_rejects_empty_item_id() {
+    let client = JellyfinClient::new();
+    connect_test_client(&client, "http://media.example.test".to_string());
+
+    let err = client
+      .library()
+      .similar_video("   ".to_string())
+      .await
+      .expect_err("empty item id should be rejected before any request");
+
+    assert_eq!(
+      err.to_string(),
+      "HTTP error: Item id is required for similar video"
+    );
+  }
+
+  #[tokio::test]
+  async fn similar_video_propagates_provider_http_failure() {
+    let server_url =
+      serve_responses(vec![("500 Internal Server Error", r#"{"Message":"boom"}"#)]).await;
+    let client = JellyfinClient::new();
+    connect_test_client(&client, server_url);
+
+    let err = client
+      .library()
+      .similar_video("00000000-0000-0000-0000-000000000090".to_string())
+      .await
+      .expect_err("provider failure should propagate instead of substituting results");
+
+    assert!(err
+      .to_string()
+      .contains("Similar video items failed: HTTP 500"));
+  }
+
+  #[tokio::test]
+  async fn emby_similar_video_requests_similar_items_with_user_query() {
+    let current_id = "00000000-0000-0000-0000-000000000300";
+    let (server_url, requests) = serve_responses_with_requests(vec![(
+      "200 OK",
+      r#"{"Items":[{"Id":"00000000-0000-0000-0000-000000000301","Name":"Emby Similar Movie","Type":"Movie","UserData":{"IsFavorite":false,"Played":true}},{"Id":"00000000-0000-0000-0000-000000000300","Name":"Current Movie","Type":"Movie"},{"Id":"00000000-0000-0000-0000-000000000302","Name":"Emby Similar Show","Type":"Series"}],"TotalRecordCount":3}"#,
+    )])
+    .await;
+    let client = JellyfinClient::new();
+    connect_test_client_as_emby(&client, server_url);
+
+    let similar = client
+      .library()
+      .similar_video(current_id.to_string())
+      .await
+      .expect("Emby similar items should load from the provider");
+
+    let ids: Vec<&str> = similar.iter().map(|item| item.id.as_str()).collect();
+    assert_eq!(
+      ids,
+      vec![
+        "00000000-0000-0000-0000-000000000301",
+        "00000000-0000-0000-0000-000000000302",
+      ]
+    );
+    assert!(similar[0].played, "played state is preserved");
+
+    let captured = requests.lock();
+    assert!(captured[0].starts_with("GET /Items/00000000-0000-0000-0000-000000000300/Similar?"));
+    assert!(captured[0].contains("Limit=12"));
+    assert!(captured[0].contains("UserId=00000000-0000-0000-0000-000000000001"));
+    assert!(captured[0].contains("EnableUserData=true"));
+    assert!(captured[0].contains("EnableImages=true"));
+    assert!(captured[0].contains("ImageTypeLimit=1"));
+    assert!(captured[0].contains("EnableImageTypes=Primary"));
+    assert!(captured[0].contains("Fields=PrimaryImageAspectRatio%2COverview%2CDateCreated"));
   }
 
   #[tokio::test]

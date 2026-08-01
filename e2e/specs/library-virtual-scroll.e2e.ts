@@ -48,6 +48,7 @@ const browseItems: VideoLibraryItem[] = Array.from({ length: 24 }, (_, index) =>
   seriesName: null,
   resumePositionSeconds: null,
   playedPercentage: null,
+  overview: null,
 }));
 
 const browsePage = {

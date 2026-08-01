@@ -55,6 +55,8 @@ export const commands = {
 	libraryShowDetail: (seriesId: string) => typedError<VideoShowDetail, CommandError>(__TAURI_INVOKE("library_show_detail", { seriesId })),
 	/**  Load Episodes for one Show season. */
 	librarySeasonEpisodes: (request: VideoSeasonEpisodesRequest) => typedError<VideoSeasonEpisodes, CommandError>(__TAURI_INVOKE("library_season_episodes", { request })),
+	/**  Load similar Movie, Series, and Episode recommendations for a Library item. */
+	librarySimilarVideo: (itemId: string) => typedError<VideoLibraryItem[], CommandError>(__TAURI_INVOKE("library_similar_video", { itemId })),
 	/**  Start explicit Library Browser playback through the active Jellyfin session. */
 	libraryPlay: (request: VideoLibraryPlayRequest) => typedError<null, CommandError>(__TAURI_INVOKE("library_play", { request })),
 	/**  Mutate Jellyfin user data for a Library Browser item. */
@@ -358,6 +360,14 @@ export type SavedSession = {
 	deviceId: string | null,
 };
 
+/**  Provider-neutral credits and ratings shared by item and show detail views. */
+export type VideoDetailMetadata = {
+	communityRating: number | null,
+	officialRating: string | null,
+	creators: string[],
+	cast: string[],
+};
+
 /**  Library Browser landing data exposed to the frontend. */
 export type VideoHome = {
 	continueWatching: VideoHomeItem[],
@@ -405,6 +415,7 @@ export type VideoItemDetail = {
 	canPlay: boolean,
 	artworkImageId: string | null,
 	backdropImageId: string | null,
+	metadata: VideoDetailMetadata,
 };
 
 /**  Audio and subtitle metadata loaded after the critical item detail. */
@@ -435,6 +446,8 @@ export type VideoLibraryItem = {
 	resumePositionSeconds: number | null,
 	/**  Percentage watched (0–100), populated for episode rows. */
 	playedPercentage: number | null,
+	/**  Synopsis text for rich detail rows and recommendation cards. */
+	overview: string | null,
 };
 
 /**  Supported video library browse families. */
@@ -555,6 +568,7 @@ export type VideoShowDetail = {
 	backdropImageId: string | null,
 	nextEpisode: VideoLibraryItem | null,
 	seasons: VideoSeason[],
+	metadata: VideoDetailMetadata,
 };
 
 /**  User data action supported by Library Browser detail views. */

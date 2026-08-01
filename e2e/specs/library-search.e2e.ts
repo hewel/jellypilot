@@ -85,6 +85,7 @@ const browsePage = {
       seriesName: null,
       resumePositionSeconds: null,
       playedPercentage: null,
+      overview: null,
     },
   ],
 } as const satisfies VideoLibraryPage;
@@ -105,6 +106,7 @@ const searchItems: VideoLibraryItem[] = [
     seriesName: null,
     resumePositionSeconds: null,
     playedPercentage: null,
+    overview: null,
   })),
   {
     id: 'e2e-search-finale',
@@ -121,6 +123,7 @@ const searchItems: VideoLibraryItem[] = [
     seriesName: null,
     resumePositionSeconds: null,
     playedPercentage: null,
+    overview: null,
   },
 ];
 
@@ -153,6 +156,7 @@ const finaleDetail = {
   canPlay: false,
   artworkImageId: null,
   backdropImageId: null,
+  metadata: { communityRating: null, officialRating: null, creators: [], cast: [] },
 } as const satisfies VideoItemDetail;
 
 const offlineState = {
@@ -181,6 +185,7 @@ const fixtures = {
   library_search_video: searchPage,
   library_item_detail: finaleDetail,
   library_item_streams: { audioStreams: [], subtitleStreams: [] },
+  library_similar_video: [],
   library_item_shortcut: moviesShortcut,
   now_playing_get_state: offlineState,
 } as const;
@@ -237,6 +242,10 @@ describe('library search finds results beyond home rows and restores them on Bac
           audioStreams: [...values.library_item_streams.audioStreams],
           subtitleStreams: [...values.library_item_streams.subtitleStreams],
         },
+      });
+      controller.installFixture('library_similar_video', {
+        kind: 'return',
+        value: [...values.library_similar_video],
       });
       controller.installFixture('library_item_shortcut', {
         kind: 'return',

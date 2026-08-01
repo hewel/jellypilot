@@ -26,6 +26,16 @@ export const contentSection = css({
   width: 'full',
 });
 
+export const sectionHeading = css({
+  color: 'onSurface',
+  fontFamily: 'display',
+  fontSize: '22',
+  fontWeight: 'bold',
+  letterSpacing: '[-0.01em]',
+  lineHeight: '28',
+  m: '0',
+});
+
 export const pillButton = css({
   borderRadius: 'full',
   maxWidth: '[100%]',
