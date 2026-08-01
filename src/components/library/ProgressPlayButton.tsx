@@ -42,6 +42,7 @@ export function ProgressPlayButton(props: {
     <Button
       type="button"
       variant={variant()}
+      size="sm"
       class={cx(
         styles.root({
           glow: variant() === 'primary',

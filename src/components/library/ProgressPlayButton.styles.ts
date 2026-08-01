@@ -7,20 +7,18 @@ import { css, cva } from '@styled-system/css';
  * does not belong on the shared recipe. */
 export const root = cva({
   base: {
-    borderRadius: 'full',
     fontSize: '13',
     justifyContent: 'flex-start',
     lineHeight: '[1.125rem]',
     maxWidth: '[100%]',
     minHeight: '[2.625rem]',
     overflow: 'hidden',
-    padding: '[0.7em 1em]',
   },
   variants: {
     glow: {
       true: {
         boxShadow: '[0 8px 24px {colors.primary/40}]',
-        minWidth: '[16rem]',
+        minWidth: '[10rem]',
       },
     },
     progress: {
