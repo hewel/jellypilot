@@ -11,6 +11,7 @@ export const root = css({
 
 export const glow = css({
   boxShadow: '[0 8px 24px {colors.primary/40}]',
+  minWidth: '[16rem]',
 });
 
 export const progressPrimary = css({
