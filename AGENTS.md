@@ -67,6 +67,12 @@ bun tauri build     # Production desktop build
 - **Validation**: Proportionate verification policy in [docs/agents/validation.md](docs/agents/validation.md); scale test scope to the change's blast radius and never skip verification.
 - **Native E2E**: Agent policy and command contract in [docs/agents/e2e.md](docs/agents/e2e.md). Use focused native E2E whenever acceptance crosses Tauri startup, IPC, post-mount routing, desktop interaction, or sandboxed persistence.
 
+## Git & Command Safety
+
+- **Git**: Never run `git stash`, `git reset`, or any destructive/broad git command. The only permitted git mutation is staging and committing specific named files in one step (`git add <files> && git commit`); no `git add -A`, `git add .`, or unstaged-sweeping commands.
+- **No cargo**: Never invoke `cargo` directly; use the Bun script wrappers (`bun run test:all`, `bun tauri …`).
+- **No slow commands**: Prefer fast, focused commands (Oxfmt/Oxlint on touched files, filtered Rstest). Avoid full builds, full suites, and long-running verification unless the user explicitly asks.
+
 ## Anti-Patterns
 
 - **Treating the project as a web app**: This is cross-platform desktop software (Tauri: Windows, macOS, Linux), not a website. Do not open the Rsbuild dev server in a browser or use web/browser tooling for verification. Verify through the native app (`bun tauri dev`) and the native E2E path in [docs/agents/e2e.md](docs/agents/e2e.md).
