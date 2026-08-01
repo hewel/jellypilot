@@ -20,6 +20,7 @@ export const seasonTabs = css({
   maxWidth: '[100%]',
   overflowX: 'auto',
   p: '1',
+  my: '0',
 });
 
 export const seasonTab = css({
