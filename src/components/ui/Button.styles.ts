@@ -14,7 +14,7 @@ export const button = cva({
     border: 0,
     cursor: 'pointer',
     textDecoration: 'none',
-    transform: '[scale(1)]',
+    transform: '[scale3d(1, 1, 1)]',
     transitionDuration: '200',
     transitionProperty: '[background-color, border-color, color, box-shadow, filter, transform]',
     userSelect: 'none',
@@ -60,7 +60,7 @@ export const button = cva({
           filter: '[brightness(1.1)]',
         },
         _active: {
-          transform: '[translateY(0) scale(0.96)]',
+          transform: '[translateY(0) scale3d(0.96, 0.96, 1)]',
         },
       },
       secondary: {
@@ -74,7 +74,7 @@ export const button = cva({
           borderColor: 'outline',
         },
         _active: {
-          transform: '[translateY(0) scale(0.96)]',
+          transform: '[translateY(0) scale3d(0.96, 0.96, 1)]',
         },
       },
       tonal: {
@@ -88,7 +88,7 @@ export const button = cva({
           borderColor: 'outline',
         },
         _active: {
-          transform: '[translateY(0) scale(0.96)]',
+          transform: '[translateY(0) scale3d(0.96, 0.96, 1)]',
         },
       },
       outlined: {
@@ -102,7 +102,7 @@ export const button = cva({
           borderColor: 'primary',
         },
         _active: {
-          transform: '[scale(0.96)]',
+          transform: '[scale3d(0.96, 0.96, 1)]',
         },
       },
       text: {
@@ -112,7 +112,7 @@ export const button = cva({
           bg: 'secondary/10',
         },
         _active: {
-          transform: '[scale(0.96)]',
+          transform: '[scale3d(0.96, 0.96, 1)]',
         },
       },
     },
@@ -133,7 +133,7 @@ export const iconButton = cva({
     border: 0,
     cursor: 'pointer',
     padding: '0',
-    transform: '[scale(1)]',
+    transform: '[scale3d(1, 1, 1)]',
     transitionDuration: '200',
     transitionProperty: '[background-color, color, transform]',
     userSelect: 'none',
@@ -147,7 +147,7 @@ export const iconButton = cva({
       color: 'onSurface',
     },
     _active: {
-      transform: '[scale(0.96)]',
+      transform: '[scale3d(0.96, 0.96, 1)]',
     },
   },
   variants: {

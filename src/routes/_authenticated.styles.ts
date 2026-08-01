@@ -41,7 +41,7 @@ export const ambientGlow = css({
   left: '[40vw]',
   position: 'absolute',
   top: '[28vh]',
-  transform: '[translate(-50%, -50%)]',
+  transform: '[translate3d(-50%, -50%, 0)]',
   width: '[55vmax]',
 });
 
@@ -51,7 +51,7 @@ export const ambientCore = css({
   borderRadius: 'full',
   height: 'full',
   opacity: '[0.45]',
-  transform: '[scale(1)]',
+  transform: '[scale3d(1, 1, 1)]',
   transitionDuration: '300',
   transitionProperty: '[opacity, transform]',
   transitionTimingFunction: 'standard',
@@ -61,7 +61,7 @@ export const ambientCore = css({
   },
   '[data-shell]:has([data-sidebar]:hover) &, [data-shell]:has([data-toolbar]:hover) &': {
     opacity: '[0.65]',
-    transform: '[scale(1.06)]',
+    transform: '[scale3d(1.06, 1.06, 1)]',
   },
 });
 

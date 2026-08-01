@@ -117,19 +117,19 @@ export default defineConfig({
         to: { transform: 'rotate(360deg)' },
       },
       ping: {
-        '75%, 100%': { transform: 'scale(2)', opacity: '0' },
+        '75%, 100%': { transform: 'scale3d(2, 2, 1)', opacity: '0' },
       },
       menuIn: {
-        from: { opacity: '0', transform: 'translateY(-4px) scale(0.98)' },
-        to: { opacity: '1', transform: 'translateY(0) scale(1)' },
+        from: { opacity: '0', transform: 'translateY(-4px) scale3d(0.98, 0.98, 1)' },
+        to: { opacity: '1', transform: 'translateY(0) scale3d(1, 1, 1)' },
       },
       sidebarLabelIn: {
         from: { opacity: '0', transform: 'translateX(-4px)' },
         to: { opacity: '1', transform: 'translateX(0)' },
       },
       iconSwapIn: {
-        from: { opacity: '0', transform: 'scale(0.25)', filter: 'blur(4px)' },
-        to: { opacity: '1', transform: 'scale(1)', filter: 'blur(0)' },
+        from: { opacity: '0', transform: 'scale3d(0.25, 0.25, 1)', filter: 'blur(4px)' },
+        to: { opacity: '1', transform: 'scale3d(1, 1, 1)', filter: 'blur(0)' },
       },
       sidebarWipeExpand: {
         from: { transform: 'scaleX(0.28125)' },

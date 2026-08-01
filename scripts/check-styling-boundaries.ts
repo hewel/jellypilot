@@ -345,6 +345,18 @@ export function collectMotionInvariantErrors(fileRel: string, source: string): s
       }
     }
 
+    const non3d = new Set<string>();
+    for (const entry of transforms) {
+      for (const match of entry.value.matchAll(/\b(translate|scale)\(/g)) {
+        non3d.add(match[1] ?? '');
+      }
+    }
+    for (const fn of non3d) {
+      result.push(
+        `${fileRel}: 2D transform function '${fn}()' must not be used; use '${fn}3d()' (${name})`,
+      );
+    }
+
     const hasResting = transforms.some((entry) => !entry.path.some(isConditionalKey));
     const baseTransitionHasTransform = transitions.some(
       (entry) =>
