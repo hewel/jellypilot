@@ -2,11 +2,18 @@
 
 Tauri v2 Jellyfin MPV Shim rewrite; external MPV controlled via JSON IPC (no libmpv embed).
 
-## Role: Codex
+## Role Separation
 
-- Keep Codex responsible for user intent, major direction, architecture, implementation, verification, review, and final user communication.
-- Use native `@quick_task`, `@designer`, and `@oracle` agents only when a clearly separable advisory, review, or execution lane benefits from delegation.
-- Keep shared-file coordination and final verification in the main Codex thread. Never recover, revert, or normalize user changes automatically.
+**scoped-implementer**
+
+* Only implements the requested changes.
+* Does not review or approve its own code.
+
+**reviewer**
+
+* Only finds bugs and explains why the code may fail.
+* Does not edit code, write fixes, or implement changes.
+
 
 ## Stack
 
