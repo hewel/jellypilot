@@ -317,42 +317,22 @@ export const favoriteIcon = css({
   width: '4',
 });
 
-export const body = css({
+export const belowMeta = css({
   alignItems: 'center',
-  borderTopColor: 'outlineVariant',
-  borderTopStyle: 'solid',
-  borderTopWidth: '1px',
   display: 'flex',
   gap: '2',
-  pb: '3',
-  pt: '2',
-  px: '4',
-});
-
-export const homeBody = css({
-  display: 'grid',
-  gap: '0_5',
   minWidth: '[0]',
   pt: '3',
 });
 
-export const copy = css({
+export const belowCopy = css({
   display: 'grid',
   flexGrow: '[1]',
-  gap: '1',
+  gap: '0_5',
   minWidth: '[0]',
 });
 
 export const title = css({
-  color: 'onSurface',
-  ...titleClamp,
-  fontSize: '16',
-  fontWeight: 'semibold',
-  lineHeight: '24',
-  overflow: 'hidden',
-});
-
-export const homeTitle = css({
   color: 'onSurface',
   ...titleClamp,
   fontSize: '16',

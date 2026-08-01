@@ -1,15 +1,22 @@
 import { Menu } from '@ark-ui/solid/menu';
 import { Toggle } from '@ark-ui/solid/toggle';
-import type { VideoLibraryKind, VideoLibraryPlayedFilter, VideoLibrarySort } from '@bindings';
+import type {
+  VideoLibraryItem,
+  VideoLibraryKind,
+  VideoLibraryPlayedFilter,
+  VideoLibrarySort,
+} from '@bindings';
 import { useAppScrollArea } from '@components/AppScrollAreaContext';
 import { useAuthenticatedBootstrap } from '@components/AuthenticatedBootstrap';
-import { LibraryVideoCard } from '@components/library/LibraryVideoCard';
 import {
   LibraryStatusPanel,
   libraryTitle,
   playedFilterLabel,
   sortItems,
 } from '@components/library/shared';
+import { VideoCard } from '@components/library/VideoCard';
+import { videoCardSubtitle } from '@components/library/videoCardModel';
+import { VideoCardSkeleton, type VideoCardAspectClass } from '@components/library/videoCardShared';
 import { Button } from '@components/ui';
 import { cx } from '@styled-system/css';
 import { createFileRoute, redirect } from '@tanstack/solid-router';
@@ -194,7 +201,7 @@ function LibraryBrowseRoute() {
               fallback={
                 <div class={cx(styles.grid, styles.fade)}>
                   <For each={browseWindow.readyState()?.items ?? []}>
-                    {(item) => <LibraryVideoCard item={item} collectionType={collectionType()} />}
+                    {(item) => <LibraryBrowseCard item={item} collectionType={collectionType()} />}
                   </For>
                   <Show when={browseWindow.isFetchingNextPage()}>
                     <LibraryBrowseSkeletonCards />
@@ -235,7 +242,7 @@ function LibraryBrowseRoute() {
                                   <div role="gridcell">
                                     <Show when={item()} fallback={<LibraryBrowseSkeletonCard />}>
                                       {(loadedItem) => (
-                                        <LibraryVideoCard
+                                        <LibraryBrowseCard
                                           item={loadedItem()}
                                           collectionType={collectionType()}
                                         />
@@ -471,8 +478,31 @@ function LibraryBrowseToolbar(props: LibraryBrowseToolbarProps) {
   );
 }
 
+function libraryBrowseCardAspect(
+  item: VideoLibraryItem,
+  collectionType: VideoLibraryKind,
+): VideoCardAspectClass {
+  return collectionType === 'tvshows' || item.itemType === 'Series' || item.itemType === 'Movie'
+    ? 'poster'
+    : 'video';
+}
+
+function LibraryBrowseCard(props: { item: VideoLibraryItem; collectionType: VideoLibraryKind }) {
+  const aspect = () => libraryBrowseCardAspect(props.item, props.collectionType);
+  return (
+    <VideoCard
+      item={props.item}
+      aspect={aspect()}
+      copy={aspect() === 'poster' ? 'overlay' : 'below'}
+      action={{ kind: 'open' }}
+      subtitle={videoCardSubtitle(props.item, { kind: 'browse' })}
+      badges={{ favorite: true, played: true }}
+    />
+  );
+}
+
 function LibraryBrowseSkeletonCard() {
-  return <LibraryVideoCard collectionType="movies" loading />;
+  return <VideoCardSkeleton aspectClass="poster" />;
 }
 
 function LibraryBrowseSkeletonCards() {

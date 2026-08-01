@@ -370,28 +370,10 @@ export type VideoDetailMetadata = {
 
 /**  Library Browser landing data exposed to the frontend. */
 export type VideoHome = {
-	continueWatching: VideoHomeItem[],
-	nextUp: VideoHomeItem[],
-	latestMovies: VideoHomeItem[],
-	latestEpisodes: VideoHomeItem[],
-};
-
-/**  Video item summary for Video Home rows. */
-export type VideoHomeItem = {
-	id: string,
-	name: string,
-	itemType: string,
-	seriesId: string | null,
-	seriesName: string | null,
-	seasonNumber: number | null,
-	episodeNumber: number | null,
-	productionYear: number | null,
-	runtimeSeconds: number | null,
-	resumePositionSeconds: number | null,
-	playedPercentage: number | null,
-	played: boolean,
-	favorite: boolean,
-	artworkImageId: string | null,
+	continueWatching: VideoLibraryItem[],
+	nextUp: VideoLibraryItem[],
+	latestMovies: VideoLibraryItem[],
+	latestEpisodes: VideoLibraryItem[],
 };
 
 /**  Playable Movie or Episode detail data exposed to the frontend. */
@@ -424,7 +406,7 @@ export type VideoItemStreams = {
 	subtitleStreams: VideoPlaybackStreamOption[],
 };
 
-/**  Media card summary for Movies and Shows browse results, and episode rows. */
+/**  Media card summary for Video Home rows, Movies and Shows browse results, episode rows, and recommendation shelves. */
 export type VideoLibraryItem = {
 	id: string,
 	name: string,

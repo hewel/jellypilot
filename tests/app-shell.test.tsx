@@ -196,6 +196,7 @@ const videoHome: VideoHome = {
       played: true,
       favorite: true,
       artworkImageId: 'https://jellyfin.example.com/Items/movie-1/Images/Primary',
+      overview: null,
     },
   ],
   latestEpisodes: [
@@ -214,6 +215,7 @@ const videoHome: VideoHome = {
       played: false,
       favorite: false,
       artworkImageId: null,
+      overview: null,
     },
   ],
   latestMovies: [
@@ -232,6 +234,7 @@ const videoHome: VideoHome = {
       played: false,
       favorite: false,
       artworkImageId: null,
+      overview: null,
     },
   ],
   nextUp: [
@@ -250,6 +253,7 @@ const videoHome: VideoHome = {
       played: false,
       favorite: false,
       artworkImageId: null,
+      overview: null,
     },
   ],
 };

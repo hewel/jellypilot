@@ -1,4 +1,4 @@
-import type { VideoHomeItem, VideoItemDetail } from '@bindings';
+import type { VideoItemDetail, VideoLibraryItem } from '@bindings';
 import { Link } from '@tanstack/solid-router';
 import { Info, Play } from 'lucide-solid';
 import { Show, createUniqueId } from 'solid-js';
@@ -13,7 +13,7 @@ export type HomeFeaturedSource = 'continueWatching' | 'nextUp' | 'latestMovies';
 
 export interface HomeFeaturedHeroProps {
   source: HomeFeaturedSource;
-  item: VideoHomeItem;
+  item: VideoLibraryItem;
   detail: VideoItemDetail | null;
   busy: boolean;
   playbackDisabled: boolean;

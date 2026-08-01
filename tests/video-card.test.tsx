@@ -7,8 +7,8 @@ import { render } from 'solid-js/web';
 
 import { commands } from '../src/bindings';
 import { AuthenticatedBootstrapProvider } from '../src/components/AuthenticatedBootstrap';
-import { HomeVideoCard } from '../src/components/library/HomeVideoCard';
-import { LibraryVideoCard } from '../src/components/library/LibraryVideoCard';
+import { VideoCard } from '../src/components/library/VideoCard';
+import { videoCardProgress, videoCardSubtitle } from '../src/components/library/videoCardModel';
 import { PopupRoot } from '../src/components/ui/PopupRoot';
 import { createJellyPilotRouter } from '../src/router';
 import { resetImageProxyBase, setImageProxyBase } from '../src/utils/imageSource';
@@ -61,27 +61,32 @@ function renderWithRouter(content: () => JSX.Element) {
   return { dispose, root };
 }
 
-test('LibraryVideoCard renders image IDs through the localhost image proxy', () => {
+test('VideoCard renders image IDs through the localhost image proxy', () => {
+  const item = {
+    artworkImageId: 'signed-card-image',
+    episodeNumber: null,
+    favorite: false,
+    id: 'movie-1',
+    itemType: 'Movie',
+    name: 'Protocol Movie',
+    overview: null,
+    played: false,
+    playedPercentage: null,
+    productionYear: 2024,
+    resumePositionSeconds: null,
+    runtimeSeconds: 7200,
+    seasonNumber: null,
+    seriesId: null,
+    seriesName: null,
+  };
   const { dispose, root } = renderWithRouter(() => (
-    <LibraryVideoCard
-      collectionType="movies"
-      item={{
-        artworkImageId: 'signed-card-image',
-        episodeNumber: null,
-        favorite: false,
-        id: 'movie-1',
-        itemType: 'Movie',
-        name: 'Protocol Movie',
-        overview: null,
-        played: false,
-        playedPercentage: null,
-        productionYear: 2024,
-        resumePositionSeconds: null,
-        runtimeSeconds: 7200,
-        seasonNumber: null,
-        seriesId: null,
-        seriesName: null,
-      }}
+    <VideoCard
+      item={item}
+      aspect="poster"
+      copy="overlay"
+      action={{ kind: 'open' }}
+      subtitle={videoCardSubtitle(item, { kind: 'browse' })}
+      badges={{ favorite: true, played: true }}
     />
   ));
 
@@ -97,11 +102,15 @@ test('LibraryVideoCard renders image IDs through the localhost image proxy', () 
   root.remove();
 });
 
-test('LibraryVideoCard waits for the image proxy before rendering artwork', () => {
+test('VideoCard waits for the image proxy before rendering artwork', () => {
   resetImageProxyBase();
   const { dispose, root } = renderWithRouter(() => (
-    <LibraryVideoCard
-      collectionType="movies"
+    <VideoCard
+      aspect="poster"
+      copy="overlay"
+      action={{ kind: 'open' }}
+      subtitle="2024"
+      badges={{ favorite: true, played: true }}
       item={{
         artworkImageId: 'delayed-card-image',
         episodeNumber: null,
@@ -135,10 +144,14 @@ test('LibraryVideoCard waits for the image proxy before rendering artwork', () =
   root.remove();
 });
 
-test('LibraryVideoCard falls back when the proxy image load fails', () => {
+test('VideoCard falls back when the proxy image load fails', () => {
   const { dispose, root } = renderWithRouter(() => (
-    <LibraryVideoCard
-      collectionType="movies"
+    <VideoCard
+      aspect="poster"
+      copy="overlay"
+      action={{ kind: 'open' }}
+      subtitle="2024"
+      badges={{ favorite: true, played: true }}
       item={{
         artworkImageId: 'broken-card-image',
         episodeNumber: null,
@@ -166,47 +179,57 @@ test('LibraryVideoCard falls back when the proxy image load fails', () => {
   root.remove();
 });
 
-test('LibraryVideoCard overlays copy on poster artwork and HomeVideoCard keeps copy below video artwork', () => {
+test('VideoCard overlays copy on poster artwork and keeps copy below video artwork', () => {
+  const overlayItem = {
+    artworkImageId: null,
+    episodeNumber: null,
+    favorite: false,
+    id: 'movie-1',
+    itemType: 'Movie',
+    name: 'Overlay Movie',
+    overview: null,
+    played: true,
+    playedPercentage: null,
+    productionYear: 2024,
+    resumePositionSeconds: null,
+    runtimeSeconds: 7200,
+    seasonNumber: null,
+    seriesId: null,
+    seriesName: null,
+  };
+  const belowItem = {
+    artworkImageId: null,
+    episodeNumber: 2,
+    favorite: false,
+    id: 'episode-1',
+    itemType: 'Episode',
+    name: 'Overlay Episode',
+    overview: null,
+    played: false,
+    playedPercentage: null,
+    productionYear: 2024,
+    resumePositionSeconds: null,
+    runtimeSeconds: 2700,
+    seasonNumber: 1,
+    seriesId: 'series-1',
+    seriesName: 'Overlay Series',
+  };
   const { dispose, root } = renderWithRouter(() => (
     <>
-      <LibraryVideoCard
-        collectionType="movies"
-        item={{
-          artworkImageId: null,
-          episodeNumber: null,
-          favorite: false,
-          id: 'movie-1',
-          itemType: 'Movie',
-          name: 'Overlay Movie',
-          overview: null,
-          played: true,
-          playedPercentage: null,
-          productionYear: 2024,
-          resumePositionSeconds: null,
-          runtimeSeconds: 7200,
-          seasonNumber: null,
-          seriesId: null,
-          seriesName: null,
-        }}
+      <VideoCard
+        item={overlayItem}
+        aspect="poster"
+        copy="overlay"
+        action={{ kind: 'open' }}
+        subtitle={videoCardSubtitle(overlayItem, { kind: 'browse' })}
+        badges={{ favorite: true, played: true }}
       />
-      <HomeVideoCard
-        rowKind="latestEpisodes"
-        item={{
-          artworkImageId: null,
-          episodeNumber: 2,
-          favorite: false,
-          id: 'episode-1',
-          itemType: 'Episode',
-          name: 'Overlay Episode',
-          played: false,
-          playedPercentage: null,
-          productionYear: 2024,
-          resumePositionSeconds: null,
-          runtimeSeconds: 2700,
-          seasonNumber: 1,
-          seriesId: 'series-1',
-          seriesName: 'Overlay Series',
-        }}
+      <VideoCard
+        item={belowItem}
+        aspect="video"
+        copy="below"
+        action={{ kind: 'open' }}
+        subtitle={videoCardSubtitle(belowItem, { kind: 'homeRow', rowKind: 'latestEpisodes' })}
       />
     </>
   ));
@@ -222,28 +245,33 @@ test('LibraryVideoCard overlays copy on poster artwork and HomeVideoCard keeps c
   root.remove();
 });
 
-test('HomeVideoCard renders reference-first Continue Watching metadata and direct resume', () => {
+test('VideoCard renders reference-first Continue Watching metadata and direct resume', () => {
   const onPlay = rstest.fn();
+  const item = {
+    artworkImageId: null,
+    episodeNumber: 4,
+    favorite: true,
+    id: 'episode-4',
+    itemType: 'Episode',
+    name: 'A Quiet Return',
+    overview: null,
+    played: true,
+    playedPercentage: 25,
+    productionYear: 2024,
+    resumePositionSeconds: 120,
+    runtimeSeconds: 3600,
+    seasonNumber: 1,
+    seriesId: 'series-1',
+    seriesName: 'Silent Echoes',
+  };
   const { dispose, root } = renderWithRouter(() => (
-    <HomeVideoCard
-      rowKind="continueWatching"
-      onPlay={onPlay}
-      item={{
-        artworkImageId: null,
-        episodeNumber: 4,
-        favorite: true,
-        id: 'episode-4',
-        itemType: 'Episode',
-        name: 'A Quiet Return',
-        played: true,
-        playedPercentage: 25,
-        productionYear: 2024,
-        resumePositionSeconds: 120,
-        runtimeSeconds: 3600,
-        seasonNumber: 1,
-        seriesId: 'series-1',
-        seriesName: 'Silent Echoes',
-      }}
+    <VideoCard
+      item={item}
+      aspect="video"
+      copy="below"
+      action={{ kind: 'play', onPlay }}
+      subtitle={videoCardSubtitle(item, { kind: 'homeRow', rowKind: 'continueWatching' })}
+      progress={videoCardProgress(item)}
     />
   ));
 
@@ -268,47 +296,57 @@ test('HomeVideoCard renders reference-first Continue Watching metadata and direc
   root.remove();
 });
 
-test('HomeVideoCard title links episodes to series detail and movies to movie detail', () => {
+test('VideoCard title links episodes to series detail and movies to movie detail', () => {
+  const episodeItem = {
+    artworkImageId: null,
+    episodeNumber: 4,
+    favorite: false,
+    id: 'episode-4',
+    itemType: 'Episode',
+    name: 'A Quiet Return',
+    overview: null,
+    played: false,
+    playedPercentage: null,
+    productionYear: 2024,
+    resumePositionSeconds: 120,
+    runtimeSeconds: 3600,
+    seasonNumber: 1,
+    seriesId: 'series-1',
+    seriesName: 'Silent Echoes',
+  };
+  const movieItem = {
+    artworkImageId: null,
+    episodeNumber: null,
+    favorite: false,
+    id: 'movie-1',
+    itemType: 'Movie',
+    name: 'Linked Movie',
+    overview: null,
+    played: false,
+    playedPercentage: null,
+    productionYear: 2024,
+    resumePositionSeconds: null,
+    runtimeSeconds: 7200,
+    seasonNumber: null,
+    seriesId: null,
+    seriesName: null,
+  };
   const { dispose, root } = renderWithRouter(() => (
     <>
-      <HomeVideoCard
-        rowKind="continueWatching"
-        onPlay={() => undefined}
-        item={{
-          artworkImageId: null,
-          episodeNumber: 4,
-          favorite: false,
-          id: 'episode-4',
-          itemType: 'Episode',
-          name: 'A Quiet Return',
-          played: false,
-          playedPercentage: null,
-          productionYear: 2024,
-          resumePositionSeconds: 120,
-          runtimeSeconds: 3600,
-          seasonNumber: 1,
-          seriesId: 'series-1',
-          seriesName: 'Silent Echoes',
-        }}
+      <VideoCard
+        item={episodeItem}
+        aspect="video"
+        copy="below"
+        action={{ kind: 'play', onPlay: () => undefined }}
+        subtitle={videoCardSubtitle(episodeItem, { kind: 'homeRow', rowKind: 'continueWatching' })}
+        progress={videoCardProgress(episodeItem)}
       />
-      <HomeVideoCard
-        rowKind="latestMovies"
-        item={{
-          artworkImageId: null,
-          episodeNumber: null,
-          favorite: false,
-          id: 'movie-1',
-          itemType: 'Movie',
-          name: 'Linked Movie',
-          played: false,
-          playedPercentage: null,
-          productionYear: 2024,
-          resumePositionSeconds: null,
-          runtimeSeconds: 7200,
-          seasonNumber: null,
-          seriesId: null,
-          seriesName: null,
-        }}
+      <VideoCard
+        item={movieItem}
+        aspect="poster"
+        copy="below"
+        action={{ kind: 'open' }}
+        subtitle={videoCardSubtitle(movieItem, { kind: 'homeRow', rowKind: 'latestMovies' })}
       />
     </>
   ));
@@ -325,68 +363,86 @@ test('HomeVideoCard title links episodes to series detail and movies to movie de
   root.remove();
 });
 
-test('HomeVideoCard derives progress and plays from zero without a saved resume position', () => {
+test('VideoCard derives progress and plays from zero without a saved resume position', () => {
+  const derivedItem = {
+    artworkImageId: null,
+    episodeNumber: null,
+    favorite: false,
+    id: 'movie-derived',
+    itemType: 'Movie',
+    name: 'Derived Progress',
+    overview: null,
+    played: false,
+    playedPercentage: null,
+    productionYear: 2024,
+    resumePositionSeconds: 900,
+    runtimeSeconds: 3600,
+    seasonNumber: null,
+    seriesId: null,
+    seriesName: null,
+  };
+  const noResumeItem = {
+    artworkImageId: null,
+    episodeNumber: null,
+    favorite: false,
+    id: 'movie-no-resume',
+    itemType: 'Movie',
+    name: 'No Resume',
+    overview: null,
+    played: false,
+    playedPercentage: 25,
+    productionYear: 2024,
+    resumePositionSeconds: null,
+    runtimeSeconds: 3600,
+    seasonNumber: null,
+    seriesId: null,
+    seriesName: null,
+  };
+  const zeroResumeItem = {
+    artworkImageId: null,
+    episodeNumber: null,
+    favorite: false,
+    id: 'movie-zero-resume',
+    itemType: 'Movie',
+    name: 'Zero Resume',
+    overview: null,
+    played: false,
+    playedPercentage: 40,
+    productionYear: 2024,
+    resumePositionSeconds: 0,
+    runtimeSeconds: 3600,
+    seasonNumber: null,
+    seriesId: null,
+    seriesName: null,
+  };
   const { dispose, root } = renderWithRouter(() => (
     <>
-      <HomeVideoCard
-        rowKind="continueWatching"
-        onPlay={() => undefined}
-        item={{
-          artworkImageId: null,
-          episodeNumber: null,
-          favorite: false,
-          id: 'movie-derived',
-          itemType: 'Movie',
-          name: 'Derived Progress',
-          played: false,
-          playedPercentage: null,
-          productionYear: 2024,
-          resumePositionSeconds: 900,
-          runtimeSeconds: 3600,
-          seasonNumber: null,
-          seriesId: null,
-          seriesName: null,
-        }}
+      <VideoCard
+        item={derivedItem}
+        aspect="video"
+        copy="below"
+        action={{ kind: 'play', onPlay: () => undefined }}
+        subtitle={videoCardSubtitle(derivedItem, { kind: 'homeRow', rowKind: 'continueWatching' })}
+        progress={videoCardProgress(derivedItem)}
       />
-      <HomeVideoCard
-        rowKind="continueWatching"
-        onPlay={() => undefined}
-        item={{
-          artworkImageId: null,
-          episodeNumber: null,
-          favorite: false,
-          id: 'movie-no-resume',
-          itemType: 'Movie',
-          name: 'No Resume',
-          played: false,
-          playedPercentage: 25,
-          productionYear: 2024,
-          resumePositionSeconds: null,
-          runtimeSeconds: 3600,
-          seasonNumber: null,
-          seriesId: null,
-          seriesName: null,
-        }}
+      <VideoCard
+        item={noResumeItem}
+        aspect="video"
+        copy="below"
+        action={{ kind: 'play', onPlay: () => undefined }}
+        subtitle={videoCardSubtitle(noResumeItem, { kind: 'homeRow', rowKind: 'continueWatching' })}
+        progress={videoCardProgress(noResumeItem)}
       />
-      <HomeVideoCard
-        rowKind="continueWatching"
-        onPlay={() => undefined}
-        item={{
-          artworkImageId: null,
-          episodeNumber: null,
-          favorite: false,
-          id: 'movie-zero-resume',
-          itemType: 'Movie',
-          name: 'Zero Resume',
-          played: false,
-          playedPercentage: 40,
-          productionYear: 2024,
-          resumePositionSeconds: 0,
-          runtimeSeconds: 3600,
-          seasonNumber: null,
-          seriesId: null,
-          seriesName: null,
-        }}
+      <VideoCard
+        item={zeroResumeItem}
+        aspect="video"
+        copy="below"
+        action={{ kind: 'play', onPlay: () => undefined }}
+        subtitle={videoCardSubtitle(zeroResumeItem, {
+          kind: 'homeRow',
+          rowKind: 'continueWatching',
+        })}
+        progress={videoCardProgress(zeroResumeItem)}
       />
     </>
   ));
@@ -421,28 +477,33 @@ test('HomeVideoCard derives progress and plays from zero without a saved resume 
   root.remove();
 });
 
-test('HomeVideoCard resumes Next Up episodes while keeping the episode subtitle', () => {
+test('VideoCard resumes Next Up episodes while keeping the episode subtitle', () => {
   const onPlay = rstest.fn();
+  const item = {
+    artworkImageId: null,
+    episodeNumber: 5,
+    favorite: false,
+    id: 'episode-5',
+    itemType: 'Episode',
+    name: 'The Crossing',
+    overview: null,
+    played: false,
+    playedPercentage: null,
+    productionYear: 2024,
+    resumePositionSeconds: 900,
+    runtimeSeconds: 3600,
+    seasonNumber: 2,
+    seriesId: 'series-1',
+    seriesName: 'Harbor Line',
+  };
   const { dispose, root } = renderWithRouter(() => (
-    <HomeVideoCard
-      rowKind="nextUp"
-      onPlay={onPlay}
-      item={{
-        artworkImageId: null,
-        episodeNumber: 5,
-        favorite: false,
-        id: 'episode-5',
-        itemType: 'Episode',
-        name: 'The Crossing',
-        played: false,
-        playedPercentage: null,
-        productionYear: 2024,
-        resumePositionSeconds: 900,
-        runtimeSeconds: 3600,
-        seasonNumber: 2,
-        seriesId: 'series-1',
-        seriesName: 'Harbor Line',
-      }}
+    <VideoCard
+      item={item}
+      aspect="video"
+      copy="below"
+      action={{ kind: 'play', onPlay }}
+      subtitle={videoCardSubtitle(item, { kind: 'homeRow', rowKind: 'nextUp' })}
+      progress={videoCardProgress(item)}
     />
   ));
 
@@ -466,27 +527,32 @@ test('HomeVideoCard resumes Next Up episodes while keeping the episode subtitle'
   root.remove();
 });
 
-test('HomeVideoCard plays Next Up episodes from zero without a resume offset', () => {
+test('VideoCard plays Next Up episodes from zero without a resume offset', () => {
+  const item = {
+    artworkImageId: null,
+    episodeNumber: 5,
+    favorite: false,
+    id: 'episode-5',
+    itemType: 'Episode',
+    name: 'The Crossing',
+    overview: null,
+    played: false,
+    playedPercentage: null,
+    productionYear: 2024,
+    resumePositionSeconds: null,
+    runtimeSeconds: 3600,
+    seasonNumber: 2,
+    seriesId: 'series-1',
+    seriesName: 'Harbor Line',
+  };
   const { dispose, root } = renderWithRouter(() => (
-    <HomeVideoCard
-      rowKind="nextUp"
-      onPlay={() => undefined}
-      item={{
-        artworkImageId: null,
-        episodeNumber: 5,
-        favorite: false,
-        id: 'episode-5',
-        itemType: 'Episode',
-        name: 'The Crossing',
-        played: false,
-        playedPercentage: null,
-        productionYear: 2024,
-        resumePositionSeconds: null,
-        runtimeSeconds: 3600,
-        seasonNumber: 2,
-        seriesId: 'series-1',
-        seriesName: 'Harbor Line',
-      }}
+    <VideoCard
+      item={item}
+      aspect="video"
+      copy="below"
+      action={{ kind: 'play', onPlay: () => undefined }}
+      subtitle={videoCardSubtitle(item, { kind: 'homeRow', rowKind: 'nextUp' })}
+      progress={null}
     />
   ));
 
@@ -501,51 +567,58 @@ test('HomeVideoCard plays Next Up episodes from zero without a resume offset', (
   root.remove();
 });
 
-test('HomeVideoCard exposes a disabled busy state while playback starts', () => {
+test('VideoCard exposes a disabled busy state while playback starts', () => {
+  const busyItem = {
+    artworkImageId: null,
+    episodeNumber: null,
+    favorite: false,
+    id: 'movie-busy',
+    itemType: 'Movie',
+    name: 'Busy Movie',
+    overview: null,
+    played: false,
+    playedPercentage: 40,
+    productionYear: 2024,
+    resumePositionSeconds: 120,
+    runtimeSeconds: 3600,
+    seasonNumber: null,
+    seriesId: null,
+    seriesName: null,
+  };
+  const waitingItem = {
+    artworkImageId: null,
+    episodeNumber: 2,
+    favorite: false,
+    id: 'episode-waiting',
+    itemType: 'Episode',
+    name: 'Waiting Episode',
+    overview: null,
+    played: false,
+    playedPercentage: null,
+    productionYear: 2024,
+    resumePositionSeconds: 60,
+    runtimeSeconds: 1800,
+    seasonNumber: 1,
+    seriesId: 'series-1',
+    seriesName: 'Waiting Show',
+  };
   const { dispose, root } = renderWithRouter(() => (
     <>
-      <HomeVideoCard
-        rowKind="continueWatching"
-        busy
-        playbackDisabled
-        onPlay={() => undefined}
-        item={{
-          artworkImageId: null,
-          episodeNumber: null,
-          favorite: false,
-          id: 'movie-busy',
-          itemType: 'Movie',
-          name: 'Busy Movie',
-          played: false,
-          playedPercentage: 40,
-          productionYear: 2024,
-          resumePositionSeconds: 120,
-          runtimeSeconds: 3600,
-          seasonNumber: null,
-          seriesId: null,
-          seriesName: null,
-        }}
+      <VideoCard
+        item={busyItem}
+        aspect="video"
+        copy="below"
+        action={{ kind: 'play', busy: true, disabled: true, onPlay: () => undefined }}
+        subtitle={videoCardSubtitle(busyItem, { kind: 'homeRow', rowKind: 'continueWatching' })}
+        progress={videoCardProgress(busyItem)}
       />
-      <HomeVideoCard
-        rowKind="nextUp"
-        playbackDisabled
-        onPlay={() => undefined}
-        item={{
-          artworkImageId: null,
-          episodeNumber: 2,
-          favorite: false,
-          id: 'episode-waiting',
-          itemType: 'Episode',
-          name: 'Waiting Episode',
-          played: false,
-          playedPercentage: null,
-          productionYear: 2024,
-          resumePositionSeconds: 60,
-          runtimeSeconds: 1800,
-          seasonNumber: 1,
-          seriesId: 'series-1',
-          seriesName: 'Waiting Show',
-        }}
+      <VideoCard
+        item={waitingItem}
+        aspect="video"
+        copy="below"
+        action={{ kind: 'play', disabled: true, onPlay: () => undefined }}
+        subtitle={videoCardSubtitle(waitingItem, { kind: 'homeRow', rowKind: 'nextUp' })}
+        progress={videoCardProgress(waitingItem)}
       />
     </>
   ));

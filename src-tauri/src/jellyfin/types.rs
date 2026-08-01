@@ -76,30 +76,10 @@ impl MediaServerProvider {
 #[derive(Debug, Clone, Serialize, Type)]
 #[serde(rename_all = "camelCase")]
 pub struct VideoHome {
-  pub continue_watching: Vec<VideoHomeItem>,
-  pub next_up: Vec<VideoHomeItem>,
-  pub latest_movies: Vec<VideoHomeItem>,
-  pub latest_episodes: Vec<VideoHomeItem>,
-}
-
-/// Video item summary for Video Home rows.
-#[derive(Debug, Clone, Serialize, Type)]
-#[serde(rename_all = "camelCase")]
-pub struct VideoHomeItem {
-  pub id: String,
-  pub name: String,
-  pub item_type: String,
-  pub series_id: Option<String>,
-  pub series_name: Option<String>,
-  pub season_number: Option<i32>,
-  pub episode_number: Option<i32>,
-  pub production_year: Option<i32>,
-  pub runtime_seconds: Option<f64>,
-  pub resume_position_seconds: Option<f64>,
-  pub played_percentage: Option<f64>,
-  pub played: bool,
-  pub favorite: bool,
-  pub artwork_image_id: Option<String>,
+  pub continue_watching: Vec<VideoLibraryItem>,
+  pub next_up: Vec<VideoLibraryItem>,
+  pub latest_movies: Vec<VideoLibraryItem>,
+  pub latest_episodes: Vec<VideoLibraryItem>,
 }
 
 /// Video library shortcut for drilling into Movies or Shows libraries.
@@ -170,7 +150,7 @@ pub struct VideoLibraryPage {
   pub items: Vec<VideoLibraryItem>,
 }
 
-/// Media card summary for Movies and Shows browse results, and episode rows.
+/// Media card summary for Video Home rows, Movies and Shows browse results, episode rows, and recommendation shelves.
 #[derive(Debug, Clone, Serialize, Type)]
 #[serde(rename_all = "camelCase")]
 pub struct VideoLibraryItem {
