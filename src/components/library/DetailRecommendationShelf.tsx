@@ -16,7 +16,7 @@ function RecommendationCard(props: { item: VideoLibraryItem }): JSX.Element {
         <LibraryImage
           imageId={props.item.artworkImageId}
           alt={`${props.item.name} poster`}
-          class={styles.posterFallback}
+          class={styles.posterImage}
           loading="lazy"
           fallback={
             <div class={styles.posterFallback} aria-hidden="true">
@@ -121,7 +121,6 @@ export function DetailRecommendationShelf(props: {
       </div>
 
       <Carousel.Root
-        autoSize
         slideCount={slideCount()}
         slidesPerPage={slidesPerPage}
         spacing="1rem"

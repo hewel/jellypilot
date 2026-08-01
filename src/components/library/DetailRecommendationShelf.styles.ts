@@ -72,18 +72,12 @@ export const arrowIcon = css({
   width: '4',
 });
 
-export const viewport = css({
-  minWidth: '[0]',
-  overflow: 'hidden',
-});
-
 export const itemGroup = css({
   display: 'flex',
   gap: '4',
 });
 
 export const item = css({
-  flex: 'none',
   minWidth: '[0]',
 });
 
@@ -98,11 +92,17 @@ export const poster = css({
   aspectRatio: '[2 / 3]',
   borderRadius: 'xl',
   boxShadow: 'md',
-  objectFit: 'cover',
   outline: '[1px solid rgb(255 255 255 / 0.08)]',
   overflow: 'hidden',
   transitionDuration: '200',
   transitionProperty: '[opacity]',
+  width: 'full',
+});
+
+export const posterImage = css({
+  display: 'block',
+  height: 'full',
+  objectFit: 'cover',
   width: 'full',
 });
 
@@ -193,6 +193,6 @@ export const skeletonCard = css({
   aspectRatio: '[2 / 3]',
   bg: 'onSurface/10',
   borderRadius: 'xl',
-  flex: 'none',
-  width: '[9rem]',
+  flex: '[1 1 0]',
+  minWidth: '[0]',
 });
