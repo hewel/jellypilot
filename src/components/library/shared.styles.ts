@@ -146,18 +146,13 @@ export const userDataActions = css({
     width: 'full',
   },
   sm: {
-    alignItems: 'center',
+    alignItems: 'flex-end',
     flexDirection: 'row',
     flexWrap: 'wrap',
     '& > *': {
       width: 'auto',
     },
   },
-});
-
-export const pillButton = css({
-  borderRadius: 'full',
-  maxWidth: '[100%]',
 });
 
 export const favoriteSelected = css({
@@ -178,6 +173,10 @@ export const favoriteIconSelected = css({
   fill: 'error',
 });
 
+export const playedIconSelected = css({
+  color: 'tertiary',
+});
+
 export const spinIcon = css({
   animation: '[spin 1s {easings.linear} infinite]',
   color: 'secondary',
@@ -191,7 +190,7 @@ export const errorText = css({
   lineHeight: '16',
 });
 
-export const moreTrigger = css({
+export const iconAction = css({
   alignItems: 'center',
   appearance: 'none',
   bg: 'onSurface/10',
@@ -202,6 +201,7 @@ export const moreTrigger = css({
   color: 'onSurfaceVariant',
   cursor: 'pointer',
   display: 'inline-flex',
+  flex: 'none',
   height: '10',
   justifyContent: 'center',
   transitionDuration: '150',
@@ -215,7 +215,7 @@ export const moreTrigger = css({
     outline: '[2px solid {colors.secondary}]',
     outlineOffset: '1',
   },
-  '&[data-disabled]': {
+  _disabled: {
     cursor: 'not-allowed',
     opacity: '[0.5]',
   },

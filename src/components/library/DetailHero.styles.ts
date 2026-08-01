@@ -263,7 +263,7 @@ export const overviewToggle = css({
 });
 
 export const actions = css({
-  alignItems: 'center',
+  alignItems: 'flex-end',
   display: 'flex',
   flexWrap: 'wrap',
   gap: '3',
