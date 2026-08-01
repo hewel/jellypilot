@@ -1,5 +1,7 @@
 <div align="center">
 
+<img src="docs/assets/banner.png" alt="JellyPilot — Jellyfin + Emby · External MPV. A high-performance desktop client built around your MPV setup." width="100%" />
+
 # JellyPilot
 
 [![CI](https://github.com/hewel/jellypilot/actions/workflows/ci.yml/badge.svg)](https://github.com/hewel/jellypilot/actions/workflows/ci.yml)
