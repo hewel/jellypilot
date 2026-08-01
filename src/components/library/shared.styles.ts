@@ -1,4 +1,4 @@
-import { css } from '@styled-system/css';
+import { css, cva } from '@styled-system/css';
 
 export const statusCard = css({
   display: 'grid',
@@ -144,22 +144,18 @@ export const userDataActions = css({
   },
 });
 
-export const favoriteSelected = css({
-  borderColor: 'error/30',
-});
-
 export const iconSm = css({
   height: '4',
   width: '4',
 });
 
-export const favoriteIcon = css({
-  color: 'onSurfaceVariant',
-});
-
-export const favoriteIconSelected = css({
-  color: 'error',
-  fill: 'error',
+export const favoriteIcon = cva({
+  base: { color: 'onSurfaceVariant' },
+  variants: {
+    selected: {
+      true: { color: 'error', fill: 'error' },
+    },
+  },
 });
 
 export const playedIconSelected = css({
@@ -179,37 +175,44 @@ export const errorText = css({
   lineHeight: '16',
 });
 
-export const iconAction = css({
-  alignItems: 'center',
-  appearance: 'none',
-  aspectRatio: '[1 / 1]',
-  bg: 'onSurface/10',
-  borderColor: 'onSurface/15',
-  borderRadius: 'full',
-  borderStyle: 'solid',
-  borderWidth: '1px',
-  color: 'onSurfaceVariant',
-  cursor: 'pointer',
-  display: 'inline-flex',
-  flex: 'none',
-  height: '10',
-  justifyContent: 'center',
-  minWidth: '10',
-  p: '0',
-  transitionDuration: '150',
-  transitionProperty: '[background-color, color]',
-  width: '10',
-  _hover: {
-    bg: 'onSurface/15',
-    color: 'onSurface',
+export const iconAction = cva({
+  base: {
+    alignItems: 'center',
+    appearance: 'none',
+    aspectRatio: '[1 / 1]',
+    bg: 'onSurface/10',
+    borderColor: 'onSurface/15',
+    borderRadius: 'full',
+    borderStyle: 'solid',
+    borderWidth: '1px',
+    color: 'onSurfaceVariant',
+    cursor: 'pointer',
+    display: 'inline-flex',
+    flex: 'none',
+    height: '10',
+    justifyContent: 'center',
+    minWidth: '10',
+    p: '0',
+    transitionDuration: '150',
+    transitionProperty: '[background-color, color]',
+    width: '10',
+    _hover: {
+      bg: 'onSurface/15',
+      color: 'onSurface',
+    },
+    _focusVisible: {
+      outline: '[2px solid {colors.secondary}]',
+      outlineOffset: '1',
+    },
+    _disabled: {
+      cursor: 'not-allowed',
+      opacity: '[0.5]',
+    },
   },
-  _focusVisible: {
-    outline: '[2px solid {colors.secondary}]',
-    outlineOffset: '1',
-  },
-  _disabled: {
-    cursor: 'not-allowed',
-    opacity: '[0.5]',
+  variants: {
+    favorited: {
+      true: { borderColor: 'error/30' },
+    },
   },
 });
 

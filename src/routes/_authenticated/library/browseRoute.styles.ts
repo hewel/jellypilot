@@ -1,4 +1,4 @@
-import { css } from '@styled-system/css';
+import { css, cva } from '@styled-system/css';
 
 export const root = css({
   minWidth: '[0]',
@@ -240,56 +240,58 @@ export const chevron = css({
   transform: '[rotate(0deg)]',
   transitionDuration: '200',
   transitionProperty: '[transform]',
+  '[data-state=open] &': { transform: '[rotate(180deg)]' },
 });
 
-export const chevronOpen = css({
-  transform: 'rotate(180deg)',
-});
-
-export const statusTrigger = css({
-  alignItems: 'center',
-  bg: '[transparent]',
-  border: '[0]',
-  borderColor: 'outlineVariant',
-  borderRadius: 'full',
-  borderStyle: 'solid',
-  borderWidth: '1px',
-  color: 'onSurfaceVariant',
-  cursor: 'pointer',
-  display: 'inline-flex',
-  gap: '2',
-  height: '10',
-  outline: 'none',
-  px: '4',
-  transitionDuration: '200',
-  transitionProperty: '[background-color, border-color, color]',
-  _hover: {
-    borderColor: 'outline',
-    color: 'onSurface',
+export const statusTrigger = cva({
+  base: {
+    alignItems: 'center',
+    bg: '[transparent]',
+    border: '[0]',
+    borderColor: 'outlineVariant',
+    borderRadius: 'full',
+    borderStyle: 'solid',
+    borderWidth: '1px',
+    color: 'onSurfaceVariant',
+    cursor: 'pointer',
+    display: 'inline-flex',
+    gap: '2',
+    height: '10',
+    outline: 'none',
+    px: '4',
+    transitionDuration: '200',
+    transitionProperty: '[background-color, border-color, color]',
+    _hover: {
+      borderColor: 'outline',
+      color: 'onSurface',
+    },
+    '&[data-state="open"]': {
+      borderColor: 'outline',
+      color: 'onSurface',
+    },
+    _disabled: {
+      cursor: 'not-allowed',
+    },
+    sm: {
+      height: '11',
+    },
   },
-  '&[data-state="open"]': {
-    borderColor: 'outline',
-    color: 'onSurface',
-  },
-  _disabled: {
-    cursor: 'not-allowed',
-  },
-  sm: {
-    height: '11',
-  },
-});
-
-export const statusTriggerActive = css({
-  bg: 'secondaryContainer/60',
-  borderColor: 'secondary/50',
-  color: 'onSecondaryContainer',
-  _hover: {
-    borderColor: 'secondary/70',
-    color: 'onSecondaryContainer',
-  },
-  '&[data-state="open"]': {
-    borderColor: 'secondary/70',
-    color: 'onSecondaryContainer',
+  variants: {
+    active: {
+      true: {
+        bg: 'secondaryContainer/60',
+        borderColor: 'secondary/50',
+        color: 'onSecondaryContainer',
+        _hover: {
+          borderColor: 'secondary/70',
+          color: 'onSecondaryContainer',
+        },
+        '&[data-state="open"]': {
+          borderColor: 'secondary/70',
+          color: 'onSecondaryContainer',
+        },
+      },
+    },
   },
 });
 

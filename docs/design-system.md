@@ -6,7 +6,7 @@ Panda CSS is the sole styling system ([ADR 0011](adr/0011-panda-css-styling.md))
 
 **Viewports:** Supported production Tauri sizes are **1280×720** (minimum) and **1600×900** (default). **800×600**, **640×720**, and **360×720** are responsive stress targets exercised with the review-only Tauri config, not production window sizes.
 
-Reusable visual patterns are components under `src/components/ui`, not global `@layer` class APIs. Compose Panda classes with Solid `class` / `classList` (and `cx` when needed).
+Reusable visual patterns are components under `src/components/ui`, not global `@layer` class APIs. Compose Panda classes with Solid `class` / `classList` and the generated `cx` under the merge-semantics rules below.
 
 ## Principles
 
@@ -168,8 +168,9 @@ Diagnostics are a user-facing support view, not a developer console. Use normal 
 - Keep styles beside their owner in `Component.styles.ts` or route `*.styles.ts` modules.
 - Import `css`, `cva`, `sva`, or `cx` from `@styled-system/css`; use patterns from `@styled-system/patterns` only when they reduce repetition.
 - Use semantic color, spacing, typography, radius, shadow, duration, easing, and z-index tokens. Add a reusable token before introducing a repeated literal.
-- Use Panda conditions and nested selectors for responsive rules, interaction states, and Ark `data-*` states.
-- In Solid `.tsx`, use `class` for static classes, `classList` for conditional maps, and `cx` for generated class composition.
+- **Merge vs concatenate.** `css(a, b)`, `.raw()` composition, and `cva` base+variant resolve property conflicts by object merge (later wins) — deterministic. `cx` and `classList` only concatenate class strings; when two concatenated atomic classes set the same property, Panda's generated stylesheet order picks the winner, not the call order. Never use `cx`/`classList` to override a property the base class already sets.
+- **State-driven styles, in order of preference:** (1) a Panda condition in the single style definition when the element already publishes the state — Ark `data-state` (`_open`, `&[data-state=…]`, or `[data-state=open] &` for a child), `aria-pressed` (`_pressed`), `aria-checked` on an ancestor (`_groupChecked` with a `group` class on the ancestor), native `:disabled` (`_disabled`); (2) a `cva` variant when the state is prop-driven; (3) an explicit call-site merge `css(base, flagA && styleA, flagB && styleB)` when several independent flags contest one property (argument order = precedence, last wins); (4) `classList` only for additive conditional classes whose properties the base never sets (e.g. `spin`, `pulse` animations).
+- **`cx` is static composition only** (recipe + class, `props.class` passthrough, or a record lookup selecting one of several mutually exclusive classes like `styles.aspect[aspect]`). No `&&` or ternaries inside `cx`; runtime conditionals go to `classList` (additive) or a condition/variant (override).
 
 ```ts
 import { css } from '@styled-system/css';
@@ -179,6 +180,23 @@ export const panel = css({
   display: 'flex',
   gap: '4',
 });
+```
+
+```ts
+// Before (broken): classList concatenation — bg resolves by stylesheet order.
+<button class={styles.seasonTab} classList={{ [styles.activeSeasonTab]: active() }} />
+
+// After: one definition, condition raises specificity — deterministic.
+export const seasonTab = css({
+  bg: '[transparent]',
+  color: 'onSurfaceVariant',
+  _pressed: {
+    bg: 'primary',
+    color: 'onPrimary',
+    _hover: { bg: 'primary', color: 'onPrimary' },
+  },
+});
+// <button class={styles.seasonTab} aria-pressed={active()} />
 ```
 
 ## Layout

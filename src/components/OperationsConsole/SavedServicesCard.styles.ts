@@ -5,7 +5,7 @@ export const stack = css({
   gap: '3',
 });
 
-export const profile = css({
+export const profile = css.raw({
   borderRadius: '2xl',
   p: '4',
   bg: 'surfaceContainerHigh/30',
@@ -14,12 +14,12 @@ export const profile = css({
   borderColor: 'outlineVariant',
 });
 
-export const activeProfile = css({
+export const activeProfile = css.raw({
   borderColor: 'secondary/70',
   boxShadow: '[0 0 0 1px {colors.secondary/25}]',
 });
 
-export const warningProfile = css({
+export const warningProfile = css.raw({
   borderColor: 'warning/60',
 });
 

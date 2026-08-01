@@ -35,13 +35,7 @@ export default function PlayerBridgeSettingsCard(props: PlayerBridgeSettingsCard
       trailing={
         <Show when={ui.playerBridgeSaveStatus}>
           {(status) => (
-            <span
-              class={styles.saveBadge}
-              classList={{
-                [styles.saveError]: status().type === 'error',
-                [styles.saveOk]: status().type !== 'error',
-              }}
-            >
+            <span class={styles.saveBadge({ tone: status().type === 'error' ? 'error' : 'ok' })}>
               {status().text}
             </span>
           )}
@@ -133,10 +127,7 @@ export default function PlayerBridgeSettingsCard(props: PlayerBridgeSettingsCard
         >
           <Collapsible.Trigger type="button" class={styles.advancedTrigger}>
             <Collapsible.Indicator class={styles.chevronWrap}>
-              <ChevronDown
-                class={styles.chevron}
-                classList={{ [styles.chevronOpen]: ui.advancedOpen }}
-              />
+              <ChevronDown class={styles.chevron} />
             </Collapsible.Indicator>
             <span>Advanced MPV options</span>
           </Collapsible.Trigger>

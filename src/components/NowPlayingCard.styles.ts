@@ -327,11 +327,24 @@ export const contextualIcon = cva({
         transform: '[scale(0.25)]',
       },
     },
+    shadow: {
+      true: {},
+      false: {},
+    },
   },
-});
-
-export const iconDropShadow = css({
-  filter: '[drop-shadow(0 2px 4px {colors.surfaceContainerLowest/30})]',
+  defaultVariants: { shadow: false },
+  compoundVariants: [
+    {
+      visible: true,
+      shadow: true,
+      css: { filter: '[blur(0) drop-shadow(0 2px 4px {colors.surfaceContainerLowest/30})]' },
+    },
+    {
+      visible: false,
+      shadow: true,
+      css: { filter: '[blur(4px) drop-shadow(0 2px 4px {colors.surfaceContainerLowest/30})]' },
+    },
+  ],
 });
 
 export const secondaryIcon = css({

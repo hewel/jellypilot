@@ -21,11 +21,7 @@ export const toggle = css({
 
 export const checkboxOffset = css({
   mt: '0_5',
-});
-
-export const checkboxChecked = css({
-  bg: 'primary',
-  borderColor: 'primary',
+  _groupChecked: { bg: 'primary', borderColor: 'primary' },
 });
 
 export const copy = css({

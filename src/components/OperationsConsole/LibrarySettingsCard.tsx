@@ -42,13 +42,9 @@ export default function LibrarySettingsCard(props: LibrarySettingsCardProps) {
         aria-label="Library Image cache"
         aria-checked={props.imageDiskCacheEnabled}
         onClick={() => props.onImageDiskCacheEnabledChange(!props.imageDiskCacheEnabled)}
-        class={styles.toggle}
+        class={cx(styles.toggle, 'group')}
       >
-        <span
-          aria-hidden="true"
-          class={cx(recipes.checkboxBox, styles.checkboxOffset)}
-          classList={{ [styles.checkboxChecked]: props.imageDiskCacheEnabled }}
-        >
+        <span aria-hidden="true" class={cx(recipes.checkboxBox, styles.checkboxOffset)}>
           <Show when={props.imageDiskCacheEnabled}>
             <Check class={styles.icon3_5} stroke-width={3} />
           </Show>

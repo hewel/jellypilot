@@ -215,8 +215,7 @@ export function UserDataControls(props: {
       <div class={styles.userDataActions}>
         <button
           type="button"
-          class={styles.iconAction}
-          classList={{ [styles.favoriteSelected]: props.favorite }}
+          class={styles.iconAction({ favorited: props.favorite })}
           disabled={anyBusy()}
           aria-label={props.favorite ? 'Remove from favorites' : 'Add to favorites'}
           onClick={() => void runAction(favoriteAction())}
@@ -224,12 +223,7 @@ export function UserDataControls(props: {
           <Show
             when={busy() === favoriteAction()}
             fallback={
-              <Heart
-                class={cx(
-                  styles.iconSm,
-                  props.favorite ? styles.favoriteIconSelected : styles.favoriteIcon,
-                )}
-              />
+              <Heart class={cx(styles.iconSm, styles.favoriteIcon({ selected: props.favorite }))} />
             }
           >
             <RefreshCw class={styles.spinIcon} />
@@ -238,7 +232,7 @@ export function UserDataControls(props: {
 
         <button
           type="button"
-          class={styles.iconAction}
+          class={styles.iconAction()}
           disabled={anyBusy()}
           aria-label={props.played ? 'Mark unplayed' : 'Mark played'}
           onClick={() => void runAction(playedAction())}
@@ -247,7 +241,8 @@ export function UserDataControls(props: {
             when={busy() === playedAction()}
             fallback={
               <Check
-                class={cx(styles.iconSm, props.played && styles.playedIconSelected)}
+                class={styles.iconSm}
+                classList={{ [styles.playedIconSelected]: props.played }}
                 aria-hidden="true"
               />
             }
@@ -260,7 +255,7 @@ export function UserDataControls(props: {
           {(startOver) => (
             <Menu.Root>
               <Menu.Trigger
-                class={styles.iconAction}
+                class={styles.iconAction()}
                 disabled={anyBusy()}
                 aria-label="More actions"
               >

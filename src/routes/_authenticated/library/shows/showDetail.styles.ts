@@ -43,6 +43,11 @@ export const seasonTab = css({
     bg: 'surfaceContainerHigh/80',
     color: 'onSurface',
   },
+  _pressed: {
+    bg: 'primary',
+    color: 'onPrimary',
+    _hover: { bg: 'primary', color: 'onPrimary' },
+  },
   _focusVisible: {
     outline: '[2px solid {colors.secondary}]',
     outlineOffset: '1',
@@ -50,15 +55,6 @@ export const seasonTab = css({
   _disabled: {
     cursor: 'wait',
     opacity: '[0.6]',
-  },
-});
-
-export const activeSeasonTab = css({
-  bg: 'primary',
-  color: 'onPrimary',
-  _hover: {
-    bg: 'primary',
-    color: 'onPrimary',
   },
 });
 

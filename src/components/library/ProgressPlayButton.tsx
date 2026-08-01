@@ -43,10 +43,11 @@ export function ProgressPlayButton(props: {
       type="button"
       variant={variant()}
       class={cx(
-        styles.root,
-        variant() === 'primary' && styles.glow,
-        percent() !== null &&
-          (variant() === 'primary' ? styles.progressPrimary : styles.progressOutlined),
+        styles.root({
+          glow: variant() === 'primary',
+          progress:
+            percent() !== null ? (variant() === 'primary' ? 'primary' : 'outlined') : 'none',
+        }),
         props.class,
       )}
       style={percent() !== null ? { '--play-progress': `${percent()}%` } : undefined}
