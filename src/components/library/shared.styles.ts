@@ -131,27 +131,16 @@ export const userDataControls = css({
 });
 
 export const userDataActions = css({
-  // Match detail hero actions: column stack under sm, row wrap on sm+.
-  alignItems: 'stretch',
+  alignItems: 'flex-start',
   display: 'flex',
   flexDirection: 'column',
   gap: '3',
   maxWidth: '[100%]',
   minWidth: '[0]',
-  width: 'full',
-  '& > *': {
-    boxSizing: 'border-box',
-    maxWidth: '[100%]',
-    minWidth: '[0]',
-    width: 'full',
-  },
   sm: {
     alignItems: 'flex-end',
     flexDirection: 'row',
     flexWrap: 'wrap',
-    '& > *': {
-      width: 'auto',
-    },
   },
 });
 
@@ -193,6 +182,7 @@ export const errorText = css({
 export const iconAction = css({
   alignItems: 'center',
   appearance: 'none',
+  aspectRatio: '[1 / 1]',
   bg: 'onSurface/10',
   borderColor: 'onSurface/15',
   borderRadius: 'full',
@@ -204,6 +194,8 @@ export const iconAction = css({
   flex: 'none',
   height: '10',
   justifyContent: 'center',
+  minWidth: '10',
+  p: '0',
   transitionDuration: '150',
   transitionProperty: '[background-color, color]',
   width: '10',
