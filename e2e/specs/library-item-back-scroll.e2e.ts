@@ -90,6 +90,7 @@ const browseItems: VideoLibraryItem[] = Array.from({ length: 96 }, (_, index) =>
   seriesName: null,
   resumePositionSeconds: null,
   playedPercentage: null,
+  overview: null,
 }));
 
 const browsePage = {
@@ -122,6 +123,7 @@ const itemDetail = {
   canPlay: false,
   artworkImageId: null,
   backdropImageId: null,
+  metadata: { communityRating: null, officialRating: null, creators: [], cast: [] },
 } as const satisfies VideoItemDetail;
 
 const offlineState = {
@@ -149,6 +151,7 @@ const fixtures = {
   library_browse_video: browsePage,
   library_item_detail: itemDetail,
   library_item_streams: { audioStreams: [], subtitleStreams: [] },
+  library_similar_video: [],
   library_item_shortcut: moviesShortcut,
   now_playing_get_state: offlineState,
 } as const;
@@ -201,6 +204,10 @@ describe('library item detail Back restores origin and scroll', () => {
           audioStreams: [...values.library_item_streams.audioStreams],
           subtitleStreams: [...values.library_item_streams.subtitleStreams],
         },
+      });
+      controller.installFixture('library_similar_video', {
+        kind: 'return',
+        value: [...values.library_similar_video],
       });
       controller.installFixture('library_item_shortcut', {
         kind: 'return',

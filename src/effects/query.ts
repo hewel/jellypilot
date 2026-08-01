@@ -130,4 +130,6 @@ export const queryKeys = {
     [...queryKeys.librarySessionRoot(sessionKey), 'seasonEpisodes', seriesId] as const,
   libraryMediaDetail: (sessionKey: LibrarySessionKey, itemType: string, itemId: string) =>
     [...queryKeys.librarySessionRoot(sessionKey), 'mediaDetail', itemType, itemId] as const,
+  librarySimilarVideo: (sessionKey: LibrarySessionKey, itemId: string) =>
+    [...queryKeys.librarySessionRoot(sessionKey), 'similarVideo', itemId] as const,
 };

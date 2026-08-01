@@ -4,11 +4,14 @@ import { Effect, Exit, Option } from 'effect';
 import { commands } from '../src/bindings';
 import type {
   ConnectionState,
+  VideoLibraryItem,
   VideoLibraryPage,
   VideoSearchPage,
   VideoShowDetail,
 } from '../src/bindings';
+import { commandFailureMessage } from '../src/effects/commands';
 import {
+  fetchSimilarVideoItems,
   fetchVideoLibraryPage,
   fetchVideoSearchPage,
   initialSeasonForShow,
@@ -51,6 +54,7 @@ test('initialSeasonForShow returns season matching nextEpisode.seasonNumber', ()
     favorite: false,
     genres: [],
     overview: null,
+    metadata: { communityRating: null, officialRating: null, creators: [], cast: [] },
     played: false,
     productionYear: null,
     canPlay: true,
@@ -60,6 +64,7 @@ test('initialSeasonForShow returns season matching nextEpisode.seasonNumber', ()
       id: 'ep-2',
       name: 'Episode 2',
       itemType: 'Episode',
+      overview: null,
       productionYear: null,
       runtimeSeconds: null,
       played: false,
@@ -113,6 +118,7 @@ test('initialSeasonForShow returns first season if no matching nextEpisode.seaso
     favorite: false,
     genres: [],
     overview: null,
+    metadata: { communityRating: null, officialRating: null, creators: [], cast: [] },
     played: false,
     productionYear: null,
     canPlay: true,
@@ -160,6 +166,7 @@ test('initialSeasonForShow returns null if show has no seasons', () => {
     favorite: false,
     genres: [],
     overview: null,
+    metadata: { communityRating: null, officialRating: null, creators: [], cast: [] },
     played: false,
     productionYear: null,
     canPlay: true,
@@ -217,4 +224,53 @@ test('fetchVideoLibraryPage does not preflight connection state per page', async
     sort: 'title',
     startIndex: 0,
   });
+});
+
+test('fetchSimilarVideoItems resolves similar library items when connected', async () => {
+  rstest.spyOn(commands, 'serverGetState').mockResolvedValue(connectedState);
+  const movie: VideoLibraryItem = {
+    id: 'movie-1',
+    name: 'Similar Movie',
+    itemType: 'Movie',
+    productionYear: 2024,
+    runtimeSeconds: 7200,
+    played: false,
+    favorite: false,
+    artworkImageId: 'art-1',
+    seasonNumber: null,
+    episodeNumber: null,
+    seriesId: null,
+    seriesName: null,
+    resumePositionSeconds: null,
+    playedPercentage: null,
+    overview: null,
+  };
+  const similar = rstest.spyOn(commands, 'librarySimilarVideo').mockResolvedValue({
+    data: [movie],
+    status: 'ok',
+  });
+
+  const exit = await Effect.runPromiseExit(fetchSimilarVideoItems('movie-1'));
+
+  expect(Exit.isSuccess(exit)).toBe(true);
+  expect(similar).toHaveBeenCalledWith('movie-1');
+  if (Exit.isSuccess(exit)) {
+    expect(exit.value).toEqual([movie]);
+  }
+});
+
+test('fetchSimilarVideoItems fails with CommandError when backend command fails', async () => {
+  rstest.spyOn(commands, 'serverGetState').mockResolvedValue(connectedState);
+  const similar = rstest.spyOn(commands, 'librarySimilarVideo').mockResolvedValue({
+    status: 'error',
+    error: { code: 'http', message: 'boom' },
+  });
+
+  const exit = await Effect.runPromiseExit(fetchSimilarVideoItems('movie-1'));
+
+  expect(Exit.isFailure(exit)).toBe(true);
+  expect(similar).toHaveBeenCalledWith('movie-1');
+  if (Exit.isFailure(exit)) {
+    expect(commandFailureMessage(exit.cause, '')).toBe('boom');
+  }
 });

@@ -2,12 +2,22 @@ import type {
   VideoLibraryItem,
   VideoLibraryPlayRequest,
   VideoSeason,
+  VideoShowDetail,
   VideoUserDataUpdateRequest,
 } from '@bindings';
 import { useAuthenticatedBootstrap } from '@components/AuthenticatedBootstrap';
 import {
+  DetailEpisodeList,
+  DetailEpisodeListSkeleton,
+} from '@components/library/DetailEpisodeList';
+import {
+  DetailRecommendationError,
+  DetailRecommendationShelf,
+  DetailRecommendationShelfSkeleton,
+} from '@components/library/DetailRecommendationShelf';
+import {
   DetailHero,
-  type DetailHeroInfoRow,
+  type DetailHeroModel,
   DetailHeroSkeleton,
   LibraryStatusPanel,
   UserDataControls,
@@ -18,20 +28,14 @@ import { Button, JellyPilotSelect } from '@components/ui';
 import type { JellyPilotSelectItem } from '@components/ui';
 import { cx } from '@styled-system/css';
 import { createMutation, createQuery, useQueryClient } from '@tanstack/solid-query';
-import {
-  Link,
-  createFileRoute,
-  useCanGoBack,
-  useNavigate,
-  useRouter,
-} from '@tanstack/solid-router';
+import { createFileRoute, useCanGoBack, useNavigate, useRouter } from '@tanstack/solid-router';
 import { Exit, Option } from 'effect';
-import { Play, RefreshCw, Tv } from 'lucide-solid';
+import { Play, RefreshCw } from 'lucide-solid';
 import { For, Show, Suspense, createMemo, createSignal } from 'solid-js';
 import { commandFailureMessage } from '~effects/commands';
 import {
   fetchSeasonEpisodes,
-  fetchVideoItemDetail,
+  fetchSimilarVideoItems,
   fetchVideoShowDetail,
   initialSeasonForShow,
   startLibraryPlayback,
@@ -39,6 +43,7 @@ import {
 } from '~effects/library';
 import type { LibraryExit, SeasonEpisodesState } from '~effects/library';
 import { isLibrarySessionKeyConnected, queryKeys, runExit } from '~effects/query';
+import { detailPlaybackProgress } from '~utils/libraryDetail';
 
 import { AUTHENTICATED_HOME_ROUTE } from '../../../../router-guards';
 import * as styles from '../detailRoute.styles';
@@ -47,6 +52,44 @@ import * as showStyles from './showDetail.styles';
 export const Route = createFileRoute('/_authenticated/library/shows/$seriesId')({
   component: LibraryShowDetailRoute,
 });
+
+const RECOMMENDATION_TITLE = 'More like this';
+
+function episodeLabel(episode: VideoLibraryItem): string {
+  if (episode.seasonNumber != null && episode.episodeNumber != null) {
+    return `S${episode.seasonNumber.toString().padStart(2, '0')}E${episode.episodeNumber.toString().padStart(2, '0')}`;
+  }
+  return 'Episode';
+}
+
+function buildShowHeroModel(show: VideoShowDetail): DetailHeroModel {
+  const next = show.nextEpisode;
+  return {
+    itemId: show.id,
+    name: show.name,
+    itemType: 'Series',
+    artworkImageId: show.artworkImageId,
+    backdropImageId: show.backdropImageId,
+    productionYear: show.productionYear,
+    runtime: null,
+    overview: show.overview,
+    communityRating: show.metadata.communityRating,
+    officialRating: show.metadata.officialRating,
+    genres: show.genres,
+    creators: show.metadata.creators,
+    cast: show.metadata.cast,
+    seriesName: null,
+    seriesId: null,
+    episodeCode: null,
+    progress: next
+      ? detailPlaybackProgress(
+          next.runtimeSeconds,
+          next.resumePositionSeconds,
+          next.playedPercentage,
+        )
+      : null,
+  };
+}
 
 function LibraryShowDetailRoute() {
   const params = Route.useParams();
@@ -126,27 +169,20 @@ function LibraryShowDetailRoute() {
   const loadEpisodes = (season: VideoSeason) => {
     setSelectedSeason(season);
   };
-  const startEpisodePlayback = async (itemId: string) => {
-    const result = await queryClient.fetchQuery({
-      queryKey: queryKeys.libraryItemDetail(sessionKey(), itemId),
-      queryFn: () => runExit(fetchVideoItemDetail(itemId)),
-    });
-    if (Exit.isFailure(result)) {
-      setPlayError(commandFailureMessage(result.cause, 'Could not load episode'));
-      return;
-    }
 
-    const episodeDetail = result.value;
-    const mode = episodeDetail.canResume ? 'resume' : 'start';
-    const playResult = await playbackMutation.mutateAsync({
+  // Playback is decided from summary state alone; no item-detail refetch.
+  const playSummary = async (episode: VideoLibraryItem) => {
+    const resume =
+      episode.resumePositionSeconds != null && episode.resumePositionSeconds > 0 && !episode.played;
+    const result = await playbackMutation.mutateAsync({
       audioStreamIndex: null,
-      itemId: episodeDetail.id,
-      mode,
-      startPositionSeconds: mode === 'resume' ? episodeDetail.resumePositionSeconds : 0,
+      itemId: episode.id,
+      mode: resume ? 'resume' : 'start',
+      startPositionSeconds: resume ? episode.resumePositionSeconds : 0,
       subtitleStreamIndex: null,
     });
     setPlayError(
-      Exit.match(playResult, {
+      Exit.match(result, {
         onFailure: (cause) => commandFailureMessage(cause, 'Could not start playback'),
         onSuccess: () => null,
       }),
@@ -160,7 +196,7 @@ function LibraryShowDetailRoute() {
 
     setPlayBusy(true);
     setPlayError(null);
-    await startEpisodePlayback(show.nextEpisode.id);
+    await playSummary(show.nextEpisode);
     setPlayBusy(false);
   };
   const playEpisode = async (episode: VideoLibraryItem) => {
@@ -170,7 +206,7 @@ function LibraryShowDetailRoute() {
 
     setEpisodePlayBusy(episode.id);
     setPlayError(null);
-    await startEpisodePlayback(episode.id);
+    await playSummary(episode);
     setEpisodePlayBusy(null);
   };
   const statusTitle = () => {
@@ -213,12 +249,6 @@ function LibraryShowDetailRoute() {
     }
     return 'Season buttons keep manual episode selection available alongside Jellyfin next-up resolution.';
   };
-  const episodeLabel = (ep: VideoLibraryItem) => {
-    if (ep.seasonNumber != null && ep.episodeNumber != null) {
-      return `S${ep.seasonNumber.toString().padStart(2, '0')}E${ep.episodeNumber.toString().padStart(2, '0')}`;
-    }
-    return 'Episode';
-  };
   const playShowLabel = () => {
     const show = detail();
     const nextEpisode = show?.nextEpisode;
@@ -233,26 +263,6 @@ function LibraryShowDetailRoute() {
         : 'Play';
     return `${prefix} ${episodeLabel(nextEpisode)}`;
   };
-  const infoRows = (): DetailHeroInfoRow[] => {
-    const show = detail();
-    if (!show) {
-      return [];
-    }
-    const rows: DetailHeroInfoRow[] = [{ label: 'Type', value: 'Series' }];
-    if (show.seasons.length > 0) {
-      rows.push({
-        label: 'Seasons',
-        value: `${show.seasons.length} ${show.seasons.length === 1 ? 'season' : 'seasons'}`,
-      });
-    }
-    if (show.nextEpisode) {
-      rows.push({
-        label: 'Next up',
-        value: `${episodeLabel(show.nextEpisode)} · ${show.nextEpisode.name}`,
-      });
-    }
-    return rows;
-  };
   const seasonMeta = () => {
     const episodes = seasonEpisodes();
     if (episodes.length === 0) {
@@ -264,140 +274,169 @@ function LibraryShowDetailRoute() {
     return total ? `${count} · ${total} total` : count;
   };
 
+  // Recommendations (deferred, independent failure domain).
+  const similarQuery = createQuery(() => ({
+    queryKey: queryKeys.librarySimilarVideo(sessionKey(), params().seriesId),
+    enabled:
+      isLibrarySessionKeyConnected(sessionKey()) &&
+      showQuery.isSuccess &&
+      showQuery.data !== undefined &&
+      Exit.isSuccess(showQuery.data),
+    queryFn: () => runExit(fetchSimilarVideoItems(params().seriesId)),
+  }));
+  const similarItems = () => {
+    const current = similarQuery.data;
+    return current && Exit.isSuccess(current) ? current.value : [];
+  };
+  const similarFailed = () => {
+    const current = similarQuery.data;
+    return Boolean(current && !Exit.isSuccess(current));
+  };
+  const similarErrorMessage = () => {
+    const current = similarQuery.data;
+    return current && !Exit.isSuccess(current)
+      ? commandFailureMessage(current.cause, 'Could not load recommendations')
+      : '';
+  };
+
+  const heroModel = createMemo(() => {
+    const show = detail();
+    return show ? buildShowHeroModel(show) : null;
+  });
+
   return (
     <div class={styles.stack}>
       <Suspense fallback={<ShowDetailSkeleton />}>
         <Show
-          when={detail()}
+          when={heroModel()}
           fallback={
             <div class={styles.contentSection}>
               <LibraryStatusPanel title={statusTitle()} description={statusDescription()} />
             </div>
           }
         >
-          {(show) => (
-            <div class={styles.page}>
-              <DetailHero
-                titleId="show-detail-title"
-                name={show().name}
-                typeLabel="Series"
-                typeIcon={<Tv class={styles.icon4} aria-hidden="true" />}
-                imageId={show().backdropImageId ?? show().artworkImageId}
-                year={show().productionYear}
-                runtime={null}
-                watchedPercent={null}
-                played={show().played}
-                favorite={show().favorite}
-                genres={show().genres}
-                overview={show().overview}
-                infoRows={infoRows()}
-                onBack={closeDetail}
-                actions={
-                  <>
-                    <Button
-                      type="button"
-                      variant="primary"
-                      class={cx(styles.pillButton, styles.playGlow)}
-                      disabled={!show().nextEpisode || playBusy()}
-                      onClick={() => void playShow()}
-                      leadingIcon={
-                        <Show when={playBusy()} fallback={<Play class={styles.playIcon} />}>
-                          <RefreshCw class={cx(styles.icon4, styles.spinner)} />
-                        </Show>
-                      }
-                    >
-                      {playBusy() ? 'Loading...' : playShowLabel()}
-                    </Button>
-                    <UserDataControls
-                      itemId={show().id}
-                      played={show().played}
-                      favorite={show().favorite}
-                      subject="show"
-                      onUpdate={(request) => userDataMutation.mutateAsync(request)}
-                      onSuccess={() => {
-                        queryClient.invalidateQueries({
-                          queryKey: queryKeys.libraryShowDetail(sessionKey(), params().seriesId),
-                        });
-                        queryClient.invalidateQueries({
-                          queryKey: queryKeys.libraryMediaDetail(
-                            sessionKey(),
-                            'Series',
-                            params().seriesId,
-                          ),
-                        });
-                        queryClient.invalidateQueries({
-                          queryKey: queryKeys.librarySeasonEpisodesRoot(
-                            sessionKey(),
-                            params().seriesId,
-                          ),
-                        });
-                        queryClient.invalidateQueries({
-                          queryKey: queryKeys.libraryHome(sessionKey()),
-                        });
-                        queryClient.invalidateQueries({
-                          queryKey: queryKeys.libraryBrowseRoot(sessionKey()),
-                        });
-                      }}
-                    />
-                  </>
-                }
-              />
+          {(model) => {
+            const show = () => detail() as VideoShowDetail;
+            return (
+              <>
+                <DetailHero
+                  titleId="show-detail-title"
+                  model={model()}
+                  onBack={closeDetail}
+                  actions={() => (
+                    <>
+                      <Button
+                        type="button"
+                        variant="primary"
+                        class={cx(styles.pillButton, styles.playGlow)}
+                        disabled={!show().nextEpisode || playBusy()}
+                        onClick={() => void playShow()}
+                        leadingIcon={
+                          <Show when={playBusy()} fallback={<Play class={styles.playIcon} />}>
+                            <RefreshCw class={cx(styles.icon4, styles.spinner)} />
+                          </Show>
+                        }
+                      >
+                        {playBusy() ? 'Loading...' : playShowLabel()}
+                      </Button>
+                      <UserDataControls
+                        itemId={show().id}
+                        played={show().played}
+                        favorite={show().favorite}
+                        subject="show"
+                        onUpdate={(request) => userDataMutation.mutateAsync(request)}
+                        onSuccess={() => {
+                          queryClient.invalidateQueries({
+                            queryKey: queryKeys.libraryShowDetail(sessionKey(), params().seriesId),
+                          });
+                          queryClient.invalidateQueries({
+                            queryKey: queryKeys.libraryMediaDetail(
+                              sessionKey(),
+                              'Series',
+                              params().seriesId,
+                            ),
+                          });
+                          queryClient.invalidateQueries({
+                            queryKey: queryKeys.librarySeasonEpisodesRoot(
+                              sessionKey(),
+                              params().seriesId,
+                            ),
+                          });
+                          queryClient.invalidateQueries({
+                            queryKey: queryKeys.libraryHome(sessionKey()),
+                          });
+                          queryClient.invalidateQueries({
+                            queryKey: queryKeys.libraryBrowseRoot(sessionKey()),
+                          });
+                        }}
+                      />
+                    </>
+                  )}
+                />
 
-              <div class={styles.contentSection}>
-                <Show
-                  when={show().seasons.length > 0}
-                  fallback={
-                    <LibraryStatusPanel
-                      title="No seasons available"
-                      description="Jellyfin returned no seasons for this show."
-                    />
-                  }
-                >
-                  <div class={showStyles.seasonBar}>
-                    <SeasonSelector
-                      seasons={show().seasons}
-                      activeSeason={activeSeason()}
-                      disabled={episodesLoading()}
-                      onSelect={loadEpisodes}
-                    />
-                    <Show when={seasonMeta()}>
-                      {(meta) => <p class={showStyles.seasonMeta}>{meta()}</p>}
-                    </Show>
-                  </div>
+                <div class={styles.contentSection}>
+                  <Show
+                    when={show().seasons.length > 0}
+                    fallback={
+                      <LibraryStatusPanel
+                        title="No seasons available"
+                        description="Jellyfin returned no seasons for this show."
+                      />
+                    }
+                  >
+                    <div class={showStyles.seasonBar}>
+                      <SeasonSelector
+                        seasons={show().seasons}
+                        activeSeason={activeSeason()}
+                        disabled={episodesLoading()}
+                        onSelect={loadEpisodes}
+                      />
+                      <Show when={seasonMeta()}>
+                        {(meta) => <p class={showStyles.seasonMeta}>{meta()}</p>}
+                      </Show>
+                    </div>
 
-                  <Suspense fallback={<SeasonEpisodesSkeleton />}>
-                    <Show
-                      when={hasSeasonEpisodes()}
-                      fallback={
-                        episodesLoading() ? (
-                          <SeasonEpisodesSkeleton />
-                        ) : (
-                          <LibraryStatusPanel
-                            title={episodesStatusTitle()}
-                            description={episodesStatusDescription()}
-                          />
-                        )
-                      }
-                    >
-                      <section aria-label="Season episodes" class={showStyles.episodeList}>
-                        <For each={seasonEpisodes()}>
-                          {(episode) => (
-                            <EpisodeRow
-                              episode={episode}
-                              label={episodeLabel(episode)}
-                              busy={episodePlayBusy() === episode.id}
-                              disabled={episodePlayBusy() !== null}
-                              onPlay={() => void playEpisode(episode)}
+                    <Suspense fallback={<DetailEpisodeListSkeleton />}>
+                      <Show
+                        when={hasSeasonEpisodes()}
+                        fallback={
+                          episodesLoading() ? (
+                            <DetailEpisodeListSkeleton />
+                          ) : (
+                            <LibraryStatusPanel
+                              title={episodesStatusTitle()}
+                              description={episodesStatusDescription()}
                             />
-                          )}
-                        </For>
-                      </section>
-                    </Show>
-                  </Suspense>
+                          )
+                        }
+                      >
+                        <DetailEpisodeList
+                          episodes={seasonEpisodes()}
+                          busyItemId={episodePlayBusy()}
+                          disabled={episodePlayBusy() !== null}
+                          onPlay={(episode) => void playEpisode(episode)}
+                        />
+                      </Show>
+                    </Suspense>
+                  </Show>
+                </div>
+
+                <Show when={similarQuery.isPending}>
+                  <DetailRecommendationShelfSkeleton title={RECOMMENDATION_TITLE} />
                 </Show>
-              </div>
-            </div>
-          )}
+                <Show when={similarFailed()}>
+                  <DetailRecommendationError
+                    title={RECOMMENDATION_TITLE}
+                    message={similarErrorMessage()}
+                    onRetry={() => void similarQuery.refetch()}
+                  />
+                </Show>
+                <Show when={similarItems().length > 0}>
+                  <DetailRecommendationShelf title={RECOMMENDATION_TITLE} items={similarItems()} />
+                </Show>
+              </>
+            );
+          }}
         </Show>
       </Suspense>
       <Show when={playError()}>{(message) => <p class={styles.error}>{message()}</p>}</Show>
@@ -462,88 +501,14 @@ function SeasonSelector(props: {
   );
 }
 
-function EpisodeRow(props: {
-  episode: VideoLibraryItem;
-  label: string;
-  busy: boolean;
-  disabled: boolean;
-  onPlay: () => void;
-}) {
-  const hasResume = () =>
-    props.episode.resumePositionSeconds != null &&
-    props.episode.resumePositionSeconds > 0 &&
-    !props.episode.played;
-
-  const number =
-    props.episode.episodeNumber !== null
-      ? props.episode.episodeNumber.toString().padStart(2, '0')
-      : '–';
-
-  return (
-    <div class={showStyles.episodeRow}>
-      <span class={showStyles.episodeNumber} aria-hidden="true">
-        {number}
-      </span>
-
-      <div class={showStyles.episodeCopy}>
-        <Link
-          to="/library/items/$itemId"
-          params={{ itemId: props.episode.id }}
-          class={showStyles.episodeTitle}
-        >
-          {props.episode.name}
-        </Link>
-        <div class={showStyles.episodeSub}>
-          <span>{props.label}</span>
-          <Show when={props.episode.played}>
-            <span aria-hidden="true">·</span>
-            <span>Played</span>
-          </Show>
-          <Show when={hasResume()}>
-            <span aria-hidden="true">·</span>
-            <span>{Math.round(props.episode.playedPercentage ?? 0)}% watched</span>
-          </Show>
-        </div>
-      </div>
-
-      <Show when={formatRuntime(props.episode.runtimeSeconds)}>
-        {(runtime) => <span class={showStyles.episodeRuntime}>{runtime()}</span>}
-      </Show>
-
-      <Button
-        type="button"
-        variant="outlined"
-        class={styles.pillButton}
-        disabled={props.disabled}
-        onClick={props.onPlay}
-        leadingIcon={
-          <Show when={props.busy} fallback={<Play class={styles.playIcon} />}>
-            <RefreshCw class={cx(styles.icon4, styles.spinner)} />
-          </Show>
-        }
-      >
-        {props.busy ? 'Loading...' : hasResume() ? 'Resume' : 'Play'}
-      </Button>
-    </div>
-  );
-}
-
 function ShowDetailSkeleton() {
   return (
     <div class={styles.page}>
       <DetailHeroSkeleton />
       <div class={styles.contentSection} aria-hidden="true">
         <div class={styles.skeletonBar} />
-        <SeasonEpisodesSkeleton />
+        <DetailEpisodeListSkeleton />
       </div>
-    </div>
-  );
-}
-
-function SeasonEpisodesSkeleton() {
-  return (
-    <div class={showStyles.episodeList} aria-hidden="true">
-      <For each={[0, 1, 2]}>{() => <div class={showStyles.skeletonRow} />}</For>
     </div>
   );
 }

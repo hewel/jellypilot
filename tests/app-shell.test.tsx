@@ -283,6 +283,7 @@ const movieDetail: VideoItemDetail = {
   itemType: 'Movie',
   name: 'Detail Movie',
   overview: 'A movie overview.',
+  metadata: { communityRating: null, officialRating: null, creators: [], cast: [] },
   played: false,
   playedPercentage: 25,
   productionYear: 2024,
@@ -313,6 +314,7 @@ const episodeDetail: VideoItemDetail = {
   itemType: 'Episode',
   name: 'Detail Episode',
   overview: null,
+  metadata: { communityRating: null, officialRating: null, creators: [], cast: [] },
   played: true,
   playedPercentage: 100,
   productionYear: null,
@@ -349,6 +351,7 @@ const showDetail: VideoShowDetail = {
   genres: ['Drama'],
   id: 'series-1',
   name: 'Example Show',
+  metadata: { communityRating: null, officialRating: null, creators: [], cast: [] },
   nextEpisode: {
     artworkImageId: null,
     episodeNumber: 2,
@@ -356,6 +359,7 @@ const showDetail: VideoShowDetail = {
     id: 'episode-2',
     itemType: 'Episode',
     name: 'Next Episode',
+    overview: null,
     played: false,
     playedPercentage: null,
     productionYear: null,
@@ -394,6 +398,7 @@ const seasonEpisodes: VideoSeasonEpisodes = {
       id: 'episode-2',
       name: 'Next Episode',
       itemType: 'Episode',
+      overview: null,
       productionYear: null,
       runtimeSeconds: 1800,
       played: false,
@@ -422,6 +427,7 @@ function videoLibraryPage(startIndex: number): VideoLibraryPage {
           id: 'paged-movie-1',
           name: 'Paged Movie',
           itemType: 'Movie',
+          overview: null,
           productionYear: 2025,
           runtimeSeconds: 5400,
           played: false,
@@ -450,6 +456,7 @@ function videoLibraryPage(startIndex: number): VideoLibraryPage {
         id: 'movie-25',
         name: 'Paged Movie 25',
         itemType: 'Movie',
+        overview: null,
         productionYear: null,
         runtimeSeconds: null,
         played: true,
@@ -483,6 +490,7 @@ function largeVideoLibraryPage(startIndex: number): VideoLibraryPage {
         id: `virtual-movie-${index + 1}`,
         name: `Virtual Movie ${index + 1}`,
         itemType: 'Movie',
+        overview: null,
         productionYear: null,
         runtimeSeconds: null,
         played: false,
@@ -508,6 +516,7 @@ const searchResultPool: VideoLibraryItem[] = [
     id: 'alien-movie',
     name: 'Alien',
     itemType: 'Movie',
+    overview: null,
     productionYear: 1979,
     runtimeSeconds: 7020,
     played: true,
@@ -524,6 +533,7 @@ const searchResultPool: VideoLibraryItem[] = [
     id: 'alien-episode',
     name: 'Alien Covenant: Homecoming',
     itemType: 'Episode',
+    overview: null,
     productionYear: 2025,
     runtimeSeconds: 3000,
     played: true,
@@ -540,6 +550,7 @@ const searchResultPool: VideoLibraryItem[] = [
     id: 'alien-show',
     name: 'Alien Earth',
     itemType: 'Series',
+    overview: null,
     productionYear: 2025,
     runtimeSeconds: null,
     played: false,
@@ -556,6 +567,7 @@ const searchResultPool: VideoLibraryItem[] = [
     id: `alien-extra-${index + 1}`,
     name: `Alien Extra ${String(index + 1).padStart(2, '0')}`,
     itemType: 'Movie',
+    overview: null,
     productionYear: null,
     runtimeSeconds: null,
     played: false,
@@ -572,6 +584,7 @@ const searchResultPool: VideoLibraryItem[] = [
     id: 'alien-rematch',
     name: 'Alien Rematch',
     itemType: 'Movie',
+    overview: null,
     productionYear: null,
     runtimeSeconds: null,
     played: false,
@@ -669,6 +682,10 @@ function mockShellCommands(state = connectedState) {
   });
   rstest.spyOn(commands, 'librarySeasonEpisodes').mockResolvedValue({
     data: seasonEpisodes,
+    status: 'ok',
+  });
+  rstest.spyOn(commands, 'librarySimilarVideo').mockResolvedValue({
+    data: [],
     status: 'ok',
   });
   rstest.spyOn(commands, 'libraryPlay').mockResolvedValue({
@@ -1820,28 +1837,19 @@ test('library item detail renders resume-primary movie metadata', async () => {
   expect(screen.getByText('A movie overview.')).toBeVisible();
   expect(screen.getByText('Drama')).toBeVisible();
   expect(screen.getByText('Mystery')).toBeVisible();
-  expect(screen.getByText('Favorite')).toBeVisible();
+  expect(screen.getByRole('button', { name: 'Remove from favorites' })).toBeVisible();
   expect(screen.getByText('2h 0m')).toBeVisible();
   expect(await screen.findByAltText('Detail Movie backdrop')).toHaveAttribute(
     'src',
     imageSource(movieDetail.backdropImageId ?? ''),
   );
   expect(screen.getByRole('button', { name: 'Resume' })).toBeVisible();
-  expect(screen.getByRole('button', { name: 'Play from beginning' })).toBeVisible();
-  fireEvent.click(screen.getByRole('button', { name: 'Resume' }));
-  await waitFor(() =>
-    expect(playCommand).toHaveBeenCalledWith({
-      audioStreamIndex: null,
-      itemId: 'detail-movie',
-      mode: 'resume',
-      startPositionSeconds: 120,
-      subtitleStreamIndex: null,
-    }),
-  );
-  await waitFor(() =>
-    expect(screen.getByRole('button', { name: 'Play from beginning' })).not.toBeDisabled(),
-  );
-  fireEvent.click(screen.getByRole('button', { name: 'Play from beginning' }));
+  // Play from beginning lives in the More actions overflow menu.
+  fireEvent.click(screen.getByRole('button', { name: 'More actions' }));
+  const startOver = await screen.findByRole('menuitem', { name: 'Play from beginning' });
+  expect(startOver).toBeVisible();
+  fireEvent.pointerDown(startOver);
+  fireEvent.click(startOver);
   await waitFor(() =>
     expect(playCommand).toHaveBeenLastCalledWith({
       audioStreamIndex: null,
@@ -1851,8 +1859,16 @@ test('library item detail renders resume-primary movie metadata', async () => {
       subtitleStreamIndex: null,
     }),
   );
+  // Resume remains the primary action.
+  fireEvent.click(screen.getByRole('button', { name: 'Resume' }));
   await waitFor(() =>
-    expect(screen.getByRole('button', { name: 'Play from beginning' })).not.toBeDisabled(),
+    expect(playCommand).toHaveBeenLastCalledWith({
+      audioStreamIndex: null,
+      itemId: 'detail-movie',
+      mode: 'resume',
+      startPositionSeconds: 120,
+      subtitleStreamIndex: null,
+    }),
   );
   expect(mpvStart).not.toHaveBeenCalled();
 
@@ -1963,7 +1979,7 @@ test('library item detail refreshes user data only after mutation success', asyn
   const cleanup = renderShell('/library/items/detail-movie');
 
   await screen.findByRole('heading', { name: 'Detail Movie' });
-  fireEvent.click(screen.getByRole('button', { name: 'Unfavorite' }));
+  fireEvent.click(screen.getByRole('button', { name: 'Remove from favorites' }));
 
   await waitFor(() =>
     expect(updateCommand).toHaveBeenCalledWith({
@@ -1971,7 +1987,7 @@ test('library item detail refreshes user data only after mutation success', asyn
       itemId: 'detail-movie',
     }),
   );
-  expect(await screen.findByText('Not favorite')).toBeVisible();
+  expect(await screen.findByRole('button', { name: 'Add to favorites' })).toBeVisible();
 
   cleanup();
 });
@@ -1985,11 +2001,11 @@ test('library item detail keeps previous user data visible on mutation failure',
   const cleanup = renderShell('/library/items/detail-movie');
 
   await screen.findByRole('heading', { name: 'Detail Movie' });
-  fireEvent.click(screen.getByRole('button', { name: 'Unfavorite' }));
+  fireEvent.click(screen.getByRole('button', { name: 'Remove from favorites' }));
 
   expect(await screen.findByText('Favorite update failed')).toBeVisible();
-  expect(screen.getByText('Favorite')).toBeVisible();
-  expect(screen.queryByText('Not favorite')).toBeNull();
+  expect(screen.getByRole('button', { name: 'Remove from favorites' })).toBeVisible();
+  expect(screen.queryByRole('button', { name: 'Add to favorites' })).toBeNull();
 
   cleanup();
 });
@@ -2005,8 +2021,7 @@ test('library item detail renders episode metadata and semantic artwork placehol
     '/library/shows/series-1',
   );
   expect(screen.getByText(/S02E03/)).toBeVisible();
-  expect(screen.getByText('Played')).toBeVisible();
-  expect(screen.getByText('Not favorite')).toBeVisible();
+  expect(screen.getByRole('button', { name: 'Add to favorites' })).toBeVisible();
   expect(screen.getByText('Sci-Fi')).toBeVisible();
   expect(screen.queryByRole('button', { name: 'Resume' })).toBeNull();
   fireEvent.click(screen.getByRole('button', { name: 'Play' }));
@@ -2026,7 +2041,6 @@ test('library item detail renders episode metadata and semantic artwork placehol
 test('library show detail auto-loads next-up season and renders episode rows', async () => {
   mockShellCommands();
   const showCommand = rstest.spyOn(commands, 'libraryShowDetail');
-  const itemCommand = rstest.spyOn(commands, 'libraryItemDetail');
   const seasonCommand = rstest.spyOn(commands, 'librarySeasonEpisodes');
   const playCommand = rstest.spyOn(commands, 'libraryPlay');
   const updateCommand = rstest.spyOn(commands, 'libraryUpdateUserData');
@@ -2037,11 +2051,10 @@ test('library show detail auto-loads next-up season and renders episode rows', a
   expect(screen.getByRole('button', { name: 'Back' })).toBeVisible();
   expect(screen.getByText('A show overview.')).toBeVisible();
   expect(screen.getByText('Drama')).toBeVisible();
-  expect(screen.getByText('Unplayed')).toBeVisible();
-  expect(screen.getByText('Not favorite')).toBeVisible();
+  expect(screen.getByRole('button', { name: 'Add to favorites' })).toBeVisible();
 
   // Series user data controls
-  fireEvent.click(screen.getByRole('button', { name: 'Favorite' }));
+  fireEvent.click(screen.getByRole('button', { name: 'Add to favorites' }));
   await waitFor(() =>
     expect(updateCommand).toHaveBeenCalledWith({
       action: 'favorite',
@@ -2050,7 +2063,6 @@ test('library show detail auto-loads next-up season and renders episode rows', a
   );
 
   fireEvent.click(screen.getByRole('button', { name: 'Play S01E02' }));
-  await waitFor(() => expect(itemCommand).toHaveBeenCalledWith('episode-2'));
   await waitFor(() =>
     expect(playCommand).toHaveBeenCalledWith({
       audioStreamIndex: null,
@@ -2086,10 +2098,9 @@ test('library show detail auto-loads next-up season and renders episode rows', a
   });
 
   // Inline episode play button
-  const episodePlayBtn = screen.getByRole('button', { name: 'Play' });
+  const episodePlayBtn = screen.getByRole('button', { name: 'Play Next Episode' });
   expect(episodePlayBtn).toBeVisible();
   fireEvent.click(episodePlayBtn);
-  await waitFor(() => expect(itemCommand).toHaveBeenLastCalledWith('episode-2'));
   await waitFor(() =>
     expect(playCommand).toHaveBeenLastCalledWith({
       audioStreamIndex: null,
@@ -2119,6 +2130,197 @@ test('library show detail auto-loads next-up season and renders episode rows', a
   await waitFor(() => expect(screen.queryByRole('heading', { name: 'Next Episode' })).toBeNull());
 
   expect(mpvStart).not.toHaveBeenCalled();
+
+  cleanup();
+});
+
+test('library item detail shows rich credits, rating chips, and resume progress', async () => {
+  mockShellCommands();
+  const richMovie: VideoItemDetail = {
+    ...movieDetail,
+    id: 'rich-movie',
+    name: 'Rich Movie',
+    overview: 'A rich movie overview.',
+    runtimeSeconds: 7200,
+    resumePositionSeconds: 1800,
+    playedPercentage: 25,
+    canResume: true,
+    metadata: {
+      communityRating: 8.7,
+      officialRating: 'PG-13',
+      creators: ['Creator A', 'Creator B', 'Creator C'],
+      cast: ['Actor 1', 'Actor 2', 'Actor 3', 'Actor 4', 'Actor 5', 'Actor 6'],
+    },
+  };
+  rstest.spyOn(commands, 'libraryItemDetail').mockResolvedValue({
+    data: richMovie,
+    status: 'ok',
+  });
+  const cleanup = renderShell('/library/items/rich-movie');
+
+  await screen.findByRole('heading', { name: 'Rich Movie' });
+  // Rating + content chips.
+  expect(screen.getByText('8.7/10')).toBeVisible();
+  expect(screen.getByText('PG-13')).toBeVisible();
+  // Creators truncated to two with a +N more marker.
+  expect(screen.getByText('Creator A')).toBeVisible();
+  expect(screen.getByText('Creator B')).toBeVisible();
+  expect(screen.queryByText('Creator C')).toBeNull();
+  expect(screen.getByText('+1 more')).toBeVisible();
+  // Cast truncated to four with a +N more marker.
+  expect(screen.getByText('Actor 4')).toBeVisible();
+  expect(screen.queryByText('Actor 5')).toBeNull();
+  expect(screen.getByText('+2 more')).toBeVisible();
+  // Resume progress bar with remaining minutes (90 of 120 minutes left).
+  const progress = screen.getByRole('progressbar', { name: 'Playback progress' });
+  expect(progress).toHaveAttribute('aria-valuenow', '25');
+  expect(screen.getByText('90 min remaining')).toBeVisible();
+
+  cleanup();
+});
+
+test('library item detail expands and collapses a long synopsis', async () => {
+  mockShellCommands();
+  const longOverview = 'A very long synopsis. '.repeat(40);
+  rstest.spyOn(commands, 'libraryItemDetail').mockResolvedValue({
+    data: { ...movieDetail, id: 'long-movie', name: 'Long Movie', overview: longOverview },
+    status: 'ok',
+  });
+  // jsdom has no layout; stub scrollHeight > clientHeight so the overflow
+  // toggle appears.
+  const scrollSpy = rstest.spyOn(HTMLElement.prototype, 'scrollHeight', 'get').mockReturnValue(200);
+  const clientSpy = rstest.spyOn(HTMLElement.prototype, 'clientHeight', 'get').mockReturnValue(40);
+  const cleanup = renderShell('/library/items/long-movie');
+
+  await screen.findByRole('heading', { name: 'Long Movie' });
+  const more = await screen.findByRole('button', { name: 'More' });
+  fireEvent.click(more);
+  expect(screen.getByRole('button', { name: 'Less' })).toBeVisible();
+  fireEvent.click(screen.getByRole('button', { name: 'Less' }));
+  expect(screen.getByRole('button', { name: 'More' })).toBeVisible();
+
+  scrollSpy.mockRestore();
+  clientSpy.mockRestore();
+  cleanup();
+});
+
+test('library item detail loads exactly four season neighbors for an episode', async () => {
+  mockShellCommands();
+  const episodes: VideoLibraryItem[] = Array.from({ length: 6 }, (_, index) => ({
+    id: `season-episode-${index + 1}`,
+    name: `Season Episode ${index + 1}`,
+    itemType: 'Episode',
+    overview: null,
+    productionYear: null,
+    runtimeSeconds: 1800,
+    played: false,
+    favorite: false,
+    artworkImageId: null,
+    seasonNumber: 2,
+    episodeNumber: index + 1,
+    seriesId: 'series-1',
+    seriesName: 'Example Show',
+    resumePositionSeconds: null,
+    playedPercentage: null,
+  }));
+  rstest.spyOn(commands, 'libraryItemDetail').mockResolvedValue({
+    data: { ...episodeDetail, id: 'season-episode-3', name: 'Season Episode 3', played: false },
+    status: 'ok',
+  });
+  rstest.spyOn(commands, 'librarySeasonEpisodes').mockResolvedValue({
+    data: { seriesId: 'series-1', seasonId: 'season-2', seasonNumber: 2, episodes },
+    status: 'ok',
+  });
+  const cleanup = renderShell('/library/items/season-episode-3');
+
+  await screen.findByRole('heading', { name: 'Season Episode 3' });
+  await screen.findByRole('region', { name: 'More from this season' });
+  // Two before (1, 2) and two after (4, 5); the current episode (3) is excluded.
+  expect(screen.getByRole('link', { name: 'Season Episode 1' })).toBeVisible();
+  expect(screen.getByRole('link', { name: 'Season Episode 2' })).toBeVisible();
+  expect(screen.getByRole('link', { name: 'Season Episode 4' })).toBeVisible();
+  expect(screen.getByRole('link', { name: 'Season Episode 5' })).toBeVisible();
+  expect(screen.queryByRole('link', { name: 'Season Episode 3' })).toBeNull();
+  expect(screen.queryByRole('link', { name: 'Season Episode 6' })).toBeNull();
+
+  cleanup();
+});
+
+test('library item detail recommendation cards route by item type', async () => {
+  mockShellCommands();
+  const similar: VideoLibraryItem[] = [
+    {
+      id: 'rec-movie',
+      name: 'Recommended Movie',
+      itemType: 'Movie',
+      overview: null,
+      productionYear: 2024,
+      runtimeSeconds: null,
+      played: true,
+      favorite: false,
+      artworkImageId: null,
+      seasonNumber: null,
+      episodeNumber: null,
+      seriesId: null,
+      seriesName: null,
+      resumePositionSeconds: null,
+      playedPercentage: null,
+    },
+    {
+      id: 'rec-series',
+      name: 'Recommended Show',
+      itemType: 'Series',
+      overview: null,
+      productionYear: 2023,
+      runtimeSeconds: null,
+      played: false,
+      favorite: true,
+      artworkImageId: null,
+      seasonNumber: null,
+      episodeNumber: null,
+      seriesId: null,
+      seriesName: null,
+      resumePositionSeconds: null,
+      playedPercentage: null,
+    },
+  ];
+  rstest.spyOn(commands, 'librarySimilarVideo').mockResolvedValue({
+    data: similar,
+    status: 'ok',
+  });
+  const cleanup = renderShell('/library/items/detail-movie');
+
+  await screen.findByRole('heading', { name: 'Detail Movie' });
+  // Carousel items are aria-hidden in jsdom (no slidesInView); use hidden:true.
+  expect(
+    await screen.findByRole('link', { name: 'Recommended Movie', hidden: true }),
+  ).toHaveAttribute('href', '/library/items/rec-movie');
+  expect(screen.getByRole('link', { name: 'Recommended Show', hidden: true })).toHaveAttribute(
+    'href',
+    '/library/shows/rec-series',
+  );
+  expect(screen.getByText('Played')).toBeVisible();
+  expect(screen.getByText('Favorite')).toBeVisible();
+
+  cleanup();
+});
+
+test('library item detail recommendation failure keeps the hero usable with retry', async () => {
+  mockShellCommands();
+  const similarCommand = rstest.spyOn(commands, 'librarySimilarVideo').mockResolvedValue({
+    error: { code: 'network', message: 'Recommendations failed' },
+    status: 'error',
+  });
+  const cleanup = renderShell('/library/items/detail-movie');
+
+  await screen.findByRole('heading', { name: 'Detail Movie' });
+  // Hero stays usable while the recommendation shelf reports its own failure.
+  expect(screen.getByRole('button', { name: 'Resume' })).toBeVisible();
+  expect(await screen.findByText('Recommendations failed')).toBeVisible();
+  const retry = screen.getByRole('button', { name: 'Retry' });
+  expect(similarCommand).toHaveBeenCalledTimes(1);
+  fireEvent.click(retry);
+  await waitFor(() => expect(similarCommand).toHaveBeenCalledTimes(2));
 
   cleanup();
 });

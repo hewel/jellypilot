@@ -16,7 +16,7 @@ use crate::image_proxy::{AppLocalServices, ImageProxyState};
 use crate::jellyfin::{
   AuthResponse, ConnectionState, Credentials, JellyfinClient, JellyfinError, MediaServerProvider,
   QuickConnectRequest, QuickConnectStatus, SavedSession, SessionManager, VideoHome,
-  VideoItemDetail, VideoItemStreams, VideoLibraryPage, VideoLibraryPageRequest,
+  VideoItemDetail, VideoItemStreams, VideoLibraryItem, VideoLibraryPage, VideoLibraryPageRequest,
   VideoLibraryPlayRequest, VideoLibraryShortcut, VideoSearchPage, VideoSearchRequest,
   VideoSeasonEpisodes, VideoSeasonEpisodesRequest, VideoShowDetail, VideoUserDataUpdate,
   VideoUserDataUpdateRequest,
@@ -769,6 +769,21 @@ pub async fn library_season_episodes(
     .map_err(jellyfin_err)
 }
 
+/// Load similar Movie, Series, and Episode recommendations for a Library item.
+#[tauri::command]
+#[specta]
+pub async fn library_similar_video(
+  state: State<'_, JellyfinState>,
+  item_id: String,
+) -> Result<Vec<VideoLibraryItem>, CommandError> {
+  state
+    .client
+    .library()
+    .similar_video(item_id)
+    .await
+    .map_err(jellyfin_err)
+}
+
 /// Start explicit Library Browser playback through the active Jellyfin session.
 #[tauri::command]
 #[specta]
@@ -1454,6 +1469,7 @@ pub fn specta_builder() -> Builder<tauri::Wry> {
       library_item_streams,
       library_show_detail,
       library_season_episodes,
+      library_similar_video,
       library_play,
       library_update_user_data,
       // Jellyfin commands

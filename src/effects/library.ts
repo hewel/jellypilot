@@ -135,6 +135,12 @@ export function fetchSeasonEpisodes(
   );
 }
 
+export type LibrarySimilarVideoState = VideoLibraryItem[];
+
+export function fetchSimilarVideoItems(itemId: string): LibraryEffect<LibrarySimilarVideoState> {
+  return withConnection(runTauriCommand(() => commands.librarySimilarVideo(itemId)));
+}
+
 export function startLibraryPlayback(request: VideoLibraryPlayRequest): LibraryEffect<void> {
   return withConnection(runTauriCommand(() => commands.libraryPlay(request)).pipe(Effect.asVoid));
 }

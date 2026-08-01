@@ -47,6 +47,10 @@ export default defineConfig({
     extend: {
       // Ark select open indicator (used by shared select styling later).
       selectOpen: '[data-scope="select"][data-part="indicator"][data-state="open"] &',
+      // Detail hero portrait poster hides below 800px (review-only narrow widths).
+      belowPoster: '@media (max-width: 799px)',
+      // Summary surface reflows to three columns at desktop (800px+).
+      posterAndUp: '@media (min-width: 800px)',
     },
   },
   globalCss: {
