@@ -141,5 +141,6 @@ jobs:
         with:
           body: ${{ needs.changelog.outputs.release_body }}
           files: artifacts/**/*
+          prerelease: ${{ contains(github.ref_name, 'rc') }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
