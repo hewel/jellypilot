@@ -78,6 +78,8 @@ type RealInvoke = <T>(command: string, args?: InvokeArgs) => Promise<T>;
 const safeRealCommands = new Set<SafeRealCommand>(['app_local_services', 'config_default']);
 const fixtures = new Map<FixtureCommand, StoredFixtureOutcome>();
 const calls = new Map<FixtureCommand, InvokeArgs[]>();
+const activeCalls = new Map<FixtureCommand, number>();
+const maxConcurrentCalls = new Map<FixtureCommand, number>();
 
 function parseFixtureCommand(command: string): FixtureCommand | undefined {
   if (
@@ -119,6 +121,8 @@ function recordCall(command: FixtureCommand, args: InvokeArgs): void {
 export function installStartupFixtures(): void {
   fixtures.clear();
   calls.clear();
+  activeCalls.clear();
+  maxConcurrentCalls.clear();
   fixtures.set('server_is_connected', { kind: 'return', value: false });
   fixtures.set('app_local_services', { kind: 'real' });
   fixtures.set('server_profiles_get', {
@@ -135,6 +139,8 @@ export function installFixture<C extends FixtureCommand>(
 ): void {
   fixtures.set(command, outcome);
   calls.delete(command);
+  activeCalls.delete(command);
+  maxConcurrentCalls.delete(command);
 }
 
 export function createControlledInvoke(realInvoke: RealInvoke): RealInvoke {
@@ -148,27 +154,40 @@ export function createControlledInvoke(realInvoke: RealInvoke): RealInvoke {
     const outcome = fixtures.get(fixtureCommand);
     if (!outcome) throw new Error(`Missing E2E fixture outcome: ${command}`);
 
-    if (outcome.delayMs !== undefined) {
-      const { promise, resolve } = Promise.withResolvers<void>();
-      setTimeout(resolve, outcome.delayMs);
-      await promise;
-    }
+    const activeCallCount = (activeCalls.get(fixtureCommand) ?? 0) + 1;
+    activeCalls.set(fixtureCommand, activeCallCount);
+    maxConcurrentCalls.set(
+      fixtureCommand,
+      Math.max(maxConcurrentCalls.get(fixtureCommand) ?? 0, activeCallCount),
+    );
+    try {
+      if (outcome.delayMs !== undefined) {
+        const { promise, resolve } = Promise.withResolvers<void>();
+        setTimeout(resolve, outcome.delayMs);
+        await promise;
+      }
 
-    if (outcome.kind === 'return') return outcome.value as T;
-    if (outcome.kind === 'error') throw outcome.error;
-    if (
-      (fixtureCommand !== 'app_local_services' && fixtureCommand !== 'config_default') ||
-      !safeRealCommands.has(fixtureCommand)
-    ) {
-      throw new Error(`Rejected unsafe real E2E IPC command: ${command}`);
-    }
+      if (outcome.kind === 'return') return outcome.value as T;
+      if (outcome.kind === 'error') throw outcome.error;
+      if (
+        (fixtureCommand !== 'app_local_services' && fixtureCommand !== 'config_default') ||
+        !safeRealCommands.has(fixtureCommand)
+      ) {
+        throw new Error(`Rejected unsafe real E2E IPC command: ${command}`);
+      }
 
-    return realInvoke<T>(command, args);
+      return await realInvoke<T>(command, args);
+    } finally {
+      activeCalls.set(fixtureCommand, Math.max((activeCalls.get(fixtureCommand) ?? 1) - 1, 0));
+    }
   };
 }
 
 export function fixtureCallCount(command: FixtureCommand): number {
   return calls.get(command)?.length ?? 0;
+}
+export function fixtureMaxConcurrentCalls(command: FixtureCommand): number {
+  return maxConcurrentCalls.get(command) ?? 0;
 }
 
 export function fixtureSummary(): readonly { command: FixtureCommand; count: number }[] {

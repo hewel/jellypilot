@@ -125,6 +125,7 @@ describe('library virtual scrolling', () => {
       });
       controller.installFixture('library_browse_video', {
         kind: 'return',
+        delayMs: 100,
         value: values.library_browse_video,
       });
       controller.installFixture('library_item_shortcut', {
@@ -205,5 +206,19 @@ describe('library virtual scrolling', () => {
     expect(result.blankPhases).toEqual([]);
     expect(result.samples.every((sample) => sample.renderedRows > 0)).toBe(true);
     expect(result.samples.every((sample) => sample.intersectsViewport)).toBe(true);
+    await browser.waitUntil(
+      () =>
+        browser.execute(
+          () => (window.__JELLYPILOT_E2E__?.callCount('library_browse_video') ?? 0) >= 3,
+        ),
+      {
+        timeout: 30_000,
+        timeoutMsg: 'The virtual grid did not request multiple library pages.',
+      },
+    );
+    const maxConcurrentBrowseCalls = await browser.execute(
+      () => window.__JELLYPILOT_E2E__?.maxConcurrentCalls('library_browse_video') ?? 0,
+    );
+    expect(maxConcurrentBrowseCalls).toBe(2);
   });
 });

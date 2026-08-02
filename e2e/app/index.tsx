@@ -10,6 +10,7 @@ import { mountApplication } from '../../src/mountApplication';
 import {
   createControlledInvoke,
   fixtureCallCount,
+  fixtureMaxConcurrentCalls,
   fixtureSummary,
   hasExpectedLibraryPlayCall,
   hasExpectedReauthenticatePasswordCall,
@@ -23,6 +24,7 @@ declare global {
     __JELLYPILOT_E2E__?: {
       readonly ready: true;
       callCount: typeof fixtureCallCount;
+      maxConcurrentCalls: typeof fixtureMaxConcurrentCalls;
       fixtureSummary: typeof fixtureSummary;
       hasExpectedLibraryPlayCall: typeof hasExpectedLibraryPlayCall;
       hasExpectedReauthenticatePasswordCall: typeof hasExpectedReauthenticatePasswordCall;
@@ -45,6 +47,7 @@ const invokeForTest = createControlledInvoke(realInvoke);
 const controller: NonNullable<Window['__JELLYPILOT_E2E__']> = {
   ready: true,
   callCount: fixtureCallCount,
+  maxConcurrentCalls: fixtureMaxConcurrentCalls,
   fixtureSummary,
   hasExpectedLibraryPlayCall,
   hasExpectedReauthenticatePasswordCall,

@@ -19,7 +19,7 @@ import { useAppScrollArea } from '@components/AppScrollAreaContext';
 import { createInfiniteQuery, useQueryClient } from '@tanstack/solid-query';
 import { createVirtualizer, observeElementRect } from '@tanstack/solid-virtual';
 import type { VirtualItem } from '@tanstack/solid-virtual';
-import { Exit } from 'effect';
+import { Effect, Exit, Semaphore } from 'effect';
 import { createEffect, createMemo, createSignal, onCleanup, onMount } from 'solid-js';
 import { commandFailureMessage } from '~effects/commands';
 import { LIBRARY_BROWSE_PAGE_SIZE, fetchVideoLibraryPage } from '~effects/library';
@@ -37,6 +37,7 @@ import {
 } from '~utils/libraryBrowsePageSelection';
 
 export const LIBRARY_VIRTUAL_TOTAL_THRESHOLD = 100;
+const LIBRARY_VIRTUAL_PAGE_CONCURRENCY = 2;
 
 interface LibraryBrowseInfiniteData {
   pages: LibraryExit<LibraryBrowseState>[];
@@ -104,6 +105,7 @@ export function createLibraryBrowseWindow(
   options: LibraryBrowseWindowOptions,
 ): LibraryBrowseWindow {
   const queryClient = useQueryClient();
+  const virtualPageFetchSemaphore = Semaphore.makeUnsafe(LIBRARY_VIRTUAL_PAGE_CONCURRENCY);
   const [virtualPagesByStartIndex, setVirtualPagesByStartIndex] = createSignal(
     new Map<number, LibraryExit<LibraryBrowseState>>(),
   );
@@ -296,13 +298,19 @@ export function createLibraryBrowseWindow(
         queryKey: virtualPageQueryKey,
         queryFn: () =>
           runExit(
-            fetchVideoLibraryPage(
-              request.collectionType,
-              request.libraryId,
-              startIndex,
-              request.sort,
-              request.playedFilter,
-              request.favoritesOnly,
+            virtualPageFetchSemaphore.withPermit(
+              Effect.suspend(() =>
+                browseQuerySignature() === expectedSignature
+                  ? fetchVideoLibraryPage(
+                      request.collectionType,
+                      request.libraryId,
+                      startIndex,
+                      request.sort,
+                      request.playedFilter,
+                      request.favoritesOnly,
+                    )
+                  : Effect.interrupt,
+              ),
             ),
           ),
       })
