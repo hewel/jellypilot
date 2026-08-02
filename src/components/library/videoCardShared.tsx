@@ -23,9 +23,14 @@ export function CardTitle(props: {
 
 export function VideoCardSkeleton(props: { aspectClass: VideoCardAspectClass; body?: boolean }) {
   return (
-    <div class={styles.card} aria-hidden="true">
+    <div class={styles.homeCard} aria-hidden="true">
       <div
-        class={cx(styles.artwork, styles.aspect[props.aspectClass], styles.skeleton)}
+        class={cx(
+          styles.artwork,
+          styles.aspect[props.aspectClass],
+          styles.homeArtwork,
+          styles.skeleton,
+        )}
         data-aspect={props.aspectClass}
       />
       <Show when={props.body === true || props.aspectClass === 'video'}>

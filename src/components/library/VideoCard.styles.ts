@@ -8,54 +8,6 @@ const titleClamp = {
   WebkitLineClamp: '[1]',
 } satisfies Record<string, string>;
 
-export const card = css({
-  bg: 'surface',
-  borderColor: 'outlineVariant/80',
-  borderRadius: '2xl',
-  borderStyle: 'solid',
-  borderWidth: '1px',
-  boxShadow: 'xl',
-  color: '[inherit]',
-  display: 'block',
-  overflow: 'hidden',
-  p: '0',
-  textDecoration: 'none',
-  transform: '[scale3d(1, 1, 1)]',
-  transitionDuration: '300',
-  transitionProperty: '[background-color, border-color, box-shadow, transform]',
-  '& img': {
-    transform: '[scale3d(1, 1, 1)]',
-  },
-  _hover: {
-    borderColor: 'primary/50',
-    '& img': {
-      transform: '[translate3d(0, -2px, 0) scale3d(1.04, 1.04, 1)]',
-    },
-  },
-  _focusVisible: {
-    boxShadow: '[0 0 0 2px color-mix(in srgb, {colors.secondary} 70%, transparent), {shadows.xl}]',
-    outline: 'none',
-    '& img': {
-      transform: '[translate3d(0, -2px, 0) scale3d(1.04, 1.04, 1)]',
-    },
-  },
-  _active: {
-    transform: '[scale3d(0.96, 0.96, 1)]',
-  },
-  '@media (prefers-reduced-motion: reduce)': {
-    _hover: {
-      '& img': {
-        transform: '[scale3d(1, 1, 1)]',
-      },
-    },
-    _focusVisible: {
-      '& img': {
-        transform: '[scale3d(1, 1, 1)]',
-      },
-    },
-  },
-});
-
 export const homeCard = css({
   color: '[inherit]',
   display: 'block',
@@ -268,35 +220,6 @@ export const homeBusyIcon = css({
   width: '4',
 });
 
-export const overlay = css({
-  backgroundImage:
-    '[linear-gradient(to top, {colors.surface} 0%, color-mix(in srgb, {colors.surface} 80%, transparent) 55%, transparent 100%)]',
-  bottom: '0',
-  display: 'grid',
-  gap: '0_5',
-  left: '0',
-  pb: '2_5',
-  position: 'absolute',
-  pt: '10',
-  px: '3',
-  right: '0',
-});
-
-export const overlayPlayedBadge = css({
-  alignItems: 'center',
-  bg: 'tertiary',
-  borderRadius: 'full',
-  boxShadow: 'lg',
-  color: 'onTertiary',
-  display: 'inline-flex',
-  height: '7',
-  justifyContent: 'center',
-  left: '2',
-  position: 'absolute',
-  top: '2',
-  width: '7',
-});
-
 export const favoriteBadge = css({
   alignItems: 'center',
   bg: 'secondary',
@@ -363,12 +286,6 @@ export const titleHoverTrigger = css({
   minWidth: '[0]',
   width: 'full',
   cursor: 'pointer',
-});
-
-export const subtitle = css({
-  color: 'onSurfaceVariant/80',
-  fontSize: '12',
-  lineHeight: '16',
 });
 
 export const homeSubtitle = css({

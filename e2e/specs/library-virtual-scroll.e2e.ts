@@ -146,6 +146,21 @@ describe('library virtual scrolling', () => {
     const firstCard = await $('aria/Open Virtual E2E Movie 1');
     await firstCard.waitForDisplayed({ timeout: 30_000 });
 
+    const metadataFollowsArtwork = await browser.execute(() => {
+      const artworkAction = document.querySelector<HTMLElement>(
+        '[aria-label="Open Virtual E2E Movie 1"]',
+      );
+      const card = artworkAction?.parentElement;
+      const artwork = artworkAction?.querySelector<HTMLElement>('[data-aspect="poster"]');
+      const title = card?.querySelector('p');
+      if (!artwork || title?.textContent !== 'Virtual E2E Movie 1') {
+        return false;
+      }
+
+      return title.getBoundingClientRect().top >= artwork.getBoundingClientRect().bottom;
+    });
+    expect(metadataFollowsArtwork).toBe(true);
+
     const result = await browser.execute(async () => {
       const viewport = document.querySelector<HTMLElement>(
         '[role="region"][aria-label="Application content"]',
@@ -168,16 +183,22 @@ describe('library virtual scrolling', () => {
       const blankPhases: string[] = [];
       const sample = (phase: string) => {
         const viewportRect = viewport.getBoundingClientRect();
-        const rows = [...virtualGrid.children];
-        const intersectsViewport = rows.some((row) => {
+        const renderedRows = virtualGrid.childElementCount;
+        let intersectsViewport = false;
+        for (let index = 0; index < renderedRows; index += 1) {
+          const row = virtualGrid.children.item(index);
+          if (!row) continue;
           const rect = row.getBoundingClientRect();
-          return rect.bottom > viewportRect.top && rect.top < viewportRect.bottom;
-        });
-        if (rows.length === 0 || !intersectsViewport) {
+          if (rect.bottom > viewportRect.top && rect.top < viewportRect.bottom) {
+            intersectsViewport = true;
+            break;
+          }
+        }
+        if (renderedRows === 0 || !intersectsViewport) {
           blankPhases.push(phase);
         }
         return {
-          renderedRows: rows.length,
+          renderedRows,
           intersectsViewport,
         };
       };

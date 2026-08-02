@@ -24,18 +24,15 @@ export interface VideoCardProps {
   item: VideoLibraryItem;
   aspect: VideoCardAspectClass;
   action: VideoCardAction;
-  /** overlay = copy on artwork (poster grids); below = copy under artwork. */
-  copy: 'overlay' | 'below';
   subtitle?: string | null;
   progress?: number | null;
   badges?: { favorite?: boolean; played?: boolean };
 }
 
 /**
- * The single video card: direct-playback home cards (action 'play'), split-link
- * cards with copy under the artwork (action 'open', copy 'below'), and
- * poster-grid cards with copy overlaid on the artwork (action 'open', copy
- * 'overlay'). All derivations come from videoCardModel.
+ * The single video card: direct-playback home cards and open-action cards,
+ * both with framed artwork and metadata below it. All derivations come from
+ * videoCardModel.
  */
 export function VideoCard(props: VideoCardProps) {
   const busy = () => props.action.kind === 'play' && props.action.busy === true;
@@ -147,54 +144,16 @@ export function VideoCard(props: VideoCardProps) {
     );
   }
 
-  if (props.copy === 'below') {
-    return (
-      <div class={styles.homeCard}>
-        <Link
-          {...videoCardDetailsTarget(props.item)}
-          aria-label={videoCardAriaLabel(props.item)}
-          class={styles.homeCardAction}
-        >
-          {renderFramedArtwork()}
-        </Link>
-        {renderBelowMeta()}
-      </div>
-    );
-  }
-
   return (
-    <Link
-      {...videoCardDetailsTarget(props.item)}
-      aria-label={videoCardAriaLabel(props.item)}
-      class={styles.card}
-    >
-      <div class={cx(styles.artwork, styles.aspect[props.aspect])} data-aspect={props.aspect}>
-        <LibraryImage
-          imageId={props.item.artworkImageId}
-          alt={`${props.item.name} artwork`}
-          class={styles.image}
-          fallback={iconFallback()}
-        />
-
-        <Show when={showFavoriteBadge()}>
-          <span class={styles.favoriteBadge} aria-hidden="true">
-            <Heart class={styles.favoriteIcon} fill="currentColor" aria-hidden="true" />
-          </span>
-        </Show>
-
-        <Show when={showPlayedBadge()}>
-          <span class={styles.overlayPlayedBadge} role="img" aria-label="Played">
-            <Check class={styles.playedIcon} aria-hidden="true" />
-          </span>
-        </Show>
-
-        <div class={styles.overlay}>
-          <CardTitle id={props.item.id} itemType={props.item.itemType} class={styles.title}>
-            {videoCardTitle(props.item)}
-          </CardTitle>
-          <Show when={props.subtitle}>{(value) => <p class={styles.subtitle}>{value()}</p>}</Show>
-        </div>
-      </div>
-    </Link>
+    <div class={styles.homeCard}>
+      <Link
+        {...videoCardDetailsTarget(props.item)}
+        aria-label={videoCardAriaLabel(props.item)}
+        class={styles.homeCardAction}
+      >
+        {renderFramedArtwork()}
+      </Link>
+      {renderBelowMeta()}
+    </div>
   );
 }

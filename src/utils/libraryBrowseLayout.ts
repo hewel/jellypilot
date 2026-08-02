@@ -22,12 +22,10 @@ export function libraryBrowseColumnCount(width: number): number {
 }
 
 export const LIBRARY_BROWSE_CARD_ASPECT_RATIO = 1.5;
-// Card chrome around the artwork, in px: 1px card top border + 1px card bottom border.
-// Poster cards overlay their text on the artwork, so there is no body block.
+// Browse cards use the shared below-artwork metadata block: 12px top padding,
+// 24px title, 2px gap, and 20px subtitle.
 // Mirrors VideoCard.styles.ts; update when the card styles change.
-export const LIBRARY_BROWSE_CARD_CHROME_HEIGHT_PX = 2;
-// Card left + right 1px borders shrink the artwork below the grid track width.
-const LIBRARY_BROWSE_CARD_SIDE_BORDERS_PX = 2;
+export const LIBRARY_BROWSE_CARD_BODY_HEIGHT_PX = 58;
 
 export function libraryBrowseVirtualRowHeight(width: number): number {
   const columns = libraryBrowseColumnCount(width);
@@ -35,8 +33,8 @@ export function libraryBrowseVirtualRowHeight(width: number): number {
     Number.isFinite(width) && width > 0 ? width : LIBRARY_BROWSE_MIN_CARD_WIDTH_PX;
   const cardWidth = (usableWidth - LIBRARY_BROWSE_GRID_COLUMN_GAP_PX * (columns - 1)) / columns;
   return Math.ceil(
-    (cardWidth - LIBRARY_BROWSE_CARD_SIDE_BORDERS_PX) * LIBRARY_BROWSE_CARD_ASPECT_RATIO +
-      LIBRARY_BROWSE_CARD_CHROME_HEIGHT_PX +
+    cardWidth * LIBRARY_BROWSE_CARD_ASPECT_RATIO +
+      LIBRARY_BROWSE_CARD_BODY_HEIGHT_PX +
       LIBRARY_BROWSE_GRID_ROW_GAP_PX,
   );
 }

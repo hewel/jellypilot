@@ -486,7 +486,6 @@ function LibraryBrowseCard(props: { item: VideoLibraryItem; collectionType: Vide
     <VideoCard
       item={props.item}
       aspect={aspect()}
-      copy={aspect() === 'poster' ? 'overlay' : 'below'}
       action={{ kind: 'open' }}
       subtitle={videoCardSubtitle(props.item, { kind: 'browse' })}
       badges={{ favorite: true, played: true }}
@@ -495,7 +494,7 @@ function LibraryBrowseCard(props: { item: VideoLibraryItem; collectionType: Vide
 }
 
 function LibraryBrowseSkeletonCard() {
-  return <VideoCardSkeleton aspectClass="poster" />;
+  return <VideoCardSkeleton aspectClass="poster" body />;
 }
 
 function LibraryBrowseSkeletonCards() {

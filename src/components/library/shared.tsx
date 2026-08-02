@@ -122,7 +122,6 @@ export function VideoHomeRow(props: {
                 <VideoCard
                   item={item}
                   aspect={videoHomeAspect(props.kind)}
-                  copy="below"
                   subtitle={videoCardSubtitle(item, { kind: 'homeRow', rowKind: props.kind })}
                   action={
                     (props.kind === 'continueWatching' || props.kind === 'nextUp') && props.onPlay

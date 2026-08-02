@@ -83,7 +83,6 @@ test('VideoCard renders image IDs through the localhost image proxy', () => {
     <VideoCard
       item={item}
       aspect="poster"
-      copy="overlay"
       action={{ kind: 'open' }}
       subtitle={videoCardSubtitle(item, { kind: 'browse' })}
       badges={{ favorite: true, played: true }}
@@ -107,7 +106,6 @@ test('VideoCard waits for the image proxy before rendering artwork', () => {
   const { dispose, root } = renderWithRouter(() => (
     <VideoCard
       aspect="poster"
-      copy="overlay"
       action={{ kind: 'open' }}
       subtitle="2024"
       badges={{ favorite: true, played: true }}
@@ -148,7 +146,6 @@ test('VideoCard falls back when the proxy image load fails', () => {
   const { dispose, root } = renderWithRouter(() => (
     <VideoCard
       aspect="poster"
-      copy="overlay"
       action={{ kind: 'open' }}
       subtitle="2024"
       badges={{ favorite: true, played: true }}
@@ -179,14 +176,14 @@ test('VideoCard falls back when the proxy image load fails', () => {
   root.remove();
 });
 
-test('VideoCard overlays copy on poster artwork and keeps copy below video artwork', () => {
-  const overlayItem = {
+test('VideoCard keeps poster and video metadata below framed artwork', () => {
+  const posterItem = {
     artworkImageId: null,
     episodeNumber: null,
     favorite: false,
     id: 'movie-1',
     itemType: 'Movie',
-    name: 'Overlay Movie',
+    name: 'Poster Movie',
     overview: null,
     played: true,
     playedPercentage: null,
@@ -197,13 +194,13 @@ test('VideoCard overlays copy on poster artwork and keeps copy below video artwo
     seriesId: null,
     seriesName: null,
   };
-  const belowItem = {
+  const videoItem = {
     artworkImageId: null,
     episodeNumber: 2,
     favorite: false,
     id: 'episode-1',
     itemType: 'Episode',
-    name: 'Overlay Episode',
+    name: 'Video Episode',
     overview: null,
     played: false,
     playedPercentage: null,
@@ -212,33 +209,31 @@ test('VideoCard overlays copy on poster artwork and keeps copy below video artwo
     runtimeSeconds: 2700,
     seasonNumber: 1,
     seriesId: 'series-1',
-    seriesName: 'Overlay Series',
+    seriesName: 'Video Series',
   };
   const { dispose, root } = renderWithRouter(() => (
     <>
       <VideoCard
-        item={overlayItem}
+        item={posterItem}
         aspect="poster"
-        copy="overlay"
         action={{ kind: 'open' }}
-        subtitle={videoCardSubtitle(overlayItem, { kind: 'browse' })}
+        subtitle={videoCardSubtitle(posterItem, { kind: 'browse' })}
         badges={{ favorite: true, played: true }}
       />
       <VideoCard
-        item={belowItem}
+        item={videoItem}
         aspect="video"
-        copy="below"
         action={{ kind: 'open' }}
-        subtitle={videoCardSubtitle(belowItem, { kind: 'homeRow', rowKind: 'latestEpisodes' })}
+        subtitle={videoCardSubtitle(videoItem, { kind: 'homeRow', rowKind: 'latestEpisodes' })}
       />
     </>
   ));
 
-  const posterTitle = screen.getByText('Overlay Movie');
+  const posterTitle = screen.getByText('Poster Movie');
   expect(posterTitle).toBeVisible();
-  expect(posterTitle.closest('[data-aspect="poster"]')).not.toBeNull();
-  expect(screen.getByText('2024').closest('[data-aspect="poster"]')).not.toBeNull();
-  expect(screen.getByText('Overlay Series • Overlay Episode').closest('[data-aspect]')).toBeNull();
+  expect(posterTitle.closest('[data-aspect]')).toBeNull();
+  expect(screen.getByText('2024').closest('[data-aspect]')).toBeNull();
+  expect(screen.getByText('Video Series • Video Episode').closest('[data-aspect]')).toBeNull();
   expect(screen.getByRole('img', { name: 'Played' })).toBeVisible();
 
   dispose();
@@ -268,7 +263,6 @@ test('VideoCard renders reference-first Continue Watching metadata and direct re
     <VideoCard
       item={item}
       aspect="video"
-      copy="below"
       action={{ kind: 'play', onPlay }}
       subtitle={videoCardSubtitle(item, { kind: 'homeRow', rowKind: 'continueWatching' })}
       progress={videoCardProgress(item)}
@@ -336,7 +330,6 @@ test('VideoCard title links episodes to series detail and movies to movie detail
       <VideoCard
         item={episodeItem}
         aspect="video"
-        copy="below"
         action={{ kind: 'play', onPlay: () => undefined }}
         subtitle={videoCardSubtitle(episodeItem, { kind: 'homeRow', rowKind: 'continueWatching' })}
         progress={videoCardProgress(episodeItem)}
@@ -344,7 +337,6 @@ test('VideoCard title links episodes to series detail and movies to movie detail
       <VideoCard
         item={movieItem}
         aspect="poster"
-        copy="below"
         action={{ kind: 'open' }}
         subtitle={videoCardSubtitle(movieItem, { kind: 'homeRow', rowKind: 'latestMovies' })}
       />
@@ -420,7 +412,6 @@ test('VideoCard derives progress and plays from zero without a saved resume posi
       <VideoCard
         item={derivedItem}
         aspect="video"
-        copy="below"
         action={{ kind: 'play', onPlay: () => undefined }}
         subtitle={videoCardSubtitle(derivedItem, { kind: 'homeRow', rowKind: 'continueWatching' })}
         progress={videoCardProgress(derivedItem)}
@@ -428,7 +419,6 @@ test('VideoCard derives progress and plays from zero without a saved resume posi
       <VideoCard
         item={noResumeItem}
         aspect="video"
-        copy="below"
         action={{ kind: 'play', onPlay: () => undefined }}
         subtitle={videoCardSubtitle(noResumeItem, { kind: 'homeRow', rowKind: 'continueWatching' })}
         progress={videoCardProgress(noResumeItem)}
@@ -436,7 +426,6 @@ test('VideoCard derives progress and plays from zero without a saved resume posi
       <VideoCard
         item={zeroResumeItem}
         aspect="video"
-        copy="below"
         action={{ kind: 'play', onPlay: () => undefined }}
         subtitle={videoCardSubtitle(zeroResumeItem, {
           kind: 'homeRow',
@@ -500,7 +489,6 @@ test('VideoCard resumes Next Up episodes while keeping the episode subtitle', ()
     <VideoCard
       item={item}
       aspect="video"
-      copy="below"
       action={{ kind: 'play', onPlay }}
       subtitle={videoCardSubtitle(item, { kind: 'homeRow', rowKind: 'nextUp' })}
       progress={videoCardProgress(item)}
@@ -549,7 +537,6 @@ test('VideoCard plays Next Up episodes from zero without a resume offset', () =>
     <VideoCard
       item={item}
       aspect="video"
-      copy="below"
       action={{ kind: 'play', onPlay: () => undefined }}
       subtitle={videoCardSubtitle(item, { kind: 'homeRow', rowKind: 'nextUp' })}
       progress={null}
@@ -607,7 +594,6 @@ test('VideoCard exposes a disabled busy state while playback starts', () => {
       <VideoCard
         item={busyItem}
         aspect="video"
-        copy="below"
         action={{ kind: 'play', busy: true, disabled: true, onPlay: () => undefined }}
         subtitle={videoCardSubtitle(busyItem, { kind: 'homeRow', rowKind: 'continueWatching' })}
         progress={videoCardProgress(busyItem)}
@@ -615,7 +601,6 @@ test('VideoCard exposes a disabled busy state while playback starts', () => {
       <VideoCard
         item={waitingItem}
         aspect="video"
-        copy="below"
         action={{ kind: 'play', disabled: true, onPlay: () => undefined }}
         subtitle={videoCardSubtitle(waitingItem, { kind: 'homeRow', rowKind: 'nextUp' })}
         progress={videoCardProgress(waitingItem)}
