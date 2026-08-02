@@ -16,6 +16,7 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Load local agent release notes
+        id: release-notes
         run: |
           body_file=".github/release-notes/${GITHUB_REF_NAME}.md"
           if [ ! -s "$body_file" ]; then
