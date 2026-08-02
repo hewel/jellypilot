@@ -2021,22 +2021,14 @@ impl<'a> JellyfinLibrary<'a> {
       .client
       .openapi_configuration(&server_url, Some(&token))?;
 
-    let show_item = jellyfin_api::apis::user_library_api::get_item(
+    let show_item_fut = jellyfin_api::apis::user_library_api::get_item(
       &configuration,
       jellyfin_api::apis::user_library_api::GetItemParams {
         item_id: series_id.clone(),
         user_id: Some(user_id.clone()),
       },
-    )
-    .await
-    .map_err(|err| JellyfinClient::openapi_error("Video show detail", err))?;
-    let mut detail = map_video_show_detail(&server_url, show_item).ok_or_else(|| {
-      JellyfinError::HttpError(
-        "Only Series details are supported by the Show Library Browser".to_string(),
-      )
-    })?;
-
-    detail.seasons = jellyfin_api::apis::tv_shows_api::get_seasons(
+    );
+    let seasons_fut = jellyfin_api::apis::tv_shows_api::get_seasons(
       &configuration,
       jellyfin_api::apis::tv_shows_api::GetSeasonsParams {
         series_id: series_id.clone(),
@@ -2050,16 +2042,8 @@ impl<'a> JellyfinLibrary<'a> {
         enable_image_types: Some(vec![jellyfin_api::models::ImageType::Primary]),
         enable_user_data: Some(true),
       },
-    )
-    .await
-    .map_err(|err| JellyfinClient::openapi_error("Video show seasons", err))?
-    .items
-    .unwrap_or_default()
-    .into_iter()
-    .filter_map(|item| map_video_season(&server_url, item))
-    .collect();
-
-    detail.next_episode = jellyfin_api::apis::tv_shows_api::get_next_up(
+    );
+    let next_up_fut = jellyfin_api::apis::tv_shows_api::get_next_up(
       &configuration,
       jellyfin_api::apis::tv_shows_api::GetNextUpParams {
         user_id: Some(user_id),
@@ -2078,13 +2062,33 @@ impl<'a> JellyfinLibrary<'a> {
         enable_resumable: Some(true),
         enable_rewatching: Some(false),
       },
-    )
-    .await
-    .map_err(|err| JellyfinClient::openapi_error("Video show next episode", err))?
-    .items
-    .unwrap_or_default()
-    .into_iter()
-    .find_map(|item| map_video_library_item(&server_url, item));
+    );
+
+    let (show_item_result, seasons_result, next_up_result) =
+      tokio::join!(show_item_fut, seasons_fut, next_up_fut);
+
+    let show_item =
+      show_item_result.map_err(|err| JellyfinClient::openapi_error("Video show detail", err))?;
+    let mut detail = map_video_show_detail(&server_url, show_item).ok_or_else(|| {
+      JellyfinError::HttpError(
+        "Only Series details are supported by the Show Library Browser".to_string(),
+      )
+    })?;
+
+    detail.seasons = seasons_result
+      .map_err(|err| JellyfinClient::openapi_error("Video show seasons", err))?
+      .items
+      .unwrap_or_default()
+      .into_iter()
+      .filter_map(|item| map_video_season(&server_url, item))
+      .collect();
+
+    detail.next_episode = next_up_result
+      .map_err(|err| JellyfinClient::openapi_error("Video show next episode", err))?
+      .items
+      .unwrap_or_default()
+      .into_iter()
+      .find_map(|item| map_video_library_item(&server_url, item));
 
     detail.can_play = detail.next_episode.is_some();
 
@@ -2554,37 +2558,37 @@ impl<'a> JellyfinLibrary<'a> {
 
     let server_url = self.client.server_url()?;
     let user_id = self.client.user_id()?;
-    let show_item = self
+    let item_path = format!("/Users/{user_id}/Items/{series_id}");
+    let seasons_path = format!("/Shows/{series_id}/Seasons");
+    let detail_query = emby_detail_query();
+    let season_query = emby_season_query(&user_id);
+
+    let show_item_fut = self
       .client
-      .get_with_query::<emby_api::models::BaseItemDto>(
-        &format!("/Users/{user_id}/Items/{series_id}"),
-        &emby_detail_query(),
-      )
-      .await?;
+      .get_with_query::<emby_api::models::BaseItemDto>(&item_path, &detail_query);
+    let seasons_fut = self
+      .client
+      .get_with_query::<emby_api::models::QueryResultBaseItemDto>(&seasons_path, &season_query);
+    let next_up_fut = emby_next_up_items(self.client, &server_url, &user_id, Some(&series_id), 1);
+
+    let (show_item_result, seasons_result, next_up_result) =
+      tokio::join!(show_item_fut, seasons_fut, next_up_fut);
+
+    let show_item = show_item_result?;
     let mut detail = map_emby_video_show_detail(&server_url, show_item).ok_or_else(|| {
       JellyfinError::HttpError(
         "Only Series details are supported by the Show Library Browser".to_string(),
       )
     })?;
 
-    detail.seasons = self
-      .client
-      .get_with_query::<emby_api::models::QueryResultBaseItemDto>(
-        &format!("/Shows/{series_id}/Seasons"),
-        &emby_season_query(&user_id),
-      )
-      .await?
+    detail.seasons = seasons_result?
       .items
       .unwrap_or_default()
       .into_iter()
       .filter_map(|item| map_emby_video_season(&server_url, item))
       .collect();
 
-    detail.next_episode =
-      emby_next_up_items(self.client, &server_url, &user_id, Some(&series_id), 1)
-        .await?
-        .into_iter()
-        .next();
+    detail.next_episode = next_up_result?.into_iter().next();
 
     detail.can_play = detail.next_episode.is_some();
 
@@ -4375,6 +4379,80 @@ mod tests {
     (format!("http://{}", addr), requests)
   }
 
+  /// Serves route-matched responses only after every expected concurrent request has arrived.
+  /// Serial clients deadlock until the outer test timeout; concurrent clients complete.
+  async fn serve_barrier_route_responses_with_requests(
+    responses: Vec<(&'static str, &'static str, &'static str)>,
+  ) -> (String, RequestLog) {
+    let responses = responses
+      .into_iter()
+      .map(|(request_match, status, body)| {
+        (
+          request_match.to_string(),
+          status.to_string(),
+          body.to_string(),
+        )
+      })
+      .collect::<Vec<_>>();
+    let request_count = responses.len();
+    let listener = TcpListener::bind("127.0.0.1:0")
+      .await
+      .expect("test server should bind");
+    let addr = listener.local_addr().expect("test server should have addr");
+    let requests = Arc::new(parking_lot::Mutex::new(Vec::new()));
+    let captured_requests = Arc::clone(&requests);
+
+    tokio::spawn(async move {
+      let mut pending = Vec::with_capacity(request_count);
+      for _ in 0..request_count {
+        let (mut stream, _) = listener.accept().await.expect("test server should accept");
+        let mut buffer = Vec::with_capacity(4096);
+        let mut chunk = [0u8; 1024];
+        while !buffer.windows(4).any(|window| window == b"\r\n\r\n") {
+          if buffer.len() >= 8192 {
+            panic!("test request headers exceeded bounded buffer");
+          }
+          let bytes_read = stream
+            .read(&mut chunk)
+            .await
+            .expect("test server should read request");
+          if bytes_read == 0 {
+            break;
+          }
+          buffer.extend_from_slice(&chunk[..bytes_read]);
+        }
+        let request = String::from_utf8_lossy(&buffer).into_owned();
+        let response_spec = responses
+          .iter()
+          .find(|(request_match, _, _)| request.contains(request_match));
+        let (status, response_body) = response_spec.map_or(
+          (
+            "404 Not Found".to_string(),
+            r#"{"Message":"missing test route"}"#.to_string(),
+          ),
+          |(_, status, body)| (status.clone(), body.clone()),
+        );
+        pending.push((stream, request, status, response_body));
+      }
+
+      for (mut stream, request, status, response_body) in pending {
+        captured_requests.lock().push(request);
+        let response = format!(
+          "HTTP/1.1 {}\r\ncontent-type: application/json\r\ncontent-length: {}\r\n\r\n{}",
+          status,
+          response_body.len(),
+          response_body
+        );
+        stream
+          .write_all(response.as_bytes())
+          .await
+          .expect("test server should write response");
+      }
+    });
+
+    (format!("http://{}", addr), requests)
+  }
+
   #[tokio::test]
   async fn authenticate_creates_saved_session_and_stores_server_name() {
     let (server_url, requests) = serve_responses_with_requests(vec![
@@ -5695,16 +5773,19 @@ mod tests {
     let series_id = "00000000-0000-0000-0000-000000000060";
     let season_id = "00000000-0000-0000-0000-000000000061";
     let next_episode_id = "00000000-0000-0000-0000-000000000062";
-    let (server_url, requests) = serve_responses_with_requests(vec![
+    let (server_url, requests) = serve_route_responses_with_requests(vec![
       (
+        "GET /Items/00000000-0000-0000-0000-000000000060?",
         "200 OK",
         r#"{"Id":"00000000-0000-0000-0000-000000000060","Name":"Example Show","Type":"Series","Overview":"A show overview.","ProductionYear":2023,"Genres":["Drama"],"CommunityRating":8.2,"OfficialRating":"TV-MA","People":[{"Name":"Show Creator","Type":"Creator"},{"Name":"Pilot Director","Type":"Director"},{"Name":"Series Actor","Type":"Actor"}],"ImageTags":{"Primary":"poster-show"},"UserData":{"IsFavorite":true,"Played":false}}"#,
       ),
       (
+        "GET /Shows/00000000-0000-0000-0000-000000000060/Seasons?",
         "200 OK",
         r#"{"Items":[{"Id":"00000000-0000-0000-0000-000000000061","Name":"Season 1","Type":"Season","IndexNumber":1,"ImageTags":{"Primary":"poster-season"},"UserData":{"IsFavorite":false,"Played":false}}],"TotalRecordCount":1}"#,
       ),
       (
+        "GET /Shows/NextUp?",
         "200 OK",
         r#"{"Items":[{"Id":"00000000-0000-0000-0000-000000000062","Name":"Next Episode","Type":"Episode","ProductionYear":2023,"UserData":{"PlaybackPositionTicks":300000000,"Played":false}}],"TotalRecordCount":1}"#,
       ),
@@ -5746,16 +5827,82 @@ mod tests {
     assert_image_ref_url(detail.artwork_image_id.as_ref(), &expected_artwork);
 
     let captured = requests.lock();
-    assert!(captured[0].starts_with("GET /Items/00000000-0000-0000-0000-000000000060?"));
-    assert!(captured[0].contains("userId=00000000-0000-0000-0000-000000000001"));
-    assert!(captured[1].starts_with("GET /Shows/00000000-0000-0000-0000-000000000060/Seasons?"));
-    assert!(captured[1].contains("enableUserData=true"));
-    assert!(captured[1].contains("isMissing=false"));
-    assert!(captured[2].starts_with("GET /Shows/NextUp?"));
-    assert!(captured[2].contains("seriesId=00000000-0000-0000-0000-000000000060"));
-    assert!(captured[2].contains("limit=1"));
-    assert!(captured[2].contains("enableResumable=true"));
-    assert!(captured[2].contains("enableRewatching=false"));
+    let item_request = captured
+      .iter()
+      .find(|request| request.starts_with("GET /Items/00000000-0000-0000-0000-000000000060?"))
+      .expect("show item request should be captured");
+    assert!(item_request.contains("userId=00000000-0000-0000-0000-000000000001"));
+    let seasons_request = captured
+      .iter()
+      .find(|request| {
+        request.starts_with("GET /Shows/00000000-0000-0000-0000-000000000060/Seasons?")
+      })
+      .expect("show seasons request should be captured");
+    assert!(seasons_request.contains("enableUserData=true"));
+    assert!(seasons_request.contains("isMissing=false"));
+    let next_up_request = captured
+      .iter()
+      .find(|request| request.starts_with("GET /Shows/NextUp?"))
+      .expect("show next-up request should be captured");
+    assert!(next_up_request.contains("seriesId=00000000-0000-0000-0000-000000000060"));
+    assert!(next_up_request.contains("limit=1"));
+    assert!(next_up_request.contains("enableResumable=true"));
+    assert!(next_up_request.contains("enableRewatching=false"));
+  }
+
+  #[tokio::test]
+  async fn show_detail_fetches_item_seasons_and_next_up_concurrently() {
+    let series_id = "00000000-0000-0000-0000-000000000063";
+    let (server_url, requests) = serve_barrier_route_responses_with_requests(vec![
+      (
+        "GET /Items/00000000-0000-0000-0000-000000000063?",
+        "200 OK",
+        r#"{"Id":"00000000-0000-0000-0000-000000000063","Name":"Concurrent Show","Type":"Series","UserData":{"IsFavorite":false,"Played":false}}"#,
+      ),
+      (
+        "GET /Shows/00000000-0000-0000-0000-000000000063/Seasons?",
+        "200 OK",
+        r#"{"Items":[{"Id":"00000000-0000-0000-0000-000000000064","Name":"Season 1","Type":"Season","IndexNumber":1}],"TotalRecordCount":1}"#,
+      ),
+      (
+        "GET /Shows/NextUp?",
+        "200 OK",
+        r#"{"Items":[{"Id":"00000000-0000-0000-0000-000000000065","Name":"Next Episode","Type":"Episode"}],"TotalRecordCount":1}"#,
+      ),
+    ])
+    .await;
+    let client = JellyfinClient::new();
+    connect_test_client(&client, server_url);
+
+    let detail = tokio::time::timeout(
+      std::time::Duration::from_secs(2),
+      client.library().show_detail(series_id.to_string()),
+    )
+    .await
+    .expect("concurrent show detail should not deadlock waiting for withheld responses")
+    .expect("concurrent show detail should load once all three requests arrive");
+
+    assert_eq!(detail.id, series_id);
+    assert_eq!(detail.seasons.len(), 1);
+    assert_eq!(
+      detail
+        .next_episode
+        .as_ref()
+        .map(|episode| episode.id.as_str()),
+      Some("00000000-0000-0000-0000-000000000065")
+    );
+
+    let captured = requests.lock();
+    assert_eq!(captured.len(), 3);
+    assert!(captured
+      .iter()
+      .any(|request| request.starts_with("GET /Items/00000000-0000-0000-0000-000000000063?")));
+    assert!(captured.iter().any(|request| {
+      request.starts_with("GET /Shows/00000000-0000-0000-0000-000000000063/Seasons?")
+    }));
+    assert!(captured
+      .iter()
+      .any(|request| request.starts_with("GET /Shows/NextUp?")));
   }
 
   #[tokio::test]
@@ -6025,28 +6172,34 @@ mod tests {
     let series_id = "00000000-0000-0000-0000-000000000260";
     let season_id = "00000000-0000-0000-0000-000000000261";
     let episode_id = "00000000-0000-0000-0000-000000000262";
-    let (server_url, requests) = serve_responses_with_requests(vec![
+    let (server_url, requests) = serve_route_responses_with_requests(vec![
       (
-        "200 OK",
-        r#"{"Id":"00000000-0000-0000-0000-000000000250","Name":"Emby Detail Movie","Type":"Movie","RunTimeTicks":72000000000,"CommunityRating":7.5,"OfficialRating":"R","People":[{"Name":"Emby Director","Type":"Director"},{"Name":"Emby Actor","Type":"Actor"}],"UserData":{"PlaybackPositionTicks":600000000,"Played":false},"MediaStreams":[{"Index":1,"Type":"Audio","Language":"eng","Codec":"aac","IsDefault":true},{"Index":2,"Type":"Subtitle","Codec":"srt","IsExternal":true}]}"#,
-      ),
-      (
+        "Fields=MediaStreams",
         "200 OK",
         r#"{"Id":"00000000-0000-0000-0000-000000000250","Type":"Movie","MediaStreams":[{"Index":1,"Type":"Audio","Language":"eng","Codec":"aac","IsDefault":true},{"Index":2,"Type":"Subtitle","Codec":"srt","IsExternal":true}]}"#,
       ),
       (
+        "GET /Users/00000000-0000-0000-0000-000000000001/Items/00000000-0000-0000-0000-000000000250?",
+        "200 OK",
+        r#"{"Id":"00000000-0000-0000-0000-000000000250","Name":"Emby Detail Movie","Type":"Movie","RunTimeTicks":72000000000,"CommunityRating":7.5,"OfficialRating":"R","People":[{"Name":"Emby Director","Type":"Director"},{"Name":"Emby Actor","Type":"Actor"}],"UserData":{"PlaybackPositionTicks":600000000,"Played":false},"MediaStreams":[{"Index":1,"Type":"Audio","Language":"eng","Codec":"aac","IsDefault":true},{"Index":2,"Type":"Subtitle","Codec":"srt","IsExternal":true}]}"#,
+      ),
+      (
+        "GET /Users/00000000-0000-0000-0000-000000000001/Items/00000000-0000-0000-0000-000000000260?",
         "200 OK",
         r#"{"Id":"00000000-0000-0000-0000-000000000260","Name":"Emby Show","Type":"Series","People":[{"Name":"Emby Show Creator","Type":"Director"}],"ImageTags":{"Primary":"show-primary"},"UserData":{"IsFavorite":true}}"#,
       ),
       (
+        "GET /Shows/00000000-0000-0000-0000-000000000260/Seasons?",
         "200 OK",
         r#"{"Items":[{"Id":"00000000-0000-0000-0000-000000000261","Name":"Season 1","Type":"Season","IndexNumber":1}],"TotalRecordCount":1}"#,
       ),
       (
+        "GET /Shows/NextUp?",
         "200 OK",
         r#"{"Items":[{"Id":"00000000-0000-0000-0000-000000000262","Name":"Next Emby Episode","Type":"Episode","UserData":{"PlaybackPositionTicks":300000000,"Played":false}}],"TotalRecordCount":1}"#,
       ),
       (
+        "GET /Shows/00000000-0000-0000-0000-000000000260/Episodes?",
         "200 OK",
         r#"{"Items":[{"Id":"00000000-0000-0000-0000-000000000262","Name":"Episode One","Type":"Episode","Overview":"Emby episode synopsis.","RunTimeTicks":18000000000,"ParentIndexNumber":1,"IndexNumber":1}],"TotalRecordCount":1}"#,
       ),
@@ -6107,18 +6260,98 @@ mod tests {
     );
 
     let captured = requests.lock();
-    assert!(captured[0].starts_with(
-      "GET /Users/00000000-0000-0000-0000-000000000001/Items/00000000-0000-0000-0000-000000000250?"
-    ));
-    assert!(!captured[0].contains("MediaStreams"));
-    assert!(captured[0].contains("Fields=Overview%2CGenres%2CPrimaryImageAspectRatio%2CPeople"));
-    assert!(captured[1].contains("Fields=MediaStreams"));
-    assert!(captured[3].contains("IncludeItemTypes=Season"));
-    assert!(captured[4].starts_with("GET /Shows/NextUp?"));
-    assert!(captured[4].contains("SeriesId=00000000-0000-0000-0000-000000000260"));
-    assert!(captured[4].contains("EnableResumable=true"));
-    assert!(captured[5].contains("ParentId=00000000-0000-0000-0000-000000000261"));
-    assert!(captured[5].contains("IncludeItemTypes=Episode"));
+    let movie_request = captured
+      .iter()
+      .find(|request| {
+        request.starts_with(
+          "GET /Users/00000000-0000-0000-0000-000000000001/Items/00000000-0000-0000-0000-000000000250?",
+        ) && !request.contains("MediaStreams")
+      })
+      .expect("Emby movie detail request should be captured");
+    assert!(movie_request.contains("Fields=Overview%2CGenres%2CPrimaryImageAspectRatio%2CPeople"));
+    assert!(captured
+      .iter()
+      .any(|request| request.contains("Fields=MediaStreams")));
+    assert!(captured.iter().any(|request| {
+      request.starts_with(
+        "GET /Users/00000000-0000-0000-0000-000000000001/Items/00000000-0000-0000-0000-000000000260?",
+      )
+    }));
+    let seasons_request = captured
+      .iter()
+      .find(|request| {
+        request.starts_with("GET /Shows/00000000-0000-0000-0000-000000000260/Seasons?")
+      })
+      .expect("Emby seasons request should be captured");
+    assert!(seasons_request.contains("IncludeItemTypes=Season"));
+    let next_up_request = captured
+      .iter()
+      .find(|request| request.starts_with("GET /Shows/NextUp?"))
+      .expect("Emby next-up request should be captured");
+    assert!(next_up_request.contains("SeriesId=00000000-0000-0000-0000-000000000260"));
+    assert!(next_up_request.contains("EnableResumable=true"));
+    let episodes_request = captured
+      .iter()
+      .find(|request| {
+        request.starts_with("GET /Shows/00000000-0000-0000-0000-000000000260/Episodes?")
+      })
+      .expect("Emby episodes request should be captured");
+    assert!(episodes_request.contains("ParentId=00000000-0000-0000-0000-000000000261"));
+    assert!(episodes_request.contains("IncludeItemTypes=Episode"));
+  }
+
+  #[tokio::test]
+  async fn emby_show_detail_fetches_item_seasons_and_next_up_concurrently() {
+    let series_id = "00000000-0000-0000-0000-000000000263";
+    let (server_url, requests) = serve_barrier_route_responses_with_requests(vec![
+      (
+        "GET /Users/00000000-0000-0000-0000-000000000001/Items/00000000-0000-0000-0000-000000000263?",
+        "200 OK",
+        r#"{"Id":"00000000-0000-0000-0000-000000000263","Name":"Concurrent Emby Show","Type":"Series","UserData":{"IsFavorite":false}}"#,
+      ),
+      (
+        "GET /Shows/00000000-0000-0000-0000-000000000263/Seasons?",
+        "200 OK",
+        r#"{"Items":[{"Id":"00000000-0000-0000-0000-000000000264","Name":"Season 1","Type":"Season","IndexNumber":1}],"TotalRecordCount":1}"#,
+      ),
+      (
+        "GET /Shows/NextUp?",
+        "200 OK",
+        r#"{"Items":[{"Id":"00000000-0000-0000-0000-000000000265","Name":"Next Emby Episode","Type":"Episode"}],"TotalRecordCount":1}"#,
+      ),
+    ])
+    .await;
+    let client = JellyfinClient::new();
+    connect_test_client_as_emby(&client, server_url);
+
+    let show = tokio::time::timeout(
+      std::time::Duration::from_secs(2),
+      client.library().show_detail(series_id.to_string()),
+    )
+    .await
+    .expect("concurrent Emby show detail should not deadlock waiting for withheld responses")
+    .expect("concurrent Emby show detail should load once all three requests arrive");
+
+    assert_eq!(show.id, series_id);
+    assert_eq!(show.seasons.len(), 1);
+    assert_eq!(
+      show.next_episode.as_ref().map(|item| item.id.as_str()),
+      Some("00000000-0000-0000-0000-000000000265")
+    );
+
+    let captured = requests.lock();
+    assert_eq!(captured.len(), 3);
+    assert!(captured.iter().any(|request| {
+      request.starts_with(
+        "GET /Users/00000000-0000-0000-0000-000000000001/Items/00000000-0000-0000-0000-000000000263?",
+      )
+    }));
+    assert!(captured.iter().any(|request| {
+      request.starts_with("GET /Shows/00000000-0000-0000-0000-000000000263/Seasons?")
+    }));
+    assert!(captured
+      .iter()
+      .any(|request| request.starts_with("GET /Shows/NextUp?")));
   }
 
   #[tokio::test]

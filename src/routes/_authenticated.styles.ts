@@ -31,8 +31,8 @@ export const authenticatedShellAmbientLayout = {
 } as const;
 
 /* Shared ambient layer: one static gradient blob spanning sidebar and main.
- * Hover on the sidebar or browse toolbar is promoted via :has() so the core
- * lifts uniformly. */
+ * Pointer-over on the sidebar or browse toolbar is promoted via data-glow on
+ * the shell so the core lifts uniformly. */
 export const ambient = css(authenticatedShellAmbientLayout);
 
 export const ambientGlow = css({
@@ -59,7 +59,7 @@ export const ambientCore = css({
   _motionReduce: {
     transition: '[none]',
   },
-  '[data-shell]:has([data-sidebar]:hover) &, [data-shell]:has([data-toolbar]:hover) &': {
+  '[data-shell][data-glow] &': {
     opacity: '[0.65]',
     transform: '[scale3d(1.06, 1.06, 1)]',
   },

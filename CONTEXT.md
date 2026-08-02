@@ -76,6 +76,10 @@ _Avoid_: Image optimizer, offline artwork library, Saved Service Profile cache
 The persistent left navigation area of the authenticated JellyPilot shell. The Sidebar lists Video Home, the user's video libraries, Now Playing, and Settings, and is always visible while JellyPilot is authenticated. At narrow window widths the Sidebar shows icons only.
 _Avoid_: Navigation rail, app drawer, floating controls
 
+**Ambient Glow**:
+The decorative radial glow behind the authenticated shell that brightens while the pointer is over the Sidebar or a Library Browser toolbar. The ambient-glow controller publishes the state as `data-glow` on the shell element.
+_Avoid_: Hover-driven :has selectors, glow state in CSS
+
 **Video Home**:
 The Library Browser landing view built from live Jellyfin rows such as Continue Watching, Next Up, latest Movies, latest Episodes, and video library shortcuts. Video Home is not cached offline and should not show fake media.
 _Avoid_: Home page, dashboard mock data

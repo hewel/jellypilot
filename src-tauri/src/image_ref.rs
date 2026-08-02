@@ -21,6 +21,21 @@ pub enum ImageRefKind {
   Backdrop,
 }
 
+impl ImageRefKind {
+  /// Maximum width requested from the origin for this reference kind.
+  pub(crate) const fn max_width(self) -> u16 {
+    match self {
+      Self::Artwork => 600,
+      Self::Backdrop => 1920,
+    }
+  }
+
+  /// JPEG/WebP quality requested from the origin for this reference kind.
+  pub(crate) const fn quality(self) -> u8 {
+    90
+  }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct ImageRefPayload {
@@ -175,6 +190,14 @@ mod tests {
     );
     assert_eq!(payload.server_url, "https://media.example.com");
     assert_eq!(payload.kind, ImageRefKind::Artwork);
+  }
+
+  #[test]
+  fn image_ref_kind_profiles_match_contract() {
+    assert_eq!(ImageRefKind::Artwork.max_width(), 600);
+    assert_eq!(ImageRefKind::Backdrop.max_width(), 1920);
+    assert_eq!(ImageRefKind::Artwork.quality(), 90);
+    assert_eq!(ImageRefKind::Backdrop.quality(), 90);
   }
 
   #[test]

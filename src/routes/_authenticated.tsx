@@ -1,5 +1,6 @@
 import { Outlet, createFileRoute, useNavigate } from '@tanstack/solid-router';
 import { Show } from 'solid-js';
+import { createAmbientGlow } from '~utils/ambientGlow';
 import { createSidebarPreferences } from '~utils/sidebarPreferences';
 import { createSidebarWipe } from '~utils/sidebarWipe';
 
@@ -32,11 +33,18 @@ function AuthenticatedShell() {
 
 function AuthenticatedShellContent() {
   const bootstrap = useAuthenticatedBootstrap();
+  const glow = createAmbientGlow();
   const { collapsed } = createSidebarPreferences();
   const { wipe } = createSidebarWipe();
 
   return (
-    <div class={styles.shell({ collapsed: collapsed() })} data-shell="">
+    <div
+      class={styles.shell({ collapsed: collapsed() })}
+      data-shell=""
+      data-glow={glow.active() ? '' : undefined}
+      onPointerOver={glow.onPointerOver}
+      onPointerOut={glow.onPointerOut}
+    >
       <div aria-hidden="true" class={styles.ambient}>
         <div class={styles.ambientGlow}>
           <div class={styles.ambientCore} />

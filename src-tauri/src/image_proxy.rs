@@ -21,11 +21,12 @@ use serde::{Deserialize, Serialize};
 use std::{collections::HashMap, net::TcpListener, sync::Arc, time::Duration};
 use tokio::sync::{broadcast, watch, Mutex as TokioMutex};
 use tokio_util::sync::CancellationToken;
+use url::Url;
 
 use crate::config::AppConfig;
 use crate::image_cache::{ImageCache, ImageCachePartition, StreamWriter};
-use crate::image_ref::{decode_image_id, normalize_server_url};
-use crate::jellyfin::JellyfinClient;
+use crate::image_ref::{decode_image_id, normalize_server_url, ImageRefKind};
+use crate::jellyfin::{JellyfinClient, MediaServerProvider};
 
 /// App local services state reported to frontend.
 #[derive(Debug, Clone, Serialize, Deserialize, specta::Type, PartialEq, Eq)]
@@ -235,9 +236,15 @@ async fn handle_image(
     .map(str::trim)
     .map(ToString::to_string);
 
+  let sized_remote_url = match sized_origin_url(&payload.remote_url, payload.kind, payload.provider)
+  {
+    Ok(url) => url,
+    Err(()) => return text_response(StatusCode::BAD_REQUEST, "invalid image remote URL"),
+  };
+
   let partition = ImageCache::partition(payload.provider, server_url);
   inner
-    .serve_image(&payload.remote_url, partition, if_none_match)
+    .serve_image(&sized_remote_url, partition, if_none_match)
     .await
 }
 
@@ -528,6 +535,93 @@ async fn serve_cached_file(
   builder
     .body(body)
     .unwrap_or_else(|_| Response::new(Body::empty()))
+}
+
+/// Apply the kind's maxWidth/quality profile to an origin image URL.
+///
+/// Retained non-sizing query segments are kept byte-for-byte from the original
+/// URL (encoding, duplicates, valueless/keyless/empty segments). Existing
+/// maxWidth/quality keys are dropped after percent-decoding only the raw key
+/// for case-insensitive matching; provider-cased sizing params are appended.
+fn sized_origin_url(
+  remote_url: &str,
+  kind: ImageRefKind,
+  provider: MediaServerProvider,
+) -> Result<String, ()> {
+  let Ok(parsed) = Url::parse(remote_url) else {
+    return Err(());
+  };
+  if !matches!(parsed.scheme(), "http" | "https") || parsed.host().is_none() {
+    return Err(());
+  }
+
+  let (max_width_key, quality_key) = match provider {
+    MediaServerProvider::Jellyfin => ("maxWidth", "quality"),
+    MediaServerProvider::Emby => ("MaxWidth", "Quality"),
+  };
+
+  let (before_fragment, fragment) = match remote_url.split_once('#') {
+    Some((base, frag)) => (base, Some(frag)),
+    None => (remote_url, None),
+  };
+  let (base, raw_query) = match before_fragment.split_once('?') {
+    Some((base, query)) => (base, Some(query)),
+    None => (before_fragment, None),
+  };
+
+  let mut new_query = String::new();
+  let mut retained_any_segment = false;
+  if let Some(query) = raw_query {
+    // Bare `?` has zero pairs; do not retain a synthetic empty segment.
+    // Explicit `?&` / `?&&` keep their empty segments via non-empty raw query.
+    if !query.is_empty() {
+      for segment in query.split('&') {
+        let raw_key = segment
+          .split_once('=')
+          .map(|(key, _)| key)
+          .unwrap_or(segment);
+        if is_sizing_query_key(raw_key) {
+          continue;
+        }
+        if retained_any_segment {
+          new_query.push('&');
+        }
+        new_query.push_str(segment);
+        retained_any_segment = true;
+      }
+    }
+  }
+  if retained_any_segment {
+    new_query.push('&');
+  }
+  new_query.push_str(max_width_key);
+  new_query.push('=');
+  new_query.push_str(&kind.max_width().to_string());
+  new_query.push('&');
+  new_query.push_str(quality_key);
+  new_query.push('=');
+  new_query.push_str(&kind.quality().to_string());
+
+  let mut sized = String::with_capacity(
+    base.len() + 1 + new_query.len() + fragment.map(|f| f.len() + 1).unwrap_or(0),
+  );
+  sized.push_str(base);
+  sized.push('?');
+  sized.push_str(&new_query);
+  if let Some(fragment) = fragment {
+    sized.push('#');
+    sized.push_str(fragment);
+  }
+  Ok(sized)
+}
+
+/// Percent-decode a raw query key only far enough to match sizing param names.
+fn is_sizing_query_key(raw_key: &str) -> bool {
+  let decoded = url::form_urlencoded::parse(format!("{raw_key}=").as_bytes())
+    .next()
+    .map(|(key, _)| key.into_owned())
+    .unwrap_or_else(|| raw_key.to_owned());
+  decoded.eq_ignore_ascii_case("maxWidth") || decoded.eq_ignore_ascii_case("quality")
 }
 
 /// Build a strong, representation-specific ETag from a content digest.
@@ -1165,6 +1259,12 @@ mod tests {
         .await
         .expect("init cache");
     let remote_url = format!("{origin_base}/Items/origin-avif/Images/Primary");
+    let sized_remote_url = sized_origin_url(
+      &remote_url,
+      ImageRefKind::Artwork,
+      MediaServerProvider::Jellyfin,
+    )
+    .expect("sized url");
     let partition =
       crate::image_cache::ImageCache::partition(MediaServerProvider::Jellyfin, &origin_base);
     let proxy = ImageProxy::start(client, Some(cache.clone()), test_config()).expect("start proxy");
@@ -1194,7 +1294,11 @@ mod tests {
 
     let mut committed = false;
     for _ in 0..100 {
-      if cache.open_reader(&partition, &remote_url).await.is_some() {
+      if cache
+        .open_reader(&partition, &sized_remote_url)
+        .await
+        .is_some()
+      {
         committed = true;
         break;
       }
@@ -1221,6 +1325,391 @@ mod tests {
     );
 
     let _ = std::fs::remove_dir_all(&dir);
+  }
+
+  #[test]
+  fn sized_origin_url_applies_artwork_profile_and_preserves_raw_tag() {
+    let sized = sized_origin_url(
+      "https://media.example.com/Items/1/Images/Primary?tag=abc%2Fdef",
+      ImageRefKind::Artwork,
+      MediaServerProvider::Jellyfin,
+    )
+    .expect("valid url");
+
+    assert_eq!(
+      sized,
+      "https://media.example.com/Items/1/Images/Primary?tag=abc%2Fdef&maxWidth=600&quality=90"
+    );
+  }
+
+  #[test]
+  fn sized_origin_url_applies_backdrop_profile() {
+    let sized = sized_origin_url(
+      "https://media.example.com/Items/1/Images/Backdrop",
+      ImageRefKind::Backdrop,
+      MediaServerProvider::Jellyfin,
+    )
+    .expect("valid url");
+
+    assert_eq!(
+      sized,
+      "https://media.example.com/Items/1/Images/Backdrop?maxWidth=1920&quality=90"
+    );
+  }
+
+  #[test]
+  fn sized_origin_url_emits_emby_provider_casing() {
+    let sized = sized_origin_url(
+      "https://media.example.com/Items/1/Images/Primary?tag=keep",
+      ImageRefKind::Artwork,
+      MediaServerProvider::Emby,
+    )
+    .expect("valid url");
+
+    assert_eq!(
+      sized,
+      "https://media.example.com/Items/1/Images/Primary?tag=keep&MaxWidth=600&Quality=90"
+    );
+  }
+
+  #[test]
+  fn sized_origin_url_preserves_raw_query_and_replaces_sizing_params() {
+    let sized = sized_origin_url(
+      "https://media.example.com/Items/1/Images/Primary?token=a%20b&flag&dup=x&dup=y&MAXWIDTH=1&Quality=10&maxWidth=2",
+      ImageRefKind::Artwork,
+      MediaServerProvider::Jellyfin,
+    )
+    .expect("valid url");
+
+    assert_eq!(
+      sized,
+      "https://media.example.com/Items/1/Images/Primary?token=a%20b&flag&dup=x&dup=y&maxWidth=600&quality=90"
+    );
+  }
+
+  #[test]
+  fn sized_origin_url_preserves_leading_and_trailing_empty_query_segments() {
+    let leading = sized_origin_url(
+      "https://media.example.com/Items/1/Images/Primary?&token=a&MAXWIDTH=1",
+      ImageRefKind::Artwork,
+      MediaServerProvider::Jellyfin,
+    )
+    .expect("valid url");
+    assert_eq!(
+      leading,
+      "https://media.example.com/Items/1/Images/Primary?&token=a&maxWidth=600&quality=90"
+    );
+
+    let repeated_leading = sized_origin_url(
+      "https://media.example.com/Items/1/Images/Primary?&&token=a&Quality=10",
+      ImageRefKind::Artwork,
+      MediaServerProvider::Jellyfin,
+    )
+    .expect("valid url");
+    assert_eq!(
+      repeated_leading,
+      "https://media.example.com/Items/1/Images/Primary?&&token=a&maxWidth=600&quality=90"
+    );
+
+    let trailing = sized_origin_url(
+      "https://media.example.com/Items/1/Images/Primary?token=a&&maxWidth=2",
+      ImageRefKind::Artwork,
+      MediaServerProvider::Jellyfin,
+    )
+    .expect("valid url");
+    assert_eq!(
+      trailing,
+      "https://media.example.com/Items/1/Images/Primary?token=a&&maxWidth=600&quality=90"
+    );
+  }
+
+  #[test]
+  fn sized_origin_url_bare_empty_query_does_not_insert_extra_ampersand() {
+    let sized = sized_origin_url(
+      "https://media.example.com/Items/1/Images/Primary?",
+      ImageRefKind::Artwork,
+      MediaServerProvider::Jellyfin,
+    )
+    .expect("valid url");
+    assert_eq!(
+      sized,
+      "https://media.example.com/Items/1/Images/Primary?maxWidth=600&quality=90"
+    );
+  }
+
+  #[tokio::test]
+  async fn test_invalid_signed_remote_url_returns_400_without_origin() {
+    let listener = TokioTcpListener::bind("127.0.0.1:0")
+      .await
+      .expect("bind mock server");
+    let origin_port = listener.local_addr().expect("port").port();
+    let origin_base = format!("http://127.0.0.1:{origin_port}");
+
+    let origin_hits = Arc::new(AtomicUsize::new(0));
+    let hits_clone = origin_hits.clone();
+    let mock_app = Router::new().fallback(get(move || {
+      let hits = hits_clone.clone();
+      async move {
+        hits.fetch_add(1, Ordering::SeqCst);
+        StatusCode::OK
+      }
+    }));
+    tokio::spawn(async move {
+      let _ = axum::serve(listener, mock_app).await;
+    });
+
+    let client = Arc::new(JellyfinClient::new());
+    client
+      .login()
+      .adopt_validated_session(&crate::jellyfin::SavedSession {
+        provider: MediaServerProvider::Jellyfin,
+        server_url: origin_base.clone(),
+        access_token: "test-token".to_string(),
+        user_id: "user-1".to_string(),
+        user_name: "Test".to_string(),
+        server_name: Some("Mock Server".to_string()),
+        device_id: None,
+      });
+
+    let proxy = ImageProxy::start(client, None, test_config()).expect("start proxy");
+    let http = ReqwestClient::new();
+
+    for remote in [
+      "not a url",
+      "ftp://files.example.com/Items/1/Images/Primary",
+    ] {
+      let signed_token = image_id_for_url(
+        MediaServerProvider::Jellyfin,
+        &origin_base,
+        remote.to_string(),
+        ImageRefKind::Artwork,
+      )
+      .expect("sign token with invalid remote url");
+
+      let resp = http
+        .get(format!("{}/image/{}", proxy.base_url, signed_token))
+        .send()
+        .await
+        .expect("send get");
+
+      assert_eq!(resp.status(), StatusCode::BAD_REQUEST, "remote={remote}");
+      assert_eq!(
+        resp.headers().get(header::CACHE_CONTROL),
+        Some(&header::HeaderValue::from_static("no-store")),
+        "remote={remote}"
+      );
+    }
+
+    assert_eq!(
+      origin_hits.load(Ordering::SeqCst),
+      0,
+      "invalid remote URL must never contact origin"
+    );
+  }
+
+  #[tokio::test]
+  async fn test_artwork_origin_request_carries_tag_and_sizing_params() {
+    let listener = TokioTcpListener::bind("127.0.0.1:0")
+      .await
+      .expect("bind mock server");
+    let origin_port = listener.local_addr().expect("port").port();
+    let origin_base = format!("http://127.0.0.1:{origin_port}");
+
+    let captured_query = Arc::new(TokioMutex::new(None::<String>));
+    let capture = captured_query.clone();
+    let mock_app = Router::new().route(
+      "/Items/sized/Images/Primary",
+      get(move |req: axum::http::Request<Body>| {
+        let capture = capture.clone();
+        async move {
+          let query = req.uri().query().unwrap_or("").to_string();
+          *capture.lock().await = Some(query);
+          ([(header::CONTENT_TYPE, "image/jpeg")], "sized-bytes")
+        }
+      }),
+    );
+    tokio::spawn(async move {
+      let _ = axum::serve(listener, mock_app).await;
+    });
+
+    let client = Arc::new(JellyfinClient::new());
+    client
+      .login()
+      .adopt_validated_session(&crate::jellyfin::SavedSession {
+        provider: MediaServerProvider::Jellyfin,
+        server_url: origin_base.clone(),
+        access_token: "test-token".to_string(),
+        user_id: "user-1".to_string(),
+        user_name: "Test".to_string(),
+        server_name: Some("Mock Server".to_string()),
+        device_id: None,
+      });
+
+    let proxy = ImageProxy::start(client, None, test_config()).expect("start proxy");
+    let remote_url = format!("{origin_base}/Items/sized/Images/Primary?tag=poster-tag");
+    let signed_token = image_id_for_url(
+      MediaServerProvider::Jellyfin,
+      &origin_base,
+      remote_url,
+      ImageRefKind::Artwork,
+    )
+    .expect("sign token");
+
+    let http = ReqwestClient::new();
+    let resp = http
+      .get(format!("{}/image/{}", proxy.base_url, signed_token))
+      .send()
+      .await
+      .expect("send get");
+    assert_eq!(resp.status(), StatusCode::OK);
+    assert_eq!(resp.text().await.expect("body"), "sized-bytes");
+
+    let query = captured_query
+      .lock()
+      .await
+      .clone()
+      .expect("origin should have been contacted");
+    let pairs: std::collections::HashMap<String, String> =
+      url::form_urlencoded::parse(query.as_bytes())
+        .into_owned()
+        .collect();
+    assert_eq!(pairs.get("tag").map(String::as_str), Some("poster-tag"));
+    assert_eq!(pairs.get("maxWidth").map(String::as_str), Some("600"));
+    assert_eq!(pairs.get("quality").map(String::as_str), Some("90"));
+  }
+
+  #[tokio::test]
+  async fn test_backdrop_origin_request_carries_sizing_params() {
+    let listener = TokioTcpListener::bind("127.0.0.1:0")
+      .await
+      .expect("bind mock server");
+    let origin_port = listener.local_addr().expect("port").port();
+    let origin_base = format!("http://127.0.0.1:{origin_port}");
+
+    let captured_query = Arc::new(TokioMutex::new(None::<String>));
+    let capture = captured_query.clone();
+    let mock_app = Router::new().route(
+      "/Items/sized/Images/Backdrop",
+      get(move |req: axum::http::Request<Body>| {
+        let capture = capture.clone();
+        async move {
+          let query = req.uri().query().unwrap_or("").to_string();
+          *capture.lock().await = Some(query);
+          ([(header::CONTENT_TYPE, "image/jpeg")], "backdrop-bytes")
+        }
+      }),
+    );
+    tokio::spawn(async move {
+      let _ = axum::serve(listener, mock_app).await;
+    });
+
+    let client = Arc::new(JellyfinClient::new());
+    client
+      .login()
+      .adopt_validated_session(&crate::jellyfin::SavedSession {
+        provider: MediaServerProvider::Jellyfin,
+        server_url: origin_base.clone(),
+        access_token: "test-token".to_string(),
+        user_id: "user-1".to_string(),
+        user_name: "Test".to_string(),
+        server_name: Some("Mock Server".to_string()),
+        device_id: None,
+      });
+
+    let proxy = ImageProxy::start(client, None, test_config()).expect("start proxy");
+    let remote_url = format!("{origin_base}/Items/sized/Images/Backdrop");
+    let signed_token = image_id_for_url(
+      MediaServerProvider::Jellyfin,
+      &origin_base,
+      remote_url,
+      ImageRefKind::Backdrop,
+    )
+    .expect("sign token");
+
+    let http = ReqwestClient::new();
+    let resp = http
+      .get(format!("{}/image/{}", proxy.base_url, signed_token))
+      .send()
+      .await
+      .expect("send get");
+    assert_eq!(resp.status(), StatusCode::OK);
+
+    let query = captured_query
+      .lock()
+      .await
+      .clone()
+      .expect("origin should have been contacted");
+    let pairs: std::collections::HashMap<String, String> =
+      url::form_urlencoded::parse(query.as_bytes())
+        .into_owned()
+        .collect();
+    assert_eq!(pairs.get("maxWidth").map(String::as_str), Some("1920"));
+    assert_eq!(pairs.get("quality").map(String::as_str), Some("90"));
+  }
+
+  #[tokio::test]
+  async fn test_emby_artwork_origin_request_uses_emby_sizing_casing() {
+    let listener = TokioTcpListener::bind("127.0.0.1:0")
+      .await
+      .expect("bind mock server");
+    let origin_port = listener.local_addr().expect("port").port();
+    let origin_base = format!("http://127.0.0.1:{origin_port}");
+
+    let captured_query = Arc::new(TokioMutex::new(None::<String>));
+    let capture = captured_query.clone();
+    let mock_app = Router::new().route(
+      "/Items/emby-sized/Images/Primary",
+      get(move |req: axum::http::Request<Body>| {
+        let capture = capture.clone();
+        async move {
+          let query = req.uri().query().unwrap_or("").to_string();
+          *capture.lock().await = Some(query);
+          ([(header::CONTENT_TYPE, "image/jpeg")], "emby-sized-bytes")
+        }
+      }),
+    );
+    tokio::spawn(async move {
+      let _ = axum::serve(listener, mock_app).await;
+    });
+
+    let client = Arc::new(JellyfinClient::new());
+    client
+      .login()
+      .adopt_validated_session(&crate::jellyfin::SavedSession {
+        provider: MediaServerProvider::Emby,
+        server_url: origin_base.clone(),
+        access_token: "test-token".to_string(),
+        user_id: "user-1".to_string(),
+        user_name: "Test".to_string(),
+        server_name: Some("Mock Server".to_string()),
+        device_id: None,
+      });
+
+    let proxy = ImageProxy::start(client, None, test_config()).expect("start proxy");
+    let remote_url = format!("{origin_base}/Items/emby-sized/Images/Primary?tag=poster-tag");
+    let signed_token = image_id_for_url(
+      MediaServerProvider::Emby,
+      &origin_base,
+      remote_url,
+      ImageRefKind::Artwork,
+    )
+    .expect("sign token");
+
+    let http = ReqwestClient::new();
+    let resp = http
+      .get(format!("{}/image/{}", proxy.base_url, signed_token))
+      .send()
+      .await
+      .expect("send get");
+    assert_eq!(resp.status(), StatusCode::OK);
+    assert_eq!(resp.text().await.expect("body"), "emby-sized-bytes");
+
+    let query = captured_query
+      .lock()
+      .await
+      .clone()
+      .expect("origin should have been contacted");
+    assert_eq!(query, "tag=poster-tag&MaxWidth=600&Quality=90");
   }
 
   #[test]
