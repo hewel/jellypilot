@@ -11,7 +11,6 @@
 import type {
   VideoLibraryItem,
   VideoLibraryKind,
-  VideoLibraryPage,
   VideoLibraryPlayedFilter,
   VideoLibrarySort,
 } from '@bindings';
@@ -34,10 +33,12 @@ import {
 import {
   libraryBrowsePageLocationForDisplayIndex,
   libraryBrowsePageStartsForRows,
+  retainLibraryBrowsePages,
 } from '~utils/libraryBrowsePageSelection';
 
 export const LIBRARY_VIRTUAL_TOTAL_THRESHOLD = 100;
 const LIBRARY_VIRTUAL_PAGE_CONCURRENCY = 2;
+const LIBRARY_VIRTUAL_PAGE_GC_TIME_MS = 120_000;
 
 interface LibraryBrowseInfiniteData {
   pages: LibraryExit<LibraryBrowseState>[];
@@ -64,26 +65,25 @@ export interface LibraryBrowseWindowOptions {
   readonly sessionActive: () => boolean;
 }
 
-type LibraryBrowsePageFailure = LibraryExit<LibraryBrowseState> & { _tag: 'Failure' };
+export type LibraryBrowseViewState =
+  | { readonly tag: 'loading' }
+  | { readonly tag: 'empty'; readonly totalRecordCount: number }
+  | { readonly tag: 'initialError'; readonly message: string }
+  | {
+      readonly tag: 'ready';
+      readonly mode: 'normal' | 'virtual';
+      readonly items: VideoLibraryItem[];
+      readonly totalRecordCount: number;
+      readonly isFetchingMore: boolean;
+      readonly loadMoreError: string | null;
+      readonly retryBusy: boolean;
+    };
 
 export interface LibraryBrowseWindow {
-  readonly readyState: () => { items: VideoLibraryItem[]; page: VideoLibraryPage } | null;
-  readonly totalRecordCount: () => number;
-  /** True for libraries large enough to use random-access virtual paging. */
-  readonly usesVirtualGrid: () => boolean;
-  readonly needsReverse: () => boolean;
-  readonly firstPage: () => LibraryExit<LibraryBrowseState> | null;
-  readonly laterPageFailure: () => { index: number; page: LibraryBrowsePageFailure } | null;
-  readonly isPending: () => boolean;
-  readonly isFetching: () => boolean;
-  readonly isFetchingNextPage: () => boolean;
-  readonly hasNextPage: () => boolean;
-  readonly fetchNextPage: () => void;
+  readonly state: () => LibraryBrowseViewState;
+  readonly loadNextPage: () => void;
   readonly itemForDisplayIndex: (displayIndex: number) => VideoLibraryItem | null;
-  readonly loadedDisplayItemCount: () => number;
-  readonly loadMoreErrorDescription: () => string | null;
-  readonly loadMoreRetryBusy: () => boolean;
-  readonly retryFailedPage: () => void;
+  readonly retry: () => void;
   /** Virtual geometry owned behind one interface; the route only renders it. */
   readonly virtual: LibraryBrowseVirtualGeometry;
 }
@@ -110,6 +110,7 @@ export function createLibraryBrowseWindow(
     new Map<number, LibraryExit<LibraryBrowseState>>(),
   );
   const [virtualPageStartsFetching, setVirtualPageStartsFetching] = createSignal(new Set<number>());
+  let retainedVirtualPageStarts = new Set<number>();
 
   const browseQueryKey = () => {
     const request = options.request();
@@ -173,6 +174,7 @@ export function createLibraryBrowseWindow(
     const nextSignature = browseQuerySignature();
     if (activeBrowseQuerySignature && activeBrowseQuerySignature !== nextSignature) {
       setVirtualPagesByStartIndex(new Map<number, LibraryExit<LibraryBrowseState>>());
+      retainedVirtualPageStarts = new Set<number>();
       setVirtualPageStartsFetching(new Set<number>());
       appScroll.scrollTo({ top: 0 });
     }
@@ -197,9 +199,9 @@ export function createLibraryBrowseWindow(
     for (const page of successfulPages()) {
       pages.set(page.value.page.startIndex, page.value);
     }
-    for (const page of virtualPagesByStartIndex().values()) {
+    for (const [startIndex, page] of virtualPagesByStartIndex()) {
       if (Exit.isSuccess(page)) {
-        pages.set(page.value.page.startIndex, page.value);
+        pages.set(startIndex, page.value);
       }
     }
     return pages;
@@ -259,11 +261,6 @@ export function createLibraryBrowseWindow(
     const page = successfulPageMap().get(location.pageStart);
     return page?.items[location.indexWithinPage] ?? null;
   };
-  const loadedDisplayItemCount = () =>
-    Math.min(
-      totalRecordCount(),
-      [...successfulPageMap().values()].reduce((count, page) => count + page.items.length, 0),
-    );
 
   const fetchVirtualPage = (startIndex: number, allowNetworkFetch: boolean) => {
     const total = totalRecordCount();
@@ -296,11 +293,13 @@ export function createLibraryBrowseWindow(
     void queryClient
       .fetchQuery({
         queryKey: virtualPageQueryKey,
+        gcTime: LIBRARY_VIRTUAL_PAGE_GC_TIME_MS,
         queryFn: () =>
           runExit(
             virtualPageFetchSemaphore.withPermit(
               Effect.suspend(() =>
-                browseQuerySignature() === expectedSignature
+                browseQuerySignature() === expectedSignature &&
+                retainedVirtualPageStarts.has(startIndex)
                   ? fetchVideoLibraryPage(
                       request.collectionType,
                       request.libraryId,
@@ -315,7 +314,10 @@ export function createLibraryBrowseWindow(
           ),
       })
       .then((page) => {
-        if (browseQuerySignature() !== expectedSignature) {
+        if (
+          browseQuerySignature() !== expectedSignature ||
+          !retainedVirtualPageStarts.has(startIndex)
+        ) {
           return;
         }
 
@@ -333,8 +335,11 @@ export function createLibraryBrowseWindow(
         });
       });
   };
-  const fetchVisibleVirtualPages = (allowNetworkFetch: boolean) => {
-    for (const startIndex of virtualPageStartsForCurrentWindow()) {
+  const fetchVisibleVirtualPages = (
+    pageStarts: ReadonlySet<number>,
+    allowNetworkFetch: boolean,
+  ) => {
+    for (const startIndex of pageStarts) {
       fetchVirtualPage(startIndex, allowNetworkFetch);
     }
   };
@@ -349,14 +354,6 @@ export function createLibraryBrowseWindow(
       currentFirstPage.value.page.startIndex === 0
     );
   };
-
-  createEffect(() => {
-    if (!usesVirtualGrid() || !canUseVirtualPages()) {
-      return;
-    }
-
-    fetchVisibleVirtualPages(!browseQuery.isFetching);
-  });
 
   const loadMoreRetryBusy = () =>
     usesVirtualGrid() ? virtualPageStartsFetching().size > 0 : browseQuery.isFetchingNextPage;
@@ -387,7 +384,7 @@ export function createLibraryBrowseWindow(
         }
         return next;
       });
-      fetchVisibleVirtualPages(true);
+      fetchVisibleVirtualPages(retainedVirtualPageStarts, true);
       return;
     }
 
@@ -406,6 +403,55 @@ export function createLibraryBrowseWindow(
     });
     void browseQuery.fetchNextPage({ cancelRefetch: false });
   };
+  const loadNextPage = () => {
+    if (
+      usesVirtualGrid() ||
+      !browseQuery.hasNextPage ||
+      browseQuery.isFetching ||
+      laterPageFailure()
+    ) {
+      return;
+    }
+    void browseQuery.fetchNextPage({ cancelRefetch: false });
+  };
+  const state = createMemo<LibraryBrowseViewState>(() => {
+    if (!options.filtersReady() || browseQuery.isPending) {
+      return { tag: 'loading' };
+    }
+
+    const currentFirstPage = firstPage();
+    if (!currentFirstPage) {
+      return { tag: 'loading' };
+    }
+    if (!Exit.isSuccess(currentFirstPage)) {
+      return {
+        tag: 'initialError',
+        message: commandFailureMessage(currentFirstPage.cause, 'Could not load Library page'),
+      };
+    }
+    if (currentFirstPage.value.items.length === 0) {
+      return {
+        tag: 'empty',
+        totalRecordCount: currentFirstPage.value.page.totalRecordCount,
+      };
+    }
+
+    const currentReadyState = readyState();
+    if (!currentReadyState) {
+      return { tag: 'loading' };
+    }
+    const mode = usesVirtualGrid() ? 'virtual' : 'normal';
+    return {
+      tag: 'ready',
+      mode,
+      items: currentReadyState.items,
+      totalRecordCount: currentReadyState.page.totalRecordCount,
+      isFetchingMore:
+        mode === 'virtual' ? virtualPageStartsFetching().size > 0 : browseQuery.isFetchingNextPage,
+      loadMoreError: loadMoreErrorDescription(),
+      retryBusy: loadMoreRetryBusy(),
+    };
+  });
 
   // Virtual geometry: shared-viewport measurement, enablement, overscan,
   // canvas height, and row placement behind one interface.
@@ -523,6 +569,19 @@ export function createLibraryBrowseWindow(
       pageSize: LIBRARY_BROWSE_PAGE_SIZE,
       reverse: needsReverse(),
     });
+  createEffect(() => {
+    if (!usesVirtualGrid() || !canUseVirtualPages()) {
+      retainedVirtualPageStarts = new Set<number>();
+      setVirtualPagesByStartIndex((current) => retainLibraryBrowsePages(current, new Set()));
+      return;
+    }
+
+    retainedVirtualPageStarts = new Set(virtualPageStartsForCurrentWindow());
+    setVirtualPagesByStartIndex((current) =>
+      retainLibraryBrowsePages(current, retainedVirtualPageStarts),
+    );
+    fetchVisibleVirtualPages(retainedVirtualPageStarts, !browseQuery.isFetching);
+  });
 
   const virtual: LibraryBrowseVirtualGeometry = {
     ref: setVirtualGrid,
@@ -534,22 +593,10 @@ export function createLibraryBrowseWindow(
   };
 
   return {
-    readyState,
-    totalRecordCount,
-    usesVirtualGrid,
-    needsReverse,
-    firstPage,
-    laterPageFailure,
-    isPending: () => browseQuery.isPending,
-    isFetching: () => browseQuery.isFetching,
-    isFetchingNextPage: () => browseQuery.isFetchingNextPage,
-    hasNextPage: () => browseQuery.hasNextPage,
-    fetchNextPage: () => void browseQuery.fetchNextPage({ cancelRefetch: false }),
+    state,
+    loadNextPage,
     itemForDisplayIndex,
-    loadedDisplayItemCount,
-    loadMoreErrorDescription,
-    loadMoreRetryBusy,
-    retryFailedPage,
+    retry: retryFailedPage,
     virtual,
   };
 }

@@ -94,3 +94,17 @@ export function libraryBrowsePageStartsForRows(
 
   return required;
 }
+
+export function retainLibraryBrowsePages<T>(
+  pages: Map<number, T>,
+  retainedPageStarts: ReadonlySet<number>,
+): Map<number, T> {
+  let retainedPages: Map<number, T> | null = null;
+  for (const pageStart of pages.keys()) {
+    if (!retainedPageStarts.has(pageStart)) {
+      retainedPages ??= new Map(pages);
+      retainedPages.delete(pageStart);
+    }
+  }
+  return retainedPages ?? pages;
+}

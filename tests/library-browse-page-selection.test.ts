@@ -3,6 +3,7 @@ import { expect, test } from '@rstest/core';
 import {
   libraryBrowsePageLocationForDisplayIndex,
   libraryBrowsePageStartsForRows,
+  retainLibraryBrowsePages,
 } from '../src/utils/libraryBrowsePageSelection';
 
 test('library browse page location maps display indexes directly in normal order', () => {
@@ -340,4 +341,30 @@ test('library browse page starts ignore rows beyond the result set', () => {
       reverse: false,
     }),
   ).toEqual([]);
+});
+
+test('library browse page retention keeps only the active virtual window', () => {
+  const pages = new Map([
+    [0, 'zero'],
+    [24, 'twenty-four'],
+    [48, 'forty-eight'],
+    [72, 'seventy-two'],
+  ]);
+
+  const retained = retainLibraryBrowsePages(pages, new Set([24, 48]));
+
+  expect([...retained]).toEqual([
+    [24, 'twenty-four'],
+    [48, 'forty-eight'],
+  ]);
+  expect(retained).not.toBe(pages);
+});
+
+test('library browse page retention preserves identity when every page remains active', () => {
+  const pages = new Map([
+    [24, 'twenty-four'],
+    [48, 'forty-eight'],
+  ]);
+
+  expect(retainLibraryBrowsePages(pages, new Set([24, 48]))).toBe(pages);
 });

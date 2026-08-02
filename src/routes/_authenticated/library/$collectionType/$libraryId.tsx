@@ -20,7 +20,6 @@ import { VideoCardSkeleton, type VideoCardAspectClass } from '@components/librar
 import { Button } from '@components/ui';
 import { cx } from '@styled-system/css';
 import { createFileRoute, redirect } from '@tanstack/solid-router';
-import { Exit } from 'effect';
 import {
   ArrowDownWideNarrowIcon,
   ArrowUpWideNarrowIcon,
@@ -32,7 +31,6 @@ import {
   RefreshCw,
 } from 'lucide-solid';
 import { For, Show, Suspense, createEffect, createMemo, createSignal, onCleanup } from 'solid-js';
-import { commandFailureMessage } from '~effects/commands';
 import { librarySessionSignature } from '~effects/query';
 import * as recipes from '~styles/recipes';
 import { createLibraryBrowseWindow } from '~utils/createLibraryBrowseWindow';
@@ -97,28 +95,28 @@ function LibraryBrowseRoute() {
     sessionActive: isMountedSessionActive,
   });
 
+  const browseState = browseWindow.state;
+  const readyState = () => {
+    const current = browseState();
+    return current.tag === 'ready' ? current : null;
+  };
   const statusTitle = () => {
-    const current = browseWindow.firstPage();
-    if (!current) {
-      return `Loading ${libraryTitle(collectionType())}`;
-    }
-    if (Exit.isSuccess(current) && current.value.items.length === 0) {
+    const current = browseState();
+    if (current.tag === 'empty') {
       return `${libraryTitle(collectionType())} has no results`;
     }
-    if (!Exit.isSuccess(current)) {
-      return 'Could not load Library page';
-    }
-    return `Loading ${libraryTitle(collectionType())}`;
+    return current.tag === 'initialError'
+      ? 'Could not load Library page'
+      : `Loading ${libraryTitle(collectionType())}`;
   };
   const statusDescription = () => {
-    const current = browseWindow.firstPage();
-    if (current && Exit.isSuccess(current) && current.value.items.length === 0) {
+    const current = browseState();
+    if (current.tag === 'empty') {
       return 'Jellyfin returned an empty server page for this video library.';
     }
-    if (current && !Exit.isSuccess(current)) {
-      return commandFailureMessage(current.cause, 'Could not load Library page');
-    }
-    return 'JellyPilot is loading a server-paged video library result set.';
+    return current.tag === 'initialError'
+      ? current.message
+      : 'JellyPilot is loading a server-paged video library result set.';
   };
   createEffect(() => {
     const sentinel = autoLoadSentinel();
@@ -141,31 +139,22 @@ function LibraryBrowseRoute() {
   });
 
   createEffect(() => {
-    if (!autoLoadSentinelVisible()) {
-      return;
+    if (autoLoadSentinelVisible()) {
+      browseWindow.loadNextPage();
     }
-    if (
-      browseWindow.usesVirtualGrid() ||
-      !browseWindow.hasNextPage() ||
-      browseWindow.isFetching() ||
-      browseWindow.laterPageFailure()
-    ) {
-      return;
-    }
-    browseWindow.fetchNextPage();
   });
-  const controlsLoading = () =>
-    !browseWindow.readyState() && (!libraryFilters.ready() || browseWindow.isFetching());
-
+  const controlsLoading = () => browseState().tag === 'loading';
   const toolbarCount = () => {
-    const state = browseWindow.readyState();
-    if (!state) {
+    const current = browseState();
+    if (current.tag === 'empty') {
+      return `0 of ${current.totalRecordCount}`;
+    }
+    if (current.tag !== 'ready') {
       return null;
     }
-    const loaded = browseWindow.usesVirtualGrid()
-      ? browseWindow.loadedDisplayItemCount()
-      : state.items.length;
-    return `${loaded} of ${browseWindow.totalRecordCount()}`;
+    return current.mode === 'virtual'
+      ? `${current.totalRecordCount} items`
+      : `${current.items.length} of ${current.totalRecordCount}`;
   };
 
   return (
@@ -186,104 +175,109 @@ function LibraryBrowseRoute() {
 
       <Suspense fallback={<LibraryBrowseSkeleton />}>
         <Show
-          when={browseWindow.readyState()}
+          when={readyState()}
           fallback={
-            !libraryFilters.ready() || browseWindow.isPending() ? (
+            browseState().tag === 'loading' ? (
               <LibraryBrowseSkeleton />
             ) : (
               <LibraryStatusPanel title={statusTitle()} description={statusDescription()} />
             )
           }
         >
-          <section class={styles.section} aria-label={libraryTitle(collectionType())}>
-            <Show
-              when={browseWindow.usesVirtualGrid()}
-              fallback={
-                <div class={cx(styles.grid, styles.fade)}>
-                  <For each={browseWindow.readyState()?.items ?? []}>
-                    {(item) => <LibraryBrowseCard item={item} collectionType={collectionType()} />}
-                  </For>
-                  <Show when={browseWindow.isFetchingNextPage()}>
-                    <LibraryBrowseSkeletonCards />
-                  </Show>
-                </div>
-              }
-            >
-              <div ref={browseWindow.virtual.ref} data-testid="library-virtual-grid">
-                <div
-                  aria-label={`${libraryTitle(collectionType())} library items`}
-                  aria-rowcount={Math.ceil(
-                    browseWindow.totalRecordCount() / browseWindow.virtual.columnCount(),
-                  )}
-                  class={styles.virtualCanvas}
-                  role="grid"
-                  style={{ height: `${browseWindow.virtual.totalSize()}px` }}
-                >
-                  <For each={browseWindow.virtual.items()}>
-                    {(virtualRow) => (
-                      <div
-                        aria-rowindex={virtualRow.index + 1}
-                        class={styles.virtualRow}
-                        role="row"
-                        style={{
-                          height: `${virtualRow.size}px`,
-                          transform: `translateY(${virtualRow.start - browseWindow.virtual.scrollMargin()}px)`,
-                        }}
-                      >
-                        <div class={styles.grid} role="presentation">
-                          <For each={browseWindow.virtual.rowColumnIndexes()}>
-                            {(columnIndex) => {
-                              const displayIndex = () =>
-                                virtualRow.index * browseWindow.virtual.columnCount() + columnIndex;
-                              const item = () => browseWindow.itemForDisplayIndex(displayIndex());
-
-                              return (
-                                <Show when={displayIndex() < browseWindow.totalRecordCount()}>
-                                  <div role="gridcell">
-                                    <Show when={item()} fallback={<LibraryBrowseSkeletonCard />}>
-                                      {(loadedItem) => (
-                                        <LibraryBrowseCard
-                                          item={loadedItem()}
-                                          collectionType={collectionType()}
-                                        />
-                                      )}
-                                    </Show>
-                                  </div>
-                                </Show>
-                              );
-                            }}
-                          </For>
-                        </div>
-                      </div>
+          {(current) => (
+            <section class={styles.section} aria-label={libraryTitle(collectionType())}>
+              <Show
+                when={current().mode === 'virtual'}
+                fallback={
+                  <div class={cx(styles.grid, styles.fade)}>
+                    <For each={current().items}>
+                      {(item) => (
+                        <LibraryBrowseCard item={item} collectionType={collectionType()} />
+                      )}
+                    </For>
+                    <Show when={current().isFetchingMore}>
+                      <LibraryBrowseSkeletonCards />
+                    </Show>
+                  </div>
+                }
+              >
+                <div ref={browseWindow.virtual.ref} data-testid="library-virtual-grid">
+                  <div
+                    aria-label={`${libraryTitle(collectionType())} library items`}
+                    aria-rowcount={Math.ceil(
+                      current().totalRecordCount / browseWindow.virtual.columnCount(),
                     )}
-                  </For>
-                </div>
-              </div>
-            </Show>
-            <Show when={browseWindow.loadMoreErrorDescription()}>
-              {(message) => (
-                <div class={styles.loadMoreError}>
-                  <p class={styles.error}>{message()}</p>
-                  <Button
-                    type="button"
-                    variant="secondary"
-                    class={recipes.pillButton}
-                    disabled={browseWindow.loadMoreRetryBusy()}
-                    onClick={browseWindow.retryFailedPage}
-                    leadingIcon={
-                      <RefreshCw
-                        class={styles.icon4}
-                        classList={{ [styles.spin]: browseWindow.loadMoreRetryBusy() }}
-                      />
-                    }
+                    class={styles.virtualCanvas}
+                    role="grid"
+                    style={{ height: `${browseWindow.virtual.totalSize()}px` }}
                   >
-                    Retry loading more
-                  </Button>
+                    <For each={browseWindow.virtual.items()}>
+                      {(virtualRow) => (
+                        <div
+                          aria-rowindex={virtualRow.index + 1}
+                          class={styles.virtualRow}
+                          role="row"
+                          style={{
+                            height: `${virtualRow.size}px`,
+                            transform: `translateY(${virtualRow.start - browseWindow.virtual.scrollMargin()}px)`,
+                          }}
+                        >
+                          <div class={styles.grid} role="presentation">
+                            <For each={browseWindow.virtual.rowColumnIndexes()}>
+                              {(columnIndex) => {
+                                const displayIndex = () =>
+                                  virtualRow.index * browseWindow.virtual.columnCount() +
+                                  columnIndex;
+                                const item = () => browseWindow.itemForDisplayIndex(displayIndex());
+
+                                return (
+                                  <Show when={displayIndex() < current().totalRecordCount}>
+                                    <div role="gridcell">
+                                      <Show when={item()} fallback={<LibraryBrowseSkeletonCard />}>
+                                        {(loadedItem) => (
+                                          <LibraryBrowseCard
+                                            item={loadedItem()}
+                                            collectionType={collectionType()}
+                                          />
+                                        )}
+                                      </Show>
+                                    </div>
+                                  </Show>
+                                );
+                              }}
+                            </For>
+                          </div>
+                        </div>
+                      )}
+                    </For>
+                  </div>
                 </div>
-              )}
-            </Show>
-            <div ref={setAutoLoadSentinel} aria-hidden="true" class={styles.sentinel} />
-          </section>
+              </Show>
+              <Show when={current().loadMoreError}>
+                {(message) => (
+                  <div class={styles.loadMoreError}>
+                    <p class={styles.error}>{message()}</p>
+                    <Button
+                      type="button"
+                      variant="secondary"
+                      class={recipes.pillButton}
+                      disabled={current().retryBusy}
+                      onClick={browseWindow.retry}
+                      leadingIcon={
+                        <RefreshCw
+                          class={styles.icon4}
+                          classList={{ [styles.spin]: current().retryBusy }}
+                        />
+                      }
+                    >
+                      Retry loading more
+                    </Button>
+                  </div>
+                )}
+              </Show>
+              <div ref={setAutoLoadSentinel} aria-hidden="true" class={styles.sentinel} />
+            </section>
+          )}
         </Show>
       </Suspense>
     </div>
