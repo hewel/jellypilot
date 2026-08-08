@@ -5,7 +5,7 @@
 # JellyPilot
 
 [![CI](https://github.com/hewel/jellypilot/actions/workflows/ci.yml/badge.svg)](https://github.com/hewel/jellypilot/actions/workflows/ci.yml)
-[![Rust](https://img.shields.io/badge/Rust-1.70+-orange?logo=rust)](https://www.rust-lang.org/)
+[![Rust](https://img.shields.io/badge/Rust-1.85+-orange?logo=rust)](https://www.rust-lang.org/)
 [![Tauri](https://img.shields.io/badge/Tauri-v2-blue?logo=tauri)](https://v2.tauri.app/)
 [![Solid.js](https://img.shields.io/badge/Solid.js-1.x-blue?logo=solid)](https://www.solidjs.com/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
@@ -175,9 +175,10 @@ sudo pacman -U jellypilot-<version>-1-x86_64.pkg.tar.zst
 <details>
 <summary>Development prerequisites</summary>
 
-*   [Bun](https://bun.sh/) (or npm/yarn)
-*   [Rust](https://rustup.rs/) (latest stable)
-*   Tauri CLI: `bun add -g @tauri-apps/cli`
+*   [Bun](https://bun.sh/) 1.3.14 or newer
+*   [Rust](https://rustup.rs/) 1.85 or newer, installed with `rustup`
+*   The `wasm32-unknown-unknown` Rust target
+*   `wasm-pack` 0.15.0 exactly
 
 </details>
 
@@ -189,11 +190,16 @@ cd jellypilot
 # Install dependencies
 bun install
 
+# Install the pinned WASM tool and target
+bun run wasm:install
+rustup target add wasm32-unknown-unknown
+
 # Build production binaries
-bunx tauri build
+bun tauri build
 ```
 
-Binaries will be in `src-tauri/target/release/bundle/`.
+The executable will be at `target/release/jellypilot`; installers will be in
+`target/release/bundle/`.
 
 ### Usage Steps
 
@@ -221,16 +227,20 @@ Binaries will be in `src-tauri/target/release/bundle/`.
 
 ```bash
 jellypilot/
-├── src/                    # Solid.js frontend
-│   ├── index.tsx          # Entry point
-│   ├── bindings.ts        # Auto-generated IPC bindings
-│   └── components/        # UI components
-├── src-tauri/             # Rust backend
+├── Cargo.toml              # Root Rust workspace
+├── crates/
+│   ├── jellypilot-core/   # Portable library-browse state machine
+│   └── jellypilot-core-wasm/ # WebAssembly adapter and generated web package
+├── src/                   # Solid.js frontend
+│   ├── index.tsx         # Entry point
+│   ├── bindings.ts       # Auto-generated IPC bindings
+│   └── components/       # UI components
+├── src-tauri/            # Tauri backend and desktop binary
 │   ├── src/
-│   │   ├── jellyfin/      # Jellyfin/Emby client implementation
-│   │   └── mpv/           # MPV IPC driver logic
-│   └── tauri.conf.json    # Tauri configuration
-└── docs/PRD.md            # Product requirements
+│   │   ├── jellyfin/     # Jellyfin/Emby client implementation
+│   │   └── mpv/          # MPV IPC driver logic
+│   └── tauri.conf.json   # Tauri configuration
+└── docs/                 # Architecture and product documentation
 ```
 
 ### Commands
@@ -238,10 +248,16 @@ jellypilot/
 | Task | Command |
 | :--- | :--- |
 | **Frontend Dev** | `bun run dev` |
-| **Tauri Dev** | `bunx tauri dev` |
-| **Build Prod** | `bunx tauri build` |
+| **Tauri Dev** | `bun tauri dev` |
+| **Build Prod** | `bun tauri build` |
+| **Build WASM (dev)** | `bun run wasm:build:dev` |
+| **Build WASM (release)** | `bun run wasm:build:release` |
 | **Test** | `bun run test` |
+| **Test Rust workspace** | `bun run rust:test` |
 | **Lint/Format** | `bun run check` |
+
+The WASM build commands regenerate the ignored web package at
+`crates/jellypilot-core-wasm/pkg/`.
 
 ### 📏 Code Conventions
 
@@ -254,7 +270,7 @@ jellypilot/
 
 1.  **Add function** in `src-tauri/src/command.rs` with `#[tauri::command]` and `#[specta]`.
 2.  **Register** in `src-tauri/src/lib.rs` inside `collect_commands![]`.
-3.  **Regenerate** bindings by running `bunx tauri dev`.
+3.  **Regenerate** bindings by running `bun tauri dev`.
 4.  **Import** from `commands` in your TypeScript file.
 
 ### Technology Stack

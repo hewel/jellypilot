@@ -11,6 +11,7 @@ import type {
   VideoLibraryPlayRequest,
   VideoLibraryShortcut,
   VideoLibrarySort,
+  VideoLibrarySortDirection,
   VideoSeasonEpisodes,
   VideoSeasonEpisodesRequest,
   VideoSeason,
@@ -46,7 +47,6 @@ export interface SeasonEpisodesState {
   page: VideoSeasonEpisodes;
 }
 
-export const LIBRARY_BROWSE_PAGE_SIZE = 24;
 export const LIBRARY_SEARCH_PAGE_SIZE = 24;
 
 const disconnectedError = () =>
@@ -83,18 +83,21 @@ export function fetchVideoLibraryPage(
   collectionType: VideoLibraryKind,
   libraryId: string,
   startIndex: number,
+  limit: number,
   sort: VideoLibrarySort,
   playedFilter: VideoLibraryPlayedFilter,
   favoritesOnly: boolean,
+  sortDirection: VideoLibrarySortDirection,
 ): LibraryEffect<LibraryBrowseState> {
   return runTauriCommand(() =>
     commands.libraryBrowseVideo({
       collectionType,
       favoritesOnly,
       libraryId,
-      limit: LIBRARY_BROWSE_PAGE_SIZE,
+      limit,
       playedFilter,
       sort,
+      sortDirection,
       startIndex,
     }),
   ).pipe(Effect.map((page) => ({ items: page.items, page })));

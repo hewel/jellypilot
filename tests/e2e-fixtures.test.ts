@@ -24,6 +24,26 @@ describe('native E2E fixture registry', () => {
     });
   });
 
+  test('correlates library page metadata with the requested start index', async () => {
+    installFixture('library_browse_video', {
+      kind: 'returnLibraryPage',
+      value: {
+        collectionType: 'movies',
+        libraryId: 'movies',
+        startIndex: 0,
+        limit: 24,
+        totalRecordCount: 48,
+        hasMore: false,
+        items: [],
+      },
+    });
+    const invoke = createControlledInvoke(async () => null);
+
+    await expect(
+      invoke('library_browse_video', { request: { startIndex: 24 } }),
+    ).resolves.toMatchObject({ startIndex: 24, hasMore: true });
+  });
+
   test('rejects with the declared raw CommandError value', async () => {
     const invoke = createControlledInvoke(async () => null);
 

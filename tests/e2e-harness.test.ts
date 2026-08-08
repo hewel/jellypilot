@@ -81,8 +81,21 @@ test('classifies E2E tool preflight versions', () => {
   expect(versionAtLeast('v22.11.0', [22, 11, 0])).toBe(true);
   expect(versionAtLeast('rustc 1.84.1', [1, 85, 0])).toBe(false);
   expect(
-    validateToolVersions('linux', { bun: '1.3.13', node: 'v24.0.0', rust: 'rustc 1.90.0' }),
+    validateToolVersions('linux', {
+      bun: '1.3.13',
+      node: 'v24.0.0',
+      rust: 'rustc 1.90.0',
+      wasmPack: 'wasm-pack 0.15.0',
+    }),
   ).toBe('Native E2E requires Bun 1.3.14; found 1.3.13.');
+  expect(
+    validateToolVersions('linux', {
+      bun: '1.3.14',
+      node: 'v24.0.0',
+      rust: 'rustc 1.90.0',
+      wasmPack: 'wasm-pack 0.14.0',
+    }),
+  ).toBe('Native E2E requires wasm-pack 0.15.0; found wasm-pack 0.14.0.');
 });
 
 test('fingerprints bundle inputs but reuses the binary for spec-only changes', async () => {
@@ -92,10 +105,15 @@ test('fingerprints bundle inputs but reuses the binary for spec-only changes', a
     await mkdir(path.join(root, 'e2e/app'), { recursive: true });
     await mkdir(path.join(root, 'e2e/specs'), { recursive: true });
     await mkdir(path.join(root, 'styled-system'), { recursive: true });
+    await mkdir(path.join(root, 'crates/jellypilot-core/src'), { recursive: true });
     await writeFile(path.join(root, 'src/app.ts'), 'export const app = 1;\n');
     await writeFile(path.join(root, 'e2e/app/bridge.ts'), 'export const bridge = 1;\n');
     await writeFile(path.join(root, 'e2e/specs/example.e2e.ts'), 'test(1);\n');
     await writeFile(path.join(root, 'styled-system/tokens.mjs'), 'export const token = 1;\n');
+    await writeFile(
+      path.join(root, 'crates/jellypilot-core/src/lib.rs'),
+      'pub const PAGE: u32 = 1;\n',
+    );
     const initial = await computeAppFingerprintAt(root);
 
     await writeFile(path.join(root, 'e2e/specs/example.e2e.ts'), 'test(2);\n');
@@ -106,6 +124,13 @@ test('fingerprints bundle inputs but reuses the binary for spec-only changes', a
 
     await writeFile(path.join(root, 'e2e/app/bridge.ts'), 'export const bridge = 1;\n');
     await writeFile(path.join(root, 'styled-system/tokens.mjs'), 'export const token = 2;\n');
+    expect(await computeAppFingerprintAt(root)).not.toBe(initial);
+
+    await writeFile(path.join(root, 'styled-system/tokens.mjs'), 'export const token = 1;\n');
+    await writeFile(
+      path.join(root, 'crates/jellypilot-core/src/lib.rs'),
+      'pub const PAGE: u32 = 2;\n',
+    );
     expect(await computeAppFingerprintAt(root)).not.toBe(initial);
   } finally {
     await rm(root, { force: true, recursive: true });

@@ -111,6 +111,7 @@ pub struct VideoLibraryPageRequest {
   pub start_index: i32,
   pub limit: i32,
   pub sort: VideoLibrarySort,
+  pub sort_direction: VideoLibrarySortDirection,
   pub played_filter: VideoLibraryPlayedFilter,
   pub favorites_only: bool,
 }
@@ -124,6 +125,15 @@ pub enum VideoLibrarySort {
   RecentlyAdded,
   #[serde(rename = "releaseDate")]
   ReleaseDate,
+}
+
+/// Supported Library Browser sort directions.
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, Type)]
+pub enum VideoLibrarySortDirection {
+  #[serde(rename = "asc")]
+  Ascending,
+  #[serde(rename = "desc")]
+  Descending,
 }
 
 /// Supported played-state filters for Library Browser results.

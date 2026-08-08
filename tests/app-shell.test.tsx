@@ -1,5 +1,8 @@
 // @rstest-environment jsdom
-import { afterEach, beforeEach, expect, rstest, test } from '@rstest/core';
+import { readFile } from 'node:fs/promises';
+import { resolve } from 'node:path';
+
+import { afterAll, afterEach, beforeAll, beforeEach, expect, rstest, test } from '@rstest/core';
 import type { QueryClient } from '@tanstack/solid-query';
 import { RouterProvider, createMemoryHistory } from '@tanstack/solid-router';
 import { fireEvent, screen, waitFor, within } from '@testing-library/dom';
@@ -28,6 +31,10 @@ import * as libraryStyles from '../src/routes/_authenticated/library.styles';
 import * as browseRouteStyles from '../src/routes/_authenticated/library/browseRoute.styles';
 import { resetSharedLibraryFilters } from '../src/utils/createSharedLibraryFilters';
 import { imageSource, resetImageProxyBase } from '../src/utils/imageSource';
+import {
+  setLibraryBrowseWasmInitializationFailureForTests,
+  setLibraryBrowseWasmInitInputForTests,
+} from '../src/utils/libraryBrowseWasm';
 import { resetSidebarPreferences } from '../src/utils/sidebarPreferences';
 import { resetSidebarWipe } from '../src/utils/sidebarWipe';
 import { createTestQueryClient, TestQueryProvider } from './query-client';
@@ -42,6 +49,20 @@ type LibraryItemStreamsResult =
 interface TestIntersectionObserverController {
   trigger(isIntersecting?: boolean): void;
 }
+
+let libraryBrowseWasmBytes: ArrayBuffer;
+
+beforeAll(async () => {
+  const wasm = await readFile(
+    resolve('crates/jellypilot-core-wasm/pkg/jellypilot_core_wasm_bg.wasm'),
+  );
+  libraryBrowseWasmBytes = Uint8Array.from(wasm).buffer;
+  setLibraryBrowseWasmInitInputForTests(libraryBrowseWasmBytes);
+});
+
+afterAll(() => {
+  setLibraryBrowseWasmInitInputForTests(undefined);
+});
 
 interface TestTauriStoreController {
   reset(): void;
@@ -444,6 +465,27 @@ function videoLibraryPage(startIndex: number): VideoLibraryPage {
           resumePositionSeconds: null,
           playedPercentage: null,
         },
+        ...Array.from(
+          { length: 23 },
+          (_, index) =>
+            ({
+              id: `paged-movie-${index + 2}`,
+              name: `Paged Movie ${index + 2}`,
+              itemType: 'Movie',
+              overview: null,
+              productionYear: null,
+              runtimeSeconds: null,
+              played: false,
+              favorite: false,
+              artworkImageId: null,
+              seasonNumber: null,
+              episodeNumber: null,
+              seriesId: null,
+              seriesName: null,
+              resumePositionSeconds: null,
+              playedPercentage: null,
+            }) satisfies VideoLibraryItem,
+        ),
       ],
       libraryId: 'movies',
       limit: 24,
@@ -1228,7 +1270,7 @@ test('library browse auto-loads paged results and opens detail links without pla
   expect(within(controls).getByRole('button', { name: 'Status' })).toBeVisible();
   expect(within(controls).getByRole('button', { name: 'Sort ascending' })).toBeVisible();
   expect(within(controls).getByRole('heading', { name: 'Movies' })).toBeVisible();
-  expect(within(controls).getByText(/\d+ of \d+/)).toBeVisible();
+  expect(await within(controls).findByText(/\d+ of \d+/)).toBeVisible();
   const pagedMovieLink = await screen.findByRole('link', {
     name: 'Open Paged Movie, favorite',
   });
@@ -1244,6 +1286,7 @@ test('library browse auto-loads paged results and opens detail links without pla
     limit: 24,
     playedFilter: 'all',
     sort: 'title',
+    sortDirection: 'asc',
     startIndex: 0,
   });
 
@@ -1253,9 +1296,9 @@ test('library browse auto-loads paged results and opens detail links without pla
 
   expect(screen.queryByRole('button', { name: 'Load more' })).toBeNull();
   window.__TEST_INTERSECTION_OBSERVER__.trigger(true);
-  const pagedMovie25Link = await screen.findByRole('link', { name: /Paged Movie 25/ });
+  const pagedMovie25Link = await screen.findByRole('link', { name: 'Open Paged Movie 25' });
   expect(pagedMovie25Link).toHaveAttribute('href', '/library/items/movie-25');
-  expect(within(pagedMovie25Link).getByRole('img', { name: 'Played' })).toBeVisible();
+  expect(screen.getByRole('img', { name: 'Played' })).toBeVisible();
   expect(browseCommand).toHaveBeenLastCalledWith({
     collectionType: 'movies',
     favoritesOnly: false,
@@ -1263,6 +1306,7 @@ test('library browse auto-loads paged results and opens detail links without pla
     limit: 24,
     playedFilter: 'all',
     sort: 'title',
+    sortDirection: 'asc',
     startIndex: 24,
   });
   expect(screen.queryByRole('button', { name: 'Load more' })).toBeNull();
@@ -1320,7 +1364,7 @@ test('library browse redirects home when active server changes under stale libra
   const browseCommand = rstest.spyOn(commands, 'libraryBrowseVideo');
   const cleanup = renderShell('/library/movies/movies', queryClient);
 
-  expect(await screen.findByRole('link', { name: /Paged Movie/ })).toBeVisible();
+  expect(await screen.findByRole('link', { name: 'Open Paged Movie, favorite' })).toBeVisible();
   browseCommand.mockClear();
 
   queryClient.setQueryData(queryKeys.connectionState, Exit.succeed(secondConnectedState));
@@ -1333,6 +1377,23 @@ test('library browse redirects home when active server changes under stale libra
   expect(queryClient.getQueryData(queryKeys.libraryHome(previousSessionKey))).toBeUndefined();
 
   cleanup();
+});
+
+test('library browse renders a recoverable status when WASM initialization fails', async () => {
+  mockShellCommands();
+  setLibraryBrowseWasmInitializationFailureForTests(
+    new Error('Injected Library browse WASM initialization failure'),
+  );
+  const cleanup = renderShell('/library/movies/movies');
+
+  try {
+    expect(
+      await screen.findByRole('heading', { name: 'Could not load Library page' }),
+    ).toBeVisible();
+  } finally {
+    cleanup();
+    setLibraryBrowseWasmInitializationFailureForTests(undefined);
+  }
 });
 
 test('library browse retries failed auto-loaded page', async () => {
@@ -1353,7 +1414,7 @@ test('library browse retries failed auto-loaded page', async () => {
   });
   const cleanup = renderShell('/library/movies/movies');
 
-  await screen.findByRole('link', { name: /Paged Movie/ });
+  await screen.findByRole('link', { name: 'Open Paged Movie, favorite' });
   window.__TEST_INTERSECTION_OBSERVER__.trigger(true);
 
   expect(await screen.findByText('Next page failed')).toBeVisible();
@@ -1363,8 +1424,47 @@ test('library browse retries failed auto-loaded page', async () => {
   nextPageShouldFail = false;
   fireEvent.click(retryButton);
 
-  expect(await screen.findByRole('link', { name: /Paged Movie 25/ })).toBeVisible();
+  expect(await screen.findByRole('link', { name: 'Open Paged Movie 25' })).toBeVisible();
   await waitFor(() => expect(screen.queryByText('Next page failed')).toBeNull());
+
+  cleanup();
+});
+
+test('library browse continues auto-loading while the sentinel stays visible', async () => {
+  mockShellCommands();
+  const firstPage = {
+    ...largeVideoLibraryPage(0),
+    totalRecordCount: 49,
+  };
+  const finalItem = {
+    ...largeVideoLibraryPage(0).items[0]!,
+    id: 'filtered-final-movie',
+    name: 'Filtered Final Movie',
+  };
+  const browseCommand = rstest.spyOn(commands, 'libraryBrowseVideo').mockImplementation((request) =>
+    Promise.resolve({
+      data:
+        request.startIndex === 0
+          ? firstPage
+          : {
+              ...firstPage,
+              hasMore: request.startIndex === 24,
+              items: request.startIndex === 24 ? [] : [finalItem],
+              startIndex: request.startIndex,
+            },
+      status: 'ok',
+    }),
+  );
+  const cleanup = renderShell('/library/movies/movies');
+
+  expect(await screen.findByRole('link', { name: 'Open Virtual Movie 1' })).toBeVisible();
+  window.__TEST_INTERSECTION_OBSERVER__.trigger(true);
+
+  await waitFor(() => {
+    expect(screen.getByRole('link', { name: 'Open Filtered Final Movie' })).toBeVisible();
+  });
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  expect(browseCommand.mock.calls.map(([request]) => request.startIndex)).toEqual([0, 24, 48]);
 
   cleanup();
 });
@@ -1425,6 +1525,7 @@ test('library browse virtualizes large libraries and fetches visible placeholder
       limit: 24,
       playedFilter: 'all',
       sort: 'title',
+      sortDirection: 'asc',
       startIndex: 120,
     }),
   );
@@ -1468,16 +1569,7 @@ test('library browse reuses cached virtual pages on route re-entry', async () =>
     expect(screen.getByRole('link', { name: 'Open Virtual Movie 125' })).toBeVisible();
   });
   await new Promise((resolve) => setTimeout(resolve, 0));
-  expect(browseCommand).toHaveBeenCalledTimes(1);
-  expect(browseCommand).toHaveBeenCalledWith({
-    collectionType: 'movies',
-    favoritesOnly: false,
-    libraryId: 'movies',
-    limit: 24,
-    playedFilter: 'all',
-    sort: 'title',
-    startIndex: 0,
-  });
+  expect(browseCommand).not.toHaveBeenCalled();
 
   secondCleanup();
 });
@@ -1506,6 +1598,7 @@ test('library browse reuses cached switched library pages before virtual pages',
       limit: 24,
       playedFilter: 'all',
       sort: 'title',
+      sortDirection: 'asc',
       startIndex: 0,
     }),
   );
@@ -1521,8 +1614,80 @@ test('library browse reuses cached switched library pages before virtual pages',
   const movieRequests = browseCommand.mock.calls
     .map(([request]) => request)
     .filter((request) => request.collectionType === 'movies' && request.libraryId === 'movies');
-  expect(movieRequests).toHaveLength(1);
-  expect(movieRequests[0]?.startIndex).toBe(0);
+  expect(movieRequests).toHaveLength(0);
+
+  cleanup();
+});
+
+test('library browse retains valid late page caches across a library switch', async () => {
+  mockShellCommands();
+  const queryClient = createTestQueryClient();
+  const pendingMoviePages = new Map<number, () => void>();
+  const browseCommand = rstest
+    .spyOn(commands, 'libraryBrowseVideo')
+    .mockImplementation((request) => {
+      const page = {
+        ...largeVideoLibraryPage(request.startIndex),
+        collectionType: request.collectionType,
+        libraryId: request.libraryId,
+      };
+      if (request.libraryId === 'movies' && request.startIndex !== 0) {
+        const { promise, resolve } = Promise.withResolvers<{
+          data: VideoLibraryPage;
+          status: 'ok';
+        }>();
+        pendingMoviePages.set(request.startIndex, () => resolve({ data: page, status: 'ok' }));
+        return promise;
+      }
+
+      return Promise.resolve({
+        data:
+          request.libraryId === 'shows'
+            ? {
+                ...page,
+                totalRecordCount: 149,
+                hasMore: request.startIndex + page.items.length < 149,
+              }
+            : page,
+        status: 'ok',
+      });
+    });
+  const cleanup = renderShell('/library/movies/movies', queryClient);
+
+  expect(await screen.findByRole('link', { name: 'Open Virtual Movie 1' })).toBeVisible();
+  await waitFor(() => expect(pendingMoviePages.size).toBeGreaterThan(0));
+
+  fireEvent.click(screen.getByRole('link', { name: 'Shows' }));
+  await waitFor(() =>
+    expect(
+      browseCommand.mock.calls.some(
+        ([request]) => request.libraryId === 'shows' && request.startIndex === 0,
+      ),
+    ).toBe(true),
+  );
+
+  for (const resolvePage of pendingMoviePages.values()) {
+    resolvePage();
+  }
+  const sessionKey = librarySessionKey(connectedState);
+  await waitFor(() => {
+    for (const startIndex of pendingMoviePages.keys()) {
+      expect(
+        queryClient.getQueryData(
+          queryKeys.libraryBrowsePage(
+            sessionKey,
+            'movies',
+            'movies',
+            'title',
+            'all',
+            false,
+            'asc',
+            startIndex,
+          ),
+        ),
+      ).toBeDefined();
+    }
+  });
 
   cleanup();
 });
@@ -1555,11 +1720,39 @@ test('library browse resets scroll to top when the sort direction changes', asyn
       limit: 24,
       playedFilter: 'all',
       sort: 'title',
+      sortDirection: 'desc',
       startIndex: 0,
     }),
   );
 
   scrollToSpy.mockRestore();
+  cleanup();
+});
+
+test('library browse preserves provider-native descending page order', async () => {
+  mockShellCommands();
+  window.__TEST_TAURI_STORE__.set('preferences.json', 'library_filters', {
+    sort: 'title',
+    playedFilter: 'all',
+    favoritesOnly: false,
+    sortDirection: 'desc',
+  });
+  const browseCommand = rstest.spyOn(commands, 'libraryBrowseVideo');
+  const cleanup = renderShell('/library/movies/movies');
+
+  const links = await screen.findAllByRole('link', { name: /Open Paged Movie/ });
+  expect(links[0]).toHaveAccessibleName('Open Paged Movie, favorite');
+  expect(browseCommand).toHaveBeenCalledWith({
+    collectionType: 'movies',
+    favoritesOnly: false,
+    libraryId: 'movies',
+    limit: 24,
+    playedFilter: 'all',
+    sort: 'title',
+    sortDirection: 'desc',
+    startIndex: 0,
+  });
+
   cleanup();
 });
 
@@ -1598,12 +1791,73 @@ test('library browse retries failed virtual placeholder page', async () => {
   cleanup();
 });
 
+test('library browse rejects mismatched virtual page metadata without corrupting page zero', async () => {
+  mockShellCommands();
+  const queryClient = createTestQueryClient();
+  const poisonedPage = {
+    ...largeVideoLibraryPage(0),
+    items: largeVideoLibraryPage(0).items.map((item, index) => ({
+      ...item,
+      id: `poisoned-virtual-movie-${index + 1}`,
+      name: `Poisoned Virtual Movie ${index + 1}`,
+    })),
+  };
+  const browseCommand = rstest.spyOn(commands, 'libraryBrowseVideo').mockImplementation((request) =>
+    Promise.resolve({
+      data: request.startIndex === 0 ? largeVideoLibraryPage(0) : poisonedPage,
+      status: 'ok',
+    }),
+  );
+  const cleanup = renderShell('/library/movies/movies', queryClient);
+
+  expect(await screen.findByRole('link', { name: 'Open Virtual Movie 1' })).toBeVisible();
+  const viewport = appScrollViewport();
+  scrollVirtualGridToEnd(viewport);
+
+  await waitFor(() =>
+    expect(browseCommand.mock.calls.some(([request]) => request.startIndex !== 0)).toBe(true),
+  );
+  expect(
+    await screen.findByText('Library page metadata did not match the requested page.'),
+  ).toBeVisible();
+  expect(screen.queryByRole('button', { name: 'Retry loading more' })).toBeNull();
+  const requestedContinuationStarts = browseCommand.mock.calls
+    .map(([request]) => request.startIndex)
+    .filter((startIndex) => startIndex !== 0);
+  const sessionKey = librarySessionKey(connectedState);
+  for (const startIndex of requestedContinuationStarts) {
+    expect(
+      queryClient.getQueryData(
+        queryKeys.libraryBrowsePage(
+          sessionKey,
+          'movies',
+          'movies',
+          'title',
+          'all',
+          false,
+          'asc',
+          startIndex,
+        ),
+      ),
+    ).toBeUndefined();
+  }
+
+  viewport.scrollTop = 0;
+  fireEvent.scroll(viewport);
+  await waitFor(() => {
+    expect(screen.getByRole('link', { name: 'Open Virtual Movie 1' })).toBeVisible();
+  });
+  expect(screen.queryByRole('link', { name: 'Open Poisoned Virtual Movie 1' })).toBeNull();
+
+  cleanup();
+});
+
 test('library browse controls reload paged results from the first page', async () => {
   mockShellCommands();
   const browseCommand = rstest.spyOn(commands, 'libraryBrowseVideo');
   const cleanup = renderShell('/library/movies/movies');
 
-  await screen.findByRole('link', { name: /Paged Movie/ });
+  await screen.findByRole('link', { name: 'Open Paged Movie, favorite' });
   fireEvent.click(screen.getByRole('button', { name: 'Sort By' }));
   fireEvent.click(screen.getByText('Recently added', { selector: 'span' }));
 
@@ -1615,6 +1869,7 @@ test('library browse controls reload paged results from the first page', async (
       limit: 24,
       playedFilter: 'all',
       sort: 'recentlyAdded',
+      sortDirection: 'asc',
       startIndex: 0,
     }),
   );
@@ -1630,6 +1885,7 @@ test('library browse controls reload paged results from the first page', async (
       limit: 24,
       playedFilter: 'unplayed',
       sort: 'recentlyAdded',
+      sortDirection: 'asc',
       startIndex: 0,
     }),
   );
@@ -1645,6 +1901,7 @@ test('library browse controls reload paged results from the first page', async (
       limit: 24,
       playedFilter: 'unplayed',
       sort: 'recentlyAdded',
+      sortDirection: 'asc',
       startIndex: 0,
     }),
   );
@@ -1660,6 +1917,7 @@ test('library browse controls reload paged results from the first page', async (
       limit: 24,
       playedFilter: 'unplayed',
       sort: 'recentlyAdded',
+      sortDirection: 'desc',
       startIndex: 0,
     }),
   );
@@ -1672,7 +1930,7 @@ test('library browse controls are shared across libraries', async () => {
   const browseCommand = rstest.spyOn(commands, 'libraryBrowseVideo');
   const cleanup = renderShell('/library/movies/movies');
 
-  await screen.findByRole('link', { name: /Paged Movie/ });
+  await screen.findByRole('link', { name: 'Open Paged Movie, favorite' });
   fireEvent.click(screen.getByRole('button', { name: 'Sort By' }));
   fireEvent.click(screen.getByText('Recently added', { selector: 'span' }));
   fireEvent.click(screen.getByRole('button', { name: 'Status' }));
@@ -1702,6 +1960,7 @@ test('library browse controls are shared across libraries', async () => {
       limit: 24,
       playedFilter: 'unplayed',
       sort: 'recentlyAdded',
+      sortDirection: 'desc',
       startIndex: 0,
     }),
   );
@@ -1729,6 +1988,7 @@ test('library browse hydrates shared filters once across route remounts', async 
       limit: 24,
       playedFilter: 'all',
       sort: 'recentlyAdded',
+      sortDirection: 'asc',
       startIndex: 0,
     }),
   );
@@ -1751,6 +2011,7 @@ test('library browse hydrates shared filters once across route remounts', async 
       limit: 24,
       playedFilter: 'all',
       sort: 'recentlyAdded',
+      sortDirection: 'asc',
       startIndex: 0,
     }),
   );
@@ -1778,6 +2039,7 @@ test('library browse hydrates filters from migrated Tauri Store preferences', as
     limit: 24,
     playedFilter: 'played',
     sort: 'releaseDate',
+    sortDirection: 'desc',
     startIndex: 0,
   };
   await waitFor(() => expect(browseCommand).toHaveBeenCalledWith(expectedRequest));
@@ -1799,6 +2061,7 @@ test('library browse migrates legacy localStorage filters into Tauri Store', asy
     limit: 24,
     playedFilter: 'unplayed',
     sort: 'recentlyAdded',
+    sortDirection: 'desc',
     startIndex: 0,
   };
   await waitFor(() => expect(browseCommand).toHaveBeenCalledWith(expectedRequest));

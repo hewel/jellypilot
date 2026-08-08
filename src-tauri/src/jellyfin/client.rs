@@ -1867,6 +1867,7 @@ impl<'a> JellyfinLibrary<'a> {
         include_item_types,
         media_types,
         sort: request.sort,
+        sort_direction: request.sort_direction,
         played_filter: request.played_filter,
         favorites_only: request.favorites_only,
       }),
@@ -2426,6 +2427,7 @@ impl<'a> JellyfinLibrary<'a> {
           start_index,
           limit,
           sort: request.sort,
+          sort_direction: request.sort_direction,
           played_filter: request.played_filter,
           favorites_only: request.favorites_only,
         }),
@@ -2859,6 +2861,7 @@ struct VideoBrowseItemsQuery {
   include_item_types: Vec<jellyfin_api::models::BaseItemKind>,
   media_types: Option<Vec<jellyfin_api::models::MediaType>>,
   sort: VideoLibrarySort,
+  sort_direction: VideoLibrarySortDirection,
   played_filter: VideoLibraryPlayedFilter,
   favorites_only: bool,
 }
@@ -2866,19 +2869,14 @@ struct VideoBrowseItemsQuery {
 fn video_browse_items_params(
   query: VideoBrowseItemsQuery,
 ) -> jellyfin_api::apis::items_api::GetItemsParams {
-  let (sort_by, sort_order) = match query.sort {
-    VideoLibrarySort::Title => (
-      jellyfin_api::models::ItemSortBy::SortName,
-      jellyfin_api::models::SortOrder::Ascending,
-    ),
-    VideoLibrarySort::RecentlyAdded => (
-      jellyfin_api::models::ItemSortBy::DateCreated,
-      jellyfin_api::models::SortOrder::Descending,
-    ),
-    VideoLibrarySort::ReleaseDate => (
-      jellyfin_api::models::ItemSortBy::PremiereDate,
-      jellyfin_api::models::SortOrder::Descending,
-    ),
+  let sort_by = match query.sort {
+    VideoLibrarySort::Title => jellyfin_api::models::ItemSortBy::SortName,
+    VideoLibrarySort::RecentlyAdded => jellyfin_api::models::ItemSortBy::DateCreated,
+    VideoLibrarySort::ReleaseDate => jellyfin_api::models::ItemSortBy::PremiereDate,
+  };
+  let sort_order = match query.sort_direction {
+    VideoLibrarySortDirection::Ascending => jellyfin_api::models::SortOrder::Ascending,
+    VideoLibrarySortDirection::Descending => jellyfin_api::models::SortOrder::Descending,
   };
   let is_played = match query.played_filter {
     VideoLibraryPlayedFilter::All => None,
@@ -2998,6 +2996,7 @@ fn video_search_items_params(
     ],
     media_types: None,
     sort: VideoLibrarySort::Title,
+    sort_direction: VideoLibrarySortDirection::Ascending,
     played_filter: VideoLibraryPlayedFilter::All,
     favorites_only: false,
   });
@@ -3535,6 +3534,7 @@ struct EmbyBrowseItemsQuery {
   start_index: i32,
   limit: i32,
   sort: VideoLibrarySort,
+  sort_direction: VideoLibrarySortDirection,
   played_filter: VideoLibraryPlayedFilter,
   favorites_only: bool,
 }
@@ -3648,10 +3648,14 @@ async fn emby_latest_video_items(
 }
 
 fn emby_browse_items_query(query: EmbyBrowseItemsQuery) -> Vec<(&'static str, String)> {
-  let (sort_by, sort_order) = match query.sort {
-    VideoLibrarySort::Title => ("SortName", "Ascending"),
-    VideoLibrarySort::RecentlyAdded => ("DateCreated", "Descending"),
-    VideoLibrarySort::ReleaseDate => ("PremiereDate", "Descending"),
+  let sort_by = match query.sort {
+    VideoLibrarySort::Title => "SortName",
+    VideoLibrarySort::RecentlyAdded => "DateCreated",
+    VideoLibrarySort::ReleaseDate => "PremiereDate",
+  };
+  let sort_order = match query.sort_direction {
+    VideoLibrarySortDirection::Ascending => "Ascending",
+    VideoLibrarySortDirection::Descending => "Descending",
   };
   let include_item_types = match query.collection_type {
     VideoLibraryKind::Movies => "Movie",
@@ -5477,6 +5481,7 @@ mod tests {
         start_index: 20,
         limit: 2,
         sort: VideoLibrarySort::Title,
+        sort_direction: VideoLibrarySortDirection::Descending,
         played_filter: VideoLibraryPlayedFilter::All,
         favorites_only: false,
       })
@@ -5490,6 +5495,7 @@ mod tests {
         start_index: -4,
         limit: 500,
         sort: VideoLibrarySort::RecentlyAdded,
+        sort_direction: VideoLibrarySortDirection::Ascending,
         played_filter: VideoLibraryPlayedFilter::All,
         favorites_only: false,
       })
@@ -5503,6 +5509,7 @@ mod tests {
         start_index: 0,
         limit: 24,
         sort: VideoLibrarySort::ReleaseDate,
+        sort_direction: VideoLibrarySortDirection::Descending,
         played_filter: VideoLibraryPlayedFilter::Played,
         favorites_only: true,
       })
@@ -5540,7 +5547,7 @@ mod tests {
     assert!(captured[0].contains("includeItemTypes=Movie"));
     assert!(captured[0].contains("mediaTypes=Video"));
     assert!(captured[0].contains("sortBy=SortName"));
-    assert!(captured[0].contains("sortOrder=Ascending"));
+    assert!(captured[0].contains("sortOrder=Descending"));
     assert!(captured[0].contains("enableTotalRecordCount=true"));
     assert!(captured[1].starts_with("GET /Items?"));
     assert!(captured[1].contains("parentId=00000000-0000-0000-0000-000000000021"));
@@ -5548,7 +5555,7 @@ mod tests {
     assert!(captured[1].contains("limit=100"));
     assert!(captured[1].contains("includeItemTypes=Series"));
     assert!(captured[1].contains("sortBy=DateCreated"));
-    assert!(captured[1].contains("sortOrder=Descending"));
+    assert!(captured[1].contains("sortOrder=Ascending"));
     assert!(!captured[1].contains("mediaTypes=Video"));
     assert!(captured[2].contains("sortBy=PremiereDate"));
     assert!(captured[2].contains("sortOrder=Descending"));
@@ -5569,6 +5576,7 @@ mod tests {
         start_index: 0,
         limit: 24,
         sort: VideoLibrarySort::Title,
+        sort_direction: VideoLibrarySortDirection::Ascending,
         played_filter: VideoLibraryPlayedFilter::All,
         favorites_only: false,
       })
@@ -6124,6 +6132,7 @@ mod tests {
         start_index: 20,
         limit: 2,
         sort: VideoLibrarySort::ReleaseDate,
+        sort_direction: VideoLibrarySortDirection::Ascending,
         played_filter: VideoLibraryPlayedFilter::Unplayed,
         favorites_only: true,
       })
@@ -6159,7 +6168,7 @@ mod tests {
     assert!(captured[0].contains("IncludeItemTypes=Movie"));
     assert!(captured[0].contains("MediaTypes=Video"));
     assert!(captured[0].contains("SortBy=PremiereDate"));
-    assert!(captured[0].contains("SortOrder=Descending"));
+    assert!(captured[0].contains("SortOrder=Ascending"));
     assert!(captured[0].contains("IsPlayed=false"));
     assert!(captured[0].contains("IsFavorite=true"));
     assert!(captured[1].contains("SearchTerm=emby+show"));

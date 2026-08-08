@@ -1,0 +1,23 @@
+[package]
+name = "jellypilot-core-wasm"
+description = "Typed WebAssembly bindings for jellypilot-core"
+edition = "2021"
+license = "MIT"
+repository = "https://github.com/hewel/jellypilot"
+rust-version = "1.85"
+version = "1.5.0"
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+jellypilot-core = { path = "../jellypilot-core" }
+serde = { version = "1.0", features = ["derive"] }
+tsify = { version = "0.5.6", default-features = false, features = ["js"] }
+wasm-bindgen = "0.2.121"
+
+[dev-dependencies]
+serde_json = "1.0"
+
+[lints]
+workspace = true

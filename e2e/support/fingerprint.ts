@@ -18,11 +18,18 @@ const INPUT_PATHS = [
   'src-tauri/icons',
   'src-tauri/build.rs',
   'src-tauri/Cargo.toml',
-  'src-tauri/Cargo.lock',
   'src-tauri/tauri.conf.json',
   'src-tauri/tauri.webdriver.conf.json',
+  'crates/jellypilot-core/src',
+  'crates/jellypilot-core/Cargo.toml',
+  'crates/jellypilot-core-wasm/src',
+  'crates/jellypilot-core-wasm/Cargo.toml',
+  'Cargo.toml',
+  'Cargo.lock',
+  'rust-toolchain.toml',
   'package.json',
   'bun.lock',
+  'scripts/build-library-browse-wasm.ts',
   'index.html',
   'rsbuild.config.ts',
   'panda.config.ts',
@@ -31,7 +38,7 @@ const INPUT_PATHS = [
 ] as const;
 
 export interface BuildManifest {
-  readonly schemaVersion: 1;
+  readonly schemaVersion: 2;
   readonly appFingerprint: string;
   readonly binaryHash: string;
   readonly builtAt: string;
@@ -44,11 +51,16 @@ export interface BuildManifest {
 }
 
 const BuildManifestSchema = Schema.Struct({
-  schemaVersion: Schema.Literal(1),
+  schemaVersion: Schema.Literal(2),
   appFingerprint: Schema.String,
   binaryHash: Schema.String,
   builtAt: Schema.String,
-  toolVersions: Schema.Struct({ bun: Schema.String, node: Schema.String, rust: Schema.String }),
+  toolVersions: Schema.Struct({
+    bun: Schema.String,
+    node: Schema.String,
+    rust: Schema.String,
+    wasmPack: Schema.String,
+  }),
   variables: Schema.Struct({
     PUBLIC_WEBDRIVER: Schema.Literal('1'),
     CARGO_TARGET_DIR: Schema.String,
@@ -122,7 +134,7 @@ export const writeBuildManifest = Effect.fn('e2e.writeBuildManifest')(
     Effect.tryPromise({
       try: async () => {
         const manifest: BuildManifest = {
-          schemaVersion: 1,
+          schemaVersion: 2,
           appFingerprint,
           binaryHash: await hashFile(BINARY_PATH),
           builtAt: new Date().toISOString(),
@@ -171,7 +183,7 @@ export const verifyBuildManifest = Effect.fn('e2e.verifyBuildManifest')(function
       }),
   });
 
-  if (manifest.schemaVersion !== 1 || manifest.appFingerprint !== appFingerprint) {
+  if (manifest.schemaVersion !== 2 || manifest.appFingerprint !== appFingerprint) {
     return yield* new E2eStaleBuildError({
       message: 'Native E2E application inputs changed. Run `bun run build:e2e` again.',
     });

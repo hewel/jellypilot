@@ -139,7 +139,15 @@ function LibraryBrowseRoute() {
   });
 
   createEffect(() => {
-    if (autoLoadSentinelVisible()) {
+    const current = browseState();
+    if (
+      autoLoadSentinelVisible() &&
+      current.tag === 'ready' &&
+      current.mode === 'normal' &&
+      !current.isFetchingMore &&
+      current.canLoadNext &&
+      current.loadMoreError === null
+    ) {
       browseWindow.loadNextPage();
     }
   });
@@ -257,21 +265,23 @@ function LibraryBrowseRoute() {
                 {(message) => (
                   <div class={styles.loadMoreError}>
                     <p class={styles.error}>{message()}</p>
-                    <Button
-                      type="button"
-                      variant="secondary"
-                      class={recipes.pillButton}
-                      disabled={current().retryBusy}
-                      onClick={browseWindow.retry}
-                      leadingIcon={
-                        <RefreshCw
-                          class={styles.icon4}
-                          classList={{ [styles.spin]: current().retryBusy }}
-                        />
-                      }
-                    >
-                      Retry loading more
-                    </Button>
+                    <Show when={current().loadMoreRetryable}>
+                      <Button
+                        type="button"
+                        variant="secondary"
+                        class={recipes.pillButton}
+                        disabled={current().retryBusy}
+                        onClick={browseWindow.retry}
+                        leadingIcon={
+                          <RefreshCw
+                            class={styles.icon4}
+                            classList={{ [styles.spin]: current().retryBusy }}
+                          />
+                        }
+                      >
+                        Retry loading more
+                      </Button>
+                    </Show>
                   </div>
                 )}
               </Show>

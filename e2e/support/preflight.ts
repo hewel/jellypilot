@@ -11,6 +11,7 @@ export interface ToolVersions {
   readonly bun: string;
   readonly node: string;
   readonly rust: string;
+  readonly wasmPack: string;
 }
 
 function versionParts(value: string): readonly number[] {
@@ -44,21 +45,26 @@ export function validateToolVersions(
   if (!versionAtLeast(versions.rust, [1, 85, 0])) {
     return `Native E2E requires Rust 1.85 or newer; found ${versions.rust}.`;
   }
+  if (versions.wasmPack !== 'wasm-pack 0.15.0') {
+    return `Native E2E requires wasm-pack 0.15.0; found ${versions.wasmPack}.`;
+  }
   return undefined;
 }
 
 export const preflight = Effect.fn('e2e.preflight')(function* () {
   const versions = yield* Effect.tryPromise({
     try: async () => {
-      const [bun, node, rust] = await Promise.all([
+      const [bun, node, rust, wasmPack] = await Promise.all([
         execFilePromise('bun', ['--version']),
         execFilePromise('node', ['--version']),
         execFilePromise('rustc', ['--version']),
+        execFilePromise('wasm-pack', ['--version']),
       ]);
       return {
         bun: bun.stdout.trim(),
         node: node.stdout.trim(),
         rust: rust.stdout.trim(),
+        wasmPack: wasmPack.stdout.trim(),
       } satisfies ToolVersions;
     },
     catch: (cause) =>

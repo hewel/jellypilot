@@ -3,11 +3,13 @@
 This document describes the virtualized grid used by the movie and TV library browse route:
 
 - route and paging: `src/routes/_authenticated/library/$collectionType/$libraryId.tsx`
+- Solid browse facade: `src/utils/createLibraryBrowseWindow.ts`
+- lazy WASM loader: `src/utils/libraryBrowseWasm.ts`
+- portable browse policy: `crates/jellypilot-core`
+- browser/WASM boundary: `crates/jellypilot-core-wasm`
 - shared layout math: `src/utils/libraryBrowseLayout.ts`
-- page selection math: `src/utils/libraryBrowsePageSelection.ts`
 - rendered regressions: `tests/app-shell.test.tsx`
 - layout math tests: `tests/library-browse-layout.test.ts`
-- page selection tests: `tests/library-browse-page-selection.test.ts`
 - native WebView regression: `e2e/specs/library-virtual-scroll.e2e.ts`
 
 ## Why the grid is virtualized
@@ -16,13 +18,13 @@ Libraries with more than 100 records render only the rows near the native applic
 Smaller libraries keep the normal grid and infinite-load sentinel. The threshold avoids paying the
 virtualizer's lifecycle and geometry costs when the full result set is already small.
 
-The first successful server page supplies `totalRecordCount`, so every browse begins through the
-same `createInfiniteQuery` bootstrap before choosing one of two continuation strategies:
+The first successful server page supplies `totalRecordCount`, so every browse begins with the same
+core-scheduled page-zero load before choosing one of two continuation strategies:
 
-| Result size           | Rendering             | Page continuation                                                            |
-| --------------------- | --------------------- | ---------------------------------------------------------------------------- |
-| 100 records or fewer  | Normal CSS grid       | `createInfiniteQuery.fetchNextPage()` through the bottom sentinel            |
-| More than 100 records | TanStack virtual rows | Random-access `fetchQuery()` calls for pages intersecting the virtual window |
+| Result size           | Rendering             | Core input and continuation                              |
+| --------------------- | --------------------- | -------------------------------------------------------- |
+| 100 records or fewer  | Normal CSS grid       | Bottom sentinel sends `LoadNext`                         |
+| More than 100 records | TanStack virtual rows | Visible display indexes are sent through `WindowChanged` |
 
 Removing virtualization made the reported whole-card flash disappear. The implementation therefore
 has one critical invariant: a large wheel or programmatic scroll jump must always leave rendered rows
@@ -30,48 +32,79 @@ covering the viewport. A temporarily empty virtual window is a visible full-card
 
 ## Ownership and data flow
 
-`LibraryBrowseRoute` owns the TanStack virtualizer, server data, grid measurements, and page
-selection. Keeping the virtualizer at the stable route lifecycle prevents cached data from creating
+Browse behavior is split by kind of knowledge, not by runtime. The portable Rust core owns
+metadata-only policy; the Solid facade owns browser lifecycle and data; provider adapters own wire
+requests. Keeping the virtualizer at the stable route lifecycle prevents cached data from creating
 a second, late lifecycle boundary.
+
+| Layer             | Owns                                                                                                                                                                                     | Must not own                                                                       |
+| ----------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------- |
+| `jellypilot-core` | Browse generation, page-zero gating, mode, demanded-page planning, bounded prefetch, request tokens, deduplication, retry, stale completion rejection, slot metadata, and page retention | Media payloads, network calls, clocks, DOM geometry, rendering, or framework state |
+| WASM wrapper      | `wasm-bindgen`/TypeScript DTO conversion and a browser-callable core handle                                                                                                              | Browse policy or environment-specific transport                                    |
+| Solid facade      | Query identity inputs, actual page payloads/cache, command execution, virtualizer-to-display-index translation, and reactive view state                                                  | A second paging scheduler or page-ordering policy                                  |
+| Route/UI          | Filters, persistence, controls, DOM measurements, columns, overscan, sentinel choice, skeletons, focus, and animations                                                                   | Provider query construction                                                        |
+| Provider adapter  | Jellyfin/Emby request construction, authentication/session context, response mapping, and typed provider failures                                                                        | Display order emulation or viewport policy                                         |
 
 ```mermaid
 flowchart TD
   identity["Session + library + filters + sort"]
-  bootstrap["Infinite query page 0"]
+  bootstrap["Core-scheduled page 0"]
   mode{"totalRecordCount > 100?"}
   sentinel["Bottom sentinel"]
-  sequential["Infinite query next page"]
+  sequential["LoadNext"]
   viewport["Native app viewport"]
   virtualizer["LibraryBrowseRoute virtualizer"]
-  paging["Visible-window page selection"]
+  facade["Solid browse facade"]
+  core["Rust browse core via WASM"]
   cache["Per-page TanStack Query cache"]
-  network["Jellyfin page request"]
+  adapter["Tauri or browser page adapter"]
+  network["Jellyfin / Emby page request"]
   cards["LibraryVideoCard / LibraryBrowseSkeletonCard"]
 
   identity --> bootstrap
   bootstrap --> mode
   mode -->|"No"| sentinel
   sentinel --> sequential
-  sequential --> cards
+  sequential --> core
   mode -->|"Yes"| virtualizer
   viewport -->|"TanStack native element-offset observer"| virtualizer
-  virtualizer -->|"Visible and overscanned row indexes"| paging
-  paging -->|"Display index → server index → page start"| cache
-  cache -->|"Miss"| network
+  virtualizer -->|"Visible and overscanned display indexes"| facade
+  facade -->|"Configure / WindowChanged / Retry"| core
+  core -->|"ResetViewport / LoadPage / CancelLoad / ReleasePages"| facade
+  facade --> cache
+  cache -->|"Miss"| adapter
+  adapter --> network
   network --> cache
+  facade -->|"PageSettled token + outcome"| core
   cache -->|"Loaded item or missing-page placeholder"| cards
 ```
 
+### Browser and Tauri adapters
+
+The shipped Tauri WebView and a normal browser use the same browser-targeted
+`jellypilot_core_wasm` module. There is no per-scroll Tauri command and no second native copy of the
+browse state machine behind IPC. Only the effect that satisfies `LoadPage` varies:
+
+- in Tauri, the adapter calls the generated typed `libraryBrowseVideo` command;
+- a normal browser host can provide an HTTP/authentication adapter with the same settle contract;
+- unit and integration tests can provide an in-memory adapter.
+
+The browser HTTP/authentication adapter is an extension seam, not permission to import transport
+into the core. A future Rust-native UI links `jellypilot-core` directly instead of loading the WASM
+wrapper.
+
 ### Query identity and Effect boundary
 
-The browse query key contains the connection/session identity, collection type, library ID, sort
+The browse source identity contains the connection/session identity, collection type, library ID, sort
 field, played filter, favorites filter, and sort direction. Changing any of them creates a distinct
-TanStack Query result and changes the route's serialized browse-query signature.
+TanStack Query result and configures a new core generation. Completions carry request tokens; a
+completion from an older generation cannot mutate the active browse state.
 
-The infinite query starts with `pageParam: 0`. Each query function passes the numeric page parameter
-to `fetchVideoLibraryPage()`, which requests `LIBRARY_BROWSE_PAGE_SIZE` records (currently 24).
-`getNextPageParam` advances to `page.startIndex + page.limit` only when the returned `Exit` is
-successful and `page.hasMore` is true.
+`Configure` establishes a new source generation. The core first emits `LoadPage` for start index zero
+and `LIBRARY_BROWSE_PAGE_SIZE` records (currently 24). The adapter calls
+`fetchVideoLibraryPage()` and returns the request token plus page metadata through `PageSettled`.
+Successful metadata includes the returned start, count, total count, and whether more records exist;
+item payloads stay in the UI cache.
 
 `fetchVideoLibraryPage()` is an Effect workflow and `runExit()` executes it at the route boundary.
 Command failures therefore arrive as `Exit.Failure` query data rather than rejected TanStack Query
@@ -102,6 +135,35 @@ conditions are true:
 The false-to-true `enabled` transition lets the Solid adapter attach its observers through its normal
 lifecycle. Route code must not call TanStack's underscore-prefixed `_didMount()` or `_willUpdate()`
 methods.
+
+The WASM module is also lazy. The application does not initialize it during shell startup.
+`src/utils/libraryBrowseWasm.ts` imports the generated `jellypilot_core_wasm` module on first Library
+Browse entry and caches one module-level call to its default initializer. Each route entry then gets
+its own `LibraryBrowseCore` instance. The route's existing loading state covers initialization, so no
+core command is interpreted before the module is ready. If initialization rejects, the active route
+uses its existing initial-error state and the loader clears the cached promise so a later Library
+entry can retry.
+
+`crates/jellypilot-core-wasm/pkg/` is ignored generated output from `wasm-pack`. Do not patch its
+JavaScript or declarations. Regenerate it from the Rust wrapper whenever its exported DTO boundary
+changes; builds and checks must generate it before TypeScript or Rsbuild consumes it.
+
+The wrapper pins `wasm-pack` 0.15.0. `bun run wasm:install` installs that exact version when it is
+missing or mismatched. Use `bun run wasm:build:dev` for a debuggable module and
+`bun run wasm:build:release` for production output; `bun run wasm:build` selects release normally and
+development output for the WebDriver build. These wrappers run the equivalent of:
+
+```bash
+wasm-pack build crates/jellypilot-core-wasm \
+  --target web \
+  --out-dir pkg \
+  --out-name jellypilot_core_wasm \
+  --dev # or --release
+```
+
+The package entry is `pkg/jellypilot_core_wasm.js` plus its emitted `.wasm` payload and declarations.
+The default export must initialize the module before callers use named exports. Rsbuild resolves the
+emitted `.wasm` URL the same way for a normal browser and the Tauri WebView.
 
 ## Geometry
 
@@ -157,137 +219,136 @@ grow without bound. Invalid or unavailable geometry falls back to six rows.
 
 ## Server paging
 
-### Infinite-query bootstrap and cache bridge
+### Core bootstrap and cache bridge
 
-The infinite query always owns page 0. For a small result set it continues to own every later page,
-flattens the successful pages, and renders them in the normal grid. For a virtual result set it
-primarily establishes the first records and `totalRecordCount`; the visible-window path then loads
-non-contiguous pages directly.
+The core always owns page-zero scheduling. For a small result set, each `LoadNext` advances from the
+settled page metadata and the Solid facade flattens successful cached pages into the normal grid. For
+a virtual result set, `WindowChanged` lets the core schedule non-contiguous pages directly.
 
-Every successful infinite-query page is copied into a per-page TanStack Query entry keyed by the
-complete browse identity plus `["page", startIndex]`. `successfulPageMap` merges those infinite-query
-pages with route-local virtual pages by server `startIndex`. This gives item rendering one
-random-access page map regardless of which path loaded a page and lets cached route re-entry reuse
-successful page data.
+Every successful page is stored in a per-page TanStack Query entry keyed by the complete browse
+identity plus `["page", startIndex]`. Item rendering reads one random-access page map regardless of
+which core input demanded a page, and cached route re-entry can settle a new `LoadPage` from existing
+data without repeating transport.
 
 ### Visible row to server page
 
-The virtualizer reports visible and overscanned row indexes to the parent route. The display-index
-translation and page grouping live in the pure, framework-independent utility
-`src/utils/libraryBrowsePageSelection.ts`, which has no Solid, TanStack, Effect, or Tauri
-dependency:
-
-- `libraryBrowsePageLocationForDisplayIndex({ displayIndex, totalRecordCount, pageSize, reverse })`
-  maps one display index to its server page start and offset within that page, returning `null`
-  for invalid or out-of-range input;
-- `libraryBrowsePageStartsForRows({ rowIndexes, columnCount, totalRecordCount, pageSize, reverse })`
-  expands virtual row indexes into the deduplicated required page starts in row/display encounter
-  order and appends one direction-aware speculative look-ahead page last.
-
-The planner expands each row into its column display indexes:
+The virtualizer reports visible and overscanned row indexes to the Solid facade. The facade expands
+each row into display indexes because column count is DOM geometry and remains UI-owned:
 
 ```text
 display index = virtual row index × column count + column index
 ```
 
-Normal display order uses the display index as the server index. Reverse display order maps across
-the complete result set:
-
-```text
-server index = total record count - 1 - display index
-```
-
-The planner then groups server indexes into 24-record page starts:
+The facade sends those indexes through `WindowChanged`. The core groups valid display indexes into
+24-record page starts:
 
 ```text
 page start =
-  floor(server index / LIBRARY_BROWSE_PAGE_SIZE)
+  floor(display index / LIBRARY_BROWSE_PAGE_SIZE)
   × LIBRARY_BROWSE_PAGE_SIZE
 ```
 
-This global index translation lets reverse order jump directly to a page near the end of the server
-result without downloading every preceding page. Because page boundaries and grid rows need not
-align, one virtual row can require records from two server pages.
+Because sorting direction is sent to the server, display indexes and server result indexes have the
+same order for both ascending and descending requests. The core does not mirror indexes or reverse
+loaded page fragments. Page boundaries and grid rows still need not align, so one virtual row can
+require records from two server pages.
 
-The page window also includes one speculative look-ahead page when one exists. Before requesting
-the network, `fetchVirtualPage` checks:
+The page window also includes one speculative look-ahead page when one exists. The core permits at
+most two pending loads across bootstrap, visible, prefetch, sequential, and retry work. Before
+emitting a `LoadPage`, it checks:
 
-1. pages already loaded by the initial infinite query;
-2. pages already installed in the route-local virtual page map;
-3. page requests already in flight;
-4. the TanStack Query cache, including cached route re-entry data.
+1. page metadata already settled for the active generation;
+2. page requests already in flight;
+3. the bounded request concurrency budget.
 
-The look-ahead follows the display order toward the visual end of the result:
+The Solid facade then checks the TanStack Query cache, including cached route re-entry data, before
+executing a network request. Cache hits are returned to the core through the same `PageSettled`
+input as transport results.
 
-```text
-normal order: max(required page starts) + LIBRARY_BROWSE_PAGE_SIZE
-reverse order: min(required page starts) - LIBRARY_BROWSE_PAGE_SIZE
-```
+The look-ahead is the next higher server page because the server already applies the requested sort
+direction. The core omits it when it falls outside the valid result range or duplicates a required
+page, and emits visible-page loads before the speculative load. This is a fixed display-order
+policy, not dynamic prediction of the user's current scroll direction.
 
-Normal order prefetches toward higher server page starts and reverse order prefetches toward lower
-ones. `libraryBrowsePageStartsForRows` omits the speculative page when it falls outside the valid
-server page range or duplicates a required page, and it always appends it after every required
-page, so visible pages stay prioritized ahead of the prefetch. This is a fixed display-order policy,
-not dynamic prediction of the user's current scroll direction.
+Every `LoadPage` has a token tied to the active generation. `PageSettled` must echo that token, so a
+request from an old library, session, sort, or filter cannot populate the new result set. The core
+also gates nonzero pages until page zero settles successfully. This prevents preserved or newly
+measured scroll geometry from starting later-page work before the total result shape is known.
 
-Before a network request starts, the route captures the current browse-query signature. Completion
-installs the page only when that signature still matches, so a request from an old library, session,
-sort, or filter cannot populate the new result set. Virtual page fetching is also gated until the
-current infinite-query first page is a successful page whose `startIndex` is zero. This ensures page
-0 settles before preserved or newly measured scroll geometry can request later pages.
+A successful settlement is accepted only when its start and limit match the pending request, its
+item count and `hasMore` agree with the total count, and every nonzero page reports the same total as
+page zero. Malformed metadata becomes a non-retryable core failure instead of corrupting slot
+addressing.
 
 Missing items render `LibraryBrowseSkeletonCard` in their stable grid slot. Successful pages replace
 those placeholders without changing the virtual canvas geometry.
 
-When filters, sorting, library, or connection identity changes, the browse query signature changes.
-The route clears its virtual-page state and scrolls the shared viewport to the top so page data from
-the previous result set cannot be displayed at the new virtual position.
+When filters, sorting, library, or connection identity changes, the core emits `CancelLoad`,
+`ReleasePages`, and `ResetViewport` as needed. The Solid facade executes them by cancelling adapter
+work where supported, releasing pages from the active slot map, and scrolling the shared viewport to
+the top. TanStack cache retention remains a UI policy, so released pages may still satisfy a later
+route entry without transport.
+
+### Server-side sorting
+
+`VideoLibraryPageRequest` carries `sortDirection: "asc" | "desc"` independently from the selected
+sort key. Jellyfin maps this to its generated `SortOrder::Ascending` or `SortOrder::Descending`; Emby
+serializes `SortOrder=Ascending` or `SortOrder=Descending`. Start/limit normalization remains
+unchanged.
+
+This is required for globally correct pagination. Reversing only the pages currently loaded can
+neither produce the global descending first page nor keep already rendered items stable as later
+pages arrive. No UI adapter may use `toReversed()` or reverse page fragments to emulate descending
+server order.
 
 ### Small-result sentinel paging
 
 The bottom sentinel uses `IntersectionObserver` with a 400px vertical root margin. When it approaches
-the viewport, the route calls `fetchNextPage({ cancelRefetch: false })` only when:
+the viewport, the route sends `LoadNext` only when:
 
 - virtual mode is inactive;
-- the infinite query has another page;
-- no query fetch is active;
-- no later infinite-query page has failed.
+- the settled page metadata says another page exists;
+- no sequential page request is active;
+- no later page has failed.
 
 While the next page is loading, the normal grid appends skeleton cards. The sentinel remains in the
 virtual route markup, but its effect explicitly stops when virtual mode is active.
 
 ### Failure and retry paths
 
-A failed first page renders the route status panel and cannot start virtual paging. Later failures
-are handled according to the active continuation strategy:
+A failed first page renders the route status panel and cannot start later paging. Later failures are
+handled according to the active continuation strategy:
 
-- for a small result set, retry removes the failed page and matching page parameter from the
-  infinite-query cache, then calls `fetchNextPage()` again;
-- for a virtual result set, retry removes failed route-local page entries and requests the pages
-  required by the current virtual window again.
+- for a small result set, `Retry` reschedules the failed sequential page when it remains demanded;
+- for a virtual result set, `Retry` asks the core to schedule failed pages that are still demanded by
+  the active window.
 
 Failed pages stay as typed `Exit.Failure` values until the route translates their causes into the
 load-more error panel. They are not treated as successful empty pages.
 
 ## Regression coverage
 
-The focused tests protect different boundaries:
+The migration uses the following test matrix. Keep these lanes separate so a serializer test does
+not stand in for a rendered or native regression; rows without a permanent filename are required
+standalone coverage for that boundary rather than a claim that another lane already covers it:
 
-- `tests/library-browse-layout.test.ts` checks adaptive overscan and its safe bounds.
-- `tests/library-browse-page-selection.test.ts` checks the pure display-to-page locations, the
-  encounter-order page planner, and the direction-aware look-ahead boundaries.
-- `tests/app-shell.test.tsx` makes several large forward and backward jumps, observes the canvas for
-  empty child windows, samples immediately, after the mutation microtask, and on the first animation
-  frame, asserts that the persistent virtual root has no entrance-animation class, checks end-of-list
-  paging, and covers cached route re-entry.
-- `e2e/specs/library-virtual-scroll.e2e.ts` runs in the controlled native Tauri WebView, performs the
-  same class of jumps on the real shared viewport, observes child-list mutations, and checks at the
-  microtask, first-frame, and settled-frame boundaries that a rendered row intersects the viewport.
+| Boundary       | Required contracts                                                                                                               | Test lane                                   |
+| -------------- | -------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------- |
+| Pure core      | Page-zero gating; visible before prefetch; partial final page; stale token/generation; concurrency; release/retention; retry     | `jellypilot-core` Rust unit tests           |
+| WASM DTO       | Serialization; handle lifetime; repeated dispatch; malformed JavaScript input                                                    | `jellypilot-core-wasm` boundary tests       |
+| Solid adapter  | Lazy shared initialization; recoverable init failure; cache hit; command execution/cancellation; `PageSettled` token correlation | Focused `libraryBrowseWasm`/facade tests    |
+| Layout         | Adaptive overscan and safe geometry fallbacks                                                                                    | `tests/library-browse-layout.test.ts`       |
+| Provider wire  | Independent sort key and explicit direction for both Jellyfin and Emby                                                           | Focused Rust provider request tests         |
+| Rendered route | Small `LoadNext`; large forward/backward jumps; no empty frame; no virtual-root entrance animation; retry; cache re-entry        | Focused cases in `tests/app-shell.test.tsx` |
+| Native WebView | Real viewport jumps and row intersection at microtask, first-frame, and settled-frame boundaries                                 | `e2e/specs/library-virtual-scroll.e2e.ts`   |
 
-When changing this code, run at least:
+Use the narrowest rows relevant to the change, then the aggregate wrappers required by the
+cross-crate contract. Do not invoke Cargo directly; use repository Bun scripts:
 
 ```bash
-bun run test -- tests/library-browse-layout.test.ts tests/library-browse-page-selection.test.ts tests/app-shell.test.tsx
+bun run test -- tests/library-browse-layout.test.ts tests/app-shell.test.tsx
+bun run rust:test
+bun run check
 bun run typecheck:e2e
 bun run build:e2e
 bun run test:e2e --spec e2e/specs/library-virtual-scroll.e2e.ts
@@ -310,7 +371,12 @@ Before merging a virtual-scroll change, confirm:
 - grid style changes are reflected in the shared row-height math;
 - cached route re-entry still attaches the scroll observer;
 - virtual paging does not start until a successful page 0 has settled;
-- infinite-query pages continue to seed the per-page cache;
-- reverse sorting requests the correct server page;
-- normal and reverse look-ahead are tested as display-order behavior;
+- small-result sentinel paging remains core-scheduled through `LoadNext`;
+- core request tokens reject stale generation completions;
+- visible page commands precede the bounded speculative page;
+- released page metadata and UI payloads stay synchronized;
+- WASM initialization remains lazy, shared, and retryable;
+- generated WASM output remains ignored and reproducible;
+- both providers receive the requested server sort direction;
+- descending display does not reverse individual loaded pages;
 - native E2E passes in addition to DOM and helper tests.

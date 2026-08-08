@@ -1,0 +1,12 @@
+[package]
+name = "jellypilot-core"
+description = "Framework-independent state machines for JellyPilot"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+version.workspace = true
+
+[lints]
+workspace = true
+

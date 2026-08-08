@@ -210,7 +210,7 @@ test('fetchVideoLibraryPage does not preflight connection state per page', async
   });
 
   const exit = await Effect.runPromiseExit(
-    fetchVideoLibraryPage('movies', 'movies', 0, 'title', 'all', false),
+    fetchVideoLibraryPage('movies', 'movies', 0, 24, 'title', 'all', false, 'asc'),
   );
 
   expect(Exit.isSuccess(exit)).toBe(true);
@@ -222,6 +222,7 @@ test('fetchVideoLibraryPage does not preflight connection state per page', async
     limit: 24,
     playedFilter: 'all',
     sort: 'title',
+    sortDirection: 'asc',
     startIndex: 0,
   });
 });

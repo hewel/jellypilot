@@ -19,8 +19,10 @@ test('release workflow builds a source-based Arch package with desktop integrati
   expect(pkgbuild).toContain('"git+https://github.com/hewel/jellypilot.git#tag=v$pkgver"');
   expect(pkgbuild).toContain("'top.pigfun.jellypilot.desktop'");
   expect(pkgbuild).toContain("'mpv'");
+  expect(pkgbuild).toContain("'rust-wasm'");
+  expect(pkgbuild).toContain("'wasm-pack=0.15.0'");
   expect(pkgbuild).toContain('bun tauri build --no-bundle --ci');
-  expect(pkgbuild).toContain('install -Dm755 "src-tauri/target/release/jellypilot"');
+  expect(pkgbuild).toContain('install -Dm755 "target/release/jellypilot"');
   expect(pkgbuild).toContain('install -Dm644 "$srcdir/top.pigfun.jellypilot.desktop"');
 
   expect(desktopEntry).toContain('Name=JellyPilot');
@@ -29,6 +31,8 @@ test('release workflow builds a source-based Arch package with desktop integrati
   expect(desktopEntry).toContain('Categories=AudioVideo;Player;');
 
   expect(releaseWorkflow).toContain('arch-package:');
+  expect(releaseWorkflow).toContain('tool: wasm-pack@0.15.0');
+  expect(releaseWorkflow).toContain('targets: wasm32-unknown-unknown');
   expect(releaseWorkflow).toContain('makepkg --syncdeps --noconfirm');
   expect(releaseWorkflow).toContain('needs: [changelog, build, arch-package]');
 });

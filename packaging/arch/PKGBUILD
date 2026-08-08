@@ -19,6 +19,8 @@ makedepends=(
   'bun'
   'git'
   'rust'
+  'rust-wasm'
+  'wasm-pack=0.15.0'
 )
 source=(
   "git+https://github.com/hewel/jellypilot.git#tag=v$pkgver"
@@ -39,7 +41,7 @@ build() {
 package() {
   cd "$srcdir/$pkgname"
 
-  install -Dm755 "src-tauri/target/release/jellypilot" "$pkgdir/usr/bin/jellypilot"
+  install -Dm755 "target/release/jellypilot" "$pkgdir/usr/bin/jellypilot"
   install -Dm644 "$srcdir/top.pigfun.jellypilot.desktop" \
     "$pkgdir/usr/share/applications/top.pigfun.jellypilot.desktop"
   install -Dm644 "src-tauri/icons/128x128.png" \

@@ -124,7 +124,7 @@ describe('library virtual scrolling', () => {
         value: [...values.library_video_shortcuts],
       });
       controller.installFixture('library_browse_video', {
-        kind: 'return',
+        kind: 'returnLibraryPage',
         delayMs: 100,
         value: values.library_browse_video,
       });
@@ -237,6 +237,7 @@ describe('library virtual scrolling', () => {
         timeoutMsg: 'The virtual grid did not request multiple library pages.',
       },
     );
+    await $('aria/Open Virtual E2E Movie 1').waitForDisplayed({ timeout: 30_000 });
     const maxConcurrentBrowseCalls = await browser.execute(
       () => window.__JELLYPILOT_E2E__?.maxConcurrentCalls('library_browse_video') ?? 0,
     );

@@ -156,7 +156,7 @@ No new Wayfinder ticket is required. Persistence and first-paint coordination is
 - [`src-tauri/tauri.panda-review.conf.json`](../../src-tauri/tauri.panda-review.conf.json)
 - [`src-tauri/tauri.webdriver.conf.json`](../../src-tauri/tauri.webdriver.conf.json)
 - [`src-tauri/Cargo.toml`](../../src-tauri/Cargo.toml)
-- [`src-tauri/Cargo.lock`](../../src-tauri/Cargo.lock)
+- [`Cargo.lock`](../../Cargo.lock)
 - [`src-tauri/src/lib.rs`](../../src-tauri/src/lib.rs)
 - [`src-tauri/capabilities/default.json`](../../src-tauri/capabilities/default.json)
 - [`docs/agents/e2e.md`](../agents/e2e.md)

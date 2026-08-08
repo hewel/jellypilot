@@ -67,6 +67,9 @@ interface FixtureDelay {
 export type FixtureOutcome<C extends FixtureCommand = FixtureCommand> = FixtureDelay &
   (
     | { readonly kind: 'return'; readonly value: RawCommandMap[C] }
+    | (C extends 'library_browse_video'
+        ? { readonly kind: 'returnLibraryPage'; readonly value: VideoLibraryPage }
+        : never)
     | { readonly kind: 'error'; readonly error: CommandError }
     | { readonly kind: 'real' }
   );
@@ -116,6 +119,19 @@ function recordCall(command: FixtureCommand, args: InvokeArgs): void {
   const commandCalls = calls.get(command) ?? [];
   commandCalls.push(args);
   calls.set(command, commandCalls);
+}
+
+function requestedLibraryPageStartIndex(args: InvokeArgs): number {
+  const request = args?.request;
+  if (
+    !request ||
+    typeof request !== 'object' ||
+    !('startIndex' in request) ||
+    typeof request.startIndex !== 'number'
+  ) {
+    throw new Error('Missing startIndex for request-correlated library page fixture.');
+  }
+  return request.startIndex;
 }
 
 export function installStartupFixtures(): void {
@@ -168,6 +184,14 @@ export function createControlledInvoke(realInvoke: RealInvoke): RealInvoke {
       }
 
       if (outcome.kind === 'return') return outcome.value as T;
+      if (outcome.kind === 'returnLibraryPage') {
+        const startIndex = requestedLibraryPageStartIndex(args);
+        return {
+          ...outcome.value,
+          startIndex,
+          hasMore: startIndex + outcome.value.items.length < outcome.value.totalRecordCount,
+        } as T;
+      }
       if (outcome.kind === 'error') throw outcome.error;
       if (
         (fixtureCommand !== 'app_local_services' && fixtureCommand !== 'config_default') ||

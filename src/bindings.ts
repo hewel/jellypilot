@@ -453,6 +453,7 @@ export type VideoLibraryPageRequest = {
 	startIndex: number,
 	limit: number,
 	sort: VideoLibrarySort,
+	sortDirection: VideoLibrarySortDirection,
 	playedFilter: VideoLibraryPlayedFilter,
 	favoritesOnly: boolean,
 };
@@ -483,6 +484,9 @@ export type VideoLibraryShortcut = {
 
 /**  Supported Library Browser sort options. */
 export type VideoLibrarySort = "title" | "recentlyAdded" | "releaseDate";
+
+/**  Supported Library Browser sort directions. */
+export type VideoLibrarySortDirection = "asc" | "desc";
 
 /**  Selectable audio or subtitle stream exposed before Library playback starts. */
 export type VideoPlaybackStreamOption = {
