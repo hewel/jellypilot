@@ -18,7 +18,7 @@ test('release workflow builds a source-based Arch package with desktop integrati
   expect(pkgbuild).toContain("options=('!lto')");
   expect(pkgbuild).toContain('"git+https://github.com/hewel/jellypilot.git#tag=v$pkgver"');
   expect(pkgbuild).toContain("'top.pigfun.jellypilot.desktop'");
-  expect(pkgbuild).toContain("'mpv'");
+  expect(pkgbuild).toContain("optdepends=('mpv: optional external playback engine')");
   expect(pkgbuild).toContain("'rust-wasm'");
   expect(pkgbuild).toContain("'wasm-pack=0.15.0'");
   expect(pkgbuild).toContain('bun tauri build --no-bundle --ci');

@@ -13,6 +13,7 @@ import { commands, events } from '../src/bindings';
 import type {
   AppConfig,
   CommandError,
+  EmbeddedPlayerState,
   NowPlayingState,
   VideoHome,
   VideoItemDetail,
@@ -147,6 +148,28 @@ const nowPlaying: NowPlayingState = {
   },
   previousUnavailableReason: 'noCurrentItem',
   status: 'playing',
+};
+
+const idleEmbeddedPlayer: EmbeddedPlayerState = {
+  canPlayInMpv: false,
+  desiredMuted: false,
+  desiredPaused: true,
+  desiredSeekPositionSeconds: null,
+  desiredVolume: 100,
+  durationSeconds: null,
+  dynamicRange: null,
+  failure: null,
+  generation: null,
+  itemId: null,
+  phase: 'idle',
+  playlistUrl: null,
+  positionSeconds: 0,
+  revision: 0,
+  sessionId: null,
+  subtitle: null,
+  timelineOffsetSeconds: 0,
+  title: null,
+  videoCodec: null,
 };
 
 const nowPlayingTrackList = JSON.stringify([
@@ -746,11 +769,20 @@ function mockShellCommands(state = connectedState) {
     data: nowPlaying,
     status: 'ok',
   });
+  rstest.spyOn(commands, 'embeddedPlayerGetState').mockResolvedValue({
+    data: idleEmbeddedPlayer,
+    status: 'ok',
+  });
+  rstest.spyOn(commands, 'embeddedPlayerRegisterCapabilities').mockResolvedValue({
+    data: idleEmbeddedPlayer,
+    status: 'ok',
+  });
   rstest.spyOn(commands, 'mpvGetProperty').mockResolvedValue({
     data: nowPlayingTrackList,
     status: 'ok',
   });
   rstest.spyOn(events.nowPlayingChanged, 'listen').mockResolvedValue(() => {});
+  rstest.spyOn(events.embeddedPlayerChanged, 'listen').mockResolvedValue(() => {});
 }
 
 function appScrollViewport(): HTMLElement {
@@ -850,6 +882,49 @@ afterEach(() => {
   localStorage.clear();
   sessionStorage.clear();
   window.__TEST_TAURI_STORE__.reset();
+});
+
+test('embedded player closes only after typed stop returns terminal state', async () => {
+  mockShellCommands();
+  const activePlayer: EmbeddedPlayerState = {
+    ...idleEmbeddedPlayer,
+    canPlayInMpv: true,
+    durationSeconds: 300,
+    generation: 3,
+    itemId: 'movie-1',
+    phase: 'preparing',
+    positionSeconds: 45,
+    revision: 1,
+    sessionId: 'embedded-test-session',
+    title: 'Embedded Test Movie',
+  };
+  const stoppedPlayer: EmbeddedPlayerState = {
+    ...activePlayer,
+    phase: 'stopped',
+    revision: 2,
+  };
+  rstest.spyOn(commands, 'embeddedPlayerGetState').mockResolvedValue({
+    data: activePlayer,
+    status: 'ok',
+  });
+  rstest.spyOn(commands, 'embeddedPlayerRegisterCapabilities').mockResolvedValue({
+    data: activePlayer,
+    status: 'ok',
+  });
+  const control = rstest.spyOn(commands, 'embeddedPlayerControl').mockResolvedValue({
+    data: stoppedPlayer,
+    status: 'ok',
+  });
+  const cleanup = renderShell('/player');
+
+  await screen.findByRole('heading', { name: 'Embedded Test Movie' });
+  fireEvent.click(screen.getByRole('button', { name: 'Stop playback and close player' }));
+
+  await waitFor(() => expect(control).toHaveBeenCalledWith({ kind: 'stop' }));
+  await screen.findByRole('navigation', { name: 'Sidebar' });
+  expect(screen.queryByRole('heading', { name: 'Embedded Test Movie' })).toBeNull();
+
+  cleanup();
 });
 
 test('authenticated shell renders the persistent Sidebar and drops floating controls', async () => {
@@ -2123,6 +2198,22 @@ test('library item detail renders resume-primary movie metadata', async () => {
       itemId: 'detail-movie',
       mode: 'start',
       startPositionSeconds: 0,
+      subtitleStreamIndex: null,
+    }),
+  );
+  fireEvent.click(screen.getByRole('button', { name: 'More actions' }));
+  const playEmbedded = await screen.findByRole('menuitem', {
+    name: 'Play in embedded player',
+  });
+  fireEvent.pointerDown(playEmbedded);
+  fireEvent.click(playEmbedded);
+  await waitFor(() =>
+    expect(playCommand).toHaveBeenLastCalledWith({
+      audioStreamIndex: null,
+      engineOverride: 'embeddedWeb',
+      itemId: 'detail-movie',
+      mode: 'resume',
+      startPositionSeconds: 120,
       subtitleStreamIndex: null,
     }),
   );

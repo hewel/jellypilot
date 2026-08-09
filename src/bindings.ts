@@ -59,6 +59,16 @@ export const commands = {
 	librarySimilarVideo: (itemId: string) => typedError<VideoLibraryItem[], CommandError>(__TAURI_INVOKE("library_similar_video", { itemId })),
 	/**  Start explicit Library Browser playback through the active Jellyfin session. */
 	libraryPlay: (request: VideoLibraryPlayRequest) => typedError<null, CommandError>(__TAURI_INVOKE("library_play", { request })),
+	/**  Get the current embedded-player read model. */
+	embeddedPlayerGetState: () => typedError<EmbeddedPlayerState, CommandError>(__TAURI_INVOKE("embedded_player_get_state")),
+	/**  Register decode capabilities detected in the current system WebView. */
+	embeddedPlayerRegisterCapabilities: (capabilities: WebPlaybackCapabilities) => typedError<EmbeddedPlayerState, CommandError>(__TAURI_INVOKE("embedded_player_register_capabilities", { capabilities })),
+	/**  Apply a generic embedded-player control command. */
+	embeddedPlayerControl: (command: PlaybackControlCommand) => typedError<EmbeddedPlayerState, CommandError>(__TAURI_INVOKE("embedded_player_control", { command })),
+	/**  Apply one session-scoped observation from the HTML media element. */
+	embeddedPlayerObserve: (observation: EmbeddedPlayerObservation) => typedError<EmbeddedPlayerState, CommandError>(__TAURI_INVOKE("embedded_player_observe", { observation })),
+	/**  Explicitly transfer a terminal embedded session to external MPV. */
+	embeddedPlayerPlayInMpv: () => typedError<null, CommandError>(__TAURI_INVOKE("embedded_player_play_in_mpv")),
 	/**  Mutate Jellyfin user data for a Library Browser item. */
 	libraryUpdateUserData: (request: VideoUserDataUpdateRequest) => typedError<VideoUserDataUpdate, CommandError>(__TAURI_INVOKE("library_update_user_data", { request })),
 	/**  Connect to a Jellyfin server. */
@@ -161,6 +171,7 @@ export const commands = {
 /** Events */
 export const events = {
 	appNotification: makeEvent<AppNotification>("app-notification"),
+	embeddedPlayerChanged: makeEvent<EmbeddedPlayerChanged>("embedded-player-changed"),
 	nowPlayingChanged: makeEvent<NowPlayingChanged>("now-playing-changed"),
 };
 
@@ -170,6 +181,8 @@ export type AdjacentEpisodeUnavailableReason = "noSession" | "noCurrentItem" | "
 
 /**  Application configuration. */
 export type AppConfig = {
+	/**  Playback engine used when a launch request does not provide an override. */
+	playbackEngine?: PlaybackEngineKind,
 	/**  Custom MPV executable path (None = auto-detect). */
 	mpvPath?: string | null,
 	/**  Additional MPV command-line arguments. */
@@ -245,6 +258,61 @@ export type Credentials = {
 	password: string,
 };
 
+/**  Embedded-player state change pushed to the Solid owner. */
+export type EmbeddedPlayerChanged = {
+	state: EmbeddedPlayerState,
+};
+
+/**  User-facing embedded failure and explicit fallback availability. */
+export type EmbeddedPlayerFailure = {
+	message: string,
+	retryable: boolean,
+	canPlayInMpv: boolean,
+};
+
+/**  Session-scoped browser observation with monotonic ordering. */
+export type EmbeddedPlayerObservation = {
+	sessionId: string,
+	generation: number,
+	sequence: number,
+	kind: EmbeddedPlayerObservationKind,
+	mediaTimeSeconds: number | null,
+	durationSeconds: number | null,
+	seekableStartSeconds: number | null,
+	seekableEndSeconds: number | null,
+	muted: boolean,
+	volume: number,
+};
+
+/**  Media event observed by the HTML video element. */
+export type EmbeddedPlayerObservationKind = { kind: "ready" } | { kind: "playing" } | { kind: "paused" } | { kind: "buffering" } | { kind: "ended" } | { kind: "failed"; message: string };
+
+/**  Browser-visible phase of the current embedded session. */
+export type EmbeddedPlayerPhase = "idle" | "preparing" | "loading" | "playing" | "paused" | "buffering" | "stopping" | "stopped" | "ended" | "failed";
+
+/**  Complete browser read model for one embedded playback generation. */
+export type EmbeddedPlayerState = {
+	sessionId: string | null,
+	revision: number,
+	generation: number | null,
+	phase: EmbeddedPlayerPhase,
+	itemId: string | null,
+	title: string | null,
+	subtitle: string | null,
+	playlistUrl: string | null,
+	timelineOffsetSeconds: number | null,
+	positionSeconds: number | null,
+	durationSeconds: number | null,
+	desiredPaused: boolean,
+	desiredMuted: boolean,
+	desiredVolume: number,
+	desiredSeekPositionSeconds: number | null,
+	videoCodec: string | null,
+	dynamicRange: string | null,
+	canPlayInMpv: boolean,
+	failure: EmbeddedPlayerFailure | null,
+};
+
 /**
  *  Point-in-time Library Image cache status reported to the frontend.
  * 
@@ -299,6 +367,12 @@ export type NowPlayingState = {
 
 /**  User-facing Now Playing status. */
 export type NowPlayingStatus = "offline" | "idle" | "playing" | "paused" | "unknown";
+
+/**  Control command shared by route controls, remote-cast commands, and fallback UI. */
+export type PlaybackControlCommand = { kind: "pause" } | { kind: "resume" } | { kind: "seek"; position_seconds: number | null } | { kind: "setVolume"; volume: number } | { kind: "toggleMute" } | { kind: "stop" } | { kind: "restart" } | { kind: "replay" };
+
+/**  Playback implementation selected for new sessions. */
+export type PlaybackEngineKind = "embeddedWeb" | "externalMpv";
 
 /**  Player transport state returned to frontend. */
 export type PlayerState = {
@@ -465,6 +539,8 @@ export type VideoLibraryPlayMode = "resume" | "start" | "show";
 export type VideoLibraryPlayRequest = {
 	itemId: string,
 	mode: VideoLibraryPlayMode,
+	/**  Optional one-shot engine choice. The configured engine is used when absent. */
+	engineOverride?: PlaybackEngineKind | null,
 	startPositionSeconds: number | null,
 	audioStreamIndex: number | null,
 	subtitleStreamIndex: number | null,
@@ -571,6 +647,15 @@ export type VideoUserDataUpdate = {
 export type VideoUserDataUpdateRequest = {
 	itemId: string,
 	action: VideoUserDataAction,
+};
+
+/**  Capabilities detected in the current system WebView. */
+export type WebPlaybackCapabilities = {
+	fragmentedMp4Hls: boolean,
+	h264Sdr: boolean,
+	hevcMain10Hdr: boolean,
+	aac: boolean,
+	maxAudioChannels: number,
 };
 
 /* Tauri Specta runtime */

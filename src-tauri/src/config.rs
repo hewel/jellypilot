@@ -12,10 +12,22 @@ pub enum IntroSkipperMode {
   Off,
 }
 
+/// Playback implementation selected for new sessions.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub enum PlaybackEngineKind {
+  EmbeddedWeb,
+  ExternalMpv,
+}
+
 /// Application configuration.
 #[derive(Debug, Clone, Serialize, Type)]
 #[serde(rename_all = "camelCase")]
 pub struct AppConfig {
+  /// Playback engine used when a launch request does not provide an override.
+  #[serde(default = "default_playback_engine")]
+  pub playback_engine: PlaybackEngineKind,
+
   /// Custom MPV executable path (None = auto-detect).
   #[serde(default)]
   pub mpv_path: Option<String>,
@@ -64,6 +76,8 @@ pub struct AppConfig {
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct AppConfigWire {
+  #[serde(default = "default_playback_engine")]
+  playback_engine: PlaybackEngineKind,
   #[serde(default)]
   mpv_path: Option<String>,
   #[serde(default)]
@@ -105,6 +119,7 @@ impl<'de> Deserialize<'de> for AppConfig {
         });
 
     Ok(Self {
+      playback_engine: wire.playback_engine,
       mpv_path: wire.mpv_path,
       mpv_args: wire.mpv_args,
       device_name: wire.device_name,
@@ -122,6 +137,10 @@ impl<'de> Deserialize<'de> for AppConfig {
 
 fn default_device_name() -> String {
   "JellyPilot".to_string()
+}
+
+fn default_playback_engine() -> PlaybackEngineKind {
+  PlaybackEngineKind::EmbeddedWeb
 }
 
 fn default_progress_interval() -> u32 {
@@ -151,6 +170,7 @@ fn default_image_disk_cache_enabled() -> bool {
 impl Default for AppConfig {
   fn default() -> Self {
     Self {
+      playback_engine: default_playback_engine(),
       mpv_path: None,
       mpv_args: Vec::new(),
       device_name: default_device_name(),
@@ -221,8 +241,22 @@ mod tests {
     .expect("older config should deserialize");
 
     assert_eq!(config.intro_skipper_mode, IntroSkipperMode::Automatic);
+    assert_eq!(config.playback_engine, PlaybackEngineKind::EmbeddedWeb);
     assert!(config.preferred_subtitle_languages.is_empty());
     assert!(config.image_disk_cache_enabled);
+  }
+
+  #[test]
+  fn external_mpv_engine_round_trips_through_saved_config() {
+    let config = AppConfig {
+      playback_engine: PlaybackEngineKind::ExternalMpv,
+      ..AppConfig::default()
+    };
+
+    let json = serde_json::to_string(&config).expect("config should serialize");
+    let restored: AppConfig = serde_json::from_str(&json).expect("config should deserialize");
+
+    assert_eq!(restored.playback_engine, PlaybackEngineKind::ExternalMpv);
   }
 
   #[test]

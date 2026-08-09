@@ -13,6 +13,7 @@ import { Route as IndexRouteImport } from './routes/index'
 import { Route as AuthenticatedRouteImport } from './routes/_authenticated'
 import { Route as LoginRouteImport } from './routes/login'
 import { Route as AuthenticatedLibraryRouteImport } from './routes/_authenticated/library'
+import { Route as AuthenticatedPlayerRouteImport } from './routes/_authenticated/player'
 import { Route as AuthenticatedLibraryIndexRouteImport } from './routes/_authenticated/library/index'
 import { Route as AuthenticatedLibrarySearchRouteImport } from './routes/_authenticated/library/search'
 import { Route as AuthenticatedLibraryCollectionTypeLibraryIdRouteImport } from './routes/_authenticated/library/$collectionType/$libraryId'
@@ -36,6 +37,11 @@ const LoginRoute = LoginRouteImport.update({
 const AuthenticatedLibraryRoute = AuthenticatedLibraryRouteImport.update({
   id: '/library',
   path: '/library',
+  getParentRoute: () => AuthenticatedRoute,
+} as any)
+const AuthenticatedPlayerRoute = AuthenticatedPlayerRouteImport.update({
+  id: '/player',
+  path: '/player',
   getParentRoute: () => AuthenticatedRoute,
 } as any)
 const AuthenticatedLibraryIndexRoute =
@@ -73,6 +79,7 @@ export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
   '/login': typeof LoginRoute
   '/library': typeof AuthenticatedLibraryRouteWithChildren
+  '/player': typeof AuthenticatedPlayerRoute
   '/library/search': typeof AuthenticatedLibrarySearchRoute
   '/library/': typeof AuthenticatedLibraryIndexRoute
   '/library/$collectionType/$libraryId': typeof AuthenticatedLibraryCollectionTypeLibraryIdRoute
@@ -82,6 +89,7 @@ export interface FileRoutesByFullPath {
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
   '/login': typeof LoginRoute
+  '/player': typeof AuthenticatedPlayerRoute
   '/library/search': typeof AuthenticatedLibrarySearchRoute
   '/library': typeof AuthenticatedLibraryIndexRoute
   '/library/$collectionType/$libraryId': typeof AuthenticatedLibraryCollectionTypeLibraryIdRoute
@@ -94,6 +102,7 @@ export interface FileRoutesById {
   '/_authenticated': typeof AuthenticatedRouteWithChildren
   '/login': typeof LoginRoute
   '/_authenticated/library': typeof AuthenticatedLibraryRouteWithChildren
+  '/_authenticated/player': typeof AuthenticatedPlayerRoute
   '/_authenticated/library/search': typeof AuthenticatedLibrarySearchRoute
   '/_authenticated/library/': typeof AuthenticatedLibraryIndexRoute
   '/_authenticated/library/$collectionType/$libraryId': typeof AuthenticatedLibraryCollectionTypeLibraryIdRoute
@@ -106,6 +115,7 @@ export interface FileRouteTypes {
     | '/'
     | '/login'
     | '/library'
+    | '/player'
     | '/library/search'
     | '/library/'
     | '/library/$collectionType/$libraryId'
@@ -115,6 +125,7 @@ export interface FileRouteTypes {
   to:
     | '/'
     | '/login'
+    | '/player'
     | '/library/search'
     | '/library'
     | '/library/$collectionType/$libraryId'
@@ -126,6 +137,7 @@ export interface FileRouteTypes {
     | '/_authenticated'
     | '/login'
     | '/_authenticated/library'
+    | '/_authenticated/player'
     | '/_authenticated/library/search'
     | '/_authenticated/library/'
     | '/_authenticated/library/$collectionType/$libraryId'
@@ -167,6 +179,13 @@ declare module '@tanstack/solid-router' {
       path: '/library'
       fullPath: '/library'
       preLoaderRoute: typeof AuthenticatedLibraryRouteImport
+      parentRoute: typeof AuthenticatedRoute
+    }
+    '/_authenticated/player': {
+      id: '/_authenticated/player'
+      path: '/player'
+      fullPath: '/player'
+      preLoaderRoute: typeof AuthenticatedPlayerRouteImport
       parentRoute: typeof AuthenticatedRoute
     }
     '/_authenticated/library/': {
@@ -230,10 +249,12 @@ const AuthenticatedLibraryRouteWithChildren =
 
 interface AuthenticatedRouteChildren {
   AuthenticatedLibraryRoute: typeof AuthenticatedLibraryRouteWithChildren
+  AuthenticatedPlayerRoute: typeof AuthenticatedPlayerRoute
 }
 
 const AuthenticatedRouteChildren: AuthenticatedRouteChildren = {
   AuthenticatedLibraryRoute: AuthenticatedLibraryRouteWithChildren,
+  AuthenticatedPlayerRoute: AuthenticatedPlayerRoute,
 }
 
 const AuthenticatedRouteWithChildren = AuthenticatedRoute._addFileChildren(

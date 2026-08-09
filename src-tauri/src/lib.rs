@@ -4,6 +4,7 @@ use std::sync::Arc;
 mod auth_profiles;
 mod command;
 mod config;
+mod embedded_player;
 mod hls_proxy;
 mod image_cache;
 mod image_proxy;
@@ -16,6 +17,7 @@ mod tray;
 
 use command::{ConfigState, JellyfinState, MpvState};
 pub use config::AppConfig;
+use embedded_player::{EmbeddedPlayerManager, EmbeddedPlayerManagerState};
 use hls_proxy::{HlsProxy, HlsProxyState};
 use image_cache::{ImageCache, ImageCacheState};
 use image_proxy::{ImageProxy, ImageProxyState};
@@ -52,6 +54,8 @@ pub fn run() {
   let hls_proxy_for_setup = hls_proxy_state.clone();
   let image_proxy_state = ImageProxyState::new();
   let image_proxy_for_setup = image_proxy_state.clone();
+  let embedded_player_state = EmbeddedPlayerManagerState::default();
+  let embedded_player_for_setup = embedded_player_state.clone();
 
   // Create MPV client state
   let mpv_client = Arc::new(MpvClient::new(None));
@@ -61,16 +65,23 @@ pub fn run() {
   // Create Jellyfin client state
   let jellyfin_client = Arc::new(JellyfinClient::new());
   let jellyfin_for_setup = jellyfin_client.clone();
-  let jellyfin_state = JellyfinState::new(jellyfin_client, mpv_client, hls_proxy_state);
+  let jellyfin_state = JellyfinState::new(
+    jellyfin_client,
+    mpv_client,
+    hls_proxy_state,
+    embedded_player_state.clone(),
+  );
 
   let app_builder = tauri::Builder::default()
     .manage(config_state)
     .manage(image_cache_state)
     .manage(image_proxy_state)
+    .manage(embedded_player_state)
     .manage(mpv_state)
     .manage(jellyfin_state)
     .invoke_handler(builder.invoke_handler())
-    .plugin(tauri_plugin_store::Builder::new().build());
+    .plugin(tauri_plugin_store::Builder::new().build())
+    .plugin(tauri_plugin_shell::init());
 
   #[cfg(feature = "webdriver")]
   let app_builder = app_builder
@@ -85,6 +96,11 @@ pub fn run() {
 
       // Load config from disk (store plugin is now available)
       let loaded_config = command::load_config_from_store(app.handle());
+      embedded_player_for_setup.install(EmbeddedPlayerManager::new(
+        app.handle().clone(),
+        jellyfin_for_setup.clone(),
+        config.clone(),
+      ));
       let image_cache = match app.path().app_cache_dir() {
         Ok(cache_dir) => {
           mpv_for_setup.set_demuxer_cache_dir(cache_dir.clone());

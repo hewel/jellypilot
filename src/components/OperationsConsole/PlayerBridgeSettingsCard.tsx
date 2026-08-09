@@ -5,6 +5,7 @@ import { cx } from '@styled-system/css';
 import { ArrowDown, ArrowUp, ChevronDown, Globe, Plus, Settings, Trash2 } from 'lucide-solid';
 import { For, Show } from 'solid-js';
 
+import type { PlaybackEngineKind } from '../../bindings';
 import { Button, FieldControl, FieldTextarea, JellyPilotSelect, SectionCard } from '../ui';
 import type { JellyPilotSelectItem } from '../ui';
 import * as styles from './PlayerBridgeSettingsCard.styles';
@@ -15,7 +16,9 @@ import type { OperationsConsoleForm } from './types';
 
 interface PlayerBridgeSettingsCardProps {
   form: OperationsConsoleForm;
+  playbackEngine: PlaybackEngineKind;
   subtitleLanguageSelectItems: JellyPilotSelectItem[];
+  onPlaybackEngineChange: (engine: PlaybackEngineKind) => void;
   onSaveTextSetting: (field: 'deviceName' | 'mpvPath' | 'mpvArgs', value: string) => void;
   onDetectMpv: () => void;
   onAddSubtitleLanguageCodes: (codes: string[]) => void;
@@ -24,6 +27,11 @@ interface PlayerBridgeSettingsCardProps {
   onClearSubtitleLanguages: () => void;
   onMoveSubtitleLanguage: (index: number, direction: -1 | 1) => void;
 }
+
+const playbackEngineItems: JellyPilotSelectItem<PlaybackEngineKind>[] = [
+  { label: 'Embedded web player', value: 'embeddedWeb' },
+  { label: 'External MPV', value: 'externalMpv' },
+];
 
 export default function PlayerBridgeSettingsCard(props: PlayerBridgeSettingsCardProps) {
   const [ui, actions] = useOperationsConsoleStore();
@@ -43,6 +51,20 @@ export default function PlayerBridgeSettingsCard(props: PlayerBridgeSettingsCard
       }
     >
       <div class={shared.stack4}>
+        <div class={styles.field}>
+          <JellyPilotSelect
+            label="Default playback engine"
+            items={playbackEngineItems}
+            value={props.playbackEngine}
+            onValueChange={props.onPlaybackEngineChange}
+            class={styles.fullWidth}
+          />
+          <p class={styles.helper}>
+            The embedded player streams through JellyPilot's bundled local FFmpeg transcoder. MPV
+            remains available as an explicit fallback.
+          </p>
+        </div>
+
         <props.form.Field
           name="deviceName"
           validators={{

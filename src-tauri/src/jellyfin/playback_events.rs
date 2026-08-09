@@ -23,12 +23,37 @@ use super::mpv_event::{
   apply_property_update, client_message_direction, is_natural_end, property_report_decision,
   should_report_progress, PropertyReportDecision,
 };
-use super::session::{PlayContext, SessionManager, SessionState};
+use super::session::{PlayContext, PlaybackEngine, PlaybackOwner, SessionManager, SessionState};
 use super::types::*;
 use crate::config::{AppConfig, IntroSkipperMode};
 use crate::hls_proxy::HlsProxyState;
 use crate::jellyfin::client::JellyfinClient;
 use crate::mpv::MpvClient;
+
+#[derive(Default)]
+struct MpvOwnerBinding {
+  owner: Option<PlaybackOwner>,
+  has_bound: bool,
+}
+
+impl MpvOwnerBinding {
+  fn accept(
+    &mut self,
+    event_name: &str,
+    active_owner: Option<PlaybackOwner>,
+  ) -> Option<PlaybackOwner> {
+    let load_boundary = matches!(event_name, "start-file" | "file-loaded");
+    if !self.has_bound {
+      if let Some(owner) = active_owner {
+        self.owner = Some(owner);
+        self.has_bound = true;
+      }
+    } else if load_boundary {
+      self.owner = active_owner;
+    }
+    self.owner.filter(|owner| Some(*owner) == active_owner)
+  }
+}
 
 /// Start the Playback Target MPV event listener for property changes,
 /// end-of-file detection, and keyboard shortcuts. This is the main
@@ -64,6 +89,7 @@ pub(super) fn start_mpv_event_listener(
       hls: hls.clone(),
       app: Some(app_handle.clone()),
       config: config.clone(),
+      embedded_player: None,
     };
 
     loop {
@@ -109,21 +135,34 @@ pub(super) fn start_mpv_event_listener(
       let mut last_progress_report = std::time::Instant::now();
       let progress_report_interval = std::time::Duration::from_secs(5);
 
-      // Process events
-      while let Ok(event) = event_rx.recv().await {
+      // Bind teardown to the MPV generation observed by this receiver. The
+      // owner may change while recv is pending during an engine handoff.
+      let mut binding = MpvOwnerBinding::default();
+      loop {
+        let Ok(event) = event_rx.recv().await else {
+          break;
+        };
+        let active_owner = state.read().active_owner(PlaybackEngine::ExternalMpv);
+        let Some(event_owner) = binding.accept(&event.event, active_owner) else {
+          log::debug!(
+            "Ignoring MPV event {} from a stale playback owner",
+            event.event
+          );
+          continue;
+        };
         match event.event.as_str() {
           "property-change" => {
             let property_name = event.name.as_deref().unwrap_or("");
             // Every observed property feeds the Now Playing transport
             // snapshot, including ones that never trigger a report.
-            update_transport_from_property(&state, &event);
+            update_transport_from_property_if_owned(&state, event_owner, &event);
             let decision = property_report_decision(property_name);
             let should_report = if decision == PropertyReportDecision::Ignore {
               false
             } else {
-              update_state_from_property(&state, &event);
+              update_state_from_property_if_owned(&state, event_owner, &event);
               if property_name == "time-pos" {
-                apply_intro_skipper(&state, &action_tx, &event).await;
+                apply_intro_skipper_if_owned(&state, &action_tx, &event, event_owner).await;
               }
 
               let now = std::time::Instant::now();
@@ -140,25 +179,29 @@ pub(super) fn start_mpv_event_listener(
             };
 
             if should_report {
-              report_progress(&client, &state).await;
+              report_progress_if_owned(&client, &state, event_owner).await;
               SessionManager::emit_now_playing_changed(&app_handle, &state).await;
             }
           }
           "end-file" => {
-            handle_end_file_event(&event, &ctx).await;
+            handle_end_file_event_if_owned(&event, &ctx, event_owner).await;
             SessionManager::emit_now_playing_changed(&app_handle, &state).await;
           }
           "client-message" => {
-            handle_client_message_event(&event, &ctx).await;
+            handle_client_message_event_if_owned(&event, &ctx, event_owner).await;
             SessionManager::emit_now_playing_changed(&app_handle, &state).await;
           }
           "seek" => {
             // A seek invalidates every prefetched lookahead window
             let proxy_session_id = {
               let s = state.read();
-              s.playback
-                .as_ref()
-                .and_then(|playback| playback.hls_proxy_session_id.clone())
+              (s.active_owner(PlaybackEngine::ExternalMpv) == Some(event_owner))
+                .then(|| {
+                  s.playback
+                    .as_ref()
+                    .and_then(|playback| playback.hls_proxy_session_id.clone())
+                })
+                .flatten()
             };
             if let Some(proxy_session_id) = proxy_session_id {
               if let Ok(proxy) = hls.current() {
@@ -174,8 +217,15 @@ pub(super) fn start_mpv_event_listener(
 
       // MPV event receiver closed - this means MPV died or disconnected
       // Clear playback context and notify Jellyfin
-      log::warn!("MPV event receiver closed, clearing playback context...");
-      clear_playback_context(&client, &state, &hls).await;
+      if let Some(owner) = binding.owner {
+        if clear_playback_context_if_owned(&client, &state, &hls, owner).await {
+          log::warn!("MPV event receiver closed, cleared its playback generation");
+        } else {
+          log::info!("MPV event receiver closed after playback ownership changed");
+        }
+      } else {
+        log::info!("MPV event receiver closed without owning an active playback generation");
+      }
       SessionManager::emit_now_playing_changed(&app_handle, &state).await;
       tokio::time::sleep(std::time::Duration::from_secs(2)).await;
     }
@@ -183,6 +233,7 @@ pub(super) fn start_mpv_event_listener(
 }
 
 /// Update the Now Playing transport snapshot from a property-change event.
+#[cfg(test)]
 pub(super) fn update_transport_from_property(
   state: &RwLock<SessionState>,
   event: &crate::mpv::MpvEvent,
@@ -195,7 +246,25 @@ pub(super) fn update_transport_from_property(
   state.write().transport.apply_property(property_name, data);
 }
 
+pub(super) fn update_transport_from_property_if_owned(
+  state: &RwLock<SessionState>,
+  owner: PlaybackOwner,
+  event: &crate::mpv::MpvEvent,
+) -> bool {
+  let property_name = event.name.as_deref().unwrap_or("");
+  let Some(data) = event.data.as_ref() else {
+    return false;
+  };
+  let mut state = state.write();
+  if state.active_owner(PlaybackEngine::ExternalMpv) != Some(owner) {
+    return false;
+  }
+  state.transport.apply_property(property_name, data);
+  true
+}
+
 /// Update session state from a property-change event.
+#[cfg(test)]
 pub(super) fn update_state_from_property(
   state: &RwLock<SessionState>,
   event: &crate::mpv::MpvEvent,
@@ -213,6 +282,26 @@ pub(super) fn update_state_from_property(
   };
 
   apply_property_update(playback, property_name, data);
+}
+
+pub(super) fn update_state_from_property_if_owned(
+  state: &RwLock<SessionState>,
+  owner: PlaybackOwner,
+  event: &crate::mpv::MpvEvent,
+) -> bool {
+  let property_name = event.name.as_deref().unwrap_or("");
+  let Some(data) = event.data.as_ref() else {
+    return false;
+  };
+  let mut state = state.write();
+  if state.active_owner(PlaybackEngine::ExternalMpv) != Some(owner) {
+    return false;
+  }
+  let Some(playback) = state.playback.as_mut() else {
+    return false;
+  };
+  apply_property_update(playback, property_name, data);
+  true
 }
 
 /// Apply Intro Skipper seek decisions for a time-position update.
@@ -281,7 +370,19 @@ pub(super) async fn apply_intro_skipper(
   }
 }
 
+async fn apply_intro_skipper_if_owned(
+  state: &RwLock<SessionState>,
+  action_tx: &mpsc::Sender<MpvAction>,
+  event: &crate::mpv::MpvEvent,
+  owner: PlaybackOwner,
+) {
+  if state.read().active_owner(PlaybackEngine::ExternalMpv) == Some(owner) {
+    apply_intro_skipper(state, action_tx, event).await;
+  }
+}
+
 /// Report current playback progress to Jellyfin.
+#[cfg(test)]
 pub(super) async fn report_progress(client: &JellyfinClient, state: &RwLock<SessionState>) {
   let session = {
     let s = state.read();
@@ -292,6 +393,27 @@ pub(super) async fn report_progress(client: &JellyfinClient, state: &RwLock<Sess
     return;
   };
 
+  report_session_progress(client, session).await;
+}
+
+async fn report_progress_if_owned(
+  client: &JellyfinClient,
+  state: &RwLock<SessionState>,
+  owner: PlaybackOwner,
+) {
+  let session = {
+    let state = state.read();
+    (state.active_owner(PlaybackEngine::ExternalMpv) == Some(owner))
+      .then(|| state.playback.clone())
+      .flatten()
+  };
+  let Some(session) = session else {
+    return;
+  };
+  report_session_progress(client, session).await;
+}
+
+async fn report_session_progress(client: &JellyfinClient, session: PlaybackSession) {
   if session.hls_recovering {
     // Progress belongs to the old transcode generation during recovery
     return;
@@ -318,7 +440,33 @@ pub(super) async fn report_progress(client: &JellyfinClient, state: &RwLock<Sess
   }
 }
 
+async fn handle_end_file_event_if_owned(
+  event: &crate::mpv::MpvEvent,
+  ctx: &PlayContext,
+  owner: PlaybackOwner,
+) {
+  if !is_natural_end(event.reason.as_deref()) {
+    return;
+  }
+  let current_item = {
+    let state = ctx.state.read();
+    (state.active_owner(PlaybackEngine::ExternalMpv) == Some(owner))
+      .then(|| state.current_item.clone())
+      .flatten()
+  };
+  let Some(item) = current_item else {
+    return;
+  };
+  if !clear_playback_context_if_owned(&ctx.client, &ctx.state, &ctx.hls, owner).await {
+    return;
+  }
+  if let Err(error) = SessionManager::play_adjacent_episode(ctx, &item, true, false).await {
+    log::info!("Natural end did not start an adjacent episode: {error}");
+  }
+}
+
 /// Handle MPV end-file event for auto-play next episode.
+#[cfg(test)]
 pub(super) async fn handle_end_file_event(event: &crate::mpv::MpvEvent, ctx: &PlayContext) {
   let reason = event.reason.as_deref().unwrap_or("");
   log::info!("MPV end-file event, reason: {}", reason);
@@ -390,6 +538,16 @@ pub(super) async fn handle_client_message_event(event: &crate::mpv::MpvEvent, ct
   }
 }
 
+async fn handle_client_message_event_if_owned(
+  event: &crate::mpv::MpvEvent,
+  ctx: &PlayContext,
+  owner: PlaybackOwner,
+) {
+  if ctx.state.read().active_owner(PlaybackEngine::ExternalMpv) == Some(owner) {
+    handle_client_message_event(event, ctx).await;
+  }
+}
+
 pub(super) async fn handle_manual_intro_skip(
   state: &RwLock<SessionState>,
   action_tx: &mpsc::Sender<MpvAction>,
@@ -449,6 +607,20 @@ pub(super) async fn clear_playback_context(
   s.current_media_streams.clear();
   s.transport.clear();
   log::info!("Playback context cleared");
+}
+
+async fn clear_playback_context_if_owned(
+  client: &JellyfinClient,
+  state: &RwLock<SessionState>,
+  hls: &HlsProxyState,
+  owner: PlaybackOwner,
+) -> bool {
+  let session = state.write().clear_context_if_owned(owner);
+  let Some(session) = session else {
+    return false;
+  };
+  SessionManager::report_stopped_session(client, hls, session).await;
+  true
 }
 
 fn intro_skipper_label(kind: IntroSkipKind) -> &'static str {

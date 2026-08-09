@@ -5,6 +5,7 @@ use reqwest::{header, Client, Method};
 use std::sync::Arc;
 use uuid::Uuid;
 
+use crate::config::PlaybackEngineKind;
 use crate::image_ref::{image_id_for_url, ImageRefKind};
 
 use super::error::JellyfinError;
@@ -27,6 +28,7 @@ const SUPPORTED_REMOTE_COMMANDS: &[&str] = &[
   "SetAudioStreamIndex",
   "SetSubtitleStreamIndex",
 ];
+const EMBEDDED_REMOTE_COMMANDS: &[&str] = &["Play", "Playstate", "SetVolume", "ToggleMute"];
 
 /// Jellyfin HTTP API client.
 pub struct JellyfinClient {
@@ -1087,6 +1089,46 @@ impl JellyfinClient {
     audio_stream_index: Option<i32>,
     subtitle_stream_index: Option<i32>,
   ) -> Result<PlaybackInfoResponse, JellyfinError> {
+    self
+      .request_playback_info(
+        item_id,
+        start_time_ticks,
+        audio_stream_index,
+        subtitle_stream_index,
+        true,
+      )
+      .await
+  }
+
+  /// Get a static media source for JellyPilot's local embedded transcoder.
+  ///
+  /// Provider-side remuxing and transcoding are disabled so every adaptive
+  /// output byte is produced by the local FFmpeg sidecar.
+  pub async fn get_embedded_playback_info(
+    &self,
+    item_id: &str,
+    start_time_ticks: Option<i64>,
+    audio_stream_index: Option<i32>,
+  ) -> Result<PlaybackInfoResponse, JellyfinError> {
+    self
+      .request_playback_info(
+        item_id,
+        start_time_ticks,
+        audio_stream_index,
+        Some(-1),
+        false,
+      )
+      .await
+  }
+
+  async fn request_playback_info(
+    &self,
+    item_id: &str,
+    start_time_ticks: Option<i64>,
+    audio_stream_index: Option<i32>,
+    subtitle_stream_index: Option<i32>,
+    allow_server_streaming: bool,
+  ) -> Result<PlaybackInfoResponse, JellyfinError> {
     let user_id = self.user_id()?;
     let path = format!("/Items/{}/PlaybackInfo", item_id);
 
@@ -1098,12 +1140,48 @@ impl JellyfinClient {
       audio_stream_index,
       subtitle_stream_index,
       enable_direct_play: true,
-      enable_direct_stream: true,
-      enable_transcoding: true,
-      auto_open_live_stream: true,
+      enable_direct_stream: allow_server_streaming,
+      enable_transcoding: allow_server_streaming,
+      auto_open_live_stream: allow_server_streaming,
     };
 
     self.post(&path, &request).await
+  }
+
+  /// Build the authenticated static-source URL consumed only by the Rust proxy.
+  pub fn build_static_stream_url(
+    &self,
+    item_id: &str,
+    media_source: &MediaSource,
+  ) -> Option<String> {
+    let state = self.state.read();
+    let server_url = state.server_url.as_ref()?;
+    let token = state.access_token.as_ref()?;
+    let container = media_source
+      .container
+      .as_deref()
+      .filter(|value| {
+        !value.is_empty()
+          && value
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-')
+      })
+      .unwrap_or("mkv");
+    let mut url = url::Url::parse(server_url).ok()?;
+    {
+      let mut segments = url.path_segments_mut().ok()?;
+      segments
+        .pop_if_empty()
+        .push("Videos")
+        .push(item_id)
+        .push(&format!("stream.{container}"));
+    }
+    url
+      .query_pairs_mut()
+      .append_pair("Static", "true")
+      .append_pair("MediaSourceId", &media_source.id)
+      .append_pair("api_key", token);
+    Some(url.into())
   }
 
   /// Fetch active Intro Skipper plugin ranges for a media item.
@@ -1245,9 +1323,23 @@ impl JellyfinClient {
   ///
   /// This makes the client appear as a controllable cast target.
   pub async fn report_capabilities(&self) -> Result<(), JellyfinError> {
+    self
+      .report_capabilities_for(PlaybackEngineKind::ExternalMpv)
+      .await
+  }
+
+  /// Report only the media and control surface supported by the selected engine.
+  pub async fn report_capabilities_for(
+    &self,
+    engine: PlaybackEngineKind,
+  ) -> Result<(), JellyfinError> {
+    let (playable_media_types, supported_commands) = match engine {
+      PlaybackEngineKind::EmbeddedWeb => (&["Video"][..], EMBEDDED_REMOTE_COMMANDS),
+      PlaybackEngineKind::ExternalMpv => (&["Video", "Audio"][..], SUPPORTED_REMOTE_COMMANDS),
+    };
     let capabilities = serde_json::json!({
-      "PlayableMediaTypes": ["Video", "Audio"],
-      "SupportedCommands": SUPPORTED_REMOTE_COMMANDS,
+      "PlayableMediaTypes": playable_media_types,
+      "SupportedCommands": supported_commands,
       "SupportsMediaControl": true,
       "SupportsPersistentIdentifier": true,
     });
@@ -1664,6 +1756,18 @@ impl<'a> JellyfinPlayback<'a> {
       .await
   }
 
+  pub async fn get_embedded_playback_info(
+    &self,
+    item_id: &str,
+    start_time_ticks: Option<i64>,
+    audio_stream_index: Option<i32>,
+  ) -> Result<PlaybackInfoResponse, JellyfinError> {
+    self
+      .client
+      .get_embedded_playback_info(item_id, start_time_ticks, audio_stream_index)
+      .await
+  }
+
   pub async fn get_intro_skipper_ranges(
     &self,
     item_id: &str,
@@ -1673,6 +1777,14 @@ impl<'a> JellyfinPlayback<'a> {
 
   pub fn build_stream_url(&self, item_id: &str, media_source: &MediaSource) -> Option<String> {
     self.client.build_stream_url(item_id, media_source)
+  }
+
+  pub fn build_static_stream_url(
+    &self,
+    item_id: &str,
+    media_source: &MediaSource,
+  ) -> Option<String> {
+    self.client.build_static_stream_url(item_id, media_source)
   }
 
   pub fn build_subtitle_url(
@@ -1711,6 +1823,16 @@ impl<'a> JellyfinPlayback<'a> {
 
   pub async fn report_capabilities(&self) -> Result<(), JellyfinError> {
     self.client.report_capabilities().await
+  }
+
+  pub async fn report_capabilities_for(
+    &self,
+    engine: PlaybackEngineKind,
+  ) -> Result<(), JellyfinError> {
+    match engine {
+      PlaybackEngineKind::EmbeddedWeb => self.client.report_capabilities_for(engine).await,
+      PlaybackEngineKind::ExternalMpv => self.report_capabilities().await,
+    }
   }
 
   pub async fn get_next_episode(
@@ -6599,6 +6721,60 @@ mod tests {
         .expect("transcoding URL"),
       "http://media.example.test/emby/videos/transcoded.m3u8?api_key=emby-token"
     );
+  }
+
+  #[test]
+  fn embedded_static_source_url_preserves_prefix_and_encodes_secret_parameters() {
+    let client = JellyfinClient::new();
+    connect_test_client_as_emby(&client, "http://media.example.test/emby".to_string());
+    let source = MediaSource {
+      id: "source & alternate".to_string(),
+      path: None,
+      protocol: "Http".to_string(),
+      container: Some("mkv?unsafe=true".to_string()),
+      run_time_ticks: None,
+      media_streams: Vec::new(),
+      supports_direct_play: true,
+      supports_direct_stream: false,
+      supports_transcoding: false,
+      direct_stream_url: None,
+      add_api_key_to_direct_stream_url: None,
+      transcoding_url: None,
+    };
+
+    let url = client
+      .build_static_stream_url("movie/one", &source)
+      .expect("static source URL");
+
+    assert_eq!(
+      url,
+      "http://media.example.test/emby/Videos/movie%2Fone/stream.mkv?Static=true&MediaSourceId=source+%26+alternate&api_key=emby-token"
+    );
+  }
+
+  #[tokio::test]
+  async fn embedded_playback_info_disables_provider_streaming_and_subtitles() {
+    let client = JellyfinClient::new();
+    let (server_url, requests) = serve_owned_responses_with_requests(vec![(
+      "200 OK".to_string(),
+      r#"{"MediaSources":[],"PlaySessionId":"session-1"}"#.to_string(),
+    )])
+    .await;
+    connect_test_client_as_emby(&client, server_url);
+
+    client
+      .get_embedded_playback_info("movie-1", Some(42), Some(3))
+      .await
+      .expect("embedded playback info");
+
+    let captured = requests.lock();
+    let request = captured.first().expect("playback info request");
+    assert!(request.starts_with("POST /Items/movie-1/PlaybackInfo "));
+    assert!(request.contains(r#""EnableDirectPlay":true"#));
+    assert!(request.contains(r#""EnableDirectStream":false"#));
+    assert!(request.contains(r#""EnableTranscoding":false"#));
+    assert!(request.contains(r#""AutoOpenLiveStream":false"#));
+    assert!(request.contains(r#""SubtitleStreamIndex":-1"#));
   }
 
   #[test]

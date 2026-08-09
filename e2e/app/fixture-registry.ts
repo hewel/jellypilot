@@ -4,6 +4,7 @@ import type {
   CommandError,
   ConnectionState,
   Credentials,
+  EmbeddedPlayerState,
   NowPlayingState,
   SavedServiceProfiles,
   VideoHome,
@@ -35,6 +36,11 @@ interface RawCommandMap {
   app_local_services: AppLocalServices;
   config_default: unknown;
   config_get: AppConfig;
+  embedded_player_control: EmbeddedPlayerState;
+  embedded_player_get_state: EmbeddedPlayerState;
+  embedded_player_observe: EmbeddedPlayerState;
+  embedded_player_play_in_mpv: null;
+  embedded_player_register_capabilities: EmbeddedPlayerState;
   library_browse_video: VideoLibraryPage;
   library_item_detail: VideoItemDetail;
   library_item_streams: VideoItemStreams;
@@ -89,6 +95,11 @@ function parseFixtureCommand(command: string): FixtureCommand | undefined {
     command === 'app_local_services' ||
     command === 'config_default' ||
     command === 'config_get' ||
+    command === 'embedded_player_control' ||
+    command === 'embedded_player_get_state' ||
+    command === 'embedded_player_observe' ||
+    command === 'embedded_player_play_in_mpv' ||
+    command === 'embedded_player_register_capabilities' ||
     command === 'library_browse_video' ||
     command === 'library_item_detail' ||
     command === 'library_item_streams' ||
@@ -147,6 +158,32 @@ export function installStartupFixtures(): void {
   });
   fixtures.set('server_connect', { kind: 'error', error: FIXTURE_NETWORK_ERROR });
   fixtures.set('config_default', { kind: 'real' });
+  const idleEmbeddedPlayer: EmbeddedPlayerState = {
+    canPlayInMpv: false,
+    desiredMuted: false,
+    desiredPaused: true,
+    desiredSeekPositionSeconds: null,
+    desiredVolume: 100,
+    durationSeconds: null,
+    dynamicRange: null,
+    failure: null,
+    generation: null,
+    itemId: null,
+    phase: 'idle',
+    playlistUrl: null,
+    positionSeconds: 0,
+    revision: 0,
+    sessionId: null,
+    subtitle: null,
+    timelineOffsetSeconds: 0,
+    title: null,
+    videoCodec: null,
+  };
+  fixtures.set('embedded_player_get_state', { kind: 'return', value: idleEmbeddedPlayer });
+  fixtures.set('embedded_player_register_capabilities', {
+    kind: 'return',
+    value: idleEmbeddedPlayer,
+  });
 }
 
 export function installFixture<C extends FixtureCommand>(

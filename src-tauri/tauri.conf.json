@@ -34,6 +34,13 @@
   "bundle": {
     "active": true,
     "targets": "all",
+    "externalBin": ["binaries/ffmpeg"],
+    "resources": {
+      "../packaging/ffmpeg/THIRD_PARTY_NOTICES.md": "licenses/ffmpeg/THIRD_PARTY_NOTICES.md",
+      "../packaging/ffmpeg/manifest.json": "licenses/ffmpeg/manifest.json",
+      "binaries/ffmpeg.LICENSE.txt": "licenses/ffmpeg/LICENSE.txt",
+      "binaries/ffmpeg.BUILD-INFO.txt": "licenses/ffmpeg/BUILD-INFO.txt"
+    },
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",

@@ -1,6 +1,6 @@
 # JellyPilot Context
 
-JellyPilot is a Jellyfin companion app that presents itself as a controllable playback target while delegating media playback to an external player.
+JellyPilot is a Jellyfin and Emby companion app that presents itself as a controllable playback target with embedded playback by default and an optional external player.
 
 ## Language
 
@@ -9,8 +9,44 @@ The address of one Jellyfin server that JellyPilot connects to. A Server URL mus
 _Avoid_: Server discovery, server selection
 
 **Playback Target**:
-The JellyPilot install as it appears to Jellyfin users when they choose where media should play. The Playback Target should be identified by the configured device name.
+The JellyPilot install as it appears to media-server users when they choose where media should play. The Playback Target is identified by the configured device name and is independent of the Playback Engine used for a session.
 _Avoid_: Generic app instance
+
+**Playback Session**:
+One active presentation of a media item through a fixed Playback Engine. Changing the Playback Engine Preference does not migrate an existing Playback Session.
+_Avoid_: Player process, transcode job
+
+**Playback Engine**:
+The presentation mechanism selected for one Playback Session. JellyPilot supports Embedded Web Playback and External MPV Playback.
+_Avoid_: Player mode, renderer
+
+**Playback Engine Preference**:
+The persisted default Playback Engine applied when the next Playback Session starts.
+_Avoid_: Current player, live engine switch
+
+**Playback Engine Override**:
+A one-playback choice that replaces the Playback Engine Preference without changing it.
+_Avoid_: Temporary global setting, automatic fallback
+
+**Embedded Web Playback**:
+Playback presented inside the JellyPilot window. It is the default Playback Engine.
+_Avoid_: Browser playback, embedded MPV, libmpv
+
+**External MPV Playback**:
+Playback presented by a standalone MPV process so the user's MPV configuration, scripts, and shaders remain available.
+_Avoid_: Embedded MPV, libmpv
+
+**Explicit MPV Fallback**:
+A user-selected retry in External MPV Playback after Embedded Web Playback cannot continue, resuming from the last known position without changing the Playback Engine Preference.
+_Avoid_: Automatic failover, silent engine switch
+
+**Local Transcode**:
+Media conversion performed on the JellyPilot device for Embedded Web Playback. It is distinct from a Provider Transcode.
+_Avoid_: Server transcode, remote conversion
+
+**Provider Transcode**:
+Media conversion performed by the connected Jellyfin or Emby server. Embedded Web Playback does not request a Provider Transcode.
+_Avoid_: Local Transcode
 
 **Quick Connect**:
 A Jellyfin authentication method on the Login screen where JellyPilot shows a short code for the user to approve from another signed-in Jellyfin client. Quick Connect is the default login method and authenticates to a known Server URL; it does not discover or choose servers.
@@ -57,12 +93,12 @@ One of the user-selectable ways to authenticate to a known Server URL. Quick Con
 _Avoid_: Account type, server type
 
 **Now Playing**:
-The user-facing playback status shown by JellyPilot for the current external player session. Now Playing may show transport state before rich Jellyfin media metadata is available.
-_Avoid_: MPV state, playback session internals
+The user-facing playback status shown by JellyPilot for the current Playback Session. Now Playing may show transport state before rich media-server metadata is available.
+_Avoid_: MPV state, Web player state, playback session internals
 
 **Library Browser**:
-The authenticated JellyPilot shell area for browsing Jellyfin video libraries, inspecting item details, launching playback through JellyPilot's Playback Target, and applying user-scoped media state. Library Browser complements the Playback Target; it is not a goal to replace every Jellyfin client feature.
-_Avoid_: Full Jellyfin replacement, embedded player
+The authenticated JellyPilot shell area for browsing video libraries, inspecting item details, launching Playback Sessions, and applying user-scoped media state. Library Browser complements the Playback Target; it is not a goal to replace every Jellyfin or Emby client feature.
+_Avoid_: Full media-server replacement
 
 **Library Image**:
 A still image shown in the Library Browser for media content. Library Images include Artwork and Backdrop and are not limited to portrait posters.

@@ -10,16 +10,20 @@ use tauri_specta::{collect_commands, collect_events, Builder, Event};
 use crate::auth_profiles::{
   load_profiles, save_profiles, SavedServiceProfileStore, SavedServiceProfiles,
 };
-use crate::config::AppConfig;
+use crate::config::{AppConfig, PlaybackEngineKind};
+use crate::embedded_player::{
+  EmbeddedPlayerChanged, EmbeddedPlayerManagerState, EmbeddedPlayerObservation,
+  EmbeddedPlayerState, PlaybackControlCommand, WebPlaybackCapabilities,
+};
 use crate::image_cache::{ImageCacheState, ImageCacheStatus};
 use crate::image_proxy::{AppLocalServices, ImageProxyState};
 use crate::jellyfin::{
   AuthResponse, ConnectionState, Credentials, JellyfinClient, JellyfinError, MediaServerProvider,
   QuickConnectRequest, QuickConnectStatus, SavedSession, SessionManager, VideoHome,
   VideoItemDetail, VideoItemStreams, VideoLibraryItem, VideoLibraryPage, VideoLibraryPageRequest,
-  VideoLibraryPlayRequest, VideoLibraryShortcut, VideoSearchPage, VideoSearchRequest,
-  VideoSeasonEpisodes, VideoSeasonEpisodesRequest, VideoShowDetail, VideoUserDataUpdate,
-  VideoUserDataUpdateRequest,
+  VideoLibraryPlayMode, VideoLibraryPlayRequest, VideoLibraryShortcut, VideoSearchPage,
+  VideoSearchRequest, VideoSeasonEpisodes, VideoSeasonEpisodesRequest, VideoShowDetail,
+  VideoUserDataUpdate, VideoUserDataUpdateRequest,
 };
 use crate::mpv::{write_input_conf, MpvClient, PropertyValue};
 use crate::playback_control;
@@ -185,6 +189,10 @@ fn internal_err(e: impl std::fmt::Display) -> CommandError {
   CommandError::internal(e.to_string())
 }
 
+fn embedded_err(e: impl std::fmt::Display) -> CommandError {
+  CommandError::internal(e.to_string())
+}
+
 fn jellyfin_err(e: JellyfinError) -> CommandError {
   match e {
     JellyfinError::InvalidUrl(message) => CommandError::invalid_input(message),
@@ -211,6 +219,7 @@ async fn start_remote_control_session_if_supported(
     config_state.0.clone(),
     app.clone(),
     state.hls_proxy.clone(),
+    state.embedded_player.current().map_err(internal_err)?,
   ));
 
   if !state.client.supports_remote_control() {
@@ -329,6 +338,7 @@ pub struct JellyfinState {
   pub mpv: Arc<MpvClient>,
   pub session: RwLock<Option<Arc<SessionManager>>>,
   pub hls_proxy: crate::hls_proxy::HlsProxyState,
+  pub embedded_player: EmbeddedPlayerManagerState,
 }
 
 impl JellyfinState {
@@ -336,12 +346,14 @@ impl JellyfinState {
     client: Arc<JellyfinClient>,
     mpv: Arc<MpvClient>,
     hls_proxy: crate::hls_proxy::HlsProxyState,
+    embedded_player: EmbeddedPlayerManagerState,
   ) -> Self {
     Self {
       client,
       mpv,
       session: RwLock::new(None),
       hls_proxy,
+      embedded_player,
     }
   }
 }
@@ -790,6 +802,7 @@ pub async fn library_similar_video(
 pub async fn library_play(
   app: tauri::AppHandle,
   state: State<'_, JellyfinState>,
+  config_state: State<'_, ConfigState>,
   request: VideoLibraryPlayRequest,
 ) -> Result<(), CommandError> {
   let session = state
@@ -798,9 +811,121 @@ pub async fn library_play(
     .clone()
     .ok_or_else(|| CommandError::invalid_input("Library playback requires an active session"))?;
 
-  session.play_library(request).await.map_err(jellyfin_err)?;
+  let engine = request
+    .engine_override
+    .unwrap_or(config_state.0.read().playback_engine);
+  match engine {
+    PlaybackEngineKind::EmbeddedWeb => session
+      .play_library_embedded(request)
+      .await
+      .map_err(jellyfin_err)?,
+    PlaybackEngineKind::ExternalMpv => session.play_library(request).await.map_err(jellyfin_err)?,
+  }
   playback_control::emit_now_playing_changed(&app, &state).await;
 
+  Ok(())
+}
+
+/// Get the current embedded-player read model.
+#[tauri::command]
+#[specta]
+pub fn embedded_player_get_state(
+  state: State<'_, EmbeddedPlayerManagerState>,
+) -> Result<EmbeddedPlayerState, CommandError> {
+  state
+    .current()
+    .map(|manager| manager.state())
+    .map_err(embedded_err)
+}
+
+/// Register decode capabilities detected in the current system WebView.
+#[tauri::command]
+#[specta]
+pub fn embedded_player_register_capabilities(
+  state: State<'_, EmbeddedPlayerManagerState>,
+  capabilities: WebPlaybackCapabilities,
+) -> Result<EmbeddedPlayerState, CommandError> {
+  let manager = state.current().map_err(embedded_err)?;
+  manager.register_capabilities(capabilities);
+  Ok(manager.state())
+}
+
+/// Apply a generic embedded-player control command.
+#[tauri::command]
+#[specta]
+pub async fn embedded_player_control(
+  state: State<'_, EmbeddedPlayerManagerState>,
+  jellyfin_state: State<'_, JellyfinState>,
+  command: PlaybackControlCommand,
+) -> Result<EmbeddedPlayerState, CommandError> {
+  let session = jellyfin_state.session.read().clone();
+  if let Some(session) = session {
+    session
+      .control_embedded(command)
+      .await
+      .map_err(jellyfin_err)
+  } else {
+    state
+      .current()
+      .map_err(embedded_err)?
+      .control(command)
+      .await
+      .map_err(embedded_err)
+  }
+}
+
+/// Apply one session-scoped observation from the HTML media element.
+#[tauri::command]
+#[specta]
+pub async fn embedded_player_observe(
+  state: State<'_, EmbeddedPlayerManagerState>,
+  observation: EmbeddedPlayerObservation,
+) -> Result<EmbeddedPlayerState, CommandError> {
+  state
+    .current()
+    .map_err(embedded_err)?
+    .observe(observation)
+    .await
+    .map_err(embedded_err)
+}
+
+/// Explicitly transfer a terminal embedded session to external MPV.
+#[tauri::command]
+#[specta]
+pub async fn embedded_player_play_in_mpv(
+  app: tauri::AppHandle,
+  player_state: State<'_, EmbeddedPlayerManagerState>,
+  jellyfin_state: State<'_, JellyfinState>,
+) -> Result<(), CommandError> {
+  let manager = player_state.current().map_err(embedded_err)?;
+  let (item_id, position_seconds) = manager
+    .mpv_fallback_request()
+    .ok_or_else(|| CommandError::invalid_input("MPV fallback is not available"))?;
+  let session = jellyfin_state
+    .session
+    .read()
+    .clone()
+    .ok_or_else(|| CommandError::invalid_input("MPV fallback requires an active session"))?;
+  session
+    .control_embedded(PlaybackControlCommand::Stop)
+    .await
+    .map_err(jellyfin_err)?;
+  session
+    .play_library(VideoLibraryPlayRequest {
+      item_id,
+      mode: if position_seconds > 0.0 {
+        VideoLibraryPlayMode::Resume
+      } else {
+        VideoLibraryPlayMode::Start
+      },
+      engine_override: Some(PlaybackEngineKind::ExternalMpv),
+      start_position_seconds: Some(position_seconds),
+      audio_stream_index: None,
+      subtitle_stream_index: Some(-1),
+    })
+    .await
+    .map_err(jellyfin_err)?;
+  playback_control::emit_now_playing_changed(&app, &jellyfin_state).await;
   Ok(())
 }
 
@@ -1305,7 +1430,12 @@ pub async fn config_set(
       .client
       .set_device_name(config.device_name.clone());
     // Re-register capabilities with new device name
-    if let Err(e) = jellyfin_state.client.playback().report_capabilities().await {
+    if let Err(e) = jellyfin_state
+      .client
+      .playback()
+      .report_capabilities_for(config.playback_engine)
+      .await
+    {
       log::warn!("Failed to re-register capabilities: {}", e);
     } else {
       log::info!("Jellyfin capabilities re-registered with new device name");
@@ -1471,6 +1601,11 @@ pub fn specta_builder() -> Builder<tauri::Wry> {
       library_season_episodes,
       library_similar_video,
       library_play,
+      embedded_player_get_state,
+      embedded_player_register_capabilities,
+      embedded_player_control,
+      embedded_player_observe,
+      embedded_player_play_in_mpv,
       library_update_user_data,
       // Jellyfin commands
       jellyfin_connect,
@@ -1512,7 +1647,11 @@ pub fn specta_builder() -> Builder<tauri::Wry> {
       image_cache_status,
       image_cache_clear,
     ])
-    .events(collect_events![AppNotification, NowPlayingChanged]);
+    .events(collect_events![
+      AppNotification,
+      NowPlayingChanged,
+      EmbeddedPlayerChanged
+    ]);
 
   #[cfg(debug_assertions)] // <- Only export on non-release builds
   {

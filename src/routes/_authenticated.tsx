@@ -1,4 +1,4 @@
-import { Outlet, createFileRoute, useNavigate } from '@tanstack/solid-router';
+import { Outlet, createFileRoute, useNavigate, useRouterState } from '@tanstack/solid-router';
 import { Show } from 'solid-js';
 import { createAmbientGlow } from '~utils/ambientGlow';
 import { createSidebarPreferences } from '~utils/sidebarPreferences';
@@ -9,6 +9,7 @@ import {
   AuthenticatedBootstrapProvider,
   useAuthenticatedBootstrap,
 } from '../components/AuthenticatedBootstrap';
+import { EmbeddedPlayerProvider } from '../components/EmbeddedPlayerProvider';
 import { NowPlayingProvider } from '../components/NowPlayingProvider';
 import { AUTHENTICATED_HOME_ROUTE, requireAuthenticatedShell } from '../router-guards';
 import * as styles from './_authenticated.styles';
@@ -25,13 +26,27 @@ function AuthenticatedShell() {
       onSessionChange={() => void navigate({ to: AUTHENTICATED_HOME_ROUTE, replace: true })}
     >
       <NowPlayingProvider>
-        <AuthenticatedShellContent />
+        <EmbeddedPlayerProvider
+          onActivePlayerChanged={() => void navigate({ to: '/player', replace: true })}
+        >
+          <AuthenticatedShellContent />
+        </EmbeddedPlayerProvider>
       </NowPlayingProvider>
     </AuthenticatedBootstrapProvider>
   );
 }
 
 function AuthenticatedShellContent() {
+  const pathname = useRouterState({ select: (state) => state.location.pathname });
+
+  return (
+    <Show when={pathname() === '/player'} fallback={<StandardAuthenticatedShell />}>
+      <Outlet />
+    </Show>
+  );
+}
+
+function StandardAuthenticatedShell() {
   const bootstrap = useAuthenticatedBootstrap();
   const glow = createAmbientGlow();
   const { collapsed } = createSidebarPreferences();

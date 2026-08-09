@@ -1,7 +1,9 @@
 //! Session manager - coordinates Jellyfin commands with MPV player.
 
+use jellypilot_playback_core::{AudioChannelLayout, SourceVideoProfile};
 use parking_lot::RwLock;
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use tauri::AppHandle;
 use tauri_plugin_store::StoreExt;
@@ -19,6 +21,9 @@ use super::types::*;
 use super::websocket::{JellyfinCommand, JellyfinWebSocket, JellyfinWebSocketEvent};
 use crate::command::{AppNotification, NowPlayingChanged, NowPlayingState};
 use crate::config::{AppConfig, IntroSkipperMode};
+use crate::embedded_player::{
+  EmbeddedPlaybackSource, EmbeddedPlayerManager, EmbeddedPlayerState, PlaybackControlCommand,
+};
 use crate::hls_proxy::HlsProxyState;
 use crate::mpv::MpvClient;
 use crate::now_playing::{build_now_playing_state, PlaybackContext, TransportSnapshot};
@@ -26,6 +31,19 @@ use tauri_specta::Event;
 
 const PREFERENCES_STORE_FILE: &str = "preferences.json";
 const SERIES_PREFERENCES_KEY: &str = "series_track_preferences";
+static NEXT_PLAYBACK_GENERATION: AtomicU64 = AtomicU64::new(1);
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum PlaybackEngine {
+  ExternalMpv,
+  EmbeddedWeb,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) struct PlaybackOwner {
+  engine: PlaybackEngine,
+  generation: u64,
+}
 
 /// Shared playback orchestration context threaded through play command handlers.
 #[derive(Clone)]
@@ -36,11 +54,13 @@ pub(super) struct PlayContext {
   pub(super) hls: HlsProxyState,
   pub(super) app: Option<AppHandle>,
   pub(super) config: Arc<RwLock<AppConfig>>,
+  pub(super) embedded_player: Option<Arc<EmbeddedPlayerManager>>,
 }
 
 /// Session manager state.
 pub(super) struct SessionState {
   pub(super) playback: Option<PlaybackSession>,
+  playback_owner: Option<PlaybackOwner>,
   /// Now Playing transport snapshot maintained from MPV property observations.
   pub(super) transport: TransportSnapshot,
   pub(super) last_report_time: std::time::Instant,
@@ -56,6 +76,47 @@ pub(super) struct SessionState {
   pub(super) series_preferences: HashMap<String, TrackPreference>,
   /// Notifications captured when no AppHandle is available (request-capture tests).
   pub(super) recorded_notifications: Vec<(String, String)>,
+}
+
+impl SessionState {
+  fn replace_playback(
+    &mut self,
+    engine: PlaybackEngine,
+    playback: PlaybackSession,
+  ) -> PlaybackOwner {
+    let owner = PlaybackOwner {
+      engine,
+      generation: NEXT_PLAYBACK_GENERATION.fetch_add(1, Ordering::Relaxed),
+    };
+    self.playback = Some(playback);
+    self.playback_owner = Some(owner);
+    owner
+  }
+
+  pub(super) fn active_owner(&self, engine: PlaybackEngine) -> Option<PlaybackOwner> {
+    self.playback_owner.filter(|owner| owner.engine == engine)
+  }
+
+  fn take_playback(&mut self) -> Option<PlaybackSession> {
+    self.playback_owner = None;
+    self.playback.take()
+  }
+
+  fn take_playback_if_owned(&mut self, owner: PlaybackOwner) -> Option<PlaybackSession> {
+    if self.playback_owner != Some(owner) {
+      return None;
+    }
+    self.take_playback()
+  }
+
+  pub(super) fn clear_context_if_owned(&mut self, owner: PlaybackOwner) -> Option<PlaybackSession> {
+    let playback = self.take_playback_if_owned(owner)?;
+    self.current_item = None;
+    self.current_series_id = None;
+    self.current_media_streams.clear();
+    self.transport.clear();
+    Some(playback)
+  }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -84,6 +145,7 @@ pub struct SessionManager {
   state: Arc<RwLock<SessionState>>,
   action_tx: mpsc::Sender<MpvAction>,
   action_rx: Arc<RwLock<Option<mpsc::Receiver<MpvAction>>>>,
+  embedded_player: Arc<EmbeddedPlayerManager>,
 }
 
 impl SessionManager {
@@ -94,6 +156,7 @@ impl SessionManager {
     config: Arc<RwLock<AppConfig>>,
     app_handle: AppHandle,
     hls_proxy: HlsProxyState,
+    embedded_player: Arc<EmbeddedPlayerManager>,
   ) -> Self {
     let (action_tx, action_rx) = mpsc::channel(32);
 
@@ -109,6 +172,7 @@ impl SessionManager {
       hls_proxy,
       state: Arc::new(RwLock::new(SessionState {
         playback: None,
+        playback_owner: None,
         transport: TransportSnapshot::default(),
         last_report_time: std::time::Instant::now(),
         effective_intro_skipper_config: IntroSkipperRuntimeConfig::from(&*config.read()),
@@ -120,6 +184,7 @@ impl SessionManager {
       })),
       action_tx,
       action_rx: Arc::new(RwLock::new(Some(action_rx))),
+      embedded_player,
     }
   }
 
@@ -132,6 +197,7 @@ impl SessionManager {
       hls: self.hls_proxy.clone(),
       app: Some(self.app_handle.clone()),
       config: self.config.clone(),
+      embedded_player: Some(self.embedded_player.clone()),
     }
   }
 
@@ -237,7 +303,12 @@ impl SessionManager {
       .await?;
 
     // Then report capabilities via HTTP (must be after WebSocket is established)
-    self.client.playback().report_capabilities().await?;
+    let playback_engine = self.config.read().playback_engine;
+    self
+      .client
+      .playback()
+      .report_capabilities_for(playback_engine)
+      .await?;
 
     if let Err(e) = self.client.playback().validate_session().await {
       log::warn!("Session validation failed: {} - cast may not work", e);
@@ -280,6 +351,7 @@ impl SessionManager {
     let mpv = self.mpv.clone();
     let config = self.config.clone();
     let hls = self.hls_proxy.clone();
+    let embedded_player = self.embedded_player.clone();
 
     tokio::spawn(async move {
       let Some(mut event_rx) = websocket.take_event_receiver() else {
@@ -294,6 +366,7 @@ impl SessionManager {
         hls,
         app: Some(app_handle.clone()),
         config,
+        embedded_player: Some(embedded_player),
       };
 
       log::info!("WebSocket command stream consumer started");
@@ -311,7 +384,13 @@ impl SessionManager {
             log::info!("WebSocket reconnected successfully");
             AppNotification::info(&app_handle, "Reconnected to Jellyfin");
 
-            if let Err(e) = ctx.client.playback().report_capabilities().await {
+            let playback_engine = ctx.config.read().playback_engine;
+            if let Err(e) = ctx
+              .client
+              .playback()
+              .report_capabilities_for(playback_engine)
+              .await
+            {
               log::error!("Failed to report capabilities after reconnect: {}", e);
             }
           }
@@ -361,22 +440,202 @@ impl SessionManager {
   ) -> Result<(), JellyfinError> {
     match cmd {
       JellyfinCommand::Play(request) => {
-        Self::handle_play(ctx, mpv.is_connected(), request).await?;
+        if ctx.config.read().playback_engine == crate::config::PlaybackEngineKind::EmbeddedWeb {
+          Self::handle_embedded_play(ctx, request).await?;
+        } else {
+          Self::handle_play(ctx, mpv.is_connected(), request).await?;
+        }
       }
       JellyfinCommand::Playstate(request) => {
-        Self::handle_playstate(ctx, mpv, request).await?;
+        if let Some(player) = ctx
+          .embedded_player
+          .as_ref()
+          .filter(|player| player.is_active())
+        {
+          Self::handle_embedded_playstate(ctx, player, request).await?;
+        } else {
+          Self::handle_playstate(ctx, mpv, request).await?;
+        }
       }
       JellyfinCommand::GeneralCommand(request) => {
-        Self::handle_general_command(
-          &ctx.client,
-          &ctx.state,
-          &ctx.action_tx,
-          ctx.app.as_ref(),
-          request,
-        )
-        .await?;
+        if let Some(player) = ctx
+          .embedded_player
+          .as_ref()
+          .filter(|player| player.is_active())
+        {
+          Self::handle_embedded_general_command(player, request).await?;
+        } else {
+          Self::handle_general_command(
+            &ctx.client,
+            &ctx.state,
+            &ctx.action_tx,
+            ctx.app.as_ref(),
+            request,
+          )
+          .await?;
+        }
       }
     }
+    Ok(())
+  }
+
+  async fn handle_embedded_play(
+    ctx: &PlayContext,
+    mut request: PlayRequest,
+  ) -> Result<(), JellyfinError> {
+    let item_id = request
+      .item_ids
+      .first()
+      .ok_or(JellyfinError::SessionNotFound)?
+      .clone();
+    let item = ctx.client.playback().get_item(&item_id).await?;
+    if item.item_type != "Movie" && item.item_type != "Episode" {
+      return Err(JellyfinError::HttpError(
+        "Embedded playback currently supports Movies and Episodes".to_string(),
+      ));
+    }
+    let start_time_ticks = if ctx.client.provider() == MediaServerProvider::Emby {
+      request.start_position_ticks
+    } else {
+      None
+    };
+    let playback_info = ctx
+      .client
+      .playback()
+      .get_embedded_playback_info(&item_id, start_time_ticks, request.audio_stream_index)
+      .await?;
+    let media_source = request
+      .media_source_id
+      .as_ref()
+      .and_then(|id| {
+        playback_info
+          .media_sources
+          .iter()
+          .find(|source| &source.id == id)
+      })
+      .or_else(|| playback_info.media_sources.first())
+      .ok_or(JellyfinError::SessionNotFound)?;
+
+    let series_preference = item
+      .series_id
+      .as_ref()
+      .and_then(|series_id| ctx.state.read().series_preferences.get(series_id).cloned());
+    request.subtitle_stream_index = Some(-1);
+    let resolution = resolve_play_request(
+      &request,
+      &item,
+      &playback_info,
+      media_source,
+      series_preference.as_ref(),
+      PlayResolutionConfig {
+        preferred_subtitle_languages: &[],
+        intro_skipper_enabled: false,
+      },
+    );
+    let upstream_url = ctx
+      .client
+      .playback()
+      .build_static_stream_url(&item_id, media_source)
+      .ok_or(JellyfinError::NotConnected)?;
+    let video_stream = media_source
+      .media_streams
+      .iter()
+      .find(|stream| stream.stream_type == "Video")
+      .ok_or_else(|| JellyfinError::HttpError("Media source has no video stream".to_string()))?;
+    let source_video_profile = if stream_is_hdr(video_stream) {
+      SourceVideoProfile::HevcMain10Hdr
+    } else {
+      SourceVideoProfile::H264Sdr
+    };
+    let audio_layout = resolution
+      .audio_stream_index
+      .and_then(|selected| {
+        media_source
+          .media_streams
+          .iter()
+          .find(|stream| stream.stream_type == "Audio" && stream.index == selected)
+      })
+      .or_else(|| {
+        media_source
+          .media_streams
+          .iter()
+          .find(|stream| stream.stream_type == "Audio")
+      })
+      .map(stream_audio_layout);
+    let subtitle = if item.item_type == "Episode" {
+      Some(format!(
+        "{} · S{:02}E{:02}",
+        item.series_name.as_deref().unwrap_or("Episode"),
+        item.parent_index_number.unwrap_or(1),
+        item.index_number.unwrap_or(1)
+      ))
+    } else {
+      None
+    };
+    let mpv_fallback_available = {
+      let config = ctx.config.read();
+      config
+        .mpv_path
+        .as_ref()
+        .is_some_and(|path| !path.trim().is_empty())
+        || which::which("mpv").is_ok()
+    };
+    let embedded_player = ctx.embedded_player.as_ref().ok_or_else(|| {
+      JellyfinError::HttpError("Embedded playback manager is unavailable".to_string())
+    })?;
+
+    if !embedded_player.is_active() {
+      Self::report_playback_stopped(&ctx.client, &ctx.state, &ctx.hls).await;
+    }
+    {
+      let mut state = ctx.state.write();
+      state.current_series_id = item.series_id.clone();
+      state.current_item = Some(item.clone());
+      state.current_media_streams = media_source.media_streams.clone();
+      state.replace_playback(
+        PlaybackEngine::EmbeddedWeb,
+        PlaybackSession {
+          item_id: item_id.clone(),
+          media_source_id: Some(media_source.id.clone()),
+          play_session_id: playback_info.play_session_id.clone(),
+          intro_skipper_ranges: Vec::new(),
+          position_ticks: resolution.position_ticks,
+          is_paused: false,
+          is_muted: false,
+          volume: 100,
+          audio_stream_index: resolution.audio_stream_index,
+          subtitle_stream_index: Some(-1),
+          play_method: "DirectPlay".to_string(),
+          hls_proxy_session_id: None,
+          hls_recovery_attempted: false,
+          hls_recovering: false,
+        },
+      );
+    }
+    // Publish the new owner before asking MPV to stop. Its receiver can close
+    // immediately, and stale teardown must not retire this embedded generation.
+    let _ = ctx.action_tx.send(MpvAction::Stop).await;
+    embedded_player
+      .play(EmbeddedPlaybackSource {
+        item_id,
+        media_source_id: Some(media_source.id.clone()),
+        play_session_id: playback_info.play_session_id,
+        title: item.name,
+        subtitle,
+        upstream_url,
+        start_position_ticks: resolution.position_ticks.max(0) as u64,
+        duration_ticks: media_source
+          .run_time_ticks
+          .or(item.run_time_ticks)
+          .and_then(|ticks| u64::try_from(ticks).ok()),
+        audio_stream_index: resolution.audio_stream_index,
+        source_video_profile,
+        audio_layout,
+        mpv_fallback_available,
+      })
+      .await
+      .map_err(|error| JellyfinError::HttpError(error.to_string()))?;
+
     Ok(())
   }
 
@@ -518,6 +777,14 @@ impl SessionManager {
       Vec::new()
     };
 
+    if let Some(player) = ctx
+      .embedded_player
+      .as_ref()
+      .filter(|player| player.is_active())
+    {
+      Self::control_embedded_player(player, &ctx.state, PlaybackControlCommand::Stop).await?;
+    }
+
     // Store playback session and current series
     let replaced_hls_session_id = {
       let mut s = ctx.state.write();
@@ -532,25 +799,28 @@ impl SessionManager {
       // state never leaks across sessions; observations reconcile the rest.
       s.transport
         .reset_for_new_session(ticks_to_seconds(resolution.position_ticks));
-      s.playback = Some(PlaybackSession {
-        item_id: item_id.clone(),
-        media_source_id: Some(media_source.id.clone()),
-        play_session_id: playback_info.play_session_id.clone(),
-        intro_skipper_ranges,
-        position_ticks: resolution.position_ticks,
-        is_paused: false,
-        is_muted: false,
-        volume: 100,
-        audio_stream_index: resolution.audio_stream_index,
-        subtitle_stream_index: resolution.subtitle_stream_index,
-        play_method: resolution.play_method.to_string(),
-        hls_proxy_session_id: decision
-          .activated
-          .as_ref()
-          .map(|activated| activated.session_id.clone()),
-        hls_recovery_attempted: false,
-        hls_recovering: false,
-      });
+      s.replace_playback(
+        PlaybackEngine::ExternalMpv,
+        PlaybackSession {
+          item_id: item_id.clone(),
+          media_source_id: Some(media_source.id.clone()),
+          play_session_id: playback_info.play_session_id.clone(),
+          intro_skipper_ranges,
+          position_ticks: resolution.position_ticks,
+          is_paused: false,
+          is_muted: false,
+          volume: 100,
+          audio_stream_index: resolution.audio_stream_index,
+          subtitle_stream_index: resolution.subtitle_stream_index,
+          play_method: resolution.play_method.to_string(),
+          hls_proxy_session_id: decision
+            .activated
+            .as_ref()
+            .map(|activated| activated.session_id.clone()),
+          hls_recovery_attempted: false,
+          hls_recovering: false,
+        },
+      );
       s.last_report_time = std::time::Instant::now();
       replaced
     };
@@ -647,6 +917,89 @@ impl SessionManager {
   }
 
   /// Handle Playstate command.
+  async fn handle_embedded_playstate(
+    ctx: &PlayContext,
+    player: &Arc<EmbeddedPlayerManager>,
+    request: PlaystateRequest,
+  ) -> Result<(), JellyfinError> {
+    let command = match request.command.as_str() {
+      "Pause" => Some(PlaybackControlCommand::Pause),
+      "Unpause" => Some(PlaybackControlCommand::Resume),
+      "PlayPause" => Some(if player.state().desired_paused {
+        PlaybackControlCommand::Resume
+      } else {
+        PlaybackControlCommand::Pause
+      }),
+      "Seek" => request
+        .seek_position_ticks
+        .map(|ticks| PlaybackControlCommand::Seek {
+          position_seconds: ticks_to_seconds(ticks),
+        }),
+      "Stop" => Some(PlaybackControlCommand::Stop),
+      "NextTrack" | "PreviousTrack" => {
+        log::info!(
+          "Ignoring unsupported embedded playback command {}",
+          request.command
+        );
+        None
+      }
+      _ => None,
+    };
+    if let Some(command) = command {
+      Self::control_embedded_player(player, &ctx.state, command).await?;
+    }
+    Ok(())
+  }
+
+  async fn control_embedded_player(
+    player: &Arc<EmbeddedPlayerManager>,
+    state: &RwLock<SessionState>,
+    command: PlaybackControlCommand,
+  ) -> Result<EmbeddedPlayerState, JellyfinError> {
+    let stopping_owner = matches!(&command, PlaybackControlCommand::Stop)
+      .then(|| state.read().active_owner(PlaybackEngine::EmbeddedWeb))
+      .flatten();
+    let player_state = player
+      .control(command)
+      .await
+      .map_err(|error| JellyfinError::HttpError(error.to_string()))?;
+    if let Some(owner) = stopping_owner {
+      state.write().clear_context_if_owned(owner);
+    }
+    Ok(player_state)
+  }
+
+  async fn handle_embedded_general_command(
+    player: &Arc<EmbeddedPlayerManager>,
+    request: GeneralCommand,
+  ) -> Result<(), JellyfinError> {
+    let command = match request.name.as_str() {
+      "SetVolume" => request
+        .arguments
+        .as_ref()
+        .and_then(|arguments| parse_command_int(arguments.get("Volume")))
+        .map(|volume| PlaybackControlCommand::SetVolume {
+          volume: volume.clamp(0, 100) as u8,
+        }),
+      "ToggleMute" => Some(PlaybackControlCommand::ToggleMute),
+      "ToggleFullscreen" | "SetAudioStreamIndex" | "SetSubtitleStreamIndex" => {
+        log::info!(
+          "Ignoring unsupported embedded playback command {}",
+          request.name
+        );
+        None
+      }
+      _ => None,
+    };
+    if let Some(command) = command {
+      player
+        .control(command)
+        .await
+        .map_err(|error| JellyfinError::HttpError(error.to_string()))?;
+    }
+    Ok(())
+  }
+
   async fn handle_playstate(
     ctx: &PlayContext,
     mpv: &MpvClient,
@@ -1005,30 +1358,38 @@ impl SessionManager {
   ) {
     let session = {
       let mut s = state.write();
-      s.playback.take()
+      s.take_playback()
     };
 
     if let Some(session) = session {
-      if let Some(proxy_session_id) = session.hls_proxy_session_id.clone() {
-        if let Ok(proxy) = hls.current() {
-          proxy.deactivate(&proxy_session_id);
-        }
+      Self::report_stopped_session(client, hls, session).await;
+    }
+  }
+
+  pub(super) async fn report_stopped_session(
+    client: &JellyfinClient,
+    hls: &HlsProxyState,
+    session: PlaybackSession,
+  ) {
+    if let Some(proxy_session_id) = session.hls_proxy_session_id.clone() {
+      if let Ok(proxy) = hls.current() {
+        proxy.deactivate(&proxy_session_id);
       }
-      if session.hls_recovering && session.play_session_id.is_none() {
-        // An unrecovered Emby transcode already reported (or terminally failed)
-        // its stop; never report the same generation twice.
-        log::info!("Skipping remote stop for unrecovered Emby transcode session");
-        return;
-      }
-      let stop_info = PlaybackStopInfo {
-        item_id: session.item_id,
-        media_source_id: session.media_source_id,
-        play_session_id: session.play_session_id,
-        position_ticks: Some(session.position_ticks),
-      };
-      if let Err(e) = client.playback().report_playback_stop(&stop_info).await {
-        log::error!("Failed to report playback stop: {}", e);
-      }
+    }
+    if session.hls_recovering && session.play_session_id.is_none() {
+      // An unrecovered Emby transcode already reported (or terminally failed)
+      // its stop; never report the same generation twice.
+      log::info!("Skipping remote stop for unrecovered Emby transcode session");
+      return;
+    }
+    let stop_info = PlaybackStopInfo {
+      item_id: session.item_id,
+      media_source_id: session.media_source_id,
+      play_session_id: session.play_session_id,
+      position_ticks: Some(session.position_ticks),
+    };
+    if let Err(e) = client.playback().report_playback_stop(&stop_info).await {
+      log::error!("Failed to report playback stop: {}", e);
     }
   }
 
@@ -1117,7 +1478,13 @@ impl SessionManager {
   ) -> Result<(), JellyfinError> {
     let play_request = Self::resolve_library_play_request(&ctx.client, request).await?;
 
-    Self::report_playback_stopped(&ctx.client, &ctx.state, &ctx.hls).await;
+    let embedded_active = ctx
+      .embedded_player
+      .as_ref()
+      .is_some_and(|player| player.is_active());
+    if !embedded_active {
+      Self::report_playback_stopped(&ctx.client, &ctx.state, &ctx.hls).await;
+    }
     Self::handle_play(ctx, mpv_connected, play_request).await
   }
 
@@ -1176,6 +1543,23 @@ impl SessionManager {
     Self::play_library_request(&self.play_context(), self.mpv.is_connected(), request).await
   }
 
+  /// Start Library playback through the embedded WebView engine.
+  pub async fn play_library_embedded(
+    &self,
+    request: VideoLibraryPlayRequest,
+  ) -> Result<(), JellyfinError> {
+    let play_request = Self::resolve_library_play_request(&self.client, request).await?;
+    Self::handle_embedded_play(&self.play_context(), play_request).await
+  }
+
+  /// Apply an embedded control while keeping the shared provider session in sync.
+  pub async fn control_embedded(
+    &self,
+    command: PlaybackControlCommand,
+  ) -> Result<EmbeddedPlayerState, JellyfinError> {
+    Self::control_embedded_player(&self.embedded_player, &self.state, command).await
+  }
+
   /// Play the next episode. Called from system tray or UI.
   pub async fn play_next_episode(&self) -> Result<(), String> {
     let current_item = {
@@ -1210,13 +1594,19 @@ impl SessionManager {
 
   /// Stop the session.
   pub async fn stop(&self) -> Result<(), JellyfinError> {
+    let embedded_active = self.embedded_player.is_active();
+    if embedded_active {
+      if let Err(error) = self.control_embedded(PlaybackControlCommand::Stop).await {
+        log::warn!("Failed to stop embedded playback during session teardown: {error}");
+      }
+    }
     // Report playback stopped if there's an active session
     let session = {
       let mut s = self.state.write();
-      s.playback.take()
+      s.take_playback()
     };
 
-    if let Some(session) = session {
+    if let Some(session) = session.filter(|_| !embedded_active) {
       if let Some(proxy_session_id) = session.hls_proxy_session_id.clone() {
         if let Ok(proxy) = self.hls_proxy.current() {
           proxy.deactivate(&proxy_session_id);
@@ -1239,6 +1629,40 @@ impl SessionManager {
 
     self.websocket.disconnect().await;
     Ok(())
+  }
+}
+
+fn stream_is_hdr(stream: &MediaStream) -> bool {
+  let explicitly_hdr = |value: &str| {
+    matches!(
+      value.to_ascii_lowercase().as_str(),
+      "hdr"
+        | "hdr10"
+        | "hdr10plus"
+        | "hlg"
+        | "dolbyvision"
+        | "dovi"
+        | "doviwithhdr10"
+        | "doviwithhlg"
+    )
+  };
+  stream.video_range.as_deref().is_some_and(explicitly_hdr)
+    || stream
+      .video_range_type
+      .as_deref()
+      .is_some_and(explicitly_hdr)
+    || stream.color_transfer.as_deref().is_some_and(|transfer| {
+      transfer.eq_ignore_ascii_case("smpte2084") || transfer.eq_ignore_ascii_case("arib-std-b67")
+    })
+}
+
+fn stream_audio_layout(stream: &MediaStream) -> AudioChannelLayout {
+  match stream.channels.unwrap_or(2).clamp(1, i32::from(u8::MAX)) as u8 {
+    1 => AudioChannelLayout::Mono,
+    2 => AudioChannelLayout::Stereo,
+    6 => AudioChannelLayout::Surround51,
+    8 => AudioChannelLayout::Surround71,
+    channels => AudioChannelLayout::Other(channels),
   }
 }
 
@@ -1370,6 +1794,35 @@ mod tests {
 
   type RequestLog = Arc<parking_lot::Mutex<Vec<String>>>;
 
+  fn video_stream(metadata: serde_json::Value) -> MediaStream {
+    let mut value = serde_json::json!({ "Index": 0, "Type": "Video" });
+    value
+      .as_object_mut()
+      .expect("video fixture is an object")
+      .extend(metadata.as_object().expect("metadata is an object").clone());
+    serde_json::from_value(value).expect("video fixture should deserialize")
+  }
+
+  #[test]
+  fn hdr_detection_does_not_treat_ten_bit_sdr_or_unknown_ranges_as_hdr() {
+    assert!(!stream_is_hdr(&video_stream(
+      serde_json::json!({ "BitDepth": 10, "VideoRange": "SDR" })
+    )));
+    assert!(!stream_is_hdr(&video_stream(
+      serde_json::json!({ "VideoRangeType": "Unknown" })
+    )));
+  }
+
+  #[test]
+  fn hdr_detection_accepts_known_range_and_transfer_signals() {
+    assert!(stream_is_hdr(&video_stream(
+      serde_json::json!({ "VideoRangeType": "HDR10" })
+    )));
+    assert!(stream_is_hdr(&video_stream(
+      serde_json::json!({ "ColorTransfer": "smpte2084" })
+    )));
+  }
+
   async fn serve_owned_responses_with_requests(
     responses: Vec<(String, String)>,
   ) -> (String, RequestLog) {
@@ -1467,6 +1920,7 @@ mod tests {
 
   pub(super) fn empty_test_state() -> RwLock<SessionState> {
     RwLock::new(SessionState {
+      playback_owner: None,
       playback: None,
       transport: TransportSnapshot::default(),
       last_report_time: std::time::Instant::now(),
@@ -1484,6 +1938,7 @@ mod tests {
 
   fn test_state_with_active_playback() -> RwLock<SessionState> {
     RwLock::new(SessionState {
+      playback_owner: None,
       playback: Some(PlaybackSession {
         item_id: "old-movie".to_string(),
         media_source_id: Some("old-source".to_string()),
@@ -1511,6 +1966,84 @@ mod tests {
     })
   }
 
+  #[test]
+  fn stale_mpv_owner_cannot_clear_new_embedded_handoff() {
+    let state = test_state_with_active_playback();
+    let mut state = state.write();
+    let playback = state.playback.take().expect("test playback");
+    let mpv_owner = state.replace_playback(PlaybackEngine::ExternalMpv, playback);
+    let embedded_playback = state.playback.clone().expect("MPV playback");
+    state.replace_playback(PlaybackEngine::EmbeddedWeb, embedded_playback);
+
+    let removed = state.clear_context_if_owned(mpv_owner);
+
+    assert_eq!(
+      (
+        removed.is_none(),
+        state.active_owner(PlaybackEngine::EmbeddedWeb).is_some(),
+        state
+          .playback
+          .as_ref()
+          .map(|playback| playback.item_id.as_str()),
+      ),
+      (true, true, Some("old-movie"))
+    );
+  }
+
+  #[test]
+  fn stale_mpv_property_event_cannot_mutate_embedded_playback() {
+    let state = test_state_with_active_playback();
+    let mpv_owner = {
+      let mut state = state.write();
+      let playback = state.playback.take().expect("test playback");
+      let mpv_owner = state.replace_playback(PlaybackEngine::ExternalMpv, playback);
+      let embedded_playback = state.playback.clone().expect("MPV playback");
+      state.replace_playback(PlaybackEngine::EmbeddedWeb, embedded_playback);
+      mpv_owner
+    };
+    let event = crate::mpv::MpvEvent {
+      event: "property-change".to_string(),
+      name: Some("volume".to_string()),
+      id: None,
+      data: Some(serde_json::json!(5)),
+      reason: None,
+      args: None,
+    };
+
+    let applied = playback_events::update_state_from_property_if_owned(&state, mpv_owner, &event);
+
+    assert_eq!(
+      (
+        applied,
+        state
+          .read()
+          .playback
+          .as_ref()
+          .map(|playback| playback.volume)
+      ),
+      (false, Some(100))
+    );
+  }
+
+  #[test]
+  fn embedded_stop_reconciliation_prevents_second_mpv_fallback_stop() {
+    let state = test_state_with_active_playback();
+    let mut state = state.write();
+    let playback = state.playback.take().expect("test playback");
+    let owner = state.replace_playback(PlaybackEngine::EmbeddedWeb, playback);
+
+    let embedded_stop = state.clear_context_if_owned(owner);
+    let fallback_stop = state.take_playback();
+
+    assert_eq!(
+      (
+        embedded_stop.map(|playback| playback.item_id),
+        fallback_stop.is_none(),
+      ),
+      (Some("old-movie".to_string()), true)
+    );
+  }
+
   pub(super) fn test_state_with_intro_range() -> RwLock<SessionState> {
     test_state_with_range(IntroSkipKind::Introduction, 10.0, 80.0)
   }
@@ -1521,6 +2054,7 @@ mod tests {
     end_seconds: f64,
   ) -> RwLock<SessionState> {
     RwLock::new(SessionState {
+      playback_owner: None,
       playback: Some(PlaybackSession {
         item_id: "item-1".to_string(),
         media_source_id: Some("source-1".to_string()),
@@ -1589,6 +2123,7 @@ mod tests {
       hls,
       app: None,
       config,
+      embedded_player: None,
     };
 
     SessionManager::play_library_request(
@@ -1597,6 +2132,7 @@ mod tests {
       VideoLibraryPlayRequest {
         item_id: "movie-1".to_string(),
         mode: VideoLibraryPlayMode::Resume,
+        engine_override: None,
         start_position_seconds: Some(120.0),
         audio_stream_index: Some(1),
         subtitle_stream_index: Some(2),
@@ -1676,6 +2212,7 @@ mod tests {
       hls,
       app: None,
       config,
+      embedded_player: None,
     };
 
     SessionManager::play_library_request(
@@ -1684,6 +2221,7 @@ mod tests {
       VideoLibraryPlayRequest {
         item_id: series_id.to_string(),
         mode: VideoLibraryPlayMode::Show,
+        engine_override: None,
         start_position_seconds: None,
         audio_stream_index: None,
         subtitle_stream_index: None,
@@ -1754,6 +2292,7 @@ mod tests {
       hls,
       app: None,
       config,
+      embedded_player: None,
     };
 
     SessionManager::play_library_request(
@@ -1762,6 +2301,7 @@ mod tests {
       VideoLibraryPlayRequest {
         item_id: "movie-emby".to_string(),
         mode: VideoLibraryPlayMode::Start,
+        engine_override: None,
         start_position_seconds: None,
         audio_stream_index: Some(1),
         subtitle_stream_index: Some(2),
@@ -1834,6 +2374,7 @@ mod tests {
     ])
     .await;
     let state = RwLock::new(SessionState {
+      playback_owner: None,
       playback: Some(PlaybackSession {
         item_id: "movie-emby".to_string(),
         media_source_id: Some("source-emby".to_string()),
@@ -1888,6 +2429,7 @@ mod tests {
     ])
     .await;
     let state = RwLock::new(SessionState {
+      playback_owner: None,
       playback: Some(PlaybackSession {
         item_id: "movie-emby".to_string(),
         media_source_id: Some("source-emby".to_string()),
@@ -1994,6 +2536,7 @@ mod tests {
   #[tokio::test]
   async fn time_pos_update_without_active_ranges_emits_no_seek_action() {
     let state = RwLock::new(SessionState {
+      playback_owner: None,
       playback: None,
       transport: TransportSnapshot::default(),
       last_report_time: std::time::Instant::now(),
@@ -2317,6 +2860,7 @@ mod emby_hls_tests {
         hls: self.hls.clone(),
         app: None,
         config: self.config.clone(),
+        embedded_player: None,
       };
       SessionManager::play_library_request(
         &ctx,
@@ -2324,6 +2868,7 @@ mod emby_hls_tests {
         VideoLibraryPlayRequest {
           item_id: item_id.to_string(),
           mode: VideoLibraryPlayMode::Start,
+          engine_override: None,
           start_position_seconds: None,
           audio_stream_index: Some(1),
           subtitle_stream_index: None,
@@ -2782,6 +3327,7 @@ mod emby_hls_tests {
       hls: harness.hls.clone(),
       app: None,
       config: harness.config.clone(),
+      embedded_player: None,
     };
     playback_events::handle_end_file_event(&end_event, &end_ctx).await;
     let (url_c, _) = recv_play_action(&mut harness.action_rx, "adjacent episode play action").await;
@@ -2920,6 +3466,7 @@ mod regression_tests {
   #[test]
   fn jellyfin_general_command_volume_from_string_updates_session_and_sends_action() {
     let state = RwLock::new(SessionState {
+      playback_owner: None,
       playback: Some(PlaybackSession {
         item_id: "item-1".to_string(),
         media_source_id: Some("source-1".to_string()),
@@ -3040,6 +3587,7 @@ mod regression_tests {
 
   fn test_state_with_episode_playback() -> RwLock<SessionState> {
     RwLock::new(SessionState {
+      playback_owner: None,
       playback: Some(PlaybackSession {
         item_id: "episode-1".to_string(),
         media_source_id: Some("source-1".to_string()),

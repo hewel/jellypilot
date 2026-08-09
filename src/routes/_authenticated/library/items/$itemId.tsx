@@ -1,4 +1,5 @@
 import type {
+  PlaybackEngineKind,
   VideoItemDetail,
   VideoLibraryItem,
   VideoLibraryPlayMode,
@@ -180,7 +181,11 @@ function LibraryItemDetailRoute() {
     return rows;
   };
   const technicalRowsLoading = () => streamsQuery.isPending || streamsQuery.isFetching;
-  const startPlayback = async (item: VideoItemDetail, mode: VideoLibraryPlayMode) => {
+  const startPlayback = async (
+    item: VideoItemDetail,
+    mode: VideoLibraryPlayMode,
+    engineOverride?: PlaybackEngineKind,
+  ) => {
     if (!item.canPlay || playBusy()) {
       return;
     }
@@ -189,6 +194,7 @@ function LibraryItemDetailRoute() {
     setPlayError(null);
     const result = await playbackMutation.mutateAsync({
       audioStreamIndex: null,
+      ...(engineOverride ? { engineOverride } : {}),
       itemId: item.id,
       mode,
       startPositionSeconds: mode === 'resume' ? item.resumePositionSeconds : 0,
@@ -364,6 +370,21 @@ function LibraryItemDetailRoute() {
                               }
                             : undefined
                         }
+                        playbackOverrides={{
+                          disabled: !item().canPlay || playBusy(),
+                          onEmbedded: () =>
+                            void startPlayback(
+                              item(),
+                              item().canResume ? 'resume' : 'start',
+                              'embeddedWeb',
+                            ),
+                          onExternalMpv: () =>
+                            void startPlayback(
+                              item(),
+                              item().canResume ? 'resume' : 'start',
+                              'externalMpv',
+                            ),
+                        }}
                         onUpdate={(request) => userDataMutation.mutateAsync(request)}
                         onSuccess={() => {
                           const itemType = item().itemType;

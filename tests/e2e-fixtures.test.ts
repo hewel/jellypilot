@@ -22,6 +22,10 @@ describe('native E2E fixture registry', () => {
       activeProfileKey: null,
       profiles: [],
     });
+    await expect(invoke('embedded_player_get_state')).resolves.toMatchObject({
+      phase: 'idle',
+      sessionId: null,
+    });
   });
 
   test('correlates library page metadata with the requested start index', async () => {

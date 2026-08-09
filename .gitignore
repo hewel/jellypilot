@@ -9,6 +9,8 @@ dist/
 styled-system/
 /target/
 /crates/jellypilot-core-wasm/pkg/
+/src-tauri/binaries/ffmpeg-*
+/src-tauri/binaries/ffmpeg.*.txt
 
 # Profile
 .rspack-profile-*/

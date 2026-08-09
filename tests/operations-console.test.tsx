@@ -9,6 +9,8 @@ import OperationsConsole from '../src/components/OperationsConsole';
 import { ToastProvider } from '../src/components/ToastProvider';
 import { TestQueryProvider } from './query-client';
 
+Element.prototype.scrollTo = () => {};
+
 const connectedState = {
   capabilities: {
     introSkipper: true,
@@ -976,6 +978,29 @@ test('player bridge settings use Ark fields and intro skip mode buttons', async 
   const manual = screen.getByRole('button', { name: /Manual/ });
   expect(manual).toHaveAttribute('aria-pressed', 'false');
 
+  cleanup();
+});
+
+test('player bridge persists the selected default playback engine', async () => {
+  const configSet = rstest.spyOn(commands, 'configSet').mockResolvedValue({
+    data: null,
+    status: 'ok',
+  });
+  const cleanup = renderConsole();
+
+  const engine = await screen.findByRole('combobox', { name: 'Default playback engine' });
+  const engineTrigger = engine.parentElement?.querySelector('button');
+  if (!engineTrigger) {
+    throw new Error('Playback engine select trigger should render');
+  }
+  fireEvent.click(engineTrigger);
+  fireEvent.click(await screen.findByRole('option', { name: 'External MPV' }));
+
+  await waitFor(() =>
+    expect(configSet).toHaveBeenCalledWith(
+      expect.objectContaining({ playbackEngine: 'externalMpv' }),
+    ),
+  );
   cleanup();
 });
 

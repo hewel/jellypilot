@@ -2,6 +2,7 @@
 members = [
   "crates/jellypilot-core",
   "crates/jellypilot-core-wasm",
+  "crates/jellypilot-playback-core",
   "src-tauri",
 ]
 exclude = [

@@ -5,6 +5,8 @@
 use serde::{Deserialize, Serialize};
 use specta::Type;
 
+use crate::config::PlaybackEngineKind;
+
 use super::intro_skipper::IntroSkipRange;
 
 /// Authentication response from Jellyfin.
@@ -332,6 +334,9 @@ pub enum VideoLibraryPlayMode {
 pub struct VideoLibraryPlayRequest {
   pub item_id: String,
   pub mode: VideoLibraryPlayMode,
+  /// Optional one-shot engine choice. The configured engine is used when absent.
+  #[serde(default)]
+  pub engine_override: Option<PlaybackEngineKind>,
   pub start_position_seconds: Option<f64>,
   pub audio_stream_index: Option<i32>,
   pub subtitle_stream_index: Option<i32>,
@@ -505,6 +510,16 @@ pub struct MediaStream {
   pub stream_type: String,
   #[serde(default)]
   pub codec: Option<String>,
+  #[serde(default)]
+  pub video_range: Option<String>,
+  #[serde(default)]
+  pub video_range_type: Option<String>,
+  #[serde(default)]
+  pub color_transfer: Option<String>,
+  #[serde(default)]
+  pub bit_depth: Option<i32>,
+  #[serde(default)]
+  pub channels: Option<i32>,
   #[serde(default)]
   pub language: Option<String>,
   #[serde(default)]
@@ -872,6 +887,11 @@ mod tests {
       index,
       stream_type: stream_type.to_string(),
       codec: None,
+      video_range: None,
+      video_range_type: None,
+      color_transfer: None,
+      bit_depth: None,
+      channels: None,
       language: language.map(str::to_string),
       display_title: None,
       is_default: false,

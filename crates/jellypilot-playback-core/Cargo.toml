@@ -1,0 +1,11 @@
+[package]
+name = "jellypilot-playback-core"
+description = "UI-agnostic embedded playback policy for JellyPilot"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+version.workspace = true
+
+[lints]
+workspace = true

@@ -7,7 +7,12 @@ import { Show, createEffect, createSignal } from 'solid-js';
 import { Portal } from 'solid-js/web';
 import * as recipes from '~styles/recipes';
 
-import type { AppConfig, IntroSkipperMode, SavedServiceProfileSummary } from '../bindings';
+import type {
+  AppConfig,
+  IntroSkipperMode,
+  PlaybackEngineKind,
+  SavedServiceProfileSummary,
+} from '../bindings';
 import { commandFailure, commandFailureMessage } from '../effects/commands';
 import { detectMpv, fetchConfig, saveConfig } from '../effects/config';
 import { disconnectJellyfin, fetchConnectionState } from '../effects/connection';
@@ -179,6 +184,7 @@ export default function OperationsConsole(props: OperationsConsoleProps) {
     latestConfigSnapshot?.imageDiskCacheEnabled ??
     config()?.imageDiskCacheEnabled ??
     true;
+  const playbackEngine = () => config()?.playbackEngine ?? 'embeddedWeb';
 
   const showPlayerBridgeStatus = (type: 'saving' | 'saved' | 'error', text: string) => {
     if (clearPlayerBridgeStatusTimer) {
@@ -591,6 +597,14 @@ export default function OperationsConsole(props: OperationsConsoleProps) {
     saveIntroSkipperSetting(mode);
   };
 
+  const handlePlaybackEngineChange = (engine: PlaybackEngineKind) => {
+    const desired = latestConfigSnapshot ?? lastSavedConfig ?? config();
+    if (desired?.playbackEngine === engine) {
+      return;
+    }
+    queueConfigSave(buildConfigSnapshot({ playbackEngine: engine }));
+  };
+
   return (
     <Provider>
       <ConsoleContainer>
@@ -622,7 +636,9 @@ export default function OperationsConsole(props: OperationsConsoleProps) {
             >
               <PlayerBridgeSettingsCard
                 form={form}
+                playbackEngine={playbackEngine()}
                 subtitleLanguageSelectItems={subtitleLanguageSelectItems}
+                onPlaybackEngineChange={handlePlaybackEngineChange}
                 onSaveTextSetting={(field, value) => {
                   if (field === 'deviceName' || field === 'mpvPath' || field === 'mpvArgs') {
                     saveTextSetting(field, value);

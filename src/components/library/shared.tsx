@@ -1,7 +1,16 @@
 import { Menu } from '@ark-ui/solid/menu';
 import { cx } from '@styled-system/css';
 import { Exit, Match } from 'effect';
-import { Check, Clapperboard, Heart, MoreVertical, RefreshCw, RotateCcw } from 'lucide-solid';
+import {
+  Check,
+  Clapperboard,
+  Heart,
+  MonitorPlay,
+  MoreVertical,
+  PanelsTopLeft,
+  RefreshCw,
+  RotateCcw,
+} from 'lucide-solid';
 import { For, Show, createSignal, createUniqueId, onCleanup, onMount } from 'solid-js';
 import { Portal } from 'solid-js/web';
 import {
@@ -188,6 +197,11 @@ export function UserDataControls(props: {
   favorite: boolean;
   subject: string;
   playFromBeginning?: { disabled: boolean; onSelect: () => void };
+  playbackOverrides?: {
+    disabled: boolean;
+    onEmbedded: () => void;
+    onExternalMpv: () => void;
+  };
   onUpdate: (
     request: VideoUserDataUpdateRequest,
   ) => Promise<Exit.Exit<VideoUserDataUpdate, CommandError>>;
@@ -261,37 +275,71 @@ export function UserDataControls(props: {
           </Show>
         </button>
 
-        <Show when={props.playFromBeginning}>
-          {(startOver) => (
-            <Menu.Root>
-              <Menu.Trigger
-                class={styles.iconAction()}
-                disabled={anyBusy()}
-                aria-label="More actions"
-              >
-                <MoreVertical class={styles.iconSm} aria-hidden="true" />
-              </Menu.Trigger>
-              <Portal mount={document.body}>
-                <Menu.Positioner>
-                  <Menu.Content class={styles.menuContent}>
-                    <Menu.Item
-                      class={styles.menuItem}
-                      value="play-from-beginning"
-                      disabled={startOver().disabled}
-                      onSelect={() => startOver().onSelect()}
-                    >
-                      <Menu.ItemText class={styles.menuText}>
-                        <span class={styles.menuItemRow}>
-                          <RotateCcw class={styles.menuItemIcon} aria-hidden="true" />
-                          Play from beginning
-                        </span>
-                      </Menu.ItemText>
-                    </Menu.Item>
-                  </Menu.Content>
-                </Menu.Positioner>
-              </Portal>
-            </Menu.Root>
-          )}
+        <Show when={Boolean(props.playFromBeginning || props.playbackOverrides)}>
+          <Menu.Root>
+            <Menu.Trigger
+              class={styles.iconAction()}
+              disabled={anyBusy()}
+              aria-label="More actions"
+            >
+              <MoreVertical class={styles.iconSm} aria-hidden="true" />
+            </Menu.Trigger>
+            <Portal mount={document.body}>
+              <Menu.Positioner>
+                <Menu.Content class={styles.menuContent}>
+                  <Show when={props.playFromBeginning}>
+                    {(startOver) => (
+                      <Menu.Item
+                        class={styles.menuItem}
+                        value="play-from-beginning"
+                        disabled={startOver().disabled}
+                        onSelect={() => startOver().onSelect()}
+                      >
+                        <Menu.ItemText class={styles.menuText}>
+                          <span class={styles.menuItemRow}>
+                            <RotateCcw class={styles.menuItemIcon} aria-hidden="true" />
+                            Play from beginning
+                          </span>
+                        </Menu.ItemText>
+                      </Menu.Item>
+                    )}
+                  </Show>
+                  <Show when={props.playbackOverrides}>
+                    {(overrides) => (
+                      <>
+                        <Menu.Item
+                          class={styles.menuItem}
+                          value="play-embedded"
+                          disabled={overrides().disabled}
+                          onSelect={() => overrides().onEmbedded()}
+                        >
+                          <Menu.ItemText class={styles.menuText}>
+                            <span class={styles.menuItemRow}>
+                              <PanelsTopLeft class={styles.menuItemIcon} aria-hidden="true" />
+                              Play in embedded player
+                            </span>
+                          </Menu.ItemText>
+                        </Menu.Item>
+                        <Menu.Item
+                          class={styles.menuItem}
+                          value="play-external-mpv"
+                          disabled={overrides().disabled}
+                          onSelect={() => overrides().onExternalMpv()}
+                        >
+                          <Menu.ItemText class={styles.menuText}>
+                            <span class={styles.menuItemRow}>
+                              <MonitorPlay class={styles.menuItemIcon} aria-hidden="true" />
+                              Play in MPV
+                            </span>
+                          </Menu.ItemText>
+                        </Menu.Item>
+                      </>
+                    )}
+                  </Show>
+                </Menu.Content>
+              </Menu.Positioner>
+            </Portal>
+          </Menu.Root>
         </Show>
       </div>
       <Show when={error()}>{(message) => <p class={styles.errorText}>{message()}</p>}</Show>
