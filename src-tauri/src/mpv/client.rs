@@ -240,7 +240,7 @@ impl MpvClient {
 
   /// Load a file for playback.
   pub async fn loadfile(&self, url: &str) -> Result<(), MpvError> {
-    log::info!("Loading file: {}", url);
+    log::info!("Loading media URL");
     self.send(MpvCommand::loadfile(url)).await?;
     Ok(())
   }
@@ -281,11 +281,11 @@ impl MpvClient {
     options.extend(file_options);
 
     if options.is_empty() {
-      log::info!("Loading file: {}", url);
+      log::info!("Loading media URL");
       self.send(MpvCommand::loadfile(url)).await?;
     } else {
       let options_str = options.join(",");
-      log::info!("Loading file: {} with options: {}", url, options_str);
+      log::info!("Loading media URL with options: {}", options_str);
       self
         .send(MpvCommand::loadfile_with_options(url, &options_str))
         .await?;
@@ -406,7 +406,7 @@ impl MpvClient {
   ///
   /// When `select` is true, the subtitle is immediately selected after loading.
   pub async fn sub_add(&self, url: &str, select: bool) -> Result<(), MpvError> {
-    log::info!("Adding external subtitle (select={}): {}", select, url);
+    log::info!("Adding external subtitle (select={select})");
     let flags = if select { Some("select") } else { None };
     self.send(MpvCommand::sub_add(url, flags)).await?;
     Ok(())

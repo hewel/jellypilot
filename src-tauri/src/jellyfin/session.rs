@@ -425,7 +425,7 @@ impl SessionManager {
       tokio::spawn(async move {
         log::info!("MPV action consumer started, waiting for actions...");
         while let Some(action) = action_rx.recv().await {
-          log::info!("Processing MPV action: {:?}", action);
+          log::info!("Processing MPV action");
           executor.execute(action).await;
         }
       });
@@ -733,7 +733,6 @@ impl SessionManager {
         intro_skipper_enabled,
       },
     );
-
     // Build stream URL
     let url = ctx
       .client

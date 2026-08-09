@@ -1102,8 +1102,9 @@ impl JellyfinClient {
 
   /// Get a static media source for JellyPilot's local embedded transcoder.
   ///
-  /// Provider-side remuxing and transcoding are disabled so every adaptive
-  /// output byte is produced by the local FFmpeg sidecar.
+  /// Direct-stream discovery is enabled so the provider can issue a valid
+  /// source route. The actual source request forces `Static=true`, while
+  /// provider-side transcoding and live-stream opening remain disabled.
   pub async fn get_embedded_playback_info(
     &self,
     item_id: &str,
@@ -1127,7 +1128,7 @@ impl JellyfinClient {
     start_time_ticks: Option<i64>,
     audio_stream_index: Option<i32>,
     subtitle_stream_index: Option<i32>,
-    allow_server_streaming: bool,
+    allow_server_transcoding: bool,
   ) -> Result<PlaybackInfoResponse, JellyfinError> {
     let user_id = self.user_id()?;
     let path = format!("/Items/{}/PlaybackInfo", item_id);
@@ -1140,9 +1141,9 @@ impl JellyfinClient {
       audio_stream_index,
       subtitle_stream_index,
       enable_direct_play: true,
-      enable_direct_stream: allow_server_streaming,
-      enable_transcoding: allow_server_streaming,
-      auto_open_live_stream: allow_server_streaming,
+      enable_direct_stream: true,
+      enable_transcoding: allow_server_transcoding,
+      auto_open_live_stream: allow_server_transcoding,
     };
 
     self.post(&path, &request).await
@@ -6753,7 +6754,7 @@ mod tests {
   }
 
   #[tokio::test]
-  async fn embedded_playback_info_disables_provider_streaming_and_subtitles() {
+  async fn embedded_playback_info_discovers_static_route_without_provider_transcoding() {
     let client = JellyfinClient::new();
     let (server_url, requests) = serve_owned_responses_with_requests(vec![(
       "200 OK".to_string(),
@@ -6771,7 +6772,7 @@ mod tests {
     let request = captured.first().expect("playback info request");
     assert!(request.starts_with("POST /Items/movie-1/PlaybackInfo "));
     assert!(request.contains(r#""EnableDirectPlay":true"#));
-    assert!(request.contains(r#""EnableDirectStream":false"#));
+    assert!(request.contains(r#""EnableDirectStream":true"#));
     assert!(request.contains(r#""EnableTranscoding":false"#));
     assert!(request.contains(r#""AutoOpenLiveStream":false"#));
     assert!(request.contains(r#""SubtitleStreamIndex":-1"#));

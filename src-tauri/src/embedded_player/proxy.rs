@@ -1,5 +1,6 @@
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::time::Instant;
 
 use axum::body::Body;
 use axum::extract::{Path, State};
@@ -28,12 +29,60 @@ struct ProxySession {
 struct ProxyState {
   client: reqwest::Client,
   active: Arc<RwLock<Option<ProxySession>>>,
+  diagnostic: Arc<RwLock<SourceProxyDiagnostic>>,
+}
+
+#[derive(Default)]
+struct SourceProxyDiagnostic {
+  started_at: Option<Instant>,
+  has_range: bool,
+  summary: String,
+}
+
+impl SourceProxyDiagnostic {
+  fn reset(&mut self) {
+    self.started_at = None;
+    self.has_range = false;
+    self.summary = "source proxy received no request".to_string();
+  }
+
+  fn started(&mut self, method: &Method, has_range: bool) {
+    self.started_at = Some(Instant::now());
+    self.has_range = has_range;
+    self.summary = format!(
+      "source proxy {method} request pending (range: {})",
+      if has_range { "yes" } else { "no" }
+    );
+  }
+
+  fn completed(&mut self, status: StatusCode) {
+    self.summary = format!(
+      "source proxy returned HTTP {} after {} ms (range: {})",
+      status.as_u16(),
+      self.elapsed_millis(),
+      if self.has_range { "yes" } else { "no" },
+    );
+  }
+
+  fn failed(&mut self) {
+    self.summary = format!(
+      "source proxy could not reach the provider after {} ms",
+      self.elapsed_millis()
+    );
+  }
+
+  fn elapsed_millis(&self) -> u128 {
+    self
+      .started_at
+      .map_or(0, |started| started.elapsed().as_millis())
+  }
 }
 
 /// One loopback server with independently authorized source and HLS routes.
 pub(super) struct LoopbackMediaServer {
   base_url: String,
   active: Arc<RwLock<Option<ProxySession>>>,
+  diagnostic: Arc<RwLock<SourceProxyDiagnostic>>,
 }
 
 impl LoopbackMediaServer {
@@ -45,9 +94,11 @@ impl LoopbackMediaServer {
       .local_addr()
       .map_err(EmbeddedPlayerError::LoopbackBind)?;
     let active = Arc::new(RwLock::new(None));
+    let diagnostic = Arc::new(RwLock::new(SourceProxyDiagnostic::default()));
     let state = ProxyState {
       client: reqwest::Client::new(),
       active: Arc::clone(&active),
+      diagnostic: Arc::clone(&diagnostic),
     };
     let router = Router::new()
       .route("/source/{nonce}", get(proxy_source).head(proxy_source))
@@ -63,6 +114,7 @@ impl LoopbackMediaServer {
     Ok(Self {
       base_url: format!("http://{address}"),
       active,
+      diagnostic,
     })
   }
 
@@ -73,6 +125,7 @@ impl LoopbackMediaServer {
     upstream_url: String,
     output_dir: PathBuf,
   ) {
+    self.diagnostic.write().reset();
     *self.active.write() = Some(ProxySession {
       source_nonce,
       hls_nonce,
@@ -92,6 +145,10 @@ impl LoopbackMediaServer {
   pub(super) fn playlist_url(&self, nonce: &str) -> String {
     format!("{}/hls/{nonce}/master.m3u8", self.base_url)
   }
+
+  pub(super) fn source_diagnostic_summary(&self) -> String {
+    self.diagnostic.read().summary.clone()
+  }
 }
 
 async fn proxy_source(
@@ -110,8 +167,13 @@ async fn proxy_source(
     Method::HEAD => reqwest::Method::HEAD,
     _ => return StatusCode::METHOD_NOT_ALLOWED.into_response(),
   };
-  let mut upstream = state.client.request(method, session.upstream_url);
-  if let Some(range) = request.headers().get(RANGE) {
+  let mut upstream = source_upstream_request(&state.client, method, &session);
+  let range = request.headers().get(RANGE);
+  state
+    .diagnostic
+    .write()
+    .started(request.method(), range.is_some());
+  if let Some(range) = range {
     upstream = upstream.header(RANGE, range);
   }
 
@@ -119,11 +181,13 @@ async fn proxy_source(
     Ok(response) => response,
     Err(_) => {
       // reqwest errors can include the authenticated upstream URL. Never log it.
+      state.diagnostic.write().failed();
       log::warn!("Embedded source proxy request failed");
       return StatusCode::BAD_GATEWAY.into_response();
     }
   };
   let status = upstream.status();
+  state.diagnostic.write().completed(status);
   let content_type = upstream.headers().get(CONTENT_TYPE).cloned();
   let content_length = upstream.headers().get(CONTENT_LENGTH).cloned();
   let content_range = upstream.headers().get(CONTENT_RANGE).cloned();
@@ -139,6 +203,19 @@ async fn proxy_source(
   insert_header(response.headers_mut(), CONTENT_RANGE, content_range);
   insert_header(response.headers_mut(), ACCEPT_RANGES, accept_ranges);
   response
+}
+
+fn source_upstream_request(
+  client: &reqwest::Client,
+  method: reqwest::Method,
+  session: &ProxySession,
+) -> reqwest::RequestBuilder {
+  // Some Emby deployments gate the static stream route by the media client
+  // identity. Match the identity used by the working external MPV path while
+  // keeping the authenticated provider URL hidden behind the loopback proxy.
+  client
+    .request(method, session.upstream_url.clone())
+    .header(reqwest::header::USER_AGENT, "libmpv")
 }
 
 async fn serve_hls_file(
@@ -281,6 +358,7 @@ mod tests {
         upstream_url: "https://media.invalid/source".to_string(),
         output_dir: PathBuf::from("/tmp/embedded-authority-test"),
       }))),
+      diagnostic: Arc::new(RwLock::new(SourceProxyDiagnostic::default())),
     };
 
     assert!(authorized_source_session(&state, "source-only").is_some());
@@ -310,15 +388,46 @@ mod tests {
     let state = ProxyState {
       client: reqwest::Client::new(),
       active: Arc::clone(&active),
+      diagnostic: Arc::new(RwLock::new(SourceProxyDiagnostic::default())),
     };
     let server = LoopbackMediaServer {
       base_url: "http://127.0.0.1:1".to_string(),
       active,
+      diagnostic: Arc::new(RwLock::new(SourceProxyDiagnostic::default())),
     };
 
     server.revoke();
 
     assert!(authorized_source_session(&state, "source-only").is_none());
     assert!(authorized_hls_session(&state, "browser-only").is_none());
+  }
+
+  #[test]
+  fn source_diagnostic_reports_status_without_upstream_identity() {
+    let mut diagnostic = SourceProxyDiagnostic::default();
+
+    diagnostic.started(&Method::GET, true);
+    diagnostic.completed(StatusCode::PARTIAL_CONTENT);
+
+    assert!(diagnostic
+      .summary
+      .starts_with("source proxy returned HTTP 206 after "));
+  }
+
+  #[test]
+  fn source_request_uses_the_working_emby_media_identity_without_auth_headers() {
+    let session = ProxySession {
+      source_nonce: "source-only".to_string(),
+      hls_nonce: "browser-only".to_string(),
+      upstream_url: "https://media.invalid/source?api_key=secret".to_string(),
+      output_dir: PathBuf::from("/tmp/embedded-request-test"),
+    };
+
+    let request = source_upstream_request(&reqwest::Client::new(), reqwest::Method::GET, &session)
+      .build()
+      .expect("source request");
+
+    assert_eq!(request.headers()[reqwest::header::USER_AGENT], "libmpv");
+    assert!(!request.headers().contains_key("X-Emby-Authorization"));
   }
 }

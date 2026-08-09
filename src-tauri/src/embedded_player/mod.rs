@@ -30,6 +30,98 @@ use crate::jellyfin::{
 
 use self::proxy::LoopbackMediaServer;
 
+const MAX_FFMPEG_STARTUP_DIAGNOSTIC_BYTES: usize = 4096;
+
+#[derive(Clone, Copy)]
+enum FfmpegStartupFailureKind {
+  Exited,
+  Deadline,
+}
+
+#[derive(Default)]
+struct FfmpegStartupDiagnostics {
+  output: String,
+  exit_code: Option<Option<i32>>,
+}
+
+impl FfmpegStartupDiagnostics {
+  fn push(&mut self, value: &str) {
+    self.output.push_str(&sanitize_ffmpeg_diagnostic(value));
+    if self.output.len() > MAX_FFMPEG_STARTUP_DIAGNOSTIC_BYTES {
+      let mut start = self.output.len() - MAX_FFMPEG_STARTUP_DIAGNOSTIC_BYTES;
+      while !self.output.is_char_boundary(start) {
+        start += 1;
+      }
+      self.output.drain(..start);
+    }
+  }
+
+  fn record_exit(&mut self, code: Option<i32>) {
+    self.exit_code = Some(code);
+  }
+
+  fn detail(&self, kind: FfmpegStartupFailureKind, proxy_summary: &str) -> String {
+    let status = match (kind, self.exit_code) {
+      (FfmpegStartupFailureKind::Exited, Some(Some(code))) => {
+        format!("FFmpeg exited with status {code}")
+      }
+      (FfmpegStartupFailureKind::Exited, _) => "FFmpeg exited without a status code".to_string(),
+      (FfmpegStartupFailureKind::Deadline, _) => {
+        "FFmpeg was still running at the startup deadline".to_string()
+      }
+    };
+    let output = self.output.trim();
+    if output.is_empty() {
+      format!("{proxy_summary}; {status}; FFmpeg produced no diagnostic output")
+    } else {
+      format!("{proxy_summary}; {status}; FFmpeg: {output}")
+    }
+  }
+}
+
+fn sanitize_ffmpeg_diagnostic(value: &str) -> String {
+  let mut sanitized = String::with_capacity(value.len());
+  let mut remaining = value;
+  while let Some(start) = ["http://", "https://"]
+    .into_iter()
+    .filter_map(|marker| remaining.find(marker))
+    .min()
+  {
+    sanitized.push_str(&remaining[..start]);
+    sanitized.push_str("[REDACTED_URL]");
+    let url = &remaining[start..];
+    let end = url
+      .find(|character: char| {
+        character.is_whitespace() || matches!(character, '\"' | '\'' | ']' | '>' | ')')
+      })
+      .unwrap_or(url.len());
+    remaining = &url[end..];
+  }
+  sanitized.push_str(remaining);
+  sanitized
+    .chars()
+    .map(|character| {
+      if character.is_control() && !matches!(character, '\n' | '\t') {
+        ' '
+      } else {
+        character
+      }
+    })
+    .collect()
+}
+
+fn startup_error(
+  kind: FfmpegStartupFailureKind,
+  diagnostics: &FfmpegStartupDiagnostics,
+  proxy_summary: &str,
+) -> EmbeddedPlayerError {
+  let detail = diagnostics.detail(kind, proxy_summary);
+  match kind {
+    FfmpegStartupFailureKind::Exited => EmbeddedPlayerError::SidecarStartupExit { detail },
+    FfmpegStartupFailureKind::Deadline => EmbeddedPlayerError::SidecarStartupTimeout { detail },
+  }
+}
+
 /// Error returned by the native embedded-player adapter.
 #[derive(Debug, thiserror::Error)]
 pub enum EmbeddedPlayerError {
@@ -41,6 +133,10 @@ pub enum EmbeddedPlayerError {
   OutputDirectory(#[source] std::io::Error),
   #[error("failed to start the FFmpeg sidecar: {0}")]
   Sidecar(#[source] tauri_plugin_shell::Error),
+  #[error("FFmpeg exited before publishing an HLS playlist: {detail}")]
+  SidecarStartupExit { detail: String },
+  #[error("FFmpeg did not publish an HLS playlist within 15 seconds: {detail}")]
+  SidecarStartupTimeout { detail: String },
   #[error("failed to force-stop FFmpeg sidecar process {pid}: {message}")]
   SidecarForceStop { pid: u32, message: String },
   #[error("FFmpeg sidecar process {pid} did not terminate within five seconds")]
@@ -630,23 +726,24 @@ impl EmbeddedPlayerManager {
     }
     let terminated = Arc::new(AtomicBool::new(false));
     let terminated_for_task = Arc::clone(&terminated);
+    let diagnostics = Arc::new(Mutex::new(FfmpegStartupDiagnostics::default()));
+    let diagnostics_for_task = Arc::clone(&diagnostics);
     let manager = Arc::downgrade(self);
     let generation = attempt.generation;
     tauri::async_runtime::spawn(async move {
-      let mut failure = String::new();
       while let Some(event) = events.recv().await {
         match event {
           CommandEvent::Stderr(bytes) => {
             let line = String::from_utf8_lossy(&bytes);
-            if failure.len() < 8192 {
-              failure.push_str(&line);
-            }
+            diagnostics_for_task.lock().push(&line);
           }
-          CommandEvent::Error(message) => failure.push_str(&message),
+          CommandEvent::Error(message) => diagnostics_for_task.lock().push(&message),
           CommandEvent::Terminated(payload) => {
+            diagnostics_for_task.lock().record_exit(payload.code);
             terminated_for_task.store(true, Ordering::Release);
             let _ = termination_tx.send(true);
             if let Some(manager) = manager.upgrade() {
+              let failure = diagnostics_for_task.lock().output.clone();
               manager
                 .handle_process_terminated(generation, pid, payload.code, failure)
                 .await;
@@ -667,14 +764,22 @@ impl EmbeddedPlayerManager {
       {
         break;
       }
-      if terminated.load(Ordering::Acquire) || tokio::time::Instant::now() >= deadline {
+      let exited = terminated.load(Ordering::Acquire);
+      let deadline_reached = tokio::time::Instant::now() >= deadline;
+      if exited || deadline_reached {
         self.stop_pipeline().await?;
-        return Err(EmbeddedPlayerError::Sidecar(tauri_plugin_shell::Error::Io(
-          std::io::Error::new(
-            std::io::ErrorKind::TimedOut,
-            "FFmpeg did not publish an HLS playlist within 15 seconds",
-          ),
-        )));
+        let diagnostics = diagnostics.lock();
+        let error = startup_error(
+          if exited {
+            FfmpegStartupFailureKind::Exited
+          } else {
+            FfmpegStartupFailureKind::Deadline
+          },
+          &diagnostics,
+          &proxy.source_diagnostic_summary(),
+        );
+        log::warn!("Embedded FFmpeg startup failed: {error}");
+        return Err(error);
       }
       tokio::time::sleep(Duration::from_millis(100)).await;
     }
@@ -1190,6 +1295,39 @@ mod tests {
     assert!(
       !program.is_empty() && args.iter().any(|argument| argument == "4242"),
       "force command must target PID 4242: {program} {args:?}"
+    );
+  }
+
+  #[test]
+  fn ffmpeg_startup_diagnostic_redacts_urls_and_keeps_the_bounded_tail() {
+    let mut diagnostic = FfmpegStartupDiagnostics::default();
+    diagnostic.push(&format!(
+      "{} https://provider.invalid/video?api_key=secret\nfinal decoder error",
+      "x".repeat(MAX_FFMPEG_STARTUP_DIAGNOSTIC_BYTES + 32)
+    ));
+
+    assert!(
+      diagnostic.output.len() <= MAX_FFMPEG_STARTUP_DIAGNOSTIC_BYTES
+        && diagnostic.output.contains("[REDACTED_URL]")
+        && diagnostic.output.ends_with("final decoder error")
+        && !diagnostic.output.contains("secret")
+    );
+  }
+
+  #[test]
+  fn startup_timeout_reports_proxy_stage_and_sanitized_ffmpeg_output() {
+    let mut diagnostic = FfmpegStartupDiagnostics::default();
+    diagnostic.push("decoder initialization failed");
+
+    let error = startup_error(
+      FfmpegStartupFailureKind::Deadline,
+      &diagnostic,
+      "source proxy returned HTTP 206 after 12 ms",
+    );
+
+    assert_eq!(
+      error.to_string(),
+      "FFmpeg did not publish an HLS playlist within 15 seconds: source proxy returned HTTP 206 after 12 ms; FFmpeg was still running at the startup deadline; FFmpeg: decoder initialization failed"
     );
   }
 }
