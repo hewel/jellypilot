@@ -90,7 +90,7 @@ function viewModelFromState(state: EmbeddedPlayerState | null): EmbeddedPlayerVi
     positionSeconds: state.positionSeconds ?? 0,
     generation: state.generation,
     sessionId: state.sessionId,
-    source: state.playlistUrl,
+    media: state.media,
     subtitle: state.subtitle,
     timelineOffsetSeconds: state.timelineOffsetSeconds ?? 0,
     title: state.title,

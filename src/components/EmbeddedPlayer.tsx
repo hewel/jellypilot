@@ -1,3 +1,4 @@
+import type { EmbeddedPlayerMedia } from '@bindings';
 import { Button } from '@components/ui';
 import { cx } from '@styled-system/css';
 import * as HlsModule from 'hls.js';
@@ -24,8 +25,8 @@ export interface EmbeddedPlayerViewModel {
   sessionId: string;
   /** Native pipeline generation used to reject observations after seek/restart. */
   generation: number;
-  /** Browser-playable media URL for the current Jellyfin item, or null while unavailable. */
-  source: string | null;
+  /** Browser-playable media selected for the current Jellyfin item, or null while unavailable. */
+  media: EmbeddedPlayerMedia | null;
   /** Real Jellyfin media title displayed in the player chrome. */
   title: string;
   /** Optional real context, such as the series and episode number. */
@@ -85,8 +86,8 @@ interface MediaSession {
   durationSeconds: number | null;
   generation: number;
   key: string;
+  media: EmbeddedPlayerMedia;
   sessionId: string;
-  source: string;
 }
 
 function formatTime(seconds: number): string {
@@ -115,13 +116,13 @@ export default function EmbeddedPlayer(props: EmbeddedPlayerProps) {
   let stallTimer: ReturnType<typeof setTimeout> | undefined;
 
   const model = () => props.player();
-  const mediaSource = createMemo(() => model()?.source ?? null);
+  const mediaSource = createMemo(() => model()?.media ?? null);
   const mediaSession = createMemo<MediaSession | null>((previous) => {
     const current = model();
-    if (!current?.source) {
+    if (!current?.media) {
       return null;
     }
-    const key = `${current.sessionId}:${current.generation.toString()}:${current.source}`;
+    const key = `${current.sessionId}:${current.generation.toString()}:${current.media.kind}:${current.media.url}`;
     if (previous?.key === key) {
       return previous;
     }
@@ -129,8 +130,8 @@ export default function EmbeddedPlayer(props: EmbeddedPlayerProps) {
       durationSeconds: current.durationSeconds,
       generation: current.generation,
       key,
+      media: current.media,
       sessionId: current.sessionId,
-      source: current.source,
     };
   }, null);
   const hasSource = () => mediaSource() !== null;
@@ -207,7 +208,10 @@ export default function EmbeddedPlayer(props: EmbeddedPlayerProps) {
     const video = videoElement;
 
     let hls: InstanceType<typeof HlsModule.default> | null = null;
-    if (HlsModule.default.isSupported()) {
+    if (session.media.kind === 'directSource') {
+      video.src = session.media.url;
+      video.load();
+    } else if (HlsModule.default.isSupported()) {
       hls = new HlsModule.default({
         enableWorker: true,
         lowLatencyMode: false,
@@ -217,10 +221,10 @@ export default function EmbeddedPlayer(props: EmbeddedPlayerProps) {
           handleVideoError(session, video, data.details);
         }
       });
-      hls.loadSource(session.source);
+      hls.loadSource(session.media.url);
       hls.attachMedia(video);
     } else if (video.canPlayType('application/vnd.apple.mpegurl')) {
-      video.src = session.source;
+      video.src = session.media.url;
       video.load();
     } else {
       handleVideoError(session, video, 'This system WebView does not support HLS playback.');
@@ -236,7 +240,7 @@ export default function EmbeddedPlayer(props: EmbeddedPlayerProps) {
 
   createEffect(() => {
     const current = model();
-    if (!videoElement || !current?.source) {
+    if (!videoElement || !current?.media) {
       return;
     }
     videoElement.muted = current.desiredMuted;

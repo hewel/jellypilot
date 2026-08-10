@@ -270,6 +270,13 @@ export type EmbeddedPlayerFailure = {
 	canPlayInMpv: boolean,
 };
 
+/**  Browser-authorized media exposed for the active delivery candidate. */
+export type EmbeddedPlayerMedia = 
+/**  Strict MP4 source forwarded without FFmpeg. */
+{ kind: "directSource"; url: string; mimeType: string } | 
+/**  Fragmented-MP4 HLS playlist produced by FFmpeg. */
+{ kind: "hls"; url: string };
+
 /**  Session-scoped browser observation with monotonic ordering. */
 export type EmbeddedPlayerObservation = {
 	sessionId: string,
@@ -299,7 +306,7 @@ export type EmbeddedPlayerState = {
 	itemId: string | null,
 	title: string | null,
 	subtitle: string | null,
-	playlistUrl: string | null,
+	media: EmbeddedPlayerMedia | null,
 	timelineOffsetSeconds: number | null,
 	positionSeconds: number | null,
 	durationSeconds: number | null,

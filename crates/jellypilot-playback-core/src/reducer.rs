@@ -26,6 +26,7 @@ pub struct EmbeddedPlaybackCore {
     position_ticks: u64,
     paused: bool,
     last_observation_sequence: Option<u64>,
+    generation_has_played: bool,
     attempt_failures: Vec<PlaybackAttemptFailure>,
     failure: Option<PlaybackFailure>,
     mpv_fallback: Option<MpvFallbackMetadata>,
@@ -54,6 +55,7 @@ impl EmbeddedPlaybackCore {
             position_ticks: 0,
             paused: false,
             last_observation_sequence: None,
+            generation_has_played: false,
             attempt_failures: Vec::new(),
             failure: None,
             mpv_fallback: None,
@@ -77,6 +79,7 @@ impl EmbeddedPlaybackCore {
                 .and_then(|session| session.duration_ticks),
             paused: self.paused,
             last_observation_sequence: self.last_observation_sequence,
+            generation_has_played: self.generation_has_played,
             active_plan: self.plan.clone(),
             active_candidate: self.active_candidate(),
             attempt_failures: self.attempt_failures.clone(),
@@ -146,12 +149,13 @@ impl EmbeddedPlaybackCore {
             PlaybackAction::StartupFailed {
                 generation,
                 message,
+                retryable,
             } => {
-                self.startup_failed(generation, message, &mut commands)?;
+                self.startup_failed(generation, message, retryable, &mut commands)?;
                 PlaybackObservationDisposition::NotObserved
             }
             PlaybackAction::BrowserObserved(observation) => {
-                self.browser_observed(observation, &mut commands)
+                self.browser_observed(observation, &mut commands)?
             }
         };
 
@@ -185,6 +189,7 @@ impl EmbeddedPlaybackCore {
         self.position_ticks = position_ticks;
         self.paused = false;
         self.last_observation_sequence = None;
+        self.generation_has_played = false;
         self.attempt_failures.clear();
         self.failure = None;
         self.mpv_fallback = None;
@@ -202,6 +207,7 @@ impl EmbeddedPlaybackCore {
                 error.to_string(),
                 None,
                 MpvFallbackReason::UnsupportedBrowserCapabilities,
+                false,
             ),
         }
         Ok(())
@@ -356,6 +362,7 @@ impl EmbeddedPlaybackCore {
         self.position_ticks = position_ticks;
         self.paused = paused;
         self.last_observation_sequence = None;
+        self.generation_has_played = false;
         self.attempt_failures.clear();
         self.failure = None;
         self.mpv_fallback = None;
@@ -375,6 +382,7 @@ impl EmbeddedPlaybackCore {
                 error.to_string(),
                 None,
                 MpvFallbackReason::UnsupportedBrowserCapabilities,
+                false,
             ),
         }
         Ok(())
@@ -399,6 +407,7 @@ impl EmbeddedPlaybackCore {
         self.position_ticks = position_ticks;
         self.paused = paused;
         self.last_observation_sequence = None;
+        self.generation_has_played = false;
         self.attempt_failures.clear();
         self.failure = None;
         self.mpv_fallback = None;
@@ -410,15 +419,18 @@ impl EmbeddedPlaybackCore {
         &mut self,
         generation: PlaybackGeneration,
         message: String,
+        retryable: bool,
         commands: &mut Vec<PlaybackCommand>,
     ) -> Result<(), PlaybackCoreError> {
         if self.generation != Some(generation) {
             return Ok(());
         }
-        if !matches!(
+        let retryable_startup_phase = matches!(
             self.phase,
             PlaybackPhase::Starting | PlaybackPhase::Seeking | PlaybackPhase::Restarting
-        ) {
+        ) || (!self.generation_has_played
+            && matches!(self.phase, PlaybackPhase::Paused | PlaybackPhase::Buffering));
+        if !retryable_startup_phase {
             return Err(self.invalid_transition(PlaybackActionKind::StartupFailed));
         }
         let Some(candidate) = self.active_candidate() else {
@@ -429,6 +441,19 @@ impl EmbeddedPlaybackCore {
             candidate,
             message: message.clone(),
         });
+
+        if !retryable {
+            self.retire_pipeline(commands);
+            self.fail(
+                PlaybackFailureStage::Startup,
+                message,
+                Some(candidate),
+                MpvFallbackReason::FfmpegCandidatesExhausted,
+                false,
+            );
+            self.close_reporting(PlaybackStopReason::StartupFailed, commands);
+            return Ok(());
+        }
 
         let next_index = self.candidate_index.saturating_add(1);
         let has_next = self
@@ -441,6 +466,7 @@ impl EmbeddedPlaybackCore {
             self.generation = Some(next_generation);
             self.candidate_index = next_index;
             self.last_observation_sequence = None;
+            self.generation_has_played = false;
             self.push_start(PlaybackStartReason::CandidateFallback, commands)?;
             return Ok(());
         }
@@ -451,6 +477,7 @@ impl EmbeddedPlaybackCore {
             message,
             Some(candidate),
             MpvFallbackReason::FfmpegCandidatesExhausted,
+            true,
         );
         self.close_reporting(PlaybackStopReason::StartupFailed, commands);
         Ok(())
@@ -460,15 +487,15 @@ impl EmbeddedPlaybackCore {
         &mut self,
         observation: BrowserObservation,
         commands: &mut Vec<PlaybackCommand>,
-    ) -> PlaybackObservationDisposition {
+    ) -> Result<PlaybackObservationDisposition, PlaybackCoreError> {
         if self.generation != Some(observation.token.generation) {
-            return PlaybackObservationDisposition::IgnoredStaleGeneration;
+            return Ok(PlaybackObservationDisposition::IgnoredStaleGeneration);
         }
         if self
             .last_observation_sequence
             .is_some_and(|sequence| observation.token.sequence <= sequence)
         {
-            return PlaybackObservationDisposition::IgnoredStaleSequence;
+            return Ok(PlaybackObservationDisposition::IgnoredStaleSequence);
         }
         if matches!(
             self.phase,
@@ -485,13 +512,19 @@ impl EmbeddedPlaybackCore {
                     | BrowserPlaybackState::Failed { .. }
             ))
         {
-            return PlaybackObservationDisposition::IgnoredTerminalPhase;
+            return Ok(PlaybackObservationDisposition::IgnoredTerminalPhase);
         }
 
         self.last_observation_sequence = Some(observation.token.sequence);
-        self.position_ticks = self.clamp_position(observation.position_ticks);
+        let observed_position = self.clamp_position(observation.position_ticks);
+        self.position_ticks = if self.generation_has_played {
+            observed_position
+        } else {
+            self.position_ticks.max(observed_position)
+        };
         match observation.state {
             BrowserPlaybackState::Playing => {
+                self.generation_has_played = true;
                 self.phase = PlaybackPhase::Playing;
                 self.paused = false;
                 self.report_started_or_progress(commands);
@@ -527,21 +560,27 @@ impl EmbeddedPlaybackCore {
                     message,
                     self.active_candidate(),
                     MpvFallbackReason::BrowserStall,
+                    true,
                 );
                 self.close_reporting(PlaybackStopReason::Stalled, commands);
             }
             BrowserPlaybackState::Failed { message } => {
+                if !self.generation_has_played {
+                    self.startup_failed(observation.token.generation, message, true, commands)?;
+                    return Ok(PlaybackObservationDisposition::Applied);
+                }
                 self.retire_pipeline(commands);
                 self.fail(
                     PlaybackFailureStage::Runtime,
                     message,
                     self.active_candidate(),
                     MpvFallbackReason::RuntimeFailure,
+                    true,
                 );
                 self.close_reporting(PlaybackStopReason::RuntimeFailure, commands);
             }
         }
-        PlaybackObservationDisposition::Applied
+        Ok(PlaybackObservationDisposition::Applied)
     }
 
     fn push_start(
@@ -624,6 +663,7 @@ impl EmbeddedPlaybackCore {
         message: String,
         candidate: Option<FfmpegCandidate>,
         fallback_reason: MpvFallbackReason,
+        retryable: bool,
     ) {
         let Some(generation) = self.generation else {
             return;
@@ -635,7 +675,7 @@ impl EmbeddedPlaybackCore {
             generation,
             candidate,
             message,
-            retryable: true,
+            retryable,
         });
         self.mpv_fallback = self.session.as_ref().map(|session| MpvFallbackMetadata {
             available: session.mpv_fallback_available,
@@ -741,8 +781,10 @@ const fn action_for_start_reason(reason: PlaybackStartReason) -> PlaybackActionK
 mod tests {
     use super::*;
     use crate::{
-        AudioChannelLayout, BrowserPlaybackCapabilities, FfmpegEncoderAvailability,
-        FfmpegPlanRequest, FfmpegPlatform, SourceVideoProfile,
+        BrowserPlaybackCapabilities, FfmpegEncoderAvailability, FfmpegPlanRequest, FfmpegPlatform,
+        MediaProbeFacts, MediaProbeResult, ProbedAudioCodec, ProbedAudioStream, ProbedContainer,
+        ProbedDynamicRange, ProbedPixelFormat, ProbedVideoCodec, ProbedVideoSampleEntry,
+        ProbedVideoStream,
     };
 
     fn session() -> PlaybackSession {
@@ -762,8 +804,24 @@ mod tests {
                     aac: true,
                     max_audio_channels: 2,
                 },
-                video: SourceVideoProfile::H264Sdr,
-                audio: Some(AudioChannelLayout::Stereo),
+                probe: MediaProbeResult::Facts(MediaProbeFacts {
+                    container: ProbedContainer::Other,
+                    video: ProbedVideoStream {
+                        stream_index: 0,
+                        codec: ProbedVideoCodec::H264,
+                        pixel_format: ProbedPixelFormat::Yuv420p,
+                        sample_entry: ProbedVideoSampleEntry::Avc1,
+                        dynamic_range: ProbedDynamicRange::Sdr,
+                        hevc_main10: false,
+                    },
+                    audio: Some(ProbedAudioStream {
+                        stream_index: 1,
+                        codec: ProbedAudioCodec::Aac,
+                        channels: 2,
+                    }),
+                    video_stream_count: 1,
+                    audio_stream_count: 1,
+                }),
             },
             mpv_fallback_available: true,
         }

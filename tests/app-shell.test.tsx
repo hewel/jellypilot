@@ -162,7 +162,7 @@ const idleEmbeddedPlayer: EmbeddedPlayerState = {
   generation: null,
   itemId: null,
   phase: 'idle',
-  playlistUrl: null,
+  media: null,
   positionSeconds: 0,
   revision: 0,
   sessionId: null,

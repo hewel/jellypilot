@@ -14,19 +14,22 @@ mod model;
 mod planner;
 mod reducer;
 
-pub use ffmpeg_cli::{ffmpeg_argv, DynamicRange, FfmpegCliRequest};
+pub use ffmpeg_cli::{ffmpeg_argv, DynamicRange, FfmpegCliError, FfmpegCliRequest};
 pub use model::{
     AudioChannelLayout, BrowserObservation, BrowserPlaybackCapabilities, BrowserPlaybackState,
     EmbeddedPlaybackCapabilities, FfmpegAudioCodec, FfmpegAudioProfile, FfmpegCandidate,
     FfmpegEncoder, FfmpegEncoderAvailability, FfmpegPixelFormat, FfmpegPlan, FfmpegPlanError,
     FfmpegPlanRequest, FfmpegPlatform, FfmpegSoftwareH264Profile, FfmpegVideoEncoder,
-    FfmpegVideoProfile, HlsContainer, MpvFallbackMetadata, MpvFallbackReason, PlaybackAction,
-    PlaybackActionKind, PlaybackAttempt, PlaybackAttemptFailure, PlaybackCapabilities,
-    PlaybackCommand, PlaybackCoreError, PlaybackFailure, PlaybackFailureStage, PlaybackGeneration,
+    FfmpegVideoProfile, HlsContainer, MediaDelivery, MediaProbeFacts, MediaProbeFailure,
+    MediaProbeResult, MpvFallbackMetadata, MpvFallbackReason, PlaybackAction, PlaybackActionKind,
+    PlaybackAttempt, PlaybackAttemptFailure, PlaybackCapabilities, PlaybackCommand,
+    PlaybackCoreError, PlaybackFailure, PlaybackFailureStage, PlaybackGeneration,
     PlaybackObservationDisposition, PlaybackObservationToken, PlaybackPhase, PlaybackReport,
     PlaybackSession, PlaybackSessionSummary, PlaybackSnapshot, PlaybackStartReason,
-    PlaybackStopReason, PlaybackUpdate, PreservedMediaProperties, RollingHlsProfile,
-    SourceVideoProfile, AAC_MULTICHANNEL_BITRATE_BPS, AAC_STEREO_BITRATE_BPS,
+    PlaybackStopReason, PlaybackUpdate, PreservedMediaProperties, ProbedAudioCodec,
+    ProbedAudioStream, ProbedContainer, ProbedDynamicRange, ProbedPixelFormat, ProbedVideoCodec,
+    ProbedVideoSampleEntry, ProbedVideoStream, RollingHlsProfile, SourceVideoProfile,
+    StreamDecision, AAC_MULTICHANNEL_BITRATE_BPS, AAC_STEREO_BITRATE_BPS,
     EMBEDDED_PLAYBACK_CAPABILITIES, H264_SDR_CRF, H264_SDR_PRESET,
     ROLLING_HLS_SEGMENT_DURATION_SECONDS, ROLLING_HLS_WINDOW_DURATION_SECONDS,
     ROLLING_HLS_WINDOW_SEGMENTS,

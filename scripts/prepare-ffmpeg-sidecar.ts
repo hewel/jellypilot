@@ -18,13 +18,14 @@ const FileAssetSchema = Schema.Struct({
 });
 
 const TargetAssetsSchema = Schema.Struct({
-  binary: FileAssetSchema,
+  ffmpeg: FileAssetSchema,
+  ffprobe: FileAssetSchema,
   license: FileAssetSchema,
   buildInfo: FileAssetSchema,
 });
 
 const ManifestSchema = Schema.Struct({
-  schemaVersion: Schema.Literal(1),
+  schemaVersion: Schema.Literal(2),
   ffmpegStaticVersion: Schema.String,
   ffmpegStaticSourceCommit: Schema.String,
   binaryReleaseTag: Schema.String,
@@ -305,7 +306,8 @@ const program = Effect.gen(function* () {
   );
   const packagePaths = useInstalledPackage
     ? {
-        binary: yield* validatedPackageAsset(installedBinaryPath, assets.binary.sha256),
+        ffmpeg: yield* validatedPackageAsset(installedBinaryPath, assets.ffmpeg.sha256),
+        ffprobe: Option.none<string>(),
         license: yield* validatedPackageAsset(
           `${installedBinaryPath}.LICENSE`,
           assets.license.sha256,
@@ -316,17 +318,26 @@ const program = Effect.gen(function* () {
         ),
       }
     : {
-        binary: Option.none<string>(),
+        ffmpeg: Option.none<string>(),
+        ffprobe: Option.none<string>(),
         license: Option.none<string>(),
         buildInfo: Option.none<string>(),
       };
 
   const executableExtension = target.includes('windows') ? '.exe' : '';
   yield* materialize(manifest.binaryBaseUrl, {
-    asset: assets.binary,
+    asset: assets.ffmpeg,
     executable: true,
-    localPackagePath: packagePaths.binary,
+    localPackagePath: packagePaths.ffmpeg,
     outputPath: path.join(outputDirectory, `ffmpeg-${target}${executableExtension}`),
+    sourceDirectory,
+    verifyOnly: options.verifyOnly,
+  });
+  yield* materialize(manifest.binaryBaseUrl, {
+    asset: assets.ffprobe,
+    executable: true,
+    localPackagePath: packagePaths.ffprobe,
+    outputPath: path.join(outputDirectory, `ffprobe-${target}${executableExtension}`),
     sourceDirectory,
     verifyOnly: options.verifyOnly,
   });
@@ -347,7 +358,9 @@ const program = Effect.gen(function* () {
     verifyOnly: options.verifyOnly,
   });
 
-  console.info(`${options.verifyOnly ? 'Verified' : 'Prepared'} FFmpeg sidecar for ${target}.`);
+  console.info(
+    `${options.verifyOnly ? 'Verified' : 'Prepared'} FFmpeg/FFprobe sidecars for ${target}.`,
+  );
 });
 
 const exit = await Effect.runPromiseExit(program);

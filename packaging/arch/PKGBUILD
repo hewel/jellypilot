@@ -26,6 +26,7 @@ source=(
   "git+https://github.com/hewel/jellypilot.git#tag=v$pkgver"
   'top.pigfun.jellypilot.desktop'
   'https://github.com/eugeneware/ffmpeg-static/releases/download/b6.1.1/ffmpeg-linux-x64'
+  'https://github.com/eugeneware/ffmpeg-static/releases/download/b6.1.1/ffprobe-linux-x64'
   'https://github.com/eugeneware/ffmpeg-static/releases/download/b6.1.1/linux-x64.LICENSE'
   'https://github.com/eugeneware/ffmpeg-static/releases/download/b6.1.1/linux-x64.README'
 )
@@ -33,6 +34,7 @@ sha256sums=(
   'SKIP'
   '7236e1197fe9cd03f7df541f77a9710f4cf9a8c1f7de6df3a6f7def6e60d7651'
   'e7e7fb30477f717e6f55f9180a70386c62677ef8a4d4d1a5d948f4098aa3eb99'
+  '4f231a1960d83e403d08f7971e271707bec278a9ae18e21b8b5b03186668450d'
   '8ceb4b9ee5adedde47b31e975c1d90c73ad27b6b165a1dcd80c7c545eb65b903'
   '72f4b1b06d419d22ace6e7cc75f06826f90737345aa0b1736158929f4aacc537'
 )
@@ -53,6 +55,8 @@ package() {
   install -Dm755 "target/release/jellypilot" "$pkgdir/usr/lib/$pkgname/jellypilot"
   install -Dm755 "src-tauri/binaries/ffmpeg-x86_64-unknown-linux-gnu" \
     "$pkgdir/usr/lib/$pkgname/ffmpeg"
+  install -Dm755 "src-tauri/binaries/ffprobe-x86_64-unknown-linux-gnu" \
+    "$pkgdir/usr/lib/$pkgname/ffprobe"
   install -d "$pkgdir/usr/bin"
   ln -s "/usr/lib/$pkgname/jellypilot" "$pkgdir/usr/bin/jellypilot"
   install -Dm644 "$srcdir/top.pigfun.jellypilot.desktop" \

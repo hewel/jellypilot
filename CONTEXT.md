@@ -44,6 +44,10 @@ _Avoid_: Automatic failover, silent engine switch
 Media conversion performed on the JellyPilot device for Embedded Web Playback. It is distinct from a Provider Transcode.
 _Avoid_: Server transcode, remote conversion
 
+**Local Media Toolchain**:
+The paired, version-matched FFmpeg and FFprobe executables that JellyPilot verifies and ships for Local Transcode. FFmpeg produces the local HLS presentation and FFprobe inspects source media; neither executable is resolved from the host's `PATH` as an implicit fallback.
+_Avoid_: System FFmpeg, optional probe, unrelated sidecars
+
 **Provider Transcode**:
 Media conversion performed by the connected Jellyfin or Emby server. Embedded Web Playback does not request a Provider Transcode.
 _Avoid_: Local Transcode

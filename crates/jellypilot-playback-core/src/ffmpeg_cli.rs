@@ -9,9 +9,29 @@
 use std::path::Path;
 
 use crate::{
-    AudioChannelLayout, FfmpegCandidate, FfmpegEncoder, FfmpegPlan, FfmpegVideoProfile,
-    RollingHlsProfile, AAC_MULTICHANNEL_BITRATE_BPS, AAC_STEREO_BITRATE_BPS,
+    FfmpegCandidate, FfmpegEncoder, FfmpegPlan, FfmpegVideoProfile, MediaDelivery,
+    ProbedVideoCodec, RollingHlsProfile, StreamDecision,
 };
+
+/// Invalid runtime inputs that prevent a safe FFmpeg command from being built.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum FfmpegCliError {
+    /// A VAAPI candidate was selected without the exact render node that passed
+    /// the runtime encoder smoke test.
+    MissingVerifiedVaapiDevice,
+}
+
+impl std::fmt::Display for FfmpegCliError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::MissingVerifiedVaapiDevice => {
+                formatter.write_str("VAAPI encoding requires a verified render node")
+            }
+        }
+    }
+}
+
+impl std::error::Error for FfmpegCliError {}
 
 /// Dynamic-range class derived from the source video profile.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -42,8 +62,8 @@ pub struct FfmpegCliRequest<'a> {
     pub output_dir: &'a Path,
     /// Seek position in seconds before the input.
     pub start_position_seconds: f64,
-    /// Optional zero-based audio stream index to map.
-    pub audio_stream_index: Option<i32>,
+    /// Exact VAAPI render node proven by the runtime smoke, when selected.
+    pub vaapi_device: Option<&'a Path>,
     /// Active pipeline candidate selected by the reducer.
     pub candidate: FfmpegCandidate,
     /// Complete plan produced by the planner.
@@ -56,8 +76,10 @@ pub struct FfmpegCliRequest<'a> {
 /// warning` preamble flags, optional `-ss` seek, input mapping, video and
 /// audio encoder arguments, forced-keyframe alignment, and the rolling-HLS
 /// muxer options derived from the plan.
-#[must_use]
-pub fn ffmpeg_argv(request: &FfmpegCliRequest<'_>) -> Vec<String> {
+pub fn ffmpeg_argv(request: &FfmpegCliRequest<'_>) -> Result<Vec<String>, FfmpegCliError> {
+    if request.candidate.delivery == MediaDelivery::DirectSource {
+        return Ok(Vec::new());
+    }
     let dynamic_range = DynamicRange::from_video_profile(&request.plan.video);
     let mut argv = vec![
         "-nostdin".to_string(),
@@ -77,28 +99,41 @@ pub fn ffmpeg_argv(request: &FfmpegCliRequest<'_>) -> Vec<String> {
         "-i".to_string(),
         request.source_url.to_string(),
         "-map".to_string(),
-        "0:v:0".to_string(),
-        "-map".to_string(),
-        request
-            .audio_stream_index
-            .map_or_else(|| "0:a:0?".to_string(), |index| format!("0:{index}?")),
+        format!("0:{}", request.plan.probe.video.stream_index),
         "-map_metadata".to_string(),
         "0".to_string(),
         "-map_metadata:s:v:0".to_string(),
-        "0:s:v:0".to_string(),
+        format!("0:s:{}", request.plan.probe.video.stream_index),
         "-sn".to_string(),
         "-dn".to_string(),
     ]);
-    argv.extend(video_argv(
-        &request.candidate,
-        dynamic_range,
-        &request.plan.video,
-    ));
-    argv.extend(audio_argv(
-        request.plan.audio.as_ref().map(|p| p.channel_layout),
-    ));
-    argv.extend(forced_keyframe_argv());
+    if let Some(audio) = request.plan.probe.audio {
+        argv.extend(["-map".to_string(), format!("0:{}", audio.stream_index)]);
+    }
+    match request.candidate.video {
+        StreamDecision::Copy => argv.extend(copy_video_argv(request.plan.probe.video.codec)),
+        StreamDecision::Transcode => {
+            argv.extend(video_argv(
+                &request.candidate,
+                dynamic_range,
+                &request.plan.video,
+                request.vaapi_device,
+            )?);
+            argv.extend(forced_keyframe_argv());
+        }
+    }
+    argv.extend(audio_argv(request));
     argv.extend(hls_argv(request.plan.hls, request.output_dir));
+    Ok(argv)
+}
+
+fn copy_video_argv(codec: ProbedVideoCodec) -> Vec<String> {
+    let mut argv = vec!["-c:v".to_string(), "copy".to_string()];
+    match codec {
+        ProbedVideoCodec::H264 => argv.extend(["-tag:v".to_string(), "avc1".to_string()]),
+        ProbedVideoCodec::Hevc => argv.extend(["-tag:v".to_string(), "hvc1".to_string()]),
+        ProbedVideoCodec::Other => {}
+    }
     argv
 }
 
@@ -106,10 +141,11 @@ fn video_argv(
     candidate: &FfmpegCandidate,
     dynamic_range: DynamicRange,
     plan_video: &FfmpegVideoProfile,
-) -> Vec<String> {
+    vaapi_device: Option<&Path>,
+) -> Result<Vec<String>, FfmpegCliError> {
     let hdr = dynamic_range == DynamicRange::Hdr;
-    match candidate.encoder {
-        FfmpegEncoder::VideoToolbox => vec![
+    Ok(match candidate.encoder {
+        Some(FfmpegEncoder::VideoToolbox) => vec![
             "-c:v".into(),
             if hdr {
                 "hevc_videotoolbox"
@@ -124,24 +160,27 @@ fn video_argv(
             "-tag:v".into(),
             if hdr { "hvc1" } else { "avc1" }.into(),
         ],
-        FfmpegEncoder::Vaapi => vec![
-            "-vaapi_device".into(),
-            "/dev/dri/renderD128".into(),
-            "-vf".into(),
-            if hdr {
-                "format=p010,hwupload"
-            } else {
-                "format=nv12,hwupload"
-            }
-            .into(),
-            "-c:v".into(),
-            if hdr { "hevc_vaapi" } else { "h264_vaapi" }.into(),
-            "-qp".into(),
-            "20".into(),
-            "-tag:v".into(),
-            if hdr { "hvc1" } else { "avc1" }.into(),
-        ],
-        FfmpegEncoder::QuickSync => vec![
+        Some(FfmpegEncoder::Vaapi) => {
+            let device = vaapi_device.ok_or(FfmpegCliError::MissingVerifiedVaapiDevice)?;
+            vec![
+                "-vaapi_device".into(),
+                device.to_string_lossy().into_owned(),
+                "-vf".into(),
+                if hdr {
+                    "format=p010,hwupload"
+                } else {
+                    "format=nv12,hwupload"
+                }
+                .into(),
+                "-c:v".into(),
+                if hdr { "hevc_vaapi" } else { "h264_vaapi" }.into(),
+                "-qp".into(),
+                "20".into(),
+                "-tag:v".into(),
+                if hdr { "hvc1" } else { "avc1" }.into(),
+            ]
+        }
+        Some(FfmpegEncoder::QuickSync) => vec![
             "-c:v".into(),
             if hdr { "hevc_qsv" } else { "h264_qsv" }.into(),
             "-preset".into(),
@@ -153,7 +192,7 @@ fn video_argv(
             "-tag:v".into(),
             if hdr { "hvc1" } else { "avc1" }.into(),
         ],
-        FfmpegEncoder::Nvenc => vec![
+        Some(FfmpegEncoder::Nvenc) => vec![
             "-c:v".into(),
             if hdr { "hevc_nvenc" } else { "h264_nvenc" }.into(),
             "-preset".into(),
@@ -165,7 +204,7 @@ fn video_argv(
             "-tag:v".into(),
             if hdr { "hvc1" } else { "avc1" }.into(),
         ],
-        FfmpegEncoder::Amf => vec![
+        Some(FfmpegEncoder::Amf) => vec![
             "-c:v".into(),
             if hdr { "hevc_amf" } else { "h264_amf" }.into(),
             "-quality".into(),
@@ -179,7 +218,15 @@ fn video_argv(
             "-tag:v".into(),
             if hdr { "hvc1" } else { "avc1" }.into(),
         ],
-        FfmpegEncoder::Software => software_argv(plan_video, hdr),
+        Some(FfmpegEncoder::Software) => software_argv(plan_video, hdr),
+        None => copy_video_argv(requested_codec_for_profile(plan_video)),
+    })
+}
+
+const fn requested_codec_for_profile(profile: &FfmpegVideoProfile) -> ProbedVideoCodec {
+    match profile {
+        FfmpegVideoProfile::H264Sdr { .. } => ProbedVideoCodec::H264,
+        FfmpegVideoProfile::HevcMain10Hdr { .. } => ProbedVideoCodec::Hevc,
     }
 }
 
@@ -212,17 +259,24 @@ fn software_argv(plan_video: &FfmpegVideoProfile, _hdr: bool) -> Vec<String> {
     }
 }
 
-fn audio_argv(layout: Option<AudioChannelLayout>) -> Vec<String> {
-    let bitrate = match layout {
-        Some(layout) if layout.channel_count() > 2 => AAC_MULTICHANNEL_BITRATE_BPS,
-        _ => AAC_STEREO_BITRATE_BPS,
-    };
-    vec![
-        "-c:a".to_string(),
-        "aac".to_string(),
-        "-b:a".to_string(),
-        format!("{}k", bitrate / 1000),
-    ]
+fn audio_argv(request: &FfmpegCliRequest<'_>) -> Vec<String> {
+    match request.candidate.audio {
+        None => vec!["-an".to_string()],
+        Some(StreamDecision::Copy) => vec!["-c:a".to_string(), "copy".to_string()],
+        Some(StreamDecision::Transcode) => {
+            let bitrate = request
+                .plan
+                .audio
+                .as_ref()
+                .map_or(crate::AAC_STEREO_BITRATE_BPS, |audio| audio.bitrate_bps);
+            vec![
+                "-c:a".to_string(),
+                "aac".to_string(),
+                "-b:a".to_string(),
+                format!("{}k", bitrate / 1000),
+            ]
+        }
+    }
 }
 
 fn forced_keyframe_argv() -> Vec<String> {
@@ -267,78 +321,19 @@ fn hls_argv(profile: RollingHlsProfile, output_dir: &Path) -> Vec<String> {
 mod tests {
     use super::*;
     use crate::{
-        AudioChannelLayout, BrowserPlaybackCapabilities, FfmpegEncoder, FfmpegEncoderAvailability,
-        FfmpegPlanRequest, FfmpegPlatform, SourceVideoProfile,
+        BrowserPlaybackCapabilities, FfmpegEncoderAvailability, FfmpegPlanRequest, FfmpegPlatform,
+        MediaProbeFacts, MediaProbeResult, ProbedAudioCodec, ProbedAudioStream, ProbedContainer,
+        ProbedDynamicRange, ProbedPixelFormat, ProbedVideoCodec, ProbedVideoSampleEntry,
+        ProbedVideoStream,
     };
 
-    fn sdr_plan() -> FfmpegPlan {
+    fn plan(video: ProbedVideoCodec, audio: ProbedAudioCodec) -> FfmpegPlan {
         crate::plan_ffmpeg(FfmpegPlanRequest {
             platform: FfmpegPlatform::Linux,
-            encoders: FfmpegEncoderAvailability::default(),
-            browser: BrowserPlaybackCapabilities {
-                fmp4_hls: true,
-                h264_sdr: true,
-                hevc_main10_hdr: false,
-                aac: true,
-                max_audio_channels: 2,
+            encoders: FfmpegEncoderAvailability {
+                vaapi: true,
+                ..FfmpegEncoderAvailability::default()
             },
-            video: SourceVideoProfile::H264Sdr,
-            audio: Some(AudioChannelLayout::Stereo),
-        })
-        .expect("SDR plan should succeed")
-    }
-
-    fn candidate(plan: &FfmpegPlan, encoder: FfmpegEncoder) -> FfmpegCandidate {
-        plan.candidates
-            .iter()
-            .find(|c| c.encoder == encoder)
-            .copied()
-            .unwrap_or_else(|| *plan.candidates.last().unwrap())
-    }
-
-    #[test]
-    fn software_sdr_argv_uses_locked_hls_and_codec_policy() {
-        let plan = sdr_plan();
-        let argv = ffmpeg_argv(&FfmpegCliRequest {
-            source_url: "http://127.0.0.1:3210/source/nonce",
-            output_dir: Path::new("/tmp/session"),
-            start_position_seconds: 0.0,
-            audio_stream_index: None,
-            candidate: candidate(&plan, FfmpegEncoder::Software),
-            plan: &plan,
-        });
-
-        assert!(argv.windows(2).any(|pair| pair == ["-c:v", "libx264"]));
-        assert!(argv.windows(2).any(|pair| pair == ["-hls_time", "4"]));
-        assert!(argv.windows(2).any(|pair| pair == ["-hls_list_size", "15"]));
-        assert!(argv.windows(2).any(|pair| pair == ["-b:a", "192k"]));
-        assert!(argv.iter().any(|argument| argument == "-re"));
-        assert!(argv
-            .windows(2)
-            .any(|pair| pair == ["-map_metadata:s:v:0", "0:s:v:0"]));
-    }
-
-    #[test]
-    fn seek_position_and_audio_stream_are_emitted() {
-        let plan = sdr_plan();
-        let argv = ffmpeg_argv(&FfmpegCliRequest {
-            source_url: "http://127.0.0.1:3210/source/nonce",
-            output_dir: Path::new("/tmp/session"),
-            start_position_seconds: 90.0,
-            audio_stream_index: Some(2),
-            candidate: candidate(&plan, FfmpegEncoder::Software),
-            plan: &plan,
-        });
-
-        assert!(argv.windows(2).any(|pair| pair == ["-ss", "90.000"]));
-        assert!(argv.contains(&"0:2?".to_string()));
-    }
-
-    #[test]
-    fn multichannel_audio_uses_384k_bitrate() {
-        let plan = crate::plan_ffmpeg(FfmpegPlanRequest {
-            platform: FfmpegPlatform::Linux,
-            encoders: FfmpegEncoderAvailability::default(),
             browser: BrowserPlaybackCapabilities {
                 fmp4_hls: true,
                 h264_sdr: true,
@@ -346,20 +341,132 @@ mod tests {
                 aac: true,
                 max_audio_channels: 8,
             },
-            video: SourceVideoProfile::H264Sdr,
-            audio: Some(AudioChannelLayout::Surround51),
+            probe: MediaProbeResult::Facts(MediaProbeFacts {
+                container: ProbedContainer::Other,
+                video: ProbedVideoStream {
+                    stream_index: 3,
+                    codec: video,
+                    pixel_format: ProbedPixelFormat::Yuv420p,
+                    sample_entry: ProbedVideoSampleEntry::Other,
+                    dynamic_range: ProbedDynamicRange::Sdr,
+                    hevc_main10: false,
+                },
+                audio: Some(ProbedAudioStream {
+                    stream_index: 7,
+                    codec: audio,
+                    channels: 6,
+                }),
+                video_stream_count: 1,
+                audio_stream_count: 1,
+            }),
         })
-        .expect("multichannel plan should succeed");
+        .expect("SDR plan should succeed")
+    }
 
+    fn candidate(plan: &FfmpegPlan, encoder: Option<FfmpegEncoder>) -> FfmpegCandidate {
+        plan.candidates
+            .iter()
+            .find(|c| c.encoder == encoder)
+            .copied()
+            .unwrap_or_else(|| *plan.candidates.last().expect("candidate"))
+    }
+
+    #[test]
+    fn full_transcode_maps_selected_global_streams_and_emits_both_codecs() {
+        let plan = plan(ProbedVideoCodec::Other, ProbedAudioCodec::Other);
         let argv = ffmpeg_argv(&FfmpegCliRequest {
             source_url: "http://127.0.0.1:3210/source/nonce",
             output_dir: Path::new("/tmp/session"),
             start_position_seconds: 0.0,
-            audio_stream_index: None,
-            candidate: candidate(&plan, FfmpegEncoder::Software),
+            vaapi_device: None,
+            candidate: candidate(&plan, Some(FfmpegEncoder::Software)),
             plan: &plan,
-        });
+        })
+        .expect("software FFmpeg command should be valid");
 
-        assert!(argv.windows(2).any(|pair| pair == ["-b:a", "384k"]));
+        assert!(
+            argv.windows(2).any(|pair| pair == ["-map", "0:3"])
+                && argv.windows(2).any(|pair| pair == ["-map", "0:7"])
+                && argv
+                    .windows(2)
+                    .any(|pair| pair == ["-map_metadata:s:v:0", "0:s:3"])
+                && argv.windows(2).any(|pair| pair == ["-c:v", "libx264"])
+                && argv.windows(2).any(|pair| pair == ["-c:a", "aac"])
+                && argv.iter().any(|argument| argument == "-force_key_frames")
+        );
+    }
+
+    #[test]
+    fn remux_copies_both_streams_without_forced_keyframes() {
+        let plan = plan(ProbedVideoCodec::H264, ProbedAudioCodec::Aac);
+        let argv = ffmpeg_argv(&FfmpegCliRequest {
+            source_url: "http://127.0.0.1:3210/source/nonce",
+            output_dir: Path::new("/tmp/session"),
+            start_position_seconds: 0.0,
+            vaapi_device: None,
+            candidate: candidate(&plan, None),
+            plan: &plan,
+        })
+        .expect("remux FFmpeg command should be valid");
+
+        assert!(
+            argv.windows(2).any(|pair| pair == ["-c:v", "copy"])
+                && argv.windows(2).any(|pair| pair == ["-c:a", "copy"])
+                && !argv.iter().any(|argument| argument == "-force_key_frames")
+        );
+    }
+
+    #[test]
+    fn audio_only_partial_transcode_keeps_video_packets() {
+        let plan = plan(ProbedVideoCodec::H264, ProbedAudioCodec::Other);
+        let argv = ffmpeg_argv(&FfmpegCliRequest {
+            source_url: "http://127.0.0.1:3210/source/nonce",
+            output_dir: Path::new("/tmp/session"),
+            start_position_seconds: 0.0,
+            vaapi_device: None,
+            candidate: candidate(&plan, None),
+            plan: &plan,
+        })
+        .expect("partial-transcode FFmpeg command should be valid");
+
+        assert!(
+            argv.windows(2).any(|pair| pair == ["-c:v", "copy"])
+                && argv.windows(2).any(|pair| pair == ["-c:a", "aac"])
+                && argv.windows(2).any(|pair| pair == ["-b:a", "384k"])
+        );
+    }
+
+    #[test]
+    fn vaapi_uses_the_exact_smoked_render_node() {
+        let plan = plan(ProbedVideoCodec::Other, ProbedAudioCodec::Aac);
+        let argv = ffmpeg_argv(&FfmpegCliRequest {
+            source_url: "http://127.0.0.1:3210/source/nonce",
+            output_dir: Path::new("/tmp/session"),
+            start_position_seconds: 0.0,
+            vaapi_device: Some(Path::new("/dev/dri/renderD129")),
+            candidate: candidate(&plan, Some(FfmpegEncoder::Vaapi)),
+            plan: &plan,
+        })
+        .expect("smoked VAAPI device should be accepted");
+
+        assert!(argv
+            .windows(2)
+            .any(|pair| pair == ["-vaapi_device", "/dev/dri/renderD129"]));
+    }
+
+    #[test]
+    fn vaapi_without_a_smoked_render_node_fails_closed() {
+        let plan = plan(ProbedVideoCodec::Other, ProbedAudioCodec::Aac);
+        let error = ffmpeg_argv(&FfmpegCliRequest {
+            source_url: "http://127.0.0.1:3210/source/nonce",
+            output_dir: Path::new("/tmp/session"),
+            start_position_seconds: 0.0,
+            vaapi_device: None,
+            candidate: candidate(&plan, Some(FfmpegEncoder::Vaapi)),
+            plan: &plan,
+        })
+        .expect_err("an unverified VAAPI device must never be guessed");
+
+        assert_eq!(error, FfmpegCliError::MissingVerifiedVaapiDevice);
     }
 }

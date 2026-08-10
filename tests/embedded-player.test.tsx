@@ -1,6 +1,7 @@
 // @rstest-environment jsdom
 import { afterEach, expect, rstest, test } from '@rstest/core';
 import { fireEvent, screen, waitFor } from '@testing-library/dom';
+import * as HlsModule from 'hls.js';
 import { createSignal } from 'solid-js';
 import { render } from 'solid-js/web';
 
@@ -23,7 +24,7 @@ const playingModel: EmbeddedPlayerViewModel = {
   phase: 'paused',
   positionSeconds: 75,
   sessionId: 'session-1',
-  source: 'http://127.0.0.1:3210/hls/session/master.m3u8',
+  media: { kind: 'hls', url: 'http://127.0.0.1:3210/hls/session/master.m3u8' },
   subtitle: 'Example Show · S01E02',
   timelineOffsetSeconds: 60,
   title: 'The Episode',
@@ -80,7 +81,43 @@ test('seek reports the absolute library position once when HLS starts from an of
   dispose();
 });
 
-test('a retired source event retains the retired session identity', async () => {
+test('direct media assigns the video source without instantiating HLS', () => {
+  const supported = rstest.spyOn(HlsModule.default, 'isSupported').mockReturnValue(true);
+  const attachMedia = rstest.spyOn(HlsModule.default.prototype, 'attachMedia');
+  const load = rstest.spyOn(HTMLMediaElement.prototype, 'load').mockImplementation(() => undefined);
+  const { dispose } = renderPlayer({
+    ...playingModel,
+    media: {
+      kind: 'directSource',
+      mimeType: 'video/mp4',
+      url: 'http://127.0.0.1:3210/direct/session/video.mp4',
+    },
+  });
+
+  const video = document.querySelector('video')!;
+
+  expect(video.src).toBe('http://127.0.0.1:3210/direct/session/video.mp4');
+  expect(load).toHaveBeenCalled();
+  expect(supported).not.toHaveBeenCalled();
+  expect(attachMedia).not.toHaveBeenCalled();
+  dispose();
+});
+
+test('HLS media keeps the hls.js source and media attachment flow', () => {
+  const supported = rstest.spyOn(HlsModule.default, 'isSupported').mockReturnValue(true);
+  const loadSource = rstest.spyOn(HlsModule.default.prototype, 'loadSource');
+  const attachMedia = rstest.spyOn(HlsModule.default.prototype, 'attachMedia');
+  const { dispose } = renderPlayer();
+
+  expect(supported).toHaveBeenCalled();
+  expect(loadSource).toHaveBeenCalledWith('http://127.0.0.1:3210/hls/session/master.m3u8');
+  expect(attachMedia).toHaveBeenCalledWith(document.querySelector('video'));
+  dispose();
+});
+
+test('switching media destroys the retired HLS session and retains its observation identity', async () => {
+  const supported = rstest.spyOn(HlsModule.default, 'isSupported').mockReturnValue(true);
+  const destroy = rstest.spyOn(HlsModule.default.prototype, 'destroy');
   const { dispose, onObservation, setCurrentModel } = renderPlayer();
   const retiredVideo = document.querySelector('video')!;
   await Promise.resolve();
@@ -89,12 +126,18 @@ test('a retired source event retains the retired session identity', async () => 
     ...playingModel,
     generation: 8,
     sessionId: 'session-2',
-    source: 'http://127.0.0.1:3210/hls/session-2/master.m3u8',
+    media: {
+      kind: 'directSource',
+      mimeType: 'video/mp4',
+      url: 'http://127.0.0.1:3210/direct/session-2/video.mp4',
+    },
   });
   await waitFor(() => expect(document.querySelector('video')).not.toBe(retiredVideo));
 
   fireEvent.timeUpdate(retiredVideo);
 
+  expect(supported).toHaveBeenCalledTimes(1);
+  expect(destroy).toHaveBeenCalledTimes(1);
   expect(onObservation).toHaveBeenLastCalledWith(
     expect.objectContaining({
       generation: 7,
@@ -110,7 +153,7 @@ test('failed playback retries through the Rust core and exposes explicit MPV fal
     ...playingModel,
     failureMessage: 'FFmpeg stopped unexpectedly',
     phase: 'failed',
-    source: null,
+    media: null,
   });
   const mpvButton = screen.getByRole('button', { name: 'Play in MPV' });
 

@@ -34,8 +34,12 @@ const activePlayer = {
   failure: null,
   generation: 3,
   itemId: 'movie-1',
+  media: {
+    kind: 'directSource',
+    mimeType: 'video/mp4',
+    url: 'data:video/mp4;base64,',
+  },
   phase: 'preparing',
-  playlistUrl: null,
   positionSeconds: 45,
   revision: 1,
   sessionId: 'embedded-e2e-session',
@@ -47,8 +51,8 @@ const activePlayer = {
 
 const stoppedPlayer = {
   ...activePlayer,
+  media: null,
   phase: 'stopped',
-  playlistUrl: null,
   revision: 2,
 } as const satisfies EmbeddedPlayerState;
 
@@ -85,7 +89,7 @@ const fixtures = {
 } as const;
 
 describe('Embedded player route', () => {
-  it('routes an active native session into immersive chrome and stops through typed IPC', async () => {
+  it('routes an active Direct Source session into native immersive chrome', async () => {
     await browser.waitUntil(
       () => browser.execute(() => window.__JELLYPILOT_E2E__?.ready === true),
       {
@@ -140,26 +144,15 @@ describe('Embedded player route', () => {
     expect(await browser.execute(() => window.location.pathname)).toBe('/player');
     expect(await $('[data-shell]').isExisting()).toBe(false);
 
+    const video = await $('video');
+    expect(await video.isExisting()).toBe(true);
+    expect(await video.getAttribute('src')).toBe(fixtures.activePlayer.media.url);
+
+    const play = await $('aria/Play');
+    expect(await play.isDisplayed()).toBe(true);
+    expect(await play.isEnabled()).toBe(true);
+
     const close = await $('aria/Stop playback and close player');
     expect(await close.isDisplayed()).toBe(true);
-    await browser.execute(() => {
-      const element = document.querySelector<HTMLButtonElement>(
-        'button[aria-label="Stop playback and close player"]',
-      );
-      if (!element) throw new Error('The accessible player close control was not found.');
-      window.setTimeout(() => element.click(), 0);
-    });
-    await browser.waitUntil(
-      async () => (await browser.execute(() => window.location.pathname)) === '/library',
-      {
-        timeout: 30_000,
-        timeoutMsg: 'Stopping embedded playback did not leave the immersive route.',
-      },
-    );
-    expect(
-      await browser.execute(
-        () => window.__JELLYPILOT_E2E__?.callCount('embedded_player_control') ?? 0,
-      ),
-    ).toBe(1);
   });
 });

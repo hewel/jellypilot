@@ -3,17 +3,21 @@
 mod proxy;
 
 use std::collections::VecDeque;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+use futures_util::future::BoxFuture;
 use jellypilot_playback_core::{
   ffmpeg_argv, AudioChannelLayout, BrowserObservation, BrowserPlaybackCapabilities,
   BrowserPlaybackState, EmbeddedPlaybackCore, FfmpegCliRequest, FfmpegEncoderAvailability,
-  FfmpegPlanRequest, FfmpegPlatform, PlaybackAction, PlaybackCommand, PlaybackGeneration,
+  FfmpegPlanRequest, FfmpegPlatform, MediaDelivery, MediaProbeFacts, MediaProbeFailure,
+  MediaProbeResult, PlaybackAction, PlaybackCommand, PlaybackGeneration,
   PlaybackObservationDisposition, PlaybackObservationToken, PlaybackPhase, PlaybackReport,
-  PlaybackSession, PlaybackSnapshot, SourceVideoProfile,
+  PlaybackSession, PlaybackSnapshot, ProbedAudioCodec, ProbedAudioStream, ProbedContainer,
+  ProbedDynamicRange, ProbedPixelFormat, ProbedVideoCodec, ProbedVideoSampleEntry,
+  ProbedVideoStream, SourceVideoProfile,
 };
 use parking_lot::{Mutex, RwLock};
 use serde::{Deserialize, Serialize};
@@ -28,9 +32,12 @@ use crate::jellyfin::{
   seconds_to_ticks, JellyfinClient, PlaybackProgressInfo, PlaybackStartInfo, PlaybackStopInfo,
 };
 
-use self::proxy::LoopbackMediaServer;
+use self::proxy::{LoopbackMediaServer, SourceProxySnapshot};
 
 const MAX_FFMPEG_STARTUP_DIAGNOSTIC_BYTES: usize = 4096;
+const MAX_FFPROBE_OUTPUT_BYTES: usize = 256 * 1024;
+const MAX_PROBE_DIAGNOSTIC_BYTES: usize = 4096;
+const FFPROBE_TIMEOUT: Duration = Duration::from_secs(15);
 
 #[derive(Clone, Copy)]
 enum FfmpegStartupFailureKind {
@@ -110,15 +117,317 @@ fn sanitize_ffmpeg_diagnostic(value: &str) -> String {
     .collect()
 }
 
+#[derive(Debug)]
+struct BoundedSidecarOutput {
+  stdout: Vec<u8>,
+  stderr: String,
+  status: Option<i32>,
+}
+
+#[derive(Deserialize)]
+struct FfprobeDocument {
+  #[serde(default)]
+  streams: Vec<FfprobeStream>,
+  format: Option<FfprobeFormat>,
+}
+
+#[derive(Deserialize)]
+struct FfprobeFormat {
+  #[serde(default)]
+  format_name: String,
+  tags: Option<FfprobeFormatTags>,
+}
+
+#[derive(Deserialize)]
+struct FfprobeFormatTags {
+  major_brand: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct FfprobeStream {
+  index: Option<u32>,
+  codec_type: Option<String>,
+  codec_name: Option<String>,
+  profile: Option<String>,
+  pix_fmt: Option<String>,
+  codec_tag_string: Option<String>,
+  channels: Option<u32>,
+  color_transfer: Option<String>,
+  disposition: Option<FfprobeDisposition>,
+  #[serde(default)]
+  side_data_list: Vec<FfprobeSideData>,
+}
+
+#[derive(Deserialize)]
+struct FfprobeDisposition {
+  #[serde(default)]
+  attached_pic: u8,
+}
+
+#[derive(Deserialize)]
+struct FfprobeSideData {
+  side_data_type: Option<String>,
+}
+
+async fn run_bounded_sidecar(
+  app: &AppHandle,
+  sidecar: &str,
+  args: Vec<String>,
+  timeout: Duration,
+  stdout_limit: usize,
+) -> Result<BoundedSidecarOutput, MediaProbeFailure> {
+  let (mut events, child) = app
+    .shell()
+    .sidecar(sidecar)
+    .map_err(|_| MediaProbeFailure::SidecarUnavailable)?
+    .args(args)
+    .spawn()
+    .map_err(|_| MediaProbeFailure::SidecarUnavailable)?;
+  let deadline = tokio::time::Instant::now() + timeout;
+  let mut stdout = Vec::new();
+  let mut stderr = String::new();
+  let mut status = None;
+
+  loop {
+    let Some(remaining) = deadline.checked_duration_since(tokio::time::Instant::now()) else {
+      let _ = child.kill();
+      return Err(MediaProbeFailure::Timeout);
+    };
+    let event = match tokio::time::timeout(remaining, events.recv()).await {
+      Ok(event) => event,
+      Err(_) => {
+        let _ = child.kill();
+        return Err(MediaProbeFailure::Timeout);
+      }
+    };
+    let Some(event) = event else {
+      break;
+    };
+    match event {
+      CommandEvent::Stdout(bytes) => {
+        if stdout.len().saturating_add(bytes.len()) > stdout_limit {
+          let _ = child.kill();
+          return Err(MediaProbeFailure::OutputTooLarge);
+        }
+        stdout.extend_from_slice(&bytes);
+        stdout.push(b'\n');
+      }
+      CommandEvent::Stderr(bytes) => append_bounded_diagnostic(
+        &mut stderr,
+        &String::from_utf8_lossy(&bytes),
+        MAX_PROBE_DIAGNOSTIC_BYTES,
+      ),
+      CommandEvent::Error(message) => {
+        append_bounded_diagnostic(&mut stderr, &message, MAX_PROBE_DIAGNOSTIC_BYTES);
+      }
+      CommandEvent::Terminated(payload) => status = payload.code,
+      _ => {}
+    }
+  }
+
+  Ok(BoundedSidecarOutput {
+    stdout,
+    stderr,
+    status,
+  })
+}
+
+fn append_bounded_diagnostic(target: &mut String, value: &str, limit: usize) {
+  target.push_str(&sanitize_ffmpeg_diagnostic(value));
+  target.push('\n');
+  if target.len() <= limit {
+    return;
+  }
+  let mut start = target.len() - limit;
+  while !target.is_char_boundary(start) {
+    start += 1;
+  }
+  target.drain(..start);
+}
+
+fn normalize_ffprobe(
+  document: &FfprobeDocument,
+  selected_audio_stream_index: Option<i32>,
+  source_profile: SourceVideoProfile,
+) -> Result<MediaProbeFacts, MediaProbeFailure> {
+  let video_streams = document
+    .streams
+    .iter()
+    .filter(|stream| {
+      stream.codec_type.as_deref() == Some("video")
+        && stream
+          .disposition
+          .as_ref()
+          .is_none_or(|disposition| disposition.attached_pic == 0)
+    })
+    .collect::<Vec<_>>();
+  let audio_streams = document
+    .streams
+    .iter()
+    .filter(|stream| stream.codec_type.as_deref() == Some("audio"))
+    .collect::<Vec<_>>();
+  let video_stream = video_streams
+    .first()
+    .copied()
+    .ok_or(MediaProbeFailure::MissingVideoStream)?;
+  let audio_stream = match selected_audio_stream_index {
+    Some(selected) => {
+      let selected =
+        u32::try_from(selected).map_err(|_| MediaProbeFailure::SelectedAudioStreamMissing)?;
+      Some(
+        audio_streams
+          .iter()
+          .copied()
+          .find(|stream| stream.index == Some(selected))
+          .ok_or(MediaProbeFailure::SelectedAudioStreamMissing)?,
+      )
+    }
+    None => audio_streams.first().copied(),
+  };
+  let video_stream_count =
+    u16::try_from(video_streams.len()).map_err(|_| MediaProbeFailure::InvalidOutput)?;
+  let audio_stream_count =
+    u16::try_from(audio_streams.len()).map_err(|_| MediaProbeFailure::InvalidOutput)?;
+
+  Ok(MediaProbeFacts {
+    container: normalize_container(document.format.as_ref()),
+    video: normalize_video_stream(video_stream, source_profile)?,
+    audio: audio_stream.map(normalize_audio_stream).transpose()?,
+    video_stream_count,
+    audio_stream_count,
+  })
+}
+
+fn normalize_container(format: Option<&FfprobeFormat>) -> ProbedContainer {
+  let Some(format) = format else {
+    return ProbedContainer::Other;
+  };
+  let mp4_family = format
+    .format_name
+    .split(',')
+    .any(|name| matches!(name.trim(), "mov" | "mp4"));
+  let major_brand = format
+    .tags
+    .as_ref()
+    .and_then(|tags| tags.major_brand.as_deref())
+    .map(str::trim);
+  let strict_mp4_brand = major_brand.is_some_and(|brand| {
+    matches!(
+      brand.to_ascii_lowercase().as_str(),
+      "isom"
+        | "iso2"
+        | "iso3"
+        | "iso4"
+        | "iso5"
+        | "iso6"
+        | "mp41"
+        | "mp42"
+        | "m4v"
+        | "avc1"
+        | "dash"
+    )
+  });
+  if mp4_family && strict_mp4_brand {
+    ProbedContainer::Mp4
+  } else {
+    ProbedContainer::Other
+  }
+}
+
+fn normalize_video_stream(
+  stream: &FfprobeStream,
+  source_profile: SourceVideoProfile,
+) -> Result<ProbedVideoStream, MediaProbeFailure> {
+  let codec = match stream.codec_name.as_deref() {
+    Some("h264") => ProbedVideoCodec::H264,
+    Some("hevc") => ProbedVideoCodec::Hevc,
+    _ => ProbedVideoCodec::Other,
+  };
+  let pixel_format = match stream.pix_fmt.as_deref() {
+    Some("yuv420p") | Some("yuvj420p") => ProbedPixelFormat::Yuv420p,
+    Some("p010le") | Some("p010be") | Some("yuv420p10le") | Some("yuv420p10be") => {
+      ProbedPixelFormat::TenBit420
+    }
+    _ => ProbedPixelFormat::Other,
+  };
+  let sample_entry = match stream.codec_tag_string.as_deref() {
+    Some(value) if value.eq_ignore_ascii_case("avc1") => ProbedVideoSampleEntry::Avc1,
+    Some(value) if value.eq_ignore_ascii_case("hvc1") => ProbedVideoSampleEntry::Hvc1,
+    _ => ProbedVideoSampleEntry::Other,
+  };
+  let reported_hdr = stream
+    .color_transfer
+    .as_deref()
+    .is_some_and(|transfer| matches!(transfer, "smpte2084" | "arib-std-b67"))
+    || stream.side_data_list.iter().any(|side_data| {
+      side_data.side_data_type.as_deref().is_some_and(|kind| {
+        let kind = kind.to_ascii_lowercase();
+        kind.contains("mastering display")
+          || kind.contains("content light")
+          || kind.contains("dovi")
+          || kind.contains("dolby vision")
+      })
+    });
+  let dynamic_range = if reported_hdr || source_profile == SourceVideoProfile::HevcMain10Hdr {
+    ProbedDynamicRange::Hdr
+  } else {
+    ProbedDynamicRange::Sdr
+  };
+  let hevc_main10 = stream
+    .profile
+    .as_deref()
+    .is_some_and(|profile| profile.eq_ignore_ascii_case("main 10"));
+
+  Ok(ProbedVideoStream {
+    stream_index: stream.index.ok_or(MediaProbeFailure::InvalidOutput)?,
+    codec,
+    pixel_format,
+    sample_entry,
+    dynamic_range,
+    hevc_main10,
+  })
+}
+
+fn normalize_audio_stream(stream: &FfprobeStream) -> Result<ProbedAudioStream, MediaProbeFailure> {
+  let channels = u8::try_from(
+    stream
+      .channels
+      .ok_or(MediaProbeFailure::InvalidAudioChannelCount)?,
+  )
+  .map_err(|_| MediaProbeFailure::InvalidAudioChannelCount)?;
+  if channels == 0 {
+    return Err(MediaProbeFailure::InvalidAudioChannelCount);
+  }
+  Ok(ProbedAudioStream {
+    stream_index: stream.index.ok_or(MediaProbeFailure::InvalidOutput)?,
+    codec: if stream.codec_name.as_deref() == Some("aac")
+      && stream
+        .profile
+        .as_deref()
+        .is_some_and(|profile| profile.eq_ignore_ascii_case("LC"))
+    {
+      ProbedAudioCodec::Aac
+    } else {
+      ProbedAudioCodec::Other
+    },
+    channels,
+  })
+}
+
 fn startup_error(
   kind: FfmpegStartupFailureKind,
   diagnostics: &FfmpegStartupDiagnostics,
-  proxy_summary: &str,
+  proxy: &SourceProxySnapshot,
 ) -> EmbeddedPlayerError {
-  let detail = diagnostics.detail(kind, proxy_summary);
+  let detail = diagnostics.detail(kind, &proxy.summary);
+  let retryable = !proxy.terminal_failure;
   match kind {
-    FfmpegStartupFailureKind::Exited => EmbeddedPlayerError::SidecarStartupExit { detail },
-    FfmpegStartupFailureKind::Deadline => EmbeddedPlayerError::SidecarStartupTimeout { detail },
+    FfmpegStartupFailureKind::Exited => {
+      EmbeddedPlayerError::SidecarStartupExit { detail, retryable }
+    }
+    FfmpegStartupFailureKind::Deadline => {
+      EmbeddedPlayerError::SidecarStartupTimeout { detail, retryable }
+    }
   }
 }
 
@@ -133,10 +442,12 @@ pub enum EmbeddedPlayerError {
   OutputDirectory(#[source] std::io::Error),
   #[error("failed to start the FFmpeg sidecar: {0}")]
   Sidecar(#[source] tauri_plugin_shell::Error),
+  #[error("failed to build the FFmpeg command: {0}")]
+  FfmpegCli(#[from] jellypilot_playback_core::FfmpegCliError),
   #[error("FFmpeg exited before publishing an HLS playlist: {detail}")]
-  SidecarStartupExit { detail: String },
+  SidecarStartupExit { detail: String, retryable: bool },
   #[error("FFmpeg did not publish an HLS playlist within 15 seconds: {detail}")]
-  SidecarStartupTimeout { detail: String },
+  SidecarStartupTimeout { detail: String, retryable: bool },
   #[error("failed to force-stop FFmpeg sidecar process {pid}: {message}")]
   SidecarForceStop { pid: u32, message: String },
   #[error("FFmpeg sidecar process {pid} did not terminate within five seconds")]
@@ -151,6 +462,27 @@ pub enum EmbeddedPlayerError {
   ManagerUnavailable,
   #[error("embedded playback session is stale")]
   StaleSession,
+}
+
+impl EmbeddedPlayerError {
+  fn startup_retryable(&self) -> bool {
+    match self {
+      Self::SidecarStartupExit { retryable, .. }
+      | Self::SidecarStartupTimeout { retryable, .. } => *retryable,
+      Self::LoopbackBind(_)
+      | Self::CacheDirectory(_)
+      | Self::OutputDirectory(_)
+      | Self::Sidecar(_)
+      | Self::FfmpegCli(_)
+      | Self::SidecarForceStop { .. }
+      | Self::SidecarTerminationTimeout { .. }
+      | Self::SidecarTerminationObserver { .. }
+      | Self::Core(_)
+      | Self::NoActiveSource
+      | Self::ManagerUnavailable
+      | Self::StaleSession => false,
+    }
+  }
 }
 
 /// Browser-visible phase of the current embedded session.
@@ -178,6 +510,20 @@ pub struct EmbeddedPlayerFailure {
   pub can_play_in_mpv: bool,
 }
 
+/// Browser-authorized media exposed for the active delivery candidate.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Type)]
+#[serde(tag = "kind", rename_all = "camelCase")]
+pub enum EmbeddedPlayerMedia {
+  /// Strict MP4 source forwarded without FFmpeg.
+  DirectSource {
+    url: String,
+    #[serde(rename = "mimeType")]
+    mime_type: String,
+  },
+  /// Fragmented-MP4 HLS playlist produced by FFmpeg.
+  Hls { url: String },
+}
+
 /// Complete browser read model for one embedded playback generation.
 #[derive(Debug, Clone, Serialize, Deserialize, Type)]
 #[serde(rename_all = "camelCase")]
@@ -189,7 +535,7 @@ pub struct EmbeddedPlayerState {
   pub item_id: Option<String>,
   pub title: Option<String>,
   pub subtitle: Option<String>,
-  pub playlist_url: Option<String>,
+  pub media: Option<EmbeddedPlayerMedia>,
   pub timeline_offset_seconds: f64,
   pub position_seconds: f64,
   pub duration_seconds: Option<f64>,
@@ -213,7 +559,7 @@ impl Default for EmbeddedPlayerState {
       item_id: None,
       title: None,
       subtitle: None,
-      playlist_url: None,
+      media: None,
       timeline_offset_seconds: 0.0,
       position_seconds: 0.0,
       duration_seconds: None,
@@ -313,6 +659,9 @@ pub(crate) struct EmbeddedPlaybackSource {
   pub duration_ticks: Option<u64>,
   pub audio_stream_index: Option<i32>,
   pub source_video_profile: SourceVideoProfile,
+  // Kept in the provider handoff until its caller can be migrated; FFprobe is
+  // authoritative because provider metadata can describe a different stream.
+  #[allow(dead_code)]
   pub audio_layout: Option<AudioChannelLayout>,
   pub mpv_fallback_available: bool,
 }
@@ -325,11 +674,19 @@ struct ActiveAdapterSession {
   termination: Option<tokio::sync::watch::Receiver<bool>>,
   stop_requested: bool,
   output_dir: Option<PathBuf>,
+  vaapi_device: Option<PathBuf>,
+  probe: Option<MediaProbeFacts>,
   timeline_offset_seconds: f64,
   seekable_start_seconds: Option<f64>,
   seekable_end_seconds: Option<f64>,
   last_progress_report: Instant,
   last_reported_paused: bool,
+}
+
+#[derive(Default)]
+struct VerifiedEncoderAvailability {
+  encoders: FfmpegEncoderAvailability,
+  vaapi_device: Option<PathBuf>,
 }
 
 /// I/O interpreter for [`EmbeddedPlaybackCore`].
@@ -406,12 +763,30 @@ impl EmbeddedPlayerManager {
     let _transition = self.transition.lock().await;
     self.stop_adapter_resources().await?;
     let session_id = uuid::Uuid::new_v4().to_string();
+    let proxy = self.ensure_proxy().await?;
+    let probe_nonce = uuid::Uuid::new_v4().to_string();
+    proxy.activate(
+      probe_nonce.clone(),
+      None,
+      None,
+      source.upstream_url.clone(),
+      None,
+    );
+    let probe_source_url = proxy.source_url(&probe_nonce);
+    let probe = self
+      .probe_source(
+        &probe_source_url,
+        source.audio_stream_index,
+        source.source_video_profile,
+      )
+      .await;
+    proxy.revoke();
+    let verified_encoders = verified_encoder_availability(&self.app, probe).await;
     let plan_request = FfmpegPlanRequest {
       platform: current_platform(),
-      encoders: verified_encoder_availability(),
+      encoders: verified_encoders.encoders,
       browser: browser_capabilities(*self.capabilities.read()),
-      video: source.source_video_profile,
-      audio: source.audio_layout,
+      probe,
     };
     let playback = PlaybackSession {
       item_id: source.item_id.clone(),
@@ -430,6 +805,11 @@ impl EmbeddedPlayerManager {
       termination: None,
       stop_requested: false,
       output_dir: None,
+      vaapi_device: verified_encoders.vaapi_device,
+      probe: match probe {
+        MediaProbeResult::Facts(facts) => Some(facts),
+        MediaProbeResult::Failed(_) => None,
+      },
       timeline_offset_seconds: 0.0,
       seekable_start_seconds: None,
       seekable_end_seconds: None,
@@ -447,6 +827,61 @@ impl EmbeddedPlayerManager {
     self.apply_snapshot(&update.snapshot, None);
     self.execute_commands(update.commands).await?;
     Ok(self.state())
+  }
+
+  async fn probe_source(
+    &self,
+    source_url: &str,
+    selected_audio_stream_index: Option<i32>,
+    source_profile: SourceVideoProfile,
+  ) -> MediaProbeResult {
+    let args = vec![
+      "-v".to_string(),
+      "error".to_string(),
+      "-print_format".to_string(),
+      "json".to_string(),
+      "-show_entries".to_string(),
+      "format=format_name:format_tags=major_brand:stream=index,codec_type,codec_name,profile,pix_fmt,codec_tag_string,channels,color_transfer:stream_disposition=attached_pic:stream_side_data=side_data_type".to_string(),
+      source_url.to_string(),
+    ];
+    let output = match run_bounded_sidecar(
+      &self.app,
+      "ffprobe",
+      args,
+      FFPROBE_TIMEOUT,
+      MAX_FFPROBE_OUTPUT_BYTES,
+    )
+    .await
+    {
+      Ok(output) => output,
+      Err(failure) => {
+        log::warn!("Embedded media probe failed: {failure:?}");
+        return MediaProbeResult::Failed(failure);
+      }
+    };
+    if output.status != Some(0) {
+      let diagnostic = output.stderr.trim();
+      if diagnostic.is_empty() {
+        log::warn!("Embedded FFprobe exited unsuccessfully without diagnostic output");
+      } else {
+        log::warn!("Embedded FFprobe exited unsuccessfully: {diagnostic}");
+      }
+      return MediaProbeResult::Failed(MediaProbeFailure::ProcessFailed);
+    }
+    let document = match serde_json::from_slice::<FfprobeDocument>(&output.stdout) {
+      Ok(document) => document,
+      Err(_) => {
+        log::warn!("Embedded FFprobe returned malformed JSON");
+        return MediaProbeResult::Failed(MediaProbeFailure::InvalidOutput);
+      }
+    };
+    match normalize_ffprobe(&document, selected_audio_stream_index, source_profile) {
+      Ok(facts) => MediaProbeResult::Facts(facts),
+      Err(failure) => {
+        log::warn!("Embedded FFprobe facts were unusable: {failure:?}");
+        MediaProbeResult::Failed(failure)
+      }
+    }
   }
 
   /// Apply a user or remote playback control.
@@ -628,35 +1063,39 @@ impl EmbeddedPlayerManager {
     });
   }
 
-  async fn execute_commands(
+  fn execute_commands(
     self: &Arc<Self>,
     commands: Vec<PlaybackCommand>,
-  ) -> Result<(), EmbeddedPlayerError> {
-    let mut commands = VecDeque::from(commands);
-    while let Some(command) = commands.pop_front() {
-      match command {
-        PlaybackCommand::StartEmbedded { attempt } => {
-          if let Err(error) = self.start_attempt(&attempt).await {
-            let update = self.core.lock().dispatch(PlaybackAction::StartupFailed {
-              generation: attempt.generation,
-              message: error.to_string(),
-            })?;
-            self.apply_snapshot(&update.snapshot, None);
-            for command in update.commands.into_iter().rev() {
-              commands.push_front(command);
+  ) -> BoxFuture<'_, Result<(), EmbeddedPlayerError>> {
+    Box::pin(async move {
+      let mut commands = VecDeque::from(commands);
+      while let Some(command) = commands.pop_front() {
+        match command {
+          PlaybackCommand::StartEmbedded { attempt } => {
+            if let Err(error) = self.start_attempt(&attempt).await {
+              let retryable = error.startup_retryable();
+              let update = self.core.lock().dispatch(PlaybackAction::StartupFailed {
+                generation: attempt.generation,
+                message: error.to_string(),
+                retryable,
+              })?;
+              self.apply_snapshot(&update.snapshot, None);
+              for command in update.commands.into_iter().rev() {
+                commands.push_front(command);
+              }
             }
           }
+          PlaybackCommand::SetPaused { paused, .. } => {
+            self.update_transport(|state| state.desired_paused = paused);
+          }
+          PlaybackCommand::StopEmbedded { .. } => self.stop_pipeline().await?,
+          PlaybackCommand::ReportStarted { report } => self.report_started(&report).await,
+          PlaybackCommand::ReportProgress { report } => self.report_progress(&report).await,
+          PlaybackCommand::ReportStopped { report, .. } => self.report_stopped(&report).await,
         }
-        PlaybackCommand::SetPaused { paused, .. } => {
-          self.update_transport(|state| state.desired_paused = paused);
-        }
-        PlaybackCommand::StopEmbedded { .. } => self.stop_pipeline().await?,
-        PlaybackCommand::ReportStarted { report } => self.report_started(&report).await,
-        PlaybackCommand::ReportProgress { report } => self.report_progress(&report).await,
-        PlaybackCommand::ReportStopped { report, .. } => self.report_stopped(&report).await,
       }
-    }
-    Ok(())
+      Ok(())
+    })
   }
 
   async fn start_attempt(
@@ -666,6 +1105,46 @@ impl EmbeddedPlayerManager {
     self.stop_pipeline().await?;
     let proxy = self.ensure_proxy().await?;
     let source_nonce = uuid::Uuid::new_v4().to_string();
+    let (upstream_url, vaapi_device) = {
+      let active = self.active.lock();
+      let active = active.as_ref().ok_or(EmbeddedPlayerError::NoActiveSource)?;
+      (
+        active.source.upstream_url.clone(),
+        active.vaapi_device.clone(),
+      )
+    };
+
+    if attempt.candidate.delivery == MediaDelivery::DirectSource {
+      let direct_media_nonce = uuid::Uuid::new_v4().to_string();
+      proxy.activate(
+        source_nonce,
+        Some(direct_media_nonce.clone()),
+        None,
+        upstream_url,
+        None,
+      );
+      {
+        let mut active = self.active.lock();
+        let active = active.as_mut().ok_or(EmbeddedPlayerError::NoActiveSource)?;
+        active.output_dir = None;
+        active.timeline_offset_seconds = 0.0;
+      }
+      let start_position_seconds = attempt.start_position_ticks as f64 / 10_000_000.0;
+      self.update_transport(|state| {
+        state.generation = Some(saturating_u32(attempt.generation.0));
+        state.phase = EmbeddedPlayerPhase::Loading;
+        state.media = Some(EmbeddedPlayerMedia::DirectSource {
+          url: proxy.direct_media_url(&direct_media_nonce),
+          mime_type: "video/mp4".to_string(),
+        });
+        state.timeline_offset_seconds = 0.0;
+        state.position_seconds = start_position_seconds;
+        state.desired_paused = attempt.paused;
+        state.desired_seek_position_seconds = Some(start_position_seconds);
+      });
+      return Ok(());
+    }
+
     let hls_nonce = uuid::Uuid::new_v4().to_string();
     let output_dir = self
       .app
@@ -677,14 +1156,6 @@ impl EmbeddedPlayerManager {
     tokio::fs::create_dir_all(&output_dir)
       .await
       .map_err(EmbeddedPlayerError::OutputDirectory)?;
-    let (upstream_url, audio_stream_index) = {
-      let active = self.active.lock();
-      let active = active.as_ref().ok_or(EmbeddedPlayerError::NoActiveSource)?;
-      (
-        active.source.upstream_url.clone(),
-        active.source.audio_stream_index,
-      )
-    };
     {
       let mut active = self.active.lock();
       let active = active.as_mut().ok_or(EmbeddedPlayerError::NoActiveSource)?;
@@ -693,19 +1164,20 @@ impl EmbeddedPlayerManager {
     }
     proxy.activate(
       source_nonce.clone(),
-      hls_nonce.clone(),
+      None,
+      Some(hls_nonce.clone()),
       upstream_url,
-      output_dir.clone(),
+      Some(output_dir.clone()),
     );
     let source_url = proxy.source_url(&source_nonce);
     let args = ffmpeg_argv(&FfmpegCliRequest {
       source_url: &source_url,
       output_dir: &output_dir,
       start_position_seconds: attempt.start_position_ticks as f64 / 10_000_000.0,
-      audio_stream_index,
+      vaapi_device: vaapi_device.as_deref(),
       candidate: attempt.candidate,
       plan: &attempt.plan,
-    });
+    })?;
     let (mut events, child) = self
       .app
       .shell()
@@ -776,7 +1248,7 @@ impl EmbeddedPlayerManager {
             FfmpegStartupFailureKind::Deadline
           },
           &diagnostics,
-          &proxy.source_diagnostic_summary(),
+          &proxy.source_diagnostic(),
         );
         log::warn!("Embedded FFmpeg startup failed: {error}");
         return Err(error);
@@ -787,7 +1259,9 @@ impl EmbeddedPlayerManager {
     self.update_transport(|state| {
       state.generation = Some(saturating_u32(attempt.generation.0));
       state.phase = EmbeddedPlayerPhase::Loading;
-      state.playlist_url = Some(proxy.playlist_url(&hls_nonce));
+      state.media = Some(EmbeddedPlayerMedia::Hls {
+        url: proxy.playlist_url(&hls_nonce),
+      });
       state.timeline_offset_seconds = attempt.start_position_ticks as f64 / 10_000_000.0;
       state.position_seconds = state.timeline_offset_seconds;
       state.desired_paused = attempt.paused;
@@ -837,7 +1311,7 @@ impl EmbeddedPlayerManager {
       );
     }
     let message = format!("Local FFmpeg transcode exited unexpectedly with status {code:?}");
-    let update = {
+    let update = if snapshot.generation_has_played {
       self
         .core
         .lock()
@@ -849,10 +1323,23 @@ impl EmbeddedPlayerManager {
           state: BrowserPlaybackState::Failed { message },
           position_ticks: snapshot.position_ticks,
         }))
+    } else {
+      let source_diagnostic = self.proxy.lock().as_ref().map_or(
+        SourceProxySnapshot {
+          summary: String::new(),
+          terminal_failure: false,
+        },
+        |proxy| proxy.source_diagnostic(),
+      );
+      self.core.lock().dispatch(PlaybackAction::StartupFailed {
+        generation,
+        message,
+        retryable: !source_diagnostic.terminal_failure,
+      })
     };
     if let Ok(update) = update {
       self.apply_snapshot(&update.snapshot, None);
-      if let Err(error) = self.execute_terminal_commands(update.commands).await {
+      if let Err(error) = self.execute_commands(update.commands).await {
         log::warn!("Failed to clean up terminated FFmpeg pipeline: {error}");
       }
     }
@@ -887,6 +1374,17 @@ impl EmbeddedPlayerManager {
       .generation
       .map(|generation| saturating_u32(generation.0));
     state.phase = phase(snapshot.phase);
+    if matches!(
+      state.phase,
+      EmbeddedPlayerPhase::Idle
+        | EmbeddedPlayerPhase::Preparing
+        | EmbeddedPlayerPhase::Stopping
+        | EmbeddedPlayerPhase::Stopped
+        | EmbeddedPlayerPhase::Ended
+        | EmbeddedPlayerPhase::Failed
+    ) {
+      state.media = None;
+    }
     state.item_id = snapshot
       .session
       .as_ref()
@@ -903,13 +1401,15 @@ impl EmbeddedPlayerManager {
       state.title = Some(active.source.title.clone());
       state.subtitle = active.source.subtitle.clone();
       state.timeline_offset_seconds = active.timeline_offset_seconds;
-      state.video_codec = Some(match active.source.source_video_profile {
-        SourceVideoProfile::H264Sdr => "h264".to_string(),
-        SourceVideoProfile::HevcMain10Hdr => "hevc-main10".to_string(),
+      state.video_codec = active.probe.map(|probe| match probe.video.codec {
+        ProbedVideoCodec::H264 => "h264".to_string(),
+        ProbedVideoCodec::Hevc if probe.video.hevc_main10 => "hevc-main10".to_string(),
+        ProbedVideoCodec::Hevc => "hevc".to_string(),
+        ProbedVideoCodec::Other => "other".to_string(),
       });
-      state.dynamic_range = Some(match active.source.source_video_profile {
-        SourceVideoProfile::H264Sdr => "sdr".to_string(),
-        SourceVideoProfile::HevcMain10Hdr => "hdr".to_string(),
+      state.dynamic_range = active.probe.map(|probe| match probe.video.dynamic_range {
+        ProbedDynamicRange::Sdr => "sdr".to_string(),
+        ProbedDynamicRange::Hdr => "hdr".to_string(),
       });
     }
     state.failure = snapshot
@@ -990,6 +1490,9 @@ impl EmbeddedPlayerManager {
         )
       }
     };
+    if let Some(proxy) = self.proxy.lock().as_ref() {
+      proxy.revoke();
+    }
     if let Some(output_dir) = output_without_process {
       self.cleanup_pipeline_output(Some(output_dir)).await;
       return Ok(());
@@ -1191,11 +1694,113 @@ fn current_platform() -> FfmpegPlatform {
   return FfmpegPlatform::Linux;
 }
 
-fn verified_encoder_availability() -> FfmpegEncoderAvailability {
-  // The bundled binary is guaranteed to provide the software encoders. Hardware
-  // candidates are enabled only after a future runtime probe proves both codec
-  // support and usable host devices.
-  FfmpegEncoderAvailability::default()
+async fn verified_encoder_availability(
+  app: &AppHandle,
+  probe: MediaProbeResult,
+) -> VerifiedEncoderAvailability {
+  #[cfg(target_os = "linux")]
+  {
+    let MediaProbeResult::Facts(facts) = probe else {
+      return VerifiedEncoderAvailability::default();
+    };
+    if facts.video.dynamic_range == ProbedDynamicRange::Hdr {
+      return VerifiedEncoderAvailability::default();
+    }
+    for render_node in discover_amd_render_nodes().await {
+      if smoke_h264_vaapi(app, &render_node).await {
+        return VerifiedEncoderAvailability {
+          encoders: FfmpegEncoderAvailability {
+            vaapi: true,
+            ..FfmpegEncoderAvailability::default()
+          },
+          vaapi_device: Some(render_node),
+        };
+      }
+    }
+    VerifiedEncoderAvailability::default()
+  }
+  #[cfg(not(target_os = "linux"))]
+  {
+    let _ = (app, probe);
+    VerifiedEncoderAvailability::default()
+  }
+}
+
+#[cfg(target_os = "linux")]
+async fn discover_amd_render_nodes() -> Vec<PathBuf> {
+  let mut nodes = Vec::new();
+  let Ok(mut entries) = tokio::fs::read_dir("/sys/class/drm").await else {
+    return nodes;
+  };
+  while let Ok(Some(entry)) = entries.next_entry().await {
+    let name = entry.file_name();
+    let Some(name) = name.to_str() else {
+      continue;
+    };
+    if !name
+      .strip_prefix("renderD")
+      .is_some_and(|suffix| !suffix.is_empty() && suffix.bytes().all(|byte| byte.is_ascii_digit()))
+    {
+      continue;
+    }
+    let Ok(vendor) = tokio::fs::read_to_string(entry.path().join("device/vendor")).await else {
+      continue;
+    };
+    if !vendor.trim().eq_ignore_ascii_case("0x1002") {
+      continue;
+    }
+    let device = Path::new("/dev/dri").join(name);
+    if tokio::fs::metadata(&device).await.is_ok() {
+      nodes.push(device);
+    }
+  }
+  nodes.sort();
+  nodes
+}
+
+#[cfg(target_os = "linux")]
+async fn smoke_h264_vaapi(app: &AppHandle, render_node: &Path) -> bool {
+  let args = vec![
+    "-nostdin".to_string(),
+    "-hide_banner".to_string(),
+    "-loglevel".to_string(),
+    "error".to_string(),
+    "-vaapi_device".to_string(),
+    render_node.to_string_lossy().into_owned(),
+    "-f".to_string(),
+    "lavfi".to_string(),
+    "-i".to_string(),
+    "color=c=black:s=64x64:r=1:d=0.1".to_string(),
+    "-vf".to_string(),
+    "format=nv12,hwupload".to_string(),
+    "-frames:v".to_string(),
+    "1".to_string(),
+    "-c:v".to_string(),
+    "h264_vaapi".to_string(),
+    "-f".to_string(),
+    "null".to_string(),
+    "-".to_string(),
+  ];
+  match run_bounded_sidecar(app, "ffmpeg", args, Duration::from_secs(5), 1024).await {
+    Ok(output) if output.status == Some(0) => true,
+    Ok(output) => {
+      if !output.stderr.trim().is_empty() {
+        log::debug!(
+          "VAAPI smoke failed for {}: {}",
+          render_node.display(),
+          output.stderr.trim()
+        );
+      }
+      false
+    }
+    Err(failure) => {
+      log::debug!(
+        "VAAPI smoke unavailable for {}: {failure:?}",
+        render_node.display()
+      );
+      false
+    }
+  }
 }
 
 fn browser_capabilities(capabilities: WebPlaybackCapabilities) -> BrowserPlaybackCapabilities {
@@ -1266,6 +1871,33 @@ async fn force_terminate_process(pid: u32) -> Result<(), String> {
 mod tests {
   use super::*;
 
+  fn ffprobe_stream(
+    index: u32,
+    codec_type: &str,
+    codec_name: &str,
+    channels: Option<u32>,
+  ) -> FfprobeStream {
+    FfprobeStream {
+      index: Some(index),
+      codec_type: Some(codec_type.to_string()),
+      codec_name: Some(codec_name.to_string()),
+      profile: Some(
+        if codec_type == "audio" && codec_name == "aac" {
+          "LC"
+        } else {
+          "High"
+        }
+        .to_string(),
+      ),
+      pix_fmt: Some("yuv420p".to_string()),
+      codec_tag_string: Some("avc1".to_string()),
+      channels,
+      color_transfer: None,
+      disposition: Some(FfprobeDisposition { attached_pic: 0 }),
+      side_data_list: Vec::new(),
+    }
+  }
+
   #[test]
   fn browser_capability_mapping_preserves_detected_limits() {
     let mapped = browser_capabilities(WebPlaybackCapabilities {
@@ -1322,12 +1954,123 @@ mod tests {
     let error = startup_error(
       FfmpegStartupFailureKind::Deadline,
       &diagnostic,
-      "source proxy returned HTTP 206 after 12 ms",
+      &SourceProxySnapshot {
+        summary: "source proxy returned HTTP 206 after 12 ms".to_string(),
+        terminal_failure: false,
+      },
     );
 
     assert_eq!(
       error.to_string(),
       "FFmpeg did not publish an HLS playlist within 15 seconds: source proxy returned HTTP 206 after 12 ms; FFmpeg was still running at the startup deadline; FFmpeg: decoder initialization failed"
     );
+    assert!(error.startup_retryable());
+  }
+
+  #[test]
+  fn ffprobe_normalization_selects_the_requested_global_audio_stream() {
+    let document = FfprobeDocument {
+      streams: vec![
+        ffprobe_stream(2, "video", "h264", None),
+        ffprobe_stream(3, "audio", "aac", Some(2)),
+        ffprobe_stream(7, "audio", "ac3", Some(6)),
+      ],
+      format: Some(FfprobeFormat {
+        format_name: "mov,mp4,m4a,3gp,3g2,mj2".to_string(),
+        tags: Some(FfprobeFormatTags {
+          major_brand: Some("isom".to_string()),
+        }),
+      }),
+    };
+
+    let facts = normalize_ffprobe(&document, Some(7), SourceVideoProfile::H264Sdr)
+      .expect("probe should normalize");
+
+    assert_eq!(
+      (
+        facts.container,
+        facts.video.stream_index,
+        facts.audio.map(|audio| (audio.stream_index, audio.codec)),
+        facts.audio_stream_count,
+      ),
+      (
+        ProbedContainer::Mp4,
+        2,
+        Some((7, ProbedAudioCodec::Other)),
+        2,
+      )
+    );
+  }
+
+  #[test]
+  fn ffprobe_normalization_rejects_a_missing_selected_audio_stream() {
+    let document = FfprobeDocument {
+      streams: vec![ffprobe_stream(0, "video", "h264", None)],
+      format: None,
+    };
+
+    let error = normalize_ffprobe(&document, Some(4), SourceVideoProfile::H264Sdr)
+      .expect_err("selected audio must not silently change");
+
+    assert_eq!(error, MediaProbeFailure::SelectedAudioStreamMissing);
+  }
+
+  #[test]
+  fn ffprobe_normalization_requires_aac_lc_for_browser_compatibility() {
+    let mut stream = ffprobe_stream(3, "audio", "aac", Some(2));
+    stream.profile = Some("HE-AAC".to_string());
+
+    let audio = normalize_audio_stream(&stream).expect("valid audio stream should normalize");
+
+    assert_eq!(audio.codec, ProbedAudioCodec::Other);
+  }
+
+  #[test]
+  fn quicktime_brand_is_not_strict_mp4_direct_source() {
+    let format = FfprobeFormat {
+      format_name: "mov,mp4,m4a,3gp,3g2,mj2".to_string(),
+      tags: Some(FfprobeFormatTags {
+        major_brand: Some("qt  ".to_string()),
+      }),
+    };
+
+    assert_eq!(normalize_container(Some(&format)), ProbedContainer::Other);
+  }
+
+  #[test]
+  fn direct_source_media_serializes_to_the_locked_public_tag() {
+    let media = EmbeddedPlayerMedia::DirectSource {
+      url: "http://127.0.0.1:1234/media/nonce".to_string(),
+      mime_type: "video/mp4".to_string(),
+    };
+
+    assert_eq!(
+      serde_json::to_value(media).expect("media should serialize"),
+      serde_json::json!({
+        "kind": "directSource",
+        "url": "http://127.0.0.1:1234/media/nonce",
+        "mimeType": "video/mp4",
+      })
+    );
+  }
+
+  #[test]
+  fn source_auth_failure_is_not_a_retryable_candidate_failure() {
+    let error = EmbeddedPlayerError::SidecarStartupExit {
+      detail: "source proxy returned HTTP 401 after 4 ms (range: no); FFmpeg exited".to_string(),
+      retryable: false,
+    };
+
+    assert!(!error.startup_retryable());
+  }
+
+  #[test]
+  fn encoder_failure_before_any_source_request_is_retryable() {
+    let error = EmbeddedPlayerError::SidecarStartupExit {
+      detail: "source proxy received no request; FFmpeg: device initialization failed".to_string(),
+      retryable: true,
+    };
+
+    assert!(error.startup_retryable());
   }
 }

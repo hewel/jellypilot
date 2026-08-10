@@ -1,9 +1,12 @@
 use jellypilot_playback_core::{
     AudioChannelLayout, BrowserObservation, BrowserPlaybackCapabilities, BrowserPlaybackState,
     EmbeddedPlaybackCore, FfmpegEncoder, FfmpegEncoderAvailability, FfmpegPlanRequest,
-    FfmpegPlatform, MpvFallbackReason, PlaybackAction, PlaybackCommand, PlaybackFailureStage,
-    PlaybackGeneration, PlaybackObservationDisposition, PlaybackObservationToken, PlaybackPhase,
-    PlaybackSession, PlaybackStartReason, PlaybackStopReason, SourceVideoProfile,
+    FfmpegPlatform, MediaDelivery, MediaProbeFacts, MediaProbeResult, MpvFallbackReason,
+    PlaybackAction, PlaybackCommand, PlaybackFailureStage, PlaybackGeneration,
+    PlaybackObservationDisposition, PlaybackObservationToken, PlaybackPhase, PlaybackSession,
+    PlaybackStartReason, PlaybackStopReason, ProbedAudioCodec, ProbedAudioStream, ProbedContainer,
+    ProbedDynamicRange, ProbedPixelFormat, ProbedVideoCodec, ProbedVideoSampleEntry,
+    ProbedVideoStream,
 };
 
 fn browser_capabilities() -> BrowserPlaybackCapabilities {
@@ -27,8 +30,24 @@ fn session(platform: FfmpegPlatform, encoders: FfmpegEncoderAvailability) -> Pla
             platform,
             encoders,
             browser: browser_capabilities(),
-            video: SourceVideoProfile::H264Sdr,
-            audio: Some(AudioChannelLayout::Stereo),
+            probe: MediaProbeResult::Facts(MediaProbeFacts {
+                container: ProbedContainer::Other,
+                video: ProbedVideoStream {
+                    stream_index: 0,
+                    codec: ProbedVideoCodec::Other,
+                    pixel_format: ProbedPixelFormat::Yuv420p,
+                    sample_entry: ProbedVideoSampleEntry::Other,
+                    dynamic_range: ProbedDynamicRange::Sdr,
+                    hevc_main10: false,
+                },
+                audio: Some(ProbedAudioStream {
+                    stream_index: 1,
+                    codec: ProbedAudioCodec::Aac,
+                    channels: AudioChannelLayout::Stereo.channel_count(),
+                }),
+                video_stream_count: 1,
+                audio_stream_count: 1,
+            }),
         },
         mpv_fallback_available: true,
     }
@@ -111,7 +130,7 @@ fn play_emits_self_contained_first_candidate_attempt() {
             PlaybackStartReason::Play,
             100,
             0,
-            FfmpegEncoder::VideoToolbox,
+            Some(FfmpegEncoder::VideoToolbox),
             4,
             15,
         )
@@ -317,31 +336,32 @@ fn startup_failures_advance_candidates_then_expose_mpv_fallback() {
         ),
     );
 
-    let second = core
-        .dispatch(PlaybackAction::StartupFailed {
-            generation: first,
-            message: "qsv init failed".to_owned(),
-        })
-        .expect("next candidate should start");
-    let second_generation = next_generation(&second.commands);
-    let third = core
-        .dispatch(PlaybackAction::StartupFailed {
-            generation: second_generation,
-            message: "nvenc init failed".to_owned(),
-        })
-        .expect("software candidate should start");
-    let third_generation = next_generation(&third.commands);
-    let failed = core
-        .dispatch(PlaybackAction::StartupFailed {
-            generation: third_generation,
-            message: "libx264 init failed".to_owned(),
-        })
-        .expect("candidate exhaustion should become visible state");
+    let candidate_count = core
+        .snapshot()
+        .active_plan
+        .as_ref()
+        .map(|plan| plan.candidates.len())
+        .expect("active plan");
+    let mut generation = first;
+    let mut terminal = None;
+    for index in 0..candidate_count {
+        let update = core
+            .dispatch(PlaybackAction::StartupFailed {
+                generation,
+                message: format!("candidate {index} failed"),
+                retryable: true,
+            })
+            .expect("candidate failure should dispatch");
+        if index + 1 == candidate_count {
+            terminal = Some(update);
+        } else {
+            generation = next_generation(&update.commands);
+        }
+    }
+    let failed = terminal.expect("last candidate should fail terminally");
 
     assert_eq!(
         (
-            second.snapshot.active_candidate.map(|value| value.encoder),
-            third.snapshot.active_candidate.map(|value| value.encoder),
             failed.snapshot.phase,
             failed.snapshot.attempt_failures.len(),
             failed
@@ -351,13 +371,83 @@ fn startup_failures_advance_candidates_then_expose_mpv_fallback() {
                 .map(|fallback| (fallback.available, fallback.reason)),
         ),
         (
-            Some(FfmpegEncoder::Nvenc),
-            Some(FfmpegEncoder::Software),
             PlaybackPhase::Failed,
-            3,
+            candidate_count,
             Some((true, MpvFallbackReason::FfmpegCandidatesExhausted)),
         )
     );
+}
+
+#[test]
+fn direct_source_failure_before_playing_advances_to_hls_in_new_generation() {
+    let mut core = EmbeddedPlaybackCore::new();
+    let mut input = session(FfmpegPlatform::Linux, FfmpegEncoderAvailability::default());
+    let MediaProbeResult::Facts(facts) = &mut input.plan_request.probe else {
+        panic!("test session must contain probe facts");
+    };
+    facts.container = ProbedContainer::Mp4;
+    facts.video.codec = ProbedVideoCodec::H264;
+    facts.video.sample_entry = ProbedVideoSampleEntry::Avc1;
+    let direct_generation = play(&mut core, input);
+
+    let fallback = observe(
+        &mut core,
+        direct_generation,
+        1,
+        BrowserPlaybackState::Failed {
+            message: "native MP4 decode failed".to_owned(),
+        },
+        0,
+    );
+
+    assert!(matches!(
+        fallback.commands.as_slice(),
+        [
+            PlaybackCommand::StopEmbedded { generation },
+            PlaybackCommand::StartEmbedded { attempt },
+        ] if *generation == direct_generation
+            && attempt.generation == PlaybackGeneration(2)
+            && attempt.candidate.delivery == MediaDelivery::HlsRemux
+            && attempt.start_position_ticks == 100
+            && fallback.snapshot.phase == PlaybackPhase::Starting
+    ));
+}
+
+#[test]
+fn terminal_startup_failure_does_not_advance_delivery_candidates() {
+    let mut core = EmbeddedPlaybackCore::new();
+    let generation = play(
+        &mut core,
+        session(
+            FfmpegPlatform::Windows,
+            FfmpegEncoderAvailability {
+                quick_sync: true,
+                nvenc: true,
+                ..FfmpegEncoderAvailability::default()
+            },
+        ),
+    );
+
+    let failed = core
+        .dispatch(PlaybackAction::StartupFailed {
+            generation,
+            message: "source authorization failed".to_owned(),
+            retryable: false,
+        })
+        .expect("terminal failure should become visible");
+
+    assert!(matches!(
+        (
+            failed.commands.as_slice(),
+            failed.snapshot.phase,
+            failed.snapshot.failure.as_ref(),
+        ),
+        (
+            [PlaybackCommand::StopEmbedded { generation: stopped }],
+            PlaybackPhase::Failed,
+            Some(failure),
+        ) if *stopped == generation && !failure.retryable
+    ));
 }
 
 #[test]
@@ -463,7 +553,14 @@ fn browser_stall_is_visible_and_offers_resume_position_to_mpv() {
 fn unsupported_hdr_becomes_explicit_planning_failure_without_start_command() {
     let mut core = EmbeddedPlaybackCore::new();
     let mut input = session(FfmpegPlatform::Linux, FfmpegEncoderAvailability::default());
-    input.plan_request.video = SourceVideoProfile::HevcMain10Hdr;
+    let MediaProbeResult::Facts(facts) = &mut input.plan_request.probe else {
+        panic!("test session must contain probe facts");
+    };
+    facts.video.codec = ProbedVideoCodec::Hevc;
+    facts.video.pixel_format = ProbedPixelFormat::TenBit420;
+    facts.video.sample_entry = ProbedVideoSampleEntry::Hvc1;
+    facts.video.dynamic_range = ProbedDynamicRange::Hdr;
+    facts.video.hevc_main10 = true;
     input.plan_request.browser.hevc_main10_hdr = false;
 
     let update = core

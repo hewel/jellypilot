@@ -34,7 +34,7 @@
   "bundle": {
     "active": true,
     "targets": "all",
-    "externalBin": ["binaries/ffmpeg"],
+    "externalBin": ["binaries/ffmpeg", "binaries/ffprobe"],
     "resources": {
       "../packaging/ffmpeg/THIRD_PARTY_NOTICES.md": "licenses/ffmpeg/THIRD_PARTY_NOTICES.md",
       "../packaging/ffmpeg/manifest.json": "licenses/ffmpeg/manifest.json",

@@ -75,10 +75,10 @@ jobs:
       - name: Install dependencies
         run: bun install --frozen-lockfile --ignore-scripts
 
-      - name: Prepare verified FFmpeg sidecar
+      - name: Prepare verified FFmpeg and FFprobe sidecars
         run: bun run ffmpeg:prepare
 
-      - name: Verify FFmpeg sidecar
+      - name: Verify FFmpeg and FFprobe sidecars
         run: bun run ffmpeg:verify
 
       - name: Build Application

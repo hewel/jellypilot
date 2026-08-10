@@ -134,6 +134,139 @@ pub struct BrowserPlaybackCapabilities {
     pub max_audio_channels: u8,
 }
 
+/// Container class normalized from the FFprobe format and major-brand facts.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ProbedContainer {
+    /// ISO Base Media File Format with an MP4-compatible major brand.
+    Mp4,
+    /// Any container that is not strictly eligible for direct MP4 delivery.
+    Other,
+}
+
+/// Video codec normalized from one selected FFprobe stream.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ProbedVideoCodec {
+    /// Advanced Video Coding.
+    H264,
+    /// High Efficiency Video Coding.
+    Hevc,
+    /// A codec outside the embedded browser policy.
+    Other,
+}
+
+/// Audio codec normalized from one selected FFprobe stream.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ProbedAudioCodec {
+    /// Advanced Audio Coding.
+    Aac,
+    /// A codec outside the embedded browser policy.
+    Other,
+}
+
+/// Pixel-layout class relevant to browser compatibility and HDR preservation.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ProbedPixelFormat {
+    /// Eight-bit planar 4:2:0.
+    Yuv420p,
+    /// Ten-bit 4:2:0 in a planar or semi-planar representation.
+    TenBit420,
+    /// Any other or unknown pixel format.
+    Other,
+}
+
+/// MP4 video sample entry normalized from `codec_tag_string`.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ProbedVideoSampleEntry {
+    /// `avc1` H.264 sample entry.
+    Avc1,
+    /// `hvc1` HEVC sample entry.
+    Hvc1,
+    /// Any other or unknown sample entry.
+    Other,
+}
+
+/// Source dynamic range normalized from transfer characteristics and metadata.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ProbedDynamicRange {
+    /// Standard dynamic range.
+    Sdr,
+    /// HDR that must never be silently tone mapped.
+    Hdr,
+}
+
+/// Normalized facts for the selected global video stream.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ProbedVideoStream {
+    /// Global FFmpeg stream index.
+    pub stream_index: u32,
+    /// Normalized codec.
+    pub codec: ProbedVideoCodec,
+    /// Normalized pixel layout.
+    pub pixel_format: ProbedPixelFormat,
+    /// Normalized MP4 sample entry.
+    pub sample_entry: ProbedVideoSampleEntry,
+    /// Source dynamic range.
+    pub dynamic_range: ProbedDynamicRange,
+    /// Whether FFprobe identified the HEVC Main 10 profile.
+    pub hevc_main10: bool,
+}
+
+/// Normalized facts for the selected global audio stream.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ProbedAudioStream {
+    /// Global FFmpeg stream index.
+    pub stream_index: u32,
+    /// Normalized codec.
+    pub codec: ProbedAudioCodec,
+    /// Positive channel count.
+    pub channels: u8,
+}
+
+/// Stable policy facts derived from one bounded FFprobe invocation.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct MediaProbeFacts {
+    /// Normalized source container.
+    pub container: ProbedContainer,
+    /// Selected video stream.
+    pub video: ProbedVideoStream,
+    /// Selected audio stream, if the source contains audio.
+    pub audio: Option<ProbedAudioStream>,
+    /// Total number of video streams in the source.
+    pub video_stream_count: u16,
+    /// Total number of audio streams in the source.
+    pub audio_stream_count: u16,
+}
+
+/// Safe, non-secret reason a media probe did not produce policy facts.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum MediaProbeFailure {
+    /// The FFprobe sidecar could not be started.
+    SidecarUnavailable,
+    /// FFprobe exceeded its fixed deadline.
+    Timeout,
+    /// FFprobe exited unsuccessfully.
+    ProcessFailed,
+    /// FFprobe output exceeded the bounded capture limit.
+    OutputTooLarge,
+    /// FFprobe returned malformed or incomplete JSON.
+    InvalidOutput,
+    /// The source contained no video stream.
+    MissingVideoStream,
+    /// The requested global audio stream was absent.
+    SelectedAudioStreamMissing,
+    /// The selected audio stream had an invalid channel count.
+    InvalidAudioChannelCount,
+}
+
+/// Probe input consumed by the pure delivery planner.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum MediaProbeResult {
+    /// FFprobe produced normalized facts.
+    Facts(MediaProbeFacts),
+    /// Probing failed without exposing provider URLs or sidecar output.
+    Failed(MediaProbeFailure),
+}
+
 /// Source video class supported by the embedded transcode policy.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum SourceVideoProfile {
@@ -170,6 +303,18 @@ impl AudioChannelLayout {
             Self::Other(channels) => channels,
         }
     }
+
+    /// Builds the closest explicit layout representation for a channel count.
+    #[must_use]
+    pub const fn from_channel_count(channels: u8) -> Self {
+        match channels {
+            1 => Self::Mono,
+            2 => Self::Stereo,
+            6 => Self::Surround51,
+            8 => Self::Surround71,
+            other => Self::Other(other),
+        }
+    }
 }
 
 /// Input to [`crate::plan_ffmpeg`].
@@ -181,10 +326,8 @@ pub struct FfmpegPlanRequest {
     pub encoders: FfmpegEncoderAvailability,
     /// Browser playback capabilities that the profile must satisfy.
     pub browser: BrowserPlaybackCapabilities,
-    /// Source video class and required output profile.
-    pub video: SourceVideoProfile,
-    /// Source audio layout, or `None` for video without audio.
-    pub audio: Option<AudioChannelLayout>,
+    /// Normalized probe facts, or a safe probe failure category.
+    pub probe: MediaProbeResult,
 }
 
 /// Pixel format selected for video output.
@@ -296,13 +439,41 @@ impl FfmpegVideoEncoder {
     }
 }
 
-/// One ordered FFmpeg startup candidate.
+/// Browser delivery selected for one ordered startup candidate.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum MediaDelivery {
+    /// Browser receives the strict MP4 source through an authorized loopback URL.
+    DirectSource,
+    /// Both selected streams are copied into fragmented-MP4 HLS.
+    HlsRemux,
+    /// Exactly one selected stream is transcoded into fragmented-MP4 HLS.
+    HlsPartialTranscode,
+    /// Both selected streams are transcoded into fragmented-MP4 HLS.
+    HlsFullTranscode,
+}
+
+/// Independent codec decision for one selected stream.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum StreamDecision {
+    /// Preserve compressed packets without re-encoding.
+    Copy,
+    /// Re-encode into the plan's browser-compatible target.
+    Transcode,
+}
+
+/// One ordered direct-source or FFmpeg-HLS startup candidate.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct FfmpegCandidate {
-    /// Acceleration family represented by this attempt.
-    pub encoder: FfmpegEncoder,
-    /// Concrete FFmpeg video encoder.
-    pub video_encoder: FfmpegVideoEncoder,
+    /// Browser delivery family represented by this attempt.
+    pub delivery: MediaDelivery,
+    /// Independent video codec decision.
+    pub video: StreamDecision,
+    /// Independent audio codec decision, or `None` for silent media.
+    pub audio: Option<StreamDecision>,
+    /// Acceleration family used when video is transcoded.
+    pub encoder: Option<FfmpegEncoder>,
+    /// Concrete FFmpeg encoder used when video is transcoded.
+    pub video_encoder: Option<FfmpegVideoEncoder>,
 }
 
 /// Source properties intentionally left unchanged by the transcode policy.
@@ -321,6 +492,8 @@ pub struct PreservedMediaProperties {
 /// Deterministic FFmpeg profile and ordered startup candidates.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct FfmpegPlan {
+    /// Normalized source facts used to select and map streams.
+    pub probe: MediaProbeFacts,
     /// Fixed rolling-HLS packaging settings.
     pub hls: RollingHlsProfile,
     /// Target video profile.
@@ -336,6 +509,8 @@ pub struct FfmpegPlan {
 /// Explicit reason FFmpeg planning cannot produce embedded playback.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum FfmpegPlanError {
+    /// The media probe failed before delivery planning.
+    ProbeFailed(MediaProbeFailure),
     /// The browser cannot consume fragmented-MP4 HLS.
     FragmentedMp4HlsUnsupported,
     /// The browser cannot decode the required H.264 SDR profile.
@@ -353,11 +528,16 @@ pub enum FfmpegPlanError {
         /// Maximum channel count exposed by the browser.
         browser_max_channels: u8,
     },
+    /// HDR input was not exact HEVC Main 10 and cannot be preserved safely.
+    UnsupportedHdrSource,
+    /// Neither strict direct MP4 nor fragmented-MP4 HLS can be delivered.
+    NoCompatibleDelivery,
 }
 
 impl fmt::Display for FfmpegPlanError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::ProbeFailed(failure) => write!(formatter, "media probe failed: {failure:?}"),
             Self::FragmentedMp4HlsUnsupported => {
                 formatter.write_str("browser does not support fragmented-MP4 HLS")
             }
@@ -377,6 +557,10 @@ impl fmt::Display for FfmpegPlanError {
                 formatter,
                 "browser supports {browser_max_channels} audio channels but source layout requires {source_channels}"
             ),
+            Self::UnsupportedHdrSource => formatter
+                .write_str("HDR source is not preservable HEVC Main 10; tone mapping is disabled"),
+            Self::NoCompatibleDelivery => formatter
+                .write_str("source has no compatible direct-source or HLS delivery plan"),
         }
     }
 }
@@ -554,6 +738,8 @@ pub enum PlaybackAction {
         generation: PlaybackGeneration,
         /// Human-readable startup failure.
         message: String,
+        /// Whether another ordered delivery candidate may safely be attempted.
+        retryable: bool,
     },
     /// Applies browser media state with generation and sequence protection.
     BrowserObserved(BrowserObservation),
@@ -809,6 +995,8 @@ pub struct PlaybackSnapshot {
     pub paused: bool,
     /// Last accepted browser sequence for the current generation.
     pub last_observation_sequence: Option<u64>,
+    /// Whether the current generation has emitted a confirmed playing observation.
+    pub generation_has_played: bool,
     /// Complete active FFmpeg plan.
     pub active_plan: Option<FfmpegPlan>,
     /// Candidate active for the current generation.
