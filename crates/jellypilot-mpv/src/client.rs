@@ -28,8 +28,8 @@ pub enum MpvError {
   IpcTimeout,
   #[error("MPV IPC disconnected")]
   IpcDisconnected,
-  #[error("MPV command failed: {0}")]
-  CommandFailed(String),
+  #[error("MPV command failed")]
+  CommandFailed,
   #[error("Not connected")]
   NotConnected,
   #[error("MPV is already running or starting")]
@@ -315,7 +315,7 @@ impl MpvClient {
     let response = ipc.send_command(cmd).await?;
 
     if !response.is_success() {
-      return Err(MpvError::CommandFailed(response.error));
+      return Err(MpvError::CommandFailed);
     }
 
     Ok(response)

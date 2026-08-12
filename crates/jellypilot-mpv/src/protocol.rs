@@ -147,7 +147,7 @@ impl MpvCommand {
 }
 
 /// Response from MPV for a command.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Clone, Deserialize)]
 pub(crate) struct MpvResponse {
   /// "success" or error message.
   pub error: String,
@@ -209,7 +209,7 @@ impl From<serde_json::Value> for PropertyValue {
 }
 
 /// Message received from MPV IPC (either response or event).
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub(crate) enum MpvMessage {
   Response(MpvResponse),
   Event(MpvEvent),
