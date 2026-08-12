@@ -16,6 +16,29 @@ use tokio::task::JoinHandle;
 
 use super::protocol::{MpvCommand, MpvEvent, MpvMessage, MpvResponse};
 
+fn parse_error_log_summary(error: &serde_json::Error, message_bytes: usize) -> String {
+  format!(
+    "category={:?}, line={}, column={}, bytes={message_bytes}",
+    error.classify(),
+    error.line(),
+    error.column()
+  )
+}
+
+fn response_trace_summary(result: &Result<MpvResponse, IpcError>) -> String {
+  match result {
+    Ok(response) => format!(
+      "request_id={}, success={}",
+      response.request_id,
+      response.is_success()
+    ),
+    Err(IpcError::ConnectionFailed(_)) => "error=connection-failed".to_owned(),
+    Err(IpcError::WriteFailed(_)) => "error=write-failed".to_owned(),
+    Err(IpcError::Timeout) => "error=timeout".to_owned(),
+    Err(IpcError::Disconnected) => "error=disconnected".to_owned(),
+  }
+}
+
 fn command_trace_summary(command: &MpvCommand) -> String {
   format!(
     "request_id={}, command={}",
@@ -212,7 +235,10 @@ impl MpvIpc {
               }
             }
             Err(e) => {
-              log::warn!("Failed to parse MPV message: {} - {}", e, trimmed);
+              log::warn!(
+                "Failed to parse MPV message ({})",
+                parse_error_log_summary(&e, trimmed.len())
+              );
             }
           }
         }
@@ -341,7 +367,7 @@ impl MpvIpc {
     // Wait for response with timeout
     match tokio::time::timeout(Duration::from_secs(5), rx).await {
       Ok(Ok(result)) => {
-        log::trace!("MPV response received: {:?}", result);
+        log::trace!("MPV response received: {}", response_trace_summary(&result));
         result
       }
       Ok(Err(_)) => {
@@ -418,6 +444,34 @@ mod tests {
 
     assert!(summary.contains("command=loadfile"));
     assert!(!summary.contains(secret_url));
+    assert!(!summary.contains("secret-token"));
+  }
+
+  #[test]
+  fn malformed_message_summary_omits_raw_token_bearing_input() {
+    let raw = r#"{"request_id":1,"data":"api_key=secret-token""#;
+    let error = serde_json::from_str::<serde_json::Value>(raw).expect_err("input is malformed");
+
+    let summary = parse_error_log_summary(&error, raw.len());
+
+    assert!(summary.contains(&format!("bytes={}", raw.len())));
+    assert!(!summary.contains("api_key"));
+    assert!(!summary.contains("secret-token"));
+  }
+
+  #[test]
+  fn response_summary_omits_property_data() {
+    let secret = "https://media.example/video?api_key=secret-token";
+    let result = Ok(MpvResponse {
+      error: "success".to_owned(),
+      data: Some(serde_json::Value::String(secret.to_owned())),
+      request_id: 41,
+    });
+
+    let summary = response_trace_summary(&result);
+
+    assert_eq!(summary, "request_id=41, success=true");
+    assert!(!summary.contains(secret));
     assert!(!summary.contains("secret-token"));
   }
 }
