@@ -1,0 +1,15 @@
+[package]
+name = "jellypilot-gtk"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Native GTK 4 frontend for JellyPilot on Linux"
+
+[target.'cfg(target_os = "linux")'.dependencies]
+jellypilot-core = { path = "../crates/jellypilot-core" }
+relm4 = { version = "0.9.1", default-features = false, features = ["macros"] }
+
+[lints]
+workspace = true
