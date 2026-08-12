@@ -506,9 +506,9 @@ impl MpvClient {
 
   /// Quit MPV gracefully.
   pub async fn quit(&self) -> Result<(), MpvError> {
-    let _ = self.send(MpvCommand::quit()).await;
+    let result = self.send(MpvCommand::quit()).await.map(|_| ());
     self.stop().await;
-    Ok(())
+    result
   }
 
   /// Observe a property for changes.
@@ -567,7 +567,7 @@ mod tests {
   use std::process::Stdio;
   use std::time::Duration;
 
-  use tokio::io::duplex;
+  use tokio::io::{duplex, AsyncBufReadExt, AsyncWriteExt, BufReader};
   use tokio::process::Command;
 
   use super::*;
@@ -628,6 +628,39 @@ mod tests {
     command.spawn().expect("controlled lifecycle child")
   }
 
+  async fn client_with_failing_command_peer() -> (MpvClient, tokio::task::JoinHandle<()>) {
+    let (client_stream, peer_stream) = duplex(1024);
+    let (reader, writer) = tokio::io::split(client_stream);
+    let client = MpvClient::from_io_for_test(reader, writer)
+      .await
+      .expect("test client should be constructed");
+    let (peer_reader, mut peer_writer) = tokio::io::split(peer_stream);
+    let peer = tokio::spawn(async move {
+      let mut lines = BufReader::new(peer_reader).lines();
+      let command = lines
+        .next_line()
+        .await
+        .expect("test peer should read the command")
+        .expect("test peer should receive a command");
+      let request_id = serde_json::from_str::<serde_json::Value>(&command)
+        .expect("command should be valid JSON")
+        .get("request_id")
+        .and_then(serde_json::Value::as_i64)
+        .expect("command should contain a request ID");
+      let response = serde_json::json!({
+        "error": "failure containing secret-token",
+        "data": null,
+        "request_id": request_id,
+      });
+      peer_writer
+        .write_all(format!("{response}\n").as_bytes())
+        .await
+        .expect("test peer should write the response");
+    });
+
+    (client, peer)
+  }
+
   #[test]
   #[ignore = "helper process launched by lifecycle tests"]
   fn lifecycle_child_process() {
@@ -678,6 +711,33 @@ mod tests {
       original_pid
     );
     client.stop().await;
+  }
+
+  #[tokio::test]
+  async fn quit_returns_sanitized_command_failure() {
+    let (client, peer) = client_with_failing_command_peer().await;
+
+    let error = client
+      .quit()
+      .await
+      .expect_err("failed quit command should be returned");
+    peer.await.expect("test peer should finish");
+
+    assert_eq!(error.to_string(), "MPV command failed");
+  }
+
+  #[tokio::test]
+  async fn quit_stops_local_process_when_command_fails() {
+    let (client, peer) = client_with_failing_command_peer().await;
+    client.runtime.lock().process = Some(lifecycle_test_child());
+
+    let _error = client
+      .quit()
+      .await
+      .expect_err("failed quit command should be returned after cleanup");
+    peer.await.expect("test peer should finish");
+
+    assert!(client.runtime.lock().process.is_none());
   }
 
   #[tokio::test]
