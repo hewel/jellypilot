@@ -2492,12 +2492,11 @@ dependencies = [
  "axum",
  "base64 0.22.1",
  "bytes",
- "dirs",
- "emby_api",
  "fs2",
  "futures-util",
  "hls_m3u8",
- "jellyfin_api",
+ "jellypilot-media-server",
+ "jellypilot-mpv",
  "jellypilot-playback-core",
  "log",
  "parking_lot",
@@ -2545,7 +2544,46 @@ name = "jellypilot-gtk"
 version = "1.5.0"
 dependencies = [
  "jellypilot-core",
+ "jellypilot-media-server",
+ "jellypilot-mpv",
  "relm4",
+]
+
+[[package]]
+name = "jellypilot-media-server"
+version = "1.5.0"
+dependencies = [
+ "base64 0.22.1",
+ "emby_api",
+ "jellyfin_api",
+ "log",
+ "parking_lot",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "sha2",
+ "specta",
+ "thiserror 2.0.18",
+ "tokio",
+ "tokio-tungstenite",
+ "url",
+ "uuid",
+]
+
+[[package]]
+name = "jellypilot-mpv"
+version = "1.5.0"
+dependencies = [
+ "async-channel",
+ "dirs",
+ "log",
+ "parking_lot",
+ "serde",
+ "serde_json",
+ "specta",
+ "thiserror 2.0.18",
+ "tokio",
+ "which",
 ]
 
 [[package]]

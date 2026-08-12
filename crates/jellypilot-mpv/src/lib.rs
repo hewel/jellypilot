@@ -1,0 +1,12 @@
+//! External MPV process control and JSON IPC.
+
+mod client;
+mod ipc;
+mod process;
+mod protocol;
+mod state;
+
+pub use client::{has_mpv_option, MpvClient, MpvError};
+pub use process::{find_mpv, jellypilot_input_conf_path, write_input_conf};
+pub use protocol::{MpvEvent, PropertyValue};
+pub use state::{collect_player_state, PlayerState, TransportSnapshot};

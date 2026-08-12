@@ -1,19 +1,22 @@
-//! MPV IPC module - spawns and controls external MPV player via JSON IPC.
-//!
-//! Architecture:
-//! - `process.rs` - MPV binary detection and process spawning
-//! - `ipc.rs` - Async IPC connection (Named Pipes on Windows, Unix Sockets on Linux/macOS)
-//! - `protocol.rs` - JSON command/response types and serialization
-//! - `client.rs` - High-level MPV client with command methods
+//! Compatibility exports for the reusable MPV crate.
 
-mod client;
-mod ipc;
-mod process;
-mod protocol;
-
-pub(crate) use client::has_mpv_option;
-pub use client::MpvClient;
+pub(crate) use jellypilot_mpv::has_mpv_option;
 #[cfg(test)]
-pub(crate) use ipc::MpvIpc;
-pub use process::{find_mpv, write_input_conf};
-pub use protocol::{MpvEvent, PropertyValue};
+pub(crate) struct MpvIpc;
+#[cfg(test)]
+impl MpvIpc {
+  pub(crate) async fn from_io_for_test<R, W>(
+    reader: R,
+    writer: W,
+  ) -> Result<MpvClient, jellypilot_mpv::MpvError>
+  where
+    R: tokio::io::AsyncRead + Send + Unpin + 'static,
+    W: tokio::io::AsyncWrite + Send + Unpin + 'static,
+  {
+    MpvClient::from_io_for_test(reader, writer).await
+  }
+}
+pub use jellypilot_mpv::{
+  collect_player_state, find_mpv, write_input_conf, MpvClient, MpvEvent, PlayerState,
+  PropertyValue, TransportSnapshot,
+};

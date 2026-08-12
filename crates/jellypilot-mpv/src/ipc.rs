@@ -16,8 +16,16 @@ use tokio::task::JoinHandle;
 
 use super::protocol::{MpvCommand, MpvEvent, MpvMessage, MpvResponse};
 
+fn command_trace_summary(command: &MpvCommand) -> String {
+  format!(
+    "request_id={}, command={}",
+    command.request_id,
+    command.command_name()
+  )
+}
+
 #[derive(Error, Debug)]
-pub enum IpcError {
+pub(crate) enum IpcError {
   #[error("Connection failed: {0}")]
   ConnectionFailed(String),
   #[error("Write failed: {0}")]
@@ -65,7 +73,7 @@ pub struct MpvIpc {
 
 impl MpvIpc {
   /// Connect to MPV IPC socket/pipe.
-  pub async fn connect(path: &str, retry_count: u32) -> Result<Self, IpcError> {
+  pub(crate) async fn connect(path: &str, retry_count: u32) -> Result<Self, IpcError> {
     let mut last_error = None;
 
     for attempt in 0..retry_count {
@@ -147,7 +155,7 @@ impl MpvIpc {
     })
   }
 
-  #[cfg(test)]
+  #[cfg(any(test, feature = "test-utils"))]
   pub(crate) async fn from_io_for_test<R, W>(reader: R, writer: W) -> Result<Self, IpcError>
   where
     R: tokio::io::AsyncRead + Send + Unpin + 'static,
@@ -268,12 +276,12 @@ impl MpvIpc {
   }
 
   /// Check if the connection is closed.
-  pub fn is_closed(&self) -> bool {
+  pub(crate) fn is_closed(&self) -> bool {
     self.closed.load(Ordering::Acquire)
   }
 
   /// Send a command to MPV and wait for response.
-  pub async fn send_command(&self, cmd: MpvCommand) -> Result<MpvResponse, IpcError> {
+  pub(crate) async fn send_command(&self, cmd: MpvCommand) -> Result<MpvResponse, IpcError> {
     // Early check for closed connection
     if self.is_closed() {
       return Err(IpcError::Disconnected);
@@ -313,7 +321,7 @@ impl MpvIpc {
       }
     };
 
-    log::trace!("Sending MPV command: {}", json);
+    log::trace!("Sending MPV command: {}", command_trace_summary(&cmd));
 
     // Send to writer task - if this fails, remove pending and return error
     if self
@@ -354,14 +362,14 @@ impl MpvIpc {
   }
 
   /// Get the event receiver for property changes and other events.
-  pub fn events(&self) -> Receiver<MpvEvent> {
+  pub(crate) fn events(&self) -> Receiver<MpvEvent> {
     self.event_rx.clone()
   }
 
   /// Close the connection gracefully.
   /// Note: This signals shutdown but tasks may not stop immediately if blocked on I/O.
   /// Drop will abort tasks forcefully.
-  pub fn close(&self) {
+  pub(crate) fn close(&self) {
     // Signal closed state with Release ordering so reader/writer see the change
     self.closed.store(true, Ordering::Release);
 
@@ -394,5 +402,22 @@ impl Drop for MpvIpc {
 
     // Drain any remaining pending requests
     self.state.lock().drain_pending();
+  }
+}
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+
+  #[test]
+  fn command_trace_summary_omits_token_bearing_arguments() {
+    let secret_url = "https://media.example/video?api_key=secret-token";
+    let command = MpvCommand::loadfile(secret_url);
+
+    let summary = command_trace_summary(&command);
+
+    assert!(summary.contains("command=loadfile"));
+    assert!(!summary.contains(secret_url));
+    assert!(!summary.contains("secret-token"));
   }
 }

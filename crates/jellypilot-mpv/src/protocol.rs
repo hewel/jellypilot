@@ -2,31 +2,40 @@
 //!
 //! Reference: https://mpv.io/manual/master/#json-ipc
 
-use serde::{Deserialize, Serialize};
 use std::sync::atomic::{AtomicI64, Ordering};
+
+use serde::{Deserialize, Serialize};
 
 /// Global request ID counter for unique command identification.
 static REQUEST_ID: AtomicI64 = AtomicI64::new(1);
 
 /// Generate a unique request ID for MPV commands.
-pub fn next_request_id() -> i64 {
+fn next_request_id() -> i64 {
   REQUEST_ID.fetch_add(1, Ordering::SeqCst)
 }
 
 /// Command sent to MPV via IPC.
 #[derive(Debug, Clone, Serialize)]
-pub struct MpvCommand {
-  pub command: Vec<serde_json::Value>,
-  pub request_id: i64,
+pub(crate) struct MpvCommand {
+  pub(crate) command: Vec<serde_json::Value>,
+  pub(crate) request_id: i64,
 }
 
 impl MpvCommand {
   /// Create a new command with auto-generated request ID.
-  pub fn new(args: Vec<serde_json::Value>) -> Self {
+  fn new(args: Vec<serde_json::Value>) -> Self {
     Self {
       command: args,
       request_id: next_request_id(),
     }
+  }
+
+  pub(crate) fn command_name(&self) -> &str {
+    self
+      .command
+      .first()
+      .and_then(serde_json::Value::as_str)
+      .unwrap_or("unknown")
   }
 
   /// Load a file for playback.
@@ -66,6 +75,11 @@ impl MpvCommand {
   /// Set volume (0-100).
   pub fn set_volume(volume: f64) -> Self {
     Self::new(vec!["set_property".into(), "volume".into(), volume.into()])
+  }
+
+  /// Set mute state.
+  pub fn set_mute(muted: bool) -> Self {
+    Self::new(vec!["set_property".into(), "mute".into(), muted.into()])
   }
 
   /// Set audio track by ID.
@@ -134,7 +148,7 @@ impl MpvCommand {
 
 /// Response from MPV for a command.
 #[derive(Debug, Clone, Deserialize)]
-pub struct MpvResponse {
+pub(crate) struct MpvResponse {
   /// "success" or error message.
   pub error: String,
   /// Response data (command-specific).
@@ -196,7 +210,7 @@ impl From<serde_json::Value> for PropertyValue {
 
 /// Message received from MPV IPC (either response or event).
 #[derive(Debug, Clone)]
-pub enum MpvMessage {
+pub(crate) enum MpvMessage {
   Response(MpvResponse),
   Event(MpvEvent),
 }

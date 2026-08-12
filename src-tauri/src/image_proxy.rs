@@ -16,17 +16,16 @@ use axum::{
 use bytes::Bytes;
 use futures_util::stream;
 use futures_util::StreamExt;
+use jellypilot_media_server::LibraryImageRequest;
 use parking_lot::RwLock;
 use serde::{Deserialize, Serialize};
 use std::{collections::HashMap, net::TcpListener, sync::Arc, time::Duration};
 use tokio::sync::{broadcast, watch, Mutex as TokioMutex};
 use tokio_util::sync::CancellationToken;
-use url::Url;
 
 use crate::config::AppConfig;
 use crate::image_cache::{ImageCache, ImageCachePartition, StreamWriter};
-use crate::image_ref::{decode_image_id, normalize_server_url, ImageRefKind};
-use crate::jellyfin::{JellyfinClient, MediaServerProvider};
+use crate::jellyfin::{JellyfinClient, JellyfinError};
 
 /// App local services state reported to frontend.
 #[derive(Debug, Clone, Serialize, Deserialize, specta::Type, PartialEq, Eq)]
@@ -211,24 +210,13 @@ async fn handle_image(
     return text_response(StatusCode::BAD_REQUEST, "missing image token");
   }
 
-  let payload = match decode_image_id(raw_token) {
-    Ok(payload) => payload,
-    Err(err) => return text_response(StatusCode::BAD_REQUEST, err.to_string()),
+  let image = match inner.client.library().image_request(raw_token) {
+    Ok(image) => image,
+    Err(error) => {
+      let (status, message) = image_fetch_error(error);
+      return text_response(status, message);
+    }
   };
-
-  let connection = inner.client.login().connection_state();
-  if !connection.connected {
-    return text_response(StatusCode::UNAUTHORIZED, "media server is not connected");
-  }
-  if connection.provider != payload.provider {
-    return text_response(StatusCode::FORBIDDEN, "image reference provider mismatch");
-  }
-  let Some(server_url) = connection.server_url.as_deref() else {
-    return text_response(StatusCode::UNAUTHORIZED, "media server URL is unavailable");
-  };
-  if normalize_server_url(server_url) != normalize_server_url(&payload.server_url) {
-    return text_response(StatusCode::FORBIDDEN, "image reference server mismatch");
-  }
 
   let if_none_match = headers
     .get(header::IF_NONE_MATCH)
@@ -236,16 +224,8 @@ async fn handle_image(
     .map(str::trim)
     .map(ToString::to_string);
 
-  let sized_remote_url = match sized_origin_url(&payload.remote_url, payload.kind, payload.provider)
-  {
-    Ok(url) => url,
-    Err(()) => return text_response(StatusCode::BAD_REQUEST, "invalid image remote URL"),
-  };
-
-  let partition = ImageCache::partition(payload.provider, server_url);
-  inner
-    .serve_image(&sized_remote_url, partition, if_none_match)
-    .await
+  let partition = ImageCache::partition(image.provider(), image.server_url());
+  inner.serve_image(image, partition, if_none_match).await
 }
 
 impl ImageProxyInner {
@@ -255,25 +235,29 @@ impl ImageProxyInner {
 
   async fn serve_image(
     &self,
-    remote_url: &str,
+    image: LibraryImageRequest,
     partition: ImageCachePartition,
     if_none_match: Option<String>,
   ) -> Response {
     if self.cache_enabled() {
       if let Some(cache) = &self.cache {
-        if let Some(reader) = cache.open_reader(&partition, remote_url).await {
+        if let Some(reader) = cache.open_reader(&partition, image.origin_url()).await {
           return serve_cached_file(reader, if_none_match).await;
         }
       }
     }
 
-    self.coalesce_and_fetch(remote_url, partition).await
+    self.coalesce_and_fetch(image, partition).await
   }
 
-  async fn coalesce_and_fetch(&self, remote_url: &str, partition: ImageCachePartition) -> Response {
+  async fn coalesce_and_fetch(
+    &self,
+    image: LibraryImageRequest,
+    partition: ImageCachePartition,
+  ) -> Response {
     let (body_rx, header_rx, is_initiator) = {
       let mut map = self.coalescer.lock().await;
-      if let Some(inflight) = map.get(remote_url) {
+      if let Some(inflight) = map.get(image.origin_url()) {
         (
           inflight.body_tx.subscribe(),
           inflight.header_tx.subscribe(),
@@ -283,18 +267,15 @@ impl ImageProxyInner {
         let (header_tx, header_rx) = watch::channel(None);
         let (body_tx, body_rx) = broadcast::channel(32);
         let inflight = Arc::new(InflightFetch { header_tx, body_tx });
-        map.insert(remote_url.to_string(), inflight);
+        map.insert(image.origin_url().to_string(), inflight);
         (body_rx, header_rx, true)
       }
     };
 
     if is_initiator {
       let inner_self = self.clone_self();
-      let remote_url_owned = remote_url.to_string();
       tokio::spawn(async move {
-        inner_self
-          .perform_origin_fetch(&remote_url_owned, partition)
-          .await;
+        inner_self.perform_origin_fetch(image, partition).await;
       });
     }
 
@@ -359,20 +340,24 @@ impl ImageProxyInner {
     })
   }
 
-  async fn perform_origin_fetch(&self, remote_url: &str, partition: ImageCachePartition) {
+  async fn perform_origin_fetch(&self, image: LibraryImageRequest, partition: ImageCachePartition) {
     let client = self.client.clone();
-    let remote_url_owned = remote_url.to_string();
+    let cache_key = image.origin_url().to_string();
 
     // 30-second total first-byte timeout covering GET request transmission,
     // header receipt, AND receipt of the first body chunk inside ONE deadline.
     let first_byte_res = tokio::time::timeout(Duration::from_secs(30), async move {
       let response = client
-        .fetch_origin_image(&remote_url_owned)
+        .library()
+        .fetch_image(&image)
         .await
-        .map_err(|e| e.to_string())?;
+        .map_err(image_fetch_error)?;
       let status = response.status();
       if !status.is_success() {
-        return Err(format!("origin returned status {status}"));
+        return Err((
+          StatusCode::BAD_GATEWAY,
+          format!("origin returned status {status}"),
+        ));
       }
 
       let content_type = response
@@ -403,7 +388,12 @@ impl ImageProxyInner {
       let mut stream = response.bytes_stream();
       let first_chunk = match stream.next().await {
         Some(Ok(bytes)) => Some(bytes),
-        Some(Err(err)) => return Err(format!("origin body stream error: {err}")),
+        Some(Err(_)) => {
+          return Err((
+            StatusCode::BAD_GATEWAY,
+            "origin body stream failed".to_string(),
+          ));
+        }
         None => None,
       };
 
@@ -413,17 +403,17 @@ impl ImageProxyInner {
 
     let (headers, first_chunk, mut stream) = match first_byte_res {
       Ok(Ok(val)) => val,
-      Ok(Err(err_msg)) => {
-        let inflight = self.coalescer.lock().await.remove(remote_url);
+      Ok(Err((status, message))) => {
+        let inflight = self.coalescer.lock().await.remove(&cache_key);
         if let Some(inflight) = inflight {
           let _ = inflight
             .header_tx
-            .send(Some(FetchResult::Error(StatusCode::BAD_GATEWAY, err_msg)));
+            .send(Some(FetchResult::Error(status, message)));
         }
         return;
       }
       Err(_) => {
-        let inflight = self.coalescer.lock().await.remove(remote_url);
+        let inflight = self.coalescer.lock().await.remove(&cache_key);
         if let Some(inflight) = inflight {
           let _ = inflight.header_tx.send(Some(FetchResult::Error(
             StatusCode::GATEWAY_TIMEOUT,
@@ -440,7 +430,7 @@ impl ImageProxyInner {
         cache
           .try_begin_writer(
             &partition,
-            remote_url,
+            &cache_key,
             headers.content_type.as_deref(),
             headers.content_length,
           )
@@ -454,7 +444,7 @@ impl ImageProxyInner {
 
     // Close registration in coalescer map BEFORE broadcasting headers and first chunk.
     // This guarantees that any late-joining request will start its own fresh request from byte 0.
-    let inflight = self.coalescer.lock().await.remove(remote_url);
+    let inflight = self.coalescer.lock().await.remove(&cache_key);
     let Some(inflight) = inflight else { return };
 
     // Broadcast headers to all pre-stream waiters
@@ -481,8 +471,10 @@ impl ImageProxyInner {
             break;
           }
         }
-        Err(err) => {
-          let _ = inflight.body_tx.send(Err(err.to_string()));
+        Err(_) => {
+          let _ = inflight
+            .body_tx
+            .send(Err("origin body stream failed".to_string()));
           break;
         }
       }
@@ -537,91 +529,26 @@ async fn serve_cached_file(
     .unwrap_or_else(|_| Response::new(Body::empty()))
 }
 
-/// Apply the kind's maxWidth/quality profile to an origin image URL.
-///
-/// Retained non-sizing query segments are kept byte-for-byte from the original
-/// URL (encoding, duplicates, valueless/keyless/empty segments). Existing
-/// maxWidth/quality keys are dropped after percent-decoding only the raw key
-/// for case-insensitive matching; provider-cased sizing params are appended.
-fn sized_origin_url(
-  remote_url: &str,
-  kind: ImageRefKind,
-  provider: MediaServerProvider,
-) -> Result<String, ()> {
-  let Ok(parsed) = Url::parse(remote_url) else {
-    return Err(());
-  };
-  if !matches!(parsed.scheme(), "http" | "https") || parsed.host().is_none() {
-    return Err(());
+fn image_fetch_error(error: JellyfinError) -> (StatusCode, String) {
+  match error {
+    JellyfinError::NotConnected => (
+      StatusCode::UNAUTHORIZED,
+      "media server is not connected".to_string(),
+    ),
+    JellyfinError::ImageReferenceProviderMismatch => (
+      StatusCode::FORBIDDEN,
+      "image reference provider mismatch".to_string(),
+    ),
+    JellyfinError::ImageReferenceServerMismatch => (
+      StatusCode::FORBIDDEN,
+      "image reference server mismatch".to_string(),
+    ),
+    JellyfinError::ImageReference(error) => (StatusCode::BAD_REQUEST, error.to_string()),
+    _ => (
+      StatusCode::BAD_GATEWAY,
+      "origin image request failed".to_string(),
+    ),
   }
-
-  let (max_width_key, quality_key) = match provider {
-    MediaServerProvider::Jellyfin => ("maxWidth", "quality"),
-    MediaServerProvider::Emby => ("MaxWidth", "Quality"),
-  };
-
-  let (before_fragment, fragment) = match remote_url.split_once('#') {
-    Some((base, frag)) => (base, Some(frag)),
-    None => (remote_url, None),
-  };
-  let (base, raw_query) = match before_fragment.split_once('?') {
-    Some((base, query)) => (base, Some(query)),
-    None => (before_fragment, None),
-  };
-
-  let mut new_query = String::new();
-  let mut retained_any_segment = false;
-  if let Some(query) = raw_query {
-    // Bare `?` has zero pairs; do not retain a synthetic empty segment.
-    // Explicit `?&` / `?&&` keep their empty segments via non-empty raw query.
-    if !query.is_empty() {
-      for segment in query.split('&') {
-        let raw_key = segment
-          .split_once('=')
-          .map(|(key, _)| key)
-          .unwrap_or(segment);
-        if is_sizing_query_key(raw_key) {
-          continue;
-        }
-        if retained_any_segment {
-          new_query.push('&');
-        }
-        new_query.push_str(segment);
-        retained_any_segment = true;
-      }
-    }
-  }
-  if retained_any_segment {
-    new_query.push('&');
-  }
-  new_query.push_str(max_width_key);
-  new_query.push('=');
-  new_query.push_str(&kind.max_width().to_string());
-  new_query.push('&');
-  new_query.push_str(quality_key);
-  new_query.push('=');
-  new_query.push_str(&kind.quality().to_string());
-
-  let mut sized = String::with_capacity(
-    base.len() + 1 + new_query.len() + fragment.map(|f| f.len() + 1).unwrap_or(0),
-  );
-  sized.push_str(base);
-  sized.push('?');
-  sized.push_str(&new_query);
-  if let Some(fragment) = fragment {
-    sized.push('#');
-    sized.push_str(fragment);
-  }
-  Ok(sized)
-}
-
-/// Percent-decode a raw query key only far enough to match sizing param names.
-fn is_sizing_query_key(raw_key: &str) -> bool {
-  let decoded = url::form_urlencoded::parse(format!("{raw_key}=").as_bytes())
-    .next()
-    .map(|(key, _)| key.into_owned())
-    .unwrap_or_else(|| raw_key.to_owned());
-  decoded.eq_ignore_ascii_case("maxWidth") || decoded.eq_ignore_ascii_case("quality")
 }
 
 /// Build a strong, representation-specific ETag from a content digest.
@@ -664,7 +591,7 @@ fn text_response(status: StatusCode, message: impl Into<String>) -> Response {
 #[cfg(test)]
 mod tests {
   use super::*;
-  use crate::image_ref::{image_id_for_url, ImageRefKind};
+  use crate::image_ref::{image_id_for_url, sized_origin_url, ImageRefKind};
   use crate::jellyfin::MediaServerProvider;
   use reqwest::Client as ReqwestClient;
   use std::sync::atomic::{AtomicUsize, Ordering};
@@ -1477,6 +1404,7 @@ mod tests {
     for remote in [
       "not a url",
       "ftp://files.example.com/Items/1/Images/Primary",
+      "http://127.0.0.1:9/Items/1/Images/Primary",
     ] {
       let signed_token = image_id_for_url(
         MediaServerProvider::Jellyfin,

@@ -1,11 +1,13 @@
 //! MPV process detection and spawning.
 
 use std::path::PathBuf;
-use std::process::{Child, Command, Stdio};
+use std::process::Stdio;
+
 use thiserror::Error;
+use tokio::process::{Child, Command};
 
 #[derive(Error, Debug)]
-pub enum ProcessError {
+pub(crate) enum ProcessError {
   #[error("MPV executable not found")]
   NotFound,
   #[error("Failed to spawn MPV: {0}")]
@@ -94,7 +96,7 @@ pub fn write_input_conf(
     log::warn!("Failed to write JellyPilot input.conf: {}", e);
     return None;
   }
-  log::info!("Updated JellyPilot input.conf at {:?}", path);
+  log::info!("Updated JellyPilot input.conf");
 
   Some(path)
 }
@@ -123,11 +125,11 @@ fn ensure_input_conf() -> Option<PathBuf> {
 fn canonicalize_path(path: PathBuf) -> PathBuf {
   match path.canonicalize() {
     Ok(canonical) => {
-      log::debug!("Canonicalized {:?} -> {:?}", path, canonical);
+      log::debug!("Canonicalized MPV executable path");
       canonical
     }
     Err(e) => {
-      log::warn!("Failed to canonicalize {:?}: {}", path, e);
+      log::warn!("Failed to canonicalize MPV executable path: {}", e);
       path
     }
   }
@@ -140,7 +142,7 @@ fn ensure_mpv_exe(path: PathBuf) -> PathBuf {
   if path.extension().map(|e| e == "com").unwrap_or(false) {
     let exe_path = path.with_extension("exe");
     if exe_path.exists() {
-      log::info!("Switching from mpv.com to mpv.exe: {:?}", exe_path);
+      log::info!("Switching from mpv.com to mpv.exe");
       return exe_path;
     }
   }
@@ -206,6 +208,10 @@ pub fn find_mpv() -> Option<PathBuf> {
   None
 }
 
+fn extra_args_log_summary(extra_args: &[String]) -> String {
+  format!("Configured {} extra MPV arguments", extra_args.len())
+}
+
 /// Spawn MPV process with IPC server enabled.
 pub fn spawn_mpv(mpv_path: Option<&PathBuf>, extra_args: &[String]) -> Result<Child, ProcessError> {
   let mpv_exe = mpv_path
@@ -215,12 +221,13 @@ pub fn spawn_mpv(mpv_path: Option<&PathBuf>, extra_args: &[String]) -> Result<Ch
 
   let ipc = ipc_path();
 
-  log::info!("Spawning MPV: {:?} with IPC: {}", mpv_exe, ipc);
+  log::info!("Spawning MPV with JSON IPC");
   if !extra_args.is_empty() {
-    log::info!("Extra MPV args: {:?}", extra_args);
+    log::info!("{}", extra_args_log_summary(extra_args));
   }
 
   let mut cmd = Command::new(&mpv_exe);
+  cmd.kill_on_drop(true);
   cmd
     .arg(format!("--input-ipc-server={}", ipc))
     .arg("--idle")
@@ -233,7 +240,7 @@ pub fn spawn_mpv(mpv_path: Option<&PathBuf>, extra_args: &[String]) -> Result<Ch
   // Using --input-conf appends to (not replaces) the user's input.conf
   if let Some(input_conf) = ensure_input_conf() {
     cmd.arg(format!("--input-conf={}", input_conf.display()));
-    log::info!("Using JellyPilot input.conf: {:?}", input_conf);
+    log::info!("Using JellyPilot input.conf");
   }
 
   // Add user-specified extra arguments
@@ -262,7 +269,7 @@ pub fn cleanup_ipc() {
 
 #[cfg(test)]
 mod tests {
-  use super::migrated_legacy_keybindings;
+  use super::{extra_args_log_summary, migrated_legacy_keybindings};
 
   #[test]
   fn migrated_legacy_keybindings_maps_old_script_messages_to_new_writer_keys() {
@@ -276,5 +283,19 @@ i script-message jmsr-skip-intro
       migrated_legacy_keybindings(legacy),
       ("Alt+n".to_string(), "Alt+p".to_string(), "i".to_string())
     );
+  }
+
+  #[test]
+  fn configured_argument_log_description_omits_values() {
+    let arguments = [
+      "--http-header-fields=Authorization: Bearer secret-token".to_owned(),
+      "--demuxer-cache-dir=/secret/cache/path".to_owned(),
+    ];
+
+    let description = extra_args_log_summary(&arguments);
+
+    assert_eq!(description, "Configured 2 extra MPV arguments");
+    assert!(!description.contains("secret-token"));
+    assert!(!description.contains("/secret/cache/path"));
   }
 }

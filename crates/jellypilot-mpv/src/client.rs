@@ -1,13 +1,14 @@
 //! High-level MPV client with command methods.
 
 use std::path::{Path, PathBuf};
-use std::process::Child;
 use std::sync::Arc;
 use std::time::Duration;
 
 use async_channel::Receiver;
 use parking_lot::Mutex;
 use thiserror::Error;
+use tokio::process::Child;
+use tokio::sync::Mutex as AsyncMutex;
 
 use super::ipc::{IpcError, MpvIpc};
 use super::process::{cleanup_ipc, ipc_path, spawn_mpv, ProcessError};
@@ -15,17 +16,48 @@ use super::protocol::{MpvCommand, MpvEvent, MpvResponse, PropertyValue};
 
 #[derive(Error, Debug)]
 pub enum MpvError {
-  #[error("Process error: {0}")]
-  Process(#[from] ProcessError),
-  #[error("IPC error: {0}")]
-  Ipc(#[from] IpcError),
+  #[error("MPV executable not found")]
+  ExecutableNotFound,
+  #[error("Failed to spawn MPV: {0}")]
+  SpawnFailed(#[source] std::io::Error),
+  #[error("MPV IPC connection failed: {0}")]
+  IpcConnectionFailed(String),
+  #[error("MPV IPC write failed: {0}")]
+  IpcWriteFailed(#[source] std::io::Error),
+  #[error("MPV IPC command timed out")]
+  IpcTimeout,
+  #[error("MPV IPC disconnected")]
+  IpcDisconnected,
   #[error("MPV command failed: {0}")]
   CommandFailed(String),
   #[error("Not connected")]
   NotConnected,
+  #[error("MPV is already running or starting")]
+  AlreadyRunning,
 }
 
-pub(crate) fn has_mpv_option(configured_args: &[String], option_name: &str) -> bool {
+impl From<ProcessError> for MpvError {
+  fn from(error: ProcessError) -> Self {
+    match error {
+      ProcessError::NotFound => Self::ExecutableNotFound,
+      ProcessError::SpawnFailed(error) => Self::SpawnFailed(error),
+    }
+  }
+}
+
+impl From<IpcError> for MpvError {
+  fn from(error: IpcError) -> Self {
+    match error {
+      IpcError::ConnectionFailed(message) => Self::IpcConnectionFailed(message),
+      IpcError::WriteFailed(error) => Self::IpcWriteFailed(error),
+      IpcError::Timeout => Self::IpcTimeout,
+      IpcError::Disconnected => Self::IpcDisconnected,
+    }
+  }
+}
+
+#[doc(hidden)]
+pub fn has_mpv_option(configured_args: &[String], option_name: &str) -> bool {
   configured_args.iter().any(|arg| {
     let Some(raw) = arg.trim().strip_prefix("--") else {
       return false;
@@ -51,13 +83,72 @@ fn mpv_spawn_args(configured_args: &[String], demuxer_cache_dir: Option<&Path>) 
   args
 }
 
+fn option_log_summary(options: &[String]) -> String {
+  let names = options
+    .iter()
+    .map(|option| {
+      option
+        .split_once('=')
+        .map(|(name, _)| name.trim_start_matches("--"))
+        .filter(|name| {
+          !name.is_empty()
+            && name
+              .bytes()
+              .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
+        })
+        .unwrap_or("<opaque>")
+    })
+    .collect::<Vec<_>>()
+    .join(",");
+  format!("count={}, names=[{names}]", options.len())
+}
+
 /// High-level MPV client.
 pub struct MpvClient {
   mpv_path: Arc<Mutex<Option<PathBuf>>>,
   extra_args: Arc<Mutex<Vec<String>>>,
   demuxer_cache_dir: Arc<Mutex<Option<PathBuf>>>,
-  process: Arc<Mutex<Option<Child>>>,
-  ipc: Arc<Mutex<Option<Arc<MpvIpc>>>>,
+  runtime: Arc<Mutex<RuntimeState>>,
+  lifecycle: Arc<AsyncMutex<()>>,
+}
+
+#[derive(Default)]
+struct RuntimeState {
+  process: Option<Child>,
+  ipc: Option<Arc<MpvIpc>>,
+}
+
+struct StartFailure {
+  source: IpcError,
+  process_reaped: bool,
+}
+
+impl StartFailure {
+  fn into_mpv_error(self) -> MpvError {
+    if !self.process_reaped {
+      log::error!("Failed MPV start left process cleanup unconfirmed");
+    }
+    self.source.into()
+  }
+}
+
+async fn terminate_child(child: &mut Child) -> bool {
+  let pid = child.id();
+  log::info!("Killing MPV process (pid: {pid:?})");
+  if let Err(error) = child.start_kill() {
+    log::warn!("Failed to signal MPV process: {error}");
+  }
+
+  match child.wait().await {
+    Ok(status) => {
+      log::info!("MPV process exited with: {status}");
+      true
+    }
+    Err(error) => {
+      log::error!("Failed to reap MPV process: {error}");
+      false
+    }
+  }
 }
 
 impl MpvClient {
@@ -67,8 +158,8 @@ impl MpvClient {
       mpv_path: Arc::new(Mutex::new(mpv_path)),
       extra_args: Arc::new(Mutex::new(Vec::new())),
       demuxer_cache_dir: Arc::new(Mutex::new(None)),
-      process: Arc::new(Mutex::new(None)),
-      ipc: Arc::new(Mutex::new(None)),
+      runtime: Arc::new(Mutex::new(RuntimeState::default())),
+      lifecycle: Arc::new(AsyncMutex::new(())),
     }
   }
 
@@ -89,84 +180,77 @@ impl MpvClient {
 
   /// Start MPV and connect to IPC.
   pub async fn start(&self) -> Result<(), MpvError> {
-    // Cleanup any existing socket
+    let _lifecycle = self.lifecycle.lock().await;
+    self.refresh_runtime();
+    {
+      let runtime = self.runtime.lock();
+      if runtime.process.is_some() || runtime.ipc.is_some() {
+        return Err(MpvError::AlreadyRunning);
+      }
+    }
+
     cleanup_ipc();
 
-    // Get current config
     let mpv_path = self.mpv_path.lock().clone();
     let configured_args = self.extra_args.lock().clone();
     let demuxer_cache_dir = self.demuxer_cache_dir.lock().clone();
     let spawn_args = mpv_spawn_args(&configured_args, demuxer_cache_dir.as_deref());
 
-    // Spawn MPV process
-    let child = spawn_mpv(mpv_path.as_ref(), &spawn_args)?;
-    {
-      let mut process = self.process.lock();
-      *process = Some(child);
-    }
+    let child = spawn_mpv(mpv_path.as_ref(), &spawn_args).map_err(MpvError::from)?;
 
-    // Wait a bit for MPV to create the socket
     tokio::time::sleep(Duration::from_millis(500)).await;
 
-    // Connect to IPC with retries
-    let ipc_conn = MpvIpc::connect(&ipc_path(), 10).await?;
-    {
-      let mut ipc = self.ipc.lock();
-      *ipc = Some(Arc::new(ipc_conn));
-    }
+    let ipc_result = MpvIpc::connect(&ipc_path(), 10).await;
+    self
+      .finish_start(child, ipc_result)
+      .await
+      .map_err(StartFailure::into_mpv_error)?;
 
     log::info!("MPV client connected");
     Ok(())
   }
 
-  /// Stop MPV and disconnect.
-  /// This is async to avoid blocking on process kill/wait.
-  pub async fn stop(&self) {
-    log::info!("stop() called - closing IPC connection");
-    // Close IPC first
-    {
-      let mut ipc = self.ipc.lock();
-      if let Some(conn) = ipc.take() {
-        log::info!("Closing IPC connection");
-        conn.close();
-      } else {
-        log::warn!("No IPC connection to close");
+  async fn finish_start(
+    &self,
+    mut child: Child,
+    ipc_result: Result<MpvIpc, IpcError>,
+  ) -> Result<(), StartFailure> {
+    match ipc_result {
+      Ok(ipc) => {
+        let mut runtime = self.runtime.lock();
+        runtime.process = Some(child);
+        runtime.ipc = Some(Arc::new(ipc));
+        Ok(())
+      }
+      Err(source) => {
+        let process_reaped = terminate_child(&mut child).await;
+        cleanup_ipc();
+        Err(StartFailure {
+          source,
+          process_reaped,
+        })
       }
     }
+  }
 
-    // Kill process in spawn_blocking to avoid blocking async runtime
-    let child = {
-      let mut process = self.process.lock();
-      process.take()
+  /// Stop MPV and disconnect.
+  pub async fn stop(&self) {
+    let _lifecycle = self.lifecycle.lock().await;
+    log::info!("stop() called - closing IPC connection");
+    let (ipc, mut child) = {
+      let mut runtime = self.runtime.lock();
+      (runtime.ipc.take(), runtime.process.take())
     };
 
-    if let Some(mut child) = child {
-      let pid = child.id();
-      log::info!("Killing MPV process (pid: {:?})", pid);
+    if let Some(ipc) = ipc {
+      log::info!("Closing IPC connection");
+      ipc.close();
+    } else {
+      log::warn!("No IPC connection to close");
+    }
 
-      // Use spawn_blocking for blocking kill/wait operations
-      let result = tokio::task::spawn_blocking(move || {
-        let kill_result = child.kill();
-        let wait_result = child.wait();
-        (kill_result, wait_result)
-      })
-      .await;
-
-      match result {
-        Ok((kill_result, wait_result)) => {
-          match kill_result {
-            Ok(_) => log::info!("kill() succeeded"),
-            Err(e) => log::error!("kill() failed: {}", e),
-          }
-          match wait_result {
-            Ok(status) => log::info!("MPV process exited with: {}", status),
-            Err(e) => log::error!("wait() failed: {}", e),
-          }
-        }
-        Err(e) => {
-          log::error!("spawn_blocking panicked during process cleanup: {}", e);
-        }
-      }
+    if let Some(child) = child.as_mut() {
+      terminate_child(child).await;
     } else {
       log::warn!("No MPV process handle to kill");
     }
@@ -175,28 +259,23 @@ impl MpvClient {
     log::info!("MPV client stopped");
   }
 
-  fn clear_closed_ipc(&self) {
-    let mut ipc = self.ipc.lock();
-    let is_closed = ipc.as_ref().is_some_and(|conn| conn.is_closed());
-
-    if is_closed {
+  fn refresh_runtime(&self) {
+    let mut runtime = self.runtime.lock();
+    if runtime.ipc.as_ref().is_some_and(|ipc| ipc.is_closed()) {
       log::info!("Dropping closed MPV IPC connection");
-      if let Some(conn) = ipc.take() {
-        conn.close();
+      if let Some(ipc) = runtime.ipc.take() {
+        ipc.close();
       }
     }
-  }
 
-  fn reap_exited_process(&self) {
-    let mut process = self.process.lock();
-    let Some(child) = process.as_mut() else {
+    let Some(child) = runtime.process.as_mut() else {
       return;
     };
 
     match child.try_wait() {
       Ok(Some(status)) => {
         log::info!("Observed MPV process exit: {}", status);
-        *process = None;
+        runtime.process = None;
       }
       Ok(None) => {}
       Err(e) => {
@@ -207,11 +286,11 @@ impl MpvClient {
 
   /// Check if connected.
   pub fn is_connected(&self) -> bool {
-    self.clear_closed_ipc();
-    self.reap_exited_process();
+    self.refresh_runtime();
 
-    let connected = self.ipc.lock().is_some();
-    let has_process = self.process.lock().is_some();
+    let runtime = self.runtime.lock();
+    let connected = runtime.ipc.is_some();
+    let has_process = runtime.process.is_some();
     log::debug!(
       "is_connected check: ipc={}, process={}",
       connected,
@@ -222,8 +301,12 @@ impl MpvClient {
 
   /// Get a clone of the IPC connection.
   fn get_ipc(&self) -> Result<Arc<MpvIpc>, MpvError> {
-    let guard = self.ipc.lock();
-    guard.clone().ok_or(MpvError::NotConnected)
+    self
+      .runtime
+      .lock()
+      .ipc
+      .clone()
+      .ok_or(MpvError::NotConnected)
   }
 
   /// Send a command to MPV.
@@ -285,7 +368,10 @@ impl MpvClient {
       self.send(MpvCommand::loadfile(url)).await?;
     } else {
       let options_str = options.join(",");
-      log::info!("Loading media URL with options: {}", options_str);
+      log::info!(
+        "Loading media URL with options: {}",
+        option_log_summary(&options)
+      );
       self
         .send(MpvCommand::loadfile_with_options(url, &options_str))
         .await?;
@@ -315,6 +401,12 @@ impl MpvClient {
   /// Set volume (0-100).
   pub async fn set_volume(&self, volume: f64) -> Result<(), MpvError> {
     self.send(MpvCommand::set_volume(volume)).await?;
+    Ok(())
+  }
+
+  /// Set mute state.
+  pub async fn set_mute(&self, muted: bool) -> Result<(), MpvError> {
+    self.send(MpvCommand::set_mute(muted)).await?;
     Ok(())
   }
 
@@ -430,15 +522,30 @@ impl MpvClient {
 
   /// Get event receiver for property changes and other events.
   pub fn events(&self) -> Option<Receiver<MpvEvent>> {
-    self.clear_closed_ipc();
-    let guard = self.ipc.lock();
-    guard.as_ref().map(|ipc| ipc.events())
+    self.refresh_runtime();
+    self.runtime.lock().ipc.as_ref().map(|ipc| ipc.events())
   }
 
-  /// Install an already-established IPC connection (MPV test seam).
-  #[cfg(test)]
-  pub(crate) fn install_ipc_for_test(&self, ipc: MpvIpc) {
-    *self.ipc.lock() = Some(Arc::new(ipc));
+  /// Create a client around an in-memory transport for tests.
+  #[cfg(any(test, feature = "test-utils"))]
+  #[doc(hidden)]
+  pub async fn from_io_for_test<R, W>(reader: R, writer: W) -> Result<Self, MpvError>
+  where
+    R: tokio::io::AsyncRead + Send + Unpin + 'static,
+    W: tokio::io::AsyncWrite + Send + Unpin + 'static,
+  {
+    let ipc = MpvIpc::from_io_for_test(reader, writer).await?;
+    let client = Self::new(None);
+    client.runtime.lock().ipc = Some(Arc::new(ipc));
+    Ok(client)
+  }
+
+  /// Move a test transport from another client into this client.
+  #[cfg(any(test, feature = "test-utils"))]
+  #[doc(hidden)]
+  pub fn install_ipc_for_test(&self, transport: Self) {
+    let ipc = transport.runtime.lock().ipc.take();
+    self.runtime.lock().ipc = ipc;
   }
 }
 
@@ -449,18 +556,19 @@ impl Clone for MpvClient {
       mpv_path: self.mpv_path.clone(),
       extra_args: self.extra_args.clone(),
       demuxer_cache_dir: self.demuxer_cache_dir.clone(),
-      process: self.process.clone(),
-      ipc: self.ipc.clone(),
+      runtime: self.runtime.clone(),
+      lifecycle: self.lifecycle.clone(),
     }
   }
 }
 
 #[cfg(test)]
 mod tests {
-  use std::sync::Arc;
+  use std::process::Stdio;
   use std::time::Duration;
 
   use tokio::io::duplex;
+  use tokio::process::Command;
 
   use super::*;
 
@@ -486,22 +594,107 @@ mod tests {
     );
   }
 
+  #[test]
+  fn option_log_summary_omits_token_bearing_values() {
+    let options = vec![
+      "http-header-fields=Authorization: Bearer secret-token".to_owned(),
+      "demuxer-cache-dir=/secret/cache/path".to_owned(),
+      "token-without-a-name".to_owned(),
+    ];
+
+    let summary = option_log_summary(&options);
+
+    assert_eq!(
+      summary,
+      "count=3, names=[http-header-fields,demuxer-cache-dir,<opaque>]"
+    );
+    assert!(!summary.contains("secret-token"));
+    assert!(!summary.contains("/secret/cache/path"));
+  }
+
+  fn lifecycle_test_child() -> Child {
+    let executable = std::env::current_exe().expect("test executable path");
+    let mut command = Command::new(executable);
+    command
+      .args([
+        "--ignored",
+        "--exact",
+        "client::tests::lifecycle_child_process",
+      ])
+      .stdin(Stdio::null())
+      .stdout(Stdio::null())
+      .stderr(Stdio::null())
+      .kill_on_drop(true);
+    command.spawn().expect("controlled lifecycle child")
+  }
+
+  #[test]
+  #[ignore = "helper process launched by lifecycle tests"]
+  fn lifecycle_child_process() {
+    std::thread::sleep(Duration::from_secs(60));
+  }
+
+  #[tokio::test]
+  async fn failed_ipc_handshake_reaps_child_and_leaves_runtime_empty() {
+    let client = MpvClient::new(None);
+    #[cfg(not(windows))]
+    let ipc_marker = std::fs::write(ipc_path(), b"stale socket marker").is_ok();
+
+    let result = client
+      .finish_start(
+        lifecycle_test_child(),
+        Err(IpcError::ConnectionFailed("test handshake failure".into())),
+      )
+      .await;
+    let Err(failure) = result else {
+      panic!("failed IPC handshake must not commit the child");
+    };
+
+    assert!(failure.process_reaped);
+    let runtime = client.runtime.lock();
+    assert!(runtime.process.is_none());
+    assert!(runtime.ipc.is_none());
+    #[cfg(not(windows))]
+    if ipc_marker {
+      assert!(!Path::new(&ipc_path()).exists());
+    }
+  }
+
+  #[tokio::test]
+  async fn repeated_start_rejects_running_child_without_replacing_it() {
+    let client = MpvClient::new(None);
+    let child = lifecycle_test_child();
+    let original_pid = child.id();
+    client.runtime.lock().process = Some(child);
+
+    let error = client
+      .start()
+      .await
+      .expect_err("running MPV must reject restart");
+
+    assert!(matches!(error, MpvError::AlreadyRunning));
+    assert_eq!(
+      client.runtime.lock().process.as_ref().and_then(Child::id),
+      original_pid
+    );
+    client.stop().await;
+  }
+
   #[tokio::test]
   async fn is_connected_returns_false_after_ipc_eof() {
-    let client = MpvClient::new(None);
     let (client_stream, peer_stream) = duplex(64);
     let (reader, writer) = tokio::io::split(client_stream);
-    let ipc = MpvIpc::from_io_for_test(reader, writer)
+    let client = MpvClient::from_io_for_test(reader, writer)
       .await
-      .expect("test IPC should be constructed");
+      .expect("test client should be constructed");
 
-    *client.ipc.lock() = Some(Arc::new(ipc));
     drop(peer_stream);
 
     tokio::time::timeout(Duration::from_secs(1), async {
       while client
-        .ipc
+        .runtime
         .lock()
+        .ipc
         .as_ref()
         .is_some_and(|ipc| !ipc.is_closed())
       {

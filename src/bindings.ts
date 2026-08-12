@@ -381,7 +381,7 @@ export type PlaybackControlCommand = { kind: "pause" } | { kind: "resume" } | { 
 /**  Playback implementation selected for new sessions. */
 export type PlaybackEngineKind = "embeddedWeb" | "externalMpv";
 
-/**  Player transport state returned to frontend. */
+/**  Player transport state. */
 export type PlayerState = {
 	connected: boolean,
 	paused: boolean,

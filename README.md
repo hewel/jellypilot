@@ -250,15 +250,18 @@ jellypilot/
 ├── Cargo.toml              # Root Rust workspace
 ├── crates/
 │   ├── jellypilot-core/   # Portable library-browse state machine
-│   └── jellypilot-core-wasm/ # WebAssembly adapter and generated web package
+│   ├── jellypilot-core-wasm/ # WebAssembly adapter and generated web package
+│   ├── jellypilot-media-server/ # Shared Jellyfin/Emby HTTP adapter
+│   └── jellypilot-mpv/    # Shared external MPV process and JSON IPC adapter
 ├── src/                   # Solid.js frontend
 │   ├── index.tsx         # Entry point
 │   ├── bindings.ts       # Auto-generated IPC bindings
 │   └── components/       # UI components
-├── src-tauri/            # Tauri backend and desktop binary
+├── src-gtk/              # Parallel native GTK 4 frontend for Linux
+├── src-tauri/            # Tauri backend and production desktop binary
 │   ├── src/
-│   │   ├── jellyfin/     # Jellyfin/Emby client implementation
-│   │   └── mpv/          # MPV IPC driver logic
+│   │   ├── jellyfin/     # Tauri media-session and compatibility adapters
+│   │   └── mpv/          # Compatibility exports for the shared MPV crate
 │   └── tauri.conf.json   # Tauri configuration
 └── docs/                 # Architecture and product documentation
 ```

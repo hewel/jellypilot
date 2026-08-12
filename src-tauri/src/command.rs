@@ -25,6 +25,7 @@ use crate::jellyfin::{
   VideoSearchRequest, VideoSeasonEpisodes, VideoSeasonEpisodesRequest, VideoShowDetail,
   VideoUserDataUpdate, VideoUserDataUpdateRequest,
 };
+pub use crate::mpv::PlayerState;
 use crate::mpv::{write_input_conf, MpvClient, PropertyValue};
 use crate::playback_control;
 
@@ -204,6 +205,10 @@ fn jellyfin_err(e: JellyfinError) -> CommandError {
     JellyfinError::NotConnected | JellyfinError::SessionNotFound => {
       CommandError::not_connected(e.to_string())
     }
+    JellyfinError::ImageReference(_) => CommandError::invalid_input("Invalid image reference"),
+    JellyfinError::ImageReferenceProviderMismatch | JellyfinError::ImageReferenceServerMismatch => {
+      CommandError::auth_failed("Image reference does not match the active session")
+    }
     JellyfinError::WebSocket(_) | JellyfinError::Json(_) => internal_err(e),
   }
 }
@@ -250,31 +255,6 @@ async fn start_remote_control_session_if_supported(
 // ============================================================================
 // Types
 // ============================================================================
-
-/// Player transport state returned to frontend.
-#[derive(Debug, Clone, Serialize, Deserialize, specta::Type)]
-#[serde(rename_all = "camelCase")]
-pub struct PlayerState {
-  pub connected: bool,
-  pub paused: bool,
-  pub muted: bool,
-  pub time_pos: f64,
-  pub duration: f64,
-  pub volume: f64,
-}
-
-impl Default for PlayerState {
-  fn default() -> Self {
-    Self {
-      connected: false,
-      paused: true,
-      muted: false,
-      time_pos: 0.0,
-      duration: 0.0,
-      volume: 100.0,
-    }
-  }
-}
 
 /// User-facing Now Playing status.
 #[derive(Debug, Clone, Serialize, Deserialize, specta::Type)]

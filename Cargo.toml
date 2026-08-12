@@ -2,6 +2,8 @@
 members = [
   "crates/jellypilot-core",
   "crates/jellypilot-core-wasm",
+  "crates/jellypilot-media-server",
+  "crates/jellypilot-mpv",
   "crates/jellypilot-playback-core",
   "src-gtk",
   "src-tauri",

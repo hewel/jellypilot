@@ -10,6 +10,10 @@ export default {
   ],
   'src-tauri/**/*.json': 'oxfmt --write --no-error-on-unmatched-pattern',
   'src-tauri/**/*.rs': () => 'cargo fmt --manifest-path src-tauri/Cargo.toml',
+  'crates/jellypilot-media-server/**/*.rs': () =>
+    'cargo fmt --manifest-path crates/jellypilot-media-server/Cargo.toml',
+  'crates/jellypilot-mpv/**/*.rs': () =>
+    'cargo fmt --manifest-path crates/jellypilot-mpv/Cargo.toml',
   'src-gtk/**/*.rs': () => 'cargo fmt --manifest-path src-gtk/Cargo.toml',
   'e2e/**/*.{js,jsx,ts,tsx}': [
     'oxfmt --write --no-error-on-unmatched-pattern',

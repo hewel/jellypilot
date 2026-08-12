@@ -20,3 +20,16 @@ pub use client::JellyfinClient;
 pub use error::JellyfinError;
 pub use session::SessionManager;
 pub use types::*;
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+
+  #[test]
+  fn login_and_playback_facets_remain_available_through_tauri_adapter() {
+    let client = JellyfinClient::new();
+
+    super::client_facade::assert_login_interface(&client);
+    super::client_facade::assert_playback_interface(&client);
+  }
+}

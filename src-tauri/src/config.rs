@@ -3,6 +3,8 @@
 use serde::{Deserialize, Deserializer, Serialize};
 use specta::Type;
 
+pub use jellypilot_media_server::PlaybackEngineKind;
+
 /// Intro Skipper behavior mode.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Type)]
 #[serde(rename_all = "camelCase")]
@@ -10,14 +12,6 @@ pub enum IntroSkipperMode {
   Automatic,
   Manual,
   Off,
-}
-
-/// Playback implementation selected for new sessions.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Type)]
-#[serde(rename_all = "camelCase")]
-pub enum PlaybackEngineKind {
-  EmbeddedWeb,
-  ExternalMpv,
 }
 
 /// Application configuration.
