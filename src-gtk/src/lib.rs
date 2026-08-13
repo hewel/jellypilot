@@ -8,6 +8,8 @@
 #[cfg(target_os = "linux")]
 mod artwork;
 #[cfg(target_os = "linux")]
+mod auth_storage;
+#[cfg(target_os = "linux")]
 mod browse_model;
 #[cfg(target_os = "linux")]
 pub mod library_browse;

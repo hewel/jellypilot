@@ -4,17 +4,19 @@ use std::rc::Rc;
 use std::sync::Arc;
 
 use jellypilot_media_server::{
-  Credentials, JellyfinClient, MediaServerProvider, VideoHome, VideoItemDetail, VideoLibraryItem,
-  VideoLibraryKind, VideoLibraryPageRequest, VideoLibraryPlayedFilter, VideoLibraryShortcut,
-  VideoLibrarySort, VideoLibrarySortDirection, VideoSearchRequest, VideoSeason,
-  VideoSeasonEpisodesPage, VideoSeasonEpisodesPageRequest, VideoShowDetail, VideoUserDataAction,
-  VideoUserDataUpdate, VideoUserDataUpdateRequest,
+  Credentials, JellyfinClient, MediaServerProvider, SavedSession, VideoHome, VideoItemDetail,
+  VideoLibraryItem, VideoLibraryKind, VideoLibraryPageRequest, VideoLibraryPlayedFilter,
+  VideoLibraryShortcut, VideoLibrarySort, VideoLibrarySortDirection, VideoSearchRequest,
+  VideoSeason, VideoSeasonEpisodesPage, VideoSeasonEpisodesPageRequest, VideoShowDetail,
+  VideoUserDataAction, VideoUserDataUpdate, VideoUserDataUpdateRequest,
 };
 use relm4::gtk::prelude::*;
-use relm4::tokio::sync::watch;
+use relm4::tokio::sync::{oneshot, watch};
 use relm4::{gtk, Component, ComponentParts, ComponentSender, RelmApp};
+use zeroize::Zeroize;
 
 use crate::artwork::{ArtworkAdapter, DecodedArtwork, FALLBACK_ARTWORK_ICON};
+use crate::auth_storage::{AuthStore, SavedProfileKey, SavedProfileSummary};
 use crate::browse_model::{
   BrowseEffect, BrowseModel, BrowsePagePayload, BrowsePageRequest, BrowsePageSettlement,
   BrowsePreferences, BrowseSource,
@@ -32,6 +34,9 @@ const SEASON_EPISODE_PAGE_SIZE: i32 = 30;
 
 struct AppModel {
   client: Arc<JellyfinClient>,
+  auth_store: AuthStore,
+  saved_profiles: LoadState<Vec<SavedProfileSummary>>,
+  active_saved_profile: Option<SavedProfileKey>,
   artwork: Arc<ArtworkAdapter>,
   artwork_view: u64,
   artwork_slot: u64,
@@ -84,6 +89,22 @@ enum PlaybackRequest {
   Muted(bool),
   Stop,
   Refresh,
+}
+
+struct SensitiveCredentials(Credentials);
+
+impl std::ops::Deref for SensitiveCredentials {
+  type Target = Credentials;
+
+  fn deref(&self) -> &Self::Target {
+    &self.0
+  }
+}
+
+impl Drop for SensitiveCredentials {
+  fn drop(&mut self) {
+    self.0.password.zeroize();
+  }
 }
 
 #[derive(Clone, Copy, Eq, PartialEq)]
@@ -192,7 +213,15 @@ enum BrowsePresentation {
 
 #[derive(Debug)]
 enum AppMessage {
+  LoadSavedProfiles,
   LoginRequested,
+  RestoreSavedProfile(SavedProfileKey),
+  ForgetSavedProfile(SavedProfileKey),
+  ForgetCurrentProfile,
+  ConfirmForgetSavedProfile {
+    key: SavedProfileKey,
+    sign_out: bool,
+  },
   Disconnect,
   ShowHome,
   ShowNowPlaying,
@@ -231,10 +260,20 @@ enum AppMessage {
 }
 
 enum AppCommand {
+  SavedProfiles(Result<Vec<SavedProfileSummary>, String>),
+  SavedSessionStored {
+    session: u64,
+    result: Result<(SavedProfileKey, Vec<SavedProfileSummary>), String>,
+  },
   Login {
     session: SessionToken,
     client: Arc<JellyfinClient>,
     result: Result<(), String>,
+  },
+  ForgotProfile {
+    key: SavedProfileKey,
+    sign_out: bool,
+    result: Result<Vec<SavedProfileSummary>, String>,
   },
   Home {
     token: HomeToken,
@@ -280,11 +319,33 @@ enum AppCommand {
 impl std::fmt::Debug for AppCommand {
   fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
     match self {
+      Self::SavedProfiles(result) => formatter
+        .debug_tuple("SavedProfiles")
+        .field(&result.as_ref().map(Vec::len))
+        .finish(),
+      Self::SavedSessionStored { session, result } => formatter
+        .debug_struct("SavedSessionStored")
+        .field("session", session)
+        .field(
+          "profile_count",
+          &result.as_ref().map(|(_, profiles)| profiles.len()),
+        )
+        .finish(),
       Self::Login {
         session, result, ..
       } => formatter
         .debug_struct("Login")
         .field("session", session)
+        .field("successful", &result.is_ok())
+        .finish(),
+      Self::ForgotProfile {
+        key,
+        sign_out,
+        result,
+      } => formatter
+        .debug_struct("ForgotProfile")
+        .field("key", key)
+        .field("sign_out", sign_out)
         .field("successful", &result.is_ok())
         .finish(),
       Self::Browse(settlement) => formatter.debug_tuple("Browse").field(settlement).finish(),
@@ -362,6 +423,8 @@ struct Ui {
   server_url: gtk::Entry,
   username: gtk::Entry,
   password: gtk::PasswordEntry,
+  saved_profiles: gtk::ListBox,
+  saved_profiles_status: gtk::Label,
   login_status: gtk::Label,
   login_button: gtk::Button,
   authenticated: gtk::Box,
@@ -399,11 +462,14 @@ struct Ui {
   volume: gtk::Scale,
   mute_button: gtk::ToggleButton,
   playback_controls_syncing: Rc<Cell<bool>>,
+  settings_saved_profile: gtk::Label,
+  settings_storage_status: gtk::Label,
+  forget_current_profile: gtk::Button,
 }
 
 #[relm4::component]
 impl Component for AppModel {
-  type Init = ();
+  type Init = bool;
   type Input = AppMessage;
   type Output = ();
   type CommandOutput = AppCommand;
@@ -418,7 +484,7 @@ impl Component for AppModel {
   }
 
   fn init(
-    _init: Self::Init,
+    smoke_test: Self::Init,
     root: Self::Root,
     sender: ComponentSender<Self>,
   ) -> ComponentParts<Self> {
@@ -442,6 +508,9 @@ impl Component for AppModel {
     let (playback_cancellation, _) = watch::channel(0);
     let model = Self {
       client: Arc::new(JellyfinClient::new()),
+      auth_store: AuthStore::default(),
+      saved_profiles: LoadState::Loading,
+      active_saved_profile: None,
       artwork: Arc::new(ArtworkAdapter::default()),
       artwork_view: 0,
       artwork_slot: 0,
@@ -468,13 +537,27 @@ impl Component for AppModel {
       ui,
     };
     let widgets = view_output!();
+    if !smoke_test {
+      sender.input(AppMessage::LoadSavedProfiles);
+    }
 
     ComponentParts { model, widgets }
   }
 
   fn update(&mut self, message: Self::Input, sender: ComponentSender<Self>, _root: &Self::Root) {
     match message {
+      AppMessage::LoadSavedProfiles => self.load_saved_profiles(&sender),
       AppMessage::LoginRequested => self.start_login(&sender),
+      AppMessage::RestoreSavedProfile(key) => self.start_saved_login(key, &sender),
+      AppMessage::ForgetSavedProfile(key) => self.confirm_forget_saved_profile(key, false, &sender),
+      AppMessage::ForgetCurrentProfile => {
+        if let Some(key) = self.active_saved_profile.clone() {
+          self.confirm_forget_saved_profile(key, true, &sender);
+        }
+      }
+      AppMessage::ConfirmForgetSavedProfile { key, sign_out } => {
+        self.forget_saved_profile(key, sign_out, &sender)
+      }
       AppMessage::Disconnect => self.disconnect(&sender),
       AppMessage::ShowHome => self.show_home(&sender),
       AppMessage::ShowNowPlaying => {
@@ -563,11 +646,73 @@ impl Component for AppModel {
     _root: &Self::Root,
   ) {
     match command {
+      AppCommand::SavedProfiles(result) => {
+        self.saved_profiles = match result {
+          Ok(profiles) => LoadState::Ready(profiles),
+          Err(message) => LoadState::Failed(message),
+        };
+        self.render_saved_profiles(&sender);
+        self.render_saved_profile_settings();
+      }
+      AppCommand::SavedSessionStored { session, result } => {
+        let is_current = session == self.requests.session_generation()
+          && matches!(self.connection, ConnectionPhase::Connected);
+        match result {
+          Ok((key, profiles)) => {
+            if is_current {
+              self.active_saved_profile = Some(key);
+            }
+            self.saved_profiles = LoadState::Ready(profiles);
+            if is_current {
+              self
+                .ui
+                .settings_storage_status
+                .set_label("This session is stored securely in Linux Secret Service.");
+            }
+          }
+          Err(message) => {
+            if is_current {
+              self.active_saved_profile = None;
+              self.ui.settings_storage_status.set_label(&message);
+            }
+          }
+        }
+        self.ui.settings_storage_status.set_visible(is_current);
+        self.render_saved_profiles(&sender);
+        self.render_saved_profile_settings();
+      }
       AppCommand::Login {
         session,
         client,
         result,
       } => self.finish_login(session, client, result, &sender),
+      AppCommand::ForgotProfile {
+        key,
+        sign_out,
+        result,
+      } => match result {
+        Ok(profiles) => {
+          if self.active_saved_profile.as_ref() == Some(&key) {
+            self.active_saved_profile = None;
+          }
+          self.saved_profiles = LoadState::Ready(profiles);
+          self
+            .ui
+            .saved_profiles_status
+            .set_label("Saved sign-in forgotten.");
+          self.ui.saved_profiles_status.set_visible(true);
+          self.render_saved_profiles(&sender);
+          self.render_saved_profile_settings();
+          if sign_out {
+            self.disconnect(&sender);
+          }
+        }
+        Err(message) => {
+          self.ui.saved_profiles_status.set_label(&message);
+          self.ui.saved_profiles_status.set_visible(true);
+          self.render_saved_profile_settings();
+        }
+      },
       AppCommand::Home { token, result } => self.finish_home(token, result, &sender),
       AppCommand::Browse(settlement) => {
         match self.browse.model.settle(settlement) {
@@ -729,6 +874,19 @@ impl Component for AppModel {
 }
 
 impl AppModel {
+  fn load_saved_profiles(&mut self, sender: &ComponentSender<Self>) {
+    self.saved_profiles = LoadState::Loading;
+    self.render_saved_profiles(sender);
+    let store = self.auth_store.clone();
+    sender.oneshot_command(async move {
+      let result = run_auth_operation(move || store.load_profiles())
+        .await
+        .map_err(|_| "Secure saved sign-ins could not be loaded.".to_string())
+        .and_then(|result| result.map_err(|error| format!("Saved sign-ins unavailable: {error}.")));
+      AppCommand::SavedProfiles(result)
+    });
+  }
+
   fn start_login(&mut self, sender: &ComponentSender<Self>) {
     if !can_start_login(self.connection, self.playback_cleanup_pending) {
       return;
@@ -747,22 +905,13 @@ impl AppModel {
     }
 
     self.ui.password.set_text("");
-    let session = self.requests.begin_login();
-    self.browse.model.reset();
-    self.connection = ConnectionPhase::Connecting;
-    self.home = LoadState::Loading;
-    self.ui.login_button.set_sensitive(false);
-    self
-      .ui
-      .login_status
-      .set_label("Connecting and loading your libraries…");
-    self.ui.login_status.set_visible(true);
-    let credentials = Credentials {
+    let session = self.prepare_login("Connecting and loading your libraries…");
+    let credentials = SensitiveCredentials(Credentials {
       provider: provider_for(self.ui.provider.selected()),
       server_url,
       username,
       password,
-    };
+    });
     // Authenticate an isolated candidate so a superseded login cannot mutate the active session.
     let client = Arc::new(JellyfinClient::new());
     let command_client = Arc::clone(&client);
@@ -784,6 +933,149 @@ impl AppModel {
     });
   }
 
+  fn start_saved_login(&mut self, key: SavedProfileKey, sender: &ComponentSender<Self>) {
+    if !can_start_login(self.connection, self.playback_cleanup_pending) {
+      return;
+    }
+    let Some(profile) = self
+      .saved_profile_summaries()
+      .iter()
+      .find(|profile| profile.key == key)
+      .cloned()
+    else {
+      self
+        .ui
+        .login_status
+        .set_label("That saved sign-in is no longer available.");
+      self.ui.login_status.set_visible(true);
+      return;
+    };
+    self.ui.provider.set_selected(match profile.provider {
+      MediaServerProvider::Jellyfin => 0,
+      MediaServerProvider::Emby => 1,
+    });
+    self.ui.server_url.set_text(&profile.server_url);
+    self.ui.username.set_text(&profile.user_name);
+    self.ui.password.set_text("");
+
+    let session = self.prepare_login("Restoring the saved sign-in…");
+    let store = self.auth_store.clone();
+    let client = Arc::new(JellyfinClient::new());
+    let command_client = Arc::clone(&client);
+    let requested_key = key.clone();
+    sender.oneshot_command(async move {
+      let result = async {
+        let stored_session = run_auth_operation(move || store.load_session(&requested_key))
+          .await
+          .map_err(|_| "The saved sign-in could not be read.".to_string())?
+          .map_err(|error| format!("Saved sign-in unavailable: {error}."))?;
+        command_client
+          .login()
+          .restore_session(&stored_session)
+          .await
+          .map_err(|error| format!("Saved sign-in could not be restored: {error}"))?;
+        Ok(())
+      }
+      .await;
+      AppCommand::Login {
+        session,
+        client,
+        result,
+      }
+    });
+  }
+
+  fn forget_saved_profile(
+    &mut self,
+    key: SavedProfileKey,
+    sign_out: bool,
+    sender: &ComponentSender<Self>,
+  ) {
+    self
+      .ui
+      .saved_profiles_status
+      .set_label("Forgetting saved sign-in…");
+    self.ui.saved_profiles_status.set_visible(true);
+    let store = self.auth_store.clone();
+    let command_key = key.clone();
+    sender.oneshot_command(async move {
+      let result = run_auth_operation(move || store.remove_profile(&command_key))
+        .await
+        .map_err(|_| "The saved sign-in could not be forgotten.".to_string())
+        .and_then(|result| {
+          result.map_err(|error| format!("Saved sign-in could not be forgotten: {error}."))
+        });
+      AppCommand::ForgotProfile {
+        key,
+        sign_out,
+        result,
+      }
+    });
+  }
+
+  fn confirm_forget_saved_profile(
+    &self,
+    key: SavedProfileKey,
+    sign_out: bool,
+    sender: &ComponentSender<Self>,
+  ) {
+    let Some(profile) = self
+      .saved_profile_summaries()
+      .iter()
+      .find(|profile| profile.key == key)
+    else {
+      return;
+    };
+    let title = if sign_out {
+      "Sign out and forget this profile?"
+    } else {
+      "Forget this saved sign-in?"
+    };
+    let server = profile
+      .server_name
+      .as_deref()
+      .unwrap_or(profile.server_url.as_str());
+    let dialog = gtk::MessageDialog::builder()
+      .modal(true)
+      .message_type(gtk::MessageType::Question)
+      .text(title)
+      .secondary_text(format!(
+        "{} on {} will need a password to sign in again.",
+        profile.user_name, server
+      ))
+      .build();
+    if let Some(window) = relm4::main_application().active_window() {
+      dialog.set_transient_for(Some(&window));
+    }
+    dialog.add_button("Cancel", gtk::ResponseType::Cancel);
+    dialog.add_button("Forget", gtk::ResponseType::Accept);
+    dialog.set_default_response(gtk::ResponseType::Cancel);
+    dialog.connect_response({
+      let sender = sender.clone();
+      move |dialog, response| {
+        dialog.close();
+        if response == gtk::ResponseType::Accept {
+          sender.input(AppMessage::ConfirmForgetSavedProfile {
+            key: key.clone(),
+            sign_out,
+          });
+        }
+      }
+    });
+    dialog.present();
+  }
+
+  fn prepare_login(&mut self, status: &str) -> SessionToken {
+    let session = self.requests.begin_login();
+    self.browse.model.reset();
+    self.connection = ConnectionPhase::Connecting;
+    self.home = LoadState::Loading;
+    self.set_login_controls_sensitive(false);
+    self.ui.login_status.set_label(status);
+    self.ui.login_status.set_visible(true);
+    session
+  }
+
   fn finish_login(
     &mut self,
     session: SessionToken,
@@ -797,9 +1089,11 @@ impl AppModel {
       return;
     }
 
-    self.ui.login_button.set_sensitive(true);
+    self.set_login_controls_sensitive(true);
     match result {
       Ok(()) => {
+        let session_to_save = client.login().get_saved_session();
+        self.active_saved_profile = None;
         self.client = client;
         self.artwork.reset_session();
         self.artwork = Arc::new(ArtworkAdapter::default());
@@ -824,6 +1118,15 @@ impl AppModel {
         self.shortcuts_error = None;
         self.ui.login_status.set_label("");
         self.ui.login_status.set_visible(false);
+        if let Some(session_to_save) = session_to_save {
+          self.start_persist_session(session_to_save, sender);
+        } else {
+          self
+            .ui
+            .settings_storage_status
+            .set_label("The connected session could not be saved securely.");
+          self.ui.settings_storage_status.set_visible(true);
+        }
         self.render_authenticated(sender);
         self.show_home(sender);
         self.load_home(sender);
@@ -833,8 +1136,31 @@ impl AppModel {
         self.home = LoadState::Failed(message.clone());
         self.ui.login_status.set_label(&message);
         self.ui.login_status.set_visible(true);
+        self.render_saved_profiles(sender);
       }
     }
+  }
+
+  fn start_persist_session(&self, session: SavedSession, sender: &ComponentSender<Self>) {
+    self
+      .ui
+      .settings_storage_status
+      .set_label("Saving this session securely…");
+    self.ui.settings_storage_status.set_visible(true);
+    let store = self.auth_store.clone();
+    let session_generation = self.requests.session_generation();
+    sender.oneshot_command(async move {
+      let result = run_auth_operation(move || store.save_session(session))
+        .await
+        .map_err(|_| "The session could not be saved securely.".to_string())
+        .and_then(|result| {
+          result.map_err(|error| format!("The session could not be saved securely: {error}."))
+        });
+      AppCommand::SavedSessionStored {
+        session: session_generation,
+        result,
+      }
+    });
   }
 
   fn load_home(&mut self, sender: &ComponentSender<Self>) {
@@ -944,10 +1270,9 @@ impl AppModel {
     if self.ui.login.parent().is_none() {
       self.ui.root.append(&self.ui.login);
     }
-    self
-      .ui
-      .login_button
-      .set_sensitive(!self.playback_cleanup_pending);
+    self.set_login_controls_sensitive(!self.playback_cleanup_pending);
+    self.render_saved_profiles(sender);
+    self.render_saved_profile_settings();
     self
       .ui
       .login_status
@@ -1017,6 +1342,89 @@ impl AppModel {
       .connection_status
       .set_label(&connection_label(&self.client));
     self.render_shortcuts(sender);
+  }
+
+  fn saved_profile_summaries(&self) -> &[SavedProfileSummary] {
+    match &self.saved_profiles {
+      LoadState::Ready(profiles) => profiles,
+      LoadState::Idle | LoadState::Loading | LoadState::Failed(_) => &[],
+    }
+  }
+
+  fn set_login_controls_sensitive(&self, sensitive: bool) {
+    self.ui.provider.set_sensitive(sensitive);
+    self.ui.server_url.set_sensitive(sensitive);
+    self.ui.username.set_sensitive(sensitive);
+    self.ui.password.set_sensitive(sensitive);
+    self.ui.login_button.set_sensitive(sensitive);
+    self.ui.saved_profiles.set_sensitive(sensitive);
+  }
+
+  fn render_saved_profiles(&self, sender: &ComponentSender<Self>) {
+    clear_list_box(&self.ui.saved_profiles);
+    match &self.saved_profiles {
+      LoadState::Idle | LoadState::Loading => {
+        self
+          .ui
+          .saved_profiles_status
+          .set_label("Loading saved sign-ins…");
+        self.ui.saved_profiles_status.set_visible(true);
+      }
+      LoadState::Failed(message) => {
+        self.ui.saved_profiles_status.set_label(message);
+        self.ui.saved_profiles_status.set_visible(true);
+      }
+      LoadState::Ready(profiles) if profiles.is_empty() => {
+        self
+          .ui
+          .saved_profiles_status
+          .set_label("No saved sign-ins yet.");
+        self.ui.saved_profiles_status.set_visible(true);
+      }
+      LoadState::Ready(profiles) => {
+        self.ui.saved_profiles_status.set_visible(false);
+        for profile in profiles {
+          self
+            .ui
+            .saved_profiles
+            .append(&saved_profile_row(profile, sender));
+        }
+      }
+    }
+  }
+
+  fn render_saved_profile_settings(&self) {
+    let active = self.active_saved_profile.as_ref().and_then(|key| {
+      self
+        .saved_profile_summaries()
+        .iter()
+        .find(|profile| &profile.key == key)
+    });
+    if let Some(profile) = active {
+      self.ui.settings_saved_profile.set_label(&format!(
+        "Signed in as {} on {}. The session token is stored in Linux Secret Service; the password is not saved.",
+        profile.user_name,
+        profile
+          .server_name
+          .as_deref()
+          .unwrap_or(profile.server_url.as_str())
+      ));
+      self.ui.forget_current_profile.set_sensitive(true);
+      self.ui.settings_storage_status.set_visible(true);
+    } else {
+      self
+        .ui
+        .settings_saved_profile
+        .set_label("This active session is not saved. Passwords are never stored by the GTK app.");
+      self.ui.forget_current_profile.set_sensitive(false);
+      if matches!(self.saved_profiles, LoadState::Failed(_)) {
+        self
+          .ui
+          .settings_storage_status
+          .set_label("Linux Secret Service is unavailable or locked.");
+        self.ui.settings_storage_status.set_visible(true);
+      }
+    }
   }
 
   fn show_home(&mut self, sender: &ComponentSender<Self>) {
@@ -2833,6 +3241,12 @@ impl Ui {
     let username = form_entry("Username", gtk::InputPurpose::Name);
     let password = gtk::PasswordEntry::new();
     password.set_placeholder_text(Some("Password"));
+    let saved_profiles = gtk::ListBox::new();
+    saved_profiles.set_selection_mode(gtk::SelectionMode::None);
+    saved_profiles.add_css_class("boxed-list");
+    let saved_profiles_status = dim_label("Loading saved sign-ins…");
+    saved_profiles_status.set_wrap(true);
+    saved_profiles_status.set_accessible_role(gtk::AccessibleRole::Status);
     let login_status = dim_label("");
     login_status.set_wrap(true);
     login_status.set_visible(false);
@@ -2847,14 +3261,16 @@ impl Ui {
       let sender = sender.clone();
       move |_| sender.input(AppMessage::LoginRequested)
     });
-    let login = login_page(
-      &provider,
-      &server_url,
-      &username,
-      &password,
-      &login_status,
-      &login_button,
-    );
+    let login = login_page(LoginPageWidgets {
+      provider: &provider,
+      server_url: &server_url,
+      username: &username,
+      password: &password,
+      saved_profiles: &saved_profiles,
+      saved_profiles_status: &saved_profiles_status,
+      status: &login_status,
+      sign_in: &login_button,
+    });
     root.append(&login);
 
     let sidebar_revealer = gtk::Revealer::builder()
@@ -3163,7 +3579,28 @@ impl Ui {
       mute: &mute_button,
     });
     content.add_named(&now_playing, Some("now-playing"));
-    let settings = settings_page(sender);
+    let settings_saved_profile = dim_label("");
+    settings_saved_profile.set_wrap(true);
+    let settings_storage_status = dim_label("");
+    settings_storage_status.set_wrap(true);
+    settings_storage_status.set_visible(false);
+    settings_storage_status.set_accessible_role(gtk::AccessibleRole::Status);
+    let forget_current_profile = gtk::Button::with_label("Sign out and forget");
+    forget_current_profile.add_css_class("destructive-action");
+    forget_current_profile.set_sensitive(false);
+    forget_current_profile.connect_clicked({
+      let sender = sender.clone();
+      move |_| {
+        // The model resolves the current key at message time so stale widgets never retain tokens.
+        sender.input(AppMessage::ForgetCurrentProfile)
+      }
+    });
+    let settings = settings_page(
+      sender,
+      &settings_saved_profile,
+      &settings_storage_status,
+      &forget_current_profile,
+    );
     content.add_named(&settings, Some("settings"));
 
     Self {
@@ -3173,6 +3610,8 @@ impl Ui {
       server_url,
       username,
       password,
+      saved_profiles,
+      saved_profiles_status,
       login_status,
       login_button,
       authenticated,
@@ -3210,18 +3649,35 @@ impl Ui {
       volume,
       mute_button,
       playback_controls_syncing,
+      settings_saved_profile,
+      settings_storage_status,
+      forget_current_profile,
     }
   }
 }
 
-fn login_page(
-  provider: &gtk::DropDown,
-  server_url: &gtk::Entry,
-  username: &gtk::Entry,
-  password: &gtk::PasswordEntry,
-  status: &gtk::Label,
-  sign_in: &gtk::Button,
-) -> gtk::Box {
+struct LoginPageWidgets<'a> {
+  provider: &'a gtk::DropDown,
+  server_url: &'a gtk::Entry,
+  username: &'a gtk::Entry,
+  password: &'a gtk::PasswordEntry,
+  saved_profiles: &'a gtk::ListBox,
+  saved_profiles_status: &'a gtk::Label,
+  status: &'a gtk::Label,
+  sign_in: &'a gtk::Button,
+}
+
+fn login_page(widgets: LoginPageWidgets<'_>) -> gtk::Box {
+  let LoginPageWidgets {
+    provider,
+    server_url,
+    username,
+    password,
+    saved_profiles,
+    saved_profiles_status,
+    status,
+    sign_in,
+  } = widgets;
   let page = gtk::Box::builder()
     .orientation(gtk::Orientation::Vertical)
     .valign(gtk::Align::Center)
@@ -3249,15 +3705,30 @@ fn login_page(
   title.add_css_class("title-1");
   title.set_halign(gtk::Align::Center);
   header.append(&title);
-  let copy = dim_label(
-    "Connect to your Jellyfin or Emby server. Credentials are used only for this session.",
-  );
+  let copy = dim_label("Connect to your Jellyfin or Emby server.");
   copy.set_wrap(true);
   copy.set_halign(gtk::Align::Center);
   copy.set_justify(gtk::Justification::Center);
   header.append(&copy);
   card.append(&header);
   card.append(&gtk::Separator::new(gtk::Orientation::Horizontal));
+  let saved_heading = gtk::Label::new(Some("Saved sign-ins"));
+  saved_heading.add_css_class("heading");
+  saved_heading.set_xalign(0.0);
+  card.append(&saved_heading);
+  let saved_profiles_scroll = gtk::ScrolledWindow::builder()
+    .child(saved_profiles)
+    .max_content_height(240)
+    .propagate_natural_height(true)
+    .hscrollbar_policy(gtk::PolicyType::Never)
+    .build();
+  card.append(&saved_profiles_scroll);
+  card.append(saved_profiles_status);
+  card.append(&gtk::Separator::new(gtk::Orientation::Horizontal));
+  let password_heading = gtk::Label::new(Some("Sign in with password"));
+  password_heading.add_css_class("heading");
+  password_heading.set_xalign(0.0);
+  card.append(&password_heading);
   let form = gtk::Grid::builder()
     .row_spacing(10)
     .column_spacing(12)
@@ -3267,18 +3738,91 @@ fn login_page(
   add_form_row(&form, 2, "Username", username);
   add_form_row(&form, 3, "Password", password);
   card.append(&form);
+  let storage_copy = dim_label(
+    "Successful sign-ins are saved in Linux Secret Service. JellyPilot never stores your password.",
+  );
+  storage_copy.set_wrap(true);
+  card.append(&storage_copy);
   status.set_halign(gtk::Align::Center);
   card.append(status);
   sign_in.set_hexpand(true);
   card.append(sign_in);
   page.append(&card);
-  let footer =
-    dim_label("Quick Connect and saved profiles are not yet available in the GTK preview.");
+  let footer = dim_label("Quick Connect is not yet available in the GTK preview.");
   footer.set_halign(gtk::Align::Center);
   footer.set_margin_top(12);
   footer.set_margin_bottom(24);
   page.append(&footer);
   page
+}
+
+fn saved_profile_row(
+  profile: &SavedProfileSummary,
+  sender: &ComponentSender<AppModel>,
+) -> gtk::ListBoxRow {
+  let row = gtk::ListBoxRow::new();
+  row.set_activatable(false);
+  row.set_selectable(false);
+  let content = gtk::Box::builder()
+    .orientation(gtk::Orientation::Horizontal)
+    .spacing(12)
+    .margin_top(10)
+    .margin_bottom(10)
+    .margin_start(12)
+    .margin_end(12)
+    .build();
+  let identity = gtk::Box::new(gtk::Orientation::Vertical, 3);
+  identity.set_hexpand(true);
+  let title = gtk::Label::new(Some(
+    profile
+      .server_name
+      .as_deref()
+      .unwrap_or(profile.server_url.as_str()),
+  ));
+  title.add_css_class("heading");
+  title.set_xalign(0.0);
+  title.set_ellipsize(gtk::pango::EllipsizeMode::End);
+  let provider = match profile.provider {
+    MediaServerProvider::Jellyfin => "Jellyfin",
+    MediaServerProvider::Emby => "Emby",
+  };
+  let account = dim_label(&format!("{provider} · {}", profile.user_name));
+  let server = dim_label(&profile.server_url);
+  server.set_ellipsize(gtk::pango::EllipsizeMode::Middle);
+  identity.append(&title);
+  identity.append(&account);
+  identity.append(&server);
+
+  let actions = gtk::Box::new(gtk::Orientation::Horizontal, 6);
+  actions.set_valign(gtk::Align::Center);
+  let continue_button = gtk::Button::with_label("Continue");
+  continue_button.add_css_class("suggested-action");
+  continue_button.update_property(&[gtk::accessible::Property::Label(&format!(
+    "Continue as {} on {}",
+    profile.user_name,
+    profile
+      .server_name
+      .as_deref()
+      .unwrap_or(profile.server_url.as_str())
+  ))]);
+  continue_button.connect_clicked({
+    let sender = sender.clone();
+    let key = profile.key.clone();
+    move |_| sender.input(AppMessage::RestoreSavedProfile(key.clone()))
+  });
+  let forget_button = gtk::Button::with_label("Forget");
+  forget_button.add_css_class("destructive-action");
+  forget_button.connect_clicked({
+    let sender = sender.clone();
+    let key = profile.key.clone();
+    move |_| sender.input(AppMessage::ForgetSavedProfile(key.clone()))
+  });
+  actions.append(&continue_button);
+  actions.append(&forget_button);
+  content.append(&identity);
+  content.append(&actions);
+  row.set_child(Some(&content));
+  row
 }
 
 struct NowPlayingPageWidgets<'a> {
@@ -3368,7 +3912,12 @@ fn now_playing_page(widgets: NowPlayingPageWidgets<'_>) -> gtk::Widget {
   page.upcast()
 }
 
-fn settings_page(sender: &ComponentSender<AppModel>) -> gtk::Widget {
+fn settings_page(
+  sender: &ComponentSender<AppModel>,
+  saved_profile: &gtk::Label,
+  storage_status: &gtk::Label,
+  forget_saved_profile: &gtk::Button,
+) -> gtk::Widget {
   let page = gtk::Box::builder()
     .orientation(gtk::Orientation::Vertical)
     .spacing(20)
@@ -3397,7 +3946,9 @@ fn settings_page(sender: &ComponentSender<AppModel>) -> gtk::Widget {
   session_heading.add_css_class("heading");
   session_heading.set_xalign(0.0);
   group_inner.append(&session_heading);
-  let copy = dim_label("Disconnect this session here or from the header bar. The server URL and credentials are not saved between sessions in the GTK preview.");
+  let copy = dim_label(
+    "Disconnect this session here or from the header bar. Saved sign-ins remain available until you forget them.",
+  );
   copy.set_wrap(true);
   group_inner.append(&copy);
   let disconnect = gtk::Button::with_label("Disconnect");
@@ -3411,6 +3962,29 @@ fn settings_page(sender: &ComponentSender<AppModel>) -> gtk::Widget {
   session_group.append(&group_inner);
   page.append(&title);
   page.append(&session_group);
+  let saved_group = gtk::Box::builder()
+    .orientation(gtk::Orientation::Vertical)
+    .spacing(12)
+    .build();
+  saved_group.add_css_class("card");
+  let saved_inner = gtk::Box::builder()
+    .orientation(gtk::Orientation::Vertical)
+    .spacing(12)
+    .margin_top(16)
+    .margin_bottom(16)
+    .margin_start(20)
+    .margin_end(20)
+    .build();
+  let saved_heading = gtk::Label::new(Some("Saved sign-in"));
+  saved_heading.add_css_class("heading");
+  saved_heading.set_xalign(0.0);
+  saved_inner.append(&saved_heading);
+  saved_inner.append(saved_profile);
+  saved_inner.append(storage_status);
+  forget_saved_profile.set_halign(gtk::Align::Start);
+  saved_inner.append(forget_saved_profile);
+  saved_group.append(&saved_inner);
+  page.append(&saved_group);
   let migration_group = gtk::Box::builder()
     .orientation(gtk::Orientation::Vertical)
     .spacing(12)
@@ -3435,7 +4009,7 @@ fn settings_page(sender: &ComponentSender<AppModel>) -> gtk::Widget {
     ("Item details and seasons", true),
     ("External MPV playback", true),
     ("Quick Connect", false),
-    ("Saved profiles", false),
+    ("Saved profiles", true),
     ("Embedded web playback", false),
   ];
   for (feature, available) in features {
@@ -3571,6 +4145,27 @@ fn clear_box(container: &gtk::Box) {
   while let Some(child) = container.first_child() {
     container.remove(&child);
   }
+}
+
+fn clear_list_box(container: &gtk::ListBox) {
+  while let Some(child) = container.first_child() {
+    container.remove(&child);
+  }
+}
+
+async fn run_auth_operation<T, F>(operation: F) -> Result<T, ()>
+where
+  T: Send + 'static,
+  F: FnOnce() -> T + Send + 'static,
+{
+  let (sender, receiver) = oneshot::channel();
+  std::thread::Builder::new()
+    .name("jellypilot-secret-service".to_string())
+    .spawn(move || {
+      let _ = sender.send(operation());
+    })
+    .map_err(|_| ())?;
+  receiver.await.map_err(|_| ())
 }
 
 const fn can_start_login(connection: ConnectionPhase, playback_cleanup_pending: bool) -> bool {
@@ -3815,9 +4410,9 @@ pub(crate) fn run(smoke_test: bool) {
   if smoke_test {
     app
       .with_args(vec!["jellypilot-gtk-smoke".to_owned()])
-      .run::<AppModel>(());
+      .run::<AppModel>(true);
   } else {
-    app.run::<AppModel>(());
+    app.run::<AppModel>(false);
   }
 }
 

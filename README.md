@@ -199,6 +199,7 @@ sudo pacman -U jellypilot-<version>-1-x86_64.pkg.tar.zst
 - The `wasm32-unknown-unknown` Rust target
 - `wasm-pack` 0.15.0 exactly
 - Linux only: GTK 4 development files and `pkg-config` to compile the native GTK preview
+- Linux GTK Saved Profiles: an unlocked Secret Service provider such as GNOME Keyring or KWallet
 - Linux native playback: [MPV](https://mpv.io/) available on `PATH`
 
 </details>
@@ -270,10 +271,10 @@ jellypilot/
 
 ### Commands
 
-The Linux GTK preview supports password sign-in, Home and library browsing, search, details and
-seasons, authenticated artwork, and external MPV playback. Tauri remains the production app while
-Saved Profiles, Quick Connect, embedded playback, packaging, and live-server acceptance remain
-explicit migration gates.
+The Linux GTK preview supports password sign-in, Saved Profiles backed by Linux Secret Service,
+Home and library browsing, search, details and seasons, authenticated artwork, and external MPV
+playback. Tauri remains the production app while Quick Connect, embedded playback, packaging, and
+live-server acceptance remain explicit migration gates.
 
 | Task                     | Command                      |
 | :----------------------- | :--------------------------- |
