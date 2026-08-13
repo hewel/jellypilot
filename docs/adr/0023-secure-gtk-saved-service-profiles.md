@@ -17,16 +17,17 @@ responsive and application shutdown does not join a keyring prompt. Serialize re
 operations inside the GTK auth-storage module. Clear temporary serialized bytes and inactive token
 copies before their allocations are released.
 
-A successful Password Login creates or refreshes a Saved Service Profile. The GTK login screen
-lists redacted summaries and restores a selected profile on an isolated media-server client; the
-live client changes only after token validation succeeds. Disconnect ends the live connection but
-retains saved profiles. Sign Out removes the active profile first and disconnects only after secure
-deletion succeeds. Restore failures retain the saved profile for retry or explicit removal.
+A successful Password Login or Jellyfin Quick Connect login creates or refreshes a Saved Service
+Profile. The GTK login screen lists redacted summaries and restores a selected profile on an
+isolated media-server client; the live client changes only after token validation succeeds.
+Disconnect ends the live connection but retains saved profiles. Sign Out removes the active profile
+first and disconnects only after secure deletion succeeds. Restore failures retain the saved
+profile for retry or explicit removal.
 
-Secret Service being absent, locked, or declined is a recoverable condition. Password Login can
-continue as an ephemeral live session, but JellyPilot reports that it was not saved and never falls
-back to a file, local storage, environment variable, or command-line secret. The GTK startup smoke
-path does not access Secret Service.
+Secret Service being absent, locked, or declined is a recoverable condition. Password Login and
+Quick Connect can continue as ephemeral live sessions, but JellyPilot reports that they were not
+saved and never falls back to a file, local storage, environment variable, or command-line secret.
+The GTK startup smoke path does not access Secret Service.
 
 ## Consequences
 

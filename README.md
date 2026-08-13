@@ -271,10 +271,11 @@ jellypilot/
 
 ### Commands
 
-The Linux GTK preview supports password sign-in, Saved Profiles backed by Linux Secret Service,
-Home and library browsing, search, details and seasons, authenticated artwork, and external MPV
-playback. Tauri remains the production app while Quick Connect, embedded playback, packaging, and
-live-server acceptance remain explicit migration gates.
+The Linux GTK preview supports password sign-in, Jellyfin Quick Connect, Saved Profiles backed by
+Linux Secret Service, Home and library browsing, search, details and seasons, authenticated
+artwork, and external MPV playback. Tauri remains the production app while embedded playback,
+packaging, automatic provider-transcode expiry recovery, and live-server acceptance remain
+explicit migration gates.
 
 | Task                     | Command                      |
 | :----------------------- | :--------------------------- |

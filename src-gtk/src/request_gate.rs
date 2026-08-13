@@ -44,6 +44,11 @@ impl RequestGate {
     true
   }
 
+  #[must_use]
+  pub(crate) fn is_current_login(&self, token: SessionToken) -> bool {
+    self.login == Some(token) && token == SessionToken(self.session)
+  }
+
   pub(crate) fn disconnect(&mut self) {
     self.advance_session();
   }
@@ -124,6 +129,19 @@ mod tests {
 
     assert!(!gate.finish_login(earlier));
     assert!(gate.finish_login(current));
+  }
+
+  #[test]
+  fn login_progress_is_current_only_for_the_active_login_generation() {
+    let mut gate = RequestGate::default();
+    let earlier = gate.begin_login();
+    let current = gate.begin_login();
+
+    assert!(!gate.is_current_login(earlier));
+    assert!(gate.is_current_login(current));
+
+    gate.disconnect();
+    assert!(!gate.is_current_login(current));
   }
 
   #[test]

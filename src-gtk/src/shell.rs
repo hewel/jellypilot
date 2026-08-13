@@ -2,18 +2,20 @@ use std::cell::Cell;
 use std::collections::{HashMap, VecDeque};
 use std::rc::Rc;
 use std::sync::Arc;
+use std::time::Duration;
 
 use jellypilot_media_server::{
-  Credentials, JellyfinClient, MediaServerProvider, SavedSession, VideoHome, VideoItemDetail,
-  VideoLibraryItem, VideoLibraryKind, VideoLibraryPageRequest, VideoLibraryPlayedFilter,
-  VideoLibraryShortcut, VideoLibrarySort, VideoLibrarySortDirection, VideoSearchRequest,
-  VideoSeason, VideoSeasonEpisodesPage, VideoSeasonEpisodesPageRequest, VideoShowDetail,
-  VideoUserDataAction, VideoUserDataUpdate, VideoUserDataUpdateRequest,
+  Credentials, JellyfinClient, JellyfinError, MediaServerProvider, QuickConnectStatus,
+  SavedSession, VideoHome, VideoItemDetail, VideoLibraryItem, VideoLibraryKind,
+  VideoLibraryPageRequest, VideoLibraryPlayedFilter, VideoLibraryShortcut, VideoLibrarySort,
+  VideoLibrarySortDirection, VideoSearchRequest, VideoSeason, VideoSeasonEpisodesPage,
+  VideoSeasonEpisodesPageRequest, VideoShowDetail, VideoUserDataAction, VideoUserDataUpdate,
+  VideoUserDataUpdateRequest,
 };
 use relm4::gtk::prelude::*;
 use relm4::tokio::sync::{oneshot, watch};
 use relm4::{gtk, Component, ComponentParts, ComponentSender, RelmApp};
-use zeroize::Zeroize;
+use zeroize::{Zeroize, Zeroizing};
 
 use crate::artwork::{ArtworkAdapter, DecodedArtwork, FALLBACK_ARTWORK_ICON};
 use crate::auth_storage::{AuthStore, SavedProfileKey, SavedProfileSummary};
@@ -31,12 +33,17 @@ use crate::request_gate::{DetailToken, HomeToken, RequestGate, SessionToken};
 const APP_ID: &str = "io.github.hewel.JellyPilot.GtkPreview";
 const SMOKE_APP_ID: &str = "io.github.hewel.JellyPilot.GtkPreview.Smoke";
 const SEASON_EPISODE_PAGE_SIZE: i32 = 30;
+const QUICK_CONNECT_POLL_INTERVAL: Duration = Duration::from_secs(5);
+const QUICK_CONNECT_TIMEOUT: Duration = Duration::from_secs(5 * 60);
 
 struct AppModel {
   client: Arc<JellyfinClient>,
   auth_store: AuthStore,
   saved_profiles: LoadState<Vec<SavedProfileSummary>>,
   active_saved_profile: Option<SavedProfileKey>,
+  profile_operation_busy: bool,
+  quick_connect_phase: QuickConnectPhase,
+  quick_connect_cancellation: watch::Sender<u64>,
   artwork: Arc<ArtworkAdapter>,
   artwork_view: u64,
   artwork_slot: u64,
@@ -164,6 +171,22 @@ enum ConnectionPhase {
   Failed,
 }
 
+#[derive(Clone, Copy, Default, Eq, PartialEq)]
+enum QuickConnectPhase {
+  #[default]
+  Idle,
+  Requesting,
+  Waiting,
+  Approving,
+  Failed,
+}
+
+impl QuickConnectPhase {
+  const fn is_active(self) -> bool {
+    matches!(self, Self::Requesting | Self::Waiting | Self::Approving)
+  }
+}
+
 #[derive(Clone, Default)]
 enum LoadState<T> {
   #[default]
@@ -215,6 +238,8 @@ enum BrowsePresentation {
 enum AppMessage {
   LoadSavedProfiles,
   LoginRequested,
+  QuickConnectRequested,
+  CancelQuickConnect,
   RestoreSavedProfile(SavedProfileKey),
   ForgetSavedProfile(SavedProfileKey),
   ForgetCurrentProfile,
@@ -270,7 +295,15 @@ enum AppCommand {
     client: Arc<JellyfinClient>,
     result: Result<(), String>,
   },
+  QuickConnectCode {
+    session: SessionToken,
+    code: String,
+  },
+  QuickConnectApproving {
+    session: SessionToken,
+  },
   ForgotProfile {
+    session: u64,
     key: SavedProfileKey,
     sign_out: bool,
     result: Result<Vec<SavedProfileSummary>, String>,
@@ -338,12 +371,23 @@ impl std::fmt::Debug for AppCommand {
         .field("session", session)
         .field("successful", &result.is_ok())
         .finish(),
+      Self::QuickConnectCode { session, .. } => formatter
+        .debug_struct("QuickConnectCode")
+        .field("session", session)
+        .field("code", &"[redacted]")
+        .finish(),
+      Self::QuickConnectApproving { session } => formatter
+        .debug_struct("QuickConnectApproving")
+        .field("session", session)
+        .finish(),
       Self::ForgotProfile {
+        session,
         key,
         sign_out,
         result,
       } => formatter
         .debug_struct("ForgotProfile")
+        .field("session", session)
         .field("key", key)
         .field("sign_out", sign_out)
         .field("successful", &result.is_ok())
@@ -418,11 +462,17 @@ impl std::fmt::Debug for AppCommand {
 
 struct Ui {
   root: gtk::Box,
-  login: gtk::Box,
+  login: gtk::ScrolledWindow,
   provider: gtk::DropDown,
   server_url: gtk::Entry,
   username: gtk::Entry,
   password: gtk::PasswordEntry,
+  login_method_switcher: gtk::StackSwitcher,
+  quick_connect_code: gtk::Label,
+  quick_connect_status: gtk::Label,
+  quick_connect_spinner: gtk::Spinner,
+  quick_connect_button: gtk::Button,
+  quick_connect_cancel_button: gtk::Button,
   saved_profiles: gtk::ListBox,
   saved_profiles_status: gtk::Label,
   login_status: gtk::Label,
@@ -464,6 +514,7 @@ struct Ui {
   playback_controls_syncing: Rc<Cell<bool>>,
   settings_saved_profile: gtk::Label,
   settings_storage_status: gtk::Label,
+  settings_disconnect_button: gtk::Button,
   forget_current_profile: gtk::Button,
 }
 
@@ -491,6 +542,13 @@ impl Component for AppModel {
     let ui = Ui::new(&sender);
     root.set_titlebar(Some(&ui.header));
     root.set_child(Some(&ui.root));
+    if smoke_test {
+      let application = relm4::main_application();
+      root.connect_map(move |_| {
+        let application = application.clone();
+        gtk::glib::idle_add_local_once(move || application.quit());
+      });
+    }
     root.connect_close_request({
       let sender = sender.clone();
       move |_| {
@@ -506,11 +564,15 @@ impl Component for AppModel {
       }
     });
     let (playback_cancellation, _) = watch::channel(0);
+    let (quick_connect_cancellation, _) = watch::channel(0);
     let model = Self {
       client: Arc::new(JellyfinClient::new()),
       auth_store: AuthStore::default(),
       saved_profiles: LoadState::Loading,
       active_saved_profile: None,
+      profile_operation_busy: false,
+      quick_connect_phase: QuickConnectPhase::Idle,
+      quick_connect_cancellation,
       artwork: Arc::new(ArtworkAdapter::default()),
       artwork_view: 0,
       artwork_slot: 0,
@@ -548,6 +610,8 @@ impl Component for AppModel {
     match message {
       AppMessage::LoadSavedProfiles => self.load_saved_profiles(&sender),
       AppMessage::LoginRequested => self.start_login(&sender),
+      AppMessage::QuickConnectRequested => self.start_quick_connect(&sender),
+      AppMessage::CancelQuickConnect => self.cancel_quick_connect(),
       AppMessage::RestoreSavedProfile(key) => self.start_saved_login(key, &sender),
       AppMessage::ForgetSavedProfile(key) => self.confirm_forget_saved_profile(key, false, &sender),
       AppMessage::ForgetCurrentProfile => {
@@ -558,7 +622,11 @@ impl Component for AppModel {
       AppMessage::ConfirmForgetSavedProfile { key, sign_out } => {
         self.forget_saved_profile(key, sign_out, &sender)
       }
-      AppMessage::Disconnect => self.disconnect(&sender),
+      AppMessage::Disconnect => {
+        if !self.profile_operation_busy {
+          self.disconnect(&sender);
+        }
+      }
       AppMessage::ShowHome => self.show_home(&sender),
       AppMessage::ShowNowPlaying => {
         self.navigate_to("now-playing");
@@ -655,6 +723,7 @@ impl Component for AppModel {
         self.render_saved_profile_settings();
       }
       AppCommand::SavedSessionStored { session, result } => {
+        self.set_profile_operation_busy(false);
         let is_current = session == self.requests.session_generation()
           && matches!(self.connection, ConnectionPhase::Connected);
         match result {
@@ -686,33 +755,76 @@ impl Component for AppModel {
         client,
         result,
       } => self.finish_login(session, client, result, &sender),
+      AppCommand::QuickConnectCode { session, code } => {
+        if !self.requests.is_current_login(session) {
+          return;
+        }
+        self.quick_connect_phase = QuickConnectPhase::Waiting;
+        self.ui.quick_connect_code.set_label(&code);
+        self
+          .ui
+          .quick_connect_code
+          .update_property(&[gtk::accessible::Property::Label(&format!(
+            "Quick Connect code: {code}"
+          ))]);
+        self.ui.quick_connect_code.set_visible(true);
+        self
+          .ui
+          .quick_connect_status
+          .set_label("Waiting for approval in another signed-in Jellyfin client…");
+        self.ui.quick_connect_spinner.start();
+        self.ui.quick_connect_spinner.set_visible(true);
+        self.render_quick_connect_controls();
+      }
+      AppCommand::QuickConnectApproving { session } => {
+        if !self.requests.is_current_login(session) {
+          return;
+        }
+        self.quick_connect_phase = QuickConnectPhase::Approving;
+        self
+          .ui
+          .quick_connect_status
+          .set_label("Approved. Signing in…");
+        self.render_quick_connect_controls();
+      }
       AppCommand::ForgotProfile {
+        session,
         key,
         sign_out,
         result,
-      } => match result {
-        Ok(profiles) => {
-          if self.active_saved_profile.as_ref() == Some(&key) {
-            self.active_saved_profile = None;
+      } => {
+        let disconnect_current_session = should_disconnect_after_forget(
+          sign_out,
+          session,
+          self.requests.session_generation(),
+          self.connection,
+          self.active_saved_profile.as_ref() == Some(&key),
+        );
+        self.set_profile_operation_busy(false);
+        match result {
+          Ok(profiles) => {
+            if self.active_saved_profile.as_ref() == Some(&key) {
+              self.active_saved_profile = None;
+            }
+            self.saved_profiles = LoadState::Ready(profiles);
+            self
+              .ui
+              .saved_profiles_status
+              .set_label("Saved sign-in forgotten.");
+            self.ui.saved_profiles_status.set_visible(true);
+            self.render_saved_profiles(&sender);
+            self.render_saved_profile_settings();
+            if disconnect_current_session {
+              self.disconnect(&sender);
+            }
           }
-          self.saved_profiles = LoadState::Ready(profiles);
-          self
-            .ui
-            .saved_profiles_status
-            .set_label("Saved sign-in forgotten.");
-          self.ui.saved_profiles_status.set_visible(true);
-          self.render_saved_profiles(&sender);
-          self.render_saved_profile_settings();
-          if sign_out {
-            self.disconnect(&sender);
+          Err(message) => {
+            self.ui.saved_profiles_status.set_label(&message);
+            self.ui.saved_profiles_status.set_visible(true);
+            self.render_saved_profile_settings();
           }
         }
-        Err(message) => {
-          self.ui.saved_profiles_status.set_label(&message);
-          self.ui.saved_profiles_status.set_visible(true);
-          self.render_saved_profile_settings();
-        }
-      },
+      }
       AppCommand::Home { token, result } => self.finish_home(token, result, &sender),
       AppCommand::Browse(settlement) => {
         match self.browse.model.settle(settlement) {
@@ -861,6 +973,7 @@ impl Component for AppModel {
 
   fn shutdown(&mut self, _widgets: &mut Self::Widgets, _output: relm4::Sender<Self::Output>) {
     self.artwork.reset_session();
+    self.cancel_inflight_quick_connect();
     self.cancel_inflight_playback();
     if let Some(source) = self.playback_refresh_source.take() {
       source.remove();
@@ -888,7 +1001,9 @@ impl AppModel {
   }
 
   fn start_login(&mut self, sender: &ComponentSender<Self>) {
-    if !can_start_login(self.connection, self.playback_cleanup_pending) {
+    if self.profile_operation_busy
+      || !can_start_login(self.connection, self.playback_cleanup_pending)
+    {
       return;
     }
     let server_url = self.ui.server_url.text().trim().to_owned();
@@ -904,6 +1019,13 @@ impl AppModel {
       return;
     }
 
+    self.cancel_inflight_quick_connect();
+    self.quick_connect_phase = QuickConnectPhase::Idle;
+    self.ui.quick_connect_code.set_label("");
+    self.ui.quick_connect_code.set_visible(false);
+    self.ui.quick_connect_status.set_label("");
+    self.ui.quick_connect_spinner.stop();
+    self.ui.quick_connect_spinner.set_visible(false);
     self.ui.password.set_text("");
     let session = self.prepare_login("Connecting and loading your libraries…");
     let credentials = SensitiveCredentials(Credentials {
@@ -933,8 +1055,94 @@ impl AppModel {
     });
   }
 
+  fn start_quick_connect(&mut self, sender: &ComponentSender<Self>) {
+    if self.profile_operation_busy
+      || !can_start_login(self.connection, self.playback_cleanup_pending)
+    {
+      return;
+    }
+    if !quick_connect_available(provider_for(self.ui.provider.selected())) {
+      self.quick_connect_phase = QuickConnectPhase::Failed;
+      self
+        .ui
+        .quick_connect_status
+        .set_label("Quick Connect is available only for Jellyfin. Sign in with a password.");
+      self.render_quick_connect_controls();
+      return;
+    }
+    let server_url = self.ui.server_url.text().trim().to_owned();
+    if server_url.is_empty() {
+      self.quick_connect_phase = QuickConnectPhase::Failed;
+      self
+        .ui
+        .quick_connect_status
+        .set_label("Enter a Jellyfin server URL to request a code.");
+      self.render_quick_connect_controls();
+      return;
+    }
+
+    self.cancel_inflight_quick_connect();
+    let session = self.prepare_login("Requesting a Quick Connect code…");
+    self.quick_connect_phase = QuickConnectPhase::Requesting;
+    self.ui.login_status.set_label("");
+    self.ui.login_status.set_visible(false);
+    self.ui.quick_connect_code.set_label("");
+    self.ui.quick_connect_code.set_visible(false);
+    self.ui.quick_connect_status.set_label("Requesting a code…");
+    self.ui.quick_connect_spinner.start();
+    self.ui.quick_connect_spinner.set_visible(true);
+    self.render_quick_connect_controls();
+
+    let client = Arc::new(JellyfinClient::new());
+    let command_client = Arc::clone(&client);
+    let mut cancellation = self.quick_connect_cancellation.subscribe();
+    sender.command(move |output, shutdown| {
+      shutdown
+        .register(async move {
+          let operation = quick_connect_workflow(
+            command_client,
+            server_url,
+            session,
+            output,
+            QUICK_CONNECT_POLL_INTERVAL,
+            QUICK_CONNECT_TIMEOUT,
+          );
+          relm4::tokio::pin!(operation);
+          relm4::tokio::select! {
+            () = &mut operation => {}
+            changed = cancellation.changed() => {
+              let _ = changed;
+            }
+          }
+        })
+        .drop_on_shutdown()
+    });
+  }
+
+  fn cancel_quick_connect(&mut self) {
+    if !self.quick_connect_phase.is_active() {
+      return;
+    }
+    self.cancel_inflight_quick_connect();
+    self.requests.disconnect();
+    self.connection = ConnectionPhase::SignedOut;
+    self.home = LoadState::Idle;
+    self.quick_connect_phase = QuickConnectPhase::Idle;
+    self.set_login_controls_sensitive(true);
+    self.ui.login_status.set_label("");
+    self.ui.login_status.set_visible(false);
+    self.ui.quick_connect_status.set_label("");
+    self.ui.quick_connect_code.set_label("");
+    self.ui.quick_connect_code.set_visible(false);
+    self.ui.quick_connect_spinner.stop();
+    self.ui.quick_connect_spinner.set_visible(false);
+    self.render_quick_connect_controls();
+  }
+
   fn start_saved_login(&mut self, key: SavedProfileKey, sender: &ComponentSender<Self>) {
-    if !can_start_login(self.connection, self.playback_cleanup_pending) {
+    if self.profile_operation_busy
+      || !can_start_login(self.connection, self.playback_cleanup_pending)
+    {
       return;
     }
     let Some(profile) = self
@@ -950,6 +1158,13 @@ impl AppModel {
       self.ui.login_status.set_visible(true);
       return;
     };
+    self.cancel_inflight_quick_connect();
+    self.quick_connect_phase = QuickConnectPhase::Idle;
+    self.ui.quick_connect_code.set_label("");
+    self.ui.quick_connect_code.set_visible(false);
+    self.ui.quick_connect_status.set_label("");
+    self.ui.quick_connect_spinner.stop();
+    self.ui.quick_connect_spinner.set_visible(false);
     self.ui.provider.set_selected(match profile.provider {
       MediaServerProvider::Jellyfin => 0,
       MediaServerProvider::Emby => 1,
@@ -991,6 +1206,10 @@ impl AppModel {
     sign_out: bool,
     sender: &ComponentSender<Self>,
   ) {
+    if self.profile_operation_busy {
+      return;
+    }
+    self.set_profile_operation_busy(true);
     self
       .ui
       .saved_profiles_status
@@ -998,6 +1217,7 @@ impl AppModel {
     self.ui.saved_profiles_status.set_visible(true);
     let store = self.auth_store.clone();
     let command_key = key.clone();
+    let session = self.requests.session_generation();
     sender.oneshot_command(async move {
       let result = run_auth_operation(move || store.remove_profile(&command_key))
         .await
@@ -1006,6 +1226,7 @@ impl AppModel {
           result.map_err(|error| format!("Saved sign-in could not be forgotten: {error}."))
         });
       AppCommand::ForgotProfile {
+        session,
         key,
         sign_out,
         result,
@@ -1019,6 +1240,9 @@ impl AppModel {
     sign_out: bool,
     sender: &ComponentSender<Self>,
   ) {
+    if self.profile_operation_busy {
+      return;
+    }
     let Some(profile) = self
       .saved_profile_summaries()
       .iter()
@@ -1048,7 +1272,8 @@ impl AppModel {
       dialog.set_transient_for(Some(&window));
     }
     dialog.add_button("Cancel", gtk::ResponseType::Cancel);
-    dialog.add_button("Forget", gtk::ResponseType::Accept);
+    let forget_button = dialog.add_button("Forget", gtk::ResponseType::Accept);
+    forget_button.add_css_class("destructive-action");
     dialog.set_default_response(gtk::ResponseType::Cancel);
     dialog.connect_response({
       let sender = sender.clone();
@@ -1089,7 +1314,23 @@ impl AppModel {
       return;
     }
 
+    let was_quick_connect = self.quick_connect_phase.is_active();
+    self.quick_connect_phase = if result.is_ok() {
+      QuickConnectPhase::Idle
+    } else if self.quick_connect_phase.is_active() {
+      QuickConnectPhase::Failed
+    } else {
+      self.quick_connect_phase
+    };
+    self.ui.quick_connect_spinner.stop();
+    self.ui.quick_connect_spinner.set_visible(false);
+    if matches!(self.quick_connect_phase, QuickConnectPhase::Idle) {
+      self.ui.quick_connect_code.set_label("");
+      self.ui.quick_connect_code.set_visible(false);
+      self.ui.quick_connect_status.set_label("");
+    }
     self.set_login_controls_sensitive(true);
+    self.render_quick_connect_controls();
     match result {
       Ok(()) => {
         let session_to_save = client.login().get_saved_session();
@@ -1134,14 +1375,23 @@ impl AppModel {
       Err(message) => {
         self.connection = ConnectionPhase::Failed;
         self.home = LoadState::Failed(message.clone());
-        self.ui.login_status.set_label(&message);
-        self.ui.login_status.set_visible(true);
+        if was_quick_connect {
+          self.ui.quick_connect_status.set_label(&message);
+          self.ui.login_status.set_label("");
+          self.ui.login_status.set_visible(false);
+        } else {
+          self.ui.login_status.set_label(&message);
+          self.ui.login_status.set_visible(true);
+        }
         self.render_saved_profiles(sender);
       }
     }
   }
 
-  fn start_persist_session(&self, session: SavedSession, sender: &ComponentSender<Self>) {
+  fn start_persist_session(&mut self, session: SavedSession, sender: &ComponentSender<Self>) {
+    // Preserve secure-storage intent ordering: Forget cannot overtake an older pending save and
+    // then be undone when that save eventually acquires the keyring lock.
+    self.set_profile_operation_busy(true);
     self
       .ui
       .settings_storage_status
@@ -1228,6 +1478,8 @@ impl AppModel {
 
   fn disconnect(&mut self, sender: &ComponentSender<Self>) {
     self.requests.disconnect();
+    self.cancel_inflight_quick_connect();
+    self.quick_connect_phase = QuickConnectPhase::Idle;
     self.artwork.reset_session();
     self.cancel_inflight_playback();
     self.artwork_view = self.artwork_view.saturating_add(1);
@@ -1263,7 +1515,14 @@ impl AppModel {
     self.ui.nav_home.set_active(true);
     self.ui.nav_home.set_active(false);
     self.ui.disconnect_button.set_sensitive(false);
+    self.ui.settings_disconnect_button.set_sensitive(false);
     self.ui.connection_status.set_label("Not connected");
+    self.ui.quick_connect_code.set_label("");
+    self.ui.quick_connect_code.set_visible(false);
+    self.ui.quick_connect_status.set_label("");
+    self.ui.quick_connect_spinner.stop();
+    self.ui.quick_connect_spinner.set_visible(false);
+    self.render_quick_connect_controls();
     if self.ui.authenticated.parent().is_some() {
       self.ui.root.remove(&self.ui.authenticated);
     }
@@ -1292,6 +1551,8 @@ impl AppModel {
       return;
     }
     self.quitting = true;
+    self.requests.disconnect();
+    self.cancel_inflight_quick_connect();
     self.artwork.reset_session();
     self.invalidate_user_data_update();
     self.cancel_inflight_playback();
@@ -1327,6 +1588,11 @@ impl AppModel {
     let _ = self.playback_cancellation.send_replace(next);
   }
 
+  fn cancel_inflight_quick_connect(&self) {
+    let next = (*self.quick_connect_cancellation.borrow()).wrapping_add(1);
+    let _ = self.quick_connect_cancellation.send_replace(next);
+  }
+
   fn render_authenticated(&mut self, sender: &ComponentSender<Self>) {
     if self.ui.login.parent().is_some() {
       self.ui.root.remove(&self.ui.login);
@@ -1336,7 +1602,14 @@ impl AppModel {
     }
     self.ui.search.set_sensitive(true);
     self.ui.sidebar_toggle.set_visible(true);
-    self.ui.disconnect_button.set_sensitive(true);
+    self
+      .ui
+      .disconnect_button
+      .set_sensitive(!self.profile_operation_busy);
+    self
+      .ui
+      .settings_disconnect_button
+      .set_sensitive(!self.profile_operation_busy);
     self
       .ui
       .connection_status
@@ -1352,12 +1625,70 @@ impl AppModel {
   }
 
   fn set_login_controls_sensitive(&self, sensitive: bool) {
+    let sensitive = sensitive && !self.profile_operation_busy;
     self.ui.provider.set_sensitive(sensitive);
     self.ui.server_url.set_sensitive(sensitive);
     self.ui.username.set_sensitive(sensitive);
     self.ui.password.set_sensitive(sensitive);
     self.ui.login_button.set_sensitive(sensitive);
     self.ui.saved_profiles.set_sensitive(sensitive);
+    self.ui.login_method_switcher.set_sensitive(sensitive);
+    self.ui.quick_connect_button.set_sensitive(
+      sensitive && quick_connect_available(provider_for(self.ui.provider.selected())),
+    );
+  }
+
+  fn render_quick_connect_controls(&self) {
+    let provider_supported = quick_connect_available(provider_for(self.ui.provider.selected()));
+    let failed = matches!(self.quick_connect_phase, QuickConnectPhase::Failed);
+    self
+      .ui
+      .login_method_switcher
+      .set_visible(provider_supported);
+    self.ui.quick_connect_button.set_visible(matches!(
+      self.quick_connect_phase,
+      QuickConnectPhase::Idle | QuickConnectPhase::Failed
+    ));
+    self.ui.quick_connect_button.set_label(
+      if matches!(self.quick_connect_phase, QuickConnectPhase::Failed) {
+        "Request a new code"
+      } else {
+        "Request Quick Connect code"
+      },
+    );
+    self
+      .ui
+      .quick_connect_cancel_button
+      .set_visible(self.quick_connect_phase.is_active());
+    self.ui.quick_connect_code.set_visible(matches!(
+      self.quick_connect_phase,
+      QuickConnectPhase::Waiting | QuickConnectPhase::Approving
+    ));
+    self.ui.quick_connect_status.set_accessible_role(if failed {
+      gtk::AccessibleRole::Alert
+    } else {
+      gtk::AccessibleRole::Status
+    });
+    if failed {
+      self.ui.quick_connect_status.add_css_class("error");
+    } else {
+      self.ui.quick_connect_status.remove_css_class("error");
+    }
+  }
+
+  fn set_profile_operation_busy(&mut self, busy: bool) {
+    self.profile_operation_busy = busy;
+    let connected = matches!(self.connection, ConnectionPhase::Connected);
+    self.ui.saved_profiles.set_sensitive(!busy);
+    self.ui.disconnect_button.set_sensitive(connected && !busy);
+    self
+      .ui
+      .settings_disconnect_button
+      .set_sensitive(connected && !busy);
+    self
+      .ui
+      .forget_current_profile
+      .set_sensitive(self.active_saved_profile.is_some() && !busy);
   }
 
   fn render_saved_profiles(&self, sender: &ComponentSender<Self>) {
@@ -1409,7 +1740,21 @@ impl AppModel {
           .as_deref()
           .unwrap_or(profile.server_url.as_str())
       ));
-      self.ui.forget_current_profile.set_sensitive(true);
+      self
+        .ui
+        .forget_current_profile
+        .set_sensitive(!self.profile_operation_busy);
+      self
+        .ui
+        .forget_current_profile
+        .update_property(&[gtk::accessible::Property::Label(&format!(
+          "Sign out and forget saved sign-in for {} on {}",
+          profile.user_name,
+          profile
+            .server_name
+            .as_deref()
+            .unwrap_or(profile.server_url.as_str())
+        ))]);
       self.ui.settings_storage_status.set_visible(true);
     } else {
       self
@@ -3261,15 +3606,66 @@ impl Ui {
       let sender = sender.clone();
       move |_| sender.input(AppMessage::LoginRequested)
     });
+    let login_method_stack = gtk::Stack::builder()
+      .transition_type(gtk::StackTransitionType::SlideLeftRight)
+      .build();
+    let login_method_switcher = gtk::StackSwitcher::new();
+    login_method_switcher.set_stack(Some(&login_method_stack));
+    login_method_switcher.set_halign(gtk::Align::Center);
+    let quick_connect_code = gtk::Label::new(None);
+    quick_connect_code.add_css_class("title-1");
+    quick_connect_code.add_css_class("monospace");
+    quick_connect_code.set_selectable(true);
+    quick_connect_code.set_visible(false);
+    let quick_connect_status = dim_label("");
+    quick_connect_status.set_wrap(true);
+    quick_connect_status.set_justify(gtk::Justification::Center);
+    quick_connect_status.set_accessible_role(gtk::AccessibleRole::Status);
+    let quick_connect_spinner = gtk::Spinner::new();
+    quick_connect_spinner.set_visible(false);
+    let quick_connect_button = gtk::Button::with_label("Request Quick Connect code");
+    quick_connect_button.add_css_class("suggested-action");
+    quick_connect_button.connect_clicked({
+      let sender = sender.clone();
+      move |_| sender.input(AppMessage::QuickConnectRequested)
+    });
+    let quick_connect_cancel_button = gtk::Button::with_label("Cancel request");
+    quick_connect_cancel_button.set_visible(false);
+    quick_connect_cancel_button.connect_clicked({
+      let sender = sender.clone();
+      move |_| sender.input(AppMessage::CancelQuickConnect)
+    });
     let login = login_page(LoginPageWidgets {
       provider: &provider,
       server_url: &server_url,
       username: &username,
       password: &password,
+      method_stack: &login_method_stack,
+      method_switcher: &login_method_switcher,
+      quick_connect_code: &quick_connect_code,
+      quick_connect_status: &quick_connect_status,
+      quick_connect_spinner: &quick_connect_spinner,
+      quick_connect: &quick_connect_button,
+      cancel_quick_connect: &quick_connect_cancel_button,
       saved_profiles: &saved_profiles,
       saved_profiles_status: &saved_profiles_status,
       status: &login_status,
       sign_in: &login_button,
+    });
+    provider.connect_selected_notify({
+      let sender = sender.clone();
+      let method_stack = login_method_stack.clone();
+      let method_switcher = login_method_switcher.clone();
+      let quick_connect_button = quick_connect_button.clone();
+      move |provider| {
+        let available = quick_connect_available(provider_for(provider.selected()));
+        method_switcher.set_visible(available);
+        quick_connect_button.set_sensitive(available);
+        if !available {
+          method_stack.set_visible_child_name("password");
+          sender.input(AppMessage::CancelQuickConnect);
+        }
+      }
     });
     root.append(&login);
 
@@ -3585,6 +3981,13 @@ impl Ui {
     settings_storage_status.set_wrap(true);
     settings_storage_status.set_visible(false);
     settings_storage_status.set_accessible_role(gtk::AccessibleRole::Status);
+    let settings_disconnect_button = gtk::Button::with_label("Disconnect");
+    settings_disconnect_button.add_css_class("destructive-action");
+    settings_disconnect_button.set_halign(gtk::Align::Start);
+    settings_disconnect_button.connect_clicked({
+      let sender = sender.clone();
+      move |_| sender.input(AppMessage::Disconnect)
+    });
     let forget_current_profile = gtk::Button::with_label("Sign out and forget");
     forget_current_profile.add_css_class("destructive-action");
     forget_current_profile.set_sensitive(false);
@@ -3596,9 +3999,9 @@ impl Ui {
       }
     });
     let settings = settings_page(
-      sender,
       &settings_saved_profile,
       &settings_storage_status,
+      &settings_disconnect_button,
       &forget_current_profile,
     );
     content.add_named(&settings, Some("settings"));
@@ -3610,6 +4013,12 @@ impl Ui {
       server_url,
       username,
       password,
+      login_method_switcher,
+      quick_connect_code,
+      quick_connect_status,
+      quick_connect_spinner,
+      quick_connect_button,
+      quick_connect_cancel_button,
       saved_profiles,
       saved_profiles_status,
       login_status,
@@ -3651,6 +4060,7 @@ impl Ui {
       playback_controls_syncing,
       settings_saved_profile,
       settings_storage_status,
+      settings_disconnect_button,
       forget_current_profile,
     }
   }
@@ -3661,18 +4071,32 @@ struct LoginPageWidgets<'a> {
   server_url: &'a gtk::Entry,
   username: &'a gtk::Entry,
   password: &'a gtk::PasswordEntry,
+  method_stack: &'a gtk::Stack,
+  method_switcher: &'a gtk::StackSwitcher,
+  quick_connect_code: &'a gtk::Label,
+  quick_connect_status: &'a gtk::Label,
+  quick_connect_spinner: &'a gtk::Spinner,
+  quick_connect: &'a gtk::Button,
+  cancel_quick_connect: &'a gtk::Button,
   saved_profiles: &'a gtk::ListBox,
   saved_profiles_status: &'a gtk::Label,
   status: &'a gtk::Label,
   sign_in: &'a gtk::Button,
 }
 
-fn login_page(widgets: LoginPageWidgets<'_>) -> gtk::Box {
+fn login_page(widgets: LoginPageWidgets<'_>) -> gtk::ScrolledWindow {
   let LoginPageWidgets {
     provider,
     server_url,
     username,
     password,
+    method_stack,
+    method_switcher,
+    quick_connect_code,
+    quick_connect_status,
+    quick_connect_spinner,
+    quick_connect,
+    cancel_quick_connect,
     saved_profiles,
     saved_profiles_status,
     status,
@@ -3725,35 +4149,76 @@ fn login_page(widgets: LoginPageWidgets<'_>) -> gtk::Box {
   card.append(&saved_profiles_scroll);
   card.append(saved_profiles_status);
   card.append(&gtk::Separator::new(gtk::Orientation::Horizontal));
-  let password_heading = gtk::Label::new(Some("Sign in with password"));
-  password_heading.add_css_class("heading");
-  password_heading.set_xalign(0.0);
-  card.append(&password_heading);
-  let form = gtk::Grid::builder()
+  let server_form = gtk::Grid::builder()
     .row_spacing(10)
     .column_spacing(12)
     .build();
-  add_form_row(&form, 0, "Server type", provider);
-  add_form_row(&form, 1, "Server URL", server_url);
-  add_form_row(&form, 2, "Username", username);
-  add_form_row(&form, 3, "Password", password);
-  card.append(&form);
+  add_form_row(&server_form, 0, "Server type", provider);
+  add_form_row(&server_form, 1, "Server URL", server_url);
+  card.append(&server_form);
+  card.append(method_switcher);
+
+  let quick_connect_page = gtk::Box::builder()
+    .orientation(gtk::Orientation::Vertical)
+    .spacing(12)
+    .margin_top(6)
+    .build();
+  let quick_connect_copy = dim_label(
+    "Request a code, then approve it from another client already signed in to this Jellyfin server.",
+  );
+  quick_connect_copy.set_wrap(true);
+  quick_connect_copy.set_justify(gtk::Justification::Center);
+  quick_connect_page.append(&quick_connect_copy);
+  quick_connect_code.set_halign(gtk::Align::Center);
+  quick_connect_page.append(quick_connect_code);
+  let quick_connect_progress = gtk::Box::builder()
+    .orientation(gtk::Orientation::Vertical)
+    .spacing(8)
+    .halign(gtk::Align::Center)
+    .hexpand(true)
+    .build();
+  quick_connect_spinner.set_halign(gtk::Align::Center);
+  quick_connect_status.set_hexpand(true);
+  quick_connect_status.set_halign(gtk::Align::Fill);
+  quick_connect_progress.append(quick_connect_spinner);
+  quick_connect_progress.append(quick_connect_status);
+  quick_connect_page.append(&quick_connect_progress);
+  quick_connect.set_hexpand(true);
+  quick_connect_page.append(quick_connect);
+  cancel_quick_connect.set_halign(gtk::Align::Center);
+  quick_connect_page.append(cancel_quick_connect);
+  method_stack.add_titled(&quick_connect_page, Some("quick-connect"), "Quick Connect");
+
+  let password_page = gtk::Box::builder()
+    .orientation(gtk::Orientation::Vertical)
+    .spacing(12)
+    .margin_top(6)
+    .build();
+  let password_form = gtk::Grid::builder()
+    .row_spacing(10)
+    .column_spacing(12)
+    .build();
+  add_form_row(&password_form, 0, "Username", username);
+  add_form_row(&password_form, 1, "Password", password);
+  password_page.append(&password_form);
   let storage_copy = dim_label(
     "Successful sign-ins are saved in Linux Secret Service. JellyPilot never stores your password.",
   );
   storage_copy.set_wrap(true);
-  card.append(&storage_copy);
+  password_page.append(&storage_copy);
+  sign_in.set_hexpand(true);
+  password_page.append(sign_in);
+  method_stack.add_titled(&password_page, Some("password"), "Password");
+  method_stack.set_visible_child_name("quick-connect");
+  card.append(method_stack);
   status.set_halign(gtk::Align::Center);
   card.append(status);
-  sign_in.set_hexpand(true);
-  card.append(sign_in);
   page.append(&card);
-  let footer = dim_label("Quick Connect is not yet available in the GTK preview.");
-  footer.set_halign(gtk::Align::Center);
-  footer.set_margin_top(12);
-  footer.set_margin_bottom(24);
-  page.append(&footer);
-  page
+  gtk::ScrolledWindow::builder()
+    .child(&page)
+    .hscrollbar_policy(gtk::PolicyType::Never)
+    .vexpand(true)
+    .build()
 }
 
 fn saved_profile_row(
@@ -3764,7 +4229,7 @@ fn saved_profile_row(
   row.set_activatable(false);
   row.set_selectable(false);
   let content = gtk::Box::builder()
-    .orientation(gtk::Orientation::Horizontal)
+    .orientation(gtk::Orientation::Vertical)
     .spacing(12)
     .margin_top(10)
     .margin_bottom(10)
@@ -3787,6 +4252,7 @@ fn saved_profile_row(
     MediaServerProvider::Emby => "Emby",
   };
   let account = dim_label(&format!("{provider} · {}", profile.user_name));
+  account.set_ellipsize(gtk::pango::EllipsizeMode::End);
   let server = dim_label(&profile.server_url);
   server.set_ellipsize(gtk::pango::EllipsizeMode::Middle);
   identity.append(&title);
@@ -3795,6 +4261,7 @@ fn saved_profile_row(
 
   let actions = gtk::Box::new(gtk::Orientation::Horizontal, 6);
   actions.set_valign(gtk::Align::Center);
+  actions.set_halign(gtk::Align::End);
   let continue_button = gtk::Button::with_label("Continue");
   continue_button.add_css_class("suggested-action");
   continue_button.update_property(&[gtk::accessible::Property::Label(&format!(
@@ -3812,6 +4279,14 @@ fn saved_profile_row(
   });
   let forget_button = gtk::Button::with_label("Forget");
   forget_button.add_css_class("destructive-action");
+  forget_button.update_property(&[gtk::accessible::Property::Label(&format!(
+    "Forget saved sign-in for {} on {}",
+    profile.user_name,
+    profile
+      .server_name
+      .as_deref()
+      .unwrap_or(profile.server_url.as_str())
+  ))]);
   forget_button.connect_clicked({
     let sender = sender.clone();
     let key = profile.key.clone();
@@ -3913,9 +4388,9 @@ fn now_playing_page(widgets: NowPlayingPageWidgets<'_>) -> gtk::Widget {
 }
 
 fn settings_page(
-  sender: &ComponentSender<AppModel>,
   saved_profile: &gtk::Label,
   storage_status: &gtk::Label,
+  disconnect: &gtk::Button,
   forget_saved_profile: &gtk::Button,
 ) -> gtk::Widget {
   let page = gtk::Box::builder()
@@ -3951,14 +4426,7 @@ fn settings_page(
   );
   copy.set_wrap(true);
   group_inner.append(&copy);
-  let disconnect = gtk::Button::with_label("Disconnect");
-  disconnect.add_css_class("destructive-action");
-  disconnect.set_halign(gtk::Align::Start);
-  disconnect.connect_clicked({
-    let sender = sender.clone();
-    move |_| sender.input(AppMessage::Disconnect)
-  });
-  group_inner.append(&disconnect);
+  group_inner.append(disconnect);
   session_group.append(&group_inner);
   page.append(&title);
   page.append(&session_group);
@@ -4008,7 +4476,7 @@ fn settings_page(
     ("Search", true),
     ("Item details and seasons", true),
     ("External MPV playback", true),
-    ("Quick Connect", false),
+    ("Quick Connect", true),
     ("Saved profiles", true),
     ("Embedded web playback", false),
   ];
@@ -4034,7 +4502,11 @@ fn settings_page(
   }
   migration_group.append(&migration_inner);
   page.append(&migration_group);
-  page.upcast()
+  gtk::ScrolledWindow::builder()
+    .child(&page)
+    .vexpand(true)
+    .build()
+    .upcast()
 }
 
 fn scrolled_page(title: &str, subtitle: &str, content: &gtk::Box) -> gtk::Widget {
@@ -4168,11 +4640,114 @@ where
   receiver.await.map_err(|_| ())
 }
 
+async fn quick_connect_workflow(
+  client: Arc<JellyfinClient>,
+  server_url: String,
+  session: SessionToken,
+  output: relm4::Sender<AppCommand>,
+  poll_interval: Duration,
+  workflow_timeout: Duration,
+) {
+  let command_client = Arc::clone(&client);
+  let result = async {
+    let request = command_client
+      .login()
+      .quick_connect_start(&server_url)
+      .await
+      .map_err(|error| quick_connect_start_message(&error).to_owned())?;
+    let (code, secret) = request.into_parts();
+    let secret = Zeroizing::new(secret);
+    if output
+      .send(AppCommand::QuickConnectCode { session, code })
+      .is_err()
+    {
+      return Err("Quick Connect was cancelled.".to_owned());
+    }
+
+    relm4::tokio::time::timeout(workflow_timeout, async {
+      loop {
+        relm4::tokio::time::sleep(poll_interval).await;
+        match command_client
+          .login()
+          .quick_connect_check(&server_url, secret.as_str())
+          .await
+          .map_err(|_| quick_connect_check_message().to_owned())?
+        {
+          QuickConnectStatus::Waiting => {}
+          QuickConnectStatus::Approved => break Ok(()),
+        }
+      }
+    })
+    .await
+    .unwrap_or_else(|_| Err(quick_connect_timeout_message().to_owned()))?;
+
+    if output
+      .send(AppCommand::QuickConnectApproving { session })
+      .is_err()
+    {
+      return Err("Quick Connect was cancelled.".to_owned());
+    }
+    let mut response = command_client
+      .login()
+      .quick_connect_authenticate(&server_url, secret.as_str())
+      .await
+      .map_err(|_| quick_connect_authentication_message().to_owned())?;
+    response.access_token.zeroize();
+    Ok(())
+  }
+  .await;
+
+  let _ = output.send(AppCommand::Login {
+    session,
+    client,
+    result,
+  });
+}
+
+const fn quick_connect_available(provider: MediaServerProvider) -> bool {
+  matches!(provider, MediaServerProvider::Jellyfin)
+}
+
+const fn quick_connect_start_message(error: &JellyfinError) -> &'static str {
+  match error {
+    JellyfinError::QuickConnectUnavailable => {
+      "Quick Connect is not enabled on this Jellyfin server. Use password sign-in instead."
+    }
+    JellyfinError::InvalidUrl(_) => "Enter a valid Jellyfin server URL to request a code.",
+    _ => "Quick Connect could not be started. Check the server address and try again.",
+  }
+}
+
+const fn quick_connect_check_message() -> &'static str {
+  "JellyPilot could not check this Quick Connect code. Request a new code and try again."
+}
+
+const fn quick_connect_authentication_message() -> &'static str {
+  "JellyPilot could not finish the approved Quick Connect sign-in. Request a new code and try again."
+}
+
+const fn quick_connect_timeout_message() -> &'static str {
+  "Quick Connect code expired. Request a new code to try again."
+}
+
 const fn can_start_login(connection: ConnectionPhase, playback_cleanup_pending: bool) -> bool {
   matches!(
     connection,
     ConnectionPhase::SignedOut | ConnectionPhase::Failed
   ) && !playback_cleanup_pending
+}
+
+const fn should_disconnect_after_forget(
+  sign_out: bool,
+  operation_session: u64,
+  current_session: u64,
+  connection: ConnectionPhase,
+  active_profile_matches: bool,
+) -> bool {
+  sign_out
+    && operation_session == current_session
+    && matches!(connection, ConnectionPhase::Connected)
+    && active_profile_matches
 }
 
 const fn quit_can_finish_without_controller(
@@ -4398,14 +4973,6 @@ pub(crate) fn run(smoke_test: bool) {
   let app = RelmApp::new(if smoke_test { SMOKE_APP_ID } else { APP_ID });
   if smoke_test {
     app.allow_multiple_instances(true);
-    let application = relm4::main_application();
-    application.connect_window_added(move |application, window| {
-      let application = application.clone();
-      window.connect_map(move |_| {
-        let application = application.clone();
-        gtk::glib::idle_add_local_once(move || application.quit());
-      });
-    });
   }
   if smoke_test {
     app
@@ -4419,6 +4986,47 @@ pub(crate) fn run(smoke_test: bool) {
 #[cfg(test)]
 mod tests {
   use super::*;
+
+  #[test]
+  fn quick_connect_is_available_only_for_jellyfin() {
+    assert!(quick_connect_available(MediaServerProvider::Jellyfin));
+    assert!(!quick_connect_available(MediaServerProvider::Emby));
+  }
+
+  #[test]
+  fn quick_connect_command_debug_redacts_the_public_code() {
+    let mut gate = RequestGate::default();
+    let session = gate.begin_login();
+    let command = AppCommand::QuickConnectCode {
+      session,
+      code: "ABCD12".to_owned(),
+    };
+
+    let debug = format!("{command:?}");
+    assert!(!debug.contains("ABCD12"));
+    assert!(debug.contains("[redacted]"));
+  }
+
+  #[test]
+  fn quick_connect_user_messages_do_not_include_transport_details() {
+    let error = JellyfinError::HttpError(
+      "https://media.example/QuickConnect/Connect?secret=private-secret".to_owned(),
+    );
+
+    let messages = [
+      quick_connect_start_message(&error),
+      quick_connect_check_message(),
+      quick_connect_authentication_message(),
+      quick_connect_timeout_message(),
+    ];
+    assert!(messages
+      .iter()
+      .all(|message| !message.contains("private-secret") && !message.contains("https://")));
+    assert_eq!(
+      quick_connect_timeout_message(),
+      "Quick Connect code expired. Request a new code to try again."
+    );
+  }
 
   #[test]
   fn season_page_request_uses_exact_identity_and_a_bounded_window() {
@@ -4438,6 +5046,31 @@ mod tests {
     assert_eq!(request.season_number, Some(2));
     assert_eq!(request.start_index, 60);
     assert_eq!(request.limit, 30);
+  }
+
+  #[test]
+  fn saved_profile_deletion_only_signs_out_the_originating_live_session() {
+    assert!(should_disconnect_after_forget(
+      true,
+      4,
+      4,
+      ConnectionPhase::Connected,
+      true,
+    ));
+    assert!(!should_disconnect_after_forget(
+      true,
+      4,
+      5,
+      ConnectionPhase::Connected,
+      true,
+    ));
+    assert!(!should_disconnect_after_forget(
+      true,
+      4,
+      4,
+      ConnectionPhase::Connected,
+      false,
+    ));
   }
 
   #[test]

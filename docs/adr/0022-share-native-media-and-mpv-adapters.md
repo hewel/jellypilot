@@ -37,7 +37,8 @@ exclude argument values and authenticated media URLs.
   lifecycle code.
 - The generated provider SDKs keep their existing paths until their generator and ADR are changed;
   their location does not make the shared client depend on Tauri at runtime.
-- Saved Service Profiles, Quick Connect, Playback Engine Preference, embedded playback, automatic
-  provider-transcode expiry recovery, and release packaging remain explicit GTK migration gates.
+- Playback Engine Preference, embedded playback, automatic provider-transcode expiry recovery, and
+  release packaging remain explicit GTK migration gates. GTK now satisfies Saved Service Profiles
+  and Jellyfin Quick Connect through frontend-owned adapters.
   Tauri remains the production application until those gates and native runtime acceptance reach
   parity.

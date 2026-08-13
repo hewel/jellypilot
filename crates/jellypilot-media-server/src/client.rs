@@ -4,6 +4,7 @@ use parking_lot::RwLock;
 use reqwest::{header, Client, Method};
 use std::sync::Arc;
 use uuid::Uuid;
+use zeroize::Zeroize;
 
 use super::error::JellyfinError;
 use super::image_ref::{
@@ -105,6 +106,23 @@ struct ClientState {
   server_name: Option<String>,
   device_id: String,
   device_name: String,
+}
+
+impl ClientState {
+  fn replace_access_token(&mut self, token: Option<String>) {
+    if let Some(mut previous) = self.access_token.take() {
+      previous.zeroize();
+    }
+    self.access_token = token;
+  }
+}
+
+impl Drop for ClientState {
+  fn drop(&mut self) {
+    if let Some(token) = self.access_token.as_mut() {
+      token.zeroize();
+    }
+  }
 }
 
 struct ValidatedSavedUser {
@@ -498,6 +516,25 @@ impl JellyfinClient {
     }
   }
 
+  fn quick_connect_openapi_error<T>(
+    context: &str,
+    err: jellyfin_api::apis::Error<T>,
+    authentication_failure: bool,
+  ) -> JellyfinError {
+    match err {
+      jellyfin_api::apis::Error::Reqwest(err) => Self::redacted_request_error(context, err),
+      jellyfin_api::apis::Error::Serde(_) => {
+        JellyfinError::HttpError(format!("{context} returned malformed JSON"))
+      }
+      jellyfin_api::apis::Error::Io(_) => {
+        JellyfinError::HttpError(format!("{context} request failed"))
+      }
+      jellyfin_api::apis::Error::ResponseError(response) => {
+        Self::redacted_response_error(context, response.status, authentication_failure)
+      }
+    }
+  }
+
   fn emby_openapi_error<T: std::fmt::Debug>(
     context: &str,
     err: emby_api::apis::Error<T>,
@@ -540,7 +577,7 @@ impl JellyfinClient {
     }
   }
 
-  fn saved_session_request_error(context: &str, error: reqwest::Error) -> JellyfinError {
+  fn redacted_request_error(context: &str, error: reqwest::Error) -> JellyfinError {
     if error.is_redirect() {
       Self::redirect_error(context)
     } else {
@@ -548,7 +585,7 @@ impl JellyfinClient {
     }
   }
 
-  fn saved_session_response_error(
+  fn redacted_response_error(
     context: &str,
     status: reqwest::StatusCode,
     authentication_failure: bool,
@@ -573,7 +610,7 @@ impl JellyfinClient {
     authentication_failure: bool,
   ) -> JellyfinError {
     match err {
-      jellyfin_api::apis::Error::Reqwest(err) => Self::saved_session_request_error(context, err),
+      jellyfin_api::apis::Error::Reqwest(err) => Self::redacted_request_error(context, err),
       jellyfin_api::apis::Error::Serde(_) => {
         JellyfinError::HttpError(format!("{context} returned malformed JSON"))
       }
@@ -581,7 +618,7 @@ impl JellyfinClient {
         JellyfinError::HttpError(format!("{context} request failed"))
       }
       jellyfin_api::apis::Error::ResponseError(response) => {
-        Self::saved_session_response_error(context, response.status, authentication_failure)
+        Self::redacted_response_error(context, response.status, authentication_failure)
       }
     }
   }
@@ -592,13 +629,13 @@ impl JellyfinClient {
     authentication_failure: bool,
   ) -> JellyfinError {
     match err {
-      emby_api::apis::Error::Reqwest(err) => Self::saved_session_request_error(context, err),
+      emby_api::apis::Error::Reqwest(err) => Self::redacted_request_error(context, err),
       emby_api::apis::Error::Serde(_) => {
         JellyfinError::HttpError(format!("{context} returned malformed JSON"))
       }
       emby_api::apis::Error::Io(_) => JellyfinError::HttpError(format!("{context} request failed")),
       emby_api::apis::Error::ResponseError(response) => {
-        Self::saved_session_response_error(context, response.status, authentication_failure)
+        Self::redacted_response_error(context, response.status, authentication_failure)
       }
     }
   }
@@ -764,7 +801,7 @@ impl JellyfinClient {
       state.remote_control_available = false;
       state.remote_control_warning = None;
       state.server_url = Some(server_url);
-      state.access_token = Some(auth.access_token.clone());
+      state.replace_access_token(Some(auth.access_token.clone()));
       state.user_id = Some(auth.user.id.clone());
       state.user_name = Some(auth.user.name.clone());
     }
@@ -784,7 +821,7 @@ impl JellyfinClient {
       state.remote_control_available = false;
       state.remote_control_warning = None;
       state.server_url = Some(server_url);
-      state.access_token = Some(auth.access_token.clone());
+      state.replace_access_token(Some(auth.access_token.clone()));
       state.user_id = Some(auth.user.id.clone());
       state.user_name = Some(auth.user.name.clone());
       state.server_name = info.map(|info| info.server_name);
@@ -901,7 +938,7 @@ impl JellyfinClient {
         {
           JellyfinError::QuickConnectUnavailable
         }
-        err => Self::openapi_error("Quick Connect initiation", err),
+        err => Self::quick_connect_openapi_error("Quick Connect initiation", err, false),
       })?;
 
     Ok(QuickConnectRequest {
@@ -930,7 +967,7 @@ impl JellyfinClient {
       },
     )
     .await
-    .map_err(|err| Self::openapi_error("Quick Connect status", err))?;
+    .map_err(|err| Self::quick_connect_openapi_error("Quick Connect status", err, false))?;
 
     if state.authenticated.unwrap_or(false) {
       Ok(QuickConnectStatus::Approved)
@@ -957,13 +994,13 @@ impl JellyfinClient {
       },
     )
     .await
-    .map_err(|err| Self::openapi_auth_error("Quick Connect authentication", err))
+    .map_err(|err| Self::quick_connect_openapi_error("Quick Connect authentication", err, true))
     .and_then(Self::auth_response_from_openapi)?;
 
     {
       let mut state = self.state.write();
       state.server_url = Some(server_url);
-      state.access_token = Some(auth.access_token.clone());
+      state.replace_access_token(Some(auth.access_token.clone()));
       state.user_id = Some(auth.user.id.clone());
       state.user_name = Some(auth.user.name.clone());
     }
@@ -1143,7 +1180,7 @@ impl JellyfinClient {
     state.remote_control_available = false;
     state.remote_control_warning = None;
     state.server_url = None;
-    state.access_token = None;
+    state.replace_access_token(None);
     state.user_id = None;
     state.user_name = None;
     state.server_name = None;
@@ -1185,7 +1222,7 @@ impl JellyfinClient {
     state.remote_control_available = false;
     state.remote_control_warning = None;
     state.server_url = Some(server_url);
-    state.access_token = Some(session.access_token.clone());
+    state.replace_access_token(Some(session.access_token.clone()));
     state.user_id = Some(validated.id);
     state.user_name = Some(user_name);
     state.server_name = server_name;
@@ -2151,7 +2188,7 @@ impl<'a> JellyfinLogin<'a> {
     state.remote_control_available = false;
     state.remote_control_warning = None;
     state.server_url = Some(session.server_url.clone());
-    state.access_token = Some(session.access_token.clone());
+    state.replace_access_token(Some(session.access_token.clone()));
     state.user_id = Some(session.user_id.clone());
     state.user_name = Some(session.user_name.clone());
     state.server_name = session.server_name.clone();
@@ -5144,6 +5181,29 @@ mod tests {
     serve_responses(vec![(status, response_body)]).await
   }
 
+  async fn serve_request_then_disconnect() -> (String, tokio::task::JoinHandle<String>) {
+    let listener = TcpListener::bind("127.0.0.1:0")
+      .await
+      .expect("disconnect server should bind");
+    let addr = listener
+      .local_addr()
+      .expect("disconnect server should have address");
+    let request_task = tokio::spawn(async move {
+      let (mut stream, _) = listener
+        .accept()
+        .await
+        .expect("disconnect server should accept");
+      let mut buffer = [0_u8; 4096];
+      let bytes_read = stream
+        .read(&mut buffer)
+        .await
+        .expect("disconnect server should read request");
+      String::from_utf8_lossy(&buffer[..bytes_read]).into_owned()
+    });
+
+    (format!("http://{addr}"), request_task)
+  }
+
   async fn serve_responses(responses: Vec<(&'static str, &'static str)>) -> String {
     serve_responses_with_requests(responses).await.0
   }
@@ -6450,7 +6510,7 @@ mod tests {
   async fn quick_connect_start_returns_unavailable_when_server_rejects_request() {
     let server_url = serve_once(
       "401 Unauthorized",
-      r#"{"Message":"Quick Connect is disabled"}"#,
+      r#"{"Message":"Quick Connect is disabled; secret=disabled-secret; token=disabled-token; server=https://private.example.test"}"#,
     )
     .await;
     let client = JellyfinClient::new();
@@ -6459,11 +6519,43 @@ mod tests {
       .quick_connect_start(&server_url)
       .await
       .expect_err("quick connect should report unavailable");
+    let message = err.to_string();
 
     assert!(
-      matches!(err, JellyfinError::QuickConnectUnavailable),
+      matches!(&err, JellyfinError::QuickConnectUnavailable),
       "expected quick connect unavailable, got {err:?}"
     );
+    assert_eq!(message, "Quick Connect is not enabled on this server");
+    assert!(!message.contains("disabled-secret"));
+    assert!(!message.contains("disabled-token"));
+    assert!(!message.contains("private.example.test"));
+    assert!(!message.contains(&server_url));
+  }
+
+  #[tokio::test]
+  async fn quick_connect_start_redacts_server_response_body() {
+    let server_url = serve_once(
+      "500 Internal Server Error",
+      r#"{"Message":"start-secret start-token https://private.example.test/full-response-body"}"#,
+    )
+    .await;
+    let client = JellyfinClient::new();
+
+    let err = client
+      .quick_connect_start(&server_url)
+      .await
+      .expect_err("quick connect should report the server error");
+    let message = err.to_string();
+
+    assert!(matches!(&err, JellyfinError::HttpError(_)));
+    assert_eq!(
+      message,
+      "HTTP error: Quick Connect initiation failed: HTTP 500 Internal Server Error"
+    );
+    assert!(!message.contains("start-secret"));
+    assert!(!message.contains("start-token"));
+    assert!(!message.contains("private.example.test"));
+    assert!(!message.contains(&server_url));
   }
 
   #[tokio::test]
@@ -6487,6 +6579,79 @@ mod tests {
       .first()
       .expect("quick connect check request should be captured");
     assert!(request.starts_with("GET /QuickConnect/Connect?secret=secret-123 "));
+  }
+
+  #[tokio::test]
+  async fn quick_connect_check_redacts_query_secret_from_transport_error() {
+    let (server_url, request_task) = serve_request_then_disconnect().await;
+    let secret = "check-query-secret";
+    let client = JellyfinClient::new();
+
+    let err = client
+      .quick_connect_check(&server_url, secret)
+      .await
+      .expect_err("quick connect check should report the disconnected response");
+    let request = request_task
+      .await
+      .expect("disconnect server task should finish");
+    let message = err.to_string();
+
+    assert!(request.starts_with("GET /QuickConnect/Connect?secret=check-query-secret "));
+    assert!(matches!(&err, JellyfinError::HttpError(_)));
+    assert_eq!(message, "HTTP error: Quick Connect status request failed");
+    assert!(!message.contains(secret));
+    assert!(!message.contains(&server_url));
+  }
+
+  #[tokio::test]
+  async fn quick_connect_authenticate_redacts_auth_response_error() {
+    let server_url = serve_once(
+      "401 Unauthorized",
+      r#"{"Message":"auth-secret auth-token https://private.example.test/full-response-body"}"#,
+    )
+    .await;
+    let client = JellyfinClient::new();
+
+    let err = client
+      .quick_connect_authenticate(&server_url, "auth-secret")
+      .await
+      .expect_err("quick connect authentication should report rejection");
+    let message = err.to_string();
+
+    assert!(matches!(&err, JellyfinError::AuthFailed(_)));
+    assert_eq!(
+      message,
+      "Authentication failed: Quick Connect authentication failed: HTTP 401 Unauthorized"
+    );
+    assert!(!message.contains("auth-secret"));
+    assert!(!message.contains("auth-token"));
+    assert!(!message.contains("private.example.test"));
+    assert!(!message.contains(&server_url));
+  }
+
+  #[tokio::test]
+  async fn quick_connect_authenticate_keeps_transport_error_non_auth_and_redacted() {
+    let (server_url, request_task) = serve_request_then_disconnect().await;
+    let secret = "auth-transport-secret";
+    let client = JellyfinClient::new();
+
+    let err = client
+      .quick_connect_authenticate(&server_url, secret)
+      .await
+      .expect_err("quick connect authentication should report the disconnected response");
+    let request = request_task
+      .await
+      .expect("disconnect server task should finish");
+    let message = err.to_string();
+
+    assert!(request.contains(r#""Secret":"auth-transport-secret""#));
+    assert!(matches!(&err, JellyfinError::HttpError(_)));
+    assert_eq!(
+      message,
+      "HTTP error: Quick Connect authentication request failed"
+    );
+    assert!(!message.contains(secret));
+    assert!(!message.contains(&server_url));
   }
 
   #[tokio::test]

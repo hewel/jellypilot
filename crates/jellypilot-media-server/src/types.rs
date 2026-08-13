@@ -6,6 +6,7 @@ use std::fmt;
 
 use serde::{Deserialize, Serialize};
 use specta::Type;
+use zeroize::Zeroize;
 
 use super::intro_skipper::IntroSkipRange;
 
@@ -35,6 +36,12 @@ impl fmt::Debug for AuthResponse {
       .field("access_token", &"[redacted]")
       .field("server_id", &self.server_id)
       .finish()
+  }
+}
+
+impl Drop for AuthResponse {
+  fn drop(&mut self) {
+    self.access_token.zeroize();
   }
 }
 
@@ -454,6 +461,18 @@ pub struct QuickConnectRequest {
   pub secret: String,
 }
 
+impl QuickConnectRequest {
+  /// Consume the response while transferring its public code and sensitive pairing secret.
+  ///
+  /// The remaining in-struct secret is empty before [`Drop`] runs.
+  pub fn into_parts(mut self) -> (String, String) {
+    (
+      std::mem::take(&mut self.code),
+      std::mem::take(&mut self.secret),
+    )
+  }
+}
+
 impl fmt::Debug for QuickConnectRequest {
   fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
     formatter
@@ -461,6 +480,12 @@ impl fmt::Debug for QuickConnectRequest {
       .field("code", &"[redacted]")
       .field("secret", &"[redacted]")
       .finish()
+  }
+}
+
+impl Drop for QuickConnectRequest {
+  fn drop(&mut self) {
+    self.secret.zeroize();
   }
 }
 
