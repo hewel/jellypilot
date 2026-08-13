@@ -195,6 +195,18 @@ struct PropertySample {
 }
 
 impl PropertySample {
+  fn transport_is_healthy(&self) -> bool {
+    [
+      &self.paused,
+      &self.time_pos,
+      &self.duration,
+      &self.volume,
+      &self.muted,
+    ]
+    .into_iter()
+    .all(|result| matches!(result, Ok(_) | Err(MpvError::CommandFailed)))
+  }
+
   fn into_sample(self, connected: bool) -> PlayerStateSample {
     let paused = match self.paused {
       Ok(PropertyValue::Bool(paused)) => Some(paused),
@@ -269,7 +281,8 @@ pub async fn collect_player_state_sample(mpv: &MpvClient) -> PlayerStateSample {
     volume: volume_res,
     muted: muted_res,
   };
-  sample.into_sample(mpv.is_connected())
+  let connected = sample.transport_is_healthy() && mpv.is_connected();
+  sample.into_sample(connected)
 }
 
 /// Collect the current state directly from MPV properties.
@@ -476,6 +489,7 @@ mod tests {
       volume: 12.0,
     };
 
+    assert!(sample.transport_is_healthy());
     let player = sample.into_sample(true).merge(&previous);
 
     assert!(player.connected);
@@ -490,6 +504,7 @@ mod tests {
     let mut sample = successful_property_sample();
     sample.duration = Err(MpvError::IpcTimeout);
 
+    assert!(!sample.transport_is_healthy());
     let player = sample.into_sample(false).merge(&PlayerState {
       connected: true,
       paused: false,

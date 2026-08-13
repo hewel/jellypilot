@@ -240,6 +240,7 @@ pub struct PlaybackController {
   mpv: MpvClient,
   configured_mpv_args: Vec<String>,
   active: Option<ActivePlayback>,
+  active_transport_matches_mpv: bool,
   last_transport: PlayerState,
   last_progress_report_at: Option<Instant>,
   load_event_boundary: LoadEventBoundary,
@@ -284,6 +285,7 @@ impl PlaybackController {
       mpv,
       configured_mpv_args,
       active: None,
+      active_transport_matches_mpv: false,
       last_transport: PlayerState::default(),
       last_progress_report_at: None,
       load_event_boundary: LoadEventBoundary::Settled,
@@ -337,6 +339,7 @@ impl PlaybackController {
     if self.active.is_none() {
       self.last_progress_report_at = None;
       self.load_event_boundary = LoadEventBoundary::Settled;
+      self.active_transport_matches_mpv = false;
       return PlaybackRefreshOutcome {
         snapshot: self.snapshot_with_transport(PlayerState::default()),
         state: PlaybackRefreshState::Idle,
@@ -376,7 +379,7 @@ impl PlaybackController {
 
   /// Gracefully stop/report any active item and always clean the MPV runtime.
   pub async fn shutdown(&mut self) -> PlaybackShutdownOutcome {
-    if self.active.is_some() {
+    if self.active.is_some() && self.active_transport_matches_mpv {
       let transport = self
         .collect_transport()
         .await
@@ -386,6 +389,7 @@ impl PlaybackController {
     let active = self.active.clone();
     self.last_progress_report_at = None;
     self.load_event_boundary = LoadEventBoundary::Settled;
+    self.active_transport_matches_mpv = false;
     self.last_transport = PlayerState::default();
     let _ = self.mpv.quit().await;
     let (stopped_active_playback, warnings) = match active {
@@ -524,6 +528,7 @@ impl PlaybackController {
     let active = self.active.clone().ok_or(PlaybackError::NoActivePlayback)?;
     self.last_progress_report_at = None;
     self.load_event_boundary = LoadEventBoundary::Settled;
+    self.active_transport_matches_mpv = false;
     self.last_transport = PlayerState::default();
     let _ = self.mpv.quit().await;
 
@@ -566,6 +571,7 @@ impl PlaybackController {
       }
     }
     self.active = Some(resolved.active);
+    self.active_transport_matches_mpv = true;
 
     let active = self
       .active
@@ -750,6 +756,10 @@ impl PlaybackController {
     };
     while events.try_recv().is_ok() {}
     self.load_event_boundary = LoadEventBoundary::AwaitingStart;
+    // From this point MPV may already have accepted the replacement even if
+    // the awaiting Rust future is cancelled. Keep the previous server item for
+    // stop attribution, but never sample the replacement transport into it.
+    self.active_transport_matches_mpv = false;
 
     if self
       .mpv
@@ -785,6 +795,7 @@ impl PlaybackController {
   async fn cleanup_failed_load(&mut self, previous: Option<&ActivePlayback>) {
     self.last_progress_report_at = None;
     self.load_event_boundary = LoadEventBoundary::Settled;
+    self.active_transport_matches_mpv = false;
     self.last_transport = PlayerState::default();
     self.mpv.stop().await;
     if let Some(previous) = previous {
@@ -817,6 +828,7 @@ impl PlaybackController {
     let active = self.active.clone();
     self.last_progress_report_at = None;
     self.load_event_boundary = LoadEventBoundary::Settled;
+    self.active_transport_matches_mpv = false;
     self.last_transport = PlayerState::default();
     let _ = self.mpv.quit().await;
     let warnings = match active {
@@ -834,6 +846,7 @@ impl PlaybackController {
     let active = self.active.clone();
     self.last_progress_report_at = None;
     self.load_event_boundary = LoadEventBoundary::Settled;
+    self.active_transport_matches_mpv = false;
     self.last_transport = PlayerState::default();
     let _ = self.mpv.quit().await;
     let warnings = match active {
@@ -1350,6 +1363,7 @@ mod tests {
       Vec::new(),
     );
     controller.active = Some(active_playback(position_seconds));
+    controller.active_transport_matches_mpv = true;
     controller
   }
 

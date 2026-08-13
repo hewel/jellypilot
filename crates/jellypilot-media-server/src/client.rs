@@ -33,6 +33,16 @@ const EMBEDDED_REMOTE_COMMANDS: &[&str] = &["Play", "Playstate", "SetVolume", "T
 const MAX_SEASON_EPISODE_PAGE_SIZE: i32 = 100;
 const MAX_COMPAT_SEASON_EPISODES: i32 = 10_000;
 
+fn season_episode_page_has_more(
+  reported_total_record_count: Option<i32>,
+  next_start_index: i32,
+  returned_count: i32,
+  limit: i32,
+) -> bool {
+  returned_count > 0
+    && reported_total_record_count.map_or(returned_count == limit, |total| next_start_index < total)
+}
+
 /// Jellyfin HTTP API client.
 pub struct JellyfinClient {
   authenticated_http: Client,
@@ -2568,8 +2578,12 @@ impl<'a> JellyfinLibrary<'a> {
     let next_start_index = start_index.saturating_add(returned_count);
     let total_record_count =
       reported_total_record_count.map_or(next_start_index, |total| total.max(next_start_index));
-    let has_more =
-      reported_total_record_count.map_or(returned_count == limit, |total| next_start_index < total);
+    let has_more = season_episode_page_has_more(
+      reported_total_record_count,
+      next_start_index,
+      returned_count,
+      limit,
+    );
 
     Ok(VideoSeasonEpisodesPage {
       series_id,
@@ -3088,8 +3102,12 @@ impl<'a> JellyfinLibrary<'a> {
     let next_start_index = start_index.saturating_add(returned_count);
     let total_record_count =
       reported_total_record_count.map_or(next_start_index, |total| total.max(next_start_index));
-    let has_more =
-      reported_total_record_count.map_or(returned_count == limit, |total| next_start_index < total);
+    let has_more = season_episode_page_has_more(
+      reported_total_record_count,
+      next_start_index,
+      returned_count,
+      limit,
+    );
 
     Ok(VideoSeasonEpisodesPage {
       series_id,
@@ -7036,6 +7054,19 @@ mod tests {
     let captured = requests.lock();
     assert!(captured[0].contains("startIndex=20"));
     assert!(captured[0].contains("limit=100"));
+  }
+
+  #[test]
+  fn empty_season_episode_page_never_advertises_forward_progress() {
+    assert!(!season_episode_page_has_more(Some(60), 30, 0, 30));
+    assert!(!season_episode_page_has_more(None, 30, 0, 30));
+  }
+
+  #[test]
+  fn non_empty_season_episode_page_uses_reported_total_or_full_page_fallback() {
+    assert!(season_episode_page_has_more(Some(60), 31, 1, 30));
+    assert!(season_episode_page_has_more(None, 60, 30, 30));
+    assert!(!season_episode_page_has_more(Some(31), 31, 1, 30));
   }
 
   #[tokio::test]

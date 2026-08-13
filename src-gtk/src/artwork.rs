@@ -11,7 +11,7 @@ use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
 use jellypilot_media_server::{JellyfinClient, LibraryImageRequest};
 use relm4::gtk;
-use relm4::gtk::gdk_pixbuf::prelude::PixbufLoaderExt;
+use relm4::gtk::gdk_pixbuf::prelude::{PixbufAnimationExt, PixbufLoaderExt};
 use relm4::tokio::sync::{oneshot, watch, Notify};
 
 pub(crate) const FALLBACK_ARTWORK_ICON: &str = "image-missing-symbolic";
@@ -659,6 +659,7 @@ pub(crate) enum ArtworkError {
   FetchFailed,
   OriginRejected,
   UnsupportedContentType,
+  AnimatedImageUnsupported,
   ResponseTooLarge,
   EmptyResponse,
   DecodeFailed,
@@ -675,6 +676,7 @@ impl fmt::Display for ArtworkError {
       Self::FetchFailed => "artwork could not be fetched",
       Self::OriginRejected => "artwork server returned an unusable status",
       Self::UnsupportedContentType => "artwork response was not an image",
+      Self::AnimatedImageUnsupported => "animated artwork is not supported",
       Self::ResponseTooLarge => "artwork response exceeded the memory limit",
       Self::EmptyResponse => "artwork response was empty",
       Self::DecodeFailed => "artwork data could not be decoded",
@@ -724,6 +726,85 @@ fn is_image_content_type(value: &str) -> bool {
     && media_type.len() > 6
 }
 
+fn validate_static_image_container(bytes: &[u8]) -> Result<(), ArtworkError> {
+  if bytes.starts_with(&[0xff, 0xd8, 0xff]) {
+    return Ok(());
+  }
+  if bytes.starts_with(b"\x89PNG\r\n\x1a\n") {
+    return if png_contains_animation_control(bytes) {
+      Err(ArtworkError::AnimatedImageUnsupported)
+    } else {
+      Ok(())
+    };
+  }
+  if bytes.starts_with(b"RIFF") && bytes.get(8..12) == Some(b"WEBP") {
+    return if webp_contains_animation(bytes) {
+      Err(ArtworkError::AnimatedImageUnsupported)
+    } else {
+      Ok(())
+    };
+  }
+  if bytes.starts_with(b"GIF87a") || bytes.starts_with(b"GIF89a") {
+    return Err(ArtworkError::AnimatedImageUnsupported);
+  }
+  Err(ArtworkError::UnsupportedContentType)
+}
+
+fn png_contains_animation_control(bytes: &[u8]) -> bool {
+  let mut offset = 8usize;
+  while let Some(header) = bytes.get(offset..offset.saturating_add(8)) {
+    let length = u32::from_be_bytes([header[0], header[1], header[2], header[3]]) as usize;
+    let chunk_type = &header[4..8];
+    if chunk_type == b"acTL" {
+      return true;
+    }
+    if chunk_type == b"IDAT" || chunk_type == b"IEND" {
+      return false;
+    }
+    let Some(next) = offset
+      .checked_add(12)
+      .and_then(|base| base.checked_add(length))
+    else {
+      return false;
+    };
+    if next > bytes.len() {
+      return false;
+    }
+    offset = next;
+  }
+  false
+}
+
+fn webp_contains_animation(bytes: &[u8]) -> bool {
+  let mut offset = 12usize;
+  while let Some(header) = bytes.get(offset..offset.saturating_add(8)) {
+    let chunk_type = &header[..4];
+    let length = u32::from_le_bytes([header[4], header[5], header[6], header[7]]) as usize;
+    if chunk_type == b"ANIM" || chunk_type == b"ANMF" {
+      return true;
+    }
+    let payload_start = offset.saturating_add(8);
+    if chunk_type == b"VP8X"
+      && bytes
+        .get(payload_start)
+        .is_some_and(|flags| flags & 0x02 != 0)
+    {
+      return true;
+    }
+    let Some(padded_length) = length.checked_add(length % 2) else {
+      return false;
+    };
+    let Some(next) = payload_start.checked_add(padded_length) else {
+      return false;
+    };
+    if next > bytes.len() {
+      return false;
+    }
+    offset = next;
+  }
+  false
+}
+
 fn append_body_chunk(
   body: &mut Vec<u8>,
   chunk: &[u8],
@@ -741,6 +822,7 @@ fn decode_pixels(
   bytes: ArtworkBytes,
   max_decoded_bytes: usize,
 ) -> Result<DecodedArtwork, ArtworkError> {
+  validate_static_image_container(bytes.0.as_ref())?;
   let loader = gtk::gdk_pixbuf::PixbufLoader::new();
   let prepared_error = Rc::new(Cell::new(None));
   let signal_error = Rc::clone(&prepared_error);
@@ -771,6 +853,12 @@ fn decode_pixels(
     return Err(error);
   }
   close_result.map_err(|_| ArtworkError::DecodeFailed)?;
+  if loader
+    .animation()
+    .is_some_and(|animation| !animation.is_static_image())
+  {
+    return Err(ArtworkError::AnimatedImageUnsupported);
+  }
   let pixbuf = loader.pixbuf().ok_or(ArtworkError::DecodeFailed)?;
   if pixbuf.colorspace() != gtk::gdk_pixbuf::Colorspace::Rgb || pixbuf.bits_per_sample() != 8 {
     return Err(ArtworkError::DecodeFailed);
@@ -1354,6 +1442,7 @@ mod tests {
       ArtworkError::FetchFailed,
       ArtworkError::OriginRejected,
       ArtworkError::UnsupportedContentType,
+      ArtworkError::AnimatedImageUnsupported,
       ArtworkError::ResponseTooLarge,
       ArtworkError::EmptyResponse,
       ArtworkError::DecodeFailed,
@@ -1394,6 +1483,35 @@ mod tests {
     let result = validate_response_metadata(true, Some(10), Some("text/html"), 10);
 
     assert_eq!(result, Err(ArtworkError::UnsupportedContentType));
+  }
+
+  #[test]
+  fn static_artwork_container_preflight_accepts_jpeg_png_and_webp() {
+    assert_eq!(validate_static_image_container(&[0xff, 0xd8, 0xff]), Ok(()));
+    assert_eq!(
+      validate_static_image_container(b"\x89PNG\r\n\x1a\n"),
+      Ok(())
+    );
+    assert_eq!(
+      validate_static_image_container(b"RIFF\x00\x00\x00\x00WEBPVP8 \x00\x00\x00\x00"),
+      Ok(())
+    );
+  }
+
+  #[test]
+  fn artwork_container_preflight_rejects_animated_formats_before_decode() {
+    assert_eq!(
+      validate_static_image_container(b"GIF89a"),
+      Err(ArtworkError::AnimatedImageUnsupported)
+    );
+    assert_eq!(
+      validate_static_image_container(b"\x89PNG\r\n\x1a\n\x00\x00\x00\x00acTL\x00\x00\x00\x00"),
+      Err(ArtworkError::AnimatedImageUnsupported)
+    );
+    assert_eq!(
+      validate_static_image_container(b"RIFF\x00\x00\x00\x00WEBPANIM\x00\x00\x00\x00"),
+      Err(ArtworkError::AnimatedImageUnsupported)
+    );
   }
 
   #[test]

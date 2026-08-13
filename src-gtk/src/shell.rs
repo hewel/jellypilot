@@ -2677,14 +2677,40 @@ impl AppModel {
         retry.connect_clicked(move |_| sender.input(AppMessage::RetrySeason));
         section.append(&retry);
       }
-      LoadState::Ready(page)
-        if page.episodes.is_empty() && page.total_record_count == 0 && !page.has_more =>
-      {
-        section.append(&state_view(
-          "No episodes available",
-          "This season does not contain any visible episodes.",
-          "folder-videos-symbolic",
-        ));
+      LoadState::Ready(page) if page.episodes.is_empty() => {
+        let (title, message) = if page.total_record_count == 0 {
+          (
+            "No episodes available",
+            "This season does not contain any visible episodes.",
+          )
+        } else {
+          (
+            "No episodes on this page",
+            "The server returned no visible episodes for this page.",
+          )
+        };
+        section.append(&state_view(title, message, "folder-videos-symbolic"));
+        let can_go_previous = page.start_index > 0;
+        let can_go_next = page.has_more && page.next_start_index > page.start_index;
+        if can_go_previous || can_go_next {
+          let navigation = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+          navigation.set_halign(gtk::Align::Center);
+          let previous = gtk::Button::with_label("Previous episode page");
+          previous.set_sensitive(can_go_previous);
+          let previous_sender = sender.clone();
+          previous.connect_clicked(move |_| {
+            previous_sender.input(AppMessage::PreviousSeasonEpisodePage);
+          });
+          let next = gtk::Button::with_label("Next episode page");
+          next.set_sensitive(can_go_next);
+          let next_sender = sender.clone();
+          next.connect_clicked(move |_| {
+            next_sender.input(AppMessage::NextSeasonEpisodePage);
+          });
+          navigation.append(&previous);
+          navigation.append(&next);
+          section.append(&navigation);
+        }
       }
       LoadState::Ready(page) => {
         let start = page.start_index.max(0);
@@ -2718,13 +2744,7 @@ impl AppModel {
         pagination.append(&page_status);
         pagination.append(&next);
         section.append(&pagination);
-        if page.episodes.is_empty() {
-          section.append(&dim_label(
-            "No visible episodes are available on this page.",
-          ));
-        } else {
-          section.append(&self.media_list(&page.episodes, sender));
-        }
+        section.append(&self.media_list(&page.episodes, sender));
       }
     }
     section.upcast()
