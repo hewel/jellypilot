@@ -21,6 +21,12 @@ port, and reverse-proxy base path immediately before attaching the current token
 image requests never follow redirects. Raw authenticated HTTP helpers and token-bearing URLs are
 not public adapter APIs.
 
+Credential- and token-bearing media-server API clients also never follow redirects. Only
+token-free public server discovery may follow a bounded redirect chain, and every hop must retain
+the same scheme, host, and effective port. Authentication therefore requires the server's
+canonical URL instead of replaying credentials or provider authorization headers to a redirected
+request.
+
 MPV startup is transactional and serialized. A failed IPC handshake reaps the child and cleans the
 endpoint before returning, repeated starts cannot replace a live child, and command or process logs
 exclude argument values and authenticated media URLs.
@@ -31,6 +37,7 @@ exclude argument values and authenticated media URLs.
   lifecycle code.
 - The generated provider SDKs keep their existing paths until their generator and ADR are changed;
   their location does not make the shared client depend on Tauri at runtime.
-- Saved Service Profiles, Quick Connect, Playback Engine Preference, embedded playback, and release
-  packaging remain explicit GTK migration gates. Tauri remains the production application until
-  those gates and native runtime acceptance reach parity.
+- Saved Service Profiles, Quick Connect, Playback Engine Preference, embedded playback, automatic
+  provider-transcode expiry recovery, and release packaging remain explicit GTK migration gates.
+  Tauri remains the production application until those gates and native runtime acceptance reach
+  parity.

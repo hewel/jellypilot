@@ -33,7 +33,7 @@ const EMBEDDED_REMOTE_COMMANDS: &[&str] = &["Play", "Playstate", "SetVolume", "T
 
 /// Jellyfin HTTP API client.
 pub struct JellyfinClient {
-  http: Client,
+  authenticated_http: Client,
   image_http: Client,
   state: Arc<RwLock<ClientState>>,
 }
@@ -101,10 +101,11 @@ impl JellyfinClient {
     let device_id = format!("{}{}", DEVICE_ID_PREFIX, Uuid::new_v4());
 
     Self {
-      http: Client::builder()
+      authenticated_http: Client::builder()
         .timeout(std::time::Duration::from_secs(30))
+        .redirect(Self::reject_redirect_policy())
         .build()
-        .expect("Failed to create HTTP client"),
+        .expect("Failed to create authenticated HTTP client"),
       image_http: Client::builder()
         .timeout(std::time::Duration::from_secs(30))
         .redirect(reqwest::redirect::Policy::none())
@@ -287,6 +288,22 @@ impl JellyfinClient {
     server_url: &str,
     token: Option<&str>,
   ) -> Result<jellyfin_api::apis::configuration::Configuration, JellyfinError> {
+    self.build_openapi_configuration(server_url, token, Self::reject_redirect_policy())
+  }
+
+  fn public_openapi_configuration(
+    &self,
+    server_url: &str,
+  ) -> Result<jellyfin_api::apis::configuration::Configuration, JellyfinError> {
+    self.build_openapi_configuration(server_url, None, Self::public_discovery_redirect_policy())
+  }
+
+  fn build_openapi_configuration(
+    &self,
+    server_url: &str,
+    token: Option<&str>,
+    redirect_policy: reqwest::redirect::Policy,
+  ) -> Result<jellyfin_api::apis::configuration::Configuration, JellyfinError> {
     let mut headers = header::HeaderMap::new();
     let auth_header = header::HeaderValue::from_str(&self.auth_header(token)).map_err(|err| {
       JellyfinError::HttpError(format!("Invalid Jellyfin authorization header: {err}"))
@@ -298,6 +315,7 @@ impl JellyfinClient {
     configuration.user_agent = Some(Self::app_user_agent());
     configuration.client = Client::builder()
       .timeout(std::time::Duration::from_secs(30))
+      .redirect(redirect_policy)
       .default_headers(headers)
       .build()?;
 
@@ -308,6 +326,26 @@ impl JellyfinClient {
     &self,
     server_url: &str,
     token: Option<&str>,
+  ) -> Result<emby_api::apis::configuration::Configuration, JellyfinError> {
+    self.build_emby_openapi_configuration(server_url, token, Self::reject_redirect_policy())
+  }
+
+  fn public_emby_openapi_configuration(
+    &self,
+    server_url: &str,
+  ) -> Result<emby_api::apis::configuration::Configuration, JellyfinError> {
+    self.build_emby_openapi_configuration(
+      server_url,
+      None,
+      Self::public_discovery_redirect_policy(),
+    )
+  }
+
+  fn build_emby_openapi_configuration(
+    &self,
+    server_url: &str,
+    token: Option<&str>,
+    redirect_policy: reqwest::redirect::Policy,
   ) -> Result<emby_api::apis::configuration::Configuration, JellyfinError> {
     let mut headers = header::HeaderMap::new();
     let auth_header = header::HeaderValue::from_str(&self.auth_header(token)).map_err(|err| {
@@ -320,10 +358,62 @@ impl JellyfinClient {
     configuration.user_agent = Some(Self::emby_chrome_user_agent());
     configuration.client = Client::builder()
       .timeout(std::time::Duration::from_secs(30))
+      .redirect(redirect_policy)
       .default_headers(headers)
       .build()?;
 
     Ok(configuration)
+  }
+
+  fn public_discovery_redirect_policy() -> reqwest::redirect::Policy {
+    let limited = reqwest::redirect::Policy::limited(10);
+    reqwest::redirect::Policy::custom(move |attempt| {
+      let same_origin = attempt
+        .previous()
+        .first()
+        .is_some_and(|initial| Self::is_safe_discovery_redirect(initial, attempt.url()));
+      if same_origin {
+        limited.redirect(attempt)
+      } else {
+        attempt.error("cross-origin public discovery redirect rejected")
+      }
+    })
+  }
+
+  fn reject_redirect_policy() -> reqwest::redirect::Policy {
+    reqwest::redirect::Policy::custom(|attempt| {
+      attempt.error("authenticated HTTP redirect rejected")
+    })
+  }
+
+  fn is_safe_discovery_redirect(initial: &reqwest::Url, next: &reqwest::Url) -> bool {
+    initial.username().is_empty()
+      && initial.password().is_none()
+      && next.username().is_empty()
+      && next.password().is_none()
+      && initial.scheme() == next.scheme()
+      && initial.host() == next.host()
+      && initial.port_or_known_default() == next.port_or_known_default()
+  }
+
+  fn redirect_error(context: &str) -> JellyfinError {
+    JellyfinError::HttpError(format!("{context} rejected an HTTP redirect"))
+  }
+
+  fn request_transport_error(context: &str, error: reqwest::Error) -> JellyfinError {
+    if error.is_redirect() {
+      Self::redirect_error(context)
+    } else {
+      JellyfinError::Http(error)
+    }
+  }
+
+  fn reject_authenticated_redirect(status: reqwest::StatusCode) -> Result<(), JellyfinError> {
+    if status.is_redirection() {
+      Err(Self::redirect_error("Authenticated API request"))
+    } else {
+      Ok(())
+    }
   }
 
   fn openapi_error<T: std::fmt::Debug>(
@@ -331,10 +421,13 @@ impl JellyfinClient {
     err: jellyfin_api::apis::Error<T>,
   ) -> JellyfinError {
     match err {
-      jellyfin_api::apis::Error::Reqwest(err) => JellyfinError::Http(err),
+      jellyfin_api::apis::Error::Reqwest(err) => Self::request_transport_error(context, err),
       jellyfin_api::apis::Error::Serde(err) => JellyfinError::Json(err),
       jellyfin_api::apis::Error::Io(err) => {
         JellyfinError::HttpError(format!("{context} failed: {err}"))
+      }
+      jellyfin_api::apis::Error::ResponseError(response) if response.status.is_redirection() => {
+        Self::redirect_error(context)
       }
       jellyfin_api::apis::Error::ResponseError(response) => JellyfinError::HttpError(format!(
         "{context} failed: HTTP {} - {}",
@@ -368,12 +461,15 @@ impl JellyfinClient {
     err: emby_api::apis::Error<T>,
   ) -> JellyfinError {
     match err {
-      emby_api::apis::Error::Reqwest(err) => JellyfinError::Http(err),
+      emby_api::apis::Error::Reqwest(err) => Self::request_transport_error(context, err),
       emby_api::apis::Error::Serde(err) => {
         JellyfinError::HttpError(format!("{context} returned malformed JSON: {err}"))
       }
       emby_api::apis::Error::Io(err) => {
         JellyfinError::HttpError(format!("{context} failed: {err}"))
+      }
+      emby_api::apis::Error::ResponseError(response) if response.status.is_redirection() => {
+        Self::redirect_error(context)
       }
       emby_api::apis::Error::ResponseError(response) => JellyfinError::HttpError(format!(
         "{context} failed: HTTP {} - {}",
@@ -600,7 +696,7 @@ impl JellyfinClient {
     let mut public_info_failures = Vec::new();
 
     for candidate in &candidates {
-      let configuration = self.emby_openapi_configuration(candidate, None)?;
+      let configuration = self.public_emby_openapi_configuration(candidate)?;
       match emby_api::apis::system_service_api::get_system_info_public(&configuration)
         .await
         .map_err(|err| Self::emby_openapi_error("System public info", err))
@@ -779,7 +875,7 @@ impl JellyfinClient {
 
     let info = match provider {
       MediaServerProvider::Jellyfin => {
-        let configuration = self.openapi_configuration(&server_url, None)?;
+        let configuration = self.public_openapi_configuration(&server_url)?;
 
         jellyfin_api::apis::system_api::get_public_system_info(&configuration)
           .await
@@ -787,7 +883,7 @@ impl JellyfinClient {
           .and_then(Self::server_info_from_openapi)?
       }
       MediaServerProvider::Emby => {
-        let configuration = self.emby_openapi_configuration(&server_url, None)?;
+        let configuration = self.public_emby_openapi_configuration(&server_url)?;
 
         emby_api::apis::system_service_api::get_system_info_public(&configuration)
           .await
@@ -1036,14 +1132,16 @@ impl JellyfinClient {
     let url = format!("{}{}", server_url, path);
 
     let response = self
-      .http
+      .authenticated_http
       .get(&url)
       .header(header::USER_AGENT, self.request_user_agent())
       .header("X-Emby-Authorization", self.auth_header(Some(&token)))
       .send()
-      .await?;
+      .await
+      .map_err(|error| Self::request_transport_error("Authenticated API request", error))?;
 
     let status = response.status();
+    Self::reject_authenticated_redirect(status)?;
     if !status.is_success() {
       let body = response.text().await.unwrap_or_default();
       return Err(JellyfinError::HttpError(format!(
@@ -1065,15 +1163,17 @@ impl JellyfinClient {
     let url = format!("{}{}", server_url, path);
 
     let response = self
-      .http
+      .authenticated_http
       .get(&url)
       .header(header::USER_AGENT, self.request_user_agent())
       .header("X-Emby-Authorization", self.auth_header(Some(&token)))
       .query(query)
       .send()
-      .await?;
+      .await
+      .map_err(|error| Self::request_transport_error("Authenticated API request", error))?;
 
     let status = response.status();
+    Self::reject_authenticated_redirect(status)?;
     if !status.is_success() {
       let body = response.text().await.unwrap_or_default();
       return Err(JellyfinError::HttpError(format!(
@@ -1095,14 +1195,16 @@ impl JellyfinClient {
     let url = format!("{}{}", server_url, path);
 
     let response = self
-      .http
+      .authenticated_http
       .request(method.clone(), &url)
       .header(header::USER_AGENT, self.request_user_agent())
       .header("X-Emby-Authorization", self.auth_header(Some(&token)))
       .send()
-      .await?;
+      .await
+      .map_err(|error| Self::request_transport_error("Authenticated API request", error))?;
 
     let status = response.status();
+    Self::reject_authenticated_redirect(status)?;
     if !status.is_success() {
       let body = response.text().await.unwrap_or_default();
       return Err(JellyfinError::HttpError(format!(
@@ -1125,16 +1227,18 @@ impl JellyfinClient {
     let url = format!("{}{}", server_url, path);
 
     let response = self
-      .http
+      .authenticated_http
       .post(&url)
       .header(header::USER_AGENT, self.request_user_agent())
       .header(header::CONTENT_TYPE, "application/json")
       .header("X-Emby-Authorization", self.auth_header(Some(&token)))
       .json(body)
       .send()
-      .await?;
+      .await
+      .map_err(|error| Self::request_transport_error("Authenticated API request", error))?;
 
     let status = response.status();
+    Self::reject_authenticated_redirect(status)?;
     if !status.is_success() {
       let body = response.text().await.unwrap_or_default();
       return Err(JellyfinError::HttpError(format!(
@@ -1159,16 +1263,18 @@ impl JellyfinClient {
     log::debug!("POST {} with body: {:?}", path, body);
 
     let response = self
-      .http
+      .authenticated_http
       .post(&url)
       .header(header::USER_AGENT, self.request_user_agent())
       .header(header::CONTENT_TYPE, "application/json")
       .header("X-Emby-Authorization", self.auth_header(Some(&token)))
       .json(body)
       .send()
-      .await?;
+      .await
+      .map_err(|error| Self::request_transport_error("Authenticated API request", error))?;
 
     let status = response.status();
+    Self::reject_authenticated_redirect(status)?;
     if !status.is_success() {
       let body = response.text().await.unwrap_or_default();
       log::error!("POST {} failed with status {}: {}", path, status, body);
@@ -1451,18 +1557,20 @@ impl JellyfinClient {
     let url = format!("{}/Sessions/Capabilities/Full", server_url);
 
     let response = self
-      .http
+      .authenticated_http
       .post(&url)
       .header(header::USER_AGENT, self.request_user_agent())
       .header(reqwest::header::CONTENT_TYPE, "application/json")
       .header("X-Emby-Authorization", self.auth_header(Some(&token)))
       .json(&capabilities)
       .send()
-      .await?;
+      .await
+      .map_err(|error| Self::request_transport_error("Authenticated API request", error))?;
 
-    log::info!("Capabilities POST response status: {}", response.status());
-    if !response.status().is_success() {
-      let status = response.status();
+    let status = response.status();
+    Self::reject_authenticated_redirect(status)?;
+    log::info!("Capabilities POST response status: {status}");
+    if !status.is_success() {
       let text = response.text().await.unwrap_or_default();
       log::error!("Capabilities POST failed: HTTP {} - {}", status, text);
     }
@@ -4506,6 +4614,13 @@ mod tests {
 
   type RequestLog = Arc<parking_lot::Mutex<Vec<String>>>;
 
+  struct OffOriginRedirectProbe {
+    server_url: String,
+    target_url: String,
+    origin_task: tokio::task::JoinHandle<String>,
+    target_task: tokio::task::JoinHandle<bool>,
+  }
+
   fn assert_chrome_jellypilot_user_agent(request: &str) {
     let request = request.to_ascii_lowercase();
     assert!(request.contains("user-agent: mozilla/5.0"));
@@ -4519,6 +4634,101 @@ mod tests {
     let image_id = image_id.expect("image id should be present");
     let payload = decode_image_id(image_id).expect("image id should decode");
     assert_eq!(payload.remote_url, expected_url);
+  }
+
+  async fn serve_off_origin_redirect() -> OffOriginRedirectProbe {
+    let redirect_target = TcpListener::bind("127.0.0.1:0")
+      .await
+      .expect("redirect target should bind");
+    let target_addr = redirect_target
+      .local_addr()
+      .expect("redirect target should have address");
+    let target_url = format!("http://{target_addr}/capture");
+    let (redirect_sent_tx, redirect_sent_rx) = tokio::sync::oneshot::channel();
+    let target_task = tokio::spawn(async move {
+      let _ = redirect_sent_rx.await;
+      tokio::time::timeout(
+        std::time::Duration::from_millis(250),
+        redirect_target.accept(),
+      )
+      .await
+      .ok()
+      .and_then(Result::ok)
+      .is_some()
+    });
+
+    let redirect_origin = TcpListener::bind("127.0.0.1:0")
+      .await
+      .expect("redirect origin should bind");
+    let origin_addr = redirect_origin
+      .local_addr()
+      .expect("redirect origin should have address");
+    let origin_task = tokio::spawn(async move {
+      let (mut stream, _) = redirect_origin
+        .accept()
+        .await
+        .expect("redirect origin should accept");
+      let mut buffer = [0_u8; 4096];
+      let bytes_read = stream
+        .read(&mut buffer)
+        .await
+        .expect("redirect origin should read request");
+      let request = String::from_utf8_lossy(&buffer[..bytes_read]).into_owned();
+      let response_body = r#"{"Message":"redirect"}"#;
+      let response = format!(
+        "HTTP/1.1 302 Found\r\nlocation: http://{target_addr}/capture\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{}",
+        response_body.len(),
+        response_body
+      );
+      stream
+        .write_all(response.as_bytes())
+        .await
+        .expect("redirect origin should write response");
+      let _ = redirect_sent_tx.send(());
+      request
+    });
+
+    OffOriginRedirectProbe {
+      server_url: format!("http://{origin_addr}"),
+      target_url,
+      origin_task,
+      target_task,
+    }
+  }
+
+  async fn assert_off_origin_redirect_blocked(
+    probe: OffOriginRedirectProbe,
+    error: JellyfinError,
+    expected_error: &str,
+    expected_token: &str,
+  ) {
+    let origin_request = probe
+      .origin_task
+      .await
+      .expect("redirect origin task should finish");
+    let target_was_contacted = probe
+      .target_task
+      .await
+      .expect("redirect target task should finish");
+    let error_message = error.to_string();
+
+    assert!(
+      origin_request
+        .to_ascii_lowercase()
+        .contains("x-emby-authorization: mediabrowser "),
+      "the validated first hop should carry media-server authorization"
+    );
+    assert!(
+      origin_request.contains(expected_token),
+      "the validated first hop should carry the active token"
+    );
+    assert!(
+      !target_was_contacted,
+      "authenticated API transport must not follow redirects"
+    );
+    assert_eq!(error_message, expected_error);
+    assert!(!error_message.contains(expected_token));
+    assert!(!error_message.contains(&probe.target_url));
   }
 
   async fn serve_once(status: &'static str, response_body: &'static str) -> String {
@@ -4537,6 +4747,54 @@ mod tests {
       .map(|(status, body)| (status.to_string(), body.to_string()))
       .collect();
     serve_owned_responses_with_requests(responses).await
+  }
+
+  async fn serve_same_origin_discovery_redirect(
+    response_body: &'static str,
+  ) -> (String, RequestLog) {
+    let listener = TcpListener::bind("127.0.0.1:0")
+      .await
+      .expect("discovery redirect server should bind");
+    let addr = listener
+      .local_addr()
+      .expect("discovery redirect server should have address");
+    let requests = Arc::new(parking_lot::Mutex::new(Vec::new()));
+    let captured_requests = Arc::clone(&requests);
+
+    tokio::spawn(async move {
+      for response_index in 0..2 {
+        let (mut stream, _) = listener
+          .accept()
+          .await
+          .expect("discovery redirect server should accept");
+        let mut buffer = [0_u8; 4096];
+        let bytes_read = stream
+          .read(&mut buffer)
+          .await
+          .expect("discovery redirect server should read request");
+        captured_requests
+          .lock()
+          .push(String::from_utf8_lossy(&buffer[..bytes_read]).into_owned());
+
+        let response = if response_index == 0 {
+          format!(
+            "HTTP/1.1 302 Found\r\nlocation: http://{addr}/canonical-system-info\r\ncontent-length: 0\r\nconnection: close\r\n\r\n"
+          )
+        } else {
+          format!(
+            "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{}",
+            response_body.len(),
+            response_body
+          )
+        };
+        stream
+          .write_all(response.as_bytes())
+          .await
+          .expect("discovery redirect server should write response");
+      }
+    });
+
+    (format!("http://{addr}"), requests)
   }
 
   async fn serve_owned_responses_with_requests(
@@ -4842,6 +5100,139 @@ mod tests {
       !target_was_contacted,
       "image transport must not follow redirects or expose authorization"
     );
+  }
+
+  #[tokio::test]
+  async fn raw_authenticated_request_rejects_redirect_without_contacting_target() {
+    let probe = serve_off_origin_redirect().await;
+    let server_url = probe.server_url.clone();
+    let token = "raw-redirect-test-token";
+    let client = JellyfinClient::new();
+    client.login().adopt_validated_session(&SavedSession {
+      provider: MediaServerProvider::Jellyfin,
+      server_url,
+      access_token: token.to_string(),
+      user_id: "user-1".to_string(),
+      user_name: "Ada".to_string(),
+      server_name: None,
+      device_id: None,
+    });
+
+    let error = client
+      .get::<serde_json::Value>("/redirect")
+      .await
+      .expect_err("authenticated raw request should reject redirect");
+
+    assert_off_origin_redirect_blocked(
+      probe,
+      error,
+      "HTTP error: Authenticated API request rejected an HTTP redirect",
+      token,
+    )
+    .await;
+  }
+
+  #[tokio::test]
+  async fn jellyfin_sdk_authenticated_request_rejects_redirect_without_contacting_target() {
+    let probe = serve_off_origin_redirect().await;
+    let server_url = probe.server_url.clone();
+    let token = "jellyfin-sdk-redirect-test-token";
+    let client = JellyfinClient::new();
+
+    let error = client
+      .login()
+      .restore_session(&SavedSession {
+        provider: MediaServerProvider::Jellyfin,
+        server_url,
+        access_token: token.to_string(),
+        user_id: "user-1".to_string(),
+        user_name: "Ada".to_string(),
+        server_name: None,
+        device_id: None,
+      })
+      .await
+      .expect_err("Jellyfin SDK request should reject redirect");
+
+    assert_off_origin_redirect_blocked(
+      probe,
+      error,
+      "HTTP error: Saved session validation rejected an HTTP redirect",
+      token,
+    )
+    .await;
+  }
+
+  #[tokio::test]
+  async fn emby_sdk_authenticated_request_rejects_redirect_without_contacting_target() {
+    let probe = serve_off_origin_redirect().await;
+    let server_url = probe.server_url.clone();
+    let token = "emby-sdk-redirect-test-token";
+    let client = JellyfinClient::new();
+
+    let error = client
+      .login()
+      .restore_session(&SavedSession {
+        provider: MediaServerProvider::Emby,
+        server_url,
+        access_token: token.to_string(),
+        user_id: "user-1".to_string(),
+        user_name: "Ada".to_string(),
+        server_name: None,
+        device_id: None,
+      })
+      .await
+      .expect_err("Emby SDK request should reject redirect");
+
+    assert_off_origin_redirect_blocked(
+      probe,
+      error,
+      "HTTP error: Saved session validation rejected an HTTP redirect",
+      token,
+    )
+    .await;
+  }
+
+  #[tokio::test]
+  async fn public_discovery_follows_same_origin_redirect() {
+    let (server_url, requests) = serve_same_origin_discovery_redirect(
+      r#"{"ServerName":"Jellyfin Home","Version":"10.11.0","Id":"server-1"}"#,
+    )
+    .await;
+    let client = JellyfinClient::new();
+    let configuration = client
+      .public_openapi_configuration(&server_url)
+      .expect("public discovery client should build");
+
+    let info = jellyfin_api::apis::system_api::get_public_system_info(&configuration)
+      .await
+      .expect("same-origin discovery redirect should succeed");
+
+    assert_eq!(info.server_name.flatten().as_deref(), Some("Jellyfin Home"));
+    let captured = requests.lock();
+    assert_eq!(captured.len(), 2);
+    assert!(captured[0].starts_with("GET /System/Info/Public "));
+    assert!(captured[1].starts_with("GET /canonical-system-info "));
+  }
+
+  #[test]
+  fn public_discovery_redirect_requires_same_origin_without_credentials() {
+    let initial =
+      reqwest::Url::parse("https://media.example.com/base").expect("initial URL should parse");
+
+    assert!(JellyfinClient::is_safe_discovery_redirect(
+      &initial,
+      &reqwest::Url::parse("https://media.example.com:443/canonical")
+        .expect("same-origin URL should parse")
+    ));
+    for unsafe_url in [
+      "http://media.example.com/canonical",
+      "https://media.example.com:444/canonical",
+      "https://other.example.com/canonical",
+      "https://user@media.example.com/canonical",
+    ] {
+      let next = reqwest::Url::parse(unsafe_url).expect("unsafe test URL should parse");
+      assert!(!JellyfinClient::is_safe_discovery_redirect(&initial, &next));
+    }
   }
 
   #[test]

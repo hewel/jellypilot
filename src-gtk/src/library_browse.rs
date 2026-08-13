@@ -5,27 +5,18 @@ use jellypilot_core::{
   LibraryBrowseLoadToken, LibraryBrowseMode, LibraryBrowsePageOutcome, LibraryBrowseStatus,
 };
 
-/// One item payload owned by the native Library Browser adapter.
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct LibraryItem {
-  /// Stable media-server item identifier.
-  pub id: String,
-  /// User-visible media title.
-  pub title: String,
-}
-
 /// One display position and its payload, if the corresponding page is loaded.
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub struct LibraryItemSlot {
+pub struct LibraryItemSlot<T> {
   /// Stable position in the current result ordering.
   pub display_index: u32,
   /// Item payload, or `None` while the native transport is loading its page.
-  pub item: Option<LibraryItem>,
+  pub item: Option<T>,
 }
 
 /// Inputs accepted by the native Library Browser adapter.
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub enum LibraryBrowseInput {
+pub enum LibraryBrowseInput<T> {
   /// Configures the complete identity of the active browse query.
   Configure { source_id: String },
   /// Requests the next sequential page when one is available.
@@ -41,7 +32,7 @@ pub enum LibraryBrowseInput {
     limit: u32,
     total_record_count: u32,
     has_more: bool,
-    items: Vec<LibraryItem>,
+    items: Vec<T>,
   },
   /// Returns one failed page load to the portable reducer.
   PageFailed {
@@ -68,7 +59,7 @@ pub enum LibraryBrowseEffect {
 
 /// GTK-friendly projection of the portable Library Browser state.
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub enum LibraryBrowseView {
+pub enum LibraryBrowseView<T> {
   /// No source has been configured.
   Inactive,
   /// Page zero is currently loading.
@@ -83,7 +74,7 @@ pub enum LibraryBrowseView {
   },
   /// Loaded items and continuation metadata.
   Ready {
-    visible_items: Vec<LibraryItemSlot>,
+    visible_items: Vec<LibraryItemSlot<T>>,
     mode: LibraryBrowseMode,
     total_record_count: u32,
     is_fetching_more: bool,
@@ -94,11 +85,21 @@ pub enum LibraryBrowseView {
 }
 
 /// Native adapter around the framework-independent browse reducer.
-#[derive(Clone, Debug, Default)]
-pub struct NativeLibraryBrowse {
+#[derive(Clone, Debug)]
+pub struct NativeLibraryBrowse<T> {
   core: LibraryBrowseCore,
-  pages: BTreeMap<u32, Vec<LibraryItem>>,
+  pages: BTreeMap<u32, Vec<T>>,
   pending: BTreeMap<LibraryBrowseLoadToken, PendingPage>,
+}
+
+impl<T> Default for NativeLibraryBrowse<T> {
+  fn default() -> Self {
+    Self {
+      core: LibraryBrowseCore::default(),
+      pages: BTreeMap::new(),
+      pending: BTreeMap::new(),
+    }
+  }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -107,11 +108,11 @@ struct PendingPage {
   limit: u32,
 }
 
-impl NativeLibraryBrowse {
+impl<T: Clone> NativeLibraryBrowse<T> {
   /// Applies an input and returns ordered effects for the GTK shell.
   pub fn handle(
     &mut self,
-    input: LibraryBrowseInput,
+    input: LibraryBrowseInput<T>,
   ) -> Result<Vec<LibraryBrowseEffect>, LibraryBrowseCoreError> {
     let action = match input {
       LibraryBrowseInput::Configure { source_id } => LibraryBrowseAction::Configure {
@@ -180,7 +181,7 @@ impl NativeLibraryBrowse {
 
   /// Returns a GTK-friendly immutable projection of the current state.
   #[must_use]
-  pub fn view(&self) -> LibraryBrowseView {
+  pub fn view(&self) -> LibraryBrowseView<T> {
     let snapshot = self.core.snapshot();
     match snapshot.status {
       LibraryBrowseStatus::Inactive => LibraryBrowseView::Inactive,
@@ -226,6 +227,16 @@ impl NativeLibraryBrowse {
     }
   }
 
+  #[cfg(test)]
+  pub(crate) fn retained_page_count(&self) -> usize {
+    self.pages.len()
+  }
+
+  #[cfg(test)]
+  pub(crate) fn retained_item_count(&self) -> usize {
+    self.pages.values().map(Vec::len).sum()
+  }
+
   fn apply_commands(&mut self, commands: Vec<LibraryBrowseCommand>) -> Vec<LibraryBrowseEffect> {
     commands
       .into_iter()
@@ -265,6 +276,12 @@ impl NativeLibraryBrowse {
 mod tests {
   use super::*;
 
+  #[derive(Clone, Debug, Eq, PartialEq)]
+  struct LibraryItem {
+    id: String,
+    title: String,
+  }
+
   fn requested_page(effects: &[LibraryBrowseEffect]) -> (LibraryBrowseLoadToken, u32, u32) {
     effects
       .iter()
@@ -290,7 +307,7 @@ mod tests {
 
   #[test]
   fn configure_requests_bootstrap_page_through_portable_core() {
-    let mut browse = NativeLibraryBrowse::default();
+    let mut browse = NativeLibraryBrowse::<LibraryItem>::default();
 
     let effects = browse
       .handle(LibraryBrowseInput::Configure {
@@ -308,7 +325,7 @@ mod tests {
 
   #[test]
   fn loaded_page_is_projected_with_caller_owned_payloads() {
-    let mut browse = NativeLibraryBrowse::default();
+    let mut browse = NativeLibraryBrowse::<LibraryItem>::default();
     let effects = browse
       .handle(LibraryBrowseInput::Configure {
         source_id: "gtk-walking-slice".to_owned(),
@@ -452,7 +469,7 @@ mod tests {
 
   #[test]
   fn failed_bootstrap_can_be_retried() {
-    let mut browse = NativeLibraryBrowse::default();
+    let mut browse = NativeLibraryBrowse::<LibraryItem>::default();
     let bootstrap = browse
       .handle(LibraryBrowseInput::Configure {
         source_id: "gtk-walking-slice".to_owned(),

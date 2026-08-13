@@ -1,11 +1,20 @@
 //! Native GTK frontend for JellyPilot.
 //!
-//! GTK and Relm4 stay in [`shell`]. The [`library_browse`] module is a
-//! framework-independent adapter around `jellypilot-core`, so its behavior can
-//! be tested without initializing GTK.
+//! Relm4 widget ownership stays in [`shell`]. Browse, request-correlation, and
+//! playback policy are kept outside the widget tree so they can be tested
+//! without initializing a display; authenticated artwork becomes a GTK
+//! texture only at the shell's main-thread boundary.
 
 #[cfg(target_os = "linux")]
+mod artwork;
+#[cfg(target_os = "linux")]
+mod browse_model;
+#[cfg(target_os = "linux")]
 pub mod library_browse;
+#[cfg(target_os = "linux")]
+pub mod playback;
+#[cfg(target_os = "linux")]
+mod request_gate;
 #[cfg(target_os = "linux")]
 mod shell;
 

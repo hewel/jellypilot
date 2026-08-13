@@ -198,6 +198,8 @@ sudo pacman -U jellypilot-<version>-1-x86_64.pkg.tar.zst
 - [Rust](https://rustup.rs/) 1.85 or newer, installed with `rustup`
 - The `wasm32-unknown-unknown` Rust target
 - `wasm-pack` 0.15.0 exactly
+- Linux only: GTK 4 development files and `pkg-config` to compile the native GTK preview
+- Linux native playback: [MPV](https://mpv.io/) available on `PATH`
 
 </details>
 
@@ -268,10 +270,17 @@ jellypilot/
 
 ### Commands
 
+The Linux GTK preview supports password sign-in, Home and library browsing, search, details and
+seasons, authenticated artwork, and external MPV playback. Tauri remains the production app while
+Saved Profiles, Quick Connect, embedded playback, packaging, and live-server acceptance remain
+explicit migration gates.
+
 | Task                     | Command                      |
 | :----------------------- | :--------------------------- |
 | **Frontend Dev**         | `bun run dev`                |
 | **Tauri Dev**            | `bun tauri dev`              |
+| **GTK Dev (Linux)**      | `bun run gtk:run`            |
+| **GTK Startup Smoke**    | `bun run gtk:smoke`          |
 | **Build Prod**           | `bun tauri build`            |
 | **Build WASM (dev)**     | `bun run wasm:build:dev`     |
 | **Build WASM (release)** | `bun run wasm:build:release` |
