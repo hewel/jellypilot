@@ -10,7 +10,7 @@ use jellypilot_media_server::{
   PlaybackProgressInfo, PlaybackStartInfo, PlaybackStopInfo, VideoItemDetail, VideoLibraryItem,
 };
 use jellypilot_mpv::{
-  collect_player_state, find_mpv, has_mpv_option, MpvClient, MpvEvent, PlayerState,
+  collect_player_state_sample, find_mpv, has_mpv_option, MpvClient, MpvEvent, PlayerState,
 };
 
 const DIRECT_PLAYBACK_CACHE_OPTIONS: [(&str, &str); 8] = [
@@ -24,6 +24,7 @@ const DIRECT_PLAYBACK_CACHE_OPTIONS: [(&str, &str); 8] = [
   ("cache-pause-wait", "cache-pause-wait=3"),
 ];
 const MEDIA_TICKS_PER_SECOND: i64 = 10_000_000;
+const MPV_FILE_LOAD_TIMEOUT: Duration = Duration::from_secs(15);
 const PASSIVE_PROGRESS_REPORT_INTERVAL: Duration = Duration::from_secs(10);
 const PLAYBACK_REPORT_TIMEOUT: Duration = Duration::from_secs(2);
 
@@ -136,7 +137,7 @@ impl fmt::Display for PlaybackWarning {
 pub enum PlaybackEndReason {
   /// MPV emitted an end-of-file event for the current item.
   EndOfFile,
-  /// MPV could not continue playing the current item.
+  /// MPV could not continue playing the current item or was stopped externally.
   Error,
   /// The MPV IPC connection disappeared while an item was active.
   Disconnected,
@@ -239,7 +240,9 @@ pub struct PlaybackController {
   mpv: MpvClient,
   configured_mpv_args: Vec<String>,
   active: Option<ActivePlayback>,
+  last_transport: PlayerState,
   last_progress_report_at: Option<Instant>,
+  load_event_boundary: LoadEventBoundary,
 }
 
 impl PlaybackController {
@@ -281,7 +284,9 @@ impl PlaybackController {
       mpv,
       configured_mpv_args,
       active: None,
+      last_transport: PlayerState::default(),
       last_progress_report_at: None,
+      load_event_boundary: LoadEventBoundary::Settled,
     }
   }
 
@@ -320,7 +325,7 @@ impl PlaybackController {
   /// Shell refresh loops should call [`Self::refresh`] so natural completion,
   /// disconnection, progress reporting, and warnings are reconciled.
   pub async fn snapshot(&self) -> PlaybackSnapshot {
-    self.snapshot_with_transport(collect_player_state(&self.mpv).await)
+    self.snapshot_with_transport(self.collect_transport().await.unwrap_or_default())
   }
 
   /// Reconcile the active item with MPV and report periodic progress.
@@ -331,6 +336,7 @@ impl PlaybackController {
   pub async fn refresh(&mut self) -> PlaybackRefreshOutcome {
     if self.active.is_none() {
       self.last_progress_report_at = None;
+      self.load_event_boundary = LoadEventBoundary::Settled;
       return PlaybackRefreshOutcome {
         snapshot: self.snapshot_with_transport(PlayerState::default()),
         state: PlaybackRefreshState::Idle,
@@ -342,12 +348,11 @@ impl PlaybackController {
       return self.finish_ended_playback(reason).await;
     }
 
-    let transport = collect_player_state(&self.mpv).await;
-    if !transport.connected {
+    let Some(transport) = self.collect_transport().await else {
       return self
         .finish_ended_playback(PlaybackEndReason::Disconnected)
         .await;
-    }
+    };
 
     self.record_transport(&transport);
     let warnings = if passive_progress_report_due(
@@ -372,11 +377,16 @@ impl PlaybackController {
   /// Gracefully stop/report any active item and always clean the MPV runtime.
   pub async fn shutdown(&mut self) -> PlaybackShutdownOutcome {
     if self.active.is_some() {
-      let transport = collect_player_state(&self.mpv).await;
+      let transport = self
+        .collect_transport()
+        .await
+        .unwrap_or_else(|| self.last_transport.clone());
       self.record_transport(&transport);
     }
-    let active = self.active.take();
+    let active = self.active.clone();
     self.last_progress_report_at = None;
+    self.load_event_boundary = LoadEventBoundary::Settled;
+    self.last_transport = PlayerState::default();
     let _ = self.mpv.quit().await;
     let (stopped_active_playback, warnings) = match active {
       Some(active) => (
@@ -388,6 +398,7 @@ impl PlaybackController {
       ),
       None => (false, Vec::new()),
     };
+    self.active = None;
 
     PlaybackShutdownOutcome {
       stopped_active_playback,
@@ -412,7 +423,10 @@ impl PlaybackController {
       .await
       .map_err(|_| PlaybackError::MpvControlFailed)?;
 
-    let mut transport = collect_player_state(&self.mpv).await;
+    let mut transport = self
+      .collect_transport()
+      .await
+      .unwrap_or_else(|| self.last_transport.clone());
     transport.paused = paused;
     self.record_transport(&transport);
     let reporting = self.report_progress_now(&transport).await;
@@ -437,7 +451,10 @@ impl PlaybackController {
       .await
       .map_err(|_| PlaybackError::MpvControlFailed)?;
 
-    let mut transport = collect_player_state(&self.mpv).await;
+    let mut transport = self
+      .collect_transport()
+      .await
+      .unwrap_or_else(|| self.last_transport.clone());
     transport.time_pos = position_seconds;
     self.record_transport(&transport);
     let reporting = self.report_progress_now(&transport).await;
@@ -459,7 +476,10 @@ impl PlaybackController {
       .await
       .map_err(|_| PlaybackError::MpvControlFailed)?;
 
-    let mut transport = collect_player_state(&self.mpv).await;
+    let mut transport = self
+      .collect_transport()
+      .await
+      .unwrap_or_else(|| self.last_transport.clone());
     transport.volume = volume;
     self.record_transport(&transport);
     let reporting = self.report_progress_now(&transport).await;
@@ -479,7 +499,10 @@ impl PlaybackController {
       .await
       .map_err(|_| PlaybackError::MpvControlFailed)?;
 
-    let mut transport = collect_player_state(&self.mpv).await;
+    let mut transport = self
+      .collect_transport()
+      .await
+      .unwrap_or_else(|| self.last_transport.clone());
     transport.muted = muted;
     self.record_transport(&transport);
     let reporting = self.report_progress_now(&transport).await;
@@ -493,18 +516,23 @@ impl PlaybackController {
   /// Returns [`PlaybackError::NoActivePlayback`] when no item is current.
   pub async fn stop(&mut self) -> Result<PlaybackStopOutcome, PlaybackError> {
     self.require_active()?;
-    let transport = collect_player_state(&self.mpv).await;
+    let transport = self
+      .collect_transport()
+      .await
+      .unwrap_or_else(|| self.last_transport.clone());
     self.record_transport(&transport);
-    let active = self.active.take().ok_or(PlaybackError::NoActivePlayback)?;
+    let active = self.active.clone().ok_or(PlaybackError::NoActivePlayback)?;
     self.last_progress_report_at = None;
+    self.load_event_boundary = LoadEventBoundary::Settled;
+    self.last_transport = PlayerState::default();
     let _ = self.mpv.quit().await;
 
-    Ok(PlaybackStopOutcome {
-      warnings: warning_for_reporting(
-        self.report_stop(&active).await,
-        PlaybackWarning::PlaybackStopNotReported,
-      ),
-    })
+    let warnings = warning_for_reporting(
+      self.report_stop(&active).await,
+      PlaybackWarning::PlaybackStopNotReported,
+    );
+    self.active = None;
+    Ok(PlaybackStopOutcome { warnings })
   }
 
   async fn play(
@@ -513,8 +541,13 @@ impl PlaybackController {
   ) -> Result<PlaybackStartOutcome, PlaybackError> {
     let resolved = self.resolve(request).await?;
     let mut warnings = self.settle_disconnected_previous().await;
+    // Keep the previous item owned by the controller until the replacement is
+    // fully loaded. This makes cancellation safe: shutdown can still report and
+    // clean the old item if the shell drops an in-flight start future.
+    let previous = self.active.clone();
+    self.last_progress_report_at = None;
     if !self.mpv.is_connected() && self.mpv.start().await.is_err() {
-      self.mpv.stop().await;
+      self.cleanup_failed_load(previous.as_ref()).await;
       return Err(PlaybackError::MpvStartFailed);
     }
 
@@ -522,19 +555,11 @@ impl PlaybackController {
       &resolved.active.now_playing.play_method,
       &self.configured_mpv_args,
     );
-    self
-      .mpv
-      .loadfile_with_options(
-        resolved.stream_url.as_str(),
-        Some(resolved.active.now_playing.start_position_seconds),
-        resolved.mpv_audio_index,
-        resolved.mpv_subtitle_index,
-        file_options,
-      )
-      .await
-      .map_err(|_| PlaybackError::MpvLoadFailed)?;
+    if !self.load_resolved(&resolved, file_options).await {
+      self.cleanup_failed_load(previous.as_ref()).await;
+      return Err(PlaybackError::MpvLoadFailed);
+    }
 
-    let previous = self.active.take();
     if let Some(previous) = previous.as_ref() {
       if self.report_stop(previous).await == ReportingStatus::Failed {
         warnings.push(PlaybackWarning::PreviousPlaybackStopNotReported);
@@ -560,7 +585,19 @@ impl PlaybackController {
       }
     }
 
-    let mut transport = collect_player_state(&self.mpv).await;
+    let mut baseline = self.last_transport.clone();
+    baseline.connected = true;
+    baseline.paused = false;
+    baseline.time_pos = active.now_playing.start_position_seconds;
+    baseline.duration = active.now_playing.runtime_seconds.unwrap_or_default();
+    let sample = collect_player_state_sample(&self.mpv).await;
+    let mut transport = if sample.is_connected() {
+      sample.merge(&baseline)
+    } else {
+      baseline
+    };
+    // The load boundary is authoritative for the new item's initial transport.
+    // A late property response can still describe the replaced file.
     transport.connected = true;
     transport.paused = false;
     transport.time_pos = active.now_playing.start_position_seconds;
@@ -690,14 +727,77 @@ impl PlaybackController {
     };
     if transport.connected && checked_seconds_to_ticks(transport.time_pos).is_ok() {
       active.last_known_position_seconds = transport.time_pos;
+      self.last_transport = transport.clone();
     }
   }
 
-  fn take_terminal_end_reason(&self) -> Option<PlaybackEndReason> {
+  async fn collect_transport(&self) -> Option<PlayerState> {
+    let sample = collect_player_state_sample(&self.mpv).await;
+    if !sample.is_connected() {
+      return None;
+    }
+    Some(sample.merge(&self.last_transport))
+  }
+
+  async fn load_resolved(
+    &mut self,
+    resolved: &ResolvedPlayback,
+    file_options: Vec<String>,
+  ) -> bool {
+    let Some(events) = self.mpv.events() else {
+      self.load_event_boundary = LoadEventBoundary::Settled;
+      return false;
+    };
+    while events.try_recv().is_ok() {}
+    self.load_event_boundary = LoadEventBoundary::AwaitingStart;
+
+    if self
+      .mpv
+      .loadfile_with_options(
+        resolved.stream_url.as_str(),
+        Some(resolved.active.now_playing.start_position_seconds),
+        resolved.mpv_audio_index,
+        resolved.mpv_subtitle_index,
+        file_options,
+      )
+      .await
+      .is_err()
+    {
+      return false;
+    }
+
+    load_completed_with_timeout(MPV_FILE_LOAD_TIMEOUT, async {
+      loop {
+        let Ok(event) = events.recv().await else {
+          return false;
+        };
+        if self.load_event_boundary.observe(&event).is_some() {
+          return false;
+        }
+        if self.load_event_boundary == LoadEventBoundary::Settled {
+          return true;
+        }
+      }
+    })
+    .await
+  }
+
+  async fn cleanup_failed_load(&mut self, previous: Option<&ActivePlayback>) {
+    self.last_progress_report_at = None;
+    self.load_event_boundary = LoadEventBoundary::Settled;
+    self.last_transport = PlayerState::default();
+    self.mpv.stop().await;
+    if let Some(previous) = previous {
+      let _ = self.report_stop(previous).await;
+    }
+    self.active = None;
+  }
+
+  fn take_terminal_end_reason(&mut self) -> Option<PlaybackEndReason> {
     let events = self.mpv.events()?;
     let mut reason = None;
     while let Ok(event) = events.try_recv() {
-      reason = playback_end_reason(&event).or(reason);
+      reason = self.load_event_boundary.observe(&event).or(reason);
     }
     reason
   }
@@ -708,28 +808,33 @@ impl PlaybackController {
     }
 
     if self.take_terminal_end_reason().is_none() {
-      let transport = collect_player_state(&self.mpv).await;
-      if transport.connected {
+      if let Some(transport) = self.collect_transport().await {
         self.record_transport(&transport);
         return Vec::new();
       }
     }
 
-    let active = self.active.take();
+    let active = self.active.clone();
     self.last_progress_report_at = None;
+    self.load_event_boundary = LoadEventBoundary::Settled;
+    self.last_transport = PlayerState::default();
     let _ = self.mpv.quit().await;
-    match active {
+    let warnings = match active {
       Some(active) => warning_for_reporting(
         self.report_stop(&active).await,
         PlaybackWarning::PreviousPlaybackStopNotReported,
       ),
       None => Vec::new(),
-    }
+    };
+    self.active = None;
+    warnings
   }
 
   async fn finish_ended_playback(&mut self, reason: PlaybackEndReason) -> PlaybackRefreshOutcome {
-    let active = self.active.take();
+    let active = self.active.clone();
     self.last_progress_report_at = None;
+    self.load_event_boundary = LoadEventBoundary::Settled;
+    self.last_transport = PlayerState::default();
     let _ = self.mpv.quit().await;
     let warnings = match active {
       Some(active) => warning_for_reporting(
@@ -738,6 +843,7 @@ impl PlaybackController {
       ),
       None => Vec::new(),
     };
+    self.active = None;
 
     PlaybackRefreshOutcome {
       snapshot: self.snapshot_with_transport(PlayerState::default()),
@@ -848,6 +954,47 @@ struct ActivePlayback {
   audio_stream_index: Option<i32>,
   subtitle_stream_index: Option<i32>,
   last_known_position_seconds: f64,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum LoadEventBoundary {
+  Settled,
+  AwaitingStart,
+  Loading,
+}
+
+impl LoadEventBoundary {
+  fn observe(&mut self, event: &MpvEvent) -> Option<PlaybackEndReason> {
+    match *self {
+      Self::Settled => playback_end_reason(event),
+      Self::AwaitingStart => match event.event.as_str() {
+        "start-file" => {
+          *self = Self::Loading;
+          None
+        }
+        "file-loaded" => {
+          *self = Self::Settled;
+          None
+        }
+        _ => None,
+      },
+      Self::Loading => match event.event.as_str() {
+        "file-loaded" => {
+          *self = Self::Settled;
+          None
+        }
+        "end-file" if event.reason.as_deref() == Some("redirect") => {
+          *self = Self::AwaitingStart;
+          None
+        }
+        "end-file" => {
+          *self = Self::Settled;
+          playback_end_reason(event)
+        }
+        _ => None,
+      },
+    }
+  }
 }
 
 struct ResolvedPlayback {
@@ -992,6 +1139,15 @@ async fn reporting_status_with_timeout<E>(
   )
 }
 
+async fn load_completed_with_timeout(
+  timeout: Duration,
+  wait_for_load: impl std::future::Future<Output = bool>,
+) -> bool {
+  relm4::tokio::time::timeout(timeout, wait_for_load)
+    .await
+    .unwrap_or(false)
+}
+
 fn warning_for_reporting(
   status: ReportingStatus,
   warning: PlaybackWarning,
@@ -1018,8 +1174,8 @@ fn playback_end_reason(event: &MpvEvent) -> Option<PlaybackEndReason> {
   }
   match event.reason.as_deref() {
     Some("eof") => Some(PlaybackEndReason::EndOfFile),
-    Some("error") => Some(PlaybackEndReason::Error),
-    _ => None,
+    Some("redirect") => None,
+    _ => Some(PlaybackEndReason::Error),
   }
 }
 
@@ -1353,15 +1509,19 @@ mod tests {
     ));
   }
 
-  fn mpv_event(reason: &str) -> MpvEvent {
+  fn lifecycle_event(event: &str, reason: Option<&str>) -> MpvEvent {
     MpvEvent {
-      event: "end-file".to_owned(),
+      event: event.to_owned(),
       id: None,
       name: None,
       data: None,
-      reason: Some(reason.to_owned()),
+      reason: reason.map(str::to_owned),
       args: None,
     }
+  }
+
+  fn mpv_event(reason: &str) -> MpvEvent {
+    lifecycle_event("end-file", Some(reason))
   }
 
   #[test]
@@ -1381,8 +1541,119 @@ mod tests {
   }
 
   #[test]
-  fn stop_event_is_ignored_as_a_stale_replace_event() {
-    assert_eq!(playback_end_reason(&mpv_event("stop")), None);
+  fn external_stop_event_maps_to_terminal_error() {
+    assert_eq!(
+      playback_end_reason(&mpv_event("stop")),
+      Some(PlaybackEndReason::Error)
+    );
+  }
+
+  #[test]
+  fn replacement_boundary_ignores_old_stop_until_new_file_is_loaded() {
+    let mut boundary = LoadEventBoundary::AwaitingStart;
+    let old_stop = boundary.observe(&mpv_event("stop"));
+    let new_start = boundary.observe(&lifecycle_event("start-file", None));
+    let new_loaded = boundary.observe(&lifecycle_event("file-loaded", None));
+
+    assert_eq!(
+      (old_stop, new_start, new_loaded, boundary),
+      (None, None, None, LoadEventBoundary::Settled)
+    );
+  }
+
+  #[test]
+  fn replacement_boundary_ignores_late_old_eof() {
+    let mut boundary = LoadEventBoundary::AwaitingStart;
+    let old_eof = boundary.observe(&mpv_event("eof"));
+    let new_start = boundary.observe(&lifecycle_event("start-file", None));
+    let new_loaded = boundary.observe(&lifecycle_event("file-loaded", None));
+
+    assert_eq!(
+      (old_eof, new_start, new_loaded, boundary),
+      (None, None, None, LoadEventBoundary::Settled)
+    );
+  }
+
+  #[test]
+  fn replacement_boundary_ignores_late_old_error_but_ends_loaded_new_item() {
+    let mut boundary = LoadEventBoundary::AwaitingStart;
+    let old_error = boundary.observe(&mpv_event("error"));
+    let new_start = boundary.observe(&lifecycle_event("start-file", None));
+    let new_loaded = boundary.observe(&lifecycle_event("file-loaded", None));
+    let new_error = boundary.observe(&mpv_event("error"));
+
+    assert_eq!(
+      (old_error, new_start, new_loaded, new_error, boundary),
+      (
+        None,
+        None,
+        None,
+        Some(PlaybackEndReason::Error),
+        LoadEventBoundary::Settled,
+      )
+    );
+  }
+
+  #[test]
+  fn replacement_boundary_treats_new_load_error_as_terminal() {
+    let mut boundary = LoadEventBoundary::AwaitingStart;
+    let new_start = boundary.observe(&lifecycle_event("start-file", None));
+    let new_error = boundary.observe(&mpv_event("error"));
+
+    assert_eq!(
+      (new_start, new_error, boundary),
+      (
+        None,
+        Some(PlaybackEndReason::Error),
+        LoadEventBoundary::Settled,
+      )
+    );
+  }
+
+  #[test]
+  fn replacement_boundary_ignores_redirect_before_followup_file_load() {
+    let mut boundary = LoadEventBoundary::AwaitingStart;
+    let first_start = boundary.observe(&lifecycle_event("start-file", None));
+    let redirect = boundary.observe(&mpv_event("redirect"));
+    let redirected_start = boundary.observe(&lifecycle_event("start-file", None));
+    let redirected_loaded = boundary.observe(&lifecycle_event("file-loaded", None));
+
+    assert_eq!(
+      (
+        first_start,
+        redirect,
+        redirected_start,
+        redirected_loaded,
+        boundary,
+      ),
+      (None, None, None, None, LoadEventBoundary::Settled)
+    );
+  }
+
+  #[test]
+  fn replacement_boundary_treats_new_stop_as_terminal_after_start_file() {
+    let mut boundary = LoadEventBoundary::AwaitingStart;
+    let new_start = boundary.observe(&lifecycle_event("start-file", None));
+    let new_stop = boundary.observe(&mpv_event("stop"));
+
+    assert_eq!(
+      (new_start, new_stop, boundary),
+      (
+        None,
+        Some(PlaybackEndReason::Error),
+        LoadEventBoundary::Settled,
+      )
+    );
+  }
+
+  #[test]
+  fn load_boundary_timeout_rejects_a_pending_load() {
+    let loaded = run_async(load_completed_with_timeout(
+      Duration::ZERO,
+      std::future::pending::<bool>(),
+    ));
+
+    assert!(!loaded);
   }
 
   #[test]
@@ -1425,6 +1696,26 @@ mod tests {
         true,
         vec![PlaybackWarning::PlaybackStopNotReported],
       )
+    );
+  }
+
+  #[test]
+  fn failed_load_cleanup_clears_attribution_and_boundary_without_a_process() {
+    let mut controller = controller_with_active(117.25);
+    let previous = active_playback(117.25);
+    controller.last_progress_report_at = Some(Instant::now());
+    controller.load_event_boundary = LoadEventBoundary::Loading;
+
+    run_async(controller.cleanup_failed_load(Some(&previous)));
+
+    assert_eq!(
+      (
+        controller.active.is_none(),
+        controller.last_progress_report_at.is_none(),
+        controller.load_event_boundary,
+        controller.mpv.is_connected(),
+      ),
+      (true, true, LoadEventBoundary::Settled, false)
     );
   }
 

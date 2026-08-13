@@ -2,6 +2,8 @@
 //!
 //! These types mirror the Jellyfin API responses and requests.
 
+use std::fmt;
+
 use serde::{Deserialize, Serialize};
 use specta::Type;
 
@@ -16,13 +18,24 @@ pub enum PlaybackEngineKind {
 }
 
 /// Authentication response from Jellyfin.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Clone, Deserialize)]
 #[serde(rename_all = "PascalCase")]
 #[allow(dead_code)] // API response fields - may be used later
 pub struct AuthResponse {
   pub user: User,
   pub access_token: String,
   pub server_id: String,
+}
+
+impl fmt::Debug for AuthResponse {
+  fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+    formatter
+      .debug_struct("AuthResponse")
+      .field("user", &self.user)
+      .field("access_token", &"[redacted]")
+      .field("server_id", &self.server_id)
+      .finish()
+  }
 }
 
 /// Jellyfin user information.
@@ -323,6 +336,32 @@ pub struct VideoSeasonEpisodes {
   pub episodes: Vec<VideoLibraryItem>,
 }
 
+/// Bounded request for a page of episodes inside a show season.
+#[derive(Debug, Clone, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct VideoSeasonEpisodesPageRequest {
+  pub series_id: String,
+  pub season_id: Option<String>,
+  pub season_number: Option<i32>,
+  pub start_index: i32,
+  pub limit: i32,
+}
+
+/// Bounded page of episodes for a selected season.
+#[derive(Debug, Clone, Serialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct VideoSeasonEpisodesPage {
+  pub series_id: String,
+  pub season_id: Option<String>,
+  pub season_number: Option<i32>,
+  pub start_index: i32,
+  pub limit: i32,
+  pub total_record_count: i32,
+  pub next_start_index: i32,
+  pub has_more: bool,
+  pub episodes: Vec<VideoLibraryItem>,
+}
+
 /// Library Browser playback mode selected by the user.
 #[derive(Debug, Clone, Copy, Deserialize, Serialize, Type)]
 pub enum VideoLibraryPlayMode {
@@ -385,7 +424,7 @@ pub struct VideoUserDataUpdate {
 }
 
 /// Credentials for authentication.
-#[derive(Debug, Clone, Deserialize, Type)]
+#[derive(Clone, Deserialize, Type)]
 #[serde(rename_all = "camelCase")]
 pub struct Credentials {
   #[serde(default = "MediaServerProvider::jellyfin")]
@@ -395,12 +434,34 @@ pub struct Credentials {
   pub password: String,
 }
 
+impl fmt::Debug for Credentials {
+  fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+    formatter
+      .debug_struct("Credentials")
+      .field("provider", &self.provider)
+      .field("server_url", &"[redacted]")
+      .field("username", &self.username)
+      .field("password", &"[redacted]")
+      .finish()
+  }
+}
+
 /// Quick Connect request created by the server.
-#[derive(Debug, Clone, Serialize, Type)]
+#[derive(Clone, Serialize, Type)]
 #[serde(rename_all = "camelCase")]
 pub struct QuickConnectRequest {
   pub code: String,
   pub secret: String,
+}
+
+impl fmt::Debug for QuickConnectRequest {
+  fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+    formatter
+      .debug_struct("QuickConnectRequest")
+      .field("code", &"[redacted]")
+      .field("secret", &"[redacted]")
+      .finish()
+  }
 }
 
 /// Quick Connect request status exposed to the frontend.
@@ -658,7 +719,7 @@ pub fn ticks_to_seconds(ticks: i64) -> f64 {
 }
 
 /// Saved session data for persistence.
-#[derive(Debug, Clone, Serialize, Deserialize, Type)]
+#[derive(Clone, Serialize, Deserialize, Type)]
 #[serde(rename_all = "camelCase")]
 pub struct SavedSession {
   #[serde(default = "MediaServerProvider::jellyfin")]
@@ -669,6 +730,21 @@ pub struct SavedSession {
   pub user_name: String,
   pub server_name: Option<String>,
   pub device_id: Option<String>,
+}
+
+impl fmt::Debug for SavedSession {
+  fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+    formatter
+      .debug_struct("SavedSession")
+      .field("provider", &self.provider)
+      .field("server_url", &"[redacted]")
+      .field("access_token", &"[redacted]")
+      .field("user_id", &self.user_id)
+      .field("user_name", &self.user_name)
+      .field("server_name", &self.server_name)
+      .field("device_id", &self.device_id)
+      .finish()
+  }
 }
 
 /// Track preference for a series (audio/subtitle language).
@@ -828,6 +904,60 @@ mod tests {
     .expect("legacy credentials should deserialize");
 
     assert_eq!(credentials.provider, MediaServerProvider::Jellyfin);
+  }
+
+  #[test]
+  fn auth_response_debug_redacts_access_token() {
+    let response = AuthResponse {
+      user: User {
+        id: "user-1".to_string(),
+        name: "Ada".to_string(),
+      },
+      access_token: "auth-secret-token".to_string(),
+      server_id: "server-1".to_string(),
+    };
+
+    assert!(!format!("{response:?}").contains("auth-secret-token"));
+  }
+
+  #[test]
+  fn credentials_debug_redacts_password_and_server_url() {
+    let credentials = Credentials {
+      provider: MediaServerProvider::Jellyfin,
+      server_url: "https://user:url-secret@media.example.com".to_string(),
+      username: "Ada".to_string(),
+      password: "password-secret".to_string(),
+    };
+    let debug = format!("{credentials:?}");
+
+    assert!(!debug.contains("password-secret") && !debug.contains("url-secret"));
+  }
+
+  #[test]
+  fn quick_connect_request_debug_redacts_pairing_material() {
+    let request = QuickConnectRequest {
+      code: "PAIR-CODE".to_string(),
+      secret: "pairing-secret".to_string(),
+    };
+    let debug = format!("{request:?}");
+
+    assert!(!debug.contains("PAIR-CODE") && !debug.contains("pairing-secret"));
+  }
+
+  #[test]
+  fn saved_session_debug_redacts_access_token_and_server_url() {
+    let session = SavedSession {
+      provider: MediaServerProvider::Emby,
+      server_url: "https://user:url-secret@media.example.com/emby".to_string(),
+      access_token: "session-secret-token".to_string(),
+      user_id: "user-1".to_string(),
+      user_name: "Ada".to_string(),
+      server_name: Some("Home".to_string()),
+      device_id: Some("device-1".to_string()),
+    };
+    let debug = format!("{session:?}");
+
+    assert!(!debug.contains("session-secret-token") && !debug.contains("url-secret"));
   }
 
   #[test]

@@ -2,6 +2,7 @@
 //!
 //! Reference: https://mpv.io/manual/master/#json-ipc
 
+use std::fmt;
 use std::sync::atomic::{AtomicI64, Ordering};
 
 use serde::{Deserialize, Serialize};
@@ -15,10 +16,20 @@ fn next_request_id() -> i64 {
 }
 
 /// Command sent to MPV via IPC.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Clone, Serialize)]
 pub(crate) struct MpvCommand {
   pub(crate) command: Vec<serde_json::Value>,
   pub(crate) request_id: i64,
+}
+
+impl fmt::Debug for MpvCommand {
+  fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+    formatter
+      .debug_struct("MpvCommand")
+      .field("command_name", &self.command_name())
+      .field("request_id", &self.request_id)
+      .finish()
+  }
 }
 
 impl MpvCommand {
@@ -243,6 +254,34 @@ mod tests {
     let json = serde_json::to_string(&cmd).unwrap();
     assert!(json.contains("loadfile"));
     assert!(json.contains("http://example.com/video.mp4"));
+  }
+
+  #[test]
+  fn command_debug_redacts_media_url_and_load_options() {
+    let secret_url = "https://media.example/video?api_key=secret-media-token";
+    let command = MpvCommand::loadfile_with_options(secret_url, "http-header-fields=token-secret");
+
+    let debug = format!("{command:?}");
+    let expected = format!(
+      "MpvCommand {{ command_name: \"loadfile\", request_id: {} }}",
+      command.request_id
+    );
+
+    assert_eq!(debug, expected);
+  }
+
+  #[test]
+  fn command_debug_redacts_external_subtitle_url() {
+    let secret_url = "https://media.example/subtitle?api_key=secret-subtitle-token";
+    let command = MpvCommand::sub_add(secret_url, Some("select"));
+
+    let debug = format!("{command:?}");
+    let expected = format!(
+      "MpvCommand {{ command_name: \"sub-add\", request_id: {} }}",
+      command.request_id
+    );
+
+    assert_eq!(debug, expected);
   }
 
   #[test]

@@ -2,7 +2,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::{MpvClient, PropertyValue};
+use crate::{MpvClient, MpvError, PropertyValue};
 
 /// Player transport state.
 #[derive(Debug, Clone, Serialize, Deserialize, specta::Type)]
@@ -133,10 +133,125 @@ impl TransportSnapshot {
   }
 }
 
-/// Collect the current state directly from MPV properties.
-pub async fn collect_player_state(mpv: &MpvClient) -> PlayerState {
+type PropertyQueryResult = Result<PropertyValue, MpvError>;
+
+/// A best-effort MPV property sample with connectivity kept separate from
+/// individual property availability.
+///
+/// MPV can reject a valid property query while its IPC connection remains
+/// healthy (for example, `duration` for a live stream). Consumers should merge
+/// this sample over their last coherent state instead of replacing missing
+/// values with transport defaults.
+#[derive(Debug, Clone)]
+pub struct PlayerStateSample {
+  connected: bool,
+  paused: Option<bool>,
+  muted: Option<bool>,
+  time_pos: Option<f64>,
+  duration: Option<f64>,
+  volume: Option<f64>,
+}
+
+impl PlayerStateSample {
+  fn disconnected() -> Self {
+    Self {
+      connected: false,
+      paused: None,
+      muted: None,
+      time_pos: None,
+      duration: None,
+      volume: None,
+    }
+  }
+
+  /// Whether MPV's IPC transport remained connected after the sample.
+  pub fn is_connected(&self) -> bool {
+    self.connected
+  }
+
+  /// Merge successfully observed properties over a previous coherent state.
+  pub fn merge(self, previous: &PlayerState) -> PlayerState {
+    if !self.connected {
+      return PlayerState::default();
+    }
+
+    PlayerState {
+      connected: true,
+      paused: self.paused.unwrap_or(previous.paused),
+      muted: self.muted.unwrap_or(previous.muted),
+      time_pos: self.time_pos.unwrap_or(previous.time_pos),
+      duration: self.duration.unwrap_or(previous.duration),
+      volume: self.volume.unwrap_or(previous.volume),
+    }
+  }
+}
+
+struct PropertySample {
+  paused: PropertyQueryResult,
+  time_pos: PropertyQueryResult,
+  duration: PropertyQueryResult,
+  volume: PropertyQueryResult,
+  muted: PropertyQueryResult,
+}
+
+impl PropertySample {
+  fn into_sample(self, connected: bool) -> PlayerStateSample {
+    let paused = match self.paused {
+      Ok(PropertyValue::Bool(paused)) => Some(paused),
+      Ok(_) => None,
+      Err(error) => {
+        log::warn!("Failed to get pause property: {error}");
+        None
+      }
+    };
+    let time_pos = match self.time_pos {
+      Ok(PropertyValue::Number(position)) if position.is_finite() => Some(position),
+      Ok(_) => None,
+      Err(error) => {
+        log::warn!("Failed to get time-pos property: {error}");
+        None
+      }
+    };
+    let duration = match self.duration {
+      Ok(PropertyValue::Number(duration)) if duration.is_finite() => Some(duration),
+      Ok(_) => None,
+      Err(error) => {
+        log::warn!("Failed to get duration property: {error}");
+        None
+      }
+    };
+    let volume = match self.volume {
+      Ok(PropertyValue::Number(volume)) if volume.is_finite() => Some(volume.clamp(0.0, 100.0)),
+      Ok(_) => None,
+      Err(error) => {
+        log::warn!("Failed to get volume property: {error}");
+        None
+      }
+    };
+    let muted = match self.muted {
+      Ok(PropertyValue::Bool(muted)) => Some(muted),
+      Ok(_) => None,
+      Err(error) => {
+        log::warn!("Failed to get mute property: {error}");
+        None
+      }
+    };
+
+    PlayerStateSample {
+      connected,
+      paused,
+      muted,
+      time_pos,
+      duration,
+      volume,
+    }
+  }
+}
+
+/// Collect a partial state sample directly from MPV properties.
+pub async fn collect_player_state_sample(mpv: &MpvClient) -> PlayerStateSample {
   if !mpv.is_connected() {
-    return PlayerState::default();
+    return PlayerStateSample::disconnected();
   }
 
   let (paused_res, time_pos_res, duration_res, volume_res, muted_res) = tokio::join!(
@@ -147,60 +262,39 @@ pub async fn collect_player_state(mpv: &MpvClient) -> PlayerState {
     mpv.get_property("mute"),
   );
 
-  let paused = match paused_res {
-    Ok(PropertyValue::Bool(paused)) => paused,
-    Ok(_) => true,
-    Err(error) => {
-      log::warn!("Failed to get pause property: {error}");
-      true
-    }
+  let sample = PropertySample {
+    paused: paused_res,
+    time_pos: time_pos_res,
+    duration: duration_res,
+    volume: volume_res,
+    muted: muted_res,
   };
-  let time_pos = match time_pos_res {
-    Ok(PropertyValue::Number(position)) if position.is_finite() => position,
-    Ok(_) => 0.0,
-    Err(error) => {
-      log::warn!("Failed to get time-pos property: {error}");
-      0.0
-    }
-  };
-  let duration = match duration_res {
-    Ok(PropertyValue::Number(duration)) if duration.is_finite() => duration,
-    Ok(_) => 0.0,
-    Err(error) => {
-      log::warn!("Failed to get duration property: {error}");
-      0.0
-    }
-  };
-  let volume = match volume_res {
-    Ok(PropertyValue::Number(volume)) if volume.is_finite() => volume.clamp(0.0, 100.0),
-    Ok(_) => 100.0,
-    Err(error) => {
-      log::warn!("Failed to get volume property: {error}");
-      100.0
-    }
-  };
-  let muted = match muted_res {
-    Ok(PropertyValue::Bool(muted)) => muted,
-    Ok(_) => false,
-    Err(error) => {
-      log::warn!("Failed to get mute property: {error}");
-      false
-    }
-  };
+  sample.into_sample(mpv.is_connected())
+}
 
-  PlayerState {
-    connected: true,
-    paused,
-    muted,
-    time_pos,
-    duration,
-    volume,
-  }
+/// Collect the current state directly from MPV properties.
+///
+/// Callers that retain transport state should prefer
+/// [`collect_player_state_sample`] and merge it over their last coherent value.
+pub async fn collect_player_state(mpv: &MpvClient) -> PlayerState {
+  collect_player_state_sample(mpv)
+    .await
+    .merge(&PlayerState::default())
 }
 
 #[cfg(test)]
 mod tests {
   use super::*;
+
+  fn successful_property_sample() -> PropertySample {
+    PropertySample {
+      paused: Ok(PropertyValue::Bool(false)),
+      time_pos: Ok(PropertyValue::Number(42.5)),
+      duration: Ok(PropertyValue::Number(1420.0)),
+      volume: Ok(PropertyValue::Number(64.0)),
+      muted: Ok(PropertyValue::Bool(false)),
+    }
+  }
 
   fn observed(properties: &[(&str, serde_json::Value)]) -> TransportSnapshot {
     let mut snapshot = TransportSnapshot::default();
@@ -367,5 +461,53 @@ mod tests {
 
     assert!(player.connected);
     assert_eq!(player.duration, 0.0);
+  }
+
+  #[test]
+  fn property_sample_preserves_successful_fields_when_one_property_is_unavailable() {
+    let mut sample = successful_property_sample();
+    sample.duration = Err(MpvError::CommandFailed);
+    let previous = PlayerState {
+      connected: true,
+      paused: true,
+      muted: true,
+      time_pos: 5.0,
+      duration: 900.0,
+      volume: 12.0,
+    };
+
+    let player = sample.into_sample(true).merge(&previous);
+
+    assert!(player.connected);
+    assert!(!player.paused);
+    assert_eq!(player.time_pos, 42.5);
+    assert_eq!(player.duration, 900.0);
+    assert_eq!(player.volume, 64.0);
+  }
+
+  #[test]
+  fn disconnected_sample_does_not_project_partial_property_values() {
+    let mut sample = successful_property_sample();
+    sample.duration = Err(MpvError::IpcTimeout);
+
+    let player = sample.into_sample(false).merge(&PlayerState {
+      connected: true,
+      paused: false,
+      muted: true,
+      time_pos: 42.0,
+      duration: 100.0,
+      volume: 50.0,
+    });
+
+    assert!(!player.connected);
+    assert_eq!(player.time_pos, 0.0);
+  }
+
+  #[test]
+  fn property_sample_marks_state_connected_when_every_query_succeeds() {
+    let sample = successful_property_sample().into_sample(true);
+    let player = sample.merge(&PlayerState::default());
+
+    assert!(player.connected);
   }
 }

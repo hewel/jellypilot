@@ -30,6 +30,8 @@ const SUPPORTED_REMOTE_COMMANDS: &[&str] = &[
   "SetSubtitleStreamIndex",
 ];
 const EMBEDDED_REMOTE_COMMANDS: &[&str] = &["Play", "Playstate", "SetVolume", "ToggleMute"];
+const MAX_SEASON_EPISODE_PAGE_SIZE: i32 = 100;
+const MAX_COMPAT_SEASON_EPISODES: i32 = 10_000;
 
 /// Jellyfin HTTP API client.
 pub struct JellyfinClient {
@@ -1038,6 +1040,11 @@ impl JellyfinClient {
 
   fn normalize_server_url(server_url: &str) -> Result<String, JellyfinError> {
     let server_url = server_url.trim_end_matches('/').to_string();
+    if !raw_url_path_is_safe(&server_url) {
+      return Err(JellyfinError::InvalidUrl(
+        "URL path contains an unsafe encoded segment".to_string(),
+      ));
+    }
     let parsed = reqwest::Url::parse(&server_url)
       .map_err(|err| JellyfinError::InvalidUrl(format!("URL could not be parsed: {err}")))?;
     if parsed.scheme() != "http" && parsed.scheme() != "https" {
@@ -1050,9 +1057,19 @@ impl JellyfinClient {
         "URL must include a hostname".to_string(),
       ));
     }
+    if !parsed.username().is_empty() || parsed.password().is_some() {
+      return Err(JellyfinError::InvalidUrl(
+        "URL must not include embedded credentials".to_string(),
+      ));
+    }
     if parsed.query().is_some() || parsed.fragment().is_some() {
       return Err(JellyfinError::InvalidUrl(
         "URL must not include a query string or fragment".to_string(),
+      ));
+    }
+    if !url_path_is_safe(&parsed) {
+      return Err(JellyfinError::InvalidUrl(
+        "URL path contains an unsafe encoded segment".to_string(),
       ));
     }
 
@@ -1378,7 +1395,7 @@ impl JellyfinClient {
             .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-')
       })
       .unwrap_or("mkv");
-    let mut url = url::Url::parse(server_url).ok()?;
+    let mut url = session_base_url(server_url)?;
     {
       let mut segments = url.path_segments_mut().ok()?;
       segments
@@ -1413,33 +1430,38 @@ impl JellyfinClient {
   /// Always uses HTTP streaming URL - even for "File" protocol sources,
   /// since the file path is on the server, not accessible locally.
   fn build_stream_url(&self, item_id: &str, media_source: &MediaSource) -> Option<String> {
-    let state = self.state.read();
-    let server_url = state.server_url.as_ref()?;
-    let token = state.access_token.as_ref()?;
+    let (server_url, token) = {
+      let state = self.state.read();
+      (
+        state.server_url.as_ref()?.clone(),
+        state.access_token.as_ref()?.clone(),
+      )
+    };
 
     if !media_source.supports_direct_play {
       if media_source.supports_direct_stream {
-        if let Some(url) = media_source.direct_stream_url.as_deref() {
-          let url = absolute_server_url(server_url, url);
-          return Some(append_api_key_if_missing(&url, token));
+        if let Some(path_or_url) = media_source.direct_stream_url.as_deref() {
+          let mut url = session_scoped_url(&server_url, path_or_url)?;
+          // Older Emby responses omit this flag while still returning an authenticated
+          // session-relative URL. Honor an explicit false, otherwise preserve the
+          // established same-origin authenticated direct-stream behavior.
+          if media_source.add_api_key_to_direct_stream_url != Some(false) {
+            append_api_key_if_missing(&mut url, &token);
+          }
+          return Some(url.into());
         }
       }
 
       if media_source.supports_transcoding {
-        if let Some(url) = media_source.transcoding_url.as_deref() {
-          let url = absolute_server_url(server_url, url);
-          return Some(append_api_key_if_missing(&url, token));
+        if let Some(path_or_url) = media_source.transcoding_url.as_deref() {
+          let mut url = session_scoped_url(&server_url, path_or_url)?;
+          append_api_key_if_missing(&mut url, &token);
+          return Some(url.into());
         }
       }
     }
 
-    // Build streaming URL - always use HTTP, never raw file paths.
-    // The file path in media_source.path is on the server, not locally accessible.
-    let container = media_source.container.as_deref().unwrap_or("mkv");
-    Some(format!(
-      "{}/Videos/{}/stream.{}?Static=true&MediaSourceId={}&api_key={}",
-      server_url, item_id, container, media_source.id, token
-    ))
+    self.build_static_stream_url(item_id, media_source)
   }
 
   /// Build external subtitle URL with correct format extension.
@@ -1479,12 +1501,20 @@ impl JellyfinClient {
       _ => "srt", // fallback for unknown codecs
     };
 
-    // Jellyfin subtitle endpoint format:
-    // /Videos/{itemId}/{mediaSourceId}/Subtitles/{streamIndex}/Stream.{format}
-    Some(format!(
-      "{}/Videos/{}/{}/Subtitles/{}/Stream.{}?api_key={}",
-      server_url, item_id, media_source_id, stream.index, ext, token
-    ))
+    let mut url = session_base_url(server_url)?;
+    {
+      let mut segments = url.path_segments_mut().ok()?;
+      segments
+        .pop_if_empty()
+        .push("Videos")
+        .push(item_id)
+        .push(media_source_id)
+        .push("Subtitles")
+        .push(&stream.index.to_string())
+        .push(&format!("Stream.{ext}"));
+    }
+    url.query_pairs_mut().append_pair("api_key", token);
+    Some(url.into())
   }
 
   /// Get WebSocket URL for session.
@@ -2432,8 +2462,52 @@ impl<'a> JellyfinLibrary<'a> {
     &self,
     request: VideoSeasonEpisodesRequest,
   ) -> Result<VideoSeasonEpisodes, JellyfinError> {
+    let mut start_index = 0;
+    let mut episodes = Vec::new();
+
+    loop {
+      let remaining = MAX_COMPAT_SEASON_EPISODES.saturating_sub(start_index);
+      if remaining == 0 {
+        return Err(JellyfinError::HttpError(
+          "Season episode listing exceeds the compatibility limit; use paged episode browsing"
+            .to_string(),
+        ));
+      }
+      let page = self
+        .season_episodes_page(VideoSeasonEpisodesPageRequest {
+          series_id: request.series_id.clone(),
+          season_id: request.season_id.clone(),
+          season_number: request.season_number,
+          start_index,
+          limit: remaining.min(MAX_SEASON_EPISODE_PAGE_SIZE),
+        })
+        .await?;
+      let next_start_index = page.next_start_index;
+      episodes.extend(page.episodes);
+      if !page.has_more || next_start_index <= start_index {
+        return Ok(VideoSeasonEpisodes {
+          series_id: page.series_id,
+          season_id: page.season_id,
+          season_number: page.season_number,
+          episodes,
+        });
+      }
+      if next_start_index >= MAX_COMPAT_SEASON_EPISODES {
+        return Err(JellyfinError::HttpError(
+          "Season episode listing exceeds the compatibility limit; use paged episode browsing"
+            .to_string(),
+        ));
+      }
+      start_index = next_start_index;
+    }
+  }
+
+  pub async fn season_episodes_page(
+    &self,
+    request: VideoSeasonEpisodesPageRequest,
+  ) -> Result<VideoSeasonEpisodesPage, JellyfinError> {
     if self.client.provider() == MediaServerProvider::Emby {
-      return self.emby_season_episodes(request).await;
+      return self.emby_season_episodes_page(request).await;
     }
 
     let series_id = request.series_id.trim().to_string();
@@ -2458,8 +2532,10 @@ impl<'a> JellyfinLibrary<'a> {
     let configuration = self
       .client
       .openapi_configuration(&server_url, Some(&token))?;
+    let start_index = request.start_index.max(0);
+    let limit = request.limit.clamp(1, MAX_SEASON_EPISODE_PAGE_SIZE);
 
-    let episodes = jellyfin_api::apis::tv_shows_api::get_episodes(
+    let response = jellyfin_api::apis::tv_shows_api::get_episodes(
       &configuration,
       jellyfin_api::apis::tv_shows_api::GetEpisodesParams {
         series_id: series_id.clone(),
@@ -2470,8 +2546,8 @@ impl<'a> JellyfinLibrary<'a> {
         is_missing: Some(false),
         adjacent_to: None,
         start_item_id: None,
-        start_index: None,
-        limit: None,
+        start_index: Some(start_index),
+        limit: Some(limit),
         enable_images: Some(true),
         image_type_limit: Some(1),
         enable_image_types: Some(vec![jellyfin_api::models::ImageType::Primary]),
@@ -2480,17 +2556,30 @@ impl<'a> JellyfinLibrary<'a> {
       },
     )
     .await
-    .map_err(|err| JellyfinClient::openapi_error("Video season episodes", err))?
-    .items
-    .unwrap_or_default()
-    .into_iter()
-    .filter_map(|item| map_video_library_item(&server_url, item))
-    .collect();
+    .map_err(|err| JellyfinClient::openapi_error("Video season episodes", err))?;
+    let reported_total_record_count = response.total_record_count.map(|total| total.max(0));
+    let mut response_items = response.items.unwrap_or_default();
+    response_items.truncate(limit as usize);
+    let returned_count = i32::try_from(response_items.len()).unwrap_or(i32::MAX);
+    let episodes = response_items
+      .into_iter()
+      .filter_map(|item| map_video_library_item(&server_url, item))
+      .collect::<Vec<_>>();
+    let next_start_index = start_index.saturating_add(returned_count);
+    let total_record_count =
+      reported_total_record_count.map_or(next_start_index, |total| total.max(next_start_index));
+    let has_more =
+      reported_total_record_count.map_or(returned_count == limit, |total| next_start_index < total);
 
-    Ok(VideoSeasonEpisodes {
+    Ok(VideoSeasonEpisodesPage {
       series_id,
       season_id,
       season_number: request.season_number,
+      start_index,
+      limit,
+      total_record_count,
+      next_start_index,
+      has_more,
       episodes,
     })
   }
@@ -2951,10 +3040,10 @@ impl<'a> JellyfinLibrary<'a> {
     Ok(detail)
   }
 
-  async fn emby_season_episodes(
+  async fn emby_season_episodes_page(
     &self,
-    request: VideoSeasonEpisodesRequest,
-  ) -> Result<VideoSeasonEpisodes, JellyfinError> {
+    request: VideoSeasonEpisodesPageRequest,
+  ) -> Result<VideoSeasonEpisodesPage, JellyfinError> {
     let series_id = request.series_id.trim().to_string();
     if series_id.is_empty() {
       return Err(JellyfinError::HttpError(
@@ -2973,23 +3062,44 @@ impl<'a> JellyfinLibrary<'a> {
 
     let server_url = self.client.server_url()?;
     let user_id = self.client.user_id()?;
-    let episodes = self
+    let start_index = request.start_index.max(0);
+    let limit = request.limit.clamp(1, MAX_SEASON_EPISODE_PAGE_SIZE);
+    let response = self
       .client
       .get_with_query::<emby_api::models::QueryResultBaseItemDto>(
         &format!("/Shows/{series_id}/Episodes"),
-        &emby_episodes_query(&user_id, season_id.as_deref(), request.season_number),
+        &emby_episodes_query(
+          &user_id,
+          season_id.as_deref(),
+          request.season_number,
+          start_index,
+          limit,
+        ),
       )
-      .await?
-      .items
-      .unwrap_or_default()
+      .await?;
+    let reported_total_record_count = response.total_record_count.map(|total| total.max(0));
+    let mut response_items = response.items.unwrap_or_default();
+    response_items.truncate(limit as usize);
+    let returned_count = i32::try_from(response_items.len()).unwrap_or(i32::MAX);
+    let episodes = response_items
       .into_iter()
       .filter_map(|item| map_emby_video_library_item(&server_url, item))
-      .collect();
+      .collect::<Vec<_>>();
+    let next_start_index = start_index.saturating_add(returned_count);
+    let total_record_count =
+      reported_total_record_count.map_or(next_start_index, |total| total.max(next_start_index));
+    let has_more =
+      reported_total_record_count.map_or(returned_count == limit, |total| next_start_index < total);
 
-    Ok(VideoSeasonEpisodes {
+    Ok(VideoSeasonEpisodesPage {
       series_id,
       season_id,
       season_number: request.season_number,
+      start_index,
+      limit,
+      total_record_count,
+      next_start_index,
+      has_more,
       episodes,
     })
   }
@@ -3860,25 +3970,103 @@ fn ticks_to_seconds(ticks: i64) -> f64 {
   ticks as f64 / 10_000_000.0
 }
 
-fn absolute_server_url(server_url: &str, path_or_url: &str) -> String {
-  if path_or_url.starts_with("http://") || path_or_url.starts_with("https://") {
-    return path_or_url.to_string();
-  }
-
-  if path_or_url.starts_with('/') {
-    format!("{server_url}{path_or_url}")
-  } else {
-    format!("{server_url}/{path_or_url}")
-  }
+fn session_base_url(server_url: &str) -> Option<url::Url> {
+  let url = url::Url::parse(server_url).ok()?;
+  (matches!(url.scheme(), "http" | "https")
+    && url.host_str().is_some()
+    && url.username().is_empty()
+    && url.password().is_none()
+    && url.query().is_none()
+    && url.fragment().is_none()
+    && url_path_is_safe(&url))
+  .then_some(url)
 }
 
-fn append_api_key_if_missing(url: &str, token: &str) -> String {
-  if url.contains("api_key=") {
-    return url.to_string();
+fn session_scoped_url(server_url: &str, path_or_url: &str) -> Option<url::Url> {
+  if !raw_url_path_is_safe(path_or_url) {
+    return None;
+  }
+  let base = session_base_url(server_url)?;
+  let candidate = if path_or_url.starts_with("//") {
+    base.join(path_or_url).ok()?
+  } else if let Ok(absolute) = url::Url::parse(path_or_url) {
+    absolute
+  } else {
+    let mut directory_base = base.clone();
+    if !directory_base.path().ends_with('/') {
+      let mut path = directory_base.path().to_string();
+      path.push('/');
+      directory_base.set_path(&path);
+    }
+    directory_base
+      .join(path_or_url.trim_start_matches('/'))
+      .ok()?
+  };
+
+  session_url_contains(&base, &candidate).then_some(candidate)
+}
+
+fn session_url_contains(base: &url::Url, candidate: &url::Url) -> bool {
+  if !matches!(candidate.scheme(), "http" | "https")
+    || !candidate.username().is_empty()
+    || candidate.password().is_some()
+    || candidate.fragment().is_some()
+    || base.scheme() != candidate.scheme()
+    || base.host() != candidate.host()
+    || base.port_or_known_default() != candidate.port_or_known_default()
+  {
+    return false;
   }
 
-  let separator = if url.contains('?') { '&' } else { '?' };
-  format!("{url}{separator}api_key={token}")
+  if !url_path_is_safe(candidate) {
+    return false;
+  }
+
+  let base_path = base.path().trim_end_matches('/');
+  base_path.is_empty()
+    || candidate.path() == base_path
+    || candidate
+      .path()
+      .strip_prefix(base_path)
+      .is_some_and(|suffix| suffix.starts_with('/'))
+}
+
+fn url_path_is_safe(url: &url::Url) -> bool {
+  path_segments_are_safe(url.path())
+}
+
+fn raw_url_path_is_safe(path_or_url: &str) -> bool {
+  let without_fragment = path_or_url.split('#').next().unwrap_or_default();
+  let without_query = without_fragment.split('?').next().unwrap_or_default();
+  let path = without_query
+    .split_once("://")
+    .and_then(|(_, authority_and_path)| {
+      authority_and_path
+        .find('/')
+        .map(|at| &authority_and_path[at..])
+    })
+    .unwrap_or(without_query);
+  path_segments_are_safe(path)
+}
+
+fn path_segments_are_safe(path: &str) -> bool {
+  !path.split('/').any(|segment| {
+    let segment = segment.to_ascii_lowercase();
+    segment.contains("%2f")
+      || segment.contains("%5c")
+      || matches!(segment.replace("%2e", ".").as_str(), "." | "..")
+  })
+}
+
+fn append_api_key_if_missing(url: &mut url::Url, token: &str) {
+  if url
+    .query_pairs()
+    .any(|(key, _)| key.eq_ignore_ascii_case("api_key"))
+  {
+    return;
+  }
+
+  url.query_pairs_mut().append_pair("api_key", token);
 }
 
 struct EmbyBrowseItemsQuery {
@@ -4102,9 +4290,13 @@ fn emby_episodes_query(
   user_id: &str,
   season_id: Option<&str>,
   season_number: Option<i32>,
+  start_index: i32,
+  limit: i32,
 ) -> Vec<(&'static str, String)> {
   let mut params = vec![
     ("UserId", user_id.to_string()),
+    ("StartIndex", start_index.to_string()),
+    ("Limit", limit.to_string()),
     ("Fields", emby_home_fields()),
     ("IsMissing", "false".to_string()),
     ("EnableImages", "true".to_string()),
@@ -4114,6 +4306,7 @@ fn emby_episodes_query(
     ("IncludeItemTypes", "Episode".to_string()),
     ("SortBy", "ParentIndexNumber,IndexNumber".to_string()),
     ("SortOrder", "Ascending".to_string()),
+    ("EnableTotalRecordCount", "true".to_string()),
   ];
   if let Some(season_id) = season_id {
     params.push(("SeasonId", season_id.to_string()));
@@ -6812,6 +7005,40 @@ mod tests {
   }
 
   #[tokio::test]
+  async fn season_episode_page_clamps_limit_and_reports_remaining_jellyfin_results() {
+    let series_id = "00000000-0000-0000-0000-000000000073";
+    let season_id = "00000000-0000-0000-0000-000000000074";
+    let (server_url, requests) = serve_responses_with_requests(vec![(
+      "200 OK",
+      r#"{"Items":[{"Id":"00000000-0000-0000-0000-000000000075","Name":"Episode 21","Type":"Episode"}],"TotalRecordCount":25,"StartIndex":20}"#,
+    )])
+    .await;
+    let client = JellyfinClient::new();
+    connect_test_client(&client, server_url);
+
+    let page = client
+      .library()
+      .season_episodes_page(VideoSeasonEpisodesPageRequest {
+        series_id: series_id.to_string(),
+        season_id: Some(season_id.to_string()),
+        season_number: Some(2),
+        start_index: 20,
+        limit: 500,
+      })
+      .await
+      .expect("bounded Jellyfin season page should load");
+
+    assert_eq!(page.start_index, 20);
+    assert_eq!(page.limit, MAX_SEASON_EPISODE_PAGE_SIZE);
+    assert_eq!(page.total_record_count, 25);
+    assert_eq!(page.next_start_index, 21);
+    assert!(page.has_more);
+    let captured = requests.lock();
+    assert!(captured[0].contains("startIndex=20"));
+    assert!(captured[0].contains("limit=100"));
+  }
+
+  #[tokio::test]
   async fn update_user_data_maps_library_actions_to_jellyfin_userdata_endpoints() {
     let item_id = "00000000-0000-0000-0000-000000000080";
     let (server_url, requests) = serve_responses_with_requests(vec![
@@ -7159,6 +7386,42 @@ mod tests {
   }
 
   #[tokio::test]
+  async fn emby_season_episode_page_sends_bounds_and_reports_completion() {
+    let series_id = "00000000-0000-0000-0000-000000000266";
+    let season_id = "00000000-0000-0000-0000-000000000267";
+    let (server_url, requests) = serve_responses_with_requests(vec![(
+      "200 OK",
+      r#"{"Items":[{"Id":"00000000-0000-0000-0000-000000000268","Name":"Episode 11","Type":"Episode"},{"Id":"00000000-0000-0000-0000-000000000269","Name":"Episode 12","Type":"Episode"}],"TotalRecordCount":12,"StartIndex":10}"#,
+    )])
+    .await;
+    let client = JellyfinClient::new();
+    connect_test_client_as_emby(&client, server_url);
+
+    let page = client
+      .library()
+      .season_episodes_page(VideoSeasonEpisodesPageRequest {
+        series_id: series_id.to_string(),
+        season_id: Some(season_id.to_string()),
+        season_number: Some(1),
+        start_index: 10,
+        limit: 2,
+      })
+      .await
+      .expect("bounded Emby season page should load");
+
+    assert_eq!(page.start_index, 10);
+    assert_eq!(page.limit, 2);
+    assert_eq!(page.total_record_count, 12);
+    assert_eq!(page.next_start_index, 12);
+    assert!(!page.has_more);
+    assert_eq!(page.episodes.len(), 2);
+    let captured = requests.lock();
+    assert!(captured[0].contains("StartIndex=10"));
+    assert!(captured[0].contains("Limit=2"));
+    assert!(captured[0].contains("EnableTotalRecordCount=true"));
+  }
+
+  #[tokio::test]
   async fn emby_show_detail_fetches_item_seasons_and_next_up_concurrently() {
     let series_id = "00000000-0000-0000-0000-000000000263";
     let (server_url, requests) = serve_barrier_route_responses_with_requests(vec![
@@ -7447,6 +7710,151 @@ mod tests {
         .build_stream_url("movie-1", &transcode)
         .expect("transcoding URL"),
       "http://media.example.test/emby/videos/transcoded.m3u8?api_key=emby-token"
+    );
+  }
+
+  #[test]
+  fn direct_stream_url_omits_session_token_when_provider_does_not_request_it() {
+    let client = JellyfinClient::new();
+    connect_test_client_as_emby(&client, "https://media.example.test/emby".to_string());
+    let source = MediaSource {
+      id: "source-1".to_string(),
+      path: None,
+      protocol: "Http".to_string(),
+      container: Some("mp4".to_string()),
+      run_time_ticks: None,
+      media_streams: Vec::new(),
+      supports_direct_play: false,
+      supports_direct_stream: true,
+      supports_transcoding: false,
+      direct_stream_url: Some("/videos/direct.mp4?MediaSourceId=source-1".to_string()),
+      add_api_key_to_direct_stream_url: Some(false),
+      transcoding_url: None,
+    };
+
+    let url = client
+      .build_stream_url("movie-1", &source)
+      .expect("same-session direct stream URL should be accepted");
+
+    assert_eq!(
+      url,
+      "https://media.example.test/emby/videos/direct.mp4?MediaSourceId=source-1"
+    );
+  }
+
+  #[test]
+  fn legacy_direct_stream_url_keeps_same_session_auth_when_flag_is_absent() {
+    let client = JellyfinClient::new();
+    connect_test_client_as_emby(&client, "https://media.example.test/emby".to_string());
+    let source = MediaSource {
+      id: "source-1".to_string(),
+      path: None,
+      protocol: "Http".to_string(),
+      container: Some("mp4".to_string()),
+      run_time_ticks: None,
+      media_streams: Vec::new(),
+      supports_direct_play: false,
+      supports_direct_stream: true,
+      supports_transcoding: false,
+      direct_stream_url: Some("/videos/direct.mp4?MediaSourceId=source-1".to_string()),
+      add_api_key_to_direct_stream_url: None,
+      transcoding_url: None,
+    };
+
+    let url = client
+      .build_stream_url("movie-1", &source)
+      .expect("legacy same-session direct stream URL should be accepted");
+
+    assert_eq!(
+      url,
+      "https://media.example.test/emby/videos/direct.mp4?MediaSourceId=source-1&api_key=emby-token"
+    );
+  }
+
+  #[test]
+  fn direct_stream_url_rejects_cross_origin_for_both_providers() {
+    let source = MediaSource {
+      id: "source-1".to_string(),
+      path: None,
+      protocol: "Http".to_string(),
+      container: Some("mp4".to_string()),
+      run_time_ticks: None,
+      media_streams: Vec::new(),
+      supports_direct_play: false,
+      supports_direct_stream: true,
+      supports_transcoding: false,
+      direct_stream_url: Some("https://cdn.example.test/video.mp4".to_string()),
+      add_api_key_to_direct_stream_url: Some(true),
+      transcoding_url: None,
+    };
+
+    for provider in [MediaServerProvider::Jellyfin, MediaServerProvider::Emby] {
+      let client = JellyfinClient::new();
+      match provider {
+        MediaServerProvider::Jellyfin => {
+          connect_test_client(&client, "https://media.example.test/jellyfin".to_string());
+        }
+        MediaServerProvider::Emby => {
+          connect_test_client_as_emby(&client, "https://media.example.test/emby".to_string());
+        }
+      }
+
+      assert!(client.build_stream_url("movie-1", &source).is_none());
+    }
+  }
+
+  #[test]
+  fn direct_stream_url_rejects_same_origin_outside_reverse_proxy_base() {
+    let client = JellyfinClient::new();
+    connect_test_client_as_emby(&client, "https://media.example.test/emby".to_string());
+    let source = MediaSource {
+      id: "source-1".to_string(),
+      path: None,
+      protocol: "Http".to_string(),
+      container: Some("mp4".to_string()),
+      run_time_ticks: None,
+      media_streams: Vec::new(),
+      supports_direct_play: false,
+      supports_direct_stream: true,
+      supports_transcoding: false,
+      direct_stream_url: Some("https://media.example.test/private/video.mp4".to_string()),
+      add_api_key_to_direct_stream_url: Some(true),
+      transcoding_url: None,
+    };
+
+    assert!(client.build_stream_url("movie-1", &source).is_none());
+  }
+
+  #[test]
+  fn session_scoped_url_rejects_encoded_path_escape() {
+    assert!(session_scoped_url(
+      "https://media.example.test/emby",
+      "https://media.example.test/emby/%2e%2e/private/video.mp4"
+    )
+    .is_none());
+  }
+
+  #[test]
+  fn normalize_server_url_rejects_embedded_credentials() {
+    let error =
+      JellyfinClient::normalize_server_url("https://user:password-secret@media.example.test/emby")
+        .expect_err("server URL userinfo should be rejected");
+
+    assert_eq!(
+      error.to_string(),
+      "Invalid server URL: URL must not include embedded credentials"
+    );
+  }
+
+  #[test]
+  fn normalize_server_url_rejects_encoded_path_escape() {
+    let error =
+      JellyfinClient::normalize_server_url("https://media.example.test/emby/%2e%2e/private")
+        .expect_err("encoded server URL path escape should be rejected");
+
+    assert_eq!(
+      error.to_string(),
+      "Invalid server URL: URL path contains an unsafe encoded segment"
     );
   }
 

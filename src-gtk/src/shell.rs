@@ -7,15 +7,17 @@ use jellypilot_media_server::{
   Credentials, JellyfinClient, MediaServerProvider, VideoHome, VideoItemDetail, VideoLibraryItem,
   VideoLibraryKind, VideoLibraryPageRequest, VideoLibraryPlayedFilter, VideoLibraryShortcut,
   VideoLibrarySort, VideoLibrarySortDirection, VideoSearchRequest, VideoSeason,
-  VideoSeasonEpisodesPage, VideoSeasonEpisodesPageRequest, VideoShowDetail,
+  VideoSeasonEpisodesPage, VideoSeasonEpisodesPageRequest, VideoShowDetail, VideoUserDataAction,
+  VideoUserDataUpdate, VideoUserDataUpdateRequest,
 };
 use relm4::gtk::prelude::*;
+use relm4::tokio::sync::watch;
 use relm4::{gtk, Component, ComponentParts, ComponentSender, RelmApp};
 
 use crate::artwork::{ArtworkAdapter, DecodedArtwork, FALLBACK_ARTWORK_ICON};
 use crate::browse_model::{
   BrowseEffect, BrowseModel, BrowsePagePayload, BrowsePageRequest, BrowsePageSettlement,
-  BrowseSource,
+  BrowsePreferences, BrowseSource,
 };
 use crate::library_browse::LibraryBrowseView;
 use crate::playback::{
@@ -27,83 +29,6 @@ use crate::request_gate::{DetailToken, HomeToken, RequestGate, SessionToken};
 const APP_ID: &str = "io.github.hewel.JellyPilot.GtkPreview";
 const SMOKE_APP_ID: &str = "io.github.hewel.JellyPilot.GtkPreview.Smoke";
 const SEASON_EPISODE_PAGE_SIZE: i32 = 30;
-
-/// Native GTK stylesheet for JellyPilot.
-const APP_CSS: &str = r#"
-.jp-card {
-  background: alpha(@theme_fg_color, 0.0);
-  border-radius: 12px;
-  transition: background 180ms ease;
-}
-.jp-card:hover {
-  background: alpha(@theme_fg_color, 0.06);
-}
-.jp-card-artwork {
-  border-radius: 10px;
-
-}
-.jp-hero {
-  border-radius: 16px;
-
-  margin-bottom: 12px;
-}
-.jp-hero-overlay {
-  background: linear-gradient(
-    to top,
-    alpha(@theme_bg_color, 0.95) 0%,
-    alpha(@theme_bg_color, 0.6) 40%,
-    transparent 100%
-  );
-}
-.jp-shelf-title {
-  font-weight: 700;
-  font-size: 1.15em;
-}
-.jp-detail-backdrop {
-  border-radius: 14px;
-
-}
-.jp-detail-overlay {
-  background: linear-gradient(
-    to top,
-    @theme_bg_color 0%,
-    alpha(@theme_bg_color, 0.85) 35%,
-    transparent 100%
-  );
-}
-.jp-now-playing {
-  border-radius: 16px;
-
-}
-.jp-action-button {
-  padding: 8px 20px;
-  font-weight: 600;
-}
-.jp-login-card {
-  background: alpha(@theme_fg_color, 0.03);
-  border-radius: 16px;
-  border: 1px solid alpha(@theme_fg_color, 0.08);
-  padding: 32px;
-}
-.jp-sidebar-button {
-  border-radius: 8px;
-  padding: 6px 10px;
-}
-.jp-progress-bar progress {
-  min-height: 4px;
-  border-radius: 2px;
-}
-"#;
-
-fn load_app_css() {
-  let provider = gtk::CssProvider::new();
-  provider.load_from_data(APP_CSS);
-  gtk::style_context_add_provider_for_display(
-    &gtk::gdk::Display::default().expect("a display is required to load the application CSS"),
-    &provider,
-    gtk::STYLE_PROVIDER_PRIORITY_APPLICATION as u32,
-  );
-}
 
 struct AppModel {
   client: Arc<JellyfinClient>,
@@ -122,7 +47,11 @@ struct AppModel {
   detail_origin: Option<String>,
   detail_parent: Option<DetailParent>,
   season: Option<SeasonSelection>,
+  user_data_busy: bool,
+  user_data_sequence: u64,
+  user_data_error: Option<String>,
   playback: PlaybackState,
+  playback_cancellation: watch::Sender<u64>,
   playback_refresh_source: Option<gtk::glib::SourceId>,
   playback_cleanup_pending: bool,
   quitting: bool,
@@ -229,6 +158,10 @@ struct BrowseState {
   model: BrowseModel,
   error: Option<String>,
   presentation: BrowsePresentation,
+  library_shortcut: Option<VideoLibraryShortcut>,
+  sort_selection: u32,
+  played_selection: u32,
+  favorites_only: bool,
 }
 
 #[derive(Clone)]
@@ -268,6 +201,9 @@ enum AppMessage {
   SearchRequested,
   SelectItem(VideoLibraryItem),
   SetBrowsePresentation(BrowsePresentation),
+  SetBrowseSort(u32),
+  SetBrowsePlayedFilter(u32),
+  SetBrowseFavoritesOnly(bool),
   LoadPreviousPage,
   LoadNextPage,
   RetryBrowse,
@@ -279,6 +215,10 @@ enum AppMessage {
   NextSeasonEpisodePage,
   RetrySeason,
   BackFromSeason,
+  UpdateUserData {
+    item_id: String,
+    action: VideoUserDataAction,
+  },
   PlayLibrary(VideoLibraryItem, PlaybackStartPosition),
   PlayDetail(VideoItemDetail, PlaybackStartPosition),
   TogglePaused,
@@ -312,6 +252,12 @@ enum AppCommand {
     token: DetailToken,
     season_id: String,
     result: Result<VideoSeasonEpisodesPage, String>,
+  },
+  UserData {
+    session: u64,
+    sequence: u64,
+    item_id: String,
+    result: Result<VideoUserDataUpdate, String>,
   },
   Artwork {
     session: u64,
@@ -361,6 +307,17 @@ impl std::fmt::Debug for AppCommand {
         .debug_struct("SeasonEpisodes")
         .field("token", token)
         .field("season_id", season_id)
+        .field("successful", &result.is_ok())
+        .finish(),
+      Self::UserData {
+        session,
+        sequence,
+        result,
+        ..
+      } => formatter
+        .debug_struct("UserData")
+        .field("session", session)
+        .field("sequence", sequence)
         .field("successful", &result.is_ok())
         .finish(),
       Self::Artwork {
@@ -422,6 +379,10 @@ struct Ui {
   browse_title: gtk::Label,
   browse_status: gtk::Label,
   browse_content: gtk::Box,
+  browse_filter_bar: gtk::Box,
+  sort_dropdown: gtk::DropDown,
+  played_dropdown: gtk::DropDown,
+  favorites_only: gtk::CheckButton,
   grid_button: gtk::ToggleButton,
   list_button: gtk::ToggleButton,
   load_previous_button: gtk::Button,
@@ -430,6 +391,8 @@ struct Ui {
   detail_content: gtk::Box,
   now_playing_status: gtk::Label,
   now_playing_notice: gtk::Label,
+  position_label: gtk::Label,
+  duration_label: gtk::Label,
   pause_button: gtk::Button,
   stop_button: gtk::Button,
   seek: gtk::Scale,
@@ -476,6 +439,7 @@ impl Component for AppModel {
         gtk::glib::ControlFlow::Continue
       }
     });
+    let (playback_cancellation, _) = watch::channel(0);
     let model = Self {
       client: Arc::new(JellyfinClient::new()),
       artwork: Arc::new(ArtworkAdapter::default()),
@@ -493,7 +457,11 @@ impl Component for AppModel {
       detail_origin: None,
       detail_parent: None,
       season: None,
+      user_data_busy: false,
+      user_data_sequence: 0,
+      user_data_error: None,
       playback: PlaybackState::default(),
+      playback_cancellation,
       playback_refresh_source: Some(playback_refresh_source),
       playback_cleanup_pending: false,
       quitting: false,
@@ -521,6 +489,18 @@ impl Component for AppModel {
         self.browse.presentation = presentation;
         self.render_browse(&sender);
       }
+      AppMessage::SetBrowseSort(selection) => {
+        self.browse.sort_selection = selection;
+        self.apply_browse_preferences(&sender);
+      }
+      AppMessage::SetBrowsePlayedFilter(selection) => {
+        self.browse.played_selection = selection;
+        self.apply_browse_preferences(&sender);
+      }
+      AppMessage::SetBrowseFavoritesOnly(favorites_only) => {
+        self.browse.favorites_only = favorites_only;
+        self.apply_browse_preferences(&sender);
+      }
       AppMessage::LoadPreviousPage => self.load_previous_page(&sender),
       AppMessage::LoadNextPage => self.load_next_page(&sender),
       AppMessage::RetryBrowse => self.retry_browse(&sender),
@@ -535,6 +515,9 @@ impl Component for AppModel {
         self.requests.navigate();
         self.season = None;
         self.render_detail(&sender);
+      }
+      AppMessage::UpdateUserData { item_id, action } => {
+        self.start_user_data_update(item_id, action, &sender)
       }
       AppMessage::PlayLibrary(item, start_position) => {
         self.start_playback(PlaybackRequest::Library(item, start_position), &sender)
@@ -635,6 +618,12 @@ impl Component for AppModel {
           self.render_detail(&sender);
         }
       }
+      AppCommand::UserData {
+        session,
+        sequence,
+        item_id,
+        result,
+      } => self.finish_user_data_update(session, sequence, &item_id, result, &sender),
       AppCommand::Artwork {
         session,
         view,
@@ -727,6 +716,7 @@ impl Component for AppModel {
 
   fn shutdown(&mut self, _widgets: &mut Self::Widgets, _output: relm4::Sender<Self::Output>) {
     self.artwork.reset_session();
+    self.cancel_inflight_playback();
     if let Some(source) = self.playback_refresh_source.take() {
       source.remove();
     }
@@ -913,6 +903,7 @@ impl AppModel {
   fn disconnect(&mut self, sender: &ComponentSender<Self>) {
     self.requests.disconnect();
     self.artwork.reset_session();
+    self.cancel_inflight_playback();
     self.artwork_view = self.artwork_view.saturating_add(1);
     self.artwork_targets.clear();
     let _client = std::mem::replace(&mut self.client, Arc::new(JellyfinClient::new()));
@@ -928,11 +919,15 @@ impl AppModel {
     self.shortcuts.clear();
     self.shortcuts_error = None;
     self.browse = BrowseState::default();
+    self.ui.sort_dropdown.set_selected(0);
+    self.ui.played_dropdown.set_selected(0);
+    self.ui.favorites_only.set_active(false);
     self.detail = LoadState::Idle;
     self.detail_selection = None;
     self.detail_origin = None;
     self.detail_parent = None;
     self.season = None;
+    self.invalidate_user_data_update();
     self.playback = PlaybackState::default();
     self.ui.search.set_text("");
     self.ui.search.set_sensitive(false);
@@ -973,6 +968,8 @@ impl AppModel {
     }
     self.quitting = true;
     self.artwork.reset_session();
+    self.invalidate_user_data_update();
+    self.cancel_inflight_playback();
     if let Some(source) = self.playback_refresh_source.take() {
       source.remove();
     }
@@ -1000,6 +997,11 @@ impl AppModel {
     });
   }
 
+  fn cancel_inflight_playback(&self) {
+    let next = (*self.playback_cancellation.borrow()).wrapping_add(1);
+    let _ = self.playback_cancellation.send_replace(next);
+  }
+
   fn render_authenticated(&mut self, sender: &ComponentSender<Self>) {
     if self.ui.login.parent().is_some() {
       self.ui.root.remove(&self.ui.login);
@@ -1024,6 +1026,7 @@ impl AppModel {
 
   fn navigate_to(&mut self, page: &str) {
     self.requests.navigate();
+    self.invalidate_user_data_update();
     self.show_page(page);
   }
 
@@ -1121,10 +1124,18 @@ impl AppModel {
     self.navigate_to("browse");
     self.browse.title = shortcut.name.clone();
     self.browse.error = None;
-    let result = self.browse.model.configure(BrowseSource::Library {
-      session: self.requests.session_generation(),
-      shortcut,
-    });
+    self.browse.library_shortcut = Some(shortcut.clone());
+    let result = self.browse.model.configure_with_preferences(
+      BrowseSource::Library {
+        session: self.requests.session_generation(),
+        shortcut,
+      },
+      browse_preferences(
+        self.browse.sort_selection,
+        self.browse.played_selection,
+        self.browse.favorites_only,
+      ),
+    );
     match result {
       Ok(effects) => self.execute_browse_effects(effects, sender),
       Err(error) => self.browse.error = Some(error.to_string()),
@@ -1149,6 +1160,7 @@ impl AppModel {
     self.navigate_to("browse");
     self.browse.title = format!("Search results for \"{query}\"");
     self.browse.error = None;
+    self.browse.library_shortcut = None;
     let result = self.browse.model.configure(BrowseSource::Search {
       session: self.requests.session_generation(),
       query,
@@ -1160,7 +1172,31 @@ impl AppModel {
     self.render_browse(sender);
   }
 
+  fn apply_browse_preferences(&mut self, sender: &ComponentSender<Self>) {
+    let Some(shortcut) = self.browse.library_shortcut.clone() else {
+      return;
+    };
+    self.browse.error = None;
+    let result = self.browse.model.configure_with_preferences(
+      BrowseSource::Library {
+        session: self.requests.session_generation(),
+        shortcut,
+      },
+      browse_preferences(
+        self.browse.sort_selection,
+        self.browse.played_selection,
+        self.browse.favorites_only,
+      ),
+    );
+    match result {
+      Ok(effects) => self.execute_browse_effects(effects, sender),
+      Err(error) => self.browse.error = Some(error.to_string()),
+    }
+    self.render_browse(sender);
+  }
+
   fn load_detail(&mut self, item: VideoLibraryItem, sender: &ComponentSender<Self>) {
+    self.invalidate_user_data_update();
     let origin = self.ui.content.visible_child_name();
     if origin.as_deref() != Some("detail") {
       self.detail_origin = origin.map(|page| page.to_string());
@@ -1209,6 +1245,7 @@ impl AppModel {
   }
 
   fn back_from_detail(&mut self, sender: &ComponentSender<Self>) {
+    self.invalidate_user_data_update();
     if let Some(parent) = self.detail_parent.take() {
       self.requests.navigate();
       self.detail = LoadState::Ready(parent.content);
@@ -1231,6 +1268,91 @@ impl AppModel {
       "home" => self.render_home(sender),
       "browse" => self.render_browse(sender),
       _ => {}
+    }
+  }
+
+  fn invalidate_user_data_update(&mut self) {
+    self.user_data_sequence = self.user_data_sequence.saturating_add(1);
+    self.user_data_busy = false;
+    self.user_data_error = None;
+  }
+
+  fn start_user_data_update(
+    &mut self,
+    item_id: String,
+    action: VideoUserDataAction,
+    sender: &ComponentSender<Self>,
+  ) {
+    if self.user_data_busy || self.current_detail_item_id() != Some(item_id.as_str()) {
+      return;
+    }
+    self.user_data_sequence = self.user_data_sequence.saturating_add(1);
+    self.user_data_busy = true;
+    self.user_data_error = None;
+    let session = self.requests.session_generation();
+    let sequence = self.user_data_sequence;
+    self.render_detail(sender);
+    let client = Arc::clone(&self.client);
+    sender.oneshot_command(async move {
+      let result = client
+        .library()
+        .update_user_data(VideoUserDataUpdateRequest {
+          item_id: item_id.clone(),
+          action,
+        })
+        .await
+        .map_err(|_| "Could not update this item's library state.".to_owned());
+      AppCommand::UserData {
+        session,
+        sequence,
+        item_id,
+        result,
+      }
+    });
+  }
+
+  fn finish_user_data_update(
+    &mut self,
+    session: u64,
+    sequence: u64,
+    item_id: &str,
+    result: Result<VideoUserDataUpdate, String>,
+    sender: &ComponentSender<Self>,
+  ) {
+    if session != self.requests.session_generation()
+      || sequence != self.user_data_sequence
+      || self.current_detail_item_id() != Some(item_id)
+    {
+      return;
+    }
+    self.user_data_busy = false;
+    match result {
+      Ok(update) => {
+        let updated = apply_user_data_update(&mut self.detail, &update);
+        debug_assert!(
+          updated,
+          "current detail identity was checked before applying user data"
+        );
+        if let Some(selection) = self
+          .detail_selection
+          .as_mut()
+          .filter(|selection| selection.id == update.item_id)
+        {
+          selection.played = update.played;
+          selection.favorite = update.favorite;
+        }
+        self.user_data_error = None;
+      }
+      Err(message) => self.user_data_error = Some(message),
+    }
+    self.render_detail(sender);
+  }
+
+  fn current_detail_item_id(&self) -> Option<&str> {
+    match &self.detail {
+      LoadState::Ready(DetailContent::Item(detail)) => Some(detail.id.as_str()),
+      LoadState::Ready(DetailContent::Show(detail)) => Some(detail.id.as_str()),
+      _ => None,
     }
   }
 
@@ -1369,6 +1491,7 @@ impl AppModel {
         token,
         start_index,
         limit,
+        preferences,
       } = request;
       let result = async {
         let start_index = i32::try_from(start_index)
@@ -1385,10 +1508,10 @@ impl AppModel {
                 collection_type,
                 start_index,
                 limit,
-                sort: VideoLibrarySort::Title,
-                sort_direction: VideoLibrarySortDirection::Ascending,
-                played_filter: VideoLibraryPlayedFilter::All,
-                favorites_only: false,
+                sort: preferences.sort,
+                sort_direction: preferences.sort_direction,
+                played_filter: preferences.played_filter,
+                favorites_only: preferences.favorites_only,
               })
               .await
               .map_err(|error| error.to_string())?
@@ -1423,6 +1546,22 @@ impl AppModel {
   fn render_browse(&mut self, sender: &ComponentSender<Self>) {
     self.begin_artwork_view();
     self.ui.browse_title.set_label(&self.browse.title);
+    self
+      .ui
+      .browse_filter_bar
+      .set_visible(self.browse.library_shortcut.is_some());
+    self
+      .ui
+      .sort_dropdown
+      .set_selected(self.browse.sort_selection);
+    self
+      .ui
+      .played_dropdown
+      .set_selected(self.browse.played_selection);
+    self
+      .ui
+      .favorites_only
+      .set_active(self.browse.favorites_only);
     self
       .ui
       .grid_button
@@ -1566,6 +1705,12 @@ impl AppModel {
     let sender_clone = sender.clone();
     back.connect_clicked(move |_| sender_clone.input(AppMessage::BackFromDetail));
     self.ui.detail_content.append(&back);
+    if let Some(message) = &self.user_data_error {
+      let status = dim_label(message);
+      status.set_accessible_role(gtk::AccessibleRole::Status);
+      status.set_wrap(true);
+      self.ui.detail_content.append(&status);
+    }
     match &self.detail {
       LoadState::Idle => self.ui.detail_content.append(&state_view(
         "Select an item",
@@ -1626,107 +1771,130 @@ impl AppModel {
     self.playback.sequence = self.playback.sequence.saturating_add(1);
     let session = self.requests.session_generation();
     let sequence = self.playback.sequence;
+    let mut cancellation = self.playback_cancellation.subscribe();
     sender.oneshot_command(async move {
-      let result = match request {
-        PlaybackRequest::Library(item, start_position) => controller
-          .play_library_item(
-            &item,
-            PlaybackOptions {
-              start_position,
-              ..PlaybackOptions::default()
-            },
-          )
-          .await
-          .map(|outcome| PlaybackCommandSuccess {
-            snapshot: Some(outcome.snapshot),
-            warnings: outcome.warnings,
-            notice: None,
-          })
-          .map_err(playback_start_failure),
-        PlaybackRequest::Detail(item, start_position) => controller
-          .play_item_detail(
-            &item,
-            PlaybackOptions {
-              start_position,
-              ..PlaybackOptions::default()
-            },
-          )
-          .await
-          .map(|outcome| PlaybackCommandSuccess {
-            snapshot: Some(outcome.snapshot),
-            warnings: outcome.warnings,
-            notice: None,
-          })
-          .map_err(playback_start_failure),
-        PlaybackRequest::Paused(paused) => controller
-          .set_paused(paused)
-          .await
-          .map(|outcome| PlaybackCommandSuccess {
-            snapshot: Some(outcome.snapshot),
-            warnings: outcome.warnings,
-            notice: None,
-          })
-          .map_err(|error| playback_failure("Could not update playback", error)),
-        PlaybackRequest::Seek(position) => controller
-          .seek(position)
-          .await
-          .map(|outcome| PlaybackCommandSuccess {
-            snapshot: Some(outcome.snapshot),
-            warnings: outcome.warnings,
-            notice: None,
-          })
-          .map_err(|error| playback_failure("Could not seek", error)),
-        PlaybackRequest::Volume(volume) => controller
-          .set_volume(volume)
-          .await
-          .map(|outcome| PlaybackCommandSuccess {
-            snapshot: Some(outcome.snapshot),
-            warnings: outcome.warnings,
-            notice: None,
-          })
-          .map_err(|error| playback_failure("Could not set volume", error)),
-        PlaybackRequest::Muted(muted) => controller
-          .set_muted(muted)
-          .await
-          .map(|outcome| PlaybackCommandSuccess {
-            snapshot: Some(outcome.snapshot),
-            warnings: outcome.warnings,
-            notice: None,
-          })
-          .map_err(|error| playback_failure("Could not update mute", error)),
-        PlaybackRequest::Stop => controller
-          .stop()
-          .await
-          .map(|outcome| PlaybackCommandSuccess {
-            snapshot: None,
-            warnings: outcome.warnings,
-            notice: Some("Playback stopped.".to_owned()),
-          })
-          .map_err(|error| playback_failure("Could not stop playback", error)),
-        PlaybackRequest::Refresh => {
-          let outcome = controller.refresh().await;
-          let (snapshot, notice) = match outcome.state {
-            PlaybackRefreshState::Active => (Some(outcome.snapshot), None),
-            PlaybackRefreshState::Idle => (None, None),
-            PlaybackRefreshState::Ended(PlaybackEndReason::EndOfFile) => {
-              (None, Some("Playback finished.".to_owned()))
+      let result = {
+        let operation = async {
+          match request {
+            PlaybackRequest::Library(item, start_position) => controller
+              .play_library_item(
+                &item,
+                PlaybackOptions {
+                  start_position,
+                  ..PlaybackOptions::default()
+                },
+              )
+              .await
+              .map(|outcome| PlaybackCommandSuccess {
+                snapshot: Some(outcome.snapshot),
+                warnings: outcome.warnings,
+                notice: None,
+              })
+              .map_err(playback_start_failure),
+            PlaybackRequest::Detail(item, start_position) => controller
+              .play_item_detail(
+                &item,
+                PlaybackOptions {
+                  start_position,
+                  ..PlaybackOptions::default()
+                },
+              )
+              .await
+              .map(|outcome| PlaybackCommandSuccess {
+                snapshot: Some(outcome.snapshot),
+                warnings: outcome.warnings,
+                notice: None,
+              })
+              .map_err(playback_start_failure),
+            PlaybackRequest::Paused(paused) => controller
+              .set_paused(paused)
+              .await
+              .map(|outcome| PlaybackCommandSuccess {
+                snapshot: Some(outcome.snapshot),
+                warnings: outcome.warnings,
+                notice: None,
+              })
+              .map_err(|error| playback_failure("Could not update playback", error)),
+            PlaybackRequest::Seek(position) => controller
+              .seek(position)
+              .await
+              .map(|outcome| PlaybackCommandSuccess {
+                snapshot: Some(outcome.snapshot),
+                warnings: outcome.warnings,
+                notice: None,
+              })
+              .map_err(|error| playback_failure("Could not seek", error)),
+            PlaybackRequest::Volume(volume) => controller
+              .set_volume(volume)
+              .await
+              .map(|outcome| PlaybackCommandSuccess {
+                snapshot: Some(outcome.snapshot),
+                warnings: outcome.warnings,
+                notice: None,
+              })
+              .map_err(|error| playback_failure("Could not set volume", error)),
+            PlaybackRequest::Muted(muted) => controller
+              .set_muted(muted)
+              .await
+              .map(|outcome| PlaybackCommandSuccess {
+                snapshot: Some(outcome.snapshot),
+                warnings: outcome.warnings,
+                notice: None,
+              })
+              .map_err(|error| playback_failure("Could not update mute", error)),
+            PlaybackRequest::Stop => controller
+              .stop()
+              .await
+              .map(|outcome| PlaybackCommandSuccess {
+                snapshot: None,
+                warnings: outcome.warnings,
+                notice: Some("Playback stopped.".to_owned()),
+              })
+              .map_err(|error| playback_failure("Could not stop playback", error)),
+            PlaybackRequest::Refresh => {
+              let outcome = controller.refresh().await;
+              let (snapshot, notice) = match outcome.state {
+                PlaybackRefreshState::Active => (Some(outcome.snapshot), None),
+                PlaybackRefreshState::Idle => (None, None),
+                PlaybackRefreshState::Ended(PlaybackEndReason::EndOfFile) => {
+                  (None, Some("Playback finished.".to_owned()))
+                }
+                PlaybackRefreshState::Ended(PlaybackEndReason::Disconnected) => (
+                  None,
+                  Some("The external player disconnected; playback was stopped.".to_owned()),
+                ),
+                PlaybackRefreshState::Ended(PlaybackEndReason::Error) => (
+                  None,
+                  Some(
+                    "The external player could not continue this item; playback was stopped."
+                      .to_owned(),
+                  ),
+                ),
+              };
+              Ok(PlaybackCommandSuccess {
+                snapshot,
+                warnings: outcome.warnings,
+                notice,
+              })
             }
-            PlaybackRefreshState::Ended(PlaybackEndReason::Disconnected) => (
-              None,
-              Some("The external player disconnected; playback was stopped.".to_owned()),
-            ),
-            PlaybackRefreshState::Ended(PlaybackEndReason::Error) => (
-              None,
-              Some(
-                "The external player could not continue this item; playback was stopped."
-                  .to_owned(),
-              ),
-            ),
-          };
-          Ok(PlaybackCommandSuccess {
-            snapshot,
-            warnings: outcome.warnings,
-            notice,
+          }
+        };
+        relm4::tokio::pin!(operation);
+        relm4::tokio::select! {
+          result = &mut operation => Some(result),
+          changed = cancellation.changed() => {
+            let _ = changed;
+            None
+          }
+        }
+      };
+      let result = match result {
+        Some(result) => result,
+        None => {
+          let _ = controller.shutdown().await;
+          Err(PlaybackCommandFailure {
+            message: "Playback operation was cancelled.".to_owned(),
+            clear_snapshot: true,
           })
         }
       };
@@ -1789,12 +1957,16 @@ impl AppModel {
       .artwork_targets
       .insert(slot, ArtworkTarget { picture, fallback });
     let artwork = Arc::clone(&self.artwork);
+    let artwork_ticket = artwork.ticket();
     let client = Arc::clone(&self.client);
     let image_id = image_id.to_owned();
     let session = self.requests.session_generation();
     let view = self.artwork_view;
     sender.oneshot_command(async move {
-      let result = artwork.load(&client, &image_id).await.map_err(|_| ());
+      let result = artwork
+        .load_with_ticket(&client, &image_id, artwork_ticket)
+        .await
+        .map_err(|_| ());
       AppCommand::Artwork {
         session,
         view,
@@ -1845,12 +2017,16 @@ impl AppModel {
         .artwork_targets
         .insert(slot, ArtworkTarget { picture, fallback });
       let artwork = Arc::clone(&self.artwork);
+      let artwork_ticket = artwork.ticket();
       let client = Arc::clone(&self.client);
       let image_id = image_id.to_owned();
       let session = self.requests.session_generation();
       let view = self.artwork_view;
       sender.oneshot_command(async move {
-        let result = artwork.load(&client, &image_id).await.map_err(|_| ());
+        let result = artwork
+          .load_with_ticket(&client, &image_id, artwork_ticket)
+          .await
+          .map_err(|_| ());
         AppCommand::Artwork {
           session,
           view,
@@ -1947,12 +2123,16 @@ impl AppModel {
         .artwork_targets
         .insert(slot, ArtworkTarget { picture, fallback });
       let artwork = Arc::clone(&self.artwork);
+      let artwork_ticket = artwork.ticket();
       let client = Arc::clone(&self.client);
       let image_id = image_id.to_owned();
       let session = self.requests.session_generation();
       let view = self.artwork_view;
       sender.oneshot_command(async move {
-        let result = artwork.load(&client, &image_id).await.map_err(|_| ());
+        let result = artwork
+          .load_with_ticket(&client, &image_id, artwork_ticket)
+          .await
+          .map_err(|_| ());
         AppCommand::Artwork {
           session,
           view,
@@ -1989,7 +2169,9 @@ impl AppModel {
       action.add_css_class("flat");
       action.add_css_class("suggested-action");
       action.set_valign(gtk::Align::Center);
-      action.set_tooltip_text(Some(if has_resume { "Resume" } else { "Play" }));
+      let action_label = if has_resume { "Resume" } else { "Play" };
+      action.set_tooltip_text(Some(action_label));
+      action.update_property(&[gtk::accessible::Property::Label(action_label)]);
       action.set_sensitive(self.playback.controller.is_some() && !self.playback.busy);
       let item = item.clone();
       let sender = sender.clone();
@@ -2043,12 +2225,16 @@ impl AppModel {
         },
       );
       let artwork = Arc::clone(&self.artwork);
+      let artwork_ticket = artwork.ticket();
       let client = Arc::clone(&self.client);
       let image_id = image_id.to_owned();
       let session = self.requests.session_generation();
       let view = self.artwork_view;
       sender.oneshot_command(async move {
-        let result = artwork.load(&client, &image_id).await.map_err(|_| ());
+        let result = artwork
+          .load_with_ticket(&client, &image_id, artwork_ticket)
+          .await
+          .map_err(|_| ());
         AppCommand::Artwork {
           session,
           view,
@@ -2261,6 +2447,7 @@ impl AppModel {
       resume.set_sensitive(self.playback.controller.is_some() && !self.playback.busy);
       actions.append(&resume);
     }
+    actions.append(&self.user_data_controls(&detail.id, detail.played, detail.favorite, sender));
     info.append(&actions);
     gradient.append(&info);
     backdrop_container.add_overlay(&gradient);
@@ -2325,6 +2512,7 @@ impl AppModel {
     let metadata = dim_label(&show_detail_metadata(detail));
     metadata.set_wrap(true);
     info.append(&metadata);
+    info.append(&self.user_data_controls(&detail.id, detail.played, detail.favorite, sender));
     gradient.append(&info);
     backdrop_container.add_overlay(&gradient);
     column.append(&backdrop_container);
@@ -2405,6 +2593,58 @@ impl AppModel {
     column.upcast()
   }
 
+  fn user_data_controls(
+    &self,
+    item_id: &str,
+    played: bool,
+    favorite: bool,
+    sender: &ComponentSender<Self>,
+  ) -> gtk::Box {
+    let controls = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+    let favorite_action = if favorite {
+      VideoUserDataAction::Unfavorite
+    } else {
+      VideoUserDataAction::Favorite
+    };
+    let favorite_button = gtk::Button::with_label(if favorite {
+      "Remove from Favorites"
+    } else {
+      "Add to Favorites"
+    });
+    favorite_button.set_sensitive(!self.user_data_busy);
+    let favorite_id = item_id.to_owned();
+    let favorite_sender = sender.clone();
+    favorite_button.connect_clicked(move |_| {
+      favorite_sender.input(AppMessage::UpdateUserData {
+        item_id: favorite_id.clone(),
+        action: favorite_action,
+      })
+    });
+    controls.append(&favorite_button);
+
+    let played_action = if played {
+      VideoUserDataAction::MarkUnplayed
+    } else {
+      VideoUserDataAction::MarkPlayed
+    };
+    let played_button = gtk::Button::with_label(if played {
+      "Mark Unwatched"
+    } else {
+      "Mark Watched"
+    });
+    played_button.set_sensitive(!self.user_data_busy);
+    let played_id = item_id.to_owned();
+    let played_sender = sender.clone();
+    played_button.connect_clicked(move |_| {
+      played_sender.input(AppMessage::UpdateUserData {
+        item_id: played_id.clone(),
+        action: played_action,
+      })
+    });
+    controls.append(&played_button);
+    controls
+  }
+
   fn season_episodes_view(
     &mut self,
     selection: &SeasonSelection,
@@ -2455,6 +2695,7 @@ impl AppModel {
         let pagination = gtk::Box::new(gtk::Orientation::Horizontal, 8);
         let previous = gtk::Button::from_icon_name("go-previous-symbolic");
         previous.set_tooltip_text(Some("Previous episode page"));
+        previous.update_property(&[gtk::accessible::Property::Label("Previous episode page")]);
         previous.set_sensitive(start > 0);
         let sender_clone = sender.clone();
         previous
@@ -2469,6 +2710,7 @@ impl AppModel {
         page_status.set_xalign(0.5);
         let next = gtk::Button::from_icon_name("go-next-symbolic");
         next.set_tooltip_text(Some("Next episode page"));
+        next.update_property(&[gtk::accessible::Property::Label("Next episode page")]);
         next.set_sensitive(page.has_more);
         let sender_clone = sender.clone();
         next.connect_clicked(move |_| sender_clone.input(AppMessage::NextSeasonEpisodePage));
@@ -2513,6 +2755,14 @@ impl AppModel {
     if let Some(snapshot) = snapshot {
       self
         .ui
+        .position_label
+        .set_label(&format_duration(snapshot.transport.time_pos));
+      self
+        .ui
+        .duration_label
+        .set_label(&format_duration(snapshot.transport.duration));
+      self
+        .ui
         .pause_button
         .set_icon_name(if snapshot.transport.paused {
           "media-playback-start-symbolic"
@@ -2547,6 +2797,9 @@ impl AppModel {
         self.ui.mute_button.set_active(snapshot.transport.muted);
       }
       self.ui.playback_controls_syncing.set(false);
+    } else {
+      self.ui.position_label.set_label("00:00");
+      self.ui.duration_label.set_label("00:00");
     }
   }
 }
@@ -2748,6 +3001,33 @@ impl Ui {
     browse_actions.append(&grid_button);
     browse_actions.append(&list_button);
     toolbar.append(&browse_actions);
+    let browse_filter_bar = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+    let sort_label = gtk::Label::new(Some("Sort"));
+    let sort_dropdown =
+      gtk::DropDown::from_strings(&["Title A–Z", "Title Z–A", "Recently added", "Release date"]);
+    sort_dropdown.update_property(&[gtk::accessible::Property::Label("Sort library")]);
+    sort_dropdown.connect_selected_notify({
+      let sender = sender.clone();
+      move |dropdown| sender.input(AppMessage::SetBrowseSort(dropdown.selected()))
+    });
+    let played_label = gtk::Label::new(Some("Watched"));
+    let played_dropdown = gtk::DropDown::from_strings(&["All", "Unwatched", "Watched"]);
+    played_dropdown.update_property(&[gtk::accessible::Property::Label("Filter watched state")]);
+    played_dropdown.connect_selected_notify({
+      let sender = sender.clone();
+      move |dropdown| sender.input(AppMessage::SetBrowsePlayedFilter(dropdown.selected()))
+    });
+    let favorites_only = gtk::CheckButton::with_label("Favorites only");
+    favorites_only.connect_toggled({
+      let sender = sender.clone();
+      move |button| sender.input(AppMessage::SetBrowseFavoritesOnly(button.is_active()))
+    });
+    browse_filter_bar.append(&sort_label);
+    browse_filter_bar.append(&sort_dropdown);
+    browse_filter_bar.append(&played_label);
+    browse_filter_bar.append(&played_dropdown);
+    browse_filter_bar.append(&favorites_only);
+    toolbar.append(&browse_filter_bar);
     let browse_content = gtk::Box::new(gtk::Orientation::Vertical, 12);
     let browse_page = gtk::Box::builder()
       .orientation(gtk::Orientation::Vertical)
@@ -2786,6 +3066,8 @@ impl Ui {
     now_playing_notice.set_wrap(true);
     now_playing_notice.set_visible(false);
     now_playing_notice.set_accessible_role(gtk::AccessibleRole::Status);
+    let position_label = playback_time_label();
+    let duration_label = playback_time_label();
     let pause_button = gtk::Button::from_icon_name("media-playback-start-symbolic");
     pause_button.set_tooltip_text(Some("Pause or resume playback"));
     pause_button.update_property(&[gtk::accessible::Property::Label("Pause or resume playback")]);
@@ -2849,15 +3131,17 @@ impl Ui {
         }
       }
     });
-    let now_playing = now_playing_page(
-      &now_playing_status,
-      &now_playing_notice,
-      &pause_button,
-      &stop_button,
-      &seek,
-      &volume,
-      &mute_button,
-    );
+    let now_playing = now_playing_page(NowPlayingPageWidgets {
+      status: &now_playing_status,
+      notice: &now_playing_notice,
+      position_label: &position_label,
+      duration_label: &duration_label,
+      pause: &pause_button,
+      stop: &stop_button,
+      seek: &seek,
+      volume: &volume,
+      mute: &mute_button,
+    });
     content.add_named(&now_playing, Some("now-playing"));
     let settings = settings_page(sender);
     content.add_named(&settings, Some("settings"));
@@ -2886,6 +3170,10 @@ impl Ui {
       browse_title,
       browse_status,
       browse_content,
+      browse_filter_bar,
+      sort_dropdown,
+      played_dropdown,
+      favorites_only,
       grid_button,
       list_button,
       load_previous_button,
@@ -2894,6 +3182,8 @@ impl Ui {
       detail_content,
       now_playing_status,
       now_playing_notice,
+      position_label,
+      duration_label,
       pause_button,
       stop_button,
       seek,
@@ -2971,15 +3261,30 @@ fn login_page(
   page
 }
 
-fn now_playing_page(
-  status: &gtk::Label,
-  notice: &gtk::Label,
-  pause: &gtk::Button,
-  stop: &gtk::Button,
-  seek: &gtk::Scale,
-  volume: &gtk::Scale,
-  mute: &gtk::ToggleButton,
-) -> gtk::Widget {
+struct NowPlayingPageWidgets<'a> {
+  status: &'a gtk::Label,
+  notice: &'a gtk::Label,
+  position_label: &'a gtk::Label,
+  duration_label: &'a gtk::Label,
+  pause: &'a gtk::Button,
+  stop: &'a gtk::Button,
+  seek: &'a gtk::Scale,
+  volume: &'a gtk::Scale,
+  mute: &'a gtk::ToggleButton,
+}
+
+fn now_playing_page(widgets: NowPlayingPageWidgets<'_>) -> gtk::Widget {
+  let NowPlayingPageWidgets {
+    status,
+    notice,
+    position_label,
+    duration_label,
+    pause,
+    stop,
+    seek,
+    volume,
+    mute,
+  } = widgets;
   let page = gtk::Box::builder()
     .orientation(gtk::Orientation::Vertical)
     .spacing(20)
@@ -3015,17 +3320,11 @@ fn now_playing_page(
   notice.set_wrap(true);
   inner.append(notice);
   let timeline = gtk::Box::new(gtk::Orientation::Horizontal, 12);
-  let position_label = gtk::Label::new(Some("00:00"));
-  position_label.add_css_class("dim-label");
-  position_label.add_css_class("monospace");
-  timeline.append(&position_label);
+  timeline.append(position_label);
   seek.set_hexpand(true);
   seek.set_draw_value(false);
   timeline.append(seek);
-  let duration_label = gtk::Label::new(Some("00:00"));
-  duration_label.add_css_class("dim-label");
-  duration_label.add_css_class("monospace");
-  timeline.append(&duration_label);
+  timeline.append(duration_label);
   inner.append(&timeline);
   let transport = gtk::Box::new(gtk::Orientation::Horizontal, 12);
   transport.set_halign(gtk::Align::Center);
@@ -3224,6 +3523,13 @@ fn dim_label(text: &str) -> gtk::Label {
   label
 }
 
+fn playback_time_label() -> gtk::Label {
+  let label = gtk::Label::new(Some("00:00"));
+  label.add_css_class("dim-label");
+  label.add_css_class("monospace");
+  label
+}
+
 fn form_entry(placeholder: &str, purpose: gtk::InputPurpose) -> gtk::Entry {
   let entry = gtk::Entry::new();
   entry.set_placeholder_text(Some(placeholder));
@@ -3303,6 +3609,61 @@ fn library_kind(collection_type: &str) -> VideoLibraryKind {
     VideoLibraryKind::TvShows
   } else {
     VideoLibraryKind::Movies
+  }
+}
+
+fn browse_preferences(
+  sort_selection: u32,
+  played_selection: u32,
+  favorites_only: bool,
+) -> BrowsePreferences {
+  let (sort, sort_direction) = match sort_selection {
+    1 => (
+      VideoLibrarySort::Title,
+      VideoLibrarySortDirection::Descending,
+    ),
+    2 => (
+      VideoLibrarySort::RecentlyAdded,
+      VideoLibrarySortDirection::Descending,
+    ),
+    3 => (
+      VideoLibrarySort::ReleaseDate,
+      VideoLibrarySortDirection::Descending,
+    ),
+    _ => (
+      VideoLibrarySort::Title,
+      VideoLibrarySortDirection::Ascending,
+    ),
+  };
+  let played_filter = match played_selection {
+    1 => VideoLibraryPlayedFilter::Unplayed,
+    2 => VideoLibraryPlayedFilter::Played,
+    _ => VideoLibraryPlayedFilter::All,
+  };
+  BrowsePreferences {
+    sort,
+    sort_direction,
+    played_filter,
+    favorites_only,
+  }
+}
+
+fn apply_user_data_update(
+  detail: &mut LoadState<DetailContent>,
+  update: &VideoUserDataUpdate,
+) -> bool {
+  match detail {
+    LoadState::Ready(DetailContent::Item(item)) if item.id == update.item_id => {
+      item.played = update.played;
+      item.favorite = update.favorite;
+      true
+    }
+    LoadState::Ready(DetailContent::Show(show)) if show.id == update.item_id => {
+      show.played = update.played;
+      show.favorite = update.favorite;
+      true
+    }
+    _ => false,
   }
 }
 
@@ -3420,7 +3781,6 @@ fn season_page_request(
 
 pub(crate) fn run(smoke_test: bool) {
   let app = RelmApp::new(if smoke_test { SMOKE_APP_ID } else { APP_ID });
-  load_app_css();
   if smoke_test {
     app.allow_multiple_instances(true);
     let application = relm4::main_application();
@@ -3463,6 +3823,61 @@ mod tests {
     assert_eq!(request.season_number, Some(2));
     assert_eq!(request.start_index, 60);
     assert_eq!(request.limit, 30);
+  }
+
+  #[test]
+  fn browse_controls_map_to_provider_neutral_preferences() {
+    let preferences = browse_preferences(2, 1, true);
+
+    assert!(matches!(preferences.sort, VideoLibrarySort::RecentlyAdded));
+    assert!(matches!(
+      preferences.sort_direction,
+      VideoLibrarySortDirection::Descending
+    ));
+    assert!(matches!(
+      preferences.played_filter,
+      VideoLibraryPlayedFilter::Unplayed
+    ));
+    assert!(preferences.favorites_only);
+  }
+
+  #[test]
+  fn user_data_completion_updates_only_the_matching_detail() {
+    let mut detail = LoadState::Ready(DetailContent::Show(VideoShowDetail {
+      id: "show-1".to_owned(),
+      name: "Show".to_owned(),
+      overview: None,
+      production_year: None,
+      genres: Vec::new(),
+      played: false,
+      favorite: false,
+      can_play: false,
+      artwork_image_id: None,
+      backdrop_image_id: None,
+      next_episode: None,
+      seasons: Vec::new(),
+      metadata: Default::default(),
+    }));
+    let stale = VideoUserDataUpdate {
+      item_id: "show-2".to_owned(),
+      played: true,
+      favorite: true,
+    };
+    assert!(!apply_user_data_update(&mut detail, &stale));
+    let current = VideoUserDataUpdate {
+      item_id: "show-1".to_owned(),
+      played: true,
+      favorite: true,
+    };
+    assert!(apply_user_data_update(&mut detail, &current));
+    assert!(matches!(
+      detail,
+      LoadState::Ready(DetailContent::Show(VideoShowDetail {
+        played: true,
+        favorite: true,
+        ..
+      }))
+    ));
   }
 
   #[test]

@@ -4,7 +4,8 @@ use jellypilot_core::{
   LibraryBrowseCoreError, LibraryBrowseLoadToken, LibraryBrowseMode, LIBRARY_BROWSE_PAGE_SIZE,
 };
 use jellypilot_media_server::{
-  VideoLibraryItem, VideoLibraryPage, VideoLibraryShortcut, VideoSearchPage,
+  VideoLibraryItem, VideoLibraryPage, VideoLibraryPlayedFilter, VideoLibraryShortcut,
+  VideoLibrarySort, VideoLibrarySortDirection, VideoSearchPage,
 };
 
 use crate::library_browse::{
@@ -49,6 +50,50 @@ pub(crate) enum BrowseEffect {
   CancelPage,
 }
 
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct BrowsePreferences {
+  pub(crate) sort: VideoLibrarySort,
+  pub(crate) sort_direction: VideoLibrarySortDirection,
+  pub(crate) played_filter: VideoLibraryPlayedFilter,
+  pub(crate) favorites_only: bool,
+}
+
+impl Default for BrowsePreferences {
+  fn default() -> Self {
+    Self {
+      sort: VideoLibrarySort::Title,
+      sort_direction: VideoLibrarySortDirection::Ascending,
+      played_filter: VideoLibraryPlayedFilter::All,
+      favorites_only: false,
+    }
+  }
+}
+
+impl BrowsePreferences {
+  fn identity(self) -> String {
+    let sort = match self.sort {
+      VideoLibrarySort::Title => "title",
+      VideoLibrarySort::RecentlyAdded => "added",
+      VideoLibrarySort::ReleaseDate => "release",
+    };
+    let direction = match self.sort_direction {
+      VideoLibrarySortDirection::Ascending => "asc",
+      VideoLibrarySortDirection::Descending => "desc",
+    };
+    let played = match self.played_filter {
+      VideoLibraryPlayedFilter::All => "all",
+      VideoLibraryPlayedFilter::Played => "played",
+      VideoLibraryPlayedFilter::Unplayed => "unplayed",
+    };
+    let favorites = if self.favorites_only {
+      "favorites"
+    } else {
+      "all"
+    };
+    format!("{sort}:{direction}:{played}:{favorites}")
+  }
+}
+
 /// One token-correlated request for the media-server adapter.
 #[derive(Clone, Debug)]
 pub(crate) struct BrowsePageRequest {
@@ -57,6 +102,7 @@ pub(crate) struct BrowsePageRequest {
   pub(crate) token: LibraryBrowseLoadToken,
   pub(crate) start_index: u32,
   pub(crate) limit: u32,
+  pub(crate) preferences: BrowsePreferences,
 }
 
 /// Provider-neutral payload returned to the browse reducer.
@@ -112,6 +158,7 @@ pub(crate) struct BrowseModel {
   source: Option<BrowseSource>,
   source_id: Option<String>,
   virtual_window_start: u32,
+  preferences: BrowsePreferences,
 }
 
 impl BrowseModel {
@@ -123,13 +170,29 @@ impl BrowseModel {
     &mut self,
     source: BrowseSource,
   ) -> Result<Vec<BrowseEffect>, LibraryBrowseCoreError> {
-    let source_id = source.identity();
-    self.virtual_window_start = 0;
+    self.configure_with_preferences(source, BrowsePreferences::default())
+  }
+
+  pub(crate) fn configure_with_preferences(
+    &mut self,
+    source: BrowseSource,
+    preferences: BrowsePreferences,
+  ) -> Result<Vec<BrowseEffect>, LibraryBrowseCoreError> {
+    let source_id = format!(
+      "{}:preferences:{}",
+      source.identity(),
+      preferences.identity()
+    );
+    let source_changed = self.source_id.as_deref() != Some(source_id.as_str());
+    let effects = self.adapter.handle(LibraryBrowseInput::Configure {
+      source_id: source_id.clone(),
+    })?;
+    if source_changed {
+      self.virtual_window_start = 0;
+    }
     self.source = Some(source);
-    self.source_id = Some(source_id.clone());
-    let effects = self
-      .adapter
-      .handle(LibraryBrowseInput::Configure { source_id })?;
+    self.source_id = Some(source_id);
+    self.preferences = preferences;
     Ok(self.translate(effects))
   }
 
@@ -325,6 +388,7 @@ impl BrowseModel {
           token,
           start_index,
           limit,
+          preferences: self.preferences,
         })),
       })
       .collect()
@@ -684,6 +748,51 @@ mod tests {
   }
 
   #[test]
+  fn reconfiguring_identical_virtual_search_preserves_window_navigation() {
+    const TOTAL: u32 = LIBRARY_BROWSE_PAGE_SIZE * 10;
+    let mut model = BrowseModel::default();
+    let source = BrowseSource::Search {
+      session: 16,
+      query: "arrival".to_owned(),
+    };
+    let bootstrap = model
+      .configure(source.clone())
+      .expect("search should configure");
+    settle_all_requests(&mut model, bootstrap, TOTAL);
+    for _ in 0..2 {
+      let effects = model.load_next().expect("later window should load");
+      settle_all_requests(&mut model, effects, TOTAL);
+    }
+    let later_range = LIBRARY_BROWSE_PAGE_SIZE * 2..LIBRARY_BROWSE_PAGE_SIZE * 3;
+    assert_eq!(model.display_range(), Some(later_range.clone()));
+
+    let effects = model
+      .configure(source)
+      .expect("identical search should remain configured");
+
+    assert!(effects.is_empty());
+    assert_eq!(model.display_range(), Some(later_range.clone()));
+    assert_eq!(
+      visible_indexes(&model),
+      later_range.clone().collect::<Vec<_>>()
+    );
+    assert!(model.can_load_previous());
+    assert!(model.can_load_more());
+
+    let next = model.load_next().expect("next window should load");
+    settle_all_requests(&mut model, next, TOTAL);
+    assert_eq!(
+      model.display_range(),
+      Some(LIBRARY_BROWSE_PAGE_SIZE * 3..LIBRARY_BROWSE_PAGE_SIZE * 4)
+    );
+
+    let previous = model.load_previous().expect("previous window should load");
+    settle_all_requests(&mut model, previous, TOTAL);
+    assert_eq!(model.display_range(), Some(later_range.clone()));
+    assert_eq!(visible_indexes(&model), later_range.collect::<Vec<_>>());
+  }
+
+  #[test]
   fn stale_settlement_after_session_reset_is_ignored() {
     let mut model = BrowseModel::default();
     let stale = request(
@@ -705,5 +814,41 @@ mod tests {
     settle(&mut model, &stale, 1, 1);
 
     assert!(matches!(model.view(), LibraryBrowseView::Loading));
+  }
+
+  #[test]
+  fn library_preferences_are_part_of_request_identity_and_payload() {
+    let mut model = BrowseModel::default();
+    let source = BrowseSource::Library {
+      session: 17,
+      shortcut: shortcut(),
+    };
+    let first = request(
+      model
+        .configure(source.clone())
+        .expect("default library should configure"),
+    );
+    let preferences = BrowsePreferences {
+      sort: VideoLibrarySort::RecentlyAdded,
+      sort_direction: VideoLibrarySortDirection::Descending,
+      played_filter: VideoLibraryPlayedFilter::Unplayed,
+      favorites_only: true,
+    };
+    let filtered = request(
+      model
+        .configure_with_preferences(source, preferences)
+        .expect("filtered library should reconfigure"),
+    );
+
+    assert_ne!(first.source_id, filtered.source_id);
+    assert!(matches!(
+      filtered.preferences.sort,
+      VideoLibrarySort::RecentlyAdded
+    ));
+    assert!(matches!(
+      filtered.preferences.played_filter,
+      VideoLibraryPlayedFilter::Unplayed
+    ));
+    assert!(filtered.preferences.favorites_only);
   }
 }

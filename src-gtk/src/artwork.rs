@@ -9,10 +9,10 @@ use std::fmt;
 use std::rc::Rc;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
-use jellypilot_media_server::JellyfinClient;
+use jellypilot_media_server::{JellyfinClient, LibraryImageRequest};
 use relm4::gtk;
 use relm4::gtk::gdk_pixbuf::prelude::PixbufLoaderExt;
-use relm4::tokio::sync::{oneshot, Notify};
+use relm4::tokio::sync::{oneshot, watch, Notify};
 
 pub(crate) const FALLBACK_ARTWORK_ICON: &str = "image-missing-symbolic";
 
@@ -27,6 +27,10 @@ const MAX_CACHED_BYTES: usize = 32 * 1024 * 1024;
 const MAX_CACHED_ENTRIES: usize = 256;
 const MAX_ACTIVE_LOADS: usize = 4;
 const MAX_ACTIVE_BYTES: usize = 64 * 1024 * 1024;
+// One Home render currently schedules at most 48 unique images. Keeping a
+// full extra active-load margin avoids dropping ordinary views while bounding
+// queued reference metadata under pathological callers.
+const MAX_QUEUED_LOADS: usize = 64;
 const DECODE_INPUT_CHUNK_BYTES: usize = 16 * 1024;
 // At peak, a decoder may retain both its mutable pixbuf and the immutable
 // GBytes snapshot returned to the UI. The encoded response is reserved too.
@@ -44,6 +48,7 @@ type FetchResult = Result<ArtworkBytes, ArtworkError>;
 /// Concurrent requests for the same opaque reference share one origin fetch.
 pub(crate) struct ArtworkAdapter {
   state: Arc<Mutex<AdapterState>>,
+  generation_sender: watch::Sender<u64>,
   limits: ArtworkLimits,
 }
 
@@ -55,6 +60,7 @@ struct ArtworkLimits {
   max_cached_entries: usize,
   max_active_loads: usize,
   max_active_bytes: usize,
+  max_queued_loads: usize,
 }
 
 impl Default for ArtworkLimits {
@@ -66,6 +72,7 @@ impl Default for ArtworkLimits {
       max_cached_entries: MAX_CACHED_ENTRIES,
       max_active_loads: MAX_ACTIVE_LOADS,
       max_active_bytes: MAX_ACTIVE_BYTES,
+      max_queued_loads: MAX_QUEUED_LOADS,
     }
   }
 }
@@ -95,12 +102,15 @@ impl Default for ArtworkAdapter {
 impl ArtworkAdapter {
   fn with_limits(limits: ArtworkLimits) -> Self {
     let limits = limits.normalized();
+    let (generation_sender, _) = watch::channel(0);
     Self {
       state: Arc::new(Mutex::new(AdapterState {
+        generation: 0,
         cache: ArtworkCache::new(limits.max_cached_bytes, limits.max_cached_entries),
         in_flight: HashMap::new(),
         scheduler: LoadScheduler::default(),
       })),
+      generation_sender,
       limits,
     }
   }
@@ -116,41 +126,102 @@ impl ArtworkAdapter {
   /// Returns a redacted [`ArtworkError`] when authorization, transport,
   /// response bounds, or decoding fails. Error values never contain the image
   /// reference, origin URL, response body, or authentication details.
-  pub(crate) async fn load(
+  #[cfg(test)]
+  async fn load(
     &self,
     client: &JellyfinClient,
     image_id: &str,
   ) -> Result<DecodedArtwork, ArtworkError> {
-    validate_image_reference(image_id)?;
-    let key = Arc::<str>::from(image_id);
+    let ticket = self.ticket();
+    self.load_with_ticket(client, image_id, ticket).await
+  }
 
-    match self.admit(Arc::clone(&key)) {
+  pub(crate) fn ticket(&self) -> ArtworkLoadTicket {
+    ArtworkLoadTicket(self.lock_state().generation)
+  }
+
+  pub(crate) async fn load_with_ticket(
+    &self,
+    client: &JellyfinClient,
+    image_id: &str,
+    ticket: ArtworkLoadTicket,
+  ) -> Result<DecodedArtwork, ArtworkError> {
+    validate_image_reference(image_id)?;
+    // This validation deliberately precedes cache admission: signed opaque
+    // references are authorized against the current client session on every
+    // call, including decoded cache hits.
+    let request = client
+      .library()
+      .image_request(image_id)
+      .map_err(|_| ArtworkError::RequestRejected)?;
+    let key = Arc::<str>::from(image_id);
+    let mut generation = self.generation_sender.subscribe();
+    let load_generation = ticket.0;
+
+    match self.admit(Arc::clone(&key), load_generation) {
       LoadAdmission::Cached(artwork) => Ok(artwork),
-      LoadAdmission::Follower(receiver) => match receiver.await {
-        Ok(result) => result,
-        Err(_) => Err(ArtworkError::Cancelled),
-      },
-      LoadAdmission::Leader => {
-        let pending = PendingLoad::new(self, Arc::clone(&key));
-        let permit = self.acquire_load_permit().await;
-        let result = self.fetch_and_decode(client, &key, permit).await;
+      LoadAdmission::Follower(receiver) => wait_for_follower(receiver, &mut generation).await,
+      LoadAdmission::Leader(load_generation) => {
+        let pending = PendingLoad::new(self, Arc::clone(&key), load_generation);
+        let permit = self
+          .acquire_load_permit(load_generation, &mut generation)
+          .await?;
+        let result = self
+          .fetch_and_decode(client, &request, permit, &mut generation)
+          .await;
         pending.complete(&result);
         result
       }
+      LoadAdmission::Cancelled => Err(ArtworkError::Cancelled),
     }
   }
 
-  fn admit(&self, key: Arc<str>) -> LoadAdmission {
-    self.lock_state().admit(key)
+  /// Cancels queued and network artwork work from the previous UI view.
+  ///
+  /// Decodes already running on the blocking pool finish in the background and
+  /// retain their aggregate-memory permit until they actually stop.
+  pub(crate) fn cancel_pending(&self) {
+    self.advance_generation(false);
   }
 
-  async fn acquire_load_permit(&self) -> LoadPermit {
-    let queued = QueuedLoad::new(self);
+  /// Cancels pending artwork work and clears decoded data from the old session.
+  pub(crate) fn reset_session(&self) {
+    self.advance_generation(true);
+  }
+
+  fn advance_generation(&self, clear_cache: bool) {
+    let (generation, waiters) = {
+      let mut state = self.lock_state();
+      state.generation = state.generation.wrapping_add(1);
+      let generation = state.generation;
+      let waiters = state.cancel_stale(clear_cache);
+      (generation, waiters)
+    };
+    let _ = self.generation_sender.send_replace(generation);
+    notify_cancelled(waiters);
+  }
+
+  fn admit(&self, key: Arc<str>, generation: u64) -> LoadAdmission {
+    self.lock_state().admit(key, generation)
+  }
+
+  async fn acquire_load_permit(
+    &self,
+    load_generation: u64,
+    generation: &mut watch::Receiver<u64>,
+  ) -> Result<LoadPermit, ArtworkError> {
+    let queued = QueuedLoad::new(self, load_generation)?;
     loop {
       if self.try_activate(queued.id()) {
-        return queued.activate(self.limits.load_reservation_bytes());
+        return Ok(queued.activate(self.limits.load_reservation_bytes()));
       }
-      queued.wait().await;
+      relm4::tokio::select! {
+        () = queued.wait() => {}
+        changed = generation.changed() => {
+          let _ = changed;
+          return Err(ArtworkError::Cancelled);
+        }
+      }
     }
   }
 
@@ -166,29 +237,41 @@ impl ArtworkAdapter {
   async fn fetch_and_decode(
     &self,
     client: &JellyfinClient,
-    image_id: &str,
+    request: &LibraryImageRequest,
     permit: LoadPermit,
+    generation: &mut watch::Receiver<u64>,
   ) -> LoadResult {
-    let bytes = self.fetch_uncached(client, image_id).await?;
+    let bytes = relm4::tokio::select! {
+      result = self.fetch_uncached(client, request) => result?,
+      changed = generation.changed() => {
+        let _ = changed;
+        return Err(ArtworkError::Cancelled);
+      }
+    };
     let decoded_limit = self.limits.max_decoded_bytes;
-    relm4::spawn_blocking(move || {
+    let decode = relm4::spawn_blocking(move || {
       // Keep aggregate admission until the blocking decode really stops. A
       // cancelled caller may drop its join handle while this closure runs.
       let _permit = permit;
       decode_pixels(bytes, decoded_limit)
-    })
-    .await
-    .map_err(|_| ArtworkError::DecodeFailed)?
+    });
+    relm4::tokio::select! {
+      result = decode => result.map_err(|_| ArtworkError::DecodeFailed)?,
+      changed = generation.changed() => {
+        let _ = changed;
+        Err(ArtworkError::Cancelled)
+      }
+    }
   }
 
-  async fn fetch_uncached(&self, client: &JellyfinClient, image_id: &str) -> FetchResult {
-    let request = client
-      .library()
-      .image_request(image_id)
-      .map_err(|_| ArtworkError::RequestRejected)?;
+  async fn fetch_uncached(
+    &self,
+    client: &JellyfinClient,
+    request: &LibraryImageRequest,
+  ) -> FetchResult {
     let mut response = client
       .library()
-      .fetch_image(&request)
+      .fetch_image(request)
       .await
       .map_err(|_| ArtworkError::FetchFailed)?;
 
@@ -226,13 +309,22 @@ impl ArtworkAdapter {
     Ok(ArtworkBytes(Arc::from(body)))
   }
 
-  fn finish_pending(&self, key: Arc<str>, result: &LoadResult) {
+  fn finish_pending(&self, key: Arc<str>, generation: u64, result: &LoadResult) {
     let waiters = {
       let mut state = self.lock_state();
-      if let Ok(artwork) = result {
-        state.cache.insert(Arc::clone(&key), artwork.clone());
+      if state.generation == generation {
+        let waiters = state
+          .in_flight
+          .remove(key.as_ref())
+          .map(|load| load.waiters)
+          .unwrap_or_default();
+        if let Ok(artwork) = result {
+          state.cache.insert(Arc::clone(&key), artwork.clone());
+        }
+        waiters
+      } else {
+        Vec::new()
       }
-      state.in_flight.remove(key.as_ref()).unwrap_or_default()
     };
 
     for waiter in waiters {
@@ -249,33 +341,86 @@ impl ArtworkAdapter {
   }
 }
 
+#[derive(Clone, Copy)]
+pub(crate) struct ArtworkLoadTicket(u64);
+
 struct AdapterState {
+  generation: u64,
   cache: ArtworkCache,
-  in_flight: HashMap<Arc<str>, Vec<oneshot::Sender<LoadResult>>>,
+  in_flight: HashMap<Arc<str>, InFlightLoad>,
   scheduler: LoadScheduler,
 }
 
 impl AdapterState {
-  fn admit(&mut self, key: Arc<str>) -> LoadAdmission {
+  fn admit(&mut self, key: Arc<str>, generation: u64) -> LoadAdmission {
+    if generation != self.generation {
+      return LoadAdmission::Cancelled;
+    }
     if let Some(artwork) = self.cache.get(key.as_ref()) {
       return LoadAdmission::Cached(artwork);
     }
 
-    if let Some(waiters) = self.in_flight.get_mut(key.as_ref()) {
+    if let Some(load) = self.in_flight.get_mut(key.as_ref()) {
+      if load.generation != generation {
+        return LoadAdmission::Cancelled;
+      }
       let (sender, receiver) = oneshot::channel();
-      waiters.push(sender);
+      load.waiters.push(sender);
       return LoadAdmission::Follower(receiver);
     }
 
-    self.in_flight.insert(key, Vec::new());
-    LoadAdmission::Leader
+    self.in_flight.insert(
+      key,
+      InFlightLoad {
+        generation,
+        waiters: Vec::new(),
+      },
+    );
+    LoadAdmission::Leader(generation)
   }
+
+  fn cancel_stale(&mut self, clear_cache: bool) -> Vec<oneshot::Sender<LoadResult>> {
+    if clear_cache {
+      self.cache.clear();
+    }
+    self.scheduler.cancel_queued();
+    self
+      .in_flight
+      .drain()
+      .flat_map(|(_, load)| load.waiters)
+      .collect()
+  }
+}
+
+struct InFlightLoad {
+  generation: u64,
+  waiters: Vec<oneshot::Sender<LoadResult>>,
 }
 
 enum LoadAdmission {
   Cached(DecodedArtwork),
   Follower(oneshot::Receiver<LoadResult>),
-  Leader,
+  Leader(u64),
+  Cancelled,
+}
+
+async fn wait_for_follower(
+  receiver: oneshot::Receiver<LoadResult>,
+  generation: &mut watch::Receiver<u64>,
+) -> LoadResult {
+  relm4::tokio::select! {
+    result = receiver => result.unwrap_or(Err(ArtworkError::Cancelled)),
+    changed = generation.changed() => {
+      let _ = changed;
+      Err(ArtworkError::Cancelled)
+    }
+  }
+}
+
+fn notify_cancelled(waiters: Vec<oneshot::Sender<LoadResult>>) {
+  for waiter in waiters {
+    let _ = waiter.send(Err(ArtworkError::Cancelled));
+  }
 }
 
 #[derive(Default)]
@@ -345,6 +490,10 @@ impl LoadScheduler {
       entry.notify.notify_one();
     }
   }
+
+  fn cancel_queued(&mut self) {
+    self.queue.clear();
+  }
 }
 
 struct QueuedLoad<'a> {
@@ -354,13 +503,22 @@ struct QueuedLoad<'a> {
 }
 
 impl<'a> QueuedLoad<'a> {
-  fn new(adapter: &'a ArtworkAdapter) -> Self {
-    let (id, notify) = adapter.lock_state().scheduler.enqueue();
-    Self {
+  fn new(adapter: &'a ArtworkAdapter, generation: u64) -> Result<Self, ArtworkError> {
+    let (id, notify) = {
+      let mut state = adapter.lock_state();
+      if state.generation != generation {
+        return Err(ArtworkError::Cancelled);
+      }
+      if state.scheduler.queue.len() >= adapter.limits.max_queued_loads {
+        return Err(ArtworkError::Overloaded);
+      }
+      state.scheduler.enqueue()
+    };
+    Ok(Self {
       adapter,
       id: Some(id),
       notify,
-    }
+    })
   }
 
   fn id(&self) -> u64 {
@@ -407,19 +565,21 @@ impl Drop for LoadPermit {
 struct PendingLoad<'a> {
   adapter: &'a ArtworkAdapter,
   key: Option<Arc<str>>,
+  generation: u64,
 }
 
 impl<'a> PendingLoad<'a> {
-  fn new(adapter: &'a ArtworkAdapter, key: Arc<str>) -> Self {
+  fn new(adapter: &'a ArtworkAdapter, key: Arc<str>, generation: u64) -> Self {
     Self {
       adapter,
       key: Some(key),
+      generation,
     }
   }
 
   fn complete(mut self, result: &LoadResult) {
     if let Some(key) = self.key.take() {
-      self.adapter.finish_pending(key, result);
+      self.adapter.finish_pending(key, self.generation, result);
     }
   }
 }
@@ -429,7 +589,7 @@ impl Drop for PendingLoad<'_> {
     if let Some(key) = self.key.take() {
       self
         .adapter
-        .finish_pending(key, &Err(ArtworkError::Cancelled));
+        .finish_pending(key, self.generation, &Err(ArtworkError::Cancelled));
     }
   }
 }
@@ -505,6 +665,7 @@ pub(crate) enum ArtworkError {
   DecodedImageTooLarge,
   UiThreadRequired,
   Cancelled,
+  Overloaded,
 }
 
 impl fmt::Display for ArtworkError {
@@ -520,6 +681,7 @@ impl fmt::Display for ArtworkError {
       Self::DecodedImageTooLarge => "decoded artwork exceeded the memory limit",
       Self::UiThreadRequired => "artwork texture must be created on the GTK thread",
       Self::Cancelled => "artwork loading was cancelled",
+      Self::Overloaded => "artwork loader is at capacity",
     };
     formatter.write_str(message)
   }
@@ -712,6 +874,11 @@ impl ArtworkCache {
     Some(entry.artwork.clone())
   }
 
+  fn clear(&mut self) {
+    self.entries.clear();
+    self.total_bytes = 0;
+  }
+
   fn insert(&mut self, key: Arc<str>, artwork: DecodedArtwork) {
     if self.max_bytes == 0 || self.max_entries == 0 || artwork.len() > self.max_bytes {
       return;
@@ -755,6 +922,9 @@ impl ArtworkCache {
 #[cfg(test)]
 mod tests {
   use super::*;
+  use jellypilot_media_server::{
+    image_id_for_url, ImageRefKind, MediaServerProvider, SavedSession,
+  };
 
   fn artwork(data: &[u8]) -> DecodedArtwork {
     DecodedArtwork {
@@ -768,16 +938,40 @@ mod tests {
 
   fn begin_leader<'a>(adapter: &'a ArtworkAdapter, key: &str) -> PendingLoad<'a> {
     let key = Arc::<str>::from(key);
-    let LoadAdmission::Leader = adapter.admit(Arc::clone(&key)) else {
+    let generation = adapter.lock_state().generation;
+    let LoadAdmission::Leader(generation) = adapter.admit(Arc::clone(&key), generation) else {
       panic!("expected a leader admission");
     };
-    PendingLoad::new(adapter, key)
+    PendingLoad::new(adapter, key, generation)
   }
 
   fn activate_permit(adapter: &ArtworkAdapter) -> LoadPermit {
-    let queued = QueuedLoad::new(adapter);
+    let generation = adapter.lock_state().generation;
+    let queued = QueuedLoad::new(adapter, generation).expect("queue has capacity");
     assert!(adapter.try_activate(queued.id()));
     queued.activate(adapter.limits.load_reservation_bytes())
+  }
+
+  fn adopt_session(client: &JellyfinClient, server_url: &str, user_id: &str) {
+    client.login().adopt_validated_session(&SavedSession {
+      provider: MediaServerProvider::Jellyfin,
+      server_url: server_url.to_owned(),
+      access_token: format!("token-{user_id}"),
+      user_id: user_id.to_owned(),
+      user_name: user_id.to_owned(),
+      server_name: None,
+      device_id: None,
+    });
+  }
+
+  fn image_id(server_url: &str) -> String {
+    image_id_for_url(
+      MediaServerProvider::Jellyfin,
+      server_url,
+      format!("{server_url}/Items/1/Images/Primary"),
+      ImageRefKind::Artwork,
+    )
+    .expect("image reference is valid")
   }
 
   #[test]
@@ -867,12 +1061,70 @@ mod tests {
   }
 
   #[test]
+  fn queue_accepts_an_ordinary_48_image_home_and_bounds_pathological_backlog() {
+    let adapter = ArtworkAdapter::default();
+    let generation = adapter.lock_state().generation;
+    let home = (0..48)
+      .map(|_| QueuedLoad::new(&adapter, generation).expect("Home queue has capacity"))
+      .collect::<Vec<_>>();
+    let margin = (48..MAX_QUEUED_LOADS)
+      .map(|_| QueuedLoad::new(&adapter, generation).expect("bounded margin has capacity"))
+      .collect::<Vec<_>>();
+
+    assert!(matches!(
+      QueuedLoad::new(&adapter, generation),
+      Err(ArtworkError::Overloaded)
+    ));
+
+    drop(home);
+    drop(margin);
+  }
+
+  #[test]
+  fn cancelling_a_generation_removes_stale_backlog_before_current_work() {
+    let adapter = ArtworkAdapter::default();
+    let stale_generation = adapter.lock_state().generation;
+    let stale = (0..MAX_QUEUED_LOADS)
+      .map(|_| QueuedLoad::new(&adapter, stale_generation).expect("stale queue has capacity"))
+      .collect::<Vec<_>>();
+
+    adapter.cancel_pending();
+
+    let current_generation = adapter.lock_state().generation;
+    let current = QueuedLoad::new(&adapter, current_generation).expect("current load is admitted");
+    assert!(adapter.try_activate(current.id()));
+    let current = current.activate(adapter.limits.load_reservation_bytes());
+    drop(stale);
+    drop(current);
+
+    let state = adapter.lock_state();
+    assert_eq!(state.scheduler.active_loads, 0);
+    assert_eq!(state.scheduler.active_bytes, 0);
+    assert!(state.scheduler.queue.is_empty());
+  }
+
+  #[test]
+  fn generation_advance_without_receivers_is_retained_for_later_loads() {
+    let adapter = ArtworkAdapter::default();
+
+    adapter.cancel_pending();
+
+    let generation = *adapter.generation_sender.subscribe().borrow();
+    assert_eq!(generation, 1);
+    assert!(matches!(
+      adapter.admit(Arc::from("current"), generation),
+      LoadAdmission::Leader(1)
+    ));
+  }
+
+  #[test]
   fn cancelling_a_queued_load_allows_the_next_unique_load_to_run() {
     let adapter = ArtworkAdapter::default();
     let first = activate_permit(&adapter);
     let second = activate_permit(&adapter);
-    let cancelled = QueuedLoad::new(&adapter);
-    let next = QueuedLoad::new(&adapter);
+    let generation = adapter.lock_state().generation;
+    let cancelled = QueuedLoad::new(&adapter, generation).expect("queue has capacity");
+    let next = QueuedLoad::new(&adapter, generation).expect("queue has capacity");
 
     assert!(!adapter.try_activate(next.id()));
     drop(cancelled);
@@ -914,7 +1166,7 @@ mod tests {
     let adapter = ArtworkAdapter::default();
     let pending = begin_leader(&adapter, "same");
     let key = Arc::<str>::from("same");
-    let LoadAdmission::Follower(receiver) = adapter.admit(key) else {
+    let LoadAdmission::Follower(receiver) = adapter.admit(key, 0) else {
       panic!("expected a follower admission");
     };
     let decoded = artwork(&[1, 2, 3, 4]);
@@ -927,7 +1179,7 @@ mod tests {
       .expect("leader succeeds");
 
     assert_eq!(received.pixels.as_ptr(), pixels);
-    let LoadAdmission::Cached(cached) = adapter.admit(Arc::from("same")) else {
+    let LoadAdmission::Cached(cached) = adapter.admit(Arc::from("same"), 0) else {
       panic!("expected a decoded cache hit");
     };
     assert_eq!(cached.pixels.as_ptr(), pixels);
@@ -938,14 +1190,14 @@ mod tests {
     let adapter = ArtworkAdapter::default();
     let pending = begin_leader(&adapter, "same");
     let key = Arc::<str>::from("same");
-    let LoadAdmission::Follower(receiver) = adapter.admit(key) else {
+    let LoadAdmission::Follower(receiver) = adapter.admit(key, 0) else {
       panic!("expected a follower admission");
     };
     drop(receiver);
     pending.complete(&Ok(artwork(&[1, 2, 3, 4])));
 
     assert!(matches!(
-      adapter.admit(Arc::from("same")),
+      adapter.admit(Arc::from("same"), 0),
       LoadAdmission::Cached(_)
     ));
   }
@@ -954,7 +1206,7 @@ mod tests {
   fn cancelled_leader_notifies_followers_and_releases_the_key() {
     let adapter = ArtworkAdapter::default();
     let pending = begin_leader(&adapter, "same");
-    let LoadAdmission::Follower(receiver) = adapter.admit(Arc::from("same")) else {
+    let LoadAdmission::Follower(receiver) = adapter.admit(Arc::from("same"), 0) else {
       panic!("expected a follower admission");
     };
 
@@ -965,8 +1217,8 @@ mod tests {
       Err(ArtworkError::Cancelled)
     ));
     assert!(matches!(
-      adapter.admit(Arc::from("same")),
-      LoadAdmission::Leader
+      adapter.admit(Arc::from("same"), 0),
+      LoadAdmission::Leader(_)
     ));
   }
 
@@ -977,8 +1229,92 @@ mod tests {
     pending.complete(&Err(ArtworkError::FetchFailed));
 
     assert!(matches!(
-      adapter.admit(Arc::from("same")),
-      LoadAdmission::Leader
+      adapter.admit(Arc::from("same"), 0),
+      LoadAdmission::Leader(_)
+    ));
+  }
+
+  #[test]
+  fn generation_cancellation_notifies_followers_and_rejects_stale_admission() {
+    let adapter = ArtworkAdapter::default();
+    let pending = begin_leader(&adapter, "same");
+    let LoadAdmission::Follower(receiver) = adapter.admit(Arc::from("same"), 0) else {
+      panic!("expected a follower admission");
+    };
+
+    adapter.cancel_pending();
+
+    assert!(matches!(
+      receiver.blocking_recv().expect("follower is notified"),
+      Err(ArtworkError::Cancelled)
+    ));
+    assert!(matches!(
+      adapter.admit(Arc::from("stale"), 0),
+      LoadAdmission::Cancelled
+    ));
+    assert!(matches!(
+      adapter.admit(Arc::from("current"), 1),
+      LoadAdmission::Leader(1)
+    ));
+    drop(pending);
+  }
+
+  #[test]
+  fn reset_session_clears_decoded_cache() {
+    let adapter = ArtworkAdapter::default();
+    adapter
+      .lock_state()
+      .cache
+      .insert(Arc::from("cached"), artwork(&[1, 2, 3, 4]));
+
+    adapter.reset_session();
+
+    assert!(adapter.lock_state().cache.get("cached").is_none());
+  }
+
+  #[test]
+  fn ticket_captured_before_reset_cannot_adopt_the_new_generation() {
+    let adapter = ArtworkAdapter::default();
+    let stale = adapter.ticket();
+
+    adapter.reset_session();
+
+    assert!(matches!(
+      adapter.admit(Arc::from("stale"), stale.0),
+      LoadAdmission::Cancelled
+    ));
+    assert!(matches!(
+      adapter.admit(Arc::from("current"), adapter.ticket().0),
+      LoadAdmission::Leader(_)
+    ));
+  }
+
+  #[test]
+  fn cached_artwork_is_revalidated_against_the_current_client_session() {
+    let adapter = ArtworkAdapter::default();
+    let client = JellyfinClient::new();
+    let first_server = "https://first.example.com";
+    let reference = image_id(first_server);
+    let cached = artwork(&[1, 2, 3, 4]);
+    let cached_pixels = cached.pixels.as_ptr();
+    adopt_session(&client, first_server, "first-user");
+    adapter
+      .lock_state()
+      .cache
+      .insert(Arc::from(reference.as_str()), cached);
+    let runtime = relm4::tokio::runtime::Builder::new_current_thread()
+      .build()
+      .expect("runtime builds");
+
+    let accepted = runtime
+      .block_on(adapter.load(&client, &reference))
+      .expect("current session accepts cache hit");
+    assert_eq!(accepted.pixels.as_ptr(), cached_pixels);
+
+    adopt_session(&client, "https://second.example.com", "second-user");
+    assert!(matches!(
+      runtime.block_on(adapter.load(&client, &reference)),
+      Err(ArtworkError::RequestRejected)
     ));
   }
 
@@ -1024,6 +1360,7 @@ mod tests {
       ArtworkError::DecodedImageTooLarge,
       ArtworkError::UiThreadRequired,
       ArtworkError::Cancelled,
+      ArtworkError::Overloaded,
     ];
 
     for error in errors {
