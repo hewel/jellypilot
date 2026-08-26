@@ -8072,16 +8072,13 @@ where
   receiver.await.map_err(|_| ())
 }
 
-#[allow(deprecated)]
 fn install_media_css() {
   let Some(display) = gtk::gdk::Display::default() else {
     return;
   };
   let provider = gtk::CssProvider::new();
-  provider.load_from_data(
-    ".jellypilot-rounded { border-radius: 14px; }\n.jellypilot-poster { border-radius: 10px; }",
-  );
-  gtk::StyleContext::add_provider_for_display(
+  provider.load_from_string(include_str!("../style.css"));
+  gtk::style_context_add_provider_for_display(
     &display,
     &provider,
     gtk::STYLE_PROVIDER_PRIORITY_APPLICATION,
