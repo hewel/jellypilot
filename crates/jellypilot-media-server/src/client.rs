@@ -3771,7 +3771,18 @@ fn map_continue_watching_item(
   item: jellyfin_api::models::BaseItemDto,
 ) -> Option<VideoLibraryItem> {
   let image_type = match item.r#type? {
-    jellyfin_api::models::BaseItemKind::Episode => jellyfin_api::models::ImageType::Thumb,
+    jellyfin_api::models::BaseItemKind::Episode => {
+      let has_thumb = item
+        .image_tags
+        .as_ref()
+        .and_then(|tags| tags.as_ref())
+        .is_some_and(|tags| tags.contains_key("Thumb"));
+      if has_thumb {
+        jellyfin_api::models::ImageType::Thumb
+      } else {
+        jellyfin_api::models::ImageType::Primary
+      }
+    }
     _ => jellyfin_api::models::ImageType::Primary,
   };
 
@@ -4700,7 +4711,17 @@ fn map_emby_continue_watching_item(
   item: emby_api::models::BaseItemDto,
 ) -> Option<VideoLibraryItem> {
   let image_type = match item.r#type.as_deref()? {
-    "Episode" => "Thumb",
+    "Episode" => {
+      let has_thumb = item
+        .image_tags
+        .as_ref()
+        .is_some_and(|tags| tags.contains_key("Thumb"));
+      if has_thumb {
+        "Thumb"
+      } else {
+        "Primary"
+      }
+    }
     _ => "Primary",
   };
 
@@ -7027,11 +7048,12 @@ mod tests {
     let episode_id = "00000000-0000-0000-0000-000000000011";
     let series_id = "00000000-0000-0000-0000-000000000012";
     let resume_episode_id = "00000000-0000-0000-0000-000000000013";
+    let resume_thumbed_episode_id = "00000000-0000-0000-0000-000000000014";
     let (server_url, requests) = serve_route_responses_with_requests(vec![
       (
         "/UserItems/Resume",
         "200 OK",
-        r#"{"Items":[{"Id":"00000000-0000-0000-0000-000000000010","Name":"Resume Movie","Type":"Movie","ProductionYear":2024,"RunTimeTicks":72000000000,"ImageTags":{"Thumb":"thumb-1"},"UserData":{"PlaybackPositionTicks":1200000000,"PlayedPercentage":25.0,"IsFavorite":true,"Played":false}},{"Id":"00000000-0000-0000-0000-000000000013","Name":"Resume Episode","Type":"Episode","SeriesName":"Example Show","SeriesId":"00000000-0000-0000-0000-000000000012","ParentIndexNumber":1,"IndexNumber":1,"ImageTags":{"Primary":"episode-primary"},"UserData":{"PlaybackPositionTicks":600000000,"PlayedPercentage":10.0,"IsFavorite":false,"Played":false}}],"TotalRecordCount":2}"#,
+        r#"{"Items":[{"Id":"00000000-0000-0000-0000-000000000010","Name":"Resume Movie","Type":"Movie","ProductionYear":2024,"RunTimeTicks":72000000000,"ImageTags":{"Thumb":"thumb-1","Primary":"poster-movie"},"UserData":{"PlaybackPositionTicks":1200000000,"PlayedPercentage":25.0,"IsFavorite":true,"Played":false}},{"Id":"00000000-0000-0000-0000-000000000013","Name":"Resume Episode","Type":"Episode","SeriesName":"Example Show","SeriesId":"00000000-0000-0000-0000-000000000012","ParentIndexNumber":1,"IndexNumber":1,"ImageTags":{"Primary":"episode-primary"},"UserData":{"PlaybackPositionTicks":600000000,"PlayedPercentage":10.0,"IsFavorite":false,"Played":false}},{"Id":"00000000-0000-0000-0000-000000000014","Name":"Resume Episode Thumb","Type":"Episode","SeriesName":"Example Show","SeriesId":"00000000-0000-0000-0000-000000000012","ParentIndexNumber":1,"IndexNumber":2,"ImageTags":{"Thumb":"episode-thumb","Primary":"episode-also-primary"},"UserData":{"PlaybackPositionTicks":300000000,"PlayedPercentage":5.0,"IsFavorite":false,"Played":false}}],"TotalRecordCount":3}"#,
       ),
       (
         "/Shows/NextUp",
@@ -7061,7 +7083,7 @@ mod tests {
 
     assert_eq!(home.continue_watching[0].id, movie_id);
     assert_eq!(home.continue_watching[0].name, "Resume Movie");
-    let expected_artwork = format!("{server_url}/Items/{movie_id}/Images/Thumb?tag=thumb-1");
+    let expected_artwork = format!("{server_url}/Items/{movie_id}/Images/Primary?tag=poster-movie");
     assert_image_ref_url(
       home.continue_watching[0].artwork_image_id.as_ref(),
       &expected_artwork,
@@ -7071,6 +7093,12 @@ mod tests {
     assert_image_ref_url(
       home.continue_watching[1].artwork_image_id.as_ref(),
       &expected_episode_artwork,
+    );
+    let expected_thumbed_episode_artwork =
+      format!("{server_url}/Items/{resume_thumbed_episode_id}/Images/Thumb?tag=episode-thumb");
+    assert_image_ref_url(
+      home.continue_watching[2].artwork_image_id.as_ref(),
+      &expected_thumbed_episode_artwork,
     );
     assert_eq!(home.next_up[0].id, episode_id);
     assert_eq!(home.next_up[0].series_id.as_deref(), Some(series_id));
@@ -7767,11 +7795,12 @@ mod tests {
     let shows_library_id = "00000000-0000-0000-0000-000000000221";
     let movie_id = "00000000-0000-0000-0000-000000000210";
     let episode_id = "00000000-0000-0000-0000-000000000211";
+    let resume_episode_id = "00000000-0000-0000-0000-000000000213";
     let (server_url, requests) = serve_route_responses_with_requests(vec![
       (
         "/Users/00000000-0000-0000-0000-000000000001/Items/Resume",
         "200 OK",
-        r#"{"Items":[{"Id":"00000000-0000-0000-0000-000000000210","Name":"Emby Resume Movie","Type":"Movie","ImageTags":{"Thumb":"thumb-emby"},"UserData":{"PlaybackPositionTicks":1500000000,"PlayedPercentage":20.0,"IsFavorite":true,"Played":false}}],"TotalRecordCount":1}"#,
+        r#"{"Items":[{"Id":"00000000-0000-0000-0000-000000000210","Name":"Emby Resume Movie","Type":"Movie","ImageTags":{"Thumb":"thumb-emby","Primary":"poster-emby"},"UserData":{"PlaybackPositionTicks":1500000000,"PlayedPercentage":20.0,"IsFavorite":true,"Played":false}},{"Id":"00000000-0000-0000-0000-000000000213","Name":"Emby Resume Episode","Type":"Episode","ImageTags":{"Primary":"episode-primary-emby"},"UserData":{"PlaybackPositionTicks":600000000,"PlayedPercentage":10.0,"IsFavorite":false,"Played":false}}],"TotalRecordCount":2}"#,
       ),
       (
         "/Shows/NextUp",
@@ -7818,7 +7847,11 @@ mod tests {
     );
     assert_image_ref_url(
       home.continue_watching[0].artwork_image_id.as_ref(),
-      &format!("{emby_base}/Items/{movie_id}/Images/Thumb?tag=thumb-emby"),
+      &format!("{emby_base}/Items/{movie_id}/Images/Primary?tag=poster-emby"),
+    );
+    assert_image_ref_url(
+      home.continue_watching[1].artwork_image_id.as_ref(),
+      &format!("{emby_base}/Items/{resume_episode_id}/Images/Primary?tag=episode-primary-emby"),
     );
     assert_eq!(home.next_up[0].id, episode_id);
     assert_eq!(home.latest_movies[0].name, "Latest Emby Movie");
