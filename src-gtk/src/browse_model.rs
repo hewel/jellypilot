@@ -11,16 +11,17 @@ use jellypilot_media_server::{
 use crate::library_browse::{
   LibraryBrowseEffect, LibraryBrowseInput, LibraryBrowseView, NativeLibraryBrowse,
 };
+use crate::request_gate::SessionToken;
 
 /// Complete identity of one active native browse result.
 #[derive(Clone, Debug)]
 pub(crate) enum BrowseSource {
   Library {
-    session: u64,
+    session: SessionToken,
     shortcut: VideoLibraryShortcut,
   },
   Search {
-    session: u64,
+    session: SessionToken,
     query: String,
   },
 }
@@ -30,13 +31,13 @@ impl BrowseSource {
   pub(crate) fn identity(&self) -> String {
     match self {
       Self::Library { session, shortcut } => format!(
-        "session:{session}:library:{}:{}:{}",
+        "session:{session:?}:library:{}:{}:{}",
         shortcut.id.len(),
         shortcut.id,
         shortcut.collection_type
       ),
       Self::Search { session, query } => {
-        format!("session:{session}:search:{}:{query}", query.len())
+        format!("session:{session:?}:search:{}:{query}", query.len())
       }
     }
   }
@@ -417,6 +418,11 @@ fn unsigned_page_value(value: i32, name: &str) -> Result<u32, String> {
 #[cfg(test)]
 mod tests {
   use super::*;
+  use crate::request_gate::RequestGate;
+
+  fn session() -> SessionToken {
+    RequestGate::default().current_session()
+  }
 
   fn shortcut() -> VideoLibraryShortcut {
     VideoLibraryShortcut {
@@ -522,7 +528,7 @@ mod tests {
     let first = request(
       model
         .configure(BrowseSource::Search {
-          session: 3,
+          session: session(),
           query: "arrival".to_owned(),
         })
         .expect("search should configure"),
@@ -552,7 +558,7 @@ mod tests {
     let first = request(
       model
         .configure(BrowseSource::Search {
-          session: 7,
+          session: session(),
           query: "dune".to_owned(),
         })
         .expect("search should configure"),
@@ -589,7 +595,7 @@ mod tests {
     let mut model = BrowseModel::default();
     let bootstrap = model
       .configure(BrowseSource::Library {
-        session: 11,
+        session: session(),
         shortcut: shortcut(),
       })
       .expect("library should configure");
@@ -617,7 +623,7 @@ mod tests {
     let mut model = BrowseModel::default();
     let bootstrap = model
       .configure(BrowseSource::Library {
-        session: 12,
+        session: session(),
         shortcut: shortcut(),
       })
       .expect("library should configure");
@@ -652,7 +658,7 @@ mod tests {
     let mut model = BrowseModel::default();
     let bootstrap = model
       .configure(BrowseSource::Library {
-        session: 15,
+        session: session(),
         shortcut: shortcut(),
       })
       .expect("library should configure");
@@ -677,7 +683,7 @@ mod tests {
     let bootstrap = request(
       model
         .configure(BrowseSource::Library {
-          session: 13,
+          session: session(),
           shortcut: shortcut(),
         })
         .expect("library should configure"),
@@ -724,7 +730,7 @@ mod tests {
     let bootstrap = request(
       model
         .configure(BrowseSource::Search {
-          session: 14,
+          session: session(),
           query: "blade runner".to_owned(),
         })
         .expect("search should configure"),
@@ -753,7 +759,7 @@ mod tests {
     const TOTAL: u32 = LIBRARY_BROWSE_PAGE_SIZE * 10;
     let mut model = BrowseModel::default();
     let source = BrowseSource::Search {
-      session: 16,
+      session: session(),
       query: "arrival".to_owned(),
     };
     let bootstrap = model
@@ -799,15 +805,17 @@ mod tests {
     let stale = request(
       model
         .configure(BrowseSource::Library {
-          session: 1,
+          session: session(),
           shortcut: shortcut(),
         })
         .expect("first source should configure"),
     );
     model.reset();
+    let mut gate = RequestGate::default();
+    gate.disconnect();
     model
       .configure(BrowseSource::Library {
-        session: 2,
+        session: gate.current_session(),
         shortcut: shortcut(),
       })
       .expect("second source should configure");
@@ -821,7 +829,7 @@ mod tests {
   fn library_preferences_are_part_of_request_identity_and_payload() {
     let mut model = BrowseModel::default();
     let source = BrowseSource::Library {
-      session: 17,
+      session: session(),
       shortcut: shortcut(),
     };
     let first = request(

@@ -42,7 +42,10 @@ use crate::playback_session::{
   IntroAvailability, PlaybackEffect, PlaybackEvent, PlaybackInput, PlaybackIntent, PlaybackNotice,
   PlaybackSession, SessionView, TracksView,
 };
-use crate::request_gate::{DetailToken, HomeToken, RequestGate, SessionToken};
+use crate::request_gate::{
+  DetailAuxKind, DetailAuxToken, DetailToken, HomeToken, ImageCacheToken, RemotePlayToken,
+  RemoteToken, RequestGate, SessionToken,
+};
 
 const APP_ID: &str = "io.github.hewel.JellyPilot.GtkPreview";
 const SUBTITLE_LANGUAGE_OPTIONS: [&str; 8] =
@@ -74,7 +77,6 @@ struct AppModel {
   artwork_view: u64,
   playback_artwork_view: u64,
   artwork_slot: u64,
-  image_cache_sequence: u64,
   image_cache_clearing: bool,
   artwork_targets: HashMap<u64, ArtworkTarget>,
   requests: RequestGate,
@@ -87,20 +89,13 @@ struct AppModel {
   detail_selection: Option<VideoLibraryItem>,
   detail_origin: Option<String>,
   detail_parent: Option<DetailParent>,
-  detail_identity: Option<String>,
   streams: LoadState<VideoItemStreams>,
-  stream_sequence: u64,
   season_neighbors: LoadState<Vec<VideoLibraryItem>>,
-  season_neighbor_sequence: u64,
   season: Option<SeasonSelection>,
   recommendations: LoadState<Vec<VideoLibraryItem>>,
-  recommendation_sequence: u64,
   user_data_busy: bool,
-  user_data_sequence: u64,
   user_data_error: Option<String>,
   remote_state: RemoteControlState,
-  remote_generation: u64,
-  remote_play_generation: u64,
   remote_socket: Option<Arc<jellypilot_session::JellyfinWebSocket>>,
   playback_session: PlaybackSession,
   playback_controller: Option<PlaybackController>,
@@ -330,13 +325,13 @@ enum AppMessage {
   StopPlayback,
   RefreshPlayback,
   QuitRequested,
-  RemoteDisconnectSettled(u64),
+  RemoteDisconnectSettled(RemoteToken),
 }
 
 enum AppCommand {
   SavedProfiles(Result<Vec<SavedProfileSummary>, String>),
   SavedSessionStored {
-    session: u64,
+    session: SessionToken,
     result: Result<(SavedProfileKey, Vec<SavedProfileSummary>), String>,
   },
   Login {
@@ -345,25 +340,24 @@ enum AppCommand {
     result: Result<(), String>,
   },
   RemoteReady {
-    generation: u64,
+    token: RemoteToken,
     socket: Arc<jellypilot_session::JellyfinWebSocket>,
     receiver: relm4::tokio::sync::mpsc::Receiver<jellypilot_session::JellyfinWebSocketEvent>,
   },
   RemoteEvent {
-    generation: u64,
+    token: RemoteToken,
     event: jellypilot_session::JellyfinWebSocketEvent,
   },
   RemoteFailed {
-    generation: u64,
+    token: RemoteToken,
   },
   RemotePlay {
-    generation: u64,
-    play_generation: u64,
+    token: RemotePlayToken,
     start_position: PlaybackStartPosition,
     result: Result<VideoItemDetail, String>,
   },
   ConnectionStatus {
-    session: u64,
+    session: SessionToken,
     result: Result<(), ()>,
   },
   QuickConnectCode {
@@ -374,7 +368,7 @@ enum AppCommand {
     session: SessionToken,
   },
   ForgotProfile {
-    session: u64,
+    session: SessionToken,
     key: SavedProfileKey,
     sign_out: bool,
     result: Result<Vec<SavedProfileSummary>, String>,
@@ -392,21 +386,15 @@ enum AppCommand {
     result: Box<Result<DetailContent, String>>,
   },
   Recommendations {
-    session: u64,
-    sequence: u64,
-    item_id: String,
+    token: DetailAuxToken,
     result: Result<Vec<VideoLibraryItem>, String>,
   },
   Streams {
-    session: u64,
-    sequence: u64,
-    item_id: String,
+    token: DetailAuxToken,
     result: Result<VideoItemStreams, String>,
   },
   SeasonNeighbors {
-    session: u64,
-    sequence: u64,
-    item_id: String,
+    token: DetailAuxToken,
     result: Result<Vec<VideoLibraryItem>, String>,
   },
   SeasonEpisodes {
@@ -415,23 +403,21 @@ enum AppCommand {
     result: Result<VideoSeasonEpisodesPage, String>,
   },
   UserData {
-    session: u64,
-    sequence: u64,
-    item_id: String,
+    token: DetailAuxToken,
     result: Result<VideoUserDataUpdate, String>,
   },
   Artwork {
-    session: u64,
+    session: SessionToken,
     view: u64,
     slot: u64,
     result: Result<DecodedArtwork, ()>,
   },
   ImageCacheStats {
-    sequence: u64,
+    token: ImageCacheToken,
     result: Result<ArtworkCacheStats, ()>,
   },
   ImageCacheCleared {
-    sequence: u64,
+    token: ImageCacheToken,
     result: Result<ArtworkCacheStats, ()>,
   },
   PlaybackSettled {
@@ -473,15 +459,13 @@ impl std::fmt::Debug for AppCommand {
         .field("session", session)
         .field("successful", &result.is_ok())
         .finish(),
-      Self::RemoteFailed { generation } => formatter
+      Self::RemoteFailed { token } => formatter
         .debug_struct("RemoteFailed")
-        .field("generation", generation)
+        .field("token", token)
         .finish(),
-      Self::RemotePlay {
-        generation, result, ..
-      } => formatter
+      Self::RemotePlay { token, result, .. } => formatter
         .debug_struct("RemotePlay")
-        .field("generation", generation)
+        .field("token", token)
         .field("successful", &result.is_ok())
         .finish(),
       Self::ConnectionStatus { session, result } => formatter
@@ -489,13 +473,13 @@ impl std::fmt::Debug for AppCommand {
         .field("session", session)
         .field("successful", &result.is_ok())
         .finish(),
-      Self::RemoteReady { generation, .. } => formatter
+      Self::RemoteReady { token, .. } => formatter
         .debug_struct("RemoteReady")
-        .field("generation", generation)
+        .field("token", token)
         .finish(),
-      Self::RemoteEvent { generation, event } => formatter
+      Self::RemoteEvent { token, event } => formatter
         .debug_struct("RemoteEvent")
-        .field("generation", generation)
+        .field("token", token)
         .field("event", event)
         .finish(),
       Self::QuickConnectCode { session, .. } => formatter
@@ -531,40 +515,19 @@ impl std::fmt::Debug for AppCommand {
         .field("token", token)
         .field("successful", &result.is_ok())
         .finish(),
-      Self::Recommendations {
-        session,
-        sequence,
-        item_id,
-        result,
-      } => formatter
+      Self::Recommendations { token, result } => formatter
         .debug_struct("Recommendations")
-        .field("session", session)
-        .field("sequence", sequence)
-        .field("item_id", item_id)
+        .field("token", token)
         .field("successful", &result.is_ok())
         .finish(),
-      Self::Streams {
-        session,
-        sequence,
-        item_id,
-        result,
-      } => formatter
+      Self::Streams { token, result } => formatter
         .debug_struct("Streams")
-        .field("session", session)
-        .field("sequence", sequence)
-        .field("item_id", item_id)
+        .field("token", token)
         .field("successful", &result.is_ok())
         .finish(),
-      Self::SeasonNeighbors {
-        session,
-        sequence,
-        item_id,
-        result,
-      } => formatter
+      Self::SeasonNeighbors { token, result } => formatter
         .debug_struct("SeasonNeighbors")
-        .field("session", session)
-        .field("sequence", sequence)
-        .field("item_id", item_id)
+        .field("token", token)
         .field("successful", &result.is_ok())
         .finish(),
       Self::SeasonEpisodes {
@@ -577,15 +540,9 @@ impl std::fmt::Debug for AppCommand {
         .field("season_id", season_id)
         .field("successful", &result.is_ok())
         .finish(),
-      Self::UserData {
-        session,
-        sequence,
-        result,
-        ..
-      } => formatter
+      Self::UserData { token, result } => formatter
         .debug_struct("UserData")
-        .field("session", session)
-        .field("sequence", sequence)
+        .field("token", token)
         .field("successful", &result.is_ok())
         .finish(),
       Self::Artwork {
@@ -600,14 +557,14 @@ impl std::fmt::Debug for AppCommand {
         .field("slot", slot)
         .field("successful", &result.is_ok())
         .finish(),
-      Self::ImageCacheStats { sequence, result } => formatter
+      Self::ImageCacheStats { token, result } => formatter
         .debug_struct("ImageCacheStats")
-        .field("sequence", sequence)
+        .field("token", token)
         .field("successful", &result.is_ok())
         .finish(),
-      Self::ImageCacheCleared { sequence, result } => formatter
+      Self::ImageCacheCleared { token, result } => formatter
         .debug_struct("ImageCacheCleared")
-        .field("sequence", sequence)
+        .field("token", token)
         .field("successful", &result.is_ok())
         .finish(),
       Self::PlaybackSettled { settlement, .. } => formatter
@@ -819,7 +776,6 @@ impl Component for AppModel {
       artwork_view: 0,
       playback_artwork_view: 0,
       artwork_slot: 0,
-      image_cache_sequence: 0,
       image_cache_clearing: false,
       artwork_targets: HashMap::new(),
       requests: RequestGate::default(),
@@ -830,22 +786,15 @@ impl Component for AppModel {
       browse: BrowseState::default(),
       detail: LoadState::Idle,
       detail_selection: None,
-      detail_identity: None,
       streams: LoadState::Idle,
-      stream_sequence: 0,
       season_neighbors: LoadState::Idle,
-      season_neighbor_sequence: 0,
       detail_origin: None,
       detail_parent: None,
       recommendations: LoadState::Idle,
-      recommendation_sequence: 0,
       season: None,
       user_data_busy: false,
-      user_data_sequence: 0,
       user_data_error: None,
       remote_state: RemoteControlState::Unavailable,
-      remote_generation: 0,
-      remote_play_generation: 0,
       remote_socket: None,
       playback_session: PlaybackSession::default(),
       playback_controller: None,
@@ -919,7 +868,7 @@ impl Component for AppModel {
       AppMessage::NextSeasonEpisodePage => self.change_season_episode_page(1, &sender),
       AppMessage::RetrySeason => self.retry_season(&sender),
       AppMessage::BackFromSeason => {
-        self.requests.navigate();
+        self.requests.cancel_detail_loads();
         self.season = None;
         self.render_detail(&sender);
       }
@@ -984,8 +933,8 @@ impl Component for AppModel {
       AppMessage::StopPlayback => self.dispatch_playback(PlaybackIntent::Stop, &sender),
       AppMessage::RefreshPlayback => self.dispatch_playback(PlaybackIntent::Tick, &sender),
       AppMessage::QuitRequested => self.request_quit(&sender),
-      AppMessage::RemoteDisconnectSettled(generation) => {
-        if generation == self.remote_generation && self.remote_disconnect_pending {
+      AppMessage::RemoteDisconnectSettled(token) => {
+        if self.requests.is_current_remote(token) && self.remote_disconnect_pending {
           self.remote_disconnect_pending = false;
           if self.quitting && self.playback_session.view().quit_may_proceed {
             relm4::main_adw_application().quit();
@@ -1019,7 +968,7 @@ impl Component for AppModel {
       }
       AppCommand::SavedSessionStored { session, result } => {
         self.set_profile_operation_busy(false);
-        let is_current = session == self.requests.session_generation()
+        let is_current = self.requests.is_current_session(session)
           && matches!(self.connection, ConnectionPhase::Connected);
         match result {
           Ok((key, profiles)) => {
@@ -1061,11 +1010,11 @@ impl Component for AppModel {
         result,
       } => self.finish_login(session, client, result, &sender),
       AppCommand::RemoteReady {
-        generation,
+        token,
         socket,
         receiver,
       } => {
-        if generation != self.remote_generation {
+        if !self.requests.is_current_remote(token) {
           return;
         }
         self.remote_state = RemoteControlState::Connecting;
@@ -1082,7 +1031,7 @@ impl Component for AppModel {
               let mut receiver = receiver;
               while let Some(event) = receiver.recv().await {
                 if output
-                  .send(AppCommand::RemoteEvent { generation, event })
+                  .send(AppCommand::RemoteEvent { token, event })
                   .is_err()
                 {
                   break;
@@ -1092,8 +1041,8 @@ impl Component for AppModel {
             .drop_on_shutdown()
         });
       }
-      AppCommand::RemoteFailed { generation } => {
-        if generation == self.remote_generation {
+      AppCommand::RemoteFailed { token } => {
+        if self.requests.is_current_remote(token) {
           self.remote_state = RemoteControlState::Lost;
           self.update_connection_status();
           self.record_diagnostic(
@@ -1103,8 +1052,8 @@ impl Component for AppModel {
           );
         }
       }
-      AppCommand::RemoteEvent { generation, event } => {
-        if generation != self.remote_generation {
+      AppCommand::RemoteEvent { token, event } => {
+        if !self.requests.is_current_remote(token) {
           return;
         }
         let message = match &event {
@@ -1140,12 +1089,11 @@ impl Component for AppModel {
         self.update_connection_status();
       }
       AppCommand::RemotePlay {
-        generation,
-        play_generation,
+        token,
         start_position,
         result,
       } => {
-        if generation != self.remote_generation || play_generation != self.remote_play_generation {
+        if !self.requests.is_current_remote_play(token) {
           return;
         }
         if let Ok(item) = result {
@@ -1160,7 +1108,7 @@ impl Component for AppModel {
         }
       }
       AppCommand::ConnectionStatus { session, result } => {
-        if session != self.requests.session_generation()
+        if !self.requests.is_current_session(session)
           || !matches!(self.connection, ConnectionPhase::Connected)
         {
           return;
@@ -1243,7 +1191,7 @@ impl Component for AppModel {
         let disconnect_current_session = should_disconnect_after_forget(
           sign_out,
           session,
-          self.requests.session_generation(),
+          self.requests.current_session(),
           self.connection,
           self.active_saved_profile.as_ref() == Some(&key),
         );
@@ -1309,16 +1257,8 @@ impl Component for AppModel {
           self.render_detail(&sender);
         }
       }
-      AppCommand::Recommendations {
-        session,
-        sequence,
-        item_id,
-        result,
-      } => {
-        if session != self.requests.session_generation()
-          || sequence != self.recommendation_sequence
-          || self.detail_identity.as_deref() != Some(item_id.as_str())
-        {
+      AppCommand::Recommendations { token, result } => {
+        if !self.requests.finish_detail_aux(token) {
           return;
         }
         self.recommendations = match result {
@@ -1329,16 +1269,8 @@ impl Component for AppModel {
           self.render_detail(&sender);
         }
       }
-      AppCommand::Streams {
-        session,
-        sequence,
-        item_id,
-        result,
-      } => {
-        if session != self.requests.session_generation()
-          || sequence != self.stream_sequence
-          || self.detail_identity.as_deref() != Some(item_id.as_str())
-        {
+      AppCommand::Streams { token, result } => {
+        if !self.requests.finish_detail_aux(token) {
           return;
         }
         self.streams = match result {
@@ -1349,16 +1281,8 @@ impl Component for AppModel {
           self.render_detail(&sender);
         }
       }
-      AppCommand::SeasonNeighbors {
-        session,
-        sequence,
-        item_id,
-        result,
-      } => {
-        if session != self.requests.session_generation()
-          || sequence != self.season_neighbor_sequence
-          || self.detail_identity.as_deref() != Some(item_id.as_str())
-        {
+      AppCommand::SeasonNeighbors { token, result } => {
+        if !self.requests.finish_detail_aux(token) {
           return;
         }
         self.season_neighbors = match result {
@@ -1392,19 +1316,16 @@ impl Component for AppModel {
           self.render_detail(&sender);
         }
       }
-      AppCommand::UserData {
-        session,
-        sequence,
-        item_id,
-        result,
-      } => self.finish_user_data_update(session, sequence, &item_id, result, &sender),
+      AppCommand::UserData { token, result } => {
+        self.finish_user_data_update(token, result, &sender)
+      }
       AppCommand::Artwork {
         session,
         view,
         slot,
         result,
       } => {
-        if session != self.requests.session_generation() {
+        if !self.requests.is_current_session(session) {
           return;
         }
         let playback_thumb = slot == PLAYBACK_ARTWORK_SLOT;
@@ -1429,8 +1350,8 @@ impl Component for AppModel {
           Err(()) => self.record_artwork_failure(),
         }
       }
-      AppCommand::ImageCacheStats { sequence, result } => {
-        if sequence != self.image_cache_sequence || self.image_cache_clearing {
+      AppCommand::ImageCacheStats { token, result } => {
+        if !self.requests.finish_image_cache(token) || self.image_cache_clearing {
           return;
         }
         match result {
@@ -1444,8 +1365,8 @@ impl Component for AppModel {
           }
         }
       }
-      AppCommand::ImageCacheCleared { sequence, result } => {
-        if sequence != self.image_cache_sequence {
+      AppCommand::ImageCacheCleared { token, result } => {
+        if !self.requests.finish_image_cache(token) {
           return;
         }
         self.image_cache_clearing = false;
@@ -1610,15 +1531,13 @@ impl AppModel {
           );
           return;
         };
-        self.remote_play_generation = self.remote_play_generation.wrapping_add(1);
-        let play_generation = self.remote_play_generation;
+        let token = self.requests.begin_remote_play();
         let start_position = request
           .start_position_ticks
           .filter(|ticks| *ticks > 0)
           .map(|ticks| PlaybackStartPosition::At(ticks as f64 / 10_000_000.0))
           .unwrap_or(PlaybackStartPosition::Beginning);
         let client = Arc::clone(&self.client);
-        let generation = self.remote_generation;
         sender.oneshot_command(async move {
           let result = client
             .library()
@@ -1626,8 +1545,7 @@ impl AppModel {
             .await
             .map_err(|error| error.to_string());
           AppCommand::RemotePlay {
-            generation,
-            play_generation,
+            token,
             start_position,
             result,
           }
@@ -1637,8 +1555,7 @@ impl AppModel {
   }
 
   fn start_remote_session(&mut self, sender: &ComponentSender<Self>) {
-    self.remote_generation = self.remote_generation.wrapping_add(1);
-    let generation = self.remote_generation;
+    let token = self.requests.begin_remote();
     self.remote_state = if self.client.supports_remote_control() {
       RemoteControlState::Connecting
     } else {
@@ -1683,30 +1600,29 @@ impl AppModel {
       .await;
       match result {
         Ok(receiver) => AppCommand::RemoteReady {
-          generation,
+          token,
           socket,
           receiver,
         },
-        Err(()) => AppCommand::RemoteFailed { generation },
+        Err(()) => AppCommand::RemoteFailed { token },
       }
     });
   }
 
   fn stop_remote_session(&mut self, quit_gate: Option<&ComponentSender<Self>>) {
-    self.remote_generation = self.remote_generation.wrapping_add(1);
+    let token = self.requests.begin_remote();
     self.remote_state = RemoteControlState::Unavailable;
     if let Some(socket) = self.remote_socket.take() {
       if let Some(sender) = quit_gate {
         self.remote_disconnect_pending = true;
-        let generation = self.remote_generation;
         let settle_sender = sender.clone();
         relm4::spawn(async move {
           socket.disconnect().await;
-          settle_sender.input(AppMessage::RemoteDisconnectSettled(generation));
+          settle_sender.input(AppMessage::RemoteDisconnectSettled(token));
         });
         let timeout_sender = sender.clone();
         gtk::glib::timeout_add_local_once(Duration::from_secs(2), move || {
-          timeout_sender.input(AppMessage::RemoteDisconnectSettled(generation));
+          timeout_sender.input(AppMessage::RemoteDisconnectSettled(token));
         });
       } else {
         relm4::spawn(async move {
@@ -1984,7 +1900,7 @@ impl AppModel {
     );
     let store = self.auth_store.clone();
     let command_key = key.clone();
-    let session = self.requests.session_generation();
+    let session = self.requests.current_session();
     sender.oneshot_command(async move {
       let result = run_auth_operation(move || store.remove_profile(&command_key))
         .await
@@ -2259,7 +2175,7 @@ impl AppModel {
       .set_label("Saving this session securely…");
     self.ui.settings_storage_status.set_visible(true);
     let store = self.auth_store.clone();
-    let session_generation = self.requests.session_generation();
+    let token = self.requests.current_session();
     sender.oneshot_command(async move {
       let result = run_auth_operation(move || store.save_session(session))
         .await
@@ -2268,7 +2184,7 @@ impl AppModel {
           result.map_err(|error| format!("The session could not be saved securely: {error}."))
         });
       AppCommand::SavedSessionStored {
-        session: session_generation,
+        session: token,
         result,
       }
     });
@@ -2371,12 +2287,9 @@ impl AppModel {
     self.detail_origin = None;
     self.detail_parent = None;
     self.recommendations = LoadState::Idle;
-    self.recommendation_sequence = self.recommendation_sequence.saturating_add(1);
-    self.detail_identity = None;
+    self.requests.set_detail_item(None);
     self.streams = LoadState::Idle;
-    self.stream_sequence = self.stream_sequence.saturating_add(1);
     self.season_neighbors = LoadState::Idle;
-    self.season_neighbor_sequence = self.season_neighbor_sequence.saturating_add(1);
     self.season = None;
     self.invalidate_user_data_update();
     self.ui.search.set_text("");
@@ -2846,7 +2759,7 @@ impl AppModel {
     self.browse.library_shortcut = Some(shortcut.clone());
     let result = self.browse.model.configure_with_preferences(
       BrowseSource::Library {
-        session: self.requests.session_generation(),
+        session: self.requests.current_session(),
         shortcut,
       },
       browse_preferences(
@@ -2881,7 +2794,7 @@ impl AppModel {
     self.browse.error = None;
     self.browse.library_shortcut = None;
     let result = self.browse.model.configure(BrowseSource::Search {
-      session: self.requests.session_generation(),
+      session: self.requests.current_session(),
       query,
     });
     match result {
@@ -2898,7 +2811,7 @@ impl AppModel {
     self.browse.error = None;
     let result = self.browse.model.configure_with_preferences(
       BrowseSource::Library {
-        session: self.requests.session_generation(),
+        session: self.requests.current_session(),
         shortcut,
       },
       browse_preferences(
@@ -2928,15 +2841,9 @@ impl AppModel {
     }
     self.detail_selection = Some(item.clone());
     self.season = None;
-    self.recommendation_sequence = self.recommendation_sequence.saturating_add(1);
-    let recommendation_sequence = self.recommendation_sequence;
+    self.requests.set_detail_item(Some(item.id.clone()));
     self.recommendations = LoadState::Loading;
-    self.detail_identity = Some(item.id.clone());
-    self.stream_sequence = self.stream_sequence.saturating_add(1);
-    let stream_sequence = self.stream_sequence;
     self.streams = LoadState::Loading;
-    self.season_neighbor_sequence = self.season_neighbor_sequence.saturating_add(1);
-    let season_neighbor_sequence = self.season_neighbor_sequence;
     let season_neighbor_request = item
       .series_id
       .clone()
@@ -2948,7 +2855,13 @@ impl AppModel {
       LoadState::Idle
     };
     let token = self.requests.begin_detail();
-    let recommendation_item_id = item.id.clone();
+    let recommendation_token = self
+      .requests
+      .begin_detail_aux(DetailAuxKind::Recommendations);
+    let stream_token = self.requests.begin_detail_aux(DetailAuxKind::Streams);
+    let season_neighbor_token = self
+      .requests
+      .begin_detail_aux(DetailAuxKind::SeasonNeighbors);
     self.detail = LoadState::Loading;
     self.show_page("detail");
     self.render_detail(sender);
@@ -2976,42 +2889,35 @@ impl AppModel {
         result: Box::new(result),
       }
     });
-    let client = Arc::clone(&self.client);
-    let item_id = recommendation_item_id;
-    let session = self.requests.session_generation();
-    sender.oneshot_command(async move {
-      let result = client
-        .library()
-        .similar_video(item_id.clone())
-        .await
-        .map_err(|error| error.to_string());
-      AppCommand::Recommendations {
-        session,
-        sequence: recommendation_sequence,
-        item_id,
-        result,
-      }
-    });
-    let client = Arc::clone(&self.client);
-    let stream_item_id = item.id.clone();
-    let session = self.requests.session_generation();
-    sender.oneshot_command(async move {
-      let result = client
-        .library()
-        .item_streams(stream_item_id.clone())
-        .await
-        .map_err(|error| error.to_string());
-      AppCommand::Streams {
-        session,
-        sequence: stream_sequence,
-        item_id: stream_item_id,
-        result,
-      }
-    });
-    if let Some((series_id, season_number)) = season_neighbor_request {
+    if let Some(token) = recommendation_token {
       let client = Arc::clone(&self.client);
       let item_id = item.id.clone();
-      let session = self.requests.session_generation();
+      sender.oneshot_command(async move {
+        let result = client
+          .library()
+          .similar_video(item_id)
+          .await
+          .map_err(|error| error.to_string());
+        AppCommand::Recommendations { token, result }
+      });
+    }
+    if let Some(token) = stream_token {
+      let client = Arc::clone(&self.client);
+      let stream_item_id = item.id.clone();
+      sender.oneshot_command(async move {
+        let result = client
+          .library()
+          .item_streams(stream_item_id)
+          .await
+          .map_err(|error| error.to_string());
+        AppCommand::Streams { token, result }
+      });
+    }
+    if let (Some((series_id, season_number)), Some(token)) =
+      (season_neighbor_request, season_neighbor_token)
+    {
+      let client = Arc::clone(&self.client);
+      let item_id = item.id.clone();
       sender.oneshot_command(async move {
         let result = client
           .library()
@@ -3031,12 +2937,7 @@ impl AppModel {
               .collect()
           })
           .map_err(|error| error.to_string());
-        AppCommand::SeasonNeighbors {
-          session,
-          sequence: season_neighbor_sequence,
-          item_id,
-          result,
-        }
+        AppCommand::SeasonNeighbors { token, result }
       });
     }
   }
@@ -3051,39 +2952,42 @@ impl AppModel {
   fn back_from_detail(&mut self, sender: &ComponentSender<Self>) {
     self.invalidate_user_data_update();
     if let Some(parent) = self.detail_parent.take() {
-      self.requests.navigate();
+      self.requests.cancel_detail_loads();
       self.detail = LoadState::Ready(parent.content);
       self.season = parent.season;
-      self.detail_identity = self.current_detail_identity().map(str::to_owned);
-      self.recommendation_sequence = self.recommendation_sequence.saturating_add(1);
-      let recommendation_sequence = self.recommendation_sequence;
+      self
+        .requests
+        .set_detail_item(self.current_detail_identity().map(str::to_owned));
       self.recommendations = LoadState::Loading;
       self.streams = LoadState::Idle;
-      self.stream_sequence = self.stream_sequence.saturating_add(1);
       self.season_neighbors = LoadState::Idle;
-      self.season_neighbor_sequence = self.season_neighbor_sequence.saturating_add(1);
-      if let Some(item_id) = self.detail_identity.clone() {
+      let _ = self.requests.begin_detail_aux(DetailAuxKind::Streams);
+      let _ = self
+        .requests
+        .begin_detail_aux(DetailAuxKind::SeasonNeighbors);
+      if let Some(token) = self
+        .requests
+        .begin_detail_aux(DetailAuxKind::Recommendations)
+      {
         let client = Arc::clone(&self.client);
-        let session = self.requests.session_generation();
+        let item_id = self
+          .current_detail_identity()
+          .expect("parent detail item was just recorded")
+          .to_owned();
         sender.oneshot_command(async move {
           let result = client
             .library()
-            .similar_video(item_id.clone())
+            .similar_video(item_id)
             .await
             .map_err(|error| error.to_string());
-          AppCommand::Recommendations {
-            session,
-            sequence: recommendation_sequence,
-            item_id,
-            result,
-          }
+          AppCommand::Recommendations { token, result }
         });
       }
       self.render_detail(sender);
       return;
     }
     if self.season.is_some() {
-      self.requests.navigate();
+      self.requests.cancel_detail_loads();
       self.season = None;
       self.render_detail(sender);
       return;
@@ -3101,7 +3005,7 @@ impl AppModel {
   }
 
   fn invalidate_user_data_update(&mut self) {
-    self.user_data_sequence = self.user_data_sequence.saturating_add(1);
+    self.requests.invalidate_detail_aux(DetailAuxKind::UserData);
     self.user_data_busy = false;
     self.user_data_error = None;
   }
@@ -3115,43 +3019,30 @@ impl AppModel {
     if self.user_data_busy || self.current_detail_item_id() != Some(item_id.as_str()) {
       return;
     }
-    self.user_data_sequence = self.user_data_sequence.saturating_add(1);
+    let Some(token) = self.requests.begin_detail_aux(DetailAuxKind::UserData) else {
+      return;
+    };
     self.user_data_busy = true;
     self.user_data_error = None;
-    let session = self.requests.session_generation();
-    let sequence = self.user_data_sequence;
     self.render_detail(sender);
     let client = Arc::clone(&self.client);
     sender.oneshot_command(async move {
       let result = client
         .library()
-        .update_user_data(VideoUserDataUpdateRequest {
-          item_id: item_id.clone(),
-          action,
-        })
+        .update_user_data(VideoUserDataUpdateRequest { item_id, action })
         .await
         .map_err(|_| "Could not update this item's library state.".to_owned());
-      AppCommand::UserData {
-        session,
-        sequence,
-        item_id,
-        result,
-      }
+      AppCommand::UserData { token, result }
     });
   }
 
   fn finish_user_data_update(
     &mut self,
-    session: u64,
-    sequence: u64,
-    item_id: &str,
+    token: DetailAuxToken,
     result: Result<VideoUserDataUpdate, String>,
     sender: &ComponentSender<Self>,
   ) {
-    if session != self.requests.session_generation()
-      || sequence != self.user_data_sequence
-      || self.current_detail_item_id() != Some(item_id)
-    {
+    if !self.requests.finish_detail_aux(token) {
       return;
     }
     self.user_data_busy = false;
@@ -4013,7 +3904,7 @@ impl AppModel {
       .set_label("Refreshing connection status…");
     self.ui.settings_config_status.set_visible(true);
     let client = Arc::clone(&self.client);
-    let session = self.requests.session_generation();
+    let session = self.requests.current_session();
     sender.oneshot_command(async move {
       AppCommand::ConnectionStatus {
         session,
@@ -4353,8 +4244,7 @@ impl AppModel {
     if self.image_cache_clearing {
       return;
     }
-    self.image_cache_sequence = self.image_cache_sequence.wrapping_add(1);
-    let sequence = self.image_cache_sequence;
+    let token = self.requests.begin_image_cache();
     self
       .ui
       .settings_image_cache_stats
@@ -4363,7 +4253,7 @@ impl AppModel {
     let artwork = Arc::clone(&self.artwork);
     sender.oneshot_command(async move {
       AppCommand::ImageCacheStats {
-        sequence,
+        token,
         result: artwork.disk_cache_stats().await.map_err(|_| ()),
       }
     });
@@ -4399,8 +4289,7 @@ impl AppModel {
       return;
     }
     self.image_cache_clearing = true;
-    self.image_cache_sequence = self.image_cache_sequence.wrapping_add(1);
-    let sequence = self.image_cache_sequence;
+    let token = self.requests.begin_image_cache();
     self
       .ui
       .settings_image_cache_stats
@@ -4413,7 +4302,7 @@ impl AppModel {
         artwork.disk_cache_stats().await.map_err(|_| ())
       }
       .await;
-      AppCommand::ImageCacheCleared { sequence, result }
+      AppCommand::ImageCacheCleared { token, result }
     });
   }
 
@@ -4473,7 +4362,7 @@ impl AppModel {
     }
     let artwork = Arc::clone(&self.artwork);
     let client = Arc::clone(&self.client);
-    let session = self.requests.session_generation();
+    let session = self.requests.current_session();
     let view = self.playback_artwork_view;
     sender.oneshot_command(async move {
       let result = artwork
@@ -4532,7 +4421,7 @@ impl AppModel {
     let artwork_ticket = artwork.ticket();
     let client = Arc::clone(&self.client);
     let image_id = image_id.to_owned();
-    let session = self.requests.session_generation();
+    let session = self.requests.current_session();
     let view = self.artwork_view;
     sender.oneshot_command(async move {
       let result = artwork
@@ -4809,7 +4698,7 @@ impl AppModel {
     let artwork_ticket = artwork.ticket();
     let client = Arc::clone(&self.client);
     let image_id = image_id.to_owned();
-    let session = self.requests.session_generation();
+    let session = self.requests.current_session();
     let view = self.artwork_view;
     sender.oneshot_command(async move {
       let result = artwork
@@ -7250,10 +7139,10 @@ const fn can_start_login(connection: ConnectionPhase) -> bool {
   )
 }
 
-const fn should_disconnect_after_forget(
+fn should_disconnect_after_forget(
   sign_out: bool,
-  operation_session: u64,
-  current_session: u64,
+  operation_session: SessionToken,
+  current_session: SessionToken,
   connection: ConnectionPhase,
   active_profile_matches: bool,
 ) -> bool {
@@ -7876,24 +7765,31 @@ mod tests {
 
   #[test]
   fn saved_profile_deletion_only_signs_out_the_originating_live_session() {
+    let mut gate = RequestGate::default();
+    for _ in 0..4 {
+      gate.disconnect();
+    }
+    let current = gate.current_session();
+    gate.disconnect();
+    let other = gate.current_session();
     assert!(should_disconnect_after_forget(
       true,
-      4,
-      4,
+      current,
+      current,
       ConnectionPhase::Connected,
       true,
     ));
     assert!(!should_disconnect_after_forget(
       true,
-      4,
-      5,
+      current,
+      other,
       ConnectionPhase::Connected,
       true,
     ));
     assert!(!should_disconnect_after_forget(
       true,
-      4,
-      4,
+      current,
+      current,
       ConnectionPhase::Connected,
       false,
     ));
