@@ -20,6 +20,8 @@ mod diagnostics;
 #[cfg(target_os = "linux")]
 pub mod library_browse;
 #[cfg(target_os = "linux")]
+mod pages;
+#[cfg(target_os = "linux")]
 pub mod playback;
 #[cfg(target_os = "linux")]
 mod playback_session;

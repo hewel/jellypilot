@@ -6,9 +6,8 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use jellypilot_media_server::{
-  Credentials, JellyfinClient, JellyfinError, MediaItem, MediaServerProvider, PlaybackEngineKind,
-  QuickConnectStatus, SavedSession, VideoDetailMetadata, VideoHome, VideoItemDetail,
-  VideoItemStreams, VideoLibraryItem, VideoLibraryKind, VideoLibraryPageRequest,
+  JellyfinClient, MediaItem, PlaybackEngineKind, SavedSession, VideoDetailMetadata, VideoHome,
+  VideoItemDetail, VideoItemStreams, VideoLibraryItem, VideoLibraryKind, VideoLibraryPageRequest,
   VideoLibraryPlayedFilter, VideoLibraryShortcut, VideoLibrarySort, VideoLibrarySortDirection,
   VideoSearchRequest, VideoSeason, VideoSeasonEpisodesPage, VideoSeasonEpisodesPageRequest,
   VideoShowDetail, VideoUserDataAction, VideoUserDataUpdate, VideoUserDataUpdateRequest,
@@ -16,9 +15,11 @@ use jellypilot_media_server::{
 use jellypilot_mpv::{find_mpv, has_mpv_option, write_input_conf, PlayerState};
 use jellypilot_session::{IntroSkipKind, IntroSkipMode, IntroSkipRange};
 use relm4::adw::prelude::*;
-use relm4::tokio::sync::{oneshot, watch};
 use relm4::{adw, gtk, Component, ComponentParts, ComponentSender, RelmApp};
-use zeroize::{Zeroize, Zeroizing};
+
+use crate::pages::login::{
+  self, run_auth_operation, LoginContext, LoginEffect, LoginEvent, LoginPage,
+};
 
 use crate::artwork::{ArtworkAdapter, DecodedArtwork, FALLBACK_ARTWORK_ICON};
 use crate::artwork_cache::ArtworkCacheStats;
@@ -52,8 +53,6 @@ const SUBTITLE_LANGUAGE_OPTIONS: [&str; 8] =
   ["eng", "spa", "fra", "deu", "ita", "por", "jpn", "zho"];
 const SMOKE_APP_ID: &str = "io.github.hewel.JellyPilot.GtkPreview.Smoke";
 const SEASON_EPISODE_PAGE_SIZE: i32 = 30;
-const QUICK_CONNECT_POLL_INTERVAL: Duration = Duration::from_secs(5);
-const QUICK_CONNECT_TIMEOUT: Duration = Duration::from_secs(5 * 60);
 const HOME_HERO_HEIGHT: i32 = 340;
 const POSTER_FRAME_WIDTH: i32 = 160;
 const POSTER_FRAME_HEIGHT: i32 = 240;
@@ -61,18 +60,14 @@ const THUMB_FRAME_WIDTH: i32 = 240;
 const THUMB_FRAME_HEIGHT: i32 = 135;
 const PLAYER_THUMB_SIZE: i32 = 36;
 const PLAYBACK_ARTWORK_SLOT: u64 = u64::MAX;
-
 struct AppModel {
   client: Arc<JellyfinClient>,
   auth_store: AuthStore,
-  pending_prefill: Option<LoginPrefill>,
+  login: LoginPage,
   intro_mode: config::IntroMode,
   diagnostics: Diagnostics,
   saved_profiles: LoadState<Vec<SavedProfileSummary>>,
   active_saved_profile: Option<SavedProfileKey>,
-  profile_operation_busy: bool,
-  quick_connect_phase: QuickConnectPhase,
-  quick_connect_cancellation: watch::Sender<u64>,
   artwork: Arc<ArtworkAdapter>,
   artwork_view: u64,
   playback_artwork_view: u64,
@@ -131,43 +126,17 @@ enum ShortcutKind {
   IntroSkip,
 }
 
-struct SensitiveCredentials(Credentials);
-
-impl std::ops::Deref for SensitiveCredentials {
-  type Target = Credentials;
-
-  fn deref(&self) -> &Self::Target {
-    &self.0
-  }
-}
-
-impl Drop for SensitiveCredentials {
-  fn drop(&mut self) {
-    self.0.password.zeroize();
-  }
-}
-
 #[derive(Clone, Copy)]
 enum ArtworkPresentation {
   Backdrop,
 }
 
 #[derive(Clone, Copy, Default, Eq, PartialEq)]
-enum ConnectionPhase {
+pub(crate) enum ConnectionPhase {
   #[default]
   SignedOut,
   Connecting,
   Connected,
-  Failed,
-}
-
-#[derive(Clone, Copy, Default, Eq, PartialEq)]
-enum QuickConnectPhase {
-  #[default]
-  Idle,
-  Requesting,
-  Waiting,
-  Approving,
   Failed,
 }
 
@@ -197,14 +166,9 @@ fn remote_volume_value(value: Option<&serde_json::Value>) -> Option<f64> {
   };
   volume.is_finite().then(|| volume.clamp(0.0, 100.0))
 }
-impl QuickConnectPhase {
-  const fn is_active(self) -> bool {
-    matches!(self, Self::Requesting | Self::Waiting | Self::Approving)
-  }
-}
 
 #[derive(Clone, Default)]
-enum LoadState<T> {
+pub(crate) enum LoadState<T> {
   #[default]
   Idle,
   Loading,
@@ -244,25 +208,15 @@ struct DetailParent {
 }
 
 #[derive(Clone, Copy, Debug, Default)]
-enum BrowsePresentation {
+pub(crate) enum BrowsePresentation {
   #[default]
   Grid,
   List,
 }
 
 #[derive(Debug)]
-enum AppMessage {
-  LoadSavedProfiles,
-  LoginRequested,
-  QuickConnectRequested,
-  CancelQuickConnect,
-  RestoreSavedProfile(SavedProfileKey),
-  ForgetSavedProfile(SavedProfileKey),
-  ForgetCurrentProfile,
-  ConfirmForgetSavedProfile {
-    key: SavedProfileKey,
-    sign_out: bool,
-  },
+pub(crate) enum AppMessage {
+  Login(login::Message),
   Disconnect,
   ShowHome,
   OpenLibrary(VideoLibraryShortcut),
@@ -329,20 +283,12 @@ enum AppMessage {
 }
 
 enum AppCommand {
-  SavedProfiles(Result<Vec<SavedProfileSummary>, String>),
-  SavedSessionStored {
-    session: SessionToken,
-    result: Result<(SavedProfileKey, Vec<SavedProfileSummary>), String>,
-  },
-  Login {
-    session: SessionToken,
-    client: Arc<JellyfinClient>,
-    result: Result<(), String>,
-  },
+  LoginEvent(LoginEvent),
   RemoteReady {
     token: RemoteToken,
     socket: Arc<jellypilot_session::JellyfinWebSocket>,
     receiver: relm4::tokio::sync::mpsc::Receiver<jellypilot_session::JellyfinWebSocketEvent>,
+    validated: bool,
   },
   RemoteEvent {
     token: RemoteToken,
@@ -359,19 +305,6 @@ enum AppCommand {
   ConnectionStatus {
     session: SessionToken,
     result: Result<(), ()>,
-  },
-  QuickConnectCode {
-    session: SessionToken,
-    code: String,
-  },
-  QuickConnectApproving {
-    session: SessionToken,
-  },
-  ForgotProfile {
-    session: SessionToken,
-    key: SavedProfileKey,
-    sign_out: bool,
-    result: Result<Vec<SavedProfileSummary>, String>,
   },
   Home {
     token: HomeToken,
@@ -440,25 +373,7 @@ enum AppCommand {
 impl std::fmt::Debug for AppCommand {
   fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
     match self {
-      Self::SavedProfiles(result) => formatter
-        .debug_tuple("SavedProfiles")
-        .field(&result.as_ref().map(Vec::len))
-        .finish(),
-      Self::SavedSessionStored { session, result } => formatter
-        .debug_struct("SavedSessionStored")
-        .field("session", session)
-        .field(
-          "profile_count",
-          &result.as_ref().map(|(_, profiles)| profiles.len()),
-        )
-        .finish(),
-      Self::Login {
-        session, result, ..
-      } => formatter
-        .debug_struct("Login")
-        .field("session", session)
-        .field("successful", &result.is_ok())
-        .finish(),
+      Self::LoginEvent(event) => formatter.debug_tuple("LoginEvent").field(event).finish(),
       Self::RemoteFailed { token } => formatter
         .debug_struct("RemoteFailed")
         .field("token", token)
@@ -481,27 +396,6 @@ impl std::fmt::Debug for AppCommand {
         .debug_struct("RemoteEvent")
         .field("token", token)
         .field("event", event)
-        .finish(),
-      Self::QuickConnectCode { session, .. } => formatter
-        .debug_struct("QuickConnectCode")
-        .field("session", session)
-        .field("code", &"[redacted]")
-        .finish(),
-      Self::QuickConnectApproving { session } => formatter
-        .debug_struct("QuickConnectApproving")
-        .field("session", session)
-        .finish(),
-      Self::ForgotProfile {
-        session,
-        key,
-        sign_out,
-        result,
-      } => formatter
-        .debug_struct("ForgotProfile")
-        .field("session", session)
-        .field("key", key)
-        .field("sign_out", sign_out)
-        .field("successful", &result.is_ok())
         .finish(),
       Self::Browse(settlement) => formatter.debug_tuple("Browse").field(settlement).finish(),
       Self::Home { token, result } => formatter
@@ -600,22 +494,6 @@ impl std::fmt::Debug for AppCommand {
 struct Ui {
   toast_overlay: adw::ToastOverlay,
   root: adw::ToolbarView,
-  login: gtk::ScrolledWindow,
-  provider: adw::ComboRow,
-  server_url: adw::EntryRow,
-  username: adw::EntryRow,
-  password: adw::PasswordEntryRow,
-  remember_prefill: gtk::Switch,
-  login_method_switcher: gtk::StackSwitcher,
-  quick_connect_code: gtk::Label,
-  quick_connect_status: gtk::Label,
-  quick_connect_spinner: gtk::Spinner,
-  quick_connect_button: gtk::Button,
-  quick_connect_cancel_button: gtk::Button,
-  saved_profiles: gtk::ListBox,
-  saved_profiles_status: gtk::Label,
-  login_status: gtk::Label,
-  login_button: gtk::Button,
   authenticated: adw::NavigationSplitView,
   connection_status: gtk::Label,
   search: gtk::SearchEntry,
@@ -713,7 +591,8 @@ impl Component for AppModel {
     root: Self::Root,
     sender: ComponentSender<Self>,
   ) -> ComponentParts<Self> {
-    let ui = Ui::new(&sender);
+    let login = LoginPage::build(sender.input_sender());
+    let ui = Ui::new(&sender, login.root());
     root.set_content(Some(&ui.toast_overlay));
     let narrow_breakpoint = adw::Breakpoint::new(adw::BreakpointCondition::new_length(
       adw::BreakpointConditionLengthType::MaxWidth,
@@ -743,7 +622,6 @@ impl Component for AppModel {
         gtk::glib::ControlFlow::Continue
       }
     });
-    let (quick_connect_cancellation, _) = watch::channel(0);
     let loaded_config = config::load_checked();
     let intro_mode = loaded_config
       .as_ref()
@@ -764,14 +642,11 @@ impl Component for AppModel {
     let model = Self {
       client: Arc::new(JellyfinClient::new()),
       auth_store: AuthStore::default(),
-      pending_prefill: None,
+      login,
       intro_mode,
       diagnostics,
       saved_profiles: LoadState::Loading,
       active_saved_profile: None,
-      profile_operation_busy: false,
-      quick_connect_phase: QuickConnectPhase::Idle,
-      quick_connect_cancellation,
       artwork,
       artwork_view: 0,
       playback_artwork_view: 0,
@@ -810,7 +685,7 @@ impl Component for AppModel {
     model.render_connection_settings();
     model.render_subtitle_settings(&sender);
     if !smoke_test {
-      sender.input(AppMessage::LoadSavedProfiles);
+      sender.input(AppMessage::Login(login::Message::LoadSavedProfiles));
     }
 
     ComponentParts { model, widgets }
@@ -818,22 +693,9 @@ impl Component for AppModel {
 
   fn update(&mut self, message: Self::Input, sender: ComponentSender<Self>, _root: &Self::Root) {
     match message {
-      AppMessage::LoadSavedProfiles => self.load_saved_profiles(&sender),
-      AppMessage::LoginRequested => self.start_login(&sender),
-      AppMessage::QuickConnectRequested => self.start_quick_connect(&sender),
-      AppMessage::CancelQuickConnect => self.cancel_quick_connect(),
-      AppMessage::RestoreSavedProfile(key) => self.start_saved_login(key, &sender),
-      AppMessage::ForgetSavedProfile(key) => self.confirm_forget_saved_profile(key, false, &sender),
-      AppMessage::ForgetCurrentProfile => {
-        if let Some(key) = self.active_saved_profile.clone() {
-          self.confirm_forget_saved_profile(key, true, &sender);
-        }
-      }
-      AppMessage::ConfirmForgetSavedProfile { key, sign_out } => {
-        self.forget_saved_profile(key, sign_out, &sender)
-      }
+      AppMessage::Login(message) => self.dispatch_login(message, &sender),
       AppMessage::Disconnect => {
-        if !self.profile_operation_busy {
+        if !self.login.is_profile_busy() {
           self.disconnect(&sender);
         }
       }
@@ -951,68 +813,12 @@ impl Component for AppModel {
     _root: &Self::Root,
   ) {
     match command {
-      AppCommand::SavedProfiles(result) => {
-        self.saved_profiles = match result {
-          Ok(profiles) => LoadState::Ready(profiles),
-          Err(message) => {
-            self.record_diagnostic(
-              DiagnosticLevel::Warning,
-              DiagnosticCategory::Auth,
-              "Saved profiles could not be loaded from Secret Service.",
-            );
-            LoadState::Failed(message)
-          }
-        };
-        self.render_saved_profiles(&sender);
-        self.render_saved_profile_settings();
-      }
-      AppCommand::SavedSessionStored { session, result } => {
-        self.set_profile_operation_busy(false);
-        let is_current = self.requests.is_current_session(session)
-          && matches!(self.connection, ConnectionPhase::Connected);
-        match result {
-          Ok((key, profiles)) => {
-            if is_current {
-              self.active_saved_profile = Some(key);
-            }
-            self.saved_profiles = LoadState::Ready(profiles);
-            if is_current {
-              self
-                .ui
-                .settings_storage_status
-                .set_label("This session is stored securely in Linux Secret Service.");
-            }
-            self.record_diagnostic(
-              DiagnosticLevel::Info,
-              DiagnosticCategory::Auth,
-              "The connected session was stored in Secret Service.",
-            );
-          }
-          Err(message) => {
-            if is_current {
-              self.active_saved_profile = None;
-              self.ui.settings_storage_status.set_label(&message);
-            }
-            self.record_diagnostic(
-              DiagnosticLevel::Warning,
-              DiagnosticCategory::Auth,
-              "The connected session could not be stored in Secret Service.",
-            );
-          }
-        }
-        self.ui.settings_storage_status.set_visible(is_current);
-        self.render_saved_profiles(&sender);
-        self.render_saved_profile_settings();
-      }
-      AppCommand::Login {
-        session,
-        client,
-        result,
-      } => self.finish_login(session, client, result, &sender),
+      AppCommand::LoginEvent(event) => self.dispatch_login_event(event, &sender),
       AppCommand::RemoteReady {
         token,
         socket,
         receiver,
+        validated,
       } => {
         if !self.requests.is_current_remote(token) {
           return;
@@ -1025,6 +831,13 @@ impl Component for AppModel {
           DiagnosticCategory::RemoteControl,
           "Remote-control capability was granted; opening the command socket.",
         );
+        if !validated {
+          self.record_diagnostic(
+            DiagnosticLevel::Warning,
+            DiagnosticCategory::RemoteControl,
+            "The server has not listed this device as a remote-control target yet.",
+          );
+        }
         sender.command(move |output, shutdown| {
           shutdown
             .register(async move {
@@ -1139,96 +952,6 @@ impl Component for AppModel {
         }
         self.ui.settings_config_status.set_visible(true);
         self.render_connection_settings();
-      }
-      AppCommand::QuickConnectCode { session, code } => {
-        if !self.requests.is_current_login(session) {
-          return;
-        }
-        self.quick_connect_phase = QuickConnectPhase::Waiting;
-        self.ui.quick_connect_code.set_label(&code);
-        self
-          .ui
-          .quick_connect_code
-          .update_property(&[gtk::accessible::Property::Label(&format!(
-            "Quick Connect code: {code}"
-          ))]);
-        self.ui.quick_connect_code.set_visible(true);
-        self
-          .ui
-          .quick_connect_status
-          .set_label("Waiting for approval in another signed-in Jellyfin client…");
-        self.ui.quick_connect_spinner.start();
-        self.ui.quick_connect_spinner.set_visible(true);
-        self.render_quick_connect_controls();
-        self.record_diagnostic(
-          DiagnosticLevel::Info,
-          DiagnosticCategory::Auth,
-          "Quick Connect code received; waiting for approval.",
-        );
-      }
-      AppCommand::QuickConnectApproving { session } => {
-        if !self.requests.is_current_login(session) {
-          return;
-        }
-        self.quick_connect_phase = QuickConnectPhase::Approving;
-        self
-          .ui
-          .quick_connect_status
-          .set_label("Approved. Signing in…");
-        self.render_quick_connect_controls();
-        self.record_diagnostic(
-          DiagnosticLevel::Info,
-          DiagnosticCategory::Auth,
-          "Quick Connect was approved; authentication is finishing.",
-        );
-      }
-      AppCommand::ForgotProfile {
-        session,
-        key,
-        sign_out,
-        result,
-      } => {
-        let disconnect_current_session = should_disconnect_after_forget(
-          sign_out,
-          session,
-          self.requests.current_session(),
-          self.connection,
-          self.active_saved_profile.as_ref() == Some(&key),
-        );
-        self.set_profile_operation_busy(false);
-        match result {
-          Ok(profiles) => {
-            if self.active_saved_profile.as_ref() == Some(&key) {
-              self.active_saved_profile = None;
-            }
-            self.saved_profiles = LoadState::Ready(profiles);
-            self
-              .ui
-              .saved_profiles_status
-              .set_label("Saved sign-in forgotten.");
-            self.ui.saved_profiles_status.set_visible(true);
-            self.render_saved_profiles(&sender);
-            self.render_saved_profile_settings();
-            if disconnect_current_session {
-              self.disconnect(&sender);
-            }
-            self.record_diagnostic(
-              DiagnosticLevel::Info,
-              DiagnosticCategory::Auth,
-              "Saved profile removal completed.",
-            );
-          }
-          Err(message) => {
-            self.ui.saved_profiles_status.set_label(&message);
-            self.ui.saved_profiles_status.set_visible(true);
-            self.render_saved_profile_settings();
-            self.record_diagnostic(
-              DiagnosticLevel::Warning,
-              DiagnosticCategory::Auth,
-              "Saved profile removal failed in Secret Service.",
-            );
-          }
-        }
       }
       AppCommand::Home { token, result } => self.finish_home(token, result, &sender),
       AppCommand::Browse(settlement) => {
@@ -1429,7 +1152,7 @@ impl Component for AppModel {
   fn shutdown(&mut self, _widgets: &mut Self::Widgets, _output: relm4::Sender<Self::Output>) {
     self.artwork.reset_session();
     self.stop_remote_session(None);
-    self.cancel_inflight_quick_connect();
+    self.login.reset_flow();
     if let Some(mut controller) = self.playback_controller.take() {
       relm4::spawn(async move {
         let _ = controller.shutdown().await;
@@ -1439,17 +1162,246 @@ impl Component for AppModel {
 }
 
 impl AppModel {
+  fn dispatch_login(&mut self, message: login::Message, sender: &ComponentSender<Self>) {
+    let effects = self.with_login_context(|login, cx| login.handle(message, cx));
+    self.execute_login_effects(effects, sender);
+  }
+
+  fn dispatch_login_event(&mut self, event: LoginEvent, sender: &ComponentSender<Self>) {
+    if let LoginEvent::SavedSessionStored { session, result } = &event {
+      self.apply_saved_session_storage_status(*session, result);
+    }
+    let effects = self.with_login_context(|login, cx| login.handle_event(event, cx));
+    self.execute_login_effects(effects, sender);
+    self.login.render_saved_profiles(&self.saved_profiles);
+    self.render_saved_profile_settings();
+  }
+
+  fn with_login_context<R>(
+    &mut self,
+    f: impl FnOnce(&mut LoginPage, &mut LoginContext<'_>) -> R,
+  ) -> R {
+    let can_start_login = self.playback_can_start_login();
+    let connection = self.connection;
+    let mut cx = LoginContext {
+      gate: &mut self.requests,
+      saved_profiles: &mut self.saved_profiles,
+      active_saved_profile: &mut self.active_saved_profile,
+      connection,
+      can_start_login,
+    };
+    f(&mut self.login, &mut cx)
+  }
+
+  fn execute_login_effects(&mut self, effects: Vec<LoginEffect>, sender: &ComponentSender<Self>) {
+    for effect in effects {
+      match effect {
+        LoginEffect::AuthStarted => {
+          self.browse.model.reset();
+          self.connection = ConnectionPhase::Connecting;
+          self.home = LoadState::Loading;
+        }
+        LoginEffect::Authenticated {
+          client,
+          stored_session,
+        } => self.finish_login(client, stored_session, sender),
+        LoginEffect::AuthFailed { message } => {
+          self.connection = ConnectionPhase::Failed;
+          self.home = LoadState::Failed(message);
+        }
+        LoginEffect::InvalidInput => {
+          self.connection = ConnectionPhase::Failed;
+        }
+        LoginEffect::PersistPrefill(prefill) => {
+          let remember = prefill.remember;
+          let warning = if remember {
+            config::save(&prefill)
+          } else {
+            config::clear()
+          }
+          .err()
+          .map(|_| {
+            if remember {
+              "Signed in, but sign-in details could not be saved on this device."
+            } else {
+              "Signed in, but remembered sign-in details could not be cleared on this device."
+            }
+          });
+          self.login.apply_prefill_warning(warning);
+          if warning.is_some() {
+            self.record_diagnostic(
+              DiagnosticLevel::Warning,
+              DiagnosticCategory::Config,
+              "Sign-in succeeded, but the local sign-in configuration update failed.",
+            );
+          }
+        }
+        LoginEffect::Diagnostic(level, category, message) => {
+          self.record_diagnostic(level, category, message);
+        }
+        LoginEffect::Cancelled => {
+          self.connection = ConnectionPhase::SignedOut;
+          self.home = LoadState::Idle;
+        }
+        LoginEffect::ProfileBusyChanged => self.sync_profile_busy_widgets(),
+        LoginEffect::Disconnect => self.disconnect(sender),
+        LoginEffect::LoadSavedProfiles => self.load_saved_profiles(sender),
+        LoginEffect::RunPasswordAuth {
+          session,
+          credentials,
+        } => {
+          let client = configured_client(&config::load());
+          let command_client = Arc::clone(&client);
+          sender.oneshot_command(async move {
+            let result = async {
+              command_client
+                .login()
+                .authenticate(&credentials)
+                .await
+                .map_err(|error| error.to_string())?;
+              Ok(())
+            }
+            .await;
+            AppCommand::LoginEvent(LoginEvent::Login {
+              session,
+              client,
+              result,
+            })
+          });
+        }
+        LoginEffect::RunQuickConnect {
+          session,
+          server_url,
+          mut cancellation,
+        } => {
+          let client = configured_client(&config::load());
+          let command_client = Arc::clone(&client);
+          sender.command(move |output, shutdown| {
+            shutdown
+              .register(async move {
+                let emit = {
+                  let output = output.clone();
+                  move |event| output.send(AppCommand::LoginEvent(event)).is_ok()
+                };
+                let operation = login::quick_connect_workflow(
+                  command_client,
+                  server_url,
+                  session,
+                  emit,
+                  login::QUICK_CONNECT_POLL_INTERVAL,
+                  login::QUICK_CONNECT_TIMEOUT,
+                );
+                relm4::tokio::pin!(operation);
+                relm4::tokio::select! {
+                  () = &mut operation => {}
+                  changed = cancellation.changed() => {
+                    let _ = changed;
+                  }
+                }
+              })
+              .drop_on_shutdown()
+          });
+        }
+        LoginEffect::RunRestore { session, key } => {
+          let store = self.auth_store.clone();
+          let client = configured_client(&config::load());
+          let command_client = Arc::clone(&client);
+          let requested_key = key.clone();
+          sender.oneshot_command(async move {
+            let result = async {
+              let stored_session = run_auth_operation(move || store.load_session(&requested_key))
+                .await
+                .map_err(|_| "The saved sign-in could not be read.".to_string())?
+                .map_err(|error| format!("Saved sign-in unavailable: {error}."))?;
+              command_client
+                .login()
+                .restore_session(&stored_session)
+                .await
+                .map_err(|error| format!("Saved sign-in could not be restored: {error}"))?;
+              Ok(())
+            }
+            .await;
+            AppCommand::LoginEvent(LoginEvent::Login {
+              session,
+              client,
+              result,
+            })
+          });
+        }
+        LoginEffect::RunForget {
+          session,
+          key,
+          sign_out,
+        } => {
+          let store = self.auth_store.clone();
+          let command_key = key.clone();
+          sender.oneshot_command(async move {
+            let result = run_auth_operation(move || store.remove_profile(&command_key))
+              .await
+              .map_err(|_| "The saved sign-in could not be forgotten.".to_string())
+              .and_then(|result| {
+                result.map_err(|error| format!("Saved sign-in could not be forgotten: {error}."))
+              });
+            AppCommand::LoginEvent(LoginEvent::ForgotProfile {
+              session,
+              key,
+              sign_out,
+              result,
+            })
+          });
+        }
+      }
+    }
+  }
+
+  fn apply_saved_session_storage_status(
+    &mut self,
+    session: SessionToken,
+    result: &Result<(SavedProfileKey, Vec<SavedProfileSummary>), String>,
+  ) {
+    let is_current = self.requests.is_current_session(session)
+      && matches!(self.connection, ConnectionPhase::Connected);
+    match result {
+      Ok(_) => {
+        if is_current {
+          self
+            .ui
+            .settings_storage_status
+            .set_label("This session is stored securely in Linux Secret Service.");
+        }
+      }
+      Err(message) => {
+        if is_current {
+          self.ui.settings_storage_status.set_label(message);
+        }
+      }
+    }
+    self.ui.settings_storage_status.set_visible(is_current);
+  }
+
   fn load_saved_profiles(&mut self, sender: &ComponentSender<Self>) {
-    self.saved_profiles = LoadState::Loading;
-    self.render_saved_profiles(sender);
     let store = self.auth_store.clone();
     sender.oneshot_command(async move {
       let result = run_auth_operation(move || store.load_profiles())
         .await
         .map_err(|_| "Secure saved sign-ins could not be loaded.".to_string())
         .and_then(|result| result.map_err(|error| format!("Saved sign-ins unavailable: {error}.")));
-      AppCommand::SavedProfiles(result)
+      AppCommand::LoginEvent(LoginEvent::SavedProfiles(result))
     });
+  }
+
+  fn sync_profile_busy_widgets(&self) {
+    let busy = self.login.is_profile_busy();
+    let connected = matches!(self.connection, ConnectionPhase::Connected);
+    self.ui.disconnect_button.set_sensitive(connected && !busy);
+    self
+      .ui
+      .settings_disconnect_button
+      .set_sensitive(connected && !busy);
+    self
+      .ui
+      .forget_current_profile
+      .set_sensitive(self.active_saved_profile.is_some() && !busy);
   }
 
   fn handle_remote_command(
@@ -1579,30 +1531,23 @@ impl AppModel {
     self.remote_socket = Some(Arc::clone(&socket));
     sender.oneshot_command(async move {
       let result = async {
-        client.playback().validate_session().await.map_err(|_| ())?;
-        client
-          .playback()
-          .report_capabilities_for_checked(PlaybackEngineKind::ExternalMpv)
-          .await
-          .map_err(|_| ())?;
-        if !client.supports_remote_control() {
-          return Err(());
-        }
         let url = client.playback().websocket_url().map_err(|_| ())?;
         let user_agent = client.playback().websocket_user_agent();
         socket
           .connect_with_user_agent(&url, Some(&user_agent))
           .await
           .map_err(|_| ())?;
+        let validated = finalize_remote_target(&client).await?;
         let receiver = socket.take_event_receiver().ok_or(())?;
-        Ok::<_, ()>(receiver)
+        Ok::<_, ()>((receiver, validated))
       }
       .await;
       match result {
-        Ok(receiver) => AppCommand::RemoteReady {
+        Ok((receiver, validated)) => AppCommand::RemoteReady {
           token,
           socket,
           receiver,
+          validated,
         },
         Err(()) => AppCommand::RemoteFailed { token },
       }
@@ -1631,544 +1576,89 @@ impl AppModel {
       }
     }
   }
-  fn start_login(&mut self, sender: &ComponentSender<Self>) {
-    if self.profile_operation_busy || !self.playback_can_start_login() {
-      return;
-    }
-    let server_url = self.ui.server_url.text().trim().to_owned();
-    let username = self.ui.username.text().trim().to_owned();
-
-    let password = self.ui.password.text().to_string();
-    if server_url.is_empty() || username.is_empty() {
-      self.connection = ConnectionPhase::Failed;
-      self
-        .ui
-        .login_status
-        .set_label("Enter a server URL and username to continue.");
-      self.ui.login_status.set_visible(true);
-      self.record_diagnostic(
-        DiagnosticLevel::Warning,
-        DiagnosticCategory::Auth,
-        "Password sign-in was rejected because the server URL or username is empty.",
-      );
-      return;
-    }
-    let mut pending_prefill = config::load();
-    pending_prefill.remember = self.ui.remember_prefill.is_active();
-    pending_prefill.server_url = server_url.clone();
-    pending_prefill.provider = if self.ui.provider.selected() == 1 {
-      "emby".to_owned()
-    } else {
-      "jellyfin".to_owned()
-    };
-    pending_prefill.username = username.clone();
-    self.pending_prefill = Some(pending_prefill);
-
-    self.cancel_inflight_quick_connect();
-    self.quick_connect_phase = QuickConnectPhase::Idle;
-    self.ui.quick_connect_code.set_label("");
-    self.ui.quick_connect_code.set_visible(false);
-    self.ui.quick_connect_status.set_label("");
-    self.ui.quick_connect_spinner.stop();
-    self.ui.quick_connect_spinner.set_visible(false);
-    self.ui.password.set_text("");
-    self.record_diagnostic(
-      DiagnosticLevel::Info,
-      DiagnosticCategory::Connection,
-      "Connecting to the selected media server.",
-    );
-    let session = self.prepare_login("Connecting and loading your libraries…");
-    let credentials = SensitiveCredentials(Credentials {
-      provider: provider_for(self.ui.provider.selected()),
-      server_url,
-      username,
-      password,
-    });
-    // Authenticate an isolated candidate so a superseded login cannot mutate the active session.
-    let client = configured_client(&config::load());
-    let command_client = Arc::clone(&client);
-    sender.oneshot_command(async move {
-      let result = async {
-        command_client
-          .login()
-          .authenticate(&credentials)
-          .await
-          .map_err(|error| error.to_string())?;
-        Ok(())
-      }
-      .await;
-      AppCommand::Login {
-        session,
-        client,
-        result,
-      }
-    });
-  }
-
-  fn start_quick_connect(&mut self, sender: &ComponentSender<Self>) {
-    if self.profile_operation_busy || !self.playback_can_start_login() {
-      return;
-    }
-    if !quick_connect_available(provider_for(self.ui.provider.selected())) {
-      self.quick_connect_phase = QuickConnectPhase::Failed;
-      self
-        .ui
-        .quick_connect_status
-        .set_label("Quick Connect is available only for Jellyfin. Sign in with a password.");
-      self.render_quick_connect_controls();
-      self.record_diagnostic(
-        DiagnosticLevel::Warning,
-        DiagnosticCategory::Auth,
-        "Quick Connect was rejected because the selected server type does not support it.",
-      );
-      return;
-    }
-    let server_url = self.ui.server_url.text().trim().to_owned();
-    if server_url.is_empty() {
-      self.quick_connect_phase = QuickConnectPhase::Failed;
-      self
-        .ui
-        .quick_connect_status
-        .set_label("Enter a Jellyfin server URL to request a code.");
-      self.render_quick_connect_controls();
-      self.record_diagnostic(
-        DiagnosticLevel::Warning,
-        DiagnosticCategory::Auth,
-        "Quick Connect was rejected because the server URL is empty.",
-      );
-      return;
-    }
-    self.pending_prefill = None;
-
-    self.cancel_inflight_quick_connect();
-    self.record_diagnostic(
-      DiagnosticLevel::Info,
-      DiagnosticCategory::Auth,
-      "Quick Connect request started.",
-    );
-    let session = self.prepare_login("Requesting a Quick Connect code…");
-    self.quick_connect_phase = QuickConnectPhase::Requesting;
-    self.ui.login_status.set_label("");
-    self.ui.login_status.set_visible(false);
-    self.ui.quick_connect_code.set_label("");
-    self.ui.quick_connect_code.set_visible(false);
-    self.ui.quick_connect_status.set_label("Requesting a code…");
-    self.ui.quick_connect_spinner.start();
-    self.ui.quick_connect_spinner.set_visible(true);
-    self.render_quick_connect_controls();
-
-    let client = configured_client(&config::load());
-    let command_client = Arc::clone(&client);
-    let mut cancellation = self.quick_connect_cancellation.subscribe();
-    sender.command(move |output, shutdown| {
-      shutdown
-        .register(async move {
-          let operation = quick_connect_workflow(
-            command_client,
-            server_url,
-            session,
-            output,
-            QUICK_CONNECT_POLL_INTERVAL,
-            QUICK_CONNECT_TIMEOUT,
-          );
-          relm4::tokio::pin!(operation);
-          relm4::tokio::select! {
-            () = &mut operation => {}
-            changed = cancellation.changed() => {
-              let _ = changed;
-            }
-          }
-        })
-        .drop_on_shutdown()
-    });
-  }
-
-  fn cancel_quick_connect(&mut self) {
-    if !self.quick_connect_phase.is_active() {
-      return;
-    }
-    self.cancel_inflight_quick_connect();
-    self.record_diagnostic(
-      DiagnosticLevel::Info,
-      DiagnosticCategory::Auth,
-      "Quick Connect request was cancelled.",
-    );
-    self.requests.disconnect();
-    self.connection = ConnectionPhase::SignedOut;
-    self.home = LoadState::Idle;
-    self.quick_connect_phase = QuickConnectPhase::Idle;
-    self.set_login_controls_sensitive(true);
-    self.ui.login_status.set_label("");
-    self.ui.login_status.set_visible(false);
-    self.ui.quick_connect_status.set_label("");
-    self.ui.quick_connect_code.set_label("");
-    self.ui.quick_connect_code.set_visible(false);
-    self.ui.quick_connect_spinner.stop();
-    self.ui.quick_connect_spinner.set_visible(false);
-    self.render_quick_connect_controls();
-  }
-
-  fn start_saved_login(&mut self, key: SavedProfileKey, sender: &ComponentSender<Self>) {
-    if self.profile_operation_busy || !self.playback_can_start_login() {
-      return;
-    }
-    let Some(profile) = self
-      .saved_profile_summaries()
-      .iter()
-      .find(|profile| profile.key == key)
-      .cloned()
-    else {
-      self
-        .ui
-        .login_status
-        .set_label("That saved sign-in is no longer available.");
-      self.ui.login_status.set_visible(true);
-      self.record_diagnostic(
-        DiagnosticLevel::Warning,
-        DiagnosticCategory::Auth,
-        "Saved profile restore was rejected because the profile is no longer available.",
-      );
-      return;
-    };
-    self.cancel_inflight_quick_connect();
-    self.quick_connect_phase = QuickConnectPhase::Idle;
-    self.ui.quick_connect_code.set_label("");
-    self.ui.quick_connect_code.set_visible(false);
-    self.ui.quick_connect_status.set_label("");
-    self.ui.quick_connect_spinner.stop();
-    self.ui.quick_connect_spinner.set_visible(false);
-    self.ui.provider.set_selected(match profile.provider {
-      MediaServerProvider::Jellyfin => 0,
-      MediaServerProvider::Emby => 1,
-    });
-    self.ui.server_url.set_text(&profile.server_url);
-    self.ui.username.set_text(&profile.user_name);
-    self.ui.password.set_text("");
-    self.pending_prefill = None;
-
-    self.record_diagnostic(
-      DiagnosticLevel::Info,
-      DiagnosticCategory::Auth,
-      "Saved profile restore started.",
-    );
-    let session = self.prepare_login("Restoring the saved sign-in…");
-    let store = self.auth_store.clone();
-    let client = configured_client(&config::load());
-    let command_client = Arc::clone(&client);
-    let requested_key = key.clone();
-    sender.oneshot_command(async move {
-      let result = async {
-        let stored_session = run_auth_operation(move || store.load_session(&requested_key))
-          .await
-          .map_err(|_| "The saved sign-in could not be read.".to_string())?
-          .map_err(|error| format!("Saved sign-in unavailable: {error}."))?;
-        command_client
-          .login()
-          .restore_session(&stored_session)
-          .await
-          .map_err(|error| format!("Saved sign-in could not be restored: {error}"))?;
-        Ok(())
-      }
-      .await;
-      AppCommand::Login {
-        session,
-        client,
-        result,
-      }
-    });
-  }
-
-  fn forget_saved_profile(
-    &mut self,
-    key: SavedProfileKey,
-    sign_out: bool,
-    sender: &ComponentSender<Self>,
-  ) {
-    if self.profile_operation_busy {
-      return;
-    }
-    self.set_profile_operation_busy(true);
-    self
-      .ui
-      .saved_profiles_status
-      .set_label("Forgetting saved sign-in…");
-    self.ui.saved_profiles_status.set_visible(true);
-    self.record_diagnostic(
-      DiagnosticLevel::Info,
-      DiagnosticCategory::Auth,
-      "Saved profile removal started.",
-    );
-    let store = self.auth_store.clone();
-    let command_key = key.clone();
-    let session = self.requests.current_session();
-    sender.oneshot_command(async move {
-      let result = run_auth_operation(move || store.remove_profile(&command_key))
-        .await
-        .map_err(|_| "The saved sign-in could not be forgotten.".to_string())
-        .and_then(|result| {
-          result.map_err(|error| format!("Saved sign-in could not be forgotten: {error}."))
-        });
-      AppCommand::ForgotProfile {
-        session,
-        key,
-        sign_out,
-        result,
-      }
-    });
-  }
-
-  #[allow(deprecated)]
-  fn confirm_forget_saved_profile(
-    &self,
-    key: SavedProfileKey,
-    sign_out: bool,
-    sender: &ComponentSender<Self>,
-  ) {
-    if self.profile_operation_busy {
-      return;
-    }
-    let Some(profile) = self
-      .saved_profile_summaries()
-      .iter()
-      .find(|profile| profile.key == key)
-    else {
-      return;
-    };
-    let title = if sign_out {
-      "Sign out and forget this profile?"
-    } else {
-      "Forget this saved sign-in?"
-    };
-    let server = profile
-      .server_name
-      .as_deref()
-      .unwrap_or(profile.server_url.as_str());
-    let dialog = gtk::MessageDialog::builder()
-      .modal(true)
-      .message_type(gtk::MessageType::Question)
-      .text(title)
-      .secondary_text(format!(
-        "{} on {} will need a password to sign in again.",
-        profile.user_name, server
-      ))
-      .build();
-    if let Some(window) = relm4::main_adw_application().active_window() {
-      dialog.set_transient_for(Some(&window));
-    }
-    dialog.add_button("Cancel", gtk::ResponseType::Cancel);
-    let forget_button = dialog.add_button("Forget", gtk::ResponseType::Accept);
-    forget_button.add_css_class("destructive-action");
-    dialog.set_default_response(gtk::ResponseType::Cancel);
-    dialog.connect_response({
-      let sender = sender.clone();
-      move |dialog, response| {
-        dialog.close();
-        if response == gtk::ResponseType::Accept {
-          sender.input(AppMessage::ConfirmForgetSavedProfile {
-            key: key.clone(),
-            sign_out,
-          });
-        }
-      }
-    });
-    dialog.present();
-  }
-
-  fn prepare_login(&mut self, status: &str) -> SessionToken {
-    let session = self.requests.begin_login();
-    self.browse.model.reset();
-    self.connection = ConnectionPhase::Connecting;
-    self.home = LoadState::Loading;
-    self.set_login_controls_sensitive(false);
-    self.ui.login_status.set_label(status);
-    self.ui.login_status.set_visible(true);
-    session
-  }
 
   fn finish_login(
     &mut self,
-    session: SessionToken,
     client: Arc<JellyfinClient>,
-    result: Result<(), String>,
+    stored_session: Option<SavedSession>,
     sender: &ComponentSender<Self>,
   ) {
-    if !matches!(self.connection, ConnectionPhase::Connecting)
-      || !self.requests.finish_login(session)
+    self.client = client;
+    self
+      .ui
+      .intro_skip_group
+      .set_visible(self.client.supports_intro_skipper());
+    self.artwork.reset_session();
+    self.diagnostics.reset_coalescing();
+    self.artwork = Arc::new(ArtworkAdapter::default());
+    let settings = config::load();
+    self
+      .artwork
+      .set_disk_cache_enabled(settings.image_cache_enabled);
+    if write_input_conf(
+      &settings.key_next_episode,
+      &settings.key_previous_episode,
+      &settings.key_intro_skip,
+    )
+    .is_none()
     {
-      return;
+      self.record_diagnostic(
+        DiagnosticLevel::Warning,
+        DiagnosticCategory::Config,
+        "The MPV shortcut file could not be written for this session.",
+      );
     }
-
-    let was_quick_connect = self.quick_connect_phase.is_active();
-    self.quick_connect_phase = if result.is_ok() {
-      QuickConnectPhase::Idle
-    } else if self.quick_connect_phase.is_active() {
-      QuickConnectPhase::Failed
+    match PlaybackController::discover(
+      Arc::clone(&self.client),
+      playback_controller_config(&settings),
+    ) {
+      Ok(controller) => {
+        self.playback_controller = Some(controller);
+        self.playback_engine_error = None;
+        self.apply_playback_event(PlaybackEvent::EngineAvailability(true), sender);
+      }
+      Err(error) => {
+        self.record_diagnostic(
+          DiagnosticLevel::Error,
+          DiagnosticCategory::Playback,
+          format!("External MPV playback is unavailable: {error}."),
+        );
+        self.playback_controller = None;
+        self.playback_engine_error = Some(format!(
+          "Playback is unavailable: {error}. Install MPV and try again."
+        ));
+        self.apply_playback_event(PlaybackEvent::EngineAvailability(false), sender);
+      }
+    }
+    self.connection = ConnectionPhase::Connected;
+    self.start_remote_session(sender);
+    self.home = LoadState::Loading;
+    self.shortcuts.clear();
+    self.shortcuts_error = None;
+    if let Some(session_to_save) = stored_session {
+      self.start_persist_session(session_to_save, sender);
     } else {
-      self.quick_connect_phase
-    };
-    self.ui.quick_connect_spinner.stop();
-    self.ui.quick_connect_spinner.set_visible(false);
-    if matches!(self.quick_connect_phase, QuickConnectPhase::Idle) {
-      self.ui.quick_connect_code.set_label("");
-      self.ui.quick_connect_code.set_visible(false);
-      self.ui.quick_connect_status.set_label("");
+      self
+        .ui
+        .settings_storage_status
+        .set_label("The connected session could not be saved securely.");
+      self.ui.settings_storage_status.set_visible(true);
+      self.record_diagnostic(
+        DiagnosticLevel::Warning,
+        DiagnosticCategory::Auth,
+        "The connected session could not be stored in Secret Service.",
+      );
     }
-    self.set_login_controls_sensitive(true);
-    self.render_quick_connect_controls();
-    let pending_prefill = self.pending_prefill.take();
-    match result {
-      Ok(()) => {
-        self.record_diagnostic(
-          DiagnosticLevel::Info,
-          DiagnosticCategory::Connection,
-          "Media server connection established.",
-        );
-        self.record_diagnostic(
-          DiagnosticLevel::Info,
-          DiagnosticCategory::Auth,
-          if was_quick_connect {
-            "Quick Connect approval completed successfully."
-          } else {
-            "Authentication completed successfully."
-          },
-        );
-        let prefill_warning = pending_prefill.and_then(|prefill| {
-          let remember = prefill.remember;
-          let result = if remember {
-            config::save(&prefill)
-          } else {
-            config::clear()
-          };
-          result.err().map(|_| {
-            if remember {
-              "Signed in, but sign-in details could not be saved on this device."
-            } else {
-              "Signed in, but remembered sign-in details could not be cleared on this device."
-            }
-          })
-        });
-        let session_to_save = client.login().get_saved_session();
-        if let Some(session) = session_to_save.as_ref() {
-          self.ui.server_url.set_text(&session.server_url);
-          self.ui.username.set_text(&session.user_name);
-        }
-        self.active_saved_profile = None;
-        self.client = client;
-        self
-          .ui
-          .intro_skip_group
-          .set_visible(self.client.supports_intro_skipper());
-        self.artwork.reset_session();
-        self.diagnostics.reset_coalescing();
-        self.artwork = Arc::new(ArtworkAdapter::default());
-        let settings = config::load();
-        self
-          .artwork
-          .set_disk_cache_enabled(settings.image_cache_enabled);
-        if write_input_conf(
-          &settings.key_next_episode,
-          &settings.key_previous_episode,
-          &settings.key_intro_skip,
-        )
-        .is_none()
-        {
-          self.record_diagnostic(
-            DiagnosticLevel::Warning,
-            DiagnosticCategory::Config,
-            "The MPV shortcut file could not be written for this session.",
-          );
-        }
-        match PlaybackController::discover(
-          Arc::clone(&self.client),
-          playback_controller_config(&settings),
-        ) {
-          Ok(controller) => {
-            self.playback_controller = Some(controller);
-            self.playback_engine_error = None;
-            self.apply_playback_event(PlaybackEvent::EngineAvailability(true), sender);
-          }
-          Err(error) => {
-            self.record_diagnostic(
-              DiagnosticLevel::Error,
-              DiagnosticCategory::Playback,
-              format!("External MPV playback is unavailable: {error}."),
-            );
-            self.playback_controller = None;
-            self.playback_engine_error = Some(format!(
-              "Playback is unavailable: {error}. Install MPV and try again."
-            ));
-            self.apply_playback_event(PlaybackEvent::EngineAvailability(false), sender);
-          }
-        }
-        self.connection = ConnectionPhase::Connected;
-        self.start_remote_session(sender);
-        self.home = LoadState::Loading;
-        self.shortcuts.clear();
-        self.shortcuts_error = None;
-        if let Some(warning) = prefill_warning {
-          self.ui.login_status.set_label(warning);
-          self.ui.login_status.set_visible(true);
-          self.record_diagnostic(
-            DiagnosticLevel::Warning,
-            DiagnosticCategory::Config,
-            "Sign-in succeeded, but the local sign-in configuration update failed.",
-          );
-        } else {
-          self.ui.login_status.set_label("");
-          self.ui.login_status.set_visible(false);
-        }
-        if let Some(session_to_save) = session_to_save {
-          self.start_persist_session(session_to_save, sender);
-        } else {
-          self
-            .ui
-            .settings_storage_status
-            .set_label("The connected session could not be saved securely.");
-          self.ui.settings_storage_status.set_visible(true);
-          self.record_diagnostic(
-            DiagnosticLevel::Warning,
-            DiagnosticCategory::Auth,
-            "The connected session could not be stored in Secret Service.",
-          );
-        }
-        self.render_authenticated(sender);
-        self.show_home(sender);
-        self.load_home(sender);
-      }
-      Err(message) => {
-        self.record_diagnostic(
-          DiagnosticLevel::Error,
-          DiagnosticCategory::Auth,
-          if was_quick_connect {
-            "Quick Connect failed or expired before authentication completed."
-          } else {
-            "Authentication failed."
-          },
-        );
-        self.record_diagnostic(
-          DiagnosticLevel::Error,
-          DiagnosticCategory::Connection,
-          "Media server connection failed.",
-        );
-        self.connection = ConnectionPhase::Failed;
-        self.home = LoadState::Failed(message.clone());
-        if was_quick_connect {
-          self.ui.quick_connect_status.set_label(&message);
-          self.ui.login_status.set_label("");
-          self.ui.login_status.set_visible(false);
-        } else {
-          self.ui.login_status.set_label(&message);
-          self.ui.login_status.set_visible(true);
-        }
-        self.render_saved_profiles(sender);
-      }
-    }
+    self.render_authenticated(sender);
+    self.show_home(sender);
+    self.load_home(sender);
   }
 
   fn start_persist_session(&mut self, session: SavedSession, sender: &ComponentSender<Self>) {
     // Preserve secure-storage intent ordering: Forget cannot overtake an older pending save and
     // then be undone when that save eventually acquires the keyring lock.
-    self.set_profile_operation_busy(true);
+    self.login.set_profile_busy(true);
+    self.sync_profile_busy_widgets();
     self
       .ui
       .settings_storage_status
@@ -2183,10 +1673,10 @@ impl AppModel {
         .and_then(|result| {
           result.map_err(|error| format!("The session could not be saved securely: {error}."))
         });
-      AppCommand::SavedSessionStored {
+      AppCommand::LoginEvent(LoginEvent::SavedSessionStored {
         session: token,
         result,
-      }
+      })
     });
   }
 
@@ -2261,8 +1751,7 @@ impl AppModel {
     );
     self.stop_remote_session(None);
     self.requests.disconnect();
-    self.cancel_inflight_quick_connect();
-    self.quick_connect_phase = QuickConnectPhase::Idle;
+    self.login.reset_flow();
     self.artwork.reset_session();
     self.diagnostics.reset_coalescing();
     self.artwork_view = self.artwork_view.saturating_add(1);
@@ -2303,25 +1792,18 @@ impl AppModel {
     self.ui.settings_disconnect_button.set_sensitive(false);
     self.ui.connection_status.set_label("Not connected");
     self.render_connection_settings();
-    self.ui.quick_connect_code.set_label("");
-    self.ui.quick_connect_code.set_visible(false);
-    self.ui.quick_connect_status.set_label("");
-    self.ui.quick_connect_spinner.stop();
-    self.ui.quick_connect_spinner.set_visible(false);
-    self.render_quick_connect_controls();
     self.ui.intro_skip_group.set_visible(false);
     self.ui.preferences.close();
-    self.ui.root.set_content(Some(&self.ui.login));
+    self.ui.root.set_content(Some(self.login.root()));
     let can_login = self.playback_can_start_login();
-    self.set_login_controls_sensitive(can_login);
-    self.render_saved_profiles(sender);
+    self.login.set_controls_sensitive(can_login);
+    self.login.render_saved_profiles(&self.saved_profiles);
     self.render_saved_profile_settings();
-    self.ui.login_status.set_label(if can_login {
+    self.login.set_status(if can_login {
       "Disconnected."
     } else {
       "Stopping native playback before another connection can start…"
     });
-    self.ui.login_status.set_visible(true);
   }
 
   fn request_quit(&mut self, sender: &ComponentSender<Self>) {
@@ -2330,7 +1812,7 @@ impl AppModel {
     }
     self.quitting = true;
     self.requests.disconnect();
-    self.cancel_inflight_quick_connect();
+    self.login.reset_flow();
     self.artwork.reset_session();
     self.invalidate_user_data_update();
     self.stop_remote_session(Some(sender));
@@ -2340,22 +1822,17 @@ impl AppModel {
     }
   }
 
-  fn cancel_inflight_quick_connect(&self) {
-    let next = (*self.quick_connect_cancellation.borrow()).wrapping_add(1);
-    let _ = self.quick_connect_cancellation.send_replace(next);
-  }
-
   fn render_authenticated(&mut self, sender: &ComponentSender<Self>) {
     self.ui.root.set_content(Some(&self.ui.authenticated));
     self.ui.search.set_sensitive(true);
     self
       .ui
       .disconnect_button
-      .set_sensitive(!self.profile_operation_busy);
+      .set_sensitive(!self.login.is_profile_busy());
     self
       .ui
       .settings_disconnect_button
-      .set_sensitive(!self.profile_operation_busy);
+      .set_sensitive(!self.login.is_profile_busy());
     self.update_connection_status();
     self.render_shortcuts(sender);
   }
@@ -2377,107 +1854,6 @@ impl AppModel {
     match &self.saved_profiles {
       LoadState::Ready(profiles) => profiles,
       LoadState::Idle | LoadState::Loading | LoadState::Failed(_) => &[],
-    }
-  }
-
-  fn set_login_controls_sensitive(&self, sensitive: bool) {
-    let sensitive = sensitive && !self.profile_operation_busy;
-    self.ui.provider.set_sensitive(sensitive);
-    self.ui.server_url.set_sensitive(sensitive);
-    self.ui.remember_prefill.set_sensitive(sensitive);
-    self.ui.username.set_sensitive(sensitive);
-    self.ui.password.set_sensitive(sensitive);
-    self.ui.login_button.set_sensitive(sensitive);
-    self.ui.saved_profiles.set_sensitive(sensitive);
-    self.ui.login_method_switcher.set_sensitive(sensitive);
-    self.ui.quick_connect_button.set_sensitive(
-      sensitive && quick_connect_available(provider_for(self.ui.provider.selected())),
-    );
-  }
-
-  fn render_quick_connect_controls(&self) {
-    let provider_supported = quick_connect_available(provider_for(self.ui.provider.selected()));
-    let failed = matches!(self.quick_connect_phase, QuickConnectPhase::Failed);
-    self
-      .ui
-      .login_method_switcher
-      .set_visible(provider_supported);
-    self.ui.quick_connect_button.set_visible(matches!(
-      self.quick_connect_phase,
-      QuickConnectPhase::Idle | QuickConnectPhase::Failed
-    ));
-    self.ui.quick_connect_button.set_label(
-      if matches!(self.quick_connect_phase, QuickConnectPhase::Failed) {
-        "Request a new code"
-      } else {
-        "Request Quick Connect code"
-      },
-    );
-    self
-      .ui
-      .quick_connect_cancel_button
-      .set_visible(self.quick_connect_phase.is_active());
-    self.ui.quick_connect_code.set_visible(matches!(
-      self.quick_connect_phase,
-      QuickConnectPhase::Waiting | QuickConnectPhase::Approving
-    ));
-    self.ui.quick_connect_status.set_accessible_role(if failed {
-      gtk::AccessibleRole::Alert
-    } else {
-      gtk::AccessibleRole::Status
-    });
-    if failed {
-      self.ui.quick_connect_status.add_css_class("error");
-    } else {
-      self.ui.quick_connect_status.remove_css_class("error");
-    }
-  }
-
-  fn set_profile_operation_busy(&mut self, busy: bool) {
-    self.profile_operation_busy = busy;
-    let connected = matches!(self.connection, ConnectionPhase::Connected);
-    self.ui.saved_profiles.set_sensitive(!busy);
-    self.ui.disconnect_button.set_sensitive(connected && !busy);
-    self
-      .ui
-      .settings_disconnect_button
-      .set_sensitive(connected && !busy);
-    self
-      .ui
-      .forget_current_profile
-      .set_sensitive(self.active_saved_profile.is_some() && !busy);
-  }
-
-  fn render_saved_profiles(&self, sender: &ComponentSender<Self>) {
-    clear_list_box(&self.ui.saved_profiles);
-    match &self.saved_profiles {
-      LoadState::Idle | LoadState::Loading => {
-        self
-          .ui
-          .saved_profiles_status
-          .set_label("Loading saved sign-ins…");
-        self.ui.saved_profiles_status.set_visible(true);
-      }
-      LoadState::Failed(message) => {
-        self.ui.saved_profiles_status.set_label(message);
-        self.ui.saved_profiles_status.set_visible(true);
-      }
-      LoadState::Ready(profiles) if profiles.is_empty() => {
-        self
-          .ui
-          .saved_profiles_status
-          .set_label("No saved sign-ins yet.");
-        self.ui.saved_profiles_status.set_visible(true);
-      }
-      LoadState::Ready(profiles) => {
-        self.ui.saved_profiles_status.set_visible(false);
-        for profile in profiles {
-          self
-            .ui
-            .saved_profiles
-            .append(&saved_profile_row(profile, sender));
-        }
-      }
     }
   }
 
@@ -2511,7 +1887,7 @@ impl AppModel {
       self
         .ui
         .forget_current_profile
-        .set_sensitive(!self.profile_operation_busy);
+        .set_sensitive(!self.login.is_profile_busy());
       self
         .ui
         .forget_current_profile
@@ -3474,7 +2850,7 @@ impl AppModel {
   }
 
   fn playback_can_start_login(&self) -> bool {
-    can_start_login(self.connection) && self.playback_session.view().can_start_login
+    login::can_start_login(self.connection) && self.playback_session.view().can_start_login
   }
 
   fn playback_controls_enabled(&self) -> bool {
@@ -3728,10 +3104,9 @@ impl AppModel {
     }
     if matches!(self.connection, ConnectionPhase::SignedOut) {
       let can_login = self.playback_can_start_login();
-      self.set_login_controls_sensitive(can_login);
+      self.login.set_controls_sensitive(can_login);
       if can_login {
-        self.ui.login_status.set_label("Disconnected.");
-        self.ui.login_status.set_visible(true);
+        self.login.set_status("Disconnected.");
       }
     }
   }
@@ -3832,10 +3207,9 @@ impl AppModel {
       }
       ControllerSettlement::Shutdown(warnings) => {
         if matches!(self.connection, ConnectionPhase::SignedOut) && !warnings.is_empty() {
-          self.ui.login_status.set_label(
+          self.login.set_status(
             "Disconnected. Playback stopped, but its final server progress could not be updated.",
           );
-          self.ui.login_status.set_visible(true);
         }
       }
       ControllerSettlement::OsdShown(Ok(())) => {}
@@ -3916,7 +3290,7 @@ impl AppModel {
   fn render_connection_settings(&self) {
     let connected = matches!(self.connection, ConnectionPhase::Connected);
     let server_url = if connected {
-      non_empty_setting(self.ui.server_url.text().to_string())
+      non_empty_setting(self.login.server_url_text())
         .unwrap_or_else(|| "Connected server URL unavailable".to_owned())
     } else {
       "Not connected".to_owned()
@@ -3926,7 +3300,7 @@ impl AppModel {
       .settings_server_url
       .set_label(&format!("Server URL: {server_url}"));
     let user = if connected {
-      non_empty_setting(self.ui.username.text().to_string())
+      non_empty_setting(self.login.username_text())
         .unwrap_or_else(|| "Authenticated user unavailable".to_owned())
     } else {
       "No authenticated user".to_owned()
@@ -5581,7 +4955,7 @@ impl AppModel {
 }
 
 impl Ui {
-  fn new(sender: &ComponentSender<AppModel>) -> Self {
+  fn new(sender: &ComponentSender<AppModel>, login: &gtk::ScrolledWindow) -> Self {
     install_media_css();
     let toast_overlay = adw::ToastOverlay::new();
     let root = adw::ToolbarView::new();
@@ -5779,114 +5153,7 @@ impl Ui {
     root.add_bottom_bar(&playback_bar);
     toast_overlay.set_child(Some(&root));
     let prefill = config::load();
-    let provider = adw::ComboRow::new();
-    provider.set_title("Server type");
-    provider.set_model(Some(&gtk::StringList::new(&["Jellyfin", "Emby"])));
-    provider.set_selected(if prefill.provider.eq_ignore_ascii_case("emby") {
-      1
-    } else {
-      0
-    });
-    let server_url = adw::EntryRow::new();
-    server_url.set_title("Server URL");
-    server_url.set_input_purpose(gtk::InputPurpose::Url);
-    server_url.set_text(&prefill.server_url);
-    let username = adw::EntryRow::new();
-    username.set_title("Username");
-    username.set_input_purpose(gtk::InputPurpose::Name);
-    username.set_text(&prefill.username);
-    let password = adw::PasswordEntryRow::new();
-    password.set_title("Password");
-    let remember_prefill = gtk::Switch::new();
-    remember_prefill.set_active(prefill.remember);
-    let saved_profiles = gtk::ListBox::new();
-    saved_profiles.set_selection_mode(gtk::SelectionMode::None);
-    saved_profiles.add_css_class("boxed-list");
-    let saved_profiles_status = dim_label("Loading saved sign-ins…");
-    saved_profiles_status.set_wrap(true);
-    saved_profiles_status.set_accessible_role(gtk::AccessibleRole::Status);
-    let login_status = dim_label("");
-    login_status.set_wrap(true);
-    login_status.set_visible(false);
-    login_status.set_accessible_role(gtk::AccessibleRole::Status);
-    let login_button = gtk::Button::with_label("Sign in");
-    login_button.add_css_class("suggested-action");
-    login_button.connect_clicked({
-      let sender = sender.clone();
-      move |_| sender.input(AppMessage::LoginRequested)
-    });
-    password.connect_entry_activated({
-      let sender = sender.clone();
-      move |_| sender.input(AppMessage::LoginRequested)
-    });
-    let login_method_stack = gtk::Stack::builder()
-      .transition_type(gtk::StackTransitionType::SlideLeftRight)
-      .build();
-    let login_method_switcher = gtk::StackSwitcher::new();
-    login_method_switcher.set_stack(Some(&login_method_stack));
-    login_method_switcher.set_halign(gtk::Align::Center);
-    let quick_connect_code = gtk::Label::new(None);
-    quick_connect_code.add_css_class("title-1");
-    quick_connect_code.add_css_class("monospace");
-    quick_connect_code.set_selectable(true);
-    quick_connect_code.set_visible(false);
-    let quick_connect_status = dim_label("");
-    quick_connect_status.set_wrap(true);
-    quick_connect_status.set_justify(gtk::Justification::Center);
-    quick_connect_status.set_accessible_role(gtk::AccessibleRole::Status);
-    let quick_connect_spinner = gtk::Spinner::new();
-    quick_connect_spinner.set_visible(false);
-    let quick_connect_button = gtk::Button::with_label("Request Quick Connect code");
-    quick_connect_button.add_css_class("suggested-action");
-    quick_connect_button.connect_clicked({
-      let sender = sender.clone();
-      move |_| sender.input(AppMessage::QuickConnectRequested)
-    });
-    let quick_connect_cancel_button = gtk::Button::with_label("Cancel request");
-    quick_connect_cancel_button.set_visible(false);
-    quick_connect_cancel_button.connect_clicked({
-      let sender = sender.clone();
-      move |_| sender.input(AppMessage::CancelQuickConnect)
-    });
-    let login = login_page(LoginPageWidgets {
-      remember_prefill: &remember_prefill,
-      provider: &provider,
-      server_url: &server_url,
-      username: &username,
-      password: &password,
-      method_stack: &login_method_stack,
-      method_switcher: &login_method_switcher,
-      quick_connect_code: &quick_connect_code,
-      quick_connect_status: &quick_connect_status,
-      quick_connect_spinner: &quick_connect_spinner,
-      quick_connect: &quick_connect_button,
-      cancel_quick_connect: &quick_connect_cancel_button,
-      saved_profiles: &saved_profiles,
-      saved_profiles_status: &saved_profiles_status,
-      status: &login_status,
-      sign_in: &login_button,
-    });
-    provider.connect_selected_notify({
-      let sender = sender.clone();
-      let method_stack = login_method_stack.clone();
-      let method_switcher = login_method_switcher.clone();
-      let quick_connect_button = quick_connect_button.clone();
-      move |provider| {
-        let available = quick_connect_available(provider_for(provider.selected()));
-        method_switcher.set_visible(available);
-        quick_connect_button.set_sensitive(available);
-        if !available {
-          method_stack.set_visible_child_name("password");
-          sender.input(AppMessage::CancelQuickConnect);
-        }
-      }
-    });
-    if !quick_connect_available(provider_for(provider.selected())) {
-      login_method_switcher.set_visible(false);
-      login_method_stack.set_visible_child_name("password");
-      quick_connect_button.set_sensitive(false);
-    }
-    root.set_content(Some(&login));
+    root.set_content(Some(login));
 
     let header = adw::HeaderBar::new();
     header.set_show_end_title_buttons(true);
@@ -6295,7 +5562,7 @@ impl Ui {
       let sender = sender.clone();
       move |_| {
         // The model resolves the current key at message time so stale widgets never retain tokens.
-        sender.input(AppMessage::ForgetCurrentProfile)
+        sender.input(AppMessage::Login(login::Message::ForgetCurrentProfile))
       }
     });
     let preferences = settings_page(
@@ -6378,22 +5645,6 @@ impl Ui {
     Self {
       toast_overlay,
       root,
-      login,
-      provider,
-      server_url,
-      username,
-      password,
-      remember_prefill,
-      login_method_switcher,
-      quick_connect_code,
-      quick_connect_status,
-      quick_connect_spinner,
-      quick_connect_button,
-      quick_connect_cancel_button,
-      saved_profiles,
-      saved_profiles_status,
-      login_status,
-      login_button,
       authenticated,
       connection_status,
       search,
@@ -6471,177 +5722,6 @@ impl Ui {
       preferences,
     }
   }
-}
-
-struct LoginPageWidgets<'a> {
-  remember_prefill: &'a gtk::Switch,
-  provider: &'a adw::ComboRow,
-  server_url: &'a adw::EntryRow,
-  username: &'a adw::EntryRow,
-  password: &'a adw::PasswordEntryRow,
-  method_stack: &'a gtk::Stack,
-  method_switcher: &'a gtk::StackSwitcher,
-  quick_connect_code: &'a gtk::Label,
-  quick_connect_status: &'a gtk::Label,
-  quick_connect_spinner: &'a gtk::Spinner,
-  quick_connect: &'a gtk::Button,
-  cancel_quick_connect: &'a gtk::Button,
-  saved_profiles: &'a gtk::ListBox,
-  saved_profiles_status: &'a gtk::Label,
-  status: &'a gtk::Label,
-  sign_in: &'a gtk::Button,
-}
-
-fn login_page(widgets: LoginPageWidgets<'_>) -> gtk::ScrolledWindow {
-  let LoginPageWidgets {
-    remember_prefill,
-    provider,
-    server_url,
-    username,
-    password,
-    method_stack,
-    method_switcher,
-    quick_connect_code,
-    quick_connect_status,
-    quick_connect_spinner,
-    quick_connect,
-    cancel_quick_connect,
-    saved_profiles,
-    saved_profiles_status,
-    status,
-    sign_in,
-  } = widgets;
-  let page = gtk::Box::new(gtk::Orientation::Vertical, 24);
-  page.set_halign(gtk::Align::Center);
-  page.set_margin_top(32);
-  page.set_margin_bottom(32);
-  let branding = gtk::Box::new(gtk::Orientation::Vertical, 8);
-  branding.set_halign(gtk::Align::Center);
-  let icon = gtk::Image::from_icon_name("video-x-generic-symbolic");
-  icon.set_pixel_size(48);
-  branding.append(&icon);
-  let title = gtk::Label::new(Some("JellyPilot"));
-  title.add_css_class("title-1");
-  branding.append(&title);
-  let subtitle = dim_label("Connect to your Jellyfin or Emby server.");
-  subtitle.set_justify(gtk::Justification::Center);
-  subtitle.set_wrap(true);
-  branding.append(&subtitle);
-  page.append(&branding);
-
-  let server_group = adw::PreferencesGroup::new();
-  server_group.set_title("Server");
-  server_group.add(provider);
-  server_group.add(server_url);
-  page.append(&server_group);
-  method_switcher.set_halign(gtk::Align::Center);
-  page.append(method_switcher);
-
-  let quick_connect_page = gtk::Box::new(gtk::Orientation::Vertical, 14);
-  let quick_copy = dim_label(
-    "Request a code, then approve it from another client already signed in to this Jellyfin server.",
-  );
-  quick_copy.set_wrap(true);
-  quick_copy.set_justify(gtk::Justification::Center);
-  quick_connect_page.append(&quick_copy);
-  quick_connect_code.set_halign(gtk::Align::Center);
-  quick_connect_page.append(quick_connect_code);
-  quick_connect_spinner.set_halign(gtk::Align::Center);
-  quick_connect_page.append(quick_connect_spinner);
-  quick_connect_status.set_justify(gtk::Justification::Center);
-  quick_connect_status.set_wrap(true);
-  quick_connect_page.append(quick_connect_status);
-  quick_connect.set_halign(gtk::Align::Center);
-  quick_connect_page.append(quick_connect);
-  cancel_quick_connect.set_halign(gtk::Align::Center);
-  quick_connect_page.append(cancel_quick_connect);
-  method_stack.add_titled(&quick_connect_page, Some("quick-connect"), "Quick Connect");
-
-  let password_page = gtk::Box::new(gtk::Orientation::Vertical, 14);
-  let credentials_group = adw::PreferencesGroup::new();
-  credentials_group.add(username);
-  credentials_group.add(password);
-  let remember_row = adw::ActionRow::new();
-  remember_row.set_title("Remember sign-in details");
-  remember_row.set_subtitle("Save server, provider, and username on this device.");
-  remember_row.add_suffix(remember_prefill);
-  remember_row.set_activatable_widget(Some(remember_prefill));
-  credentials_group.add(&remember_row);
-  password_page.append(&credentials_group);
-  let storage_copy = dim_label(
-    "Successful sign-ins are saved in Linux Secret Service. JellyPilot never stores your password.",
-  );
-  storage_copy.set_wrap(true);
-  password_page.append(&storage_copy);
-  sign_in.set_hexpand(true);
-  password_page.append(sign_in);
-  method_stack.add_titled(&password_page, Some("password"), "Password");
-  method_stack.set_visible_child_name("quick-connect");
-  page.append(method_stack);
-  status.set_halign(gtk::Align::Center);
-  status.set_wrap(true);
-  page.append(status);
-
-  let saved_group = adw::PreferencesGroup::new();
-  saved_group.set_title("Saved sign-ins");
-  let saved_profiles_scroll = gtk::ScrolledWindow::builder()
-    .child(saved_profiles)
-    .max_content_height(240)
-    .propagate_natural_height(true)
-    .hscrollbar_policy(gtk::PolicyType::Never)
-    .build();
-  saved_group.add(&saved_profiles_scroll);
-  saved_group.add(saved_profiles_status);
-  page.append(&saved_group);
-
-  let clamp = adw::Clamp::new();
-  clamp.set_maximum_size(620);
-  clamp.set_child(Some(&page));
-  gtk::ScrolledWindow::builder()
-    .child(&clamp)
-    .hscrollbar_policy(gtk::PolicyType::Never)
-    .vexpand(true)
-    .build()
-}
-
-fn saved_profile_row(
-  profile: &SavedProfileSummary,
-  sender: &ComponentSender<AppModel>,
-) -> adw::ActionRow {
-  let action = adw::ActionRow::new();
-  let provider = match profile.provider {
-    MediaServerProvider::Jellyfin => "Jellyfin",
-    MediaServerProvider::Emby => "Emby",
-  };
-  let server = profile
-    .server_name
-    .as_deref()
-    .unwrap_or(profile.server_url.as_str());
-  action.set_title(&format!("{}@{}", profile.user_name, server));
-  action.set_subtitle(provider);
-  action.set_activatable(true);
-  action.update_property(&[gtk::accessible::Property::Label(&format!(
-    "Restore saved sign-in for {} on {}",
-    profile.user_name, server
-  ))]);
-  let key = profile.key.clone();
-  let sender_clone = sender.clone();
-  action.connect_activated(move |_| {
-    sender_clone.input(AppMessage::RestoreSavedProfile(key.clone()));
-  });
-  let forget = gtk::Button::with_label("Forget");
-  forget.add_css_class("destructive-action");
-  forget.update_property(&[gtk::accessible::Property::Label(&format!(
-    "Forget saved sign-in for {} on {}",
-    profile.user_name, server
-  ))]);
-  let key = profile.key.clone();
-  let sender_clone = sender.clone();
-  forget.connect_clicked(move |_| {
-    sender_clone.input(AppMessage::ForgetSavedProfile(key.clone()));
-  });
-  action.add_suffix(&forget);
-  action
 }
 
 fn diagnostics_page(
@@ -7015,21 +6095,6 @@ fn clear_list_box(container: &gtk::ListBox) {
   }
 }
 
-async fn run_auth_operation<T, F>(operation: F) -> Result<T, ()>
-where
-  T: Send + 'static,
-  F: FnOnce() -> T + Send + 'static,
-{
-  let (sender, receiver) = oneshot::channel();
-  std::thread::Builder::new()
-    .name("jellypilot-secret-service".to_string())
-    .spawn(move || {
-      let _ = sender.send(operation());
-    })
-    .map_err(|_| ())?;
-  receiver.await.map_err(|_| ())
-}
-
 fn install_media_css() {
   let Some(display) = gtk::gdk::Display::default() else {
     return;
@@ -7041,123 +6106,6 @@ fn install_media_css() {
     &provider,
     gtk::STYLE_PROVIDER_PRIORITY_APPLICATION,
   );
-}
-async fn quick_connect_workflow(
-  client: Arc<JellyfinClient>,
-  server_url: String,
-  session: SessionToken,
-  output: relm4::Sender<AppCommand>,
-  poll_interval: Duration,
-  workflow_timeout: Duration,
-) {
-  let command_client = Arc::clone(&client);
-  let result = async {
-    let request = command_client
-      .login()
-      .quick_connect_start(&server_url)
-      .await
-      .map_err(|error| quick_connect_start_message(&error).to_owned())?;
-    let (code, secret) = request.into_parts();
-    let secret = Zeroizing::new(secret);
-    if output
-      .send(AppCommand::QuickConnectCode { session, code })
-      .is_err()
-    {
-      return Err("Quick Connect was cancelled.".to_owned());
-    }
-
-    relm4::tokio::time::timeout(workflow_timeout, async {
-      loop {
-        relm4::tokio::time::sleep(poll_interval).await;
-        match command_client
-          .login()
-          .quick_connect_check(&server_url, secret.as_str())
-          .await
-          .map_err(|_| quick_connect_check_message().to_owned())?
-        {
-          QuickConnectStatus::Waiting => {}
-          QuickConnectStatus::Approved => break Ok(()),
-        }
-      }
-    })
-    .await
-    .unwrap_or_else(|_| Err(quick_connect_timeout_message().to_owned()))?;
-
-    if output
-      .send(AppCommand::QuickConnectApproving { session })
-      .is_err()
-    {
-      return Err("Quick Connect was cancelled.".to_owned());
-    }
-    let mut response = command_client
-      .login()
-      .quick_connect_authenticate(&server_url, secret.as_str())
-      .await
-      .map_err(|_| quick_connect_authentication_message().to_owned())?;
-    response.access_token.zeroize();
-    Ok(())
-  }
-  .await;
-
-  let _ = output.send(AppCommand::Login {
-    session,
-    client,
-    result,
-  });
-}
-
-const fn quick_connect_available(provider: MediaServerProvider) -> bool {
-  matches!(provider, MediaServerProvider::Jellyfin)
-}
-
-const fn quick_connect_start_message(error: &JellyfinError) -> &'static str {
-  match error {
-    JellyfinError::QuickConnectUnavailable => {
-      "Quick Connect is not enabled on this Jellyfin server. Use password sign-in instead."
-    }
-    JellyfinError::InvalidUrl(_) => "Enter a valid Jellyfin server URL to request a code.",
-    _ => "Quick Connect could not be started. Check the server address and try again.",
-  }
-}
-
-const fn quick_connect_check_message() -> &'static str {
-  "JellyPilot could not check this Quick Connect code. Request a new code and try again."
-}
-
-const fn quick_connect_authentication_message() -> &'static str {
-  "JellyPilot could not finish the approved Quick Connect sign-in. Request a new code and try again."
-}
-
-const fn quick_connect_timeout_message() -> &'static str {
-  "Quick Connect code expired. Request a new code to try again."
-}
-
-const fn can_start_login(connection: ConnectionPhase) -> bool {
-  matches!(
-    connection,
-    ConnectionPhase::SignedOut | ConnectionPhase::Failed
-  )
-}
-
-fn should_disconnect_after_forget(
-  sign_out: bool,
-  operation_session: SessionToken,
-  current_session: SessionToken,
-  connection: ConnectionPhase,
-  active_profile_matches: bool,
-) -> bool {
-  sign_out
-    && operation_session == current_session
-    && matches!(connection, ConnectionPhase::Connected)
-    && active_profile_matches
-}
-
-fn provider_for(selected: u32) -> MediaServerProvider {
-  if selected == 1 {
-    MediaServerProvider::Emby
-  } else {
-    MediaServerProvider::Jellyfin
-  }
 }
 
 fn library_kind(collection_type: &str) -> VideoLibraryKind {
@@ -7684,6 +6632,20 @@ fn season_page_request(
   }
 }
 
+/// Reports this device as a controllable Playback Target after the command socket
+/// connected, then checks session visibility. The server registers the session from
+/// the socket and learns media control from this report, so both must happen before
+/// any validation. Validation is informational: a fresh session may not be listed
+/// yet, so it never fails setup. Returns whether validation succeeded.
+async fn finalize_remote_target(client: &JellyfinClient) -> Result<bool, ()> {
+  client
+    .playback()
+    .report_capabilities_for_checked(PlaybackEngineKind::ExternalMpv)
+    .await
+    .map_err(|_| ())?;
+  Ok(client.playback().validate_session().await.is_ok())
+}
+
 pub(crate) fn run(smoke_test: bool) {
   let app = RelmApp::new(if smoke_test { SMOKE_APP_ID } else { APP_ID });
   if smoke_test {
@@ -7701,46 +6663,114 @@ pub(crate) fn run(smoke_test: bool) {
 #[cfg(test)]
 mod tests {
   use super::*;
+  use jellypilot_media_server::{Credentials, MediaServerProvider};
+  use std::future::Future;
 
-  #[test]
-  fn quick_connect_is_available_only_for_jellyfin() {
-    assert!(quick_connect_available(MediaServerProvider::Jellyfin));
-    assert!(!quick_connect_available(MediaServerProvider::Emby));
+  fn run_async<T>(future: impl Future<Output = T>) -> T {
+    relm4::tokio::runtime::Builder::new_current_thread()
+      .enable_io()
+      .enable_time()
+      .build()
+      .expect("test runtime should build")
+      .block_on(future)
+  }
+
+  /// Minimal canned-response HTTP server: one connection per response, request line
+  /// captured per connection, `connection: close` so the client opens a fresh one.
+  fn serve_http_responses(
+    responses: Vec<(&'static str, &'static str)>,
+  ) -> (String, std::sync::mpsc::Receiver<String>) {
+    use std::io::{Read, Write};
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("fake server should bind");
+    let addr = listener
+      .local_addr()
+      .expect("fake server should have an address");
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+      for (status, body) in responses {
+        let (mut stream, _) = listener.accept().expect("fake server should accept");
+        let mut buffer = [0_u8; 8192];
+        let read = stream
+          .read(&mut buffer)
+          .expect("fake server should read the request");
+        tx.send(String::from_utf8_lossy(&buffer[..read]).into_owned())
+          .expect("request log should send");
+        let response = format!(
+          "HTTP/1.1 {status}\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
+          body.len()
+        );
+        stream
+          .write_all(response.as_bytes())
+          .expect("fake server should write the response");
+      }
+    });
+    (format!("http://{addr}"), rx)
+  }
+
+  async fn authenticated_client(server_url: String) -> JellyfinClient {
+    let client = JellyfinClient::new();
+    client
+      .login()
+      .authenticate(&Credentials {
+        provider: MediaServerProvider::Jellyfin,
+        server_url,
+        username: "Ada".to_owned(),
+        password: "correct horse battery staple".to_owned(),
+      })
+      .await
+      .expect("authentication against the fake server should succeed");
+    client
   }
 
   #[test]
-  fn quick_connect_command_debug_redacts_the_public_code() {
-    let mut gate = RequestGate::default();
-    let session = gate.begin_login();
-    let command = AppCommand::QuickConnectCode {
-      session,
-      code: "ABCD12".to_owned(),
-    };
+  fn finalize_remote_target_reports_capabilities_before_informational_validation() {
+    let (server_url, requests) = serve_http_responses(vec![
+      (
+        "200 OK",
+        r#"{"User":{"Id":"00000000-0000-0000-0000-000000000001","Name":"Ada"},"AccessToken":"token-1","ServerId":"server-1"}"#,
+      ),
+      (
+        "200 OK",
+        r#"{"ServerName":"Fake","Version":"10.10.0","Id":"server-1"}"#,
+      ),
+      ("200 OK", ""),
+      ("500 Internal Server Error", r#"{"Message":"boom"}"#),
+    ]);
+    let client = run_async(async {
+      let client = authenticated_client(server_url).await;
+      let validated = finalize_remote_target(&client)
+        .await
+        .expect("a validation failure must not fail remote-target setup");
+      assert!(!validated, "validation failed softly");
+      client
+    });
+    drop(client);
 
-    let debug = format!("{command:?}");
-    assert!(!debug.contains("ABCD12"));
-    assert!(debug.contains("[redacted]"));
+    let _auth = requests.recv().expect("auth request captured");
+    let _info = requests.recv().expect("info request captured");
+    let capabilities = requests.recv().expect("capabilities request captured");
+    let validation = requests.recv().expect("validation request captured");
+    assert!(capabilities.starts_with("POST /Sessions/Capabilities"));
+    assert!(validation.starts_with("GET /Sessions"));
   }
 
   #[test]
-  fn quick_connect_user_messages_do_not_include_transport_details() {
-    let error = JellyfinError::HttpError(
-      "https://media.example/QuickConnect/Connect?secret=private-secret".to_owned(),
-    );
-
-    let messages = [
-      quick_connect_start_message(&error),
-      quick_connect_check_message(),
-      quick_connect_authentication_message(),
-      quick_connect_timeout_message(),
-    ];
-    assert!(messages
-      .iter()
-      .all(|message| !message.contains("private-secret") && !message.contains("https://")));
-    assert_eq!(
-      quick_connect_timeout_message(),
-      "Quick Connect code expired. Request a new code to try again."
-    );
+  fn finalize_remote_target_fails_when_capability_report_is_rejected() {
+    let (server_url, _requests) = serve_http_responses(vec![
+      (
+        "200 OK",
+        r#"{"User":{"Id":"00000000-0000-0000-0000-000000000001","Name":"Ada"},"AccessToken":"token-1","ServerId":"server-1"}"#,
+      ),
+      (
+        "200 OK",
+        r#"{"ServerName":"Fake","Version":"10.10.0","Id":"server-1"}"#,
+      ),
+      ("500 Internal Server Error", r#"{"Message":"boom"}"#),
+    ]);
+    run_async(async {
+      let client = authenticated_client(server_url).await;
+      assert!(finalize_remote_target(&client).await.is_err());
+    });
   }
 
   #[test]
@@ -7761,38 +6791,6 @@ mod tests {
     assert_eq!(request.season_number, Some(2));
     assert_eq!(request.start_index, 60);
     assert_eq!(request.limit, 30);
-  }
-
-  #[test]
-  fn saved_profile_deletion_only_signs_out_the_originating_live_session() {
-    let mut gate = RequestGate::default();
-    for _ in 0..4 {
-      gate.disconnect();
-    }
-    let current = gate.current_session();
-    gate.disconnect();
-    let other = gate.current_session();
-    assert!(should_disconnect_after_forget(
-      true,
-      current,
-      current,
-      ConnectionPhase::Connected,
-      true,
-    ));
-    assert!(!should_disconnect_after_forget(
-      true,
-      current,
-      other,
-      ConnectionPhase::Connected,
-      true,
-    ));
-    assert!(!should_disconnect_after_forget(
-      true,
-      current,
-      current,
-      ConnectionPhase::Connected,
-      false,
-    ));
   }
 
   #[test]
@@ -7848,14 +6846,6 @@ mod tests {
         ..
       }))
     ));
-  }
-
-  #[test]
-  fn login_is_blocked_while_connecting_or_connected() {
-    assert!(!can_start_login(ConnectionPhase::Connecting));
-    assert!(!can_start_login(ConnectionPhase::Connected));
-    assert!(can_start_login(ConnectionPhase::SignedOut));
-    assert!(can_start_login(ConnectionPhase::Failed));
   }
 
   #[test]
