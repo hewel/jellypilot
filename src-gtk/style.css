@@ -13,13 +13,27 @@
   box-shadow: 0 1px 3px alpha(@shade_color, 0.28);
 }
 
+.jellypilot-hero {
+  min-height: 340px;
+}
+
 .jellypilot-hero-scrim {
   background-image: linear-gradient(
     to top,
-    alpha(black, 0.72) 0%,
-    alpha(black, 0.28) 42%,
+    alpha(black, 0.90) 0%,
+    alpha(black, 0.78) 26%,
+    alpha(black, 0.42) 55%,
+    alpha(black, 0.10) 78%,
     alpha(black, 0) 100%
   );
+}
+
+.jellypilot-hero-scrim label {
+  color: white;
+}
+
+.jellypilot-hero-scrim .dim-label {
+  color: alpha(white, 0.88);
 }
 
 .jellypilot-progress-overlay {
@@ -93,6 +107,7 @@
 
 .jellypilot-badge {
   padding: 2px 8px;
+  margin: 8px;
   border-radius: 999px;
   background-color: alpha(black, 0.62);
   color: white;

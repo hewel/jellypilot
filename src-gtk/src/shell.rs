@@ -49,6 +49,11 @@ const SMOKE_APP_ID: &str = "io.github.hewel.JellyPilot.GtkPreview.Smoke";
 const SEASON_EPISODE_PAGE_SIZE: i32 = 30;
 const QUICK_CONNECT_POLL_INTERVAL: Duration = Duration::from_secs(5);
 const QUICK_CONNECT_TIMEOUT: Duration = Duration::from_secs(5 * 60);
+const HOME_HERO_HEIGHT: i32 = 340;
+const POSTER_FRAME_WIDTH: i32 = 160;
+const POSTER_FRAME_HEIGHT: i32 = 240;
+const THUMB_FRAME_WIDTH: i32 = 240;
+const THUMB_FRAME_HEIGHT: i32 = 135;
 
 struct AppModel {
   client: Arc<JellyfinClient>,
@@ -5302,68 +5307,50 @@ impl AppModel {
     self.row_card(item, sender)
   }
 
-  #[allow(deprecated)]
   fn poster_card(
     &mut self,
     item: &VideoLibraryItem,
     sender: &ComponentSender<Self>,
   ) -> gtk::Widget {
+    let (width, height) = card_frame_size(item);
     let card = gtk::Box::new(gtk::Orientation::Vertical, 6);
-    card.add_css_class("flat");
+    card.set_width_request(width);
     let button = gtk::Button::new();
     button.set_has_frame(false);
-    let column = gtk::Box::new(gtk::Orientation::Vertical, 0);
+    let column = gtk::Box::new(gtk::Orientation::Vertical, 6);
     let artwork_overlay = gtk::Overlay::new();
     artwork_overlay.add_css_class("jellypilot-poster");
     artwork_overlay.set_overflow(gtk::Overflow::Hidden);
-    let picture = gtk::Picture::new();
-    picture.set_can_shrink(true);
-    picture.set_keep_aspect_ratio(true);
-    picture.set_size_request(164, 220);
+    artwork_overlay.set_size_request(width, height);
+    let picture = cover_picture(width, height);
     let fallback = gtk::Image::from_icon_name(FALLBACK_ARTWORK_ICON);
     fallback.set_pixel_size(48);
     fallback.set_halign(gtk::Align::Center);
     fallback.set_valign(gtk::Align::Center);
     artwork_overlay.set_child(Some(&picture));
     artwork_overlay.add_overlay(&fallback);
-    if let Some(image_id) = item.artwork_image_id.as_deref() {
-      self.artwork_slot = self.artwork_slot.saturating_add(1);
-      let slot = self.artwork_slot;
-      self
-        .artwork_targets
-        .insert(slot, ArtworkTarget { picture, fallback });
-      let artwork = Arc::clone(&self.artwork);
-      let artwork_ticket = artwork.ticket();
-      let client = Arc::clone(&self.client);
-      let image_id = image_id.to_owned();
-      let session = self.requests.session_generation();
-      let view = self.artwork_view;
-      sender.oneshot_command(async move {
-        let result = artwork
-          .load_with_ticket(&client, &image_id, artwork_ticket)
-          .await
-          .map_err(|_| ());
-        AppCommand::Artwork {
-          session,
-          view,
-          slot,
-          result,
-        }
-      });
+    self.queue_artwork(picture, fallback, item.artwork_image_id.as_deref(), sender);
+    if let Some(badge) = status_badge(item) {
+      artwork_overlay.add_overlay(&badge);
     }
-    if item
-      .played_percentage
-      .is_some_and(|value| value > 0.0 && value < 100.0)
-    {
-      let progress = gtk::ProgressBar::new();
-      progress.set_fraction(item.played_percentage.unwrap_or_default() / 100.0);
-      progress.set_show_text(false);
-      progress.set_valign(gtk::Align::End);
-      progress.set_hexpand(true);
-      progress.add_css_class("osd");
+    if let Some(progress) = resume_progress_bar(item) {
       artwork_overlay.add_overlay(&progress);
     }
     column.append(&artwork_overlay);
+    let text = gtk::Box::builder()
+      .orientation(gtk::Orientation::Vertical)
+      .spacing(2)
+      .build();
+    let title = gtk::Label::new(Some(&item.name));
+    title.set_xalign(0.0);
+    title.set_ellipsize(gtk::pango::EllipsizeMode::End);
+    title.set_max_width_chars(18);
+    text.append(&title);
+    let details = dim_label(&item_caption(item));
+    details.set_ellipsize(gtk::pango::EllipsizeMode::End);
+    details.set_max_width_chars(18);
+    text.append(&details);
+    column.append(&text);
     button.set_child(Some(&column));
     let accessible_label = format!("Open details for {}", item.name);
     button.set_tooltip_text(Some(&accessible_label));
@@ -5374,43 +5361,9 @@ impl AppModel {
       selection_sender.input(AppMessage::SelectItem(selection_item.clone()))
     });
     card.append(&button);
-    let text = gtk::Box::builder()
-      .orientation(gtk::Orientation::Vertical)
-      .spacing(2)
-      .margin_start(4)
-      .margin_end(4)
-      .margin_bottom(4)
-      .build();
-    let title = gtk::Label::new(Some(&item.name));
-    title.set_xalign(0.0);
-    title.set_ellipsize(gtk::pango::EllipsizeMode::End);
-    title.set_max_width_chars(20);
-    text.append(&title);
-    let details = dim_label(&item_metadata(item));
-    details.set_ellipsize(gtk::pango::EllipsizeMode::End);
-    details.set_max_width_chars(20);
-    text.append(&details);
-    card.append(&text);
-    if matches!(item.item_type.as_str(), "Movie" | "Episode") {
-      let has_resume = item.resume_position_seconds.unwrap_or_default() > 0.0;
-      let action = gtk::Button::with_label(if has_resume { "▶ Resume" } else { "▶ Play" });
-      action.add_css_class("flat");
-      action.set_sensitive(self.playback.controller.is_some() && !self.playback.busy);
-      let item = item.clone();
-      let sender = sender.clone();
-      let position = if has_resume {
-        PlaybackStartPosition::Resume
-      } else {
-        PlaybackStartPosition::Beginning
-      };
-      action
-        .connect_clicked(move |_| sender.input(AppMessage::PlayLibrary(item.clone(), position)));
-      card.append(&action);
-    }
     card.upcast()
   }
 
-  #[allow(deprecated)]
   fn row_card(&mut self, item: &VideoLibraryItem, sender: &ComponentSender<Self>) -> gtk::Widget {
     let button = gtk::Button::new();
     button.set_has_frame(false);
@@ -5422,43 +5375,28 @@ impl AppModel {
       .margin_start(8)
       .margin_end(8)
       .build();
+    let (width, height) = if is_episode_item(item) {
+      (128, 72)
+    } else {
+      (72, 108)
+    };
     let artwork_overlay = gtk::Overlay::new();
     artwork_overlay.add_css_class("jellypilot-poster");
     artwork_overlay.set_overflow(gtk::Overflow::Hidden);
-    let picture = gtk::Picture::new();
-    picture.set_can_shrink(true);
-    picture.set_keep_aspect_ratio(true);
-    picture.set_size_request(96, 72);
+    artwork_overlay.set_size_request(width, height);
+    let picture = cover_picture(width, height);
     let fallback = gtk::Image::from_icon_name(FALLBACK_ARTWORK_ICON);
     fallback.set_pixel_size(32);
     fallback.set_halign(gtk::Align::Center);
     fallback.set_valign(gtk::Align::Center);
     artwork_overlay.set_child(Some(&picture));
     artwork_overlay.add_overlay(&fallback);
-    if let Some(image_id) = item.artwork_image_id.as_deref() {
-      self.artwork_slot = self.artwork_slot.saturating_add(1);
-      let slot = self.artwork_slot;
-      self
-        .artwork_targets
-        .insert(slot, ArtworkTarget { picture, fallback });
-      let artwork = Arc::clone(&self.artwork);
-      let artwork_ticket = artwork.ticket();
-      let client = Arc::clone(&self.client);
-      let image_id = image_id.to_owned();
-      let session = self.requests.session_generation();
-      let view = self.artwork_view;
-      sender.oneshot_command(async move {
-        let result = artwork
-          .load_with_ticket(&client, &image_id, artwork_ticket)
-          .await
-          .map_err(|_| ());
-        AppCommand::Artwork {
-          session,
-          view,
-          slot,
-          result,
-        }
-      });
+    self.queue_artwork(picture, fallback, item.artwork_image_id.as_deref(), sender);
+    if let Some(badge) = status_badge(item) {
+      artwork_overlay.add_overlay(&badge);
+    }
+    if let Some(progress) = resume_progress_bar(item) {
+      artwork_overlay.add_overlay(&progress);
     }
     row.append(&artwork_overlay);
     let text = gtk::Box::new(gtk::Orientation::Vertical, 3);
@@ -5469,18 +5407,9 @@ impl AppModel {
     title.set_ellipsize(gtk::pango::EllipsizeMode::End);
     title.set_max_width_chars(64);
     text.append(&title);
-    let details = dim_label(&item_metadata(item));
+    let details = dim_label(&item_caption(item));
     details.set_ellipsize(gtk::pango::EllipsizeMode::End);
     text.append(&details);
-    if item
-      .played_percentage
-      .is_some_and(|value| value > 0.0 && value < 100.0)
-    {
-      let progress = gtk::ProgressBar::new();
-      progress.set_fraction(item.played_percentage.unwrap_or_default() / 100.0);
-      progress.set_show_text(false);
-      text.append(&progress);
-    }
     row.append(&text);
     if matches!(item.item_type.as_str(), "Movie" | "Episode") {
       let has_resume = item.resume_position_seconds.unwrap_or_default() > 0.0;
@@ -5515,7 +5444,6 @@ impl AppModel {
     button.upcast()
   }
 
-  #[allow(deprecated)]
   fn featured_hero(
     &mut self,
     item: &VideoLibraryItem,
@@ -5523,78 +5451,56 @@ impl AppModel {
   ) -> gtk::Widget {
     let container = gtk::Overlay::new();
     container.add_css_class("jellypilot-rounded");
+    container.add_css_class("jellypilot-hero");
     container.set_overflow(gtk::Overflow::Hidden);
-    let backdrop = gtk::Picture::new();
-    backdrop.set_can_shrink(true);
-    backdrop.set_keep_aspect_ratio(true);
-    backdrop.set_size_request(-1, 280);
+    container.set_hexpand(true);
+    container.set_size_request(-1, HOME_HERO_HEIGHT);
+    let backdrop = cover_picture(-1, HOME_HERO_HEIGHT);
     let fallback = gtk::Image::from_icon_name("image-missing-symbolic");
     fallback.set_pixel_size(64);
     fallback.set_halign(gtk::Align::Center);
     fallback.set_valign(gtk::Align::Center);
     let backdrop_overlay = gtk::Overlay::new();
+    backdrop_overlay.set_hexpand(true);
+    backdrop_overlay.set_vexpand(true);
     backdrop_overlay.set_child(Some(&backdrop));
     backdrop_overlay.add_overlay(&fallback);
     container.set_child(Some(&backdrop_overlay));
-    if let Some(image_id) = item.artwork_image_id.as_deref() {
-      self.artwork_slot = self.artwork_slot.saturating_add(1);
-      let slot = self.artwork_slot;
-      self.artwork_targets.insert(
-        slot,
-        ArtworkTarget {
-          picture: backdrop,
-          fallback,
-        },
-      );
-      let artwork = Arc::clone(&self.artwork);
-      let artwork_ticket = artwork.ticket();
-      let client = Arc::clone(&self.client);
-      let image_id = image_id.to_owned();
-      let session = self.requests.session_generation();
-      let view = self.artwork_view;
-      sender.oneshot_command(async move {
-        let result = artwork
-          .load_with_ticket(&client, &image_id, artwork_ticket)
-          .await
-          .map_err(|_| ());
-        AppCommand::Artwork {
-          session,
-          view,
-          slot,
-          result,
-        }
-      });
-    }
-    let gradient = gtk::Box::new(gtk::Orientation::Vertical, 0);
-    gradient.add_css_class("osd");
-    gradient.set_hexpand(true);
-    gradient.set_vexpand(true);
-    gradient.set_valign(gtk::Align::End);
+    self.queue_artwork(backdrop, fallback, item.artwork_image_id.as_deref(), sender);
+    let scrim = gtk::Box::new(gtk::Orientation::Vertical, 0);
+    scrim.add_css_class("jellypilot-hero-scrim");
+    scrim.set_hexpand(true);
+    scrim.set_vexpand(true);
+    scrim.set_valign(gtk::Align::Fill);
     let hero_text = gtk::Box::builder()
       .orientation(gtk::Orientation::Vertical)
       .spacing(8)
-      .margin_top(24)
+      .margin_top(48)
       .margin_bottom(24)
       .margin_start(28)
       .margin_end(28)
+      .valign(gtk::Align::End)
+      .vexpand(true)
       .build();
-    let title = gtk::Label::new(Some(&item.name));
+    let title = gtk::Label::new(Some(&hero_headline(item)));
     title.add_css_class("title-1");
     title.set_xalign(0.0);
     title.set_ellipsize(gtk::pango::EllipsizeMode::End);
     title.set_max_width_chars(60);
     hero_text.append(&title);
-    let metadata = dim_label(&item_metadata(item));
+    let metadata = gtk::Label::new(Some(&hero_metadata(item)));
+    metadata.add_css_class("dim-label");
     metadata.set_xalign(0.0);
     metadata.set_ellipsize(gtk::pango::EllipsizeMode::End);
     hero_text.append(&metadata);
     if let Some(overview) = &item.overview {
       let synopsis = gtk::Label::new(Some(overview));
       synopsis.set_xalign(0.0);
+      synopsis.set_wrap(true);
+      synopsis.set_wrap_mode(gtk::pango::WrapMode::WordChar);
+      synopsis.set_lines(3);
       synopsis.set_ellipsize(gtk::pango::EllipsizeMode::End);
       synopsis.set_max_width_chars(80);
-      synopsis.set_lines(3);
-      synopsis.set_wrap(false);
       synopsis.add_css_class("dim-label");
       hero_text.append(&synopsis);
     }
@@ -5603,6 +5509,7 @@ impl AppModel {
     let primary_label = if has_resume { "Resume" } else { "Play" };
     let primary = gtk::Button::with_label(primary_label);
     primary.add_css_class("suggested-action");
+    primary.add_css_class("pill");
     let primary_position = if has_resume {
       PlaybackStartPosition::Resume
     } else {
@@ -5616,26 +5523,52 @@ impl AppModel {
     primary.set_sensitive(self.playback.controller.is_some() && !self.playback.busy);
     actions.append(&primary);
     let details = gtk::Button::with_label("Details");
+    details.add_css_class("pill");
+    details.add_css_class("osd");
     let detail_item = item.clone();
     let detail_sender = sender.clone();
     details
       .connect_clicked(move |_| detail_sender.input(AppMessage::SelectItem(detail_item.clone())));
     actions.append(&details);
-    if item
-      .played_percentage
-      .is_some_and(|value| value > 0.0 && value < 100.0)
-    {
-      let progress = gtk::ProgressBar::new();
-      progress.set_fraction(item.played_percentage.unwrap_or_default() / 100.0);
-      progress.set_show_text(false);
-      progress.set_hexpand(true);
-      progress.set_valign(gtk::Align::Center);
-      hero_text.append(&progress);
-    }
     hero_text.append(&actions);
-    gradient.append(&hero_text);
-    container.add_overlay(&gradient);
+    scrim.append(&hero_text);
+    container.add_overlay(&scrim);
     container.upcast()
+  }
+
+  fn queue_artwork(
+    &mut self,
+    picture: gtk::Picture,
+    fallback: gtk::Image,
+    image_id: Option<&str>,
+    sender: &ComponentSender<Self>,
+  ) {
+    let Some(image_id) = image_id else {
+      return;
+    };
+    self.artwork_slot = self.artwork_slot.saturating_add(1);
+    let slot = self.artwork_slot;
+    self
+      .artwork_targets
+      .insert(slot, ArtworkTarget { picture, fallback });
+    let artwork = Arc::clone(&self.artwork);
+    let artwork_ticket = artwork.ticket();
+    let client = Arc::clone(&self.client);
+    let image_id = image_id.to_owned();
+    let session = self.requests.session_generation();
+    let view = self.artwork_view;
+    sender.oneshot_command(async move {
+      let result = artwork
+        .load_with_ticket(&client, &image_id, artwork_ticket)
+        .await
+        .map_err(|_| ());
+      AppCommand::Artwork {
+        session,
+        view,
+        slot,
+        result,
+      }
+    });
   }
 
   fn media_shelf(
@@ -5645,10 +5578,8 @@ impl AppModel {
     sender: &ComponentSender<Self>,
   ) -> gtk::Widget {
     let section = gtk::Box::new(gtk::Orientation::Vertical, 12);
-    section.set_margin_top(8);
-    section.set_margin_bottom(8);
     let title_label = gtk::Label::new(Some(title));
-    title_label.add_css_class("title-3");
+    title_label.add_css_class("title-2");
     title_label.set_xalign(0.0);
     section.append(&title_label);
     if items.is_empty() {
@@ -5657,9 +5588,7 @@ impl AppModel {
     }
     let row = gtk::Box::new(gtk::Orientation::Horizontal, 12);
     for item in items {
-      let card = self.media_button(item, true, sender);
-      card.set_width_request(164);
-      row.append(&card);
+      row.append(&self.media_button(item, true, sender));
     }
     let scroll = gtk::ScrolledWindow::builder()
       .child(&row)
@@ -6760,7 +6689,7 @@ impl Ui {
     content.set_transition_type(gtk::StackTransitionType::Crossfade);
     let home_content = gtk::Box::builder()
       .orientation(gtk::Orientation::Vertical)
-      .spacing(18)
+      .spacing(24)
       .margin_top(24)
       .margin_bottom(24)
       .margin_start(24)
@@ -8310,16 +8239,88 @@ fn connection_label(client: &JellyfinClient) -> String {
   }
 }
 
-fn item_metadata(item: &VideoLibraryItem) -> String {
-  let mut details = Vec::new();
-  if let Some(year) = item.production_year {
-    details.push(year.to_string());
+fn is_episode_item(item: &VideoLibraryItem) -> bool {
+  item.item_type.eq_ignore_ascii_case("Episode")
+}
+
+fn card_frame_size(item: &VideoLibraryItem) -> (i32, i32) {
+  if is_episode_item(item) {
+    (THUMB_FRAME_WIDTH, THUMB_FRAME_HEIGHT)
+  } else {
+    (POSTER_FRAME_WIDTH, POSTER_FRAME_HEIGHT)
   }
-  details.push(item.item_type.clone());
-  if item.played {
-    details.push("Played".to_owned());
+}
+
+fn cover_picture(width: i32, height: i32) -> gtk::Picture {
+  let picture = gtk::Picture::new();
+  picture.set_can_shrink(true);
+  picture.set_content_fit(gtk::ContentFit::Cover);
+  picture.set_hexpand(true);
+  picture.set_vexpand(true);
+  picture.set_halign(gtk::Align::Fill);
+  picture.set_valign(gtk::Align::Fill);
+  picture.set_size_request(width, height);
+  picture
+}
+
+fn item_caption(item: &VideoLibraryItem) -> String {
+  match item.production_year {
+    Some(year) => format!("{year} · {}", item.item_type),
+    None => item.item_type.clone(),
   }
-  details.join(" · ")
+}
+
+fn hero_headline(item: &VideoLibraryItem) -> String {
+  if is_episode_item(item) {
+    item
+      .series_name
+      .as_deref()
+      .map(str::trim)
+      .filter(|name| !name.is_empty())
+      .map(ToOwned::to_owned)
+      .unwrap_or_else(|| item.name.clone())
+  } else {
+    item.name.clone()
+  }
+}
+
+fn hero_metadata(item: &VideoLibraryItem) -> String {
+  if is_episode_item(item) {
+    match (item.season_number, item.episode_number) {
+      (Some(season), Some(number)) => format!("S{season} E{number} · {}", item.name),
+      _ => format!("Episode · {}", item.name),
+    }
+  } else {
+    item_caption(item)
+  }
+}
+
+fn status_badge(item: &VideoLibraryItem) -> Option<gtk::Label> {
+  let text = if item.played {
+    "Played"
+  } else if item.favorite {
+    "Favorite"
+  } else {
+    return None;
+  };
+  let badge = gtk::Label::new(Some(text));
+  badge.add_css_class("jellypilot-badge");
+  badge.set_halign(gtk::Align::End);
+  badge.set_valign(gtk::Align::Start);
+  Some(badge)
+}
+
+fn resume_progress_bar(item: &VideoLibraryItem) -> Option<gtk::ProgressBar> {
+  let percentage = item
+    .played_percentage
+    .filter(|value| *value > 0.0 && *value < 100.0)?;
+  let progress = gtk::ProgressBar::new();
+  progress.set_fraction(percentage / 100.0);
+  progress.set_show_text(false);
+  progress.set_valign(gtk::Align::End);
+  progress.set_hexpand(true);
+  progress.add_css_class("jellypilot-progress-overlay");
+  Some(progress)
 }
 
 fn detail_metadata(detail: &VideoItemDetail) -> String {
