@@ -1,36 +1,50 @@
-use std::cell::Cell;
+use std::cell::{Cell, RefCell};
 use std::collections::{HashMap, VecDeque};
+use std::path::PathBuf;
 use std::rc::Rc;
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use jellypilot_media_server::{
-  Credentials, JellyfinClient, JellyfinError, MediaServerProvider, QuickConnectStatus,
-  SavedSession, VideoHome, VideoItemDetail, VideoLibraryItem, VideoLibraryKind,
-  VideoLibraryPageRequest, VideoLibraryPlayedFilter, VideoLibraryShortcut, VideoLibrarySort,
-  VideoLibrarySortDirection, VideoSearchRequest, VideoSeason, VideoSeasonEpisodesPage,
-  VideoSeasonEpisodesPageRequest, VideoShowDetail, VideoUserDataAction, VideoUserDataUpdate,
-  VideoUserDataUpdateRequest,
+  Credentials, JellyfinClient, JellyfinError, MediaItem, MediaServerProvider, PlaybackEngineKind,
+  QuickConnectStatus, SavedSession, VideoDetailMetadata, VideoHome, VideoItemDetail,
+  VideoItemStreams, VideoLibraryItem, VideoLibraryKind, VideoLibraryPageRequest,
+  VideoLibraryPlayedFilter, VideoLibraryShortcut, VideoLibrarySort, VideoLibrarySortDirection,
+  VideoSearchRequest, VideoSeason, VideoSeasonEpisodesPage, VideoSeasonEpisodesPageRequest,
+  VideoShowDetail, VideoUserDataAction, VideoUserDataUpdate, VideoUserDataUpdateRequest,
 };
-use relm4::gtk::prelude::*;
+use jellypilot_mpv::{find_mpv, has_mpv_option, write_input_conf};
+use jellypilot_session::{
+  evaluate_intro_skip, evaluate_manual_skip, IntroSkipAction, IntroSkipKind, IntroSkipMode,
+  IntroSkipRange,
+};
+use relm4::adw::prelude::*;
 use relm4::tokio::sync::{oneshot, watch};
-use relm4::{gtk, Component, ComponentParts, ComponentSender, RelmApp};
+use relm4::{adw, gtk, Component, ComponentParts, ComponentSender, RelmApp};
 use zeroize::{Zeroize, Zeroizing};
 
 use crate::artwork::{ArtworkAdapter, DecodedArtwork, FALLBACK_ARTWORK_ICON};
+use crate::artwork_cache::ArtworkCacheStats;
 use crate::auth_storage::{AuthStore, SavedProfileKey, SavedProfileSummary};
 use crate::browse_model::{
   BrowseEffect, BrowseModel, BrowsePagePayload, BrowsePageRequest, BrowsePageSettlement,
   BrowsePreferences, BrowseSource,
 };
+use crate::config::{self, LoginPrefill};
+use crate::diagnostics::{
+  sanitize_message, DiagnosticCategory, DiagnosticChange, DiagnosticEvent, DiagnosticLevel,
+  Diagnostics, DiagnosticsViewState,
+};
 use crate::library_browse::LibraryBrowseView;
 use crate::playback::{
   PlaybackController, PlaybackControllerConfig, PlaybackEndReason, PlaybackError, PlaybackOptions,
-  PlaybackRefreshState, PlaybackSnapshot, PlaybackStartPosition, PlaybackWarning,
+  PlaybackRefreshState, PlaybackSnapshot, PlaybackStartPosition, PlaybackWarning, TrackInfo,
 };
 use crate::request_gate::{DetailToken, HomeToken, RequestGate, SessionToken};
 
 const APP_ID: &str = "io.github.hewel.JellyPilot.GtkPreview";
+const SUBTITLE_LANGUAGE_OPTIONS: [&str; 8] =
+  ["eng", "spa", "fra", "deu", "ita", "por", "jpn", "zho"];
 const SMOKE_APP_ID: &str = "io.github.hewel.JellyPilot.GtkPreview.Smoke";
 const SEASON_EPISODE_PAGE_SIZE: i32 = 30;
 const QUICK_CONNECT_POLL_INTERVAL: Duration = Duration::from_secs(5);
@@ -39,6 +53,9 @@ const QUICK_CONNECT_TIMEOUT: Duration = Duration::from_secs(5 * 60);
 struct AppModel {
   client: Arc<JellyfinClient>,
   auth_store: AuthStore,
+  pending_prefill: Option<LoginPrefill>,
+  intro_mode: config::IntroMode,
+  diagnostics: Diagnostics,
   saved_profiles: LoadState<Vec<SavedProfileSummary>>,
   active_saved_profile: Option<SavedProfileKey>,
   profile_operation_busy: bool,
@@ -47,6 +64,8 @@ struct AppModel {
   artwork: Arc<ArtworkAdapter>,
   artwork_view: u64,
   artwork_slot: u64,
+  image_cache_sequence: u64,
+  image_cache_clearing: bool,
   artwork_targets: HashMap<u64, ArtworkTarget>,
   requests: RequestGate,
   connection: ConnectionPhase,
@@ -58,14 +77,27 @@ struct AppModel {
   detail_selection: Option<VideoLibraryItem>,
   detail_origin: Option<String>,
   detail_parent: Option<DetailParent>,
+  detail_identity: Option<String>,
+  streams: LoadState<VideoItemStreams>,
+  stream_sequence: u64,
+  season_neighbors: LoadState<Vec<VideoLibraryItem>>,
+  season_neighbor_sequence: u64,
   season: Option<SeasonSelection>,
+  recommendations: LoadState<Vec<VideoLibraryItem>>,
+  recommendation_sequence: u64,
   user_data_busy: bool,
   user_data_sequence: u64,
   user_data_error: Option<String>,
+  remote_state: RemoteControlState,
+  remote_generation: u64,
+  remote_play_generation: u64,
+  remote_socket: Option<Arc<jellypilot_session::JellyfinWebSocket>>,
   playback: PlaybackState,
   playback_cancellation: watch::Sender<u64>,
+  playback_start_generation: u64,
   playback_refresh_source: Option<gtk::glib::SourceId>,
   playback_cleanup_pending: bool,
+  remote_disconnect_pending: bool,
   quitting: bool,
   ui: Ui,
 }
@@ -75,25 +107,166 @@ struct ArtworkTarget {
   fallback: gtk::Image,
 }
 
+struct DiagnosticRowWidgets {
+  row: gtk::ListBoxRow,
+  message: gtk::Label,
+}
+
 #[derive(Default)]
 struct PlaybackState {
   controller: Option<PlaybackController>,
   snapshot: Option<PlaybackSnapshot>,
+  active_item: Option<MediaItem>,
+  active_artwork_image_id: Option<String>,
+  identity: Option<PlaybackIdentity>,
+  tracks: PlaybackTrackState,
+  adjacent: AdjacentState,
+  intro_skip: IntroSkipState,
   unavailable: Option<String>,
   error: Option<String>,
   notice: Option<String>,
   busy: bool,
+  desired_paused: Option<bool>,
+  desired_muted: Option<bool>,
   sequence: u64,
+  reconfigure_pending: bool,
   pending: VecDeque<PlaybackRequest>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct PlaybackIdentity {
+  session: u64,
+  sequence: u64,
+  item_id: String,
+}
+
+#[derive(Default)]
+enum PlaybackTrackState {
+  #[default]
+  Unavailable,
+  Loading {
+    identity: PlaybackIdentity,
+  },
+  Ready {
+    identity: PlaybackIdentity,
+    tracks: Vec<TrackInfo>,
+  },
+  Failed {
+    identity: PlaybackIdentity,
+    message: String,
+  },
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum AdjacentDirection {
+  Previous,
+  Next,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum TrackKind {
+  Audio,
+  Subtitle,
+}
+
+#[derive(Clone, Copy)]
+enum ShortcutKind {
+  Next,
+  Previous,
+  IntroSkip,
+}
+
+#[derive(Default)]
+enum AdjacentAvailability {
+  #[default]
+  Idle,
+  Loading,
+  Available(MediaItem),
+  Unavailable(String),
+}
+
+#[derive(Default)]
+struct AdjacentState {
+  identity: Option<PlaybackIdentity>,
+  sequence: u64,
+  previous: AdjacentAvailability,
+  next: AdjacentAvailability,
+}
+
+impl AdjacentState {
+  fn availability(&self, direction: AdjacentDirection) -> &AdjacentAvailability {
+    match direction {
+      AdjacentDirection::Previous => &self.previous,
+      AdjacentDirection::Next => &self.next,
+    }
+  }
+}
+
+struct IntroSkipState {
+  identity: Option<PlaybackIdentity>,
+  sequence: u64,
+  mode: IntroSkipMode,
+  ranges: Vec<IntroSkipRange>,
+  active_prompt: Option<ActiveIntroPrompt>,
+}
+
+impl Default for IntroSkipState {
+  fn default() -> Self {
+    Self {
+      identity: None,
+      sequence: 0,
+      mode: IntroSkipMode::Off,
+      ranges: Vec::new(),
+      active_prompt: None,
+    }
+  }
+}
+
+struct ActiveIntroPrompt {
+  range_index: usize,
+  expires_at: Instant,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum IntroUiAction {
+  Seek {
+    range_index: usize,
+    target: f64,
+  },
+  Prompt {
+    range_index: usize,
+    kind: IntroSkipKind,
+  },
+  ManualSkip {
+    range_index: usize,
+    kind: IntroSkipKind,
+    seek_target: f64,
+  },
 }
 
 enum PlaybackRequest {
   Library(VideoLibraryItem, PlaybackStartPosition),
   Detail(VideoItemDetail, PlaybackStartPosition),
+  ReplaceMedia(MediaItem),
   Paused(bool),
   Seek(f64),
   Volume(f64),
   Muted(bool),
+  AudioTrack {
+    identity: PlaybackIdentity,
+    id: i64,
+  },
+  SubtitleTrack {
+    identity: PlaybackIdentity,
+    id: Option<i64>,
+  },
+  RefreshTracks(PlaybackIdentity),
+  ShowText {
+    identity: PlaybackIdentity,
+    text: String,
+    duration_ms: i64,
+    prompt_range: Option<usize>,
+  },
   Stop,
   Refresh,
 }
@@ -121,6 +294,10 @@ enum PlaybackRequestKind {
   Seek,
   Volume,
   Muted,
+  AudioTrack,
+  SubtitleTrack,
+  RefreshTracks,
+  ShowText,
   Stop,
   Refresh,
 }
@@ -128,21 +305,107 @@ enum PlaybackRequestKind {
 impl PlaybackRequest {
   const fn kind(&self) -> PlaybackRequestKind {
     match self {
-      Self::Library(..) | Self::Detail(..) => PlaybackRequestKind::Start,
+      Self::Library(..) | Self::Detail(..) | Self::ReplaceMedia(..) => PlaybackRequestKind::Start,
       Self::Paused(_) => PlaybackRequestKind::Paused,
       Self::Seek(_) => PlaybackRequestKind::Seek,
       Self::Volume(_) => PlaybackRequestKind::Volume,
       Self::Muted(_) => PlaybackRequestKind::Muted,
+      Self::AudioTrack { .. } => PlaybackRequestKind::AudioTrack,
+      Self::SubtitleTrack { .. } => PlaybackRequestKind::SubtitleTrack,
+      Self::RefreshTracks(_) => PlaybackRequestKind::RefreshTracks,
+      Self::ShowText { .. } => PlaybackRequestKind::ShowText,
       Self::Stop => PlaybackRequestKind::Stop,
       Self::Refresh => PlaybackRequestKind::Refresh,
     }
   }
+
+  fn identity(&self) -> Option<&PlaybackIdentity> {
+    match self {
+      Self::AudioTrack { identity, .. }
+      | Self::SubtitleTrack { identity, .. }
+      | Self::RefreshTracks(identity)
+      | Self::ShowText { identity, .. } => Some(identity),
+      _ => None,
+    }
+  }
+
+  fn started_item(&self) -> Option<MediaItem> {
+    match self {
+      Self::Library(item, _) => Some(media_item_from_library(item)),
+      Self::Detail(item, _) => Some(media_item_from_detail(item)),
+      Self::ReplaceMedia(item) => Some(item.clone()),
+      _ => None,
+    }
+  }
+
+  fn started_artwork_image_id(&self) -> Option<String> {
+    match self {
+      Self::Library(item, _) => item.artwork_image_id.clone(),
+      Self::Detail(item, _) => item
+        .backdrop_image_id
+        .clone()
+        .or_else(|| item.artwork_image_id.clone()),
+      Self::ReplaceMedia(_) => None,
+      _ => None,
+    }
+  }
+}
+
+struct IntroPromptReceipt {
+  identity: PlaybackIdentity,
+  range_index: usize,
+  duration: Duration,
 }
 
 struct PlaybackCommandSuccess {
   snapshot: Option<PlaybackSnapshot>,
+  preserve_snapshot: bool,
   warnings: Vec<PlaybackWarning>,
   notice: Option<String>,
+  tracks: Option<Result<Vec<TrackInfo>, String>>,
+  client_messages: Vec<String>,
+  prompt_displayed: Option<IntroPromptReceipt>,
+}
+
+impl PlaybackCommandSuccess {
+  fn playback(
+    snapshot: Option<PlaybackSnapshot>,
+    warnings: Vec<PlaybackWarning>,
+    notice: Option<String>,
+  ) -> Self {
+    Self {
+      snapshot,
+      preserve_snapshot: false,
+      warnings,
+      notice,
+      tracks: None,
+      client_messages: Vec::new(),
+      prompt_displayed: None,
+    }
+  }
+
+  fn tracks(result: Result<Vec<TrackInfo>, String>) -> Self {
+    Self {
+      snapshot: None,
+      preserve_snapshot: true,
+      warnings: Vec::new(),
+      notice: None,
+      tracks: Some(result),
+      client_messages: Vec::new(),
+      prompt_displayed: None,
+    }
+  }
+  fn preserved() -> Self {
+    Self {
+      snapshot: None,
+      preserve_snapshot: true,
+      warnings: Vec::new(),
+      notice: None,
+      tracks: None,
+      client_messages: Vec::new(),
+      prompt_displayed: None,
+    }
+  }
 }
 
 struct PlaybackCommandFailure {
@@ -181,6 +444,32 @@ enum QuickConnectPhase {
   Failed,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum RemoteControlState {
+  Unavailable,
+  Connecting,
+  Available,
+  Lost,
+}
+fn remote_state_after_event(
+  state: RemoteControlState,
+  event: &jellypilot_session::JellyfinWebSocketEvent,
+) -> RemoteControlState {
+  match event {
+    jellypilot_session::JellyfinWebSocketEvent::Connected
+    | jellypilot_session::JellyfinWebSocketEvent::Reconnected => RemoteControlState::Available,
+    jellypilot_session::JellyfinWebSocketEvent::ConnectionLost => RemoteControlState::Lost,
+    jellypilot_session::JellyfinWebSocketEvent::Command(_) => state,
+  }
+}
+fn remote_volume_value(value: Option<&serde_json::Value>) -> Option<f64> {
+  let volume = match value? {
+    serde_json::Value::Number(number) => number.as_f64()?,
+    serde_json::Value::String(value) => value.trim().parse().ok()?,
+    _ => return None,
+  };
+  volume.is_finite().then(|| volume.clamp(0.0, 100.0))
+}
 impl QuickConnectPhase {
   const fn is_active(self) -> bool {
     matches!(self, Self::Requesting | Self::Waiting | Self::Approving)
@@ -250,7 +539,6 @@ enum AppMessage {
   Disconnect,
   ShowHome,
   ShowNowPlaying,
-  ShowSettings,
   OpenLibrary(VideoLibraryShortcut),
   SearchRequested,
   SelectItem(VideoLibraryItem),
@@ -276,12 +564,42 @@ enum AppMessage {
   PlayLibrary(VideoLibraryItem, PlaybackStartPosition),
   PlayDetail(VideoItemDetail, PlaybackStartPosition),
   TogglePaused,
+  SetPaused(bool),
   Seek(f64),
   SetVolume(f64),
   SetMuted(bool),
+  SelectAudioTrack(u32),
+  SelectSubtitleTrack(u32),
+  PlayAdjacent(AdjacentDirection),
+  SetIntroMode(u32),
+  ReconnectRemoteControl,
+  RefreshConnectionStatus,
+  DetectMpv,
+  SetMpvPath(String),
+  SetMpvArgs(String),
+  SetPlaybackTargetName(String),
+  AddSubtitlePreset,
+  AddSubtitleCustom,
+  MoveSubtitleLanguage {
+    index: usize,
+    offset: i32,
+  },
+  RemoveSubtitleLanguage(usize),
+  ClearSubtitleLanguages,
+  SetNextEpisodeKey(String),
+  SetPreviousEpisodeKey(String),
+  SetIntroSkipKey(String),
+  SetImageCacheEnabled(bool),
+  RefreshImageCacheStats,
+  ConfirmClearImageCache,
+  ClearImageCache,
+  CopyDiagnostics,
+  ClearDiagnostics,
+  RefreshDiagnostics,
   StopPlayback,
   RefreshPlayback,
   QuitRequested,
+  RemoteDisconnectSettled(u64),
 }
 
 enum AppCommand {
@@ -294,6 +612,29 @@ enum AppCommand {
     session: SessionToken,
     client: Arc<JellyfinClient>,
     result: Result<(), String>,
+  },
+  RemoteReady {
+    generation: u64,
+    socket: Arc<jellypilot_session::JellyfinWebSocket>,
+    receiver: relm4::tokio::sync::mpsc::Receiver<jellypilot_session::JellyfinWebSocketEvent>,
+  },
+  RemoteEvent {
+    generation: u64,
+    event: jellypilot_session::JellyfinWebSocketEvent,
+  },
+  RemoteFailed {
+    generation: u64,
+  },
+  RemotePlay {
+    generation: u64,
+    playback_generation: u64,
+    play_generation: u64,
+    start_position: PlaybackStartPosition,
+    result: Result<VideoItemDetail, String>,
+  },
+  ConnectionStatus {
+    session: u64,
+    result: Result<(), ()>,
   },
   QuickConnectCode {
     session: SessionToken,
@@ -320,6 +661,24 @@ enum AppCommand {
     token: DetailToken,
     result: Box<Result<DetailContent, String>>,
   },
+  Recommendations {
+    session: u64,
+    sequence: u64,
+    item_id: String,
+    result: Result<Vec<VideoLibraryItem>, String>,
+  },
+  Streams {
+    session: u64,
+    sequence: u64,
+    item_id: String,
+    result: Result<VideoItemStreams, String>,
+  },
+  SeasonNeighbors {
+    session: u64,
+    sequence: u64,
+    item_id: String,
+    result: Result<Vec<VideoLibraryItem>, String>,
+  },
   SeasonEpisodes {
     token: DetailToken,
     season_id: String,
@@ -337,11 +696,35 @@ enum AppCommand {
     slot: u64,
     result: Result<DecodedArtwork, ()>,
   },
+  ImageCacheStats {
+    sequence: u64,
+    result: Result<ArtworkCacheStats, ()>,
+  },
+  ImageCacheCleared {
+    sequence: u64,
+    result: Result<ArtworkCacheStats, ()>,
+  },
   Playback {
     session: u64,
     sequence: u64,
+    request_kind: PlaybackRequestKind,
+    started_item: Option<MediaItem>,
+    started_artwork_image_id: Option<String>,
     controller: Box<PlaybackController>,
     result: Result<PlaybackCommandSuccess, PlaybackCommandFailure>,
+  },
+  AdjacentEpisodes {
+    session: u64,
+    sequence: u64,
+    identity: PlaybackIdentity,
+    previous: Result<Option<MediaItem>, String>,
+    next: Result<Option<MediaItem>, String>,
+  },
+  IntroRanges {
+    session: u64,
+    sequence: u64,
+    identity: PlaybackIdentity,
+    ranges: Vec<IntroSkipRange>,
   },
   PlaybackShutdown {
     disposition: PlaybackShutdownDisposition,
@@ -370,6 +753,31 @@ impl std::fmt::Debug for AppCommand {
         .debug_struct("Login")
         .field("session", session)
         .field("successful", &result.is_ok())
+        .finish(),
+      Self::RemoteFailed { generation } => formatter
+        .debug_struct("RemoteFailed")
+        .field("generation", generation)
+        .finish(),
+      Self::RemotePlay {
+        generation, result, ..
+      } => formatter
+        .debug_struct("RemotePlay")
+        .field("generation", generation)
+        .field("successful", &result.is_ok())
+        .finish(),
+      Self::ConnectionStatus { session, result } => formatter
+        .debug_struct("ConnectionStatus")
+        .field("session", session)
+        .field("successful", &result.is_ok())
+        .finish(),
+      Self::RemoteReady { generation, .. } => formatter
+        .debug_struct("RemoteReady")
+        .field("generation", generation)
+        .finish(),
+      Self::RemoteEvent { generation, event } => formatter
+        .debug_struct("RemoteEvent")
+        .field("generation", generation)
+        .field("event", event)
         .finish(),
       Self::QuickConnectCode { session, .. } => formatter
         .debug_struct("QuickConnectCode")
@@ -402,6 +810,42 @@ impl std::fmt::Debug for AppCommand {
       Self::Detail { token, result } => formatter
         .debug_struct("Detail")
         .field("token", token)
+        .field("successful", &result.is_ok())
+        .finish(),
+      Self::Recommendations {
+        session,
+        sequence,
+        item_id,
+        result,
+      } => formatter
+        .debug_struct("Recommendations")
+        .field("session", session)
+        .field("sequence", sequence)
+        .field("item_id", item_id)
+        .field("successful", &result.is_ok())
+        .finish(),
+      Self::Streams {
+        session,
+        sequence,
+        item_id,
+        result,
+      } => formatter
+        .debug_struct("Streams")
+        .field("session", session)
+        .field("sequence", sequence)
+        .field("item_id", item_id)
+        .field("successful", &result.is_ok())
+        .finish(),
+      Self::SeasonNeighbors {
+        session,
+        sequence,
+        item_id,
+        result,
+      } => formatter
+        .debug_struct("SeasonNeighbors")
+        .field("session", session)
+        .field("sequence", sequence)
+        .field("item_id", item_id)
         .field("successful", &result.is_ok())
         .finish(),
       Self::SeasonEpisodes {
@@ -437,6 +881,16 @@ impl std::fmt::Debug for AppCommand {
         .field("slot", slot)
         .field("successful", &result.is_ok())
         .finish(),
+      Self::ImageCacheStats { sequence, result } => formatter
+        .debug_struct("ImageCacheStats")
+        .field("sequence", sequence)
+        .field("successful", &result.is_ok())
+        .finish(),
+      Self::ImageCacheCleared { sequence, result } => formatter
+        .debug_struct("ImageCacheCleared")
+        .field("sequence", sequence)
+        .field("successful", &result.is_ok())
+        .finish(),
       Self::Playback {
         session,
         sequence,
@@ -447,6 +901,30 @@ impl std::fmt::Debug for AppCommand {
         .field("session", session)
         .field("sequence", sequence)
         .field("successful", &result.is_ok())
+        .finish(),
+      Self::AdjacentEpisodes {
+        session,
+        sequence,
+        previous,
+        next,
+        ..
+      } => formatter
+        .debug_struct("AdjacentEpisodes")
+        .field("session", session)
+        .field("sequence", sequence)
+        .field("previous_successful", &previous.is_ok())
+        .field("next_successful", &next.is_ok())
+        .finish(),
+      Self::IntroRanges {
+        session,
+        sequence,
+        ranges,
+        ..
+      } => formatter
+        .debug_struct("IntroRanges")
+        .field("session", session)
+        .field("sequence", sequence)
+        .field("range_count", &ranges.len())
         .finish(),
       Self::PlaybackShutdown {
         disposition,
@@ -461,12 +939,13 @@ impl std::fmt::Debug for AppCommand {
 }
 
 struct Ui {
-  root: gtk::Box,
+  root: adw::ToolbarView,
   login: gtk::ScrolledWindow,
-  provider: gtk::DropDown,
-  server_url: gtk::Entry,
-  username: gtk::Entry,
-  password: gtk::PasswordEntry,
+  provider: adw::ComboRow,
+  server_url: adw::EntryRow,
+  username: adw::EntryRow,
+  password: adw::PasswordEntryRow,
+  remember_prefill: gtk::Switch,
   login_method_switcher: gtk::StackSwitcher,
   quick_connect_code: gtk::Label,
   quick_connect_status: gtk::Label,
@@ -477,16 +956,15 @@ struct Ui {
   saved_profiles_status: gtk::Label,
   login_status: gtk::Label,
   login_button: gtk::Button,
-  authenticated: gtk::Box,
-  header: gtk::HeaderBar,
-  sidebar_toggle: gtk::ToggleButton,
+  authenticated: adw::NavigationSplitView,
   connection_status: gtk::Label,
   search: gtk::SearchEntry,
+  playback_bar: gtk::Box,
+  playback_bar_title: gtk::Label,
+  playback_bar_pause: gtk::Button,
   disconnect_button: gtk::Button,
   content: gtk::Stack,
   nav_home: gtk::ToggleButton,
-  nav_now_playing: gtk::ToggleButton,
-  nav_settings: gtk::ToggleButton,
   shortcuts: gtk::Box,
   home_content: gtk::Box,
   browse_title: gtk::Label,
@@ -502,20 +980,54 @@ struct Ui {
   load_next_button: gtk::Button,
   browse_scroll: gtk::ScrolledWindow,
   detail_content: gtk::Box,
+  now_playing_artwork: gtk::Box,
   now_playing_status: gtk::Label,
   now_playing_notice: gtk::Label,
   position_label: gtk::Label,
   duration_label: gtk::Label,
+  previous_button: gtk::Button,
   pause_button: gtk::Button,
+  next_button: gtk::Button,
   stop_button: gtk::Button,
   seek: gtk::Scale,
   volume: gtk::Scale,
   mute_button: gtk::ToggleButton,
+  audio_tracks: gtk::DropDown,
+  subtitle_tracks: gtk::DropDown,
+  track_status: gtk::Label,
+  adjacent_status: gtk::Label,
   playback_controls_syncing: Rc<Cell<bool>>,
   settings_saved_profile: gtk::Label,
   settings_storage_status: gtk::Label,
   settings_disconnect_button: gtk::Button,
+  intro_skip_group: adw::PreferencesGroup,
+  intro_skip_mode: adw::ComboRow,
+  intro_skip_status: gtk::Label,
+  settings_config_status: gtk::Label,
+  settings_server_url: gtk::Label,
+  settings_user: gtk::Label,
+  settings_remote_status: gtk::Label,
+  settings_reconnect_button: gtk::Button,
+  settings_refresh_status_button: gtk::Button,
+  settings_mpv_path: adw::EntryRow,
+  settings_mpv_status: gtk::Label,
+  settings_subtitle_languages: gtk::Box,
+  settings_subtitle_preset: gtk::DropDown,
+  settings_subtitle_custom: adw::EntryRow,
+  settings_image_cache: adw::SwitchRow,
+  settings_image_cache_syncing: Rc<Cell<bool>>,
+  settings_image_cache_stats: gtk::Label,
+  settings_image_cache_clear: gtk::Button,
+  diagnostics_list: gtk::ListBox,
+  diagnostic_rows: Rc<RefCell<HashMap<u64, DiagnosticRowWidgets>>>,
+  diagnostics_empty: gtk::Label,
+  diagnostics_count: gtk::Label,
+  diagnostics_scroll: gtk::ScrolledWindow,
+  diagnostics_copy: gtk::Button,
+  diagnostics_clear: gtk::Button,
+  diagnostics_status: gtk::Label,
   forget_current_profile: gtk::Button,
+  preferences: adw::PreferencesDialog,
 }
 
 #[relm4::component]
@@ -528,22 +1040,27 @@ impl Component for AppModel {
 
   view! {
     #[root]
-    main_window = gtk::ApplicationWindow {
+    main_window = adw::ApplicationWindow {
       set_title: Some("JellyPilot"),
       set_default_size: (1280, 720),
     }
   }
-
   fn init(
     smoke_test: Self::Init,
     root: Self::Root,
     sender: ComponentSender<Self>,
   ) -> ComponentParts<Self> {
     let ui = Ui::new(&sender);
-    root.set_titlebar(Some(&ui.header));
-    root.set_child(Some(&ui.root));
+    root.set_content(Some(&ui.root));
+    let narrow_breakpoint = adw::Breakpoint::new(adw::BreakpointCondition::new_length(
+      adw::BreakpointConditionLengthType::MaxWidth,
+      800.0,
+      adw::LengthUnit::Sp,
+    ));
+    narrow_breakpoint.add_setters(&[(&ui.authenticated, "collapsed", true)]);
+    root.add_breakpoint(narrow_breakpoint);
     if smoke_test {
-      let application = relm4::main_application();
+      let application = relm4::main_adw_application();
       root.connect_map(move |_| {
         let application = application.clone();
         gtk::glib::idle_add_local_once(move || application.quit());
@@ -565,17 +1082,39 @@ impl Component for AppModel {
     });
     let (playback_cancellation, _) = watch::channel(0);
     let (quick_connect_cancellation, _) = watch::channel(0);
+    let loaded_config = config::load_checked();
+    let intro_mode = loaded_config
+      .as_ref()
+      .map_or_else(|_| config::IntroMode::default(), |config| config.intro_mode);
+    let image_cache_enabled = loaded_config
+      .as_ref()
+      .map_or(true, |config| config.image_cache_enabled);
+    let artwork = Arc::new(ArtworkAdapter::default());
+    artwork.set_disk_cache_enabled(image_cache_enabled);
+    let mut diagnostics = Diagnostics::default();
+    if loaded_config.is_err() {
+      diagnostics.record(
+        DiagnosticLevel::Warning,
+        DiagnosticCategory::Config,
+        "The GTK configuration could not be loaded; safe defaults are in use.",
+      );
+    }
     let model = Self {
       client: Arc::new(JellyfinClient::new()),
       auth_store: AuthStore::default(),
+      pending_prefill: None,
+      intro_mode,
+      diagnostics,
       saved_profiles: LoadState::Loading,
       active_saved_profile: None,
       profile_operation_busy: false,
       quick_connect_phase: QuickConnectPhase::Idle,
       quick_connect_cancellation,
-      artwork: Arc::new(ArtworkAdapter::default()),
+      artwork,
       artwork_view: 0,
       artwork_slot: 0,
+      image_cache_sequence: 0,
+      image_cache_clearing: false,
       artwork_targets: HashMap::new(),
       requests: RequestGate::default(),
       connection: ConnectionPhase::SignedOut,
@@ -585,20 +1124,35 @@ impl Component for AppModel {
       browse: BrowseState::default(),
       detail: LoadState::Idle,
       detail_selection: None,
+      detail_identity: None,
+      streams: LoadState::Idle,
+      stream_sequence: 0,
+      season_neighbors: LoadState::Idle,
+      season_neighbor_sequence: 0,
       detail_origin: None,
       detail_parent: None,
+      recommendations: LoadState::Idle,
+      recommendation_sequence: 0,
       season: None,
       user_data_busy: false,
       user_data_sequence: 0,
       user_data_error: None,
+      remote_state: RemoteControlState::Unavailable,
+      remote_generation: 0,
+      remote_play_generation: 0,
+      remote_socket: None,
       playback: PlaybackState::default(),
       playback_cancellation,
+      playback_start_generation: 0,
       playback_refresh_source: Some(playback_refresh_source),
       playback_cleanup_pending: false,
+      remote_disconnect_pending: false,
       quitting: false,
       ui,
     };
     let widgets = view_output!();
+    model.render_connection_settings();
+    model.render_subtitle_settings(&sender);
     if !smoke_test {
       sender.input(AppMessage::LoadSavedProfiles);
     }
@@ -630,9 +1184,13 @@ impl Component for AppModel {
       AppMessage::ShowHome => self.show_home(&sender),
       AppMessage::ShowNowPlaying => {
         self.navigate_to("now-playing");
+        self.render_now_playing_artwork(&sender);
         self.start_playback(PlaybackRequest::Refresh, &sender);
+        if let Some(identity) = self.playback.identity.clone() {
+          self.start_playback(PlaybackRequest::RefreshTracks(identity.clone()), &sender);
+          self.refresh_adjacent_episodes(identity, &sender);
+        }
       }
-      AppMessage::ShowSettings => self.navigate_to("settings"),
       AppMessage::OpenLibrary(shortcut) => self.open_library(shortcut, &sender),
       AppMessage::SearchRequested => self.start_search(&sender),
       AppMessage::SelectItem(item) => self.load_detail(item, &sender),
@@ -676,21 +1234,64 @@ impl Component for AppModel {
       AppMessage::PlayDetail(item, start_position) => {
         self.start_playback(PlaybackRequest::Detail(item, start_position), &sender)
       }
-      AppMessage::TogglePaused => self.start_playback(
-        PlaybackRequest::Paused(
-          !self
-            .playback
-            .snapshot
-            .as_ref()
-            .is_some_and(|snapshot| snapshot.transport.paused),
-        ),
-        &sender,
-      ),
+      AppMessage::TogglePaused => {
+        let paused = self
+          .playback
+          .desired_paused
+          .or_else(|| {
+            self
+              .playback
+              .snapshot
+              .as_ref()
+              .map(|snapshot| snapshot.transport.paused)
+          })
+          .unwrap_or(false);
+        self.start_playback(PlaybackRequest::Paused(!paused), &sender);
+      }
+      AppMessage::SetPaused(paused) => {
+        self.start_playback(PlaybackRequest::Paused(paused), &sender)
+      }
       AppMessage::Seek(position) => self.start_playback(PlaybackRequest::Seek(position), &sender),
       AppMessage::SetVolume(volume) => {
         self.start_playback(PlaybackRequest::Volume(volume), &sender)
       }
       AppMessage::SetMuted(muted) => self.start_playback(PlaybackRequest::Muted(muted), &sender),
+      AppMessage::SelectAudioTrack(selected) => {
+        self.select_track(TrackKind::Audio, selected, &sender)
+      }
+      AppMessage::SelectSubtitleTrack(selected) => {
+        self.select_track(TrackKind::Subtitle, selected, &sender)
+      }
+      AppMessage::PlayAdjacent(direction) => self.play_adjacent(direction, &sender),
+      AppMessage::CopyDiagnostics => self.copy_diagnostics(),
+      AppMessage::ClearDiagnostics => {
+        self.diagnostics.clear();
+        self.ui.diagnostics_status.set_label("");
+        self.ui.diagnostics_status.set_visible(false);
+        self.render_diagnostics();
+      }
+      AppMessage::RefreshDiagnostics => self.render_diagnostics(),
+      AppMessage::SetIntroMode(selected) => self.set_intro_mode(selected),
+      AppMessage::ReconnectRemoteControl => self.reconnect_remote_control(&sender),
+      AppMessage::RefreshConnectionStatus => self.refresh_connection_status(&sender),
+      AppMessage::DetectMpv => self.detect_mpv(),
+      AppMessage::SetMpvPath(path) => self.update_mpv_path(path),
+      AppMessage::SetMpvArgs(args) => self.update_mpv_args(args),
+      AppMessage::SetPlaybackTargetName(name) => self.update_playback_target_name(name),
+      AppMessage::AddSubtitlePreset => self.add_subtitle_preset(&sender),
+      AppMessage::AddSubtitleCustom => self.add_custom_subtitle(&sender),
+      AppMessage::MoveSubtitleLanguage { index, offset } => {
+        self.move_subtitle_language(index, offset, &sender)
+      }
+      AppMessage::RemoveSubtitleLanguage(index) => self.remove_subtitle_language(index, &sender),
+      AppMessage::ClearSubtitleLanguages => self.clear_subtitle_languages(&sender),
+      AppMessage::SetNextEpisodeKey(key) => self.update_shortcut(ShortcutKind::Next, key),
+      AppMessage::SetPreviousEpisodeKey(key) => self.update_shortcut(ShortcutKind::Previous, key),
+      AppMessage::SetIntroSkipKey(key) => self.update_shortcut(ShortcutKind::IntroSkip, key),
+      AppMessage::SetImageCacheEnabled(enabled) => self.set_image_cache_enabled(enabled),
+      AppMessage::RefreshImageCacheStats => self.refresh_image_cache_stats(&sender),
+      AppMessage::ConfirmClearImageCache => self.confirm_clear_image_cache(&sender),
+      AppMessage::ClearImageCache => self.clear_image_cache(&sender),
       AppMessage::StopPlayback => self.start_playback(PlaybackRequest::Stop, &sender),
       AppMessage::RefreshPlayback => {
         if self
@@ -704,6 +1305,16 @@ impl Component for AppModel {
         }
       }
       AppMessage::QuitRequested => self.request_quit(&sender),
+      AppMessage::RemoteDisconnectSettled(generation) => {
+        if generation == self.remote_generation && self.remote_disconnect_pending {
+          self.remote_disconnect_pending = false;
+          if self.quitting
+            && quit_can_finish_without_controller(self.playback.busy, self.playback_cleanup_pending)
+          {
+            relm4::main_adw_application().quit();
+          }
+        }
+      }
     }
   }
 
@@ -717,7 +1328,14 @@ impl Component for AppModel {
       AppCommand::SavedProfiles(result) => {
         self.saved_profiles = match result {
           Ok(profiles) => LoadState::Ready(profiles),
-          Err(message) => LoadState::Failed(message),
+          Err(message) => {
+            self.record_diagnostic(
+              DiagnosticLevel::Warning,
+              DiagnosticCategory::Auth,
+              "Saved profiles could not be loaded from Secret Service.",
+            );
+            LoadState::Failed(message)
+          }
         };
         self.render_saved_profiles(&sender);
         self.render_saved_profile_settings();
@@ -738,12 +1356,22 @@ impl Component for AppModel {
                 .settings_storage_status
                 .set_label("This session is stored securely in Linux Secret Service.");
             }
+            self.record_diagnostic(
+              DiagnosticLevel::Info,
+              DiagnosticCategory::Auth,
+              "The connected session was stored in Secret Service.",
+            );
           }
           Err(message) => {
             if is_current {
               self.active_saved_profile = None;
               self.ui.settings_storage_status.set_label(&message);
             }
+            self.record_diagnostic(
+              DiagnosticLevel::Warning,
+              DiagnosticCategory::Auth,
+              "The connected session could not be stored in Secret Service.",
+            );
           }
         }
         self.ui.settings_storage_status.set_visible(is_current);
@@ -755,6 +1383,142 @@ impl Component for AppModel {
         client,
         result,
       } => self.finish_login(session, client, result, &sender),
+      AppCommand::RemoteReady {
+        generation,
+        socket,
+        receiver,
+      } => {
+        if generation != self.remote_generation {
+          return;
+        }
+        self.remote_state = RemoteControlState::Connecting;
+        self.remote_socket = Some(socket);
+        self.update_connection_status();
+        self.record_diagnostic(
+          DiagnosticLevel::Info,
+          DiagnosticCategory::RemoteControl,
+          "Remote-control capability was granted; opening the command socket.",
+        );
+        sender.command(move |output, shutdown| {
+          shutdown
+            .register(async move {
+              let mut receiver = receiver;
+              while let Some(event) = receiver.recv().await {
+                if output
+                  .send(AppCommand::RemoteEvent { generation, event })
+                  .is_err()
+                {
+                  break;
+                }
+              }
+            })
+            .drop_on_shutdown()
+        });
+      }
+      AppCommand::RemoteFailed { generation } => {
+        if generation == self.remote_generation {
+          self.remote_state = RemoteControlState::Lost;
+          self.update_connection_status();
+          self.record_diagnostic(
+            DiagnosticLevel::Error,
+            DiagnosticCategory::RemoteControl,
+            "Remote-control capability or socket setup failed.",
+          );
+        }
+      }
+      AppCommand::RemoteEvent { generation, event } => {
+        if generation != self.remote_generation {
+          return;
+        }
+        let message = match &event {
+          jellypilot_session::JellyfinWebSocketEvent::Connected => {
+            Some("Remote-control socket connected.")
+          }
+          jellypilot_session::JellyfinWebSocketEvent::ConnectionLost => {
+            Some("Remote-control socket connection was lost.")
+          }
+          jellypilot_session::JellyfinWebSocketEvent::Reconnected => {
+            Some("Remote-control socket reconnected.")
+          }
+          jellypilot_session::JellyfinWebSocketEvent::Command(_) => None,
+        };
+        if let Some(message) = message {
+          self.record_diagnostic(
+            if matches!(
+              event,
+              jellypilot_session::JellyfinWebSocketEvent::ConnectionLost
+            ) {
+              DiagnosticLevel::Warning
+            } else {
+              DiagnosticLevel::Info
+            },
+            DiagnosticCategory::RemoteControl,
+            message,
+          );
+        }
+        self.remote_state = remote_state_after_event(self.remote_state, &event);
+        if let jellypilot_session::JellyfinWebSocketEvent::Command(command) = event {
+          self.handle_remote_command(command, &sender);
+        }
+        self.update_connection_status();
+      }
+      AppCommand::RemotePlay {
+        generation,
+        playback_generation,
+        play_generation,
+        start_position,
+        result,
+      } => {
+        if generation != self.remote_generation
+          || playback_generation != self.playback_start_generation
+          || play_generation != self.remote_play_generation
+        {
+          return;
+        }
+        if let Ok(item) = result {
+          self.start_playback(PlaybackRequest::Detail(item, start_position), &sender);
+        } else {
+          self.record_diagnostic(
+            DiagnosticLevel::Warning,
+            DiagnosticCategory::RemoteControl,
+            "A remote Play command was rejected because its item could not be loaded.",
+          );
+          self.update_connection_status();
+        }
+      }
+      AppCommand::ConnectionStatus { session, result } => {
+        if session != self.requests.session_generation()
+          || !matches!(self.connection, ConnectionPhase::Connected)
+        {
+          return;
+        }
+        match result {
+          Ok(()) => {
+            self.record_diagnostic(
+              DiagnosticLevel::Info,
+              DiagnosticCategory::Connection,
+              "Authenticated connection status refresh succeeded.",
+            );
+            self
+              .ui
+              .settings_config_status
+              .set_label("Connection status refreshed.");
+          }
+          Err(()) => {
+            self.record_diagnostic(
+              DiagnosticLevel::Warning,
+              DiagnosticCategory::Connection,
+              "Authenticated connection status refresh failed.",
+            );
+            self
+              .ui
+              .settings_config_status
+              .set_label("Connection status refresh failed.");
+          }
+        }
+        self.ui.settings_config_status.set_visible(true);
+        self.render_connection_settings();
+      }
       AppCommand::QuickConnectCode { session, code } => {
         if !self.requests.is_current_login(session) {
           return;
@@ -775,6 +1539,11 @@ impl Component for AppModel {
         self.ui.quick_connect_spinner.start();
         self.ui.quick_connect_spinner.set_visible(true);
         self.render_quick_connect_controls();
+        self.record_diagnostic(
+          DiagnosticLevel::Info,
+          DiagnosticCategory::Auth,
+          "Quick Connect code received; waiting for approval.",
+        );
       }
       AppCommand::QuickConnectApproving { session } => {
         if !self.requests.is_current_login(session) {
@@ -786,6 +1555,11 @@ impl Component for AppModel {
           .quick_connect_status
           .set_label("Approved. Signing in…");
         self.render_quick_connect_controls();
+        self.record_diagnostic(
+          DiagnosticLevel::Info,
+          DiagnosticCategory::Auth,
+          "Quick Connect was approved; authentication is finishing.",
+        );
       }
       AppCommand::ForgotProfile {
         session,
@@ -817,11 +1591,21 @@ impl Component for AppModel {
             if disconnect_current_session {
               self.disconnect(&sender);
             }
+            self.record_diagnostic(
+              DiagnosticLevel::Info,
+              DiagnosticCategory::Auth,
+              "Saved profile removal completed.",
+            );
           }
           Err(message) => {
             self.ui.saved_profiles_status.set_label(&message);
             self.ui.saved_profiles_status.set_visible(true);
             self.render_saved_profile_settings();
+            self.record_diagnostic(
+              DiagnosticLevel::Warning,
+              DiagnosticCategory::Auth,
+              "Saved profile removal failed in Secret Service.",
+            );
           }
         }
       }
@@ -846,6 +1630,66 @@ impl Component for AppModel {
         }
         self.detail = match *result {
           Ok(detail) => LoadState::Ready(detail),
+          Err(message) => LoadState::Failed(message),
+        };
+        if self.ui.content.visible_child_name().as_deref() == Some("detail") {
+          self.render_detail(&sender);
+        }
+      }
+      AppCommand::Recommendations {
+        session,
+        sequence,
+        item_id,
+        result,
+      } => {
+        if session != self.requests.session_generation()
+          || sequence != self.recommendation_sequence
+          || self.detail_identity.as_deref() != Some(item_id.as_str())
+        {
+          return;
+        }
+        self.recommendations = match result {
+          Ok(items) => LoadState::Ready(items),
+          Err(message) => LoadState::Failed(message),
+        };
+        if self.ui.content.visible_child_name().as_deref() == Some("detail") {
+          self.render_detail(&sender);
+        }
+      }
+      AppCommand::Streams {
+        session,
+        sequence,
+        item_id,
+        result,
+      } => {
+        if session != self.requests.session_generation()
+          || sequence != self.stream_sequence
+          || self.detail_identity.as_deref() != Some(item_id.as_str())
+        {
+          return;
+        }
+        self.streams = match result {
+          Ok(streams) => LoadState::Ready(streams),
+          Err(message) => LoadState::Failed(message),
+        };
+        if self.ui.content.visible_child_name().as_deref() == Some("detail") {
+          self.render_detail(&sender);
+        }
+      }
+      AppCommand::SeasonNeighbors {
+        session,
+        sequence,
+        item_id,
+        result,
+      } => {
+        if session != self.requests.session_generation()
+          || sequence != self.season_neighbor_sequence
+          || self.detail_identity.as_deref() != Some(item_id.as_str())
+        {
+          return;
+        }
+        self.season_neighbors = match result {
+          Ok(items) => LoadState::Ready(items),
           Err(message) => LoadState::Failed(message),
         };
         if self.ui.content.visible_child_name().as_deref() == Some("detail") {
@@ -893,18 +1737,68 @@ impl Component for AppModel {
         let Some(target) = self.artwork_targets.remove(&slot) else {
           return;
         };
-        if let Ok(decoded) = result.and_then(|decoded| decoded.texture().map_err(|_| ())) {
-          target.picture.set_paintable(Some(&decoded));
-          target.fallback.set_visible(false);
+        match result.and_then(|decoded| decoded.texture().map_err(|_| ())) {
+          Ok(decoded) => {
+            target.picture.set_paintable(Some(&decoded));
+            target.fallback.set_visible(false);
+            self.diagnostics.reset_coalescing();
+          }
+          Err(()) => self.record_artwork_failure(),
+        }
+      }
+      AppCommand::ImageCacheStats { sequence, result } => {
+        if sequence != self.image_cache_sequence || self.image_cache_clearing {
+          return;
+        }
+        match result {
+          Ok(stats) => self.render_image_cache_stats(stats),
+          Err(()) => {
+            self
+              .ui
+              .settings_image_cache_stats
+              .set_label("Cache statistics are unavailable.");
+            self.ui.settings_image_cache_clear.set_sensitive(false);
+          }
+        }
+      }
+      AppCommand::ImageCacheCleared { sequence, result } => {
+        if sequence != self.image_cache_sequence {
+          return;
+        }
+        self.image_cache_clearing = false;
+        match result {
+          Ok(stats) => {
+            self.render_image_cache_stats(stats);
+            self.record_diagnostic(
+              DiagnosticLevel::Info,
+              DiagnosticCategory::Artwork,
+              "Library Image Cache cleared.",
+            );
+          }
+          Err(()) => {
+            self
+              .ui
+              .settings_image_cache_stats
+              .set_label("Library Image Cache could not be cleared.");
+            self.ui.settings_image_cache_clear.set_sensitive(true);
+            self.record_diagnostic(
+              DiagnosticLevel::Warning,
+              DiagnosticCategory::Artwork,
+              "Library Image Cache clear failed.",
+            );
+          }
         }
       }
       AppCommand::Playback {
         session,
         sequence,
+        request_kind,
+        started_item,
+        started_artwork_image_id,
         controller,
         result,
       } => {
-        let controller = *controller;
+        let mut controller = *controller;
         if session != self.requests.session_generation()
           || sequence != self.playback.sequence
           || self.quitting
@@ -917,40 +1811,321 @@ impl Component for AppModel {
           self.shutdown_playback(controller, disposition, &sender);
           return;
         }
+        if self.playback.reconfigure_pending {
+          self.playback.reconfigure_pending = false;
+          if controller
+            .configure_for_next_start(playback_controller_config(&config::load()))
+            .is_err()
+          {
+            self.show_settings_failure(
+              "Settings were saved, but no MPV executable is available for the next start.",
+            );
+          }
+        }
         self.playback.controller = Some(controller);
         self.playback.busy = false;
+        let mut refresh_auxiliary = None;
+        let mut refresh_artwork = false;
+        let mut intro_action = None;
+        let mut shortcut_adjacent = None;
+        let mut playback_started_title = None;
         match result {
           Ok(success) => {
-            self.playback.snapshot = success.snapshot;
+            let PlaybackCommandSuccess {
+              snapshot,
+              preserve_snapshot,
+              warnings,
+              notice,
+              tracks,
+              client_messages,
+              prompt_displayed,
+            } = success;
+            if !warnings.is_empty() && request_kind != PlaybackRequestKind::Refresh {
+              self.record_diagnostic(
+                DiagnosticLevel::Warning,
+                DiagnosticCategory::Playback,
+                "Playback completed with one or more non-fatal reporting warnings.",
+              );
+            }
+            if !preserve_snapshot {
+              self.playback.snapshot = snapshot;
+            }
+            if let Some(snapshot) = self.playback.snapshot.as_ref() {
+              self.playback.desired_paused = Some(snapshot.transport.paused);
+              self.playback.desired_muted = Some(snapshot.transport.muted);
+            } else {
+              self.playback.desired_paused = None;
+              self.playback.desired_muted = None;
+            }
             self.playback.error = None;
-            self.playback.notice = playback_notice(success.notice, &success.warnings);
+            self.playback.notice = playback_notice(notice, &warnings);
+            if request_kind == PlaybackRequestKind::Start {
+              if let (Some(item), Some(now_playing)) = (
+                started_item,
+                self
+                  .playback
+                  .snapshot
+                  .as_ref()
+                  .and_then(|snapshot| snapshot.now_playing.as_ref()),
+              ) {
+                if item.id == now_playing.item_id {
+                  let identity = PlaybackIdentity {
+                    session,
+                    sequence,
+                    item_id: item.id.clone(),
+                  };
+                  playback_started_title = Some(item.name.clone());
+                  self.playback.active_item = Some(item);
+                  self.playback.active_artwork_image_id = started_artwork_image_id;
+                  refresh_artwork = true;
+                  self.playback.identity = Some(identity.clone());
+                  self.playback.tracks = PlaybackTrackState::Loading {
+                    identity: identity.clone(),
+                  };
+                  self.playback.intro_skip = IntroSkipState {
+                    identity: Some(identity.clone()),
+                    sequence: 0,
+                    mode: session_intro_mode(self.intro_mode),
+                    ranges: Vec::new(),
+                    active_prompt: None,
+                  };
+                  refresh_auxiliary = Some(identity);
+                }
+              }
+            } else if matches!(
+              request_kind,
+              PlaybackRequestKind::Stop | PlaybackRequestKind::Refresh
+            ) && self.playback.snapshot.is_none()
+            {
+              self.clear_playback_context();
+              refresh_artwork = true;
+            }
+            if let Some(result) = tracks {
+              if matches!(
+                request_kind,
+                PlaybackRequestKind::AudioTrack | PlaybackRequestKind::SubtitleTrack
+              ) {
+                self.record_diagnostic(
+                  if result.is_ok() {
+                    DiagnosticLevel::Info
+                  } else {
+                    DiagnosticLevel::Warning
+                  },
+                  DiagnosticCategory::Playback,
+                  match (request_kind, result.is_ok()) {
+                    (PlaybackRequestKind::AudioTrack, true) => {
+                      "MPV audio track selection completed."
+                    }
+                    (PlaybackRequestKind::AudioTrack, false) => "MPV audio track selection failed.",
+                    (_, true) => "MPV subtitle track selection completed.",
+                    (_, false) => "MPV subtitle track selection failed.",
+                  },
+                );
+              }
+              self.finish_track_refresh(result);
+            }
+            if let Some(prompt) = prompt_displayed {
+              let current = auxiliary_settlement_is_current(
+                prompt.identity.session,
+                &prompt.identity,
+                self.requests.session_generation(),
+                self.playback.identity.as_ref(),
+              );
+              let prompt_range_valid = self
+                .playback
+                .intro_skip
+                .ranges
+                .get(prompt.range_index)
+                .is_some_and(|range| range.notified && !range.skipped);
+              if current
+                && self.playback.intro_skip.mode == IntroSkipMode::Manual
+                && prompt_range_valid
+              {
+                self.playback.intro_skip.active_prompt = Some(ActiveIntroPrompt {
+                  range_index: prompt.range_index,
+                  expires_at: Instant::now() + prompt.duration,
+                });
+              }
+            }
+            if request_kind == PlaybackRequestKind::Refresh {
+              let position = self
+                .playback
+                .snapshot
+                .as_ref()
+                .map(|snapshot| snapshot.transport.time_pos);
+              if let (Some(direction), Some(identity)) = (
+                adjacent_direction_from_client_messages(&client_messages),
+                self.playback.identity.clone(),
+              ) {
+                if auxiliary_settlement_is_current(
+                  identity.session,
+                  &identity,
+                  self.requests.session_generation(),
+                  self.playback.identity.as_ref(),
+                ) {
+                  shortcut_adjacent = Some((identity, direction));
+                }
+              }
+              if shortcut_adjacent.is_none() {
+                let manual_requested = manual_intro_skip_requested(&client_messages);
+                let active_prompt_range = active_intro_prompt_range(
+                  &mut self.playback.intro_skip.active_prompt,
+                  Instant::now(),
+                );
+                if let (Some(position), Some(identity)) = (position, self.playback.identity.clone())
+                {
+                  if self.playback.intro_skip.identity.as_ref() == Some(&identity) {
+                    intro_action = evaluate_intro_ui_action(
+                      position,
+                      &mut self.playback.intro_skip.ranges,
+                      self.playback.intro_skip.mode,
+                      manual_requested,
+                      active_prompt_range,
+                    )
+                    .map(|action| (identity, action));
+                  }
+                }
+              }
+            }
+            if let Some(title) = playback_started_title.take() {
+              self.record_diagnostic(
+                DiagnosticLevel::Info,
+                DiagnosticCategory::Playback,
+                format!("Playback started for “{title}”."),
+              );
+            } else if request_kind == PlaybackRequestKind::Stop {
+              self.record_diagnostic(
+                DiagnosticLevel::Info,
+                DiagnosticCategory::Playback,
+                "Playback stopped.",
+              );
+            } else if request_kind == PlaybackRequestKind::Refresh
+              && self.playback.snapshot.is_none()
+            {
+              self.record_diagnostic(
+                if self
+                  .playback
+                  .notice
+                  .as_deref()
+                  .is_some_and(|notice| notice.contains("disconnected"))
+                {
+                  DiagnosticLevel::Warning
+                } else {
+                  DiagnosticLevel::Info
+                },
+                DiagnosticCategory::Playback,
+                "Playback session ended.",
+              );
+            }
+            if refresh_artwork {
+              self.render_now_playing_artwork(&sender);
+            }
             if self.playback.snapshot.is_some() {
               self.show_page("now-playing");
             }
             self.render_now_playing();
           }
           Err(failure) => {
+            self.record_diagnostic(
+              DiagnosticLevel::Error,
+              DiagnosticCategory::Playback,
+              &failure.message,
+            );
             if failure.clear_snapshot {
               self.playback.snapshot = None;
+              self.clear_playback_context();
+              self.render_now_playing_artwork(&sender);
+            }
+            if let Some(snapshot) = self.playback.snapshot.as_ref() {
+              self.playback.desired_paused = Some(snapshot.transport.paused);
+              self.playback.desired_muted = Some(snapshot.transport.muted);
+            } else {
+              self.playback.desired_paused = None;
+              self.playback.desired_muted = None;
             }
             self.playback.error = Some(failure.message);
             self.show_page("now-playing");
             self.render_now_playing();
           }
         }
+        if let Some(identity) = refresh_auxiliary {
+          self.refresh_adjacent_episodes(identity.clone(), &sender);
+          self.refresh_intro_ranges(identity.clone(), &sender);
+          self.queue_playback_request(PlaybackRequest::RefreshTracks(identity));
+        }
+        if let Some((identity, direction)) = shortcut_adjacent {
+          if auxiliary_settlement_is_current(
+            identity.session,
+            &identity,
+            self.requests.session_generation(),
+            self.playback.identity.as_ref(),
+          ) {
+            self.play_adjacent(direction, &sender);
+          }
+        } else if let Some((identity, action)) = intro_action {
+          self.apply_intro_action(identity, action, &sender);
+        }
         if let Some(request) = self.playback.pending.pop_front() {
           self.start_playback(request, &sender);
         }
+      }
+      AppCommand::AdjacentEpisodes {
+        session,
+        sequence,
+        identity,
+        previous,
+        next,
+      } => {
+        if !auxiliary_settlement_is_current(
+          session,
+          &identity,
+          self.requests.session_generation(),
+          self.playback.identity.as_ref(),
+        ) || sequence != self.playback.adjacent.sequence
+        {
+          return;
+        }
+        if previous.is_err() || next.is_err() {
+          self.record_diagnostic(
+            DiagnosticLevel::Warning,
+            DiagnosticCategory::Playback,
+            "The server could not resolve one or more adjacent episodes.",
+          );
+        }
+        self.playback.adjacent.previous =
+          adjacent_availability(AdjacentDirection::Previous, previous);
+        self.playback.adjacent.next = adjacent_availability(AdjacentDirection::Next, next);
+        self.render_now_playing();
+      }
+      AppCommand::IntroRanges {
+        session,
+        sequence,
+        identity,
+        ranges,
+      } => {
+        if !auxiliary_settlement_is_current(
+          session,
+          &identity,
+          self.requests.session_generation(),
+          self.playback.identity.as_ref(),
+        ) || sequence != self.playback.intro_skip.sequence
+        {
+          return;
+        }
+        self.playback.intro_skip.ranges = ranges;
       }
       AppCommand::PlaybackShutdown {
         disposition,
         warnings,
       } => {
-        if matches!(disposition, PlaybackShutdownDisposition::Disconnect) {
-          self.playback_cleanup_pending = false;
-        }
+        self.playback.busy = false;
+        self.playback_cleanup_pending = false;
         if shutdown_completion_quits(self.quitting, disposition) {
-          relm4::main_application().quit();
+          if self.remote_disconnect_pending {
+            self.quitting = true;
+            return;
+          }
+          relm4::main_adw_application().quit();
           return;
         }
         if matches!(disposition, PlaybackShutdownDisposition::Disconnect) && !warnings.is_empty() {
@@ -973,6 +2148,7 @@ impl Component for AppModel {
 
   fn shutdown(&mut self, _widgets: &mut Self::Widgets, _output: relm4::Sender<Self::Output>) {
     self.artwork.reset_session();
+    self.stop_remote_session(None);
     self.cancel_inflight_quick_connect();
     self.cancel_inflight_playback();
     if let Some(source) = self.playback_refresh_source.take() {
@@ -1000,6 +2176,197 @@ impl AppModel {
     });
   }
 
+  fn handle_remote_command(
+    &mut self,
+    command: jellypilot_session::JellyfinCommand,
+    sender: &ComponentSender<Self>,
+  ) {
+    match command {
+      jellypilot_session::JellyfinCommand::Playstate(request) => match request.command.as_str() {
+        "Pause" => sender.input(AppMessage::SetPaused(true)),
+        "Unpause" => sender.input(AppMessage::SetPaused(false)),
+        "Seek" => {
+          if let Some(ticks) = request.seek_position_ticks {
+            sender.input(AppMessage::Seek(ticks as f64 / 10_000_000.0));
+          } else {
+            self.record_diagnostic(
+              DiagnosticLevel::Warning,
+              DiagnosticCategory::RemoteControl,
+              "A remote Seek command was rejected because it had no position.",
+            );
+          }
+        }
+        "Stop" => sender.input(AppMessage::StopPlayback),
+        _ => self.record_diagnostic(
+          DiagnosticLevel::Warning,
+          DiagnosticCategory::RemoteControl,
+          "An unsupported remote playstate command was rejected.",
+        ),
+      },
+      jellypilot_session::JellyfinCommand::GeneralCommand(request) => match request.name.as_str() {
+        "SetVolume" => {
+          if let Some(volume) = remote_volume_value(
+            request
+              .arguments
+              .as_ref()
+              .and_then(|args| args.get("Volume")),
+          ) {
+            sender.input(AppMessage::SetVolume(volume));
+          } else {
+            self.record_diagnostic(
+              DiagnosticLevel::Warning,
+              DiagnosticCategory::RemoteControl,
+              "A remote volume command was rejected because its value was invalid.",
+            );
+          }
+        }
+        "ToggleMute" => {
+          let muted = self
+            .playback
+            .desired_muted
+            .or_else(|| {
+              self
+                .playback
+                .snapshot
+                .as_ref()
+                .map(|snapshot| snapshot.transport.muted)
+            })
+            .unwrap_or(false);
+          sender.input(AppMessage::SetMuted(!muted));
+        }
+        _ => self.record_diagnostic(
+          DiagnosticLevel::Warning,
+          DiagnosticCategory::RemoteControl,
+          "An unsupported remote general command was rejected.",
+        ),
+      },
+      jellypilot_session::JellyfinCommand::Play(request) => {
+        if !matches!(
+          request.play_command.as_str(),
+          "PlayNow" | "PlayInstant" | ""
+        ) {
+          self.record_diagnostic(
+            DiagnosticLevel::Warning,
+            DiagnosticCategory::RemoteControl,
+            "A remote Play command with an unsupported mode was rejected.",
+          );
+          return;
+        }
+        let Some(item_id) = request.item_ids.first().cloned() else {
+          self.record_diagnostic(
+            DiagnosticLevel::Warning,
+            DiagnosticCategory::RemoteControl,
+            "A remote Play command without an item was rejected.",
+          );
+          return;
+        };
+        self.remote_play_generation = self.remote_play_generation.wrapping_add(1);
+        let play_generation = self.remote_play_generation;
+        let playback_generation = self.playback_start_generation;
+        let start_position = request
+          .start_position_ticks
+          .filter(|ticks| *ticks > 0)
+          .map(|ticks| PlaybackStartPosition::At(ticks as f64 / 10_000_000.0))
+          .unwrap_or(PlaybackStartPosition::Beginning);
+        let client = Arc::clone(&self.client);
+        let generation = self.remote_generation;
+        sender.oneshot_command(async move {
+          let result = client
+            .library()
+            .item_detail(item_id)
+            .await
+            .map_err(|error| error.to_string());
+          AppCommand::RemotePlay {
+            generation,
+            playback_generation,
+            play_generation,
+            start_position,
+            result,
+          }
+        });
+      }
+    }
+  }
+
+  fn start_remote_session(&mut self, sender: &ComponentSender<Self>) {
+    self.remote_generation = self.remote_generation.wrapping_add(1);
+    let generation = self.remote_generation;
+    self.remote_state = if self.client.supports_remote_control() {
+      RemoteControlState::Connecting
+    } else {
+      RemoteControlState::Unavailable
+    };
+    if !self.client.supports_remote_control() {
+      self.record_diagnostic(
+        DiagnosticLevel::Warning,
+        DiagnosticCategory::RemoteControl,
+        "The server denied remote-control capability.",
+      );
+      return;
+    }
+    self.record_diagnostic(
+      DiagnosticLevel::Info,
+      DiagnosticCategory::RemoteControl,
+      "Requesting remote-control capability.",
+    );
+    let client = Arc::clone(&self.client);
+    let socket = Arc::new(jellypilot_session::JellyfinWebSocket::new());
+    self.remote_socket = Some(Arc::clone(&socket));
+    sender.oneshot_command(async move {
+      let result = async {
+        client.playback().validate_session().await.map_err(|_| ())?;
+        client
+          .playback()
+          .report_capabilities_for_checked(PlaybackEngineKind::ExternalMpv)
+          .await
+          .map_err(|_| ())?;
+        if !client.supports_remote_control() {
+          return Err(());
+        }
+        let url = client.playback().websocket_url().map_err(|_| ())?;
+        let user_agent = client.playback().websocket_user_agent();
+        socket
+          .connect_with_user_agent(&url, Some(&user_agent))
+          .await
+          .map_err(|_| ())?;
+        let receiver = socket.take_event_receiver().ok_or(())?;
+        Ok::<_, ()>(receiver)
+      }
+      .await;
+      match result {
+        Ok(receiver) => AppCommand::RemoteReady {
+          generation,
+          socket,
+          receiver,
+        },
+        Err(()) => AppCommand::RemoteFailed { generation },
+      }
+    });
+  }
+
+  fn stop_remote_session(&mut self, quit_gate: Option<&ComponentSender<Self>>) {
+    self.remote_generation = self.remote_generation.wrapping_add(1);
+    self.remote_state = RemoteControlState::Unavailable;
+    if let Some(socket) = self.remote_socket.take() {
+      if let Some(sender) = quit_gate {
+        self.remote_disconnect_pending = true;
+        let generation = self.remote_generation;
+        let settle_sender = sender.clone();
+        relm4::spawn(async move {
+          socket.disconnect().await;
+          settle_sender.input(AppMessage::RemoteDisconnectSettled(generation));
+        });
+        let timeout_sender = sender.clone();
+        gtk::glib::timeout_add_local_once(Duration::from_secs(2), move || {
+          timeout_sender.input(AppMessage::RemoteDisconnectSettled(generation));
+        });
+      } else {
+        relm4::spawn(async move {
+          socket.disconnect().await;
+        });
+      }
+    }
+  }
   fn start_login(&mut self, sender: &ComponentSender<Self>) {
     if self.profile_operation_busy
       || !can_start_login(self.connection, self.playback_cleanup_pending)
@@ -1008,6 +2375,7 @@ impl AppModel {
     }
     let server_url = self.ui.server_url.text().trim().to_owned();
     let username = self.ui.username.text().trim().to_owned();
+
     let password = self.ui.password.text().to_string();
     if server_url.is_empty() || username.is_empty() {
       self.connection = ConnectionPhase::Failed;
@@ -1016,8 +2384,23 @@ impl AppModel {
         .login_status
         .set_label("Enter a server URL and username to continue.");
       self.ui.login_status.set_visible(true);
+      self.record_diagnostic(
+        DiagnosticLevel::Warning,
+        DiagnosticCategory::Auth,
+        "Password sign-in was rejected because the server URL or username is empty.",
+      );
       return;
     }
+    let mut pending_prefill = config::load();
+    pending_prefill.remember = self.ui.remember_prefill.is_active();
+    pending_prefill.server_url = server_url.clone();
+    pending_prefill.provider = if self.ui.provider.selected() == 1 {
+      "emby".to_owned()
+    } else {
+      "jellyfin".to_owned()
+    };
+    pending_prefill.username = username.clone();
+    self.pending_prefill = Some(pending_prefill);
 
     self.cancel_inflight_quick_connect();
     self.quick_connect_phase = QuickConnectPhase::Idle;
@@ -1027,6 +2410,11 @@ impl AppModel {
     self.ui.quick_connect_spinner.stop();
     self.ui.quick_connect_spinner.set_visible(false);
     self.ui.password.set_text("");
+    self.record_diagnostic(
+      DiagnosticLevel::Info,
+      DiagnosticCategory::Connection,
+      "Connecting to the selected media server.",
+    );
     let session = self.prepare_login("Connecting and loading your libraries…");
     let credentials = SensitiveCredentials(Credentials {
       provider: provider_for(self.ui.provider.selected()),
@@ -1035,7 +2423,7 @@ impl AppModel {
       password,
     });
     // Authenticate an isolated candidate so a superseded login cannot mutate the active session.
-    let client = Arc::new(JellyfinClient::new());
+    let client = configured_client(&config::load());
     let command_client = Arc::clone(&client);
     sender.oneshot_command(async move {
       let result = async {
@@ -1068,6 +2456,11 @@ impl AppModel {
         .quick_connect_status
         .set_label("Quick Connect is available only for Jellyfin. Sign in with a password.");
       self.render_quick_connect_controls();
+      self.record_diagnostic(
+        DiagnosticLevel::Warning,
+        DiagnosticCategory::Auth,
+        "Quick Connect was rejected because the selected server type does not support it.",
+      );
       return;
     }
     let server_url = self.ui.server_url.text().trim().to_owned();
@@ -1078,10 +2471,21 @@ impl AppModel {
         .quick_connect_status
         .set_label("Enter a Jellyfin server URL to request a code.");
       self.render_quick_connect_controls();
+      self.record_diagnostic(
+        DiagnosticLevel::Warning,
+        DiagnosticCategory::Auth,
+        "Quick Connect was rejected because the server URL is empty.",
+      );
       return;
     }
+    self.pending_prefill = None;
 
     self.cancel_inflight_quick_connect();
+    self.record_diagnostic(
+      DiagnosticLevel::Info,
+      DiagnosticCategory::Auth,
+      "Quick Connect request started.",
+    );
     let session = self.prepare_login("Requesting a Quick Connect code…");
     self.quick_connect_phase = QuickConnectPhase::Requesting;
     self.ui.login_status.set_label("");
@@ -1093,7 +2497,7 @@ impl AppModel {
     self.ui.quick_connect_spinner.set_visible(true);
     self.render_quick_connect_controls();
 
-    let client = Arc::new(JellyfinClient::new());
+    let client = configured_client(&config::load());
     let command_client = Arc::clone(&client);
     let mut cancellation = self.quick_connect_cancellation.subscribe();
     sender.command(move |output, shutdown| {
@@ -1124,6 +2528,11 @@ impl AppModel {
       return;
     }
     self.cancel_inflight_quick_connect();
+    self.record_diagnostic(
+      DiagnosticLevel::Info,
+      DiagnosticCategory::Auth,
+      "Quick Connect request was cancelled.",
+    );
     self.requests.disconnect();
     self.connection = ConnectionPhase::SignedOut;
     self.home = LoadState::Idle;
@@ -1156,6 +2565,11 @@ impl AppModel {
         .login_status
         .set_label("That saved sign-in is no longer available.");
       self.ui.login_status.set_visible(true);
+      self.record_diagnostic(
+        DiagnosticLevel::Warning,
+        DiagnosticCategory::Auth,
+        "Saved profile restore was rejected because the profile is no longer available.",
+      );
       return;
     };
     self.cancel_inflight_quick_connect();
@@ -1172,10 +2586,16 @@ impl AppModel {
     self.ui.server_url.set_text(&profile.server_url);
     self.ui.username.set_text(&profile.user_name);
     self.ui.password.set_text("");
+    self.pending_prefill = None;
 
+    self.record_diagnostic(
+      DiagnosticLevel::Info,
+      DiagnosticCategory::Auth,
+      "Saved profile restore started.",
+    );
     let session = self.prepare_login("Restoring the saved sign-in…");
     let store = self.auth_store.clone();
-    let client = Arc::new(JellyfinClient::new());
+    let client = configured_client(&config::load());
     let command_client = Arc::clone(&client);
     let requested_key = key.clone();
     sender.oneshot_command(async move {
@@ -1215,6 +2635,11 @@ impl AppModel {
       .saved_profiles_status
       .set_label("Forgetting saved sign-in…");
     self.ui.saved_profiles_status.set_visible(true);
+    self.record_diagnostic(
+      DiagnosticLevel::Info,
+      DiagnosticCategory::Auth,
+      "Saved profile removal started.",
+    );
     let store = self.auth_store.clone();
     let command_key = key.clone();
     let session = self.requests.session_generation();
@@ -1234,6 +2659,7 @@ impl AppModel {
     });
   }
 
+  #[allow(deprecated)]
   fn confirm_forget_saved_profile(
     &self,
     key: SavedProfileKey,
@@ -1268,7 +2694,7 @@ impl AppModel {
         profile.user_name, server
       ))
       .build();
-    if let Some(window) = relm4::main_application().active_window() {
+    if let Some(window) = relm4::main_adw_application().active_window() {
       dialog.set_transient_for(Some(&window));
     }
     dialog.add_button("Cancel", gtk::ResponseType::Cancel);
@@ -1331,34 +2757,108 @@ impl AppModel {
     }
     self.set_login_controls_sensitive(true);
     self.render_quick_connect_controls();
+    let pending_prefill = self.pending_prefill.take();
     match result {
       Ok(()) => {
+        self.record_diagnostic(
+          DiagnosticLevel::Info,
+          DiagnosticCategory::Connection,
+          "Media server connection established.",
+        );
+        self.record_diagnostic(
+          DiagnosticLevel::Info,
+          DiagnosticCategory::Auth,
+          if was_quick_connect {
+            "Quick Connect approval completed successfully."
+          } else {
+            "Authentication completed successfully."
+          },
+        );
+        let prefill_warning = pending_prefill.and_then(|prefill| {
+          let remember = prefill.remember;
+          let result = if remember {
+            config::save(&prefill)
+          } else {
+            config::clear()
+          };
+          result.err().map(|_| {
+            if remember {
+              "Signed in, but sign-in details could not be saved on this device."
+            } else {
+              "Signed in, but remembered sign-in details could not be cleared on this device."
+            }
+          })
+        });
         let session_to_save = client.login().get_saved_session();
+        if let Some(session) = session_to_save.as_ref() {
+          self.ui.server_url.set_text(&session.server_url);
+          self.ui.username.set_text(&session.user_name);
+        }
         self.active_saved_profile = None;
         self.client = client;
+        self
+          .ui
+          .intro_skip_group
+          .set_visible(self.client.supports_intro_skipper());
         self.artwork.reset_session();
+        self.diagnostics.reset_coalescing();
         self.artwork = Arc::new(ArtworkAdapter::default());
+        let settings = config::load();
+        self
+          .artwork
+          .set_disk_cache_enabled(settings.image_cache_enabled);
+        if write_input_conf(
+          &settings.key_next_episode,
+          &settings.key_previous_episode,
+          &settings.key_intro_skip,
+        )
+        .is_none()
+        {
+          self.record_diagnostic(
+            DiagnosticLevel::Warning,
+            DiagnosticCategory::Config,
+            "The MPV shortcut file could not be written for this session.",
+          );
+        }
         self.playback = match PlaybackController::discover(
           Arc::clone(&self.client),
-          PlaybackControllerConfig::default(),
+          playback_controller_config(&settings),
         ) {
           Ok(controller) => PlaybackState {
             controller: Some(controller),
             ..PlaybackState::default()
           },
-          Err(error) => PlaybackState {
-            unavailable: Some(format!(
-              "Playback is unavailable: {error}. Install MPV and try again."
-            )),
-            ..PlaybackState::default()
-          },
+          Err(error) => {
+            self.record_diagnostic(
+              DiagnosticLevel::Error,
+              DiagnosticCategory::Playback,
+              format!("External MPV playback is unavailable: {error}."),
+            );
+            PlaybackState {
+              unavailable: Some(format!(
+                "Playback is unavailable: {error}. Install MPV and try again."
+              )),
+              ..PlaybackState::default()
+            }
+          }
         };
         self.connection = ConnectionPhase::Connected;
+        self.start_remote_session(sender);
         self.home = LoadState::Loading;
         self.shortcuts.clear();
         self.shortcuts_error = None;
-        self.ui.login_status.set_label("");
-        self.ui.login_status.set_visible(false);
+        if let Some(warning) = prefill_warning {
+          self.ui.login_status.set_label(warning);
+          self.ui.login_status.set_visible(true);
+          self.record_diagnostic(
+            DiagnosticLevel::Warning,
+            DiagnosticCategory::Config,
+            "Sign-in succeeded, but the local sign-in configuration update failed.",
+          );
+        } else {
+          self.ui.login_status.set_label("");
+          self.ui.login_status.set_visible(false);
+        }
         if let Some(session_to_save) = session_to_save {
           self.start_persist_session(session_to_save, sender);
         } else {
@@ -1367,12 +2867,31 @@ impl AppModel {
             .settings_storage_status
             .set_label("The connected session could not be saved securely.");
           self.ui.settings_storage_status.set_visible(true);
+          self.record_diagnostic(
+            DiagnosticLevel::Warning,
+            DiagnosticCategory::Auth,
+            "The connected session could not be stored in Secret Service.",
+          );
         }
         self.render_authenticated(sender);
         self.show_home(sender);
         self.load_home(sender);
       }
       Err(message) => {
+        self.record_diagnostic(
+          DiagnosticLevel::Error,
+          DiagnosticCategory::Auth,
+          if was_quick_connect {
+            "Quick Connect failed or expired before authentication completed."
+          } else {
+            "Authentication failed."
+          },
+        );
+        self.record_diagnostic(
+          DiagnosticLevel::Error,
+          DiagnosticCategory::Connection,
+          "Media server connection failed.",
+        );
         self.connection = ConnectionPhase::Failed;
         self.home = LoadState::Failed(message.clone());
         if was_quick_connect {
@@ -1477,10 +2996,17 @@ impl AppModel {
   }
 
   fn disconnect(&mut self, sender: &ComponentSender<Self>) {
+    self.record_diagnostic(
+      DiagnosticLevel::Info,
+      DiagnosticCategory::Connection,
+      "Disconnected from the media server.",
+    );
+    self.stop_remote_session(None);
     self.requests.disconnect();
     self.cancel_inflight_quick_connect();
     self.quick_connect_phase = QuickConnectPhase::Idle;
     self.artwork.reset_session();
+    self.diagnostics.reset_coalescing();
     self.cancel_inflight_playback();
     self.artwork_view = self.artwork_view.saturating_add(1);
     self.artwork_targets.clear();
@@ -1493,6 +3019,7 @@ impl AppModel {
     );
     self.playback.pending.clear();
     self.connection = ConnectionPhase::SignedOut;
+    self.active_saved_profile = None;
     self.home = LoadState::Idle;
     self.shortcuts.clear();
     self.shortcuts_error = None;
@@ -1504,12 +3031,19 @@ impl AppModel {
     self.detail_selection = None;
     self.detail_origin = None;
     self.detail_parent = None;
+    self.recommendations = LoadState::Idle;
+    self.recommendation_sequence = self.recommendation_sequence.saturating_add(1);
+    self.detail_identity = None;
+    self.streams = LoadState::Idle;
+    self.stream_sequence = self.stream_sequence.saturating_add(1);
+    self.season_neighbors = LoadState::Idle;
+    self.season_neighbor_sequence = self.season_neighbor_sequence.saturating_add(1);
     self.season = None;
     self.invalidate_user_data_update();
     self.playback = PlaybackState::default();
     self.ui.search.set_text("");
+    self.ui.playback_bar.set_visible(false);
     self.ui.search.set_sensitive(false);
-    self.ui.sidebar_toggle.set_visible(false);
     // Activating the static group anchor first clears any dynamic library shortcut,
     // then deactivating it leaves the signed-out shell with no selected destination.
     self.ui.nav_home.set_active(true);
@@ -1517,18 +3051,16 @@ impl AppModel {
     self.ui.disconnect_button.set_sensitive(false);
     self.ui.settings_disconnect_button.set_sensitive(false);
     self.ui.connection_status.set_label("Not connected");
+    self.render_connection_settings();
     self.ui.quick_connect_code.set_label("");
     self.ui.quick_connect_code.set_visible(false);
     self.ui.quick_connect_status.set_label("");
     self.ui.quick_connect_spinner.stop();
     self.ui.quick_connect_spinner.set_visible(false);
     self.render_quick_connect_controls();
-    if self.ui.authenticated.parent().is_some() {
-      self.ui.root.remove(&self.ui.authenticated);
-    }
-    if self.ui.login.parent().is_none() {
-      self.ui.root.append(&self.ui.login);
-    }
+    self.ui.intro_skip_group.set_visible(false);
+    self.ui.preferences.close();
+    self.ui.root.set_content(Some(&self.ui.login));
     self.set_login_controls_sensitive(!self.playback_cleanup_pending);
     self.render_saved_profiles(sender);
     self.render_saved_profile_settings();
@@ -1560,11 +3092,13 @@ impl AppModel {
       source.remove();
     }
     self.playback.pending.clear();
+    self.stop_remote_session(Some(sender));
     if let Some(controller) = self.playback.controller.take() {
       self.shutdown_playback(controller, PlaybackShutdownDisposition::Quit, sender);
     } else if quit_can_finish_without_controller(self.playback.busy, self.playback_cleanup_pending)
+      && !self.remote_disconnect_pending
     {
-      relm4::main_application().quit();
+      relm4::main_adw_application().quit();
     }
   }
 
@@ -1594,14 +3128,8 @@ impl AppModel {
   }
 
   fn render_authenticated(&mut self, sender: &ComponentSender<Self>) {
-    if self.ui.login.parent().is_some() {
-      self.ui.root.remove(&self.ui.login);
-    }
-    if self.ui.authenticated.parent().is_none() {
-      self.ui.root.append(&self.ui.authenticated);
-    }
+    self.ui.root.set_content(Some(&self.ui.authenticated));
     self.ui.search.set_sensitive(true);
-    self.ui.sidebar_toggle.set_visible(true);
     self
       .ui
       .disconnect_button
@@ -1610,11 +3138,21 @@ impl AppModel {
       .ui
       .settings_disconnect_button
       .set_sensitive(!self.profile_operation_busy);
+    self.update_connection_status();
+    self.render_shortcuts(sender);
+  }
+  fn update_connection_status(&self) {
+    let remote = match self.remote_state {
+      RemoteControlState::Unavailable => "Remote control unavailable",
+      RemoteControlState::Connecting => "Remote control connecting",
+      RemoteControlState::Available => "Remote control available",
+      RemoteControlState::Lost => "Remote control connection lost",
+    };
     self
       .ui
       .connection_status
-      .set_label(&connection_label(&self.client));
-    self.render_shortcuts(sender);
+      .set_label(&format!("{} · {remote}", connection_label(&self.client)));
+    self.render_connection_settings();
   }
 
   fn saved_profile_summaries(&self) -> &[SavedProfileSummary] {
@@ -1628,6 +3166,7 @@ impl AppModel {
     let sensitive = sensitive && !self.profile_operation_busy;
     self.ui.provider.set_sensitive(sensitive);
     self.ui.server_url.set_sensitive(sensitive);
+    self.ui.remember_prefill.set_sensitive(sensitive);
     self.ui.username.set_sensitive(sensitive);
     self.ui.password.set_sensitive(sensitive);
     self.ui.login_button.set_sensitive(sensitive);
@@ -1725,6 +3264,17 @@ impl AppModel {
   }
 
   fn render_saved_profile_settings(&self) {
+    self.ui.settings_storage_status.set_visible(false);
+    if !matches!(self.connection, ConnectionPhase::Connected) {
+      self
+        .ui
+        .settings_saved_profile
+        .set_label("No active session. Sign in to manage this device's saved profile.");
+      self.ui.settings_disconnect_button.set_sensitive(false);
+      self.ui.forget_current_profile.set_sensitive(false);
+      return;
+    }
+
     let active = self.active_saved_profile.as_ref().and_then(|key| {
       self
         .saved_profile_summaries()
@@ -1785,10 +3335,9 @@ impl AppModel {
 
   fn show_page(&self, page: &str) {
     self.ui.content.set_visible_child_name(page);
+    self.ui.authenticated.set_show_content(true);
     match page {
       "home" => self.ui.nav_home.set_active(true),
-      "now-playing" => self.ui.nav_now_playing.set_active(true),
-      "settings" => self.ui.nav_settings.set_active(true),
       "browse" | "detail" => {}
       _ => {}
     }
@@ -1852,8 +3401,8 @@ impl AppModel {
         let latest_episodes = home.latest_episodes.clone();
         let hero_item = continue_watching
           .first()
-          .or(latest_movies.first())
           .or(next_up.first())
+          .or(latest_movies.first())
           .cloned();
         if let Some(item) = hero_item {
           let hero = self.featured_hero(&item, sender);
@@ -1869,11 +3418,64 @@ impl AppModel {
           let shelf = self.media_shelf(title, &items, sender);
           self.ui.home_content.append(&shelf);
         }
+        self
+          .ui
+          .home_content
+          .append(&self.library_shortcuts_section(sender));
       }
     }
   }
 
+  fn library_shortcuts_section(&self, sender: &ComponentSender<Self>) -> gtk::Widget {
+    let group = adw::PreferencesGroup::new();
+    group.set_title("Libraries");
+    if let Some(message) = &self.shortcuts_error {
+      group.set_description(Some(message));
+    } else if self.shortcuts.is_empty() {
+      group.set_description(Some("No video libraries available."));
+    } else {
+      for shortcut in &self.shortcuts {
+        let button = gtk::Button::with_label(&shortcut.name);
+        button.add_css_class("flat");
+        button.set_halign(gtk::Align::Start);
+        let shortcut = shortcut.clone();
+        let sender = sender.clone();
+        button.connect_clicked(move |_| {
+          sender.input(AppMessage::OpenLibrary(shortcut.clone()));
+        });
+        group.add(&button);
+      }
+    }
+    group.upcast()
+  }
+
+  fn select_library_shortcut(&self, shortcut_id: &str) {
+    let Some(index) = self
+      .shortcuts
+      .iter()
+      .position(|shortcut| shortcut.id == shortcut_id)
+    else {
+      return;
+    };
+    let Some(button) = self
+      .ui
+      .shortcuts
+      .first_child()
+      .and_then(|mut child| {
+        for _ in 0..index {
+          child = child.next_sibling()?;
+        }
+        Some(child)
+      })
+      .and_downcast::<gtk::ToggleButton>()
+    else {
+      return;
+    };
+    button.set_active(true);
+  }
+
   fn open_library(&mut self, shortcut: VideoLibraryShortcut, sender: &ComponentSender<Self>) {
+    self.select_library_shortcut(&shortcut.id);
     self.navigate_to("browse");
     self.browse.title = shortcut.name.clone();
     self.browse.error = None;
@@ -1962,23 +3564,45 @@ impl AppModel {
     }
     self.detail_selection = Some(item.clone());
     self.season = None;
+    self.recommendation_sequence = self.recommendation_sequence.saturating_add(1);
+    let recommendation_sequence = self.recommendation_sequence;
+    self.recommendations = LoadState::Loading;
+    self.detail_identity = Some(item.id.clone());
+    self.stream_sequence = self.stream_sequence.saturating_add(1);
+    let stream_sequence = self.stream_sequence;
+    self.streams = LoadState::Loading;
+    self.season_neighbor_sequence = self.season_neighbor_sequence.saturating_add(1);
+    let season_neighbor_sequence = self.season_neighbor_sequence;
+    let season_neighbor_request = item
+      .series_id
+      .clone()
+      .zip(item.season_number)
+      .filter(|_| item.item_type.eq_ignore_ascii_case("episode"));
+    self.season_neighbors = if season_neighbor_request.is_some() {
+      LoadState::Loading
+    } else {
+      LoadState::Idle
+    };
     let token = self.requests.begin_detail();
+    let recommendation_item_id = item.id.clone();
     self.detail = LoadState::Loading;
     self.show_page("detail");
     self.render_detail(sender);
     let client = Arc::clone(&self.client);
+    let detail_item_id = item.id.clone();
+    let detail_item_type = item.item_type.clone();
     sender.oneshot_command(async move {
-      let result = if item.item_type.eq_ignore_ascii_case("series") {
+      let result = if detail_item_type.eq_ignore_ascii_case("series") {
         client
           .library()
-          .show_detail(item.id)
+          .show_detail(detail_item_id.clone())
           .await
           .map(DetailContent::Show)
           .map_err(|error| error.to_string())
       } else {
         client
           .library()
-          .item_detail(item.id)
+          .item_detail(detail_item_id)
           .await
           .map(DetailContent::Item)
           .map_err(|error| error.to_string())
@@ -1988,6 +3612,69 @@ impl AppModel {
         result: Box::new(result),
       }
     });
+    let client = Arc::clone(&self.client);
+    let item_id = recommendation_item_id;
+    let session = self.requests.session_generation();
+    sender.oneshot_command(async move {
+      let result = client
+        .library()
+        .similar_video(item_id.clone())
+        .await
+        .map_err(|error| error.to_string());
+      AppCommand::Recommendations {
+        session,
+        sequence: recommendation_sequence,
+        item_id,
+        result,
+      }
+    });
+    let client = Arc::clone(&self.client);
+    let stream_item_id = item.id.clone();
+    let session = self.requests.session_generation();
+    sender.oneshot_command(async move {
+      let result = client
+        .library()
+        .item_streams(stream_item_id.clone())
+        .await
+        .map_err(|error| error.to_string());
+      AppCommand::Streams {
+        session,
+        sequence: stream_sequence,
+        item_id: stream_item_id,
+        result,
+      }
+    });
+    if let Some((series_id, season_number)) = season_neighbor_request {
+      let client = Arc::clone(&self.client);
+      let item_id = item.id.clone();
+      let session = self.requests.session_generation();
+      sender.oneshot_command(async move {
+        let result = client
+          .library()
+          .season_episodes_page(VideoSeasonEpisodesPageRequest {
+            series_id,
+            season_id: None,
+            season_number: Some(season_number),
+            start_index: 0,
+            limit: SEASON_EPISODE_PAGE_SIZE,
+          })
+          .await
+          .map(|page| {
+            page
+              .episodes
+              .into_iter()
+              .filter(|episode| episode.id != item_id)
+              .collect()
+          })
+          .map_err(|error| error.to_string());
+        AppCommand::SeasonNeighbors {
+          session,
+          sequence: season_neighbor_sequence,
+          item_id,
+          result,
+        }
+      });
+    }
   }
 
   fn retry_detail(&mut self, sender: &ComponentSender<Self>) {
@@ -2003,6 +3690,31 @@ impl AppModel {
       self.requests.navigate();
       self.detail = LoadState::Ready(parent.content);
       self.season = parent.season;
+      self.detail_identity = self.current_detail_identity().map(str::to_owned);
+      self.recommendation_sequence = self.recommendation_sequence.saturating_add(1);
+      let recommendation_sequence = self.recommendation_sequence;
+      self.recommendations = LoadState::Loading;
+      self.streams = LoadState::Idle;
+      self.stream_sequence = self.stream_sequence.saturating_add(1);
+      self.season_neighbors = LoadState::Idle;
+      self.season_neighbor_sequence = self.season_neighbor_sequence.saturating_add(1);
+      if let Some(item_id) = self.detail_identity.clone() {
+        let client = Arc::clone(&self.client);
+        let session = self.requests.session_generation();
+        sender.oneshot_command(async move {
+          let result = client
+            .library()
+            .similar_video(item_id.clone())
+            .await
+            .map_err(|error| error.to_string());
+          AppCommand::Recommendations {
+            session,
+            sequence: recommendation_sequence,
+            item_id,
+            result,
+          }
+        });
+      }
       self.render_detail(sender);
       return;
     }
@@ -2102,6 +3814,13 @@ impl AppModel {
   }
 
   fn current_detail_item_id(&self) -> Option<&str> {
+    match &self.detail {
+      LoadState::Ready(DetailContent::Item(detail)) => Some(detail.id.as_str()),
+      LoadState::Ready(DetailContent::Show(detail)) => Some(detail.id.as_str()),
+      _ => None,
+    }
+  }
+  fn current_detail_identity(&self) -> Option<&str> {
     match &self.detail {
       LoadState::Ready(DetailContent::Item(detail)) => Some(detail.id.as_str()),
       LoadState::Ready(DetailContent::Show(detail)) => Some(detail.id.as_str()),
@@ -2501,14 +4220,38 @@ impl AppModel {
 
   fn start_playback(&mut self, request: PlaybackRequest, sender: &ComponentSender<Self>) {
     let request_kind = request.kind();
+    match &request {
+      PlaybackRequest::Paused(value) => self.playback.desired_paused = Some(*value),
+      PlaybackRequest::Muted(value) => self.playback.desired_muted = Some(*value),
+      _ => {}
+    }
+    if request_kind == PlaybackRequestKind::Start {
+      self.playback_start_generation = self.playback_start_generation.wrapping_add(1);
+    }
+    if let Some(identity) = request.identity() {
+      if !auxiliary_settlement_is_current(
+        identity.session,
+        identity,
+        self.requests.session_generation(),
+        self.playback.identity.as_ref(),
+      ) {
+        return;
+      }
+    }
     if self.playback.busy {
       if request_kind != PlaybackRequestKind::Refresh {
         self.queue_playback_request(request);
       }
       return;
     }
+    let started_artwork_image_id = request.started_artwork_image_id();
+    let started_item = request.started_item();
+    let track_identity = request.identity().cloned();
     let Some(mut controller) = self.playback.controller.take() else {
-      if request_kind == PlaybackRequestKind::Refresh {
+      if matches!(
+        request_kind,
+        PlaybackRequestKind::Refresh | PlaybackRequestKind::RefreshTracks
+      ) {
         return;
       }
       self.playback.error = self
@@ -2520,11 +4263,15 @@ impl AppModel {
       self.render_now_playing();
       return;
     };
+    if let Some(identity) = track_identity {
+      self.playback.tracks = PlaybackTrackState::Loading { identity };
+    }
     self.playback.busy = true;
     self.playback.sequence = self.playback.sequence.saturating_add(1);
     let session = self.requests.session_generation();
     let sequence = self.playback.sequence;
     let mut cancellation = self.playback_cancellation.subscribe();
+    self.render_now_playing();
     sender.oneshot_command(async move {
       let result = {
         let operation = async {
@@ -2538,10 +4285,8 @@ impl AppModel {
                 },
               )
               .await
-              .map(|outcome| PlaybackCommandSuccess {
-                snapshot: Some(outcome.snapshot),
-                warnings: outcome.warnings,
-                notice: None,
+              .map(|outcome| {
+                PlaybackCommandSuccess::playback(Some(outcome.snapshot), outcome.warnings, None)
               })
               .map_err(playback_start_failure),
             PlaybackRequest::Detail(item, start_position) => controller
@@ -2553,55 +4298,118 @@ impl AppModel {
                 },
               )
               .await
-              .map(|outcome| PlaybackCommandSuccess {
-                snapshot: Some(outcome.snapshot),
-                warnings: outcome.warnings,
-                notice: None,
+              .map(|outcome| {
+                PlaybackCommandSuccess::playback(Some(outcome.snapshot), outcome.warnings, None)
               })
               .map_err(playback_start_failure),
+            PlaybackRequest::ReplaceMedia(item) => match controller.stop().await {
+              Ok(stopped) => {
+                match controller
+                  .play_media_item(&item, PlaybackOptions::default())
+                  .await
+                {
+                  Ok(outcome) => {
+                    let mut warnings = stopped.warnings;
+                    warnings.extend(outcome.warnings);
+                    Ok(PlaybackCommandSuccess::playback(
+                      Some(outcome.snapshot),
+                      warnings,
+                      None,
+                    ))
+                  }
+                  Err(error) => Err(PlaybackCommandFailure {
+                    message: format!("Could not start adjacent episode: {error}."),
+                    clear_snapshot: true,
+                  }),
+                }
+              }
+              Err(error) => Err(playback_failure(
+                "Could not stop the current episode",
+                error,
+              )),
+            },
             PlaybackRequest::Paused(paused) => controller
               .set_paused(paused)
               .await
-              .map(|outcome| PlaybackCommandSuccess {
-                snapshot: Some(outcome.snapshot),
-                warnings: outcome.warnings,
-                notice: None,
+              .map(|outcome| {
+                PlaybackCommandSuccess::playback(Some(outcome.snapshot), outcome.warnings, None)
               })
               .map_err(|error| playback_failure("Could not update playback", error)),
             PlaybackRequest::Seek(position) => controller
               .seek(position)
               .await
-              .map(|outcome| PlaybackCommandSuccess {
-                snapshot: Some(outcome.snapshot),
-                warnings: outcome.warnings,
-                notice: None,
+              .map(|outcome| {
+                PlaybackCommandSuccess::playback(Some(outcome.snapshot), outcome.warnings, None)
               })
               .map_err(|error| playback_failure("Could not seek", error)),
             PlaybackRequest::Volume(volume) => controller
               .set_volume(volume)
               .await
-              .map(|outcome| PlaybackCommandSuccess {
-                snapshot: Some(outcome.snapshot),
-                warnings: outcome.warnings,
-                notice: None,
+              .map(|outcome| {
+                PlaybackCommandSuccess::playback(Some(outcome.snapshot), outcome.warnings, None)
               })
               .map_err(|error| playback_failure("Could not set volume", error)),
             PlaybackRequest::Muted(muted) => controller
               .set_muted(muted)
               .await
-              .map(|outcome| PlaybackCommandSuccess {
-                snapshot: Some(outcome.snapshot),
-                warnings: outcome.warnings,
-                notice: None,
+              .map(|outcome| {
+                PlaybackCommandSuccess::playback(Some(outcome.snapshot), outcome.warnings, None)
               })
               .map_err(|error| playback_failure("Could not update mute", error)),
+            PlaybackRequest::AudioTrack { id, .. } => {
+              let result = match controller.select_audio_track(id).await {
+                Ok(()) => controller.tracks().await.map_err(|_| {
+                  "MPV changed the audio track, but its track state could not be refreshed."
+                    .to_owned()
+                }),
+                Err(_) => Err("MPV could not select that audio track.".to_owned()),
+              };
+              Ok(PlaybackCommandSuccess::tracks(result))
+            }
+            PlaybackRequest::SubtitleTrack { id, .. } => {
+              let result = match controller.select_subtitle_track(id).await {
+                Ok(()) => controller.tracks().await.map_err(|_| {
+                  "MPV changed the subtitle track, but its track state could not be refreshed."
+                    .to_owned()
+                }),
+                Err(_) => Err("MPV could not select that subtitle track.".to_owned()),
+              };
+              Ok(PlaybackCommandSuccess::tracks(result))
+            }
+            PlaybackRequest::RefreshTracks(_) => {
+              let result = controller
+                .tracks()
+                .await
+                .map_err(|_| "MPV track information is unavailable.".to_owned());
+              Ok(PlaybackCommandSuccess::tracks(result))
+            }
+            PlaybackRequest::ShowText {
+              identity,
+              text,
+              duration_ms,
+              prompt_range,
+            } => controller
+              .show_text(&text, duration_ms)
+              .await
+              .map(|()| {
+                let mut success = PlaybackCommandSuccess::preserved();
+                success.prompt_displayed = prompt_range.map(|range_index| IntroPromptReceipt {
+                  identity,
+                  range_index,
+                  duration: Duration::from_millis(duration_ms.max(0) as u64),
+                });
+                success
+              })
+              .map_err(|error| playback_failure("Could not show the Intro Skipper prompt", error)),
             PlaybackRequest::Stop => controller
               .stop()
               .await
-              .map(|outcome| PlaybackCommandSuccess {
-                snapshot: None,
-                warnings: outcome.warnings,
-                notice: Some("Playback stopped.".to_owned()),
+              .map(|outcome| {
+                PlaybackCommandSuccess::playback(
+                  None,
+                  outcome.warnings,
+                  Some("Playback stopped.".to_owned()),
+                )
               })
               .map_err(|error| playback_failure("Could not stop playback", error)),
             PlaybackRequest::Refresh => {
@@ -2624,11 +4432,10 @@ impl AppModel {
                   ),
                 ),
               };
-              Ok(PlaybackCommandSuccess {
-                snapshot,
-                warnings: outcome.warnings,
-                notice,
-              })
+              let mut success =
+                PlaybackCommandSuccess::playback(snapshot, outcome.warnings, notice);
+              success.client_messages = controller.take_client_messages();
+              Ok(success)
             }
           }
         };
@@ -2654,6 +4461,9 @@ impl AppModel {
       AppCommand::Playback {
         session,
         sequence,
+        request_kind,
+        started_item,
+        started_artwork_image_id,
         controller: Box::new(controller),
         result,
       }
@@ -2673,12 +4483,762 @@ impl AppModel {
     self.playback.pending.push_back(request);
   }
 
+  fn clear_playback_context(&mut self) {
+    self.playback.active_item = None;
+    self.playback.active_artwork_image_id = None;
+    self.playback.identity = None;
+    self.playback.desired_paused = None;
+    self.playback.desired_muted = None;
+    self.playback.tracks = PlaybackTrackState::Unavailable;
+    self.playback.adjacent = AdjacentState::default();
+    self.playback.intro_skip = IntroSkipState::default();
+  }
+
+  fn finish_track_refresh(&mut self, result: Result<Vec<TrackInfo>, String>) {
+    let PlaybackTrackState::Loading { identity } = &self.playback.tracks else {
+      return;
+    };
+    let identity = identity.clone();
+    if !auxiliary_settlement_is_current(
+      identity.session,
+      &identity,
+      self.requests.session_generation(),
+      self.playback.identity.as_ref(),
+    ) {
+      return;
+    }
+    self.playback.tracks = match result {
+      Ok(tracks) => PlaybackTrackState::Ready { identity, tracks },
+      Err(message) => PlaybackTrackState::Failed { identity, message },
+    };
+  }
+
+  fn select_track(&mut self, kind: TrackKind, selected: u32, sender: &ComponentSender<Self>) {
+    let PlaybackTrackState::Ready { identity, tracks } = &self.playback.tracks else {
+      return;
+    };
+    let Some(id) = selected_track_id(tracks, kind, selected) else {
+      return;
+    };
+    let identity = identity.clone();
+    let request = match kind {
+      TrackKind::Audio => {
+        let Some(id) = id else {
+          return;
+        };
+        PlaybackRequest::AudioTrack { identity, id }
+      }
+      TrackKind::Subtitle => PlaybackRequest::SubtitleTrack { identity, id },
+    };
+    self.start_playback(request, sender);
+  }
+
+  fn play_adjacent(&mut self, direction: AdjacentDirection, sender: &ComponentSender<Self>) {
+    if self.playback.busy {
+      return;
+    }
+    let AdjacentAvailability::Available(item) = self.playback.adjacent.availability(direction)
+    else {
+      return;
+    };
+    let item = item.clone();
+    self.record_diagnostic(
+      DiagnosticLevel::Info,
+      DiagnosticCategory::Playback,
+      match direction {
+        AdjacentDirection::Previous => "Starting the previous episode.",
+        AdjacentDirection::Next => "Starting the next episode.",
+      },
+    );
+    self.start_playback(PlaybackRequest::ReplaceMedia(item), sender);
+  }
+
+  fn refresh_adjacent_episodes(
+    &mut self,
+    identity: PlaybackIdentity,
+    sender: &ComponentSender<Self>,
+  ) {
+    if !auxiliary_settlement_is_current(
+      identity.session,
+      &identity,
+      self.requests.session_generation(),
+      self.playback.identity.as_ref(),
+    ) {
+      return;
+    }
+    let Some(item) = self.playback.active_item.clone() else {
+      return;
+    };
+    self.playback.adjacent.sequence = self.playback.adjacent.sequence.saturating_add(1);
+    self.playback.adjacent.identity = Some(identity.clone());
+    if item.item_type != "Episode" {
+      let reason = "Previous and next controls are available only for episodes.".to_owned();
+      self.playback.adjacent.previous = AdjacentAvailability::Unavailable(reason.clone());
+      self.playback.adjacent.next = AdjacentAvailability::Unavailable(reason);
+      self.render_now_playing();
+      return;
+    }
+    if item.series_id.is_none() {
+      let reason = "The server did not provide the series identity for this episode.".to_owned();
+      self.playback.adjacent.previous = AdjacentAvailability::Unavailable(reason.clone());
+      self.playback.adjacent.next = AdjacentAvailability::Unavailable(reason);
+      self.render_now_playing();
+      return;
+    }
+
+    let session = identity.session;
+    let sequence = self.playback.adjacent.sequence;
+    let client = Arc::clone(&self.client);
+    self.playback.adjacent.previous = AdjacentAvailability::Loading;
+    self.playback.adjacent.next = AdjacentAvailability::Loading;
+    self.render_now_playing();
+    sender.oneshot_command(async move {
+      let previous_client = Arc::clone(&client);
+      let previous_item = item.clone();
+      let previous = async move {
+        previous_client
+          .playback()
+          .get_previous_episode(&previous_item)
+          .await
+          .map_err(|_| "Could not check for a previous episode.".to_owned())
+      };
+      let next = async move {
+        client
+          .playback()
+          .get_next_episode(&item)
+          .await
+          .map_err(|_| "Could not check for a next episode.".to_owned())
+      };
+      let (previous, next) = relm4::tokio::join!(previous, next);
+      AppCommand::AdjacentEpisodes {
+        session,
+        sequence,
+        identity,
+        previous,
+        next,
+      }
+    });
+  }
+
+  fn refresh_intro_ranges(&mut self, identity: PlaybackIdentity, sender: &ComponentSender<Self>) {
+    if !auxiliary_settlement_is_current(
+      identity.session,
+      &identity,
+      self.requests.session_generation(),
+      self.playback.identity.as_ref(),
+    ) {
+      return;
+    }
+    let Some(item) = self.playback.active_item.as_ref() else {
+      return;
+    };
+    let mode = session_intro_mode(self.intro_mode);
+    self.playback.intro_skip.identity = Some(identity.clone());
+    self.playback.intro_skip.mode = mode;
+    self.playback.intro_skip.ranges.clear();
+    self.playback.intro_skip.sequence = self.playback.intro_skip.sequence.saturating_add(1);
+    if !should_fetch_intro_ranges(
+      self.intro_mode,
+      self.client.supports_intro_skipper(),
+      &item.item_type,
+    ) {
+      return;
+    }
+
+    let session = identity.session;
+    let sequence = self.playback.intro_skip.sequence;
+    let item_id = item.id.clone();
+    let client = Arc::clone(&self.client);
+    sender.oneshot_command(async move {
+      let ranges = client
+        .playback()
+        .get_intro_skipper_ranges(&item_id)
+        .await
+        .unwrap_or_default();
+      AppCommand::IntroRanges {
+        session,
+        sequence,
+        identity,
+        ranges,
+      }
+    });
+  }
+
+  fn apply_intro_action(
+    &mut self,
+    identity: PlaybackIdentity,
+    action: IntroUiAction,
+    sender: &ComponentSender<Self>,
+  ) {
+    if !auxiliary_settlement_is_current(
+      identity.session,
+      &identity,
+      self.requests.session_generation(),
+      self.playback.identity.as_ref(),
+    ) {
+      return;
+    }
+    match action {
+      IntroUiAction::Seek { target, .. } => {
+        self.start_playback(PlaybackRequest::Seek(target), sender);
+      }
+      IntroUiAction::Prompt { range_index, kind } => {
+        self.start_playback(
+          PlaybackRequest::ShowText {
+            identity,
+            text: format!(
+              "{} available — use the JellyPilot skip-intro shortcut",
+              intro_skip_label(kind)
+            ),
+            duration_ms: 3000,
+            prompt_range: Some(range_index),
+          },
+          sender,
+        );
+      }
+      IntroUiAction::ManualSkip {
+        range_index,
+        kind,
+        seek_target,
+      } => {
+        if self
+          .playback
+          .intro_skip
+          .active_prompt
+          .as_ref()
+          .is_some_and(|prompt| prompt.range_index == range_index)
+        {
+          self.playback.intro_skip.active_prompt = None;
+        }
+        self.start_playback(PlaybackRequest::Seek(seek_target), sender);
+        self.start_playback(
+          PlaybackRequest::ShowText {
+            identity,
+            text: format!("Skipped {}", intro_skip_label(kind).to_lowercase()),
+            duration_ms: 1500,
+            prompt_range: None,
+          },
+          sender,
+        );
+      }
+    }
+  }
+
+  fn set_intro_mode(&mut self, selected: u32) {
+    let mode = config_intro_mode(selected);
+    let mut prefill = config::load();
+    prefill.intro_mode = mode;
+    match config::save(&prefill) {
+      Ok(()) => {
+        self.intro_mode = mode;
+        if mode == config::IntroMode::Off {
+          disable_intro_skip(&mut self.playback.intro_skip);
+        }
+        self.ui.intro_skip_status.set_label("");
+        self.ui.intro_skip_status.set_visible(false);
+        self.record_diagnostic(
+          DiagnosticLevel::Info,
+          DiagnosticCategory::Config,
+          "Intro Skip preference was saved.",
+        );
+      }
+      Err(_) => {
+        self.record_diagnostic(
+          DiagnosticLevel::Warning,
+          DiagnosticCategory::Config,
+          "The Intro Skip preference could not be saved.",
+        );
+        self
+          .ui
+          .intro_skip_status
+          .set_label("The Intro Skip preference could not be saved.");
+        self.ui.intro_skip_status.set_visible(true);
+        self
+          .ui
+          .intro_skip_mode
+          .set_selected(intro_mode_selection(self.intro_mode));
+      }
+    }
+  }
+
+  fn reconnect_remote_control(&mut self, sender: &ComponentSender<Self>) {
+    if !matches!(self.connection, ConnectionPhase::Connected) {
+      return;
+    }
+    self.record_diagnostic(
+      DiagnosticLevel::Info,
+      DiagnosticCategory::RemoteControl,
+      "Remote-control reconnection requested from Settings.",
+    );
+    self.stop_remote_session(None);
+    self.start_remote_session(sender);
+    self.render_connection_settings();
+  }
+
+  fn refresh_connection_status(&mut self, sender: &ComponentSender<Self>) {
+    if !matches!(self.connection, ConnectionPhase::Connected) {
+      return;
+    }
+    self
+      .ui
+      .settings_config_status
+      .set_label("Refreshing connection status…");
+    self.ui.settings_config_status.set_visible(true);
+    let client = Arc::clone(&self.client);
+    let session = self.requests.session_generation();
+    sender.oneshot_command(async move {
+      AppCommand::ConnectionStatus {
+        session,
+        result: client.playback().validate_session().await.map_err(|_| ()),
+      }
+    });
+  }
+
+  fn render_connection_settings(&self) {
+    let connected = matches!(self.connection, ConnectionPhase::Connected);
+    let server_url = if connected {
+      non_empty_setting(self.ui.server_url.text().to_string())
+        .unwrap_or_else(|| "Connected server URL unavailable".to_owned())
+    } else {
+      "Not connected".to_owned()
+    };
+    self
+      .ui
+      .settings_server_url
+      .set_label(&format!("Server URL: {server_url}"));
+    let user = if connected {
+      non_empty_setting(self.ui.username.text().to_string())
+        .unwrap_or_else(|| "Authenticated user unavailable".to_owned())
+    } else {
+      "No authenticated user".to_owned()
+    };
+    self.ui.settings_user.set_label(&format!("User: {user}"));
+    self
+      .ui
+      .settings_remote_status
+      .set_label(match self.remote_state {
+        RemoteControlState::Unavailable => "Remote Control unavailable",
+        RemoteControlState::Connecting => "Remote Control connecting",
+        RemoteControlState::Available => "Remote Control available",
+        RemoteControlState::Lost => "Remote Control connection lost",
+      });
+    self
+      .ui
+      .settings_reconnect_button
+      .set_sensitive(connected && self.client.supports_remote_control());
+    self
+      .ui
+      .settings_refresh_status_button
+      .set_sensitive(connected);
+  }
+  fn detect_mpv(&mut self) {
+    match find_mpv() {
+      Some(path) => {
+        self.ui.settings_mpv_path.set_text(&path.to_string_lossy());
+        self
+          .ui
+          .settings_mpv_status
+          .set_label("MPV detected. The path applies on the next MPV start.");
+        self.ui.settings_mpv_status.set_visible(true);
+      }
+      None => {
+        self
+          .ui
+          .settings_mpv_status
+          .set_label("MPV was not found in PATH or a standard install location.");
+        self.ui.settings_mpv_status.set_visible(true);
+        self.record_diagnostic(
+          DiagnosticLevel::Warning,
+          DiagnosticCategory::Playback,
+          "MPV detection from Settings did not find an executable.",
+        );
+      }
+    }
+  }
+
+  fn update_mpv_path(&mut self, path: String) {
+    let mut settings = config::load();
+    settings.mpv_path = non_empty_setting(path);
+    if self.save_application_config(&settings) {
+      self.reconfigure_playback_controller();
+    }
+  }
+
+  fn update_mpv_args(&mut self, args: String) {
+    let mut settings = config::load();
+    settings.mpv_args = parse_mpv_args(&args);
+    if self.save_application_config(&settings) {
+      self.reconfigure_playback_controller();
+    }
+  }
+
+  fn update_playback_target_name(&mut self, name: String) {
+    let mut settings = config::load();
+    settings.playback_target_name = non_empty_setting(name);
+    self.save_application_config(&settings);
+  }
+
+  fn reconfigure_playback_controller(&mut self) {
+    let settings = config::load();
+    let playback_config = playback_controller_config(&settings);
+    if self.playback.controller.is_none() {
+      if self.playback.busy {
+        self.playback.reconfigure_pending = true;
+        return;
+      }
+      match PlaybackController::discover(Arc::clone(&self.client), playback_config) {
+        Ok(controller) => {
+          self.playback.controller = Some(controller);
+          self.playback.unavailable = None;
+          self.playback.error = None;
+          self.playback.reconfigure_pending = false;
+          self
+            .ui
+            .settings_config_status
+            .set_label("Saved. MPV is available for the next playback start.");
+          self.ui.settings_config_status.set_visible(true);
+        }
+        Err(_) => {
+          self.playback.reconfigure_pending = false;
+          self.show_settings_failure(
+            "Settings were saved, but no MPV executable is available for the next start.",
+          );
+        }
+      }
+      return;
+    }
+
+    let result = self
+      .playback
+      .controller
+      .as_mut()
+      .map(|controller| controller.configure_for_next_start(playback_config));
+    match result {
+      Some(Ok(())) => {
+        self.playback.reconfigure_pending = false;
+        self
+          .ui
+          .settings_config_status
+          .set_label("Saved. Player changes apply on the next MPV start.");
+        self.ui.settings_config_status.set_visible(true);
+      }
+      Some(Err(_)) | None => {
+        self.playback.reconfigure_pending = false;
+        self.show_settings_failure(
+          "Settings were saved, but no MPV executable is available for the next start.",
+        );
+      }
+    }
+  }
+
+  fn add_subtitle_preset(&mut self, sender: &ComponentSender<Self>) {
+    let selected = self.ui.settings_subtitle_preset.selected() as usize;
+    let Some(language) = SUBTITLE_LANGUAGE_OPTIONS.get(selected) else {
+      return;
+    };
+    self.add_subtitle_language((*language).to_owned(), sender);
+  }
+
+  fn add_custom_subtitle(&mut self, sender: &ComponentSender<Self>) {
+    let language = self.ui.settings_subtitle_custom.text().to_string();
+    if self.add_subtitle_language(language, sender) {
+      self.ui.settings_subtitle_custom.set_text("");
+    }
+  }
+
+  fn add_subtitle_language(&mut self, language: String, sender: &ComponentSender<Self>) -> bool {
+    let language = language.trim().to_ascii_lowercase();
+    if !valid_subtitle_language(&language) {
+      self.show_settings_failure("Enter a language code using letters, numbers, '-' or '_'.");
+      return false;
+    }
+    let mut settings = config::load();
+    if settings
+      .subtitle_languages
+      .iter()
+      .any(|existing| existing.eq_ignore_ascii_case(&language))
+    {
+      self.show_settings_failure("That subtitle language is already in the priority list.");
+      return false;
+    }
+    settings.subtitle_languages.push(language);
+    if self.save_application_config(&settings) {
+      self.reconfigure_playback_controller();
+      self.render_subtitle_settings(sender);
+      true
+    } else {
+      false
+    }
+  }
+
+  fn move_subtitle_language(&mut self, index: usize, offset: i32, sender: &ComponentSender<Self>) {
+    let mut settings = config::load();
+    let Ok(index_i32) = i32::try_from(index) else {
+      return;
+    };
+    let target = index_i32.saturating_add(offset);
+    let Ok(target) = usize::try_from(target) else {
+      return;
+    };
+    if index >= settings.subtitle_languages.len() || target >= settings.subtitle_languages.len() {
+      return;
+    }
+    settings.subtitle_languages.swap(index, target);
+    if self.save_application_config(&settings) {
+      self.reconfigure_playback_controller();
+      self.render_subtitle_settings(sender);
+    }
+  }
+
+  fn remove_subtitle_language(&mut self, index: usize, sender: &ComponentSender<Self>) {
+    let mut settings = config::load();
+    if index >= settings.subtitle_languages.len() {
+      return;
+    }
+    settings.subtitle_languages.remove(index);
+    if self.save_application_config(&settings) {
+      self.reconfigure_playback_controller();
+      self.render_subtitle_settings(sender);
+    }
+  }
+
+  fn clear_subtitle_languages(&mut self, sender: &ComponentSender<Self>) {
+    let mut settings = config::load();
+    settings.subtitle_languages.clear();
+    if self.save_application_config(&settings) {
+      self.reconfigure_playback_controller();
+      self.render_subtitle_settings(sender);
+    }
+  }
+
+  fn render_subtitle_settings(&self, sender: &ComponentSender<Self>) {
+    clear_box(&self.ui.settings_subtitle_languages);
+    let settings = config::load();
+    if settings.subtitle_languages.is_empty() {
+      self
+        .ui
+        .settings_subtitle_languages
+        .append(&dim_label("No subtitle language priority configured."));
+      return;
+    }
+    let last = settings.subtitle_languages.len().saturating_sub(1);
+    for (index, language) in settings.subtitle_languages.iter().enumerate() {
+      let row = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+      let label = gtk::Label::new(Some(language));
+      label.add_css_class("monospace");
+      label.set_hexpand(true);
+      label.set_xalign(0.0);
+      row.append(&label);
+      let up = gtk::Button::from_icon_name("go-up-symbolic");
+      up.set_tooltip_text(Some("Move up"));
+      up.set_sensitive(index > 0);
+      up.connect_clicked({
+        let sender = sender.clone();
+        move |_| sender.input(AppMessage::MoveSubtitleLanguage { index, offset: -1 })
+      });
+      row.append(&up);
+      let down = gtk::Button::from_icon_name("go-down-symbolic");
+      down.set_tooltip_text(Some("Move down"));
+      down.set_sensitive(index < last);
+      down.connect_clicked({
+        let sender = sender.clone();
+        move |_| sender.input(AppMessage::MoveSubtitleLanguage { index, offset: 1 })
+      });
+      row.append(&down);
+      let remove = gtk::Button::from_icon_name("edit-delete-symbolic");
+      remove.set_tooltip_text(Some("Remove"));
+      remove.connect_clicked({
+        let sender = sender.clone();
+        move |_| sender.input(AppMessage::RemoveSubtitleLanguage(index))
+      });
+      row.append(&remove);
+      self.ui.settings_subtitle_languages.append(&row);
+    }
+  }
+
+  fn update_shortcut(&mut self, kind: ShortcutKind, key: String) {
+    let key = key.trim().to_owned();
+    if key.is_empty() {
+      self.show_settings_failure("MPV shortcut keys cannot be empty.");
+      return;
+    }
+    let mut settings = config::load();
+    if shortcut_binding_collision(&settings, kind, &key) {
+      self.show_settings_failure(
+        "That MPV shortcut is already assigned to another JellyPilot action.",
+      );
+      return;
+    }
+    match kind {
+      ShortcutKind::Next => settings.key_next_episode = key,
+      ShortcutKind::Previous => settings.key_previous_episode = key,
+      ShortcutKind::IntroSkip => settings.key_intro_skip = key,
+    }
+    if self.save_application_config(&settings) {
+      self.write_shortcut_config(&settings);
+    }
+  }
+
+  fn write_shortcut_config(&mut self, settings: &LoginPrefill) {
+    if write_input_conf(
+      &settings.key_next_episode,
+      &settings.key_previous_episode,
+      &settings.key_intro_skip,
+    )
+    .is_some()
+    {
+      self
+        .ui
+        .settings_config_status
+        .set_label("Saved. Shortcut changes apply when MPV (re)starts.");
+      self.ui.settings_config_status.set_visible(true);
+    } else {
+      self.show_settings_failure(
+        "Settings were saved, but the MPV shortcut file could not be written.",
+      );
+    }
+  }
+
+  fn set_image_cache_enabled(&mut self, enabled: bool) {
+    let mut settings = config::load();
+    let previous = settings.image_cache_enabled;
+    settings.image_cache_enabled = enabled;
+    if self.save_application_config(&settings) {
+      self.artwork.set_disk_cache_enabled(enabled);
+      self.ui.settings_config_status.set_label(if enabled {
+        "Saved. Disk Library Image Cache enabled."
+      } else {
+        "Saved. Disk Library Image Cache disabled; memory caching remains active."
+      });
+      self.ui.settings_config_status.set_visible(true);
+    } else {
+      self.ui.settings_image_cache_syncing.set(true);
+      self.ui.settings_image_cache.set_active(previous);
+      self.ui.settings_image_cache_syncing.set(false);
+    }
+  }
+
+  fn refresh_image_cache_stats(&mut self, sender: &ComponentSender<Self>) {
+    if self.image_cache_clearing {
+      return;
+    }
+    self.image_cache_sequence = self.image_cache_sequence.wrapping_add(1);
+    let sequence = self.image_cache_sequence;
+    self
+      .ui
+      .settings_image_cache_stats
+      .set_label("Computing cache statistics…");
+    self.ui.settings_image_cache_clear.set_sensitive(false);
+    let artwork = Arc::clone(&self.artwork);
+    sender.oneshot_command(async move {
+      AppCommand::ImageCacheStats {
+        sequence,
+        result: artwork.disk_cache_stats().await.map_err(|_| ()),
+      }
+    });
+  }
+
+  fn confirm_clear_image_cache(&mut self, sender: &ComponentSender<Self>) {
+    if self.image_cache_clearing {
+      return;
+    }
+    let Some(parent) = relm4::main_adw_application().active_window() else {
+      self.show_settings_failure("Library Image Cache confirmation could not be shown.");
+      return;
+    };
+    let dialog = adw::AlertDialog::new(
+      Some("Clear Library Image Cache?"),
+      Some(
+        "This removes best-effort original image copies. Artwork will be fetched again as needed.",
+      ),
+    );
+    dialog.add_responses(&[("cancel", "Cancel"), ("clear", "Clear cache")]);
+    dialog.set_close_response("cancel");
+    dialog.set_response_appearance("clear", adw::ResponseAppearance::Destructive);
+    let sender = sender.clone();
+    gtk::glib::spawn_future_local(async move {
+      if dialog.choose_future(&parent).await.as_str() == "clear" {
+        sender.input(AppMessage::ClearImageCache);
+      }
+    });
+  }
+
+  fn clear_image_cache(&mut self, sender: &ComponentSender<Self>) {
+    if self.image_cache_clearing {
+      return;
+    }
+    self.image_cache_clearing = true;
+    self.image_cache_sequence = self.image_cache_sequence.wrapping_add(1);
+    let sequence = self.image_cache_sequence;
+    self
+      .ui
+      .settings_image_cache_stats
+      .set_label("Clearing Library Image Cache…");
+    self.ui.settings_image_cache_clear.set_sensitive(false);
+    let artwork = Arc::clone(&self.artwork);
+    sender.oneshot_command(async move {
+      let result = async {
+        artwork.clear_disk_cache().await.map_err(|_| ())?;
+        artwork.disk_cache_stats().await.map_err(|_| ())
+      }
+      .await;
+      AppCommand::ImageCacheCleared { sequence, result }
+    });
+  }
+
+  fn render_image_cache_stats(&self, stats: ArtworkCacheStats) {
+    self.ui.settings_image_cache_stats.set_label(&format!(
+      "{} across {} cached image{}",
+      format_byte_count(stats.bytes),
+      stats.entries,
+      if stats.entries == 1 { "" } else { "s" }
+    ));
+    self
+      .ui
+      .settings_image_cache_clear
+      .set_sensitive(!self.image_cache_clearing && stats.entries > 0);
+  }
+
+  fn save_application_config(&mut self, settings: &LoginPrefill) -> bool {
+    match config::save(settings) {
+      Ok(()) => {
+        self.ui.settings_config_status.set_label("Saved");
+        self.ui.settings_config_status.set_visible(true);
+        true
+      }
+      Err(_) => {
+        self.show_settings_failure("Settings could not be saved.");
+        false
+      }
+    }
+  }
+
+  fn show_settings_failure(&mut self, message: &str) {
+    self.ui.settings_config_status.set_label(message);
+    self.ui.settings_config_status.set_visible(true);
+    self.record_diagnostic(
+      DiagnosticLevel::Warning,
+      DiagnosticCategory::Config,
+      message,
+    );
+  }
+
+  fn render_now_playing_artwork(&mut self, sender: &ComponentSender<Self>) {
+    self.begin_artwork_view();
+    clear_box(&self.ui.now_playing_artwork);
+    let image_id = self.playback.active_artwork_image_id.clone();
+    let artwork = self.artwork(image_id.as_deref(), ArtworkPresentation::Backdrop, sender);
+    artwork.add_css_class("jellypilot-rounded");
+    artwork.set_overflow(gtk::Overflow::Hidden);
+    self.ui.now_playing_artwork.append(&artwork);
+  }
+
   fn begin_artwork_view(&mut self) {
     self.artwork.cancel_pending();
     self.artwork_view = self.artwork_view.saturating_add(1);
     self.artwork_targets.clear();
   }
-
+  #[allow(deprecated)]
   fn artwork(
     &mut self,
     image_id: Option<&str>,
@@ -2742,6 +5302,7 @@ impl AppModel {
     self.row_card(item, sender)
   }
 
+  #[allow(deprecated)]
   fn poster_card(
     &mut self,
     item: &VideoLibraryItem,
@@ -2753,6 +5314,8 @@ impl AppModel {
     button.set_has_frame(false);
     let column = gtk::Box::new(gtk::Orientation::Vertical, 0);
     let artwork_overlay = gtk::Overlay::new();
+    artwork_overlay.add_css_class("jellypilot-poster");
+    artwork_overlay.set_overflow(gtk::Overflow::Hidden);
     let picture = gtk::Picture::new();
     picture.set_can_shrink(true);
     picture.set_keep_aspect_ratio(true);
@@ -2847,6 +5410,7 @@ impl AppModel {
     card.upcast()
   }
 
+  #[allow(deprecated)]
   fn row_card(&mut self, item: &VideoLibraryItem, sender: &ComponentSender<Self>) -> gtk::Widget {
     let button = gtk::Button::new();
     button.set_has_frame(false);
@@ -2859,6 +5423,8 @@ impl AppModel {
       .margin_end(8)
       .build();
     let artwork_overlay = gtk::Overlay::new();
+    artwork_overlay.add_css_class("jellypilot-poster");
+    artwork_overlay.set_overflow(gtk::Overflow::Hidden);
     let picture = gtk::Picture::new();
     picture.set_can_shrink(true);
     picture.set_keep_aspect_ratio(true);
@@ -2949,12 +5515,15 @@ impl AppModel {
     button.upcast()
   }
 
+  #[allow(deprecated)]
   fn featured_hero(
     &mut self,
     item: &VideoLibraryItem,
     sender: &ComponentSender<Self>,
   ) -> gtk::Widget {
     let container = gtk::Overlay::new();
+    container.add_css_class("jellypilot-rounded");
+    container.set_overflow(gtk::Overflow::Hidden);
     let backdrop = gtk::Picture::new();
     backdrop.set_can_shrink(true);
     backdrop.set_keep_aspect_ratio(true);
@@ -3086,20 +5655,19 @@ impl AppModel {
       section.append(&dim_label("Nothing available."));
       return section.upcast();
     }
-    let flow = gtk::FlowBox::builder()
-      .selection_mode(gtk::SelectionMode::None)
-      .max_children_per_line(6)
-      .min_children_per_line(1)
-      .row_spacing(12)
-      .column_spacing(12)
-      .homogeneous(true)
-      .build();
+    let row = gtk::Box::new(gtk::Orientation::Horizontal, 12);
     for item in items {
-      let child = gtk::FlowBoxChild::new();
-      child.set_child(Some(&self.media_button(item, true, sender)));
-      flow.insert(&child, -1);
+      let card = self.media_button(item, true, sender);
+      card.set_width_request(164);
+      row.append(&card);
     }
-    section.append(&flow);
+    let scroll = gtk::ScrolledWindow::builder()
+      .child(&row)
+      .hscrollbar_policy(gtk::PolicyType::Automatic)
+      .vscrollbar_policy(gtk::PolicyType::Never)
+      .propagate_natural_width(true)
+      .build();
+    section.append(&scroll);
     section.upcast()
   }
 
@@ -3224,6 +5792,16 @@ impl AppModel {
       overview.set_selectable(true);
       body.append(&overview);
     }
+    if let Some(metadata) = detail_metadata_section(&detail.metadata, &detail.genres) {
+      body.append(&metadata);
+    }
+    body.append(&self.stream_metadata_view());
+    if let Some(neighbors) = self.season_neighbors_view(detail, sender) {
+      body.append(&neighbors);
+    }
+    if let Some(recommendations) = self.recommendations_view(sender) {
+      body.append(&recommendations);
+    }
     column.append(&body);
     column.upcast()
   }
@@ -3322,20 +5900,28 @@ impl AppModel {
         }
       });
       for season in &detail.seasons {
-        let row = gtk::Box::new(gtk::Orientation::Horizontal, 8);
-        let name = gtk::Label::new(Some(&season.name));
-        name.set_hexpand(true);
-        name.set_xalign(0.0);
-        row.append(&name);
-        let list_row = gtk::ListBoxRow::new();
-        list_row.set_child(Some(&row));
-        list_row.set_tooltip_text(Some(&format!("Browse episodes in {}", season.name)));
-        seasons.append(&list_row);
+        let row = adw::ActionRow::new();
+        row.set_title(&season.name);
+        row.set_subtitle(
+          &season
+            .season_number
+            .map(|number| format!("Season {number}"))
+            .unwrap_or_else(|| "Season".to_owned()),
+        );
+        row.set_activatable(true);
+        row.set_tooltip_text(Some(&format!("Browse episodes in {}", season.name)));
+        seasons.append(&row);
         if selected_season_id == Some(season.id.as_str()) {
-          seasons.select_row(Some(&list_row));
+          seasons.select_row(Some(&row));
         }
       }
       body.append(&seasons);
+    }
+    if let Some(metadata) = detail_metadata_section(&detail.metadata, &detail.genres) {
+      body.append(&metadata);
+    }
+    if let Some(recommendations) = self.recommendations_view(sender) {
+      body.append(&recommendations);
     }
     if let Some(selection) = self.season.clone() {
       let section = self.season_episodes_view(&selection, sender);
@@ -3344,6 +5930,63 @@ impl AppModel {
     }
     column.append(&body);
     column.upcast()
+  }
+  fn stream_metadata_view(&self) -> gtk::Widget {
+    match &self.streams {
+      LoadState::Idle => stream_metadata_status(),
+      LoadState::Loading => loading_view("Loading audio and subtitle metadata…"),
+      LoadState::Failed(message) => state_view(
+        "Stream metadata unavailable",
+        message,
+        "dialog-warning-symbolic",
+      ),
+      LoadState::Ready(streams) => {
+        let audio = streams.audio_streams.len();
+        let subtitles = streams.subtitle_streams.len();
+        state_view(
+          "Audio and subtitles",
+          &format!("{audio} audio stream(s) · {subtitles} subtitle stream(s) available."),
+          "audio-x-generic-symbolic",
+        )
+      }
+    }
+  }
+
+  fn season_neighbors_view(
+    &mut self,
+    detail: &VideoItemDetail,
+    sender: &ComponentSender<Self>,
+  ) -> Option<gtk::Widget> {
+    let season_number = detail.season_number?;
+    match self.season_neighbors.clone() {
+      LoadState::Idle => None,
+      LoadState::Loading => Some(loading_view(&format!(
+        "Loading more from Season {season_number}…"
+      ))),
+      LoadState::Failed(message) => Some(state_view(
+        "Season episodes unavailable",
+        &message,
+        "dialog-warning-symbolic",
+      )),
+      LoadState::Ready(items) if items.is_empty() => None,
+      LoadState::Ready(items) => {
+        Some(self.media_shelf(&format!("More from Season {season_number}"), &items, sender))
+      }
+    }
+  }
+
+  fn recommendations_view(&mut self, sender: &ComponentSender<Self>) -> Option<gtk::Widget> {
+    match self.recommendations.clone() {
+      LoadState::Idle => None,
+      LoadState::Loading => Some(loading_view("Loading recommendations…")),
+      LoadState::Failed(message) => Some(state_view(
+        "Recommendations unavailable",
+        &message,
+        "dialog-warning-symbolic",
+      )),
+      LoadState::Ready(items) if items.is_empty() => None,
+      LoadState::Ready(items) => Some(self.media_shelf("More like this", &items, sender)),
+    }
   }
 
   fn user_data_controls(
@@ -3503,9 +6146,165 @@ impl AppModel {
     section.upcast()
   }
 
+  fn record_diagnostic(
+    &mut self,
+    level: DiagnosticLevel,
+    category: DiagnosticCategory,
+    message: impl AsRef<str>,
+  ) {
+    let change = self.diagnostics.record(level, category, message);
+    self.apply_diagnostic_change(change);
+  }
+
+  fn record_artwork_failure(&mut self) {
+    let change = self.diagnostics.record_coalesced(
+      "artwork-load-failure",
+      DiagnosticLevel::Warning,
+      DiagnosticCategory::Artwork,
+      "Artwork could not be loaded or decoded; a fallback is shown.",
+    );
+    self.apply_diagnostic_change(change);
+  }
+
+  fn apply_diagnostic_change(&self, change: DiagnosticChange) {
+    match change {
+      DiagnosticChange::Added { event, dropped_id } => {
+        if let Some(dropped_id) = dropped_id {
+          if let Some(row) = self.ui.diagnostic_rows.borrow_mut().remove(&dropped_id) {
+            self.ui.diagnostics_list.remove(&row.row);
+          }
+        }
+        self.append_diagnostic_row(&event);
+        self.update_diagnostics_summary();
+      }
+      DiagnosticChange::Updated(event) => {
+        let message = self
+          .ui
+          .diagnostic_rows
+          .borrow()
+          .get(&event.id)
+          .map(|row| row.message.clone());
+        if let Some(message) = message {
+          message.set_label(&event.message);
+        } else {
+          self.render_diagnostics();
+        }
+      }
+    }
+  }
+
+  fn render_diagnostics(&self) {
+    clear_list_box(&self.ui.diagnostics_list);
+    self.ui.diagnostic_rows.borrow_mut().clear();
+    for event in self.diagnostics.events() {
+      self.append_diagnostic_row(event);
+    }
+    self.update_diagnostics_summary();
+  }
+
+  fn append_diagnostic_row(&self, event: &DiagnosticEvent) {
+    let content = gtk::Box::new(gtk::Orientation::Horizontal, 10);
+    content.set_margin_top(8);
+    content.set_margin_bottom(8);
+    content.set_margin_start(10);
+    content.set_margin_end(10);
+    let time = gtk::Label::new(Some(&format_diagnostic_time(event.timestamp_seconds)));
+    time.add_css_class("dim-label");
+    time.add_css_class("monospace");
+    time.set_valign(gtk::Align::Start);
+    content.append(&time);
+    let level = gtk::Label::new(Some(event.level.label()));
+    level.add_css_class("caption-heading");
+    level.add_css_class(match event.level {
+      DiagnosticLevel::Info => "accent",
+      DiagnosticLevel::Warning => "warning",
+      DiagnosticLevel::Error => "error",
+    });
+    level.set_valign(gtk::Align::Start);
+    content.append(&level);
+    let category = gtk::Label::new(Some(event.category.label()));
+    category.add_css_class("dim-label");
+    category.set_valign(gtk::Align::Start);
+    content.append(&category);
+    let message = gtk::Label::new(Some(&event.message));
+    message.add_css_class("monospace");
+    message.set_hexpand(true);
+    message.set_wrap(true);
+    message.set_xalign(0.0);
+    message.set_selectable(true);
+    content.append(&message);
+    let row = gtk::ListBoxRow::new();
+    row.set_child(Some(&content));
+    self.ui.diagnostics_list.append(&row);
+    self
+      .ui
+      .diagnostic_rows
+      .borrow_mut()
+      .insert(event.id, DiagnosticRowWidgets { row, message });
+  }
+
+  fn update_diagnostics_summary(&self) {
+    let state = self.diagnostics.view_state();
+    let count = match state {
+      DiagnosticsViewState::Empty => 0,
+      DiagnosticsViewState::Events { count } => count,
+    };
+    self.ui.diagnostics_count.set_label(&format!(
+      "{count} sanitized runtime event{}",
+      if count == 1 { "" } else { "s" }
+    ));
+    let populated = count > 0;
+    self.ui.diagnostics_empty.set_visible(!populated);
+    self.ui.diagnostics_scroll.set_visible(populated);
+    self.ui.diagnostics_copy.set_sensitive(populated);
+    self.ui.diagnostics_clear.set_sensitive(populated);
+    if populated {
+      let adjustment = self.ui.diagnostics_scroll.vadjustment();
+      gtk::glib::idle_add_local_once(move || {
+        adjustment.set_value((adjustment.upper() - adjustment.page_size()).max(0.0));
+      });
+    }
+  }
+
+  fn copy_diagnostics(&self) {
+    let text = self
+      .diagnostics
+      .events()
+      .map(|event| {
+        format!(
+          "[{}] {} [{}] {}",
+          format_diagnostic_time(event.timestamp_seconds),
+          event.level.label(),
+          event.category.label(),
+          sanitize_message(&event.message)
+        )
+      })
+      .collect::<Vec<_>>()
+      .join("\n");
+    let Some(display) = gtk::gdk::Display::default() else {
+      self
+        .ui
+        .diagnostics_status
+        .set_label("Copy failed: no display clipboard is available.");
+      self.ui.diagnostics_status.set_visible(true);
+      return;
+    };
+    display.clipboard().set_text(&text);
+    self.ui.diagnostics_status.set_label("Copied");
+    self.ui.diagnostics_status.set_visible(true);
+  }
+
   fn render_now_playing(&self) {
     let snapshot = self.playback.snapshot.as_ref();
     let now_playing = snapshot.and_then(|snapshot| snapshot.now_playing.as_ref());
+    let controller_available = self.playback.controller.is_some();
+    self.ui.playback_bar.set_visible(now_playing.is_some());
+    self.ui.playback_bar_title.set_label(
+      &snapshot
+        .zip(now_playing)
+        .map(|(snapshot, item)| format!("{} · {}", item.title, playback_position(snapshot)))
+        .unwrap_or_default(),
+    );
     let label = match (snapshot, now_playing) {
       (Some(snapshot), Some(item)) => format!("{} · {}", item.title, playback_position(snapshot)),
       _ => "No active native playback session.".to_owned(),
@@ -3519,7 +6318,7 @@ impl AppModel {
       .or(self.playback.unavailable.as_deref());
     self.ui.now_playing_notice.set_label(notice.unwrap_or(""));
     self.ui.now_playing_notice.set_visible(notice.is_some());
-    let active = now_playing.is_some() && !self.playback.busy;
+    let active = now_playing.is_some() && controller_available && !self.playback.busy;
     self.ui.pause_button.set_sensitive(active);
     self.ui.stop_button.set_sensitive(active);
     self.ui.seek.set_sensitive(active);
@@ -3542,6 +6341,22 @@ impl AppModel {
         } else {
           "media-playback-pause-symbolic"
         });
+      self
+        .ui
+        .playback_bar_pause
+        .set_icon_name(if snapshot.transport.paused {
+          "media-playback-start-symbolic"
+        } else {
+          "media-playback-pause-symbolic"
+        });
+      self
+        .ui
+        .playback_bar_pause
+        .set_tooltip_text(Some(if snapshot.transport.paused {
+          "Resume playback"
+        } else {
+          "Pause playback"
+        }));
       self
         .ui
         .pause_button
@@ -3574,18 +6389,229 @@ impl AppModel {
       self.ui.position_label.set_label("00:00");
       self.ui.duration_label.set_label("00:00");
     }
+    self.render_track_controls(active);
+    self.render_adjacent_controls(active);
+  }
+
+  fn render_track_controls(&self, active: bool) {
+    self.ui.playback_controls_syncing.set(true);
+    let current_identity = self.playback.identity.as_ref();
+    match &self.playback.tracks {
+      PlaybackTrackState::Ready { identity, tracks } if Some(identity) == current_identity => {
+        let audio = tracks
+          .iter()
+          .filter(|track| track.track_type == "audio")
+          .collect::<Vec<_>>();
+        let subtitles = tracks
+          .iter()
+          .filter(|track| track.track_type == "sub")
+          .collect::<Vec<_>>();
+        let audio_labels = audio
+          .iter()
+          .map(|track| track_label(track))
+          .collect::<Vec<_>>();
+        let audio_model = string_list(&audio_labels);
+        self.ui.audio_tracks.set_model(Some(&audio_model));
+        self.ui.audio_tracks.set_selected(
+          audio
+            .iter()
+            .position(|track| track.selected)
+            .map_or(gtk::INVALID_LIST_POSITION, |index| index as u32),
+        );
+
+        let mut subtitle_labels = Vec::with_capacity(subtitles.len() + 1);
+        subtitle_labels.push("Off".to_owned());
+        subtitle_labels.extend(subtitles.iter().map(|track| track_label(track)));
+        let subtitle_model = string_list(&subtitle_labels);
+        self.ui.subtitle_tracks.set_model(Some(&subtitle_model));
+        self.ui.subtitle_tracks.set_selected(
+          subtitles
+            .iter()
+            .position(|track| track.selected)
+            .map_or(0, |index| index as u32 + 1),
+        );
+
+        let audio_available = !audio.is_empty();
+        let subtitle_available = !subtitles.is_empty();
+        self
+          .ui
+          .audio_tracks
+          .set_sensitive(active && audio_available);
+        self
+          .ui
+          .subtitle_tracks
+          .set_sensitive(active && subtitle_available);
+        self
+          .ui
+          .audio_tracks
+          .set_tooltip_text(Some(if audio_available {
+            "Select the MPV audio track"
+          } else {
+            "MPV reported no audio tracks."
+          }));
+        self
+          .ui
+          .subtitle_tracks
+          .set_tooltip_text(Some(if subtitle_available {
+            "Select an MPV subtitle track or turn subtitles off"
+          } else {
+            "MPV reported no subtitle tracks."
+          }));
+        let status = match (audio_available, subtitle_available) {
+          (true, true) => None,
+          (false, true) => Some("MPV reported no audio tracks."),
+          (true, false) => Some("MPV reported no subtitle tracks."),
+          (false, false) => Some("MPV reported no selectable audio or subtitle tracks."),
+        };
+        self.ui.track_status.set_label(status.unwrap_or(""));
+        self.ui.track_status.set_visible(status.is_some());
+      }
+      PlaybackTrackState::Loading { identity } if Some(identity) == current_identity => {
+        self.set_empty_track_models();
+        self.ui.track_status.set_label("Loading MPV tracks…");
+        self.ui.track_status.set_visible(true);
+        self
+          .ui
+          .audio_tracks
+          .set_tooltip_text(Some("Audio tracks are loading."));
+        self
+          .ui
+          .subtitle_tracks
+          .set_tooltip_text(Some("Subtitle tracks are loading."));
+      }
+      PlaybackTrackState::Failed { identity, message } if Some(identity) == current_identity => {
+        self.set_empty_track_models();
+        self.ui.track_status.set_label(message);
+        self.ui.track_status.set_visible(true);
+        self.ui.audio_tracks.set_tooltip_text(Some(message));
+        self.ui.subtitle_tracks.set_tooltip_text(Some(message));
+      }
+      _ => {
+        self.set_empty_track_models();
+        let reason = if self.playback.controller.is_none() {
+          self
+            .playback
+            .unavailable
+            .as_deref()
+            .unwrap_or("Playback controller is unavailable.")
+        } else {
+          "Track controls require active playback."
+        };
+        self.ui.track_status.set_label(reason);
+        self.ui.track_status.set_visible(true);
+        self.ui.audio_tracks.set_tooltip_text(Some(reason));
+        self.ui.subtitle_tracks.set_tooltip_text(Some(reason));
+      }
+    }
+    self.ui.playback_controls_syncing.set(false);
+  }
+
+  fn set_empty_track_models(&self) {
+    let empty = gtk::StringList::new(&[]);
+    self.ui.audio_tracks.set_model(Some(&empty));
+    self.ui.audio_tracks.set_sensitive(false);
+    self
+      .ui
+      .audio_tracks
+      .set_selected(gtk::INVALID_LIST_POSITION);
+    let subtitles = gtk::StringList::new(&["Off"]);
+    self.ui.subtitle_tracks.set_model(Some(&subtitles));
+    self.ui.subtitle_tracks.set_sensitive(false);
+    self.ui.subtitle_tracks.set_selected(0);
+  }
+
+  fn render_adjacent_controls(&self, active: bool) {
+    let current = self.playback.adjacent.identity.as_ref() == self.playback.identity.as_ref()
+      && self.playback.identity.is_some();
+    let previous = current.then_some(&self.playback.adjacent.previous);
+    let next = current.then_some(&self.playback.adjacent.next);
+    let previous_available = previous
+      .is_some_and(|availability| matches!(availability, AdjacentAvailability::Available(_)));
+    let next_available =
+      next.is_some_and(|availability| matches!(availability, AdjacentAvailability::Available(_)));
+    self
+      .ui
+      .previous_button
+      .set_sensitive(active && previous_available);
+    self.ui.next_button.set_sensitive(active && next_available);
+    let busy_reason = self
+      .playback
+      .busy
+      .then_some("Another playback operation is in progress.");
+    let previous_reason =
+      busy_reason.unwrap_or_else(|| adjacent_control_reason(previous, AdjacentDirection::Previous));
+    let next_reason =
+      busy_reason.unwrap_or_else(|| adjacent_control_reason(next, AdjacentDirection::Next));
+    self
+      .ui
+      .previous_button
+      .set_tooltip_text(Some(previous_reason));
+    self.ui.next_button.set_tooltip_text(Some(next_reason));
+    let status = adjacent_status(previous, next);
+    self
+      .ui
+      .adjacent_status
+      .set_label(status.as_deref().unwrap_or(""));
+    self.ui.adjacent_status.set_visible(status.is_some());
   }
 }
 
 impl Ui {
   fn new(sender: &ComponentSender<AppModel>) -> Self {
-    let root = gtk::Box::new(gtk::Orientation::Vertical, 0);
-    let provider = gtk::DropDown::from_strings(&["Jellyfin", "Emby"]);
-    provider.set_selected(0);
-    let server_url = form_entry("https://media.example.com", gtk::InputPurpose::Url);
-    let username = form_entry("Username", gtk::InputPurpose::Name);
-    let password = gtk::PasswordEntry::new();
-    password.set_placeholder_text(Some("Password"));
+    install_media_css();
+    let root = adw::ToolbarView::new();
+    let playback_bar = gtk::Box::new(gtk::Orientation::Horizontal, 10);
+    playback_bar.set_margin_top(6);
+    playback_bar.set_margin_bottom(6);
+    playback_bar.set_margin_start(12);
+    playback_bar.set_margin_end(12);
+    playback_bar.set_visible(false);
+    let playback_bar_title = gtk::Label::new(Some(""));
+    playback_bar_title.set_hexpand(true);
+    playback_bar_title.set_xalign(0.0);
+    playback_bar.append(&playback_bar_title);
+    let playback_pause = gtk::Button::from_icon_name("media-playback-pause-symbolic");
+    playback_pause.set_tooltip_text(Some("Pause or resume playback"));
+    playback_pause.connect_clicked({
+      let sender = sender.clone();
+      move |_| sender.input(AppMessage::TogglePaused)
+    });
+    playback_bar.append(&playback_pause);
+    let playback_stop = gtk::Button::from_icon_name("media-playback-stop-symbolic");
+    playback_stop.set_tooltip_text(Some("Stop playback"));
+    playback_stop.connect_clicked({
+      let sender = sender.clone();
+      move |_| sender.input(AppMessage::StopPlayback)
+    });
+    playback_bar.append(&playback_stop);
+    let open_now_playing = gtk::GestureClick::new();
+    open_now_playing.connect_released({
+      let sender = sender.clone();
+      move |_, _, _, _| sender.input(AppMessage::ShowNowPlaying)
+    });
+    playback_bar.add_controller(open_now_playing);
+    root.add_bottom_bar(&playback_bar);
+    let prefill = config::load();
+    let provider = adw::ComboRow::new();
+    provider.set_title("Server type");
+    provider.set_model(Some(&gtk::StringList::new(&["Jellyfin", "Emby"])));
+    provider.set_selected(if prefill.provider.eq_ignore_ascii_case("emby") {
+      1
+    } else {
+      0
+    });
+    let server_url = adw::EntryRow::new();
+    server_url.set_title("Server URL");
+    server_url.set_input_purpose(gtk::InputPurpose::Url);
+    server_url.set_text(&prefill.server_url);
+    let username = adw::EntryRow::new();
+    username.set_title("Username");
+    username.set_input_purpose(gtk::InputPurpose::Name);
+    username.set_text(&prefill.username);
+    let password = adw::PasswordEntryRow::new();
+    password.set_title("Password");
+    let remember_prefill = gtk::Switch::new();
+    remember_prefill.set_active(prefill.remember);
     let saved_profiles = gtk::ListBox::new();
     saved_profiles.set_selection_mode(gtk::SelectionMode::None);
     saved_profiles.add_css_class("boxed-list");
@@ -3602,7 +6628,7 @@ impl Ui {
       let sender = sender.clone();
       move |_| sender.input(AppMessage::LoginRequested)
     });
-    password.connect_activate({
+    password.connect_entry_activated({
       let sender = sender.clone();
       move |_| sender.input(AppMessage::LoginRequested)
     });
@@ -3636,6 +6662,7 @@ impl Ui {
       move |_| sender.input(AppMessage::CancelQuickConnect)
     });
     let login = login_page(LoginPageWidgets {
+      remember_prefill: &remember_prefill,
       provider: &provider,
       server_url: &server_url,
       username: &username,
@@ -3667,36 +6694,30 @@ impl Ui {
         }
       }
     });
-    root.append(&login);
+    if !quick_connect_available(provider_for(provider.selected())) {
+      login_method_switcher.set_visible(false);
+      login_method_stack.set_visible_child_name("password");
+      quick_connect_button.set_sensitive(false);
+    }
+    root.set_content(Some(&login));
 
-    let sidebar_revealer = gtk::Revealer::builder()
-      .transition_type(gtk::RevealerTransitionType::SlideRight)
-      .reveal_child(true)
-      .build();
-    let header = gtk::HeaderBar::new();
-    header.set_show_title_buttons(true);
-    let sidebar_toggle = gtk::ToggleButton::new();
-    sidebar_toggle.set_child(Some(&gtk::Image::from_icon_name("sidebar-show-symbolic")));
-    sidebar_toggle.set_active(true);
-    sidebar_toggle.set_visible(false);
-    sidebar_toggle.set_tooltip_text(Some("Show or hide navigation"));
-    sidebar_toggle.update_property(&[gtk::accessible::Property::Label("Show or hide navigation")]);
-    sidebar_toggle.connect_toggled({
-      let sidebar_revealer = sidebar_revealer.clone();
-      move |button| sidebar_revealer.set_reveal_child(button.is_active())
-    });
-    header.pack_start(&sidebar_toggle);
+    let header = adw::HeaderBar::new();
+    header.set_show_end_title_buttons(true);
     let search = gtk::SearchEntry::new();
     search.set_placeholder_text(Some("Search your media"));
     search.set_hexpand(true);
     search.set_width_chars(12);
     search.set_sensitive(false);
     search.update_property(&[gtk::accessible::Property::Label("Search your media")]);
+    root.add_top_bar(&header);
     search.connect_activate({
       let sender = sender.clone();
       move |_| sender.input(AppMessage::SearchRequested)
     });
-    header.set_title_widget(Some(&search));
+    let window_title = gtk::Label::new(Some("JellyPilot"));
+    window_title.add_css_class("title");
+    header.set_title_widget(Some(&window_title));
+    header.pack_start(&search);
     let connection_status = dim_label("Not connected");
     connection_status.set_accessible_role(gtk::AccessibleRole::Status);
     header.pack_end(&connection_status);
@@ -3710,10 +6731,6 @@ impl Ui {
     });
     header.pack_end(&disconnect_button);
 
-    let authenticated = gtk::Box::new(gtk::Orientation::Vertical, 0);
-    let body = gtk::Box::new(gtk::Orientation::Horizontal, 0);
-    body.set_vexpand(true);
-    authenticated.append(&body);
     let sidebar = gtk::Box::builder()
       .orientation(gtk::Orientation::Vertical)
       .spacing(4)
@@ -3736,31 +6753,11 @@ impl Ui {
     let shortcuts = gtk::Box::new(gtk::Orientation::Vertical, 4);
     sidebar.append(&shortcuts);
     sidebar.append(&gtk::Separator::new(gtk::Orientation::Horizontal));
-    let nav_now_playing = navigation_button("Now Playing", "media-playback-start-symbolic");
-    nav_now_playing.set_group(Some(&nav_home));
-    nav_now_playing.connect_clicked({
-      let sender = sender.clone();
-      move |_| sender.input(AppMessage::ShowNowPlaying)
-    });
-    sidebar.append(&nav_now_playing);
-    let nav_settings = navigation_button("Settings", "emblem-system-symbolic");
-    nav_settings.set_group(Some(&nav_home));
-    nav_settings.connect_clicked({
-      let sender = sender.clone();
-      move |_| sender.input(AppMessage::ShowSettings)
-    });
-    sidebar.append(&nav_settings);
-    let sidebar_panel = gtk::Box::new(gtk::Orientation::Horizontal, 0);
-    sidebar_panel.append(&sidebar);
-    sidebar_panel.append(&gtk::Separator::new(gtk::Orientation::Vertical));
-    sidebar_revealer.set_child(Some(&sidebar_panel));
-    body.append(&sidebar_revealer);
 
     let content = gtk::Stack::new();
     content.set_hexpand(true);
     content.set_vexpand(true);
     content.set_transition_type(gtk::StackTransitionType::Crossfade);
-    body.append(&content);
     let home_content = gtk::Box::builder()
       .orientation(gtk::Orientation::Vertical)
       .spacing(18)
@@ -3790,11 +6787,15 @@ impl Ui {
     grid_button.set_tooltip_text(Some("Grid view"));
     grid_button.update_property(&[gtk::accessible::Property::Label("Grid view")]);
     grid_button.set_active(true);
+    grid_button.set_valign(gtk::Align::Center);
+    grid_button.set_size_request(36, 32);
     let list_button = gtk::ToggleButton::new();
     list_button.set_child(Some(&gtk::Image::from_icon_name("view-list-symbolic")));
     list_button.set_tooltip_text(Some("List view"));
     list_button.update_property(&[gtk::accessible::Property::Label("List view")]);
     list_button.set_group(Some(&grid_button));
+    list_button.set_valign(gtk::Align::Center);
+    list_button.set_size_request(36, 32);
     grid_button.connect_toggled({
       let sender = sender.clone();
       move |button| {
@@ -3823,16 +6824,14 @@ impl Ui {
       let sender = sender.clone();
       move |_| sender.input(AppMessage::LoadPreviousPage)
     });
-    let toolbar = gtk::Box::new(gtk::Orientation::Vertical, 6);
-    toolbar.append(&browse_title);
+    let toolbar = adw::PreferencesGroup::new();
+    toolbar.set_title("Browse");
+    toolbar.add(&browse_title);
+    toolbar.add(&browse_status);
     let browse_actions = gtk::Box::new(gtk::Orientation::Horizontal, 8);
-    browse_actions.append(&browse_status);
-    let spacer = gtk::Box::new(gtk::Orientation::Horizontal, 0);
-    spacer.set_hexpand(true);
-    browse_actions.append(&spacer);
     browse_actions.append(&grid_button);
     browse_actions.append(&list_button);
-    toolbar.append(&browse_actions);
+    toolbar.add(&browse_actions);
     let browse_filter_bar = gtk::Box::new(gtk::Orientation::Horizontal, 8);
     let sort_label = gtk::Label::new(Some("Sort"));
     let sort_dropdown =
@@ -3859,7 +6858,7 @@ impl Ui {
     browse_filter_bar.append(&played_label);
     browse_filter_bar.append(&played_dropdown);
     browse_filter_bar.append(&favorites_only);
-    toolbar.append(&browse_filter_bar);
+    toolbar.add(&browse_filter_bar);
     let browse_content = gtk::Box::new(gtk::Orientation::Vertical, 12);
     let browse_page = gtk::Box::builder()
       .orientation(gtk::Orientation::Vertical)
@@ -3871,9 +6870,10 @@ impl Ui {
       .build();
     browse_page.append(&toolbar);
     browse_page.append(&browse_content);
-    let pagination = gtk::Box::new(gtk::Orientation::Horizontal, 8);
-    pagination.append(&load_previous_button);
-    pagination.append(&load_next_button);
+    let pagination = adw::ActionRow::new();
+    pagination.set_title("Pages");
+    pagination.add_suffix(&load_previous_button);
+    pagination.add_suffix(&load_next_button);
     browse_page.append(&pagination);
     let browse_scroll = gtk::ScrolledWindow::builder()
       .child(&browse_page)
@@ -3892,6 +6892,15 @@ impl Ui {
     let detail_page = scrolled_page("Item Details", "", &detail_content);
     content.add_named(&detail_page, Some("detail"));
 
+    let now_playing_artwork = gtk::Box::new(gtk::Orientation::Vertical, 0);
+    now_playing_artwork.set_size_request(-1, 220);
+    now_playing_artwork.add_css_class("jellypilot-rounded");
+    now_playing_artwork.set_overflow(gtk::Overflow::Hidden);
+    let artwork_fallback = gtk::Image::from_icon_name(FALLBACK_ARTWORK_ICON);
+    artwork_fallback.set_pixel_size(32);
+    artwork_fallback.set_vexpand(true);
+    artwork_fallback.set_valign(gtk::Align::Center);
+    now_playing_artwork.append(&artwork_fallback);
     let now_playing_status = dim_label("No active native playback session.");
     now_playing_status.set_wrap(true);
     let now_playing_notice = dim_label("");
@@ -3900,6 +6909,14 @@ impl Ui {
     now_playing_notice.set_accessible_role(gtk::AccessibleRole::Status);
     let position_label = playback_time_label();
     let duration_label = playback_time_label();
+    let previous_button = gtk::Button::from_icon_name("media-skip-backward-symbolic");
+    previous_button.set_tooltip_text(Some("Previous episode is unavailable."));
+    previous_button.update_property(&[gtk::accessible::Property::Label("Previous episode")]);
+    previous_button.set_sensitive(false);
+    previous_button.connect_clicked({
+      let sender = sender.clone();
+      move |_| sender.input(AppMessage::PlayAdjacent(AdjacentDirection::Previous))
+    });
     let pause_button = gtk::Button::from_icon_name("media-playback-start-symbolic");
     pause_button.set_tooltip_text(Some("Pause or resume playback"));
     pause_button.update_property(&[gtk::accessible::Property::Label("Pause or resume playback")]);
@@ -3907,6 +6924,14 @@ impl Ui {
     pause_button.connect_clicked({
       let sender = sender.clone();
       move |_| sender.input(AppMessage::TogglePaused)
+    });
+    let next_button = gtk::Button::from_icon_name("media-skip-forward-symbolic");
+    next_button.set_tooltip_text(Some("Next episode is unavailable."));
+    next_button.update_property(&[gtk::accessible::Property::Label("Next episode")]);
+    next_button.set_sensitive(false);
+    next_button.connect_clicked({
+      let sender = sender.clone();
+      move |_| sender.input(AppMessage::PlayAdjacent(AdjacentDirection::Next))
     });
     let stop_button = gtk::Button::from_icon_name("media-playback-stop-symbolic");
     stop_button.set_tooltip_text(Some("Stop playback"));
@@ -3963,18 +6988,71 @@ impl Ui {
         }
       }
     });
+    let audio_tracks = gtk::DropDown::from_strings(&[]);
+    audio_tracks.set_hexpand(true);
+    audio_tracks.set_sensitive(false);
+    audio_tracks.update_property(&[gtk::accessible::Property::Label("Audio track")]);
+    audio_tracks.connect_selected_notify({
+      let sender = sender.clone();
+      let playback_controls_syncing = Rc::clone(&playback_controls_syncing);
+      move |dropdown| {
+        if !playback_controls_syncing.get() {
+          sender.input(AppMessage::SelectAudioTrack(dropdown.selected()));
+        }
+      }
+    });
+    let subtitle_tracks = gtk::DropDown::from_strings(&[]);
+    subtitle_tracks.set_hexpand(true);
+    subtitle_tracks.set_sensitive(false);
+    subtitle_tracks.update_property(&[gtk::accessible::Property::Label("Subtitle track")]);
+    subtitle_tracks.connect_selected_notify({
+      let sender = sender.clone();
+      let playback_controls_syncing = Rc::clone(&playback_controls_syncing);
+      move |dropdown| {
+        if !playback_controls_syncing.get() {
+          sender.input(AppMessage::SelectSubtitleTrack(dropdown.selected()));
+        }
+      }
+    });
+    let track_status = dim_label("Track controls require active playback.");
+    track_status.set_wrap(true);
+    track_status.set_accessible_role(gtk::AccessibleRole::Status);
+    let adjacent_status = dim_label("Episode navigation requires active episode playback.");
+    adjacent_status.set_wrap(true);
+    adjacent_status.set_accessible_role(gtk::AccessibleRole::Status);
     let now_playing = now_playing_page(NowPlayingPageWidgets {
+      artwork: &now_playing_artwork,
       status: &now_playing_status,
       notice: &now_playing_notice,
       position_label: &position_label,
       duration_label: &duration_label,
+      previous: &previous_button,
       pause: &pause_button,
+      next: &next_button,
       stop: &stop_button,
       seek: &seek,
       volume: &volume,
       mute: &mute_button,
+      audio_tracks: &audio_tracks,
+      subtitle_tracks: &subtitle_tracks,
+      track_status: &track_status,
+      adjacent_status: &adjacent_status,
     });
     content.add_named(&now_playing, Some("now-playing"));
+    let sidebar_header = adw::HeaderBar::new();
+    sidebar_header.set_title_widget(Some(&gtk::Label::new(Some("Navigation"))));
+    let sidebar_toolbar = adw::ToolbarView::new();
+    sidebar_toolbar.add_top_bar(&sidebar_header);
+    sidebar_toolbar.set_content(Some(&sidebar));
+    let sidebar_page = adw::NavigationPage::new(&sidebar_toolbar, "Navigation");
+    let content_toolbar = adw::ToolbarView::new();
+    content_toolbar.set_content(Some(&content));
+    let content_page = adw::NavigationPage::new(&content_toolbar, "Content");
+    let authenticated = adw::NavigationSplitView::new();
+    authenticated.set_sidebar(Some(&sidebar_page));
+    authenticated.set_content(Some(&content_page));
+    authenticated.set_hexpand(true);
+    authenticated.set_vexpand(true);
     let settings_saved_profile = dim_label("");
     settings_saved_profile.set_wrap(true);
     let settings_storage_status = dim_label("");
@@ -3988,6 +7066,188 @@ impl Ui {
       let sender = sender.clone();
       move |_| sender.input(AppMessage::Disconnect)
     });
+    let intro_skip_group = adw::PreferencesGroup::new();
+    intro_skip_group.set_title("Intro Skip");
+    intro_skip_group.set_description(Some(
+      "Automatic skips detected ranges. Manual shows an MPV prompt. Off does not fetch or apply ranges.",
+    ));
+    intro_skip_group.set_visible(false);
+    let intro_skip_mode = adw::ComboRow::new();
+    intro_skip_mode.set_title("Mode");
+    intro_skip_mode.set_subtitle("Changes apply when playback next (re)starts in MPV.");
+    intro_skip_mode.set_model(Some(&gtk::StringList::new(&["Automatic", "Manual", "Off"])));
+    intro_skip_mode.set_selected(intro_mode_selection(prefill.intro_mode));
+    intro_skip_mode.connect_selected_notify({
+      let sender = sender.clone();
+      move |row| sender.input(AppMessage::SetIntroMode(row.selected()))
+    });
+    intro_skip_group.add(&intro_skip_mode);
+    let intro_skip_status = dim_label("");
+    intro_skip_status.set_wrap(true);
+    intro_skip_status.set_visible(false);
+    let settings_config_status = dim_label("");
+    settings_config_status.set_wrap(true);
+    settings_config_status.set_visible(false);
+    settings_config_status.set_accessible_role(gtk::AccessibleRole::Status);
+    let settings_server_url = dim_label("Not connected");
+    settings_server_url.set_selectable(true);
+    settings_server_url.set_wrap(true);
+    let settings_user = dim_label("No authenticated user");
+    settings_user.set_selectable(true);
+    let settings_remote_status = dim_label("Remote Control unavailable");
+    let settings_reconnect_button = gtk::Button::with_label("Reconnect remote control");
+    settings_reconnect_button.set_sensitive(false);
+    settings_reconnect_button.connect_clicked({
+      let sender = sender.clone();
+      move |_| sender.input(AppMessage::ReconnectRemoteControl)
+    });
+    let settings_refresh_status_button = gtk::Button::with_label("Refresh status");
+    settings_refresh_status_button.set_sensitive(false);
+    settings_refresh_status_button.connect_clicked({
+      let sender = sender.clone();
+      move |_| sender.input(AppMessage::RefreshConnectionStatus)
+    });
+    let settings_mpv_path = adw::EntryRow::new();
+    settings_mpv_path.set_title("MPV path");
+    settings_mpv_path.set_text(prefill.mpv_path.as_deref().unwrap_or(""));
+    settings_mpv_path.connect_changed({
+      let sender = sender.clone();
+      move |entry| sender.input(AppMessage::SetMpvPath(entry.text().to_string()))
+    });
+    let settings_detect_mpv = gtk::Button::with_label("Detect");
+    settings_detect_mpv.connect_clicked({
+      let sender = sender.clone();
+      move |_| sender.input(AppMessage::DetectMpv)
+    });
+    let settings_mpv_status = dim_label("");
+    settings_mpv_status.set_wrap(true);
+    settings_mpv_status.set_visible(false);
+    settings_mpv_status.set_accessible_role(gtk::AccessibleRole::Status);
+    let settings_mpv_args = adw::EntryRow::new();
+    settings_mpv_args.set_title("Advanced MPV arguments");
+    settings_mpv_args.set_text(&prefill.mpv_args.join(" "));
+    settings_mpv_args.connect_changed({
+      let sender = sender.clone();
+      move |entry| sender.input(AppMessage::SetMpvArgs(entry.text().to_string()))
+    });
+    let settings_target_name = adw::EntryRow::new();
+    settings_target_name.set_title("Playback Target name");
+    settings_target_name.set_text(prefill.playback_target_name.as_deref().unwrap_or(""));
+    settings_target_name.connect_changed({
+      let sender = sender.clone();
+      move |entry| sender.input(AppMessage::SetPlaybackTargetName(entry.text().to_string()))
+    });
+    let settings_subtitle_languages = gtk::Box::new(gtk::Orientation::Vertical, 6);
+    let settings_subtitle_preset = gtk::DropDown::from_strings(&SUBTITLE_LANGUAGE_OPTIONS);
+    let subtitle_preset_add = gtk::Button::with_label("Add selected");
+    subtitle_preset_add.connect_clicked({
+      let sender = sender.clone();
+      move |_| sender.input(AppMessage::AddSubtitlePreset)
+    });
+    let settings_subtitle_custom = adw::EntryRow::new();
+    settings_subtitle_custom.set_title("Custom language code");
+    settings_subtitle_custom.connect_entry_activated({
+      let sender = sender.clone();
+      move |_| sender.input(AppMessage::AddSubtitleCustom)
+    });
+    let subtitle_custom_add = gtk::Button::with_label("Add custom");
+    subtitle_custom_add.connect_clicked({
+      let sender = sender.clone();
+      move |_| sender.input(AppMessage::AddSubtitleCustom)
+    });
+    let subtitle_clear = gtk::Button::with_label("Clear all");
+    subtitle_clear.add_css_class("destructive-action");
+    subtitle_clear.connect_clicked({
+      let sender = sender.clone();
+      move |_| sender.input(AppMessage::ClearSubtitleLanguages)
+    });
+    let settings_key_next = adw::EntryRow::new();
+    settings_key_next.set_title("Next episode");
+    settings_key_next.set_text(&prefill.key_next_episode);
+    settings_key_next.connect_changed({
+      let sender = sender.clone();
+      move |entry| sender.input(AppMessage::SetNextEpisodeKey(entry.text().to_string()))
+    });
+    let settings_key_previous = adw::EntryRow::new();
+    settings_key_previous.set_title("Previous episode");
+    settings_key_previous.set_text(&prefill.key_previous_episode);
+    settings_key_previous.connect_changed({
+      let sender = sender.clone();
+      move |entry| sender.input(AppMessage::SetPreviousEpisodeKey(entry.text().to_string()))
+    });
+    let settings_key_intro = adw::EntryRow::new();
+    settings_key_intro.set_title("Skip intro");
+    settings_key_intro.set_text(&prefill.key_intro_skip);
+    settings_key_intro.connect_changed({
+      let sender = sender.clone();
+      move |entry| sender.input(AppMessage::SetIntroSkipKey(entry.text().to_string()))
+    });
+    let settings_image_cache_syncing = Rc::new(Cell::new(false));
+    let settings_image_cache = adw::SwitchRow::new();
+    settings_image_cache.set_title("Disk Library Image Cache");
+    settings_image_cache.set_subtitle(
+      "Stores original server image bytes for faster repeat browsing; never used as offline truth.",
+    );
+    settings_image_cache.set_active(prefill.image_cache_enabled);
+    settings_image_cache.connect_active_notify({
+      let sender = sender.clone();
+      let syncing = Rc::clone(&settings_image_cache_syncing);
+      move |row| {
+        if !syncing.get() {
+          sender.input(AppMessage::SetImageCacheEnabled(row.is_active()));
+        }
+      }
+    });
+    let settings_image_cache_stats = dim_label("Cache statistics have not been computed.");
+    settings_image_cache_stats.set_wrap(true);
+    settings_image_cache_stats.set_accessible_role(gtk::AccessibleRole::Status);
+    let settings_image_cache_clear = gtk::Button::with_label("Clear Library Image Cache");
+    settings_image_cache_clear.add_css_class("destructive-action");
+    settings_image_cache_clear.connect_clicked({
+      let sender = sender.clone();
+      move |_| sender.input(AppMessage::ConfirmClearImageCache)
+    });
+    let diagnostics_count = dim_label("0 sanitized runtime events");
+    diagnostics_count.set_xalign(0.0);
+    let diagnostics_list = gtk::ListBox::new();
+    diagnostics_list.set_selection_mode(gtk::SelectionMode::None);
+    diagnostics_list.add_css_class("boxed-list");
+    let diagnostic_rows = Rc::new(RefCell::new(HashMap::new()));
+    let diagnostics_scroll = gtk::ScrolledWindow::builder()
+      .child(&diagnostics_list)
+      .min_content_height(360)
+      .vexpand(true)
+      .build();
+    diagnostics_scroll.set_visible(false);
+    let diagnostics_empty = dim_label("No diagnostic events yet");
+    diagnostics_empty.set_xalign(0.0);
+    diagnostics_empty.set_wrap(true);
+    let diagnostics_status = dim_label("");
+    diagnostics_status.set_visible(false);
+    diagnostics_status.set_accessible_role(gtk::AccessibleRole::Status);
+    let diagnostics_copy = gtk::Button::with_label("Copy diagnostics");
+    diagnostics_copy.set_sensitive(false);
+    diagnostics_copy.connect_clicked({
+      let sender = sender.clone();
+      move |_| sender.input(AppMessage::CopyDiagnostics)
+    });
+    let diagnostics_clear = gtk::Button::with_label("Clear");
+    diagnostics_clear.add_css_class("destructive-action");
+    diagnostics_clear.set_sensitive(false);
+    diagnostics_clear.connect_clicked({
+      let sender = sender.clone();
+      move |_| sender.input(AppMessage::ClearDiagnostics)
+    });
+    let diagnostics_page = diagnostics_page(
+      &diagnostics_count,
+      &diagnostics_scroll,
+      &diagnostics_empty,
+      &diagnostics_status,
+      &diagnostics_copy,
+      &diagnostics_clear,
+    );
+    intro_skip_status.set_accessible_role(gtk::AccessibleRole::Status);
+    intro_skip_group.add(&intro_skip_status);
     let forget_current_profile = gtk::Button::with_label("Sign out and forget");
     forget_current_profile.add_css_class("destructive-action");
     forget_current_profile.set_sensitive(false);
@@ -3998,13 +7258,80 @@ impl Ui {
         sender.input(AppMessage::ForgetCurrentProfile)
       }
     });
-    let settings = settings_page(
-      &settings_saved_profile,
-      &settings_storage_status,
-      &settings_disconnect_button,
-      &forget_current_profile,
+    let preferences = settings_page(
+      SettingsPageWidgets {
+        config_status: &settings_config_status,
+        server_url: &settings_server_url,
+        user: &settings_user,
+        remote_status: &settings_remote_status,
+        disconnect: &settings_disconnect_button,
+        reconnect: &settings_reconnect_button,
+        refresh_status: &settings_refresh_status_button,
+        saved_profile: &settings_saved_profile,
+        storage_status: &settings_storage_status,
+        forget_saved_profile: &forget_current_profile,
+        mpv_path: &settings_mpv_path,
+        detect_mpv: &settings_detect_mpv,
+        mpv_status: &settings_mpv_status,
+        mpv_args: &settings_mpv_args,
+        target_name: &settings_target_name,
+        subtitle_languages: &settings_subtitle_languages,
+        subtitle_preset: &settings_subtitle_preset,
+        subtitle_preset_add: &subtitle_preset_add,
+        subtitle_custom: &settings_subtitle_custom,
+        subtitle_custom_add: &subtitle_custom_add,
+        subtitle_clear: &subtitle_clear,
+        key_next: &settings_key_next,
+        key_previous: &settings_key_previous,
+        key_intro: &settings_key_intro,
+        image_cache: &settings_image_cache,
+        image_cache_stats: &settings_image_cache_stats,
+        image_cache_clear: &settings_image_cache_clear,
+        intro_skip: &intro_skip_group,
+      },
+      &diagnostics_page,
     );
-    content.add_named(&settings, Some("settings"));
+    let about = adw::AboutDialog::new();
+    about.set_application_name("JellyPilot");
+    about.set_application_icon("video-x-generic");
+    about.set_version(env!("CARGO_PKG_VERSION"));
+    about.set_comments("A native media client for Jellyfin and Emby.");
+    about.set_website("https://github.com/hewel/jellypilot");
+    let application = relm4::main_adw_application();
+    let preferences_action = gtk::gio::SimpleAction::new("preferences", None);
+    preferences_action.connect_activate({
+      let preferences = preferences.clone();
+      let sender = sender.clone();
+      move |_, _| {
+        sender.input(AppMessage::RefreshDiagnostics);
+        sender.input(AppMessage::RefreshImageCacheStats);
+        let parent = relm4::main_adw_application().active_window();
+        preferences.present(parent.as_ref());
+      }
+    });
+    application.add_action(&preferences_action);
+    let about_action = gtk::gio::SimpleAction::new("about", None);
+    about_action.connect_activate({
+      let about = about.clone();
+      move |_, _| {
+        let parent = relm4::main_adw_application().active_window();
+        about.present(parent.as_ref());
+      }
+    });
+    application.add_action(&about_action);
+    let quit_action = gtk::gio::SimpleAction::new("quit", None);
+    let sender = sender.clone();
+    quit_action.connect_activate(move |_, _| sender.input(AppMessage::QuitRequested));
+    application.add_action(&quit_action);
+    let menu = gtk::gio::Menu::new();
+    menu.append(Some("Preferences"), Some("app.preferences"));
+    menu.append(Some("About JellyPilot"), Some("app.about"));
+    menu.append(Some("Quit"), Some("app.quit"));
+    let menu_button = gtk::MenuButton::new();
+    menu_button.set_icon_name("open-menu-symbolic");
+    menu_button.set_tooltip_text(Some("Main menu"));
+    menu_button.set_menu_model(Some(&menu));
+    header.pack_end(&menu_button);
 
     Self {
       root,
@@ -4013,6 +7340,7 @@ impl Ui {
       server_url,
       username,
       password,
+      remember_prefill,
       login_method_switcher,
       quick_connect_code,
       quick_connect_status,
@@ -4024,15 +7352,14 @@ impl Ui {
       login_status,
       login_button,
       authenticated,
-      header,
-      sidebar_toggle,
       connection_status,
       search,
+      playback_bar,
+      playback_bar_title,
+      playback_bar_pause: playback_pause,
       disconnect_button,
       content,
       nav_home,
-      nav_now_playing,
-      nav_settings,
       shortcuts,
       home_content,
       browse_title,
@@ -4048,29 +7375,64 @@ impl Ui {
       load_next_button,
       browse_scroll,
       detail_content,
+      now_playing_artwork,
       now_playing_status,
       now_playing_notice,
       position_label,
       duration_label,
+      previous_button,
       pause_button,
+      next_button,
       stop_button,
       seek,
       volume,
       mute_button,
+      audio_tracks,
+      subtitle_tracks,
+      track_status,
+      adjacent_status,
       playback_controls_syncing,
       settings_saved_profile,
       settings_storage_status,
       settings_disconnect_button,
+      intro_skip_group,
+      intro_skip_mode,
+      intro_skip_status,
+      settings_config_status,
+      settings_server_url,
+      settings_user,
+      settings_remote_status,
+      settings_reconnect_button,
+      settings_refresh_status_button,
+      settings_mpv_path,
+      settings_mpv_status,
+      settings_subtitle_languages,
+      settings_subtitle_preset,
+      settings_subtitle_custom,
+      settings_image_cache,
+      settings_image_cache_syncing,
+      settings_image_cache_stats,
+      settings_image_cache_clear,
+      diagnostics_list,
+      diagnostic_rows,
+      diagnostics_empty,
+      diagnostics_count,
+      diagnostics_scroll,
+      diagnostics_copy,
+      diagnostics_clear,
+      diagnostics_status,
       forget_current_profile,
+      preferences,
     }
   }
 }
 
 struct LoginPageWidgets<'a> {
-  provider: &'a gtk::DropDown,
-  server_url: &'a gtk::Entry,
-  username: &'a gtk::Entry,
-  password: &'a gtk::PasswordEntry,
+  remember_prefill: &'a gtk::Switch,
+  provider: &'a adw::ComboRow,
+  server_url: &'a adw::EntryRow,
+  username: &'a adw::EntryRow,
+  password: &'a adw::PasswordEntryRow,
   method_stack: &'a gtk::Stack,
   method_switcher: &'a gtk::StackSwitcher,
   quick_connect_code: &'a gtk::Label,
@@ -4086,6 +7448,7 @@ struct LoginPageWidgets<'a> {
 
 fn login_page(widgets: LoginPageWidgets<'_>) -> gtk::ScrolledWindow {
   let LoginPageWidgets {
+    remember_prefill,
     provider,
     server_url,
     username,
@@ -4102,105 +7465,63 @@ fn login_page(widgets: LoginPageWidgets<'_>) -> gtk::ScrolledWindow {
     status,
     sign_in,
   } = widgets;
-  let page = gtk::Box::builder()
-    .orientation(gtk::Orientation::Vertical)
-    .valign(gtk::Align::Center)
-    .halign(gtk::Align::Center)
-    .spacing(0)
-    .build();
-  let card = gtk::Box::builder()
-    .orientation(gtk::Orientation::Vertical)
-    .spacing(18)
-    .margin_top(32)
-    .margin_bottom(32)
-    .margin_start(36)
-    .margin_end(36)
-    .build();
-  card.add_css_class("card");
-  let header = gtk::Box::builder()
-    .orientation(gtk::Orientation::Vertical)
-    .spacing(8)
-    .build();
+  let page = gtk::Box::new(gtk::Orientation::Vertical, 24);
+  page.set_halign(gtk::Align::Center);
+  page.set_margin_top(32);
+  page.set_margin_bottom(32);
+  let branding = gtk::Box::new(gtk::Orientation::Vertical, 8);
+  branding.set_halign(gtk::Align::Center);
   let icon = gtk::Image::from_icon_name("video-x-generic-symbolic");
   icon.set_pixel_size(48);
-  icon.set_halign(gtk::Align::Center);
-  header.append(&icon);
+  branding.append(&icon);
   let title = gtk::Label::new(Some("JellyPilot"));
   title.add_css_class("title-1");
-  title.set_halign(gtk::Align::Center);
-  header.append(&title);
-  let copy = dim_label("Connect to your Jellyfin or Emby server.");
-  copy.set_wrap(true);
-  copy.set_halign(gtk::Align::Center);
-  copy.set_justify(gtk::Justification::Center);
-  header.append(&copy);
-  card.append(&header);
-  card.append(&gtk::Separator::new(gtk::Orientation::Horizontal));
-  let saved_heading = gtk::Label::new(Some("Saved sign-ins"));
-  saved_heading.add_css_class("heading");
-  saved_heading.set_xalign(0.0);
-  card.append(&saved_heading);
-  let saved_profiles_scroll = gtk::ScrolledWindow::builder()
-    .child(saved_profiles)
-    .max_content_height(240)
-    .propagate_natural_height(true)
-    .hscrollbar_policy(gtk::PolicyType::Never)
-    .build();
-  card.append(&saved_profiles_scroll);
-  card.append(saved_profiles_status);
-  card.append(&gtk::Separator::new(gtk::Orientation::Horizontal));
-  let server_form = gtk::Grid::builder()
-    .row_spacing(10)
-    .column_spacing(12)
-    .build();
-  add_form_row(&server_form, 0, "Server type", provider);
-  add_form_row(&server_form, 1, "Server URL", server_url);
-  card.append(&server_form);
-  card.append(method_switcher);
+  branding.append(&title);
+  let subtitle = dim_label("Connect to your Jellyfin or Emby server.");
+  subtitle.set_justify(gtk::Justification::Center);
+  subtitle.set_wrap(true);
+  branding.append(&subtitle);
+  page.append(&branding);
 
-  let quick_connect_page = gtk::Box::builder()
-    .orientation(gtk::Orientation::Vertical)
-    .spacing(12)
-    .margin_top(6)
-    .build();
-  let quick_connect_copy = dim_label(
+  let server_group = adw::PreferencesGroup::new();
+  server_group.set_title("Server");
+  server_group.add(provider);
+  server_group.add(server_url);
+  page.append(&server_group);
+  method_switcher.set_halign(gtk::Align::Center);
+  page.append(method_switcher);
+
+  let quick_connect_page = gtk::Box::new(gtk::Orientation::Vertical, 14);
+  let quick_copy = dim_label(
     "Request a code, then approve it from another client already signed in to this Jellyfin server.",
   );
-  quick_connect_copy.set_wrap(true);
-  quick_connect_copy.set_justify(gtk::Justification::Center);
-  quick_connect_page.append(&quick_connect_copy);
+  quick_copy.set_wrap(true);
+  quick_copy.set_justify(gtk::Justification::Center);
+  quick_connect_page.append(&quick_copy);
   quick_connect_code.set_halign(gtk::Align::Center);
   quick_connect_page.append(quick_connect_code);
-  let quick_connect_progress = gtk::Box::builder()
-    .orientation(gtk::Orientation::Vertical)
-    .spacing(8)
-    .halign(gtk::Align::Center)
-    .hexpand(true)
-    .build();
   quick_connect_spinner.set_halign(gtk::Align::Center);
-  quick_connect_status.set_hexpand(true);
-  quick_connect_status.set_halign(gtk::Align::Fill);
-  quick_connect_progress.append(quick_connect_spinner);
-  quick_connect_progress.append(quick_connect_status);
-  quick_connect_page.append(&quick_connect_progress);
-  quick_connect.set_hexpand(true);
+  quick_connect_page.append(quick_connect_spinner);
+  quick_connect_status.set_justify(gtk::Justification::Center);
+  quick_connect_status.set_wrap(true);
+  quick_connect_page.append(quick_connect_status);
+  quick_connect.set_halign(gtk::Align::Center);
   quick_connect_page.append(quick_connect);
   cancel_quick_connect.set_halign(gtk::Align::Center);
   quick_connect_page.append(cancel_quick_connect);
   method_stack.add_titled(&quick_connect_page, Some("quick-connect"), "Quick Connect");
 
-  let password_page = gtk::Box::builder()
-    .orientation(gtk::Orientation::Vertical)
-    .spacing(12)
-    .margin_top(6)
-    .build();
-  let password_form = gtk::Grid::builder()
-    .row_spacing(10)
-    .column_spacing(12)
-    .build();
-  add_form_row(&password_form, 0, "Username", username);
-  add_form_row(&password_form, 1, "Password", password);
-  password_page.append(&password_form);
+  let password_page = gtk::Box::new(gtk::Orientation::Vertical, 14);
+  let credentials_group = adw::PreferencesGroup::new();
+  credentials_group.add(username);
+  credentials_group.add(password);
+  let remember_row = adw::ActionRow::new();
+  remember_row.set_title("Remember sign-in details");
+  remember_row.set_subtitle("Save server, provider, and username on this device.");
+  remember_row.add_suffix(remember_prefill);
+  remember_row.set_activatable_widget(Some(remember_prefill));
+  credentials_group.add(&remember_row);
+  password_page.append(&credentials_group);
   let storage_copy = dim_label(
     "Successful sign-ins are saved in Linux Secret Service. JellyPilot never stores your password.",
   );
@@ -4210,12 +7531,28 @@ fn login_page(widgets: LoginPageWidgets<'_>) -> gtk::ScrolledWindow {
   password_page.append(sign_in);
   method_stack.add_titled(&password_page, Some("password"), "Password");
   method_stack.set_visible_child_name("quick-connect");
-  card.append(method_stack);
+  page.append(method_stack);
   status.set_halign(gtk::Align::Center);
-  card.append(status);
-  page.append(&card);
+  status.set_wrap(true);
+  page.append(status);
+
+  let saved_group = adw::PreferencesGroup::new();
+  saved_group.set_title("Saved sign-ins");
+  let saved_profiles_scroll = gtk::ScrolledWindow::builder()
+    .child(saved_profiles)
+    .max_content_height(240)
+    .propagate_natural_height(true)
+    .hscrollbar_policy(gtk::PolicyType::Never)
+    .build();
+  saved_group.add(&saved_profiles_scroll);
+  saved_group.add(saved_profiles_status);
+  page.append(&saved_group);
+
+  let clamp = adw::Clamp::new();
+  clamp.set_maximum_size(620);
+  clamp.set_child(Some(&page));
   gtk::ScrolledWindow::builder()
-    .child(&page)
+    .child(&clamp)
     .hscrollbar_policy(gtk::PolicyType::Never)
     .vexpand(true)
     .build()
@@ -4224,105 +7561,80 @@ fn login_page(widgets: LoginPageWidgets<'_>) -> gtk::ScrolledWindow {
 fn saved_profile_row(
   profile: &SavedProfileSummary,
   sender: &ComponentSender<AppModel>,
-) -> gtk::ListBoxRow {
-  let row = gtk::ListBoxRow::new();
-  row.set_activatable(false);
-  row.set_selectable(false);
-  let content = gtk::Box::builder()
-    .orientation(gtk::Orientation::Vertical)
-    .spacing(12)
-    .margin_top(10)
-    .margin_bottom(10)
-    .margin_start(12)
-    .margin_end(12)
-    .build();
-  let identity = gtk::Box::new(gtk::Orientation::Vertical, 3);
-  identity.set_hexpand(true);
-  let title = gtk::Label::new(Some(
-    profile
-      .server_name
-      .as_deref()
-      .unwrap_or(profile.server_url.as_str()),
-  ));
-  title.add_css_class("heading");
-  title.set_xalign(0.0);
-  title.set_ellipsize(gtk::pango::EllipsizeMode::End);
+) -> adw::ActionRow {
+  let action = adw::ActionRow::new();
   let provider = match profile.provider {
     MediaServerProvider::Jellyfin => "Jellyfin",
     MediaServerProvider::Emby => "Emby",
   };
-  let account = dim_label(&format!("{provider} · {}", profile.user_name));
-  account.set_ellipsize(gtk::pango::EllipsizeMode::End);
-  let server = dim_label(&profile.server_url);
-  server.set_ellipsize(gtk::pango::EllipsizeMode::Middle);
-  identity.append(&title);
-  identity.append(&account);
-  identity.append(&server);
-
-  let actions = gtk::Box::new(gtk::Orientation::Horizontal, 6);
-  actions.set_valign(gtk::Align::Center);
-  actions.set_halign(gtk::Align::End);
-  let continue_button = gtk::Button::with_label("Continue");
-  continue_button.add_css_class("suggested-action");
-  continue_button.update_property(&[gtk::accessible::Property::Label(&format!(
-    "Continue as {} on {}",
-    profile.user_name,
-    profile
-      .server_name
-      .as_deref()
-      .unwrap_or(profile.server_url.as_str())
+  let server = profile
+    .server_name
+    .as_deref()
+    .unwrap_or(profile.server_url.as_str());
+  action.set_title(&format!("{}@{}", profile.user_name, server));
+  action.set_subtitle(provider);
+  action.set_activatable(true);
+  action.update_property(&[gtk::accessible::Property::Label(&format!(
+    "Restore saved sign-in for {} on {}",
+    profile.user_name, server
   ))]);
-  continue_button.connect_clicked({
-    let sender = sender.clone();
-    let key = profile.key.clone();
-    move |_| sender.input(AppMessage::RestoreSavedProfile(key.clone()))
+  let key = profile.key.clone();
+  let sender_clone = sender.clone();
+  action.connect_activated(move |_| {
+    sender_clone.input(AppMessage::RestoreSavedProfile(key.clone()));
   });
-  let forget_button = gtk::Button::with_label("Forget");
-  forget_button.add_css_class("destructive-action");
-  forget_button.update_property(&[gtk::accessible::Property::Label(&format!(
+  let forget = gtk::Button::with_label("Forget");
+  forget.add_css_class("destructive-action");
+  forget.update_property(&[gtk::accessible::Property::Label(&format!(
     "Forget saved sign-in for {} on {}",
-    profile.user_name,
-    profile
-      .server_name
-      .as_deref()
-      .unwrap_or(profile.server_url.as_str())
+    profile.user_name, server
   ))]);
-  forget_button.connect_clicked({
-    let sender = sender.clone();
-    let key = profile.key.clone();
-    move |_| sender.input(AppMessage::ForgetSavedProfile(key.clone()))
+  let key = profile.key.clone();
+  let sender_clone = sender.clone();
+  forget.connect_clicked(move |_| {
+    sender_clone.input(AppMessage::ForgetSavedProfile(key.clone()));
   });
-  actions.append(&continue_button);
-  actions.append(&forget_button);
-  content.append(&identity);
-  content.append(&actions);
-  row.set_child(Some(&content));
-  row
+  action.add_suffix(&forget);
+  action
 }
 
 struct NowPlayingPageWidgets<'a> {
+  artwork: &'a gtk::Box,
   status: &'a gtk::Label,
   notice: &'a gtk::Label,
   position_label: &'a gtk::Label,
   duration_label: &'a gtk::Label,
+  previous: &'a gtk::Button,
   pause: &'a gtk::Button,
+  next: &'a gtk::Button,
   stop: &'a gtk::Button,
   seek: &'a gtk::Scale,
   volume: &'a gtk::Scale,
   mute: &'a gtk::ToggleButton,
+  audio_tracks: &'a gtk::DropDown,
+  subtitle_tracks: &'a gtk::DropDown,
+  track_status: &'a gtk::Label,
+  adjacent_status: &'a gtk::Label,
 }
 
 fn now_playing_page(widgets: NowPlayingPageWidgets<'_>) -> gtk::Widget {
   let NowPlayingPageWidgets {
+    artwork,
     status,
     notice,
     position_label,
     duration_label,
+    previous,
     pause,
+    next,
     stop,
     seek,
     volume,
     mute,
+    audio_tracks,
+    subtitle_tracks,
+    track_status,
+    adjacent_status,
   } = widgets;
   let page = gtk::Box::builder()
     .orientation(gtk::Orientation::Vertical)
@@ -4369,9 +7681,13 @@ fn now_playing_page(widgets: NowPlayingPageWidgets<'_>) -> gtk::Widget {
   transport.set_halign(gtk::Align::Center);
   pause.add_css_class("suggested-action");
   stop.add_css_class("destructive-action");
+  transport.append(previous);
   transport.append(pause);
+  transport.append(next);
   transport.append(stop);
   inner.append(&transport);
+  adjacent_status.set_xalign(0.0);
+  inner.append(adjacent_status);
   let audio_row = gtk::Box::new(gtk::Orientation::Horizontal, 12);
   audio_row.set_halign(gtk::Align::Center);
   let volume_icon = gtk::Image::from_icon_name("audio-volume-medium-symbolic");
@@ -4381,132 +7697,274 @@ fn now_playing_page(widgets: NowPlayingPageWidgets<'_>) -> gtk::Widget {
   audio_row.append(volume);
   audio_row.append(mute);
   inner.append(&audio_row);
+  let tracks = gtk::Grid::builder()
+    .column_spacing(12)
+    .row_spacing(12)
+    .build();
+  let audio_label = gtk::Label::new(Some("Audio"));
+  audio_label.set_xalign(0.0);
+  tracks.attach(&audio_label, 0, 0, 1, 1);
+  tracks.attach(audio_tracks, 1, 0, 1, 1);
+  let subtitle_label = gtk::Label::new(Some("Subtitles"));
+  subtitle_label.set_xalign(0.0);
+  tracks.attach(&subtitle_label, 0, 1, 1, 1);
+  tracks.attach(subtitle_tracks, 1, 1, 1, 1);
+  inner.append(&tracks);
+  track_status.set_xalign(0.0);
+  inner.append(track_status);
   panel.append(&inner);
   page.append(&title);
+  page.append(artwork);
   page.append(&panel);
   page.upcast()
 }
 
+fn diagnostics_page(
+  count: &gtk::Label,
+  scroll: &gtk::ScrolledWindow,
+  empty: &gtk::Label,
+  status: &gtk::Label,
+  copy: &gtk::Button,
+  clear: &gtk::Button,
+) -> adw::PreferencesPage {
+  let page = adw::PreferencesPage::new();
+  page.set_title("Diagnostics");
+  page.set_icon_name(Some("dialog-information-symbolic"));
+  let group = adw::PreferencesGroup::new();
+  group.set_title("Sanitized runtime events");
+  group.set_description(Some(
+    "Connection, authentication, playback, remote-control, artwork, and configuration events useful for support.",
+  ));
+  let content = gtk::Box::new(gtk::Orientation::Vertical, 12);
+  content.append(count);
+  content.append(empty);
+  content.append(scroll);
+  content.append(status);
+  let actions = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+  actions.set_halign(gtk::Align::End);
+  actions.append(copy);
+  actions.append(clear);
+  content.append(&actions);
+  group.add(&content);
+  page.add(&group);
+  page
+}
+
+struct SettingsPageWidgets<'a> {
+  config_status: &'a gtk::Label,
+  server_url: &'a gtk::Label,
+  user: &'a gtk::Label,
+  remote_status: &'a gtk::Label,
+  disconnect: &'a gtk::Button,
+  reconnect: &'a gtk::Button,
+  refresh_status: &'a gtk::Button,
+  saved_profile: &'a gtk::Label,
+  storage_status: &'a gtk::Label,
+  forget_saved_profile: &'a gtk::Button,
+  mpv_path: &'a adw::EntryRow,
+  detect_mpv: &'a gtk::Button,
+  mpv_status: &'a gtk::Label,
+  mpv_args: &'a adw::EntryRow,
+  target_name: &'a adw::EntryRow,
+  subtitle_languages: &'a gtk::Box,
+  subtitle_preset: &'a gtk::DropDown,
+  subtitle_preset_add: &'a gtk::Button,
+  subtitle_custom: &'a adw::EntryRow,
+  subtitle_custom_add: &'a gtk::Button,
+  subtitle_clear: &'a gtk::Button,
+  key_next: &'a adw::EntryRow,
+  key_previous: &'a adw::EntryRow,
+  key_intro: &'a adw::EntryRow,
+  image_cache: &'a adw::SwitchRow,
+  image_cache_stats: &'a gtk::Label,
+  image_cache_clear: &'a gtk::Button,
+  intro_skip: &'a adw::PreferencesGroup,
+}
+
 fn settings_page(
-  saved_profile: &gtk::Label,
-  storage_status: &gtk::Label,
-  disconnect: &gtk::Button,
-  forget_saved_profile: &gtk::Button,
-) -> gtk::Widget {
-  let page = gtk::Box::builder()
-    .orientation(gtk::Orientation::Vertical)
-    .spacing(20)
-    .margin_top(24)
-    .margin_bottom(24)
-    .margin_start(24)
-    .margin_end(24)
-    .build();
-  let title = gtk::Label::new(Some("Settings"));
-  title.add_css_class("title-1");
-  title.set_xalign(0.0);
-  let session_group = gtk::Box::builder()
-    .orientation(gtk::Orientation::Vertical)
-    .spacing(12)
-    .build();
-  session_group.add_css_class("card");
-  let group_inner = gtk::Box::builder()
-    .orientation(gtk::Orientation::Vertical)
-    .spacing(12)
-    .margin_top(16)
-    .margin_bottom(16)
-    .margin_start(20)
-    .margin_end(20)
-    .build();
-  let session_heading = gtk::Label::new(Some("Session"));
-  session_heading.add_css_class("heading");
-  session_heading.set_xalign(0.0);
-  group_inner.append(&session_heading);
-  let copy = dim_label(
-    "Disconnect this session here or from the header bar. Saved sign-ins remain available until you forget them.",
-  );
-  copy.set_wrap(true);
-  group_inner.append(&copy);
-  group_inner.append(disconnect);
-  session_group.append(&group_inner);
-  page.append(&title);
-  page.append(&session_group);
-  let saved_group = gtk::Box::builder()
-    .orientation(gtk::Orientation::Vertical)
-    .spacing(12)
-    .build();
-  saved_group.add_css_class("card");
-  let saved_inner = gtk::Box::builder()
-    .orientation(gtk::Orientation::Vertical)
-    .spacing(12)
-    .margin_top(16)
-    .margin_bottom(16)
-    .margin_start(20)
-    .margin_end(20)
-    .build();
-  let saved_heading = gtk::Label::new(Some("Saved sign-in"));
-  saved_heading.add_css_class("heading");
-  saved_heading.set_xalign(0.0);
-  saved_inner.append(&saved_heading);
-  saved_inner.append(saved_profile);
-  saved_inner.append(storage_status);
+  widgets: SettingsPageWidgets<'_>,
+  diagnostics: &adw::PreferencesPage,
+) -> adw::PreferencesDialog {
+  let dialog = adw::PreferencesDialog::new();
+  dialog.set_title("Preferences");
+  let page = adw::PreferencesPage::new();
+  page.set_title("JellyPilot");
+  let SettingsPageWidgets {
+    config_status,
+    server_url,
+    user,
+    remote_status,
+    disconnect,
+    reconnect,
+    refresh_status,
+    saved_profile,
+    storage_status,
+    forget_saved_profile,
+    mpv_path,
+    detect_mpv,
+    mpv_status,
+    mpv_args,
+    target_name,
+    subtitle_languages,
+    subtitle_preset,
+    subtitle_preset_add,
+    subtitle_custom,
+    subtitle_custom_add,
+    subtitle_clear,
+    key_next,
+    key_previous,
+    key_intro,
+    image_cache,
+    image_cache_stats,
+    image_cache_clear,
+    intro_skip,
+  } = widgets;
+
+  let status_group = adw::PreferencesGroup::new();
+  status_group.add(config_status);
+  page.add(&status_group);
+
+  let connection_group = adw::PreferencesGroup::new();
+  connection_group.set_title("Connection");
+  connection_group.set_description(Some(
+    "Live authenticated-session and Remote Control status.",
+  ));
+  connection_group.add(server_url);
+  connection_group.add(user);
+  connection_group.add(remote_status);
+  let connection_actions = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+  connection_actions.append(disconnect);
+  connection_actions.append(reconnect);
+  connection_actions.append(refresh_status);
+  connection_group.add(&connection_actions);
+  page.add(&connection_group);
+
+  let player_group = adw::PreferencesGroup::new();
+  player_group.set_title("Player");
+  player_group.set_description(Some(
+    "MPV path, advanced arguments, and subtitle priorities apply on the next MPV start. Playback Target name applies to newly established sessions.",
+  ));
+  player_group.add(mpv_path);
+  let detect_row = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+  detect_row.append(detect_mpv);
+  detect_row.append(mpv_status);
+  player_group.add(&detect_row);
+  player_group.add(mpv_args);
+  player_group.add(target_name);
+  page.add(&player_group);
+
+  let subtitles_group = adw::PreferencesGroup::new();
+  subtitles_group.set_title("Subtitles");
+  subtitles_group.set_description(Some(
+    "Ordered MPV subtitle-language priority for newly started playback.",
+  ));
+  subtitles_group.add(subtitle_languages);
+  let preset_row = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+  preset_row.append(subtitle_preset);
+  preset_row.append(subtitle_preset_add);
+  subtitles_group.add(&preset_row);
+  subtitles_group.add(subtitle_custom);
+  let subtitle_actions = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+  subtitle_actions.append(subtitle_custom_add);
+  subtitle_actions.append(subtitle_clear);
+  subtitles_group.add(&subtitle_actions);
+  page.add(&subtitles_group);
+
+  let shortcuts_group = adw::PreferencesGroup::new();
+  shortcuts_group.set_title("Shortcuts");
+  shortcuts_group.set_description(Some(
+    "JellyPilot MPV bindings are saved immediately and apply when MPV (re)starts.",
+  ));
+  shortcuts_group.add(key_next);
+  shortcuts_group.add(key_previous);
+  shortcuts_group.add(key_intro);
+  page.add(&shortcuts_group);
+
+  let library_group = adw::PreferencesGroup::new();
+  library_group.set_title("Library");
+  library_group.set_description(Some(
+    "The disk cache is best-effort acceleration for original Library Image bytes, not an offline artwork source. Capacity is bounded to 512 MiB.",
+  ));
+  library_group.add(image_cache);
+  library_group.add(image_cache_stats);
+  image_cache_clear.set_halign(gtk::Align::Start);
+  library_group.add(image_cache_clear);
+  page.add(&library_group);
+
+  page.add(intro_skip);
+
+  let session_group = adw::PreferencesGroup::new();
+  session_group.set_title("Session");
+  session_group.set_description(Some(
+    "Saved sign-ins remain available until they are forgotten.",
+  ));
+  session_group.add(saved_profile);
+  session_group.add(storage_status);
   forget_saved_profile.set_halign(gtk::Align::Start);
-  saved_inner.append(forget_saved_profile);
-  saved_group.append(&saved_inner);
-  page.append(&saved_group);
-  let migration_group = gtk::Box::builder()
-    .orientation(gtk::Orientation::Vertical)
-    .spacing(12)
-    .build();
-  migration_group.add_css_class("card");
-  let migration_inner = gtk::Box::builder()
-    .orientation(gtk::Orientation::Vertical)
-    .spacing(8)
-    .margin_top(16)
-    .margin_bottom(16)
-    .margin_start(20)
-    .margin_end(20)
-    .build();
-  let migration_heading = gtk::Label::new(Some("Migration Status"));
-  migration_heading.add_css_class("heading");
-  migration_heading.set_xalign(0.0);
-  migration_inner.append(&migration_heading);
-  let features = [
-    ("Password sign-in", true),
-    ("Video Home and library browsing", true),
-    ("Search", true),
-    ("Item details and seasons", true),
-    ("External MPV playback", true),
-    ("Quick Connect", true),
-    ("Saved profiles", true),
-    ("Embedded web playback", false),
-  ];
-  for (feature, available) in features {
-    let row = gtk::Box::new(gtk::Orientation::Horizontal, 8);
-    let icon = gtk::Image::from_icon_name(if available {
-      "emblem-ok-symbolic"
-    } else {
-      "action-unavailable-symbolic"
-    });
-    icon.set_pixel_size(16);
-    if !available {
-      icon.add_css_class("dim-label");
-    }
-    row.append(&icon);
-    let label = gtk::Label::new(Some(feature));
-    label.set_xalign(0.0);
-    if !available {
-      label.add_css_class("dim-label");
-    }
-    row.append(&label);
-    migration_inner.append(&row);
+  session_group.add(forget_saved_profile);
+  page.add(&session_group);
+
+  dialog.add(&page);
+  dialog.add(diagnostics);
+  dialog
+}
+
+fn detail_metadata_section(
+  metadata: &VideoDetailMetadata,
+  genres: &[String],
+) -> Option<gtk::Widget> {
+  let rating = match (&metadata.community_rating, &metadata.official_rating) {
+    (Some(community), Some(official)) => format!("Community rating {community:.1} · {official}"),
+    (Some(community), None) => format!("Community rating {community:.1}"),
+    (None, Some(official)) => official.clone(),
+    (None, None) => String::new(),
+  };
+  if rating.is_empty()
+    && genres.is_empty()
+    && metadata.creators.is_empty()
+    && metadata.cast.is_empty()
+  {
+    return None;
   }
-  migration_group.append(&migration_inner);
-  page.append(&migration_group);
-  gtk::ScrolledWindow::builder()
-    .child(&page)
-    .vexpand(true)
-    .build()
-    .upcast()
+  let group = adw::PreferencesGroup::new();
+  group.set_title("Details");
+  if !rating.is_empty() {
+    group.add(&dim_label(&rating));
+  }
+  if !genres.is_empty() {
+    group.add(&dim_label(&format!("Genres: {}", genres.join(", "))));
+  }
+  if !metadata.creators.is_empty() {
+    group.add(&dim_label(&format!(
+      "Creators: {}",
+      metadata.creators.join(", ")
+    )));
+  }
+  if !metadata.cast.is_empty() {
+    let cast = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+    for name in metadata.cast.iter().take(12) {
+      let label = gtk::Label::new(Some(name));
+      label.add_css_class("caption");
+      label.set_max_width_chars(18);
+      label.set_ellipsize(gtk::pango::EllipsizeMode::End);
+      cast.append(&label);
+    }
+    let cast_scroll = gtk::ScrolledWindow::builder()
+      .child(&cast)
+      .hscrollbar_policy(gtk::PolicyType::Automatic)
+      .vscrollbar_policy(gtk::PolicyType::Never)
+      .build();
+    group.add(&cast_scroll);
+  }
+  Some(group.upcast())
+}
+
+fn stream_metadata_status() -> gtk::Widget {
+  state_view(
+    "Audio and subtitles",
+    "Stream metadata is available when playback starts; no stream details were requested yet.",
+    "audio-x-generic-symbolic",
+  )
 }
 
 fn scrolled_page(title: &str, subtitle: &str, content: &gtk::Box) -> gtk::Widget {
@@ -4528,44 +7986,35 @@ fn scrolled_page(title: &str, subtitle: &str, content: &gtk::Box) -> gtk::Widget
     page.append(&subtitle);
   }
   page.append(content);
+  let clamp = adw::Clamp::new();
+  clamp.set_maximum_size(960);
+  clamp.set_child(Some(&page));
   let scroll = gtk::ScrolledWindow::builder()
-    .child(&page)
+    .child(&clamp)
     .vexpand(true)
     .build();
   scroll.upcast()
 }
 
 fn state_view(title: &str, copy: &str, icon_name: &str) -> gtk::Widget {
-  let state = gtk::Box::builder()
-    .orientation(gtk::Orientation::Horizontal)
-    .spacing(12)
-    .build();
-  state.set_accessible_role(gtk::AccessibleRole::Status);
-  let icon = gtk::Image::from_icon_name(icon_name);
-  icon.set_pixel_size(24);
-  let text = gtk::Box::new(gtk::Orientation::Vertical, 4);
-  let title = gtk::Label::new(Some(title));
-  title.add_css_class("heading");
-  title.set_xalign(0.0);
-  let copy = dim_label(copy);
-  copy.set_xalign(0.0);
-  copy.set_wrap(true);
-  text.append(&title);
-  text.append(&copy);
-  state.append(&icon);
-  state.append(&text);
-  state.upcast()
+  let status = adw::StatusPage::new();
+  status.set_title(title);
+  status.set_description(Some(copy));
+  status.set_icon_name(Some(icon_name));
+  status.set_vexpand(true);
+  status.upcast()
 }
 
 fn loading_view(copy: &str) -> gtk::Widget {
-  let row = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+  let column = gtk::Box::new(gtk::Orientation::Vertical, 10);
+  column.set_halign(gtk::Align::Center);
+  column.set_valign(gtk::Align::Center);
+  column.set_accessible_role(gtk::AccessibleRole::Status);
   let spinner = gtk::Spinner::new();
   spinner.start();
-  let label = dim_label(copy);
-  row.set_accessible_role(gtk::AccessibleRole::Status);
-  row.append(&spinner);
-  row.append(&label);
-  row.upcast()
+  column.append(&spinner);
+  column.append(&dim_label(copy));
+  column.upcast()
 }
 
 fn navigation_button(label: &str, icon: &str) -> gtk::ToggleButton {
@@ -4596,23 +8045,6 @@ fn playback_time_label() -> gtk::Label {
   label
 }
 
-fn form_entry(placeholder: &str, purpose: gtk::InputPurpose) -> gtk::Entry {
-  let entry = gtk::Entry::new();
-  entry.set_placeholder_text(Some(placeholder));
-  entry.set_input_purpose(purpose);
-  entry.set_hexpand(true);
-  entry.set_width_chars(1);
-  entry
-}
-
-fn add_form_row<W: IsA<gtk::Widget>>(grid: &gtk::Grid, row: i32, label: &str, widget: &W) {
-  let label = gtk::Label::with_mnemonic(&format!("_{label}"));
-  label.set_xalign(1.0);
-  label.set_mnemonic_widget(Some(widget));
-  grid.attach(&label, 0, row, 1, 1);
-  grid.attach(widget, 1, row, 1, 1);
-}
-
 fn clear_box(container: &gtk::Box) {
   while let Some(child) = container.first_child() {
     container.remove(&child);
@@ -4640,6 +8072,21 @@ where
   receiver.await.map_err(|_| ())
 }
 
+#[allow(deprecated)]
+fn install_media_css() {
+  let Some(display) = gtk::gdk::Display::default() else {
+    return;
+  };
+  let provider = gtk::CssProvider::new();
+  provider.load_from_data(
+    ".jellypilot-rounded { border-radius: 14px; }\n.jellypilot-poster { border-radius: 10px; }",
+  );
+  gtk::StyleContext::add_provider_for_display(
+    &display,
+    &provider,
+    gtk::STYLE_PROVIDER_PRIORITY_APPLICATION,
+  );
+}
 async fn quick_connect_workflow(
   client: Arc<JellyfinClient>,
   server_url: String,
@@ -4918,6 +8365,343 @@ fn playback_notice(notice: Option<String>, warnings: &[PlaybackWarning]) -> Opti
   }
 }
 
+fn shortcut_binding_collision(
+  settings: &LoginPrefill,
+  kind: ShortcutKind,
+  candidate: &str,
+) -> bool {
+  let other_bindings = match kind {
+    ShortcutKind::Next => [
+      settings.key_previous_episode.as_str(),
+      settings.key_intro_skip.as_str(),
+    ],
+    ShortcutKind::Previous => [
+      settings.key_next_episode.as_str(),
+      settings.key_intro_skip.as_str(),
+    ],
+    ShortcutKind::IntroSkip => [
+      settings.key_next_episode.as_str(),
+      settings.key_previous_episode.as_str(),
+    ],
+  };
+  other_bindings
+    .iter()
+    .any(|binding| binding.trim().eq_ignore_ascii_case(candidate.trim()))
+}
+
+fn non_empty_setting(value: String) -> Option<String> {
+  let value = value.trim();
+  (!value.is_empty()).then(|| value.to_owned())
+}
+
+fn parse_mpv_args(value: &str) -> Vec<String> {
+  value.split_whitespace().map(str::to_owned).collect()
+}
+
+fn valid_subtitle_language(value: &str) -> bool {
+  !value.is_empty()
+    && value.len() <= 16
+    && value
+      .chars()
+      .all(|character| character.is_ascii_alphanumeric() || matches!(character, '-' | '_'))
+}
+
+fn configured_client(settings: &LoginPrefill) -> Arc<JellyfinClient> {
+  let client = Arc::new(JellyfinClient::new());
+  if let Some(name) = settings
+    .playback_target_name
+    .as_deref()
+    .map(str::trim)
+    .filter(|name| !name.is_empty())
+  {
+    client.set_device_name(name.to_owned());
+  }
+  client
+}
+
+fn configured_mpv_args(settings: &LoginPrefill) -> Vec<String> {
+  let mut args = settings.mpv_args.clone();
+  if !settings.subtitle_languages.is_empty() && !has_mpv_option(&args, "slang") {
+    args.push(format!("--slang={}", settings.subtitle_languages.join(",")));
+  }
+  args
+}
+
+fn playback_controller_config(settings: &LoginPrefill) -> PlaybackControllerConfig {
+  let mut playback =
+    PlaybackControllerConfig::default().with_extra_args(configured_mpv_args(settings));
+  if let Some(path) = settings
+    .mpv_path
+    .as_deref()
+    .map(str::trim)
+    .filter(|path| !path.is_empty())
+  {
+    playback = playback.with_mpv_path(PathBuf::from(path));
+  }
+  playback
+}
+
+const fn config_intro_mode(selected: u32) -> config::IntroMode {
+  match selected {
+    1 => config::IntroMode::Manual,
+    2 => config::IntroMode::Off,
+    _ => config::IntroMode::Automatic,
+  }
+}
+
+const fn intro_mode_selection(mode: config::IntroMode) -> u32 {
+  match mode {
+    config::IntroMode::Automatic => 0,
+    config::IntroMode::Manual => 1,
+    config::IntroMode::Off => 2,
+  }
+}
+
+const fn session_intro_mode(mode: config::IntroMode) -> IntroSkipMode {
+  match mode {
+    config::IntroMode::Automatic => IntroSkipMode::Automatic,
+    config::IntroMode::Manual => IntroSkipMode::Manual,
+    config::IntroMode::Off => IntroSkipMode::Off,
+  }
+}
+
+fn should_fetch_intro_ranges(
+  mode: config::IntroMode,
+  capability_available: bool,
+  item_type: &str,
+) -> bool {
+  mode != config::IntroMode::Off && capability_available && item_type == "Episode"
+}
+
+fn evaluate_intro_ui_action(
+  position_seconds: f64,
+  ranges: &mut [IntroSkipRange],
+  mode: IntroSkipMode,
+  manual_requested: bool,
+  active_prompt_range: Option<usize>,
+) -> Option<IntroUiAction> {
+  let range_index = ranges.iter().position(|range| {
+    !range.skipped
+      && position_seconds.is_finite()
+      && position_seconds >= range.start_seconds
+      && position_seconds < range.end_seconds
+  })?;
+  let range = std::slice::from_mut(&mut ranges[range_index]);
+  if manual_requested {
+    if mode != IntroSkipMode::Manual || active_prompt_range != Some(range_index) {
+      return None;
+    }
+    return evaluate_manual_skip(position_seconds, range).map(|decision| {
+      IntroUiAction::ManualSkip {
+        range_index,
+        kind: decision.kind,
+        seek_target: decision.seek_target,
+      }
+    });
+  }
+  evaluate_intro_skip(position_seconds, range, mode).map(|action| match action {
+    IntroSkipAction::Seek(target) => IntroUiAction::Seek {
+      range_index,
+      target,
+    },
+    IntroSkipAction::ShowPrompt(kind) => IntroUiAction::Prompt { range_index, kind },
+  })
+}
+
+fn active_intro_prompt_range(
+  prompt: &mut Option<ActiveIntroPrompt>,
+  now: Instant,
+) -> Option<usize> {
+  if prompt
+    .as_ref()
+    .is_some_and(|prompt| now < prompt.expires_at)
+  {
+    prompt.as_ref().map(|prompt| prompt.range_index)
+  } else {
+    *prompt = None;
+    None
+  }
+}
+
+fn disable_intro_skip(state: &mut IntroSkipState) {
+  state.sequence = state.sequence.wrapping_add(1);
+  state.mode = IntroSkipMode::Off;
+  state.ranges.clear();
+  state.active_prompt = None;
+}
+
+const fn intro_skip_label(kind: IntroSkipKind) -> &'static str {
+  match kind {
+    IntroSkipKind::Introduction => "Intro",
+    IntroSkipKind::Credits => "Credits",
+  }
+}
+
+fn manual_intro_skip_requested(messages: &[String]) -> bool {
+  messages
+    .iter()
+    .any(|message| message == "jellypilot-skip-intro")
+}
+
+fn adjacent_direction_from_client_messages(messages: &[String]) -> Option<AdjacentDirection> {
+  messages.iter().find_map(|message| match message.as_str() {
+    "jellypilot-next" => Some(AdjacentDirection::Next),
+    "jellypilot-prev" => Some(AdjacentDirection::Previous),
+    _ => None,
+  })
+}
+
+fn auxiliary_settlement_is_current(
+  operation_session: u64,
+  identity: &PlaybackIdentity,
+  current_session: u64,
+  current_identity: Option<&PlaybackIdentity>,
+) -> bool {
+  operation_session == current_session
+    && identity.session == operation_session
+    && current_identity == Some(identity)
+}
+
+fn selected_track_id(tracks: &[TrackInfo], kind: TrackKind, selected: u32) -> Option<Option<i64>> {
+  let track_type = match kind {
+    TrackKind::Audio => "audio",
+    TrackKind::Subtitle => "sub",
+  };
+  if kind == TrackKind::Subtitle && selected == 0 {
+    return Some(None);
+  }
+  let index = if kind == TrackKind::Subtitle {
+    selected.checked_sub(1)?
+  } else {
+    selected
+  };
+  tracks
+    .iter()
+    .filter(|track| track.track_type == track_type)
+    .nth(index as usize)
+    .map(|track| Some(track.id))
+}
+
+fn track_label(track: &TrackInfo) -> String {
+  match (track.title.as_deref(), track.language.as_deref()) {
+    (Some(title), Some(language)) if !title.eq_ignore_ascii_case(language) => {
+      format!("{title} · {language}")
+    }
+    (Some(title), _) => title.to_owned(),
+    (None, Some(language)) => language.to_owned(),
+    (None, None) => format!("Track {}", track.id),
+  }
+}
+
+fn string_list(labels: &[String]) -> gtk::StringList {
+  let model = gtk::StringList::new(&[]);
+  for label in labels {
+    model.append(label);
+  }
+  model
+}
+
+fn adjacent_availability(
+  direction: AdjacentDirection,
+  result: Result<Option<MediaItem>, String>,
+) -> AdjacentAvailability {
+  match result {
+    Ok(Some(item)) => AdjacentAvailability::Available(item),
+    Ok(None) => AdjacentAvailability::Unavailable(
+      match direction {
+        AdjacentDirection::Previous => "No previous episode is available.",
+        AdjacentDirection::Next => "No next episode is available.",
+      }
+      .to_owned(),
+    ),
+    Err(message) => AdjacentAvailability::Unavailable(message),
+  }
+}
+
+fn adjacent_control_reason(
+  availability: Option<&AdjacentAvailability>,
+  direction: AdjacentDirection,
+) -> &str {
+  match availability {
+    Some(AdjacentAvailability::Loading) => "Checking adjacent episodes…",
+    Some(AdjacentAvailability::Available(_)) => match direction {
+      AdjacentDirection::Previous => "Play previous episode",
+      AdjacentDirection::Next => "Play next episode",
+    },
+    Some(AdjacentAvailability::Unavailable(message)) => message,
+    Some(AdjacentAvailability::Idle) | None => {
+      "Episode navigation requires active episode playback."
+    }
+  }
+}
+
+fn adjacent_status(
+  previous: Option<&AdjacentAvailability>,
+  next: Option<&AdjacentAvailability>,
+) -> Option<String> {
+  if previous.is_some_and(|value| matches!(value, AdjacentAvailability::Loading))
+    || next.is_some_and(|value| matches!(value, AdjacentAvailability::Loading))
+  {
+    return Some("Checking for adjacent episodes…".to_owned());
+  }
+  let previous_reason = match previous {
+    Some(AdjacentAvailability::Unavailable(message)) => Some(message.as_str()),
+    Some(AdjacentAvailability::Idle) | None => {
+      Some("Episode navigation requires active episode playback.")
+    }
+    _ => None,
+  };
+  let next_reason = match next {
+    Some(AdjacentAvailability::Unavailable(message)) => Some(message.as_str()),
+    Some(AdjacentAvailability::Idle) | None => {
+      Some("Episode navigation requires active episode playback.")
+    }
+    _ => None,
+  };
+  match (previous_reason, next_reason) {
+    (None, None) => None,
+    (Some(previous), Some(next)) if previous == next => Some(previous.to_owned()),
+    (Some(previous), Some(next)) => Some(format!("{previous} {next}")),
+    (Some(reason), None) | (None, Some(reason)) => Some(reason.to_owned()),
+  }
+}
+
+fn media_item_from_library(item: &VideoLibraryItem) -> MediaItem {
+  MediaItem {
+    id: item.id.clone(),
+    name: item.name.clone(),
+    item_type: item.item_type.clone(),
+    series_id: item.series_id.clone(),
+    series_name: item.series_name.clone(),
+    season_name: None,
+    index_number: item.episode_number,
+    parent_index_number: item.season_number,
+    run_time_ticks: runtime_seconds_to_ticks(item.runtime_seconds),
+    overview: item.overview.clone(),
+  }
+}
+
+fn media_item_from_detail(item: &VideoItemDetail) -> MediaItem {
+  MediaItem {
+    id: item.id.clone(),
+    name: item.name.clone(),
+    item_type: item.item_type.clone(),
+    series_id: item.series_id.clone(),
+    series_name: item.series_name.clone(),
+    season_name: None,
+    index_number: item.episode_number,
+    parent_index_number: item.season_number,
+    run_time_ticks: runtime_seconds_to_ticks(item.runtime_seconds),
+    overview: item.overview.clone(),
+  }
+}
+
+fn runtime_seconds_to_ticks(seconds: Option<f64>) -> Option<i64> {
+  seconds
+    .filter(|seconds| seconds.is_finite() && *seconds >= 0.0)
+    .map(|seconds| (seconds * 10_000_000.0).round() as i64)
+}
+
 fn playback_failure(context: &str, error: PlaybackError) -> PlaybackCommandFailure {
   PlaybackCommandFailure {
     message: format!("{context}: {error}."),
@@ -4933,6 +8717,31 @@ fn playback_start_failure(error: PlaybackError) -> PlaybackCommandFailure {
       PlaybackError::MpvStartFailed | PlaybackError::MpvLoadFailed
     ),
   }
+}
+
+fn format_byte_count(bytes: u64) -> String {
+  const KIB: f64 = 1024.0;
+  const MIB: f64 = KIB * 1024.0;
+  const GIB: f64 = MIB * 1024.0;
+  let bytes = bytes as f64;
+  if bytes >= GIB {
+    format!("{:.1} GiB", bytes / GIB)
+  } else if bytes >= MIB {
+    format!("{:.1} MiB", bytes / MIB)
+  } else if bytes >= KIB {
+    format!("{:.1} KiB", bytes / KIB)
+  } else {
+    format!("{bytes:.0} B")
+  }
+}
+
+fn format_diagnostic_time(timestamp_seconds: u64) -> String {
+  i64::try_from(timestamp_seconds)
+    .ok()
+    .and_then(|timestamp| gtk::glib::DateTime::from_unix_utc(timestamp).ok())
+    .and_then(|timestamp| timestamp.format("%Y-%m-%d %H:%M:%S UTC").ok())
+    .map(|timestamp| timestamp.to_string())
+    .unwrap_or_else(|| format!("{timestamp_seconds} UTC"))
 }
 
 fn format_duration(seconds: f64) -> String {
@@ -5162,6 +8971,21 @@ mod tests {
       PlaybackShutdownDisposition::Detached,
     ));
   }
+  #[test]
+  fn remote_volume_accepts_wire_string_and_number_forms() {
+    assert_eq!(
+      remote_volume_value(Some(&serde_json::json!("50"))),
+      Some(50.0)
+    );
+    assert_eq!(
+      remote_volume_value(Some(&serde_json::json!(125))),
+      Some(100.0)
+    );
+    assert_eq!(
+      remote_volume_value(Some(&serde_json::json!("invalid"))),
+      None
+    );
+  }
 
   #[test]
   fn disconnect_requires_cleanup_for_owned_or_in_flight_controller() {
@@ -5185,5 +9009,332 @@ mod tests {
       stale_playback_disposition(true, ConnectionPhase::Connected, false),
       PlaybackShutdownDisposition::Quit,
     );
+  }
+  #[test]
+  fn track_selection_maps_filtered_rows_and_subtitle_off() {
+    let tracks = vec![
+      TrackInfo {
+        id: 3,
+        track_type: "audio".to_owned(),
+        title: Some("English".to_owned()),
+        language: Some("eng".to_owned()),
+        selected: true,
+      },
+      TrackInfo {
+        id: 8,
+        track_type: "sub".to_owned(),
+        title: Some("Spanish".to_owned()),
+        language: Some("spa".to_owned()),
+        selected: false,
+      },
+    ];
+
+    assert_eq!(
+      selected_track_id(&tracks, TrackKind::Audio, 0),
+      Some(Some(3))
+    );
+    assert_eq!(
+      selected_track_id(&tracks, TrackKind::Subtitle, 0),
+      Some(None)
+    );
+    assert_eq!(
+      selected_track_id(&tracks, TrackKind::Subtitle, 1),
+      Some(Some(8))
+    );
+    assert_eq!(selected_track_id(&tracks, TrackKind::Audio, 1), None);
+  }
+
+  #[test]
+  fn auxiliary_settlement_requires_the_current_session_and_playback_identity() {
+    let current = PlaybackIdentity {
+      session: 4,
+      sequence: 9,
+      item_id: "episode-3".to_owned(),
+    };
+    let replaced = PlaybackIdentity {
+      session: 4,
+      sequence: 10,
+      item_id: "episode-3".to_owned(),
+    };
+
+    assert!(auxiliary_settlement_is_current(
+      4,
+      &current,
+      4,
+      Some(&current),
+    ));
+    assert!(!auxiliary_settlement_is_current(
+      4,
+      &current,
+      5,
+      Some(&current),
+    ));
+    assert!(!auxiliary_settlement_is_current(
+      4,
+      &current,
+      4,
+      Some(&replaced),
+    ));
+  }
+  #[test]
+  fn remote_lifecycle_transitions_remain_honest() {
+    assert_eq!(
+      remote_state_after_event(
+        RemoteControlState::Connecting,
+        &jellypilot_session::JellyfinWebSocketEvent::Connected,
+      ),
+      RemoteControlState::Available
+    );
+    assert_eq!(
+      remote_state_after_event(
+        RemoteControlState::Available,
+        &jellypilot_session::JellyfinWebSocketEvent::ConnectionLost,
+      ),
+      RemoteControlState::Lost
+    );
+  }
+  fn intro_range(kind: IntroSkipKind, start_seconds: f64, end_seconds: f64) -> IntroSkipRange {
+    IntroSkipRange {
+      kind,
+      start_seconds,
+      end_seconds,
+      notified: false,
+      skipped: false,
+    }
+  }
+
+  #[test]
+  fn intro_range_fetch_requires_enabled_mode_capability_and_episode() {
+    assert!(should_fetch_intro_ranges(
+      config::IntroMode::Automatic,
+      true,
+      "Episode",
+    ));
+    assert!(!should_fetch_intro_ranges(
+      config::IntroMode::Off,
+      true,
+      "Episode",
+    ));
+    assert!(!should_fetch_intro_ranges(
+      config::IntroMode::Manual,
+      false,
+      "Episode",
+    ));
+    assert!(!should_fetch_intro_ranges(
+      config::IntroMode::Manual,
+      true,
+      "Movie",
+    ));
+  }
+
+  #[test]
+  fn disabling_intro_skip_purges_ranges_prompt_and_invalidates_fetch() {
+    let mut state = IntroSkipState {
+      identity: None,
+      sequence: 7,
+      mode: IntroSkipMode::Manual,
+      ranges: vec![intro_range(IntroSkipKind::Introduction, 10.0, 30.0)],
+      active_prompt: Some(ActiveIntroPrompt {
+        range_index: 0,
+        expires_at: Instant::now() + Duration::from_secs(3),
+      }),
+    };
+
+    disable_intro_skip(&mut state);
+
+    assert_eq!(state.mode, IntroSkipMode::Off);
+    assert!(state.ranges.is_empty());
+    assert!(state.active_prompt.is_none());
+    assert_eq!(state.sequence, 8);
+  }
+
+  #[test]
+  fn automatic_intro_skip_starts_at_the_exact_boundary_and_applies_each_range_once() {
+    let mut ranges = [
+      intro_range(IntroSkipKind::Introduction, 10.0, 30.0),
+      intro_range(IntroSkipKind::Credits, 90.0, 120.0),
+    ];
+
+    assert_eq!(
+      evaluate_intro_ui_action(9.5, &mut ranges, IntroSkipMode::Automatic, false, None),
+      None
+    );
+    assert_eq!(
+      evaluate_intro_ui_action(10.0, &mut ranges, IntroSkipMode::Automatic, false, None),
+      Some(IntroUiAction::Seek {
+        range_index: 0,
+        target: 30.0,
+      })
+    );
+    assert_eq!(
+      evaluate_intro_ui_action(10.0, &mut ranges, IntroSkipMode::Automatic, false, None),
+      None
+    );
+    assert_eq!(
+      evaluate_intro_ui_action(90.0, &mut ranges, IntroSkipMode::Automatic, false, None),
+      Some(IntroUiAction::Seek {
+        range_index: 1,
+        target: 120.0,
+      })
+    );
+  }
+
+  #[test]
+  fn seeking_back_does_not_reskip_an_automatic_range() {
+    let mut ranges = [intro_range(IntroSkipKind::Introduction, 10.0, 30.0)];
+
+    assert_eq!(
+      evaluate_intro_ui_action(10.0, &mut ranges, IntroSkipMode::Automatic, false, None),
+      Some(IntroUiAction::Seek {
+        range_index: 0,
+        target: 30.0,
+      })
+    );
+    assert_eq!(
+      evaluate_intro_ui_action(5.0, &mut ranges, IntroSkipMode::Automatic, false, None),
+      None
+    );
+    assert_eq!(
+      evaluate_intro_ui_action(10.0, &mut ranges, IntroSkipMode::Automatic, false, None),
+      None
+    );
+  }
+
+  #[test]
+  fn manual_intro_shortcut_requires_a_live_displayed_prompt_and_skips_once() {
+    let mut ranges = [intro_range(IntroSkipKind::Introduction, 10.0, 30.0)];
+
+    assert_eq!(
+      evaluate_intro_ui_action(10.0, &mut ranges, IntroSkipMode::Manual, false, None),
+      Some(IntroUiAction::Prompt {
+        range_index: 0,
+        kind: IntroSkipKind::Introduction,
+      })
+    );
+    let messages = vec!["jellypilot-skip-intro".to_owned()];
+    assert!(manual_intro_skip_requested(&messages));
+    assert_eq!(
+      evaluate_intro_ui_action(
+        10.0,
+        &mut ranges,
+        IntroSkipMode::Manual,
+        manual_intro_skip_requested(&messages),
+        None,
+      ),
+      None
+    );
+    let now = Instant::now();
+    let mut prompt = Some(ActiveIntroPrompt {
+      range_index: 0,
+      expires_at: now + Duration::from_secs(3),
+    });
+    let active_prompt = active_intro_prompt_range(&mut prompt, now);
+    assert_eq!(
+      evaluate_intro_ui_action(
+        10.0,
+        &mut ranges,
+        IntroSkipMode::Manual,
+        manual_intro_skip_requested(&messages),
+        active_prompt,
+      ),
+      Some(IntroUiAction::ManualSkip {
+        range_index: 0,
+        kind: IntroSkipKind::Introduction,
+        seek_target: 30.0,
+      })
+    );
+    assert_eq!(
+      evaluate_intro_ui_action(
+        10.0,
+        &mut ranges,
+        IntroSkipMode::Manual,
+        manual_intro_skip_requested(&messages),
+        active_prompt,
+      ),
+      None
+    );
+    let mut expired_prompt = Some(ActiveIntroPrompt {
+      range_index: 0,
+      expires_at: now,
+    });
+    assert_eq!(active_intro_prompt_range(&mut expired_prompt, now), None);
+    assert!(expired_prompt.is_none());
+  }
+  #[test]
+  fn diagnostic_timestamp_includes_date_and_explicit_utc_zone() {
+    assert_eq!(format_diagnostic_time(0), "1970-01-01 00:00:00 UTC");
+  }
+  #[test]
+  fn advanced_mpv_arguments_parse_as_space_separated_values() {
+    assert_eq!(
+      parse_mpv_args(" --fullscreen   --profile=gpu-hq "),
+      vec!["--fullscreen", "--profile=gpu-hq"]
+    );
+  }
+
+  #[test]
+  fn subtitle_preferences_reach_mpv_launch_without_overriding_user_slang() {
+    let mut settings = LoginPrefill {
+      mpv_args: vec!["--fullscreen".to_owned()],
+      subtitle_languages: vec!["eng".to_owned(), "spa".to_owned()],
+      ..LoginPrefill::default()
+    };
+    assert_eq!(
+      configured_mpv_args(&settings),
+      vec!["--fullscreen", "--slang=eng,spa"]
+    );
+
+    settings.mpv_args.push("--slang=jpn".to_owned());
+    assert_eq!(
+      configured_mpv_args(&settings),
+      vec!["--fullscreen", "--slang=jpn"]
+    );
+  }
+
+  #[test]
+  fn custom_subtitle_language_validation_rejects_mpv_list_delimiters() {
+    assert!(valid_subtitle_language("pt-br"));
+    assert!(valid_subtitle_language("zho_hant"));
+    assert!(!valid_subtitle_language(""));
+    assert!(!valid_subtitle_language("eng,spa"));
+    assert!(!valid_subtitle_language("english subtitles"));
+  }
+  #[test]
+  fn client_messages_map_to_adjacent_episode_directions() {
+    assert_eq!(
+      adjacent_direction_from_client_messages(&[
+        "unrelated".to_owned(),
+        "jellypilot-next".to_owned(),
+      ]),
+      Some(AdjacentDirection::Next)
+    );
+    assert_eq!(
+      adjacent_direction_from_client_messages(&["jellypilot-prev".to_owned()]),
+      Some(AdjacentDirection::Previous)
+    );
+    assert_eq!(
+      adjacent_direction_from_client_messages(&["jellypilot-skip-intro".to_owned()]),
+      None
+    );
+  }
+
+  #[test]
+  fn shortcut_collisions_are_case_insensitive_trimmed_and_exclude_current_action() {
+    let settings = LoginPrefill::default();
+    assert!(shortcut_binding_collision(
+      &settings,
+      ShortcutKind::Next,
+      " shift+< ",
+    ));
+    assert!(shortcut_binding_collision(
+      &settings,
+      ShortcutKind::IntroSkip,
+      "SHIFT+>",
+    ));
+    assert!(!shortcut_binding_collision(
+      &settings,
+      ShortcutKind::Next,
+      " shift+> ",
+    ));
   }
 }

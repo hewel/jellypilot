@@ -6,7 +6,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use jellypilot_media_server::{
-  ticks_to_seconds, JellyfinClient, MediaServerProvider, MediaSource, MediaStream,
+  ticks_to_seconds, JellyfinClient, MediaItem, MediaServerProvider, MediaSource, MediaStream,
   PlaybackProgressInfo, PlaybackStartInfo, PlaybackStopInfo, VideoItemDetail, VideoLibraryItem,
 };
 use jellypilot_mpv::{
@@ -81,6 +81,28 @@ pub struct PlaybackOptions {
   pub subtitle_stream_index: Option<i32>,
   /// Prefer a specific source from the playback-info response.
   pub media_source_id: Option<String>,
+}
+/// Track metadata read from MPV's authoritative track-list property.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TrackInfo {
+  pub id: i64,
+  pub track_type: String,
+  pub title: Option<String>,
+  pub language: Option<String>,
+  pub selected: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum MpvSubtitleSelection {
+  Track(i64),
+  Value(&'static str),
+}
+
+fn mpv_subtitle_selection(id: Option<i64>) -> MpvSubtitleSelection {
+  match id {
+    Some(id) if id >= 0 => MpvSubtitleSelection::Track(id),
+    Some(_) | None => MpvSubtitleSelection::Value("no"),
+  }
 }
 
 /// Token-free metadata suitable for a Now Playing view.
@@ -244,6 +266,7 @@ pub struct PlaybackController {
   last_transport: PlayerState,
   last_progress_report_at: Option<Instant>,
   load_event_boundary: LoadEventBoundary,
+  pending_client_messages: Vec<String>,
 }
 
 impl PlaybackController {
@@ -289,7 +312,31 @@ impl PlaybackController {
       last_transport: PlayerState::default(),
       last_progress_report_at: None,
       load_event_boundary: LoadEventBoundary::Settled,
+      pending_client_messages: Vec::new(),
     }
+  }
+
+  /// Update process settings used the next time MPV starts.
+  ///
+  /// # Errors
+  ///
+  /// Returns [`PlaybackError::MpvNotFound`] when no explicit or discoverable
+  /// executable is available.
+  pub fn configure_for_next_start(
+    &mut self,
+    config: PlaybackControllerConfig,
+  ) -> Result<(), PlaybackError> {
+    let mpv_path = match config.mpv_path {
+      Some(path) => path,
+      None => find_mpv().ok_or(PlaybackError::MpvNotFound)?,
+    };
+    self.mpv.set_mpv_path(Some(mpv_path));
+    self.mpv.set_extra_args(config.extra_args.clone());
+    if let Some(cache_dir) = config.demuxer_cache_dir {
+      self.mpv.set_demuxer_cache_dir(cache_dir);
+    }
+    self.configured_mpv_args = config.extra_args;
+    Ok(())
   }
 
   /// Resolve and play a Library summary item.
@@ -322,6 +369,21 @@ impl PlaybackController {
     self.play(request).await
   }
 
+  /// Resolve and play a media item returned by the adjacent-episode API.
+  ///
+  /// # Errors
+  ///
+  /// Returns a sanitized [`PlaybackError`] when the item, server response, MPV
+  /// startup, or MPV load command cannot be completed.
+  pub async fn play_media_item(
+    &mut self,
+    item: &MediaItem,
+    options: PlaybackOptions,
+  ) -> Result<PlaybackStartOutcome, PlaybackError> {
+    let request = PlayableRequest::from_media_item(item, options)?;
+    self.play(request).await
+  }
+
   /// Read MPV transport without changing lifecycle or reporting state.
   ///
   /// Shell refresh loops should call [`Self::refresh`] so natural completion,
@@ -330,6 +392,50 @@ impl PlaybackController {
     self.snapshot_with_transport(self.collect_transport().await.unwrap_or_default())
   }
 
+  /// Read the active MPV track list without changing playback state.
+  pub async fn tracks(&self) -> Result<Vec<TrackInfo>, PlaybackError> {
+    let value = self
+      .mpv
+      .get_property("track-list")
+      .await
+      .map_err(|_| PlaybackError::MpvControlFailed)?;
+    let jellypilot_mpv::PropertyValue::Json(json) = value else {
+      return Err(PlaybackError::TrackUnavailable);
+    };
+    parse_track_list(&json)
+  }
+
+  /// Select an audio track by MPV track id.
+  pub async fn select_audio_track(&self, id: i64) -> Result<(), PlaybackError> {
+    self
+      .mpv
+      .set_audio_track(id)
+      .await
+      .map_err(|_| PlaybackError::MpvControlFailed)
+  }
+
+  /// Select or disable a subtitle track by MPV track id.
+  pub async fn select_subtitle_track(&self, id: Option<i64>) -> Result<(), PlaybackError> {
+    let result = match mpv_subtitle_selection(id) {
+      MpvSubtitleSelection::Track(id) => self.mpv.set_subtitle_track(id).await,
+      MpvSubtitleSelection::Value(value) => self.mpv.set_property_string("sid", value).await,
+    };
+    result.map_err(|_| PlaybackError::MpvControlFailed)
+  }
+
+  /// Show a transient message in MPV's on-screen display.
+  pub async fn show_text(&self, text: &str, duration_ms: i64) -> Result<(), PlaybackError> {
+    self
+      .mpv
+      .show_text(text, duration_ms)
+      .await
+      .map_err(|_| PlaybackError::MpvControlFailed)
+  }
+
+  /// Drain script-message names observed since the last shell refresh.
+  pub fn take_client_messages(&mut self) -> Vec<String> {
+    std::mem::take(&mut self.pending_client_messages)
+  }
   /// Reconcile the active item with MPV and report periodic progress.
   ///
   /// A disconnected process or MPV end-of-file event ends the active session,
@@ -340,6 +446,7 @@ impl PlaybackController {
       self.last_progress_report_at = None;
       self.load_event_boundary = LoadEventBoundary::Settled;
       self.active_transport_matches_mpv = false;
+      self.pending_client_messages.clear();
       return PlaybackRefreshOutcome {
         snapshot: self.snapshot_with_transport(PlayerState::default()),
         state: PlaybackRefreshState::Idle,
@@ -391,6 +498,7 @@ impl PlaybackController {
     self.load_event_boundary = LoadEventBoundary::Settled;
     self.active_transport_matches_mpv = false;
     self.last_transport = PlayerState::default();
+    self.pending_client_messages.clear();
     let _ = self.mpv.quit().await;
     let (stopped_active_playback, warnings) = match active {
       Some(active) => (
@@ -530,6 +638,7 @@ impl PlaybackController {
     self.load_event_boundary = LoadEventBoundary::Settled;
     self.active_transport_matches_mpv = false;
     self.last_transport = PlayerState::default();
+    self.pending_client_messages.clear();
     let _ = self.mpv.quit().await;
 
     let warnings = warning_for_reporting(
@@ -551,6 +660,7 @@ impl PlaybackController {
     // clean the old item if the shell drops an in-flight start future.
     let previous = self.active.clone();
     self.last_progress_report_at = None;
+    self.pending_client_messages.clear();
     if !self.mpv.is_connected() && self.mpv.start().await.is_err() {
       self.cleanup_failed_load(previous.as_ref()).await;
       return Err(PlaybackError::MpvStartFailed);
@@ -808,6 +918,11 @@ impl PlaybackController {
     let events = self.mpv.events()?;
     let mut reason = None;
     while let Ok(event) = events.try_recv() {
+      if event.event == "client-message" {
+        if let Some(message) = event.args.as_ref().and_then(|args| args.first()) {
+          self.pending_client_messages.push(message.clone());
+        }
+      }
       reason = self.load_event_boundary.observe(&event).or(reason);
     }
     reason
@@ -1087,6 +1202,27 @@ impl PlayableRequest {
     })
   }
 
+  fn from_media_item(item: &MediaItem, options: PlaybackOptions) -> Result<Self, PlaybackError> {
+    validate_item_type(&item.item_type)?;
+    Ok(Self {
+      item_id: item.id.clone(),
+      title: item_title(
+        &item.name,
+        &item.item_type,
+        item.series_name.as_deref(),
+        item.parent_index_number,
+        item.index_number,
+      ),
+      item_type: item.item_type.clone(),
+      runtime_seconds: item
+        .run_time_ticks
+        .filter(|ticks| *ticks >= 0)
+        .map(ticks_to_seconds),
+      resume_position_seconds: None,
+      options,
+    })
+  }
+
   fn start_position_seconds(&self) -> Result<f64, PlaybackError> {
     let seconds = match self.options.start_position {
       PlaybackStartPosition::Beginning => 0.0,
@@ -1254,6 +1390,39 @@ fn play_method(media_source: &MediaSource) -> &'static str {
     "Transcode"
   }
 }
+fn parse_track_list(json: &str) -> Result<Vec<TrackInfo>, PlaybackError> {
+  let values: Vec<serde_json::Value> =
+    serde_json::from_str(json).map_err(|_| PlaybackError::TrackUnavailable)?;
+  let mut tracks = Vec::new();
+  for value in values {
+    let Some(id) = value.get("id").and_then(serde_json::Value::as_i64) else {
+      continue;
+    };
+    let Some(track_type) = value.get("type").and_then(serde_json::Value::as_str) else {
+      continue;
+    };
+    if !matches!(track_type, "audio" | "sub") {
+      continue;
+    }
+    tracks.push(TrackInfo {
+      id,
+      track_type: track_type.to_owned(),
+      title: value
+        .get("title")
+        .and_then(|value| value.as_str())
+        .map(str::to_owned),
+      language: value
+        .get("lang")
+        .and_then(|value| value.as_str())
+        .map(str::to_owned),
+      selected: value
+        .get("selected")
+        .and_then(serde_json::Value::as_bool)
+        .unwrap_or(false),
+    });
+  }
+  Ok(tracks)
+}
 
 fn direct_playback_file_options(play_method: &str, configured_args: &[String]) -> Vec<String> {
   if !matches!(play_method, "DirectPlay" | "DirectStream") {
@@ -1299,6 +1468,39 @@ mod tests {
       .build()
       .expect("test runtime should build")
       .block_on(future)
+  }
+  #[test]
+  fn track_list_parser_filters_and_maps_tracks() {
+    let tracks = parse_track_list(
+      r#"[{"id":1,"type":"audio","title":"English","lang":"eng","selected":true},{"id":2,"type":"sub","title":"Spanish","lang":"spa","selected":false},{"id":3,"type":"video"}]"#,
+    )
+    .unwrap();
+    assert_eq!(tracks.len(), 2);
+    assert_eq!(tracks[0].id, 1);
+    assert_eq!(tracks[0].track_type, "audio");
+    assert!(tracks[0].selected);
+    assert_eq!(tracks[1].language.as_deref(), Some("spa"));
+  }
+
+  #[test]
+  fn track_list_parser_rejects_invalid_json() {
+    assert!(parse_track_list("not-json").is_err());
+  }
+
+  #[test]
+  fn subtitle_off_and_negative_ids_map_to_mpv_no() {
+    assert_eq!(
+      mpv_subtitle_selection(None),
+      MpvSubtitleSelection::Value("no")
+    );
+    assert_eq!(
+      mpv_subtitle_selection(Some(-1)),
+      MpvSubtitleSelection::Value("no")
+    );
+    assert_eq!(
+      mpv_subtitle_selection(Some(2)),
+      MpvSubtitleSelection::Track(2)
+    );
   }
 
   fn library_item(item_type: &str) -> VideoLibraryItem {

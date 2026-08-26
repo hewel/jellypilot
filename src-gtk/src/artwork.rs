@@ -14,6 +14,8 @@ use relm4::gtk;
 use relm4::gtk::gdk_pixbuf::prelude::{PixbufAnimationExt, PixbufLoaderExt};
 use relm4::tokio::sync::{oneshot, watch, Notify};
 
+use crate::artwork_cache::{artwork_cache_key, ArtworkCacheStats, ArtworkDiskCache};
+
 pub(crate) const FALLBACK_ARTWORK_ICON: &str = "image-missing-symbolic";
 
 const MAX_IMAGE_REFERENCE_BYTES: usize = 32 * 1024;
@@ -50,6 +52,7 @@ pub(crate) struct ArtworkAdapter {
   state: Arc<Mutex<AdapterState>>,
   generation_sender: watch::Sender<u64>,
   limits: ArtworkLimits,
+  disk_cache: ArtworkDiskCache,
 }
 
 #[derive(Clone, Copy)]
@@ -101,6 +104,10 @@ impl Default for ArtworkAdapter {
 
 impl ArtworkAdapter {
   fn with_limits(limits: ArtworkLimits) -> Self {
+    Self::with_limits_and_disk_cache(limits, ArtworkDiskCache::default())
+  }
+
+  fn with_limits_and_disk_cache(limits: ArtworkLimits, disk_cache: ArtworkDiskCache) -> Self {
     let limits = limits.normalized();
     let (generation_sender, _) = watch::channel(0);
     Self {
@@ -112,6 +119,7 @@ impl ArtworkAdapter {
       })),
       generation_sender,
       limits,
+      disk_cache,
     }
   }
 
@@ -140,6 +148,26 @@ impl ArtworkAdapter {
     ArtworkLoadTicket(self.lock_state().generation)
   }
 
+  pub(crate) fn set_disk_cache_enabled(&self, enabled: bool) {
+    self.disk_cache.set_enabled(enabled);
+  }
+
+  pub(crate) async fn disk_cache_stats(&self) -> Result<ArtworkCacheStats, ArtworkError> {
+    self
+      .disk_cache
+      .stats()
+      .await
+      .map_err(|_| ArtworkError::CacheUnavailable)
+  }
+
+  pub(crate) async fn clear_disk_cache(&self) -> Result<(), ArtworkError> {
+    self
+      .disk_cache
+      .clear()
+      .await
+      .map_err(|_| ArtworkError::CacheUnavailable)
+  }
+
   pub(crate) async fn load_with_ticket(
     &self,
     client: &JellyfinClient,
@@ -155,9 +183,9 @@ impl ArtworkAdapter {
       .image_request(image_id)
       .map_err(|_| ArtworkError::RequestRejected)?;
     let key = Arc::<str>::from(image_id);
+    let disk_key = artwork_cache_key(request.server_url(), request.origin_url());
     let mut generation = self.generation_sender.subscribe();
     let load_generation = ticket.0;
-
     match self.admit(Arc::clone(&key), load_generation) {
       LoadAdmission::Cached(artwork) => Ok(artwork),
       LoadAdmission::Follower(receiver) => wait_for_follower(receiver, &mut generation).await,
@@ -167,7 +195,7 @@ impl ArtworkAdapter {
           .acquire_load_permit(load_generation, &mut generation)
           .await?;
         let result = self
-          .fetch_and_decode(client, &request, permit, &mut generation)
+          .fetch_and_decode(client, &request, disk_key, permit, &mut generation)
           .await;
         pending.complete(&result);
         result
@@ -238,11 +266,12 @@ impl ArtworkAdapter {
     &self,
     client: &JellyfinClient,
     request: &LibraryImageRequest,
+    disk_key: String,
     permit: LoadPermit,
     generation: &mut watch::Receiver<u64>,
   ) -> LoadResult {
     let bytes = relm4::tokio::select! {
-      result = self.fetch_uncached(client, request) => result?,
+      result = self.original_bytes(client, request, disk_key) => result?,
       changed = generation.changed() => {
         let _ = changed;
         return Err(ArtworkError::Cancelled);
@@ -262,6 +291,37 @@ impl ArtworkAdapter {
         Err(ArtworkError::Cancelled)
       }
     }
+  }
+
+  async fn original_bytes(
+    &self,
+    client: &JellyfinClient,
+    request: &LibraryImageRequest,
+    disk_key: String,
+  ) -> FetchResult {
+    if let Some(bytes) = self
+      .disk_cache
+      .load(
+        disk_key.clone(),
+        self.limits.max_response_bytes,
+        validate_disk_artwork,
+      )
+      .await
+    {
+      return Ok(ArtworkBytes(bytes));
+    }
+    let bytes = self.fetch_uncached(client, request).await?;
+    // Undecodable content (e.g. animated images) must not enter the disk
+    // cache: it can never be served and would churn store → validate-delete →
+    // refetch on every view.
+    if validate_static_image_container(bytes.0.as_ref()).is_ok() {
+      let disk_cache = self.disk_cache.clone();
+      let disk_bytes = Arc::clone(&bytes.0);
+      relm4::spawn(async move {
+        disk_cache.store(disk_key, disk_bytes).await;
+      });
+    }
+    Ok(bytes)
   }
 
   async fn fetch_uncached(
@@ -663,6 +723,7 @@ pub(crate) enum ArtworkError {
   ResponseTooLarge,
   EmptyResponse,
   DecodeFailed,
+  CacheUnavailable,
   DecodedImageTooLarge,
   UiThreadRequired,
   Cancelled,
@@ -680,6 +741,7 @@ impl fmt::Display for ArtworkError {
       Self::ResponseTooLarge => "artwork response exceeded the memory limit",
       Self::EmptyResponse => "artwork response was empty",
       Self::DecodeFailed => "artwork data could not be decoded",
+      Self::CacheUnavailable => "artwork disk cache is unavailable",
       Self::DecodedImageTooLarge => "decoded artwork exceeded the memory limit",
       Self::UiThreadRequired => "artwork texture must be created on the GTK thread",
       Self::Cancelled => "artwork loading was cancelled",
@@ -690,6 +752,10 @@ impl fmt::Display for ArtworkError {
 }
 
 impl std::error::Error for ArtworkError {}
+
+fn validate_disk_artwork(bytes: &[u8]) -> bool {
+  validate_static_image_container(bytes).is_ok()
+}
 
 fn validate_image_reference(image_id: &str) -> Result<(), ArtworkError> {
   if image_id.is_empty() || image_id.len() > MAX_IMAGE_REFERENCE_BYTES {

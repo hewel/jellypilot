@@ -17,7 +17,7 @@ jobs:
       - name: Install system dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y libwebkit2gtk-4.1-dev build-essential curl wget file libssl-dev libgtk-3-dev libgtk-4-dev libayatana-appindicator3-dev librsvg2-dev xauth xvfb
+          sudo apt-get install -y libwebkit2gtk-4.1-dev build-essential curl wget file libssl-dev libgtk-3-dev libgtk-4-dev libadwaita-1-dev libayatana-appindicator3-dev librsvg2-dev xauth xvfb
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
