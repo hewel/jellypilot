@@ -1,4 +1,4 @@
-use std::cell::{Cell, RefCell};
+use std::cell::Cell;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::rc::Rc;
@@ -12,13 +12,17 @@ use jellypilot_media_server::{
   VideoSearchRequest, VideoSeason, VideoSeasonEpisodesPage, VideoSeasonEpisodesPageRequest,
   VideoShowDetail, VideoUserDataAction, VideoUserDataUpdate, VideoUserDataUpdateRequest,
 };
-use jellypilot_mpv::{find_mpv, has_mpv_option, write_input_conf, PlayerState};
+use jellypilot_mpv::{has_mpv_option, write_input_conf, PlayerState};
 use jellypilot_session::{IntroSkipKind, IntroSkipMode, IntroSkipRange};
 use relm4::adw::prelude::*;
 use relm4::{adw, gtk, Component, ComponentParts, ComponentSender, RelmApp};
 
+use crate::pages::diagnostics::{self, DiagnosticsContext, DiagnosticsPage};
 use crate::pages::login::{
   self, run_auth_operation, LoginContext, LoginEffect, LoginEvent, LoginPage,
+};
+use crate::pages::settings::{
+  self, ConnectionView, SettingsContext, SettingsEffect, SettingsEvent, SettingsPage,
 };
 
 use crate::artwork::{ArtworkAdapter, DecodedArtwork, FALLBACK_ARTWORK_ICON};
@@ -29,10 +33,7 @@ use crate::browse_model::{
   BrowsePreferences, BrowseSource,
 };
 use crate::config::{self, LoginPrefill};
-use crate::diagnostics::{
-  sanitize_message, DiagnosticCategory, DiagnosticChange, DiagnosticEvent, DiagnosticLevel,
-  Diagnostics, DiagnosticsViewState,
-};
+use crate::diagnostics::{DiagnosticCategory, DiagnosticLevel, Diagnostics};
 use crate::library_browse::LibraryBrowseView;
 use crate::playback::{
   Playable, PlaybackController, PlaybackControllerConfig, PlaybackError, PlaybackRefreshOutcome,
@@ -49,8 +50,6 @@ use crate::request_gate::{
 };
 
 const APP_ID: &str = "io.github.hewel.JellyPilot.GtkPreview";
-const SUBTITLE_LANGUAGE_OPTIONS: [&str; 8] =
-  ["eng", "spa", "fra", "deu", "ita", "por", "jpn", "zho"];
 const SMOKE_APP_ID: &str = "io.github.hewel.JellyPilot.GtkPreview.Smoke";
 const SEASON_EPISODE_PAGE_SIZE: i32 = 30;
 const HOME_HERO_HEIGHT: i32 = 340;
@@ -64,6 +63,8 @@ struct AppModel {
   client: Arc<JellyfinClient>,
   auth_store: AuthStore,
   login: LoginPage,
+  settings: SettingsPage,
+  diagnostics_page: DiagnosticsPage,
   intro_mode: config::IntroMode,
   diagnostics: Diagnostics,
   saved_profiles: LoadState<Vec<SavedProfileSummary>>,
@@ -108,22 +109,10 @@ struct ArtworkTarget {
   fallback: gtk::Image,
 }
 
-struct DiagnosticRowWidgets {
-  row: gtk::ListBoxRow,
-  message: gtk::Label,
-}
-
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum TrackKind {
   Audio,
   Subtitle,
-}
-
-#[derive(Clone, Copy)]
-enum ShortcutKind {
-  Next,
-  Previous,
-  IntroSkip,
 }
 
 #[derive(Clone, Copy)]
@@ -217,6 +206,8 @@ pub(crate) enum BrowsePresentation {
 #[derive(Debug)]
 pub(crate) enum AppMessage {
   Login(login::Message),
+  Settings(settings::Message),
+  Diagnostics(diagnostics::Message),
   Disconnect,
   ShowHome,
   OpenLibrary(VideoLibraryShortcut),
@@ -251,31 +242,6 @@ pub(crate) enum AppMessage {
   SelectAudioTrack(i64),
   SelectSubtitleTrack(Option<i64>),
   PlayAdjacent(AdjacentDirection),
-  SetIntroMode(u32),
-  ReconnectRemoteControl,
-  RefreshConnectionStatus,
-  DetectMpv,
-  SetMpvPath(String),
-  SetMpvArgs(String),
-  SetPlaybackTargetName(String),
-  AddSubtitlePreset,
-  AddSubtitleCustom,
-  MoveSubtitleLanguage {
-    index: usize,
-    offset: i32,
-  },
-  RemoveSubtitleLanguage(usize),
-  ClearSubtitleLanguages,
-  SetNextEpisodeKey(String),
-  SetPreviousEpisodeKey(String),
-  SetIntroSkipKey(String),
-  SetImageCacheEnabled(bool),
-  RefreshImageCacheStats,
-  ConfirmClearImageCache,
-  ClearImageCache,
-  CopyDiagnostics,
-  ClearDiagnostics,
-  RefreshDiagnostics,
   StopPlayback,
   RefreshPlayback,
   QuitRequested,
@@ -538,37 +504,6 @@ struct Ui {
   subtitle_track_list: gtk::Box,
   playback_controls_syncing: Rc<Cell<bool>>,
   sender: ComponentSender<AppModel>,
-  settings_saved_profile: gtk::Label,
-  settings_storage_status: gtk::Label,
-  settings_disconnect_button: gtk::Button,
-  intro_skip_group: adw::PreferencesGroup,
-  intro_skip_mode: adw::ComboRow,
-  intro_skip_status: gtk::Label,
-  settings_config_status: gtk::Label,
-  settings_server_url: gtk::Label,
-  settings_user: gtk::Label,
-  settings_remote_status: gtk::Label,
-  settings_reconnect_button: gtk::Button,
-  settings_refresh_status_button: gtk::Button,
-  settings_mpv_path: adw::EntryRow,
-  settings_mpv_status: gtk::Label,
-  settings_subtitle_languages: gtk::Box,
-  settings_subtitle_preset: gtk::DropDown,
-  settings_subtitle_custom: adw::EntryRow,
-  settings_image_cache: adw::SwitchRow,
-  settings_image_cache_syncing: Rc<Cell<bool>>,
-  settings_image_cache_stats: gtk::Label,
-  settings_image_cache_clear: gtk::Button,
-  diagnostics_list: gtk::ListBox,
-  diagnostic_rows: Rc<RefCell<HashMap<u64, DiagnosticRowWidgets>>>,
-  diagnostics_empty: gtk::Label,
-  diagnostics_count: gtk::Label,
-  diagnostics_scroll: gtk::ScrolledWindow,
-  diagnostics_copy: gtk::Button,
-  diagnostics_clear: gtk::Button,
-  diagnostics_status: gtk::Label,
-  forget_current_profile: gtk::Button,
-  preferences: adw::PreferencesDialog,
 }
 
 #[relm4::component]
@@ -592,6 +527,8 @@ impl Component for AppModel {
     sender: ComponentSender<Self>,
   ) -> ComponentParts<Self> {
     let login = LoginPage::build(sender.input_sender());
+    let diagnostics_page = DiagnosticsPage::build(sender.input_sender());
+    let settings = SettingsPage::build(sender.input_sender(), diagnostics_page.root());
     let ui = Ui::new(&sender, login.root());
     root.set_content(Some(&ui.toast_overlay));
     let narrow_breakpoint = adw::Breakpoint::new(adw::BreakpointCondition::new_length(
@@ -643,6 +580,8 @@ impl Component for AppModel {
       client: Arc::new(JellyfinClient::new()),
       auth_store: AuthStore::default(),
       login,
+      settings,
+      diagnostics_page,
       intro_mode,
       diagnostics,
       saved_profiles: LoadState::Loading,
@@ -683,7 +622,6 @@ impl Component for AppModel {
     };
     let widgets = view_output!();
     model.render_connection_settings();
-    model.render_subtitle_settings(&sender);
     if !smoke_test {
       sender.input(AppMessage::Login(login::Message::LoadSavedProfiles));
     }
@@ -694,6 +632,8 @@ impl Component for AppModel {
   fn update(&mut self, message: Self::Input, sender: ComponentSender<Self>, _root: &Self::Root) {
     match message {
       AppMessage::Login(message) => self.dispatch_login(message, &sender),
+      AppMessage::Settings(message) => self.dispatch_settings(message, &sender),
+      AppMessage::Diagnostics(message) => self.dispatch_diagnostics(message),
       AppMessage::Disconnect => {
         if !self.login.is_profile_busy() {
           self.disconnect(&sender);
@@ -763,35 +703,6 @@ impl Component for AppModel {
       AppMessage::PlayAdjacent(direction) => {
         self.dispatch_playback(PlaybackIntent::PlayAdjacent(direction), &sender)
       }
-      AppMessage::CopyDiagnostics => self.copy_diagnostics(),
-      AppMessage::ClearDiagnostics => {
-        self.diagnostics.clear();
-        self.ui.diagnostics_status.set_label("");
-        self.ui.diagnostics_status.set_visible(false);
-        self.render_diagnostics();
-      }
-      AppMessage::RefreshDiagnostics => self.render_diagnostics(),
-      AppMessage::SetIntroMode(selected) => self.set_intro_mode(selected, &sender),
-      AppMessage::ReconnectRemoteControl => self.reconnect_remote_control(&sender),
-      AppMessage::RefreshConnectionStatus => self.refresh_connection_status(&sender),
-      AppMessage::DetectMpv => self.detect_mpv(),
-      AppMessage::SetMpvPath(path) => self.update_mpv_path(path),
-      AppMessage::SetMpvArgs(args) => self.update_mpv_args(args),
-      AppMessage::SetPlaybackTargetName(name) => self.update_playback_target_name(name),
-      AppMessage::AddSubtitlePreset => self.add_subtitle_preset(&sender),
-      AppMessage::AddSubtitleCustom => self.add_custom_subtitle(&sender),
-      AppMessage::MoveSubtitleLanguage { index, offset } => {
-        self.move_subtitle_language(index, offset, &sender)
-      }
-      AppMessage::RemoveSubtitleLanguage(index) => self.remove_subtitle_language(index, &sender),
-      AppMessage::ClearSubtitleLanguages => self.clear_subtitle_languages(&sender),
-      AppMessage::SetNextEpisodeKey(key) => self.update_shortcut(ShortcutKind::Next, key),
-      AppMessage::SetPreviousEpisodeKey(key) => self.update_shortcut(ShortcutKind::Previous, key),
-      AppMessage::SetIntroSkipKey(key) => self.update_shortcut(ShortcutKind::IntroSkip, key),
-      AppMessage::SetImageCacheEnabled(enabled) => self.set_image_cache_enabled(enabled),
-      AppMessage::RefreshImageCacheStats => self.refresh_image_cache_stats(&sender),
-      AppMessage::ConfirmClearImageCache => self.confirm_clear_image_cache(&sender),
-      AppMessage::ClearImageCache => self.clear_image_cache(&sender),
       AppMessage::StopPlayback => self.dispatch_playback(PlaybackIntent::Stop, &sender),
       AppMessage::RefreshPlayback => self.dispatch_playback(PlaybackIntent::Tick, &sender),
       AppMessage::QuitRequested => self.request_quit(&sender),
@@ -933,10 +844,6 @@ impl Component for AppModel {
               DiagnosticCategory::Connection,
               "Authenticated connection status refresh succeeded.",
             );
-            self
-              .ui
-              .settings_config_status
-              .set_label("Connection status refreshed.");
           }
           Err(()) => {
             self.record_diagnostic(
@@ -944,13 +851,12 @@ impl Component for AppModel {
               DiagnosticCategory::Connection,
               "Authenticated connection status refresh failed.",
             );
-            self
-              .ui
-              .settings_config_status
-              .set_label("Connection status refresh failed.");
           }
         }
-        self.ui.settings_config_status.set_visible(true);
+        let cx = self.settings_context();
+        self
+          .settings
+          .handle_event(SettingsEvent::ConnectionStatus(result), &cx);
         self.render_connection_settings();
       }
       AppCommand::Home { token, result } => self.finish_home(token, result, &sender),
@@ -1077,25 +983,18 @@ impl Component for AppModel {
         if !self.requests.finish_image_cache(token) || self.image_cache_clearing {
           return;
         }
-        match result {
-          Ok(stats) => self.render_image_cache_stats(stats),
-          Err(()) => {
-            self
-              .ui
-              .settings_image_cache_stats
-              .set_label("Cache statistics are unavailable.");
-            self.ui.settings_image_cache_clear.set_sensitive(false);
-          }
-        }
+        let cx = self.settings_context();
+        self
+          .settings
+          .handle_event(SettingsEvent::ImageCacheStats(result), &cx);
       }
       AppCommand::ImageCacheCleared { token, result } => {
         if !self.requests.finish_image_cache(token) {
           return;
         }
         self.image_cache_clearing = false;
-        match result {
-          Ok(stats) => {
-            self.render_image_cache_stats(stats);
+        match &result {
+          Ok(_) => {
             self.record_diagnostic(
               DiagnosticLevel::Info,
               DiagnosticCategory::Artwork,
@@ -1103,11 +1002,6 @@ impl Component for AppModel {
             );
           }
           Err(()) => {
-            self
-              .ui
-              .settings_image_cache_stats
-              .set_label("Library Image Cache could not be cleared.");
-            self.ui.settings_image_cache_clear.set_sensitive(true);
             self.record_diagnostic(
               DiagnosticLevel::Warning,
               DiagnosticCategory::Artwork,
@@ -1115,6 +1009,10 @@ impl Component for AppModel {
             );
           }
         }
+        let cx = self.settings_context();
+        self
+          .settings
+          .handle_event(SettingsEvent::ImageCacheCleared(result), &cx);
       }
       AppCommand::PlaybackSettled {
         id,
@@ -1165,6 +1063,83 @@ impl AppModel {
   fn dispatch_login(&mut self, message: login::Message, sender: &ComponentSender<Self>) {
     let effects = self.with_login_context(|login, cx| login.handle(message, cx));
     self.execute_login_effects(effects, sender);
+  }
+
+  fn settings_context(&self) -> SettingsContext {
+    SettingsContext {
+      intro_mode: self.intro_mode,
+      image_cache_clearing: self.image_cache_clearing,
+      connected: matches!(self.connection, ConnectionPhase::Connected),
+    }
+  }
+
+  fn dispatch_settings(&mut self, message: settings::Message, sender: &ComponentSender<Self>) {
+    let cx = self.settings_context();
+    let effects = self.settings.handle(message, &cx);
+    self.execute_settings_effects(effects, sender);
+  }
+
+  fn dispatch_diagnostics(&mut self, message: diagnostics::Message) {
+    let mut cx = DiagnosticsContext {
+      diagnostics: &mut self.diagnostics,
+    };
+    self.diagnostics_page.handle(message, &mut cx);
+  }
+
+  fn execute_settings_effects(
+    &mut self,
+    effects: Vec<SettingsEffect>,
+    sender: &ComponentSender<Self>,
+  ) {
+    for effect in effects {
+      match effect {
+        SettingsEffect::ReconfigurePlayback => self.reconfigure_playback_controller(),
+        SettingsEffect::IntroModeChanged(mode) => {
+          self.intro_mode = mode;
+          self.dispatch_playback(
+            PlaybackIntent::SetIntroMode(session_intro_mode(mode)),
+            sender,
+          );
+        }
+        SettingsEffect::ReconnectRemoteControl => self.reconnect_remote_control(sender),
+        SettingsEffect::RefreshConnectionStatus => self.refresh_connection_status(sender),
+        SettingsEffect::SetImageCacheEnabled(enabled) => {
+          self.artwork.set_disk_cache_enabled(enabled);
+        }
+        SettingsEffect::RefreshImageCacheStats => {
+          if self.image_cache_clearing {
+            continue;
+          }
+          let token = self.requests.begin_image_cache();
+          let artwork = Arc::clone(&self.artwork);
+          sender.oneshot_command(async move {
+            AppCommand::ImageCacheStats {
+              token,
+              result: artwork.disk_cache_stats().await.map_err(|_| ()),
+            }
+          });
+        }
+        SettingsEffect::ClearImageCache => {
+          if self.image_cache_clearing {
+            continue;
+          }
+          self.image_cache_clearing = true;
+          let token = self.requests.begin_image_cache();
+          let artwork = Arc::clone(&self.artwork);
+          sender.oneshot_command(async move {
+            let result = async {
+              artwork.clear_disk_cache().await.map_err(|_| ())?;
+              artwork.disk_cache_stats().await.map_err(|_| ())
+            }
+            .await;
+            AppCommand::ImageCacheCleared { token, result }
+          });
+        }
+        SettingsEffect::Diagnostic(level, category, message) => {
+          self.record_diagnostic(level, category, message);
+        }
+      }
+    }
   }
 
   fn dispatch_login_event(&mut self, event: LoginEvent, sender: &ComponentSender<Self>) {
@@ -1364,19 +1339,21 @@ impl AppModel {
     match result {
       Ok(_) => {
         if is_current {
-          self
-            .ui
-            .settings_storage_status
-            .set_label("This session is stored securely in Linux Secret Service.");
+          self.settings.set_storage_status(
+            "This session is stored securely in Linux Secret Service.",
+            true,
+          );
         }
       }
       Err(message) => {
         if is_current {
-          self.ui.settings_storage_status.set_label(message);
+          self.settings.set_storage_status(message, true);
         }
       }
     }
-    self.ui.settings_storage_status.set_visible(is_current);
+    if !is_current {
+      self.settings.set_storage_status("", false);
+    }
   }
 
   fn load_saved_profiles(&mut self, sender: &ComponentSender<Self>) {
@@ -1394,14 +1371,10 @@ impl AppModel {
     let busy = self.login.is_profile_busy();
     let connected = matches!(self.connection, ConnectionPhase::Connected);
     self.ui.disconnect_button.set_sensitive(connected && !busy);
+    self.settings.set_disconnect_sensitive(connected && !busy);
     self
-      .ui
-      .settings_disconnect_button
-      .set_sensitive(connected && !busy);
-    self
-      .ui
-      .forget_current_profile
-      .set_sensitive(self.active_saved_profile.is_some() && !busy);
+      .settings
+      .set_forget_sensitive(self.active_saved_profile.is_some() && !busy);
   }
 
   fn handle_remote_command(
@@ -1585,9 +1558,8 @@ impl AppModel {
   ) {
     self.client = client;
     self
-      .ui
-      .intro_skip_group
-      .set_visible(self.client.supports_intro_skipper());
+      .settings
+      .set_intro_skip_visible(self.client.supports_intro_skipper());
     self.artwork.reset_session();
     self.diagnostics.reset_coalescing();
     self.artwork = Arc::new(ArtworkAdapter::default());
@@ -1639,10 +1611,8 @@ impl AppModel {
       self.start_persist_session(session_to_save, sender);
     } else {
       self
-        .ui
-        .settings_storage_status
-        .set_label("The connected session could not be saved securely.");
-      self.ui.settings_storage_status.set_visible(true);
+        .settings
+        .set_storage_status("The connected session could not be saved securely.", true);
       self.record_diagnostic(
         DiagnosticLevel::Warning,
         DiagnosticCategory::Auth,
@@ -1660,10 +1630,8 @@ impl AppModel {
     self.login.set_profile_busy(true);
     self.sync_profile_busy_widgets();
     self
-      .ui
-      .settings_storage_status
-      .set_label("Saving this session securely…");
-    self.ui.settings_storage_status.set_visible(true);
+      .settings
+      .set_storage_status("Saving this session securely…", true);
     let store = self.auth_store.clone();
     let token = self.requests.current_session();
     sender.oneshot_command(async move {
@@ -1789,11 +1757,11 @@ impl AppModel {
     self.ui.nav_home.set_active(true);
     self.ui.nav_home.set_active(false);
     self.ui.disconnect_button.set_sensitive(false);
-    self.ui.settings_disconnect_button.set_sensitive(false);
+    self.settings.set_disconnect_sensitive(false);
     self.ui.connection_status.set_label("Not connected");
     self.render_connection_settings();
-    self.ui.intro_skip_group.set_visible(false);
-    self.ui.preferences.close();
+    self.settings.set_intro_skip_visible(false);
+    self.settings.close();
     self.ui.root.set_content(Some(self.login.root()));
     let can_login = self.playback_can_start_login();
     self.login.set_controls_sensitive(can_login);
@@ -1830,9 +1798,8 @@ impl AppModel {
       .disconnect_button
       .set_sensitive(!self.login.is_profile_busy());
     self
-      .ui
-      .settings_disconnect_button
-      .set_sensitive(!self.login.is_profile_busy());
+      .settings
+      .set_disconnect_sensitive(!self.login.is_profile_busy());
     self.update_connection_status();
     self.render_shortcuts(sender);
   }
@@ -1850,70 +1817,13 @@ impl AppModel {
     self.render_connection_settings();
   }
 
-  fn saved_profile_summaries(&self) -> &[SavedProfileSummary] {
-    match &self.saved_profiles {
-      LoadState::Ready(profiles) => profiles,
-      LoadState::Idle | LoadState::Loading | LoadState::Failed(_) => &[],
-    }
-  }
-
   fn render_saved_profile_settings(&self) {
-    self.ui.settings_storage_status.set_visible(false);
-    if !matches!(self.connection, ConnectionPhase::Connected) {
-      self
-        .ui
-        .settings_saved_profile
-        .set_label("No active session. Sign in to manage this device's saved profile.");
-      self.ui.settings_disconnect_button.set_sensitive(false);
-      self.ui.forget_current_profile.set_sensitive(false);
-      return;
-    }
-
-    let active = self.active_saved_profile.as_ref().and_then(|key| {
-      self
-        .saved_profile_summaries()
-        .iter()
-        .find(|profile| &profile.key == key)
-    });
-    if let Some(profile) = active {
-      self.ui.settings_saved_profile.set_label(&format!(
-        "Signed in as {} on {}. The session token is stored in Linux Secret Service; the password is not saved.",
-        profile.user_name,
-        profile
-          .server_name
-          .as_deref()
-          .unwrap_or(profile.server_url.as_str())
-      ));
-      self
-        .ui
-        .forget_current_profile
-        .set_sensitive(!self.login.is_profile_busy());
-      self
-        .ui
-        .forget_current_profile
-        .update_property(&[gtk::accessible::Property::Label(&format!(
-          "Sign out and forget saved sign-in for {} on {}",
-          profile.user_name,
-          profile
-            .server_name
-            .as_deref()
-            .unwrap_or(profile.server_url.as_str())
-        ))]);
-      self.ui.settings_storage_status.set_visible(true);
-    } else {
-      self
-        .ui
-        .settings_saved_profile
-        .set_label("This active session is not saved. Passwords are never stored by the GTK app.");
-      self.ui.forget_current_profile.set_sensitive(false);
-      if matches!(self.saved_profiles, LoadState::Failed(_)) {
-        self
-          .ui
-          .settings_storage_status
-          .set_label("Linux Secret Service is unavailable or locked.");
-        self.ui.settings_storage_status.set_visible(true);
-      }
-    }
+    self.settings.render_profiles(
+      &self.saved_profiles,
+      &self.active_saved_profile,
+      self.connection,
+      self.login.is_profile_busy(),
+    );
   }
 
   fn show_home(&mut self, sender: &ComponentSender<Self>) {
@@ -3216,44 +3126,6 @@ impl AppModel {
     }
   }
 
-  fn set_intro_mode(&mut self, selected: u32, sender: &ComponentSender<Self>) {
-    let mode = config_intro_mode(selected);
-    let mut prefill = config::load();
-    prefill.intro_mode = mode;
-    match config::save(&prefill) {
-      Ok(()) => {
-        self.intro_mode = mode;
-        self.dispatch_playback(
-          PlaybackIntent::SetIntroMode(session_intro_mode(mode)),
-          sender,
-        );
-        self.ui.intro_skip_status.set_label("");
-        self.ui.intro_skip_status.set_visible(false);
-        self.record_diagnostic(
-          DiagnosticLevel::Info,
-          DiagnosticCategory::Config,
-          "Intro Skip preference was saved.",
-        );
-      }
-      Err(_) => {
-        self.record_diagnostic(
-          DiagnosticLevel::Warning,
-          DiagnosticCategory::Config,
-          "The Intro Skip preference could not be saved.",
-        );
-        self
-          .ui
-          .intro_skip_status
-          .set_label("The Intro Skip preference could not be saved.");
-        self.ui.intro_skip_status.set_visible(true);
-        self
-          .ui
-          .intro_skip_mode
-          .set_selected(intro_mode_selection(self.intro_mode));
-      }
-    }
-  }
-
   fn reconnect_remote_control(&mut self, sender: &ComponentSender<Self>) {
     if !matches!(self.connection, ConnectionPhase::Connected) {
       return;
@@ -3272,11 +3144,6 @@ impl AppModel {
     if !matches!(self.connection, ConnectionPhase::Connected) {
       return;
     }
-    self
-      .ui
-      .settings_config_status
-      .set_label("Refreshing connection status…");
-    self.ui.settings_config_status.set_visible(true);
     let client = Arc::clone(&self.client);
     let session = self.requests.current_session();
     sender.oneshot_command(async move {
@@ -3289,88 +3156,21 @@ impl AppModel {
 
   fn render_connection_settings(&self) {
     let connected = matches!(self.connection, ConnectionPhase::Connected);
-    let server_url = if connected {
-      non_empty_setting(self.login.server_url_text())
-        .unwrap_or_else(|| "Connected server URL unavailable".to_owned())
-    } else {
-      "Not connected".to_owned()
+    let remote_status = match self.remote_state {
+      RemoteControlState::Unavailable => "Remote Control unavailable",
+      RemoteControlState::Connecting => "Remote Control connecting",
+      RemoteControlState::Available => "Remote Control available",
+      RemoteControlState::Lost => "Remote Control connection lost",
     };
-    self
-      .ui
-      .settings_server_url
-      .set_label(&format!("Server URL: {server_url}"));
-    let user = if connected {
-      non_empty_setting(self.login.username_text())
-        .unwrap_or_else(|| "Authenticated user unavailable".to_owned())
-    } else {
-      "No authenticated user".to_owned()
-    };
-    self.ui.settings_user.set_label(&format!("User: {user}"));
-    self
-      .ui
-      .settings_remote_status
-      .set_label(match self.remote_state {
-        RemoteControlState::Unavailable => "Remote Control unavailable",
-        RemoteControlState::Connecting => "Remote Control connecting",
-        RemoteControlState::Available => "Remote Control available",
-        RemoteControlState::Lost => "Remote Control connection lost",
-      });
-    self
-      .ui
-      .settings_reconnect_button
-      .set_sensitive(connected && self.client.supports_remote_control());
-    self
-      .ui
-      .settings_refresh_status_button
-      .set_sensitive(connected);
+    self.settings.render_connection(&ConnectionView {
+      connected,
+      server_url: &self.login.server_url_text(),
+      user: &self.login.username_text(),
+      remote_status,
+      reconnect_sensitive: connected && self.client.supports_remote_control(),
+      refresh_sensitive: connected,
+    });
   }
-  fn detect_mpv(&mut self) {
-    match find_mpv() {
-      Some(path) => {
-        self.ui.settings_mpv_path.set_text(&path.to_string_lossy());
-        self
-          .ui
-          .settings_mpv_status
-          .set_label("MPV detected. The path applies on the next MPV start.");
-        self.ui.settings_mpv_status.set_visible(true);
-      }
-      None => {
-        self
-          .ui
-          .settings_mpv_status
-          .set_label("MPV was not found in PATH or a standard install location.");
-        self.ui.settings_mpv_status.set_visible(true);
-        self.record_diagnostic(
-          DiagnosticLevel::Warning,
-          DiagnosticCategory::Playback,
-          "MPV detection from Settings did not find an executable.",
-        );
-      }
-    }
-  }
-
-  fn update_mpv_path(&mut self, path: String) {
-    let mut settings = config::load();
-    settings.mpv_path = non_empty_setting(path);
-    if self.save_application_config(&settings) {
-      self.reconfigure_playback_controller();
-    }
-  }
-
-  fn update_mpv_args(&mut self, args: String) {
-    let mut settings = config::load();
-    settings.mpv_args = parse_mpv_args(&args);
-    if self.save_application_config(&settings) {
-      self.reconfigure_playback_controller();
-    }
-  }
-
-  fn update_playback_target_name(&mut self, name: String) {
-    let mut settings = config::load();
-    settings.playback_target_name = non_empty_setting(name);
-    self.save_application_config(&settings);
-  }
-
   fn reconfigure_playback_controller(&mut self) {
     let settings = config::load();
     let playback_config = playback_controller_config(&settings);
@@ -3389,10 +3189,8 @@ impl AppModel {
             Instant::now(),
           );
           self
-            .ui
-            .settings_config_status
-            .set_label("Saved. MPV is available for the next playback start.");
-          self.ui.settings_config_status.set_visible(true);
+            .settings
+            .set_config_status("Saved. MPV is available for the next playback start.");
           self.render_playback_bar();
         }
         Err(_) => {
@@ -3413,10 +3211,8 @@ impl AppModel {
       Some(Ok(())) => {
         self.playback_reconfigure_pending = false;
         self
-          .ui
-          .settings_config_status
-          .set_label("Saved. Player changes apply on the next MPV start.");
-        self.ui.settings_config_status.set_visible(true);
+          .settings
+          .set_config_status("Saved. Player changes apply on the next MPV start.");
       }
       Some(Err(_)) | None => {
         self.playback_reconfigure_pending = false;
@@ -3427,289 +3223,8 @@ impl AppModel {
     }
   }
 
-  fn add_subtitle_preset(&mut self, sender: &ComponentSender<Self>) {
-    let selected = self.ui.settings_subtitle_preset.selected() as usize;
-    let Some(language) = SUBTITLE_LANGUAGE_OPTIONS.get(selected) else {
-      return;
-    };
-    self.add_subtitle_language((*language).to_owned(), sender);
-  }
-
-  fn add_custom_subtitle(&mut self, sender: &ComponentSender<Self>) {
-    let language = self.ui.settings_subtitle_custom.text().to_string();
-    if self.add_subtitle_language(language, sender) {
-      self.ui.settings_subtitle_custom.set_text("");
-    }
-  }
-
-  fn add_subtitle_language(&mut self, language: String, sender: &ComponentSender<Self>) -> bool {
-    let language = language.trim().to_ascii_lowercase();
-    if !valid_subtitle_language(&language) {
-      self.show_settings_failure("Enter a language code using letters, numbers, '-' or '_'.");
-      return false;
-    }
-    let mut settings = config::load();
-    if settings
-      .subtitle_languages
-      .iter()
-      .any(|existing| existing.eq_ignore_ascii_case(&language))
-    {
-      self.show_settings_failure("That subtitle language is already in the priority list.");
-      return false;
-    }
-    settings.subtitle_languages.push(language);
-    if self.save_application_config(&settings) {
-      self.reconfigure_playback_controller();
-      self.render_subtitle_settings(sender);
-      true
-    } else {
-      false
-    }
-  }
-
-  fn move_subtitle_language(&mut self, index: usize, offset: i32, sender: &ComponentSender<Self>) {
-    let mut settings = config::load();
-    let Ok(index_i32) = i32::try_from(index) else {
-      return;
-    };
-    let target = index_i32.saturating_add(offset);
-    let Ok(target) = usize::try_from(target) else {
-      return;
-    };
-    if index >= settings.subtitle_languages.len() || target >= settings.subtitle_languages.len() {
-      return;
-    }
-    settings.subtitle_languages.swap(index, target);
-    if self.save_application_config(&settings) {
-      self.reconfigure_playback_controller();
-      self.render_subtitle_settings(sender);
-    }
-  }
-
-  fn remove_subtitle_language(&mut self, index: usize, sender: &ComponentSender<Self>) {
-    let mut settings = config::load();
-    if index >= settings.subtitle_languages.len() {
-      return;
-    }
-    settings.subtitle_languages.remove(index);
-    if self.save_application_config(&settings) {
-      self.reconfigure_playback_controller();
-      self.render_subtitle_settings(sender);
-    }
-  }
-
-  fn clear_subtitle_languages(&mut self, sender: &ComponentSender<Self>) {
-    let mut settings = config::load();
-    settings.subtitle_languages.clear();
-    if self.save_application_config(&settings) {
-      self.reconfigure_playback_controller();
-      self.render_subtitle_settings(sender);
-    }
-  }
-
-  fn render_subtitle_settings(&self, sender: &ComponentSender<Self>) {
-    clear_box(&self.ui.settings_subtitle_languages);
-    let settings = config::load();
-    if settings.subtitle_languages.is_empty() {
-      self
-        .ui
-        .settings_subtitle_languages
-        .append(&dim_label("No subtitle language priority configured."));
-      return;
-    }
-    let last = settings.subtitle_languages.len().saturating_sub(1);
-    for (index, language) in settings.subtitle_languages.iter().enumerate() {
-      let row = gtk::Box::new(gtk::Orientation::Horizontal, 8);
-      let label = gtk::Label::new(Some(language));
-      label.add_css_class("monospace");
-      label.set_hexpand(true);
-      label.set_xalign(0.0);
-      row.append(&label);
-      let up = gtk::Button::from_icon_name("go-up-symbolic");
-      up.set_tooltip_text(Some("Move up"));
-      up.set_sensitive(index > 0);
-      up.connect_clicked({
-        let sender = sender.clone();
-        move |_| sender.input(AppMessage::MoveSubtitleLanguage { index, offset: -1 })
-      });
-      row.append(&up);
-      let down = gtk::Button::from_icon_name("go-down-symbolic");
-      down.set_tooltip_text(Some("Move down"));
-      down.set_sensitive(index < last);
-      down.connect_clicked({
-        let sender = sender.clone();
-        move |_| sender.input(AppMessage::MoveSubtitleLanguage { index, offset: 1 })
-      });
-      row.append(&down);
-      let remove = gtk::Button::from_icon_name("edit-delete-symbolic");
-      remove.set_tooltip_text(Some("Remove"));
-      remove.connect_clicked({
-        let sender = sender.clone();
-        move |_| sender.input(AppMessage::RemoveSubtitleLanguage(index))
-      });
-      row.append(&remove);
-      self.ui.settings_subtitle_languages.append(&row);
-    }
-  }
-
-  fn update_shortcut(&mut self, kind: ShortcutKind, key: String) {
-    let key = key.trim().to_owned();
-    if key.is_empty() {
-      self.show_settings_failure("MPV shortcut keys cannot be empty.");
-      return;
-    }
-    let mut settings = config::load();
-    if shortcut_binding_collision(&settings, kind, &key) {
-      self.show_settings_failure(
-        "That MPV shortcut is already assigned to another JellyPilot action.",
-      );
-      return;
-    }
-    match kind {
-      ShortcutKind::Next => settings.key_next_episode = key,
-      ShortcutKind::Previous => settings.key_previous_episode = key,
-      ShortcutKind::IntroSkip => settings.key_intro_skip = key,
-    }
-    if self.save_application_config(&settings) {
-      self.write_shortcut_config(&settings);
-    }
-  }
-
-  fn write_shortcut_config(&mut self, settings: &LoginPrefill) {
-    if write_input_conf(
-      &settings.key_next_episode,
-      &settings.key_previous_episode,
-      &settings.key_intro_skip,
-    )
-    .is_some()
-    {
-      self
-        .ui
-        .settings_config_status
-        .set_label("Saved. Shortcut changes apply when MPV (re)starts.");
-      self.ui.settings_config_status.set_visible(true);
-    } else {
-      self.show_settings_failure(
-        "Settings were saved, but the MPV shortcut file could not be written.",
-      );
-    }
-  }
-
-  fn set_image_cache_enabled(&mut self, enabled: bool) {
-    let mut settings = config::load();
-    let previous = settings.image_cache_enabled;
-    settings.image_cache_enabled = enabled;
-    if self.save_application_config(&settings) {
-      self.artwork.set_disk_cache_enabled(enabled);
-      self.ui.settings_config_status.set_label(if enabled {
-        "Saved. Disk Library Image Cache enabled."
-      } else {
-        "Saved. Disk Library Image Cache disabled; memory caching remains active."
-      });
-      self.ui.settings_config_status.set_visible(true);
-    } else {
-      self.ui.settings_image_cache_syncing.set(true);
-      self.ui.settings_image_cache.set_active(previous);
-      self.ui.settings_image_cache_syncing.set(false);
-    }
-  }
-
-  fn refresh_image_cache_stats(&mut self, sender: &ComponentSender<Self>) {
-    if self.image_cache_clearing {
-      return;
-    }
-    let token = self.requests.begin_image_cache();
-    self
-      .ui
-      .settings_image_cache_stats
-      .set_label("Computing cache statistics…");
-    self.ui.settings_image_cache_clear.set_sensitive(false);
-    let artwork = Arc::clone(&self.artwork);
-    sender.oneshot_command(async move {
-      AppCommand::ImageCacheStats {
-        token,
-        result: artwork.disk_cache_stats().await.map_err(|_| ()),
-      }
-    });
-  }
-
-  fn confirm_clear_image_cache(&mut self, sender: &ComponentSender<Self>) {
-    if self.image_cache_clearing {
-      return;
-    }
-    let Some(parent) = relm4::main_adw_application().active_window() else {
-      self.show_settings_failure("Library Image Cache confirmation could not be shown.");
-      return;
-    };
-    let dialog = adw::AlertDialog::new(
-      Some("Clear Library Image Cache?"),
-      Some(
-        "This removes best-effort original image copies. Artwork will be fetched again as needed.",
-      ),
-    );
-    dialog.add_responses(&[("cancel", "Cancel"), ("clear", "Clear cache")]);
-    dialog.set_close_response("cancel");
-    dialog.set_response_appearance("clear", adw::ResponseAppearance::Destructive);
-    let sender = sender.clone();
-    gtk::glib::spawn_future_local(async move {
-      if dialog.choose_future(&parent).await.as_str() == "clear" {
-        sender.input(AppMessage::ClearImageCache);
-      }
-    });
-  }
-
-  fn clear_image_cache(&mut self, sender: &ComponentSender<Self>) {
-    if self.image_cache_clearing {
-      return;
-    }
-    self.image_cache_clearing = true;
-    let token = self.requests.begin_image_cache();
-    self
-      .ui
-      .settings_image_cache_stats
-      .set_label("Clearing Library Image Cache…");
-    self.ui.settings_image_cache_clear.set_sensitive(false);
-    let artwork = Arc::clone(&self.artwork);
-    sender.oneshot_command(async move {
-      let result = async {
-        artwork.clear_disk_cache().await.map_err(|_| ())?;
-        artwork.disk_cache_stats().await.map_err(|_| ())
-      }
-      .await;
-      AppCommand::ImageCacheCleared { token, result }
-    });
-  }
-
-  fn render_image_cache_stats(&self, stats: ArtworkCacheStats) {
-    self.ui.settings_image_cache_stats.set_label(&format!(
-      "{} across {} cached image{}",
-      format_byte_count(stats.bytes),
-      stats.entries,
-      if stats.entries == 1 { "" } else { "s" }
-    ));
-    self
-      .ui
-      .settings_image_cache_clear
-      .set_sensitive(!self.image_cache_clearing && stats.entries > 0);
-  }
-
-  fn save_application_config(&mut self, settings: &LoginPrefill) -> bool {
-    match config::save(settings) {
-      Ok(()) => {
-        self.ui.settings_config_status.set_label("Saved");
-        self.ui.settings_config_status.set_visible(true);
-        true
-      }
-      Err(_) => {
-        self.show_settings_failure("Settings could not be saved.");
-        false
-      }
-    }
-  }
-
   fn show_settings_failure(&mut self, message: &str) {
-    self.ui.settings_config_status.set_label(message);
-    self.ui.settings_config_status.set_visible(true);
+    self.settings.set_config_status(message);
     self.record_diagnostic(
       DiagnosticLevel::Warning,
       DiagnosticCategory::Config,
@@ -4598,7 +4113,9 @@ impl AppModel {
     message: impl AsRef<str>,
   ) {
     let change = self.diagnostics.record(level, category, message);
-    self.apply_diagnostic_change(change);
+    self
+      .diagnostics_page
+      .apply_change(change, &self.diagnostics);
   }
 
   fn record_artwork_failure(&mut self) {
@@ -4608,135 +4125,9 @@ impl AppModel {
       DiagnosticCategory::Artwork,
       "Artwork could not be loaded or decoded; a fallback is shown.",
     );
-    self.apply_diagnostic_change(change);
-  }
-
-  fn apply_diagnostic_change(&self, change: DiagnosticChange) {
-    match change {
-      DiagnosticChange::Added { event, dropped_id } => {
-        if let Some(dropped_id) = dropped_id {
-          if let Some(row) = self.ui.diagnostic_rows.borrow_mut().remove(&dropped_id) {
-            self.ui.diagnostics_list.remove(&row.row);
-          }
-        }
-        self.append_diagnostic_row(&event);
-        self.update_diagnostics_summary();
-      }
-      DiagnosticChange::Updated(event) => {
-        let message = self
-          .ui
-          .diagnostic_rows
-          .borrow()
-          .get(&event.id)
-          .map(|row| row.message.clone());
-        if let Some(message) = message {
-          message.set_label(&event.message);
-        } else {
-          self.render_diagnostics();
-        }
-      }
-    }
-  }
-
-  fn render_diagnostics(&self) {
-    clear_list_box(&self.ui.diagnostics_list);
-    self.ui.diagnostic_rows.borrow_mut().clear();
-    for event in self.diagnostics.events() {
-      self.append_diagnostic_row(event);
-    }
-    self.update_diagnostics_summary();
-  }
-
-  fn append_diagnostic_row(&self, event: &DiagnosticEvent) {
-    let content = gtk::Box::new(gtk::Orientation::Horizontal, 10);
-    content.set_margin_top(8);
-    content.set_margin_bottom(8);
-    content.set_margin_start(10);
-    content.set_margin_end(10);
-    let time = gtk::Label::new(Some(&format_diagnostic_time(event.timestamp_seconds)));
-    time.add_css_class("dim-label");
-    time.add_css_class("monospace");
-    time.set_valign(gtk::Align::Start);
-    content.append(&time);
-    let level = gtk::Label::new(Some(event.level.label()));
-    level.add_css_class("caption-heading");
-    level.add_css_class(match event.level {
-      DiagnosticLevel::Info => "accent",
-      DiagnosticLevel::Warning => "warning",
-      DiagnosticLevel::Error => "error",
-    });
-    level.set_valign(gtk::Align::Start);
-    content.append(&level);
-    let category = gtk::Label::new(Some(event.category.label()));
-    category.add_css_class("dim-label");
-    category.set_valign(gtk::Align::Start);
-    content.append(&category);
-    let message = gtk::Label::new(Some(&event.message));
-    message.add_css_class("monospace");
-    message.set_hexpand(true);
-    message.set_wrap(true);
-    message.set_xalign(0.0);
-    message.set_selectable(true);
-    content.append(&message);
-    let row = gtk::ListBoxRow::new();
-    row.set_child(Some(&content));
-    self.ui.diagnostics_list.append(&row);
     self
-      .ui
-      .diagnostic_rows
-      .borrow_mut()
-      .insert(event.id, DiagnosticRowWidgets { row, message });
-  }
-
-  fn update_diagnostics_summary(&self) {
-    let state = self.diagnostics.view_state();
-    let count = match state {
-      DiagnosticsViewState::Empty => 0,
-      DiagnosticsViewState::Events { count } => count,
-    };
-    self.ui.diagnostics_count.set_label(&format!(
-      "{count} sanitized runtime event{}",
-      if count == 1 { "" } else { "s" }
-    ));
-    let populated = count > 0;
-    self.ui.diagnostics_empty.set_visible(!populated);
-    self.ui.diagnostics_scroll.set_visible(populated);
-    self.ui.diagnostics_copy.set_sensitive(populated);
-    self.ui.diagnostics_clear.set_sensitive(populated);
-    if populated {
-      let adjustment = self.ui.diagnostics_scroll.vadjustment();
-      gtk::glib::idle_add_local_once(move || {
-        adjustment.set_value((adjustment.upper() - adjustment.page_size()).max(0.0));
-      });
-    }
-  }
-
-  fn copy_diagnostics(&self) {
-    let text = self
-      .diagnostics
-      .events()
-      .map(|event| {
-        format!(
-          "[{}] {} [{}] {}",
-          format_diagnostic_time(event.timestamp_seconds),
-          event.level.label(),
-          event.category.label(),
-          sanitize_message(&event.message)
-        )
-      })
-      .collect::<Vec<_>>()
-      .join("\n");
-    let Some(display) = gtk::gdk::Display::default() else {
-      self
-        .ui
-        .diagnostics_status
-        .set_label("Copy failed: no display clipboard is available.");
-      self.ui.diagnostics_status.set_visible(true);
-      return;
-    };
-    display.clipboard().set_text(&text);
-    self.ui.diagnostics_status.set_label("Copied");
-    self.ui.diagnostics_status.set_visible(true);
+      .diagnostics_page
+      .apply_change(change, &self.diagnostics);
   }
 
   fn add_toast(&self, title: impl AsRef<str>) {
@@ -5152,7 +4543,6 @@ impl Ui {
     playback_bar.append(&row);
     root.add_bottom_bar(&playback_bar);
     toast_overlay.set_child(Some(&root));
-    let prefill = config::load();
     root.set_content(Some(login));
 
     let header = adw::HeaderBar::new();
@@ -5360,244 +4750,6 @@ impl Ui {
     authenticated.set_content(Some(&content_page));
     authenticated.set_hexpand(true);
     authenticated.set_vexpand(true);
-    let settings_saved_profile = dim_label("");
-    settings_saved_profile.set_wrap(true);
-    let settings_storage_status = dim_label("");
-    settings_storage_status.set_wrap(true);
-    settings_storage_status.set_visible(false);
-    settings_storage_status.set_accessible_role(gtk::AccessibleRole::Status);
-    let settings_disconnect_button = gtk::Button::with_label("Disconnect");
-    settings_disconnect_button.add_css_class("destructive-action");
-    settings_disconnect_button.set_halign(gtk::Align::Start);
-    settings_disconnect_button.connect_clicked({
-      let sender = sender.clone();
-      move |_| sender.input(AppMessage::Disconnect)
-    });
-    let intro_skip_group = adw::PreferencesGroup::new();
-    intro_skip_group.set_title("Intro Skip");
-    intro_skip_group.set_description(Some(
-      "Automatic skips detected ranges. Manual shows an MPV prompt. Off does not fetch or apply ranges.",
-    ));
-    intro_skip_group.set_visible(false);
-    let intro_skip_mode = adw::ComboRow::new();
-    intro_skip_mode.set_title("Mode");
-    intro_skip_mode.set_subtitle("Changes apply when playback next (re)starts in MPV.");
-    intro_skip_mode.set_model(Some(&gtk::StringList::new(&["Automatic", "Manual", "Off"])));
-    intro_skip_mode.set_selected(intro_mode_selection(prefill.intro_mode));
-    intro_skip_mode.connect_selected_notify({
-      let sender = sender.clone();
-      move |row| sender.input(AppMessage::SetIntroMode(row.selected()))
-    });
-    intro_skip_group.add(&intro_skip_mode);
-    let intro_skip_status = dim_label("");
-    intro_skip_status.set_wrap(true);
-    intro_skip_status.set_visible(false);
-    let settings_config_status = dim_label("");
-    settings_config_status.set_wrap(true);
-    settings_config_status.set_visible(false);
-    settings_config_status.set_accessible_role(gtk::AccessibleRole::Status);
-    let settings_server_url = dim_label("Not connected");
-    settings_server_url.set_selectable(true);
-    settings_server_url.set_wrap(true);
-    let settings_user = dim_label("No authenticated user");
-    settings_user.set_selectable(true);
-    let settings_remote_status = dim_label("Remote Control unavailable");
-    let settings_reconnect_button = gtk::Button::with_label("Reconnect remote control");
-    settings_reconnect_button.set_sensitive(false);
-    settings_reconnect_button.connect_clicked({
-      let sender = sender.clone();
-      move |_| sender.input(AppMessage::ReconnectRemoteControl)
-    });
-    let settings_refresh_status_button = gtk::Button::with_label("Refresh status");
-    settings_refresh_status_button.set_sensitive(false);
-    settings_refresh_status_button.connect_clicked({
-      let sender = sender.clone();
-      move |_| sender.input(AppMessage::RefreshConnectionStatus)
-    });
-    let settings_mpv_path = adw::EntryRow::new();
-    settings_mpv_path.set_title("MPV path");
-    settings_mpv_path.set_text(prefill.mpv_path.as_deref().unwrap_or(""));
-    settings_mpv_path.connect_changed({
-      let sender = sender.clone();
-      move |entry| sender.input(AppMessage::SetMpvPath(entry.text().to_string()))
-    });
-    let settings_detect_mpv = gtk::Button::with_label("Detect");
-    settings_detect_mpv.connect_clicked({
-      let sender = sender.clone();
-      move |_| sender.input(AppMessage::DetectMpv)
-    });
-    let settings_mpv_status = dim_label("");
-    settings_mpv_status.set_wrap(true);
-    settings_mpv_status.set_visible(false);
-    settings_mpv_status.set_accessible_role(gtk::AccessibleRole::Status);
-    let settings_mpv_args = adw::EntryRow::new();
-    settings_mpv_args.set_title("Advanced MPV arguments");
-    settings_mpv_args.set_text(&prefill.mpv_args.join(" "));
-    settings_mpv_args.connect_changed({
-      let sender = sender.clone();
-      move |entry| sender.input(AppMessage::SetMpvArgs(entry.text().to_string()))
-    });
-    let settings_target_name = adw::EntryRow::new();
-    settings_target_name.set_title("Playback Target name");
-    settings_target_name.set_text(prefill.playback_target_name.as_deref().unwrap_or(""));
-    settings_target_name.connect_changed({
-      let sender = sender.clone();
-      move |entry| sender.input(AppMessage::SetPlaybackTargetName(entry.text().to_string()))
-    });
-    let settings_subtitle_languages = gtk::Box::new(gtk::Orientation::Vertical, 6);
-    let settings_subtitle_preset = gtk::DropDown::from_strings(&SUBTITLE_LANGUAGE_OPTIONS);
-    let subtitle_preset_add = gtk::Button::with_label("Add selected");
-    subtitle_preset_add.connect_clicked({
-      let sender = sender.clone();
-      move |_| sender.input(AppMessage::AddSubtitlePreset)
-    });
-    let settings_subtitle_custom = adw::EntryRow::new();
-    settings_subtitle_custom.set_title("Custom language code");
-    settings_subtitle_custom.connect_entry_activated({
-      let sender = sender.clone();
-      move |_| sender.input(AppMessage::AddSubtitleCustom)
-    });
-    let subtitle_custom_add = gtk::Button::with_label("Add custom");
-    subtitle_custom_add.connect_clicked({
-      let sender = sender.clone();
-      move |_| sender.input(AppMessage::AddSubtitleCustom)
-    });
-    let subtitle_clear = gtk::Button::with_label("Clear all");
-    subtitle_clear.add_css_class("destructive-action");
-    subtitle_clear.connect_clicked({
-      let sender = sender.clone();
-      move |_| sender.input(AppMessage::ClearSubtitleLanguages)
-    });
-    let settings_key_next = adw::EntryRow::new();
-    settings_key_next.set_title("Next episode");
-    settings_key_next.set_text(&prefill.key_next_episode);
-    settings_key_next.connect_changed({
-      let sender = sender.clone();
-      move |entry| sender.input(AppMessage::SetNextEpisodeKey(entry.text().to_string()))
-    });
-    let settings_key_previous = adw::EntryRow::new();
-    settings_key_previous.set_title("Previous episode");
-    settings_key_previous.set_text(&prefill.key_previous_episode);
-    settings_key_previous.connect_changed({
-      let sender = sender.clone();
-      move |entry| sender.input(AppMessage::SetPreviousEpisodeKey(entry.text().to_string()))
-    });
-    let settings_key_intro = adw::EntryRow::new();
-    settings_key_intro.set_title("Skip intro");
-    settings_key_intro.set_text(&prefill.key_intro_skip);
-    settings_key_intro.connect_changed({
-      let sender = sender.clone();
-      move |entry| sender.input(AppMessage::SetIntroSkipKey(entry.text().to_string()))
-    });
-    let settings_image_cache_syncing = Rc::new(Cell::new(false));
-    let settings_image_cache = adw::SwitchRow::new();
-    settings_image_cache.set_title("Disk Library Image Cache");
-    settings_image_cache.set_subtitle(
-      "Stores original server image bytes for faster repeat browsing; never used as offline truth.",
-    );
-    settings_image_cache.set_active(prefill.image_cache_enabled);
-    settings_image_cache.connect_active_notify({
-      let sender = sender.clone();
-      let syncing = Rc::clone(&settings_image_cache_syncing);
-      move |row| {
-        if !syncing.get() {
-          sender.input(AppMessage::SetImageCacheEnabled(row.is_active()));
-        }
-      }
-    });
-    let settings_image_cache_stats = dim_label("Cache statistics have not been computed.");
-    settings_image_cache_stats.set_wrap(true);
-    settings_image_cache_stats.set_accessible_role(gtk::AccessibleRole::Status);
-    let settings_image_cache_clear = gtk::Button::with_label("Clear Library Image Cache");
-    settings_image_cache_clear.add_css_class("destructive-action");
-    settings_image_cache_clear.connect_clicked({
-      let sender = sender.clone();
-      move |_| sender.input(AppMessage::ConfirmClearImageCache)
-    });
-    let diagnostics_count = dim_label("0 sanitized runtime events");
-    diagnostics_count.set_xalign(0.0);
-    let diagnostics_list = gtk::ListBox::new();
-    diagnostics_list.set_selection_mode(gtk::SelectionMode::None);
-    diagnostics_list.add_css_class("boxed-list");
-    let diagnostic_rows = Rc::new(RefCell::new(HashMap::new()));
-    let diagnostics_scroll = gtk::ScrolledWindow::builder()
-      .child(&diagnostics_list)
-      .min_content_height(360)
-      .vexpand(true)
-      .build();
-    diagnostics_scroll.set_visible(false);
-    let diagnostics_empty = dim_label("No diagnostic events yet");
-    diagnostics_empty.set_xalign(0.0);
-    diagnostics_empty.set_wrap(true);
-    let diagnostics_status = dim_label("");
-    diagnostics_status.set_visible(false);
-    diagnostics_status.set_accessible_role(gtk::AccessibleRole::Status);
-    let diagnostics_copy = gtk::Button::with_label("Copy diagnostics");
-    diagnostics_copy.set_sensitive(false);
-    diagnostics_copy.connect_clicked({
-      let sender = sender.clone();
-      move |_| sender.input(AppMessage::CopyDiagnostics)
-    });
-    let diagnostics_clear = gtk::Button::with_label("Clear");
-    diagnostics_clear.add_css_class("destructive-action");
-    diagnostics_clear.set_sensitive(false);
-    diagnostics_clear.connect_clicked({
-      let sender = sender.clone();
-      move |_| sender.input(AppMessage::ClearDiagnostics)
-    });
-    let diagnostics_page = diagnostics_page(
-      &diagnostics_count,
-      &diagnostics_scroll,
-      &diagnostics_empty,
-      &diagnostics_status,
-      &diagnostics_copy,
-      &diagnostics_clear,
-    );
-    intro_skip_status.set_accessible_role(gtk::AccessibleRole::Status);
-    intro_skip_group.add(&intro_skip_status);
-    let forget_current_profile = gtk::Button::with_label("Sign out and forget");
-    forget_current_profile.add_css_class("destructive-action");
-    forget_current_profile.set_sensitive(false);
-    forget_current_profile.connect_clicked({
-      let sender = sender.clone();
-      move |_| {
-        // The model resolves the current key at message time so stale widgets never retain tokens.
-        sender.input(AppMessage::Login(login::Message::ForgetCurrentProfile))
-      }
-    });
-    let preferences = settings_page(
-      SettingsPageWidgets {
-        config_status: &settings_config_status,
-        server_url: &settings_server_url,
-        user: &settings_user,
-        remote_status: &settings_remote_status,
-        disconnect: &settings_disconnect_button,
-        reconnect: &settings_reconnect_button,
-        refresh_status: &settings_refresh_status_button,
-        saved_profile: &settings_saved_profile,
-        storage_status: &settings_storage_status,
-        forget_saved_profile: &forget_current_profile,
-        mpv_path: &settings_mpv_path,
-        detect_mpv: &settings_detect_mpv,
-        mpv_status: &settings_mpv_status,
-        mpv_args: &settings_mpv_args,
-        target_name: &settings_target_name,
-        subtitle_languages: &settings_subtitle_languages,
-        subtitle_preset: &settings_subtitle_preset,
-        subtitle_preset_add: &subtitle_preset_add,
-        subtitle_custom: &settings_subtitle_custom,
-        subtitle_custom_add: &subtitle_custom_add,
-        subtitle_clear: &subtitle_clear,
-        key_next: &settings_key_next,
-        key_previous: &settings_key_previous,
-        key_intro: &settings_key_intro,
-        image_cache: &settings_image_cache,
-        image_cache_stats: &settings_image_cache_stats,
-        image_cache_clear: &settings_image_cache_clear,
-        intro_skip: &intro_skip_group,
-      },
-      &diagnostics_page,
-    );
     let about = adw::AboutDialog::new();
     about.set_application_name("JellyPilot");
     about.set_application_icon("video-x-generic");
@@ -5605,18 +4757,6 @@ impl Ui {
     about.set_comments("A native media client for Jellyfin and Emby.");
     about.set_website("https://github.com/hewel/jellypilot");
     let application = relm4::main_adw_application();
-    let preferences_action = gtk::gio::SimpleAction::new("preferences", None);
-    preferences_action.connect_activate({
-      let preferences = preferences.clone();
-      let sender = sender.clone();
-      move |_, _| {
-        sender.input(AppMessage::RefreshDiagnostics);
-        sender.input(AppMessage::RefreshImageCacheStats);
-        let parent = relm4::main_adw_application().active_window();
-        preferences.present(parent.as_ref());
-      }
-    });
-    application.add_action(&preferences_action);
     let about_action = gtk::gio::SimpleAction::new("about", None);
     about_action.connect_activate({
       let about = about.clone();
@@ -5689,229 +4829,8 @@ impl Ui {
       subtitle_track_list,
       playback_controls_syncing,
       sender: sender.clone(),
-      settings_saved_profile,
-      settings_storage_status,
-      settings_disconnect_button,
-      intro_skip_group,
-      intro_skip_mode,
-      intro_skip_status,
-      settings_config_status,
-      settings_server_url,
-      settings_user,
-      settings_remote_status,
-      settings_reconnect_button,
-      settings_refresh_status_button,
-      settings_mpv_path,
-      settings_mpv_status,
-      settings_subtitle_languages,
-      settings_subtitle_preset,
-      settings_subtitle_custom,
-      settings_image_cache,
-      settings_image_cache_syncing,
-      settings_image_cache_stats,
-      settings_image_cache_clear,
-      diagnostics_list,
-      diagnostic_rows,
-      diagnostics_empty,
-      diagnostics_count,
-      diagnostics_scroll,
-      diagnostics_copy,
-      diagnostics_clear,
-      diagnostics_status,
-      forget_current_profile,
-      preferences,
     }
   }
-}
-
-fn diagnostics_page(
-  count: &gtk::Label,
-  scroll: &gtk::ScrolledWindow,
-  empty: &gtk::Label,
-  status: &gtk::Label,
-  copy: &gtk::Button,
-  clear: &gtk::Button,
-) -> adw::PreferencesPage {
-  let page = adw::PreferencesPage::new();
-  page.set_title("Diagnostics");
-  page.set_icon_name(Some("dialog-information-symbolic"));
-  let group = adw::PreferencesGroup::new();
-  group.set_title("Sanitized runtime events");
-  group.set_description(Some(
-    "Connection, authentication, playback, remote-control, artwork, and configuration events useful for support.",
-  ));
-  let content = gtk::Box::new(gtk::Orientation::Vertical, 12);
-  content.append(count);
-  content.append(empty);
-  content.append(scroll);
-  content.append(status);
-  let actions = gtk::Box::new(gtk::Orientation::Horizontal, 8);
-  actions.set_halign(gtk::Align::End);
-  actions.append(copy);
-  actions.append(clear);
-  content.append(&actions);
-  group.add(&content);
-  page.add(&group);
-  page
-}
-
-struct SettingsPageWidgets<'a> {
-  config_status: &'a gtk::Label,
-  server_url: &'a gtk::Label,
-  user: &'a gtk::Label,
-  remote_status: &'a gtk::Label,
-  disconnect: &'a gtk::Button,
-  reconnect: &'a gtk::Button,
-  refresh_status: &'a gtk::Button,
-  saved_profile: &'a gtk::Label,
-  storage_status: &'a gtk::Label,
-  forget_saved_profile: &'a gtk::Button,
-  mpv_path: &'a adw::EntryRow,
-  detect_mpv: &'a gtk::Button,
-  mpv_status: &'a gtk::Label,
-  mpv_args: &'a adw::EntryRow,
-  target_name: &'a adw::EntryRow,
-  subtitle_languages: &'a gtk::Box,
-  subtitle_preset: &'a gtk::DropDown,
-  subtitle_preset_add: &'a gtk::Button,
-  subtitle_custom: &'a adw::EntryRow,
-  subtitle_custom_add: &'a gtk::Button,
-  subtitle_clear: &'a gtk::Button,
-  key_next: &'a adw::EntryRow,
-  key_previous: &'a adw::EntryRow,
-  key_intro: &'a adw::EntryRow,
-  image_cache: &'a adw::SwitchRow,
-  image_cache_stats: &'a gtk::Label,
-  image_cache_clear: &'a gtk::Button,
-  intro_skip: &'a adw::PreferencesGroup,
-}
-
-fn settings_page(
-  widgets: SettingsPageWidgets<'_>,
-  diagnostics: &adw::PreferencesPage,
-) -> adw::PreferencesDialog {
-  let dialog = adw::PreferencesDialog::new();
-  dialog.set_title("Preferences");
-  let page = adw::PreferencesPage::new();
-  page.set_title("JellyPilot");
-  let SettingsPageWidgets {
-    config_status,
-    server_url,
-    user,
-    remote_status,
-    disconnect,
-    reconnect,
-    refresh_status,
-    saved_profile,
-    storage_status,
-    forget_saved_profile,
-    mpv_path,
-    detect_mpv,
-    mpv_status,
-    mpv_args,
-    target_name,
-    subtitle_languages,
-    subtitle_preset,
-    subtitle_preset_add,
-    subtitle_custom,
-    subtitle_custom_add,
-    subtitle_clear,
-    key_next,
-    key_previous,
-    key_intro,
-    image_cache,
-    image_cache_stats,
-    image_cache_clear,
-    intro_skip,
-  } = widgets;
-
-  let status_group = adw::PreferencesGroup::new();
-  status_group.add(config_status);
-  page.add(&status_group);
-
-  let connection_group = adw::PreferencesGroup::new();
-  connection_group.set_title("Connection");
-  connection_group.set_description(Some(
-    "Live authenticated-session and Remote Control status.",
-  ));
-  connection_group.add(server_url);
-  connection_group.add(user);
-  connection_group.add(remote_status);
-  let connection_actions = gtk::Box::new(gtk::Orientation::Horizontal, 8);
-  connection_actions.append(disconnect);
-  connection_actions.append(reconnect);
-  connection_actions.append(refresh_status);
-  connection_group.add(&connection_actions);
-  page.add(&connection_group);
-
-  let player_group = adw::PreferencesGroup::new();
-  player_group.set_title("Player");
-  player_group.set_description(Some(
-    "MPV path, advanced arguments, and subtitle priorities apply on the next MPV start. Playback Target name applies to newly established sessions.",
-  ));
-  player_group.add(mpv_path);
-  let detect_row = gtk::Box::new(gtk::Orientation::Horizontal, 8);
-  detect_row.append(detect_mpv);
-  detect_row.append(mpv_status);
-  player_group.add(&detect_row);
-  player_group.add(mpv_args);
-  player_group.add(target_name);
-  page.add(&player_group);
-
-  let subtitles_group = adw::PreferencesGroup::new();
-  subtitles_group.set_title("Subtitles");
-  subtitles_group.set_description(Some(
-    "Ordered MPV subtitle-language priority for newly started playback.",
-  ));
-  subtitles_group.add(subtitle_languages);
-  let preset_row = gtk::Box::new(gtk::Orientation::Horizontal, 8);
-  preset_row.append(subtitle_preset);
-  preset_row.append(subtitle_preset_add);
-  subtitles_group.add(&preset_row);
-  subtitles_group.add(subtitle_custom);
-  let subtitle_actions = gtk::Box::new(gtk::Orientation::Horizontal, 8);
-  subtitle_actions.append(subtitle_custom_add);
-  subtitle_actions.append(subtitle_clear);
-  subtitles_group.add(&subtitle_actions);
-  page.add(&subtitles_group);
-
-  let shortcuts_group = adw::PreferencesGroup::new();
-  shortcuts_group.set_title("Shortcuts");
-  shortcuts_group.set_description(Some(
-    "JellyPilot MPV bindings are saved immediately and apply when MPV (re)starts.",
-  ));
-  shortcuts_group.add(key_next);
-  shortcuts_group.add(key_previous);
-  shortcuts_group.add(key_intro);
-  page.add(&shortcuts_group);
-
-  let library_group = adw::PreferencesGroup::new();
-  library_group.set_title("Library");
-  library_group.set_description(Some(
-    "The disk cache is best-effort acceleration for original Library Image bytes, not an offline artwork source. Capacity is bounded to 512 MiB.",
-  ));
-  library_group.add(image_cache);
-  library_group.add(image_cache_stats);
-  image_cache_clear.set_halign(gtk::Align::Start);
-  library_group.add(image_cache_clear);
-  page.add(&library_group);
-
-  page.add(intro_skip);
-
-  let session_group = adw::PreferencesGroup::new();
-  session_group.set_title("Session");
-  session_group.set_description(Some(
-    "Saved sign-ins remain available until they are forgotten.",
-  ));
-  session_group.add(saved_profile);
-  session_group.add(storage_status);
-  forget_saved_profile.set_halign(gtk::Align::Start);
-  session_group.add(forget_saved_profile);
-  page.add(&session_group);
-
-  dialog.add(&page);
-  dialog.add(diagnostics);
-  dialog
 }
 
 fn detail_metadata_section(
@@ -6084,12 +5003,6 @@ fn library_shortcut_caption(shortcut: &VideoLibraryShortcut) -> String {
 }
 
 fn clear_box(container: &gtk::Box) {
-  while let Some(child) = container.first_child() {
-    container.remove(&child);
-  }
-}
-
-fn clear_list_box(container: &gtk::ListBox) {
   while let Some(child) = container.first_child() {
     container.remove(&child);
   }
@@ -6295,47 +5208,6 @@ fn playback_notice(notice: &PlaybackNotice) -> Option<String> {
   })
 }
 
-fn shortcut_binding_collision(
-  settings: &LoginPrefill,
-  kind: ShortcutKind,
-  candidate: &str,
-) -> bool {
-  let other_bindings = match kind {
-    ShortcutKind::Next => [
-      settings.key_previous_episode.as_str(),
-      settings.key_intro_skip.as_str(),
-    ],
-    ShortcutKind::Previous => [
-      settings.key_next_episode.as_str(),
-      settings.key_intro_skip.as_str(),
-    ],
-    ShortcutKind::IntroSkip => [
-      settings.key_next_episode.as_str(),
-      settings.key_previous_episode.as_str(),
-    ],
-  };
-  other_bindings
-    .iter()
-    .any(|binding| binding.trim().eq_ignore_ascii_case(candidate.trim()))
-}
-
-fn non_empty_setting(value: String) -> Option<String> {
-  let value = value.trim();
-  (!value.is_empty()).then(|| value.to_owned())
-}
-
-fn parse_mpv_args(value: &str) -> Vec<String> {
-  value.split_whitespace().map(str::to_owned).collect()
-}
-
-fn valid_subtitle_language(value: &str) -> bool {
-  !value.is_empty()
-    && value.len() <= 16
-    && value
-      .chars()
-      .all(|character| character.is_ascii_alphanumeric() || matches!(character, '-' | '_'))
-}
-
 fn configured_client(settings: &LoginPrefill) -> Arc<JellyfinClient> {
   let client = Arc::new(JellyfinClient::new());
   if let Some(name) = settings
@@ -6369,22 +5241,6 @@ fn playback_controller_config(settings: &LoginPrefill) -> PlaybackControllerConf
     playback = playback.with_mpv_path(PathBuf::from(path));
   }
   playback
-}
-
-const fn config_intro_mode(selected: u32) -> config::IntroMode {
-  match selected {
-    1 => config::IntroMode::Manual,
-    2 => config::IntroMode::Off,
-    _ => config::IntroMode::Automatic,
-  }
-}
-
-const fn intro_mode_selection(mode: config::IntroMode) -> u32 {
-  match mode {
-    config::IntroMode::Automatic => 0,
-    config::IntroMode::Manual => 1,
-    config::IntroMode::Off => 2,
-  }
 }
 
 const fn session_intro_mode(mode: config::IntroMode) -> IntroSkipMode {
@@ -6571,31 +5427,6 @@ fn runtime_seconds_to_ticks(seconds: Option<f64>) -> Option<i64> {
   seconds
     .filter(|seconds| seconds.is_finite() && *seconds >= 0.0)
     .map(|seconds| (seconds * 10_000_000.0).round() as i64)
-}
-
-fn format_byte_count(bytes: u64) -> String {
-  const KIB: f64 = 1024.0;
-  const MIB: f64 = KIB * 1024.0;
-  const GIB: f64 = MIB * 1024.0;
-  let bytes = bytes as f64;
-  if bytes >= GIB {
-    format!("{:.1} GiB", bytes / GIB)
-  } else if bytes >= MIB {
-    format!("{:.1} MiB", bytes / MIB)
-  } else if bytes >= KIB {
-    format!("{:.1} KiB", bytes / KIB)
-  } else {
-    format!("{bytes:.0} B")
-  }
-}
-
-fn format_diagnostic_time(timestamp_seconds: u64) -> String {
-  i64::try_from(timestamp_seconds)
-    .ok()
-    .and_then(|timestamp| gtk::glib::DateTime::from_unix_utc(timestamp).ok())
-    .and_then(|timestamp| timestamp.format("%Y-%m-%d %H:%M:%S UTC").ok())
-    .map(|timestamp| timestamp.to_string())
-    .unwrap_or_else(|| format!("{timestamp_seconds} UTC"))
 }
 
 fn format_duration(seconds: f64) -> String {
@@ -6916,18 +5747,6 @@ mod tests {
     );
   }
   #[test]
-  fn diagnostic_timestamp_includes_date_and_explicit_utc_zone() {
-    assert_eq!(format_diagnostic_time(0), "1970-01-01 00:00:00 UTC");
-  }
-  #[test]
-  fn advanced_mpv_arguments_parse_as_space_separated_values() {
-    assert_eq!(
-      parse_mpv_args(" --fullscreen   --profile=gpu-hq "),
-      vec!["--fullscreen", "--profile=gpu-hq"]
-    );
-  }
-
-  #[test]
   fn subtitle_preferences_reach_mpv_launch_without_overriding_user_slang() {
     let mut settings = LoginPrefill {
       mpv_args: vec!["--fullscreen".to_owned()],
@@ -6944,34 +5763,5 @@ mod tests {
       configured_mpv_args(&settings),
       vec!["--fullscreen", "--slang=jpn"]
     );
-  }
-
-  #[test]
-  fn custom_subtitle_language_validation_rejects_mpv_list_delimiters() {
-    assert!(valid_subtitle_language("pt-br"));
-    assert!(valid_subtitle_language("zho_hant"));
-    assert!(!valid_subtitle_language(""));
-    assert!(!valid_subtitle_language("eng,spa"));
-    assert!(!valid_subtitle_language("english subtitles"));
-  }
-
-  #[test]
-  fn shortcut_collisions_are_case_insensitive_trimmed_and_exclude_current_action() {
-    let settings = LoginPrefill::default();
-    assert!(shortcut_binding_collision(
-      &settings,
-      ShortcutKind::Next,
-      " shift+< ",
-    ));
-    assert!(shortcut_binding_collision(
-      &settings,
-      ShortcutKind::IntroSkip,
-      "SHIFT+>",
-    ));
-    assert!(!shortcut_binding_collision(
-      &settings,
-      ShortcutKind::Next,
-      " shift+> ",
-    ));
   }
 }
