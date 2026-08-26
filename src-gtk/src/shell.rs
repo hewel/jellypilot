@@ -1,5 +1,5 @@
 use std::cell::{Cell, RefCell};
-use std::collections::{HashMap, VecDeque};
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::rc::Rc;
 use std::sync::Arc;
@@ -13,11 +13,8 @@ use jellypilot_media_server::{
   VideoSearchRequest, VideoSeason, VideoSeasonEpisodesPage, VideoSeasonEpisodesPageRequest,
   VideoShowDetail, VideoUserDataAction, VideoUserDataUpdate, VideoUserDataUpdateRequest,
 };
-use jellypilot_mpv::{find_mpv, has_mpv_option, write_input_conf};
-use jellypilot_session::{
-  evaluate_intro_skip, evaluate_manual_skip, IntroSkipAction, IntroSkipKind, IntroSkipMode,
-  IntroSkipRange,
-};
+use jellypilot_mpv::{find_mpv, has_mpv_option, write_input_conf, PlayerState};
+use jellypilot_session::{IntroSkipKind, IntroSkipMode, IntroSkipRange};
 use relm4::adw::prelude::*;
 use relm4::tokio::sync::{oneshot, watch};
 use relm4::{adw, gtk, Component, ComponentParts, ComponentSender, RelmApp};
@@ -37,8 +34,13 @@ use crate::diagnostics::{
 };
 use crate::library_browse::LibraryBrowseView;
 use crate::playback::{
-  PlaybackController, PlaybackControllerConfig, PlaybackEndReason, PlaybackError, PlaybackOptions,
-  PlaybackRefreshState, PlaybackSnapshot, PlaybackStartPosition, PlaybackWarning, TrackInfo,
+  Playable, PlaybackController, PlaybackControllerConfig, PlaybackError, PlaybackRefreshOutcome,
+  PlaybackRefreshState, PlaybackSnapshot, PlaybackStartPosition, TrackInfo,
+};
+use crate::playback_session::{
+  AdjacentAvailability, AdjacentDirection, ControllerCommand, ControllerSettlement, EffectId,
+  IntroAvailability, PlaybackEffect, PlaybackEvent, PlaybackInput, PlaybackIntent, PlaybackNotice,
+  PlaybackSession, SessionView, TracksView,
 };
 use crate::request_gate::{DetailToken, HomeToken, RequestGate, SessionToken};
 
@@ -100,11 +102,12 @@ struct AppModel {
   remote_generation: u64,
   remote_play_generation: u64,
   remote_socket: Option<Arc<jellypilot_session::JellyfinWebSocket>>,
-  playback: PlaybackState,
-  playback_cancellation: watch::Sender<u64>,
-  playback_start_generation: u64,
-  playback_refresh_source: Option<gtk::glib::SourceId>,
-  playback_cleanup_pending: bool,
+  playback_session: PlaybackSession,
+  playback_controller: Option<PlaybackController>,
+  playback_item: Option<MediaItem>,
+  playback_artwork_image_id: Option<String>,
+  playback_reconfigure_pending: bool,
+  playback_engine_error: Option<String>,
   remote_disconnect_pending: bool,
   quitting: bool,
   ui: Ui,
@@ -120,57 +123,6 @@ struct DiagnosticRowWidgets {
   message: gtk::Label,
 }
 
-#[derive(Default)]
-struct PlaybackState {
-  controller: Option<PlaybackController>,
-  snapshot: Option<PlaybackSnapshot>,
-  active_item: Option<MediaItem>,
-  active_artwork_image_id: Option<String>,
-  identity: Option<PlaybackIdentity>,
-  tracks: PlaybackTrackState,
-  adjacent: AdjacentState,
-  intro_skip: IntroSkipState,
-  unavailable: Option<String>,
-  error: Option<String>,
-  notice: Option<String>,
-  busy: bool,
-  desired_paused: Option<bool>,
-  desired_muted: Option<bool>,
-  sequence: u64,
-  reconfigure_pending: bool,
-  pending: VecDeque<PlaybackRequest>,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-struct PlaybackIdentity {
-  session: u64,
-  sequence: u64,
-  item_id: String,
-}
-
-#[derive(Default)]
-enum PlaybackTrackState {
-  #[default]
-  Unavailable,
-  Loading {
-    identity: PlaybackIdentity,
-  },
-  Ready {
-    identity: PlaybackIdentity,
-    tracks: Vec<TrackInfo>,
-  },
-  Failed {
-    identity: PlaybackIdentity,
-    message: String,
-  },
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum AdjacentDirection {
-  Previous,
-  Next,
-}
-
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum TrackKind {
   Audio,
@@ -182,101 +134,6 @@ enum ShortcutKind {
   Next,
   Previous,
   IntroSkip,
-}
-
-#[derive(Default)]
-enum AdjacentAvailability {
-  #[default]
-  Idle,
-  Loading,
-  Available(MediaItem),
-  Unavailable(String),
-}
-
-#[derive(Default)]
-struct AdjacentState {
-  identity: Option<PlaybackIdentity>,
-  sequence: u64,
-  previous: AdjacentAvailability,
-  next: AdjacentAvailability,
-}
-
-impl AdjacentState {
-  fn availability(&self, direction: AdjacentDirection) -> &AdjacentAvailability {
-    match direction {
-      AdjacentDirection::Previous => &self.previous,
-      AdjacentDirection::Next => &self.next,
-    }
-  }
-}
-
-struct IntroSkipState {
-  identity: Option<PlaybackIdentity>,
-  sequence: u64,
-  mode: IntroSkipMode,
-  ranges: Vec<IntroSkipRange>,
-  active_prompt: Option<ActiveIntroPrompt>,
-}
-
-impl Default for IntroSkipState {
-  fn default() -> Self {
-    Self {
-      identity: None,
-      sequence: 0,
-      mode: IntroSkipMode::Off,
-      ranges: Vec::new(),
-      active_prompt: None,
-    }
-  }
-}
-
-struct ActiveIntroPrompt {
-  range_index: usize,
-  expires_at: Instant,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq)]
-enum IntroUiAction {
-  Seek {
-    range_index: usize,
-    target: f64,
-  },
-  Prompt {
-    range_index: usize,
-    kind: IntroSkipKind,
-  },
-  ManualSkip {
-    range_index: usize,
-    kind: IntroSkipKind,
-    seek_target: f64,
-  },
-}
-
-enum PlaybackRequest {
-  Library(VideoLibraryItem, PlaybackStartPosition),
-  Detail(VideoItemDetail, PlaybackStartPosition),
-  ReplaceMedia(MediaItem),
-  Paused(bool),
-  Seek(f64),
-  Volume(f64),
-  Muted(bool),
-  AudioTrack {
-    identity: PlaybackIdentity,
-    id: i64,
-  },
-  SubtitleTrack {
-    identity: PlaybackIdentity,
-    id: Option<i64>,
-  },
-  RefreshTracks(PlaybackIdentity),
-  ShowText {
-    identity: PlaybackIdentity,
-    text: String,
-    duration_ms: i64,
-    prompt_range: Option<usize>,
-  },
-  Stop,
-  Refresh,
 }
 
 struct SensitiveCredentials(Credentials);
@@ -293,142 +150,6 @@ impl Drop for SensitiveCredentials {
   fn drop(&mut self) {
     self.0.password.zeroize();
   }
-}
-
-#[derive(Clone, Copy, Eq, PartialEq)]
-enum PlaybackRequestKind {
-  Start,
-  Paused,
-  Seek,
-  Volume,
-  Muted,
-  AudioTrack,
-  SubtitleTrack,
-  RefreshTracks,
-  ShowText,
-  Stop,
-  Refresh,
-}
-
-impl PlaybackRequest {
-  const fn kind(&self) -> PlaybackRequestKind {
-    match self {
-      Self::Library(..) | Self::Detail(..) | Self::ReplaceMedia(..) => PlaybackRequestKind::Start,
-      Self::Paused(_) => PlaybackRequestKind::Paused,
-      Self::Seek(_) => PlaybackRequestKind::Seek,
-      Self::Volume(_) => PlaybackRequestKind::Volume,
-      Self::Muted(_) => PlaybackRequestKind::Muted,
-      Self::AudioTrack { .. } => PlaybackRequestKind::AudioTrack,
-      Self::SubtitleTrack { .. } => PlaybackRequestKind::SubtitleTrack,
-      Self::RefreshTracks(_) => PlaybackRequestKind::RefreshTracks,
-      Self::ShowText { .. } => PlaybackRequestKind::ShowText,
-      Self::Stop => PlaybackRequestKind::Stop,
-      Self::Refresh => PlaybackRequestKind::Refresh,
-    }
-  }
-
-  fn identity(&self) -> Option<&PlaybackIdentity> {
-    match self {
-      Self::AudioTrack { identity, .. }
-      | Self::SubtitleTrack { identity, .. }
-      | Self::RefreshTracks(identity)
-      | Self::ShowText { identity, .. } => Some(identity),
-      _ => None,
-    }
-  }
-
-  fn started_item(&self) -> Option<MediaItem> {
-    match self {
-      Self::Library(item, _) => Some(media_item_from_library(item)),
-      Self::Detail(item, _) => Some(media_item_from_detail(item)),
-      Self::ReplaceMedia(item) => Some(item.clone()),
-      _ => None,
-    }
-  }
-
-  fn started_artwork_image_id(&self) -> Option<String> {
-    match self {
-      Self::Library(item, _) => item
-        .series_poster_image_id
-        .clone()
-        .or_else(|| item.artwork_image_id.clone()),
-      Self::Detail(item, _) => item
-        .series_poster_image_id
-        .clone()
-        .or_else(|| item.artwork_image_id.clone()),
-      Self::ReplaceMedia(_) => None,
-      _ => None,
-    }
-  }
-}
-
-struct IntroPromptReceipt {
-  identity: PlaybackIdentity,
-  range_index: usize,
-  duration: Duration,
-}
-
-struct PlaybackCommandSuccess {
-  snapshot: Option<PlaybackSnapshot>,
-  preserve_snapshot: bool,
-  warnings: Vec<PlaybackWarning>,
-  notice: Option<String>,
-  tracks: Option<Result<Vec<TrackInfo>, String>>,
-  client_messages: Vec<String>,
-  prompt_displayed: Option<IntroPromptReceipt>,
-}
-
-impl PlaybackCommandSuccess {
-  fn playback(
-    snapshot: Option<PlaybackSnapshot>,
-    warnings: Vec<PlaybackWarning>,
-    notice: Option<String>,
-  ) -> Self {
-    Self {
-      snapshot,
-      preserve_snapshot: false,
-      warnings,
-      notice,
-      tracks: None,
-      client_messages: Vec::new(),
-      prompt_displayed: None,
-    }
-  }
-
-  fn tracks(result: Result<Vec<TrackInfo>, String>) -> Self {
-    Self {
-      snapshot: None,
-      preserve_snapshot: true,
-      warnings: Vec::new(),
-      notice: None,
-      tracks: Some(result),
-      client_messages: Vec::new(),
-      prompt_displayed: None,
-    }
-  }
-  fn preserved() -> Self {
-    Self {
-      snapshot: None,
-      preserve_snapshot: true,
-      warnings: Vec::new(),
-      notice: None,
-      tracks: None,
-      client_messages: Vec::new(),
-      prompt_displayed: None,
-    }
-  }
-}
-
-struct PlaybackCommandFailure {
-  message: String,
-  clear_snapshot: bool,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum PlaybackShutdownDisposition {
-  Detached,
-  Disconnect,
-  Quit,
 }
 
 #[derive(Clone, Copy)]
@@ -637,7 +358,6 @@ enum AppCommand {
   },
   RemotePlay {
     generation: u64,
-    playback_generation: u64,
     play_generation: u64,
     start_position: PlaybackStartPosition,
     result: Result<VideoItemDetail, String>,
@@ -714,31 +434,20 @@ enum AppCommand {
     sequence: u64,
     result: Result<ArtworkCacheStats, ()>,
   },
-  Playback {
-    session: u64,
-    sequence: u64,
-    request_kind: PlaybackRequestKind,
-    started_item: Option<MediaItem>,
-    started_artwork_image_id: Option<String>,
-    controller: Box<PlaybackController>,
-    result: Result<PlaybackCommandSuccess, PlaybackCommandFailure>,
+  PlaybackSettled {
+    id: EffectId,
+    controller: Option<Box<PlaybackController>>,
+    settlement: ControllerSettlement,
+    tracks: Option<Result<Vec<TrackInfo>, PlaybackError>>,
   },
-  AdjacentEpisodes {
-    session: u64,
-    sequence: u64,
-    identity: PlaybackIdentity,
-    previous: Result<Option<MediaItem>, String>,
-    next: Result<Option<MediaItem>, String>,
+  IntroRangesSettled {
+    id: EffectId,
+    result: Result<Vec<IntroSkipRange>, ()>,
   },
-  IntroRanges {
-    session: u64,
-    sequence: u64,
-    identity: PlaybackIdentity,
-    ranges: Vec<IntroSkipRange>,
-  },
-  PlaybackShutdown {
-    disposition: PlaybackShutdownDisposition,
-    warnings: Vec<PlaybackWarning>,
+  AdjacentSettled {
+    id: EffectId,
+    direction: AdjacentDirection,
+    result: Result<Option<MediaItem>, ()>,
   },
 }
 
@@ -901,48 +610,31 @@ impl std::fmt::Debug for AppCommand {
         .field("sequence", sequence)
         .field("successful", &result.is_ok())
         .finish(),
-      Self::Playback {
-        session,
-        sequence,
-        result,
-        ..
-      } => formatter
-        .debug_struct("Playback")
-        .field("session", session)
-        .field("sequence", sequence)
+      Self::PlaybackSettled { settlement, .. } => formatter
+        .debug_struct("PlaybackSettled")
+        .field(
+          "kind",
+          &match settlement {
+            ControllerSettlement::Started(_) => "started",
+            ControllerSettlement::Controlled(_) => "controlled",
+            ControllerSettlement::Stopped(_) => "stopped",
+            ControllerSettlement::Refreshed { .. } => "refreshed",
+            ControllerSettlement::TrackSelected(_) => "track-selected",
+            ControllerSettlement::OsdShown(_) => "osd",
+            ControllerSettlement::Shutdown(_) => "shutdown",
+          },
+        )
+        .finish(),
+      Self::IntroRangesSettled { result, .. } => formatter
+        .debug_struct("IntroRangesSettled")
         .field("successful", &result.is_ok())
         .finish(),
-      Self::AdjacentEpisodes {
-        session,
-        sequence,
-        previous,
-        next,
-        ..
+      Self::AdjacentSettled {
+        direction, result, ..
       } => formatter
-        .debug_struct("AdjacentEpisodes")
-        .field("session", session)
-        .field("sequence", sequence)
-        .field("previous_successful", &previous.is_ok())
-        .field("next_successful", &next.is_ok())
-        .finish(),
-      Self::IntroRanges {
-        session,
-        sequence,
-        ranges,
-        ..
-      } => formatter
-        .debug_struct("IntroRanges")
-        .field("session", session)
-        .field("sequence", sequence)
-        .field("range_count", &ranges.len())
-        .finish(),
-      Self::PlaybackShutdown {
-        disposition,
-        warnings,
-      } => formatter
-        .debug_struct("PlaybackShutdown")
-        .field("disposition", disposition)
-        .field("warning_count", &warnings.len())
+        .debug_struct("AdjacentSettled")
+        .field("direction", direction)
+        .field("successful", &result.is_ok())
         .finish(),
     }
   }
@@ -1087,14 +779,13 @@ impl Component for AppModel {
         gtk::glib::Propagation::Stop
       }
     });
-    let playback_refresh_source = gtk::glib::timeout_add_seconds_local(1, {
+    let _playback_tick = gtk::glib::timeout_add_seconds_local(1, {
       let sender = sender.clone();
       move || {
         sender.input(AppMessage::RefreshPlayback);
         gtk::glib::ControlFlow::Continue
       }
     });
-    let (playback_cancellation, _) = watch::channel(0);
     let (quick_connect_cancellation, _) = watch::channel(0);
     let loaded_config = config::load_checked();
     let intro_mode = loaded_config
@@ -1156,11 +847,12 @@ impl Component for AppModel {
       remote_generation: 0,
       remote_play_generation: 0,
       remote_socket: None,
-      playback: PlaybackState::default(),
-      playback_cancellation,
-      playback_start_generation: 0,
-      playback_refresh_source: Some(playback_refresh_source),
-      playback_cleanup_pending: false,
+      playback_session: PlaybackSession::default(),
+      playback_controller: None,
+      playback_item: None,
+      playback_artwork_image_id: None,
+      playback_reconfigure_pending: false,
+      playback_engine_error: None,
       remote_disconnect_pending: false,
       quitting: false,
       ui,
@@ -1235,36 +927,31 @@ impl Component for AppModel {
         self.start_user_data_update(item_id, action, &sender)
       }
       AppMessage::PlayLibrary(item, start_position) => {
-        self.start_playback(PlaybackRequest::Library(item, start_position), &sender)
+        self.start_playback(Playable::from(item), start_position, &sender)
       }
       AppMessage::PlayDetail(item, start_position) => {
-        self.start_playback(PlaybackRequest::Detail(item, start_position), &sender)
+        self.start_playback(Playable::from(item), start_position, &sender)
       }
-      AppMessage::TogglePaused => {
-        let paused = self
-          .playback
-          .desired_paused
-          .or_else(|| {
-            self
-              .playback
-              .snapshot
-              .as_ref()
-              .map(|snapshot| snapshot.transport.paused)
-          })
-          .unwrap_or(false);
-        self.start_playback(PlaybackRequest::Paused(!paused), &sender);
-      }
+      AppMessage::TogglePaused => self.dispatch_playback(PlaybackIntent::TogglePaused, &sender),
       AppMessage::SetPaused(paused) => {
-        self.start_playback(PlaybackRequest::Paused(paused), &sender)
+        self.dispatch_playback(PlaybackIntent::SetPaused(paused), &sender)
       }
-      AppMessage::Seek(position) => self.start_playback(PlaybackRequest::Seek(position), &sender),
+      AppMessage::Seek(position) => self.dispatch_playback(PlaybackIntent::Seek(position), &sender),
       AppMessage::SetVolume(volume) => {
-        self.start_playback(PlaybackRequest::Volume(volume), &sender)
+        self.dispatch_playback(PlaybackIntent::SetVolume(volume), &sender)
       }
-      AppMessage::SetMuted(muted) => self.start_playback(PlaybackRequest::Muted(muted), &sender),
-      AppMessage::SelectAudioTrack(id) => self.select_track(TrackKind::Audio, Some(id), &sender),
-      AppMessage::SelectSubtitleTrack(id) => self.select_track(TrackKind::Subtitle, id, &sender),
-      AppMessage::PlayAdjacent(direction) => self.play_adjacent(direction, &sender),
+      AppMessage::SetMuted(muted) => {
+        self.dispatch_playback(PlaybackIntent::SetMuted(muted), &sender)
+      }
+      AppMessage::SelectAudioTrack(id) => {
+        self.dispatch_playback(PlaybackIntent::SelectAudioTrack(id), &sender)
+      }
+      AppMessage::SelectSubtitleTrack(id) => {
+        self.dispatch_playback(PlaybackIntent::SelectSubtitleTrack(id), &sender)
+      }
+      AppMessage::PlayAdjacent(direction) => {
+        self.dispatch_playback(PlaybackIntent::PlayAdjacent(direction), &sender)
+      }
       AppMessage::CopyDiagnostics => self.copy_diagnostics(),
       AppMessage::ClearDiagnostics => {
         self.diagnostics.clear();
@@ -1273,7 +960,7 @@ impl Component for AppModel {
         self.render_diagnostics();
       }
       AppMessage::RefreshDiagnostics => self.render_diagnostics(),
-      AppMessage::SetIntroMode(selected) => self.set_intro_mode(selected),
+      AppMessage::SetIntroMode(selected) => self.set_intro_mode(selected, &sender),
       AppMessage::ReconnectRemoteControl => self.reconnect_remote_control(&sender),
       AppMessage::RefreshConnectionStatus => self.refresh_connection_status(&sender),
       AppMessage::DetectMpv => self.detect_mpv(),
@@ -1294,25 +981,13 @@ impl Component for AppModel {
       AppMessage::RefreshImageCacheStats => self.refresh_image_cache_stats(&sender),
       AppMessage::ConfirmClearImageCache => self.confirm_clear_image_cache(&sender),
       AppMessage::ClearImageCache => self.clear_image_cache(&sender),
-      AppMessage::StopPlayback => self.start_playback(PlaybackRequest::Stop, &sender),
-      AppMessage::RefreshPlayback => {
-        if self
-          .playback
-          .snapshot
-          .as_ref()
-          .and_then(|snapshot| snapshot.now_playing.as_ref())
-          .is_some()
-        {
-          self.start_playback(PlaybackRequest::Refresh, &sender);
-        }
-      }
+      AppMessage::StopPlayback => self.dispatch_playback(PlaybackIntent::Stop, &sender),
+      AppMessage::RefreshPlayback => self.dispatch_playback(PlaybackIntent::Tick, &sender),
       AppMessage::QuitRequested => self.request_quit(&sender),
       AppMessage::RemoteDisconnectSettled(generation) => {
         if generation == self.remote_generation && self.remote_disconnect_pending {
           self.remote_disconnect_pending = false;
-          if self.quitting
-            && quit_can_finish_without_controller(self.playback.busy, self.playback_cleanup_pending)
-          {
+          if self.quitting && self.playback_session.view().quit_may_proceed {
             relm4::main_adw_application().quit();
           }
         }
@@ -1466,19 +1141,15 @@ impl Component for AppModel {
       }
       AppCommand::RemotePlay {
         generation,
-        playback_generation,
         play_generation,
         start_position,
         result,
       } => {
-        if generation != self.remote_generation
-          || playback_generation != self.playback_start_generation
-          || play_generation != self.remote_play_generation
-        {
+        if generation != self.remote_generation || play_generation != self.remote_play_generation {
           return;
         }
         if let Ok(item) = result {
-          self.start_playback(PlaybackRequest::Detail(item, start_position), &sender);
+          self.start_playback(Playable::from(item), start_position, &sender);
         } else {
           self.record_diagnostic(
             DiagnosticLevel::Warning,
@@ -1801,367 +1472,35 @@ impl Component for AppModel {
           }
         }
       }
-      AppCommand::Playback {
-        session,
-        sequence,
-        request_kind,
-        started_item,
-        started_artwork_image_id,
+      AppCommand::PlaybackSettled {
+        id,
         controller,
+        settlement,
+        tracks,
+      } => self.finish_controller_settlement(id, controller, settlement, tracks, &sender),
+      AppCommand::IntroRangesSettled { id, result } => {
+        self.apply_playback_event(PlaybackEvent::IntroRangesSettled { id, result }, &sender);
+      }
+      AppCommand::AdjacentSettled {
+        id,
+        direction,
         result,
       } => {
-        let mut controller = *controller;
-        if session != self.requests.session_generation()
-          || sequence != self.playback.sequence
-          || self.quitting
-        {
-          let disposition = stale_playback_disposition(
-            self.quitting,
-            self.connection,
-            self.playback_cleanup_pending,
-          );
-          self.shutdown_playback(controller, disposition, &sender);
-          return;
-        }
-        if self.playback.reconfigure_pending {
-          self.playback.reconfigure_pending = false;
-          if controller
-            .configure_for_next_start(playback_controller_config(&config::load()))
-            .is_err()
-          {
-            self.show_settings_failure(
-              "Settings were saved, but no MPV executable is available for the next start.",
-            );
-          }
-        }
-        self.playback.controller = Some(controller);
-        self.playback.busy = false;
-        let mut refresh_auxiliary = None;
-        let mut refresh_artwork = false;
-        let mut intro_action = None;
-        let mut shortcut_adjacent = None;
-        let mut playback_started_title = None;
-        match result {
-          Ok(success) => {
-            let PlaybackCommandSuccess {
-              snapshot,
-              preserve_snapshot,
-              warnings,
-              notice,
-              tracks,
-              client_messages,
-              prompt_displayed,
-            } = success;
-            if !warnings.is_empty() && request_kind != PlaybackRequestKind::Refresh {
-              self.record_diagnostic(
-                DiagnosticLevel::Warning,
-                DiagnosticCategory::Playback,
-                "Playback completed with one or more non-fatal reporting warnings.",
-              );
-            }
-            if !preserve_snapshot {
-              self.playback.snapshot = snapshot;
-            }
-            if let Some(snapshot) = self.playback.snapshot.as_ref() {
-              self.playback.desired_paused = Some(snapshot.transport.paused);
-              self.playback.desired_muted = Some(snapshot.transport.muted);
-            } else {
-              self.playback.desired_paused = None;
-              self.playback.desired_muted = None;
-            }
-            self.playback.error = None;
-            self.playback.notice = playback_notice(notice, &warnings);
-            if request_kind == PlaybackRequestKind::Start {
-              if let (Some(item), Some(now_playing)) = (
-                started_item,
-                self
-                  .playback
-                  .snapshot
-                  .as_ref()
-                  .and_then(|snapshot| snapshot.now_playing.as_ref()),
-              ) {
-                if item.id == now_playing.item_id {
-                  let identity = PlaybackIdentity {
-                    session,
-                    sequence,
-                    item_id: item.id.clone(),
-                  };
-                  playback_started_title = Some(item.name.clone());
-                  self.playback.active_item = Some(item);
-                  if started_artwork_image_id.is_some() {
-                    self.playback.active_artwork_image_id = started_artwork_image_id;
-                    refresh_artwork = true;
-                  }
-                  self.playback.identity = Some(identity.clone());
-                  self.playback.tracks = PlaybackTrackState::Loading {
-                    identity: identity.clone(),
-                  };
-                  self.playback.intro_skip = IntroSkipState {
-                    identity: Some(identity.clone()),
-                    sequence: 0,
-                    mode: session_intro_mode(self.intro_mode),
-                    ranges: Vec::new(),
-                    active_prompt: None,
-                  };
-                  refresh_auxiliary = Some(identity);
-                }
-              }
-            } else if matches!(
-              request_kind,
-              PlaybackRequestKind::Stop | PlaybackRequestKind::Refresh
-            ) && self.playback.snapshot.is_none()
-            {
-              self.clear_playback_context();
-              refresh_artwork = true;
-            }
-            if let Some(result) = tracks {
-              if matches!(
-                request_kind,
-                PlaybackRequestKind::AudioTrack | PlaybackRequestKind::SubtitleTrack
-              ) {
-                self.record_diagnostic(
-                  if result.is_ok() {
-                    DiagnosticLevel::Info
-                  } else {
-                    DiagnosticLevel::Warning
-                  },
-                  DiagnosticCategory::Playback,
-                  match (request_kind, result.is_ok()) {
-                    (PlaybackRequestKind::AudioTrack, true) => {
-                      "MPV audio track selection completed."
-                    }
-                    (PlaybackRequestKind::AudioTrack, false) => "MPV audio track selection failed.",
-                    (_, true) => "MPV subtitle track selection completed.",
-                    (_, false) => "MPV subtitle track selection failed.",
-                  },
-                );
-              }
-              self.finish_track_refresh(result);
-            }
-            if let Some(prompt) = prompt_displayed {
-              let current = auxiliary_settlement_is_current(
-                prompt.identity.session,
-                &prompt.identity,
-                self.requests.session_generation(),
-                self.playback.identity.as_ref(),
-              );
-              let prompt_range_valid = self
-                .playback
-                .intro_skip
-                .ranges
-                .get(prompt.range_index)
-                .is_some_and(|range| range.notified && !range.skipped);
-              if current
-                && self.playback.intro_skip.mode == IntroSkipMode::Manual
-                && prompt_range_valid
-              {
-                self.playback.intro_skip.active_prompt = Some(ActiveIntroPrompt {
-                  range_index: prompt.range_index,
-                  expires_at: Instant::now() + prompt.duration,
-                });
-              }
-            }
-            if request_kind == PlaybackRequestKind::Refresh {
-              let position = self
-                .playback
-                .snapshot
-                .as_ref()
-                .map(|snapshot| snapshot.transport.time_pos);
-              if let (Some(direction), Some(identity)) = (
-                adjacent_direction_from_client_messages(&client_messages),
-                self.playback.identity.clone(),
-              ) {
-                if auxiliary_settlement_is_current(
-                  identity.session,
-                  &identity,
-                  self.requests.session_generation(),
-                  self.playback.identity.as_ref(),
-                ) {
-                  shortcut_adjacent = Some((identity, direction));
-                }
-              }
-              if shortcut_adjacent.is_none() {
-                let manual_requested = manual_intro_skip_requested(&client_messages);
-                let active_prompt_range = active_intro_prompt_range(
-                  &mut self.playback.intro_skip.active_prompt,
-                  Instant::now(),
-                );
-                if let (Some(position), Some(identity)) = (position, self.playback.identity.clone())
-                {
-                  if self.playback.intro_skip.identity.as_ref() == Some(&identity) {
-                    intro_action = evaluate_intro_ui_action(
-                      position,
-                      &mut self.playback.intro_skip.ranges,
-                      self.playback.intro_skip.mode,
-                      manual_requested,
-                      active_prompt_range,
-                    )
-                    .map(|action| (identity, action));
-                  }
-                }
-              }
-            }
-            if let Some(title) = playback_started_title.take() {
-              self.record_diagnostic(
-                DiagnosticLevel::Info,
-                DiagnosticCategory::Playback,
-                format!("Playback started for “{title}”."),
-              );
-            } else if request_kind == PlaybackRequestKind::Stop {
-              self.record_diagnostic(
-                DiagnosticLevel::Info,
-                DiagnosticCategory::Playback,
-                "Playback stopped.",
-              );
-            } else if request_kind == PlaybackRequestKind::Refresh
-              && self.playback.snapshot.is_none()
-            {
-              self.record_diagnostic(
-                if self
-                  .playback
-                  .notice
-                  .as_deref()
-                  .is_some_and(|notice| notice.contains("disconnected"))
-                {
-                  DiagnosticLevel::Warning
-                } else {
-                  DiagnosticLevel::Info
-                },
-                DiagnosticCategory::Playback,
-                "Playback session ended.",
-              );
-            }
-            if refresh_artwork {
-              self.queue_playback_artwork(&sender);
-            }
-            if matches!(
-              request_kind,
-              PlaybackRequestKind::AudioTrack | PlaybackRequestKind::SubtitleTrack
-            ) {
-              self.add_toast(match request_kind {
-                PlaybackRequestKind::AudioTrack => "Audio track switched.",
-                _ => "Subtitle track switched.",
-              });
-            }
-            self.render_playback_bar();
-          }
-          Err(failure) => {
-            self.record_diagnostic(
-              DiagnosticLevel::Error,
-              DiagnosticCategory::Playback,
-              &failure.message,
-            );
-            if failure.clear_snapshot {
-              self.playback.snapshot = None;
-              self.clear_playback_context();
-              self.queue_playback_artwork(&sender);
-            }
-            if let Some(snapshot) = self.playback.snapshot.as_ref() {
-              self.playback.desired_paused = Some(snapshot.transport.paused);
-              self.playback.desired_muted = Some(snapshot.transport.muted);
-            } else {
-              self.playback.desired_paused = None;
-              self.playback.desired_muted = None;
-            }
-            self.add_toast(&failure.message);
-            self.playback.error = Some(failure.message);
-            self.render_playback_bar();
-          }
-        }
-        if let Some(identity) = refresh_auxiliary {
-          self.refresh_adjacent_episodes(identity.clone(), &sender);
-          self.refresh_intro_ranges(identity.clone(), &sender);
-          self.queue_playback_request(PlaybackRequest::RefreshTracks(identity));
-        }
-        if let Some((identity, direction)) = shortcut_adjacent {
-          if auxiliary_settlement_is_current(
-            identity.session,
-            &identity,
-            self.requests.session_generation(),
-            self.playback.identity.as_ref(),
-          ) {
-            self.play_adjacent(direction, &sender);
-          }
-        } else if let Some((identity, action)) = intro_action {
-          self.apply_intro_action(identity, action, &sender);
-        }
-        if let Some(request) = self.playback.pending.pop_front() {
-          self.start_playback(request, &sender);
-        }
-      }
-      AppCommand::AdjacentEpisodes {
-        session,
-        sequence,
-        identity,
-        previous,
-        next,
-      } => {
-        if !auxiliary_settlement_is_current(
-          session,
-          &identity,
-          self.requests.session_generation(),
-          self.playback.identity.as_ref(),
-        ) || sequence != self.playback.adjacent.sequence
-        {
-          return;
-        }
-        if previous.is_err() || next.is_err() {
+        if result.is_err() {
           self.record_diagnostic(
             DiagnosticLevel::Warning,
             DiagnosticCategory::Playback,
             "The server could not resolve one or more adjacent episodes.",
           );
         }
-        self.playback.adjacent.previous =
-          adjacent_availability(AdjacentDirection::Previous, previous);
-        self.playback.adjacent.next = adjacent_availability(AdjacentDirection::Next, next);
-        self.render_playback_bar();
-      }
-      AppCommand::IntroRanges {
-        session,
-        sequence,
-        identity,
-        ranges,
-      } => {
-        if !auxiliary_settlement_is_current(
-          session,
-          &identity,
-          self.requests.session_generation(),
-          self.playback.identity.as_ref(),
-        ) || sequence != self.playback.intro_skip.sequence
-        {
-          return;
-        }
-        self.playback.intro_skip.ranges = ranges;
-      }
-      AppCommand::PlaybackShutdown {
-        disposition,
-        warnings,
-      } => {
-        self.playback.busy = false;
-        self.playback_cleanup_pending = false;
-        if shutdown_completion_quits(self.quitting, disposition) {
-          if self.remote_disconnect_pending {
-            self.quitting = true;
-            return;
-          }
-          relm4::main_adw_application().quit();
-          return;
-        }
-        if matches!(disposition, PlaybackShutdownDisposition::Disconnect) && !warnings.is_empty() {
-          self.ui.login_status.set_label(
-            "Disconnected. Playback stopped, but its final server progress could not be updated.",
-          );
-          self.ui.login_status.set_visible(true);
-        }
-        if matches!(disposition, PlaybackShutdownDisposition::Disconnect) {
-          self.playback.busy = false;
-          self.ui.login_button.set_sensitive(true);
-          if warnings.is_empty() {
-            self.ui.login_status.set_label("Disconnected.");
-            self.ui.login_status.set_visible(true);
-          }
-        }
+        self.apply_playback_event(
+          PlaybackEvent::AdjacentSettled {
+            id,
+            direction,
+            result,
+          },
+          &sender,
+        );
       }
     }
   }
@@ -2170,11 +1509,7 @@ impl Component for AppModel {
     self.artwork.reset_session();
     self.stop_remote_session(None);
     self.cancel_inflight_quick_connect();
-    self.cancel_inflight_playback();
-    if let Some(source) = self.playback_refresh_source.take() {
-      source.remove();
-    }
-    if let Some(mut controller) = self.playback.controller.take() {
+    if let Some(mut controller) = self.playback_controller.take() {
       relm4::spawn(async move {
         let _ = controller.shutdown().await;
       });
@@ -2242,15 +1577,10 @@ impl AppModel {
         }
         "ToggleMute" => {
           let muted = self
-            .playback
-            .desired_muted
-            .or_else(|| {
-              self
-                .playback
-                .snapshot
-                .as_ref()
-                .map(|snapshot| snapshot.transport.muted)
-            })
+            .playback_session
+            .view()
+            .now_playing
+            .map(|view| view.muted)
             .unwrap_or(false);
           sender.input(AppMessage::SetMuted(!muted));
         }
@@ -2282,7 +1612,6 @@ impl AppModel {
         };
         self.remote_play_generation = self.remote_play_generation.wrapping_add(1);
         let play_generation = self.remote_play_generation;
-        let playback_generation = self.playback_start_generation;
         let start_position = request
           .start_position_ticks
           .filter(|ticks| *ticks > 0)
@@ -2298,7 +1627,6 @@ impl AppModel {
             .map_err(|error| error.to_string());
           AppCommand::RemotePlay {
             generation,
-            playback_generation,
             play_generation,
             start_position,
             result,
@@ -2388,9 +1716,7 @@ impl AppModel {
     }
   }
   fn start_login(&mut self, sender: &ComponentSender<Self>) {
-    if self.profile_operation_busy
-      || !can_start_login(self.connection, self.playback_cleanup_pending)
-    {
+    if self.profile_operation_busy || !self.playback_can_start_login() {
       return;
     }
     let server_url = self.ui.server_url.text().trim().to_owned();
@@ -2464,9 +1790,7 @@ impl AppModel {
   }
 
   fn start_quick_connect(&mut self, sender: &ComponentSender<Self>) {
-    if self.profile_operation_busy
-      || !can_start_login(self.connection, self.playback_cleanup_pending)
-    {
+    if self.profile_operation_busy || !self.playback_can_start_login() {
       return;
     }
     if !quick_connect_available(provider_for(self.ui.provider.selected())) {
@@ -2569,9 +1893,7 @@ impl AppModel {
   }
 
   fn start_saved_login(&mut self, key: SavedProfileKey, sender: &ComponentSender<Self>) {
-    if self.profile_operation_busy
-      || !can_start_login(self.connection, self.playback_cleanup_pending)
-    {
+    if self.profile_operation_busy || !self.playback_can_start_login() {
       return;
     }
     let Some(profile) = self
@@ -2840,28 +2162,28 @@ impl AppModel {
             "The MPV shortcut file could not be written for this session.",
           );
         }
-        self.playback = match PlaybackController::discover(
+        match PlaybackController::discover(
           Arc::clone(&self.client),
           playback_controller_config(&settings),
         ) {
-          Ok(controller) => PlaybackState {
-            controller: Some(controller),
-            ..PlaybackState::default()
-          },
+          Ok(controller) => {
+            self.playback_controller = Some(controller);
+            self.playback_engine_error = None;
+            self.apply_playback_event(PlaybackEvent::EngineAvailability(true), sender);
+          }
           Err(error) => {
             self.record_diagnostic(
               DiagnosticLevel::Error,
               DiagnosticCategory::Playback,
               format!("External MPV playback is unavailable: {error}."),
             );
-            PlaybackState {
-              unavailable: Some(format!(
-                "Playback is unavailable: {error}. Install MPV and try again."
-              )),
-              ..PlaybackState::default()
-            }
+            self.playback_controller = None;
+            self.playback_engine_error = Some(format!(
+              "Playback is unavailable: {error}. Install MPV and try again."
+            ));
+            self.apply_playback_event(PlaybackEvent::EngineAvailability(false), sender);
           }
-        };
+        }
         self.connection = ConnectionPhase::Connected;
         self.start_remote_session(sender);
         self.home = LoadState::Loading;
@@ -3027,17 +2349,14 @@ impl AppModel {
     self.quick_connect_phase = QuickConnectPhase::Idle;
     self.artwork.reset_session();
     self.diagnostics.reset_coalescing();
-    self.cancel_inflight_playback();
     self.artwork_view = self.artwork_view.saturating_add(1);
     self.artwork_targets.clear();
     let _client = std::mem::replace(&mut self.client, Arc::new(JellyfinClient::new()));
-    let controller = self.playback.controller.take();
-    self.playback_cleanup_pending = playback_cleanup_required(
-      self.playback_cleanup_pending,
-      controller.is_some(),
-      self.playback.busy,
-    );
-    self.playback.pending.clear();
+    self.dispatch_playback(PlaybackIntent::Disconnect, sender);
+    self.apply_playback_event(PlaybackEvent::EngineAvailability(false), sender);
+    self.playback_item = None;
+    self.playback_artwork_image_id = None;
+    self.playback_engine_error = None;
     self.connection = ConnectionPhase::SignedOut;
     self.active_saved_profile = None;
     self.home = LoadState::Idle;
@@ -3060,7 +2379,6 @@ impl AppModel {
     self.season_neighbor_sequence = self.season_neighbor_sequence.saturating_add(1);
     self.season = None;
     self.invalidate_user_data_update();
-    self.playback = PlaybackState::default();
     self.ui.search.set_text("");
     self.ui.playback_bar.set_visible(false);
     self.ui.search.set_sensitive(false);
@@ -3081,21 +2399,16 @@ impl AppModel {
     self.ui.intro_skip_group.set_visible(false);
     self.ui.preferences.close();
     self.ui.root.set_content(Some(&self.ui.login));
-    self.set_login_controls_sensitive(!self.playback_cleanup_pending);
+    let can_login = self.playback_can_start_login();
+    self.set_login_controls_sensitive(can_login);
     self.render_saved_profiles(sender);
     self.render_saved_profile_settings();
-    self
-      .ui
-      .login_status
-      .set_label(if self.playback_cleanup_pending {
-        "Stopping native playback before another connection can start…"
-      } else {
-        "Disconnected."
-      });
+    self.ui.login_status.set_label(if can_login {
+      "Disconnected."
+    } else {
+      "Stopping native playback before another connection can start…"
+    });
     self.ui.login_status.set_visible(true);
-    if let Some(controller) = controller {
-      self.shutdown_playback(controller, PlaybackShutdownDisposition::Disconnect, sender);
-    }
   }
 
   fn request_quit(&mut self, sender: &ComponentSender<Self>) {
@@ -3107,39 +2420,11 @@ impl AppModel {
     self.cancel_inflight_quick_connect();
     self.artwork.reset_session();
     self.invalidate_user_data_update();
-    self.cancel_inflight_playback();
-    if let Some(source) = self.playback_refresh_source.take() {
-      source.remove();
-    }
-    self.playback.pending.clear();
     self.stop_remote_session(Some(sender));
-    if let Some(controller) = self.playback.controller.take() {
-      self.shutdown_playback(controller, PlaybackShutdownDisposition::Quit, sender);
-    } else if quit_can_finish_without_controller(self.playback.busy, self.playback_cleanup_pending)
-      && !self.remote_disconnect_pending
-    {
+    self.dispatch_playback(PlaybackIntent::Quit, sender);
+    if self.playback_session.view().quit_may_proceed && !self.remote_disconnect_pending {
       relm4::main_adw_application().quit();
     }
-  }
-
-  fn shutdown_playback(
-    &self,
-    mut controller: PlaybackController,
-    disposition: PlaybackShutdownDisposition,
-    sender: &ComponentSender<Self>,
-  ) {
-    sender.oneshot_command(async move {
-      let outcome = controller.shutdown().await;
-      AppCommand::PlaybackShutdown {
-        disposition,
-        warnings: outcome.warnings,
-      }
-    });
-  }
-
-  fn cancel_inflight_playback(&self) {
-    let next = (*self.playback_cancellation.borrow()).wrapping_add(1);
-    let _ = self.playback_cancellation.send_replace(next);
   }
 
   fn cancel_inflight_quick_connect(&self) {
@@ -4297,537 +3582,386 @@ impl AppModel {
     }
   }
 
-  fn start_playback(&mut self, request: PlaybackRequest, sender: &ComponentSender<Self>) {
-    let request_kind = request.kind();
-    match &request {
-      PlaybackRequest::Paused(value) => self.playback.desired_paused = Some(*value),
-      PlaybackRequest::Muted(value) => self.playback.desired_muted = Some(*value),
-      _ => {}
+  fn playback_can_start_login(&self) -> bool {
+    can_start_login(self.connection) && self.playback_session.view().can_start_login
+  }
+
+  fn playback_controls_enabled(&self) -> bool {
+    let view = self.playback_session.view();
+    view.engine_available && !view.busy
+  }
+
+  fn intro_availability(&self) -> IntroAvailability {
+    IntroAvailability {
+      mode: session_intro_mode(self.intro_mode),
+      skipper_available: self.client.supports_intro_skipper(),
     }
-    if request_kind == PlaybackRequestKind::Start {
-      self.playback_start_generation = self.playback_start_generation.wrapping_add(1);
-    }
-    if let Some(identity) = request.identity() {
-      if !auxiliary_settlement_is_current(
-        identity.session,
-        identity,
-        self.requests.session_generation(),
-        self.playback.identity.as_ref(),
-      ) {
-        return;
+  }
+
+  fn start_playback(
+    &mut self,
+    item: Playable,
+    position: PlaybackStartPosition,
+    sender: &ComponentSender<Self>,
+  ) {
+    self.dispatch_playback(
+      PlaybackIntent::Start {
+        item,
+        position,
+        intro: self.intro_availability(),
+      },
+      sender,
+    );
+  }
+
+  fn dispatch_playback(&mut self, intent: PlaybackIntent, sender: &ComponentSender<Self>) {
+    self.apply_playback_input(PlaybackInput::Intent(intent), sender);
+  }
+
+  fn apply_playback_event(&mut self, event: PlaybackEvent, sender: &ComponentSender<Self>) {
+    self.apply_playback_input(PlaybackInput::Event(event), sender);
+  }
+
+  fn apply_playback_input(&mut self, input: PlaybackInput, sender: &ComponentSender<Self>) {
+    let effects = self.playback_session.handle(input, Instant::now());
+    self.execute_playback_effects(effects, sender);
+    self.render_playback_bar();
+  }
+
+  fn execute_playback_effects(
+    &mut self,
+    effects: Vec<PlaybackEffect>,
+    sender: &ComponentSender<Self>,
+  ) {
+    for effect in effects {
+      match effect {
+        PlaybackEffect::Controller(id, command) => {
+          self.execute_controller_command(id, command, sender);
+        }
+        PlaybackEffect::FetchIntroRanges(id, item_id) => {
+          let client = Arc::clone(&self.client);
+          sender.oneshot_command(async move {
+            let result = client
+              .playback()
+              .get_intro_skipper_ranges(&item_id)
+              .await
+              .map_err(|_| ());
+            AppCommand::IntroRangesSettled { id, result }
+          });
+        }
+        PlaybackEffect::LookupAdjacent(id, direction) => {
+          let Some(item) = self.playback_item.clone() else {
+            self.apply_playback_event(
+              PlaybackEvent::AdjacentSettled {
+                id,
+                direction,
+                result: Ok(None),
+              },
+              sender,
+            );
+            continue;
+          };
+          let client = Arc::clone(&self.client);
+          sender.oneshot_command(async move {
+            let result = match direction {
+              AdjacentDirection::Previous => client.playback().get_previous_episode(&item).await,
+              AdjacentDirection::Next => client.playback().get_next_episode(&item).await,
+            }
+            .map_err(|_| ());
+            AppCommand::AdjacentSettled {
+              id,
+              direction,
+              result,
+            }
+          });
+        }
       }
     }
-    if self.playback.busy {
-      if request_kind != PlaybackRequestKind::Refresh {
-        self.queue_playback_request(request);
-      }
-      return;
-    }
-    let started_artwork_image_id = request.started_artwork_image_id();
-    if request_kind == PlaybackRequestKind::Start {
-      if let Some(image_id) = started_artwork_image_id.clone() {
-        self.playback.active_artwork_image_id = Some(image_id);
+  }
+
+  fn execute_controller_command(
+    &mut self,
+    id: EffectId,
+    command: ControllerCommand,
+    sender: &ComponentSender<Self>,
+  ) {
+    if let ControllerCommand::Start { item, .. } = &command {
+      self.playback_item = Some(media_item_from_playable(item));
+      if let Some(image_id) = playable_artwork_image_id(item) {
+        self.playback_artwork_image_id = Some(image_id);
         self.queue_playback_artwork(sender);
       }
     }
-    let started_item = request.started_item();
-    let track_identity = request.identity().cloned();
-    let Some(mut controller) = self.playback.controller.take() else {
-      if matches!(
-        request_kind,
-        PlaybackRequestKind::Refresh | PlaybackRequestKind::RefreshTracks
-      ) {
-        return;
-      }
-      self.playback.error = self
-        .playback
-        .unavailable
-        .clone()
-        .or_else(|| Some("Playback controller is unavailable.".to_owned()));
-      if let Some(message) = self.playback.error.as_deref() {
-        self.add_toast(message);
-      }
-      self.render_playback_bar();
-      return;
-    };
-    if let Some(identity) = track_identity {
-      self.playback.tracks = PlaybackTrackState::Loading { identity };
-    }
-    self.playback.busy = true;
-    self.playback.sequence = self.playback.sequence.saturating_add(1);
-    let session = self.requests.session_generation();
-    let sequence = self.playback.sequence;
-    let mut cancellation = self.playback_cancellation.subscribe();
-    self.render_playback_bar();
-    sender.oneshot_command(async move {
-      let result = {
-        let operation = async {
-          match request {
-            PlaybackRequest::Library(item, start_position) => controller
-              .play_library_item(
-                &item,
-                PlaybackOptions {
-                  start_position,
-                  ..PlaybackOptions::default()
-                },
-              )
-              .await
-              .map(|outcome| {
-                PlaybackCommandSuccess::playback(Some(outcome.snapshot), outcome.warnings, None)
-              })
-              .map_err(playback_start_failure),
-            PlaybackRequest::Detail(item, start_position) => controller
-              .play_item_detail(
-                &item,
-                PlaybackOptions {
-                  start_position,
-                  ..PlaybackOptions::default()
-                },
-              )
-              .await
-              .map(|outcome| {
-                PlaybackCommandSuccess::playback(Some(outcome.snapshot), outcome.warnings, None)
-              })
-              .map_err(playback_start_failure),
-            PlaybackRequest::ReplaceMedia(item) => match controller.stop().await {
-              Ok(stopped) => {
-                match controller
-                  .play_media_item(&item, PlaybackOptions::default())
-                  .await
-                {
-                  Ok(outcome) => {
-                    let mut warnings = stopped.warnings;
-                    warnings.extend(outcome.warnings);
-                    Ok(PlaybackCommandSuccess::playback(
-                      Some(outcome.snapshot),
-                      warnings,
-                      None,
-                    ))
-                  }
-                  Err(error) => Err(PlaybackCommandFailure {
-                    message: format!("Could not start adjacent episode: {error}."),
-                    clear_snapshot: true,
-                  }),
-                }
-              }
-              Err(error) => Err(playback_failure(
-                "Could not stop the current episode",
-                error,
-              )),
+    let Some(mut controller) = self.playback_controller.take() else {
+      let settlement = match command {
+        ControllerCommand::Shutdown => ControllerSettlement::Shutdown(Vec::new()),
+        ControllerCommand::Start { .. } => {
+          ControllerSettlement::Started(Err(PlaybackError::MpvNotFound))
+        }
+        ControllerCommand::Stop => {
+          ControllerSettlement::Stopped(Err(PlaybackError::NoActivePlayback))
+        }
+        ControllerCommand::Refresh => ControllerSettlement::Refreshed {
+          outcome: PlaybackRefreshOutcome {
+            snapshot: PlaybackSnapshot {
+              now_playing: None,
+              transport: PlayerState::default(),
             },
-            PlaybackRequest::Paused(paused) => controller
-              .set_paused(paused)
-              .await
-              .map(|outcome| {
-                PlaybackCommandSuccess::playback(Some(outcome.snapshot), outcome.warnings, None)
-              })
-              .map_err(|error| playback_failure("Could not update playback", error)),
-            PlaybackRequest::Seek(position) => controller
-              .seek(position)
-              .await
-              .map(|outcome| {
-                PlaybackCommandSuccess::playback(Some(outcome.snapshot), outcome.warnings, None)
-              })
-              .map_err(|error| playback_failure("Could not seek", error)),
-            PlaybackRequest::Volume(volume) => controller
-              .set_volume(volume)
-              .await
-              .map(|outcome| {
-                PlaybackCommandSuccess::playback(Some(outcome.snapshot), outcome.warnings, None)
-              })
-              .map_err(|error| playback_failure("Could not set volume", error)),
-            PlaybackRequest::Muted(muted) => controller
-              .set_muted(muted)
-              .await
-              .map(|outcome| {
-                PlaybackCommandSuccess::playback(Some(outcome.snapshot), outcome.warnings, None)
-              })
-              .map_err(|error| playback_failure("Could not update mute", error)),
-            PlaybackRequest::AudioTrack { id, .. } => {
-              let result = match controller.select_audio_track(id).await {
-                Ok(()) => controller.tracks().await.map_err(|_| {
-                  "MPV changed the audio track, but its track state could not be refreshed."
-                    .to_owned()
-                }),
-                Err(_) => Err("MPV could not select that audio track.".to_owned()),
-              };
-              Ok(PlaybackCommandSuccess::tracks(result))
-            }
-            PlaybackRequest::SubtitleTrack { id, .. } => {
-              let result = match controller.select_subtitle_track(id).await {
-                Ok(()) => controller.tracks().await.map_err(|_| {
-                  "MPV changed the subtitle track, but its track state could not be refreshed."
-                    .to_owned()
-                }),
-                Err(_) => Err("MPV could not select that subtitle track.".to_owned()),
-              };
-              Ok(PlaybackCommandSuccess::tracks(result))
-            }
-            PlaybackRequest::RefreshTracks(_) => {
-              let result = controller
-                .tracks()
-                .await
-                .map_err(|_| "MPV track information is unavailable.".to_owned());
-              Ok(PlaybackCommandSuccess::tracks(result))
-            }
-            PlaybackRequest::ShowText {
-              identity,
-              text,
-              duration_ms,
-              prompt_range,
-            } => controller
-              .show_text(&text, duration_ms)
-              .await
-              .map(|()| {
-                let mut success = PlaybackCommandSuccess::preserved();
-                success.prompt_displayed = prompt_range.map(|range_index| IntroPromptReceipt {
-                  identity,
-                  range_index,
-                  duration: Duration::from_millis(duration_ms.max(0) as u64),
-                });
-                success
-              })
-              .map_err(|error| playback_failure("Could not show the Intro Skipper prompt", error)),
-            PlaybackRequest::Stop => controller
-              .stop()
-              .await
-              .map(|outcome| {
-                PlaybackCommandSuccess::playback(
-                  None,
-                  outcome.warnings,
-                  Some("Playback stopped.".to_owned()),
-                )
-              })
-              .map_err(|error| playback_failure("Could not stop playback", error)),
-            PlaybackRequest::Refresh => {
-              let outcome = controller.refresh().await;
-              let (snapshot, notice) = match outcome.state {
-                PlaybackRefreshState::Active => (Some(outcome.snapshot), None),
-                PlaybackRefreshState::Idle => (None, None),
-                PlaybackRefreshState::Ended(PlaybackEndReason::EndOfFile) => {
-                  (None, Some("Playback finished.".to_owned()))
-                }
-                PlaybackRefreshState::Ended(PlaybackEndReason::Disconnected) => (
-                  None,
-                  Some("The external player disconnected; playback was stopped.".to_owned()),
-                ),
-                PlaybackRefreshState::Ended(PlaybackEndReason::Error) => (
-                  None,
-                  Some(
-                    "The external player could not continue this item; playback was stopped."
-                      .to_owned(),
-                  ),
-                ),
-              };
-              let mut success =
-                PlaybackCommandSuccess::playback(snapshot, outcome.warnings, notice);
-              success.client_messages = controller.take_client_messages();
-              Ok(success)
-            }
-          }
-        };
-        relm4::tokio::pin!(operation);
-        relm4::tokio::select! {
-          result = &mut operation => Some(result),
-          changed = cancellation.changed() => {
-            let _ = changed;
-            None
-          }
+            state: PlaybackRefreshState::Idle,
+            warnings: Vec::new(),
+          },
+          client_messages: Vec::new(),
+        },
+        ControllerCommand::SelectAudioTrack(_) | ControllerCommand::SelectSubtitleTrack(_) => {
+          ControllerSettlement::TrackSelected(Err(PlaybackError::NoActivePlayback))
+        }
+        ControllerCommand::ShowText { .. } => {
+          ControllerSettlement::OsdShown(Err(PlaybackError::NoActivePlayback))
+        }
+        ControllerCommand::SetPaused(_)
+        | ControllerCommand::Seek(_)
+        | ControllerCommand::SetVolume(_)
+        | ControllerCommand::SetMuted(_) => {
+          ControllerSettlement::Controlled(Err(PlaybackError::NoActivePlayback))
         }
       };
-      let result = match result {
-        Some(result) => result,
-        None => {
-          let _ = controller.shutdown().await;
-          Err(PlaybackCommandFailure {
-            message: "Playback operation was cancelled.".to_owned(),
-            clear_snapshot: true,
-          })
+      self.finish_controller_settlement(id, None, settlement, None, sender);
+      return;
+    };
+    sender.oneshot_command(async move {
+      let mut tracks = None;
+      let (settlement, controller) = match command {
+        ControllerCommand::Start { item, position } => {
+          let result = controller.play(item, position).await;
+          if result.is_ok() {
+            tracks = Some(controller.tracks().await);
+          }
+          (ControllerSettlement::Started(result), Some(controller))
+        }
+        ControllerCommand::SetPaused(paused) => (
+          ControllerSettlement::Controlled(controller.set_paused(paused).await),
+          Some(controller),
+        ),
+        ControllerCommand::Seek(position) => (
+          ControllerSettlement::Controlled(controller.seek(position).await),
+          Some(controller),
+        ),
+        ControllerCommand::SetVolume(volume) => (
+          ControllerSettlement::Controlled(controller.set_volume(volume).await),
+          Some(controller),
+        ),
+        ControllerCommand::SetMuted(muted) => (
+          ControllerSettlement::Controlled(controller.set_muted(muted).await),
+          Some(controller),
+        ),
+        ControllerCommand::SelectAudioTrack(id) => (
+          ControllerSettlement::TrackSelected(controller.select_audio_track(id).await),
+          Some(controller),
+        ),
+        ControllerCommand::SelectSubtitleTrack(id) => (
+          ControllerSettlement::TrackSelected(controller.select_subtitle_track(id).await),
+          Some(controller),
+        ),
+        ControllerCommand::ShowText { text, duration_ms } => (
+          ControllerSettlement::OsdShown(controller.show_text(&text, duration_ms).await),
+          Some(controller),
+        ),
+        ControllerCommand::Stop => (
+          ControllerSettlement::Stopped(controller.stop().await),
+          Some(controller),
+        ),
+        ControllerCommand::Refresh => {
+          let outcome = controller.refresh().await;
+          let client_messages = controller.take_client_messages();
+          (
+            ControllerSettlement::Refreshed {
+              outcome,
+              client_messages,
+            },
+            Some(controller),
+          )
+        }
+        ControllerCommand::Shutdown => {
+          let outcome = controller.shutdown().await;
+          (ControllerSettlement::Shutdown(outcome.warnings), None)
         }
       };
-      AppCommand::Playback {
-        session,
-        sequence,
-        request_kind,
-        started_item,
-        started_artwork_image_id,
-        controller: Box::new(controller),
-        result,
+      AppCommand::PlaybackSettled {
+        id,
+        controller: controller.map(Box::new),
+        settlement,
+        tracks,
       }
     });
   }
 
-  fn queue_playback_request(&mut self, request: PlaybackRequest) {
-    let kind = request.kind();
-    if matches!(kind, PlaybackRequestKind::Start | PlaybackRequestKind::Stop) {
-      self.playback.pending.clear();
-    } else {
-      self
-        .playback
-        .pending
-        .retain(|pending| pending.kind() != kind);
+  fn finish_controller_settlement(
+    &mut self,
+    id: EffectId,
+    controller: Option<Box<PlaybackController>>,
+    settlement: ControllerSettlement,
+    tracks: Option<Result<Vec<TrackInfo>, PlaybackError>>,
+    sender: &ComponentSender<Self>,
+  ) {
+    if let Some(mut controller) = controller {
+      if self.playback_reconfigure_pending {
+        self.playback_reconfigure_pending = false;
+        if controller
+          .configure_for_next_start(playback_controller_config(&config::load()))
+          .is_err()
+        {
+          self.show_settings_failure(
+            "Settings were saved, but no MPV executable is available for the next start.",
+          );
+        }
+      }
+      self.playback_controller = Some(*controller);
     }
-    self.playback.pending.push_back(request);
-  }
-
-  fn clear_playback_context(&mut self) {
-    self.playback.active_item = None;
-    self.playback.active_artwork_image_id = None;
-    self.playback.identity = None;
-    self.playback.desired_paused = None;
-    self.playback.desired_muted = None;
-    self.playback.tracks = PlaybackTrackState::Unavailable;
-    self.playback.adjacent = AdjacentState::default();
-    self.playback.intro_skip = IntroSkipState::default();
-  }
-
-  fn finish_track_refresh(&mut self, result: Result<Vec<TrackInfo>, String>) {
-    let PlaybackTrackState::Loading { identity } = &self.playback.tracks else {
-      return;
-    };
-    let identity = identity.clone();
-    if !auxiliary_settlement_is_current(
-      identity.session,
-      &identity,
-      self.requests.session_generation(),
-      self.playback.identity.as_ref(),
-    ) {
-      return;
+    self.record_playback_settlement(&settlement);
+    self.apply_playback_event(PlaybackEvent::ControllerSettled { id, settlement }, sender);
+    if self.playback_session.view().now_playing.is_none() {
+      self.playback_item = None;
+      self.playback_artwork_image_id = None;
+      self.queue_playback_artwork(sender);
     }
-    self.playback.tracks = match result {
-      Ok(tracks) => PlaybackTrackState::Ready { identity, tracks },
-      Err(message) => PlaybackTrackState::Failed { identity, message },
-    };
-  }
-
-  fn select_track(&mut self, kind: TrackKind, id: Option<i64>, sender: &ComponentSender<Self>) {
-    let PlaybackTrackState::Ready { identity, tracks } = &self.playback.tracks else {
-      return;
-    };
-    let expected_type = match kind {
-      TrackKind::Audio => "audio",
-      TrackKind::Subtitle => "sub",
-    };
-    if let Some(id) = id {
-      if !tracks
-        .iter()
-        .any(|track| track.track_type == expected_type && track.id == id)
-      {
+    if let Some(tracks) = tracks {
+      self.apply_playback_event(PlaybackEvent::TracksSettled { id, result: tracks }, sender);
+    }
+    let view = self.playback_session.view();
+    if view.quit_may_proceed {
+      if self.remote_disconnect_pending {
         return;
       }
-    } else if kind == TrackKind::Audio {
+      relm4::main_adw_application().quit();
       return;
     }
-    let identity = identity.clone();
-    let request = match (kind, id) {
-      (TrackKind::Audio, Some(id)) => PlaybackRequest::AudioTrack { identity, id },
-      (TrackKind::Audio, None) => return,
-      (TrackKind::Subtitle, id) => PlaybackRequest::SubtitleTrack { identity, id },
-    };
-    self.start_playback(request, sender);
+    if matches!(self.connection, ConnectionPhase::SignedOut) {
+      let can_login = self.playback_can_start_login();
+      self.set_login_controls_sensitive(can_login);
+      if can_login {
+        self.ui.login_status.set_label("Disconnected.");
+        self.ui.login_status.set_visible(true);
+      }
+    }
   }
 
-  fn play_adjacent(&mut self, direction: AdjacentDirection, sender: &ComponentSender<Self>) {
-    if self.playback.busy {
-      return;
-    }
-    let AdjacentAvailability::Available(item) = self.playback.adjacent.availability(direction)
-    else {
-      return;
-    };
-    let item = item.clone();
-    self.record_diagnostic(
-      DiagnosticLevel::Info,
-      DiagnosticCategory::Playback,
-      match direction {
-        AdjacentDirection::Previous => "Starting the previous episode.",
-        AdjacentDirection::Next => "Starting the next episode.",
-      },
-    );
-    self.start_playback(PlaybackRequest::ReplaceMedia(item), sender);
-  }
-
-  fn refresh_adjacent_episodes(
-    &mut self,
-    identity: PlaybackIdentity,
-    sender: &ComponentSender<Self>,
-  ) {
-    if !auxiliary_settlement_is_current(
-      identity.session,
-      &identity,
-      self.requests.session_generation(),
-      self.playback.identity.as_ref(),
-    ) {
-      return;
-    }
-    let Some(item) = self.playback.active_item.clone() else {
-      return;
-    };
-    self.playback.adjacent.sequence = self.playback.adjacent.sequence.saturating_add(1);
-    self.playback.adjacent.identity = Some(identity.clone());
-    if item.item_type != "Episode" {
-      let reason = "Previous and next controls are available only for episodes.".to_owned();
-      self.playback.adjacent.previous = AdjacentAvailability::Unavailable(reason.clone());
-      self.playback.adjacent.next = AdjacentAvailability::Unavailable(reason);
-      self.render_playback_bar();
-      return;
-    }
-    if item.series_id.is_none() {
-      let reason = "The server did not provide the series identity for this episode.".to_owned();
-      self.playback.adjacent.previous = AdjacentAvailability::Unavailable(reason.clone());
-      self.playback.adjacent.next = AdjacentAvailability::Unavailable(reason);
-      self.render_playback_bar();
-      return;
-    }
-
-    let session = identity.session;
-    let sequence = self.playback.adjacent.sequence;
-    let client = Arc::clone(&self.client);
-    self.playback.adjacent.previous = AdjacentAvailability::Loading;
-    self.playback.adjacent.next = AdjacentAvailability::Loading;
-    self.render_playback_bar();
-    sender.oneshot_command(async move {
-      let previous_client = Arc::clone(&client);
-      let previous_item = item.clone();
-      let previous = async move {
-        previous_client
-          .playback()
-          .get_previous_episode(&previous_item)
-          .await
-          .map_err(|_| "Could not check for a previous episode.".to_owned())
-      };
-      let next = async move {
-        client
-          .playback()
-          .get_next_episode(&item)
-          .await
-          .map_err(|_| "Could not check for a next episode.".to_owned())
-      };
-      let (previous, next) = relm4::tokio::join!(previous, next);
-      AppCommand::AdjacentEpisodes {
-        session,
-        sequence,
-        identity,
-        previous,
-        next,
-      }
-    });
-  }
-
-  fn refresh_intro_ranges(&mut self, identity: PlaybackIdentity, sender: &ComponentSender<Self>) {
-    if !auxiliary_settlement_is_current(
-      identity.session,
-      &identity,
-      self.requests.session_generation(),
-      self.playback.identity.as_ref(),
-    ) {
-      return;
-    }
-    let Some(item) = self.playback.active_item.as_ref() else {
-      return;
-    };
-    let mode = session_intro_mode(self.intro_mode);
-    self.playback.intro_skip.identity = Some(identity.clone());
-    self.playback.intro_skip.mode = mode;
-    self.playback.intro_skip.ranges.clear();
-    self.playback.intro_skip.sequence = self.playback.intro_skip.sequence.saturating_add(1);
-    if !should_fetch_intro_ranges(
-      self.intro_mode,
-      self.client.supports_intro_skipper(),
-      &item.item_type,
-    ) {
-      return;
-    }
-
-    let session = identity.session;
-    let sequence = self.playback.intro_skip.sequence;
-    let item_id = item.id.clone();
-    let client = Arc::clone(&self.client);
-    sender.oneshot_command(async move {
-      let ranges = client
-        .playback()
-        .get_intro_skipper_ranges(&item_id)
-        .await
-        .unwrap_or_default();
-      AppCommand::IntroRanges {
-        session,
-        sequence,
-        identity,
-        ranges,
-      }
-    });
-  }
-
-  fn apply_intro_action(
-    &mut self,
-    identity: PlaybackIdentity,
-    action: IntroUiAction,
-    sender: &ComponentSender<Self>,
-  ) {
-    if !auxiliary_settlement_is_current(
-      identity.session,
-      &identity,
-      self.requests.session_generation(),
-      self.playback.identity.as_ref(),
-    ) {
-      return;
-    }
-    match action {
-      IntroUiAction::Seek { target, .. } => {
-        self.start_playback(PlaybackRequest::Seek(target), sender);
-      }
-      IntroUiAction::Prompt { range_index, kind } => {
-        self.start_playback(
-          PlaybackRequest::ShowText {
-            identity,
-            text: format!(
-              "{} available — use the JellyPilot skip-intro shortcut",
-              intro_skip_label(kind)
-            ),
-            duration_ms: 3000,
-            prompt_range: Some(range_index),
-          },
-          sender,
-        );
-      }
-      IntroUiAction::ManualSkip {
-        range_index,
-        kind,
-        seek_target,
-      } => {
-        if self
-          .playback
-          .intro_skip
-          .active_prompt
-          .as_ref()
-          .is_some_and(|prompt| prompt.range_index == range_index)
-        {
-          self.playback.intro_skip.active_prompt = None;
+  fn record_playback_settlement(&mut self, settlement: &ControllerSettlement) {
+    match settlement {
+      ControllerSettlement::Started(Ok(outcome)) => {
+        if !outcome.warnings.is_empty() {
+          self.record_diagnostic(
+            DiagnosticLevel::Warning,
+            DiagnosticCategory::Playback,
+            "Playback completed with one or more non-fatal reporting warnings.",
+          );
         }
-        self.start_playback(PlaybackRequest::Seek(seek_target), sender);
-        self.start_playback(
-          PlaybackRequest::ShowText {
-            identity,
-            text: format!("Skipped {}", intro_skip_label(kind).to_lowercase()),
-            duration_ms: 1500,
-            prompt_range: None,
-          },
-          sender,
+        if let Some(item) = &self.playback_item {
+          self.record_diagnostic(
+            DiagnosticLevel::Info,
+            DiagnosticCategory::Playback,
+            format!("Playback started for “{}”.", item.name),
+          );
+        }
+      }
+      ControllerSettlement::Started(Err(error)) => {
+        let message = format!("Could not start playback: {error}.");
+        self.record_diagnostic(
+          DiagnosticLevel::Error,
+          DiagnosticCategory::Playback,
+          &message,
+        );
+        self.add_toast(&message);
+      }
+      ControllerSettlement::Controlled(Ok(outcome)) => {
+        if !outcome.warnings.is_empty() {
+          self.record_diagnostic(
+            DiagnosticLevel::Warning,
+            DiagnosticCategory::Playback,
+            "Playback completed with one or more non-fatal reporting warnings.",
+          );
+        }
+      }
+      ControllerSettlement::Controlled(Err(error)) => {
+        let message = format!("{error}.");
+        self.record_diagnostic(
+          DiagnosticLevel::Error,
+          DiagnosticCategory::Playback,
+          &message,
+        );
+        self.add_toast(&message);
+      }
+      ControllerSettlement::Stopped(Ok(_)) => {
+        self.record_diagnostic(
+          DiagnosticLevel::Info,
+          DiagnosticCategory::Playback,
+          "Playback stopped.",
         );
       }
+      ControllerSettlement::Stopped(Err(error)) => {
+        let message = format!("Could not stop playback: {error}.");
+        self.record_diagnostic(
+          DiagnosticLevel::Error,
+          DiagnosticCategory::Playback,
+          &message,
+        );
+        self.add_toast(&message);
+      }
+      ControllerSettlement::TrackSelected(Ok(_)) => {
+        self.record_diagnostic(
+          DiagnosticLevel::Info,
+          DiagnosticCategory::Playback,
+          "MPV track selection completed.",
+        );
+        self.add_toast("Track switched.");
+      }
+      ControllerSettlement::TrackSelected(Err(_)) => {
+        self.record_diagnostic(
+          DiagnosticLevel::Warning,
+          DiagnosticCategory::Playback,
+          "MPV track selection failed.",
+        );
+        self.add_toast("Could not switch that track.");
+      }
+      ControllerSettlement::Refreshed { outcome, .. } => {
+        if outcome.snapshot.now_playing.is_none() {
+          self.record_diagnostic(
+            DiagnosticLevel::Info,
+            DiagnosticCategory::Playback,
+            "Playback session ended.",
+          );
+        }
+      }
+      ControllerSettlement::OsdShown(Err(error)) => {
+        let message = format!("Could not show the Intro Skipper prompt: {error}.");
+        self.record_diagnostic(
+          DiagnosticLevel::Error,
+          DiagnosticCategory::Playback,
+          &message,
+        );
+      }
+      ControllerSettlement::Shutdown(warnings) => {
+        if matches!(self.connection, ConnectionPhase::SignedOut) && !warnings.is_empty() {
+          self.ui.login_status.set_label(
+            "Disconnected. Playback stopped, but its final server progress could not be updated.",
+          );
+          self.ui.login_status.set_visible(true);
+        }
+      }
+      ControllerSettlement::OsdShown(Ok(())) => {}
     }
   }
 
-  fn set_intro_mode(&mut self, selected: u32) {
+  fn set_intro_mode(&mut self, selected: u32, sender: &ComponentSender<Self>) {
     let mode = config_intro_mode(selected);
     let mut prefill = config::load();
     prefill.intro_mode = mode;
     match config::save(&prefill) {
       Ok(()) => {
         self.intro_mode = mode;
-        if mode == config::IntroMode::Off {
-          disable_intro_skip(&mut self.playback.intro_skip);
-        }
+        self.dispatch_playback(
+          PlaybackIntent::SetIntroMode(session_intro_mode(mode)),
+          sender,
+        );
         self.ui.intro_skip_status.set_label("");
         self.ui.intro_skip_status.set_visible(false);
         self.record_diagnostic(
@@ -4975,25 +4109,29 @@ impl AppModel {
   fn reconfigure_playback_controller(&mut self) {
     let settings = config::load();
     let playback_config = playback_controller_config(&settings);
-    if self.playback.controller.is_none() {
-      if self.playback.busy {
-        self.playback.reconfigure_pending = true;
+    if self.playback_controller.is_none() {
+      if self.playback_session.view().busy {
+        self.playback_reconfigure_pending = true;
         return;
       }
       match PlaybackController::discover(Arc::clone(&self.client), playback_config) {
         Ok(controller) => {
-          self.playback.controller = Some(controller);
-          self.playback.unavailable = None;
-          self.playback.error = None;
-          self.playback.reconfigure_pending = false;
+          self.playback_controller = Some(controller);
+          self.playback_engine_error = None;
+          self.playback_reconfigure_pending = false;
+          self.playback_session.handle(
+            PlaybackInput::Event(PlaybackEvent::EngineAvailability(true)),
+            Instant::now(),
+          );
           self
             .ui
             .settings_config_status
             .set_label("Saved. MPV is available for the next playback start.");
           self.ui.settings_config_status.set_visible(true);
+          self.render_playback_bar();
         }
         Err(_) => {
-          self.playback.reconfigure_pending = false;
+          self.playback_reconfigure_pending = false;
           self.show_settings_failure(
             "Settings were saved, but no MPV executable is available for the next start.",
           );
@@ -5003,13 +4141,12 @@ impl AppModel {
     }
 
     let result = self
-      .playback
-      .controller
+      .playback_controller
       .as_mut()
       .map(|controller| controller.configure_for_next_start(playback_config));
     match result {
       Some(Ok(())) => {
-        self.playback.reconfigure_pending = false;
+        self.playback_reconfigure_pending = false;
         self
           .ui
           .settings_config_status
@@ -5017,7 +4154,7 @@ impl AppModel {
         self.ui.settings_config_status.set_visible(true);
       }
       Some(Err(_)) | None => {
-        self.playback.reconfigure_pending = false;
+        self.playback_reconfigure_pending = false;
         self.show_settings_failure(
           "Settings were saved, but no MPV executable is available for the next start.",
         );
@@ -5324,7 +4461,7 @@ impl AppModel {
       .playback_artwork
       .set_paintable(None::<&gtk::gdk::Paintable>);
     self.ui.playback_artwork_fallback.set_visible(true);
-    let Some(image_id) = self.playback.active_artwork_image_id.clone() else {
+    let Some(image_id) = self.playback_artwork_image_id.clone() else {
       return;
     };
     if let Some(decoded) = self.artwork.cached(&image_id) {
@@ -5356,7 +4493,7 @@ impl AppModel {
     self.artwork.cancel_pending();
     self.artwork_view = self.artwork_view.saturating_add(1);
     self.artwork_targets.clear();
-    if self.playback.active_artwork_image_id.is_some() {
+    if self.playback_artwork_image_id.is_some() {
       self.queue_playback_artwork(sender);
     }
   }
@@ -5537,7 +4674,7 @@ impl AppModel {
       let action_label = if has_resume { "Resume" } else { "Play" };
       action.set_tooltip_text(Some(action_label));
       action.update_property(&[gtk::accessible::Property::Label(action_label)]);
-      action.set_sensitive(self.playback.controller.is_some() && !self.playback.busy);
+      action.set_sensitive(self.playback_controls_enabled());
       let item = item.clone();
       let sender = sender.clone();
       let position = if has_resume {
@@ -5637,7 +4774,7 @@ impl AppModel {
     primary.connect_clicked(move |_| {
       play_sender.input(AppMessage::PlayLibrary(play_item.clone(), primary_position))
     });
-    primary.set_sensitive(self.playback.controller.is_some() && !self.playback.busy);
+    primary.set_sensitive(self.playback_controls_enabled());
     actions.append(&primary);
     let details = gtk::Button::with_label("Details");
     details.add_css_class("pill");
@@ -5798,8 +4935,7 @@ impl AppModel {
         PlaybackStartPosition::Beginning,
       ))
     });
-    play
-      .set_sensitive(self.playback.controller.is_some() && !self.playback.busy && detail.can_play);
+    play.set_sensitive(self.playback_controls_enabled() && detail.can_play);
     actions.append(&play);
     if detail.can_resume {
       let resume = gtk::Button::with_label("Resume");
@@ -5811,7 +4947,7 @@ impl AppModel {
           PlaybackStartPosition::Resume,
         ))
       });
-      resume.set_sensitive(self.playback.controller.is_some() && !self.playback.busy);
+      resume.set_sensitive(self.playback_controls_enabled());
       actions.append(&resume);
     }
     actions.append(&self.user_data_controls(&detail.id, detail.played, detail.favorite, sender));
@@ -6348,26 +5484,32 @@ impl AppModel {
   }
 
   fn render_playback_bar(&self) {
-    let snapshot = self.playback.snapshot.as_ref();
-    let now_playing = snapshot.and_then(|snapshot| snapshot.now_playing.as_ref());
-    let controller_available = self.playback.controller.is_some();
+    let view = self.playback_session.view();
+    let now_playing = view.now_playing.as_ref();
     self.ui.playback_bar.set_visible(now_playing.is_some());
-    let title = self
-      .playback
-      .active_item
-      .as_ref()
-      .map(|item| item.name.as_str())
-      .or(now_playing.map(|item| item.title.as_str()))
+    let title = now_playing
+      .map(|playing| playing.item.title.as_str())
       .unwrap_or("");
     self.ui.playback_title.set_label(title);
-    let subtitle = playback_meta_subtitle(self.playback.active_item.as_ref());
+    if let Some(prompt) = view.intro_prompt {
+      self.ui.playback_title.set_tooltip_text(Some(&format!(
+        "{} skip available",
+        intro_skip_label(prompt.kind)
+      )));
+    } else {
+      self.ui.playback_title.set_tooltip_text(None::<&str>);
+    }
+    let subtitle = playback_meta_subtitle(self.playback_item.as_ref());
     self.ui.playback_subtitle.set_label(&subtitle);
     self.ui.playback_subtitle.set_visible(!subtitle.is_empty());
+    let error = view.notice.as_ref().and_then(|notice| match notice {
+      PlaybackNotice::Failed(_) => playback_notice(notice),
+      _ => None,
+    });
     let status = playback_bar_status(
-      self.playback.error.as_deref(),
-      self.playback.unavailable.as_deref(),
-      self.playback.busy,
-      snapshot.map(|snapshot| snapshot.transport.connected),
+      error.as_deref(),
+      self.playback_engine_error.as_deref(),
+      view.busy,
     );
     match status {
       Some((icon, message)) => {
@@ -6377,86 +5519,67 @@ impl AppModel {
       }
       None => self.ui.playback_info.set_visible_child_name("meta"),
     }
-    let active = now_playing.is_some() && controller_available && !self.playback.busy;
+    let active = now_playing.is_some() && view.engine_available && !view.busy;
     self.ui.pause_button.set_sensitive(active);
     self.ui.stop_button.set_sensitive(active);
     self.ui.seek.set_sensitive(active);
     self.ui.volume.set_sensitive(active);
     self.ui.mute_button.set_sensitive(active);
-    if let Some(snapshot) = snapshot {
+    if let Some(playing) = now_playing {
+      let duration = playing.duration_seconds.unwrap_or(playing.position_seconds);
       self
         .ui
         .position_label
-        .set_label(&format_duration(snapshot.transport.time_pos));
-      self
-        .ui
-        .duration_label
-        .set_label(&format_duration(snapshot.transport.duration));
-      self
-        .ui
-        .pause_button
-        .set_icon_name(if snapshot.transport.paused {
-          "media-playback-start-symbolic"
-        } else {
-          "media-playback-pause-symbolic"
-        });
+        .set_label(&format_duration(playing.position_seconds));
+      self.ui.duration_label.set_label(&format_duration(duration));
+      self.ui.pause_button.set_icon_name(if playing.paused {
+        "media-playback-start-symbolic"
+      } else {
+        "media-playback-pause-symbolic"
+      });
       self
         .ui
         .pause_button
-        .set_tooltip_text(Some(if snapshot.transport.paused {
+        .set_tooltip_text(Some(if playing.paused {
           "Resume playback"
         } else {
           "Pause playback"
         }));
+      self.ui.mute_button.set_icon_name(if playing.muted {
+        "audio-volume-muted-symbolic"
+      } else {
+        "audio-volume-high-symbolic"
+      });
       self
         .ui
         .mute_button
-        .set_icon_name(if snapshot.transport.muted {
-          "audio-volume-muted-symbolic"
-        } else {
-          "audio-volume-high-symbolic"
-        });
-      self
-        .ui
-        .mute_button
-        .set_tooltip_text(Some(if snapshot.transport.muted {
-          "Unmute"
-        } else {
-          "Mute"
-        }));
+        .set_tooltip_text(Some(if playing.muted { "Unmute" } else { "Mute" }));
       self.ui.playback_controls_syncing.set(true);
-      self
-        .ui
-        .seek
-        .set_range(0.0, snapshot.transport.duration.max(1.0));
-      let position = snapshot
-        .transport
-        .time_pos
-        .clamp(0.0, snapshot.transport.duration.max(1.0));
+      self.ui.seek.set_range(0.0, duration.max(1.0));
+      let position = playing.position_seconds.clamp(0.0, duration.max(1.0));
       if (self.ui.seek.value() - position).abs() > f64::EPSILON {
         self.ui.seek.set_value(position);
       }
-      let volume = snapshot.transport.volume.clamp(0.0, 100.0);
+      let volume = playing.volume.clamp(0.0, 100.0);
       if (self.ui.volume.value() - volume).abs() > f64::EPSILON {
         self.ui.volume.set_value(volume);
       }
-      if self.ui.mute_button.is_active() != snapshot.transport.muted {
-        self.ui.mute_button.set_active(snapshot.transport.muted);
+      if self.ui.mute_button.is_active() != playing.muted {
+        self.ui.mute_button.set_active(playing.muted);
       }
       self.ui.playback_controls_syncing.set(false);
     } else {
       self.ui.position_label.set_label("00:00");
       self.ui.duration_label.set_label("00:00");
     }
-    self.render_track_controls(active);
-    self.render_adjacent_controls(active);
+    self.render_track_controls(active, &view);
+    self.render_adjacent_controls(active, &view);
   }
 
-  fn render_track_controls(&self, active: bool) {
+  fn render_track_controls(&self, active: bool, view: &SessionView) {
     self.ui.playback_controls_syncing.set(true);
-    let current_identity = self.playback.identity.as_ref();
-    match &self.playback.tracks {
-      PlaybackTrackState::Ready { identity, tracks } if Some(identity) == current_identity => {
+    match &view.tracks {
+      TracksView::Ready { tracks, .. } => {
         let audio = tracks
           .iter()
           .filter(|track| track.track_type == "audio")
@@ -6508,7 +5631,7 @@ impl AppModel {
             "MPV reported no subtitle tracks."
           }));
       }
-      PlaybackTrackState::Loading { identity } if Some(identity) == current_identity => {
+      TracksView::Loading => {
         self.clear_track_lists();
         self
           .ui
@@ -6519,17 +5642,11 @@ impl AppModel {
           .subtitle_button
           .set_tooltip_text(Some("Subtitle tracks are loading."));
       }
-      PlaybackTrackState::Failed { identity, message } if Some(identity) == current_identity => {
+      TracksView::Unavailable => {
         self.clear_track_lists();
-        self.ui.audio_button.set_tooltip_text(Some(message));
-        self.ui.subtitle_button.set_tooltip_text(Some(message));
-      }
-      _ => {
-        self.clear_track_lists();
-        let reason = if self.playback.controller.is_none() {
+        let reason = if !view.engine_available {
           self
-            .playback
-            .unavailable
+            .playback_engine_error
             .as_deref()
             .unwrap_or("Playback controller is unavailable.")
         } else {
@@ -6549,22 +5666,17 @@ impl AppModel {
     self.ui.subtitle_button.set_sensitive(false);
   }
 
-  fn render_adjacent_controls(&self, active: bool) {
-    let current = self.playback.adjacent.identity.as_ref() == self.playback.identity.as_ref()
-      && self.playback.identity.is_some();
-    let previous = current.then_some(&self.playback.adjacent.previous);
-    let next = current.then_some(&self.playback.adjacent.next);
-    let previous_available = previous
-      .is_some_and(|availability| matches!(availability, AdjacentAvailability::Available(_)));
-    let next_available =
-      next.is_some_and(|availability| matches!(availability, AdjacentAvailability::Available(_)));
+  fn render_adjacent_controls(&self, active: bool, view: &SessionView) {
+    let previous = &view.adjacent.previous;
+    let next = &view.adjacent.next;
+    let previous_available = matches!(previous, AdjacentAvailability::Available { .. });
+    let next_available = matches!(next, AdjacentAvailability::Available { .. });
     self
       .ui
       .previous_button
       .set_sensitive(active && previous_available);
     self.ui.next_button.set_sensitive(active && next_available);
-    let busy_reason = self
-      .playback
+    let busy_reason = view
       .busy
       .then_some("Another playback operation is in progress.");
     let previous_reason =
@@ -8131,11 +7243,11 @@ const fn quick_connect_timeout_message() -> &'static str {
   "Quick Connect code expired. Request a new code to try again."
 }
 
-const fn can_start_login(connection: ConnectionPhase, playback_cleanup_pending: bool) -> bool {
+const fn can_start_login(connection: ConnectionPhase) -> bool {
   matches!(
     connection,
     ConnectionPhase::SignedOut | ConnectionPhase::Failed
-  ) && !playback_cleanup_pending
+  )
 }
 
 const fn should_disconnect_after_forget(
@@ -8149,42 +7261,6 @@ const fn should_disconnect_after_forget(
     && operation_session == current_session
     && matches!(connection, ConnectionPhase::Connected)
     && active_profile_matches
-}
-
-const fn quit_can_finish_without_controller(
-  playback_busy: bool,
-  playback_cleanup_pending: bool,
-) -> bool {
-  !playback_busy && !playback_cleanup_pending
-}
-
-const fn shutdown_completion_quits(
-  quitting: bool,
-  disposition: PlaybackShutdownDisposition,
-) -> bool {
-  quitting || matches!(disposition, PlaybackShutdownDisposition::Quit)
-}
-
-const fn playback_cleanup_required(
-  cleanup_pending: bool,
-  controller_owned: bool,
-  command_busy: bool,
-) -> bool {
-  cleanup_pending || controller_owned || command_busy
-}
-
-const fn stale_playback_disposition(
-  quitting: bool,
-  connection: ConnectionPhase,
-  playback_cleanup_pending: bool,
-) -> PlaybackShutdownDisposition {
-  if quitting {
-    PlaybackShutdownDisposition::Quit
-  } else if matches!(connection, ConnectionPhase::SignedOut) || playback_cleanup_pending {
-    PlaybackShutdownDisposition::Disconnect
-  } else {
-    PlaybackShutdownDisposition::Detached
-  }
 }
 
 fn provider_for(selected: u32) -> MediaServerProvider {
@@ -8366,20 +7442,20 @@ fn detail_metadata(detail: &VideoItemDetail) -> String {
   details.join(" · ")
 }
 
-fn playback_notice(notice: Option<String>, warnings: &[PlaybackWarning]) -> Option<String> {
-  let warning = (!warnings.is_empty()).then(|| {
-    let details = warnings
-      .iter()
-      .map(ToString::to_string)
-      .collect::<Vec<_>>()
-      .join("; ");
-    format!("Playback is active, but {details}.")
-  });
-  match (notice, warning) {
-    (Some(notice), Some(warning)) => Some(format!("{notice}\n{warning}")),
-    (Some(notice), None) => Some(notice),
-    (None, warning) => warning,
-  }
+fn playback_notice(notice: &PlaybackNotice) -> Option<String> {
+  Some(match notice {
+    PlaybackNotice::Finished => "Playback finished.".to_owned(),
+    PlaybackNotice::Stopped => "Playback stopped.".to_owned(),
+    PlaybackNotice::Failed(error) => format!("{error}."),
+    PlaybackNotice::Warnings(warnings) => {
+      let details = warnings
+        .iter()
+        .map(ToString::to_string)
+        .collect::<Vec<_>>()
+        .join("; ");
+      format!("Playback is active, but {details}.")
+    }
+  })
 }
 
 fn shortcut_binding_collision(
@@ -8482,101 +7558,11 @@ const fn session_intro_mode(mode: config::IntroMode) -> IntroSkipMode {
   }
 }
 
-fn should_fetch_intro_ranges(
-  mode: config::IntroMode,
-  capability_available: bool,
-  item_type: &str,
-) -> bool {
-  mode != config::IntroMode::Off && capability_available && item_type == "Episode"
-}
-
-fn evaluate_intro_ui_action(
-  position_seconds: f64,
-  ranges: &mut [IntroSkipRange],
-  mode: IntroSkipMode,
-  manual_requested: bool,
-  active_prompt_range: Option<usize>,
-) -> Option<IntroUiAction> {
-  let range_index = ranges.iter().position(|range| {
-    !range.skipped
-      && position_seconds.is_finite()
-      && position_seconds >= range.start_seconds
-      && position_seconds < range.end_seconds
-  })?;
-  let range = std::slice::from_mut(&mut ranges[range_index]);
-  if manual_requested {
-    if mode != IntroSkipMode::Manual || active_prompt_range != Some(range_index) {
-      return None;
-    }
-    return evaluate_manual_skip(position_seconds, range).map(|decision| {
-      IntroUiAction::ManualSkip {
-        range_index,
-        kind: decision.kind,
-        seek_target: decision.seek_target,
-      }
-    });
-  }
-  evaluate_intro_skip(position_seconds, range, mode).map(|action| match action {
-    IntroSkipAction::Seek(target) => IntroUiAction::Seek {
-      range_index,
-      target,
-    },
-    IntroSkipAction::ShowPrompt(kind) => IntroUiAction::Prompt { range_index, kind },
-  })
-}
-
-fn active_intro_prompt_range(
-  prompt: &mut Option<ActiveIntroPrompt>,
-  now: Instant,
-) -> Option<usize> {
-  if prompt
-    .as_ref()
-    .is_some_and(|prompt| now < prompt.expires_at)
-  {
-    prompt.as_ref().map(|prompt| prompt.range_index)
-  } else {
-    *prompt = None;
-    None
-  }
-}
-
-fn disable_intro_skip(state: &mut IntroSkipState) {
-  state.sequence = state.sequence.wrapping_add(1);
-  state.mode = IntroSkipMode::Off;
-  state.ranges.clear();
-  state.active_prompt = None;
-}
-
 const fn intro_skip_label(kind: IntroSkipKind) -> &'static str {
   match kind {
     IntroSkipKind::Introduction => "Intro",
     IntroSkipKind::Credits => "Credits",
   }
-}
-
-fn manual_intro_skip_requested(messages: &[String]) -> bool {
-  messages
-    .iter()
-    .any(|message| message == "jellypilot-skip-intro")
-}
-
-fn adjacent_direction_from_client_messages(messages: &[String]) -> Option<AdjacentDirection> {
-  messages.iter().find_map(|message| match message.as_str() {
-    "jellypilot-next" => Some(AdjacentDirection::Next),
-    "jellypilot-prev" => Some(AdjacentDirection::Previous),
-    _ => None,
-  })
-}
-
-fn auxiliary_settlement_is_current(
-  operation_session: u64,
-  identity: &PlaybackIdentity,
-  current_session: u64,
-  current_identity: Option<&PlaybackIdentity>,
-) -> bool {
-  operation_session == current_session
-    && identity.session == operation_session
-    && current_identity == Some(identity)
 }
 
 #[cfg_attr(not(test), allow(dead_code))]
@@ -8667,7 +7653,6 @@ fn playback_bar_status<'a>(
   error: Option<&'a str>,
   unavailable: Option<&'a str>,
   busy: bool,
-  connected: Option<bool>,
 ) -> Option<(&'static str, &'a str)> {
   if let Some(error) = error {
     return Some(("dialog-error-symbolic", error));
@@ -8675,78 +7660,73 @@ fn playback_bar_status<'a>(
   if let Some(unavailable) = unavailable {
     return Some(("dialog-warning-symbolic", unavailable));
   }
-  if connected == Some(false) {
-    return Some(("network-offline-symbolic", "Connection lost"));
-  }
   if busy {
     return Some(("content-loading-symbolic", "Buffering…"));
   }
   None
 }
 
-fn adjacent_availability(
-  direction: AdjacentDirection,
-  result: Result<Option<MediaItem>, String>,
-) -> AdjacentAvailability {
-  match result {
-    Ok(Some(item)) => AdjacentAvailability::Available(item),
-    Ok(None) => AdjacentAvailability::Unavailable(
-      match direction {
-        AdjacentDirection::Previous => "No previous episode is available.",
-        AdjacentDirection::Next => "No next episode is available.",
-      }
-      .to_owned(),
-    ),
-    Err(message) => AdjacentAvailability::Unavailable(message),
-  }
-}
-
 fn adjacent_control_reason(
-  availability: Option<&AdjacentAvailability>,
+  availability: &AdjacentAvailability,
   direction: AdjacentDirection,
 ) -> &str {
   match availability {
-    Some(AdjacentAvailability::Loading) => "Checking adjacent episodes…",
-    Some(AdjacentAvailability::Available(_)) => match direction {
+    AdjacentAvailability::Loading => "Checking adjacent episodes…",
+    AdjacentAvailability::Available { .. } => match direction {
       AdjacentDirection::Previous => "Play previous episode",
       AdjacentDirection::Next => "Play next episode",
     },
-    Some(AdjacentAvailability::Unavailable(message)) => message,
-    Some(AdjacentAvailability::Idle) | None => {
-      "Episode navigation requires active episode playback."
-    }
+    AdjacentAvailability::Unavailable => match direction {
+      AdjacentDirection::Previous => "No previous episode is available.",
+      AdjacentDirection::Next => "No next episode is available.",
+    },
+    AdjacentAvailability::Idle => "Episode navigation requires active episode playback.",
   }
 }
 
-fn media_item_from_library(item: &VideoLibraryItem) -> MediaItem {
-  MediaItem {
-    id: item.id.clone(),
-    name: item.name.clone(),
-    item_type: item.item_type.clone(),
-    series_id: item.series_id.clone(),
-    series_name: item.series_name.clone(),
-    season_name: None,
-    index_number: item.episode_number,
-    parent_index_number: item.season_number,
-    run_time_ticks: runtime_seconds_to_ticks(item.runtime_seconds),
-    overview: item.overview.clone(),
-    series_primary_image_tag: None,
+fn playable_artwork_image_id(item: &Playable) -> Option<String> {
+  match item {
+    Playable::Library(item) => item
+      .series_poster_image_id
+      .clone()
+      .or_else(|| item.artwork_image_id.clone()),
+    Playable::Detail(item) => item
+      .series_poster_image_id
+      .clone()
+      .or_else(|| item.artwork_image_id.clone()),
+    Playable::Media(_) => None,
   }
 }
 
-fn media_item_from_detail(item: &VideoItemDetail) -> MediaItem {
-  MediaItem {
-    id: item.id.clone(),
-    name: item.name.clone(),
-    item_type: item.item_type.clone(),
-    series_id: item.series_id.clone(),
-    series_name: item.series_name.clone(),
-    season_name: None,
-    index_number: item.episode_number,
-    parent_index_number: item.season_number,
-    run_time_ticks: runtime_seconds_to_ticks(item.runtime_seconds),
-    overview: item.overview.clone(),
-    series_primary_image_tag: None,
+fn media_item_from_playable(item: &Playable) -> MediaItem {
+  match item {
+    Playable::Library(item) => MediaItem {
+      id: item.id.clone(),
+      name: item.name.clone(),
+      item_type: item.item_type.clone(),
+      series_id: item.series_id.clone(),
+      series_name: item.series_name.clone(),
+      season_name: None,
+      index_number: item.episode_number,
+      parent_index_number: item.season_number,
+      run_time_ticks: runtime_seconds_to_ticks(item.runtime_seconds),
+      overview: item.overview.clone(),
+      series_primary_image_tag: None,
+    },
+    Playable::Detail(item) => MediaItem {
+      id: item.id.clone(),
+      name: item.name.clone(),
+      item_type: item.item_type.clone(),
+      series_id: item.series_id.clone(),
+      series_name: item.series_name.clone(),
+      season_name: None,
+      index_number: item.episode_number,
+      parent_index_number: item.season_number,
+      run_time_ticks: runtime_seconds_to_ticks(item.runtime_seconds),
+      overview: item.overview.clone(),
+      series_primary_image_tag: None,
+    },
+    Playable::Media(item) => item.clone(),
   }
 }
 
@@ -8754,23 +7734,6 @@ fn runtime_seconds_to_ticks(seconds: Option<f64>) -> Option<i64> {
   seconds
     .filter(|seconds| seconds.is_finite() && *seconds >= 0.0)
     .map(|seconds| (seconds * 10_000_000.0).round() as i64)
-}
-
-fn playback_failure(context: &str, error: PlaybackError) -> PlaybackCommandFailure {
-  PlaybackCommandFailure {
-    message: format!("{context}: {error}."),
-    clear_snapshot: false,
-  }
-}
-
-fn playback_start_failure(error: PlaybackError) -> PlaybackCommandFailure {
-  PlaybackCommandFailure {
-    message: format!("Could not start playback: {error}."),
-    clear_snapshot: matches!(
-      error,
-      PlaybackError::MpvStartFailed | PlaybackError::MpvLoadFailed
-    ),
-  }
 }
 
 fn format_byte_count(bytes: u64) -> String {
@@ -8992,39 +7955,13 @@ mod tests {
   }
 
   #[test]
-  fn login_is_blocked_while_connecting_connected_or_cleaning_playback() {
-    assert!(!can_start_login(ConnectionPhase::Connecting, false));
-    assert!(!can_start_login(ConnectionPhase::Connected, false));
-    assert!(!can_start_login(ConnectionPhase::SignedOut, true));
-    assert!(can_start_login(ConnectionPhase::SignedOut, false));
-    assert!(can_start_login(ConnectionPhase::Failed, false));
+  fn login_is_blocked_while_connecting_or_connected() {
+    assert!(!can_start_login(ConnectionPhase::Connecting));
+    assert!(!can_start_login(ConnectionPhase::Connected));
+    assert!(can_start_login(ConnectionPhase::SignedOut));
+    assert!(can_start_login(ConnectionPhase::Failed));
   }
 
-  #[test]
-  fn only_failed_mpv_start_or_load_clears_the_previous_snapshot() {
-    assert!(playback_start_failure(PlaybackError::MpvStartFailed).clear_snapshot);
-    assert!(playback_start_failure(PlaybackError::MpvLoadFailed).clear_snapshot);
-    assert!(!playback_start_failure(PlaybackError::PlaybackInfoUnavailable).clear_snapshot);
-  }
-
-  #[test]
-  fn quit_waits_for_disconnect_cleanup_and_finishes_on_its_completion() {
-    assert!(!quit_can_finish_without_controller(false, true));
-    assert!(!quit_can_finish_without_controller(true, false));
-    assert!(quit_can_finish_without_controller(false, false));
-    assert!(shutdown_completion_quits(
-      true,
-      PlaybackShutdownDisposition::Disconnect,
-    ));
-    assert!(shutdown_completion_quits(
-      false,
-      PlaybackShutdownDisposition::Quit,
-    ));
-    assert!(!shutdown_completion_quits(
-      false,
-      PlaybackShutdownDisposition::Detached,
-    ));
-  }
   #[test]
   fn remote_volume_accepts_wire_string_and_number_forms() {
     assert_eq!(
@@ -9041,29 +7978,6 @@ mod tests {
     );
   }
 
-  #[test]
-  fn disconnect_requires_cleanup_for_owned_or_in_flight_controller() {
-    assert!(!playback_cleanup_required(false, false, false));
-    assert!(playback_cleanup_required(false, true, false));
-    assert!(playback_cleanup_required(false, false, true));
-    assert!(playback_cleanup_required(true, false, false));
-  }
-
-  #[test]
-  fn stale_playback_from_disconnected_session_is_shut_down_before_relogin() {
-    assert_eq!(
-      stale_playback_disposition(false, ConnectionPhase::SignedOut, true),
-      PlaybackShutdownDisposition::Disconnect,
-    );
-    assert_eq!(
-      stale_playback_disposition(false, ConnectionPhase::Connected, false),
-      PlaybackShutdownDisposition::Detached,
-    );
-    assert_eq!(
-      stale_playback_disposition(true, ConnectionPhase::Connected, false),
-      PlaybackShutdownDisposition::Quit,
-    );
-  }
   #[test]
   fn track_selection_maps_filtered_rows_and_subtitle_off() {
     let tracks = vec![
@@ -9099,38 +8013,6 @@ mod tests {
   }
 
   #[test]
-  fn auxiliary_settlement_requires_the_current_session_and_playback_identity() {
-    let current = PlaybackIdentity {
-      session: 4,
-      sequence: 9,
-      item_id: "episode-3".to_owned(),
-    };
-    let replaced = PlaybackIdentity {
-      session: 4,
-      sequence: 10,
-      item_id: "episode-3".to_owned(),
-    };
-
-    assert!(auxiliary_settlement_is_current(
-      4,
-      &current,
-      4,
-      Some(&current),
-    ));
-    assert!(!auxiliary_settlement_is_current(
-      4,
-      &current,
-      5,
-      Some(&current),
-    ));
-    assert!(!auxiliary_settlement_is_current(
-      4,
-      &current,
-      4,
-      Some(&replaced),
-    ));
-  }
-  #[test]
   fn remote_lifecycle_transitions_remain_honest() {
     assert_eq!(
       remote_state_after_event(
@@ -9146,173 +8028,6 @@ mod tests {
       ),
       RemoteControlState::Lost
     );
-  }
-  fn intro_range(kind: IntroSkipKind, start_seconds: f64, end_seconds: f64) -> IntroSkipRange {
-    IntroSkipRange {
-      kind,
-      start_seconds,
-      end_seconds,
-      notified: false,
-      skipped: false,
-    }
-  }
-
-  #[test]
-  fn intro_range_fetch_requires_enabled_mode_capability_and_episode() {
-    assert!(should_fetch_intro_ranges(
-      config::IntroMode::Automatic,
-      true,
-      "Episode",
-    ));
-    assert!(!should_fetch_intro_ranges(
-      config::IntroMode::Off,
-      true,
-      "Episode",
-    ));
-    assert!(!should_fetch_intro_ranges(
-      config::IntroMode::Manual,
-      false,
-      "Episode",
-    ));
-    assert!(!should_fetch_intro_ranges(
-      config::IntroMode::Manual,
-      true,
-      "Movie",
-    ));
-  }
-
-  #[test]
-  fn disabling_intro_skip_purges_ranges_prompt_and_invalidates_fetch() {
-    let mut state = IntroSkipState {
-      identity: None,
-      sequence: 7,
-      mode: IntroSkipMode::Manual,
-      ranges: vec![intro_range(IntroSkipKind::Introduction, 10.0, 30.0)],
-      active_prompt: Some(ActiveIntroPrompt {
-        range_index: 0,
-        expires_at: Instant::now() + Duration::from_secs(3),
-      }),
-    };
-
-    disable_intro_skip(&mut state);
-
-    assert_eq!(state.mode, IntroSkipMode::Off);
-    assert!(state.ranges.is_empty());
-    assert!(state.active_prompt.is_none());
-    assert_eq!(state.sequence, 8);
-  }
-
-  #[test]
-  fn automatic_intro_skip_starts_at_the_exact_boundary_and_applies_each_range_once() {
-    let mut ranges = [
-      intro_range(IntroSkipKind::Introduction, 10.0, 30.0),
-      intro_range(IntroSkipKind::Credits, 90.0, 120.0),
-    ];
-
-    assert_eq!(
-      evaluate_intro_ui_action(9.5, &mut ranges, IntroSkipMode::Automatic, false, None),
-      None
-    );
-    assert_eq!(
-      evaluate_intro_ui_action(10.0, &mut ranges, IntroSkipMode::Automatic, false, None),
-      Some(IntroUiAction::Seek {
-        range_index: 0,
-        target: 30.0,
-      })
-    );
-    assert_eq!(
-      evaluate_intro_ui_action(10.0, &mut ranges, IntroSkipMode::Automatic, false, None),
-      None
-    );
-    assert_eq!(
-      evaluate_intro_ui_action(90.0, &mut ranges, IntroSkipMode::Automatic, false, None),
-      Some(IntroUiAction::Seek {
-        range_index: 1,
-        target: 120.0,
-      })
-    );
-  }
-
-  #[test]
-  fn seeking_back_does_not_reskip_an_automatic_range() {
-    let mut ranges = [intro_range(IntroSkipKind::Introduction, 10.0, 30.0)];
-
-    assert_eq!(
-      evaluate_intro_ui_action(10.0, &mut ranges, IntroSkipMode::Automatic, false, None),
-      Some(IntroUiAction::Seek {
-        range_index: 0,
-        target: 30.0,
-      })
-    );
-    assert_eq!(
-      evaluate_intro_ui_action(5.0, &mut ranges, IntroSkipMode::Automatic, false, None),
-      None
-    );
-    assert_eq!(
-      evaluate_intro_ui_action(10.0, &mut ranges, IntroSkipMode::Automatic, false, None),
-      None
-    );
-  }
-
-  #[test]
-  fn manual_intro_shortcut_requires_a_live_displayed_prompt_and_skips_once() {
-    let mut ranges = [intro_range(IntroSkipKind::Introduction, 10.0, 30.0)];
-
-    assert_eq!(
-      evaluate_intro_ui_action(10.0, &mut ranges, IntroSkipMode::Manual, false, None),
-      Some(IntroUiAction::Prompt {
-        range_index: 0,
-        kind: IntroSkipKind::Introduction,
-      })
-    );
-    let messages = vec!["jellypilot-skip-intro".to_owned()];
-    assert!(manual_intro_skip_requested(&messages));
-    assert_eq!(
-      evaluate_intro_ui_action(
-        10.0,
-        &mut ranges,
-        IntroSkipMode::Manual,
-        manual_intro_skip_requested(&messages),
-        None,
-      ),
-      None
-    );
-    let now = Instant::now();
-    let mut prompt = Some(ActiveIntroPrompt {
-      range_index: 0,
-      expires_at: now + Duration::from_secs(3),
-    });
-    let active_prompt = active_intro_prompt_range(&mut prompt, now);
-    assert_eq!(
-      evaluate_intro_ui_action(
-        10.0,
-        &mut ranges,
-        IntroSkipMode::Manual,
-        manual_intro_skip_requested(&messages),
-        active_prompt,
-      ),
-      Some(IntroUiAction::ManualSkip {
-        range_index: 0,
-        kind: IntroSkipKind::Introduction,
-        seek_target: 30.0,
-      })
-    );
-    assert_eq!(
-      evaluate_intro_ui_action(
-        10.0,
-        &mut ranges,
-        IntroSkipMode::Manual,
-        manual_intro_skip_requested(&messages),
-        active_prompt,
-      ),
-      None
-    );
-    let mut expired_prompt = Some(ActiveIntroPrompt {
-      range_index: 0,
-      expires_at: now,
-    });
-    assert_eq!(active_intro_prompt_range(&mut expired_prompt, now), None);
-    assert!(expired_prompt.is_none());
   }
   #[test]
   fn diagnostic_timestamp_includes_date_and_explicit_utc_zone() {
@@ -9352,24 +8067,6 @@ mod tests {
     assert!(!valid_subtitle_language(""));
     assert!(!valid_subtitle_language("eng,spa"));
     assert!(!valid_subtitle_language("english subtitles"));
-  }
-  #[test]
-  fn client_messages_map_to_adjacent_episode_directions() {
-    assert_eq!(
-      adjacent_direction_from_client_messages(&[
-        "unrelated".to_owned(),
-        "jellypilot-next".to_owned(),
-      ]),
-      Some(AdjacentDirection::Next)
-    );
-    assert_eq!(
-      adjacent_direction_from_client_messages(&["jellypilot-prev".to_owned()]),
-      Some(AdjacentDirection::Previous)
-    );
-    assert_eq!(
-      adjacent_direction_from_client_messages(&["jellypilot-skip-intro".to_owned()]),
-      None
-    );
   }
 
   #[test]

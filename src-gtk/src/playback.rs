@@ -1,12 +1,16 @@
 //! Framework-independent external MPV playback for the native GTK shell.
 
 use std::fmt;
+use std::future::Future;
 use std::path::PathBuf;
+use std::pin::Pin;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+#[cfg(test)]
+use jellypilot_media_server::MediaStream;
 use jellypilot_media_server::{
-  ticks_to_seconds, JellyfinClient, MediaItem, MediaServerProvider, MediaSource, MediaStream,
+  ticks_to_seconds, JellyfinClient, MediaItem, MediaServerProvider, MediaSource,
   PlaybackProgressInfo, PlaybackStartInfo, PlaybackStopInfo, VideoItemDetail, VideoLibraryItem,
 };
 use jellypilot_mpv::{
@@ -70,18 +74,32 @@ pub enum PlaybackStartPosition {
   /// Start at an explicit number of seconds.
   At(f64),
 }
-
-/// Optional choices applied atomically with MPV's `loadfile` command.
-#[derive(Debug, Clone, Default, PartialEq)]
-pub struct PlaybackOptions {
-  pub start_position: PlaybackStartPosition,
-  /// Provider stream index, not MPV's type-local track number.
-  pub audio_stream_index: Option<i32>,
-  /// Provider stream index, or `-1` to disable subtitles.
-  pub subtitle_stream_index: Option<i32>,
-  /// Prefer a specific source from the playback-info response.
-  pub media_source_id: Option<String>,
+/// An item accepted by the playback controller.
+#[derive(Debug, Clone)]
+pub enum Playable {
+  Library(VideoLibraryItem),
+  Detail(VideoItemDetail),
+  Media(MediaItem),
 }
+
+impl From<VideoLibraryItem> for Playable {
+  fn from(item: VideoLibraryItem) -> Self {
+    Self::Library(item)
+  }
+}
+
+impl From<VideoItemDetail> for Playable {
+  fn from(item: VideoItemDetail) -> Self {
+    Self::Detail(item)
+  }
+}
+
+impl From<MediaItem> for Playable {
+  fn from(item: MediaItem) -> Self {
+    Self::Media(item)
+  }
+}
+
 /// Track metadata read from MPV's authoritative track-list property.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TrackInfo {
@@ -121,13 +139,6 @@ pub struct NowPlayingItem {
 pub struct PlaybackSnapshot {
   pub now_playing: Option<NowPlayingItem>,
   pub transport: PlayerState,
-}
-
-/// Whether a best-effort media-server playback report succeeded.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ReportingStatus {
-  Reported,
-  Failed,
 }
 
 /// Non-fatal work that could not be completed after media started playing.
@@ -173,19 +184,19 @@ pub enum PlaybackRefreshState {
   Ended(PlaybackEndReason),
 }
 
-/// Result returned after MPV accepted a new item.
+/// Result returned after MPV accepted a new item or a transport control.
 #[must_use = "playback warnings must be surfaced to the user"]
 #[derive(Debug, Clone)]
-pub struct PlaybackStartOutcome {
+pub struct PlaybackOutcome {
   pub snapshot: PlaybackSnapshot,
   pub warnings: Vec<PlaybackWarning>,
 }
 
-/// Result returned by a transport control.
+/// Result returned after selecting a media track.
 #[must_use = "playback warnings must be surfaced to the user"]
 #[derive(Debug, Clone)]
-pub struct PlaybackControlOutcome {
-  pub snapshot: PlaybackSnapshot,
+pub struct TrackSelectionOutcome {
+  pub tracks: Vec<TrackInfo>,
   pub warnings: Vec<PlaybackWarning>,
 }
 
@@ -209,7 +220,6 @@ pub struct PlaybackRefreshOutcome {
 #[must_use = "shutdown reporting warnings must be surfaced to the user"]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PlaybackShutdownOutcome {
-  pub stopped_active_playback: bool,
   pub warnings: Vec<PlaybackWarning>,
 }
 
@@ -255,10 +265,218 @@ impl fmt::Display for PlaybackError {
 }
 
 impl std::error::Error for PlaybackError {}
+/// Boxed asynchronous operation exposed by [`PlaybackServer`].
+pub type PlaybackServerFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
+
+/// Token-free request for resolving an item into playable media.
+#[derive(Debug, Clone)]
+pub struct PlaybackResolutionRequest {
+  pub item_id: String,
+  pub start_time_ticks: Option<i64>,
+}
+
+/// Media-server data required to load a resolved item.
+#[derive(Clone)]
+pub struct PlaybackResolution {
+  pub media_source: MediaSource,
+  pub play_session_id: Option<String>,
+  pub stream_url: AuthenticatedUrl,
+}
+// MediaSource embeds tokenized stream URLs; keep them out of Debug output.
+impl fmt::Debug for PlaybackResolution {
+  fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+    formatter
+      .debug_struct("PlaybackResolution")
+      .field("media_source_id", &self.media_source.id)
+      .field("play_session_id", &self.play_session_id)
+      .field("stream_url", &self.stream_url)
+      .finish()
+  }
+}
+
+/// Token-free state sent for playback start and progress reports.
+#[derive(Debug, Clone)]
+pub struct PlaybackReport {
+  pub item_id: String,
+  pub media_source_id: String,
+  pub play_session_id: Option<String>,
+  pub position_ticks: Option<i64>,
+  pub is_paused: bool,
+  pub is_muted: bool,
+  pub volume_level: i32,
+  pub audio_stream_index: Option<i32>,
+  pub subtitle_stream_index: Option<i32>,
+  pub play_method: String,
+}
+
+/// Token-free state sent when playback stops.
+#[derive(Debug, Clone)]
+pub struct PlaybackStopReport {
+  pub item_id: String,
+  pub media_source_id: String,
+  pub play_session_id: Option<String>,
+  pub position_ticks: Option<i64>,
+}
+
+/// Media-server operations required by the playback controller.
+pub trait PlaybackServer: Send + Sync {
+  fn provider(&self) -> MediaServerProvider;
+
+  fn resolve(
+    &self,
+    request: PlaybackResolutionRequest,
+  ) -> PlaybackServerFuture<'_, Result<PlaybackResolution, PlaybackError>>;
+
+  fn report_playback_start(
+    &self,
+    report: PlaybackReport,
+  ) -> PlaybackServerFuture<'_, Result<(), ()>>;
+
+  fn report_playback_progress(
+    &self,
+    report: PlaybackReport,
+  ) -> PlaybackServerFuture<'_, Result<(), ()>>;
+
+  fn report_playback_stop(
+    &self,
+    report: PlaybackStopReport,
+  ) -> PlaybackServerFuture<'_, Result<(), ()>>;
+}
+
+/// Production playback-server adapter backed by an authenticated Jellyfin client.
+pub struct JellyfinPlaybackServer(Arc<JellyfinClient>);
+
+impl From<Arc<JellyfinClient>> for JellyfinPlaybackServer {
+  fn from(server: Arc<JellyfinClient>) -> Self {
+    Self(server)
+  }
+}
+
+impl PlaybackServer for JellyfinPlaybackServer {
+  fn provider(&self) -> MediaServerProvider {
+    self.0.provider()
+  }
+
+  fn resolve(
+    &self,
+    request: PlaybackResolutionRequest,
+  ) -> PlaybackServerFuture<'_, Result<PlaybackResolution, PlaybackError>> {
+    Box::pin(async move {
+      let playback = self
+        .0
+        .playback()
+        .get_playback_info(&request.item_id, request.start_time_ticks, None, None)
+        .await
+        .map_err(|_| PlaybackError::PlaybackInfoUnavailable)?;
+      let media_source = select_media_source(&playback.media_sources, None)?.clone();
+      let stream_url = self
+        .0
+        .playback()
+        .build_stream_url(&request.item_id, &media_source)
+        .map(AuthenticatedUrl::new)
+        .ok_or(PlaybackError::StreamUrlUnavailable)?;
+
+      Ok(PlaybackResolution {
+        media_source,
+        play_session_id: playback.play_session_id,
+        stream_url,
+      })
+    })
+  }
+
+  fn report_playback_start(
+    &self,
+    report: PlaybackReport,
+  ) -> PlaybackServerFuture<'_, Result<(), ()>> {
+    Box::pin(async move {
+      self
+        .0
+        .playback()
+        .report_playback_start(&PlaybackStartInfo::from(report))
+        .await
+        .map_err(|_| ())
+    })
+  }
+
+  fn report_playback_progress(
+    &self,
+    report: PlaybackReport,
+  ) -> PlaybackServerFuture<'_, Result<(), ()>> {
+    Box::pin(async move {
+      self
+        .0
+        .playback()
+        .report_playback_progress(&PlaybackProgressInfo::from(report))
+        .await
+        .map_err(|_| ())
+    })
+  }
+
+  fn report_playback_stop(
+    &self,
+    report: PlaybackStopReport,
+  ) -> PlaybackServerFuture<'_, Result<(), ()>> {
+    Box::pin(async move {
+      self
+        .0
+        .playback()
+        .report_playback_stop(&PlaybackStopInfo::from(report))
+        .await
+        .map_err(|_| ())
+    })
+  }
+}
+
+impl From<PlaybackReport> for PlaybackStartInfo {
+  fn from(report: PlaybackReport) -> Self {
+    Self {
+      item_id: report.item_id,
+      media_source_id: Some(report.media_source_id),
+      play_session_id: report.play_session_id,
+      position_ticks: report.position_ticks,
+      is_paused: report.is_paused,
+      is_muted: report.is_muted,
+      volume_level: report.volume_level,
+      audio_stream_index: report.audio_stream_index,
+      subtitle_stream_index: report.subtitle_stream_index,
+      play_method: report.play_method,
+      can_seek: true,
+    }
+  }
+}
+
+impl From<PlaybackReport> for PlaybackProgressInfo {
+  fn from(report: PlaybackReport) -> Self {
+    Self {
+      item_id: report.item_id,
+      media_source_id: Some(report.media_source_id),
+      play_session_id: report.play_session_id,
+      position_ticks: report.position_ticks,
+      is_paused: report.is_paused,
+      is_muted: report.is_muted,
+      volume_level: report.volume_level,
+      audio_stream_index: report.audio_stream_index,
+      subtitle_stream_index: report.subtitle_stream_index,
+      play_method: report.play_method,
+      can_seek: true,
+    }
+  }
+}
+
+impl From<PlaybackStopReport> for PlaybackStopInfo {
+  fn from(report: PlaybackStopReport) -> Self {
+    Self {
+      item_id: report.item_id,
+      media_source_id: Some(report.media_source_id),
+      play_session_id: report.play_session_id,
+      position_ticks: report.position_ticks,
+    }
+  }
+}
 
 /// Single-current-item playback adapter shared by GTK application code.
 pub struct PlaybackController {
-  server: Arc<JellyfinClient>,
+  server: Arc<dyn PlaybackServer>,
   mpv: MpvClient,
   configured_mpv_args: Vec<String>,
   active: Option<ActivePlayback>,
@@ -303,6 +521,18 @@ impl PlaybackController {
     mpv: MpvClient,
     configured_mpv_args: Vec<String>,
   ) -> Self {
+    Self::from_server(
+      Arc::new(JellyfinPlaybackServer::from(server)),
+      mpv,
+      configured_mpv_args,
+    )
+  }
+
+  fn from_server(
+    server: Arc<dyn PlaybackServer>,
+    mpv: MpvClient,
+    configured_mpv_args: Vec<String>,
+  ) -> Self {
     Self {
       server,
       mpv,
@@ -339,57 +569,19 @@ impl PlaybackController {
     Ok(())
   }
 
-  /// Resolve and play a Library summary item.
+  /// Resolve and play an item.
   ///
   /// # Errors
   ///
   /// Returns a sanitized [`PlaybackError`] when the item, server response, MPV
   /// startup, or MPV load command cannot be completed.
-  pub async fn play_library_item(
+  pub async fn play(
     &mut self,
-    item: &VideoLibraryItem,
-    options: PlaybackOptions,
-  ) -> Result<PlaybackStartOutcome, PlaybackError> {
-    let request = PlayableRequest::from_library_item(item, options)?;
-    self.play(request).await
-  }
-
-  /// Resolve and play a fully loaded Library item detail.
-  ///
-  /// # Errors
-  ///
-  /// Returns a sanitized [`PlaybackError`] when the item, server response, MPV
-  /// startup, or MPV load command cannot be completed.
-  pub async fn play_item_detail(
-    &mut self,
-    item: &VideoItemDetail,
-    options: PlaybackOptions,
-  ) -> Result<PlaybackStartOutcome, PlaybackError> {
-    let request = PlayableRequest::from_item_detail(item, options)?;
-    self.play(request).await
-  }
-
-  /// Resolve and play a media item returned by the adjacent-episode API.
-  ///
-  /// # Errors
-  ///
-  /// Returns a sanitized [`PlaybackError`] when the item, server response, MPV
-  /// startup, or MPV load command cannot be completed.
-  pub async fn play_media_item(
-    &mut self,
-    item: &MediaItem,
-    options: PlaybackOptions,
-  ) -> Result<PlaybackStartOutcome, PlaybackError> {
-    let request = PlayableRequest::from_media_item(item, options)?;
-    self.play(request).await
-  }
-
-  /// Read MPV transport without changing lifecycle or reporting state.
-  ///
-  /// Shell refresh loops should call [`Self::refresh`] so natural completion,
-  /// disconnection, progress reporting, and warnings are reconciled.
-  pub async fn snapshot(&self) -> PlaybackSnapshot {
-    self.snapshot_with_transport(self.collect_transport().await.unwrap_or_default())
+    playable: Playable,
+    position: PlaybackStartPosition,
+  ) -> Result<PlaybackOutcome, PlaybackError> {
+    let request = PlayableRequest::from_playable(playable, position)?;
+    self.play_request(request).await
   }
 
   /// Read the active MPV track list without changing playback state.
@@ -405,22 +597,36 @@ impl PlaybackController {
     parse_track_list(&json)
   }
 
-  /// Select an audio track by MPV track id.
-  pub async fn select_audio_track(&self, id: i64) -> Result<(), PlaybackError> {
+  /// Select an audio track by MPV track id and return the refreshed track list.
+  pub async fn select_audio_track(
+    &mut self,
+    id: i64,
+  ) -> Result<TrackSelectionOutcome, PlaybackError> {
     self
       .mpv
       .set_audio_track(id)
       .await
-      .map_err(|_| PlaybackError::MpvControlFailed)
+      .map_err(|_| PlaybackError::MpvControlFailed)?;
+    Ok(TrackSelectionOutcome {
+      tracks: self.tracks().await?,
+      warnings: Vec::new(),
+    })
   }
 
-  /// Select or disable a subtitle track by MPV track id.
-  pub async fn select_subtitle_track(&self, id: Option<i64>) -> Result<(), PlaybackError> {
-    let result = match mpv_subtitle_selection(id) {
+  /// Select or disable a subtitle track and return the refreshed track list.
+  pub async fn select_subtitle_track(
+    &mut self,
+    id: Option<i64>,
+  ) -> Result<TrackSelectionOutcome, PlaybackError> {
+    match mpv_subtitle_selection(id) {
       MpvSubtitleSelection::Track(id) => self.mpv.set_subtitle_track(id).await,
       MpvSubtitleSelection::Value(value) => self.mpv.set_property_string("sid", value).await,
-    };
-    result.map_err(|_| PlaybackError::MpvControlFailed)
+    }
+    .map_err(|_| PlaybackError::MpvControlFailed)?;
+    Ok(TrackSelectionOutcome {
+      tracks: self.tracks().await?,
+      warnings: Vec::new(),
+    })
   }
 
   /// Show a transient message in MPV's on-screen display.
@@ -500,22 +706,16 @@ impl PlaybackController {
     self.last_transport = PlayerState::default();
     self.pending_client_messages.clear();
     let _ = self.mpv.quit().await;
-    let (stopped_active_playback, warnings) = match active {
-      Some(active) => (
-        true,
-        warning_for_reporting(
-          self.report_stop(&active).await,
-          PlaybackWarning::PlaybackStopNotReported,
-        ),
+    let warnings = match active {
+      Some(active) => warning_for_reporting(
+        self.report_stop(&active).await,
+        PlaybackWarning::PlaybackStopNotReported,
       ),
-      None => (false, Vec::new()),
+      None => Vec::new(),
     };
     self.active = None;
 
-    PlaybackShutdownOutcome {
-      stopped_active_playback,
-      warnings,
-    }
+    PlaybackShutdownOutcome { warnings }
   }
 
   /// Pause or resume the current item and report the resulting state.
@@ -524,10 +724,7 @@ impl PlaybackController {
   ///
   /// Returns [`PlaybackError::NoActivePlayback`] without an item, or
   /// [`PlaybackError::MpvControlFailed`] when MPV rejects the command.
-  pub async fn set_paused(
-    &mut self,
-    paused: bool,
-  ) -> Result<PlaybackControlOutcome, PlaybackError> {
+  pub async fn set_paused(&mut self, paused: bool) -> Result<PlaybackOutcome, PlaybackError> {
     self.require_active()?;
     self
       .mpv
@@ -551,10 +748,7 @@ impl PlaybackController {
   ///
   /// Returns an error for missing playback, a negative/non-finite position, or
   /// a rejected MPV command.
-  pub async fn seek(
-    &mut self,
-    position_seconds: f64,
-  ) -> Result<PlaybackControlOutcome, PlaybackError> {
+  pub async fn seek(&mut self, position_seconds: f64) -> Result<PlaybackOutcome, PlaybackError> {
     self.require_active()?;
     checked_seconds_to_ticks(position_seconds)?;
     self
@@ -579,7 +773,7 @@ impl PlaybackController {
   ///
   /// Returns an error for missing playback, out-of-range volume, or a rejected
   /// MPV command.
-  pub async fn set_volume(&mut self, volume: f64) -> Result<PlaybackControlOutcome, PlaybackError> {
+  pub async fn set_volume(&mut self, volume: f64) -> Result<PlaybackOutcome, PlaybackError> {
     self.require_active()?;
     validate_volume(volume)?;
     self
@@ -603,7 +797,7 @@ impl PlaybackController {
   /// # Errors
   ///
   /// Returns an error for missing playback or a rejected MPV command.
-  pub async fn set_muted(&mut self, muted: bool) -> Result<PlaybackControlOutcome, PlaybackError> {
+  pub async fn set_muted(&mut self, muted: bool) -> Result<PlaybackOutcome, PlaybackError> {
     self.require_active()?;
     self
       .mpv
@@ -649,10 +843,10 @@ impl PlaybackController {
     Ok(PlaybackStopOutcome { warnings })
   }
 
-  async fn play(
+  async fn play_request(
     &mut self,
     request: PlayableRequest,
-  ) -> Result<PlaybackStartOutcome, PlaybackError> {
+  ) -> Result<PlaybackOutcome, PlaybackError> {
     let resolved = self.resolve(request).await?;
     let mut warnings = self.settle_disconnected_previous().await;
     // Keep the previous item owned by the controller until the replacement is
@@ -676,7 +870,7 @@ impl PlaybackController {
     }
 
     if let Some(previous) = previous.as_ref() {
-      if self.report_stop(previous).await == ReportingStatus::Failed {
+      if !self.report_stop(previous).await {
         warnings.push(PlaybackWarning::PreviousPlaybackStopNotReported);
       }
     }
@@ -722,12 +916,12 @@ impl PlaybackController {
       .active
       .as_ref()
       .ok_or(PlaybackError::NoActivePlayback)?;
-    if self.report_start(active, &transport).await == ReportingStatus::Failed {
+    if !self.report_start(active, &transport).await {
       warnings.push(PlaybackWarning::PlaybackStartNotReported);
     }
     self.last_progress_report_at = Some(Instant::now());
 
-    Ok(PlaybackStartOutcome {
+    Ok(PlaybackOutcome {
       snapshot: self.snapshot_with_transport(transport),
       warnings,
     })
@@ -738,38 +932,17 @@ impl PlaybackController {
     let start_position_ticks = checked_seconds_to_ticks(start_position_seconds)?;
     let server_start_ticks =
       matches!(self.server.provider(), MediaServerProvider::Emby).then_some(start_position_ticks);
-    let playback = self
-      .server
-      .playback()
-      .get_playback_info(
-        &request.item_id,
-        server_start_ticks,
-        request.options.audio_stream_index,
-        request.options.subtitle_stream_index,
-      )
-      .await
-      .map_err(|_| PlaybackError::PlaybackInfoUnavailable)?;
-    let media_source = select_media_source(
-      &playback.media_sources,
-      request.options.media_source_id.as_deref(),
-    )?;
-    let stream_url = self
-      .server
-      .playback()
-      .build_stream_url(&request.item_id, media_source)
-      .map(AuthenticatedUrl)
-      .ok_or(PlaybackError::StreamUrlUnavailable)?;
-
-    let mpv_audio_index = resolve_mpv_track(
-      &media_source.media_streams,
-      "Audio",
-      request.options.audio_stream_index,
-    )?;
-    let (mpv_subtitle_index, external_subtitle_url) = self.resolve_subtitle(
-      &request.item_id,
+    let PlaybackResolution {
       media_source,
-      request.options.subtitle_stream_index,
-    )?;
+      play_session_id,
+      stream_url,
+    } = self
+      .server
+      .resolve(PlaybackResolutionRequest {
+        item_id: request.item_id.clone(),
+        start_time_ticks: server_start_ticks,
+      })
+      .await?;
     let runtime_seconds = request.runtime_seconds.or_else(|| {
       media_source
         .run_time_ticks
@@ -785,52 +958,19 @@ impl PlaybackController {
           item_type: request.item_type,
           runtime_seconds,
           start_position_seconds,
-          play_method: play_method(media_source).to_owned(),
+          play_method: play_method(&media_source).to_owned(),
         },
-        media_source_id: media_source.id.clone(),
-        play_session_id: playback.play_session_id,
-        audio_stream_index: request.options.audio_stream_index,
-        subtitle_stream_index: request.options.subtitle_stream_index,
+        media_source_id: media_source.id,
+        play_session_id,
+        audio_stream_index: None,
+        subtitle_stream_index: None,
         last_known_position_seconds: start_position_seconds,
       },
       stream_url,
-      external_subtitle_url,
-      mpv_audio_index,
-      mpv_subtitle_index,
+      external_subtitle_url: None,
+      mpv_audio_index: None,
+      mpv_subtitle_index: None,
     })
-  }
-
-  fn resolve_subtitle(
-    &self,
-    item_id: &str,
-    media_source: &MediaSource,
-    selected_index: Option<i32>,
-  ) -> Result<(Option<i64>, Option<AuthenticatedUrl>), PlaybackError> {
-    let Some(selected_index) = selected_index else {
-      return Ok((None, None));
-    };
-    if selected_index < 0 {
-      return Ok((Some(i64::from(selected_index)), None));
-    }
-    let stream = find_stream(&media_source.media_streams, "Subtitle", selected_index)?;
-    if !stream.is_external {
-      return Ok((
-        Some(type_local_track_index(
-          &media_source.media_streams,
-          "Subtitle",
-          selected_index,
-        )?),
-        None,
-      ));
-    }
-
-    let subtitle_url = self
-      .server
-      .playback()
-      .build_subtitle_url(item_id, &media_source.id, stream)
-      .map(AuthenticatedUrl)
-      .ok_or(PlaybackError::SubtitleUrlUnavailable)?;
-    Ok((None, Some(subtitle_url)))
   }
 
   fn require_active(&self) -> Result<&ActivePlayback, PlaybackError> {
@@ -990,85 +1130,51 @@ impl PlaybackController {
     }
   }
 
-  fn control_outcome(
-    &self,
-    transport: PlayerState,
-    reporting: ReportingStatus,
-  ) -> PlaybackControlOutcome {
-    PlaybackControlOutcome {
+  fn control_outcome(&self, transport: PlayerState, reported: bool) -> PlaybackOutcome {
+    PlaybackOutcome {
       snapshot: self.snapshot_with_transport(transport),
-      warnings: warning_for_reporting(reporting, PlaybackWarning::PlaybackProgressNotReported),
+      warnings: warning_for_reporting(reported, PlaybackWarning::PlaybackProgressNotReported),
     }
   }
 
-  async fn report_start(
-    &self,
-    active: &ActivePlayback,
-    transport: &PlayerState,
-  ) -> ReportingStatus {
-    let info = PlaybackStartInfo {
-      item_id: active.now_playing.item_id.clone(),
-      media_source_id: Some(active.media_source_id.clone()),
-      play_session_id: active.play_session_id.clone(),
-      position_ticks: checked_seconds_to_ticks(transport.time_pos).ok(),
-      is_paused: transport.paused,
-      is_muted: transport.muted,
-      volume_level: volume_level(transport.volume),
-      audio_stream_index: active.audio_stream_index,
-      subtitle_stream_index: active.subtitle_stream_index,
-      play_method: active.now_playing.play_method.clone(),
-      can_seek: true,
-    };
-    let playback = self.server.playback();
-    reporting_status_with_timeout(
+  async fn report_start(&self, active: &ActivePlayback, transport: &PlayerState) -> bool {
+    reporting_succeeded_with_timeout(
       PLAYBACK_REPORT_TIMEOUT,
-      playback.report_playback_start(&info),
+      self
+        .server
+        .report_playback_start(playback_report(active, transport)),
     )
     .await
   }
 
-  async fn report_progress_for_transport(&self, transport: &PlayerState) -> ReportingStatus {
+  async fn report_progress_for_transport(&self, transport: &PlayerState) -> bool {
     let Some(active) = self.active.as_ref() else {
-      return ReportingStatus::Failed;
+      return false;
     };
-    let info = PlaybackProgressInfo {
-      item_id: active.now_playing.item_id.clone(),
-      media_source_id: Some(active.media_source_id.clone()),
-      play_session_id: active.play_session_id.clone(),
-      position_ticks: checked_seconds_to_ticks(transport.time_pos).ok(),
-      is_paused: transport.paused,
-      is_muted: transport.muted,
-      volume_level: volume_level(transport.volume),
-      audio_stream_index: active.audio_stream_index,
-      subtitle_stream_index: active.subtitle_stream_index,
-      play_method: active.now_playing.play_method.clone(),
-      can_seek: true,
-    };
-    let playback = self.server.playback();
-    reporting_status_with_timeout(
+    reporting_succeeded_with_timeout(
       PLAYBACK_REPORT_TIMEOUT,
-      playback.report_playback_progress(&info),
+      self
+        .server
+        .report_playback_progress(playback_report(active, transport)),
     )
     .await
   }
 
-  async fn report_progress_now(&mut self, transport: &PlayerState) -> ReportingStatus {
-    let reporting = self.report_progress_for_transport(transport).await;
+  async fn report_progress_now(&mut self, transport: &PlayerState) -> bool {
+    let reported = self.report_progress_for_transport(transport).await;
     self.last_progress_report_at = Some(Instant::now());
-    reporting
+    reported
   }
 
-  async fn report_stop(&self, active: &ActivePlayback) -> ReportingStatus {
-    let info = PlaybackStopInfo {
-      item_id: active.now_playing.item_id.clone(),
-      media_source_id: Some(active.media_source_id.clone()),
-      play_session_id: active.play_session_id.clone(),
-      position_ticks: checked_seconds_to_ticks(active.last_known_position_seconds).ok(),
-    };
-    let playback = self.server.playback();
-    reporting_status_with_timeout(
+  async fn report_stop(&self, active: &ActivePlayback) -> bool {
+    reporting_succeeded_with_timeout(
       PLAYBACK_REPORT_TIMEOUT,
-      playback.report_playback_stop(&info),
+      self.server.report_playback_stop(PlaybackStopReport {
+        item_id: active.now_playing.item_id.clone(),
+        media_source_id: active.media_source_id.clone(),
+        play_session_id: active.play_session_id.clone(),
+        position_ticks: checked_seconds_to_ticks(active.last_known_position_seconds).ok(),
+      }),
     )
     .await
   }
@@ -1082,6 +1188,20 @@ struct ActivePlayback {
   audio_stream_index: Option<i32>,
   subtitle_stream_index: Option<i32>,
   last_known_position_seconds: f64,
+}
+fn playback_report(active: &ActivePlayback, transport: &PlayerState) -> PlaybackReport {
+  PlaybackReport {
+    item_id: active.now_playing.item_id.clone(),
+    media_source_id: active.media_source_id.clone(),
+    play_session_id: active.play_session_id.clone(),
+    position_ticks: checked_seconds_to_ticks(transport.time_pos).ok(),
+    is_paused: transport.paused,
+    is_muted: transport.muted,
+    volume_level: volume_level(transport.volume),
+    audio_stream_index: active.audio_stream_index,
+    subtitle_stream_index: active.subtitle_stream_index,
+    play_method: active.now_playing.play_method.clone(),
+  }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1133,9 +1253,17 @@ struct ResolvedPlayback {
   mpv_subtitle_index: Option<i64>,
 }
 
-struct AuthenticatedUrl(String);
+/// Authenticated playback URL whose debug output never exposes credentials.
+#[derive(Clone)]
+pub struct AuthenticatedUrl(String);
 
 impl AuthenticatedUrl {
+  /// Wrap an authenticated playback URL.
+  #[must_use]
+  pub fn new(url: String) -> Self {
+    Self(url)
+  }
+
   fn as_str(&self) -> &str {
     &self.0
   }
@@ -1153,78 +1281,77 @@ struct PlayableRequest {
   item_type: String,
   runtime_seconds: Option<f64>,
   resume_position_seconds: Option<f64>,
-  options: PlaybackOptions,
+  position: PlaybackStartPosition,
 }
 
 impl PlayableRequest {
-  fn from_library_item(
-    item: &VideoLibraryItem,
-    options: PlaybackOptions,
+  fn from_playable(
+    playable: Playable,
+    position: PlaybackStartPosition,
   ) -> Result<Self, PlaybackError> {
-    validate_item_type(&item.item_type)?;
-    Ok(Self {
-      item_id: item.id.clone(),
-      title: item_title(
-        &item.name,
-        &item.item_type,
-        item.series_name.as_deref(),
-        item.season_number,
-        item.episode_number,
-      ),
-      item_type: item.item_type.clone(),
-      runtime_seconds: item.runtime_seconds,
-      resume_position_seconds: item.resume_position_seconds,
-      options,
-    })
-  }
-
-  fn from_item_detail(
-    item: &VideoItemDetail,
-    options: PlaybackOptions,
-  ) -> Result<Self, PlaybackError> {
-    validate_item_type(&item.item_type)?;
-    if !item.can_play {
-      return Err(PlaybackError::ItemNotPlayable);
+    match playable {
+      Playable::Library(item) => {
+        validate_item_type(&item.item_type)?;
+        Ok(Self {
+          item_id: item.id,
+          title: item_title(
+            &item.name,
+            &item.item_type,
+            item.series_name.as_deref(),
+            item.season_number,
+            item.episode_number,
+          ),
+          item_type: item.item_type,
+          runtime_seconds: item.runtime_seconds,
+          resume_position_seconds: item.resume_position_seconds,
+          position,
+        })
+      }
+      Playable::Detail(item) => {
+        validate_item_type(&item.item_type)?;
+        if !item.can_play {
+          return Err(PlaybackError::ItemNotPlayable);
+        }
+        Ok(Self {
+          item_id: item.id,
+          title: item_title(
+            &item.name,
+            &item.item_type,
+            item.series_name.as_deref(),
+            item.season_number,
+            item.episode_number,
+          ),
+          item_type: item.item_type,
+          runtime_seconds: item.runtime_seconds,
+          resume_position_seconds: item.resume_position_seconds,
+          position,
+        })
+      }
+      Playable::Media(item) => {
+        validate_item_type(&item.item_type)?;
+        Ok(Self {
+          item_id: item.id,
+          title: item_title(
+            &item.name,
+            &item.item_type,
+            item.series_name.as_deref(),
+            item.parent_index_number,
+            item.index_number,
+          ),
+          item_type: item.item_type,
+          runtime_seconds: item
+            .run_time_ticks
+            .filter(|ticks| *ticks >= 0)
+            .map(ticks_to_seconds),
+          resume_position_seconds: None,
+          position,
+        })
+      }
     }
-    Ok(Self {
-      item_id: item.id.clone(),
-      title: item_title(
-        &item.name,
-        &item.item_type,
-        item.series_name.as_deref(),
-        item.season_number,
-        item.episode_number,
-      ),
-      item_type: item.item_type.clone(),
-      runtime_seconds: item.runtime_seconds,
-      resume_position_seconds: item.resume_position_seconds,
-      options,
-    })
-  }
-
-  fn from_media_item(item: &MediaItem, options: PlaybackOptions) -> Result<Self, PlaybackError> {
-    validate_item_type(&item.item_type)?;
-    Ok(Self {
-      item_id: item.id.clone(),
-      title: item_title(
-        &item.name,
-        &item.item_type,
-        item.series_name.as_deref(),
-        item.parent_index_number,
-        item.index_number,
-      ),
-      item_type: item.item_type.clone(),
-      runtime_seconds: item
-        .run_time_ticks
-        .filter(|ticks| *ticks >= 0)
-        .map(ticks_to_seconds),
-      resume_position_seconds: None,
-      options,
-    })
   }
 
   fn start_position_seconds(&self) -> Result<f64, PlaybackError> {
-    let seconds = match self.options.start_position {
+    let seconds = match self.position {
       PlaybackStartPosition::Beginning => 0.0,
       PlaybackStartPosition::Resume => self.resume_position_seconds.unwrap_or(0.0),
       PlaybackStartPosition::At(seconds) => seconds,
@@ -1269,39 +1396,26 @@ fn volume_level(volume: f64) -> i32 {
   }
 }
 
-fn reporting_status(success: bool) -> ReportingStatus {
-  if success {
-    ReportingStatus::Reported
-  } else {
-    ReportingStatus::Failed
-  }
-}
-
-async fn reporting_status_with_timeout<E>(
+async fn reporting_succeeded_with_timeout<E>(
   timeout: Duration,
-  report: impl std::future::Future<Output = Result<(), E>>,
-) -> ReportingStatus {
-  reporting_status(
-    relm4::tokio::time::timeout(timeout, report)
-      .await
-      .is_ok_and(|result| result.is_ok()),
-  )
+  report: impl Future<Output = Result<(), E>>,
+) -> bool {
+  relm4::tokio::time::timeout(timeout, report)
+    .await
+    .is_ok_and(|result| result.is_ok())
 }
 
 async fn load_completed_with_timeout(
   timeout: Duration,
-  wait_for_load: impl std::future::Future<Output = bool>,
+  wait_for_load: impl Future<Output = bool>,
 ) -> bool {
   relm4::tokio::time::timeout(timeout, wait_for_load)
     .await
     .unwrap_or(false)
 }
 
-fn warning_for_reporting(
-  status: ReportingStatus,
-  warning: PlaybackWarning,
-) -> Vec<PlaybackWarning> {
-  if status == ReportingStatus::Reported {
+fn warning_for_reporting(reported: bool, warning: PlaybackWarning) -> Vec<PlaybackWarning> {
+  if reported {
     Vec::new()
   } else {
     vec![warning]
@@ -1339,6 +1453,7 @@ fn select_media_source<'a>(
   .ok_or(PlaybackError::MediaSourceUnavailable)
 }
 
+#[cfg(test)]
 fn find_stream<'a>(
   streams: &'a [MediaStream],
   stream_type: &str,
@@ -1350,6 +1465,7 @@ fn find_stream<'a>(
     .ok_or(PlaybackError::TrackUnavailable)
 }
 
+#[cfg(test)]
 fn resolve_mpv_track(
   streams: &[MediaStream],
   stream_type: &str,
@@ -1366,6 +1482,7 @@ fn resolve_mpv_track(
     .transpose()
 }
 
+#[cfg(test)]
 fn type_local_track_index(
   streams: &[MediaStream],
   stream_type: &str,
@@ -1458,7 +1575,12 @@ fn item_title(
 
 #[cfg(test)]
 mod tests {
-  use std::future::Future;
+  use std::sync::atomic::{AtomicBool, Ordering};
+  use std::sync::Mutex;
+
+  use relm4::tokio::io::{
+    duplex, AsyncBufReadExt, AsyncWriteExt, BufReader, DuplexStream, WriteHalf,
+  };
 
   use super::*;
 
@@ -1468,6 +1590,337 @@ mod tests {
       .build()
       .expect("test runtime should build")
       .block_on(future)
+  }
+
+  #[derive(Default)]
+  struct MockReports {
+    starts: Vec<PlaybackReport>,
+    progress: Vec<PlaybackReport>,
+    stops: Vec<PlaybackStopReport>,
+    resolutions: Vec<PlaybackResolutionRequest>,
+  }
+
+  struct MockPlaybackServer {
+    provider: MediaServerProvider,
+    resolution: PlaybackResolution,
+    reports: Mutex<MockReports>,
+    fail_start: AtomicBool,
+    fail_progress: AtomicBool,
+    fail_stop: AtomicBool,
+  }
+
+  impl MockPlaybackServer {
+    fn new() -> Self {
+      Self {
+        provider: MediaServerProvider::Jellyfin,
+        resolution: PlaybackResolution {
+          media_source: MediaSource {
+            id: "source-1".to_owned(),
+            path: None,
+            protocol: "Http".to_owned(),
+            container: Some("mkv".to_owned()),
+            run_time_ticks: Some(15_000_000_000),
+            media_streams: Vec::new(),
+            supports_direct_play: true,
+            supports_direct_stream: true,
+            supports_transcoding: true,
+            direct_stream_url: None,
+            add_api_key_to_direct_stream_url: None,
+            transcoding_url: None,
+          },
+          play_session_id: Some("play-1".to_owned()),
+          stream_url: AuthenticatedUrl::new(
+            "https://media.example/video?api_key=secret".to_owned(),
+          ),
+        },
+        reports: Mutex::new(MockReports::default()),
+        fail_start: AtomicBool::new(false),
+        fail_progress: AtomicBool::new(false),
+        fail_stop: AtomicBool::new(false),
+      }
+    }
+
+    fn with_provider(mut self, provider: MediaServerProvider) -> Self {
+      self.provider = provider;
+      self
+    }
+
+    fn stop_item_ids(&self) -> Vec<String> {
+      self
+        .reports
+        .lock()
+        .expect("mock reports should not be poisoned")
+        .stops
+        .iter()
+        .map(|report| report.item_id.clone())
+        .collect()
+    }
+
+    fn start_track_indices(&self) -> Vec<(Option<i32>, Option<i32>)> {
+      self
+        .reports
+        .lock()
+        .expect("mock reports should not be poisoned")
+        .starts
+        .iter()
+        .map(|report| (report.audio_stream_index, report.subtitle_stream_index))
+        .collect()
+    }
+
+    fn resolution_start_ticks(&self) -> Vec<Option<i64>> {
+      self
+        .reports
+        .lock()
+        .expect("mock reports should not be poisoned")
+        .resolutions
+        .iter()
+        .map(|request| request.start_time_ticks)
+        .collect()
+    }
+  }
+
+  impl PlaybackServer for MockPlaybackServer {
+    fn provider(&self) -> MediaServerProvider {
+      self.provider
+    }
+
+    fn resolve(
+      &self,
+      request: PlaybackResolutionRequest,
+    ) -> PlaybackServerFuture<'_, Result<PlaybackResolution, PlaybackError>> {
+      self
+        .reports
+        .lock()
+        .expect("mock reports should not be poisoned")
+        .resolutions
+        .push(request);
+      let resolution = self.resolution.clone();
+      Box::pin(async move { Ok(resolution) })
+    }
+
+    fn report_playback_start(
+      &self,
+      report: PlaybackReport,
+    ) -> PlaybackServerFuture<'_, Result<(), ()>> {
+      self
+        .reports
+        .lock()
+        .expect("mock reports should not be poisoned")
+        .starts
+        .push(report);
+      let fails = self.fail_start.load(Ordering::Relaxed);
+      Box::pin(async move {
+        if fails {
+          Err(())
+        } else {
+          Ok(())
+        }
+      })
+    }
+
+    fn report_playback_progress(
+      &self,
+      report: PlaybackReport,
+    ) -> PlaybackServerFuture<'_, Result<(), ()>> {
+      self
+        .reports
+        .lock()
+        .expect("mock reports should not be poisoned")
+        .progress
+        .push(report);
+      let fails = self.fail_progress.load(Ordering::Relaxed);
+      Box::pin(async move {
+        if fails {
+          Err(())
+        } else {
+          Ok(())
+        }
+      })
+    }
+
+    fn report_playback_stop(
+      &self,
+      report: PlaybackStopReport,
+    ) -> PlaybackServerFuture<'_, Result<(), ()>> {
+      self
+        .reports
+        .lock()
+        .expect("mock reports should not be poisoned")
+        .stops
+        .push(report);
+      let fails = self.fail_stop.load(Ordering::Relaxed);
+      Box::pin(async move {
+        if fails {
+          Err(())
+        } else {
+          Ok(())
+        }
+      })
+    }
+  }
+
+  struct MpvPeerState {
+    paused: bool,
+    time_pos: f64,
+    duration: f64,
+    volume: f64,
+    muted: bool,
+    audio_track: i64,
+    subtitle_track: Option<i64>,
+  }
+
+  impl Default for MpvPeerState {
+    fn default() -> Self {
+      Self {
+        paused: false,
+        time_pos: 0.0,
+        duration: 1_500.0,
+        volume: 100.0,
+        muted: false,
+        audio_track: 1,
+        subtitle_track: None,
+      }
+    }
+  }
+
+  struct InMemoryMpv {
+    client: MpvClient,
+    writer: Arc<relm4::tokio::sync::Mutex<WriteHalf<DuplexStream>>>,
+    peer: relm4::tokio::task::JoinHandle<()>,
+  }
+
+  impl InMemoryMpv {
+    async fn new() -> Self {
+      let client = MpvClient::new(None);
+      let (client_stream, peer_stream) = duplex(128 * 1024);
+      let (reader, writer) = relm4::tokio::io::split(client_stream);
+      let transport = MpvClient::from_io_for_test(reader, writer)
+        .await
+        .expect("test MPV transport should be constructed");
+      client.install_ipc_for_test(transport);
+
+      let (peer_reader, peer_writer) = relm4::tokio::io::split(peer_stream);
+      let writer = Arc::new(relm4::tokio::sync::Mutex::new(peer_writer));
+      let task_writer = Arc::clone(&writer);
+      let peer = relm4::tokio::spawn(async move {
+        let mut lines = BufReader::new(peer_reader).lines();
+        let mut state = MpvPeerState::default();
+        while let Ok(Some(line)) = lines.next_line().await {
+          let Ok(message) = serde_json::from_str::<serde_json::Value>(&line) else {
+            continue;
+          };
+          let Some(request_id) = message.get("request_id").and_then(|value| value.as_i64()) else {
+            continue;
+          };
+          let command = message
+            .get("command")
+            .and_then(serde_json::Value::as_array)
+            .cloned()
+            .unwrap_or_default();
+          let data = apply_mpv_command(&mut state, &command);
+          let mut writer = task_writer.lock().await;
+          write_mpv_message(
+            &mut writer,
+            &serde_json::json!({
+              "request_id": request_id,
+              "error": "success",
+              "data": data,
+            }),
+          )
+          .await;
+          if command.first().and_then(serde_json::Value::as_str) == Some("loadfile") {
+            write_mpv_message(&mut writer, &serde_json::json!({"event": "start-file"})).await;
+            write_mpv_message(&mut writer, &serde_json::json!({"event": "file-loaded"})).await;
+          }
+        }
+      });
+
+      Self {
+        client,
+        writer,
+        peer,
+      }
+    }
+
+    async fn emit_eof(&self) {
+      {
+        let mut writer = self.writer.lock().await;
+        write_mpv_message(
+          &mut writer,
+          &serde_json::json!({"event": "end-file", "reason": "eof"}),
+        )
+        .await;
+      }
+      self
+        .client
+        .get_property("pause")
+        .await
+        .expect("barrier property should be readable");
+    }
+  }
+
+  impl Drop for InMemoryMpv {
+    fn drop(&mut self) {
+      self.peer.abort();
+    }
+  }
+
+  async fn write_mpv_message(writer: &mut WriteHalf<DuplexStream>, message: &serde_json::Value) {
+    writer
+      .write_all(format!("{message}\n").as_bytes())
+      .await
+      .expect("test MPV peer should stay writable");
+  }
+
+  fn apply_mpv_command(
+    state: &mut MpvPeerState,
+    command: &[serde_json::Value],
+  ) -> serde_json::Value {
+    let name = command.first().and_then(serde_json::Value::as_str);
+    match name {
+      Some("set_property") => {
+        let property = command.get(1).and_then(serde_json::Value::as_str);
+        let value = command.get(2).cloned().unwrap_or(serde_json::Value::Null);
+        match property {
+          Some("pause") => state.paused = value.as_bool().unwrap_or(state.paused),
+          Some("volume") => state.volume = value.as_f64().unwrap_or(state.volume),
+          Some("mute") => state.muted = value.as_bool().unwrap_or(state.muted),
+          Some("aid") => state.audio_track = value.as_i64().unwrap_or(state.audio_track),
+          Some("sid") => state.subtitle_track = value.as_i64(),
+          _ => {}
+        }
+        serde_json::Value::Null
+      }
+      Some("seek") => {
+        state.time_pos = command
+          .get(1)
+          .and_then(serde_json::Value::as_f64)
+          .unwrap_or(state.time_pos);
+        serde_json::Value::Null
+      }
+      Some("get_property") => match command.get(1).and_then(serde_json::Value::as_str) {
+        Some("pause") => serde_json::json!(state.paused),
+        Some("time-pos") => serde_json::json!(state.time_pos),
+        Some("duration") => serde_json::json!(state.duration),
+        Some("volume") => serde_json::json!(state.volume),
+        Some("mute") => serde_json::json!(state.muted),
+        Some("track-list") => serde_json::json!([
+          {"id": 1, "type": "audio", "title": "English", "selected": state.audio_track == 1},
+          {"id": 2, "type": "audio", "title": "Commentary", "selected": state.audio_track == 2},
+          {"id": 3, "type": "sub", "title": "English", "selected": state.subtitle_track == Some(3)},
+        ]),
+        _ => serde_json::Value::Null,
+      },
+      _ => serde_json::Value::Null,
+    }
+  }
+
+  async fn controller_harness(
+    server: Arc<MockPlaybackServer>,
+  ) -> (PlaybackController, InMemoryMpv) {
+    let mpv = InMemoryMpv::new().await;
+    let controller = PlaybackController::from_server(server, mpv.client.clone(), Vec::new());
+    (controller, mpv)
   }
   #[test]
   fn track_list_parser_filters_and_maps_tracks() {
@@ -1524,6 +1977,48 @@ mod tests {
     }
   }
 
+  fn item_detail(can_play: bool) -> VideoItemDetail {
+    VideoItemDetail {
+      id: "item-1".to_owned(),
+      name: "Pilot".to_owned(),
+      item_type: "Episode".to_owned(),
+      overview: None,
+      production_year: None,
+      runtime_seconds: Some(1_500.0),
+      series_id: Some("series-1".to_owned()),
+      series_name: Some("Series".to_owned()),
+      season_number: Some(1),
+      episode_number: Some(2),
+      genres: Vec::new(),
+      played: false,
+      favorite: false,
+      played_percentage: None,
+      resume_position_seconds: Some(42.5),
+      can_resume: true,
+      can_play,
+      artwork_image_id: None,
+      backdrop_image_id: None,
+      series_poster_image_id: None,
+      metadata: jellypilot_media_server::VideoDetailMetadata::default(),
+    }
+  }
+
+  fn media_item(id: &str) -> MediaItem {
+    MediaItem {
+      id: id.to_owned(),
+      name: "Pilot".to_owned(),
+      item_type: "Episode".to_owned(),
+      series_id: Some("series-1".to_owned()),
+      series_name: Some("Series".to_owned()),
+      season_name: Some("Season 1".to_owned()),
+      index_number: Some(2),
+      parent_index_number: Some(1),
+      run_time_ticks: Some(15_000_000_000),
+      overview: None,
+      series_primary_image_tag: None,
+    }
+  }
+
   fn stream(index: i32, stream_type: &str) -> MediaStream {
     MediaStream {
       index,
@@ -1573,14 +2068,8 @@ mod tests {
   #[test]
   fn library_item_resume_uses_provider_position_without_exposing_transport_data() {
     let item = library_item("Episode");
-    let request = PlayableRequest::from_library_item(
-      &item,
-      PlaybackOptions {
-        start_position: PlaybackStartPosition::Resume,
-        ..PlaybackOptions::default()
-      },
-    )
-    .expect("episode should be playable");
+    let request = PlayableRequest::from_playable(item.into(), PlaybackStartPosition::Resume)
+      .expect("episode should be playable");
 
     assert_eq!(request.start_position_seconds(), Ok(42.5));
   }
@@ -1589,7 +2078,7 @@ mod tests {
   fn library_item_rejects_non_playable_show_summary() {
     let item = library_item("Series");
 
-    let result = PlayableRequest::from_library_item(&item, PlaybackOptions::default());
+    let result = PlayableRequest::from_playable(item.into(), PlaybackStartPosition::Beginning);
 
     assert!(matches!(result, Err(PlaybackError::UnsupportedItemType)));
   }
@@ -1632,6 +2121,36 @@ mod tests {
       AuthenticatedUrl("https://media.example/video?api_key=do-not-print-this-token".to_owned());
 
     assert_eq!(format!("{url:?}"), "AuthenticatedUrl([redacted])");
+  }
+  #[test]
+  fn playback_resolution_debug_output_omits_tokenized_media_source_urls() {
+    let resolution = PlaybackResolution {
+      media_source: MediaSource {
+        id: "source-1".to_owned(),
+        path: None,
+        protocol: "Http".to_owned(),
+        container: Some("mkv".to_owned()),
+        run_time_ticks: Some(15_000_000_000),
+        media_streams: Vec::new(),
+        supports_direct_play: true,
+        supports_direct_stream: true,
+        supports_transcoding: true,
+        direct_stream_url: Some(
+          "https://media.example/video?api_key=do-not-print-this-token".to_owned(),
+        ),
+        add_api_key_to_direct_stream_url: Some(true),
+        transcoding_url: None,
+      },
+      play_session_id: Some("play-1".to_owned()),
+      stream_url: AuthenticatedUrl(
+        "https://media.example/video?api_key=do-not-print-this-token".to_owned(),
+      ),
+    };
+
+    let debug = format!("{resolution:?}");
+
+    assert!(!debug.contains("do-not-print-this-token"));
+    assert!(debug.contains("source-1"));
   }
 
   #[test]
@@ -1685,10 +2204,7 @@ mod tests {
   #[test]
   fn progress_reporting_failure_becomes_a_sanitized_warning() {
     assert_eq!(
-      warning_for_reporting(
-        ReportingStatus::Failed,
-        PlaybackWarning::PlaybackProgressNotReported,
-      ),
+      warning_for_reporting(false, PlaybackWarning::PlaybackProgressNotReported),
       vec![PlaybackWarning::PlaybackProgressNotReported]
     );
   }
@@ -1875,100 +2391,303 @@ mod tests {
 
   #[test]
   fn reporting_timeout_returns_failed_for_a_pending_request() {
-    let status = run_async(reporting_status_with_timeout(
+    let reported = run_async(reporting_succeeded_with_timeout(
       Duration::ZERO,
       std::future::pending::<Result<(), ()>>(),
     ));
 
-    assert_eq!(status, ReportingStatus::Failed);
+    assert!(!reported);
   }
 
   #[test]
   fn reporting_timeout_preserves_an_immediate_success() {
-    let status = run_async(reporting_status_with_timeout(
+    let reported = run_async(reporting_succeeded_with_timeout(
       Duration::from_secs(1),
       std::future::ready(Ok::<(), ()>(())),
     ));
 
-    assert_eq!(status, ReportingStatus::Reported);
+    assert!(reported);
   }
 
   #[test]
-  fn refresh_reconciles_disconnected_active_playback_without_a_process() {
-    let mut controller = controller_with_active(117.25);
-    controller.last_progress_report_at = Some(Instant::now());
+  fn play_refreshes_through_natural_end_of_file() {
+    run_async(async {
+      let server = Arc::new(MockPlaybackServer::new());
+      let (mut controller, mpv) = controller_harness(Arc::clone(&server)).await;
 
-    let outcome = run_async(controller.refresh());
+      let started = controller
+        .play(
+          library_item("Episode").into(),
+          PlaybackStartPosition::Resume,
+        )
+        .await
+        .expect("playback should start");
+      mpv.emit_eof().await;
+      let refreshed = controller.refresh().await;
 
-    assert_eq!(
-      (
-        outcome.state,
-        outcome.snapshot.now_playing.is_none(),
-        controller.last_progress_report_at.is_none(),
+      assert_eq!(
+        (
+          started.snapshot.now_playing.is_some(),
+          refreshed.state,
+          refreshed.snapshot.now_playing.is_none(),
+          server.stop_item_ids(),
+        ),
+        (
+          true,
+          PlaybackRefreshState::Ended(PlaybackEndReason::EndOfFile),
+          true,
+          vec!["item-1".to_owned()],
+        )
+      );
+    });
+  }
+
+  #[test]
+  fn transport_controls_return_authoritative_outcomes() {
+    run_async(async {
+      let server = Arc::new(MockPlaybackServer::new());
+      let (mut controller, _mpv) = controller_harness(server).await;
+      let _ = controller
+        .play(
+          library_item("Episode").into(),
+          PlaybackStartPosition::Beginning,
+        )
+        .await
+        .expect("playback should start");
+
+      let paused = controller
+        .set_paused(true)
+        .await
+        .expect("pause should work");
+      let sought = controller.seek(60.0).await.expect("seek should work");
+      let volume = controller
+        .set_volume(37.0)
+        .await
+        .expect("volume should work");
+      let muted = controller.set_muted(true).await.expect("mute should work");
+
+      assert_eq!(
+        (
+          paused.snapshot.transport.paused,
+          sought.snapshot.transport.time_pos,
+          volume.snapshot.transport.volume,
+          muted.snapshot.transport.muted,
+        ),
+        (true, 60.0, 37.0, true)
+      );
+    });
+  }
+
+  #[test]
+  fn failed_start_report_becomes_playback_start_warning() {
+    run_async(async {
+      let server = Arc::new(MockPlaybackServer::new());
+      server.fail_start.store(true, Ordering::Relaxed);
+      let (mut controller, _mpv) = controller_harness(server).await;
+
+      let outcome = controller
+        .play(
+          library_item("Episode").into(),
+          PlaybackStartPosition::Beginning,
+        )
+        .await
+        .expect("reporting failure must not fail playback");
+
+      assert_eq!(
         outcome.warnings,
-      ),
-      (
-        PlaybackRefreshState::Ended(PlaybackEndReason::Disconnected),
-        true,
-        true,
-        vec![PlaybackWarning::PlaybackStopNotReported],
-      )
-    );
+        vec![PlaybackWarning::PlaybackStartNotReported]
+      );
+    });
   }
 
   #[test]
-  fn failed_load_cleanup_clears_attribution_and_boundary_without_a_process() {
-    let mut controller = controller_with_active(117.25);
-    let previous = active_playback(117.25);
-    controller.last_progress_report_at = Some(Instant::now());
-    controller.load_event_boundary = LoadEventBoundary::Loading;
+  fn failed_progress_report_becomes_playback_progress_warning() {
+    run_async(async {
+      let server = Arc::new(MockPlaybackServer::new());
+      let (mut controller, _mpv) = controller_harness(Arc::clone(&server)).await;
+      let _ = controller
+        .play(
+          library_item("Episode").into(),
+          PlaybackStartPosition::Beginning,
+        )
+        .await
+        .expect("playback should start");
+      server.fail_progress.store(true, Ordering::Relaxed);
 
-    run_async(controller.cleanup_failed_load(Some(&previous)));
+      let outcome = controller.seek(60.0).await.expect("seek should work");
 
-    assert_eq!(
-      (
-        controller.active.is_none(),
-        controller.last_progress_report_at.is_none(),
-        controller.load_event_boundary,
-        controller.mpv.is_connected(),
-      ),
-      (true, true, LoadEventBoundary::Settled, false)
-    );
-  }
-
-  #[test]
-  fn shutdown_clears_active_playback_without_a_process() {
-    let mut controller = controller_with_active(117.25);
-    controller.last_progress_report_at = Some(Instant::now());
-
-    let outcome = run_async(controller.shutdown());
-
-    assert_eq!(
-      (
-        outcome.stopped_active_playback,
-        controller.active.is_none(),
-        controller.last_progress_report_at.is_none(),
+      assert_eq!(
         outcome.warnings,
-      ),
-      (
-        true,
-        true,
-        true,
-        vec![PlaybackWarning::PlaybackStopNotReported],
-      )
-    );
+        vec![PlaybackWarning::PlaybackProgressNotReported]
+      );
+    });
   }
 
   #[test]
-  fn stop_clears_passive_progress_schedule() {
-    let mut controller = controller_with_active(117.25);
-    controller.last_progress_report_at = Some(Instant::now());
+  fn failed_stop_report_becomes_playback_stop_warning() {
+    run_async(async {
+      let server = Arc::new(MockPlaybackServer::new());
+      let (mut controller, _mpv) = controller_harness(Arc::clone(&server)).await;
+      let _ = controller
+        .play(
+          library_item("Episode").into(),
+          PlaybackStartPosition::Beginning,
+        )
+        .await
+        .expect("playback should start");
+      server.fail_stop.store(true, Ordering::Relaxed);
 
-    let result = run_async(controller.stop());
+      let outcome = controller.stop().await.expect("stop should complete");
 
-    assert!(
-      result.is_ok() && controller.last_progress_report_at.is_none(),
-      "stop result was {result:?}"
-    );
+      assert_eq!(
+        outcome.warnings,
+        vec![PlaybackWarning::PlaybackStopNotReported]
+      );
+    });
+  }
+
+  #[test]
+  fn track_selection_returns_refreshed_tracks() {
+    run_async(async {
+      let server = Arc::new(MockPlaybackServer::new());
+      let (mut controller, _mpv) = controller_harness(server).await;
+      let _ = controller
+        .play(
+          library_item("Episode").into(),
+          PlaybackStartPosition::Beginning,
+        )
+        .await
+        .expect("playback should start");
+
+      let audio = controller
+        .select_audio_track(2)
+        .await
+        .expect("audio track should be selected");
+      let subtitle = controller
+        .select_subtitle_track(Some(3))
+        .await
+        .expect("subtitle track should be selected");
+
+      assert_eq!(
+        (
+          audio
+            .tracks
+            .iter()
+            .find(|track| track.id == 2)
+            .map(|track| track.selected),
+          subtitle
+            .tracks
+            .iter()
+            .find(|track| track.id == 3)
+            .map(|track| track.selected),
+          audio.warnings,
+          subtitle.warnings,
+        ),
+        (Some(true), Some(true), Vec::new(), Vec::new())
+      );
+    });
+  }
+
+  #[test]
+  fn replacement_start_reports_previous_stop_and_maps_failure() {
+    run_async(async {
+      let server = Arc::new(MockPlaybackServer::new());
+      let (mut controller, _mpv) = controller_harness(Arc::clone(&server)).await;
+      let _ = controller
+        .play(
+          library_item("Episode").into(),
+          PlaybackStartPosition::Beginning,
+        )
+        .await
+        .expect("first playback should start");
+      server.fail_stop.store(true, Ordering::Relaxed);
+      let mut replacement = library_item("Episode");
+      replacement.id = "item-2".to_owned();
+
+      let outcome = controller
+        .play(replacement.into(), PlaybackStartPosition::Beginning)
+        .await
+        .expect("replacement playback should start");
+
+      assert_eq!(
+        (server.stop_item_ids(), outcome.warnings),
+        (
+          vec!["item-1".to_owned()],
+          vec![PlaybackWarning::PreviousPlaybackStopNotReported],
+        )
+      );
+    });
+  }
+
+  #[test]
+  fn direct_play_start_carries_no_track_indices() {
+    run_async(async {
+      let server = Arc::new(MockPlaybackServer::new());
+      let (mut controller, _mpv) = controller_harness(Arc::clone(&server)).await;
+
+      let _ = controller
+        .play(
+          library_item("Episode").into(),
+          PlaybackStartPosition::Beginning,
+        )
+        .await
+        .expect("playback should start");
+
+      assert_eq!(server.start_track_indices(), vec![(None, None)]);
+    });
+  }
+
+  #[test]
+  fn emby_resolution_receives_start_position_ticks() {
+    run_async(async {
+      let server = Arc::new(MockPlaybackServer::new().with_provider(MediaServerProvider::Emby));
+      let (mut controller, _mpv) = controller_harness(Arc::clone(&server)).await;
+
+      let _ = controller
+        .play(
+          library_item("Episode").into(),
+          PlaybackStartPosition::At(12.5),
+        )
+        .await
+        .expect("playback should start");
+
+      assert_eq!(server.resolution_start_ticks(), vec![Some(125_000_000)]);
+    });
+  }
+
+  #[test]
+  fn item_detail_can_play_gate_prevents_resolution() {
+    run_async(async {
+      let server = Arc::new(MockPlaybackServer::new());
+      let mut controller =
+        PlaybackController::from_server(server, MpvClient::new(None), Vec::new());
+
+      let result = controller
+        .play(item_detail(false).into(), PlaybackStartPosition::Beginning)
+        .await;
+
+      assert!(matches!(result, Err(PlaybackError::ItemNotPlayable)));
+    });
+  }
+
+  #[test]
+  fn media_item_has_no_resume_position() {
+    run_async(async {
+      let server = Arc::new(MockPlaybackServer::new());
+      let (mut controller, _mpv) = controller_harness(server).await;
+
+      let outcome = controller
+        .play(media_item("item-1").into(), PlaybackStartPosition::Resume)
+        .await
+        .expect("media item should start");
+
+      assert_eq!(
+        outcome
+          .snapshot
+          .now_playing
+          .map(|item| item.start_position_seconds),
+        Some(0.0)
+      );
+    });
   }
 }

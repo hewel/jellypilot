@@ -18,5 +18,8 @@ serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.149"
 zeroize = "1.8.1"
 
+[dev-dependencies]
+jellypilot-mpv = { path = "../crates/jellypilot-mpv", features = ["test-utils"] }
+
 [lints]
 workspace = true
