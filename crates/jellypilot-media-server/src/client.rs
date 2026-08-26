@@ -3803,6 +3803,14 @@ fn map_video_home_item(
     artwork_url(server_url, &id, item.image_tags.flatten(), image_type),
     ImageRefKind::Artwork,
   );
+  let series_id = item.series_id.flatten().map(|id| id.to_string());
+  let series_primary_image_tag = item.series_primary_image_tag.flatten();
+  let series_poster_image_id = image_id_for_series_primary(
+    MediaServerProvider::Jellyfin,
+    server_url,
+    series_id.as_deref(),
+    series_primary_image_tag.as_deref(),
+  );
 
   Some(VideoLibraryItem {
     id,
@@ -3811,7 +3819,7 @@ fn map_video_home_item(
       .flatten()
       .unwrap_or_else(|| "Untitled".to_string()),
     item_type,
-    series_id: item.series_id.flatten().map(|id| id.to_string()),
+    series_id,
     series_name: item.series_name.flatten(),
     season_number: item.parent_index_number.flatten(),
     episode_number: item.index_number.flatten(),
@@ -3833,6 +3841,7 @@ fn map_video_home_item(
       .and_then(|data| data.is_favorite)
       .unwrap_or(false),
     artwork_image_id,
+    series_poster_image_id,
     overview: None,
   })
 }
@@ -3854,6 +3863,14 @@ fn map_video_library_item(
       jellyfin_api::models::ImageType::Primary,
     ),
     ImageRefKind::Artwork,
+  );
+  let series_id = item.series_id.flatten().map(|id| id.to_string());
+  let series_primary_image_tag = item.series_primary_image_tag.flatten();
+  let series_poster_image_id = image_id_for_series_primary(
+    MediaServerProvider::Jellyfin,
+    server_url,
+    series_id.as_deref(),
+    series_primary_image_tag.as_deref(),
   );
 
   let user_data_ref = user_data.as_ref();
@@ -3883,9 +3900,10 @@ fn map_video_library_item(
       .and_then(|data| data.is_favorite)
       .unwrap_or(false),
     artwork_image_id,
+    series_poster_image_id,
     season_number: item.parent_index_number.flatten(),
     episode_number: item.index_number.flatten(),
-    series_id: item.series_id.flatten().map(|id| id.to_string()),
+    series_id,
     series_name: item.series_name.flatten(),
     resume_position_seconds,
     played_percentage: user_data_ref.and_then(|data| data.played_percentage.flatten()),
@@ -4088,6 +4106,14 @@ fn map_video_item_detail(
     ),
     ImageRefKind::Backdrop,
   );
+  let series_id = item.series_id.flatten().map(|id| id.to_string());
+  let series_primary_image_tag = item.series_primary_image_tag.flatten();
+  let series_poster_image_id = image_id_for_series_primary(
+    MediaServerProvider::Jellyfin,
+    server_url,
+    series_id.as_deref(),
+    series_primary_image_tag.as_deref(),
+  );
 
   Some(VideoItemDetail {
     id: id.clone(),
@@ -4099,7 +4125,7 @@ fn map_video_item_detail(
     overview: item.overview.flatten(),
     production_year: item.production_year.flatten(),
     runtime_seconds: item.run_time_ticks.flatten().map(ticks_to_seconds),
-    series_id: item.series_id.flatten().map(|id| id.to_string()),
+    series_id,
     series_name: item.series_name.flatten(),
     season_number: item.parent_index_number.flatten(),
     episode_number: item.index_number.flatten(),
@@ -4117,6 +4143,7 @@ fn map_video_item_detail(
     can_play: true,
     artwork_image_id,
     backdrop_image_id,
+    series_poster_image_id,
     metadata,
   })
 }
@@ -4222,6 +4249,25 @@ fn artwork_url(
     "{}/Items/{}/Images/{}?tag={}",
     server_url, item_id, image_type, tag
   ))
+}
+
+fn image_id_for_series_primary(
+  provider: MediaServerProvider,
+  server_url: &str,
+  series_id: Option<&str>,
+  series_primary_image_tag: Option<&str>,
+) -> Option<String> {
+  let series_id = series_id?;
+  let tag = series_primary_image_tag?;
+  image_id_for_remote_url(
+    provider,
+    server_url,
+    Some(format!(
+      "{}/Items/{}/Images/Primary?tag={}",
+      server_url, series_id, tag
+    )),
+    ImageRefKind::Artwork,
+  )
 }
 
 fn backdrop_url(
@@ -4749,6 +4795,12 @@ fn map_emby_video_home_item(
     ),
     ImageRefKind::Artwork,
   );
+  let series_poster_image_id = image_id_for_series_primary(
+    MediaServerProvider::Emby,
+    server_url,
+    item.series_id.as_deref(),
+    item.series_primary_image_tag.as_deref(),
+  );
 
   Some(VideoLibraryItem {
     id,
@@ -4767,6 +4819,7 @@ fn map_emby_video_home_item(
     played: user_data.and_then(|data| data.played).unwrap_or(false),
     favorite: user_data.and_then(|data| data.is_favorite).unwrap_or(false),
     artwork_image_id,
+    series_poster_image_id,
     overview: None,
   })
 }
@@ -4791,6 +4844,12 @@ fn map_emby_video_library_item(
     ),
     ImageRefKind::Artwork,
   );
+  let series_poster_image_id = image_id_for_series_primary(
+    MediaServerProvider::Emby,
+    server_url,
+    item.series_id.as_deref(),
+    item.series_primary_image_tag.as_deref(),
+  );
 
   let played = user_data.and_then(|data| data.played).unwrap_or(false);
   let resume_ticks = user_data
@@ -4813,6 +4872,7 @@ fn map_emby_video_library_item(
     played,
     favorite: user_data.and_then(|data| data.is_favorite).unwrap_or(false),
     artwork_image_id,
+    series_poster_image_id,
     season_number: item.parent_index_number.flatten(),
     episode_number: item.index_number.flatten(),
     series_id: item.series_id,
@@ -4950,6 +5010,12 @@ fn map_emby_video_item_detail(
     ),
     ImageRefKind::Backdrop,
   );
+  let series_poster_image_id = image_id_for_series_primary(
+    MediaServerProvider::Emby,
+    server_url,
+    item.series_id.as_deref(),
+    item.series_primary_image_tag.as_deref(),
+  );
 
   Some(VideoItemDetail {
     id,
@@ -4971,6 +5037,7 @@ fn map_emby_video_item_detail(
     can_play: true,
     artwork_image_id,
     backdrop_image_id,
+    series_poster_image_id,
     metadata,
   })
 }

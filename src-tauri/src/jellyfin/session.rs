@@ -3618,6 +3618,7 @@ mod regression_tests {
         parent_index_number: Some(1),
         run_time_ticks: Some(15_000_000_000),
         overview: None,
+        series_primary_image_tag: None,
       }),
       current_media_streams: Vec::new(),
       series_preferences: HashMap::new(),

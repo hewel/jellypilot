@@ -200,6 +200,8 @@ pub struct VideoLibraryItem {
   pub played: bool,
   pub favorite: bool,
   pub artwork_image_id: Option<String>,
+  /// Series primary poster for episode player-bar thumbs; absent for movies.
+  pub series_poster_image_id: Option<String>,
   /// Episode metadata: season number (1-based), available for Episode items.
   pub season_number: Option<i32>,
   /// Episode metadata: episode number within season (1-based), available for Episode items.
@@ -270,6 +272,8 @@ pub struct VideoItemDetail {
   pub can_play: bool,
   pub artwork_image_id: Option<String>,
   pub backdrop_image_id: Option<String>,
+  /// Series primary poster for episode player-bar thumbs; absent for movies.
+  pub series_poster_image_id: Option<String>,
   pub metadata: VideoDetailMetadata,
 }
 
@@ -562,6 +566,8 @@ pub struct MediaItem {
   pub run_time_ticks: Option<i64>,
   #[serde(default)]
   pub overview: Option<String>,
+  #[serde(default)]
+  pub series_primary_image_tag: Option<String>,
 }
 
 /// Media source for playback.

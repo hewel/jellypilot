@@ -348,8 +348,14 @@ impl PlaybackRequest {
 
   fn started_artwork_image_id(&self) -> Option<String> {
     match self {
-      Self::Library(item, _) => item.artwork_image_id.clone(),
-      Self::Detail(item, _) => item.artwork_image_id.clone(),
+      Self::Library(item, _) => item
+        .series_poster_image_id
+        .clone()
+        .or_else(|| item.artwork_image_id.clone()),
+      Self::Detail(item, _) => item
+        .series_poster_image_id
+        .clone()
+        .or_else(|| item.artwork_image_id.clone()),
       Self::ReplaceMedia(_) => None,
       _ => None,
     }
@@ -964,7 +970,7 @@ struct Ui {
   authenticated: adw::NavigationSplitView,
   connection_status: gtk::Label,
   search: gtk::SearchEntry,
-  playback_bar: gtk::Overlay,
+  playback_bar: gtk::Box,
   playback_artwork: gtk::Image,
   playback_artwork_fallback: gtk::Image,
   playback_title: gtk::Label,
@@ -6681,7 +6687,7 @@ impl Ui {
     seek.set_sensitive(false);
     seek.set_hexpand(true);
     seek.set_halign(gtk::Align::Fill);
-    seek.set_valign(gtk::Align::Start);
+    seek.set_valign(gtk::Align::Center);
     seek.update_property(&[gtk::accessible::Property::Label("Playback position")]);
     seek.connect_change_value({
       let sender = sender.clone();
@@ -6733,7 +6739,7 @@ impl Ui {
     let audio_button = gtk::MenuButton::new();
     audio_button.add_css_class("flat");
     audio_button.add_css_class("circular");
-    audio_button.set_icon_name("audio-speakers-symbolic");
+    audio_button.set_icon_name("audio-x-generic-symbolic");
     audio_button.set_tooltip_text(Some("Audio track"));
     audio_button.set_sensitive(false);
     audio_button.set_popover(Some(&audio_popover));
@@ -6751,7 +6757,7 @@ impl Ui {
     subtitle_button.set_popover(Some(&subtitle_popover));
     subtitle_button.update_property(&[gtk::accessible::Property::Label("Subtitle track")]);
     let row = gtk::Box::new(gtk::Orientation::Horizontal, 10);
-    row.set_margin_top(10);
+    row.set_margin_top(4);
     row.set_margin_bottom(8);
     row.set_margin_start(12);
     row.set_margin_end(12);
@@ -6764,11 +6770,11 @@ impl Ui {
     row.append(&mute_button);
     row.append(&audio_button);
     row.append(&subtitle_button);
-    let playback_bar = gtk::Overlay::new();
+    let playback_bar = gtk::Box::new(gtk::Orientation::Vertical, 0);
     playback_bar.add_css_class("jellypilot-playerbar");
     playback_bar.set_visible(false);
-    playback_bar.set_child(Some(&row));
-    playback_bar.add_overlay(&seek);
+    playback_bar.append(&seek);
+    playback_bar.append(&row);
     root.add_bottom_bar(&playback_bar);
     toast_overlay.set_child(Some(&root));
     let prefill = config::load();
@@ -8724,6 +8730,7 @@ fn media_item_from_library(item: &VideoLibraryItem) -> MediaItem {
     parent_index_number: item.season_number,
     run_time_ticks: runtime_seconds_to_ticks(item.runtime_seconds),
     overview: item.overview.clone(),
+    series_primary_image_tag: None,
   }
 }
 
@@ -8739,6 +8746,7 @@ fn media_item_from_detail(item: &VideoItemDetail) -> MediaItem {
     parent_index_number: item.season_number,
     run_time_ticks: runtime_seconds_to_ticks(item.runtime_seconds),
     overview: item.overview.clone(),
+    series_primary_image_tag: None,
   }
 }
 
