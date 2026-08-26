@@ -76,6 +76,7 @@ bun tauri build     # Production desktop build
 
 ## Anti-Patterns
 
+- **Agent visual verification**: All visual verification is performed by humans, never by agents. Agents must not launch the app to "check how it looks", capture screenshots, toggle system settings (gsettings/color scheme), or inject input to drive the desktop. Agents verify code-level only — focused checks/lints, format, type checks, smoke gates (e.g. `bun run task rust check|clippy gtk`, `bun run task gtk run --smoke`) — and report a concrete visual checklist (where to look, what should appear) for the user to review.
 - **Treating the project as a web app**: This is cross-platform desktop software (Tauri: Windows, macOS, Linux), not a website. Do not open the Rsbuild dev server in a browser or use web/browser tooling for verification. Verify through the native app (`bun tauri dev`) and the native E2E path in [docs/agents/e2e.md](docs/agents/e2e.md).
 - **Cross-component private style imports**: Do not import another component's `.styles.ts` exports; consume the component API or move the needed behavior into a shared component.
 - **Shared UI style barrels**: Do not create broad style barrels for unrelated components. Keep owner-local style modules beside their component or route.
