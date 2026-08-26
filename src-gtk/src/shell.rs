@@ -965,7 +965,7 @@ struct Ui {
   connection_status: gtk::Label,
   search: gtk::SearchEntry,
   playback_bar: gtk::Overlay,
-  playback_artwork: gtk::Picture,
+  playback_artwork: gtk::Image,
   playback_artwork_fallback: gtk::Image,
   playback_title: gtk::Label,
   playback_subtitle: gtk::Label,
@@ -6579,11 +6579,8 @@ impl Ui {
     let toast_overlay = adw::ToastOverlay::new();
     let root = adw::ToolbarView::new();
     let playback_controls_syncing = Rc::new(Cell::new(false));
-    let playback_artwork = cover_picture(PLAYER_THUMB_SIZE, PLAYER_THUMB_SIZE);
-    playback_artwork.set_hexpand(true);
-    playback_artwork.set_vexpand(true);
-    playback_artwork.set_halign(gtk::Align::Fill);
-    playback_artwork.set_valign(gtk::Align::Fill);
+    let playback_artwork = gtk::Image::new();
+    playback_artwork.set_pixel_size(PLAYER_THUMB_SIZE);
     let playback_artwork_fallback = gtk::Image::from_icon_name(FALLBACK_ARTWORK_ICON);
     playback_artwork_fallback.set_pixel_size(16);
     playback_artwork_fallback.set_halign(gtk::Align::Center);
