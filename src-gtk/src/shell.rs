@@ -54,6 +54,8 @@ const POSTER_FRAME_WIDTH: i32 = 160;
 const POSTER_FRAME_HEIGHT: i32 = 240;
 const THUMB_FRAME_WIDTH: i32 = 240;
 const THUMB_FRAME_HEIGHT: i32 = 135;
+const PLAYER_THUMB_SIZE: i32 = 36;
+const PLAYBACK_ARTWORK_SLOT: u64 = u64::MAX;
 
 struct AppModel {
   client: Arc<JellyfinClient>,
@@ -68,6 +70,7 @@ struct AppModel {
   quick_connect_cancellation: watch::Sender<u64>,
   artwork: Arc<ArtworkAdapter>,
   artwork_view: u64,
+  playback_artwork_view: u64,
   artwork_slot: u64,
   image_cache_sequence: u64,
   image_cache_clearing: bool,
@@ -543,7 +546,6 @@ enum AppMessage {
   },
   Disconnect,
   ShowHome,
-  ShowNowPlaying,
   OpenLibrary(VideoLibraryShortcut),
   SearchRequested,
   SelectItem(VideoLibraryItem),
@@ -573,8 +575,8 @@ enum AppMessage {
   Seek(f64),
   SetVolume(f64),
   SetMuted(bool),
-  SelectAudioTrack(u32),
-  SelectSubtitleTrack(u32),
+  SelectAudioTrack(i64),
+  SelectSubtitleTrack(Option<i64>),
   PlayAdjacent(AdjacentDirection),
   SetIntroMode(u32),
   ReconnectRemoteControl,
@@ -944,6 +946,7 @@ impl std::fmt::Debug for AppCommand {
 }
 
 struct Ui {
+  toast_overlay: adw::ToastOverlay,
   root: adw::ToolbarView,
   login: gtk::ScrolledWindow,
   provider: adw::ComboRow,
@@ -964,9 +967,14 @@ struct Ui {
   authenticated: adw::NavigationSplitView,
   connection_status: gtk::Label,
   search: gtk::SearchEntry,
-  playback_bar: gtk::Box,
-  playback_bar_title: gtk::Label,
-  playback_bar_pause: gtk::Button,
+  playback_bar: gtk::Overlay,
+  playback_artwork: gtk::Picture,
+  playback_artwork_fallback: gtk::Image,
+  playback_title: gtk::Label,
+  playback_subtitle: gtk::Label,
+  playback_status_icon: gtk::Image,
+  playback_status_label: gtk::Label,
+  playback_info: gtk::Stack,
   disconnect_button: gtk::Button,
   content: gtk::Stack,
   nav_home: gtk::ToggleButton,
@@ -985,9 +993,6 @@ struct Ui {
   load_next_button: gtk::Button,
   browse_scroll: gtk::ScrolledWindow,
   detail_content: gtk::Box,
-  now_playing_artwork: gtk::Box,
-  now_playing_status: gtk::Label,
-  now_playing_notice: gtk::Label,
   position_label: gtk::Label,
   duration_label: gtk::Label,
   previous_button: gtk::Button,
@@ -997,11 +1002,12 @@ struct Ui {
   seek: gtk::Scale,
   volume: gtk::Scale,
   mute_button: gtk::ToggleButton,
-  audio_tracks: gtk::DropDown,
-  subtitle_tracks: gtk::DropDown,
-  track_status: gtk::Label,
-  adjacent_status: gtk::Label,
+  audio_button: gtk::MenuButton,
+  subtitle_button: gtk::MenuButton,
+  audio_track_list: gtk::Box,
+  subtitle_track_list: gtk::Box,
   playback_controls_syncing: Rc<Cell<bool>>,
+  sender: ComponentSender<AppModel>,
   settings_saved_profile: gtk::Label,
   settings_storage_status: gtk::Label,
   settings_disconnect_button: gtk::Button,
@@ -1056,7 +1062,7 @@ impl Component for AppModel {
     sender: ComponentSender<Self>,
   ) -> ComponentParts<Self> {
     let ui = Ui::new(&sender);
-    root.set_content(Some(&ui.root));
+    root.set_content(Some(&ui.toast_overlay));
     let narrow_breakpoint = adw::Breakpoint::new(adw::BreakpointCondition::new_length(
       adw::BreakpointConditionLengthType::MaxWidth,
       800.0,
@@ -1117,6 +1123,7 @@ impl Component for AppModel {
       quick_connect_cancellation,
       artwork,
       artwork_view: 0,
+      playback_artwork_view: 0,
       artwork_slot: 0,
       image_cache_sequence: 0,
       image_cache_clearing: false,
@@ -1187,15 +1194,6 @@ impl Component for AppModel {
         }
       }
       AppMessage::ShowHome => self.show_home(&sender),
-      AppMessage::ShowNowPlaying => {
-        self.navigate_to("now-playing");
-        self.render_now_playing_artwork(&sender);
-        self.start_playback(PlaybackRequest::Refresh, &sender);
-        if let Some(identity) = self.playback.identity.clone() {
-          self.start_playback(PlaybackRequest::RefreshTracks(identity.clone()), &sender);
-          self.refresh_adjacent_episodes(identity, &sender);
-        }
-      }
       AppMessage::OpenLibrary(shortcut) => self.open_library(shortcut, &sender),
       AppMessage::SearchRequested => self.start_search(&sender),
       AppMessage::SelectItem(item) => self.load_detail(item, &sender),
@@ -1261,12 +1259,8 @@ impl Component for AppModel {
         self.start_playback(PlaybackRequest::Volume(volume), &sender)
       }
       AppMessage::SetMuted(muted) => self.start_playback(PlaybackRequest::Muted(muted), &sender),
-      AppMessage::SelectAudioTrack(selected) => {
-        self.select_track(TrackKind::Audio, selected, &sender)
-      }
-      AppMessage::SelectSubtitleTrack(selected) => {
-        self.select_track(TrackKind::Subtitle, selected, &sender)
-      }
+      AppMessage::SelectAudioTrack(id) => self.select_track(TrackKind::Audio, Some(id), &sender),
+      AppMessage::SelectSubtitleTrack(id) => self.select_track(TrackKind::Subtitle, id, &sender),
       AppMessage::PlayAdjacent(direction) => self.play_adjacent(direction, &sender),
       AppMessage::CopyDiagnostics => self.copy_diagnostics(),
       AppMessage::ClearDiagnostics => {
@@ -1736,16 +1730,26 @@ impl Component for AppModel {
         slot,
         result,
       } => {
-        if session != self.requests.session_generation() || view != self.artwork_view {
+        if session != self.requests.session_generation() {
           return;
         }
-        let Some(target) = self.artwork_targets.remove(&slot) else {
+        let playback_thumb = slot == PLAYBACK_ARTWORK_SLOT;
+        if playback_thumb {
+          if view != self.playback_artwork_view {
+            return;
+          }
+        } else if view != self.artwork_view {
           return;
-        };
+        }
         match result.and_then(|decoded| decoded.texture().map_err(|_| ())) {
           Ok(decoded) => {
-            target.picture.set_paintable(Some(&decoded));
-            target.fallback.set_visible(false);
+            if playback_thumb {
+              self.ui.playback_artwork.set_paintable(Some(&decoded));
+              self.ui.playback_artwork_fallback.set_visible(false);
+            } else if let Some(target) = self.artwork_targets.remove(&slot) {
+              target.picture.set_paintable(Some(&decoded));
+              target.fallback.set_visible(false);
+            }
             self.diagnostics.reset_coalescing();
           }
           Err(()) => self.record_artwork_failure(),
@@ -2023,12 +2027,18 @@ impl Component for AppModel {
               );
             }
             if refresh_artwork {
-              self.render_now_playing_artwork(&sender);
+              self.queue_playback_artwork(&sender);
             }
-            if self.playback.snapshot.is_some() {
-              self.show_page("now-playing");
+            if matches!(
+              request_kind,
+              PlaybackRequestKind::AudioTrack | PlaybackRequestKind::SubtitleTrack
+            ) {
+              self.add_toast(match request_kind {
+                PlaybackRequestKind::AudioTrack => "Audio track switched.",
+                _ => "Subtitle track switched.",
+              });
             }
-            self.render_now_playing();
+            self.render_playback_bar();
           }
           Err(failure) => {
             self.record_diagnostic(
@@ -2039,7 +2049,7 @@ impl Component for AppModel {
             if failure.clear_snapshot {
               self.playback.snapshot = None;
               self.clear_playback_context();
-              self.render_now_playing_artwork(&sender);
+              self.queue_playback_artwork(&sender);
             }
             if let Some(snapshot) = self.playback.snapshot.as_ref() {
               self.playback.desired_paused = Some(snapshot.transport.paused);
@@ -2048,9 +2058,9 @@ impl Component for AppModel {
               self.playback.desired_paused = None;
               self.playback.desired_muted = None;
             }
+            self.add_toast(&failure.message);
             self.playback.error = Some(failure.message);
-            self.show_page("now-playing");
-            self.render_now_playing();
+            self.render_playback_bar();
           }
         }
         if let Some(identity) = refresh_auxiliary {
@@ -2100,7 +2110,7 @@ impl Component for AppModel {
         self.playback.adjacent.previous =
           adjacent_availability(AdjacentDirection::Previous, previous);
         self.playback.adjacent.next = adjacent_availability(AdjacentDirection::Next, next);
-        self.render_now_playing();
+        self.render_playback_bar();
       }
       AppCommand::IntroRanges {
         session,
@@ -3376,7 +3386,7 @@ impl AppModel {
   }
 
   fn render_home(&mut self, sender: &ComponentSender<Self>) {
-    self.begin_artwork_view();
+    self.begin_artwork_view(sender);
     clear_box(&self.ui.home_content);
     match &self.home {
       LoadState::Idle => self.ui.home_content.append(&state_view(
@@ -4021,7 +4031,7 @@ impl AppModel {
   }
 
   fn render_browse(&mut self, sender: &ComponentSender<Self>) {
-    self.begin_artwork_view();
+    self.begin_artwork_view(sender);
     self.ui.browse_title.set_label(&self.browse.title);
     self
       .ui
@@ -4176,7 +4186,7 @@ impl AppModel {
   }
 
   fn render_detail(&mut self, sender: &ComponentSender<Self>) {
-    self.begin_artwork_view();
+    self.begin_artwork_view(sender);
     clear_box(&self.ui.detail_content);
     let back = gtk::Button::with_label("Back");
     let sender_clone = sender.clone();
@@ -4264,8 +4274,10 @@ impl AppModel {
         .unavailable
         .clone()
         .or_else(|| Some("Playback controller is unavailable.".to_owned()));
-      self.show_page("now-playing");
-      self.render_now_playing();
+      if let Some(message) = self.playback.error.as_deref() {
+        self.add_toast(message);
+      }
+      self.render_playback_bar();
       return;
     };
     if let Some(identity) = track_identity {
@@ -4276,7 +4288,7 @@ impl AppModel {
     let session = self.requests.session_generation();
     let sequence = self.playback.sequence;
     let mut cancellation = self.playback_cancellation.subscribe();
-    self.render_now_playing();
+    self.render_playback_bar();
     sender.oneshot_command(async move {
       let result = {
         let operation = async {
@@ -4518,22 +4530,29 @@ impl AppModel {
     };
   }
 
-  fn select_track(&mut self, kind: TrackKind, selected: u32, sender: &ComponentSender<Self>) {
+  fn select_track(&mut self, kind: TrackKind, id: Option<i64>, sender: &ComponentSender<Self>) {
     let PlaybackTrackState::Ready { identity, tracks } = &self.playback.tracks else {
       return;
     };
-    let Some(id) = selected_track_id(tracks, kind, selected) else {
-      return;
+    let expected_type = match kind {
+      TrackKind::Audio => "audio",
+      TrackKind::Subtitle => "sub",
     };
-    let identity = identity.clone();
-    let request = match kind {
-      TrackKind::Audio => {
-        let Some(id) = id else {
-          return;
-        };
-        PlaybackRequest::AudioTrack { identity, id }
+    if let Some(id) = id {
+      if !tracks
+        .iter()
+        .any(|track| track.track_type == expected_type && track.id == id)
+      {
+        return;
       }
-      TrackKind::Subtitle => PlaybackRequest::SubtitleTrack { identity, id },
+    } else if kind == TrackKind::Audio {
+      return;
+    }
+    let identity = identity.clone();
+    let request = match (kind, id) {
+      (TrackKind::Audio, Some(id)) => PlaybackRequest::AudioTrack { identity, id },
+      (TrackKind::Audio, None) => return,
+      (TrackKind::Subtitle, id) => PlaybackRequest::SubtitleTrack { identity, id },
     };
     self.start_playback(request, sender);
   }
@@ -4580,14 +4599,14 @@ impl AppModel {
       let reason = "Previous and next controls are available only for episodes.".to_owned();
       self.playback.adjacent.previous = AdjacentAvailability::Unavailable(reason.clone());
       self.playback.adjacent.next = AdjacentAvailability::Unavailable(reason);
-      self.render_now_playing();
+      self.render_playback_bar();
       return;
     }
     if item.series_id.is_none() {
       let reason = "The server did not provide the series identity for this episode.".to_owned();
       self.playback.adjacent.previous = AdjacentAvailability::Unavailable(reason.clone());
       self.playback.adjacent.next = AdjacentAvailability::Unavailable(reason);
-      self.render_now_playing();
+      self.render_playback_bar();
       return;
     }
 
@@ -4596,7 +4615,7 @@ impl AppModel {
     let client = Arc::clone(&self.client);
     self.playback.adjacent.previous = AdjacentAvailability::Loading;
     self.playback.adjacent.next = AdjacentAvailability::Loading;
-    self.render_now_playing();
+    self.render_playback_bar();
     sender.oneshot_command(async move {
       let previous_client = Arc::clone(&client);
       let previous_item = item.clone();
@@ -5228,20 +5247,42 @@ impl AppModel {
     );
   }
 
-  fn render_now_playing_artwork(&mut self, sender: &ComponentSender<Self>) {
-    self.begin_artwork_view();
-    clear_box(&self.ui.now_playing_artwork);
-    let image_id = self.playback.active_artwork_image_id.clone();
-    let artwork = self.artwork(image_id.as_deref(), ArtworkPresentation::Backdrop, sender);
-    artwork.add_css_class("jellypilot-rounded");
-    artwork.set_overflow(gtk::Overflow::Hidden);
-    self.ui.now_playing_artwork.append(&artwork);
+  fn queue_playback_artwork(&mut self, sender: &ComponentSender<Self>) {
+    self.playback_artwork_view = self.playback_artwork_view.saturating_add(1);
+    self
+      .ui
+      .playback_artwork
+      .set_paintable(None::<&gtk::gdk::Paintable>);
+    self.ui.playback_artwork_fallback.set_visible(true);
+    let Some(image_id) = self.playback.active_artwork_image_id.clone() else {
+      return;
+    };
+    let artwork = Arc::clone(&self.artwork);
+    let artwork_ticket = artwork.ticket();
+    let client = Arc::clone(&self.client);
+    let session = self.requests.session_generation();
+    let view = self.playback_artwork_view;
+    sender.oneshot_command(async move {
+      let result = artwork
+        .load_with_ticket(&client, &image_id, artwork_ticket)
+        .await
+        .map_err(|_| ());
+      AppCommand::Artwork {
+        session,
+        view,
+        slot: PLAYBACK_ARTWORK_SLOT,
+        result,
+      }
+    });
   }
 
-  fn begin_artwork_view(&mut self) {
+  fn begin_artwork_view(&mut self, sender: &ComponentSender<Self>) {
     self.artwork.cancel_pending();
     self.artwork_view = self.artwork_view.saturating_add(1);
     self.artwork_targets.clear();
+    if self.playback.active_artwork_image_id.is_some() {
+      self.queue_playback_artwork(sender);
+    }
   }
   #[allow(deprecated)]
   fn artwork(
@@ -6223,30 +6264,53 @@ impl AppModel {
     self.ui.diagnostics_status.set_visible(true);
   }
 
-  fn render_now_playing(&self) {
+  fn add_toast(&self, title: impl AsRef<str>) {
+    self
+      .ui
+      .toast_overlay
+      .add_toast(adw::Toast::new(title.as_ref()));
+  }
+
+  fn render_playback_bar(&self) {
     let snapshot = self.playback.snapshot.as_ref();
     let now_playing = snapshot.and_then(|snapshot| snapshot.now_playing.as_ref());
     let controller_available = self.playback.controller.is_some();
     self.ui.playback_bar.set_visible(now_playing.is_some());
-    self.ui.playback_bar_title.set_label(
-      &snapshot
-        .zip(now_playing)
-        .map(|(snapshot, item)| format!("{} · {}", item.title, playback_position(snapshot)))
-        .unwrap_or_default(),
-    );
-    let label = match (snapshot, now_playing) {
-      (Some(snapshot), Some(item)) => format!("{} · {}", item.title, playback_position(snapshot)),
-      _ => "No active native playback session.".to_owned(),
-    };
-    self.ui.now_playing_status.set_label(&label);
-    let notice = self
+    let title = self
       .playback
-      .error
-      .as_deref()
-      .or(self.playback.notice.as_deref())
-      .or(self.playback.unavailable.as_deref());
-    self.ui.now_playing_notice.set_label(notice.unwrap_or(""));
-    self.ui.now_playing_notice.set_visible(notice.is_some());
+      .active_item
+      .as_ref()
+      .map(|item| item.name.as_str())
+      .or(now_playing.map(|item| item.title.as_str()))
+      .unwrap_or("");
+    self.ui.playback_title.set_label(title);
+    let elapsed_total = snapshot
+      .map(playback_position)
+      .unwrap_or_else(|| "00:00 / 00:00".to_owned());
+    let subtitle = self
+      .playback
+      .active_item
+      .as_ref()
+      .and_then(|item| item.series_name.as_deref())
+      .map(str::trim)
+      .filter(|name| !name.is_empty())
+      .map(|series| format!("{series} · {elapsed_total}"))
+      .unwrap_or(elapsed_total);
+    self.ui.playback_subtitle.set_label(&subtitle);
+    let status = playback_bar_status(
+      self.playback.error.as_deref(),
+      self.playback.unavailable.as_deref(),
+      self.playback.busy,
+      snapshot.map(|snapshot| snapshot.transport.connected),
+    );
+    match status {
+      Some((icon, message)) => {
+        self.ui.playback_status_icon.set_icon_name(Some(icon));
+        self.ui.playback_status_label.set_label(message);
+        self.ui.playback_info.set_visible_child_name("status");
+      }
+      None => self.ui.playback_info.set_visible_child_name("meta"),
+    }
     let active = now_playing.is_some() && controller_available && !self.playback.busy;
     self.ui.pause_button.set_sensitive(active);
     self.ui.stop_button.set_sensitive(active);
@@ -6272,15 +6336,7 @@ impl AppModel {
         });
       self
         .ui
-        .playback_bar_pause
-        .set_icon_name(if snapshot.transport.paused {
-          "media-playback-start-symbolic"
-        } else {
-          "media-playback-pause-symbolic"
-        });
-      self
-        .ui
-        .playback_bar_pause
+        .pause_button
         .set_tooltip_text(Some(if snapshot.transport.paused {
           "Resume playback"
         } else {
@@ -6288,11 +6344,19 @@ impl AppModel {
         }));
       self
         .ui
-        .pause_button
-        .set_tooltip_text(Some(if snapshot.transport.paused {
-          "Resume"
+        .mute_button
+        .set_icon_name(if snapshot.transport.muted {
+          "audio-volume-muted-symbolic"
         } else {
-          "Pause"
+          "audio-volume-high-symbolic"
+        });
+      self
+        .ui
+        .mute_button
+        .set_tooltip_text(Some(if snapshot.transport.muted {
+          "Unmute"
+        } else {
+          "Mute"
         }));
       self.ui.playback_controls_syncing.set(true);
       self
@@ -6335,44 +6399,35 @@ impl AppModel {
           .iter()
           .filter(|track| track.track_type == "sub")
           .collect::<Vec<_>>();
-        let audio_labels = audio
-          .iter()
-          .map(|track| track_label(track))
-          .collect::<Vec<_>>();
-        let audio_model = string_list(&audio_labels);
-        self.ui.audio_tracks.set_model(Some(&audio_model));
-        self.ui.audio_tracks.set_selected(
-          audio
-            .iter()
-            .position(|track| track.selected)
-            .map_or(gtk::INVALID_LIST_POSITION, |index| index as u32),
+        populate_track_list(
+          &self.ui.audio_track_list,
+          audio.iter().copied(),
+          None,
+          TrackKind::Audio,
+          &self.ui.playback_controls_syncing,
+          &self.ui.sender,
         );
-
-        let mut subtitle_labels = Vec::with_capacity(subtitles.len() + 1);
-        subtitle_labels.push("Off".to_owned());
-        subtitle_labels.extend(subtitles.iter().map(|track| track_label(track)));
-        let subtitle_model = string_list(&subtitle_labels);
-        self.ui.subtitle_tracks.set_model(Some(&subtitle_model));
-        self.ui.subtitle_tracks.set_selected(
-          subtitles
-            .iter()
-            .position(|track| track.selected)
-            .map_or(0, |index| index as u32 + 1),
+        populate_track_list(
+          &self.ui.subtitle_track_list,
+          subtitles.iter().copied(),
+          Some("Off"),
+          TrackKind::Subtitle,
+          &self.ui.playback_controls_syncing,
+          &self.ui.sender,
         );
-
         let audio_available = !audio.is_empty();
         let subtitle_available = !subtitles.is_empty();
         self
           .ui
-          .audio_tracks
+          .audio_button
           .set_sensitive(active && audio_available);
         self
           .ui
-          .subtitle_tracks
+          .subtitle_button
           .set_sensitive(active && subtitle_available);
         self
           .ui
-          .audio_tracks
+          .audio_button
           .set_tooltip_text(Some(if audio_available {
             "Select the MPV audio track"
           } else {
@@ -6380,43 +6435,31 @@ impl AppModel {
           }));
         self
           .ui
-          .subtitle_tracks
+          .subtitle_button
           .set_tooltip_text(Some(if subtitle_available {
             "Select an MPV subtitle track or turn subtitles off"
           } else {
             "MPV reported no subtitle tracks."
           }));
-        let status = match (audio_available, subtitle_available) {
-          (true, true) => None,
-          (false, true) => Some("MPV reported no audio tracks."),
-          (true, false) => Some("MPV reported no subtitle tracks."),
-          (false, false) => Some("MPV reported no selectable audio or subtitle tracks."),
-        };
-        self.ui.track_status.set_label(status.unwrap_or(""));
-        self.ui.track_status.set_visible(status.is_some());
       }
       PlaybackTrackState::Loading { identity } if Some(identity) == current_identity => {
-        self.set_empty_track_models();
-        self.ui.track_status.set_label("Loading MPV tracks…");
-        self.ui.track_status.set_visible(true);
+        self.clear_track_lists();
         self
           .ui
-          .audio_tracks
+          .audio_button
           .set_tooltip_text(Some("Audio tracks are loading."));
         self
           .ui
-          .subtitle_tracks
+          .subtitle_button
           .set_tooltip_text(Some("Subtitle tracks are loading."));
       }
       PlaybackTrackState::Failed { identity, message } if Some(identity) == current_identity => {
-        self.set_empty_track_models();
-        self.ui.track_status.set_label(message);
-        self.ui.track_status.set_visible(true);
-        self.ui.audio_tracks.set_tooltip_text(Some(message));
-        self.ui.subtitle_tracks.set_tooltip_text(Some(message));
+        self.clear_track_lists();
+        self.ui.audio_button.set_tooltip_text(Some(message));
+        self.ui.subtitle_button.set_tooltip_text(Some(message));
       }
       _ => {
-        self.set_empty_track_models();
+        self.clear_track_lists();
         let reason = if self.playback.controller.is_none() {
           self
             .playback
@@ -6426,27 +6469,18 @@ impl AppModel {
         } else {
           "Track controls require active playback."
         };
-        self.ui.track_status.set_label(reason);
-        self.ui.track_status.set_visible(true);
-        self.ui.audio_tracks.set_tooltip_text(Some(reason));
-        self.ui.subtitle_tracks.set_tooltip_text(Some(reason));
+        self.ui.audio_button.set_tooltip_text(Some(reason));
+        self.ui.subtitle_button.set_tooltip_text(Some(reason));
       }
     }
     self.ui.playback_controls_syncing.set(false);
   }
 
-  fn set_empty_track_models(&self) {
-    let empty = gtk::StringList::new(&[]);
-    self.ui.audio_tracks.set_model(Some(&empty));
-    self.ui.audio_tracks.set_sensitive(false);
-    self
-      .ui
-      .audio_tracks
-      .set_selected(gtk::INVALID_LIST_POSITION);
-    let subtitles = gtk::StringList::new(&["Off"]);
-    self.ui.subtitle_tracks.set_model(Some(&subtitles));
-    self.ui.subtitle_tracks.set_sensitive(false);
-    self.ui.subtitle_tracks.set_selected(0);
+  fn clear_track_lists(&self) {
+    clear_box(&self.ui.audio_track_list);
+    clear_box(&self.ui.subtitle_track_list);
+    self.ui.audio_button.set_sensitive(false);
+    self.ui.subtitle_button.set_sensitive(false);
   }
 
   fn render_adjacent_controls(&self, active: bool) {
@@ -6476,50 +6510,208 @@ impl AppModel {
       .previous_button
       .set_tooltip_text(Some(previous_reason));
     self.ui.next_button.set_tooltip_text(Some(next_reason));
-    let status = adjacent_status(previous, next);
-    self
-      .ui
-      .adjacent_status
-      .set_label(status.as_deref().unwrap_or(""));
-    self.ui.adjacent_status.set_visible(status.is_some());
   }
 }
 
 impl Ui {
   fn new(sender: &ComponentSender<AppModel>) -> Self {
     install_media_css();
+    let toast_overlay = adw::ToastOverlay::new();
     let root = adw::ToolbarView::new();
-    let playback_bar = gtk::Box::new(gtk::Orientation::Horizontal, 10);
-    playback_bar.set_margin_top(6);
-    playback_bar.set_margin_bottom(6);
-    playback_bar.set_margin_start(12);
-    playback_bar.set_margin_end(12);
-    playback_bar.set_visible(false);
-    let playback_bar_title = gtk::Label::new(Some(""));
-    playback_bar_title.set_hexpand(true);
-    playback_bar_title.set_xalign(0.0);
-    playback_bar.append(&playback_bar_title);
-    let playback_pause = gtk::Button::from_icon_name("media-playback-pause-symbolic");
-    playback_pause.set_tooltip_text(Some("Pause or resume playback"));
-    playback_pause.connect_clicked({
+    let playback_controls_syncing = Rc::new(Cell::new(false));
+    let playback_artwork = cover_picture(PLAYER_THUMB_SIZE, PLAYER_THUMB_SIZE);
+    playback_artwork.set_hexpand(false);
+    playback_artwork.set_vexpand(false);
+    playback_artwork.set_can_shrink(false);
+    let playback_artwork_fallback = gtk::Image::from_icon_name(FALLBACK_ARTWORK_ICON);
+    playback_artwork_fallback.set_pixel_size(16);
+    playback_artwork_fallback.set_halign(gtk::Align::Center);
+    playback_artwork_fallback.set_valign(gtk::Align::Center);
+    let artwork_frame = gtk::Overlay::new();
+    artwork_frame.add_css_class("jellypilot-rounded");
+    artwork_frame.add_css_class("jellypilot-playerbar-thumb");
+    artwork_frame.set_overflow(gtk::Overflow::Hidden);
+    artwork_frame.set_size_request(PLAYER_THUMB_SIZE, PLAYER_THUMB_SIZE);
+    artwork_frame.set_valign(gtk::Align::Center);
+    artwork_frame.set_child(Some(&playback_artwork));
+    artwork_frame.add_overlay(&playback_artwork_fallback);
+    let playback_title = gtk::Label::new(None);
+    playback_title.add_css_class("heading");
+    playback_title.set_xalign(0.0);
+    playback_title.set_ellipsize(gtk::pango::EllipsizeMode::End);
+    playback_title.set_hexpand(true);
+    let playback_subtitle = dim_label("");
+    playback_subtitle.set_xalign(0.0);
+    playback_subtitle.set_ellipsize(gtk::pango::EllipsizeMode::End);
+    let playback_meta = gtk::Box::new(gtk::Orientation::Vertical, 0);
+    playback_meta.set_valign(gtk::Align::Center);
+    playback_meta.set_hexpand(true);
+    playback_meta.append(&playback_title);
+    playback_meta.append(&playback_subtitle);
+    let playback_status_icon = gtk::Image::from_icon_name("content-loading-symbolic");
+    playback_status_icon.set_pixel_size(16);
+    let playback_status_label = gtk::Label::new(None);
+    playback_status_label.set_xalign(0.0);
+    playback_status_label.set_ellipsize(gtk::pango::EllipsizeMode::End);
+    playback_status_label.set_hexpand(true);
+    let playback_status = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+    playback_status.set_valign(gtk::Align::Center);
+    playback_status.append(&playback_status_icon);
+    playback_status.append(&playback_status_label);
+    let playback_info = gtk::Stack::new();
+    playback_info.set_hexpand(true);
+    playback_info.set_hhomogeneous(true);
+    playback_info.add_named(&playback_meta, Some("meta"));
+    playback_info.add_named(&playback_status, Some("status"));
+    playback_info.set_visible_child_name("meta");
+    let previous_button = gtk::Button::from_icon_name("media-skip-backward-symbolic");
+    previous_button.add_css_class("flat");
+    previous_button.add_css_class("circular");
+    previous_button.set_tooltip_text(Some("Previous episode is unavailable."));
+    previous_button.update_property(&[gtk::accessible::Property::Label("Previous episode")]);
+    previous_button.set_sensitive(false);
+    previous_button.connect_clicked({
+      let sender = sender.clone();
+      move |_| sender.input(AppMessage::PlayAdjacent(AdjacentDirection::Previous))
+    });
+    let pause_button = gtk::Button::from_icon_name("media-playback-start-symbolic");
+    pause_button.add_css_class("flat");
+    pause_button.add_css_class("circular");
+    pause_button.set_tooltip_text(Some("Pause or resume playback"));
+    pause_button.update_property(&[gtk::accessible::Property::Label("Pause or resume playback")]);
+    pause_button.set_sensitive(false);
+    pause_button.connect_clicked({
       let sender = sender.clone();
       move |_| sender.input(AppMessage::TogglePaused)
     });
-    playback_bar.append(&playback_pause);
-    let playback_stop = gtk::Button::from_icon_name("media-playback-stop-symbolic");
-    playback_stop.set_tooltip_text(Some("Stop playback"));
-    playback_stop.connect_clicked({
+    let next_button = gtk::Button::from_icon_name("media-skip-forward-symbolic");
+    next_button.add_css_class("flat");
+    next_button.add_css_class("circular");
+    next_button.set_tooltip_text(Some("Next episode is unavailable."));
+    next_button.update_property(&[gtk::accessible::Property::Label("Next episode")]);
+    next_button.set_sensitive(false);
+    next_button.connect_clicked({
+      let sender = sender.clone();
+      move |_| sender.input(AppMessage::PlayAdjacent(AdjacentDirection::Next))
+    });
+    let stop_button = gtk::Button::from_icon_name("media-playback-stop-symbolic");
+    stop_button.add_css_class("flat");
+    stop_button.add_css_class("circular");
+    stop_button.set_tooltip_text(Some("Stop playback"));
+    stop_button.update_property(&[gtk::accessible::Property::Label("Stop playback")]);
+    stop_button.set_sensitive(false);
+    stop_button.connect_clicked({
       let sender = sender.clone();
       move |_| sender.input(AppMessage::StopPlayback)
     });
-    playback_bar.append(&playback_stop);
-    let open_now_playing = gtk::GestureClick::new();
-    open_now_playing.connect_released({
+    let transport = gtk::Box::new(gtk::Orientation::Horizontal, 2);
+    transport.set_valign(gtk::Align::Center);
+    transport.append(&previous_button);
+    transport.append(&pause_button);
+    transport.append(&next_button);
+    transport.append(&stop_button);
+    let position_label = playback_time_label();
+    let duration_label = playback_time_label();
+    let time = gtk::Box::new(gtk::Orientation::Horizontal, 6);
+    time.set_valign(gtk::Align::Center);
+    time.append(&position_label);
+    time.append(&gtk::Label::new(Some("/")));
+    time.append(&duration_label);
+    let seek = gtk::Scale::with_range(gtk::Orientation::Horizontal, 0.0, 1.0, 1.0);
+    seek.add_css_class("jellypilot-bar-seek");
+    seek.set_draw_value(false);
+    seek.set_sensitive(false);
+    seek.set_hexpand(true);
+    seek.set_halign(gtk::Align::Fill);
+    seek.set_valign(gtk::Align::Start);
+    seek.update_property(&[gtk::accessible::Property::Label("Playback position")]);
+    seek.connect_change_value({
       let sender = sender.clone();
-      move |_, _, _, _| sender.input(AppMessage::ShowNowPlaying)
+      let playback_controls_syncing = Rc::clone(&playback_controls_syncing);
+      move |_, _, value| {
+        if !playback_controls_syncing.get() {
+          sender.input(AppMessage::Seek(value));
+        }
+        gtk::glib::Propagation::Proceed
+      }
     });
-    playback_bar.add_controller(open_now_playing);
+    let volume = gtk::Scale::with_range(gtk::Orientation::Horizontal, 0.0, 100.0, 1.0);
+    volume.add_css_class("jellypilot-bar-volume");
+    volume.set_draw_value(false);
+    volume.set_sensitive(false);
+    volume.set_hexpand(false);
+    volume.set_size_request(88, -1);
+    volume.update_property(&[gtk::accessible::Property::Label("Volume")]);
+    volume.connect_change_value({
+      let sender = sender.clone();
+      let playback_controls_syncing = Rc::clone(&playback_controls_syncing);
+      move |_, _, value| {
+        if !playback_controls_syncing.get() {
+          sender.input(AppMessage::SetVolume(value));
+        }
+        gtk::glib::Propagation::Proceed
+      }
+    });
+    let mute_button = gtk::ToggleButton::new();
+    mute_button.set_icon_name("audio-volume-high-symbolic");
+    mute_button.add_css_class("flat");
+    mute_button.set_tooltip_text(Some("Mute"));
+    mute_button.set_sensitive(false);
+    mute_button.update_property(&[gtk::accessible::Property::Label("Mute")]);
+    mute_button.connect_toggled({
+      let sender = sender.clone();
+      let playback_controls_syncing = Rc::clone(&playback_controls_syncing);
+      move |button| {
+        if !playback_controls_syncing.get() {
+          sender.input(AppMessage::SetMuted(button.is_active()));
+        }
+      }
+    });
+    let audio_track_list = gtk::Box::new(gtk::Orientation::Vertical, 0);
+    audio_track_list.add_css_class("jellypilot-track-list");
+    let audio_popover = gtk::Popover::new();
+    audio_popover.set_child(Some(&audio_track_list));
+    let audio_button = gtk::MenuButton::new();
+    audio_button.add_css_class("flat");
+    audio_button.add_css_class("circular");
+    audio_button.set_icon_name("audio-speakers-symbolic");
+    audio_button.set_tooltip_text(Some("Audio track"));
+    audio_button.set_sensitive(false);
+    audio_button.set_popover(Some(&audio_popover));
+    audio_button.update_property(&[gtk::accessible::Property::Label("Audio track")]);
+    let subtitle_track_list = gtk::Box::new(gtk::Orientation::Vertical, 0);
+    subtitle_track_list.add_css_class("jellypilot-track-list");
+    let subtitle_popover = gtk::Popover::new();
+    subtitle_popover.set_child(Some(&subtitle_track_list));
+    let subtitle_button = gtk::MenuButton::new();
+    subtitle_button.add_css_class("flat");
+    subtitle_button.add_css_class("circular");
+    subtitle_button.set_icon_name("media-view-subtitles-symbolic");
+    subtitle_button.set_tooltip_text(Some("Subtitle track"));
+    subtitle_button.set_sensitive(false);
+    subtitle_button.set_popover(Some(&subtitle_popover));
+    subtitle_button.update_property(&[gtk::accessible::Property::Label("Subtitle track")]);
+    let row = gtk::Box::new(gtk::Orientation::Horizontal, 10);
+    row.set_margin_top(10);
+    row.set_margin_bottom(8);
+    row.set_margin_start(12);
+    row.set_margin_end(12);
+    row.set_valign(gtk::Align::Center);
+    row.append(&artwork_frame);
+    row.append(&playback_info);
+    row.append(&transport);
+    row.append(&time);
+    row.append(&volume);
+    row.append(&mute_button);
+    row.append(&audio_button);
+    row.append(&subtitle_button);
+    let playback_bar = gtk::Overlay::new();
+    playback_bar.add_css_class("jellypilot-playerbar");
+    playback_bar.set_visible(false);
+    playback_bar.set_child(Some(&row));
+    playback_bar.add_overlay(&seek);
     root.add_bottom_bar(&playback_bar);
+    toast_overlay.set_child(Some(&root));
     let prefill = config::load();
     let provider = adw::ComboRow::new();
     provider.set_title("Server type");
@@ -6821,153 +7013,6 @@ impl Ui {
     let detail_page = scrolled_page("Item Details", "", &detail_content);
     content.add_named(&detail_page, Some("detail"));
 
-    let now_playing_artwork = gtk::Box::new(gtk::Orientation::Vertical, 0);
-    now_playing_artwork.set_size_request(-1, 220);
-    now_playing_artwork.add_css_class("jellypilot-rounded");
-    now_playing_artwork.set_overflow(gtk::Overflow::Hidden);
-    let artwork_fallback = gtk::Image::from_icon_name(FALLBACK_ARTWORK_ICON);
-    artwork_fallback.set_pixel_size(32);
-    artwork_fallback.set_vexpand(true);
-    artwork_fallback.set_valign(gtk::Align::Center);
-    now_playing_artwork.append(&artwork_fallback);
-    let now_playing_status = dim_label("No active native playback session.");
-    now_playing_status.set_wrap(true);
-    let now_playing_notice = dim_label("");
-    now_playing_notice.set_wrap(true);
-    now_playing_notice.set_visible(false);
-    now_playing_notice.set_accessible_role(gtk::AccessibleRole::Status);
-    let position_label = playback_time_label();
-    let duration_label = playback_time_label();
-    let previous_button = gtk::Button::from_icon_name("media-skip-backward-symbolic");
-    previous_button.set_tooltip_text(Some("Previous episode is unavailable."));
-    previous_button.update_property(&[gtk::accessible::Property::Label("Previous episode")]);
-    previous_button.set_sensitive(false);
-    previous_button.connect_clicked({
-      let sender = sender.clone();
-      move |_| sender.input(AppMessage::PlayAdjacent(AdjacentDirection::Previous))
-    });
-    let pause_button = gtk::Button::from_icon_name("media-playback-start-symbolic");
-    pause_button.set_tooltip_text(Some("Pause or resume playback"));
-    pause_button.update_property(&[gtk::accessible::Property::Label("Pause or resume playback")]);
-    pause_button.set_sensitive(false);
-    pause_button.connect_clicked({
-      let sender = sender.clone();
-      move |_| sender.input(AppMessage::TogglePaused)
-    });
-    let next_button = gtk::Button::from_icon_name("media-skip-forward-symbolic");
-    next_button.set_tooltip_text(Some("Next episode is unavailable."));
-    next_button.update_property(&[gtk::accessible::Property::Label("Next episode")]);
-    next_button.set_sensitive(false);
-    next_button.connect_clicked({
-      let sender = sender.clone();
-      move |_| sender.input(AppMessage::PlayAdjacent(AdjacentDirection::Next))
-    });
-    let stop_button = gtk::Button::from_icon_name("media-playback-stop-symbolic");
-    stop_button.set_tooltip_text(Some("Stop playback"));
-    stop_button.update_property(&[gtk::accessible::Property::Label("Stop playback")]);
-    stop_button.set_sensitive(false);
-    stop_button.connect_clicked({
-      let sender = sender.clone();
-      move |_| sender.input(AppMessage::StopPlayback)
-    });
-    let playback_controls_syncing = Rc::new(Cell::new(false));
-    let seek = gtk::Scale::with_range(gtk::Orientation::Horizontal, 0.0, 1.0, 1.0);
-    seek.set_hexpand(true);
-    seek.set_draw_value(false);
-    seek.set_sensitive(false);
-    seek.update_property(&[gtk::accessible::Property::Label("Playback position")]);
-    seek.connect_change_value({
-      let sender = sender.clone();
-      let playback_controls_syncing = Rc::clone(&playback_controls_syncing);
-      move |_, _, value| {
-        if !playback_controls_syncing.get() {
-          sender.input(AppMessage::Seek(value));
-        }
-        gtk::glib::Propagation::Proceed
-      }
-    });
-    let volume = gtk::Scale::with_range(gtk::Orientation::Horizontal, 0.0, 100.0, 1.0);
-    volume.set_hexpand(true);
-    volume.set_draw_value(false);
-    volume.set_sensitive(false);
-    volume.update_property(&[gtk::accessible::Property::Label("Volume")]);
-    volume.connect_change_value({
-      let sender = sender.clone();
-      let playback_controls_syncing = Rc::clone(&playback_controls_syncing);
-      move |_, _, value| {
-        if !playback_controls_syncing.get() {
-          sender.input(AppMessage::SetVolume(value));
-        }
-        gtk::glib::Propagation::Proceed
-      }
-    });
-    let mute_button = gtk::ToggleButton::new();
-    mute_button.set_child(Some(&gtk::Image::from_icon_name(
-      "audio-volume-muted-symbolic",
-    )));
-    mute_button.set_tooltip_text(Some("Mute"));
-    mute_button.set_sensitive(false);
-    mute_button.update_property(&[gtk::accessible::Property::Label("Mute")]);
-    mute_button.connect_toggled({
-      let sender = sender.clone();
-      let playback_controls_syncing = Rc::clone(&playback_controls_syncing);
-      move |button| {
-        if !playback_controls_syncing.get() {
-          sender.input(AppMessage::SetMuted(button.is_active()));
-        }
-      }
-    });
-    let audio_tracks = gtk::DropDown::from_strings(&[]);
-    audio_tracks.set_hexpand(true);
-    audio_tracks.set_sensitive(false);
-    audio_tracks.update_property(&[gtk::accessible::Property::Label("Audio track")]);
-    audio_tracks.connect_selected_notify({
-      let sender = sender.clone();
-      let playback_controls_syncing = Rc::clone(&playback_controls_syncing);
-      move |dropdown| {
-        if !playback_controls_syncing.get() {
-          sender.input(AppMessage::SelectAudioTrack(dropdown.selected()));
-        }
-      }
-    });
-    let subtitle_tracks = gtk::DropDown::from_strings(&[]);
-    subtitle_tracks.set_hexpand(true);
-    subtitle_tracks.set_sensitive(false);
-    subtitle_tracks.update_property(&[gtk::accessible::Property::Label("Subtitle track")]);
-    subtitle_tracks.connect_selected_notify({
-      let sender = sender.clone();
-      let playback_controls_syncing = Rc::clone(&playback_controls_syncing);
-      move |dropdown| {
-        if !playback_controls_syncing.get() {
-          sender.input(AppMessage::SelectSubtitleTrack(dropdown.selected()));
-        }
-      }
-    });
-    let track_status = dim_label("Track controls require active playback.");
-    track_status.set_wrap(true);
-    track_status.set_accessible_role(gtk::AccessibleRole::Status);
-    let adjacent_status = dim_label("Episode navigation requires active episode playback.");
-    adjacent_status.set_wrap(true);
-    adjacent_status.set_accessible_role(gtk::AccessibleRole::Status);
-    let now_playing = now_playing_page(NowPlayingPageWidgets {
-      artwork: &now_playing_artwork,
-      status: &now_playing_status,
-      notice: &now_playing_notice,
-      position_label: &position_label,
-      duration_label: &duration_label,
-      previous: &previous_button,
-      pause: &pause_button,
-      next: &next_button,
-      stop: &stop_button,
-      seek: &seek,
-      volume: &volume,
-      mute: &mute_button,
-      audio_tracks: &audio_tracks,
-      subtitle_tracks: &subtitle_tracks,
-      track_status: &track_status,
-      adjacent_status: &adjacent_status,
-    });
-    content.add_named(&now_playing, Some("now-playing"));
     let sidebar_header = adw::HeaderBar::new();
     sidebar_header.set_title_widget(Some(&gtk::Label::new(Some("Navigation"))));
     let sidebar_toolbar = adw::ToolbarView::new();
@@ -7249,8 +7294,10 @@ impl Ui {
     });
     application.add_action(&about_action);
     let quit_action = gtk::gio::SimpleAction::new("quit", None);
-    let sender = sender.clone();
-    quit_action.connect_activate(move |_, _| sender.input(AppMessage::QuitRequested));
+    quit_action.connect_activate({
+      let sender = sender.clone();
+      move |_, _| sender.input(AppMessage::QuitRequested)
+    });
     application.add_action(&quit_action);
     let menu = gtk::gio::Menu::new();
     menu.append(Some("Preferences"), Some("app.preferences"));
@@ -7263,6 +7310,7 @@ impl Ui {
     header.pack_end(&menu_button);
 
     Self {
+      toast_overlay,
       root,
       login,
       provider,
@@ -7284,8 +7332,13 @@ impl Ui {
       connection_status,
       search,
       playback_bar,
-      playback_bar_title,
-      playback_bar_pause: playback_pause,
+      playback_artwork,
+      playback_artwork_fallback,
+      playback_title,
+      playback_subtitle,
+      playback_status_icon,
+      playback_status_label,
+      playback_info,
       disconnect_button,
       content,
       nav_home,
@@ -7304,9 +7357,6 @@ impl Ui {
       load_next_button,
       browse_scroll,
       detail_content,
-      now_playing_artwork,
-      now_playing_status,
-      now_playing_notice,
       position_label,
       duration_label,
       previous_button,
@@ -7316,11 +7366,12 @@ impl Ui {
       seek,
       volume,
       mute_button,
-      audio_tracks,
-      subtitle_tracks,
-      track_status,
-      adjacent_status,
+      audio_button,
+      subtitle_button,
+      audio_track_list,
+      subtitle_track_list,
       playback_controls_syncing,
+      sender: sender.clone(),
       settings_saved_profile,
       settings_storage_status,
       settings_disconnect_button,
@@ -7525,127 +7576,6 @@ fn saved_profile_row(
   });
   action.add_suffix(&forget);
   action
-}
-
-struct NowPlayingPageWidgets<'a> {
-  artwork: &'a gtk::Box,
-  status: &'a gtk::Label,
-  notice: &'a gtk::Label,
-  position_label: &'a gtk::Label,
-  duration_label: &'a gtk::Label,
-  previous: &'a gtk::Button,
-  pause: &'a gtk::Button,
-  next: &'a gtk::Button,
-  stop: &'a gtk::Button,
-  seek: &'a gtk::Scale,
-  volume: &'a gtk::Scale,
-  mute: &'a gtk::ToggleButton,
-  audio_tracks: &'a gtk::DropDown,
-  subtitle_tracks: &'a gtk::DropDown,
-  track_status: &'a gtk::Label,
-  adjacent_status: &'a gtk::Label,
-}
-
-fn now_playing_page(widgets: NowPlayingPageWidgets<'_>) -> gtk::Widget {
-  let NowPlayingPageWidgets {
-    artwork,
-    status,
-    notice,
-    position_label,
-    duration_label,
-    previous,
-    pause,
-    next,
-    stop,
-    seek,
-    volume,
-    mute,
-    audio_tracks,
-    subtitle_tracks,
-    track_status,
-    adjacent_status,
-  } = widgets;
-  let page = gtk::Box::builder()
-    .orientation(gtk::Orientation::Vertical)
-    .spacing(20)
-    .margin_top(24)
-    .margin_bottom(24)
-    .margin_start(24)
-    .margin_end(24)
-    .build();
-  let title = gtk::Label::new(Some("Now Playing"));
-  title.add_css_class("title-1");
-  title.set_xalign(0.0);
-  let panel = gtk::Box::builder()
-    .orientation(gtk::Orientation::Vertical)
-    .spacing(16)
-    .build();
-  panel.add_css_class("card");
-  panel.set_margin_top(8);
-  panel.set_margin_bottom(8);
-  panel.set_margin_start(8);
-  panel.set_margin_end(8);
-  let inner = gtk::Box::builder()
-    .orientation(gtk::Orientation::Vertical)
-    .spacing(16)
-    .margin_top(20)
-    .margin_bottom(20)
-    .margin_start(24)
-    .margin_end(24)
-    .build();
-  status.set_xalign(0.0);
-  status.set_wrap(true);
-  inner.append(status);
-  notice.set_xalign(0.0);
-  notice.set_wrap(true);
-  inner.append(notice);
-  let timeline = gtk::Box::new(gtk::Orientation::Horizontal, 12);
-  timeline.append(position_label);
-  seek.set_hexpand(true);
-  seek.set_draw_value(false);
-  timeline.append(seek);
-  timeline.append(duration_label);
-  inner.append(&timeline);
-  let transport = gtk::Box::new(gtk::Orientation::Horizontal, 12);
-  transport.set_halign(gtk::Align::Center);
-  pause.add_css_class("suggested-action");
-  stop.add_css_class("destructive-action");
-  transport.append(previous);
-  transport.append(pause);
-  transport.append(next);
-  transport.append(stop);
-  inner.append(&transport);
-  adjacent_status.set_xalign(0.0);
-  inner.append(adjacent_status);
-  let audio_row = gtk::Box::new(gtk::Orientation::Horizontal, 12);
-  audio_row.set_halign(gtk::Align::Center);
-  let volume_icon = gtk::Image::from_icon_name("audio-volume-medium-symbolic");
-  audio_row.append(&volume_icon);
-  volume.set_size_request(200, -1);
-  volume.set_draw_value(false);
-  audio_row.append(volume);
-  audio_row.append(mute);
-  inner.append(&audio_row);
-  let tracks = gtk::Grid::builder()
-    .column_spacing(12)
-    .row_spacing(12)
-    .build();
-  let audio_label = gtk::Label::new(Some("Audio"));
-  audio_label.set_xalign(0.0);
-  tracks.attach(&audio_label, 0, 0, 1, 1);
-  tracks.attach(audio_tracks, 1, 0, 1, 1);
-  let subtitle_label = gtk::Label::new(Some("Subtitles"));
-  subtitle_label.set_xalign(0.0);
-  tracks.attach(&subtitle_label, 0, 1, 1, 1);
-  tracks.attach(subtitle_tracks, 1, 1, 1, 1);
-  inner.append(&tracks);
-  track_status.set_xalign(0.0);
-  inner.append(track_status);
-  panel.append(&inner);
-  page.append(&title);
-  page.append(artwork);
-  page.append(&panel);
-  page.upcast()
 }
 
 fn diagnostics_page(
@@ -8560,6 +8490,7 @@ fn auxiliary_settlement_is_current(
     && current_identity == Some(identity)
 }
 
+#[cfg_attr(not(test), allow(dead_code))]
 fn selected_track_id(tracks: &[TrackInfo], kind: TrackKind, selected: u32) -> Option<Option<i64>> {
   let track_type = match kind {
     TrackKind::Audio => "audio",
@@ -8591,12 +8522,77 @@ fn track_label(track: &TrackInfo) -> String {
   }
 }
 
-fn string_list(labels: &[String]) -> gtk::StringList {
-  let model = gtk::StringList::new(&[]);
-  for label in labels {
-    model.append(label);
+fn populate_track_list<'a>(
+  list: &gtk::Box,
+  tracks: impl Iterator<Item = &'a TrackInfo>,
+  off_label: Option<&str>,
+  kind: TrackKind,
+  syncing: &Rc<Cell<bool>>,
+  sender: &ComponentSender<AppModel>,
+) {
+  clear_box(list);
+  let tracks = tracks.collect::<Vec<_>>();
+  let off_selected = off_label.is_some() && tracks.iter().all(|track| !track.selected);
+  let mut group = None;
+  if let Some(label) = off_label {
+    let off = gtk::CheckButton::with_label(label);
+    off.set_active(off_selected);
+    off.connect_toggled({
+      let sender = sender.clone();
+      let syncing = Rc::clone(syncing);
+      move |button| {
+        if !syncing.get() && button.is_active() {
+          sender.input(AppMessage::SelectSubtitleTrack(None));
+        }
+      }
+    });
+    group = Some(off.clone());
+    list.append(&off);
   }
-  model
+  for track in tracks {
+    let row = gtk::CheckButton::with_label(&track_label(track));
+    if let Some(group) = &group {
+      row.set_group(Some(group));
+    } else {
+      group = Some(row.clone());
+    }
+    row.set_active(track.selected);
+    let id = track.id;
+    row.connect_toggled({
+      let sender = sender.clone();
+      let syncing = Rc::clone(syncing);
+      move |button| {
+        if !syncing.get() && button.is_active() {
+          match kind {
+            TrackKind::Audio => sender.input(AppMessage::SelectAudioTrack(id)),
+            TrackKind::Subtitle => sender.input(AppMessage::SelectSubtitleTrack(Some(id))),
+          }
+        }
+      }
+    });
+    list.append(&row);
+  }
+}
+
+fn playback_bar_status<'a>(
+  error: Option<&'a str>,
+  unavailable: Option<&'a str>,
+  busy: bool,
+  connected: Option<bool>,
+) -> Option<(&'static str, &'a str)> {
+  if let Some(error) = error {
+    return Some(("dialog-error-symbolic", error));
+  }
+  if let Some(unavailable) = unavailable {
+    return Some(("dialog-warning-symbolic", unavailable));
+  }
+  if connected == Some(false) {
+    return Some(("network-offline-symbolic", "Connection lost"));
+  }
+  if busy {
+    return Some(("content-loading-symbolic", "Buffering…"));
+  }
+  None
 }
 
 fn adjacent_availability(
@@ -8630,37 +8626,6 @@ fn adjacent_control_reason(
     Some(AdjacentAvailability::Idle) | None => {
       "Episode navigation requires active episode playback."
     }
-  }
-}
-
-fn adjacent_status(
-  previous: Option<&AdjacentAvailability>,
-  next: Option<&AdjacentAvailability>,
-) -> Option<String> {
-  if previous.is_some_and(|value| matches!(value, AdjacentAvailability::Loading))
-    || next.is_some_and(|value| matches!(value, AdjacentAvailability::Loading))
-  {
-    return Some("Checking for adjacent episodes…".to_owned());
-  }
-  let previous_reason = match previous {
-    Some(AdjacentAvailability::Unavailable(message)) => Some(message.as_str()),
-    Some(AdjacentAvailability::Idle) | None => {
-      Some("Episode navigation requires active episode playback.")
-    }
-    _ => None,
-  };
-  let next_reason = match next {
-    Some(AdjacentAvailability::Unavailable(message)) => Some(message.as_str()),
-    Some(AdjacentAvailability::Idle) | None => {
-      Some("Episode navigation requires active episode playback.")
-    }
-    _ => None,
-  };
-  match (previous_reason, next_reason) {
-    (None, None) => None,
-    (Some(previous), Some(next)) if previous == next => Some(previous.to_owned()),
-    (Some(previous), Some(next)) => Some(format!("{previous} {next}")),
-    (Some(reason), None) | (None, Some(reason)) => Some(reason.to_owned()),
   }
 }
 

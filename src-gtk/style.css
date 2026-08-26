@@ -53,12 +53,29 @@
   background-color: @accent_color;
 }
 
+
 .jellypilot-playerbar {
   background-color: @view_bg_color;
   color: @view_fg_color;
   border-top: 1px solid @borders;
+  min-height: 52px;
 }
 
+.jellypilot-playerbar-thumb {
+  min-width: 36px;
+  min-height: 36px;
+}
+
+.jellypilot-bar-volume {
+  min-width: 88px;
+  padding-top: 0;
+  padding-bottom: 0;
+}
+
+.jellypilot-track-list {
+  min-width: 180px;
+  padding: 6px;
+}
 .jellypilot-bar-seek {
   min-height: 16px;
   padding-top: 0;
