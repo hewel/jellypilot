@@ -478,6 +478,8 @@ export type VideoItemDetail = {
 	canPlay: boolean,
 	artworkImageId: string | null,
 	backdropImageId: string | null,
+	/**  Series primary poster for episode player-bar thumbs; absent for movies. */
+	seriesPosterImageId: string | null,
 	metadata: VideoDetailMetadata,
 };
 
@@ -497,6 +499,8 @@ export type VideoLibraryItem = {
 	played: boolean,
 	favorite: boolean,
 	artworkImageId: string | null,
+	/**  Series primary poster for episode player-bar thumbs; absent for movies. */
+	seriesPosterImageId: string | null,
 	/**  Episode metadata: season number (1-based), available for Episode items. */
 	seasonNumber: number | null,
 	/**  Episode metadata: episode number within season (1-based), available for Episode items. */
