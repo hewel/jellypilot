@@ -3771,10 +3771,8 @@ fn map_continue_watching_item(
   item: jellyfin_api::models::BaseItemDto,
 ) -> Option<VideoLibraryItem> {
   let image_type = match item.r#type? {
-    jellyfin_api::models::BaseItemKind::Episode | jellyfin_api::models::BaseItemKind::Series => {
-      jellyfin_api::models::ImageType::Primary
-    }
-    _ => jellyfin_api::models::ImageType::Thumb,
+    jellyfin_api::models::BaseItemKind::Episode => jellyfin_api::models::ImageType::Thumb,
+    _ => jellyfin_api::models::ImageType::Primary,
   };
 
   map_video_home_item(server_url, item, image_type)
@@ -4702,8 +4700,8 @@ fn map_emby_continue_watching_item(
   item: emby_api::models::BaseItemDto,
 ) -> Option<VideoLibraryItem> {
   let image_type = match item.r#type.as_deref()? {
-    "Episode" | "Series" => "Primary",
-    _ => "Thumb",
+    "Episode" => "Thumb",
+    _ => "Primary",
   };
 
   map_emby_video_home_item(server_url, item, image_type)

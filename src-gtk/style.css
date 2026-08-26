@@ -67,9 +67,23 @@
 }
 
 .jellypilot-bar-volume {
-  min-width: 88px;
-  padding-top: 0;
-  padding-bottom: 0;
+  min-width: 140px;
+}
+
+.jellypilot-bar-volume > trough {
+  min-height: 4px;
+  border-radius: 99px;
+}
+
+.jellypilot-bar-volume > trough > highlight {
+  min-height: 4px;
+  border-radius: 99px;
+}
+
+.jellypilot-bar-volume > trough > slider {
+  min-width: 14px;
+  min-height: 14px;
+  margin: -5px;
 }
 
 .jellypilot-track-list {

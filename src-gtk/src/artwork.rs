@@ -148,6 +148,10 @@ impl ArtworkAdapter {
     ArtworkLoadTicket(self.lock_state().generation)
   }
 
+  pub(crate) fn cached(&self, image_id: &str) -> Option<DecodedArtwork> {
+    self.lock_state().cache.get(image_id)
+  }
+
   pub(crate) fn set_disk_cache_enabled(&self, enabled: bool) {
     self.disk_cache.set_enabled(enabled);
   }

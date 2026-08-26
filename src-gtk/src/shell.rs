@@ -349,10 +349,7 @@ impl PlaybackRequest {
   fn started_artwork_image_id(&self) -> Option<String> {
     match self {
       Self::Library(item, _) => item.artwork_image_id.clone(),
-      Self::Detail(item, _) => item
-        .backdrop_image_id
-        .clone()
-        .or_else(|| item.artwork_image_id.clone()),
+      Self::Detail(item, _) => item.artwork_image_id.clone(),
       Self::ReplaceMedia(_) => None,
       _ => None,
     }
@@ -1885,8 +1882,10 @@ impl Component for AppModel {
                   };
                   playback_started_title = Some(item.name.clone());
                   self.playback.active_item = Some(item);
-                  self.playback.active_artwork_image_id = started_artwork_image_id;
-                  refresh_artwork = true;
+                  if started_artwork_image_id.is_some() {
+                    self.playback.active_artwork_image_id = started_artwork_image_id;
+                    refresh_artwork = true;
+                  }
                   self.playback.identity = Some(identity.clone());
                   self.playback.tracks = PlaybackTrackState::Loading {
                     identity: identity.clone(),
@@ -3433,35 +3432,94 @@ impl AppModel {
           let shelf = self.media_shelf(title, &items, sender);
           self.ui.home_content.append(&shelf);
         }
-        self
-          .ui
-          .home_content
-          .append(&self.library_shortcuts_section(sender));
+        let libraries = self.library_shortcuts_section(sender);
+        self.ui.home_content.append(&libraries);
       }
     }
   }
 
-  fn library_shortcuts_section(&self, sender: &ComponentSender<Self>) -> gtk::Widget {
-    let group = adw::PreferencesGroup::new();
-    group.set_title("Libraries");
+  fn library_shortcuts_section(&mut self, sender: &ComponentSender<Self>) -> gtk::Widget {
+    let section = gtk::Box::new(gtk::Orientation::Vertical, 12);
+    let title = gtk::Label::new(Some("Libraries"));
+    title.add_css_class("title-2");
+    title.set_xalign(0.0);
+    section.append(&title);
     if let Some(message) = &self.shortcuts_error {
-      group.set_description(Some(message));
-    } else if self.shortcuts.is_empty() {
-      group.set_description(Some("No video libraries available."));
-    } else {
-      for shortcut in &self.shortcuts {
-        let button = gtk::Button::with_label(&shortcut.name);
-        button.add_css_class("flat");
-        button.set_halign(gtk::Align::Start);
-        let shortcut = shortcut.clone();
-        let sender = sender.clone();
-        button.connect_clicked(move |_| {
-          sender.input(AppMessage::OpenLibrary(shortcut.clone()));
-        });
-        group.add(&button);
-      }
+      section.append(&dim_label(message));
+      return section.upcast();
     }
-    group.upcast()
+    if self.shortcuts.is_empty() {
+      section.append(&dim_label("No video libraries available."));
+      return section.upcast();
+    }
+    let row = gtk::Box::new(gtk::Orientation::Horizontal, 12);
+    let shortcuts = self.shortcuts.clone();
+    for shortcut in &shortcuts {
+      row.append(&self.library_shortcut_card(shortcut, sender));
+    }
+    let scroll = gtk::ScrolledWindow::builder()
+      .child(&row)
+      .hscrollbar_policy(gtk::PolicyType::Automatic)
+      .vscrollbar_policy(gtk::PolicyType::Never)
+      .propagate_natural_width(true)
+      .build();
+    section.append(&scroll);
+    section.upcast()
+  }
+
+  fn library_shortcut_card(
+    &mut self,
+    shortcut: &VideoLibraryShortcut,
+    sender: &ComponentSender<Self>,
+  ) -> gtk::Widget {
+    let card = gtk::Box::new(gtk::Orientation::Vertical, 6);
+    card.set_width_request(POSTER_FRAME_WIDTH);
+    let button = gtk::Button::new();
+    button.set_has_frame(false);
+    let column = gtk::Box::new(gtk::Orientation::Vertical, 6);
+    let artwork_overlay = gtk::Overlay::new();
+    artwork_overlay.add_css_class("jellypilot-poster");
+    artwork_overlay.set_overflow(gtk::Overflow::Hidden);
+    artwork_overlay.set_size_request(POSTER_FRAME_WIDTH, POSTER_FRAME_HEIGHT);
+    let picture = cover_picture(POSTER_FRAME_WIDTH, POSTER_FRAME_HEIGHT);
+    let fallback = gtk::Image::from_icon_name(FALLBACK_ARTWORK_ICON);
+    fallback.set_pixel_size(48);
+    fallback.set_halign(gtk::Align::Center);
+    fallback.set_valign(gtk::Align::Center);
+    artwork_overlay.set_child(Some(&picture));
+    artwork_overlay.add_overlay(&fallback);
+    self.queue_artwork(
+      picture,
+      fallback,
+      shortcut.artwork_image_id.as_deref(),
+      sender,
+    );
+    column.append(&artwork_overlay);
+    let text = gtk::Box::builder()
+      .orientation(gtk::Orientation::Vertical)
+      .spacing(2)
+      .build();
+    let title = gtk::Label::new(Some(&shortcut.name));
+    title.set_xalign(0.0);
+    title.set_ellipsize(gtk::pango::EllipsizeMode::End);
+    title.set_max_width_chars(18);
+    text.append(&title);
+    let details = dim_label(&library_shortcut_caption(shortcut));
+    details.set_ellipsize(gtk::pango::EllipsizeMode::End);
+    details.set_max_width_chars(18);
+    text.append(&details);
+    column.append(&text);
+    button.set_child(Some(&column));
+    let accessible_label = format!("Open library {}", shortcut.name);
+    button.set_tooltip_text(Some(&accessible_label));
+    button.update_property(&[gtk::accessible::Property::Label(&accessible_label)]);
+    let shortcut = shortcut.clone();
+    let sender = sender.clone();
+    button.connect_clicked(move |_| {
+      sender.input(AppMessage::OpenLibrary(shortcut.clone()));
+    });
+    card.append(&button);
+    card.upcast()
   }
 
   fn select_library_shortcut(&self, shortcut_id: &str) {
@@ -4260,6 +4318,12 @@ impl AppModel {
       return;
     }
     let started_artwork_image_id = request.started_artwork_image_id();
+    if request_kind == PlaybackRequestKind::Start {
+      if let Some(image_id) = started_artwork_image_id.clone() {
+        self.playback.active_artwork_image_id = Some(image_id);
+        self.queue_playback_artwork(sender);
+      }
+    }
     let started_item = request.started_item();
     let track_identity = request.identity().cloned();
     let Some(mut controller) = self.playback.controller.take() else {
@@ -5257,14 +5321,20 @@ impl AppModel {
     let Some(image_id) = self.playback.active_artwork_image_id.clone() else {
       return;
     };
+    if let Some(decoded) = self.artwork.cached(&image_id) {
+      if let Ok(texture) = decoded.texture() {
+        self.ui.playback_artwork.set_paintable(Some(&texture));
+        self.ui.playback_artwork_fallback.set_visible(false);
+        return;
+      }
+    }
     let artwork = Arc::clone(&self.artwork);
-    let artwork_ticket = artwork.ticket();
     let client = Arc::clone(&self.client);
     let session = self.requests.session_generation();
     let view = self.playback_artwork_view;
     sender.oneshot_command(async move {
       let result = artwork
-        .load_with_ticket(&client, &image_id, artwork_ticket)
+        .load_with_ticket(&client, &image_id, artwork.ticket())
         .await
         .map_err(|_| ());
       AppCommand::Artwork {
@@ -6284,19 +6354,9 @@ impl AppModel {
       .or(now_playing.map(|item| item.title.as_str()))
       .unwrap_or("");
     self.ui.playback_title.set_label(title);
-    let elapsed_total = snapshot
-      .map(playback_position)
-      .unwrap_or_else(|| "00:00 / 00:00".to_owned());
-    let subtitle = self
-      .playback
-      .active_item
-      .as_ref()
-      .and_then(|item| item.series_name.as_deref())
-      .map(str::trim)
-      .filter(|name| !name.is_empty())
-      .map(|series| format!("{series} · {elapsed_total}"))
-      .unwrap_or(elapsed_total);
+    let subtitle = playback_meta_subtitle(self.playback.active_item.as_ref());
     self.ui.playback_subtitle.set_label(&subtitle);
+    self.ui.playback_subtitle.set_visible(!subtitle.is_empty());
     let status = playback_bar_status(
       self.playback.error.as_deref(),
       self.playback.unavailable.as_deref(),
@@ -6520,9 +6580,10 @@ impl Ui {
     let root = adw::ToolbarView::new();
     let playback_controls_syncing = Rc::new(Cell::new(false));
     let playback_artwork = cover_picture(PLAYER_THUMB_SIZE, PLAYER_THUMB_SIZE);
-    playback_artwork.set_hexpand(false);
-    playback_artwork.set_vexpand(false);
-    playback_artwork.set_can_shrink(false);
+    playback_artwork.set_hexpand(true);
+    playback_artwork.set_vexpand(true);
+    playback_artwork.set_halign(gtk::Align::Fill);
+    playback_artwork.set_valign(gtk::Align::Fill);
     let playback_artwork_fallback = gtk::Image::from_icon_name(FALLBACK_ARTWORK_ICON);
     playback_artwork_fallback.set_pixel_size(16);
     playback_artwork_fallback.set_halign(gtk::Align::Center);
@@ -6640,8 +6701,9 @@ impl Ui {
     volume.set_draw_value(false);
     volume.set_sensitive(false);
     volume.set_hexpand(false);
-    volume.set_size_request(88, -1);
-    volume.update_property(&[gtk::accessible::Property::Label("Volume")]);
+    volume.set_vexpand(false);
+    volume.set_valign(gtk::Align::Center);
+    volume.set_size_request(140, -1);
     volume.connect_change_value({
       let sender = sender.clone();
       let playback_controls_syncing = Rc::clone(&playback_controls_syncing);
@@ -7904,6 +7966,39 @@ fn playback_time_label() -> gtk::Label {
   label
 }
 
+fn playback_meta_subtitle(item: Option<&MediaItem>) -> String {
+  let Some(item) = item else {
+    return String::new();
+  };
+  if !item.item_type.eq_ignore_ascii_case("episode") {
+    return String::new();
+  }
+  let series = item
+    .series_name
+    .as_deref()
+    .map(str::trim)
+    .filter(|name| !name.is_empty());
+  match (series, item.parent_index_number, item.index_number) {
+    (Some(series), Some(season), Some(episode)) => {
+      format!("{series} · S{season} E{episode}")
+    }
+    (Some(series), _, _) => series.to_owned(),
+    (_, Some(season), Some(episode)) => format!("S{season} E{episode} · {}", item.name),
+    _ => item.name.clone(),
+  }
+}
+
+fn library_shortcut_caption(shortcut: &VideoLibraryShortcut) -> String {
+  let kind = match library_kind(&shortcut.collection_type) {
+    VideoLibraryKind::TvShows => "TV Shows",
+    VideoLibraryKind::Movies => "Movies",
+  };
+  match shortcut.item_count {
+    Some(count) => format!("{kind} · {count}"),
+    None => kind.to_owned(),
+  }
+}
+
 fn clear_box(container: &gtk::Box) {
   while let Some(child) = container.first_child() {
     container.remove(&child);
@@ -8266,15 +8361,6 @@ fn detail_metadata(detail: &VideoItemDetail) -> String {
     details.push("Favorite".to_owned());
   }
   details.join(" · ")
-}
-
-fn playback_position(snapshot: &PlaybackSnapshot) -> String {
-  let transport = &snapshot.transport;
-  format!(
-    "{} / {}",
-    format_duration(transport.time_pos),
-    format_duration(transport.duration)
-  )
 }
 
 fn playback_notice(notice: Option<String>, warnings: &[PlaybackWarning]) -> Option<String> {
