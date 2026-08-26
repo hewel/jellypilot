@@ -44,8 +44,8 @@ build() {
 
   bun install --frozen-lockfile --ignore-scripts
   JELLYPILOT_FFMPEG_ASSET_DIR="$srcdir" \
-    bun run ffmpeg:prepare --target x86_64-unknown-linux-gnu
-  bun run ffmpeg:verify --target x86_64-unknown-linux-gnu
+    bun run task ffmpeg prepare --target x86_64-unknown-linux-gnu
+  bun run task ffmpeg prepare --verify --target x86_64-unknown-linux-gnu
   bun tauri build --no-bundle --ci
 }
 

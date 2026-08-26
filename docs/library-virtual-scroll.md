@@ -148,10 +148,10 @@ entry can retry.
 JavaScript or declarations. Regenerate it from the Rust wrapper whenever its exported DTO boundary
 changes; builds and checks must generate it before TypeScript or Rsbuild consumes it.
 
-The wrapper pins `wasm-pack` 0.15.0. `bun run wasm:install` installs that exact version when it is
-missing or mismatched. Use `bun run wasm:build:dev` for a debuggable module and
-`bun run wasm:build:release` for production output; `bun run wasm:build` selects release normally and
-development output for the WebDriver build. These wrappers run the equivalent of:
+The dispatcher pins `wasm-pack` 0.15.0. `bun run task wasm install` installs that exact version when
+it is missing or mismatched. Use `bun run task wasm build --dev` for a debuggable module and
+`bun run task wasm build --release` for production output; `bun run task wasm build` selects release
+normally and development output for the WebDriver build. These commands run the equivalent of:
 
 ```bash
 wasm-pack build crates/jellypilot-core-wasm \
@@ -347,11 +347,11 @@ cross-crate contract. Do not invoke Cargo directly; use repository Bun scripts:
 
 ```bash
 bun run test -- tests/library-browse-layout.test.ts tests/app-shell.test.tsx
-bun run rust:test
+bun run task rust test
 bun run check
-bun run typecheck:e2e
-bun run build:e2e
-bun run test:e2e --spec e2e/specs/library-virtual-scroll.e2e.ts
+bun run task e2e typecheck
+bun run task e2e build
+bun run task e2e test --spec e2e/specs/library-virtual-scroll.e2e.ts
 git diff --check
 ```
 

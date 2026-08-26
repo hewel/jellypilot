@@ -326,7 +326,7 @@ function reviewWindow(): NiriWindow {
   );
   if (matches.length === 0) {
     throw new Error(
-      `No '${REVIEW_WINDOW_TITLE}' window found. Start it with bun run review:parity -- launch.`,
+      `No '${REVIEW_WINDOW_TITLE}' window found. Start it with bun run task review parity launch.`,
     );
   }
   return matches.find((window) => window.title === REVIEW_WINDOW_TITLE) ?? matches[0];
@@ -455,16 +455,16 @@ function help(): string {
   return `Tauri/WebKit parity review assistant (#141)
 
 Usage:
-  bun run review:parity -- launch
-  bun run review:parity -- doctor
-  bun run review:parity -- status
-  bun run review:parity -- next
-  bun run review:parity -- resize <screen> <viewport>
-  bun run review:parity -- capture <screen> <viewport> [--state <label>]
-  bun run review:parity -- record <screen> <viewport> --verdict pass|fail|pending
+  bun run task review parity launch
+  bun run task review parity doctor
+  bun run task review parity status
+  bun run task review parity next
+  bun run task review parity resize <screen> <viewport>
+  bun run task review parity capture <screen> <viewport> [--state <label>]
+  bun run task review parity record <screen> <viewport> --verdict pass|fail|pending
     [--states loaded,dialog] [--checks focus,portals,overflow]
     [--evidence <path-or-url>] [--notes <text>]
-  bun run review:parity -- report [--out <path>]
+  bun run task review parity report [--out <path>]
 
 Screens: ${Object.keys(SCREENS).join(', ')}
 Viewports: ${VIEWPORT_ORDER.map((viewport) => viewport.label).join(', ')}
@@ -495,7 +495,7 @@ async function main(argv: string[]): Promise<void> {
     return;
   }
   if (command === 'launch') {
-    run('bun', ['run', 'review:panda:tauri']);
+    run('bun', ['tauri', 'dev', '--config', 'src-tauri/tauri.panda-review.conf.json']);
     return;
   }
   if (command === 'status') {
@@ -509,9 +509,9 @@ async function main(argv: string[]): Promise<void> {
       return;
     }
     console.log(`Next: ${entry.screenLabel} at ${entry.viewport}`);
-    console.log(`Resize: bun run review:parity -- resize ${entry.screen} ${entry.viewport}`);
+    console.log(`Resize: bun run task review parity resize ${entry.screen} ${entry.viewport}`);
     console.log(
-      `Capture: bun run review:parity -- capture ${entry.screen} ${entry.viewport} --state <state>`,
+      `Capture: bun run task review parity capture ${entry.screen} ${entry.viewport} --state <state>`,
     );
     return;
   }

@@ -31,16 +31,16 @@ jobs:
         run: bun install --frozen-lockfile
 
       - name: Install pinned WASM toolchain
-        run: bun run wasm:install
+        run: bun run task wasm install
 
       - name: Format and Lint check
         run: bun run check
 
       - name: Run tests
-        run: bun run test:all
+        run: bun run task test --all
 
       - name: Run GTK startup smoke
-        run: xvfb-run -a env GSK_RENDERER=cairo bun run gtk:smoke
+        run: xvfb-run -a env GSK_RENDERER=cairo bun run task gtk run --smoke
 
       - name: Production build
         run: bun run build

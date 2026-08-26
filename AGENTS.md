@@ -43,10 +43,11 @@ Tauri v2 Jellyfin MPV Shim rewrite; external MPV controlled via JSON IPC (no lib
 bun run dev          # Start Rsbuild dev server (port 3000)
 bun run build        # Production build → dist/
 bun run test         # Rstest
-bun run test:watch   # Rstest watch mode
+bun run task test --watch  # Rstest watch mode
 bun run check        # Oxfmt/Oxlint + type/Rust checks (includes format + typecheck)
 bun run test:e2e     # Reuse an existing native E2E build
 bun run e2e:verify  # Full native path plus production-isolation proof
+bun run task         # List and run dispatcher subcommands directly
 
 # Tauri (run from project root)
 bun tauri dev       # Dev mode with hot reload
@@ -70,7 +71,7 @@ bun tauri build     # Production desktop build
 ## Git & Command Safety
 
 - **Git**: Never run `git stash`, `git reset`, or any destructive/broad git command. The only permitted git mutation is staging and committing specific named files in one step (`git add <files> && git commit`); no `git add -A`, `git add .`, or unstaged-sweeping commands.
-- **No cargo**: Never invoke `cargo` directly; use the Bun script wrappers (`bun run test:all`, `bun tauri …`).
+- **No cargo**: Never invoke `cargo` directly; use the `scripts/task.ts` dispatcher (`bun run task rust …`) or `bun tauri …`.
 - **No slow commands**: Prefer fast, focused commands (Oxfmt/Oxlint on touched files, filtered Rstest). Avoid full builds, full suites, and long-running verification unless the user explicitly asks.
 
 ## Anti-Patterns

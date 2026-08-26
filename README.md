@@ -213,7 +213,7 @@ cd jellypilot
 bun install --frozen-lockfile --ignore-scripts
 
 # Install the pinned WASM tool and target
-bun run wasm:install
+bun run task wasm install
 rustup target add wasm32-unknown-unknown
 
 # Build production binaries
@@ -281,13 +281,13 @@ explicit migration gates.
 | :----------------------- | :--------------------------- |
 | **Frontend Dev**         | `bun run dev`                |
 | **Tauri Dev**            | `bun tauri dev`              |
-| **GTK Dev (Linux)**      | `bun run gtk:run`            |
-| **GTK Startup Smoke**    | `bun run gtk:smoke`          |
+| **GTK Dev (Linux)**      | `bun run task gtk run`             |
+| **GTK Startup Smoke**    | `bun run task gtk run --smoke`     |
 | **Build Prod**           | `bun tauri build`            |
-| **Build WASM (dev)**     | `bun run wasm:build:dev`     |
-| **Build WASM (release)** | `bun run wasm:build:release` |
-| **Test**                 | `bun run test`               |
-| **Test Rust workspace**  | `bun run rust:test`          |
+| **Build WASM (dev)**     | `bun run task wasm build --dev`     |
+| **Build WASM (release)** | `bun run task wasm build --release` |
+| **Test**                 | `bun run test`                      |
+| **Test Rust workspace**  | `bun run task rust test`            |
 | **Lint/Format**          | `bun run check`              |
 
 The WASM build commands regenerate the ignored web package at

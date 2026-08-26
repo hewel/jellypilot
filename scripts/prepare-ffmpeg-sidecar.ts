@@ -99,7 +99,7 @@ const parseCli = Effect.fn('ffmpeg.parseCli')(function* (args: readonly string[]
     }
     return yield* sidecarError(
       `Unknown FFmpeg sidecar option: ${argument}\n` +
-        'Usage: bun run ffmpeg:prepare [--verify] [--target <rust-target-triple>]',
+        'Usage: bun run task ffmpeg prepare [--verify] [--target <rust-target-triple>]',
     );
   }
 
@@ -210,7 +210,9 @@ const materialize = Effect.fn('ffmpeg.materialize')(function* (
 
   if (options.verifyOnly) {
     const state = Option.isSome(existing) ? 'has the wrong checksum' : 'is missing';
-    return yield* sidecarError(`${options.outputPath} ${state}. Run \`bun run ffmpeg:prepare\`.`);
+    return yield* sidecarError(
+      `${options.outputPath} ${state}. Run \`bun run task ffmpeg prepare\`.`,
+    );
   }
 
   const sourcePath = Option.match(options.sourceDirectory, {

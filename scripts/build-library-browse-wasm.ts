@@ -30,7 +30,7 @@ const wasmPack = Bun.which('wasm-pack');
 if (wasmPack === null) {
   fail(
     `${REQUIRED_WASM_PACK_VERSION} is required to build the library browse WASM package.\n` +
-      'Install the pinned tool with `bun run wasm:install`.',
+      'Install the pinned tool with `bun run task wasm install`.',
   );
 }
 
@@ -44,7 +44,7 @@ if (versionResult.exitCode !== 0 || installedVersion !== REQUIRED_WASM_PACK_VERS
   const found = installedVersion.length > 0 ? installedVersion : 'an unreadable version';
   fail(
     `Library browse WASM requires ${REQUIRED_WASM_PACK_VERSION}; found ${found}.\n` +
-      'Install the pinned tool with `bun run wasm:install`.',
+      'Install the pinned tool with `bun run task wasm install`.',
   );
 }
 

@@ -10,10 +10,10 @@ ships regressions.
    changed contract: `cargo test --manifest-path src-tauri/Cargo.toml <module-or-name>` for Rust,
    `bun run test <path-or-name>` for frontend, plus formatting for touched files. Use when the
    change is confined to one module and alters no cross-module contract.
-2. **Suite** — for contract or cross-module changes: focused tests first, then `bun run test:all`
-   and `bun run check`. Use when exported signatures, shared types, generated bindings, or more
-   than one module change.
-3. **Native** — for desktop-boundary crossings: add `bun run build:e2e` and the focused permanent
+2. **Suite** — for contract or cross-module changes: focused tests first, then
+   `bun run task test --all` and `bun run check`. Use when exported signatures, shared types,
+   generated bindings, or more than one module change.
+3. **Native** — for desktop-boundary crossings: add `bun run task e2e build` and the focused permanent
    spec per [e2e.md](e2e.md) when acceptance crosses Tauri startup, IPC, post-mount routing,
    desktop interaction, or sandboxed persistence.
 

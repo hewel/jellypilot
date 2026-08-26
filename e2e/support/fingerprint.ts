@@ -163,14 +163,14 @@ export const verifyBuildManifest = Effect.fn('e2e.verifyBuildManifest')(function
     },
     catch: () =>
       new E2eStaleBuildError({
-        message: 'Native E2E build is missing. Run `bun run build:e2e` first.',
+        message: 'Native E2E build is missing. Run `bun run task e2e build` first.',
       }),
   });
   const manifest = yield* Schema.decodeUnknownEffect(BuildManifestSchema)(manifestJson).pipe(
     Effect.mapError(
       () =>
         new E2eStaleBuildError({
-          message: 'Native E2E manifest is invalid. Run `bun run build:e2e` again.',
+          message: 'Native E2E manifest is invalid. Run `bun run task e2e build` again.',
         }),
     ),
   );
@@ -179,18 +179,18 @@ export const verifyBuildManifest = Effect.fn('e2e.verifyBuildManifest')(function
     try: () => Promise.all([computeAppFingerprintAt(REPO_ROOT), hashFile(BINARY_PATH)]),
     catch: () =>
       new E2eStaleBuildError({
-        message: 'Could not verify the native E2E build. Run `bun run build:e2e` again.',
+        message: 'Could not verify the native E2E build. Run `bun run task e2e build` again.',
       }),
   });
 
   if (manifest.schemaVersion !== 2 || manifest.appFingerprint !== appFingerprint) {
     return yield* new E2eStaleBuildError({
-      message: 'Native E2E application inputs changed. Run `bun run build:e2e` again.',
+      message: 'Native E2E application inputs changed. Run `bun run task e2e build` again.',
     });
   }
   if (manifest.binaryHash !== binaryHash) {
     return yield* new E2eStaleBuildError({
-      message: 'Native E2E binary does not match its manifest. Run `bun run build:e2e` again.',
+      message: 'Native E2E binary does not match its manifest. Run `bun run task e2e build` again.',
     });
   }
 

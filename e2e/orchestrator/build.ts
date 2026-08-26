@@ -48,7 +48,7 @@ export const buildE2e = Effect.fn('e2e.build')(function* (baseEnv: NodeJS.Proces
   const afterFingerprint = yield* computeAppFingerprint();
   if (beforeFingerprint !== afterFingerprint) {
     return yield* new E2eBuildError({
-      message: 'E2E application inputs changed during the build; rerun `bun run build:e2e`.',
+      message: 'E2E application inputs changed during the build; rerun `bun run task e2e build`.',
     });
   }
 

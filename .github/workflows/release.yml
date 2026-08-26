@@ -76,10 +76,10 @@ jobs:
         run: bun install --frozen-lockfile --ignore-scripts
 
       - name: Prepare verified FFmpeg and FFprobe sidecars
-        run: bun run ffmpeg:prepare
+        run: bun run task ffmpeg prepare
 
       - name: Verify FFmpeg and FFprobe sidecars
-        run: bun run ffmpeg:verify
+        run: bun run task ffmpeg prepare --verify
 
       - name: Build Application
         run: bun tauri build

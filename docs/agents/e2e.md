@@ -13,17 +13,21 @@ their cheaper focused checks unless their acceptance criterion explicitly crosse
 
 ## Command contract
 
-- `bun run build:e2e` validates Bun 1.3.14, Node 22.11+, Rust 1.85+, builds the WebDriver-only
+- `bun run task e2e build` validates Bun 1.3.14, Node 22.11+, Rust 1.85+, builds the WebDriver-only
   frontend and debug Tauri binary, and writes a hash manifest under `.artifacts/e2e/build/`.
-- `bun run test:e2e` reuses that build and refuses missing, changed, or mismatched output. It never
-  rebuilds. Use `--spec e2e/specs/<name>.e2e.ts` for one permanent spec and `--headed` to use the
-  current display while retaining all storage/process isolation.
-- `bun run typecheck:e2e` checks the harness and permanent specs independently.
-- `bun run e2e` runs typecheck, build, then all permanent native specs.
-- `bun run check:e2e-isolation` builds the normal optimized unbundled application in a separate
+- `bun run task e2e test` reuses that build and refuses missing, changed, or mismatched output. It
+  never rebuilds. Use `--spec e2e/specs/<name>.e2e.ts` for one permanent spec and `--headed` to use
+  the current display while retaining all storage/process isolation.
+- `bun run task e2e typecheck` checks the harness and permanent specs independently.
+- `bun run task e2e isolation` builds the normal optimized unbundled application in a separate
   target and proves that normal config, dependency graph, frontend, and binary exclude automation.
-- `bun run e2e:verify` runs the complete native path followed by production isolation.
-- `bun run e2e:clean` removes only the sentinel-owned `.artifacts/e2e/` tree.
+- `bun run task e2e verify` runs the complete native path followed by production isolation.
+- `bun run task e2e clean` removes only the sentinel-owned `.artifacts/e2e/` tree.
+
+The dispatcher runs FFmpeg sidecar preparation and the development WASM build before `e2e build`
+and `e2e verify`, and the development WASM build before `e2e typecheck`; `--skip-setup` skips those
+setup steps. Directly invoking `e2e/cli.ts <subcommand>` with `tsx` remains supported internally, but
+`bun run task e2e <subcommand>` is the documented entry point.
 
 Build and isolation operations have a 15-minute cap. Each spec, including teardown, has a five-minute
 cap. Specs run one at a time, each in a new application process, embedded-driver port, HOME, TMPDIR,
