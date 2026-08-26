@@ -80,7 +80,7 @@ pub fn client_message_direction(args: &[String]) -> Option<AdjacentDirection> {
 #[cfg(test)]
 mod tests {
   use super::*;
-  use crate::jellyfin::intro_skipper::IntroSkipRange;
+  use jellypilot_session::IntroSkipRange;
 
   fn playback() -> PlaybackSession {
     PlaybackSession {

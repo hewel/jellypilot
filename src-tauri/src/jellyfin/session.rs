@@ -1,6 +1,7 @@
 //! Session manager - coordinates Jellyfin commands with MPV player.
 
 use jellypilot_playback_core::{AudioChannelLayout, SourceVideoProfile};
+use jellypilot_session::{JellyfinCommand, JellyfinWebSocket, JellyfinWebSocketEvent};
 use parking_lot::RwLock;
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -18,7 +19,6 @@ use super::play_resolution::{
 };
 use super::playback_events;
 use super::types::*;
-use super::websocket::{JellyfinCommand, JellyfinWebSocket, JellyfinWebSocketEvent};
 use crate::command::{AppNotification, NowPlayingChanged, NowPlayingState};
 use crate::config::{AppConfig, IntroSkipperMode};
 use crate::embedded_player::{
@@ -1785,8 +1785,8 @@ fn find_assignment_value_end(text: &str, value_start: usize, quote: Option<char>
 
 #[cfg(test)]
 mod tests {
-  use super::super::intro_skipper::{IntroSkipKind, IntroSkipRange};
   use super::*;
+  use jellypilot_session::{IntroSkipKind, IntroSkipRange};
   use std::sync::Arc;
   use tokio::io::{AsyncReadExt, AsyncWriteExt};
   use tokio::net::TcpListener;

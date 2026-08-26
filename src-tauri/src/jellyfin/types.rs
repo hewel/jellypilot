@@ -7,7 +7,7 @@ pub use jellypilot_media_server::{
   VideoLibraryItem, VideoLibraryPage, VideoLibraryPageRequest, VideoLibraryPlayMode,
   VideoLibraryPlayRequest, VideoLibraryShortcut, VideoSearchPage, VideoSearchRequest,
   VideoSeasonEpisodes, VideoSeasonEpisodesRequest, VideoShowDetail, VideoUserDataUpdate,
-  VideoUserDataUpdateRequest, WsMessage,
+  VideoUserDataUpdateRequest,
 };
 
 #[cfg(test)]

@@ -1815,7 +1815,42 @@ impl JellyfinClient {
   }
 
   /// Report only the media and control surface supported by the selected engine.
+  ///
+  /// Lenient variant: a non-success response is logged but not treated as an
+  /// error, preserving the historical session-start behavior.
   async fn report_capabilities_for(&self, engine: PlaybackEngineKind) -> Result<(), JellyfinError> {
+    let response = self.post_capabilities(engine).await?;
+    let status = response.status();
+    log::info!("Capabilities POST response status: {status}");
+    if !status.is_success() {
+      let text = response.text().await.unwrap_or_default();
+      log::error!("Capabilities POST failed: HTTP {} - {}", status, text);
+    }
+
+    Ok(())
+  }
+
+  /// Strict variant of `report_capabilities_for`: any non-success response
+  /// is an error so callers can honestly treat capability registration as
+  /// failed instead of appearing as a controllable target.
+  async fn report_capabilities_for_checked(
+    &self,
+    engine: PlaybackEngineKind,
+  ) -> Result<(), JellyfinError> {
+    let status = self.post_capabilities(engine).await?.status();
+    if status.is_success() {
+      Ok(())
+    } else {
+      Err(JellyfinError::HttpError(format!(
+        "Capabilities registration failed: HTTP {status}"
+      )))
+    }
+  }
+
+  async fn post_capabilities(
+    &self,
+    engine: PlaybackEngineKind,
+  ) -> Result<reqwest::Response, JellyfinError> {
     let (playable_media_types, supported_commands) = match engine {
       PlaybackEngineKind::EmbeddedWeb => (&["Video"][..], EMBEDDED_REMOTE_COMMANDS),
       PlaybackEngineKind::ExternalMpv => (&["Video", "Audio"][..], SUPPORTED_REMOTE_COMMANDS),
@@ -1842,15 +1877,8 @@ impl JellyfinClient {
       .await
       .map_err(|error| Self::request_transport_error("Authenticated API request", error))?;
 
-    let status = response.status();
-    Self::reject_authenticated_redirect(status)?;
-    log::info!("Capabilities POST response status: {status}");
-    if !status.is_success() {
-      let text = response.text().await.unwrap_or_default();
-      log::error!("Capabilities POST failed: HTTP {} - {}", status, text);
-    }
-
-    Ok(())
+    Self::reject_authenticated_redirect(response.status())?;
+    Ok(response)
   }
 
   /// Get the next episode in a series after the given episode.
@@ -2318,6 +2346,14 @@ impl<'a> JellyfinPlayback<'a> {
       PlaybackEngineKind::EmbeddedWeb => self.client.report_capabilities_for(engine).await,
       PlaybackEngineKind::ExternalMpv => self.report_capabilities().await,
     }
+  }
+  /// Strict capability registration: non-success responses are errors so the
+  /// caller can mark remote control unavailable instead of claiming it.
+  pub async fn report_capabilities_for_checked(
+    &self,
+    engine: PlaybackEngineKind,
+  ) -> Result<(), JellyfinError> {
+    self.client.report_capabilities_for_checked(engine).await
   }
 
   pub async fn get_next_episode(
@@ -6705,6 +6741,50 @@ mod tests {
     state.server_url = Some(server_url);
     state.access_token = Some("emby-token".to_string());
     state.user_id = Some("00000000-0000-0000-0000-000000000001".to_string());
+  }
+  #[tokio::test]
+  async fn checked_capabilities_registration_rejects_non_success_status() {
+    let client = JellyfinClient::new();
+    let (server_url, _requests) =
+      serve_owned_responses_with_requests(vec![("403 Forbidden".to_string(), "{}".to_string())])
+        .await;
+    connect_test_client(&client, server_url);
+
+    let error = client
+      .report_capabilities_for_checked(PlaybackEngineKind::ExternalMpv)
+      .await
+      .expect_err("non-success capability registration must fail in checked mode");
+    assert!(matches!(error, JellyfinError::HttpError(_)));
+  }
+
+  #[tokio::test]
+  async fn checked_capabilities_registration_accepts_success_status() {
+    let client = JellyfinClient::new();
+    let (server_url, _requests) =
+      serve_owned_responses_with_requests(vec![("204 No Content".to_string(), String::new())])
+        .await;
+    connect_test_client(&client, server_url);
+
+    client
+      .report_capabilities_for_checked(PlaybackEngineKind::ExternalMpv)
+      .await
+      .expect("successful capability registration should pass in checked mode");
+  }
+
+  #[tokio::test]
+  async fn lenient_capabilities_registration_tolerates_non_success_status() {
+    let client = JellyfinClient::new();
+    let (server_url, _requests) = serve_owned_responses_with_requests(vec![(
+      "500 Internal Server Error".to_string(),
+      "{}".to_string(),
+    )])
+    .await;
+    connect_test_client(&client, server_url);
+
+    client
+      .report_capabilities()
+      .await
+      .expect("lenient capability registration should preserve historical tolerance");
   }
 
   #[tokio::test]

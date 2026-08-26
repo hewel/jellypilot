@@ -11,13 +11,13 @@
 
 use std::sync::Arc;
 
+use jellypilot_session::{
+  evaluate_intro_skip, evaluate_manual_skip, IntroSkipAction, IntroSkipKind, IntroSkipMode,
+};
 use parking_lot::RwLock;
 use tauri::AppHandle;
 use tokio::sync::mpsc;
 
-use super::intro_skipper::{
-  evaluate_manual_skip, evaluate_skip, evaluate_skip_prompt, IntroSkipKind,
-};
 use super::mpv_action::MpvAction;
 use super::mpv_event::{
   apply_property_update, client_message_direction, is_natural_end, property_report_decision,
@@ -327,46 +327,40 @@ pub(super) async fn apply_intro_skipper(
     return;
   };
 
-  match intro_skipper_config.mode {
-    IntroSkipperMode::Automatic => {
-      let seek_target = {
-        let mut s = state.write();
-        s.playback
-          .as_mut()
-          .and_then(|playback| evaluate_skip(position_seconds, &mut playback.intro_skipper_ranges))
-      };
+  let mode = match intro_skipper_config.mode {
+    IntroSkipperMode::Automatic => IntroSkipMode::Automatic,
+    IntroSkipperMode::Manual => IntroSkipMode::Manual,
+    IntroSkipperMode::Off => IntroSkipMode::Off,
+  };
+  let action = {
+    let mut state = state.write();
+    state.playback.as_mut().and_then(|playback| {
+      evaluate_intro_skip(position_seconds, &mut playback.intro_skipper_ranges, mode)
+    })
+  };
 
-      if let Some(seek_target) = seek_target {
-        log::info!(
-          "Intro Skipper seeking from {:.3}s to {:.3}s",
-          position_seconds,
-          seek_target
-        );
-        let _ = action_tx.send(MpvAction::Seek(seek_target)).await;
-      }
+  match action {
+    Some(IntroSkipAction::Seek(seek_target)) => {
+      log::info!(
+        "Intro Skipper seeking from {:.3}s to {:.3}s",
+        position_seconds,
+        seek_target
+      );
+      let _ = action_tx.send(MpvAction::Seek(seek_target)).await;
     }
-    IntroSkipperMode::Manual => {
-      let prompt_kind = {
-        let mut s = state.write();
-        s.playback.as_mut().and_then(|playback| {
-          evaluate_skip_prompt(position_seconds, &mut playback.intro_skipper_ranges)
+    Some(IntroSkipAction::ShowPrompt(kind)) => {
+      let _ = action_tx
+        .send(MpvAction::ShowText {
+          text: format!(
+            "{} available - press {} to skip",
+            intro_skipper_label(kind),
+            intro_skipper_config.keybind_intro_skip
+          ),
+          duration_ms: 3000,
         })
-      };
-
-      if let Some(kind) = prompt_kind {
-        let _ = action_tx
-          .send(MpvAction::ShowText {
-            text: format!(
-              "{} available - press {} to skip",
-              intro_skipper_label(kind),
-              intro_skipper_config.keybind_intro_skip
-            ),
-            duration_ms: 3000,
-          })
-          .await;
-      }
+        .await;
     }
-    IntroSkipperMode::Off => {}
+    None => {}
   }
 }
 

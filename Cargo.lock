@@ -2738,6 +2738,7 @@ dependencies = [
  "jellypilot-media-server",
  "jellypilot-mpv",
  "jellypilot-playback-core",
+ "jellypilot-session",
  "log",
  "parking_lot",
  "reqwest",
@@ -2757,7 +2758,6 @@ dependencies = [
  "tauri-specta",
  "thiserror 2.0.18",
  "tokio",
- "tokio-tungstenite",
  "tokio-util",
  "url",
  "uuid",
@@ -2786,6 +2786,7 @@ dependencies = [
  "jellypilot-core",
  "jellypilot-media-server",
  "jellypilot-mpv",
+ "jellypilot-session",
  "keyring",
  "relm4",
  "serde",
@@ -2834,6 +2835,20 @@ dependencies = [
 [[package]]
 name = "jellypilot-playback-core"
 version = "1.5.0"
+
+[[package]]
+name = "jellypilot-session"
+version = "1.5.0"
+dependencies = [
+ "futures-util",
+ "jellypilot-media-server",
+ "log",
+ "parking_lot",
+ "serde_json",
+ "tokio",
+ "tokio-tungstenite",
+ "tokio-util",
+]
 
 [[package]]
 name = "jni"
@@ -2982,6 +2997,37 @@ name = "leb128fmt"
 version = "0.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "09edd9e8b54e49e587e4f6295a7d29c3ea94d469cb40ab8ca70b288248a81db2"
+
+[[package]]
+name = "libadwaita"
+version = "0.7.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "500135d29c16aabf67baafd3e7741d48e8b8978ca98bac39e589165c8dc78191"
+dependencies = [
+ "gdk4",
+ "gio 0.20.12",
+ "glib 0.20.12",
+ "gtk4",
+ "libadwaita-sys",
+ "libc",
+ "pango 0.20.12",
+]
+
+[[package]]
+name = "libadwaita-sys"
+version = "0.7.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6680988058c2558baf3f548a370e4e78da3bf7f08469daa822ac414842c912db"
+dependencies = [
+ "gdk4-sys",
+ "gio-sys 0.20.10",
+ "glib-sys 0.20.10",
+ "gobject-sys 0.20.10",
+ "gtk4-sys",
+ "libc",
+ "pango-sys 0.20.10",
+ "system-deps 7.0.8",
+]
 
 [[package]]
 name = "libappindicator"
@@ -4242,6 +4288,7 @@ dependencies = [
  "fragile",
  "futures",
  "gtk4",
+ "libadwaita",
  "once_cell",
  "relm4-macros",
  "tokio",
@@ -5932,6 +5979,7 @@ dependencies = [
  "bytes",
  "futures-core",
  "futures-sink",
+ "futures-util",
  "pin-project-lite",
  "tokio",
 ]
