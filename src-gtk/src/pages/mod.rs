@@ -4,6 +4,7 @@ pub(crate) mod detail;
 pub(crate) mod diagnostics;
 pub(crate) mod home;
 pub(crate) mod login;
+pub(crate) mod player;
 pub(crate) mod settings;
 
 #[derive(Clone, Default)]

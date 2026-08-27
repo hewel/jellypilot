@@ -1,6 +1,4 @@
-use std::cell::Cell;
 use std::path::PathBuf;
-use std::rc::Rc;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -10,11 +8,11 @@ use jellypilot_media_server::{
 };
 
 use jellypilot_mpv::{has_mpv_option, write_input_conf, PlayerState};
-use jellypilot_session::{IntroSkipKind, IntroSkipMode, IntroSkipRange};
+use jellypilot_session::{IntroSkipMode, IntroSkipRange};
 use relm4::adw::prelude::*;
 use relm4::{adw, gtk, Component, ComponentParts, ComponentSender, RelmApp};
 
-use crate::artwork::{ArtworkAdapter, DecodedArtwork, FALLBACK_ARTWORK_ICON};
+use crate::artwork::{ArtworkAdapter, DecodedArtwork};
 use crate::artwork_binder::{ArtworkBinder, ArtworkSettlement, ArtworkSlot, ArtworkSurface};
 use crate::artwork_cache::ArtworkCacheStats;
 use crate::auth_storage::{AuthStore, SavedProfileKey, SavedProfileSummary};
@@ -29,6 +27,7 @@ use crate::pages::home::{self, HomeContext, HomeEffect, HomeEvent, HomePage};
 use crate::pages::login::{
   self, run_auth_operation, LoginContext, LoginEffect, LoginEvent, LoginPage,
 };
+use crate::pages::player::{self, PlayerContext, PlayerEffect, PlayerEvent, PlayerPage};
 use crate::pages::settings::{
   self, ConnectionView, SettingsContext, SettingsEffect, SettingsEvent, SettingsPage,
 };
@@ -38,9 +37,8 @@ use crate::playback::{
   PlaybackRefreshState, PlaybackSnapshot, PlaybackStartPosition, TrackInfo,
 };
 use crate::playback_session::{
-  AdjacentAvailability, AdjacentDirection, ControllerCommand, ControllerSettlement, EffectId,
-  IntroAvailability, PlaybackEffect, PlaybackEvent, PlaybackInput, PlaybackIntent, PlaybackNotice,
-  PlaybackSession, SessionView, TracksView,
+  AdjacentDirection, ControllerCommand, ControllerSettlement, EffectId, IntroAvailability,
+  PlaybackEffect, PlaybackEvent, PlaybackInput, PlaybackIntent, PlaybackSession,
 };
 use crate::request_gate::{
   ImageCacheToken, RemotePlayToken, RemoteToken, RequestGate, SessionToken,
@@ -50,7 +48,6 @@ pub(crate) use crate::pages::LoadState;
 
 const APP_ID: &str = "io.github.hewel.JellyPilot.GtkPreview";
 const SMOKE_APP_ID: &str = "io.github.hewel.JellyPilot.GtkPreview.Smoke";
-const PLAYER_THUMB_SIZE: i32 = 36;
 struct AppModel {
   client: Arc<JellyfinClient>,
   auth_store: AuthStore,
@@ -60,6 +57,7 @@ struct AppModel {
   home_page: HomePage,
   browse_page: BrowsePage,
   detail_page: DetailPage,
+  player: PlayerPage,
   intro_mode: config::IntroMode,
   diagnostics: Diagnostics,
   saved_profiles: LoadState<Vec<SavedProfileSummary>>,
@@ -73,19 +71,10 @@ struct AppModel {
   remote_socket: Option<Arc<jellypilot_session::JellyfinWebSocket>>,
   playback_session: PlaybackSession,
   playback_controller: Option<PlaybackController>,
-  playback_item: Option<MediaItem>,
-  playback_artwork_image_id: Option<String>,
   playback_reconfigure_pending: bool,
-  playback_engine_error: Option<String>,
   remote_disconnect_pending: bool,
   quitting: bool,
   ui: Ui,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum TrackKind {
-  Audio,
-  Subtitle,
 }
 
 #[derive(Clone, Copy, Default, Eq, PartialEq)]
@@ -132,17 +121,14 @@ pub(crate) enum AppMessage {
   Home(home::Message),
   Browse(browse::Message),
   Detail(detail::Message),
+  Player(player::Message),
   Disconnect,
   ShowHome,
   SearchRequested,
-  TogglePaused,
   SetPaused(bool),
   Seek(f64),
   SetVolume(f64),
   SetMuted(bool),
-  SelectAudioTrack(i64),
-  SelectSubtitleTrack(Option<i64>),
-  PlayAdjacent(AdjacentDirection),
   StopPlayback,
   RefreshPlayback,
   QuitRequested,
@@ -297,34 +283,10 @@ struct Ui {
   authenticated: adw::NavigationSplitView,
   connection_status: gtk::Label,
   search: gtk::SearchEntry,
-  playback_bar: gtk::Box,
-  playback_artwork: gtk::Image,
-  playback_artwork_fallback: gtk::Image,
-  playback_title: gtk::Label,
-  playback_subtitle: gtk::Label,
-  playback_status_icon: gtk::Image,
-  playback_status_label: gtk::Label,
-  playback_info: gtk::Stack,
   disconnect_button: gtk::Button,
   content: gtk::Stack,
   nav_home: gtk::ToggleButton,
   shortcuts: gtk::Box,
-
-  position_label: gtk::Label,
-  duration_label: gtk::Label,
-  previous_button: gtk::Button,
-  pause_button: gtk::Button,
-  next_button: gtk::Button,
-  stop_button: gtk::Button,
-  seek: gtk::Scale,
-  volume: gtk::Scale,
-  mute_button: gtk::ToggleButton,
-  audio_button: gtk::MenuButton,
-  subtitle_button: gtk::MenuButton,
-  audio_track_list: gtk::Box,
-  subtitle_track_list: gtk::Box,
-  playback_controls_syncing: Rc<Cell<bool>>,
-  sender: ComponentSender<AppModel>,
 }
 
 #[relm4::component]
@@ -353,12 +315,14 @@ impl Component for AppModel {
     let home_page = HomePage::build(sender.input_sender());
     let browse_page = BrowsePage::build(sender.input_sender());
     let detail_page = DetailPage::build(sender.input_sender());
+    let player = PlayerPage::build(sender.input_sender());
     let ui = Ui::new(
       &sender,
       login.root(),
       home_page.root(),
       browse_page.root(),
       detail_page.root(),
+      player.root(),
     );
 
     root.set_content(Some(&ui.toast_overlay));
@@ -416,6 +380,7 @@ impl Component for AppModel {
       home_page,
       browse_page,
       detail_page,
+      player,
       intro_mode,
       diagnostics,
       saved_profiles: LoadState::Loading,
@@ -429,10 +394,7 @@ impl Component for AppModel {
       remote_socket: None,
       playback_session: PlaybackSession::default(),
       playback_controller: None,
-      playback_item: None,
-      playback_artwork_image_id: None,
       playback_reconfigure_pending: false,
-      playback_engine_error: None,
       remote_disconnect_pending: false,
       quitting: false,
       ui,
@@ -454,6 +416,7 @@ impl Component for AppModel {
       AppMessage::Home(message) => self.dispatch_home(message, &sender),
       AppMessage::Browse(message) => self.dispatch_browse(message, &sender),
       AppMessage::Detail(message) => self.dispatch_detail(message, &sender),
+      AppMessage::Player(message) => self.dispatch_player(message, &sender),
       AppMessage::Disconnect => {
         if !self.login.is_profile_busy() {
           self.disconnect(&sender);
@@ -461,7 +424,6 @@ impl Component for AppModel {
       }
       AppMessage::ShowHome => self.show_home(&sender),
       AppMessage::SearchRequested => self.start_search(&sender),
-      AppMessage::TogglePaused => self.dispatch_playback(PlaybackIntent::TogglePaused, &sender),
       AppMessage::SetPaused(paused) => {
         self.dispatch_playback(PlaybackIntent::SetPaused(paused), &sender)
       }
@@ -471,15 +433,6 @@ impl Component for AppModel {
       }
       AppMessage::SetMuted(muted) => {
         self.dispatch_playback(PlaybackIntent::SetMuted(muted), &sender)
-      }
-      AppMessage::SelectAudioTrack(id) => {
-        self.dispatch_playback(PlaybackIntent::SelectAudioTrack(id), &sender)
-      }
-      AppMessage::SelectSubtitleTrack(id) => {
-        self.dispatch_playback(PlaybackIntent::SelectSubtitleTrack(id), &sender)
-      }
-      AppMessage::PlayAdjacent(direction) => {
-        self.dispatch_playback(PlaybackIntent::PlayAdjacent(direction), &sender)
       }
       AppMessage::StopPlayback => self.dispatch_playback(PlaybackIntent::Stop, &sender),
       AppMessage::RefreshPlayback => self.dispatch_playback(PlaybackIntent::Tick, &sender),
@@ -1036,6 +989,64 @@ impl AppModel {
     }
   }
 
+  fn dispatch_player(&mut self, message: player::Message, sender: &ComponentSender<Self>) {
+    let effects = self.with_player_context(|page, cx| page.handle(message, cx));
+    self.execute_player_effects(effects, sender);
+  }
+
+  fn dispatch_player_event(&mut self, event: PlayerEvent<'_>, sender: &ComponentSender<Self>) {
+    let effects = self.with_player_context(|page, cx| page.handle_event(event, cx));
+    self.execute_player_effects(effects, sender);
+  }
+
+  fn with_player_context<R>(
+    &mut self,
+    f: impl FnOnce(&mut PlayerPage, &mut PlayerContext<'_>) -> R,
+  ) -> R {
+    let mut cx = PlayerContext {
+      artwork: self.artwork.as_ref(),
+      binder: &mut self.artwork_binder,
+    };
+    f(&mut self.player, &mut cx)
+  }
+
+  fn execute_player_effects(&mut self, effects: Vec<PlayerEffect>, sender: &ComponentSender<Self>) {
+    for effect in effects {
+      match effect {
+        PlayerEffect::TogglePaused => self.dispatch_playback(PlaybackIntent::TogglePaused, sender),
+        PlayerEffect::Seek(position) => {
+          self.dispatch_playback(PlaybackIntent::Seek(position), sender)
+        }
+        PlayerEffect::SetVolume(volume) => {
+          self.dispatch_playback(PlaybackIntent::SetVolume(volume), sender)
+        }
+        PlayerEffect::SetMuted(muted) => {
+          self.dispatch_playback(PlaybackIntent::SetMuted(muted), sender)
+        }
+        PlayerEffect::SelectAudioTrack(id) => {
+          self.dispatch_playback(PlaybackIntent::SelectAudioTrack(id), sender)
+        }
+        PlayerEffect::SelectSubtitleTrack(id) => {
+          self.dispatch_playback(PlaybackIntent::SelectSubtitleTrack(id), sender)
+        }
+        PlayerEffect::PlayAdjacent(direction) => {
+          self.dispatch_playback(PlaybackIntent::PlayAdjacent(direction), sender)
+        }
+        PlayerEffect::Stop => self.dispatch_playback(PlaybackIntent::Stop, sender),
+        PlayerEffect::ArtworkLoad {
+          surface,
+          slot,
+          image_id,
+        } => self.spawn_artwork_load(surface, slot, image_id, sender),
+      }
+    }
+  }
+
+  fn render_player(&self) {
+    let view = self.playback_session.view();
+    self.player.render(&view);
+  }
+
   fn visible_page(&self) -> Option<String> {
     self
       .ui
@@ -1046,9 +1057,7 @@ impl AppModel {
 
   fn begin_page_artwork_view(&mut self, sender: &ComponentSender<Self>) {
     self.artwork.cancel_pending();
-    if self.playback_artwork_image_id.is_some() {
-      self.queue_playback_artwork(sender);
-    }
+    self.dispatch_player_event(PlayerEvent::RefreshArtwork, sender);
   }
 
   fn spawn_artwork_load(
@@ -1095,14 +1104,7 @@ impl AppModel {
       ArtworkSurface::Home => self.home_page.apply_artwork(slot, decoded),
       ArtworkSurface::Browse => self.browse_page.apply_artwork(slot, decoded),
       ArtworkSurface::Detail => self.detail_page.apply_artwork(slot, decoded),
-      ArtworkSurface::PlayerBar => match decoded.texture() {
-        Ok(texture) => {
-          self.ui.playback_artwork.set_paintable(Some(&texture));
-          self.ui.playback_artwork_fallback.set_visible(false);
-          true
-        }
-        Err(_) => false,
-      },
+      ArtworkSurface::PlayerBar => self.player.apply_artwork(slot, decoded),
     };
     if applied {
       self.diagnostics.reset_coalescing();
@@ -1118,7 +1120,7 @@ impl AppModel {
   ) {
     for effect in effects {
       match effect {
-        SettingsEffect::ReconfigurePlayback => self.reconfigure_playback_controller(),
+        SettingsEffect::ReconfigurePlayback => self.reconfigure_playback_controller(sender),
         SettingsEffect::IntroModeChanged(mode) => {
           self.intro_mode = mode;
           self.dispatch_playback(
@@ -1614,7 +1616,7 @@ impl AppModel {
     ) {
       Ok(controller) => {
         self.playback_controller = Some(controller);
-        self.playback_engine_error = None;
+        self.dispatch_player_event(PlayerEvent::EngineAvailable, sender);
         self.apply_playback_event(PlaybackEvent::EngineAvailability(true), sender);
       }
       Err(error) => {
@@ -1624,9 +1626,12 @@ impl AppModel {
           format!("External MPV playback is unavailable: {error}."),
         );
         self.playback_controller = None;
-        self.playback_engine_error = Some(format!(
-          "Playback is unavailable: {error}. Install MPV and try again."
-        ));
+        self.dispatch_player_event(
+          PlayerEvent::EngineUnavailable(format!(
+            "Playback is unavailable: {error}. Install MPV and try again."
+          )),
+          sender,
+        );
         self.apply_playback_event(PlaybackEvent::EngineAvailability(false), sender);
       }
     }
@@ -1693,16 +1698,15 @@ impl AppModel {
     let _client = std::mem::replace(&mut self.client, Arc::new(JellyfinClient::new()));
     self.dispatch_playback(PlaybackIntent::Disconnect, sender);
     self.apply_playback_event(PlaybackEvent::EngineAvailability(false), sender);
-    self.playback_item = None;
-    self.playback_artwork_image_id = None;
-    self.playback_engine_error = None;
+    self.dispatch_player_event(PlayerEvent::EngineAvailable, sender);
+    self.dispatch_player_event(PlayerEvent::Stopped, sender);
     self.connection = ConnectionPhase::SignedOut;
     self.active_saved_profile = None;
     self.requests.set_detail_item(None);
     self.invalidate_user_data_update();
 
     self.ui.search.set_text("");
-    self.ui.playback_bar.set_visible(false);
+    self.render_player();
     self.ui.search.set_sensitive(false);
     // Activating the static group anchor first clears any dynamic library shortcut,
     // then deactivating it leaves the signed-out shell with no selected destination.
@@ -1919,7 +1923,7 @@ impl AppModel {
   fn apply_playback_input(&mut self, input: PlaybackInput, sender: &ComponentSender<Self>) {
     let effects = self.playback_session.handle(input, Instant::now());
     self.execute_playback_effects(effects, sender);
-    self.render_playback_bar();
+    self.render_player();
   }
 
   fn execute_playback_effects(
@@ -1944,7 +1948,7 @@ impl AppModel {
           });
         }
         PlaybackEffect::LookupAdjacent(id, direction) => {
-          let Some(item) = self.playback_item.clone() else {
+          let Some(item) = self.player.item().cloned() else {
             self.apply_playback_event(
               PlaybackEvent::AdjacentSettled {
                 id,
@@ -1980,11 +1984,7 @@ impl AppModel {
     sender: &ComponentSender<Self>,
   ) {
     if let ControllerCommand::Start { item, .. } = &command {
-      self.playback_item = Some(media_item_from_playable(item));
-      if let Some(image_id) = playable_artwork_image_id(item) {
-        self.playback_artwork_image_id = Some(image_id);
-        self.queue_playback_artwork(sender);
-      }
+      self.dispatch_player_event(PlayerEvent::Started(item), sender);
     }
     let Some(mut controller) = self.playback_controller.take() else {
       let settlement = match command {
@@ -2114,9 +2114,7 @@ impl AppModel {
     self.record_playback_settlement(&settlement);
     self.apply_playback_event(PlaybackEvent::ControllerSettled { id, settlement }, sender);
     if self.playback_session.view().now_playing.is_none() {
-      self.playback_item = None;
-      self.playback_artwork_image_id = None;
-      self.queue_playback_artwork(sender);
+      self.dispatch_player_event(PlayerEvent::Stopped, sender);
     }
     if let Some(tracks) = tracks {
       self.apply_playback_event(PlaybackEvent::TracksSettled { id, result: tracks }, sender);
@@ -2148,7 +2146,7 @@ impl AppModel {
             "Playback completed with one or more non-fatal reporting warnings.",
           );
         }
-        if let Some(item) = &self.playback_item {
+        if let Some(item) = self.player.item() {
           self.record_diagnostic(
             DiagnosticLevel::Info,
             DiagnosticCategory::Playback,
@@ -2288,7 +2286,8 @@ impl AppModel {
       refresh_sensitive: connected,
     });
   }
-  fn reconfigure_playback_controller(&mut self) {
+
+  fn reconfigure_playback_controller(&mut self, sender: &ComponentSender<Self>) {
     let settings = config::load();
     let playback_config = playback_controller_config(&settings);
     if self.playback_controller.is_none() {
@@ -2299,7 +2298,7 @@ impl AppModel {
       match PlaybackController::discover(Arc::clone(&self.client), playback_config) {
         Ok(controller) => {
           self.playback_controller = Some(controller);
-          self.playback_engine_error = None;
+          self.dispatch_player_event(PlayerEvent::EngineAvailable, sender);
           self.playback_reconfigure_pending = false;
           self.playback_session.handle(
             PlaybackInput::Event(PlaybackEvent::EngineAvailability(true)),
@@ -2308,7 +2307,7 @@ impl AppModel {
           self
             .settings
             .set_config_status("Saved. MPV is available for the next playback start.");
-          self.render_playback_bar();
+          self.render_player();
         }
         Err(_) => {
           self.playback_reconfigure_pending = false;
@@ -2349,26 +2348,6 @@ impl AppModel {
     );
   }
 
-  fn queue_playback_artwork(&mut self, sender: &ComponentSender<Self>) {
-    let slot = self.artwork_binder.bind_player_bar();
-    self
-      .ui
-      .playback_artwork
-      .set_paintable(None::<&gtk::gdk::Paintable>);
-    self.ui.playback_artwork_fallback.set_visible(true);
-    let Some(image_id) = self.playback_artwork_image_id.clone() else {
-      return;
-    };
-    if let Some(decoded) = self.artwork.cached(&image_id) {
-      if let Ok(texture) = decoded.texture() {
-        self.ui.playback_artwork.set_paintable(Some(&texture));
-        self.ui.playback_artwork_fallback.set_visible(false);
-        return;
-      }
-    }
-    self.spawn_artwork_load(ArtworkSurface::PlayerBar, slot, image_id, sender);
-  }
-
   fn record_diagnostic(
     &mut self,
     level: DiagnosticLevel,
@@ -2399,213 +2378,6 @@ impl AppModel {
       .toast_overlay
       .add_toast(adw::Toast::new(title.as_ref()));
   }
-
-  fn render_playback_bar(&self) {
-    let view = self.playback_session.view();
-    let now_playing = view.now_playing.as_ref();
-    self.ui.playback_bar.set_visible(now_playing.is_some());
-    let title = now_playing
-      .map(|playing| playing.item.title.as_str())
-      .unwrap_or("");
-    self.ui.playback_title.set_label(title);
-    if let Some(prompt) = view.intro_prompt {
-      self.ui.playback_title.set_tooltip_text(Some(&format!(
-        "{} skip available",
-        intro_skip_label(prompt.kind)
-      )));
-    } else {
-      self.ui.playback_title.set_tooltip_text(None::<&str>);
-    }
-    let subtitle = playback_meta_subtitle(self.playback_item.as_ref());
-    self.ui.playback_subtitle.set_label(&subtitle);
-    self.ui.playback_subtitle.set_visible(!subtitle.is_empty());
-    let error = view.notice.as_ref().and_then(|notice| match notice {
-      PlaybackNotice::Failed(_) => playback_notice(notice),
-      _ => None,
-    });
-    let status = playback_bar_status(
-      error.as_deref(),
-      self.playback_engine_error.as_deref(),
-      view.busy,
-    );
-    match status {
-      Some((icon, message)) => {
-        self.ui.playback_status_icon.set_icon_name(Some(icon));
-        self.ui.playback_status_label.set_label(message);
-        self.ui.playback_info.set_visible_child_name("status");
-      }
-      None => self.ui.playback_info.set_visible_child_name("meta"),
-    }
-    let active = now_playing.is_some() && view.engine_available && !view.busy;
-    self.ui.pause_button.set_sensitive(active);
-    self.ui.stop_button.set_sensitive(active);
-    self.ui.seek.set_sensitive(active);
-    self.ui.volume.set_sensitive(active);
-    self.ui.mute_button.set_sensitive(active);
-    if let Some(playing) = now_playing {
-      let duration = playing.duration_seconds.unwrap_or(playing.position_seconds);
-      self
-        .ui
-        .position_label
-        .set_label(&format_duration(playing.position_seconds));
-      self.ui.duration_label.set_label(&format_duration(duration));
-      self.ui.pause_button.set_icon_name(if playing.paused {
-        "media-playback-start-symbolic"
-      } else {
-        "media-playback-pause-symbolic"
-      });
-      self
-        .ui
-        .pause_button
-        .set_tooltip_text(Some(if playing.paused {
-          "Resume playback"
-        } else {
-          "Pause playback"
-        }));
-      self.ui.mute_button.set_icon_name(if playing.muted {
-        "audio-volume-muted-symbolic"
-      } else {
-        "audio-volume-high-symbolic"
-      });
-      self
-        .ui
-        .mute_button
-        .set_tooltip_text(Some(if playing.muted { "Unmute" } else { "Mute" }));
-      self.ui.playback_controls_syncing.set(true);
-      self.ui.seek.set_range(0.0, duration.max(1.0));
-      let position = playing.position_seconds.clamp(0.0, duration.max(1.0));
-      if (self.ui.seek.value() - position).abs() > f64::EPSILON {
-        self.ui.seek.set_value(position);
-      }
-      let volume = playing.volume.clamp(0.0, 100.0);
-      if (self.ui.volume.value() - volume).abs() > f64::EPSILON {
-        self.ui.volume.set_value(volume);
-      }
-      if self.ui.mute_button.is_active() != playing.muted {
-        self.ui.mute_button.set_active(playing.muted);
-      }
-      self.ui.playback_controls_syncing.set(false);
-    } else {
-      self.ui.position_label.set_label("00:00");
-      self.ui.duration_label.set_label("00:00");
-    }
-    self.render_track_controls(active, &view);
-    self.render_adjacent_controls(active, &view);
-  }
-
-  fn render_track_controls(&self, active: bool, view: &SessionView) {
-    self.ui.playback_controls_syncing.set(true);
-    match &view.tracks {
-      TracksView::Ready { tracks, .. } => {
-        let audio = tracks
-          .iter()
-          .filter(|track| track.track_type == "audio")
-          .collect::<Vec<_>>();
-        let subtitles = tracks
-          .iter()
-          .filter(|track| track.track_type == "sub")
-          .collect::<Vec<_>>();
-        populate_track_list(
-          &self.ui.audio_track_list,
-          audio.iter().copied(),
-          None,
-          TrackKind::Audio,
-          &self.ui.playback_controls_syncing,
-          &self.ui.sender,
-        );
-        populate_track_list(
-          &self.ui.subtitle_track_list,
-          subtitles.iter().copied(),
-          Some("Off"),
-          TrackKind::Subtitle,
-          &self.ui.playback_controls_syncing,
-          &self.ui.sender,
-        );
-        let audio_available = !audio.is_empty();
-        let subtitle_available = !subtitles.is_empty();
-        self
-          .ui
-          .audio_button
-          .set_sensitive(active && audio_available);
-        self
-          .ui
-          .subtitle_button
-          .set_sensitive(active && subtitle_available);
-        self
-          .ui
-          .audio_button
-          .set_tooltip_text(Some(if audio_available {
-            "Select the MPV audio track"
-          } else {
-            "MPV reported no audio tracks."
-          }));
-        self
-          .ui
-          .subtitle_button
-          .set_tooltip_text(Some(if subtitle_available {
-            "Select an MPV subtitle track or turn subtitles off"
-          } else {
-            "MPV reported no subtitle tracks."
-          }));
-      }
-      TracksView::Loading => {
-        self.clear_track_lists();
-        self
-          .ui
-          .audio_button
-          .set_tooltip_text(Some("Audio tracks are loading."));
-        self
-          .ui
-          .subtitle_button
-          .set_tooltip_text(Some("Subtitle tracks are loading."));
-      }
-      TracksView::Unavailable => {
-        self.clear_track_lists();
-        let reason = if !view.engine_available {
-          self
-            .playback_engine_error
-            .as_deref()
-            .unwrap_or("Playback controller is unavailable.")
-        } else {
-          "Track controls require active playback."
-        };
-        self.ui.audio_button.set_tooltip_text(Some(reason));
-        self.ui.subtitle_button.set_tooltip_text(Some(reason));
-      }
-    }
-    self.ui.playback_controls_syncing.set(false);
-  }
-
-  fn clear_track_lists(&self) {
-    clear_box(&self.ui.audio_track_list);
-    clear_box(&self.ui.subtitle_track_list);
-    self.ui.audio_button.set_sensitive(false);
-    self.ui.subtitle_button.set_sensitive(false);
-  }
-
-  fn render_adjacent_controls(&self, active: bool, view: &SessionView) {
-    let previous = &view.adjacent.previous;
-    let next = &view.adjacent.next;
-    let previous_available = matches!(previous, AdjacentAvailability::Available { .. });
-    let next_available = matches!(next, AdjacentAvailability::Available { .. });
-    self
-      .ui
-      .previous_button
-      .set_sensitive(active && previous_available);
-    self.ui.next_button.set_sensitive(active && next_available);
-    let busy_reason = view
-      .busy
-      .then_some("Another playback operation is in progress.");
-    let previous_reason =
-      busy_reason.unwrap_or_else(|| adjacent_control_reason(previous, AdjacentDirection::Previous));
-    let next_reason =
-      busy_reason.unwrap_or_else(|| adjacent_control_reason(next, AdjacentDirection::Next));
-    self
-      .ui
-      .previous_button
-      .set_tooltip_text(Some(previous_reason));
-    self.ui.next_button.set_tooltip_text(Some(next_reason));
-  }
 }
 
 impl Ui {
@@ -2615,202 +2387,12 @@ impl Ui {
     home: &gtk::Widget,
     browse: &gtk::ScrolledWindow,
     detail: &gtk::Widget,
+    player: &gtk::Box,
   ) -> Self {
     install_media_css();
     let toast_overlay = adw::ToastOverlay::new();
     let root = adw::ToolbarView::new();
-    let playback_controls_syncing = Rc::new(Cell::new(false));
-    let playback_artwork = gtk::Image::new();
-    playback_artwork.set_pixel_size(PLAYER_THUMB_SIZE);
-    let playback_artwork_fallback = gtk::Image::from_icon_name(FALLBACK_ARTWORK_ICON);
-    playback_artwork_fallback.set_pixel_size(16);
-    playback_artwork_fallback.set_halign(gtk::Align::Center);
-    playback_artwork_fallback.set_valign(gtk::Align::Center);
-    let artwork_frame = gtk::Overlay::new();
-    artwork_frame.add_css_class("jellypilot-rounded");
-    artwork_frame.add_css_class("jellypilot-playerbar-thumb");
-    artwork_frame.set_overflow(gtk::Overflow::Hidden);
-    artwork_frame.set_size_request(PLAYER_THUMB_SIZE, PLAYER_THUMB_SIZE);
-    artwork_frame.set_valign(gtk::Align::Center);
-    artwork_frame.set_child(Some(&playback_artwork));
-    artwork_frame.add_overlay(&playback_artwork_fallback);
-    let playback_title = gtk::Label::new(None);
-    playback_title.add_css_class("heading");
-    playback_title.set_xalign(0.0);
-    playback_title.set_ellipsize(gtk::pango::EllipsizeMode::End);
-    playback_title.set_hexpand(true);
-    let playback_subtitle = dim_label("");
-    playback_subtitle.set_xalign(0.0);
-    playback_subtitle.set_ellipsize(gtk::pango::EllipsizeMode::End);
-    let playback_meta = gtk::Box::new(gtk::Orientation::Vertical, 0);
-    playback_meta.set_valign(gtk::Align::Center);
-    playback_meta.set_hexpand(true);
-    playback_meta.append(&playback_title);
-    playback_meta.append(&playback_subtitle);
-    let playback_status_icon = gtk::Image::from_icon_name("content-loading-symbolic");
-    playback_status_icon.set_pixel_size(16);
-    let playback_status_label = gtk::Label::new(None);
-    playback_status_label.set_xalign(0.0);
-    playback_status_label.set_ellipsize(gtk::pango::EllipsizeMode::End);
-    playback_status_label.set_hexpand(true);
-    let playback_status = gtk::Box::new(gtk::Orientation::Horizontal, 8);
-    playback_status.set_valign(gtk::Align::Center);
-    playback_status.append(&playback_status_icon);
-    playback_status.append(&playback_status_label);
-    let playback_info = gtk::Stack::new();
-    playback_info.set_hexpand(true);
-    playback_info.set_hhomogeneous(true);
-    playback_info.add_named(&playback_meta, Some("meta"));
-    playback_info.add_named(&playback_status, Some("status"));
-    playback_info.set_visible_child_name("meta");
-    let previous_button = gtk::Button::from_icon_name("media-skip-backward-symbolic");
-    previous_button.add_css_class("flat");
-    previous_button.add_css_class("circular");
-    previous_button.set_tooltip_text(Some("Previous episode is unavailable."));
-    previous_button.update_property(&[gtk::accessible::Property::Label("Previous episode")]);
-    previous_button.set_sensitive(false);
-    previous_button.connect_clicked({
-      let sender = sender.clone();
-      move |_| sender.input(AppMessage::PlayAdjacent(AdjacentDirection::Previous))
-    });
-    let pause_button = gtk::Button::from_icon_name("media-playback-start-symbolic");
-    pause_button.add_css_class("flat");
-    pause_button.add_css_class("circular");
-    pause_button.set_tooltip_text(Some("Pause or resume playback"));
-    pause_button.update_property(&[gtk::accessible::Property::Label("Pause or resume playback")]);
-    pause_button.set_sensitive(false);
-    pause_button.connect_clicked({
-      let sender = sender.clone();
-      move |_| sender.input(AppMessage::TogglePaused)
-    });
-    let next_button = gtk::Button::from_icon_name("media-skip-forward-symbolic");
-    next_button.add_css_class("flat");
-    next_button.add_css_class("circular");
-    next_button.set_tooltip_text(Some("Next episode is unavailable."));
-    next_button.update_property(&[gtk::accessible::Property::Label("Next episode")]);
-    next_button.set_sensitive(false);
-    next_button.connect_clicked({
-      let sender = sender.clone();
-      move |_| sender.input(AppMessage::PlayAdjacent(AdjacentDirection::Next))
-    });
-    let stop_button = gtk::Button::from_icon_name("media-playback-stop-symbolic");
-    stop_button.add_css_class("flat");
-    stop_button.add_css_class("circular");
-    stop_button.set_tooltip_text(Some("Stop playback"));
-    stop_button.update_property(&[gtk::accessible::Property::Label("Stop playback")]);
-    stop_button.set_sensitive(false);
-    stop_button.connect_clicked({
-      let sender = sender.clone();
-      move |_| sender.input(AppMessage::StopPlayback)
-    });
-    let transport = gtk::Box::new(gtk::Orientation::Horizontal, 2);
-    transport.set_valign(gtk::Align::Center);
-    transport.append(&previous_button);
-    transport.append(&pause_button);
-    transport.append(&next_button);
-    transport.append(&stop_button);
-    let position_label = playback_time_label();
-    let duration_label = playback_time_label();
-    let time = gtk::Box::new(gtk::Orientation::Horizontal, 6);
-    time.set_valign(gtk::Align::Center);
-    time.append(&position_label);
-    time.append(&gtk::Label::new(Some("/")));
-    time.append(&duration_label);
-    let seek = gtk::Scale::with_range(gtk::Orientation::Horizontal, 0.0, 1.0, 1.0);
-    seek.add_css_class("jellypilot-bar-seek");
-    seek.set_draw_value(false);
-    seek.set_sensitive(false);
-    seek.set_hexpand(true);
-    seek.set_halign(gtk::Align::Fill);
-    seek.set_valign(gtk::Align::Center);
-    seek.update_property(&[gtk::accessible::Property::Label("Playback position")]);
-    seek.connect_change_value({
-      let sender = sender.clone();
-      let playback_controls_syncing = Rc::clone(&playback_controls_syncing);
-      move |_, _, value| {
-        if !playback_controls_syncing.get() {
-          sender.input(AppMessage::Seek(value));
-        }
-        gtk::glib::Propagation::Proceed
-      }
-    });
-    let volume = gtk::Scale::with_range(gtk::Orientation::Horizontal, 0.0, 100.0, 1.0);
-    volume.add_css_class("jellypilot-bar-volume");
-    volume.set_draw_value(false);
-    volume.set_sensitive(false);
-    volume.set_hexpand(false);
-    volume.set_vexpand(false);
-    volume.set_valign(gtk::Align::Center);
-    volume.set_size_request(140, -1);
-    volume.connect_change_value({
-      let sender = sender.clone();
-      let playback_controls_syncing = Rc::clone(&playback_controls_syncing);
-      move |_, _, value| {
-        if !playback_controls_syncing.get() {
-          sender.input(AppMessage::SetVolume(value));
-        }
-        gtk::glib::Propagation::Proceed
-      }
-    });
-    let mute_button = gtk::ToggleButton::new();
-    mute_button.set_icon_name("audio-volume-high-symbolic");
-    mute_button.add_css_class("flat");
-    mute_button.set_tooltip_text(Some("Mute"));
-    mute_button.set_sensitive(false);
-    mute_button.update_property(&[gtk::accessible::Property::Label("Mute")]);
-    mute_button.connect_toggled({
-      let sender = sender.clone();
-      let playback_controls_syncing = Rc::clone(&playback_controls_syncing);
-      move |button| {
-        if !playback_controls_syncing.get() {
-          sender.input(AppMessage::SetMuted(button.is_active()));
-        }
-      }
-    });
-    let audio_track_list = gtk::Box::new(gtk::Orientation::Vertical, 0);
-    audio_track_list.add_css_class("jellypilot-track-list");
-    let audio_popover = gtk::Popover::new();
-    audio_popover.set_child(Some(&audio_track_list));
-    let audio_button = gtk::MenuButton::new();
-    audio_button.add_css_class("flat");
-    audio_button.add_css_class("circular");
-    audio_button.set_icon_name("audio-x-generic-symbolic");
-    audio_button.set_tooltip_text(Some("Audio track"));
-    audio_button.set_sensitive(false);
-    audio_button.set_popover(Some(&audio_popover));
-    audio_button.update_property(&[gtk::accessible::Property::Label("Audio track")]);
-    let subtitle_track_list = gtk::Box::new(gtk::Orientation::Vertical, 0);
-    subtitle_track_list.add_css_class("jellypilot-track-list");
-    let subtitle_popover = gtk::Popover::new();
-    subtitle_popover.set_child(Some(&subtitle_track_list));
-    let subtitle_button = gtk::MenuButton::new();
-    subtitle_button.add_css_class("flat");
-    subtitle_button.add_css_class("circular");
-    subtitle_button.set_icon_name("media-view-subtitles-symbolic");
-    subtitle_button.set_tooltip_text(Some("Subtitle track"));
-    subtitle_button.set_sensitive(false);
-    subtitle_button.set_popover(Some(&subtitle_popover));
-    subtitle_button.update_property(&[gtk::accessible::Property::Label("Subtitle track")]);
-    let row = gtk::Box::new(gtk::Orientation::Horizontal, 10);
-    row.set_margin_top(4);
-    row.set_margin_bottom(8);
-    row.set_margin_start(12);
-    row.set_margin_end(12);
-    row.set_valign(gtk::Align::Center);
-    row.append(&artwork_frame);
-    row.append(&playback_info);
-    row.append(&transport);
-    row.append(&time);
-    row.append(&volume);
-    row.append(&mute_button);
-    row.append(&audio_button);
-    row.append(&subtitle_button);
-    let playback_bar = gtk::Box::new(gtk::Orientation::Vertical, 0);
-    playback_bar.add_css_class("jellypilot-playerbar");
-    playback_bar.set_visible(false);
-    playback_bar.append(&seek);
-    playback_bar.append(&row);
-    root.add_bottom_bar(&playback_bar);
+    root.add_bottom_bar(player);
     toast_overlay.set_child(Some(&root));
     root.set_content(Some(login));
 
@@ -2927,33 +2509,10 @@ impl Ui {
       authenticated,
       connection_status,
       search,
-      playback_bar,
-      playback_artwork,
-      playback_artwork_fallback,
-      playback_title,
-      playback_subtitle,
-      playback_status_icon,
-      playback_status_label,
-      playback_info,
       disconnect_button,
       content,
       nav_home,
       shortcuts,
-      position_label,
-      duration_label,
-      previous_button,
-      pause_button,
-      next_button,
-      stop_button,
-      seek,
-      volume,
-      mute_button,
-      audio_button,
-      subtitle_button,
-      audio_track_list,
-      subtitle_track_list,
-      playback_controls_syncing,
-      sender: sender.clone(),
     }
   }
 }
@@ -2970,35 +2529,6 @@ fn navigation_button(label: &str, icon: &str) -> gtk::ToggleButton {
   row.append(&label);
   button.set_child(Some(&row));
   button
-}
-
-fn playback_time_label() -> gtk::Label {
-  let label = gtk::Label::new(Some("00:00"));
-  label.add_css_class("dim-label");
-  label.add_css_class("monospace");
-  label
-}
-
-fn playback_meta_subtitle(item: Option<&MediaItem>) -> String {
-  let Some(item) = item else {
-    return String::new();
-  };
-  if !item.item_type.eq_ignore_ascii_case("episode") {
-    return String::new();
-  }
-  let series = item
-    .series_name
-    .as_deref()
-    .map(str::trim)
-    .filter(|name| !name.is_empty());
-  match (series, item.parent_index_number, item.index_number) {
-    (Some(series), Some(season), Some(episode)) => {
-      format!("{series} · S{season} E{episode}")
-    }
-    (Some(series), _, _) => series.to_owned(),
-    (_, Some(season), Some(episode)) => format!("S{season} E{episode} · {}", item.name),
-    _ => item.name.clone(),
-  }
 }
 
 fn install_media_css() {
@@ -3021,22 +2551,6 @@ fn connection_label(client: &JellyfinClient) -> String {
     (Some(server), None) => format!("Connected to {server}"),
     _ => "Connected".to_owned(),
   }
-}
-
-fn playback_notice(notice: &PlaybackNotice) -> Option<String> {
-  Some(match notice {
-    PlaybackNotice::Finished => "Playback finished.".to_owned(),
-    PlaybackNotice::Stopped => "Playback stopped.".to_owned(),
-    PlaybackNotice::Failed(error) => format!("{error}."),
-    PlaybackNotice::Warnings(warnings) => {
-      let details = warnings
-        .iter()
-        .map(ToString::to_string)
-        .collect::<Vec<_>>()
-        .join("; ");
-      format!("Playback is active, but {details}.")
-    }
-  })
 }
 
 fn configured_client(settings: &LoginPrefill) -> Arc<JellyfinClient> {
@@ -3080,189 +2594,6 @@ const fn session_intro_mode(mode: config::IntroMode) -> IntroSkipMode {
     config::IntroMode::Manual => IntroSkipMode::Manual,
     config::IntroMode::Off => IntroSkipMode::Off,
   }
-}
-
-const fn intro_skip_label(kind: IntroSkipKind) -> &'static str {
-  match kind {
-    IntroSkipKind::Introduction => "Intro",
-    IntroSkipKind::Credits => "Credits",
-  }
-}
-
-#[cfg_attr(not(test), allow(dead_code))]
-fn selected_track_id(tracks: &[TrackInfo], kind: TrackKind, selected: u32) -> Option<Option<i64>> {
-  let track_type = match kind {
-    TrackKind::Audio => "audio",
-    TrackKind::Subtitle => "sub",
-  };
-  if kind == TrackKind::Subtitle && selected == 0 {
-    return Some(None);
-  }
-  let index = if kind == TrackKind::Subtitle {
-    selected.checked_sub(1)?
-  } else {
-    selected
-  };
-  tracks
-    .iter()
-    .filter(|track| track.track_type == track_type)
-    .nth(index as usize)
-    .map(|track| Some(track.id))
-}
-
-fn track_label(track: &TrackInfo) -> String {
-  match (track.title.as_deref(), track.language.as_deref()) {
-    (Some(title), Some(language)) if !title.eq_ignore_ascii_case(language) => {
-      format!("{title} · {language}")
-    }
-    (Some(title), _) => title.to_owned(),
-    (None, Some(language)) => language.to_owned(),
-    (None, None) => format!("Track {}", track.id),
-  }
-}
-
-fn populate_track_list<'a>(
-  list: &gtk::Box,
-  tracks: impl Iterator<Item = &'a TrackInfo>,
-  off_label: Option<&str>,
-  kind: TrackKind,
-  syncing: &Rc<Cell<bool>>,
-  sender: &ComponentSender<AppModel>,
-) {
-  clear_box(list);
-  let tracks = tracks.collect::<Vec<_>>();
-  let off_selected = off_label.is_some() && tracks.iter().all(|track| !track.selected);
-  let mut group = None;
-  if let Some(label) = off_label {
-    let off = gtk::CheckButton::with_label(label);
-    off.set_active(off_selected);
-    off.connect_toggled({
-      let sender = sender.clone();
-      let syncing = Rc::clone(syncing);
-      move |button| {
-        if !syncing.get() && button.is_active() {
-          sender.input(AppMessage::SelectSubtitleTrack(None));
-        }
-      }
-    });
-    group = Some(off.clone());
-    list.append(&off);
-  }
-  for track in tracks {
-    let row = gtk::CheckButton::with_label(&track_label(track));
-    if let Some(group) = &group {
-      row.set_group(Some(group));
-    } else {
-      group = Some(row.clone());
-    }
-    row.set_active(track.selected);
-    let id = track.id;
-    row.connect_toggled({
-      let sender = sender.clone();
-      let syncing = Rc::clone(syncing);
-      move |button| {
-        if !syncing.get() && button.is_active() {
-          match kind {
-            TrackKind::Audio => sender.input(AppMessage::SelectAudioTrack(id)),
-            TrackKind::Subtitle => sender.input(AppMessage::SelectSubtitleTrack(Some(id))),
-          }
-        }
-      }
-    });
-    list.append(&row);
-  }
-}
-
-fn playback_bar_status<'a>(
-  error: Option<&'a str>,
-  unavailable: Option<&'a str>,
-  busy: bool,
-) -> Option<(&'static str, &'a str)> {
-  if let Some(error) = error {
-    return Some(("dialog-error-symbolic", error));
-  }
-  if let Some(unavailable) = unavailable {
-    return Some(("dialog-warning-symbolic", unavailable));
-  }
-  if busy {
-    return Some(("content-loading-symbolic", "Buffering…"));
-  }
-  None
-}
-
-fn adjacent_control_reason(
-  availability: &AdjacentAvailability,
-  direction: AdjacentDirection,
-) -> &str {
-  match availability {
-    AdjacentAvailability::Loading => "Checking adjacent episodes…",
-    AdjacentAvailability::Available { .. } => match direction {
-      AdjacentDirection::Previous => "Play previous episode",
-      AdjacentDirection::Next => "Play next episode",
-    },
-    AdjacentAvailability::Unavailable => match direction {
-      AdjacentDirection::Previous => "No previous episode is available.",
-      AdjacentDirection::Next => "No next episode is available.",
-    },
-    AdjacentAvailability::Idle => "Episode navigation requires active episode playback.",
-  }
-}
-
-fn playable_artwork_image_id(item: &Playable) -> Option<String> {
-  match item {
-    Playable::Library(item) => item
-      .series_poster_image_id
-      .clone()
-      .or_else(|| item.artwork_image_id.clone()),
-    Playable::Detail(item) => item
-      .series_poster_image_id
-      .clone()
-      .or_else(|| item.artwork_image_id.clone()),
-    Playable::Media(_) => None,
-  }
-}
-
-fn media_item_from_playable(item: &Playable) -> MediaItem {
-  match item {
-    Playable::Library(item) => MediaItem {
-      id: item.id.clone(),
-      name: item.name.clone(),
-      item_type: item.item_type.clone(),
-      series_id: item.series_id.clone(),
-      series_name: item.series_name.clone(),
-      season_name: None,
-      index_number: item.episode_number,
-      parent_index_number: item.season_number,
-      run_time_ticks: runtime_seconds_to_ticks(item.runtime_seconds),
-      overview: item.overview.clone(),
-      series_primary_image_tag: None,
-    },
-    Playable::Detail(item) => MediaItem {
-      id: item.id.clone(),
-      name: item.name.clone(),
-      item_type: item.item_type.clone(),
-      series_id: item.series_id.clone(),
-      series_name: item.series_name.clone(),
-      season_name: None,
-      index_number: item.episode_number,
-      parent_index_number: item.season_number,
-      run_time_ticks: runtime_seconds_to_ticks(item.runtime_seconds),
-      overview: item.overview.clone(),
-      series_primary_image_tag: None,
-    },
-    Playable::Media(item) => item.clone(),
-  }
-}
-
-fn runtime_seconds_to_ticks(seconds: Option<f64>) -> Option<i64> {
-  seconds
-    .filter(|seconds| seconds.is_finite() && *seconds >= 0.0)
-    .map(|seconds| (seconds * 10_000_000.0).round() as i64)
-}
-
-fn format_duration(seconds: f64) -> String {
-  let seconds = seconds.max(0.0).round() as u64;
-  format!("{:02}:{:02}", seconds / 60, seconds % 60)
 }
 
 /// Reports this device as a controllable Playback Target after the command socket
@@ -3420,40 +2751,6 @@ mod tests {
       remote_volume_value(Some(&serde_json::json!("invalid"))),
       None
     );
-  }
-
-  #[test]
-  fn track_selection_maps_filtered_rows_and_subtitle_off() {
-    let tracks = vec![
-      TrackInfo {
-        id: 3,
-        track_type: "audio".to_owned(),
-        title: Some("English".to_owned()),
-        language: Some("eng".to_owned()),
-        selected: true,
-      },
-      TrackInfo {
-        id: 8,
-        track_type: "sub".to_owned(),
-        title: Some("Spanish".to_owned()),
-        language: Some("spa".to_owned()),
-        selected: false,
-      },
-    ];
-
-    assert_eq!(
-      selected_track_id(&tracks, TrackKind::Audio, 0),
-      Some(Some(3))
-    );
-    assert_eq!(
-      selected_track_id(&tracks, TrackKind::Subtitle, 0),
-      Some(None)
-    );
-    assert_eq!(
-      selected_track_id(&tracks, TrackKind::Subtitle, 1),
-      Some(Some(8))
-    );
-    assert_eq!(selected_track_id(&tracks, TrackKind::Audio, 1), None);
   }
 
   #[test]
