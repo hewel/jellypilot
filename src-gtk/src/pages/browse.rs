@@ -609,23 +609,6 @@ impl BrowsePage {
       child.set_child(Some(&self.media_button(item, true, cx, effects)));
       flow.insert(&child, -1);
     }
-    // [DEBUG-browse-grid] temporary layout probe; remove after diagnosis.
-    gtk::glib::timeout_add_local_once(std::time::Duration::from_millis(600), {
-      let flow = flow.clone();
-      move || {
-        let mut widths = Vec::new();
-        let mut child = flow.first_child();
-        while let Some(widget) = child {
-          widths.push(widget.width());
-          child = widget.next_sibling();
-        }
-        eprintln!(
-          "[DEBUG-browse-grid] flow width={} min_children=1 max_children=6 children={:?}",
-          flow.width(),
-          widths
-        );
-      }
-    });
     flow.upcast()
   }
 

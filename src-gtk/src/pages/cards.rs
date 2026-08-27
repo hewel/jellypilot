@@ -61,8 +61,14 @@ pub(crate) fn poster_card(
   let (width, height) = card_frame_size(item);
   let card = gtk::Box::new(gtk::Orientation::Vertical, 6);
   card.set_width_request(width);
+  card.set_halign(gtk::Align::Center);
+  let clickable = gtk::Overlay::new();
   let button = gtk::Button::new();
   button.set_has_frame(false);
+  button.set_hexpand(true);
+  button.set_vexpand(true);
+  button.set_halign(gtk::Align::Fill);
+  button.set_valign(gtk::Align::Fill);
   let column = gtk::Box::new(gtk::Orientation::Vertical, 6);
   let (overlay, artwork) = poster_overlay(item, width, height, 48);
   column.append(&overlay);
@@ -80,12 +86,14 @@ pub(crate) fn poster_card(
   details.set_max_width_chars(18);
   text.append(&details);
   column.append(&text);
-  button.set_child(Some(&column));
+  clickable.set_child(Some(&column));
+  clickable.add_overlay(&button);
+  clickable.set_measure_overlay(&button, false);
   let accessible_label = format!("Open details for {}", item.name);
   button.set_tooltip_text(Some(&accessible_label));
   button.update_property(&[gtk::accessible::Property::Label(&accessible_label)]);
   button.connect_clicked(move |_| on_select());
-  card.append(&button);
+  card.append(&clickable);
   (card.upcast(), artwork)
 }
 
@@ -249,12 +257,12 @@ pub(crate) fn library_shortcut_card(
   artwork_overlay.add_css_class("jellypilot-poster");
   artwork_overlay.set_overflow(gtk::Overflow::Hidden);
   artwork_overlay.set_size_request(POSTER_FRAME_WIDTH, POSTER_FRAME_HEIGHT);
-  let picture = cover_picture(POSTER_FRAME_WIDTH, POSTER_FRAME_HEIGHT);
+  let (picture_frame, picture) = framed_cover_picture(POSTER_FRAME_WIDTH, POSTER_FRAME_HEIGHT);
   let fallback = gtk::Image::from_icon_name(FALLBACK_ARTWORK_ICON);
   fallback.set_pixel_size(48);
   fallback.set_halign(gtk::Align::Center);
   fallback.set_valign(gtk::Align::Center);
-  artwork_overlay.set_child(Some(&picture));
+  artwork_overlay.set_child(Some(&picture_frame));
   artwork_overlay.add_overlay(&fallback);
   let artwork = bind_image(shortcut.artwork_image_id.as_deref(), picture, fallback);
   column.append(&artwork_overlay);
@@ -316,6 +324,24 @@ pub(crate) fn cover_picture(width: i32, height: i32) -> gtk::Picture {
   picture.set_valign(gtk::Align::Fill);
   picture.set_size_request(width, height);
   picture
+}
+
+// Keep loaded paintables' intrinsic dimensions out of parent card measurements.
+fn framed_cover_picture(width: i32, height: i32) -> (adw::Clamp, gtk::Picture) {
+  let picture = cover_picture(width, height);
+  let height_clamp = adw::Clamp::new();
+  height_clamp.set_orientation(gtk::Orientation::Vertical);
+  height_clamp.set_maximum_size(height);
+  height_clamp.set_tightening_threshold(height);
+  height_clamp.set_child(Some(&picture));
+  height_clamp.set_vexpand(true);
+  let width_clamp = adw::Clamp::new();
+  width_clamp.set_maximum_size(width);
+  width_clamp.set_tightening_threshold(width);
+  width_clamp.set_child(Some(&height_clamp));
+  width_clamp.set_hexpand(true);
+  width_clamp.set_vexpand(true);
+  (width_clamp, picture)
 }
 
 pub(crate) fn item_caption(item: &VideoLibraryItem) -> String {
@@ -470,12 +496,12 @@ fn poster_overlay(
   artwork_overlay.add_css_class("jellypilot-poster");
   artwork_overlay.set_overflow(gtk::Overflow::Hidden);
   artwork_overlay.set_size_request(width, height);
-  let picture = cover_picture(width, height);
+  let (picture_frame, picture) = framed_cover_picture(width, height);
   let fallback = gtk::Image::from_icon_name(FALLBACK_ARTWORK_ICON);
   fallback.set_pixel_size(fallback_pixel_size);
   fallback.set_halign(gtk::Align::Center);
   fallback.set_valign(gtk::Align::Center);
-  artwork_overlay.set_child(Some(&picture));
+  artwork_overlay.set_child(Some(&picture_frame));
   artwork_overlay.add_overlay(&fallback);
   if let Some(badge) = status_badge(item) {
     artwork_overlay.add_overlay(&badge);
