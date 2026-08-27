@@ -2,14 +2,16 @@ use std::fmt;
 use std::ops::{Deref, DerefMut};
 use std::sync::{Arc, Mutex};
 
-use jellypilot_media_server::{MediaServerProvider, SavedSession};
+use jellypilot_media_server::{Credentials, MediaServerProvider, SavedSession};
 use keyring::{Entry, Error as KeyringError};
+use relm4::tokio::sync::oneshot;
 use serde::{Deserialize, Serialize};
 use zeroize::{Zeroize, Zeroizing};
 
 const KEYRING_SERVICE: &str = "io.github.hewel.JellyPilot.GtkPreview";
 const KEYRING_ACCOUNT: &str = "saved-media-server-profiles-v1";
 const STORAGE_VERSION: u32 = 1;
+const WORKER_THREAD_NAME: &str = "jellypilot-secret-service";
 
 #[derive(Serialize, Deserialize)]
 struct StoredProfiles {
@@ -44,6 +46,28 @@ impl Drop for SensitiveSavedSession {
 impl fmt::Debug for SensitiveSavedSession {
   fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
     formatter.write_str("SensitiveSavedSession([redacted])")
+  }
+}
+
+pub(crate) struct AuthCredentials(Credentials);
+
+impl Deref for AuthCredentials {
+  type Target = Credentials;
+
+  fn deref(&self) -> &Self::Target {
+    &self.0
+  }
+}
+
+impl Drop for AuthCredentials {
+  fn drop(&mut self) {
+    self.0.password.zeroize();
+  }
+}
+
+impl fmt::Debug for AuthCredentials {
+  fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+    formatter.write_str("AuthCredentials([redacted])")
   }
 }
 
@@ -104,10 +128,67 @@ impl fmt::Debug for SavedProfileKey {
 #[derive(Clone)]
 pub(crate) struct SavedProfileSummary {
   pub(crate) key: SavedProfileKey,
-  pub(crate) provider: MediaServerProvider,
+  provider: MediaServerProvider,
   pub(crate) server_url: String,
   pub(crate) server_name: Option<String>,
   pub(crate) user_name: String,
+}
+
+impl SavedProfileSummary {
+  pub(crate) const fn key(&self) -> &SavedProfileKey {
+    &self.key
+  }
+
+  pub(crate) const fn provider(&self) -> MediaServerProvider {
+    self.provider
+  }
+
+  pub(crate) fn server_url(&self) -> &str {
+    &self.server_url
+  }
+
+  pub(crate) fn user_name(&self) -> &str {
+    &self.user_name
+  }
+
+  pub(crate) fn title(&self) -> String {
+    format!("{}@{}", self.user_name, self.server_display_name())
+  }
+
+  pub(crate) const fn subtitle(&self) -> &'static str {
+    match self.provider {
+      MediaServerProvider::Jellyfin => "Jellyfin",
+      MediaServerProvider::Emby => "Emby",
+    }
+  }
+
+  pub(crate) fn restore_accessibility_label(&self) -> String {
+    format!(
+      "Restore saved sign-in for {} on {}",
+      self.user_name,
+      self.server_display_name()
+    )
+  }
+
+  pub(crate) fn forget_accessibility_label(&self) -> String {
+    format!(
+      "Forget saved sign-in for {} on {}",
+      self.user_name,
+      self.server_display_name()
+    )
+  }
+
+  pub(crate) fn forget_confirmation(&self) -> String {
+    format!(
+      "{} on {} will need a password to sign in again.",
+      self.user_name,
+      self.server_display_name()
+    )
+  }
+
+  fn server_display_name(&self) -> &str {
+    self.server_name.as_deref().unwrap_or(&self.server_url)
+  }
 }
 
 impl fmt::Debug for SavedProfileSummary {
@@ -157,14 +238,65 @@ impl Default for AuthStore {
 }
 
 impl AuthStore {
-  pub(crate) fn load_profiles(&self) -> Result<Vec<SavedProfileSummary>, AuthStorageError> {
+  pub(crate) const fn protect_credentials(credentials: Credentials) -> AuthCredentials {
+    AuthCredentials(credentials)
+  }
+
+  pub(crate) async fn load_profiles(&self) -> Result<Vec<SavedProfileSummary>, AuthStorageError> {
+    self.run(|store| store.load_profiles_blocking()).await
+  }
+
+  pub(crate) async fn load_session(
+    &self,
+    key: SavedProfileKey,
+  ) -> Result<SensitiveSavedSession, AuthStorageError> {
+    self
+      .run(move |store| store.load_session_blocking(&key))
+      .await
+  }
+
+  pub(crate) async fn save_session(
+    &self,
+    session: SavedSession,
+  ) -> Result<(SavedProfileKey, Vec<SavedProfileSummary>), AuthStorageError> {
+    self
+      .run(move |store| store.save_session_blocking(session))
+      .await
+  }
+
+  pub(crate) async fn remove_profile(
+    &self,
+    key: SavedProfileKey,
+  ) -> Result<Vec<SavedProfileSummary>, AuthStorageError> {
+    self
+      .run(move |store| store.remove_profile_blocking(&key))
+      .await
+  }
+
+  async fn run<T, F>(&self, operation: F) -> Result<T, AuthStorageError>
+  where
+    T: Send + 'static,
+    F: FnOnce(Self) -> Result<T, AuthStorageError> + Send + 'static,
+  {
+    let store = self.clone();
+    let (sender, receiver) = oneshot::channel();
+    std::thread::Builder::new()
+      .name(WORKER_THREAD_NAME.to_owned())
+      .spawn(move || {
+        let _ = sender.send(operation(store));
+      })
+      .map_err(|_| AuthStorageError::Unavailable)?;
+    receiver.await.map_err(|_| AuthStorageError::Unavailable)?
+  }
+
+  fn load_profiles_blocking(&self) -> Result<Vec<SavedProfileSummary>, AuthStorageError> {
     let _operation = self.lock_operation()?;
     self
       .load_sessions()
       .map(|sessions| profile_summaries(&sessions))
   }
 
-  pub(crate) fn load_session(
+  fn load_session_blocking(
     &self,
     key: &SavedProfileKey,
   ) -> Result<SensitiveSavedSession, AuthStorageError> {
@@ -177,7 +309,7 @@ impl AuthStore {
     Ok(SensitiveSavedSession(sessions.remove(position)))
   }
 
-  pub(crate) fn save_session(
+  fn save_session_blocking(
     &self,
     mut session: SavedSession,
   ) -> Result<(SavedProfileKey, Vec<SavedProfileSummary>), AuthStorageError> {
@@ -200,7 +332,7 @@ impl AuthStore {
     Ok((key, profile_summaries(&sessions)))
   }
 
-  pub(crate) fn remove_profile(
+  fn remove_profile_blocking(
     &self,
     key: &SavedProfileKey,
   ) -> Result<Vec<SavedProfileSummary>, AuthStorageError> {
@@ -357,7 +489,9 @@ fn valid_session(session: &SavedSession) -> bool {
 
 #[cfg(test)]
 mod tests {
+  use std::future::Future;
   use std::sync::atomic::{AtomicBool, Ordering};
+  use std::thread::ThreadId;
 
   use super::*;
 
@@ -365,10 +499,24 @@ mod tests {
   struct MemoryCredential {
     secret: Mutex<Option<Vec<u8>>>,
     fail_delete: AtomicBool,
+    operation_thread: Mutex<Option<(ThreadId, String)>>,
+  }
+
+  impl MemoryCredential {
+    fn record_operation_thread(&self) -> Result<(), CredentialError> {
+      let thread = std::thread::current();
+      *self
+        .operation_thread
+        .lock()
+        .map_err(|_| CredentialError::Unavailable)? =
+        Some((thread.id(), thread.name().unwrap_or_default().to_owned()));
+      Ok(())
+    }
   }
 
   impl SecureCredential for MemoryCredential {
     fn read(&self) -> Result<Vec<u8>, CredentialError> {
+      self.record_operation_thread()?;
       self
         .secret
         .lock()
@@ -378,6 +526,7 @@ mod tests {
     }
 
     fn write(&self, secret: &[u8]) -> Result<(), CredentialError> {
+      self.record_operation_thread()?;
       *self
         .secret
         .lock()
@@ -386,6 +535,7 @@ mod tests {
     }
 
     fn delete(&self) -> Result<(), CredentialError> {
+      self.record_operation_thread()?;
       if self.fail_delete.load(Ordering::Relaxed) {
         return Err(CredentialError::WriteFailed);
       }
@@ -411,6 +561,14 @@ mod tests {
       credential,
       operation: Arc::new(Mutex::new(())),
     }
+  }
+
+  fn block_on<T>(future: impl Future<Output = T>) -> T {
+    relm4::tokio::runtime::Builder::new_current_thread()
+      .enable_all()
+      .build()
+      .expect("test runtime should build")
+      .block_on(future)
   }
 
   fn session(access_token: &str) -> SavedSession {
@@ -462,13 +620,10 @@ mod tests {
   fn auth_store_round_trips_a_saved_session_through_its_interface() {
     let store = memory_store();
     let expected = session("secret-token");
-    let (key, _) = store
-      .save_session(expected)
-      .expect("memory adapter should save session");
+    let (key, _) =
+      block_on(store.save_session(expected)).expect("memory adapter should save session");
 
-    let restored = store
-      .load_session(&key)
-      .expect("memory adapter should load session");
+    let restored = block_on(store.load_session(key)).expect("memory adapter should load session");
 
     assert_eq!(restored.access_token, "secret-token");
   }
@@ -476,16 +631,12 @@ mod tests {
   #[test]
   fn remove_profile_deletes_the_last_secure_credential() {
     let store = memory_store();
-    let (key, _) = store
-      .save_session(session("secret-token"))
+    let (key, _) = block_on(store.save_session(session("secret-token")))
       .expect("memory adapter should save session");
 
-    store
-      .remove_profile(&key)
-      .expect("memory adapter should remove session");
+    block_on(store.remove_profile(key)).expect("memory adapter should remove session");
 
-    assert!(store
-      .load_profiles()
+    assert!(block_on(store.load_profiles())
       .expect("empty store should load")
       .is_empty());
   }
@@ -495,9 +646,7 @@ mod tests {
     let store = memory_store();
     let missing = profile_key(&session("secret-token"));
 
-    let error = store
-      .remove_profile(&missing)
-      .expect_err("missing profile should fail");
+    let error = block_on(store.remove_profile(missing)).expect_err("missing profile should fail");
 
     assert_eq!(error, AuthStorageError::ProfileNotFound);
   }
@@ -506,29 +655,43 @@ mod tests {
   fn remove_profile_reports_secure_deletion_failure() {
     let credential = Arc::new(MemoryCredential::default());
     let store = store_with_credential(credential.clone());
-    let (key, _) = store
-      .save_session(session("secret-token"))
+    let (key, _) = block_on(store.save_session(session("secret-token")))
       .expect("memory adapter should save session");
     credential.fail_delete.store(true, Ordering::Relaxed);
 
-    let error = store
-      .remove_profile(&key)
-      .expect_err("failed secure deletion should fail");
+    let error =
+      block_on(store.remove_profile(key)).expect_err("failed secure deletion should fail");
 
     assert_eq!(error, AuthStorageError::WriteFailed);
   }
 
   #[test]
-  fn unsupported_storage_version_is_rejected_as_corrupt() {
+  fn public_interface_runs_credential_work_on_the_named_worker_thread() {
+    let caller_thread = std::thread::current().id();
+    let credential = Arc::new(MemoryCredential::default());
+    let store = store_with_credential(credential.clone());
+
+    block_on(store.load_profiles()).expect("empty store should load");
+
+    let (worker_thread, worker_name) = credential
+      .operation_thread
+      .lock()
+      .expect("operation thread should be recorded")
+      .clone()
+      .expect("credential should be accessed");
+    assert_ne!(worker_thread, caller_thread);
+    assert_eq!(worker_name, WORKER_THREAD_NAME);
+  }
+
+  #[test]
+  fn typed_storage_error_round_trips_through_the_async_interface() {
     let credential = Arc::new(MemoryCredential::default());
     credential
       .write(br#"{"version":2,"profiles":[]}"#)
       .expect("fixture should be stored");
     let store = store_with_credential(credential);
 
-    let error = store
-      .load_profiles()
-      .expect_err("unsupported version should fail");
+    let error = block_on(store.load_profiles()).expect_err("unsupported version should fail");
 
     assert_eq!(error, AuthStorageError::Corrupt);
   }

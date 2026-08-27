@@ -1,4 +1,3 @@
-use std::ops::Deref;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -6,11 +5,13 @@ use jellypilot_media_server::{
   Credentials, JellyfinClient, JellyfinError, MediaServerProvider, QuickConnectStatus, SavedSession,
 };
 use relm4::adw::prelude::*;
-use relm4::tokio::sync::{oneshot, watch};
+use relm4::tokio::sync::watch;
 use relm4::{adw, gtk, Sender};
 use zeroize::{Zeroize, Zeroizing};
 
-use crate::auth_storage::{SavedProfileKey, SavedProfileSummary};
+use crate::auth_storage::{
+  AuthCredentials, AuthStorageError, AuthStore, SavedProfileKey, SavedProfileSummary,
+};
 use crate::config::{self, LoginPrefill};
 use crate::diagnostics::{DiagnosticCategory, DiagnosticLevel};
 use crate::request_gate::{RequestGate, SessionToken};
@@ -67,15 +68,15 @@ pub(crate) enum Message {
 }
 
 pub(crate) enum LoginEvent {
-  SavedProfiles(Result<Vec<SavedProfileSummary>, String>),
+  SavedProfiles(Result<Vec<SavedProfileSummary>, AuthStorageError>),
   SavedSessionStored {
     session: SessionToken,
-    result: Result<(SavedProfileKey, Vec<SavedProfileSummary>), String>,
+    result: Result<(SavedProfileKey, Vec<SavedProfileSummary>), AuthStorageError>,
   },
   Login {
     session: SessionToken,
     client: Arc<JellyfinClient>,
-    result: Result<(), String>,
+    result: Result<(), LoginError>,
   },
   QuickConnectCode {
     session: SessionToken,
@@ -88,8 +89,28 @@ pub(crate) enum LoginEvent {
     session: SessionToken,
     key: SavedProfileKey,
     sign_out: bool,
-    result: Result<Vec<SavedProfileSummary>, String>,
+    result: Result<Vec<SavedProfileSummary>, AuthStorageError>,
   },
+}
+
+pub(crate) enum LoginError {
+  AuthStorage(AuthStorageError),
+  Request(String),
+}
+
+impl From<AuthStorageError> for LoginError {
+  fn from(error: AuthStorageError) -> Self {
+    Self::AuthStorage(error)
+  }
+}
+
+impl std::fmt::Display for LoginError {
+  fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    match self {
+      Self::AuthStorage(error) => write!(formatter, "Saved sign-in unavailable: {error}."),
+      Self::Request(message) => formatter.write_str(message),
+    }
+  }
 }
 
 pub(crate) enum LoginEffect {
@@ -111,7 +132,7 @@ pub(crate) enum LoginEffect {
   LoadSavedProfiles,
   RunPasswordAuth {
     session: SessionToken,
-    credentials: SensitiveCredentials,
+    credentials: AuthCredentials,
   },
   RunQuickConnect {
     session: SessionToken,
@@ -127,22 +148,6 @@ pub(crate) enum LoginEffect {
     key: SavedProfileKey,
     sign_out: bool,
   },
-}
-
-pub(crate) struct SensitiveCredentials(pub(crate) Credentials);
-
-impl Deref for SensitiveCredentials {
-  type Target = Credentials;
-
-  fn deref(&self) -> &Self::Target {
-    &self.0
-  }
-}
-
-impl Drop for SensitiveCredentials {
-  fn drop(&mut self) {
-    self.0.password.zeroize();
-  }
 }
 
 #[derive(Clone, Copy, Default, Eq, PartialEq)]
@@ -534,7 +539,7 @@ impl LoginPage {
       LoginEffect::AuthStarted,
       LoginEffect::RunPasswordAuth {
         session,
-        credentials: SensitiveCredentials(Credentials {
+        credentials: AuthStore::protect_credentials(Credentials {
           provider: provider_for(self.provider.selected()),
           server_url,
           username,
@@ -633,7 +638,7 @@ impl LoginPage {
     }
     let Some(profile) = saved_profile_summaries(cx.saved_profiles)
       .iter()
-      .find(|profile| profile.key == key)
+      .find(|profile| profile.key() == &key)
       .cloned()
     else {
       self.set_status("That saved sign-in is no longer available.");
@@ -646,12 +651,12 @@ impl LoginPage {
     self.cancel_inflight_quick_connect();
     self.quick_connect_phase = QuickConnectPhase::Idle;
     self.clear_quick_connect_surface();
-    self.provider.set_selected(match profile.provider {
+    self.provider.set_selected(match profile.provider() {
       MediaServerProvider::Jellyfin => 0,
       MediaServerProvider::Emby => 1,
     });
-    self.server_url.set_text(&profile.server_url);
-    self.username.set_text(&profile.user_name);
+    self.server_url.set_text(profile.server_url());
+    self.username.set_text(profile.user_name());
     self.password.set_text("");
     self.pending_prefill = None;
     let session = self.begin_login(cx, "Restoring the saved sign-in…");
@@ -708,7 +713,7 @@ impl LoginPage {
     }
     let Some(profile) = saved_profile_summaries(cx.saved_profiles)
       .iter()
-      .find(|profile| profile.key == key)
+      .find(|profile| profile.key() == &key)
     else {
       return;
     };
@@ -717,18 +722,11 @@ impl LoginPage {
     } else {
       "Forget this saved sign-in?"
     };
-    let server = profile
-      .server_name
-      .as_deref()
-      .unwrap_or(profile.server_url.as_str());
     let dialog = gtk::MessageDialog::builder()
       .modal(true)
       .message_type(gtk::MessageType::Question)
       .text(title)
-      .secondary_text(format!(
-        "{} on {} will need a password to sign in again.",
-        profile.user_name, server
-      ))
+      .secondary_text(profile.forget_confirmation())
       .build();
     if let Some(window) = relm4::main_adw_application().active_window() {
       dialog.set_transient_for(Some(&window));
@@ -761,19 +759,19 @@ impl LoginPage {
 
   fn finish_saved_profiles(
     &mut self,
-    result: Result<Vec<SavedProfileSummary>, String>,
+    result: Result<Vec<SavedProfileSummary>, AuthStorageError>,
     cx: &mut LoginContext<'_>,
   ) -> Vec<LoginEffect> {
     let mut effects = Vec::new();
     *cx.saved_profiles = match result {
       Ok(profiles) => LoadState::Ready(profiles),
-      Err(message) => {
+      Err(error) => {
         effects.push(diagnostic(
           DiagnosticLevel::Warning,
           DiagnosticCategory::Auth,
           "Saved profiles could not be loaded from Secret Service.",
         ));
-        LoadState::Failed(message)
+        LoadState::Failed(format!("Saved sign-ins unavailable: {error}."))
       }
     };
     self.render_saved_profiles(cx.saved_profiles);
@@ -783,7 +781,7 @@ impl LoginPage {
   fn finish_saved_session(
     &mut self,
     session: SessionToken,
-    result: Result<(SavedProfileKey, Vec<SavedProfileSummary>), String>,
+    result: Result<(SavedProfileKey, Vec<SavedProfileSummary>), AuthStorageError>,
     cx: &mut LoginContext<'_>,
   ) -> Vec<LoginEffect> {
     self.set_profile_busy(false);
@@ -821,7 +819,7 @@ impl LoginPage {
     &mut self,
     session: SessionToken,
     client: Arc<JellyfinClient>,
-    result: Result<(), String>,
+    result: Result<(), LoginError>,
     cx: &mut LoginContext<'_>,
   ) -> Vec<LoginEffect> {
     if !matches!(cx.connection, ConnectionPhase::Connecting) || !cx.gate.finish_login(session) {
@@ -879,7 +877,8 @@ impl LoginPage {
         });
         effects
       }
-      Err(message) => {
+      Err(error) => {
+        let message = error.to_string();
         if was_quick_connect {
           self.quick_connect_status.set_label(&message);
           self.login_status.set_label("");
@@ -962,7 +961,7 @@ impl LoginPage {
     session: SessionToken,
     key: SavedProfileKey,
     sign_out: bool,
-    result: Result<Vec<SavedProfileSummary>, String>,
+    result: Result<Vec<SavedProfileSummary>, AuthStorageError>,
     cx: &mut LoginContext<'_>,
   ) -> Vec<LoginEffect> {
     let disconnect_current_session = should_disconnect_after_forget(
@@ -994,8 +993,10 @@ impl LoginPage {
           "Saved profile removal completed.",
         ));
       }
-      Err(message) => {
-        self.saved_profiles_status.set_label(&message);
+      Err(error) => {
+        self
+          .saved_profiles_status
+          .set_label(&format!("Saved sign-in could not be forgotten: {error}."));
         self.saved_profiles_status.set_visible(true);
         effects.push(diagnostic(
           DiagnosticLevel::Warning,
@@ -1205,33 +1206,23 @@ fn login_page(widgets: LoginPageWidgets<'_>) -> gtk::ScrolledWindow {
 
 fn saved_profile_row(profile: &SavedProfileSummary, sender: &Sender<AppMessage>) -> adw::ActionRow {
   let action = adw::ActionRow::new();
-  let provider = match profile.provider {
-    MediaServerProvider::Jellyfin => "Jellyfin",
-    MediaServerProvider::Emby => "Emby",
-  };
-  let server = profile
-    .server_name
-    .as_deref()
-    .unwrap_or(profile.server_url.as_str());
-  action.set_title(&format!("{}@{}", profile.user_name, server));
-  action.set_subtitle(provider);
+  action.set_title(&profile.title());
+  action.set_subtitle(profile.subtitle());
   action.set_activatable(true);
-  action.update_property(&[gtk::accessible::Property::Label(&format!(
-    "Restore saved sign-in for {} on {}",
-    profile.user_name, server
-  ))]);
-  let key = profile.key.clone();
+  action.update_property(&[gtk::accessible::Property::Label(
+    &profile.restore_accessibility_label(),
+  )]);
+  let key = profile.key().clone();
   let sender_clone = sender.clone();
   action.connect_activated(move |_| {
     sender_clone.emit(AppMessage::Login(Message::RestoreSavedProfile(key.clone())));
   });
   let forget = gtk::Button::with_label("Forget");
   forget.add_css_class("destructive-action");
-  forget.update_property(&[gtk::accessible::Property::Label(&format!(
-    "Forget saved sign-in for {} on {}",
-    profile.user_name, server
-  ))]);
-  let key = profile.key.clone();
+  forget.update_property(&[gtk::accessible::Property::Label(
+    &profile.forget_accessibility_label(),
+  )]);
+  let key = profile.key().clone();
   let sender_clone = sender.clone();
   forget.connect_clicked(move |_| {
     sender_clone.emit(AppMessage::Login(Message::ForgetSavedProfile(key.clone())));
@@ -1253,21 +1244,6 @@ fn clear_list_box(container: &gtk::ListBox) {
   }
 }
 
-pub(crate) async fn run_auth_operation<T, F>(operation: F) -> Result<T, ()>
-where
-  T: Send + 'static,
-  F: FnOnce() -> T + Send + 'static,
-{
-  let (sender, receiver) = oneshot::channel();
-  std::thread::Builder::new()
-    .name("jellypilot-secret-service".to_string())
-    .spawn(move || {
-      let _ = sender.send(operation());
-    })
-    .map_err(|_| ())?;
-  receiver.await.map_err(|_| ())
-}
-
 pub(crate) async fn quick_connect_workflow(
   client: Arc<JellyfinClient>,
   server_url: String,
@@ -1277,16 +1253,18 @@ pub(crate) async fn quick_connect_workflow(
   workflow_timeout: Duration,
 ) {
   let command_client = Arc::clone(&client);
-  let result = async {
+  let result: Result<(), LoginError> = async {
     let request = command_client
       .login()
       .quick_connect_start(&server_url)
       .await
-      .map_err(|error| quick_connect_start_message(&error).to_owned())?;
+      .map_err(|error| LoginError::Request(quick_connect_start_message(&error).to_owned()))?;
     let (code, secret) = request.into_parts();
     let secret = Zeroizing::new(secret);
     if !emit(LoginEvent::QuickConnectCode { session, code }) {
-      return Err("Quick Connect was cancelled.".to_owned());
+      return Err(LoginError::Request(
+        "Quick Connect was cancelled.".to_owned(),
+      ));
     }
 
     relm4::tokio::time::timeout(workflow_timeout, async {
@@ -1296,7 +1274,7 @@ pub(crate) async fn quick_connect_workflow(
           .login()
           .quick_connect_check(&server_url, secret.as_str())
           .await
-          .map_err(|_| quick_connect_check_message().to_owned())?
+          .map_err(|_| LoginError::Request(quick_connect_check_message().to_owned()))?
         {
           QuickConnectStatus::Waiting => {}
           QuickConnectStatus::Approved => break Ok(()),
@@ -1304,16 +1282,22 @@ pub(crate) async fn quick_connect_workflow(
       }
     })
     .await
-    .unwrap_or_else(|_| Err(quick_connect_timeout_message().to_owned()))?;
+    .unwrap_or_else(|_| {
+      Err(LoginError::Request(
+        quick_connect_timeout_message().to_owned(),
+      ))
+    })?;
 
     if !emit(LoginEvent::QuickConnectApproving { session }) {
-      return Err("Quick Connect was cancelled.".to_owned());
+      return Err(LoginError::Request(
+        "Quick Connect was cancelled.".to_owned(),
+      ));
     }
     let mut response = command_client
       .login()
       .quick_connect_authenticate(&server_url, secret.as_str())
       .await
-      .map_err(|_| quick_connect_authentication_message().to_owned())?;
+      .map_err(|_| LoginError::Request(quick_connect_authentication_message().to_owned()))?;
     response.access_token.zeroize();
     Ok(())
   }

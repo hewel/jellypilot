@@ -15,7 +15,7 @@ use relm4::{adw, gtk, Component, ComponentParts, ComponentSender, RelmApp};
 use crate::artwork::{ArtworkAdapter, DecodedArtwork};
 use crate::artwork_binder::{ArtworkBinder, ArtworkSettlement, ArtworkSlot, ArtworkSurface};
 use crate::artwork_cache::ArtworkCacheStats;
-use crate::auth_storage::{AuthStore, SavedProfileKey, SavedProfileSummary};
+use crate::auth_storage::{AuthStorageError, AuthStore, SavedProfileKey, SavedProfileSummary};
 
 use crate::config::{self, LoginPrefill};
 use crate::diagnostics::{DiagnosticCategory, DiagnosticLevel, Diagnostics};
@@ -24,9 +24,7 @@ use crate::pages::cards::{clear_box, dim_label};
 use crate::pages::detail::{self, DetailContext, DetailEffect, DetailEvent, DetailPage};
 use crate::pages::diagnostics::{self, DiagnosticsContext, DiagnosticsPage};
 use crate::pages::home::{self, HomeContext, HomeEffect, HomeEvent, HomePage};
-use crate::pages::login::{
-  self, run_auth_operation, LoginContext, LoginEffect, LoginEvent, LoginPage,
-};
+use crate::pages::login::{self, LoginContext, LoginEffect, LoginError, LoginEvent, LoginPage};
 use crate::pages::player::{self, PlayerContext, PlayerEffect, PlayerEvent, PlayerPage};
 use crate::pages::settings::{
   self, ConnectionView, SettingsContext, SettingsEffect, SettingsEvent, SettingsPage,
@@ -1266,7 +1264,7 @@ impl AppModel {
                 .login()
                 .authenticate(&credentials)
                 .await
-                .map_err(|error| error.to_string())?;
+                .map_err(|error| LoginError::Request(error.to_string()))?;
               Ok(())
             }
             .await;
@@ -1317,15 +1315,17 @@ impl AppModel {
           let requested_key = key.clone();
           sender.oneshot_command(async move {
             let result = async {
-              let stored_session = run_auth_operation(move || store.load_session(&requested_key))
+              let stored_session = store
+                .load_session(requested_key)
                 .await
-                .map_err(|_| "The saved sign-in could not be read.".to_string())?
-                .map_err(|error| format!("Saved sign-in unavailable: {error}."))?;
+                .map_err(LoginError::from)?;
               command_client
                 .login()
                 .restore_session(&stored_session)
                 .await
-                .map_err(|error| format!("Saved sign-in could not be restored: {error}"))?;
+                .map_err(|error| {
+                  LoginError::Request(format!("Saved sign-in could not be restored: {error}"))
+                })?;
               Ok(())
             }
             .await;
@@ -1344,12 +1344,7 @@ impl AppModel {
           let store = self.auth_store.clone();
           let command_key = key.clone();
           sender.oneshot_command(async move {
-            let result = run_auth_operation(move || store.remove_profile(&command_key))
-              .await
-              .map_err(|_| "The saved sign-in could not be forgotten.".to_string())
-              .and_then(|result| {
-                result.map_err(|error| format!("Saved sign-in could not be forgotten: {error}."))
-              });
+            let result = store.remove_profile(command_key).await;
             AppCommand::LoginEvent(LoginEvent::ForgotProfile {
               session,
               key,
@@ -1365,7 +1360,7 @@ impl AppModel {
   fn apply_saved_session_storage_status(
     &mut self,
     session: SessionToken,
-    result: &Result<(SavedProfileKey, Vec<SavedProfileSummary>), String>,
+    result: &Result<(SavedProfileKey, Vec<SavedProfileSummary>), AuthStorageError>,
   ) {
     let is_current = self.requests.is_current_session(session)
       && matches!(self.connection, ConnectionPhase::Connected);
@@ -1378,9 +1373,12 @@ impl AppModel {
           );
         }
       }
-      Err(message) => {
+      Err(error) => {
         if is_current {
-          self.settings.set_storage_status(message, true);
+          self.settings.set_storage_status(
+            &format!("The session could not be saved securely: {error}."),
+            true,
+          );
         }
       }
     }
@@ -1392,10 +1390,7 @@ impl AppModel {
   fn load_saved_profiles(&mut self, sender: &ComponentSender<Self>) {
     let store = self.auth_store.clone();
     sender.oneshot_command(async move {
-      let result = run_auth_operation(move || store.load_profiles())
-        .await
-        .map_err(|_| "Secure saved sign-ins could not be loaded.".to_string())
-        .and_then(|result| result.map_err(|error| format!("Saved sign-ins unavailable: {error}.")));
+      let result = store.load_profiles().await;
       AppCommand::LoginEvent(LoginEvent::SavedProfiles(result))
     });
   }
@@ -1670,12 +1665,7 @@ impl AppModel {
     let store = self.auth_store.clone();
     let token = self.requests.current_session();
     sender.oneshot_command(async move {
-      let result = run_auth_operation(move || store.save_session(session))
-        .await
-        .map_err(|_| "The session could not be saved securely.".to_string())
-        .and_then(|result| {
-          result.map_err(|error| format!("The session could not be saved securely: {error}."))
-        });
+      let result = store.save_session(session).await;
       AppCommand::LoginEvent(LoginEvent::SavedSessionStored {
         session: token,
         result,
