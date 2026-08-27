@@ -17,7 +17,7 @@ use crate::artwork_binder::{ArtworkBinder, ArtworkSettlement, ArtworkSlot, Artwo
 use crate::artwork_cache::ArtworkCacheStats;
 use crate::auth_storage::{AuthStorageError, AuthStore, SavedProfileKey, SavedProfileSummary};
 
-use crate::config::{self, LoginPrefill};
+use crate::config::{self, Settings};
 use crate::diagnostics::{DiagnosticCategory, DiagnosticLevel, Diagnostics};
 use crate::pages::browse::{self, BrowseContext, BrowseEffect, BrowseEvent, BrowsePage};
 use crate::pages::cards::{clear_box, dim_label};
@@ -48,6 +48,7 @@ const APP_ID: &str = "io.github.hewel.JellyPilot.GtkPreview";
 const SMOKE_APP_ID: &str = "io.github.hewel.JellyPilot.GtkPreview.Smoke";
 struct AppModel {
   client: Arc<JellyfinClient>,
+  configuration: config::SettingsStore,
   auth_store: AuthStore,
   login: LoginPage,
   settings: SettingsPage,
@@ -307,9 +308,17 @@ impl Component for AppModel {
     root: Self::Root,
     sender: ComponentSender<Self>,
   ) -> ComponentParts<Self> {
-    let login = LoginPage::build(sender.input_sender());
+    let (configuration, config_load_failed) = match config::SettingsStore::load() {
+      Ok(settings) => (settings, false),
+      Err(_) => (config::SettingsStore::default(), true),
+    };
+    let login = LoginPage::build(sender.input_sender(), configuration.snapshot());
     let diagnostics_page = DiagnosticsPage::build(sender.input_sender());
-    let settings = SettingsPage::build(sender.input_sender(), diagnostics_page.root());
+    let settings = SettingsPage::build(
+      sender.input_sender(),
+      diagnostics_page.root(),
+      configuration.snapshot(),
+    );
     let home_page = HomePage::build(sender.input_sender());
     let browse_page = BrowsePage::build(sender.input_sender());
     let detail_page = DetailPage::build(sender.input_sender());
@@ -352,17 +361,12 @@ impl Component for AppModel {
         gtk::glib::ControlFlow::Continue
       }
     });
-    let loaded_config = config::load_checked();
-    let intro_mode = loaded_config
-      .as_ref()
-      .map_or_else(|_| config::IntroMode::default(), |config| config.intro_mode);
-    let image_cache_enabled = loaded_config
-      .as_ref()
-      .map_or(true, |config| config.image_cache_enabled);
+    let intro_mode = configuration.snapshot().intro_mode();
+    let image_cache_enabled = configuration.snapshot().image_cache_enabled();
     let artwork = Arc::new(ArtworkAdapter::default());
     artwork.set_disk_cache_enabled(image_cache_enabled);
     let mut diagnostics = Diagnostics::default();
-    if loaded_config.is_err() {
+    if config_load_failed {
       diagnostics.record(
         DiagnosticLevel::Warning,
         DiagnosticCategory::Config,
@@ -371,6 +375,7 @@ impl Component for AppModel {
     }
     let model = Self {
       client: Arc::new(JellyfinClient::new()),
+      configuration,
       auth_store: AuthStore::default(),
       login,
       settings,
@@ -693,7 +698,7 @@ impl AppModel {
 
   fn dispatch_settings(&mut self, message: settings::Message, sender: &ComponentSender<Self>) {
     let cx = self.settings_context();
-    let effects = self.settings.handle(message, &cx);
+    let effects = self.settings.handle(message, &cx, &mut self.configuration);
     self.execute_settings_effects(effects, sender);
   }
 
@@ -1217,15 +1222,17 @@ impl AppModel {
         LoginEffect::InvalidInput => {
           self.connection = ConnectionPhase::Failed;
         }
-        LoginEffect::PersistPrefill(prefill) => {
-          let remember = prefill.remember;
-          let warning = if remember {
-            config::save(&prefill)
+        LoginEffect::PersistPrefill {
+          prefill,
+          provider,
+          remember,
+        } => {
+          let result = if remember {
+            self.configuration.set_login_prefill(prefill, provider)
           } else {
-            config::clear()
-          }
-          .err()
-          .map(|_| {
+            self.configuration.clear_login_prefill()
+          };
+          let warning = result.err().map(|_| {
             if remember {
               "Signed in, but sign-in details could not be saved on this device."
             } else {
@@ -1256,7 +1263,7 @@ impl AppModel {
           session,
           credentials,
         } => {
-          let client = configured_client(&config::load());
+          let client = configured_client(self.configuration.snapshot());
           let command_client = Arc::clone(&client);
           sender.oneshot_command(async move {
             let result = async {
@@ -1280,7 +1287,7 @@ impl AppModel {
           server_url,
           mut cancellation,
         } => {
-          let client = configured_client(&config::load());
+          let client = configured_client(self.configuration.snapshot());
           let command_client = Arc::clone(&client);
           sender.command(move |output, shutdown| {
             shutdown
@@ -1310,7 +1317,7 @@ impl AppModel {
         }
         LoginEffect::RunRestore { session, key } => {
           let store = self.auth_store.clone();
-          let client = configured_client(&config::load());
+          let client = configured_client(self.configuration.snapshot());
           let command_client = Arc::clone(&client);
           let requested_key = key.clone();
           sender.oneshot_command(async move {
@@ -1589,29 +1596,25 @@ impl AppModel {
       .settings
       .set_intro_skip_visible(self.client.supports_intro_skipper());
     self.artwork.reset_session();
-    self.diagnostics.reset_coalescing();
-    self.artwork = Arc::new(ArtworkAdapter::default());
-    let settings = config::load();
+    let settings = self.configuration.snapshot();
     self
       .artwork
-      .set_disk_cache_enabled(settings.image_cache_enabled);
-    if write_input_conf(
-      &settings.key_next_episode,
-      &settings.key_previous_episode,
-      &settings.key_intro_skip,
+      .set_disk_cache_enabled(settings.image_cache_enabled());
+    let playback_config = playback_controller_config(settings);
+    let shortcut_write_failed = write_input_conf(
+      settings.key_next_episode(),
+      settings.key_previous_episode(),
+      settings.key_intro_skip(),
     )
-    .is_none()
-    {
+    .is_none();
+    if shortcut_write_failed {
       self.record_diagnostic(
         DiagnosticLevel::Warning,
         DiagnosticCategory::Config,
         "The MPV shortcut file could not be written for this session.",
       );
     }
-    match PlaybackController::discover(
-      Arc::clone(&self.client),
-      playback_controller_config(&settings),
-    ) {
+    match PlaybackController::discover(Arc::clone(&self.client), playback_config) {
       Ok(controller) => {
         self.playback_controller = Some(controller);
         self.dispatch_player_event(PlayerEvent::EngineAvailable, sender);
@@ -2094,7 +2097,7 @@ impl AppModel {
       if self.playback_reconfigure_pending {
         self.playback_reconfigure_pending = false;
         if controller
-          .configure_for_next_start(playback_controller_config(&config::load()))
+          .configure_for_next_start(playback_controller_config(self.configuration.snapshot()))
           .is_err()
         {
           self.show_settings_failure(
@@ -2281,8 +2284,7 @@ impl AppModel {
   }
 
   fn reconfigure_playback_controller(&mut self, sender: &ComponentSender<Self>) {
-    let settings = config::load();
-    let playback_config = playback_controller_config(&settings);
+    let playback_config = playback_controller_config(self.configuration.snapshot());
     if self.playback_controller.is_none() {
       if self.playback_session.view().busy {
         self.playback_reconfigure_pending = true;
@@ -2546,36 +2548,29 @@ fn connection_label(client: &JellyfinClient) -> String {
   }
 }
 
-fn configured_client(settings: &LoginPrefill) -> Arc<JellyfinClient> {
+fn configured_client(settings: &Settings) -> Arc<JellyfinClient> {
   let client = Arc::new(JellyfinClient::new());
-  if let Some(name) = settings
-    .playback_target_name
-    .as_deref()
-    .map(str::trim)
-    .filter(|name| !name.is_empty())
-  {
+  if let Some(name) = settings.playback_target_name() {
     client.set_device_name(name.to_owned());
   }
   client
 }
 
-fn configured_mpv_args(settings: &LoginPrefill) -> Vec<String> {
-  let mut args = settings.mpv_args.clone();
-  if !settings.subtitle_languages.is_empty() && !has_mpv_option(&args, "slang") {
-    args.push(format!("--slang={}", settings.subtitle_languages.join(",")));
+fn configured_mpv_args(settings: &Settings) -> Vec<String> {
+  let mut args = settings.mpv_args().to_vec();
+  if !settings.subtitle_languages().is_empty() && !has_mpv_option(&args, "slang") {
+    args.push(format!(
+      "--slang={}",
+      settings.subtitle_languages().join(",")
+    ));
   }
   args
 }
 
-fn playback_controller_config(settings: &LoginPrefill) -> PlaybackControllerConfig {
+fn playback_controller_config(settings: &Settings) -> PlaybackControllerConfig {
   let mut playback =
     PlaybackControllerConfig::default().with_extra_args(configured_mpv_args(settings));
-  if let Some(path) = settings
-    .mpv_path
-    .as_deref()
-    .map(str::trim)
-    .filter(|path| !path.is_empty())
-  {
+  if let Some(path) = settings.mpv_path() {
     playback = playback.with_mpv_path(PathBuf::from(path));
   }
   playback
@@ -2765,19 +2760,31 @@ mod tests {
   }
   #[test]
   fn subtitle_preferences_reach_mpv_launch_without_overriding_user_slang() {
-    let mut settings = LoginPrefill {
-      mpv_args: vec!["--fullscreen".to_owned()],
-      subtitle_languages: vec!["eng".to_owned(), "spa".to_owned()],
-      ..LoginPrefill::default()
-    };
+    let settings: Settings = serde_json::from_value(serde_json::json!({
+      "remember": false,
+      "server_url": "",
+      "provider": "",
+      "username": "",
+      "mpv_args": ["--fullscreen"],
+      "subtitle_languages": ["eng", "spa"]
+    }))
+    .unwrap();
     assert_eq!(
       configured_mpv_args(&settings),
       vec!["--fullscreen", "--slang=eng,spa"]
     );
 
-    settings.mpv_args.push("--slang=jpn".to_owned());
+    let explicit_slang: Settings = serde_json::from_value(serde_json::json!({
+      "remember": false,
+      "server_url": "",
+      "provider": "",
+      "username": "",
+      "mpv_args": ["--fullscreen", "--slang=jpn"],
+      "subtitle_languages": ["eng", "spa"]
+    }))
+    .unwrap();
     assert_eq!(
-      configured_mpv_args(&settings),
+      configured_mpv_args(&explicit_slang),
       vec!["--fullscreen", "--slang=jpn"]
     );
   }

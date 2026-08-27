@@ -23,7 +23,7 @@ pub(crate) const QUICK_CONNECT_TIMEOUT: Duration = Duration::from_secs(5 * 60);
 pub(crate) struct LoginPage {
   root: gtk::ScrolledWindow,
   sender: Sender<AppMessage>,
-  pending_prefill: Option<LoginPrefill>,
+  pending_prefill: Option<PendingLoginPrefill>,
   quick_connect_phase: QuickConnectPhase,
   quick_connect_cancellation: watch::Sender<u64>,
   profile_operation_busy: bool,
@@ -42,6 +42,12 @@ pub(crate) struct LoginPage {
   saved_profiles_status: gtk::Label,
   login_status: gtk::Label,
   login_button: gtk::Button,
+}
+
+struct PendingLoginPrefill {
+  prefill: LoginPrefill,
+  provider: String,
+  remember: bool,
 }
 
 pub(crate) struct LoginContext<'a> {
@@ -124,7 +130,11 @@ pub(crate) enum LoginEffect {
   },
   /// Form input failed validation before any request; no Home impact.
   InvalidInput,
-  PersistPrefill(LoginPrefill),
+  PersistPrefill {
+    prefill: LoginPrefill,
+    provider: String,
+    remember: bool,
+  },
   Diagnostic(DiagnosticLevel, DiagnosticCategory, String),
   Cancelled,
   ProfileBusyChanged,
@@ -214,12 +224,12 @@ impl std::fmt::Debug for LoginEvent {
 }
 
 impl LoginPage {
-  pub(crate) fn build(sender: &Sender<AppMessage>) -> Self {
-    let prefill = config::load();
+  pub(crate) fn build(sender: &Sender<AppMessage>, settings: &config::Settings) -> Self {
+    let prefill = settings.login_prefill();
     let provider = adw::ComboRow::new();
     provider.set_title("Server type");
     provider.set_model(Some(&gtk::StringList::new(&["Jellyfin", "Emby"])));
-    provider.set_selected(if prefill.provider.eq_ignore_ascii_case("emby") {
+    provider.set_selected(if settings.login_provider().eq_ignore_ascii_case("emby") {
       1
     } else {
       0
@@ -227,15 +237,15 @@ impl LoginPage {
     let server_url = adw::EntryRow::new();
     server_url.set_title("Server URL");
     server_url.set_input_purpose(gtk::InputPurpose::Url);
-    server_url.set_text(&prefill.server_url);
+    server_url.set_text(prefill.server_url());
     let username = adw::EntryRow::new();
     username.set_title("Username");
     username.set_input_purpose(gtk::InputPurpose::Name);
-    username.set_text(&prefill.username);
+    username.set_text(prefill.username());
     let password = adw::PasswordEntryRow::new();
     password.set_title("Password");
     let remember_prefill = gtk::Switch::new();
-    remember_prefill.set_active(prefill.remember);
+    remember_prefill.set_active(settings.remembers_login_prefill());
     let saved_profiles = gtk::ListBox::new();
     saved_profiles.set_selection_mode(gtk::SelectionMode::None);
     saved_profiles.add_css_class("boxed-list");
@@ -514,16 +524,16 @@ impl LoginPage {
         LoginEffect::InvalidInput,
       ];
     }
-    let mut pending_prefill = config::load();
-    pending_prefill.remember = self.remember_prefill.is_active();
-    pending_prefill.server_url = server_url.clone();
-    pending_prefill.provider = if self.provider.selected() == 1 {
+    let provider = if self.provider.selected() == 1 {
       "emby".to_owned()
     } else {
       "jellyfin".to_owned()
     };
-    pending_prefill.username = username.clone();
-    self.pending_prefill = Some(pending_prefill);
+    self.pending_prefill = Some(PendingLoginPrefill {
+      prefill: LoginPrefill::new(server_url.clone(), username.clone()),
+      provider,
+      remember: self.remember_prefill.is_active(),
+    });
 
     self.cancel_inflight_quick_connect();
     self.quick_connect_phase = QuickConnectPhase::Idle;
@@ -860,8 +870,12 @@ impl LoginPage {
             },
           ),
         ];
-        if let Some(prefill) = pending_prefill {
-          effects.push(LoginEffect::PersistPrefill(prefill));
+        if let Some(pending) = pending_prefill {
+          effects.push(LoginEffect::PersistPrefill {
+            prefill: pending.prefill,
+            provider: pending.provider,
+            remember: pending.remember,
+          });
         } else {
           self.apply_prefill_warning(None);
         }

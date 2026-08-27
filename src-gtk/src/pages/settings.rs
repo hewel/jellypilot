@@ -7,7 +7,7 @@ use relm4::{adw, gtk, Sender};
 
 use crate::artwork_cache::ArtworkCacheStats;
 use crate::auth_storage::{SavedProfileKey, SavedProfileSummary};
-use crate::config::{self, LoginPrefill};
+use crate::config::{self, Settings, SettingsMutationError, SettingsStore, ShortcutKind};
 use crate::diagnostics::{DiagnosticCategory, DiagnosticLevel};
 use crate::pages::login;
 use crate::shell::{AppMessage, ConnectionPhase, LoadState};
@@ -97,16 +97,12 @@ pub(crate) enum SettingsEffect {
   Diagnostic(DiagnosticLevel, DiagnosticCategory, String),
 }
 
-#[derive(Clone, Copy)]
-enum ShortcutKind {
-  Next,
-  Previous,
-  IntroSkip,
-}
-
 impl SettingsPage {
-  pub(crate) fn build(sender: &Sender<AppMessage>, diagnostics: &adw::PreferencesPage) -> Self {
-    let prefill = config::load();
+  pub(crate) fn build(
+    sender: &Sender<AppMessage>,
+    diagnostics: &adw::PreferencesPage,
+    settings: &Settings,
+  ) -> Self {
     let saved_profile = dim_label("");
     saved_profile.set_wrap(true);
     let storage_status = dim_label("");
@@ -130,7 +126,7 @@ impl SettingsPage {
     intro_skip_mode.set_title("Mode");
     intro_skip_mode.set_subtitle("Changes apply when playback next (re)starts in MPV.");
     intro_skip_mode.set_model(Some(&gtk::StringList::new(&["Automatic", "Manual", "Off"])));
-    intro_skip_mode.set_selected(intro_mode_selection(prefill.intro_mode));
+    intro_skip_mode.set_selected(intro_mode_selection(settings.intro_mode()));
     intro_skip_mode.connect_selected_notify({
       let sender = sender.clone();
       move |row| sender.emit(AppMessage::Settings(Message::SetIntroMode(row.selected())))
@@ -163,7 +159,7 @@ impl SettingsPage {
     });
     let mpv_path = adw::EntryRow::new();
     mpv_path.set_title("MPV path");
-    mpv_path.set_text(prefill.mpv_path.as_deref().unwrap_or(""));
+    mpv_path.set_text(settings.mpv_path().unwrap_or(""));
     mpv_path.connect_changed({
       let sender = sender.clone();
       move |entry| {
@@ -183,7 +179,7 @@ impl SettingsPage {
     mpv_status.set_accessible_role(gtk::AccessibleRole::Status);
     let mpv_args = adw::EntryRow::new();
     mpv_args.set_title("Advanced MPV arguments");
-    mpv_args.set_text(&prefill.mpv_args.join(" "));
+    mpv_args.set_text(&settings.mpv_args().join(" "));
     mpv_args.connect_changed({
       let sender = sender.clone();
       move |entry| {
@@ -194,7 +190,7 @@ impl SettingsPage {
     });
     let target_name = adw::EntryRow::new();
     target_name.set_title("Playback Target name");
-    target_name.set_text(prefill.playback_target_name.as_deref().unwrap_or(""));
+    target_name.set_text(settings.playback_target_name().unwrap_or(""));
     target_name.connect_changed({
       let sender = sender.clone();
       move |entry| {
@@ -229,7 +225,7 @@ impl SettingsPage {
     });
     let key_next = adw::EntryRow::new();
     key_next.set_title("Next episode");
-    key_next.set_text(&prefill.key_next_episode);
+    key_next.set_text(settings.key_next_episode());
     key_next.connect_changed({
       let sender = sender.clone();
       move |entry| {
@@ -240,7 +236,7 @@ impl SettingsPage {
     });
     let key_previous = adw::EntryRow::new();
     key_previous.set_title("Previous episode");
-    key_previous.set_text(&prefill.key_previous_episode);
+    key_previous.set_text(settings.key_previous_episode());
     key_previous.connect_changed({
       let sender = sender.clone();
       move |entry| {
@@ -251,7 +247,7 @@ impl SettingsPage {
     });
     let key_intro = adw::EntryRow::new();
     key_intro.set_title("Skip intro");
-    key_intro.set_text(&prefill.key_intro_skip);
+    key_intro.set_text(settings.key_intro_skip());
     key_intro.connect_changed({
       let sender = sender.clone();
       move |entry| {
@@ -266,7 +262,7 @@ impl SettingsPage {
     image_cache.set_subtitle(
       "Stores original server image bytes for faster repeat browsing; never used as offline truth.",
     );
-    image_cache.set_active(prefill.image_cache_enabled);
+    image_cache.set_active(settings.image_cache_enabled());
     image_cache.connect_active_notify({
       let sender = sender.clone();
       let syncing = Rc::clone(&image_cache_syncing);
@@ -373,7 +369,7 @@ impl SettingsPage {
       intro_skip_mode,
       intro_skip_status,
     };
-    page.render_subtitle_settings();
+    page.render_subtitle_settings(settings);
     page
   }
 
@@ -407,9 +403,14 @@ impl SettingsPage {
     self.storage_status.set_visible(visible);
   }
 
-  pub(crate) fn handle(&mut self, message: Message, cx: &SettingsContext) -> Vec<SettingsEffect> {
+  pub(crate) fn handle(
+    &mut self,
+    message: Message,
+    cx: &SettingsContext,
+    settings: &mut SettingsStore,
+  ) -> Vec<SettingsEffect> {
     match message {
-      Message::SetIntroMode(selected) => self.set_intro_mode(selected, cx),
+      Message::SetIntroMode(selected) => self.set_intro_mode(selected, cx, settings),
       Message::ReconnectRemoteControl => vec![SettingsEffect::ReconnectRemoteControl],
       Message::RefreshConnectionStatus => {
         if !cx.connected {
@@ -419,18 +420,22 @@ impl SettingsPage {
         vec![SettingsEffect::RefreshConnectionStatus]
       }
       Message::DetectMpv => self.detect_mpv(),
-      Message::SetMpvPath(path) => self.update_mpv_path(path),
-      Message::SetMpvArgs(args) => self.update_mpv_args(args),
-      Message::SetPlaybackTargetName(name) => self.update_playback_target_name(name),
-      Message::AddSubtitlePreset => self.add_subtitle_preset(),
-      Message::AddSubtitleCustom => self.add_custom_subtitle(),
-      Message::MoveSubtitleLanguage { index, offset } => self.move_subtitle_language(index, offset),
-      Message::RemoveSubtitleLanguage(index) => self.remove_subtitle_language(index),
-      Message::ClearSubtitleLanguages => self.clear_subtitle_languages(),
-      Message::SetNextEpisodeKey(key) => self.update_shortcut(ShortcutKind::Next, key),
-      Message::SetPreviousEpisodeKey(key) => self.update_shortcut(ShortcutKind::Previous, key),
-      Message::SetIntroSkipKey(key) => self.update_shortcut(ShortcutKind::IntroSkip, key),
-      Message::SetImageCacheEnabled(enabled) => self.set_image_cache_enabled(enabled),
+      Message::SetMpvPath(path) => self.update_mpv_path(path, settings),
+      Message::SetMpvArgs(args) => self.update_mpv_args(args, settings),
+      Message::SetPlaybackTargetName(name) => self.update_playback_target_name(name, settings),
+      Message::AddSubtitlePreset => self.add_subtitle_preset(settings),
+      Message::AddSubtitleCustom => self.add_custom_subtitle(settings),
+      Message::MoveSubtitleLanguage { index, offset } => {
+        self.move_subtitle_language(index, offset, settings)
+      }
+      Message::RemoveSubtitleLanguage(index) => self.remove_subtitle_language(index, settings),
+      Message::ClearSubtitleLanguages => self.clear_subtitle_languages(settings),
+      Message::SetNextEpisodeKey(key) => self.update_shortcut(ShortcutKind::Next, key, settings),
+      Message::SetPreviousEpisodeKey(key) => {
+        self.update_shortcut(ShortcutKind::Previous, key, settings)
+      }
+      Message::SetIntroSkipKey(key) => self.update_shortcut(ShortcutKind::IntroSkip, key, settings),
+      Message::SetImageCacheEnabled(enabled) => self.set_image_cache_enabled(enabled, settings),
       Message::RefreshImageCacheStats => {
         if cx.image_cache_clearing {
           return Vec::new();
@@ -486,19 +491,23 @@ impl SettingsPage {
 
   pub(crate) fn render_connection(&self, view: &ConnectionView<'_>) {
     let server_url = if view.connected {
-      non_empty_setting(view.server_url.to_owned())
-        .unwrap_or_else(|| "Connected server URL unavailable".to_owned())
+      match view.server_url.trim() {
+        "" => "Connected server URL unavailable",
+        server_url => server_url,
+      }
     } else {
-      "Not connected".to_owned()
+      "Not connected"
     };
     self
       .server_url
       .set_label(&format!("Server URL: {server_url}"));
     let user = if view.connected {
-      non_empty_setting(view.user.to_owned())
-        .unwrap_or_else(|| "Authenticated user unavailable".to_owned())
+      match view.user.trim() {
+        "" => "Authenticated user unavailable",
+        user => user,
+      }
     } else {
-      "No authenticated user".to_owned()
+      "No authenticated user"
     };
     self.user.set_label(&format!("User: {user}"));
     self.remote_status.set_label(view.remote_status);
@@ -565,22 +574,29 @@ impl SettingsPage {
     }
   }
 
-  fn set_intro_mode(&self, selected: u32, cx: &SettingsContext) -> Vec<SettingsEffect> {
+  fn set_intro_mode(
+    &self,
+    selected: u32,
+    cx: &SettingsContext,
+    settings: &mut SettingsStore,
+  ) -> Vec<SettingsEffect> {
     let mode = config_intro_mode(selected);
-    let mut prefill = config::load();
-    prefill.intro_mode = mode;
-    match config::save(&prefill) {
-      Ok(()) => {
+    match settings.set_intro_mode(mode) {
+      Ok(changed) => {
         self.intro_skip_status.set_label("");
         self.intro_skip_status.set_visible(false);
-        vec![
-          SettingsEffect::IntroModeChanged(mode),
-          diagnostic(
-            DiagnosticLevel::Info,
-            DiagnosticCategory::Config,
-            "Intro Skip preference was saved.",
-          ),
-        ]
+        if changed {
+          vec![
+            SettingsEffect::IntroModeChanged(mode),
+            diagnostic(
+              DiagnosticLevel::Info,
+              DiagnosticCategory::Config,
+              "Intro Skip preference was saved.",
+            ),
+          ]
+        } else {
+          Vec::new()
+        }
       }
       Err(_) => {
         self
@@ -623,135 +639,114 @@ impl SettingsPage {
     }
   }
 
-  fn update_mpv_path(&self, path: String) -> Vec<SettingsEffect> {
-    let mut settings = config::load();
-    settings.mpv_path = non_empty_setting(path);
-    self.save_and_reconfigure(&settings)
+  fn update_mpv_path(&self, path: String, settings: &mut SettingsStore) -> Vec<SettingsEffect> {
+    let result = settings.set_mpv_path(path);
+    self.save_and_reconfigure(result)
   }
 
-  fn update_mpv_args(&self, args: String) -> Vec<SettingsEffect> {
-    let mut settings = config::load();
-    settings.mpv_args = parse_mpv_args(&args);
-    self.save_and_reconfigure(&settings)
+  fn update_mpv_args(&self, args: String, settings: &mut SettingsStore) -> Vec<SettingsEffect> {
+    let result = settings.set_mpv_args(&args);
+    self.save_and_reconfigure(result)
   }
 
-  fn update_playback_target_name(&self, name: String) -> Vec<SettingsEffect> {
-    let mut settings = config::load();
-    settings.playback_target_name = non_empty_setting(name);
-    match self.save_application_config(&settings) {
-      Ok(()) => Vec::new(),
+  fn update_playback_target_name(
+    &self,
+    name: String,
+    settings: &mut SettingsStore,
+  ) -> Vec<SettingsEffect> {
+    match self.save_application_config(settings.set_playback_target_name(name)) {
+      Ok(_) => Vec::new(),
       Err(effect) => vec![effect],
     }
   }
 
-  fn add_subtitle_preset(&self) -> Vec<SettingsEffect> {
+  fn add_subtitle_preset(&self, settings: &mut SettingsStore) -> Vec<SettingsEffect> {
     let selected = self.subtitle_preset.selected() as usize;
     let Some(language) = SUBTITLE_LANGUAGE_OPTIONS.get(selected) else {
       return Vec::new();
     };
-    self.add_subtitle_language((*language).to_owned())
+    self.add_subtitle_language((*language).to_owned(), settings)
   }
 
-  fn add_custom_subtitle(&self) -> Vec<SettingsEffect> {
+  fn add_custom_subtitle(&self, settings: &mut SettingsStore) -> Vec<SettingsEffect> {
     let language = self.subtitle_custom.text().to_string();
-    let effects = self.add_subtitle_language(language);
-    if !effects.is_empty()
-      && effects
-        .iter()
-        .any(|effect| matches!(effect, SettingsEffect::ReconfigurePlayback))
+    let effects = self.add_subtitle_language(language, settings);
+    if effects
+      .iter()
+      .any(|effect| matches!(effect, SettingsEffect::ReconfigurePlayback))
     {
       self.subtitle_custom.set_text("");
     }
     effects
   }
 
-  fn add_subtitle_language(&self, language: String) -> Vec<SettingsEffect> {
-    let language = language.trim().to_ascii_lowercase();
-    if !valid_subtitle_language(&language) {
-      return vec![self.show_failure("Enter a language code using letters, numbers, '-' or '_'.")];
+  fn add_subtitle_language(
+    &self,
+    language: String,
+    settings: &mut SettingsStore,
+  ) -> Vec<SettingsEffect> {
+    let result = settings.add_subtitle_language(language);
+    match result {
+      Err(SettingsMutationError::InvalidSubtitleLanguage) => {
+        vec![self.show_failure("Enter a language code using letters, numbers, '-' or '_'.")]
+      }
+      Err(SettingsMutationError::DuplicateSubtitleLanguage) => {
+        vec![self.show_failure("That subtitle language is already in the priority list.")]
+      }
+      result => self.finish_subtitle_mutation(result, settings.snapshot()),
     }
-    let mut settings = config::load();
-    if settings
-      .subtitle_languages
-      .iter()
-      .any(|existing| existing.eq_ignore_ascii_case(&language))
-    {
-      return vec![self.show_failure("That subtitle language is already in the priority list.")];
-    }
-    settings.subtitle_languages.push(language);
-    let effects = self.save_and_reconfigure(&settings);
+  }
+
+  fn move_subtitle_language(
+    &self,
+    index: usize,
+    offset: i32,
+    settings: &mut SettingsStore,
+  ) -> Vec<SettingsEffect> {
+    let result = settings.move_subtitle_language(index, offset);
+    self.finish_subtitle_mutation(result, settings.snapshot())
+  }
+
+  fn remove_subtitle_language(
+    &self,
+    index: usize,
+    settings: &mut SettingsStore,
+  ) -> Vec<SettingsEffect> {
+    let result = settings.remove_subtitle_language(index);
+    self.finish_subtitle_mutation(result, settings.snapshot())
+  }
+
+  fn clear_subtitle_languages(&self, settings: &mut SettingsStore) -> Vec<SettingsEffect> {
+    let result = settings.clear_subtitle_languages();
+    self.finish_subtitle_mutation(result, settings.snapshot())
+  }
+
+  fn finish_subtitle_mutation(
+    &self,
+    result: Result<bool, SettingsMutationError>,
+    settings: &Settings,
+  ) -> Vec<SettingsEffect> {
+    let effects = self.save_and_reconfigure(result);
     if effects
       .iter()
       .any(|effect| matches!(effect, SettingsEffect::ReconfigurePlayback))
     {
-      self.render_subtitle_settings();
+      self.render_subtitle_settings(settings);
     }
     effects
   }
 
-  fn move_subtitle_language(&self, index: usize, offset: i32) -> Vec<SettingsEffect> {
-    let mut settings = config::load();
-    let Ok(index_i32) = i32::try_from(index) else {
-      return Vec::new();
-    };
-    let target = index_i32.saturating_add(offset);
-    let Ok(target) = usize::try_from(target) else {
-      return Vec::new();
-    };
-    if index >= settings.subtitle_languages.len() || target >= settings.subtitle_languages.len() {
-      return Vec::new();
-    }
-    settings.subtitle_languages.swap(index, target);
-    let effects = self.save_and_reconfigure(&settings);
-    if effects
-      .iter()
-      .any(|effect| matches!(effect, SettingsEffect::ReconfigurePlayback))
-    {
-      self.render_subtitle_settings();
-    }
-    effects
-  }
-
-  fn remove_subtitle_language(&self, index: usize) -> Vec<SettingsEffect> {
-    let mut settings = config::load();
-    if index >= settings.subtitle_languages.len() {
-      return Vec::new();
-    }
-    settings.subtitle_languages.remove(index);
-    let effects = self.save_and_reconfigure(&settings);
-    if effects
-      .iter()
-      .any(|effect| matches!(effect, SettingsEffect::ReconfigurePlayback))
-    {
-      self.render_subtitle_settings();
-    }
-    effects
-  }
-
-  fn clear_subtitle_languages(&self) -> Vec<SettingsEffect> {
-    let mut settings = config::load();
-    settings.subtitle_languages.clear();
-    let effects = self.save_and_reconfigure(&settings);
-    if effects
-      .iter()
-      .any(|effect| matches!(effect, SettingsEffect::ReconfigurePlayback))
-    {
-      self.render_subtitle_settings();
-    }
-    effects
-  }
-
-  fn render_subtitle_settings(&self) {
+  fn render_subtitle_settings(&self, settings: &Settings) {
     clear_box(&self.subtitle_languages);
-    let settings = config::load();
-    if settings.subtitle_languages.is_empty() {
+    let languages = settings.subtitle_languages();
+    if languages.is_empty() {
       self
         .subtitle_languages
         .append(&dim_label("No subtitle language priority configured."));
       return;
     }
-    let last = settings.subtitle_languages.len().saturating_sub(1);
-    for (index, language) in settings.subtitle_languages.iter().enumerate() {
+    let last = languages.len().saturating_sub(1);
+    for (index, language) in languages.iter().enumerate() {
       let row = gtk::Box::new(gtk::Orientation::Horizontal, 8);
       let label = gtk::Label::new(Some(language));
       label.add_css_class("monospace");
@@ -795,33 +790,34 @@ impl SettingsPage {
     }
   }
 
-  fn update_shortcut(&self, kind: ShortcutKind, key: String) -> Vec<SettingsEffect> {
-    let key = key.trim().to_owned();
-    if key.is_empty() {
-      return vec![self.show_failure("MPV shortcut keys cannot be empty.")];
-    }
-    let mut settings = config::load();
-    if shortcut_binding_collision(&settings, kind, &key) {
-      return vec![
-        self.show_failure("That MPV shortcut is already assigned to another JellyPilot action.")
-      ];
-    }
-    match kind {
-      ShortcutKind::Next => settings.key_next_episode = key,
-      ShortcutKind::Previous => settings.key_previous_episode = key,
-      ShortcutKind::IntroSkip => settings.key_intro_skip = key,
-    }
-    match self.save_application_config(&settings) {
-      Ok(()) => self.write_shortcut_config(&settings),
-      Err(effect) => vec![effect],
+  fn update_shortcut(
+    &self,
+    kind: ShortcutKind,
+    key: String,
+    settings: &mut SettingsStore,
+  ) -> Vec<SettingsEffect> {
+    match settings.set_shortcut(kind, key) {
+      Err(SettingsMutationError::EmptyShortcut) => {
+        vec![self.show_failure("MPV shortcut keys cannot be empty.")]
+      }
+      Err(SettingsMutationError::ShortcutCollision) => {
+        vec![
+          self.show_failure("That MPV shortcut is already assigned to another JellyPilot action.")
+        ]
+      }
+      result => match self.save_application_config(result) {
+        Ok(true) => self.write_shortcut_config(settings.snapshot()),
+        Ok(false) => Vec::new(),
+        Err(effect) => vec![effect],
+      },
     }
   }
 
-  fn write_shortcut_config(&self, settings: &LoginPrefill) -> Vec<SettingsEffect> {
+  fn write_shortcut_config(&self, settings: &Settings) -> Vec<SettingsEffect> {
     if write_input_conf(
-      &settings.key_next_episode,
-      &settings.key_previous_episode,
-      &settings.key_intro_skip,
+      settings.key_next_episode(),
+      settings.key_previous_episode(),
+      settings.key_intro_skip(),
     )
     .is_some()
     {
@@ -832,12 +828,14 @@ impl SettingsPage {
     }
   }
 
-  fn set_image_cache_enabled(&self, enabled: bool) -> Vec<SettingsEffect> {
-    let mut settings = config::load();
-    let previous = settings.image_cache_enabled;
-    settings.image_cache_enabled = enabled;
-    match self.save_application_config(&settings) {
-      Ok(()) => {
+  fn set_image_cache_enabled(
+    &self,
+    enabled: bool,
+    settings: &mut SettingsStore,
+  ) -> Vec<SettingsEffect> {
+    let previous = settings.snapshot().image_cache_enabled();
+    match self.save_application_config(settings.set_image_cache_enabled(enabled)) {
+      Ok(true) => {
         self.set_config_status(if enabled {
           "Saved. Disk Library Image Cache enabled."
         } else {
@@ -845,6 +843,7 @@ impl SettingsPage {
         });
         vec![SettingsEffect::SetImageCacheEnabled(enabled)]
       }
+      Ok(false) => Vec::new(),
       Err(effect) => {
         self.image_cache_syncing.set(true);
         self.image_cache.set_active(previous);
@@ -891,18 +890,27 @@ impl SettingsPage {
       .set_sensitive(!clearing && stats.entries > 0);
   }
 
-  fn save_and_reconfigure(&self, settings: &LoginPrefill) -> Vec<SettingsEffect> {
-    match self.save_application_config(settings) {
-      Ok(()) => vec![SettingsEffect::ReconfigurePlayback],
+  fn save_and_reconfigure(
+    &self,
+    result: Result<bool, SettingsMutationError>,
+  ) -> Vec<SettingsEffect> {
+    match self.save_application_config(result) {
+      Ok(true) => vec![SettingsEffect::ReconfigurePlayback],
+      Ok(false) => Vec::new(),
       Err(effect) => vec![effect],
     }
   }
 
-  fn save_application_config(&self, settings: &LoginPrefill) -> Result<(), SettingsEffect> {
-    match config::save(settings) {
-      Ok(()) => {
-        self.set_config_status("Saved");
-        Ok(())
+  fn save_application_config(
+    &self,
+    result: Result<bool, SettingsMutationError>,
+  ) -> Result<bool, SettingsEffect> {
+    match result {
+      Ok(changed) => {
+        if changed {
+          self.set_config_status("Saved");
+        }
+        Ok(changed)
       }
       Err(_) => Err(self.show_failure("Settings could not be saved.")),
     }
@@ -1098,47 +1106,6 @@ fn clear_box(container: &gtk::Box) {
   }
 }
 
-fn shortcut_binding_collision(
-  settings: &LoginPrefill,
-  kind: ShortcutKind,
-  candidate: &str,
-) -> bool {
-  let other_bindings = match kind {
-    ShortcutKind::Next => [
-      settings.key_previous_episode.as_str(),
-      settings.key_intro_skip.as_str(),
-    ],
-    ShortcutKind::Previous => [
-      settings.key_next_episode.as_str(),
-      settings.key_intro_skip.as_str(),
-    ],
-    ShortcutKind::IntroSkip => [
-      settings.key_next_episode.as_str(),
-      settings.key_previous_episode.as_str(),
-    ],
-  };
-  other_bindings
-    .iter()
-    .any(|binding| binding.trim().eq_ignore_ascii_case(candidate.trim()))
-}
-
-fn non_empty_setting(value: String) -> Option<String> {
-  let value = value.trim();
-  (!value.is_empty()).then(|| value.to_owned())
-}
-
-fn parse_mpv_args(value: &str) -> Vec<String> {
-  value.split_whitespace().map(str::to_owned).collect()
-}
-
-fn valid_subtitle_language(value: &str) -> bool {
-  !value.is_empty()
-    && value.len() <= 16
-    && value
-      .chars()
-      .all(|character| character.is_ascii_alphanumeric() || matches!(character, '-' | '_'))
-}
-
 const fn config_intro_mode(selected: u32) -> config::IntroMode {
   match selected {
     1 => config::IntroMode::Manual,
@@ -1168,47 +1135,5 @@ fn format_byte_count(bytes: u64) -> String {
     format!("{:.1} KiB", bytes / KIB)
   } else {
     format!("{bytes:.0} B")
-  }
-}
-
-#[cfg(test)]
-mod tests {
-  use super::*;
-
-  #[test]
-  fn advanced_mpv_arguments_parse_as_space_separated_values() {
-    assert_eq!(
-      parse_mpv_args(" --fullscreen   --profile=gpu-hq "),
-      vec!["--fullscreen", "--profile=gpu-hq"]
-    );
-  }
-
-  #[test]
-  fn custom_subtitle_language_validation_rejects_mpv_list_delimiters() {
-    assert!(valid_subtitle_language("pt-br"));
-    assert!(valid_subtitle_language("zho_hant"));
-    assert!(!valid_subtitle_language(""));
-    assert!(!valid_subtitle_language("eng,spa"));
-    assert!(!valid_subtitle_language("english subtitles"));
-  }
-
-  #[test]
-  fn shortcut_collisions_are_case_insensitive_trimmed_and_exclude_current_action() {
-    let settings = LoginPrefill::default();
-    assert!(shortcut_binding_collision(
-      &settings,
-      ShortcutKind::Next,
-      " shift+< ",
-    ));
-    assert!(shortcut_binding_collision(
-      &settings,
-      ShortcutKind::IntroSkip,
-      "SHIFT+>",
-    ));
-    assert!(!shortcut_binding_collision(
-      &settings,
-      ShortcutKind::Next,
-      " shift+> ",
-    ));
   }
 }
