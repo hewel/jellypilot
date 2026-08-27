@@ -830,6 +830,9 @@ impl AppModel {
             ))
           });
         }
+        BrowseEffect::CancelBrowsePage(_token) => {
+          // Relm4 one-shot commands cannot be aborted; the model rejects late settlements.
+        }
         BrowseEffect::OpenDetail(item) => self.dispatch_detail(detail::Message::Open(item), sender),
         BrowseEffect::PlayItem(item, position) => self.start_playback(item, position, sender),
         BrowseEffect::Render => {

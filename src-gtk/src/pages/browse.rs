@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
+use jellypilot_core::LibraryBrowseLoadToken;
 use jellypilot_media_server::{
   JellyfinClient, VideoLibraryItem, VideoLibraryPageRequest, VideoLibraryPlayedFilter,
   VideoLibraryShortcut, VideoLibrarySort, VideoLibrarySortDirection, VideoSearchRequest,
@@ -12,9 +13,8 @@ use crate::artwork::DecodedArtwork;
 use crate::artwork_binder::{ArtworkBinder, ArtworkSlot, ArtworkSurface};
 use crate::browse_model::{
   BrowseModel, BrowsePagePayload, BrowsePageRequest, BrowsePageSettlement, BrowsePreferences,
-  BrowseSource,
+  BrowseSource, LibraryBrowseView,
 };
-use crate::library_browse::LibraryBrowseView;
 use crate::pages::cards::{
   apply_decoded_artwork, clear_box, dim_label, library_kind, loading_view, poster_card,
   register_artwork, row_card, state_view, ArtworkTarget,
@@ -88,6 +88,7 @@ pub(crate) enum BrowseEffect {
     image_id: String,
   },
   BrowsePage(BrowsePageRequest),
+  CancelBrowsePage(LibraryBrowseLoadToken),
   OpenDetail(VideoLibraryItem),
   PlayItem(Playable, PlaybackStartPosition),
   Render,
@@ -562,7 +563,9 @@ impl BrowsePage {
         crate::browse_model::BrowseEffect::RequestPage(request) => {
           out.push(BrowseEffect::BrowsePage(request));
         }
-        crate::browse_model::BrowseEffect::CancelPage => {}
+        crate::browse_model::BrowseEffect::CancelPage { token } => {
+          out.push(BrowseEffect::CancelBrowsePage(token));
+        }
       }
     }
     out
