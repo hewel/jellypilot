@@ -8,6 +8,8 @@
 #[cfg(target_os = "linux")]
 mod artwork;
 #[cfg(target_os = "linux")]
+mod artwork_binder;
+#[cfg(target_os = "linux")]
 mod artwork_cache;
 #[cfg(target_os = "linux")]
 mod auth_storage;

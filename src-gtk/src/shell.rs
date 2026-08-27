@@ -1,23 +1,31 @@
 use std::cell::Cell;
-use std::collections::HashMap;
 use std::path::PathBuf;
 use std::rc::Rc;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use jellypilot_media_server::{
-  JellyfinClient, MediaItem, PlaybackEngineKind, SavedSession, VideoDetailMetadata, VideoHome,
-  VideoItemDetail, VideoItemStreams, VideoLibraryItem, VideoLibraryKind, VideoLibraryPageRequest,
-  VideoLibraryPlayedFilter, VideoLibraryShortcut, VideoLibrarySort, VideoLibrarySortDirection,
-  VideoSearchRequest, VideoSeason, VideoSeasonEpisodesPage, VideoSeasonEpisodesPageRequest,
-  VideoShowDetail, VideoUserDataAction, VideoUserDataUpdate, VideoUserDataUpdateRequest,
+  JellyfinClient, MediaItem, PlaybackEngineKind, SavedSession, VideoItemDetail,
+  VideoUserDataUpdateRequest,
 };
+
 use jellypilot_mpv::{has_mpv_option, write_input_conf, PlayerState};
 use jellypilot_session::{IntroSkipKind, IntroSkipMode, IntroSkipRange};
 use relm4::adw::prelude::*;
 use relm4::{adw, gtk, Component, ComponentParts, ComponentSender, RelmApp};
 
+use crate::artwork::{ArtworkAdapter, DecodedArtwork, FALLBACK_ARTWORK_ICON};
+use crate::artwork_binder::{ArtworkBinder, ArtworkSettlement, ArtworkSlot, ArtworkSurface};
+use crate::artwork_cache::ArtworkCacheStats;
+use crate::auth_storage::{AuthStore, SavedProfileKey, SavedProfileSummary};
+
+use crate::config::{self, LoginPrefill};
+use crate::diagnostics::{DiagnosticCategory, DiagnosticLevel, Diagnostics};
+use crate::pages::browse::{self, BrowseContext, BrowseEffect, BrowseEvent, BrowsePage};
+use crate::pages::cards::{clear_box, dim_label};
+use crate::pages::detail::{self, DetailContext, DetailEffect, DetailEvent, DetailPage};
 use crate::pages::diagnostics::{self, DiagnosticsContext, DiagnosticsPage};
+use crate::pages::home::{self, HomeContext, HomeEffect, HomeEvent, HomePage};
 use crate::pages::login::{
   self, run_auth_operation, LoginContext, LoginEffect, LoginEvent, LoginPage,
 };
@@ -25,16 +33,6 @@ use crate::pages::settings::{
   self, ConnectionView, SettingsContext, SettingsEffect, SettingsEvent, SettingsPage,
 };
 
-use crate::artwork::{ArtworkAdapter, DecodedArtwork, FALLBACK_ARTWORK_ICON};
-use crate::artwork_cache::ArtworkCacheStats;
-use crate::auth_storage::{AuthStore, SavedProfileKey, SavedProfileSummary};
-use crate::browse_model::{
-  BrowseEffect, BrowseModel, BrowsePagePayload, BrowsePageRequest, BrowsePageSettlement,
-  BrowsePreferences, BrowseSource,
-};
-use crate::config::{self, LoginPrefill};
-use crate::diagnostics::{DiagnosticCategory, DiagnosticLevel, Diagnostics};
-use crate::library_browse::LibraryBrowseView;
 use crate::playback::{
   Playable, PlaybackController, PlaybackControllerConfig, PlaybackError, PlaybackRefreshOutcome,
   PlaybackRefreshState, PlaybackSnapshot, PlaybackStartPosition, TrackInfo,
@@ -45,52 +43,32 @@ use crate::playback_session::{
   PlaybackSession, SessionView, TracksView,
 };
 use crate::request_gate::{
-  DetailAuxKind, DetailAuxToken, DetailToken, HomeToken, ImageCacheToken, RemotePlayToken,
-  RemoteToken, RequestGate, SessionToken,
+  ImageCacheToken, RemotePlayToken, RemoteToken, RequestGate, SessionToken,
 };
+
+pub(crate) use crate::pages::LoadState;
 
 const APP_ID: &str = "io.github.hewel.JellyPilot.GtkPreview";
 const SMOKE_APP_ID: &str = "io.github.hewel.JellyPilot.GtkPreview.Smoke";
-const SEASON_EPISODE_PAGE_SIZE: i32 = 30;
-const HOME_HERO_HEIGHT: i32 = 340;
-const POSTER_FRAME_WIDTH: i32 = 160;
-const POSTER_FRAME_HEIGHT: i32 = 240;
-const THUMB_FRAME_WIDTH: i32 = 240;
-const THUMB_FRAME_HEIGHT: i32 = 135;
 const PLAYER_THUMB_SIZE: i32 = 36;
-const PLAYBACK_ARTWORK_SLOT: u64 = u64::MAX;
 struct AppModel {
   client: Arc<JellyfinClient>,
   auth_store: AuthStore,
   login: LoginPage,
   settings: SettingsPage,
   diagnostics_page: DiagnosticsPage,
+  home_page: HomePage,
+  browse_page: BrowsePage,
+  detail_page: DetailPage,
   intro_mode: config::IntroMode,
   diagnostics: Diagnostics,
   saved_profiles: LoadState<Vec<SavedProfileSummary>>,
   active_saved_profile: Option<SavedProfileKey>,
   artwork: Arc<ArtworkAdapter>,
-  artwork_view: u64,
-  playback_artwork_view: u64,
-  artwork_slot: u64,
+  artwork_binder: ArtworkBinder,
   image_cache_clearing: bool,
-  artwork_targets: HashMap<u64, ArtworkTarget>,
   requests: RequestGate,
   connection: ConnectionPhase,
-  home: LoadState<VideoHome>,
-  shortcuts: Vec<VideoLibraryShortcut>,
-  shortcuts_error: Option<String>,
-  browse: BrowseState,
-  detail: LoadState<DetailContent>,
-  detail_selection: Option<VideoLibraryItem>,
-  detail_origin: Option<String>,
-  detail_parent: Option<DetailParent>,
-  streams: LoadState<VideoItemStreams>,
-  season_neighbors: LoadState<Vec<VideoLibraryItem>>,
-  season: Option<SeasonSelection>,
-  recommendations: LoadState<Vec<VideoLibraryItem>>,
-  user_data_busy: bool,
-  user_data_error: Option<String>,
   remote_state: RemoteControlState,
   remote_socket: Option<Arc<jellypilot_session::JellyfinWebSocket>>,
   playback_session: PlaybackSession,
@@ -104,20 +82,10 @@ struct AppModel {
   ui: Ui,
 }
 
-struct ArtworkTarget {
-  picture: gtk::Picture,
-  fallback: gtk::Image,
-}
-
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum TrackKind {
   Audio,
   Subtitle,
-}
-
-#[derive(Clone, Copy)]
-enum ArtworkPresentation {
-  Backdrop,
 }
 
 #[derive(Clone, Copy, Default, Eq, PartialEq)]
@@ -156,84 +124,17 @@ fn remote_volume_value(value: Option<&serde_json::Value>) -> Option<f64> {
   volume.is_finite().then(|| volume.clamp(0.0, 100.0))
 }
 
-#[derive(Clone, Default)]
-pub(crate) enum LoadState<T> {
-  #[default]
-  Idle,
-  Loading,
-  Ready(T),
-  Failed(String),
-}
-
-#[derive(Default)]
-struct BrowseState {
-  title: String,
-  model: BrowseModel,
-  error: Option<String>,
-  presentation: BrowsePresentation,
-  library_shortcut: Option<VideoLibraryShortcut>,
-  sort_selection: u32,
-  played_selection: u32,
-  favorites_only: bool,
-}
-
-#[derive(Clone)]
-enum DetailContent {
-  Item(VideoItemDetail),
-  Show(VideoShowDetail),
-}
-
-#[derive(Clone)]
-struct SeasonSelection {
-  season: VideoSeason,
-  episodes: LoadState<VideoSeasonEpisodesPage>,
-  requested_start_index: i32,
-}
-
-#[derive(Clone)]
-struct DetailParent {
-  content: DetailContent,
-  season: Option<SeasonSelection>,
-}
-
-#[derive(Clone, Copy, Debug, Default)]
-pub(crate) enum BrowsePresentation {
-  #[default]
-  Grid,
-  List,
-}
-
 #[derive(Debug)]
 pub(crate) enum AppMessage {
   Login(login::Message),
   Settings(settings::Message),
   Diagnostics(diagnostics::Message),
+  Home(home::Message),
+  Browse(browse::Message),
+  Detail(detail::Message),
   Disconnect,
   ShowHome,
-  OpenLibrary(VideoLibraryShortcut),
   SearchRequested,
-  SelectItem(VideoLibraryItem),
-  SetBrowsePresentation(BrowsePresentation),
-  SetBrowseSort(u32),
-  SetBrowsePlayedFilter(u32),
-  SetBrowseFavoritesOnly(bool),
-  LoadPreviousPage,
-  LoadNextPage,
-  RetryBrowse,
-  RetryHome,
-  RetryDetail,
-  BackFromDetail,
-  SelectSeason(VideoSeason),
-  PreviousSeasonEpisodePage,
-  NextSeasonEpisodePage,
-  RetrySeason,
-  BackFromSeason,
-  UpdateUserData {
-    item_id: String,
-    action: VideoUserDataAction,
-  },
-  PlayLibrary(VideoLibraryItem, PlaybackStartPosition),
-  PlayDetail(VideoItemDetail, PlaybackStartPosition),
   TogglePaused,
   SetPaused(bool),
   Seek(f64),
@@ -272,45 +173,16 @@ enum AppCommand {
     session: SessionToken,
     result: Result<(), ()>,
   },
-  Home {
-    token: HomeToken,
-    result: (
-      Result<VideoHome, String>,
-      Result<Vec<VideoLibraryShortcut>, String>,
-    ),
-  },
-  Browse(BrowsePageSettlement),
-  Detail {
-    token: DetailToken,
-    result: Box<Result<DetailContent, String>>,
-  },
-  Recommendations {
-    token: DetailAuxToken,
-    result: Result<Vec<VideoLibraryItem>, String>,
-  },
-  Streams {
-    token: DetailAuxToken,
-    result: Result<VideoItemStreams, String>,
-  },
-  SeasonNeighbors {
-    token: DetailAuxToken,
-    result: Result<Vec<VideoLibraryItem>, String>,
-  },
-  SeasonEpisodes {
-    token: DetailToken,
-    season_id: String,
-    result: Result<VideoSeasonEpisodesPage, String>,
-  },
-  UserData {
-    token: DetailAuxToken,
-    result: Result<VideoUserDataUpdate, String>,
-  },
+  HomeEvent(HomeEvent),
+  BrowseEvent(BrowseEvent),
+  DetailEvent(DetailEvent),
   Artwork {
     session: SessionToken,
-    view: u64,
-    slot: u64,
+    surface: ArtworkSurface,
+    slot: ArtworkSlot,
     result: Result<DecodedArtwork, ()>,
   },
+
   ImageCacheStats {
     token: ImageCacheToken,
     result: Result<ArtworkCacheStats, ()>,
@@ -363,60 +235,22 @@ impl std::fmt::Debug for AppCommand {
         .field("token", token)
         .field("event", event)
         .finish(),
-      Self::Browse(settlement) => formatter.debug_tuple("Browse").field(settlement).finish(),
-      Self::Home { token, result } => formatter
-        .debug_struct("Home")
-        .field("token", token)
-        .field("home_successful", &result.0.is_ok())
-        .field("shortcuts_successful", &result.1.is_ok())
-        .finish(),
-      Self::Detail { token, result } => formatter
-        .debug_struct("Detail")
-        .field("token", token)
-        .field("successful", &result.is_ok())
-        .finish(),
-      Self::Recommendations { token, result } => formatter
-        .debug_struct("Recommendations")
-        .field("token", token)
-        .field("successful", &result.is_ok())
-        .finish(),
-      Self::Streams { token, result } => formatter
-        .debug_struct("Streams")
-        .field("token", token)
-        .field("successful", &result.is_ok())
-        .finish(),
-      Self::SeasonNeighbors { token, result } => formatter
-        .debug_struct("SeasonNeighbors")
-        .field("token", token)
-        .field("successful", &result.is_ok())
-        .finish(),
-      Self::SeasonEpisodes {
-        token,
-        season_id,
-        result,
-      } => formatter
-        .debug_struct("SeasonEpisodes")
-        .field("token", token)
-        .field("season_id", season_id)
-        .field("successful", &result.is_ok())
-        .finish(),
-      Self::UserData { token, result } => formatter
-        .debug_struct("UserData")
-        .field("token", token)
-        .field("successful", &result.is_ok())
-        .finish(),
+      Self::HomeEvent(_) => formatter.debug_tuple("HomeEvent").finish(),
+      Self::BrowseEvent(_) => formatter.debug_tuple("BrowseEvent").finish(),
+      Self::DetailEvent(_) => formatter.debug_tuple("DetailEvent").finish(),
       Self::Artwork {
         session,
-        view,
+        surface,
         slot,
         result,
       } => formatter
         .debug_struct("Artwork")
         .field("session", session)
-        .field("view", view)
+        .field("surface", surface)
         .field("slot", slot)
         .field("successful", &result.is_ok())
         .finish(),
+
       Self::ImageCacheStats { token, result } => formatter
         .debug_struct("ImageCacheStats")
         .field("token", token)
@@ -475,20 +309,7 @@ struct Ui {
   content: gtk::Stack,
   nav_home: gtk::ToggleButton,
   shortcuts: gtk::Box,
-  home_content: gtk::Box,
-  browse_title: gtk::Label,
-  browse_status: gtk::Label,
-  browse_content: gtk::Box,
-  browse_filter_bar: gtk::Box,
-  sort_dropdown: gtk::DropDown,
-  played_dropdown: gtk::DropDown,
-  favorites_only: gtk::CheckButton,
-  grid_button: gtk::ToggleButton,
-  list_button: gtk::ToggleButton,
-  load_previous_button: gtk::Button,
-  load_next_button: gtk::Button,
-  browse_scroll: gtk::ScrolledWindow,
-  detail_content: gtk::Box,
+
   position_label: gtk::Label,
   duration_label: gtk::Label,
   previous_button: gtk::Button,
@@ -529,7 +350,17 @@ impl Component for AppModel {
     let login = LoginPage::build(sender.input_sender());
     let diagnostics_page = DiagnosticsPage::build(sender.input_sender());
     let settings = SettingsPage::build(sender.input_sender(), diagnostics_page.root());
-    let ui = Ui::new(&sender, login.root());
+    let home_page = HomePage::build(sender.input_sender());
+    let browse_page = BrowsePage::build(sender.input_sender());
+    let detail_page = DetailPage::build(sender.input_sender());
+    let ui = Ui::new(
+      &sender,
+      login.root(),
+      home_page.root(),
+      browse_page.root(),
+      detail_page.root(),
+    );
+
     root.set_content(Some(&ui.toast_overlay));
     let narrow_breakpoint = adw::Breakpoint::new(adw::BreakpointCondition::new_length(
       adw::BreakpointConditionLengthType::MaxWidth,
@@ -582,32 +413,18 @@ impl Component for AppModel {
       login,
       settings,
       diagnostics_page,
+      home_page,
+      browse_page,
+      detail_page,
       intro_mode,
       diagnostics,
       saved_profiles: LoadState::Loading,
       active_saved_profile: None,
       artwork,
-      artwork_view: 0,
-      playback_artwork_view: 0,
-      artwork_slot: 0,
+      artwork_binder: ArtworkBinder::default(),
       image_cache_clearing: false,
-      artwork_targets: HashMap::new(),
       requests: RequestGate::default(),
       connection: ConnectionPhase::SignedOut,
-      home: LoadState::Idle,
-      shortcuts: Vec::new(),
-      shortcuts_error: None,
-      browse: BrowseState::default(),
-      detail: LoadState::Idle,
-      detail_selection: None,
-      streams: LoadState::Idle,
-      season_neighbors: LoadState::Idle,
-      detail_origin: None,
-      detail_parent: None,
-      recommendations: LoadState::Idle,
-      season: None,
-      user_data_busy: false,
-      user_data_error: None,
       remote_state: RemoteControlState::Unavailable,
       remote_socket: None,
       playback_session: PlaybackSession::default(),
@@ -634,55 +451,16 @@ impl Component for AppModel {
       AppMessage::Login(message) => self.dispatch_login(message, &sender),
       AppMessage::Settings(message) => self.dispatch_settings(message, &sender),
       AppMessage::Diagnostics(message) => self.dispatch_diagnostics(message),
+      AppMessage::Home(message) => self.dispatch_home(message, &sender),
+      AppMessage::Browse(message) => self.dispatch_browse(message, &sender),
+      AppMessage::Detail(message) => self.dispatch_detail(message, &sender),
       AppMessage::Disconnect => {
         if !self.login.is_profile_busy() {
           self.disconnect(&sender);
         }
       }
       AppMessage::ShowHome => self.show_home(&sender),
-      AppMessage::OpenLibrary(shortcut) => self.open_library(shortcut, &sender),
       AppMessage::SearchRequested => self.start_search(&sender),
-      AppMessage::SelectItem(item) => self.load_detail(item, &sender),
-      AppMessage::SetBrowsePresentation(presentation) => {
-        self.browse.presentation = presentation;
-        self.render_browse(&sender);
-      }
-      AppMessage::SetBrowseSort(selection) => {
-        self.browse.sort_selection = selection;
-        self.apply_browse_preferences(&sender);
-      }
-      AppMessage::SetBrowsePlayedFilter(selection) => {
-        self.browse.played_selection = selection;
-        self.apply_browse_preferences(&sender);
-      }
-      AppMessage::SetBrowseFavoritesOnly(favorites_only) => {
-        self.browse.favorites_only = favorites_only;
-        self.apply_browse_preferences(&sender);
-      }
-      AppMessage::LoadPreviousPage => self.load_previous_page(&sender),
-      AppMessage::LoadNextPage => self.load_next_page(&sender),
-      AppMessage::RetryBrowse => self.retry_browse(&sender),
-      AppMessage::RetryHome => self.load_home(&sender),
-      AppMessage::RetryDetail => self.retry_detail(&sender),
-      AppMessage::BackFromDetail => self.back_from_detail(&sender),
-      AppMessage::SelectSeason(season) => self.load_season(season, &sender),
-      AppMessage::PreviousSeasonEpisodePage => self.change_season_episode_page(-1, &sender),
-      AppMessage::NextSeasonEpisodePage => self.change_season_episode_page(1, &sender),
-      AppMessage::RetrySeason => self.retry_season(&sender),
-      AppMessage::BackFromSeason => {
-        self.requests.cancel_detail_loads();
-        self.season = None;
-        self.render_detail(&sender);
-      }
-      AppMessage::UpdateUserData { item_id, action } => {
-        self.start_user_data_update(item_id, action, &sender)
-      }
-      AppMessage::PlayLibrary(item, start_position) => {
-        self.start_playback(Playable::from(item), start_position, &sender)
-      }
-      AppMessage::PlayDetail(item, start_position) => {
-        self.start_playback(Playable::from(item), start_position, &sender)
-      }
       AppMessage::TogglePaused => self.dispatch_playback(PlaybackIntent::TogglePaused, &sender),
       AppMessage::SetPaused(paused) => {
         self.dispatch_playback(PlaybackIntent::SetPaused(paused), &sender)
@@ -859,126 +637,15 @@ impl Component for AppModel {
           .handle_event(SettingsEvent::ConnectionStatus(result), &cx);
         self.render_connection_settings();
       }
-      AppCommand::Home { token, result } => self.finish_home(token, result, &sender),
-      AppCommand::Browse(settlement) => {
-        match self.browse.model.settle(settlement) {
-          Ok(effects) => {
-            self.browse.error = None;
-            self.execute_browse_effects(effects, &sender);
-          }
-          Err(error) => self.browse.error = Some(error.to_string()),
-        }
-        // Keep background page settlements from invalidating artwork targets owned by a
-        // different visible page (for example, an item detail opened while browse was loading).
-        if self.ui.content.visible_child_name().as_deref() == Some("browse") {
-          self.render_browse(&sender);
-        }
-      }
-      AppCommand::Detail { token, result } => {
-        if !self.requests.finish_detail(token) {
-          return;
-        }
-        self.detail = match *result {
-          Ok(detail) => LoadState::Ready(detail),
-          Err(message) => LoadState::Failed(message),
-        };
-        if self.ui.content.visible_child_name().as_deref() == Some("detail") {
-          self.render_detail(&sender);
-        }
-      }
-      AppCommand::Recommendations { token, result } => {
-        if !self.requests.finish_detail_aux(token) {
-          return;
-        }
-        self.recommendations = match result {
-          Ok(items) => LoadState::Ready(items),
-          Err(message) => LoadState::Failed(message),
-        };
-        if self.ui.content.visible_child_name().as_deref() == Some("detail") {
-          self.render_detail(&sender);
-        }
-      }
-      AppCommand::Streams { token, result } => {
-        if !self.requests.finish_detail_aux(token) {
-          return;
-        }
-        self.streams = match result {
-          Ok(streams) => LoadState::Ready(streams),
-          Err(message) => LoadState::Failed(message),
-        };
-        if self.ui.content.visible_child_name().as_deref() == Some("detail") {
-          self.render_detail(&sender);
-        }
-      }
-      AppCommand::SeasonNeighbors { token, result } => {
-        if !self.requests.finish_detail_aux(token) {
-          return;
-        }
-        self.season_neighbors = match result {
-          Ok(items) => LoadState::Ready(items),
-          Err(message) => LoadState::Failed(message),
-        };
-        if self.ui.content.visible_child_name().as_deref() == Some("detail") {
-          self.render_detail(&sender);
-        }
-      }
-      AppCommand::SeasonEpisodes {
-        token,
-        season_id,
-        result,
-      } => {
-        if !self.requests.finish_detail(token) {
-          return;
-        }
-        let Some(selection) = self
-          .season
-          .as_mut()
-          .filter(|selection| selection.season.id == season_id)
-        else {
-          return;
-        };
-        selection.episodes = match result {
-          Ok(episodes) => LoadState::Ready(episodes),
-          Err(message) => LoadState::Failed(message),
-        };
-        if self.ui.content.visible_child_name().as_deref() == Some("detail") {
-          self.render_detail(&sender);
-        }
-      }
-      AppCommand::UserData { token, result } => {
-        self.finish_user_data_update(token, result, &sender)
-      }
+      AppCommand::HomeEvent(event) => self.dispatch_home_event(event, &sender),
+      AppCommand::BrowseEvent(event) => self.dispatch_browse_event(event, &sender),
+      AppCommand::DetailEvent(event) => self.dispatch_detail_event(event, &sender),
       AppCommand::Artwork {
         session,
-        view,
+        surface,
         slot,
         result,
-      } => {
-        if !self.requests.is_current_session(session) {
-          return;
-        }
-        let playback_thumb = slot == PLAYBACK_ARTWORK_SLOT;
-        if playback_thumb {
-          if view != self.playback_artwork_view {
-            return;
-          }
-        } else if view != self.artwork_view {
-          return;
-        }
-        match result.and_then(|decoded| decoded.texture().map_err(|_| ())) {
-          Ok(decoded) => {
-            if playback_thumb {
-              self.ui.playback_artwork.set_paintable(Some(&decoded));
-              self.ui.playback_artwork_fallback.set_visible(false);
-            } else if let Some(target) = self.artwork_targets.remove(&slot) {
-              target.picture.set_paintable(Some(&decoded));
-              target.fallback.set_visible(false);
-            }
-            self.diagnostics.reset_coalescing();
-          }
-          Err(()) => self.record_artwork_failure(),
-        }
-      }
+      } => self.settle_artwork(session, surface, slot, result),
       AppCommand::ImageCacheStats { token, result } => {
         if !self.requests.finish_image_cache(token) || self.image_cache_clearing {
           return;
@@ -1086,6 +753,364 @@ impl AppModel {
     self.diagnostics_page.handle(message, &mut cx);
   }
 
+  fn dispatch_home(&mut self, message: home::Message, sender: &ComponentSender<Self>) {
+    let effects = self.with_home_context(|page, cx| page.handle(message, cx));
+    self.execute_home_effects(effects, sender);
+  }
+
+  fn dispatch_home_event(&mut self, event: HomeEvent, sender: &ComponentSender<Self>) {
+    let effects = self.with_home_context(|page, cx| page.handle_event(event, cx));
+    self.render_shortcuts(sender);
+    self.execute_home_effects(effects, sender);
+  }
+
+  fn with_home_context<R>(
+    &mut self,
+    f: impl FnOnce(&mut HomePage, &mut HomeContext<'_>) -> R,
+  ) -> R {
+    let connection = self.connection;
+    let playback_enabled = self.playback_controls_enabled();
+    let mut cx = HomeContext {
+      gate: &mut self.requests,
+      binder: &mut self.artwork_binder,
+      connection,
+      playback_enabled,
+    };
+    f(&mut self.home_page, &mut cx)
+  }
+
+  fn execute_home_effects(&mut self, effects: Vec<HomeEffect>, sender: &ComponentSender<Self>) {
+    for effect in effects {
+      match effect {
+        HomeEffect::BeginArtworkView => self.begin_page_artwork_view(sender),
+        HomeEffect::ArtworkLoad {
+          surface,
+          slot,
+          image_id,
+        } => self.spawn_artwork_load(surface, slot, image_id, sender),
+        HomeEffect::HomeLoad { token } => {
+          let client = Arc::clone(&self.client);
+          sender.oneshot_command(async move {
+            AppCommand::HomeEvent(home::load_home_data(client, token).await)
+          });
+        }
+        HomeEffect::OpenDetail(item) => self.dispatch_detail(detail::Message::Open(item), sender),
+        HomeEffect::OpenLibrary(shortcut) => {
+          self.select_library_shortcut(&shortcut.id);
+          self.navigate_to("browse");
+          self.dispatch_browse(browse::Message::OpenLibrary(shortcut), sender);
+        }
+        HomeEffect::PlayItem(item, position) => self.start_playback(item, position, sender),
+        HomeEffect::RenderIfVisible => {
+          if self.visible_page().as_deref() == Some("home") {
+            let render = self.with_home_context(|page, cx| page.render(cx));
+            self.execute_home_effects(render, sender);
+          }
+        }
+      }
+    }
+  }
+  fn dispatch_browse(&mut self, message: browse::Message, sender: &ComponentSender<Self>) {
+    match &message {
+      browse::Message::OpenLibrary(shortcut) => {
+        self.select_library_shortcut(&shortcut.id);
+        self.navigate_to("browse");
+      }
+      browse::Message::Search(_) => {
+        self.ui.nav_home.set_active(true);
+        self.ui.nav_home.set_active(false);
+        self.navigate_to("browse");
+      }
+      _ => {}
+    }
+    let effects = self.with_browse_context(|page, cx| page.handle(message, cx));
+    self.execute_browse_page_effects(effects, sender);
+  }
+
+  fn dispatch_browse_event(&mut self, event: BrowseEvent, sender: &ComponentSender<Self>) {
+    let effects = self.with_browse_context(|page, cx| page.handle_event(event, cx));
+    let render = effects
+      .iter()
+      .any(|effect| matches!(effect, BrowseEffect::Render));
+    let effects = effects
+      .into_iter()
+      .filter(|effect| !matches!(effect, BrowseEffect::Render))
+      .collect();
+    self.execute_browse_page_effects(effects, sender);
+    if render && self.visible_page().as_deref() == Some("browse") {
+      let render = self.with_browse_context(|page, cx| page.render(cx));
+      self.execute_browse_page_effects(render, sender);
+    }
+  }
+
+  fn with_browse_context<R>(
+    &mut self,
+    f: impl FnOnce(&mut BrowsePage, &mut BrowseContext<'_>) -> R,
+  ) -> R {
+    let playback_enabled = self.playback_controls_enabled();
+    let mut cx = BrowseContext {
+      gate: &mut self.requests,
+      binder: &mut self.artwork_binder,
+      playback_enabled,
+    };
+    f(&mut self.browse_page, &mut cx)
+  }
+
+  fn execute_browse_page_effects(
+    &mut self,
+    effects: Vec<BrowseEffect>,
+    sender: &ComponentSender<Self>,
+  ) {
+    for effect in effects {
+      match effect {
+        BrowseEffect::BeginArtworkView => self.begin_page_artwork_view(sender),
+        BrowseEffect::ArtworkLoad {
+          surface,
+          slot,
+          image_id,
+        } => self.spawn_artwork_load(surface, slot, image_id, sender),
+        BrowseEffect::BrowsePage(request) => {
+          let client = Arc::clone(&self.client);
+          sender.oneshot_command(async move {
+            AppCommand::BrowseEvent(BrowseEvent::Page(
+              browse::fetch_browse_page(client, request).await,
+            ))
+          });
+        }
+        BrowseEffect::OpenDetail(item) => self.dispatch_detail(detail::Message::Open(item), sender),
+        BrowseEffect::PlayItem(item, position) => self.start_playback(item, position, sender),
+        BrowseEffect::Render => {
+          let render = self.with_browse_context(|page, cx| page.render(cx));
+          self.execute_browse_page_effects(render, sender);
+        }
+      }
+    }
+  }
+
+  fn dispatch_detail(&mut self, message: detail::Message, sender: &ComponentSender<Self>) {
+    let effects = self.with_detail_context(|page, cx| page.handle(message, cx));
+    self.execute_detail_effects(effects, sender);
+  }
+
+  fn dispatch_detail_event(&mut self, event: DetailEvent, sender: &ComponentSender<Self>) {
+    let effects = self.with_detail_context(|page, cx| page.handle_event(event, cx));
+    let render = effects
+      .iter()
+      .any(|effect| matches!(effect, DetailEffect::Render));
+    let effects = effects
+      .into_iter()
+      .filter(|effect| !matches!(effect, DetailEffect::Render))
+      .collect();
+    self.execute_detail_effects(effects, sender);
+    if render && self.visible_page().as_deref() == Some("detail") {
+      let render = self.with_detail_context(|page, cx| page.render(cx));
+      self.execute_detail_effects(render, sender);
+    }
+  }
+
+  fn with_detail_context<R>(
+    &mut self,
+    f: impl FnOnce(&mut DetailPage, &mut DetailContext<'_>) -> R,
+  ) -> R {
+    let playback_enabled = self.playback_controls_enabled();
+    let current_page = self.visible_page();
+    let mut cx = DetailContext {
+      gate: &mut self.requests,
+      binder: &mut self.artwork_binder,
+      playback_enabled,
+      current_page,
+    };
+    f(&mut self.detail_page, &mut cx)
+  }
+
+  fn execute_detail_effects(&mut self, effects: Vec<DetailEffect>, sender: &ComponentSender<Self>) {
+    for effect in effects {
+      match effect {
+        DetailEffect::BeginArtworkView => self.begin_page_artwork_view(sender),
+        DetailEffect::ArtworkLoad {
+          surface,
+          slot,
+          image_id,
+        } => self.spawn_artwork_load(surface, slot, image_id, sender),
+        DetailEffect::DetailLoad { token, item } => {
+          let client = Arc::clone(&self.client);
+          sender.oneshot_command(async move {
+            AppCommand::DetailEvent(DetailEvent::Loaded {
+              token,
+              result: Box::new(detail::load_detail_content(client, item).await),
+            })
+          });
+        }
+        DetailEffect::Recommendations { token, item_id } => {
+          let client = Arc::clone(&self.client);
+          sender.oneshot_command(async move {
+            let result = client
+              .library()
+              .similar_video(item_id)
+              .await
+              .map_err(|error| error.to_string());
+            AppCommand::DetailEvent(DetailEvent::Recommendations { token, result })
+          });
+        }
+        DetailEffect::Streams { token, item_id } => {
+          let client = Arc::clone(&self.client);
+          sender.oneshot_command(async move {
+            let result = client
+              .library()
+              .item_streams(item_id)
+              .await
+              .map_err(|error| error.to_string());
+            AppCommand::DetailEvent(DetailEvent::Streams { token, result })
+          });
+        }
+        DetailEffect::SeasonNeighbors {
+          token,
+          item_id,
+          series_id,
+          season_number,
+        } => {
+          let client = Arc::clone(&self.client);
+          sender.oneshot_command(async move {
+            AppCommand::DetailEvent(DetailEvent::SeasonNeighbors {
+              token,
+              result: detail::load_season_neighbors(client, item_id, series_id, season_number)
+                .await,
+            })
+          });
+        }
+        DetailEffect::SeasonPage {
+          token,
+          season_id,
+          request,
+        } => {
+          let client = Arc::clone(&self.client);
+          sender.oneshot_command(async move {
+            let result = client
+              .library()
+              .season_episodes_page(request)
+              .await
+              .map_err(|error| error.to_string());
+            AppCommand::DetailEvent(DetailEvent::SeasonEpisodes {
+              token,
+              season_id,
+              result,
+            })
+          });
+        }
+        DetailEffect::UserDataAction {
+          token,
+          item_id,
+          action,
+        } => {
+          let client = Arc::clone(&self.client);
+          sender.oneshot_command(async move {
+            let result = client
+              .library()
+              .update_user_data(VideoUserDataUpdateRequest { item_id, action })
+              .await
+              .map_err(|_| "Could not update this item's library state.".to_owned());
+            AppCommand::DetailEvent(DetailEvent::UserData { token, result })
+          });
+        }
+        DetailEffect::PlayItem(item, position) => self.start_playback(item, position, sender),
+        DetailEffect::ShowDetail => self.show_page("detail"),
+        DetailEffect::Back { origin } => {
+          self.navigate_to(&origin);
+          match origin.as_str() {
+            "home" => {
+              let render = self.with_home_context(|page, cx| page.render(cx));
+              self.execute_home_effects(render, sender);
+            }
+            "browse" => {
+              let render = self.with_browse_context(|page, cx| page.render(cx));
+              self.execute_browse_page_effects(render, sender);
+            }
+            _ => {}
+          }
+        }
+        DetailEffect::Render => {
+          let render = self.with_detail_context(|page, cx| page.render(cx));
+          self.execute_detail_effects(render, sender);
+        }
+      }
+    }
+  }
+
+  fn visible_page(&self) -> Option<String> {
+    self
+      .ui
+      .content
+      .visible_child_name()
+      .map(|name| name.to_string())
+  }
+
+  fn begin_page_artwork_view(&mut self, sender: &ComponentSender<Self>) {
+    self.artwork.cancel_pending();
+    if self.playback_artwork_image_id.is_some() {
+      self.queue_playback_artwork(sender);
+    }
+  }
+
+  fn spawn_artwork_load(
+    &self,
+    surface: ArtworkSurface,
+    slot: ArtworkSlot,
+    image_id: String,
+    sender: &ComponentSender<Self>,
+  ) {
+    let artwork = Arc::clone(&self.artwork);
+    let artwork_ticket = artwork.ticket();
+    let client = Arc::clone(&self.client);
+    let session = self.requests.current_session();
+    sender.oneshot_command(async move {
+      let result = artwork
+        .load_with_ticket(&client, &image_id, artwork_ticket)
+        .await
+        .map_err(|_| ());
+      AppCommand::Artwork {
+        session,
+        surface,
+        slot,
+        result,
+      }
+    });
+  }
+
+  fn settle_artwork(
+    &mut self,
+    session: SessionToken,
+    surface: ArtworkSurface,
+    slot: ArtworkSlot,
+    result: Result<DecodedArtwork, ()>,
+  ) {
+    let session_ok = self.requests.is_current_session(session);
+    if self.artwork_binder.settle(slot, surface, session_ok) != ArtworkSettlement::Apply {
+      return;
+    }
+    let Ok(decoded) = result else {
+      self.record_artwork_failure();
+      return;
+    };
+    let applied = match surface {
+      ArtworkSurface::Home => self.home_page.apply_artwork(slot, decoded),
+      ArtworkSurface::Browse => self.browse_page.apply_artwork(slot, decoded),
+      ArtworkSurface::Detail => self.detail_page.apply_artwork(slot, decoded),
+      ArtworkSurface::PlayerBar => match decoded.texture() {
+        Ok(texture) => {
+          self.ui.playback_artwork.set_paintable(Some(&texture));
+          self.ui.playback_artwork_fallback.set_visible(false);
+          true
+        }
+        Err(_) => false,
+      },
+    };
+    if applied {
+      self.diagnostics.reset_coalescing();
+    } else {
+      self.record_artwork_failure();
+    }
+  }
+
   fn execute_settings_effects(
     &mut self,
     effects: Vec<SettingsEffect>,
@@ -1172,18 +1197,20 @@ impl AppModel {
     for effect in effects {
       match effect {
         LoginEffect::AuthStarted => {
-          self.browse.model.reset();
+          self.browse_page.reset();
           self.connection = ConnectionPhase::Connecting;
-          self.home = LoadState::Loading;
+          self.home_page.prepare_connected_session();
         }
+
         LoginEffect::Authenticated {
           client,
           stored_session,
         } => self.finish_login(client, stored_session, sender),
         LoginEffect::AuthFailed { message } => {
           self.connection = ConnectionPhase::Failed;
-          self.home = LoadState::Failed(message);
+          self.home_page.show_failure(&message);
         }
+
         LoginEffect::InvalidInput => {
           self.connection = ConnectionPhase::Failed;
         }
@@ -1216,8 +1243,9 @@ impl AppModel {
         }
         LoginEffect::Cancelled => {
           self.connection = ConnectionPhase::SignedOut;
-          self.home = LoadState::Idle;
+          self.home_page.reset();
         }
+
         LoginEffect::ProfileBusyChanged => self.sync_profile_busy_widgets(),
         LoginEffect::Disconnect => self.disconnect(sender),
         LoginEffect::LoadSavedProfiles => self.load_saved_profiles(sender),
@@ -1604,9 +1632,8 @@ impl AppModel {
     }
     self.connection = ConnectionPhase::Connected;
     self.start_remote_session(sender);
-    self.home = LoadState::Loading;
-    self.shortcuts.clear();
-    self.shortcuts_error = None;
+    self.home_page.prepare_connected_session();
+
     if let Some(session_to_save) = stored_session {
       self.start_persist_session(session_to_save, sender);
     } else {
@@ -1621,7 +1648,7 @@ impl AppModel {
     }
     self.render_authenticated(sender);
     self.show_home(sender);
-    self.load_home(sender);
+    self.dispatch_home(home::Message::Load, sender);
   }
 
   fn start_persist_session(&mut self, session: SavedSession, sender: &ComponentSender<Self>) {
@@ -1648,69 +1675,6 @@ impl AppModel {
     });
   }
 
-  fn load_home(&mut self, sender: &ComponentSender<Self>) {
-    let client = Arc::clone(&self.client);
-    let token = self.requests.begin_home();
-    self.home = LoadState::Loading;
-    if self.ui.content.visible_child_name().as_deref() == Some("home") {
-      self.render_home(sender);
-    }
-    sender.oneshot_command(async move {
-      let (home, shortcuts) = relm4::tokio::join!(
-        async {
-          client
-            .library()
-            .video_home()
-            .await
-            .map_err(|error| error.to_string())
-        },
-        async {
-          client
-            .library()
-            .library_shortcuts()
-            .await
-            .map_err(|error| error.to_string())
-        },
-      );
-      AppCommand::Home {
-        token,
-        result: (home, shortcuts),
-      }
-    });
-  }
-
-  fn finish_home(
-    &mut self,
-    token: HomeToken,
-    result: (
-      Result<VideoHome, String>,
-      Result<Vec<VideoLibraryShortcut>, String>,
-    ),
-    sender: &ComponentSender<Self>,
-  ) {
-    if !self.requests.finish_home(token) || !matches!(self.connection, ConnectionPhase::Connected) {
-      return;
-    }
-    self.home = match result.0 {
-      Ok(home) => LoadState::Ready(home),
-      Err(message) => LoadState::Failed(message),
-    };
-    match result.1 {
-      Ok(shortcuts) => {
-        self.shortcuts = shortcuts;
-        self.shortcuts_error = None;
-      }
-      Err(message) => {
-        self.shortcuts.clear();
-        self.shortcuts_error = Some(message);
-      }
-    }
-    self.render_shortcuts(sender);
-    if self.ui.content.visible_child_name().as_deref() == Some("home") {
-      self.render_home(sender);
-    }
-  }
-
   fn disconnect(&mut self, sender: &ComponentSender<Self>) {
     self.record_diagnostic(
       DiagnosticLevel::Info,
@@ -1722,8 +1686,10 @@ impl AppModel {
     self.login.reset_flow();
     self.artwork.reset_session();
     self.diagnostics.reset_coalescing();
-    self.artwork_view = self.artwork_view.saturating_add(1);
-    self.artwork_targets.clear();
+    self.artwork_binder.reset();
+    self.home_page.reset();
+    self.browse_page.reset();
+    self.detail_page.reset();
     let _client = std::mem::replace(&mut self.client, Arc::new(JellyfinClient::new()));
     self.dispatch_playback(PlaybackIntent::Disconnect, sender);
     self.apply_playback_event(PlaybackEvent::EngineAvailability(false), sender);
@@ -1732,23 +1698,9 @@ impl AppModel {
     self.playback_engine_error = None;
     self.connection = ConnectionPhase::SignedOut;
     self.active_saved_profile = None;
-    self.home = LoadState::Idle;
-    self.shortcuts.clear();
-    self.shortcuts_error = None;
-    self.browse = BrowseState::default();
-    self.ui.sort_dropdown.set_selected(0);
-    self.ui.played_dropdown.set_selected(0);
-    self.ui.favorites_only.set_active(false);
-    self.detail = LoadState::Idle;
-    self.detail_selection = None;
-    self.detail_origin = None;
-    self.detail_parent = None;
-    self.recommendations = LoadState::Idle;
     self.requests.set_detail_item(None);
-    self.streams = LoadState::Idle;
-    self.season_neighbors = LoadState::Idle;
-    self.season = None;
     self.invalidate_user_data_update();
+
     self.ui.search.set_text("");
     self.ui.playback_bar.set_visible(false);
     self.ui.search.set_sensitive(false);
@@ -1828,7 +1780,8 @@ impl AppModel {
 
   fn show_home(&mut self, sender: &ComponentSender<Self>) {
     self.navigate_to("home");
-    self.render_home(sender);
+    let render = self.with_home_context(|page, cx| page.render(cx));
+    self.execute_home_effects(render, sender);
   }
 
   fn navigate_to(&mut self, page: &str) {
@@ -1849,172 +1802,39 @@ impl AppModel {
 
   fn render_shortcuts(&self, sender: &ComponentSender<Self>) {
     clear_box(&self.ui.shortcuts);
-    if let Some(message) = &self.shortcuts_error {
+    if let Some(message) = self.home_page.shortcuts_error() {
       let retry = gtk::Button::with_label("Retry libraries");
       retry.set_tooltip_text(Some(message));
       let sender = sender.clone();
-      retry.connect_clicked(move |_| sender.input(AppMessage::RetryHome));
+      retry.connect_clicked(move |_| sender.input(AppMessage::Home(home::Message::Retry)));
       self.ui.shortcuts.append(&retry);
       return;
     }
-    if self.shortcuts.is_empty() {
+    if self.home_page.shortcuts().is_empty() {
       self
         .ui
         .shortcuts
         .append(&dim_label("No video libraries available."));
       return;
     }
-    for shortcut in &self.shortcuts {
+    for shortcut in self.home_page.shortcuts() {
       let button = navigation_button(&shortcut.name, "folder-videos-symbolic");
       button.set_group(Some(&self.ui.nav_home));
       let shortcut = shortcut.clone();
       let sender = sender.clone();
-      button.connect_clicked(move |_| sender.input(AppMessage::OpenLibrary(shortcut.clone())));
+      button.connect_clicked(move |_| {
+        sender.input(AppMessage::Browse(browse::Message::OpenLibrary(
+          shortcut.clone(),
+        )))
+      });
       self.ui.shortcuts.append(&button);
     }
   }
 
-  fn render_home(&mut self, sender: &ComponentSender<Self>) {
-    self.begin_artwork_view(sender);
-    clear_box(&self.ui.home_content);
-    match &self.home {
-      LoadState::Idle => self.ui.home_content.append(&state_view(
-        "Connect to browse your libraries",
-        "Sign in to Jellyfin or Emby to load Video Home.",
-        "network-offline-symbolic",
-      )),
-      LoadState::Loading => self
-        .ui
-        .home_content
-        .append(&loading_view("Loading Video Home…")),
-      LoadState::Failed(message) => {
-        self.ui.home_content.append(&state_view(
-          "Video Home could not load",
-          message.as_str(),
-          "dialog-error-symbolic",
-        ));
-        let retry = gtk::Button::with_label("Retry");
-        let sender = sender.clone();
-        retry.connect_clicked(move |_| sender.input(AppMessage::RetryHome));
-        self.ui.home_content.append(&retry);
-      }
-      LoadState::Ready(home) => {
-        let continue_watching = home.continue_watching.clone();
-        let next_up = home.next_up.clone();
-        let latest_movies = home.latest_movies.clone();
-        let latest_episodes = home.latest_episodes.clone();
-        let hero_item = continue_watching
-          .first()
-          .or(next_up.first())
-          .or(latest_movies.first())
-          .cloned();
-        if let Some(item) = hero_item {
-          let hero = self.featured_hero(&item, sender);
-          self.ui.home_content.append(&hero);
-        }
-        let shelves = [
-          ("Continue Watching", continue_watching),
-          ("Next Up", next_up),
-          ("Latest Movies", latest_movies),
-          ("Latest Episodes", latest_episodes),
-        ];
-        for (title, items) in shelves {
-          let shelf = self.media_shelf(title, &items, sender);
-          self.ui.home_content.append(&shelf);
-        }
-        let libraries = self.library_shortcuts_section(sender);
-        self.ui.home_content.append(&libraries);
-      }
-    }
-  }
-
-  fn library_shortcuts_section(&mut self, sender: &ComponentSender<Self>) -> gtk::Widget {
-    let section = gtk::Box::new(gtk::Orientation::Vertical, 12);
-    let title = gtk::Label::new(Some("Libraries"));
-    title.add_css_class("title-2");
-    title.set_xalign(0.0);
-    section.append(&title);
-    if let Some(message) = &self.shortcuts_error {
-      section.append(&dim_label(message));
-      return section.upcast();
-    }
-    if self.shortcuts.is_empty() {
-      section.append(&dim_label("No video libraries available."));
-      return section.upcast();
-    }
-    let row = gtk::Box::new(gtk::Orientation::Horizontal, 12);
-    let shortcuts = self.shortcuts.clone();
-    for shortcut in &shortcuts {
-      row.append(&self.library_shortcut_card(shortcut, sender));
-    }
-    let scroll = gtk::ScrolledWindow::builder()
-      .child(&row)
-      .hscrollbar_policy(gtk::PolicyType::Automatic)
-      .vscrollbar_policy(gtk::PolicyType::Never)
-      .propagate_natural_width(true)
-      .build();
-    section.append(&scroll);
-    section.upcast()
-  }
-
-  fn library_shortcut_card(
-    &mut self,
-    shortcut: &VideoLibraryShortcut,
-    sender: &ComponentSender<Self>,
-  ) -> gtk::Widget {
-    let card = gtk::Box::new(gtk::Orientation::Vertical, 6);
-    card.set_width_request(POSTER_FRAME_WIDTH);
-    let button = gtk::Button::new();
-    button.set_has_frame(false);
-    let column = gtk::Box::new(gtk::Orientation::Vertical, 6);
-    let artwork_overlay = gtk::Overlay::new();
-    artwork_overlay.add_css_class("jellypilot-poster");
-    artwork_overlay.set_overflow(gtk::Overflow::Hidden);
-    artwork_overlay.set_size_request(POSTER_FRAME_WIDTH, POSTER_FRAME_HEIGHT);
-    let picture = cover_picture(POSTER_FRAME_WIDTH, POSTER_FRAME_HEIGHT);
-    let fallback = gtk::Image::from_icon_name(FALLBACK_ARTWORK_ICON);
-    fallback.set_pixel_size(48);
-    fallback.set_halign(gtk::Align::Center);
-    fallback.set_valign(gtk::Align::Center);
-    artwork_overlay.set_child(Some(&picture));
-    artwork_overlay.add_overlay(&fallback);
-    self.queue_artwork(
-      picture,
-      fallback,
-      shortcut.artwork_image_id.as_deref(),
-      sender,
-    );
-    column.append(&artwork_overlay);
-    let text = gtk::Box::builder()
-      .orientation(gtk::Orientation::Vertical)
-      .spacing(2)
-      .build();
-    let title = gtk::Label::new(Some(&shortcut.name));
-    title.set_xalign(0.0);
-    title.set_ellipsize(gtk::pango::EllipsizeMode::End);
-    title.set_max_width_chars(18);
-    text.append(&title);
-    let details = dim_label(&library_shortcut_caption(shortcut));
-    details.set_ellipsize(gtk::pango::EllipsizeMode::End);
-    details.set_max_width_chars(18);
-    text.append(&details);
-    column.append(&text);
-    button.set_child(Some(&column));
-    let accessible_label = format!("Open library {}", shortcut.name);
-    button.set_tooltip_text(Some(&accessible_label));
-    button.update_property(&[gtk::accessible::Property::Label(&accessible_label)]);
-    let shortcut = shortcut.clone();
-    let sender = sender.clone();
-    button.connect_clicked(move |_| {
-      sender.input(AppMessage::OpenLibrary(shortcut.clone()));
-    });
-    card.append(&button);
-    card.upcast()
-  }
-
   fn select_library_shortcut(&self, shortcut_id: &str) {
     let Some(index) = self
-      .shortcuts
+      .home_page
+      .shortcuts()
       .iter()
       .position(|shortcut| shortcut.id == shortcut_id)
     else {
@@ -2037,30 +1857,6 @@ impl AppModel {
     button.set_active(true);
   }
 
-  fn open_library(&mut self, shortcut: VideoLibraryShortcut, sender: &ComponentSender<Self>) {
-    self.select_library_shortcut(&shortcut.id);
-    self.navigate_to("browse");
-    self.browse.title = shortcut.name.clone();
-    self.browse.error = None;
-    self.browse.library_shortcut = Some(shortcut.clone());
-    let result = self.browse.model.configure_with_preferences(
-      BrowseSource::Library {
-        session: self.requests.current_session(),
-        shortcut,
-      },
-      browse_preferences(
-        self.browse.sort_selection,
-        self.browse.played_selection,
-        self.browse.favorites_only,
-      ),
-    );
-    match result {
-      Ok(effects) => self.execute_browse_effects(effects, sender),
-      Err(error) => self.browse.error = Some(error.to_string()),
-    }
-    self.render_browse(sender);
-  }
-
   fn start_search(&mut self, sender: &ComponentSender<Self>) {
     let query = self.ui.search.text().trim().to_owned();
     if query.is_empty() {
@@ -2071,692 +1867,13 @@ impl AppModel {
       self.ui.search.grab_focus();
       return;
     }
-    // Activating the static group anchor first clears any dynamic library shortcut,
-    // then deactivating it represents a global search with no sidebar destination.
-    self.ui.nav_home.set_active(true);
-    self.ui.nav_home.set_active(false);
-    self.navigate_to("browse");
-    self.browse.title = format!("Search results for \"{query}\"");
-    self.browse.error = None;
-    self.browse.library_shortcut = None;
-    let result = self.browse.model.configure(BrowseSource::Search {
-      session: self.requests.current_session(),
-      query,
-    });
-    match result {
-      Ok(effects) => self.execute_browse_effects(effects, sender),
-      Err(error) => self.browse.error = Some(error.to_string()),
-    }
-    self.render_browse(sender);
-  }
-
-  fn apply_browse_preferences(&mut self, sender: &ComponentSender<Self>) {
-    let Some(shortcut) = self.browse.library_shortcut.clone() else {
-      return;
-    };
-    self.browse.error = None;
-    let result = self.browse.model.configure_with_preferences(
-      BrowseSource::Library {
-        session: self.requests.current_session(),
-        shortcut,
-      },
-      browse_preferences(
-        self.browse.sort_selection,
-        self.browse.played_selection,
-        self.browse.favorites_only,
-      ),
-    );
-    match result {
-      Ok(effects) => self.execute_browse_effects(effects, sender),
-      Err(error) => self.browse.error = Some(error.to_string()),
-    }
-    self.render_browse(sender);
-  }
-
-  fn load_detail(&mut self, item: VideoLibraryItem, sender: &ComponentSender<Self>) {
-    self.invalidate_user_data_update();
-    let origin = self.ui.content.visible_child_name();
-    if origin.as_deref() != Some("detail") {
-      self.detail_origin = origin.map(|page| page.to_string());
-      self.detail_parent = None;
-    } else if let LoadState::Ready(content @ DetailContent::Show(_)) = &self.detail {
-      self.detail_parent = Some(DetailParent {
-        content: content.clone(),
-        season: self.season.clone(),
-      });
-    }
-    self.detail_selection = Some(item.clone());
-    self.season = None;
-    self.requests.set_detail_item(Some(item.id.clone()));
-    self.recommendations = LoadState::Loading;
-    self.streams = LoadState::Loading;
-    let season_neighbor_request = item
-      .series_id
-      .clone()
-      .zip(item.season_number)
-      .filter(|_| item.item_type.eq_ignore_ascii_case("episode"));
-    self.season_neighbors = if season_neighbor_request.is_some() {
-      LoadState::Loading
-    } else {
-      LoadState::Idle
-    };
-    let token = self.requests.begin_detail();
-    let recommendation_token = self
-      .requests
-      .begin_detail_aux(DetailAuxKind::Recommendations);
-    let stream_token = self.requests.begin_detail_aux(DetailAuxKind::Streams);
-    let season_neighbor_token = self
-      .requests
-      .begin_detail_aux(DetailAuxKind::SeasonNeighbors);
-    self.detail = LoadState::Loading;
-    self.show_page("detail");
-    self.render_detail(sender);
-    let client = Arc::clone(&self.client);
-    let detail_item_id = item.id.clone();
-    let detail_item_type = item.item_type.clone();
-    sender.oneshot_command(async move {
-      let result = if detail_item_type.eq_ignore_ascii_case("series") {
-        client
-          .library()
-          .show_detail(detail_item_id.clone())
-          .await
-          .map(DetailContent::Show)
-          .map_err(|error| error.to_string())
-      } else {
-        client
-          .library()
-          .item_detail(detail_item_id)
-          .await
-          .map(DetailContent::Item)
-          .map_err(|error| error.to_string())
-      };
-      AppCommand::Detail {
-        token,
-        result: Box::new(result),
-      }
-    });
-    if let Some(token) = recommendation_token {
-      let client = Arc::clone(&self.client);
-      let item_id = item.id.clone();
-      sender.oneshot_command(async move {
-        let result = client
-          .library()
-          .similar_video(item_id)
-          .await
-          .map_err(|error| error.to_string());
-        AppCommand::Recommendations { token, result }
-      });
-    }
-    if let Some(token) = stream_token {
-      let client = Arc::clone(&self.client);
-      let stream_item_id = item.id.clone();
-      sender.oneshot_command(async move {
-        let result = client
-          .library()
-          .item_streams(stream_item_id)
-          .await
-          .map_err(|error| error.to_string());
-        AppCommand::Streams { token, result }
-      });
-    }
-    if let (Some((series_id, season_number)), Some(token)) =
-      (season_neighbor_request, season_neighbor_token)
-    {
-      let client = Arc::clone(&self.client);
-      let item_id = item.id.clone();
-      sender.oneshot_command(async move {
-        let result = client
-          .library()
-          .season_episodes_page(VideoSeasonEpisodesPageRequest {
-            series_id,
-            season_id: None,
-            season_number: Some(season_number),
-            start_index: 0,
-            limit: SEASON_EPISODE_PAGE_SIZE,
-          })
-          .await
-          .map(|page| {
-            page
-              .episodes
-              .into_iter()
-              .filter(|episode| episode.id != item_id)
-              .collect()
-          })
-          .map_err(|error| error.to_string());
-        AppCommand::SeasonNeighbors { token, result }
-      });
-    }
-  }
-
-  fn retry_detail(&mut self, sender: &ComponentSender<Self>) {
-    let Some(item) = self.detail_selection.clone() else {
-      return;
-    };
-    self.load_detail(item, sender);
-  }
-
-  fn back_from_detail(&mut self, sender: &ComponentSender<Self>) {
-    self.invalidate_user_data_update();
-    if let Some(parent) = self.detail_parent.take() {
-      self.requests.cancel_detail_loads();
-      self.detail = LoadState::Ready(parent.content);
-      self.season = parent.season;
-      self
-        .requests
-        .set_detail_item(self.current_detail_identity().map(str::to_owned));
-      self.recommendations = LoadState::Loading;
-      self.streams = LoadState::Idle;
-      self.season_neighbors = LoadState::Idle;
-      let _ = self.requests.begin_detail_aux(DetailAuxKind::Streams);
-      let _ = self
-        .requests
-        .begin_detail_aux(DetailAuxKind::SeasonNeighbors);
-      if let Some(token) = self
-        .requests
-        .begin_detail_aux(DetailAuxKind::Recommendations)
-      {
-        let client = Arc::clone(&self.client);
-        let item_id = self
-          .current_detail_identity()
-          .expect("parent detail item was just recorded")
-          .to_owned();
-        sender.oneshot_command(async move {
-          let result = client
-            .library()
-            .similar_video(item_id)
-            .await
-            .map_err(|error| error.to_string());
-          AppCommand::Recommendations { token, result }
-        });
-      }
-      self.render_detail(sender);
-      return;
-    }
-    if self.season.is_some() {
-      self.requests.cancel_detail_loads();
-      self.season = None;
-      self.render_detail(sender);
-      return;
-    }
-    let origin = self
-      .detail_origin
-      .clone()
-      .unwrap_or_else(|| "home".to_owned());
-    self.navigate_to(&origin);
-    match origin.as_str() {
-      "home" => self.render_home(sender),
-      "browse" => self.render_browse(sender),
-      _ => {}
-    }
+    self.dispatch_browse(browse::Message::Search(query), sender);
   }
 
   fn invalidate_user_data_update(&mut self) {
-    self.requests.invalidate_detail_aux(DetailAuxKind::UserData);
-    self.user_data_busy = false;
-    self.user_data_error = None;
-  }
-
-  fn start_user_data_update(
-    &mut self,
-    item_id: String,
-    action: VideoUserDataAction,
-    sender: &ComponentSender<Self>,
-  ) {
-    if self.user_data_busy || self.current_detail_item_id() != Some(item_id.as_str()) {
-      return;
-    }
-    let Some(token) = self.requests.begin_detail_aux(DetailAuxKind::UserData) else {
-      return;
-    };
-    self.user_data_busy = true;
-    self.user_data_error = None;
-    self.render_detail(sender);
-    let client = Arc::clone(&self.client);
-    sender.oneshot_command(async move {
-      let result = client
-        .library()
-        .update_user_data(VideoUserDataUpdateRequest { item_id, action })
-        .await
-        .map_err(|_| "Could not update this item's library state.".to_owned());
-      AppCommand::UserData { token, result }
-    });
-  }
-
-  fn finish_user_data_update(
-    &mut self,
-    token: DetailAuxToken,
-    result: Result<VideoUserDataUpdate, String>,
-    sender: &ComponentSender<Self>,
-  ) {
-    if !self.requests.finish_detail_aux(token) {
-      return;
-    }
-    self.user_data_busy = false;
-    match result {
-      Ok(update) => {
-        let updated = apply_user_data_update(&mut self.detail, &update);
-        debug_assert!(
-          updated,
-          "current detail identity was checked before applying user data"
-        );
-        if let Some(selection) = self
-          .detail_selection
-          .as_mut()
-          .filter(|selection| selection.id == update.item_id)
-        {
-          selection.played = update.played;
-          selection.favorite = update.favorite;
-        }
-        self.user_data_error = None;
-      }
-      Err(message) => self.user_data_error = Some(message),
-    }
-    self.render_detail(sender);
-  }
-
-  fn current_detail_item_id(&self) -> Option<&str> {
-    match &self.detail {
-      LoadState::Ready(DetailContent::Item(detail)) => Some(detail.id.as_str()),
-      LoadState::Ready(DetailContent::Show(detail)) => Some(detail.id.as_str()),
-      _ => None,
-    }
-  }
-  fn current_detail_identity(&self) -> Option<&str> {
-    match &self.detail {
-      LoadState::Ready(DetailContent::Item(detail)) => Some(detail.id.as_str()),
-      LoadState::Ready(DetailContent::Show(detail)) => Some(detail.id.as_str()),
-      _ => None,
-    }
-  }
-
-  fn load_season(&mut self, season: VideoSeason, sender: &ComponentSender<Self>) {
-    self.load_season_page(season, 0, sender);
-  }
-
-  fn load_season_page(
-    &mut self,
-    season: VideoSeason,
-    start_index: i32,
-    sender: &ComponentSender<Self>,
-  ) {
-    let Some(series_id) = self.current_show().map(|detail| detail.id.clone()) else {
-      return;
-    };
-    let start_index = start_index.max(0);
-    let token = self.requests.begin_detail();
-    let season_id = season.id.clone();
-    let request = season_page_request(&series_id, &season, start_index);
-    self.season = Some(SeasonSelection {
-      season,
-      episodes: LoadState::Loading,
-      requested_start_index: start_index,
-    });
-    self.render_detail(sender);
-    let client = Arc::clone(&self.client);
-    sender.oneshot_command(async move {
-      let result = client
-        .library()
-        .season_episodes_page(request)
-        .await
-        .map_err(|error| error.to_string());
-      AppCommand::SeasonEpisodes {
-        token,
-        season_id,
-        result,
-      }
-    });
-  }
-
-  fn retry_season(&mut self, sender: &ComponentSender<Self>) {
-    let Some((season, start_index)) = self
-      .season
-      .as_ref()
-      .map(|selection| (selection.season.clone(), selection.requested_start_index))
-    else {
-      return;
-    };
-    self.load_season_page(season, start_index, sender);
-  }
-
-  fn change_season_episode_page(&mut self, direction: i8, sender: &ComponentSender<Self>) {
-    let Some(selection) = self.season.as_ref() else {
-      return;
-    };
-    let LoadState::Ready(page) = &selection.episodes else {
-      return;
-    };
-    let next_start_index = if direction < 0 {
-      if page.start_index <= 0 {
-        return;
-      }
-      page.start_index.saturating_sub(page.limit.max(1))
-    } else {
-      if !page.has_more || page.next_start_index <= page.start_index {
-        return;
-      }
-      page.next_start_index
-    };
-    let season = selection.season.clone();
-    self.load_season_page(season, next_start_index, sender);
-  }
-
-  fn current_show(&self) -> Option<&VideoShowDetail> {
-    match &self.detail {
-      LoadState::Ready(DetailContent::Show(detail)) => Some(detail),
-      _ => None,
-    }
-  }
-
-  fn load_next_page(&mut self, sender: &ComponentSender<Self>) {
-    match self.browse.model.load_next() {
-      Ok(effects) => {
-        self.browse.error = None;
-        self.execute_browse_effects(effects, sender);
-      }
-      Err(error) => self.browse.error = Some(error.to_string()),
-    }
-    self.render_browse(sender);
-  }
-
-  fn load_previous_page(&mut self, sender: &ComponentSender<Self>) {
-    match self.browse.model.load_previous() {
-      Ok(effects) => {
-        self.browse.error = None;
-        self.execute_browse_effects(effects, sender);
-      }
-      Err(error) => self.browse.error = Some(error.to_string()),
-    }
-    self.render_browse(sender);
-  }
-
-  fn retry_browse(&mut self, sender: &ComponentSender<Self>) {
-    match self.browse.model.retry() {
-      Ok(effects) => {
-        self.browse.error = None;
-        self.execute_browse_effects(effects, sender);
-      }
-      Err(error) => self.browse.error = Some(error.to_string()),
-    }
-    self.render_browse(sender);
-  }
-
-  fn execute_browse_effects(&self, effects: Vec<BrowseEffect>, sender: &ComponentSender<Self>) {
-    for effect in effects {
-      match effect {
-        BrowseEffect::ResetViewport => {
-          let adjustment = self.ui.browse_scroll.vadjustment();
-          adjustment.set_value(adjustment.lower());
-        }
-        BrowseEffect::RequestPage(request) => self.request_browse_page(request, sender),
-        // One-shot commands cannot be aborted individually. Removing the pending reducer token
-        // still makes the eventual completion a deterministic no-op.
-        BrowseEffect::CancelPage => {}
-      }
-    }
-  }
-
-  fn request_browse_page(&self, request: BrowsePageRequest, sender: &ComponentSender<Self>) {
-    let client = Arc::clone(&self.client);
-    sender.oneshot_command(async move {
-      let BrowsePageRequest {
-        source_id,
-        source,
-        token,
-        start_index,
-        limit,
-        preferences,
-      } = request;
-      let result = async {
-        let start_index = i32::try_from(start_index)
-          .map_err(|_| "Library page start index is too large.".to_owned())?;
-        let limit =
-          i32::try_from(limit).map_err(|_| "Library page size is too large.".to_owned())?;
-        match source {
-          BrowseSource::Library { shortcut, .. } => {
-            let collection_type = library_kind(&shortcut.collection_type);
-            client
-              .library()
-              .browse_video(VideoLibraryPageRequest {
-                library_id: shortcut.id,
-                collection_type,
-                start_index,
-                limit,
-                sort: preferences.sort,
-                sort_direction: preferences.sort_direction,
-                played_filter: preferences.played_filter,
-                favorites_only: preferences.favorites_only,
-              })
-              .await
-              .map_err(|error| error.to_string())?
-              .try_into()
-          }
-          BrowseSource::Search { query, .. } => {
-            let page = client
-              .library()
-              .search_video(VideoSearchRequest {
-                query: query.clone(),
-                start_index,
-                limit,
-              })
-              .await
-              .map_err(|error| error.to_string())?;
-            if page.query != query {
-              return Err("Media server returned results for a different search.".to_owned());
-            }
-            BrowsePagePayload::try_from(page)
-          }
-        }
-      }
-      .await;
-      AppCommand::Browse(BrowsePageSettlement {
-        source_id,
-        token,
-        result,
-      })
-    });
-  }
-
-  fn render_browse(&mut self, sender: &ComponentSender<Self>) {
-    self.begin_artwork_view(sender);
-    self.ui.browse_title.set_label(&self.browse.title);
     self
-      .ui
-      .browse_filter_bar
-      .set_visible(self.browse.library_shortcut.is_some());
-    self
-      .ui
-      .sort_dropdown
-      .set_selected(self.browse.sort_selection);
-    self
-      .ui
-      .played_dropdown
-      .set_selected(self.browse.played_selection);
-    self
-      .ui
-      .favorites_only
-      .set_active(self.browse.favorites_only);
-    self
-      .ui
-      .grid_button
-      .set_active(matches!(self.browse.presentation, BrowsePresentation::Grid));
-    self
-      .ui
-      .list_button
-      .set_active(matches!(self.browse.presentation, BrowsePresentation::List));
-    clear_box(&self.ui.browse_content);
-    self.ui.browse_status.set_label("");
-    self.ui.load_previous_button.set_visible(false);
-    self.ui.load_previous_button.set_sensitive(true);
-    self.ui.load_next_button.set_visible(false);
-    self.ui.load_next_button.set_sensitive(true);
-    if let Some(message) = &self.browse.error {
-      self.ui.browse_content.append(&state_view(
-        "Items could not load",
-        message,
-        "dialog-error-symbolic",
-      ));
-      return;
-    }
-
-    match self.browse.model.view() {
-      LibraryBrowseView::Inactive => self.ui.browse_content.append(&state_view(
-        "Choose a library",
-        "Select Movies or Shows from the sidebar.",
-        "folder-videos-symbolic",
-      )),
-      LibraryBrowseView::Loading => self
-        .ui
-        .browse_content
-        .append(&loading_view("Loading items…")),
-      LibraryBrowseView::Empty => self.ui.browse_content.append(&state_view(
-        "No matching items",
-        "Try a different library or search term.",
-        "edit-find-symbolic",
-      )),
-      LibraryBrowseView::Failed {
-        message,
-        retryable,
-        retry_busy,
-      } => {
-        self.ui.browse_status.set_label(&message);
-        self.ui.browse_content.append(&state_view(
-          "Items could not load",
-          &message,
-          "dialog-error-symbolic",
-        ));
-        if retryable {
-          let retry = gtk::Button::with_label("Retry");
-          retry.set_sensitive(!retry_busy);
-          let sender = sender.clone();
-          retry.connect_clicked(move |_| sender.input(AppMessage::RetryBrowse));
-          self.ui.browse_content.append(&retry);
-        }
-      }
-      LibraryBrowseView::Ready {
-        visible_items,
-        total_record_count,
-        is_fetching_more,
-        load_more_failure,
-        retry_busy,
-        ..
-      } => {
-        let display_range = self.browse.model.display_range();
-        let items: Vec<_> = visible_items
-          .into_iter()
-          .filter_map(|slot| slot.item)
-          .collect();
-        self.render_media_results(&items, total_record_count, sender);
-        if let Some(range) = display_range {
-          self.ui.browse_status.set_label(&format!(
-            "Items {}–{} of {total_record_count}",
-            range.start.saturating_add(1),
-            range.end
-          ));
-        }
-        if is_fetching_more {
-          self
-            .ui
-            .browse_content
-            .append(&loading_view("Loading more items…"));
-        }
-        if let Some(message) = load_more_failure {
-          self.ui.browse_content.append(&state_view(
-            "More items could not load",
-            &message,
-            "dialog-warning-symbolic",
-          ));
-          let retry = gtk::Button::with_label("Retry loading more");
-          retry.set_sensitive(!retry_busy);
-          let sender = sender.clone();
-          retry.connect_clicked(move |_| sender.input(AppMessage::RetryBrowse));
-          self.ui.browse_content.append(&retry);
-        } else {
-          self
-            .ui
-            .load_previous_button
-            .set_visible(self.browse.model.can_load_previous());
-          self
-            .ui
-            .load_previous_button
-            .set_sensitive(!is_fetching_more);
-          self
-            .ui
-            .load_next_button
-            .set_visible(self.browse.model.can_load_more());
-          self.ui.load_next_button.set_sensitive(!is_fetching_more);
-        }
-      }
-    }
-  }
-
-  fn render_media_results(
-    &mut self,
-    items: &[VideoLibraryItem],
-    total: u32,
-    sender: &ComponentSender<Self>,
-  ) {
-    self.ui.browse_status.set_label(&format!("{total} items"));
-    if items.is_empty() {
-      self.ui.browse_content.append(&state_view(
-        "No matching items",
-        "Try a different library or search term.",
-        "edit-find-symbolic",
-      ));
-      return;
-    }
-    let content = match self.browse.presentation {
-      BrowsePresentation::Grid => self.media_grid(items, sender),
-      BrowsePresentation::List => self.media_list(items, sender),
-    };
-    self.ui.browse_content.append(&content);
-  }
-
-  fn render_detail(&mut self, sender: &ComponentSender<Self>) {
-    self.begin_artwork_view(sender);
-    clear_box(&self.ui.detail_content);
-    let back = gtk::Button::with_label("Back");
-    let sender_clone = sender.clone();
-    back.connect_clicked(move |_| sender_clone.input(AppMessage::BackFromDetail));
-    self.ui.detail_content.append(&back);
-    if let Some(message) = &self.user_data_error {
-      let status = dim_label(message);
-      status.set_accessible_role(gtk::AccessibleRole::Status);
-      status.set_wrap(true);
-      self.ui.detail_content.append(&status);
-    }
-    match &self.detail {
-      LoadState::Idle => self.ui.detail_content.append(&state_view(
-        "Select an item",
-        "Choose a movie or episode to inspect its details.",
-        "view-more-symbolic",
-      )),
-      LoadState::Loading => self
-        .ui
-        .detail_content
-        .append(&loading_view("Loading details…")),
-      LoadState::Failed(message) => {
-        self.ui.detail_content.append(&state_view(
-          "Details could not load",
-          message.as_str(),
-          "dialog-error-symbolic",
-        ));
-        let retry = gtk::Button::with_label("Retry");
-        retry.set_sensitive(self.detail_selection.is_some());
-        let sender = sender.clone();
-        retry.connect_clicked(move |_| sender.input(AppMessage::RetryDetail));
-        self.ui.detail_content.append(&retry);
-      }
-      LoadState::Ready(DetailContent::Item(detail)) => {
-        let detail = detail.clone();
-        let view = self.detail_view(&detail, sender);
-        self.ui.detail_content.append(&view);
-      }
-      LoadState::Ready(DetailContent::Show(detail)) => {
-        let detail = detail.clone();
-        let view = self.show_detail_view(&detail, sender);
-        self.ui.detail_content.append(&view);
-      }
-    }
+      .requests
+      .invalidate_detail_aux(crate::request_gate::DetailAuxKind::UserData);
   }
 
   fn playback_can_start_login(&self) -> bool {
@@ -3233,7 +2350,7 @@ impl AppModel {
   }
 
   fn queue_playback_artwork(&mut self, sender: &ComponentSender<Self>) {
-    self.playback_artwork_view = self.playback_artwork_view.saturating_add(1);
+    let slot = self.artwork_binder.bind_player_bar();
     self
       .ui
       .playback_artwork
@@ -3249,861 +2366,7 @@ impl AppModel {
         return;
       }
     }
-    let artwork = Arc::clone(&self.artwork);
-    let client = Arc::clone(&self.client);
-    let session = self.requests.current_session();
-    let view = self.playback_artwork_view;
-    sender.oneshot_command(async move {
-      let result = artwork
-        .load_with_ticket(&client, &image_id, artwork.ticket())
-        .await
-        .map_err(|_| ());
-      AppCommand::Artwork {
-        session,
-        view,
-        slot: PLAYBACK_ARTWORK_SLOT,
-        result,
-      }
-    });
-  }
-
-  fn begin_artwork_view(&mut self, sender: &ComponentSender<Self>) {
-    self.artwork.cancel_pending();
-    self.artwork_view = self.artwork_view.saturating_add(1);
-    self.artwork_targets.clear();
-    if self.playback_artwork_image_id.is_some() {
-      self.queue_playback_artwork(sender);
-    }
-  }
-  #[allow(deprecated)]
-  fn artwork(
-    &mut self,
-    image_id: Option<&str>,
-    presentation: ArtworkPresentation,
-    sender: &ComponentSender<Self>,
-  ) -> gtk::Widget {
-    let overlay = gtk::Overlay::new();
-    let picture = gtk::Picture::new();
-    picture.set_can_shrink(true);
-    picture.set_keep_aspect_ratio(true);
-    match presentation {
-      ArtworkPresentation::Backdrop => {
-        picture.set_hexpand(true);
-        picture.set_size_request(-1, 220);
-      }
-    }
-    let fallback = gtk::Image::from_icon_name(FALLBACK_ARTWORK_ICON);
-    fallback.set_pixel_size(32);
-    fallback.set_halign(gtk::Align::Center);
-    fallback.set_valign(gtk::Align::Center);
-    overlay.set_child(Some(&picture));
-    overlay.add_overlay(&fallback);
-    let Some(image_id) = image_id else {
-      return overlay.upcast();
-    };
-    self.artwork_slot = self.artwork_slot.saturating_add(1);
-    let slot = self.artwork_slot;
-    self
-      .artwork_targets
-      .insert(slot, ArtworkTarget { picture, fallback });
-    let artwork = Arc::clone(&self.artwork);
-    let artwork_ticket = artwork.ticket();
-    let client = Arc::clone(&self.client);
-    let image_id = image_id.to_owned();
-    let session = self.requests.current_session();
-    let view = self.artwork_view;
-    sender.oneshot_command(async move {
-      let result = artwork
-        .load_with_ticket(&client, &image_id, artwork_ticket)
-        .await
-        .map_err(|_| ());
-      AppCommand::Artwork {
-        session,
-        view,
-        slot,
-        result,
-      }
-    });
-    overlay.upcast()
-  }
-
-  fn media_button(
-    &mut self,
-    item: &VideoLibraryItem,
-    compact: bool,
-    sender: &ComponentSender<Self>,
-  ) -> gtk::Widget {
-    if compact {
-      return self.poster_card(item, sender);
-    }
-    self.row_card(item, sender)
-  }
-
-  fn poster_card(
-    &mut self,
-    item: &VideoLibraryItem,
-    sender: &ComponentSender<Self>,
-  ) -> gtk::Widget {
-    let (width, height) = card_frame_size(item);
-    let card = gtk::Box::new(gtk::Orientation::Vertical, 6);
-    card.set_width_request(width);
-    let button = gtk::Button::new();
-    button.set_has_frame(false);
-    let column = gtk::Box::new(gtk::Orientation::Vertical, 6);
-    let artwork_overlay = gtk::Overlay::new();
-    artwork_overlay.add_css_class("jellypilot-poster");
-    artwork_overlay.set_overflow(gtk::Overflow::Hidden);
-    artwork_overlay.set_size_request(width, height);
-    let picture = cover_picture(width, height);
-    let fallback = gtk::Image::from_icon_name(FALLBACK_ARTWORK_ICON);
-    fallback.set_pixel_size(48);
-    fallback.set_halign(gtk::Align::Center);
-    fallback.set_valign(gtk::Align::Center);
-    artwork_overlay.set_child(Some(&picture));
-    artwork_overlay.add_overlay(&fallback);
-    self.queue_artwork(picture, fallback, item.artwork_image_id.as_deref(), sender);
-    if let Some(badge) = status_badge(item) {
-      artwork_overlay.add_overlay(&badge);
-    }
-    if let Some(progress) = resume_progress_bar(item) {
-      artwork_overlay.add_overlay(&progress);
-    }
-    column.append(&artwork_overlay);
-    let text = gtk::Box::builder()
-      .orientation(gtk::Orientation::Vertical)
-      .spacing(2)
-      .build();
-    let title = gtk::Label::new(Some(&item.name));
-    title.set_xalign(0.0);
-    title.set_ellipsize(gtk::pango::EllipsizeMode::End);
-    title.set_max_width_chars(18);
-    text.append(&title);
-    let details = dim_label(&item_caption(item));
-    details.set_ellipsize(gtk::pango::EllipsizeMode::End);
-    details.set_max_width_chars(18);
-    text.append(&details);
-    column.append(&text);
-    button.set_child(Some(&column));
-    let accessible_label = format!("Open details for {}", item.name);
-    button.set_tooltip_text(Some(&accessible_label));
-    button.update_property(&[gtk::accessible::Property::Label(&accessible_label)]);
-    let selection_item = item.clone();
-    let selection_sender = sender.clone();
-    button.connect_clicked(move |_| {
-      selection_sender.input(AppMessage::SelectItem(selection_item.clone()))
-    });
-    card.append(&button);
-    card.upcast()
-  }
-
-  fn row_card(&mut self, item: &VideoLibraryItem, sender: &ComponentSender<Self>) -> gtk::Widget {
-    let button = gtk::Button::new();
-    button.set_has_frame(false);
-    let row = gtk::Box::builder()
-      .orientation(gtk::Orientation::Horizontal)
-      .spacing(12)
-      .margin_top(6)
-      .margin_bottom(6)
-      .margin_start(8)
-      .margin_end(8)
-      .build();
-    let (width, height) = if is_episode_item(item) {
-      (128, 72)
-    } else {
-      (72, 108)
-    };
-    let artwork_overlay = gtk::Overlay::new();
-    artwork_overlay.add_css_class("jellypilot-poster");
-    artwork_overlay.set_overflow(gtk::Overflow::Hidden);
-    artwork_overlay.set_size_request(width, height);
-    let picture = cover_picture(width, height);
-    let fallback = gtk::Image::from_icon_name(FALLBACK_ARTWORK_ICON);
-    fallback.set_pixel_size(32);
-    fallback.set_halign(gtk::Align::Center);
-    fallback.set_valign(gtk::Align::Center);
-    artwork_overlay.set_child(Some(&picture));
-    artwork_overlay.add_overlay(&fallback);
-    self.queue_artwork(picture, fallback, item.artwork_image_id.as_deref(), sender);
-    if let Some(badge) = status_badge(item) {
-      artwork_overlay.add_overlay(&badge);
-    }
-    if let Some(progress) = resume_progress_bar(item) {
-      artwork_overlay.add_overlay(&progress);
-    }
-    row.append(&artwork_overlay);
-    let text = gtk::Box::new(gtk::Orientation::Vertical, 3);
-    text.set_hexpand(true);
-    text.set_valign(gtk::Align::Center);
-    let title = gtk::Label::new(Some(&item.name));
-    title.set_xalign(0.0);
-    title.set_ellipsize(gtk::pango::EllipsizeMode::End);
-    title.set_max_width_chars(64);
-    text.append(&title);
-    let details = dim_label(&item_caption(item));
-    details.set_ellipsize(gtk::pango::EllipsizeMode::End);
-    text.append(&details);
-    row.append(&text);
-    if matches!(item.item_type.as_str(), "Movie" | "Episode") {
-      let has_resume = item.resume_position_seconds.unwrap_or_default() > 0.0;
-      let action = gtk::Button::from_icon_name("media-playback-start-symbolic");
-      action.add_css_class("flat");
-      action.add_css_class("suggested-action");
-      action.set_valign(gtk::Align::Center);
-      let action_label = if has_resume { "Resume" } else { "Play" };
-      action.set_tooltip_text(Some(action_label));
-      action.update_property(&[gtk::accessible::Property::Label(action_label)]);
-      action.set_sensitive(self.playback_controls_enabled());
-      let item = item.clone();
-      let sender = sender.clone();
-      let position = if has_resume {
-        PlaybackStartPosition::Resume
-      } else {
-        PlaybackStartPosition::Beginning
-      };
-      action
-        .connect_clicked(move |_| sender.input(AppMessage::PlayLibrary(item.clone(), position)));
-      row.append(&action);
-    }
-    button.set_child(Some(&row));
-    let accessible_label = format!("Open details for {}", item.name);
-    button.set_tooltip_text(Some(&accessible_label));
-    button.update_property(&[gtk::accessible::Property::Label(&accessible_label)]);
-    let selection_item = item.clone();
-    let selection_sender = sender.clone();
-    button.connect_clicked(move |_| {
-      selection_sender.input(AppMessage::SelectItem(selection_item.clone()))
-    });
-    button.upcast()
-  }
-
-  fn featured_hero(
-    &mut self,
-    item: &VideoLibraryItem,
-    sender: &ComponentSender<Self>,
-  ) -> gtk::Widget {
-    let container = gtk::Overlay::new();
-    container.add_css_class("jellypilot-rounded");
-    container.add_css_class("jellypilot-hero");
-    container.set_overflow(gtk::Overflow::Hidden);
-    container.set_hexpand(true);
-    container.set_size_request(-1, HOME_HERO_HEIGHT);
-    let backdrop = cover_picture(-1, HOME_HERO_HEIGHT);
-    let fallback = gtk::Image::from_icon_name("image-missing-symbolic");
-    fallback.set_pixel_size(64);
-    fallback.set_halign(gtk::Align::Center);
-    fallback.set_valign(gtk::Align::Center);
-    let backdrop_overlay = gtk::Overlay::new();
-    backdrop_overlay.set_hexpand(true);
-    backdrop_overlay.set_vexpand(true);
-    backdrop_overlay.set_child(Some(&backdrop));
-    backdrop_overlay.add_overlay(&fallback);
-    container.set_child(Some(&backdrop_overlay));
-    self.queue_artwork(backdrop, fallback, item.artwork_image_id.as_deref(), sender);
-    let scrim = gtk::Box::new(gtk::Orientation::Vertical, 0);
-    scrim.add_css_class("jellypilot-hero-scrim");
-    scrim.set_hexpand(true);
-    scrim.set_vexpand(true);
-    scrim.set_valign(gtk::Align::Fill);
-    let hero_text = gtk::Box::builder()
-      .orientation(gtk::Orientation::Vertical)
-      .spacing(8)
-      .margin_top(48)
-      .margin_bottom(24)
-      .margin_start(28)
-      .margin_end(28)
-      .valign(gtk::Align::End)
-      .vexpand(true)
-      .build();
-    let title = gtk::Label::new(Some(&hero_headline(item)));
-    title.add_css_class("title-1");
-    title.set_xalign(0.0);
-    title.set_ellipsize(gtk::pango::EllipsizeMode::End);
-    title.set_max_width_chars(60);
-    hero_text.append(&title);
-    let metadata = gtk::Label::new(Some(&hero_metadata(item)));
-    metadata.add_css_class("dim-label");
-    metadata.set_xalign(0.0);
-    metadata.set_ellipsize(gtk::pango::EllipsizeMode::End);
-    hero_text.append(&metadata);
-    if let Some(overview) = &item.overview {
-      let synopsis = gtk::Label::new(Some(overview));
-      synopsis.set_xalign(0.0);
-      synopsis.set_wrap(true);
-      synopsis.set_wrap_mode(gtk::pango::WrapMode::WordChar);
-      synopsis.set_lines(3);
-      synopsis.set_ellipsize(gtk::pango::EllipsizeMode::End);
-      synopsis.set_max_width_chars(80);
-      synopsis.add_css_class("dim-label");
-      hero_text.append(&synopsis);
-    }
-    let actions = gtk::Box::new(gtk::Orientation::Horizontal, 10);
-    let has_resume = item.resume_position_seconds.unwrap_or_default() > 0.0;
-    let primary_label = if has_resume { "Resume" } else { "Play" };
-    let primary = gtk::Button::with_label(primary_label);
-    primary.add_css_class("suggested-action");
-    primary.add_css_class("pill");
-    let primary_position = if has_resume {
-      PlaybackStartPosition::Resume
-    } else {
-      PlaybackStartPosition::Beginning
-    };
-    let play_item = item.clone();
-    let play_sender = sender.clone();
-    primary.connect_clicked(move |_| {
-      play_sender.input(AppMessage::PlayLibrary(play_item.clone(), primary_position))
-    });
-    primary.set_sensitive(self.playback_controls_enabled());
-    actions.append(&primary);
-    let details = gtk::Button::with_label("Details");
-    details.add_css_class("pill");
-    details.add_css_class("osd");
-    let detail_item = item.clone();
-    let detail_sender = sender.clone();
-    details
-      .connect_clicked(move |_| detail_sender.input(AppMessage::SelectItem(detail_item.clone())));
-    actions.append(&details);
-    hero_text.append(&actions);
-    scrim.append(&hero_text);
-    container.add_overlay(&scrim);
-    container.upcast()
-  }
-
-  fn queue_artwork(
-    &mut self,
-    picture: gtk::Picture,
-    fallback: gtk::Image,
-    image_id: Option<&str>,
-    sender: &ComponentSender<Self>,
-  ) {
-    let Some(image_id) = image_id else {
-      return;
-    };
-    self.artwork_slot = self.artwork_slot.saturating_add(1);
-    let slot = self.artwork_slot;
-    self
-      .artwork_targets
-      .insert(slot, ArtworkTarget { picture, fallback });
-    let artwork = Arc::clone(&self.artwork);
-    let artwork_ticket = artwork.ticket();
-    let client = Arc::clone(&self.client);
-    let image_id = image_id.to_owned();
-    let session = self.requests.current_session();
-    let view = self.artwork_view;
-    sender.oneshot_command(async move {
-      let result = artwork
-        .load_with_ticket(&client, &image_id, artwork_ticket)
-        .await
-        .map_err(|_| ());
-      AppCommand::Artwork {
-        session,
-        view,
-        slot,
-        result,
-      }
-    });
-  }
-
-  fn media_shelf(
-    &mut self,
-    title: &str,
-    items: &[VideoLibraryItem],
-    sender: &ComponentSender<Self>,
-  ) -> gtk::Widget {
-    let section = gtk::Box::new(gtk::Orientation::Vertical, 12);
-    let title_label = gtk::Label::new(Some(title));
-    title_label.add_css_class("title-2");
-    title_label.set_xalign(0.0);
-    section.append(&title_label);
-    if items.is_empty() {
-      section.append(&dim_label("Nothing available."));
-      return section.upcast();
-    }
-    let row = gtk::Box::new(gtk::Orientation::Horizontal, 12);
-    for item in items {
-      row.append(&self.media_button(item, true, sender));
-    }
-    let scroll = gtk::ScrolledWindow::builder()
-      .child(&row)
-      .hscrollbar_policy(gtk::PolicyType::Automatic)
-      .vscrollbar_policy(gtk::PolicyType::Never)
-      .propagate_natural_width(true)
-      .build();
-    section.append(&scroll);
-    section.upcast()
-  }
-
-  fn media_grid(
-    &mut self,
-    items: &[VideoLibraryItem],
-    sender: &ComponentSender<Self>,
-  ) -> gtk::Widget {
-    let flow = gtk::FlowBox::builder()
-      .selection_mode(gtk::SelectionMode::None)
-      .max_children_per_line(6)
-      .min_children_per_line(1)
-      .row_spacing(12)
-      .column_spacing(12)
-      .build();
-    for item in items {
-      let child = gtk::FlowBoxChild::new();
-      child.set_child(Some(&self.media_button(item, true, sender)));
-      flow.insert(&child, -1);
-    }
-    flow.upcast()
-  }
-
-  fn media_list(
-    &mut self,
-    items: &[VideoLibraryItem],
-    sender: &ComponentSender<Self>,
-  ) -> gtk::Widget {
-    let list = gtk::ListBox::new();
-    list.set_selection_mode(gtk::SelectionMode::None);
-    for item in items {
-      list.append(&self.media_button(item, false, sender));
-    }
-    list.upcast()
-  }
-
-  fn detail_view(
-    &mut self,
-    detail: &VideoItemDetail,
-    sender: &ComponentSender<Self>,
-  ) -> gtk::Widget {
-    let column = gtk::Box::new(gtk::Orientation::Vertical, 0);
-    let backdrop_container = gtk::Overlay::new();
-    let backdrop_artwork = self.artwork(
-      detail
-        .backdrop_image_id
-        .as_deref()
-        .or(detail.artwork_image_id.as_deref()),
-      ArtworkPresentation::Backdrop,
-      sender,
-    );
-    backdrop_container.set_child(Some(&backdrop_artwork));
-    let gradient = gtk::Box::new(gtk::Orientation::Vertical, 0);
-    gradient.add_css_class("osd");
-    gradient.set_hexpand(true);
-    gradient.set_vexpand(true);
-    gradient.set_valign(gtk::Align::End);
-    let info = gtk::Box::builder()
-      .orientation(gtk::Orientation::Vertical)
-      .spacing(8)
-      .margin_top(20)
-      .margin_bottom(20)
-      .margin_start(24)
-      .margin_end(24)
-      .build();
-    let title = gtk::Label::new(Some(&detail.name));
-    title.add_css_class("title-1");
-    title.set_xalign(0.0);
-    title.set_wrap(true);
-    info.append(&title);
-    let metadata = dim_label(&detail_metadata(detail));
-    metadata.set_wrap(true);
-    info.append(&metadata);
-    let actions = gtk::Box::new(gtk::Orientation::Horizontal, 10);
-    let play = gtk::Button::with_label("Play");
-    play.add_css_class("suggested-action");
-    let item = detail.clone();
-    let sender_clone = sender.clone();
-    play.connect_clicked(move |_| {
-      sender_clone.input(AppMessage::PlayDetail(
-        item.clone(),
-        PlaybackStartPosition::Beginning,
-      ))
-    });
-    play.set_sensitive(self.playback_controls_enabled() && detail.can_play);
-    actions.append(&play);
-    if detail.can_resume {
-      let resume = gtk::Button::with_label("Resume");
-      let item = detail.clone();
-      let sender_clone = sender.clone();
-      resume.connect_clicked(move |_| {
-        sender_clone.input(AppMessage::PlayDetail(
-          item.clone(),
-          PlaybackStartPosition::Resume,
-        ))
-      });
-      resume.set_sensitive(self.playback_controls_enabled());
-      actions.append(&resume);
-    }
-    actions.append(&self.user_data_controls(&detail.id, detail.played, detail.favorite, sender));
-    info.append(&actions);
-    gradient.append(&info);
-    backdrop_container.add_overlay(&gradient);
-    column.append(&backdrop_container);
-    let body = gtk::Box::builder()
-      .orientation(gtk::Orientation::Vertical)
-      .spacing(12)
-      .margin_top(16)
-      .margin_start(24)
-      .margin_end(24)
-      .margin_bottom(24)
-      .build();
-    if let Some(overview) = &detail.overview {
-      let overview_label = gtk::Label::new(Some("Synopsis"));
-      overview_label.add_css_class("heading");
-      overview_label.set_xalign(0.0);
-      body.append(&overview_label);
-      let overview = gtk::Label::new(Some(overview));
-      overview.set_xalign(0.0);
-      overview.set_wrap(true);
-      overview.set_selectable(true);
-      body.append(&overview);
-    }
-    if let Some(metadata) = detail_metadata_section(&detail.metadata, &detail.genres) {
-      body.append(&metadata);
-    }
-    body.append(&self.stream_metadata_view());
-    if let Some(neighbors) = self.season_neighbors_view(detail, sender) {
-      body.append(&neighbors);
-    }
-    if let Some(recommendations) = self.recommendations_view(sender) {
-      body.append(&recommendations);
-    }
-    column.append(&body);
-    column.upcast()
-  }
-
-  fn show_detail_view(
-    &mut self,
-    detail: &VideoShowDetail,
-    sender: &ComponentSender<Self>,
-  ) -> gtk::Widget {
-    let column = gtk::Box::new(gtk::Orientation::Vertical, 0);
-    let backdrop_container = gtk::Overlay::new();
-    let backdrop_artwork = self.artwork(
-      detail
-        .backdrop_image_id
-        .as_deref()
-        .or(detail.artwork_image_id.as_deref()),
-      ArtworkPresentation::Backdrop,
-      sender,
-    );
-    backdrop_container.set_child(Some(&backdrop_artwork));
-    let gradient = gtk::Box::new(gtk::Orientation::Vertical, 0);
-    gradient.add_css_class("osd");
-    gradient.set_hexpand(true);
-    gradient.set_vexpand(true);
-    gradient.set_valign(gtk::Align::End);
-    let info = gtk::Box::builder()
-      .orientation(gtk::Orientation::Vertical)
-      .spacing(8)
-      .margin_top(20)
-      .margin_bottom(20)
-      .margin_start(24)
-      .margin_end(24)
-      .build();
-    let title = gtk::Label::new(Some(&detail.name));
-    title.add_css_class("title-1");
-    title.set_xalign(0.0);
-    title.set_wrap(true);
-    info.append(&title);
-    let metadata = dim_label(&show_detail_metadata(detail));
-    metadata.set_wrap(true);
-    info.append(&metadata);
-    info.append(&self.user_data_controls(&detail.id, detail.played, detail.favorite, sender));
-    gradient.append(&info);
-    backdrop_container.add_overlay(&gradient);
-    column.append(&backdrop_container);
-    let body = gtk::Box::builder()
-      .orientation(gtk::Orientation::Vertical)
-      .spacing(12)
-      .margin_top(16)
-      .margin_start(24)
-      .margin_end(24)
-      .margin_bottom(24)
-      .build();
-    if let Some(overview) = &detail.overview {
-      let overview_label = gtk::Label::new(Some("Synopsis"));
-      overview_label.add_css_class("heading");
-      overview_label.set_xalign(0.0);
-      body.append(&overview_label);
-      let overview = gtk::Label::new(Some(overview));
-      overview.set_xalign(0.0);
-      overview.set_wrap(true);
-      overview.set_selectable(true);
-      body.append(&overview);
-    }
-    if let Some(episode) = &detail.next_episode {
-      let heading = gtk::Label::new(Some("Next Episode"));
-      heading.add_css_class("heading");
-      heading.set_xalign(0.0);
-      body.append(&heading);
-      body.append(&self.media_button(episode, false, sender));
-    }
-    let seasons_heading = gtk::Label::new(Some("Seasons"));
-    seasons_heading.add_css_class("heading");
-    seasons_heading.set_xalign(0.0);
-    body.append(&seasons_heading);
-    if detail.seasons.is_empty() {
-      body.append(&dim_label("No seasons are available."));
-    } else {
-      let seasons = gtk::ListBox::new();
-      seasons.set_selection_mode(gtk::SelectionMode::Single);
-      seasons.set_activate_on_single_click(true);
-      let selected_season_id = self
-        .season
-        .as_ref()
-        .map(|selection| selection.season.id.as_str());
-      let available_seasons = detail.seasons.clone();
-      seasons.connect_row_activated({
-        let sender = sender.clone();
-        move |_, row| {
-          let Ok(index) = usize::try_from(row.index()) else {
-            return;
-          };
-          if let Some(season) = available_seasons.get(index) {
-            sender.input(AppMessage::SelectSeason(season.clone()));
-          }
-        }
-      });
-      for season in &detail.seasons {
-        let row = adw::ActionRow::new();
-        row.set_title(&season.name);
-        row.set_subtitle(
-          &season
-            .season_number
-            .map(|number| format!("Season {number}"))
-            .unwrap_or_else(|| "Season".to_owned()),
-        );
-        row.set_activatable(true);
-        row.set_tooltip_text(Some(&format!("Browse episodes in {}", season.name)));
-        seasons.append(&row);
-        if selected_season_id == Some(season.id.as_str()) {
-          seasons.select_row(Some(&row));
-        }
-      }
-      body.append(&seasons);
-    }
-    if let Some(metadata) = detail_metadata_section(&detail.metadata, &detail.genres) {
-      body.append(&metadata);
-    }
-    if let Some(recommendations) = self.recommendations_view(sender) {
-      body.append(&recommendations);
-    }
-    if let Some(selection) = self.season.clone() {
-      let section = self.season_episodes_view(&selection, sender);
-      body.append(&gtk::Separator::new(gtk::Orientation::Horizontal));
-      body.append(&section);
-    }
-    column.append(&body);
-    column.upcast()
-  }
-  fn stream_metadata_view(&self) -> gtk::Widget {
-    match &self.streams {
-      LoadState::Idle => stream_metadata_status(),
-      LoadState::Loading => loading_view("Loading audio and subtitle metadata…"),
-      LoadState::Failed(message) => state_view(
-        "Stream metadata unavailable",
-        message,
-        "dialog-warning-symbolic",
-      ),
-      LoadState::Ready(streams) => {
-        let audio = streams.audio_streams.len();
-        let subtitles = streams.subtitle_streams.len();
-        state_view(
-          "Audio and subtitles",
-          &format!("{audio} audio stream(s) · {subtitles} subtitle stream(s) available."),
-          "audio-x-generic-symbolic",
-        )
-      }
-    }
-  }
-
-  fn season_neighbors_view(
-    &mut self,
-    detail: &VideoItemDetail,
-    sender: &ComponentSender<Self>,
-  ) -> Option<gtk::Widget> {
-    let season_number = detail.season_number?;
-    match self.season_neighbors.clone() {
-      LoadState::Idle => None,
-      LoadState::Loading => Some(loading_view(&format!(
-        "Loading more from Season {season_number}…"
-      ))),
-      LoadState::Failed(message) => Some(state_view(
-        "Season episodes unavailable",
-        &message,
-        "dialog-warning-symbolic",
-      )),
-      LoadState::Ready(items) if items.is_empty() => None,
-      LoadState::Ready(items) => {
-        Some(self.media_shelf(&format!("More from Season {season_number}"), &items, sender))
-      }
-    }
-  }
-
-  fn recommendations_view(&mut self, sender: &ComponentSender<Self>) -> Option<gtk::Widget> {
-    match self.recommendations.clone() {
-      LoadState::Idle => None,
-      LoadState::Loading => Some(loading_view("Loading recommendations…")),
-      LoadState::Failed(message) => Some(state_view(
-        "Recommendations unavailable",
-        &message,
-        "dialog-warning-symbolic",
-      )),
-      LoadState::Ready(items) if items.is_empty() => None,
-      LoadState::Ready(items) => Some(self.media_shelf("More like this", &items, sender)),
-    }
-  }
-
-  fn user_data_controls(
-    &self,
-    item_id: &str,
-    played: bool,
-    favorite: bool,
-    sender: &ComponentSender<Self>,
-  ) -> gtk::Box {
-    let controls = gtk::Box::new(gtk::Orientation::Horizontal, 8);
-    let favorite_action = if favorite {
-      VideoUserDataAction::Unfavorite
-    } else {
-      VideoUserDataAction::Favorite
-    };
-    let favorite_button = gtk::Button::with_label(if favorite {
-      "Remove from Favorites"
-    } else {
-      "Add to Favorites"
-    });
-    favorite_button.set_sensitive(!self.user_data_busy);
-    let favorite_id = item_id.to_owned();
-    let favorite_sender = sender.clone();
-    favorite_button.connect_clicked(move |_| {
-      favorite_sender.input(AppMessage::UpdateUserData {
-        item_id: favorite_id.clone(),
-        action: favorite_action,
-      })
-    });
-    controls.append(&favorite_button);
-
-    let played_action = if played {
-      VideoUserDataAction::MarkUnplayed
-    } else {
-      VideoUserDataAction::MarkPlayed
-    };
-    let played_button = gtk::Button::with_label(if played {
-      "Mark Unwatched"
-    } else {
-      "Mark Watched"
-    });
-    played_button.set_sensitive(!self.user_data_busy);
-    let played_id = item_id.to_owned();
-    let played_sender = sender.clone();
-    played_button.connect_clicked(move |_| {
-      played_sender.input(AppMessage::UpdateUserData {
-        item_id: played_id.clone(),
-        action: played_action,
-      })
-    });
-    controls.append(&played_button);
-    controls
-  }
-
-  fn season_episodes_view(
-    &mut self,
-    selection: &SeasonSelection,
-    sender: &ComponentSender<Self>,
-  ) -> gtk::Widget {
-    let section = gtk::Box::new(gtk::Orientation::Vertical, 10);
-    let heading_row = gtk::Box::new(gtk::Orientation::Horizontal, 8);
-    let heading = gtk::Label::new(Some(&selection.season.name));
-    heading.add_css_class("title-3");
-    heading.set_hexpand(true);
-    heading.set_xalign(0.0);
-    let all_seasons = gtk::Button::with_label("All seasons");
-    let sender_clone = sender.clone();
-    all_seasons.connect_clicked(move |_| sender_clone.input(AppMessage::BackFromSeason));
-    heading_row.append(&heading);
-    heading_row.append(&all_seasons);
-    section.append(&heading_row);
-    match &selection.episodes {
-      LoadState::Idle | LoadState::Loading => {
-        section.append(&loading_view("Loading episodes…"));
-      }
-      LoadState::Failed(message) => {
-        section.append(&state_view(
-          "Episodes could not load",
-          message,
-          "dialog-error-symbolic",
-        ));
-        let retry = gtk::Button::with_label("Retry");
-        let sender = sender.clone();
-        retry.connect_clicked(move |_| sender.input(AppMessage::RetrySeason));
-        section.append(&retry);
-      }
-      LoadState::Ready(page) if page.episodes.is_empty() => {
-        let (title, message) = if page.total_record_count == 0 {
-          (
-            "No episodes available",
-            "This season does not contain any visible episodes.",
-          )
-        } else {
-          (
-            "No episodes on this page",
-            "The server returned no visible episodes for this page.",
-          )
-        };
-        section.append(&state_view(title, message, "folder-videos-symbolic"));
-        let can_go_previous = page.start_index > 0;
-        let can_go_next = page.has_more && page.next_start_index > page.start_index;
-        if can_go_previous || can_go_next {
-          let navigation = gtk::Box::new(gtk::Orientation::Horizontal, 8);
-          navigation.set_halign(gtk::Align::Center);
-          let previous = gtk::Button::with_label("Previous episode page");
-          previous.set_sensitive(can_go_previous);
-          let previous_sender = sender.clone();
-          previous.connect_clicked(move |_| {
-            previous_sender.input(AppMessage::PreviousSeasonEpisodePage);
-          });
-          let next = gtk::Button::with_label("Next episode page");
-          next.set_sensitive(can_go_next);
-          let next_sender = sender.clone();
-          next.connect_clicked(move |_| {
-            next_sender.input(AppMessage::NextSeasonEpisodePage);
-          });
-          navigation.append(&previous);
-          navigation.append(&next);
-          section.append(&navigation);
-        }
-      }
-      LoadState::Ready(page) => {
-        let start = page.start_index.max(0);
-        let end = page
-          .next_start_index
-          .max(start)
-          .min(page.total_record_count);
-        let pagination = gtk::Box::new(gtk::Orientation::Horizontal, 8);
-        let previous = gtk::Button::from_icon_name("go-previous-symbolic");
-        previous.set_tooltip_text(Some("Previous episode page"));
-        previous.update_property(&[gtk::accessible::Property::Label("Previous episode page")]);
-        previous.set_sensitive(start > 0);
-        let sender_clone = sender.clone();
-        previous
-          .connect_clicked(move |_| sender_clone.input(AppMessage::PreviousSeasonEpisodePage));
-        let page_status = gtk::Label::new(Some(&format!(
-          "Episodes {}–{} of {}",
-          start.saturating_add(1),
-          end,
-          page.total_record_count,
-        )));
-        page_status.set_hexpand(true);
-        page_status.set_xalign(0.5);
-        let next = gtk::Button::from_icon_name("go-next-symbolic");
-        next.set_tooltip_text(Some("Next episode page"));
-        next.update_property(&[gtk::accessible::Property::Label("Next episode page")]);
-        next.set_sensitive(page.has_more);
-        let sender_clone = sender.clone();
-        next.connect_clicked(move |_| sender_clone.input(AppMessage::NextSeasonEpisodePage));
-        pagination.append(&previous);
-        pagination.append(&page_status);
-        pagination.append(&next);
-        section.append(&pagination);
-        section.append(&self.media_list(&page.episodes, sender));
-      }
-    }
-    section.upcast()
+    self.spawn_artwork_load(ArtworkSurface::PlayerBar, slot, image_id, sender);
   }
 
   fn record_diagnostic(
@@ -4346,7 +2609,13 @@ impl AppModel {
 }
 
 impl Ui {
-  fn new(sender: &ComponentSender<AppModel>, login: &gtk::ScrolledWindow) -> Self {
+  fn new(
+    sender: &ComponentSender<AppModel>,
+    login: &gtk::ScrolledWindow,
+    home: &gtk::Widget,
+    browse: &gtk::ScrolledWindow,
+    detail: &gtk::Widget,
+  ) -> Self {
     install_media_css();
     let toast_overlay = adw::ToastOverlay::new();
     let root = adw::ToolbarView::new();
@@ -4602,139 +2871,9 @@ impl Ui {
     content.set_hexpand(true);
     content.set_vexpand(true);
     content.set_transition_type(gtk::StackTransitionType::Crossfade);
-    let home_content = gtk::Box::builder()
-      .orientation(gtk::Orientation::Vertical)
-      .spacing(24)
-      .margin_top(24)
-      .margin_bottom(24)
-      .margin_start(24)
-      .margin_end(24)
-      .build();
-    let home_page = scrolled_page(
-      "Video Home",
-      "Recently added and in-progress video from this server.",
-      &home_content,
-    );
-    content.add_named(&home_page, Some("home"));
-
-    let browse_title = gtk::Label::new(Some("Library"));
-    browse_title.add_css_class("title-2");
-    browse_title.set_xalign(0.0);
-    browse_title.set_hexpand(true);
-    browse_title.set_ellipsize(gtk::pango::EllipsizeMode::End);
-    browse_title.set_max_width_chars(48);
-    let browse_status = dim_label("");
-    browse_status.set_xalign(0.0);
-    browse_status.set_wrap(true);
-    let grid_button = gtk::ToggleButton::new();
-    grid_button.set_child(Some(&gtk::Image::from_icon_name("view-grid-symbolic")));
-    grid_button.set_tooltip_text(Some("Grid view"));
-    grid_button.update_property(&[gtk::accessible::Property::Label("Grid view")]);
-    grid_button.set_active(true);
-    grid_button.set_valign(gtk::Align::Center);
-    grid_button.set_size_request(36, 32);
-    let list_button = gtk::ToggleButton::new();
-    list_button.set_child(Some(&gtk::Image::from_icon_name("view-list-symbolic")));
-    list_button.set_tooltip_text(Some("List view"));
-    list_button.update_property(&[gtk::accessible::Property::Label("List view")]);
-    list_button.set_group(Some(&grid_button));
-    list_button.set_valign(gtk::Align::Center);
-    list_button.set_size_request(36, 32);
-    grid_button.connect_toggled({
-      let sender = sender.clone();
-      move |button| {
-        if button.is_active() {
-          sender.input(AppMessage::SetBrowsePresentation(BrowsePresentation::Grid));
-        }
-      }
-    });
-    list_button.connect_toggled({
-      let sender = sender.clone();
-      move |button| {
-        if button.is_active() {
-          sender.input(AppMessage::SetBrowsePresentation(BrowsePresentation::List));
-        }
-      }
-    });
-    let load_next_button = gtk::Button::with_label("Load more");
-    load_next_button.set_visible(false);
-    load_next_button.connect_clicked({
-      let sender = sender.clone();
-      move |_| sender.input(AppMessage::LoadNextPage)
-    });
-    let load_previous_button = gtk::Button::with_label("Previous page");
-    load_previous_button.set_visible(false);
-    load_previous_button.connect_clicked({
-      let sender = sender.clone();
-      move |_| sender.input(AppMessage::LoadPreviousPage)
-    });
-    let toolbar = adw::PreferencesGroup::new();
-    toolbar.set_title("Browse");
-    toolbar.add(&browse_title);
-    toolbar.add(&browse_status);
-    let browse_actions = gtk::Box::new(gtk::Orientation::Horizontal, 8);
-    browse_actions.append(&grid_button);
-    browse_actions.append(&list_button);
-    toolbar.add(&browse_actions);
-    let browse_filter_bar = gtk::Box::new(gtk::Orientation::Horizontal, 8);
-    let sort_label = gtk::Label::new(Some("Sort"));
-    let sort_dropdown =
-      gtk::DropDown::from_strings(&["Title A–Z", "Title Z–A", "Recently added", "Release date"]);
-    sort_dropdown.update_property(&[gtk::accessible::Property::Label("Sort library")]);
-    sort_dropdown.connect_selected_notify({
-      let sender = sender.clone();
-      move |dropdown| sender.input(AppMessage::SetBrowseSort(dropdown.selected()))
-    });
-    let played_label = gtk::Label::new(Some("Watched"));
-    let played_dropdown = gtk::DropDown::from_strings(&["All", "Unwatched", "Watched"]);
-    played_dropdown.update_property(&[gtk::accessible::Property::Label("Filter watched state")]);
-    played_dropdown.connect_selected_notify({
-      let sender = sender.clone();
-      move |dropdown| sender.input(AppMessage::SetBrowsePlayedFilter(dropdown.selected()))
-    });
-    let favorites_only = gtk::CheckButton::with_label("Favorites only");
-    favorites_only.connect_toggled({
-      let sender = sender.clone();
-      move |button| sender.input(AppMessage::SetBrowseFavoritesOnly(button.is_active()))
-    });
-    browse_filter_bar.append(&sort_label);
-    browse_filter_bar.append(&sort_dropdown);
-    browse_filter_bar.append(&played_label);
-    browse_filter_bar.append(&played_dropdown);
-    browse_filter_bar.append(&favorites_only);
-    toolbar.add(&browse_filter_bar);
-    let browse_content = gtk::Box::new(gtk::Orientation::Vertical, 12);
-    let browse_page = gtk::Box::builder()
-      .orientation(gtk::Orientation::Vertical)
-      .spacing(16)
-      .margin_top(24)
-      .margin_bottom(24)
-      .margin_start(24)
-      .margin_end(24)
-      .build();
-    browse_page.append(&toolbar);
-    browse_page.append(&browse_content);
-    let pagination = adw::ActionRow::new();
-    pagination.set_title("Pages");
-    pagination.add_suffix(&load_previous_button);
-    pagination.add_suffix(&load_next_button);
-    browse_page.append(&pagination);
-    let browse_scroll = gtk::ScrolledWindow::builder()
-      .child(&browse_page)
-      .vexpand(true)
-      .build();
-    content.add_named(&browse_scroll, Some("browse"));
-
-    let detail_content = gtk::Box::builder()
-      .orientation(gtk::Orientation::Vertical)
-      .spacing(12)
-      .margin_top(24)
-      .margin_bottom(24)
-      .margin_start(24)
-      .margin_end(24)
-      .build();
-    let detail_page = scrolled_page("Item Details", "", &detail_content);
-    content.add_named(&detail_page, Some("detail"));
+    content.add_named(home, Some("home"));
+    content.add_named(browse, Some("browse"));
+    content.add_named(detail, Some("detail"));
 
     let sidebar_header = adw::HeaderBar::new();
     sidebar_header.set_title_widget(Some(&gtk::Label::new(Some("Navigation"))));
@@ -4800,20 +2939,6 @@ impl Ui {
       content,
       nav_home,
       shortcuts,
-      home_content,
-      browse_title,
-      browse_status,
-      browse_content,
-      browse_filter_bar,
-      sort_dropdown,
-      played_dropdown,
-      favorites_only,
-      grid_button,
-      list_button,
-      load_previous_button,
-      load_next_button,
-      browse_scroll,
-      detail_content,
       position_label,
       duration_label,
       previous_button,
@@ -4833,114 +2958,6 @@ impl Ui {
   }
 }
 
-fn detail_metadata_section(
-  metadata: &VideoDetailMetadata,
-  genres: &[String],
-) -> Option<gtk::Widget> {
-  let rating = match (&metadata.community_rating, &metadata.official_rating) {
-    (Some(community), Some(official)) => format!("Community rating {community:.1} · {official}"),
-    (Some(community), None) => format!("Community rating {community:.1}"),
-    (None, Some(official)) => official.clone(),
-    (None, None) => String::new(),
-  };
-  if rating.is_empty()
-    && genres.is_empty()
-    && metadata.creators.is_empty()
-    && metadata.cast.is_empty()
-  {
-    return None;
-  }
-  let group = adw::PreferencesGroup::new();
-  group.set_title("Details");
-  if !rating.is_empty() {
-    group.add(&dim_label(&rating));
-  }
-  if !genres.is_empty() {
-    group.add(&dim_label(&format!("Genres: {}", genres.join(", "))));
-  }
-  if !metadata.creators.is_empty() {
-    group.add(&dim_label(&format!(
-      "Creators: {}",
-      metadata.creators.join(", ")
-    )));
-  }
-  if !metadata.cast.is_empty() {
-    let cast = gtk::Box::new(gtk::Orientation::Horizontal, 8);
-    for name in metadata.cast.iter().take(12) {
-      let label = gtk::Label::new(Some(name));
-      label.add_css_class("caption");
-      label.set_max_width_chars(18);
-      label.set_ellipsize(gtk::pango::EllipsizeMode::End);
-      cast.append(&label);
-    }
-    let cast_scroll = gtk::ScrolledWindow::builder()
-      .child(&cast)
-      .hscrollbar_policy(gtk::PolicyType::Automatic)
-      .vscrollbar_policy(gtk::PolicyType::Never)
-      .build();
-    group.add(&cast_scroll);
-  }
-  Some(group.upcast())
-}
-
-fn stream_metadata_status() -> gtk::Widget {
-  state_view(
-    "Audio and subtitles",
-    "Stream metadata is available when playback starts; no stream details were requested yet.",
-    "audio-x-generic-symbolic",
-  )
-}
-
-fn scrolled_page(title: &str, subtitle: &str, content: &gtk::Box) -> gtk::Widget {
-  let page = gtk::Box::builder()
-    .orientation(gtk::Orientation::Vertical)
-    .spacing(18)
-    .margin_top(24)
-    .margin_bottom(24)
-    .margin_start(24)
-    .margin_end(24)
-    .build();
-  let title = gtk::Label::new(Some(title));
-  title.add_css_class("title-1");
-  title.set_xalign(0.0);
-  page.append(&title);
-  if !subtitle.is_empty() {
-    let subtitle = dim_label(subtitle);
-    subtitle.set_wrap(true);
-    page.append(&subtitle);
-  }
-  page.append(content);
-  let clamp = adw::Clamp::new();
-  clamp.set_maximum_size(960);
-  clamp.set_child(Some(&page));
-  let scroll = gtk::ScrolledWindow::builder()
-    .child(&clamp)
-    .vexpand(true)
-    .build();
-  scroll.upcast()
-}
-
-fn state_view(title: &str, copy: &str, icon_name: &str) -> gtk::Widget {
-  let status = adw::StatusPage::new();
-  status.set_title(title);
-  status.set_description(Some(copy));
-  status.set_icon_name(Some(icon_name));
-  status.set_vexpand(true);
-  status.upcast()
-}
-
-fn loading_view(copy: &str) -> gtk::Widget {
-  let column = gtk::Box::new(gtk::Orientation::Vertical, 10);
-  column.set_halign(gtk::Align::Center);
-  column.set_valign(gtk::Align::Center);
-  column.set_accessible_role(gtk::AccessibleRole::Status);
-  let spinner = gtk::Spinner::new();
-  spinner.start();
-  column.append(&spinner);
-  column.append(&dim_label(copy));
-  column.upcast()
-}
-
 fn navigation_button(label: &str, icon: &str) -> gtk::ToggleButton {
   let button = gtk::ToggleButton::new();
   button.set_halign(gtk::Align::Fill);
@@ -4953,13 +2970,6 @@ fn navigation_button(label: &str, icon: &str) -> gtk::ToggleButton {
   row.append(&label);
   button.set_child(Some(&row));
   button
-}
-
-fn dim_label(text: &str) -> gtk::Label {
-  let label = gtk::Label::new(Some(text));
-  label.add_css_class("dim-label");
-  label.set_xalign(0.0);
-  label
 }
 
 fn playback_time_label() -> gtk::Label {
@@ -4991,23 +3001,6 @@ fn playback_meta_subtitle(item: Option<&MediaItem>) -> String {
   }
 }
 
-fn library_shortcut_caption(shortcut: &VideoLibraryShortcut) -> String {
-  let kind = match library_kind(&shortcut.collection_type) {
-    VideoLibraryKind::TvShows => "TV Shows",
-    VideoLibraryKind::Movies => "Movies",
-  };
-  match shortcut.item_count {
-    Some(count) => format!("{kind} · {count}"),
-    None => kind.to_owned(),
-  }
-}
-
-fn clear_box(container: &gtk::Box) {
-  while let Some(child) = container.first_child() {
-    container.remove(&child);
-  }
-}
-
 fn install_media_css() {
   let Some(display) = gtk::gdk::Display::default() else {
     return;
@@ -5021,69 +3014,6 @@ fn install_media_css() {
   );
 }
 
-fn library_kind(collection_type: &str) -> VideoLibraryKind {
-  if collection_type.eq_ignore_ascii_case("tvshows") || collection_type.eq_ignore_ascii_case("tv") {
-    VideoLibraryKind::TvShows
-  } else {
-    VideoLibraryKind::Movies
-  }
-}
-
-fn browse_preferences(
-  sort_selection: u32,
-  played_selection: u32,
-  favorites_only: bool,
-) -> BrowsePreferences {
-  let (sort, sort_direction) = match sort_selection {
-    1 => (
-      VideoLibrarySort::Title,
-      VideoLibrarySortDirection::Descending,
-    ),
-    2 => (
-      VideoLibrarySort::RecentlyAdded,
-      VideoLibrarySortDirection::Descending,
-    ),
-    3 => (
-      VideoLibrarySort::ReleaseDate,
-      VideoLibrarySortDirection::Descending,
-    ),
-    _ => (
-      VideoLibrarySort::Title,
-      VideoLibrarySortDirection::Ascending,
-    ),
-  };
-  let played_filter = match played_selection {
-    1 => VideoLibraryPlayedFilter::Unplayed,
-    2 => VideoLibraryPlayedFilter::Played,
-    _ => VideoLibraryPlayedFilter::All,
-  };
-  BrowsePreferences {
-    sort,
-    sort_direction,
-    played_filter,
-    favorites_only,
-  }
-}
-
-fn apply_user_data_update(
-  detail: &mut LoadState<DetailContent>,
-  update: &VideoUserDataUpdate,
-) -> bool {
-  match detail {
-    LoadState::Ready(DetailContent::Item(item)) if item.id == update.item_id => {
-      item.played = update.played;
-      item.favorite = update.favorite;
-      true
-    }
-    LoadState::Ready(DetailContent::Show(show)) if show.id == update.item_id => {
-      show.played = update.played;
-      show.favorite = update.favorite;
-      true
-    }
-    _ => false,
-  }
-}
-
 fn connection_label(client: &JellyfinClient) -> String {
   let state = client.login().connection_state();
   match (state.server_name, state.user_name) {
@@ -5091,105 +3021,6 @@ fn connection_label(client: &JellyfinClient) -> String {
     (Some(server), None) => format!("Connected to {server}"),
     _ => "Connected".to_owned(),
   }
-}
-
-fn is_episode_item(item: &VideoLibraryItem) -> bool {
-  item.item_type.eq_ignore_ascii_case("Episode")
-}
-
-fn card_frame_size(item: &VideoLibraryItem) -> (i32, i32) {
-  if is_episode_item(item) {
-    (THUMB_FRAME_WIDTH, THUMB_FRAME_HEIGHT)
-  } else {
-    (POSTER_FRAME_WIDTH, POSTER_FRAME_HEIGHT)
-  }
-}
-
-fn cover_picture(width: i32, height: i32) -> gtk::Picture {
-  let picture = gtk::Picture::new();
-  picture.set_can_shrink(true);
-  picture.set_content_fit(gtk::ContentFit::Cover);
-  picture.set_hexpand(true);
-  picture.set_vexpand(true);
-  picture.set_halign(gtk::Align::Fill);
-  picture.set_valign(gtk::Align::Fill);
-  picture.set_size_request(width, height);
-  picture
-}
-
-fn item_caption(item: &VideoLibraryItem) -> String {
-  match item.production_year {
-    Some(year) => format!("{year} · {}", item.item_type),
-    None => item.item_type.clone(),
-  }
-}
-
-fn hero_headline(item: &VideoLibraryItem) -> String {
-  if is_episode_item(item) {
-    item
-      .series_name
-      .as_deref()
-      .map(str::trim)
-      .filter(|name| !name.is_empty())
-      .map(ToOwned::to_owned)
-      .unwrap_or_else(|| item.name.clone())
-  } else {
-    item.name.clone()
-  }
-}
-
-fn hero_metadata(item: &VideoLibraryItem) -> String {
-  if is_episode_item(item) {
-    match (item.season_number, item.episode_number) {
-      (Some(season), Some(number)) => format!("S{season} E{number} · {}", item.name),
-      _ => format!("Episode · {}", item.name),
-    }
-  } else {
-    item_caption(item)
-  }
-}
-
-fn status_badge(item: &VideoLibraryItem) -> Option<gtk::Label> {
-  let text = if item.played {
-    "Played"
-  } else if item.favorite {
-    "Favorite"
-  } else {
-    return None;
-  };
-  let badge = gtk::Label::new(Some(text));
-  badge.add_css_class("jellypilot-badge");
-  badge.set_halign(gtk::Align::End);
-  badge.set_valign(gtk::Align::Start);
-  Some(badge)
-}
-
-fn resume_progress_bar(item: &VideoLibraryItem) -> Option<gtk::ProgressBar> {
-  let percentage = item
-    .played_percentage
-    .filter(|value| *value > 0.0 && *value < 100.0)?;
-  let progress = gtk::ProgressBar::new();
-  progress.set_fraction(percentage / 100.0);
-  progress.set_show_text(false);
-  progress.set_valign(gtk::Align::End);
-  progress.set_hexpand(true);
-  progress.add_css_class("jellypilot-progress-overlay");
-  Some(progress)
-}
-
-fn detail_metadata(detail: &VideoItemDetail) -> String {
-  let mut details = Vec::new();
-  if let Some(year) = detail.production_year {
-    details.push(year.to_string());
-  }
-  details.push(detail.item_type.clone());
-  if !detail.genres.is_empty() {
-    details.push(detail.genres.join(", "));
-  }
-  if detail.favorite {
-    details.push("Favorite".to_owned());
-  }
-  details.join(" · ")
 }
 
 fn playback_notice(notice: &PlaybackNotice) -> Option<String> {
@@ -5434,35 +3265,6 @@ fn format_duration(seconds: f64) -> String {
   format!("{:02}:{:02}", seconds / 60, seconds % 60)
 }
 
-fn show_detail_metadata(detail: &VideoShowDetail) -> String {
-  let mut details = Vec::new();
-  if let Some(year) = detail.production_year {
-    details.push(year.to_string());
-  }
-  details.push("Series".to_owned());
-  if !detail.genres.is_empty() {
-    details.push(detail.genres.join(", "));
-  }
-  if detail.favorite {
-    details.push("Favorite".to_owned());
-  }
-  details.join(" · ")
-}
-
-fn season_page_request(
-  series_id: &str,
-  season: &VideoSeason,
-  start_index: i32,
-) -> VideoSeasonEpisodesPageRequest {
-  VideoSeasonEpisodesPageRequest {
-    series_id: series_id.to_owned(),
-    season_id: Some(season.id.clone()),
-    season_number: season.season_number,
-    start_index: start_index.max(0),
-    limit: SEASON_EPISODE_PAGE_SIZE,
-  }
-}
-
 /// Reports this device as a controllable Playback Target after the command socket
 /// connected, then checks session visibility. The server registers the session from
 /// the socket and learns media control from this report, so both must happen before
@@ -5602,81 +3404,6 @@ mod tests {
       let client = authenticated_client(server_url).await;
       assert!(finalize_remote_target(&client).await.is_err());
     });
-  }
-
-  #[test]
-  fn season_page_request_uses_exact_identity_and_a_bounded_window() {
-    let season = VideoSeason {
-      id: "season-2".to_owned(),
-      name: "Season 2".to_owned(),
-      season_number: Some(2),
-      played: false,
-      favorite: false,
-      artwork_image_id: None,
-    };
-
-    let request = season_page_request("show-1", &season, 60);
-
-    assert_eq!(request.series_id, "show-1");
-    assert_eq!(request.season_id.as_deref(), Some("season-2"));
-    assert_eq!(request.season_number, Some(2));
-    assert_eq!(request.start_index, 60);
-    assert_eq!(request.limit, 30);
-  }
-
-  #[test]
-  fn browse_controls_map_to_provider_neutral_preferences() {
-    let preferences = browse_preferences(2, 1, true);
-
-    assert!(matches!(preferences.sort, VideoLibrarySort::RecentlyAdded));
-    assert!(matches!(
-      preferences.sort_direction,
-      VideoLibrarySortDirection::Descending
-    ));
-    assert!(matches!(
-      preferences.played_filter,
-      VideoLibraryPlayedFilter::Unplayed
-    ));
-    assert!(preferences.favorites_only);
-  }
-
-  #[test]
-  fn user_data_completion_updates_only_the_matching_detail() {
-    let mut detail = LoadState::Ready(DetailContent::Show(VideoShowDetail {
-      id: "show-1".to_owned(),
-      name: "Show".to_owned(),
-      overview: None,
-      production_year: None,
-      genres: Vec::new(),
-      played: false,
-      favorite: false,
-      can_play: false,
-      artwork_image_id: None,
-      backdrop_image_id: None,
-      next_episode: None,
-      seasons: Vec::new(),
-      metadata: Default::default(),
-    }));
-    let stale = VideoUserDataUpdate {
-      item_id: "show-2".to_owned(),
-      played: true,
-      favorite: true,
-    };
-    assert!(!apply_user_data_update(&mut detail, &stale));
-    let current = VideoUserDataUpdate {
-      item_id: "show-1".to_owned(),
-      played: true,
-      favorite: true,
-    };
-    assert!(apply_user_data_update(&mut detail, &current));
-    assert!(matches!(
-      detail,
-      LoadState::Ready(DetailContent::Show(VideoShowDetail {
-        played: true,
-        favorite: true,
-        ..
-      }))
-    ));
   }
 
   #[test]
