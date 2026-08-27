@@ -160,59 +160,6 @@ impl Settings {
   pub(crate) const fn image_cache_enabled(&self) -> bool {
     self.image_cache_enabled
   }
-
-  fn validate(&mut self) {
-    if !self.remember {
-      self.server_url.clear();
-      self.provider.clear();
-      self.username.clear();
-    } else {
-      self.server_url = self.server_url.trim().to_owned();
-      self.username = self.username.trim().to_owned();
-      if self.server_url.is_empty() || self.username.is_empty() {
-        self.remember = false;
-        self.server_url.clear();
-        self.provider.clear();
-        self.username.clear();
-      }
-    }
-    self.mpv_path = self.mpv_path.take().and_then(non_empty_setting);
-    self.playback_target_name = self.playback_target_name.take().and_then(non_empty_setting);
-    self.mpv_args = self
-      .mpv_args
-      .drain(..)
-      .filter_map(non_empty_setting)
-      .collect();
-
-    let mut languages = Vec::with_capacity(self.subtitle_languages.len());
-    for language in self.subtitle_languages.drain(..) {
-      let language = language.trim().to_ascii_lowercase();
-      if valid_subtitle_language(&language)
-        && !languages
-          .iter()
-          .any(|existing: &String| existing.eq_ignore_ascii_case(&language))
-      {
-        languages.push(language);
-      }
-    }
-    self.subtitle_languages = languages;
-
-    self.key_next_episode = non_empty_setting(std::mem::take(&mut self.key_next_episode))
-      .unwrap_or_else(default_key_next_episode);
-    self.key_previous_episode = non_empty_setting(std::mem::take(&mut self.key_previous_episode))
-      .unwrap_or_else(default_key_previous_episode);
-    self.key_intro_skip = non_empty_setting(std::mem::take(&mut self.key_intro_skip))
-      .unwrap_or_else(default_key_intro_skip);
-    if shortcut_collision(
-      &self.key_next_episode,
-      &self.key_previous_episode,
-      &self.key_intro_skip,
-    ) {
-      self.key_next_episode = default_key_next_episode();
-      self.key_previous_episode = default_key_previous_episode();
-      self.key_intro_skip = default_key_intro_skip();
-    }
-  }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -305,6 +252,7 @@ impl SettingsStore {
       settings.server_url = server_url;
       settings.provider = provider;
       settings.username = username;
+      Ok(())
     })
   }
 
@@ -314,27 +262,40 @@ impl SettingsStore {
       settings.server_url.clear();
       settings.provider.clear();
       settings.username.clear();
+      Ok(())
     })
   }
 
   pub(crate) fn set_intro_mode(&mut self, mode: IntroMode) -> Result<bool, SettingsMutationError> {
-    self.update(|settings| settings.intro_mode = mode)
+    self.update(|settings| {
+      settings.intro_mode = mode;
+      Ok(())
+    })
   }
 
   pub(crate) fn set_mpv_path(&mut self, path: String) -> Result<bool, SettingsMutationError> {
-    self.update(|settings| settings.mpv_path = non_empty_setting(path))
+    self.update(|settings| {
+      settings.mpv_path = non_empty_setting(path);
+      Ok(())
+    })
   }
 
   pub(crate) fn set_mpv_args(&mut self, args: &str) -> Result<bool, SettingsMutationError> {
     let args = parse_mpv_args(args);
-    self.update(|settings| settings.mpv_args = args)
+    self.update(|settings| {
+      settings.mpv_args = args;
+      Ok(())
+    })
   }
 
   pub(crate) fn set_playback_target_name(
     &mut self,
     name: String,
   ) -> Result<bool, SettingsMutationError> {
-    self.update(|settings| settings.playback_target_name = non_empty_setting(name))
+    self.update(|settings| {
+      settings.playback_target_name = non_empty_setting(name);
+      Ok(())
+    })
   }
 
   pub(crate) fn add_subtitle_language(
@@ -345,15 +306,17 @@ impl SettingsStore {
     if !valid_subtitle_language(&language) {
       return Err(SettingsMutationError::InvalidSubtitleLanguage);
     }
-    if self
-      .settings
-      .subtitle_languages
-      .iter()
-      .any(|existing| existing.eq_ignore_ascii_case(&language))
-    {
-      return Err(SettingsMutationError::DuplicateSubtitleLanguage);
-    }
-    self.update(|settings| settings.subtitle_languages.push(language))
+    self.update(|settings| {
+      if settings
+        .subtitle_languages
+        .iter()
+        .any(|existing| existing.eq_ignore_ascii_case(&language))
+      {
+        return Err(SettingsMutationError::DuplicateSubtitleLanguage);
+      }
+      settings.subtitle_languages.push(language);
+      Ok(())
+    })
   }
 
   pub(crate) fn move_subtitle_language(
@@ -368,28 +331,33 @@ impl SettingsStore {
     let Ok(target) = usize::try_from(target) else {
       return Ok(false);
     };
-    if index >= self.settings.subtitle_languages.len()
-      || target >= self.settings.subtitle_languages.len()
-    {
-      return Ok(false);
-    }
-    self.update(|settings| settings.subtitle_languages.swap(index, target))
+    self.update(|settings| {
+      if index >= settings.subtitle_languages.len() || target >= settings.subtitle_languages.len() {
+        return Ok(());
+      }
+      settings.subtitle_languages.swap(index, target);
+      Ok(())
+    })
   }
 
   pub(crate) fn remove_subtitle_language(
     &mut self,
     index: usize,
   ) -> Result<bool, SettingsMutationError> {
-    if index >= self.settings.subtitle_languages.len() {
-      return Ok(false);
-    }
     self.update(|settings| {
+      if index >= settings.subtitle_languages.len() {
+        return Ok(());
+      }
       settings.subtitle_languages.remove(index);
+      Ok(())
     })
   }
 
   pub(crate) fn clear_subtitle_languages(&mut self) -> Result<bool, SettingsMutationError> {
-    self.update(|settings| settings.subtitle_languages.clear())
+    self.update(|settings| {
+      settings.subtitle_languages.clear();
+      Ok(())
+    })
   }
 
   pub(crate) fn set_shortcut(
@@ -398,28 +366,30 @@ impl SettingsStore {
     key: String,
   ) -> Result<bool, SettingsMutationError> {
     let key = non_empty_setting(key).ok_or(SettingsMutationError::EmptyShortcut)?;
-    let bindings = &self.settings;
-    let collision = match kind {
-      ShortcutKind::Next => {
-        binding_matches(&bindings.key_previous_episode, &key)
-          || binding_matches(&bindings.key_intro_skip, &key)
+    self.update(|settings| {
+      let collision = match kind {
+        ShortcutKind::Next => {
+          binding_matches(&settings.key_previous_episode, &key)
+            || binding_matches(&settings.key_intro_skip, &key)
+        }
+        ShortcutKind::Previous => {
+          binding_matches(&settings.key_next_episode, &key)
+            || binding_matches(&settings.key_intro_skip, &key)
+        }
+        ShortcutKind::IntroSkip => {
+          binding_matches(&settings.key_next_episode, &key)
+            || binding_matches(&settings.key_previous_episode, &key)
+        }
+      };
+      if collision {
+        return Err(SettingsMutationError::ShortcutCollision);
       }
-      ShortcutKind::Previous => {
-        binding_matches(&bindings.key_next_episode, &key)
-          || binding_matches(&bindings.key_intro_skip, &key)
+      match kind {
+        ShortcutKind::Next => settings.key_next_episode = key,
+        ShortcutKind::Previous => settings.key_previous_episode = key,
+        ShortcutKind::IntroSkip => settings.key_intro_skip = key,
       }
-      ShortcutKind::IntroSkip => {
-        binding_matches(&bindings.key_next_episode, &key)
-          || binding_matches(&bindings.key_previous_episode, &key)
-      }
-    };
-    if collision {
-      return Err(SettingsMutationError::ShortcutCollision);
-    }
-    self.update(|settings| match kind {
-      ShortcutKind::Next => settings.key_next_episode = key,
-      ShortcutKind::Previous => settings.key_previous_episode = key,
-      ShortcutKind::IntroSkip => settings.key_intro_skip = key,
+      Ok(())
     })
   }
 
@@ -427,17 +397,21 @@ impl SettingsStore {
     &mut self,
     enabled: bool,
   ) -> Result<bool, SettingsMutationError> {
-    self.update(|settings| settings.image_cache_enabled = enabled)
+    self.update(|settings| {
+      settings.image_cache_enabled = enabled;
+      Ok(())
+    })
   }
 
   fn update(
     &mut self,
-    mutation: impl FnOnce(&mut Settings),
+    mutation: impl FnOnce(&mut Settings) -> Result<(), SettingsMutationError>,
   ) -> Result<bool, SettingsMutationError> {
-    let mut candidate = self.settings.clone();
-    mutation(&mut candidate);
-    candidate.validate();
-    if candidate == self.settings {
+    let mut candidate = read_from(&self.path).unwrap_or_else(|_| self.settings.clone());
+    let previous = candidate.clone();
+    mutation(&mut candidate)?;
+    if candidate == previous {
+      self.settings = candidate;
       return Ok(false);
     }
     save_to(&self.path, &candidate)?;
@@ -481,12 +455,6 @@ fn valid_subtitle_language(value: &str) -> bool {
 
 fn binding_matches(left: &str, right: &str) -> bool {
   left.trim().eq_ignore_ascii_case(right.trim())
-}
-
-fn shortcut_collision(next: &str, previous: &str, intro_skip: &str) -> bool {
-  binding_matches(next, previous)
-    || binding_matches(next, intro_skip)
-    || binding_matches(previous, intro_skip)
 }
 
 fn deserialize_optional_string<'de, D>(deserializer: D) -> Result<Option<String>, D::Error>
@@ -598,14 +566,17 @@ fn temporary_path(path: &Path) -> PathBuf {
 }
 
 fn load_from(path: &Path) -> Result<Settings, ConfigError> {
-  let contents = match fs::read_to_string(path) {
-    Ok(contents) => contents,
-    Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(Settings::default()),
-    Err(error) => return Err(error.into()),
-  };
-  let mut settings: Settings = serde_json::from_str(&contents)?;
-  settings.validate();
-  Ok(settings)
+  match read_from(path) {
+    Err(ConfigError::Io(error)) if error.kind() == io::ErrorKind::NotFound => {
+      Ok(Settings::default())
+    }
+    result => result,
+  }
+}
+
+fn read_from(path: &Path) -> Result<Settings, ConfigError> {
+  let contents = fs::read_to_string(path)?;
+  Ok(serde_json::from_str(&contents)?)
 }
 
 fn save_to(path: &Path, settings: &Settings) -> Result<(), ConfigError> {
@@ -715,29 +686,55 @@ mod tests {
   }
 
   #[test]
-  fn load_normalizes_semantically_invalid_settings() {
-    let path = test_path("semantic-validity");
+  fn load_and_unrelated_mutation_preserve_legacy_strict_values() {
+    let path = test_path("legacy-strict-values");
     let _ = fs::remove_file(&path);
     fs::write(
       &path,
-      r#"{"remember":false,"server_url":"stale","provider":"jellyfin","username":"stale","mpv_path":"  ","mpv_args":[" --fullscreen "," "],"playback_target_name":" Living Room ","subtitle_languages":[" ENG ","eng","bad,list","pt-br"],"key_next_episode":" x ","key_previous_episode":"X","key_intro_skip":"g"}"#,
+      r#"{"remember":false,"server_url":"","provider":"","username":"","subtitle_languages":["English (CC)"],"key_next_episode":"x","key_previous_episode":"X","key_intro_skip":"g"}"#,
     )
     .unwrap();
 
     let settings = load_from(&path).unwrap();
 
-    assert_eq!(
-      settings.login_prefill(),
-      LoginPrefill::new(String::new(), String::new())
-    );
-    assert_eq!(settings.mpv_path(), None);
-    assert_eq!(settings.mpv_args(), &["--fullscreen"]);
-    assert_eq!(settings.playback_target_name(), Some("Living Room"));
-    assert_eq!(settings.subtitle_languages(), &["eng", "pt-br"]);
-    assert_eq!(settings.key_next_episode(), "Shift+>");
-    assert_eq!(settings.key_previous_episode(), "Shift+<");
-    assert_eq!(settings.key_intro_skip(), "g");
+    assert_eq!(settings.subtitle_languages(), &["English (CC)"]);
+    assert_eq!(settings.key_next_episode(), "x");
+    assert_eq!(settings.key_previous_episode(), "X");
+    let mut store = store_at(path.clone(), settings);
+    assert!(store.set_intro_mode(IntroMode::Manual).unwrap());
+    let saved = load_from(&path).unwrap();
+    assert_eq!(saved.subtitle_languages(), &["English (CC)"]);
+    assert_eq!(saved.key_next_episode(), "x");
+    assert_eq!(saved.key_previous_episode(), "X");
     fs::remove_file(path).unwrap();
+  }
+
+  #[test]
+  fn new_subtitle_language_mutation_rejects_legacy_invalid_value() {
+    let path = test_path("invalid-new-language");
+    let _ = fs::remove_file(&path);
+    let mut store = store_at(path, Settings::default());
+
+    assert!(matches!(
+      store.add_subtitle_language("English (CC)".to_owned()),
+      Err(SettingsMutationError::InvalidSubtitleLanguage)
+    ));
+  }
+
+  #[test]
+  fn new_shortcut_mutation_rejects_legacy_collision() {
+    let path = test_path("invalid-new-shortcut");
+    let _ = fs::remove_file(&path);
+    let settings = Settings {
+      key_previous_episode: "X".to_owned(),
+      ..Settings::default()
+    };
+    let mut store = store_at(path, settings);
+
+    assert!(matches!(
+      store.set_shortcut(ShortcutKind::Next, "x".to_owned()),
+      Err(SettingsMutationError::ShortcutCollision)
+    ));
   }
 
   #[test]
@@ -789,6 +786,25 @@ mod tests {
     expected.provider.clear();
     expected.username.clear();
     assert_eq!(load_from(&path).unwrap(), expected);
+    fs::remove_file(path).unwrap();
+  }
+
+  #[test]
+  fn mutation_merges_unrelated_on_disk_edits_after_startup() {
+    let path = test_path("external-edit");
+    let _ = fs::remove_file(&path);
+    let startup = remembered_settings();
+    save_to(&path, &startup).unwrap();
+    let mut store = store_at(path.clone(), startup.clone());
+    let mut external = startup;
+    external.playback_target_name = Some("Bedroom".to_owned());
+    save_to(&path, &external).unwrap();
+
+    assert!(store.set_intro_mode(IntroMode::Off).unwrap());
+
+    external.intro_mode = IntroMode::Off;
+    assert_eq!(load_from(&path).unwrap(), external);
+    assert_eq!(store.snapshot(), &external);
     fs::remove_file(path).unwrap();
   }
 
