@@ -1,4 +1,5 @@
 use std::collections::VecDeque;
+use std::fmt::Write as _;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 pub(crate) const MAX_DIAGNOSTIC_EVENTS: usize = 200;
@@ -43,22 +44,39 @@ impl DiagnosticCategory {
   }
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct DiagnosticEvent {
+struct DiagnosticEvent {
+  id: u64,
+  timestamp_seconds: u64,
+  level: DiagnosticLevel,
+  category: DiagnosticCategory,
+  message: String,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum DiagnosticChange {
+  Added { id: u64, dropped_id: Option<u64> },
+  Updated { id: u64 },
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct DiagnosticRow<'a> {
   pub(crate) id: u64,
   pub(crate) timestamp_seconds: u64,
   pub(crate) level: DiagnosticLevel,
   pub(crate) category: DiagnosticCategory,
-  pub(crate) message: String,
+  pub(crate) message: &'a str,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) enum DiagnosticChange {
-  Added {
-    event: DiagnosticEvent,
-    dropped_id: Option<u64>,
-  },
-  Updated(DiagnosticEvent),
+impl DiagnosticEvent {
+  fn row(&self) -> DiagnosticRow<'_> {
+    DiagnosticRow {
+      id: self.id,
+      timestamp_seconds: self.timestamp_seconds,
+      level: self.level,
+      category: self.category,
+      message: &self.message,
+    }
+  }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -88,15 +106,41 @@ impl Diagnostics {
     category: DiagnosticCategory,
     message: impl AsRef<str>,
   ) -> DiagnosticChange {
-    self.record_at(current_timestamp_seconds(), level, category, message)
+    self.record_with_timestamp(current_timestamp_seconds(), level, category, message)
   }
 
-  pub(crate) fn record_at(
+  #[cfg(test)]
+  fn record_at(
     &mut self,
     timestamp_seconds: u64,
     level: DiagnosticLevel,
     category: DiagnosticCategory,
     message: impl AsRef<str>,
+  ) -> DiagnosticChange {
+    self.record_with_timestamp(timestamp_seconds, level, category, message)
+  }
+
+  fn record_with_timestamp(
+    &mut self,
+    timestamp_seconds: u64,
+    level: DiagnosticLevel,
+    category: DiagnosticCategory,
+    message: impl AsRef<str>,
+  ) -> DiagnosticChange {
+    self.record_sanitized(
+      timestamp_seconds,
+      level,
+      category,
+      sanitize_message(message.as_ref()),
+    )
+  }
+
+  fn record_sanitized(
+    &mut self,
+    timestamp_seconds: u64,
+    level: DiagnosticLevel,
+    category: DiagnosticCategory,
+    message: String,
   ) -> DiagnosticChange {
     self.next_id = self.next_id.wrapping_add(1);
     let event = DiagnosticEvent {
@@ -104,15 +148,16 @@ impl Diagnostics {
       timestamp_seconds,
       level,
       category,
-      message: sanitize_message(message.as_ref()),
+      message,
     };
     let dropped_id = if self.events.len() == MAX_DIAGNOSTIC_EVENTS {
       self.events.pop_front().map(|event| event.id)
     } else {
       None
     };
-    self.events.push_back(event.clone());
-    DiagnosticChange::Added { event, dropped_id }
+    let id = event.id;
+    self.events.push_back(event);
+    DiagnosticChange::Added { id, dropped_id }
   }
 
   pub(crate) fn record_coalesced(
@@ -122,10 +167,22 @@ impl Diagnostics {
     category: DiagnosticCategory,
     message: &str,
   ) -> DiagnosticChange {
-    self.record_coalesced_at(current_timestamp_seconds(), key, level, category, message)
+    self.record_coalesced_with_timestamp(current_timestamp_seconds(), key, level, category, message)
   }
 
-  pub(crate) fn record_coalesced_at(
+  #[cfg(test)]
+  fn record_coalesced_at(
+    &mut self,
+    timestamp_seconds: u64,
+    key: &str,
+    level: DiagnosticLevel,
+    category: DiagnosticCategory,
+    message: &str,
+  ) -> DiagnosticChange {
+    self.record_coalesced_with_timestamp(timestamp_seconds, key, level, category, message)
+  }
+
+  fn record_coalesced_with_timestamp(
     &mut self,
     timestamp_seconds: u64,
     key: &str,
@@ -145,16 +202,16 @@ impl Diagnostics {
       {
         coalesced.count = coalesced.count.saturating_add(1);
         event.message = format!("{} (×{})", coalesced.base_message, coalesced.count);
-        return DiagnosticChange::Updated(event.clone());
+        return DiagnosticChange::Updated { id: event.id };
       }
     }
 
     let base_message = sanitize_message(message);
-    let change = self.record_at(timestamp_seconds, level, category, &base_message);
-    if let DiagnosticChange::Added { event, .. } = &change {
+    let change = self.record_sanitized(timestamp_seconds, level, category, base_message.clone());
+    if let DiagnosticChange::Added { id, .. } = change {
       self.coalesced = Some(CoalescedRecord {
         key: key.to_owned(),
-        event_id: event.id,
+        event_id: id,
         count: 1,
         base_message,
       });
@@ -166,8 +223,35 @@ impl Diagnostics {
     self.coalesced = None;
   }
 
-  pub(crate) fn events(&self) -> impl ExactSizeIterator<Item = &DiagnosticEvent> {
-    self.events.iter()
+  pub(crate) fn rows(&self) -> impl ExactSizeIterator<Item = DiagnosticRow<'_>> {
+    self.events.iter().map(DiagnosticEvent::row)
+  }
+
+  pub(crate) fn row(&self, id: u64) -> Option<DiagnosticRow<'_>> {
+    self
+      .events
+      .iter()
+      .find(|event| event.id == id)
+      .map(DiagnosticEvent::row)
+  }
+
+  pub(crate) fn export_text(&self, mut format_timestamp: impl FnMut(u64) -> String) -> String {
+    let mut text = String::new();
+    for row in self.rows() {
+      if !text.is_empty() {
+        text.push('\n');
+      }
+      write!(
+        text,
+        "[{}] {} [{}] {}",
+        format_timestamp(row.timestamp_seconds),
+        row.level.label(),
+        row.category.label(),
+        row.message
+      )
+      .expect("writing to a String cannot fail");
+    }
+    text
   }
 
   pub(crate) fn clear(&mut self) {
@@ -193,7 +277,7 @@ fn current_timestamp_seconds() -> u64 {
     .as_secs()
 }
 
-pub(crate) fn sanitize_message(message: &str) -> String {
+fn sanitize_message(message: &str) -> String {
   let lowercase = message.to_ascii_lowercase();
   let lowercase_bytes = lowercase.as_bytes();
   let mut sanitized = String::with_capacity(message.len());
@@ -265,7 +349,7 @@ mod tests {
   use super::*;
 
   #[test]
-  fn buffer_keeps_latest_two_hundred_events_in_order() {
+  fn buffer_keeps_latest_two_hundred_rows_in_order() {
     let mut diagnostics = Diagnostics::default();
     for index in 0..=MAX_DIAGNOSTIC_EVENTS {
       diagnostics.record_at(
@@ -276,20 +360,14 @@ mod tests {
       );
     }
 
-    let events = diagnostics.events().collect::<Vec<_>>();
-    assert_eq!(events.len(), MAX_DIAGNOSTIC_EVENTS);
-    assert_eq!(
-      events.first().map(|event| event.message.as_str()),
-      Some("event 1")
-    );
-    assert_eq!(
-      events.last().map(|event| event.message.as_str()),
-      Some("event 200")
-    );
+    let rows = diagnostics.rows().collect::<Vec<_>>();
+    assert_eq!(rows.len(), MAX_DIAGNOSTIC_EVENTS);
+    assert_eq!(rows.first().map(|row| row.message), Some("event 1"));
+    assert_eq!(rows.last().map(|row| row.message), Some("event 200"));
   }
 
   #[test]
-  fn record_redacts_query_secrets_and_bearer_tokens_again() {
+  fn rows_and_export_text_expose_only_sanitized_event_data() {
     let mut diagnostics = Diagnostics::default();
     diagnostics.record_at(
       1,
@@ -298,14 +376,19 @@ mod tests {
       "GET https://media.example/video?api_key=secret&token=other Password bearer TOP-SECRET",
     );
 
-    let message = &diagnostics.events().next().expect("event recorded").message;
+    let row = diagnostics.rows().next().expect("event recorded");
+    assert_eq!(row.id, 1);
+    assert_eq!(row.timestamp_seconds, 1);
+    assert_eq!(row.level, DiagnosticLevel::Error);
+    assert_eq!(row.category, DiagnosticCategory::Playback);
     assert_eq!(
-      message,
+      row.message,
       "GET https://media.example/video?api_key=[REDACTED]&token=[REDACTED] Password bearer [REDACTED]"
     );
-    assert!(!message.contains("secret"));
-    assert!(!message.contains("other"));
-    assert!(!message.contains("TOP-SECRET"));
+    assert_eq!(
+      diagnostics.export_text(|timestamp| format!("{timestamp} UTC")),
+      "[1 UTC] ERROR [Playback] GET https://media.example/video?api_key=[REDACTED]&token=[REDACTED] Password bearer [REDACTED]"
+    );
     assert_eq!(
       sanitize_message("Authorization:Bearer another-secret"),
       "Authorization:Bearer [REDACTED]"
@@ -313,7 +396,7 @@ mod tests {
   }
 
   #[test]
-  fn coalesced_events_update_one_entry_until_reset() {
+  fn coalesced_events_update_one_row_until_reset() {
     let mut diagnostics = Diagnostics::default();
     for timestamp in 1..=3 {
       diagnostics.record_coalesced_at(
@@ -325,10 +408,10 @@ mod tests {
       );
     }
 
-    let events = diagnostics.events().collect::<Vec<_>>();
-    assert_eq!(events.len(), 1);
+    let rows = diagnostics.rows().collect::<Vec<_>>();
+    assert_eq!(rows.len(), 1);
     assert_eq!(
-      events[0].message,
+      rows[0].message,
       "Artwork could not be loaded or decoded. (×3)"
     );
 
@@ -341,11 +424,11 @@ mod tests {
       "Artwork could not be loaded or decoded.",
     );
 
-    assert_eq!(diagnostics.events().len(), 2);
+    assert_eq!(diagnostics.rows().len(), 2);
   }
 
   #[test]
-  fn clear_removes_every_event() {
+  fn clear_removes_every_row() {
     let mut diagnostics = Diagnostics::default();
     diagnostics.record_at(
       1,
@@ -356,7 +439,7 @@ mod tests {
 
     diagnostics.clear();
 
-    assert_eq!(diagnostics.events().len(), 0);
+    assert_eq!(diagnostics.rows().len(), 0);
   }
 
   #[test]

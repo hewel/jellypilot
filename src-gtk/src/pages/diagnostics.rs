@@ -5,8 +5,7 @@ use relm4::adw::prelude::*;
 use relm4::{adw, gtk, Sender};
 
 use crate::diagnostics::{
-  sanitize_message, DiagnosticChange, DiagnosticEvent, DiagnosticLevel, Diagnostics,
-  DiagnosticsViewState,
+  DiagnosticChange, DiagnosticLevel, DiagnosticRow, Diagnostics, DiagnosticsViewState,
 };
 use crate::shell::AppMessage;
 
@@ -103,23 +102,27 @@ impl DiagnosticsPage {
 
   pub(crate) fn apply_change(&self, change: DiagnosticChange, diagnostics: &Diagnostics) {
     match change {
-      DiagnosticChange::Added { event, dropped_id } => {
+      DiagnosticChange::Added { id, dropped_id } => {
         if let Some(dropped_id) = dropped_id {
           if let Some(row) = self.rows.borrow_mut().remove(&dropped_id) {
             self.list.remove(&row.row);
           }
         }
-        self.append_row(&event);
+        let Some(row) = diagnostics.row(id) else {
+          self.render(diagnostics);
+          return;
+        };
+        self.append_row(row);
         self.update_summary(diagnostics.view_state());
       }
-      DiagnosticChange::Updated(event) => {
-        let message = self
-          .rows
-          .borrow()
-          .get(&event.id)
-          .map(|row| row.message.clone());
+      DiagnosticChange::Updated { id } => {
+        let Some(row) = diagnostics.row(id) else {
+          self.render(diagnostics);
+          return;
+        };
+        let message = self.rows.borrow().get(&id).map(|row| row.message.clone());
         if let Some(message) = message {
-          message.set_label(&event.message);
+          message.set_label(row.message);
         } else {
           self.render(diagnostics);
         }
@@ -130,26 +133,14 @@ impl DiagnosticsPage {
   pub(crate) fn render(&self, diagnostics: &Diagnostics) {
     clear_list_box(&self.list);
     self.rows.borrow_mut().clear();
-    for event in diagnostics.events() {
-      self.append_row(event);
+    for row in diagnostics.rows() {
+      self.append_row(row);
     }
     self.update_summary(diagnostics.view_state());
   }
 
   fn copy(&self, diagnostics: &Diagnostics) {
-    let text = diagnostics
-      .events()
-      .map(|event| {
-        format!(
-          "[{}] {} [{}] {}",
-          format_diagnostic_time(event.timestamp_seconds),
-          event.level.label(),
-          event.category.label(),
-          sanitize_message(&event.message)
-        )
-      })
-      .collect::<Vec<_>>()
-      .join("\n");
+    let text = diagnostics.export_text(format_diagnostic_time);
     let Some(display) = gtk::gdk::Display::default() else {
       self
         .status
@@ -162,31 +153,31 @@ impl DiagnosticsPage {
     self.status.set_visible(true);
   }
 
-  fn append_row(&self, event: &DiagnosticEvent) {
+  fn append_row(&self, diagnostic: DiagnosticRow<'_>) {
     let content = gtk::Box::new(gtk::Orientation::Horizontal, 10);
     content.set_margin_top(8);
     content.set_margin_bottom(8);
     content.set_margin_start(10);
     content.set_margin_end(10);
-    let time = gtk::Label::new(Some(&format_diagnostic_time(event.timestamp_seconds)));
+    let time = gtk::Label::new(Some(&format_diagnostic_time(diagnostic.timestamp_seconds)));
     time.add_css_class("dim-label");
     time.add_css_class("monospace");
     time.set_valign(gtk::Align::Start);
     content.append(&time);
-    let level = gtk::Label::new(Some(event.level.label()));
+    let level = gtk::Label::new(Some(diagnostic.level.label()));
     level.add_css_class("caption-heading");
-    level.add_css_class(match event.level {
+    level.add_css_class(match diagnostic.level {
       DiagnosticLevel::Info => "accent",
       DiagnosticLevel::Warning => "warning",
       DiagnosticLevel::Error => "error",
     });
     level.set_valign(gtk::Align::Start);
     content.append(&level);
-    let category = gtk::Label::new(Some(event.category.label()));
+    let category = gtk::Label::new(Some(diagnostic.category.label()));
     category.add_css_class("dim-label");
     category.set_valign(gtk::Align::Start);
     content.append(&category);
-    let message = gtk::Label::new(Some(&event.message));
+    let message = gtk::Label::new(Some(diagnostic.message));
     message.add_css_class("monospace");
     message.set_hexpand(true);
     message.set_wrap(true);
@@ -199,7 +190,7 @@ impl DiagnosticsPage {
     self
       .rows
       .borrow_mut()
-      .insert(event.id, DiagnosticRowWidgets { row, message });
+      .insert(diagnostic.id, DiagnosticRowWidgets { row, message });
   }
 
   fn update_summary(&self, state: DiagnosticsViewState) {
