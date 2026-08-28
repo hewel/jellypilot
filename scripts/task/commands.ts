@@ -45,7 +45,6 @@ export const RUST_FORMAT_PACKAGES = [
   'jellypilot-mpv',
   'jellypilot-session',
   'jellypilot-playback-core',
-  'jellypilot-gtk',
   'jellypilot-ui',
   'jellypilot-iced',
 ];

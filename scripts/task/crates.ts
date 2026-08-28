@@ -6,7 +6,6 @@ export type CrateShortName =
   | 'mpv'
   | 'session'
   | 'playback-core'
-  | 'gtk'
   | 'iced';
 
 export const CRATE_NAMES: Readonly<Record<CrateShortName, readonly string[]>> = {
@@ -17,7 +16,6 @@ export const CRATE_NAMES: Readonly<Record<CrateShortName, readonly string[]>> = 
   mpv: ['jellypilot-mpv'],
   session: ['jellypilot-session'],
   'playback-core': ['jellypilot-playback-core'],
-  gtk: ['jellypilot-gtk'],
   iced: ['jellypilot-ui', 'jellypilot-iced'],
 };
 
@@ -30,7 +28,6 @@ export function isCrateShortName(value: string): value is CrateShortName {
     value === 'mpv' ||
     value === 'session' ||
     value === 'playback-core' ||
-    value === 'gtk' ||
     value === 'iced'
   );
 }

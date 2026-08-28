@@ -12,7 +12,6 @@ test('maps every task crate short name and rejects unknown crates', () => {
     mpv: ['jellypilot-mpv'],
     session: ['jellypilot-session'],
     'playback-core': ['jellypilot-playback-core'],
-    gtk: ['jellypilot-gtk'],
     iced: ['jellypilot-ui', 'jellypilot-iced'],
   });
   for (const [shortName, packageNames] of Object.entries(CRATE_NAMES)) {

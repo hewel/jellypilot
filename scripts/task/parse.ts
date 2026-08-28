@@ -32,7 +32,6 @@ export type TaskCommand =
   | { readonly _tag: 'wasm'; readonly action: 'install' }
   | { readonly _tag: 'wasm'; readonly action: 'build'; readonly mode?: '--dev' | '--release' }
   | { readonly _tag: 'ffmpeg'; readonly verify: boolean; readonly target?: string }
-  | { readonly _tag: 'gtk'; readonly smoke: boolean }
   | { readonly _tag: 'iced'; readonly smoke: boolean }
   | {
       readonly _tag: 'e2e';
@@ -214,20 +213,6 @@ export function parseCli(argv: readonly string[]): TaskCommand {
       }
     }
     return target === undefined ? { _tag: command, verify } : { _tag: command, verify, target };
-  }
-  if (command === 'gtk') {
-    const [action, ...rest] = args;
-    if (action !== 'run') {
-      throw new Error(
-        action === undefined ? 'Missing GTK command.' : `Unknown GTK command: ${action}`,
-      );
-    }
-    let smoke = false;
-    for (const argument of rest) {
-      if (argument === '--smoke') smoke = true;
-      else unknownOption('gtk run', argument);
-    }
-    return { _tag: command, smoke };
   }
   if (command === 'iced') {
     const [action, ...rest] = args;

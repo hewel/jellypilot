@@ -5,7 +5,7 @@
 # JellyPilot
 
 [![CI](https://github.com/hewel/jellypilot/actions/workflows/ci.yml/badge.svg)](https://github.com/hewel/jellypilot/actions/workflows/ci.yml)
-[![Rust](https://img.shields.io/badge/Rust-1.85+-orange?logo=rust)](https://www.rust-lang.org/)
+[![Rust](https://img.shields.io/badge/Rust-1.88+-orange?logo=rust)](https://www.rust-lang.org/)
 [![Tauri](https://img.shields.io/badge/Tauri-v2-blue?logo=tauri)](https://v2.tauri.app/)
 [![Solid.js](https://img.shields.io/badge/Solid.js-1.x-blue?logo=solid)](https://www.solidjs.com/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
@@ -195,11 +195,9 @@ sudo pacman -U jellypilot-<version>-1-x86_64.pkg.tar.zst
 <summary>Development prerequisites</summary>
 
 - [Bun](https://bun.sh/) 1.3.14 or newer
-- [Rust](https://rustup.rs/) 1.85 or newer, installed with `rustup`
+- [Rust](https://rustup.rs/) 1.88 or newer, installed with `rustup`
 - The `wasm32-unknown-unknown` Rust target
 - `wasm-pack` 0.15.0 exactly
-- Linux only: GTK 4 development files and `pkg-config` to compile the native GTK preview
-- Linux GTK Saved Profiles: an unlocked Secret Service provider such as GNOME Keyring or KWallet
 - Linux native playback: [MPV](https://mpv.io/) available on `PATH`
 
 </details>
@@ -260,7 +258,7 @@ jellypilot/
 │   ├── index.tsx         # Entry point
 │   ├── bindings.ts       # Auto-generated IPC bindings
 │   └── components/       # UI components
-├── src-gtk/              # Parallel native GTK 4 frontend for Linux
+├── src-iced/             # Cross-platform iced frontend (ADR 0027, in migration)
 ├── src-tauri/            # Tauri backend and production desktop binary
 │   ├── src/
 │   │   ├── jellyfin/     # Tauri media-session and compatibility adapters
@@ -271,18 +269,12 @@ jellypilot/
 
 ### Commands
 
-The Linux GTK preview supports password sign-in, Jellyfin Quick Connect, Saved Profiles backed by
-Linux Secret Service, Home and library browsing, search, details and seasons, authenticated
-artwork, and external MPV playback. Tauri remains the production app while embedded playback,
-packaging, automatic provider-transcode expiry recovery, and live-server acceptance remain
-explicit migration gates.
-
 | Task                     | Command                      |
 | :----------------------- | :--------------------------- |
 | **Frontend Dev**         | `bun run dev`                |
 | **Tauri Dev**            | `bun tauri dev`              |
-| **GTK Dev (Linux)**      | `bun run task gtk run`             |
-| **GTK Startup Smoke**    | `bun run task gtk run --smoke`     |
+| **iced Dev**             | `bun run task iced run`          |
+| **iced Startup Smoke**   | `bun run task iced run --smoke`  |
 | **Build Prod**           | `bun tauri build`            |
 | **Build WASM (dev)**     | `bun run task wasm build --dev`     |
 | **Build WASM (release)** | `bun run task wasm build --release` |

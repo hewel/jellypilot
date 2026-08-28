@@ -5,7 +5,6 @@ import { runBuild, runDev, runPreview, runTest } from './task/dev';
 import { runE2e } from './task/e2e';
 import { TaskCliError } from './task/errors';
 import { runFfmpeg } from './task/ffmpeg';
-import { runGtk } from './task/gtk';
 import { TASK_HELP } from './task/help';
 import { runIced } from './task/iced';
 import { runApi, runPanda, runReview } from './task/misc';
@@ -37,7 +36,6 @@ const program = Effect.try({
       Match.when({ _tag: 'rust' }, (task) => runRust(task)),
       Match.when({ _tag: 'wasm' }, (task) => runWasm(task)),
       Match.when({ _tag: 'ffmpeg' }, ({ target, verify }) => runFfmpeg({ target, verify })),
-      Match.when({ _tag: 'gtk' }, ({ smoke }) => runGtk(smoke)),
       Match.when({ _tag: 'iced' }, ({ smoke }) => runIced(smoke)),
       Match.when({ _tag: 'e2e' }, ({ action, args, skipSetup }) =>
         runE2e({ action, args, skipSetup }),

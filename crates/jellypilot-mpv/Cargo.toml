@@ -11,6 +11,7 @@ version.workspace = true
 async-channel = "2.5.0"
 dirs = "6.0.0"
 log = "0.4"
+jellypilot-core = { path = "../jellypilot-core" }
 jellypilot-media-server = { path = "../jellypilot-media-server" }
 jellypilot-session = { path = "../jellypilot-session" }
 parking_lot = "0.12.5"

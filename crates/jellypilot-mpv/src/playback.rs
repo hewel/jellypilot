@@ -100,6 +100,40 @@ impl From<MediaItem> for Playable {
   }
 }
 
+/// Reconstructs the media-server item needed for adjacent episode lookup.
+#[must_use]
+pub fn media_item_from_playable(item: &Playable) -> MediaItem {
+  match item {
+    Playable::Library(item) => MediaItem {
+      id: item.id.clone(),
+      name: item.name.clone(),
+      item_type: item.item_type.clone(),
+      series_id: item.series_id.clone(),
+      series_name: item.series_name.clone(),
+      season_name: None,
+      index_number: item.episode_number,
+      parent_index_number: item.season_number,
+      run_time_ticks: crate::player::runtime_seconds_to_ticks(item.runtime_seconds),
+      overview: item.overview.clone(),
+      series_primary_image_tag: None,
+    },
+    Playable::Detail(item) => MediaItem {
+      id: item.id.clone(),
+      name: item.name.clone(),
+      item_type: item.item_type.clone(),
+      series_id: item.series_id.clone(),
+      series_name: item.series_name.clone(),
+      season_name: None,
+      index_number: item.episode_number,
+      parent_index_number: item.season_number,
+      run_time_ticks: crate::player::runtime_seconds_to_ticks(item.runtime_seconds),
+      overview: item.overview.clone(),
+      series_primary_image_tag: None,
+    },
+    Playable::Media(item) => item.clone(),
+  }
+}
+
 /// Track metadata read from MPV's authoritative track-list property.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TrackInfo {
@@ -2015,6 +2049,85 @@ mod tests {
       overview: None,
       series_primary_image_tag: None,
     }
+  }
+
+  #[test]
+  fn library_playable_reconstructs_adjacent_lookup_metadata() {
+    let mut item = library_item("Episode");
+    item.overview = Some("Episode overview".to_owned());
+
+    let converted = media_item_from_playable(&Playable::Library(item));
+
+    assert_eq!(
+      (
+        converted.id.as_str(),
+        converted.name.as_str(),
+        converted.item_type.as_str(),
+        converted.series_id.as_deref(),
+        converted.series_name.as_deref(),
+        converted.season_name.as_deref(),
+        converted.index_number,
+        converted.parent_index_number,
+        converted.run_time_ticks,
+        converted.overview.as_deref(),
+        converted.series_primary_image_tag.as_deref(),
+      ),
+      (
+        "item-1",
+        "Pilot",
+        "Episode",
+        Some("series-1"),
+        Some("Series"),
+        None,
+        Some(2),
+        Some(1),
+        Some(15_000_000_000),
+        Some("Episode overview"),
+        None,
+      )
+    );
+  }
+
+  #[test]
+  fn detail_playable_reconstructs_adjacent_lookup_metadata() {
+    let mut item = item_detail(true);
+    item.overview = Some("Detail overview".to_owned());
+
+    let converted = media_item_from_playable(&Playable::Detail(item));
+
+    assert_eq!(
+      (
+        converted.id.as_str(),
+        converted.series_id.as_deref(),
+        converted.series_name.as_deref(),
+        converted.index_number,
+        converted.parent_index_number,
+        converted.run_time_ticks,
+        converted.overview.as_deref(),
+      ),
+      (
+        "item-1",
+        Some("series-1"),
+        Some("Series"),
+        Some(2),
+        Some(1),
+        Some(15_000_000_000),
+        Some("Detail overview"),
+      )
+    );
+  }
+
+  #[test]
+  fn media_playable_preserves_the_lookup_item() {
+    let item = media_item("media-item");
+    let expected = serde_json::to_value(&item).expect("media item should serialize");
+
+    let converted = media_item_from_playable(&Playable::Media(item));
+
+    assert_eq!(
+      serde_json::to_value(converted).expect("converted item should serialize"),
+      expected
+    );
   }
 
   fn stream(index: i32, stream_type: &str) -> MediaStream {

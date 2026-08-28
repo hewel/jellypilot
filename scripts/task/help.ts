@@ -23,7 +23,6 @@ WASM and sidecars:
   wasm install
   wasm build [--dev|--release]
   ffmpeg prepare [--verify] [--target <rust-target-triple>]
-  gtk run [--smoke]
   iced run [--smoke]
 
 Native E2E (delegated to e2e/cli.ts; --skip-setup skips the setup chain):
@@ -47,5 +46,4 @@ Crate short names:
   mpv            jellypilot-mpv
   session        jellypilot-session
   playback-core  jellypilot-playback-core
-  gtk            jellypilot-gtk
   iced           jellypilot-ui, jellypilot-iced`;

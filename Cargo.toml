@@ -8,7 +8,6 @@ members = [
   "crates/jellypilot-mpv",
   "crates/jellypilot-session",
   "crates/jellypilot-playback-core",
-  "src-gtk",
   "src-iced",
   "src-tauri",
 ]
