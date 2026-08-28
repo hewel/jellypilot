@@ -332,6 +332,7 @@ where
     Self {
       state: Arc::new(Mutex::new(AdapterState {
         generation: 0,
+        cache_generation: 0,
         cache: ArtworkCache::new(limits.max_cached_bytes, limits.max_cached_entries),
         in_flight: HashMap::new(),
         scheduler: LoadScheduler::default(),
@@ -452,6 +453,9 @@ where
       let mut state = self.lock_state();
       state.generation = state.generation.wrapping_add(1);
       let generation = state.generation;
+      if clear_cache {
+        state.cache_generation = generation;
+      }
       let waiters = state.cancel_stale(clear_cache);
       (generation, waiters)
     };
@@ -600,16 +604,17 @@ where
   fn finish_pending(&self, key: Arc<str>, generation: u64, result: &AdapterLoadResult<D::Output>) {
     let waiters = {
       let mut state = self.lock_state();
+      if let Ok(artwork) = result {
+        if generation >= state.cache_generation {
+          state.cache.insert(Arc::clone(&key), artwork.clone());
+        }
+      }
       if state.generation == generation {
-        let waiters = state
+        state
           .in_flight
           .remove(key.as_ref())
           .map(|load| load.waiters)
-          .unwrap_or_default();
-        if let Ok(artwork) = result {
-          state.cache.insert(Arc::clone(&key), artwork.clone());
-        }
-        waiters
+          .unwrap_or_default()
       } else {
         Vec::new()
       }
@@ -644,6 +649,7 @@ where
   T: ArtworkOutput,
 {
   generation: u64,
+  cache_generation: u64,
   cache: ArtworkCache<T>,
   in_flight: HashMap<Arc<str>, InFlightLoad<T>>,
   scheduler: LoadScheduler,
@@ -1410,6 +1416,17 @@ mod tests {
     adapter.reset_session();
 
     assert!(adapter.lock_state().cache.get("cached").is_none());
+  }
+
+  #[test]
+  fn stale_success_after_reset_session_does_not_repopulate_decoded_cache() {
+    let adapter = ArtworkAdapter::default();
+    let pending = begin_leader(&adapter, "stale");
+
+    adapter.reset_session();
+    pending.complete(&Ok(artwork(&[1, 2, 3, 4])));
+
+    assert!(adapter.lock_state().cache.get("stale").is_none());
   }
 
   #[test]

@@ -86,6 +86,43 @@ pub fn style(_theme: &Theme, variant: ButtonVariant, status: button::Status) -> 
     }
 }
 
+/// Resolves the borderless poster-stream card button style for grid and row poster cards.
+///
+/// In the default/active state, there is no card chrome (transparent background, zero border,
+/// no shadow) so the poster and metadata sit directly on the page surface. On hover or press,
+/// an outline ring and subtle elevation appear. Poster callers reserve a 1 px content inset so
+/// this ring remains visible around full-bleed artwork without changing status padding.
+pub fn poster_card_style(_theme: &Theme, status: button::Status) -> button::Style {
+    let colors = TOKENS.colors;
+    let (background, border_color, border_width, shadow) = match status {
+        button::Status::Active => (None, Color::TRANSPARENT, 0.0, TOKENS.shadows.none.iced()),
+        button::Status::Hovered => (
+            None,
+            with_alpha(colors.primary, 0.35),
+            1.0,
+            TOKENS.shadows.xl.iced(),
+        ),
+        button::Status::Pressed => (
+            None,
+            with_alpha(colors.primary, 0.5),
+            1.0,
+            TOKENS.shadows.md.iced(),
+        ),
+        button::Status::Disabled => (None, Color::TRANSPARENT, 0.0, TOKENS.shadows.none.iced()),
+    };
+    button::Style {
+        background: background.map(Background::Color),
+        text_color: colors.onSurface,
+        border: Border {
+            radius: TOKENS.radii.x2l.into(),
+            color: border_color,
+            width: border_width,
+        },
+        shadow,
+        ..button::Style::default()
+    }
+}
+
 fn brightness(color: Color, factor: f32) -> Color {
     Color {
         r: (color.r * factor).min(1.0),
@@ -154,5 +191,39 @@ mod tests {
                 "Text button variant must have transparent border color in status {status:?}"
             );
         }
+    }
+
+    #[test]
+    fn poster_card_style_active_has_no_border_or_background_or_shadow() {
+        let theme = crate::theme::theme();
+        let style = super::poster_card_style(&theme, iced::widget::button::Status::Active);
+        assert_eq!(style.border.width, 0.0);
+        assert_eq!(style.border.color, Color::TRANSPARENT);
+        assert!(style.background.is_none());
+        assert_eq!(style.shadow, crate::tokens::TOKENS.shadows.none.iced());
+    }
+    #[test]
+    fn poster_card_style_hovered_has_ring_border_and_elevation_shadow() {
+        let theme = crate::theme::theme();
+        let style = super::poster_card_style(&theme, iced::widget::button::Status::Hovered);
+        assert_eq!(style.border.width, 1.0);
+        assert_eq!(
+            style.border.color,
+            super::with_alpha(crate::tokens::TOKENS.colors.primary, 0.35)
+        );
+        assert!(style.background.is_none());
+        assert_eq!(style.shadow, crate::tokens::TOKENS.shadows.xl.iced());
+    }
+
+    #[test]
+    fn poster_card_style_pressed_has_ring_border() {
+        let theme = crate::theme::theme();
+        let style = super::poster_card_style(&theme, iced::widget::button::Status::Pressed);
+        assert_eq!(style.border.width, 1.0);
+        assert_eq!(
+            style.border.color,
+            super::with_alpha(crate::tokens::TOKENS.colors.primary, 0.5)
+        );
+        assert!(style.background.is_none());
     }
 }

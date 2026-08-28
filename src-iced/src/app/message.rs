@@ -67,6 +67,13 @@ pub enum WindowMessage {
 }
 
 #[derive(Clone)]
+pub struct ArtworkLoadCompletion {
+  pub slot: ArtworkSlot,
+  pub image_id: String,
+  pub result: Result<ArtworkBytes, ArtworkError>,
+}
+
+#[derive(Clone)]
 pub enum HomeMessage {
   Navigate(super::state::Destination),
   Retry,
@@ -74,6 +81,11 @@ pub enum HomeMessage {
     token: HomeToken,
     result: HomeDataResult,
   },
+  ArtworkBatchLoaded {
+    session: SessionToken,
+    completions: Vec<ArtworkLoadCompletion>,
+  },
+  #[allow(dead_code)]
   ArtworkLoaded {
     session: SessionToken,
     slot: ArtworkSlot,
@@ -97,6 +109,11 @@ pub enum BrowseMessage {
   LoadPrevious,
   LoadNext,
   PageSettled(BrowsePageSettlement),
+  ArtworkBatchLoaded {
+    session: SessionToken,
+    completions: Vec<ArtworkLoadCompletion>,
+  },
+  #[allow(dead_code)]
   ArtworkLoaded {
     session: SessionToken,
     slot: ArtworkSlot,
@@ -131,6 +148,11 @@ pub enum DetailMessage {
     token: DetailAuxToken,
     result: Result<VideoUserDataUpdate, String>,
   },
+  ArtworkBatchLoaded {
+    session: SessionToken,
+    completions: Vec<ArtworkLoadCompletion>,
+  },
+  #[allow(dead_code)]
   ArtworkLoaded {
     session: SessionToken,
     slot: ArtworkSlot,

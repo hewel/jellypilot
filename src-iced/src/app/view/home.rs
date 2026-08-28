@@ -104,7 +104,7 @@ fn featured_hero<'a>(state: &'a State, item: &'a VideoLibraryItem) -> Element<'a
   } else {
     "Play"
   };
-  let play_enabled = !state.playback_view.busy && state.playback_view.engine_available;
+  let play_enabled = state.playback_view.engine_available;
   let play = button(
     row![
       icon_for_variant_disabled(
@@ -209,12 +209,19 @@ fn video_card<'a>(
   item: &'a VideoLibraryItem,
 ) -> Element<'a, Message> {
   let (frame_width, frame_height) = section_frame_size(section);
+  let is_action_card = matches!(section, HomeSection::ContinueWatching | HomeSection::NextUp);
+  let radius = if is_action_card {
+    card_top_radius(TOKENS.radii.x2l)
+  } else {
+    full_radius(TOKENS.radii.x2l)
+  };
   let poster = card_artwork(
     state,
     state.home_artwork.card(section, &item.id),
     &item.name,
     frame_width,
     frame_height,
+    radius,
   );
 
   let text_stack = column![
@@ -230,7 +237,7 @@ fn video_card<'a>(
   .spacing(TOKENS.spacing.s1)
   .width(Fill);
 
-  if matches!(section, HomeSection::ContinueWatching | HomeSection::NextUp) {
+  if is_action_card {
     let progress_element: Option<Element<'a, Message>> =
       card_progress(section, item).map(progress_bar);
 
@@ -239,7 +246,7 @@ fn video_card<'a>(
     } else {
       "Play"
     };
-    let play_enabled = !state.playback_view.busy && state.playback_view.engine_available;
+    let play_enabled = state.playback_view.engine_available;
     let play = button(
       row![
         icon_for_variant_disabled(
@@ -297,25 +304,34 @@ fn video_card<'a>(
       .into();
   }
 
-  let copy = container(text_stack)
-    .padding(iced::Padding {
-      top: TOKENS.spacing.s3,
-      right: TOKENS.spacing.s4,
-      bottom: TOKENS.spacing.s4,
-      left: TOKENS.spacing.s4,
-    })
-    .width(Fill);
+  let copy = column![
+    text(&item.name)
+      .size(14)
+      .color(TOKENS.colors.onSurface)
+      .wrapping(Wrapping::None),
+    text(item_caption(item))
+      .size(12)
+      .color(TOKENS.colors.onSurfaceVariant)
+      .wrapping(Wrapping::None),
+  ]
+  .spacing(TOKENS.spacing.s1)
+  .padding(iced::Padding {
+    top: TOKENS.spacing.s2,
+    right: 0.0,
+    bottom: 0.0,
+    left: 0.0,
+  })
+  .width(frame_width);
 
-  button(
-    container(column![poster, copy].width(Fill))
+  container(
+    button(column![poster, copy].width(frame_width))
+      .padding(1)
       .width(frame_width)
-      .clip(true)
-      .style(|theme| jellypilot_ui::theme::surface_variant(theme, SurfaceVariant::Filled)),
+      .on_press(Message::OpenDetail(item.clone()))
+      .style(jellypilot_ui::theme::poster_card_button),
   )
-  .padding(0)
   .width(frame_width)
-  .on_press(Message::OpenDetail(item.clone()))
-  .style(|theme, status| jellypilot_ui::theme::button_variant(theme, status, ButtonVariant::Text))
+  .clip(true)
   .into()
 }
 
@@ -398,11 +414,12 @@ fn card_artwork<'a>(
   name: &'a str,
   width: f32,
   height: f32,
+  radius: iced::border::Radius,
 ) -> Element<'a, Message> {
   if let Some(cell) = cell {
     if cell.state == ArtworkCellState::Ready {
       if let Some(handle) = state.artwork_handles.get(cell.slot, &cell.image_id) {
-        return rounded_image(handle.clone(), card_top_radius(TOKENS.radii.x2l))
+        return rounded_image(handle.clone(), radius)
           .content_fit(ContentFit::Cover)
           .width(width)
           .height(height)
@@ -443,12 +460,12 @@ fn card_artwork<'a>(
   .height(height)
   .center_x(Fill)
   .center_y(Fill)
-  .style(|_theme| container::Style {
+  .style(move |_theme| container::Style {
     background: Some(iced::Background::Color(
       TOKENS.colors.surfaceContainerLowest,
     )),
     border: iced::Border {
-      radius: card_top_radius(TOKENS.radii.x2l),
+      radius,
       width: 0.0,
       color: iced::Color::TRANSPARENT,
     },
@@ -554,4 +571,20 @@ fn skeleton_box<'a>(width: f32, height: f32) -> Element<'a, Message> {
     .height(height)
     .style(|theme| jellypilot_ui::theme::surface_variant(theme, SurfaceVariant::Elevated))
     .into()
+}
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+
+  #[test]
+  fn section_frame_sizes_and_row_heights_match_aspect_ratios() {
+    let (cw_w, cw_h) = section_frame_size(HomeSection::ContinueWatching);
+    assert_eq!((cw_w, cw_h), (THUMB_FRAME_WIDTH, THUMB_FRAME_HEIGHT));
+    assert_eq!(section_scroll_height(HomeSection::ContinueWatching), 280.0);
+
+    let (mov_w, mov_h) = section_frame_size(HomeSection::LatestMovies);
+    assert_eq!((mov_w, mov_h), (POSTER_FRAME_WIDTH, POSTER_FRAME_HEIGHT));
+    assert_eq!(section_scroll_height(HomeSection::LatestMovies), 340.0);
+  }
 }

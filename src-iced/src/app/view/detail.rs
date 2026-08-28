@@ -310,8 +310,7 @@ fn detail_actions<'a>(
   played: bool,
   favorite: bool,
 ) -> Element<'a, Message> {
-  let playback_enabled =
-    playback_target.is_some() && !state.playback_view.busy && state.playback_view.engine_available;
+  let playback_enabled = playback_target.is_some() && state.playback_view.engine_available;
   let playback = button(
     row![
       icon_for_variant_disabled(
@@ -563,7 +562,7 @@ fn episode_card<'a>(state: &'a State, episode: &'a VideoLibraryItem) -> Element<
   } else {
     "Play"
   };
-  let play_enabled = !state.playback_view.busy && state.playback_view.engine_available;
+  let play_enabled = state.playback_view.engine_available;
   let play = button(
     row![
       icon_for_variant_disabled(

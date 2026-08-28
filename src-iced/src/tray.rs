@@ -254,7 +254,7 @@ impl Drop for Tray {
 
 pub(crate) fn tray_menu_state(view: &SessionView, quitting: bool) -> TrayMenuState {
   let active = view.now_playing.as_ref();
-  let controls_enabled = active.is_some() && !view.busy && !quitting;
+  let controls_enabled = active.is_some() && view.engine_available && !quitting;
   TrayMenuState {
     play_pause_label: if active.is_some_and(|playing| !playing.paused) {
       "Pause"
@@ -366,6 +366,18 @@ mod tests {
     assert!(menu.next_enabled);
     assert!(!menu.previous_enabled);
     assert_eq!(menu.mute_label, "Unmute");
+    assert!(menu.mute_enabled);
+  }
+
+  #[test]
+  fn menu_state_keeps_playback_controls_enabled_when_busy() {
+    let menu = tray_menu_state(&session_view(true, false, true), false);
+
+    assert_eq!(menu.play_pause_label, "Play");
+    assert!(menu.play_pause_enabled);
+    assert!(menu.next_enabled);
+    assert!(!menu.previous_enabled);
+    assert_eq!(menu.mute_label, "Mute");
     assert!(menu.mute_enabled);
   }
 

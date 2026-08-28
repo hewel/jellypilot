@@ -747,6 +747,18 @@ impl State {
       search_input: String::new(),
     }
   }
+  pub fn all_artwork_slots(&self) -> impl Iterator<Item = ArtworkSlot> + '_ {
+    self
+      .home_artwork
+      .slots()
+      .chain(self.browse_artwork.slots())
+      .chain(self.detail_artwork.slots())
+      .chain(self.playback_artwork.as_ref().map(|cell| cell.slot))
+  }
+  pub fn retain_artwork_handles(&mut self) {
+    let slots: HashSet<_> = self.all_artwork_slots().collect();
+    self.artwork_handles.retain_slots(slots);
+  }
   pub fn intro_availability(&self) -> IntroAvailability {
     IntroAvailability {
       mode: intro_skip_mode(self.settings.snapshot().intro_mode()),

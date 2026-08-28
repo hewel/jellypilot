@@ -427,12 +427,27 @@ impl PlaybackSession {
   }
 
   fn enqueue(&mut self, request: ControllerRequest) -> Vec<PlaybackEffect> {
+    let is_start = matches!(request.kind, RequestKind::Start { .. });
     if self.controller_busy() {
       if request.kind == RequestKind::Refresh {
         return Vec::new();
       }
       if self.is_duplicate_in_flight(&request) {
+        if let RequestKind::Start { target_id } = &request.kind {
+          self.pending.retain(|pending| {
+            !matches!(
+              &pending.kind,
+              RequestKind::Start {
+                target_id: queued_target,
+              } if queued_target != target_id
+            )
+          });
+          self.invalidate_auxiliary();
+        }
         return Vec::new();
+      }
+      if is_start {
+        self.invalidate_auxiliary();
       }
       self.queue_request(request);
       return Vec::new();
@@ -931,6 +946,7 @@ impl PlaybackSession {
   fn invalidate_auxiliary(&mut self) {
     self.pending_intro = None;
     self.pending_adjacent = [None, None];
+    self.adjacent = AdjacentState::default();
   }
 
   fn set_warning_notice(&mut self, warnings: Vec<PlaybackWarning>) {
@@ -1556,6 +1572,106 @@ mod tests {
     );
     let (_, command) = controller_effect(effects);
     assert!(matches!(command, ControllerCommand::Start { .. }));
+  }
+
+  #[test]
+  fn duplicate_start_discards_queued_different_target() {
+    let now = instant();
+    let mut session = PlaybackSession::default();
+    let start_id = start_command(&mut session, now, IntroSkipMode::Off);
+
+    session.handle(
+      PlaybackInput::Intent(PlaybackIntent::Start {
+        item: Playable::Media(media_item("episode-2", "Second")),
+        position: PlaybackStartPosition::Beginning,
+        intro: intro_availability(IntroSkipMode::Off),
+        selection: Box::default(),
+      }),
+      now,
+    );
+    assert_eq!(session.pending.len(), 1);
+
+    let duplicate = session.handle(
+      PlaybackInput::Intent(PlaybackIntent::Start {
+        item: Playable::Media(media_item("episode-1", "Pilot")),
+        position: PlaybackStartPosition::Beginning,
+        intro: intro_availability(IntroSkipMode::Off),
+        selection: Box::default(),
+      }),
+      now,
+    );
+
+    assert!(duplicate.is_empty());
+    assert!(session.pending.is_empty());
+    assert_eq!(
+      session.in_flight.as_ref().map(|in_flight| in_flight.id),
+      Some(start_id)
+    );
+  }
+
+  #[test]
+  fn replacement_start_clears_adjacent_availability_while_pending() {
+    let (mut session, now, auxiliary) = start_session(IntroSkipMode::Off);
+    let next_id = adjacent_id(&auxiliary, AdjacentDirection::Next);
+    session.handle(
+      PlaybackInput::Event(PlaybackEvent::AdjacentSettled {
+        id: next_id,
+        direction: AdjacentDirection::Next,
+        result: Ok(Some(media_item("episode-2", "Second"))),
+      }),
+      now,
+    );
+    assert!(matches!(
+      session.view().adjacent.next,
+      AdjacentAvailability::Available { .. }
+    ));
+
+    let (refresh_id, _) =
+      controller_effect(session.handle(PlaybackInput::Intent(PlaybackIntent::Tick), now));
+    session.handle(
+      PlaybackInput::Intent(PlaybackIntent::Start {
+        item: Playable::Media(media_item("episode-3", "Third")),
+        position: PlaybackStartPosition::Beginning,
+        intro: intro_availability(IntroSkipMode::Off),
+        selection: Box::default(),
+      }),
+      now,
+    );
+    session.handle(
+      PlaybackInput::Event(PlaybackEvent::AdjacentSettled {
+        id: next_id,
+        direction: AdjacentDirection::Next,
+        result: Ok(Some(media_item("episode-2", "Second"))),
+      }),
+      now,
+    );
+    assert!(!matches!(
+      session.view().adjacent.next,
+      AdjacentAvailability::Available { .. }
+    ));
+
+    let effects = session.handle(
+      PlaybackInput::Event(PlaybackEvent::ControllerSettled {
+        id: refresh_id,
+        settlement: ControllerSettlement::Refreshed {
+          outcome: PlaybackRefreshOutcome {
+            snapshot: snapshot("episode-1", "Episode", 10.0),
+            state: PlaybackRefreshState::Active,
+            warnings: Vec::new(),
+          },
+          client_messages: Vec::new(),
+        },
+      }),
+      now,
+    );
+    assert!(!matches!(
+      session.view().adjacent.next,
+      AdjacentAvailability::Available { .. }
+    ));
+    assert!(matches!(
+      controller_effect(effects).1,
+      ControllerCommand::Start { .. }
+    ));
   }
 
   #[test]

@@ -93,25 +93,10 @@ impl ArtworkDiskCache {
     {
       return;
     }
-    let root = Arc::clone(&self.root);
-    let max_bytes = self.max_bytes;
+    let cache = self.clone();
     let expected_epoch = self.epoch.load(Ordering::Acquire);
-    let epoch = Arc::clone(&self.epoch);
-    let clearing = Arc::clone(&self.clearing);
-    let operation_lock = Arc::clone(&self.operation_lock);
-    let _ = tokio::task::spawn_blocking(move || {
-      let _operation = operation_lock.write();
-      store_entry(
-        &root,
-        &key,
-        &bytes,
-        max_bytes,
-        expected_epoch,
-        &epoch,
-        &clearing,
-      )
-    })
-    .await;
+    let _ =
+      tokio::task::spawn_blocking(move || cache.store_entry(key, bytes, expected_epoch)).await;
   }
 
   pub async fn stats(&self) -> Result<ArtworkCacheStats, io::Error> {
@@ -222,32 +207,40 @@ fn remove_invalid_entry(
   }
 }
 
-fn store_entry(
-  root: &Path,
-  key: &str,
-  bytes: &[u8],
-  max_bytes: u64,
-  expected_epoch: u64,
-  epoch: &AtomicU64,
-  clearing: &AtomicBool,
-) -> Result<(), io::Error> {
-  fs::create_dir_all(root)?;
-  let sequence = TEMPORARY_SEQUENCE.fetch_add(1, Ordering::Relaxed);
-  let temporary = root.join(format!(".{key}-{}-{sequence}.tmp", std::process::id()));
-  if let Err(error) = fs::write(&temporary, bytes) {
-    let _ = fs::remove_file(&temporary);
-    return Err(error);
+impl ArtworkDiskCache {
+  fn store_entry(
+    &self,
+    key: String,
+    bytes: Arc<[u8]>,
+    expected_epoch: u64,
+  ) -> Result<(), io::Error> {
+    fs::create_dir_all(&*self.root)?;
+    let sequence = TEMPORARY_SEQUENCE.fetch_add(1, Ordering::Relaxed);
+    let temporary = self
+      .root
+      .join(format!(".{key}-{}-{sequence}.tmp", std::process::id()));
+    if let Err(error) = fs::write(&temporary, bytes.as_ref()) {
+      let _ = fs::remove_file(&temporary);
+      return Err(error);
+    }
+    if self.clearing.load(Ordering::Acquire) || self.epoch.load(Ordering::Acquire) != expected_epoch
+    {
+      let _ = fs::remove_file(temporary);
+      return Ok(());
+    }
+    let _operation = self.operation_lock.write();
+    if self.clearing.load(Ordering::Acquire) || self.epoch.load(Ordering::Acquire) != expected_epoch
+    {
+      let _ = fs::remove_file(temporary);
+      return Ok(());
+    }
+    let path = entry_path(&self.root, &key);
+    if let Err(error) = fs::rename(&temporary, &path) {
+      let _ = fs::remove_file(&temporary);
+      return Err(error);
+    }
+    evict_oldest_entries(&self.root, self.max_bytes)
   }
-  if clearing.load(Ordering::Acquire) || epoch.load(Ordering::Acquire) != expected_epoch {
-    let _ = fs::remove_file(temporary);
-    return Ok(());
-  }
-  let path = entry_path(root, key);
-  if let Err(error) = fs::rename(&temporary, &path) {
-    let _ = fs::remove_file(&temporary);
-    return Err(error);
-  }
-  evict_oldest_entries(root, max_bytes)
 }
 
 fn cache_stats(root: &Path) -> Result<ArtworkCacheStats, io::Error> {
@@ -302,6 +295,7 @@ fn tolerate_not_found<T>(result: Result<T, io::Error>) -> Result<Option<T>, io::
 }
 fn evict_oldest_entries(root: &Path, max_bytes: u64) -> Result<(), io::Error> {
   let mut entries = Vec::new();
+  let mut total = 0_u64;
   for entry in fs::read_dir(root)? {
     let entry = entry?;
     let path = entry.path();
@@ -310,16 +304,18 @@ fn evict_oldest_entries(root: &Path, max_bytes: u64) -> Result<(), io::Error> {
     }
     let metadata = entry.metadata()?;
     if metadata.is_file() {
+      let len = metadata.len();
+      total = total.saturating_add(len);
       entries.push((
         metadata.modified().unwrap_or(SystemTime::UNIX_EPOCH),
         path,
-        metadata.len(),
+        len,
       ));
     }
   }
-  let mut total = entries
-    .iter()
-    .fold(0_u64, |total, (_, _, size)| total.saturating_add(*size));
+  if total <= max_bytes {
+    return Ok(());
+  }
   entries.sort_by(|left, right| left.0.cmp(&right.0).then_with(|| left.1.cmp(&right.1)));
   for (_, path, size) in entries {
     if total <= max_bytes {
@@ -483,16 +479,9 @@ mod tests {
     let stale_epoch = cache.epoch.load(Ordering::Acquire);
     cache.epoch.fetch_add(1, Ordering::AcqRel);
 
-    store_entry(
-      &root,
-      "stale",
-      &[1_u8, 2, 3],
-      1024,
-      stale_epoch,
-      &cache.epoch,
-      &cache.clearing,
-    )
-    .unwrap();
+    cache
+      .store_entry("stale".to_owned(), Arc::from([1_u8, 2, 3]), stale_epoch)
+      .unwrap();
 
     assert!(!entry_path(&root, "stale").exists());
     fs::remove_dir_all(root).unwrap();
