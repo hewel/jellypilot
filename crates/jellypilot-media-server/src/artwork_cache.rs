@@ -1,10 +1,11 @@
+use parking_lot::RwLock;
 use std::fs;
 #[cfg(test)]
 use std::future::Future;
 use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::time::SystemTime;
 
 pub const MAX_DISK_CACHE_BYTES: u64 = 512 * 1024 * 1024;
@@ -24,7 +25,7 @@ pub struct ArtworkDiskCache {
   enabled: Arc<AtomicBool>,
   clearing: Arc<AtomicBool>,
   epoch: Arc<AtomicU64>,
-  operation_lock: Arc<Mutex<()>>,
+  operation_lock: Arc<RwLock<()>>,
 }
 
 impl Default for ArtworkDiskCache {
@@ -48,7 +49,7 @@ impl ArtworkDiskCache {
       enabled: Arc::new(AtomicBool::new(enabled)),
       clearing: Arc::new(AtomicBool::new(false)),
       epoch: Arc::new(AtomicU64::new(0)),
-      operation_lock: Arc::new(Mutex::new(())),
+      operation_lock: Arc::new(RwLock::new(())),
     }
   }
 
@@ -68,10 +69,17 @@ impl ArtworkDiskCache {
     let root = Arc::clone(&self.root);
     let operation_lock = Arc::clone(&self.operation_lock);
     tokio::task::spawn_blocking(move || {
-      let _operation = operation_lock
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner());
-      load_entry(&root, &key, max_entry_bytes, validate)
+      let read_operation = operation_lock.read();
+      match read_candidate_entry(&root, &key, max_entry_bytes, validate) {
+        EntryReadOutcome::Valid(bytes) => Some(bytes),
+        EntryReadOutcome::NotFound => None,
+        EntryReadOutcome::Invalid => {
+          drop(read_operation);
+          let _write_operation = operation_lock.write();
+          remove_invalid_entry(&root, &key, max_entry_bytes, validate);
+          None
+        }
+      }
     })
     .await
     .ok()
@@ -92,9 +100,7 @@ impl ArtworkDiskCache {
     let clearing = Arc::clone(&self.clearing);
     let operation_lock = Arc::clone(&self.operation_lock);
     let _ = tokio::task::spawn_blocking(move || {
-      let _operation = operation_lock
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner());
+      let _operation = operation_lock.write();
       store_entry(
         &root,
         &key,
@@ -112,9 +118,7 @@ impl ArtworkDiskCache {
     let root = Arc::clone(&self.root);
     let operation_lock = Arc::clone(&self.operation_lock);
     tokio::task::spawn_blocking(move || {
-      let _operation = operation_lock
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner());
+      let _operation = operation_lock.read();
       cache_stats(&root)
     })
     .await
@@ -129,9 +133,7 @@ impl ArtworkDiskCache {
     let root = Arc::clone(&self.root);
     let operation_lock = Arc::clone(&self.operation_lock);
     let result = match tokio::task::spawn_blocking(move || {
-      let _operation = operation_lock
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner());
+      let _operation = operation_lock.write();
       clear_entries(&root)
     })
     .await
@@ -170,30 +172,54 @@ fn entry_path(root: &Path, key: &str) -> PathBuf {
   root.join(format!("{key}.{ENTRY_EXTENSION}"))
 }
 
-fn load_entry(
+enum EntryReadOutcome {
+  Valid(Arc<[u8]>),
+  NotFound,
+  Invalid,
+}
+
+fn read_candidate_entry(
   root: &Path,
   key: &str,
   max_entry_bytes: usize,
   validate: fn(&[u8]) -> bool,
-) -> Option<Arc<[u8]>> {
+) -> EntryReadOutcome {
   let path = entry_path(root, key);
   let metadata = match fs::metadata(&path) {
     Ok(metadata) => metadata,
-    Err(_) => return None,
+    Err(_) => return EntryReadOutcome::NotFound,
   };
   if metadata.len() == 0 || metadata.len() > max_entry_bytes as u64 {
-    let _ = fs::remove_file(path);
-    return None;
+    return EntryReadOutcome::Invalid;
   }
   let bytes = match fs::read(&path) {
     Ok(bytes) => bytes,
-    Err(_) => return None,
+    Err(_) => return EntryReadOutcome::NotFound,
   };
   if !validate(&bytes) {
-    let _ = fs::remove_file(path);
-    return None;
+    return EntryReadOutcome::Invalid;
   }
-  Some(Arc::from(bytes))
+  EntryReadOutcome::Valid(Arc::from(bytes))
+}
+
+fn remove_invalid_entry(
+  root: &Path,
+  key: &str,
+  max_entry_bytes: usize,
+  validate: fn(&[u8]) -> bool,
+) {
+  let path = entry_path(root, key);
+  if let Ok(metadata) = fs::metadata(&path) {
+    if metadata.len() == 0 || metadata.len() > max_entry_bytes as u64 {
+      let _ = fs::remove_file(&path);
+      return;
+    }
+  }
+  if let Ok(bytes) = fs::read(&path) {
+    if !validate(&bytes) {
+      let _ = fs::remove_file(&path);
+    }
+  }
 }
 
 fn store_entry(
@@ -486,6 +512,53 @@ mod tests {
       .is_none());
     assert_eq!(cache_stats(&root).unwrap(), ArtworkCacheStats::default());
     clear_entries(&root).unwrap();
+    fs::remove_dir_all(root).unwrap();
+  }
+
+  #[tokio::test]
+  async fn concurrent_disk_reads_execute_in_parallel() {
+    let root = test_root("concurrent-reads");
+    let cache = ArtworkDiskCache::new(root.clone(), 1024, true);
+    cache
+      .store("entry-1".to_owned(), Arc::from([1_u8, 2, 3].as_slice()))
+      .await;
+    cache
+      .store("entry-2".to_owned(), Arc::from([4_u8, 5, 6].as_slice()))
+      .await;
+
+    use std::sync::atomic::AtomicUsize;
+    static ACTIVE_VALIDATORS: AtomicUsize = AtomicUsize::new(0);
+    static OBSERVED_CONCURRENCY: AtomicBool = AtomicBool::new(false);
+
+    ACTIVE_VALIDATORS.store(0, Ordering::SeqCst);
+    OBSERVED_CONCURRENCY.store(false, Ordering::SeqCst);
+
+    fn barrier_validate(bytes: &[u8]) -> bool {
+      let active = ACTIVE_VALIDATORS.fetch_add(1, Ordering::SeqCst) + 1;
+      if active >= 2 {
+        OBSERVED_CONCURRENCY.store(true, Ordering::SeqCst);
+      }
+      let start = std::time::Instant::now();
+      while !OBSERVED_CONCURRENCY.load(Ordering::SeqCst)
+        && start.elapsed() < std::time::Duration::from_millis(500)
+      {
+        std::thread::yield_now();
+      }
+      ACTIVE_VALIDATORS.fetch_sub(1, Ordering::SeqCst);
+      !bytes.is_empty()
+    }
+
+    let (read_one, read_two) = tokio::join!(
+      cache.load("entry-1".to_owned(), 1024, barrier_validate),
+      cache.load("entry-2".to_owned(), 1024, barrier_validate),
+    );
+
+    assert!(
+      OBSERVED_CONCURRENCY.load(Ordering::SeqCst),
+      "both load operations must execute their validation concurrently under shared read locks"
+    );
+    assert_eq!(read_one.unwrap().as_ref(), [1, 2, 3]);
+    assert_eq!(read_two.unwrap().as_ref(), [4, 5, 6]);
     fs::remove_dir_all(root).unwrap();
   }
 }

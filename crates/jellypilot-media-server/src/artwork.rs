@@ -227,6 +227,14 @@ impl ArtworkBytes {
   }
 }
 
+#[cfg(any(test, feature = "test-utils"))]
+impl ArtworkBytes {
+  #[must_use]
+  pub fn from_raw_for_test(bytes: Arc<[u8]>) -> Self {
+    Self(bytes)
+  }
+}
+
 /// A cacheable result produced by an [`ArtworkDecoder`].
 pub trait ArtworkOutput: Clone + Send + Sync + 'static {
   fn byte_len(&self) -> usize;
@@ -618,6 +626,16 @@ where
 
   fn lock_state(&self) -> MutexGuard<'_, AdapterState<D::Output>> {
     self.state.lock().unwrap_or_else(PoisonError::into_inner)
+  }
+}
+
+#[cfg(any(test, feature = "test-utils"))]
+impl<D> ArtworkAdapter<D>
+where
+  D: ArtworkDecoder,
+{
+  pub fn seed_cached_for_test(&self, image_id: &str, output: D::Output) {
+    self.lock_state().cache.insert(Arc::from(image_id), output);
   }
 }
 

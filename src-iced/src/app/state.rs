@@ -180,7 +180,7 @@ impl HomeSection {
     }
   }
 
-  const fn index(self) -> usize {
+  pub const fn index(self) -> usize {
     match self {
       Self::ContinueWatching => 0,
       Self::LatestMovies => 1,
@@ -247,6 +247,13 @@ impl HomeState {
       .or_else(|| ready_items(&self.next_up).and_then(|items| items.first()))
       .or_else(|| ready_items(&self.latest_movies).and_then(|items| items.first()))
   }
+
+  pub fn has_ready_content(&self) -> bool {
+    matches!(self.continue_watching, LoadState::Ready(_))
+      || matches!(self.latest_movies, LoadState::Ready(_))
+      || matches!(self.next_up, LoadState::Ready(_))
+      || matches!(self.latest_episodes, LoadState::Ready(_))
+  }
 }
 
 fn ready_items(state: &LoadState<Vec<VideoLibraryItem>>) -> Option<&[VideoLibraryItem]> {
@@ -288,13 +295,6 @@ pub struct HomeArtwork {
 }
 
 impl HomeArtwork {
-  pub fn clear(&mut self) {
-    self.hero = None;
-    for section in &mut self.sections {
-      section.clear();
-    }
-  }
-
   pub fn insert_hero(&mut self, item_id: String, cell: ArtworkCell) {
     self.hero = Some((item_id, cell));
   }
@@ -326,6 +326,48 @@ impl HomeArtwork {
       .iter_mut()
       .flat_map(HashMap::values_mut)
       .find(|cell| cell.slot == slot && cell.image_id == image_id)
+  }
+
+  pub fn slots(&self) -> impl Iterator<Item = ArtworkSlot> + '_ {
+    self
+      .hero
+      .as_ref()
+      .map(|(_, cell)| cell.slot)
+      .into_iter()
+      .chain(
+        self
+          .sections
+          .iter()
+          .flat_map(HashMap::values)
+          .map(|cell| cell.slot),
+      )
+  }
+
+  pub fn retain_items(
+    &mut self,
+    hero_item_id: Option<&str>,
+    section_item_ids: &[HashSet<&str>; 4],
+  ) {
+    if let Some((bound_item_id, _)) = &self.hero {
+      if hero_item_id != Some(bound_item_id.as_str()) {
+        self.hero = None;
+      }
+    }
+    for (i, section) in self.sections.iter_mut().enumerate() {
+      let allowed = &section_item_ids[i];
+      section.retain(|item_id, _| allowed.contains(item_id.as_str()));
+    }
+  }
+
+  pub fn prune_unready(&mut self) {
+    if let Some((_, cell)) = &self.hero {
+      if cell.state != ArtworkCellState::Ready {
+        self.hero = None;
+      }
+    }
+    for section in &mut self.sections {
+      section.retain(|_, cell| cell.state == ArtworkCellState::Ready);
+    }
   }
 }
 
@@ -468,6 +510,17 @@ impl<T> HandleRetention<T> {
       .get(&slot)
       .filter(|entry| entry.image_id == image_id)
       .map(|entry| &entry.value)
+  }
+
+  pub fn find_by_image_id(&self, image_id: &str) -> Option<T>
+  where
+    T: Clone,
+  {
+    self
+      .entries
+      .values()
+      .find(|entry| entry.image_id == image_id)
+      .map(|entry| entry.value.clone())
   }
 
   pub fn retain_slots(&mut self, slots: impl IntoIterator<Item = ArtworkSlot>) {

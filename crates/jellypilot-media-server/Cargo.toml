@@ -7,6 +7,9 @@ repository.workspace = true
 rust-version.workspace = true
 version.workspace = true
 
+
+[features]
+test-utils = []
 [dependencies]
 base64 = "0.22.1"
 dirs = "6.0.0"

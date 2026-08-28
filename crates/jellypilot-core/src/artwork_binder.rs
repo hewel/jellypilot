@@ -55,6 +55,13 @@ impl ArtworkBinder {
         self.allocate(surface)
     }
 
+    /// Allocates a unique slot for an already-settled artwork without tracking
+    /// an in-flight async liveness record in `slots`.
+    pub fn bind_settled(&mut self) -> ArtworkSlot {
+        self.next_slot = self.next_slot.saturating_add(1);
+        ArtworkSlot(self.next_slot)
+    }
+
     /// PlayerBar slots live outside the view-epoch policy. Rebinding invalidates
     /// only the previous player-bar generation (today's dedicated view counter).
     pub fn bind_player_bar(&mut self) -> ArtworkSlot {
@@ -125,6 +132,15 @@ impl ArtworkBinder {
             ArtworkSurface::Detail => self.detail_epoch,
             ArtworkSurface::PlayerBar => self.player_bar_epoch,
         }
+    }
+}
+
+#[cfg(any(test, feature = "test-utils"))]
+impl ArtworkBinder {
+    /// Returns the number of currently tracked in-flight slots.
+    #[must_use]
+    pub fn live_slots_count(&self) -> usize {
+        self.slots.len()
     }
 }
 
@@ -211,6 +227,19 @@ mod tests {
         assert_eq!(
             binder.settle(second, ArtworkSurface::PlayerBar, true),
             ArtworkSettlement::Apply
+        );
+    }
+
+    #[test]
+    fn bind_settled_allocates_unique_slot_without_tracking_liveness() {
+        let mut binder = ArtworkBinder::default();
+        let slot_1 = binder.bind_settled();
+        let slot_2 = binder.bind_settled();
+        assert_ne!(slot_1, slot_2);
+        assert_eq!(binder.live_slots_count(), 0);
+        assert_eq!(
+            binder.settle(slot_1, ArtworkSurface::Home, true),
+            ArtworkSettlement::Drop
         );
     }
 }
