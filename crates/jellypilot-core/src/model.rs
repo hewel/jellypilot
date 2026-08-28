@@ -6,7 +6,10 @@ use std::fmt;
 pub const LIBRARY_BROWSE_PAGE_SIZE: u32 = 24;
 
 /// Result counts above this value use random-access virtual paging.
-pub const LIBRARY_BROWSE_VIRTUAL_THRESHOLD: u32 = 100;
+///
+/// Explicit windowed pagination is the only browse mode for multi-page libraries,
+/// forced at this narrow threshold seam.
+pub const LIBRARY_BROWSE_VIRTUAL_THRESHOLD: u32 = 0;
 
 /// Maximum number of page loads the reducer allows at once.
 pub const LIBRARY_BROWSE_MAX_CONCURRENT_LOADS: usize = 2;

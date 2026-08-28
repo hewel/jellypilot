@@ -1,8 +1,9 @@
+use iced::widget::text::Wrapping;
 use iced::widget::{button, column, container, image, row, scrollable, space, text, Column};
 use iced::{Alignment, ContentFit, Element, Fill};
 use jellypilot_core::browse_model::{LibraryBrowseView, LibraryItemSlot};
-use jellypilot_core::cards::{card_frame_size, item_caption};
-use jellypilot_core::{LibraryBrowseFailure, LibraryBrowseMode};
+use jellypilot_core::cards::item_caption;
+use jellypilot_core::{LibraryBrowseFailure, LIBRARY_BROWSE_PAGE_SIZE};
 use jellypilot_media_server::{
   VideoLibraryItem, VideoLibraryPlayedFilter, VideoLibrarySort, VideoLibrarySortDirection,
 };
@@ -192,18 +193,14 @@ fn browse_body(state: &State) -> Element<'_, Message> {
     } => failure_surface(message, *retryable, *retry_busy),
     LibraryBrowseView::Ready {
       visible_items,
-      mode,
       total_record_count,
-      is_fetching_more,
-      can_load_next: _,
       load_more_failure,
       retry_busy,
+      ..
     } => ready_surface(
       state,
       visible_items,
-      *mode,
       *total_record_count,
-      *is_fetching_more,
       load_more_failure.as_ref(),
       *retry_busy,
     ),
@@ -213,33 +210,29 @@ fn browse_body(state: &State) -> Element<'_, Message> {
 fn ready_surface<'a>(
   state: &'a State,
   items: &'a [LibraryItemSlot],
-  mode: LibraryBrowseMode,
   total_record_count: u32,
-  is_fetching_more: bool,
   load_more_failure: Option<&'a LibraryBrowseFailure>,
   retry_busy: bool,
 ) -> Element<'a, Message> {
   let available_width = (state.browse_viewport.width - PAGE_PADDING * 2.0).max(1.0);
-  let metrics = ArtworkGridMetrics::for_width(available_width);
+  let metrics = ArtworkGridMetrics::for_cards(available_width, CARD_COPY_HEIGHT);
   let viewport = ArtworkGridViewport {
     offset_y: state.browse_viewport.offset_y,
     height: state.browse_viewport.height,
   };
-  let mut grid = Some(artwork_grid(items, available_width, viewport, |slot| {
-    browse_slot(state, slot, metrics.cell_width, metrics.cell_height)
+  let mut grid = Some(artwork_grid(items, metrics, viewport, |slot| {
+    browse_slot(state, slot, metrics.cell_width)
   }));
   let mut content = Column::new().width(Fill);
 
   for section in body_sections(
-    mode,
-    state.browse.display_range().is_some(),
-    is_fetching_more,
+    state.browse.display_range().is_some() && total_record_count > LIBRARY_BROWSE_PAGE_SIZE,
     load_more_failure.is_some(),
   ) {
     match section {
-      BodySection::VirtualNavigation => {
+      BodySection::Pagination => {
         if let Some(range) = state.browse.display_range() {
-          let previous = button(text("Previous page"))
+          let previous = button(text("Previous"))
             .padding([9, 13])
             .style(|theme, status| {
               jellypilot_ui::theme::button_variant(theme, status, ButtonVariant::Outlined)
@@ -249,9 +242,20 @@ fn ready_surface<'a>(
           } else {
             previous
           };
+          let next = button(text("Next"))
+            .padding([9, 13])
+            .style(|theme, status| {
+              jellypilot_ui::theme::button_variant(theme, status, ButtonVariant::Outlined)
+            });
+          let next = if let Some(message) = next_action(state.browse.can_load_next()) {
+            next.on_press(message)
+          } else {
+            next
+          };
           content = content.push(
             row![
               previous,
+              next,
               text(format!(
                 "Items {}–{} of {total_record_count}",
                 range.start.saturating_add(1),
@@ -271,9 +275,6 @@ fn ready_surface<'a>(
           content = content.push(container(grid).padding([0.0, PAGE_PADDING]).width(Fill));
         }
       }
-      BodySection::LoadingMore => {
-        content = content.push(status_line("Loading more…"));
-      }
       BodySection::InlineFailure => {
         if let Some(failure) = load_more_failure {
           content = content.push(inline_failure(failure, retry_busy));
@@ -292,30 +293,20 @@ fn ready_surface<'a>(
 }
 
 /// Composition order of the ready surface's sections, factored so tests can
-/// assert the rendered order the user sees (virtual navigation must stay
-/// above the grid or auto tail-advance makes it unreachable).
+/// assert the rendered order the user sees (pagination must stay above the grid).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum BodySection {
-  VirtualNavigation,
+  Pagination,
   Grid,
-  LoadingMore,
   InlineFailure,
 }
 
-fn body_sections(
-  mode: LibraryBrowseMode,
-  has_display_range: bool,
-  is_fetching_more: bool,
-  has_failure: bool,
-) -> Vec<BodySection> {
-  let mut sections = Vec::with_capacity(4);
-  if matches!(mode, LibraryBrowseMode::Virtual) && has_display_range {
-    sections.push(BodySection::VirtualNavigation);
+fn body_sections(has_display_range: bool, has_failure: bool) -> Vec<BodySection> {
+  let mut sections = Vec::with_capacity(3);
+  if has_display_range {
+    sections.push(BodySection::Pagination);
   }
   sections.push(BodySection::Grid);
-  if is_fetching_more {
-    sections.push(BodySection::LoadingMore);
-  }
   if has_failure {
     sections.push(BodySection::InlineFailure);
   }
@@ -326,11 +317,14 @@ fn previous_action(enabled: bool) -> Option<Message> {
   enabled.then_some(Message::Browse(BrowseMessage::LoadPrevious))
 }
 
+fn next_action(enabled: bool) -> Option<Message> {
+  enabled.then_some(Message::Browse(BrowseMessage::LoadNext))
+}
+
 fn browse_slot<'a>(
   state: &'a State,
   slot: &'a LibraryItemSlot,
   cell_width: f32,
-  cell_height: f32,
 ) -> Element<'a, Message> {
   let Some(item) = &slot.item else {
     return container(space::vertical())
@@ -339,18 +333,18 @@ fn browse_slot<'a>(
       .style(|theme| jellypilot_ui::theme::surface_variant(theme, SurfaceVariant::Filled))
       .into();
   };
-  video_card(state, item, cell_width, cell_height)
+  video_card(state, item, cell_width)
 }
+
+const POSTER_FRAME_WIDTH: f32 = 160.0;
+const POSTER_FRAME_HEIGHT: f32 = 240.0;
 
 fn video_card<'a>(
   state: &'a State,
   item: &'a VideoLibraryItem,
   cell_width: f32,
-  cell_height: f32,
 ) -> Element<'a, Message> {
-  let (frame_width, frame_height) = card_frame_size(item);
-  let artwork_height = (cell_width * frame_height as f32 / frame_width as f32)
-    .min((cell_height - CARD_COPY_HEIGHT).max(1.0));
+  let artwork_height = cell_width * POSTER_FRAME_HEIGHT / POSTER_FRAME_WIDTH;
   let artwork = artwork(
     state,
     state.browse_artwork.get(&item.id),
@@ -361,16 +355,21 @@ fn video_card<'a>(
     container(
       column![
         artwork,
-        text(&item.name).size(14).color(TOKENS.colors.onSurface),
+        text(&item.name)
+          .size(14)
+          .color(TOKENS.colors.onSurface)
+          .wrapping(Wrapping::None),
         text(item_caption(item))
           .size(12)
-          .color(TOKENS.colors.onSurfaceVariant),
+          .color(TOKENS.colors.onSurfaceVariant)
+          .wrapping(Wrapping::None),
       ]
       .spacing(TOKENS.spacing.s1)
       .width(Fill),
     )
     .width(Fill)
     .height(Fill)
+    .clip(true)
     .style(|theme| jellypilot_ui::theme::surface_variant(theme, SurfaceVariant::Filled)),
   )
   .padding(0)
@@ -482,13 +481,6 @@ fn retry_action(retryable: bool, retry_busy: bool) -> Option<Message> {
   (retryable && !retry_busy).then_some(Message::Browse(BrowseMessage::Retry))
 }
 
-fn status_line(label: &str) -> Element<'_, Message> {
-  container(text(label).size(13).color(TOKENS.colors.onSurfaceVariant))
-    .padding([TOKENS.spacing.s3, PAGE_PADDING])
-    .width(Fill)
-    .into()
-}
-
 fn empty_surface(message: String) -> Element<'static, Message> {
   container(text(message).size(16).color(TOKENS.colors.onSurfaceVariant))
     .padding(PAGE_PADDING)
@@ -510,29 +502,28 @@ mod tests {
   use super::*;
 
   #[test]
-  fn virtual_navigation_is_rendered_before_the_grid() {
-    let sections = body_sections(LibraryBrowseMode::Virtual, true, true, true);
+  fn pagination_is_rendered_before_the_grid() {
+    let sections = body_sections(true, true);
     let navigation = sections
       .iter()
-      .position(|section| *section == BodySection::VirtualNavigation);
+      .position(|section| *section == BodySection::Pagination);
     let grid = sections
       .iter()
       .position(|section| *section == BodySection::Grid);
     assert!(
       navigation.is_some_and(|nav| grid.is_some_and(|grid| nav < grid)),
-      "virtual navigation must precede the grid: {sections:?}"
+      "pagination must precede the grid: {sections:?}"
     );
+    assert_eq!(body_sections(false, false), vec![BodySection::Grid]);
+  }
+
+  #[test]
+  fn single_page_results_render_no_pagination_chrome() {
+    // Callers pass `has_display_range = display_range.is_some() && total >
+    // PAGE_SIZE`, so a one-window library must not render the section.
     assert_eq!(
-      body_sections(LibraryBrowseMode::Normal, true, true, true),
-      vec![
-        BodySection::Grid,
-        BodySection::LoadingMore,
-        BodySection::InlineFailure
-      ]
-    );
-    assert_eq!(
-      body_sections(LibraryBrowseMode::Virtual, false, false, false),
-      vec![BodySection::Grid]
+      body_sections(false, true),
+      vec![BodySection::Grid, BodySection::InlineFailure]
     );
   }
 
@@ -542,6 +533,16 @@ mod tests {
       previous_action(true),
       Some(Message::Browse(BrowseMessage::LoadPrevious))
     ));
+    assert!(previous_action(false).is_none());
+  }
+
+  #[test]
+  fn next_action_is_available_when_not_on_last_window() {
+    assert!(matches!(
+      next_action(true),
+      Some(Message::Browse(BrowseMessage::LoadNext))
+    ));
+    assert!(next_action(false).is_none());
   }
 
   #[test]

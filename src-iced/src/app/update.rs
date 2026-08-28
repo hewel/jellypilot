@@ -2342,31 +2342,15 @@ fn update_browse(state: &mut State, message: BrowseMessage) -> Task<Message> {
     }),
     BrowseMessage::Scrolled(viewport) => {
       let bounds = viewport.bounds();
-      let content_bounds = viewport.content_bounds();
       let offset = viewport.absolute_offset();
       state.browse_viewport = BrowseViewport {
         offset_y: offset.y,
         height: bounds.height,
-        content_height: content_bounds.height,
         width: bounds.width,
       };
-      let is_fetching_more = matches!(
-        state.browse_view,
-        LibraryBrowseView::Ready {
-          is_fetching_more: true,
-          ..
-        }
-      );
-      if should_load_next(
-        state.browse_viewport,
-        state.browse.can_load_more(),
-        is_fetching_more,
-      ) {
-        load_next_browse_page(state)
-      } else {
-        Task::none()
-      }
+      Task::none()
     }
+    BrowseMessage::LoadNext => load_next_browse_page(state),
     BrowseMessage::Retry => {
       let effects = match state.browse.retry() {
         Ok(effects) => effects,
@@ -2671,22 +2655,6 @@ fn prepare_browse_artwork(state: &mut State) -> Task<Message> {
     .artwork_handles
     .retain_slots(state.browse_artwork.slots().chain(player_slot));
   Task::batch(tasks)
-}
-
-fn should_load_next(viewport: BrowseViewport, can_load_next: bool, is_fetching_more: bool) -> bool {
-  if !can_load_next
-    || is_fetching_more
-    || !viewport.offset_y.is_finite()
-    || !viewport.height.is_finite()
-    || !viewport.content_height.is_finite()
-    || viewport.height <= 0.0
-    || viewport.content_height <= viewport.height
-  {
-    return false;
-  }
-  let viewport_end = viewport.offset_y.max(0.0) + viewport.height;
-  let remaining = viewport.content_height - viewport_end;
-  remaining <= viewport.height
 }
 
 fn begin_browse_artwork_view(state: &mut State) {
@@ -3811,34 +3779,74 @@ mod tests {
   }
 
   #[test]
-  fn tail_trigger_requires_an_approaching_idle_loadable_tail() {
-    let approaching = BrowseViewport {
-      offset_y: 500.0,
-      height: 400.0,
-      content_height: 1_200.0,
-      width: 900.0,
+  fn browse_load_next_and_previous_advance_and_retreat_windows() {
+    let mut state = test_state();
+    let library = BrowseSource::Library {
+      session: state.request_gate.current_session(),
+      shortcut: jellypilot_media_server::VideoLibraryShortcut {
+        id: "library-1".to_owned(),
+        name: "Movies".to_owned(),
+        collection_type: "movies".to_owned(),
+        item_count: Some(264),
+        artwork_image_id: None,
+      },
     };
-    let distant = BrowseViewport {
-      offset_y: 100.0,
-      ..approaching
+    let initial_request = browse_request(
+      state
+        .browse
+        .configure(library)
+        .expect("library should configure"),
+    );
+    sync_browse_view(&mut state);
+
+    let settlement = BrowsePageSettlement {
+      source_id: initial_request.source_id.clone(),
+      token: initial_request.token,
+      result: Ok(jellypilot_core::browse_model::BrowsePagePayload {
+        start_index: 0,
+        limit: 24,
+        total_record_count: 264,
+        has_more: true,
+        items: (0..24)
+          .map(|index| VideoLibraryItem {
+            id: format!("item-{index}"),
+            name: format!("Item {index}"),
+            item_type: "Movie".to_owned(),
+            production_year: None,
+            runtime_seconds: None,
+            played: false,
+            favorite: false,
+            artwork_image_id: None,
+            series_poster_image_id: None,
+            season_number: None,
+            episode_number: None,
+            series_id: None,
+            series_name: None,
+            resume_position_seconds: None,
+            played_percentage: None,
+            overview: None,
+          })
+          .collect(),
+      }),
     };
+    drop(update_browse(
+      &mut state,
+      BrowseMessage::PageSettled(settlement),
+    ));
 
-    assert!(should_load_next(approaching, true, false));
-    assert!(!should_load_next(distant, true, false));
-    assert!(!should_load_next(approaching, false, false));
-    assert!(!should_load_next(approaching, true, true));
-  }
+    assert_eq!(state.browse.display_range(), Some(0..24));
+    assert!(state.browse.can_load_next());
+    assert!(!state.browse.can_load_previous());
 
-  #[test]
-  fn tail_trigger_rejects_content_that_does_not_overflow_the_viewport() {
-    let viewport = BrowseViewport {
-      offset_y: 0.0,
-      height: 400.0,
-      content_height: 400.0,
-      width: 900.0,
-    };
+    drop(update_browse(&mut state, BrowseMessage::LoadNext));
+    assert_eq!(state.browse.display_range(), Some(24..48));
+    assert!(state.browse.can_load_next());
+    assert!(state.browse.can_load_previous());
 
-    assert!(!should_load_next(viewport, true, false));
+    drop(update_browse(&mut state, BrowseMessage::LoadPrevious));
+    assert_eq!(state.browse.display_range(), Some(0..24));
+    assert!(state.browse.can_load_next());
+    assert!(!state.browse.can_load_previous());
   }
 
   struct TestSettingsFile(PathBuf);

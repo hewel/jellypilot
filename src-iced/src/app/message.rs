@@ -95,6 +95,7 @@ pub enum BrowseMessage {
   Scrolled(scrollable::Viewport),
   Retry,
   LoadPrevious,
+  LoadNext,
   PageSettled(BrowsePageSettlement),
   ArtworkLoaded {
     session: SessionToken,

@@ -63,6 +63,17 @@ pub struct ArtworkGridMetrics {
 
 impl ArtworkGridMetrics {
     /// Measures the responsive columns and fixed poster cell geometry.
+    /// Metrics for poster cards with a copy area below the artwork: the
+    /// artwork keeps the exact 2:3 poster aspect and `copy_height` adds room
+    /// for title/caption lines beneath it.
+    #[must_use]
+    pub fn for_cards(available_width: f32, copy_height: f32) -> Self {
+        let mut metrics = Self::for_width(available_width);
+        metrics.cell_height += copy_height.max(0.0);
+        metrics.row_height = metrics.cell_height + ROW_GAP;
+        metrics
+    }
+
     #[must_use]
     pub fn for_width(available_width: f32) -> Self {
         let width = if available_width.is_finite() && available_width > 0.0 {
@@ -94,7 +105,7 @@ impl ArtworkGridMetrics {
 /// width. Cells remain caller-owned and may contain any normal iced widgets.
 pub fn artwork_grid<'a, Item, Message, Builder>(
     items: &'a [Item],
-    available_width: f32,
+    metrics: ArtworkGridMetrics,
     viewport: ArtworkGridViewport,
     cell_builder: Builder,
 ) -> Element<'a, Message>
@@ -103,7 +114,6 @@ where
     Message: 'a,
     Builder: Fn(&'a Item) -> Element<'a, Message>,
 {
-    let metrics = ArtworkGridMetrics::for_width(available_width);
     let row_count = items.len().div_ceil(metrics.columns);
     let window = row_window(
         row_count,
@@ -331,6 +341,14 @@ mod tests {
 
         assert_eq!((window.visible_start, window.visible_end), (10, 10));
         assert_eq!((window.start, window.end), (4, 10));
+    }
+
+    #[test]
+    fn for_cards_adds_copy_height_below_the_poster_aspect() {
+        let cards = ArtworkGridMetrics::for_cards(416.0, 48.0);
+        assert_eq!(cards.cell_width, 128.0);
+        assert_eq!(cards.cell_height, 192.0 + 48.0);
+        assert_eq!(cards.row_height, 240.0 + ROW_GAP);
     }
 
     #[test]

@@ -1,7 +1,8 @@
 use iced::widget::scrollable::{Direction, Scrollbar};
+use iced::widget::text::Wrapping;
 use iced::widget::{button, column, container, image, row, scrollable, space, text, Column, Row};
 use iced::{Alignment, ContentFit, Element, Fill, Length};
-use jellypilot_core::cards::{card_frame_size, hero_headline, hero_metadata, item_caption};
+use jellypilot_core::cards::{hero_headline, hero_metadata, item_caption};
 use jellypilot_core::LoadState;
 use jellypilot_media_server::VideoLibraryItem;
 use jellypilot_mpv::playback::{Playable, PlaybackStartPosition};
@@ -12,10 +13,26 @@ use jellypilot_ui::variants::{ButtonVariant, SurfaceVariant};
 
 use crate::app::message::{HomeMessage, Message, PlaybackMessage};
 use crate::app::state::{has_resume_position, ArtworkCell, ArtworkCellState, HomeSection, State};
+const THUMB_FRAME_WIDTH: f32 = 240.0;
+const THUMB_FRAME_HEIGHT: f32 = 135.0;
+const POSTER_FRAME_WIDTH: f32 = 160.0;
+const POSTER_FRAME_HEIGHT: f32 = 240.0;
 
-const POSTER_WIDTH: f32 = 160.0;
-const POSTER_HEIGHT: f32 = 240.0;
-const CARD_HEIGHT: f32 = 320.0;
+const fn section_frame_size(section: HomeSection) -> (f32, f32) {
+  match section {
+    HomeSection::ContinueWatching | HomeSection::NextUp => (THUMB_FRAME_WIDTH, THUMB_FRAME_HEIGHT),
+    HomeSection::LatestMovies | HomeSection::LatestEpisodes => {
+      (POSTER_FRAME_WIDTH, POSTER_FRAME_HEIGHT)
+    }
+  }
+}
+
+const fn section_scroll_height(section: HomeSection) -> f32 {
+  match section {
+    HomeSection::ContinueWatching | HomeSection::NextUp => 280.0,
+    HomeSection::LatestMovies | HomeSection::LatestEpisodes => 340.0,
+  }
+}
 
 pub fn view(state: &State) -> Element<'_, Message> {
   let mut content = Column::new()
@@ -131,7 +148,7 @@ fn featured_skeleton<'a>() -> Element<'a, Message> {
 fn section_view(state: &State, section: HomeSection) -> Option<Element<'_, Message>> {
   match state.home.section(section) {
     LoadState::Idle => None,
-    LoadState::Loading => Some(section_skeleton(section.title())),
+    LoadState::Loading => Some(section_skeleton(section)),
     LoadState::Failed(error) => Some(section_error(section.title(), error)),
     LoadState::Ready(items) if items.is_empty() => None,
     LoadState::Ready(items) => Some(section_row(state, section, items)),
@@ -151,7 +168,7 @@ fn section_row<'a>(
   }
   let cards = scrollable(cards)
     .direction(Direction::Horizontal(Scrollbar::new()))
-    .height(CARD_HEIGHT)
+    .height(section_scroll_height(section))
     .style(jellypilot_ui::theme::scrollable);
 
   column![
@@ -170,9 +187,7 @@ fn video_card<'a>(
   section: HomeSection,
   item: &'a VideoLibraryItem,
 ) -> Element<'a, Message> {
-  let (frame_width, frame_height) = card_frame_size(item);
-  let frame_width = frame_width as f32;
-  let frame_height = frame_height as f32;
+  let (frame_width, frame_height) = section_frame_size(section);
   let poster = artwork(
     state,
     state.home_artwork.card(section, &item.id),
@@ -182,55 +197,65 @@ fn video_card<'a>(
   );
   let mut content = column![
     poster,
-    text(&item.name).size(14).color(TOKENS.colors.onSurface),
+    text(&item.name)
+      .size(14)
+      .color(TOKENS.colors.onSurface)
+      .wrapping(Wrapping::None),
     text(item_caption(item))
       .size(12)
-      .color(TOKENS.colors.onSurfaceVariant),
+      .color(TOKENS.colors.onSurfaceVariant)
+      .wrapping(Wrapping::None),
   ]
   .spacing(TOKENS.spacing.s2)
   .width(frame_width);
-  if let Some(progress) = card_progress(section, item) {
-    content = content.push(progress_bar(progress));
-  }
 
-  if !matches!(section, HomeSection::ContinueWatching | HomeSection::NextUp) {
-    return button(
-      container(content)
-        .width(frame_width)
-        .style(|theme| jellypilot_ui::theme::surface_variant(theme, SurfaceVariant::Filled)),
+  if matches!(section, HomeSection::ContinueWatching | HomeSection::NextUp) {
+    let progress_element: Element<'a, Message> =
+      if let Some(progress) = card_progress(section, item) {
+        progress_bar(progress)
+      } else {
+        container(space::horizontal()).height(4).into()
+      };
+    content = content.push(container(progress_element).height(4).width(frame_width));
+
+    let play = button(text(if has_resume_position(item) {
+      "Resume"
+    } else {
+      "Play"
+    }))
+    .padding([7, 10])
+    .on_press_maybe(
+      (!state.playback_view.busy && state.playback_view.engine_available)
+        .then(|| play_message(state, item)),
     )
-    .padding(0)
+    .style(|theme, status| {
+      jellypilot_ui::theme::button_variant(theme, status, ButtonVariant::Primary)
+    });
+    let details = button(text("Details"))
+      .padding([7, 10])
+      .on_press(Message::OpenDetail(item.clone()))
+      .style(|theme, status| {
+        jellypilot_ui::theme::button_variant(theme, status, ButtonVariant::Text)
+      });
+    return container(
+      column![content, row![play, details].spacing(TOKENS.spacing.s1)].spacing(TOKENS.spacing.s2),
+    )
     .width(frame_width)
-    .on_press(Message::OpenDetail(item.clone()))
-    .style(|theme, status| jellypilot_ui::theme::button_variant(theme, status, ButtonVariant::Text))
+    .clip(true)
+    .style(|theme| jellypilot_ui::theme::surface_variant(theme, SurfaceVariant::Filled))
     .into();
   }
 
-  let play = button(text(if has_resume_position(item) {
-    "Resume"
-  } else {
-    "Play"
-  }))
-  .padding([7, 10])
-  .on_press_maybe(
-    (!state.playback_view.busy && state.playback_view.engine_available)
-      .then(|| play_message(state, item)),
+  button(
+    container(content)
+      .width(frame_width)
+      .clip(true)
+      .style(|theme| jellypilot_ui::theme::surface_variant(theme, SurfaceVariant::Filled)),
   )
-  .style(|theme, status| {
-    jellypilot_ui::theme::button_variant(theme, status, ButtonVariant::Primary)
-  });
-  let details = button(text("Details"))
-    .padding([7, 10])
-    .on_press(Message::OpenDetail(item.clone()))
-    .style(|theme, status| {
-      jellypilot_ui::theme::button_variant(theme, status, ButtonVariant::Text)
-    });
-  container(column![
-    content,
-    row![play, details].spacing(TOKENS.spacing.s1)
-  ])
+  .padding(0)
   .width(frame_width)
-  .style(|theme| jellypilot_ui::theme::surface_variant(theme, SurfaceVariant::Filled))
+  .on_press(Message::OpenDetail(item.clone()))
+  .style(|theme, status| jellypilot_ui::theme::button_variant(theme, status, ButtonVariant::Text))
   .into()
 }
 
@@ -281,7 +306,7 @@ fn artwork<'a>(
   container(
     text(initial)
       .font(SPACE_GROTESK_FONT)
-      .size(if width > POSTER_WIDTH { 54 } else { 38 })
+      .size(if width > POSTER_FRAME_WIDTH { 54 } else { 38 })
       .color(if failed {
         TOKENS.colors.warning
       } else {
@@ -340,20 +365,21 @@ fn progress_bar<'a>(progress: f64) -> Element<'a, Message> {
   bar.into()
 }
 
-fn section_skeleton<'a>(title: &'static str) -> Element<'a, Message> {
+fn section_skeleton<'a>(section: HomeSection) -> Element<'a, Message> {
+  let (width, height) = section_frame_size(section);
   let mut cards = Row::new().spacing(TOKENS.spacing.s4);
   for _ in 0..5 {
     cards = cards.push(
       column![
-        skeleton_box(POSTER_WIDTH, POSTER_HEIGHT),
-        skeleton_box(POSTER_WIDTH, 18.0),
-        skeleton_box(96.0, 14.0),
+        skeleton_box(width, height),
+        skeleton_box(width, 18.0),
+        skeleton_box(width * 0.6, 14.0),
       ]
       .spacing(TOKENS.spacing.s2),
     );
   }
   column![
-    text(title)
+    text(section.title())
       .font(SPACE_GROTESK_FONT)
       .size(24)
       .color(TOKENS.colors.onSurface),

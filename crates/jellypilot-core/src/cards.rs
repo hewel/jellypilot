@@ -1,20 +1,5 @@
 use jellypilot_media_server::{VideoLibraryItem, VideoLibraryKind, VideoLibraryShortcut};
 
-pub const HOME_HERO_HEIGHT: i32 = 340;
-pub const POSTER_FRAME_WIDTH: i32 = 160;
-pub const POSTER_FRAME_HEIGHT: i32 = 240;
-pub const THUMB_FRAME_WIDTH: i32 = 240;
-pub const THUMB_FRAME_HEIGHT: i32 = 135;
-
-#[must_use]
-pub fn card_frame_size(item: &VideoLibraryItem) -> (i32, i32) {
-    if is_episode_item(item) {
-        (THUMB_FRAME_WIDTH, THUMB_FRAME_HEIGHT)
-    } else {
-        (POSTER_FRAME_WIDTH, POSTER_FRAME_HEIGHT)
-    }
-}
-
 #[must_use]
 pub fn item_caption(item: &VideoLibraryItem) -> String {
     match item.production_year {

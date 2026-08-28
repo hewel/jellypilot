@@ -2,10 +2,19 @@ use iced::widget::container;
 use iced::{Background, Border, Color, Theme};
 
 use crate::tokens::TOKENS;
-use crate::variants::SurfaceVariant;
 
-pub(super) fn popover_surface(theme: &Theme) -> container::Style {
-    crate::widgets::container::style(theme, SurfaceVariant::Elevated)
+pub(super) fn popover_surface(_theme: &Theme) -> container::Style {
+    container::Style {
+        background: Some(Background::Color(TOKENS.colors.surfaceContainerHighest)),
+        text_color: Some(TOKENS.colors.onSurface),
+        border: Border {
+            radius: TOKENS.radii.md.into(),
+            color: TOKENS.colors.outlineVariant,
+            width: 1.0,
+        },
+        shadow: TOKENS.shadows.x2l.iced(),
+        ..container::Style::default()
+    }
 }
 
 pub(super) fn tooltip_surface(_theme: &Theme) -> container::Style {
@@ -30,13 +39,17 @@ mod tests {
     use crate::tokens::TOKENS;
 
     #[test]
-    fn popover_uses_the_elevated_surface_catalog_style() {
-        let theme = crate::theme::theme();
-
-        assert_eq!(
-            popover_surface(&theme),
-            crate::widgets::container::style(&theme, crate::variants::SurfaceVariant::Elevated)
-        );
+    fn popover_surface_has_fully_opaque_background() {
+        let style = popover_surface(&crate::theme::theme());
+        match style.background {
+            Some(Background::Color(color)) => {
+                assert_eq!(color.a, 1.0, "popover background must be fully opaque");
+                assert_eq!(color, TOKENS.colors.surfaceContainerHighest);
+            }
+            other => panic!("expected Color background, got {other:?}"),
+        }
+        assert_eq!(style.border.color, TOKENS.colors.outlineVariant);
+        assert_eq!(style.border.width, 1.0);
     }
 
     #[test]

@@ -661,9 +661,10 @@ mod tests {
         let before = core.snapshot();
 
         let error = core
-            .dispatch(LibraryBrowseAction::LoadNext)
+            .dispatch(LibraryBrowseAction::WindowChanged {
+                display_indexes: vec![24],
+            })
             .expect_err("sequence should be exhausted");
-
         assert_eq!(
             (error, core.snapshot()),
             (LibraryBrowseCoreError::SequenceExhausted, before)

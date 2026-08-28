@@ -189,9 +189,11 @@ fn disabling_same_source_cancels_and_releases_without_reset() {
     let page_zero = configure(&mut core, "movies");
     loaded(&mut core, page_zero, 0, 80, 24, true);
     let next = core
-        .dispatch(LibraryBrowseAction::LoadNext)
-        .expect("load next should dispatch");
-    let next_token = load_tokens(&next)[0];
+        .dispatch(LibraryBrowseAction::WindowChanged {
+            display_indexes: (24..48).collect(),
+        })
+        .expect("window changed should dispatch");
+    let tokens = load_tokens(&next);
 
     let update = core
         .dispatch(LibraryBrowseAction::Configure {
@@ -203,14 +205,14 @@ fn disabling_same_source_cancels_and_releases_without_reset() {
     assert_eq!(
         update.commands,
         vec![
-            LibraryBrowseCommand::CancelLoad { token: next_token },
+            LibraryBrowseCommand::CancelLoad { token: tokens[0] },
+            LibraryBrowseCommand::CancelLoad { token: tokens[1] },
             LibraryBrowseCommand::ReleasePages {
                 page_starts: vec![0],
             },
         ]
     );
 }
-
 #[test]
 fn virtual_window_waits_for_successful_page_zero() {
     let mut core = LibraryBrowseCore::new();
@@ -227,27 +229,11 @@ fn virtual_window_waits_for_successful_page_zero() {
 }
 
 #[test]
-fn threshold_count_uses_normal_mode() {
+fn non_empty_count_uses_virtual_mode() {
     let mut core = LibraryBrowseCore::new();
     let token = configure(&mut core, "movies");
 
     let update = loaded(&mut core, token, 0, 100, 24, true);
-
-    assert!(matches!(
-        update.snapshot.status,
-        LibraryBrowseStatus::Ready {
-            mode: LibraryBrowseMode::Normal,
-            ..
-        }
-    ));
-}
-
-#[test]
-fn count_above_threshold_uses_virtual_mode() {
-    let mut core = LibraryBrowseCore::new();
-    let token = configure(&mut core, "movies");
-
-    let update = loaded(&mut core, token, 0, 101, 24, true);
 
     assert!(matches!(
         update.snapshot.status,
@@ -283,13 +269,15 @@ fn filtered_empty_page_with_remaining_records_stays_ready_for_continuation() {
     assert!(matches!(
         update.snapshot.status,
         LibraryBrowseStatus::Ready {
-            mode: LibraryBrowseMode::Normal,
+            mode: LibraryBrowseMode::Virtual,
             total_record_count: 25,
             ..
         }
     ));
     let continuation = core
-        .dispatch(LibraryBrowseAction::LoadNext)
+        .dispatch(LibraryBrowseAction::WindowChanged {
+            display_indexes: vec![24],
+        })
         .expect("the UI should be able to continue after a filtered empty page");
     assert!(matches!(
         continuation.commands.as_slice(),
@@ -301,28 +289,23 @@ fn filtered_empty_page_with_remaining_records_stays_ready_for_continuation() {
 }
 
 #[test]
-fn normal_terminal_page_disables_sequential_continuation() {
+fn terminal_page_settles_and_updates_ready_status() {
     let mut core = LibraryBrowseCore::new();
     let page_zero = configure(&mut core, "movies");
     loaded(&mut core, page_zero, 0, 49, 24, true);
-    let page_24 = load_tokens(
-        &core
-            .dispatch(LibraryBrowseAction::LoadNext)
-            .expect("page 24 should schedule"),
-    )[0];
-    loaded(&mut core, page_24, 24, 49, 0, true);
-    let page_48 = load_tokens(
-        &core
-            .dispatch(LibraryBrowseAction::LoadNext)
-            .expect("page 48 should schedule"),
-    )[0];
-
-    let update = loaded(&mut core, page_48, 48, 49, 1, false);
+    let next_24 = core
+        .dispatch(LibraryBrowseAction::WindowChanged {
+            display_indexes: (24..48).collect(),
+        })
+        .expect("page 24 and 48 should schedule");
+    let tokens = load_tokens(&next_24);
+    loaded(&mut core, tokens[0], 24, 49, 24, true);
+    let update = loaded(&mut core, tokens[1], 48, 49, 1, false);
 
     assert!(matches!(
         update.snapshot.status,
         LibraryBrowseStatus::Ready {
-            can_load_next: false,
+            total_record_count: 49,
             ..
         }
     ));
@@ -416,47 +399,58 @@ fn stale_settlement_from_old_generation_is_ignored() {
 }
 
 #[test]
-fn normal_load_next_uses_the_next_contiguous_page() {
+fn window_change_loads_the_requested_page() {
     let mut core = LibraryBrowseCore::new();
     let page_zero = configure(&mut core, "movies");
-    loaded(&mut core, page_zero, 0, 80, 20, true);
+    loaded(&mut core, page_zero, 0, 80, 24, true);
 
     let update = core
-        .dispatch(LibraryBrowseAction::LoadNext)
-        .expect("load next should dispatch");
+        .dispatch(LibraryBrowseAction::WindowChanged {
+            display_indexes: (24..48).collect(),
+        })
+        .expect("window change should dispatch");
 
     assert!(matches!(
         update.commands.as_slice(),
-        [LibraryBrowseCommand::LoadPage {
-            start_index: 24,
-            priority: LibraryBrowseLoadPriority::Sequential,
-            ..
-        }]
+        [
+            LibraryBrowseCommand::LoadPage {
+                start_index: 24,
+                priority: LibraryBrowseLoadPriority::Visible,
+                ..
+            },
+            LibraryBrowseCommand::LoadPage {
+                start_index: 48,
+                priority: LibraryBrowseLoadPriority::Prefetch,
+                ..
+            },
+        ]
     ));
 }
 
 #[test]
-fn normal_slots_flatten_short_pages_in_contiguous_page_order() {
+fn virtual_slots_map_window_indexes_to_stored_pages() {
     let mut core = LibraryBrowseCore::new();
     let page_zero = configure(&mut core, "movies");
-    loaded(&mut core, page_zero, 0, 30, 20, true);
+    loaded(&mut core, page_zero, 0, 30, 24, true);
     let next = core
-        .dispatch(LibraryBrowseAction::LoadNext)
-        .expect("load next should dispatch");
+        .dispatch(LibraryBrowseAction::WindowChanged {
+            display_indexes: vec![24, 25],
+        })
+        .expect("window change should dispatch");
     let update = loaded(&mut core, load_tokens(&next)[0], 24, 30, 6, false);
 
     assert_eq!(
-        (&update.snapshot.slots[19], &update.snapshot.slots[20]),
+        (&update.snapshot.slots[0], &update.snapshot.slots[1]),
         (
             &LibraryBrowseSlot {
-                display_index: 19,
-                page_start: 0,
-                index_within_page: 19,
-            },
-            &LibraryBrowseSlot {
-                display_index: 20,
+                display_index: 24,
                 page_start: 24,
                 index_within_page: 0,
+            },
+            &LibraryBrowseSlot {
+                display_index: 25,
+                page_start: 24,
+                index_within_page: 1,
             },
         )
     );
@@ -670,13 +664,15 @@ fn retained_virtual_failure_retries_with_reload_priority() {
 }
 
 #[test]
-fn failed_normal_continuation_is_exposed_in_ready_status() {
+fn failed_virtual_continuation_is_exposed_in_ready_status() {
     let mut core = LibraryBrowseCore::new();
     let page_zero = configure(&mut core, "movies");
     loaded(&mut core, page_zero, 0, 80, 24, true);
     let next = core
-        .dispatch(LibraryBrowseAction::LoadNext)
-        .expect("load next should dispatch");
+        .dispatch(LibraryBrowseAction::WindowChanged {
+            display_indexes: vec![24],
+        })
+        .expect("window change should dispatch");
 
     let update = failed(&mut core, load_tokens(&next)[0], "offline", true);
 

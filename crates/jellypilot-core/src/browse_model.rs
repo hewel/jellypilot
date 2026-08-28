@@ -376,7 +376,12 @@ impl BrowseModel {
                 mode,
                 total_record_count,
                 is_fetching_more,
-                can_load_next,
+                can_load_next: match mode {
+                    LibraryBrowseMode::Normal => can_load_next,
+                    LibraryBrowseMode::Virtual => {
+                        self.virtual_window_start < last_virtual_window_start(total_record_count)
+                    }
+                },
                 load_more_failure,
                 retry_busy,
             },
@@ -401,6 +406,11 @@ impl BrowseModel {
             | LibraryBrowseView::Empty
             | LibraryBrowseView::Failed { .. } => false,
         }
+    }
+
+    #[must_use]
+    pub fn can_load_next(&self) -> bool {
+        self.can_load_more()
     }
 
     #[must_use]
@@ -705,23 +715,19 @@ mod tests {
                 })
                 .expect("search should configure"),
         );
-        settle(&mut model, &first, 30, 24);
-
-        let next = request(model.load_next().expect("continuation should schedule"));
+        let lookahead = settle(&mut model, &first, 30, 24);
+        let next = request(lookahead);
         assert!(matches!(
           next.source,
           BrowseSource::Search { ref query, .. } if query == "arrival"
         ));
         settle(&mut model, &next, 30, 6);
 
-        assert!(matches!(
-          model.view(),
-          LibraryBrowseView::Ready {
-            ref visible_items,
-            can_load_next: false,
-            ..
-          } if visible_items.len() == 30
-        ));
+        let advance = model.load_next().expect("window advance should succeed");
+        assert!(matches!(advance.first(), Some(BrowseEffect::ResetViewport)));
+        assert_eq!(model.display_range(), Some(24..30));
+        assert!(!model.can_load_next());
+        assert!(model.can_load_previous());
     }
 
     #[test]
@@ -735,8 +741,8 @@ mod tests {
                 })
                 .expect("search should configure"),
         );
-        settle(&mut model, &first, 30, 24);
-        let failed = request(model.load_next().expect("continuation should schedule"));
+        let lookahead = settle(&mut model, &first, 30, 24);
+        let failed = request(lookahead);
         model
             .settle(BrowsePageSettlement {
                 source_id: failed.source_id.clone(),
@@ -745,14 +751,13 @@ mod tests {
             })
             .expect("failure should settle");
 
+        let _ = model.load_next().expect("window advance should succeed");
         assert!(matches!(
           model.view(),
           LibraryBrowseView::Ready {
-            ref visible_items,
             ref load_more_failure,
             ..
-          } if visible_items.len() == 24
-            && load_more_failure.as_ref().map(|failure| failure.message.as_str())
+          } if load_more_failure.as_ref().map(|failure| failure.message.as_str())
               == Some("temporary failure")
             && load_more_failure.as_ref().is_some_and(|failure| failure.retryable)
         ));
@@ -775,8 +780,8 @@ mod tests {
                 })
                 .expect("search should configure"),
         );
-        settle(&mut model, &first, 30, LIBRARY_BROWSE_PAGE_SIZE);
-        let next = request(model.load_next().expect("continuation should schedule"));
+        let lookahead = settle(&mut model, &first, 30, LIBRARY_BROWSE_PAGE_SIZE);
+        let next = request(lookahead);
 
         model
             .settle(BrowsePageSettlement {
@@ -792,6 +797,7 @@ mod tests {
             })
             .expect("malformed continuation should settle as a failure");
 
+        let _ = model.load_next().expect("window advance should succeed");
         assert!(matches!(
             model.view(),
             LibraryBrowseView::Ready {
@@ -1287,5 +1293,100 @@ mod tests {
         assert!(effects.iter().any(
             |effect| matches!(effect, BrowseEffect::CancelPage { token } if *token == pending.token)
         ));
+    }
+
+    #[test]
+    fn multi_page_library_pagination_walks_all_windows_forward_and_backward() {
+        let total = 264_u32;
+        let mut model = BrowseModel::default();
+        let bootstrap = request(
+            model
+                .configure(BrowseSource::Library {
+                    session: session(),
+                    shortcut: VideoLibraryShortcut {
+                        id: "large-library".to_owned(),
+                        name: "Large Library".to_owned(),
+                        collection_type: "movies".to_owned(),
+                        item_count: Some(264),
+                        artwork_image_id: None,
+                    },
+                })
+                .expect("source should configure"),
+        );
+
+        let initial_effects = settle(&mut model, &bootstrap, total, 24);
+        settle_all_requests(&mut model, initial_effects, total);
+
+        // Window 0 of 11 (0..24)
+        assert_eq!(model.display_range(), Some(0..24));
+        assert!(!model.can_load_previous());
+        assert!(model.can_load_next());
+
+        // Next walks all 11 windows (windows 1 through 10)
+        for expected_window in 1..11 {
+            let start = expected_window * 24;
+            let end = (start + 24).min(total);
+            let next_effects = model.load_next().expect("load_next should succeed");
+            settle_all_requests(&mut model, next_effects, total);
+            assert_eq!(model.display_range(), Some(start..end));
+            assert!(model.can_load_previous());
+            if expected_window == 10 {
+                // Last window disables Next
+                assert!(!model.can_load_next());
+            } else {
+                assert!(model.can_load_next());
+            }
+        }
+
+        // Previous walks back (windows 9 down to 0)
+        for expected_window in (0..10).rev() {
+            let start = expected_window * 24;
+            let end = start + 24;
+            let prev_effects = model.load_previous().expect("load_previous should succeed");
+            settle_all_requests(&mut model, prev_effects, total);
+            assert_eq!(model.display_range(), Some(start..end));
+            assert!(model.can_load_next());
+            if expected_window == 0 {
+                // First window disables Previous
+                assert!(!model.can_load_previous());
+            } else {
+                assert!(model.can_load_previous());
+            }
+        }
+
+        // Advance to window 3 (72..96)
+        for _ in 0..3 {
+            let effects = model.load_next().expect("load_next should succeed");
+            settle_all_requests(&mut model, effects, total);
+        }
+        assert_eq!(model.display_range(), Some(72..96));
+
+        // Filter / preference change resets to first window
+        let preferences = BrowsePreferences {
+            sort: jellypilot_media_server::VideoLibrarySort::ReleaseDate,
+            ..Default::default()
+        };
+        let reconfig = model
+            .configure_with_preferences(
+                BrowseSource::Library {
+                    session: session(),
+                    shortcut: VideoLibraryShortcut {
+                        id: "large-library".to_owned(),
+                        name: "Large Library".to_owned(),
+                        collection_type: "movies".to_owned(),
+                        item_count: Some(264),
+                        artwork_image_id: None,
+                    },
+                },
+                preferences,
+            )
+            .expect("reconfigure should succeed");
+        let bootstrap2 = request(reconfig);
+        let reconfig_effects = settle(&mut model, &bootstrap2, total, 24);
+        settle_all_requests(&mut model, reconfig_effects, total);
+
+        assert_eq!(model.display_range(), Some(0..24));
+        assert!(!model.can_load_previous());
+        assert!(model.can_load_next());
     }
 }

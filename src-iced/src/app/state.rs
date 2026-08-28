@@ -425,7 +425,6 @@ impl DetailState {
 pub struct BrowseViewport {
   pub offset_y: f32,
   pub height: f32,
-  pub content_height: f32,
   pub width: f32,
 }
 
@@ -434,7 +433,6 @@ impl Default for BrowseViewport {
     Self {
       offset_y: 0.0,
       height: 720.0,
-      content_height: 0.0,
       width: 960.0,
     }
   }
