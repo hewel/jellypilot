@@ -1,7 +1,7 @@
 use crate::app::message::{BrowseMessage, Message};
 use crate::app::state::{ArtworkCell, ArtworkCellState, Destination, State};
 use iced::widget::text::Wrapping;
-use iced::widget::{button, column, container, image, row, scrollable, space, text, Column};
+use iced::widget::{button, column, container, row, scrollable, space, text, Column};
 use iced::{Alignment, ContentFit, Element, Fill};
 use jellypilot_core::browse_model::{LibraryBrowseView, LibraryItemSlot};
 use jellypilot_core::cards::item_caption;
@@ -17,10 +17,10 @@ use jellypilot_ui::overlay::{popover, PopoverOptions};
 use jellypilot_ui::tokens::TOKENS;
 use jellypilot_ui::variants::{ButtonVariant, SurfaceVariant};
 use jellypilot_ui::widgets::artwork_grid::{artwork_grid, ArtworkGridMetrics, ArtworkGridViewport};
+use jellypilot_ui::{card_top_radius, rounded_image};
 
 const PAGE_PADDING: f32 = 32.0;
-const CARD_COPY_HEIGHT: f32 = 48.0;
-
+const CARD_COPY_HEIGHT: f32 = 68.0;
 pub fn view(state: &State) -> Element<'_, Message> {
   let title = match &state.destination {
     Destination::Library { library_id, .. } => match &state.home.shortcuts {
@@ -390,26 +390,34 @@ fn video_card<'a>(
     &item.name,
     artwork_height,
   );
+  let copy = container(
+    column![
+      text(&item.name)
+        .size(14)
+        .color(TOKENS.colors.onSurface)
+        .wrapping(Wrapping::None),
+      text(item_caption(item))
+        .size(12)
+        .color(TOKENS.colors.onSurfaceVariant)
+        .wrapping(Wrapping::None),
+    ]
+    .spacing(TOKENS.spacing.s1)
+    .width(Fill),
+  )
+  .padding(iced::Padding {
+    top: TOKENS.spacing.s3,
+    right: TOKENS.spacing.s4,
+    bottom: TOKENS.spacing.s4,
+    left: TOKENS.spacing.s4,
+  })
+  .width(Fill);
+
   button(
-    container(
-      column![
-        artwork,
-        text(&item.name)
-          .size(14)
-          .color(TOKENS.colors.onSurface)
-          .wrapping(Wrapping::None),
-        text(item_caption(item))
-          .size(12)
-          .color(TOKENS.colors.onSurfaceVariant)
-          .wrapping(Wrapping::None),
-      ]
-      .spacing(TOKENS.spacing.s1)
-      .width(Fill),
-    )
-    .width(Fill)
-    .height(Fill)
-    .clip(true)
-    .style(|theme| jellypilot_ui::theme::surface_variant(theme, SurfaceVariant::Filled)),
+    container(column![artwork, copy,].width(Fill))
+      .width(Fill)
+      .height(Fill)
+      .clip(true)
+      .style(|theme| jellypilot_ui::theme::surface_variant(theme, SurfaceVariant::Filled)),
   )
   .padding(0)
   .width(Fill)
@@ -428,16 +436,11 @@ fn artwork<'a>(
   if let Some(cell) = cell {
     if cell.state == ArtworkCellState::Ready {
       if let Some(handle) = state.artwork_handles.get(cell.slot, &cell.image_id) {
-        return container(
-          image(handle.clone())
-            .content_fit(ContentFit::Cover)
-            .width(Fill)
-            .height(Fill),
-        )
-        .width(Fill)
-        .height(height)
-        .style(|theme| jellypilot_ui::theme::surface_variant(theme, SurfaceVariant::Elevated))
-        .into();
+        return rounded_image(handle.clone(), card_top_radius(TOKENS.radii.x2l))
+          .content_fit(ContentFit::Cover)
+          .width(Fill)
+          .height(height)
+          .into();
       }
     }
   }
@@ -469,7 +472,17 @@ fn artwork<'a>(
   .height(height)
   .center_x(Fill)
   .center_y(Fill)
-  .style(|theme| jellypilot_ui::theme::surface_variant(theme, SurfaceVariant::Elevated))
+  .style(|_theme| container::Style {
+    background: Some(iced::Background::Color(
+      TOKENS.colors.surfaceContainerLowest,
+    )),
+    border: iced::Border {
+      radius: card_top_radius(TOKENS.radii.x2l),
+      width: 0.0,
+      color: iced::Color::TRANSPARENT,
+    },
+    ..container::Style::default()
+  })
   .into()
 }
 fn failure_surface(message: &str, retryable: bool, retry_busy: bool) -> Element<'_, Message> {

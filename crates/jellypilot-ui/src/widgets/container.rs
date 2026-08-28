@@ -51,3 +51,32 @@ fn bordered(radius: f32, color: Color) -> Border {
 fn with_alpha(color: Color, alpha: f32) -> Color {
     Color { a: alpha, ..color }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use iced::border::Radius;
+
+    #[test]
+    fn filled_surface_has_single_card_border() {
+        let theme = crate::theme::theme();
+        let style = style(&theme, SurfaceVariant::Filled);
+
+        assert_eq!(style.border.width, 1.0);
+        assert_eq!(style.border.radius, Radius::from(TOKENS.radii.x2l));
+        assert_eq!(
+            style.border.color,
+            with_alpha(TOKENS.colors.outlineVariant, 0.8)
+        );
+    }
+
+    #[test]
+    fn elevated_surface_has_elevated_card_border() {
+        let theme = crate::theme::theme();
+        let style = style(&theme, SurfaceVariant::Elevated);
+
+        assert_eq!(style.border.width, 1.0);
+        assert_eq!(style.border.radius, Radius::from(TOKENS.radii.x4l));
+        assert_eq!(style.border.color, with_alpha(TOKENS.colors.primary, 0.2));
+    }
+}

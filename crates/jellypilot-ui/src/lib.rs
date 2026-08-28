@@ -16,3 +16,4 @@ pub use icons::{
     icon_with_color, Icon, IconSize, DEFAULT_ICON_SIZE, ICON_SIZE_2XL, ICON_SIZE_LG, ICON_SIZE_MD,
     ICON_SIZE_SM, ICON_SIZE_XL, ICON_SIZE_XS,
 };
+pub use widgets::rounded_image::{card_top_radius, full_radius, rounded_image, RoundedImage};

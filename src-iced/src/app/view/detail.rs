@@ -5,7 +5,7 @@ use iced::advanced::text::paragraph::Paragraph;
 use iced::advanced::{text as advanced_text, Text as AdvancedText};
 use iced::gradient;
 use iced::widget::{
-  button, column, container, image, responsive, row, scrollable, space, stack, text, Column, Row,
+  button, column, container, responsive, row, scrollable, space, stack, text, Column, Row,
 };
 use iced::{
   alignment, Alignment, Background, ContentFit, Degrees, Element, Fill, Font, Length, Pixels, Size,
@@ -21,6 +21,7 @@ use jellypilot_ui::icons::{
 };
 use jellypilot_ui::tokens::TOKENS;
 use jellypilot_ui::variants::{ButtonVariant, SurfaceVariant};
+use jellypilot_ui::{full_radius, rounded_image};
 
 const HERO_HEIGHT: f32 = 430.0;
 const POSTER_WIDTH: f32 = 220.0;
@@ -627,16 +628,11 @@ fn artwork<'a>(
   }) = cell
   {
     if let Some(handle) = state.artwork_handles.get(*slot, image_id) {
-      return container(
-        image(handle.clone())
-          .content_fit(ContentFit::Cover)
-          .width(Fill)
-          .height(Fill),
-      )
-      .width(width)
-      .height(height)
-      .style(|theme| jellypilot_ui::theme::surface_variant(theme, SurfaceVariant::Elevated))
-      .into();
+      return rounded_image(handle.clone(), full_radius(TOKENS.radii.x2l))
+        .content_fit(ContentFit::Cover)
+        .width(width)
+        .height(height)
+        .into();
     }
   }
   let failed = cell.is_some_and(|cell| cell.state == ArtworkCellState::Failed);
@@ -667,7 +663,17 @@ fn artwork<'a>(
   .height(height)
   .center_x(Fill)
   .center_y(Fill)
-  .style(|theme| jellypilot_ui::theme::surface_variant(theme, SurfaceVariant::Elevated))
+  .style(|_theme| container::Style {
+    background: Some(iced::Background::Color(
+      TOKENS.colors.surfaceContainerLowest,
+    )),
+    border: iced::Border {
+      radius: full_radius(TOKENS.radii.x2l),
+      width: 0.0,
+      color: iced::Color::TRANSPARENT,
+    },
+    ..container::Style::default()
+  })
   .into()
 }
 

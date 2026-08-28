@@ -2,7 +2,7 @@ use std::fmt;
 
 use crate::app::message::{Message, PlaybackMessage};
 use crate::app::state::{ArtworkCellState, State};
-use iced::widget::{button, column, container, image, row, slider, space, text, Column};
+use iced::widget::{button, column, container, row, slider, space, text, Column};
 use iced::{Alignment, ContentFit, Element, Fill, Length};
 use jellypilot_mpv::playback::{Playable, TrackInfo};
 use jellypilot_mpv::playback_session::{
@@ -17,6 +17,7 @@ use jellypilot_ui::icons::{
 use jellypilot_ui::overlay::{popover, tooltip, Placement, PopoverOptions, TooltipOptions};
 use jellypilot_ui::tokens::TOKENS;
 use jellypilot_ui::variants::{ButtonVariant, SurfaceVariant};
+use jellypilot_ui::{full_radius, rounded_image};
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 struct TrackChoice {
@@ -528,16 +529,11 @@ fn playback_artwork(state: &State, width: f32, height: f32) -> Element<'_, Messa
   if let Some(cell) = &state.playback_artwork {
     if cell.state == ArtworkCellState::Ready {
       if let Some(handle) = state.artwork_handles.get(cell.slot, &cell.image_id) {
-        return container(
-          image(handle.clone())
-            .content_fit(ContentFit::Cover)
-            .width(Fill)
-            .height(Fill),
-        )
-        .width(width)
-        .height(height)
-        .style(|theme| jellypilot_ui::theme::surface_variant(theme, SurfaceVariant::Elevated))
-        .into();
+        return rounded_image(handle.clone(), full_radius(TOKENS.radii.lg))
+          .content_fit(ContentFit::Cover)
+          .width(width)
+          .height(height)
+          .into();
       }
     }
   }
@@ -550,7 +546,17 @@ fn playback_artwork(state: &State, width: f32, height: f32) -> Element<'_, Messa
   .height(height)
   .center_x(Fill)
   .center_y(Fill)
-  .style(|theme| jellypilot_ui::theme::surface_variant(theme, SurfaceVariant::Elevated))
+  .style(|_theme| container::Style {
+    background: Some(iced::Background::Color(
+      TOKENS.colors.surfaceContainerLowest,
+    )),
+    border: iced::Border {
+      radius: full_radius(TOKENS.radii.lg),
+      width: 0.0,
+      color: iced::Color::TRANSPARENT,
+    },
+    ..container::Style::default()
+  })
   .into()
 }
 #[cfg(test)]
@@ -679,7 +685,7 @@ mod tests {
     state.artwork_handles.insert(
       slot,
       image_id.clone(),
-      image::Handle::from_bytes(vec![0; 8]),
+      iced::widget::image::Handle::from_bytes(vec![0; 8]),
     );
 
     let initial_artwork = state.playback_artwork.clone();

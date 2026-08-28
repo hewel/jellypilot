@@ -130,4 +130,29 @@ mod tests {
     fn brightness_clamps_channels_to_one() {
         assert_eq!(brightness(Color::WHITE, 1.1), Color::WHITE);
     }
+
+    #[test]
+    fn text_button_variant_never_draws_border_in_any_status() {
+        use crate::variants::ButtonVariant;
+        use iced::widget::button::Status;
+
+        let theme = crate::theme::theme();
+        for status in [
+            Status::Active,
+            Status::Hovered,
+            Status::Pressed,
+            Status::Disabled,
+        ] {
+            let style = super::style(&theme, ButtonVariant::Text, status);
+            assert_eq!(
+                style.border.width, 0.0,
+                "Text button variant must have zero border width in status {status:?}"
+            );
+            assert_eq!(
+                style.border.color,
+                Color::TRANSPARENT,
+                "Text button variant must have transparent border color in status {status:?}"
+            );
+        }
+    }
 }

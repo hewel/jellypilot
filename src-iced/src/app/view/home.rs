@@ -2,7 +2,7 @@ use crate::app::message::{HomeMessage, Message, PlaybackMessage};
 use crate::app::state::{has_resume_position, ArtworkCell, ArtworkCellState, HomeSection, State};
 use iced::widget::scrollable::{Direction, Scrollbar};
 use iced::widget::text::Wrapping;
-use iced::widget::{button, column, container, image, row, scrollable, space, text, Column, Row};
+use iced::widget::{button, column, container, row, scrollable, space, text, Column, Row};
 use iced::{Alignment, ContentFit, Element, Fill, Length};
 use jellypilot_core::cards::{hero_headline, hero_metadata, item_caption};
 use jellypilot_core::LoadState;
@@ -15,6 +15,7 @@ use jellypilot_ui::icons::{
 };
 use jellypilot_ui::tokens::TOKENS;
 use jellypilot_ui::variants::{ButtonVariant, SurfaceVariant};
+use jellypilot_ui::{card_top_radius, full_radius, rounded_image};
 const THUMB_FRAME_WIDTH: f32 = 240.0;
 const THUMB_FRAME_HEIGHT: f32 = 135.0;
 const POSTER_FRAME_WIDTH: f32 = 160.0;
@@ -68,7 +69,7 @@ fn home_is_loading(state: &State) -> bool {
 }
 
 fn featured_hero<'a>(state: &'a State, item: &'a VideoLibraryItem) -> Element<'a, Message> {
-  let artwork = artwork(
+  let artwork = hero_artwork(
     state,
     state.home_artwork.hero(&item.id),
     &item.name,
@@ -208,15 +209,15 @@ fn video_card<'a>(
   item: &'a VideoLibraryItem,
 ) -> Element<'a, Message> {
   let (frame_width, frame_height) = section_frame_size(section);
-  let poster = artwork(
+  let poster = card_artwork(
     state,
     state.home_artwork.card(section, &item.id),
     &item.name,
     frame_width,
     frame_height,
   );
-  let mut content = column![
-    poster,
+
+  let text_stack = column![
     text(&item.name)
       .size(14)
       .color(TOKENS.colors.onSurface)
@@ -226,17 +227,12 @@ fn video_card<'a>(
       .color(TOKENS.colors.onSurfaceVariant)
       .wrapping(Wrapping::None),
   ]
-  .spacing(TOKENS.spacing.s2)
-  .width(frame_width);
+  .spacing(TOKENS.spacing.s1)
+  .width(Fill);
 
   if matches!(section, HomeSection::ContinueWatching | HomeSection::NextUp) {
-    let progress_element: Element<'a, Message> =
-      if let Some(progress) = card_progress(section, item) {
-        progress_bar(progress)
-      } else {
-        container(space::horizontal()).height(4).into()
-      };
-    content = content.push(container(progress_element).height(4).width(frame_width));
+    let progress_element: Option<Element<'a, Message>> =
+      card_progress(section, item).map(progress_bar);
 
     let play_label = if has_resume_position(item) {
       "Resume"
@@ -274,17 +270,44 @@ fn video_card<'a>(
     .style(|theme, status| {
       jellypilot_ui::theme::button_variant(theme, status, ButtonVariant::Text)
     });
-    return container(
-      column![content, row![play, details].spacing(TOKENS.spacing.s1)].spacing(TOKENS.spacing.s2),
+
+    let copy = container(
+      column![text_stack, row![play, details].spacing(TOKENS.spacing.s2),]
+        .spacing(TOKENS.spacing.s3)
+        .width(Fill),
     )
-    .width(frame_width)
-    .clip(true)
-    .style(|theme| jellypilot_ui::theme::surface_variant(theme, SurfaceVariant::Filled))
-    .into();
+    .padding(iced::Padding {
+      top: TOKENS.spacing.s3,
+      right: TOKENS.spacing.s4,
+      bottom: TOKENS.spacing.s4,
+      left: TOKENS.spacing.s4,
+    })
+    .width(Fill);
+
+    let mut card_column = Column::new().width(Fill).push(poster);
+    if let Some(prog) = progress_element {
+      card_column = card_column.push(container(prog).height(4).width(frame_width));
+    }
+    card_column = card_column.push(copy);
+
+    return container(card_column)
+      .width(frame_width)
+      .clip(true)
+      .style(|theme| jellypilot_ui::theme::surface_variant(theme, SurfaceVariant::Filled))
+      .into();
   }
 
+  let copy = container(text_stack)
+    .padding(iced::Padding {
+      top: TOKENS.spacing.s3,
+      right: TOKENS.spacing.s4,
+      bottom: TOKENS.spacing.s4,
+      left: TOKENS.spacing.s4,
+    })
+    .width(Fill);
+
   button(
-    container(content)
+    container(column![poster, copy].width(Fill))
       .width(frame_width)
       .clip(true)
       .style(|theme| jellypilot_ui::theme::surface_variant(theme, SurfaceVariant::Filled)),
@@ -309,7 +332,7 @@ fn play_message(state: &State, item: &VideoLibraryItem) -> Message {
   }))
 }
 
-fn artwork<'a>(
+fn hero_artwork<'a>(
   state: &'a State,
   cell: Option<&ArtworkCell>,
   name: &'a str,
@@ -319,16 +342,71 @@ fn artwork<'a>(
   if let Some(cell) = cell {
     if cell.state == ArtworkCellState::Ready {
       if let Some(handle) = state.artwork_handles.get(cell.slot, &cell.image_id) {
-        return container(
-          image(handle.clone())
-            .content_fit(ContentFit::Cover)
-            .width(Fill)
-            .height(Fill),
-        )
-        .width(width)
-        .height(height)
-        .style(|theme| jellypilot_ui::theme::surface_variant(theme, SurfaceVariant::Elevated))
-        .into();
+        return rounded_image(handle.clone(), full_radius(TOKENS.radii.x2l))
+          .content_fit(ContentFit::Cover)
+          .width(width)
+          .height(height)
+          .into();
+      }
+    }
+  }
+
+  let failed = cell.is_some_and(|cell| cell.state == ArtworkCellState::Failed);
+  let placeholder_color = if failed {
+    TOKENS.colors.warning
+  } else {
+    TOKENS.colors.onSurfaceVariant
+  };
+  let initial = name
+    .trim()
+    .chars()
+    .next()
+    .map(|character| character.to_uppercase().collect::<String>())
+    .unwrap_or_else(|| "•".to_owned());
+  container(
+    column![
+      icon_with_color(Icon::Movie, 42.0, placeholder_color),
+      text(initial)
+        .font(SPACE_GROTESK_FONT)
+        .size(32)
+        .color(placeholder_color),
+    ]
+    .spacing(TOKENS.spacing.s1)
+    .align_x(Alignment::Center),
+  )
+  .width(width)
+  .height(height)
+  .center_x(Fill)
+  .center_y(Fill)
+  .style(|_theme| container::Style {
+    background: Some(iced::Background::Color(
+      TOKENS.colors.surfaceContainerLowest,
+    )),
+    border: iced::Border {
+      radius: full_radius(TOKENS.radii.x2l),
+      width: 0.0,
+      color: iced::Color::TRANSPARENT,
+    },
+    ..container::Style::default()
+  })
+  .into()
+}
+
+fn card_artwork<'a>(
+  state: &'a State,
+  cell: Option<&ArtworkCell>,
+  name: &'a str,
+  width: f32,
+  height: f32,
+) -> Element<'a, Message> {
+  if let Some(cell) = cell {
+    if cell.state == ArtworkCellState::Ready {
+      if let Some(handle) = state.artwork_handles.get(cell.slot, &cell.image_id) {
+        return rounded_image(handle.clone(), card_top_radius(TOKENS.radii.x2l))
+          .content_fit(ContentFit::Cover)
+          .width(width)
+          .height(height)
+          .into();
       }
     }
   }
@@ -365,7 +443,17 @@ fn artwork<'a>(
   .height(height)
   .center_x(Fill)
   .center_y(Fill)
-  .style(|theme| jellypilot_ui::theme::surface_variant(theme, SurfaceVariant::Elevated))
+  .style(|_theme| container::Style {
+    background: Some(iced::Background::Color(
+      TOKENS.colors.surfaceContainerLowest,
+    )),
+    border: iced::Border {
+      radius: card_top_radius(TOKENS.radii.x2l),
+      width: 0.0,
+      color: iced::Color::TRANSPARENT,
+    },
+    ..container::Style::default()
+  })
   .into()
 }
 fn card_progress(section: HomeSection, item: &VideoLibraryItem) -> Option<f64> {
