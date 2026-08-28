@@ -3,6 +3,7 @@ mod detail;
 mod home;
 mod login;
 mod player;
+mod settings;
 mod shell;
 
 use iced::Element;

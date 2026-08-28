@@ -10,8 +10,9 @@ use jellypilot_auth::login::ConnectionPhase;
 use jellypilot_auth::{AuthStore, SavedProfileKey, SavedProfileSummary, SensitiveSavedSession};
 use jellypilot_core::artwork_binder::{ArtworkBinder, ArtworkSlot};
 use jellypilot_core::browse_model::{BrowseModel, LibraryBrowseView};
-use jellypilot_core::config::{IntroMode, LoginPrefill, Settings, SettingsStore};
+use jellypilot_core::config::{IntroMode, LoginPrefill, Settings, SettingsStore, ShortcutKind};
 use jellypilot_core::detail::DetailContent;
+use jellypilot_core::diagnostics::{DiagnosticCategory, DiagnosticLevel, Diagnostics};
 use jellypilot_core::request_gate::{RemoteToken, RequestGate};
 use jellypilot_core::{LibraryBrowseLoadToken, LoadState};
 use jellypilot_media_server::artwork::{ArtworkAdapter, RawArtworkDecoder};
@@ -151,6 +152,7 @@ pub enum Destination {
   Search(String),
   Detail(String),
   NowPlaying,
+  Settings,
 }
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
@@ -517,9 +519,58 @@ pub fn intro_skip_mode(mode: IntroMode) -> IntroSkipMode {
   }
 }
 
+pub struct SettingsState {
+  pub mpv_path_input: String,
+  pub mpv_args_input: String,
+  pub playback_target_name_input: String,
+  pub intro_menu_open: bool,
+  pub subtitle_menu_open: bool,
+  pub diagnostic_level_menu_open: bool,
+  pub diagnostic_category_menu_open: bool,
+  pub diagnostic_level: Option<DiagnosticLevel>,
+  pub diagnostic_category: Option<DiagnosticCategory>,
+  pub shortcut_capture: Option<ShortcutKind>,
+  pub error: Option<&'static str>,
+  pub saved: Option<&'static str>,
+}
+
+impl SettingsState {
+  pub fn from_settings(settings: &Settings) -> Self {
+    Self {
+      mpv_path_input: settings.mpv_path().unwrap_or_default().to_owned(),
+      mpv_args_input: settings.mpv_args().join(" "),
+      playback_target_name_input: settings
+        .playback_target_name()
+        .unwrap_or_default()
+        .to_owned(),
+      intro_menu_open: false,
+      subtitle_menu_open: false,
+      diagnostic_level_menu_open: false,
+      diagnostic_category_menu_open: false,
+      diagnostic_level: None,
+      diagnostic_category: None,
+      shortcut_capture: None,
+      error: None,
+      saved: None,
+    }
+  }
+}
+
+pub fn diagnostic_matches(
+  level_filter: Option<DiagnosticLevel>,
+  category_filter: Option<DiagnosticCategory>,
+  level: DiagnosticLevel,
+  category: DiagnosticCategory,
+) -> bool {
+  level_filter.is_none_or(|filter| filter == level)
+    && category_filter.is_none_or(|filter| filter == category)
+}
+
 pub struct State {
   pub smoke: bool,
   pub settings: SettingsStore,
+  pub settings_view: SettingsState,
+  pub diagnostics: Diagnostics,
   pub auth_store: AuthStore,
   pub request_gate: RequestGate,
   pub client: Option<Arc<JellyfinClient>>,
@@ -575,15 +626,24 @@ impl State {
       ),
     };
     let mut login = LoginState::from_settings(settings.snapshot());
-    login.error = settings_error;
+    login.error = settings_error.clone();
+    let settings_view = SettingsState::from_settings(settings.snapshot());
+    let mut diagnostics = Diagnostics::default();
+    if let Some(error) = &settings_error {
+      diagnostics.record(DiagnosticLevel::Error, DiagnosticCategory::Config, error);
+    }
     let mut request_gate = RequestGate::default();
     let playback_remote = request_gate.begin_remote();
     let playback_session = PlaybackSession::default();
     let playback_view = playback_session.view();
+    let artwork_adapter = Arc::new(ArtworkAdapter::new());
+    artwork_adapter.set_disk_cache_enabled(settings.snapshot().image_cache_enabled());
 
     Self {
       smoke,
       settings,
+      settings_view,
+      diagnostics,
       auth_store: AuthStore::default(),
       request_gate,
       client: None,
@@ -602,7 +662,7 @@ impl State {
       detail: DetailState::default(),
       detail_artwork: DetailArtwork::default(),
       home: HomeState::default(),
-      artwork_adapter: Arc::new(ArtworkAdapter::new()),
+      artwork_adapter,
       artwork_binder: ArtworkBinder::default(),
       home_artwork: HomeArtwork::default(),
       artwork_handles: ArtworkHandleRetention::default(),
@@ -822,6 +882,27 @@ mod tests {
 
     assert!(HomeSection::ALL.iter().all(
       |section| matches!(home.section(*section), LoadState::Ready(items) if items.is_empty())
+    ));
+  }
+  #[test]
+  fn diagnostic_filters_match_level_and_category_independently() {
+    assert!(diagnostic_matches(
+      Some(DiagnosticLevel::Warning),
+      Some(DiagnosticCategory::Playback),
+      DiagnosticLevel::Warning,
+      DiagnosticCategory::Playback,
+    ));
+    assert!(!diagnostic_matches(
+      Some(DiagnosticLevel::Error),
+      None,
+      DiagnosticLevel::Warning,
+      DiagnosticCategory::Playback,
+    ));
+    assert!(!diagnostic_matches(
+      None,
+      Some(DiagnosticCategory::Auth),
+      DiagnosticLevel::Error,
+      DiagnosticCategory::Config,
     ));
   }
 }

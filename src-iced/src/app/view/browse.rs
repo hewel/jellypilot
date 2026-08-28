@@ -30,14 +30,18 @@ pub fn view(state: &State) -> Element<'_, Message> {
       | jellypilot_core::LoadState::Failed(_) => "Library",
     },
     Destination::Search(query) => query,
-    Destination::Home | Destination::Detail(_) | Destination::NowPlaying => "Library",
+    Destination::Home
+    | Destination::Detail(_)
+    | Destination::NowPlaying
+    | Destination::Settings => "Library",
   };
   let heading = match &state.destination {
     Destination::Search(_) => format!("Search results for “{title}”"),
     Destination::Home
     | Destination::Library { .. }
     | Destination::Detail(_)
-    | Destination::NowPlaying => title.to_owned(),
+    | Destination::NowPlaying
+    | Destination::Settings => title.to_owned(),
   };
   let mut header = Column::new().spacing(TOKENS.spacing.s3).push(
     text(heading)
@@ -178,7 +182,8 @@ fn browse_body(state: &State) -> Element<'_, Message> {
       Destination::Home
       | Destination::Library { .. }
       | Destination::Detail(_)
-      | Destination::NowPlaying => empty_surface("This library has no matching items.".to_owned()),
+      | Destination::NowPlaying
+      | Destination::Settings => empty_surface("This library has no matching items.".to_owned()),
     },
     LibraryBrowseView::Failed {
       message,

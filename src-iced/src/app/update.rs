@@ -1,4 +1,5 @@
-use std::collections::HashSet;
+use std::collections::{hash_map::DefaultHasher, HashSet};
+use std::hash::{Hash, Hasher};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
@@ -16,11 +17,14 @@ use jellypilot_core::browse_model::{
   BrowseEffect, BrowsePageRequest, BrowsePageSettlement, BrowsePreferences, BrowseSource,
   LibraryBrowseView,
 };
-use jellypilot_core::config::{BrowseFilterSettings, LoginPrefill, Settings};
+use jellypilot_core::config::{
+  BrowseFilterSettings, LoginPrefill, Settings, SettingsMutationError,
+};
 use jellypilot_core::detail::{
   apply_user_data_update, load_detail_content, load_season_neighbors, season_page_request,
   DetailContent,
 };
+use jellypilot_core::diagnostics::{DiagnosticCategory, DiagnosticLevel};
 use jellypilot_core::request_gate::{
   DetailAuxKind, DetailToken, HomeToken, RemotePlayToken, RequestGate,
 };
@@ -41,9 +45,8 @@ use jellypilot_mpv::playback_session::{
   PlaybackInput, PlaybackIntent, PlaybackNotice, SessionView, TracksView,
 };
 use jellypilot_session::{
-  finalize_remote_target, remote_index_value, remote_state_after_event, remote_volume_value,
-  GeneralCommand, JellyfinCommand, JellyfinWebSocket, JellyfinWebSocketEvent, PlayRequest,
-  PlaystateRequest, RemoteControlState,
+  finalize_remote_target, remote_index_value, remote_volume_value, GeneralCommand, JellyfinCommand,
+  JellyfinWebSocket, JellyfinWebSocketEvent, PlayRequest, PlaystateRequest, RemoteControlState,
 };
 use url::Url;
 use zeroize::{Zeroize, Zeroizing};
@@ -53,7 +56,7 @@ use crate::tray::{self, TrayAction};
 use super::message::{
   BrowseMessage, DetailMessage, HomeMessage, LoginMessage, Message, PasswordSubmission,
   PlaybackMessage, ProtectedSavedSession, RemoteMessage, RemoteSessionStart, RemoteStartError,
-  SensitiveSessionPayload, WindowMessage,
+  SensitiveSessionPayload, SettingsMessage, WindowMessage,
 };
 use super::state::{
   ArtworkCell, ArtworkCellState, BrowseArtwork, BrowseViewport, ConnectedIdentity, Destination,
@@ -61,14 +64,36 @@ use super::state::{
   RemoteEventChannel, RemoteSessionHandle, State, UserDataActionKind,
 };
 
+const SETTINGS_SAVE_ERROR: &str = "Could not save settings.";
+const INVALID_LOGIN_PREFILL_ERROR: &str = "Server and username are required.";
+const INVALID_PROVIDER_ERROR: &str = "The selected provider is invalid.";
+const INVALID_SUBTITLE_LANGUAGE_ERROR: &str = "Choose a valid subtitle language.";
+const DUPLICATE_SUBTITLE_LANGUAGE_ERROR: &str = "That subtitle language is already in the list.";
+const EMPTY_SHORTCUT_ERROR: &str = "Press a non-modifier key for this shortcut.";
+const SHORTCUT_COLLISION_ERROR: &str = "That shortcut is already assigned.";
+const PLAYBACK_CONFIG_APPLY_ERROR: &str = "Settings were saved, but MPV could not be reconfigured.";
+
 pub fn update(state: &mut State, message: Message) -> Task<Message> {
   match message {
     Message::Window(message) => update_window(state, message),
     Message::Login(message) => {
       let was_connected = state.connection == ConnectionPhase::Connected;
+      let previous_error = state.login.error.clone();
       let login_task = update_login(state, message).map(Message::Login);
       let is_connected = state.connection == ConnectionPhase::Connected;
+      if state.login.error != previous_error {
+        if let Some(error) = &state.login.error {
+          state
+            .diagnostics
+            .record(DiagnosticLevel::Error, DiagnosticCategory::Auth, error);
+        }
+      }
       if !was_connected && is_connected {
+        state.diagnostics.record(
+          DiagnosticLevel::Info,
+          DiagnosticCategory::Connection,
+          "Connected to media server.",
+        );
         state.destination = Destination::Home;
         initialize_playback(state);
         Task::batch([
@@ -77,6 +102,11 @@ pub fn update(state: &mut State, message: Message) -> Task<Message> {
           start_remote_session(state),
         ])
       } else if was_connected && !is_connected {
+        state.diagnostics.record(
+          DiagnosticLevel::Info,
+          DiagnosticCategory::Connection,
+          "Disconnected from media server.",
+        );
         Task::batch([login_task, reset_connected_surface(state)])
       } else {
         login_task
@@ -86,9 +116,89 @@ pub fn update(state: &mut State, message: Message) -> Task<Message> {
     Message::Browse(message) => update_browse(state, message),
     Message::OpenDetail(item) => open_detail(state, item),
     Message::Detail(message) => update_detail(state, message),
-    Message::Playback(message) => update_playback(state, message),
-    Message::Remote(message) => update_remote(state, message),
+    Message::Settings(message) => update_settings(state, message),
+    Message::Playback(message) => {
+      let previous_notice = state.playback_notice.clone();
+      let task = update_playback(state, message);
+      record_playback_notice(state, previous_notice.as_deref());
+      task
+    }
+    Message::Remote(message) => {
+      let previous_state = state.remote_control_state;
+      let previous_notice = state.notice.clone();
+      let task = update_remote(state, message);
+      record_remote_change(state, previous_state, previous_notice.as_deref());
+      task
+    }
     Message::TrayPoll => update_tray(state),
+  }
+}
+
+fn record_playback_notice(state: &mut State, previous: Option<&str>) {
+  let Some(notice) = state.playback_notice.as_deref() else {
+    if previous.is_some() {
+      state.diagnostics.reset_coalescing();
+    }
+    return;
+  };
+  if Some(notice) == previous {
+    return;
+  }
+  let level = if notice.contains("failed")
+    || notice.contains("Failed")
+    || notice.contains("unavailable")
+    || notice.contains("Unavailable")
+  {
+    DiagnosticLevel::Error
+  } else {
+    DiagnosticLevel::Warning
+  };
+  let key = diagnostic_coalescing_key("playback", notice);
+  state
+    .diagnostics
+    .record_coalesced(&key, level, DiagnosticCategory::Playback, notice);
+}
+
+fn diagnostic_coalescing_key(prefix: &str, message: &str) -> String {
+  let mut hasher = DefaultHasher::new();
+  message.hash(&mut hasher);
+  format!("{prefix}-{:x}", hasher.finish())
+}
+
+fn record_remote_change(
+  state: &mut State,
+  previous_state: RemoteControlState,
+  previous_notice: Option<&str>,
+) {
+  if state.remote_control_state != previous_state {
+    let (level, message) = match state.remote_control_state {
+      RemoteControlState::Connecting => {
+        (DiagnosticLevel::Info, "Remote playback target connecting.")
+      }
+      RemoteControlState::Available => (DiagnosticLevel::Info, "Remote playback target available."),
+      RemoteControlState::Lost => (
+        DiagnosticLevel::Warning,
+        "Remote playback target connection lost.",
+      ),
+      RemoteControlState::Unavailable => (
+        DiagnosticLevel::Warning,
+        "Remote playback target unavailable.",
+      ),
+    };
+    state
+      .diagnostics
+      .record(level, DiagnosticCategory::RemoteControl, message);
+  }
+  if let Some(notice) = state
+    .notice
+    .as_deref()
+    .filter(|notice| Some(*notice) != previous_notice)
+  {
+    state.diagnostics.record(
+      DiagnosticLevel::Warning,
+      DiagnosticCategory::RemoteControl,
+      notice,
+    );
   }
 }
 
@@ -113,6 +223,304 @@ fn update_window(state: &mut State, message: WindowMessage) -> Task<Message> {
     }
   }
 }
+fn update_settings(state: &mut State, message: SettingsMessage) -> Task<Message> {
+  match message {
+    SettingsMessage::MpvPathChanged(value) => {
+      state.settings_view.mpv_path_input = value;
+      clear_settings_feedback(state);
+      Task::none()
+    }
+    SettingsMessage::SaveMpvPath => {
+      let value = state.settings_view.mpv_path_input.clone();
+      let result = state.settings.set_mpv_path(value);
+      if finish_settings_mutation(state, result) {
+        apply_playback_configuration(state)
+      } else {
+        Task::none()
+      }
+    }
+    SettingsMessage::MpvArgsChanged(value) => {
+      state.settings_view.mpv_args_input = value;
+      clear_settings_feedback(state);
+      Task::none()
+    }
+    SettingsMessage::SaveMpvArgs => {
+      let value = state.settings_view.mpv_args_input.clone();
+      let result = state.settings.set_mpv_args(&value);
+      if finish_settings_mutation(state, result) {
+        state.settings_view.mpv_args_input = state.settings.snapshot().mpv_args().join(" ");
+        apply_playback_configuration(state)
+      } else {
+        Task::none()
+      }
+    }
+    SettingsMessage::PlaybackTargetNameChanged(value) => {
+      state.settings_view.playback_target_name_input = value;
+      clear_settings_feedback(state);
+      Task::none()
+    }
+    SettingsMessage::SavePlaybackTargetName => {
+      let value = state.settings_view.playback_target_name_input.clone();
+      let result = state.settings.set_playback_target_name(value);
+      if finish_settings_mutation(state, result) {
+        refinalize_playback_target(state)
+      } else {
+        Task::none()
+      }
+    }
+    SettingsMessage::IntroMenuToggled => {
+      state.settings_view.intro_menu_open = !state.settings_view.intro_menu_open;
+      Task::none()
+    }
+    SettingsMessage::IntroMenuDismissed => {
+      state.settings_view.intro_menu_open = false;
+      Task::none()
+    }
+    SettingsMessage::IntroModeSelected(mode) => {
+      state.settings_view.intro_menu_open = false;
+      let result = state.settings.set_intro_mode(mode);
+      if finish_settings_mutation(state, result) {
+        let mode = state.intro_availability().mode;
+        apply_playback_input(
+          state,
+          PlaybackInput::Intent(PlaybackIntent::SetIntroMode(mode)),
+        )
+      } else {
+        Task::none()
+      }
+    }
+    SettingsMessage::SubtitleMenuToggled => {
+      state.settings_view.subtitle_menu_open = !state.settings_view.subtitle_menu_open;
+      Task::none()
+    }
+    SettingsMessage::SubtitleMenuDismissed => {
+      state.settings_view.subtitle_menu_open = false;
+      Task::none()
+    }
+    SettingsMessage::SubtitleLanguageAdded(language) => {
+      state.settings_view.subtitle_menu_open = false;
+      let result = state.settings.add_subtitle_language(language);
+      if finish_settings_mutation(state, result) {
+        apply_playback_configuration(state)
+      } else {
+        Task::none()
+      }
+    }
+    SettingsMessage::SubtitleLanguageMoved { index, offset } => {
+      let result = state.settings.move_subtitle_language(index, offset);
+      if finish_settings_mutation(state, result) {
+        apply_playback_configuration(state)
+      } else {
+        Task::none()
+      }
+    }
+    SettingsMessage::SubtitleLanguageRemoved(index) => {
+      let result = state.settings.remove_subtitle_language(index);
+      if finish_settings_mutation(state, result) {
+        apply_playback_configuration(state)
+      } else {
+        Task::none()
+      }
+    }
+    SettingsMessage::BeginShortcutCapture(kind) => {
+      state.settings_view.shortcut_capture = Some(kind);
+      clear_settings_feedback(state);
+      Task::none()
+    }
+    SettingsMessage::ShortcutCaptured(binding) => {
+      let Some(kind) = state.settings_view.shortcut_capture.take() else {
+        return Task::none();
+      };
+      let result = state.settings.set_shortcut(kind, binding);
+      finish_settings_mutation(state, result);
+      Task::none()
+    }
+    SettingsMessage::CancelShortcutCapture => {
+      state.settings_view.shortcut_capture = None;
+      Task::none()
+    }
+    SettingsMessage::ImageCacheToggled => {
+      let enabled = !state.settings.snapshot().image_cache_enabled();
+      let result = state.settings.set_image_cache_enabled(enabled);
+      if finish_settings_mutation(state, result) {
+        state.artwork_adapter.set_disk_cache_enabled(enabled);
+      }
+      Task::none()
+    }
+    SettingsMessage::StartMinimizedToggled => {
+      let enabled = !state.settings.snapshot().start_minimized();
+      let result = state.settings.set_start_minimized(enabled);
+      finish_settings_mutation(state, result);
+      Task::none()
+    }
+    SettingsMessage::DiagnosticLevelMenuToggled => {
+      state.settings_view.diagnostic_level_menu_open =
+        !state.settings_view.diagnostic_level_menu_open;
+      Task::none()
+    }
+    SettingsMessage::DiagnosticLevelMenuDismissed => {
+      state.settings_view.diagnostic_level_menu_open = false;
+      Task::none()
+    }
+    SettingsMessage::DiagnosticLevelSelected(level) => {
+      state.settings_view.diagnostic_level = level;
+      state.settings_view.diagnostic_level_menu_open = false;
+      Task::none()
+    }
+    SettingsMessage::DiagnosticCategoryMenuToggled => {
+      state.settings_view.diagnostic_category_menu_open =
+        !state.settings_view.diagnostic_category_menu_open;
+      Task::none()
+    }
+    SettingsMessage::DiagnosticCategoryMenuDismissed => {
+      state.settings_view.diagnostic_category_menu_open = false;
+      Task::none()
+    }
+    SettingsMessage::DiagnosticCategorySelected(category) => {
+      state.settings_view.diagnostic_category = category;
+      state.settings_view.diagnostic_category_menu_open = false;
+      Task::none()
+    }
+    SettingsMessage::Disconnect => stop_remote_session_for_login(state).map(Message::Login),
+    SettingsMessage::SignOut => {
+      if let Some(key) = state.active_profile.clone() {
+        start_forget(state, key)
+          .map(|task| task.map(Message::Login))
+          .unwrap_or_else(Task::none)
+      } else {
+        stop_remote_session_for_login(state).map(Message::Login)
+      }
+    }
+    SettingsMessage::PlaybackConfigApplied(result) => {
+      if result.is_err() {
+        state.settings_view.error = Some(PLAYBACK_CONFIG_APPLY_ERROR);
+        state.diagnostics.record(
+          DiagnosticLevel::Error,
+          DiagnosticCategory::Config,
+          PLAYBACK_CONFIG_APPLY_ERROR,
+        );
+      }
+      Task::none()
+    }
+  }
+}
+
+fn clear_settings_feedback(state: &mut State) {
+  state.settings_view.error = None;
+  state.settings_view.saved = None;
+}
+
+fn finish_settings_mutation(
+  state: &mut State,
+  result: Result<bool, SettingsMutationError>,
+) -> bool {
+  match result {
+    Ok(changed) => {
+      state.settings_view.error = None;
+      state.settings_view.saved = Some("Saved");
+      if changed {
+        state.diagnostics.record(
+          DiagnosticLevel::Info,
+          DiagnosticCategory::Config,
+          "Settings updated.",
+        );
+      }
+      changed
+    }
+    Err(error) => {
+      state.settings_view.saved = None;
+      state.settings_view.error = Some(settings_mutation_error(&error));
+      state.diagnostics.record(
+        DiagnosticLevel::Error,
+        DiagnosticCategory::Config,
+        error.to_string(),
+      );
+      false
+    }
+  }
+}
+
+fn settings_mutation_error(error: &SettingsMutationError) -> &'static str {
+  match error {
+    SettingsMutationError::Config(_) => SETTINGS_SAVE_ERROR,
+    SettingsMutationError::InvalidLoginPrefill => INVALID_LOGIN_PREFILL_ERROR,
+    SettingsMutationError::InvalidProvider => INVALID_PROVIDER_ERROR,
+    SettingsMutationError::InvalidSubtitleLanguage => INVALID_SUBTITLE_LANGUAGE_ERROR,
+    SettingsMutationError::DuplicateSubtitleLanguage => DUPLICATE_SUBTITLE_LANGUAGE_ERROR,
+    SettingsMutationError::EmptyShortcut => EMPTY_SHORTCUT_ERROR,
+    SettingsMutationError::ShortcutCollision => SHORTCUT_COLLISION_ERROR,
+  }
+}
+
+fn apply_playback_configuration(state: &mut State) -> Task<Message> {
+  let config = playback_controller_config(state.settings.snapshot());
+  if let Some(controller) = state.playback_controller.as_ref().map(Arc::clone) {
+    return Task::perform(
+      async move { controller.lock().await.configure_for_next_start(config) },
+      |result| Message::Settings(SettingsMessage::PlaybackConfigApplied(result)),
+    );
+  }
+  let Some(client) = state.client.as_ref().map(Arc::clone) else {
+    return Task::none();
+  };
+  match PlaybackController::discover(client, config) {
+    Ok(controller) => {
+      state.playback_controller = Some(Arc::new(tokio::sync::Mutex::new(controller)));
+      let _ = state.playback_session.handle(
+        PlaybackInput::Event(PlaybackEvent::EngineAvailability(true)),
+        Instant::now(),
+      );
+      sync_playback_projection(state);
+      state.playback_notice = None;
+      Task::none()
+    }
+    Err(error) => {
+      let _ = state.playback_session.handle(
+        PlaybackInput::Event(PlaybackEvent::EngineAvailability(false)),
+        Instant::now(),
+      );
+      sync_playback_projection(state);
+      state.playback_notice =
+        Some("External playback is unavailable because MPV could not be found.".into());
+      Task::done(Message::Settings(SettingsMessage::PlaybackConfigApplied(
+        Err(error),
+      )))
+    }
+  }
+}
+
+fn refinalize_playback_target(state: &mut State) -> Task<Message> {
+  let Some(client) = state.client.as_ref().map(Arc::clone) else {
+    return Task::none();
+  };
+  let name = state
+    .settings
+    .snapshot()
+    .playback_target_name()
+    .unwrap_or("JellyPilot")
+    .to_owned();
+  client.set_device_name(name);
+  if !should_refinalize_playback_target(state) {
+    return Task::none();
+  }
+  state.diagnostics.record(
+    DiagnosticLevel::Info,
+    DiagnosticCategory::RemoteControl,
+    "Playback target name changed; remote registration requested.",
+  );
+  let remote = state.playback_remote;
+  Task::perform(
+    async move { finalize_remote_target(&client).await },
+    move |result| Message::Remote(RemoteMessage::Finalized { remote, result }),
+  )
+}
+
+fn should_refinalize_playback_target(state: &State) -> bool {
+  state.connection == ConnectionPhase::Connected
+    && state.remote_session.is_some()
+    && state.remote_control_state == RemoteControlState::Available
+}
+
 fn start_remote_session(state: &mut State) -> Task<Message> {
   let Some(client) = state.client.as_ref().map(Arc::clone) else {
     return Task::none();
@@ -227,7 +635,6 @@ fn update_remote(state: &mut State, message: RemoteMessage) -> Task<Message> {
       if !state.request_gate.is_current_remote(remote) {
         return Task::none();
       }
-      state.remote_control_state = remote_state_after_event(state.remote_control_state, &event);
       match event {
         JellyfinWebSocketEvent::Command(command)
           if state.remote_control_state == RemoteControlState::Available =>
@@ -239,12 +646,14 @@ fn update_remote(state: &mut State, message: RemoteMessage) -> Task<Message> {
           let Some(client) = state.client.as_ref().map(Arc::clone) else {
             return Task::none();
           };
+          state.remote_control_state = RemoteControlState::Connecting;
           Task::perform(
             async move { finalize_remote_target(&client).await },
             move |result| Message::Remote(RemoteMessage::Finalized { remote, result }),
           )
         }
         JellyfinWebSocketEvent::ConnectionLost => {
+          state.remote_control_state = RemoteControlState::Lost;
           state.notice = Some(REMOTE_CONNECTION_LOST_NOTICE.to_owned());
           Task::none()
         }
@@ -264,6 +673,7 @@ fn update_remote(state: &mut State, message: RemoteMessage) -> Task<Message> {
           Task::none()
         }
         Ok(false) => {
+          state.remote_control_state = RemoteControlState::Available;
           state.notice = Some(
             "Remote playback target reconnected, but server session validation is still pending."
               .to_owned(),
@@ -1377,6 +1787,9 @@ fn navigate_back(state: &mut State) -> Task<Message> {
 }
 
 fn activate_destination(state: &mut State, previous: Destination) -> Task<Message> {
+  if previous == Destination::Settings && state.destination != Destination::Settings {
+    state.settings_view.shortcut_capture = None;
+  }
   if previous == Destination::Home && state.destination != Destination::Home {
     leave_home_view(state);
   } else if matches!(
@@ -1399,7 +1812,7 @@ fn activate_destination(state: &mut State, previous: Destination) -> Task<Messag
     }
     Destination::Search(_) => start_browse(state),
     Destination::Detail(_) => start_detail_load(state),
-    Destination::NowPlaying => Task::none(),
+    Destination::NowPlaying | Destination::Settings => Task::none(),
   }
 }
 
@@ -2095,7 +2508,10 @@ fn browse_source(state: &State) -> Option<BrowseSource> {
       session,
       query: query.clone(),
     }),
-    Destination::Home | Destination::Detail(_) | Destination::NowPlaying => None,
+    Destination::Home
+    | Destination::Detail(_)
+    | Destination::NowPlaying
+    | Destination::Settings => None,
   }
 }
 
@@ -2944,10 +3360,13 @@ mod tests {
     let playback_remote = request_gate.begin_remote();
     let playback_session = jellypilot_mpv::playback_session::PlaybackSession::default();
     let playback_view = playback_session.view();
+    let settings_view = crate::app::state::SettingsState::from_settings(settings.snapshot());
     State {
       smoke: false,
       login: LoginState::from_settings(settings.snapshot()),
       settings,
+      settings_view,
+      diagnostics: jellypilot_core::diagnostics::Diagnostics::default(),
       auth_store: AuthStore::default(),
       request_gate,
       client: None,
@@ -3833,6 +4252,89 @@ mod tests {
     (*id, command.clone())
   }
 
+  fn active_intro_prompt_state() -> State {
+    let mut state = test_state();
+    let now = Instant::now();
+    state.playback_session.handle(
+      PlaybackInput::Event(PlaybackEvent::EngineAvailability(true)),
+      now,
+    );
+    let effects = state.playback_session.handle(
+      PlaybackInput::Intent(PlaybackIntent::Start {
+        item: Playable::Library(episode("episode-1", 1)),
+        position: jellypilot_mpv::playback::PlaybackStartPosition::Beginning,
+        intro: jellypilot_mpv::playback_session::IntroAvailability {
+          mode: jellypilot_session::IntroSkipMode::Manual,
+          skipper_available: true,
+        },
+        selection: Box::default(),
+      }),
+      now,
+    );
+    let (start_id, _) = controller_effect(effects);
+    let auxiliary = state.playback_session.handle(
+      PlaybackInput::Event(PlaybackEvent::ControllerSettled {
+        id: start_id,
+        settlement: ControllerSettlement::Started(Ok(jellypilot_mpv::playback::PlaybackOutcome {
+          snapshot: playback_snapshot(0.0),
+          warnings: Vec::new(),
+        })),
+      }),
+      now,
+    );
+    let intro_id = auxiliary
+      .iter()
+      .find_map(|effect| match effect {
+        PlaybackEffect::FetchIntroRanges(id, _) => Some(*id),
+        PlaybackEffect::Controller(_, _) | PlaybackEffect::LookupAdjacent(_, _) => None,
+      })
+      .expect("active intro playback should fetch ranges");
+    state.playback_session.handle(
+      PlaybackInput::Event(PlaybackEvent::IntroRangesSettled {
+        id: intro_id,
+        result: Ok(vec![jellypilot_session::IntroSkipRange {
+          kind: jellypilot_session::IntroSkipKind::Introduction,
+          start_seconds: 10.0,
+          end_seconds: 30.0,
+          notified: false,
+          skipped: false,
+        }]),
+      }),
+      now,
+    );
+    let (refresh_id, _) = controller_effect(
+      state
+        .playback_session
+        .handle(PlaybackInput::Intent(PlaybackIntent::Tick), now),
+    );
+    let effects = state.playback_session.handle(
+      PlaybackInput::Event(PlaybackEvent::ControllerSettled {
+        id: refresh_id,
+        settlement: ControllerSettlement::Refreshed {
+          outcome: PlaybackRefreshOutcome {
+            snapshot: playback_snapshot(10.0),
+            state: PlaybackRefreshState::Active,
+            warnings: Vec::new(),
+          },
+          client_messages: Vec::new(),
+        },
+      }),
+      now,
+    );
+    let (prompt_id, command) = controller_effect(effects);
+    assert!(matches!(command, ControllerCommand::ShowText { .. }));
+    state.playback_session.handle(
+      PlaybackInput::Event(PlaybackEvent::ControllerSettled {
+        id: prompt_id,
+        settlement: ControllerSettlement::OsdShown(Ok(())),
+      }),
+      now,
+    );
+    state.playback_view = state.playback_session.view();
+    assert!(state.playback_view.intro_prompt.is_some());
+    state
+  }
+
   #[test]
   fn seek_release_keeps_committed_preview_while_queued_behind_refresh() {
     let mut state = active_playback_state();
@@ -4328,6 +4830,33 @@ mod tests {
   }
 
   #[test]
+  fn reconnect_stays_connecting_until_capability_registration_finishes() {
+    let mut state = test_state();
+    state.client = Some(Arc::new(JellyfinClient::new()));
+    state.remote_control_state = RemoteControlState::Lost;
+    let remote = state.playback_remote;
+
+    let task = update_remote(
+      &mut state,
+      RemoteMessage::Event {
+        remote,
+        event: JellyfinWebSocketEvent::Reconnected,
+      },
+    );
+
+    assert_eq!(task.units(), 1);
+    assert_eq!(state.remote_control_state, RemoteControlState::Connecting);
+    drop(update_remote(
+      &mut state,
+      RemoteMessage::Finalized {
+        remote,
+        result: Ok(false),
+      },
+    ));
+    assert_eq!(state.remote_control_state, RemoteControlState::Available);
+  }
+
+  #[test]
   fn initial_setup_failure_invalidates_a_later_finalization_success() {
     let mut state = test_state();
     state.connection = ConnectionPhase::Connected;
@@ -4379,6 +4908,26 @@ mod tests {
       assert_eq!(availability.mode, expected);
       assert!(!availability.skipper_available);
     }
+  }
+
+  #[test]
+  fn intro_mode_mutation_updates_the_active_playback_session() {
+    let (settings, _file) = isolated_settings("live-intro-mode");
+    let mut state = active_intro_prompt_state();
+    state.settings = settings;
+    state.settings_view =
+      crate::app::state::SettingsState::from_settings(state.settings.snapshot());
+
+    drop(update_settings(
+      &mut state,
+      SettingsMessage::IntroModeSelected(jellypilot_core::config::IntroMode::Off),
+    ));
+
+    assert_eq!(
+      state.settings.snapshot().intro_mode(),
+      jellypilot_core::config::IntroMode::Off
+    );
+    assert!(state.playback_view.intro_prompt.is_none());
   }
 
   #[test]
@@ -4450,5 +4999,164 @@ mod tests {
       state.login.error.as_deref(),
       Some("Finishing external playback shutdown. Try again in a moment.")
     );
+  }
+  #[test]
+  fn target_name_mutation_requests_live_remote_refinalization() {
+    let path = std::env::temp_dir().join(format!(
+      "jellypilot-iced-target-name-{}.json",
+      std::process::id()
+    ));
+    let _ = fs::remove_file(&path);
+    let mut state = test_state();
+    state.settings = SettingsStore::for_test(path.clone());
+    state.settings_view =
+      crate::app::state::SettingsState::from_settings(state.settings.snapshot());
+    state.connection = ConnectionPhase::Connected;
+    state.client = Some(Arc::new(JellyfinClient::new()));
+    state.remote_session = Some(RemoteSessionHandle {
+      websocket: Arc::new(JellyfinWebSocket::new()),
+      lifecycle: Arc::new(tokio::sync::Mutex::new(())),
+    });
+    state.settings_view.playback_target_name_input = "Bedroom".to_owned();
+    state.remote_control_state = RemoteControlState::Available;
+
+    let task = update_settings(&mut state, SettingsMessage::SavePlaybackTargetName);
+
+    assert_eq!(
+      state.settings.snapshot().playback_target_name(),
+      Some("Bedroom")
+    );
+    assert!(state.diagnostics.rows().any(|event| {
+      event.message == "Playback target name changed; remote registration requested."
+    }));
+    assert_eq!(task.units(), 1);
+    fs::remove_file(path).unwrap();
+  }
+
+  #[test]
+  fn connecting_target_name_mutation_schedules_no_duplicate_registration() {
+    let (settings, _file) = isolated_settings("connecting-target-name");
+    let mut state = test_state();
+    state.settings = settings;
+    state.settings_view =
+      crate::app::state::SettingsState::from_settings(state.settings.snapshot());
+    state.connection = ConnectionPhase::Connected;
+    state.client = Some(Arc::new(JellyfinClient::new()));
+    state.remote_session = Some(RemoteSessionHandle {
+      websocket: Arc::new(JellyfinWebSocket::new()),
+      lifecycle: Arc::new(tokio::sync::Mutex::new(())),
+    });
+    state.remote_control_state = RemoteControlState::Connecting;
+    state.settings_view.playback_target_name_input = "Bedroom".to_owned();
+
+    let task = update_settings(&mut state, SettingsMessage::SavePlaybackTargetName);
+
+    assert_eq!(task.units(), 0);
+    assert!(!state.diagnostics.rows().any(|event| {
+      event.message == "Playback target name changed; remote registration requested."
+    }));
+  }
+
+  #[test]
+  fn saving_mpv_path_discovers_a_missing_playback_controller() {
+    let (settings, _file) = isolated_settings("discover-mpv-path");
+    let mut state = test_state();
+    state.settings = settings;
+    state.settings_view =
+      crate::app::state::SettingsState::from_settings(state.settings.snapshot());
+    state.client = Some(Arc::new(JellyfinClient::new()));
+    state.settings_view.mpv_path_input = std::env::current_exe()
+      .expect("test executable path should resolve")
+      .to_string_lossy()
+      .into_owned();
+
+    let task = update_settings(&mut state, SettingsMessage::SaveMpvPath);
+
+    assert_eq!(task.units(), 0);
+    assert!(state.playback_controller.is_some());
+    assert!(state.playback_view.engine_available);
+    assert!(state.playback_notice.is_none());
+  }
+
+  #[test]
+  fn escape_and_leaving_settings_both_clear_shortcut_capture() {
+    let mut state = test_state();
+    state.destination = Destination::Settings;
+    state.settings_view.shortcut_capture = Some(jellypilot_core::config::ShortcutKind::Next);
+
+    drop(update_settings(
+      &mut state,
+      SettingsMessage::CancelShortcutCapture,
+    ));
+    assert!(state.settings_view.shortcut_capture.is_none());
+
+    state.settings_view.shortcut_capture = Some(jellypilot_core::config::ShortcutKind::Previous);
+    drop(navigate(&mut state, Destination::Home));
+    assert_eq!(state.destination, Destination::Home);
+    assert!(state.settings_view.shortcut_capture.is_none());
+  }
+
+  #[test]
+  fn sign_out_starts_secure_profile_removal_while_disconnect_does_not() {
+    let key = profile_key("active");
+    let mut disconnect = test_state();
+    disconnect.connection = ConnectionPhase::Connected;
+    disconnect.active_profile = Some(key.clone());
+
+    drop(update_settings(
+      &mut disconnect,
+      SettingsMessage::Disconnect,
+    ));
+
+    assert!(disconnect.login.busy_profile.is_none());
+
+    let mut sign_out = test_state();
+    sign_out.connection = ConnectionPhase::Connected;
+    sign_out.active_profile = Some(key.clone());
+    drop(update_settings(&mut sign_out, SettingsMessage::SignOut));
+
+    assert_eq!(sign_out.login.busy_profile.as_ref(), Some(&key));
+  }
+
+  #[test]
+  fn settings_mutation_errors_use_fixed_inline_copy() {
+    let path = std::env::temp_dir().join(format!(
+      "jellypilot-iced-settings-error-{}.json",
+      std::process::id()
+    ));
+    let _ = fs::remove_file(&path);
+    let mut state = test_state();
+    state.settings = SettingsStore::for_test(path);
+    state.settings_view =
+      crate::app::state::SettingsState::from_settings(state.settings.snapshot());
+    state.settings_view.shortcut_capture = Some(jellypilot_core::config::ShortcutKind::Next);
+
+    drop(update_settings(
+      &mut state,
+      SettingsMessage::ShortcutCaptured("Shift+<".to_owned()),
+    ));
+
+    assert_eq!(
+      state.settings_view.error,
+      Some("That shortcut is already assigned.")
+    );
+  }
+
+  #[test]
+  fn login_failures_feed_the_sanitized_diagnostics_buffer() {
+    let mut state = test_state();
+    let revision = state.login.profiles_revision;
+
+    drop(update(
+      &mut state,
+      Message::Login(LoginMessage::ProfilesLoaded {
+        revision,
+        result: Err(AuthStorageError::Corrupt),
+      }),
+    ));
+
+    assert!(state.diagnostics.rows().any(|event| {
+      event.level == DiagnosticLevel::Error && event.category == DiagnosticCategory::Auth
+    }));
   }
 }

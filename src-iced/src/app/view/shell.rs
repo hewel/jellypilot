@@ -8,7 +8,7 @@ use jellypilot_ui::variants::{ButtonVariant, FieldVariant, SurfaceVariant};
 use crate::app::message::{BrowseMessage, HomeMessage, Message};
 use crate::app::state::{Destination, State};
 
-use super::{browse, detail, home, player};
+use super::{browse, detail, home, player, settings};
 
 const SIDEBAR_WIDTH: f32 = 248.0;
 
@@ -19,6 +19,7 @@ pub fn view(state: &State) -> Element<'_, Message> {
     Destination::Library { .. } | Destination::Search(_) => browse::view(state),
     Destination::Detail(_) => detail::view(state),
     Destination::NowPlaying => player::page(state),
+    Destination::Settings => settings::view(state),
   };
   let content = stack![content].width(Fill).height(Fill);
   let mut content_column = Column::new()
@@ -117,7 +118,15 @@ fn sidebar(state: &State) -> container::Container<'_, Message> {
   let main = column![title, search_slot, destinations]
     .spacing(TOKENS.spacing.s5)
     .width(Fill);
-  let bottom = connection_summary(state);
+  let bottom = column![
+    destination_button(
+      "Settings",
+      Destination::Settings,
+      state.destination == Destination::Settings,
+    ),
+    connection_summary(state),
+  ]
+  .spacing(TOKENS.spacing.s3);
   let content = column![main, space::vertical(), bottom]
     .spacing(TOKENS.spacing.s4)
     .width(Fill)

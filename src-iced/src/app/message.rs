@@ -8,7 +8,8 @@ use jellypilot_auth::{
 };
 use jellypilot_core::artwork_binder::ArtworkSlot;
 use jellypilot_core::browse_model::BrowsePageSettlement;
-use jellypilot_core::config::LoginPrefill;
+use jellypilot_core::config::{IntroMode, LoginPrefill, ShortcutKind};
+use jellypilot_core::diagnostics::{DiagnosticCategory, DiagnosticLevel};
 use jellypilot_core::request_gate::{
   DetailAuxToken, DetailToken, HomeToken, RemotePlayToken, RemoteToken, SessionToken,
 };
@@ -37,6 +38,7 @@ impl std::fmt::Debug for Message {
       Self::OpenDetail(_) => formatter.write_str("OpenDetail"),
       Self::Detail(_) => formatter.write_str("Detail"),
       Self::Playback(_) => formatter.write_str("Playback"),
+      Self::Settings(_) => formatter.write_str("Settings"),
       Self::Remote(_) => formatter.write_str("Remote"),
       Self::TrayPoll => formatter.write_str("TrayPoll"),
     }
@@ -52,6 +54,7 @@ pub enum Message {
   OpenDetail(VideoLibraryItem),
   Detail(DetailMessage),
   Playback(PlaybackMessage),
+  Settings(SettingsMessage),
   Remote(RemoteMessage),
   TrayPoll,
 }
@@ -134,6 +137,38 @@ pub enum DetailMessage {
     result: Result<ArtworkBytes, ArtworkError>,
   },
 }
+#[derive(Clone)]
+pub enum SettingsMessage {
+  MpvPathChanged(String),
+  SaveMpvPath,
+  MpvArgsChanged(String),
+  SaveMpvArgs,
+  PlaybackTargetNameChanged(String),
+  SavePlaybackTargetName,
+  IntroMenuToggled,
+  IntroMenuDismissed,
+  IntroModeSelected(IntroMode),
+  SubtitleMenuToggled,
+  SubtitleMenuDismissed,
+  SubtitleLanguageAdded(String),
+  SubtitleLanguageMoved { index: usize, offset: i32 },
+  SubtitleLanguageRemoved(usize),
+  BeginShortcutCapture(ShortcutKind),
+  ShortcutCaptured(String),
+  CancelShortcutCapture,
+  ImageCacheToggled,
+  StartMinimizedToggled,
+  DiagnosticLevelMenuToggled,
+  DiagnosticLevelMenuDismissed,
+  DiagnosticLevelSelected(Option<DiagnosticLevel>),
+  DiagnosticCategoryMenuToggled,
+  DiagnosticCategoryMenuDismissed,
+  DiagnosticCategorySelected(Option<DiagnosticCategory>),
+  Disconnect,
+  SignOut,
+  PlaybackConfigApplied(Result<(), PlaybackError>),
+}
+
 #[derive(Clone)]
 pub enum PlaybackMessage {
   Intent(PlaybackIntent),

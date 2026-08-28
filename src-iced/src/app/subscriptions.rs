@@ -27,13 +27,13 @@ pub fn subscription(state: &State) -> Subscription<Message> {
       time::every(Duration::from_secs(1))
         .map(|_| Message::Playback(PlaybackMessage::Intent(PlaybackIntent::Tick))),
     );
+  }
+  if state.settings_view.shortcut_capture.is_some() {
+    subscriptions.push(event::listen_with(shortcut_capture));
+  } else if state.playback_view.now_playing.is_some() {
     subscriptions.push(
       event::listen()
-        .with((
-          state.settings.snapshot().key_next_episode().to_owned(),
-          state.settings.snapshot().key_previous_episode().to_owned(),
-          state.settings.snapshot().key_intro_skip().to_owned(),
-        ))
+        .with(playback_shortcuts(state.settings.snapshot()))
         .filter_map(playback_shortcut),
     );
   }
@@ -48,6 +48,14 @@ pub fn subscription(state: &State) -> Subscription<Message> {
     subscriptions.push(window::frames().map(|_| Message::Window(WindowMessage::FrameRendered)));
   }
   Subscription::batch(subscriptions)
+}
+
+fn playback_shortcuts(settings: &jellypilot_core::config::Settings) -> (String, String, String) {
+  (
+    settings.key_next_episode().to_owned(),
+    settings.key_previous_episode().to_owned(),
+    settings.key_intro_skip().to_owned(),
+  )
 }
 
 fn playback_shortcut(
@@ -72,6 +80,58 @@ fn playback_shortcut(
     return None;
   };
   Some(Message::Playback(PlaybackMessage::Intent(intent)))
+}
+
+fn shortcut_capture(
+  event: Event,
+  _status: event::Status,
+  _window_id: window::Id,
+) -> Option<Message> {
+  let Event::Keyboard(keyboard::Event::KeyPressed {
+    modified_key,
+    modifiers,
+    repeat: false,
+    ..
+  }) = event
+  else {
+    return None;
+  };
+  let key = match modified_key.as_ref() {
+    keyboard::Key::Named(keyboard::key::Named::Escape) => {
+      return Some(Message::Settings(
+        super::message::SettingsMessage::CancelShortcutCapture,
+      ));
+    }
+    keyboard::Key::Character("+") => "Plus".to_owned(),
+    keyboard::Key::Character(value) => value.to_owned(),
+    keyboard::Key::Named(
+      keyboard::key::Named::Alt
+      | keyboard::key::Named::AltGraph
+      | keyboard::key::Named::Control
+      | keyboard::key::Named::Shift
+      | keyboard::key::Named::Meta
+      | keyboard::key::Named::Super,
+    )
+    | keyboard::Key::Unidentified => return None,
+    keyboard::Key::Named(value) => format!("{value:?}"),
+  };
+  let mut binding = String::new();
+  if modifiers.control() {
+    binding.push_str("Ctrl+");
+  }
+  if modifiers.alt() {
+    binding.push_str("Alt+");
+  }
+  if modifiers.logo() {
+    binding.push_str("Super+");
+  }
+  if modifiers.shift() {
+    binding.push_str("Shift+");
+  }
+  binding.push_str(&key);
+  Some(Message::Settings(
+    super::message::SettingsMessage::ShortcutCaptured(binding),
+  ))
 }
 
 fn remote_event_stream(channel: &RemoteEventChannel) -> impl Stream<Item = Message> {
@@ -123,7 +183,10 @@ fn shortcut_matches(binding: &str, key: &keyboard::Key, modifiers: keyboard::Mod
     return false;
   }
   match key.as_ref() {
-    keyboard::Key::Character(value) => value.eq_ignore_ascii_case(expected_key),
+    keyboard::Key::Character(value) => {
+      value.eq_ignore_ascii_case(expected_key)
+        || (value == "+" && expected_key.eq_ignore_ascii_case("Plus"))
+    }
     keyboard::Key::Named(value) => format!("{value:?}").eq_ignore_ascii_case(expected_key),
     keyboard::Key::Unidentified => false,
   }
@@ -132,6 +195,114 @@ fn shortcut_matches(binding: &str, key: &keyboard::Key, modifiers: keyboard::Mod
 #[cfg(test)]
 mod tests {
   use super::*;
+
+  fn key_pressed(key: keyboard::Key, modifiers: keyboard::Modifiers) -> Event {
+    Event::Keyboard(keyboard::Event::KeyPressed {
+      modified_key: key.clone(),
+      key,
+      physical_key: keyboard::key::Physical::Code(keyboard::key::Code::KeyA),
+      location: keyboard::Location::Standard,
+      modifiers,
+      text: None,
+      repeat: false,
+    })
+  }
+
+  #[test]
+  fn shortcut_capture_keeps_playback_tick_subscribed() {
+    let mut state = State::boot(false);
+    state.playback_view.now_playing = Some(jellypilot_mpv::playback_session::NowPlayingView {
+      item: jellypilot_mpv::playback::NowPlayingItem {
+        item_id: "episode-1".to_owned(),
+        title: "Pilot".to_owned(),
+        item_type: "Episode".to_owned(),
+        runtime_seconds: Some(1_800.0),
+        start_position_seconds: 0.0,
+        play_method: "DirectPlay".to_owned(),
+      },
+      paused: false,
+      position_seconds: 10.0,
+      duration_seconds: Some(1_800.0),
+      volume: 75.0,
+      muted: false,
+    });
+    state.settings_view.shortcut_capture = Some(jellypilot_core::config::ShortcutKind::Next);
+
+    assert_eq!(subscription(&state).units(), 3);
+  }
+
+  #[test]
+  fn captured_widget_key_reaches_shortcut_capture() {
+    let message = shortcut_capture(
+      key_pressed(
+        keyboard::Key::Character("k".into()),
+        keyboard::Modifiers::CTRL,
+      ),
+      event::Status::Captured,
+      window::Id::unique(),
+    );
+
+    assert!(matches!(
+      message,
+      Some(Message::Settings(
+        super::super::message::SettingsMessage::ShortcutCaptured(binding)
+      )) if binding == "Ctrl+k"
+    ));
+  }
+
+  #[test]
+  fn escape_cancels_shortcut_capture_without_persisting_a_binding() {
+    let message = shortcut_capture(
+      key_pressed(
+        keyboard::Key::Named(keyboard::key::Named::Escape),
+        keyboard::Modifiers::NONE,
+      ),
+      event::Status::Captured,
+      window::Id::unique(),
+    );
+
+    assert!(matches!(
+      message,
+      Some(Message::Settings(
+        super::super::message::SettingsMessage::CancelShortcutCapture
+      ))
+    ));
+  }
+
+  #[test]
+  fn captured_plus_key_round_trips_through_persistence_and_matching() {
+    let Some(Message::Settings(super::super::message::SettingsMessage::ShortcutCaptured(binding))) =
+      shortcut_capture(
+        key_pressed(
+          keyboard::Key::Character("+".into()),
+          keyboard::Modifiers::SHIFT,
+        ),
+        event::Status::Captured,
+        window::Id::unique(),
+      )
+    else {
+      panic!("plus key should produce a captured shortcut");
+    };
+    let path = std::env::temp_dir().join(format!(
+      "jellypilot-iced-plus-shortcut-{}.json",
+      std::process::id()
+    ));
+    let _ = std::fs::remove_file(&path);
+    let mut settings = jellypilot_core::config::SettingsStore::for_test(path.clone());
+
+    settings
+      .set_shortcut(jellypilot_core::config::ShortcutKind::Next, binding)
+      .unwrap();
+    let persisted = playback_shortcuts(settings.snapshot()).0;
+
+    assert_eq!(persisted, "Shift+Plus");
+    assert!(shortcut_matches(
+      &persisted,
+      &keyboard::Key::Character("+".into()),
+      keyboard::Modifiers::SHIFT,
+    ));
+    std::fs::remove_file(path).unwrap();
+  }
 
   #[test]
   fn default_episode_shortcuts_match_modified_character_keys() {
@@ -190,5 +361,24 @@ mod tests {
       &key,
       keyboard::Modifiers::SHIFT | keyboard::Modifiers::CTRL,
     ));
+  }
+  #[test]
+  fn playback_shortcuts_reread_persisted_bindings_after_mutation() {
+    let path = std::env::temp_dir().join(format!(
+      "jellypilot-iced-shortcuts-{}.json",
+      std::process::id()
+    ));
+    let _ = std::fs::remove_file(&path);
+    let mut settings = jellypilot_core::config::SettingsStore::for_test(path.clone());
+
+    settings
+      .set_shortcut(
+        jellypilot_core::config::ShortcutKind::Next,
+        "Ctrl+n".to_owned(),
+      )
+      .unwrap();
+
+    assert_eq!(playback_shortcuts(settings.snapshot()).0, "Ctrl+n");
+    std::fs::remove_file(path).unwrap();
   }
 }
