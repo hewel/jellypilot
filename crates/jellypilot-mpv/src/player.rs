@@ -57,6 +57,7 @@ mod tests {
         title: Some("English".to_owned()),
         language: Some("eng".to_owned()),
         selected: true,
+        provider_index: Some(3),
       },
       TrackInfo {
         id: 8,
@@ -64,6 +65,7 @@ mod tests {
         title: Some("Spanish".to_owned()),
         language: Some("spa".to_owned()),
         selected: false,
+        provider_index: Some(7),
       },
     ];
 

@@ -10,10 +10,8 @@ use std::time::{Duration, Instant};
 use crate::{
   collect_player_state_sample, find_mpv, has_mpv_option, MpvClient, MpvEvent, PlayerState,
 };
-#[cfg(test)]
-use jellypilot_media_server::MediaStream;
 use jellypilot_media_server::{
-  ticks_to_seconds, JellyfinClient, MediaItem, MediaServerProvider, MediaSource,
+  ticks_to_seconds, JellyfinClient, MediaItem, MediaServerProvider, MediaSource, MediaStream,
   PlaybackProgressInfo, PlaybackStartInfo, PlaybackStopInfo, VideoItemDetail, VideoLibraryItem,
 };
 
@@ -73,6 +71,14 @@ pub enum PlaybackStartPosition {
   Resume,
   /// Start at an explicit number of seconds.
   At(f64),
+}
+
+/// Provider selections attached to a remote playback request.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct PlaybackSelection {
+  pub media_source_id: Option<String>,
+  pub audio_stream_index: Option<i32>,
+  pub subtitle_stream_index: Option<i32>,
 }
 /// An item accepted by the playback controller.
 #[derive(Debug, Clone)]
@@ -142,6 +148,8 @@ pub struct TrackInfo {
   pub title: Option<String>,
   pub language: Option<String>,
   pub selected: bool,
+  /// Provider media-stream index corresponding to this MPV track, when known.
+  pub provider_index: Option<i32>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -307,6 +315,7 @@ pub type PlaybackServerFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + '
 pub struct PlaybackResolutionRequest {
   pub item_id: String,
   pub start_time_ticks: Option<i64>,
+  pub selection: PlaybackSelection,
 }
 
 /// Media-server data required to load a resolved item.
@@ -315,6 +324,7 @@ pub struct PlaybackResolution {
   pub media_source: MediaSource,
   pub play_session_id: Option<String>,
   pub stream_url: AuthenticatedUrl,
+  pub external_subtitle_url: Option<AuthenticatedUrl>,
 }
 // MediaSource embeds tokenized stream URLs; keep them out of Debug output.
 impl fmt::Debug for PlaybackResolution {
@@ -399,21 +409,44 @@ impl PlaybackServer for JellyfinPlaybackServer {
       let playback = self
         .0
         .playback()
-        .get_playback_info(&request.item_id, request.start_time_ticks, None, None)
+        .get_playback_info(
+          &request.item_id,
+          request.start_time_ticks,
+          request.selection.audio_stream_index,
+          request.selection.subtitle_stream_index,
+        )
         .await
         .map_err(|_| PlaybackError::PlaybackInfoUnavailable)?;
-      let media_source = select_media_source(&playback.media_sources, None)?.clone();
+      let media_source = select_media_source(
+        &playback.media_sources,
+        request.selection.media_source_id.as_deref(),
+      )?
+      .clone();
       let stream_url = self
         .0
         .playback()
         .build_stream_url(&request.item_id, &media_source)
         .map(AuthenticatedUrl::new)
         .ok_or(PlaybackError::StreamUrlUnavailable)?;
+      let external_subtitle_url = request
+        .selection
+        .subtitle_stream_index
+        .filter(|index| *index >= 0)
+        .and_then(|index| find_stream(&media_source.media_streams, "Subtitle", index).ok())
+        .filter(|stream| stream.is_external)
+        .and_then(|stream| {
+          self
+            .0
+            .playback()
+            .build_subtitle_url(&request.item_id, &media_source.id, stream)
+        })
+        .map(AuthenticatedUrl::new);
 
       Ok(PlaybackResolution {
         media_source,
         play_session_id: playback.play_session_id,
         stream_url,
+        external_subtitle_url,
       })
     })
   }
@@ -614,7 +647,24 @@ impl PlaybackController {
     playable: Playable,
     position: PlaybackStartPosition,
   ) -> Result<PlaybackOutcome, PlaybackError> {
-    let request = PlayableRequest::from_playable(playable, position)?;
+    self
+      .play_selected(playable, position, PlaybackSelection::default())
+      .await
+  }
+
+  /// Resolve and play an item with provider media-source and track selections.
+  ///
+  /// # Errors
+  ///
+  /// Returns a sanitized [`PlaybackError`] when the selected source or track is
+  /// unavailable, or when MPV cannot start or load it.
+  pub async fn play_selected(
+    &mut self,
+    playable: Playable,
+    position: PlaybackStartPosition,
+    selection: PlaybackSelection,
+  ) -> Result<PlaybackOutcome, PlaybackError> {
+    let request = PlayableRequest::from_playable(playable, position, selection)?;
     self.play_request(request).await
   }
 
@@ -628,7 +678,15 @@ impl PlaybackController {
     let crate::PropertyValue::Json(json) = value else {
       return Err(PlaybackError::TrackUnavailable);
     };
-    parse_track_list(&json)
+    let mut tracks = parse_track_list(&json)?;
+    if let Some(active) = &self.active {
+      assign_provider_indexes(
+        &mut tracks,
+        &active.media_streams,
+        active.subtitle_stream_index,
+      );
+    }
+    Ok(tracks)
   }
 
   /// Select an audio track by MPV track id and return the refreshed track list.
@@ -966,15 +1024,18 @@ impl PlaybackController {
     let start_position_ticks = checked_seconds_to_ticks(start_position_seconds)?;
     let server_start_ticks =
       matches!(self.server.provider(), MediaServerProvider::Emby).then_some(start_position_ticks);
+    let selection = request.selection;
     let PlaybackResolution {
       media_source,
       play_session_id,
       stream_url,
+      external_subtitle_url,
     } = self
       .server
       .resolve(PlaybackResolutionRequest {
         item_id: request.item_id.clone(),
         start_time_ticks: server_start_ticks,
+        selection: selection.clone(),
       })
       .await?;
     let runtime_seconds = request.runtime_seconds.or_else(|| {
@@ -983,6 +1044,20 @@ impl PlaybackController {
         .filter(|ticks| *ticks >= 0)
         .map(ticks_to_seconds)
     });
+    let mpv_audio_index = resolve_mpv_track(
+      &media_source.media_streams,
+      "Audio",
+      selection.audio_stream_index,
+    )?;
+    let mpv_subtitle_index = if external_subtitle_url.is_some() {
+      None
+    } else {
+      resolve_mpv_track(
+        &media_source.media_streams,
+        "Subtitle",
+        selection.subtitle_stream_index,
+      )?
+    };
 
     Ok(ResolvedPlayback {
       active: ActivePlayback {
@@ -996,14 +1071,15 @@ impl PlaybackController {
         },
         media_source_id: media_source.id,
         play_session_id,
-        audio_stream_index: None,
-        subtitle_stream_index: None,
+        audio_stream_index: selection.audio_stream_index,
+        subtitle_stream_index: selection.subtitle_stream_index,
+        media_streams: media_source.media_streams,
         last_known_position_seconds: start_position_seconds,
       },
       stream_url,
-      external_subtitle_url: None,
-      mpv_audio_index: None,
-      mpv_subtitle_index: None,
+      external_subtitle_url,
+      mpv_audio_index,
+      mpv_subtitle_index,
     })
   }
 
@@ -1221,6 +1297,7 @@ struct ActivePlayback {
   play_session_id: Option<String>,
   audio_stream_index: Option<i32>,
   subtitle_stream_index: Option<i32>,
+  media_streams: Vec<MediaStream>,
   last_known_position_seconds: f64,
 }
 fn playback_report(active: &ActivePlayback, transport: &PlayerState) -> PlaybackReport {
@@ -1316,12 +1393,14 @@ struct PlayableRequest {
   runtime_seconds: Option<f64>,
   resume_position_seconds: Option<f64>,
   position: PlaybackStartPosition,
+  selection: PlaybackSelection,
 }
 
 impl PlayableRequest {
   fn from_playable(
     playable: Playable,
     position: PlaybackStartPosition,
+    selection: PlaybackSelection,
   ) -> Result<Self, PlaybackError> {
     match playable {
       Playable::Library(item) => {
@@ -1339,6 +1418,7 @@ impl PlayableRequest {
           runtime_seconds: item.runtime_seconds,
           resume_position_seconds: item.resume_position_seconds,
           position,
+          selection,
         })
       }
       Playable::Detail(item) => {
@@ -1359,6 +1439,7 @@ impl PlayableRequest {
           runtime_seconds: item.runtime_seconds,
           resume_position_seconds: item.resume_position_seconds,
           position,
+          selection,
         })
       }
       Playable::Media(item) => {
@@ -1379,6 +1460,7 @@ impl PlayableRequest {
             .map(ticks_to_seconds),
           resume_position_seconds: None,
           position,
+          selection,
         })
       }
     }
@@ -1487,7 +1569,6 @@ fn select_media_source<'a>(
   .ok_or(PlaybackError::MediaSourceUnavailable)
 }
 
-#[cfg(test)]
 fn find_stream<'a>(
   streams: &'a [MediaStream],
   stream_type: &str,
@@ -1499,7 +1580,6 @@ fn find_stream<'a>(
     .ok_or(PlaybackError::TrackUnavailable)
 }
 
-#[cfg(test)]
 fn resolve_mpv_track(
   streams: &[MediaStream],
   stream_type: &str,
@@ -1516,7 +1596,6 @@ fn resolve_mpv_track(
     .transpose()
 }
 
-#[cfg(test)]
 fn type_local_track_index(
   streams: &[MediaStream],
   stream_type: &str,
@@ -1570,9 +1649,56 @@ fn parse_track_list(json: &str) -> Result<Vec<TrackInfo>, PlaybackError> {
         .get("selected")
         .and_then(serde_json::Value::as_bool)
         .unwrap_or(false),
+      provider_index: None,
     });
   }
   Ok(tracks)
+}
+
+fn assign_provider_indexes(
+  tracks: &mut [TrackInfo],
+  streams: &[MediaStream],
+  selected_subtitle_index: Option<i32>,
+) {
+  for track_type in ["audio", "sub"] {
+    for (position, track) in tracks
+      .iter_mut()
+      .filter(|track| track.track_type == track_type)
+      .enumerate()
+    {
+      track.provider_index =
+        provider_stream_for_mpv_track(streams, track_type, position, selected_subtitle_index)
+          .map(|stream| stream.index);
+    }
+  }
+}
+
+fn provider_stream_for_mpv_track<'a>(
+  streams: &'a [MediaStream],
+  track_type: &str,
+  position: usize,
+  selected_subtitle_index: Option<i32>,
+) -> Option<&'a MediaStream> {
+  let provider_type = if track_type == "audio" {
+    "Audio"
+  } else {
+    "Subtitle"
+  };
+  let mut internal = streams
+    .iter()
+    .filter(|stream| stream.stream_type == provider_type && !stream.is_external);
+  let internal_count = internal.clone().count();
+  if position < internal_count {
+    return internal.nth(position);
+  }
+  if track_type != "sub" || position != internal_count {
+    return None;
+  }
+  streams.iter().find(|stream| {
+    stream.stream_type == provider_type
+      && stream.is_external
+      && Some(stream.index) == selected_subtitle_index
+  })
 }
 
 fn direct_playback_file_options(play_method: &str, configured_args: &[String]) -> Vec<String> {
@@ -1664,6 +1790,7 @@ mod tests {
           stream_url: AuthenticatedUrl::new(
             "https://media.example/video?api_key=secret".to_owned(),
           ),
+          external_subtitle_url: None,
         },
         reports: Mutex::new(MockReports::default()),
         fail_start: AtomicBool::new(false),
@@ -2161,6 +2288,7 @@ mod tests {
       play_session_id: Some("play-1".to_owned()),
       audio_stream_index: None,
       subtitle_stream_index: None,
+      media_streams: Vec::new(),
       last_known_position_seconds: position_seconds,
     }
   }
@@ -2179,8 +2307,12 @@ mod tests {
   #[test]
   fn library_item_resume_uses_provider_position_without_exposing_transport_data() {
     let item = library_item("Episode");
-    let request = PlayableRequest::from_playable(item.into(), PlaybackStartPosition::Resume)
-      .expect("episode should be playable");
+    let request = PlayableRequest::from_playable(
+      item.into(),
+      PlaybackStartPosition::Resume,
+      PlaybackSelection::default(),
+    )
+    .expect("episode should be playable");
 
     assert_eq!(request.start_position_seconds(), Ok(42.5));
   }
@@ -2189,7 +2321,11 @@ mod tests {
   fn library_item_rejects_non_playable_show_summary() {
     let item = library_item("Series");
 
-    let result = PlayableRequest::from_playable(item.into(), PlaybackStartPosition::Beginning);
+    let result = PlayableRequest::from_playable(
+      item.into(),
+      PlaybackStartPosition::Beginning,
+      PlaybackSelection::default(),
+    );
 
     assert!(matches!(result, Err(PlaybackError::UnsupportedItemType)));
   }
@@ -2204,6 +2340,83 @@ mod tests {
     ];
 
     assert_eq!(resolve_mpv_track(&streams, "Audio", Some(5)), Ok(Some(2)));
+  }
+
+  #[test]
+  fn remote_selection_reaches_resolution_and_initial_mpv_tracks() {
+    run_async(async {
+      let mut mock = MockPlaybackServer::new();
+      mock.resolution.media_source.media_streams = vec![
+        stream(0, "Video"),
+        stream(3, "Audio"),
+        stream(5, "Audio"),
+        stream(7, "Subtitle"),
+      ];
+      let server = Arc::new(mock);
+      let controller =
+        PlaybackController::from_server(server.clone(), MpvClient::new(None), Vec::new());
+      let selection = PlaybackSelection {
+        media_source_id: Some("source-1".to_owned()),
+        audio_stream_index: Some(5),
+        subtitle_stream_index: Some(7),
+      };
+      let request = PlayableRequest::from_playable(
+        Playable::Media(media_item("episode-1")),
+        PlaybackStartPosition::Beginning,
+        selection.clone(),
+      )
+      .expect("remote episode should be playable");
+
+      let resolved = controller
+        .resolve(request)
+        .await
+        .expect("remote selection should resolve");
+
+      assert_eq!(resolved.mpv_audio_index, Some(2));
+      assert_eq!(resolved.mpv_subtitle_index, Some(1));
+      assert_eq!(resolved.active.audio_stream_index, Some(5));
+      assert_eq!(resolved.active.subtitle_stream_index, Some(7));
+      let reports = server
+        .reports
+        .lock()
+        .expect("mock reports should not be poisoned");
+      assert_eq!(reports.resolutions[0].selection, selection);
+    });
+  }
+
+  #[test]
+  fn current_mpv_tracks_receive_provider_stream_indexes() {
+    let mut tracks = vec![
+      TrackInfo {
+        id: 2,
+        track_type: "audio".to_owned(),
+        title: None,
+        language: None,
+        selected: true,
+        provider_index: None,
+      },
+      TrackInfo {
+        id: 6,
+        track_type: "sub".to_owned(),
+        title: None,
+        language: None,
+        selected: false,
+        provider_index: None,
+      },
+    ];
+
+    assign_provider_indexes(
+      &mut tracks,
+      &[
+        stream(0, "Video"),
+        stream(4, "Audio"),
+        stream(7, "Subtitle"),
+      ],
+      None,
+    );
+
+    assert_eq!(tracks[0].provider_index, Some(4));
+    assert_eq!(tracks[1].provider_index, Some(7));
   }
 
   #[test]
@@ -2256,6 +2469,7 @@ mod tests {
       stream_url: AuthenticatedUrl(
         "https://media.example/video?api_key=do-not-print-this-token".to_owned(),
       ),
+      external_subtitle_url: None,
     };
 
     let debug = format!("{resolution:?}");

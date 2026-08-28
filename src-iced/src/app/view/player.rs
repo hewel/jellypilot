@@ -7,6 +7,7 @@ use jellypilot_mpv::playback_session::{
   AdjacentAvailability, AdjacentDirection, PlaybackIntent, TracksView,
 };
 use jellypilot_mpv::player::format_duration;
+use jellypilot_session::IntroSkipKind;
 use jellypilot_ui::fonts::SPACE_GROTESK_FONT;
 use jellypilot_ui::tokens::TOKENS;
 use jellypilot_ui::variants::{ButtonVariant, SurfaceVariant};
@@ -75,6 +76,11 @@ pub fn bar(state: &State) -> Option<Element<'_, Message>> {
   .width(Fill);
 
   let mut content = Column::new().spacing(TOKENS.spacing.s2).push(top);
+  if intro_prompt_on_surface(&state.destination, IntroPromptSurface::Bar) {
+    if let Some(prompt) = intro_prompt(state) {
+      content = content.push(prompt);
+    }
+  }
   if let Some(duration) = duration {
     content = content.push(
       row![
@@ -99,6 +105,19 @@ pub fn bar(state: &State) -> Option<Element<'_, Message>> {
       .style(|theme| jellypilot_ui::theme::surface_variant(theme, SurfaceVariant::Elevated))
       .into(),
   )
+}
+
+#[derive(Clone, Copy)]
+enum IntroPromptSurface {
+  Bar,
+  Page,
+}
+
+fn intro_prompt_on_surface(destination: &Destination, surface: IntroPromptSurface) -> bool {
+  match surface {
+    IntroPromptSurface::Bar => *destination != Destination::NowPlaying,
+    IntroPromptSurface::Page => *destination == Destination::NowPlaying,
+  }
 }
 
 pub fn page(state: &State) -> Element<'_, Message> {
@@ -179,8 +198,16 @@ pub fn page(state: &State) -> Element<'_, Message> {
   .spacing(TOKENS.spacing.s3)
   .align_y(Alignment::Center);
 
+  let page_prompt = if intro_prompt_on_surface(&state.destination, IntroPromptSurface::Page) {
+    intro_prompt(state)
+  } else {
+    None
+  }
+  .unwrap_or_else(|| space::vertical().height(0).into());
+
   let content = column![
     header,
+    page_prompt,
     timeline,
     full_transport(state),
     volume_controls,
@@ -195,6 +222,50 @@ pub fn page(state: &State) -> Element<'_, Message> {
     .height(Fill)
     .style(|theme| jellypilot_ui::theme::surface_variant(theme, SurfaceVariant::Filled))
     .into()
+}
+
+fn intro_prompt(state: &State) -> Option<Element<'_, Message>> {
+  let prompt = state.playback_view.intro_prompt?;
+  let label = match prompt.kind {
+    IntroSkipKind::Introduction => "Skip intro?",
+    IntroSkipKind::Credits => "Skip credits?",
+  };
+  let actions = row![
+    button(text("Skip"))
+      .padding([8, 14])
+      .on_press_maybe((!state.playback_view.busy).then_some(Message::Playback(
+        PlaybackMessage::Intent(PlaybackIntent::SkipIntro),
+      )))
+      .style(|theme, status| {
+        jellypilot_ui::theme::button_variant(theme, status, ButtonVariant::Primary)
+      }),
+    button(text("Dismiss"))
+      .padding([8, 14])
+      .on_press(Message::Playback(PlaybackMessage::Intent(
+        PlaybackIntent::DismissIntro,
+      )))
+      .style(|theme, status| {
+        jellypilot_ui::theme::button_variant(theme, status, ButtonVariant::Outlined)
+      }),
+  ]
+  .spacing(TOKENS.spacing.s2);
+  Some(
+    container(
+      row![
+        text(label)
+          .font(SPACE_GROTESK_FONT)
+          .size(16)
+          .color(TOKENS.colors.onSurface),
+        space::horizontal(),
+        actions,
+      ]
+      .align_y(Alignment::Center),
+    )
+    .padding([TOKENS.spacing.s2, TOKENS.spacing.s3])
+    .width(Fill)
+    .style(|theme| jellypilot_ui::theme::surface_variant(theme, SurfaceVariant::Elevated))
+    .into(),
+  )
 }
 
 fn compact_transport(state: &State) -> Element<'_, Message> {
@@ -431,4 +502,20 @@ fn playback_artwork(state: &State, width: f32, height: f32) -> Element<'_, Messa
     .center_y(Fill)
     .style(|theme| jellypilot_ui::theme::surface_variant(theme, SurfaceVariant::Elevated))
     .into()
+}
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+
+  #[test]
+  fn intro_prompt_is_rendered_on_exactly_one_surface() {
+    for destination in [Destination::Home, Destination::NowPlaying] {
+      let count = [IntroPromptSurface::Bar, IntroPromptSurface::Page]
+        .into_iter()
+        .filter(|surface| intro_prompt_on_surface(&destination, *surface))
+        .count();
+      assert_eq!(count, 1);
+    }
+  }
 }

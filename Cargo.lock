@@ -3640,6 +3640,7 @@ dependencies = [
  "jellypilot-mpv",
  "jellypilot-session",
  "jellypilot-ui",
+ "serde_json",
  "tokio",
  "tray-icon",
  "url",

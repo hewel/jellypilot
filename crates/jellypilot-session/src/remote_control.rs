@@ -1,4 +1,4 @@
-use jellypilot_media_server::{JellyfinClient, PlaybackEngineKind};
+use jellypilot_media_server::JellyfinClient;
 use serde_json::Value;
 
 use crate::JellyfinWebSocketEvent;
@@ -38,6 +38,16 @@ pub fn remote_volume_value(value: Option<&Value>) -> Option<f64> {
     volume.is_finite().then(|| volume.clamp(0.0, 100.0))
 }
 
+/// Parses Jellyfin's numeric or string track-index payload.
+#[must_use]
+pub fn remote_index_value(value: Option<&Value>) -> Option<i64> {
+    match value? {
+        Value::Number(number) => number.as_i64(),
+        Value::String(value) => value.trim().parse().ok(),
+        _ => None,
+    }
+}
+
 /// Registers remote-control capabilities before informational session validation.
 ///
 /// A fresh socket session may not be visible to validation yet, so validation
@@ -49,7 +59,7 @@ pub fn remote_volume_value(value: Option<&Value>) -> Option<f64> {
 pub async fn finalize_remote_target(client: &JellyfinClient) -> Result<bool, ()> {
     client
         .playback()
-        .report_capabilities_for_checked(PlaybackEngineKind::ExternalMpv)
+        .report_iced_capabilities_checked()
         .await
         .map_err(|_| ())?;
     Ok(client.playback().validate_session().await.is_ok())
@@ -148,6 +158,9 @@ mod tests {
         let capabilities = requests.recv().expect("capabilities request captured");
         let validation = requests.recv().expect("validation request captured");
         assert!(capabilities.starts_with("POST /Sessions/Capabilities"));
+        assert!(capabilities.contains(r#""PlayableMediaTypes":["Video"]"#));
+        assert!(!capabilities.contains(r#""PlayableMediaTypes":["Video","Audio"]"#));
+        assert!(!capabilities.contains("ToggleFullscreen"));
         assert!(validation.starts_with("GET /Sessions"));
     }
 
@@ -182,6 +195,16 @@ mod tests {
         );
         assert_eq!(
             remote_volume_value(Some(&serde_json::json!("invalid"))),
+            None
+        );
+    }
+
+    #[test]
+    fn remote_track_index_accepts_wire_string_and_number_forms() {
+        assert_eq!(remote_index_value(Some(&serde_json::json!("4"))), Some(4));
+        assert_eq!(remote_index_value(Some(&serde_json::json!(-1))), Some(-1));
+        assert_eq!(
+            remote_index_value(Some(&serde_json::json!("invalid"))),
             None
         );
     }

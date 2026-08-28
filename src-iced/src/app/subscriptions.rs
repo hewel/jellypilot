@@ -1,10 +1,13 @@
 use std::time::Duration;
 
+#[cfg(test)]
+use iced::futures::StreamExt;
+use iced::futures::{SinkExt, Stream};
 use iced::{event, keyboard, time, window, Event, Subscription};
-
-use super::message::{Message, PlaybackMessage, WindowMessage};
-use super::state::State;
 use jellypilot_mpv::playback_session::{AdjacentDirection, PlaybackIntent};
+
+use super::message::{Message, PlaybackMessage, RemoteMessage, WindowMessage};
+use super::state::{RemoteEventChannel, State};
 
 pub fn subscription(state: &State) -> Subscription<Message> {
   let window_events = event::listen_with(|event, status, window_id| {
@@ -29,9 +32,13 @@ pub fn subscription(state: &State) -> Subscription<Message> {
         .with((
           state.settings.snapshot().key_next_episode().to_owned(),
           state.settings.snapshot().key_previous_episode().to_owned(),
+          state.settings.snapshot().key_intro_skip().to_owned(),
         ))
         .filter_map(playback_shortcut),
     );
+  }
+  if let Some(channel) = state.remote_events.clone() {
+    subscriptions.push(Subscription::run_with(channel, remote_event_stream));
   }
   if state.tray.is_some() {
     subscriptions.push(time::every(Duration::from_millis(100)).map(|_| Message::TrayPoll));
@@ -43,7 +50,9 @@ pub fn subscription(state: &State) -> Subscription<Message> {
   Subscription::batch(subscriptions)
 }
 
-fn playback_shortcut(((next, previous), event): ((String, String), Event)) -> Option<Message> {
+fn playback_shortcut(
+  ((next, previous, intro_skip), event): ((String, String, String), Event),
+) -> Option<Message> {
   let Event::Keyboard(keyboard::Event::KeyPressed {
     modified_key,
     modifiers,
@@ -53,16 +62,35 @@ fn playback_shortcut(((next, previous), event): ((String, String), Event)) -> Op
   else {
     return None;
   };
-  let direction = if shortcut_matches(&next, &modified_key, modifiers) {
-    AdjacentDirection::Next
+  let intent = if shortcut_matches(&next, &modified_key, modifiers) {
+    PlaybackIntent::PlayAdjacent(AdjacentDirection::Next)
   } else if shortcut_matches(&previous, &modified_key, modifiers) {
-    AdjacentDirection::Previous
+    PlaybackIntent::PlayAdjacent(AdjacentDirection::Previous)
+  } else if shortcut_matches(&intro_skip, &modified_key, modifiers) {
+    PlaybackIntent::SkipIntro
   } else {
     return None;
   };
-  Some(Message::Playback(PlaybackMessage::Intent(
-    PlaybackIntent::PlayAdjacent(direction),
-  )))
+  Some(Message::Playback(PlaybackMessage::Intent(intent)))
+}
+
+fn remote_event_stream(channel: &RemoteEventChannel) -> impl Stream<Item = Message> {
+  let channel = channel.clone();
+  iced::stream::channel(32, async move |mut output| loop {
+    let Some(event) = channel.receiver.lock().await.recv().await else {
+      break;
+    };
+    if output
+      .send(Message::Remote(RemoteMessage::Event {
+        remote: channel.remote,
+        event,
+      }))
+      .await
+      .is_err()
+    {
+      break;
+    }
+  })
 }
 
 fn shortcut_matches(binding: &str, key: &keyboard::Key, modifiers: keyboard::Modifiers) -> bool {
@@ -117,6 +145,36 @@ mod tests {
       &keyboard::Key::Character("<".into()),
       keyboard::Modifiers::SHIFT,
     ));
+  }
+
+  #[test]
+  fn remote_event_stream_backpressures_without_dropping_bursts() {
+    let runtime = tokio::runtime::Builder::new_current_thread()
+      .enable_time()
+      .build()
+      .expect("test runtime should build");
+    runtime.block_on(async {
+      let mut gate = jellypilot_core::request_gate::RequestGate::default();
+      let remote = gate.begin_remote();
+      let (sender, receiver) = tokio::sync::mpsc::unbounded_channel();
+      let channel = RemoteEventChannel {
+        remote,
+        receiver: std::sync::Arc::new(tokio::sync::Mutex::new(receiver)),
+      };
+      for _ in 0..64 {
+        sender
+          .send(jellypilot_session::JellyfinWebSocketEvent::Connected)
+          .expect("test receiver should remain open");
+      }
+      drop(sender);
+
+      let messages = remote_event_stream(&channel)
+        .take(64)
+        .collect::<Vec<_>>()
+        .await;
+
+      assert_eq!(messages.len(), 64);
+    });
   }
 
   #[test]

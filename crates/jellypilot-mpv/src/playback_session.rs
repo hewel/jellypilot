@@ -9,8 +9,8 @@ use jellypilot_session::{
 
 use crate::playback::{
   NowPlayingItem, Playable, PlaybackEndReason, PlaybackError, PlaybackOutcome,
-  PlaybackRefreshOutcome, PlaybackRefreshState, PlaybackStartPosition, PlaybackStopOutcome,
-  PlaybackWarning, TrackInfo, TrackSelectionOutcome,
+  PlaybackRefreshOutcome, PlaybackRefreshState, PlaybackSelection, PlaybackStartPosition,
+  PlaybackStopOutcome, PlaybackWarning, TrackInfo, TrackSelectionOutcome,
 };
 
 const INTRO_PROMPT_DURATION: Duration = Duration::from_secs(3);
@@ -36,6 +36,7 @@ pub enum PlaybackIntent {
     item: Playable,
     position: PlaybackStartPosition,
     intro: IntroAvailability,
+    selection: Box<PlaybackSelection>,
   },
   TogglePaused,
   SetPaused(bool),
@@ -48,6 +49,7 @@ pub enum PlaybackIntent {
   PlayAdjacent(AdjacentDirection),
   #[cfg_attr(not(test), allow(dead_code))]
   SkipIntro,
+  DismissIntro,
   Tick,
   Disconnect,
   Quit,
@@ -110,6 +112,7 @@ pub enum ControllerCommand {
   Start {
     item: Playable,
     position: PlaybackStartPosition,
+    selection: PlaybackSelection,
   },
   SetPaused(bool),
   Seek(f64),
@@ -294,11 +297,12 @@ impl PlaybackSession {
         item,
         position,
         intro,
+        selection,
       } => {
         if !self.engine_available || self.quitting {
           return Vec::new();
         }
-        self.enqueue(ControllerRequest::start(item, position, intro))
+        self.enqueue(ControllerRequest::start(item, position, intro, *selection))
       }
       PlaybackIntent::TogglePaused => {
         let Some(paused) = self.current_paused() else {
@@ -353,6 +357,10 @@ impl PlaybackSession {
       PlaybackIntent::Stop => self.enqueue(ControllerRequest::stop()),
       PlaybackIntent::PlayAdjacent(direction) => self.play_adjacent(direction),
       PlaybackIntent::SkipIntro => self.apply_intro_action(now, true),
+      PlaybackIntent::DismissIntro => {
+        self.intro.active_prompt = None;
+        Vec::new()
+      }
       PlaybackIntent::Tick => {
         self.expire_intro_prompt(now);
         if self.snapshot.is_none() || self.quitting {
@@ -746,6 +754,7 @@ impl PlaybackSession {
         mode: self.intro.mode,
         skipper_available: self.intro.skipper_available,
       },
+      PlaybackSelection::default(),
     ))
   }
 
@@ -967,10 +976,19 @@ struct ControllerRequest {
 }
 
 impl ControllerRequest {
-  fn start(item: Playable, position: PlaybackStartPosition, intro: IntroAvailability) -> Self {
+  fn start(
+    item: Playable,
+    position: PlaybackStartPosition,
+    intro: IntroAvailability,
+    selection: PlaybackSelection,
+  ) -> Self {
     Self {
       kind: RequestKind::Start,
-      command: ControllerCommand::Start { item, position },
+      command: ControllerCommand::Start {
+        item,
+        position,
+        selection,
+      },
       operation: ControllerOperation::Start { intro },
     }
   }
@@ -1303,6 +1321,7 @@ mod tests {
         item: Playable::Media(media_item("episode-1", "Pilot")),
         position: PlaybackStartPosition::Beginning,
         intro: intro_availability(mode),
+        selection: Box::default(),
       }),
       now,
     ));
@@ -1492,6 +1511,7 @@ mod tests {
         item: Playable::Media(media_item("episode-2", "Second")),
         position: PlaybackStartPosition::Beginning,
         intro: intro_availability(IntroSkipMode::Off),
+        selection: Box::default(),
       }),
       now,
     );
@@ -1658,6 +1678,25 @@ mod tests {
   }
 
   #[test]
+  fn dismiss_intro_clears_the_live_prompt_without_seeking() {
+    let (mut session, now, auxiliary) = start_session(IntroSkipMode::Manual);
+    settle_intro_ranges(&mut session, intro_fetch_id(&auxiliary), now);
+    let (prompt_id, _) = controller_effect(refresh_at(&mut session, now, 10.0, Vec::new()));
+    session.handle(
+      PlaybackInput::Event(PlaybackEvent::ControllerSettled {
+        id: prompt_id,
+        settlement: ControllerSettlement::OsdShown(Ok(())),
+      }),
+      now,
+    );
+
+    let effects = session.handle(PlaybackInput::Intent(PlaybackIntent::DismissIntro), now);
+
+    assert!(effects.is_empty());
+    assert!(session.view().intro_prompt.is_none());
+  }
+
+  #[test]
   fn tick_expires_the_intro_prompt_at_its_deadline() {
     let (mut session, now, auxiliary) = start_session(IntroSkipMode::Manual);
     settle_intro_ranges(&mut session, intro_fetch_id(&auxiliary), now);
@@ -1744,6 +1783,7 @@ mod tests {
           mode: IntroSkipMode::Automatic,
           skipper_available: false,
         },
+        selection: Box::default(),
       }),
       now,
     ));
@@ -1905,6 +1945,7 @@ mod tests {
         item: Playable::Media(media_item("episode-1", "Pilot")),
         position: PlaybackStartPosition::Beginning,
         intro: intro_availability(IntroSkipMode::Automatic),
+        selection: Box::default(),
       }),
       now,
     );
@@ -2084,6 +2125,7 @@ mod tests {
         title: Some("English".to_owned()),
         language: Some("eng".to_owned()),
         selected: true,
+        provider_index: Some(3),
       },
       TrackInfo {
         id: 8,
@@ -2091,6 +2133,7 @@ mod tests {
         title: Some("Spanish".to_owned()),
         language: Some("spa".to_owned()),
         selected: true,
+        provider_index: Some(7),
       },
     ];
 

@@ -1,7 +1,8 @@
 use std::collections::{HashMap, HashSet};
+use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 
-use tokio::sync::Mutex;
+use tokio::sync::{mpsc, Mutex};
 
 use iced::task;
 use iced::widget::image;
@@ -9,7 +10,7 @@ use jellypilot_auth::login::ConnectionPhase;
 use jellypilot_auth::{AuthStore, SavedProfileKey, SavedProfileSummary, SensitiveSavedSession};
 use jellypilot_core::artwork_binder::{ArtworkBinder, ArtworkSlot};
 use jellypilot_core::browse_model::{BrowseModel, LibraryBrowseView};
-use jellypilot_core::config::{LoginPrefill, Settings, SettingsStore};
+use jellypilot_core::config::{IntroMode, LoginPrefill, Settings, SettingsStore};
 use jellypilot_core::detail::DetailContent;
 use jellypilot_core::request_gate::{RemoteToken, RequestGate};
 use jellypilot_core::{LibraryBrowseLoadToken, LoadState};
@@ -19,7 +20,10 @@ use jellypilot_media_server::{
   VideoSeasonEpisodesPage,
 };
 use jellypilot_mpv::playback::{Playable, PlaybackController};
-use jellypilot_mpv::playback_session::{PlaybackSession, SessionView};
+use jellypilot_mpv::playback_session::{IntroAvailability, PlaybackSession, SessionView};
+use jellypilot_session::{
+  IntroSkipMode, JellyfinWebSocket, JellyfinWebSocketEvent, RemoteControlState,
+};
 use zeroize::Zeroizing;
 
 use crate::tray::Tray;
@@ -487,6 +491,31 @@ impl<T> HandleRetention<T> {
 
 pub type ArtworkHandleRetention = HandleRetention<image::Handle>;
 pub type PlaybackControllerHandle = Arc<Mutex<PlaybackController>>;
+#[derive(Clone)]
+pub struct RemoteSessionHandle {
+  pub websocket: Arc<JellyfinWebSocket>,
+  pub lifecycle: Arc<Mutex<()>>,
+}
+
+#[derive(Clone)]
+pub struct RemoteEventChannel {
+  pub remote: RemoteToken,
+  pub receiver: Arc<Mutex<mpsc::UnboundedReceiver<JellyfinWebSocketEvent>>>,
+}
+
+impl Hash for RemoteEventChannel {
+  fn hash<H: Hasher>(&self, state: &mut H) {
+    Arc::as_ptr(&self.receiver).hash(state);
+  }
+}
+
+pub fn intro_skip_mode(mode: IntroMode) -> IntroSkipMode {
+  match mode {
+    IntroMode::Automatic => IntroSkipMode::Automatic,
+    IntroMode::Manual => IntroSkipMode::Manual,
+    IntroMode::Off => IntroSkipMode::Off,
+  }
+}
 
 pub struct State {
   pub smoke: bool,
@@ -520,6 +549,10 @@ pub struct State {
   pub playback_playable: Option<Playable>,
   pub adjacent_playables: [Option<Playable>; 2],
   pub playback_remote: RemoteToken,
+  pub remote_session: Option<RemoteSessionHandle>,
+  pub remote_events: Option<RemoteEventChannel>,
+  pub remote_control_state: RemoteControlState,
+  pub remote_stopping: bool,
   pub seek_preview: Option<f64>,
   pub volume_preview: Option<f64>,
   pub browse: BrowseModel,
@@ -580,6 +613,10 @@ impl State {
       playback_playable: None,
       adjacent_playables: [None, None],
       playback_remote,
+      remote_session: None,
+      remote_events: None,
+      remote_control_state: RemoteControlState::Unavailable,
+      remote_stopping: false,
       seek_preview: None,
       volume_preview: None,
       browse: BrowseModel::default(),
@@ -590,6 +627,15 @@ impl State {
       browse_scroll_id: iced::widget::Id::unique(),
       browse_sort_menu_open: false,
       search_input: String::new(),
+    }
+  }
+  pub fn intro_availability(&self) -> IntroAvailability {
+    IntroAvailability {
+      mode: intro_skip_mode(self.settings.snapshot().intro_mode()),
+      skipper_available: self
+        .client
+        .as_ref()
+        .is_some_and(|client| client.supports_intro_skipper()),
     }
   }
 

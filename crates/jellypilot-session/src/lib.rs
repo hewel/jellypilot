@@ -10,6 +10,7 @@ pub use intro_skipper::{
     IntroSkipMode, IntroSkipRange,
 };
 pub use remote_control::{
-    finalize_remote_target, remote_state_after_event, remote_volume_value, RemoteControlState,
+    finalize_remote_target, remote_index_value, remote_state_after_event, remote_volume_value,
+    RemoteControlState,
 };
 pub use websocket::{JellyfinCommand, JellyfinWebSocket, JellyfinWebSocketEvent};

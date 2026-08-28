@@ -12,8 +12,7 @@ use jellypilot_core::detail::{detail_metadata, show_detail_metadata, DetailConte
 use jellypilot_core::LoadState;
 use jellypilot_media_server::{VideoLibraryItem, VideoSeason, VideoShowDetail};
 use jellypilot_mpv::playback::{Playable, PlaybackStartPosition};
-use jellypilot_mpv::playback_session::{IntroAvailability, PlaybackIntent};
-use jellypilot_session::IntroSkipMode;
+use jellypilot_mpv::playback_session::PlaybackIntent;
 use jellypilot_ui::fonts::SPACE_GROTESK_FONT;
 use jellypilot_ui::tokens::TOKENS;
 use jellypilot_ui::variants::{ButtonVariant, SurfaceVariant};
@@ -290,7 +289,7 @@ fn detail_actions<'a>(
     .on_press_maybe(
       playback_target
         .filter(|_| !state.playback_view.busy && state.playback_view.engine_available)
-        .map(|(item, position)| playback_message(item, position)),
+        .map(|(item, position)| playback_message(state, item, position)),
     )
     .style(|theme, status| {
       jellypilot_ui::theme::button_variant(theme, status, ButtonVariant::Primary)
@@ -529,6 +528,7 @@ fn episode_card<'a>(state: &'a State, episode: &'a VideoLibraryItem) -> Element<
     .on_press_maybe(
       (!state.playback_view.busy && state.playback_view.engine_available).then(|| {
         playback_message(
+          state,
           Playable::Library(episode.clone()),
           if has_resume(episode) {
             PlaybackStartPosition::Resume
@@ -552,14 +552,12 @@ fn episode_card<'a>(state: &'a State, episode: &'a VideoLibraryItem) -> Element<
   .into()
 }
 
-fn playback_message(item: Playable, position: PlaybackStartPosition) -> Message {
+fn playback_message(state: &State, item: Playable, position: PlaybackStartPosition) -> Message {
   Message::Playback(PlaybackMessage::Intent(PlaybackIntent::Start {
     item,
     position,
-    intro: IntroAvailability {
-      mode: IntroSkipMode::Off,
-      skipper_available: false,
-    },
+    intro: state.intro_availability(),
+    selection: Box::default(),
   }))
 }
 

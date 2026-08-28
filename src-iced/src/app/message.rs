@@ -18,10 +18,13 @@ use jellypilot_media_server::{
   JellyfinClient, MediaItem, MediaServerProvider, VideoItemDetail, VideoLibraryItem,
   VideoLibraryPlayedFilter, VideoLibrarySort, VideoSeasonEpisodesPage, VideoUserDataUpdate,
 };
-use jellypilot_mpv::playback::{Playable, PlaybackError, TrackInfo};
+use jellypilot_mpv::playback::{Playable, PlaybackError, PlaybackSelection, TrackInfo};
 use jellypilot_mpv::playback_session::{
   AdjacentDirection, ControllerSettlement, EffectId, PlaybackEvent, PlaybackIntent,
 };
+use jellypilot_session::JellyfinWebSocketEvent;
+
+use super::state::RemoteSessionHandle;
 
 use zeroize::Zeroize;
 impl std::fmt::Debug for Message {
@@ -34,6 +37,7 @@ impl std::fmt::Debug for Message {
       Self::OpenDetail(_) => formatter.write_str("OpenDetail"),
       Self::Detail(_) => formatter.write_str("Detail"),
       Self::Playback(_) => formatter.write_str("Playback"),
+      Self::Remote(_) => formatter.write_str("Remote"),
       Self::TrayPoll => formatter.write_str("TrayPoll"),
     }
   }
@@ -48,6 +52,7 @@ pub enum Message {
   OpenDetail(VideoLibraryItem),
   Detail(DetailMessage),
   Playback(PlaybackMessage),
+  Remote(RemoteMessage),
   TrayPoll,
 }
 
@@ -158,6 +163,55 @@ pub enum PlaybackMessage {
     result: Result<ArtworkBytes, ArtworkError>,
   },
 }
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum RemoteStartError {
+  SessionUnavailable,
+  ConnectionFailed,
+  CapabilityRegistrationFailed,
+}
+
+impl RemoteStartError {
+  pub const fn diagnostic(self) -> &'static str {
+    match self {
+      Self::SessionUnavailable => "Remote playback target session is unavailable.",
+      Self::ConnectionFailed => "Remote playback target could not connect.",
+      Self::CapabilityRegistrationFailed => {
+        "Remote playback target capabilities could not be registered."
+      }
+    }
+  }
+}
+
+#[derive(Clone)]
+pub struct RemoteSessionStart {
+  pub session: RemoteSessionHandle,
+  pub validated: bool,
+}
+
+#[derive(Clone)]
+pub enum RemoteMessage {
+  Started {
+    remote: RemoteToken,
+    result: Result<RemoteSessionStart, RemoteStartError>,
+  },
+  Event {
+    remote: RemoteToken,
+    event: JellyfinWebSocketEvent,
+  },
+  Finalized {
+    remote: RemoteToken,
+    result: Result<bool, ()>,
+  },
+  PlayResolved {
+    remote: RemoteToken,
+    play: RemotePlayToken,
+    result: Box<Result<Playable, ()>>,
+    start_position_ticks: Option<i64>,
+    selection: PlaybackSelection,
+  },
+  RemoteDisconnected,
+  QuitStopped,
+}
 
 pub type SensitiveSessionPayload = SensitiveSavedSession;
 
@@ -225,6 +279,7 @@ pub enum LoginMessage {
   QuickConnectSubmitted,
   QuickConnectCancelled,
   PasswordSubmitted,
+  RemoteDisconnected,
   ProfilesLoaded {
     revision: u64,
     result: Result<Vec<SavedProfileSummary>, AuthStorageError>,

@@ -5,8 +5,7 @@ use jellypilot_core::cards::{card_frame_size, hero_headline, hero_metadata, item
 use jellypilot_core::LoadState;
 use jellypilot_media_server::VideoLibraryItem;
 use jellypilot_mpv::playback::{Playable, PlaybackStartPosition};
-use jellypilot_mpv::playback_session::{IntroAvailability, PlaybackIntent};
-use jellypilot_session::IntroSkipMode;
+use jellypilot_mpv::playback_session::PlaybackIntent;
 use jellypilot_ui::fonts::SPACE_GROTESK_FONT;
 use jellypilot_ui::tokens::TOKENS;
 use jellypilot_ui::variants::{ButtonVariant, SurfaceVariant};
@@ -87,7 +86,8 @@ fn featured_hero<'a>(state: &'a State, item: &'a VideoLibraryItem) -> Element<'a
   }))
   .padding([10, 16])
   .on_press_maybe(
-    (!state.playback_view.busy && state.playback_view.engine_available).then(|| play_message(item)),
+    (!state.playback_view.busy && state.playback_view.engine_available)
+      .then(|| play_message(state, item)),
   )
   .style(|theme, status| {
     jellypilot_ui::theme::button_variant(theme, status, ButtonVariant::Primary)
@@ -213,7 +213,8 @@ fn video_card<'a>(
   }))
   .padding([7, 10])
   .on_press_maybe(
-    (!state.playback_view.busy && state.playback_view.engine_available).then(|| play_message(item)),
+    (!state.playback_view.busy && state.playback_view.engine_available)
+      .then(|| play_message(state, item)),
   )
   .style(|theme, status| {
     jellypilot_ui::theme::button_variant(theme, status, ButtonVariant::Primary)
@@ -233,7 +234,7 @@ fn video_card<'a>(
   .into()
 }
 
-fn play_message(item: &VideoLibraryItem) -> Message {
+fn play_message(state: &State, item: &VideoLibraryItem) -> Message {
   Message::Playback(PlaybackMessage::Intent(PlaybackIntent::Start {
     item: Playable::Library(item.clone()),
     position: if has_resume_position(item) {
@@ -241,10 +242,8 @@ fn play_message(item: &VideoLibraryItem) -> Message {
     } else {
       PlaybackStartPosition::Beginning
     },
-    intro: IntroAvailability {
-      mode: IntroSkipMode::Off,
-      skipper_available: false,
-    },
+    intro: state.intro_availability(),
+    selection: Box::default(),
   }))
 }
 

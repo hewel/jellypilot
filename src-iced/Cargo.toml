@@ -28,6 +28,7 @@ gtk = "0.18.2"
 
 [dev-dependencies]
 jellypilot-core = { path = "../crates/jellypilot-core", features = ["test-utils"] }
+serde_json = "1.0.149"
 
 [lints]
 workspace = true

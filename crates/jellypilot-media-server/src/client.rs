@@ -30,6 +30,14 @@ const SUPPORTED_REMOTE_COMMANDS: &[&str] = &[
   "SetAudioStreamIndex",
   "SetSubtitleStreamIndex",
 ];
+const ICED_REMOTE_COMMANDS: &[&str] = &[
+  "Play",
+  "Playstate",
+  "SetVolume",
+  "ToggleMute",
+  "SetAudioStreamIndex",
+  "SetSubtitleStreamIndex",
+];
 const EMBEDDED_REMOTE_COMMANDS: &[&str] = &["Play", "Playstate", "SetVolume", "ToggleMute"];
 const MAX_SEASON_EPISODE_PAGE_SIZE: i32 = 100;
 const MAX_COMPAT_SEASON_EPISODES: i32 = 10_000;
@@ -1847,6 +1855,20 @@ impl JellyfinClient {
     }
   }
 
+  async fn report_iced_capabilities_checked(&self) -> Result<(), JellyfinError> {
+    let status = self
+      .post_capabilities_payload(&["Video"], ICED_REMOTE_COMMANDS)
+      .await?
+      .status();
+    if status.is_success() {
+      Ok(())
+    } else {
+      Err(JellyfinError::HttpError(format!(
+        "Capabilities registration failed: HTTP {status}"
+      )))
+    }
+  }
+
   async fn post_capabilities(
     &self,
     engine: PlaybackEngineKind,
@@ -1855,6 +1877,16 @@ impl JellyfinClient {
       PlaybackEngineKind::EmbeddedWeb => (&["Video"][..], EMBEDDED_REMOTE_COMMANDS),
       PlaybackEngineKind::ExternalMpv => (&["Video", "Audio"][..], SUPPORTED_REMOTE_COMMANDS),
     };
+    self
+      .post_capabilities_payload(playable_media_types, supported_commands)
+      .await
+  }
+
+  async fn post_capabilities_payload(
+    &self,
+    playable_media_types: &[&str],
+    supported_commands: &[&str],
+  ) -> Result<reqwest::Response, JellyfinError> {
     let capabilities = serde_json::json!({
       "PlayableMediaTypes": playable_media_types,
       "SupportedCommands": supported_commands,
@@ -2354,6 +2386,15 @@ impl<'a> JellyfinPlayback<'a> {
     engine: PlaybackEngineKind,
   ) -> Result<(), JellyfinError> {
     self.client.report_capabilities_for_checked(engine).await
+  }
+
+  /// Register the iced shell's video-only, window-independent command surface.
+  ///
+  /// # Errors
+  ///
+  /// Returns an error when the request fails or the server rejects registration.
+  pub async fn report_iced_capabilities_checked(&self) -> Result<(), JellyfinError> {
+    self.client.report_iced_capabilities_checked().await
   }
 
   pub async fn get_next_episode(

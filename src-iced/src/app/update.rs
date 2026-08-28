@@ -33,11 +33,17 @@ use jellypilot_media_server::{
 use jellypilot_mpv::configured_mpv_args;
 use jellypilot_mpv::playback::{
   media_item_from_playable, Playable, PlaybackController, PlaybackControllerConfig,
-  PlaybackEndReason, PlaybackError, PlaybackRefreshOutcome, PlaybackRefreshState, PlaybackSnapshot,
+  PlaybackEndReason, PlaybackError, PlaybackRefreshOutcome, PlaybackRefreshState,
+  PlaybackSelection, PlaybackSnapshot,
 };
 use jellypilot_mpv::playback_session::{
   AdjacentDirection, ControllerCommand, ControllerSettlement, PlaybackEffect, PlaybackEvent,
-  PlaybackInput, PlaybackIntent, PlaybackNotice,
+  PlaybackInput, PlaybackIntent, PlaybackNotice, SessionView, TracksView,
+};
+use jellypilot_session::{
+  finalize_remote_target, remote_index_value, remote_state_after_event, remote_volume_value,
+  GeneralCommand, JellyfinCommand, JellyfinWebSocket, JellyfinWebSocketEvent, PlayRequest,
+  PlaystateRequest, RemoteControlState,
 };
 use url::Url;
 use zeroize::{Zeroize, Zeroizing};
@@ -46,12 +52,13 @@ use crate::tray::{self, TrayAction};
 
 use super::message::{
   BrowseMessage, DetailMessage, HomeMessage, LoginMessage, Message, PasswordSubmission,
-  PlaybackMessage, ProtectedSavedSession, SensitiveSessionPayload, WindowMessage,
+  PlaybackMessage, ProtectedSavedSession, RemoteMessage, RemoteSessionStart, RemoteStartError,
+  SensitiveSessionPayload, WindowMessage,
 };
 use super::state::{
   ArtworkCell, ArtworkCellState, BrowseArtwork, BrowseViewport, ConnectedIdentity, Destination,
   DetailArtwork, DetailState, HomeArtwork, HomeSection, HomeState, LoginMethod, QuickConnectState,
-  State, UserDataActionKind,
+  RemoteEventChannel, RemoteSessionHandle, State, UserDataActionKind,
 };
 
 pub fn update(state: &mut State, message: Message) -> Task<Message> {
@@ -64,7 +71,11 @@ pub fn update(state: &mut State, message: Message) -> Task<Message> {
       if !was_connected && is_connected {
         state.destination = Destination::Home;
         initialize_playback(state);
-        Task::batch([login_task, start_home_load(state)])
+        Task::batch([
+          login_task,
+          start_home_load(state),
+          start_remote_session(state),
+        ])
       } else if was_connected && !is_connected {
         Task::batch([login_task, reset_connected_surface(state)])
       } else {
@@ -76,6 +87,7 @@ pub fn update(state: &mut State, message: Message) -> Task<Message> {
     Message::OpenDetail(item) => open_detail(state, item),
     Message::Detail(message) => update_detail(state, message),
     Message::Playback(message) => update_playback(state, message),
+    Message::Remote(message) => update_remote(state, message),
     Message::TrayPoll => update_tray(state),
   }
 }
@@ -87,7 +99,10 @@ fn update_window(state: &mut State, message: WindowMessage) -> Task<Message> {
     }
     WindowMessage::CloseRequested(_) => {
       state.quit_requested = true;
-      apply_playback_input(state, PlaybackInput::Intent(PlaybackIntent::Quit))
+      Task::batch([
+        apply_playback_input(state, PlaybackInput::Intent(PlaybackIntent::Quit)),
+        stop_remote_session_for_quit(state),
+      ])
     }
     WindowMessage::ShowRequested(id) => id.map_or_else(Task::none, |id| {
       iced::window::set_mode(id, iced::window::Mode::Windowed).chain(iced::window::gain_focus(id))
@@ -98,6 +113,418 @@ fn update_window(state: &mut State, message: WindowMessage) -> Task<Message> {
     }
   }
 }
+fn start_remote_session(state: &mut State) -> Task<Message> {
+  let Some(client) = state.client.as_ref().map(Arc::clone) else {
+    return Task::none();
+  };
+  if let Some(name) = state.settings.snapshot().playback_target_name() {
+    client.set_device_name(name.to_owned());
+  }
+
+  let remote = state.playback_remote;
+  let websocket = Arc::new(JellyfinWebSocket::new());
+  let Some(mut websocket_events) = websocket.take_event_receiver() else {
+    return Task::done(Message::Remote(RemoteMessage::Started {
+      remote,
+      result: Err(RemoteStartError::SessionUnavailable),
+    }));
+  };
+  let (event_sender, event_receiver) = tokio::sync::mpsc::unbounded_channel();
+  state.remote_events = Some(RemoteEventChannel {
+    remote,
+    receiver: Arc::new(tokio::sync::Mutex::new(event_receiver)),
+  });
+  let session = RemoteSessionHandle {
+    websocket: Arc::clone(&websocket),
+    lifecycle: Arc::new(tokio::sync::Mutex::new(())),
+  };
+  state.remote_session = Some(session.clone());
+  state.remote_control_state = RemoteControlState::Connecting;
+
+  Task::perform(
+    async move {
+      let lifecycle = Arc::clone(&session.lifecycle);
+      let _lifecycle = lifecycle.lock().await;
+      let websocket_url = client
+        .playback()
+        .websocket_url()
+        .map_err(|_| RemoteStartError::SessionUnavailable)?;
+      let user_agent = client.playback().websocket_user_agent();
+      let forwarder = tokio::spawn(async move {
+        while let Some(event) = websocket_events.recv().await {
+          if event_sender.send(event).is_err() {
+            break;
+          }
+        }
+      });
+      if websocket
+        .connect_with_user_agent(&websocket_url, Some(&user_agent))
+        .await
+        .is_err()
+      {
+        websocket.disconnect().await;
+        let _ = forwarder.await;
+        return Err(RemoteStartError::ConnectionFailed);
+      }
+      let validated = match finalize_remote_target(&client).await {
+        Ok(validated) => validated,
+        Err(()) => {
+          websocket.disconnect().await;
+          let _ = forwarder.await;
+          return Err(RemoteStartError::CapabilityRegistrationFailed);
+        }
+      };
+      Ok(RemoteSessionStart { session, validated })
+    },
+    move |result| Message::Remote(RemoteMessage::Started { remote, result }),
+  )
+}
+
+const REMOTE_CONNECTION_LOST_NOTICE: &str = "Remote playback connection lost; reconnecting…";
+const REMOTE_TRACKS_UNAVAILABLE_NOTICE: &str =
+  "Remote track selection ignored because playback tracks are not loaded.";
+
+fn update_remote(state: &mut State, message: RemoteMessage) -> Task<Message> {
+  match message {
+    RemoteMessage::Started { remote, result } => {
+      if !state.request_gate.is_current_remote(remote)
+        || state.connection != ConnectionPhase::Connected
+      {
+        return match result {
+          Ok(started) => {
+            let session = started.session;
+            Task::perform(
+              async move { disconnect_remote_session(session).await },
+              |()| Message::Remote(RemoteMessage::RemoteDisconnected),
+            )
+          }
+          Err(_) => Task::none(),
+        };
+      }
+      match result {
+        Ok(started) => {
+          let RemoteSessionStart { session, validated } = started;
+          state.remote_session = Some(session);
+          state.remote_control_state = RemoteControlState::Available;
+          if !validated {
+            state.notice = Some(
+              "Remote playback target connected, but server session validation is still pending."
+                .to_owned(),
+            );
+          }
+        }
+        Err(error) => {
+          state.playback_remote = state.request_gate.begin_remote();
+          state.remote_session = None;
+          state.remote_events = None;
+          state.remote_control_state = RemoteControlState::Unavailable;
+          state.notice = Some(error.diagnostic().to_owned());
+        }
+      }
+      Task::none()
+    }
+    RemoteMessage::Event { remote, event } => {
+      if !state.request_gate.is_current_remote(remote) {
+        return Task::none();
+      }
+      state.remote_control_state = remote_state_after_event(state.remote_control_state, &event);
+      match event {
+        JellyfinWebSocketEvent::Command(command)
+          if state.remote_control_state == RemoteControlState::Available =>
+        {
+          handle_remote_command(state, remote, command)
+        }
+        JellyfinWebSocketEvent::Command(_) => Task::none(),
+        JellyfinWebSocketEvent::Reconnected => {
+          let Some(client) = state.client.as_ref().map(Arc::clone) else {
+            return Task::none();
+          };
+          Task::perform(
+            async move { finalize_remote_target(&client).await },
+            move |result| Message::Remote(RemoteMessage::Finalized { remote, result }),
+          )
+        }
+        JellyfinWebSocketEvent::ConnectionLost => {
+          state.notice = Some(REMOTE_CONNECTION_LOST_NOTICE.to_owned());
+          Task::none()
+        }
+        JellyfinWebSocketEvent::Connected => Task::none(),
+      }
+    }
+    RemoteMessage::Finalized { remote, result } => {
+      if !state.request_gate.is_current_remote(remote) {
+        return Task::none();
+      }
+      match result {
+        Ok(true) => {
+          state.remote_control_state = RemoteControlState::Available;
+          if state.notice.as_deref() == Some(REMOTE_CONNECTION_LOST_NOTICE) {
+            state.notice = None;
+          }
+          Task::none()
+        }
+        Ok(false) => {
+          state.notice = Some(
+            "Remote playback target reconnected, but server session validation is still pending."
+              .to_owned(),
+          );
+          Task::none()
+        }
+        Err(()) => fail_remote_finalization(state),
+      }
+    }
+    RemoteMessage::PlayResolved {
+      remote,
+      play,
+      result,
+      start_position_ticks,
+      selection,
+    } => {
+      if !state.request_gate.is_current_remote(remote)
+        || !state.request_gate.is_current_remote_play(play)
+      {
+        return Task::none();
+      }
+      let Ok(item) = *result else {
+        state.notice = Some("Remote playback item could not be loaded.".to_owned());
+        return Task::none();
+      };
+      let position = start_position_ticks.map_or(
+        jellypilot_mpv::playback::PlaybackStartPosition::Beginning,
+        |ticks| {
+          jellypilot_mpv::playback::PlaybackStartPosition::At(
+            jellypilot_media_server::ticks_to_seconds(ticks),
+          )
+        },
+      );
+      apply_playback_input(
+        state,
+        PlaybackInput::Intent(PlaybackIntent::Start {
+          item,
+          position,
+          intro: state.intro_availability(),
+          selection: Box::new(selection),
+        }),
+      )
+    }
+    RemoteMessage::RemoteDisconnected => Task::none(),
+    RemoteMessage::QuitStopped => {
+      state.remote_stopping = false;
+      if quit_may_exit(state) {
+        iced::exit()
+      } else {
+        Task::none()
+      }
+    }
+  }
+}
+
+enum RemoteCommandAction {
+  Intent(RemotePlaybackIntent),
+  Play {
+    item_id: String,
+    start_position_ticks: Option<i64>,
+    selection: PlaybackSelection,
+  },
+}
+
+#[derive(Clone, Copy)]
+enum RemotePlaybackIntent {
+  SetPaused(bool),
+  TogglePaused,
+  Seek(f64),
+  SetVolume(f64),
+  SetMuted(bool),
+  SelectAudioStream(i64),
+  SelectSubtitleStream(Option<i64>),
+  Stop,
+  PlayAdjacent(AdjacentDirection),
+}
+
+impl RemotePlaybackIntent {
+  fn into_playback_intent(self, playback: &SessionView) -> Option<PlaybackIntent> {
+    match self {
+      Self::SetPaused(paused) => Some(PlaybackIntent::SetPaused(paused)),
+      Self::TogglePaused => Some(PlaybackIntent::TogglePaused),
+      Self::Seek(position) => Some(PlaybackIntent::Seek(position)),
+      Self::SetVolume(volume) => Some(PlaybackIntent::SetVolume(volume)),
+      Self::SetMuted(muted) => Some(PlaybackIntent::SetMuted(muted)),
+      Self::SelectAudioStream(index) => {
+        provider_track_id(playback, "audio", index).map(PlaybackIntent::SelectAudioTrack)
+      }
+      Self::SelectSubtitleStream(None) => Some(PlaybackIntent::SelectSubtitleTrack(None)),
+      Self::SelectSubtitleStream(Some(index)) => provider_track_id(playback, "sub", index)
+        .map(|id| PlaybackIntent::SelectSubtitleTrack(Some(id))),
+      Self::Stop => Some(PlaybackIntent::Stop),
+      Self::PlayAdjacent(direction) => Some(PlaybackIntent::PlayAdjacent(direction)),
+    }
+  }
+
+  const fn invalidates_remote_play(self) -> bool {
+    matches!(self, Self::Stop | Self::PlayAdjacent(_))
+  }
+}
+
+fn remote_command_action(
+  command: JellyfinCommand,
+  playback: &SessionView,
+) -> Option<RemoteCommandAction> {
+  match command {
+    JellyfinCommand::Play(request) => remote_play_action(request),
+    JellyfinCommand::Playstate(request) => remote_playstate_action(request),
+    JellyfinCommand::GeneralCommand(request) => remote_general_action(
+      request,
+      playback.now_playing.as_ref().map(|playing| playing.muted),
+    ),
+  }
+}
+
+fn remote_play_action(request: PlayRequest) -> Option<RemoteCommandAction> {
+  Some(RemoteCommandAction::Play {
+    item_id: request.item_ids.first()?.clone(),
+    start_position_ticks: request.start_position_ticks,
+    selection: PlaybackSelection {
+      media_source_id: request.media_source_id,
+      audio_stream_index: request.audio_stream_index,
+      subtitle_stream_index: request.subtitle_stream_index,
+    },
+  })
+}
+
+fn remote_playstate_action(request: PlaystateRequest) -> Option<RemoteCommandAction> {
+  let intent = match request.command.as_str() {
+    "Pause" => RemotePlaybackIntent::SetPaused(true),
+    "Unpause" => RemotePlaybackIntent::SetPaused(false),
+    "PlayPause" => RemotePlaybackIntent::TogglePaused,
+    "Seek" => RemotePlaybackIntent::Seek(jellypilot_media_server::ticks_to_seconds(
+      request.seek_position_ticks?,
+    )),
+    "Stop" => RemotePlaybackIntent::Stop,
+    "NextTrack" => RemotePlaybackIntent::PlayAdjacent(AdjacentDirection::Next),
+    "PreviousTrack" => RemotePlaybackIntent::PlayAdjacent(AdjacentDirection::Previous),
+    _ => return None,
+  };
+  Some(RemoteCommandAction::Intent(intent))
+}
+
+fn remote_general_action(
+  request: GeneralCommand,
+  muted: Option<bool>,
+) -> Option<RemoteCommandAction> {
+  let arguments = request.arguments.as_ref();
+  let intent = match request.name.as_str() {
+    "SetVolume" => RemotePlaybackIntent::SetVolume(remote_volume_value(
+      arguments.and_then(|arguments| arguments.get("Volume")),
+    )?),
+    "ToggleMute" => RemotePlaybackIntent::SetMuted(!muted?),
+    "SetAudioStreamIndex" => RemotePlaybackIntent::SelectAudioStream(remote_index_value(
+      arguments.and_then(|arguments| arguments.get("Index")),
+    )?),
+    "SetSubtitleStreamIndex" => {
+      let index = remote_index_value(arguments.and_then(|arguments| arguments.get("Index")))?;
+      RemotePlaybackIntent::SelectSubtitleStream((index >= 0).then_some(index))
+    }
+    _ => return None,
+  };
+  Some(RemoteCommandAction::Intent(intent))
+}
+
+fn handle_remote_command(
+  state: &mut State,
+  remote: jellypilot_core::request_gate::RemoteToken,
+  command: JellyfinCommand,
+) -> Task<Message> {
+  match remote_command_action(command, &state.playback_view) {
+    Some(RemoteCommandAction::Intent(intent)) => {
+      if intent.invalidates_remote_play() {
+        state.request_gate.begin_remote_play();
+      }
+      let Some(intent) = intent.into_playback_intent(&state.playback_view) else {
+        state.notice = Some(REMOTE_TRACKS_UNAVAILABLE_NOTICE.to_owned());
+        return Task::none();
+      };
+      apply_playback_input(state, PlaybackInput::Intent(intent))
+    }
+    Some(RemoteCommandAction::Play {
+      item_id,
+      start_position_ticks,
+      selection,
+    }) => {
+      let play = state.request_gate.begin_remote_play();
+      let Some(client) = state.client.as_ref().map(Arc::clone) else {
+        return Task::none();
+      };
+      Task::perform(
+        async move {
+          let item = client.playback().get_item(&item_id).await.map_err(|_| ())?;
+          Ok(
+            client
+              .library()
+              .item_detail(item_id)
+              .await
+              .map(Playable::Detail)
+              .unwrap_or_else(|_| Playable::Media(item)),
+          )
+        },
+        move |result| {
+          Message::Remote(RemoteMessage::PlayResolved {
+            remote,
+            play,
+            result: Box::new(result),
+            start_position_ticks,
+            selection,
+          })
+        },
+      )
+    }
+    None => Task::none(),
+  }
+}
+fn provider_track_id(playback: &SessionView, track_type: &str, provider_index: i64) -> Option<i64> {
+  let TracksView::Ready { tracks, .. } = &playback.tracks else {
+    return None;
+  };
+  tracks
+    .iter()
+    .find(|track| {
+      track.track_type == track_type && track.provider_index.map(i64::from) == Some(provider_index)
+    })
+    .map(|track| track.id)
+}
+
+fn fail_remote_finalization(state: &mut State) -> Task<Message> {
+  state.playback_remote = state.request_gate.begin_remote();
+  state.remote_events = None;
+  state.remote_control_state = RemoteControlState::Unavailable;
+  state.notice = Some("Remote playback target capabilities could not be registered.".to_owned());
+  let Some(session) = state.remote_session.take() else {
+    return Task::none();
+  };
+  Task::perform(
+    async move { disconnect_remote_session(session).await },
+    |()| Message::Remote(RemoteMessage::RemoteDisconnected),
+  )
+}
+
+async fn disconnect_remote_session(session: RemoteSessionHandle) {
+  let lifecycle = Arc::clone(&session.lifecycle);
+  let _lifecycle = lifecycle.lock().await;
+  session.websocket.disconnect().await;
+}
+
+fn stop_remote_session_for_quit(state: &mut State) -> Task<Message> {
+  state.playback_remote = state.request_gate.begin_remote();
+  state.remote_events = None;
+  state.remote_control_state = RemoteControlState::Unavailable;
+  let Some(session) = state.remote_session.take() else {
+    return Task::none();
+  };
+  state.remote_stopping = true;
+  Task::perform(
+    async move { disconnect_remote_session(session).await },
+    |()| Message::Remote(RemoteMessage::QuitStopped),
+  )
+}
 
 fn update_tray(state: &mut State) -> Task<Message> {
   let mut tasks = Vec::new();
@@ -106,13 +533,12 @@ fn update_tray(state: &mut State) -> Task<Message> {
       TrayAction::PlayPause => {
         apply_playback_input(state, PlaybackInput::Intent(PlaybackIntent::TogglePaused))
       }
-      TrayAction::Next => apply_playback_input(
+      TrayAction::Next => {
+        apply_local_playback_intent(state, PlaybackIntent::PlayAdjacent(AdjacentDirection::Next))
+      }
+      TrayAction::Previous => apply_local_playback_intent(
         state,
-        PlaybackInput::Intent(PlaybackIntent::PlayAdjacent(AdjacentDirection::Next)),
-      ),
-      TrayAction::Previous => apply_playback_input(
-        state,
-        PlaybackInput::Intent(PlaybackIntent::PlayAdjacent(AdjacentDirection::Previous)),
+        PlaybackIntent::PlayAdjacent(AdjacentDirection::Previous),
       ),
       TrayAction::Mute => {
         let Some(muted) = state
@@ -137,7 +563,10 @@ fn update_tray(state: &mut State) -> Task<Message> {
         }
         state.quit_requested = true;
         sync_tray(state);
-        apply_playback_input(state, PlaybackInput::Intent(PlaybackIntent::Quit))
+        Task::batch([
+          apply_playback_input(state, PlaybackInput::Intent(PlaybackIntent::Quit)),
+          stop_remote_session_for_quit(state),
+        ])
       }
     };
     tasks.push(task);
@@ -189,9 +618,19 @@ fn playback_controller_config(settings: &Settings) -> PlaybackControllerConfig {
   }
 }
 
+fn apply_local_playback_intent(state: &mut State, intent: PlaybackIntent) -> Task<Message> {
+  if matches!(
+    &intent,
+    PlaybackIntent::Start { .. } | PlaybackIntent::Stop | PlaybackIntent::PlayAdjacent(_)
+  ) {
+    state.request_gate.begin_remote_play();
+  }
+  apply_playback_input(state, PlaybackInput::Intent(intent))
+}
+
 fn update_playback(state: &mut State, message: PlaybackMessage) -> Task<Message> {
   match message {
-    PlaybackMessage::Intent(intent) => apply_playback_input(state, PlaybackInput::Intent(intent)),
+    PlaybackMessage::Intent(intent) => apply_local_playback_intent(state, intent),
     PlaybackMessage::Event(event) => apply_playback_input(state, PlaybackInput::Event(*event)),
     PlaybackMessage::SeekChanged(position) => {
       state.seek_preview = seek_intent(
@@ -388,7 +827,7 @@ fn apply_playback_input(state: &mut State, input: PlaybackInput) -> Task<Message
 }
 
 fn quit_may_exit(state: &State) -> bool {
-  state.quit_requested && state.playback_view.quit_may_proceed
+  state.quit_requested && state.playback_view.quit_may_proceed && !state.remote_stopping
 }
 
 fn sync_playback_projection(state: &mut State) {
@@ -503,12 +942,35 @@ fn execute_playback_effect(
         },
       )
     }
-    PlaybackEffect::FetchIntroRanges(id, _) => Task::done(Message::Playback(
-      PlaybackMessage::Event(Box::new(PlaybackEvent::IntroRangesSettled {
-        id,
-        result: Err(()),
-      })),
-    )),
+    PlaybackEffect::FetchIntroRanges(id, item_id) => {
+      let Some(client) = state
+        .client
+        .as_ref()
+        .filter(|client| client.supports_intro_skipper())
+        .map(Arc::clone)
+      else {
+        return Task::done(Message::Playback(PlaybackMessage::Event(Box::new(
+          PlaybackEvent::IntroRangesSettled {
+            id,
+            result: Err(()),
+          },
+        ))));
+      };
+      Task::perform(
+        async move {
+          client
+            .playback()
+            .get_intro_skipper_ranges(&item_id)
+            .await
+            .map_err(|_| ())
+        },
+        move |result| {
+          Message::Playback(PlaybackMessage::Event(Box::new(
+            PlaybackEvent::IntroRangesSettled { id, result },
+          )))
+        },
+      )
+    }
   }
 }
 
@@ -534,8 +996,12 @@ fn execute_controller_command(
     async move {
       let mut controller = controller.lock().await;
       match command {
-        ControllerCommand::Start { item, position } => {
-          let result = controller.play(item, position).await;
+        ControllerCommand::Start {
+          item,
+          position,
+          selection,
+        } => {
+          let result = controller.play_selected(item, position, selection).await;
           let tracks = if result.is_ok() {
             Some(controller.tracks().await)
           } else {
@@ -1836,6 +2302,10 @@ fn reset_connected_surface(state: &mut State) -> Task<Message> {
   let playback_task =
     apply_playback_input(state, PlaybackInput::Intent(PlaybackIntent::Disconnect));
   state.playback_remote = state.request_gate.begin_remote();
+  state.remote_session = None;
+  state.remote_events = None;
+  state.remote_control_state = RemoteControlState::Unavailable;
+  state.remote_stopping = false;
   abort_browse_pages(state);
   state.artwork_adapter.reset_session();
   state.artwork_binder.reset();
@@ -1913,6 +2383,17 @@ pub fn update_login(state: &mut State, message: LoginMessage) -> Task<LoginMessa
       } else {
         Task::none()
       }
+    }
+    LoginMessage::RemoteDisconnected => {
+      state.remote_stopping = false;
+      if let Some(client) = state.client.take() {
+        client.login().disconnect();
+      }
+      state.request_gate.disconnect();
+      state.connection = ConnectionPhase::SignedOut;
+      state.connected_identity = None;
+      state.active_profile = None;
+      Task::none()
     }
     LoginMessage::ProfilesLoaded { revision, result } => {
       state.login.profiles_loading = false;
@@ -2038,13 +2519,7 @@ pub fn update_login(state: &mut State, message: LoginMessage) -> Task<LoginMessa
           state.login.profiles_revision = state.login.profiles_revision.wrapping_add(1);
           state.login.profiles = profiles;
           if disconnect {
-            if let Some(client) = state.client.take() {
-              client.login().disconnect();
-            }
-            state.request_gate.disconnect();
-            state.connection = ConnectionPhase::SignedOut;
-            state.connected_identity = None;
-            state.active_profile = None;
+            return stop_remote_session_for_login(state);
           }
         }
         Err(error) => state.login.error = Some(LoginError::AuthStorage(error).to_string()),
@@ -2052,6 +2527,20 @@ pub fn update_login(state: &mut State, message: LoginMessage) -> Task<LoginMessa
       Task::none()
     }
   }
+}
+
+fn stop_remote_session_for_login(state: &mut State) -> Task<LoginMessage> {
+  state.playback_remote = state.request_gate.begin_remote();
+  state.remote_events = None;
+  state.remote_control_state = RemoteControlState::Unavailable;
+  let Some(session) = state.remote_session.take() else {
+    return Task::done(LoginMessage::RemoteDisconnected);
+  };
+  state.remote_stopping = true;
+  Task::perform(
+    async move { disconnect_remote_session(session).await },
+    |()| LoginMessage::RemoteDisconnected,
+  )
 }
 
 fn playback_allows_login(state: &mut State) -> bool {
@@ -2487,6 +2976,10 @@ mod tests {
       playback_playable: None,
       adjacent_playables: [None, None],
       playback_remote,
+      remote_session: None,
+      remote_events: None,
+      remote_control_state: RemoteControlState::Unavailable,
+      remote_stopping: false,
       seek_preview: None,
       volume_preview: None,
       browse: Default::default(),
@@ -3309,6 +3802,7 @@ mod tests {
           mode: jellypilot_session::IntroSkipMode::Off,
           skipper_available: false,
         },
+        selection: Box::default(),
       }),
       now,
     );
@@ -3542,6 +4036,385 @@ mod tests {
     assert!(volume_intent(f64::INFINITY, true).is_none());
   }
 
+  fn playstate_action(command: &str, seek_position_ticks: Option<i64>) -> RemoteCommandAction {
+    remote_playstate_action(PlaystateRequest {
+      command: command.to_owned(),
+      seek_position_ticks,
+    })
+    .expect("supported command should map")
+  }
+
+  fn general_action(
+    name: &str,
+    arguments: Option<serde_json::Value>,
+    muted: Option<bool>,
+  ) -> RemoteCommandAction {
+    remote_general_action(
+      GeneralCommand {
+        name: name.to_owned(),
+        arguments,
+      },
+      muted,
+    )
+    .expect("supported command should map")
+  }
+
+  #[test]
+  fn remote_playstate_commands_map_to_session_intents() {
+    assert!(matches!(
+      playstate_action("Pause", None),
+      RemoteCommandAction::Intent(RemotePlaybackIntent::SetPaused(true))
+    ));
+    assert!(matches!(
+      playstate_action("Unpause", None),
+      RemoteCommandAction::Intent(RemotePlaybackIntent::SetPaused(false))
+    ));
+    assert!(matches!(
+      playstate_action("PlayPause", None),
+      RemoteCommandAction::Intent(RemotePlaybackIntent::TogglePaused)
+    ));
+    assert!(matches!(
+      playstate_action("Seek", Some(125_000_000)),
+      RemoteCommandAction::Intent(RemotePlaybackIntent::Seek(12.5))
+    ));
+    assert!(matches!(
+      playstate_action("Stop", None),
+      RemoteCommandAction::Intent(RemotePlaybackIntent::Stop)
+    ));
+    assert!(matches!(
+      playstate_action("NextTrack", None),
+      RemoteCommandAction::Intent(RemotePlaybackIntent::PlayAdjacent(AdjacentDirection::Next))
+    ));
+    assert!(matches!(
+      playstate_action("PreviousTrack", None),
+      RemoteCommandAction::Intent(RemotePlaybackIntent::PlayAdjacent(
+        AdjacentDirection::Previous
+      ))
+    ));
+  }
+
+  #[test]
+  fn remote_general_commands_accept_wire_values_and_map_to_session_intents() {
+    for (value, expected) in [
+      (serde_json::json!("52.5"), 52.5),
+      (serde_json::json!(125), 100.0),
+      (serde_json::json!(-5), 0.0),
+    ] {
+      assert!(matches!(
+        general_action("SetVolume", Some(serde_json::json!({ "Volume": value })), None),
+        RemoteCommandAction::Intent(RemotePlaybackIntent::SetVolume(volume))
+          if volume == expected
+      ));
+    }
+    assert!(matches!(
+      general_action("ToggleMute", None, Some(false)),
+      RemoteCommandAction::Intent(RemotePlaybackIntent::SetMuted(true))
+    ));
+    assert!(matches!(
+      general_action(
+        "SetAudioStreamIndex",
+        Some(serde_json::json!({ "Index": "4" })),
+        None,
+      ),
+      RemoteCommandAction::Intent(RemotePlaybackIntent::SelectAudioStream(4))
+    ));
+    assert!(matches!(
+      general_action(
+        "SetSubtitleStreamIndex",
+        Some(serde_json::json!({ "Index": -1 })),
+        None,
+      ),
+      RemoteCommandAction::Intent(RemotePlaybackIntent::SelectSubtitleStream(None))
+    ));
+    assert!(matches!(
+      general_action(
+        "SetSubtitleStreamIndex",
+        Some(serde_json::json!({ "Index": 7 })),
+        None,
+      ),
+      RemoteCommandAction::Intent(RemotePlaybackIntent::SelectSubtitleStream(Some(7)))
+    ));
+  }
+
+  #[test]
+  fn remote_play_carries_source_and_track_selection() {
+    let action = remote_play_action(PlayRequest {
+      item_ids: vec!["episode-1".to_owned(), "episode-2".to_owned()],
+      start_position_ticks: Some(75_000_000),
+      play_command: "PlayNow".to_owned(),
+      media_source_id: Some("source-2".to_owned()),
+      audio_stream_index: Some(4),
+      subtitle_stream_index: Some(7),
+    })
+    .expect("play request should map");
+
+    assert!(matches!(
+      action,
+      RemoteCommandAction::Play {
+        item_id,
+        start_position_ticks: Some(75_000_000),
+        selection: PlaybackSelection {
+          media_source_id: Some(source),
+          audio_stream_index: Some(4),
+          subtitle_stream_index: Some(7),
+        },
+      } if item_id == "episode-1" && source == "source-2"
+    ));
+  }
+
+  #[test]
+  fn provider_stream_index_maps_to_current_mpv_track_id() {
+    let mut state = test_state();
+    state.playback_view.tracks = TracksView::Ready {
+      tracks: vec![
+        jellypilot_mpv::playback::TrackInfo {
+          id: 2,
+          track_type: "audio".to_owned(),
+          title: None,
+          language: None,
+          selected: false,
+          provider_index: Some(4),
+        },
+        jellypilot_mpv::playback::TrackInfo {
+          id: 6,
+          track_type: "sub".to_owned(),
+          title: None,
+          language: None,
+          selected: false,
+          provider_index: Some(7),
+        },
+      ],
+      audio: None,
+      subtitle: None,
+    };
+
+    assert!(matches!(
+      RemotePlaybackIntent::SelectAudioStream(4).into_playback_intent(&state.playback_view),
+      Some(PlaybackIntent::SelectAudioTrack(2))
+    ));
+    assert!(matches!(
+      RemotePlaybackIntent::SelectSubtitleStream(Some(7))
+        .into_playback_intent(&state.playback_view),
+      Some(PlaybackIntent::SelectSubtitleTrack(Some(6)))
+    ));
+  }
+
+  #[test]
+  fn remote_track_selection_without_loaded_mapping_is_ignored_with_diagnostic() {
+    let mut state = test_state();
+    state.playback_view.tracks = TracksView::Unavailable;
+    let remote = state.playback_remote;
+
+    drop(handle_remote_command(
+      &mut state,
+      remote,
+      JellyfinCommand::GeneralCommand(GeneralCommand {
+        name: "SetAudioStreamIndex".to_owned(),
+        arguments: Some(serde_json::json!({ "Index": 4 })),
+      }),
+    ));
+
+    assert_eq!(
+      state.notice.as_deref(),
+      Some(REMOTE_TRACKS_UNAVAILABLE_NOTICE)
+    );
+  }
+  #[test]
+  fn local_stop_invalidates_an_in_flight_remote_play_resolution() {
+    let mut state = test_state();
+    state.playback_session.handle(
+      PlaybackInput::Event(PlaybackEvent::EngineAvailability(true)),
+      Instant::now(),
+    );
+    sync_playback_projection(&mut state);
+    let stale_play = state.request_gate.begin_remote_play();
+    drop(update_playback(
+      &mut state,
+      PlaybackMessage::Intent(PlaybackIntent::Stop),
+    ));
+    assert!(!state.request_gate.is_current_remote_play(stale_play));
+    let remote = state.playback_remote;
+
+    drop(update_remote(
+      &mut state,
+      RemoteMessage::PlayResolved {
+        remote,
+        play: stale_play,
+        result: Box::new(Ok(Playable::Media(jellypilot_media_server::MediaItem {
+          id: "episode-1".to_owned(),
+          name: "Pilot".to_owned(),
+          item_type: "Episode".to_owned(),
+          series_id: Some("series-1".to_owned()),
+          series_name: Some("Series".to_owned()),
+          season_name: None,
+          index_number: Some(1),
+          parent_index_number: Some(1),
+          run_time_ticks: Some(1_800_000_000),
+          overview: None,
+          series_primary_image_tag: None,
+        }))),
+        start_position_ticks: None,
+        selection: PlaybackSelection::default(),
+      },
+    ));
+
+    assert!(state.playback_view.busy);
+    assert!(state.playback_view.now_playing.is_none());
+  }
+
+  #[test]
+  fn local_adjacent_starts_invalidate_an_in_flight_remote_play_resolution() {
+    for direction in [AdjacentDirection::Previous, AdjacentDirection::Next] {
+      let mut state = test_state();
+      let stale_play = state.request_gate.begin_remote_play();
+
+      drop(update_playback(
+        &mut state,
+        PlaybackMessage::Intent(PlaybackIntent::PlayAdjacent(direction)),
+      ));
+
+      assert!(!state.request_gate.is_current_remote_play(stale_play));
+    }
+  }
+
+  #[test]
+  fn unavailable_remote_target_does_not_dispatch_commands() {
+    let mut state = test_state();
+    state.remote_control_state = RemoteControlState::Unavailable;
+    let pending = state.request_gate.begin_remote_play();
+    let remote = state.playback_remote;
+    drop(update_remote(
+      &mut state,
+      RemoteMessage::Event {
+        remote,
+        event: JellyfinWebSocketEvent::Command(JellyfinCommand::Play(PlayRequest {
+          item_ids: vec!["episode-1".to_owned()],
+          start_position_ticks: None,
+          play_command: "PlayNow".to_owned(),
+          media_source_id: None,
+          audio_stream_index: None,
+          subtitle_stream_index: None,
+        })),
+      },
+    ));
+
+    assert!(state.request_gate.is_current_remote_play(pending));
+  }
+
+  #[test]
+  fn successful_reconnect_clears_only_the_connection_lost_notice() {
+    let mut state = test_state();
+    state.notice = Some(REMOTE_CONNECTION_LOST_NOTICE.to_owned());
+    let remote = state.playback_remote;
+
+    drop(update_remote(
+      &mut state,
+      RemoteMessage::Finalized {
+        remote,
+        result: Ok(true),
+      },
+    ));
+
+    assert!(state.notice.is_none());
+    state.notice = Some("Unrelated notice".to_owned());
+    drop(update_remote(
+      &mut state,
+      RemoteMessage::Finalized {
+        remote,
+        result: Ok(true),
+      },
+    ));
+    assert_eq!(state.notice.as_deref(), Some("Unrelated notice"));
+  }
+
+  #[test]
+  fn initial_setup_failure_invalidates_a_later_finalization_success() {
+    let mut state = test_state();
+    state.connection = ConnectionPhase::Connected;
+    let stale_remote = state.playback_remote;
+
+    drop(update_remote(
+      &mut state,
+      RemoteMessage::Started {
+        remote: stale_remote,
+        result: Err(RemoteStartError::CapabilityRegistrationFailed),
+      },
+    ));
+    drop(update_remote(
+      &mut state,
+      RemoteMessage::Finalized {
+        remote: stale_remote,
+        result: Ok(true),
+      },
+    ));
+
+    assert_eq!(state.remote_control_state, RemoteControlState::Unavailable);
+    assert!(!state.request_gate.is_current_remote(stale_remote));
+  }
+
+  #[test]
+  fn settings_intro_mode_threads_into_playback_availability() {
+    let (settings, _file) = isolated_settings("intro-availability");
+    let mut state = test_state();
+    state.settings = settings;
+    for (configured, expected) in [
+      (
+        jellypilot_core::config::IntroMode::Automatic,
+        jellypilot_session::IntroSkipMode::Automatic,
+      ),
+      (
+        jellypilot_core::config::IntroMode::Manual,
+        jellypilot_session::IntroSkipMode::Manual,
+      ),
+      (
+        jellypilot_core::config::IntroMode::Off,
+        jellypilot_session::IntroSkipMode::Off,
+      ),
+    ] {
+      state
+        .settings
+        .set_intro_mode(configured)
+        .expect("isolated settings should save");
+      let availability = state.intro_availability();
+      assert_eq!(availability.mode, expected);
+      assert!(!availability.skipper_available);
+    }
+  }
+
+  #[test]
+  fn login_state_changes_only_after_remote_teardown_completion() {
+    let mut state = test_state();
+    state.connection = ConnectionPhase::Connected;
+    state.client = Some(Arc::new(JellyfinClient::new()));
+
+    drop(stop_remote_session_for_login(&mut state));
+
+    assert!(state.connection == ConnectionPhase::Connected);
+    assert!(state.client.is_some());
+    drop(update_login(&mut state, LoginMessage::RemoteDisconnected));
+    assert!(state.connection == ConnectionPhase::SignedOut);
+    assert!(state.client.is_none());
+  }
+
+  #[tokio::test]
+  async fn websocket_teardown_waits_for_inflight_setup_to_release_lifecycle() {
+    let lifecycle = Arc::new(tokio::sync::Mutex::new(()));
+    let setup = lifecycle.lock().await;
+    let session = RemoteSessionHandle {
+      websocket: Arc::new(JellyfinWebSocket::new()),
+      lifecycle: Arc::clone(&lifecycle),
+    };
+    let teardown = tokio::spawn(disconnect_remote_session(session));
+    tokio::task::yield_now().await;
+
+    assert!(!teardown.is_finished());
+    drop(setup);
+    tokio::time::timeout(std::time::Duration::from_secs(1), teardown)
+      .await
+      .expect("teardown should finish after setup releases the lifecycle")
+      .expect("teardown task should finish");
+  }
+
   #[test]
   fn quit_exit_stays_blocked_until_the_session_cleanup_handshake_settles() {
     let mut state = test_state();
@@ -3550,6 +4423,8 @@ mod tests {
     assert!(!quit_may_exit(&state));
     state.playback_view.quit_may_proceed = true;
     assert!(quit_may_exit(&state));
+    state.remote_stopping = true;
+    assert!(!quit_may_exit(&state));
   }
 
   #[test]
