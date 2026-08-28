@@ -143,7 +143,7 @@ pub struct Fonts {
     pub sans: &'static str,
 }
 
-/// Panda spacing tokens, converted from rem to logical pixels at the 16px root.
+/// Panda spacing tokens and component-specific spatial constraints in logical pixels.
 #[derive(Debug, Clone, Copy)]
 pub struct Spacing {
     pub s0: f32,
@@ -181,6 +181,7 @@ pub struct Spacing {
     pub x7l: f32,
     pub x8l: f32,
     pub x9l: f32,
+    pub tooltip_max_width: f32,
 }
 
 /// Panda font-size tokens in logical pixels.
@@ -476,6 +477,7 @@ pub const TOKENS: DesignTokens = DesignTokens {
         x7l: 72.0,
         x8l: 96.0,
         x9l: 128.0,
+        tooltip_max_width: 300.0,
     },
     font_sizes: FontSizes {
         s10: 10.0,
