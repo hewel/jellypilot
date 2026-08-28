@@ -178,6 +178,12 @@ pub enum PlaybackMessage {
   SeekReleased,
   VolumeChanged(f64),
   VolumeReleased,
+  AudioMenuToggled,
+  AudioMenuDismissed,
+  AudioTrackSelected(i64),
+  SubtitleMenuToggled,
+  SubtitleMenuDismissed,
+  SubtitleTrackSelected(Option<i64>),
   ControllerSettled {
     id: EffectId,
     settlement: Box<ControllerSettlement>,

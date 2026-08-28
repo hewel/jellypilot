@@ -1092,6 +1092,32 @@ fn update_playback(state: &mut State, message: PlaybackMessage) -> Task<Message>
       };
       apply_playback_input(state, PlaybackInput::Intent(intent))
     }
+    PlaybackMessage::AudioMenuToggled => {
+      state.audio_menu_open = !state.audio_menu_open;
+      state.subtitle_menu_open = false;
+      Task::none()
+    }
+    PlaybackMessage::AudioMenuDismissed => {
+      state.audio_menu_open = false;
+      Task::none()
+    }
+    PlaybackMessage::AudioTrackSelected(id) => {
+      state.audio_menu_open = false;
+      apply_local_playback_intent(state, PlaybackIntent::SelectAudioTrack(id))
+    }
+    PlaybackMessage::SubtitleMenuToggled => {
+      state.subtitle_menu_open = !state.subtitle_menu_open;
+      state.audio_menu_open = false;
+      Task::none()
+    }
+    PlaybackMessage::SubtitleMenuDismissed => {
+      state.subtitle_menu_open = false;
+      Task::none()
+    }
+    PlaybackMessage::SubtitleTrackSelected(id) => {
+      state.subtitle_menu_open = false;
+      apply_local_playback_intent(state, PlaybackIntent::SelectSubtitleTrack(id))
+    }
     PlaybackMessage::ControllerSettled {
       id,
       settlement,
@@ -1279,15 +1305,9 @@ fn clear_inactive_playback(state: &mut State) -> Task<Message> {
   clear_player_artwork(state);
   state.seek_preview = None;
   state.volume_preview = None;
-  if state.destination == Destination::NowPlaying {
-    let task = navigate(state, Destination::Home);
-    state
-      .navigation_stack
-      .retain(|destination| destination != &Destination::NowPlaying);
-    task
-  } else {
-    Task::none()
-  }
+  state.audio_menu_open = false;
+  state.subtitle_menu_open = false;
+  Task::none()
 }
 
 fn execute_playback_effects(state: &mut State, effects: Vec<PlaybackEffect>) -> Task<Message> {
@@ -1928,7 +1948,7 @@ fn activate_destination(state: &mut State, previous: Destination) -> Task<Messag
     }
     Destination::Search(_) => start_browse(state),
     Destination::Detail(_) => start_detail_load(state),
-    Destination::NowPlaying | Destination::Settings => Task::none(),
+    Destination::Settings => Task::none(),
   }
 }
 
@@ -2647,10 +2667,7 @@ fn browse_source(state: &State) -> Option<BrowseSource> {
       session,
       query: query.clone(),
     }),
-    Destination::Home
-    | Destination::Detail(_)
-    | Destination::NowPlaying
-    | Destination::Settings => None,
+    Destination::Home | Destination::Detail(_) | Destination::Settings => None,
   }
 }
 
@@ -3563,6 +3580,8 @@ mod tests {
       browse_viewport: BrowseViewport::default(),
       browse_scroll_id: iced::widget::Id::unique(),
       browse_sort_menu_open: false,
+      audio_menu_open: false,
+      subtitle_menu_open: false,
       search_input: String::new(),
     }
   }
@@ -3628,6 +3647,22 @@ mod tests {
       resume_position_seconds: None,
       played_percentage: None,
       overview: None,
+    }
+  }
+
+  fn media_item(id: &str) -> jellypilot_media_server::MediaItem {
+    jellypilot_media_server::MediaItem {
+      id: id.to_owned(),
+      name: "Pilot".to_owned(),
+      item_type: "Episode".to_owned(),
+      series_id: Some("series-1".to_owned()),
+      series_name: Some("Series".to_owned()),
+      season_name: None,
+      index_number: Some(1),
+      parent_index_number: Some(1),
+      run_time_ticks: Some(1_800_000_000),
+      overview: None,
+      series_primary_image_tag: None,
     }
   }
 
@@ -4648,19 +4683,20 @@ mod tests {
   }
 
   #[test]
-  fn inactive_now_playing_navigation_activates_and_loads_home() {
+  fn inactive_playback_clears_artwork_previews_and_popover_state() {
     let mut state = test_state();
     state.client = Some(Arc::new(JellyfinClient::new()));
-    state.destination = Destination::NowPlaying;
-    state.navigation_stack = vec![Destination::Home];
+    state.audio_menu_open = true;
+    state.subtitle_menu_open = true;
+    state.seek_preview = Some(42.0);
+    state.volume_preview = Some(80.0);
 
     drop(clear_inactive_playback(&mut state));
 
-    assert_eq!(state.destination, Destination::Home);
-    assert!(matches!(
-      state.home.continue_watching,
-      jellypilot_core::LoadState::Loading
-    ));
+    assert!(!state.audio_menu_open);
+    assert!(!state.subtitle_menu_open);
+    assert_eq!(state.seek_preview, None);
+    assert_eq!(state.volume_preview, None);
   }
 
   #[test]
@@ -4972,6 +5008,135 @@ mod tests {
 
       assert!(!state.request_gate.is_current_remote_play(stale_play));
     }
+  }
+
+  #[test]
+  fn double_adjacent_press_dispatches_single_start() {
+    let mut state = test_state();
+    let now = Instant::now();
+    state.playback_session.handle(
+      PlaybackInput::Event(PlaybackEvent::EngineAvailability(true)),
+      now,
+    );
+    let effects = state.playback_session.handle(
+      PlaybackInput::Intent(PlaybackIntent::Start {
+        item: Playable::Library(episode("episode-1", 1)),
+        position: jellypilot_mpv::playback::PlaybackStartPosition::Beginning,
+        intro: jellypilot_mpv::playback_session::IntroAvailability {
+          mode: jellypilot_session::IntroSkipMode::Off,
+          skipper_available: false,
+        },
+        selection: Box::default(),
+      }),
+      now,
+    );
+    let (id, _) = controller_effect(effects);
+    let aux = state.playback_session.handle(
+      PlaybackInput::Event(PlaybackEvent::ControllerSettled {
+        id,
+        settlement: ControllerSettlement::Started(Ok(jellypilot_mpv::playback::PlaybackOutcome {
+          snapshot: playback_snapshot(10.0),
+          warnings: Vec::new(),
+        })),
+      }),
+      now,
+    );
+    state.playback_view = state.playback_session.view();
+    let next_id = aux
+      .iter()
+      .find_map(|effect| match effect {
+        PlaybackEffect::LookupAdjacent(id, AdjacentDirection::Next) => Some(*id),
+        _ => None,
+      })
+      .expect("expected next lookup effect");
+
+    // Settle next adjacent item
+    state.playback_session.handle(
+      PlaybackInput::Event(PlaybackEvent::AdjacentSettled {
+        id: next_id,
+        direction: AdjacentDirection::Next,
+        result: Ok(Some(media_item("episode-2"))),
+      }),
+      now,
+    );
+    sync_playback_projection(&mut state);
+
+    // First adjacent press
+    let first_effects = state.playback_session.handle(
+      PlaybackInput::Intent(PlaybackIntent::PlayAdjacent(AdjacentDirection::Next)),
+      now,
+    );
+    let (start_id, _) = controller_effect(first_effects);
+    sync_playback_projection(&mut state);
+    assert!(state.playback_view.busy);
+
+    // Second adjacent press while first is in flight (suppressed)
+    let second_effects = state.playback_session.handle(
+      PlaybackInput::Intent(PlaybackIntent::PlayAdjacent(AdjacentDirection::Next)),
+      now,
+    );
+    assert!(second_effects.is_empty());
+
+    // Settle the start
+    let settle_effects = state.playback_session.handle(
+      PlaybackInput::Event(PlaybackEvent::ControllerSettled {
+        id: start_id,
+        settlement: ControllerSettlement::Started(Ok(jellypilot_mpv::playback::PlaybackOutcome {
+          snapshot: playback_snapshot(0.0),
+          warnings: Vec::new(),
+        })),
+      }),
+      now,
+    );
+    sync_playback_projection(&mut state);
+
+    // No second start effect dispatched
+    assert!(!settle_effects
+      .iter()
+      .any(|e| matches!(e, PlaybackEffect::Controller(_, _))));
+    assert!(!state.playback_view.busy);
+    assert!(state.playback_view.now_playing.is_some());
+  }
+
+  #[test]
+  fn double_stop_dispatches_single_stop_and_retains_stopped_notice() {
+    let mut state = active_playback_state();
+    let now = Instant::now();
+
+    // First stop
+    let first_effects = state
+      .playback_session
+      .handle(PlaybackInput::Intent(PlaybackIntent::Stop), now);
+    let (stop_id, _) = controller_effect(first_effects);
+    sync_playback_projection(&mut state);
+    assert!(state.playback_view.busy);
+
+    // Second stop while first is in flight
+    let second_effects = state
+      .playback_session
+      .handle(PlaybackInput::Intent(PlaybackIntent::Stop), now);
+    assert!(second_effects.is_empty());
+
+    // Settle the stop
+    let settle_effects = state.playback_session.handle(
+      PlaybackInput::Event(PlaybackEvent::ControllerSettled {
+        id: stop_id,
+        settlement: ControllerSettlement::Stopped(Ok(
+          jellypilot_mpv::playback::PlaybackStopOutcome {
+            warnings: Vec::new(),
+          },
+        )),
+      }),
+      now,
+    );
+    sync_playback_projection(&mut state);
+
+    // Stopped notice intact, no second stop
+    assert!(settle_effects.is_empty());
+    assert!(!state.playback_view.busy);
+    assert!(state.playback_view.now_playing.is_none());
+    assert_eq!(state.playback_view.notice, Some(PlaybackNotice::Stopped));
+    assert_eq!(state.playback_notice.as_deref(), Some("Playback stopped."));
   }
 
   #[test]

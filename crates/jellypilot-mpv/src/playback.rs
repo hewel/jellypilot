@@ -88,6 +88,17 @@ pub enum Playable {
   Media(MediaItem),
 }
 
+impl Playable {
+  #[must_use]
+  pub fn item_id(&self) -> &str {
+    match self {
+      Self::Library(item) => &item.id,
+      Self::Detail(item) => &item.id,
+      Self::Media(item) => &item.id,
+    }
+  }
+}
+
 impl From<VideoLibraryItem> for Playable {
   fn from(item: VideoLibraryItem) -> Self {
     Self::Library(item)

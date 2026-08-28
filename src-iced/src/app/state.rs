@@ -151,7 +151,6 @@ pub enum Destination {
   },
   Search(String),
   Detail(String),
-  NowPlaying,
   Settings,
 }
 
@@ -281,7 +280,7 @@ pub enum ArtworkCellState {
   Failed,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct ArtworkCell {
   pub slot: ArtworkSlot,
   pub image_id: String,
@@ -664,6 +663,8 @@ pub struct State {
   pub browse_viewport: BrowseViewport,
   pub browse_scroll_id: iced::widget::Id,
   pub browse_sort_menu_open: bool,
+  pub audio_menu_open: bool,
+  pub subtitle_menu_open: bool,
   pub search_input: String,
 }
 
@@ -737,6 +738,8 @@ impl State {
       browse_viewport: BrowseViewport::default(),
       browse_scroll_id: iced::widget::Id::unique(),
       browse_sort_menu_open: false,
+      audio_menu_open: false,
+      subtitle_menu_open: false,
       search_input: String::new(),
     }
   }

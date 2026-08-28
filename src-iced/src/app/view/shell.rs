@@ -18,7 +18,6 @@ pub fn view(state: &State) -> Element<'_, Message> {
     Destination::Home => home::view(state),
     Destination::Library { .. } | Destination::Search(_) => browse::view(state),
     Destination::Detail(_) => detail::view(state),
-    Destination::NowPlaying => player::page(state),
     Destination::Settings => settings::view(state),
   };
   let content = stack![content].width(Fill).height(Fill);
@@ -83,13 +82,6 @@ fn sidebar(state: &State) -> container::Container<'_, Message> {
       Destination::Home,
       state.destination == Destination::Home,
     ));
-  if state.playback_view.now_playing.is_some() {
-    destinations = destinations.push(destination_button(
-      "Now Playing",
-      Destination::NowPlaying,
-      state.destination == Destination::NowPlaying,
-    ));
-  }
   match &state.home.shortcuts {
     LoadState::Idle | LoadState::Loading => {
       destinations = destinations

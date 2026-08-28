@@ -431,14 +431,37 @@ impl PlaybackSession {
       if request.kind == RequestKind::Refresh {
         return Vec::new();
       }
+      if self.is_duplicate_in_flight(&request) {
+        return Vec::new();
+      }
       self.queue_request(request);
       return Vec::new();
     }
     self.dispatch(request)
   }
 
+  fn is_duplicate_in_flight(&self, request: &ControllerRequest) -> bool {
+    let Some(in_flight) = self.in_flight.as_ref() else {
+      return false;
+    };
+    match (&request.operation, &in_flight.operation) {
+      (
+        ControllerOperation::Start {
+          target_id: new_target,
+          ..
+        },
+        ControllerOperation::Start {
+          target_id: current_target,
+          ..
+        },
+      ) => new_target == current_target,
+      (ControllerOperation::Stop, ControllerOperation::Stop) => true,
+      _ => false,
+    }
+  }
+
   fn queue_request(&mut self, request: ControllerRequest) {
-    if matches!(request.kind, RequestKind::Start | RequestKind::Stop) {
+    if matches!(request.kind, RequestKind::Start { .. } | RequestKind::Stop) {
       self.pending.clear();
     } else {
       self.pending.retain(|pending| pending.kind != request.kind);
@@ -447,7 +470,7 @@ impl PlaybackSession {
   }
 
   fn dispatch(&mut self, request: ControllerRequest) -> Vec<PlaybackEffect> {
-    if request.kind == RequestKind::Start {
+    if matches!(request.kind, RequestKind::Start { .. }) {
       self.bump_epoch();
       self.invalidate_auxiliary();
     }
@@ -516,7 +539,7 @@ impl PlaybackSession {
     now: Instant,
   ) -> Vec<PlaybackEffect> {
     match (operation, settlement) {
-      (ControllerOperation::Start { intro }, ControllerSettlement::Started(result)) => {
+      (ControllerOperation::Start { intro, .. }, ControllerSettlement::Started(result)) => {
         self.finish_start(result, intro)
       }
       (ControllerOperation::Controlled, ControllerSettlement::Controlled(result)) => {
@@ -941,6 +964,7 @@ struct InFlight {
 
 enum ControllerOperation {
   Start {
+    target_id: String,
     intro: IntroAvailability,
   },
   Controlled,
@@ -955,9 +979,9 @@ enum ControllerOperation {
   Shutdown,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 enum RequestKind {
-  Start,
+  Start { target_id: String },
   Paused,
   Seek,
   Volume,
@@ -982,14 +1006,17 @@ impl ControllerRequest {
     intro: IntroAvailability,
     selection: PlaybackSelection,
   ) -> Self {
+    let target_id = item.item_id().to_owned();
     Self {
-      kind: RequestKind::Start,
+      kind: RequestKind::Start {
+        target_id: target_id.clone(),
+      },
       command: ControllerCommand::Start {
         item,
         position,
         selection,
       },
-      operation: ControllerOperation::Start { intro },
+      operation: ControllerOperation::Start { target_id, intro },
     }
   }
 
@@ -1427,7 +1454,7 @@ mod tests {
       session
         .pending
         .iter()
-        .map(|request| request.kind)
+        .map(|request| request.kind.clone())
         .collect::<Vec<_>>(),
       vec![RequestKind::Seek, RequestKind::Volume]
     );
@@ -1543,7 +1570,7 @@ mod tests {
     assert!(effects.is_empty());
     assert_eq!(session.pending.len(), 1);
     assert_eq!(
-      session.pending.front().map(|request| request.kind),
+      session.pending.front().map(|request| request.kind.clone()),
       Some(RequestKind::Stop)
     );
   }
@@ -2003,6 +2030,90 @@ mod tests {
         ..
       } if id == "episode-2"
     ));
+  }
+
+  #[test]
+  fn double_adjacent_press_while_in_flight_dispatches_single_start() {
+    let (mut session, now, auxiliary) = start_session(IntroSkipMode::Off);
+    let id = adjacent_id(&auxiliary, AdjacentDirection::Next);
+    session.handle(
+      PlaybackInput::Event(PlaybackEvent::AdjacentSettled {
+        id,
+        direction: AdjacentDirection::Next,
+        result: Ok(Some(media_item("episode-2", "Second"))),
+      }),
+      now,
+    );
+
+    // First press dispatches start for episode-2
+    let first_effects = session.handle(
+      PlaybackInput::Intent(PlaybackIntent::PlayAdjacent(AdjacentDirection::Next)),
+      now,
+    );
+    let (start_id, command) = controller_effect(first_effects);
+    assert!(matches!(
+      command,
+      ControllerCommand::Start {
+        item: Playable::Media(MediaItem { id, .. }),
+        ..
+      } if id == "episode-2"
+    ));
+
+    // Second press while start is in flight is deduplicated against in-flight start
+    let second_effects = session.handle(
+      PlaybackInput::Intent(PlaybackIntent::PlayAdjacent(AdjacentDirection::Next)),
+      now,
+    );
+    assert!(second_effects.is_empty());
+    assert!(session.pending.is_empty());
+
+    // Settlement of the first start produces only auxiliary effects, no second start
+    let settle_effects = session.handle(
+      PlaybackInput::Event(PlaybackEvent::ControllerSettled {
+        id: start_id,
+        settlement: ControllerSettlement::Started(Ok(PlaybackOutcome {
+          snapshot: snapshot("episode-2", "Episode", 0.0),
+          warnings: Vec::new(),
+        })),
+      }),
+      now,
+    );
+    assert!(!settle_effects
+      .iter()
+      .any(|effect| matches!(effect, PlaybackEffect::Controller(_, _))));
+  }
+
+  #[test]
+  fn double_stop_while_in_flight_dispatches_single_stop_and_preserves_stopped_notice() {
+    let (mut session, now, _) = start_session(IntroSkipMode::Off);
+
+    // First Stop intent dispatches Stop to controller
+    let first_effects = session.handle(PlaybackInput::Intent(PlaybackIntent::Stop), now);
+    let (stop_id, command) = controller_effect(first_effects);
+    assert!(matches!(command, ControllerCommand::Stop));
+
+    // Second Stop intent while Stop is in flight is suppressed
+    let second_effects = session.handle(PlaybackInput::Intent(PlaybackIntent::Stop), now);
+    assert!(second_effects.is_empty());
+    assert!(session.pending.is_empty());
+
+    // Settle the first Stop
+    let settle_effects = session.handle(
+      PlaybackInput::Event(PlaybackEvent::ControllerSettled {
+        id: stop_id,
+        settlement: ControllerSettlement::Stopped(Ok(PlaybackStopOutcome {
+          warnings: Vec::new(),
+        })),
+      }),
+      now,
+    );
+
+    // Assert no second Stop was queued or dispatched
+    assert!(settle_effects.is_empty());
+    assert!(session.pending.is_empty());
+    assert_eq!(session.view().notice, Some(PlaybackNotice::Stopped));
+    assert!(session.view().now_playing.is_none());
+    assert!(!session.view().busy);
   }
 
   #[test]
