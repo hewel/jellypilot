@@ -1,7 +1,10 @@
-//! External MPV process control and JSON IPC.
+//! External MPV process control, playback orchestration, and JSON IPC.
 
 mod client;
 mod ipc;
+pub mod playback;
+pub mod playback_session;
+pub mod player;
 mod process;
 mod protocol;
 mod state;

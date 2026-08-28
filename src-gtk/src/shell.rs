@@ -7,42 +7,48 @@ use jellypilot_media_server::{
   VideoUserDataUpdateRequest,
 };
 
+use jellypilot_auth::login::{
+  can_start_login, quick_connect_workflow, ConnectionPhase, LoginEffect, LoginError, LoginEvent,
+  QUICK_CONNECT_POLL_INTERVAL, QUICK_CONNECT_TIMEOUT,
+};
 use jellypilot_mpv::{has_mpv_option, write_input_conf, PlayerState};
 use jellypilot_session::{IntroSkipMode, IntroSkipRange};
 use relm4::adw::prelude::*;
 use relm4::{adw, gtk, Component, ComponentParts, ComponentSender, RelmApp};
 
 use crate::artwork::{ArtworkAdapter, DecodedArtwork};
-use crate::artwork_binder::{ArtworkBinder, ArtworkSettlement, ArtworkSlot, ArtworkSurface};
-use crate::artwork_cache::ArtworkCacheStats;
-use crate::auth_storage::{AuthStorageError, AuthStore, SavedProfileKey, SavedProfileSummary};
+use jellypilot_auth::{AuthStorageError, AuthStore, SavedProfileKey, SavedProfileSummary};
+use jellypilot_core::artwork_binder::{
+  ArtworkBinder, ArtworkSettlement, ArtworkSlot, ArtworkSurface,
+};
+use jellypilot_media_server::ArtworkCacheStats;
 
-use crate::config::{self, Settings};
-use crate::diagnostics::{DiagnosticCategory, DiagnosticLevel, Diagnostics};
 use crate::pages::browse::{self, BrowseContext, BrowseEffect, BrowseEvent, BrowsePage};
 use crate::pages::cards::{clear_box, dim_label};
 use crate::pages::detail::{self, DetailContext, DetailEffect, DetailEvent, DetailPage};
 use crate::pages::diagnostics::{self, DiagnosticsContext, DiagnosticsPage};
 use crate::pages::home::{self, HomeContext, HomeEffect, HomeEvent, HomePage};
-use crate::pages::login::{self, LoginContext, LoginEffect, LoginError, LoginEvent, LoginPage};
+use crate::pages::login::{self, LoginContext, LoginPage};
 use crate::pages::player::{self, PlayerContext, PlayerEffect, PlayerEvent, PlayerPage};
 use crate::pages::settings::{
   self, ConnectionView, SettingsContext, SettingsEffect, SettingsEvent, SettingsPage,
 };
+use jellypilot_core::config::{self, Settings};
+use jellypilot_core::diagnostics::{DiagnosticCategory, DiagnosticLevel, Diagnostics};
 
-use crate::playback::{
+use jellypilot_core::request_gate::{
+  ImageCacheToken, RemotePlayToken, RemoteToken, RequestGate, SessionToken,
+};
+use jellypilot_mpv::playback::{
   Playable, PlaybackController, PlaybackControllerConfig, PlaybackError, PlaybackRefreshOutcome,
   PlaybackRefreshState, PlaybackSnapshot, PlaybackStartPosition, TrackInfo,
 };
-use crate::playback_session::{
+use jellypilot_mpv::playback_session::{
   AdjacentDirection, ControllerCommand, ControllerSettlement, EffectId, IntroAvailability,
   PlaybackEffect, PlaybackEvent, PlaybackInput, PlaybackIntent, PlaybackSession,
 };
-use crate::request_gate::{
-  ImageCacheToken, RemotePlayToken, RemoteToken, RequestGate, SessionToken,
-};
 
-pub(crate) use crate::pages::LoadState;
+use jellypilot_core::LoadState;
 
 const APP_ID: &str = "io.github.hewel.JellyPilot.GtkPreview";
 const SMOKE_APP_ID: &str = "io.github.hewel.JellyPilot.GtkPreview.Smoke";
@@ -74,15 +80,6 @@ struct AppModel {
   remote_disconnect_pending: bool,
   quitting: bool,
   ui: Ui,
-}
-
-#[derive(Clone, Copy, Default, Eq, PartialEq)]
-pub(crate) enum ConnectionPhase {
-  #[default]
-  SignedOut,
-  Connecting,
-  Connected,
-  Failed,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -747,7 +744,8 @@ impl AppModel {
         HomeEffect::HomeLoad { token } => {
           let client = Arc::clone(&self.client);
           sender.oneshot_command(async move {
-            AppCommand::HomeEvent(home::load_home_data(client, token).await)
+            let result = jellypilot_media_server::home::load_home_data(client).await;
+            AppCommand::HomeEvent(HomeEvent::Loaded { token, result })
           });
         }
         HomeEffect::OpenDetail(item) => self.dispatch_detail(detail::Message::Open(item), sender),
@@ -829,7 +827,7 @@ impl AppModel {
           let client = Arc::clone(&self.client);
           sender.oneshot_command(async move {
             AppCommand::BrowseEvent(BrowseEvent::Page(
-              browse::fetch_browse_page(client, request).await,
+              jellypilot_core::browse::fetch_browse_page(client, request).await,
             ))
           });
         }
@@ -896,7 +894,7 @@ impl AppModel {
           sender.oneshot_command(async move {
             AppCommand::DetailEvent(DetailEvent::Loaded {
               token,
-              result: Box::new(detail::load_detail_content(client, item).await),
+              result: Box::new(jellypilot_core::detail::load_detail_content(client, item).await),
             })
           });
         }
@@ -932,8 +930,13 @@ impl AppModel {
           sender.oneshot_command(async move {
             AppCommand::DetailEvent(DetailEvent::SeasonNeighbors {
               token,
-              result: detail::load_season_neighbors(client, item_id, series_id, season_number)
-                .await,
+              result: jellypilot_core::detail::load_season_neighbors(
+                client,
+                item_id,
+                series_id,
+                season_number,
+              )
+              .await,
             })
           });
         }
@@ -1296,13 +1299,13 @@ impl AppModel {
                   let output = output.clone();
                   move |event| output.send(AppCommand::LoginEvent(event)).is_ok()
                 };
-                let operation = login::quick_connect_workflow(
+                let operation = quick_connect_workflow(
                   command_client,
                   server_url,
                   session,
                   emit,
-                  login::QUICK_CONNECT_POLL_INTERVAL,
-                  login::QUICK_CONNECT_TIMEOUT,
+                  QUICK_CONNECT_POLL_INTERVAL,
+                  QUICK_CONNECT_TIMEOUT,
                 );
                 relm4::tokio::pin!(operation);
                 relm4::tokio::select! {
@@ -1873,11 +1876,11 @@ impl AppModel {
   fn invalidate_user_data_update(&mut self) {
     self
       .requests
-      .invalidate_detail_aux(crate::request_gate::DetailAuxKind::UserData);
+      .invalidate_detail_aux(jellypilot_core::request_gate::DetailAuxKind::UserData);
   }
 
   fn playback_can_start_login(&self) -> bool {
-    login::can_start_login(self.connection) && self.playback_session.view().can_start_login
+    can_start_login(self.connection) && self.playback_session.view().can_start_login
   }
 
   fn playback_controls_enabled(&self) -> bool {

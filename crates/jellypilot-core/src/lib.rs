@@ -1,12 +1,29 @@
-//! Framework-independent state machines for JellyPilot.
+//! Framework-independent application state and presentation logic for JellyPilot.
 //!
-//! The library browse core is a synchronous, metadata-only reducer. Callers
-//! execute its commands and return page metadata through settlement events;
-//! item payloads remain outside this crate.
+//! This crate owns browse and request state machines, settings persistence,
+//! diagnostic buffering, artwork correlation, and display-free page helpers.
+
+pub mod artwork_binder;
+#[cfg(feature = "native")]
+pub mod browse;
+#[cfg(feature = "native")]
+pub mod browse_model;
+#[cfg(feature = "native")]
+pub mod cards;
+#[cfg(feature = "native")]
+pub mod config;
+#[cfg(feature = "native")]
+pub mod detail;
+pub mod diagnostics;
+mod load_state;
+pub mod request_gate;
+#[cfg(feature = "native")]
+pub mod settings;
 
 mod model;
 mod reducer;
 
+pub use load_state::LoadState;
 pub use model::{
     LibraryBrowseAction, LibraryBrowseCacheMode, LibraryBrowseCommand, LibraryBrowseCoreError,
     LibraryBrowseFailure, LibraryBrowseLoadPriority, LibraryBrowseLoadToken, LibraryBrowseMode,

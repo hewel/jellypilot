@@ -7,18 +7,18 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::SystemTime;
 
-pub(crate) const MAX_DISK_CACHE_BYTES: u64 = 512 * 1024 * 1024;
+pub const MAX_DISK_CACHE_BYTES: u64 = 512 * 1024 * 1024;
 const ENTRY_EXTENSION: &str = "artwork";
 static TEMPORARY_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-pub(crate) struct ArtworkCacheStats {
-  pub(crate) bytes: u64,
-  pub(crate) entries: usize,
+pub struct ArtworkCacheStats {
+  pub bytes: u64,
+  pub entries: usize,
 }
 
 #[derive(Clone)]
-pub(crate) struct ArtworkDiskCache {
+pub struct ArtworkDiskCache {
   root: Arc<PathBuf>,
   max_bytes: u64,
   enabled: Arc<AtomicBool>,
@@ -30,7 +30,8 @@ pub(crate) struct ArtworkDiskCache {
 impl Default for ArtworkDiskCache {
   fn default() -> Self {
     Self::new(
-      relm4::gtk::glib::user_cache_dir()
+      dirs::cache_dir()
+        .unwrap_or_else(std::env::temp_dir)
         .join("jellypilot")
         .join("artwork"),
       MAX_DISK_CACHE_BYTES,
@@ -40,7 +41,7 @@ impl Default for ArtworkDiskCache {
 }
 
 impl ArtworkDiskCache {
-  pub(crate) fn new(root: PathBuf, max_bytes: u64, enabled: bool) -> Self {
+  pub fn new(root: PathBuf, max_bytes: u64, enabled: bool) -> Self {
     Self {
       root: Arc::new(root),
       max_bytes,
@@ -51,11 +52,11 @@ impl ArtworkDiskCache {
     }
   }
 
-  pub(crate) fn set_enabled(&self, enabled: bool) {
+  pub fn set_enabled(&self, enabled: bool) {
     self.enabled.store(enabled, Ordering::Release);
   }
 
-  pub(crate) async fn load(
+  pub async fn load(
     &self,
     key: String,
     max_entry_bytes: usize,
@@ -66,7 +67,7 @@ impl ArtworkDiskCache {
     }
     let root = Arc::clone(&self.root);
     let operation_lock = Arc::clone(&self.operation_lock);
-    relm4::spawn_blocking(move || {
+    tokio::task::spawn_blocking(move || {
       let _operation = operation_lock
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
@@ -77,7 +78,7 @@ impl ArtworkDiskCache {
     .flatten()
   }
 
-  pub(crate) async fn store(&self, key: String, bytes: Arc<[u8]>) {
+  pub async fn store(&self, key: String, bytes: Arc<[u8]>) {
     if !self.enabled.load(Ordering::Acquire)
       || self.clearing.load(Ordering::Acquire)
       || bytes.len() as u64 > self.max_bytes
@@ -90,7 +91,7 @@ impl ArtworkDiskCache {
     let epoch = Arc::clone(&self.epoch);
     let clearing = Arc::clone(&self.clearing);
     let operation_lock = Arc::clone(&self.operation_lock);
-    let _ = relm4::spawn_blocking(move || {
+    let _ = tokio::task::spawn_blocking(move || {
       let _operation = operation_lock
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
@@ -107,10 +108,10 @@ impl ArtworkDiskCache {
     .await;
   }
 
-  pub(crate) async fn stats(&self) -> Result<ArtworkCacheStats, io::Error> {
+  pub async fn stats(&self) -> Result<ArtworkCacheStats, io::Error> {
     let root = Arc::clone(&self.root);
     let operation_lock = Arc::clone(&self.operation_lock);
-    relm4::spawn_blocking(move || {
+    tokio::task::spawn_blocking(move || {
       let _operation = operation_lock
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
@@ -120,14 +121,14 @@ impl ArtworkDiskCache {
     .map_err(io::Error::other)?
   }
 
-  pub(crate) async fn clear(&self) -> Result<(), io::Error> {
+  pub async fn clear(&self) -> Result<(), io::Error> {
     if self.clearing.swap(true, Ordering::AcqRel) {
       return Ok(());
     }
     self.epoch.fetch_add(1, Ordering::AcqRel);
     let root = Arc::clone(&self.root);
     let operation_lock = Arc::clone(&self.operation_lock);
-    let result = match relm4::spawn_blocking(move || {
+    let result = match tokio::task::spawn_blocking(move || {
       let _operation = operation_lock
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
@@ -143,7 +144,7 @@ impl ArtworkDiskCache {
   }
 }
 
-pub(crate) fn artwork_cache_key(server_identity: &str, origin_url: &str) -> String {
+pub fn artwork_cache_key(server_identity: &str, origin_url: &str) -> String {
   let normalized_server = server_identity
     .trim()
     .trim_end_matches('/')
@@ -320,7 +321,7 @@ mod tests {
   }
 
   fn run_async<T>(future: impl Future<Output = T>) -> T {
-    relm4::tokio::runtime::Builder::new_current_thread()
+    tokio::runtime::Builder::new_current_thread()
       .enable_all()
       .build()
       .expect("test runtime")

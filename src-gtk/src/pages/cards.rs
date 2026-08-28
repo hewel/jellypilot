@@ -1,18 +1,16 @@
 use std::collections::HashMap;
 
-use jellypilot_media_server::{VideoLibraryItem, VideoLibraryKind, VideoLibraryShortcut};
+use jellypilot_core::cards::{
+  card_frame_size, hero_headline, hero_metadata, is_episode_item, item_caption,
+  library_shortcut_caption, HOME_HERO_HEIGHT, POSTER_FRAME_HEIGHT, POSTER_FRAME_WIDTH,
+};
+use jellypilot_media_server::{VideoLibraryItem, VideoLibraryShortcut};
 use relm4::adw::prelude::*;
 use relm4::{adw, gtk};
 
 use crate::artwork::FALLBACK_ARTWORK_ICON;
-use crate::artwork_binder::{ArtworkBinder, ArtworkSlot, ArtworkSurface};
-use crate::playback::PlaybackStartPosition;
-
-pub(crate) const HOME_HERO_HEIGHT: i32 = 340;
-pub(crate) const POSTER_FRAME_WIDTH: i32 = 160;
-pub(crate) const POSTER_FRAME_HEIGHT: i32 = 240;
-pub(crate) const THUMB_FRAME_WIDTH: i32 = 240;
-pub(crate) const THUMB_FRAME_HEIGHT: i32 = 135;
+use jellypilot_core::artwork_binder::{ArtworkBinder, ArtworkSlot, ArtworkSurface};
+use jellypilot_mpv::playback::PlaybackStartPosition;
 
 pub(crate) struct ArtworkTarget {
   pub picture: gtk::Picture,
@@ -306,14 +304,6 @@ pub(crate) fn backdrop_artwork(image_id: Option<&str>) -> (gtk::Widget, Option<A
   (overlay.upcast(), artwork)
 }
 
-pub(crate) fn card_frame_size(item: &VideoLibraryItem) -> (i32, i32) {
-  if is_episode_item(item) {
-    (THUMB_FRAME_WIDTH, THUMB_FRAME_HEIGHT)
-  } else {
-    (POSTER_FRAME_WIDTH, POSTER_FRAME_HEIGHT)
-  }
-}
-
 pub(crate) fn cover_picture(width: i32, height: i32) -> gtk::Picture {
   let picture = gtk::Picture::new();
   picture.set_can_shrink(true);
@@ -342,38 +332,6 @@ fn framed_cover_picture(width: i32, height: i32) -> (adw::Clamp, gtk::Picture) {
   width_clamp.set_hexpand(true);
   width_clamp.set_vexpand(true);
   (width_clamp, picture)
-}
-
-pub(crate) fn item_caption(item: &VideoLibraryItem) -> String {
-  match item.production_year {
-    Some(year) => format!("{year} · {}", item.item_type),
-    None => item.item_type.clone(),
-  }
-}
-
-pub(crate) fn hero_headline(item: &VideoLibraryItem) -> String {
-  if is_episode_item(item) {
-    item
-      .series_name
-      .as_deref()
-      .map(str::trim)
-      .filter(|name| !name.is_empty())
-      .map(ToOwned::to_owned)
-      .unwrap_or_else(|| item.name.clone())
-  } else {
-    item.name.clone()
-  }
-}
-
-pub(crate) fn hero_metadata(item: &VideoLibraryItem) -> String {
-  if is_episode_item(item) {
-    match (item.season_number, item.episode_number) {
-      (Some(season), Some(number)) => format!("S{season} E{number} · {}", item.name),
-      _ => format!("Episode · {}", item.name),
-    }
-  } else {
-    item_caption(item)
-  }
 }
 
 pub(crate) fn status_badge(item: &VideoLibraryItem) -> Option<gtk::Label> {
@@ -467,25 +425,6 @@ pub(crate) fn scrolled_page(title: &str, subtitle: &str, content: &gtk::Box) -> 
   scroll.upcast()
 }
 
-pub(crate) fn library_kind(collection_type: &str) -> VideoLibraryKind {
-  if collection_type.eq_ignore_ascii_case("tvshows") || collection_type.eq_ignore_ascii_case("tv") {
-    VideoLibraryKind::TvShows
-  } else {
-    VideoLibraryKind::Movies
-  }
-}
-
-pub(crate) fn library_shortcut_caption(shortcut: &VideoLibraryShortcut) -> String {
-  let kind = match library_kind(&shortcut.collection_type) {
-    VideoLibraryKind::TvShows => "TV Shows",
-    VideoLibraryKind::Movies => "Movies",
-  };
-  match shortcut.item_count {
-    Some(count) => format!("{kind} · {count}"),
-    None => kind.to_owned(),
-  }
-}
-
 fn poster_overlay(
   item: &VideoLibraryItem,
   width: i32,
@@ -522,8 +461,4 @@ fn bind_image(
     image_id: image_id?.to_owned(),
     target: ArtworkTarget { picture, fallback },
   })
-}
-
-fn is_episode_item(item: &VideoLibraryItem) -> bool {
-  item.item_type.eq_ignore_ascii_case("Episode")
 }

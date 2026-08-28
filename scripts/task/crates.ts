@@ -1,4 +1,5 @@
 export type CrateShortName =
+  | 'auth'
   | 'core'
   | 'core-wasm'
   | 'media-server'
@@ -9,6 +10,7 @@ export type CrateShortName =
   | 'iced';
 
 export const CRATE_NAMES: Readonly<Record<CrateShortName, readonly string[]>> = {
+  auth: ['jellypilot-auth'],
   core: ['jellypilot-core'],
   'core-wasm': ['jellypilot-core-wasm'],
   'media-server': ['jellypilot-media-server'],
@@ -21,6 +23,7 @@ export const CRATE_NAMES: Readonly<Record<CrateShortName, readonly string[]>> = 
 
 export function isCrateShortName(value: string): value is CrateShortName {
   return (
+    value === 'auth' ||
     value === 'core' ||
     value === 'core-wasm' ||
     value === 'media-server' ||

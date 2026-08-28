@@ -1,6 +1,7 @@
 [workspace]
 members = [
   "crates/jellypilot-core",
+  "crates/jellypilot-auth",
   "crates/jellypilot-core-wasm",
   "crates/jellypilot-ui",
   "crates/jellypilot-media-server",

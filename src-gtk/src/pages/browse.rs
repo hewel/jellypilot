@@ -1,34 +1,23 @@
 use std::collections::HashMap;
-use std::sync::Arc;
 
+use jellypilot_core::browse::{browse_preferences, BrowsePresentation};
 use jellypilot_core::LibraryBrowseLoadToken;
-use jellypilot_media_server::{
-  JellyfinClient, VideoLibraryItem, VideoLibraryPageRequest, VideoLibraryPlayedFilter,
-  VideoLibraryShortcut, VideoLibrarySort, VideoLibrarySortDirection, VideoSearchRequest,
-};
+use jellypilot_media_server::{VideoLibraryItem, VideoLibraryShortcut};
 use relm4::adw::prelude::*;
 use relm4::{adw, gtk, Sender};
 
 use crate::artwork::DecodedArtwork;
-use crate::artwork_binder::{ArtworkBinder, ArtworkSlot, ArtworkSurface};
-use crate::browse_model::{
-  BrowseModel, BrowsePagePayload, BrowsePageRequest, BrowsePageSettlement, BrowsePreferences,
-  BrowseSource, LibraryBrowseView,
-};
 use crate::pages::cards::{
-  apply_decoded_artwork, clear_box, dim_label, library_kind, loading_view, poster_card,
-  register_artwork, row_card, state_view, ArtworkTarget,
+  apply_decoded_artwork, clear_box, dim_label, loading_view, poster_card, register_artwork,
+  row_card, state_view, ArtworkTarget,
 };
-use crate::playback::{Playable, PlaybackStartPosition};
-use crate::request_gate::RequestGate;
 use crate::shell::AppMessage;
-
-#[derive(Clone, Copy, Debug, Default)]
-pub(crate) enum BrowsePresentation {
-  #[default]
-  Grid,
-  List,
-}
+use jellypilot_core::artwork_binder::{ArtworkBinder, ArtworkSlot, ArtworkSurface};
+use jellypilot_core::browse_model::{
+  BrowseModel, BrowsePageRequest, BrowsePageSettlement, BrowseSource, LibraryBrowseView,
+};
+use jellypilot_core::request_gate::RequestGate;
+use jellypilot_mpv::playback::{Playable, PlaybackStartPosition};
 
 pub(crate) struct BrowsePage {
   root: gtk::ScrolledWindow,
@@ -552,18 +541,21 @@ impl BrowsePage {
     effects
   }
 
-  fn model_effects(&self, effects: Vec<crate::browse_model::BrowseEffect>) -> Vec<BrowseEffect> {
+  fn model_effects(
+    &self,
+    effects: Vec<jellypilot_core::browse_model::BrowseEffect>,
+  ) -> Vec<BrowseEffect> {
     let mut out = Vec::new();
     for effect in effects {
       match effect {
-        crate::browse_model::BrowseEffect::ResetViewport => {
+        jellypilot_core::browse_model::BrowseEffect::ResetViewport => {
           let adjustment = self.root.vadjustment();
           adjustment.set_value(adjustment.lower());
         }
-        crate::browse_model::BrowseEffect::RequestPage(request) => {
+        jellypilot_core::browse_model::BrowseEffect::RequestPage(request) => {
           out.push(BrowseEffect::BrowsePage(request));
         }
-        crate::browse_model::BrowseEffect::CancelPage { token } => {
+        jellypilot_core::browse_model::BrowseEffect::CancelPage { token } => {
           out.push(BrowseEffect::CancelBrowsePage(token));
         }
       }
@@ -672,122 +664,5 @@ impl BrowsePage {
       });
     }
     widget
-  }
-}
-
-pub(crate) async fn fetch_browse_page(
-  client: Arc<JellyfinClient>,
-  request: BrowsePageRequest,
-) -> BrowsePageSettlement {
-  let BrowsePageRequest {
-    source_id,
-    source,
-    token,
-    start_index,
-    limit,
-    preferences,
-  } = request;
-  let result = async {
-    let start_index = i32::try_from(start_index)
-      .map_err(|_| "Library page start index is too large.".to_owned())?;
-    let limit = i32::try_from(limit).map_err(|_| "Library page size is too large.".to_owned())?;
-    match source {
-      BrowseSource::Library { shortcut, .. } => {
-        let collection_type = library_kind(&shortcut.collection_type);
-        client
-          .library()
-          .browse_video(VideoLibraryPageRequest {
-            library_id: shortcut.id,
-            collection_type,
-            start_index,
-            limit,
-            sort: preferences.sort,
-            sort_direction: preferences.sort_direction,
-            played_filter: preferences.played_filter,
-            favorites_only: preferences.favorites_only,
-          })
-          .await
-          .map_err(|error| error.to_string())?
-          .try_into()
-      }
-      BrowseSource::Search { query, .. } => {
-        let page = client
-          .library()
-          .search_video(VideoSearchRequest {
-            query: query.clone(),
-            start_index,
-            limit,
-          })
-          .await
-          .map_err(|error| error.to_string())?;
-        if page.query != query {
-          return Err("Media server returned results for a different search.".to_owned());
-        }
-        BrowsePagePayload::try_from(page)
-      }
-    }
-  }
-  .await;
-  BrowsePageSettlement {
-    source_id,
-    token,
-    result,
-  }
-}
-
-pub(crate) fn browse_preferences(
-  sort_selection: u32,
-  played_selection: u32,
-  favorites_only: bool,
-) -> BrowsePreferences {
-  let (sort, sort_direction) = match sort_selection {
-    1 => (
-      VideoLibrarySort::Title,
-      VideoLibrarySortDirection::Descending,
-    ),
-    2 => (
-      VideoLibrarySort::RecentlyAdded,
-      VideoLibrarySortDirection::Descending,
-    ),
-    3 => (
-      VideoLibrarySort::ReleaseDate,
-      VideoLibrarySortDirection::Descending,
-    ),
-    _ => (
-      VideoLibrarySort::Title,
-      VideoLibrarySortDirection::Ascending,
-    ),
-  };
-  let played_filter = match played_selection {
-    1 => VideoLibraryPlayedFilter::Unplayed,
-    2 => VideoLibraryPlayedFilter::Played,
-    _ => VideoLibraryPlayedFilter::All,
-  };
-  BrowsePreferences {
-    sort,
-    sort_direction,
-    played_filter,
-    favorites_only,
-  }
-}
-
-#[cfg(test)]
-mod tests {
-  use super::*;
-
-  #[test]
-  fn browse_controls_map_to_provider_neutral_preferences() {
-    let preferences = browse_preferences(2, 1, true);
-
-    assert!(matches!(preferences.sort, VideoLibrarySort::RecentlyAdded));
-    assert!(matches!(
-      preferences.sort_direction,
-      VideoLibrarySortDirection::Descending
-    ));
-    assert!(matches!(
-      preferences.played_filter,
-      VideoLibraryPlayedFilter::Unplayed
-    ));
-    assert!(preferences.favorites_only);
   }
 }

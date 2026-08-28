@@ -14,7 +14,7 @@ pub enum JellyfinError {
   HttpError(String),
 
   #[error("WebSocket error: {0}")]
-  WebSocket(#[from] tokio_tungstenite::tungstenite::Error),
+  WebSocket(#[from] tungstenite::Error),
 
   #[error("JSON serialization error: {0}")]
   Json(#[from] serde_json::Error),

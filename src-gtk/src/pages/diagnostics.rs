@@ -4,10 +4,11 @@ use std::collections::HashMap;
 use relm4::adw::prelude::*;
 use relm4::{adw, gtk, Sender};
 
-use crate::diagnostics::{
-  DiagnosticChange, DiagnosticLevel, DiagnosticRow, Diagnostics, DiagnosticsViewState,
-};
 use crate::shell::AppMessage;
+use jellypilot_core::diagnostics::{
+  format_diagnostic_time, DiagnosticChange, DiagnosticLevel, DiagnosticRow, Diagnostics,
+  DiagnosticsViewState,
+};
 
 pub(crate) struct DiagnosticsPage {
   root: adw::PreferencesPage,
@@ -257,24 +258,5 @@ fn dim_label(text: &str) -> gtk::Label {
 fn clear_list_box(container: &gtk::ListBox) {
   while let Some(child) = container.first_child() {
     container.remove(&child);
-  }
-}
-
-fn format_diagnostic_time(timestamp_seconds: u64) -> String {
-  i64::try_from(timestamp_seconds)
-    .ok()
-    .and_then(|timestamp| gtk::glib::DateTime::from_unix_utc(timestamp).ok())
-    .and_then(|timestamp| timestamp.format("%Y-%m-%d %H:%M:%S UTC").ok())
-    .map(|timestamp| timestamp.to_string())
-    .unwrap_or_else(|| format!("{timestamp_seconds} UTC"))
-}
-
-#[cfg(test)]
-mod tests {
-  use super::*;
-
-  #[test]
-  fn diagnostic_timestamp_includes_date_and_explicit_utc_zone() {
-    assert_eq!(format_diagnostic_time(0), "1970-01-01 00:00:00 UTC");
   }
 }

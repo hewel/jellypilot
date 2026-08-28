@@ -1,32 +1,14 @@
 //! Native GTK frontend for JellyPilot.
 //!
-//! Relm4 widget ownership stays in [`shell`]. Browse, request-correlation, and
-//! playback policy are kept outside the widget tree so they can be tested
-//! without initializing a display; authenticated artwork becomes a GTK
-//! texture only at the shell's main-thread boundary.
+//! Relm4 widget ownership stays in [`shell`]. Display-free browse, request,
+//! playback, configuration, diagnostics, authentication, and artwork policy
+//! live in shared crates; authenticated artwork becomes a GTK texture only at
+//! the shell's main-thread boundary.
 
 #[cfg(target_os = "linux")]
 mod artwork;
 #[cfg(target_os = "linux")]
-mod artwork_binder;
-#[cfg(target_os = "linux")]
-mod artwork_cache;
-#[cfg(target_os = "linux")]
-mod auth_storage;
-#[cfg(target_os = "linux")]
-mod browse_model;
-#[cfg(target_os = "linux")]
-mod config;
-#[cfg(target_os = "linux")]
-mod diagnostics;
-#[cfg(target_os = "linux")]
 mod pages;
-#[cfg(target_os = "linux")]
-pub mod playback;
-#[cfg(target_os = "linux")]
-mod playback_session;
-#[cfg(target_os = "linux")]
-mod request_gate;
 #[cfg(target_os = "linux")]
 mod shell;
 

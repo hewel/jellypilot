@@ -7,13 +7,14 @@ use relm4::gtk::prelude::*;
 use relm4::{gtk, Sender};
 
 use crate::artwork::{ArtworkAdapter, DecodedArtwork, FALLBACK_ARTWORK_ICON};
-use crate::artwork_binder::{ArtworkBinder, ArtworkSlot, ArtworkSurface};
 use crate::pages::cards::{clear_box, dim_label};
-use crate::playback::{Playable, TrackInfo};
-use crate::playback_session::{
+use crate::shell::AppMessage;
+use jellypilot_core::artwork_binder::{ArtworkBinder, ArtworkSlot, ArtworkSurface};
+use jellypilot_mpv::playback::{Playable, TrackInfo};
+use jellypilot_mpv::playback_session::{
   AdjacentAvailability, AdjacentDirection, PlaybackNotice, SessionView, TracksView,
 };
-use crate::shell::AppMessage;
+use jellypilot_mpv::player::{format_duration, runtime_seconds_to_ticks, TrackKind};
 
 const PLAYER_THUMB_SIZE: i32 = 36;
 
@@ -597,12 +598,6 @@ impl PlayerPage {
   }
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum TrackKind {
-  Audio,
-  Subtitle,
-}
-
 fn playback_time_label() -> gtk::Label {
   let label = gtk::Label::new(Some("00:00"));
   label.add_css_class("dim-label");
@@ -653,27 +648,6 @@ const fn intro_skip_label(kind: IntroSkipKind) -> &'static str {
     IntroSkipKind::Introduction => "Intro",
     IntroSkipKind::Credits => "Credits",
   }
-}
-
-#[cfg_attr(not(test), allow(dead_code))]
-fn selected_track_id(tracks: &[TrackInfo], kind: TrackKind, selected: u32) -> Option<Option<i64>> {
-  let track_type = match kind {
-    TrackKind::Audio => "audio",
-    TrackKind::Subtitle => "sub",
-  };
-  if kind == TrackKind::Subtitle && selected == 0 {
-    return Some(None);
-  }
-  let index = if kind == TrackKind::Subtitle {
-    selected.checked_sub(1)?
-  } else {
-    selected
-  };
-  tracks
-    .iter()
-    .filter(|track| track.track_type == track_type)
-    .nth(index as usize)
-    .map(|track| Some(track.id))
 }
 
 fn track_label(track: &TrackInfo) -> String {
@@ -821,55 +795,5 @@ fn media_item_from_playable(item: &Playable) -> MediaItem {
       series_primary_image_tag: None,
     },
     Playable::Media(item) => item.clone(),
-  }
-}
-
-fn runtime_seconds_to_ticks(seconds: Option<f64>) -> Option<i64> {
-  seconds
-    .filter(|seconds| seconds.is_finite() && *seconds >= 0.0)
-    .map(|seconds| (seconds * 10_000_000.0).round() as i64)
-}
-
-fn format_duration(seconds: f64) -> String {
-  let seconds = seconds.max(0.0).round() as u64;
-  format!("{:02}:{:02}", seconds / 60, seconds % 60)
-}
-
-#[cfg(test)]
-mod tests {
-  use super::*;
-
-  #[test]
-  fn track_selection_maps_filtered_rows_and_subtitle_off() {
-    let tracks = vec![
-      TrackInfo {
-        id: 3,
-        track_type: "audio".to_owned(),
-        title: Some("English".to_owned()),
-        language: Some("eng".to_owned()),
-        selected: true,
-      },
-      TrackInfo {
-        id: 8,
-        track_type: "sub".to_owned(),
-        title: Some("Spanish".to_owned()),
-        language: Some("spa".to_owned()),
-        selected: false,
-      },
-    ];
-
-    assert_eq!(
-      selected_track_id(&tracks, TrackKind::Audio, 0),
-      Some(Some(3))
-    );
-    assert_eq!(
-      selected_track_id(&tracks, TrackKind::Subtitle, 0),
-      Some(None)
-    );
-    assert_eq!(
-      selected_track_id(&tracks, TrackKind::Subtitle, 1),
-      Some(Some(8))
-    );
-    assert_eq!(selected_track_id(&tracks, TrackKind::Audio, 1), None);
   }
 }

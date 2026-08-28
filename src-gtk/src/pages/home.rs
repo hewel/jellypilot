@@ -1,21 +1,21 @@
 use std::collections::HashMap;
-use std::sync::Arc;
 
-use jellypilot_media_server::{JellyfinClient, VideoHome, VideoLibraryItem, VideoLibraryShortcut};
+use jellypilot_media_server::{VideoHome, VideoLibraryItem, VideoLibraryShortcut};
 use relm4::gtk::prelude::*;
 use relm4::{gtk, Sender};
 
 use crate::artwork::DecodedArtwork;
-use crate::artwork_binder::{ArtworkBinder, ArtworkSlot, ArtworkSurface};
+use jellypilot_core::artwork_binder::{ArtworkBinder, ArtworkSlot, ArtworkSurface};
 
 use crate::pages::cards::{
   apply_decoded_artwork, clear_box, dim_label, featured_hero, library_shortcut_card, loading_view,
   poster_card, register_artwork, scrolled_page, state_view, ArtworkTarget,
 };
-use crate::pages::LoadState;
-use crate::playback::{Playable, PlaybackStartPosition};
-use crate::request_gate::{HomeToken, RequestGate};
-use crate::shell::{AppMessage, ConnectionPhase};
+use crate::shell::AppMessage;
+use jellypilot_auth::login::ConnectionPhase;
+use jellypilot_core::request_gate::{HomeToken, RequestGate};
+use jellypilot_core::LoadState;
+use jellypilot_mpv::playback::{Playable, PlaybackStartPosition};
 
 pub(crate) struct HomePage {
   root: gtk::Widget,
@@ -343,28 +343,5 @@ impl HomePage {
         image_id,
       });
     }
-  }
-}
-
-pub(crate) async fn load_home_data(client: Arc<JellyfinClient>, token: HomeToken) -> HomeEvent {
-  let (home, shortcuts) = relm4::tokio::join!(
-    async {
-      client
-        .library()
-        .video_home()
-        .await
-        .map_err(|error| error.to_string())
-    },
-    async {
-      client
-        .library()
-        .library_shortcuts()
-        .await
-        .map_err(|error| error.to_string())
-    },
-  );
-  HomeEvent::Loaded {
-    token,
-    result: (home, shortcuts),
   }
 }

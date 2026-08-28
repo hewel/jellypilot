@@ -7,14 +7,14 @@ use std::pin::Pin;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+use crate::{
+  collect_player_state_sample, find_mpv, has_mpv_option, MpvClient, MpvEvent, PlayerState,
+};
 #[cfg(test)]
 use jellypilot_media_server::MediaStream;
 use jellypilot_media_server::{
   ticks_to_seconds, JellyfinClient, MediaItem, MediaServerProvider, MediaSource,
   PlaybackProgressInfo, PlaybackStartInfo, PlaybackStopInfo, VideoItemDetail, VideoLibraryItem,
-};
-use jellypilot_mpv::{
-  collect_player_state_sample, find_mpv, has_mpv_option, MpvClient, MpvEvent, PlayerState,
 };
 
 const DIRECT_PLAYBACK_CACHE_OPTIONS: [(&str, &str); 8] = [
@@ -591,7 +591,7 @@ impl PlaybackController {
       .get_property("track-list")
       .await
       .map_err(|_| PlaybackError::MpvControlFailed)?;
-    let jellypilot_mpv::PropertyValue::Json(json) = value else {
+    let crate::PropertyValue::Json(json) = value else {
       return Err(PlaybackError::TrackUnavailable);
     };
     parse_track_list(&json)
@@ -1400,7 +1400,7 @@ async fn reporting_succeeded_with_timeout<E>(
   timeout: Duration,
   report: impl Future<Output = Result<(), E>>,
 ) -> bool {
-  relm4::tokio::time::timeout(timeout, report)
+  tokio::time::timeout(timeout, report)
     .await
     .is_ok_and(|result| result.is_ok())
 }
@@ -1409,7 +1409,7 @@ async fn load_completed_with_timeout(
   timeout: Duration,
   wait_for_load: impl Future<Output = bool>,
 ) -> bool {
-  relm4::tokio::time::timeout(timeout, wait_for_load)
+  tokio::time::timeout(timeout, wait_for_load)
     .await
     .unwrap_or(false)
 }
@@ -1578,14 +1578,12 @@ mod tests {
   use std::sync::atomic::{AtomicBool, Ordering};
   use std::sync::Mutex;
 
-  use relm4::tokio::io::{
-    duplex, AsyncBufReadExt, AsyncWriteExt, BufReader, DuplexStream, WriteHalf,
-  };
+  use tokio::io::{duplex, AsyncBufReadExt, AsyncWriteExt, BufReader, DuplexStream, WriteHalf};
 
   use super::*;
 
   fn run_async<T>(future: impl Future<Output = T>) -> T {
-    relm4::tokio::runtime::Builder::new_current_thread()
+    tokio::runtime::Builder::new_current_thread()
       .enable_time()
       .build()
       .expect("test runtime should build")
@@ -1785,24 +1783,24 @@ mod tests {
 
   struct InMemoryMpv {
     client: MpvClient,
-    writer: Arc<relm4::tokio::sync::Mutex<WriteHalf<DuplexStream>>>,
-    peer: relm4::tokio::task::JoinHandle<()>,
+    writer: Arc<tokio::sync::Mutex<WriteHalf<DuplexStream>>>,
+    peer: tokio::task::JoinHandle<()>,
   }
 
   impl InMemoryMpv {
     async fn new() -> Self {
       let client = MpvClient::new(None);
       let (client_stream, peer_stream) = duplex(128 * 1024);
-      let (reader, writer) = relm4::tokio::io::split(client_stream);
+      let (reader, writer) = tokio::io::split(client_stream);
       let transport = MpvClient::from_io_for_test(reader, writer)
         .await
         .expect("test MPV transport should be constructed");
       client.install_ipc_for_test(transport);
 
-      let (peer_reader, peer_writer) = relm4::tokio::io::split(peer_stream);
-      let writer = Arc::new(relm4::tokio::sync::Mutex::new(peer_writer));
+      let (peer_reader, peer_writer) = tokio::io::split(peer_stream);
+      let writer = Arc::new(tokio::sync::Mutex::new(peer_writer));
       let task_writer = Arc::clone(&writer);
-      let peer = relm4::tokio::spawn(async move {
+      let peer = tokio::spawn(async move {
         let mut lines = BufReader::new(peer_reader).lines();
         let mut state = MpvPeerState::default();
         while let Ok(Some(line)) = lines.next_line().await {

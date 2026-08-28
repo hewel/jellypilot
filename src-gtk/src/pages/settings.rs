@@ -5,15 +5,17 @@ use jellypilot_mpv::{find_mpv, write_input_conf};
 use relm4::adw::prelude::*;
 use relm4::{adw, gtk, Sender};
 
-use crate::artwork_cache::ArtworkCacheStats;
-use crate::auth_storage::{SavedProfileKey, SavedProfileSummary};
-use crate::config::{self, Settings, SettingsMutationError, SettingsStore, ShortcutKind};
-use crate::diagnostics::{DiagnosticCategory, DiagnosticLevel};
 use crate::pages::login;
-use crate::shell::{AppMessage, ConnectionPhase, LoadState};
-
-const SUBTITLE_LANGUAGE_OPTIONS: [&str; 8] =
-  ["eng", "spa", "fra", "deu", "ita", "por", "jpn", "zho"];
+use crate::shell::AppMessage;
+use jellypilot_auth::login::ConnectionPhase;
+use jellypilot_auth::{SavedProfileKey, SavedProfileSummary};
+use jellypilot_core::config::{self, Settings, SettingsMutationError, SettingsStore, ShortcutKind};
+use jellypilot_core::diagnostics::{DiagnosticCategory, DiagnosticLevel};
+use jellypilot_core::settings::{
+  config_intro_mode, format_byte_count, intro_mode_selection, SUBTITLE_LANGUAGE_OPTIONS,
+};
+use jellypilot_core::LoadState;
+use jellypilot_media_server::ArtworkCacheStats;
 
 pub(crate) struct SettingsPage {
   root: adw::PreferencesDialog,
@@ -1103,37 +1105,5 @@ fn dim_label(text: &str) -> gtk::Label {
 fn clear_box(container: &gtk::Box) {
   while let Some(child) = container.first_child() {
     container.remove(&child);
-  }
-}
-
-const fn config_intro_mode(selected: u32) -> config::IntroMode {
-  match selected {
-    1 => config::IntroMode::Manual,
-    2 => config::IntroMode::Off,
-    _ => config::IntroMode::Automatic,
-  }
-}
-
-const fn intro_mode_selection(mode: config::IntroMode) -> u32 {
-  match mode {
-    config::IntroMode::Automatic => 0,
-    config::IntroMode::Manual => 1,
-    config::IntroMode::Off => 2,
-  }
-}
-
-fn format_byte_count(bytes: u64) -> String {
-  const KIB: f64 = 1024.0;
-  const MIB: f64 = KIB * 1024.0;
-  const GIB: f64 = MIB * 1024.0;
-  let bytes = bytes as f64;
-  if bytes >= GIB {
-    format!("{:.1} GiB", bytes / GIB)
-  } else if bytes >= MIB {
-    format!("{:.1} MiB", bytes / MIB)
-  } else if bytes >= KIB {
-    format!("{:.1} KiB", bytes / KIB)
-  } else {
-    format!("{bytes:.0} B")
   }
 }

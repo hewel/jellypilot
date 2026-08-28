@@ -18,18 +18,18 @@ const INTRO_PROMPT_DURATION_MS: i64 = 3_000;
 const INTRO_CONFIRMATION_DURATION_MS: i64 = 1_500;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct EffectId {
+pub struct EffectId {
   epoch: u64,
   sequence: u64,
 }
 
-pub(crate) enum PlaybackInput {
+pub enum PlaybackInput {
   Intent(PlaybackIntent),
   Event(PlaybackEvent),
 }
 
 #[allow(clippy::large_enum_variant)]
-pub(crate) enum PlaybackIntent {
+pub enum PlaybackIntent {
   Start {
     item: Playable,
     position: PlaybackStartPosition,
@@ -53,12 +53,12 @@ pub(crate) enum PlaybackIntent {
 }
 
 #[derive(Clone, Copy)]
-pub(crate) struct IntroAvailability {
+pub struct IntroAvailability {
   pub mode: IntroSkipMode,
   pub skipper_available: bool,
 }
 
-pub(crate) enum PlaybackEvent {
+pub enum PlaybackEvent {
   EngineAvailability(bool),
   ControllerSettled {
     id: EffectId,
@@ -79,7 +79,7 @@ pub(crate) enum PlaybackEvent {
   },
 }
 
-pub(crate) enum ControllerSettlement {
+pub enum ControllerSettlement {
   Started(Result<PlaybackOutcome, PlaybackError>),
   Controlled(Result<PlaybackOutcome, PlaybackError>),
   Stopped(Result<PlaybackStopOutcome, PlaybackError>),
@@ -93,14 +93,14 @@ pub(crate) enum ControllerSettlement {
 }
 
 #[allow(clippy::large_enum_variant)]
-pub(crate) enum PlaybackEffect {
+pub enum PlaybackEffect {
   Controller(EffectId, ControllerCommand),
   FetchIntroRanges(EffectId, String),
   LookupAdjacent(EffectId, AdjacentDirection),
 }
 
 #[allow(clippy::large_enum_variant)]
-pub(crate) enum ControllerCommand {
+pub enum ControllerCommand {
   Start {
     item: Playable,
     position: PlaybackStartPosition,
@@ -121,7 +121,7 @@ pub(crate) enum ControllerCommand {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum AdjacentDirection {
+pub enum AdjacentDirection {
   Previous,
   Next,
 }
@@ -136,7 +136,7 @@ impl AdjacentDirection {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) enum AdjacentAvailability {
+pub enum AdjacentAvailability {
   Idle,
   Loading,
   Available { title: String },
@@ -144,13 +144,13 @@ pub(crate) enum AdjacentAvailability {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct AdjacentView {
+pub struct AdjacentView {
   pub previous: AdjacentAvailability,
   pub next: AdjacentAvailability,
 }
 
 #[derive(Clone, Debug, PartialEq)]
-pub(crate) enum TracksView {
+pub enum TracksView {
   Loading,
   Ready {
     tracks: Vec<TrackInfo>,
@@ -161,7 +161,7 @@ pub(crate) enum TracksView {
 }
 
 #[derive(Clone, Debug, PartialEq)]
-pub(crate) struct NowPlayingView {
+pub struct NowPlayingView {
   pub item: NowPlayingItem,
   pub paused: bool,
   pub position_seconds: f64,
@@ -171,12 +171,12 @@ pub(crate) struct NowPlayingView {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct IntroPromptView {
+pub struct IntroPromptView {
   pub kind: IntroSkipKind,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) enum PlaybackNotice {
+pub enum PlaybackNotice {
   Finished,
   Stopped,
   Failed(PlaybackError),
@@ -184,7 +184,7 @@ pub(crate) enum PlaybackNotice {
 }
 
 #[derive(Clone, Debug, PartialEq)]
-pub(crate) struct SessionView {
+pub struct SessionView {
   pub now_playing: Option<NowPlayingView>,
   pub tracks: TracksView,
   pub adjacent: AdjacentView,
@@ -196,7 +196,7 @@ pub(crate) struct SessionView {
   pub quit_may_proceed: bool,
 }
 
-pub(crate) struct PlaybackSession {
+pub struct PlaybackSession {
   snapshot: Option<crate::playback::PlaybackSnapshot>,
   tracks: TracksView,
   adjacent: AdjacentState,
@@ -241,14 +241,14 @@ impl Default for PlaybackSession {
 }
 
 impl PlaybackSession {
-  pub(crate) fn handle(&mut self, input: PlaybackInput, now: Instant) -> Vec<PlaybackEffect> {
+  pub fn handle(&mut self, input: PlaybackInput, now: Instant) -> Vec<PlaybackEffect> {
     match input {
       PlaybackInput::Intent(intent) => self.handle_intent(intent, now),
       PlaybackInput::Event(event) => self.handle_event(event, now),
     }
   }
 
-  pub(crate) fn view(&self) -> SessionView {
+  pub fn view(&self) -> SessionView {
     let now_playing = self.snapshot.as_ref().and_then(|snapshot| {
       snapshot.now_playing.as_ref().map(|item| {
         let duration_seconds = (snapshot.transport.duration.is_finite()
@@ -1213,7 +1213,7 @@ fn ready_tracks(tracks: Vec<TrackInfo>) -> TracksView {
 
 #[cfg(test)]
 mod tests {
-  use jellypilot_mpv::PlayerState;
+  use crate::PlayerState;
 
   use super::*;
   use crate::playback::PlaybackSnapshot;

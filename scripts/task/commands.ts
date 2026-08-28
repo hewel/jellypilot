@@ -38,6 +38,7 @@ export const LINT_PATHS = [
 
 export const RUST_FORMAT_PACKAGES = [
   'jellypilot',
+  'jellypilot-auth',
   'jellypilot-core',
   'jellypilot-core-wasm',
   'jellypilot-media-server',

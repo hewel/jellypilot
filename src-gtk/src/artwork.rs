@@ -4,7 +4,7 @@
 //! created only when [`DecodedArtwork::texture`] is called on the GTK thread.
 
 use std::cell::Cell;
-use std::collections::{HashMap, VecDeque};
+use std::collections::HashMap;
 use std::fmt;
 use std::rc::Rc;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
@@ -14,29 +14,18 @@ use relm4::gtk;
 use relm4::gtk::gdk_pixbuf::prelude::{PixbufAnimationExt, PixbufLoaderExt};
 use relm4::tokio::sync::{oneshot, watch, Notify};
 
-use crate::artwork_cache::{artwork_cache_key, ArtworkCacheStats, ArtworkDiskCache};
+#[cfg(test)]
+use jellypilot_media_server::artwork::MAX_QUEUED_LOADS;
+use jellypilot_media_server::artwork::{
+  ArtworkError, ArtworkLimits, ArtworkLoadTicket, LoadAdmission as SharedLoadAdmission,
+  LoadScheduler,
+};
+use jellypilot_media_server::{artwork_cache_key, ArtworkCacheStats, ArtworkDiskCache};
 
 pub(crate) const FALLBACK_ARTWORK_ICON: &str = "image-missing-symbolic";
 
 const MAX_IMAGE_REFERENCE_BYTES: usize = 32 * 1024;
-const MAX_RESPONSE_BYTES: usize = 8 * 1024 * 1024;
-// Artwork is displayed at at most 220 logical pixels high today. Four MiB of
-// pixels still permits about 1365x768 RGBA, while bounding 48 retained Home
-// textures to about 192 MiB. Larger originals are downscaled by PixbufLoader
-// at `size-prepared`, before its destination pixel buffer is allocated.
-const MAX_DECODED_BYTES: usize = 4 * 1024 * 1024;
-const MAX_CACHED_BYTES: usize = 32 * 1024 * 1024;
-const MAX_CACHED_ENTRIES: usize = 256;
-const MAX_ACTIVE_LOADS: usize = 4;
-const MAX_ACTIVE_BYTES: usize = 64 * 1024 * 1024;
-// One Home render currently schedules at most 48 unique images. Keeping a
-// full extra active-load margin avoids dropping ordinary views while bounding
-// queued reference metadata under pathological callers.
-const MAX_QUEUED_LOADS: usize = 64;
 const DECODE_INPUT_CHUNK_BYTES: usize = 16 * 1024;
-// At peak, a decoder may retain both its mutable pixbuf and the immutable
-// GBytes snapshot returned to the UI. The encoded response is reserved too.
-const DECODE_PIXEL_BUFFER_RESERVATIONS: usize = 2;
 // GdkPixbuf emits 8-bit RGB or RGBA; four bytes per pixel also upper-bounds
 // the padding in an RGB rowstride.
 const PIXBUF_ALLOCATION_BYTES_PER_PIXEL: usize = 4;
@@ -53,47 +42,6 @@ pub(crate) struct ArtworkAdapter {
   generation_sender: watch::Sender<u64>,
   limits: ArtworkLimits,
   disk_cache: ArtworkDiskCache,
-}
-
-#[derive(Clone, Copy)]
-struct ArtworkLimits {
-  max_response_bytes: usize,
-  max_decoded_bytes: usize,
-  max_cached_bytes: usize,
-  max_cached_entries: usize,
-  max_active_loads: usize,
-  max_active_bytes: usize,
-  max_queued_loads: usize,
-}
-
-impl Default for ArtworkLimits {
-  fn default() -> Self {
-    Self {
-      max_response_bytes: MAX_RESPONSE_BYTES,
-      max_decoded_bytes: MAX_DECODED_BYTES,
-      max_cached_bytes: MAX_CACHED_BYTES,
-      max_cached_entries: MAX_CACHED_ENTRIES,
-      max_active_loads: MAX_ACTIVE_LOADS,
-      max_active_bytes: MAX_ACTIVE_BYTES,
-      max_queued_loads: MAX_QUEUED_LOADS,
-    }
-  }
-}
-
-impl ArtworkLimits {
-  fn load_reservation_bytes(self) -> usize {
-    self.max_response_bytes.saturating_add(
-      self
-        .max_decoded_bytes
-        .saturating_mul(DECODE_PIXEL_BUFFER_RESERVATIONS),
-    )
-  }
-
-  fn normalized(mut self) -> Self {
-    self.max_active_loads = self.max_active_loads.max(1);
-    self.max_active_bytes = self.max_active_bytes.max(self.load_reservation_bytes());
-    self
-  }
 }
 
 impl Default for ArtworkAdapter {
@@ -145,7 +93,7 @@ impl ArtworkAdapter {
   }
 
   pub(crate) fn ticket(&self) -> ArtworkLoadTicket {
-    ArtworkLoadTicket(self.lock_state().generation)
+    ArtworkLoadTicket::new(self.lock_state().generation)
   }
 
   pub(crate) fn cached(&self, image_id: &str) -> Option<DecodedArtwork> {
@@ -189,7 +137,7 @@ impl ArtworkAdapter {
     let key = Arc::<str>::from(image_id);
     let disk_key = artwork_cache_key(request.server_url(), request.origin_url());
     let mut generation = self.generation_sender.subscribe();
-    let load_generation = ticket.0;
+    let load_generation = ticket.generation();
     match self.admit(Arc::clone(&key), load_generation) {
       LoadAdmission::Cached(artwork) => Ok(artwork),
       LoadAdmission::Follower(receiver) => wait_for_follower(receiver, &mut generation).await,
@@ -405,9 +353,6 @@ impl ArtworkAdapter {
   }
 }
 
-#[derive(Clone, Copy)]
-pub(crate) struct ArtworkLoadTicket(u64);
-
 struct AdapterState {
   generation: u64,
   cache: ArtworkCache,
@@ -461,12 +406,7 @@ struct InFlightLoad {
   waiters: Vec<oneshot::Sender<LoadResult>>,
 }
 
-enum LoadAdmission {
-  Cached(DecodedArtwork),
-  Follower(oneshot::Receiver<LoadResult>),
-  Leader(u64),
-  Cancelled,
-}
+type LoadAdmission = SharedLoadAdmission<DecodedArtwork, oneshot::Receiver<LoadResult>>;
 
 async fn wait_for_follower(
   receiver: oneshot::Receiver<LoadResult>,
@@ -487,79 +427,6 @@ fn notify_cancelled(waiters: Vec<oneshot::Sender<LoadResult>>) {
   }
 }
 
-#[derive(Default)]
-struct LoadScheduler {
-  next_queue_id: u64,
-  active_loads: usize,
-  active_bytes: usize,
-  queue: VecDeque<QueuedEntry>,
-}
-
-struct QueuedEntry {
-  id: u64,
-  notify: Arc<Notify>,
-}
-
-impl LoadScheduler {
-  fn enqueue(&mut self) -> (u64, Arc<Notify>) {
-    let id = self.next_queue_id;
-    self.next_queue_id = self.next_queue_id.wrapping_add(1);
-    let notify = Arc::new(Notify::new());
-    self.queue.push_back(QueuedEntry {
-      id,
-      notify: Arc::clone(&notify),
-    });
-    (id, notify)
-  }
-
-  fn try_activate(
-    &mut self,
-    queue_id: u64,
-    max_active_loads: usize,
-    max_active_bytes: usize,
-    reserved_bytes: usize,
-  ) -> bool {
-    let is_next = self.queue.front().is_some_and(|entry| entry.id == queue_id);
-    let bytes_fit = reserved_bytes <= max_active_bytes.saturating_sub(self.active_bytes);
-    if !is_next || self.active_loads >= max_active_loads || !bytes_fit {
-      return false;
-    }
-
-    self.queue.pop_front();
-    self.active_loads += 1;
-    self.active_bytes += reserved_bytes;
-    true
-  }
-
-  fn release(&mut self, reserved_bytes: usize) {
-    if self.active_loads > 0 {
-      self.active_loads -= 1;
-    }
-    self.active_bytes = self.active_bytes.saturating_sub(reserved_bytes);
-    self.notify_front();
-  }
-
-  fn cancel(&mut self, queue_id: u64) {
-    let was_front = self.queue.front().is_some_and(|entry| entry.id == queue_id);
-    if let Some(index) = self.queue.iter().position(|entry| entry.id == queue_id) {
-      self.queue.remove(index);
-    }
-    if was_front {
-      self.notify_front();
-    }
-  }
-
-  fn notify_front(&self) {
-    if let Some(entry) = self.queue.front() {
-      entry.notify.notify_one();
-    }
-  }
-
-  fn cancel_queued(&mut self) {
-    self.queue.clear();
-  }
-}
-
 struct QueuedLoad<'a> {
   adapter: &'a ArtworkAdapter,
   id: Option<u64>,
@@ -573,7 +440,7 @@ impl<'a> QueuedLoad<'a> {
       if state.generation != generation {
         return Err(ArtworkError::Cancelled);
       }
-      if state.scheduler.queue.len() >= adapter.limits.max_queued_loads {
+      if state.scheduler.queued_loads() >= adapter.limits.max_queued_loads {
         return Err(ArtworkError::Overloaded);
       }
       state.scheduler.enqueue()
@@ -715,47 +582,6 @@ enum PixelFormat {
   Rgb,
   Rgba,
 }
-
-/// Redacted artwork failures suitable for UI state and logs.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum ArtworkError {
-  RequestRejected,
-  FetchFailed,
-  OriginRejected,
-  UnsupportedContentType,
-  AnimatedImageUnsupported,
-  ResponseTooLarge,
-  EmptyResponse,
-  DecodeFailed,
-  CacheUnavailable,
-  DecodedImageTooLarge,
-  UiThreadRequired,
-  Cancelled,
-  Overloaded,
-}
-
-impl fmt::Display for ArtworkError {
-  fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-    let message = match self {
-      Self::RequestRejected => "artwork reference was rejected",
-      Self::FetchFailed => "artwork could not be fetched",
-      Self::OriginRejected => "artwork server returned an unusable status",
-      Self::UnsupportedContentType => "artwork response was not an image",
-      Self::AnimatedImageUnsupported => "animated artwork is not supported",
-      Self::ResponseTooLarge => "artwork response exceeded the memory limit",
-      Self::EmptyResponse => "artwork response was empty",
-      Self::DecodeFailed => "artwork data could not be decoded",
-      Self::CacheUnavailable => "artwork disk cache is unavailable",
-      Self::DecodedImageTooLarge => "decoded artwork exceeded the memory limit",
-      Self::UiThreadRequired => "artwork texture must be created on the GTK thread",
-      Self::Cancelled => "artwork loading was cancelled",
-      Self::Overloaded => "artwork loader is at capacity",
-    };
-    formatter.write_str(message)
-  }
-}
-
-impl std::error::Error for ArtworkError {}
 
 fn validate_disk_artwork(bytes: &[u8]) -> bool {
   validate_static_image_container(bytes).is_ok()
@@ -1154,71 +980,6 @@ mod tests {
   }
 
   #[test]
-  fn aggregate_reservation_covers_encoded_and_two_pixel_buffers() {
-    let limits = ArtworkLimits::default();
-
-    assert_eq!(
-      limits.load_reservation_bytes(),
-      MAX_RESPONSE_BYTES + (2 * MAX_DECODED_BYTES)
-    );
-    assert_eq!(
-      MAX_ACTIVE_BYTES / limits.load_reservation_bytes(),
-      MAX_ACTIVE_LOADS
-    );
-  }
-
-  #[test]
-  fn aggregate_reservation_saturates_on_overflow() {
-    let limits = ArtworkLimits {
-      max_response_bytes: usize::MAX,
-      max_decoded_bytes: usize::MAX,
-      ..ArtworkLimits::default()
-    };
-
-    assert_eq!(limits.load_reservation_bytes(), usize::MAX);
-  }
-
-  #[test]
-  fn scheduler_bounds_active_loads_and_aggregate_bytes() {
-    let mut scheduler = LoadScheduler::default();
-    let (first, _) = scheduler.enqueue();
-    let (second, _) = scheduler.enqueue();
-    let (third, _) = scheduler.enqueue();
-    let reservation = 40;
-
-    assert!(scheduler.try_activate(first, 3, 80, reservation));
-    assert!(scheduler.try_activate(second, 3, 80, reservation));
-    assert!(!scheduler.try_activate(third, 3, 80, reservation));
-    assert_eq!(scheduler.active_loads, 2);
-    assert_eq!(scheduler.active_bytes, 80);
-
-    scheduler.release(reservation);
-    assert!(scheduler.try_activate(third, 3, 80, reservation));
-    assert_eq!(scheduler.active_loads, 2);
-    assert_eq!(scheduler.active_bytes, 80);
-  }
-
-  #[test]
-  fn ordinary_home_batch_queues_and_drains_in_fifo_order() {
-    let mut scheduler = LoadScheduler::default();
-    let queued = (0..48).map(|_| scheduler.enqueue().0).collect::<Vec<_>>();
-    let reservation = 40;
-
-    assert!(scheduler.try_activate(queued[0], 2, 80, reservation));
-    assert!(scheduler.try_activate(queued[1], 2, 80, reservation));
-    for id in &queued[2..] {
-      scheduler.release(reservation);
-      assert!(scheduler.try_activate(*id, 2, 80, reservation));
-    }
-    scheduler.release(reservation);
-    scheduler.release(reservation);
-
-    assert_eq!(scheduler.active_loads, 0);
-    assert_eq!(scheduler.active_bytes, 0);
-    assert!(scheduler.queue.is_empty());
-  }
-
-  #[test]
   fn queue_accepts_an_ordinary_48_image_home_and_bounds_pathological_backlog() {
     let adapter = ArtworkAdapter::default();
     let generation = adapter.lock_state().generation;
@@ -1256,9 +1017,9 @@ mod tests {
     drop(current);
 
     let state = adapter.lock_state();
-    assert_eq!(state.scheduler.active_loads, 0);
-    assert_eq!(state.scheduler.active_bytes, 0);
-    assert!(state.scheduler.queue.is_empty());
+    assert_eq!(state.scheduler.active_loads(), 0);
+    assert_eq!(state.scheduler.active_bytes(), 0);
+    assert_eq!(state.scheduler.queued_loads(), 0);
   }
 
   #[test]
@@ -1293,8 +1054,8 @@ mod tests {
     drop(second);
     drop(next);
     let state = adapter.lock_state();
-    assert_eq!(state.scheduler.active_loads, 0);
-    assert_eq!(state.scheduler.active_bytes, 0);
+    assert_eq!(state.scheduler.active_loads(), 0);
+    assert_eq!(state.scheduler.active_bytes(), 0);
   }
 
   #[test]
@@ -1310,13 +1071,13 @@ mod tests {
     });
 
     started_receiver.recv().expect("worker starts");
-    assert_eq!(adapter.lock_state().scheduler.active_loads, 1);
+    assert_eq!(adapter.lock_state().scheduler.active_loads(), 1);
     finish_sender.send(()).expect("worker remains");
     worker.join().expect("worker does not panic");
 
     let state = adapter.lock_state();
-    assert_eq!(state.scheduler.active_loads, 0);
-    assert_eq!(state.scheduler.active_bytes, 0);
+    assert_eq!(state.scheduler.active_loads(), 0);
+    assert_eq!(state.scheduler.active_bytes(), 0);
   }
 
   #[test]
@@ -1438,11 +1199,11 @@ mod tests {
     adapter.reset_session();
 
     assert!(matches!(
-      adapter.admit(Arc::from("stale"), stale.0),
+      adapter.admit(Arc::from("stale"), stale.generation()),
       LoadAdmission::Cancelled
     ));
     assert!(matches!(
-      adapter.admit(Arc::from("current"), adapter.ticket().0),
+      adapter.admit(Arc::from("current"), adapter.ticket().generation()),
       LoadAdmission::Leader(_)
     ));
   }
@@ -1502,29 +1263,6 @@ mod tests {
     cache.insert(Arc::from("large"), artwork(&[1, 2, 3]));
 
     assert!(cache.get("large").is_none());
-  }
-
-  #[test]
-  fn errors_are_redacted() {
-    let secret = "https://server.invalid/image?api_key=secret";
-    let errors = [
-      ArtworkError::RequestRejected,
-      ArtworkError::FetchFailed,
-      ArtworkError::OriginRejected,
-      ArtworkError::UnsupportedContentType,
-      ArtworkError::AnimatedImageUnsupported,
-      ArtworkError::ResponseTooLarge,
-      ArtworkError::EmptyResponse,
-      ArtworkError::DecodeFailed,
-      ArtworkError::DecodedImageTooLarge,
-      ArtworkError::UiThreadRequired,
-      ArtworkError::Cancelled,
-      ArtworkError::Overloaded,
-    ];
-
-    for error in errors {
-      assert!(!error.to_string().contains(secret));
-    }
   }
 
   #[test]
