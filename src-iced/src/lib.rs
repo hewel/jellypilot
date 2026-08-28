@@ -48,7 +48,7 @@ fn subscription(state: &State) -> Subscription<Message> {
 }
 
 fn theme(_state: &State) -> Theme {
-  Theme::Dark
+  jellypilot_ui::theme::theme()
 }
 
 fn view(_state: &State) -> Element<'_, Message> {
