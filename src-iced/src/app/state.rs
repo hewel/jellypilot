@@ -6,9 +6,10 @@ use iced::widget::image;
 use jellypilot_auth::login::ConnectionPhase;
 use jellypilot_auth::{AuthStore, SavedProfileKey, SavedProfileSummary, SensitiveSavedSession};
 use jellypilot_core::artwork_binder::{ArtworkBinder, ArtworkSlot};
+use jellypilot_core::browse_model::{BrowseModel, LibraryBrowseView};
 use jellypilot_core::config::{LoginPrefill, Settings, SettingsStore};
 use jellypilot_core::request_gate::RequestGate;
-use jellypilot_core::LoadState;
+use jellypilot_core::{LibraryBrowseLoadToken, LoadState};
 use jellypilot_media_server::artwork::{ArtworkAdapter, RawArtworkDecoder};
 use jellypilot_media_server::{
   JellyfinClient, MediaServerProvider, VideoLibraryItem, VideoLibraryShortcut,
@@ -131,7 +132,11 @@ impl ConnectedIdentity {
 pub enum Destination {
   #[default]
   Home,
-  Library(String),
+  Library {
+    library_id: String,
+    collection_type: String,
+  },
+  Search(String),
 }
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
@@ -307,6 +312,61 @@ impl HomeArtwork {
   }
 }
 
+#[derive(Default)]
+pub struct BrowseArtwork {
+  cells: HashMap<String, ArtworkCell>,
+}
+
+impl BrowseArtwork {
+  pub fn clear(&mut self) {
+    self.cells.clear();
+  }
+
+  pub fn insert(&mut self, item_id: String, cell: ArtworkCell) {
+    self.cells.insert(item_id, cell);
+  }
+
+  pub fn get(&self, item_id: &str) -> Option<&ArtworkCell> {
+    self.cells.get(item_id)
+  }
+
+  pub fn cell_mut(&mut self, slot: ArtworkSlot, image_id: &str) -> Option<&mut ArtworkCell> {
+    self
+      .cells
+      .values_mut()
+      .find(|cell| cell.slot == slot && cell.image_id == image_id)
+  }
+
+  pub fn retain_items(&mut self, item_ids: &HashSet<&str>) {
+    self
+      .cells
+      .retain(|item_id, _| item_ids.contains(item_id.as_str()));
+  }
+
+  pub fn slots(&self) -> impl Iterator<Item = ArtworkSlot> + '_ {
+    self.cells.values().map(|cell| cell.slot)
+  }
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct BrowseViewport {
+  pub offset_y: f32,
+  pub height: f32,
+  pub content_height: f32,
+  pub width: f32,
+}
+
+impl Default for BrowseViewport {
+  fn default() -> Self {
+    Self {
+      offset_y: 0.0,
+      height: 720.0,
+      content_height: 0.0,
+      width: 960.0,
+    }
+  }
+}
+
 struct RetainedHandle<T> {
   image_id: String,
   value: T,
@@ -374,6 +434,14 @@ pub struct State {
   pub artwork_binder: ArtworkBinder,
   pub home_artwork: HomeArtwork,
   pub artwork_handles: ArtworkHandleRetention,
+  pub browse: BrowseModel,
+  pub browse_view: LibraryBrowseView,
+  pub browse_artwork: BrowseArtwork,
+  pub browse_page_tasks: HashMap<LibraryBrowseLoadToken, task::Handle>,
+  pub browse_viewport: BrowseViewport,
+  pub browse_scroll_id: iced::widget::Id,
+  pub browse_sort_menu_open: bool,
+  pub search_input: String,
 }
 
 impl State {
@@ -406,6 +474,14 @@ impl State {
       artwork_binder: ArtworkBinder::default(),
       home_artwork: HomeArtwork::default(),
       artwork_handles: ArtworkHandleRetention::default(),
+      browse: BrowseModel::default(),
+      browse_view: LibraryBrowseView::Inactive,
+      browse_artwork: BrowseArtwork::default(),
+      browse_page_tasks: HashMap::new(),
+      browse_viewport: BrowseViewport::default(),
+      browse_scroll_id: iced::widget::Id::unique(),
+      browse_sort_menu_open: false,
+      search_input: String::new(),
     }
   }
 }

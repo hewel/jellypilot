@@ -3,7 +3,12 @@ use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
 
+use jellypilot_media_server::{
+    VideoLibraryPlayedFilter, VideoLibrarySort, VideoLibrarySortDirection,
+};
 use serde::{Deserialize, Serialize};
+
+use crate::browse_model::BrowsePreferences;
 
 const CONFIG_DIRECTORY: &str = "jellypilot";
 const CONFIG_FILE: &str = "config.json";
@@ -54,6 +59,121 @@ impl LoginPrefill {
     }
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BrowseFilterSettings {
+    sort: VideoLibrarySort,
+    played_filter: VideoLibraryPlayedFilter,
+    favorites_only: bool,
+    sort_direction: VideoLibrarySortDirection,
+}
+
+impl Default for BrowseFilterSettings {
+    fn default() -> Self {
+        Self {
+            sort: VideoLibrarySort::Title,
+            played_filter: VideoLibraryPlayedFilter::All,
+            favorites_only: false,
+            sort_direction: VideoLibrarySortDirection::Ascending,
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for BrowseFilterSettings {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let value = serde_json::Value::deserialize(deserializer)?;
+        let Some(object) = value.as_object() else {
+            return Ok(Self::default());
+        };
+        let sort = match object.get("sort").and_then(serde_json::Value::as_str) {
+            Some("recentlyAdded") => VideoLibrarySort::RecentlyAdded,
+            Some("releaseDate") => VideoLibrarySort::ReleaseDate,
+            _ => VideoLibrarySort::Title,
+        };
+        let played_filter = match object
+            .get("playedFilter")
+            .and_then(serde_json::Value::as_str)
+        {
+            Some("played") => VideoLibraryPlayedFilter::Played,
+            Some("unplayed") => VideoLibraryPlayedFilter::Unplayed,
+            _ => VideoLibraryPlayedFilter::All,
+        };
+        let sort_direction = match object
+            .get("sortDirection")
+            .and_then(serde_json::Value::as_str)
+        {
+            Some("desc") => VideoLibrarySortDirection::Descending,
+            _ => VideoLibrarySortDirection::Ascending,
+        };
+
+        Ok(Self {
+            sort,
+            played_filter,
+            favorites_only: object
+                .get("favoritesOnly")
+                .and_then(serde_json::Value::as_bool)
+                .unwrap_or(false),
+            sort_direction,
+        })
+    }
+}
+
+impl BrowseFilterSettings {
+    pub const fn sort(self) -> VideoLibrarySort {
+        self.sort
+    }
+
+    pub const fn played_filter(self) -> VideoLibraryPlayedFilter {
+        self.played_filter
+    }
+
+    pub const fn favorites_only(self) -> bool {
+        self.favorites_only
+    }
+
+    pub const fn sort_direction(self) -> VideoLibrarySortDirection {
+        self.sort_direction
+    }
+
+    #[must_use]
+    pub const fn with_sort(mut self, sort: VideoLibrarySort) -> Self {
+        self.sort = sort;
+        self
+    }
+
+    #[must_use]
+    pub const fn with_played_filter(mut self, played_filter: VideoLibraryPlayedFilter) -> Self {
+        self.played_filter = played_filter;
+        self
+    }
+
+    #[must_use]
+    pub const fn with_favorites_only(mut self, favorites_only: bool) -> Self {
+        self.favorites_only = favorites_only;
+        self
+    }
+
+    #[must_use]
+    pub const fn with_sort_direction(mut self, sort_direction: VideoLibrarySortDirection) -> Self {
+        self.sort_direction = sort_direction;
+        self
+    }
+}
+
+impl From<BrowseFilterSettings> for BrowsePreferences {
+    fn from(settings: BrowseFilterSettings) -> Self {
+        Self {
+            sort: settings.sort,
+            sort_direction: settings.sort_direction,
+            played_filter: settings.played_filter,
+            favorites_only: settings.favorites_only,
+        }
+    }
+}
+
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct Settings {
     remember: bool,
@@ -90,6 +210,8 @@ pub struct Settings {
         deserialize_with = "deserialize_image_cache_enabled"
     )]
     image_cache_enabled: bool,
+    #[serde(default)]
+    library_filters: BrowseFilterSettings,
 }
 
 impl Default for Settings {
@@ -108,6 +230,7 @@ impl Default for Settings {
             key_previous_episode: default_key_previous_episode(),
             key_intro_skip: default_key_intro_skip(),
             image_cache_enabled: default_image_cache_enabled(),
+            library_filters: BrowseFilterSettings::default(),
         }
     }
 }
@@ -159,6 +282,10 @@ impl Settings {
 
     pub const fn image_cache_enabled(&self) -> bool {
         self.image_cache_enabled
+    }
+
+    pub const fn browse_filters(&self) -> BrowseFilterSettings {
+        self.library_filters
     }
 }
 
@@ -417,6 +544,16 @@ impl SettingsStore {
         })
     }
 
+    pub fn set_browse_filters(
+        &mut self,
+        filters: BrowseFilterSettings,
+    ) -> Result<bool, SettingsMutationError> {
+        self.update(|settings| {
+            settings.library_filters = filters;
+            Ok(())
+        })
+    }
+
     fn update(
         &mut self,
         mutation: impl FnOnce(&mut Settings) -> Result<(), SettingsMutationError>,
@@ -636,6 +773,11 @@ mod tests {
             key_previous_episode: "P".to_owned(),
             key_intro_skip: "I".to_owned(),
             image_cache_enabled: false,
+            library_filters: BrowseFilterSettings::default()
+                .with_sort(VideoLibrarySort::ReleaseDate)
+                .with_played_filter(VideoLibraryPlayedFilter::Unplayed)
+                .with_favorites_only(true)
+                .with_sort_direction(VideoLibrarySortDirection::Descending),
         }
     }
 
@@ -664,6 +806,7 @@ mod tests {
         assert_eq!(settings.key_previous_episode(), "Shift+<");
         assert_eq!(settings.key_intro_skip(), "g");
         assert!(settings.image_cache_enabled());
+        assert_eq!(settings.browse_filters(), BrowseFilterSettings::default());
         fs::remove_file(path).unwrap();
     }
 
@@ -693,6 +836,54 @@ mod tests {
         assert_eq!(settings.key_previous_episode(), "Shift+<");
         assert_eq!(settings.key_intro_skip(), "g");
         assert!(settings.image_cache_enabled());
+        assert_eq!(settings.browse_filters(), BrowseFilterSettings::default());
+        fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn malformed_browse_filters_fall_back_field_by_field() {
+        let path = test_path("malformed-browse-filters");
+        let _ = fs::remove_file(&path);
+        fs::write(
+            &path,
+            r#"{"remember":false,"server_url":"","provider":"","username":"","library_filters":{"sort":"releaseDate","playedFilter":"invalid","favoritesOnly":"yes","sortDirection":"desc"}}"#,
+        )
+        .unwrap();
+
+        let filters = load_from(&path).unwrap().browse_filters();
+
+        assert_eq!(
+            filters,
+            BrowseFilterSettings::default()
+                .with_sort(VideoLibrarySort::ReleaseDate)
+                .with_sort_direction(VideoLibrarySortDirection::Descending)
+        );
+        fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn browse_filter_mutation_persists_validated_shape_and_maps_to_source_preferences() {
+        let path = test_path("browse-filter-persistence");
+        let _ = fs::remove_file(&path);
+        let mut store = store_at(path.clone(), Settings::default());
+        let filters = BrowseFilterSettings::default()
+            .with_sort(VideoLibrarySort::RecentlyAdded)
+            .with_played_filter(VideoLibraryPlayedFilter::Played)
+            .with_favorites_only(true)
+            .with_sort_direction(VideoLibrarySortDirection::Descending);
+
+        assert!(store.set_browse_filters(filters).unwrap());
+
+        let saved = load_from(&path).unwrap().browse_filters();
+        let preferences = BrowsePreferences::from(saved);
+        assert_eq!(saved, filters);
+        assert_eq!(preferences.sort, VideoLibrarySort::RecentlyAdded);
+        assert_eq!(
+            preferences.sort_direction,
+            VideoLibrarySortDirection::Descending
+        );
+        assert_eq!(preferences.played_filter, VideoLibraryPlayedFilter::Played);
+        assert!(preferences.favorites_only);
         fs::remove_file(path).unwrap();
     }
 

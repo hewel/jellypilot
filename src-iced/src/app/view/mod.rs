@@ -1,3 +1,4 @@
+mod browse;
 mod home;
 mod login;
 mod shell;

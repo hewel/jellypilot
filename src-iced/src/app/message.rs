@@ -1,16 +1,20 @@
 use std::sync::{Arc, Mutex};
 
+use iced::widget::scrollable;
 use iced::window;
 use jellypilot_auth::login::{LoginError, LoginEvent};
 use jellypilot_auth::{
   AuthStorageError, SavedProfileKey, SavedProfileSummary, SensitiveSavedSession,
 };
 use jellypilot_core::artwork_binder::ArtworkSlot;
+use jellypilot_core::browse_model::BrowsePageSettlement;
 use jellypilot_core::config::LoginPrefill;
 use jellypilot_core::request_gate::{HomeToken, SessionToken};
 use jellypilot_media_server::artwork::{ArtworkBytes, ArtworkError};
 use jellypilot_media_server::home::HomeDataResult;
-use jellypilot_media_server::{JellyfinClient, MediaServerProvider};
+use jellypilot_media_server::{
+  JellyfinClient, MediaServerProvider, VideoLibraryPlayedFilter, VideoLibrarySort,
+};
 
 use zeroize::Zeroize;
 impl std::fmt::Debug for Message {
@@ -19,6 +23,7 @@ impl std::fmt::Debug for Message {
       Self::Window(message) => formatter.debug_tuple("Window").field(message).finish(),
       Self::Login(_) => formatter.write_str("Login([redacted])"),
       Self::Home(_) => formatter.write_str("Home"),
+      Self::Browse(_) => formatter.write_str("Browse"),
     }
   }
 }
@@ -28,6 +33,7 @@ pub enum Message {
   Window(WindowMessage),
   Login(LoginMessage),
   Home(HomeMessage),
+  Browse(BrowseMessage),
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -44,6 +50,28 @@ pub enum HomeMessage {
     token: HomeToken,
     result: HomeDataResult,
   },
+  ArtworkLoaded {
+    session: SessionToken,
+    slot: ArtworkSlot,
+    image_id: String,
+    result: Result<ArtworkBytes, ArtworkError>,
+  },
+}
+
+#[derive(Clone)]
+pub enum BrowseMessage {
+  SearchInputChanged(String),
+  SearchSubmitted,
+  SortMenuToggled,
+  SortMenuDismissed,
+  SortChanged(VideoLibrarySort),
+  SortDirectionToggled,
+  PlayedFilterChanged(VideoLibraryPlayedFilter),
+  FavoritesToggled,
+  Scrolled(scrollable::Viewport),
+  Retry,
+  LoadPrevious,
+  PageSettled(BrowsePageSettlement),
   ArtworkLoaded {
     session: SessionToken,
     slot: ArtworkSlot,

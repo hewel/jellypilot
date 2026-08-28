@@ -1,16 +1,14 @@
-use iced::widget::{button, column, container, row, space, stack, text, Column};
-use iced::{Alignment, Element, Fill, Length};
-use jellypilot_core::cards::library_shortcut_caption;
+use iced::widget::{button, column, container, row, space, stack, text, text_input, Column};
+use iced::{Element, Fill, Length};
 use jellypilot_core::LoadState;
-use jellypilot_media_server::VideoLibraryShortcut;
 use jellypilot_ui::fonts::SPACE_GROTESK_FONT;
 use jellypilot_ui::tokens::TOKENS;
-use jellypilot_ui::variants::{ButtonVariant, SurfaceVariant};
+use jellypilot_ui::variants::{ButtonVariant, FieldVariant, SurfaceVariant};
 
-use crate::app::message::{HomeMessage, Message};
+use crate::app::message::{BrowseMessage, HomeMessage, Message};
 use crate::app::state::{Destination, State};
 
-use super::home;
+use super::{browse, home};
 
 const SIDEBAR_WIDTH: f32 = 248.0;
 
@@ -18,7 +16,7 @@ pub fn view(state: &State) -> Element<'_, Message> {
   let sidebar = sidebar(state).width(Length::Fixed(SIDEBAR_WIDTH));
   let content: Element<'_, Message> = match &state.destination {
     Destination::Home => home::view(state),
-    Destination::Library(library_id) => library_view(state, library_id),
+    Destination::Library { .. } | Destination::Search(_) => browse::view(state),
   };
   let content = stack![content].width(Fill).height(Fill);
   let shell = row![sidebar, content]
@@ -45,14 +43,15 @@ fn sidebar(state: &State) -> container::Container<'_, Message> {
       .color(TOKENS.colors.onSurfaceVariant),
   ]
   .spacing(TOKENS.spacing.s1);
-  let search_slot = container(
-    text("Search")
-      .size(14)
-      .color(TOKENS.colors.onSurfaceVariant),
-  )
-  .padding([10, 12])
-  .width(Fill)
-  .style(|theme| jellypilot_ui::theme::surface_variant(theme, SurfaceVariant::Filled));
+  let search_slot = text_input("Search videos", &state.search_input)
+    .on_input(|value| Message::Browse(BrowseMessage::SearchInputChanged(value)))
+    .on_submit(Message::Browse(BrowseMessage::SearchSubmitted))
+    .padding([10, 12])
+    .size(14)
+    .width(Fill)
+    .style(|theme, status| {
+      jellypilot_ui::theme::field_variant(theme, status, FieldVariant::Filled)
+    });
 
   let mut destinations = Column::new()
     .spacing(TOKENS.spacing.s1_5)
@@ -69,7 +68,10 @@ fn sidebar(state: &State) -> container::Container<'_, Message> {
     }
     LoadState::Ready(shortcuts) => {
       for shortcut in shortcuts {
-        let destination = Destination::Library(shortcut.id.clone());
+        let destination = Destination::Library {
+          library_id: shortcut.id.clone(),
+          collection_type: shortcut.collection_type.clone(),
+        };
         let active = state.destination == destination;
         destinations = destinations.push(destination_button(&shortcut.name, destination, active));
       }
@@ -143,36 +145,4 @@ fn connection_summary(state: &State) -> Element<'_, Message> {
   ]
   .spacing(TOKENS.spacing.s1)
   .into()
-}
-
-fn library_view<'a>(state: &'a State, library_id: &str) -> Element<'a, Message> {
-  let shortcut = match &state.home.shortcuts {
-    LoadState::Ready(shortcuts) => shortcuts.iter().find(|shortcut| shortcut.id == library_id),
-    LoadState::Idle | LoadState::Loading | LoadState::Failed(_) => None,
-  };
-  let Some(shortcut) = shortcut else {
-    return space::vertical().into();
-  };
-  library_summary(shortcut)
-}
-
-fn library_summary(shortcut: &VideoLibraryShortcut) -> Element<'_, Message> {
-  let content = column![
-    text(&shortcut.name)
-      .font(SPACE_GROTESK_FONT)
-      .size(38)
-      .color(TOKENS.colors.onSurface),
-    text(library_shortcut_caption(shortcut))
-      .size(16)
-      .color(TOKENS.colors.onSurfaceVariant),
-  ]
-  .spacing(TOKENS.spacing.s3)
-  .align_x(Alignment::Start);
-
-  container(content)
-    .padding(TOKENS.spacing.s8)
-    .width(Fill)
-    .height(Fill)
-    .style(|theme| jellypilot_ui::theme::surface_variant(theme, SurfaceVariant::Filled))
-    .into()
 }

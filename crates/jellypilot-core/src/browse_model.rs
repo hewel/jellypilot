@@ -3,8 +3,8 @@ use std::ops::Range;
 
 use crate::{
     LibraryBrowseAction, LibraryBrowseCommand, LibraryBrowseCore, LibraryBrowseCoreError,
-    LibraryBrowseLoadToken, LibraryBrowseMode, LibraryBrowsePageOutcome, LibraryBrowseStatus,
-    LIBRARY_BROWSE_PAGE_SIZE,
+    LibraryBrowseFailure, LibraryBrowseLoadToken, LibraryBrowseMode, LibraryBrowsePageOutcome,
+    LibraryBrowseStatus, LIBRARY_BROWSE_PAGE_SIZE,
 };
 use jellypilot_media_server::{
     VideoLibraryItem, VideoLibraryPage, VideoLibraryPlayedFilter, VideoLibraryShortcut,
@@ -145,7 +145,7 @@ impl TryFrom<VideoSearchPage> for BrowsePagePayload {
 }
 
 /// A completed request, including the source identity that issued it.
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct BrowsePageSettlement {
     pub source_id: String,
     pub token: LibraryBrowseLoadToken,
@@ -174,7 +174,7 @@ pub enum LibraryBrowseView {
         total_record_count: u32,
         is_fetching_more: bool,
         can_load_next: bool,
-        load_more_failure: Option<String>,
+        load_more_failure: Option<LibraryBrowseFailure>,
         retry_busy: bool,
     },
 }
@@ -195,11 +195,24 @@ pub struct BrowseModel {
     source_id: Option<String>,
     virtual_window_start: u32,
     preferences: BrowsePreferences,
+    epoch: u32,
 }
 
 impl BrowseModel {
-    pub fn reset(&mut self) {
-        *self = Self::default();
+    /// Clears browse state while advancing the settlement identity epoch.
+    ///
+    /// The epoch survives media-session reuse so a completion queued before a
+    /// route reset can never match a request issued after reopening that route.
+    pub fn reset(&mut self) -> Result<(), LibraryBrowseCoreError> {
+        let epoch = self
+            .epoch
+            .checked_add(1)
+            .ok_or(LibraryBrowseCoreError::GenerationExhausted)?;
+        *self = Self {
+            epoch,
+            ..Self::default()
+        };
+        Ok(())
     }
 
     pub fn configure(
@@ -215,7 +228,8 @@ impl BrowseModel {
         preferences: BrowsePreferences,
     ) -> Result<Vec<BrowseEffect>, LibraryBrowseCoreError> {
         let source_id = format!(
-            "{}:preferences:{}",
+            "epoch:{}:{}:preferences:{}",
+            self.epoch,
             source.identity(),
             preferences.identity()
         );
@@ -297,7 +311,7 @@ impl BrowseModel {
         &mut self,
         settlement: BrowsePageSettlement,
     ) -> Result<Vec<BrowseEffect>, LibraryBrowseCoreError> {
-        if self.source_id.as_deref() != Some(settlement.source_id.as_str()) {
+        if !self.is_current_settlement(&settlement) {
             return Ok(Vec::new());
         }
 
@@ -314,6 +328,13 @@ impl BrowseModel {
             effects.extend(self.update_virtual_window(total_record_count)?);
         }
         Ok(effects)
+    }
+
+    /// Returns whether a settlement belongs to a currently pending request.
+    #[must_use]
+    pub fn is_current_settlement(&self, settlement: &BrowsePageSettlement) -> bool {
+        self.source_id.as_deref() == Some(settlement.source_id.as_str())
+            && self.pending.contains_key(&settlement.token)
     }
 
     #[must_use]
@@ -356,7 +377,7 @@ impl BrowseModel {
                 total_record_count,
                 is_fetching_more,
                 can_load_next,
-                load_more_failure: load_more_failure.map(|failure| failure.message),
+                load_more_failure,
                 retry_busy,
             },
         }
@@ -493,11 +514,16 @@ impl BrowseModel {
         total_record_count: u32,
     ) -> Result<Vec<BrowseEffect>, LibraryBrowseCoreError> {
         let range = virtual_window_range(start, total_record_count);
+        let window_changed = range.start != self.virtual_window_start;
         let update = self.core.dispatch(LibraryBrowseAction::WindowChanged {
             display_indexes: range.clone().collect(),
         })?;
         self.virtual_window_start = range.start;
-        Ok(self.apply_commands(update.commands))
+        let mut effects = self.apply_commands(update.commands);
+        if window_changed {
+            effects.insert(0, BrowseEffect::ResetViewport);
+        }
+        Ok(effects)
     }
 
     fn dispatch_action(
@@ -725,7 +751,10 @@ mod tests {
             ref visible_items,
             ref load_more_failure,
             ..
-          } if visible_items.len() == 24 && load_more_failure.as_deref() == Some("temporary failure")
+          } if visible_items.len() == 24
+            && load_more_failure.as_ref().map(|failure| failure.message.as_str())
+              == Some("temporary failure")
+            && load_more_failure.as_ref().is_some_and(|failure| failure.retryable)
         ));
         let retry = request(model.retry().expect("retry should schedule"));
         assert_eq!(retry.start_index, 24);
@@ -733,6 +762,50 @@ mod tests {
           retry.source,
           BrowseSource::Search { ref query, .. } if query == "dune"
         ));
+    }
+
+    #[test]
+    fn malformed_continuation_preserves_non_retryable_failure_metadata() {
+        let mut model = BrowseModel::default();
+        let first = request(
+            model
+                .configure(BrowseSource::Search {
+                    session: session(),
+                    query: "dune".to_owned(),
+                })
+                .expect("search should configure"),
+        );
+        settle(&mut model, &first, 30, LIBRARY_BROWSE_PAGE_SIZE);
+        let next = request(model.load_next().expect("continuation should schedule"));
+
+        model
+            .settle(BrowsePageSettlement {
+                source_id: next.source_id,
+                token: next.token,
+                result: Ok(BrowsePagePayload {
+                    start_index: next.start_index.saturating_add(1),
+                    limit: next.limit,
+                    total_record_count: 30,
+                    has_more: false,
+                    items: items(next.start_index, 6),
+                }),
+            })
+            .expect("malformed continuation should settle as a failure");
+
+        assert!(matches!(
+            model.view(),
+            LibraryBrowseView::Ready {
+                load_more_failure: Some(LibraryBrowseFailure {
+                    retryable: false,
+                    ..
+                }),
+                ..
+            }
+        ));
+        assert!(model
+            .retry()
+            .expect("non-retryable failure should be ignored")
+            .is_empty());
     }
 
     #[test]
@@ -776,11 +849,23 @@ mod tests {
         settle_all_requests(&mut model, bootstrap, TOTAL);
         assert!(!model.can_load_previous());
         let first_advance = model.load_next().expect("first next window should load");
+        assert!(matches!(
+            first_advance.first(),
+            Some(BrowseEffect::ResetViewport)
+        ));
         settle_all_requests(&mut model, first_advance, TOTAL);
         let second_advance = model.load_next().expect("second next window should load");
+        assert!(matches!(
+            second_advance.first(),
+            Some(BrowseEffect::ResetViewport)
+        ));
         settle_all_requests(&mut model, second_advance, TOTAL);
 
         let previous = model.load_previous().expect("previous window should load");
+        assert!(matches!(
+            previous.first(),
+            Some(BrowseEffect::ResetViewport)
+        ));
         assert_eq!(
             request(previous.clone()).start_index,
             LIBRARY_BROWSE_PAGE_SIZE
@@ -946,28 +1031,33 @@ mod tests {
     }
 
     #[test]
-    fn stale_settlement_after_session_reset_is_ignored() {
+    fn stale_settlement_after_same_session_route_reset_is_ignored() {
         let mut model = BrowseModel::default();
+        let source = BrowseSource::Library {
+            session: session(),
+            shortcut: shortcut(),
+        };
         let stale = request(
             model
-                .configure(BrowseSource::Library {
-                    session: session(),
-                    shortcut: shortcut(),
-                })
+                .configure(source.clone())
                 .expect("first source should configure"),
         );
-        model.reset();
-        let mut gate = RequestGate::default();
-        gate.disconnect();
-        model
-            .configure(BrowseSource::Library {
-                session: gate.current_session(),
-                shortcut: shortcut(),
-            })
-            .expect("second source should configure");
+        model.reset().expect("browse epoch should advance");
+        let current = request(
+            model
+                .configure(source)
+                .expect("same source should reopen in a new epoch"),
+        );
 
+        assert_eq!(stale.token, current.token);
+        assert_ne!(stale.source_id, current.source_id);
         settle(&mut model, &stale, 1, 1);
 
+        assert!(model.is_current_settlement(&BrowsePageSettlement {
+            source_id: current.source_id,
+            token: current.token,
+            result: Err(String::new()),
+        }));
         assert!(matches!(model.view(), LibraryBrowseView::Loading));
     }
 

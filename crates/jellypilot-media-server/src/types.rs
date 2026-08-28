@@ -145,7 +145,7 @@ pub struct VideoLibraryPageRequest {
 }
 
 /// Supported Library Browser sort options.
-#[derive(Debug, Clone, Copy, Deserialize, Serialize, Type)]
+#[derive(Debug, Clone, Copy, Deserialize, Eq, PartialEq, Serialize, Type)]
 pub enum VideoLibrarySort {
   #[serde(rename = "title")]
   Title,
@@ -156,7 +156,7 @@ pub enum VideoLibrarySort {
 }
 
 /// Supported Library Browser sort directions.
-#[derive(Debug, Clone, Copy, Deserialize, Serialize, Type)]
+#[derive(Debug, Clone, Copy, Deserialize, Eq, PartialEq, Serialize, Type)]
 pub enum VideoLibrarySortDirection {
   #[serde(rename = "asc")]
   Ascending,
@@ -165,7 +165,7 @@ pub enum VideoLibrarySortDirection {
 }
 
 /// Supported played-state filters for Library Browser results.
-#[derive(Debug, Clone, Copy, Deserialize, Serialize, Type)]
+#[derive(Debug, Clone, Copy, Deserialize, Eq, PartialEq, Serialize, Type)]
 pub enum VideoLibraryPlayedFilter {
   #[serde(rename = "all")]
   All,
