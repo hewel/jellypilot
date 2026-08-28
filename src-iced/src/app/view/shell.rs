@@ -1,12 +1,13 @@
-use iced::widget::{button, column, container, row, space, stack, text, text_input, Column};
-use iced::{Element, Fill, Length};
-use jellypilot_core::LoadState;
-use jellypilot_ui::fonts::SPACE_GROTESK_FONT;
-use jellypilot_ui::tokens::TOKENS;
-use jellypilot_ui::variants::{ButtonVariant, FieldVariant, SurfaceVariant};
-
 use crate::app::message::{BrowseMessage, HomeMessage, Message};
 use crate::app::state::{Destination, State};
+use iced::widget::{button, column, container, row, space, stack, text, text_input, Column};
+use iced::{Alignment, Element, Fill, Length};
+use jellypilot_core::LoadState;
+use jellypilot_ui::fonts::SPACE_GROTESK_FONT;
+use jellypilot_ui::icons::{icon_for_variant, icon_with_color, Icon, IconSize};
+use jellypilot_ui::overlay::{tooltip, TooltipOptions};
+use jellypilot_ui::tokens::TOKENS;
+use jellypilot_ui::variants::{ButtonVariant, FieldVariant, SurfaceVariant};
 
 use super::{browse, detail, home, player, settings};
 
@@ -27,10 +28,17 @@ pub fn view(state: &State) -> Element<'_, Message> {
     .height(Fill);
   if let Some(notice) = visible_notice(state) {
     content_column = content_column.push(
-      container(text(notice).size(13).color(TOKENS.colors.warning))
-        .padding([8, 12])
-        .width(Fill)
-        .style(|theme| jellypilot_ui::theme::surface_variant(theme, SurfaceVariant::Elevated)),
+      container(
+        row![
+          icon_with_color(Icon::Warning, IconSize::Sm, TOKENS.colors.warning),
+          text(notice).size(13).color(TOKENS.colors.warning),
+        ]
+        .spacing(TOKENS.spacing.s2)
+        .align_y(Alignment::Center),
+      )
+      .padding([8, 12])
+      .width(Fill)
+      .style(|theme| jellypilot_ui::theme::surface_variant(theme, SurfaceVariant::Elevated)),
     );
   }
   content_column = content_column.push(content);
@@ -65,7 +73,7 @@ fn sidebar(state: &State) -> container::Container<'_, Message> {
       .color(TOKENS.colors.onSurfaceVariant),
   ]
   .spacing(TOKENS.spacing.s1);
-  let search_slot = text_input("Search videos", &state.search_input)
+  let search_input = text_input("Search videos", &state.search_input)
     .on_input(|value| Message::Browse(BrowseMessage::SearchInputChanged(value)))
     .on_submit(Message::Browse(BrowseMessage::SearchSubmitted))
     .padding([10, 12])
@@ -74,10 +82,26 @@ fn sidebar(state: &State) -> container::Container<'_, Message> {
     .style(|theme, status| {
       jellypilot_ui::theme::field_variant(theme, status, FieldVariant::Filled)
     });
-
+  let search_button = button(icon_for_variant(
+    Icon::Search,
+    IconSize::Sm,
+    ButtonVariant::Outlined,
+  ))
+  .padding([9, 11])
+  .on_press(Message::Browse(BrowseMessage::SearchSubmitted))
+  .style(|theme, status| {
+    jellypilot_ui::theme::button_variant(theme, status, ButtonVariant::Outlined)
+  });
+  let search_slot = row![
+    search_input,
+    tooltip(search_button, "Search", TooltipOptions::default()),
+  ]
+  .spacing(TOKENS.spacing.s1_5)
+  .align_y(Alignment::Center);
   let mut destinations = Column::new()
     .spacing(TOKENS.spacing.s1_5)
     .push(destination_button(
+      Icon::Home,
       "Home",
       Destination::Home,
       state.destination == Destination::Home,
@@ -95,7 +119,12 @@ fn sidebar(state: &State) -> container::Container<'_, Message> {
           collection_type: shortcut.collection_type.clone(),
         };
         let active = state.destination == destination;
-        destinations = destinations.push(destination_button(&shortcut.name, destination, active));
+        destinations = destinations.push(destination_button(
+          Icon::for_collection_type(&shortcut.collection_type),
+          &shortcut.name,
+          destination,
+          active,
+        ));
       }
     }
     LoadState::Failed(_) => {
@@ -112,6 +141,7 @@ fn sidebar(state: &State) -> container::Container<'_, Message> {
     .width(Fill);
   let bottom = column![
     destination_button(
+      Icon::Settings,
       "Settings",
       Destination::Settings,
       state.destination == Destination::Settings,
@@ -131,28 +161,30 @@ fn sidebar(state: &State) -> container::Container<'_, Message> {
 }
 
 fn destination_button<'a>(
+  icon: Icon,
   label: &'a str,
   destination: Destination,
   active: bool,
 ) -> Element<'a, Message> {
-  button(text(label).size(14).width(Fill))
-    .padding([10, 12])
-    .width(Fill)
-    .on_press(Message::Home(HomeMessage::Navigate(destination)))
-    .style(move |theme, status| {
-      jellypilot_ui::theme::button_variant(
-        theme,
-        status,
-        if active {
-          ButtonVariant::Secondary
-        } else {
-          ButtonVariant::Text
-        },
-      )
-    })
-    .into()
+  let variant = if active {
+    ButtonVariant::Secondary
+  } else {
+    ButtonVariant::Text
+  };
+  button(
+    row![
+      icon_for_variant(icon, IconSize::Md, variant),
+      text(label).size(14).width(Fill),
+    ]
+    .spacing(TOKENS.spacing.s2_5)
+    .align_y(Alignment::Center),
+  )
+  .padding([10, 12])
+  .width(Fill)
+  .on_press(Message::Home(HomeMessage::Navigate(destination)))
+  .style(move |theme, status| jellypilot_ui::theme::button_variant(theme, status, variant))
+  .into()
 }
-
 fn shortcut_skeleton<'a>() -> Element<'a, Message> {
   container(space::horizontal())
     .height(38)
@@ -165,18 +197,22 @@ fn connection_summary(state: &State) -> Element<'_, Message> {
   let Some(identity) = &state.connected_identity else {
     return space::vertical().into();
   };
-  column![
-    text(&identity.user_name)
-      .size(13)
-      .color(TOKENS.colors.onSurface),
-    text(&identity.server)
-      .size(11)
-      .color(TOKENS.colors.onSurfaceVariant),
+  row![
+    icon_with_color(Icon::Server, IconSize::Md, TOKENS.colors.onSurfaceVariant),
+    column![
+      text(&identity.user_name)
+        .size(13)
+        .color(TOKENS.colors.onSurface),
+      text(&identity.server)
+        .size(11)
+        .color(TOKENS.colors.onSurfaceVariant),
+    ]
+    .spacing(TOKENS.spacing.s0_5),
   ]
-  .spacing(TOKENS.spacing.s1)
+  .spacing(TOKENS.spacing.s2)
+  .align_y(Alignment::Center)
   .into()
 }
-
 #[cfg(test)]
 mod tests {
   use super::*;

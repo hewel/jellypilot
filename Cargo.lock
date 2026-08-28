@@ -3712,6 +3712,8 @@ name = "jellypilot-ui"
 version = "1.5.0"
 dependencies = [
  "iced",
+ "roxmltree",
+ "usvg",
 ]
 
 [[package]]

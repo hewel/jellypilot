@@ -5,7 +5,10 @@ use jellypilot_core::config::{IntroMode, ShortcutKind};
 use jellypilot_core::diagnostics::{format_diagnostic_time, DiagnosticCategory, DiagnosticLevel};
 use jellypilot_core::settings::SUBTITLE_LANGUAGE_OPTIONS;
 use jellypilot_ui::fonts::SPACE_GROTESK_FONT;
-use jellypilot_ui::overlay::{popover, PopoverOptions};
+use jellypilot_ui::icons::{
+  icon_for_variant, icon_for_variant_disabled, icon_with_color, Icon, IconSize,
+};
+use jellypilot_ui::overlay::{popover, tooltip, PopoverOptions, TooltipOptions};
 use jellypilot_ui::tokens::TOKENS;
 use jellypilot_ui::variants::{BadgeVariant, ButtonVariant, FieldVariant, SurfaceVariant};
 
@@ -84,9 +87,15 @@ fn connection_section(state: &State) -> Element<'_, Message> {
     },
   );
   let connected = state.connection == ConnectionPhase::Connected;
-  let disconnect = action_button("Disconnect", connected, SettingsMessage::Disconnect);
-  let sign_out = action_button("Sign Out", connected, SettingsMessage::SignOut);
+  let disconnect = action_button(
+    Icon::Close,
+    "Disconnect",
+    connected,
+    SettingsMessage::Disconnect,
+  );
+  let sign_out = action_button(Icon::User, "Sign Out", connected, SettingsMessage::SignOut);
   section(
+    Icon::Server,
     "Connection",
     column![
       row![identity, space::horizontal(), status]
@@ -120,6 +129,7 @@ fn mpv_section(state: &State) -> Element<'_, Message> {
   .width(Fill)
   .style(|theme, status| jellypilot_ui::theme::field_variant(theme, status, FieldVariant::Filled));
   section(
+    Icon::Cpu,
     "MPV",
     column![
       labeled_field(
@@ -174,6 +184,7 @@ fn playback_section(state: &State) -> Element<'_, Message> {
     Message::Settings(SettingsMessage::IntroMenuDismissed),
   );
   section(
+    Icon::Sliders,
     "Playback",
     column![
       labeled_field(
@@ -198,12 +209,19 @@ fn playback_section(state: &State) -> Element<'_, Message> {
 }
 
 fn subtitles_section(state: &State) -> Element<'_, Message> {
-  let trigger = button(text("Add language"))
-    .padding([9, 13])
-    .on_press(Message::Settings(SettingsMessage::SubtitleMenuToggled))
-    .style(|theme, status| {
-      jellypilot_ui::theme::button_variant(theme, status, ButtonVariant::Outlined)
-    });
+  let trigger = button(
+    row![
+      icon_for_variant(Icon::Subtitles, IconSize::Sm, ButtonVariant::Outlined),
+      text("Add language"),
+    ]
+    .spacing(TOKENS.spacing.s1_5)
+    .align_y(Alignment::Center),
+  )
+  .padding([9, 13])
+  .on_press(Message::Settings(SettingsMessage::SubtitleMenuToggled))
+  .style(|theme, status| {
+    jellypilot_ui::theme::button_variant(theme, status, ButtonVariant::Outlined)
+  });
   let mut menu = Column::new().spacing(TOKENS.spacing.s1).width(Fill);
   for language in SUBTITLE_LANGUAGE_OPTIONS {
     menu = menu.push(
@@ -248,19 +266,22 @@ fn subtitles_section(state: &State) -> Element<'_, Message> {
         .size(13)
         .width(Fill),
         compact_button(
-          "↑",
+          Icon::ArrowUp,
+          "Move up",
           index > 0,
-          SettingsMessage::SubtitleLanguageMoved { index, offset: -1 }
+          SettingsMessage::SubtitleLanguageMoved { index, offset: -1 },
         ),
         compact_button(
-          "↓",
+          Icon::ArrowDown,
+          "Move down",
           index + 1 < languages.len(),
           SettingsMessage::SubtitleLanguageMoved { index, offset: 1 },
         ),
         compact_button(
+          Icon::Trash,
           "Remove",
           true,
-          SettingsMessage::SubtitleLanguageRemoved(index)
+          SettingsMessage::SubtitleLanguageRemoved(index),
         ),
       ]
       .spacing(TOKENS.spacing.s2)
@@ -268,6 +289,7 @@ fn subtitles_section(state: &State) -> Element<'_, Message> {
     );
   }
   section(
+    Icon::Subtitles,
     "Subtitles",
     column![
       text("Languages are tried from top to bottom on future playback starts.")
@@ -282,6 +304,7 @@ fn subtitles_section(state: &State) -> Element<'_, Message> {
 
 fn shortcuts_section(state: &State) -> Element<'_, Message> {
   section(
+    Icon::Keyboard,
     "Shortcuts",
     column![
       shortcut_row(state, "Next episode", ShortcutKind::Next),
@@ -302,24 +325,32 @@ fn shortcut_row<'a>(state: &'a State, label: &'a str, kind: ShortcutKind) -> Ele
     ShortcutKind::IntroSkip => state.settings.snapshot().key_intro_skip(),
   };
   let capturing = state.settings_view.shortcut_capture == Some(kind);
+  let variant = if capturing {
+    ButtonVariant::Secondary
+  } else {
+    ButtonVariant::Outlined
+  };
   row![
-    text(label).size(13).width(Fill),
-    button(text(if capturing { "Press a key…" } else { binding }))
-      .padding([8, 11])
-      .on_press(Message::Settings(SettingsMessage::BeginShortcutCapture(
-        kind
-      )))
-      .style(move |theme, status| {
-        jellypilot_ui::theme::button_variant(
-          theme,
-          status,
-          if capturing {
-            ButtonVariant::Secondary
-          } else {
-            ButtonVariant::Outlined
-          },
-        )
-      }),
+    row![
+      icon_with_color(Icon::Keyboard, IconSize::Sm, TOKENS.colors.onSurfaceVariant),
+      text(label).size(13),
+    ]
+    .spacing(TOKENS.spacing.s2)
+    .align_y(Alignment::Center)
+    .width(Fill),
+    button(
+      row![
+        icon_for_variant(Icon::Keyboard, IconSize::Xs, variant),
+        text(if capturing { "Press a key…" } else { binding }),
+      ]
+      .spacing(TOKENS.spacing.s1_5)
+      .align_y(Alignment::Center),
+    )
+    .padding([8, 11])
+    .on_press(Message::Settings(SettingsMessage::BeginShortcutCapture(
+      kind
+    )))
+    .style(move |theme, status| { jellypilot_ui::theme::button_variant(theme, status, variant) }),
   ]
   .align_y(Alignment::Center)
   .spacing(TOKENS.spacing.s3)
@@ -330,6 +361,7 @@ fn cache_section(state: &State) -> Element<'_, Message> {
   let cache_enabled = state.settings.snapshot().image_cache_enabled();
   let start_minimized = state.settings.snapshot().start_minimized();
   section(
+    Icon::Database,
     "Cache",
     column![
       toggle_row(
@@ -350,13 +382,20 @@ fn cache_section(state: &State) -> Element<'_, Message> {
 }
 
 fn diagnostics_section(state: &State) -> Element<'_, Message> {
-  let level_trigger = button(text(format!(
-    "Level: {}",
-    state
-      .settings_view
-      .diagnostic_level
-      .map_or("All", DiagnosticLevel::label)
-  )))
+  let level_trigger = button(
+    row![
+      icon_for_variant(Icon::Filter, IconSize::Sm, ButtonVariant::Outlined),
+      text(format!(
+        "Level: {}",
+        state
+          .settings_view
+          .diagnostic_level
+          .map_or("All", DiagnosticLevel::label)
+      )),
+    ]
+    .spacing(TOKENS.spacing.s1_5)
+    .align_y(Alignment::Center),
+  )
   .padding([8, 11])
   .on_press(Message::Settings(
     SettingsMessage::DiagnosticLevelMenuToggled,
@@ -382,13 +421,20 @@ fn diagnostics_section(state: &State) -> Element<'_, Message> {
     },
     Message::Settings(SettingsMessage::DiagnosticLevelMenuDismissed),
   );
-  let category_trigger = button(text(format!(
-    "Category: {}",
-    state
-      .settings_view
-      .diagnostic_category
-      .map_or("All", DiagnosticCategory::label)
-  )))
+  let category_trigger = button(
+    row![
+      icon_for_variant(Icon::Sliders, IconSize::Sm, ButtonVariant::Outlined),
+      text(format!(
+        "Category: {}",
+        state
+          .settings_view
+          .diagnostic_category
+          .map_or("All", DiagnosticCategory::label)
+      )),
+    ]
+    .spacing(TOKENS.spacing.s1_5)
+    .align_y(Alignment::Center),
+  )
   .padding([8, 11])
   .on_press(Message::Settings(
     SettingsMessage::DiagnosticCategoryMenuToggled,
@@ -429,11 +475,21 @@ fn diagnostics_section(state: &State) -> Element<'_, Message> {
     )
   }) {
     count = count.saturating_add(1);
+    let (level_icon, level_color) = match diagnostic.level {
+      DiagnosticLevel::Info => (Icon::Info, TOKENS.colors.primary),
+      DiagnosticLevel::Warning => (Icon::Warning, TOKENS.colors.warning),
+      DiagnosticLevel::Error => (Icon::Error, TOKENS.colors.error),
+    };
     events = events.push(
       container(
         column![
           row![
-            badge(diagnostic.level.label(), diagnostic_badge(diagnostic.level)),
+            row![
+              icon_with_color(level_icon, IconSize::Xs, level_color),
+              badge(diagnostic.level.label(), diagnostic_badge(diagnostic.level)),
+            ]
+            .spacing(TOKENS.spacing.s1)
+            .align_y(Alignment::Center),
             text(diagnostic.category.label())
               .size(12)
               .color(TOKENS.colors.onSurfaceVariant),
@@ -463,6 +519,7 @@ fn diagnostics_section(state: &State) -> Element<'_, Message> {
     );
   }
   section(
+    Icon::Activity,
     "Diagnostics",
     column![
       row![level_filter, category_filter].spacing(TOKENS.spacing.s2),
@@ -477,6 +534,7 @@ fn diagnostics_section(state: &State) -> Element<'_, Message> {
 
 fn about_section<'a>() -> Element<'a, Message> {
   section(
+    Icon::Info,
     "About",
     column![
       text("JellyPilot").size(15).color(TOKENS.colors.onSurface),
@@ -488,13 +546,18 @@ fn about_section<'a>() -> Element<'a, Message> {
   )
 }
 
-fn section<'a>(title: &'a str, content: Column<'a, Message>) -> Element<'a, Message> {
+fn section<'a>(icon: Icon, title: &'a str, content: Column<'a, Message>) -> Element<'a, Message> {
   container(
     column![
-      text(title)
-        .font(SPACE_GROTESK_FONT)
-        .size(22)
-        .color(TOKENS.colors.onSurface),
+      row![
+        icon_with_color(icon, IconSize::Lg, TOKENS.colors.primary),
+        text(title)
+          .font(SPACE_GROTESK_FONT)
+          .size(22)
+          .color(TOKENS.colors.onSurface),
+      ]
+      .spacing(TOKENS.spacing.s2)
+      .align_y(Alignment::Center),
       content,
     ]
     .spacing(TOKENS.spacing.s3),
@@ -516,12 +579,19 @@ fn labeled_field<'a>(
     text(help).size(12).color(TOKENS.colors.onSurfaceVariant),
     row![
       field,
-      button(text("Save"))
-        .padding([10, 14])
-        .on_press(Message::Settings(save))
-        .style(|theme, status| {
-          jellypilot_ui::theme::button_variant(theme, status, ButtonVariant::Primary)
-        }),
+      button(
+        row![
+          icon_for_variant(Icon::Check, IconSize::Sm, ButtonVariant::Primary),
+          text("Save"),
+        ]
+        .spacing(TOKENS.spacing.s1_5)
+        .align_y(Alignment::Center),
+      )
+      .padding([10, 14])
+      .on_press(Message::Settings(save))
+      .style(|theme, status| {
+        jellypilot_ui::theme::button_variant(theme, status, ButtonVariant::Primary)
+      }),
     ]
     .spacing(TOKENS.spacing.s2)
     .align_y(Alignment::Center),
@@ -564,11 +634,21 @@ fn toggle_row<'a>(
 }
 
 fn action_button<'a>(
+  icon: Icon,
   label: &'a str,
   enabled: bool,
   message: SettingsMessage,
 ) -> Element<'a, Message> {
-  let button = button(text(label)).padding([9, 13]).style(|theme, status| {
+  let button = button(
+    row![
+      icon_for_variant_disabled(icon, IconSize::Sm, ButtonVariant::Outlined, !enabled),
+      text(label),
+    ]
+    .spacing(TOKENS.spacing.s1_5)
+    .align_y(Alignment::Center),
+  )
+  .padding([9, 13])
+  .style(|theme, status| {
     jellypilot_ui::theme::button_variant(theme, status, ButtonVariant::Outlined)
   });
   if enabled {
@@ -579,20 +659,27 @@ fn action_button<'a>(
 }
 
 fn compact_button<'a>(
+  icon: Icon,
   label: &'a str,
   enabled: bool,
   message: SettingsMessage,
 ) -> Element<'a, Message> {
-  let button = button(text(label).size(12))
-    .padding([6, 9])
-    .style(|theme, status| {
-      jellypilot_ui::theme::button_variant(theme, status, ButtonVariant::Text)
-    });
-  if enabled {
-    button.on_press(Message::Settings(message)).into()
+  let button = button(icon_for_variant_disabled(
+    icon,
+    IconSize::Xs,
+    ButtonVariant::Outlined,
+    !enabled,
+  ))
+  .padding([6, 9])
+  .style(|theme, status| {
+    jellypilot_ui::theme::button_variant(theme, status, ButtonVariant::Outlined)
+  });
+  let trigger = if enabled {
+    button.on_press(Message::Settings(message))
   } else {
-    button.into()
-  }
+    button
+  };
+  tooltip(trigger, label, TooltipOptions::default())
 }
 
 fn intro_option(
@@ -646,13 +733,6 @@ fn diagnostic_category_option(
     .into()
 }
 
-fn badge<'a>(label: &'a str, variant: BadgeVariant) -> Element<'a, Message> {
-  container(text(label).size(11))
-    .padding([4, 8])
-    .style(move |theme| jellypilot_ui::widgets::badge::style(theme, variant))
-    .into()
-}
-
 const fn intro_mode_label(mode: IntroMode) -> &'static str {
   match mode {
     IntroMode::Automatic => "Automatic",
@@ -661,24 +741,67 @@ const fn intro_mode_label(mode: IntroMode) -> &'static str {
   }
 }
 
-fn subtitle_language_label(code: &str) -> &'static str {
+fn subtitle_language_label(code: &str) -> &str {
   match code {
-    "eng" => "English (eng)",
-    "spa" => "Spanish (spa)",
-    "fra" => "French (fra)",
-    "deu" => "German (deu)",
-    "ita" => "Italian (ita)",
-    "por" => "Portuguese (por)",
-    "jpn" => "Japanese (jpn)",
-    "zho" => "Chinese (zho)",
-    _ => "Custom language",
+    "eng" => "English",
+    "spa" => "Spanish",
+    "fra" | "fre" => "French",
+    "deu" | "ger" => "German",
+    "ita" => "Italian",
+    "por" => "Portuguese",
+    "rus" => "Russian",
+    "zho" | "chi" => "Chinese",
+    "jpn" => "Japanese",
+    "kor" => "Korean",
+    "ara" => "Arabic",
+    "hin" => "Hindi",
+    _ => code,
   }
+}
+
+fn badge<'a, Message: 'a>(label: &'a str, variant: BadgeVariant) -> Element<'a, Message> {
+  container(text(label).size(12))
+    .padding([4, 8])
+    .style(move |theme| jellypilot_ui::theme::badge_variant(theme, variant))
+    .into()
 }
 
 const fn diagnostic_badge(level: DiagnosticLevel) -> BadgeVariant {
   match level {
     DiagnosticLevel::Info => BadgeVariant::Neutral,
     DiagnosticLevel::Warning => BadgeVariant::Warning,
-    DiagnosticLevel::Error => BadgeVariant::Warning,
+    DiagnosticLevel::Error => BadgeVariant::Neutral,
+  }
+}
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+
+  #[test]
+  fn diagnostic_badge_maps_levels() {
+    assert_eq!(
+      diagnostic_badge(DiagnosticLevel::Info),
+      BadgeVariant::Neutral
+    );
+    assert_eq!(
+      diagnostic_badge(DiagnosticLevel::Warning),
+      BadgeVariant::Warning
+    );
+    assert_eq!(
+      diagnostic_badge(DiagnosticLevel::Error),
+      BadgeVariant::Neutral
+    );
+  }
+
+  #[test]
+  fn subtitle_language_options_all_have_human_readable_labels() {
+    for code in SUBTITLE_LANGUAGE_OPTIONS {
+      let label = subtitle_language_label(code);
+      assert_ne!(
+        label, code,
+        "Configured subtitle language option {code:?} must have a human-readable label"
+      );
+    }
   }
 }

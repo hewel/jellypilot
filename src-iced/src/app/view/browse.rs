@@ -1,3 +1,5 @@
+use crate::app::message::{BrowseMessage, Message};
+use crate::app::state::{ArtworkCell, ArtworkCellState, Destination, State};
 use iced::widget::text::Wrapping;
 use iced::widget::{button, column, container, image, row, scrollable, space, text, Column};
 use iced::{Alignment, ContentFit, Element, Fill};
@@ -8,13 +10,13 @@ use jellypilot_media_server::{
   VideoLibraryItem, VideoLibraryPlayedFilter, VideoLibrarySort, VideoLibrarySortDirection,
 };
 use jellypilot_ui::fonts::SPACE_GROTESK_FONT;
+use jellypilot_ui::icons::{
+  icon_for_variant, icon_for_variant_disabled, icon_with_color, Icon, IconSize,
+};
 use jellypilot_ui::overlay::{popover, PopoverOptions};
 use jellypilot_ui::tokens::TOKENS;
 use jellypilot_ui::variants::{ButtonVariant, SurfaceVariant};
 use jellypilot_ui::widgets::artwork_grid::{artwork_grid, ArtworkGridMetrics, ArtworkGridViewport};
-
-use crate::app::message::{BrowseMessage, Message};
-use crate::app::state::{ArtworkCell, ArtworkCellState, Destination, State};
 
 const PAGE_PADDING: f32 = 32.0;
 const CARD_COPY_HEIGHT: f32 = 48.0;
@@ -63,12 +65,19 @@ pub fn view(state: &State) -> Element<'_, Message> {
 
 fn toolbar(state: &State) -> Element<'_, Message> {
   let filters = state.settings.snapshot().browse_filters();
-  let sort_trigger = button(text(format!("Sort: {}", sort_label(filters.sort()))))
-    .padding([9, 13])
-    .on_press(Message::Browse(BrowseMessage::SortMenuToggled))
-    .style(|theme, status| {
-      jellypilot_ui::theme::button_variant(theme, status, ButtonVariant::Outlined)
-    });
+  let sort_trigger = button(
+    row![
+      icon_for_variant(Icon::Sliders, IconSize::Sm, ButtonVariant::Outlined),
+      text(format!("Sort: {}", sort_label(filters.sort()))),
+    ]
+    .spacing(TOKENS.spacing.s1_5)
+    .align_y(Alignment::Center),
+  )
+  .padding([9, 13])
+  .on_press(Message::Browse(BrowseMessage::SortMenuToggled))
+  .style(|theme, status| {
+    jellypilot_ui::theme::button_variant(theme, status, ButtonVariant::Outlined)
+  });
   let sort_menu = column![
     sort_option("Title", VideoLibrarySort::Title),
     sort_option("Recently added", VideoLibrarySort::RecentlyAdded),
@@ -86,48 +95,57 @@ fn toolbar(state: &State) -> Element<'_, Message> {
     },
     Message::Browse(BrowseMessage::SortMenuDismissed),
   );
-  let direction = button(text(match filters.sort_direction() {
-    VideoLibrarySortDirection::Ascending => "Ascending ↑",
-    VideoLibrarySortDirection::Descending => "Descending ↓",
-  }))
+  let (direction_icon, direction_label) = match filters.sort_direction() {
+    VideoLibrarySortDirection::Ascending => (Icon::SortAscending, "Ascending"),
+    VideoLibrarySortDirection::Descending => (Icon::SortDescending, "Descending"),
+  };
+  let direction = button(
+    row![
+      icon_for_variant(direction_icon, IconSize::Sm, ButtonVariant::Outlined),
+      text(direction_label),
+    ]
+    .spacing(TOKENS.spacing.s1_5)
+    .align_y(Alignment::Center),
+  )
   .padding([9, 13])
   .on_press(Message::Browse(BrowseMessage::SortDirectionToggled))
   .style(|theme, status| {
     jellypilot_ui::theme::button_variant(theme, status, ButtonVariant::Outlined)
   });
-  let favorites = button(text(if filters.favorites_only() {
-    "Favorites: On"
+  let (fav_icon, fav_label, fav_variant) = if filters.favorites_only() {
+    (Icon::HeartFilled, "Favorites: On", ButtonVariant::Secondary)
   } else {
-    "Favorites: Off"
-  }))
+    (Icon::Heart, "Favorites: Off", ButtonVariant::Outlined)
+  };
+  let favorites = button(
+    row![
+      icon_for_variant(fav_icon, IconSize::Sm, fav_variant),
+      text(fav_label),
+    ]
+    .spacing(TOKENS.spacing.s1_5)
+    .align_y(Alignment::Center),
+  )
   .padding([9, 13])
   .on_press(Message::Browse(BrowseMessage::FavoritesToggled))
-  .style(move |theme, status| {
-    jellypilot_ui::theme::button_variant(
-      theme,
-      status,
-      if filters.favorites_only() {
-        ButtonVariant::Secondary
-      } else {
-        ButtonVariant::Outlined
-      },
-    )
-  });
+  .style(move |theme, status| jellypilot_ui::theme::button_variant(theme, status, fav_variant));
 
   row![
     sort,
     direction,
     played_option(
+      Icon::CircleDot,
       "All",
       VideoLibraryPlayedFilter::All,
-      filters.played_filter()
+      filters.played_filter(),
     ),
     played_option(
+      Icon::CircleCheck,
       "Played",
       VideoLibraryPlayedFilter::Played,
       filters.played_filter(),
     ),
     played_option(
+      Icon::Circle,
       "Unplayed",
       VideoLibraryPlayedFilter::Unplayed,
       filters.played_filter(),
@@ -149,25 +167,25 @@ fn sort_option(label: &'static str, sort: VideoLibrarySort) -> Element<'static, 
 }
 
 fn played_option(
+  icon: Icon,
   label: &'static str,
   value: VideoLibraryPlayedFilter,
   selected: VideoLibraryPlayedFilter,
 ) -> Element<'static, Message> {
-  button(text(label))
-    .padding([9, 13])
-    .on_press(Message::Browse(BrowseMessage::PlayedFilterChanged(value)))
-    .style(move |theme, status| {
-      jellypilot_ui::theme::button_variant(
-        theme,
-        status,
-        if value == selected {
-          ButtonVariant::Secondary
-        } else {
-          ButtonVariant::Outlined
-        },
-      )
-    })
-    .into()
+  let variant = if value == selected {
+    ButtonVariant::Secondary
+  } else {
+    ButtonVariant::Outlined
+  };
+  button(
+    row![icon_for_variant(icon, IconSize::Sm, variant), text(label),]
+      .spacing(TOKENS.spacing.s1_5)
+      .align_y(Alignment::Center),
+  )
+  .padding([9, 13])
+  .on_press(Message::Browse(BrowseMessage::PlayedFilterChanged(value)))
+  .style(move |theme, status| jellypilot_ui::theme::button_variant(theme, status, variant))
+  .into()
 }
 
 fn browse_body(state: &State) -> Element<'_, Message> {
@@ -227,22 +245,48 @@ fn ready_surface<'a>(
     match section {
       BodySection::Pagination => {
         if let Some(range) = state.browse.display_range() {
-          let previous = button(text("Previous"))
-            .padding([9, 13])
-            .style(|theme, status| {
-              jellypilot_ui::theme::button_variant(theme, status, ButtonVariant::Outlined)
-            });
-          let previous = if let Some(message) = previous_action(state.browse.can_load_previous()) {
+          let prev_enabled = state.browse.can_load_previous();
+          let previous = button(
+            row![
+              icon_for_variant_disabled(
+                Icon::ChevronLeft,
+                IconSize::Sm,
+                ButtonVariant::Outlined,
+                !prev_enabled,
+              ),
+              text("Previous"),
+            ]
+            .spacing(TOKENS.spacing.s1_5)
+            .align_y(Alignment::Center),
+          )
+          .padding([9, 13])
+          .style(|theme, status| {
+            jellypilot_ui::theme::button_variant(theme, status, ButtonVariant::Outlined)
+          });
+          let previous = if let Some(message) = previous_action(prev_enabled) {
             previous.on_press(message)
           } else {
             previous
           };
-          let next = button(text("Next"))
-            .padding([9, 13])
-            .style(|theme, status| {
-              jellypilot_ui::theme::button_variant(theme, status, ButtonVariant::Outlined)
-            });
-          let next = if let Some(message) = next_action(state.browse.can_load_next()) {
+          let next_enabled = state.browse.can_load_next();
+          let next = button(
+            row![
+              text("Next"),
+              icon_for_variant_disabled(
+                Icon::ChevronRight,
+                IconSize::Sm,
+                ButtonVariant::Outlined,
+                !next_enabled,
+              ),
+            ]
+            .spacing(TOKENS.spacing.s1_5)
+            .align_y(Alignment::Center),
+          )
+          .padding([9, 13])
+          .style(|theme, status| {
+            jellypilot_ui::theme::button_variant(theme, status, ButtonVariant::Outlined)
+          });
+          let next = if let Some(message) = next_action(next_enabled) {
             next.on_press(message)
           } else {
             next
@@ -399,6 +443,11 @@ fn artwork<'a>(
   }
 
   let failed = cell.is_some_and(|cell| cell.state == ArtworkCellState::Failed);
+  let placeholder_color = if failed {
+    TOKENS.colors.warning
+  } else {
+    TOKENS.colors.onSurfaceVariant
+  };
   let initial = name
     .trim()
     .chars()
@@ -406,14 +455,15 @@ fn artwork<'a>(
     .map(|character| character.to_uppercase().collect::<String>())
     .unwrap_or_else(|| "•".to_owned());
   container(
-    text(initial)
-      .font(SPACE_GROTESK_FONT)
-      .size(38)
-      .color(if failed {
-        TOKENS.colors.warning
-      } else {
-        TOKENS.colors.onSurfaceVariant
-      }),
+    column![
+      icon_with_color(Icon::Movie, IconSize::Custom(36.0), placeholder_color),
+      text(initial)
+        .font(SPACE_GROTESK_FONT)
+        .size(24)
+        .color(placeholder_color),
+    ]
+    .spacing(TOKENS.spacing.s1)
+    .align_x(Alignment::Center),
   )
   .width(Fill)
   .height(height)
@@ -422,13 +472,25 @@ fn artwork<'a>(
   .style(|theme| jellypilot_ui::theme::surface_variant(theme, SurfaceVariant::Elevated))
   .into()
 }
-
 fn failure_surface(message: &str, retryable: bool, retry_busy: bool) -> Element<'_, Message> {
-  let retry = button(text(if retry_busy { "Retrying…" } else { "Retry" }))
-    .padding([9, 14])
-    .style(|theme, status| {
-      jellypilot_ui::theme::button_variant(theme, status, ButtonVariant::Primary)
-    });
+  let retry_enabled = retryable && !retry_busy;
+  let retry = button(
+    row![
+      icon_for_variant_disabled(
+        Icon::Refresh,
+        IconSize::Sm,
+        ButtonVariant::Primary,
+        !retry_enabled,
+      ),
+      text(if retry_busy { "Retrying…" } else { "Retry" }),
+    ]
+    .spacing(TOKENS.spacing.s1_5)
+    .align_y(Alignment::Center),
+  )
+  .padding([9, 14])
+  .style(|theme, status| {
+    jellypilot_ui::theme::button_variant(theme, status, ButtonVariant::Primary)
+  });
   let retry = if let Some(message) = retry_action(retryable, retry_busy) {
     retry.on_press(message)
   } else {
@@ -452,11 +514,24 @@ fn failure_surface(message: &str, retryable: bool, retry_busy: bool) -> Element<
 }
 
 fn inline_failure(failure: &LibraryBrowseFailure, retry_busy: bool) -> Element<'_, Message> {
-  let retry = button(text(if retry_busy { "Retrying…" } else { "Retry" }))
-    .padding([8, 12])
-    .style(|theme, status| {
-      jellypilot_ui::theme::button_variant(theme, status, ButtonVariant::Outlined)
-    });
+  let retry_enabled = failure.retryable && !retry_busy;
+  let retry = button(
+    row![
+      icon_for_variant_disabled(
+        Icon::Refresh,
+        IconSize::Xs,
+        ButtonVariant::Outlined,
+        !retry_enabled,
+      ),
+      text(if retry_busy { "Retrying…" } else { "Retry" }),
+    ]
+    .spacing(TOKENS.spacing.s1)
+    .align_y(Alignment::Center),
+  )
+  .padding([8, 12])
+  .style(|theme, status| {
+    jellypilot_ui::theme::button_variant(theme, status, ButtonVariant::Outlined)
+  });
   let retry = if let Some(message) = retry_action(failure.retryable, retry_busy) {
     retry.on_press(message)
   } else {

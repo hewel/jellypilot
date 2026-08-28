@@ -1,13 +1,15 @@
+use crate::app::message::{LoginMessage, Message};
+use crate::app::state::{LoginMethod, QuickConnectState, State};
 use iced::widget::{button, column, container, row, scrollable, text, text_input, Column};
 use iced::{Alignment, Element, Fill, Length};
 use jellypilot_auth::login::{can_start_login, ConnectionPhase};
 use jellypilot_media_server::MediaServerProvider;
 use jellypilot_ui::fonts::SPACE_GROTESK_FONT;
+use jellypilot_ui::icons::{
+  icon_for_variant, icon_for_variant_disabled, icon_with_color, Icon, IconSize,
+};
 use jellypilot_ui::tokens::TOKENS;
 use jellypilot_ui::variants::{BadgeVariant, ButtonVariant, FieldVariant, SurfaceVariant};
-
-use crate::app::message::{LoginMessage, Message};
-use crate::app::state::{LoginMethod, QuickConnectState, State};
 
 pub fn view(state: &State) -> Element<'_, Message> {
   let login = &state.login;
@@ -91,21 +93,23 @@ fn provider_button<'a>(
   state: &'a State,
 ) -> Element<'a, Message> {
   let selected = state.login.provider == provider;
-  button(text(label))
-    .padding([10, 18])
-    .on_press(Message::Login(LoginMessage::ProviderSelected(provider)))
-    .style(move |theme, status| {
-      jellypilot_ui::theme::button_variant(
-        theme,
-        status,
-        if selected {
-          ButtonVariant::Primary
-        } else {
-          ButtonVariant::Outlined
-        },
-      )
-    })
-    .into()
+  let variant = if selected {
+    ButtonVariant::Primary
+  } else {
+    ButtonVariant::Outlined
+  };
+  button(
+    row![
+      icon_for_variant(Icon::Server, IconSize::Md, variant),
+      text(label),
+    ]
+    .spacing(TOKENS.spacing.s2)
+    .align_y(Alignment::Center),
+  )
+  .padding([10, 18])
+  .on_press(Message::Login(LoginMessage::ProviderSelected(provider)))
+  .style(move |theme, status| jellypilot_ui::theme::button_variant(theme, status, variant))
+  .into()
 }
 
 fn method_button<'a>(
@@ -114,21 +118,24 @@ fn method_button<'a>(
   state: &'a State,
 ) -> Element<'a, Message> {
   let selected = state.login.method == method;
-  button(text(label))
-    .padding([10, 18])
-    .on_press(Message::Login(LoginMessage::MethodSelected(method)))
-    .style(move |theme, status| {
-      jellypilot_ui::theme::button_variant(
-        theme,
-        status,
-        if selected {
-          ButtonVariant::Secondary
-        } else {
-          ButtonVariant::Text
-        },
-      )
-    })
-    .into()
+  let icon = match method {
+    LoginMethod::QuickConnect => Icon::QrCode,
+    LoginMethod::Password => Icon::Lock,
+  };
+  let variant = if selected {
+    ButtonVariant::Secondary
+  } else {
+    ButtonVariant::Text
+  };
+  button(
+    row![icon_for_variant(icon, IconSize::Sm, variant), text(label),]
+      .spacing(TOKENS.spacing.s1_5)
+      .align_y(Alignment::Center),
+  )
+  .padding([10, 18])
+  .on_press(Message::Login(LoginMessage::MethodSelected(method)))
+  .style(move |theme, status| jellypilot_ui::theme::button_variant(theme, status, variant))
+  .into()
 }
 
 fn quick_connect(state: &State) -> Element<'_, Message> {
@@ -140,12 +147,25 @@ fn quick_connect(state: &State) -> Element<'_, Message> {
       } else {
         "Request Quick Connect code"
       };
-      let request = button(text(label))
-        .padding([12, 20])
-        .style(|theme, status| {
-          jellypilot_ui::theme::button_variant(theme, status, ButtonVariant::Primary)
-        });
-      if can_start_login(state.connection) {
+      let can_login = can_start_login(state.connection);
+      let request = button(
+        row![
+          icon_for_variant_disabled(
+            Icon::QrCode,
+            IconSize::Md,
+            ButtonVariant::Primary,
+            !can_login,
+          ),
+          text(label),
+        ]
+        .spacing(TOKENS.spacing.s2)
+        .align_y(Alignment::Center),
+      )
+      .padding([12, 20])
+      .style(|theme, status| {
+        jellypilot_ui::theme::button_variant(theme, status, ButtonVariant::Primary)
+      });
+      if can_login {
         request
           .on_press(Message::Login(LoginMessage::QuickConnectSubmitted))
           .into()
@@ -156,10 +176,15 @@ fn quick_connect(state: &State) -> Element<'_, Message> {
     QuickConnectState::Requesting => quick_connect_progress("Requesting a code…", None),
     QuickConnectState::Waiting(code) => {
       let code_badge = container(
-        text(code)
-          .font(SPACE_GROTESK_FONT)
-          .size(32)
-          .color(TOKENS.colors.onSurface),
+        row![
+          icon_with_color(Icon::QrCode, IconSize::X2l, TOKENS.colors.primary),
+          text(code)
+            .font(SPACE_GROTESK_FONT)
+            .size(32)
+            .color(TOKENS.colors.onSurface),
+        ]
+        .spacing(TOKENS.spacing.s3)
+        .align_y(Alignment::Center),
       )
       .padding([12, 20])
       .style(|theme| jellypilot_ui::theme::badge_variant(theme, BadgeVariant::Neutral));
@@ -197,13 +222,20 @@ fn quick_connect_progress<'a>(label: &'a str, _code: Option<&'a str>) -> Element
 }
 
 fn cancel_button<'a>() -> Element<'a, Message> {
-  button(text("Cancel"))
-    .padding([10, 16])
-    .on_press(Message::Login(LoginMessage::QuickConnectCancelled))
-    .style(|theme, status| {
-      jellypilot_ui::theme::button_variant(theme, status, ButtonVariant::Outlined)
-    })
-    .into()
+  button(
+    row![
+      icon_for_variant(Icon::Close, IconSize::Xs, ButtonVariant::Outlined),
+      text("Cancel"),
+    ]
+    .spacing(TOKENS.spacing.s1_5)
+    .align_y(Alignment::Center),
+  )
+  .padding([10, 16])
+  .on_press(Message::Login(LoginMessage::QuickConnectCancelled))
+  .style(|theme, status| {
+    jellypilot_ui::theme::button_variant(theme, status, ButtonVariant::Outlined)
+  })
+  .into()
 }
 
 fn password(state: &State) -> Element<'_, Message> {
@@ -239,16 +271,29 @@ fn password(state: &State) -> Element<'_, Message> {
     .style(|theme, status| {
       jellypilot_ui::theme::button_variant(theme, status, ButtonVariant::Text)
     });
-  let submit = button(text(if state.connection == ConnectionPhase::Connecting {
-    "Signing in…"
-  } else {
-    "Sign in"
-  }))
+  let can_login = can_start_login(state.connection);
+  let submit = button(
+    row![
+      icon_for_variant_disabled(
+        Icon::UserCheck,
+        IconSize::Md,
+        ButtonVariant::Primary,
+        !can_login,
+      ),
+      text(if state.connection == ConnectionPhase::Connecting {
+        "Signing in…"
+      } else {
+        "Sign in"
+      }),
+    ]
+    .spacing(TOKENS.spacing.s2)
+    .align_y(Alignment::Center),
+  )
   .padding([12, 20])
   .style(|theme, status| {
     jellypilot_ui::theme::button_variant(theme, status, ButtonVariant::Primary)
   });
-  let submit = if can_start_login(state.connection) {
+  let submit = if can_login {
     submit.on_press(Message::Login(LoginMessage::PasswordSubmitted))
   } else {
     submit
@@ -261,18 +306,30 @@ fn password(state: &State) -> Element<'_, Message> {
 
 fn saved_profiles(state: &State) -> Element<'_, Message> {
   let mut profiles = Column::new().spacing(12).push(
-    text("Saved sign-ins")
-      .size(20)
-      .color(TOKENS.colors.onSurface),
+    row![
+      icon_with_color(Icon::User, IconSize::Lg, TOKENS.colors.primary),
+      text("Saved sign-ins")
+        .size(20)
+        .color(TOKENS.colors.onSurface),
+    ]
+    .spacing(TOKENS.spacing.s2)
+    .align_y(Alignment::Center),
   );
   for profile in &state.login.profiles {
     let key = profile.key().clone();
     let is_busy = state.login.busy_profile.as_ref() == Some(&key);
-    let restore = button(text(if is_busy {
-      "Checking saved sign-in…".to_owned()
-    } else {
-      profile.title()
-    }))
+    let restore = button(
+      row![
+        icon_for_variant_disabled(Icon::User, IconSize::Sm, ButtonVariant::Secondary, is_busy),
+        text(if is_busy {
+          "Checking saved sign-in…".to_owned()
+        } else {
+          profile.title()
+        }),
+      ]
+      .spacing(TOKENS.spacing.s2)
+      .align_y(Alignment::Center),
+    )
     .padding([10, 14])
     .style(|theme, status| {
       jellypilot_ui::theme::button_variant(theme, status, ButtonVariant::Secondary)
@@ -282,11 +339,18 @@ fn saved_profiles(state: &State) -> Element<'_, Message> {
     } else {
       restore.on_press(Message::Login(LoginMessage::RestoreProfile(key.clone())))
     };
-    let forget = button(text("Forget"))
-      .padding([10, 14])
-      .style(|theme, status| {
-        jellypilot_ui::theme::button_variant(theme, status, ButtonVariant::Text)
-      });
+    let forget = button(
+      row![
+        icon_for_variant_disabled(Icon::Trash, IconSize::Xs, ButtonVariant::Text, is_busy),
+        text("Forget"),
+      ]
+      .spacing(TOKENS.spacing.s1)
+      .align_y(Alignment::Center),
+    )
+    .padding([10, 14])
+    .style(|theme, status| {
+      jellypilot_ui::theme::button_variant(theme, status, ButtonVariant::Text)
+    });
     let forget = if state.login.busy_profile.is_none() {
       forget.on_press(Message::Login(LoginMessage::AskForgetProfile(key.clone())))
     } else {
@@ -303,24 +367,38 @@ fn saved_profiles(state: &State) -> Element<'_, Message> {
         column![
           text(profile.forget_confirmation()).color(TOKENS.colors.warning),
           row![
-            button(text("Keep sign-in"))
-              .padding([8, 12])
-              .on_press(Message::Login(LoginMessage::CancelForgetProfile))
-              .style(|theme, status| jellypilot_ui::theme::button_variant(
-                theme,
-                status,
-                ButtonVariant::Outlined,
-              )),
-            button(text("Forget sign-in"))
-              .padding([8, 12])
-              .on_press(Message::Login(LoginMessage::ConfirmForgetProfile(
-                key.clone(),
-              )))
-              .style(|theme, status| jellypilot_ui::theme::button_variant(
-                theme,
-                status,
-                ButtonVariant::Primary,
-              )),
+            button(
+              row![
+                icon_for_variant(Icon::Check, IconSize::Xs, ButtonVariant::Outlined),
+                text("Keep sign-in"),
+              ]
+              .spacing(TOKENS.spacing.s1)
+              .align_y(Alignment::Center),
+            )
+            .padding([8, 12])
+            .on_press(Message::Login(LoginMessage::CancelForgetProfile))
+            .style(|theme, status| jellypilot_ui::theme::button_variant(
+              theme,
+              status,
+              ButtonVariant::Outlined,
+            )),
+            button(
+              row![
+                icon_for_variant(Icon::Trash, IconSize::Xs, ButtonVariant::Primary),
+                text("Forget sign-in"),
+              ]
+              .spacing(TOKENS.spacing.s1)
+              .align_y(Alignment::Center),
+            )
+            .padding([8, 12])
+            .on_press(Message::Login(LoginMessage::ConfirmForgetProfile(
+              key.clone(),
+            )))
+            .style(|theme, status| jellypilot_ui::theme::button_variant(
+              theme,
+              status,
+              ButtonVariant::Primary,
+            )),
           ]
           .spacing(10),
         ]

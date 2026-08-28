@@ -1,3 +1,5 @@
+use crate::app::message::{HomeMessage, Message, PlaybackMessage};
+use crate::app::state::{has_resume_position, ArtworkCell, ArtworkCellState, HomeSection, State};
 use iced::widget::scrollable::{Direction, Scrollbar};
 use iced::widget::text::Wrapping;
 use iced::widget::{button, column, container, image, row, scrollable, space, text, Column, Row};
@@ -8,11 +10,11 @@ use jellypilot_media_server::VideoLibraryItem;
 use jellypilot_mpv::playback::{Playable, PlaybackStartPosition};
 use jellypilot_mpv::playback_session::PlaybackIntent;
 use jellypilot_ui::fonts::SPACE_GROTESK_FONT;
+use jellypilot_ui::icons::{
+  icon_for_variant, icon_for_variant_disabled, icon_with_color, Icon, IconSize,
+};
 use jellypilot_ui::tokens::TOKENS;
 use jellypilot_ui::variants::{ButtonVariant, SurfaceVariant};
-
-use crate::app::message::{HomeMessage, Message, PlaybackMessage};
-use crate::app::state::{has_resume_position, ArtworkCell, ArtworkCellState, HomeSection, State};
 const THUMB_FRAME_WIDTH: f32 = 240.0;
 const THUMB_FRAME_HEIGHT: f32 = 135.0;
 const POSTER_FRAME_WIDTH: f32 = 160.0;
@@ -96,25 +98,43 @@ fn featured_hero<'a>(state: &'a State, item: &'a VideoLibraryItem) -> Element<'a
     );
   }
 
-  let play = button(text(if has_resume_position(item) {
+  let play_label = if has_resume_position(item) {
     "Resume"
   } else {
     "Play"
-  }))
-  .padding([10, 16])
-  .on_press_maybe(
-    (!state.playback_view.busy && state.playback_view.engine_available)
-      .then(|| play_message(state, item)),
+  };
+  let play_enabled = !state.playback_view.busy && state.playback_view.engine_available;
+  let play = button(
+    row![
+      icon_for_variant_disabled(
+        Icon::Play,
+        IconSize::Md,
+        ButtonVariant::Primary,
+        !play_enabled,
+      ),
+      text(play_label),
+    ]
+    .spacing(TOKENS.spacing.s2)
+    .align_y(Alignment::Center),
   )
+  .padding([10, 16])
+  .on_press_maybe(play_enabled.then(|| play_message(state, item)))
   .style(|theme, status| {
     jellypilot_ui::theme::button_variant(theme, status, ButtonVariant::Primary)
   });
-  let details = button(text("Details"))
-    .padding([10, 16])
-    .on_press(Message::OpenDetail(item.clone()))
-    .style(|theme, status| {
-      jellypilot_ui::theme::button_variant(theme, status, ButtonVariant::Outlined)
-    });
+  let details = button(
+    row![
+      icon_for_variant(Icon::Info, IconSize::Md, ButtonVariant::Outlined),
+      text("Details"),
+    ]
+    .spacing(TOKENS.spacing.s2)
+    .align_y(Alignment::Center),
+  )
+  .padding([10, 16])
+  .on_press(Message::OpenDetail(item.clone()))
+  .style(|theme, status| {
+    jellypilot_ui::theme::button_variant(theme, status, ButtonVariant::Outlined)
+  });
   container(
     row![
       artwork,
@@ -218,25 +238,42 @@ fn video_card<'a>(
       };
     content = content.push(container(progress_element).height(4).width(frame_width));
 
-    let play = button(text(if has_resume_position(item) {
+    let play_label = if has_resume_position(item) {
       "Resume"
     } else {
       "Play"
-    }))
-    .padding([7, 10])
-    .on_press_maybe(
-      (!state.playback_view.busy && state.playback_view.engine_available)
-        .then(|| play_message(state, item)),
+    };
+    let play_enabled = !state.playback_view.busy && state.playback_view.engine_available;
+    let play = button(
+      row![
+        icon_for_variant_disabled(
+          Icon::Play,
+          IconSize::Xs,
+          ButtonVariant::Primary,
+          !play_enabled,
+        ),
+        text(play_label),
+      ]
+      .spacing(TOKENS.spacing.s1)
+      .align_y(Alignment::Center),
     )
+    .padding([7, 10])
+    .on_press_maybe(play_enabled.then(|| play_message(state, item)))
     .style(|theme, status| {
       jellypilot_ui::theme::button_variant(theme, status, ButtonVariant::Primary)
     });
-    let details = button(text("Details"))
-      .padding([7, 10])
-      .on_press(Message::OpenDetail(item.clone()))
-      .style(|theme, status| {
-        jellypilot_ui::theme::button_variant(theme, status, ButtonVariant::Text)
-      });
+    let details = button(
+      row![
+        icon_for_variant(Icon::Info, IconSize::Xs, ButtonVariant::Text),
+        text("Details"),
+      ]
+      .spacing(TOKENS.spacing.s1)
+      .align_y(Alignment::Center),
+    )
+    .on_press(Message::OpenDetail(item.clone()))
+    .style(|theme, status| {
+      jellypilot_ui::theme::button_variant(theme, status, ButtonVariant::Text)
+    });
     return container(
       column![content, row![play, details].spacing(TOKENS.spacing.s1)].spacing(TOKENS.spacing.s2),
     )
@@ -297,21 +334,32 @@ fn artwork<'a>(
   }
 
   let failed = cell.is_some_and(|cell| cell.state == ArtworkCellState::Failed);
+  let placeholder_color = if failed {
+    TOKENS.colors.warning
+  } else {
+    TOKENS.colors.onSurfaceVariant
+  };
   let initial = name
     .trim()
     .chars()
     .next()
     .map(|character| character.to_uppercase().collect::<String>())
     .unwrap_or_else(|| "•".to_owned());
+  let icon_dim = if width > POSTER_FRAME_WIDTH {
+    42.0
+  } else {
+    32.0
+  };
   container(
-    text(initial)
-      .font(SPACE_GROTESK_FONT)
-      .size(if width > POSTER_FRAME_WIDTH { 54 } else { 38 })
-      .color(if failed {
-        TOKENS.colors.warning
-      } else {
-        TOKENS.colors.onSurfaceVariant
-      }),
+    column![
+      icon_with_color(Icon::Movie, icon_dim, placeholder_color),
+      text(initial)
+        .font(SPACE_GROTESK_FONT)
+        .size(if width > POSTER_FRAME_WIDTH { 32 } else { 24 })
+        .color(placeholder_color),
+    ]
+    .spacing(TOKENS.spacing.s1)
+    .align_x(Alignment::Center),
   )
   .width(width)
   .height(height)
@@ -320,7 +368,6 @@ fn artwork<'a>(
   .style(|theme| jellypilot_ui::theme::surface_variant(theme, SurfaceVariant::Elevated))
   .into()
 }
-
 fn card_progress(section: HomeSection, item: &VideoLibraryItem) -> Option<f64> {
   if section != HomeSection::ContinueWatching
     && (section != HomeSection::NextUp || !has_resume_position(item))

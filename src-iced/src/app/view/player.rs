@@ -1,5 +1,7 @@
 use std::fmt;
 
+use crate::app::message::{Message, PlaybackMessage};
+use crate::app::state::{ArtworkCellState, State};
 use iced::widget::{button, column, container, image, row, slider, space, text, Column};
 use iced::{Alignment, ContentFit, Element, Fill, Length};
 use jellypilot_mpv::playback::{Playable, TrackInfo};
@@ -9,12 +11,12 @@ use jellypilot_mpv::playback_session::{
 use jellypilot_mpv::player::format_duration;
 use jellypilot_session::IntroSkipKind;
 use jellypilot_ui::fonts::SPACE_GROTESK_FONT;
-use jellypilot_ui::overlay::{popover, Placement, PopoverOptions};
+use jellypilot_ui::icons::{
+  icon_for_variant, icon_for_variant_disabled, icon_with_color, Icon, IconSize,
+};
+use jellypilot_ui::overlay::{popover, tooltip, Placement, PopoverOptions, TooltipOptions};
 use jellypilot_ui::tokens::TOKENS;
 use jellypilot_ui::variants::{ButtonVariant, SurfaceVariant};
-
-use crate::app::message::{Message, PlaybackMessage};
-use crate::app::state::{ArtworkCellState, State};
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 struct TrackChoice {
@@ -47,29 +49,49 @@ pub fn bar(state: &State) -> Option<Element<'_, Message>> {
   .spacing(TOKENS.spacing.s0_5)
   .width(Length::FillPortion(2));
 
+  let is_paused = now_playing.paused;
+  let play_pause_icon = if is_paused { Icon::Play } else { Icon::Pause };
+  let play_pause_label = if is_paused { "Play" } else { "Pause" };
+  let play_pause_button = button(icon_for_variant(
+    play_pause_icon,
+    IconSize::Lg,
+    ButtonVariant::Primary,
+  ))
+  .padding([8, 12])
+  .on_press(Message::Playback(PlaybackMessage::Intent(
+    PlaybackIntent::TogglePaused,
+  )))
+  .style(|theme, status| {
+    jellypilot_ui::theme::button_variant(theme, status, ButtonVariant::Primary)
+  });
+  let play_pause = tooltip(
+    play_pause_button,
+    play_pause_label,
+    TooltipOptions::default(),
+  );
+
+  let stop_button = button(icon_for_variant(
+    Icon::Stop,
+    IconSize::Md,
+    ButtonVariant::Outlined,
+  ))
+  .padding([8, 10])
+  .on_press(Message::Playback(PlaybackMessage::Intent(
+    PlaybackIntent::Stop,
+  )))
+  .style(|theme, status| {
+    jellypilot_ui::theme::button_variant(theme, status, ButtonVariant::Outlined)
+  });
+  let stop = tooltip(stop_button, "Stop", TooltipOptions::default());
+
   let transport = row![
     adjacent_button(state, AdjacentDirection::Previous, "Previous"),
-    button(text(if now_playing.paused { "Play" } else { "Pause" }))
-      .padding([8, 14])
-      .on_press(Message::Playback(PlaybackMessage::Intent(
-        PlaybackIntent::TogglePaused,
-      )))
-      .style(|theme, status| {
-        jellypilot_ui::theme::button_variant(theme, status, ButtonVariant::Primary)
-      }),
-    button(text("Stop"))
-      .padding([8, 12])
-      .on_press(Message::Playback(PlaybackMessage::Intent(
-        PlaybackIntent::Stop,
-      )))
-      .style(|theme, status| {
-        jellypilot_ui::theme::button_variant(theme, status, ButtonVariant::Outlined)
-      }),
+    play_pause,
+    stop,
     adjacent_button(state, AdjacentDirection::Next, "Next"),
   ]
   .spacing(TOKENS.spacing.s1_5)
   .align_y(Alignment::Center);
-
   let track_selection = row![audio_popover(state), subtitle_popover(state)]
     .spacing(TOKENS.spacing.s1_5)
     .align_y(Alignment::Center);
@@ -83,20 +105,29 @@ pub fn bar(state: &State) -> Option<Element<'_, Message>> {
   .step(1.0)
   .width(100);
 
-  let volume = row![
-    button(text(if now_playing.muted { "Unmute" } else { "Mute" }))
-      .padding([8, 12])
-      .on_press(Message::Playback(PlaybackMessage::Intent(
-        PlaybackIntent::SetMuted(!now_playing.muted),
-      )))
-      .style(|theme, status| {
-        jellypilot_ui::theme::button_variant(theme, status, ButtonVariant::Outlined)
-      }),
-    volume_slider,
-  ]
-  .spacing(TOKENS.spacing.s2)
-  .align_y(Alignment::Center);
+  let mute_icon = if now_playing.muted {
+    Icon::VolumeMute
+  } else {
+    Icon::VolumeHigh
+  };
+  let mute_label = if now_playing.muted { "Unmute" } else { "Mute" };
+  let mute_button = button(icon_for_variant(
+    mute_icon,
+    IconSize::Md,
+    ButtonVariant::Outlined,
+  ))
+  .padding([8, 10])
+  .on_press(Message::Playback(PlaybackMessage::Intent(
+    PlaybackIntent::SetMuted(!now_playing.muted),
+  )))
+  .style(|theme, status| {
+    jellypilot_ui::theme::button_variant(theme, status, ButtonVariant::Outlined)
+  });
+  let mute = tooltip(mute_button, mute_label, TooltipOptions::default());
 
+  let volume = row![mute, volume_slider,]
+    .spacing(TOKENS.spacing.s2)
+    .align_y(Alignment::Center);
   let top = row![
     playback_artwork(state, 56.0, 56.0),
     metadata,
@@ -147,36 +178,51 @@ fn intro_prompt(state: &State) -> Option<Element<'_, Message>> {
     IntroSkipKind::Credits => "Skip credits?",
   };
   let actions = row![
-    button(text("Skip"))
-      .padding([8, 14])
-      .on_press(Message::Playback(PlaybackMessage::Intent(
-        PlaybackIntent::SkipIntro,
-      )))
-      .style(|theme, status| {
-        jellypilot_ui::theme::button_variant(theme, status, ButtonVariant::Primary)
-      }),
-    button(text("Dismiss"))
-      .padding([8, 14])
-      .on_press(Message::Playback(PlaybackMessage::Intent(
-        PlaybackIntent::DismissIntro,
-      )))
-      .style(|theme, status| {
-        jellypilot_ui::theme::button_variant(theme, status, ButtonVariant::Outlined)
-      }),
+    button(
+      row![
+        icon_for_variant(Icon::Next, IconSize::Sm, ButtonVariant::Primary),
+        text("Skip"),
+      ]
+      .spacing(TOKENS.spacing.s1_5)
+      .align_y(Alignment::Center),
+    )
+    .padding([8, 14])
+    .on_press(Message::Playback(PlaybackMessage::Intent(
+      PlaybackIntent::SkipIntro,
+    )))
+    .style(|theme, status| {
+      jellypilot_ui::theme::button_variant(theme, status, ButtonVariant::Primary)
+    }),
+    button(
+      row![
+        icon_for_variant(Icon::Close, IconSize::Xs, ButtonVariant::Outlined),
+        text("Dismiss"),
+      ]
+      .spacing(TOKENS.spacing.s1_5)
+      .align_y(Alignment::Center),
+    )
+    .on_press(Message::Playback(PlaybackMessage::Intent(
+      PlaybackIntent::DismissIntro,
+    )))
+    .style(|theme, status| {
+      jellypilot_ui::theme::button_variant(theme, status, ButtonVariant::Outlined)
+    }),
   ]
   .spacing(TOKENS.spacing.s2);
   Some(
-    container(
+    container(row![
       row![
+        icon_with_color(Icon::IntroSkip, IconSize::Md, TOKENS.colors.primary),
         text(label)
           .font(SPACE_GROTESK_FONT)
           .size(16)
           .color(TOKENS.colors.onSurface),
-        space::horizontal(),
-        actions,
       ]
+      .spacing(TOKENS.spacing.s2)
       .align_y(Alignment::Center),
-    )
+      space::horizontal(),
+      actions,
+    ])
     .padding([TOKENS.spacing.s2, TOKENS.spacing.s3])
     .width(Fill)
     .style(|theme| jellypilot_ui::theme::surface_variant(theme, SurfaceVariant::Elevated))
@@ -193,17 +239,27 @@ fn adjacent_button<'a>(
     AdjacentDirection::Previous => &state.playback_view.adjacent.previous,
     AdjacentDirection::Next => &state.playback_view.adjacent.next,
   };
-  button(text(label))
-    .padding([8, 12])
-    .on_press_maybe(
-      matches!(availability, AdjacentAvailability::Available { .. }).then_some(Message::Playback(
-        PlaybackMessage::Intent(PlaybackIntent::PlayAdjacent(direction)),
-      )),
-    )
-    .style(|theme, status| {
-      jellypilot_ui::theme::button_variant(theme, status, ButtonVariant::Outlined)
-    })
-    .into()
+  let icon_variant = match direction {
+    AdjacentDirection::Previous => Icon::Previous,
+    AdjacentDirection::Next => Icon::Next,
+  };
+  let available = matches!(availability, AdjacentAvailability::Available { .. });
+  let btn = button(icon_for_variant_disabled(
+    icon_variant,
+    IconSize::Md,
+    ButtonVariant::Outlined,
+    !available,
+  ))
+  .padding([8, 10])
+  .on_press_maybe(
+    available.then_some(Message::Playback(PlaybackMessage::Intent(
+      PlaybackIntent::PlayAdjacent(direction),
+    ))),
+  )
+  .style(|theme, status| {
+    jellypilot_ui::theme::button_variant(theme, status, ButtonVariant::Outlined)
+  });
+  tooltip(btn, label, TooltipOptions::default())
 }
 
 fn audio_popover(state: &State) -> Element<'_, Message> {
@@ -211,23 +267,29 @@ fn audio_popover(state: &State) -> Element<'_, Message> {
     TracksView::Ready { tracks, .. } => !track_choices(tracks, "audio", false).is_empty(),
     TracksView::Loading | TracksView::Unavailable => false,
   };
-  let trigger = button(text("Audio"))
-    .padding([8, 12])
-    .on_press_maybe(
-      has_audio_choices.then_some(Message::Playback(PlaybackMessage::AudioMenuToggled)),
-    )
-    .style(|theme, status| {
-      jellypilot_ui::theme::button_variant(
-        theme,
-        status,
-        if state.audio_menu_open {
-          ButtonVariant::Secondary
-        } else {
-          ButtonVariant::Outlined
-        },
-      )
-    });
-
+  let audio_btn_variant = if state.audio_menu_open {
+    ButtonVariant::Secondary
+  } else {
+    ButtonVariant::Outlined
+  };
+  let trigger = button(
+    row![
+      icon_for_variant_disabled(
+        Icon::AudioTrack,
+        IconSize::Sm,
+        audio_btn_variant,
+        !has_audio_choices,
+      ),
+      text("Audio"),
+    ]
+    .spacing(TOKENS.spacing.s1_5)
+    .align_y(Alignment::Center),
+  )
+  .padding([8, 12])
+  .on_press_maybe(has_audio_choices.then_some(Message::Playback(PlaybackMessage::AudioMenuToggled)))
+  .style(move |theme, status| {
+    jellypilot_ui::theme::button_variant(theme, status, audio_btn_variant)
+  });
   let menu = match &state.playback_view.tracks {
     TracksView::Ready { tracks, audio, .. } => {
       let choices = track_choices(tracks, "audio", false);
@@ -242,13 +304,15 @@ fn audio_popover(state: &State) -> Element<'_, Message> {
         for choice in choices {
           let active = choice.id == *audio;
           let id = choice.id.unwrap_or_default();
+          let active_marker: Element<'_, Message> = if active {
+            icon_with_color(Icon::Check, IconSize::Xs, TOKENS.colors.primary).into()
+          } else {
+            space::horizontal().width(14).into()
+          };
           col = col.push(
             button(
-              row![
-                text(choice.label).width(Fill).size(13),
-                text(if active { "✓" } else { "" }).size(12),
-              ]
-              .align_y(Alignment::Center),
+              row![text(choice.label).width(Fill).size(13), active_marker,]
+                .align_y(Alignment::Center),
             )
             .padding([8, 10])
             .width(Fill)
@@ -299,23 +363,29 @@ fn subtitle_popover(state: &State) -> Element<'_, Message> {
     TracksView::Ready { tracks, .. } => !track_choices(tracks, "sub", false).is_empty(),
     TracksView::Loading | TracksView::Unavailable => false,
   };
-  let trigger = button(text("Subtitles"))
-    .padding([8, 12])
-    .on_press_maybe(
-      has_subtitle_choices.then_some(Message::Playback(PlaybackMessage::SubtitleMenuToggled)),
-    )
-    .style(|theme, status| {
-      jellypilot_ui::theme::button_variant(
-        theme,
-        status,
-        if state.subtitle_menu_open {
-          ButtonVariant::Secondary
-        } else {
-          ButtonVariant::Outlined
-        },
-      )
-    });
-
+  let sub_btn_variant = if state.subtitle_menu_open {
+    ButtonVariant::Secondary
+  } else {
+    ButtonVariant::Outlined
+  };
+  let trigger = button(
+    row![
+      icon_for_variant_disabled(
+        Icon::Subtitles,
+        IconSize::Sm,
+        sub_btn_variant,
+        !has_subtitle_choices,
+      ),
+      text("Subtitles"),
+    ]
+    .spacing(TOKENS.spacing.s1_5)
+    .align_y(Alignment::Center),
+  )
+  .padding([8, 12])
+  .on_press_maybe(
+    has_subtitle_choices.then_some(Message::Playback(PlaybackMessage::SubtitleMenuToggled)),
+  )
+  .style(move |theme, status| jellypilot_ui::theme::button_variant(theme, status, sub_btn_variant));
   let menu = match &state.playback_view.tracks {
     TracksView::Ready {
       tracks, subtitle, ..
@@ -324,13 +394,15 @@ fn subtitle_popover(state: &State) -> Element<'_, Message> {
       let mut col = Column::new().spacing(TOKENS.spacing.s1).width(Fill);
       for choice in choices {
         let active = choice.id == *subtitle;
+        let active_marker: Element<'_, Message> = if active {
+          icon_with_color(Icon::Check, IconSize::Xs, TOKENS.colors.primary).into()
+        } else {
+          space::horizontal().width(14).into()
+        };
         col = col.push(
           button(
-            row![
-              text(choice.label).width(Fill).size(13),
-              text(if active { "✓" } else { "" }).size(12),
-            ]
-            .align_y(Alignment::Center),
+            row![text(choice.label).width(Fill).size(13), active_marker,]
+              .align_y(Alignment::Center),
           )
           .padding([8, 10])
           .width(Fill)
@@ -469,15 +541,18 @@ fn playback_artwork(state: &State, width: f32, height: f32) -> Element<'_, Messa
       }
     }
   }
-  container(text("♪").font(SPACE_GROTESK_FONT).size(28))
-    .width(width)
-    .height(height)
-    .center_x(Fill)
-    .center_y(Fill)
-    .style(|theme| jellypilot_ui::theme::surface_variant(theme, SurfaceVariant::Elevated))
-    .into()
+  container(icon_with_color(
+    Icon::Movie,
+    IconSize::Custom(26.0),
+    TOKENS.colors.onSurfaceVariant,
+  ))
+  .width(width)
+  .height(height)
+  .center_x(Fill)
+  .center_y(Fill)
+  .style(|theme| jellypilot_ui::theme::surface_variant(theme, SurfaceVariant::Elevated))
+  .into()
 }
-
 #[cfg(test)]
 mod tests {
   use super::*;
