@@ -40,7 +40,7 @@ impl std::fmt::Debug for Message {
       Self::Playback(_) => formatter.write_str("Playback"),
       Self::Settings(_) => formatter.write_str("Settings"),
       Self::Remote(_) => formatter.write_str("Remote"),
-      Self::TrayPoll => formatter.write_str("TrayPoll"),
+      Self::Tray(action) => formatter.debug_tuple("Tray").field(action).finish(),
     }
   }
 }
@@ -56,7 +56,7 @@ pub enum Message {
   Playback(PlaybackMessage),
   Settings(SettingsMessage),
   Remote(RemoteMessage),
-  TrayPoll,
+  Tray(crate::tray::TrayAction),
 }
 
 #[derive(Clone, Copy, Debug)]

@@ -51,7 +51,7 @@ use jellypilot_session::{
 use url::Url;
 use zeroize::{Zeroize, Zeroizing};
 
-use crate::tray::{self, TrayAction};
+use crate::tray::TrayAction;
 
 use super::message::{
   BrowseMessage, DetailMessage, HomeMessage, LoginMessage, Message, PasswordSubmission,
@@ -130,7 +130,7 @@ pub fn update(state: &mut State, message: Message) -> Task<Message> {
       record_remote_change(state, previous_state, previous_notice.as_deref());
       task
     }
-    Message::TrayPoll => update_tray(state),
+    Message::Tray(action) => update_tray(state, action),
   }
 }
 
@@ -936,52 +936,47 @@ fn stop_remote_session_for_quit(state: &mut State) -> Task<Message> {
   )
 }
 
-fn update_tray(state: &mut State) -> Task<Message> {
-  let mut tasks = Vec::new();
-  while let Some(action) = tray::next_action() {
-    let task = match action {
-      TrayAction::PlayPause => {
-        apply_playback_input(state, PlaybackInput::Intent(PlaybackIntent::TogglePaused))
-      }
-      TrayAction::Next => {
-        apply_local_playback_intent(state, PlaybackIntent::PlayAdjacent(AdjacentDirection::Next))
-      }
-      TrayAction::Previous => apply_local_playback_intent(
+fn update_tray(state: &mut State, action: TrayAction) -> Task<Message> {
+  match action {
+    TrayAction::PlayPause => {
+      apply_playback_input(state, PlaybackInput::Intent(PlaybackIntent::TogglePaused))
+    }
+    TrayAction::Next => {
+      apply_local_playback_intent(state, PlaybackIntent::PlayAdjacent(AdjacentDirection::Next))
+    }
+    TrayAction::Previous => apply_local_playback_intent(
+      state,
+      PlaybackIntent::PlayAdjacent(AdjacentDirection::Previous),
+    ),
+    TrayAction::Mute => {
+      let Some(muted) = state
+        .playback_view
+        .now_playing
+        .as_ref()
+        .map(|playing| playing.muted)
+      else {
+        return Task::none();
+      };
+      apply_playback_input(
         state,
-        PlaybackIntent::PlayAdjacent(AdjacentDirection::Previous),
-      ),
-      TrayAction::Mute => {
-        let Some(muted) = state
-          .playback_view
-          .now_playing
-          .as_ref()
-          .map(|playing| playing.muted)
-        else {
-          continue;
-        };
-        apply_playback_input(
-          state,
-          PlaybackInput::Intent(PlaybackIntent::SetMuted(!muted)),
-        )
+        PlaybackInput::Intent(PlaybackIntent::SetMuted(!muted)),
+      )
+    }
+    TrayAction::Show => {
+      iced::window::oldest().map(|id| Message::Window(WindowMessage::ShowRequested(id)))
+    }
+    TrayAction::Quit => {
+      if state.quit_requested {
+        return Task::none();
       }
-      TrayAction::Show => {
-        iced::window::oldest().map(|id| Message::Window(WindowMessage::ShowRequested(id)))
-      }
-      TrayAction::Quit => {
-        if state.quit_requested {
-          continue;
-        }
-        state.quit_requested = true;
-        sync_tray(state);
-        Task::batch([
-          apply_playback_input(state, PlaybackInput::Intent(PlaybackIntent::Quit)),
-          stop_remote_session_for_quit(state),
-        ])
-      }
-    };
-    tasks.push(task);
+      state.quit_requested = true;
+      sync_tray(state);
+      Task::batch([
+        apply_playback_input(state, PlaybackInput::Intent(PlaybackIntent::Quit)),
+        stop_remote_session_for_quit(state),
+      ])
+    }
   }
-  Task::batch(tasks)
 }
 
 fn initialize_playback(state: &mut State) {
@@ -994,6 +989,8 @@ fn initialize_playback(state: &mut State) {
   state.seek_preview = None;
   state.volume_preview = None;
   state.playback_remote = state.request_gate.begin_remote();
+  state.in_flight_refresh = None;
+  state.in_flight_command = None;
 
   let Some(client) = state.client.as_ref().map(Arc::clone) else {
     state.playback_controller = None;
@@ -1124,6 +1121,12 @@ fn update_playback(state: &mut State, message: PlaybackMessage) -> Task<Message>
       started,
       tracks,
     } => {
+      if state.in_flight_refresh == Some(id) {
+        state.in_flight_refresh = None;
+      }
+      if state.in_flight_command == Some(id) {
+        state.in_flight_command = None;
+      }
       let started = if matches!(settlement.as_ref(), ControllerSettlement::Started(Ok(_))) {
         started
       } else {
@@ -1254,8 +1257,8 @@ fn volume_intent(volume: f64, active: bool) -> Option<PlaybackIntent> {
 
 fn apply_playback_input(state: &mut State, input: PlaybackInput) -> Task<Message> {
   let effects = state.playback_session.handle(input, Instant::now());
-  sync_playback_projection(state);
   let task = execute_playback_effects(state, effects);
+  sync_playback_projection(state);
   if quit_may_exit(state) {
     Task::batch([task, iced::exit()])
   } else {
@@ -1268,7 +1271,11 @@ fn quit_may_exit(state: &State) -> bool {
 }
 
 fn sync_playback_projection(state: &mut State) {
-  state.playback_view = state.playback_session.view();
+  let mut view = state.playback_session.view();
+  if view.busy && state.in_flight_refresh.is_some() && state.in_flight_command.is_none() {
+    view.busy = false;
+  }
+  state.playback_view = view;
   state.playback_notice = state
     .playback_view
     .notice
@@ -1328,7 +1335,18 @@ fn execute_playback_effect(
   adjacent_play: Option<RemotePlayToken>,
 ) -> Task<Message> {
   match effect {
-    PlaybackEffect::Controller(id, command) => execute_controller_command(state, id, command),
+    PlaybackEffect::Controller(id, command) => {
+      match &command {
+        ControllerCommand::Refresh => {
+          state.in_flight_refresh = Some(id);
+        }
+        ControllerCommand::ShowText { .. } => {}
+        _ => {
+          state.in_flight_command = Some(id);
+        }
+      }
+      execute_controller_command(state, id, command)
+    }
     PlaybackEffect::LookupAdjacent(id, direction) => {
       let Some(play) = adjacent_play else {
         return Task::none();
@@ -2897,6 +2915,8 @@ fn reset_connected_surface(state: &mut State) -> Task<Message> {
   abort_browse_pages(state);
   state.artwork_adapter.reset_session();
   state.artwork_binder.reset();
+  state.in_flight_refresh = None;
+  state.in_flight_command = None;
   state.home_artwork = HomeArtwork::default();
   state.browse_artwork = BrowseArtwork::default();
   state.detail_artwork = DetailArtwork::default();
@@ -3566,6 +3586,8 @@ mod tests {
       playback_view,
       playback_playable: None,
       adjacent_playables: [None, None],
+      in_flight_refresh: None,
+      in_flight_command: None,
       playback_remote,
       remote_session: None,
       remote_events: None,
@@ -5905,6 +5927,178 @@ mod tests {
     for _ in 0..10 {
       drop(prepare_home_artwork(&mut state));
       assert_eq!(state.artwork_binder.live_slots_count(), 0);
+    }
+  }
+
+  #[test]
+  fn playback_tick_and_settlement_do_not_project_busy_to_ui() {
+    let mut state = active_playback_state();
+    assert!(!state.playback_view.busy);
+
+    // Tick intent executes Refresh but must NOT project busy to UI
+    drop(update_playback(
+      &mut state,
+      PlaybackMessage::Intent(PlaybackIntent::Tick),
+    ));
+    assert!(state.in_flight_refresh.is_some());
+    assert_eq!(state.in_flight_command, None);
+    assert!(
+      !state.playback_view.busy,
+      "periodic refresh tick must not mark playback_view busy (prevents button flickering)"
+    );
+
+    // Refresh settlement clears in-flight refresh and keeps busy false
+    let refresh_id = state.in_flight_refresh.unwrap();
+    drop(update_playback(
+      &mut state,
+      PlaybackMessage::ControllerSettled {
+        id: refresh_id,
+        settlement: Box::new(ControllerSettlement::Refreshed {
+          outcome: PlaybackRefreshOutcome {
+            snapshot: playback_snapshot(11.0),
+            state: PlaybackRefreshState::Active,
+            warnings: Vec::new(),
+          },
+          client_messages: Vec::new(),
+        }),
+        started: None,
+        tracks: None,
+      },
+    ));
+    assert_eq!(state.in_flight_refresh, None);
+    assert!(
+      !state.playback_view.busy,
+      "refresh settlement must keep playback_view busy as false"
+    );
+  }
+
+  #[test]
+  fn playback_refresh_transition_to_queued_command_preserves_busy_state() {
+    let mut state = active_playback_state();
+    assert!(!state.playback_view.busy);
+
+    // 1. Tick intent starts a Refresh
+    drop(update_playback(
+      &mut state,
+      PlaybackMessage::Intent(PlaybackIntent::Tick),
+    ));
+    let refresh_id = state
+      .in_flight_refresh
+      .expect("tick must initiate an in-flight refresh");
+    assert_eq!(state.in_flight_command, None);
+    assert!(
+      !state.playback_view.busy,
+      "periodic refresh tick alone must not mark playback_view busy"
+    );
+
+    // 2. Queue a seek command while refresh is in flight
+    drop(update_playback(
+      &mut state,
+      PlaybackMessage::Intent(PlaybackIntent::Seek(50.0)),
+    ));
+
+    // 3. Settle the in-flight refresh
+    drop(update_playback(
+      &mut state,
+      PlaybackMessage::ControllerSettled {
+        id: refresh_id,
+        settlement: Box::new(ControllerSettlement::Refreshed {
+          outcome: PlaybackRefreshOutcome {
+            snapshot: playback_snapshot(11.0),
+            state: PlaybackRefreshState::Active,
+            warnings: Vec::new(),
+          },
+          client_messages: Vec::new(),
+        }),
+        started: None,
+        tracks: None,
+      },
+    ));
+
+    // Refresh marker is cleared, command marker is set to the newly dispatched seek command,
+    // and playback_view.busy is true
+    assert_eq!(state.in_flight_refresh, None);
+    let command_id = state
+      .in_flight_command
+      .expect("settling refresh must dispatch the queued command and set in_flight_command");
+    assert!(
+      state.playback_view.busy,
+      "playback_view.busy must remain true while queued command is in flight"
+    );
+
+    // 4. Settle the command
+    drop(update_playback(
+      &mut state,
+      PlaybackMessage::ControllerSettled {
+        id: command_id,
+        settlement: Box::new(ControllerSettlement::Controlled(Ok(
+          jellypilot_mpv::playback::PlaybackOutcome {
+            snapshot: playback_snapshot(50.0),
+            warnings: Vec::new(),
+          },
+        ))),
+        started: None,
+        tracks: None,
+      },
+    ));
+    // Command marker is cleared and busy is false
+    assert_eq!(state.in_flight_command, None);
+    assert!(
+      !state.playback_view.busy,
+      "playback_view.busy must be false after command settles"
+    );
+  }
+
+  #[test]
+  fn tray_action_executes_in_update_tray() {
+    let mut state = active_playback_state();
+    assert_eq!(
+      state.playback_view.now_playing.as_ref().map(|np| np.paused),
+      Some(false)
+    );
+
+    drop(update_tray(&mut state, crate::tray::TrayAction::PlayPause));
+
+    assert_eq!(
+      state.playback_view.now_playing.as_ref().map(|np| np.paused),
+      Some(true)
+    );
+  }
+
+  #[test]
+  fn page_settle_spawns_all_24_visible_browse_loads_at_once() {
+    let mut state = test_state();
+    state.client = Some(Arc::new(JellyfinClient::new()));
+    let items = (0..24)
+      .map(|i| {
+        let mut item = episode(&format!("item-{i}"), 1);
+        item.artwork_image_id = Some(format!("art-{i}"));
+        jellypilot_core::browse_model::LibraryItemSlot { item: Some(item) }
+      })
+      .collect::<Vec<_>>();
+
+    state.browse_view = LibraryBrowseView::Ready {
+      visible_items: items,
+      mode: jellypilot_core::LibraryBrowseMode::Normal,
+      total_record_count: 24,
+      is_fetching_more: false,
+      can_load_next: false,
+      load_more_failure: None,
+      retry_busy: false,
+    };
+
+    drop(prepare_browse_artwork(&mut state));
+
+    for i in 0..24 {
+      let cell = state
+        .browse_artwork
+        .get(&format!("item-{i}"))
+        .expect("all 24 cells must be present in browse_artwork");
+      assert_eq!(
+        cell.state,
+        ArtworkCellState::Loading,
+        "all 24 cells must be admitted into Loading in the same pass"
+      );
     }
   }
 }

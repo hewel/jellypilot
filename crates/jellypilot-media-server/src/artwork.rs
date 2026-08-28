@@ -12,9 +12,9 @@ pub const MAX_RESPONSE_BYTES: usize = 8 * 1024 * 1024;
 pub const MAX_DECODED_BYTES: usize = 4 * 1024 * 1024;
 pub const MAX_CACHED_BYTES: usize = 32 * 1024 * 1024;
 pub const MAX_CACHED_ENTRIES: usize = 256;
-pub const MAX_ACTIVE_LOADS: usize = 4;
-pub const MAX_ACTIVE_BYTES: usize = 64 * 1024 * 1024;
-pub const MAX_QUEUED_LOADS: usize = 64;
+pub const MAX_ACTIVE_LOADS: usize = 24;
+pub const MAX_ACTIVE_BYTES: usize = 384 * 1024 * 1024;
+pub const MAX_QUEUED_LOADS: usize = 128;
 pub const DECODE_PIXEL_BUFFER_RESERVATIONS: usize = 2;
 
 const MAX_IMAGE_REFERENCE_BYTES: usize = 32 * 1024;
@@ -1142,6 +1142,25 @@ mod tests {
     assert!(!scheduler.try_activate(third, 2, 100, 40));
     scheduler.release(40);
     assert!(scheduler.try_activate(third, 2, 100, 40));
+  }
+  #[test]
+  fn full_24_poster_page_activates_concurrently_without_queueing() {
+    let adapter = ArtworkAdapter::default();
+    let generation = adapter.lock_state().generation;
+    let loads = (0..MAX_ACTIVE_LOADS)
+      .map(|_| QueuedLoad::new(&adapter, generation).expect("load should be queued"))
+      .collect::<Vec<_>>();
+    for load in &loads {
+      assert!(
+        adapter.try_activate(load.id()),
+        "all 24 visible page loads should activate in the same pass"
+      );
+    }
+    assert_eq!(
+      adapter.lock_state().scheduler.active_loads(),
+      MAX_ACTIVE_LOADS
+    );
+    assert_eq!(adapter.lock_state().scheduler.queued_loads(), 0);
   }
 
   #[test]

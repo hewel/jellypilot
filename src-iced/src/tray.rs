@@ -1,6 +1,8 @@
+use std::sync::Arc;
+
 use jellypilot_mpv::playback_session::{AdjacentAvailability, SessionView};
 use tray_icon::menu::{Menu, MenuEvent, MenuItem, PredefinedMenuItem};
-use tray_icon::{Icon, MouseButton, MouseButtonState, TrayIcon, TrayIconBuilder, TrayIconEvent};
+use tray_icon::{Icon, MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 
 const PLAY_PAUSE_ID: &str = "play-pause";
 const NEXT_ID: &str = "next";
@@ -19,113 +21,238 @@ pub enum TrayAction {
   Quit,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct TrayMenuState {
+  pub play_pause_label: &'static str,
+  pub play_pause_enabled: bool,
+  pub next_enabled: bool,
+  pub previous_enabled: bool,
+  pub mute_label: &'static str,
+  pub mute_enabled: bool,
+  pub quitting: bool,
+}
+
+enum TrayCommand {
+  Sync(TrayMenuState),
+  Shutdown,
+}
+
+#[derive(Clone, Debug)]
+pub struct TrayEventChannel {
+  pub receiver: Arc<tokio::sync::Mutex<tokio::sync::mpsc::UnboundedReceiver<TrayAction>>>,
+}
+
+impl std::hash::Hash for TrayEventChannel {
+  fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+    Arc::as_ptr(&self.receiver).hash(state);
+  }
+}
+
+impl PartialEq for TrayEventChannel {
+  fn eq(&self, other: &Self) -> bool {
+    Arc::ptr_eq(&self.receiver, &other.receiver)
+  }
+}
+
+impl Eq for TrayEventChannel {}
+
 pub struct Tray {
-  _icon: TrayIcon,
-  play_pause: MenuItem,
-  next: MenuItem,
-  previous: MenuItem,
-  mute: MenuItem,
-  quit: MenuItem,
+  cmd_tx: tokio::sync::mpsc::UnboundedSender<TrayCommand>,
+  action_rx: Arc<tokio::sync::Mutex<tokio::sync::mpsc::UnboundedReceiver<TrayAction>>>,
+  #[cfg(target_os = "linux")]
+  glib_context: gtk::glib::MainContext,
+  thread: Option<std::thread::JoinHandle<()>>,
 }
 
 impl Tray {
   pub fn new() -> Result<Self, String> {
+    let (init_tx, init_rx) = std::sync::mpsc::sync_channel::<Result<(), String>>(1);
+    let (cmd_tx, mut cmd_rx) = tokio::sync::mpsc::unbounded_channel::<TrayCommand>();
+    let (action_tx, action_rx) = tokio::sync::mpsc::unbounded_channel::<TrayAction>();
+
     #[cfg(target_os = "linux")]
-    gtk::init().map_err(|error| error.to_string())?;
-    let play_pause = MenuItem::with_id(PLAY_PAUSE_ID, "Play", false, None);
-    let next = MenuItem::with_id(NEXT_ID, "Next", false, None);
-    let previous = MenuItem::with_id(PREVIOUS_ID, "Previous", false, None);
-    let mute = MenuItem::with_id(MUTE_ID, "Mute", false, None);
-    let show = MenuItem::with_id(SHOW_ID, "Show", true, None);
-    let quit = MenuItem::with_id(QUIT_ID, "Quit", true, None);
-    let separator = PredefinedMenuItem::separator();
-    let menu = Menu::with_items(&[
-      &play_pause,
-      &next,
-      &previous,
-      &mute,
-      &separator,
-      &show,
-      &quit,
-    ])
-    .map_err(|error| error.to_string())?;
-    let icon = TrayIconBuilder::new()
-      .with_tooltip("JellyPilot")
-      .with_icon(tray_icon_image()?)
-      .with_menu(Box::new(menu))
-      .with_menu_on_left_click(false)
-      .build()
+    let glib_context = gtk::glib::MainContext::default();
+
+    let thread = std::thread::Builder::new()
+      .name("tray".to_owned())
+      .spawn(move || {
+        #[cfg(target_os = "linux")]
+        if let Err(error) = gtk::init() {
+          let _ = init_tx.send(Err(error.to_string()));
+          return;
+        }
+
+        let play_pause = MenuItem::with_id(PLAY_PAUSE_ID, "Play", false, None);
+        let next = MenuItem::with_id(NEXT_ID, "Next", false, None);
+        let previous = MenuItem::with_id(PREVIOUS_ID, "Previous", false, None);
+        let mute = MenuItem::with_id(MUTE_ID, "Mute", false, None);
+        let show = MenuItem::with_id(SHOW_ID, "Show", true, None);
+        let quit = MenuItem::with_id(QUIT_ID, "Quit", true, None);
+        let separator = PredefinedMenuItem::separator();
+        let menu = match Menu::with_items(&[
+          &play_pause,
+          &next,
+          &previous,
+          &mute,
+          &separator,
+          &show,
+          &quit,
+        ]) {
+          Ok(menu) => menu,
+          Err(error) => {
+            let _ = init_tx.send(Err(error.to_string()));
+            return;
+          }
+        };
+
+        let icon = match tray_icon_image() {
+          Ok(icon) => icon,
+          Err(error) => {
+            let _ = init_tx.send(Err(error));
+            return;
+          }
+        };
+
+        let _icon = match TrayIconBuilder::new()
+          .with_tooltip("JellyPilot")
+          .with_icon(icon)
+          .with_menu(Box::new(menu))
+          .with_menu_on_left_click(false)
+          .build()
+        {
+          Ok(icon) => icon,
+          Err(error) => {
+            let _ = init_tx.send(Err(error.to_string()));
+            return;
+          }
+        };
+
+        if init_tx.send(Ok(())).is_err() {
+          return;
+        }
+
+        loop {
+          while let Ok(cmd) = cmd_rx.try_recv() {
+            match cmd {
+              TrayCommand::Sync(menu_state) => {
+                play_pause.set_text(menu_state.play_pause_label);
+                play_pause.set_enabled(menu_state.play_pause_enabled);
+                next.set_enabled(menu_state.next_enabled);
+                previous.set_enabled(menu_state.previous_enabled);
+                mute.set_text(menu_state.mute_label);
+                mute.set_enabled(menu_state.mute_enabled);
+                quit.set_enabled(!menu_state.quitting);
+              }
+              TrayCommand::Shutdown => return,
+            }
+          }
+
+          #[cfg(target_os = "linux")]
+          {
+            let context = gtk::glib::MainContext::default();
+            while context.pending() {
+              context.iteration(false);
+            }
+          }
+
+          while let Ok(event) = MenuEvent::receiver().try_recv() {
+            let action = match event.id.as_ref() {
+              PLAY_PAUSE_ID => Some(TrayAction::PlayPause),
+              NEXT_ID => Some(TrayAction::Next),
+              PREVIOUS_ID => Some(TrayAction::Previous),
+              MUTE_ID => Some(TrayAction::Mute),
+              SHOW_ID => Some(TrayAction::Show),
+              QUIT_ID => Some(TrayAction::Quit),
+              _ => None,
+            };
+            if let Some(action) = action {
+              if action_tx.send(action).is_err() {
+                return;
+              }
+            }
+          }
+          while let Ok(event) = TrayIconEvent::receiver().try_recv() {
+            let is_click = matches!(
+              event,
+              TrayIconEvent::Click {
+                button: MouseButton::Left,
+                button_state: MouseButtonState::Up,
+                ..
+              }
+            );
+            if is_click && action_tx.send(TrayAction::Show).is_err() {
+              return;
+            }
+          }
+          #[cfg(target_os = "linux")]
+          {
+            let context = gtk::glib::MainContext::default();
+            context.iteration(true);
+          }
+          #[cfg(not(target_os = "linux"))]
+          {
+            match cmd_rx.blocking_recv() {
+              Some(TrayCommand::Sync(menu_state)) => {
+                play_pause.set_text(menu_state.play_pause_label);
+                play_pause.set_enabled(menu_state.play_pause_enabled);
+                next.set_enabled(menu_state.next_enabled);
+                previous.set_enabled(menu_state.previous_enabled);
+                mute.set_text(menu_state.mute_label);
+                mute.set_enabled(menu_state.mute_enabled);
+                quit.set_enabled(!menu_state.quitting);
+              }
+              Some(TrayCommand::Shutdown) | None => return,
+            }
+          }
+        }
+      })
       .map_err(|error| error.to_string())?;
 
-    Ok(Self {
-      _icon: icon,
-      play_pause,
-      next,
-      previous,
-      mute,
-      quit,
-    })
+    match init_rx.recv() {
+      Ok(Ok(())) => Ok(Self {
+        cmd_tx,
+        action_rx: Arc::new(tokio::sync::Mutex::new(action_rx)),
+        #[cfg(target_os = "linux")]
+        glib_context,
+        thread: Some(thread),
+      }),
+      Ok(Err(error)) => {
+        let _ = thread.join();
+        Err(error)
+      }
+      Err(_) => {
+        let _ = thread.join();
+        Err("Tray thread initialization disconnected".to_owned())
+      }
+    }
   }
 
   pub fn sync(&self, view: &SessionView, quitting: bool) {
     let menu = tray_menu_state(view, quitting);
-    self.play_pause.set_text(menu.play_pause_label);
-    self.play_pause.set_enabled(menu.play_pause_enabled);
-    self.next.set_enabled(menu.next_enabled);
-    self.previous.set_enabled(menu.previous_enabled);
-    self.mute.set_text(menu.mute_label);
-    self.mute.set_enabled(menu.mute_enabled);
-    self.quit.set_enabled(!quitting);
+    let _ = self.cmd_tx.send(TrayCommand::Sync(menu));
+    #[cfg(target_os = "linux")]
+    self.glib_context.wakeup();
+  }
+
+  pub fn channel(&self) -> TrayEventChannel {
+    TrayEventChannel {
+      receiver: Arc::clone(&self.action_rx),
+    }
   }
 }
 
-pub fn next_action() -> Option<TrayAction> {
-  #[cfg(target_os = "linux")]
-  {
-    let context = gtk::glib::MainContext::default();
-    while context.pending() {
-      context.iteration(false);
+impl Drop for Tray {
+  fn drop(&mut self) {
+    let _ = self.cmd_tx.send(TrayCommand::Shutdown);
+    #[cfg(target_os = "linux")]
+    self.glib_context.wakeup();
+    if let Some(thread) = self.thread.take() {
+      let _ = thread.join();
     }
   }
-  while let Ok(event) = MenuEvent::receiver().try_recv() {
-    let action = match event.id.as_ref() {
-      PLAY_PAUSE_ID => Some(TrayAction::PlayPause),
-      NEXT_ID => Some(TrayAction::Next),
-      PREVIOUS_ID => Some(TrayAction::Previous),
-      MUTE_ID => Some(TrayAction::Mute),
-      SHOW_ID => Some(TrayAction::Show),
-      QUIT_ID => Some(TrayAction::Quit),
-      _ => None,
-    };
-    if action.is_some() {
-      return action;
-    }
-  }
-  while let Ok(event) = TrayIconEvent::receiver().try_recv() {
-    if matches!(
-      event,
-      TrayIconEvent::Click {
-        button: MouseButton::Left,
-        button_state: MouseButtonState::Up,
-        ..
-      }
-    ) {
-      return Some(TrayAction::Show);
-    }
-  }
-  None
 }
 
-struct TrayMenuState {
-  play_pause_label: &'static str,
-  play_pause_enabled: bool,
-  next_enabled: bool,
-  previous_enabled: bool,
-  mute_label: &'static str,
-  mute_enabled: bool,
-}
-
-fn tray_menu_state(view: &SessionView, quitting: bool) -> TrayMenuState {
+pub(crate) fn tray_menu_state(view: &SessionView, quitting: bool) -> TrayMenuState {
   let active = view.now_playing.as_ref();
   let controls_enabled = active.is_some() && !view.busy && !quitting;
   TrayMenuState {
@@ -148,6 +275,7 @@ fn tray_menu_state(view: &SessionView, quitting: bool) -> TrayMenuState {
       "Mute"
     },
     mute_enabled: controls_enabled,
+    quitting,
   }
 }
 
@@ -249,5 +377,33 @@ mod tests {
     assert!(!menu.next_enabled);
     assert!(!menu.previous_enabled);
     assert!(!menu.mute_enabled);
+  }
+
+  #[test]
+  fn tray_event_channel_implements_equality_and_hash_by_receiver() {
+    use std::hash::{DefaultHasher, Hash, Hasher};
+
+    let (_tx1, rx1) = tokio::sync::mpsc::unbounded_channel();
+    let channel1 = TrayEventChannel {
+      receiver: Arc::new(tokio::sync::Mutex::new(rx1)),
+    };
+    let channel1_clone = channel1.clone();
+
+    let (_tx2, rx2) = tokio::sync::mpsc::unbounded_channel();
+    let channel2 = TrayEventChannel {
+      receiver: Arc::new(tokio::sync::Mutex::new(rx2)),
+    };
+
+    assert_eq!(channel1, channel1_clone);
+    assert_ne!(channel1, channel2);
+
+    let hash_channel = |channel: &TrayEventChannel| {
+      let mut hasher = DefaultHasher::new();
+      channel.hash(&mut hasher);
+      hasher.finish()
+    };
+
+    assert_eq!(hash_channel(&channel1), hash_channel(&channel1_clone));
+    assert_ne!(hash_channel(&channel1), hash_channel(&channel2));
   }
 }

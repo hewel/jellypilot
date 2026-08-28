@@ -21,7 +21,7 @@ use jellypilot_media_server::{
   VideoSeasonEpisodesPage,
 };
 use jellypilot_mpv::playback::{Playable, PlaybackController};
-use jellypilot_mpv::playback_session::{IntroAvailability, PlaybackSession, SessionView};
+use jellypilot_mpv::playback_session::{EffectId, IntroAvailability, PlaybackSession, SessionView};
 use jellypilot_session::{
   IntroSkipMode, JellyfinWebSocket, JellyfinWebSocketEvent, RemoteControlState,
 };
@@ -648,6 +648,8 @@ pub struct State {
   pub playback_session: PlaybackSession,
   pub playback_view: SessionView,
   pub playback_playable: Option<Playable>,
+  pub in_flight_refresh: Option<EffectId>,
+  pub in_flight_command: Option<EffectId>,
   pub adjacent_playables: [Option<Playable>; 2],
   pub playback_remote: RemoteToken,
   pub remote_session: Option<RemoteSessionHandle>,
@@ -725,6 +727,8 @@ impl State {
       playback_playable: None,
       adjacent_playables: [None, None],
       playback_remote,
+      in_flight_refresh: None,
+      in_flight_command: None,
       remote_session: None,
       remote_events: None,
       remote_control_state: RemoteControlState::Unavailable,

@@ -40,8 +40,8 @@ pub fn subscription(state: &State) -> Subscription<Message> {
   if let Some(channel) = state.remote_events.clone() {
     subscriptions.push(Subscription::run_with(channel, remote_event_stream));
   }
-  if state.tray.is_some() {
-    subscriptions.push(time::every(Duration::from_millis(100)).map(|_| Message::TrayPoll));
+  if let Some(tray) = &state.tray {
+    subscriptions.push(Subscription::run_with(tray.channel(), tray_event_stream));
   }
 
   if state.smoke {
@@ -148,6 +148,18 @@ fn remote_event_stream(channel: &RemoteEventChannel) -> impl Stream<Item = Messa
       .await
       .is_err()
     {
+      break;
+    }
+  })
+}
+
+fn tray_event_stream(channel: &crate::tray::TrayEventChannel) -> impl Stream<Item = Message> {
+  let channel = channel.clone();
+  iced::stream::channel(1, async move |mut output| loop {
+    let Some(action) = channel.receiver.lock().await.recv().await else {
+      break;
+    };
+    if output.send(Message::Tray(action)).await.is_err() {
       break;
     }
   })
@@ -345,6 +357,47 @@ mod tests {
         .await;
 
       assert_eq!(messages.len(), 64);
+    });
+  }
+
+  #[test]
+  fn tray_event_stream_stays_silent_when_no_actions_are_pending() {
+    let runtime = tokio::runtime::Builder::new_current_thread()
+      .enable_time()
+      .build()
+      .expect("test runtime should build");
+    runtime.block_on(async {
+      let (_tx, rx) = tokio::sync::mpsc::unbounded_channel();
+      let channel = crate::tray::TrayEventChannel {
+        receiver: std::sync::Arc::new(tokio::sync::Mutex::new(rx)),
+      };
+      let mut stream = std::pin::pin!(tray_event_stream(&channel));
+      let polled = tokio::time::timeout(Duration::from_millis(150), stream.next()).await;
+      assert!(
+        polled.is_err(),
+        "tray stream should produce no messages when no tray actions occur"
+      );
+    });
+  }
+
+  #[test]
+  fn tray_event_stream_yields_on_action() {
+    let runtime = tokio::runtime::Builder::new_current_thread()
+      .enable_time()
+      .build()
+      .expect("test runtime should build");
+    runtime.block_on(async {
+      let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+      let channel = crate::tray::TrayEventChannel {
+        receiver: std::sync::Arc::new(tokio::sync::Mutex::new(rx)),
+      };
+      let mut stream = std::pin::pin!(tray_event_stream(&channel));
+      tx.send(crate::tray::TrayAction::PlayPause).unwrap();
+      let polled = tokio::time::timeout(Duration::from_millis(150), stream.next()).await;
+      assert!(matches!(
+        polled,
+        Ok(Some(Message::Tray(crate::tray::TrayAction::PlayPause)))
+      ));
     });
   }
 
