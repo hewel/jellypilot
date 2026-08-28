@@ -45,6 +45,8 @@ export const RUST_FORMAT_PACKAGES = [
   'jellypilot-session',
   'jellypilot-playback-core',
   'jellypilot-gtk',
+  'jellypilot-ui',
+  'jellypilot-iced',
 ];
 
 export const RUST_CLIPPY_PACKAGES = RUST_FORMAT_PACKAGES.slice(1);

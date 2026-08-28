@@ -1,23 +1,24 @@
 import { expect, test } from '@rstest/core';
 
 import { e2eSetupCommands, getSetupCommands } from '../scripts/task/commands';
-import { CRATE_NAMES, resolveCrate } from '../scripts/task/crates';
+import { CRATE_NAMES, resolveCrates } from '../scripts/task/crates';
 import { parseCli } from '../scripts/task/parse';
 
 test('maps every task crate short name and rejects unknown crates', () => {
   expect(CRATE_NAMES).toEqual({
-    core: 'jellypilot-core',
-    'core-wasm': 'jellypilot-core-wasm',
-    'media-server': 'jellypilot-media-server',
-    mpv: 'jellypilot-mpv',
-    session: 'jellypilot-session',
-    'playback-core': 'jellypilot-playback-core',
-    gtk: 'jellypilot-gtk',
+    core: ['jellypilot-core'],
+    'core-wasm': ['jellypilot-core-wasm'],
+    'media-server': ['jellypilot-media-server'],
+    mpv: ['jellypilot-mpv'],
+    session: ['jellypilot-session'],
+    'playback-core': ['jellypilot-playback-core'],
+    gtk: ['jellypilot-gtk'],
+    iced: ['jellypilot-ui', 'jellypilot-iced'],
   });
-  for (const [shortName, packageName] of Object.entries(CRATE_NAMES)) {
-    expect(resolveCrate(shortName)).toBe(packageName);
+  for (const [shortName, packageNames] of Object.entries(CRATE_NAMES)) {
+    expect(resolveCrates(shortName)).toBe(packageNames);
   }
-  expect(() => resolveCrate('unknown')).toThrow("Unknown crate 'unknown'.");
+  expect(() => resolveCrates('unknown')).toThrow("Unknown crate 'unknown'.");
 });
 
 test('parses Rust clippy task variants', () => {
@@ -30,6 +31,17 @@ test('parses Rust clippy task variants', () => {
     _tag: 'rust',
     action: 'clippy',
     crates: [],
+  });
+});
+
+test('parses iced run variants', () => {
+  expect(parseCli(['iced', 'run'])).toEqual({
+    _tag: 'iced',
+    smoke: false,
+  });
+  expect(parseCli(['iced', 'run', '--smoke'])).toEqual({
+    _tag: 'iced',
+    smoke: true,
   });
 });
 

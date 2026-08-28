@@ -1,0 +1,18 @@
+[package]
+name = "jellypilot-iced"
+description = "Cross-platform iced frontend for JellyPilot"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+version.workspace = true
+
+[features]
+debug = ["iced/hot"]
+
+[dependencies]
+jellypilot-ui = { path = "../crates/jellypilot-ui" }
+iced = { version = "0.14.0", features = ["advanced", "svg", "tokio"] }
+
+[lints]
+workspace = true

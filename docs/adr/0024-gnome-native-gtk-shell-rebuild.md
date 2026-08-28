@@ -1,6 +1,6 @@
 # Rebuild the GTK shell as a GNOME-native interface at runtime parity
 
-_Status: Accepted. Refines ADR 0021 and ADR 0022._
+_Status: Accepted. Refines ADR 0021 and ADR 0022. The frontend endgame and the Rust 1.85 floor are superseded by ADR 0027._
 
 ## Context
 

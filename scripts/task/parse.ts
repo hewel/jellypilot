@@ -33,6 +33,7 @@ export type TaskCommand =
   | { readonly _tag: 'wasm'; readonly action: 'build'; readonly mode?: '--dev' | '--release' }
   | { readonly _tag: 'ffmpeg'; readonly verify: boolean; readonly target?: string }
   | { readonly _tag: 'gtk'; readonly smoke: boolean }
+  | { readonly _tag: 'iced'; readonly smoke: boolean }
   | {
       readonly _tag: 'e2e';
       readonly action: E2eSubcommand;
@@ -225,6 +226,20 @@ export function parseCli(argv: readonly string[]): TaskCommand {
     for (const argument of rest) {
       if (argument === '--smoke') smoke = true;
       else unknownOption('gtk run', argument);
+    }
+    return { _tag: command, smoke };
+  }
+  if (command === 'iced') {
+    const [action, ...rest] = args;
+    if (action !== 'run') {
+      throw new Error(
+        action === undefined ? 'Missing iced command.' : `Unknown iced command: ${action}`,
+      );
+    }
+    let smoke = false;
+    for (const argument of rest) {
+      if (argument === '--smoke') smoke = true;
+      else unknownOption('iced run', argument);
     }
     return { _tag: command, smoke };
   }

@@ -2,11 +2,13 @@
 members = [
   "crates/jellypilot-core",
   "crates/jellypilot-core-wasm",
+  "crates/jellypilot-ui",
   "crates/jellypilot-media-server",
   "crates/jellypilot-mpv",
   "crates/jellypilot-session",
   "crates/jellypilot-playback-core",
   "src-gtk",
+  "src-iced",
   "src-tauri",
 ]
 exclude = [
@@ -19,7 +21,7 @@ resolver = "2"
 edition = "2021"
 license = "MIT"
 repository = "https://github.com/hewel/jellypilot"
-rust-version = "1.85"
+rust-version = "1.88"
 version = "1.5.0"
 
 [workspace.lints.rust]

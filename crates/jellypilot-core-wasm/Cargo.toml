@@ -4,7 +4,7 @@ description = "Typed WebAssembly bindings for jellypilot-core"
 edition = "2021"
 license = "MIT"
 repository = "https://github.com/hewel/jellypilot"
-rust-version = "1.85"
+rust-version = "1.88"
 version = "1.5.0"
 
 [lib]

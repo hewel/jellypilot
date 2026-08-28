@@ -13,7 +13,7 @@ their cheaper focused checks unless their acceptance criterion explicitly crosse
 
 ## Command contract
 
-- `bun run task e2e build` validates Bun 1.3.14, Node 22.11+, Rust 1.85+, builds the WebDriver-only
+- `bun run task e2e build` validates Bun 1.3.14, Node 22.11+, Rust 1.88+, builds the WebDriver-only
   frontend and debug Tauri binary, and writes a hash manifest under `.artifacts/e2e/build/`.
 - `bun run task e2e test` reuses that build and refuses missing, changed, or mismatched output. It
   never rebuilds. Use `--spec e2e/specs/<name>.e2e.ts` for one permanent spec and `--headed` to use

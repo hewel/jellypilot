@@ -273,7 +273,7 @@ impl LibraryBrowseCore {
 
         let valid = start_index == pending.start_index
             && limit == pending.limit
-            && start_index % LIBRARY_BROWSE_PAGE_SIZE == 0
+            && start_index.is_multiple_of(LIBRARY_BROWSE_PAGE_SIZE)
             && start_index <= total_record_count
             && item_count <= limit
             && end_index.is_some_and(|end_index| end_index <= total_record_count)

@@ -5,16 +5,18 @@ export type CrateShortName =
   | 'mpv'
   | 'session'
   | 'playback-core'
-  | 'gtk';
+  | 'gtk'
+  | 'iced';
 
-export const CRATE_NAMES: Readonly<Record<CrateShortName, string>> = {
-  core: 'jellypilot-core',
-  'core-wasm': 'jellypilot-core-wasm',
-  'media-server': 'jellypilot-media-server',
-  mpv: 'jellypilot-mpv',
-  session: 'jellypilot-session',
-  'playback-core': 'jellypilot-playback-core',
-  gtk: 'jellypilot-gtk',
+export const CRATE_NAMES: Readonly<Record<CrateShortName, readonly string[]>> = {
+  core: ['jellypilot-core'],
+  'core-wasm': ['jellypilot-core-wasm'],
+  'media-server': ['jellypilot-media-server'],
+  mpv: ['jellypilot-mpv'],
+  session: ['jellypilot-session'],
+  'playback-core': ['jellypilot-playback-core'],
+  gtk: ['jellypilot-gtk'],
+  iced: ['jellypilot-ui', 'jellypilot-iced'],
 };
 
 export function isCrateShortName(value: string): value is CrateShortName {
@@ -25,7 +27,8 @@ export function isCrateShortName(value: string): value is CrateShortName {
     value === 'mpv' ||
     value === 'session' ||
     value === 'playback-core' ||
-    value === 'gtk'
+    value === 'gtk' ||
+    value === 'iced'
   );
 }
 
@@ -36,7 +39,7 @@ function parseCrate(value: string): CrateShortName {
   return value;
 }
 
-export function resolveCrate(value: string): string {
+export function resolveCrates(value: string): readonly string[] {
   return CRATE_NAMES[parseCrate(value)];
 }
 

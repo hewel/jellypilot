@@ -1,6 +1,6 @@
 # Add a parallel native GTK frontend for Linux
 
-_Status: Accepted. Extends ADR 0018 while retaining the Tauri application during migration._
+_Status: Accepted. Extends ADR 0018 while retaining the Tauri application during migration. The frontend endgame and the Rust 1.85 floor are superseded by ADR 0027._
 
 ## Context
 

@@ -7,6 +7,7 @@ import { TaskCliError } from './task/errors';
 import { runFfmpeg } from './task/ffmpeg';
 import { runGtk } from './task/gtk';
 import { TASK_HELP } from './task/help';
+import { runIced } from './task/iced';
 import { runApi, runPanda, runReview } from './task/misc';
 import { parseCli } from './task/parse';
 import { runFormat, runLint, runTypecheck } from './task/quality';
@@ -37,6 +38,7 @@ const program = Effect.try({
       Match.when({ _tag: 'wasm' }, (task) => runWasm(task)),
       Match.when({ _tag: 'ffmpeg' }, ({ target, verify }) => runFfmpeg({ target, verify })),
       Match.when({ _tag: 'gtk' }, ({ smoke }) => runGtk(smoke)),
+      Match.when({ _tag: 'iced' }, ({ smoke }) => runIced(smoke)),
       Match.when({ _tag: 'e2e' }, ({ action, args, skipSetup }) =>
         runE2e({ action, args, skipSetup }),
       ),

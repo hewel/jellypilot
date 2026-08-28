@@ -7,7 +7,7 @@ import {
   type CommandSpec,
 } from './commands';
 import type { CrateShortName } from './crates';
-import { resolveCrate } from './crates';
+import { resolveCrates } from './crates';
 import { runCommand, runCommands } from './process';
 
 export type RustTask =
@@ -18,7 +18,9 @@ export type RustTask =
     };
 
 function packageArguments(crates: readonly CrateShortName[]): readonly string[] {
-  return crates.flatMap((crate) => ['--package', resolveCrate(crate)]);
+  return crates.flatMap((crate) =>
+    resolveCrates(crate).flatMap((packageName) => ['--package', packageName]),
+  );
 }
 
 function rustCheckCommands(crates: readonly CrateShortName[]): readonly CommandSpec[] {
@@ -54,15 +56,17 @@ function rustTestCommands(crates: readonly CrateShortName[]): readonly CommandSp
   if (crates.length === 0) {
     return [command('cargo', ['test', '--manifest-path', 'Cargo.toml', '--workspace'])];
   }
-  return crates.map((crate) =>
-    command('cargo', [
-      'test',
-      '--manifest-path',
-      'Cargo.toml',
-      '--package',
-      resolveCrate(crate),
-      ...(crate === 'mpv' ? ['--features', 'test-utils'] : []),
-    ]),
+  return crates.flatMap((crate) =>
+    resolveCrates(crate).map((packageName) =>
+      command('cargo', [
+        'test',
+        '--manifest-path',
+        'Cargo.toml',
+        '--package',
+        packageName,
+        ...(crate === 'mpv' ? ['--features', 'test-utils'] : []),
+      ]),
+    ),
   );
 }
 
