@@ -8,7 +8,7 @@ use jellypilot_ui::variants::{ButtonVariant, FieldVariant, SurfaceVariant};
 use crate::app::message::{BrowseMessage, HomeMessage, Message};
 use crate::app::state::{Destination, State};
 
-use super::{browse, detail, home};
+use super::{browse, detail, home, player};
 
 const SIDEBAR_WIDTH: f32 = 248.0;
 
@@ -18,19 +18,40 @@ pub fn view(state: &State) -> Element<'_, Message> {
     Destination::Home => home::view(state),
     Destination::Library { .. } | Destination::Search(_) => browse::view(state),
     Destination::Detail(_) => detail::view(state),
+    Destination::NowPlaying => player::page(state),
   };
   let content = stack![content].width(Fill).height(Fill);
-  let shell = row![sidebar, content]
-    .spacing(TOKENS.spacing.s4)
-    .padding(TOKENS.spacing.s3)
+  let mut content_column = Column::new()
+    .spacing(TOKENS.spacing.s2)
     .width(Fill)
     .height(Fill);
+  if let Some(notice) = visible_notice(state) {
+    content_column = content_column.push(
+      container(text(notice).size(13).color(TOKENS.colors.warning))
+        .padding([8, 12])
+        .width(Fill)
+        .style(|theme| jellypilot_ui::theme::surface_variant(theme, SurfaceVariant::Elevated)),
+    );
+  }
+  content_column = content_column.push(content);
+  let body = row![sidebar, content_column]
+    .spacing(TOKENS.spacing.s4)
+    .width(Fill)
+    .height(Fill);
+  let mut shell = Column::new().spacing(TOKENS.spacing.s3).push(body);
+  if let Some(player_bar) = player::bar(state) {
+    shell = shell.push(player_bar);
+  }
+  let shell = shell.padding(TOKENS.spacing.s3).width(Fill).height(Fill);
 
   container(shell)
     .width(Fill)
     .height(Fill)
     .style(|theme| jellypilot_ui::theme::surface_variant(theme, SurfaceVariant::Filled))
     .into()
+}
+fn visible_notice(state: &State) -> Option<&str> {
+  state.notice.as_deref().or(state.playback_notice.as_deref())
 }
 
 fn sidebar(state: &State) -> container::Container<'_, Message> {
@@ -61,6 +82,13 @@ fn sidebar(state: &State) -> container::Container<'_, Message> {
       Destination::Home,
       state.destination == Destination::Home,
     ));
+  if state.playback_view.now_playing.is_some() {
+    destinations = destinations.push(destination_button(
+      "Now Playing",
+      Destination::NowPlaying,
+      state.destination == Destination::NowPlaying,
+    ));
+  }
   match &state.home.shortcuts {
     LoadState::Idle | LoadState::Loading => {
       destinations = destinations
@@ -146,4 +174,18 @@ fn connection_summary(state: &State) -> Element<'_, Message> {
   ]
   .spacing(TOKENS.spacing.s1)
   .into()
+}
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+
+  #[test]
+  fn general_notice_takes_precedence_over_stale_playback_notice() {
+    let mut state = State::boot(false);
+    state.playback_notice = Some("Playback stopped.".to_owned());
+    state.notice = Some("Library refresh failed.".to_owned());
+
+    assert_eq!(visible_notice(&state), Some("Library refresh failed."));
+  }
 }

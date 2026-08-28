@@ -2,6 +2,7 @@ mod browse;
 mod detail;
 mod home;
 mod login;
+mod player;
 mod shell;
 
 use iced::Element;

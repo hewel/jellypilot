@@ -1,5 +1,7 @@
 use std::collections::HashSet;
+use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
+use std::time::Instant;
 
 use iced::widget::{image, operation};
 use iced::Task;
@@ -14,24 +16,37 @@ use jellypilot_core::browse_model::{
   BrowseEffect, BrowsePageRequest, BrowsePageSettlement, BrowsePreferences, BrowseSource,
   LibraryBrowseView,
 };
-use jellypilot_core::config::{BrowseFilterSettings, LoginPrefill};
+use jellypilot_core::config::{BrowseFilterSettings, LoginPrefill, Settings};
 use jellypilot_core::detail::{
   apply_user_data_update, load_detail_content, load_season_neighbors, season_page_request,
   DetailContent,
 };
-use jellypilot_core::request_gate::{DetailAuxKind, DetailToken, HomeToken, RequestGate};
+use jellypilot_core::request_gate::{
+  DetailAuxKind, DetailToken, HomeToken, RemotePlayToken, RequestGate,
+};
 use jellypilot_media_server::home::{load_home_data, HomeDataResult};
 use jellypilot_media_server::{
   Credentials, JellyfinClient, MediaServerProvider, VideoLibraryItem, VideoLibrarySortDirection,
   VideoSeason, VideoSeasonEpisodesPage, VideoSeasonEpisodesPageRequest, VideoUserDataAction,
   VideoUserDataUpdate, VideoUserDataUpdateRequest,
 };
+use jellypilot_mpv::configured_mpv_args;
+use jellypilot_mpv::playback::{
+  media_item_from_playable, Playable, PlaybackController, PlaybackControllerConfig,
+  PlaybackEndReason, PlaybackError, PlaybackRefreshOutcome, PlaybackRefreshState, PlaybackSnapshot,
+};
+use jellypilot_mpv::playback_session::{
+  AdjacentDirection, ControllerCommand, ControllerSettlement, PlaybackEffect, PlaybackEvent,
+  PlaybackInput, PlaybackIntent, PlaybackNotice,
+};
 use url::Url;
 use zeroize::{Zeroize, Zeroizing};
 
+use crate::tray::{self, TrayAction};
+
 use super::message::{
   BrowseMessage, DetailMessage, HomeMessage, LoginMessage, Message, PasswordSubmission,
-  ProtectedSavedSession, SensitiveSessionPayload, WindowMessage,
+  PlaybackMessage, ProtectedSavedSession, SensitiveSessionPayload, WindowMessage,
 };
 use super::state::{
   ArtworkCell, ArtworkCellState, BrowseArtwork, BrowseViewport, ConnectedIdentity, Destination,
@@ -48,11 +63,11 @@ pub fn update(state: &mut State, message: Message) -> Task<Message> {
       let is_connected = state.connection == ConnectionPhase::Connected;
       if !was_connected && is_connected {
         state.destination = Destination::Home;
+        initialize_playback(state);
         Task::batch([login_task, start_home_load(state)])
+      } else if was_connected && !is_connected {
+        Task::batch([login_task, reset_connected_surface(state)])
       } else {
-        if was_connected && !is_connected {
-          reset_connected_surface(state);
-        }
         login_task
       }
     }
@@ -60,19 +75,639 @@ pub fn update(state: &mut State, message: Message) -> Task<Message> {
     Message::Browse(message) => update_browse(state, message),
     Message::OpenDetail(item) => open_detail(state, item),
     Message::Detail(message) => update_detail(state, message),
+    Message::Playback(message) => update_playback(state, message),
+    Message::TrayPoll => update_tray(state),
   }
 }
 
 fn update_window(state: &mut State, message: WindowMessage) -> Task<Message> {
   match message {
-    WindowMessage::CloseRequested(id) => {
-      cancel_quick_connect(state);
-      iced::window::close(id)
+    WindowMessage::CloseRequested(id) if state.tray.is_some() => {
+      iced::window::set_mode(id, iced::window::Mode::Hidden)
     }
+    WindowMessage::CloseRequested(_) => {
+      state.quit_requested = true;
+      apply_playback_input(state, PlaybackInput::Intent(PlaybackIntent::Quit))
+    }
+    WindowMessage::ShowRequested(id) => id.map_or_else(Task::none, |id| {
+      iced::window::set_mode(id, iced::window::Mode::Windowed).chain(iced::window::gain_focus(id))
+    }),
     WindowMessage::FrameRendered => {
       state.smoke = false;
       iced::exit()
     }
+  }
+}
+
+fn update_tray(state: &mut State) -> Task<Message> {
+  let mut tasks = Vec::new();
+  while let Some(action) = tray::next_action() {
+    let task = match action {
+      TrayAction::PlayPause => {
+        apply_playback_input(state, PlaybackInput::Intent(PlaybackIntent::TogglePaused))
+      }
+      TrayAction::Next => apply_playback_input(
+        state,
+        PlaybackInput::Intent(PlaybackIntent::PlayAdjacent(AdjacentDirection::Next)),
+      ),
+      TrayAction::Previous => apply_playback_input(
+        state,
+        PlaybackInput::Intent(PlaybackIntent::PlayAdjacent(AdjacentDirection::Previous)),
+      ),
+      TrayAction::Mute => {
+        let Some(muted) = state
+          .playback_view
+          .now_playing
+          .as_ref()
+          .map(|playing| playing.muted)
+        else {
+          continue;
+        };
+        apply_playback_input(
+          state,
+          PlaybackInput::Intent(PlaybackIntent::SetMuted(!muted)),
+        )
+      }
+      TrayAction::Show => {
+        iced::window::oldest().map(|id| Message::Window(WindowMessage::ShowRequested(id)))
+      }
+      TrayAction::Quit => {
+        if state.quit_requested {
+          continue;
+        }
+        state.quit_requested = true;
+        sync_tray(state);
+        apply_playback_input(state, PlaybackInput::Intent(PlaybackIntent::Quit))
+      }
+    };
+    tasks.push(task);
+  }
+  Task::batch(tasks)
+}
+
+fn initialize_playback(state: &mut State) {
+  state.playback_session = Default::default();
+  state.playback_view = state.playback_session.view();
+  state.playback_notice = None;
+  state.playback_playable = None;
+  state.adjacent_playables = [None, None];
+  clear_player_artwork(state);
+  state.seek_preview = None;
+  state.volume_preview = None;
+  state.playback_remote = state.request_gate.begin_remote();
+
+  let Some(client) = state.client.as_ref().map(Arc::clone) else {
+    state.playback_controller = None;
+    return;
+  };
+  match PlaybackController::discover(
+    client,
+    playback_controller_config(state.settings.snapshot()),
+  ) {
+    Ok(controller) => {
+      state.playback_controller = Some(Arc::new(tokio::sync::Mutex::new(controller)));
+      let _ = state.playback_session.handle(
+        PlaybackInput::Event(PlaybackEvent::EngineAvailability(true)),
+        Instant::now(),
+      );
+      state.playback_view = state.playback_session.view();
+    }
+    Err(_) => {
+      state.playback_controller = None;
+      state.playback_notice =
+        Some("External playback is unavailable because MPV could not be found.".into());
+    }
+  }
+  sync_tray(state);
+}
+
+fn playback_controller_config(settings: &Settings) -> PlaybackControllerConfig {
+  let config = PlaybackControllerConfig::default().with_extra_args(configured_mpv_args(settings));
+  match settings.mpv_path() {
+    Some(path) => config.with_mpv_path(PathBuf::from(path)),
+    None => config,
+  }
+}
+
+fn update_playback(state: &mut State, message: PlaybackMessage) -> Task<Message> {
+  match message {
+    PlaybackMessage::Intent(intent) => apply_playback_input(state, PlaybackInput::Intent(intent)),
+    PlaybackMessage::Event(event) => apply_playback_input(state, PlaybackInput::Event(*event)),
+    PlaybackMessage::SeekChanged(position) => {
+      state.seek_preview = seek_intent(
+        position,
+        state
+          .playback_view
+          .now_playing
+          .as_ref()
+          .and_then(|view| view.duration_seconds),
+        state.playback_view.now_playing.is_some(),
+      )
+      .and_then(|intent| match intent {
+        PlaybackIntent::Seek(position) => Some(position),
+        _ => None,
+      });
+      Task::none()
+    }
+    PlaybackMessage::SeekReleased => {
+      let Some(position) = state.seek_preview else {
+        return Task::none();
+      };
+      let Some(intent) = seek_intent(
+        position,
+        state
+          .playback_view
+          .now_playing
+          .as_ref()
+          .and_then(|view| view.duration_seconds),
+        state.playback_view.now_playing.is_some(),
+      ) else {
+        return Task::none();
+      };
+      apply_playback_input(state, PlaybackInput::Intent(intent))
+    }
+    PlaybackMessage::VolumeChanged(volume) => {
+      state.volume_preview = volume_intent(volume, state.playback_view.now_playing.is_some())
+        .and_then(|intent| match intent {
+          PlaybackIntent::SetVolume(volume) => Some(volume),
+          _ => None,
+        });
+      Task::none()
+    }
+    PlaybackMessage::VolumeReleased => {
+      let Some(volume) = state.volume_preview else {
+        return Task::none();
+      };
+      let Some(intent) = volume_intent(volume, state.playback_view.now_playing.is_some()) else {
+        return Task::none();
+      };
+      apply_playback_input(state, PlaybackInput::Intent(intent))
+    }
+    PlaybackMessage::ControllerSettled {
+      id,
+      settlement,
+      started,
+      tracks,
+    } => {
+      let started = if matches!(settlement.as_ref(), ControllerSettlement::Started(Ok(_))) {
+        started
+      } else {
+        None
+      };
+      let shutdown = matches!(settlement.as_ref(), ControllerSettlement::Shutdown(_));
+      let previous_playable = state.playback_playable.clone();
+      if let Some(playable) = started.as_deref() {
+        state.playback_playable = Some(playable.clone());
+        state.adjacent_playables = [None, None];
+      }
+      let mut tasks = vec![apply_playback_input(
+        state,
+        PlaybackInput::Event(PlaybackEvent::ControllerSettled {
+          id,
+          settlement: *settlement,
+        }),
+      )];
+      let start_accepted = started.as_deref().is_some_and(|playable| {
+        state
+          .playback_view
+          .now_playing
+          .as_ref()
+          .is_some_and(|view| view.item.item_id == playable_item_id(playable))
+      });
+      if started.is_some() && !start_accepted {
+        state.playback_playable = previous_playable;
+      }
+      if let Some(result) = tracks {
+        tasks.push(apply_playback_input(
+          state,
+          PlaybackInput::Event(PlaybackEvent::TracksSettled { id, result }),
+        ));
+      }
+      if start_accepted {
+        tasks.push(prepare_player_artwork(state));
+      }
+      if shutdown {
+        state.playback_controller = None;
+        let _ = state.playback_session.handle(
+          PlaybackInput::Event(PlaybackEvent::EngineAvailability(false)),
+          Instant::now(),
+        );
+        sync_playback_projection(state);
+      }
+      if !state.playback_view.busy {
+        state.seek_preview = None;
+        state.volume_preview = None;
+      }
+      tasks.push(clear_inactive_playback(state));
+      Task::batch(tasks)
+    }
+    PlaybackMessage::AdjacentSettled {
+      remote,
+      play,
+      id,
+      direction,
+      result,
+      detail,
+    } => {
+      if remote != state.playback_remote
+        || !state.request_gate.is_current_remote(remote)
+        || !state.request_gate.is_current_remote_play(play)
+      {
+        return Task::none();
+      }
+      state.adjacent_playables[adjacent_index(direction)] =
+        result.as_ref().ok().and_then(Option::as_ref).map(|item| {
+          detail
+            .map(|detail| Playable::Detail(*detail))
+            .unwrap_or_else(|| Playable::Media(item.clone()))
+        });
+      apply_playback_input(
+        state,
+        PlaybackInput::Event(PlaybackEvent::AdjacentSettled {
+          id,
+          direction,
+          result,
+        }),
+      )
+    }
+    PlaybackMessage::ArtworkLoaded {
+      session,
+      slot,
+      image_id,
+      result,
+    } => {
+      let session_ok = state.request_gate.is_current_session(session);
+      if state
+        .artwork_binder
+        .settle(slot, ArtworkSurface::PlayerBar, session_ok)
+        != ArtworkSettlement::Apply
+      {
+        return Task::none();
+      }
+      let Some(cell) = state
+        .playback_artwork
+        .as_mut()
+        .filter(|cell| cell.slot == slot && cell.image_id == image_id)
+      else {
+        return Task::none();
+      };
+      match result {
+        Ok(bytes) => {
+          cell.state = ArtworkCellState::Ready;
+          state.artwork_handles.insert(
+            slot,
+            image_id,
+            image::Handle::from_bytes(bytes.as_slice().to_vec()),
+          );
+        }
+        Err(_) => cell.state = ArtworkCellState::Failed,
+      }
+      Task::none()
+    }
+  }
+}
+
+fn seek_intent(position: f64, duration: Option<f64>, active: bool) -> Option<PlaybackIntent> {
+  let duration = duration.filter(|duration| duration.is_finite() && *duration > 0.0)?;
+  (active && position.is_finite()).then(|| PlaybackIntent::Seek(position.clamp(0.0, duration)))
+}
+
+fn volume_intent(volume: f64, active: bool) -> Option<PlaybackIntent> {
+  (active && volume.is_finite()).then(|| PlaybackIntent::SetVolume(volume.clamp(0.0, 100.0)))
+}
+
+fn apply_playback_input(state: &mut State, input: PlaybackInput) -> Task<Message> {
+  let effects = state.playback_session.handle(input, Instant::now());
+  sync_playback_projection(state);
+  let task = execute_playback_effects(state, effects);
+  if quit_may_exit(state) {
+    Task::batch([task, iced::exit()])
+  } else {
+    task
+  }
+}
+
+fn quit_may_exit(state: &State) -> bool {
+  state.quit_requested && state.playback_view.quit_may_proceed
+}
+
+fn sync_playback_projection(state: &mut State) {
+  state.playback_view = state.playback_session.view();
+  state.playback_notice = state
+    .playback_view
+    .notice
+    .as_ref()
+    .map(|notice| match notice {
+      PlaybackNotice::Finished => "Playback finished.".to_owned(),
+      PlaybackNotice::Stopped => "Playback stopped.".to_owned(),
+      PlaybackNotice::Failed(error) => error.to_string(),
+      PlaybackNotice::Warnings(_) => {
+        "Playback is active, but setup or reporting could not be completed.".to_owned()
+      }
+    });
+  sync_tray(state);
+}
+
+fn sync_tray(state: &State) {
+  if let Some(tray) = &state.tray {
+    tray.sync(&state.playback_view, state.quit_requested);
+  }
+}
+
+fn clear_player_artwork(state: &mut State) {
+  if let Some(cell) = state.playback_artwork.take() {
+    state.artwork_handles.remove(cell.slot);
+  }
+}
+
+fn clear_inactive_playback(state: &mut State) -> Task<Message> {
+  if state.playback_view.now_playing.is_some() {
+    return Task::none();
+  }
+  state.playback_playable = None;
+  state.adjacent_playables = [None, None];
+  clear_player_artwork(state);
+  state.seek_preview = None;
+  state.volume_preview = None;
+  if state.destination == Destination::NowPlaying {
+    let task = navigate(state, Destination::Home);
+    state
+      .navigation_stack
+      .retain(|destination| destination != &Destination::NowPlaying);
+    task
+  } else {
+    Task::none()
+  }
+}
+
+fn execute_playback_effects(state: &mut State, effects: Vec<PlaybackEffect>) -> Task<Message> {
+  let adjacent_play = effects
+    .iter()
+    .any(|effect| matches!(effect, PlaybackEffect::LookupAdjacent(_, _)))
+    .then(|| state.request_gate.begin_remote_play());
+  Task::batch(
+    effects
+      .into_iter()
+      .map(|effect| execute_playback_effect(state, effect, adjacent_play)),
+  )
+}
+
+fn execute_playback_effect(
+  state: &mut State,
+  effect: PlaybackEffect,
+  adjacent_play: Option<RemotePlayToken>,
+) -> Task<Message> {
+  match effect {
+    PlaybackEffect::Controller(id, command) => execute_controller_command(state, id, command),
+    PlaybackEffect::LookupAdjacent(id, direction) => {
+      let Some(play) = adjacent_play else {
+        return Task::none();
+      };
+      let Some(client) = state.client.as_ref().map(Arc::clone) else {
+        return Task::done(Message::Playback(PlaybackMessage::AdjacentSettled {
+          remote: state.playback_remote,
+          play,
+          id,
+          direction,
+          result: Err(()),
+          detail: None,
+        }));
+      };
+      let Some(playable) = state.playback_playable.as_ref() else {
+        return Task::none();
+      };
+      let current = media_item_from_playable(playable);
+      let remote = state.playback_remote;
+      Task::perform(
+        async move {
+          let result = match direction {
+            AdjacentDirection::Previous => client.playback().get_previous_episode(&current).await,
+            AdjacentDirection::Next => client.playback().get_next_episode(&current).await,
+          }
+          .map_err(|_| ());
+          let detail = match &result {
+            Ok(Some(item)) => client.library().item_detail(item.id.clone()).await.ok(),
+            Ok(None) | Err(()) => None,
+          };
+          (result, detail)
+        },
+        move |(result, detail)| {
+          Message::Playback(PlaybackMessage::AdjacentSettled {
+            remote,
+            play,
+            id,
+            direction,
+            result,
+            detail: detail.map(Box::new),
+          })
+        },
+      )
+    }
+    PlaybackEffect::FetchIntroRanges(id, _) => Task::done(Message::Playback(
+      PlaybackMessage::Event(Box::new(PlaybackEvent::IntroRangesSettled {
+        id,
+        result: Err(()),
+      })),
+    )),
+  }
+}
+
+fn execute_controller_command(
+  state: &State,
+  id: jellypilot_mpv::playback_session::EffectId,
+  command: ControllerCommand,
+) -> Task<Message> {
+  let started = match &command {
+    ControllerCommand::Start { item, .. } => Some(rich_playable(state, item)),
+    _ => None,
+  };
+  let Some(controller) = state.playback_controller.as_ref().map(Arc::clone) else {
+    let settlement = missing_controller_settlement(&command);
+    return Task::done(Message::Playback(PlaybackMessage::ControllerSettled {
+      id,
+      settlement: Box::new(settlement),
+      started: started.map(Box::new),
+      tracks: None,
+    }));
+  };
+  Task::perform(
+    async move {
+      let mut controller = controller.lock().await;
+      match command {
+        ControllerCommand::Start { item, position } => {
+          let result = controller.play(item, position).await;
+          let tracks = if result.is_ok() {
+            Some(controller.tracks().await)
+          } else {
+            None
+          };
+          (ControllerSettlement::Started(result), tracks)
+        }
+        ControllerCommand::SetPaused(paused) => (
+          ControllerSettlement::Controlled(controller.set_paused(paused).await),
+          None,
+        ),
+        ControllerCommand::Seek(position) => (
+          ControllerSettlement::Controlled(controller.seek(position).await),
+          None,
+        ),
+        ControllerCommand::SetVolume(volume) => (
+          ControllerSettlement::Controlled(controller.set_volume(volume).await),
+          None,
+        ),
+        ControllerCommand::SetMuted(muted) => (
+          ControllerSettlement::Controlled(controller.set_muted(muted).await),
+          None,
+        ),
+        ControllerCommand::SelectAudioTrack(id) => (
+          ControllerSettlement::TrackSelected(controller.select_audio_track(id).await),
+          None,
+        ),
+        ControllerCommand::SelectSubtitleTrack(id) => (
+          ControllerSettlement::TrackSelected(controller.select_subtitle_track(id).await),
+          None,
+        ),
+        ControllerCommand::ShowText { text, duration_ms } => (
+          ControllerSettlement::OsdShown(controller.show_text(&text, duration_ms).await),
+          None,
+        ),
+        ControllerCommand::Stop => (ControllerSettlement::Stopped(controller.stop().await), None),
+        ControllerCommand::Refresh => {
+          let outcome = controller.refresh().await;
+          let client_messages = controller.take_client_messages();
+          (
+            ControllerSettlement::Refreshed {
+              outcome,
+              client_messages,
+            },
+            None,
+          )
+        }
+        ControllerCommand::Shutdown => {
+          let outcome = controller.shutdown().await;
+          (ControllerSettlement::Shutdown(outcome.warnings), None)
+        }
+      }
+    },
+    move |(settlement, tracks)| {
+      Message::Playback(PlaybackMessage::ControllerSettled {
+        id,
+        settlement: Box::new(settlement),
+        started: started.map(Box::new),
+        tracks,
+      })
+    },
+  )
+}
+
+fn missing_controller_settlement(command: &ControllerCommand) -> ControllerSettlement {
+  match command {
+    ControllerCommand::Start { .. } => {
+      ControllerSettlement::Started(Err(PlaybackError::MpvNotFound))
+    }
+    ControllerCommand::Stop => ControllerSettlement::Stopped(Err(PlaybackError::NoActivePlayback)),
+    ControllerCommand::SelectAudioTrack(_) | ControllerCommand::SelectSubtitleTrack(_) => {
+      ControllerSettlement::TrackSelected(Err(PlaybackError::NoActivePlayback))
+    }
+    ControllerCommand::ShowText { .. } => {
+      ControllerSettlement::OsdShown(Err(PlaybackError::NoActivePlayback))
+    }
+    ControllerCommand::Shutdown => ControllerSettlement::Shutdown(Vec::new()),
+    ControllerCommand::Refresh => ControllerSettlement::Refreshed {
+      outcome: PlaybackRefreshOutcome {
+        snapshot: PlaybackSnapshot {
+          now_playing: None,
+          transport: Default::default(),
+        },
+        state: PlaybackRefreshState::Ended(PlaybackEndReason::Disconnected),
+        warnings: Vec::new(),
+      },
+      client_messages: Vec::new(),
+    },
+    ControllerCommand::SetPaused(_)
+    | ControllerCommand::Seek(_)
+    | ControllerCommand::SetVolume(_)
+    | ControllerCommand::SetMuted(_) => {
+      ControllerSettlement::Controlled(Err(PlaybackError::NoActivePlayback))
+    }
+  }
+}
+
+fn rich_playable(state: &State, item: &Playable) -> Playable {
+  let Playable::Media(media) = item else {
+    return item.clone();
+  };
+  state
+    .adjacent_playables
+    .iter()
+    .flatten()
+    .find(|playable| playable_item_id(playable) == media.id)
+    .cloned()
+    .unwrap_or_else(|| item.clone())
+}
+
+fn playable_item_id(playable: &Playable) -> &str {
+  match playable {
+    Playable::Library(item) => &item.id,
+    Playable::Detail(item) => &item.id,
+    Playable::Media(item) => &item.id,
+  }
+}
+
+fn adjacent_index(direction: AdjacentDirection) -> usize {
+  match direction {
+    AdjacentDirection::Previous => 0,
+    AdjacentDirection::Next => 1,
+  }
+}
+
+fn prepare_player_artwork(state: &mut State) -> Task<Message> {
+  let image_id = state
+    .playback_playable
+    .as_ref()
+    .and_then(playback_image_id)
+    .map(str::to_owned);
+  let Some(image_id) = image_id else {
+    clear_player_artwork(state);
+    return Task::none();
+  };
+  let Some(client) = state.client.as_ref().map(Arc::clone) else {
+    return Task::none();
+  };
+  clear_player_artwork(state);
+  let slot = state.artwork_binder.bind_player_bar();
+  state.playback_artwork = Some(ArtworkCell {
+    slot,
+    image_id: image_id.clone(),
+    state: ArtworkCellState::Loading,
+  });
+  let adapter = Arc::clone(&state.artwork_adapter);
+  let session = state.request_gate.current_session();
+  let completion_image_id = image_id.clone();
+  Task::perform(
+    async move { adapter.load(&client, &image_id).await },
+    move |result| {
+      Message::Playback(PlaybackMessage::ArtworkLoaded {
+        session,
+        slot,
+        image_id: completion_image_id,
+        result,
+      })
+    },
+  )
+}
+
+fn playback_image_id(playable: &Playable) -> Option<&str> {
+  match playable {
+    Playable::Library(item) => item
+      .series_poster_image_id
+      .as_deref()
+      .or(item.artwork_image_id.as_deref()),
+    Playable::Detail(item) => item
+      .series_poster_image_id
+      .as_deref()
+      .or(item.artwork_image_id.as_deref()),
+    Playable::Media(_) => None,
   }
 }
 
@@ -122,7 +757,9 @@ fn update_home(state: &mut State, message: HomeMessage) -> Task<Message> {
 fn start_home_load(state: &mut State) -> Task<Message> {
   state.home.begin_load();
   begin_home_artwork_view(state);
-  state.artwork_adapter.cancel_pending();
+  if state.playback_view.now_playing.is_none() {
+    state.artwork_adapter.cancel_pending();
+  }
   let token = state.request_gate.begin_home();
   let Some(client) = state.client.as_ref().map(Arc::clone) else {
     let error = "The connected media server session is unavailable.".to_owned();
@@ -239,12 +876,15 @@ fn push_artwork_spec(
 fn begin_home_artwork_view(state: &mut State) {
   state.artwork_binder.begin_view(ArtworkSurface::Home);
   state.home_artwork.clear();
-  state.artwork_handles.retain_slots(std::iter::empty());
+  let player_slot = state.playback_artwork.as_ref().map(|cell| cell.slot);
+  state.artwork_handles.retain_slots(player_slot);
 }
 
 fn leave_home_view(state: &mut State) {
   state.request_gate.begin_home();
-  state.artwork_adapter.cancel_pending();
+  if state.playback_view.now_playing.is_none() {
+    state.artwork_adapter.cancel_pending();
+  }
   begin_home_artwork_view(state);
 }
 
@@ -293,6 +933,7 @@ fn activate_destination(state: &mut State, previous: Destination) -> Task<Messag
     }
     Destination::Search(_) => start_browse(state),
     Destination::Detail(_) => start_detail_load(state),
+    Destination::NowPlaying => Task::none(),
   }
 }
 
@@ -746,9 +1387,10 @@ fn prepare_detail_artwork(state: &mut State) -> Task<Message> {
       },
     ));
   }
+  let player_slot = state.playback_artwork.as_ref().map(|cell| cell.slot);
   state
     .artwork_handles
-    .retain_slots(state.detail_artwork.slots());
+    .retain_slots(state.detail_artwork.slots().chain(player_slot));
   Task::batch(tasks)
 }
 
@@ -768,12 +1410,15 @@ fn detail_episode_key(item_id: &str) -> String {
 fn begin_detail_artwork_view(state: &mut State) {
   state.artwork_binder.begin_view(ArtworkSurface::Detail);
   state.detail_artwork.clear();
-  state.artwork_handles.retain_slots(std::iter::empty());
+  let player_slot = state.playback_artwork.as_ref().map(|cell| cell.slot);
+  state.artwork_handles.retain_slots(player_slot);
 }
 
 fn leave_detail_view(state: &mut State) {
   state.request_gate.navigate();
-  state.artwork_adapter.cancel_pending();
+  if state.playback_view.now_playing.is_none() {
+    state.artwork_adapter.cancel_pending();
+  }
   begin_detail_artwork_view(state);
   state.detail.clear();
 }
@@ -953,7 +1598,9 @@ fn start_browse(state: &mut State) -> Task<Message> {
       return Task::none();
     }
   };
-  state.artwork_adapter.cancel_pending();
+  if state.playback_view.now_playing.is_none() {
+    state.artwork_adapter.cancel_pending();
+  }
   begin_browse_artwork_view(state);
   sync_browse_view(state);
   Task::batch([
@@ -982,7 +1629,7 @@ fn browse_source(state: &State) -> Option<BrowseSource> {
       session,
       query: query.clone(),
     }),
-    Destination::Home | Destination::Detail(_) => None,
+    Destination::Home | Destination::Detail(_) | Destination::NowPlaying => None,
   }
 }
 
@@ -1137,9 +1784,10 @@ fn prepare_browse_artwork(state: &mut State) -> Task<Message> {
     ));
   }
 
+  let player_slot = state.playback_artwork.as_ref().map(|cell| cell.slot);
   state
     .artwork_handles
-    .retain_slots(state.browse_artwork.slots());
+    .retain_slots(state.browse_artwork.slots().chain(player_slot));
   Task::batch(tasks)
 }
 
@@ -1162,12 +1810,15 @@ fn should_load_next(viewport: BrowseViewport, can_load_next: bool, is_fetching_m
 fn begin_browse_artwork_view(state: &mut State) {
   state.artwork_binder.begin_view(ArtworkSurface::Browse);
   state.browse_artwork.clear();
-  state.artwork_handles.retain_slots(std::iter::empty());
+  let player_slot = state.playback_artwork.as_ref().map(|cell| cell.slot);
+  state.artwork_handles.retain_slots(player_slot);
 }
 
 fn leave_browse_view(state: &mut State) {
   abort_browse_pages(state);
-  state.artwork_adapter.cancel_pending();
+  if state.playback_view.now_playing.is_none() {
+    state.artwork_adapter.cancel_pending();
+  }
   begin_browse_artwork_view(state);
   if let Err(error) = state.browse.reset() {
     state.notice = Some(format!("Could not reset library browsing: {error}"));
@@ -1181,7 +1832,10 @@ fn abort_browse_pages(state: &mut State) {
   }
 }
 
-fn reset_connected_surface(state: &mut State) {
+fn reset_connected_surface(state: &mut State) -> Task<Message> {
+  let playback_task =
+    apply_playback_input(state, PlaybackInput::Intent(PlaybackIntent::Disconnect));
+  state.playback_remote = state.request_gate.begin_remote();
   abort_browse_pages(state);
   state.artwork_adapter.reset_session();
   state.artwork_binder.reset();
@@ -1198,6 +1852,7 @@ fn reset_connected_surface(state: &mut State) {
   }
   state.browse_view = LibraryBrowseView::Inactive;
   state.destination = Destination::Home;
+  playback_task
 }
 
 pub fn update_login(state: &mut State, message: LoginMessage) -> Task<LoginMessage> {
@@ -1237,7 +1892,13 @@ pub fn update_login(state: &mut State, message: LoginMessage) -> Task<LoginMessa
       state.login.remember = !state.login.remember;
       Task::none()
     }
-    LoginMessage::QuickConnectSubmitted => start_quick_connect(state),
+    LoginMessage::QuickConnectSubmitted => {
+      if playback_allows_login(state) {
+        start_quick_connect(state)
+      } else {
+        Task::none()
+      }
+    }
     LoginMessage::QuickConnectCancelled => {
       cancel_quick_connect(state);
       state.connection = ConnectionPhase::SignedOut;
@@ -1246,7 +1907,13 @@ pub fn update_login(state: &mut State, message: LoginMessage) -> Task<LoginMessa
       state.request_gate.disconnect();
       Task::none()
     }
-    LoginMessage::PasswordSubmitted => start_password_login(state),
+    LoginMessage::PasswordSubmitted => {
+      if playback_allows_login(state) {
+        start_password_login(state)
+      } else {
+        Task::none()
+      }
+    }
     LoginMessage::ProfilesLoaded { revision, result } => {
       state.login.profiles_loading = false;
       if revision != state.login.profiles_revision {
@@ -1300,7 +1967,13 @@ pub fn update_login(state: &mut State, message: LoginMessage) -> Task<LoginMessa
       }
       Task::none()
     }
-    LoginMessage::RestoreProfile(key) => start_restore(state, key),
+    LoginMessage::RestoreProfile(key) => {
+      if playback_allows_login(state) {
+        start_restore(state, key)
+      } else {
+        Task::none()
+      }
+    }
     LoginMessage::RestoreFinished {
       session,
       key,
@@ -1378,6 +2051,16 @@ pub fn update_login(state: &mut State, message: LoginMessage) -> Task<LoginMessa
       }
       Task::none()
     }
+  }
+}
+
+fn playback_allows_login(state: &mut State) -> bool {
+  if state.playback_view.can_start_login {
+    true
+  } else {
+    state.login.error =
+      Some("Finishing external playback shutdown. Try again in a moment.".to_owned());
+    false
   }
 }
 
@@ -1768,18 +2451,25 @@ mod tests {
 
   fn test_state() -> State {
     let settings = SettingsStore::default();
+    let mut request_gate = RequestGate::default();
+    let playback_remote = request_gate.begin_remote();
+    let playback_session = jellypilot_mpv::playback_session::PlaybackSession::default();
+    let playback_view = playback_session.view();
     State {
       smoke: false,
       login: LoginState::from_settings(settings.snapshot()),
       settings,
       auth_store: AuthStore::default(),
-      request_gate: Default::default(),
+      request_gate,
       client: None,
       connection: ConnectionPhase::SignedOut,
       connected_identity: None,
       active_profile: None,
       quick_connect_task: None,
       notice: None,
+      playback_notice: None,
+      tray: None,
+      quit_requested: false,
       destination: Destination::Home,
       navigation_stack: Vec::new(),
       detail_items: Default::default(),
@@ -1790,6 +2480,15 @@ mod tests {
       artwork_binder: Default::default(),
       home_artwork: HomeArtwork::default(),
       artwork_handles: Default::default(),
+      playback_artwork: None,
+      playback_controller: None,
+      playback_session,
+      playback_view,
+      playback_playable: None,
+      adjacent_playables: [None, None],
+      playback_remote,
+      seek_preview: None,
+      volume_preview: None,
       browse: Default::default(),
       browse_view: LibraryBrowseView::Inactive,
       browse_artwork: Default::default(),
@@ -2571,6 +3270,310 @@ mod tests {
     assert_eq!(
       restore_state.login.error.as_deref(),
       Some("Could not restore this saved sign-in. Sign in again to refresh it.")
+    );
+  }
+
+  fn playback_snapshot(position: f64) -> PlaybackSnapshot {
+    PlaybackSnapshot {
+      now_playing: Some(jellypilot_mpv::playback::NowPlayingItem {
+        item_id: "episode-1".to_owned(),
+        title: "Pilot".to_owned(),
+        item_type: "Episode".to_owned(),
+        runtime_seconds: Some(1_800.0),
+        start_position_seconds: 0.0,
+        play_method: "Transcode".to_owned(),
+      }),
+      transport: jellypilot_mpv::PlayerState {
+        connected: true,
+        paused: false,
+        muted: false,
+        time_pos: position,
+        duration: 1_800.0,
+        volume: 75.0,
+      },
+    }
+  }
+
+  fn active_playback_state() -> State {
+    let mut state = test_state();
+    let now = Instant::now();
+    state.playback_session.handle(
+      PlaybackInput::Event(PlaybackEvent::EngineAvailability(true)),
+      now,
+    );
+    let effects = state.playback_session.handle(
+      PlaybackInput::Intent(PlaybackIntent::Start {
+        item: Playable::Library(episode("episode-1", 1)),
+        position: jellypilot_mpv::playback::PlaybackStartPosition::Beginning,
+        intro: jellypilot_mpv::playback_session::IntroAvailability {
+          mode: jellypilot_session::IntroSkipMode::Off,
+          skipper_available: false,
+        },
+      }),
+      now,
+    );
+    let (id, _) = controller_effect(effects);
+    state.playback_session.handle(
+      PlaybackInput::Event(PlaybackEvent::ControllerSettled {
+        id,
+        settlement: ControllerSettlement::Started(Ok(jellypilot_mpv::playback::PlaybackOutcome {
+          snapshot: playback_snapshot(10.0),
+          warnings: Vec::new(),
+        })),
+      }),
+      now,
+    );
+    state.playback_view = state.playback_session.view();
+    state
+  }
+
+  fn controller_effect(
+    effects: Vec<PlaybackEffect>,
+  ) -> (
+    jellypilot_mpv::playback_session::EffectId,
+    ControllerCommand,
+  ) {
+    let [PlaybackEffect::Controller(id, command)] = effects.as_slice() else {
+      panic!("expected one controller effect");
+    };
+    (*id, command.clone())
+  }
+
+  #[test]
+  fn seek_release_keeps_committed_preview_while_queued_behind_refresh() {
+    let mut state = active_playback_state();
+    let now = Instant::now();
+    let (refresh_id, command) = controller_effect(
+      state
+        .playback_session
+        .handle(PlaybackInput::Intent(PlaybackIntent::Tick), now),
+    );
+    assert!(matches!(command, ControllerCommand::Refresh));
+    state.playback_view = state.playback_session.view();
+    state.seek_preview = Some(120.0);
+
+    drop(update_playback(&mut state, PlaybackMessage::SeekReleased));
+    drop(update_playback(
+      &mut state,
+      PlaybackMessage::ControllerSettled {
+        id: refresh_id,
+        settlement: Box::new(ControllerSettlement::Refreshed {
+          outcome: PlaybackRefreshOutcome {
+            snapshot: playback_snapshot(10.0),
+            state: PlaybackRefreshState::Active,
+            warnings: Vec::new(),
+          },
+          client_messages: Vec::new(),
+        }),
+        started: None,
+        tracks: None,
+      },
+    ));
+
+    assert_eq!(state.seek_preview, Some(120.0));
+    assert!(state.playback_view.busy);
+  }
+
+  #[test]
+  fn volume_release_keeps_committed_preview_while_queued_behind_refresh() {
+    let mut state = active_playback_state();
+    let now = Instant::now();
+    let (refresh_id, _) = controller_effect(
+      state
+        .playback_session
+        .handle(PlaybackInput::Intent(PlaybackIntent::Tick), now),
+    );
+    state.playback_view = state.playback_session.view();
+    state.volume_preview = Some(42.0);
+
+    drop(update_playback(&mut state, PlaybackMessage::VolumeReleased));
+    drop(update_playback(
+      &mut state,
+      PlaybackMessage::ControllerSettled {
+        id: refresh_id,
+        settlement: Box::new(ControllerSettlement::Refreshed {
+          outcome: PlaybackRefreshOutcome {
+            snapshot: playback_snapshot(10.0),
+            state: PlaybackRefreshState::Active,
+            warnings: Vec::new(),
+          },
+          client_messages: Vec::new(),
+        }),
+        started: None,
+        tracks: None,
+      },
+    ));
+
+    assert_eq!(state.volume_preview, Some(42.0));
+    assert!(state.playback_view.busy);
+  }
+
+  #[test]
+  fn seek_change_during_refresh_keeps_the_draft_and_the_release_commits() {
+    let mut state = active_playback_state();
+    let now = Instant::now();
+    let (_refresh_id, command) = controller_effect(
+      state
+        .playback_session
+        .handle(PlaybackInput::Intent(PlaybackIntent::Tick), now),
+    );
+    assert!(matches!(command, ControllerCommand::Refresh));
+    state.playback_view = state.playback_session.view();
+    assert!(state.playback_view.busy);
+
+    drop(update_playback(
+      &mut state,
+      PlaybackMessage::SeekChanged(5.0),
+    ));
+    assert_eq!(state.seek_preview, Some(5.0));
+
+    drop(update_playback(&mut state, PlaybackMessage::SeekReleased));
+    assert_eq!(state.seek_preview, Some(5.0));
+    assert!(state.playback_view.busy);
+  }
+
+  #[test]
+  fn volume_change_during_refresh_keeps_the_draft_and_the_release_commits() {
+    let mut state = active_playback_state();
+    let now = Instant::now();
+    let (_refresh_id, command) = controller_effect(
+      state
+        .playback_session
+        .handle(PlaybackInput::Intent(PlaybackIntent::Tick), now),
+    );
+    assert!(matches!(command, ControllerCommand::Refresh));
+    state.playback_view = state.playback_session.view();
+    assert!(state.playback_view.busy);
+
+    drop(update_playback(
+      &mut state,
+      PlaybackMessage::VolumeChanged(42.0),
+    ));
+    assert_eq!(state.volume_preview, Some(42.0));
+
+    drop(update_playback(&mut state, PlaybackMessage::VolumeReleased));
+    assert_eq!(state.volume_preview, Some(42.0));
+    assert!(state.playback_view.busy);
+  }
+
+  #[test]
+  fn inactive_now_playing_navigation_activates_and_loads_home() {
+    let mut state = test_state();
+    state.client = Some(Arc::new(JellyfinClient::new()));
+    state.destination = Destination::NowPlaying;
+    state.navigation_stack = vec![Destination::Home];
+
+    drop(clear_inactive_playback(&mut state));
+
+    assert_eq!(state.destination, Destination::Home);
+    assert!(matches!(
+      state.home.continue_watching,
+      jellypilot_core::LoadState::Loading
+    ));
+  }
+
+  #[test]
+  fn player_artwork_rebind_releases_the_previous_decoded_handle() {
+    let mut state = test_state();
+    let old_slot = state.artwork_binder.bind_player_bar();
+    state.playback_artwork = Some(ArtworkCell {
+      slot: old_slot,
+      image_id: "old-image".to_owned(),
+      state: ArtworkCellState::Ready,
+    });
+    state.artwork_handles.insert(
+      old_slot,
+      "old-image".to_owned(),
+      image::Handle::from_bytes(vec![1]),
+    );
+    let mut playable = episode("episode-1", 1);
+    playable.artwork_image_id = Some("new-image".to_owned());
+    state.playback_playable = Some(Playable::Library(playable));
+    state.client = Some(Arc::new(JellyfinClient::new()));
+
+    drop(prepare_player_artwork(&mut state));
+
+    assert!(state.artwork_handles.get(old_slot, "old-image").is_none());
+    assert_ne!(
+      state.playback_artwork.as_ref().map(|cell| cell.slot),
+      Some(old_slot)
+    );
+  }
+
+  #[test]
+  fn clearing_playback_releases_the_current_decoded_player_handle() {
+    let mut state = test_state();
+    let slot = state.artwork_binder.bind_player_bar();
+    state.playback_artwork = Some(ArtworkCell {
+      slot,
+      image_id: "player-image".to_owned(),
+      state: ArtworkCellState::Ready,
+    });
+    state.artwork_handles.insert(
+      slot,
+      "player-image".to_owned(),
+      image::Handle::from_bytes(vec![1]),
+    );
+
+    drop(clear_inactive_playback(&mut state));
+
+    assert!(state.artwork_handles.get(slot, "player-image").is_none());
+    assert!(state.playback_artwork.is_none());
+  }
+
+  #[test]
+  fn seek_intent_is_emitted_for_an_active_timeline_regardless_of_busy() {
+    assert!(matches!(
+      seek_intent(125.0, Some(100.0), true),
+      Some(PlaybackIntent::Seek(100.0))
+    ));
+    assert!(seek_intent(10.0, None, true).is_none());
+    assert!(seek_intent(10.0, Some(100.0), false).is_none());
+    assert!(seek_intent(f64::NAN, Some(100.0), true).is_none());
+  }
+
+  #[test]
+  fn volume_intent_is_emitted_for_active_playback_regardless_of_busy() {
+    assert!(matches!(
+      volume_intent(125.0, true),
+      Some(PlaybackIntent::SetVolume(100.0))
+    ));
+    assert!(volume_intent(50.0, false).is_none());
+    assert!(volume_intent(f64::INFINITY, true).is_none());
+  }
+
+  #[test]
+  fn quit_exit_stays_blocked_until_the_session_cleanup_handshake_settles() {
+    let mut state = test_state();
+    state.quit_requested = true;
+
+    assert!(!quit_may_exit(&state));
+    state.playback_view.quit_may_proceed = true;
+    assert!(quit_may_exit(&state));
+  }
+
+  #[test]
+  fn close_without_an_available_tray_uses_the_quit_cleanup_handshake() {
+    let mut state = test_state();
+
+    drop(update_window(
+      &mut state,
+      WindowMessage::CloseRequested(iced::window::Id::unique()),
+    ));
+
+    assert!(state.quit_requested);
+    assert!(state.playback_view.quit_may_proceed);
+  }
+
+  #[test]
+  fn login_is_gated_by_playback_cleanup_with_fixed_copy() {
+    let mut state = test_state();
+    state.playback_view.can_start_login = false;
+
+    assert!(!playback_allows_login(&mut state));
+    assert_eq!(
+      state.login.error.as_deref(),
+      Some("Finishing external playback shutdown. Try again in a moment.")
     );
   }
 }

@@ -1,6 +1,8 @@
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
+use tokio::sync::Mutex;
+
 use iced::task;
 use iced::widget::image;
 use jellypilot_auth::login::ConnectionPhase;
@@ -9,14 +11,18 @@ use jellypilot_core::artwork_binder::{ArtworkBinder, ArtworkSlot};
 use jellypilot_core::browse_model::{BrowseModel, LibraryBrowseView};
 use jellypilot_core::config::{LoginPrefill, Settings, SettingsStore};
 use jellypilot_core::detail::DetailContent;
-use jellypilot_core::request_gate::RequestGate;
+use jellypilot_core::request_gate::{RemoteToken, RequestGate};
 use jellypilot_core::{LibraryBrowseLoadToken, LoadState};
 use jellypilot_media_server::artwork::{ArtworkAdapter, RawArtworkDecoder};
 use jellypilot_media_server::{
   JellyfinClient, MediaServerProvider, VideoLibraryItem, VideoLibraryShortcut,
   VideoSeasonEpisodesPage,
 };
+use jellypilot_mpv::playback::{Playable, PlaybackController};
+use jellypilot_mpv::playback_session::{PlaybackSession, SessionView};
 use zeroize::Zeroizing;
+
+use crate::tray::Tray;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum LoginMethod {
@@ -140,6 +146,7 @@ pub enum Destination {
   },
   Search(String),
   Detail(String),
+  NowPlaying,
 }
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
@@ -244,13 +251,14 @@ fn ready_items(state: &LoadState<Vec<VideoLibraryItem>>) -> Option<&[VideoLibrar
 }
 
 pub fn has_resume_position(item: &VideoLibraryItem) -> bool {
-  item.resume_position_seconds.is_some_and(|position| {
-    position.is_finite()
-      && position > 0.0
-      && item
-        .runtime_seconds
-        .is_none_or(|runtime| !runtime.is_finite() || runtime <= 0.0 || position < runtime)
-  })
+  !item.played
+    && item.resume_position_seconds.is_some_and(|position| {
+      position.is_finite()
+        && position > 0.0
+        && item
+          .runtime_seconds
+          .is_none_or(|runtime| !runtime.is_finite() || runtime <= 0.0 || position < runtime)
+    })
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -463,6 +471,10 @@ impl<T> HandleRetention<T> {
     self.entries.retain(|slot, _| slots.contains(slot));
   }
 
+  pub fn remove(&mut self, slot: ArtworkSlot) {
+    self.entries.remove(&slot);
+  }
+
   pub fn clear(&mut self) {
     self.entries.clear();
   }
@@ -474,6 +486,7 @@ impl<T> HandleRetention<T> {
 }
 
 pub type ArtworkHandleRetention = HandleRetention<image::Handle>;
+pub type PlaybackControllerHandle = Arc<Mutex<PlaybackController>>;
 
 pub struct State {
   pub smoke: bool,
@@ -487,6 +500,9 @@ pub struct State {
   pub active_profile: Option<SavedProfileKey>,
   pub quick_connect_task: Option<task::Handle>,
   pub notice: Option<String>,
+  pub playback_notice: Option<String>,
+  pub tray: Option<Tray>,
+  pub quit_requested: bool,
   pub destination: Destination,
   pub navigation_stack: Vec<Destination>,
   pub detail_items: HashMap<String, VideoLibraryItem>,
@@ -497,6 +513,15 @@ pub struct State {
   pub artwork_binder: ArtworkBinder,
   pub home_artwork: HomeArtwork,
   pub artwork_handles: ArtworkHandleRetention,
+  pub playback_artwork: Option<ArtworkCell>,
+  pub playback_controller: Option<PlaybackControllerHandle>,
+  pub playback_session: PlaybackSession,
+  pub playback_view: SessionView,
+  pub playback_playable: Option<Playable>,
+  pub adjacent_playables: [Option<Playable>; 2],
+  pub playback_remote: RemoteToken,
+  pub seek_preview: Option<f64>,
+  pub volume_preview: Option<f64>,
   pub browse: BrowseModel,
   pub browse_view: LibraryBrowseView,
   pub browse_artwork: BrowseArtwork,
@@ -518,12 +543,16 @@ impl State {
     };
     let mut login = LoginState::from_settings(settings.snapshot());
     login.error = settings_error;
+    let mut request_gate = RequestGate::default();
+    let playback_remote = request_gate.begin_remote();
+    let playback_session = PlaybackSession::default();
+    let playback_view = playback_session.view();
 
     Self {
       smoke,
       settings,
       auth_store: AuthStore::default(),
-      request_gate: RequestGate::default(),
+      request_gate,
       client: None,
       connection: ConnectionPhase::SignedOut,
       login,
@@ -531,6 +560,9 @@ impl State {
       active_profile: None,
       quick_connect_task: None,
       notice: None,
+      playback_notice: None,
+      tray: None,
+      quit_requested: false,
       destination: Destination::Home,
       navigation_stack: Vec::new(),
       detail_items: HashMap::new(),
@@ -541,6 +573,15 @@ impl State {
       artwork_binder: ArtworkBinder::default(),
       home_artwork: HomeArtwork::default(),
       artwork_handles: ArtworkHandleRetention::default(),
+      playback_artwork: None,
+      playback_controller: None,
+      playback_session,
+      playback_view,
+      playback_playable: None,
+      adjacent_playables: [None, None],
+      playback_remote,
+      seek_preview: None,
+      volume_preview: None,
       browse: BrowseModel::default(),
       browse_view: LibraryBrowseView::Inactive,
       browse_artwork: BrowseArtwork::default(),

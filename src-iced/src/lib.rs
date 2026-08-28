@@ -1,6 +1,7 @@
 //! Cross-platform iced application shell for JellyPilot.
 
 mod app;
+mod tray;
 
 use iced::{window, Size};
 
@@ -15,18 +16,25 @@ pub fn run_smoke() -> iced::Result {
 }
 
 fn run_application(smoke: bool) -> iced::Result {
-  let mut application = iced::application(move || app::boot(smoke), app::update, app::view)
-    .title("JellyPilot")
-    .subscription(app::subscription)
-    .theme(app::theme)
-    .window(window::Settings {
-      size: Size::new(1600.0, 900.0),
-      min_size: Some(Size::new(1280.0, 720.0)),
-      resizable: true,
-      ..window::Settings::default()
-    })
-    .exit_on_close_request(false)
-    .default_font(jellypilot_ui::fonts::INTER_FONT);
+  let mut application = iced::application(
+    move || {
+      let tray = (!smoke).then(|| tray::Tray::new().ok()).flatten();
+      app::boot(smoke, tray)
+    },
+    app::update,
+    app::view,
+  )
+  .title("JellyPilot")
+  .subscription(app::subscription)
+  .theme(app::theme)
+  .window(window::Settings {
+    size: Size::new(1600.0, 900.0),
+    min_size: Some(Size::new(1280.0, 720.0)),
+    resizable: true,
+    ..window::Settings::default()
+  })
+  .exit_on_close_request(false)
+  .default_font(jellypilot_ui::fonts::INTER_FONT);
 
   for font in jellypilot_ui::fonts::fonts() {
     application = application.font(font);

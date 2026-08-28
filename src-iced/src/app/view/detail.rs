@@ -11,12 +11,14 @@ use iced::{
 use jellypilot_core::detail::{detail_metadata, show_detail_metadata, DetailContent};
 use jellypilot_core::LoadState;
 use jellypilot_media_server::{VideoLibraryItem, VideoSeason, VideoShowDetail};
+use jellypilot_mpv::playback::{Playable, PlaybackStartPosition};
+use jellypilot_mpv::playback_session::{IntroAvailability, PlaybackIntent};
+use jellypilot_session::IntroSkipMode;
 use jellypilot_ui::fonts::SPACE_GROTESK_FONT;
-use jellypilot_ui::overlay::{tooltip, TooltipOptions};
 use jellypilot_ui::tokens::TOKENS;
 use jellypilot_ui::variants::{ButtonVariant, SurfaceVariant};
 
-use crate::app::message::{DetailMessage, Message};
+use crate::app::message::{DetailMessage, Message, PlaybackMessage};
 use crate::app::state::{ArtworkCell, ArtworkCellState, State, UserDataActionKind};
 
 const HERO_HEIGHT: f32 = 430.0;
@@ -26,7 +28,6 @@ const EPISODE_ART_WIDTH: f32 = 240.0;
 const EPISODE_ART_HEIGHT: f32 = 135.0;
 const OVERVIEW_TEXT_SIZE: f32 = 15.0;
 const OVERVIEW_COLLAPSED_LINES: f32 = 4.0;
-const PLAYBACK_TOOLTIP: &str = "Playback arrives with the next migration slice";
 const DETAIL_POSTER_KEY: &str = "detail-poster";
 const DETAIL_BACKDROP_KEY: &str = "detail-backdrop";
 
@@ -81,14 +82,24 @@ fn item_hero<'a>(
   item: &'a jellypilot_media_server::VideoItemDetail,
 ) -> Element<'a, Message> {
   let playback_label = if item.can_resume { "Resume" } else { "Play" };
+  let position = if item.can_resume {
+    PlaybackStartPosition::Resume
+  } else {
+    PlaybackStartPosition::Beginning
+  };
   hero(
     state,
-    &item.name,
-    item_metadata(item),
-    item.overview.as_deref(),
-    playback_label.to_owned(),
-    item.played,
-    item.favorite,
+    HeroContent {
+      name: &item.name,
+      metadata: item_metadata(item),
+      overview: item.overview.as_deref(),
+      playback_label: playback_label.to_owned(),
+      playback: item
+        .can_play
+        .then(|| (Playable::Detail(item.clone()), position)),
+      played: item.played,
+      favorite: item.favorite,
+    },
   )
 }
 
@@ -104,14 +115,27 @@ fn show_hero<'a>(state: &'a State, show: &'a VideoShowDetail) -> Element<'a, Mes
       format!("{action} {}", episode_label(episode))
     },
   );
+  let playback = show.next_episode.as_ref().map(|episode| {
+    (
+      Playable::Library(episode.clone()),
+      if has_resume(episode) {
+        PlaybackStartPosition::Resume
+      } else {
+        PlaybackStartPosition::Beginning
+      },
+    )
+  });
   hero(
     state,
-    &show.name,
-    show_metadata(show),
-    show.overview.as_deref(),
-    playback_label,
-    show.played,
-    show.favorite,
+    HeroContent {
+      name: &show.name,
+      metadata: show_metadata(show),
+      overview: show.overview.as_deref(),
+      playback_label,
+      playback,
+      played: show.played,
+      favorite: show.favorite,
+    },
   )
 }
 
@@ -120,27 +144,12 @@ struct HeroContent<'a> {
   metadata: String,
   overview: Option<&'a str>,
   playback_label: String,
+  playback: Option<(Playable, PlaybackStartPosition)>,
   played: bool,
   favorite: bool,
 }
 
-fn hero<'a>(
-  state: &'a State,
-  name: &'a str,
-  metadata: String,
-  overview: Option<&'a str>,
-  playback_label: String,
-  played: bool,
-  favorite: bool,
-) -> Element<'a, Message> {
-  let content = HeroContent {
-    name,
-    metadata,
-    overview,
-    playback_label,
-    played,
-    favorite,
-  };
+fn hero<'a>(state: &'a State, content: HeroContent<'a>) -> Element<'a, Message> {
   responsive(move |bounds| hero_at_width(state, &content, bounds.width))
     .height(Length::Shrink)
     .into()
@@ -247,6 +256,7 @@ fn hero_at_width<'a>(
   copy = copy.push(detail_actions(
     state,
     content.playback_label.clone(),
+    content.playback.clone(),
     content.played,
     content.favorite,
   ));
@@ -268,18 +278,23 @@ fn hero_at_width<'a>(
     .into()
 }
 
-fn detail_actions(
-  state: &State,
+fn detail_actions<'a>(
+  state: &'a State,
   playback_label: String,
+  playback_target: Option<(Playable, PlaybackStartPosition)>,
   played: bool,
   favorite: bool,
-) -> Element<'_, Message> {
+) -> Element<'a, Message> {
   let playback = button(text(playback_label))
     .padding([11, 18])
+    .on_press_maybe(
+      playback_target
+        .filter(|_| !state.playback_view.busy && state.playback_view.engine_available)
+        .map(|(item, position)| playback_message(item, position)),
+    )
     .style(|theme, status| {
       jellypilot_ui::theme::button_variant(theme, status, ButtonVariant::Primary)
     });
-  let playback = tooltip(playback, PLAYBACK_TOOLTIP, TooltipOptions::default());
   let any_busy = state.detail.user_data_busy.is_some();
   let favorite_button = button(text(if favorite {
     "♥ Favorited"
@@ -509,15 +524,23 @@ fn episode_card<'a>(state: &'a State, episode: &'a VideoLibraryItem) -> Element<
   } else {
     "Play"
   };
-  let play = tooltip(
-    button(text(play_label))
-      .padding([8, 13])
-      .style(|theme, status| {
-        jellypilot_ui::theme::button_variant(theme, status, ButtonVariant::Primary)
+  let play = button(text(play_label))
+    .padding([8, 13])
+    .on_press_maybe(
+      (!state.playback_view.busy && state.playback_view.engine_available).then(|| {
+        playback_message(
+          Playable::Library(episode.clone()),
+          if has_resume(episode) {
+            PlaybackStartPosition::Resume
+          } else {
+            PlaybackStartPosition::Beginning
+          },
+        )
       }),
-    PLAYBACK_TOOLTIP,
-    TooltipOptions::default(),
-  );
+    )
+    .style(|theme, status| {
+      jellypilot_ui::theme::button_variant(theme, status, ButtonVariant::Primary)
+    });
   container(
     row![art, copy, play]
       .spacing(TOKENS.spacing.s4)
@@ -527,6 +550,17 @@ fn episode_card<'a>(state: &'a State, episode: &'a VideoLibraryItem) -> Element<
   .width(Fill)
   .style(|theme| jellypilot_ui::theme::surface_variant(theme, SurfaceVariant::Elevated))
   .into()
+}
+
+fn playback_message(item: Playable, position: PlaybackStartPosition) -> Message {
+  Message::Playback(PlaybackMessage::Intent(PlaybackIntent::Start {
+    item,
+    position,
+    intro: IntroAvailability {
+      mode: IntroSkipMode::Off,
+      skipper_available: false,
+    },
+  }))
 }
 
 fn artwork<'a>(
@@ -803,7 +837,10 @@ fn runtime_label(seconds: f64) -> Option<String> {
 }
 
 fn has_resume(item: &VideoLibraryItem) -> bool {
-  !item.played && playback_progress(item).is_some()
+  !item.played
+    && item
+      .resume_position_seconds
+      .is_some_and(|position| position.is_finite() && position > 0.0)
 }
 
 fn episode_label(episode: &VideoLibraryItem) -> String {
@@ -860,6 +897,45 @@ fn limited_people(people: &[String], limit: usize) -> String {
 #[cfg(test)]
 mod tests {
   use super::*;
+
+  fn episode_with_progress(
+    resume_position_seconds: Option<f64>,
+    played_percentage: Option<f64>,
+    played: bool,
+  ) -> VideoLibraryItem {
+    VideoLibraryItem {
+      id: "episode-1".to_owned(),
+      name: "Pilot".to_owned(),
+      item_type: "Episode".to_owned(),
+      production_year: None,
+      runtime_seconds: Some(1_800.0),
+      played,
+      favorite: false,
+      artwork_image_id: None,
+      series_poster_image_id: None,
+      season_number: Some(1),
+      episode_number: Some(1),
+      series_id: Some("show-1".to_owned()),
+      series_name: Some("Show".to_owned()),
+      resume_position_seconds,
+      played_percentage,
+      overview: None,
+    }
+  }
+
+  #[test]
+  fn watched_percentage_without_a_positive_offset_does_not_offer_resume() {
+    let episode = episode_with_progress(None, Some(50.0), false);
+
+    assert!(!has_resume(&episode));
+  }
+
+  #[test]
+  fn finite_positive_offset_on_an_unplayed_episode_offers_resume() {
+    let episode = episode_with_progress(Some(120.0), None, false);
+
+    assert!(has_resume(&episode));
+  }
 
   #[test]
   fn overview_at_the_collapsed_height_is_not_expandable() {

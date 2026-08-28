@@ -9,8 +9,12 @@ use iced::{Subscription, Task, Theme};
 pub use message::Message;
 pub use state::State;
 
-pub fn boot(smoke: bool) -> (State, Task<Message>) {
-  let state = State::boot(smoke);
+pub fn boot(smoke: bool, tray: Option<crate::tray::Tray>) -> (State, Task<Message>) {
+  let mut state = State::boot(smoke);
+  state.tray = tray;
+  if let Some(tray) = &state.tray {
+    tray.sync(&state.playback_view, false);
+  }
   let task = update::load_saved_profiles(&state).map(Message::Login);
   (state, task)
 }

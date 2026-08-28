@@ -9,12 +9,18 @@ use jellypilot_auth::{
 use jellypilot_core::artwork_binder::ArtworkSlot;
 use jellypilot_core::browse_model::BrowsePageSettlement;
 use jellypilot_core::config::LoginPrefill;
-use jellypilot_core::request_gate::{DetailAuxToken, DetailToken, HomeToken, SessionToken};
+use jellypilot_core::request_gate::{
+  DetailAuxToken, DetailToken, HomeToken, RemotePlayToken, RemoteToken, SessionToken,
+};
 use jellypilot_media_server::artwork::{ArtworkBytes, ArtworkError};
 use jellypilot_media_server::home::HomeDataResult;
 use jellypilot_media_server::{
-  JellyfinClient, MediaServerProvider, VideoLibraryItem, VideoLibraryPlayedFilter,
-  VideoLibrarySort, VideoSeasonEpisodesPage, VideoUserDataUpdate,
+  JellyfinClient, MediaItem, MediaServerProvider, VideoItemDetail, VideoLibraryItem,
+  VideoLibraryPlayedFilter, VideoLibrarySort, VideoSeasonEpisodesPage, VideoUserDataUpdate,
+};
+use jellypilot_mpv::playback::{Playable, PlaybackError, TrackInfo};
+use jellypilot_mpv::playback_session::{
+  AdjacentDirection, ControllerSettlement, EffectId, PlaybackEvent, PlaybackIntent,
 };
 
 use zeroize::Zeroize;
@@ -27,6 +33,8 @@ impl std::fmt::Debug for Message {
       Self::Browse(_) => formatter.write_str("Browse"),
       Self::OpenDetail(_) => formatter.write_str("OpenDetail"),
       Self::Detail(_) => formatter.write_str("Detail"),
+      Self::Playback(_) => formatter.write_str("Playback"),
+      Self::TrayPoll => formatter.write_str("TrayPoll"),
     }
   }
 }
@@ -39,10 +47,13 @@ pub enum Message {
   Browse(BrowseMessage),
   OpenDetail(VideoLibraryItem),
   Detail(DetailMessage),
+  Playback(PlaybackMessage),
+  TrayPoll,
 }
 
 #[derive(Clone, Copy, Debug)]
 pub enum WindowMessage {
+  ShowRequested(Option<window::Id>),
   CloseRequested(window::Id),
   FrameRendered,
 }
@@ -110,6 +121,35 @@ pub enum DetailMessage {
   UserDataUpdated {
     token: DetailAuxToken,
     result: Result<VideoUserDataUpdate, String>,
+  },
+  ArtworkLoaded {
+    session: SessionToken,
+    slot: ArtworkSlot,
+    image_id: String,
+    result: Result<ArtworkBytes, ArtworkError>,
+  },
+}
+#[derive(Clone)]
+pub enum PlaybackMessage {
+  Intent(PlaybackIntent),
+  Event(Box<PlaybackEvent>),
+  SeekChanged(f64),
+  SeekReleased,
+  VolumeChanged(f64),
+  VolumeReleased,
+  ControllerSettled {
+    id: EffectId,
+    settlement: Box<ControllerSettlement>,
+    started: Option<Box<Playable>>,
+    tracks: Option<Result<Vec<TrackInfo>, PlaybackError>>,
+  },
+  AdjacentSettled {
+    remote: RemoteToken,
+    play: RemotePlayToken,
+    id: EffectId,
+    direction: AdjacentDirection,
+    result: Result<Option<MediaItem>, ()>,
+    detail: Option<Box<VideoItemDetail>>,
   },
   ArtworkLoaded {
     session: SessionToken,

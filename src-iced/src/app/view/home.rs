@@ -4,11 +4,14 @@ use iced::{Alignment, ContentFit, Element, Fill, Length};
 use jellypilot_core::cards::{card_frame_size, hero_headline, hero_metadata, item_caption};
 use jellypilot_core::LoadState;
 use jellypilot_media_server::VideoLibraryItem;
+use jellypilot_mpv::playback::{Playable, PlaybackStartPosition};
+use jellypilot_mpv::playback_session::{IntroAvailability, PlaybackIntent};
+use jellypilot_session::IntroSkipMode;
 use jellypilot_ui::fonts::SPACE_GROTESK_FONT;
 use jellypilot_ui::tokens::TOKENS;
 use jellypilot_ui::variants::{ButtonVariant, SurfaceVariant};
 
-use crate::app::message::{HomeMessage, Message};
+use crate::app::message::{HomeMessage, Message, PlaybackMessage};
 use crate::app::state::{has_resume_position, ArtworkCell, ArtworkCellState, HomeSection, State};
 
 const POSTER_WIDTH: f32 = 160.0;
@@ -77,20 +80,36 @@ fn featured_hero<'a>(state: &'a State, item: &'a VideoLibraryItem) -> Element<'a
     );
   }
 
-  button(
-    container(
-      row![artwork, copy]
-        .spacing(TOKENS.spacing.s8)
-        .align_y(Alignment::Center),
-    )
-    .padding(TOKENS.spacing.s6)
-    .width(Fill)
-    .style(|theme| jellypilot_ui::theme::surface_variant(theme, SurfaceVariant::Elevated)),
+  let play = button(text(if has_resume_position(item) {
+    "Resume"
+  } else {
+    "Play"
+  }))
+  .padding([10, 16])
+  .on_press_maybe(
+    (!state.playback_view.busy && state.playback_view.engine_available).then(|| play_message(item)),
   )
-  .padding(0)
+  .style(|theme, status| {
+    jellypilot_ui::theme::button_variant(theme, status, ButtonVariant::Primary)
+  });
+  let details = button(text("Details"))
+    .padding([10, 16])
+    .on_press(Message::OpenDetail(item.clone()))
+    .style(|theme, status| {
+      jellypilot_ui::theme::button_variant(theme, status, ButtonVariant::Outlined)
+    });
+  container(
+    row![
+      artwork,
+      copy,
+      column![play, details].spacing(TOKENS.spacing.s2)
+    ]
+    .spacing(TOKENS.spacing.s8)
+    .align_y(Alignment::Center),
+  )
+  .padding(TOKENS.spacing.s6)
   .width(Fill)
-  .on_press(Message::OpenDetail(item.clone()))
-  .style(|theme, status| jellypilot_ui::theme::button_variant(theme, status, ButtonVariant::Text))
+  .style(|theme| jellypilot_ui::theme::surface_variant(theme, SurfaceVariant::Elevated))
   .into()
 }
 
@@ -174,16 +193,59 @@ fn video_card<'a>(
     content = content.push(progress_bar(progress));
   }
 
-  button(
-    container(content)
-      .width(frame_width)
-      .style(|theme| jellypilot_ui::theme::surface_variant(theme, SurfaceVariant::Filled)),
+  if !matches!(section, HomeSection::ContinueWatching | HomeSection::NextUp) {
+    return button(
+      container(content)
+        .width(frame_width)
+        .style(|theme| jellypilot_ui::theme::surface_variant(theme, SurfaceVariant::Filled)),
+    )
+    .padding(0)
+    .width(frame_width)
+    .on_press(Message::OpenDetail(item.clone()))
+    .style(|theme, status| jellypilot_ui::theme::button_variant(theme, status, ButtonVariant::Text))
+    .into();
+  }
+
+  let play = button(text(if has_resume_position(item) {
+    "Resume"
+  } else {
+    "Play"
+  }))
+  .padding([7, 10])
+  .on_press_maybe(
+    (!state.playback_view.busy && state.playback_view.engine_available).then(|| play_message(item)),
   )
-  .padding(0)
+  .style(|theme, status| {
+    jellypilot_ui::theme::button_variant(theme, status, ButtonVariant::Primary)
+  });
+  let details = button(text("Details"))
+    .padding([7, 10])
+    .on_press(Message::OpenDetail(item.clone()))
+    .style(|theme, status| {
+      jellypilot_ui::theme::button_variant(theme, status, ButtonVariant::Text)
+    });
+  container(column![
+    content,
+    row![play, details].spacing(TOKENS.spacing.s1)
+  ])
   .width(frame_width)
-  .on_press(Message::OpenDetail(item.clone()))
-  .style(|theme, status| jellypilot_ui::theme::button_variant(theme, status, ButtonVariant::Text))
+  .style(|theme| jellypilot_ui::theme::surface_variant(theme, SurfaceVariant::Filled))
   .into()
+}
+
+fn play_message(item: &VideoLibraryItem) -> Message {
+  Message::Playback(PlaybackMessage::Intent(PlaybackIntent::Start {
+    item: Playable::Library(item.clone()),
+    position: if has_resume_position(item) {
+      PlaybackStartPosition::Resume
+    } else {
+      PlaybackStartPosition::Beginning
+    },
+    intro: IntroAvailability {
+      mode: IntroSkipMode::Off,
+      skipper_available: false,
+    },
+  }))
 }
 
 fn artwork<'a>(

@@ -23,11 +23,13 @@ pub struct EffectId {
   sequence: u64,
 }
 
+#[derive(Clone)]
 pub enum PlaybackInput {
   Intent(PlaybackIntent),
   Event(PlaybackEvent),
 }
 
+#[derive(Clone)]
 #[allow(clippy::large_enum_variant)]
 pub enum PlaybackIntent {
   Start {
@@ -58,6 +60,7 @@ pub struct IntroAvailability {
   pub skipper_available: bool,
 }
 
+#[derive(Clone)]
 pub enum PlaybackEvent {
   EngineAvailability(bool),
   ControllerSettled {
@@ -79,6 +82,7 @@ pub enum PlaybackEvent {
   },
 }
 
+#[derive(Clone)]
 pub enum ControllerSettlement {
   Started(Result<PlaybackOutcome, PlaybackError>),
   Controlled(Result<PlaybackOutcome, PlaybackError>),
@@ -92,6 +96,7 @@ pub enum ControllerSettlement {
   Shutdown(Vec<PlaybackWarning>),
 }
 
+#[derive(Clone)]
 #[allow(clippy::large_enum_variant)]
 pub enum PlaybackEffect {
   Controller(EffectId, ControllerCommand),
@@ -99,6 +104,7 @@ pub enum PlaybackEffect {
   LookupAdjacent(EffectId, AdjacentDirection),
 }
 
+#[derive(Clone)]
 #[allow(clippy::large_enum_variant)]
 pub enum ControllerCommand {
   Start {
@@ -1410,6 +1416,69 @@ mod tests {
       session.in_flight.as_ref().map(|effect| effect.id),
       Some(busy_id)
     );
+  }
+
+  #[test]
+  fn seek_queued_behind_refresh_reaches_the_controller_after_refresh_settles() {
+    let (mut session, now, _) = start_session(IntroSkipMode::Off);
+    let (refresh_id, command) =
+      controller_effect(session.handle(PlaybackInput::Intent(PlaybackIntent::Tick), now));
+    assert!(matches!(command, ControllerCommand::Refresh));
+
+    let queued = session.handle(PlaybackInput::Intent(PlaybackIntent::Seek(120.0)), now);
+    assert!(queued.is_empty());
+
+    let effects = session.handle(
+      PlaybackInput::Event(PlaybackEvent::ControllerSettled {
+        id: refresh_id,
+        settlement: ControllerSettlement::Refreshed {
+          outcome: PlaybackRefreshOutcome {
+            snapshot: snapshot("episode-1", "Episode", 10.0),
+            state: PlaybackRefreshState::Active,
+            warnings: Vec::new(),
+          },
+          client_messages: Vec::new(),
+        },
+      }),
+      now,
+    );
+    let (_, command) = controller_effect(effects);
+
+    assert!(matches!(
+      command,
+      ControllerCommand::Seek(position) if position == 120.0
+    ));
+  }
+
+  #[test]
+  fn volume_queued_behind_refresh_reaches_the_controller_after_refresh_settles() {
+    let (mut session, now, _) = start_session(IntroSkipMode::Off);
+    let (refresh_id, _) =
+      controller_effect(session.handle(PlaybackInput::Intent(PlaybackIntent::Tick), now));
+
+    let queued = session.handle(PlaybackInput::Intent(PlaybackIntent::SetVolume(42.0)), now);
+    assert!(queued.is_empty());
+
+    let effects = session.handle(
+      PlaybackInput::Event(PlaybackEvent::ControllerSettled {
+        id: refresh_id,
+        settlement: ControllerSettlement::Refreshed {
+          outcome: PlaybackRefreshOutcome {
+            snapshot: snapshot("episode-1", "Episode", 10.0),
+            state: PlaybackRefreshState::Active,
+            warnings: Vec::new(),
+          },
+          client_messages: Vec::new(),
+        },
+      }),
+      now,
+    );
+    let (_, command) = controller_effect(effects);
+
+    assert!(matches!(
+      command,
+      ControllerCommand::SetVolume(volume) if volume == 42.0
+    ));
   }
 
   #[test]
