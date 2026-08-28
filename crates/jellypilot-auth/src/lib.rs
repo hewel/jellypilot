@@ -6,13 +6,13 @@ use std::fmt;
 use std::ops::{Deref, DerefMut};
 use std::sync::{Arc, Mutex};
 
-use jellypilot_media_server::{Credentials, MediaServerProvider, SavedSession};
+use jellypilot_media_server::{Credentials, JellyfinClient, MediaServerProvider, SavedSession};
 use keyring::{Entry, Error as KeyringError};
 use serde::{Deserialize, Serialize};
 use tokio::sync::oneshot;
 use zeroize::{Zeroize, Zeroizing};
 
-const KEYRING_SERVICE: &str = "io.github.hewel.JellyPilot.GtkPreview";
+const KEYRING_SERVICE: &str = "io.github.hewel.JellyPilot";
 const KEYRING_ACCOUNT: &str = "saved-media-server-profiles-v1";
 const STORAGE_VERSION: u32 = 1;
 const WORKER_THREAD_NAME: &str = "jellypilot-secret-service";
@@ -31,19 +31,52 @@ struct StoredProfilesRef<'a> {
 
 struct SensitiveSessions(Vec<SavedSession>);
 
-pub struct SensitiveSavedSession(SavedSession);
+pub struct SensitiveSavedSession(Option<SavedSession>);
+
+impl SensitiveSavedSession {
+    /// Captures the client's current session behind its zeroizing owner.
+    ///
+    /// Callers outside `jellypilot-auth` never own a plain [`SavedSession`]:
+    /// the access token crosses frontend boundaries only through this wrapper.
+    pub fn from_client(client: &JellyfinClient) -> Option<Self> {
+        client.login().get_saved_session().map(Self::new)
+    }
+
+    /// Wraps a session so its access token is zeroized when dropped.
+    fn new(session: SavedSession) -> Self {
+        Self(Some(session))
+    }
+
+    /// Transfers the session into secure storage. This is deliberately
+    /// crate-private so a plain access-token string cannot reach frontends.
+    fn take_for_storage(&mut self) -> SavedSession {
+        self.0
+            .take()
+            .expect("a sensitive saved session can only be stored once")
+    }
+}
 
 impl Deref for SensitiveSavedSession {
     type Target = SavedSession;
 
     fn deref(&self) -> &Self::Target {
-        &self.0
+        self.0
+            .as_ref()
+            .expect("a consumed sensitive saved session cannot be borrowed")
+    }
+}
+
+impl Zeroize for SensitiveSavedSession {
+    fn zeroize(&mut self) {
+        if let Some(session) = &mut self.0 {
+            session.access_token.zeroize();
+        }
     }
 }
 
 impl Drop for SensitiveSavedSession {
     fn drop(&mut self) {
-        self.0.access_token.zeroize();
+        self.zeroize();
     }
 }
 
@@ -122,6 +155,17 @@ trait SecureCredential: Send + Sync {
 
 #[derive(Clone, Eq, PartialEq)]
 pub struct SavedProfileKey(String);
+impl SavedProfileKey {
+    /// Derives the stable secure-storage key for a profile identity.
+    pub fn for_identity(provider: MediaServerProvider, server_url: &str, user_id: &str) -> Self {
+        profile_key_for_identity(provider, server_url, user_id)
+    }
+
+    /// Derives the same stable profile key used by secure storage.
+    pub fn for_session(session: &SavedSession) -> Self {
+        profile_key(session)
+    }
+}
 
 impl fmt::Debug for SavedProfileKey {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -258,9 +302,14 @@ impl AuthStore {
             .await
     }
 
+    /// Saves a session while retaining its zeroizing owner across the async
+    /// boundary and into the secure-storage worker.
+    ///
+    /// A plain [`SavedSession`] access token is exposed only inside that
+    /// worker; frontend tasks always retain [`SensitiveSavedSession`].
     pub async fn save_session(
         &self,
-        session: SavedSession,
+        session: SensitiveSavedSession,
     ) -> Result<(SavedProfileKey, Vec<SavedProfileSummary>), AuthStorageError> {
         self.run(move |store| store.save_session_blocking(session))
             .await
@@ -306,27 +355,16 @@ impl AuthStore {
             .iter()
             .position(|session| profile_key(session) == *key)
             .ok_or(AuthStorageError::ProfileNotFound)?;
-        Ok(SensitiveSavedSession(sessions.remove(position)))
+        Ok(SensitiveSavedSession::new(sessions.remove(position)))
     }
 
     fn save_session_blocking(
         &self,
-        mut session: SavedSession,
+        mut session: SensitiveSavedSession,
     ) -> Result<(SavedProfileKey, Vec<SavedProfileSummary>), AuthStorageError> {
-        let _operation = match self.lock_operation() {
-            Ok(operation) => operation,
-            Err(error) => {
-                session.access_token.zeroize();
-                return Err(error);
-            }
-        };
-        let mut sessions = match self.load_sessions() {
-            Ok(sessions) => sessions,
-            Err(error) => {
-                session.access_token.zeroize();
-                return Err(error);
-            }
-        };
+        let _operation = self.lock_operation()?;
+        let mut sessions = self.load_sessions()?;
+        let session = session.take_for_storage();
         let key = upsert_session(&mut sessions, session);
         self.write_sessions(&sessions)?;
         Ok((key, profile_summaries(&sessions)))
@@ -467,14 +505,21 @@ fn profile_summaries(sessions: &[SavedSession]) -> Vec<SavedProfileSummary> {
 }
 
 fn profile_key(session: &SavedSession) -> SavedProfileKey {
-    let provider = match session.provider {
+    profile_key_for_identity(session.provider, &session.server_url, &session.user_id)
+}
+
+fn profile_key_for_identity(
+    provider: MediaServerProvider,
+    server_url: &str,
+    user_id: &str,
+) -> SavedProfileKey {
+    let provider = match provider {
         MediaServerProvider::Jellyfin => "jellyfin",
         MediaServerProvider::Emby => "emby",
     };
     SavedProfileKey(format!(
-        "{provider}|{}|{}",
-        session.server_url.trim_end_matches('/'),
-        session.user_id
+        "{provider}|{}|{user_id}",
+        server_url.trim_end_matches('/')
     ))
 }
 
@@ -615,7 +660,7 @@ mod tests {
     #[test]
     fn auth_store_round_trips_a_saved_session_through_its_interface() {
         let store = memory_store();
-        let expected = session("secret-token");
+        let expected = SensitiveSavedSession::new(session("secret-token"));
         let (key, _) =
             block_on(store.save_session(expected)).expect("memory adapter should save session");
 
@@ -628,8 +673,9 @@ mod tests {
     #[test]
     fn remove_profile_deletes_the_last_secure_credential() {
         let store = memory_store();
-        let (key, _) = block_on(store.save_session(session("secret-token")))
-            .expect("memory adapter should save session");
+        let (key, _) =
+            block_on(store.save_session(SensitiveSavedSession::new(session("secret-token"))))
+                .expect("memory adapter should save session");
 
         block_on(store.remove_profile(key)).expect("memory adapter should remove session");
 
@@ -653,8 +699,9 @@ mod tests {
     fn remove_profile_reports_secure_deletion_failure() {
         let credential = Arc::new(MemoryCredential::default());
         let store = store_with_credential(credential.clone());
-        let (key, _) = block_on(store.save_session(session("secret-token")))
-            .expect("memory adapter should save session");
+        let (key, _) =
+            block_on(store.save_session(SensitiveSavedSession::new(session("secret-token"))))
+                .expect("memory adapter should save session");
         credential.fail_delete.store(true, Ordering::Relaxed);
 
         let error =

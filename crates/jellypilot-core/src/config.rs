@@ -232,6 +232,16 @@ impl SettingsStore {
         Ok(Self { path, settings })
     }
 
+    /// Creates an isolated store for cross-crate tests.
+    #[cfg(feature = "test-utils")]
+    #[doc(hidden)]
+    pub fn for_test(path: PathBuf) -> Self {
+        Self {
+            path,
+            settings: Settings::default(),
+        }
+    }
+
     pub fn snapshot(&self) -> &Settings {
         &self.settings
     }

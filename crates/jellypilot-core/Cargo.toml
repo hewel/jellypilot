@@ -16,6 +16,7 @@ serde_json = { version = "1.0.149", optional = true }
 [features]
 default = ["native"]
 native = ["dep:dirs", "dep:jellypilot-media-server", "dep:serde", "dep:serde_json"]
+test-utils = []
 
 [lints]
 workspace = true

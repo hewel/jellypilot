@@ -11,8 +11,17 @@ version.workspace = true
 debug = ["iced/hot"]
 
 [dependencies]
+jellypilot-auth = { path = "../crates/jellypilot-auth" }
+jellypilot-core = { path = "../crates/jellypilot-core" }
+jellypilot-media-server = { path = "../crates/jellypilot-media-server" }
 jellypilot-ui = { path = "../crates/jellypilot-ui" }
 iced = { version = "0.14.0", features = ["advanced", "svg", "tokio"] }
+tokio = { version = "1.50.0", features = ["macros", "rt", "sync", "time"] }
+url = "2.5.8"
+zeroize = "1.8.1"
+
+[dev-dependencies]
+jellypilot-core = { path = "../crates/jellypilot-core", features = ["test-utils"] }
 
 [lints]
 workspace = true

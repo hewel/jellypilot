@@ -3400,7 +3400,13 @@ name = "jellypilot-iced"
 version = "1.5.0"
 dependencies = [
  "iced",
+ "jellypilot-auth",
+ "jellypilot-core",
+ "jellypilot-media-server",
  "jellypilot-ui",
+ "tokio",
+ "url",
+ "zeroize",
 ]
 
 [[package]]

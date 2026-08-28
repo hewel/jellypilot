@@ -1,16 +1,8 @@
-//! ADR 0027 cross-platform iced frontend skeleton for JellyPilot.
+//! Cross-platform iced application shell for JellyPilot.
 
-use iced::widget::{container, text};
-use iced::{window, Element, Fill, Subscription, Task, Theme};
+mod app;
 
-struct State {
-  smoke: bool,
-}
-
-#[derive(Debug, Clone, Copy)]
-enum Message {
-  FrameRendered,
-}
+use iced::{window, Size};
 
 /// Starts the cross-platform iced application and blocks until its window closes.
 pub fn run() -> iced::Result {
@@ -23,37 +15,22 @@ pub fn run_smoke() -> iced::Result {
 }
 
 fn run_application(smoke: bool) -> iced::Result {
-  iced::application(move || (State { smoke }, Task::none()), update, view)
+  let mut application = iced::application(move || app::boot(smoke), app::update, app::view)
     .title("JellyPilot")
-    .subscription(subscription)
-    .theme(theme)
-    .run()
-}
+    .subscription(app::subscription)
+    .theme(app::theme)
+    .window(window::Settings {
+      size: Size::new(1600.0, 900.0),
+      min_size: Some(Size::new(1280.0, 720.0)),
+      resizable: true,
+      ..window::Settings::default()
+    })
+    .exit_on_close_request(false)
+    .default_font(jellypilot_ui::fonts::INTER_FONT);
 
-fn update(state: &mut State, message: Message) -> Task<Message> {
-  match message {
-    Message::FrameRendered => {
-      state.smoke = false;
-      iced::exit()
-    }
+  for font in jellypilot_ui::fonts::fonts() {
+    application = application.font(font);
   }
-}
 
-fn subscription(state: &State) -> Subscription<Message> {
-  if state.smoke {
-    window::frames().map(|_| Message::FrameRendered)
-  } else {
-    Subscription::none()
-  }
-}
-
-fn theme(_state: &State) -> Theme {
-  jellypilot_ui::theme::theme()
-}
-
-fn view(_state: &State) -> Element<'_, Message> {
-  container(text("JellyPilot"))
-    .width(Fill)
-    .height(Fill)
-    .into()
+  application.run()
 }

@@ -23,6 +23,7 @@ pub enum ConnectionPhase {
     Failed,
 }
 
+#[derive(Clone)]
 pub enum LoginEvent {
     SavedProfiles(Result<Vec<SavedProfileSummary>, AuthStorageError>),
     SavedSessionStored {
@@ -49,6 +50,7 @@ pub enum LoginEvent {
     },
 }
 
+#[derive(Clone)]
 pub enum LoginError {
     AuthStorage(AuthStorageError),
     Request(String),

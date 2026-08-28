@@ -473,4 +473,23 @@ mod tests {
             OutsidePressAction::PublishDismissal
         );
     }
+
+    #[test]
+    fn outside_touch_press_publishes_dismissal_without_capture() {
+        let event = Event::Touch(iced::touch::Event::FingerPressed {
+            id: iced::touch::Finger(2),
+            position: Point::new(20.0, 20.0),
+        });
+
+        assert_eq!(
+            outside_press_action(
+                true,
+                &event,
+                mouse::Cursor::Unavailable,
+                Rectangle::new(Point::new(100.0, 100.0), Size::new(80.0, 60.0)),
+                Rectangle::new(Point::new(100.0, 60.0), Size::new(40.0, 24.0)),
+            ),
+            OutsidePressAction::PublishDismissal
+        );
+    }
 }
