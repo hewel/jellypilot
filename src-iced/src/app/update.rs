@@ -15,21 +15,28 @@ use jellypilot_core::browse_model::{
   LibraryBrowseView,
 };
 use jellypilot_core::config::{BrowseFilterSettings, LoginPrefill};
-use jellypilot_core::request_gate::{HomeToken, RequestGate};
+use jellypilot_core::detail::{
+  apply_user_data_update, load_detail_content, load_season_neighbors, season_page_request,
+  DetailContent,
+};
+use jellypilot_core::request_gate::{DetailAuxKind, DetailToken, HomeToken, RequestGate};
 use jellypilot_media_server::home::{load_home_data, HomeDataResult};
 use jellypilot_media_server::{
   Credentials, JellyfinClient, MediaServerProvider, VideoLibraryItem, VideoLibrarySortDirection,
+  VideoSeason, VideoSeasonEpisodesPage, VideoSeasonEpisodesPageRequest, VideoUserDataAction,
+  VideoUserDataUpdate, VideoUserDataUpdateRequest,
 };
 use url::Url;
 use zeroize::{Zeroize, Zeroizing};
 
 use super::message::{
-  BrowseMessage, HomeMessage, LoginMessage, Message, PasswordSubmission, ProtectedSavedSession,
-  SensitiveSessionPayload, WindowMessage,
+  BrowseMessage, DetailMessage, HomeMessage, LoginMessage, Message, PasswordSubmission,
+  ProtectedSavedSession, SensitiveSessionPayload, WindowMessage,
 };
 use super::state::{
   ArtworkCell, ArtworkCellState, BrowseArtwork, BrowseViewport, ConnectedIdentity, Destination,
-  HomeArtwork, HomeSection, HomeState, LoginMethod, QuickConnectState, State,
+  DetailArtwork, DetailState, HomeArtwork, HomeSection, HomeState, LoginMethod, QuickConnectState,
+  State, UserDataActionKind,
 };
 
 pub fn update(state: &mut State, message: Message) -> Task<Message> {
@@ -51,6 +58,8 @@ pub fn update(state: &mut State, message: Message) -> Task<Message> {
     }
     Message::Home(message) => update_home(state, message),
     Message::Browse(message) => update_browse(state, message),
+    Message::OpenDetail(item) => open_detail(state, item),
+    Message::Detail(message) => update_detail(state, message),
   }
 }
 
@@ -240,23 +249,533 @@ fn leave_home_view(state: &mut State) {
 }
 
 fn navigate(state: &mut State, destination: Destination) -> Task<Message> {
-  let was_home = state.destination == Destination::Home;
-  let opens_home = destination == Destination::Home;
-  if was_home && !opens_home {
-    leave_home_view(state);
-  } else if !was_home && opens_home {
-    leave_browse_view(state);
+  let previous = state.destination.clone();
+  if !state.navigate_to(destination) {
+    return Task::none();
   }
-  if matches!(destination, Destination::Library { .. }) {
-    state.search_input.clear();
-  }
-  state.destination = destination;
+  activate_destination(state, previous)
+}
 
-  if opens_home {
-    start_home_load(state)
-  } else {
-    start_browse(state)
+fn open_detail(state: &mut State, item: VideoLibraryItem) -> Task<Message> {
+  let item_id = item.id.clone();
+  state.detail_items.insert(item_id.clone(), item);
+  navigate(state, Destination::Detail(item_id))
+}
+
+fn navigate_back(state: &mut State) -> Task<Message> {
+  let previous = state.destination.clone();
+  if !state.navigate_back() {
+    return Task::none();
   }
+  activate_destination(state, previous)
+}
+
+fn activate_destination(state: &mut State, previous: Destination) -> Task<Message> {
+  if previous == Destination::Home && state.destination != Destination::Home {
+    leave_home_view(state);
+  } else if matches!(
+    previous,
+    Destination::Library { .. } | Destination::Search(_)
+  ) && !matches!(
+    state.destination,
+    Destination::Library { .. } | Destination::Search(_)
+  ) {
+    leave_browse_view(state);
+  } else if matches!(previous, Destination::Detail(_)) && previous != state.destination {
+    leave_detail_view(state);
+  }
+
+  match &state.destination {
+    Destination::Home => start_home_load(state),
+    Destination::Library { .. } => {
+      state.search_input.clear();
+      start_browse(state)
+    }
+    Destination::Search(_) => start_browse(state),
+    Destination::Detail(_) => start_detail_load(state),
+  }
+}
+
+const DETAIL_FAILURE: &str = "Could not load this item. Try again.";
+const SEASON_FAILURE: &str = "Could not load this season. Try again.";
+const USER_DATA_FAILURE: &str = "Could not update user data. Try again.";
+
+fn update_detail(state: &mut State, message: DetailMessage) -> Task<Message> {
+  match message {
+    DetailMessage::Back => navigate_back(state),
+    DetailMessage::Retry => start_detail_load(state),
+    DetailMessage::RetryNeighbors => start_detail_followup(state),
+    DetailMessage::RetrySeason => start_selected_season_load(state),
+    DetailMessage::OverviewToggled => {
+      state.detail.overview_expanded = !state.detail.overview_expanded;
+      Task::none()
+    }
+    DetailMessage::SeasonSelected(season_id) => {
+      if !select_season(&mut state.detail, &season_id) {
+        return Task::none();
+      }
+      start_selected_season_load(state)
+    }
+    DetailMessage::FavoriteToggled => start_user_data_update(state, UserDataActionKind::Favorite),
+    DetailMessage::PlayedToggled => start_user_data_update(state, UserDataActionKind::Played),
+    DetailMessage::Loaded { token, result } => {
+      if !settle_detail_load(&mut state.detail, &mut state.request_gate, token, *result) {
+        return Task::none();
+      }
+      let followup = start_detail_followup(state);
+      Task::batch([followup, prepare_detail_artwork(state)])
+    }
+    DetailMessage::SeasonLoaded { token, result } => {
+      if !settle_season_load(&mut state.detail, &mut state.request_gate, token, result) {
+        return Task::none();
+      }
+      prepare_detail_artwork(state)
+    }
+    DetailMessage::NeighborsLoaded { token, result } => {
+      if !state.request_gate.finish_detail_aux(token) {
+        return Task::none();
+      }
+      state.detail.season_neighbors = match result {
+        Ok(items) => jellypilot_core::LoadState::Ready(items),
+        Err(_) => jellypilot_core::LoadState::Failed(SEASON_FAILURE.to_owned()),
+      };
+      prepare_detail_artwork(state)
+    }
+    DetailMessage::UserDataUpdated { token, result } => {
+      let Some(update) =
+        settle_user_data_update(&mut state.detail, &mut state.request_gate, token, result)
+      else {
+        return Task::none();
+      };
+      if let Some(update) = update {
+        if let Some(item) = state.detail_items.get_mut(&update.item_id) {
+          item.played = update.played;
+          item.favorite = update.favorite;
+        }
+      }
+      Task::none()
+    }
+    DetailMessage::ArtworkLoaded {
+      session,
+      slot,
+      image_id,
+      result,
+    } => {
+      let session_ok = state.request_gate.is_current_session(session);
+      if state
+        .artwork_binder
+        .settle(slot, ArtworkSurface::Detail, session_ok)
+        != ArtworkSettlement::Apply
+      {
+        return Task::none();
+      }
+      let Some(cell) = state.detail_artwork.cell_mut(slot, &image_id) else {
+        return Task::none();
+      };
+      match result {
+        Ok(bytes) => {
+          cell.state = ArtworkCellState::Ready;
+          state.artwork_handles.insert(
+            slot,
+            image_id,
+            image::Handle::from_bytes(bytes.as_slice().to_vec()),
+          );
+        }
+        Err(_) => cell.state = ArtworkCellState::Failed,
+      }
+      Task::none()
+    }
+  }
+}
+
+fn start_detail_load(state: &mut State) -> Task<Message> {
+  let Destination::Detail(item_id) = &state.destination else {
+    return Task::none();
+  };
+  let item_id = item_id.clone();
+  let Some(item) = state.detail_items.get(&item_id).cloned() else {
+    state.detail.content = jellypilot_core::LoadState::Failed(DETAIL_FAILURE.to_owned());
+    return Task::none();
+  };
+  state.detail.clear();
+  begin_detail_artwork_view(state);
+  state.request_gate.set_detail_item(Some(item_id));
+  let token = state.request_gate.begin_detail();
+  state.detail.content = jellypilot_core::LoadState::Loading;
+  let Some(client) = state.client.as_ref().map(Arc::clone) else {
+    state.detail.content = jellypilot_core::LoadState::Failed(DETAIL_FAILURE.to_owned());
+    return Task::none();
+  };
+
+  Task::perform(
+    async move {
+      load_detail_content(client, item)
+        .await
+        .map_err(|_| DETAIL_FAILURE.to_owned())
+    },
+    move |result| {
+      Message::Detail(DetailMessage::Loaded {
+        token,
+        result: Box::new(result),
+      })
+    },
+  )
+}
+
+fn settle_detail_load(
+  detail: &mut DetailState,
+  gate: &mut RequestGate,
+  token: DetailToken,
+  result: Result<DetailContent, String>,
+) -> bool {
+  if !gate.finish_detail(token) {
+    return false;
+  }
+  detail.content = match result {
+    Ok(content) => jellypilot_core::LoadState::Ready(content),
+    Err(_) => jellypilot_core::LoadState::Failed(DETAIL_FAILURE.to_owned()),
+  };
+  true
+}
+
+fn start_detail_followup(state: &mut State) -> Task<Message> {
+  match &state.detail.content {
+    jellypilot_core::LoadState::Ready(DetailContent::Item(item)) => {
+      let request = match (
+        item.series_id.as_ref(),
+        item.season_number,
+        item.item_type.eq_ignore_ascii_case("episode"),
+      ) {
+        (Some(series_id), Some(season_number), true) => {
+          Some((item.id.clone(), series_id.clone(), season_number))
+        }
+        _ => None,
+      };
+      let Some((item_id, series_id, season_number)) = request else {
+        state.detail.season_neighbors = jellypilot_core::LoadState::Idle;
+        return Task::none();
+      };
+      let Some(token) = state
+        .request_gate
+        .begin_detail_aux(DetailAuxKind::SeasonNeighbors)
+      else {
+        return Task::none();
+      };
+      state.detail.season_neighbors = jellypilot_core::LoadState::Loading;
+      let Some(client) = state.client.as_ref().map(Arc::clone) else {
+        state.detail.season_neighbors =
+          jellypilot_core::LoadState::Failed(SEASON_FAILURE.to_owned());
+        return Task::none();
+      };
+      Task::perform(
+        async move {
+          load_season_neighbors(client, item_id, series_id, season_number)
+            .await
+            .map_err(|_| SEASON_FAILURE.to_owned())
+        },
+        move |result| Message::Detail(DetailMessage::NeighborsLoaded { token, result }),
+      )
+    }
+    jellypilot_core::LoadState::Ready(DetailContent::Show(show)) => {
+      state.detail.selected_season_id = initial_season(show).map(|season| season.id.clone());
+      start_selected_season_load(state)
+    }
+    jellypilot_core::LoadState::Idle
+    | jellypilot_core::LoadState::Loading
+    | jellypilot_core::LoadState::Failed(_) => Task::none(),
+  }
+}
+
+fn initial_season(show: &jellypilot_media_server::VideoShowDetail) -> Option<&VideoSeason> {
+  show
+    .next_episode
+    .as_ref()
+    .and_then(|episode| episode.season_number)
+    .and_then(|season_number| {
+      show
+        .seasons
+        .iter()
+        .find(|season| season.season_number == Some(season_number))
+    })
+    .or_else(|| show.seasons.first())
+}
+
+fn select_season(detail: &mut DetailState, season_id: &str) -> bool {
+  let jellypilot_core::LoadState::Ready(DetailContent::Show(show)) = &detail.content else {
+    return false;
+  };
+  if detail.selected_season_id.as_deref() == Some(season_id)
+    || !show.seasons.iter().any(|season| season.id == season_id)
+  {
+    return false;
+  }
+  detail.selected_season_id = Some(season_id.to_owned());
+  true
+}
+
+fn selected_season_request(detail: &DetailState) -> Option<VideoSeasonEpisodesPageRequest> {
+  let jellypilot_core::LoadState::Ready(DetailContent::Show(show)) = &detail.content else {
+    return None;
+  };
+  let selected_id = detail.selected_season_id.as_deref()?;
+  let season = show
+    .seasons
+    .iter()
+    .find(|season| season.id == selected_id)?;
+  Some(season_page_request(&show.id, season, 0))
+}
+
+fn start_selected_season_load(state: &mut State) -> Task<Message> {
+  let Some(request) = selected_season_request(&state.detail) else {
+    state.detail.season_episodes = jellypilot_core::LoadState::Idle;
+    return Task::none();
+  };
+  let token = state.request_gate.begin_detail();
+  state.detail.season_episodes = jellypilot_core::LoadState::Loading;
+  let Some(client) = state.client.as_ref().map(Arc::clone) else {
+    state.detail.season_episodes = jellypilot_core::LoadState::Failed(SEASON_FAILURE.to_owned());
+    return Task::none();
+  };
+  Task::perform(
+    async move {
+      client
+        .library()
+        .season_episodes_page(request)
+        .await
+        .map_err(|_| SEASON_FAILURE.to_owned())
+    },
+    move |result| Message::Detail(DetailMessage::SeasonLoaded { token, result }),
+  )
+}
+
+fn settle_season_load(
+  detail: &mut DetailState,
+  gate: &mut RequestGate,
+  token: DetailToken,
+  result: Result<VideoSeasonEpisodesPage, String>,
+) -> bool {
+  if !gate.finish_detail(token) {
+    return false;
+  }
+  detail.season_episodes = match result {
+    Ok(page) => jellypilot_core::LoadState::Ready(page),
+    Err(_) => jellypilot_core::LoadState::Failed(SEASON_FAILURE.to_owned()),
+  };
+  true
+}
+
+fn start_user_data_update(state: &mut State, kind: UserDataActionKind) -> Task<Message> {
+  if state.detail.user_data_busy.is_some() {
+    return Task::none();
+  }
+  let Some((item_id, played, favorite)) = detail_user_data(&state.detail.content) else {
+    return Task::none();
+  };
+  let action = match kind {
+    UserDataActionKind::Favorite if favorite => VideoUserDataAction::Unfavorite,
+    UserDataActionKind::Favorite => VideoUserDataAction::Favorite,
+    UserDataActionKind::Played if played => VideoUserDataAction::MarkUnplayed,
+    UserDataActionKind::Played => VideoUserDataAction::MarkPlayed,
+  };
+  let Some(token) = state.request_gate.begin_detail_aux(DetailAuxKind::UserData) else {
+    return Task::none();
+  };
+  let Some(client) = state.client.as_ref().map(Arc::clone) else {
+    state.detail.user_data_error = Some(USER_DATA_FAILURE.to_owned());
+    return Task::none();
+  };
+  state.detail.user_data_busy = Some(kind);
+  state.detail.user_data_error = None;
+  let request = VideoUserDataUpdateRequest { item_id, action };
+  Task::perform(
+    async move {
+      client
+        .library()
+        .update_user_data(request)
+        .await
+        .map_err(|_| USER_DATA_FAILURE.to_owned())
+    },
+    move |result| Message::Detail(DetailMessage::UserDataUpdated { token, result }),
+  )
+}
+
+fn detail_user_data(
+  detail: &jellypilot_core::LoadState<DetailContent>,
+) -> Option<(String, bool, bool)> {
+  match detail {
+    jellypilot_core::LoadState::Ready(DetailContent::Item(item)) => {
+      Some((item.id.clone(), item.played, item.favorite))
+    }
+    jellypilot_core::LoadState::Ready(DetailContent::Show(show)) => {
+      Some((show.id.clone(), show.played, show.favorite))
+    }
+    jellypilot_core::LoadState::Idle
+    | jellypilot_core::LoadState::Loading
+    | jellypilot_core::LoadState::Failed(_) => None,
+  }
+}
+
+fn settle_user_data_update(
+  detail: &mut DetailState,
+  gate: &mut RequestGate,
+  token: jellypilot_core::request_gate::DetailAuxToken,
+  result: Result<VideoUserDataUpdate, String>,
+) -> Option<Option<VideoUserDataUpdate>> {
+  if !gate.finish_detail_aux(token) {
+    return None;
+  }
+  detail.user_data_busy = None;
+  match result {
+    Ok(update) if apply_user_data_update(&mut detail.content, &update) => {
+      detail.user_data_error = None;
+      Some(Some(update))
+    }
+    Ok(_) | Err(_) => {
+      detail.user_data_error = Some(USER_DATA_FAILURE.to_owned());
+      Some(None)
+    }
+  }
+}
+
+const DETAIL_POSTER_KEY: &str = "detail-poster";
+const DETAIL_BACKDROP_KEY: &str = "detail-backdrop";
+
+struct DetailArtworkSpec {
+  key: String,
+  image_id: String,
+}
+
+fn prepare_detail_artwork(state: &mut State) -> Task<Message> {
+  let mut specs = Vec::new();
+  match &state.detail.content {
+    jellypilot_core::LoadState::Ready(DetailContent::Item(item)) => {
+      push_detail_artwork(
+        &mut specs,
+        DETAIL_POSTER_KEY.to_owned(),
+        &item.artwork_image_id,
+      );
+      push_detail_artwork(
+        &mut specs,
+        DETAIL_BACKDROP_KEY.to_owned(),
+        &item.backdrop_image_id,
+      );
+      if let jellypilot_core::LoadState::Ready(neighbors) = &state.detail.season_neighbors {
+        for episode in neighbors {
+          push_detail_artwork(
+            &mut specs,
+            detail_episode_key(&episode.id),
+            &episode.artwork_image_id,
+          );
+        }
+      }
+    }
+    jellypilot_core::LoadState::Ready(DetailContent::Show(show)) => {
+      push_detail_artwork(
+        &mut specs,
+        DETAIL_POSTER_KEY.to_owned(),
+        &show.artwork_image_id,
+      );
+      push_detail_artwork(
+        &mut specs,
+        DETAIL_BACKDROP_KEY.to_owned(),
+        &show.backdrop_image_id,
+      );
+      if let Some(next) = &show.next_episode {
+        push_detail_artwork(
+          &mut specs,
+          detail_episode_key(&next.id),
+          &next.artwork_image_id,
+        );
+      }
+      if let jellypilot_core::LoadState::Ready(page) = &state.detail.season_episodes {
+        for episode in &page.episodes {
+          push_detail_artwork(
+            &mut specs,
+            detail_episode_key(&episode.id),
+            &episode.artwork_image_id,
+          );
+        }
+      }
+    }
+    jellypilot_core::LoadState::Idle
+    | jellypilot_core::LoadState::Loading
+    | jellypilot_core::LoadState::Failed(_) => {}
+  }
+
+  let retained_keys = specs
+    .iter()
+    .map(|spec| spec.key.as_str())
+    .collect::<HashSet<_>>();
+  state.detail_artwork.retain_keys(&retained_keys);
+  drop(retained_keys);
+  let session = state.request_gate.current_session();
+  let Some(client) = state.client.as_ref().map(Arc::clone) else {
+    return Task::none();
+  };
+  let adapter = Arc::clone(&state.artwork_adapter);
+  let mut tasks = Vec::new();
+  for spec in specs {
+    if state
+      .detail_artwork
+      .get(&spec.key)
+      .is_some_and(|cell| cell.image_id == spec.image_id)
+    {
+      continue;
+    }
+    let slot = state.artwork_binder.bind(ArtworkSurface::Detail);
+    state.detail_artwork.insert(
+      spec.key,
+      ArtworkCell {
+        slot,
+        image_id: spec.image_id.clone(),
+        state: ArtworkCellState::Loading,
+      },
+    );
+    let client = Arc::clone(&client);
+    let adapter = Arc::clone(&adapter);
+    let completion_image_id = spec.image_id.clone();
+    tasks.push(Task::perform(
+      async move { adapter.load(&client, &spec.image_id).await },
+      move |result| {
+        Message::Detail(DetailMessage::ArtworkLoaded {
+          session,
+          slot,
+          image_id: completion_image_id,
+          result,
+        })
+      },
+    ));
+  }
+  state
+    .artwork_handles
+    .retain_slots(state.detail_artwork.slots());
+  Task::batch(tasks)
+}
+
+fn push_detail_artwork(specs: &mut Vec<DetailArtworkSpec>, key: String, image_id: &Option<String>) {
+  if let Some(image_id) = image_id {
+    specs.push(DetailArtworkSpec {
+      key,
+      image_id: image_id.clone(),
+    });
+  }
+}
+
+fn detail_episode_key(item_id: &str) -> String {
+  format!("detail-episode:{item_id}")
+}
+
+fn begin_detail_artwork_view(state: &mut State) {
+  state.artwork_binder.begin_view(ArtworkSurface::Detail);
+  state.detail_artwork.clear();
+  state.artwork_handles.retain_slots(std::iter::empty());
+}
+
+fn leave_detail_view(state: &mut State) {
+  state.request_gate.navigate();
+  state.artwork_adapter.cancel_pending();
+  begin_detail_artwork_view(state);
+  state.detail.clear();
 }
 
 fn update_browse(state: &mut State, message: BrowseMessage) -> Task<Message> {
@@ -463,7 +982,7 @@ fn browse_source(state: &State) -> Option<BrowseSource> {
       session,
       query: query.clone(),
     }),
-    Destination::Home => None,
+    Destination::Home | Destination::Detail(_) => None,
   }
 }
 
@@ -668,8 +1187,12 @@ fn reset_connected_surface(state: &mut State) {
   state.artwork_binder.reset();
   state.home_artwork = HomeArtwork::default();
   state.browse_artwork = BrowseArtwork::default();
+  state.detail_artwork = DetailArtwork::default();
   state.artwork_handles.clear();
   state.home = HomeState::default();
+  state.detail.clear();
+  state.detail_items.clear();
+  state.navigation_stack.clear();
   if let Err(error) = state.browse.reset() {
     state.notice = Some(format!("Could not reset library browsing: {error}"));
   }
@@ -1258,6 +1781,10 @@ mod tests {
       quick_connect_task: None,
       notice: None,
       destination: Destination::Home,
+      navigation_stack: Vec::new(),
+      detail_items: Default::default(),
+      detail: DetailState::default(),
+      detail_artwork: DetailArtwork::default(),
       home: HomeState::default(),
       artwork_adapter: Arc::new(jellypilot_media_server::artwork::ArtworkAdapter::new()),
       artwork_binder: Default::default(),
@@ -1289,6 +1816,254 @@ mod tests {
       session: state.request_gate.current_session(),
       query: query.to_owned(),
     }
+  }
+
+  fn video_item(id: &str) -> jellypilot_media_server::VideoItemDetail {
+    jellypilot_media_server::VideoItemDetail {
+      id: id.to_owned(),
+      name: "Arrival".to_owned(),
+      item_type: "Movie".to_owned(),
+      overview: None,
+      production_year: Some(2016),
+      runtime_seconds: Some(116.0 * 60.0),
+      series_id: None,
+      series_name: None,
+      season_number: None,
+      episode_number: None,
+      genres: vec!["Science Fiction".to_owned()],
+      played: false,
+      favorite: false,
+      played_percentage: None,
+      resume_position_seconds: None,
+      can_resume: false,
+      can_play: true,
+      artwork_image_id: None,
+      backdrop_image_id: None,
+      series_poster_image_id: None,
+      metadata: Default::default(),
+    }
+  }
+
+  fn episode(id: &str, season_number: i32) -> VideoLibraryItem {
+    VideoLibraryItem {
+      id: id.to_owned(),
+      name: "Episode".to_owned(),
+      item_type: "Episode".to_owned(),
+      production_year: None,
+      runtime_seconds: Some(1_800.0),
+      played: false,
+      favorite: false,
+      artwork_image_id: None,
+      series_poster_image_id: None,
+      season_number: Some(season_number),
+      episode_number: Some(1),
+      series_id: Some("show-1".to_owned()),
+      series_name: Some("Show".to_owned()),
+      resume_position_seconds: None,
+      played_percentage: None,
+      overview: None,
+    }
+  }
+
+  fn season(id: &str, number: i32) -> VideoSeason {
+    VideoSeason {
+      id: id.to_owned(),
+      name: format!("Season {number}"),
+      season_number: Some(number),
+      played: false,
+      favorite: false,
+      artwork_image_id: None,
+    }
+  }
+
+  fn show_detail() -> jellypilot_media_server::VideoShowDetail {
+    jellypilot_media_server::VideoShowDetail {
+      id: "show-1".to_owned(),
+      name: "Show".to_owned(),
+      overview: None,
+      production_year: None,
+      genres: Vec::new(),
+      played: false,
+      favorite: false,
+      can_play: true,
+      artwork_image_id: None,
+      backdrop_image_id: None,
+      next_episode: Some(episode("episode-2", 2)),
+      seasons: vec![season("season-1", 1), season("season-2", 2)],
+      metadata: Default::default(),
+    }
+  }
+
+  #[test]
+  fn stale_detail_settlement_cannot_replace_the_current_request() {
+    let mut detail = DetailState {
+      content: jellypilot_core::LoadState::Loading,
+      ..DetailState::default()
+    };
+    let mut gate = RequestGate::default();
+    let stale = gate.begin_detail();
+    let current = gate.begin_detail();
+
+    assert!(!settle_detail_load(
+      &mut detail,
+      &mut gate,
+      stale,
+      Ok(DetailContent::Item(video_item("stale"))),
+    ));
+    assert!(matches!(
+      detail.content,
+      jellypilot_core::LoadState::Loading
+    ));
+    assert!(settle_detail_load(
+      &mut detail,
+      &mut gate,
+      current,
+      Ok(DetailContent::Item(video_item("current"))),
+    ));
+    assert!(matches!(
+      &detail.content,
+      jellypilot_core::LoadState::Ready(DetailContent::Item(item))
+        if item.id == "current"
+    ));
+  }
+
+  #[test]
+  fn user_data_transition_waits_for_confirmation_and_preserves_data_on_failure() {
+    let mut detail = DetailState {
+      content: jellypilot_core::LoadState::Ready(DetailContent::Item(video_item("item-1"))),
+      user_data_busy: Some(UserDataActionKind::Favorite),
+      ..DetailState::default()
+    };
+    let mut gate = RequestGate::default();
+    gate.set_detail_item(Some("item-1".to_owned()));
+    let stale = gate
+      .begin_detail_aux(DetailAuxKind::UserData)
+      .expect("detail item should permit user-data update");
+    let success = gate
+      .begin_detail_aux(DetailAuxKind::UserData)
+      .expect("detail item should permit user-data update");
+
+    assert!(settle_user_data_update(
+      &mut detail,
+      &mut gate,
+      stale,
+      Ok(VideoUserDataUpdate {
+        item_id: "item-1".to_owned(),
+        played: true,
+        favorite: true,
+      }),
+    )
+    .is_none());
+    assert_eq!(detail.user_data_busy, Some(UserDataActionKind::Favorite));
+
+    let applied = settle_user_data_update(
+      &mut detail,
+      &mut gate,
+      success,
+      Ok(VideoUserDataUpdate {
+        item_id: "item-1".to_owned(),
+        played: false,
+        favorite: true,
+      }),
+    );
+    assert!(matches!(applied, Some(Some(_))));
+    assert!(matches!(
+      &detail.content,
+      jellypilot_core::LoadState::Ready(DetailContent::Item(item))
+        if item.favorite && !item.played
+    ));
+    assert!(detail.user_data_busy.is_none());
+
+    detail.user_data_busy = Some(UserDataActionKind::Played);
+    let failure = gate
+      .begin_detail_aux(DetailAuxKind::UserData)
+      .expect("retry should mint a fresh token");
+    assert!(matches!(
+      settle_user_data_update(
+        &mut detail,
+        &mut gate,
+        failure,
+        Err("raw server response".to_owned()),
+      ),
+      Some(None)
+    ));
+    assert!(matches!(
+      &detail.content,
+      jellypilot_core::LoadState::Ready(DetailContent::Item(item))
+        if item.favorite && !item.played
+    ));
+    assert_eq!(detail.user_data_error.as_deref(), Some(USER_DATA_FAILURE));
+  }
+
+  #[test]
+  fn leaving_detail_rejects_pending_user_data_after_reopening_same_item() {
+    let mut state = test_state();
+    state.destination = Destination::Detail("item-1".to_owned());
+    state
+      .request_gate
+      .set_detail_item(Some("item-1".to_owned()));
+    let stale = state
+      .request_gate
+      .begin_detail_aux(DetailAuxKind::UserData)
+      .expect("detail item should permit user-data update");
+
+    leave_detail_view(&mut state);
+    state.destination = Destination::Detail("item-1".to_owned());
+    state
+      .request_gate
+      .set_detail_item(Some("item-1".to_owned()));
+    state.detail.content =
+      jellypilot_core::LoadState::Ready(DetailContent::Item(video_item("item-1")));
+    state.detail.user_data_busy = Some(UserDataActionKind::Favorite);
+
+    let settlement = settle_user_data_update(
+      &mut state.detail,
+      &mut state.request_gate,
+      stale,
+      Ok(VideoUserDataUpdate {
+        item_id: "item-1".to_owned(),
+        played: true,
+        favorite: true,
+      }),
+    );
+
+    assert!(settlement.is_none());
+    assert!(matches!(
+      &state.detail.content,
+      jellypilot_core::LoadState::Ready(DetailContent::Item(item))
+        if !item.played && !item.favorite
+    ));
+    assert_eq!(
+      state.detail.user_data_busy,
+      Some(UserDataActionKind::Favorite)
+    );
+  }
+
+  #[test]
+  fn season_switching_uses_the_selected_seasons_exact_identity() {
+    let show = show_detail();
+    assert_eq!(
+      initial_season(&show).map(|season| season.id.as_str()),
+      Some("season-2")
+    );
+    let mut detail = DetailState {
+      content: jellypilot_core::LoadState::Ready(DetailContent::Show(show)),
+      selected_season_id: Some("season-2".to_owned()),
+      ..DetailState::default()
+    };
+
+    assert!(select_season(&mut detail, "season-1"));
+    let request = selected_season_request(&detail).expect("selected season should produce a page");
+    assert_eq!(request.series_id, "show-1");
+    assert_eq!(request.season_id.as_deref(), Some("season-1"));
+    assert_eq!(request.season_number, Some(1));
+    assert_eq!(request.start_index, 0);
+    assert_eq!(
+      request.limit,
+      jellypilot_core::detail::SEASON_EPISODE_PAGE_SIZE
+    );
+    assert!(!select_season(&mut detail, "season-1"));
+    assert!(!select_season(&mut detail, "missing-season"));
   }
 
   #[test]

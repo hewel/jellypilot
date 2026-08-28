@@ -8,11 +8,13 @@ use jellypilot_auth::{AuthStore, SavedProfileKey, SavedProfileSummary, Sensitive
 use jellypilot_core::artwork_binder::{ArtworkBinder, ArtworkSlot};
 use jellypilot_core::browse_model::{BrowseModel, LibraryBrowseView};
 use jellypilot_core::config::{LoginPrefill, Settings, SettingsStore};
+use jellypilot_core::detail::DetailContent;
 use jellypilot_core::request_gate::RequestGate;
 use jellypilot_core::{LibraryBrowseLoadToken, LoadState};
 use jellypilot_media_server::artwork::{ArtworkAdapter, RawArtworkDecoder};
 use jellypilot_media_server::{
   JellyfinClient, MediaServerProvider, VideoLibraryItem, VideoLibraryShortcut,
+  VideoSeasonEpisodesPage,
 };
 use zeroize::Zeroizing;
 
@@ -137,6 +139,7 @@ pub enum Destination {
     collection_type: String,
   },
   Search(String),
+  Detail(String),
 }
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
@@ -347,6 +350,62 @@ impl BrowseArtwork {
     self.cells.values().map(|cell| cell.slot)
   }
 }
+#[derive(Default)]
+pub struct DetailArtwork {
+  cells: HashMap<String, ArtworkCell>,
+}
+
+impl DetailArtwork {
+  pub fn clear(&mut self) {
+    self.cells.clear();
+  }
+
+  pub fn insert(&mut self, key: String, cell: ArtworkCell) {
+    self.cells.insert(key, cell);
+  }
+
+  pub fn get(&self, key: &str) -> Option<&ArtworkCell> {
+    self.cells.get(key)
+  }
+
+  pub fn cell_mut(&mut self, slot: ArtworkSlot, image_id: &str) -> Option<&mut ArtworkCell> {
+    self
+      .cells
+      .values_mut()
+      .find(|cell| cell.slot == slot && cell.image_id == image_id)
+  }
+
+  pub fn retain_keys(&mut self, keys: &HashSet<&str>) {
+    self.cells.retain(|key, _| keys.contains(key.as_str()));
+  }
+
+  pub fn slots(&self) -> impl Iterator<Item = ArtworkSlot> + '_ {
+    self.cells.values().map(|cell| cell.slot)
+  }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum UserDataActionKind {
+  Favorite,
+  Played,
+}
+
+#[derive(Default)]
+pub struct DetailState {
+  pub content: LoadState<DetailContent>,
+  pub season_neighbors: LoadState<Vec<VideoLibraryItem>>,
+  pub season_episodes: LoadState<VideoSeasonEpisodesPage>,
+  pub selected_season_id: Option<String>,
+  pub overview_expanded: bool,
+  pub user_data_busy: Option<UserDataActionKind>,
+  pub user_data_error: Option<String>,
+}
+
+impl DetailState {
+  pub fn clear(&mut self) {
+    *self = Self::default();
+  }
+}
 
 #[derive(Clone, Copy, Debug)]
 pub struct BrowseViewport {
@@ -429,6 +488,10 @@ pub struct State {
   pub quick_connect_task: Option<task::Handle>,
   pub notice: Option<String>,
   pub destination: Destination,
+  pub navigation_stack: Vec<Destination>,
+  pub detail_items: HashMap<String, VideoLibraryItem>,
+  pub detail: DetailState,
+  pub detail_artwork: DetailArtwork,
   pub home: HomeState,
   pub artwork_adapter: Arc<ArtworkAdapter<RawArtworkDecoder>>,
   pub artwork_binder: ArtworkBinder,
@@ -469,6 +532,10 @@ impl State {
       quick_connect_task: None,
       notice: None,
       destination: Destination::Home,
+      navigation_stack: Vec::new(),
+      detail_items: HashMap::new(),
+      detail: DetailState::default(),
+      detail_artwork: DetailArtwork::default(),
       home: HomeState::default(),
       artwork_adapter: Arc::new(ArtworkAdapter::new()),
       artwork_binder: ArtworkBinder::default(),
@@ -484,6 +551,34 @@ impl State {
       search_input: String::new(),
     }
   }
+
+  pub fn navigate_to(&mut self, destination: Destination) -> bool {
+    if self.destination == destination {
+      return false;
+    }
+    if !matches!(&destination, Destination::Detail(_)) {
+      if let Some(index) = self
+        .navigation_stack
+        .iter()
+        .rposition(|entry| entry == &destination)
+      {
+        self.navigation_stack.truncate(index);
+        self.destination = destination;
+        return true;
+      }
+    }
+    self.navigation_stack.push(self.destination.clone());
+    self.destination = destination;
+    true
+  }
+
+  pub fn navigate_back(&mut self) -> bool {
+    let Some(destination) = self.navigation_stack.pop() else {
+      return false;
+    };
+    self.destination = destination;
+    true
+  }
 }
 
 #[cfg(test)]
@@ -491,6 +586,85 @@ mod tests {
   use jellypilot_core::artwork_binder::ArtworkSurface;
 
   use super::*;
+
+  #[test]
+  fn navigation_stack_restores_each_previous_destination_in_order() {
+    let mut state = State::boot(false);
+    let library = Destination::Library {
+      library_id: "movies".to_owned(),
+      collection_type: "movies".to_owned(),
+    };
+    assert!(state.navigate_to(library.clone()));
+    assert!(state.navigate_to(Destination::Detail("movie-1".to_owned())));
+    assert!(state.navigate_back());
+    assert_eq!(state.destination, library);
+    assert!(state.navigate_back());
+    assert_eq!(state.destination, Destination::Home);
+    assert!(!state.navigate_back());
+  }
+
+  #[test]
+  fn navigating_to_the_current_destination_does_not_create_a_false_back_entry() {
+    let mut state = State::boot(false);
+
+    assert!(!state.navigate_to(Destination::Home));
+    assert!(state.navigation_stack.is_empty());
+  }
+
+  #[test]
+  fn sidebar_cycles_keep_the_navigation_stack_bounded() {
+    let mut state = State::boot(false);
+    let library = Destination::Library {
+      library_id: "movies".to_owned(),
+      collection_type: "movies".to_owned(),
+    };
+
+    assert!(state.navigate_to(library.clone()));
+    assert!(state.navigate_to(Destination::Home));
+    assert!(state.navigate_to(library.clone()));
+    assert!(state.navigate_to(Destination::Home));
+    assert!(state.navigate_to(library.clone()));
+
+    assert_eq!(state.destination, library);
+    assert_eq!(state.navigation_stack, vec![Destination::Home]);
+  }
+
+  #[test]
+  fn back_after_cycle_collapse_visits_each_destination_once() {
+    let mut state = State::boot(false);
+    let library = Destination::Library {
+      library_id: "movies".to_owned(),
+      collection_type: "movies".to_owned(),
+    };
+    assert!(state.navigate_to(library.clone()));
+    assert!(state.navigate_to(Destination::Home));
+    assert!(state.navigate_to(library.clone()));
+
+    assert!(state.navigate_back());
+    assert_eq!(state.destination, Destination::Home);
+    assert!(!state.navigate_back());
+  }
+
+  #[test]
+  fn detail_navigation_pushes_when_the_item_is_already_in_history() {
+    let mut state = State::boot(false);
+    let detail = Destination::Detail("movie-1".to_owned());
+    let library = Destination::Library {
+      library_id: "movies".to_owned(),
+      collection_type: "movies".to_owned(),
+    };
+    assert!(state.navigate_to(detail.clone()));
+    assert!(state.navigate_to(library.clone()));
+
+    assert!(state.navigate_to(detail.clone()));
+
+    assert_eq!(
+      state.navigation_stack,
+      vec![Destination::Home, detail, library.clone()]
+    );
+    assert!(state.navigate_back());
+    assert_eq!(state.destination, library);
+  }
 
   #[test]
   fn handle_retention_evicts_slots_outside_the_current_window() {

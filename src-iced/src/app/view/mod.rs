@@ -1,4 +1,5 @@
 mod browse;
+mod detail;
 mod home;
 mod login;
 mod shell;

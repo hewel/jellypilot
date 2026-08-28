@@ -152,6 +152,10 @@ impl RequestGate {
     pub fn navigate(&mut self) {
         self.detail = None;
         self.detail_item = None;
+        for sequence in &mut self.aux_sequence {
+            *sequence = sequence.saturating_add(1);
+        }
+        self.aux_live = [false; 4];
     }
 
     /// Invalidates one aux family regardless of whether a detail item is set.
@@ -370,17 +374,22 @@ mod tests {
     }
 
     #[test]
-    fn navigate_invalidates_detail_aux() {
+    fn navigate_rejects_detail_aux_after_reopening_the_same_item() {
         let mut gate = RequestGate::default();
         gate.set_detail_item(Some("item-1".to_owned()));
-        let token = gate
+        let user_data = gate
             .begin_detail_aux(DetailAuxKind::UserData)
             .expect("user-data aux requires a detail item");
+        let season_neighbors = gate
+            .begin_detail_aux(DetailAuxKind::SeasonNeighbors)
+            .expect("season-neighbor aux requires a detail item");
         gate.navigate();
+        gate.set_detail_item(Some("item-1".to_owned()));
 
-        assert!(!gate.finish_detail_aux(token));
-        assert!(gate.begin_detail_aux(DetailAuxKind::UserData).is_none());
+        assert!(!gate.finish_detail_aux(user_data));
+        assert!(!gate.finish_detail_aux(season_neighbors));
     }
+
     #[test]
     fn season_back_keeps_displayed_detail_aux_valid() {
         let mut gate = RequestGate::default();
@@ -426,15 +435,13 @@ mod tests {
     }
 
     #[test]
-    fn invalidate_detail_aux_rejects_outstanding_token_after_renavigate() {
+    fn invalidate_detail_aux_rejects_outstanding_token() {
         let mut gate = RequestGate::default();
         gate.set_detail_item(Some("show-1".to_owned()));
         let user_data = gate
             .begin_detail_aux(DetailAuxKind::UserData)
             .expect("user-data aux requires a detail item");
-        gate.navigate();
         gate.invalidate_detail_aux(DetailAuxKind::UserData);
-        gate.set_detail_item(Some("show-1".to_owned()));
 
         assert!(!gate.finish_detail_aux(user_data));
     }

@@ -77,14 +77,20 @@ fn featured_hero<'a>(state: &'a State, item: &'a VideoLibraryItem) -> Element<'a
     );
   }
 
-  container(
-    row![artwork, copy]
-      .spacing(TOKENS.spacing.s8)
-      .align_y(Alignment::Center),
+  button(
+    container(
+      row![artwork, copy]
+        .spacing(TOKENS.spacing.s8)
+        .align_y(Alignment::Center),
+    )
+    .padding(TOKENS.spacing.s6)
+    .width(Fill)
+    .style(|theme| jellypilot_ui::theme::surface_variant(theme, SurfaceVariant::Elevated)),
   )
-  .padding(TOKENS.spacing.s6)
+  .padding(0)
   .width(Fill)
-  .style(|theme| jellypilot_ui::theme::surface_variant(theme, SurfaceVariant::Elevated))
+  .on_press(Message::OpenDetail(item.clone()))
+  .style(|theme, status| jellypilot_ui::theme::button_variant(theme, status, ButtonVariant::Text))
   .into()
 }
 
@@ -168,10 +174,16 @@ fn video_card<'a>(
     content = content.push(progress_bar(progress));
   }
 
-  container(content)
-    .width(frame_width)
-    .style(|theme| jellypilot_ui::theme::surface_variant(theme, SurfaceVariant::Filled))
-    .into()
+  button(
+    container(content)
+      .width(frame_width)
+      .style(|theme| jellypilot_ui::theme::surface_variant(theme, SurfaceVariant::Filled)),
+  )
+  .padding(0)
+  .width(frame_width)
+  .on_press(Message::OpenDetail(item.clone()))
+  .style(|theme, status| jellypilot_ui::theme::button_variant(theme, status, ButtonVariant::Text))
+  .into()
 }
 
 fn artwork<'a>(

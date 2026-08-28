@@ -30,11 +30,11 @@ pub fn view(state: &State) -> Element<'_, Message> {
       | jellypilot_core::LoadState::Failed(_) => "Library",
     },
     Destination::Search(query) => query,
-    Destination::Home => "Library",
+    Destination::Home | Destination::Detail(_) => "Library",
   };
   let heading = match &state.destination {
     Destination::Search(_) => format!("Search results for “{title}”"),
-    Destination::Home | Destination::Library { .. } => title.to_owned(),
+    Destination::Home | Destination::Library { .. } | Destination::Detail(_) => title.to_owned(),
   };
   let mut header = Column::new().spacing(TOKENS.spacing.s3).push(
     text(heading)
@@ -172,7 +172,7 @@ fn browse_body(state: &State) -> Element<'_, Message> {
     LibraryBrowseView::Loading => empty_surface("Loading library…".to_owned()),
     LibraryBrowseView::Empty => match &state.destination {
       Destination::Search(query) => empty_surface(format!("No results for “{query}”.")),
-      Destination::Home | Destination::Library { .. } => {
+      Destination::Home | Destination::Library { .. } | Destination::Detail(_) => {
         empty_surface("This library has no matching items.".to_owned())
       }
     },
@@ -348,20 +348,27 @@ fn video_card<'a>(
     &item.name,
     artwork_height,
   );
-  container(
-    column![
-      artwork,
-      text(&item.name).size(14).color(TOKENS.colors.onSurface),
-      text(item_caption(item))
-        .size(12)
-        .color(TOKENS.colors.onSurfaceVariant),
-    ]
-    .spacing(TOKENS.spacing.s1)
-    .width(Fill),
+  button(
+    container(
+      column![
+        artwork,
+        text(&item.name).size(14).color(TOKENS.colors.onSurface),
+        text(item_caption(item))
+          .size(12)
+          .color(TOKENS.colors.onSurfaceVariant),
+      ]
+      .spacing(TOKENS.spacing.s1)
+      .width(Fill),
+    )
+    .width(Fill)
+    .height(Fill)
+    .style(|theme| jellypilot_ui::theme::surface_variant(theme, SurfaceVariant::Filled)),
   )
+  .padding(0)
   .width(Fill)
   .height(Fill)
-  .style(|theme| jellypilot_ui::theme::surface_variant(theme, SurfaceVariant::Filled))
+  .on_press(Message::OpenDetail(item.clone()))
+  .style(|theme, status| jellypilot_ui::theme::button_variant(theme, status, ButtonVariant::Text))
   .into()
 }
 

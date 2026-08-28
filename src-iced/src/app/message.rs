@@ -9,11 +9,12 @@ use jellypilot_auth::{
 use jellypilot_core::artwork_binder::ArtworkSlot;
 use jellypilot_core::browse_model::BrowsePageSettlement;
 use jellypilot_core::config::LoginPrefill;
-use jellypilot_core::request_gate::{HomeToken, SessionToken};
+use jellypilot_core::request_gate::{DetailAuxToken, DetailToken, HomeToken, SessionToken};
 use jellypilot_media_server::artwork::{ArtworkBytes, ArtworkError};
 use jellypilot_media_server::home::HomeDataResult;
 use jellypilot_media_server::{
-  JellyfinClient, MediaServerProvider, VideoLibraryPlayedFilter, VideoLibrarySort,
+  JellyfinClient, MediaServerProvider, VideoLibraryItem, VideoLibraryPlayedFilter,
+  VideoLibrarySort, VideoSeasonEpisodesPage, VideoUserDataUpdate,
 };
 
 use zeroize::Zeroize;
@@ -24,6 +25,8 @@ impl std::fmt::Debug for Message {
       Self::Login(_) => formatter.write_str("Login([redacted])"),
       Self::Home(_) => formatter.write_str("Home"),
       Self::Browse(_) => formatter.write_str("Browse"),
+      Self::OpenDetail(_) => formatter.write_str("OpenDetail"),
+      Self::Detail(_) => formatter.write_str("Detail"),
     }
   }
 }
@@ -34,6 +37,8 @@ pub enum Message {
   Login(LoginMessage),
   Home(HomeMessage),
   Browse(BrowseMessage),
+  OpenDetail(VideoLibraryItem),
+  Detail(DetailMessage),
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -72,6 +77,40 @@ pub enum BrowseMessage {
   Retry,
   LoadPrevious,
   PageSettled(BrowsePageSettlement),
+  ArtworkLoaded {
+    session: SessionToken,
+    slot: ArtworkSlot,
+    image_id: String,
+    result: Result<ArtworkBytes, ArtworkError>,
+  },
+}
+
+#[derive(Clone)]
+pub enum DetailMessage {
+  Back,
+  Retry,
+  RetryNeighbors,
+  RetrySeason,
+  OverviewToggled,
+  SeasonSelected(String),
+  FavoriteToggled,
+  PlayedToggled,
+  Loaded {
+    token: DetailToken,
+    result: Box<Result<jellypilot_core::detail::DetailContent, String>>,
+  },
+  SeasonLoaded {
+    token: DetailToken,
+    result: Result<VideoSeasonEpisodesPage, String>,
+  },
+  NeighborsLoaded {
+    token: DetailAuxToken,
+    result: Result<Vec<VideoLibraryItem>, String>,
+  },
+  UserDataUpdated {
+    token: DetailAuxToken,
+    result: Result<VideoUserDataUpdate, String>,
+  },
   ArtworkLoaded {
     session: SessionToken,
     slot: ArtworkSlot,

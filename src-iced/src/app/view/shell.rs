@@ -8,7 +8,7 @@ use jellypilot_ui::variants::{ButtonVariant, FieldVariant, SurfaceVariant};
 use crate::app::message::{BrowseMessage, HomeMessage, Message};
 use crate::app::state::{Destination, State};
 
-use super::{browse, home};
+use super::{browse, detail, home};
 
 const SIDEBAR_WIDTH: f32 = 248.0;
 
@@ -17,6 +17,7 @@ pub fn view(state: &State) -> Element<'_, Message> {
   let content: Element<'_, Message> = match &state.destination {
     Destination::Home => home::view(state),
     Destination::Library { .. } | Destination::Search(_) => browse::view(state),
+    Destination::Detail(_) => detail::view(state),
   };
   let content = stack![content].width(Fill).height(Fill);
   let shell = row![sidebar, content]
