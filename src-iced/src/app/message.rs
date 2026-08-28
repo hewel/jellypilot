@@ -5,8 +5,11 @@ use jellypilot_auth::login::{LoginError, LoginEvent};
 use jellypilot_auth::{
   AuthStorageError, SavedProfileKey, SavedProfileSummary, SensitiveSavedSession,
 };
+use jellypilot_core::artwork_binder::ArtworkSlot;
 use jellypilot_core::config::LoginPrefill;
-use jellypilot_core::request_gate::SessionToken;
+use jellypilot_core::request_gate::{HomeToken, SessionToken};
+use jellypilot_media_server::artwork::{ArtworkBytes, ArtworkError};
+use jellypilot_media_server::home::HomeDataResult;
 use jellypilot_media_server::{JellyfinClient, MediaServerProvider};
 
 use zeroize::Zeroize;
@@ -15,6 +18,7 @@ impl std::fmt::Debug for Message {
     match self {
       Self::Window(message) => formatter.debug_tuple("Window").field(message).finish(),
       Self::Login(_) => formatter.write_str("Login([redacted])"),
+      Self::Home(_) => formatter.write_str("Home"),
     }
   }
 }
@@ -23,12 +27,29 @@ impl std::fmt::Debug for Message {
 pub enum Message {
   Window(WindowMessage),
   Login(LoginMessage),
+  Home(HomeMessage),
 }
 
 #[derive(Clone, Copy, Debug)]
 pub enum WindowMessage {
   CloseRequested(window::Id),
   FrameRendered,
+}
+
+#[derive(Clone)]
+pub enum HomeMessage {
+  Navigate(super::state::Destination),
+  Retry,
+  Loaded {
+    token: HomeToken,
+    result: HomeDataResult,
+  },
+  ArtworkLoaded {
+    session: SessionToken,
+    slot: ArtworkSlot,
+    image_id: String,
+    result: Result<ArtworkBytes, ArtworkError>,
+  },
 }
 
 pub type SensitiveSessionPayload = SensitiveSavedSession;

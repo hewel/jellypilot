@@ -1,26 +1,47 @@
 use std::sync::{Arc, Mutex};
 
+use iced::widget::image;
 use iced::Task;
 use jellypilot_auth::login::{
   can_start_login, quick_connect_workflow, should_disconnect_after_forget, ConnectionPhase,
   LoginError, LoginEvent, QUICK_CONNECT_POLL_INTERVAL, QUICK_CONNECT_TIMEOUT,
 };
 use jellypilot_auth::AuthStore;
+use jellypilot_core::artwork_binder::{ArtworkSettlement, ArtworkSurface};
 use jellypilot_core::config::LoginPrefill;
-use jellypilot_media_server::{Credentials, JellyfinClient, MediaServerProvider};
+use jellypilot_core::request_gate::{HomeToken, RequestGate};
+use jellypilot_media_server::home::{load_home_data, HomeDataResult};
+use jellypilot_media_server::{Credentials, JellyfinClient, MediaServerProvider, VideoLibraryItem};
 use url::Url;
 use zeroize::{Zeroize, Zeroizing};
 
 use super::message::{
-  LoginMessage, Message, PasswordSubmission, ProtectedSavedSession, SensitiveSessionPayload,
-  WindowMessage,
+  HomeMessage, LoginMessage, Message, PasswordSubmission, ProtectedSavedSession,
+  SensitiveSessionPayload, WindowMessage,
 };
-use super::state::{ConnectedIdentity, LoginMethod, QuickConnectState, State};
+use super::state::{
+  ArtworkCell, ArtworkCellState, ConnectedIdentity, Destination, HomeArtwork, HomeSection,
+  HomeState, LoginMethod, QuickConnectState, State,
+};
 
 pub fn update(state: &mut State, message: Message) -> Task<Message> {
   match message {
     Message::Window(message) => update_window(state, message),
-    Message::Login(message) => update_login(state, message).map(Message::Login),
+    Message::Login(message) => {
+      let was_connected = state.connection == ConnectionPhase::Connected;
+      let login_task = update_login(state, message).map(Message::Login);
+      let is_connected = state.connection == ConnectionPhase::Connected;
+      if !was_connected && is_connected {
+        state.destination = Destination::Home;
+        Task::batch([login_task, start_home_load(state)])
+      } else {
+        if was_connected && !is_connected {
+          reset_connected_surface(state);
+        }
+        login_task
+      }
+    }
+    Message::Home(message) => update_home(state, message),
   }
 }
 
@@ -35,6 +56,198 @@ fn update_window(state: &mut State, message: WindowMessage) -> Task<Message> {
       iced::exit()
     }
   }
+}
+
+fn update_home(state: &mut State, message: HomeMessage) -> Task<Message> {
+  match message {
+    HomeMessage::Navigate(destination) => {
+      let opens_home = destination == Destination::Home;
+      if state.destination == Destination::Home && !opens_home {
+        leave_home_view(state);
+      }
+      state.destination = destination;
+      if opens_home {
+        start_home_load(state)
+      } else {
+        Task::none()
+      }
+    }
+    HomeMessage::Retry => start_home_load(state),
+    HomeMessage::Loaded { token, result } => {
+      if !settle_home(&mut state.home, &mut state.request_gate, token, result) {
+        return Task::none();
+      }
+      prepare_home_artwork(state)
+    }
+    HomeMessage::ArtworkLoaded {
+      session,
+      slot,
+      image_id,
+      result,
+    } => {
+      let session_ok = state.request_gate.is_current_session(session);
+      if state
+        .artwork_binder
+        .settle(slot, ArtworkSurface::Home, session_ok)
+        != ArtworkSettlement::Apply
+      {
+        return Task::none();
+      }
+      let Some(cell) = state.home_artwork.cell_mut(slot, &image_id) else {
+        return Task::none();
+      };
+      match result {
+        Ok(bytes) => {
+          cell.state = ArtworkCellState::Ready;
+          state.artwork_handles.insert(
+            slot,
+            image_id,
+            image::Handle::from_bytes(bytes.as_slice().to_vec()),
+          );
+        }
+        Err(_) => cell.state = ArtworkCellState::Failed,
+      }
+      Task::none()
+    }
+  }
+}
+
+fn start_home_load(state: &mut State) -> Task<Message> {
+  state.home.begin_load();
+  begin_home_artwork_view(state);
+  state.artwork_adapter.cancel_pending();
+  let token = state.request_gate.begin_home();
+  let Some(client) = state.client.as_ref().map(Arc::clone) else {
+    let error = "The connected media server session is unavailable.".to_owned();
+    state.home.settle_video_home(Err(error.clone()));
+    state.home.settle_shortcuts(Err(error));
+    return Task::none();
+  };
+
+  Task::perform(load_home_data(client), move |result| {
+    Message::Home(HomeMessage::Loaded { token, result })
+  })
+}
+
+fn settle_home(
+  home: &mut HomeState,
+  request_gate: &mut RequestGate,
+  token: HomeToken,
+  result: HomeDataResult,
+) -> bool {
+  if !request_gate.finish_home(token) {
+    return false;
+  }
+  let (video_home, shortcuts) = result;
+  home.settle_video_home(video_home);
+  home.settle_shortcuts(shortcuts);
+  true
+}
+
+#[derive(Clone, Copy)]
+enum ArtworkPlacement {
+  Hero,
+  Card(HomeSection),
+}
+
+struct ArtworkLoadSpec {
+  placement: ArtworkPlacement,
+  item_id: String,
+  image_id: String,
+}
+
+fn prepare_home_artwork(state: &mut State) -> Task<Message> {
+  let specs = home_artwork_specs(&state.home);
+  begin_home_artwork_view(state);
+  let session = state.request_gate.current_session();
+  let Some(client) = state.client.as_ref().map(Arc::clone) else {
+    return Task::none();
+  };
+  let adapter = Arc::clone(&state.artwork_adapter);
+  let mut tasks = Vec::with_capacity(specs.len());
+
+  for spec in specs {
+    let slot = state.artwork_binder.bind(ArtworkSurface::Home);
+    let cell = ArtworkCell {
+      slot,
+      image_id: spec.image_id.clone(),
+      state: ArtworkCellState::Loading,
+    };
+    match spec.placement {
+      ArtworkPlacement::Hero => state.home_artwork.insert_hero(spec.item_id, cell),
+      ArtworkPlacement::Card(section) => {
+        state.home_artwork.insert_card(section, spec.item_id, cell);
+      }
+    }
+
+    let client = Arc::clone(&client);
+    let adapter = Arc::clone(&adapter);
+    let image_id = spec.image_id;
+    let completion_image_id = image_id.clone();
+    tasks.push(Task::perform(
+      async move { adapter.load(&client, &image_id).await },
+      move |result| {
+        Message::Home(HomeMessage::ArtworkLoaded {
+          session,
+          slot,
+          image_id: completion_image_id,
+          result,
+        })
+      },
+    ));
+  }
+
+  Task::batch(tasks)
+}
+
+fn home_artwork_specs(home: &HomeState) -> Vec<ArtworkLoadSpec> {
+  let mut specs = Vec::new();
+  if let Some(item) = home.featured_item() {
+    push_artwork_spec(&mut specs, ArtworkPlacement::Hero, item);
+  }
+  for section in HomeSection::ALL {
+    if let jellypilot_core::LoadState::Ready(items) = home.section(section) {
+      for item in items {
+        push_artwork_spec(&mut specs, ArtworkPlacement::Card(section), item);
+      }
+    }
+  }
+  specs
+}
+
+fn push_artwork_spec(
+  specs: &mut Vec<ArtworkLoadSpec>,
+  placement: ArtworkPlacement,
+  item: &VideoLibraryItem,
+) {
+  if let Some(image_id) = &item.artwork_image_id {
+    specs.push(ArtworkLoadSpec {
+      placement,
+      item_id: item.id.clone(),
+      image_id: image_id.clone(),
+    });
+  }
+}
+
+fn begin_home_artwork_view(state: &mut State) {
+  state.artwork_binder.begin_view(ArtworkSurface::Home);
+  state.home_artwork.clear();
+  state.artwork_handles.retain_slots(std::iter::empty());
+}
+
+fn leave_home_view(state: &mut State) {
+  state.request_gate.begin_home();
+  state.artwork_adapter.cancel_pending();
+  begin_home_artwork_view(state);
+}
+
+fn reset_connected_surface(state: &mut State) {
+  state.artwork_adapter.reset_session();
+  state.artwork_binder.reset();
+  state.home_artwork = HomeArtwork::default();
+  state.artwork_handles.clear();
+  state.home = HomeState::default();
+  state.destination = Destination::Home;
 }
 
 pub fn update_login(state: &mut State, message: LoginMessage) -> Task<LoginMessage> {
@@ -617,7 +830,41 @@ mod tests {
       active_profile: None,
       quick_connect_task: None,
       notice: None,
+      destination: Destination::Home,
+      home: HomeState::default(),
+      artwork_adapter: Arc::new(jellypilot_media_server::artwork::ArtworkAdapter::new()),
+      artwork_binder: Default::default(),
+      home_artwork: HomeArtwork::default(),
+      artwork_handles: Default::default(),
     }
+  }
+
+  #[test]
+  fn stale_home_settlement_does_not_replace_the_current_loading_state() {
+    let mut home = HomeState::default();
+    let mut gate = RequestGate::default();
+    let stale = gate.begin_home();
+    let _current = gate.begin_home();
+    home.begin_load();
+
+    let applied = settle_home(
+      &mut home,
+      &mut gate,
+      stale,
+      (
+        Err("stale home".to_owned()),
+        Err("stale shortcuts".to_owned()),
+      ),
+    );
+
+    assert!(matches!(
+      (applied, &home.continue_watching, &home.shortcuts),
+      (
+        false,
+        jellypilot_core::LoadState::Loading,
+        jellypilot_core::LoadState::Loading
+      )
+    ));
   }
 
   struct TestSettingsFile(PathBuf);
