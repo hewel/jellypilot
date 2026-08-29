@@ -4,6 +4,7 @@ pub mod artwork_grid;
 pub mod badge;
 pub mod button;
 pub mod container;
+pub mod ellipsis_text;
 pub mod field;
 pub mod poster_card;
 pub mod rounded_image;
