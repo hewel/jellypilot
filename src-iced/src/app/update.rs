@@ -56,6 +56,7 @@ use jellypilot_session::{
   finalize_remote_target, remote_index_value, remote_volume_value, GeneralCommand, JellyfinCommand,
   JellyfinWebSocket, JellyfinWebSocketEvent, PlayRequest, PlaystateRequest, RemoteControlState,
 };
+use jellypilot_ui::layout::SizeClass;
 use jellypilot_ui::tokens::TOKENS;
 use jellypilot_ui::widgets::artwork_grid::{ArtworkGridMetrics, ArtworkGridViewport};
 use url::Url;
@@ -73,8 +74,8 @@ use super::state::{
   DetailArtwork, DetailState, HomeArtwork, HomeSection, HomeState, LoginMethod, NoticeLevel,
   QuickConnectState, RemoteEventChannel, RemoteSessionHandle, State, UserDataActionKind,
 };
-use super::view::browse::{CARD_COPY_HEIGHT, PAGE_PADDING, PAGINATION_ROW_HEIGHT};
-use super::view::home::{section_frame_size, HOME_CONTENT_WIDTH};
+use super::view::browse::{grid_available_width, CARD_COPY_HEIGHT, PAGINATION_ROW_HEIGHT};
+use super::view::home::{content_width, section_frame_size};
 
 const SETTINGS_SAVE_ERROR: &str = "Could not save settings.";
 const INVALID_LOGIN_PREFILL_ERROR: &str = "Server and username are required.";
@@ -262,6 +263,10 @@ fn update_window(state: &mut State, message: WindowMessage) -> Task<Message> {
     WindowMessage::ShowRequested(id) => id.map_or_else(Task::none, |id| {
       iced::window::set_mode(id, iced::window::Mode::Windowed).chain(iced::window::gain_focus(id))
     }),
+    WindowMessage::Resized(size) => {
+      state.window_size = size;
+      Task::none()
+    }
     WindowMessage::FrameRendered => {
       state.smoke = false;
       iced::exit()
@@ -1681,7 +1686,12 @@ fn prepare_player_artwork(state: &mut State) -> Task<Message> {
   Task::perform(
     async move {
       adapter
-        .load(&client, &image_id, ArtworkSizeClass::Card, LoadLane::Visible)
+        .load(
+          &client,
+          &image_id,
+          ArtworkSizeClass::Card,
+          LoadLane::Visible,
+        )
         .await
         .0
     },
@@ -1873,7 +1883,9 @@ where
           LoadLane::Offscreen
         };
         let image_id = load.image_id;
-        let (result, observation) = adapter.load(&client, &image_id, load.size_class, lane).await;
+        let (result, observation) = adapter
+          .load(&client, &image_id, load.size_class, lane)
+          .await;
         if let Ok(mut summary) = summary.lock() {
           summary.record(&observation);
         }
@@ -1902,7 +1914,7 @@ fn prepare_home_artwork(state: &mut State) -> Task<Message> {
   if !state.home.has_ready_content() {
     return Task::none();
   }
-  let specs = home_artwork_specs(&state.home);
+  let specs = home_artwork_specs(state);
   let hero_item_id = specs
     .iter()
     .find(|spec| matches!(spec.placement, ArtworkPlacement::Hero))
@@ -2007,15 +2019,17 @@ fn prepare_home_artwork(state: &mut State) -> Task<Message> {
   )
 }
 
-fn home_artwork_specs(home: &HomeState) -> Vec<ArtworkLoadSpec> {
+fn home_artwork_specs(state: &State) -> Vec<ArtworkLoadSpec> {
   let mut specs = Vec::new();
-  if let Some(item) = home.featured_item() {
+  if let Some(item) = state.home.featured_item() {
     push_artwork_spec(&mut specs, ArtworkPlacement::Hero, item, true);
   }
+  let class = SizeClass::from_width(state.window_size.width);
+  let content_width = content_width(state.window_size.width, class);
   for section in HomeSection::ALL {
-    if let jellypilot_core::LoadState::Ready(items) = home.section(section) {
+    if let jellypilot_core::LoadState::Ready(items) = state.home.section(section) {
       let (card_width, _) = section_frame_size(section);
-      let visible_cards = visible_row_cards(HOME_CONTENT_WIDTH, card_width, TOKENS.spacing.s4);
+      let visible_cards = visible_row_cards(content_width, card_width, TOKENS.spacing.s4);
       for (index, item) in items.iter().enumerate() {
         push_artwork_spec(
           &mut specs,
@@ -2709,7 +2723,6 @@ fn update_browse(state: &mut State, message: BrowseMessage) -> Task<Message> {
       state.browse_viewport = BrowseViewport {
         offset_y: offset.y,
         height: bounds.height,
-        width: bounds.width,
       };
       Task::none()
     }
@@ -2971,7 +2984,8 @@ fn prepare_browse_artwork(state: &mut State) -> Task<Message> {
     visible_items,
     total_record_count,
     ..
-  } = &state.browse_view else {
+  } = &state.browse_view
+  else {
     return Task::none();
   };
   let specs = visible_items
@@ -2996,7 +3010,8 @@ fn prepare_browse_artwork(state: &mut State) -> Task<Message> {
     return Task::none();
   };
   let adapter = Arc::clone(&state.artwork_adapter);
-  let available_width = (state.browse_viewport.width - PAGE_PADDING * 2.0).max(1.0);
+  let class = SizeClass::from_width(state.window_size.width);
+  let available_width = grid_available_width(state.window_size.width, class);
   let metrics = ArtworkGridMetrics::for_cards(available_width, CARD_COPY_HEIGHT);
   // The pagination row above the grid shifts the grid in scroll coordinates;
   // classify in grid-local coordinates like the rendered viewport does.
@@ -3005,7 +3020,11 @@ fn prepare_browse_artwork(state: &mut State) -> Task<Message> {
   let grid_viewport = ArtworkGridViewport::from_scroll_geometry(
     state.browse_viewport.offset_y,
     state.browse_viewport.height,
-    if paginated { PAGINATION_ROW_HEIGHT } else { 0.0 },
+    if paginated {
+      PAGINATION_ROW_HEIGHT
+    } else {
+      0.0
+    },
   );
   let mut summary = ArtworkLoadSummary::default();
   let mut load_specs = Vec::new();
@@ -3761,6 +3780,7 @@ mod tests {
     let settings_view = crate::app::state::SettingsState::from_settings(settings.snapshot());
     State {
       smoke: false,
+      window_size: iced::Size::new(1600.0, 900.0),
       login: LoginState::from_settings(settings.snapshot()),
       settings,
       settings_view,
@@ -5653,6 +5673,15 @@ mod tests {
     assert!(state.quit_requested);
     assert!(state.playback_view.quit_may_proceed);
   }
+  #[test]
+  fn window_resize_updates_the_tracked_window_size() {
+    let mut state = test_state();
+    let size = iced::Size::new(1024.0, 768.0);
+
+    drop(update_window(&mut state, WindowMessage::Resized(size)));
+
+    assert_eq!(state.window_size, size);
+  }
 
   #[test]
   fn login_is_gated_by_playback_cleanup_with_fixed_copy() {
@@ -5857,7 +5886,11 @@ mod tests {
         slot,
         image_id: "art-1".to_owned(),
         result: Ok(
-          jellypilot_media_server::artwork::ArtworkRaster::from_raw_for_test(1, 1, vec![1, 2, 3, 4]),
+          jellypilot_media_server::artwork::ArtworkRaster::from_raw_for_test(
+            1,
+            1,
+            vec![1, 2, 3, 4],
+          ),
         ),
       },
     ));
@@ -5928,7 +5961,11 @@ mod tests {
     state.artwork_adapter.seed_raster_for_test(
       "cached-art-2",
       jellypilot_media_server::artwork::ArtworkSizeClass::Card,
-      jellypilot_media_server::artwork::ArtworkRaster::from_raw_for_test(1, 1, vec![10, 20, 30, 40]),
+      jellypilot_media_server::artwork::ArtworkRaster::from_raw_for_test(
+        1,
+        1,
+        vec![10, 20, 30, 40],
+      ),
     );
     let warm_task = prepare_home_artwork(&mut state);
     // One sentinel unit reports the aggregate cache-hit telemetry event.
@@ -6112,7 +6149,11 @@ mod tests {
         slot,
         image_id: "browse-art-1".to_owned(),
         result: Ok(
-          jellypilot_media_server::artwork::ArtworkRaster::from_raw_for_test(1, 1, vec![1, 2, 3, 4]),
+          jellypilot_media_server::artwork::ArtworkRaster::from_raw_for_test(
+            1,
+            1,
+            vec![1, 2, 3, 4],
+          ),
         ),
       },
     ));
@@ -6123,12 +6164,7 @@ mod tests {
         .map(|cell| cell.state),
       Some(ArtworkCellState::Ready)
     );
-    assert!(
-      state
-        .artwork_handles
-        .get(slot, "browse-art-1")
-        .is_some()
-    );
+    assert!(state.artwork_handles.get(slot, "browse-art-1").is_some());
 
     // Navigate away to Home
     drop(navigate(&mut state, Destination::Home));
@@ -6153,12 +6189,10 @@ mod tests {
     assert_eq!(browse_cell.state, ArtworkCellState::Ready);
     // The handle is rebuilt synchronously from the raster cache; there is no
     // cross-navigation handle identity to preserve.
-    assert!(
-      state
-        .artwork_handles
-        .get(browse_cell.slot, "browse-art-1")
-        .is_some()
-    );
+    assert!(state
+      .artwork_handles
+      .get(browse_cell.slot, "browse-art-1")
+      .is_some());
   }
 
   #[test]
@@ -6200,7 +6234,11 @@ mod tests {
     state.artwork_adapter.seed_raster_for_test(
       "detail-cache-art",
       jellypilot_media_server::artwork::ArtworkSizeClass::Hero,
-      jellypilot_media_server::artwork::ArtworkRaster::from_raw_for_test(1, 1, vec![10, 20, 30, 40]),
+      jellypilot_media_server::artwork::ArtworkRaster::from_raw_for_test(
+        1,
+        1,
+        vec![10, 20, 30, 40],
+      ),
     );
     state.artwork_handles.clear();
     let warm_task = prepare_detail_artwork(&mut state);
@@ -6229,7 +6267,11 @@ mod tests {
     state.artwork_adapter.seed_raster_for_test(
       "browse-cache-art-1",
       jellypilot_media_server::artwork::ArtworkSizeClass::Card,
-      jellypilot_media_server::artwork::ArtworkRaster::from_raw_for_test(1, 1, vec![10, 20, 30, 40]),
+      jellypilot_media_server::artwork::ArtworkRaster::from_raw_for_test(
+        1,
+        1,
+        vec![10, 20, 30, 40],
+      ),
     );
 
     // Wipe artwork_handles completely so there is NO retained handle in artwork_handles
@@ -6347,7 +6389,11 @@ mod tests {
         slot: cold_slot,
         image_id: "art-warm".to_owned(),
         result: Ok(
-          jellypilot_media_server::artwork::ArtworkRaster::from_raw_for_test(1, 1, vec![1, 2, 3, 4]),
+          jellypilot_media_server::artwork::ArtworkRaster::from_raw_for_test(
+            1,
+            1,
+            vec![1, 2, 3, 4],
+          ),
         ),
       },
     ));

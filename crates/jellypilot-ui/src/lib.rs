@@ -5,6 +5,7 @@
 
 pub mod fonts;
 pub mod icons;
+pub mod layout;
 pub mod overlay;
 pub mod theme;
 pub mod tokens;

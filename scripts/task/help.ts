@@ -23,7 +23,7 @@ WASM and sidecars:
   wasm install
   wasm build [--dev|--release]
   ffmpeg prepare [--verify] [--target <rust-target-triple>]
-  iced run [--smoke] [--release]
+  iced run [--smoke] [--release] (env: JELLYPILOT_SMOKE_SIZE=WxH)
 
 Native E2E (delegated to e2e/cli.ts; --skip-setup skips the setup chain):
   e2e build [args...]

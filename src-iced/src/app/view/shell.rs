@@ -6,14 +6,28 @@ use iced::{Alignment, Color, Element, Fill, Length};
 use jellypilot_core::LoadState;
 use jellypilot_ui::fonts::SPACE_GROTESK_FONT;
 use jellypilot_ui::icons::{icon_for_variant, icon_with_color, Icon, IconSize};
+use jellypilot_ui::layout::SizeClass;
 use jellypilot_ui::overlay::{tooltip, TooltipOptions};
 use jellypilot_ui::tokens::TOKENS;
 use jellypilot_ui::variants::{ButtonVariant, FieldVariant, SurfaceVariant};
 
 pub(crate) const SIDEBAR_WIDTH: f32 = 248.0;
+pub(crate) const SIDEBAR_RAIL_WIDTH: f32 = 72.0;
+
+/// Returns the sidebar width corresponding to the given window-width [`SizeClass`].
+///
+/// Compact windows collapse the sidebar to a 72px icon rail to maximize screen
+/// real estate for media content, while Standard and Wide windows use the full 248px panel.
+pub(crate) fn sidebar_width(class: SizeClass) -> f32 {
+  match class {
+    SizeClass::Compact => SIDEBAR_RAIL_WIDTH,
+    SizeClass::Standard | SizeClass::Wide => SIDEBAR_WIDTH,
+  }
+}
 
 pub fn view(state: &State) -> Element<'_, Message> {
-  let sidebar = sidebar(state).width(Length::Fixed(SIDEBAR_WIDTH));
+  let class = SizeClass::from_width(state.window_size.width);
+  let sidebar = sidebar(state, class).width(Length::Fixed(sidebar_width(class)));
   let content: Element<'_, Message> = match &state.destination {
     Destination::Home => home::view(state),
     Destination::Library { .. } | Destination::Search(_) => browse::view(state),
@@ -135,7 +149,14 @@ fn with_alpha(color: Color, alpha: f32) -> Color {
   Color { a: alpha, ..color }
 }
 
-fn sidebar(state: &State) -> container::Container<'_, Message> {
+fn sidebar(state: &State, class: SizeClass) -> container::Container<'_, Message> {
+  match class {
+    SizeClass::Compact => sidebar_compact(state),
+    SizeClass::Standard | SizeClass::Wide => sidebar_full(state),
+  }
+}
+
+fn sidebar_full(state: &State) -> container::Container<'_, Message> {
   let title = column![
     text("JellyPilot")
       .font(SPACE_GROTESK_FONT)
@@ -233,6 +254,57 @@ fn sidebar(state: &State) -> container::Container<'_, Message> {
     .style(|theme| jellypilot_ui::theme::surface_variant(theme, SurfaceVariant::Elevated))
 }
 
+fn sidebar_compact(state: &State) -> container::Container<'_, Message> {
+  let mut destinations = Column::new()
+    .spacing(TOKENS.spacing.s1_5)
+    .align_x(Alignment::Center)
+    .width(Fill)
+    .push(compact_destination_button(
+      Icon::Home,
+      "Home",
+      Destination::Home,
+      state.destination == Destination::Home,
+    ));
+  if let LoadState::Ready(shortcuts) = &state.home.shortcuts {
+    for shortcut in shortcuts {
+      let destination = Destination::Library {
+        library_id: shortcut.id.clone(),
+        collection_type: shortcut.collection_type.clone(),
+      };
+      let active = state.destination == destination;
+      destinations = destinations.push(compact_destination_button(
+        Icon::for_collection_type(&shortcut.collection_type),
+        &shortcut.name,
+        destination,
+        active,
+      ));
+    }
+  }
+
+  let bottom = column![
+    compact_destination_button(
+      Icon::Settings,
+      "Settings",
+      Destination::Settings,
+      state.destination == Destination::Settings,
+    ),
+    compact_connection_status(state),
+  ]
+  .spacing(TOKENS.spacing.s3)
+  .align_x(Alignment::Center)
+  .width(Fill);
+
+  let content = column![destinations, space::vertical(), bottom]
+    .spacing(TOKENS.spacing.s4)
+    .width(Fill)
+    .height(Fill);
+
+  container(content)
+    .padding(TOKENS.spacing.s4)
+    .height(Fill)
+    .style(|theme| jellypilot_ui::theme::surface_variant(theme, SurfaceVariant::Elevated))
+}
+
 fn destination_button<'a>(
   icon: Icon,
   label: &'a str,
@@ -286,6 +358,53 @@ fn connection_summary(state: &State) -> Element<'_, Message> {
   .align_y(Alignment::Center)
   .into()
 }
+
+fn compact_destination_button<'a>(
+  icon: Icon,
+  label: &'a str,
+  destination: Destination,
+  active: bool,
+) -> Element<'a, Message> {
+  let variant = if active {
+    ButtonVariant::Secondary
+  } else {
+    ButtonVariant::Text
+  };
+  let btn = button(
+    container(icon_for_variant(icon, IconSize::Md, variant))
+      .width(Fill)
+      .align_x(Alignment::Center),
+  )
+  .padding([7, 0])
+  .width(Fill)
+  .on_press(Message::Home(HomeMessage::Navigate(destination)))
+  .style(move |theme, status| jellypilot_ui::theme::button_variant(theme, status, variant));
+
+  tooltip(btn, label, TooltipOptions::default())
+}
+
+fn compact_connection_status(state: &State) -> Element<'_, Message> {
+  let Some(identity) = &state.connected_identity else {
+    return space::vertical().into();
+  };
+  let summary = format!("{} • {}", identity.user_name, identity.server);
+  let dot = container(space::horizontal())
+    .width(8.0)
+    .height(8.0)
+    .style(|_theme| container::Style {
+      background: Some(iced::Background::Color(TOKENS.colors.onSurfaceVariant)),
+      border: iced::Border {
+        radius: TOKENS.radii.full.into(),
+        ..iced::Border::default()
+      },
+      ..container::Style::default()
+    });
+  let trigger = container(dot)
+    .padding(TOKENS.spacing.s2)
+    .width(Fill)
+    .align_x(Alignment::Center);
+  tooltip(trigger, summary, TooltipOptions::default())
+}
 #[cfg(test)]
 mod tests {
   use super::*;
@@ -337,5 +456,11 @@ mod tests {
 
     state.dismiss_toast(2);
     assert_eq!(visible_notice(&state), None);
+  }
+  #[test]
+  fn sidebar_width_maps_size_classes_to_expected_widths() {
+    assert_eq!(sidebar_width(SizeClass::Compact), 72.0);
+    assert_eq!(sidebar_width(SizeClass::Standard), 248.0);
+    assert_eq!(sidebar_width(SizeClass::Wide), 248.0);
   }
 }

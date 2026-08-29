@@ -22,6 +22,8 @@ pub fn subscription(state: &State) -> Subscription<Message> {
     }
   });
   let mut subscriptions = vec![window_events];
+  subscriptions
+    .push(window::resize_events().map(|(_id, size)| Message::Window(WindowMessage::Resized(size))));
   if state.playback_view.now_playing.is_some() {
     subscriptions.push(
       time::every(Duration::from_secs(1))
@@ -240,7 +242,8 @@ mod tests {
     });
     state.settings_view.shortcut_capture = Some(jellypilot_core::config::ShortcutKind::Next);
 
-    assert_eq!(subscription(&state).units(), 3);
+    // window events, resize events, playback tick, shortcut capture
+    assert_eq!(subscription(&state).units(), 4);
   }
 
   #[test]

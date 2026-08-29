@@ -1,7 +1,6 @@
 use crate::app::message::{HomeMessage, Message, PlaybackMessage};
 use crate::app::state::{has_resume_position, ArtworkCell, ArtworkCellState, HomeSection, State};
 use iced::widget::scrollable::{Direction, Scrollbar};
-use iced::widget::text::Wrapping;
 use iced::widget::{button, column, container, row, scrollable, space, text, Column, Row};
 use iced::{Alignment, ContentFit, Element, Fill, Length};
 use jellypilot_core::cards::{hero_headline, hero_metadata, item_caption};
@@ -13,22 +12,27 @@ use jellypilot_ui::fonts::SPACE_GROTESK_FONT;
 use jellypilot_ui::icons::{
   icon_for_variant, icon_for_variant_disabled, icon_with_color, Icon, IconSize,
 };
+use jellypilot_ui::layout::SizeClass;
 use jellypilot_ui::tokens::TOKENS;
 use jellypilot_ui::variants::{ButtonVariant, SurfaceVariant};
+use jellypilot_ui::widgets::ellipsis_text::ellipsis_text;
 use jellypilot_ui::{card_top_radius, full_radius, poster_card, rounded_image};
 const THUMB_FRAME_WIDTH: f32 = 240.0;
 const THUMB_FRAME_HEIGHT: f32 = 135.0;
 const POSTER_FRAME_WIDTH: f32 = 160.0;
 const POSTER_FRAME_HEIGHT: f32 = 240.0;
 
-/// Content width used to classify initially visible home cards before a
-/// measured layout exists: default window width minus the shell's outer
-/// padding, sidebar, sidebar-content gap, and the home page padding.
-pub(crate) const HOME_CONTENT_WIDTH: f32 = 1600.0
+/// Content width available for home content at a given window width and size class:
+/// window width minus the shell's outer padding, tier-dependent sidebar width,
+/// sidebar-content gap, and the home page horizontal padding.
+pub(crate) fn content_width(window_width: f32, class: SizeClass) -> f32 {
+  (window_width
     - TOKENS.spacing.s3 * 2.0
-    - super::shell::SIDEBAR_WIDTH
+    - super::shell::sidebar_width(class)
     - TOKENS.spacing.s4
-    - TOKENS.spacing.s8 * 2.0;
+    - TOKENS.spacing.s8 * 2.0)
+    .max(1.0)
+}
 
 pub(crate) const fn section_frame_size(section: HomeSection) -> (f32, f32) {
   match section {
@@ -234,14 +238,12 @@ fn video_card<'a>(
   );
 
   let text_stack = column![
-    text(&item.name)
+    ellipsis_text(&item.name)
       .size(14)
-      .color(TOKENS.colors.onSurface)
-      .wrapping(Wrapping::None),
-    text(item_caption(item))
+      .color(TOKENS.colors.onSurface),
+    ellipsis_text(item_caption(item))
       .size(12)
-      .color(TOKENS.colors.onSurfaceVariant)
-      .wrapping(Wrapping::None),
+      .color(TOKENS.colors.onSurfaceVariant),
   ]
   .spacing(TOKENS.spacing.s1)
   .width(Fill);
@@ -314,14 +316,12 @@ fn video_card<'a>(
   }
 
   let copy = column![
-    text(&item.name)
+    ellipsis_text(&item.name)
       .size(14)
-      .color(TOKENS.colors.onSurface)
-      .wrapping(Wrapping::None),
-    text(item_caption(item))
+      .color(TOKENS.colors.onSurface),
+    ellipsis_text(item_caption(item))
       .size(12)
-      .color(TOKENS.colors.onSurfaceVariant)
-      .wrapping(Wrapping::None),
+      .color(TOKENS.colors.onSurfaceVariant),
   ]
   .spacing(TOKENS.spacing.s1)
   .padding(iced::Padding {
@@ -589,5 +589,28 @@ mod tests {
     let (mov_w, mov_h) = section_frame_size(HomeSection::LatestMovies);
     assert_eq!((mov_w, mov_h), (POSTER_FRAME_WIDTH, POSTER_FRAME_HEIGHT));
     assert_eq!(section_scroll_height(HomeSection::LatestMovies), 296.0);
+  }
+
+  #[test]
+  fn content_width_standard_matches_pinned_regression_constant() {
+    let expected =
+      1600.0 - TOKENS.spacing.s3 * 2.0 - 248.0 - TOKENS.spacing.s4 - TOKENS.spacing.s8 * 2.0;
+    assert_eq!(content_width(1600.0, SizeClass::Standard), expected);
+    assert_eq!(content_width(1600.0, SizeClass::Standard), 1248.0);
+  }
+
+  #[test]
+  fn content_width_compact_uses_rail_sidebar() {
+    let expected =
+      1024.0 - TOKENS.spacing.s3 * 2.0 - 72.0 - TOKENS.spacing.s4 - TOKENS.spacing.s8 * 2.0;
+    assert_eq!(content_width(1024.0, SizeClass::Compact), expected);
+    assert_eq!(content_width(1024.0, SizeClass::Compact), 848.0);
+  }
+
+  #[test]
+  fn content_width_clamps_to_floor_at_narrow_widths() {
+    assert_eq!(content_width(0.0, SizeClass::Compact), 1.0);
+    assert_eq!(content_width(50.0, SizeClass::Compact), 1.0);
+    assert_eq!(content_width(-100.0, SizeClass::Compact), 1.0);
   }
 }

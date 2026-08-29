@@ -16,6 +16,12 @@ pub fn boot(smoke: bool, tray: Option<crate::tray::Tray>) -> (State, Task<Messag
     tray.sync(&state.playback_view, false);
   }
   let task = update::load_saved_profiles(&state).map(Message::Login);
+  let task = Task::batch([
+    task,
+    iced::window::latest()
+      .and_then(iced::window::size)
+      .map(|size| Message::Window(message::WindowMessage::Resized(size))),
+  ]);
   (state, task)
 }
 

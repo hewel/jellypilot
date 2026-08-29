@@ -479,7 +479,6 @@ impl DetailState {
 pub struct BrowseViewport {
   pub offset_y: f32,
   pub height: f32,
-  pub width: f32,
 }
 
 impl Default for BrowseViewport {
@@ -487,7 +486,6 @@ impl Default for BrowseViewport {
     Self {
       offset_y: 0.0,
       height: 720.0,
-      width: 960.0,
     }
   }
 }
@@ -620,6 +618,8 @@ pub fn diagnostic_matches(
 
 pub struct State {
   pub smoke: bool,
+  /// Latest known logical window size; drives size-class layout decisions.
+  pub window_size: iced::Size,
   pub settings: SettingsStore,
   pub settings_view: SettingsState,
   pub diagnostics: Diagnostics,
@@ -699,6 +699,7 @@ impl State {
 
     Self {
       smoke,
+      window_size: iced::Size::new(1600.0, 900.0),
       settings,
       settings_view,
       diagnostics,

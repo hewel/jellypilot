@@ -1,6 +1,5 @@
 use crate::app::message::{BrowseMessage, Message};
 use crate::app::state::{ArtworkCell, ArtworkCellState, Destination, State};
-use iced::widget::text::Wrapping;
 use iced::widget::{button, column, container, row, scrollable, space, text, Column};
 use iced::{Alignment, ContentFit, Element, Fill};
 use jellypilot_core::browse_model::{LibraryBrowseView, LibraryItemSlot};
@@ -13,19 +12,49 @@ use jellypilot_ui::fonts::SPACE_GROTESK_FONT;
 use jellypilot_ui::icons::{
   icon_for_variant, icon_for_variant_disabled, icon_with_color, Icon, IconSize,
 };
+use jellypilot_ui::layout::SizeClass;
 use jellypilot_ui::overlay::{popover, PopoverOptions};
 use jellypilot_ui::tokens::TOKENS;
 use jellypilot_ui::variants::ButtonVariant;
 use jellypilot_ui::widgets::artwork_grid::{artwork_grid, ArtworkGridMetrics, ArtworkGridViewport};
+use jellypilot_ui::widgets::ellipsis_text::ellipsis_text;
 use jellypilot_ui::{full_radius, poster_card, rounded_image};
 
 pub(crate) const PAGE_PADDING: f32 = 32.0;
+
+/// Horizontal page padding for browse screens, tier-dependent:
+/// [`SizeClass::Compact`] uses tighter spacing ([`TOKENS.spacing.s4`] = 16.0),
+/// while [`SizeClass::Standard`] and [`SizeClass::Wide`] use [`PAGE_PADDING`] (32.0).
+pub(crate) fn page_padding(class: SizeClass) -> f32 {
+  match class {
+    SizeClass::Compact => TOKENS.spacing.s4,
+    SizeClass::Standard | SizeClass::Wide => PAGE_PADDING,
+  }
+}
+/// Grid width derived from the tracked window size: window minus shell
+/// padding, the tier-dependent sidebar, the sidebar-content gap, and the
+/// tier-dependent page padding.
+///
+/// The scrollable's `on_scroll` viewport is NOT used for width: iced only
+/// publishes it when the content overflows the viewport, so a maximized
+/// window whose grid fits vertically would keep reporting a stale width.
+/// `state.window_size` follows every resize event and never goes stale.
+pub(crate) fn grid_available_width(window_width: f32, class: SizeClass) -> f32 {
+  (window_width
+    - TOKENS.spacing.s3 * 2.0
+    - super::shell::sidebar_width(class)
+    - TOKENS.spacing.s4
+    - page_padding(class) * 2.0)
+    .max(1.0)
+}
+
 pub(crate) const CARD_COPY_HEIGHT: f32 = 46.0;
 /// Height of the pagination row rendered above the grid when it is shown:
 /// vertical padding around the button row plus the buttons themselves
 /// (text line height plus vertical button padding).
 pub(crate) const PAGINATION_ROW_HEIGHT: f32 = TOKENS.spacing.s3 * 2.0 + 13.0 * 1.3 + 6.0 * 2.0;
 pub fn view(state: &State) -> Element<'_, Message> {
+  let class = SizeClass::from_width(state.window_size.width);
   let title = match &state.destination {
     Destination::Library { library_id, .. } => match &state.home.shortcuts {
       jellypilot_core::LoadState::Ready(shortcuts) => shortcuts
@@ -60,7 +89,7 @@ pub fn view(state: &State) -> Element<'_, Message> {
     container(header)
       .padding([TOKENS.spacing.s5, TOKENS.spacing.s8])
       .width(Fill),
-    browse_body(state),
+    browse_body(state, class),
   ]
   .height(Fill)
   .width(Fill)
@@ -192,22 +221,25 @@ fn played_option(
   .into()
 }
 
-fn browse_body(state: &State) -> Element<'_, Message> {
+fn browse_body(state: &State, class: SizeClass) -> Element<'_, Message> {
+  let padding = page_padding(class);
   match &state.browse_view {
-    LibraryBrowseView::Inactive => empty_surface("Choose a library to browse.".to_owned()),
-    LibraryBrowseView::Loading => empty_surface("Loading library…".to_owned()),
+    LibraryBrowseView::Inactive => empty_surface("Choose a library to browse.".to_owned(), padding),
+    LibraryBrowseView::Loading => empty_surface("Loading library…".to_owned(), padding),
     LibraryBrowseView::Empty => match &state.destination {
-      Destination::Search(query) => empty_surface(format!("No results for “{query}”.")),
+      Destination::Search(query) => empty_surface(format!("No results for “{query}”."), padding),
       Destination::Home
       | Destination::Library { .. }
       | Destination::Detail(_)
-      | Destination::Settings => empty_surface("This library has no matching items.".to_owned()),
+      | Destination::Settings => {
+        empty_surface("This library has no matching items.".to_owned(), padding)
+      }
     },
     LibraryBrowseView::Failed {
       message,
       retryable,
       retry_busy,
-    } => failure_surface(message, *retryable, *retry_busy),
+    } => failure_surface(message, *retryable, *retry_busy, padding),
     LibraryBrowseView::Ready {
       visible_items,
       total_record_count,
@@ -220,6 +252,7 @@ fn browse_body(state: &State) -> Element<'_, Message> {
       *total_record_count,
       load_more_failure.as_ref(),
       *retry_busy,
+      class,
     ),
   }
 }
@@ -230,8 +263,10 @@ fn ready_surface<'a>(
   total_record_count: u32,
   load_more_failure: Option<&'a LibraryBrowseFailure>,
   retry_busy: bool,
+  class: SizeClass,
 ) -> Element<'a, Message> {
-  let available_width = (state.browse_viewport.width - PAGE_PADDING * 2.0).max(1.0);
+  let padding = page_padding(class);
+  let available_width = grid_available_width(state.window_size.width, class);
   let metrics = ArtworkGridMetrics::for_cards(available_width, CARD_COPY_HEIGHT);
   let viewport = ArtworkGridViewport {
     offset_y: state.browse_viewport.offset_y,
@@ -308,19 +343,19 @@ fn ready_surface<'a>(
               .color(TOKENS.colors.onSurfaceVariant),
             ]
             .spacing(TOKENS.spacing.s3)
-            .padding([TOKENS.spacing.s3, PAGE_PADDING])
+            .padding([TOKENS.spacing.s3, padding])
             .align_y(Alignment::Center),
           );
         }
       }
       BodySection::Grid => {
         if let Some(grid) = grid.take() {
-          content = content.push(container(grid).padding([0.0, PAGE_PADDING]).width(Fill));
+          content = content.push(container(grid).padding([0.0, padding]).width(Fill));
         }
       }
       BodySection::InlineFailure => {
         if let Some(failure) = load_more_failure {
-          content = content.push(inline_failure(failure, retry_busy));
+          content = content.push(inline_failure(failure, retry_busy, padding));
         }
       }
     }
@@ -391,14 +426,12 @@ fn video_card<'a>(
     artwork_height,
   );
   let copy = column![
-    text(&item.name)
+    ellipsis_text(&item.name)
       .size(14)
-      .color(TOKENS.colors.onSurface)
-      .wrapping(Wrapping::None),
-    text(item_caption(item))
+      .color(TOKENS.colors.onSurface),
+    ellipsis_text(item_caption(item))
       .size(12)
-      .color(TOKENS.colors.onSurfaceVariant)
-      .wrapping(Wrapping::None),
+      .color(TOKENS.colors.onSurfaceVariant),
   ]
   .spacing(TOKENS.spacing.s1)
   .padding(iced::Padding {
@@ -473,7 +506,12 @@ fn artwork<'a>(
   })
   .into()
 }
-fn failure_surface(message: &str, retryable: bool, retry_busy: bool) -> Element<'_, Message> {
+fn failure_surface(
+  message: &str,
+  retryable: bool,
+  retry_busy: bool,
+  padding: f32,
+) -> Element<'_, Message> {
   let retry_enabled = retryable && !retry_busy;
   let retry = button(
     row![
@@ -508,13 +546,17 @@ fn failure_surface(message: &str, retryable: bool, retry_busy: bool) -> Element<
     ]
     .spacing(TOKENS.spacing.s3),
   )
-  .padding(PAGE_PADDING)
+  .padding(padding)
   .width(Fill)
   .height(Fill)
   .into()
 }
 
-fn inline_failure(failure: &LibraryBrowseFailure, retry_busy: bool) -> Element<'_, Message> {
+fn inline_failure(
+  failure: &LibraryBrowseFailure,
+  retry_busy: bool,
+  padding: f32,
+) -> Element<'_, Message> {
   let retry_enabled = failure.retryable && !retry_busy;
   let retry = button(
     row![
@@ -543,7 +585,7 @@ fn inline_failure(failure: &LibraryBrowseFailure, retry_busy: bool) -> Element<'
     retry,
   ]
   .spacing(TOKENS.spacing.s3)
-  .padding([TOKENS.spacing.s3, PAGE_PADDING])
+  .padding([TOKENS.spacing.s3, padding])
   .align_y(Alignment::Center)
   .into()
 }
@@ -552,9 +594,9 @@ fn retry_action(retryable: bool, retry_busy: bool) -> Option<Message> {
   (retryable && !retry_busy).then_some(Message::Browse(BrowseMessage::Retry))
 }
 
-fn empty_surface(message: String) -> Element<'static, Message> {
+fn empty_surface(message: String, padding: f32) -> Element<'static, Message> {
   container(text(message).size(16).color(TOKENS.colors.onSurfaceVariant))
-    .padding(PAGE_PADDING)
+    .padding(padding)
     .width(Fill)
     .height(Fill)
     .into()
@@ -629,5 +671,32 @@ mod tests {
       metrics.cell_height,
       metrics.cell_width * 1.5 + CARD_COPY_HEIGHT
     );
+  }
+
+  #[test]
+  fn page_padding_matches_tier_contract() {
+    assert_eq!(page_padding(SizeClass::Compact), TOKENS.spacing.s4);
+    assert_eq!(page_padding(SizeClass::Compact), 16.0);
+    assert_eq!(page_padding(SizeClass::Standard), PAGE_PADDING);
+    assert_eq!(page_padding(SizeClass::Standard), 32.0);
+    assert_eq!(page_padding(SizeClass::Wide), PAGE_PADDING);
+    assert_eq!(page_padding(SizeClass::Wide), 32.0);
+  }
+  #[test]
+  fn grid_available_width_matches_legacy_startup_geometry() {
+    // 1600×900 default window, full sidebar: the pre-adaptation grid measured
+    // the scrollable at 1312px and subtracted 2×32 page padding.
+    assert_eq!(grid_available_width(1600.0, SizeClass::Standard), 1248.0);
+  }
+
+  #[test]
+  fn grid_available_width_compact_uses_rail_and_narrow_padding() {
+    // 1024 - 2×12 shell padding - 72 rail - 16 gap - 2×16 page padding.
+    assert_eq!(grid_available_width(1024.0, SizeClass::Compact), 880.0);
+  }
+
+  #[test]
+  fn grid_available_width_never_falls_below_one() {
+    assert_eq!(grid_available_width(100.0, SizeClass::Compact), 1.0);
   }
 }

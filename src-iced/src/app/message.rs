@@ -69,6 +69,7 @@ pub enum Message {
 pub enum WindowMessage {
   ShowRequested(Option<window::Id>),
   CloseRequested(window::Id),
+  Resized(iced::Size),
   FrameRendered,
 }
 
