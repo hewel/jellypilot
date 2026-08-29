@@ -17,10 +17,10 @@ use jellypilot_ui::overlay::{popover, PopoverOptions};
 use jellypilot_ui::tokens::TOKENS;
 use jellypilot_ui::variants::ButtonVariant;
 use jellypilot_ui::widgets::artwork_grid::{artwork_grid, ArtworkGridMetrics, ArtworkGridViewport};
-use jellypilot_ui::{full_radius, rounded_image};
+use jellypilot_ui::{full_radius, poster_card, rounded_image};
 
 const PAGE_PADDING: f32 = 32.0;
-const CARD_COPY_HEIGHT: f32 = 68.0;
+const CARD_COPY_HEIGHT: f32 = 46.0;
 pub fn view(state: &State) -> Element<'_, Message> {
   let title = match &state.destination {
     Destination::Library { library_id, .. } => match &state.home.shortcuts {
@@ -405,18 +405,10 @@ fn video_card<'a>(
   })
   .width(Fill);
 
-  container(
-    button(column![artwork, copy].width(Fill))
-      .padding(0)
-      .width(Fill)
-      .height(Fill)
-      .on_press(Message::OpenDetail(item.clone()))
-      .style(jellypilot_ui::theme::poster_card_button),
-  )
-  .width(Fill)
-  .height(Fill)
-  .clip(true)
-  .into()
+  poster_card(artwork, copy)
+    .width(Fill)
+    .on_press(Message::OpenDetail(item.clone()))
+    .into()
 }
 
 fn artwork<'a>(
@@ -623,5 +615,15 @@ mod tests {
   #[test]
   fn non_retryable_incremental_failure_has_no_retry_action() {
     assert!(retry_action(false, false).is_none());
+  }
+
+  #[test]
+  fn browse_card_metrics_match_exact_poster_and_copy_height() {
+    let metrics = ArtworkGridMetrics::for_cards(640.0, CARD_COPY_HEIGHT);
+    assert_eq!(CARD_COPY_HEIGHT, 46.0);
+    assert_eq!(
+      metrics.cell_height,
+      metrics.cell_width * 1.5 + CARD_COPY_HEIGHT
+    );
   }
 }

@@ -85,43 +85,6 @@ pub fn style(_theme: &Theme, variant: ButtonVariant, status: button::Status) -> 
         ..button::Style::default()
     }
 }
-
-/// Resolves the borderless poster-stream card button style for grid and row poster cards.
-///
-/// In the default/active state, there is no card chrome (transparent background, zero border,
-/// no shadow) so the poster and metadata sit directly on the page surface. On hover or press,
-/// a subtle brightness lift appears without an outline ring or shadow elevation.
-pub fn poster_card_style(_theme: &Theme, status: button::Status) -> button::Style {
-    let colors = TOKENS.colors;
-    let (background, border_color, border_width, shadow) = match status {
-        button::Status::Active => (None, Color::TRANSPARENT, 0.0, TOKENS.shadows.none.iced()),
-        button::Status::Hovered => (
-            Some(with_alpha(Color::WHITE, 0.05)),
-            Color::TRANSPARENT,
-            0.0,
-            TOKENS.shadows.none.iced(),
-        ),
-        button::Status::Pressed => (
-            Some(with_alpha(Color::WHITE, 0.08)),
-            Color::TRANSPARENT,
-            0.0,
-            TOKENS.shadows.none.iced(),
-        ),
-        button::Status::Disabled => (None, Color::TRANSPARENT, 0.0, TOKENS.shadows.none.iced()),
-    };
-    button::Style {
-        background: background.map(Background::Color),
-        text_color: colors.onSurface,
-        border: Border {
-            radius: TOKENS.radii.lg.into(),
-            color: border_color,
-            width: border_width,
-        },
-        shadow,
-        ..button::Style::default()
-    }
-}
-
 fn brightness(color: Color, factor: f32) -> Color {
     Color {
         r: (color.r * factor).min(1.0),
@@ -193,47 +156,6 @@ mod tests {
     }
 
     #[test]
-    fn poster_card_style_active_has_no_border_or_background_or_shadow() {
-        let theme = crate::theme::theme();
-        let style = super::poster_card_style(&theme, iced::widget::button::Status::Active);
-        assert_eq!(style.border.width, 0.0);
-        assert_eq!(style.border.color, Color::TRANSPARENT);
-        assert!(style.background.is_none());
-        assert_eq!(style.shadow, crate::tokens::TOKENS.shadows.none.iced());
-    }
-    #[test]
-    fn poster_card_style_hovered_has_brightness_lift_and_no_ring_or_shadow() {
-        let theme = crate::theme::theme();
-        let style = super::poster_card_style(&theme, iced::widget::button::Status::Hovered);
-        assert_eq!(style.border.width, 0.0);
-        assert_eq!(style.border.color, Color::TRANSPARENT);
-        assert_eq!(
-            style.background,
-            Some(iced::Background::Color(super::with_alpha(
-                Color::WHITE,
-                0.05
-            )))
-        );
-        assert_eq!(style.shadow, crate::tokens::TOKENS.shadows.none.iced());
-    }
-
-    #[test]
-    fn poster_card_style_pressed_has_stronger_brightness_lift_and_no_ring_or_shadow() {
-        let theme = crate::theme::theme();
-        let style = super::poster_card_style(&theme, iced::widget::button::Status::Pressed);
-        assert_eq!(style.border.width, 0.0);
-        assert_eq!(style.border.color, Color::TRANSPARENT);
-        assert_eq!(
-            style.background,
-            Some(iced::Background::Color(super::with_alpha(
-                Color::WHITE,
-                0.08
-            )))
-        );
-        assert_eq!(style.shadow, crate::tokens::TOKENS.shadows.none.iced());
-    }
-
-    #[test]
     fn button_variants_use_lg_radius_token() {
         use crate::variants::ButtonVariant;
         use iced::border::Radius;
@@ -254,11 +176,5 @@ mod tests {
                 "Button variant {variant:?} must use lg (8px) radius token"
             );
         }
-
-        let poster_style = super::poster_card_style(&theme, Status::Active);
-        assert_eq!(
-            poster_style.border.radius,
-            Radius::from(crate::tokens::TOKENS.radii.lg)
-        );
     }
 }

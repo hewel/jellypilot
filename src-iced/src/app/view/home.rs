@@ -15,7 +15,7 @@ use jellypilot_ui::icons::{
 };
 use jellypilot_ui::tokens::TOKENS;
 use jellypilot_ui::variants::{ButtonVariant, SurfaceVariant};
-use jellypilot_ui::{card_top_radius, full_radius, rounded_image};
+use jellypilot_ui::{card_top_radius, full_radius, poster_card, rounded_image};
 const THUMB_FRAME_WIDTH: f32 = 240.0;
 const THUMB_FRAME_HEIGHT: f32 = 135.0;
 const POSTER_FRAME_WIDTH: f32 = 160.0;
@@ -33,7 +33,7 @@ const fn section_frame_size(section: HomeSection) -> (f32, f32) {
 const fn section_scroll_height(section: HomeSection) -> f32 {
   match section {
     HomeSection::ContinueWatching | HomeSection::NextUp => 280.0,
-    HomeSection::LatestMovies | HomeSection::LatestEpisodes => 340.0,
+    HomeSection::LatestMovies | HomeSection::LatestEpisodes => 296.0,
   }
 }
 
@@ -323,16 +323,10 @@ fn video_card<'a>(
   })
   .width(frame_width);
 
-  container(
-    button(column![poster, copy].width(frame_width))
-      .padding(0)
-      .width(frame_width)
-      .on_press(Message::OpenDetail(item.clone()))
-      .style(jellypilot_ui::theme::poster_card_button),
-  )
-  .width(frame_width)
-  .clip(true)
-  .into()
+  poster_card(poster, copy)
+    .width(frame_width)
+    .on_press(Message::OpenDetail(item.clone()))
+    .into()
 }
 
 fn play_message(state: &State, item: &VideoLibraryItem) -> Message {
@@ -585,6 +579,6 @@ mod tests {
 
     let (mov_w, mov_h) = section_frame_size(HomeSection::LatestMovies);
     assert_eq!((mov_w, mov_h), (POSTER_FRAME_WIDTH, POSTER_FRAME_HEIGHT));
-    assert_eq!(section_scroll_height(HomeSection::LatestMovies), 340.0);
+    assert_eq!(section_scroll_height(HomeSection::LatestMovies), 296.0);
   }
 }

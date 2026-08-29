@@ -50,11 +50,6 @@ pub fn button_variant(
     widgets::button::style(theme, variant, status)
 }
 
-/// Resolves a poster card button style with hover/press ring affordance and no static card chrome.
-pub fn poster_card_button(theme: &Theme, status: button::Status) -> button::Style {
-    widgets::button::poster_card_style(theme, status)
-}
-
 /// Resolves a status badge variant.
 pub fn badge_variant(theme: &Theme, variant: BadgeVariant) -> container::Style {
     widgets::badge::style(theme, variant)
