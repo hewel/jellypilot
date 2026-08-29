@@ -15,10 +15,10 @@ pub fn view(state: &State) -> Element<'_, Message> {
   let login = &state.login;
   let title = text("Sign in to JellyPilot")
     .font(SPACE_GROTESK_FONT)
-    .size(38)
+    .size(32)
     .color(TOKENS.colors.onSurface);
   let subtitle = text("Connect directly to your own media server.")
-    .size(16)
+    .size(14)
     .color(TOKENS.colors.onSurfaceVariant);
 
   let provider_row = row![
@@ -29,8 +29,8 @@ pub fn view(state: &State) -> Element<'_, Message> {
 
   let server_field = text_input("https://media.example.com", &login.server_url)
     .on_input(|value| Message::Login(LoginMessage::ServerUrlChanged(value)))
-    .padding(14)
-    .size(16)
+    .padding([8, 12])
+    .size(14)
     .style(move |theme, status| {
       if login.error.is_some() && login.server_url.trim().is_empty() {
         jellypilot_ui::theme::error_field_variant(theme, status, FieldVariant::Filled)
@@ -63,7 +63,7 @@ pub fn view(state: &State) -> Element<'_, Message> {
   };
 
   let mut form = column![title, subtitle, provider_row, fields, method_tabs, method]
-    .spacing(18)
+    .spacing(14)
     .width(Fill);
   if let Some(error) = &login.error {
     form = form.push(text(error).size(15).color(TOKENS.colors.error));
@@ -76,13 +76,13 @@ pub fn view(state: &State) -> Element<'_, Message> {
 
   let card = container(form)
     .width(Length::Fixed(640.0))
-    .padding(36)
+    .padding(28)
     .style(|theme| jellypilot_ui::theme::surface_variant(theme, SurfaceVariant::Elevated));
   container(scrollable(card).style(jellypilot_ui::theme::scrollable))
     .width(Fill)
     .height(Fill)
     .center_x(Fill)
-    .padding([48, 24])
+    .padding([36, 24])
     .style(|theme| jellypilot_ui::theme::surface_variant(theme, SurfaceVariant::Filled))
     .into()
 }
@@ -106,7 +106,7 @@ fn provider_button<'a>(
     .spacing(TOKENS.spacing.s2)
     .align_y(Alignment::Center),
   )
-  .padding([10, 18])
+  .padding([7, 14])
   .on_press(Message::Login(LoginMessage::ProviderSelected(provider)))
   .style(move |theme, status| jellypilot_ui::theme::button_variant(theme, status, variant))
   .into()
@@ -132,7 +132,7 @@ fn method_button<'a>(
       .spacing(TOKENS.spacing.s1_5)
       .align_y(Alignment::Center),
   )
-  .padding([10, 18])
+  .padding([7, 14])
   .on_press(Message::Login(LoginMessage::MethodSelected(method)))
   .style(move |theme, status| jellypilot_ui::theme::button_variant(theme, status, variant))
   .into()
@@ -161,7 +161,7 @@ fn quick_connect(state: &State) -> Element<'_, Message> {
         .spacing(TOKENS.spacing.s2)
         .align_y(Alignment::Center),
       )
-      .padding([12, 20])
+      .padding([8, 16])
       .style(|theme, status| {
         jellypilot_ui::theme::button_variant(theme, status, ButtonVariant::Primary)
       });
@@ -230,7 +230,7 @@ fn cancel_button<'a>() -> Element<'a, Message> {
     .spacing(TOKENS.spacing.s1_5)
     .align_y(Alignment::Center),
   )
-  .padding([10, 16])
+  .padding([7, 12])
   .on_press(Message::Login(LoginMessage::QuickConnectCancelled))
   .style(|theme, status| {
     jellypilot_ui::theme::button_variant(theme, status, ButtonVariant::Outlined)
@@ -242,16 +242,16 @@ fn password(state: &State) -> Element<'_, Message> {
   let login = &state.login;
   let username = text_input("Username", &login.username)
     .on_input(|value| Message::Login(LoginMessage::UsernameChanged(value)))
-    .padding(14)
-    .size(16)
+    .padding([8, 12])
+    .size(14)
     .style(|theme, status| {
       jellypilot_ui::theme::field_variant(theme, status, FieldVariant::Filled)
     });
   let password = text_input("Password", &login.password)
     .on_input(|value| Message::Login(LoginMessage::PasswordChanged(value)))
     .secure(true)
-    .padding(14)
-    .size(16)
+    .padding([8, 12])
+    .size(14)
     .style(|theme, status| {
       jellypilot_ui::theme::field_variant(theme, status, FieldVariant::Filled)
     });
@@ -266,7 +266,7 @@ fn password(state: &State) -> Element<'_, Message> {
     "Remember server and username: Off"
   };
   let remember = button(text(remember_label))
-    .padding([10, 14])
+    .padding([6, 12])
     .on_press(Message::Login(LoginMessage::RememberToggled))
     .style(|theme, status| {
       jellypilot_ui::theme::button_variant(theme, status, ButtonVariant::Text)
@@ -289,7 +289,7 @@ fn password(state: &State) -> Element<'_, Message> {
     .spacing(TOKENS.spacing.s2)
     .align_y(Alignment::Center),
   )
-  .padding([12, 20])
+  .padding([8, 16])
   .style(|theme, status| {
     jellypilot_ui::theme::button_variant(theme, status, ButtonVariant::Primary)
   });
@@ -309,7 +309,7 @@ fn saved_profiles(state: &State) -> Element<'_, Message> {
     row![
       icon_with_color(Icon::User, IconSize::Lg, TOKENS.colors.primary),
       text("Saved sign-ins")
-        .size(20)
+        .size(18)
         .color(TOKENS.colors.onSurface),
     ]
     .spacing(TOKENS.spacing.s2)
@@ -330,7 +330,7 @@ fn saved_profiles(state: &State) -> Element<'_, Message> {
       .spacing(TOKENS.spacing.s2)
       .align_y(Alignment::Center),
     )
-    .padding([10, 14])
+    .padding([6, 12])
     .style(|theme, status| {
       jellypilot_ui::theme::button_variant(theme, status, ButtonVariant::Secondary)
     });
@@ -347,7 +347,7 @@ fn saved_profiles(state: &State) -> Element<'_, Message> {
       .spacing(TOKENS.spacing.s1)
       .align_y(Alignment::Center),
     )
-    .padding([10, 14])
+    .padding([6, 12])
     .style(|theme, status| {
       jellypilot_ui::theme::button_variant(theme, status, ButtonVariant::Text)
     });
@@ -375,7 +375,7 @@ fn saved_profiles(state: &State) -> Element<'_, Message> {
               .spacing(TOKENS.spacing.s1)
               .align_y(Alignment::Center),
             )
-            .padding([8, 12])
+            .padding([6, 10])
             .on_press(Message::Login(LoginMessage::CancelForgetProfile))
             .style(|theme, status| jellypilot_ui::theme::button_variant(
               theme,
@@ -390,7 +390,7 @@ fn saved_profiles(state: &State) -> Element<'_, Message> {
               .spacing(TOKENS.spacing.s1)
               .align_y(Alignment::Center),
             )
-            .padding([8, 12])
+            .padding([6, 10])
             .on_press(Message::Login(LoginMessage::ConfirmForgetProfile(
               key.clone(),
             )))

@@ -77,7 +77,7 @@ pub fn style(_theme: &Theme, variant: ButtonVariant, status: button::Status) -> 
         background: background.map(Background::Color),
         text_color,
         border: Border {
-            radius: TOKENS.radii.x2l.into(),
+            radius: TOKENS.radii.lg.into(),
             color: border_color,
             width: border_width,
         },
@@ -113,7 +113,7 @@ pub fn poster_card_style(_theme: &Theme, status: button::Status) -> button::Styl
         background: background.map(Background::Color),
         text_color: colors.onSurface,
         border: Border {
-            radius: TOKENS.radii.x2l.into(),
+            radius: TOKENS.radii.lg.into(),
             color: border_color,
             width: border_width,
         },
@@ -231,5 +231,34 @@ mod tests {
             )))
         );
         assert_eq!(style.shadow, crate::tokens::TOKENS.shadows.none.iced());
+    }
+
+    #[test]
+    fn button_variants_use_lg_radius_token() {
+        use crate::variants::ButtonVariant;
+        use iced::border::Radius;
+        use iced::widget::button::Status;
+
+        let theme = crate::theme::theme();
+        for variant in [
+            ButtonVariant::Primary,
+            ButtonVariant::Secondary,
+            ButtonVariant::Outlined,
+            ButtonVariant::Text,
+            ButtonVariant::Icon,
+        ] {
+            let style = super::style(&theme, variant, Status::Active);
+            assert_eq!(
+                style.border.radius,
+                Radius::from(crate::tokens::TOKENS.radii.lg),
+                "Button variant {variant:?} must use lg (8px) radius token"
+            );
+        }
+
+        let poster_style = super::poster_card_style(&theme, Status::Active);
+        assert_eq!(
+            poster_style.border.radius,
+            Radius::from(crate::tokens::TOKENS.radii.lg)
+        );
     }
 }

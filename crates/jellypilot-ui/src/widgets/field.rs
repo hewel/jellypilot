@@ -58,7 +58,7 @@ fn resolve(
             background
         }),
         border: Border {
-            radius: TOKENS.radii.x2l.into(),
+            radius: TOKENS.radii.lg.into(),
             color: if disabled {
                 scale_alpha(border_color, 0.5)
             } else {
@@ -85,5 +85,25 @@ fn scale_alpha(color: Color, factor: f32) -> Color {
     Color {
         a: color.a * factor,
         ..color
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use iced::border::Radius;
+    use iced::widget::text_input::Status;
+
+    use super::*;
+
+    #[test]
+    fn field_style_uses_lg_radius_token() {
+        let theme = crate::theme::theme();
+        let style = style(&theme, FieldVariant::Filled, Status::Active);
+        assert_eq!(style.border.radius, Radius::from(TOKENS.radii.lg));
+        assert_eq!(style.border.width, 1.0);
+
+        let err_style = error_style(&theme, FieldVariant::Filled, Status::Active);
+        assert_eq!(err_style.border.radius, Radius::from(TOKENS.radii.lg));
+        assert_eq!(err_style.border.width, 1.0);
     }
 }

@@ -19,7 +19,7 @@ pub fn view(state: &State) -> Element<'_, Message> {
   let header = column![
     text("Settings")
       .font(SPACE_GROTESK_FONT)
-      .size(34)
+      .size(28)
       .color(TOKENS.colors.onSurface),
     text("Changes are written to disk when Saved appears.")
       .size(13)
@@ -42,7 +42,7 @@ pub fn view(state: &State) -> Element<'_, Message> {
   .spacing(TOKENS.spacing.s4)
   .width(Fill);
 
-  scrollable(container(content).padding([TOKENS.spacing.s5, TOKENS.spacing.s8]))
+  scrollable(container(content).padding([TOKENS.spacing.s4, TOKENS.spacing.s6]))
     .width(Fill)
     .height(Fill)
     .into()
@@ -114,7 +114,7 @@ fn mpv_section(state: &State) -> Element<'_, Message> {
   let path = text_input("Auto-detect from PATH", &state.settings_view.mpv_path_input)
     .on_input(|value| Message::Settings(SettingsMessage::MpvPathChanged(value)))
     .on_submit(Message::Settings(SettingsMessage::SaveMpvPath))
-    .padding([10, 12])
+    .padding([7, 10])
     .width(Fill)
     .style(|theme, status| {
       jellypilot_ui::theme::field_variant(theme, status, FieldVariant::Filled)
@@ -125,7 +125,7 @@ fn mpv_section(state: &State) -> Element<'_, Message> {
   )
   .on_input(|value| Message::Settings(SettingsMessage::MpvArgsChanged(value)))
   .on_submit(Message::Settings(SettingsMessage::SaveMpvArgs))
-  .padding([10, 12])
+  .padding([7, 10])
   .width(Fill)
   .style(|theme, status| jellypilot_ui::theme::field_variant(theme, status, FieldVariant::Filled));
   section(
@@ -156,12 +156,12 @@ fn playback_section(state: &State) -> Element<'_, Message> {
   )
   .on_input(|value| Message::Settings(SettingsMessage::PlaybackTargetNameChanged(value)))
   .on_submit(Message::Settings(SettingsMessage::SavePlaybackTargetName))
-  .padding([10, 12])
+  .padding([7, 10])
   .width(Fill)
   .style(|theme, status| jellypilot_ui::theme::field_variant(theme, status, FieldVariant::Filled));
   let mode = state.settings.snapshot().intro_mode();
   let trigger = button(text(format!("Intro Skipper: {}", intro_mode_label(mode))))
-    .padding([9, 13])
+    .padding([6, 12])
     .on_press(Message::Settings(SettingsMessage::IntroMenuToggled))
     .style(|theme, status| {
       jellypilot_ui::theme::button_variant(theme, status, ButtonVariant::Outlined)
@@ -217,7 +217,7 @@ fn subtitles_section(state: &State) -> Element<'_, Message> {
     .spacing(TOKENS.spacing.s1_5)
     .align_y(Alignment::Center),
   )
-  .padding([9, 13])
+  .padding([6, 12])
   .on_press(Message::Settings(SettingsMessage::SubtitleMenuToggled))
   .style(|theme, status| {
     jellypilot_ui::theme::button_variant(theme, status, ButtonVariant::Outlined)
@@ -226,7 +226,7 @@ fn subtitles_section(state: &State) -> Element<'_, Message> {
   for language in SUBTITLE_LANGUAGE_OPTIONS {
     menu = menu.push(
       button(text(subtitle_language_label(language)).width(Fill))
-        .padding([8, 10])
+        .padding([6, 10])
         .width(Fill)
         .on_press(Message::Settings(SettingsMessage::SubtitleLanguageAdded(
           language.to_owned(),
@@ -346,7 +346,7 @@ fn shortcut_row<'a>(state: &'a State, label: &'a str, kind: ShortcutKind) -> Ele
       .spacing(TOKENS.spacing.s1_5)
       .align_y(Alignment::Center),
     )
-    .padding([8, 11])
+    .padding([5, 10])
     .on_press(Message::Settings(SettingsMessage::BeginShortcutCapture(
       kind
     )))
@@ -396,7 +396,7 @@ fn diagnostics_section(state: &State) -> Element<'_, Message> {
     .spacing(TOKENS.spacing.s1_5)
     .align_y(Alignment::Center),
   )
-  .padding([8, 11])
+  .padding([6, 10])
   .on_press(Message::Settings(
     SettingsMessage::DiagnosticLevelMenuToggled,
   ))
@@ -435,7 +435,7 @@ fn diagnostics_section(state: &State) -> Element<'_, Message> {
     .spacing(TOKENS.spacing.s1_5)
     .align_y(Alignment::Center),
   )
-  .padding([8, 11])
+  .padding([6, 10])
   .on_press(Message::Settings(
     SettingsMessage::DiagnosticCategoryMenuToggled,
   ))
@@ -550,10 +550,10 @@ fn section<'a>(icon: Icon, title: &'a str, content: Column<'a, Message>) -> Elem
   container(
     column![
       row![
-        icon_with_color(icon, IconSize::Lg, TOKENS.colors.primary),
+        icon_with_color(icon, IconSize::Md, TOKENS.colors.primary),
         text(title)
           .font(SPACE_GROTESK_FONT)
-          .size(22)
+          .size(18)
           .color(TOKENS.colors.onSurface),
       ]
       .spacing(TOKENS.spacing.s2)
@@ -562,7 +562,7 @@ fn section<'a>(icon: Icon, title: &'a str, content: Column<'a, Message>) -> Elem
     ]
     .spacing(TOKENS.spacing.s3),
   )
-  .padding(TOKENS.spacing.s5)
+  .padding(TOKENS.spacing.s4)
   .width(Fill)
   .style(|theme| jellypilot_ui::theme::surface_variant(theme, SurfaceVariant::Elevated))
   .into()
@@ -587,7 +587,7 @@ fn labeled_field<'a>(
         .spacing(TOKENS.spacing.s1_5)
         .align_y(Alignment::Center),
       )
-      .padding([10, 14])
+      .padding([6, 12])
       .on_press(Message::Settings(save))
       .style(|theme, status| {
         jellypilot_ui::theme::button_variant(theme, status, ButtonVariant::Primary)
@@ -614,7 +614,7 @@ fn toggle_row<'a>(
     .spacing(TOKENS.spacing.s1)
     .width(Fill),
     button(text(if enabled { "On" } else { "Off" }))
-      .padding([8, 12])
+      .padding([5, 10])
       .on_press(Message::Settings(message))
       .style(move |theme, status| {
         jellypilot_ui::theme::button_variant(
@@ -647,7 +647,7 @@ fn action_button<'a>(
     .spacing(TOKENS.spacing.s1_5)
     .align_y(Alignment::Center),
   )
-  .padding([9, 13])
+  .padding([6, 12])
   .style(|theme, status| {
     jellypilot_ui::theme::button_variant(theme, status, ButtonVariant::Outlined)
   });
@@ -670,7 +670,7 @@ fn compact_button<'a>(
     ButtonVariant::Outlined,
     !enabled,
   ))
-  .padding([6, 9])
+  .padding([5, 8])
   .style(|theme, status| {
     jellypilot_ui::theme::button_variant(theme, status, ButtonVariant::Outlined)
   });
@@ -688,7 +688,7 @@ fn intro_option(
   selected: IntroMode,
 ) -> Element<'static, Message> {
   button(text(label).width(Fill))
-    .padding([8, 10])
+    .padding([6, 10])
     .width(Fill)
     .on_press(Message::Settings(SettingsMessage::IntroModeSelected(value)))
     .style(move |theme, status| {
@@ -710,7 +710,7 @@ fn diagnostic_level_option(
   level: Option<DiagnosticLevel>,
 ) -> Element<'static, Message> {
   button(text(label).width(Fill))
-    .padding([8, 10])
+    .padding([6, 10])
     .width(Fill)
     .on_press(Message::Settings(SettingsMessage::DiagnosticLevelSelected(
       level,
@@ -724,7 +724,7 @@ fn diagnostic_category_option(
   category: Option<DiagnosticCategory>,
 ) -> Element<'static, Message> {
   button(text(label).width(Fill))
-    .padding([8, 10])
+    .padding([6, 10])
     .width(Fill)
     .on_press(Message::Settings(
       SettingsMessage::DiagnosticCategorySelected(category),
@@ -761,7 +761,7 @@ fn subtitle_language_label(code: &str) -> &str {
 
 fn badge<'a, Message: 'a>(label: &'a str, variant: BadgeVariant) -> Element<'a, Message> {
   container(text(label).size(12))
-    .padding([4, 8])
+    .padding([3, 8])
     .style(move |theme| jellypilot_ui::theme::badge_variant(theme, variant))
     .into()
 }

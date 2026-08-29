@@ -12,12 +12,12 @@ pub fn style(_theme: &Theme, variant: SurfaceVariant) -> container::Style {
     let (background, border, shadow) = match variant {
         SurfaceVariant::Elevated => (
             Some(with_alpha(colors.surfaceContainerLow, 0.45)),
-            bordered(TOKENS.radii.x4l, with_alpha(colors.primary, 0.2)),
+            bordered(TOKENS.radii.xl, with_alpha(colors.primary, 0.2)),
             TOKENS.shadows.x2l.iced(),
         ),
         SurfaceVariant::Filled => (
             Some(with_alpha(colors.surface, 0.5)),
-            bordered(TOKENS.radii.x2l, with_alpha(colors.outlineVariant, 0.8)),
+            bordered(TOKENS.radii.xl, with_alpha(colors.outlineVariant, 0.8)),
             TOKENS.shadows.xl.iced(),
         ),
     };
@@ -63,7 +63,7 @@ mod tests {
         let style = style(&theme, SurfaceVariant::Filled);
 
         assert_eq!(style.border.width, 1.0);
-        assert_eq!(style.border.radius, Radius::from(TOKENS.radii.x2l));
+        assert_eq!(style.border.radius, Radius::from(TOKENS.radii.xl));
         assert_eq!(
             style.border.color,
             with_alpha(TOKENS.colors.outlineVariant, 0.8)
@@ -76,7 +76,7 @@ mod tests {
         let style = style(&theme, SurfaceVariant::Elevated);
 
         assert_eq!(style.border.width, 1.0);
-        assert_eq!(style.border.radius, Radius::from(TOKENS.radii.x4l));
+        assert_eq!(style.border.radius, Radius::from(TOKENS.radii.xl));
         assert_eq!(style.border.color, with_alpha(TOKENS.colors.primary, 0.2));
     }
 }

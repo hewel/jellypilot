@@ -208,7 +208,7 @@ fn hero_at_width<'a>(
     .spacing(TOKENS.spacing.s1_5)
     .align_y(Alignment::Center),
   )
-  .padding([8, 12])
+  .padding([6, 10])
   .on_press_maybe(back_enabled.then_some(Message::Detail(DetailMessage::Back)))
   .style(|theme, status| {
     jellypilot_ui::theme::button_variant(theme, status, ButtonVariant::Outlined)
@@ -324,7 +324,7 @@ fn detail_actions<'a>(
     .spacing(TOKENS.spacing.s2)
     .align_y(Alignment::Center),
   )
-  .padding([11, 18])
+  .padding([8, 16])
   .on_press_maybe(
     playback_target
       .filter(|_| playback_enabled)
@@ -347,7 +347,7 @@ fn detail_actions<'a>(
     .spacing(TOKENS.spacing.s2)
     .align_y(Alignment::Center),
   )
-  .padding([11, 16])
+  .padding([8, 14])
   .on_press_maybe((!any_busy).then_some(Message::Detail(DetailMessage::FavoriteToggled)))
   .style(move |theme, status| jellypilot_ui::theme::button_variant(theme, status, fav_variant));
   let (played_icon, played_label, played_variant) = if played {
@@ -363,7 +363,7 @@ fn detail_actions<'a>(
     .spacing(TOKENS.spacing.s2)
     .align_y(Alignment::Center),
   )
-  .padding([11, 16])
+  .padding([8, 14])
   .on_press_maybe((!any_busy).then_some(Message::Detail(DetailMessage::PlayedToggled)))
   .style(move |theme, status| jellypilot_ui::theme::button_variant(theme, status, played_variant));
   let mut actions = Row::new()
@@ -468,7 +468,7 @@ fn season_button<'a>(
 ) -> Element<'a, Message> {
   let active = state.detail.selected_season_id.as_deref() == Some(season.id.as_str());
   button(text(season_label(season)))
-    .padding([9, 13])
+    .padding([6, 12])
     .on_press_maybe(
       (!loading).then_some(Message::Detail(DetailMessage::SeasonSelected(
         season.id.clone(),
@@ -576,7 +576,7 @@ fn episode_card<'a>(state: &'a State, episode: &'a VideoLibraryItem) -> Element<
     .spacing(TOKENS.spacing.s1_5)
     .align_y(Alignment::Center),
   )
-  .padding([8, 13])
+  .padding([6, 12])
   .on_press_maybe(play_enabled.then(|| {
     playback_message(
       state,
@@ -619,6 +619,11 @@ fn artwork<'a>(
   height: Length,
   initial_size: u32,
 ) -> Element<'a, Message> {
+  let radius = if key == DETAIL_BACKDROP_KEY {
+    full_radius(TOKENS.radii.xl)
+  } else {
+    full_radius(TOKENS.radii.lg)
+  };
   let cell = state.detail_artwork.get(key);
   if let Some(ArtworkCell {
     slot,
@@ -627,7 +632,7 @@ fn artwork<'a>(
   }) = cell
   {
     if let Some(handle) = state.artwork_handles.get(*slot, image_id) {
-      return rounded_image(handle.clone(), full_radius(TOKENS.radii.x2l))
+      return rounded_image(handle.clone(), radius)
         .content_fit(ContentFit::Cover)
         .width(width)
         .height(height)
@@ -662,12 +667,12 @@ fn artwork<'a>(
   .height(height)
   .center_x(Fill)
   .center_y(Fill)
-  .style(|_theme| container::Style {
+  .style(move |_theme| container::Style {
     background: Some(iced::Background::Color(
       TOKENS.colors.surfaceContainerLowest,
     )),
     border: iced::Border {
-      radius: full_radius(TOKENS.radii.x2l),
+      radius,
       width: 0.0,
       color: iced::Color::TRANSPARENT,
     },
@@ -691,7 +696,7 @@ fn detail_skeleton(state: &State) -> Element<'_, Message> {
     .spacing(TOKENS.spacing.s1_5)
     .align_y(Alignment::Center),
   )
-  .padding([8, 12])
+  .padding([6, 10])
   .on_press_maybe(back_enabled.then_some(Message::Detail(DetailMessage::Back)))
   .style(|theme, status| {
     jellypilot_ui::theme::button_variant(theme, status, ButtonVariant::Outlined)
@@ -730,7 +735,7 @@ fn detail_failure<'a>(state: &State, error: &'a str) -> Element<'a, Message> {
     .spacing(TOKENS.spacing.s1_5)
     .align_y(Alignment::Center),
   )
-  .padding([8, 12])
+  .padding([6, 10])
   .on_press_maybe(back_enabled.then_some(Message::Detail(DetailMessage::Back)))
   .style(|theme, status| {
     jellypilot_ui::theme::button_variant(theme, status, ButtonVariant::Outlined)
@@ -743,7 +748,7 @@ fn detail_failure<'a>(state: &State, error: &'a str) -> Element<'a, Message> {
     .spacing(TOKENS.spacing.s1_5)
     .align_y(Alignment::Center),
   )
-  .padding([9, 14])
+  .padding([6, 12])
   .on_press(Message::Detail(DetailMessage::Retry))
   .style(|theme, status| {
     jellypilot_ui::theme::button_variant(theme, status, ButtonVariant::Primary)
@@ -778,7 +783,7 @@ fn retryable_surface<'a>(error: &'a str, retry: Message) -> Element<'a, Message>
         .spacing(TOKENS.spacing.s1)
         .align_y(Alignment::Center),
       )
-      .padding([8, 12])
+      .padding([6, 10])
       .on_press(retry)
       .style(|theme, status| {
         jellypilot_ui::theme::button_variant(theme, status, ButtonVariant::Outlined)

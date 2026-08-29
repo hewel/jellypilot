@@ -58,7 +58,7 @@ pub fn bar(state: &State) -> Option<Element<'_, Message>> {
     IconSize::Lg,
     ButtonVariant::Primary,
   ))
-  .padding([8, 12])
+  .padding([7, 11])
   .on_press(Message::Playback(PlaybackMessage::Intent(
     PlaybackIntent::TogglePaused,
   )))
@@ -76,7 +76,7 @@ pub fn bar(state: &State) -> Option<Element<'_, Message>> {
     IconSize::Md,
     ButtonVariant::Outlined,
   ))
-  .padding([8, 10])
+  .padding([6, 10])
   .on_press(Message::Playback(PlaybackMessage::Intent(
     PlaybackIntent::Stop,
   )))
@@ -117,7 +117,7 @@ pub fn bar(state: &State) -> Option<Element<'_, Message>> {
     IconSize::Md,
     ButtonVariant::Outlined,
   ))
-  .padding([8, 10])
+  .padding([6, 10])
   .on_press(Message::Playback(PlaybackMessage::Intent(
     PlaybackIntent::SetMuted(!now_playing.muted),
   )))
@@ -187,7 +187,7 @@ fn intro_prompt(state: &State) -> Option<Element<'_, Message>> {
       .spacing(TOKENS.spacing.s1_5)
       .align_y(Alignment::Center),
     )
-    .padding([8, 14])
+    .padding([6, 12])
     .on_press(Message::Playback(PlaybackMessage::Intent(
       PlaybackIntent::SkipIntro,
     )))
@@ -251,7 +251,7 @@ fn adjacent_button<'a>(
     ButtonVariant::Outlined,
     !available,
   ))
-  .padding([8, 10])
+  .padding([6, 10])
   .on_press_maybe(
     available.then_some(Message::Playback(PlaybackMessage::Intent(
       PlaybackIntent::PlayAdjacent(direction),
@@ -286,7 +286,7 @@ fn audio_popover(state: &State) -> Element<'_, Message> {
     .spacing(TOKENS.spacing.s1_5)
     .align_y(Alignment::Center),
   )
-  .padding([8, 12])
+  .padding([6, 10])
   .on_press_maybe(has_audio_choices.then_some(Message::Playback(PlaybackMessage::AudioMenuToggled)))
   .style(move |theme, status| {
     jellypilot_ui::theme::button_variant(theme, status, audio_btn_variant)
@@ -315,7 +315,7 @@ fn audio_popover(state: &State) -> Element<'_, Message> {
               row![text(choice.label).width(Fill).size(13), active_marker,]
                 .align_y(Alignment::Center),
             )
-            .padding([8, 10])
+            .padding([6, 10])
             .width(Fill)
             .on_press(Message::Playback(PlaybackMessage::AudioTrackSelected(id)))
             .style(move |theme, status| {
@@ -382,7 +382,7 @@ fn subtitle_popover(state: &State) -> Element<'_, Message> {
     .spacing(TOKENS.spacing.s1_5)
     .align_y(Alignment::Center),
   )
-  .padding([8, 12])
+  .padding([6, 10])
   .on_press_maybe(
     has_subtitle_choices.then_some(Message::Playback(PlaybackMessage::SubtitleMenuToggled)),
   )
@@ -405,7 +405,7 @@ fn subtitle_popover(state: &State) -> Element<'_, Message> {
             row![text(choice.label).width(Fill).size(13), active_marker,]
               .align_y(Alignment::Center),
           )
-          .padding([8, 10])
+          .padding([6, 10])
           .width(Fill)
           .on_press(Message::Playback(PlaybackMessage::SubtitleTrackSelected(
             choice.id,

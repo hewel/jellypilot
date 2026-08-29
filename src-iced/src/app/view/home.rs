@@ -118,7 +118,7 @@ fn featured_hero<'a>(state: &'a State, item: &'a VideoLibraryItem) -> Element<'a
     .spacing(TOKENS.spacing.s2)
     .align_y(Alignment::Center),
   )
-  .padding([10, 16])
+  .padding([7, 14])
   .on_press_maybe(play_enabled.then(|| play_message(state, item)))
   .style(|theme, status| {
     jellypilot_ui::theme::button_variant(theme, status, ButtonVariant::Primary)
@@ -131,7 +131,7 @@ fn featured_hero<'a>(state: &'a State, item: &'a VideoLibraryItem) -> Element<'a
     .spacing(TOKENS.spacing.s2)
     .align_y(Alignment::Center),
   )
-  .padding([10, 16])
+  .padding([7, 14])
   .on_press(Message::OpenDetail(item.clone()))
   .style(|theme, status| {
     jellypilot_ui::theme::button_variant(theme, status, ButtonVariant::Outlined)
@@ -211,9 +211,9 @@ fn video_card<'a>(
   let (frame_width, frame_height) = section_frame_size(section);
   let is_action_card = matches!(section, HomeSection::ContinueWatching | HomeSection::NextUp);
   let radius = if is_action_card {
-    card_top_radius(TOKENS.radii.x2l)
+    card_top_radius(TOKENS.radii.xl)
   } else {
-    full_radius(TOKENS.radii.x2l)
+    full_radius(TOKENS.radii.lg)
   };
   let poster = card_artwork(
     state,
@@ -260,7 +260,7 @@ fn video_card<'a>(
       .spacing(TOKENS.spacing.s1)
       .align_y(Alignment::Center),
     )
-    .padding([7, 10])
+    .padding([6, 10])
     .on_press_maybe(play_enabled.then(|| play_message(state, item)))
     .style(|theme, status| {
       jellypilot_ui::theme::button_variant(theme, status, ButtonVariant::Primary)
@@ -358,7 +358,7 @@ fn hero_artwork<'a>(
   if let Some(cell) = cell {
     if cell.state == ArtworkCellState::Ready {
       if let Some(handle) = state.artwork_handles.get(cell.slot, &cell.image_id) {
-        return rounded_image(handle.clone(), full_radius(TOKENS.radii.x2l))
+        return rounded_image(handle.clone(), full_radius(TOKENS.radii.xl))
           .content_fit(ContentFit::Cover)
           .width(width)
           .height(height)
@@ -399,7 +399,7 @@ fn hero_artwork<'a>(
       TOKENS.colors.surfaceContainerLowest,
     )),
     border: iced::Border {
-      radius: full_radius(TOKENS.radii.x2l),
+      radius: full_radius(TOKENS.radii.xl),
       width: 0.0,
       color: iced::Color::TRANSPARENT,
     },
@@ -543,7 +543,7 @@ fn section_skeleton<'a>(section: HomeSection) -> Element<'a, Message> {
 
 fn section_error<'a>(title: &'static str, error: &'a str) -> Element<'a, Message> {
   let retry = button(text("Retry"))
-    .padding([8, 14])
+    .padding([6, 12])
     .on_press(Message::Home(HomeMessage::Retry))
     .style(|theme, status| {
       jellypilot_ui::theme::button_variant(theme, status, ButtonVariant::Outlined)

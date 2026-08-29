@@ -31,7 +31,7 @@ pub fn style(_theme: &Theme, variant: BadgeVariant) -> container::Style {
         background: Some(Background::Color(background)),
         text_color: Some(text_color),
         border: Border {
-            radius: TOKENS.radii.full.into(),
+            radius: TOKENS.radii.md.into(),
             color: border_color,
             width: 1.0,
         },
@@ -41,4 +41,29 @@ pub fn style(_theme: &Theme, variant: BadgeVariant) -> container::Style {
 
 fn with_alpha(color: Color, alpha: f32) -> Color {
     Color { a: alpha, ..color }
+}
+
+#[cfg(test)]
+mod tests {
+    use iced::border::Radius;
+
+    use super::*;
+
+    #[test]
+    fn badge_variants_use_md_radius_token() {
+        let theme = crate::theme::theme();
+        for variant in [
+            BadgeVariant::Success,
+            BadgeVariant::Warning,
+            BadgeVariant::Neutral,
+        ] {
+            let style = style(&theme, variant);
+            assert_eq!(
+                style.border.radius,
+                Radius::from(TOKENS.radii.md),
+                "Badge variant {variant:?} must use md (6px) radius token"
+            );
+            assert_eq!(style.border.width, 1.0);
+        }
+    }
 }

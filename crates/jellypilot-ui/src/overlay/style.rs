@@ -8,7 +8,7 @@ pub(super) fn popover_surface(_theme: &Theme) -> container::Style {
         background: Some(Background::Color(TOKENS.colors.surfaceContainerHighest)),
         text_color: Some(TOKENS.colors.onSurface),
         border: Border {
-            radius: TOKENS.radii.md.into(),
+            radius: TOKENS.radii.xl.into(),
             color: TOKENS.colors.outlineVariant,
             width: 1.0,
         },
@@ -50,6 +50,10 @@ mod tests {
         }
         assert_eq!(style.border.color, TOKENS.colors.outlineVariant);
         assert_eq!(style.border.width, 1.0);
+        assert_eq!(
+            style.border.radius,
+            iced::border::Radius::from(TOKENS.radii.xl)
+        );
     }
 
     #[test]

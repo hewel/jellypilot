@@ -149,7 +149,7 @@ fn sidebar(state: &State) -> container::Container<'_, Message> {
   let search_input = text_input("Search videos", &state.search_input)
     .on_input(|value| Message::Browse(BrowseMessage::SearchInputChanged(value)))
     .on_submit(Message::Browse(BrowseMessage::SearchSubmitted))
-    .padding([10, 12])
+    .padding([8, 12])
     .size(14)
     .width(Fill)
     .style(|theme, status| {
@@ -160,7 +160,7 @@ fn sidebar(state: &State) -> container::Container<'_, Message> {
     IconSize::Sm,
     ButtonVariant::Outlined,
   ))
-  .padding([9, 11])
+  .padding([7, 11])
   .on_press(Message::Browse(BrowseMessage::SearchSubmitted))
   .style(|theme, status| {
     jellypilot_ui::theme::button_variant(theme, status, ButtonVariant::Outlined)
@@ -252,7 +252,7 @@ fn destination_button<'a>(
     .spacing(TOKENS.spacing.s2_5)
     .align_y(Alignment::Center),
   )
-  .padding([10, 12])
+  .padding([7, 12])
   .width(Fill)
   .on_press(Message::Home(HomeMessage::Navigate(destination)))
   .style(move |theme, status| jellypilot_ui::theme::button_variant(theme, status, variant))
@@ -260,7 +260,7 @@ fn destination_button<'a>(
 }
 fn shortcut_skeleton<'a>() -> Element<'a, Message> {
   container(space::horizontal())
-    .height(38)
+    .height(34)
     .width(Fill)
     .style(|theme| jellypilot_ui::theme::surface_variant(theme, SurfaceVariant::Filled))
     .into()

@@ -679,4 +679,17 @@ mod tests {
             }
         );
     }
+
+    #[test]
+    fn radii_scale_matches_canonical_tokens() {
+        assert_eq!(TOKENS.radii.none, 0.0);
+        assert_eq!(TOKENS.radii.sm, 2.0);
+        assert_eq!(TOKENS.radii.md, 6.0);
+        assert_eq!(TOKENS.radii.lg, 8.0);
+        assert_eq!(TOKENS.radii.xl, 12.0);
+        assert_eq!(TOKENS.radii.x2l, 16.0);
+        assert_eq!(TOKENS.radii.x3l, 24.0);
+        assert_eq!(TOKENS.radii.x4l, 32.0);
+        assert_eq!(TOKENS.radii.full, 9999.0);
+    }
 }

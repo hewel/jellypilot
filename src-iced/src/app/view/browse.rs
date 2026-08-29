@@ -73,7 +73,7 @@ fn toolbar(state: &State) -> Element<'_, Message> {
     .spacing(TOKENS.spacing.s1_5)
     .align_y(Alignment::Center),
   )
-  .padding([9, 13])
+  .padding([6, 12])
   .on_press(Message::Browse(BrowseMessage::SortMenuToggled))
   .style(|theme, status| {
     jellypilot_ui::theme::button_variant(theme, status, ButtonVariant::Outlined)
@@ -107,7 +107,7 @@ fn toolbar(state: &State) -> Element<'_, Message> {
     .spacing(TOKENS.spacing.s1_5)
     .align_y(Alignment::Center),
   )
-  .padding([9, 13])
+  .padding([6, 12])
   .on_press(Message::Browse(BrowseMessage::SortDirectionToggled))
   .style(|theme, status| {
     jellypilot_ui::theme::button_variant(theme, status, ButtonVariant::Outlined)
@@ -125,7 +125,7 @@ fn toolbar(state: &State) -> Element<'_, Message> {
     .spacing(TOKENS.spacing.s1_5)
     .align_y(Alignment::Center),
   )
-  .padding([9, 13])
+  .padding([6, 12])
   .on_press(Message::Browse(BrowseMessage::FavoritesToggled))
   .style(move |theme, status| jellypilot_ui::theme::button_variant(theme, status, fav_variant));
 
@@ -159,7 +159,7 @@ fn toolbar(state: &State) -> Element<'_, Message> {
 
 fn sort_option(label: &'static str, sort: VideoLibrarySort) -> Element<'static, Message> {
   button(text(label).width(Fill))
-    .padding([8, 10])
+    .padding([6, 10])
     .width(Fill)
     .on_press(Message::Browse(BrowseMessage::SortChanged(sort)))
     .style(|theme, status| jellypilot_ui::theme::button_variant(theme, status, ButtonVariant::Text))
@@ -182,7 +182,7 @@ fn played_option(
       .spacing(TOKENS.spacing.s1_5)
       .align_y(Alignment::Center),
   )
-  .padding([9, 13])
+  .padding([6, 12])
   .on_press(Message::Browse(BrowseMessage::PlayedFilterChanged(value)))
   .style(move |theme, status| jellypilot_ui::theme::button_variant(theme, status, variant))
   .into()
@@ -259,7 +259,7 @@ fn ready_surface<'a>(
             .spacing(TOKENS.spacing.s1_5)
             .align_y(Alignment::Center),
           )
-          .padding([9, 13])
+          .padding([6, 12])
           .style(|theme, status| {
             jellypilot_ui::theme::button_variant(theme, status, ButtonVariant::Outlined)
           });
@@ -282,7 +282,7 @@ fn ready_surface<'a>(
             .spacing(TOKENS.spacing.s1_5)
             .align_y(Alignment::Center),
           )
-          .padding([9, 13])
+          .padding([6, 12])
           .style(|theme, status| {
             jellypilot_ui::theme::button_variant(theme, status, ButtonVariant::Outlined)
           });
@@ -428,7 +428,7 @@ fn artwork<'a>(
   if let Some(cell) = cell {
     if cell.state == ArtworkCellState::Ready {
       if let Some(handle) = state.artwork_handles.get(cell.slot, &cell.image_id) {
-        return rounded_image(handle.clone(), full_radius(TOKENS.radii.x2l))
+        return rounded_image(handle.clone(), full_radius(TOKENS.radii.lg))
           .content_fit(ContentFit::Cover)
           .width(Fill)
           .height(height)
@@ -469,7 +469,7 @@ fn artwork<'a>(
       TOKENS.colors.surfaceContainerLowest,
     )),
     border: iced::Border {
-      radius: full_radius(TOKENS.radii.x2l),
+      radius: full_radius(TOKENS.radii.lg),
       width: 0.0,
       color: iced::Color::TRANSPARENT,
     },
@@ -492,7 +492,7 @@ fn failure_surface(message: &str, retryable: bool, retry_busy: bool) -> Element<
     .spacing(TOKENS.spacing.s1_5)
     .align_y(Alignment::Center),
   )
-  .padding([9, 14])
+  .padding([6, 12])
   .style(|theme, status| {
     jellypilot_ui::theme::button_variant(theme, status, ButtonVariant::Primary)
   });
@@ -533,7 +533,7 @@ fn inline_failure(failure: &LibraryBrowseFailure, retry_busy: bool) -> Element<'
     .spacing(TOKENS.spacing.s1)
     .align_y(Alignment::Center),
   )
-  .padding([8, 12])
+  .padding([6, 10])
   .style(|theme, status| {
     jellypilot_ui::theme::button_variant(theme, status, ButtonVariant::Outlined)
   });
