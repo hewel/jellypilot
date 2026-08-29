@@ -21,7 +21,16 @@ const THUMB_FRAME_HEIGHT: f32 = 135.0;
 const POSTER_FRAME_WIDTH: f32 = 160.0;
 const POSTER_FRAME_HEIGHT: f32 = 240.0;
 
-const fn section_frame_size(section: HomeSection) -> (f32, f32) {
+/// Content width used to classify initially visible home cards before a
+/// measured layout exists: default window width minus the shell's outer
+/// padding, sidebar, sidebar-content gap, and the home page padding.
+pub(crate) const HOME_CONTENT_WIDTH: f32 = 1600.0
+    - TOKENS.spacing.s3 * 2.0
+    - super::shell::SIDEBAR_WIDTH
+    - TOKENS.spacing.s4
+    - TOKENS.spacing.s8 * 2.0;
+
+pub(crate) const fn section_frame_size(section: HomeSection) -> (f32, f32) {
   match section {
     HomeSection::ContinueWatching | HomeSection::NextUp => (THUMB_FRAME_WIDTH, THUMB_FRAME_HEIGHT),
     HomeSection::LatestMovies | HomeSection::LatestEpisodes => {

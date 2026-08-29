@@ -1,10 +1,10 @@
-mod browse;
+pub(crate) mod browse;
 mod detail;
-mod home;
+pub(crate) mod home;
 mod login;
 mod player;
 mod settings;
-mod shell;
+pub(crate) mod shell;
 
 use iced::Element;
 use jellypilot_auth::login::ConnectionPhase;

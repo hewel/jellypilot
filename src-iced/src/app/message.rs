@@ -13,7 +13,7 @@ use jellypilot_core::diagnostics::{DiagnosticCategory, DiagnosticLevel};
 use jellypilot_core::request_gate::{
   DetailAuxToken, DetailToken, HomeToken, RemotePlayToken, RemoteToken, SessionToken,
 };
-use jellypilot_media_server::artwork::{ArtworkBytes, ArtworkError};
+use jellypilot_media_server::artwork::{ArtworkBytes, ArtworkError, ArtworkLoadSummary};
 use jellypilot_media_server::home::HomeDataResult;
 use jellypilot_media_server::{
   JellyfinClient, MediaItem, MediaServerProvider, VideoItemDetail, VideoLibraryItem,
@@ -42,6 +42,7 @@ impl std::fmt::Debug for Message {
       Self::Remote(_) => formatter.write_str("Remote"),
       Self::Tray(action) => formatter.debug_tuple("Tray").field(action).finish(),
       Self::DismissNotice(id) => formatter.debug_tuple("DismissNotice").field(id).finish(),
+      Self::ArtworkStreamCompleted(_) => formatter.write_str("ArtworkStreamCompleted"),
     }
   }
 }
@@ -59,6 +60,9 @@ pub enum Message {
   Remote(RemoteMessage),
   Tray(crate::tray::TrayAction),
   DismissNotice(u64),
+  /// A surface's streamed Library Image loads all settled; carries that
+  /// stream's own sanitized aggregate for the diagnostics event.
+  ArtworkStreamCompleted(ArtworkLoadSummary),
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -68,12 +72,9 @@ pub enum WindowMessage {
   FrameRendered,
 }
 
-#[derive(Clone)]
-pub struct ArtworkLoadCompletion {
-  pub slot: ArtworkSlot,
-  pub image_id: String,
-  pub result: Result<ArtworkBytes, ArtworkError>,
-}
+/// One settled Library Image load delivered to a surface.
+pub type ArtworkLoadCompletion =
+  jellypilot_core::artwork_loader::ArtworkLoadCompletion<Result<ArtworkBytes, ArtworkError>>;
 
 #[derive(Clone)]
 pub enum HomeMessage {
@@ -83,11 +84,6 @@ pub enum HomeMessage {
     token: HomeToken,
     result: HomeDataResult,
   },
-  ArtworkBatchLoaded {
-    session: SessionToken,
-    completions: Vec<ArtworkLoadCompletion>,
-  },
-  #[allow(dead_code)]
   ArtworkLoaded {
     session: SessionToken,
     slot: ArtworkSlot,
@@ -111,11 +107,6 @@ pub enum BrowseMessage {
   LoadPrevious,
   LoadNext,
   PageSettled(BrowsePageSettlement),
-  ArtworkBatchLoaded {
-    session: SessionToken,
-    completions: Vec<ArtworkLoadCompletion>,
-  },
-  #[allow(dead_code)]
   ArtworkLoaded {
     session: SessionToken,
     slot: ArtworkSlot,
@@ -150,11 +141,6 @@ pub enum DetailMessage {
     token: DetailAuxToken,
     result: Result<VideoUserDataUpdate, String>,
   },
-  ArtworkBatchLoaded {
-    session: SessionToken,
-    completions: Vec<ArtworkLoadCompletion>,
-  },
-  #[allow(dead_code)]
   ArtworkLoaded {
     session: SessionToken,
     slot: ArtworkSlot,

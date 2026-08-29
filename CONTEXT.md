@@ -112,6 +112,10 @@ _Avoid_: Poster as the umbrella term, thumbnail
 A best-effort disk copy of a media server's original Library Image response bytes, shared by Saved Service Profiles that refer to the same server. The Library Image Cache accelerates repeat browsing but is never a transformed representation or an offline source of truth.
 _Avoid_: Image optimizer, offline artwork library, Saved Service Profile cache
 
+**Library Image Raster**:
+An in-memory, display-sized RGBA decode of a Library Image, keyed by the Library Image reference and a size class. Library Image Rasters accelerate first paint and repeat rendering across navigations; they are never persisted and are distinct from the Library Image Cache, which stores only origin-encoded bytes.
+_Avoid_: Texture, transformed cache variant, decoded cache entry
+
 **Sidebar**:
 The persistent left navigation area of the authenticated JellyPilot shell. The Sidebar lists Video Home, the user's video libraries, Now Playing, and Settings, and is always visible while JellyPilot is authenticated. At narrow window widths the Sidebar shows icons only.
 _Avoid_: Navigation rail, app drawer, floating controls
@@ -221,3 +225,11 @@ Domain expert: "No. The Intro Skipper Setting lets the user turn automatic skipp
 Dev: "Should JellyPilot ask which audio track to use before starting playback?"
 
 Domain expert: "No. Direct Playback starts immediately with backend preference resolution; the user can switch tracks from Now Playing while the session is active."
+
+Dev: "Does the Library Image Cache store decoded rasters?"
+
+Domain expert: "No. The Library Image Cache stores only origin-encoded bytes on disk; Library Image Rasters are display-sized decodes that live in memory and are never persisted."
+
+Dev: "Is a Library Image Raster a new kind of Library Image reference?"
+
+Domain expert: "No. A Library Image Raster is keyed by an existing Library Image reference plus a render-side size class; it does not change what is requested from the server."

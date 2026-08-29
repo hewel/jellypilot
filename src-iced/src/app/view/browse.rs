@@ -19,8 +19,12 @@ use jellypilot_ui::variants::ButtonVariant;
 use jellypilot_ui::widgets::artwork_grid::{artwork_grid, ArtworkGridMetrics, ArtworkGridViewport};
 use jellypilot_ui::{full_radius, poster_card, rounded_image};
 
-const PAGE_PADDING: f32 = 32.0;
-const CARD_COPY_HEIGHT: f32 = 46.0;
+pub(crate) const PAGE_PADDING: f32 = 32.0;
+pub(crate) const CARD_COPY_HEIGHT: f32 = 46.0;
+/// Height of the pagination row rendered above the grid when it is shown:
+/// vertical padding around the button row plus the buttons themselves
+/// (text line height plus vertical button padding).
+pub(crate) const PAGINATION_ROW_HEIGHT: f32 = TOKENS.spacing.s3 * 2.0 + 13.0 * 1.3 + 6.0 * 2.0;
 pub fn view(state: &State) -> Element<'_, Message> {
   let title = match &state.destination {
     Destination::Library { library_id, .. } => match &state.home.shortcuts {

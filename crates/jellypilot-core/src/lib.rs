@@ -4,6 +4,7 @@
 //! diagnostic buffering, artwork correlation, and display-free page helpers.
 
 pub mod artwork_binder;
+pub mod artwork_loader;
 #[cfg(feature = "native")]
 pub mod browse;
 #[cfg(feature = "native")]

@@ -36,7 +36,9 @@ impl ArtworkGridViewport {
         )
     }
 
-    fn from_scroll_geometry(
+    /// Converts raw scroll geometry to grid-local coordinates.
+    #[must_use]
+    pub fn from_scroll_geometry(
         viewport_offset: f32,
         viewport_height: f32,
         grid_scroll_margin: f32,

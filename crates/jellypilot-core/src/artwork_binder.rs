@@ -136,6 +136,15 @@ impl ArtworkBinder {
 }
 
 #[cfg(any(test, feature = "test-utils"))]
+impl ArtworkSlot {
+    /// Mints a slot with a known value for deterministic tests.
+    #[must_use]
+    pub fn for_test(value: u64) -> Self {
+        Self(value)
+    }
+}
+
+#[cfg(any(test, feature = "test-utils"))]
 impl ArtworkBinder {
     /// Returns the number of currently tracked in-flight slots.
     #[must_use]

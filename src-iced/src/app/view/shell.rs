@@ -10,7 +10,7 @@ use jellypilot_ui::overlay::{tooltip, TooltipOptions};
 use jellypilot_ui::tokens::TOKENS;
 use jellypilot_ui::variants::{ButtonVariant, FieldVariant, SurfaceVariant};
 
-const SIDEBAR_WIDTH: f32 = 248.0;
+pub(crate) const SIDEBAR_WIDTH: f32 = 248.0;
 
 pub fn view(state: &State) -> Element<'_, Message> {
   let sidebar = sidebar(state).width(Length::Fixed(SIDEBAR_WIDTH));

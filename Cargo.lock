@@ -3664,6 +3664,7 @@ dependencies = [
  "specta",
  "thiserror 2.0.18",
  "tokio",
+ "tracing",
  "tungstenite",
  "url",
  "uuid",

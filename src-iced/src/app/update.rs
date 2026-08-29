@@ -4,7 +4,7 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
-use iced::futures::future::join_all;
+use iced::futures::stream::{self, StreamExt};
 use iced::widget::{image, operation};
 use iced::Task;
 use jellypilot_auth::login::{
@@ -13,6 +13,9 @@ use jellypilot_auth::login::{
 };
 use jellypilot_auth::AuthStore;
 use jellypilot_core::artwork_binder::{ArtworkSettlement, ArtworkSurface};
+use jellypilot_core::artwork_loader::{
+  grid_cell_visible, plan_artwork_loads, visible_row_cards, PlannedArtworkLoad,
+};
 use jellypilot_core::browse::fetch_browse_page;
 use jellypilot_core::browse_model::{
   BrowseEffect, BrowsePageRequest, BrowsePageSettlement, BrowsePreferences, BrowseSource,
@@ -28,6 +31,10 @@ use jellypilot_core::detail::{
 use jellypilot_core::diagnostics::{DiagnosticCategory, DiagnosticLevel};
 use jellypilot_core::request_gate::{
   DetailAuxKind, DetailToken, HomeToken, RemotePlayToken, RequestGate,
+};
+use jellypilot_core::LIBRARY_BROWSE_PAGE_SIZE;
+use jellypilot_media_server::artwork::{
+  ArtworkLoadObservation, ArtworkLoadSummary, ArtworkOutput, LoadLane,
 };
 use jellypilot_media_server::home::{load_home_data, HomeDataResult};
 use jellypilot_media_server::{
@@ -49,6 +56,8 @@ use jellypilot_session::{
   finalize_remote_target, remote_index_value, remote_volume_value, GeneralCommand, JellyfinCommand,
   JellyfinWebSocket, JellyfinWebSocketEvent, PlayRequest, PlaystateRequest, RemoteControlState,
 };
+use jellypilot_ui::tokens::TOKENS;
+use jellypilot_ui::widgets::artwork_grid::{ArtworkGridMetrics, ArtworkGridViewport};
 use url::Url;
 use zeroize::{Zeroize, Zeroizing};
 
@@ -64,6 +73,8 @@ use super::state::{
   DetailArtwork, DetailState, HomeArtwork, HomeSection, HomeState, LoginMethod, NoticeLevel,
   QuickConnectState, RemoteEventChannel, RemoteSessionHandle, State, UserDataActionKind,
 };
+use super::view::browse::{CARD_COPY_HEIGHT, PAGE_PADDING, PAGINATION_ROW_HEIGHT};
+use super::view::home::{section_frame_size, HOME_CONTENT_WIDTH};
 
 const SETTINGS_SAVE_ERROR: &str = "Could not save settings.";
 const INVALID_LOGIN_PREFILL_ERROR: &str = "Server and username are required.";
@@ -147,6 +158,14 @@ pub fn update(state: &mut State, message: Message) -> Task<Message> {
     Message::Tray(action) => update_tray(state, action),
     Message::DismissNotice(id) => {
       state.dismiss_toast(id);
+      Task::none()
+    }
+    Message::ArtworkStreamCompleted(summary) => {
+      if let Some(message) = summary.diagnostic_message() {
+        state
+          .diagnostics
+          .record(DiagnosticLevel::Info, DiagnosticCategory::Artwork, message);
+      }
       Task::none()
     }
   }
@@ -1667,7 +1686,7 @@ fn prepare_player_artwork(state: &mut State) -> Task<Message> {
   let session = state.request_gate.current_session();
   let completion_image_id = image_id.clone();
   Task::perform(
-    async move { adapter.load(&client, &image_id).await },
+    async move { adapter.load(&client, &image_id, LoadLane::Visible).await.0 },
     move |result| {
       Message::Playback(PlaybackMessage::ArtworkLoaded {
         session,
@@ -1702,16 +1721,6 @@ fn update_home(state: &mut State, message: HomeMessage) -> Task<Message> {
         return Task::none();
       }
       prepare_home_artwork(state)
-    }
-    HomeMessage::ArtworkBatchLoaded {
-      session,
-      completions,
-    } => {
-      let session_ok = state.request_gate.is_current_session(session);
-      for completion in completions {
-        apply_home_artwork_completion(state, session_ok, completion);
-      }
-      Task::none()
     }
     HomeMessage::ArtworkLoaded {
       session,
@@ -1812,9 +1821,19 @@ struct ArtworkLoadSpec {
   placement: ArtworkPlacement,
   item_id: String,
   image_id: String,
+  visible: bool,
 }
 
-fn load_artwork_batch<F>(
+enum ArtworkStreamEvent {
+  Loaded(ArtworkLoadCompletion),
+  Completed(ArtworkLoadSummary),
+}
+
+/// Streams a surface's Library Image loads visible-first, emitting one message
+/// per image as it settles and `Message::ArtworkStreamCompleted` with this
+/// stream's own sanitized aggregate at the end. `summary` seeds the aggregate
+/// with synchronous cache hits from the prepare pass.
+fn stream_artwork_loads<F>(
   adapter: Arc<
     jellypilot_media_server::artwork::ArtworkAdapter<
       jellypilot_media_server::artwork::RawArtworkDecoder,
@@ -1822,35 +1841,57 @@ fn load_artwork_batch<F>(
   >,
   client: Arc<JellyfinClient>,
   session: jellypilot_core::request_gate::SessionToken,
-  specs: Vec<(jellypilot_core::artwork_binder::ArtworkSlot, String)>,
+  loads: Vec<PlannedArtworkLoad>,
+  summary: ArtworkLoadSummary,
   make_message: F,
 ) -> Task<Message>
 where
-  F: Fn(jellypilot_core::request_gate::SessionToken, Vec<ArtworkLoadCompletion>) -> Message
+  F: Fn(jellypilot_core::request_gate::SessionToken, ArtworkLoadCompletion) -> Message
     + Send
     + Sync
     + 'static,
 {
-  if specs.is_empty() {
+  if loads.is_empty() && summary == ArtworkLoadSummary::default() {
     return Task::none();
   }
-  let completion_task = async move {
-    join_all(specs.into_iter().map(|(slot, image_id)| {
+  let summary = Arc::new(Mutex::new(summary));
+  let planned = plan_artwork_loads(loads);
+  let concurrency = planned.len();
+  let completions = stream::iter(planned).map({
+    let summary = Arc::clone(&summary);
+    move |load| {
       let adapter = Arc::clone(&adapter);
       let client = Arc::clone(&client);
+      let summary = Arc::clone(&summary);
       async move {
-        let result = adapter.load(&client, &image_id).await;
+        let lane = if load.visible {
+          LoadLane::Visible
+        } else {
+          LoadLane::Offscreen
+        };
+        let image_id = load.image_id;
+        let (result, observation) = adapter.load(&client, &image_id, lane).await;
+        if let Ok(mut summary) = summary.lock() {
+          summary.record(&observation);
+        }
         ArtworkLoadCompletion {
-          slot,
+          slot: load.slot,
           image_id,
           result,
         }
       }
-    }))
-    .await
-  };
-  Task::perform(completion_task, move |completions| {
-    make_message(session, completions)
+    }
+  });
+  let events = completions
+    .buffer_unordered(concurrency)
+    .map(ArtworkStreamEvent::Loaded)
+    .chain(stream::once(async move {
+      let summary = summary.lock().map(|summary| *summary).unwrap_or_default();
+      ArtworkStreamEvent::Completed(summary)
+    }));
+  Task::run(events, move |event| match event {
+    ArtworkStreamEvent::Loaded(completion) => make_message(session, completion),
+    ArtworkStreamEvent::Completed(summary) => Message::ArtworkStreamCompleted(summary),
   })
 }
 
@@ -1879,6 +1920,7 @@ fn prepare_home_artwork(state: &mut State) -> Task<Message> {
     return Task::none();
   };
   let adapter = Arc::clone(&state.artwork_adapter);
+  let mut summary = ArtworkLoadSummary::default();
   let mut load_specs = Vec::new();
 
   for spec in specs {
@@ -1922,6 +1964,7 @@ fn prepare_home_artwork(state: &mut State) -> Task<Message> {
     }
 
     if let Some(bytes) = adapter.cached(&spec.image_id) {
+      summary.record(&ArtworkLoadObservation::memory_hit(bytes.byte_len() as u64));
       let slot = state.artwork_binder.bind_settled();
       let handle = image::Handle::from_bytes(bytes.as_slice().to_vec());
       state
@@ -1953,19 +1996,26 @@ fn prepare_home_artwork(state: &mut State) -> Task<Message> {
         state.home_artwork.insert_card(section, spec.item_id, cell);
       }
     }
-    load_specs.push((slot, spec.image_id));
+    load_specs.push(PlannedArtworkLoad {
+      slot,
+      image_id: spec.image_id,
+      visible: spec.visible,
+    });
   }
 
   state.retain_artwork_handles();
-  load_artwork_batch(
+  stream_artwork_loads(
     adapter,
     client,
     session,
     load_specs,
-    |session, completions| {
-      Message::Home(HomeMessage::ArtworkBatchLoaded {
+    summary,
+    |session, completion| {
+      Message::Home(HomeMessage::ArtworkLoaded {
         session,
-        completions,
+        slot: completion.slot,
+        image_id: completion.image_id,
+        result: completion.result,
       })
     },
   )
@@ -1974,12 +2024,19 @@ fn prepare_home_artwork(state: &mut State) -> Task<Message> {
 fn home_artwork_specs(home: &HomeState) -> Vec<ArtworkLoadSpec> {
   let mut specs = Vec::new();
   if let Some(item) = home.featured_item() {
-    push_artwork_spec(&mut specs, ArtworkPlacement::Hero, item);
+    push_artwork_spec(&mut specs, ArtworkPlacement::Hero, item, true);
   }
   for section in HomeSection::ALL {
     if let jellypilot_core::LoadState::Ready(items) = home.section(section) {
-      for item in items {
-        push_artwork_spec(&mut specs, ArtworkPlacement::Card(section), item);
+      let (card_width, _) = section_frame_size(section);
+      let visible_cards = visible_row_cards(HOME_CONTENT_WIDTH, card_width, TOKENS.spacing.s4);
+      for (index, item) in items.iter().enumerate() {
+        push_artwork_spec(
+          &mut specs,
+          ArtworkPlacement::Card(section),
+          item,
+          index < visible_cards,
+        );
       }
     }
   }
@@ -1990,12 +2047,14 @@ fn push_artwork_spec(
   specs: &mut Vec<ArtworkLoadSpec>,
   placement: ArtworkPlacement,
   item: &VideoLibraryItem,
+  visible: bool,
 ) {
   if let Some(image_id) = &item.artwork_image_id {
     specs.push(ArtworkLoadSpec {
       placement,
       item_id: item.id.clone(),
       image_id: image_id.clone(),
+      visible,
     });
   }
 }
@@ -2116,16 +2175,6 @@ fn update_detail(state: &mut State, message: DetailMessage) -> Task<Message> {
           item.played = update.played;
           item.favorite = update.favorite;
         }
-      }
-      Task::none()
-    }
-    DetailMessage::ArtworkBatchLoaded {
-      session,
-      completions,
-    } => {
-      let session_ok = state.request_gate.is_current_session(session);
-      for completion in completions {
-        apply_detail_artwork_completion(state, session_ok, completion);
       }
       Task::none()
     }
@@ -2437,6 +2486,7 @@ const DETAIL_BACKDROP_KEY: &str = "detail-backdrop";
 struct DetailArtworkSpec {
   key: String,
   image_id: String,
+  visible: bool,
 }
 
 fn prepare_detail_artwork(state: &mut State) -> Task<Message> {
@@ -2447,11 +2497,13 @@ fn prepare_detail_artwork(state: &mut State) -> Task<Message> {
         &mut specs,
         DETAIL_POSTER_KEY.to_owned(),
         &item.artwork_image_id,
+        true,
       );
       push_detail_artwork(
         &mut specs,
         DETAIL_BACKDROP_KEY.to_owned(),
         &item.backdrop_image_id,
+        true,
       );
       if let jellypilot_core::LoadState::Ready(neighbors) = &state.detail.season_neighbors {
         for episode in neighbors {
@@ -2459,6 +2511,7 @@ fn prepare_detail_artwork(state: &mut State) -> Task<Message> {
             &mut specs,
             detail_episode_key(&episode.id),
             &episode.artwork_image_id,
+            false,
           );
         }
       }
@@ -2468,17 +2521,20 @@ fn prepare_detail_artwork(state: &mut State) -> Task<Message> {
         &mut specs,
         DETAIL_POSTER_KEY.to_owned(),
         &show.artwork_image_id,
+        true,
       );
       push_detail_artwork(
         &mut specs,
         DETAIL_BACKDROP_KEY.to_owned(),
         &show.backdrop_image_id,
+        true,
       );
       if let Some(next) = &show.next_episode {
         push_detail_artwork(
           &mut specs,
           detail_episode_key(&next.id),
           &next.artwork_image_id,
+          false,
         );
       }
       if let jellypilot_core::LoadState::Ready(page) = &state.detail.season_episodes {
@@ -2487,6 +2543,7 @@ fn prepare_detail_artwork(state: &mut State) -> Task<Message> {
             &mut specs,
             detail_episode_key(&episode.id),
             &episode.artwork_image_id,
+            false,
           );
         }
       }
@@ -2508,6 +2565,7 @@ fn prepare_detail_artwork(state: &mut State) -> Task<Message> {
     return Task::none();
   };
   let adapter = Arc::clone(&state.artwork_adapter);
+  let mut summary = ArtworkLoadSummary::default();
   let mut load_specs = Vec::new();
   for spec in specs {
     if let Some(cell) = state.detail_artwork.get(&spec.key) {
@@ -2543,6 +2601,7 @@ fn prepare_detail_artwork(state: &mut State) -> Task<Message> {
     }
 
     if let Some(bytes) = adapter.cached(&spec.image_id) {
+      summary.record(&ArtworkLoadObservation::memory_hit(bytes.byte_len() as u64));
       let slot = state.artwork_binder.bind_settled();
       let handle = image::Handle::from_bytes(bytes.as_slice().to_vec());
       state
@@ -2568,28 +2627,41 @@ fn prepare_detail_artwork(state: &mut State) -> Task<Message> {
         state: ArtworkCellState::Loading,
       },
     );
-    load_specs.push((slot, spec.image_id));
+    load_specs.push(PlannedArtworkLoad {
+      slot,
+      image_id: spec.image_id,
+      visible: spec.visible,
+    });
   }
   state.retain_artwork_handles();
-  load_artwork_batch(
+  stream_artwork_loads(
     adapter,
     client,
     session,
     load_specs,
-    |session, completions| {
-      Message::Detail(DetailMessage::ArtworkBatchLoaded {
+    summary,
+    |session, completion| {
+      Message::Detail(DetailMessage::ArtworkLoaded {
         session,
-        completions,
+        slot: completion.slot,
+        image_id: completion.image_id,
+        result: completion.result,
       })
     },
   )
 }
 
-fn push_detail_artwork(specs: &mut Vec<DetailArtworkSpec>, key: String, image_id: &Option<String>) {
+fn push_detail_artwork(
+  specs: &mut Vec<DetailArtworkSpec>,
+  key: String,
+  image_id: &Option<String>,
+  visible: bool,
+) {
   if let Some(image_id) = image_id {
     specs.push(DetailArtworkSpec {
       key,
       image_id: image_id.clone(),
+      visible,
     });
   }
 }
@@ -2702,16 +2774,6 @@ fn update_browse(state: &mut State, message: BrowseMessage) -> Task<Message> {
         apply_browse_effects(state, effects),
         prepare_browse_artwork(state),
       ])
-    }
-    BrowseMessage::ArtworkBatchLoaded {
-      session,
-      completions,
-    } => {
-      let session_ok = state.request_gate.is_current_session(session);
-      for completion in completions {
-        apply_browse_artwork_completion(state, session_ok, completion);
-      }
-      Task::none()
     }
     BrowseMessage::ArtworkLoaded {
       session,
@@ -2924,17 +2986,26 @@ fn fixed_browse_failure(
 }
 
 fn prepare_browse_artwork(state: &mut State) -> Task<Message> {
-  let LibraryBrowseView::Ready { visible_items, .. } = &state.browse_view else {
+  let LibraryBrowseView::Ready {
+    visible_items,
+    total_record_count,
+    ..
+  } = &state.browse_view else {
     return Task::none();
   };
   let specs = visible_items
     .iter()
-    .filter_map(|slot| slot.item.as_ref())
-    .map(|item| (item.id.clone(), item.artwork_image_id.clone()))
+    .enumerate()
+    .filter_map(|(index, slot)| {
+      slot
+        .item
+        .as_ref()
+        .map(|item| (index, item.id.clone(), item.artwork_image_id.clone()))
+    })
     .collect::<Vec<_>>();
   let visible_ids = specs
     .iter()
-    .map(|(item_id, _)| item_id.as_str())
+    .map(|(_, item_id, _)| item_id.as_str())
     .collect::<HashSet<_>>();
   state.browse_artwork.retain_items(&visible_ids);
   drop(visible_ids);
@@ -2944,9 +3015,21 @@ fn prepare_browse_artwork(state: &mut State) -> Task<Message> {
     return Task::none();
   };
   let adapter = Arc::clone(&state.artwork_adapter);
+  let available_width = (state.browse_viewport.width - PAGE_PADDING * 2.0).max(1.0);
+  let metrics = ArtworkGridMetrics::for_cards(available_width, CARD_COPY_HEIGHT);
+  // The pagination row above the grid shifts the grid in scroll coordinates;
+  // classify in grid-local coordinates like the rendered viewport does.
+  let paginated =
+    state.browse.display_range().is_some() && *total_record_count > LIBRARY_BROWSE_PAGE_SIZE;
+  let grid_viewport = ArtworkGridViewport::from_scroll_geometry(
+    state.browse_viewport.offset_y,
+    state.browse_viewport.height,
+    if paginated { PAGINATION_ROW_HEIGHT } else { 0.0 },
+  );
+  let mut summary = ArtworkLoadSummary::default();
   let mut load_specs = Vec::new();
 
-  for (item_id, image_id) in specs {
+  for (index, item_id, image_id) in specs {
     let Some(image_id) = image_id else {
       continue;
     };
@@ -2980,6 +3063,7 @@ fn prepare_browse_artwork(state: &mut State) -> Task<Message> {
       continue;
     }
     if let Some(bytes) = adapter.cached(&image_id) {
+      summary.record(&ArtworkLoadObservation::memory_hit(bytes.byte_len() as u64));
       let slot = state.artwork_binder.bind_settled();
       let handle = image::Handle::from_bytes(bytes.as_slice().to_vec());
       state.artwork_handles.insert(slot, image_id.clone(), handle);
@@ -3003,19 +3087,32 @@ fn prepare_browse_artwork(state: &mut State) -> Task<Message> {
         state: ArtworkCellState::Loading,
       },
     );
-    load_specs.push((slot, image_id));
+    load_specs.push(PlannedArtworkLoad {
+      slot,
+      image_id,
+      visible: grid_cell_visible(
+        index,
+        metrics.columns,
+        grid_viewport.offset_y,
+        grid_viewport.height,
+        metrics.row_height,
+      ),
+    });
   }
 
   state.retain_artwork_handles();
-  load_artwork_batch(
+  stream_artwork_loads(
     adapter,
     client,
     session,
     load_specs,
-    |session, completions| {
-      Message::Browse(BrowseMessage::ArtworkBatchLoaded {
+    summary,
+    |session, completion| {
+      Message::Browse(BrowseMessage::ArtworkLoaded {
         session,
-        completions,
+        slot: completion.slot,
+        image_id: completion.image_id,
+        result: completion.result,
       })
     },
   )
@@ -5869,7 +5966,8 @@ mod tests {
       .find_by_image_id("cached-art-2")
       .is_none());
     let warm_task = prepare_home_artwork(&mut state);
-    assert_eq!(warm_task.units(), 0);
+    // One sentinel unit reports the aggregate cache-hit telemetry event.
+    assert_eq!(warm_task.units(), 1);
 
     let card_cell = state
       .home_artwork
@@ -5883,7 +5981,41 @@ mod tests {
   }
 
   #[test]
-  fn artwork_batch_settlement_applies_all_completions_in_one_update() {
+  fn artwork_stream_completion_records_one_sanitized_aggregate_event() {
+    let mut state = test_state();
+    let summary = ArtworkLoadSummary {
+      memory_loads: 2,
+      disk_loads: 1,
+      network_loads: 3,
+      failed_loads: 1,
+      total_duration_millis: 120,
+      total_bytes: 4096,
+    };
+
+    drop(update(&mut state, Message::ArtworkStreamCompleted(summary)));
+
+    let artwork_events = state
+      .diagnostics
+      .rows()
+      .filter(|row| row.category == DiagnosticCategory::Artwork)
+      .count();
+    assert_eq!(artwork_events, 1);
+
+    // An empty summary records nothing.
+    drop(update(
+      &mut state,
+      Message::ArtworkStreamCompleted(ArtworkLoadSummary::default()),
+    ));
+    let artwork_events = state
+      .diagnostics
+      .rows()
+      .filter(|row| row.category == DiagnosticCategory::Artwork)
+      .count();
+    assert_eq!(artwork_events, 1);
+  }
+
+  #[test]
+  fn artwork_stream_settlement_applies_each_completion_as_it_arrives() {
     let mut state = test_state();
     state.client = Some(Arc::new(JellyfinClient::new()));
     let mut items = Vec::new();
@@ -5931,15 +6063,19 @@ mod tests {
           result,
         }
       })
-      .collect();
+      .collect::<Vec<ArtworkLoadCompletion>>();
     let session = state.request_gate.current_session();
-    drop(update_home(
-      &mut state,
-      HomeMessage::ArtworkBatchLoaded {
-        session,
-        completions,
-      },
-    ));
+    for completion in completions {
+      drop(update_home(
+        &mut state,
+        HomeMessage::ArtworkLoaded {
+          session,
+          slot: completion.slot,
+          image_id: completion.image_id,
+          result: completion.result,
+        },
+      ));
+    }
 
     for index in 1..=3 {
       let item_id = format!("batch-item-{index}");
@@ -6093,7 +6229,8 @@ mod tests {
     );
     state.artwork_handles.clear();
     let warm_task = prepare_detail_artwork(&mut state);
-    assert_eq!(warm_task.units(), 0);
+    // One sentinel unit reports the aggregate cache-hit telemetry event.
+    assert_eq!(warm_task.units(), 1);
 
     let poster = state
       .detail_artwork
@@ -6139,7 +6276,8 @@ mod tests {
     };
 
     let warm_task = prepare_browse_artwork(&mut state);
-    assert_eq!(warm_task.units(), 0);
+    // One sentinel unit reports the aggregate cache-hit telemetry event.
+    assert_eq!(warm_task.units(), 1);
 
     let browse_cell = state
       .browse_artwork
