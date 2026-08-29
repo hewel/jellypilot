@@ -32,7 +32,7 @@ export type TaskCommand =
   | { readonly _tag: 'wasm'; readonly action: 'install' }
   | { readonly _tag: 'wasm'; readonly action: 'build'; readonly mode?: '--dev' | '--release' }
   | { readonly _tag: 'ffmpeg'; readonly verify: boolean; readonly target?: string }
-  | { readonly _tag: 'iced'; readonly smoke: boolean }
+  | { readonly _tag: 'iced'; readonly smoke: boolean; readonly release: boolean }
   | {
       readonly _tag: 'e2e';
       readonly action: E2eSubcommand;
@@ -222,11 +222,13 @@ export function parseCli(argv: readonly string[]): TaskCommand {
       );
     }
     let smoke = false;
+    let release = false;
     for (const argument of rest) {
       if (argument === '--smoke') smoke = true;
+      else if (argument === '--release') release = true;
       else unknownOption('iced run', argument);
     }
-    return { _tag: command, smoke };
+    return { _tag: command, smoke, release };
   }
   if (command === 'e2e') {
     const [action, ...rest] = args;

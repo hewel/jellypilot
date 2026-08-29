@@ -36,7 +36,7 @@ const program = Effect.try({
       Match.when({ _tag: 'rust' }, (task) => runRust(task)),
       Match.when({ _tag: 'wasm' }, (task) => runWasm(task)),
       Match.when({ _tag: 'ffmpeg' }, ({ target, verify }) => runFfmpeg({ target, verify })),
-      Match.when({ _tag: 'iced' }, ({ smoke }) => runIced(smoke)),
+      Match.when({ _tag: 'iced' }, ({ smoke, release }) => runIced(smoke, release)),
       Match.when({ _tag: 'e2e' }, ({ action, args, skipSetup }) =>
         runE2e({ action, args, skipSetup }),
       ),
