@@ -90,23 +90,22 @@ pub fn style(_theme: &Theme, variant: ButtonVariant, status: button::Status) -> 
 ///
 /// In the default/active state, there is no card chrome (transparent background, zero border,
 /// no shadow) so the poster and metadata sit directly on the page surface. On hover or press,
-/// an outline ring and subtle elevation appear. Poster callers reserve a 1 px content inset so
-/// this ring remains visible around full-bleed artwork without changing status padding.
+/// a subtle brightness lift appears without an outline ring or shadow elevation.
 pub fn poster_card_style(_theme: &Theme, status: button::Status) -> button::Style {
     let colors = TOKENS.colors;
     let (background, border_color, border_width, shadow) = match status {
         button::Status::Active => (None, Color::TRANSPARENT, 0.0, TOKENS.shadows.none.iced()),
         button::Status::Hovered => (
-            None,
-            with_alpha(colors.primary, 0.35),
-            1.0,
-            TOKENS.shadows.xl.iced(),
+            Some(with_alpha(Color::WHITE, 0.05)),
+            Color::TRANSPARENT,
+            0.0,
+            TOKENS.shadows.none.iced(),
         ),
         button::Status::Pressed => (
-            None,
-            with_alpha(colors.primary, 0.5),
-            1.0,
-            TOKENS.shadows.md.iced(),
+            Some(with_alpha(Color::WHITE, 0.08)),
+            Color::TRANSPARENT,
+            0.0,
+            TOKENS.shadows.none.iced(),
         ),
         button::Status::Disabled => (None, Color::TRANSPARENT, 0.0, TOKENS.shadows.none.iced()),
     };
@@ -203,27 +202,34 @@ mod tests {
         assert_eq!(style.shadow, crate::tokens::TOKENS.shadows.none.iced());
     }
     #[test]
-    fn poster_card_style_hovered_has_ring_border_and_elevation_shadow() {
+    fn poster_card_style_hovered_has_brightness_lift_and_no_ring_or_shadow() {
         let theme = crate::theme::theme();
         let style = super::poster_card_style(&theme, iced::widget::button::Status::Hovered);
-        assert_eq!(style.border.width, 1.0);
+        assert_eq!(style.border.width, 0.0);
+        assert_eq!(style.border.color, Color::TRANSPARENT);
         assert_eq!(
-            style.border.color,
-            super::with_alpha(crate::tokens::TOKENS.colors.primary, 0.35)
+            style.background,
+            Some(iced::Background::Color(super::with_alpha(
+                Color::WHITE,
+                0.05
+            )))
         );
-        assert!(style.background.is_none());
-        assert_eq!(style.shadow, crate::tokens::TOKENS.shadows.xl.iced());
+        assert_eq!(style.shadow, crate::tokens::TOKENS.shadows.none.iced());
     }
 
     #[test]
-    fn poster_card_style_pressed_has_ring_border() {
+    fn poster_card_style_pressed_has_stronger_brightness_lift_and_no_ring_or_shadow() {
         let theme = crate::theme::theme();
         let style = super::poster_card_style(&theme, iced::widget::button::Status::Pressed);
-        assert_eq!(style.border.width, 1.0);
+        assert_eq!(style.border.width, 0.0);
+        assert_eq!(style.border.color, Color::TRANSPARENT);
         assert_eq!(
-            style.border.color,
-            super::with_alpha(crate::tokens::TOKENS.colors.primary, 0.5)
+            style.background,
+            Some(iced::Background::Color(super::with_alpha(
+                Color::WHITE,
+                0.08
+            )))
         );
-        assert!(style.background.is_none());
+        assert_eq!(style.shadow, crate::tokens::TOKENS.shadows.none.iced());
     }
 }

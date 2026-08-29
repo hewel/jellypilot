@@ -116,8 +116,19 @@ impl<H> RoundedImage<H> {
     where
         H: Clone,
     {
+        // Note: In iced 0.14 wgpu image shader (image.wgsl vs quad.wgsl), the position vector is not
+        // negated prior to rounded_box_sdf, causing corner radii to be evaluated diagonally inverted
+        // (top_left <-> bottom_right, top_right <-> bottom_left). We translate the logical radius
+        // to the inverted representation expected by iced's image shader so that the rendered corners
+        // match the requested top/bottom/left/right positions.
+        let iced_radius = Radius {
+            top_left: self.radius.bottom_right,
+            top_right: self.radius.bottom_left,
+            bottom_right: self.radius.top_left,
+            bottom_left: self.radius.top_right,
+        };
         let mut image_widget = Image::new(self.handle.clone())
-            .border_radius(self.radius)
+            .border_radius(iced_radius)
             .content_fit(self.content_fit)
             .width(self.width)
             .height(self.height)

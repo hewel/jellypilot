@@ -61,8 +61,8 @@ use super::message::{
 };
 use super::state::{
   ArtworkCell, ArtworkCellState, BrowseArtwork, BrowseViewport, ConnectedIdentity, Destination,
-  DetailArtwork, DetailState, HomeArtwork, HomeSection, HomeState, LoginMethod, QuickConnectState,
-  RemoteEventChannel, RemoteSessionHandle, State, UserDataActionKind,
+  DetailArtwork, DetailState, HomeArtwork, HomeSection, HomeState, LoginMethod, NoticeLevel,
+  QuickConnectState, RemoteEventChannel, RemoteSessionHandle, State, UserDataActionKind,
 };
 
 const SETTINGS_SAVE_ERROR: &str = "Could not save settings.";
@@ -114,36 +114,53 @@ pub fn update(state: &mut State, message: Message) -> Task<Message> {
       }
     }
     Message::Home(message) => update_home(state, message),
-    Message::Browse(message) => update_browse(state, message),
+    Message::Browse(message) => {
+      let previous_notice = state.notice.clone();
+      let task = update_browse(state, message);
+      if let Some(notice) = state
+        .notice
+        .clone()
+        .filter(|notice| Some(notice.as_str()) != previous_notice.as_deref())
+      {
+        let toast_task = state.show_toast(NoticeLevel::Error, notice);
+        Task::batch([task, toast_task])
+      } else {
+        task
+      }
+    }
     Message::OpenDetail(item) => open_detail(state, item),
     Message::Detail(message) => update_detail(state, message),
     Message::Settings(message) => update_settings(state, message),
     Message::Playback(message) => {
       let previous_notice = state.playback_notice.clone();
       let task = update_playback(state, message);
-      record_playback_notice(state, previous_notice.as_deref());
-      task
+      let toast_task = record_playback_notice(state, previous_notice.as_deref());
+      Task::batch([task, toast_task])
     }
     Message::Remote(message) => {
       let previous_state = state.remote_control_state;
       let previous_notice = state.notice.clone();
       let task = update_remote(state, message);
-      record_remote_change(state, previous_state, previous_notice.as_deref());
-      task
+      let toast_task = record_remote_change(state, previous_state, previous_notice.as_deref());
+      Task::batch([task, toast_task])
     }
     Message::Tray(action) => update_tray(state, action),
+    Message::DismissNotice(id) => {
+      state.dismiss_toast(id);
+      Task::none()
+    }
   }
 }
 
-fn record_playback_notice(state: &mut State, previous: Option<&str>) {
-  let Some(notice) = state.playback_notice.as_deref() else {
+fn record_playback_notice(state: &mut State, previous: Option<&str>) -> Task<Message> {
+  let Some(notice) = state.playback_notice.clone() else {
     if previous.is_some() {
       state.diagnostics.reset_coalescing();
     }
-    return;
+    return Task::none();
   };
-  if Some(notice) == previous {
-    return;
+  if Some(notice.as_str()) == previous {
+    return Task::none();
   }
   let level = if notice.contains("failed")
     || notice.contains("Failed")
@@ -154,10 +171,16 @@ fn record_playback_notice(state: &mut State, previous: Option<&str>) {
   } else {
     DiagnosticLevel::Warning
   };
-  let key = diagnostic_coalescing_key("playback", notice);
+  let key = diagnostic_coalescing_key("playback", &notice);
   state
     .diagnostics
-    .record_coalesced(&key, level, DiagnosticCategory::Playback, notice);
+    .record_coalesced(&key, level, DiagnosticCategory::Playback, &notice);
+
+  let toast_level = match level {
+    DiagnosticLevel::Error => NoticeLevel::Error,
+    _ => NoticeLevel::Warning,
+  };
+  state.show_toast(toast_level, notice)
 }
 
 fn diagnostic_coalescing_key(prefix: &str, message: &str) -> String {
@@ -170,7 +193,7 @@ fn record_remote_change(
   state: &mut State,
   previous_state: RemoteControlState,
   previous_notice: Option<&str>,
-) {
+) -> Task<Message> {
   if state.remote_control_state != previous_state {
     let (level, message) = match state.remote_control_state {
       RemoteControlState::Connecting => {
@@ -192,15 +215,17 @@ fn record_remote_change(
   }
   if let Some(notice) = state
     .notice
-    .as_deref()
-    .filter(|notice| Some(*notice) != previous_notice)
+    .clone()
+    .filter(|notice| Some(notice.as_str()) != previous_notice)
   {
     state.diagnostics.record(
       DiagnosticLevel::Warning,
       DiagnosticCategory::RemoteControl,
-      notice,
+      &notice,
     );
+    return state.show_toast(NoticeLevel::Warning, notice);
   }
+  Task::none()
 }
 
 fn update_window(state: &mut State, message: WindowMessage) -> Task<Message> {
@@ -483,9 +508,16 @@ fn apply_playback_configuration(state: &mut State) -> Task<Message> {
       sync_playback_projection(state);
       state.playback_notice =
         Some("External playback is unavailable because MPV could not be found.".into());
-      Task::done(Message::Settings(SettingsMessage::PlaybackConfigApplied(
-        Err(error),
-      )))
+      let toast_task = state.show_toast(
+        NoticeLevel::Error,
+        "External playback is unavailable because MPV could not be found.",
+      );
+      Task::batch([
+        Task::done(Message::Settings(SettingsMessage::PlaybackConfigApplied(
+          Err(error),
+        ))),
+        toast_task,
+      ])
     }
   }
 }
@@ -1282,8 +1314,6 @@ fn sync_playback_projection(state: &mut State) {
     .notice
     .as_ref()
     .map(|notice| match notice {
-      PlaybackNotice::Finished => "Playback finished.".to_owned(),
-      PlaybackNotice::Stopped => "Playback stopped.".to_owned(),
       PlaybackNotice::Failed(error) => error.to_string(),
       PlaybackNotice::Warnings(_) => {
         "Playback is active, but setup or reporting could not be completed.".to_owned()
@@ -3678,6 +3708,8 @@ mod tests {
       quick_connect_task: None,
       notice: None,
       playback_notice: None,
+      active_toast: None,
+      next_toast_id: 0,
       tray: None,
       quit_requested: false,
       destination: Destination::Home,
@@ -5231,7 +5263,7 @@ mod tests {
   }
 
   #[test]
-  fn double_stop_dispatches_single_stop_and_retains_stopped_notice() {
+  fn double_stop_dispatches_single_stop_and_produces_no_notice() {
     let mut state = active_playback_state();
     let now = Instant::now();
 
@@ -5263,12 +5295,87 @@ mod tests {
     );
     sync_playback_projection(&mut state);
 
-    // Stopped notice intact, no second stop
+    // Stop settled with no notice
     assert!(settle_effects.is_empty());
     assert!(!state.playback_view.busy);
     assert!(state.playback_view.now_playing.is_none());
-    assert_eq!(state.playback_view.notice, Some(PlaybackNotice::Stopped));
-    assert_eq!(state.playback_notice.as_deref(), Some("Playback stopped."));
+    assert!(state.playback_view.notice.is_none());
+    assert!(state.playback_notice.is_none());
+    assert!(state.active_toast.is_none());
+  }
+
+  #[test]
+  fn stop_and_eof_produce_no_visible_notice_state() {
+    let mut state = active_playback_state();
+    let now = Instant::now();
+
+    let refresh_effects = state
+      .playback_session
+      .handle(PlaybackInput::Intent(PlaybackIntent::Tick), now);
+    let (refresh_id, _) = controller_effect(refresh_effects);
+
+    // Simulate EOF refresh settlement
+    let settle_effects = state.playback_session.handle(
+      PlaybackInput::Event(PlaybackEvent::ControllerSettled {
+        id: refresh_id,
+        settlement: ControllerSettlement::Refreshed {
+          outcome: PlaybackRefreshOutcome {
+            snapshot: playback_snapshot(10.0),
+            state: PlaybackRefreshState::Ended(PlaybackEndReason::EndOfFile),
+            warnings: Vec::new(),
+          },
+          client_messages: Vec::new(),
+        },
+      }),
+      now,
+    );
+    sync_playback_projection(&mut state);
+
+    assert!(settle_effects.is_empty());
+    assert!(state.playback_view.now_playing.is_none());
+    assert!(state.playback_view.notice.is_none());
+    assert!(state.playback_notice.is_none());
+    assert!(state.active_toast.is_none());
+  }
+
+  #[test]
+  fn failure_produces_toast_that_clears_on_timeout_message() {
+    let mut state = test_state();
+    assert!(state.active_toast.is_none());
+
+    let task = state.show_toast(NoticeLevel::Error, "Playback failed: decoder error");
+    assert!(task.units() > 0);
+    assert!(state.active_toast.is_some());
+    let toast = state.active_toast.as_ref().unwrap();
+    assert_eq!(toast.id, 1);
+    assert_eq!(toast.message, "Playback failed: decoder error");
+    assert_eq!(toast.level, NoticeLevel::Error);
+
+    // Dismissing with matching ID clears the toast
+    drop(update(&mut state, Message::DismissNotice(1)));
+    assert!(state.active_toast.is_none());
+  }
+
+  #[test]
+  fn newer_notice_replaces_older_and_older_timeout_does_not_dismiss_newer() {
+    let mut state = test_state();
+
+    drop(state.show_toast(NoticeLevel::Warning, "Warning 1"));
+    assert_eq!(state.active_toast.as_ref().unwrap().id, 1);
+    assert_eq!(state.active_toast.as_ref().unwrap().message, "Warning 1");
+
+    drop(state.show_toast(NoticeLevel::Error, "Error 2"));
+    assert_eq!(state.active_toast.as_ref().unwrap().id, 2);
+    assert_eq!(state.active_toast.as_ref().unwrap().message, "Error 2");
+
+    // Timeout from older notice (id: 1) arrives -> does NOT clear newer notice (id: 2)
+    drop(update(&mut state, Message::DismissNotice(1)));
+    assert!(state.active_toast.is_some());
+    assert_eq!(state.active_toast.as_ref().unwrap().id, 2);
+
+    // Timeout or manual dismiss for newer notice (id: 2) -> clears it
+    drop(update(&mut state, Message::DismissNotice(2)));
+    assert!(state.active_toast.is_none());
   }
 
   #[test]

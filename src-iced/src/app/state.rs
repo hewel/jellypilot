@@ -30,6 +30,19 @@ use zeroize::Zeroizing;
 use crate::tray::Tray;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum NoticeLevel {
+  Warning,
+  Error,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ToastNotice {
+  pub id: u64,
+  pub message: String,
+  pub level: NoticeLevel,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum LoginMethod {
   QuickConnect,
   Password,
@@ -631,6 +644,8 @@ pub struct State {
   pub quick_connect_task: Option<task::Handle>,
   pub notice: Option<String>,
   pub playback_notice: Option<String>,
+  pub active_toast: Option<ToastNotice>,
+  pub next_toast_id: u64,
   pub tray: Option<Tray>,
   pub quit_requested: bool,
   pub destination: Destination,
@@ -708,6 +723,8 @@ impl State {
       quick_connect_task: None,
       notice: None,
       playback_notice: None,
+      active_toast: None,
+      next_toast_id: 0,
       tray: None,
       quit_requested: false,
       destination: Destination::Home,
@@ -795,6 +812,48 @@ impl State {
     };
     self.destination = destination;
     true
+  }
+
+  pub fn show_toast(
+    &mut self,
+    level: NoticeLevel,
+    message: impl Into<String>,
+  ) -> iced::Task<crate::app::message::Message> {
+    self.next_toast_id = self.next_toast_id.wrapping_add(1);
+    let id = self.next_toast_id;
+    let message = message.into();
+    self.active_toast = Some(ToastNotice {
+      id,
+      message: message.clone(),
+      level,
+    });
+    self.notice = Some(message);
+    iced::Task::perform(
+      async move {
+        tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+        id
+      },
+      crate::app::message::Message::DismissNotice,
+    )
+  }
+
+  pub fn dismiss_toast(&mut self, id: u64) {
+    if self
+      .active_toast
+      .as_ref()
+      .is_some_and(|toast| toast.id == id)
+    {
+      self.active_toast = None;
+      self.notice = None;
+      self.playback_notice = None;
+    }
+  }
+
+  #[allow(dead_code)]
+  pub fn clear_toast(&mut self) {
+    self.active_toast = None;
+    self.notice = None;
+    self.playback_notice = None;
   }
 }
 

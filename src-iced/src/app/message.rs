@@ -41,6 +41,7 @@ impl std::fmt::Debug for Message {
       Self::Settings(_) => formatter.write_str("Settings"),
       Self::Remote(_) => formatter.write_str("Remote"),
       Self::Tray(action) => formatter.debug_tuple("Tray").field(action).finish(),
+      Self::DismissNotice(id) => formatter.debug_tuple("DismissNotice").field(id).finish(),
     }
   }
 }
@@ -57,6 +58,7 @@ pub enum Message {
   Settings(SettingsMessage),
   Remote(RemoteMessage),
   Tray(crate::tray::TrayAction),
+  DismissNotice(u64),
 }
 
 #[derive(Clone, Copy, Debug)]

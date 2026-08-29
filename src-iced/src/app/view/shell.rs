@@ -1,15 +1,14 @@
+use super::{browse, detail, home, player, settings};
 use crate::app::message::{BrowseMessage, HomeMessage, Message};
-use crate::app::state::{Destination, State};
+use crate::app::state::{Destination, NoticeLevel, State, ToastNotice};
 use iced::widget::{button, column, container, row, space, stack, text, text_input, Column};
-use iced::{Alignment, Element, Fill, Length};
+use iced::{Alignment, Color, Element, Fill, Length};
 use jellypilot_core::LoadState;
 use jellypilot_ui::fonts::SPACE_GROTESK_FONT;
 use jellypilot_ui::icons::{icon_for_variant, icon_with_color, Icon, IconSize};
 use jellypilot_ui::overlay::{tooltip, TooltipOptions};
 use jellypilot_ui::tokens::TOKENS;
 use jellypilot_ui::variants::{ButtonVariant, FieldVariant, SurfaceVariant};
-
-use super::{browse, detail, home, player, settings};
 
 const SIDEBAR_WIDTH: f32 = 248.0;
 
@@ -21,28 +20,21 @@ pub fn view(state: &State) -> Element<'_, Message> {
     Destination::Detail(_) => detail::view(state),
     Destination::Settings => settings::view(state),
   };
-  let content = stack![content].width(Fill).height(Fill);
-  let mut content_column = Column::new()
-    .spacing(TOKENS.spacing.s2)
-    .width(Fill)
-    .height(Fill);
-  if let Some(notice) = visible_notice(state) {
-    content_column = content_column.push(
-      container(
-        row![
-          icon_with_color(Icon::Warning, IconSize::Sm, TOKENS.colors.warning),
-          text(notice).size(13).color(TOKENS.colors.warning),
-        ]
-        .spacing(TOKENS.spacing.s2)
-        .align_y(Alignment::Center),
-      )
-      .padding([8, 12])
-      .width(Fill)
-      .style(|theme| jellypilot_ui::theme::surface_variant(theme, SurfaceVariant::Elevated)),
+  let mut content_stack = stack![content].width(Fill).height(Fill);
+  if let Some(toast) = visible_toast(state) {
+    content_stack = content_stack.push(
+      container(toast_view(toast))
+        .width(Fill)
+        .padding(iced::Padding {
+          top: TOKENS.spacing.s2,
+          right: TOKENS.spacing.s3,
+          bottom: 0.0,
+          left: TOKENS.spacing.s3,
+        })
+        .align_x(Alignment::End),
     );
   }
-  content_column = content_column.push(content);
-  let body = row![sidebar, content_column]
+  let body = row![sidebar, content_stack]
     .spacing(TOKENS.spacing.s4)
     .width(Fill)
     .height(Fill);
@@ -58,8 +50,89 @@ pub fn view(state: &State) -> Element<'_, Message> {
     .style(|theme| jellypilot_ui::theme::surface_variant(theme, SurfaceVariant::Filled))
     .into()
 }
-fn visible_notice(state: &State) -> Option<&str> {
-  state.notice.as_deref().or(state.playback_notice.as_deref())
+fn visible_toast(state: &State) -> Option<&ToastNotice> {
+  state.active_toast.as_ref()
+}
+
+#[allow(dead_code)]
+pub fn visible_notice(state: &State) -> Option<&str> {
+  state
+    .active_toast
+    .as_ref()
+    .map(|toast| toast.message.as_str())
+}
+
+fn toast_view(toast: &ToastNotice) -> Element<'_, Message> {
+  let colors = TOKENS.colors;
+  let (icon, icon_color, text_color, bg_color, border_color) = match toast.level {
+    NoticeLevel::Error => (
+      Icon::Warning,
+      colors.error,
+      colors.onErrorContainer,
+      with_alpha(colors.errorContainer, 0.90),
+      with_alpha(colors.error, 0.40),
+    ),
+    NoticeLevel::Warning => (
+      Icon::Warning,
+      colors.warning,
+      colors.onWarningContainer,
+      with_alpha(colors.warningContainer, 0.90),
+      with_alpha(colors.warning, 0.40),
+    ),
+  };
+
+  let close_id = toast.id;
+  let dismiss_button = button(icon_with_color(Icon::Close, IconSize::Xs, text_color))
+    .padding([3, 5])
+    .on_press(Message::DismissNotice(close_id))
+    .style(|_theme, status| {
+      let bg = match status {
+        button::Status::Hovered => Some(iced::Background::Color(Color::from_rgba(
+          1.0, 1.0, 1.0, 0.1,
+        ))),
+        button::Status::Pressed => Some(iced::Background::Color(Color::from_rgba(
+          1.0, 1.0, 1.0, 0.18,
+        ))),
+        _ => None,
+      };
+      button::Style {
+        background: bg,
+        text_color: Color::TRANSPARENT,
+        border: iced::Border {
+          radius: TOKENS.radii.sm.into(),
+          ..iced::Border::default()
+        },
+        ..button::Style::default()
+      }
+    });
+
+  let toast_content = row![
+    icon_with_color(icon, IconSize::Sm, icon_color),
+    text(&toast.message).size(13).color(text_color).width(Fill),
+    dismiss_button,
+  ]
+  .spacing(TOKENS.spacing.s2)
+  .align_y(Alignment::Center);
+
+  container(toast_content)
+    .max_width(440.0)
+    .padding([10, 14])
+    .style(move |_theme| container::Style {
+      background: Some(iced::Background::Color(bg_color)),
+      text_color: Some(text_color),
+      border: iced::Border {
+        color: border_color,
+        width: 1.0,
+        radius: TOKENS.radii.xl.into(),
+      },
+      shadow: TOKENS.shadows.x2l.iced(),
+      ..container::Style::default()
+    })
+    .into()
+}
+
+fn with_alpha(color: Color, alpha: f32) -> Color {
+  Color { a: alpha, ..color }
 }
 
 fn sidebar(state: &State) -> container::Container<'_, Message> {
@@ -218,11 +291,51 @@ mod tests {
   use super::*;
 
   #[test]
-  fn general_notice_takes_precedence_over_stale_playback_notice() {
+  fn active_toast_is_rendered_and_cleared_on_dismiss() {
     let mut state = State::boot(false);
-    state.playback_notice = Some("Playback stopped.".to_owned());
-    state.notice = Some("Library refresh failed.".to_owned());
+    assert_eq!(visible_notice(&state), None);
+    assert_eq!(visible_toast(&state), None);
 
-    assert_eq!(visible_notice(&state), Some("Library refresh failed."));
+    state.active_toast = Some(ToastNotice {
+      id: 1,
+      message: "Playback failed.".to_owned(),
+      level: NoticeLevel::Error,
+    });
+    assert_eq!(visible_notice(&state), Some("Playback failed."));
+    assert_eq!(
+      visible_toast(&state),
+      Some(&ToastNotice {
+        id: 1,
+        message: "Playback failed.".to_owned(),
+        level: NoticeLevel::Error,
+      })
+    );
+
+    state.dismiss_toast(1);
+    assert_eq!(visible_notice(&state), None);
+    assert_eq!(visible_toast(&state), None);
+  }
+
+  #[test]
+  fn newer_toast_replaces_older_and_older_id_does_not_dismiss_newer() {
+    let mut state = State::boot(false);
+    state.active_toast = Some(ToastNotice {
+      id: 1,
+      message: "First notice".to_owned(),
+      level: NoticeLevel::Warning,
+    });
+    state.active_toast = Some(ToastNotice {
+      id: 2,
+      message: "Second notice".to_owned(),
+      level: NoticeLevel::Error,
+    });
+
+    assert_eq!(visible_notice(&state), Some("Second notice"));
+
+    state.dismiss_toast(1);
+    assert_eq!(visible_notice(&state), Some("Second notice"));
+
+    state.dismiss_toast(2);
+    assert_eq!(visible_notice(&state), None);
   }
 }

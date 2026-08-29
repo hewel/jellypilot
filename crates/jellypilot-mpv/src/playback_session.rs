@@ -186,8 +186,6 @@ pub struct IntroPromptView {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum PlaybackNotice {
-  Finished,
-  Stopped,
   Failed(PlaybackError),
   Warnings(Vec<PlaybackWarning>),
 }
@@ -658,7 +656,7 @@ impl PlaybackSession {
     match result {
       Ok(_outcome) => {
         self.clear_playback_context();
-        self.notice = Some(PlaybackNotice::Stopped);
+        self.notice = None;
       }
       Err(error) => {
         self.sync_desired_transport();
@@ -695,7 +693,7 @@ impl PlaybackSession {
       }
       PlaybackRefreshState::Ended(PlaybackEndReason::EndOfFile) => {
         self.clear_playback_context();
-        self.notice = Some(PlaybackNotice::Finished);
+        self.notice = None;
         Vec::new()
       }
       PlaybackRefreshState::Ended(PlaybackEndReason::Error | PlaybackEndReason::Disconnected) => {
@@ -1731,7 +1729,7 @@ mod tests {
 
     assert!(effects.is_empty());
     assert!(session.view().now_playing.is_none());
-    assert_eq!(session.view().notice, Some(PlaybackNotice::Finished));
+    assert_eq!(session.view().notice, None);
   }
 
   #[test]
@@ -2200,7 +2198,7 @@ mod tests {
   }
 
   #[test]
-  fn double_stop_while_in_flight_dispatches_single_stop_and_preserves_stopped_notice() {
+  fn double_stop_while_in_flight_dispatches_single_stop() {
     let (mut session, now, _) = start_session(IntroSkipMode::Off);
 
     // First Stop intent dispatches Stop to controller
@@ -2227,7 +2225,7 @@ mod tests {
     // Assert no second Stop was queued or dispatched
     assert!(settle_effects.is_empty());
     assert!(session.pending.is_empty());
-    assert_eq!(session.view().notice, Some(PlaybackNotice::Stopped));
+    assert_eq!(session.view().notice, None);
     assert!(session.view().now_playing.is_none());
     assert!(!session.view().busy);
   }

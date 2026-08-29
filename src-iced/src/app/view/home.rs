@@ -325,7 +325,7 @@ fn video_card<'a>(
 
   container(
     button(column![poster, copy].width(frame_width))
-      .padding(1)
+      .padding(0)
       .width(frame_width)
       .on_press(Message::OpenDetail(item.clone()))
       .style(jellypilot_ui::theme::poster_card_button),

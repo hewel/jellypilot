@@ -407,7 +407,7 @@ fn video_card<'a>(
 
   container(
     button(column![artwork, copy].width(Fill))
-      .padding(1)
+      .padding(0)
       .width(Fill)
       .height(Fill)
       .on_press(Message::OpenDetail(item.clone()))
