@@ -7,13 +7,17 @@
 //! frontend executes the plan as a stream of per-image
 //! [`ArtworkLoadCompletion`] settlements.
 
+use jellypilot_media_server::artwork::ArtworkSizeClass;
+
 use crate::artwork_binder::ArtworkSlot;
 
-/// One Library Image load submitted by a surface, classified by visibility.
+/// One Library Image load submitted by a surface, classified by visibility
+/// and the render-side decode bucket its Library Image Raster targets.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct PlannedArtworkLoad {
     pub slot: ArtworkSlot,
     pub image_id: String,
+    pub size_class: ArtworkSizeClass,
     pub visible: bool,
 }
 
@@ -107,6 +111,7 @@ mod tests {
         PlannedArtworkLoad {
             slot: ArtworkSlot::for_test(slot),
             image_id: format!("image-{slot}"),
+            size_class: ArtworkSizeClass::Card,
             visible,
         }
     }

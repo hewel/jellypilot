@@ -34,7 +34,7 @@ use jellypilot_core::request_gate::{
 };
 use jellypilot_core::LIBRARY_BROWSE_PAGE_SIZE;
 use jellypilot_media_server::artwork::{
-  ArtworkLoadObservation, ArtworkLoadSummary, ArtworkOutput, LoadLane,
+  ArtworkLoadObservation, ArtworkLoadSummary, ArtworkSizeClass, LoadLane,
 };
 use jellypilot_media_server::home::{load_home_data, HomeDataResult};
 use jellypilot_media_server::{
@@ -1282,12 +1282,12 @@ fn update_playback(state: &mut State, message: PlaybackMessage) -> Task<Message>
         return Task::none();
       };
       match result {
-        Ok(bytes) => {
+        Ok(raster) => {
           cell.state = ArtworkCellState::Ready;
           state.artwork_handles.insert(
             slot,
             image_id,
-            image::Handle::from_bytes(bytes.as_slice().to_vec()),
+            image::Handle::from_rgba(raster.width(), raster.height(), raster.into_pixels()),
           );
         }
         Err(jellypilot_media_server::artwork::ArtworkError::Cancelled) => {}
@@ -1655,19 +1655,12 @@ fn prepare_player_artwork(state: &mut State) -> Task<Message> {
     }
   }
   clear_player_artwork(state);
-  if let Some(handle) = state.artwork_handles.find_by_image_id(&image_id) {
+  if let Some(raster) = state
+    .artwork_adapter
+    .cached(&image_id, ArtworkSizeClass::Card)
+  {
     let slot = state.artwork_binder.bind_settled();
-    state.artwork_handles.insert(slot, image_id.clone(), handle);
-    state.playback_artwork = Some(ArtworkCell {
-      slot,
-      image_id,
-      state: ArtworkCellState::Ready,
-    });
-    return Task::none();
-  }
-  if let Some(bytes) = state.artwork_adapter.cached(&image_id) {
-    let slot = state.artwork_binder.bind_settled();
-    let handle = image::Handle::from_bytes(bytes.as_slice().to_vec());
+    let handle = image::Handle::from_rgba(raster.width(), raster.height(), raster.into_pixels());
     state.artwork_handles.insert(slot, image_id.clone(), handle);
     state.playback_artwork = Some(ArtworkCell {
       slot,
@@ -1686,7 +1679,12 @@ fn prepare_player_artwork(state: &mut State) -> Task<Message> {
   let session = state.request_gate.current_session();
   let completion_image_id = image_id.clone();
   Task::perform(
-    async move { adapter.load(&client, &image_id, LoadLane::Visible).await.0 },
+    async move {
+      adapter
+        .load(&client, &image_id, ArtworkSizeClass::Card, LoadLane::Visible)
+        .await
+        .0
+    },
     move |result| {
       Message::Playback(PlaybackMessage::ArtworkLoaded {
         session,
@@ -1762,12 +1760,12 @@ fn apply_home_artwork_completion(
     return;
   };
   match completion.result {
-    Ok(bytes) => {
+    Ok(raster) => {
       cell.state = ArtworkCellState::Ready;
       state.artwork_handles.insert(
         completion.slot,
         completion.image_id,
-        image::Handle::from_bytes(bytes.as_slice().to_vec()),
+        image::Handle::from_rgba(raster.width(), raster.height(), raster.into_pixels()),
       );
     }
     Err(jellypilot_media_server::artwork::ArtworkError::Cancelled) => {}
@@ -1824,6 +1822,15 @@ struct ArtworkLoadSpec {
   visible: bool,
 }
 
+impl ArtworkLoadSpec {
+  fn size_class(&self) -> ArtworkSizeClass {
+    match self.placement {
+      ArtworkPlacement::Hero => ArtworkSizeClass::Hero,
+      ArtworkPlacement::Card(_) => ArtworkSizeClass::Card,
+    }
+  }
+}
+
 enum ArtworkStreamEvent {
   Loaded(ArtworkLoadCompletion),
   Completed(ArtworkLoadSummary),
@@ -1834,11 +1841,7 @@ enum ArtworkStreamEvent {
 /// stream's own sanitized aggregate at the end. `summary` seeds the aggregate
 /// with synchronous cache hits from the prepare pass.
 fn stream_artwork_loads<F>(
-  adapter: Arc<
-    jellypilot_media_server::artwork::ArtworkAdapter<
-      jellypilot_media_server::artwork::RawArtworkDecoder,
-    >,
-  >,
+  adapter: Arc<jellypilot_media_server::artwork::ArtworkAdapter>,
   client: Arc<JellyfinClient>,
   session: jellypilot_core::request_gate::SessionToken,
   loads: Vec<PlannedArtworkLoad>,
@@ -1870,7 +1873,7 @@ where
           LoadLane::Offscreen
         };
         let image_id = load.image_id;
-        let (result, observation) = adapter.load(&client, &image_id, lane).await;
+        let (result, observation) = adapter.load(&client, &image_id, load.size_class, lane).await;
         if let Ok(mut summary) = summary.lock() {
           summary.record(&observation);
         }
@@ -1944,29 +1947,10 @@ fn prepare_home_artwork(state: &mut State) -> Task<Message> {
       }
     }
 
-    if let Some(handle) = state.artwork_handles.find_by_image_id(&spec.image_id) {
+    if let Some(raster) = adapter.cached(&spec.image_id, spec.size_class()) {
+      summary.record(&ArtworkLoadObservation::raster_hit(raster.byte_len() as u64));
       let slot = state.artwork_binder.bind_settled();
-      state
-        .artwork_handles
-        .insert(slot, spec.image_id.clone(), handle);
-      let cell = ArtworkCell {
-        slot,
-        image_id: spec.image_id,
-        state: ArtworkCellState::Ready,
-      };
-      match spec.placement {
-        ArtworkPlacement::Hero => state.home_artwork.insert_hero(spec.item_id, cell),
-        ArtworkPlacement::Card(section) => {
-          state.home_artwork.insert_card(section, spec.item_id, cell);
-        }
-      }
-      continue;
-    }
-
-    if let Some(bytes) = adapter.cached(&spec.image_id) {
-      summary.record(&ArtworkLoadObservation::memory_hit(bytes.byte_len() as u64));
-      let slot = state.artwork_binder.bind_settled();
-      let handle = image::Handle::from_bytes(bytes.as_slice().to_vec());
+      let handle = image::Handle::from_rgba(raster.width(), raster.height(), raster.into_pixels());
       state
         .artwork_handles
         .insert(slot, spec.image_id.clone(), handle);
@@ -1985,6 +1969,7 @@ fn prepare_home_artwork(state: &mut State) -> Task<Message> {
     }
 
     let slot = state.artwork_binder.bind(ArtworkSurface::Home);
+    let size_class = spec.size_class();
     let cell = ArtworkCell {
       slot,
       image_id: spec.image_id.clone(),
@@ -1999,6 +1984,7 @@ fn prepare_home_artwork(state: &mut State) -> Task<Message> {
     load_specs.push(PlannedArtworkLoad {
       slot,
       image_id: spec.image_id,
+      size_class,
       visible: spec.visible,
     });
   }
@@ -2218,12 +2204,12 @@ fn apply_detail_artwork_completion(
     return;
   };
   match completion.result {
-    Ok(bytes) => {
+    Ok(raster) => {
       cell.state = ArtworkCellState::Ready;
       state.artwork_handles.insert(
         completion.slot,
         completion.image_id,
-        image::Handle::from_bytes(bytes.as_slice().to_vec()),
+        image::Handle::from_rgba(raster.width(), raster.height(), raster.into_pixels()),
       );
     }
     Err(jellypilot_media_server::artwork::ArtworkError::Cancelled) => {}
@@ -2486,6 +2472,7 @@ const DETAIL_BACKDROP_KEY: &str = "detail-backdrop";
 struct DetailArtworkSpec {
   key: String,
   image_id: String,
+  size_class: ArtworkSizeClass,
   visible: bool,
 }
 
@@ -2497,12 +2484,14 @@ fn prepare_detail_artwork(state: &mut State) -> Task<Message> {
         &mut specs,
         DETAIL_POSTER_KEY.to_owned(),
         &item.artwork_image_id,
+        ArtworkSizeClass::Hero,
         true,
       );
       push_detail_artwork(
         &mut specs,
         DETAIL_BACKDROP_KEY.to_owned(),
         &item.backdrop_image_id,
+        ArtworkSizeClass::Backdrop,
         true,
       );
       if let jellypilot_core::LoadState::Ready(neighbors) = &state.detail.season_neighbors {
@@ -2511,6 +2500,7 @@ fn prepare_detail_artwork(state: &mut State) -> Task<Message> {
             &mut specs,
             detail_episode_key(&episode.id),
             &episode.artwork_image_id,
+            ArtworkSizeClass::Card,
             false,
           );
         }
@@ -2521,12 +2511,14 @@ fn prepare_detail_artwork(state: &mut State) -> Task<Message> {
         &mut specs,
         DETAIL_POSTER_KEY.to_owned(),
         &show.artwork_image_id,
+        ArtworkSizeClass::Hero,
         true,
       );
       push_detail_artwork(
         &mut specs,
         DETAIL_BACKDROP_KEY.to_owned(),
         &show.backdrop_image_id,
+        ArtworkSizeClass::Backdrop,
         true,
       );
       if let Some(next) = &show.next_episode {
@@ -2534,6 +2526,7 @@ fn prepare_detail_artwork(state: &mut State) -> Task<Message> {
           &mut specs,
           detail_episode_key(&next.id),
           &next.artwork_image_id,
+          ArtworkSizeClass::Card,
           false,
         );
       }
@@ -2543,6 +2536,7 @@ fn prepare_detail_artwork(state: &mut State) -> Task<Message> {
             &mut specs,
             detail_episode_key(&episode.id),
             &episode.artwork_image_id,
+            ArtworkSizeClass::Card,
             false,
           );
         }
@@ -2584,26 +2578,10 @@ fn prepare_detail_artwork(state: &mut State) -> Task<Message> {
       }
     }
 
-    if let Some(handle) = state.artwork_handles.find_by_image_id(&spec.image_id) {
+    if let Some(raster) = adapter.cached(&spec.image_id, spec.size_class) {
+      summary.record(&ArtworkLoadObservation::raster_hit(raster.byte_len() as u64));
       let slot = state.artwork_binder.bind_settled();
-      state
-        .artwork_handles
-        .insert(slot, spec.image_id.clone(), handle);
-      state.detail_artwork.insert(
-        spec.key,
-        ArtworkCell {
-          slot,
-          image_id: spec.image_id,
-          state: ArtworkCellState::Ready,
-        },
-      );
-      continue;
-    }
-
-    if let Some(bytes) = adapter.cached(&spec.image_id) {
-      summary.record(&ArtworkLoadObservation::memory_hit(bytes.byte_len() as u64));
-      let slot = state.artwork_binder.bind_settled();
-      let handle = image::Handle::from_bytes(bytes.as_slice().to_vec());
+      let handle = image::Handle::from_rgba(raster.width(), raster.height(), raster.into_pixels());
       state
         .artwork_handles
         .insert(slot, spec.image_id.clone(), handle);
@@ -2630,6 +2608,7 @@ fn prepare_detail_artwork(state: &mut State) -> Task<Message> {
     load_specs.push(PlannedArtworkLoad {
       slot,
       image_id: spec.image_id,
+      size_class: spec.size_class,
       visible: spec.visible,
     });
   }
@@ -2655,12 +2634,14 @@ fn push_detail_artwork(
   specs: &mut Vec<DetailArtworkSpec>,
   key: String,
   image_id: &Option<String>,
+  size_class: ArtworkSizeClass,
   visible: bool,
 ) {
   if let Some(image_id) = image_id {
     specs.push(DetailArtworkSpec {
       key,
       image_id: image_id.clone(),
+      size_class,
       visible,
     });
   }
@@ -2815,12 +2796,12 @@ fn apply_browse_artwork_completion(
     return;
   };
   match completion.result {
-    Ok(bytes) => {
+    Ok(raster) => {
       cell.state = ArtworkCellState::Ready;
       state.artwork_handles.insert(
         completion.slot,
         completion.image_id,
-        image::Handle::from_bytes(bytes.as_slice().to_vec()),
+        image::Handle::from_rgba(raster.width(), raster.height(), raster.into_pixels()),
       );
     }
     Err(jellypilot_media_server::artwork::ArtworkError::Cancelled) => {}
@@ -3049,23 +3030,10 @@ fn prepare_browse_artwork(state: &mut State) -> Task<Message> {
       }
     }
 
-    if let Some(handle) = state.artwork_handles.find_by_image_id(&image_id) {
+    if let Some(raster) = adapter.cached(&image_id, ArtworkSizeClass::Card) {
+      summary.record(&ArtworkLoadObservation::raster_hit(raster.byte_len() as u64));
       let slot = state.artwork_binder.bind_settled();
-      state.artwork_handles.insert(slot, image_id.clone(), handle);
-      state.browse_artwork.insert(
-        item_id,
-        ArtworkCell {
-          slot,
-          image_id,
-          state: ArtworkCellState::Ready,
-        },
-      );
-      continue;
-    }
-    if let Some(bytes) = adapter.cached(&image_id) {
-      summary.record(&ArtworkLoadObservation::memory_hit(bytes.byte_len() as u64));
-      let slot = state.artwork_binder.bind_settled();
-      let handle = image::Handle::from_bytes(bytes.as_slice().to_vec());
+      let handle = image::Handle::from_rgba(raster.width(), raster.height(), raster.into_pixels());
       state.artwork_handles.insert(slot, image_id.clone(), handle);
       state.browse_artwork.insert(
         item_id,
@@ -3090,6 +3058,7 @@ fn prepare_browse_artwork(state: &mut State) -> Task<Message> {
     load_specs.push(PlannedArtworkLoad {
       slot,
       image_id,
+      size_class: ArtworkSizeClass::Card,
       visible: grid_cell_visible(
         index,
         metrics.columns,
@@ -4972,7 +4941,7 @@ mod tests {
     state.artwork_handles.insert(
       old_slot,
       "old-image".to_owned(),
-      image::Handle::from_bytes(vec![1]),
+      image::Handle::from_rgba(1, 1, vec![0, 0, 0, 255]),
     );
     let mut playable = episode("episode-1", 1);
     playable.artwork_image_id = Some("new-image".to_owned());
@@ -5000,7 +4969,7 @@ mod tests {
     state.artwork_handles.insert(
       slot,
       "player-image".to_owned(),
-      image::Handle::from_bytes(vec![1]),
+      image::Handle::from_rgba(1, 1, vec![0, 0, 0, 255]),
     );
 
     drop(clear_inactive_playback(&mut state));
@@ -5888,9 +5857,7 @@ mod tests {
         slot,
         image_id: "art-1".to_owned(),
         result: Ok(
-          jellypilot_media_server::artwork::ArtworkBytes::from_raw_for_test(Arc::from(vec![
-            1, 2, 3,
-          ])),
+          jellypilot_media_server::artwork::ArtworkRaster::from_raw_for_test(1, 1, vec![1, 2, 3, 4]),
         ),
       },
     ));
@@ -5956,15 +5923,13 @@ mod tests {
       }));
     state.home.settle_shortcuts(Ok(Vec::new()));
 
-    // Seed adapter cache directly (without priming artwork_handles)
-    state.artwork_adapter.seed_cached_for_test(
+    // Seed the raster cache directly on a fresh state, so no handle is
+    // retained for the image when the prepare pass runs.
+    state.artwork_adapter.seed_raster_for_test(
       "cached-art-2",
-      jellypilot_media_server::artwork::ArtworkBytes::from_raw_for_test(Arc::from(vec![10, 20])),
+      jellypilot_media_server::artwork::ArtworkSizeClass::Card,
+      jellypilot_media_server::artwork::ArtworkRaster::from_raw_for_test(1, 1, vec![10, 20, 30, 40]),
     );
-    assert!(state
-      .artwork_handles
-      .find_by_image_id("cached-art-2")
-      .is_none());
     let warm_task = prepare_home_artwork(&mut state);
     // One sentinel unit reports the aggregate cache-hit telemetry event.
     assert_eq!(warm_task.units(), 1);
@@ -5984,6 +5949,7 @@ mod tests {
   fn artwork_stream_completion_records_one_sanitized_aggregate_event() {
     let mut state = test_state();
     let summary = ArtworkLoadSummary {
+      raster_loads: 1,
       memory_loads: 2,
       disk_loads: 1,
       network_loads: 3,
@@ -6052,9 +6018,11 @@ mod tests {
           Err(jellypilot_media_server::artwork::ArtworkError::FetchFailed)
         } else {
           Ok(
-            jellypilot_media_server::artwork::ArtworkBytes::from_raw_for_test(Arc::from(vec![
-              1, 2, 3,
-            ])),
+            jellypilot_media_server::artwork::ArtworkRaster::from_raw_for_test(
+              1,
+              1,
+              vec![1, 2, 3, 4],
+            ),
           )
         };
         ArtworkLoadCompletion {
@@ -6095,7 +6063,7 @@ mod tests {
   }
 
   #[test]
-  fn browse_re_navigation_reuses_retained_handle_or_memory_cache() {
+  fn browse_re_navigation_rebuilds_from_the_raster_cache() {
     let mut state = test_state();
     state.client = Some(Arc::new(JellyfinClient::new()));
     let library = Destination::Library {
@@ -6130,6 +6098,13 @@ mod tests {
     drop(prepare_browse_artwork(&mut state));
     let slot = state.browse_artwork.get("browse-item-1").unwrap().slot;
     let session = state.request_gate.current_session();
+    // A real load stores the raster in the adapter cache; seed it beside the
+    // synthesized completion so re-navigation can rebuild from it.
+    state.artwork_adapter.seed_raster_for_test(
+      "browse-art-1",
+      jellypilot_media_server::artwork::ArtworkSizeClass::Card,
+      jellypilot_media_server::artwork::ArtworkRaster::from_raw_for_test(1, 1, vec![1, 2, 3, 4]),
+    );
     drop(update_browse(
       &mut state,
       BrowseMessage::ArtworkLoaded {
@@ -6137,9 +6112,7 @@ mod tests {
         slot,
         image_id: "browse-art-1".to_owned(),
         result: Ok(
-          jellypilot_media_server::artwork::ArtworkBytes::from_raw_for_test(Arc::from(vec![
-            1, 2, 3,
-          ])),
+          jellypilot_media_server::artwork::ArtworkRaster::from_raw_for_test(1, 1, vec![1, 2, 3, 4]),
         ),
       },
     ));
@@ -6150,11 +6123,12 @@ mod tests {
         .map(|cell| cell.state),
       Some(ArtworkCellState::Ready)
     );
-    let initial_handle_id = state
-      .artwork_handles
-      .get(slot, "browse-art-1")
-      .expect("initial handle exists")
-      .id();
+    assert!(
+      state
+        .artwork_handles
+        .get(slot, "browse-art-1")
+        .is_some()
+    );
 
     // Navigate away to Home
     drop(navigate(&mut state, Destination::Home));
@@ -6177,12 +6151,14 @@ mod tests {
       .get("browse-item-1")
       .expect("browse cell exists");
     assert_eq!(browse_cell.state, ArtworkCellState::Ready);
-    let re_nav_handle_id = state
-      .artwork_handles
-      .get(browse_cell.slot, "browse-art-1")
-      .expect("re-nav handle exists")
-      .id();
-    assert_eq!(initial_handle_id, re_nav_handle_id);
+    // The handle is rebuilt synchronously from the raster cache; there is no
+    // cross-navigation handle identity to preserve.
+    assert!(
+      state
+        .artwork_handles
+        .get(browse_cell.slot, "browse-art-1")
+        .is_some()
+    );
   }
 
   #[test]
@@ -6221,11 +6197,10 @@ mod tests {
     let mut item = video_item("detail-cache-item");
     item.artwork_image_id = Some("detail-cache-art".to_owned());
     state.detail.content = jellypilot_core::LoadState::Ready(DetailContent::Item(item));
-    state.artwork_adapter.seed_cached_for_test(
+    state.artwork_adapter.seed_raster_for_test(
       "detail-cache-art",
-      jellypilot_media_server::artwork::ArtworkBytes::from_raw_for_test(Arc::from(vec![
-        10, 20, 30,
-      ])),
+      jellypilot_media_server::artwork::ArtworkSizeClass::Hero,
+      jellypilot_media_server::artwork::ArtworkRaster::from_raw_for_test(1, 1, vec![10, 20, 30, 40]),
     );
     state.artwork_handles.clear();
     let warm_task = prepare_detail_artwork(&mut state);
@@ -6250,20 +6225,15 @@ mod tests {
     let mut item = episode("browse-cache-item-1", 1);
     item.artwork_image_id = Some("browse-cache-art-1".to_owned());
 
-    // Seed adapter cache directly
-    state.artwork_adapter.seed_cached_for_test(
+    // Seed the raster cache directly
+    state.artwork_adapter.seed_raster_for_test(
       "browse-cache-art-1",
-      jellypilot_media_server::artwork::ArtworkBytes::from_raw_for_test(Arc::from(vec![
-        10, 20, 30,
-      ])),
+      jellypilot_media_server::artwork::ArtworkSizeClass::Card,
+      jellypilot_media_server::artwork::ArtworkRaster::from_raw_for_test(1, 1, vec![10, 20, 30, 40]),
     );
 
     // Wipe artwork_handles completely so there is NO retained handle in artwork_handles
     state.artwork_handles.clear();
-    assert!(state
-      .artwork_handles
-      .find_by_image_id("browse-cache-art-1")
-      .is_none());
 
     state.browse_view = LibraryBrowseView::Ready {
       visible_items: vec![jellypilot_core::browse_model::LibraryItemSlot { item: Some(item) }],
@@ -6377,9 +6347,7 @@ mod tests {
         slot: cold_slot,
         image_id: "art-warm".to_owned(),
         result: Ok(
-          jellypilot_media_server::artwork::ArtworkBytes::from_raw_for_test(Arc::from(vec![
-            1, 2, 3,
-          ])),
+          jellypilot_media_server::artwork::ArtworkRaster::from_raw_for_test(1, 1, vec![1, 2, 3, 4]),
         ),
       },
     ));

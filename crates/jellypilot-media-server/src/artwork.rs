@@ -1,8 +1,10 @@
 use std::collections::{HashMap, VecDeque};
 use std::fmt;
+use std::io::Cursor;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::time::{Duration, Instant};
 
+use bytes::Bytes;
 use tokio::sync::{oneshot, watch, Notify};
 
 use crate::{
@@ -10,9 +12,10 @@ use crate::{
 };
 
 pub const MAX_RESPONSE_BYTES: usize = 8 * 1024 * 1024;
-pub const MAX_DECODED_BYTES: usize = 4 * 1024 * 1024;
 pub const MAX_CACHED_BYTES: usize = 32 * 1024 * 1024;
 pub const MAX_CACHED_ENTRIES: usize = 256;
+pub const MAX_RASTER_CACHED_BYTES: usize = 64 * 1024 * 1024;
+pub const MAX_RASTER_CACHED_ENTRIES: usize = 512;
 pub const MAX_ACTIVE_LOADS: usize = 24;
 pub const MAX_ACTIVE_BYTES: usize = 384 * 1024 * 1024;
 pub const MAX_QUEUED_LOADS: usize = 128;
@@ -23,9 +26,10 @@ const MAX_IMAGE_REFERENCE_BYTES: usize = 32 * 1024;
 #[derive(Clone, Copy)]
 pub struct ArtworkLimits {
   pub max_response_bytes: usize,
-  pub max_decoded_bytes: usize,
   pub max_cached_bytes: usize,
   pub max_cached_entries: usize,
+  pub max_raster_cached_bytes: usize,
+  pub max_raster_cached_entries: usize,
   pub max_active_loads: usize,
   pub max_active_bytes: usize,
   pub max_queued_loads: usize,
@@ -35,9 +39,10 @@ impl Default for ArtworkLimits {
   fn default() -> Self {
     Self {
       max_response_bytes: MAX_RESPONSE_BYTES,
-      max_decoded_bytes: MAX_DECODED_BYTES,
       max_cached_bytes: MAX_CACHED_BYTES,
       max_cached_entries: MAX_CACHED_ENTRIES,
+      max_raster_cached_bytes: MAX_RASTER_CACHED_BYTES,
+      max_raster_cached_entries: MAX_RASTER_CACHED_ENTRIES,
       max_active_loads: MAX_ACTIVE_LOADS,
       max_active_bytes: MAX_ACTIVE_BYTES,
       max_queued_loads: MAX_QUEUED_LOADS,
@@ -46,19 +51,28 @@ impl Default for ArtworkLimits {
 }
 
 impl ArtworkLimits {
+  /// Bytes one load admits against the aggregate budget: the encoded body,
+  /// the bounded full-size decode buffer, and the resulting Library Image
+  /// Raster. Both decoded sizes are class-bounded, so the reservation is per
+  /// size class.
   #[must_use]
-  pub fn load_reservation_bytes(self) -> usize {
-    self.max_response_bytes.saturating_add(
-      self
-        .max_decoded_bytes
-        .saturating_mul(DECODE_PIXEL_BUFFER_RESERVATIONS),
-    )
+  pub fn load_reservation_bytes(self, size_class: ArtworkSizeClass) -> usize {
+    self
+      .max_response_bytes
+      .saturating_add(size_class.max_decode_bytes())
+      .saturating_add(
+        size_class
+          .max_raster_bytes()
+          .saturating_mul(DECODE_PIXEL_BUFFER_RESERVATIONS),
+      )
   }
 
   #[must_use]
   pub fn normalized(mut self) -> Self {
     self.max_active_loads = self.max_active_loads.max(1);
-    self.max_active_bytes = self.max_active_bytes.max(self.load_reservation_bytes());
+    self.max_active_bytes = self
+      .max_active_bytes
+      .max(self.load_reservation_bytes(ArtworkSizeClass::Backdrop));
     self
   }
 }
@@ -268,63 +282,181 @@ impl ArtworkBytes {
   }
 
   #[must_use]
-  pub fn into_inner(self) -> Arc<[u8]> {
-    self.0
-  }
-}
-
-#[cfg(any(test, feature = "test-utils"))]
-impl ArtworkBytes {
-  #[must_use]
-  pub fn from_raw_for_test(bytes: Arc<[u8]>) -> Self {
-    Self(bytes)
-  }
-}
-
-/// A cacheable result produced by an [`ArtworkDecoder`].
-pub trait ArtworkOutput: Clone + Send + Sync + 'static {
-  fn byte_len(&self) -> usize;
-}
-
-impl ArtworkOutput for ArtworkBytes {
-  fn byte_len(&self) -> usize {
+  pub fn byte_len(&self) -> usize {
     self.0.len()
   }
 }
 
-/// Display-independent decoding boundary for the bounded artwork pipeline.
-pub trait ArtworkDecoder: Clone + Send + Sync + 'static {
-  type Output: ArtworkOutput;
-
-  fn decode(
-    &self,
-    bytes: ArtworkBytes,
-    max_decoded_bytes: usize,
-  ) -> Result<Self::Output, ArtworkError>;
+/// Render-side decode bucket for a Library Image Raster.
+///
+/// Classes are derived from view constants at roughly twice the logical
+/// display size; they do not change what is requested from the server.
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub enum ArtworkSizeClass {
+  /// Browse posters (160×240), home thumbs (240×135), player bar (56×56).
+  Card,
+  /// Home hero and detail poster (220×330).
+  Hero,
+  /// Detail backdrop; the server already caps these requests at 1920px.
+  Backdrop,
 }
 
-/// Decoder boundary that validates the image container and returns encoded bytes.
-#[derive(Clone, Copy, Debug, Default)]
-pub struct RawArtworkDecoder;
+impl ArtworkSizeClass {
+  /// Decode target box: the raster is shrunk to fit, aspect preserved, and
+  /// never upscaled.
+  #[must_use]
+  pub const fn target_box(self) -> (u32, u32) {
+    match self {
+      Self::Card => (400, 600),
+      Self::Hero => (440, 660),
+      Self::Backdrop => (1920, 1920),
+    }
+  }
 
-impl ArtworkDecoder for RawArtworkDecoder {
-  type Output = ArtworkBytes;
+  /// Upper bound on one raster's RGBA bytes, implied by the target box.
+  #[must_use]
+  pub const fn max_raster_bytes(self) -> usize {
+    let (width, height) = self.target_box();
+    width as usize * height as usize * 4
+  }
 
-  fn decode(
-    &self,
-    bytes: ArtworkBytes,
-    _max_decoded_bytes: usize,
-  ) -> Result<Self::Output, ArtworkError> {
-    validate_static_image_container(bytes.as_slice())?;
-    Ok(bytes)
+  /// Cap on the source-image area decoded before downsampling, in pixels.
+  ///
+  /// Sources are server-resized to maxWidth 600 (Card/Hero) or 1920
+  /// (Backdrop); the caps admit generous aspect extremes while rejecting
+  /// decompression-bomb-shaped sources before the full RGBA buffer is
+  /// allocated.
+  #[must_use]
+  pub const fn max_decode_pixels(self) -> u64 {
+    match self {
+      Self::Card | Self::Hero => 600 * 2400,
+      Self::Backdrop => 1920 * 4320,
+    }
+  }
+
+  /// Upper bound on the full-size decoded RGBA buffer, implied by
+  /// [`Self::max_decode_pixels`].
+  #[must_use]
+  pub const fn max_decode_bytes(self) -> usize {
+    self.max_decode_pixels() as usize * 4
   }
 }
 
-/// Where a Library Image load obtained its bytes.
+/// A Library Image Raster: an in-memory, display-sized RGBA decode of a
+/// Library Image, keyed by the image reference and an [`ArtworkSizeClass`].
+/// Never persisted; renderers build their handle from it synchronously.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ArtworkRaster {
+  width: u32,
+  height: u32,
+  pixels: Bytes,
+}
+
+impl ArtworkRaster {
+  #[must_use]
+  pub const fn width(&self) -> u32 {
+    self.width
+  }
+
+  #[must_use]
+  pub const fn height(&self) -> u32 {
+    self.height
+  }
+
+  #[must_use]
+  pub fn byte_len(&self) -> usize {
+    self.pixels.len()
+  }
+
+  #[must_use]
+  pub fn into_pixels(self) -> Bytes {
+    self.pixels
+  }
+}
+
+#[cfg(any(test, feature = "test-utils"))]
+impl ArtworkRaster {
+  #[must_use]
+  pub fn from_raw_for_test(width: u32, height: u32, pixels: impl Into<Bytes>) -> Self {
+    Self {
+      width,
+      height,
+      pixels: pixels.into(),
+    }
+  }
+}
+
+/// Cache and coalescing key for one decoded Library Image Raster.
+#[derive(Clone, Eq, Hash, Ord, PartialEq, PartialOrd)]
+struct RasterKey {
+  image_id: Arc<str>,
+  size_class: ArtworkSizeClass,
+}
+
+/// Decodes encoded bytes into a display-sized Library Image Raster.
+///
+/// Applies EXIF orientation as iced's image loader does, then downsamples to
+/// the size class target box (shrink-only, aspect preserved). Animated
+/// containers are rejected before decode.
+fn decode_raster(
+  bytes: &ArtworkBytes,
+  size_class: ArtworkSizeClass,
+) -> Result<ArtworkRaster, ArtworkError> {
+  use image::ImageDecoder as _;
+
+  validate_static_image_container(bytes.as_slice())?;
+  let reader = image::ImageReader::new(Cursor::new(bytes.as_slice()))
+    .with_guessed_format()
+    .map_err(|_| ArtworkError::DecodeFailed)?;
+  let mut decoder = reader
+    .into_decoder()
+    .map_err(|_| ArtworkError::DecodeFailed)?;
+  let orientation = decoder
+    .orientation()
+    .unwrap_or(image::metadata::Orientation::NoTransforms);
+  // Reject oversized sources before the full-size buffer is allocated;
+  // max_alloc backstops wider intermediates (e.g. 16-bit PNG decode buffers).
+  let (source_width, source_height) = decoder.dimensions();
+  if u64::from(source_width) * u64::from(source_height) > size_class.max_decode_pixels() {
+    return Err(ArtworkError::DecodedImageTooLarge);
+  }
+  let mut limits = image::Limits::default();
+  limits.max_alloc = Some(2 * size_class.max_decode_bytes() as u64);
+  let _ = decoder.set_limits(limits);
+  let mut decoded =
+    image::DynamicImage::from_decoder(decoder).map_err(|_| ArtworkError::DecodeFailed)?;
+  decoded.apply_orientation(orientation);
+  let (target_width, target_height) = size_class.target_box();
+  // `thumbnail` scales to fill the box even for smaller images; skip it to
+  // keep the downsample shrink-only.
+  let sized = if decoded.width() > target_width || decoded.height() > target_height {
+    decoded.thumbnail(target_width, target_height)
+  } else {
+    decoded
+  };
+  let rgba = sized.to_rgba8();
+  let (width, height) = rgba.dimensions();
+  let pixels = Bytes::from(rgba.into_raw());
+  if pixels.len() > size_class.max_raster_bytes() {
+    return Err(ArtworkError::DecodedImageTooLarge);
+  }
+  Ok(ArtworkRaster {
+    width,
+    height,
+    pixels,
+  })
+}
+
+/// Where a Library Image load obtained its result.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ArtworkSource {
+  /// Synchronous hit on the Library Image Raster cache.
+  Raster,
+  /// Encoded bytes came from the in-memory Library Image cache.
   Memory,
+  /// Encoded bytes came from the on-disk Library Image Cache.
   Disk,
+  /// Encoded bytes came from the media server.
   Network,
 }
 
@@ -332,6 +464,7 @@ impl ArtworkSource {
   #[must_use]
   pub const fn as_str(self) -> &'static str {
     match self {
+      Self::Raster => "raster",
       Self::Memory => "memory",
       Self::Disk => "disk",
       Self::Network => "network",
@@ -345,6 +478,7 @@ impl ArtworkSource {
 /// so it can feed the user-facing Diagnostics view directly.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct ArtworkLoadSummary {
+  pub raster_loads: u64,
   pub memory_loads: u64,
   pub disk_loads: u64,
   pub network_loads: u64,
@@ -367,7 +501,8 @@ pub enum ArtworkLoadSettlement {
 }
 
 /// Telemetry for one Library Image load call: how it settled, its duration,
-/// and its encoded byte size. Never carries URLs or image references, so it
+/// and the byte size of what it served (raster pixels for raster hits,
+/// encoded bytes otherwise). Never carries URLs or image references, so it
 /// can feed the user-facing Diagnostics view aggregates directly.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct ArtworkLoadObservation {
@@ -377,11 +512,12 @@ pub struct ArtworkLoadObservation {
 }
 
 impl ArtworkLoadObservation {
-  /// Observation for a synchronous decoded-cache hit on a caller fast path.
+  /// Observation for a synchronous Library Image Raster cache hit on a caller
+  /// fast path.
   #[must_use]
-  pub const fn memory_hit(bytes: u64) -> Self {
+  pub const fn raster_hit(bytes: u64) -> Self {
     Self {
-      settlement: ArtworkLoadSettlement::Loaded(ArtworkSource::Memory),
+      settlement: ArtworkLoadSettlement::Loaded(ArtworkSource::Raster),
       duration: Duration::ZERO,
       bytes,
     }
@@ -404,6 +540,7 @@ impl ArtworkLoadSummary {
 
   fn record_success(&mut self, source: ArtworkSource, duration: Duration, bytes: u64) {
     match source {
+      ArtworkSource::Raster => self.raster_loads = self.raster_loads.saturating_add(1),
       ArtworkSource::Memory => self.memory_loads = self.memory_loads.saturating_add(1),
       ArtworkSource::Disk => self.disk_loads = self.disk_loads.saturating_add(1),
       ArtworkSource::Network => self.network_loads = self.network_loads.saturating_add(1),
@@ -422,7 +559,8 @@ impl ArtworkLoadSummary {
   #[must_use]
   pub fn diagnostic_message(&self) -> Option<String> {
     let succeeded = self
-      .memory_loads
+      .raster_loads
+      .saturating_add(self.memory_loads)
       .saturating_add(self.disk_loads)
       .saturating_add(self.network_loads);
     let settled = succeeded.saturating_add(self.failed_loads);
@@ -434,8 +572,9 @@ impl ArtworkLoadSummary {
       .checked_div(succeeded)
       .unwrap_or_default();
     Some(format!(
-      "Library images settled: {settled} ({} memory, {} disk, {} network, {} failed); \
-      {} bytes loaded; average {} ms.",
+      "Library images settled: {settled} ({} raster, {} memory, {} disk, {} network, \
+      {} failed); {} bytes loaded; average {} ms.",
+      self.raster_loads,
       self.memory_loads,
       self.disk_loads,
       self.network_loads,
@@ -446,29 +585,29 @@ impl ArtworkLoadSummary {
   }
 }
 
-type AdapterLoadResult<T> = Result<T, ArtworkError>;
+type AdapterLoadResult = Result<ArtworkRaster, ArtworkError>;
 type AdapterFetchResult = Result<(ArtworkBytes, ArtworkSource), ArtworkError>;
-type AdapterLoadAdmission<T> = LoadAdmission<T, oneshot::Receiver<AdapterLoadResult<T>>>;
+type AdapterLoadAdmission = LoadAdmission<ArtworkRaster, oneshot::Receiver<AdapterLoadResult>>;
 
 /// Authenticated, bounded, coalescing artwork pipeline.
-pub struct ArtworkAdapter<D = RawArtworkDecoder>
-where
-  D: ArtworkDecoder,
-{
-  state: Arc<Mutex<AdapterState<D::Output>>>,
+///
+/// Loads decode to a Library Image Raster sized by an [`ArtworkSizeClass`]:
+/// the raster cache (byte-budgeted) is consulted first, then the encoded
+/// memory cache, coalesced in-flight work, the disk cache, and the network.
+pub struct ArtworkAdapter {
+  state: Arc<Mutex<AdapterState>>,
   generation_sender: watch::Sender<u64>,
   limits: ArtworkLimits,
   disk_cache: ArtworkDiskCache,
-  decoder: D,
 }
 
-impl Default for ArtworkAdapter<RawArtworkDecoder> {
+impl Default for ArtworkAdapter {
   fn default() -> Self {
     Self::with_limits(ArtworkLimits::default())
   }
 }
 
-impl ArtworkAdapter<RawArtworkDecoder> {
+impl ArtworkAdapter {
   #[must_use]
   pub fn new() -> Self {
     Self::default()
@@ -476,43 +615,28 @@ impl ArtworkAdapter<RawArtworkDecoder> {
 
   #[must_use]
   pub fn with_limits(limits: ArtworkLimits) -> Self {
-    Self::with_decoder_limits_and_disk_cache(RawArtworkDecoder, limits, ArtworkDiskCache::default())
-  }
-}
-
-impl<D> ArtworkAdapter<D>
-where
-  D: ArtworkDecoder,
-{
-  #[must_use]
-  pub fn with_decoder(decoder: D) -> Self {
-    Self::with_decoder_limits_and_disk_cache(
-      decoder,
-      ArtworkLimits::default(),
-      ArtworkDiskCache::default(),
-    )
+    Self::with_limits_and_disk_cache(limits, ArtworkDiskCache::default())
   }
 
   #[must_use]
-  pub fn with_decoder_limits_and_disk_cache(
-    decoder: D,
-    limits: ArtworkLimits,
-    disk_cache: ArtworkDiskCache,
-  ) -> Self {
+  pub fn with_limits_and_disk_cache(limits: ArtworkLimits, disk_cache: ArtworkDiskCache) -> Self {
     let limits = limits.normalized();
     let (generation_sender, _) = watch::channel(0);
     Self {
       state: Arc::new(Mutex::new(AdapterState {
         generation: 0,
         cache_generation: 0,
-        cache: ArtworkCache::new(limits.max_cached_bytes, limits.max_cached_entries),
+        encoded_cache: ArtworkCache::new(limits.max_cached_bytes, limits.max_cached_entries),
+        raster_cache: ArtworkCache::new(
+          limits.max_raster_cached_bytes,
+          limits.max_raster_cached_entries,
+        ),
         in_flight: HashMap::new(),
         scheduler: LoadScheduler::default(),
       })),
       generation_sender,
       limits,
       disk_cache,
-      decoder,
     }
   }
 
@@ -521,8 +645,13 @@ where
     ArtworkLoadTicket::new(self.lock_state().generation)
   }
 
-  pub fn cached(&self, image_id: &str) -> Option<D::Output> {
-    self.lock_state().cache.get(image_id)
+  /// Synchronous fast path: returns the cached Library Image Raster for this
+  /// reference and size class, when present.
+  pub fn cached(&self, image_id: &str, size_class: ArtworkSizeClass) -> Option<ArtworkRaster> {
+    self.lock_state().raster_cache.get(&RasterKey {
+      image_id: Arc::from(image_id),
+      size_class,
+    })
   }
 
   pub fn set_disk_cache_enabled(&self, enabled: bool) {
@@ -555,7 +684,8 @@ where
       .map_err(|_| ArtworkError::CacheUnavailable)
   }
 
-  /// Fetches and decodes an opaque signed image reference.
+  /// Fetches and decodes an opaque signed image reference into a Library
+  /// Image Raster sized by `size_class`.
   ///
   /// `lane` classifies the load's scheduling priority: [`LoadLane::Visible`]
   /// loads drain before queued [`LoadLane::Offscreen`] work. The returned
@@ -565,10 +695,11 @@ where
     &self,
     client: &JellyfinClient,
     image_id: &str,
+    size_class: ArtworkSizeClass,
     lane: LoadLane,
-  ) -> (Result<D::Output, ArtworkError>, ArtworkLoadObservation) {
+  ) -> (Result<ArtworkRaster, ArtworkError>, ArtworkLoadObservation) {
     self
-      .load_with_ticket(client, image_id, self.ticket(), lane)
+      .load_with_ticket(client, image_id, size_class, self.ticket(), lane)
       .await
   }
 
@@ -577,9 +708,10 @@ where
     &self,
     client: &JellyfinClient,
     image_id: &str,
+    size_class: ArtworkSizeClass,
     ticket: ArtworkLoadTicket,
     lane: LoadLane,
-  ) -> (Result<D::Output, ArtworkError>, ArtworkLoadObservation) {
+  ) -> (Result<ArtworkRaster, ArtworkError>, ArtworkLoadObservation) {
     let started = Instant::now();
     let span = tracing::info_span!(
       "library_image_load",
@@ -600,20 +732,22 @@ where
         return (Err(ArtworkError::RequestRejected), observation);
       }
     };
-    let key = Arc::<str>::from(image_id);
-    let disk_key = artwork_cache_key(request.server_url(), request.origin_url());
+    let key = RasterKey {
+      image_id: Arc::from(image_id),
+      size_class,
+    };
     let mut generation = self.generation_sender.subscribe();
     let load_generation = ticket.generation();
-    match self.admit(Arc::clone(&key), load_generation, lane) {
-      LoadAdmission::Cached(artwork) => {
-        let bytes = artwork.byte_len();
+    match self.admit(key.clone(), load_generation, lane) {
+      LoadAdmission::Cached(raster) => {
+        let bytes = raster.byte_len();
         let observation = finish_load(
           &span,
           started,
-          ArtworkLoadSettlement::Loaded(ArtworkSource::Memory),
+          ArtworkLoadSettlement::Loaded(ArtworkSource::Raster),
           bytes,
         );
-        (Ok(artwork), observation)
+        (Ok(raster), observation)
       }
       LoadAdmission::Follower(receiver) => {
         let result = wait_for_follower(receiver, &mut generation).await;
@@ -626,30 +760,41 @@ where
         (result, observation)
       }
       LoadAdmission::Leader(load_generation) => {
-        let pending = PendingLoad::new(self, Arc::clone(&key), load_generation);
+        let pending = PendingLoad::new(self, key.clone(), load_generation);
         let result = match self
           .acquire_load_permit(&key, load_generation, lane, &mut generation)
           .await
         {
           Ok(permit) => {
             self
-              .fetch_and_decode(client, &request, disk_key, permit, &mut generation)
+              .fetch_and_decode(
+                client,
+                &request,
+                key.clone(),
+                permit,
+                load_generation,
+                &mut generation,
+              )
               .await
           }
           Err(error) => Err(error),
         };
+        // Non-raster sources report the encoded body length so the aggregate
+        // keeps transfer bytes distinct from raster pixel bytes.
         let (settlement, bytes) = match &result {
-          Ok((artwork, source)) => (ArtworkLoadSettlement::Loaded(*source), artwork.byte_len()),
+          Ok((_, source, encoded_bytes)) => {
+            (ArtworkLoadSettlement::Loaded(*source), *encoded_bytes)
+          }
           Err(ArtworkError::Cancelled) => (ArtworkLoadSettlement::Cancelled, 0),
           Err(_) => (ArtworkLoadSettlement::Failed, 0),
         };
         let settled = result
           .as_ref()
-          .map(|(artwork, _)| artwork.clone())
+          .map(|(raster, _, _)| raster.clone())
           .map_err(|error| *error);
         pending.complete(&settled);
         let observation = finish_load(&span, started, settlement, bytes);
-        (result.map(|(artwork, _)| artwork), observation)
+        (result.map(|(raster, _, _)| raster), observation)
       }
       LoadAdmission::Cancelled => {
         let observation = finish_load(&span, started, ArtworkLoadSettlement::Cancelled, 0);
@@ -683,33 +828,29 @@ where
     notify_cancelled(waiters);
   }
 
-  fn admit(
-    &self,
-    key: Arc<str>,
-    generation: u64,
-    lane: LoadLane,
-  ) -> AdapterLoadAdmission<D::Output> {
+  fn admit(&self, key: RasterKey, generation: u64, lane: LoadLane) -> AdapterLoadAdmission {
     self.lock_state().admit(key, generation, lane)
   }
 
   async fn acquire_load_permit(
     &self,
-    key: &Arc<str>,
+    key: &RasterKey,
     load_generation: u64,
     lane: LoadLane,
     generation: &mut watch::Receiver<u64>,
-  ) -> Result<LoadPermit<D::Output>, ArtworkError> {
+  ) -> Result<LoadPermit, ArtworkError> {
     let queued = QueuedLoad::new(self, load_generation, lane)?;
     // Publish the queue entry so a visible follower can promote this leader
     // while it is still queued.
-    if let Some(load) = self.lock_state().in_flight.get_mut(key.as_ref()) {
+    if let Some(load) = self.lock_state().in_flight.get_mut(key) {
       if load.generation == load_generation {
         load.queued_id = Some(queued.id());
       }
     }
+    let reservation = self.limits.load_reservation_bytes(key.size_class);
     loop {
-      if self.try_activate(queued.id()) {
-        return Ok(queued.activate(self.limits.load_reservation_bytes()));
+      if self.try_activate(queued.id(), reservation) {
+        return Ok(queued.activate(reservation));
       }
       tokio::select! {
         () = queued.wait() => {}
@@ -721,12 +862,12 @@ where
     }
   }
 
-  fn try_activate(&self, queue_id: u64) -> bool {
+  fn try_activate(&self, queue_id: u64, reservation: usize) -> bool {
     self.lock_state().scheduler.try_activate(
       queue_id,
       self.limits.max_active_loads,
       self.limits.max_active_bytes,
-      self.limits.load_reservation_bytes(),
+      reservation,
     )
   }
 
@@ -734,27 +875,28 @@ where
     &self,
     client: &JellyfinClient,
     request: &LibraryImageRequest,
-    disk_key: String,
-    permit: LoadPermit<D::Output>,
+    key: RasterKey,
+    permit: LoadPermit,
+    load_generation: u64,
     generation: &mut watch::Receiver<u64>,
-  ) -> AdapterLoadResult<(D::Output, ArtworkSource)> {
+  ) -> Result<(ArtworkRaster, ArtworkSource, usize), ArtworkError> {
+    let size_class = key.size_class;
     let (bytes, source) = tokio::select! {
-      result = self.original_bytes(client, request, disk_key) => result?,
+      result = self.original_bytes(client, request, key.image_id, load_generation) => result?,
       changed = generation.changed() => {
         let _ = changed;
         return Err(ArtworkError::Cancelled);
       }
     };
-    let decoder = self.decoder.clone();
-    let decoded_limit = self.limits.max_decoded_bytes;
+    let encoded_bytes = bytes.byte_len();
     let decode = tokio::task::spawn_blocking(move || {
-      // Cancellation may drop the join handle, so the blocking decoder owns
+      // Cancellation may drop the join handle, so the blocking decode owns
       // aggregate admission until it actually stops.
       let _permit = permit;
-      decoder.decode(bytes, decoded_limit)
+      decode_raster(&bytes, size_class)
     });
     tokio::select! {
-      result = decode => result.map_err(|_| ArtworkError::DecodeFailed)?.map(|output| (output, source)),
+      result = decode => result.map_err(|_| ArtworkError::DecodeFailed)?.map(|raster| (raster, source, encoded_bytes)),
       changed = generation.changed() => {
         let _ = changed;
         Err(ArtworkError::Cancelled)
@@ -762,12 +904,19 @@ where
     }
   }
 
+  /// Resolves the encoded Library Image bytes: encoded memory cache first,
+  /// then the disk cache, then the network.
   async fn original_bytes(
     &self,
     client: &JellyfinClient,
     request: &LibraryImageRequest,
-    disk_key: String,
+    image_key: Arc<str>,
+    load_generation: u64,
   ) -> AdapterFetchResult {
+    if let Some(bytes) = self.lock_state().encoded_cache.get(&image_key) {
+      return Ok((bytes, ArtworkSource::Memory));
+    }
+    let disk_key = artwork_cache_key(request.server_url(), request.origin_url());
     if let Some(bytes) = self
       .disk_cache
       .load(
@@ -777,10 +926,13 @@ where
       )
       .await
     {
-      return Ok((ArtworkBytes(bytes), ArtworkSource::Disk));
+      let bytes = ArtworkBytes(bytes);
+      self.cache_encoded(image_key, &bytes, load_generation);
+      return Ok((bytes, ArtworkSource::Disk));
     }
     let bytes = self.fetch_uncached(client, request).await?;
     if validate_static_image_container(bytes.0.as_ref()).is_ok() {
+      self.cache_encoded(image_key, &bytes, load_generation);
       let disk_cache = self.disk_cache.clone();
       let disk_bytes = Arc::clone(&bytes.0);
       tokio::spawn(async move {
@@ -788,6 +940,15 @@ where
       });
     }
     Ok((bytes, ArtworkSource::Network))
+  }
+
+  /// Stores encoded bytes fetched by a load, unless the load's session has
+  /// been reset since admission (same gate as raster insertion).
+  fn cache_encoded(&self, image_key: Arc<str>, bytes: &ArtworkBytes, load_generation: u64) {
+    let mut state = self.lock_state();
+    if load_generation >= state.cache_generation {
+      state.encoded_cache.insert(image_key, bytes.clone());
+    }
   }
 
   async fn fetch_uncached(
@@ -835,18 +996,18 @@ where
     Ok(ArtworkBytes(Arc::from(body)))
   }
 
-  fn finish_pending(&self, key: Arc<str>, generation: u64, result: &AdapterLoadResult<D::Output>) {
+  fn finish_pending(&self, key: RasterKey, generation: u64, result: &AdapterLoadResult) {
     let waiters = {
       let mut state = self.lock_state();
-      if let Ok(artwork) = result {
+      if let Ok(raster) = result {
         if generation >= state.cache_generation {
-          state.cache.insert(Arc::clone(&key), artwork.clone());
+          state.raster_cache.insert(key.clone(), raster.clone());
         }
       }
       if state.generation == generation {
         state
           .in_flight
-          .remove(key.as_ref())
+          .remove(&key)
           .map(|load| load.waiters)
           .unwrap_or_default()
       } else {
@@ -863,44 +1024,47 @@ where
     self.lock_state().scheduler.cancel(queue_id);
   }
 
-  fn lock_state(&self) -> MutexGuard<'_, AdapterState<D::Output>> {
+  fn lock_state(&self) -> MutexGuard<'_, AdapterState> {
     self.state.lock().unwrap_or_else(PoisonError::into_inner)
   }
 }
 
 #[cfg(any(test, feature = "test-utils"))]
-impl<D> ArtworkAdapter<D>
-where
-  D: ArtworkDecoder,
-{
-  pub fn seed_cached_for_test(&self, image_id: &str, output: D::Output) {
-    self.lock_state().cache.insert(Arc::from(image_id), output);
+impl ArtworkAdapter {
+  pub fn seed_raster_for_test(
+    &self,
+    image_id: &str,
+    size_class: ArtworkSizeClass,
+    raster: ArtworkRaster,
+  ) {
+    self.lock_state().raster_cache.insert(
+      RasterKey {
+        image_id: Arc::from(image_id),
+        size_class,
+      },
+      raster,
+    );
   }
 }
 
-struct AdapterState<T>
-where
-  T: ArtworkOutput,
-{
+struct AdapterState {
   generation: u64,
   cache_generation: u64,
-  cache: ArtworkCache<T>,
-  in_flight: HashMap<Arc<str>, InFlightLoad<T>>,
+  encoded_cache: ArtworkCache<Arc<str>, ArtworkBytes>,
+  raster_cache: ArtworkCache<RasterKey, ArtworkRaster>,
+  in_flight: HashMap<RasterKey, InFlightLoad>,
   scheduler: LoadScheduler,
 }
 
-impl<T> AdapterState<T>
-where
-  T: ArtworkOutput,
-{
-  fn admit(&mut self, key: Arc<str>, generation: u64, lane: LoadLane) -> AdapterLoadAdmission<T> {
+impl AdapterState {
+  fn admit(&mut self, key: RasterKey, generation: u64, lane: LoadLane) -> AdapterLoadAdmission {
     if generation != self.generation {
       return LoadAdmission::Cancelled;
     }
-    if let Some(artwork) = self.cache.get(key.as_ref()) {
-      return LoadAdmission::Cached(artwork);
+    if let Some(raster) = self.raster_cache.get(&key) {
+      return LoadAdmission::Cached(raster);
     }
-    if let Some(load) = self.in_flight.get_mut(key.as_ref()) {
+    if let Some(load) = self.in_flight.get_mut(&key) {
       if load.generation != generation {
         return LoadAdmission::Cancelled;
       }
@@ -926,9 +1090,10 @@ where
     LoadAdmission::Leader(generation)
   }
 
-  fn cancel_stale(&mut self, clear_cache: bool) -> Vec<oneshot::Sender<AdapterLoadResult<T>>> {
+  fn cancel_stale(&mut self, clear_cache: bool) -> Vec<oneshot::Sender<AdapterLoadResult>> {
     if clear_cache {
-      self.cache.clear();
+      self.encoded_cache.clear();
+      self.raster_cache.clear();
     }
     self.scheduler.cancel_queued();
     self
@@ -939,24 +1104,18 @@ where
   }
 }
 
-struct InFlightLoad<T>
-where
-  T: ArtworkOutput,
-{
+struct InFlightLoad {
   generation: u64,
-  waiters: Vec<oneshot::Sender<AdapterLoadResult<T>>>,
+  waiters: Vec<oneshot::Sender<AdapterLoadResult>>,
   /// Scheduler entry while the leader waits for a permit; lets a visible
   /// follower promote a still-queued offscreen leader.
   queued_id: Option<u64>,
 }
 
-async fn wait_for_follower<T>(
-  receiver: oneshot::Receiver<AdapterLoadResult<T>>,
+async fn wait_for_follower(
+  receiver: oneshot::Receiver<AdapterLoadResult>,
   generation: &mut watch::Receiver<u64>,
-) -> AdapterLoadResult<T>
-where
-  T: ArtworkOutput,
-{
+) -> AdapterLoadResult {
   tokio::select! {
     result = receiver => result.unwrap_or(Err(ArtworkError::Cancelled)),
     changed = generation.changed() => {
@@ -986,30 +1145,21 @@ fn finish_load(
   }
 }
 
-fn notify_cancelled<T>(waiters: Vec<oneshot::Sender<AdapterLoadResult<T>>>)
-where
-  T: ArtworkOutput,
-{
+fn notify_cancelled(waiters: Vec<oneshot::Sender<AdapterLoadResult>>) {
   for waiter in waiters {
     let _ = waiter.send(Err(ArtworkError::Cancelled));
   }
 }
 
-struct QueuedLoad<'a, D>
-where
-  D: ArtworkDecoder,
-{
-  adapter: &'a ArtworkAdapter<D>,
+struct QueuedLoad<'a> {
+  adapter: &'a ArtworkAdapter,
   id: Option<u64>,
   notify: Arc<Notify>,
 }
 
-impl<'a, D> QueuedLoad<'a, D>
-where
-  D: ArtworkDecoder,
-{
+impl<'a> QueuedLoad<'a> {
   fn new(
-    adapter: &'a ArtworkAdapter<D>,
+    adapter: &'a ArtworkAdapter,
     generation: u64,
     lane: LoadLane,
   ) -> Result<Self, ArtworkError> {
@@ -1038,7 +1188,7 @@ where
     self.notify.notified().await;
   }
 
-  fn activate(mut self, reserved_bytes: usize) -> LoadPermit<D::Output> {
+  fn activate(mut self, reserved_bytes: usize) -> LoadPermit {
     self.id.take();
     LoadPermit {
       state: Arc::clone(&self.adapter.state),
@@ -1047,10 +1197,7 @@ where
   }
 }
 
-impl<D> Drop for QueuedLoad<'_, D>
-where
-  D: ArtworkDecoder,
-{
+impl Drop for QueuedLoad<'_> {
   fn drop(&mut self) {
     if let Some(id) = self.id.take() {
       self.adapter.cancel_queued_load(id);
@@ -1058,18 +1205,12 @@ where
   }
 }
 
-struct LoadPermit<T>
-where
-  T: ArtworkOutput,
-{
-  state: Arc<Mutex<AdapterState<T>>>,
+struct LoadPermit {
+  state: Arc<Mutex<AdapterState>>,
   reserved_bytes: usize,
 }
 
-impl<T> Drop for LoadPermit<T>
-where
-  T: ArtworkOutput,
-{
+impl Drop for LoadPermit {
   fn drop(&mut self) {
     self
       .state
@@ -1080,20 +1221,14 @@ where
   }
 }
 
-struct PendingLoad<'a, D>
-where
-  D: ArtworkDecoder,
-{
-  adapter: &'a ArtworkAdapter<D>,
-  key: Option<Arc<str>>,
+struct PendingLoad<'a> {
+  adapter: &'a ArtworkAdapter,
+  key: Option<RasterKey>,
   generation: u64,
 }
 
-impl<'a, D> PendingLoad<'a, D>
-where
-  D: ArtworkDecoder,
-{
-  fn new(adapter: &'a ArtworkAdapter<D>, key: Arc<str>, generation: u64) -> Self {
+impl<'a> PendingLoad<'a> {
+  fn new(adapter: &'a ArtworkAdapter, key: RasterKey, generation: u64) -> Self {
     Self {
       adapter,
       key: Some(key),
@@ -1101,17 +1236,14 @@ where
     }
   }
 
-  fn complete(mut self, result: &AdapterLoadResult<D::Output>) {
+  fn complete(mut self, result: &AdapterLoadResult) {
     if let Some(key) = self.key.take() {
       self.adapter.finish_pending(key, self.generation, result);
     }
   }
 }
 
-impl<D> Drop for PendingLoad<'_, D>
-where
-  D: ArtworkDecoder,
-{
+impl Drop for PendingLoad<'_> {
   fn drop(&mut self) {
     if let Some(key) = self.key.take() {
       self
@@ -1252,11 +1384,31 @@ pub fn append_body_chunk(
   Ok(())
 }
 
-struct ArtworkCache<T>
+/// A value stored in a byte-budgeted artwork cache.
+trait CacheValue: Clone + Send + Sync + 'static {
+  fn byte_len(&self) -> usize;
+}
+
+impl CacheValue for ArtworkBytes {
+  fn byte_len(&self) -> usize {
+    self.0.len()
+  }
+}
+
+impl CacheValue for ArtworkRaster {
+  fn byte_len(&self) -> usize {
+    self.pixels.len()
+  }
+}
+
+/// Clock-LRU cache bounded by total bytes and entry count; shared by the
+/// encoded Library Image memory cache and the Library Image Raster cache.
+struct ArtworkCache<K, T>
 where
-  T: ArtworkOutput,
+  K: Eq + std::hash::Hash + Ord + Clone,
+  T: CacheValue,
 {
-  entries: HashMap<Arc<str>, CacheEntry<T>>,
+  entries: HashMap<K, CacheEntry<T>>,
   total_bytes: usize,
   clock: u64,
   max_bytes: usize,
@@ -1268,9 +1420,10 @@ struct CacheEntry<T> {
   last_used: u64,
 }
 
-impl<T> ArtworkCache<T>
+impl<K, T> ArtworkCache<K, T>
 where
-  T: ArtworkOutput,
+  K: Eq + std::hash::Hash + Ord + Clone,
+  T: CacheValue,
 {
   fn new(max_bytes: usize, max_entries: usize) -> Self {
     Self {
@@ -1282,7 +1435,7 @@ where
     }
   }
 
-  fn get(&mut self, key: &str) -> Option<T> {
+  fn get(&mut self, key: &K) -> Option<T> {
     let entry = self.entries.get_mut(key)?;
     self.clock = self.clock.saturating_add(1);
     entry.last_used = self.clock;
@@ -1294,12 +1447,12 @@ where
     self.total_bytes = 0;
   }
 
-  fn insert(&mut self, key: Arc<str>, artwork: T) {
+  fn insert(&mut self, key: K, artwork: T) {
     let artwork_bytes = artwork.byte_len();
     if self.max_bytes == 0 || self.max_entries == 0 || artwork_bytes > self.max_bytes {
       return;
     }
-    if let Some(previous) = self.entries.remove(key.as_ref()) {
+    if let Some(previous) = self.entries.remove(&key) {
       self.total_bytes = self.total_bytes.saturating_sub(previous.artwork.byte_len());
     }
     self.clock = self.clock.saturating_add(1);
@@ -1323,11 +1476,11 @@ where
             .cmp(&right.1.last_used)
             .then_with(|| left.0.cmp(right.0))
         })
-        .map(|(key, _)| Arc::clone(key))
+        .map(|(key, _)| key.clone())
       else {
         break;
       };
-      if let Some(removed) = self.entries.remove(oldest.as_ref()) {
+      if let Some(removed) = self.entries.remove(&oldest) {
         self.total_bytes = self.total_bytes.saturating_sub(removed.artwork.byte_len());
       }
     }
@@ -1343,26 +1496,39 @@ mod tests {
     ArtworkBytes(Arc::from(data))
   }
 
-  fn begin_leader<'a>(
-    adapter: &'a ArtworkAdapter,
-    key: &str,
-  ) -> PendingLoad<'a, RawArtworkDecoder> {
-    let key = Arc::<str>::from(key);
-    let generation = adapter.lock_state().generation;
-    let LoadAdmission::Leader(generation) =
-      adapter.admit(Arc::clone(&key), generation, LoadLane::Offscreen)
-    else {
-      panic!("expected a leader admission");
-    };
-    PendingLoad::new(adapter, key, generation)
+  fn raster(width: u32, height: u32) -> ArtworkRaster {
+    let pixels = vec![7u8; width as usize * height as usize * 4];
+    ArtworkRaster::from_raw_for_test(width, height, Bytes::from(pixels))
   }
 
-  fn activate_permit(adapter: &ArtworkAdapter) -> LoadPermit<ArtworkBytes> {
+  fn class_key(image_id: &str, size_class: ArtworkSizeClass) -> RasterKey {
+    RasterKey {
+      image_id: Arc::from(image_id),
+      size_class,
+    }
+  }
+
+  fn begin_leader<'a>(adapter: &'a ArtworkAdapter, key: &str) -> PendingLoad<'a> {
+    let generation = adapter.lock_state().generation;
+    let LoadAdmission::Leader(generation) = adapter.admit(
+      class_key(key, ArtworkSizeClass::Card),
+      generation,
+      LoadLane::Offscreen,
+    ) else {
+      panic!("expected a leader admission");
+    };
+    PendingLoad::new(adapter, class_key(key, ArtworkSizeClass::Card), generation)
+  }
+
+  fn activate_permit(adapter: &ArtworkAdapter) -> LoadPermit {
     let generation = adapter.lock_state().generation;
     let queued =
       QueuedLoad::new(adapter, generation, LoadLane::Visible).expect("queue has capacity");
-    assert!(adapter.try_activate(queued.id()));
-    queued.activate(adapter.limits.load_reservation_bytes())
+    let reservation = adapter
+      .limits
+      .load_reservation_bytes(ArtworkSizeClass::Card);
+    assert!(adapter.try_activate(queued.id(), reservation));
+    queued.activate(reservation)
   }
 
   fn adopt_session(client: &JellyfinClient, server_url: &str, user_id: &str) {
@@ -1387,25 +1553,75 @@ mod tests {
     .expect("image reference is valid")
   }
 
+  /// Encodes a deterministic RGBA image of the given size as PNG.
+  fn encode_test_png(width: u32, height: u32) -> Vec<u8> {
+    let buffer = image::RgbaImage::from_pixel(width, height, image::Rgba([3, 90, 200, 255]));
+    let mut encoded = Cursor::new(Vec::new());
+    buffer
+      .write_to(&mut encoded, image::ImageFormat::Png)
+      .expect("test image encodes");
+    encoded.into_inner()
+  }
+
+  /// Encodes a JPEG carrying an EXIF orientation tag.
+  fn encode_oriented_jpeg(width: u32, height: u32, orientation: u16) -> Vec<u8> {
+    let buffer = image::RgbImage::from_pixel(width, height, image::Rgb([12, 34, 56]));
+    let mut encoded = Cursor::new(Vec::new());
+    buffer
+      .write_to(&mut encoded, image::ImageFormat::Jpeg)
+      .expect("test image encodes");
+    let jpeg = encoded.into_inner();
+    assert!(jpeg.starts_with(&[0xff, 0xd8]));
+
+    // Minimal EXIF APP1 segment: "Exif\0\0" + little-endian TIFF header + one
+    // IFD entry for tag 0x0112 (Orientation).
+    let mut exif = Vec::new();
+    exif.extend_from_slice(&[0xff, 0xe1, 0x00, 0x22]); // APP1, length 34
+    exif.extend_from_slice(b"Exif\0\0");
+    exif.extend_from_slice(b"II\x2a\x00"); // little-endian TIFF magic
+    exif.extend_from_slice(&8u32.to_le_bytes()); // IFD offset
+    exif.extend_from_slice(&1u16.to_le_bytes()); // one entry
+    exif.extend_from_slice(&0x0112u16.to_le_bytes()); // Orientation tag
+    exif.extend_from_slice(&3u16.to_le_bytes()); // SHORT
+    exif.extend_from_slice(&1u32.to_le_bytes()); // count
+    exif.extend_from_slice(&u32::from(orientation).to_le_bytes());
+    exif.extend_from_slice(&0u32.to_le_bytes()); // no next IFD
+
+    let mut oriented = jpeg[..2].to_vec();
+    oriented.extend_from_slice(&exif);
+    oriented.extend_from_slice(&jpeg[2..]);
+    oriented
+  }
+
   #[test]
-  fn aggregate_reservation_covers_encoded_and_two_pixel_buffers() {
+  fn aggregate_reservation_covers_encoded_and_two_pixel_buffers_per_class() {
     let limits = ArtworkLimits::default();
 
-    assert_eq!(
-      limits.load_reservation_bytes(),
-      limits.max_response_bytes + limits.max_decoded_bytes * DECODE_PIXEL_BUFFER_RESERVATIONS
-    );
+    for size_class in [
+      ArtworkSizeClass::Card,
+      ArtworkSizeClass::Hero,
+      ArtworkSizeClass::Backdrop,
+    ] {
+      assert_eq!(
+        limits.load_reservation_bytes(size_class),
+        limits.max_response_bytes
+          + size_class.max_decode_bytes()
+          + size_class.max_raster_bytes() * DECODE_PIXEL_BUFFER_RESERVATIONS
+      );
+    }
   }
 
   #[test]
   fn aggregate_reservation_saturates_on_overflow() {
     let limits = ArtworkLimits {
       max_response_bytes: usize::MAX,
-      max_decoded_bytes: usize::MAX,
       ..ArtworkLimits::default()
     };
 
-    assert_eq!(limits.load_reservation_bytes(), usize::MAX);
+    assert_eq!(
+      limits.load_reservation_bytes(ArtworkSizeClass::Backdrop),
+      usize::MAX
+    );
   }
 
   #[test]
@@ -1425,6 +1641,9 @@ mod tests {
   fn full_24_poster_page_activates_concurrently_without_queueing() {
     let adapter = ArtworkAdapter::default();
     let generation = adapter.lock_state().generation;
+    let reservation = adapter
+      .limits
+      .load_reservation_bytes(ArtworkSizeClass::Card);
     let loads = (0..MAX_ACTIVE_LOADS)
       .map(|_| {
         QueuedLoad::new(&adapter, generation, LoadLane::Visible).expect("load should be queued")
@@ -1432,7 +1651,7 @@ mod tests {
       .collect::<Vec<_>>();
     for load in &loads {
       assert!(
-        adapter.try_activate(load.id()),
+        adapter.try_activate(load.id(), reservation),
         "all 24 visible page loads should activate in the same pass"
       );
     }
@@ -1484,24 +1703,28 @@ mod tests {
   }
 
   #[test]
-  fn cached_admission_reports_a_memory_observation() {
+  fn cached_admission_reports_a_raster_observation() {
     let adapter = ArtworkAdapter::default();
     let client = JellyfinClient::new();
     let server_url = "https://server.example.com";
     let reference = image_id(server_url);
     adopt_session(&client, server_url, "user");
-    adapter.seed_cached_for_test(&reference, artwork(&[1, 2, 3, 4]));
+    adapter.seed_raster_for_test(&reference, ArtworkSizeClass::Card, raster(1, 1));
     let runtime = tokio::runtime::Builder::new_current_thread()
       .build()
       .expect("runtime builds");
 
-    let (result, observation) =
-      runtime.block_on(adapter.load(&client, &reference, LoadLane::Visible));
+    let (result, observation) = runtime.block_on(adapter.load(
+      &client,
+      &reference,
+      ArtworkSizeClass::Card,
+      LoadLane::Visible,
+    ));
 
     assert!(result.is_ok());
     assert_eq!(
       observation.settlement,
-      ArtworkLoadSettlement::Loaded(ArtworkSource::Memory)
+      ArtworkLoadSettlement::Loaded(ArtworkSource::Raster)
     );
     assert_eq!(observation.bytes, 4);
   }
@@ -1509,7 +1732,7 @@ mod tests {
   #[test]
   fn summary_folds_observations_and_skips_shared_and_cancelled_loads() {
     let mut summary = ArtworkLoadSummary::default();
-    summary.record(&ArtworkLoadObservation::memory_hit(10));
+    summary.record(&ArtworkLoadObservation::raster_hit(10));
     summary.record(&ArtworkLoadObservation {
       settlement: ArtworkLoadSettlement::Loaded(ArtworkSource::Network),
       duration: Duration::from_millis(40),
@@ -1531,7 +1754,7 @@ mod tests {
       bytes: 0,
     });
 
-    assert_eq!(summary.memory_loads, 1);
+    assert_eq!(summary.raster_loads, 1);
     assert_eq!(summary.network_loads, 1);
     assert_eq!(summary.failed_loads, 1);
     assert_eq!(summary.total_bytes, 100);
@@ -1571,21 +1794,26 @@ mod tests {
     adapter
       .lock_state()
       .in_flight
-      .get_mut("shared")
+      .get_mut(&class_key("shared", ArtworkSizeClass::Card))
       .expect("leader is in flight")
       .queued_id = Some(leader.id());
 
-    let LoadAdmission::Follower(_receiver) =
-      adapter.admit(Arc::from("shared"), generation, LoadLane::Visible)
-    else {
+    let LoadAdmission::Follower(_receiver) = adapter.admit(
+      class_key("shared", ArtworkSizeClass::Card),
+      generation,
+      LoadLane::Visible,
+    ) else {
       panic!("expected a follower admission");
     };
 
     // When one permit frees, the promoted leader drains before the earlier
     // offscreen load.
     drop(permits.pop());
-    assert!(adapter.try_activate(leader.id()));
-    assert!(!adapter.try_activate(earlier.id()));
+    let reservation = adapter
+      .limits
+      .load_reservation_bytes(ArtworkSizeClass::Card);
+    assert!(adapter.try_activate(leader.id(), reservation));
+    assert!(!adapter.try_activate(earlier.id(), reservation));
   }
 
   #[test]
@@ -1593,18 +1821,20 @@ mod tests {
     assert_eq!(ArtworkLoadSummary::default().diagnostic_message(), None);
 
     let summary = ArtworkLoadSummary {
+      raster_loads: 4,
       memory_loads: 8,
       disk_loads: 3,
       network_loads: 1,
       failed_loads: 2,
-      total_duration_millis: 480,
+      total_duration_millis: 640,
       total_bytes: 1_234_567,
     };
     let message = summary
       .diagnostic_message()
       .expect("settled loads describe");
 
-    assert!(message.contains("14"));
+    assert!(message.contains("18"));
+    assert!(message.contains("4 raster"));
     assert!(message.contains("8 memory"));
     assert!(message.contains("3 disk"));
     assert!(message.contains("1 network"));
@@ -1683,6 +1913,9 @@ mod tests {
   #[test]
   fn cancelling_a_generation_removes_stale_backlog_before_current_work() {
     let adapter = ArtworkAdapter::default();
+    let reservation = adapter
+      .limits
+      .load_reservation_bytes(ArtworkSizeClass::Card);
     let stale_generation = adapter.lock_state().generation;
     let stale = (0..MAX_QUEUED_LOADS)
       .map(|_| {
@@ -1696,8 +1929,8 @@ mod tests {
     let current_generation = adapter.lock_state().generation;
     let current = QueuedLoad::new(&adapter, current_generation, LoadLane::Visible)
       .expect("current load is admitted");
-    assert!(adapter.try_activate(current.id()));
-    let current = current.activate(adapter.limits.load_reservation_bytes());
+    assert!(adapter.try_activate(current.id(), reservation));
+    let current = current.activate(reservation);
     drop(stale);
     drop(current);
 
@@ -1716,7 +1949,11 @@ mod tests {
     let generation = *adapter.generation_sender.subscribe().borrow();
     assert_eq!(generation, 1);
     assert!(matches!(
-      adapter.admit(Arc::from("current"), generation, LoadLane::Offscreen),
+      adapter.admit(
+        class_key("current", ArtworkSizeClass::Card),
+        generation,
+        LoadLane::Offscreen
+      ),
       LoadAdmission::Leader(1)
     ));
   }
@@ -1724,6 +1961,9 @@ mod tests {
   #[test]
   fn cancelling_a_queued_load_allows_the_next_unique_load_to_run() {
     let adapter = ArtworkAdapter::default();
+    let reservation = adapter
+      .limits
+      .load_reservation_bytes(ArtworkSizeClass::Card);
     let first = activate_permit(&adapter);
     let second = activate_permit(&adapter);
     let generation = adapter.lock_state().generation;
@@ -1732,12 +1972,12 @@ mod tests {
     let next =
       QueuedLoad::new(&adapter, generation, LoadLane::Visible).expect("queue has capacity");
 
-    assert!(!adapter.try_activate(next.id()));
+    assert!(!adapter.try_activate(next.id(), reservation));
     drop(cancelled);
     drop(first);
-    assert!(adapter.try_activate(next.id()));
+    assert!(adapter.try_activate(next.id(), reservation));
 
-    let next = next.activate(adapter.limits.load_reservation_bytes());
+    let next = next.activate(reservation);
     drop(second);
     drop(next);
     let state = adapter.lock_state();
@@ -1771,13 +2011,15 @@ mod tests {
   fn in_flight_admission_coalesces_one_result_and_storage() {
     let adapter = ArtworkAdapter::default();
     let pending = begin_leader(&adapter, "same");
-    let LoadAdmission::Follower(receiver) =
-      adapter.admit(Arc::from("same"), 0, LoadLane::Offscreen)
-    else {
+    let LoadAdmission::Follower(receiver) = adapter.admit(
+      class_key("same", ArtworkSizeClass::Card),
+      0,
+      LoadLane::Offscreen,
+    ) else {
       panic!("expected a follower admission");
     };
-    let decoded = artwork(&[1, 2, 3, 4]);
-    let bytes = decoded.0.as_ptr();
+    let decoded = raster(1, 1);
+    let pixels = decoded.pixels.as_ptr();
 
     pending.complete(&Ok(decoded));
     let received = receiver
@@ -1785,28 +2027,69 @@ mod tests {
       .expect("leader sends a result")
       .expect("leader succeeds");
 
-    assert_eq!(received.0.as_ptr(), bytes);
-    let LoadAdmission::Cached(cached) = adapter.admit(Arc::from("same"), 0, LoadLane::Offscreen)
-    else {
-      panic!("expected a decoded cache hit");
+    assert_eq!(received.pixels.as_ptr(), pixels);
+    let LoadAdmission::Cached(cached) = adapter.admit(
+      class_key("same", ArtworkSizeClass::Card),
+      0,
+      LoadLane::Offscreen,
+    ) else {
+      panic!("expected a raster cache hit");
     };
-    assert_eq!(cached.0.as_ptr(), bytes);
+    assert_eq!(cached.pixels.as_ptr(), pixels);
+  }
+
+  #[test]
+  fn coalescing_distinguishes_size_classes() {
+    let adapter = ArtworkAdapter::default();
+    let generation = adapter.lock_state().generation;
+
+    assert!(matches!(
+      adapter.admit(
+        class_key("shared", ArtworkSizeClass::Card),
+        generation,
+        LoadLane::Offscreen
+      ),
+      LoadAdmission::Leader(_)
+    ));
+    assert!(matches!(
+      adapter.admit(
+        class_key("shared", ArtworkSizeClass::Card),
+        generation,
+        LoadLane::Offscreen
+      ),
+      LoadAdmission::Follower(_)
+    ));
+    // A different size class of the same reference coalesces separately.
+    assert!(matches!(
+      adapter.admit(
+        class_key("shared", ArtworkSizeClass::Hero),
+        generation,
+        LoadLane::Offscreen
+      ),
+      LoadAdmission::Leader(_)
+    ));
   }
 
   #[test]
   fn cancelled_follower_does_not_cancel_the_shared_leader() {
     let adapter = ArtworkAdapter::default();
     let pending = begin_leader(&adapter, "same");
-    let LoadAdmission::Follower(receiver) =
-      adapter.admit(Arc::from("same"), 0, LoadLane::Offscreen)
-    else {
+    let LoadAdmission::Follower(receiver) = adapter.admit(
+      class_key("same", ArtworkSizeClass::Card),
+      0,
+      LoadLane::Offscreen,
+    ) else {
       panic!("expected a follower admission");
     };
     drop(receiver);
-    pending.complete(&Ok(artwork(&[1, 2, 3, 4])));
+    pending.complete(&Ok(raster(1, 1)));
 
     assert!(matches!(
-      adapter.admit(Arc::from("same"), 0, LoadLane::Offscreen),
+      adapter.admit(
+        class_key("same", ArtworkSizeClass::Card),
+        0,
+        LoadLane::Offscreen
+      ),
       LoadAdmission::Cached(_)
     ));
   }
@@ -1815,9 +2098,11 @@ mod tests {
   fn cancelled_leader_notifies_followers_and_releases_the_key() {
     let adapter = ArtworkAdapter::default();
     let pending = begin_leader(&adapter, "same");
-    let LoadAdmission::Follower(receiver) =
-      adapter.admit(Arc::from("same"), 0, LoadLane::Offscreen)
-    else {
+    let LoadAdmission::Follower(receiver) = adapter.admit(
+      class_key("same", ArtworkSizeClass::Card),
+      0,
+      LoadLane::Offscreen,
+    ) else {
       panic!("expected a follower admission");
     };
 
@@ -1828,7 +2113,11 @@ mod tests {
       Err(ArtworkError::Cancelled)
     ));
     assert!(matches!(
-      adapter.admit(Arc::from("same"), 0, LoadLane::Offscreen),
+      adapter.admit(
+        class_key("same", ArtworkSizeClass::Card),
+        0,
+        LoadLane::Offscreen
+      ),
       LoadAdmission::Leader(_)
     ));
   }
@@ -1840,7 +2129,11 @@ mod tests {
     pending.complete(&Err(ArtworkError::FetchFailed));
 
     assert!(matches!(
-      adapter.admit(Arc::from("same"), 0, LoadLane::Offscreen),
+      adapter.admit(
+        class_key("same", ArtworkSizeClass::Card),
+        0,
+        LoadLane::Offscreen
+      ),
       LoadAdmission::Leader(_)
     ));
   }
@@ -1849,9 +2142,11 @@ mod tests {
   fn generation_cancellation_notifies_followers_and_rejects_stale_admission() {
     let adapter = ArtworkAdapter::default();
     let pending = begin_leader(&adapter, "same");
-    let LoadAdmission::Follower(receiver) =
-      adapter.admit(Arc::from("same"), 0, LoadLane::Offscreen)
-    else {
+    let LoadAdmission::Follower(receiver) = adapter.admit(
+      class_key("same", ArtworkSizeClass::Card),
+      0,
+      LoadLane::Offscreen,
+    ) else {
       panic!("expected a follower admission");
     };
 
@@ -1862,38 +2157,60 @@ mod tests {
       Err(ArtworkError::Cancelled)
     ));
     assert!(matches!(
-      adapter.admit(Arc::from("stale"), 0, LoadLane::Offscreen),
+      adapter.admit(
+        class_key("stale", ArtworkSizeClass::Card),
+        0,
+        LoadLane::Offscreen
+      ),
       LoadAdmission::Cancelled
     ));
     assert!(matches!(
-      adapter.admit(Arc::from("current"), 1, LoadLane::Offscreen),
+      adapter.admit(
+        class_key("current", ArtworkSizeClass::Card),
+        1,
+        LoadLane::Offscreen
+      ),
       LoadAdmission::Leader(1)
     ));
     drop(pending);
   }
 
   #[test]
-  fn reset_session_clears_decoded_cache() {
+  fn reset_session_clears_caches() {
     let adapter = ArtworkAdapter::default();
-    adapter
-      .lock_state()
-      .cache
-      .insert(Arc::from("cached"), artwork(&[1, 2, 3, 4]));
+    {
+      let mut state = adapter.lock_state();
+      state
+        .raster_cache
+        .insert(class_key("cached", ArtworkSizeClass::Card), raster(1, 1));
+      state
+        .encoded_cache
+        .insert(Arc::from("encoded"), artwork(&[1, 2, 3, 4]));
+    }
 
     adapter.reset_session();
 
-    assert!(adapter.lock_state().cache.get("cached").is_none());
+    let mut state = adapter.lock_state();
+    assert!(state
+      .raster_cache
+      .get(&class_key("cached", ArtworkSizeClass::Card))
+      .is_none());
+    assert!(state.encoded_cache.get(&Arc::from("encoded")).is_none());
   }
 
   #[test]
-  fn stale_success_after_reset_session_does_not_repopulate_decoded_cache() {
+  fn stale_success_after_reset_session_does_not_repopulate_raster_cache() {
     let adapter = ArtworkAdapter::default();
     let pending = begin_leader(&adapter, "stale");
 
     adapter.reset_session();
-    pending.complete(&Ok(artwork(&[1, 2, 3, 4])));
+    pending.complete(&Ok(raster(1, 1)));
 
-    assert!(adapter.lock_state().cache.get("stale").is_none());
+    assert!(adapter
+      .lock_state()
+      .raster_cache
+      .get(&class_key("stale", ArtworkSizeClass::Card))
+      .is_none());
   }
 
   #[test]
@@ -1904,12 +2221,16 @@ mod tests {
     adapter.reset_session();
 
     assert!(matches!(
-      adapter.admit(Arc::from("stale"), stale.generation(), LoadLane::Offscreen),
+      adapter.admit(
+        class_key("stale", ArtworkSizeClass::Card),
+        stale.generation(),
+        LoadLane::Offscreen
+      ),
       LoadAdmission::Cancelled
     ));
     assert!(matches!(
       adapter.admit(
-        Arc::from("current"),
+        class_key("current", ArtworkSizeClass::Card),
         adapter.ticket().generation(),
         LoadLane::Offscreen
       ),
@@ -1918,61 +2239,244 @@ mod tests {
   }
 
   #[test]
-  fn cached_artwork_is_revalidated_against_the_current_client_session() {
+  fn cached_raster_is_revalidated_against_the_current_client_session() {
     let adapter = ArtworkAdapter::default();
     let client = JellyfinClient::new();
     let first_server = "https://first.example.com";
     let reference = image_id(first_server);
-    let cached = artwork(&[1, 2, 3, 4]);
-    let cached_bytes = cached.0.as_ptr();
+    let cached = raster(1, 1);
+    let cached_pixels = cached.pixels.as_ptr();
     adopt_session(&client, first_server, "first-user");
-    adapter
-      .lock_state()
-      .cache
-      .insert(Arc::from(reference.as_str()), cached);
+    adapter.seed_raster_for_test(&reference, ArtworkSizeClass::Card, cached);
     let runtime = tokio::runtime::Builder::new_current_thread()
       .build()
       .expect("runtime builds");
 
-    let (accepted, _) = runtime.block_on(adapter.load(&client, &reference, LoadLane::Visible));
+    let (accepted, _) = runtime.block_on(adapter.load(
+      &client,
+      &reference,
+      ArtworkSizeClass::Card,
+      LoadLane::Visible,
+    ));
     let accepted = accepted.expect("current session accepts cache hit");
-    assert_eq!(accepted.0.as_ptr(), cached_bytes);
+    assert_eq!(accepted.pixels.as_ptr(), cached_pixels);
 
     adopt_session(&client, "https://second.example.com", "second-user");
     assert!(matches!(
       runtime
-        .block_on(adapter.load(&client, &reference, LoadLane::Visible))
+        .block_on(adapter.load(
+          &client,
+          &reference,
+          ArtworkSizeClass::Card,
+          LoadLane::Visible
+        ))
         .0,
       Err(ArtworkError::RequestRejected)
     ));
   }
 
   #[test]
+  fn raster_cache_hit_skips_fetch_and_decode() {
+    let adapter = ArtworkAdapter::default();
+    let client = JellyfinClient::new();
+    let server_url = "https://server.example.com";
+    let reference = image_id(server_url);
+    adopt_session(&client, server_url, "user");
+    let seeded = raster(2, 1);
+    let seeded_pixels = seeded.pixels.as_ptr();
+    adapter.seed_raster_for_test(&reference, ArtworkSizeClass::Card, seeded);
+    let runtime = tokio::runtime::Builder::new_current_thread()
+      .build()
+      .expect("runtime builds");
+
+    // The seeded pixels are not a decodable image and no server answers the
+    // reference, so any fetch or decode would fail instead of succeeding.
+    let (result, observation) = runtime.block_on(adapter.load(
+      &client,
+      &reference,
+      ArtworkSizeClass::Card,
+      LoadLane::Visible,
+    ));
+
+    let raster = result.expect("raster cache hit succeeds without decoding");
+    assert_eq!(raster.pixels.as_ptr(), seeded_pixels);
+    assert_eq!(
+      observation.settlement,
+      ArtworkLoadSettlement::Loaded(ArtworkSource::Raster)
+    );
+    assert_eq!(observation.bytes, 8);
+  }
+
+  #[test]
+  fn encoded_memory_hit_decodes_to_a_class_sized_raster() {
+    let adapter = ArtworkAdapter::default();
+    let client = JellyfinClient::new();
+    let server_url = "https://server.example.com";
+    let reference = image_id(server_url);
+    adopt_session(&client, server_url, "user");
+    let png = encode_test_png(600, 900);
+    adapter
+      .lock_state()
+      .encoded_cache
+      .insert(Arc::from(reference.as_str()), artwork(&png));
+    let runtime = tokio::runtime::Builder::new_current_thread()
+      .enable_all()
+      .build()
+      .expect("runtime builds");
+
+    let (result, observation) = runtime.block_on(adapter.load(
+      &client,
+      &reference,
+      ArtworkSizeClass::Card,
+      LoadLane::Visible,
+    ));
+
+    let raster = result.expect("encoded cache bytes decode");
+    assert_eq!((raster.width(), raster.height()), (400, 600));
+    assert_eq!(
+      observation.settlement,
+      ArtworkLoadSettlement::Loaded(ArtworkSource::Memory)
+    );
+    // The raster is now cached for the Card class only.
+    assert!(adapter.cached(&reference, ArtworkSizeClass::Card).is_some());
+    assert!(adapter.cached(&reference, ArtworkSizeClass::Hero).is_none());
+  }
+
+  #[test]
+  fn decode_bounds_dimensions_to_the_class_box() {
+    // Sources for Card/Hero loads are server-resized to maxWidth=600.
+    let png = encode_test_png(600, 900);
+
+    let card = decode_raster(&artwork(&png), ArtworkSizeClass::Card).expect("card decodes");
+    assert_eq!((card.width(), card.height()), (400, 600));
+    let hero = decode_raster(&artwork(&png), ArtworkSizeClass::Hero).expect("hero decodes");
+    assert_eq!((hero.width(), hero.height()), (440, 660));
+    let backdrop =
+      decode_raster(&artwork(&png), ArtworkSizeClass::Backdrop).expect("backdrop decodes");
+    assert_eq!((backdrop.width(), backdrop.height()), (600, 900));
+  }
+
+  #[test]
+  fn decode_never_upscales_smaller_artwork() {
+    let png = encode_test_png(100, 150);
+
+    let card = decode_raster(&artwork(&png), ArtworkSizeClass::Card).expect("card decodes");
+    assert_eq!((card.width(), card.height()), (100, 150));
+  }
+
+  #[test]
+  fn decode_applies_exif_orientation() {
+    let jpeg = encode_oriented_jpeg(120, 40, 6);
+
+    let raster = decode_raster(&artwork(&jpeg), ArtworkSizeClass::Card).expect("jpeg decodes");
+
+    assert_eq!((raster.width(), raster.height()), (40, 120));
+  }
+
+  #[test]
+  fn decode_rejects_animated_containers_before_decoding() {
+    assert_eq!(
+      decode_raster(&artwork(b"GIF89a"), ArtworkSizeClass::Card),
+      Err(ArtworkError::AnimatedImageUnsupported)
+    );
+    assert_eq!(
+      decode_raster(
+        &artwork(b"\x89PNG\r\n\x1a\n\x00\x00\x00\x00acTL\x00\x00\x00\x00"),
+        ArtworkSizeClass::Card
+      ),
+      Err(ArtworkError::AnimatedImageUnsupported)
+    );
+  }
+
+  #[test]
+  fn decode_rejects_oversized_sources_before_allocating_the_full_buffer() {
+    // 1300×1300 exceeds the Card/Hero source cap (600×2400) but fits the
+    // Backdrop cap, so the rejection is the class bound, not the container.
+    let png = encode_test_png(1300, 1300);
+
+    assert_eq!(
+      decode_raster(&artwork(&png), ArtworkSizeClass::Card),
+      Err(ArtworkError::DecodedImageTooLarge)
+    );
+    assert_eq!(
+      decode_raster(&artwork(&png), ArtworkSizeClass::Hero),
+      Err(ArtworkError::DecodedImageTooLarge)
+    );
+    let backdrop =
+      decode_raster(&artwork(&png), ArtworkSizeClass::Backdrop).expect("backdrop decodes");
+    assert_eq!((backdrop.width(), backdrop.height()), (1300, 1300));
+  }
+
+  #[test]
+  fn encoded_cache_insertion_is_gated_on_the_load_generation() {
+    let adapter = ArtworkAdapter::default();
+    adapter.cache_encoded(Arc::from("fresh"), &artwork(&[1, 2]), 0);
+    assert!(adapter
+      .lock_state()
+      .encoded_cache
+      .get(&Arc::from("fresh"))
+      .is_some());
+
+    adapter.reset_session();
+    // A load admitted before the reset must not repopulate the encoded cache.
+    adapter.cache_encoded(Arc::from("stale"), &artwork(&[3, 4]), 0);
+    assert!(adapter
+      .lock_state()
+      .encoded_cache
+      .get(&Arc::from("stale"))
+      .is_none());
+  }
+
+  #[test]
+  fn decode_rejects_garbage_bytes() {
+    let garbage = [0xff, 0xd8, 0xff, 0x00, 0x10, 0x00];
+
+    assert_eq!(
+      decode_raster(&artwork(&garbage), ArtworkSizeClass::Card),
+      Err(ArtworkError::DecodeFailed)
+    );
+  }
+
+  #[test]
   fn cache_evicts_least_recently_used_entry_when_entry_limit_is_reached() {
-    let mut cache = ArtworkCache::new(16, 2);
+    let mut cache = ArtworkCache::<Arc<str>, ArtworkBytes>::new(16, 2);
     cache.insert(Arc::from("a"), artwork(&[1]));
     cache.insert(Arc::from("b"), artwork(&[2]));
-    let _ = cache.get("a");
+    let _ = cache.get(&Arc::from("a"));
     cache.insert(Arc::from("c"), artwork(&[3]));
 
-    assert!(cache.get("b").is_none());
+    assert!(cache.get(&Arc::from("b")).is_none());
   }
 
   #[test]
   fn cache_evicts_oldest_entry_when_byte_limit_is_reached() {
-    let mut cache = ArtworkCache::new(3, 3);
+    let mut cache = ArtworkCache::<Arc<str>, ArtworkBytes>::new(3, 3);
     cache.insert(Arc::from("a"), artwork(&[1, 2]));
     cache.insert(Arc::from("b"), artwork(&[3, 4]));
 
-    assert!(cache.get("a").is_none());
+    assert!(cache.get(&Arc::from("a")).is_none());
   }
 
   #[test]
   fn cache_does_not_store_an_entry_larger_than_its_total_limit() {
-    let mut cache = ArtworkCache::new(2, 2);
+    let mut cache = ArtworkCache::<Arc<str>, ArtworkBytes>::new(2, 2);
     cache.insert(Arc::from("large"), artwork(&[1, 2, 3]));
 
-    assert!(cache.get("large").is_none());
+    assert!(cache.get(&Arc::from("large")).is_none());
+  }
+
+  #[test]
+  fn raster_cache_evicts_by_byte_budget_across_size_classes() {
+    let mut cache = ArtworkCache::<RasterKey, ArtworkRaster>::new(64, usize::MAX);
+    cache.insert(class_key("a", ArtworkSizeClass::Card), raster(2, 2)); // 16 bytes
+    cache.insert(class_key("a", ArtworkSizeClass::Hero), raster(2, 2)); // 16 bytes
+    let _ = cache.get(&class_key("a", ArtworkSizeClass::Card));
+    cache.insert(class_key("b", ArtworkSizeClass::Card), raster(2, 2)); // 48 total
+    cache.insert(class_key("c", ArtworkSizeClass::Card), raster(3, 2)); // 72 > 64: evicts the Hero raster
+
+    assert!(cache.get(&class_key("a", ArtworkSizeClass::Hero)).is_none());
+    assert!(cache.get(&class_key("a", ArtworkSizeClass::Card)).is_some());
+    assert!(cache.get(&class_key("c", ArtworkSizeClass::Card)).is_some());
   }
 
   #[test]

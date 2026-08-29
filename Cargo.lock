@@ -3652,8 +3652,10 @@ name = "jellypilot-media-server"
 version = "1.5.0"
 dependencies = [
  "base64 0.22.1",
+ "bytes",
  "dirs",
  "emby_api",
+ "image",
  "jellyfin_api",
  "log",
  "parking_lot",

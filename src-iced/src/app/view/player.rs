@@ -685,7 +685,7 @@ mod tests {
     state.artwork_handles.insert(
       slot,
       image_id.clone(),
-      iced::widget::image::Handle::from_bytes(vec![0; 8]),
+      iced::widget::image::Handle::from_rgba(2, 1, vec![0; 8]),
     );
 
     let initial_artwork = state.playback_artwork.clone();

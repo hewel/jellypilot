@@ -15,7 +15,7 @@ use jellypilot_core::detail::DetailContent;
 use jellypilot_core::diagnostics::{DiagnosticCategory, DiagnosticLevel, Diagnostics};
 use jellypilot_core::request_gate::{RemoteToken, RequestGate};
 use jellypilot_core::{LibraryBrowseLoadToken, LoadState};
-use jellypilot_media_server::artwork::{ArtworkAdapter, RawArtworkDecoder};
+use jellypilot_media_server::artwork::ArtworkAdapter;
 use jellypilot_media_server::{
   JellyfinClient, MediaServerProvider, VideoLibraryItem, VideoLibraryShortcut,
   VideoSeasonEpisodesPage,
@@ -524,17 +524,6 @@ impl<T> HandleRetention<T> {
       .map(|entry| &entry.value)
   }
 
-  pub fn find_by_image_id(&self, image_id: &str) -> Option<T>
-  where
-    T: Clone,
-  {
-    self
-      .entries
-      .values()
-      .find(|entry| entry.image_id == image_id)
-      .map(|entry| entry.value.clone())
-  }
-
   pub fn retain_slots(&mut self, slots: impl IntoIterator<Item = ArtworkSlot>) {
     let slots: HashSet<_> = slots.into_iter().collect();
     self.entries.retain(|slot, _| slots.contains(slot));
@@ -654,7 +643,7 @@ pub struct State {
   pub detail: DetailState,
   pub detail_artwork: DetailArtwork,
   pub home: HomeState,
-  pub artwork_adapter: Arc<ArtworkAdapter<RawArtworkDecoder>>,
+  pub artwork_adapter: Arc<ArtworkAdapter>,
   pub artwork_binder: ArtworkBinder,
   pub home_artwork: HomeArtwork,
   pub artwork_handles: ArtworkHandleRetention,

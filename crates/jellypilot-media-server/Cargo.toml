@@ -12,9 +12,11 @@ version.workspace = true
 test-utils = []
 [dependencies]
 base64 = "0.22.1"
+bytes = "1.11.1"
 dirs = "6.0.0"
 emby_api = { version = "4.9.3", path = "../../src-tauri/media-server-api/emby", features = ["rustls"] }
 jellyfin_api = { version = "10.11.10", path = "../../src-tauri/media-server-api/jellyfin", features = ["rustls"] }
+image = { version = "0.25.10", default-features = false, features = ["jpeg", "png", "webp"] }
 log = "0.4"
 parking_lot = "0.12.5"
 reqwest = { version = "0.13.3", features = ["json", "query", "rustls", "stream"] }

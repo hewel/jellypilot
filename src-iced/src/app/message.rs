@@ -13,7 +13,7 @@ use jellypilot_core::diagnostics::{DiagnosticCategory, DiagnosticLevel};
 use jellypilot_core::request_gate::{
   DetailAuxToken, DetailToken, HomeToken, RemotePlayToken, RemoteToken, SessionToken,
 };
-use jellypilot_media_server::artwork::{ArtworkBytes, ArtworkError, ArtworkLoadSummary};
+use jellypilot_media_server::artwork::{ArtworkError, ArtworkLoadSummary, ArtworkRaster};
 use jellypilot_media_server::home::HomeDataResult;
 use jellypilot_media_server::{
   JellyfinClient, MediaItem, MediaServerProvider, VideoItemDetail, VideoLibraryItem,
@@ -74,7 +74,7 @@ pub enum WindowMessage {
 
 /// One settled Library Image load delivered to a surface.
 pub type ArtworkLoadCompletion =
-  jellypilot_core::artwork_loader::ArtworkLoadCompletion<Result<ArtworkBytes, ArtworkError>>;
+  jellypilot_core::artwork_loader::ArtworkLoadCompletion<Result<ArtworkRaster, ArtworkError>>;
 
 #[derive(Clone)]
 pub enum HomeMessage {
@@ -88,7 +88,7 @@ pub enum HomeMessage {
     session: SessionToken,
     slot: ArtworkSlot,
     image_id: String,
-    result: Result<ArtworkBytes, ArtworkError>,
+    result: Result<ArtworkRaster, ArtworkError>,
   },
 }
 
@@ -111,7 +111,7 @@ pub enum BrowseMessage {
     session: SessionToken,
     slot: ArtworkSlot,
     image_id: String,
-    result: Result<ArtworkBytes, ArtworkError>,
+    result: Result<ArtworkRaster, ArtworkError>,
   },
 }
 
@@ -145,7 +145,7 @@ pub enum DetailMessage {
     session: SessionToken,
     slot: ArtworkSlot,
     image_id: String,
-    result: Result<ArtworkBytes, ArtworkError>,
+    result: Result<ArtworkRaster, ArtworkError>,
   },
 }
 #[derive(Clone)]
@@ -212,7 +212,7 @@ pub enum PlaybackMessage {
     session: SessionToken,
     slot: ArtworkSlot,
     image_id: String,
-    result: Result<ArtworkBytes, ArtworkError>,
+    result: Result<ArtworkRaster, ArtworkError>,
   },
 }
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
