@@ -10,7 +10,7 @@ use jellypilot_ui::layout::SizeClass;
 use jellypilot_ui::overlay::{tooltip, TooltipOptions};
 use jellypilot_ui::tokens::TOKENS;
 use jellypilot_ui::variants::{ButtonVariant, FieldVariant, SurfaceVariant};
-
+use jellypilot_ui::widgets::skeleton::skeleton_block;
 pub(crate) const SIDEBAR_WIDTH: f32 = 248.0;
 pub(crate) const SIDEBAR_RAIL_WIDTH: f32 = 72.0;
 
@@ -26,8 +26,11 @@ pub(crate) fn sidebar_width(class: SizeClass) -> f32 {
 }
 
 pub fn view(state: &State) -> Element<'_, Message> {
+  let skeleton_phase = state.skeleton_phase;
+  let reduced_motion = state.settings.snapshot().reduced_motion();
   let class = SizeClass::from_width(state.window_size.width);
-  let sidebar = sidebar(state, class).width(Length::Fixed(sidebar_width(class)));
+  let sidebar = sidebar(state, class, skeleton_phase, reduced_motion)
+    .width(Length::Fixed(sidebar_width(class)));
   let content: Element<'_, Message> = match &state.destination {
     Destination::Home => home::view(state),
     Destination::Library { .. } | Destination::Search(_) => browse::view(state),
@@ -149,14 +152,23 @@ fn with_alpha(color: Color, alpha: f32) -> Color {
   Color { a: alpha, ..color }
 }
 
-fn sidebar(state: &State, class: SizeClass) -> container::Container<'_, Message> {
+fn sidebar(
+  state: &State,
+  class: SizeClass,
+  skeleton_phase: f32,
+  reduced_motion: bool,
+) -> container::Container<'_, Message> {
   match class {
     SizeClass::Compact => sidebar_compact(state),
-    SizeClass::Standard | SizeClass::Wide => sidebar_full(state),
+    SizeClass::Standard | SizeClass::Wide => sidebar_full(state, skeleton_phase, reduced_motion),
   }
 }
 
-fn sidebar_full(state: &State) -> container::Container<'_, Message> {
+fn sidebar_full(
+  state: &State,
+  skeleton_phase: f32,
+  reduced_motion: bool,
+) -> container::Container<'_, Message> {
   let title = column![
     text("JellyPilot")
       .font(SPACE_GROTESK_FONT)
@@ -203,8 +215,8 @@ fn sidebar_full(state: &State) -> container::Container<'_, Message> {
   match &state.home.shortcuts {
     LoadState::Idle | LoadState::Loading => {
       destinations = destinations
-        .push(shortcut_skeleton())
-        .push(shortcut_skeleton());
+        .push(shortcut_skeleton(skeleton_phase, reduced_motion))
+        .push(shortcut_skeleton(skeleton_phase, reduced_motion));
     }
     LoadState::Ready(shortcuts) => {
       for shortcut in shortcuts {
@@ -330,12 +342,8 @@ fn destination_button<'a>(
   .style(move |theme, status| jellypilot_ui::theme::button_variant(theme, status, variant))
   .into()
 }
-fn shortcut_skeleton<'a>() -> Element<'a, Message> {
-  container(space::horizontal())
-    .height(34)
-    .width(Fill)
-    .style(|theme| jellypilot_ui::theme::surface_variant(theme, SurfaceVariant::Filled))
-    .into()
+fn shortcut_skeleton<'a>(skeleton_phase: f32, reduced_motion: bool) -> Element<'a, Message> {
+  skeleton_block(Length::Fill, 34.0, skeleton_phase, reduced_motion).into()
 }
 
 fn connection_summary(state: &State) -> Element<'_, Message> {
@@ -462,5 +470,13 @@ mod tests {
     assert_eq!(sidebar_width(SizeClass::Compact), 72.0);
     assert_eq!(sidebar_width(SizeClass::Standard), 248.0);
     assert_eq!(sidebar_width(SizeClass::Wide), 248.0);
+  }
+
+  #[test]
+  fn shell_view_renders_in_loading_state() {
+    let mut state = State::boot(false);
+    state.skeleton_phase = 0.42;
+    state.home.shortcuts = LoadState::Loading;
+    let _element = view(&state);
   }
 }

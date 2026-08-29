@@ -21,6 +21,7 @@ use jellypilot_ui::icons::{
 };
 use jellypilot_ui::tokens::TOKENS;
 use jellypilot_ui::variants::{ButtonVariant, SurfaceVariant};
+use jellypilot_ui::widgets::skeleton::{skeleton_block, skeleton_panel};
 use jellypilot_ui::{full_radius, rounded_image};
 
 const HERO_HEIGHT: f32 = 430.0;
@@ -34,18 +35,25 @@ const DETAIL_POSTER_KEY: &str = "detail-poster";
 const DETAIL_BACKDROP_KEY: &str = "detail-backdrop";
 
 pub fn view(state: &State) -> Element<'_, Message> {
+  let skeleton_phase = state.skeleton_phase;
+  let reduced_motion = state.settings.snapshot().reduced_motion();
   match &state.detail.content {
-    LoadState::Idle | LoadState::Loading => detail_skeleton(state),
+    LoadState::Idle | LoadState::Loading => detail_skeleton(state, skeleton_phase, reduced_motion),
     LoadState::Failed(error) => detail_failure(state, error),
-    LoadState::Ready(content) => detail_ready(state, content),
+    LoadState::Ready(content) => detail_ready(state, content, skeleton_phase, reduced_motion),
   }
 }
 
-fn detail_ready<'a>(state: &'a State, content: &'a DetailContent) -> Element<'a, Message> {
+fn detail_ready<'a>(
+  state: &'a State,
+  content: &'a DetailContent,
+  skeleton_phase: f32,
+  reduced_motion: bool,
+) -> Element<'a, Message> {
   let mut page = Column::new().width(Fill).spacing(TOKENS.spacing.s6);
   page = page.push(match content {
-    DetailContent::Item(item) => item_hero(state, item),
-    DetailContent::Show(show) => show_hero(state, show),
+    DetailContent::Item(item) => item_hero(state, item, skeleton_phase, reduced_motion),
+    DetailContent::Show(show) => show_hero(state, show, skeleton_phase, reduced_motion),
   });
 
   match content {
@@ -56,7 +64,7 @@ fn detail_ready<'a>(state: &'a State, content: &'a DetailContent) -> Element<'a,
         &item.metadata.cast,
       ));
       if item.item_type.eq_ignore_ascii_case("episode") {
-        page = page.push(neighbor_section(state));
+        page = page.push(neighbor_section(state, skeleton_phase, reduced_motion));
       }
     }
     DetailContent::Show(show) => {
@@ -66,9 +74,9 @@ fn detail_ready<'a>(state: &'a State, content: &'a DetailContent) -> Element<'a,
         &show.metadata.cast,
       ));
       if let Some(next) = &show.next_episode {
-        page = page.push(next_up_section(state, next));
+        page = page.push(next_up_section(state, next, skeleton_phase, reduced_motion));
       }
-      page = page.push(seasons_section(state, show));
+      page = page.push(seasons_section(state, show, skeleton_phase, reduced_motion));
     }
   }
 
@@ -82,6 +90,8 @@ fn detail_ready<'a>(state: &'a State, content: &'a DetailContent) -> Element<'a,
 fn item_hero<'a>(
   state: &'a State,
   item: &'a jellypilot_media_server::VideoItemDetail,
+  skeleton_phase: f32,
+  reduced_motion: bool,
 ) -> Element<'a, Message> {
   let playback_label = if item.can_resume { "Resume" } else { "Play" };
   let position = if item.can_resume {
@@ -102,10 +112,17 @@ fn item_hero<'a>(
       played: item.played,
       favorite: item.favorite,
     },
+    skeleton_phase,
+    reduced_motion,
   )
 }
 
-fn show_hero<'a>(state: &'a State, show: &'a VideoShowDetail) -> Element<'a, Message> {
+fn show_hero<'a>(
+  state: &'a State,
+  show: &'a VideoShowDetail,
+  skeleton_phase: f32,
+  reduced_motion: bool,
+) -> Element<'a, Message> {
   let playback_label = show.next_episode.as_ref().map_or_else(
     || "Play".to_owned(),
     |episode| {
@@ -138,6 +155,8 @@ fn show_hero<'a>(state: &'a State, show: &'a VideoShowDetail) -> Element<'a, Mes
       played: show.played,
       favorite: show.favorite,
     },
+    skeleton_phase,
+    reduced_motion,
   )
 }
 
@@ -151,16 +170,31 @@ struct HeroContent<'a> {
   favorite: bool,
 }
 
-fn hero<'a>(state: &'a State, content: HeroContent<'a>) -> Element<'a, Message> {
-  responsive(move |bounds| hero_at_width(state, &content, bounds.width))
-    .height(Length::Shrink)
-    .into()
+fn hero<'a>(
+  state: &'a State,
+  content: HeroContent<'a>,
+  skeleton_phase: f32,
+  reduced_motion: bool,
+) -> Element<'a, Message> {
+  responsive(move |bounds| {
+    hero_at_width(
+      state,
+      &content,
+      bounds.width,
+      skeleton_phase,
+      reduced_motion,
+    )
+  })
+  .height(Length::Shrink)
+  .into()
 }
 
 fn hero_at_width<'a>(
   state: &'a State,
   content: &HeroContent<'a>,
   width: f32,
+  skeleton_phase: f32,
+  reduced_motion: bool,
 ) -> Element<'a, Message> {
   let name = content.name;
   let overview = content.overview.filter(|value| !value.trim().is_empty());
@@ -179,9 +213,10 @@ fn hero_at_width<'a>(
     state,
     DETAIL_BACKDROP_KEY,
     name,
-    Fill,
-    Length::Fixed(hero_height),
+    (Fill, Length::Fixed(hero_height)),
     64,
+    skeleton_phase,
+    reduced_motion,
   );
   let gradient = gradient::Linear::new(Degrees(90.0))
     .add_stop(0.0, TOKENS.colors.surfaceContainerLowest)
@@ -217,9 +252,10 @@ fn hero_at_width<'a>(
     state,
     DETAIL_POSTER_KEY,
     name,
-    Length::Fixed(POSTER_WIDTH),
-    Length::Fixed(POSTER_HEIGHT),
+    (Length::Fixed(POSTER_WIDTH), Length::Fixed(POSTER_HEIGHT)),
     54,
+    skeleton_phase,
+    reduced_motion,
   );
   let mut copy = Column::new()
     .spacing(TOKENS.spacing.s3)
@@ -424,7 +460,12 @@ fn summary_column(label: &'static str, values: String) -> Element<'static, Messa
   .into()
 }
 
-fn seasons_section<'a>(state: &'a State, show: &'a VideoShowDetail) -> Element<'a, Message> {
+fn seasons_section<'a>(
+  state: &'a State,
+  show: &'a VideoShowDetail,
+  skeleton_phase: f32,
+  reduced_motion: bool,
+) -> Element<'a, Message> {
   let title = text("Seasons")
     .font(SPACE_GROTESK_FONT)
     .size(26)
@@ -447,14 +488,14 @@ fn seasons_section<'a>(state: &'a State, show: &'a VideoShowDetail) -> Element<'
     .style(jellypilot_ui::theme::scrollable);
   let episodes = match &state.detail.season_episodes {
     LoadState::Idle => status_surface("Choose a season"),
-    LoadState::Loading => episode_skeletons(),
+    LoadState::Loading => episode_skeletons(skeleton_phase, reduced_motion),
     LoadState::Failed(error) => {
       retryable_surface(error, Message::Detail(DetailMessage::RetrySeason))
     }
     LoadState::Ready(page) if page.episodes.is_empty() => {
       status_surface("Jellyfin returned no episodes for this season.")
     }
-    LoadState::Ready(page) => episode_list(state, &page.episodes),
+    LoadState::Ready(page) => episode_list(state, &page.episodes, skeleton_phase, reduced_motion),
   };
   column![title, selector, episodes]
     .spacing(TOKENS.spacing.s3)
@@ -488,54 +529,76 @@ fn season_button<'a>(
     .into()
 }
 
-fn neighbor_section(state: &State) -> Element<'_, Message> {
+fn neighbor_section(
+  state: &State,
+  skeleton_phase: f32,
+  reduced_motion: bool,
+) -> Element<'_, Message> {
   let title = text("More from this season")
     .font(SPACE_GROTESK_FONT)
     .size(26)
     .color(TOKENS.colors.onSurface);
   let body = match &state.detail.season_neighbors {
     LoadState::Idle => return space::vertical().height(0).into(),
-    LoadState::Loading => episode_skeletons(),
+    LoadState::Loading => episode_skeletons(skeleton_phase, reduced_motion),
     LoadState::Failed(error) => {
       retryable_surface(error, Message::Detail(DetailMessage::RetryNeighbors))
     }
     LoadState::Ready(items) if items.is_empty() => {
       status_surface("No neighboring episodes are available.")
     }
-    LoadState::Ready(items) => episode_list(state, items),
+    LoadState::Ready(items) => episode_list(state, items, skeleton_phase, reduced_motion),
   };
   column![title, body].spacing(TOKENS.spacing.s3).into()
 }
-
-fn next_up_section<'a>(state: &'a State, episode: &'a VideoLibraryItem) -> Element<'a, Message> {
+fn next_up_section<'a>(
+  state: &'a State,
+  episode: &'a VideoLibraryItem,
+  skeleton_phase: f32,
+  reduced_motion: bool,
+) -> Element<'a, Message> {
   column![
     text("Next Up")
       .font(SPACE_GROTESK_FONT)
       .size(26)
       .color(TOKENS.colors.onSurface),
-    episode_card(state, episode),
+    episode_card(state, episode, skeleton_phase, reduced_motion),
   ]
   .spacing(TOKENS.spacing.s3)
   .into()
 }
 
-fn episode_list<'a>(state: &'a State, episodes: &'a [VideoLibraryItem]) -> Element<'a, Message> {
+fn episode_list<'a>(
+  state: &'a State,
+  episodes: &'a [VideoLibraryItem],
+  skeleton_phase: f32,
+  reduced_motion: bool,
+) -> Element<'a, Message> {
   let mut cards = Column::new().spacing(TOKENS.spacing.s3).width(Fill);
   for episode in episodes {
-    cards = cards.push(episode_card(state, episode));
+    cards = cards.push(episode_card(state, episode, skeleton_phase, reduced_motion));
   }
   cards.into()
 }
 
-fn episode_card<'a>(state: &'a State, episode: &'a VideoLibraryItem) -> Element<'a, Message> {
+fn episode_card<'a>(
+  state: &'a State,
+  episode: &'a VideoLibraryItem,
+  skeleton_phase: f32,
+  reduced_motion: bool,
+) -> Element<'a, Message> {
   let key = format!("detail-episode:{}", episode.id);
   let art = artwork(
     state,
     &key,
     &episode.name,
-    Length::Fixed(EPISODE_ART_WIDTH),
-    Length::Fixed(EPISODE_ART_HEIGHT),
+    (
+      Length::Fixed(EPISODE_ART_WIDTH),
+      Length::Fixed(EPISODE_ART_HEIGHT),
+    ),
     34,
+    skeleton_phase,
+    reduced_motion,
   );
   let mut copy = Column::new().spacing(TOKENS.spacing.s2).width(Fill).push(
     text(format!("{}  {}", episode_label(episode), episode.name))
@@ -615,9 +678,10 @@ fn artwork<'a>(
   state: &'a State,
   key: &str,
   name: &'a str,
-  width: Length,
-  height: Length,
+  (width, height): (Length, Length),
   initial_size: u32,
+  phase: f32,
+  reduced_motion: bool,
 ) -> Element<'a, Message> {
   let radius = if key == DETAIL_BACKDROP_KEY {
     full_radius(TOKENS.radii.xl)
@@ -640,48 +704,60 @@ fn artwork<'a>(
     }
   }
   let failed = cell.is_some_and(|cell| cell.state == ArtworkCellState::Failed);
-  let placeholder_color = if failed {
-    TOKENS.colors.warning
-  } else {
-    TOKENS.colors.onSurfaceVariant
-  };
-  let initial = name
-    .trim()
-    .chars()
-    .next()
-    .map(|character| character.to_uppercase().collect::<String>())
-    .unwrap_or_else(|| "•".to_owned());
-  let icon_dim = (initial_size as f32).max(28.0);
-  container(
-    column![
-      icon_with_color(Icon::Movie, icon_dim, placeholder_color),
-      text(initial)
-        .font(SPACE_GROTESK_FONT)
-        .size(initial_size.min(28))
-        .color(placeholder_color),
-    ]
-    .spacing(TOKENS.spacing.s1)
-    .align_x(Alignment::Center),
+  if failed {
+    let placeholder_color = TOKENS.colors.warning;
+    let initial = name
+      .trim()
+      .chars()
+      .next()
+      .map(|character| character.to_uppercase().collect::<String>())
+      .unwrap_or_else(|| "•".to_owned());
+    let icon_dim = (initial_size as f32).max(28.0);
+    return container(
+      column![
+        icon_with_color(Icon::Movie, icon_dim, placeholder_color),
+        text(initial)
+          .font(SPACE_GROTESK_FONT)
+          .size(initial_size.min(28))
+          .color(placeholder_color),
+      ]
+      .spacing(TOKENS.spacing.s1)
+      .align_x(Alignment::Center),
+    )
+    .width(width)
+    .height(height)
+    .center_x(Fill)
+    .center_y(Fill)
+    .style(move |_theme| container::Style {
+      background: Some(iced::Background::Color(
+        TOKENS.colors.surfaceContainerLowest,
+      )),
+      border: iced::Border {
+        radius,
+        width: 0.0,
+        color: iced::Color::TRANSPARENT,
+      },
+      ..container::Style::default()
+    })
+    .into();
+  }
+
+  skeleton_panel(
+    width,
+    height,
+    TOKENS.colors.surfaceContainerLowest,
+    radius,
+    phase,
+    reduced_motion,
   )
-  .width(width)
-  .height(height)
-  .center_x(Fill)
-  .center_y(Fill)
-  .style(move |_theme| container::Style {
-    background: Some(iced::Background::Color(
-      TOKENS.colors.surfaceContainerLowest,
-    )),
-    border: iced::Border {
-      radius,
-      width: 0.0,
-      color: iced::Color::TRANSPARENT,
-    },
-    ..container::Style::default()
-  })
   .into()
 }
 
-fn detail_skeleton(state: &State) -> Element<'_, Message> {
+fn detail_skeleton(
+  state: &State,
+  skeleton_phase: f32,
+  reduced_motion: bool,
+) -> Element<'_, Message> {
   let back_enabled = !state.navigation_stack.is_empty();
   let back = button(
     row![
@@ -704,12 +780,12 @@ fn detail_skeleton(state: &State) -> Element<'_, Message> {
   let body = column![
     back,
     row![
-      skeleton_box(POSTER_WIDTH, POSTER_HEIGHT),
+      skeleton_block(POSTER_WIDTH, POSTER_HEIGHT, skeleton_phase, reduced_motion),
       column![
-        skeleton_box(240.0, 18.0),
-        skeleton_box(520.0, 48.0),
-        skeleton_box(680.0, 96.0),
-        skeleton_box(430.0, 42.0),
+        skeleton_block(240.0, 18.0, skeleton_phase, reduced_motion),
+        skeleton_block(520.0, 48.0, skeleton_phase, reduced_motion),
+        skeleton_block(680.0, 96.0, skeleton_phase, reduced_motion),
+        skeleton_block(430.0, 42.0, skeleton_phase, reduced_motion),
       ]
       .spacing(TOKENS.spacing.s4),
     ]
@@ -806,26 +882,27 @@ fn status_surface(message: &str) -> Element<'_, Message> {
     .into()
 }
 
-fn episode_skeletons<'a>() -> Element<'a, Message> {
+fn episode_skeletons<'a>(skeleton_phase: f32, reduced_motion: bool) -> Element<'a, Message> {
   let mut rows = Column::new().spacing(TOKENS.spacing.s3).width(Fill);
   for _ in 0..3 {
     rows = rows.push(
       row![
-        skeleton_box(EPISODE_ART_WIDTH, EPISODE_ART_HEIGHT),
-        column![skeleton_box(320.0, 20.0), skeleton_box(620.0, 54.0)].spacing(TOKENS.spacing.s3),
+        skeleton_block(
+          EPISODE_ART_WIDTH,
+          EPISODE_ART_HEIGHT,
+          skeleton_phase,
+          reduced_motion,
+        ),
+        column![
+          skeleton_block(320.0, 20.0, skeleton_phase, reduced_motion),
+          skeleton_block(620.0, 54.0, skeleton_phase, reduced_motion),
+        ]
+        .spacing(TOKENS.spacing.s3),
       ]
       .spacing(TOKENS.spacing.s4),
     );
   }
   rows.into()
-}
-
-fn skeleton_box<'a>(width: f32, height: f32) -> Element<'a, Message> {
-  container(space::horizontal())
-    .width(width)
-    .height(height)
-    .style(|theme| jellypilot_ui::theme::surface_variant(theme, SurfaceVariant::Elevated))
-    .into()
 }
 
 fn progress_bar<'a>(progress: f64) -> Element<'a, Message> {
@@ -1061,5 +1138,159 @@ mod tests {
       available width is narrow, while fitting into fewer lines when more width is available.";
 
     assert!(overview_height(overview, 120.0) > overview_height(overview, 800.0));
+  }
+
+  #[test]
+  fn detail_view_renders_in_loading_state() {
+    let mut state = State::boot(false);
+    state.skeleton_phase = 0.42;
+    state.detail.content = LoadState::Loading;
+    let _element = view(&state);
+  }
+
+  #[test]
+  fn detail_seasons_and_neighbors_render_episode_skeletons_when_loading() {
+    {
+      let mut state = State::boot(false);
+      state.skeleton_phase = 0.75;
+      state.detail.content = LoadState::Ready(DetailContent::Show(VideoShowDetail {
+        id: "show-1".to_owned(),
+        name: "Show 1".to_owned(),
+        overview: None,
+        production_year: None,
+        genres: Vec::new(),
+        played: false,
+        favorite: false,
+        can_play: true,
+        artwork_image_id: None,
+        backdrop_image_id: None,
+        next_episode: None,
+        seasons: vec![VideoSeason {
+          id: "season-1".to_owned(),
+          name: "Season 1".to_owned(),
+          season_number: Some(1),
+          played: false,
+          favorite: false,
+          artwork_image_id: None,
+        }],
+        metadata: Default::default(),
+      }));
+      state.detail.season_episodes = LoadState::Loading;
+      let _element = view(&state);
+    }
+
+    {
+      let mut state = State::boot(false);
+      state.skeleton_phase = 0.75;
+      let item = jellypilot_media_server::VideoItemDetail {
+        id: "ep-1".to_owned(),
+        name: "Ep 1".to_owned(),
+        item_type: "Episode".to_owned(),
+        overview: None,
+        production_year: None,
+        runtime_seconds: None,
+        series_id: None,
+        series_name: None,
+        season_number: Some(1),
+        episode_number: Some(1),
+        genres: Vec::new(),
+        played: false,
+        favorite: false,
+        played_percentage: None,
+        resume_position_seconds: None,
+        can_resume: false,
+        can_play: true,
+        artwork_image_id: None,
+        backdrop_image_id: None,
+        series_poster_image_id: None,
+        metadata: Default::default(),
+      };
+      state.detail.content = LoadState::Ready(DetailContent::Item(item));
+      state.detail.season_neighbors = LoadState::Loading;
+      let _element = view(&state);
+    }
+  }
+
+  #[test]
+  fn detail_view_renders_hero_and_episodes_with_loading_and_failed_artwork() {
+    let mut state = State::boot(false);
+    state.skeleton_phase = 0.5;
+    let item = jellypilot_media_server::VideoItemDetail {
+      id: "ep-1".to_owned(),
+      name: "Episode 1".to_owned(),
+      item_type: "Episode".to_owned(),
+      overview: Some("Episode overview".to_owned()),
+      production_year: Some(2024),
+      runtime_seconds: Some(3600.0),
+      series_id: Some("series-1".to_owned()),
+      series_name: Some("Series 1".to_owned()),
+      season_number: Some(1),
+      episode_number: Some(1),
+      genres: vec!["Sci-Fi".to_owned()],
+      played: false,
+      favorite: false,
+      played_percentage: None,
+      resume_position_seconds: None,
+      can_resume: false,
+      can_play: true,
+      artwork_image_id: None,
+      backdrop_image_id: None,
+      series_poster_image_id: None,
+      metadata: Default::default(),
+    };
+    let neighbor_item = VideoLibraryItem {
+      id: "ep-2".to_owned(),
+      name: "Episode 2".to_owned(),
+      item_type: "Episode".to_owned(),
+      overview: None,
+      production_year: Some(2024),
+      runtime_seconds: Some(3600.0),
+      played: false,
+      favorite: false,
+      artwork_image_id: None,
+      series_poster_image_id: None,
+      season_number: Some(1),
+      episode_number: Some(2),
+      series_id: Some("series-1".to_owned()),
+      series_name: Some("Series 1".to_owned()),
+      resume_position_seconds: None,
+      played_percentage: None,
+    };
+    let slot_1 = state
+      .artwork_binder
+      .bind(jellypilot_core::artwork_binder::ArtworkSurface::Detail);
+    let slot_2 = state
+      .artwork_binder
+      .bind(jellypilot_core::artwork_binder::ArtworkSurface::Detail);
+    let slot_3 = state
+      .artwork_binder
+      .bind(jellypilot_core::artwork_binder::ArtworkSurface::Detail);
+    state.detail_artwork.insert(
+      DETAIL_BACKDROP_KEY.to_owned(),
+      ArtworkCell {
+        slot: slot_1,
+        image_id: "img-backdrop".to_owned(),
+        state: ArtworkCellState::Loading,
+      },
+    );
+    state.detail_artwork.insert(
+      DETAIL_POSTER_KEY.to_owned(),
+      ArtworkCell {
+        slot: slot_2,
+        image_id: "img-poster".to_owned(),
+        state: ArtworkCellState::Failed,
+      },
+    );
+    state.detail_artwork.insert(
+      "detail-episode:ep-2".to_owned(),
+      ArtworkCell {
+        slot: slot_3,
+        image_id: "img-ep2".to_owned(),
+        state: ArtworkCellState::Loading,
+      },
+    );
+    state.detail.content = LoadState::Ready(DetailContent::Item(item));
+    state.detail.season_neighbors = LoadState::Ready(vec![neighbor_item]);
+    let _element = view(&state);
   }
 }

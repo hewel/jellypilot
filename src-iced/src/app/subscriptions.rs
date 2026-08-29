@@ -46,8 +46,12 @@ pub fn subscription(state: &State) -> Subscription<Message> {
     subscriptions.push(Subscription::run_with(tray.channel(), tray_event_stream));
   }
 
-  if state.smoke {
-    subscriptions.push(window::frames().map(|_| Message::Window(WindowMessage::FrameRendered)));
+  // Drive the shimmer phase only while skeletons are actually on screen (or a
+  // smoke run waits on its first frame); an always-on frames subscription
+  // would redraw the shell at display refresh for no visible change.
+  if state.smoke || (state.skeletons_active() && !state.settings.snapshot().reduced_motion()) {
+    subscriptions
+      .push(window::frames().map(|instant| Message::Window(WindowMessage::FrameTick(instant))));
   }
   Subscription::batch(subscriptions)
 }
@@ -209,6 +213,7 @@ fn shortcut_matches(binding: &str, key: &keyboard::Key, modifiers: keyboard::Mod
 #[cfg(test)]
 mod tests {
   use super::*;
+  use jellypilot_core::LoadState;
 
   fn key_pressed(key: keyboard::Key, modifiers: keyboard::Modifiers) -> Event {
     Event::Keyboard(keyboard::Event::KeyPressed {
@@ -244,6 +249,39 @@ mod tests {
 
     // window events, resize events, playback tick, shortcut capture
     assert_eq!(subscription(&state).units(), 4);
+  }
+  #[test]
+  fn frames_subscription_only_runs_for_smoke_or_active_skeletons() {
+    let mut state = State::boot(false);
+    // window events, resize events; no frames while nothing loads.
+    assert_eq!(subscription(&state).units(), 2);
+
+    state.smoke = true;
+    assert_eq!(subscription(&state).units(), 3);
+    state.smoke = false;
+
+    state.home.begin_load();
+    assert_eq!(subscription(&state).units(), 3);
+    // Episode/neighbor loads render shimmer skeletons independently of the
+    // main detail content state; the frames subscription must stay alive.
+    let mut detail_state = State::boot(false);
+    detail_state.detail.season_episodes = LoadState::Loading;
+    assert!(detail_state.skeletons_active());
+    assert_eq!(subscription(&detail_state).units(), 3);
+    detail_state.detail.season_episodes = LoadState::Idle;
+    detail_state.detail.season_neighbors = LoadState::Loading;
+    assert_eq!(subscription(&detail_state).units(), 3);
+
+    // Reduced motion renders static skeletons, so no frame ticks are needed.
+    let path = std::env::temp_dir().join(format!(
+      "jellypilot-iced-frames-{}.json",
+      std::process::id()
+    ));
+    let _ = std::fs::remove_file(&path);
+    state.settings = jellypilot_core::config::SettingsStore::for_test(path.clone());
+    state.settings.set_reduced_motion(true).unwrap();
+    assert_eq!(subscription(&state).units(), 2);
+    std::fs::remove_file(path).unwrap();
   }
 
   #[test]

@@ -381,6 +381,18 @@ impl HomeArtwork {
       section.retain(|_, cell| cell.state == ArtworkCellState::Ready);
     }
   }
+
+  pub fn has_loading(&self) -> bool {
+    self
+      .hero
+      .as_ref()
+      .is_some_and(|(_, cell)| cell.state == ArtworkCellState::Loading)
+      || self
+        .sections
+        .iter()
+        .flat_map(HashMap::values)
+        .any(|cell| cell.state == ArtworkCellState::Loading)
+  }
 }
 
 #[derive(Default)]
@@ -417,6 +429,13 @@ impl BrowseArtwork {
   pub fn slots(&self) -> impl Iterator<Item = ArtworkSlot> + '_ {
     self.cells.values().map(|cell| cell.slot)
   }
+
+  pub fn has_loading(&self) -> bool {
+    self
+      .cells
+      .values()
+      .any(|cell| cell.state == ArtworkCellState::Loading)
+  }
 }
 #[derive(Default)]
 pub struct DetailArtwork {
@@ -449,6 +468,13 @@ impl DetailArtwork {
 
   pub fn slots(&self) -> impl Iterator<Item = ArtworkSlot> + '_ {
     self.cells.values().map(|cell| cell.slot)
+  }
+
+  pub fn has_loading(&self) -> bool {
+    self
+      .cells
+      .values()
+      .any(|cell| cell.state == ArtworkCellState::Loading)
   }
 }
 
@@ -620,6 +646,13 @@ pub struct State {
   pub smoke: bool,
   /// Latest known logical window size; drives size-class layout decisions.
   pub window_size: iced::Size,
+  /// Shimmer sweep phase in [0, 1) for skeleton placeholders; advanced by
+  /// each `FrameTick` while skeletons are on screen.
+  pub skeleton_phase: f32,
+  /// Animation clock origin for the shimmer sweep. `None` while no skeletons
+  /// are visible so the next loading burst restarts the sweep from phase 0.
+  /// `pub(crate)` because update tests construct `State` literals.
+  pub(crate) skeleton_animation_start: Option<std::time::Instant>,
   pub settings: SettingsStore,
   pub settings_view: SettingsState,
   pub diagnostics: Diagnostics,
@@ -700,6 +733,8 @@ impl State {
     Self {
       smoke,
       window_size: iced::Size::new(1600.0, 900.0),
+      skeleton_phase: 0.0,
+      skeleton_animation_start: None,
       settings,
       settings_view,
       diagnostics,
@@ -761,6 +796,39 @@ impl State {
       .chain(self.browse_artwork.slots())
       .chain(self.detail_artwork.slots())
       .chain(self.playback_artwork.as_ref().map(|cell| cell.slot))
+  }
+
+  /// True while any surface renders skeleton placeholders or while any artwork
+  /// cell is loading. Gates the frame subscription that advances `skeleton_phase`,
+  /// so the shell never redraws at display refresh just for an invisible animation.
+  pub(crate) fn skeletons_active(&self) -> bool {
+    let home_loading = HomeSection::ALL
+      .iter()
+      .any(|section| matches!(self.home.section(*section), LoadState::Loading))
+      || matches!(self.home.shortcuts, LoadState::Loading);
+    let browse_loading = match &self.browse_view {
+      LibraryBrowseView::Loading => true,
+      // A ready grid can still hold unloaded placeholder slots while more
+      // pages stream in.
+      LibraryBrowseView::Ready { visible_items, .. } => {
+        visible_items.iter().any(|slot| slot.item.is_none())
+      }
+      LibraryBrowseView::Inactive | LibraryBrowseView::Empty | LibraryBrowseView::Failed { .. } => {
+        false
+      }
+    };
+    // Detail renders episode skeletons for season episodes and continue-watching
+    // neighbors independently of the main content load state; all three keep the
+    // shimmer frames subscription alive.
+    let detail_loading = matches!(self.detail.content, LoadState::Loading)
+      || matches!(self.detail.season_episodes, LoadState::Loading)
+      || matches!(self.detail.season_neighbors, LoadState::Loading);
+    // Artwork cells also display breathing skeleton pulse blocks while in the
+    // Loading state across Home hero/sections, Browse grid, and Detail views.
+    let artwork_loading = self.home_artwork.has_loading()
+      || self.browse_artwork.has_loading()
+      || self.detail_artwork.has_loading();
+    home_loading || browse_loading || detail_loading || artwork_loading
   }
   pub fn retain_artwork_handles(&mut self) {
     let slots: HashSet<_> = self.all_artwork_slots().collect();
@@ -1023,5 +1091,69 @@ mod tests {
       DiagnosticLevel::Error,
       DiagnosticCategory::Config,
     ));
+  }
+  #[test]
+  fn skeletons_active_returns_true_when_artwork_cells_are_loading() {
+    let mut state = State::boot(false);
+    assert!(!state.skeletons_active());
+
+    let mut binder = ArtworkBinder::default();
+    let slot_1 = binder.bind(ArtworkSurface::Home);
+    let slot_2 = binder.bind(ArtworkSurface::Home);
+    let slot_3 = binder.bind(ArtworkSurface::Browse);
+    let slot_4 = binder.bind(ArtworkSurface::Detail);
+
+    // Home hero loading
+    state.home_artwork.insert_hero(
+      "item-hero".to_owned(),
+      ArtworkCell {
+        slot: slot_1,
+        image_id: "img-hero".to_owned(),
+        state: ArtworkCellState::Loading,
+      },
+    );
+    assert!(state.skeletons_active());
+    state.home_artwork.prune_unready();
+    assert!(!state.skeletons_active());
+
+    // Home card loading
+    state.home_artwork.insert_card(
+      HomeSection::ContinueWatching,
+      "item-card".to_owned(),
+      ArtworkCell {
+        slot: slot_2,
+        image_id: "img-card".to_owned(),
+        state: ArtworkCellState::Loading,
+      },
+    );
+    assert!(state.skeletons_active());
+    state.home_artwork.prune_unready();
+    assert!(!state.skeletons_active());
+
+    // Browse artwork loading
+    state.browse_artwork.insert(
+      "item-browse".to_owned(),
+      ArtworkCell {
+        slot: slot_3,
+        image_id: "img-browse".to_owned(),
+        state: ArtworkCellState::Loading,
+      },
+    );
+    assert!(state.skeletons_active());
+    state.browse_artwork.clear();
+    assert!(!state.skeletons_active());
+
+    // Detail artwork loading
+    state.detail_artwork.insert(
+      "detail-poster".to_owned(),
+      ArtworkCell {
+        slot: slot_4,
+        image_id: "img-detail".to_owned(),
+        state: ArtworkCellState::Loading,
+      },
+    );
+    assert!(state.skeletons_active());
+    state.detail_artwork.clear();
+    assert!(!state.skeletons_active());
   }
 }

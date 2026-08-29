@@ -35,6 +35,7 @@ pub fn view(state: &State) -> Element<'_, Message> {
     playback_section(state),
     subtitles_section(state),
     shortcuts_section(state),
+    interface_section(state),
     cache_section(state),
     diagnostics_section(state),
     about_section(),
@@ -355,6 +356,21 @@ fn shortcut_row<'a>(state: &'a State, label: &'a str, kind: ShortcutKind) -> Ele
   .align_y(Alignment::Center)
   .spacing(TOKENS.spacing.s3)
   .into()
+}
+
+fn interface_section(state: &State) -> Element<'_, Message> {
+  let reduced_motion = state.settings.snapshot().reduced_motion();
+  section(
+    Icon::Settings,
+    "Interface",
+    column![toggle_row(
+      "Reduce motion",
+      "Shows skeleton loading placeholders without the shimmer animation.",
+      reduced_motion,
+      SettingsMessage::ReducedMotionToggled,
+    )]
+    .spacing(TOKENS.spacing.s4),
+  )
 }
 
 fn cache_section(state: &State) -> Element<'_, Message> {

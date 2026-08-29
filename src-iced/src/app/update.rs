@@ -2,7 +2,7 @@ use std::collections::{hash_map::DefaultHasher, HashSet};
 use std::hash::{Hash, Hasher};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use iced::futures::stream::{self, StreamExt};
 use iced::widget::{image, operation};
@@ -267,11 +267,29 @@ fn update_window(state: &mut State, message: WindowMessage) -> Task<Message> {
       state.window_size = size;
       Task::none()
     }
-    WindowMessage::FrameRendered => {
-      state.smoke = false;
-      iced::exit()
+    WindowMessage::FrameTick(now) => {
+      // Smoke runs only need proof that the first frame rendered.
+      if state.smoke {
+        state.smoke = false;
+        return iced::exit();
+      }
+      if state.skeletons_active() {
+        let start = state.skeleton_animation_start.get_or_insert(now);
+        state.skeleton_phase = skeleton_phase_at(now.duration_since(*start));
+      } else {
+        // Restart the sweep from phase 0 on the next loading burst.
+        state.skeleton_animation_start = None;
+        state.skeleton_phase = 0.0;
+      }
+      Task::none()
     }
   }
+}
+
+/// Breathing pulse phase in [0, 1): one full pulse per 1600ms, matching
+/// `tokens.durations.ms1600` in jellypilot-ui.
+fn skeleton_phase_at(elapsed: Duration) -> f32 {
+  (elapsed.as_secs_f32() / Duration::from_millis(1600).as_secs_f32()).fract()
 }
 fn update_settings(state: &mut State, message: SettingsMessage) -> Task<Message> {
   match message {
@@ -400,6 +418,12 @@ fn update_settings(state: &mut State, message: SettingsMessage) -> Task<Message>
     SettingsMessage::StartMinimizedToggled => {
       let enabled = !state.settings.snapshot().start_minimized();
       let result = state.settings.set_start_minimized(enabled);
+      finish_settings_mutation(state, result);
+      Task::none()
+    }
+    SettingsMessage::ReducedMotionToggled => {
+      let enabled = !state.settings.snapshot().reduced_motion();
+      let result = state.settings.set_reduced_motion(enabled);
       finish_settings_mutation(state, result);
       Task::none()
     }
@@ -3770,6 +3794,40 @@ mod tests {
   use crate::app::state::LoginState;
   use jellypilot_auth::{AuthStorageError, SavedProfileKey};
   use jellypilot_core::config::SettingsStore;
+  #[test]
+  fn skeleton_phase_wraps_once_per_1600ms() {
+    assert_eq!(skeleton_phase_at(Duration::from_millis(0)), 0.0);
+    assert_eq!(skeleton_phase_at(Duration::from_millis(800)), 0.5);
+    assert_eq!(skeleton_phase_at(Duration::from_millis(1600)), 0.0);
+    assert_eq!(skeleton_phase_at(Duration::from_millis(2000)), 0.25);
+  }
+
+  #[test]
+  fn frame_tick_advances_phase_while_skeletons_load_and_resets_after() {
+    let mut state = test_state();
+    state.home.begin_load();
+
+    let start = Instant::now();
+    drop(update_window(&mut state, WindowMessage::FrameTick(start)));
+    assert_eq!(state.skeleton_phase, 0.0);
+    assert_eq!(state.skeleton_animation_start, Some(start));
+
+    drop(update_window(
+      &mut state,
+      WindowMessage::FrameTick(start + Duration::from_millis(800)),
+    ));
+    assert_eq!(state.skeleton_phase, 0.5);
+
+    // Once nothing loads, the clock resets so the next burst starts at 0.
+    state.home.settle_video_home(Err("settled".to_owned()));
+    state.home.settle_shortcuts(Err("settled".to_owned()));
+    drop(update_window(
+      &mut state,
+      WindowMessage::FrameTick(start + Duration::from_millis(1200)),
+    ));
+    assert_eq!(state.skeleton_phase, 0.0);
+    assert_eq!(state.skeleton_animation_start, None);
+  }
 
   fn test_state() -> State {
     let settings = SettingsStore::default();
@@ -3781,6 +3839,8 @@ mod tests {
     State {
       smoke: false,
       window_size: iced::Size::new(1600.0, 900.0),
+      skeleton_phase: 0.0,
+      skeleton_animation_start: None,
       login: LoginState::from_settings(settings.snapshot()),
       settings,
       settings_view,

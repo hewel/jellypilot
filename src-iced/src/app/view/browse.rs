@@ -1,6 +1,6 @@
 use crate::app::message::{BrowseMessage, Message};
 use crate::app::state::{ArtworkCell, ArtworkCellState, Destination, State};
-use iced::widget::{button, column, container, row, scrollable, space, text, Column};
+use iced::widget::{button, column, container, row, scrollable, text, Column, Row};
 use iced::{Alignment, ContentFit, Element, Fill};
 use jellypilot_core::browse_model::{LibraryBrowseView, LibraryItemSlot};
 use jellypilot_core::cards::item_caption;
@@ -18,6 +18,7 @@ use jellypilot_ui::tokens::TOKENS;
 use jellypilot_ui::variants::ButtonVariant;
 use jellypilot_ui::widgets::artwork_grid::{artwork_grid, ArtworkGridMetrics, ArtworkGridViewport};
 use jellypilot_ui::widgets::ellipsis_text::ellipsis_text;
+use jellypilot_ui::widgets::skeleton::{skeleton_block, skeleton_panel};
 use jellypilot_ui::{full_radius, poster_card, rounded_image};
 
 pub(crate) const PAGE_PADDING: f32 = 32.0;
@@ -221,11 +222,11 @@ fn played_option(
   .into()
 }
 
-fn browse_body(state: &State, class: SizeClass) -> Element<'_, Message> {
+fn browse_body<'a>(state: &'a State, class: SizeClass) -> Element<'a, Message> {
   let padding = page_padding(class);
   match &state.browse_view {
     LibraryBrowseView::Inactive => empty_surface("Choose a library to browse.".to_owned(), padding),
-    LibraryBrowseView::Loading => empty_surface("Loading library…".to_owned(), padding),
+    LibraryBrowseView::Loading => browse_loading_skeleton(state, class),
     LibraryBrowseView::Empty => match &state.destination {
       Destination::Search(query) => empty_surface(format!("No results for “{query}”."), padding),
       Destination::Home
@@ -265,6 +266,8 @@ fn ready_surface<'a>(
   retry_busy: bool,
   class: SizeClass,
 ) -> Element<'a, Message> {
+  let skeleton_phase = state.skeleton_phase;
+  let reduced_motion = state.settings.snapshot().reduced_motion();
   let padding = page_padding(class);
   let available_width = grid_available_width(state.window_size.width, class);
   let metrics = ArtworkGridMetrics::for_cards(available_width, CARD_COPY_HEIGHT);
@@ -273,7 +276,13 @@ fn ready_surface<'a>(
     height: state.browse_viewport.height,
   };
   let mut grid = Some(artwork_grid(items, metrics, viewport, |slot| {
-    browse_slot(state, slot, metrics.cell_width)
+    browse_slot(
+      state,
+      slot,
+      metrics.cell_width,
+      skeleton_phase,
+      reduced_motion,
+    )
   }));
   let mut content = Column::new().width(Fill);
 
@@ -403,11 +412,111 @@ fn browse_slot<'a>(
   state: &'a State,
   slot: &'a LibraryItemSlot,
   cell_width: f32,
+  skeleton_phase: f32,
+  reduced_motion: bool,
 ) -> Element<'a, Message> {
   let Some(item) = &slot.item else {
-    return space::vertical().width(Fill).height(Fill).into();
+    return skeleton_cell(cell_width, skeleton_phase, reduced_motion);
   };
-  video_card(state, item, cell_width)
+  video_card(state, item, cell_width, skeleton_phase, reduced_motion)
+}
+
+fn browse_loading_skeleton<'a>(state: &'a State, class: SizeClass) -> Element<'a, Message> {
+  let skeleton_phase = state.skeleton_phase;
+  let reduced_motion = state.settings.snapshot().reduced_motion();
+  let padding = page_padding(class);
+  let metrics = skeleton_grid_metrics(state.window_size.width, class);
+  let grid = browse_skeleton_grid(metrics, skeleton_phase, reduced_motion);
+  let content = Column::new()
+    .width(Fill)
+    .push(container(grid).padding([0.0, padding]).width(Fill));
+
+  scrollable(content)
+    .id(state.browse_scroll_id.clone())
+    .on_scroll(|viewport| Message::Browse(BrowseMessage::Scrolled(viewport)))
+    .width(Fill)
+    .height(Fill)
+    .style(jellypilot_ui::theme::scrollable)
+    .into()
+}
+
+pub(crate) fn skeleton_grid_metrics(window_width: f32, class: SizeClass) -> ArtworkGridMetrics {
+  let available_width = grid_available_width(window_width, class);
+  ArtworkGridMetrics::for_cards(available_width, CARD_COPY_HEIGHT)
+}
+
+fn browse_skeleton_grid<'a>(
+  metrics: ArtworkGridMetrics,
+  skeleton_phase: f32,
+  reduced_motion: bool,
+) -> Element<'a, Message> {
+  let total_cells = LIBRARY_BROWSE_PAGE_SIZE as usize;
+  let row_count = total_cells.div_ceil(metrics.columns);
+  let mut grid = Column::new().spacing(TOKENS.spacing.s4).width(Fill);
+
+  for row_index in 0..row_count {
+    let start = row_index * metrics.columns;
+    let end = (start + metrics.columns).min(total_cells);
+    let mut row = Row::new().spacing(TOKENS.spacing.s4);
+    for _ in start..end {
+      row = row.push(
+        container(skeleton_cell(
+          metrics.cell_width,
+          skeleton_phase,
+          reduced_motion,
+        ))
+        .width(metrics.cell_width)
+        .height(metrics.cell_height),
+      );
+    }
+    grid = grid.push(row);
+  }
+
+  grid.into()
+}
+
+#[cfg(test)]
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(crate) struct SkeletonCellDimensions {
+  pub cell_width: f32,
+  pub cell_height: f32,
+  pub artwork_height: f32,
+}
+
+#[cfg(test)]
+pub(crate) fn skeleton_cell_dimensions(metrics: ArtworkGridMetrics) -> SkeletonCellDimensions {
+  SkeletonCellDimensions {
+    cell_width: metrics.cell_width,
+    cell_height: metrics.cell_height,
+    artwork_height: card_artwork_height(metrics.cell_width),
+  }
+}
+
+pub(crate) fn card_artwork_height(cell_width: f32) -> f32 {
+  cell_width * POSTER_FRAME_HEIGHT / POSTER_FRAME_WIDTH
+}
+
+fn skeleton_cell<'a>(
+  cell_width: f32,
+  skeleton_phase: f32,
+  reduced_motion: bool,
+) -> Element<'a, Message> {
+  let artwork_height = card_artwork_height(cell_width);
+  let poster = skeleton_block(cell_width, artwork_height, skeleton_phase, reduced_motion);
+  let copy = column![
+    skeleton_block(cell_width, 18.0, skeleton_phase, reduced_motion),
+    skeleton_block(cell_width * 0.6, 14.0, skeleton_phase, reduced_motion),
+  ]
+  .spacing(TOKENS.spacing.s1)
+  .padding(iced::Padding {
+    top: TOKENS.spacing.s2,
+    right: 0.0,
+    bottom: 0.0,
+    left: 0.0,
+  })
+  .width(Fill);
+
+  column![poster, copy].width(Fill).into()
 }
 
 const POSTER_FRAME_WIDTH: f32 = 160.0;
@@ -417,13 +526,17 @@ fn video_card<'a>(
   state: &'a State,
   item: &'a VideoLibraryItem,
   cell_width: f32,
+  skeleton_phase: f32,
+  reduced_motion: bool,
 ) -> Element<'a, Message> {
-  let artwork_height = cell_width * POSTER_FRAME_HEIGHT / POSTER_FRAME_WIDTH;
+  let artwork_height = card_artwork_height(cell_width);
   let artwork = artwork(
     state,
     state.browse_artwork.get(&item.id),
     &item.name,
     artwork_height,
+    skeleton_phase,
+    reduced_motion,
   );
   let copy = column![
     ellipsis_text(&item.name)
@@ -453,6 +566,8 @@ fn artwork<'a>(
   cell: Option<&ArtworkCell>,
   name: &'a str,
   height: f32,
+  phase: f32,
+  reduced_motion: bool,
 ) -> Element<'a, Message> {
   if let Some(cell) = cell {
     if cell.state == ArtworkCellState::Ready {
@@ -467,43 +582,51 @@ fn artwork<'a>(
   }
 
   let failed = cell.is_some_and(|cell| cell.state == ArtworkCellState::Failed);
-  let placeholder_color = if failed {
-    TOKENS.colors.warning
-  } else {
-    TOKENS.colors.onSurfaceVariant
-  };
-  let initial = name
-    .trim()
-    .chars()
-    .next()
-    .map(|character| character.to_uppercase().collect::<String>())
-    .unwrap_or_else(|| "•".to_owned());
-  container(
-    column![
-      icon_with_color(Icon::Movie, IconSize::Custom(36.0), placeholder_color),
-      text(initial)
-        .font(SPACE_GROTESK_FONT)
-        .size(24)
-        .color(placeholder_color),
-    ]
-    .spacing(TOKENS.spacing.s1)
-    .align_x(Alignment::Center),
+  if failed {
+    let placeholder_color = TOKENS.colors.warning;
+    let initial = name
+      .trim()
+      .chars()
+      .next()
+      .map(|character| character.to_uppercase().collect::<String>())
+      .unwrap_or_else(|| "•".to_owned());
+    return container(
+      column![
+        icon_with_color(Icon::Movie, IconSize::Custom(36.0), placeholder_color),
+        text(initial)
+          .font(SPACE_GROTESK_FONT)
+          .size(24)
+          .color(placeholder_color),
+      ]
+      .spacing(TOKENS.spacing.s1)
+      .align_x(Alignment::Center),
+    )
+    .width(Fill)
+    .height(height)
+    .center_x(Fill)
+    .center_y(Fill)
+    .style(|_theme| container::Style {
+      background: Some(iced::Background::Color(
+        TOKENS.colors.surfaceContainerLowest,
+      )),
+      border: iced::Border {
+        radius: full_radius(TOKENS.radii.lg),
+        width: 0.0,
+        color: iced::Color::TRANSPARENT,
+      },
+      ..container::Style::default()
+    })
+    .into();
+  }
+
+  skeleton_panel(
+    Fill,
+    height,
+    TOKENS.colors.surfaceContainerLowest,
+    full_radius(TOKENS.radii.lg),
+    phase,
+    reduced_motion,
   )
-  .width(Fill)
-  .height(height)
-  .center_x(Fill)
-  .center_y(Fill)
-  .style(|_theme| container::Style {
-    background: Some(iced::Background::Color(
-      TOKENS.colors.surfaceContainerLowest,
-    )),
-    border: iced::Border {
-      radius: full_radius(TOKENS.radii.lg),
-      width: 0.0,
-      color: iced::Color::TRANSPARENT,
-    },
-    ..container::Style::default()
-  })
   .into()
 }
 fn failure_surface(
@@ -698,5 +821,153 @@ mod tests {
   #[test]
   fn grid_available_width_never_falls_below_one() {
     assert_eq!(grid_available_width(100.0, SizeClass::Compact), 1.0);
+  }
+
+  #[test]
+  fn skeleton_grid_metrics_match_loaded_grid_metrics_at_same_window_width() {
+    for (width, class) in [
+      (1024.0, SizeClass::Compact),
+      (1600.0, SizeClass::Standard),
+      (1920.0, SizeClass::Wide),
+    ] {
+      let expected =
+        ArtworkGridMetrics::for_cards(grid_available_width(width, class), CARD_COPY_HEIGHT);
+      let actual = skeleton_grid_metrics(width, class);
+      assert_eq!(actual, expected);
+      assert_eq!(actual.columns, expected.columns);
+      assert_eq!(actual.cell_width, expected.cell_width);
+      assert_eq!(actual.cell_height, expected.cell_height);
+      assert_eq!(actual.row_height, expected.row_height);
+    }
+  }
+
+  #[test]
+  fn skeleton_cell_dimensions_match_card_geometry() {
+    let metrics = ArtworkGridMetrics::for_cards(1248.0, CARD_COPY_HEIGHT);
+    let dims = skeleton_cell_dimensions(metrics);
+    assert_eq!(dims.cell_width, metrics.cell_width);
+    assert_eq!(dims.cell_height, metrics.cell_height);
+    assert_eq!(dims.artwork_height, metrics.cell_width * 1.5);
+    assert_eq!(dims.cell_height, dims.artwork_height + CARD_COPY_HEIGHT);
+  }
+
+  #[test]
+  fn card_artwork_height_matches_video_card_aspect_ratio() {
+    assert_eq!(card_artwork_height(160.0), 240.0);
+    assert_eq!(card_artwork_height(200.0), 300.0);
+  }
+
+  #[test]
+  fn skeleton_grid_row_and_cell_count_covers_full_page() {
+    let metrics = ArtworkGridMetrics::for_cards(1248.0, CARD_COPY_HEIGHT);
+    let total_cells = LIBRARY_BROWSE_PAGE_SIZE as usize;
+    let row_count = total_cells.div_ceil(metrics.columns);
+    assert_eq!(total_cells, 24);
+    assert!(row_count >= 1);
+    assert_eq!(row_count, (24_usize).div_ceil(metrics.columns));
+  }
+
+  #[test]
+  fn browse_view_renders_in_loading_state() {
+    let mut state = State::boot(false);
+    state.skeleton_phase = 0.42;
+    state.browse_view = LibraryBrowseView::Loading;
+    let _element = view(&state);
+  }
+
+  #[test]
+  fn browse_view_renders_with_unloaded_slots_in_ready_state() {
+    let mut state = State::boot(false);
+    state.skeleton_phase = 0.42;
+    state.browse_view = LibraryBrowseView::Ready {
+      visible_items: vec![
+        LibraryItemSlot { item: None },
+        LibraryItemSlot { item: None },
+      ],
+      mode: jellypilot_core::LibraryBrowseMode::Normal,
+      total_record_count: 50,
+      is_fetching_more: false,
+      can_load_next: true,
+      load_more_failure: None,
+      retry_busy: false,
+    };
+    let _element = view(&state);
+  }
+
+  #[test]
+  fn browse_view_renders_cards_with_loading_and_failed_artwork_cells() {
+    let mut state = State::boot(false);
+    state.skeleton_phase = 0.5;
+    let item_1 = VideoLibraryItem {
+      id: "item-1".to_owned(),
+      name: "Movie 1".to_owned(),
+      item_type: "Movie".to_owned(),
+      production_year: Some(2024),
+      runtime_seconds: None,
+      played: false,
+      favorite: false,
+      artwork_image_id: None,
+      series_poster_image_id: None,
+      season_number: None,
+      episode_number: None,
+      series_id: None,
+      series_name: None,
+      resume_position_seconds: None,
+      played_percentage: None,
+      overview: None,
+    };
+    let item_2 = VideoLibraryItem {
+      id: "item-2".to_owned(),
+      name: "Movie 2".to_owned(),
+      item_type: "Movie".to_owned(),
+      production_year: Some(2023),
+      runtime_seconds: None,
+      played: false,
+      favorite: false,
+      artwork_image_id: None,
+      series_poster_image_id: None,
+      season_number: None,
+      episode_number: None,
+      series_id: None,
+      series_name: None,
+      resume_position_seconds: None,
+      played_percentage: None,
+      overview: None,
+    };
+    let slot_1 = state
+      .artwork_binder
+      .bind(jellypilot_core::artwork_binder::ArtworkSurface::Browse);
+    let slot_2 = state
+      .artwork_binder
+      .bind(jellypilot_core::artwork_binder::ArtworkSurface::Browse);
+    state.browse_artwork.insert(
+      "item-1".to_owned(),
+      ArtworkCell {
+        slot: slot_1,
+        image_id: "img-1".to_owned(),
+        state: ArtworkCellState::Loading,
+      },
+    );
+    state.browse_artwork.insert(
+      "item-2".to_owned(),
+      ArtworkCell {
+        slot: slot_2,
+        image_id: "img-2".to_owned(),
+        state: ArtworkCellState::Failed,
+      },
+    );
+    state.browse_view = LibraryBrowseView::Ready {
+      visible_items: vec![
+        LibraryItemSlot { item: Some(item_1) },
+        LibraryItemSlot { item: Some(item_2) },
+      ],
+      mode: jellypilot_core::LibraryBrowseMode::Normal,
+      total_record_count: 2,
+      is_fetching_more: false,
+      can_load_next: false,
+      load_more_failure: None,
+      retry_busy: false,
+    };
+    let _element = view(&state);
   }
 }

@@ -70,7 +70,9 @@ pub enum WindowMessage {
   ShowRequested(Option<window::Id>),
   CloseRequested(window::Id),
   Resized(iced::Size),
-  FrameRendered,
+  /// One rendered frame; carries the compositor timestamp so animation
+  /// phases derive from frame cadence instead of wall-clock polling.
+  FrameTick(std::time::Instant),
 }
 
 /// One settled Library Image load delivered to a surface.
@@ -170,6 +172,7 @@ pub enum SettingsMessage {
   CancelShortcutCapture,
   ImageCacheToggled,
   StartMinimizedToggled,
+  ReducedMotionToggled,
   DiagnosticLevelMenuToggled,
   DiagnosticLevelMenuDismissed,
   DiagnosticLevelSelected(Option<DiagnosticLevel>),

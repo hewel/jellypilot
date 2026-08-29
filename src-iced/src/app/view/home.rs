@@ -16,6 +16,7 @@ use jellypilot_ui::layout::SizeClass;
 use jellypilot_ui::tokens::TOKENS;
 use jellypilot_ui::variants::{ButtonVariant, SurfaceVariant};
 use jellypilot_ui::widgets::ellipsis_text::ellipsis_text;
+use jellypilot_ui::widgets::skeleton::{skeleton_block, skeleton_panel};
 use jellypilot_ui::{card_top_radius, full_radius, poster_card, rounded_image};
 const THUMB_FRAME_WIDTH: f32 = 240.0;
 const THUMB_FRAME_HEIGHT: f32 = 135.0;
@@ -51,19 +52,22 @@ const fn section_scroll_height(section: HomeSection) -> f32 {
 }
 
 pub fn view(state: &State) -> Element<'_, Message> {
+  let skeleton_phase = state.skeleton_phase;
+  let reduced_motion = state.settings.snapshot().reduced_motion();
+
   let mut content = Column::new()
     .spacing(TOKENS.spacing.s8)
     .padding([TOKENS.spacing.s6, TOKENS.spacing.s8])
     .width(Fill);
 
   if let Some(item) = state.home.featured_item() {
-    content = content.push(featured_hero(state, item));
+    content = content.push(featured_hero(state, item, skeleton_phase, reduced_motion));
   } else if home_is_loading(state) {
-    content = content.push(featured_skeleton());
+    content = content.push(featured_skeleton(skeleton_phase, reduced_motion));
   }
 
   for section in HomeSection::ALL {
-    if let Some(row) = section_view(state, section) {
+    if let Some(row) = section_view(state, section, skeleton_phase, reduced_motion) {
       content = content.push(row);
     }
   }
@@ -81,13 +85,20 @@ fn home_is_loading(state: &State) -> bool {
     .any(|section| matches!(state.home.section(*section), LoadState::Loading))
 }
 
-fn featured_hero<'a>(state: &'a State, item: &'a VideoLibraryItem) -> Element<'a, Message> {
+fn featured_hero<'a>(
+  state: &'a State,
+  item: &'a VideoLibraryItem,
+  skeleton_phase: f32,
+  reduced_motion: bool,
+) -> Element<'a, Message> {
   let artwork = hero_artwork(
     state,
     state.home_artwork.hero(&item.id),
     &item.name,
     220.0,
     330.0,
+    skeleton_phase,
+    reduced_motion,
   );
   let mut copy = column![
     text(hero_headline(item))
@@ -164,12 +175,12 @@ fn featured_hero<'a>(state: &'a State, item: &'a VideoLibraryItem) -> Element<'a
   .into()
 }
 
-fn featured_skeleton<'a>() -> Element<'a, Message> {
-  let poster = skeleton_box(220.0, 330.0);
+fn featured_skeleton<'a>(phase: f32, reduced_motion: bool) -> Element<'a, Message> {
+  let poster = skeleton_block(220.0, 330.0, phase, reduced_motion);
   let copy = column![
-    skeleton_box(360.0, 44.0),
-    skeleton_box(240.0, 20.0),
-    skeleton_box(520.0, 72.0),
+    skeleton_block(360.0, 44.0, phase, reduced_motion),
+    skeleton_block(240.0, 20.0, phase, reduced_motion),
+    skeleton_block(520.0, 72.0, phase, reduced_motion),
   ]
   .spacing(TOKENS.spacing.s4);
   container(row![poster, copy].spacing(TOKENS.spacing.s8))
@@ -179,13 +190,24 @@ fn featured_skeleton<'a>() -> Element<'a, Message> {
     .into()
 }
 
-fn section_view(state: &State, section: HomeSection) -> Option<Element<'_, Message>> {
+fn section_view(
+  state: &State,
+  section: HomeSection,
+  skeleton_phase: f32,
+  reduced_motion: bool,
+) -> Option<Element<'_, Message>> {
   match state.home.section(section) {
     LoadState::Idle => None,
-    LoadState::Loading => Some(section_skeleton(section)),
+    LoadState::Loading => Some(section_skeleton(section, skeleton_phase, reduced_motion)),
     LoadState::Failed(error) => Some(section_error(section.title(), error)),
     LoadState::Ready(items) if items.is_empty() => None,
-    LoadState::Ready(items) => Some(section_row(state, section, items)),
+    LoadState::Ready(items) => Some(section_row(
+      state,
+      section,
+      items,
+      skeleton_phase,
+      reduced_motion,
+    )),
   }
 }
 
@@ -193,12 +215,20 @@ fn section_row<'a>(
   state: &'a State,
   section: HomeSection,
   items: &'a [VideoLibraryItem],
+  skeleton_phase: f32,
+  reduced_motion: bool,
 ) -> Element<'a, Message> {
   let mut cards = Row::new()
     .spacing(TOKENS.spacing.s4)
     .align_y(Alignment::Start);
   for item in items {
-    cards = cards.push(video_card(state, section, item));
+    cards = cards.push(video_card(
+      state,
+      section,
+      item,
+      skeleton_phase,
+      reduced_motion,
+    ));
   }
   let cards = scrollable(cards)
     .direction(Direction::Horizontal(Scrollbar::new()))
@@ -220,6 +250,8 @@ fn video_card<'a>(
   state: &'a State,
   section: HomeSection,
   item: &'a VideoLibraryItem,
+  skeleton_phase: f32,
+  reduced_motion: bool,
 ) -> Element<'a, Message> {
   let (frame_width, frame_height) = section_frame_size(section);
   let is_action_card = matches!(section, HomeSection::ContinueWatching | HomeSection::NextUp);
@@ -232,9 +264,10 @@ fn video_card<'a>(
     state,
     state.home_artwork.card(section, &item.id),
     &item.name,
-    frame_width,
-    frame_height,
+    (frame_width, frame_height),
     radius,
+    skeleton_phase,
+    reduced_motion,
   );
 
   let text_stack = column![
@@ -357,6 +390,8 @@ fn hero_artwork<'a>(
   name: &'a str,
   width: f32,
   height: f32,
+  phase: f32,
+  reduced_motion: bool,
 ) -> Element<'a, Message> {
   if let Some(cell) = cell {
     if cell.state == ArtworkCellState::Ready {
@@ -371,43 +406,51 @@ fn hero_artwork<'a>(
   }
 
   let failed = cell.is_some_and(|cell| cell.state == ArtworkCellState::Failed);
-  let placeholder_color = if failed {
-    TOKENS.colors.warning
-  } else {
-    TOKENS.colors.onSurfaceVariant
-  };
-  let initial = name
-    .trim()
-    .chars()
-    .next()
-    .map(|character| character.to_uppercase().collect::<String>())
-    .unwrap_or_else(|| "•".to_owned());
-  container(
-    column![
-      icon_with_color(Icon::Movie, 42.0, placeholder_color),
-      text(initial)
-        .font(SPACE_GROTESK_FONT)
-        .size(32)
-        .color(placeholder_color),
-    ]
-    .spacing(TOKENS.spacing.s1)
-    .align_x(Alignment::Center),
+  if failed {
+    let placeholder_color = TOKENS.colors.warning;
+    let initial = name
+      .trim()
+      .chars()
+      .next()
+      .map(|character| character.to_uppercase().collect::<String>())
+      .unwrap_or_else(|| "•".to_owned());
+    return container(
+      column![
+        icon_with_color(Icon::Movie, 42.0, placeholder_color),
+        text(initial)
+          .font(SPACE_GROTESK_FONT)
+          .size(32)
+          .color(placeholder_color),
+      ]
+      .spacing(TOKENS.spacing.s1)
+      .align_x(Alignment::Center),
+    )
+    .width(width)
+    .height(height)
+    .center_x(Fill)
+    .center_y(Fill)
+    .style(|_theme| container::Style {
+      background: Some(iced::Background::Color(
+        TOKENS.colors.surfaceContainerLowest,
+      )),
+      border: iced::Border {
+        radius: full_radius(TOKENS.radii.xl),
+        width: 0.0,
+        color: iced::Color::TRANSPARENT,
+      },
+      ..container::Style::default()
+    })
+    .into();
+  }
+
+  skeleton_panel(
+    width,
+    height,
+    TOKENS.colors.surfaceContainerLowest,
+    full_radius(TOKENS.radii.xl),
+    phase,
+    reduced_motion,
   )
-  .width(width)
-  .height(height)
-  .center_x(Fill)
-  .center_y(Fill)
-  .style(|_theme| container::Style {
-    background: Some(iced::Background::Color(
-      TOKENS.colors.surfaceContainerLowest,
-    )),
-    border: iced::Border {
-      radius: full_radius(TOKENS.radii.xl),
-      width: 0.0,
-      color: iced::Color::TRANSPARENT,
-    },
-    ..container::Style::default()
-  })
   .into()
 }
 
@@ -415,9 +458,10 @@ fn card_artwork<'a>(
   state: &'a State,
   cell: Option<&ArtworkCell>,
   name: &'a str,
-  width: f32,
-  height: f32,
+  (width, height): (f32, f32),
   radius: iced::border::Radius,
+  phase: f32,
+  reduced_motion: bool,
 ) -> Element<'a, Message> {
   if let Some(cell) = cell {
     if cell.state == ArtworkCellState::Ready {
@@ -432,48 +476,56 @@ fn card_artwork<'a>(
   }
 
   let failed = cell.is_some_and(|cell| cell.state == ArtworkCellState::Failed);
-  let placeholder_color = if failed {
-    TOKENS.colors.warning
-  } else {
-    TOKENS.colors.onSurfaceVariant
-  };
-  let initial = name
-    .trim()
-    .chars()
-    .next()
-    .map(|character| character.to_uppercase().collect::<String>())
-    .unwrap_or_else(|| "•".to_owned());
-  let icon_dim = if width > POSTER_FRAME_WIDTH {
-    42.0
-  } else {
-    32.0
-  };
-  container(
-    column![
-      icon_with_color(Icon::Movie, icon_dim, placeholder_color),
-      text(initial)
-        .font(SPACE_GROTESK_FONT)
-        .size(if width > POSTER_FRAME_WIDTH { 32 } else { 24 })
-        .color(placeholder_color),
-    ]
-    .spacing(TOKENS.spacing.s1)
-    .align_x(Alignment::Center),
+  if failed {
+    let placeholder_color = TOKENS.colors.warning;
+    let initial = name
+      .trim()
+      .chars()
+      .next()
+      .map(|character| character.to_uppercase().collect::<String>())
+      .unwrap_or_else(|| "•".to_owned());
+    let icon_dim = if width > POSTER_FRAME_WIDTH {
+      42.0
+    } else {
+      32.0
+    };
+    return container(
+      column![
+        icon_with_color(Icon::Movie, icon_dim, placeholder_color),
+        text(initial)
+          .font(SPACE_GROTESK_FONT)
+          .size(if width > POSTER_FRAME_WIDTH { 32 } else { 24 })
+          .color(placeholder_color),
+      ]
+      .spacing(TOKENS.spacing.s1)
+      .align_x(Alignment::Center),
+    )
+    .width(width)
+    .height(height)
+    .center_x(Fill)
+    .center_y(Fill)
+    .style(move |_theme| container::Style {
+      background: Some(iced::Background::Color(
+        TOKENS.colors.surfaceContainerLowest,
+      )),
+      border: iced::Border {
+        radius,
+        width: 0.0,
+        color: iced::Color::TRANSPARENT,
+      },
+      ..container::Style::default()
+    })
+    .into();
+  }
+
+  skeleton_panel(
+    width,
+    height,
+    TOKENS.colors.surfaceContainerLowest,
+    radius,
+    phase,
+    reduced_motion,
   )
-  .width(width)
-  .height(height)
-  .center_x(Fill)
-  .center_y(Fill)
-  .style(move |_theme| container::Style {
-    background: Some(iced::Background::Color(
-      TOKENS.colors.surfaceContainerLowest,
-    )),
-    border: iced::Border {
-      radius,
-      width: 0.0,
-      color: iced::Color::TRANSPARENT,
-    },
-    ..container::Style::default()
-  })
   .into()
 }
 fn card_progress(section: HomeSection, item: &VideoLibraryItem) -> Option<f64> {
@@ -520,15 +572,19 @@ fn progress_bar<'a>(progress: f64) -> Element<'a, Message> {
   bar.into()
 }
 
-fn section_skeleton<'a>(section: HomeSection) -> Element<'a, Message> {
+fn section_skeleton<'a>(
+  section: HomeSection,
+  phase: f32,
+  reduced_motion: bool,
+) -> Element<'a, Message> {
   let (width, height) = section_frame_size(section);
   let mut cards = Row::new().spacing(TOKENS.spacing.s4);
   for _ in 0..5 {
     cards = cards.push(
       column![
-        skeleton_box(width, height),
-        skeleton_box(width, 18.0),
-        skeleton_box(width * 0.6, 14.0),
+        skeleton_block(width, height, phase, reduced_motion),
+        skeleton_block(width, 18.0, phase, reduced_motion),
+        skeleton_block(width * 0.6, 14.0, phase, reduced_motion),
       ]
       .spacing(TOKENS.spacing.s2),
     );
@@ -568,14 +624,6 @@ fn section_error<'a>(title: &'static str, error: &'a str) -> Element<'a, Message
   .into()
 }
 
-fn skeleton_box<'a>(width: f32, height: f32) -> Element<'a, Message> {
-  container(space::horizontal())
-    .width(width)
-    .height(height)
-    .style(|theme| jellypilot_ui::theme::surface_variant(theme, SurfaceVariant::Elevated))
-    .into()
-}
-
 #[cfg(test)]
 mod tests {
   use super::*;
@@ -612,5 +660,80 @@ mod tests {
     assert_eq!(content_width(0.0, SizeClass::Compact), 1.0);
     assert_eq!(content_width(50.0, SizeClass::Compact), 1.0);
     assert_eq!(content_width(-100.0, SizeClass::Compact), 1.0);
+  }
+
+  #[test]
+  fn home_view_renders_hero_and_cards_with_loading_and_failed_artwork() {
+    let mut state = State::boot(false);
+    state.skeleton_phase = 0.5;
+    let hero_item = VideoLibraryItem {
+      id: "hero-1".to_owned(),
+      name: "Hero Movie".to_owned(),
+      item_type: "Movie".to_owned(),
+      production_year: Some(2024),
+      runtime_seconds: Some(7200.0),
+      played: false,
+      favorite: true,
+      artwork_image_id: None,
+      series_poster_image_id: None,
+      season_number: None,
+      episode_number: None,
+      series_id: None,
+      series_name: None,
+      resume_position_seconds: None,
+      played_percentage: None,
+      overview: Some("Hero overview text".to_owned()),
+    };
+    let card_item = VideoLibraryItem {
+      id: "card-1".to_owned(),
+      name: "Card Movie".to_owned(),
+      item_type: "Movie".to_owned(),
+      production_year: Some(2023),
+      runtime_seconds: Some(5400.0),
+      played: false,
+      favorite: false,
+      artwork_image_id: None,
+      series_poster_image_id: None,
+      season_number: None,
+      episode_number: None,
+      series_id: None,
+      series_name: None,
+      resume_position_seconds: Some(2430.0),
+      played_percentage: Some(45.0),
+      overview: None,
+    };
+    state
+      .home
+      .settle_video_home(Ok(jellypilot_media_server::VideoHome {
+        continue_watching: vec![card_item],
+        latest_movies: vec![hero_item],
+        next_up: Vec::new(),
+        latest_episodes: Vec::new(),
+      }));
+    state.home.settle_shortcuts(Ok(vec![]));
+    let slot_1 = state
+      .artwork_binder
+      .bind(jellypilot_core::artwork_binder::ArtworkSurface::Home);
+    let slot_2 = state
+      .artwork_binder
+      .bind(jellypilot_core::artwork_binder::ArtworkSurface::Home);
+    state.home_artwork.insert_hero(
+      "hero-1".to_owned(),
+      ArtworkCell {
+        slot: slot_1,
+        image_id: "img-hero".to_owned(),
+        state: ArtworkCellState::Loading,
+      },
+    );
+    state.home_artwork.insert_card(
+      HomeSection::ContinueWatching,
+      "card-1".to_owned(),
+      ArtworkCell {
+        slot: slot_2,
+        image_id: "img-card".to_owned(),
+        state: ArtworkCellState::Failed,
+      },
+    );
+    let _element = view(&state);
   }
 }
