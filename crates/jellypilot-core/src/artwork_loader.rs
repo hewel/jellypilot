@@ -128,7 +128,13 @@ mod tests {
 
         assert_eq!(
             plan,
-            vec![load(2, true), load(4, true), load(1, false), load(3, false), load(5, false)]
+            vec![
+                load(2, true),
+                load(4, true),
+                load(1, false),
+                load(3, false),
+                load(5, false)
+            ]
         );
     }
 
@@ -208,7 +214,10 @@ mod tests {
         assert!(plan.iter().take(6).all(|planned| planned.visible));
         assert!(plan.iter().skip(6).all(|planned| !planned.visible));
         let ordered = plan.iter().map(|planned| planned.slot).collect::<Vec<_>>();
-        assert_eq!(ordered, (0..10).map(ArtworkSlot::for_test).collect::<Vec<_>>());
+        assert_eq!(
+            ordered,
+            (0..10).map(ArtworkSlot::for_test).collect::<Vec<_>>()
+        );
     }
 
     #[test]
@@ -222,6 +231,9 @@ mod tests {
 
         let plan = plan_artwork_loads(loads);
 
-        assert_eq!(plan, vec![load(1, true), load(2, true), load(3, false), load(4, false)]);
+        assert_eq!(
+            plan,
+            vec![load(1, true), load(2, true), load(3, false), load(4, false)]
+        );
     }
 }
