@@ -212,6 +212,8 @@ pub struct Settings {
     image_cache_enabled: bool,
     #[serde(default, deserialize_with = "deserialize_start_minimized")]
     start_minimized: bool,
+    #[serde(default, deserialize_with = "deserialize_reduced_motion")]
+    reduced_motion: bool,
     #[serde(default)]
     library_filters: BrowseFilterSettings,
 }
@@ -233,6 +235,7 @@ impl Default for Settings {
             key_intro_skip: default_key_intro_skip(),
             image_cache_enabled: default_image_cache_enabled(),
             start_minimized: false,
+            reduced_motion: false,
             library_filters: BrowseFilterSettings::default(),
         }
     }
@@ -289,6 +292,10 @@ impl Settings {
 
     pub const fn start_minimized(&self) -> bool {
         self.start_minimized
+    }
+
+    pub const fn reduced_motion(&self) -> bool {
+        self.reduced_motion
     }
 
     pub const fn browse_filters(&self) -> BrowseFilterSettings {
@@ -561,6 +568,13 @@ impl SettingsStore {
         })
     }
 
+    pub fn set_reduced_motion(&mut self, enabled: bool) -> Result<bool, SettingsMutationError> {
+        self.update(|settings| {
+            settings.reduced_motion = enabled;
+            Ok(())
+        })
+    }
+
     pub fn set_browse_filters(
         &mut self,
         filters: BrowseFilterSettings,
@@ -698,6 +712,14 @@ where
     Ok(value.as_bool().unwrap_or_default())
 }
 
+fn deserialize_reduced_motion<'de, D>(deserializer: D) -> Result<bool, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value = serde_json::Value::deserialize(deserializer)?;
+    Ok(value.as_bool().unwrap_or_default())
+}
+
 #[derive(Debug)]
 pub enum ConfigError {
     Io(io::Error),
@@ -799,6 +821,7 @@ mod tests {
             key_intro_skip: "I".to_owned(),
             image_cache_enabled: false,
             start_minimized: true,
+            reduced_motion: false,
             library_filters: BrowseFilterSettings::default()
                 .with_sort(VideoLibrarySort::ReleaseDate)
                 .with_played_filter(VideoLibraryPlayedFilter::Unplayed)
@@ -833,6 +856,7 @@ mod tests {
         assert_eq!(settings.key_intro_skip(), "g");
         assert!(settings.image_cache_enabled());
         assert!(!settings.start_minimized());
+        assert!(!settings.reduced_motion());
         assert_eq!(settings.browse_filters(), BrowseFilterSettings::default());
         fs::remove_file(path).unwrap();
     }
@@ -845,6 +869,18 @@ mod tests {
 
         assert!(store.set_start_minimized(true).unwrap());
         assert!(load_from(&path).unwrap().start_minimized());
+        fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn reduced_motion_is_persisted_and_defaults_false() {
+        let path = test_path("reduced-motion");
+        let _ = fs::remove_file(&path);
+        let mut store = store_at(path.clone(), Settings::default());
+
+        assert!(!Settings::default().reduced_motion());
+        assert!(store.set_reduced_motion(true).unwrap());
+        assert!(load_from(&path).unwrap().reduced_motion());
         fs::remove_file(path).unwrap();
     }
 
