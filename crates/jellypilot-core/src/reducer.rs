@@ -51,6 +51,13 @@ pub struct LibraryBrowseCore {
     pending: BTreeMap<LibraryBrowseLoadToken, PendingLoad>,
     retry_requested: BTreeSet<u32>,
     display_indexes: Vec<u32>,
+    /// When set, loaded pages are kept after leaving the virtual window.
+    ///
+    /// Defaults to `false` (evict on window exit), the behavior the wasm/web
+    /// contract relies on. Native shells may opt into accumulation so
+    /// revisiting an earlier window does not refetch; failed pages are always
+    /// released when they leave the window so returning to them refetches.
+    retain_loaded_pages: bool,
 }
 
 impl Default for LibraryBrowseCore {
@@ -72,6 +79,7 @@ impl LibraryBrowseCore {
             pending: BTreeMap::new(),
             retry_requested: BTreeSet::new(),
             display_indexes: Vec::new(),
+            retain_loaded_pages: false,
         }
     }
 
@@ -111,6 +119,14 @@ impl LibraryBrowseCore {
             snapshot: self.snapshot(),
             commands,
         })
+    }
+
+    /// Selects whether loaded pages are retained after leaving the window.
+    ///
+    /// The setting is metadata-only, survives configure cycles, and never
+    /// alters the serialized snapshot or command shapes.
+    pub fn set_retain_loaded_pages(&mut self, retain: bool) {
+        self.retain_loaded_pages = retain;
     }
 
     /// Returns the current immutable reducer view without changing state.
@@ -309,9 +325,12 @@ impl LibraryBrowseCore {
 
         let released: Vec<u32> = self
             .pages
-            .keys()
-            .copied()
-            .filter(|start_index| !retained.contains(start_index))
+            .iter()
+            .filter(|(start_index, page)| {
+                !retained.contains(*start_index)
+                    && (!self.retain_loaded_pages || matches!(page, StoredPage::Failed(_)))
+            })
+            .map(|(start_index, _)| *start_index)
             .collect();
         if !released.is_empty() {
             for start_index in &released {
@@ -657,6 +676,7 @@ mod tests {
             pending: BTreeMap::new(),
             retry_requested: BTreeSet::new(),
             display_indexes: Vec::new(),
+            retain_loaded_pages: false,
         };
         let before = core.snapshot();
 
@@ -668,6 +688,176 @@ mod tests {
         assert_eq!(
             (error, core.snapshot()),
             (LibraryBrowseCoreError::SequenceExhausted, before)
+        );
+    }
+
+    const TOTAL: u32 = LIBRARY_BROWSE_PAGE_SIZE * 10;
+
+    fn configure_enabled(core: &mut LibraryBrowseCore) -> LibraryBrowseLoadToken {
+        let update = core
+            .dispatch(LibraryBrowseAction::Configure {
+                source_id: "movies".to_owned(),
+                enabled: true,
+            })
+            .expect("configure should succeed");
+        update
+            .commands
+            .iter()
+            .find_map(|command| match command {
+                LibraryBrowseCommand::LoadPage { token, .. } => Some(*token),
+                LibraryBrowseCommand::ResetViewport
+                | LibraryBrowseCommand::CancelLoad { .. }
+                | LibraryBrowseCommand::ReleasePages { .. } => None,
+            })
+            .expect("bootstrap load should be scheduled")
+    }
+
+    fn settle_loaded(
+        core: &mut LibraryBrowseCore,
+        token: LibraryBrowseLoadToken,
+        start_index: u32,
+    ) -> LibraryBrowseUpdate {
+        core.dispatch(LibraryBrowseAction::PageSettled {
+            token,
+            outcome: LibraryBrowsePageOutcome::Loaded {
+                start_index,
+                limit: LIBRARY_BROWSE_PAGE_SIZE,
+                total_record_count: TOTAL,
+                item_count: LIBRARY_BROWSE_PAGE_SIZE,
+                has_more: start_index + LIBRARY_BROWSE_PAGE_SIZE < TOTAL,
+            },
+        })
+        .expect("loaded page should settle")
+    }
+
+    fn settle_failed(core: &mut LibraryBrowseCore, token: LibraryBrowseLoadToken) {
+        core.dispatch(LibraryBrowseAction::PageSettled {
+            token,
+            outcome: LibraryBrowsePageOutcome::Failed {
+                failure: LibraryBrowseFailure {
+                    message: "flaky".to_owned(),
+                    retryable: true,
+                },
+            },
+        })
+        .expect("failed page should settle");
+    }
+
+    fn move_window(core: &mut LibraryBrowseCore, start: u32) -> LibraryBrowseUpdate {
+        core.dispatch(LibraryBrowseAction::WindowChanged {
+            display_indexes: (start..start + LIBRARY_BROWSE_PAGE_SIZE).collect(),
+        })
+        .expect("window change should dispatch")
+    }
+
+    fn settle_all_loads(core: &mut LibraryBrowseCore, update: &LibraryBrowseUpdate) {
+        let loads: Vec<(LibraryBrowseLoadToken, u32)> = update
+            .commands
+            .iter()
+            .filter_map(|command| match command {
+                LibraryBrowseCommand::LoadPage {
+                    token, start_index, ..
+                } => Some((*token, *start_index)),
+                LibraryBrowseCommand::ResetViewport
+                | LibraryBrowseCommand::CancelLoad { .. }
+                | LibraryBrowseCommand::ReleasePages { .. } => None,
+            })
+            .collect();
+        for (token, start_index) in loads {
+            settle_loaded(core, token, start_index);
+        }
+    }
+
+    fn requested_starts(update: &LibraryBrowseUpdate) -> Vec<u32> {
+        update
+            .commands
+            .iter()
+            .filter_map(|command| match command {
+                LibraryBrowseCommand::LoadPage { start_index, .. } => Some(*start_index),
+                LibraryBrowseCommand::ResetViewport
+                | LibraryBrowseCommand::CancelLoad { .. }
+                | LibraryBrowseCommand::ReleasePages { .. } => None,
+            })
+            .collect()
+    }
+
+    fn released_starts(update: &LibraryBrowseUpdate) -> Vec<u32> {
+        let mut released = Vec::new();
+        for command in &update.commands {
+            if let LibraryBrowseCommand::ReleasePages { page_starts } = command {
+                released.extend(page_starts.iter().copied());
+            }
+        }
+        released
+    }
+
+    #[test]
+    fn default_policy_evicts_loaded_pages_outside_the_window() {
+        let mut core = LibraryBrowseCore::new();
+        let bootstrap = configure_enabled(&mut core);
+        settle_loaded(&mut core, bootstrap, 0);
+        let forward = move_window(&mut core, LIBRARY_BROWSE_PAGE_SIZE);
+        settle_all_loads(&mut core, &forward);
+
+        let further = move_window(&mut core, LIBRARY_BROWSE_PAGE_SIZE * 2);
+        assert_eq!(released_starts(&further), vec![LIBRARY_BROWSE_PAGE_SIZE]);
+        settle_all_loads(&mut core, &further);
+
+        let back = move_window(&mut core, LIBRARY_BROWSE_PAGE_SIZE);
+        assert!(
+            requested_starts(&back).contains(&LIBRARY_BROWSE_PAGE_SIZE),
+            "evicted page should be refetched on return"
+        );
+    }
+
+    #[test]
+    fn retain_policy_keeps_loaded_pages_across_window_moves() {
+        let mut core = LibraryBrowseCore::new();
+        core.set_retain_loaded_pages(true);
+        let bootstrap = configure_enabled(&mut core);
+        settle_loaded(&mut core, bootstrap, 0);
+        let forward = move_window(&mut core, LIBRARY_BROWSE_PAGE_SIZE);
+        settle_all_loads(&mut core, &forward);
+
+        let further = move_window(&mut core, LIBRARY_BROWSE_PAGE_SIZE * 2);
+        assert!(released_starts(&further).is_empty());
+        settle_all_loads(&mut core, &further);
+
+        let back = move_window(&mut core, LIBRARY_BROWSE_PAGE_SIZE);
+        assert!(released_starts(&back).is_empty());
+        assert!(
+            requested_starts(&back).is_empty(),
+            "retained page should not be refetched on return"
+        );
+    }
+
+    #[test]
+    fn retain_policy_still_releases_failed_pages_outside_the_window() {
+        let mut core = LibraryBrowseCore::new();
+        core.set_retain_loaded_pages(true);
+        let bootstrap = configure_enabled(&mut core);
+        settle_loaded(&mut core, bootstrap, 0);
+        let initial = move_window(&mut core, 0);
+        let lookahead = initial
+            .commands
+            .iter()
+            .find_map(|command| match command {
+                LibraryBrowseCommand::LoadPage { token, .. } => Some(*token),
+                LibraryBrowseCommand::ResetViewport
+                | LibraryBrowseCommand::CancelLoad { .. }
+                | LibraryBrowseCommand::ReleasePages { .. } => None,
+            })
+            .expect("lookahead load should be scheduled");
+        settle_failed(&mut core, lookahead);
+
+        let away = move_window(&mut core, LIBRARY_BROWSE_PAGE_SIZE * 2);
+        assert_eq!(released_starts(&away), vec![LIBRARY_BROWSE_PAGE_SIZE]);
+        settle_all_loads(&mut core, &away);
+
+        let back = move_window(&mut core, 0);
+        assert!(
+            requested_starts(&back).contains(&LIBRARY_BROWSE_PAGE_SIZE),
+            "released failed page should be refetched on return"
         );
     }
 }

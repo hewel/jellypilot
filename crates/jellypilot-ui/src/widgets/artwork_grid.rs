@@ -1,4 +1,9 @@
 //! Viewport-sliced artwork grid built from normal iced layout widgets.
+//!
+//! Renders a full-height sparse range where cells look up items by global index.
+//! This allows the browse grid to represent the total item count with top and
+//! bottom spacers while only generating iced widget trees for the visible and
+//! overscanned rows.
 
 use iced::widget::{container, scrollable, Column, Row, Space};
 use iced::{Element, Length};
@@ -104,19 +109,19 @@ impl ArtworkGridMetrics {
 /// The parent stores the latest [`scrollable::Viewport`] received from
 /// [`scrollable::Scrollable::on_scroll`], converts it with
 /// [`ArtworkGridViewport::from_scrollable`], and supplies the measured grid
-/// width. Cells remain caller-owned and may contain any normal iced widgets.
-pub fn artwork_grid<'a, Item, Message, Builder>(
-    items: &'a [Item],
+/// width. Cells look up items by global item index and may contain any normal
+/// iced widgets.
+pub fn artwork_grid<'a, Message, Builder>(
+    item_count: usize,
     metrics: ArtworkGridMetrics,
     viewport: ArtworkGridViewport,
     cell_builder: Builder,
 ) -> Element<'a, Message>
 where
-    Item: 'a,
     Message: 'a,
-    Builder: Fn(&'a Item) -> Element<'a, Message>,
+    Builder: Fn(usize) -> Element<'a, Message>,
 {
-    let row_count = items.len().div_ceil(metrics.columns);
+    let row_count = item_count.div_ceil(metrics.columns);
     let window = row_window(
         row_count,
         viewport.offset_y,
@@ -129,7 +134,7 @@ where
 
     for row_index in window.start..window.end {
         let item_start = row_index * metrics.columns;
-        let item_end = (item_start + metrics.columns).min(items.len());
+        let item_end = (item_start + metrics.columns).min(item_count);
         let row_height = if row_index + 1 == row_count {
             metrics.cell_height
         } else {
@@ -140,9 +145,9 @@ where
             .width(Length::Fill)
             .height(row_height);
 
-        for item in &items[item_start..item_end] {
+        for index in item_start..item_end {
             row = row.push(
-                container(cell_builder(item))
+                container(cell_builder(index))
                     .width(metrics.cell_width)
                     .height(metrics.cell_height),
             );
@@ -235,9 +240,13 @@ fn finite_non_negative(value: f32) -> f32 {
 
 #[cfg(test)]
 mod tests {
+    use std::cell::RefCell;
+
+    use iced::Element;
+
     use super::{
-        overscan_rows, row_window, ArtworkGridMetrics, ArtworkGridViewport, RowWindow,
-        MAX_OVERSCAN_ROWS, MIN_OVERSCAN_ROWS, ROW_GAP,
+        artwork_grid, overscan_rows, row_window, ArtworkGridMetrics, ArtworkGridViewport,
+        RowWindow, MAX_OVERSCAN_ROWS, MIN_OVERSCAN_ROWS, ROW_GAP,
     };
 
     const ROW_HEIGHT: f32 = 100.0;
@@ -461,5 +470,55 @@ mod tests {
                 bottom_spacer: 0.0,
             }
         );
+    }
+
+    #[test]
+    fn artwork_grid_builds_cells_with_global_indexes_for_viewport_window() {
+        let built_indexes = RefCell::new(Vec::new());
+        let metrics = ArtworkGridMetrics {
+            columns: 4,
+            cell_width: 100.0,
+            cell_height: 100.0,
+            row_height: 100.0,
+        };
+        // With row_height=100.0 and viewport_height=100.0, overscan is MIN_OVERSCAN_ROWS (6).
+        // An offset_y of 800.0 puts visible_start at row 8, so window start is row 2 (8 - 6 = 2).
+        // For columns=4, row 2 starts at global item index 8.
+        let viewport = ArtworkGridViewport {
+            offset_y: 800.0,
+            height: 100.0,
+        };
+        let _element: Element<'_, ()> = artwork_grid(100, metrics, viewport, |index| {
+            built_indexes.borrow_mut().push(index);
+            iced::widget::Space::new().into()
+        });
+
+        let indexes = built_indexes.into_inner();
+        assert_eq!(indexes.first(), Some(&8));
+        // Window end is visible_end (9) + overscan (6) = 15.
+        // Row 14 ends at global item index 60 (exclusive).
+        assert_eq!(indexes.last(), Some(&59));
+        assert_eq!(indexes, (8..60).collect::<Vec<_>>());
+    }
+
+    #[test]
+    fn artwork_grid_empty_item_count_builds_no_cells() {
+        let built_indexes = RefCell::new(Vec::new());
+        let metrics = ArtworkGridMetrics {
+            columns: 4,
+            cell_width: 100.0,
+            cell_height: 100.0,
+            row_height: 100.0,
+        };
+        let viewport = ArtworkGridViewport {
+            offset_y: 0.0,
+            height: 300.0,
+        };
+        let _element: Element<'_, ()> = artwork_grid(0, metrics, viewport, |index| {
+            built_indexes.borrow_mut().push(index);
+            iced::widget::Space::new().into()
+        });
+
+        assert!(built_indexes.into_inner().is_empty());
     }
 }

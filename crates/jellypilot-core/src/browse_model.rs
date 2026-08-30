@@ -170,10 +170,10 @@ pub enum LibraryBrowseView {
     },
     Ready {
         visible_items: Vec<LibraryItemSlot>,
+        visible_start: u32,
         mode: LibraryBrowseMode,
         total_record_count: u32,
         is_fetching_more: bool,
-        can_load_next: bool,
         load_more_failure: Option<LibraryBrowseFailure>,
         retry_busy: bool,
     },
@@ -194,6 +194,11 @@ pub struct BrowseModel {
     source: Option<BrowseSource>,
     source_id: Option<String>,
     virtual_window_start: u32,
+    /// The exact virtual display range currently projected by the reducer.
+    ///
+    /// `None` means that no virtual window has been established yet (for
+    /// example, before the bootstrap page settles).
+    virtual_window: Option<Range<u32>>,
     preferences: BrowsePreferences,
     epoch: u32,
 }
@@ -234,73 +239,21 @@ impl BrowseModel {
             preferences.identity()
         );
         let source_changed = self.source_id.as_deref() != Some(source_id.as_str());
+        // The native shell accumulates loaded pages across window moves; the
+        // core default (eviction) remains the wasm/web contract.
+        self.core.set_retain_loaded_pages(true);
         let update = self.core.dispatch(LibraryBrowseAction::Configure {
             source_id: source_id.clone(),
             enabled: true,
         })?;
         if source_changed {
             self.virtual_window_start = 0;
+            self.virtual_window = None;
         }
         self.source = Some(source);
         self.source_id = Some(source_id);
         self.preferences = preferences;
         Ok(self.apply_commands(update.commands))
-    }
-
-    pub fn load_next(&mut self) -> Result<Vec<BrowseEffect>, LibraryBrowseCoreError> {
-        match self.view() {
-            LibraryBrowseView::Ready {
-                mode: LibraryBrowseMode::Normal,
-                ..
-            } => self.dispatch_action(LibraryBrowseAction::LoadNext),
-            LibraryBrowseView::Ready {
-                mode: LibraryBrowseMode::Virtual,
-                total_record_count,
-                ..
-            } => {
-                let next_start = self
-                    .virtual_window_start
-                    .checked_add(LIBRARY_BROWSE_PAGE_SIZE)
-                    .unwrap_or(total_record_count)
-                    .min(last_virtual_window_start(total_record_count));
-                if next_start == self.virtual_window_start {
-                    Ok(Vec::new())
-                } else {
-                    self.set_virtual_window(next_start, total_record_count)
-                }
-            }
-            LibraryBrowseView::Inactive
-            | LibraryBrowseView::Loading
-            | LibraryBrowseView::Empty
-            | LibraryBrowseView::Failed { .. } => Ok(Vec::new()),
-        }
-    }
-
-    pub fn load_previous(&mut self) -> Result<Vec<BrowseEffect>, LibraryBrowseCoreError> {
-        match self.view() {
-            LibraryBrowseView::Ready {
-                mode: LibraryBrowseMode::Virtual,
-                total_record_count,
-                ..
-            } => {
-                let previous_start = self
-                    .virtual_window_start
-                    .saturating_sub(LIBRARY_BROWSE_PAGE_SIZE);
-                if previous_start == self.virtual_window_start {
-                    Ok(Vec::new())
-                } else {
-                    self.set_virtual_window(previous_start, total_record_count)
-                }
-            }
-            LibraryBrowseView::Inactive
-            | LibraryBrowseView::Loading
-            | LibraryBrowseView::Empty
-            | LibraryBrowseView::Failed { .. }
-            | LibraryBrowseView::Ready {
-                mode: LibraryBrowseMode::Normal,
-                ..
-            } => Ok(Vec::new()),
-        }
     }
 
     pub fn retry(&mut self) -> Result<Vec<BrowseEffect>, LibraryBrowseCoreError> {
@@ -356,72 +309,82 @@ impl BrowseModel {
                 mode,
                 total_record_count,
                 is_fetching_more,
-                can_load_next,
                 load_more_failure,
                 retry_busy,
                 ..
-            } => LibraryBrowseView::Ready {
-                visible_items: snapshot
-                    .slots
-                    .iter()
-                    .map(|slot| {
-                        let item = usize::try_from(slot.index_within_page)
-                            .ok()
-                            .and_then(|index| {
-                                self.pages.get(&slot.page_start)?.get(index).cloned()
-                            });
-                        LibraryItemSlot { item }
-                    })
-                    .collect(),
-                mode,
-                total_record_count,
-                is_fetching_more,
-                can_load_next: match mode {
-                    LibraryBrowseMode::Normal => can_load_next,
-                    LibraryBrowseMode::Virtual => {
-                        self.virtual_window_start < last_virtual_window_start(total_record_count)
-                    }
-                },
-                load_more_failure,
-                retry_busy,
-            },
+            } => {
+                let visible_start = snapshot.slots.first().map_or(0, |slot| slot.display_index);
+                LibraryBrowseView::Ready {
+                    visible_items: snapshot
+                        .slots
+                        .iter()
+                        .map(|slot| {
+                            let item =
+                                usize::try_from(slot.index_within_page)
+                                    .ok()
+                                    .and_then(|index| {
+                                        self.pages.get(&slot.page_start)?.get(index).cloned()
+                                    });
+                            LibraryItemSlot { item }
+                        })
+                        .collect(),
+                    visible_start,
+                    mode,
+                    total_record_count,
+                    is_fetching_more,
+                    load_more_failure,
+                    retry_busy,
+                }
+            }
         }
     }
 
-    #[must_use]
-    pub fn can_load_more(&self) -> bool {
-        match self.view() {
-            LibraryBrowseView::Ready {
-                mode: LibraryBrowseMode::Normal,
-                can_load_next,
-                ..
-            } => can_load_next,
-            LibraryBrowseView::Ready {
-                mode: LibraryBrowseMode::Virtual,
-                total_record_count,
-                ..
-            } => self.virtual_window_start < last_virtual_window_start(total_record_count),
-            LibraryBrowseView::Inactive
-            | LibraryBrowseView::Loading
-            | LibraryBrowseView::Empty
-            | LibraryBrowseView::Failed { .. } => false,
+    /// Changes the sparse virtual display window without resetting the
+    /// viewport.
+    ///
+    /// Scroll-driven window updates must preserve the caller's scroll
+    /// position; `ResetViewport` remains reserved for configure/sort resets.
+    pub fn set_display_range(
+        &mut self,
+        range: Range<u32>,
+        total_record_count: u32,
+    ) -> Result<Vec<BrowseEffect>, LibraryBrowseCoreError> {
+        let range = clamped_display_range(range, total_record_count);
+        if self.virtual_window.as_ref() == Some(&range) {
+            return Ok(Vec::new());
         }
+
+        let update = self.core.dispatch(LibraryBrowseAction::WindowChanged {
+            display_indexes: range.clone().collect(),
+        })?;
+        self.virtual_window_start = range.start;
+        self.virtual_window = Some(range);
+        Ok(self.apply_commands(update.commands))
     }
 
+    /// Returns the projected virtual display range without cloning any items.
+    ///
+    /// Matches [`Self::display_range`] but is built from core metadata only
+    /// (slot bounds, mode, and total record count), so callers that need the
+    /// range on every scroll tick avoid cloning the visible page payloads.
     #[must_use]
-    pub fn can_load_next(&self) -> bool {
-        self.can_load_more()
-    }
-
-    #[must_use]
-    pub fn can_load_previous(&self) -> bool {
-        matches!(
-          self.view(),
-          LibraryBrowseView::Ready {
+    pub fn peek_display_range(&self) -> Option<Range<u32>> {
+        let snapshot = self.core.snapshot();
+        let LibraryBrowseStatus::Ready {
             mode: LibraryBrowseMode::Virtual,
+            total_record_count,
             ..
-          } if self.virtual_window_start > 0
-        )
+        } = snapshot.status
+        else {
+            return None;
+        };
+        match (snapshot.slots.first(), snapshot.slots.last()) {
+            (Some(first), Some(last)) => Some(first.display_index..last.display_index + 1),
+            _ => Some(self.virtual_window.clone().map_or_else(
+                || virtual_window_range(self.virtual_window_start, total_record_count),
+                |range| clamped_display_range(range, total_record_count),
+            )),
+        }
     }
 
     #[must_use]
@@ -431,9 +394,9 @@ impl BrowseModel {
                 mode: LibraryBrowseMode::Virtual,
                 total_record_count,
                 ..
-            } => Some(virtual_window_range(
-                self.virtual_window_start,
-                total_record_count,
+            } => Some(self.virtual_window.clone().map_or_else(
+                || virtual_window_range(self.virtual_window_start, total_record_count),
+                |range| clamped_display_range(range, total_record_count),
             )),
             LibraryBrowseView::Inactive
             | LibraryBrowseView::Loading
@@ -515,25 +478,11 @@ impl BrowseModel {
         &mut self,
         total_record_count: u32,
     ) -> Result<Vec<BrowseEffect>, LibraryBrowseCoreError> {
-        self.set_virtual_window(self.virtual_window_start, total_record_count)
-    }
-
-    fn set_virtual_window(
-        &mut self,
-        start: u32,
-        total_record_count: u32,
-    ) -> Result<Vec<BrowseEffect>, LibraryBrowseCoreError> {
-        let range = virtual_window_range(start, total_record_count);
-        let window_changed = range.start != self.virtual_window_start;
-        let update = self.core.dispatch(LibraryBrowseAction::WindowChanged {
-            display_indexes: range.clone().collect(),
-        })?;
-        self.virtual_window_start = range.start;
-        let mut effects = self.apply_commands(update.commands);
-        if window_changed {
-            effects.insert(0, BrowseEffect::ResetViewport);
-        }
-        Ok(effects)
+        let range = self
+            .virtual_window
+            .clone()
+            .unwrap_or_else(|| virtual_window_range(self.virtual_window_start, total_record_count));
+        self.set_display_range(range, total_record_count)
     }
 
     fn dispatch_action(
@@ -579,6 +528,12 @@ impl BrowseModel {
             })
             .collect()
     }
+}
+
+fn clamped_display_range(range: Range<u32>, total_record_count: u32) -> Range<u32> {
+    let start = range.start.min(total_record_count);
+    let end = range.end.min(total_record_count).max(start);
+    start..end
 }
 
 fn last_virtual_window_start(total_record_count: u32) -> u32 {
@@ -723,11 +678,13 @@ mod tests {
         ));
         settle(&mut model, &next, 30, 6);
 
-        let advance = model.load_next().expect("window advance should succeed");
-        assert!(matches!(advance.first(), Some(BrowseEffect::ResetViewport)));
+        let advance = model
+            .set_display_range(24..30, 30)
+            .expect("window advance should succeed");
+        assert!(advance
+            .iter()
+            .all(|effect| !matches!(effect, BrowseEffect::ResetViewport)));
         assert_eq!(model.display_range(), Some(24..30));
-        assert!(!model.can_load_next());
-        assert!(model.can_load_previous());
     }
 
     #[test]
@@ -751,7 +708,9 @@ mod tests {
             })
             .expect("failure should settle");
 
-        let _ = model.load_next().expect("window advance should succeed");
+        let _ = model
+            .set_display_range(24..30, 30)
+            .expect("window advance should succeed");
         assert!(matches!(
           model.view(),
           LibraryBrowseView::Ready {
@@ -797,7 +756,9 @@ mod tests {
             })
             .expect("malformed continuation should settle as a failure");
 
-        let _ = model.load_next().expect("window advance should succeed");
+        let _ = model
+            .set_display_range(24..30, 30)
+            .expect("window advance should succeed");
         assert!(matches!(
             model.view(),
             LibraryBrowseView::Ready {
@@ -815,8 +776,9 @@ mod tests {
     }
 
     #[test]
-    fn virtual_window_keeps_slots_and_retained_payloads_bounded_after_many_pages() {
+    fn virtual_window_accumulates_loaded_pages_without_refetching() {
         const TOTAL: u32 = LIBRARY_BROWSE_PAGE_SIZE * 80;
+        const WINDOWS: u32 = 50;
         let mut model = BrowseModel::default();
         let bootstrap = model
             .configure(BrowseSource::Library {
@@ -827,23 +789,38 @@ mod tests {
         settle_all_requests(&mut model, bootstrap, TOTAL);
 
         let mut max_visible_slots = visible_indexes(&model).len();
-        let mut max_retained_pages = model.retained_page_count();
-        let mut max_retained_items = model.retained_item_count();
-        for _ in 0..50 {
-            let effects = model.load_next().expect("next window should load");
+        for window in 1..WINDOWS {
+            let start = window * LIBRARY_BROWSE_PAGE_SIZE;
+            let effects = model
+                .set_display_range(start..start + LIBRARY_BROWSE_PAGE_SIZE, TOTAL)
+                .expect("next window should load");
             settle_all_requests(&mut model, effects, TOTAL);
             max_visible_slots = max_visible_slots.max(visible_indexes(&model).len());
-            max_retained_pages = max_retained_pages.max(model.retained_page_count());
-            max_retained_items = max_retained_items.max(model.retained_item_count());
         }
 
         assert_eq!(max_visible_slots, LIBRARY_BROWSE_PAGE_SIZE as usize);
-        assert_eq!(max_retained_pages, 3);
-        assert_eq!(max_retained_items, (LIBRARY_BROWSE_PAGE_SIZE * 3) as usize);
+        // Bootstrap loads page 0 and its lookahead; every window then adds its
+        // own lookahead page, so pages 0..=WINDOWS stay resident.
+        assert_eq!(model.retained_page_count(), (WINDOWS + 1) as usize);
+        assert_eq!(
+            model.retained_item_count(),
+            (LIBRARY_BROWSE_PAGE_SIZE * (WINDOWS + 1)) as usize
+        );
+
+        for window in (0..WINDOWS).rev() {
+            let start = window * LIBRARY_BROWSE_PAGE_SIZE;
+            let effects = model
+                .set_display_range(start..start + LIBRARY_BROWSE_PAGE_SIZE, TOTAL)
+                .expect("previous window should be retained");
+            assert!(
+                effects.is_empty(),
+                "retained window {window} should not emit effects"
+            );
+        }
     }
 
     #[test]
-    fn load_previous_restores_a_released_earlier_window() {
+    fn moving_the_window_back_reuses_retained_pages_without_refetching() {
         const TOTAL: u32 = LIBRARY_BROWSE_PAGE_SIZE * 10;
         let mut model = BrowseModel::default();
         let bootstrap = model
@@ -853,30 +830,31 @@ mod tests {
             })
             .expect("library should configure");
         settle_all_requests(&mut model, bootstrap, TOTAL);
-        assert!(!model.can_load_previous());
-        let first_advance = model.load_next().expect("first next window should load");
-        assert!(matches!(
-            first_advance.first(),
-            Some(BrowseEffect::ResetViewport)
-        ));
+        let first_advance = model
+            .set_display_range(
+                LIBRARY_BROWSE_PAGE_SIZE..LIBRARY_BROWSE_PAGE_SIZE * 2,
+                TOTAL,
+            )
+            .expect("first next window should load");
         settle_all_requests(&mut model, first_advance, TOTAL);
-        let second_advance = model.load_next().expect("second next window should load");
-        assert!(matches!(
-            second_advance.first(),
-            Some(BrowseEffect::ResetViewport)
-        ));
+        let second_advance = model
+            .set_display_range(
+                LIBRARY_BROWSE_PAGE_SIZE * 2..LIBRARY_BROWSE_PAGE_SIZE * 3,
+                TOTAL,
+            )
+            .expect("second next window should load");
         settle_all_requests(&mut model, second_advance, TOTAL);
 
-        let previous = model.load_previous().expect("previous window should load");
-        assert!(matches!(
-            previous.first(),
-            Some(BrowseEffect::ResetViewport)
-        ));
-        assert_eq!(
-            request(previous.clone()).start_index,
-            LIBRARY_BROWSE_PAGE_SIZE
+        let previous = model
+            .set_display_range(
+                LIBRARY_BROWSE_PAGE_SIZE..LIBRARY_BROWSE_PAGE_SIZE * 2,
+                TOTAL,
+            )
+            .expect("previous window should already be retained");
+        assert!(
+            previous.is_empty(),
+            "retained window should not emit requests or viewport resets"
         );
-        settle_all_requests(&mut model, previous, TOTAL);
 
         assert_eq!(
             model.display_range(),
@@ -886,11 +864,54 @@ mod tests {
             visible_indexes(&model),
             (LIBRARY_BROWSE_PAGE_SIZE..LIBRARY_BROWSE_PAGE_SIZE * 2).collect::<Vec<_>>()
         );
-        assert!(model.can_load_previous());
+        assert!(matches!(
+          model.view(),
+          LibraryBrowseView::Ready {
+            ref visible_items,
+            ..
+          } if visible_items.iter().all(|slot| slot.item.is_some())
+        ));
     }
 
     #[test]
-    fn final_virtual_window_clamps_its_range_and_disables_next() {
+    fn peek_display_range_matches_display_range_across_window_positions() {
+        const TOTAL: u32 = LIBRARY_BROWSE_PAGE_SIZE * 10 + 5;
+        let mut model = BrowseModel::default();
+        assert_eq!(model.peek_display_range(), None);
+        let bootstrap = model
+            .configure(BrowseSource::Library {
+                session: session(),
+                shortcut: shortcut(),
+            })
+            .expect("library should configure");
+        assert_eq!(model.peek_display_range(), model.display_range());
+        settle_all_requests(&mut model, bootstrap, TOTAL);
+        assert_eq!(model.peek_display_range(), model.display_range());
+
+        for window in 1..10 {
+            let start = window * LIBRARY_BROWSE_PAGE_SIZE;
+            let effects = model
+                .set_display_range(start..start + LIBRARY_BROWSE_PAGE_SIZE, TOTAL)
+                .expect("window advance should succeed");
+            assert_eq!(model.peek_display_range(), model.display_range());
+            settle_all_requests(&mut model, effects, TOTAL);
+            assert_eq!(
+                model.peek_display_range(),
+                Some(start..(start + LIBRARY_BROWSE_PAGE_SIZE).min(TOTAL))
+            );
+            assert_eq!(model.peek_display_range(), model.display_range());
+        }
+
+        let tail = model
+            .set_display_range(7..TOTAL + LIBRARY_BROWSE_PAGE_SIZE, TOTAL)
+            .expect("unaligned tail window should clamp");
+        settle_all_requests(&mut model, tail, TOTAL);
+        assert_eq!(model.peek_display_range(), Some(7..TOTAL));
+        assert_eq!(model.peek_display_range(), model.display_range());
+    }
+
+    #[test]
+    fn final_display_range_clamps_to_total_and_is_stable() {
         const TOTAL: u32 = 101;
         let mut model = BrowseModel::default();
         let bootstrap = model
@@ -900,21 +921,21 @@ mod tests {
             })
             .expect("library should configure");
         settle_all_requests(&mut model, bootstrap, TOTAL);
-        while model.can_load_more() {
-            let effects = model.load_next().expect("next window should load");
-            settle_all_requests(&mut model, effects, TOTAL);
-        }
+        let effects = model
+            .set_display_range(96..101, TOTAL)
+            .expect("final window should load");
+        settle_all_requests(&mut model, effects, TOTAL);
 
         assert_eq!(model.display_range(), Some(96..101));
         assert_eq!(visible_indexes(&model), (96..101).collect::<Vec<_>>());
         assert!(model
-            .load_next()
-            .expect("last window should remain stable")
+            .set_display_range(96..101, TOTAL)
+            .expect("unchanged window should remain stable")
             .is_empty());
     }
 
     #[test]
-    fn settlement_for_a_window_that_moved_on_does_not_retain_its_payload() {
+    fn settlement_for_a_window_that_moved_on_is_retained_without_replacing_the_view() {
         const TOTAL: u32 = LIBRARY_BROWSE_PAGE_SIZE * 10;
         let mut model = BrowseModel::default();
         let bootstrap = request(
@@ -931,9 +952,19 @@ mod tests {
             TOTAL,
             LIBRARY_BROWSE_PAGE_SIZE,
         ));
-        let second_page = request(model.load_next().expect("first next window should load"));
+        let second_page = request(
+            model
+                .set_display_range(
+                    LIBRARY_BROWSE_PAGE_SIZE..LIBRARY_BROWSE_PAGE_SIZE * 2,
+                    TOTAL,
+                )
+                .expect("first next window should load"),
+        );
         model
-            .load_next()
+            .set_display_range(
+                LIBRARY_BROWSE_PAGE_SIZE * 2..LIBRARY_BROWSE_PAGE_SIZE * 3,
+                TOTAL,
+            )
             .expect("window should move past the first prefetch");
 
         let replacement = settle(&mut model, &first_prefetch, TOTAL, LIBRARY_BROWSE_PAGE_SIZE);
@@ -942,9 +973,11 @@ mod tests {
             model.display_range(),
             Some(LIBRARY_BROWSE_PAGE_SIZE * 2..LIBRARY_BROWSE_PAGE_SIZE * 3)
         );
+        // Pages 0 and the late-settling prefetch stay resident under retention.
+        assert_eq!(model.retained_page_count(), 2);
         assert_eq!(
             model.retained_item_count(),
-            LIBRARY_BROWSE_PAGE_SIZE as usize
+            (LIBRARY_BROWSE_PAGE_SIZE * 2) as usize
         );
         assert!(matches!(
           model.view(),
@@ -958,6 +991,71 @@ mod tests {
             LIBRARY_BROWSE_PAGE_SIZE * 3
         );
         assert_eq!(second_page.start_index, LIBRARY_BROWSE_PAGE_SIZE * 2);
+
+        let back = model
+            .set_display_range(0..LIBRARY_BROWSE_PAGE_SIZE, TOTAL)
+            .expect("retained prefetch should still serve the earlier window");
+        assert!(back.is_empty());
+        assert!(matches!(
+          model.view(),
+          LibraryBrowseView::Ready {
+            ref visible_items,
+            ..
+          } if visible_items.iter().all(|slot| slot.item.is_some())
+        ));
+    }
+
+    #[test]
+    fn failed_page_leaving_the_window_is_released_and_refetched_on_return() {
+        const TOTAL: u32 = LIBRARY_BROWSE_PAGE_SIZE * 10;
+        let mut model = BrowseModel::default();
+        let bootstrap = request(
+            model
+                .configure(BrowseSource::Library {
+                    session: session(),
+                    shortcut: shortcut(),
+                })
+                .expect("library should configure"),
+        );
+        let lookahead = request(settle(
+            &mut model,
+            &bootstrap,
+            TOTAL,
+            LIBRARY_BROWSE_PAGE_SIZE,
+        ));
+        model
+            .settle(BrowsePageSettlement {
+                source_id: lookahead.source_id.clone(),
+                token: lookahead.token,
+                result: Err("flaky page".to_owned()),
+            })
+            .expect("failed page should settle");
+        let advance = model
+            .set_display_range(
+                LIBRARY_BROWSE_PAGE_SIZE * 2..LIBRARY_BROWSE_PAGE_SIZE * 3,
+                TOTAL,
+            )
+            .expect("window should move past the failed page");
+        settle_all_requests(&mut model, advance, TOTAL);
+
+        let back = model
+            .set_display_range(0..LIBRARY_BROWSE_PAGE_SIZE, TOTAL)
+            .expect("window should return to the released page");
+        let refetch = request(back);
+        assert_eq!(refetch.start_index, LIBRARY_BROWSE_PAGE_SIZE);
+
+        settle_all_requests(&mut model, vec![BrowseEffect::RequestPage(refetch)], TOTAL);
+        let settled = model
+            .set_display_range(0..LIBRARY_BROWSE_PAGE_SIZE, TOTAL)
+            .expect("refetched page should now be retained");
+        assert!(settled.is_empty());
+        assert!(matches!(
+          model.view(),
+          LibraryBrowseView::Ready {
+            ref visible_items,
+            ..
+          } if visible_items.iter().all(|slot| slot.item.is_some())
+        ));
     }
 
     #[test]
@@ -974,7 +1072,12 @@ mod tests {
         );
         let initial_window = settle(&mut model, &bootstrap, TOTAL, LIBRARY_BROWSE_PAGE_SIZE);
         settle_all_requests(&mut model, initial_window, TOTAL);
-        let next_window = model.load_next().expect("next search window should load");
+        let next_window = model
+            .set_display_range(
+                LIBRARY_BROWSE_PAGE_SIZE..LIBRARY_BROWSE_PAGE_SIZE * 2,
+                TOTAL,
+            )
+            .expect("next search window should load");
 
         let search_requests = requests(&next_window);
         assert!(
@@ -1003,8 +1106,11 @@ mod tests {
             .configure(source.clone())
             .expect("search should configure");
         settle_all_requests(&mut model, bootstrap, TOTAL);
-        for _ in 0..2 {
-            let effects = model.load_next().expect("later window should load");
+        for window in 1..=2_u32 {
+            let start = window * LIBRARY_BROWSE_PAGE_SIZE;
+            let effects = model
+                .set_display_range(start..start + LIBRARY_BROWSE_PAGE_SIZE, TOTAL)
+                .expect("later window should load");
             settle_all_requests(&mut model, effects, TOTAL);
         }
         let later_range = LIBRARY_BROWSE_PAGE_SIZE * 2..LIBRARY_BROWSE_PAGE_SIZE * 3;
@@ -1020,17 +1126,22 @@ mod tests {
             visible_indexes(&model),
             later_range.clone().collect::<Vec<_>>()
         );
-        assert!(model.can_load_previous());
-        assert!(model.can_load_more());
 
-        let next = model.load_next().expect("next window should load");
+        let next = model
+            .set_display_range(
+                LIBRARY_BROWSE_PAGE_SIZE * 3..LIBRARY_BROWSE_PAGE_SIZE * 4,
+                TOTAL,
+            )
+            .expect("next window should load");
         settle_all_requests(&mut model, next, TOTAL);
         assert_eq!(
             model.display_range(),
             Some(LIBRARY_BROWSE_PAGE_SIZE * 3..LIBRARY_BROWSE_PAGE_SIZE * 4)
         );
 
-        let previous = model.load_previous().expect("previous window should load");
+        let previous = model
+            .set_display_range(later_range.clone(), TOTAL)
+            .expect("previous window should load");
         settle_all_requests(&mut model, previous, TOTAL);
         assert_eq!(model.display_range(), Some(later_range.clone()));
         assert_eq!(visible_indexes(&model), later_range.collect::<Vec<_>>());
@@ -1138,7 +1249,6 @@ mod tests {
           LibraryBrowseView::Ready {
             ref visible_items,
             total_record_count: 30,
-            can_load_next: true,
             ..
           } if visible_items.len() == 24
             && visible_items.iter().all(|slot| slot.item.is_some())
@@ -1160,7 +1270,10 @@ mod tests {
         settle(&mut model, &bootstrap, TOTAL, LIBRARY_BROWSE_PAGE_SIZE);
 
         let window = model
-            .set_virtual_window(LIBRARY_BROWSE_PAGE_SIZE * 2, TOTAL)
+            .set_display_range(
+                LIBRARY_BROWSE_PAGE_SIZE * 2..LIBRARY_BROWSE_PAGE_SIZE * 3,
+                TOTAL,
+            )
             .expect("virtual window should dispatch");
         let page_request = request(window);
         assert_eq!(page_request.start_index, LIBRARY_BROWSE_PAGE_SIZE * 2);
@@ -1296,7 +1409,7 @@ mod tests {
     }
 
     #[test]
-    fn multi_page_library_pagination_walks_all_windows_forward_and_backward() {
+    fn multi_page_library_display_ranges_walk_all_windows_forward_and_backward() {
         let total = 264_u32;
         let mut model = BrowseModel::default();
         let bootstrap = request(
@@ -1319,46 +1432,34 @@ mod tests {
 
         // Window 0 of 11 (0..24)
         assert_eq!(model.display_range(), Some(0..24));
-        assert!(!model.can_load_previous());
-        assert!(model.can_load_next());
 
-        // Next walks all 11 windows (windows 1 through 10)
+        // Scrolling forward walks all 11 windows (windows 1 through 10)
         for expected_window in 1..11 {
             let start = expected_window * 24;
             let end = (start + 24).min(total);
-            let next_effects = model.load_next().expect("load_next should succeed");
+            let next_effects = model
+                .set_display_range(start..end, total)
+                .expect("set_display_range should succeed");
             settle_all_requests(&mut model, next_effects, total);
             assert_eq!(model.display_range(), Some(start..end));
-            assert!(model.can_load_previous());
-            if expected_window == 10 {
-                // Last window disables Next
-                assert!(!model.can_load_next());
-            } else {
-                assert!(model.can_load_next());
-            }
         }
 
-        // Previous walks back (windows 9 down to 0)
+        // Scrolling back walks windows 9 down to 0
         for expected_window in (0..10).rev() {
             let start = expected_window * 24;
             let end = start + 24;
-            let prev_effects = model.load_previous().expect("load_previous should succeed");
+            let prev_effects = model
+                .set_display_range(start..end, total)
+                .expect("set_display_range should succeed");
             settle_all_requests(&mut model, prev_effects, total);
             assert_eq!(model.display_range(), Some(start..end));
-            assert!(model.can_load_next());
-            if expected_window == 0 {
-                // First window disables Previous
-                assert!(!model.can_load_previous());
-            } else {
-                assert!(model.can_load_previous());
-            }
         }
 
         // Advance to window 3 (72..96)
-        for _ in 0..3 {
-            let effects = model.load_next().expect("load_next should succeed");
-            settle_all_requests(&mut model, effects, total);
-        }
+        let effects = model
+            .set_display_range(72..96, total)
+            .expect("set_display_range should succeed");
+        settle_all_requests(&mut model, effects, total);
         assert_eq!(model.display_range(), Some(72..96));
 
         // Filter / preference change resets to first window
@@ -1386,7 +1487,83 @@ mod tests {
         settle_all_requests(&mut model, reconfig_effects, total);
 
         assert_eq!(model.display_range(), Some(0..24));
-        assert!(!model.can_load_previous());
-        assert!(model.can_load_next());
+    }
+
+    #[test]
+    fn set_display_range_clamps_to_total_and_is_idempotent() {
+        let total = 30;
+        let mut model = BrowseModel::default();
+        let bootstrap = model
+            .configure(BrowseSource::Library {
+                session: session(),
+                shortcut: shortcut(),
+            })
+            .expect("library should configure");
+        settle_all_requests(&mut model, bootstrap, total);
+
+        let effects = model
+            .set_display_range(20..u32::MAX, total)
+            .expect("display range should dispatch");
+        assert!(effects
+            .iter()
+            .all(|effect| !matches!(effect, BrowseEffect::ResetViewport)));
+        assert_eq!(model.display_range(), Some(20..30));
+        assert_eq!(
+            match model.view() {
+                LibraryBrowseView::Ready { visible_start, .. } => Some(visible_start),
+                _ => None,
+            },
+            Some(20)
+        );
+
+        assert!(model
+            .set_display_range(20..u32::MAX, total)
+            .expect("unchanged display range should be accepted")
+            .is_empty());
+
+        model
+            .set_display_range(total..u32::MAX, total)
+            .expect("empty display range should be accepted");
+        assert_eq!(
+            match model.view() {
+                LibraryBrowseView::Ready { visible_start, .. } => Some(visible_start),
+                _ => None,
+            },
+            Some(0)
+        );
+    }
+
+    #[test]
+    fn set_display_range_loads_visible_page_and_lookahead_without_reset() {
+        let total = 600;
+        let mut model = BrowseModel::default();
+        let bootstrap = model
+            .configure(BrowseSource::Library {
+                session: session(),
+                shortcut: shortcut(),
+            })
+            .expect("library should configure");
+        settle_all_requests(&mut model, bootstrap, total);
+
+        let effects = model
+            .set_display_range(480..504, total)
+            .expect("far display range should dispatch");
+        assert!(effects
+            .iter()
+            .all(|effect| !matches!(effect, BrowseEffect::ResetViewport)));
+        assert_eq!(
+            requests(&effects)
+                .into_iter()
+                .map(|request| request.start_index)
+                .collect::<Vec<_>>(),
+            vec![480, 504]
+        );
+        assert_eq!(
+            match model.view() {
+                LibraryBrowseView::Ready { visible_start, .. } => Some(visible_start),
+                _ => None,
+            },
+            Some(480)
+        );
     }
 }

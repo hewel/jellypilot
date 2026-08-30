@@ -107,8 +107,6 @@ pub enum BrowseMessage {
   FavoritesToggled,
   Scrolled(scrollable::Viewport),
   Retry,
-  LoadPrevious,
-  LoadNext,
   PageSettled(BrowsePageSettlement),
   ArtworkLoaded {
     session: SessionToken,

@@ -1,7 +1,7 @@
 use crate::app::message::{BrowseMessage, Message};
 use crate::app::state::{ArtworkCell, ArtworkCellState, Destination, State};
-use iced::widget::{button, column, container, row, scrollable, text, Column, Row};
-use iced::{Alignment, ContentFit, Element, Fill};
+use iced::widget::{button, column, container, row, scrollable, stack, text, Column, Row};
+use iced::{Alignment, Color, ContentFit, Element, Fill};
 use jellypilot_core::browse_model::{LibraryBrowseView, LibraryItemSlot};
 use jellypilot_core::cards::item_caption;
 use jellypilot_core::{LibraryBrowseFailure, LIBRARY_BROWSE_PAGE_SIZE};
@@ -50,10 +50,6 @@ pub(crate) fn grid_available_width(window_width: f32, class: SizeClass) -> f32 {
 }
 
 pub(crate) const CARD_COPY_HEIGHT: f32 = 46.0;
-/// Height of the pagination row rendered above the grid when it is shown:
-/// vertical padding around the button row plus the buttons themselves
-/// (text line height plus vertical button padding).
-pub(crate) const PAGINATION_ROW_HEIGHT: f32 = TOKENS.spacing.s3 * 2.0 + 13.0 * 1.3 + 6.0 * 2.0;
 pub fn view(state: &State) -> Element<'_, Message> {
   let class = SizeClass::from_width(state.window_size.width);
   let title = match &state.destination {
@@ -243,6 +239,7 @@ fn browse_body<'a>(state: &'a State, class: SizeClass) -> Element<'a, Message> {
     } => failure_surface(message, *retryable, *retry_busy, padding),
     LibraryBrowseView::Ready {
       visible_items,
+      visible_start,
       total_record_count,
       load_more_failure,
       retry_busy,
@@ -250,6 +247,7 @@ fn browse_body<'a>(state: &'a State, class: SizeClass) -> Element<'a, Message> {
     } => ready_surface(
       state,
       visible_items,
+      *visible_start,
       *total_record_count,
       load_more_failure.as_ref(),
       *retry_busy,
@@ -261,6 +259,7 @@ fn browse_body<'a>(state: &'a State, class: SizeClass) -> Element<'a, Message> {
 fn ready_surface<'a>(
   state: &'a State,
   items: &'a [LibraryItemSlot],
+  visible_start: u32,
   total_record_count: u32,
   load_more_failure: Option<&'a LibraryBrowseFailure>,
   retry_busy: bool,
@@ -271,154 +270,74 @@ fn ready_surface<'a>(
   let padding = page_padding(class);
   let available_width = grid_available_width(state.window_size.width, class);
   let metrics = ArtworkGridMetrics::for_cards(available_width, CARD_COPY_HEIGHT);
-  let viewport = ArtworkGridViewport {
-    offset_y: state.browse_viewport.offset_y,
-    height: state.browse_viewport.height,
-  };
-  let mut grid = Some(artwork_grid(items, metrics, viewport, |slot| {
-    browse_slot(
-      state,
-      slot,
-      metrics.cell_width,
-      skeleton_phase,
-      reduced_motion,
+  // The count row above the grid is short enough that the grid's overscan
+  // absorbs it, so no scroll margin is subtracted here.
+  let viewport = ArtworkGridViewport::from_scroll_geometry(
+    state.browse_viewport.offset_y,
+    state.browse_viewport.height,
+    0.0,
+  );
+  let grid = artwork_grid(
+    total_record_count as usize,
+    metrics,
+    viewport,
+    |index| match item_at(visible_start, items, index) {
+      Some(item) => video_card(
+        state,
+        item,
+        metrics.cell_width,
+        skeleton_phase,
+        reduced_motion,
+      ),
+      None => skeleton_cell(metrics.cell_width, skeleton_phase, reduced_motion),
+    },
+  );
+  let content = Column::new()
+    .width(Fill)
+    .push(
+      row![text(format!("{total_record_count} items"))
+        .size(13)
+        .color(TOKENS.colors.onSurfaceVariant),]
+      .padding([TOKENS.spacing.s3, padding])
+      .align_y(Alignment::Center),
     )
-  }));
-  let mut content = Column::new().width(Fill);
+    .push(container(grid).padding([0.0, padding]).width(Fill));
 
-  for section in body_sections(
-    state.browse.display_range().is_some() && total_record_count > LIBRARY_BROWSE_PAGE_SIZE,
-    load_more_failure.is_some(),
-  ) {
-    match section {
-      BodySection::Pagination => {
-        if let Some(range) = state.browse.display_range() {
-          let prev_enabled = state.browse.can_load_previous();
-          let previous = button(
-            row![
-              icon_for_variant_disabled(
-                Icon::ChevronLeft,
-                IconSize::Sm,
-                ButtonVariant::Outlined,
-                !prev_enabled,
-              ),
-              text("Previous"),
-            ]
-            .spacing(TOKENS.spacing.s1_5)
-            .align_y(Alignment::Center),
-          )
-          .padding([6, 12])
-          .style(|theme, status| {
-            jellypilot_ui::theme::button_variant(theme, status, ButtonVariant::Outlined)
-          });
-          let previous = if let Some(message) = previous_action(prev_enabled) {
-            previous.on_press(message)
-          } else {
-            previous
-          };
-          let next_enabled = state.browse.can_load_next();
-          let next = button(
-            row![
-              text("Next"),
-              icon_for_variant_disabled(
-                Icon::ChevronRight,
-                IconSize::Sm,
-                ButtonVariant::Outlined,
-                !next_enabled,
-              ),
-            ]
-            .spacing(TOKENS.spacing.s1_5)
-            .align_y(Alignment::Center),
-          )
-          .padding([6, 12])
-          .style(|theme, status| {
-            jellypilot_ui::theme::button_variant(theme, status, ButtonVariant::Outlined)
-          });
-          let next = if let Some(message) = next_action(next_enabled) {
-            next.on_press(message)
-          } else {
-            next
-          };
-          content = content.push(
-            row![
-              previous,
-              next,
-              text(format!(
-                "Items {}–{} of {total_record_count}",
-                range.start.saturating_add(1),
-                range.end,
-              ))
-              .size(13)
-              .color(TOKENS.colors.onSurfaceVariant),
-            ]
-            .spacing(TOKENS.spacing.s3)
-            .padding([TOKENS.spacing.s3, padding])
-            .align_y(Alignment::Center),
-          );
-        }
-      }
-      BodySection::Grid => {
-        if let Some(grid) = grid.take() {
-          content = content.push(container(grid).padding([0.0, padding]).width(Fill));
-        }
-      }
-      BodySection::InlineFailure => {
-        if let Some(failure) = load_more_failure {
-          content = content.push(inline_failure(failure, retry_busy, padding));
-        }
-      }
-    }
-  }
-
-  scrollable(content)
+  let body = scrollable(content)
     .id(state.browse_scroll_id.clone())
     .on_scroll(|viewport| Message::Browse(BrowseMessage::Scrolled(viewport)))
     .width(Fill)
     .height(Fill)
-    .style(jellypilot_ui::theme::scrollable)
-    .into()
-}
+    .style(jellypilot_ui::theme::scrollable);
 
-/// Composition order of the ready surface's sections, factored so tests can
-/// assert the rendered order the user sees (pagination must stay above the grid).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum BodySection {
-  Pagination,
-  Grid,
-  InlineFailure,
-}
-
-fn body_sections(has_display_range: bool, has_failure: bool) -> Vec<BodySection> {
-  let mut sections = Vec::with_capacity(3);
-  if has_display_range {
-    sections.push(BodySection::Pagination);
+  // The failure banner stacks above the scrollable (the shell-toast pattern)
+  // so it stays pinned to the viewport's bottom edge at any scroll position.
+  let mut surface = stack![body].width(Fill).height(Fill);
+  if let Some(banner) = failure_overlay(load_more_failure, retry_busy) {
+    surface = surface.push(banner);
   }
-  sections.push(BodySection::Grid);
-  if has_failure {
-    sections.push(BodySection::InlineFailure);
-  }
-  sections
+  surface.into()
 }
 
-fn previous_action(enabled: bool) -> Option<Message> {
-  enabled.then_some(Message::Browse(BrowseMessage::LoadPrevious))
+/// Builds the viewport-pinned failure banner when the ready surface carries
+/// an incremental load-more failure, or `None` when the tail loaded cleanly.
+fn failure_overlay(
+  load_more_failure: Option<&LibraryBrowseFailure>,
+  retry_busy: bool,
+) -> Option<Element<'_, Message>> {
+  load_more_failure.map(|failure| failure_banner(failure, retry_busy))
 }
 
-fn next_action(enabled: bool) -> Option<Message> {
-  enabled.then_some(Message::Browse(BrowseMessage::LoadNext))
-}
-
-fn browse_slot<'a>(
-  state: &'a State,
-  slot: &'a LibraryItemSlot,
-  cell_width: f32,
-  skeleton_phase: f32,
-  reduced_motion: bool,
-) -> Element<'a, Message> {
-  let Some(item) = &slot.item else {
-    return skeleton_cell(cell_width, skeleton_phase, reduced_motion);
-  };
-  video_card(state, item, cell_width, skeleton_phase, reduced_motion)
+/// Maps a global item index into the sparse window of slots that starts at
+/// `visible_start`. Indexes before the window, beyond it, or landing on an
+/// unloaded slot yield `None` and render as skeleton cells.
+fn item_at(
+  visible_start: u32,
+  slots: &[LibraryItemSlot],
+  index: usize,
+) -> Option<&VideoLibraryItem> {
+  let slot_index = index.checked_sub(visible_start as usize)?;
+  slots.get(slot_index)?.item.as_ref()
 }
 
 fn browse_loading_skeleton<'a>(state: &'a State, class: SizeClass) -> Element<'a, Message> {
@@ -675,11 +594,12 @@ fn failure_surface(
   .into()
 }
 
-fn inline_failure(
-  failure: &LibraryBrowseFailure,
-  retry_busy: bool,
-  padding: f32,
-) -> Element<'_, Message> {
+/// Incremental load-more failure pinned to the bottom edge of the grid
+/// viewport. The outer fill container anchors the banner bottom-center with
+/// an `s4` offset; the banner itself borrows the shell toast's elevated,
+/// translucent error-container styling.
+fn failure_banner(failure: &LibraryBrowseFailure, retry_busy: bool) -> Element<'_, Message> {
+  let colors = TOKENS.colors;
   let retry_enabled = failure.retryable && !retry_busy;
   let retry = button(
     row![
@@ -703,14 +623,43 @@ fn inline_failure(
   } else {
     retry
   };
-  row![
-    text(&failure.message).size(13).color(TOKENS.colors.error),
-    retry,
-  ]
-  .spacing(TOKENS.spacing.s3)
-  .padding([TOKENS.spacing.s3, padding])
-  .align_y(Alignment::Center)
-  .into()
+
+  let banner = container(
+    row![text(&failure.message).size(13), retry,]
+      .spacing(TOKENS.spacing.s3)
+      .align_y(Alignment::Center),
+  )
+  .padding(TOKENS.spacing.s4)
+  .style(move |_theme| container::Style {
+    background: Some(iced::Background::Color(Color {
+      a: 0.90,
+      ..colors.errorContainer
+    })),
+    text_color: Some(colors.onErrorContainer),
+    border: iced::Border {
+      color: Color {
+        a: 0.40,
+        ..colors.error
+      },
+      width: 1.0,
+      radius: TOKENS.radii.xl.into(),
+    },
+    shadow: TOKENS.shadows.x2l.iced(),
+    ..container::Style::default()
+  });
+
+  container(banner)
+    .width(Fill)
+    .height(Fill)
+    .padding(iced::Padding {
+      top: 0.0,
+      right: TOKENS.spacing.s4,
+      bottom: TOKENS.spacing.s4,
+      left: TOKENS.spacing.s4,
+    })
+    .align_x(Alignment::Center)
+    .align_y(Alignment::End)
+    .into()
 }
 
 fn retry_action(retryable: bool, retry_busy: bool) -> Option<Message> {
@@ -738,47 +687,43 @@ mod tests {
   use super::*;
 
   #[test]
-  fn pagination_is_rendered_before_the_grid() {
-    let sections = body_sections(true, true);
-    let navigation = sections
-      .iter()
-      .position(|section| *section == BodySection::Pagination);
-    let grid = sections
-      .iter()
-      .position(|section| *section == BodySection::Grid);
+  fn failure_banner_overlays_only_when_a_load_more_failure_is_present() {
+    let failure = LibraryBrowseFailure {
+      message: "Could not load more items.".to_owned(),
+      retryable: true,
+    };
     assert!(
-      navigation.is_some_and(|nav| grid.is_some_and(|grid| nav < grid)),
-      "pagination must precede the grid: {sections:?}"
+      failure_overlay(Some(&failure), false).is_some(),
+      "a ready surface with a load-more failure must pin the banner overlay"
     );
-    assert_eq!(body_sections(false, false), vec![BodySection::Grid]);
+    assert!(
+      failure_overlay(Some(&failure), true).is_some(),
+      "the banner stays pinned while a retry is in flight"
+    );
+    assert!(
+      failure_overlay(None, false).is_none(),
+      "a clean tail renders no overlay"
+    );
   }
 
   #[test]
-  fn single_page_results_render_no_pagination_chrome() {
-    // Callers pass `has_display_range = display_range.is_some() && total >
-    // PAGE_SIZE`, so a one-window library must not render the section.
+  fn item_at_maps_global_indexes_into_the_sparse_window() {
+    let slots = vec![
+      LibraryItemSlot {
+        item: Some(video_item("item-1")),
+      },
+      LibraryItemSlot { item: None },
+    ];
+
+    assert!(item_at(24, &slots, 23).is_none(), "before the window");
     assert_eq!(
-      body_sections(false, true),
-      vec![BodySection::Grid, BodySection::InlineFailure]
+      item_at(24, &slots, 24).map(|item| item.id.as_str()),
+      Some("item-1"),
+      "in-range hit"
     );
-  }
-
-  #[test]
-  fn previous_action_is_available_for_a_later_virtual_window() {
-    assert!(matches!(
-      previous_action(true),
-      Some(Message::Browse(BrowseMessage::LoadPrevious))
-    ));
-    assert!(previous_action(false).is_none());
-  }
-
-  #[test]
-  fn next_action_is_available_when_not_on_last_window() {
-    assert!(matches!(
-      next_action(true),
-      Some(Message::Browse(BrowseMessage::LoadNext))
-    ));
-    assert!(next_action(false).is_none());
+    assert!(item_at(24, &slots, 25).is_none(), "unloaded slot");
+    assert!(item_at(24, &slots, 26).is_none(), "beyond the window");
+    assert!(item_at(0, &[], 0).is_none(), "empty window");
   }
 
   #[test]
@@ -884,23 +829,20 @@ mod tests {
         LibraryItemSlot { item: None },
         LibraryItemSlot { item: None },
       ],
+      visible_start: 0,
       mode: jellypilot_core::LibraryBrowseMode::Normal,
       total_record_count: 50,
       is_fetching_more: false,
-      can_load_next: true,
       load_more_failure: None,
       retry_busy: false,
     };
     let _element = view(&state);
   }
 
-  #[test]
-  fn browse_view_renders_cards_with_loading_and_failed_artwork_cells() {
-    let mut state = State::boot(false);
-    state.skeleton_phase = 0.5;
-    let item_1 = VideoLibraryItem {
-      id: "item-1".to_owned(),
-      name: "Movie 1".to_owned(),
+  fn video_item(id: &str) -> VideoLibraryItem {
+    VideoLibraryItem {
+      id: id.to_owned(),
+      name: format!("Movie {id}"),
       item_type: "Movie".to_owned(),
       production_year: Some(2024),
       runtime_seconds: None,
@@ -915,25 +857,15 @@ mod tests {
       resume_position_seconds: None,
       played_percentage: None,
       overview: None,
-    };
-    let item_2 = VideoLibraryItem {
-      id: "item-2".to_owned(),
-      name: "Movie 2".to_owned(),
-      item_type: "Movie".to_owned(),
-      production_year: Some(2023),
-      runtime_seconds: None,
-      played: false,
-      favorite: false,
-      artwork_image_id: None,
-      series_poster_image_id: None,
-      season_number: None,
-      episode_number: None,
-      series_id: None,
-      series_name: None,
-      resume_position_seconds: None,
-      played_percentage: None,
-      overview: None,
-    };
+    }
+  }
+
+  #[test]
+  fn browse_view_renders_cards_with_loading_and_failed_artwork_cells() {
+    let mut state = State::boot(false);
+    state.skeleton_phase = 0.5;
+    let item_1 = video_item("item-1");
+    let item_2 = video_item("item-2");
     let slot_1 = state
       .artwork_binder
       .bind(jellypilot_core::artwork_binder::ArtworkSurface::Browse);
@@ -961,10 +893,10 @@ mod tests {
         LibraryItemSlot { item: Some(item_1) },
         LibraryItemSlot { item: Some(item_2) },
       ],
+      visible_start: 0,
       mode: jellypilot_core::LibraryBrowseMode::Normal,
       total_record_count: 2,
       is_fetching_more: false,
-      can_load_next: false,
       load_more_failure: None,
       retry_busy: false,
     };

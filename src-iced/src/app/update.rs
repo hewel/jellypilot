@@ -1,5 +1,6 @@
 use std::collections::{hash_map::DefaultHasher, HashSet};
 use std::hash::{Hash, Hasher};
+use std::ops::Range;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -32,7 +33,6 @@ use jellypilot_core::diagnostics::{DiagnosticCategory, DiagnosticLevel};
 use jellypilot_core::request_gate::{
   DetailAuxKind, DetailToken, HomeToken, RemotePlayToken, RequestGate,
 };
-use jellypilot_core::LIBRARY_BROWSE_PAGE_SIZE;
 use jellypilot_media_server::artwork::{
   ArtworkLoadObservation, ArtworkLoadSummary, ArtworkSizeClass, LoadLane,
 };
@@ -74,7 +74,7 @@ use super::state::{
   DetailArtwork, DetailState, HomeArtwork, HomeSection, HomeState, LoginMethod, NoticeLevel,
   QuickConnectState, RemoteEventChannel, RemoteSessionHandle, State, UserDataActionKind,
 };
-use super::view::browse::{grid_available_width, CARD_COPY_HEIGHT, PAGINATION_ROW_HEIGHT};
+use super::view::browse::{grid_available_width, CARD_COPY_HEIGHT};
 use super::view::home::{content_width, section_frame_size};
 
 const SETTINGS_SAVE_ERROR: &str = "Could not save settings.";
@@ -265,7 +265,7 @@ fn update_window(state: &mut State, message: WindowMessage) -> Task<Message> {
     }),
     WindowMessage::Resized(size) => {
       state.window_size = size;
-      Task::none()
+      sync_browse_scroll_window(state)
     }
     WindowMessage::FrameTick(now) => {
       // Smoke runs only need proof that the first frame rendered.
@@ -2748,9 +2748,8 @@ fn update_browse(state: &mut State, message: BrowseMessage) -> Task<Message> {
         offset_y: offset.y,
         height: bounds.height,
       };
-      Task::none()
+      sync_browse_scroll_window(state)
     }
-    BrowseMessage::LoadNext => load_next_browse_page(state),
     BrowseMessage::Retry => {
       let effects = match state.browse.retry() {
         Ok(effects) => effects,
@@ -2761,20 +2760,6 @@ fn update_browse(state: &mut State, message: BrowseMessage) -> Task<Message> {
       };
       sync_browse_view(state);
       apply_browse_effects(state, effects)
-    }
-    BrowseMessage::LoadPrevious => {
-      let effects = match state.browse.load_previous() {
-        Ok(effects) => effects,
-        Err(error) => {
-          state.notice = Some(format!("Could not load the previous library page: {error}"));
-          return Task::none();
-        }
-      };
-      sync_browse_view(state);
-      Task::batch([
-        apply_browse_effects(state, effects),
-        prepare_browse_artwork(state),
-      ])
     }
     BrowseMessage::PageSettled(settlement) => {
       if state.browse.is_current_settlement(&settlement) {
@@ -2790,6 +2775,7 @@ fn update_browse(state: &mut State, message: BrowseMessage) -> Task<Message> {
       sync_browse_view(state);
       Task::batch([
         apply_browse_effects(state, effects),
+        sync_browse_scroll_window(state),
         prepare_browse_artwork(state),
       ])
     }
@@ -2913,8 +2899,85 @@ fn browse_source(state: &State) -> Option<BrowseSource> {
   }
 }
 
-fn load_next_browse_page(state: &mut State) -> Task<Message> {
-  let effects = match state.browse.load_next() {
+/// Extra grid rows included in the loading window beyond each viewport edge.
+const BROWSE_WINDOW_MARGIN_ROWS: u32 = 2;
+
+/// Maps scroll geometry to the clamped display-index window the grid covers.
+///
+/// Rows come from dividing the viewport span by the grid row height; item
+/// indexes are rows times the column count, expanded by
+/// [`BROWSE_WINDOW_MARGIN_ROWS`] on each side and clamped to `total`.
+fn visible_display_range(
+  offset_y: f32,
+  viewport_height: f32,
+  metrics: ArtworkGridMetrics,
+  total: u32,
+) -> Range<u32> {
+  if total == 0
+    || metrics.columns == 0
+    || !metrics.row_height.is_finite()
+    || metrics.row_height <= 0.0
+  {
+    return 0..0;
+  }
+  let offset_y = finite_non_negative(offset_y);
+  let viewport_height = finite_non_negative(viewport_height);
+  let columns = u32::try_from(metrics.columns).unwrap_or(u32::MAX);
+  let first_row = (offset_y / metrics.row_height).floor() as u32;
+  let end_row = ((offset_y + viewport_height) / metrics.row_height).ceil() as u32;
+  let start = first_row
+    .saturating_sub(BROWSE_WINDOW_MARGIN_ROWS)
+    .saturating_mul(columns)
+    .min(total);
+  let end = end_row
+    .saturating_add(BROWSE_WINDOW_MARGIN_ROWS)
+    .saturating_mul(columns)
+    .min(total)
+    .max(start);
+  start..end
+}
+
+const fn finite_non_negative(value: f32) -> f32 {
+  if value.is_finite() && value > 0.0 {
+    value
+  } else {
+    0.0
+  }
+}
+
+/// Recomputes the scroll-driven display window and loads newly visible pages.
+///
+/// The model no-ops an unchanged range, so callers may invoke this freely
+/// after scroll, resize, and page-settlement events.
+fn sync_browse_scroll_window(state: &mut State) -> Task<Message> {
+  let LibraryBrowseView::Ready {
+    total_record_count, ..
+  } = &state.browse_view
+  else {
+    return Task::none();
+  };
+  let total = *total_record_count;
+  let class = SizeClass::from_width(state.window_size.width);
+  let metrics = ArtworkGridMetrics::for_cards(
+    grid_available_width(state.window_size.width, class),
+    CARD_COPY_HEIGHT,
+  );
+  // iced only publishes scroll viewport geometry for overflowing content, so
+  // short libraries would never report a height; the window height is a safe
+  // upper bound that keeps the auto-fill trigger alive for them.
+  let viewport_height = state.browse_viewport.height.max(state.window_size.height);
+  let range = visible_display_range(
+    state.browse_viewport.offset_y,
+    viewport_height,
+    metrics,
+    total,
+  );
+  // Metadata-only peek: the hot scroll path must not clone the window's
+  // items via `display_range()` just to compare the range.
+  if state.browse.peek_display_range().as_ref() == Some(&range) {
+    return Task::none();
+  }
+  let effects = match state.browse.set_display_range(range, total) {
     Ok(effects) => effects,
     Err(error) => {
       state.notice = Some(format!("Could not load more library items: {error}"));
@@ -3006,12 +3069,13 @@ fn fixed_browse_failure(
 fn prepare_browse_artwork(state: &mut State) -> Task<Message> {
   let LibraryBrowseView::Ready {
     visible_items,
-    total_record_count,
+    visible_start,
     ..
   } = &state.browse_view
   else {
     return Task::none();
   };
+  let visible_start = usize::try_from(*visible_start).unwrap_or(usize::MAX);
   let specs = visible_items
     .iter()
     .enumerate()
@@ -3037,18 +3101,12 @@ fn prepare_browse_artwork(state: &mut State) -> Task<Message> {
   let class = SizeClass::from_width(state.window_size.width);
   let available_width = grid_available_width(state.window_size.width, class);
   let metrics = ArtworkGridMetrics::for_cards(available_width, CARD_COPY_HEIGHT);
-  // The pagination row above the grid shifts the grid in scroll coordinates;
-  // classify in grid-local coordinates like the rendered viewport does.
-  let paginated =
-    state.browse.display_range().is_some() && *total_record_count > LIBRARY_BROWSE_PAGE_SIZE;
+  // The grid is the first scrollable child, so scroll coordinates are already
+  // grid-local; the window start shifts slot positions to global grid indexes.
   let grid_viewport = ArtworkGridViewport::from_scroll_geometry(
     state.browse_viewport.offset_y,
     state.browse_viewport.height,
-    if paginated {
-      PAGINATION_ROW_HEIGHT
-    } else {
-      0.0
-    },
+    0.0,
   );
   let mut summary = ArtworkLoadSummary::default();
   let mut load_specs = Vec::new();
@@ -3103,7 +3161,7 @@ fn prepare_browse_artwork(state: &mut State) -> Task<Message> {
       image_id,
       size_class: ArtworkSizeClass::Card,
       visible: grid_cell_visible(
-        index,
+        visible_start.saturating_add(index),
         metrics.columns,
         grid_viewport.offset_y,
         grid_viewport.height,
@@ -4311,7 +4369,9 @@ mod tests {
   }
 
   #[test]
-  fn browse_load_next_and_previous_advance_and_retreat_windows() {
+  fn browse_scroll_position_drives_the_display_window() {
+    // 1600×900 window: 1248px grid, 8 columns, 275px rows; the 900px window
+    // height covers 4 rows, so the settled bootstrap expands to 6 rows.
     let mut state = test_state();
     let library = BrowseSource::Library {
       session: state.request_gate.current_session(),
@@ -4366,19 +4426,81 @@ mod tests {
       BrowseMessage::PageSettled(settlement),
     ));
 
-    assert_eq!(state.browse.display_range(), Some(0..24));
-    assert!(state.browse.can_load_next());
-    assert!(!state.browse.can_load_previous());
+    // Settlement triggers a scroll-window sync that fills the viewport.
+    assert_eq!(state.browse.display_range(), Some(0..48));
 
-    drop(update_browse(&mut state, BrowseMessage::LoadNext));
-    assert_eq!(state.browse.display_range(), Some(24..48));
-    assert!(state.browse.can_load_next());
-    assert!(state.browse.can_load_previous());
+    // Scrolling ten rows down shifts the window without resetting it.
+    state.browse_viewport = BrowseViewport {
+      offset_y: 2750.0,
+      height: 800.0,
+    };
+    drop(sync_browse_scroll_window(&mut state));
+    assert_eq!(state.browse.display_range(), Some(64..128));
 
-    drop(update_browse(&mut state, BrowseMessage::LoadPrevious));
-    assert_eq!(state.browse.display_range(), Some(0..24));
-    assert!(state.browse.can_load_next());
-    assert!(!state.browse.can_load_previous());
+    // An unchanged viewport keeps the window and emits no page requests.
+    let pending_before = state.browse_page_tasks.len();
+    drop(sync_browse_scroll_window(&mut state));
+    assert_eq!(state.browse.display_range(), Some(64..128));
+    assert_eq!(state.browse_page_tasks.len(), pending_before);
+
+    // Scrolling back up restores the earlier window.
+    state.browse_viewport = BrowseViewport {
+      offset_y: 0.0,
+      height: 800.0,
+    };
+    drop(sync_browse_scroll_window(&mut state));
+    assert_eq!(state.browse.display_range(), Some(0..48));
+  }
+
+  #[test]
+  fn visible_display_range_maps_scroll_geometry_to_item_indexes() {
+    let metrics = ArtworkGridMetrics {
+      columns: 8,
+      cell_width: 142.0,
+      cell_height: 259.0,
+      row_height: 275.0,
+    };
+
+    // Top of the grid: four visible rows plus two margin rows below.
+    assert_eq!(visible_display_range(0.0, 900.0, metrics, 264), 0..48);
+    // Middle: rows 10..14 visible, expanded to rows 8..16.
+    assert_eq!(visible_display_range(2750.0, 900.0, metrics, 264), 64..128);
+    // Near the end the window clamps to the total.
+    assert_eq!(visible_display_range(8800.0, 900.0, metrics, 264), 240..264);
+    // A zero-height viewport still covers its margin rows.
+    assert_eq!(visible_display_range(0.0, 0.0, metrics, 264), 0..16);
+    // An empty library yields an empty window.
+    assert_eq!(visible_display_range(0.0, 900.0, metrics, 0), 0..0);
+  }
+
+  #[test]
+  fn visible_display_range_sanitizes_degenerate_inputs() {
+    let metrics = ArtworkGridMetrics {
+      columns: 8,
+      cell_width: 142.0,
+      cell_height: 259.0,
+      row_height: 275.0,
+    };
+
+    // Non-finite or negative geometry falls back to the grid origin.
+    assert_eq!(visible_display_range(f32::NAN, 900.0, metrics, 264), 0..48);
+    assert_eq!(
+      visible_display_range(2750.0, f32::INFINITY, metrics, 264),
+      64..96
+    );
+    assert_eq!(visible_display_range(-50.0, 900.0, metrics, 264), 0..48);
+
+    // Degenerate metrics cannot map rows, so the window is empty.
+    let zero_row = ArtworkGridMetrics {
+      row_height: 0.0,
+      ..metrics
+    };
+    assert_eq!(visible_display_range(0.0, 900.0, zero_row, 264), 0..0);
+    let no_columns = ArtworkGridMetrics {
+      columns: 0,
+      ..metrics
+    };
+    assert_eq!(visible_display_range(0.0, 900.0, no_columns, 264), 0..0);
   }
 
   struct TestSettingsFile(PathBuf);
@@ -6184,10 +6306,10 @@ mod tests {
       visible_items: vec![jellypilot_core::browse_model::LibraryItemSlot {
         item: Some(item.clone()),
       }],
+      visible_start: 0,
       mode: jellypilot_core::LibraryBrowseMode::Normal,
       total_record_count: 1,
       is_fetching_more: false,
-      can_load_next: false,
       load_more_failure: None,
       retry_busy: false,
     };
@@ -6233,10 +6355,10 @@ mod tests {
     drop(navigate(&mut state, library));
     state.browse_view = LibraryBrowseView::Ready {
       visible_items: vec![jellypilot_core::browse_model::LibraryItemSlot { item: Some(item) }],
+      visible_start: 0,
       mode: jellypilot_core::LibraryBrowseMode::Normal,
       total_record_count: 1,
       is_fetching_more: false,
-      can_load_next: false,
       load_more_failure: None,
       retry_busy: false,
     };
@@ -6339,10 +6461,10 @@ mod tests {
 
     state.browse_view = LibraryBrowseView::Ready {
       visible_items: vec![jellypilot_core::browse_model::LibraryItemSlot { item: Some(item) }],
+      visible_start: 0,
       mode: jellypilot_core::LibraryBrowseMode::Normal,
       total_record_count: 1,
       is_fetching_more: false,
-      can_load_next: false,
       load_more_failure: None,
       retry_busy: false,
     };
@@ -6616,10 +6738,10 @@ mod tests {
 
     state.browse_view = LibraryBrowseView::Ready {
       visible_items: items,
+      visible_start: 0,
       mode: jellypilot_core::LibraryBrowseMode::Normal,
       total_record_count: 24,
       is_fetching_more: false,
-      can_load_next: false,
       load_more_failure: None,
       retry_busy: false,
     };
