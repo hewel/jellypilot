@@ -53,7 +53,7 @@ pub(crate) const CARD_COPY_HEIGHT: f32 = 46.0;
 pub fn view(state: &State) -> Element<'_, Message> {
   let class = SizeClass::from_width(state.window_size.width);
   let title = match &state.destination {
-    Destination::Library { library_id, .. } => match &state.home.shortcuts {
+    Destination::Library { library_id, .. } => match &state.home.data.shortcuts {
       jellypilot_core::LoadState::Ready(shortcuts) => shortcuts
         .iter()
         .find(|shortcut| shortcut.id == *library_id)

@@ -60,7 +60,7 @@ pub fn view(state: &State) -> Element<'_, Message> {
     .padding([TOKENS.spacing.s6, TOKENS.spacing.s8])
     .width(Fill);
 
-  if let Some(item) = state.home.featured_item() {
+  if let Some(item) = state.home.data.featured_item() {
     content = content.push(featured_hero(state, item, skeleton_phase, reduced_motion));
   } else if home_is_loading(state) {
     content = content.push(featured_skeleton(skeleton_phase, reduced_motion));
@@ -82,7 +82,7 @@ pub fn view(state: &State) -> Element<'_, Message> {
 fn home_is_loading(state: &State) -> bool {
   HomeSection::ALL
     .iter()
-    .any(|section| matches!(state.home.section(*section), LoadState::Loading))
+    .any(|section| matches!(state.home.data.section(*section), LoadState::Loading))
 }
 
 fn featured_hero<'a>(
@@ -93,7 +93,7 @@ fn featured_hero<'a>(
 ) -> Element<'a, Message> {
   let artwork = hero_artwork(
     state,
-    state.home_artwork.hero(&item.id),
+    state.home.artwork.hero(&item.id),
     &item.name,
     220.0,
     330.0,
@@ -196,7 +196,7 @@ fn section_view(
   skeleton_phase: f32,
   reduced_motion: bool,
 ) -> Option<Element<'_, Message>> {
-  match state.home.section(section) {
+  match state.home.data.section(section) {
     LoadState::Idle => None,
     LoadState::Loading => Some(section_skeleton(section, skeleton_phase, reduced_motion)),
     LoadState::Failed(error) => Some(section_error(section.title(), error)),
@@ -262,7 +262,7 @@ fn video_card<'a>(
   };
   let poster = card_artwork(
     state,
-    state.home_artwork.card(section, &item.id),
+    state.home.artwork.card(section, &item.id),
     &item.name,
     (frame_width, frame_height),
     radius,
@@ -704,13 +704,14 @@ mod tests {
     };
     state
       .home
+      .data
       .settle_video_home(Ok(jellypilot_media_server::VideoHome {
         continue_watching: vec![card_item],
         latest_movies: vec![hero_item],
         next_up: Vec::new(),
         latest_episodes: Vec::new(),
       }));
-    state.home.settle_shortcuts(Ok(vec![]));
+    state.home.data.settle_shortcuts(Ok(vec![]));
     let slot_1 = state
       .kernel
       .artwork_binder
@@ -719,7 +720,7 @@ mod tests {
       .kernel
       .artwork_binder
       .bind(jellypilot_core::artwork_binder::ArtworkSurface::Home);
-    state.home_artwork.insert_hero(
+    state.home.artwork.insert_hero(
       "hero-1".to_owned(),
       ArtworkCell {
         slot: slot_1,
@@ -727,7 +728,7 @@ mod tests {
         state: ArtworkCellState::Loading,
       },
     );
-    state.home_artwork.insert_card(
+    state.home.artwork.insert_card(
       HomeSection::ContinueWatching,
       "card-1".to_owned(),
       ArtworkCell {

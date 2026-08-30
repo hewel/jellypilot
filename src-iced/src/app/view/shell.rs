@@ -213,7 +213,7 @@ fn sidebar_full(
       Destination::Home,
       state.destination == Destination::Home,
     ));
-  match &state.home.shortcuts {
+  match &state.home.data.shortcuts {
     LoadState::Idle | LoadState::Loading => {
       destinations = destinations
         .push(shortcut_skeleton(skeleton_phase, reduced_motion))
@@ -278,7 +278,7 @@ fn sidebar_compact(state: &State) -> container::Container<'_, Message> {
       Destination::Home,
       state.destination == Destination::Home,
     ));
-  if let LoadState::Ready(shortcuts) = &state.home.shortcuts {
+  if let LoadState::Ready(shortcuts) = &state.home.data.shortcuts {
     for shortcut in shortcuts {
       let destination = Destination::Library {
         library_id: shortcut.id.clone(),
@@ -477,7 +477,7 @@ mod tests {
   fn shell_view_renders_in_loading_state() {
     let mut state = State::boot(false);
     state.skeleton_phase = 0.42;
-    state.home.shortcuts = LoadState::Loading;
+    state.home.data.shortcuts = LoadState::Loading;
     let _element = view(&state);
   }
 }

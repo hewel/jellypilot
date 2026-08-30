@@ -1,3 +1,5 @@
+pub mod artwork;
+pub mod home;
 pub mod kernel;
 pub mod login;
 pub mod message;

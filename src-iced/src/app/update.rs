@@ -2,17 +2,14 @@ use std::collections::{hash_map::DefaultHasher, HashSet};
 use std::hash::{Hash, Hasher};
 use std::ops::Range;
 use std::path::PathBuf;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use iced::futures::stream::{self, StreamExt};
 use iced::widget::{image, operation};
 use iced::Task;
 use jellypilot_auth::login::{should_disconnect_after_forget, ConnectionPhase};
 use jellypilot_core::artwork_binder::{ArtworkSettlement, ArtworkSurface};
-use jellypilot_core::artwork_loader::{
-  grid_cell_visible, plan_artwork_loads, visible_row_cards, PlannedArtworkLoad,
-};
+use jellypilot_core::artwork_loader::{grid_cell_visible, PlannedArtworkLoad};
 use jellypilot_core::browse::fetch_browse_page;
 use jellypilot_core::browse_model::{
   BrowseEffect, BrowsePageRequest, BrowsePageSettlement, BrowsePreferences, BrowseSource,
@@ -24,17 +21,14 @@ use jellypilot_core::detail::{
   DetailContent,
 };
 use jellypilot_core::diagnostics::{DiagnosticCategory, DiagnosticLevel};
-use jellypilot_core::request_gate::{
-  DetailAuxKind, DetailToken, HomeToken, RemotePlayToken, RequestGate,
-};
+use jellypilot_core::request_gate::{DetailAuxKind, DetailToken, RemotePlayToken, RequestGate};
 use jellypilot_media_server::artwork::{
   ArtworkLoadObservation, ArtworkLoadSummary, ArtworkSizeClass, LoadLane,
 };
-use jellypilot_media_server::home::{load_home_data, HomeDataResult};
 use jellypilot_media_server::{
-  JellyfinClient, VideoLibraryItem, VideoLibrarySortDirection, VideoSeason,
-  VideoSeasonEpisodesPage, VideoSeasonEpisodesPageRequest, VideoUserDataAction,
-  VideoUserDataUpdate, VideoUserDataUpdateRequest,
+  VideoLibraryItem, VideoLibrarySortDirection, VideoSeason, VideoSeasonEpisodesPage,
+  VideoSeasonEpisodesPageRequest, VideoUserDataAction, VideoUserDataUpdate,
+  VideoUserDataUpdateRequest,
 };
 use jellypilot_mpv::configured_mpv_args;
 use jellypilot_mpv::playback::{
@@ -51,11 +45,12 @@ use jellypilot_session::{
   JellyfinWebSocket, JellyfinWebSocketEvent, PlayRequest, PlaystateRequest, RemoteControlState,
 };
 use jellypilot_ui::layout::SizeClass;
-use jellypilot_ui::tokens::TOKENS;
 use jellypilot_ui::widgets::artwork_grid::{ArtworkGridMetrics, ArtworkGridViewport};
 
 use crate::tray::TrayAction;
 
+use super::artwork::stream_artwork_loads;
+use super::home;
 use super::login;
 use super::message::{
   ArtworkLoadCompletion, BrowseMessage, DetailMessage, HomeMessage, LoginMessage, Message,
@@ -65,11 +60,9 @@ use super::message::{
 use super::settings;
 use super::state::{
   ArtworkCell, ArtworkCellState, BrowseArtwork, BrowseViewport, Destination, DetailArtwork,
-  DetailState, HomeArtwork, HomeSection, HomeState, NoticeLevel, RemoteEventChannel,
-  RemoteSessionHandle, State, UserDataActionKind,
+  DetailState, NoticeLevel, RemoteEventChannel, RemoteSessionHandle, State, UserDataActionKind,
 };
 use super::view::browse::{grid_available_width, CARD_COPY_HEIGHT};
-use super::view::home::{content_width, section_frame_size};
 
 /// Settings fields whose mutation triggers cross-surface follow-ups (playback
 /// reconfiguration, intro-mode input, remote refinalization). The top-level
@@ -159,7 +152,11 @@ pub fn update(state: &mut State, message: Message) -> Task<Message> {
         initialize_playback(state);
         Task::batch([
           login_task,
-          start_home_load(state),
+          home::start_load(
+            &mut state.home,
+            &mut state.kernel,
+            state.playback_view.now_playing.is_none(),
+          ),
           start_remote_session(state),
         ])
       } else if was_connected && !is_connected {
@@ -173,7 +170,25 @@ pub fn update(state: &mut State, message: Message) -> Task<Message> {
         login_task
       }
     }
-    Message::Home(message) => update_home(state, message),
+    Message::Home(HomeMessage::Navigate(destination)) => navigate(state, destination),
+    Message::Home(message) => {
+      // Cross-surface follow-ups hoisted out of the home surface (ADR 0029): a
+      // Loaded settlement re-prepares the artwork pipeline, after which
+      // handles are retained here because retention reads every surface's
+      // slot set.
+      let reprepared_artwork = matches!(message, HomeMessage::Loaded { .. });
+      let task = home::update(
+        &mut state.home,
+        &mut state.kernel,
+        state.playback_view.now_playing.is_none(),
+        state.window_size.width,
+        message,
+      );
+      if reprepared_artwork {
+        state.retain_artwork_handles();
+      }
+      task
+    }
     Message::Browse(message) => {
       let previous_notice = state.kernel.notice.clone();
       let task = update_browse(state, message);
@@ -1613,361 +1628,6 @@ fn playback_image_id(playable: &Playable) -> Option<&str> {
   }
 }
 
-fn update_home(state: &mut State, message: HomeMessage) -> Task<Message> {
-  match message {
-    HomeMessage::Navigate(destination) => navigate(state, destination),
-    HomeMessage::Retry => start_home_load(state),
-    HomeMessage::Loaded { token, result } => {
-      if !settle_home(
-        &mut state.home,
-        &mut state.kernel.request_gate,
-        token,
-        result,
-      ) {
-        return Task::none();
-      }
-      prepare_home_artwork(state)
-    }
-    HomeMessage::ArtworkLoaded {
-      session,
-      slot,
-      image_id,
-      result,
-    } => {
-      let session_ok = state.kernel.request_gate.is_current_session(session);
-      apply_home_artwork_completion(
-        state,
-        session_ok,
-        ArtworkLoadCompletion {
-          slot,
-          image_id,
-          result,
-        },
-      );
-      Task::none()
-    }
-  }
-}
-
-fn apply_home_artwork_completion(
-  state: &mut State,
-  session_ok: bool,
-  completion: ArtworkLoadCompletion,
-) {
-  if state
-    .kernel
-    .artwork_binder
-    .settle(completion.slot, ArtworkSurface::Home, session_ok)
-    != ArtworkSettlement::Apply
-  {
-    return;
-  }
-  let Some(cell) = state
-    .home_artwork
-    .cell_mut(completion.slot, &completion.image_id)
-  else {
-    return;
-  };
-  match completion.result {
-    Ok(raster) => {
-      cell.state = ArtworkCellState::Ready;
-      state.kernel.artwork_handles.insert(
-        completion.slot,
-        completion.image_id,
-        image::Handle::from_rgba(raster.width(), raster.height(), raster.into_pixels()),
-      );
-    }
-    Err(jellypilot_media_server::artwork::ArtworkError::Cancelled) => {}
-    Err(_) => cell.state = ArtworkCellState::Failed,
-  }
-}
-
-fn start_home_load(state: &mut State) -> Task<Message> {
-  if !state.home.has_ready_content() {
-    state.home.begin_load();
-  }
-  if state.playback_view.now_playing.is_none() {
-    state.kernel.artwork_adapter.cancel_pending();
-    state.home_artwork.prune_unready();
-  }
-  let token = state.kernel.request_gate.begin_home();
-  let Some(client) = state.kernel.client.as_ref().map(Arc::clone) else {
-    let error = "The connected media server session is unavailable.".to_owned();
-    state.home.settle_video_home(Err(error.clone()));
-    state.home.settle_shortcuts(Err(error));
-    return Task::none();
-  };
-
-  Task::perform(load_home_data(client), move |result| {
-    Message::Home(HomeMessage::Loaded { token, result })
-  })
-}
-
-fn settle_home(
-  home: &mut HomeState,
-  request_gate: &mut RequestGate,
-  token: HomeToken,
-  result: HomeDataResult,
-) -> bool {
-  if !request_gate.finish_home(token) {
-    return false;
-  }
-  let (video_home, shortcuts) = result;
-  home.settle_video_home(video_home);
-  home.settle_shortcuts(shortcuts);
-  true
-}
-
-#[derive(Clone, Copy)]
-enum ArtworkPlacement {
-  Hero,
-  Card(HomeSection),
-}
-
-struct ArtworkLoadSpec {
-  placement: ArtworkPlacement,
-  item_id: String,
-  image_id: String,
-  visible: bool,
-}
-
-impl ArtworkLoadSpec {
-  fn size_class(&self) -> ArtworkSizeClass {
-    match self.placement {
-      ArtworkPlacement::Hero => ArtworkSizeClass::Hero,
-      ArtworkPlacement::Card(_) => ArtworkSizeClass::Card,
-    }
-  }
-}
-
-enum ArtworkStreamEvent {
-  Loaded(ArtworkLoadCompletion),
-  Completed(ArtworkLoadSummary),
-}
-
-/// Streams a surface's Library Image loads visible-first, emitting one message
-/// per image as it settles and `Message::ArtworkStreamCompleted` with this
-/// stream's own sanitized aggregate at the end. `summary` seeds the aggregate
-/// with synchronous cache hits from the prepare pass.
-fn stream_artwork_loads<F>(
-  adapter: Arc<jellypilot_media_server::artwork::ArtworkAdapter>,
-  client: Arc<JellyfinClient>,
-  session: jellypilot_core::request_gate::SessionToken,
-  loads: Vec<PlannedArtworkLoad>,
-  summary: ArtworkLoadSummary,
-  make_message: F,
-) -> Task<Message>
-where
-  F: Fn(jellypilot_core::request_gate::SessionToken, ArtworkLoadCompletion) -> Message
-    + Send
-    + Sync
-    + 'static,
-{
-  if loads.is_empty() && summary == ArtworkLoadSummary::default() {
-    return Task::none();
-  }
-  let summary = Arc::new(Mutex::new(summary));
-  let planned = plan_artwork_loads(loads);
-  let concurrency = planned.len();
-  let completions = stream::iter(planned).map({
-    let summary = Arc::clone(&summary);
-    move |load| {
-      let adapter = Arc::clone(&adapter);
-      let client = Arc::clone(&client);
-      let summary = Arc::clone(&summary);
-      async move {
-        let lane = if load.visible {
-          LoadLane::Visible
-        } else {
-          LoadLane::Offscreen
-        };
-        let image_id = load.image_id;
-        let (result, observation) = adapter
-          .load(&client, &image_id, load.size_class, lane)
-          .await;
-        if let Ok(mut summary) = summary.lock() {
-          summary.record(&observation);
-        }
-        ArtworkLoadCompletion {
-          slot: load.slot,
-          image_id,
-          result,
-        }
-      }
-    }
-  });
-  let events = completions
-    .buffer_unordered(concurrency)
-    .map(ArtworkStreamEvent::Loaded)
-    .chain(stream::once(async move {
-      let summary = summary.lock().map(|summary| *summary).unwrap_or_default();
-      ArtworkStreamEvent::Completed(summary)
-    }));
-  Task::run(events, move |event| match event {
-    ArtworkStreamEvent::Loaded(completion) => make_message(session, completion),
-    ArtworkStreamEvent::Completed(summary) => Message::ArtworkStreamCompleted(summary),
-  })
-}
-
-fn prepare_home_artwork(state: &mut State) -> Task<Message> {
-  if !state.home.has_ready_content() {
-    return Task::none();
-  }
-  let specs = home_artwork_specs(state);
-  let hero_item_id = specs
-    .iter()
-    .find(|spec| matches!(spec.placement, ArtworkPlacement::Hero))
-    .map(|spec| spec.item_id.as_str());
-  let mut section_item_ids: [HashSet<&str>; 4] = Default::default();
-  for spec in &specs {
-    if let ArtworkPlacement::Card(section) = spec.placement {
-      section_item_ids[section.index()].insert(spec.item_id.as_str());
-    }
-  }
-  state
-    .home_artwork
-    .retain_items(hero_item_id, &section_item_ids);
-
-  let session = state.kernel.request_gate.current_session();
-  let Some(client) = state.kernel.client.as_ref().map(Arc::clone) else {
-    state.retain_artwork_handles();
-    return Task::none();
-  };
-  let adapter = Arc::clone(&state.kernel.artwork_adapter);
-  let mut summary = ArtworkLoadSummary::default();
-  let mut load_specs = Vec::new();
-
-  for spec in specs {
-    let existing_cell = match spec.placement {
-      ArtworkPlacement::Hero => state.home_artwork.hero(&spec.item_id),
-      ArtworkPlacement::Card(section) => state.home_artwork.card(section, &spec.item_id),
-    };
-    if let Some(cell) = existing_cell {
-      if cell.image_id == spec.image_id {
-        if cell.state == ArtworkCellState::Loading {
-          continue;
-        }
-        if cell.state == ArtworkCellState::Ready
-          && state
-            .kernel
-            .artwork_handles
-            .get(cell.slot, &cell.image_id)
-            .is_some()
-        {
-          continue;
-        }
-      }
-    }
-
-    if let Some(raster) = adapter.cached(&spec.image_id, spec.size_class()) {
-      summary.record(&ArtworkLoadObservation::raster_hit(raster.byte_len() as u64));
-      let slot = state.kernel.artwork_binder.bind_settled();
-      let handle = image::Handle::from_rgba(raster.width(), raster.height(), raster.into_pixels());
-      state
-        .kernel
-        .artwork_handles
-        .insert(slot, spec.image_id.clone(), handle);
-      let cell = ArtworkCell {
-        slot,
-        image_id: spec.image_id,
-        state: ArtworkCellState::Ready,
-      };
-      match spec.placement {
-        ArtworkPlacement::Hero => state.home_artwork.insert_hero(spec.item_id, cell),
-        ArtworkPlacement::Card(section) => {
-          state.home_artwork.insert_card(section, spec.item_id, cell);
-        }
-      }
-      continue;
-    }
-
-    let slot = state.kernel.artwork_binder.bind(ArtworkSurface::Home);
-    let size_class = spec.size_class();
-    let cell = ArtworkCell {
-      slot,
-      image_id: spec.image_id.clone(),
-      state: ArtworkCellState::Loading,
-    };
-    match spec.placement {
-      ArtworkPlacement::Hero => state.home_artwork.insert_hero(spec.item_id, cell),
-      ArtworkPlacement::Card(section) => {
-        state.home_artwork.insert_card(section, spec.item_id, cell);
-      }
-    }
-    load_specs.push(PlannedArtworkLoad {
-      slot,
-      image_id: spec.image_id,
-      size_class,
-      visible: spec.visible,
-    });
-  }
-
-  state.retain_artwork_handles();
-  stream_artwork_loads(
-    adapter,
-    client,
-    session,
-    load_specs,
-    summary,
-    |session, completion| {
-      Message::Home(HomeMessage::ArtworkLoaded {
-        session,
-        slot: completion.slot,
-        image_id: completion.image_id,
-        result: completion.result,
-      })
-    },
-  )
-}
-
-fn home_artwork_specs(state: &State) -> Vec<ArtworkLoadSpec> {
-  let mut specs = Vec::new();
-  if let Some(item) = state.home.featured_item() {
-    push_artwork_spec(&mut specs, ArtworkPlacement::Hero, item, true);
-  }
-  let class = SizeClass::from_width(state.window_size.width);
-  let content_width = content_width(state.window_size.width, class);
-  for section in HomeSection::ALL {
-    if let jellypilot_core::LoadState::Ready(items) = state.home.section(section) {
-      let (card_width, _) = section_frame_size(section);
-      let visible_cards = visible_row_cards(content_width, card_width, TOKENS.spacing.s4);
-      for (index, item) in items.iter().enumerate() {
-        push_artwork_spec(
-          &mut specs,
-          ArtworkPlacement::Card(section),
-          item,
-          index < visible_cards,
-        );
-      }
-    }
-  }
-  specs
-}
-
-fn push_artwork_spec(
-  specs: &mut Vec<ArtworkLoadSpec>,
-  placement: ArtworkPlacement,
-  item: &VideoLibraryItem,
-  visible: bool,
-) {
-  if let Some(image_id) = &item.artwork_image_id {
-    specs.push(ArtworkLoadSpec {
-      placement,
-      item_id: item.id.clone(),
-      image_id: image_id.clone(),
-      visible,
-    });
-  }
-}
-
-fn leave_home_view(state: &mut State) {
-  state.kernel.request_gate.begin_home();
-  if state.playback_view.now_playing.is_none() {
-    state.kernel.artwork_adapter.cancel_pending();
-    state.home_artwork.prune_unready();
-  }
-}
-
 fn navigate(state: &mut State, destination: Destination) -> Task<Message> {
   let previous = state.destination.clone();
   if !state.navigate_to(destination) {
@@ -1995,7 +1655,11 @@ fn activate_destination(state: &mut State, previous: Destination) -> Task<Messag
     state.settings.view.shortcut_capture = None;
   }
   if previous == Destination::Home && state.destination != Destination::Home {
-    leave_home_view(state);
+    home::leave_view(
+      &mut state.home,
+      &mut state.kernel,
+      state.playback_view.now_playing.is_none(),
+    );
   } else if matches!(
     previous,
     Destination::Library { .. } | Destination::Search(_)
@@ -2009,7 +1673,11 @@ fn activate_destination(state: &mut State, previous: Destination) -> Task<Messag
   }
 
   match &state.destination {
-    Destination::Home => start_home_load(state),
+    Destination::Home => home::start_load(
+      &mut state.home,
+      &mut state.kernel,
+      state.playback_view.now_playing.is_none(),
+    ),
     Destination::Library { .. } => {
       state.search_input.clear();
       start_browse(state)
@@ -2784,7 +2452,7 @@ fn browse_source(state: &State) -> Option<BrowseSource> {
       library_id,
       collection_type,
     } => {
-      let jellypilot_core::LoadState::Ready(shortcuts) = &state.home.shortcuts else {
+      let jellypilot_core::LoadState::Ready(shortcuts) = &state.home.data.shortcuts else {
         return None;
       };
       shortcuts
@@ -3133,11 +2801,10 @@ fn reset_connected_surface(state: &mut State) -> Task<Message> {
   state.kernel.artwork_binder.reset();
   state.in_flight_refresh = None;
   state.in_flight_command = None;
-  state.home_artwork = HomeArtwork::default();
+  state.home = home::Surface::default();
   state.browse_artwork = BrowseArtwork::default();
   state.detail_artwork = DetailArtwork::default();
   state.kernel.artwork_handles.clear();
-  state.home = HomeState::default();
   state.detail.clear();
   state.detail_items.clear();
   state.navigation_stack.clear();
@@ -3173,7 +2840,7 @@ mod tests {
   use crate::app::state::LoginState;
   use jellypilot_auth::{AuthStorageError, AuthStore, SavedProfileKey};
   use jellypilot_core::config::SettingsStore;
-  use jellypilot_media_server::MediaServerProvider;
+  use jellypilot_media_server::{JellyfinClient, MediaServerProvider};
   #[test]
   fn skeleton_phase_wraps_once_per_1600ms() {
     assert_eq!(skeleton_phase_at(Duration::from_millis(0)), 0.0);
@@ -3185,7 +2852,7 @@ mod tests {
   #[test]
   fn frame_tick_advances_phase_while_skeletons_load_and_resets_after() {
     let mut state = test_state();
-    state.home.begin_load();
+    state.home.data.begin_load();
 
     let start = Instant::now();
     drop(update_window(&mut state, WindowMessage::FrameTick(start)));
@@ -3199,8 +2866,8 @@ mod tests {
     assert_eq!(state.skeleton_phase, 0.5);
 
     // Once nothing loads, the clock resets so the next burst starts at 0.
-    state.home.settle_video_home(Err("settled".to_owned()));
-    state.home.settle_shortcuts(Err("settled".to_owned()));
+    state.home.data.settle_video_home(Err("settled".to_owned()));
+    state.home.data.settle_shortcuts(Err("settled".to_owned()));
     drop(update_window(
       &mut state,
       WindowMessage::FrameTick(start + Duration::from_millis(1200)),
@@ -3252,8 +2919,7 @@ mod tests {
       detail_items: Default::default(),
       detail: DetailState::default(),
       detail_artwork: DetailArtwork::default(),
-      home: HomeState::default(),
-      home_artwork: HomeArtwork::default(),
+      home: home::Surface::default(),
       playback_artwork: None,
       playback_controller: None,
       playback_session,
@@ -3669,34 +3335,6 @@ mod tests {
     ));
 
     assert_eq!(state.browse_viewport.offset_y, 0.0);
-  }
-
-  #[test]
-  fn stale_home_settlement_does_not_replace_the_current_loading_state() {
-    let mut home = HomeState::default();
-    let mut gate = RequestGate::default();
-    let stale = gate.begin_home();
-    let _current = gate.begin_home();
-    home.begin_load();
-
-    let applied = settle_home(
-      &mut home,
-      &mut gate,
-      stale,
-      (
-        Err("stale home".to_owned()),
-        Err("stale shortcuts".to_owned()),
-      ),
-    );
-
-    assert!(matches!(
-      (applied, &home.continue_watching, &home.shortcuts),
-      (
-        false,
-        jellypilot_core::LoadState::Loading,
-        jellypilot_core::LoadState::Loading
-      )
-    ));
   }
 
   #[test]
@@ -5044,138 +4682,6 @@ mod tests {
   }
 
   #[test]
-  fn leave_and_return_with_unchanged_data_preserves_ready_artwork_and_avoids_loading_reset() {
-    let mut state = test_state();
-    state.kernel.client = Some(Arc::new(JellyfinClient::new()));
-    let item = episode("item-1", 1);
-    let mut item_with_art = item.clone();
-    item_with_art.artwork_image_id = Some("art-1".to_owned());
-    state
-      .home
-      .settle_video_home(Ok(jellypilot_media_server::VideoHome {
-        continue_watching: vec![item_with_art.clone()],
-        latest_movies: Vec::new(),
-        next_up: Vec::new(),
-        latest_episodes: Vec::new(),
-      }));
-    state.home.settle_shortcuts(Ok(Vec::new()));
-
-    drop(prepare_home_artwork(&mut state));
-    let slot = state
-      .home_artwork
-      .card(HomeSection::ContinueWatching, "item-1")
-      .expect("card slot exists")
-      .slot;
-
-    let session = state.kernel.request_gate.current_session();
-    drop(update_home(
-      &mut state,
-      HomeMessage::ArtworkLoaded {
-        session,
-        slot,
-        image_id: "art-1".to_owned(),
-        result: Ok(
-          jellypilot_media_server::artwork::ArtworkRaster::from_raw_for_test(
-            1,
-            1,
-            vec![1, 2, 3, 4],
-          ),
-        ),
-      },
-    ));
-    let initial_handle_id = state
-      .kernel
-      .artwork_handles
-      .get(slot, "art-1")
-      .expect("initial handle exists")
-      .id();
-
-    // Navigate away to Settings
-    drop(navigate(&mut state, Destination::Settings));
-    assert!(state.home.has_ready_content());
-
-    // Return to Home
-    drop(navigate(&mut state, Destination::Home));
-    assert!(state.home.has_ready_content());
-    assert_eq!(
-      state
-        .home_artwork
-        .card(HomeSection::ContinueWatching, "item-1")
-        .map(|cell| cell.state),
-      Some(ArtworkCellState::Ready)
-    );
-    let post_nav_handle_id = state
-      .kernel
-      .artwork_handles
-      .get(slot, "art-1")
-      .expect("post-nav handle exists")
-      .id();
-    assert_eq!(initial_handle_id, post_nav_handle_id);
-
-    // Identical refetch settles without resetting cell to Loading
-    let warm_task = prepare_home_artwork(&mut state);
-    assert_eq!(warm_task.units(), 0);
-    assert_eq!(
-      state
-        .home_artwork
-        .card(HomeSection::ContinueWatching, "item-1")
-        .map(|cell| cell.state),
-      Some(ArtworkCellState::Ready)
-    );
-    let refetch_handle_id = state
-      .kernel
-      .artwork_handles
-      .get(slot, "art-1")
-      .expect("refetched handle exists")
-      .id();
-    assert_eq!(initial_handle_id, refetch_handle_id);
-  }
-
-  #[test]
-  fn home_memory_cache_hit_synchronously_settles_without_retained_handle() {
-    let mut state = test_state();
-    state.kernel.client = Some(Arc::new(JellyfinClient::new()));
-    let item = episode("item-2", 1);
-    let mut item_with_art = item.clone();
-    item_with_art.artwork_image_id = Some("cached-art-2".to_owned());
-    state
-      .home
-      .settle_video_home(Ok(jellypilot_media_server::VideoHome {
-        continue_watching: vec![item_with_art],
-        latest_movies: Vec::new(),
-        next_up: Vec::new(),
-        latest_episodes: Vec::new(),
-      }));
-    state.home.settle_shortcuts(Ok(Vec::new()));
-
-    // Seed the raster cache directly on a fresh state, so no handle is
-    // retained for the image when the prepare pass runs.
-    state.kernel.artwork_adapter.seed_raster_for_test(
-      "cached-art-2",
-      jellypilot_media_server::artwork::ArtworkSizeClass::Card,
-      jellypilot_media_server::artwork::ArtworkRaster::from_raw_for_test(
-        1,
-        1,
-        vec![10, 20, 30, 40],
-      ),
-    );
-    let warm_task = prepare_home_artwork(&mut state);
-    // One sentinel unit reports the aggregate cache-hit telemetry event.
-    assert_eq!(warm_task.units(), 1);
-
-    let card_cell = state
-      .home_artwork
-      .card(HomeSection::ContinueWatching, "item-2")
-      .expect("card cell exists");
-    assert_eq!(card_cell.state, ArtworkCellState::Ready);
-    assert!(state
-      .kernel
-      .artwork_handles
-      .get(card_cell.slot, "cached-art-2")
-      .is_some());
-  }
-
-  #[test]
   fn artwork_stream_completion_records_one_sanitized_aggregate_event() {
     let mut state = test_state();
     let summary = ArtworkLoadSummary {
@@ -5213,96 +4719,6 @@ mod tests {
   }
 
   #[test]
-  fn artwork_stream_settlement_applies_each_completion_as_it_arrives() {
-    let mut state = test_state();
-    state.kernel.client = Some(Arc::new(JellyfinClient::new()));
-    let mut items = Vec::new();
-    for index in 1..=3 {
-      let mut item = episode(&format!("batch-item-{index}"), index);
-      item.artwork_image_id = Some(format!("batch-art-{index}"));
-      items.push(item);
-    }
-    state
-      .home
-      .settle_video_home(Ok(jellypilot_media_server::VideoHome {
-        continue_watching: items,
-        latest_movies: Vec::new(),
-        next_up: Vec::new(),
-        latest_episodes: Vec::new(),
-      }));
-    state.home.settle_shortcuts(Ok(Vec::new()));
-    drop(prepare_home_artwork(&mut state));
-
-    let image_ids = (1..=3)
-      .map(|index| format!("batch-art-{index}"))
-      .collect::<Vec<_>>();
-    let completions = image_ids
-      .iter()
-      .enumerate()
-      .map(|(index, image_id)| {
-        let item_id = image_id.replacen("batch-art", "batch-item", 1);
-        let slot = state
-          .home_artwork
-          .card(HomeSection::ContinueWatching, &item_id)
-          .expect("batch card exists")
-          .slot;
-        let result = if index == 1 {
-          Err(jellypilot_media_server::artwork::ArtworkError::FetchFailed)
-        } else {
-          Ok(
-            jellypilot_media_server::artwork::ArtworkRaster::from_raw_for_test(
-              1,
-              1,
-              vec![1, 2, 3, 4],
-            ),
-          )
-        };
-        ArtworkLoadCompletion {
-          slot,
-          image_id: image_id.clone(),
-          result,
-        }
-      })
-      .collect::<Vec<ArtworkLoadCompletion>>();
-    let session = state.kernel.request_gate.current_session();
-    for completion in completions {
-      drop(update_home(
-        &mut state,
-        HomeMessage::ArtworkLoaded {
-          session,
-          slot: completion.slot,
-          image_id: completion.image_id,
-          result: completion.result,
-        },
-      ));
-    }
-
-    for index in 1..=3 {
-      let item_id = format!("batch-item-{index}");
-      let image_id = format!("batch-art-{index}");
-      let cell = state
-        .home_artwork
-        .card(HomeSection::ContinueWatching, &item_id)
-        .expect("settled batch card exists");
-      if index == 2 {
-        assert_eq!(cell.state, ArtworkCellState::Failed);
-        assert!(state
-          .kernel
-          .artwork_handles
-          .get(cell.slot, &image_id)
-          .is_none());
-      } else {
-        assert_eq!(cell.state, ArtworkCellState::Ready);
-        assert!(state
-          .kernel
-          .artwork_handles
-          .get(cell.slot, &image_id)
-          .is_some());
-      }
-    }
-  }
-
-  #[test]
   fn browse_re_navigation_rebuilds_from_the_raster_cache() {
     let mut state = test_state();
     state.kernel.client = Some(Arc::new(JellyfinClient::new()));
@@ -5310,7 +4726,7 @@ mod tests {
       library_id: "movies".to_owned(),
       collection_type: "movies".to_owned(),
     };
-    state.home.shortcuts =
+    state.home.data.shortcuts =
       jellypilot_core::LoadState::Ready(vec![jellypilot_media_server::VideoLibraryShortcut {
         id: "movies".to_owned(),
         name: "Movies".to_owned(),
@@ -5510,111 +4926,6 @@ mod tests {
       .artwork_handles
       .get(browse_cell.slot, "browse-cache-art-1")
       .is_some());
-  }
-
-  #[test]
-  fn cancelled_artwork_load_does_not_mark_cell_failed_and_is_reloaded_on_revisit() {
-    let mut state = test_state();
-    state.kernel.client = Some(Arc::new(JellyfinClient::new()));
-    let mut item = episode("item-cancel", 1);
-    item.artwork_image_id = Some("art-cancel".to_owned());
-    state
-      .home
-      .settle_video_home(Ok(jellypilot_media_server::VideoHome {
-        continue_watching: vec![item],
-        latest_movies: Vec::new(),
-        next_up: Vec::new(),
-        latest_episodes: Vec::new(),
-      }));
-    state.home.settle_shortcuts(Ok(Vec::new()));
-
-    drop(prepare_home_artwork(&mut state));
-    let slot = state
-      .home_artwork
-      .card(HomeSection::ContinueWatching, "item-cancel")
-      .expect("card slot exists")
-      .slot;
-
-    // Navigation away cancels pending loads and prunes unready cells
-    drop(navigate(&mut state, Destination::Settings));
-    assert!(state
-      .home_artwork
-      .card(HomeSection::ContinueWatching, "item-cancel")
-      .is_none());
-
-    // Late cancelled message arriving after leave does not mark failed
-    let session = state.kernel.request_gate.current_session();
-    drop(update_home(
-      &mut state,
-      HomeMessage::ArtworkLoaded {
-        session,
-        slot,
-        image_id: "art-cancel".to_owned(),
-        result: Err(jellypilot_media_server::artwork::ArtworkError::Cancelled),
-      },
-    ));
-
-    // Returning to Home re-prepares and binds a fresh load
-    drop(navigate(&mut state, Destination::Home));
-    drop(prepare_home_artwork(&mut state));
-    let new_cell = state
-      .home_artwork
-      .card(HomeSection::ContinueWatching, "item-cancel")
-      .expect("card cell is recreated on revisit");
-    assert_eq!(new_cell.state, ArtworkCellState::Loading);
-  }
-
-  #[test]
-  fn repeated_warm_prepares_maintain_zero_tracked_live_slots() {
-    let mut state = test_state();
-    state.kernel.client = Some(Arc::new(JellyfinClient::new()));
-    let item = episode("item-warm", 1);
-    let mut item_with_art = item.clone();
-    item_with_art.artwork_image_id = Some("art-warm".to_owned());
-    state
-      .home
-      .settle_video_home(Ok(jellypilot_media_server::VideoHome {
-        continue_watching: vec![item_with_art],
-        latest_movies: Vec::new(),
-        next_up: Vec::new(),
-        latest_episodes: Vec::new(),
-      }));
-    state.home.settle_shortcuts(Ok(Vec::new()));
-
-    // Cold prepare allocates 1 live in-flight slot
-    drop(prepare_home_artwork(&mut state));
-    let cold_slot = state
-      .home_artwork
-      .card(HomeSection::ContinueWatching, "item-warm")
-      .unwrap()
-      .slot;
-    assert_eq!(state.kernel.artwork_binder.live_slots_count(), 1);
-
-    // Settle the cold load -> live_slots_count becomes 0
-    let session = state.kernel.request_gate.current_session();
-    drop(update_home(
-      &mut state,
-      HomeMessage::ArtworkLoaded {
-        session,
-        slot: cold_slot,
-        image_id: "art-warm".to_owned(),
-        result: Ok(
-          jellypilot_media_server::artwork::ArtworkRaster::from_raw_for_test(
-            1,
-            1,
-            vec![1, 2, 3, 4],
-          ),
-        ),
-      },
-    ));
-    assert_eq!(state.kernel.artwork_binder.live_slots_count(), 0);
-
-    // Repeated warm prepares (handle reuse / cached hit) must NOT leak live slots in ArtworkBinder
-    for _ in 0..10 {
-      let warm_task = prepare_home_artwork(&mut state);
-      assert_eq!(warm_task.units(), 0);
-      assert_eq!(state.kernel.artwork_binder.live_slots_count(), 0);
-    }
   }
 
   #[test]

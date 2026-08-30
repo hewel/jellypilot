@@ -261,7 +261,7 @@ mod tests {
     assert_eq!(subscription(&state).units(), 3);
     state.smoke = false;
 
-    state.home.begin_load();
+    state.home.data.begin_load();
     assert_eq!(subscription(&state).units(), 3);
     // Episode/neighbor loads render shimmer skeletons independently of the
     // main detail content state; the frames subscription must stay alive.

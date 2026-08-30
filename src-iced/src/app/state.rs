@@ -662,8 +662,7 @@ pub struct State {
   pub detail_items: HashMap<String, VideoLibraryItem>,
   pub detail: DetailState,
   pub detail_artwork: DetailArtwork,
-  pub home: HomeState,
-  pub home_artwork: HomeArtwork,
+  pub home: crate::app::home::Surface,
   pub playback_artwork: Option<ArtworkCell>,
   pub playback_controller: Option<PlaybackControllerHandle>,
   pub playback_session: PlaybackSession,
@@ -750,8 +749,7 @@ impl State {
       detail_items: HashMap::new(),
       detail: DetailState::default(),
       detail_artwork: DetailArtwork::default(),
-      home: HomeState::default(),
-      home_artwork: HomeArtwork::default(),
+      home: crate::app::home::Surface::default(),
       playback_artwork: None,
       playback_controller: None,
       playback_session,
@@ -781,7 +779,8 @@ impl State {
   }
   pub fn all_artwork_slots(&self) -> impl Iterator<Item = ArtworkSlot> + '_ {
     self
-      .home_artwork
+      .home
+      .artwork
       .slots()
       .chain(self.browse_artwork.slots())
       .chain(self.detail_artwork.slots())
@@ -794,8 +793,8 @@ impl State {
   pub(crate) fn skeletons_active(&self) -> bool {
     let home_loading = HomeSection::ALL
       .iter()
-      .any(|section| matches!(self.home.section(*section), LoadState::Loading))
-      || matches!(self.home.shortcuts, LoadState::Loading);
+      .any(|section| matches!(self.home.data.section(*section), LoadState::Loading))
+      || matches!(self.home.data.shortcuts, LoadState::Loading);
     let browse_loading = match &self.browse_view {
       LibraryBrowseView::Loading => true,
       // A ready grid can still hold unloaded placeholder slots while more
@@ -815,7 +814,7 @@ impl State {
       || matches!(self.detail.season_neighbors, LoadState::Loading);
     // Artwork cells also display breathing skeleton pulse blocks while in the
     // Loading state across Home hero/sections, Browse grid, and Detail views.
-    let artwork_loading = self.home_artwork.has_loading()
+    let artwork_loading = self.home.artwork.has_loading()
       || self.browse_artwork.has_loading()
       || self.detail_artwork.has_loading();
     home_loading || browse_loading || detail_loading || artwork_loading
@@ -1096,7 +1095,7 @@ mod tests {
     let slot_4 = binder.bind(ArtworkSurface::Detail);
 
     // Home hero loading
-    state.home_artwork.insert_hero(
+    state.home.artwork.insert_hero(
       "item-hero".to_owned(),
       ArtworkCell {
         slot: slot_1,
@@ -1105,11 +1104,11 @@ mod tests {
       },
     );
     assert!(state.skeletons_active());
-    state.home_artwork.prune_unready();
+    state.home.artwork.prune_unready();
     assert!(!state.skeletons_active());
 
     // Home card loading
-    state.home_artwork.insert_card(
+    state.home.artwork.insert_card(
       HomeSection::ContinueWatching,
       "item-card".to_owned(),
       ArtworkCell {
@@ -1119,7 +1118,7 @@ mod tests {
       },
     );
     assert!(state.skeletons_active());
-    state.home_artwork.prune_unready();
+    state.home.artwork.prune_unready();
     assert!(!state.skeletons_active());
 
     // Browse artwork loading
