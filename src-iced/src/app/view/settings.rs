@@ -60,14 +60,14 @@ fn feedback(state: &State) -> Element<'_, Message> {
 }
 
 fn connection_section(state: &State) -> Element<'_, Message> {
-  let status = match state.connection {
+  let status = match state.kernel.connection {
     ConnectionPhase::Connected => badge("Connected", BadgeVariant::Success),
     ConnectionPhase::Connecting => badge("Working", BadgeVariant::Warning),
     ConnectionPhase::SignedOut | ConnectionPhase::Failed => {
       badge("Disconnected", BadgeVariant::Neutral)
     }
   };
-  let identity: Element<'_, Message> = state.connected_identity.as_ref().map_or_else(
+  let identity: Element<'_, Message> = state.kernel.connected_identity.as_ref().map_or_else(
     || {
       text("No active connection")
         .size(13)
@@ -87,7 +87,7 @@ fn connection_section(state: &State) -> Element<'_, Message> {
       .into()
     },
   );
-  let connected = state.connection == ConnectionPhase::Connected;
+  let connected = state.kernel.connection == ConnectionPhase::Connected;
   let disconnect = action_button(
     Icon::Close,
     "Disconnect",
@@ -482,7 +482,7 @@ fn diagnostics_section(state: &State) -> Element<'_, Message> {
 
   let mut events = Column::new().spacing(TOKENS.spacing.s2).width(Fill);
   let mut count = 0_usize;
-  for diagnostic in state.diagnostics.rows().filter(|diagnostic| {
+  for diagnostic in state.kernel.diagnostics.rows().filter(|diagnostic| {
     diagnostic_matches(
       state.settings_view.diagnostic_level,
       state.settings_view.diagnostic_category,

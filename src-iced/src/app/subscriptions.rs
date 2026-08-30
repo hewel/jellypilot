@@ -42,7 +42,7 @@ pub fn subscription(state: &State) -> Subscription<Message> {
   if let Some(channel) = state.remote_events.clone() {
     subscriptions.push(Subscription::run_with(channel, remote_event_stream));
   }
-  if let Some(tray) = &state.tray {
+  if let Some(tray) = &state.kernel.tray {
     subscriptions.push(Subscription::run_with(tray.channel(), tray_event_stream));
   }
 

@@ -490,7 +490,7 @@ fn artwork<'a>(
 ) -> Element<'a, Message> {
   if let Some(cell) = cell {
     if cell.state == ArtworkCellState::Ready {
-      if let Some(handle) = state.artwork_handles.get(cell.slot, &cell.image_id) {
+      if let Some(handle) = state.kernel.artwork_handles.get(cell.slot, &cell.image_id) {
         return rounded_image(handle.clone(), full_radius(TOKENS.radii.lg))
           .content_fit(ContentFit::Cover)
           .width(Fill)
@@ -867,9 +867,11 @@ mod tests {
     let item_1 = video_item("item-1");
     let item_2 = video_item("item-2");
     let slot_1 = state
+      .kernel
       .artwork_binder
       .bind(jellypilot_core::artwork_binder::ArtworkSurface::Browse);
     let slot_2 = state
+      .kernel
       .artwork_binder
       .bind(jellypilot_core::artwork_binder::ArtworkSurface::Browse);
     state.browse_artwork.insert(

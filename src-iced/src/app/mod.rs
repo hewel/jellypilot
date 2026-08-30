@@ -1,3 +1,4 @@
+pub mod kernel;
 pub mod message;
 pub mod state;
 mod subscriptions;
@@ -11,8 +12,8 @@ pub use state::State;
 
 pub fn boot(smoke: bool, tray: Option<crate::tray::Tray>) -> (State, Task<Message>) {
   let mut state = State::boot(smoke);
-  state.tray = tray;
-  if let Some(tray) = &state.tray {
+  state.kernel.tray = tray;
+  if let Some(tray) = &state.kernel.tray {
     tray.sync(&state.playback_view, false);
   }
   let task = update::load_saved_profiles(&state).map(Message::Login);

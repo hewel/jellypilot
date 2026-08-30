@@ -395,7 +395,7 @@ fn hero_artwork<'a>(
 ) -> Element<'a, Message> {
   if let Some(cell) = cell {
     if cell.state == ArtworkCellState::Ready {
-      if let Some(handle) = state.artwork_handles.get(cell.slot, &cell.image_id) {
+      if let Some(handle) = state.kernel.artwork_handles.get(cell.slot, &cell.image_id) {
         return rounded_image(handle.clone(), full_radius(TOKENS.radii.xl))
           .content_fit(ContentFit::Cover)
           .width(width)
@@ -465,7 +465,7 @@ fn card_artwork<'a>(
 ) -> Element<'a, Message> {
   if let Some(cell) = cell {
     if cell.state == ArtworkCellState::Ready {
-      if let Some(handle) = state.artwork_handles.get(cell.slot, &cell.image_id) {
+      if let Some(handle) = state.kernel.artwork_handles.get(cell.slot, &cell.image_id) {
         return rounded_image(handle.clone(), radius)
           .content_fit(ContentFit::Cover)
           .width(width)
@@ -712,9 +712,11 @@ mod tests {
       }));
     state.home.settle_shortcuts(Ok(vec![]));
     let slot_1 = state
+      .kernel
       .artwork_binder
       .bind(jellypilot_core::artwork_binder::ArtworkSurface::Home);
     let slot_2 = state
+      .kernel
       .artwork_binder
       .bind(jellypilot_core::artwork_binder::ArtworkSurface::Home);
     state.home_artwork.insert_hero(

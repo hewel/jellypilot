@@ -528,7 +528,7 @@ fn media_caption(
 fn playback_artwork(state: &State, width: f32, height: f32) -> Element<'_, Message> {
   if let Some(cell) = &state.playback_artwork {
     if cell.state == ArtworkCellState::Ready {
-      if let Some(handle) = state.artwork_handles.get(cell.slot, &cell.image_id) {
+      if let Some(handle) = state.kernel.artwork_handles.get(cell.slot, &cell.image_id) {
         return rounded_image(handle.clone(), full_radius(TOKENS.radii.lg))
           .content_fit(ContentFit::Cover)
           .width(width)
@@ -675,14 +675,14 @@ mod tests {
     );
     state.playback_view = state.playback_session.view();
 
-    let slot = state.artwork_binder.bind_player_bar();
+    let slot = state.kernel.artwork_binder.bind_player_bar();
     let image_id = "test-artwork-image".to_owned();
     state.playback_artwork = Some(crate::app::state::ArtworkCell {
       slot,
       image_id: image_id.clone(),
       state: ArtworkCellState::Ready,
     });
-    state.artwork_handles.insert(
+    state.kernel.artwork_handles.insert(
       slot,
       image_id.clone(),
       iced::widget::image::Handle::from_rgba(2, 1, vec![0; 8]),
@@ -746,7 +746,7 @@ mod tests {
 
     // Verify artwork cell, slot, image_id, and retained handle identity remain unchanged
     assert_eq!(state.playback_artwork, initial_artwork);
-    assert!(state.artwork_handles.get(slot, &image_id).is_some());
+    assert!(state.kernel.artwork_handles.get(slot, &image_id).is_some());
     assert!(bar(&state).is_some());
   }
 

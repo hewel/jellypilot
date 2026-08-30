@@ -147,7 +147,7 @@ fn quick_connect(state: &State) -> Element<'_, Message> {
       } else {
         "Request Quick Connect code"
       };
-      let can_login = can_start_login(state.connection);
+      let can_login = can_start_login(state.kernel.connection);
       let request = button(
         row![
           icon_for_variant_disabled(
@@ -255,7 +255,7 @@ fn password(state: &State) -> Element<'_, Message> {
     .style(|theme, status| {
       jellypilot_ui::theme::field_variant(theme, status, FieldVariant::Filled)
     });
-  let password = if can_start_login(state.connection) {
+  let password = if can_start_login(state.kernel.connection) {
     password.on_submit(Message::Login(LoginMessage::PasswordSubmitted))
   } else {
     password
@@ -271,7 +271,7 @@ fn password(state: &State) -> Element<'_, Message> {
     .style(|theme, status| {
       jellypilot_ui::theme::button_variant(theme, status, ButtonVariant::Text)
     });
-  let can_login = can_start_login(state.connection);
+  let can_login = can_start_login(state.kernel.connection);
   let submit = button(
     row![
       icon_for_variant_disabled(
@@ -280,7 +280,7 @@ fn password(state: &State) -> Element<'_, Message> {
         ButtonVariant::Primary,
         !can_login,
       ),
-      text(if state.connection == ConnectionPhase::Connecting {
+      text(if state.kernel.connection == ConnectionPhase::Connecting {
         "Signing in…"
       } else {
         "Sign in"

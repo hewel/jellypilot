@@ -695,7 +695,7 @@ fn artwork<'a>(
     state: ArtworkCellState::Ready,
   }) = cell
   {
-    if let Some(handle) = state.artwork_handles.get(*slot, image_id) {
+    if let Some(handle) = state.kernel.artwork_handles.get(*slot, image_id) {
       return rounded_image(handle.clone(), radius)
         .content_fit(ContentFit::Cover)
         .width(width)
@@ -1257,12 +1257,15 @@ mod tests {
       played_percentage: None,
     };
     let slot_1 = state
+      .kernel
       .artwork_binder
       .bind(jellypilot_core::artwork_binder::ArtworkSurface::Detail);
     let slot_2 = state
+      .kernel
       .artwork_binder
       .bind(jellypilot_core::artwork_binder::ArtworkSurface::Detail);
     let slot_3 = state
+      .kernel
       .artwork_binder
       .bind(jellypilot_core::artwork_binder::ArtworkSurface::Detail);
     state.detail_artwork.insert(

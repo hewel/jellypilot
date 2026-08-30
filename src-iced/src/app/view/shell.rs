@@ -68,12 +68,13 @@ pub fn view(state: &State) -> Element<'_, Message> {
     .into()
 }
 fn visible_toast(state: &State) -> Option<&ToastNotice> {
-  state.active_toast.as_ref()
+  state.kernel.active_toast.as_ref()
 }
 
 #[allow(dead_code)]
 pub fn visible_notice(state: &State) -> Option<&str> {
   state
+    .kernel
     .active_toast
     .as_ref()
     .map(|toast| toast.message.as_str())
@@ -347,7 +348,7 @@ fn shortcut_skeleton<'a>(skeleton_phase: f32, reduced_motion: bool) -> Element<'
 }
 
 fn connection_summary(state: &State) -> Element<'_, Message> {
-  let Some(identity) = &state.connected_identity else {
+  let Some(identity) = &state.kernel.connected_identity else {
     return space::vertical().into();
   };
   row![
@@ -392,7 +393,7 @@ fn compact_destination_button<'a>(
 }
 
 fn compact_connection_status(state: &State) -> Element<'_, Message> {
-  let Some(identity) = &state.connected_identity else {
+  let Some(identity) = &state.kernel.connected_identity else {
     return space::vertical().into();
   };
   let summary = format!("{} • {}", identity.user_name, identity.server);
@@ -423,7 +424,7 @@ mod tests {
     assert_eq!(visible_notice(&state), None);
     assert_eq!(visible_toast(&state), None);
 
-    state.active_toast = Some(ToastNotice {
+    state.kernel.active_toast = Some(ToastNotice {
       id: 1,
       message: "Playback failed.".to_owned(),
       level: NoticeLevel::Error,
@@ -446,12 +447,12 @@ mod tests {
   #[test]
   fn newer_toast_replaces_older_and_older_id_does_not_dismiss_newer() {
     let mut state = State::boot(false);
-    state.active_toast = Some(ToastNotice {
+    state.kernel.active_toast = Some(ToastNotice {
       id: 1,
       message: "First notice".to_owned(),
       level: NoticeLevel::Warning,
     });
-    state.active_toast = Some(ToastNotice {
+    state.kernel.active_toast = Some(ToastNotice {
       id: 2,
       message: "Second notice".to_owned(),
       level: NoticeLevel::Error,

@@ -17,8 +17,7 @@ use jellypilot_core::request_gate::{RemoteToken, RequestGate};
 use jellypilot_core::{LibraryBrowseLoadToken, LoadState};
 use jellypilot_media_server::artwork::ArtworkAdapter;
 use jellypilot_media_server::{
-  JellyfinClient, MediaServerProvider, VideoLibraryItem, VideoLibraryShortcut,
-  VideoSeasonEpisodesPage,
+  MediaServerProvider, VideoLibraryItem, VideoLibraryShortcut, VideoSeasonEpisodesPage,
 };
 use jellypilot_mpv::playback::{Playable, PlaybackController};
 use jellypilot_mpv::playback_session::{EffectId, IntroAvailability, PlaybackSession, SessionView};
@@ -27,7 +26,7 @@ use jellypilot_session::{
 };
 use zeroize::Zeroizing;
 
-use crate::tray::Tray;
+use super::kernel::Kernel;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum NoticeLevel {
@@ -655,20 +654,10 @@ pub struct State {
   pub(crate) skeleton_animation_start: Option<std::time::Instant>,
   pub settings: SettingsStore,
   pub settings_view: SettingsState,
-  pub diagnostics: Diagnostics,
-  pub auth_store: AuthStore,
-  pub request_gate: RequestGate,
-  pub client: Option<Arc<JellyfinClient>>,
-  pub connection: ConnectionPhase,
+  pub kernel: Kernel,
   pub login: LoginState,
-  pub connected_identity: Option<ConnectedIdentity>,
-  pub active_profile: Option<SavedProfileKey>,
   pub quick_connect_task: Option<task::Handle>,
-  pub notice: Option<String>,
   pub playback_notice: Option<String>,
-  pub active_toast: Option<ToastNotice>,
-  pub next_toast_id: u64,
-  pub tray: Option<Tray>,
   pub quit_requested: bool,
   pub destination: Destination,
   pub navigation_stack: Vec<Destination>,
@@ -676,10 +665,7 @@ pub struct State {
   pub detail: DetailState,
   pub detail_artwork: DetailArtwork,
   pub home: HomeState,
-  pub artwork_adapter: Arc<ArtworkAdapter>,
-  pub artwork_binder: ArtworkBinder,
   pub home_artwork: HomeArtwork,
-  pub artwork_handles: ArtworkHandleRetention,
   pub playback_artwork: Option<ArtworkCell>,
   pub playback_controller: Option<PlaybackControllerHandle>,
   pub playback_session: PlaybackSession,
@@ -737,20 +723,25 @@ impl State {
       skeleton_animation_start: None,
       settings,
       settings_view,
-      diagnostics,
-      auth_store: AuthStore::default(),
-      request_gate,
-      client: None,
-      connection: ConnectionPhase::SignedOut,
+      kernel: Kernel {
+        diagnostics,
+        auth_store: AuthStore::default(),
+        request_gate,
+        client: None,
+        connection: ConnectionPhase::SignedOut,
+        connected_identity: None,
+        active_profile: None,
+        notice: None,
+        active_toast: None,
+        next_toast_id: 0,
+        tray: None,
+        artwork_adapter,
+        artwork_binder: ArtworkBinder::default(),
+        artwork_handles: ArtworkHandleRetention::default(),
+      },
       login,
-      connected_identity: None,
-      active_profile: None,
       quick_connect_task: None,
-      notice: None,
       playback_notice: None,
-      active_toast: None,
-      next_toast_id: 0,
-      tray: None,
       quit_requested: false,
       destination: Destination::Home,
       navigation_stack: Vec::new(),
@@ -758,10 +749,7 @@ impl State {
       detail: DetailState::default(),
       detail_artwork: DetailArtwork::default(),
       home: HomeState::default(),
-      artwork_adapter,
-      artwork_binder: ArtworkBinder::default(),
       home_artwork: HomeArtwork::default(),
-      artwork_handles: ArtworkHandleRetention::default(),
       playback_artwork: None,
       playback_controller: None,
       playback_session,
@@ -832,12 +820,13 @@ impl State {
   }
   pub fn retain_artwork_handles(&mut self) {
     let slots: HashSet<_> = self.all_artwork_slots().collect();
-    self.artwork_handles.retain_slots(slots);
+    self.kernel.artwork_handles.retain_slots(slots);
   }
   pub fn intro_availability(&self) -> IntroAvailability {
     IntroAvailability {
       mode: intro_skip_mode(self.settings.snapshot().intro_mode()),
       skipper_available: self
+        .kernel
         .client
         .as_ref()
         .is_some_and(|client| client.supports_intro_skipper()),
@@ -877,15 +866,15 @@ impl State {
     level: NoticeLevel,
     message: impl Into<String>,
   ) -> iced::Task<crate::app::message::Message> {
-    self.next_toast_id = self.next_toast_id.wrapping_add(1);
-    let id = self.next_toast_id;
+    self.kernel.next_toast_id = self.kernel.next_toast_id.wrapping_add(1);
+    let id = self.kernel.next_toast_id;
     let message = message.into();
-    self.active_toast = Some(ToastNotice {
+    self.kernel.active_toast = Some(ToastNotice {
       id,
       message: message.clone(),
       level,
     });
-    self.notice = Some(message);
+    self.kernel.notice = Some(message);
     iced::Task::perform(
       async move {
         tokio::time::sleep(std::time::Duration::from_secs(5)).await;
@@ -897,20 +886,21 @@ impl State {
 
   pub fn dismiss_toast(&mut self, id: u64) {
     if self
+      .kernel
       .active_toast
       .as_ref()
       .is_some_and(|toast| toast.id == id)
     {
-      self.active_toast = None;
-      self.notice = None;
+      self.kernel.active_toast = None;
+      self.kernel.notice = None;
       self.playback_notice = None;
     }
   }
 
   #[allow(dead_code)]
   pub fn clear_toast(&mut self) {
-    self.active_toast = None;
-    self.notice = None;
+    self.kernel.active_toast = None;
+    self.kernel.notice = None;
     self.playback_notice = None;
   }
 }

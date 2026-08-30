@@ -90,19 +90,20 @@ pub fn update(state: &mut State, message: Message) -> Task<Message> {
   match message {
     Message::Window(message) => update_window(state, message),
     Message::Login(message) => {
-      let was_connected = state.connection == ConnectionPhase::Connected;
+      let was_connected = state.kernel.connection == ConnectionPhase::Connected;
       let previous_error = state.login.error.clone();
       let login_task = update_login(state, message).map(Message::Login);
-      let is_connected = state.connection == ConnectionPhase::Connected;
+      let is_connected = state.kernel.connection == ConnectionPhase::Connected;
       if state.login.error != previous_error {
         if let Some(error) = &state.login.error {
           state
+            .kernel
             .diagnostics
             .record(DiagnosticLevel::Error, DiagnosticCategory::Auth, error);
         }
       }
       if !was_connected && is_connected {
-        state.diagnostics.record(
+        state.kernel.diagnostics.record(
           DiagnosticLevel::Info,
           DiagnosticCategory::Connection,
           "Connected to media server.",
@@ -115,7 +116,7 @@ pub fn update(state: &mut State, message: Message) -> Task<Message> {
           start_remote_session(state),
         ])
       } else if was_connected && !is_connected {
-        state.diagnostics.record(
+        state.kernel.diagnostics.record(
           DiagnosticLevel::Info,
           DiagnosticCategory::Connection,
           "Disconnected from media server.",
@@ -127,9 +128,10 @@ pub fn update(state: &mut State, message: Message) -> Task<Message> {
     }
     Message::Home(message) => update_home(state, message),
     Message::Browse(message) => {
-      let previous_notice = state.notice.clone();
+      let previous_notice = state.kernel.notice.clone();
       let task = update_browse(state, message);
       if let Some(notice) = state
+        .kernel
         .notice
         .clone()
         .filter(|notice| Some(notice.as_str()) != previous_notice.as_deref())
@@ -151,7 +153,7 @@ pub fn update(state: &mut State, message: Message) -> Task<Message> {
     }
     Message::Remote(message) => {
       let previous_state = state.remote_control_state;
-      let previous_notice = state.notice.clone();
+      let previous_notice = state.kernel.notice.clone();
       let task = update_remote(state, message);
       let toast_task = record_remote_change(state, previous_state, previous_notice.as_deref());
       Task::batch([task, toast_task])
@@ -163,9 +165,11 @@ pub fn update(state: &mut State, message: Message) -> Task<Message> {
     }
     Message::ArtworkStreamCompleted(summary) => {
       if let Some(message) = summary.diagnostic_message() {
-        state
-          .diagnostics
-          .record(DiagnosticLevel::Info, DiagnosticCategory::Artwork, message);
+        state.kernel.diagnostics.record(
+          DiagnosticLevel::Info,
+          DiagnosticCategory::Artwork,
+          message,
+        );
       }
       Task::none()
     }
@@ -175,7 +179,7 @@ pub fn update(state: &mut State, message: Message) -> Task<Message> {
 fn record_playback_notice(state: &mut State, previous: Option<&str>) -> Task<Message> {
   let Some(notice) = state.playback_notice.clone() else {
     if previous.is_some() {
-      state.diagnostics.reset_coalescing();
+      state.kernel.diagnostics.reset_coalescing();
     }
     return Task::none();
   };
@@ -193,6 +197,7 @@ fn record_playback_notice(state: &mut State, previous: Option<&str>) -> Task<Mes
   };
   let key = diagnostic_coalescing_key("playback", &notice);
   state
+    .kernel
     .diagnostics
     .record_coalesced(&key, level, DiagnosticCategory::Playback, &notice);
 
@@ -230,15 +235,17 @@ fn record_remote_change(
       ),
     };
     state
+      .kernel
       .diagnostics
       .record(level, DiagnosticCategory::RemoteControl, message);
   }
   if let Some(notice) = state
+    .kernel
     .notice
     .clone()
     .filter(|notice| Some(notice.as_str()) != previous_notice)
   {
-    state.diagnostics.record(
+    state.kernel.diagnostics.record(
       DiagnosticLevel::Warning,
       DiagnosticCategory::RemoteControl,
       &notice,
@@ -250,7 +257,7 @@ fn record_remote_change(
 
 fn update_window(state: &mut State, message: WindowMessage) -> Task<Message> {
   match message {
-    WindowMessage::CloseRequested(id) if state.tray.is_some() => {
+    WindowMessage::CloseRequested(id) if state.kernel.tray.is_some() => {
       iced::window::set_mode(id, iced::window::Mode::Hidden)
     }
     WindowMessage::CloseRequested(_) => {
@@ -411,7 +418,7 @@ fn update_settings(state: &mut State, message: SettingsMessage) -> Task<Message>
       let enabled = !state.settings.snapshot().image_cache_enabled();
       let result = state.settings.set_image_cache_enabled(enabled);
       if finish_settings_mutation(state, result) {
-        state.artwork_adapter.set_disk_cache_enabled(enabled);
+        state.kernel.artwork_adapter.set_disk_cache_enabled(enabled);
       }
       Task::none()
     }
@@ -457,7 +464,7 @@ fn update_settings(state: &mut State, message: SettingsMessage) -> Task<Message>
     }
     SettingsMessage::Disconnect => stop_remote_session_for_login(state).map(Message::Login),
     SettingsMessage::SignOut => {
-      if let Some(key) = state.active_profile.clone() {
+      if let Some(key) = state.kernel.active_profile.clone() {
         start_forget(state, key)
           .map(|task| task.map(Message::Login))
           .unwrap_or_else(Task::none)
@@ -468,7 +475,7 @@ fn update_settings(state: &mut State, message: SettingsMessage) -> Task<Message>
     SettingsMessage::PlaybackConfigApplied(result) => {
       if result.is_err() {
         state.settings_view.error = Some(PLAYBACK_CONFIG_APPLY_ERROR);
-        state.diagnostics.record(
+        state.kernel.diagnostics.record(
           DiagnosticLevel::Error,
           DiagnosticCategory::Config,
           PLAYBACK_CONFIG_APPLY_ERROR,
@@ -493,7 +500,7 @@ fn finish_settings_mutation(
       state.settings_view.error = None;
       state.settings_view.saved = Some("Saved");
       if changed {
-        state.diagnostics.record(
+        state.kernel.diagnostics.record(
           DiagnosticLevel::Info,
           DiagnosticCategory::Config,
           "Settings updated.",
@@ -504,7 +511,7 @@ fn finish_settings_mutation(
     Err(error) => {
       state.settings_view.saved = None;
       state.settings_view.error = Some(settings_mutation_error(&error));
-      state.diagnostics.record(
+      state.kernel.diagnostics.record(
         DiagnosticLevel::Error,
         DiagnosticCategory::Config,
         error.to_string(),
@@ -534,7 +541,7 @@ fn apply_playback_configuration(state: &mut State) -> Task<Message> {
       |result| Message::Settings(SettingsMessage::PlaybackConfigApplied(result)),
     );
   }
-  let Some(client) = state.client.as_ref().map(Arc::clone) else {
+  let Some(client) = state.kernel.client.as_ref().map(Arc::clone) else {
     return Task::none();
   };
   match PlaybackController::discover(client, config) {
@@ -571,7 +578,7 @@ fn apply_playback_configuration(state: &mut State) -> Task<Message> {
 }
 
 fn refinalize_playback_target(state: &mut State) -> Task<Message> {
-  let Some(client) = state.client.as_ref().map(Arc::clone) else {
+  let Some(client) = state.kernel.client.as_ref().map(Arc::clone) else {
     return Task::none();
   };
   let name = state
@@ -584,7 +591,7 @@ fn refinalize_playback_target(state: &mut State) -> Task<Message> {
   if !should_refinalize_playback_target(state) {
     return Task::none();
   }
-  state.diagnostics.record(
+  state.kernel.diagnostics.record(
     DiagnosticLevel::Info,
     DiagnosticCategory::RemoteControl,
     "Playback target name changed; remote registration requested.",
@@ -597,13 +604,13 @@ fn refinalize_playback_target(state: &mut State) -> Task<Message> {
 }
 
 fn should_refinalize_playback_target(state: &State) -> bool {
-  state.connection == ConnectionPhase::Connected
+  state.kernel.connection == ConnectionPhase::Connected
     && state.remote_session.is_some()
     && state.remote_control_state == RemoteControlState::Available
 }
 
 fn start_remote_session(state: &mut State) -> Task<Message> {
-  let Some(client) = state.client.as_ref().map(Arc::clone) else {
+  let Some(client) = state.kernel.client.as_ref().map(Arc::clone) else {
     return Task::none();
   };
   if let Some(name) = state.settings.snapshot().playback_target_name() {
@@ -676,8 +683,8 @@ const REMOTE_TRACKS_UNAVAILABLE_NOTICE: &str =
 fn update_remote(state: &mut State, message: RemoteMessage) -> Task<Message> {
   match message {
     RemoteMessage::Started { remote, result } => {
-      if !state.request_gate.is_current_remote(remote)
-        || state.connection != ConnectionPhase::Connected
+      if !state.kernel.request_gate.is_current_remote(remote)
+        || state.kernel.connection != ConnectionPhase::Connected
       {
         return match result {
           Ok(started) => {
@@ -696,24 +703,24 @@ fn update_remote(state: &mut State, message: RemoteMessage) -> Task<Message> {
           state.remote_session = Some(session);
           state.remote_control_state = RemoteControlState::Available;
           if !validated {
-            state.notice = Some(
+            state.kernel.notice = Some(
               "Remote playback target connected, but server session validation is still pending."
                 .to_owned(),
             );
           }
         }
         Err(error) => {
-          state.playback_remote = state.request_gate.begin_remote();
+          state.playback_remote = state.kernel.request_gate.begin_remote();
           state.remote_session = None;
           state.remote_events = None;
           state.remote_control_state = RemoteControlState::Unavailable;
-          state.notice = Some(error.diagnostic().to_owned());
+          state.kernel.notice = Some(error.diagnostic().to_owned());
         }
       }
       Task::none()
     }
     RemoteMessage::Event { remote, event } => {
-      if !state.request_gate.is_current_remote(remote) {
+      if !state.kernel.request_gate.is_current_remote(remote) {
         return Task::none();
       }
       match event {
@@ -724,7 +731,7 @@ fn update_remote(state: &mut State, message: RemoteMessage) -> Task<Message> {
         }
         JellyfinWebSocketEvent::Command(_) => Task::none(),
         JellyfinWebSocketEvent::Reconnected => {
-          let Some(client) = state.client.as_ref().map(Arc::clone) else {
+          let Some(client) = state.kernel.client.as_ref().map(Arc::clone) else {
             return Task::none();
           };
           state.remote_control_state = RemoteControlState::Connecting;
@@ -735,27 +742,27 @@ fn update_remote(state: &mut State, message: RemoteMessage) -> Task<Message> {
         }
         JellyfinWebSocketEvent::ConnectionLost => {
           state.remote_control_state = RemoteControlState::Lost;
-          state.notice = Some(REMOTE_CONNECTION_LOST_NOTICE.to_owned());
+          state.kernel.notice = Some(REMOTE_CONNECTION_LOST_NOTICE.to_owned());
           Task::none()
         }
         JellyfinWebSocketEvent::Connected => Task::none(),
       }
     }
     RemoteMessage::Finalized { remote, result } => {
-      if !state.request_gate.is_current_remote(remote) {
+      if !state.kernel.request_gate.is_current_remote(remote) {
         return Task::none();
       }
       match result {
         Ok(true) => {
           state.remote_control_state = RemoteControlState::Available;
-          if state.notice.as_deref() == Some(REMOTE_CONNECTION_LOST_NOTICE) {
-            state.notice = None;
+          if state.kernel.notice.as_deref() == Some(REMOTE_CONNECTION_LOST_NOTICE) {
+            state.kernel.notice = None;
           }
           Task::none()
         }
         Ok(false) => {
           state.remote_control_state = RemoteControlState::Available;
-          state.notice = Some(
+          state.kernel.notice = Some(
             "Remote playback target reconnected, but server session validation is still pending."
               .to_owned(),
           );
@@ -771,13 +778,13 @@ fn update_remote(state: &mut State, message: RemoteMessage) -> Task<Message> {
       start_position_ticks,
       selection,
     } => {
-      if !state.request_gate.is_current_remote(remote)
-        || !state.request_gate.is_current_remote_play(play)
+      if !state.kernel.request_gate.is_current_remote(remote)
+        || !state.kernel.request_gate.is_current_remote_play(play)
       {
         return Task::none();
       }
       let Ok(item) = *result else {
-        state.notice = Some("Remote playback item could not be loaded.".to_owned());
+        state.kernel.notice = Some("Remote playback item could not be loaded.".to_owned());
         return Task::none();
       };
       let position = start_position_ticks.map_or(
@@ -928,10 +935,10 @@ fn handle_remote_command(
   match remote_command_action(command, &state.playback_view) {
     Some(RemoteCommandAction::Intent(intent)) => {
       if intent.invalidates_remote_play() {
-        state.request_gate.begin_remote_play();
+        state.kernel.request_gate.begin_remote_play();
       }
       let Some(intent) = intent.into_playback_intent(&state.playback_view) else {
-        state.notice = Some(REMOTE_TRACKS_UNAVAILABLE_NOTICE.to_owned());
+        state.kernel.notice = Some(REMOTE_TRACKS_UNAVAILABLE_NOTICE.to_owned());
         return Task::none();
       };
       apply_playback_input(state, PlaybackInput::Intent(intent))
@@ -941,8 +948,8 @@ fn handle_remote_command(
       start_position_ticks,
       selection,
     }) => {
-      let play = state.request_gate.begin_remote_play();
-      let Some(client) = state.client.as_ref().map(Arc::clone) else {
+      let play = state.kernel.request_gate.begin_remote_play();
+      let Some(client) = state.kernel.client.as_ref().map(Arc::clone) else {
         return Task::none();
       };
       Task::perform(
@@ -984,10 +991,11 @@ fn provider_track_id(playback: &SessionView, track_type: &str, provider_index: i
 }
 
 fn fail_remote_finalization(state: &mut State) -> Task<Message> {
-  state.playback_remote = state.request_gate.begin_remote();
+  state.playback_remote = state.kernel.request_gate.begin_remote();
   state.remote_events = None;
   state.remote_control_state = RemoteControlState::Unavailable;
-  state.notice = Some("Remote playback target capabilities could not be registered.".to_owned());
+  state.kernel.notice =
+    Some("Remote playback target capabilities could not be registered.".to_owned());
   let Some(session) = state.remote_session.take() else {
     return Task::none();
   };
@@ -1004,7 +1012,7 @@ async fn disconnect_remote_session(session: RemoteSessionHandle) {
 }
 
 fn stop_remote_session_for_quit(state: &mut State) -> Task<Message> {
-  state.playback_remote = state.request_gate.begin_remote();
+  state.playback_remote = state.kernel.request_gate.begin_remote();
   state.remote_events = None;
   state.remote_control_state = RemoteControlState::Unavailable;
   let Some(session) = state.remote_session.take() else {
@@ -1069,11 +1077,11 @@ fn initialize_playback(state: &mut State) {
   clear_player_artwork(state);
   state.seek_preview = None;
   state.volume_preview = None;
-  state.playback_remote = state.request_gate.begin_remote();
+  state.playback_remote = state.kernel.request_gate.begin_remote();
   state.in_flight_refresh = None;
   state.in_flight_command = None;
 
-  let Some(client) = state.client.as_ref().map(Arc::clone) else {
+  let Some(client) = state.kernel.client.as_ref().map(Arc::clone) else {
     state.playback_controller = None;
     return;
   };
@@ -1111,7 +1119,7 @@ fn apply_local_playback_intent(state: &mut State, intent: PlaybackIntent) -> Tas
     &intent,
     PlaybackIntent::Start { .. } | PlaybackIntent::Stop | PlaybackIntent::PlayAdjacent(_)
   ) {
-    state.request_gate.begin_remote_play();
+    state.kernel.request_gate.begin_remote_play();
   }
   apply_playback_input(state, PlaybackInput::Intent(intent))
 }
@@ -1269,8 +1277,8 @@ fn update_playback(state: &mut State, message: PlaybackMessage) -> Task<Message>
       detail,
     } => {
       if remote != state.playback_remote
-        || !state.request_gate.is_current_remote(remote)
-        || !state.request_gate.is_current_remote_play(play)
+        || !state.kernel.request_gate.is_current_remote(remote)
+        || !state.kernel.request_gate.is_current_remote_play(play)
       {
         return Task::none();
       }
@@ -1295,8 +1303,9 @@ fn update_playback(state: &mut State, message: PlaybackMessage) -> Task<Message>
       image_id,
       result,
     } => {
-      let session_ok = state.request_gate.is_current_session(session);
+      let session_ok = state.kernel.request_gate.is_current_session(session);
       if state
+        .kernel
         .artwork_binder
         .settle(slot, ArtworkSurface::PlayerBar, session_ok)
         != ArtworkSettlement::Apply
@@ -1313,7 +1322,7 @@ fn update_playback(state: &mut State, message: PlaybackMessage) -> Task<Message>
       match result {
         Ok(raster) => {
           cell.state = ArtworkCellState::Ready;
-          state.artwork_handles.insert(
+          state.kernel.artwork_handles.insert(
             slot,
             image_id,
             image::Handle::from_rgba(raster.width(), raster.height(), raster.into_pixels()),
@@ -1371,14 +1380,14 @@ fn sync_playback_projection(state: &mut State) {
 }
 
 fn sync_tray(state: &State) {
-  if let Some(tray) = &state.tray {
+  if let Some(tray) = &state.kernel.tray {
     tray.sync(&state.playback_view, state.quit_requested);
   }
 }
 
 fn clear_player_artwork(state: &mut State) {
   if let Some(cell) = state.playback_artwork.take() {
-    state.artwork_handles.remove(cell.slot);
+    state.kernel.artwork_handles.remove(cell.slot);
   }
 }
 
@@ -1400,7 +1409,7 @@ fn execute_playback_effects(state: &mut State, effects: Vec<PlaybackEffect>) -> 
   let adjacent_play = effects
     .iter()
     .any(|effect| matches!(effect, PlaybackEffect::LookupAdjacent(_, _)))
-    .then(|| state.request_gate.begin_remote_play());
+    .then(|| state.kernel.request_gate.begin_remote_play());
   Task::batch(
     effects
       .into_iter()
@@ -1430,7 +1439,7 @@ fn execute_playback_effect(
       let Some(play) = adjacent_play else {
         return Task::none();
       };
-      let Some(client) = state.client.as_ref().map(Arc::clone) else {
+      let Some(client) = state.kernel.client.as_ref().map(Arc::clone) else {
         return Task::done(Message::Playback(PlaybackMessage::AdjacentSettled {
           remote: state.playback_remote,
           play,
@@ -1472,6 +1481,7 @@ fn execute_playback_effect(
     }
     PlaybackEffect::FetchIntroRanges(id, item_id) => {
       let Some(client) = state
+        .kernel
         .client
         .as_ref()
         .filter(|client| client.supports_intro_skipper())
@@ -1665,7 +1675,7 @@ fn prepare_player_artwork(state: &mut State) -> Task<Message> {
     clear_player_artwork(state);
     return Task::none();
   };
-  let Some(client) = state.client.as_ref().map(Arc::clone) else {
+  let Some(client) = state.kernel.client.as_ref().map(Arc::clone) else {
     return Task::none();
   };
   if let Some(cell) = &state.playback_artwork {
@@ -1675,6 +1685,7 @@ fn prepare_player_artwork(state: &mut State) -> Task<Message> {
       }
       if cell.state == ArtworkCellState::Ready
         && state
+          .kernel
           .artwork_handles
           .get(cell.slot, &cell.image_id)
           .is_some()
@@ -1685,12 +1696,16 @@ fn prepare_player_artwork(state: &mut State) -> Task<Message> {
   }
   clear_player_artwork(state);
   if let Some(raster) = state
+    .kernel
     .artwork_adapter
     .cached(&image_id, ArtworkSizeClass::Card)
   {
-    let slot = state.artwork_binder.bind_settled();
+    let slot = state.kernel.artwork_binder.bind_settled();
     let handle = image::Handle::from_rgba(raster.width(), raster.height(), raster.into_pixels());
-    state.artwork_handles.insert(slot, image_id.clone(), handle);
+    state
+      .kernel
+      .artwork_handles
+      .insert(slot, image_id.clone(), handle);
     state.playback_artwork = Some(ArtworkCell {
       slot,
       image_id,
@@ -1698,14 +1713,14 @@ fn prepare_player_artwork(state: &mut State) -> Task<Message> {
     });
     return Task::none();
   }
-  let slot = state.artwork_binder.bind_player_bar();
+  let slot = state.kernel.artwork_binder.bind_player_bar();
   state.playback_artwork = Some(ArtworkCell {
     slot,
     image_id: image_id.clone(),
     state: ArtworkCellState::Loading,
   });
-  let adapter = Arc::clone(&state.artwork_adapter);
-  let session = state.request_gate.current_session();
+  let adapter = Arc::clone(&state.kernel.artwork_adapter);
+  let session = state.kernel.request_gate.current_session();
   let completion_image_id = image_id.clone();
   Task::perform(
     async move {
@@ -1749,7 +1764,12 @@ fn update_home(state: &mut State, message: HomeMessage) -> Task<Message> {
     HomeMessage::Navigate(destination) => navigate(state, destination),
     HomeMessage::Retry => start_home_load(state),
     HomeMessage::Loaded { token, result } => {
-      if !settle_home(&mut state.home, &mut state.request_gate, token, result) {
+      if !settle_home(
+        &mut state.home,
+        &mut state.kernel.request_gate,
+        token,
+        result,
+      ) {
         return Task::none();
       }
       prepare_home_artwork(state)
@@ -1760,7 +1780,7 @@ fn update_home(state: &mut State, message: HomeMessage) -> Task<Message> {
       image_id,
       result,
     } => {
-      let session_ok = state.request_gate.is_current_session(session);
+      let session_ok = state.kernel.request_gate.is_current_session(session);
       apply_home_artwork_completion(
         state,
         session_ok,
@@ -1781,6 +1801,7 @@ fn apply_home_artwork_completion(
   completion: ArtworkLoadCompletion,
 ) {
   if state
+    .kernel
     .artwork_binder
     .settle(completion.slot, ArtworkSurface::Home, session_ok)
     != ArtworkSettlement::Apply
@@ -1796,7 +1817,7 @@ fn apply_home_artwork_completion(
   match completion.result {
     Ok(raster) => {
       cell.state = ArtworkCellState::Ready;
-      state.artwork_handles.insert(
+      state.kernel.artwork_handles.insert(
         completion.slot,
         completion.image_id,
         image::Handle::from_rgba(raster.width(), raster.height(), raster.into_pixels()),
@@ -1812,11 +1833,11 @@ fn start_home_load(state: &mut State) -> Task<Message> {
     state.home.begin_load();
   }
   if state.playback_view.now_playing.is_none() {
-    state.artwork_adapter.cancel_pending();
+    state.kernel.artwork_adapter.cancel_pending();
     state.home_artwork.prune_unready();
   }
-  let token = state.request_gate.begin_home();
-  let Some(client) = state.client.as_ref().map(Arc::clone) else {
+  let token = state.kernel.request_gate.begin_home();
+  let Some(client) = state.kernel.client.as_ref().map(Arc::clone) else {
     let error = "The connected media server session is unavailable.".to_owned();
     state.home.settle_video_home(Err(error.clone()));
     state.home.settle_shortcuts(Err(error));
@@ -1953,12 +1974,12 @@ fn prepare_home_artwork(state: &mut State) -> Task<Message> {
     .home_artwork
     .retain_items(hero_item_id, &section_item_ids);
 
-  let session = state.request_gate.current_session();
-  let Some(client) = state.client.as_ref().map(Arc::clone) else {
+  let session = state.kernel.request_gate.current_session();
+  let Some(client) = state.kernel.client.as_ref().map(Arc::clone) else {
     state.retain_artwork_handles();
     return Task::none();
   };
-  let adapter = Arc::clone(&state.artwork_adapter);
+  let adapter = Arc::clone(&state.kernel.artwork_adapter);
   let mut summary = ArtworkLoadSummary::default();
   let mut load_specs = Vec::new();
 
@@ -1974,6 +1995,7 @@ fn prepare_home_artwork(state: &mut State) -> Task<Message> {
         }
         if cell.state == ArtworkCellState::Ready
           && state
+            .kernel
             .artwork_handles
             .get(cell.slot, &cell.image_id)
             .is_some()
@@ -1985,9 +2007,10 @@ fn prepare_home_artwork(state: &mut State) -> Task<Message> {
 
     if let Some(raster) = adapter.cached(&spec.image_id, spec.size_class()) {
       summary.record(&ArtworkLoadObservation::raster_hit(raster.byte_len() as u64));
-      let slot = state.artwork_binder.bind_settled();
+      let slot = state.kernel.artwork_binder.bind_settled();
       let handle = image::Handle::from_rgba(raster.width(), raster.height(), raster.into_pixels());
       state
+        .kernel
         .artwork_handles
         .insert(slot, spec.image_id.clone(), handle);
       let cell = ArtworkCell {
@@ -2004,7 +2027,7 @@ fn prepare_home_artwork(state: &mut State) -> Task<Message> {
       continue;
     }
 
-    let slot = state.artwork_binder.bind(ArtworkSurface::Home);
+    let slot = state.kernel.artwork_binder.bind(ArtworkSurface::Home);
     let size_class = spec.size_class();
     let cell = ArtworkCell {
       slot,
@@ -2084,9 +2107,9 @@ fn push_artwork_spec(
 }
 
 fn leave_home_view(state: &mut State) {
-  state.request_gate.begin_home();
+  state.kernel.request_gate.begin_home();
   if state.playback_view.now_playing.is_none() {
-    state.artwork_adapter.cancel_pending();
+    state.kernel.artwork_adapter.cancel_pending();
     state.home_artwork.prune_unready();
   }
 }
@@ -2166,20 +2189,30 @@ fn update_detail(state: &mut State, message: DetailMessage) -> Task<Message> {
     DetailMessage::FavoriteToggled => start_user_data_update(state, UserDataActionKind::Favorite),
     DetailMessage::PlayedToggled => start_user_data_update(state, UserDataActionKind::Played),
     DetailMessage::Loaded { token, result } => {
-      if !settle_detail_load(&mut state.detail, &mut state.request_gate, token, *result) {
+      if !settle_detail_load(
+        &mut state.detail,
+        &mut state.kernel.request_gate,
+        token,
+        *result,
+      ) {
         return Task::none();
       }
       let followup = start_detail_followup(state);
       Task::batch([followup, prepare_detail_artwork(state)])
     }
     DetailMessage::SeasonLoaded { token, result } => {
-      if !settle_season_load(&mut state.detail, &mut state.request_gate, token, result) {
+      if !settle_season_load(
+        &mut state.detail,
+        &mut state.kernel.request_gate,
+        token,
+        result,
+      ) {
         return Task::none();
       }
       prepare_detail_artwork(state)
     }
     DetailMessage::NeighborsLoaded { token, result } => {
-      if !state.request_gate.finish_detail_aux(token) {
+      if !state.kernel.request_gate.finish_detail_aux(token) {
         return Task::none();
       }
       state.detail.season_neighbors = match result {
@@ -2189,9 +2222,12 @@ fn update_detail(state: &mut State, message: DetailMessage) -> Task<Message> {
       prepare_detail_artwork(state)
     }
     DetailMessage::UserDataUpdated { token, result } => {
-      let Some(update) =
-        settle_user_data_update(&mut state.detail, &mut state.request_gate, token, result)
-      else {
+      let Some(update) = settle_user_data_update(
+        &mut state.detail,
+        &mut state.kernel.request_gate,
+        token,
+        result,
+      ) else {
         return Task::none();
       };
       if let Some(update) = update {
@@ -2208,7 +2244,7 @@ fn update_detail(state: &mut State, message: DetailMessage) -> Task<Message> {
       image_id,
       result,
     } => {
-      let session_ok = state.request_gate.is_current_session(session);
+      let session_ok = state.kernel.request_gate.is_current_session(session);
       apply_detail_artwork_completion(
         state,
         session_ok,
@@ -2229,6 +2265,7 @@ fn apply_detail_artwork_completion(
   completion: ArtworkLoadCompletion,
 ) {
   if state
+    .kernel
     .artwork_binder
     .settle(completion.slot, ArtworkSurface::Detail, session_ok)
     != ArtworkSettlement::Apply
@@ -2244,7 +2281,7 @@ fn apply_detail_artwork_completion(
   match completion.result {
     Ok(raster) => {
       cell.state = ArtworkCellState::Ready;
-      state.artwork_handles.insert(
+      state.kernel.artwork_handles.insert(
         completion.slot,
         completion.image_id,
         image::Handle::from_rgba(raster.width(), raster.height(), raster.into_pixels()),
@@ -2266,10 +2303,10 @@ fn start_detail_load(state: &mut State) -> Task<Message> {
   };
   state.detail.clear();
   begin_detail_artwork_view(state);
-  state.request_gate.set_detail_item(Some(item_id));
-  let token = state.request_gate.begin_detail();
+  state.kernel.request_gate.set_detail_item(Some(item_id));
+  let token = state.kernel.request_gate.begin_detail();
   state.detail.content = jellypilot_core::LoadState::Loading;
-  let Some(client) = state.client.as_ref().map(Arc::clone) else {
+  let Some(client) = state.kernel.client.as_ref().map(Arc::clone) else {
     state.detail.content = jellypilot_core::LoadState::Failed(DETAIL_FAILURE.to_owned());
     return Task::none();
   };
@@ -2323,13 +2360,14 @@ fn start_detail_followup(state: &mut State) -> Task<Message> {
         return Task::none();
       };
       let Some(token) = state
+        .kernel
         .request_gate
         .begin_detail_aux(DetailAuxKind::SeasonNeighbors)
       else {
         return Task::none();
       };
       state.detail.season_neighbors = jellypilot_core::LoadState::Loading;
-      let Some(client) = state.client.as_ref().map(Arc::clone) else {
+      let Some(client) = state.kernel.client.as_ref().map(Arc::clone) else {
         state.detail.season_neighbors =
           jellypilot_core::LoadState::Failed(SEASON_FAILURE.to_owned());
         return Task::none();
@@ -2397,9 +2435,9 @@ fn start_selected_season_load(state: &mut State) -> Task<Message> {
     state.detail.season_episodes = jellypilot_core::LoadState::Idle;
     return Task::none();
   };
-  let token = state.request_gate.begin_detail();
+  let token = state.kernel.request_gate.begin_detail();
   state.detail.season_episodes = jellypilot_core::LoadState::Loading;
-  let Some(client) = state.client.as_ref().map(Arc::clone) else {
+  let Some(client) = state.kernel.client.as_ref().map(Arc::clone) else {
     state.detail.season_episodes = jellypilot_core::LoadState::Failed(SEASON_FAILURE.to_owned());
     return Task::none();
   };
@@ -2444,10 +2482,14 @@ fn start_user_data_update(state: &mut State, kind: UserDataActionKind) -> Task<M
     UserDataActionKind::Played if played => VideoUserDataAction::MarkUnplayed,
     UserDataActionKind::Played => VideoUserDataAction::MarkPlayed,
   };
-  let Some(token) = state.request_gate.begin_detail_aux(DetailAuxKind::UserData) else {
+  let Some(token) = state
+    .kernel
+    .request_gate
+    .begin_detail_aux(DetailAuxKind::UserData)
+  else {
     return Task::none();
   };
-  let Some(client) = state.client.as_ref().map(Arc::clone) else {
+  let Some(client) = state.kernel.client.as_ref().map(Arc::clone) else {
     state.detail.user_data_error = Some(USER_DATA_FAILURE.to_owned());
     return Task::none();
   };
@@ -2591,12 +2633,12 @@ fn prepare_detail_artwork(state: &mut State) -> Task<Message> {
     .collect::<HashSet<_>>();
   state.detail_artwork.retain_keys(&retained_keys);
   drop(retained_keys);
-  let session = state.request_gate.current_session();
-  let Some(client) = state.client.as_ref().map(Arc::clone) else {
+  let session = state.kernel.request_gate.current_session();
+  let Some(client) = state.kernel.client.as_ref().map(Arc::clone) else {
     state.retain_artwork_handles();
     return Task::none();
   };
-  let adapter = Arc::clone(&state.artwork_adapter);
+  let adapter = Arc::clone(&state.kernel.artwork_adapter);
   let mut summary = ArtworkLoadSummary::default();
   let mut load_specs = Vec::new();
   for spec in specs {
@@ -2607,6 +2649,7 @@ fn prepare_detail_artwork(state: &mut State) -> Task<Message> {
         }
         if cell.state == ArtworkCellState::Ready
           && state
+            .kernel
             .artwork_handles
             .get(cell.slot, &cell.image_id)
             .is_some()
@@ -2618,9 +2661,10 @@ fn prepare_detail_artwork(state: &mut State) -> Task<Message> {
 
     if let Some(raster) = adapter.cached(&spec.image_id, spec.size_class) {
       summary.record(&ArtworkLoadObservation::raster_hit(raster.byte_len() as u64));
-      let slot = state.artwork_binder.bind_settled();
+      let slot = state.kernel.artwork_binder.bind_settled();
       let handle = image::Handle::from_rgba(raster.width(), raster.height(), raster.into_pixels());
       state
+        .kernel
         .artwork_handles
         .insert(slot, spec.image_id.clone(), handle);
       state.detail_artwork.insert(
@@ -2634,7 +2678,7 @@ fn prepare_detail_artwork(state: &mut State) -> Task<Message> {
       continue;
     }
 
-    let slot = state.artwork_binder.bind(ArtworkSurface::Detail);
+    let slot = state.kernel.artwork_binder.bind(ArtworkSurface::Detail);
     state.detail_artwork.insert(
       spec.key,
       ArtworkCell {
@@ -2690,14 +2734,17 @@ fn detail_episode_key(item_id: &str) -> String {
 }
 
 fn begin_detail_artwork_view(state: &mut State) {
-  state.artwork_binder.begin_view(ArtworkSurface::Detail);
+  state
+    .kernel
+    .artwork_binder
+    .begin_view(ArtworkSurface::Detail);
   state.detail_artwork.clear();
 }
 
 fn leave_detail_view(state: &mut State) {
-  state.request_gate.navigate();
+  state.kernel.request_gate.navigate();
   if state.playback_view.now_playing.is_none() {
-    state.artwork_adapter.cancel_pending();
+    state.kernel.artwork_adapter.cancel_pending();
   }
   begin_detail_artwork_view(state);
   state.detail.clear();
@@ -2754,7 +2801,7 @@ fn update_browse(state: &mut State, message: BrowseMessage) -> Task<Message> {
       let effects = match state.browse.retry() {
         Ok(effects) => effects,
         Err(error) => {
-          state.notice = Some(format!("Could not retry library browsing: {error}"));
+          state.kernel.notice = Some(format!("Could not retry library browsing: {error}"));
           return Task::none();
         }
       };
@@ -2768,7 +2815,7 @@ fn update_browse(state: &mut State, message: BrowseMessage) -> Task<Message> {
       let effects = match state.browse.settle(settlement) {
         Ok(effects) => effects,
         Err(error) => {
-          state.notice = Some(format!("Could not apply library results: {error}"));
+          state.kernel.notice = Some(format!("Could not apply library results: {error}"));
           return Task::none();
         }
       };
@@ -2785,7 +2832,7 @@ fn update_browse(state: &mut State, message: BrowseMessage) -> Task<Message> {
       image_id,
       result,
     } => {
-      let session_ok = state.request_gate.is_current_session(session);
+      let session_ok = state.kernel.request_gate.is_current_session(session);
       apply_browse_artwork_completion(
         state,
         session_ok,
@@ -2806,6 +2853,7 @@ fn apply_browse_artwork_completion(
   completion: ArtworkLoadCompletion,
 ) {
   if state
+    .kernel
     .artwork_binder
     .settle(completion.slot, ArtworkSurface::Browse, session_ok)
     != ArtworkSettlement::Apply
@@ -2821,7 +2869,7 @@ fn apply_browse_artwork_completion(
   match completion.result {
     Ok(raster) => {
       cell.state = ArtworkCellState::Ready;
-      state.artwork_handles.insert(
+      state.kernel.artwork_handles.insert(
         completion.slot,
         completion.image_id,
         image::Handle::from_rgba(raster.width(), raster.height(), raster.into_pixels()),
@@ -2841,7 +2889,7 @@ fn persist_browse_filters(
   }
   let filters = mutation(state.settings.snapshot().browse_filters());
   if let Err(error) = state.settings.set_browse_filters(filters) {
-    state.notice = Some(format!("Could not save library filters: {error}"));
+    state.kernel.notice = Some(format!("Could not save library filters: {error}"));
     return Task::none();
   }
   start_browse(state)
@@ -2851,24 +2899,24 @@ fn start_browse(state: &mut State) -> Task<Message> {
   let Some(source) = browse_source(state) else {
     abort_browse_pages(state);
     if let Err(error) = state.browse.reset() {
-      state.notice = Some(format!("Could not reset library browsing: {error}"));
+      state.kernel.notice = Some(format!("Could not reset library browsing: {error}"));
       return Task::none();
     }
     sync_browse_view(state);
-    state.notice = Some("The selected library is no longer available.".to_owned());
+    state.kernel.notice = Some("The selected library is no longer available.".to_owned());
     return Task::none();
   };
   let preferences = BrowsePreferences::from(state.settings.snapshot().browse_filters());
   let effects = match state.browse.configure_with_preferences(source, preferences) {
     Ok(effects) => effects,
     Err(error) => {
-      state.notice = Some(format!("Could not open library browsing: {error}"));
+      state.kernel.notice = Some(format!("Could not open library browsing: {error}"));
       sync_browse_view(state);
       return Task::none();
     }
   };
   if state.playback_view.now_playing.is_none() {
-    state.artwork_adapter.cancel_pending();
+    state.kernel.artwork_adapter.cancel_pending();
   }
   begin_browse_artwork_view(state);
   sync_browse_view(state);
@@ -2876,7 +2924,7 @@ fn start_browse(state: &mut State) -> Task<Message> {
 }
 
 fn browse_source(state: &State) -> Option<BrowseSource> {
-  let session = state.request_gate.current_session();
+  let session = state.kernel.request_gate.current_session();
   match &state.destination {
     Destination::Library {
       library_id,
@@ -2980,7 +3028,7 @@ fn sync_browse_scroll_window(state: &mut State) -> Task<Message> {
   let effects = match state.browse.set_display_range(range, total) {
     Ok(effects) => effects,
     Err(error) => {
-      state.notice = Some(format!("Could not load more library items: {error}"));
+      state.kernel.notice = Some(format!("Could not load more library items: {error}"));
       return Task::none();
     }
   };
@@ -3031,7 +3079,7 @@ fn apply_browse_effects(state: &mut State, effects: Vec<BrowseEffect>) -> Task<M
 fn start_browse_page_request(state: &mut State, request: BrowsePageRequest) -> Task<Message> {
   let token = request.token;
   let failure_message = browse_failure_message(&request.source);
-  let Some(client) = state.client.as_ref().map(Arc::clone) else {
+  let Some(client) = state.kernel.client.as_ref().map(Arc::clone) else {
     return Task::done(Message::Browse(BrowseMessage::PageSettled(
       BrowsePageSettlement {
         source_id: request.source_id,
@@ -3092,12 +3140,12 @@ fn prepare_browse_artwork(state: &mut State) -> Task<Message> {
     .collect::<HashSet<_>>();
   state.browse_artwork.retain_items(&visible_ids);
   drop(visible_ids);
-  let session = state.request_gate.current_session();
-  let Some(client) = state.client.as_ref().map(Arc::clone) else {
+  let session = state.kernel.request_gate.current_session();
+  let Some(client) = state.kernel.client.as_ref().map(Arc::clone) else {
     state.retain_artwork_handles();
     return Task::none();
   };
-  let adapter = Arc::clone(&state.artwork_adapter);
+  let adapter = Arc::clone(&state.kernel.artwork_adapter);
   let class = SizeClass::from_width(state.window_size.width);
   let available_width = grid_available_width(state.window_size.width, class);
   let metrics = ArtworkGridMetrics::for_cards(available_width, CARD_COPY_HEIGHT);
@@ -3122,6 +3170,7 @@ fn prepare_browse_artwork(state: &mut State) -> Task<Message> {
         }
         if cell.state == ArtworkCellState::Ready
           && state
+            .kernel
             .artwork_handles
             .get(cell.slot, &cell.image_id)
             .is_some()
@@ -3133,9 +3182,12 @@ fn prepare_browse_artwork(state: &mut State) -> Task<Message> {
 
     if let Some(raster) = adapter.cached(&image_id, ArtworkSizeClass::Card) {
       summary.record(&ArtworkLoadObservation::raster_hit(raster.byte_len() as u64));
-      let slot = state.artwork_binder.bind_settled();
+      let slot = state.kernel.artwork_binder.bind_settled();
       let handle = image::Handle::from_rgba(raster.width(), raster.height(), raster.into_pixels());
-      state.artwork_handles.insert(slot, image_id.clone(), handle);
+      state
+        .kernel
+        .artwork_handles
+        .insert(slot, image_id.clone(), handle);
       state.browse_artwork.insert(
         item_id,
         ArtworkCell {
@@ -3147,7 +3199,7 @@ fn prepare_browse_artwork(state: &mut State) -> Task<Message> {
       continue;
     }
 
-    let slot = state.artwork_binder.bind(ArtworkSurface::Browse);
+    let slot = state.kernel.artwork_binder.bind(ArtworkSurface::Browse);
     state.browse_artwork.insert(
       item_id,
       ArtworkCell {
@@ -3189,18 +3241,21 @@ fn prepare_browse_artwork(state: &mut State) -> Task<Message> {
 }
 
 fn begin_browse_artwork_view(state: &mut State) {
-  state.artwork_binder.begin_view(ArtworkSurface::Browse);
+  state
+    .kernel
+    .artwork_binder
+    .begin_view(ArtworkSurface::Browse);
   state.browse_artwork.clear();
 }
 
 fn leave_browse_view(state: &mut State) {
   abort_browse_pages(state);
   if state.playback_view.now_playing.is_none() {
-    state.artwork_adapter.cancel_pending();
+    state.kernel.artwork_adapter.cancel_pending();
   }
   begin_browse_artwork_view(state);
   if let Err(error) = state.browse.reset() {
-    state.notice = Some(format!("Could not reset library browsing: {error}"));
+    state.kernel.notice = Some(format!("Could not reset library browsing: {error}"));
   }
   sync_browse_view(state);
 }
@@ -3214,26 +3269,26 @@ fn abort_browse_pages(state: &mut State) {
 fn reset_connected_surface(state: &mut State) -> Task<Message> {
   let playback_task =
     apply_playback_input(state, PlaybackInput::Intent(PlaybackIntent::Disconnect));
-  state.playback_remote = state.request_gate.begin_remote();
+  state.playback_remote = state.kernel.request_gate.begin_remote();
   state.remote_session = None;
   state.remote_events = None;
   state.remote_control_state = RemoteControlState::Unavailable;
   state.remote_stopping = false;
   abort_browse_pages(state);
-  state.artwork_adapter.reset_session();
-  state.artwork_binder.reset();
+  state.kernel.artwork_adapter.reset_session();
+  state.kernel.artwork_binder.reset();
   state.in_flight_refresh = None;
   state.in_flight_command = None;
   state.home_artwork = HomeArtwork::default();
   state.browse_artwork = BrowseArtwork::default();
   state.detail_artwork = DetailArtwork::default();
-  state.artwork_handles.clear();
+  state.kernel.artwork_handles.clear();
   state.home = HomeState::default();
   state.detail.clear();
   state.detail_items.clear();
   state.navigation_stack.clear();
   if let Err(error) = state.browse.reset() {
-    state.notice = Some(format!("Could not reset library browsing: {error}"));
+    state.kernel.notice = Some(format!("Could not reset library browsing: {error}"));
   }
   state.browse_view = LibraryBrowseView::Inactive;
   state.destination = Destination::Home;
@@ -3286,10 +3341,10 @@ pub fn update_login(state: &mut State, message: LoginMessage) -> Task<LoginMessa
     }
     LoginMessage::QuickConnectCancelled => {
       cancel_quick_connect(state);
-      state.connection = ConnectionPhase::SignedOut;
+      state.kernel.connection = ConnectionPhase::SignedOut;
       state.login.reset_quick_connect();
       state.login.error = None;
-      state.request_gate.disconnect();
+      state.kernel.request_gate.disconnect();
       Task::none()
     }
     LoginMessage::PasswordSubmitted => {
@@ -3301,13 +3356,13 @@ pub fn update_login(state: &mut State, message: LoginMessage) -> Task<LoginMessa
     }
     LoginMessage::RemoteDisconnected => {
       state.remote_stopping = false;
-      if let Some(client) = state.client.take() {
+      if let Some(client) = state.kernel.client.take() {
         client.login().disconnect();
       }
-      state.request_gate.disconnect();
-      state.connection = ConnectionPhase::SignedOut;
-      state.connected_identity = None;
-      state.active_profile = None;
+      state.kernel.request_gate.disconnect();
+      state.kernel.connection = ConnectionPhase::SignedOut;
+      state.kernel.connected_identity = None;
+      state.kernel.active_profile = None;
       Task::none()
     }
     LoginMessage::ProfilesLoaded { revision, result } => {
@@ -3330,7 +3385,7 @@ pub fn update_login(state: &mut State, message: LoginMessage) -> Task<LoginMessa
       result,
       submission,
     } => {
-      if !state.request_gate.finish_login(session) {
+      if !state.kernel.request_gate.finish_login(session) {
         return Task::none();
       }
       match result {
@@ -3347,17 +3402,17 @@ pub fn update_login(state: &mut State, message: LoginMessage) -> Task<LoginMessa
       }
     }
     LoginMessage::SavedSessionStored { session, result } => {
-      let current = state.request_gate.is_current_session(session);
+      let current = state.kernel.request_gate.is_current_session(session);
       match result {
         Ok((key, profiles)) => {
           state.login.profiles_revision = state.login.profiles_revision.wrapping_add(1);
           state.login.profiles = profiles;
           if current {
-            state.active_profile = Some(key);
+            state.kernel.active_profile = Some(key);
           }
         }
         Err(error) if current => {
-          state.notice = Some(LoginError::AuthStorage(error).to_string());
+          state.kernel.notice = Some(LoginError::AuthStorage(error).to_string());
         }
         Err(_) => {}
       }
@@ -3375,7 +3430,7 @@ pub fn update_login(state: &mut State, message: LoginMessage) -> Task<LoginMessa
       key,
       result,
     } => {
-      if !state.request_gate.finish_login(session) {
+      if !state.kernel.request_gate.finish_login(session) {
         return Task::none();
       }
       if state.login.busy_profile.as_ref() == Some(&key) {
@@ -3388,10 +3443,10 @@ pub fn update_login(state: &mut State, message: LoginMessage) -> Task<LoginMessa
           };
           let client = Arc::new(JellyfinClient::new());
           client.login().adopt_validated_session(&saved_session);
-          state.connection = ConnectionPhase::Connected;
-          state.connected_identity = Some(ConnectedIdentity::from_session(&saved_session));
-          state.client = Some(client);
-          state.active_profile = Some(key);
+          state.kernel.connection = ConnectionPhase::Connected;
+          state.kernel.connected_identity = Some(ConnectedIdentity::from_session(&saved_session));
+          state.kernel.client = Some(client);
+          state.kernel.active_profile = Some(key);
           state.login.error = None;
         }
         Err(error) => fail_restore(state, &error),
@@ -3421,12 +3476,12 @@ pub fn update_login(state: &mut State, message: LoginMessage) -> Task<LoginMessa
       if state.login.forget_confirmation.as_ref() == Some(&key) {
         state.login.forget_confirmation = None;
       }
-      let active_matches = state.active_profile.as_ref() == Some(&key);
+      let active_matches = state.kernel.active_profile.as_ref() == Some(&key);
       let disconnect = should_disconnect_after_forget(
         sign_out,
         session,
-        state.request_gate.current_session(),
-        state.connection,
+        state.kernel.request_gate.current_session(),
+        state.kernel.connection,
         active_matches,
       );
       match result {
@@ -3445,7 +3500,7 @@ pub fn update_login(state: &mut State, message: LoginMessage) -> Task<LoginMessa
 }
 
 fn stop_remote_session_for_login(state: &mut State) -> Task<LoginMessage> {
-  state.playback_remote = state.request_gate.begin_remote();
+  state.playback_remote = state.kernel.request_gate.begin_remote();
   state.remote_events = None;
   state.remote_control_state = RemoteControlState::Unavailable;
   let Some(session) = state.remote_session.take() else {
@@ -3469,7 +3524,7 @@ fn playback_allows_login(state: &mut State) -> bool {
 }
 
 pub fn load_saved_profiles(state: &State) -> Task<LoginMessage> {
-  let store = state.auth_store.clone();
+  let store = state.kernel.auth_store.clone();
   let revision = state.login.profiles_revision;
   Task::perform(async move { store.load_profiles().await }, move |result| {
     LoginMessage::ProfilesLoaded { revision, result }
@@ -3477,7 +3532,7 @@ pub fn load_saved_profiles(state: &State) -> Task<LoginMessage> {
 }
 
 fn start_quick_connect(state: &mut State) -> Task<LoginMessage> {
-  if !can_start_login(state.connection) {
+  if !can_start_login(state.kernel.connection) {
     return Task::none();
   }
   if state.login.provider != MediaServerProvider::Jellyfin {
@@ -3494,8 +3549,8 @@ fn start_quick_connect(state: &mut State) -> Task<LoginMessage> {
   state.login.server_url = server_url.clone();
 
   cancel_quick_connect(state);
-  let session = state.request_gate.begin_login();
-  state.connection = ConnectionPhase::Connecting;
+  let session = state.kernel.request_gate.begin_login();
+  state.kernel.connection = ConnectionPhase::Connecting;
   state.login.quick_connect = QuickConnectState::Requesting;
   state.login.error = None;
   let client = Arc::new(JellyfinClient::new());
@@ -3521,7 +3576,7 @@ fn start_quick_connect(state: &mut State) -> Task<LoginMessage> {
 }
 
 fn start_password_login(state: &mut State) -> Task<LoginMessage> {
-  if !can_start_login(state.connection) {
+  if !can_start_login(state.kernel.connection) {
     return Task::none();
   }
   let server_url = match validate_server_url(&state.login.server_url, state.login.provider) {
@@ -3539,8 +3594,8 @@ fn start_password_login(state: &mut State) -> Task<LoginMessage> {
   }
 
   cancel_quick_connect(state);
-  let session = state.request_gate.begin_login();
-  state.connection = ConnectionPhase::Connecting;
+  let session = state.kernel.request_gate.begin_login();
+  state.kernel.connection = ConnectionPhase::Connecting;
   state.login.error = None;
   let client = Arc::new(JellyfinClient::new());
   let command_client = Arc::clone(&client);
@@ -3587,13 +3642,13 @@ fn password_submission(state: &State, server_url: String, username: String) -> P
 fn handle_workflow_event(state: &mut State, event: LoginEvent) -> Task<LoginMessage> {
   match event {
     LoginEvent::QuickConnectCode { session, code } => {
-      if state.request_gate.is_current_login(session) {
+      if state.kernel.request_gate.is_current_login(session) {
         state.login.quick_connect = QuickConnectState::Waiting(code);
       }
       Task::none()
     }
     LoginEvent::QuickConnectApproving { session } => {
-      if state.request_gate.is_current_login(session) {
+      if state.kernel.request_gate.is_current_login(session) {
         state.login.quick_connect = QuickConnectState::Approving;
       }
       Task::none()
@@ -3603,7 +3658,7 @@ fn handle_workflow_event(state: &mut State, event: LoginEvent) -> Task<LoginMess
       client,
       result,
     } => {
-      if !state.request_gate.finish_login(session) {
+      if !state.kernel.request_gate.finish_login(session) {
         return Task::none();
       }
       state.quick_connect_task = None;
@@ -3666,13 +3721,13 @@ fn complete_authentication(
     persist_password_submission(state, submission);
   }
 
-  state.connection = ConnectionPhase::Connected;
-  state.connected_identity = Some(identity);
-  state.client = Some(client);
+  state.kernel.connection = ConnectionPhase::Connected;
+  state.kernel.connected_identity = Some(identity);
+  state.kernel.client = Some(client);
   state.login.password.clear();
   state.login.error = None;
   state.login.reset_quick_connect();
-  let store = state.auth_store.clone();
+  let store = state.kernel.auth_store.clone();
 
   Task::perform(
     async move { store.save_session(saved_session).await },
@@ -3690,17 +3745,17 @@ fn persist_password_submission(state: &mut State, submission: PasswordSubmission
     state.settings.clear_login_prefill()
   };
   if let Err(error) = settings_result {
-    state.notice = Some(format!("Could not update remembered sign-in: {error}"));
+    state.kernel.notice = Some(format!("Could not update remembered sign-in: {error}"));
   }
 }
 
 fn start_restore(state: &mut State, key: jellypilot_auth::SavedProfileKey) -> Task<LoginMessage> {
   interrupt_quick_connect(state);
-  let session = state.request_gate.begin_login();
-  state.connection = ConnectionPhase::Connecting;
+  let session = state.kernel.request_gate.begin_login();
+  state.kernel.connection = ConnectionPhase::Connecting;
   state.login.busy_profile = Some(key.clone());
   state.login.error = None;
-  let store = state.auth_store.clone();
+  let store = state.kernel.auth_store.clone();
   Task::perform(
     async move {
       let result = async {
@@ -3735,9 +3790,9 @@ fn start_forget(
   }
   state.login.forget_confirmation = None;
   state.login.busy_profile = Some(key.clone());
-  let session = state.request_gate.current_session();
-  let sign_out = state.active_profile.as_ref() == Some(&key);
-  let store = state.auth_store.clone();
+  let session = state.kernel.request_gate.current_session();
+  let sign_out = state.kernel.active_profile.as_ref() == Some(&key);
+  let store = state.kernel.auth_store.clone();
   Some(Task::perform(
     async move {
       let result = store.remove_profile(key.clone()).await;
@@ -3763,25 +3818,25 @@ fn interrupt_quick_connect(state: &mut State) {
     || !matches!(state.login.quick_connect, QuickConnectState::Idle)
   {
     cancel_quick_connect(state);
-    state.request_gate.disconnect();
-    state.connection = ConnectionPhase::SignedOut;
+    state.kernel.request_gate.disconnect();
+    state.kernel.connection = ConnectionPhase::SignedOut;
     state.login.reset_quick_connect();
   }
 }
 
 fn fail_login(state: &mut State, error: LoginError) {
-  state.connection = ConnectionPhase::Failed;
+  state.kernel.connection = ConnectionPhase::Failed;
   state.login.error = Some(error.to_string());
 }
 
 fn fail_password_login(state: &mut State, _error: &LoginError) {
-  state.connection = ConnectionPhase::Failed;
+  state.kernel.connection = ConnectionPhase::Failed;
   state.login.error =
     Some("Sign-in failed. Check your server, username, and password, then try again.".to_owned());
 }
 
 fn fail_restore(state: &mut State, _error: &LoginError) {
-  state.connection = ConnectionPhase::Failed;
+  state.kernel.connection = ConnectionPhase::Failed;
   state.login.error =
     Some("Could not restore this saved sign-in. Sign in again to refresh it.".to_owned());
 }
@@ -3849,6 +3904,7 @@ mod tests {
   use std::path::PathBuf;
 
   use super::*;
+  use crate::app::kernel::Kernel;
   use crate::app::state::LoginState;
   use jellypilot_auth::{AuthStorageError, SavedProfileKey};
   use jellypilot_core::config::SettingsStore;
@@ -3902,19 +3958,24 @@ mod tests {
       login: LoginState::from_settings(settings.snapshot()),
       settings,
       settings_view,
-      diagnostics: jellypilot_core::diagnostics::Diagnostics::default(),
-      auth_store: AuthStore::default(),
-      request_gate,
-      client: None,
-      connection: ConnectionPhase::SignedOut,
-      connected_identity: None,
-      active_profile: None,
+      kernel: Kernel {
+        diagnostics: jellypilot_core::diagnostics::Diagnostics::default(),
+        auth_store: AuthStore::default(),
+        request_gate,
+        client: None,
+        connection: ConnectionPhase::SignedOut,
+        connected_identity: None,
+        active_profile: None,
+        notice: None,
+        active_toast: None,
+        next_toast_id: 0,
+        tray: None,
+        artwork_adapter: Arc::new(jellypilot_media_server::artwork::ArtworkAdapter::new()),
+        artwork_binder: Default::default(),
+        artwork_handles: Default::default(),
+      },
       quick_connect_task: None,
-      notice: None,
       playback_notice: None,
-      active_toast: None,
-      next_toast_id: 0,
-      tray: None,
       quit_requested: false,
       destination: Destination::Home,
       navigation_stack: Vec::new(),
@@ -3922,10 +3983,7 @@ mod tests {
       detail: DetailState::default(),
       detail_artwork: DetailArtwork::default(),
       home: HomeState::default(),
-      artwork_adapter: Arc::new(jellypilot_media_server::artwork::ArtworkAdapter::new()),
-      artwork_binder: Default::default(),
       home_artwork: HomeArtwork::default(),
-      artwork_handles: Default::default(),
       playback_artwork: None,
       playback_controller: None,
       playback_session,
@@ -3966,7 +4024,7 @@ mod tests {
 
   fn search_source(state: &State, query: &str) -> BrowseSource {
     BrowseSource::Search {
-      session: state.request_gate.current_session(),
+      session: state.kernel.request_gate.current_session(),
       query: query.to_owned(),
     }
   }
@@ -4169,9 +4227,11 @@ mod tests {
     let mut state = test_state();
     state.destination = Destination::Detail("item-1".to_owned());
     state
+      .kernel
       .request_gate
       .set_detail_item(Some("item-1".to_owned()));
     let stale = state
+      .kernel
       .request_gate
       .begin_detail_aux(DetailAuxKind::UserData)
       .expect("detail item should permit user-data update");
@@ -4179,6 +4239,7 @@ mod tests {
     leave_detail_view(&mut state);
     state.destination = Destination::Detail("item-1".to_owned());
     state
+      .kernel
       .request_gate
       .set_detail_item(Some("item-1".to_owned()));
     state.detail.content =
@@ -4187,7 +4248,7 @@ mod tests {
 
     let settlement = settle_user_data_update(
       &mut state.detail,
-      &mut state.request_gate,
+      &mut state.kernel.request_gate,
       stale,
       Ok(VideoUserDataUpdate {
         item_id: "item-1".to_owned(),
@@ -4291,7 +4352,7 @@ mod tests {
   fn browse_failure_messages_are_fixed_for_library_and_search_sources() {
     let state = test_state();
     let library = BrowseSource::Library {
-      session: state.request_gate.current_session(),
+      session: state.kernel.request_gate.current_session(),
       shortcut: jellypilot_media_server::VideoLibraryShortcut {
         id: "library-1".to_owned(),
         name: "Movies".to_owned(),
@@ -4374,7 +4435,7 @@ mod tests {
     // height covers 4 rows, so the settled bootstrap expands to 6 rows.
     let mut state = test_state();
     let library = BrowseSource::Library {
-      session: state.request_gate.current_session(),
+      session: state.kernel.request_gate.current_session(),
       shortcut: jellypilot_media_server::VideoLibraryShortcut {
         id: "library-1".to_owned(),
         name: "Movies".to_owned(),
@@ -4533,14 +4594,14 @@ mod tests {
   fn invalid_server_url_is_rejected_before_a_login_token_is_created() {
     let mut state = test_state();
     state.login.server_url = "not a server".to_owned();
-    let session_before = state.request_gate.current_session();
+    let session_before = state.kernel.request_gate.current_session();
 
     drop(update_login(
       &mut state,
       LoginMessage::QuickConnectSubmitted,
     ));
 
-    assert_eq!(state.request_gate.current_session(), session_before);
+    assert_eq!(state.kernel.request_gate.current_session(), session_before);
     assert_eq!(
       state.login.error.as_deref(),
       Some("Enter a valid Jellyfin server URL.")
@@ -4555,7 +4616,7 @@ mod tests {
       &mut state,
       LoginMessage::QuickConnectSubmitted,
     ));
-    let first_session = state.request_gate.current_session();
+    let first_session = state.kernel.request_gate.current_session();
     state.login.quick_connect = QuickConnectState::Waiting("ABC123".to_owned());
 
     drop(update_login(
@@ -4569,7 +4630,7 @@ mod tests {
       LoginMessage::QuickConnectSubmitted,
     ));
     assert_eq!(state.login.quick_connect, QuickConnectState::Requesting);
-    assert_ne!(state.request_gate.current_session(), first_session);
+    assert_ne!(state.kernel.request_gate.current_session(), first_session);
   }
 
   #[test]
@@ -4610,7 +4671,7 @@ mod tests {
       &mut state,
       LoginMessage::QuickConnectSubmitted,
     ));
-    let stale_session = state.request_gate.current_session();
+    let stale_session = state.kernel.request_gate.current_session();
     drop(update_login(
       &mut state,
       LoginMessage::QuickConnectCancelled,
@@ -4630,14 +4691,14 @@ mod tests {
     ));
 
     assert!(state.quick_connect_task.is_some());
-    assert!(state.connection == ConnectionPhase::Connecting);
+    assert!(state.kernel.connection == ConnectionPhase::Connecting);
     assert_eq!(state.login.quick_connect, QuickConnectState::Requesting);
   }
 
   #[test]
   fn stale_profile_load_is_rejected_after_session_storage_completes() {
     let mut state = test_state();
-    let session = state.request_gate.current_session();
+    let session = state.kernel.request_gate.current_session();
     let key = profile_key("new");
 
     drop(update_login(
@@ -4656,7 +4717,7 @@ mod tests {
     ));
 
     assert_eq!(state.login.profiles_revision, 1);
-    assert_eq!(state.active_profile.as_ref(), Some(&key));
+    assert_eq!(state.kernel.active_profile.as_ref(), Some(&key));
     assert!(state.login.error.is_none());
     assert!(!state.login.profiles_loading);
   }
@@ -4665,13 +4726,13 @@ mod tests {
   fn forget_result_is_applied_after_a_new_login_session_starts() {
     let mut state = test_state();
     let key = profile_key("forgotten");
-    let forget_session = state.request_gate.begin_login();
-    state.connection = ConnectionPhase::Connected;
-    state.active_profile = Some(key.clone());
+    let forget_session = state.kernel.request_gate.begin_login();
+    state.kernel.connection = ConnectionPhase::Connected;
+    state.kernel.active_profile = Some(key.clone());
     state.login.busy_profile = Some(key.clone());
     state.login.forget_confirmation = Some(key.clone());
-    let current_session = state.request_gate.begin_login();
-    state.connection = ConnectionPhase::Connecting;
+    let current_session = state.kernel.request_gate.begin_login();
+    state.kernel.connection = ConnectionPhase::Connecting;
 
     drop(update_login(
       &mut state,
@@ -4683,12 +4744,12 @@ mod tests {
       },
     ));
 
-    assert_eq!(state.request_gate.current_session(), current_session);
+    assert_eq!(state.kernel.request_gate.current_session(), current_session);
     assert_eq!(state.login.profiles_revision, 1);
     assert!(state.login.busy_profile.is_none());
     assert!(state.login.forget_confirmation.is_none());
-    assert_eq!(state.active_profile.as_ref(), Some(&key));
-    assert!(state.connection == ConnectionPhase::Connecting);
+    assert_eq!(state.kernel.active_profile.as_ref(), Some(&key));
+    assert!(state.kernel.connection == ConnectionPhase::Connecting);
   }
 
   #[test]
@@ -4697,9 +4758,9 @@ mod tests {
     let first_key = profile_key("first");
     let second_key = profile_key("second");
     drop(start_restore(&mut state, first_key.clone()));
-    let first_session = state.request_gate.current_session();
+    let first_session = state.kernel.request_gate.current_session();
     drop(start_restore(&mut state, second_key.clone()));
-    let second_session = state.request_gate.current_session();
+    let second_session = state.kernel.request_gate.current_session();
 
     drop(update_login(
       &mut state,
@@ -4710,9 +4771,9 @@ mod tests {
       },
     ));
 
-    assert_eq!(state.request_gate.current_session(), second_session);
+    assert_eq!(state.kernel.request_gate.current_session(), second_session);
     assert_eq!(state.login.busy_profile.as_ref(), Some(&second_key));
-    assert!(state.connection == ConnectionPhase::Connecting);
+    assert!(state.kernel.connection == ConnectionPhase::Connecting);
     assert!(state.login.error.is_none());
   }
 
@@ -4738,12 +4799,15 @@ mod tests {
     state.login.server_url = "https://media.example.test".to_owned();
     drop(start_quick_connect(&mut state));
     state.login.quick_connect = QuickConnectState::Waiting("ABC123".to_owned());
-    let quick_connect_session = state.request_gate.current_session();
+    let quick_connect_session = state.kernel.request_gate.current_session();
     let key = profile_key("restore");
 
     drop(start_restore(&mut state, key.clone()));
 
-    assert_ne!(state.request_gate.current_session(), quick_connect_session);
+    assert_ne!(
+      state.kernel.request_gate.current_session(),
+      quick_connect_session
+    );
     assert!(state.quick_connect_task.is_none());
     assert_eq!(state.login.quick_connect, QuickConnectState::Idle);
     assert_eq!(state.login.busy_profile.as_ref(), Some(&key));
@@ -4752,11 +4816,11 @@ mod tests {
   #[test]
   fn login_submit_handlers_reject_requests_while_connecting() {
     let mut state = test_state();
-    state.connection = ConnectionPhase::Connecting;
+    state.kernel.connection = ConnectionPhase::Connecting;
     state.login.server_url = "https://media.example.test".to_owned();
     state.login.username = "ada".to_owned();
     state.login.password = Zeroizing::new("secret".to_owned());
-    let session = state.request_gate.current_session();
+    let session = state.kernel.request_gate.current_session();
 
     drop(update_login(
       &mut state,
@@ -4764,7 +4828,7 @@ mod tests {
     ));
     drop(update_login(&mut state, LoginMessage::PasswordSubmitted));
 
-    assert_eq!(state.request_gate.current_session(), session);
+    assert_eq!(state.kernel.request_gate.current_session(), session);
     assert_eq!(state.login.password.as_str(), "secret");
     assert_eq!(state.login.quick_connect, QuickConnectState::Idle);
   }
@@ -4802,8 +4866,8 @@ mod tests {
   #[test]
   fn password_and_restore_failures_use_fixed_user_messages() {
     let mut password_state = test_state();
-    let password_session = password_state.request_gate.begin_login();
-    password_state.connection = ConnectionPhase::Connecting;
+    let password_session = password_state.kernel.request_gate.begin_login();
+    password_state.kernel.connection = ConnectionPhase::Connecting;
     let submission = password_submission(
       &password_state,
       "https://media.example.test".to_owned(),
@@ -4823,8 +4887,8 @@ mod tests {
 
     let mut restore_state = test_state();
     let key = profile_key("restore-error");
-    let restore_session = restore_state.request_gate.begin_login();
-    restore_state.connection = ConnectionPhase::Connecting;
+    let restore_session = restore_state.kernel.request_gate.begin_login();
+    restore_state.kernel.connection = ConnectionPhase::Connecting;
     restore_state.login.busy_profile = Some(key.clone());
     drop(update_login(
       &mut restore_state,
@@ -5117,7 +5181,7 @@ mod tests {
   #[test]
   fn inactive_playback_clears_artwork_previews_and_popover_state() {
     let mut state = test_state();
-    state.client = Some(Arc::new(JellyfinClient::new()));
+    state.kernel.client = Some(Arc::new(JellyfinClient::new()));
     state.audio_menu_open = true;
     state.subtitle_menu_open = true;
     state.seek_preview = Some(42.0);
@@ -5134,13 +5198,13 @@ mod tests {
   #[test]
   fn player_artwork_rebind_releases_the_previous_decoded_handle() {
     let mut state = test_state();
-    let old_slot = state.artwork_binder.bind_player_bar();
+    let old_slot = state.kernel.artwork_binder.bind_player_bar();
     state.playback_artwork = Some(ArtworkCell {
       slot: old_slot,
       image_id: "old-image".to_owned(),
       state: ArtworkCellState::Ready,
     });
-    state.artwork_handles.insert(
+    state.kernel.artwork_handles.insert(
       old_slot,
       "old-image".to_owned(),
       image::Handle::from_rgba(1, 1, vec![0, 0, 0, 255]),
@@ -5148,11 +5212,15 @@ mod tests {
     let mut playable = episode("episode-1", 1);
     playable.artwork_image_id = Some("new-image".to_owned());
     state.playback_playable = Some(Playable::Library(playable));
-    state.client = Some(Arc::new(JellyfinClient::new()));
+    state.kernel.client = Some(Arc::new(JellyfinClient::new()));
 
     drop(prepare_player_artwork(&mut state));
 
-    assert!(state.artwork_handles.get(old_slot, "old-image").is_none());
+    assert!(state
+      .kernel
+      .artwork_handles
+      .get(old_slot, "old-image")
+      .is_none());
     assert_ne!(
       state.playback_artwork.as_ref().map(|cell| cell.slot),
       Some(old_slot)
@@ -5162,13 +5230,13 @@ mod tests {
   #[test]
   fn clearing_playback_releases_the_current_decoded_player_handle() {
     let mut state = test_state();
-    let slot = state.artwork_binder.bind_player_bar();
+    let slot = state.kernel.artwork_binder.bind_player_bar();
     state.playback_artwork = Some(ArtworkCell {
       slot,
       image_id: "player-image".to_owned(),
       state: ArtworkCellState::Ready,
     });
-    state.artwork_handles.insert(
+    state.kernel.artwork_handles.insert(
       slot,
       "player-image".to_owned(),
       image::Handle::from_rgba(1, 1, vec![0, 0, 0, 255]),
@@ -5176,7 +5244,11 @@ mod tests {
 
     drop(clear_inactive_playback(&mut state));
 
-    assert!(state.artwork_handles.get(slot, "player-image").is_none());
+    assert!(state
+      .kernel
+      .artwork_handles
+      .get(slot, "player-image")
+      .is_none());
     assert!(state.playback_artwork.is_none());
   }
 
@@ -5380,7 +5452,7 @@ mod tests {
     ));
 
     assert_eq!(
-      state.notice.as_deref(),
+      state.kernel.notice.as_deref(),
       Some(REMOTE_TRACKS_UNAVAILABLE_NOTICE)
     );
   }
@@ -5392,12 +5464,12 @@ mod tests {
       Instant::now(),
     );
     sync_playback_projection(&mut state);
-    let stale_play = state.request_gate.begin_remote_play();
+    let stale_play = state.kernel.request_gate.begin_remote_play();
     drop(update_playback(
       &mut state,
       PlaybackMessage::Intent(PlaybackIntent::Stop),
     ));
-    assert!(!state.request_gate.is_current_remote_play(stale_play));
+    assert!(!state.kernel.request_gate.is_current_remote_play(stale_play));
     let remote = state.playback_remote;
 
     drop(update_remote(
@@ -5431,14 +5503,14 @@ mod tests {
   fn local_adjacent_starts_invalidate_an_in_flight_remote_play_resolution() {
     for direction in [AdjacentDirection::Previous, AdjacentDirection::Next] {
       let mut state = test_state();
-      let stale_play = state.request_gate.begin_remote_play();
+      let stale_play = state.kernel.request_gate.begin_remote_play();
 
       drop(update_playback(
         &mut state,
         PlaybackMessage::Intent(PlaybackIntent::PlayAdjacent(direction)),
       ));
 
-      assert!(!state.request_gate.is_current_remote_play(stale_play));
+      assert!(!state.kernel.request_gate.is_current_remote_play(stale_play));
     }
   }
 
@@ -5569,7 +5641,7 @@ mod tests {
     assert!(state.playback_view.now_playing.is_none());
     assert!(state.playback_view.notice.is_none());
     assert!(state.playback_notice.is_none());
-    assert!(state.active_toast.is_none());
+    assert!(state.kernel.active_toast.is_none());
   }
 
   #[test]
@@ -5603,25 +5675,25 @@ mod tests {
     assert!(state.playback_view.now_playing.is_none());
     assert!(state.playback_view.notice.is_none());
     assert!(state.playback_notice.is_none());
-    assert!(state.active_toast.is_none());
+    assert!(state.kernel.active_toast.is_none());
   }
 
   #[test]
   fn failure_produces_toast_that_clears_on_timeout_message() {
     let mut state = test_state();
-    assert!(state.active_toast.is_none());
+    assert!(state.kernel.active_toast.is_none());
 
     let task = state.show_toast(NoticeLevel::Error, "Playback failed: decoder error");
     assert!(task.units() > 0);
-    assert!(state.active_toast.is_some());
-    let toast = state.active_toast.as_ref().unwrap();
+    assert!(state.kernel.active_toast.is_some());
+    let toast = state.kernel.active_toast.as_ref().unwrap();
     assert_eq!(toast.id, 1);
     assert_eq!(toast.message, "Playback failed: decoder error");
     assert_eq!(toast.level, NoticeLevel::Error);
 
     // Dismissing with matching ID clears the toast
     drop(update(&mut state, Message::DismissNotice(1)));
-    assert!(state.active_toast.is_none());
+    assert!(state.kernel.active_toast.is_none());
   }
 
   #[test]
@@ -5629,28 +5701,34 @@ mod tests {
     let mut state = test_state();
 
     drop(state.show_toast(NoticeLevel::Warning, "Warning 1"));
-    assert_eq!(state.active_toast.as_ref().unwrap().id, 1);
-    assert_eq!(state.active_toast.as_ref().unwrap().message, "Warning 1");
+    assert_eq!(state.kernel.active_toast.as_ref().unwrap().id, 1);
+    assert_eq!(
+      state.kernel.active_toast.as_ref().unwrap().message,
+      "Warning 1"
+    );
 
     drop(state.show_toast(NoticeLevel::Error, "Error 2"));
-    assert_eq!(state.active_toast.as_ref().unwrap().id, 2);
-    assert_eq!(state.active_toast.as_ref().unwrap().message, "Error 2");
+    assert_eq!(state.kernel.active_toast.as_ref().unwrap().id, 2);
+    assert_eq!(
+      state.kernel.active_toast.as_ref().unwrap().message,
+      "Error 2"
+    );
 
     // Timeout from older notice (id: 1) arrives -> does NOT clear newer notice (id: 2)
     drop(update(&mut state, Message::DismissNotice(1)));
-    assert!(state.active_toast.is_some());
-    assert_eq!(state.active_toast.as_ref().unwrap().id, 2);
+    assert!(state.kernel.active_toast.is_some());
+    assert_eq!(state.kernel.active_toast.as_ref().unwrap().id, 2);
 
     // Timeout or manual dismiss for newer notice (id: 2) -> clears it
     drop(update(&mut state, Message::DismissNotice(2)));
-    assert!(state.active_toast.is_none());
+    assert!(state.kernel.active_toast.is_none());
   }
 
   #[test]
   fn unavailable_remote_target_does_not_dispatch_commands() {
     let mut state = test_state();
     state.remote_control_state = RemoteControlState::Unavailable;
-    let pending = state.request_gate.begin_remote_play();
+    let pending = state.kernel.request_gate.begin_remote_play();
     let remote = state.playback_remote;
     drop(update_remote(
       &mut state,
@@ -5667,13 +5745,13 @@ mod tests {
       },
     ));
 
-    assert!(state.request_gate.is_current_remote_play(pending));
+    assert!(state.kernel.request_gate.is_current_remote_play(pending));
   }
 
   #[test]
   fn successful_reconnect_clears_only_the_connection_lost_notice() {
     let mut state = test_state();
-    state.notice = Some(REMOTE_CONNECTION_LOST_NOTICE.to_owned());
+    state.kernel.notice = Some(REMOTE_CONNECTION_LOST_NOTICE.to_owned());
     let remote = state.playback_remote;
 
     drop(update_remote(
@@ -5684,8 +5762,8 @@ mod tests {
       },
     ));
 
-    assert!(state.notice.is_none());
-    state.notice = Some("Unrelated notice".to_owned());
+    assert!(state.kernel.notice.is_none());
+    state.kernel.notice = Some("Unrelated notice".to_owned());
     drop(update_remote(
       &mut state,
       RemoteMessage::Finalized {
@@ -5693,13 +5771,13 @@ mod tests {
         result: Ok(true),
       },
     ));
-    assert_eq!(state.notice.as_deref(), Some("Unrelated notice"));
+    assert_eq!(state.kernel.notice.as_deref(), Some("Unrelated notice"));
   }
 
   #[test]
   fn reconnect_stays_connecting_until_capability_registration_finishes() {
     let mut state = test_state();
-    state.client = Some(Arc::new(JellyfinClient::new()));
+    state.kernel.client = Some(Arc::new(JellyfinClient::new()));
     state.remote_control_state = RemoteControlState::Lost;
     let remote = state.playback_remote;
 
@@ -5726,7 +5804,7 @@ mod tests {
   #[test]
   fn initial_setup_failure_invalidates_a_later_finalization_success() {
     let mut state = test_state();
-    state.connection = ConnectionPhase::Connected;
+    state.kernel.connection = ConnectionPhase::Connected;
     let stale_remote = state.playback_remote;
 
     drop(update_remote(
@@ -5745,7 +5823,7 @@ mod tests {
     ));
 
     assert_eq!(state.remote_control_state, RemoteControlState::Unavailable);
-    assert!(!state.request_gate.is_current_remote(stale_remote));
+    assert!(!state.kernel.request_gate.is_current_remote(stale_remote));
   }
 
   #[test]
@@ -5800,16 +5878,16 @@ mod tests {
   #[test]
   fn login_state_changes_only_after_remote_teardown_completion() {
     let mut state = test_state();
-    state.connection = ConnectionPhase::Connected;
-    state.client = Some(Arc::new(JellyfinClient::new()));
+    state.kernel.connection = ConnectionPhase::Connected;
+    state.kernel.client = Some(Arc::new(JellyfinClient::new()));
 
     drop(stop_remote_session_for_login(&mut state));
 
-    assert!(state.connection == ConnectionPhase::Connected);
-    assert!(state.client.is_some());
+    assert!(state.kernel.connection == ConnectionPhase::Connected);
+    assert!(state.kernel.client.is_some());
     drop(update_login(&mut state, LoginMessage::RemoteDisconnected));
-    assert!(state.connection == ConnectionPhase::SignedOut);
-    assert!(state.client.is_none());
+    assert!(state.kernel.connection == ConnectionPhase::SignedOut);
+    assert!(state.kernel.client.is_none());
   }
 
   #[tokio::test]
@@ -5887,8 +5965,8 @@ mod tests {
     state.settings = SettingsStore::for_test(path.clone());
     state.settings_view =
       crate::app::state::SettingsState::from_settings(state.settings.snapshot());
-    state.connection = ConnectionPhase::Connected;
-    state.client = Some(Arc::new(JellyfinClient::new()));
+    state.kernel.connection = ConnectionPhase::Connected;
+    state.kernel.client = Some(Arc::new(JellyfinClient::new()));
     state.remote_session = Some(RemoteSessionHandle {
       websocket: Arc::new(JellyfinWebSocket::new()),
       lifecycle: Arc::new(tokio::sync::Mutex::new(())),
@@ -5902,7 +5980,7 @@ mod tests {
       state.settings.snapshot().playback_target_name(),
       Some("Bedroom")
     );
-    assert!(state.diagnostics.rows().any(|event| {
+    assert!(state.kernel.diagnostics.rows().any(|event| {
       event.message == "Playback target name changed; remote registration requested."
     }));
     assert_eq!(task.units(), 1);
@@ -5916,8 +5994,8 @@ mod tests {
     state.settings = settings;
     state.settings_view =
       crate::app::state::SettingsState::from_settings(state.settings.snapshot());
-    state.connection = ConnectionPhase::Connected;
-    state.client = Some(Arc::new(JellyfinClient::new()));
+    state.kernel.connection = ConnectionPhase::Connected;
+    state.kernel.client = Some(Arc::new(JellyfinClient::new()));
     state.remote_session = Some(RemoteSessionHandle {
       websocket: Arc::new(JellyfinWebSocket::new()),
       lifecycle: Arc::new(tokio::sync::Mutex::new(())),
@@ -5928,7 +6006,7 @@ mod tests {
     let task = update_settings(&mut state, SettingsMessage::SavePlaybackTargetName);
 
     assert_eq!(task.units(), 0);
-    assert!(!state.diagnostics.rows().any(|event| {
+    assert!(!state.kernel.diagnostics.rows().any(|event| {
       event.message == "Playback target name changed; remote registration requested."
     }));
   }
@@ -5940,7 +6018,7 @@ mod tests {
     state.settings = settings;
     state.settings_view =
       crate::app::state::SettingsState::from_settings(state.settings.snapshot());
-    state.client = Some(Arc::new(JellyfinClient::new()));
+    state.kernel.client = Some(Arc::new(JellyfinClient::new()));
     state.settings_view.mpv_path_input = std::env::current_exe()
       .expect("test executable path should resolve")
       .to_string_lossy()
@@ -5976,8 +6054,8 @@ mod tests {
   fn sign_out_starts_secure_profile_removal_while_disconnect_does_not() {
     let key = profile_key("active");
     let mut disconnect = test_state();
-    disconnect.connection = ConnectionPhase::Connected;
-    disconnect.active_profile = Some(key.clone());
+    disconnect.kernel.connection = ConnectionPhase::Connected;
+    disconnect.kernel.active_profile = Some(key.clone());
 
     drop(update_settings(
       &mut disconnect,
@@ -5987,8 +6065,8 @@ mod tests {
     assert!(disconnect.login.busy_profile.is_none());
 
     let mut sign_out = test_state();
-    sign_out.connection = ConnectionPhase::Connected;
-    sign_out.active_profile = Some(key.clone());
+    sign_out.kernel.connection = ConnectionPhase::Connected;
+    sign_out.kernel.active_profile = Some(key.clone());
     drop(update_settings(&mut sign_out, SettingsMessage::SignOut));
 
     assert_eq!(sign_out.login.busy_profile.as_ref(), Some(&key));
@@ -6031,7 +6109,7 @@ mod tests {
       }),
     ));
 
-    assert!(state.diagnostics.rows().any(|event| {
+    assert!(state.kernel.diagnostics.rows().any(|event| {
       event.level == DiagnosticLevel::Error && event.category == DiagnosticCategory::Auth
     }));
   }
@@ -6039,7 +6117,7 @@ mod tests {
   #[test]
   fn leave_and_return_with_unchanged_data_preserves_ready_artwork_and_avoids_loading_reset() {
     let mut state = test_state();
-    state.client = Some(Arc::new(JellyfinClient::new()));
+    state.kernel.client = Some(Arc::new(JellyfinClient::new()));
     let item = episode("item-1", 1);
     let mut item_with_art = item.clone();
     item_with_art.artwork_image_id = Some("art-1".to_owned());
@@ -6060,7 +6138,7 @@ mod tests {
       .expect("card slot exists")
       .slot;
 
-    let session = state.request_gate.current_session();
+    let session = state.kernel.request_gate.current_session();
     drop(update_home(
       &mut state,
       HomeMessage::ArtworkLoaded {
@@ -6077,6 +6155,7 @@ mod tests {
       },
     ));
     let initial_handle_id = state
+      .kernel
       .artwork_handles
       .get(slot, "art-1")
       .expect("initial handle exists")
@@ -6097,6 +6176,7 @@ mod tests {
       Some(ArtworkCellState::Ready)
     );
     let post_nav_handle_id = state
+      .kernel
       .artwork_handles
       .get(slot, "art-1")
       .expect("post-nav handle exists")
@@ -6114,6 +6194,7 @@ mod tests {
       Some(ArtworkCellState::Ready)
     );
     let refetch_handle_id = state
+      .kernel
       .artwork_handles
       .get(slot, "art-1")
       .expect("refetched handle exists")
@@ -6124,7 +6205,7 @@ mod tests {
   #[test]
   fn home_memory_cache_hit_synchronously_settles_without_retained_handle() {
     let mut state = test_state();
-    state.client = Some(Arc::new(JellyfinClient::new()));
+    state.kernel.client = Some(Arc::new(JellyfinClient::new()));
     let item = episode("item-2", 1);
     let mut item_with_art = item.clone();
     item_with_art.artwork_image_id = Some("cached-art-2".to_owned());
@@ -6140,7 +6221,7 @@ mod tests {
 
     // Seed the raster cache directly on a fresh state, so no handle is
     // retained for the image when the prepare pass runs.
-    state.artwork_adapter.seed_raster_for_test(
+    state.kernel.artwork_adapter.seed_raster_for_test(
       "cached-art-2",
       jellypilot_media_server::artwork::ArtworkSizeClass::Card,
       jellypilot_media_server::artwork::ArtworkRaster::from_raw_for_test(
@@ -6159,6 +6240,7 @@ mod tests {
       .expect("card cell exists");
     assert_eq!(card_cell.state, ArtworkCellState::Ready);
     assert!(state
+      .kernel
       .artwork_handles
       .get(card_cell.slot, "cached-art-2")
       .is_some());
@@ -6180,6 +6262,7 @@ mod tests {
     drop(update(&mut state, Message::ArtworkStreamCompleted(summary)));
 
     let artwork_events = state
+      .kernel
       .diagnostics
       .rows()
       .filter(|row| row.category == DiagnosticCategory::Artwork)
@@ -6192,6 +6275,7 @@ mod tests {
       Message::ArtworkStreamCompleted(ArtworkLoadSummary::default()),
     ));
     let artwork_events = state
+      .kernel
       .diagnostics
       .rows()
       .filter(|row| row.category == DiagnosticCategory::Artwork)
@@ -6202,7 +6286,7 @@ mod tests {
   #[test]
   fn artwork_stream_settlement_applies_each_completion_as_it_arrives() {
     let mut state = test_state();
-    state.client = Some(Arc::new(JellyfinClient::new()));
+    state.kernel.client = Some(Arc::new(JellyfinClient::new()));
     let mut items = Vec::new();
     for index in 1..=3 {
       let mut item = episode(&format!("batch-item-{index}"), index);
@@ -6251,7 +6335,7 @@ mod tests {
         }
       })
       .collect::<Vec<ArtworkLoadCompletion>>();
-    let session = state.request_gate.current_session();
+    let session = state.kernel.request_gate.current_session();
     for completion in completions {
       drop(update_home(
         &mut state,
@@ -6273,10 +6357,18 @@ mod tests {
         .expect("settled batch card exists");
       if index == 2 {
         assert_eq!(cell.state, ArtworkCellState::Failed);
-        assert!(state.artwork_handles.get(cell.slot, &image_id).is_none());
+        assert!(state
+          .kernel
+          .artwork_handles
+          .get(cell.slot, &image_id)
+          .is_none());
       } else {
         assert_eq!(cell.state, ArtworkCellState::Ready);
-        assert!(state.artwork_handles.get(cell.slot, &image_id).is_some());
+        assert!(state
+          .kernel
+          .artwork_handles
+          .get(cell.slot, &image_id)
+          .is_some());
       }
     }
   }
@@ -6284,7 +6376,7 @@ mod tests {
   #[test]
   fn browse_re_navigation_rebuilds_from_the_raster_cache() {
     let mut state = test_state();
-    state.client = Some(Arc::new(JellyfinClient::new()));
+    state.kernel.client = Some(Arc::new(JellyfinClient::new()));
     let library = Destination::Library {
       library_id: "movies".to_owned(),
       collection_type: "movies".to_owned(),
@@ -6316,10 +6408,10 @@ mod tests {
 
     drop(prepare_browse_artwork(&mut state));
     let slot = state.browse_artwork.get("browse-item-1").unwrap().slot;
-    let session = state.request_gate.current_session();
+    let session = state.kernel.request_gate.current_session();
     // A real load stores the raster in the adapter cache; seed it beside the
     // synthesized completion so re-navigation can rebuild from it.
-    state.artwork_adapter.seed_raster_for_test(
+    state.kernel.artwork_adapter.seed_raster_for_test(
       "browse-art-1",
       jellypilot_media_server::artwork::ArtworkSizeClass::Card,
       jellypilot_media_server::artwork::ArtworkRaster::from_raw_for_test(1, 1, vec![1, 2, 3, 4]),
@@ -6346,7 +6438,11 @@ mod tests {
         .map(|cell| cell.state),
       Some(ArtworkCellState::Ready)
     );
-    assert!(state.artwork_handles.get(slot, "browse-art-1").is_some());
+    assert!(state
+      .kernel
+      .artwork_handles
+      .get(slot, "browse-art-1")
+      .is_some());
 
     // Navigate away to Home
     drop(navigate(&mut state, Destination::Home));
@@ -6372,6 +6468,7 @@ mod tests {
     // The handle is rebuilt synchronously from the raster cache; there is no
     // cross-navigation handle identity to preserve.
     assert!(state
+      .kernel
       .artwork_handles
       .get(browse_cell.slot, "browse-art-1")
       .is_some());
@@ -6380,7 +6477,7 @@ mod tests {
   #[test]
   fn inflight_loading_artwork_is_not_re_issued_on_followup_prepare() {
     let mut state = test_state();
-    state.client = Some(Arc::new(JellyfinClient::new()));
+    state.kernel.client = Some(Arc::new(JellyfinClient::new()));
     let mut item = video_item("detail-item-1");
     item.artwork_image_id = Some("detail-art-1".to_owned());
     state.detail.content = jellypilot_core::LoadState::Ready(DetailContent::Item(item));
@@ -6409,11 +6506,11 @@ mod tests {
   #[test]
   fn detail_memory_cache_hit_synchronously_settles_without_retained_handle() {
     let mut state = test_state();
-    state.client = Some(Arc::new(JellyfinClient::new()));
+    state.kernel.client = Some(Arc::new(JellyfinClient::new()));
     let mut item = video_item("detail-cache-item");
     item.artwork_image_id = Some("detail-cache-art".to_owned());
     state.detail.content = jellypilot_core::LoadState::Ready(DetailContent::Item(item));
-    state.artwork_adapter.seed_raster_for_test(
+    state.kernel.artwork_adapter.seed_raster_for_test(
       "detail-cache-art",
       jellypilot_media_server::artwork::ArtworkSizeClass::Hero,
       jellypilot_media_server::artwork::ArtworkRaster::from_raw_for_test(
@@ -6422,7 +6519,7 @@ mod tests {
         vec![10, 20, 30, 40],
       ),
     );
-    state.artwork_handles.clear();
+    state.kernel.artwork_handles.clear();
     let warm_task = prepare_detail_artwork(&mut state);
     // One sentinel unit reports the aggregate cache-hit telemetry event.
     assert_eq!(warm_task.units(), 1);
@@ -6433,6 +6530,7 @@ mod tests {
       .expect("detail poster exists");
     assert_eq!(poster.state, ArtworkCellState::Ready);
     assert!(state
+      .kernel
       .artwork_handles
       .get(poster.slot, "detail-cache-art")
       .is_some());
@@ -6441,12 +6539,12 @@ mod tests {
   #[test]
   fn browse_memory_cache_hit_synchronously_settles_without_retained_handle() {
     let mut state = test_state();
-    state.client = Some(Arc::new(JellyfinClient::new()));
+    state.kernel.client = Some(Arc::new(JellyfinClient::new()));
     let mut item = episode("browse-cache-item-1", 1);
     item.artwork_image_id = Some("browse-cache-art-1".to_owned());
 
     // Seed the raster cache directly
-    state.artwork_adapter.seed_raster_for_test(
+    state.kernel.artwork_adapter.seed_raster_for_test(
       "browse-cache-art-1",
       jellypilot_media_server::artwork::ArtworkSizeClass::Card,
       jellypilot_media_server::artwork::ArtworkRaster::from_raw_for_test(
@@ -6457,7 +6555,7 @@ mod tests {
     );
 
     // Wipe artwork_handles completely so there is NO retained handle in artwork_handles
-    state.artwork_handles.clear();
+    state.kernel.artwork_handles.clear();
 
     state.browse_view = LibraryBrowseView::Ready {
       visible_items: vec![jellypilot_core::browse_model::LibraryItemSlot { item: Some(item) }],
@@ -6479,6 +6577,7 @@ mod tests {
       .expect("browse cell exists");
     assert_eq!(browse_cell.state, ArtworkCellState::Ready);
     assert!(state
+      .kernel
       .artwork_handles
       .get(browse_cell.slot, "browse-cache-art-1")
       .is_some());
@@ -6487,7 +6586,7 @@ mod tests {
   #[test]
   fn cancelled_artwork_load_does_not_mark_cell_failed_and_is_reloaded_on_revisit() {
     let mut state = test_state();
-    state.client = Some(Arc::new(JellyfinClient::new()));
+    state.kernel.client = Some(Arc::new(JellyfinClient::new()));
     let mut item = episode("item-cancel", 1);
     item.artwork_image_id = Some("art-cancel".to_owned());
     state
@@ -6515,7 +6614,7 @@ mod tests {
       .is_none());
 
     // Late cancelled message arriving after leave does not mark failed
-    let session = state.request_gate.current_session();
+    let session = state.kernel.request_gate.current_session();
     drop(update_home(
       &mut state,
       HomeMessage::ArtworkLoaded {
@@ -6539,7 +6638,7 @@ mod tests {
   #[test]
   fn repeated_warm_prepares_maintain_zero_tracked_live_slots() {
     let mut state = test_state();
-    state.client = Some(Arc::new(JellyfinClient::new()));
+    state.kernel.client = Some(Arc::new(JellyfinClient::new()));
     let item = episode("item-warm", 1);
     let mut item_with_art = item.clone();
     item_with_art.artwork_image_id = Some("art-warm".to_owned());
@@ -6560,10 +6659,10 @@ mod tests {
       .card(HomeSection::ContinueWatching, "item-warm")
       .unwrap()
       .slot;
-    assert_eq!(state.artwork_binder.live_slots_count(), 1);
+    assert_eq!(state.kernel.artwork_binder.live_slots_count(), 1);
 
     // Settle the cold load -> live_slots_count becomes 0
-    let session = state.request_gate.current_session();
+    let session = state.kernel.request_gate.current_session();
     drop(update_home(
       &mut state,
       HomeMessage::ArtworkLoaded {
@@ -6579,13 +6678,13 @@ mod tests {
         ),
       },
     ));
-    assert_eq!(state.artwork_binder.live_slots_count(), 0);
+    assert_eq!(state.kernel.artwork_binder.live_slots_count(), 0);
 
     // Repeated warm prepares (handle reuse / cached hit) must NOT leak live slots in ArtworkBinder
     for _ in 0..10 {
       let warm_task = prepare_home_artwork(&mut state);
       assert_eq!(warm_task.units(), 0);
-      assert_eq!(state.artwork_binder.live_slots_count(), 0);
+      assert_eq!(state.kernel.artwork_binder.live_slots_count(), 0);
     }
   }
 
@@ -6727,7 +6826,7 @@ mod tests {
   #[test]
   fn page_settle_spawns_all_24_visible_browse_loads_at_once() {
     let mut state = test_state();
-    state.client = Some(Arc::new(JellyfinClient::new()));
+    state.kernel.client = Some(Arc::new(JellyfinClient::new()));
     let items = (0..24)
       .map(|i| {
         let mut item = episode(&format!("item-{i}"), 1);
