@@ -266,11 +266,11 @@ mod tests {
     // Episode/neighbor loads render shimmer skeletons independently of the
     // main detail content state; the frames subscription must stay alive.
     let mut detail_state = State::boot(false);
-    detail_state.detail.season_episodes = LoadState::Loading;
+    detail_state.detail.data.season_episodes = LoadState::Loading;
     assert!(detail_state.skeletons_active());
     assert_eq!(subscription(&detail_state).units(), 3);
-    detail_state.detail.season_episodes = LoadState::Idle;
-    detail_state.detail.season_neighbors = LoadState::Loading;
+    detail_state.detail.data.season_episodes = LoadState::Idle;
+    detail_state.detail.data.season_neighbors = LoadState::Loading;
     assert_eq!(subscription(&detail_state).units(), 3);
 
     // Reduced motion renders static skeletons, so no frame ticks are needed.

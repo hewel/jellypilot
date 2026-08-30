@@ -1,4 +1,5 @@
 pub mod artwork;
+pub mod detail;
 pub mod home;
 pub mod kernel;
 pub mod login;

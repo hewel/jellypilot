@@ -10,7 +10,9 @@ use iced::widget::{
 use iced::{
   alignment, Alignment, Background, ContentFit, Degrees, Element, Fill, Font, Length, Pixels, Size,
 };
-use jellypilot_core::detail::{detail_metadata, show_detail_metadata, DetailContent};
+use jellypilot_core::detail::{
+  detail_episode_key, detail_metadata, show_detail_metadata, DetailContent,
+};
 use jellypilot_core::LoadState;
 use jellypilot_media_server::{VideoLibraryItem, VideoSeason, VideoShowDetail};
 use jellypilot_mpv::playback::{Playable, PlaybackStartPosition};
@@ -37,7 +39,7 @@ const DETAIL_BACKDROP_KEY: &str = "detail-backdrop";
 pub fn view(state: &State) -> Element<'_, Message> {
   let skeleton_phase = state.skeleton_phase;
   let reduced_motion = state.kernel.settings.snapshot().reduced_motion();
-  match &state.detail.content {
+  match &state.detail.data.content {
     LoadState::Idle | LoadState::Loading => detail_skeleton(state, skeleton_phase, reduced_motion),
     LoadState::Failed(error) => detail_failure(state, error),
     LoadState::Ready(content) => detail_ready(state, content, skeleton_phase, reduced_motion),
@@ -202,7 +204,7 @@ fn hero_at_width<'a>(
   let collapsed_height = overview_collapsed_height();
   let measured_height = overview.map_or(0.0, |value| overview_height(value, copy_width));
   let overview_expandable = overview_is_expandable(measured_height, collapsed_height);
-  let overview_expanded = overview_expandable && state.detail.overview_expanded;
+  let overview_expanded = overview_expandable && state.detail.data.overview_expanded;
   let hero_height = if overview_expanded {
     HERO_HEIGHT + (measured_height - collapsed_height).max(0.0)
   } else {
@@ -369,7 +371,7 @@ fn detail_actions<'a>(
   .style(|theme, status| {
     jellypilot_ui::theme::button_variant(theme, status, ButtonVariant::Primary)
   });
-  let any_busy = state.detail.user_data_busy.is_some();
+  let any_busy = state.detail.data.user_data_busy.is_some();
   let (fav_icon, fav_label, fav_variant) = if favorite {
     (Icon::HeartFilled, "Favorited", ButtonVariant::Secondary)
   } else {
@@ -408,7 +410,7 @@ fn detail_actions<'a>(
     .push(playback)
     .push(favorite_button)
     .push(played_button);
-  if let Some(kind) = state.detail.user_data_busy {
+  if let Some(kind) = state.detail.data.user_data_busy {
     actions = actions.push(
       text(match kind {
         UserDataActionKind::Favorite => "Updating favorite…",
@@ -419,7 +421,7 @@ fn detail_actions<'a>(
     );
   }
   let mut content = Column::new().spacing(TOKENS.spacing.s2).push(actions);
-  if let Some(error) = &state.detail.user_data_error {
+  if let Some(error) = &state.detail.data.user_data_error {
     content = content.push(text(error).size(13).color(TOKENS.colors.error));
   }
   content.into()
@@ -475,7 +477,7 @@ fn seasons_section<'a>(
       .spacing(TOKENS.spacing.s3)
       .into();
   }
-  let loading = matches!(state.detail.season_episodes, LoadState::Loading);
+  let loading = matches!(state.detail.data.season_episodes, LoadState::Loading);
   let mut season_buttons = Row::new().spacing(TOKENS.spacing.s2);
   for season in &show.seasons {
     season_buttons = season_buttons.push(season_button(state, season, loading));
@@ -486,7 +488,7 @@ fn seasons_section<'a>(
     ))
     .height(48)
     .style(jellypilot_ui::theme::scrollable);
-  let episodes = match &state.detail.season_episodes {
+  let episodes = match &state.detail.data.season_episodes {
     LoadState::Idle => status_surface("Choose a season"),
     LoadState::Loading => episode_skeletons(skeleton_phase, reduced_motion),
     LoadState::Failed(error) => {
@@ -507,7 +509,7 @@ fn season_button<'a>(
   season: &'a VideoSeason,
   loading: bool,
 ) -> Element<'a, Message> {
-  let active = state.detail.selected_season_id.as_deref() == Some(season.id.as_str());
+  let active = state.detail.data.selected_season_id.as_deref() == Some(season.id.as_str());
   button(text(season_label(season)))
     .padding([6, 12])
     .on_press_maybe(
@@ -538,7 +540,7 @@ fn neighbor_section(
     .font(SPACE_GROTESK_FONT)
     .size(26)
     .color(TOKENS.colors.onSurface);
-  let body = match &state.detail.season_neighbors {
+  let body = match &state.detail.data.season_neighbors {
     LoadState::Idle => return space::vertical().height(0).into(),
     LoadState::Loading => episode_skeletons(skeleton_phase, reduced_motion),
     LoadState::Failed(error) => {
@@ -587,7 +589,7 @@ fn episode_card<'a>(
   skeleton_phase: f32,
   reduced_motion: bool,
 ) -> Element<'a, Message> {
-  let key = format!("detail-episode:{}", episode.id);
+  let key = detail_episode_key(&episode.id);
   let art = artwork(
     state,
     &key,
@@ -688,7 +690,7 @@ fn artwork<'a>(
   } else {
     full_radius(TOKENS.radii.lg)
   };
-  let cell = state.detail_artwork.get(key);
+  let cell = state.detail.artwork.get(key);
   if let Some(ArtworkCell {
     slot,
     image_id,
@@ -1144,7 +1146,7 @@ mod tests {
   fn detail_view_renders_in_loading_state() {
     let mut state = State::boot(false);
     state.skeleton_phase = 0.42;
-    state.detail.content = LoadState::Loading;
+    state.detail.data.content = LoadState::Loading;
     let _element = view(&state);
   }
 
@@ -1153,7 +1155,7 @@ mod tests {
     {
       let mut state = State::boot(false);
       state.skeleton_phase = 0.75;
-      state.detail.content = LoadState::Ready(DetailContent::Show(VideoShowDetail {
+      state.detail.data.content = LoadState::Ready(DetailContent::Show(VideoShowDetail {
         id: "show-1".to_owned(),
         name: "Show 1".to_owned(),
         overview: None,
@@ -1175,7 +1177,7 @@ mod tests {
         }],
         metadata: Default::default(),
       }));
-      state.detail.season_episodes = LoadState::Loading;
+      state.detail.data.season_episodes = LoadState::Loading;
       let _element = view(&state);
     }
 
@@ -1205,8 +1207,8 @@ mod tests {
         series_poster_image_id: None,
         metadata: Default::default(),
       };
-      state.detail.content = LoadState::Ready(DetailContent::Item(item));
-      state.detail.season_neighbors = LoadState::Loading;
+      state.detail.data.content = LoadState::Ready(DetailContent::Item(item));
+      state.detail.data.season_neighbors = LoadState::Loading;
       let _element = view(&state);
     }
   }
@@ -1268,7 +1270,7 @@ mod tests {
       .kernel
       .artwork_binder
       .bind(jellypilot_core::artwork_binder::ArtworkSurface::Detail);
-    state.detail_artwork.insert(
+    state.detail.artwork.insert(
       DETAIL_BACKDROP_KEY.to_owned(),
       ArtworkCell {
         slot: slot_1,
@@ -1276,7 +1278,7 @@ mod tests {
         state: ArtworkCellState::Loading,
       },
     );
-    state.detail_artwork.insert(
+    state.detail.artwork.insert(
       DETAIL_POSTER_KEY.to_owned(),
       ArtworkCell {
         slot: slot_2,
@@ -1284,7 +1286,7 @@ mod tests {
         state: ArtworkCellState::Failed,
       },
     );
-    state.detail_artwork.insert(
+    state.detail.artwork.insert(
       "detail-episode:ep-2".to_owned(),
       ArtworkCell {
         slot: slot_3,
@@ -1292,8 +1294,8 @@ mod tests {
         state: ArtworkCellState::Loading,
       },
     );
-    state.detail.content = LoadState::Ready(DetailContent::Item(item));
-    state.detail.season_neighbors = LoadState::Ready(vec![neighbor_item]);
+    state.detail.data.content = LoadState::Ready(DetailContent::Item(item));
+    state.detail.data.season_neighbors = LoadState::Ready(vec![neighbor_item]);
     let _element = view(&state);
   }
 }

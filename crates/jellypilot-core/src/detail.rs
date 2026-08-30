@@ -93,6 +93,60 @@ pub fn show_detail_metadata(detail: &VideoShowDetail) -> String {
     details.join(" · ")
 }
 
+/// Picks the season a show detail opens on: the season of the next-up
+/// episode, falling back to the first listed season.
+#[must_use]
+pub fn initial_season(show: &VideoShowDetail) -> Option<&VideoSeason> {
+    show.next_episode
+        .as_ref()
+        .and_then(|episode| episode.season_number)
+        .and_then(|season_number| {
+            show.seasons
+                .iter()
+                .find(|season| season.season_number == Some(season_number))
+        })
+        .or_else(|| show.seasons.first())
+}
+
+/// Builds the first-page episodes request for the show's selected season, or
+/// `None` when the selection does not resolve to a season of the loaded show.
+#[must_use]
+pub fn selected_season_request(
+    detail: &LoadState<DetailContent>,
+    selected_season_id: Option<&str>,
+) -> Option<VideoSeasonEpisodesPageRequest> {
+    let LoadState::Ready(DetailContent::Show(show)) = detail else {
+        return None;
+    };
+    let selected_season_id = selected_season_id?;
+    let season = show
+        .seasons
+        .iter()
+        .find(|season| season.id == selected_season_id)?;
+    Some(season_page_request(&show.id, season, 0))
+}
+
+/// Artwork cell key shared by the detail update and view for an episode card.
+#[must_use]
+pub fn detail_episode_key(item_id: &str) -> String {
+    format!("detail-episode:{item_id}")
+}
+
+/// Reads the current (item id, played, favorite) user-data flags of ready
+/// detail content; `None` while no content is ready.
+#[must_use]
+pub fn detail_user_data(detail: &LoadState<DetailContent>) -> Option<(String, bool, bool)> {
+    match detail {
+        LoadState::Ready(DetailContent::Item(item)) => {
+            Some((item.id.clone(), item.played, item.favorite))
+        }
+        LoadState::Ready(DetailContent::Show(show)) => {
+            Some((show.id.clone(), show.played, show.favorite))
+        }
+        LoadState::Idle | LoadState::Loading | LoadState::Failed(_) => None,
+    }
+}
+
 #[must_use]
 pub fn season_page_request(
     series_id: &str,
@@ -188,5 +242,104 @@ mod tests {
                 ..
             }))
         ));
+    }
+
+    fn episode(id: &str, season_number: i32) -> VideoLibraryItem {
+        VideoLibraryItem {
+            id: id.to_owned(),
+            name: "Episode".to_owned(),
+            item_type: "Episode".to_owned(),
+            production_year: None,
+            runtime_seconds: Some(1_800.0),
+            played: false,
+            favorite: false,
+            artwork_image_id: None,
+            series_poster_image_id: None,
+            season_number: Some(season_number),
+            episode_number: Some(1),
+            series_id: Some("show-1".to_owned()),
+            series_name: Some("Show".to_owned()),
+            resume_position_seconds: None,
+            played_percentage: None,
+            overview: None,
+        }
+    }
+
+    fn season(id: &str, number: i32) -> VideoSeason {
+        VideoSeason {
+            id: id.to_owned(),
+            name: format!("Season {number}"),
+            season_number: Some(number),
+            played: false,
+            favorite: false,
+            artwork_image_id: None,
+        }
+    }
+
+    fn show_detail(next_episode: Option<VideoLibraryItem>) -> VideoShowDetail {
+        VideoShowDetail {
+            id: "show-1".to_owned(),
+            name: "Show".to_owned(),
+            overview: None,
+            production_year: None,
+            genres: Vec::new(),
+            played: false,
+            favorite: true,
+            can_play: true,
+            artwork_image_id: None,
+            backdrop_image_id: None,
+            next_episode,
+            seasons: vec![season("season-1", 1), season("season-2", 2)],
+            metadata: Default::default(),
+        }
+    }
+
+    #[test]
+    fn initial_season_prefers_the_next_up_episodes_season_then_the_first_season() {
+        let show = show_detail(Some(episode("episode-2", 2)));
+        assert_eq!(
+            initial_season(&show).map(|season| season.id.as_str()),
+            Some("season-2")
+        );
+
+        let show = show_detail(None);
+        assert_eq!(
+            initial_season(&show).map(|season| season.id.as_str()),
+            Some("season-1")
+        );
+    }
+
+    #[test]
+    fn selected_season_request_resolves_only_a_season_of_the_loaded_show() {
+        let detail = LoadState::Ready(DetailContent::Show(show_detail(None)));
+
+        let request = selected_season_request(&detail, Some("season-2"))
+            .expect("selected season should produce a page");
+        assert_eq!(request.series_id, "show-1");
+        assert_eq!(request.season_id.as_deref(), Some("season-2"));
+        assert_eq!(request.season_number, Some(2));
+        assert_eq!(request.start_index, 0);
+        assert_eq!(request.limit, SEASON_EPISODE_PAGE_SIZE);
+
+        assert!(selected_season_request(&detail, Some("missing-season")).is_none());
+        assert!(selected_season_request(&detail, None).is_none());
+        assert!(selected_season_request(&LoadState::Loading, Some("season-2")).is_none());
+    }
+
+    #[test]
+    fn detail_episode_key_scopes_episode_cells_under_the_detail_prefix() {
+        assert_eq!(detail_episode_key("ep-1"), "detail-episode:ep-1");
+    }
+
+    #[test]
+    fn detail_user_data_reads_flags_only_from_ready_content() {
+        assert!(detail_user_data(&LoadState::Loading).is_none());
+
+        let detail = LoadState::Ready(DetailContent::Show(show_detail(None)));
+        let (item_id, played, favorite) =
+            detail_user_data(&detail).expect("ready content exposes user data");
+        assert_eq!(item_id, "show-1");
+        assert!(!played);
+        assert!(favorite);
     }
 }

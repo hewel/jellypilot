@@ -659,9 +659,7 @@ pub struct State {
   pub quit_requested: bool,
   pub destination: Destination,
   pub navigation_stack: Vec<Destination>,
-  pub detail_items: HashMap<String, VideoLibraryItem>,
-  pub detail: DetailState,
-  pub detail_artwork: DetailArtwork,
+  pub detail: crate::app::detail::Surface,
   pub home: crate::app::home::Surface,
   pub playback_artwork: Option<ArtworkCell>,
   pub playback_controller: Option<PlaybackControllerHandle>,
@@ -746,9 +744,7 @@ impl State {
       quit_requested: false,
       destination: Destination::Home,
       navigation_stack: Vec::new(),
-      detail_items: HashMap::new(),
-      detail: DetailState::default(),
-      detail_artwork: DetailArtwork::default(),
+      detail: crate::app::detail::Surface::default(),
       home: crate::app::home::Surface::default(),
       playback_artwork: None,
       playback_controller: None,
@@ -783,7 +779,7 @@ impl State {
       .artwork
       .slots()
       .chain(self.browse_artwork.slots())
-      .chain(self.detail_artwork.slots())
+      .chain(self.detail.artwork.slots())
       .chain(self.playback_artwork.as_ref().map(|cell| cell.slot))
   }
 
@@ -809,14 +805,14 @@ impl State {
     // Detail renders episode skeletons for season episodes and continue-watching
     // neighbors independently of the main content load state; all three keep the
     // shimmer frames subscription alive.
-    let detail_loading = matches!(self.detail.content, LoadState::Loading)
-      || matches!(self.detail.season_episodes, LoadState::Loading)
-      || matches!(self.detail.season_neighbors, LoadState::Loading);
+    let detail_loading = matches!(self.detail.data.content, LoadState::Loading)
+      || matches!(self.detail.data.season_episodes, LoadState::Loading)
+      || matches!(self.detail.data.season_neighbors, LoadState::Loading);
     // Artwork cells also display breathing skeleton pulse blocks while in the
     // Loading state across Home hero/sections, Browse grid, and Detail views.
     let artwork_loading = self.home.artwork.has_loading()
       || self.browse_artwork.has_loading()
-      || self.detail_artwork.has_loading();
+      || self.detail.artwork.has_loading();
     home_loading || browse_loading || detail_loading || artwork_loading
   }
   pub fn retain_artwork_handles(&mut self) {
@@ -1135,7 +1131,7 @@ mod tests {
     assert!(!state.skeletons_active());
 
     // Detail artwork loading
-    state.detail_artwork.insert(
+    state.detail.artwork.insert(
       "detail-poster".to_owned(),
       ArtworkCell {
         slot: slot_4,
@@ -1144,7 +1140,7 @@ mod tests {
       },
     );
     assert!(state.skeletons_active());
-    state.detail_artwork.clear();
+    state.detail.artwork.clear();
     assert!(!state.skeletons_active());
   }
 }
