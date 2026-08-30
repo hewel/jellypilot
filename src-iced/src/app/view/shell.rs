@@ -26,12 +26,12 @@ pub(crate) fn sidebar_width(class: SizeClass) -> f32 {
 }
 
 pub fn view(state: &State) -> Element<'_, Message> {
-  let skeleton_phase = state.skeleton_phase;
+  let skeleton_phase = state.shell.skeleton_phase;
   let reduced_motion = state.kernel.settings.snapshot().reduced_motion();
-  let class = SizeClass::from_width(state.window_size.width);
+  let class = SizeClass::from_width(state.shell.window_size.width);
   let sidebar = sidebar(state, class, skeleton_phase, reduced_motion)
     .width(Length::Fixed(sidebar_width(class)));
-  let content: Element<'_, Message> = match &state.destination {
+  let content: Element<'_, Message> = match &state.shell.destination {
     Destination::Home => home::view(state),
     Destination::Library { .. } | Destination::Search(_) => browse::view(state),
     Destination::Detail(_) => detail::view(state),
@@ -211,7 +211,7 @@ fn sidebar_full(
       Icon::Home,
       "Home",
       Destination::Home,
-      state.destination == Destination::Home,
+      state.shell.destination == Destination::Home,
     ));
   match &state.home.data.shortcuts {
     LoadState::Idle | LoadState::Loading => {
@@ -225,7 +225,7 @@ fn sidebar_full(
           library_id: shortcut.id.clone(),
           collection_type: shortcut.collection_type.clone(),
         };
-        let active = state.destination == destination;
+        let active = state.shell.destination == destination;
         destinations = destinations.push(destination_button(
           Icon::for_collection_type(&shortcut.collection_type),
           &shortcut.name,
@@ -251,7 +251,7 @@ fn sidebar_full(
       Icon::Settings,
       "Settings",
       Destination::Settings,
-      state.destination == Destination::Settings,
+      state.shell.destination == Destination::Settings,
     ),
     connection_summary(state),
   ]
@@ -276,7 +276,7 @@ fn sidebar_compact(state: &State) -> container::Container<'_, Message> {
       Icon::Home,
       "Home",
       Destination::Home,
-      state.destination == Destination::Home,
+      state.shell.destination == Destination::Home,
     ));
   if let LoadState::Ready(shortcuts) = &state.home.data.shortcuts {
     for shortcut in shortcuts {
@@ -284,7 +284,7 @@ fn sidebar_compact(state: &State) -> container::Container<'_, Message> {
         library_id: shortcut.id.clone(),
         collection_type: shortcut.collection_type.clone(),
       };
-      let active = state.destination == destination;
+      let active = state.shell.destination == destination;
       destinations = destinations.push(compact_destination_button(
         Icon::for_collection_type(&shortcut.collection_type),
         &shortcut.name,
@@ -299,7 +299,7 @@ fn sidebar_compact(state: &State) -> container::Container<'_, Message> {
       Icon::Settings,
       "Settings",
       Destination::Settings,
-      state.destination == Destination::Settings,
+      state.shell.destination == Destination::Settings,
     ),
     compact_connection_status(state),
   ]
@@ -476,7 +476,7 @@ mod tests {
   #[test]
   fn shell_view_renders_in_loading_state() {
     let mut state = State::boot(false);
-    state.skeleton_phase = 0.42;
+    state.shell.skeleton_phase = 0.42;
     state.home.data.shortcuts = LoadState::Loading;
     let _element = view(&state);
   }

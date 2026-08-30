@@ -7,6 +7,7 @@ pub mod login;
 pub mod message;
 pub mod playback;
 pub mod settings;
+pub mod shell;
 pub mod state;
 mod subscriptions;
 mod update;

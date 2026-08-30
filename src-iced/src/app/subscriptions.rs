@@ -49,7 +49,8 @@ pub fn subscription(state: &State) -> Subscription<Message> {
   // Drive the shimmer phase only while skeletons are actually on screen (or a
   // smoke run waits on its first frame); an always-on frames subscription
   // would redraw the shell at display refresh for no visible change.
-  if state.smoke || (state.skeletons_active() && !state.kernel.settings.snapshot().reduced_motion())
+  if state.shell.smoke
+    || (state.skeletons_active() && !state.kernel.settings.snapshot().reduced_motion())
   {
     subscriptions
       .push(window::frames().map(|instant| Message::Window(WindowMessage::FrameTick(instant))));
@@ -257,9 +258,9 @@ mod tests {
     // window events, resize events; no frames while nothing loads.
     assert_eq!(subscription(&state).units(), 2);
 
-    state.smoke = true;
+    state.shell.smoke = true;
     assert_eq!(subscription(&state).units(), 3);
-    state.smoke = false;
+    state.shell.smoke = false;
 
     state.home.data.begin_load();
     assert_eq!(subscription(&state).units(), 3);

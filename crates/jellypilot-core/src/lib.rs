@@ -21,6 +21,7 @@ mod load_state;
 pub mod request_gate;
 #[cfg(feature = "native")]
 pub mod settings;
+pub mod skeleton;
 
 mod model;
 mod reducer;

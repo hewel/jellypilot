@@ -10,8 +10,6 @@
 //! quit-handshake flag, computed by the router so this module never reads
 //! window/shell state.
 
-use std::collections::hash_map::DefaultHasher;
-use std::hash::{Hash, Hasher};
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Instant;
@@ -21,7 +19,7 @@ use iced::Task;
 use jellypilot_auth::login::ConnectionPhase;
 use jellypilot_core::artwork_binder::{ArtworkSettlement, ArtworkSurface};
 use jellypilot_core::config::Settings;
-use jellypilot_core::diagnostics::{DiagnosticCategory, DiagnosticLevel};
+use jellypilot_core::diagnostics::{coalescing_key, DiagnosticCategory, DiagnosticLevel};
 use jellypilot_core::request_gate::{RemotePlayToken, RemoteToken, RequestGate};
 use jellypilot_media_server::artwork::{ArtworkSizeClass, LoadLane};
 use jellypilot_media_server::ticks_to_seconds;
@@ -159,7 +157,7 @@ fn record_playback_notice(
   } else {
     DiagnosticLevel::Warning
   };
-  let key = diagnostic_coalescing_key("playback", &notice);
+  let key = coalescing_key("playback", &notice);
   kernel
     .diagnostics
     .record_coalesced(&key, level, DiagnosticCategory::Playback, &notice);
@@ -169,12 +167,6 @@ fn record_playback_notice(
     _ => NoticeLevel::Warning,
   };
   kernel.show_toast(toast_level, notice)
-}
-
-fn diagnostic_coalescing_key(prefix: &str, message: &str) -> String {
-  let mut hasher = DefaultHasher::new();
-  message.hash(&mut hasher);
-  format!("{prefix}-{:x}", hasher.finish())
 }
 
 fn record_remote_change(

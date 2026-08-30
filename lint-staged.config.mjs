@@ -5,5 +5,5 @@ export default {
   ],
   '.ox{fmt,lint}rc.json': 'oxfmt --write --no-error-on-unmatched-pattern',
   '{package,scripts/tsconfig}.json': 'oxfmt --write --no-error-on-unmatched-pattern',
-  '{crates,src-iced}/**/*.rs': () => 'cargo fmt --all',
+  '{crates,src-iced}/**/*.rs': () => 'bun run task rust fmt',
 };

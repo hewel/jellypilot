@@ -1,15 +1,12 @@
 //! Top-level message router (ADR 0029): per-surface messages delegate to the
-//! surface modules; navigation, the window/quit handshake, tray window
-//! actions, and cross-surface follow-ups stay here.
-
-use std::time::Duration;
+//! surface modules; navigation lives in the shell surface, and cross-surface
+//! follow-ups (login connection transitions, settings playback snapshots,
+//! window resize/close effects, tray window actions) are hoisted here.
 
 use iced::Task;
 use jellypilot_auth::login::{should_disconnect_after_forget, ConnectionPhase};
-use jellypilot_core::browse_model::BrowseSource;
 use jellypilot_core::config::{IntroMode, Settings};
 use jellypilot_core::diagnostics::{DiagnosticCategory, DiagnosticLevel};
-use jellypilot_media_server::VideoLibraryItem;
 use jellypilot_mpv::playback_session::{PlaybackInput, PlaybackIntent};
 
 use crate::tray::TrayAction;
@@ -23,6 +20,7 @@ use super::message::{
 };
 use super::playback;
 use super::settings;
+use super::shell;
 use super::state::{Destination, NoticeLevel, State};
 
 /// Settings fields whose mutation triggers cross-surface follow-ups (playback
@@ -51,7 +49,43 @@ impl SettingsPlaybackSnapshot {
 
 pub fn update(state: &mut State, message: Message) -> Task<Message> {
   match message {
-    Message::Window(message) => update_window(state, message),
+    Message::Window(message) => {
+      // Cross-surface follow-ups hoisted out of the shell surface (ADR 0029):
+      // a close without an available tray runs the playback quit handshake,
+      // and a resize re-syncs the browse scroll window, after which handles
+      // are retained here because retention reads every surface's slot set.
+      let skeletons_active = state.skeletons_active();
+      let close_without_tray =
+        matches!(message, WindowMessage::CloseRequested(_)) && state.kernel.tray.is_none();
+      let window_task = shell::update(
+        &mut state.shell,
+        &mut state.kernel,
+        skeletons_active,
+        message,
+      );
+      let mut tasks = vec![window_task];
+      if close_without_tray {
+        tasks.push(playback::apply_playback_input(
+          &mut state.playback,
+          &mut state.kernel,
+          state.shell.quit_requested,
+          PlaybackInput::Intent(PlaybackIntent::Quit),
+        ));
+        tasks.push(playback::stop_remote_session_for_quit(
+          &mut state.playback,
+          &mut state.kernel,
+        ));
+      }
+      if let WindowMessage::Resized(size) = message {
+        tasks.push(browse::sync_scroll_window(
+          &mut state.browse,
+          &mut state.kernel,
+          size,
+        ));
+        state.retain_artwork_handles();
+      }
+      Task::batch(tasks)
+    }
     Message::Login(message) => {
       let was_connected = state.kernel.connection == ConnectionPhase::Connected;
       let previous_error = state.login.flow.error.clone();
@@ -110,8 +144,12 @@ pub fn update(state: &mut State, message: Message) -> Task<Message> {
           DiagnosticCategory::Connection,
           "Connected to media server.",
         );
-        state.destination = Destination::Home;
-        playback::initialize_playback(&mut state.playback, &mut state.kernel, state.quit_requested);
+        state.shell.destination = Destination::Home;
+        playback::initialize_playback(
+          &mut state.playback,
+          &mut state.kernel,
+          state.shell.quit_requested,
+        );
         let home_task = home::start_load(
           &mut state.home,
           &mut state.kernel,
@@ -125,12 +163,12 @@ pub fn update(state: &mut State, message: Message) -> Task<Message> {
           DiagnosticCategory::Connection,
           "Disconnected from media server.",
         );
-        Task::batch([login_task, reset_connected_surface(state)])
+        Task::batch([login_task, shell::reset_connected_surface(state)])
       } else {
         login_task
       }
     }
-    Message::Home(HomeMessage::Navigate(destination)) => navigate(state, destination),
+    Message::Home(HomeMessage::Navigate(destination)) => shell::navigate(state, destination),
     Message::Home(message) => {
       // Cross-surface follow-ups hoisted out of the home surface (ADR 0029): a
       // Loaded settlement re-prepares the artwork pipeline, after which
@@ -141,7 +179,7 @@ pub fn update(state: &mut State, message: Message) -> Task<Message> {
         &mut state.home,
         &mut state.kernel,
         state.playback.view.now_playing.is_none(),
-        state.window_size.width,
+        state.shell.window_size.width,
         message,
       );
       if reprepared_artwork {
@@ -157,7 +195,7 @@ pub fn update(state: &mut State, message: Message) -> Task<Message> {
       if query.is_empty() {
         Task::none()
       } else {
-        navigate(state, Destination::Search(query))
+        shell::navigate(state, Destination::Search(query))
       }
     }
     Message::Browse(message) => {
@@ -176,16 +214,16 @@ pub fn update(state: &mut State, message: Message) -> Task<Message> {
         BrowseMessage::SortChanged(_)
         | BrowseMessage::SortDirectionToggled
         | BrowseMessage::PlayedFilterChanged(_)
-        | BrowseMessage::FavoritesToggled => browse_source(state),
+        | BrowseMessage::FavoritesToggled => shell::browse_source(state),
         _ => None,
       };
       let task = browse::update(
         &mut state.browse,
         &mut state.kernel,
         source,
-        matches!(state.destination, Destination::Library { .. }),
+        matches!(state.shell.destination, Destination::Library { .. }),
         state.playback.view.now_playing.is_none(),
-        state.window_size,
+        state.shell.window_size,
         message,
       );
       if reprepared_artwork {
@@ -203,8 +241,8 @@ pub fn update(state: &mut State, message: Message) -> Task<Message> {
         task
       }
     }
-    Message::OpenDetail(item) => open_detail(state, item),
-    Message::Detail(DetailMessage::Back) => navigate_back(state),
+    Message::OpenDetail(item) => shell::open_detail(state, item),
+    Message::Detail(DetailMessage::Back) => shell::navigate_back(state),
     Message::Detail(message) => {
       // Cross-surface follow-ups hoisted out of the detail surface (ADR
       // 0029): a content/season/neighbors settlement re-prepares the artwork
@@ -216,7 +254,7 @@ pub fn update(state: &mut State, message: Message) -> Task<Message> {
           | DetailMessage::SeasonLoaded { .. }
           | DetailMessage::NeighborsLoaded { .. }
       );
-      let detail_item_id = match &state.destination {
+      let detail_item_id = match &state.shell.destination {
         Destination::Detail(item_id) => Some(item_id.as_str()),
         _ => None,
       };
@@ -250,7 +288,7 @@ pub fn update(state: &mut State, message: Message) -> Task<Message> {
         tasks.push(playback::apply_playback_configuration(
           &mut state.playback,
           &mut state.kernel,
-          state.quit_requested,
+          state.shell.quit_requested,
         ));
       }
       if settings_after.intro_mode != settings_before.intro_mode {
@@ -258,7 +296,7 @@ pub fn update(state: &mut State, message: Message) -> Task<Message> {
         tasks.push(playback::apply_playback_input(
           &mut state.playback,
           &mut state.kernel,
-          state.quit_requested,
+          state.shell.quit_requested,
           PlaybackInput::Intent(PlaybackIntent::SetIntroMode(mode)),
         ));
       }
@@ -288,13 +326,13 @@ pub fn update(state: &mut State, message: Message) -> Task<Message> {
     Message::Playback(message) => playback::update(
       &mut state.playback,
       &mut state.kernel,
-      state.quit_requested,
+      state.shell.quit_requested,
       message,
     ),
     Message::Remote(message) => playback::update_remote(
       &mut state.playback,
       &mut state.kernel,
-      state.quit_requested,
+      state.shell.quit_requested,
       message,
     ),
     // Tray window actions stay at the router (ADR 0029): Show routes through
@@ -304,16 +342,16 @@ pub fn update(state: &mut State, message: Message) -> Task<Message> {
       iced::window::oldest().map(|id| Message::Window(WindowMessage::ShowRequested(id)))
     }
     Message::Tray(TrayAction::Quit) => {
-      if state.quit_requested {
+      if state.shell.quit_requested {
         return Task::none();
       }
-      state.quit_requested = true;
-      playback::sync_tray(&state.playback, &state.kernel, state.quit_requested);
+      state.shell.quit_requested = true;
+      playback::sync_tray(&state.playback, &state.kernel, state.shell.quit_requested);
       Task::batch([
         playback::apply_playback_input(
           &mut state.playback,
           &mut state.kernel,
-          state.quit_requested,
+          state.shell.quit_requested,
           PlaybackInput::Intent(PlaybackIntent::Quit),
         ),
         playback::stop_remote_session_for_quit(&mut state.playback, &mut state.kernel),
@@ -322,7 +360,7 @@ pub fn update(state: &mut State, message: Message) -> Task<Message> {
     Message::Tray(action) => playback::update_tray(
       &mut state.playback,
       &mut state.kernel,
-      state.quit_requested,
+      state.shell.quit_requested,
       action,
     ),
     Message::DismissNotice(id) => {
@@ -342,181 +380,6 @@ pub fn update(state: &mut State, message: Message) -> Task<Message> {
   }
 }
 
-fn update_window(state: &mut State, message: WindowMessage) -> Task<Message> {
-  match message {
-    WindowMessage::CloseRequested(id) if state.kernel.tray.is_some() => {
-      iced::window::set_mode(id, iced::window::Mode::Hidden)
-    }
-    WindowMessage::CloseRequested(_) => {
-      state.quit_requested = true;
-      Task::batch([
-        playback::apply_playback_input(
-          &mut state.playback,
-          &mut state.kernel,
-          state.quit_requested,
-          PlaybackInput::Intent(PlaybackIntent::Quit),
-        ),
-        playback::stop_remote_session_for_quit(&mut state.playback, &mut state.kernel),
-      ])
-    }
-    WindowMessage::ShowRequested(id) => id.map_or_else(Task::none, |id| {
-      iced::window::set_mode(id, iced::window::Mode::Windowed).chain(iced::window::gain_focus(id))
-    }),
-    WindowMessage::Resized(size) => {
-      state.window_size = size;
-      let task = browse::sync_scroll_window(&mut state.browse, &mut state.kernel, size);
-      // The sync may have re-prepared the artwork pipeline; retention reads
-      // every surface's slot set, so it is hoisted to the router (ADR 0029).
-      state.retain_artwork_handles();
-      task
-    }
-    WindowMessage::FrameTick(now) => {
-      // Smoke runs only need proof that the first frame rendered.
-      if state.smoke {
-        state.smoke = false;
-        return iced::exit();
-      }
-      if state.skeletons_active() {
-        let start = state.skeleton_animation_start.get_or_insert(now);
-        state.skeleton_phase = skeleton_phase_at(now.duration_since(*start));
-      } else {
-        // Restart the sweep from phase 0 on the next loading burst.
-        state.skeleton_animation_start = None;
-        state.skeleton_phase = 0.0;
-      }
-      Task::none()
-    }
-  }
-}
-
-/// Breathing pulse phase in [0, 1): one full pulse per 1600ms, matching
-/// `tokens.durations.ms1600` in jellypilot-ui.
-fn skeleton_phase_at(elapsed: Duration) -> f32 {
-  (elapsed.as_secs_f32() / Duration::from_millis(1600).as_secs_f32()).fract()
-}
-
-fn navigate(state: &mut State, destination: Destination) -> Task<Message> {
-  let previous = state.destination.clone();
-  if !state.navigate_to(destination) {
-    return Task::none();
-  }
-  activate_destination(state, previous)
-}
-
-fn open_detail(state: &mut State, item: VideoLibraryItem) -> Task<Message> {
-  let item_id = item.id.clone();
-  state.detail.items.insert(item_id.clone(), item);
-  navigate(state, Destination::Detail(item_id))
-}
-
-fn navigate_back(state: &mut State) -> Task<Message> {
-  let previous = state.destination.clone();
-  if !state.navigate_back() {
-    return Task::none();
-  }
-  activate_destination(state, previous)
-}
-
-fn activate_destination(state: &mut State, previous: Destination) -> Task<Message> {
-  if previous == Destination::Settings && state.destination != Destination::Settings {
-    state.settings.view.shortcut_capture = None;
-  }
-  if previous == Destination::Home && state.destination != Destination::Home {
-    home::leave_view(
-      &mut state.home,
-      &mut state.kernel,
-      state.playback.view.now_playing.is_none(),
-    );
-  } else if matches!(
-    previous,
-    Destination::Library { .. } | Destination::Search(_)
-  ) && !matches!(
-    state.destination,
-    Destination::Library { .. } | Destination::Search(_)
-  ) {
-    browse::leave_view(
-      &mut state.browse,
-      &mut state.kernel,
-      state.playback.view.now_playing.is_none(),
-    );
-  } else if matches!(previous, Destination::Detail(_)) && previous != state.destination {
-    detail::leave_view(
-      &mut state.detail,
-      &mut state.kernel,
-      state.playback.view.now_playing.is_none(),
-    );
-  }
-
-  match &state.destination {
-    Destination::Home => home::start_load(
-      &mut state.home,
-      &mut state.kernel,
-      state.playback.view.now_playing.is_none(),
-    ),
-    Destination::Library { .. } => {
-      state.browse.search_input.clear();
-      let source = browse_source(state);
-      browse::start(
-        &mut state.browse,
-        &mut state.kernel,
-        source,
-        state.playback.view.now_playing.is_none(),
-      )
-    }
-    Destination::Search(_) => {
-      let source = browse_source(state);
-      browse::start(
-        &mut state.browse,
-        &mut state.kernel,
-        source,
-        state.playback.view.now_playing.is_none(),
-      )
-    }
-    Destination::Detail(item_id) => {
-      detail::start_load(&mut state.detail, &mut state.kernel, Some(item_id))
-    }
-    Destination::Settings => Task::none(),
-  }
-}
-
-fn browse_source(state: &State) -> Option<BrowseSource> {
-  let session = state.kernel.request_gate.current_session();
-  match &state.destination {
-    Destination::Library {
-      library_id,
-      collection_type,
-    } => {
-      let jellypilot_core::LoadState::Ready(shortcuts) = &state.home.data.shortcuts else {
-        return None;
-      };
-      shortcuts
-        .iter()
-        .find(|shortcut| shortcut.id == *library_id && shortcut.collection_type == *collection_type)
-        .cloned()
-        .map(|shortcut| BrowseSource::Library { session, shortcut })
-    }
-    Destination::Search(query) => Some(BrowseSource::Search {
-      session,
-      query: query.clone(),
-    }),
-    Destination::Home | Destination::Detail(_) | Destination::Settings => None,
-  }
-}
-
-fn reset_connected_surface(state: &mut State) -> Task<Message> {
-  let playback_task =
-    playback::disconnect(&mut state.playback, &mut state.kernel, state.quit_requested);
-  browse::reset(&mut state.browse, &mut state.kernel);
-  state.kernel.artwork_adapter.reset_session();
-  state.kernel.artwork_binder.reset();
-  state.home = home::Surface::default();
-  state.detail = detail::Surface::default();
-  state.kernel.artwork_handles.clear();
-  state.navigation_stack.clear();
-  state.destination = Destination::Home;
-  playback_task
-}
-
 #[cfg(test)]
 mod tests {
   use std::fs;
@@ -528,7 +391,7 @@ mod tests {
   use jellypilot_core::browse_model::LibraryBrowseView;
   use jellypilot_core::config::SettingsStore;
   use jellypilot_media_server::artwork::ArtworkLoadSummary;
-  use jellypilot_media_server::{JellyfinClient, MediaServerProvider};
+  use jellypilot_media_server::{JellyfinClient, MediaServerProvider, VideoLibraryItem};
   use jellypilot_mpv::playback::{
     Playable, PlaybackOutcome, PlaybackRefreshOutcome, PlaybackRefreshState, PlaybackSnapshot,
   };
@@ -541,58 +404,13 @@ mod tests {
   use crate::app::kernel::Kernel;
   use crate::app::state::{ArtworkCellState, LoginState, RemoteSessionHandle};
 
-  #[test]
-  fn skeleton_phase_wraps_once_per_1600ms() {
-    assert_eq!(skeleton_phase_at(Duration::from_millis(0)), 0.0);
-    assert_eq!(skeleton_phase_at(Duration::from_millis(800)), 0.5);
-    assert_eq!(skeleton_phase_at(Duration::from_millis(1600)), 0.0);
-    assert_eq!(skeleton_phase_at(Duration::from_millis(2000)), 0.25);
-  }
-
-  #[test]
-  fn frame_tick_advances_phase_while_skeletons_load_and_resets_after() {
-    let mut state = test_state();
-    state.home.data.begin_load();
-
-    let start = Instant::now();
-    drop(update_window(&mut state, WindowMessage::FrameTick(start)));
-    assert_eq!(state.skeleton_phase, 0.0);
-    assert_eq!(state.skeleton_animation_start, Some(start));
-
-    drop(update_window(
-      &mut state,
-      WindowMessage::FrameTick(start + Duration::from_millis(800)),
-    ));
-    assert_eq!(state.skeleton_phase, 0.5);
-
-    // Once nothing loads, the clock resets so the next burst starts at 0.
-    state.home.data.settle_video_home(Err("settled".to_owned()));
-    state.home.data.settle_shortcuts(Err("settled".to_owned()));
-    drop(update_window(
-      &mut state,
-      WindowMessage::FrameTick(start + Duration::from_millis(1200)),
-    ));
-    assert_eq!(state.skeleton_phase, 0.0);
-    assert_eq!(state.skeleton_animation_start, None);
-  }
-
   fn test_state() -> State {
     let settings = SettingsStore::default();
     let mut request_gate = jellypilot_core::request_gate::RequestGate::default();
     let playback = playback::Surface::new(&mut request_gate);
     let settings_view = crate::app::state::SettingsState::from_settings(settings.snapshot());
+    let login_flow = LoginState::from_settings(settings.snapshot());
     State {
-      smoke: false,
-      window_size: iced::Size::new(1600.0, 900.0),
-      skeleton_phase: 0.0,
-      skeleton_animation_start: None,
-      login: crate::app::login::Surface {
-        flow: LoginState::from_settings(settings.snapshot()),
-        quick_connect_task: None,
-      },
-      settings: crate::app::settings::Surface {
-        view: settings_view,
-      },
       kernel: Kernel {
         settings,
         diagnostics: jellypilot_core::diagnostics::Diagnostics::default(),
@@ -610,13 +428,18 @@ mod tests {
         artwork_binder: Default::default(),
         artwork_handles: Default::default(),
       },
-      playback,
-      quit_requested: false,
-      destination: Destination::Home,
-      navigation_stack: Vec::new(),
-      detail: detail::Surface::default(),
+      login: crate::app::login::Surface {
+        flow: login_flow,
+        quick_connect_task: None,
+      },
+      settings: crate::app::settings::Surface {
+        view: settings_view,
+      },
       home: home::Surface::default(),
+      detail: detail::Surface::default(),
       browse: browse::Surface::default(),
+      playback,
+      shell: shell::Surface::new(false),
     }
   }
 
@@ -909,23 +732,13 @@ mod tests {
   fn close_without_an_available_tray_uses_the_quit_cleanup_handshake() {
     let mut state = test_state();
 
-    drop(update_window(
+    drop(update(
       &mut state,
-      WindowMessage::CloseRequested(iced::window::Id::unique()),
+      Message::Window(WindowMessage::CloseRequested(iced::window::Id::unique())),
     ));
 
-    assert!(state.quit_requested);
+    assert!(state.shell.quit_requested);
     assert!(state.playback.view.quit_may_proceed);
-  }
-
-  #[test]
-  fn window_resize_updates_the_tracked_window_size() {
-    let mut state = test_state();
-    let size = iced::Size::new(1024.0, 768.0);
-
-    drop(update_window(&mut state, WindowMessage::Resized(size)));
-
-    assert_eq!(state.window_size, size);
   }
 
   #[test]
@@ -1015,7 +828,7 @@ mod tests {
   #[test]
   fn escape_and_leaving_settings_both_clear_shortcut_capture() {
     let mut state = test_state();
-    state.destination = Destination::Settings;
+    state.shell.destination = Destination::Settings;
     state.settings.view.shortcut_capture = Some(jellypilot_core::config::ShortcutKind::Next);
 
     drop(update(
@@ -1025,8 +838,8 @@ mod tests {
     assert!(state.settings.view.shortcut_capture.is_none());
 
     state.settings.view.shortcut_capture = Some(jellypilot_core::config::ShortcutKind::Previous);
-    drop(navigate(&mut state, Destination::Home));
-    assert_eq!(state.destination, Destination::Home);
+    drop(shell::navigate(&mut state, Destination::Home));
+    assert_eq!(state.shell.destination, Destination::Home);
     assert!(state.settings.view.shortcut_capture.is_none());
   }
 
@@ -1127,7 +940,7 @@ mod tests {
         artwork_image_id: None,
       }]);
 
-    drop(navigate(&mut state, library.clone()));
+    drop(shell::navigate(&mut state, library.clone()));
 
     let mut item = episode("browse-item-1", 1);
     item.artwork_image_id = Some("browse-art-1".to_owned());
@@ -1148,7 +961,7 @@ mod tests {
     drop(browse::prepare_artwork(
       &mut state.browse,
       &mut state.kernel,
-      state.window_size.width,
+      state.shell.window_size.width,
     ));
     state.retain_artwork_handles();
     let slot = state.browse.artwork.get("browse-item-1").unwrap().slot;
@@ -1166,7 +979,7 @@ mod tests {
       None,
       false,
       state.playback.view.now_playing.is_none(),
-      state.window_size,
+      state.shell.window_size,
       BrowseMessage::ArtworkLoaded {
         session,
         slot,
@@ -1195,10 +1008,10 @@ mod tests {
       .is_some());
 
     // Navigate away to Home
-    drop(navigate(&mut state, Destination::Home));
+    drop(shell::navigate(&mut state, Destination::Home));
 
     // Return to Browse
-    drop(navigate(&mut state, library));
+    drop(shell::navigate(&mut state, library));
     state.browse.view = LibraryBrowseView::Ready {
       visible_items: vec![jellypilot_core::browse_model::LibraryItemSlot { item: Some(item) }],
       visible_start: 0,
@@ -1211,7 +1024,7 @@ mod tests {
     drop(browse::prepare_artwork(
       &mut state.browse,
       &mut state.kernel,
-      state.window_size.width,
+      state.shell.window_size.width,
     ));
     state.retain_artwork_handles();
 

@@ -1,5 +1,7 @@
+use std::collections::hash_map::DefaultHasher;
 use std::collections::VecDeque;
 use std::fmt::Write as _;
+use std::hash::{Hash, Hasher};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 pub const MAX_DIAGNOSTIC_EVENTS: usize = 200;
@@ -276,6 +278,16 @@ impl Diagnostics {
     }
 }
 
+/// Stable coalescing key for `Diagnostics::record_coalesced`: the caller's
+/// prefix plus a hash of the full message, so repeated identical events update
+/// one row while differing messages open new ones.
+#[must_use]
+pub fn coalescing_key(prefix: &str, message: &str) -> String {
+    let mut hasher = DefaultHasher::new();
+    message.hash(&mut hasher);
+    format!("{prefix}-{:x}", hasher.finish())
+}
+
 fn current_timestamp_seconds() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -462,6 +474,23 @@ mod tests {
         );
 
         assert_eq!(diagnostics.rows().len(), 2);
+    }
+
+    #[test]
+    fn coalescing_key_is_stable_per_message_and_scoped_by_prefix() {
+        assert_eq!(
+            coalescing_key("playback", "boom"),
+            coalescing_key("playback", "boom")
+        );
+        assert_ne!(
+            coalescing_key("playback", "boom"),
+            coalescing_key("playback", "bam")
+        );
+        assert_ne!(
+            coalescing_key("playback", "boom"),
+            coalescing_key("remote", "boom")
+        );
+        assert!(coalescing_key("playback", "boom").starts_with("playback-"));
     }
 
     #[test]

@@ -638,26 +638,14 @@ pub fn diagnostic_matches(
 }
 
 pub struct State {
-  pub smoke: bool,
-  /// Latest known logical window size; drives size-class layout decisions.
-  pub window_size: iced::Size,
-  /// Shimmer sweep phase in [0, 1) for skeleton placeholders; advanced by
-  /// each `FrameTick` while skeletons are on screen.
-  pub skeleton_phase: f32,
-  /// Animation clock origin for the shimmer sweep. `None` while no skeletons
-  /// are visible so the next loading burst restarts the sweep from phase 0.
-  /// `pub(crate)` because update tests construct `State` literals.
-  pub(crate) skeleton_animation_start: Option<std::time::Instant>,
-  pub settings: crate::app::settings::Surface,
   pub kernel: Kernel,
   pub login: crate::app::login::Surface,
-  pub quit_requested: bool,
-  pub destination: Destination,
-  pub navigation_stack: Vec<Destination>,
-  pub detail: crate::app::detail::Surface,
+  pub settings: crate::app::settings::Surface,
   pub home: crate::app::home::Surface,
-  pub playback: crate::app::playback::Surface,
+  pub detail: crate::app::detail::Surface,
   pub browse: crate::app::browse::Surface,
+  pub playback: crate::app::playback::Surface,
+  pub shell: crate::app::shell::Surface,
 }
 
 impl State {
@@ -682,13 +670,6 @@ impl State {
     artwork_adapter.set_disk_cache_enabled(settings.snapshot().image_cache_enabled());
 
     Self {
-      smoke,
-      window_size: iced::Size::new(1600.0, 900.0),
-      skeleton_phase: 0.0,
-      skeleton_animation_start: None,
-      settings: crate::app::settings::Surface {
-        view: settings_view,
-      },
       kernel: Kernel {
         settings,
         diagnostics,
@@ -698,6 +679,7 @@ impl State {
         connection: ConnectionPhase::SignedOut,
         connected_identity: None,
         active_profile: None,
+
         notice: None,
         active_toast: None,
         next_toast_id: 0,
@@ -710,13 +692,14 @@ impl State {
         flow: login,
         quick_connect_task: None,
       },
-      quit_requested: false,
-      destination: Destination::Home,
-      navigation_stack: Vec::new(),
-      detail: crate::app::detail::Surface::default(),
+      settings: crate::app::settings::Surface {
+        view: settings_view,
+      },
       home: crate::app::home::Surface::default(),
-      playback,
+      detail: crate::app::detail::Surface::default(),
       browse: crate::app::browse::Surface::default(),
+      playback,
+      shell: crate::app::shell::Surface::new(smoke),
     }
   }
   pub fn all_artwork_slots(&self) -> impl Iterator<Item = ArtworkSlot> + '_ {
@@ -766,34 +749,6 @@ impl State {
     self.kernel.artwork_handles.retain_slots(slots);
   }
 
-  pub fn navigate_to(&mut self, destination: Destination) -> bool {
-    if self.destination == destination {
-      return false;
-    }
-    if !matches!(&destination, Destination::Detail(_)) {
-      if let Some(index) = self
-        .navigation_stack
-        .iter()
-        .rposition(|entry| entry == &destination)
-      {
-        self.navigation_stack.truncate(index);
-        self.destination = destination;
-        return true;
-      }
-    }
-    self.navigation_stack.push(self.destination.clone());
-    self.destination = destination;
-    true
-  }
-
-  pub fn navigate_back(&mut self) -> bool {
-    let Some(destination) = self.navigation_stack.pop() else {
-      return false;
-    };
-    self.destination = destination;
-    true
-  }
-
   /// Dismisses the kernel toast and clears the playback surface's notice;
   /// cross-surface so it stays on `State` (ADR 0029).
   pub fn dismiss_toast(&mut self, id: u64) {
@@ -822,85 +777,6 @@ mod tests {
   use jellypilot_core::artwork_binder::ArtworkSurface;
 
   use super::*;
-
-  #[test]
-  fn navigation_stack_restores_each_previous_destination_in_order() {
-    let mut state = State::boot(false);
-    let library = Destination::Library {
-      library_id: "movies".to_owned(),
-      collection_type: "movies".to_owned(),
-    };
-    assert!(state.navigate_to(library.clone()));
-    assert!(state.navigate_to(Destination::Detail("movie-1".to_owned())));
-    assert!(state.navigate_back());
-    assert_eq!(state.destination, library);
-    assert!(state.navigate_back());
-    assert_eq!(state.destination, Destination::Home);
-    assert!(!state.navigate_back());
-  }
-
-  #[test]
-  fn navigating_to_the_current_destination_does_not_create_a_false_back_entry() {
-    let mut state = State::boot(false);
-
-    assert!(!state.navigate_to(Destination::Home));
-    assert!(state.navigation_stack.is_empty());
-  }
-
-  #[test]
-  fn sidebar_cycles_keep_the_navigation_stack_bounded() {
-    let mut state = State::boot(false);
-    let library = Destination::Library {
-      library_id: "movies".to_owned(),
-      collection_type: "movies".to_owned(),
-    };
-
-    assert!(state.navigate_to(library.clone()));
-    assert!(state.navigate_to(Destination::Home));
-    assert!(state.navigate_to(library.clone()));
-    assert!(state.navigate_to(Destination::Home));
-    assert!(state.navigate_to(library.clone()));
-
-    assert_eq!(state.destination, library);
-    assert_eq!(state.navigation_stack, vec![Destination::Home]);
-  }
-
-  #[test]
-  fn back_after_cycle_collapse_visits_each_destination_once() {
-    let mut state = State::boot(false);
-    let library = Destination::Library {
-      library_id: "movies".to_owned(),
-      collection_type: "movies".to_owned(),
-    };
-    assert!(state.navigate_to(library.clone()));
-    assert!(state.navigate_to(Destination::Home));
-    assert!(state.navigate_to(library.clone()));
-
-    assert!(state.navigate_back());
-    assert_eq!(state.destination, Destination::Home);
-    assert!(!state.navigate_back());
-  }
-
-  #[test]
-  fn detail_navigation_pushes_when_the_item_is_already_in_history() {
-    let mut state = State::boot(false);
-    let detail = Destination::Detail("movie-1".to_owned());
-    let library = Destination::Library {
-      library_id: "movies".to_owned(),
-      collection_type: "movies".to_owned(),
-    };
-    assert!(state.navigate_to(detail.clone()));
-    assert!(state.navigate_to(library.clone()));
-
-    assert!(state.navigate_to(detail.clone()));
-
-    assert_eq!(
-      state.navigation_stack,
-      vec![Destination::Home, detail, library.clone()]
-    );
-    assert!(state.navigate_back());
-    assert_eq!(state.destination, library);
-  }
 
   #[test]
   fn handle_retention_evicts_slots_outside_the_current_window() {

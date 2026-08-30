@@ -37,7 +37,7 @@ const DETAIL_POSTER_KEY: &str = "detail-poster";
 const DETAIL_BACKDROP_KEY: &str = "detail-backdrop";
 
 pub fn view(state: &State) -> Element<'_, Message> {
-  let skeleton_phase = state.skeleton_phase;
+  let skeleton_phase = state.shell.skeleton_phase;
   let reduced_motion = state.kernel.settings.snapshot().reduced_motion();
   match &state.detail.data.content {
     LoadState::Idle | LoadState::Loading => detail_skeleton(state, skeleton_phase, reduced_motion),
@@ -231,7 +231,7 @@ fn hero_at_width<'a>(
       iced::widget::container::Style::default().background(Background::Gradient(gradient.into()))
     });
 
-  let back_enabled = !state.navigation_stack.is_empty();
+  let back_enabled = !state.shell.navigation_stack.is_empty();
   let back = button(
     row![
       icon_for_variant_disabled(
@@ -760,7 +760,7 @@ fn detail_skeleton(
   skeleton_phase: f32,
   reduced_motion: bool,
 ) -> Element<'_, Message> {
-  let back_enabled = !state.navigation_stack.is_empty();
+  let back_enabled = !state.shell.navigation_stack.is_empty();
   let back = button(
     row![
       icon_for_variant_disabled(
@@ -799,7 +799,7 @@ fn detail_skeleton(
 }
 
 fn detail_failure<'a>(state: &State, error: &'a str) -> Element<'a, Message> {
-  let back_enabled = !state.navigation_stack.is_empty();
+  let back_enabled = !state.shell.navigation_stack.is_empty();
   let back = button(
     row![
       icon_for_variant_disabled(
@@ -1145,7 +1145,7 @@ mod tests {
   #[test]
   fn detail_view_renders_in_loading_state() {
     let mut state = State::boot(false);
-    state.skeleton_phase = 0.42;
+    state.shell.skeleton_phase = 0.42;
     state.detail.data.content = LoadState::Loading;
     let _element = view(&state);
   }
@@ -1154,7 +1154,7 @@ mod tests {
   fn detail_seasons_and_neighbors_render_episode_skeletons_when_loading() {
     {
       let mut state = State::boot(false);
-      state.skeleton_phase = 0.75;
+      state.shell.skeleton_phase = 0.75;
       state.detail.data.content = LoadState::Ready(DetailContent::Show(VideoShowDetail {
         id: "show-1".to_owned(),
         name: "Show 1".to_owned(),
@@ -1183,7 +1183,7 @@ mod tests {
 
     {
       let mut state = State::boot(false);
-      state.skeleton_phase = 0.75;
+      state.shell.skeleton_phase = 0.75;
       let item = jellypilot_media_server::VideoItemDetail {
         id: "ep-1".to_owned(),
         name: "Ep 1".to_owned(),
@@ -1216,7 +1216,7 @@ mod tests {
   #[test]
   fn detail_view_renders_hero_and_episodes_with_loading_and_failed_artwork() {
     let mut state = State::boot(false);
-    state.skeleton_phase = 0.5;
+    state.shell.skeleton_phase = 0.5;
     let item = jellypilot_media_server::VideoItemDetail {
       id: "ep-1".to_owned(),
       name: "Episode 1".to_owned(),

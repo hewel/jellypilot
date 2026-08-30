@@ -52,7 +52,7 @@ const fn section_scroll_height(section: HomeSection) -> f32 {
 }
 
 pub fn view(state: &State) -> Element<'_, Message> {
-  let skeleton_phase = state.skeleton_phase;
+  let skeleton_phase = state.shell.skeleton_phase;
   let reduced_motion = state.kernel.settings.snapshot().reduced_motion();
 
   let mut content = Column::new()
@@ -665,7 +665,7 @@ mod tests {
   #[test]
   fn home_view_renders_hero_and_cards_with_loading_and_failed_artwork() {
     let mut state = State::boot(false);
-    state.skeleton_phase = 0.5;
+    state.shell.skeleton_phase = 0.5;
     let hero_item = VideoLibraryItem {
       id: "hero-1".to_owned(),
       name: "Hero Movie".to_owned(),

@@ -39,7 +39,7 @@ pub(crate) fn page_padding(class: SizeClass) -> f32 {
 /// The scrollable's `on_scroll` viewport is NOT used for width: iced only
 /// publishes it when the content overflows the viewport, so a maximized
 /// window whose grid fits vertically would keep reporting a stale width.
-/// `state.window_size` follows every resize event and never goes stale.
+/// `state.shell.window_size` follows every resize event and never goes stale.
 pub(crate) fn grid_available_width(window_width: f32, class: SizeClass) -> f32 {
   (window_width
     - TOKENS.spacing.s3 * 2.0
@@ -51,8 +51,8 @@ pub(crate) fn grid_available_width(window_width: f32, class: SizeClass) -> f32 {
 
 pub(crate) const CARD_COPY_HEIGHT: f32 = 46.0;
 pub fn view(state: &State) -> Element<'_, Message> {
-  let class = SizeClass::from_width(state.window_size.width);
-  let title = match &state.destination {
+  let class = SizeClass::from_width(state.shell.window_size.width);
+  let title = match &state.shell.destination {
     Destination::Library { library_id, .. } => match &state.home.data.shortcuts {
       jellypilot_core::LoadState::Ready(shortcuts) => shortcuts
         .iter()
@@ -65,7 +65,7 @@ pub fn view(state: &State) -> Element<'_, Message> {
     Destination::Search(query) => query,
     Destination::Home | Destination::Detail(_) | Destination::Settings => "Library",
   };
-  let heading = match &state.destination {
+  let heading = match &state.shell.destination {
     Destination::Search(_) => format!("Search results for “{title}”"),
     Destination::Home
     | Destination::Library { .. }
@@ -78,7 +78,7 @@ pub fn view(state: &State) -> Element<'_, Message> {
       .size(34)
       .color(TOKENS.colors.onSurface),
   );
-  if matches!(state.destination, Destination::Library { .. }) {
+  if matches!(state.shell.destination, Destination::Library { .. }) {
     header = header.push(toolbar(state));
   }
 
@@ -223,7 +223,7 @@ fn browse_body<'a>(state: &'a State, class: SizeClass) -> Element<'a, Message> {
   match &state.browse.view {
     LibraryBrowseView::Inactive => empty_surface("Choose a library to browse.".to_owned(), padding),
     LibraryBrowseView::Loading => browse_loading_skeleton(state, class),
-    LibraryBrowseView::Empty => match &state.destination {
+    LibraryBrowseView::Empty => match &state.shell.destination {
       Destination::Search(query) => empty_surface(format!("No results for “{query}”."), padding),
       Destination::Home
       | Destination::Library { .. }
@@ -265,10 +265,10 @@ fn ready_surface<'a>(
   retry_busy: bool,
   class: SizeClass,
 ) -> Element<'a, Message> {
-  let skeleton_phase = state.skeleton_phase;
+  let skeleton_phase = state.shell.skeleton_phase;
   let reduced_motion = state.kernel.settings.snapshot().reduced_motion();
   let padding = page_padding(class);
-  let available_width = grid_available_width(state.window_size.width, class);
+  let available_width = grid_available_width(state.shell.window_size.width, class);
   let metrics = ArtworkGridMetrics::for_cards(available_width, CARD_COPY_HEIGHT);
   // The count row above the grid is short enough that the grid's overscan
   // absorbs it, so no scroll margin is subtracted here.
@@ -341,10 +341,10 @@ fn item_at(
 }
 
 fn browse_loading_skeleton<'a>(state: &'a State, class: SizeClass) -> Element<'a, Message> {
-  let skeleton_phase = state.skeleton_phase;
+  let skeleton_phase = state.shell.skeleton_phase;
   let reduced_motion = state.kernel.settings.snapshot().reduced_motion();
   let padding = page_padding(class);
-  let metrics = skeleton_grid_metrics(state.window_size.width, class);
+  let metrics = skeleton_grid_metrics(state.shell.window_size.width, class);
   let grid = browse_skeleton_grid(metrics, skeleton_phase, reduced_motion);
   let content = Column::new()
     .width(Fill)
@@ -815,7 +815,7 @@ mod tests {
   #[test]
   fn browse_view_renders_in_loading_state() {
     let mut state = State::boot(false);
-    state.skeleton_phase = 0.42;
+    state.shell.skeleton_phase = 0.42;
     state.browse.view = LibraryBrowseView::Loading;
     let _element = view(&state);
   }
@@ -823,7 +823,7 @@ mod tests {
   #[test]
   fn browse_view_renders_with_unloaded_slots_in_ready_state() {
     let mut state = State::boot(false);
-    state.skeleton_phase = 0.42;
+    state.shell.skeleton_phase = 0.42;
     state.browse.view = LibraryBrowseView::Ready {
       visible_items: vec![
         LibraryItemSlot { item: None },
@@ -863,7 +863,7 @@ mod tests {
   #[test]
   fn browse_view_renders_cards_with_loading_and_failed_artwork_cells() {
     let mut state = State::boot(false);
-    state.skeleton_phase = 0.5;
+    state.shell.skeleton_phase = 0.5;
     let item_1 = video_item("item-1");
     let item_2 = video_item("item-2");
     let slot_1 = state
