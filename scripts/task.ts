@@ -1,17 +1,13 @@
 import { Cause, Effect, Exit, Fiber, Match } from 'effect';
 
 import { runCheck } from './task/check';
-import { runBuild, runDev, runPreview, runTest } from './task/dev';
-import { runE2e } from './task/e2e';
 import { TaskCliError } from './task/errors';
-import { runFfmpeg } from './task/ffmpeg';
 import { TASK_HELP } from './task/help';
 import { runIced } from './task/iced';
-import { runApi, runPanda, runReview } from './task/misc';
+import { runApi } from './task/misc';
 import { parseCli } from './task/parse';
 import { runFormat, runLint, runTypecheck } from './task/quality';
 import { runRust } from './task/rust';
-import { runWasm } from './task/wasm';
 
 const program = Effect.try({
   try: () => parseCli(process.argv.slice(2)),
@@ -23,26 +19,13 @@ const program = Effect.try({
   Effect.flatMap((task) =>
     Match.value(task).pipe(
       Match.when({ _tag: 'help' }, () => Effect.sync(() => console.log(TASK_HELP))),
-      Match.when({ _tag: 'dev' }, ({ rsdoctor, skipSetup }) => runDev({ rsdoctor, skipSetup })),
-      Match.when({ _tag: 'build' }, ({ rsdoctor, skipSetup }) => runBuild({ rsdoctor, skipSetup })),
-      Match.when({ _tag: 'preview' }, () => runPreview()),
-      Match.when({ _tag: 'test' }, ({ all, skipSetup, watch }) =>
-        runTest({ all, skipSetup, watch }),
-      ),
       Match.when({ _tag: 'check' }, () => runCheck()),
       Match.when({ _tag: 'fmt' }, ({ check }) => runFormat(check)),
       Match.when({ _tag: 'lint' }, ({ fix }) => runLint(fix)),
-      Match.when({ _tag: 'typecheck' }, ({ skipSetup }) => runTypecheck(skipSetup)),
+      Match.when({ _tag: 'typecheck' }, () => runTypecheck()),
       Match.when({ _tag: 'rust' }, (task) => runRust(task)),
-      Match.when({ _tag: 'wasm' }, (task) => runWasm(task)),
-      Match.when({ _tag: 'ffmpeg' }, ({ target, verify }) => runFfmpeg({ target, verify })),
       Match.when({ _tag: 'iced' }, ({ smoke, release }) => runIced(smoke, release)),
-      Match.when({ _tag: 'e2e' }, ({ action, args, skipSetup }) =>
-        runE2e({ action, args, skipSetup }),
-      ),
       Match.when({ _tag: 'api' }, () => runApi()),
-      Match.when({ _tag: 'panda' }, () => runPanda()),
-      Match.when({ _tag: 'review' }, ({ action, args }) => runReview(action, args)),
       Match.exhaustive,
     ),
   ),

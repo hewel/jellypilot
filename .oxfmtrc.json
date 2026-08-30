@@ -9,8 +9,6 @@
   "ignorePatterns": [
     "dist/**",
     "node_modules/**",
-    "src/bindings.ts",
-    "src/routeTree.gen.ts",
-    "src-tauri/openapi/jellyfin-openapi-stable.json"
+    "crates/media-server-api/openapi/jellyfin-openapi-stable.json"
   ]
 }

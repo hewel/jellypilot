@@ -2,14 +2,11 @@ import { Effect } from 'effect';
 
 import type { CommandSpec } from './commands';
 import {
-  command,
   formatCommand,
   lintCommand,
-  pandaCodegenCommand,
   rustClippyWorkspaceCommands,
   rustFormatCommand,
   typecheckCommands,
-  wasmBuildCommand,
 } from './commands';
 import type { TaskProcessError } from './errors';
 import { TaskCheckError } from './errors';
@@ -56,18 +53,6 @@ const runBufferedStep = Effect.fn('task.check.step')(function* (step: BufferedSt
   return { label: step.label, output: output.join(''), failed } satisfies StepResult;
 });
 
-const runDependentSteps = Effect.fn('task.check.dependent')(function* (
-  steps: readonly BufferedStep[],
-) {
-  const results: StepResult[] = [];
-  for (const step of steps) {
-    const result = yield* runBufferedStep(step);
-    results.push(result);
-    if (result.failed) break;
-  }
-  return results;
-});
-
 function printResults(results: readonly StepResult[]): void {
   for (const result of results) {
     const output = result.output.trimEnd();
@@ -77,35 +62,16 @@ function printResults(results: readonly StepResult[]): void {
 }
 
 export const runCheck = Effect.fn('task.check')(function* () {
-  const independentSteps: readonly BufferedStep[] = [
+  const steps: readonly BufferedStep[] = [
     { label: 'fmt --check', commands: [formatCommand(true)] },
     { label: 'lint', commands: [lintCommand(false)] },
-    {
-      label: 'check:effect-rules',
-      commands: [command('bun', ['scripts/check-no-switch.ts'])],
-    },
-    {
-      label: 'check:styling-boundaries',
-      commands: [command('bun', ['scripts/check-styling-boundaries.ts'])],
-    },
+    { label: 'typecheck', commands: typecheckCommands() },
     { label: 'rust fmt --check', commands: [rustFormatCommand(true)] },
     { label: 'rust clippy', commands: rustClippyWorkspaceCommands() },
   ];
-  const typecheckSteps: readonly BufferedStep[] = [
-    { label: 'panda codegen', commands: [pandaCodegenCommand()] },
-    { label: 'wasm build --dev', commands: [wasmBuildCommand('--dev')] },
-    { label: 'typecheck', commands: typecheckCommands() },
-  ];
 
-  const [independentResults, dependentResults] = yield* Effect.all(
-    [
-      Effect.all(independentSteps.map(runBufferedStep), { concurrency: 'unbounded' }),
-      runDependentSteps(typecheckSteps),
-    ],
-    { concurrency: 'unbounded' },
-  );
-  const results = [...independentResults, ...dependentResults];
-  yield* Effect.sync(() => printResults(results));
+  const results = yield* Effect.all(steps.map(runBufferedStep), { concurrency: 'unbounded' });
+  yield* Effect.sync(() => printResults([...results]));
 
   const failedSteps = results.filter((result) => result.failed).map((result) => result.label);
   if (failedSteps.length > 0) {

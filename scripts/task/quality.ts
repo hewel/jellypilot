@@ -1,12 +1,6 @@
 import { Effect } from 'effect';
 
-import {
-  formatCommand,
-  lintCommand,
-  pandaCodegenCommand,
-  typecheckCommands,
-  wasmBuildCommand,
-} from './commands';
+import { formatCommand, lintCommand, typecheckCommands } from './commands';
 import { runCommand, runCommands } from './process';
 
 export const runFormat = Effect.fn('task.format')((check: boolean) =>
@@ -17,9 +11,6 @@ export const runLint = Effect.fn('task.lint')((fix: boolean) =>
   runCommand(lintCommand(fix)).pipe(Effect.asVoid),
 );
 
-export const runTypecheck = Effect.fn('task.typecheck')(function* (skipSetup: boolean) {
-  if (!skipSetup) {
-    yield* runCommands([pandaCodegenCommand(), wasmBuildCommand('--dev')]);
-  }
-  yield* runCommands(typecheckCommands());
-});
+export const runTypecheck = Effect.fn('task.typecheck')(() =>
+  runCommands(typecheckCommands()).pipe(Effect.asVoid),
+);
