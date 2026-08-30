@@ -257,13 +257,13 @@ fn sidebar_full(
     .spacing(TOKENS.spacing.s5)
     .width(Fill);
   let bottom = column![
+    connection_summary(state),
     destination_button(
       Icon::Settings,
       "Settings",
       Destination::Settings,
       state.shell.destination == Destination::Settings,
     ),
-    connection_summary(state),
   ]
   .spacing(TOKENS.spacing.s3);
   let content = column![main, space::vertical(), bottom]
@@ -305,13 +305,13 @@ fn sidebar_compact(state: &State) -> container::Container<'_, Message> {
   }
 
   let bottom = column![
+    compact_connection_status(state),
     compact_destination_button(
       Icon::Settings,
       "Settings",
       Destination::Settings,
       state.shell.destination == Destination::Settings,
     ),
-    compact_connection_status(state),
   ]
   .spacing(TOKENS.spacing.s3)
   .align_x(Alignment::Center)
