@@ -9,8 +9,8 @@ use jellypilot_session::{
 
 use crate::playback::{
   NowPlayingItem, Playable, PlaybackEndReason, PlaybackError, PlaybackOutcome,
-  PlaybackRefreshOutcome, PlaybackRefreshState, PlaybackSelection, PlaybackStartPosition,
-  PlaybackStopOutcome, PlaybackWarning, TrackInfo, TrackSelectionOutcome,
+  PlaybackRefreshOutcome, PlaybackRefreshState, PlaybackSelection, PlaybackSnapshot,
+  PlaybackStartPosition, PlaybackStopOutcome, PlaybackWarning, TrackInfo, TrackSelectionOutcome,
 };
 
 const INTRO_PROMPT_DURATION: Duration = Duration::from_secs(3);
@@ -129,6 +129,37 @@ pub enum ControllerCommand {
   Shutdown,
 }
 
+impl ControllerCommand {
+  /// Settlement synthesized when no controller process is available, so the
+  /// session settles the pending effect instead of waiting on MPV forever.
+  #[must_use]
+  pub fn missing_controller_settlement(&self) -> ControllerSettlement {
+    match self {
+      Self::Start { .. } => ControllerSettlement::Started(Err(PlaybackError::MpvNotFound)),
+      Self::Stop => ControllerSettlement::Stopped(Err(PlaybackError::NoActivePlayback)),
+      Self::SelectAudioTrack(_) | Self::SelectSubtitleTrack(_) => {
+        ControllerSettlement::TrackSelected(Err(PlaybackError::NoActivePlayback))
+      }
+      Self::ShowText { .. } => ControllerSettlement::OsdShown(Err(PlaybackError::NoActivePlayback)),
+      Self::Shutdown => ControllerSettlement::Shutdown(Vec::new()),
+      Self::Refresh => ControllerSettlement::Refreshed {
+        outcome: PlaybackRefreshOutcome {
+          snapshot: PlaybackSnapshot {
+            now_playing: None,
+            transport: Default::default(),
+          },
+          state: PlaybackRefreshState::Ended(PlaybackEndReason::Disconnected),
+          warnings: Vec::new(),
+        },
+        client_messages: Vec::new(),
+      },
+      Self::SetPaused(_) | Self::Seek(_) | Self::SetVolume(_) | Self::SetMuted(_) => {
+        ControllerSettlement::Controlled(Err(PlaybackError::NoActivePlayback))
+      }
+    }
+  }
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum AdjacentDirection {
   Previous,
@@ -136,12 +167,30 @@ pub enum AdjacentDirection {
 }
 
 impl AdjacentDirection {
-  const fn index(self) -> usize {
+  /// Slot in a previous/next pair of adjacent playables.
+  #[must_use]
+  pub const fn index(self) -> usize {
     match self {
       Self::Previous => 0,
       Self::Next => 1,
     }
   }
+}
+
+/// Seek intent for a scrubber position, clamped to the active timeline.
+/// `None` while playback is inactive, the position is not finite, or no
+/// positive finite duration is known.
+#[must_use]
+pub fn seek_intent(position: f64, duration: Option<f64>, active: bool) -> Option<PlaybackIntent> {
+  let duration = duration.filter(|duration| duration.is_finite() && *duration > 0.0)?;
+  (active && position.is_finite()).then(|| PlaybackIntent::Seek(position.clamp(0.0, duration)))
+}
+
+/// Volume intent for a slider value, clamped to MPV's 0-100 range. `None`
+/// while playback is inactive or the value is not finite.
+#[must_use]
+pub fn volume_intent(volume: f64, active: bool) -> Option<PlaybackIntent> {
+  (active && volume.is_finite()).then(|| PlaybackIntent::SetVolume(volume.clamp(0.0, 100.0)))
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -2417,6 +2466,97 @@ mod tests {
     assert_eq!(
       session.view().notice,
       Some(PlaybackNotice::Failed(PlaybackError::MpvControlFailed))
+    );
+  }
+
+  #[test]
+  fn seek_intent_is_emitted_for_an_active_timeline_regardless_of_busy() {
+    assert!(matches!(
+      seek_intent(125.0, Some(100.0), true),
+      Some(PlaybackIntent::Seek(100.0))
+    ));
+    assert!(seek_intent(10.0, None, true).is_none());
+    assert!(seek_intent(10.0, Some(100.0), false).is_none());
+    assert!(seek_intent(f64::NAN, Some(100.0), true).is_none());
+  }
+
+  #[test]
+  fn volume_intent_is_emitted_for_active_playback_regardless_of_busy() {
+    assert!(matches!(
+      volume_intent(125.0, true),
+      Some(PlaybackIntent::SetVolume(100.0))
+    ));
+    assert!(volume_intent(50.0, false).is_none());
+    assert!(volume_intent(f64::INFINITY, true).is_none());
+  }
+
+  #[test]
+  fn missing_controller_settlement_matches_each_command_kind() {
+    let item = Playable::Media(media_item("episode-1", "Pilot"));
+    let cases: Vec<(ControllerCommand, ControllerSettlement)> = vec![
+      (
+        ControllerCommand::Start {
+          item,
+          position: PlaybackStartPosition::Beginning,
+          selection: PlaybackSelection::default(),
+        },
+        ControllerSettlement::Started(Err(PlaybackError::MpvNotFound)),
+      ),
+      (
+        ControllerCommand::Stop,
+        ControllerSettlement::Stopped(Err(PlaybackError::NoActivePlayback)),
+      ),
+      (
+        ControllerCommand::SetPaused(true),
+        ControllerSettlement::Controlled(Err(PlaybackError::NoActivePlayback)),
+      ),
+      (
+        ControllerCommand::Seek(10.0),
+        ControllerSettlement::Controlled(Err(PlaybackError::NoActivePlayback)),
+      ),
+      (
+        ControllerCommand::SetVolume(50.0),
+        ControllerSettlement::Controlled(Err(PlaybackError::NoActivePlayback)),
+      ),
+      (
+        ControllerCommand::SetMuted(true),
+        ControllerSettlement::Controlled(Err(PlaybackError::NoActivePlayback)),
+      ),
+      (
+        ControllerCommand::SelectAudioTrack(2),
+        ControllerSettlement::TrackSelected(Err(PlaybackError::NoActivePlayback)),
+      ),
+      (
+        ControllerCommand::SelectSubtitleTrack(None),
+        ControllerSettlement::TrackSelected(Err(PlaybackError::NoActivePlayback)),
+      ),
+      (
+        ControllerCommand::ShowText {
+          text: "Hi".to_owned(),
+          duration_ms: 1_000,
+        },
+        ControllerSettlement::OsdShown(Err(PlaybackError::NoActivePlayback)),
+      ),
+      (
+        ControllerCommand::Shutdown,
+        ControllerSettlement::Shutdown(Vec::new()),
+      ),
+    ];
+    for (command, expected) in cases {
+      assert_eq!(
+        std::mem::discriminant(&command.missing_controller_settlement()),
+        std::mem::discriminant(&expected),
+      );
+    }
+    let ControllerSettlement::Refreshed { outcome, .. } =
+      ControllerCommand::Refresh.missing_controller_settlement()
+    else {
+      panic!("refresh should settle as a synthetic refresh");
+    };
+    assert!(outcome.snapshot.now_playing.is_none());
+    assert_eq!(
+      outcome.state,
+      PlaybackRefreshState::Ended(PlaybackEndReason::Disconnected)
     );
   }
 }

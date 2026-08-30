@@ -128,7 +128,7 @@ fn featured_hero<'a>(
   } else {
     "Play"
   };
-  let play_enabled = state.playback_view.engine_available;
+  let play_enabled = state.playback.view.engine_available;
   let play = button(
     row![
       icon_for_variant_disabled(
@@ -290,7 +290,7 @@ fn video_card<'a>(
     } else {
       "Play"
     };
-    let play_enabled = state.playback_view.engine_available;
+    let play_enabled = state.playback.view.engine_available;
     let play = button(
       row![
         icon_for_variant_disabled(
@@ -379,7 +379,7 @@ fn play_message(state: &State, item: &VideoLibraryItem) -> Message {
     } else {
       PlaybackStartPosition::Beginning
     },
-    intro: state.intro_availability(),
+    intro: state.kernel.intro_availability(),
     selection: Box::default(),
   }))
 }

@@ -18,11 +18,8 @@ use jellypilot_media_server::artwork::ArtworkAdapter;
 use jellypilot_media_server::{
   MediaServerProvider, VideoLibraryItem, VideoLibraryShortcut, VideoSeasonEpisodesPage,
 };
-use jellypilot_mpv::playback::{Playable, PlaybackController};
-use jellypilot_mpv::playback_session::{EffectId, IntroAvailability, PlaybackSession, SessionView};
-use jellypilot_session::{
-  IntroSkipMode, JellyfinWebSocket, JellyfinWebSocketEvent, RemoteControlState,
-};
+use jellypilot_mpv::playback::PlaybackController;
+use jellypilot_session::{IntroSkipMode, JellyfinWebSocket, JellyfinWebSocketEvent};
 use zeroize::Zeroizing;
 
 use super::kernel::Kernel;
@@ -654,30 +651,13 @@ pub struct State {
   pub settings: crate::app::settings::Surface,
   pub kernel: Kernel,
   pub login: crate::app::login::Surface,
-  pub playback_notice: Option<String>,
   pub quit_requested: bool,
   pub destination: Destination,
   pub navigation_stack: Vec<Destination>,
   pub detail: crate::app::detail::Surface,
   pub home: crate::app::home::Surface,
-  pub playback_artwork: Option<ArtworkCell>,
-  pub playback_controller: Option<PlaybackControllerHandle>,
-  pub playback_session: PlaybackSession,
-  pub playback_view: SessionView,
-  pub playback_playable: Option<Playable>,
-  pub in_flight_refresh: Option<EffectId>,
-  pub in_flight_command: Option<EffectId>,
-  pub adjacent_playables: [Option<Playable>; 2],
-  pub playback_remote: RemoteToken,
-  pub remote_session: Option<RemoteSessionHandle>,
-  pub remote_events: Option<RemoteEventChannel>,
-  pub remote_control_state: RemoteControlState,
-  pub remote_stopping: bool,
-  pub seek_preview: Option<f64>,
-  pub volume_preview: Option<f64>,
+  pub playback: crate::app::playback::Surface,
   pub browse: crate::app::browse::Surface,
-  pub audio_menu_open: bool,
-  pub subtitle_menu_open: bool,
 }
 
 impl State {
@@ -697,9 +677,7 @@ impl State {
       diagnostics.record(DiagnosticLevel::Error, DiagnosticCategory::Config, error);
     }
     let mut request_gate = RequestGate::default();
-    let playback_remote = request_gate.begin_remote();
-    let playback_session = PlaybackSession::default();
-    let playback_view = playback_session.view();
+    let playback = crate::app::playback::Surface::new(&mut request_gate);
     let artwork_adapter = Arc::new(ArtworkAdapter::new());
     artwork_adapter.set_disk_cache_enabled(settings.snapshot().image_cache_enabled());
 
@@ -732,30 +710,13 @@ impl State {
         flow: login,
         quick_connect_task: None,
       },
-      playback_notice: None,
       quit_requested: false,
       destination: Destination::Home,
       navigation_stack: Vec::new(),
       detail: crate::app::detail::Surface::default(),
       home: crate::app::home::Surface::default(),
-      playback_artwork: None,
-      playback_controller: None,
-      playback_session,
-      playback_view,
-      playback_playable: None,
-      adjacent_playables: [None, None],
-      playback_remote,
-      in_flight_refresh: None,
-      in_flight_command: None,
-      remote_session: None,
-      remote_events: None,
-      remote_control_state: RemoteControlState::Unavailable,
-      remote_stopping: false,
-      seek_preview: None,
-      volume_preview: None,
+      playback,
       browse: crate::app::browse::Surface::default(),
-      audio_menu_open: false,
-      subtitle_menu_open: false,
     }
   }
   pub fn all_artwork_slots(&self) -> impl Iterator<Item = ArtworkSlot> + '_ {
@@ -765,7 +726,7 @@ impl State {
       .slots()
       .chain(self.browse.artwork.slots())
       .chain(self.detail.artwork.slots())
-      .chain(self.playback_artwork.as_ref().map(|cell| cell.slot))
+      .chain(self.playback.artwork.as_ref().map(|cell| cell.slot))
   }
 
   /// True while any surface renders skeleton placeholders or while any artwork
@@ -804,16 +765,6 @@ impl State {
     let slots: HashSet<_> = self.all_artwork_slots().collect();
     self.kernel.artwork_handles.retain_slots(slots);
   }
-  pub fn intro_availability(&self) -> IntroAvailability {
-    IntroAvailability {
-      mode: intro_skip_mode(self.kernel.settings.snapshot().intro_mode()),
-      skipper_available: self
-        .kernel
-        .client
-        .as_ref()
-        .is_some_and(|client| client.supports_intro_skipper()),
-    }
-  }
 
   pub fn navigate_to(&mut self, destination: Destination) -> bool {
     if self.destination == destination {
@@ -843,29 +794,8 @@ impl State {
     true
   }
 
-  pub fn show_toast(
-    &mut self,
-    level: NoticeLevel,
-    message: impl Into<String>,
-  ) -> iced::Task<crate::app::message::Message> {
-    self.kernel.next_toast_id = self.kernel.next_toast_id.wrapping_add(1);
-    let id = self.kernel.next_toast_id;
-    let message = message.into();
-    self.kernel.active_toast = Some(ToastNotice {
-      id,
-      message: message.clone(),
-      level,
-    });
-    self.kernel.notice = Some(message);
-    iced::Task::perform(
-      async move {
-        tokio::time::sleep(std::time::Duration::from_secs(5)).await;
-        id
-      },
-      crate::app::message::Message::DismissNotice,
-    )
-  }
-
+  /// Dismisses the kernel toast and clears the playback surface's notice;
+  /// cross-surface so it stays on `State` (ADR 0029).
   pub fn dismiss_toast(&mut self, id: u64) {
     if self
       .kernel
@@ -875,7 +805,7 @@ impl State {
     {
       self.kernel.active_toast = None;
       self.kernel.notice = None;
-      self.playback_notice = None;
+      self.playback.notice = None;
     }
   }
 
@@ -883,7 +813,7 @@ impl State {
   pub fn clear_toast(&mut self) {
     self.kernel.active_toast = None;
     self.kernel.notice = None;
-    self.playback_notice = None;
+    self.playback.notice = None;
   }
 }
 

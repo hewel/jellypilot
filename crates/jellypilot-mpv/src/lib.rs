@@ -8,6 +8,7 @@ pub mod playback_session;
 pub mod player;
 mod process;
 mod protocol;
+pub mod remote_commands;
 mod state;
 
 pub use client::{has_mpv_option, MpvClient, MpvError};

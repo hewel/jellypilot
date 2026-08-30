@@ -32,11 +32,14 @@ impl fmt::Display for TrackChoice {
 }
 
 pub fn bar(state: &State) -> Option<Element<'_, Message>> {
-  let now_playing = state.playback_view.now_playing.as_ref()?;
+  let now_playing = state.playback.view.now_playing.as_ref()?;
   let duration = now_playing
     .duration_seconds
     .filter(|duration| duration.is_finite() && *duration > 0.0);
-  let position = state.seek_preview.unwrap_or(now_playing.position_seconds);
+  let position = state
+    .playback
+    .seek_preview
+    .unwrap_or(now_playing.position_seconds);
 
   let metadata = column![
     text(&now_playing.item.title)
@@ -99,7 +102,7 @@ pub fn bar(state: &State) -> Option<Element<'_, Message>> {
 
   let volume_slider = slider(
     0.0..=100.0,
-    state.volume_preview.unwrap_or(now_playing.volume),
+    state.playback.volume_preview.unwrap_or(now_playing.volume),
     |value| Message::Playback(PlaybackMessage::VolumeChanged(value)),
   )
   .on_release(Message::Playback(PlaybackMessage::VolumeReleased))
@@ -173,7 +176,7 @@ pub fn bar(state: &State) -> Option<Element<'_, Message>> {
 }
 
 fn intro_prompt(state: &State) -> Option<Element<'_, Message>> {
-  let prompt = state.playback_view.intro_prompt?;
+  let prompt = state.playback.view.intro_prompt?;
   let label = match prompt.kind {
     IntroSkipKind::Introduction => "Skip intro?",
     IntroSkipKind::Credits => "Skip credits?",
@@ -237,8 +240,8 @@ fn adjacent_button<'a>(
   label: &'a str,
 ) -> Element<'a, Message> {
   let availability = match direction {
-    AdjacentDirection::Previous => &state.playback_view.adjacent.previous,
-    AdjacentDirection::Next => &state.playback_view.adjacent.next,
+    AdjacentDirection::Previous => &state.playback.view.adjacent.previous,
+    AdjacentDirection::Next => &state.playback.view.adjacent.next,
   };
   let icon_variant = match direction {
     AdjacentDirection::Previous => Icon::Previous,
@@ -264,11 +267,11 @@ fn adjacent_button<'a>(
 }
 
 fn audio_popover(state: &State) -> Element<'_, Message> {
-  let has_audio_choices = match &state.playback_view.tracks {
+  let has_audio_choices = match &state.playback.view.tracks {
     TracksView::Ready { tracks, .. } => !track_choices(tracks, "audio", false).is_empty(),
     TracksView::Loading | TracksView::Unavailable => false,
   };
-  let audio_btn_variant = if state.audio_menu_open {
+  let audio_btn_variant = if state.playback.audio_menu_open {
     ButtonVariant::Secondary
   } else {
     ButtonVariant::Outlined
@@ -291,7 +294,7 @@ fn audio_popover(state: &State) -> Element<'_, Message> {
   .style(move |theme, status| {
     jellypilot_ui::theme::button_variant(theme, status, audio_btn_variant)
   });
-  let menu = match &state.playback_view.tracks {
+  let menu = match &state.playback.view.tracks {
     TracksView::Ready { tracks, audio, .. } => {
       let choices = track_choices(tracks, "audio", false);
       if choices.is_empty() {
@@ -349,7 +352,7 @@ fn audio_popover(state: &State) -> Element<'_, Message> {
   popover(
     trigger,
     menu,
-    state.audio_menu_open,
+    state.playback.audio_menu_open,
     PopoverOptions {
       placement: Placement::Above,
       width: Some(240.0),
@@ -360,11 +363,11 @@ fn audio_popover(state: &State) -> Element<'_, Message> {
 }
 
 fn subtitle_popover(state: &State) -> Element<'_, Message> {
-  let has_subtitle_choices = match &state.playback_view.tracks {
+  let has_subtitle_choices = match &state.playback.view.tracks {
     TracksView::Ready { tracks, .. } => !track_choices(tracks, "sub", false).is_empty(),
     TracksView::Loading | TracksView::Unavailable => false,
   };
-  let sub_btn_variant = if state.subtitle_menu_open {
+  let sub_btn_variant = if state.playback.subtitle_menu_open {
     ButtonVariant::Secondary
   } else {
     ButtonVariant::Outlined
@@ -387,7 +390,7 @@ fn subtitle_popover(state: &State) -> Element<'_, Message> {
     has_subtitle_choices.then_some(Message::Playback(PlaybackMessage::SubtitleMenuToggled)),
   )
   .style(move |theme, status| jellypilot_ui::theme::button_variant(theme, status, sub_btn_variant));
-  let menu = match &state.playback_view.tracks {
+  let menu = match &state.playback.view.tracks {
     TracksView::Ready {
       tracks, subtitle, ..
     } => {
@@ -440,7 +443,7 @@ fn subtitle_popover(state: &State) -> Element<'_, Message> {
   popover(
     trigger,
     menu,
-    state.subtitle_menu_open,
+    state.playback.subtitle_menu_open,
     PopoverOptions {
       placement: Placement::Above,
       width: Some(240.0),
@@ -480,9 +483,10 @@ fn track_label(track: &TrackInfo) -> String {
 }
 
 fn playback_caption(state: &State) -> String {
-  let Some(playable) = state.playback_playable.as_ref() else {
+  let Some(playable) = state.playback.playable.as_ref() else {
     return state
-      .playback_view
+      .playback
+      .view
       .now_playing
       .as_ref()
       .map(|view| view.item.item_type.clone())
@@ -526,7 +530,7 @@ fn media_caption(
 }
 
 fn playback_artwork(state: &State, width: f32, height: f32) -> Element<'_, Message> {
-  if let Some(cell) = &state.playback_artwork {
+  if let Some(cell) = &state.playback.artwork {
     if cell.state == ArtworkCellState::Ready {
       if let Some(handle) = state.kernel.artwork_handles.get(cell.slot, &cell.image_id) {
         return rounded_image(handle.clone(), full_radius(TOKENS.radii.lg))
@@ -602,7 +606,7 @@ mod tests {
   #[test]
   fn bar_renders_when_playback_is_active() {
     let mut state = State::boot(false);
-    state.playback_view.now_playing = Some(test_now_playing());
+    state.playback.view.now_playing = Some(test_now_playing());
     assert!(bar(&state).is_some());
   }
 
@@ -610,11 +614,11 @@ mod tests {
   fn bar_composition_and_artwork_stable_across_position_settlement() {
     let mut state = State::boot(false);
     let now = Instant::now();
-    state.playback_session.handle(
+    state.playback.session.handle(
       PlaybackInput::Event(PlaybackEvent::EngineAvailability(true)),
       now,
     );
-    let start_effects = state.playback_session.handle(
+    let start_effects = state.playback.session.handle(
       PlaybackInput::Intent(PlaybackIntent::Start {
         item: Playable::Library(VideoLibraryItem {
           id: "episode-1".to_owned(),
@@ -646,7 +650,7 @@ mod tests {
     let [PlaybackEffect::Controller(start_id, _)] = start_effects.as_slice() else {
       panic!("expected start controller effect");
     };
-    state.playback_session.handle(
+    state.playback.session.handle(
       PlaybackInput::Event(PlaybackEvent::ControllerSettled {
         id: *start_id,
         settlement: ControllerSettlement::Started(Ok(PlaybackOutcome {
@@ -673,11 +677,11 @@ mod tests {
       }),
       now,
     );
-    state.playback_view = state.playback_session.view();
+    state.playback.view = state.playback.session.view();
 
     let slot = state.kernel.artwork_binder.bind_player_bar();
     let image_id = "test-artwork-image".to_owned();
-    state.playback_artwork = Some(crate::app::state::ArtworkCell {
+    state.playback.artwork = Some(crate::app::state::ArtworkCell {
       slot,
       image_id: image_id.clone(),
       state: ArtworkCellState::Ready,
@@ -688,12 +692,13 @@ mod tests {
       iced::widget::image::Handle::from_rgba(2, 1, vec![0; 8]),
     );
 
-    let initial_artwork = state.playback_artwork.clone();
+    let initial_artwork = state.playback.artwork.clone();
     assert!(bar(&state).is_some());
 
     // Issue tick intent to trigger refresh
     let tick_effects = state
-      .playback_session
+      .playback
+      .session
       .handle(PlaybackInput::Intent(PlaybackIntent::Tick), now);
     let [PlaybackEffect::Controller(refresh_id, _)] = tick_effects.as_slice() else {
       panic!("expected refresh controller effect");
@@ -737,7 +742,8 @@ mod tests {
     // Verify position advanced via real settlement
     assert_eq!(
       state
-        .playback_view
+        .playback
+        .view
         .now_playing
         .as_ref()
         .map(|np| np.position_seconds),
@@ -745,7 +751,7 @@ mod tests {
     );
 
     // Verify artwork cell, slot, image_id, and retained handle identity remain unchanged
-    assert_eq!(state.playback_artwork, initial_artwork);
+    assert_eq!(state.playback.artwork, initial_artwork);
     assert!(state.kernel.artwork_handles.get(slot, &image_id).is_some());
     assert!(bar(&state).is_some());
   }
@@ -796,15 +802,15 @@ mod tests {
   #[test]
   fn intro_prompt_rendered_on_bar_when_active() {
     let mut state = State::boot(false);
-    state.playback_view.now_playing = Some(test_now_playing());
+    state.playback.view.now_playing = Some(test_now_playing());
     assert!(intro_prompt(&state).is_none());
 
-    state.playback_view.intro_prompt = Some(IntroPromptView {
+    state.playback.view.intro_prompt = Some(IntroPromptView {
       kind: IntroSkipKind::Introduction,
     });
     assert!(intro_prompt(&state).is_some());
 
-    state.playback_view.intro_prompt = Some(IntroPromptView {
+    state.playback.view.intro_prompt = Some(IntroPromptView {
       kind: IntroSkipKind::Credits,
     });
     assert!(intro_prompt(&state).is_some());
@@ -813,8 +819,8 @@ mod tests {
   #[test]
   fn adjacent_buttons_rendered_with_availability() {
     let mut state = State::boot(false);
-    state.playback_view.now_playing = Some(test_now_playing());
-    state.playback_view.adjacent = AdjacentView {
+    state.playback.view.now_playing = Some(test_now_playing());
+    state.playback.view.adjacent = AdjacentView {
       previous: AdjacentAvailability::Unavailable,
       next: AdjacentAvailability::Available {
         title: "Episode 2".to_owned(),
@@ -830,24 +836,24 @@ mod tests {
   #[test]
   fn audio_and_subtitle_popovers_render_across_track_states() {
     let mut state = State::boot(false);
-    state.playback_view.now_playing = Some(test_now_playing());
+    state.playback.view.now_playing = Some(test_now_playing());
 
     // Loading
-    state.playback_view.tracks = TracksView::Loading;
+    state.playback.view.tracks = TracksView::Loading;
     let audio_el = audio_popover(&state);
     let sub_el = subtitle_popover(&state);
     drop(audio_el);
     drop(sub_el);
 
     // Unavailable
-    state.playback_view.tracks = TracksView::Unavailable;
+    state.playback.view.tracks = TracksView::Unavailable;
     let audio_el = audio_popover(&state);
     let sub_el = subtitle_popover(&state);
     drop(audio_el);
     drop(sub_el);
 
     // Ready with open menus
-    state.playback_view.tracks = TracksView::Ready {
+    state.playback.view.tracks = TracksView::Ready {
       tracks: vec![
         TrackInfo {
           id: 1,
@@ -869,8 +875,8 @@ mod tests {
       audio: Some(1),
       subtitle: Some(2),
     };
-    state.audio_menu_open = true;
-    state.subtitle_menu_open = true;
+    state.playback.audio_menu_open = true;
+    state.playback.subtitle_menu_open = true;
     let audio_el = audio_popover(&state);
     let sub_el = subtitle_popover(&state);
     drop(audio_el);
@@ -880,10 +886,10 @@ mod tests {
   #[test]
   fn audio_and_subtitle_popovers_disabled_when_track_choices_empty() {
     let mut state = State::boot(false);
-    state.playback_view.now_playing = Some(test_now_playing());
+    state.playback.view.now_playing = Some(test_now_playing());
 
     // Ready with zero audio tracks and zero subtitle tracks
-    state.playback_view.tracks = TracksView::Ready {
+    state.playback.view.tracks = TracksView::Ready {
       tracks: Vec::new(),
       audio: None,
       subtitle: None,
@@ -894,7 +900,7 @@ mod tests {
     drop(sub_el);
 
     // Ready with audio only (subtitles should remain disabled)
-    state.playback_view.tracks = TracksView::Ready {
+    state.playback.view.tracks = TracksView::Ready {
       tracks: vec![TrackInfo {
         id: 1,
         track_type: "audio".to_owned(),
@@ -912,7 +918,7 @@ mod tests {
     drop(sub_el);
 
     // Ready with subtitles only (audio should remain disabled)
-    state.playback_view.tracks = TracksView::Ready {
+    state.playback.view.tracks = TracksView::Ready {
       tracks: vec![TrackInfo {
         id: 2,
         track_type: "sub".to_owned(),

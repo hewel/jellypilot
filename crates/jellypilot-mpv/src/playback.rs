@@ -97,6 +97,38 @@ impl Playable {
       Self::Media(item) => &item.id,
     }
   }
+
+  /// Artwork image for the player bar: the series poster when present, the
+  /// item's own artwork otherwise. Bare media items carry no image reference.
+  #[must_use]
+  pub fn image_id(&self) -> Option<&str> {
+    match self {
+      Self::Library(item) => item
+        .series_poster_image_id
+        .as_deref()
+        .or(item.artwork_image_id.as_deref()),
+      Self::Detail(item) => item
+        .series_poster_image_id
+        .as_deref()
+        .or(item.artwork_image_id.as_deref()),
+      Self::Media(_) => None,
+    }
+  }
+}
+
+/// Enriches a bare media-item playable with the fully resolved adjacent
+/// playable when the same item was already looked up in either direction.
+#[must_use]
+pub fn rich_playable(adjacent: &[Option<Playable>; 2], item: &Playable) -> Playable {
+  let Playable::Media(media) = item else {
+    return item.clone();
+  };
+  adjacent
+    .iter()
+    .flatten()
+    .find(|playable| playable.item_id() == media.id)
+    .cloned()
+    .unwrap_or_else(|| item.clone())
 }
 
 impl From<VideoLibraryItem> for Playable {
@@ -2187,6 +2219,50 @@ mod tests {
       overview: None,
       series_primary_image_tag: None,
     }
+  }
+
+  #[test]
+  fn playable_image_id_prefers_the_series_poster() {
+    let mut item = library_item("Episode");
+    item.artwork_image_id = Some("item-art".to_owned());
+    assert_eq!(Playable::Library(item.clone()).image_id(), Some("item-art"));
+    item.series_poster_image_id = Some("series-poster".to_owned());
+    assert_eq!(Playable::Library(item).image_id(), Some("series-poster"));
+
+    let mut detail = item_detail(true);
+    detail.artwork_image_id = Some("detail-art".to_owned());
+    assert_eq!(Playable::Detail(detail).image_id(), Some("detail-art"));
+
+    assert_eq!(Playable::Media(media_item("item-1")).image_id(), None);
+  }
+
+  #[test]
+  fn rich_playable_substitutes_a_matching_adjacent_entry() {
+    let bare = Playable::Media(media_item("item-1"));
+    let mut detail = item_detail(true);
+    detail.artwork_image_id = Some("detail-art".to_owned());
+
+    assert!(matches!(
+      rich_playable(&[None, None], &bare),
+      Playable::Media(_)
+    ));
+    assert!(matches!(
+      rich_playable(&[None, Some(Playable::Detail(detail))], &bare),
+      Playable::Detail(_)
+    ));
+    // Non-media playables and mismatched ids pass through unchanged.
+    let library = Playable::Library(library_item("Episode"));
+    assert!(matches!(
+      rich_playable(&[Some(library.clone()), None], &library),
+      Playable::Library(_)
+    ));
+    assert!(matches!(
+      rich_playable(
+        &[Some(library), None],
+        &Playable::Media(media_item("other"))
+      ),
+      Playable::Media(_)
+    ));
   }
 
   #[test]

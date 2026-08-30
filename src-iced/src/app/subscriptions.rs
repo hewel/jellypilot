@@ -24,7 +24,7 @@ pub fn subscription(state: &State) -> Subscription<Message> {
   let mut subscriptions = vec![window_events];
   subscriptions
     .push(window::resize_events().map(|(_id, size)| Message::Window(WindowMessage::Resized(size))));
-  if state.playback_view.now_playing.is_some() {
+  if state.playback.view.now_playing.is_some() {
     subscriptions.push(
       time::every(Duration::from_secs(1))
         .map(|_| Message::Playback(PlaybackMessage::Intent(PlaybackIntent::Tick))),
@@ -32,14 +32,14 @@ pub fn subscription(state: &State) -> Subscription<Message> {
   }
   if state.settings.view.shortcut_capture.is_some() {
     subscriptions.push(event::listen_with(shortcut_capture));
-  } else if state.playback_view.now_playing.is_some() {
+  } else if state.playback.view.now_playing.is_some() {
     subscriptions.push(
       event::listen()
         .with(playback_shortcuts(state.kernel.settings.snapshot()))
         .filter_map(playback_shortcut),
     );
   }
-  if let Some(channel) = state.remote_events.clone() {
+  if let Some(channel) = state.playback.remote_events.clone() {
     subscriptions.push(Subscription::run_with(channel, remote_event_stream));
   }
   if let Some(tray) = &state.kernel.tray {
@@ -231,7 +231,7 @@ mod tests {
   #[test]
   fn shortcut_capture_keeps_playback_tick_subscribed() {
     let mut state = State::boot(false);
-    state.playback_view.now_playing = Some(jellypilot_mpv::playback_session::NowPlayingView {
+    state.playback.view.now_playing = Some(jellypilot_mpv::playback_session::NowPlayingView {
       item: jellypilot_mpv::playback::NowPlayingItem {
         item_id: "episode-1".to_owned(),
         title: "Pilot".to_owned(),
