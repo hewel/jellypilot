@@ -677,7 +677,7 @@ impl JellyfinClient {
 
     Ok(AuthResponse {
       user: User {
-        id: id.to_string(),
+        id: jellyfin_id(id),
         name,
       },
       access_token,
@@ -1074,7 +1074,7 @@ impl JellyfinClient {
           .id
           .ok_or_else(|| Self::missing_openapi_field("Saved session validation", "User.Id"))?;
         Ok(ValidatedSavedUser {
-          id: id.to_string(),
+          id: jellyfin_id(id),
           name: user.name.flatten(),
         })
       }
@@ -1159,11 +1159,13 @@ impl JellyfinClient {
 
   fn expected_saved_user_id(session: &SavedSession) -> Result<String, JellyfinError> {
     match session.provider {
-      MediaServerProvider::Jellyfin => Uuid::parse_str(&session.user_id)
-        .map(|id| id.to_string())
-        .map_err(|_| {
-          JellyfinError::AuthFailed("Saved session user identity is invalid".to_string())
-        }),
+      MediaServerProvider::Jellyfin => {
+        Uuid::parse_str(&session.user_id)
+          .map(jellyfin_id)
+          .map_err(|_| {
+            JellyfinError::AuthFailed("Saved session user identity is invalid".to_string())
+          })
+      }
       MediaServerProvider::Emby => Ok(session.user_id.clone()),
     }
   }
@@ -3829,13 +3831,22 @@ fn map_continue_watching_item(
 
   map_video_home_item(server_url, item, image_type)
 }
+/// Jellyfin's native item ids are 32 lowercase hex characters without dashes,
+/// but the generated OpenAPI client types them as [`Uuid`], whose `to_string`
+/// inserts dashes. Playback-path types (`MediaItem`) deserialize the raw
+/// server form instead, so ids for the same episode used to compare unequal
+/// across the two families and `rich_playable` enrichment never matched.
+/// Normalize every generated-client id to the native undashed form.
+fn jellyfin_id(id: Uuid) -> String {
+  id.simple().to_string()
+}
 
 fn map_video_home_item(
   server_url: &str,
   item: jellyfin_api::models::BaseItemDto,
   image_type: jellyfin_api::models::ImageType,
 ) -> Option<VideoLibraryItem> {
-  let id = item.id?.to_string();
+  let id = jellyfin_id(item.id?);
   let item_type = item.r#type?.to_string();
   let user_data = item.user_data.flatten();
   let artwork_image_id = image_id_for_remote_url(
@@ -3844,7 +3855,7 @@ fn map_video_home_item(
     artwork_url(server_url, &id, item.image_tags.flatten(), image_type),
     ImageRefKind::Artwork,
   );
-  let series_id = item.series_id.flatten().map(|id| id.to_string());
+  let series_id = item.series_id.flatten().map(jellyfin_id);
   let series_primary_image_tag = item.series_primary_image_tag.flatten();
   let series_poster_image_id = image_id_for_series_primary(
     MediaServerProvider::Jellyfin,
@@ -3891,7 +3902,7 @@ fn map_video_library_item(
   server_url: &str,
   item: jellyfin_api::models::BaseItemDto,
 ) -> Option<VideoLibraryItem> {
-  let id = item.id?.to_string();
+  let id = jellyfin_id(item.id?);
   let item_type = item.r#type?.to_string();
   let user_data = item.user_data.flatten();
   let artwork_image_id = image_id_for_remote_url(
@@ -3905,7 +3916,7 @@ fn map_video_library_item(
     ),
     ImageRefKind::Artwork,
   );
-  let series_id = item.series_id.flatten().map(|id| id.to_string());
+  let series_id = item.series_id.flatten().map(jellyfin_id);
   let series_primary_image_tag = item.series_primary_image_tag.flatten();
   let series_poster_image_id = image_id_for_series_primary(
     MediaServerProvider::Jellyfin,
@@ -3974,7 +3985,7 @@ fn map_video_show_detail(
 
   let metadata = jellyfin_detail_metadata(&item);
 
-  let id = item.id?.to_string();
+  let id = jellyfin_id(item.id?);
   let user_data = item.user_data.flatten();
   let artwork_image_id = image_id_for_remote_url(
     MediaServerProvider::Jellyfin,
@@ -3994,10 +4005,7 @@ fn map_video_show_detail(
       server_url,
       &id,
       item.backdrop_image_tags.flatten(),
-      item
-        .parent_backdrop_item_id
-        .flatten()
-        .map(|id| id.to_string()),
+      item.parent_backdrop_item_id.flatten().map(jellyfin_id),
       item.parent_backdrop_image_tags.flatten(),
     ),
     ImageRefKind::Backdrop,
@@ -4033,7 +4041,7 @@ fn map_video_season(
   server_url: &str,
   item: jellyfin_api::models::BaseItemDto,
 ) -> Option<VideoSeason> {
-  let id = item.id?.to_string();
+  let id = jellyfin_id(item.id?);
   let user_data = item.user_data.flatten();
 
   Some(VideoSeason {
@@ -4068,7 +4076,7 @@ fn map_video_season(
 fn map_video_playback_target(
   item: jellyfin_api::models::BaseItemDto,
 ) -> Option<VideoPlaybackTarget> {
-  let item_id = item.id?.to_string();
+  let item_id = jellyfin_id(item.id?);
   let user_data = item.user_data.flatten();
   let played = user_data
     .as_ref()
@@ -4111,7 +4119,7 @@ fn map_video_item_detail(
 
   let metadata = jellyfin_detail_metadata(&item);
 
-  let id = item.id?.to_string();
+  let id = jellyfin_id(item.id?);
   let user_data = item.user_data.flatten();
   let resume_position_seconds = user_data
     .as_ref()
@@ -4139,15 +4147,12 @@ fn map_video_item_detail(
       server_url,
       &id,
       item.backdrop_image_tags.flatten(),
-      item
-        .parent_backdrop_item_id
-        .flatten()
-        .map(|id| id.to_string()),
+      item.parent_backdrop_item_id.flatten().map(jellyfin_id),
       item.parent_backdrop_image_tags.flatten(),
     ),
     ImageRefKind::Backdrop,
   );
-  let series_id = item.series_id.flatten().map(|id| id.to_string());
+  let series_id = item.series_id.flatten().map(jellyfin_id);
   let series_primary_image_tag = item.series_primary_image_tag.flatten();
   let series_poster_image_id = image_id_for_series_primary(
     MediaServerProvider::Jellyfin,
@@ -4253,7 +4258,7 @@ fn map_video_library_shortcut(
     return None;
   }
 
-  let id = item.id?.to_string();
+  let id = jellyfin_id(item.id?);
   let artwork_image_id = image_id_for_remote_url(
     MediaServerProvider::Jellyfin,
     server_url,
@@ -5456,7 +5461,7 @@ mod tests {
           .push(String::from_utf8_lossy(&buffer[..bytes_read]).into_owned());
 
         let response = if response_index == 0 {
-          let body = r#"{"Id":"00000000-0000-0000-0000-000000000001","Name":"Ada"}"#;
+          let body = r#"{"Id":"00000000000000000000000000000001","Name":"Ada"}"#;
           format!(
             "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{}",
             body.len(),
@@ -5831,7 +5836,7 @@ mod tests {
         provider: MediaServerProvider::Jellyfin,
         server_url,
         access_token: token.to_string(),
-        user_id: "00000000-0000-0000-0000-000000000001".to_string(),
+        user_id: "00000000000000000000000000000001".to_string(),
         user_name: "Ada".to_string(),
         server_name: None,
         device_id: None,
@@ -5997,7 +6002,7 @@ mod tests {
     let (server_url, requests) = serve_responses_with_requests(vec![
       (
         "200 OK",
-        r#"{"User":{"Id":"00000000-0000-0000-0000-000000000001","Name":"Ada"},"AccessToken":"token-1","ServerId":"server-1"}"#,
+        r#"{"User":{"Id":"00000000000000000000000000000001","Name":"Ada"},"AccessToken":"token-1","ServerId":"server-1"}"#,
       ),
       (
         "200 OK",
@@ -6326,7 +6331,7 @@ mod tests {
     let (server_url, requests) = serve_responses_with_requests(vec![
       (
         "200 OK",
-        r#"{"Id":"00000000-0000-0000-0000-000000000001","Name":"Ada"}"#,
+        r#"{"Id":"00000000000000000000000000000001","Name":"Ada"}"#,
       ),
       (
         "200 OK",
@@ -6341,7 +6346,7 @@ mod tests {
         provider: MediaServerProvider::Jellyfin,
         server_url: format!("  {server_url}///  "),
         access_token: "token-1".to_string(),
-        user_id: "00000000-0000-0000-0000-000000000001".to_string(),
+        user_id: "00000000000000000000000000000001".to_string(),
         user_name: "Stale Jellyfin User".to_string(),
         server_name: None,
         device_id: Some("jellypilot-saved-device".to_string()),
@@ -6368,7 +6373,7 @@ mod tests {
   async fn restore_session_rejects_jellyfin_user_mismatch_before_state_adoption() {
     let saved_url = serve_once(
       "200 OK",
-      r#"{"Id":"00000000-0000-0000-0000-000000000002","Name":"Grace"}"#,
+      r#"{"Id":"00000000000000000000000000000002","Name":"Grace"}"#,
     )
     .await;
     let client = JellyfinClient::new();
@@ -6380,7 +6385,7 @@ mod tests {
         provider: MediaServerProvider::Jellyfin,
         server_url: saved_url.clone(),
         access_token: "jellyfin-private-token".to_string(),
-        user_id: "00000000-0000-0000-0000-000000000001".to_string(),
+        user_id: "00000000000000000000000000000001".to_string(),
         user_name: "Stale User".to_string(),
         server_name: None,
         device_id: Some("jellypilot-saved-device".to_string()),
@@ -6409,7 +6414,7 @@ mod tests {
         provider: MediaServerProvider::Jellyfin,
         server_url: server_url.clone(),
         access_token: "jellyfin-private-token".to_string(),
-        user_id: "00000000-0000-0000-0000-000000000001".to_string(),
+        user_id: "00000000000000000000000000000001".to_string(),
         user_name: "Ada".to_string(),
         server_name: None,
         device_id: Some("jellypilot-saved-device".to_string()),
@@ -6442,7 +6447,7 @@ mod tests {
         provider: MediaServerProvider::Jellyfin,
         server_url: saved_url.to_string(),
         access_token: "jellyfin-private-token".to_string(),
-        user_id: "00000000-0000-0000-0000-000000000001".to_string(),
+        user_id: "00000000000000000000000000000001".to_string(),
         user_name: "Ada".to_string(),
         server_name: None,
         device_id: None,
@@ -6468,7 +6473,7 @@ mod tests {
         provider: MediaServerProvider::Jellyfin,
         server_url,
         access_token: "token-1".to_string(),
-        user_id: "00000000-0000-0000-0000-000000000001".to_string(),
+        user_id: "00000000000000000000000000000001".to_string(),
         user_name: "Ada".to_string(),
         server_name: Some("Jellyfin Home".to_string()),
         device_id: Some("jellypilot-saved-device".to_string()),
@@ -6493,7 +6498,7 @@ mod tests {
         provider: MediaServerProvider::Jellyfin,
         server_url,
         access_token: "token-1".to_string(),
-        user_id: "00000000-0000-0000-0000-000000000001".to_string(),
+        user_id: "00000000000000000000000000000001".to_string(),
         user_name: "Ada".to_string(),
         server_name: None,
         device_id: Some("jellypilot-saved-device".to_string()),
@@ -6521,7 +6526,7 @@ mod tests {
         provider: MediaServerProvider::Jellyfin,
         server_url,
         access_token: "token-1".to_string(),
-        user_id: "00000000-0000-0000-0000-000000000001".to_string(),
+        user_id: "00000000000000000000000000000001".to_string(),
         user_name: "Ada".to_string(),
         server_name: None,
         device_id: Some("jellypilot-saved-device".to_string()),
@@ -6544,7 +6549,7 @@ mod tests {
         provider: MediaServerProvider::Jellyfin,
         server_url: "http://127.0.0.1:1/private-path".to_string(),
         access_token: "token-1".to_string(),
-        user_id: "00000000-0000-0000-0000-000000000001".to_string(),
+        user_id: "00000000000000000000000000000001".to_string(),
         user_name: "Ada".to_string(),
         server_name: None,
         device_id: Some("jellypilot-saved-device".to_string()),
@@ -6569,7 +6574,7 @@ mod tests {
       provider: MediaServerProvider::Jellyfin,
       server_url: failing_url.clone(),
       access_token: "expired-token".to_string(),
-      user_id: "00000000-0000-0000-0000-000000000001".to_string(),
+      user_id: "00000000000000000000000000000001".to_string(),
       user_name: "Ada".to_string(),
       server_name: None,
       device_id: Some("jellypilot-saved-device".to_string()),
@@ -6581,7 +6586,7 @@ mod tests {
         provider: MediaServerProvider::Jellyfin,
         server_url: failing_url,
         access_token: "expired-token".to_string(),
-        user_id: "00000000-0000-0000-0000-000000000001".to_string(),
+        user_id: "00000000000000000000000000000001".to_string(),
         user_name: "Ada".to_string(),
         server_name: None,
         device_id: Some("jellypilot-saved-device".to_string()),
@@ -6822,7 +6827,7 @@ mod tests {
     let (server_url, requests) = serve_responses_with_requests(vec![
       (
         "200 OK",
-        r#"{"User":{"Id":"00000000-0000-0000-0000-000000000001","Name":"Ada"},"AccessToken":"token-1","ServerId":"server-1"}"#,
+        r#"{"User":{"Id":"00000000000000000000000000000001","Name":"Ada"},"AccessToken":"token-1","ServerId":"server-1"}"#,
       ),
       (
         "200 OK",
@@ -6859,7 +6864,7 @@ mod tests {
     let mut state = client.state.write();
     state.server_url = Some(server_url);
     state.access_token = Some("token-1".to_string());
-    state.user_id = Some("00000000-0000-0000-0000-000000000001".to_string());
+    state.user_id = Some("00000000000000000000000000000001".to_string());
   }
 
   fn connect_test_client_as_emby(client: &JellyfinClient, server_url: String) {
@@ -6867,7 +6872,7 @@ mod tests {
     state.provider = MediaServerProvider::Emby;
     state.server_url = Some(server_url);
     state.access_token = Some("emby-token".to_string());
-    state.user_id = Some("00000000-0000-0000-0000-000000000001".to_string());
+    state.user_id = Some("00000000000000000000000000000001".to_string());
   }
   #[tokio::test]
   async fn checked_capabilities_registration_rejects_non_success_status() {
@@ -7085,7 +7090,7 @@ mod tests {
   async fn intro_skipper_ranges_parse_valid_introduction_response() {
     let server_url = serve_once(
       "200 OK",
-      r#"{"Introduction":{"EpisodeId":"00000000-0000-0000-0000-000000000001","Start":8.5,"End":68.25}}"#,
+      r#"{"Introduction":{"EpisodeId":"00000000000000000000000000000001","Start":8.5,"End":68.25}}"#,
     )
     .await;
     let client = JellyfinClient::new();
@@ -7152,31 +7157,31 @@ mod tests {
 
   #[tokio::test]
   async fn video_home_loads_real_rows_without_library_shortcuts() {
-    let movie_id = "00000000-0000-0000-0000-000000000010";
-    let episode_id = "00000000-0000-0000-0000-000000000011";
-    let series_id = "00000000-0000-0000-0000-000000000012";
-    let resume_episode_id = "00000000-0000-0000-0000-000000000013";
-    let resume_thumbed_episode_id = "00000000-0000-0000-0000-000000000014";
+    let movie_id = "00000000000000000000000000000010";
+    let episode_id = "00000000000000000000000000000011";
+    let series_id = "00000000000000000000000000000012";
+    let resume_episode_id = "00000000000000000000000000000013";
+    let resume_thumbed_episode_id = "00000000000000000000000000000014";
     let (server_url, requests) = serve_route_responses_with_requests(vec![
       (
         "/UserItems/Resume",
         "200 OK",
-        r#"{"Items":[{"Id":"00000000-0000-0000-0000-000000000010","Name":"Resume Movie","Type":"Movie","ProductionYear":2024,"RunTimeTicks":72000000000,"ImageTags":{"Thumb":"thumb-1","Primary":"poster-movie"},"UserData":{"PlaybackPositionTicks":1200000000,"PlayedPercentage":25.0,"IsFavorite":true,"Played":false}},{"Id":"00000000-0000-0000-0000-000000000013","Name":"Resume Episode","Type":"Episode","SeriesName":"Example Show","SeriesId":"00000000-0000-0000-0000-000000000012","ParentIndexNumber":1,"IndexNumber":1,"ImageTags":{"Primary":"episode-primary"},"UserData":{"PlaybackPositionTicks":600000000,"PlayedPercentage":10.0,"IsFavorite":false,"Played":false}},{"Id":"00000000-0000-0000-0000-000000000014","Name":"Resume Episode Thumb","Type":"Episode","SeriesName":"Example Show","SeriesId":"00000000-0000-0000-0000-000000000012","ParentIndexNumber":1,"IndexNumber":2,"ImageTags":{"Thumb":"episode-thumb","Primary":"episode-also-primary"},"UserData":{"PlaybackPositionTicks":300000000,"PlayedPercentage":5.0,"IsFavorite":false,"Played":false}}],"TotalRecordCount":3}"#,
+        r#"{"Items":[{"Id":"00000000000000000000000000000010","Name":"Resume Movie","Type":"Movie","ProductionYear":2024,"RunTimeTicks":72000000000,"ImageTags":{"Thumb":"thumb-1","Primary":"poster-movie"},"UserData":{"PlaybackPositionTicks":1200000000,"PlayedPercentage":25.0,"IsFavorite":true,"Played":false}},{"Id":"00000000000000000000000000000013","Name":"Resume Episode","Type":"Episode","SeriesName":"Example Show","SeriesId":"00000000000000000000000000000012","ParentIndexNumber":1,"IndexNumber":1,"ImageTags":{"Primary":"episode-primary"},"UserData":{"PlaybackPositionTicks":600000000,"PlayedPercentage":10.0,"IsFavorite":false,"Played":false}},{"Id":"00000000000000000000000000000014","Name":"Resume Episode Thumb","Type":"Episode","SeriesName":"Example Show","SeriesId":"00000000000000000000000000000012","ParentIndexNumber":1,"IndexNumber":2,"ImageTags":{"Thumb":"episode-thumb","Primary":"episode-also-primary"},"UserData":{"PlaybackPositionTicks":300000000,"PlayedPercentage":5.0,"IsFavorite":false,"Played":false}}],"TotalRecordCount":3}"#,
       ),
       (
         "/Shows/NextUp",
         "200 OK",
-        r#"{"Items":[{"Id":"00000000-0000-0000-0000-000000000011","Name":"Next Episode","Type":"Episode","SeriesName":"Example Show","SeriesId":"00000000-0000-0000-0000-000000000012","ParentIndexNumber":1,"IndexNumber":2,"ImageTags":{"Primary":"poster-2"},"UserData":{"PlaybackPositionTicks":0,"PlayedPercentage":0.0,"IsFavorite":false,"Played":false}}],"TotalRecordCount":1}"#,
+        r#"{"Items":[{"Id":"00000000000000000000000000000011","Name":"Next Episode","Type":"Episode","SeriesName":"Example Show","SeriesId":"00000000000000000000000000000012","ParentIndexNumber":1,"IndexNumber":2,"ImageTags":{"Primary":"poster-2"},"UserData":{"PlaybackPositionTicks":0,"PlayedPercentage":0.0,"IsFavorite":false,"Played":false}}],"TotalRecordCount":1}"#,
       ),
       (
         "includeItemTypes=Movie",
         "200 OK",
-        r#"[{"Id":"00000000-0000-0000-0000-000000000010","Name":"Latest Movie","Type":"Movie","ImageTags":{"Primary":"poster-3"}}]"#,
+        r#"[{"Id":"00000000000000000000000000000010","Name":"Latest Movie","Type":"Movie","ImageTags":{"Primary":"poster-3"}}]"#,
       ),
       (
         "includeItemTypes=Episode",
         "200 OK",
-        r#"[{"Id":"00000000-0000-0000-0000-000000000011","Name":"Latest Episode","Type":"Episode","SeriesName":"Example Show","ParentIndexNumber":1,"IndexNumber":3}]"#,
+        r#"[{"Id":"00000000000000000000000000000011","Name":"Latest Episode","Type":"Episode","SeriesName":"Example Show","ParentIndexNumber":1,"IndexNumber":3}]"#,
       ),
     ])
     .await;
@@ -7240,11 +7245,11 @@ mod tests {
 
   #[tokio::test]
   async fn library_shortcuts_loads_movies_and_shows_only() {
-    let movie_library_id = "00000000-0000-0000-0000-000000000020";
-    let shows_library_id = "00000000-0000-0000-0000-000000000021";
+    let movie_library_id = "00000000000000000000000000000020";
+    let shows_library_id = "00000000000000000000000000000021";
     let (server_url, requests) = serve_responses_with_requests(vec![(
       "200 OK",
-      r#"{"Items":[{"Id":"00000000-0000-0000-0000-000000000020","Name":"Movies","Type":"CollectionFolder","CollectionType":"movies","RecursiveItemCount":8},{"Id":"00000000-0000-0000-0000-000000000021","Name":"Shows","Type":"CollectionFolder","CollectionType":"tvshows","RecursiveItemCount":5},{"Id":"00000000-0000-0000-0000-000000000022","Name":"Music","Type":"CollectionFolder","CollectionType":"music","RecursiveItemCount":99}],"TotalRecordCount":3}"#,
+      r#"{"Items":[{"Id":"00000000000000000000000000000020","Name":"Movies","Type":"CollectionFolder","CollectionType":"movies","RecursiveItemCount":8},{"Id":"00000000000000000000000000000021","Name":"Shows","Type":"CollectionFolder","CollectionType":"tvshows","RecursiveItemCount":5},{"Id":"00000000000000000000000000000022","Name":"Music","Type":"CollectionFolder","CollectionType":"music","RecursiveItemCount":99}],"TotalRecordCount":3}"#,
     )])
     .await;
     let client = JellyfinClient::new();
@@ -7275,22 +7280,22 @@ mod tests {
 
   #[tokio::test]
   async fn browse_video_maps_movies_and_shows_to_paged_library_queries() {
-    let movie_library_id = "00000000-0000-0000-0000-000000000020";
-    let shows_library_id = "00000000-0000-0000-0000-000000000021";
-    let movie_id = "00000000-0000-0000-0000-000000000030";
-    let show_id = "00000000-0000-0000-0000-000000000031";
+    let movie_library_id = "00000000000000000000000000000020";
+    let shows_library_id = "00000000000000000000000000000021";
+    let movie_id = "00000000000000000000000000000030";
+    let show_id = "00000000000000000000000000000031";
     let (server_url, requests) = serve_responses_with_requests(vec![
       (
         "200 OK",
-        r#"{"Items":[{"Id":"00000000-0000-0000-0000-000000000030","Name":"Paged Movie","Type":"Movie","ProductionYear":2025,"RunTimeTicks":54000000000,"ImageTags":{"Primary":"poster-movie"},"UserData":{"IsFavorite":true,"Played":false}}],"TotalRecordCount":24,"StartIndex":20}"#,
+        r#"{"Items":[{"Id":"00000000000000000000000000000030","Name":"Paged Movie","Type":"Movie","ProductionYear":2025,"RunTimeTicks":54000000000,"ImageTags":{"Primary":"poster-movie"},"UserData":{"IsFavorite":true,"Played":false}}],"TotalRecordCount":24,"StartIndex":20}"#,
       ),
       (
         "200 OK",
-        r#"{"Items":[{"Id":"00000000-0000-0000-0000-000000000031","Name":"Paged Show","Type":"Series","ImageTags":{"Primary":"poster-show"},"UserData":{"IsFavorite":false,"Played":true}}],"TotalRecordCount":1,"StartIndex":0}"#,
+        r#"{"Items":[{"Id":"00000000000000000000000000000031","Name":"Paged Show","Type":"Series","ImageTags":{"Primary":"poster-show"},"UserData":{"IsFavorite":false,"Played":true}}],"TotalRecordCount":1,"StartIndex":0}"#,
       ),
       (
         "200 OK",
-        r#"{"Items":[{"Id":"00000000-0000-0000-0000-000000000030","Name":"Filtered Movie","Type":"Movie","UserData":{"IsFavorite":true,"Played":true}}],"TotalRecordCount":1,"StartIndex":0}"#,
+        r#"{"Items":[{"Id":"00000000000000000000000000000030","Name":"Filtered Movie","Type":"Movie","UserData":{"IsFavorite":true,"Played":true}}],"TotalRecordCount":1,"StartIndex":0}"#,
       ),
     ])
     .await;
@@ -7364,7 +7369,7 @@ mod tests {
 
     let captured = requests.lock();
     assert!(captured[0].starts_with("GET /Items?"));
-    assert!(captured[0].contains("parentId=00000000-0000-0000-0000-000000000020"));
+    assert!(captured[0].contains("parentId=00000000000000000000000000000020"));
     assert!(captured[0].contains("startIndex=20"));
     assert!(captured[0].contains("limit=2"));
     assert!(captured[0].contains("recursive=true"));
@@ -7374,7 +7379,7 @@ mod tests {
     assert!(captured[0].contains("sortOrder=Descending"));
     assert!(captured[0].contains("enableTotalRecordCount=true"));
     assert!(captured[1].starts_with("GET /Items?"));
-    assert!(captured[1].contains("parentId=00000000-0000-0000-0000-000000000021"));
+    assert!(captured[1].contains("parentId=00000000000000000000000000000021"));
     assert!(captured[1].contains("startIndex=0"));
     assert!(captured[1].contains("limit=100"));
     assert!(captured[1].contains("includeItemTypes=Series"));
@@ -7415,12 +7420,12 @@ mod tests {
 
   #[tokio::test]
   async fn search_video_maps_query_to_video_only_paged_items() {
-    let movie_id = "00000000-0000-0000-0000-000000000040";
-    let show_id = "00000000-0000-0000-0000-000000000041";
-    let episode_id = "00000000-0000-0000-0000-000000000042";
+    let movie_id = "00000000000000000000000000000040";
+    let show_id = "00000000000000000000000000000041";
+    let episode_id = "00000000000000000000000000000042";
     let (server_url, requests) = serve_responses_with_requests(vec![(
       "200 OK",
-      r#"{"Items":[{"Id":"00000000-0000-0000-0000-000000000040","Name":"Search Movie","Type":"Movie","ImageTags":{"Primary":"poster-search"}},{"Id":"00000000-0000-0000-0000-000000000041","Name":"Search Show","Type":"Series"},{"Id":"00000000-0000-0000-0000-000000000042","Name":"Search Episode","Type":"Episode","UserData":{"Played":false}}],"TotalRecordCount":5,"StartIndex":0}"#,
+      r#"{"Items":[{"Id":"00000000000000000000000000000040","Name":"Search Movie","Type":"Movie","ImageTags":{"Primary":"poster-search"}},{"Id":"00000000000000000000000000000041","Name":"Search Show","Type":"Series"},{"Id":"00000000000000000000000000000042","Name":"Search Episode","Type":"Episode","UserData":{"Played":false}}],"TotalRecordCount":5,"StartIndex":0}"#,
     )])
     .await;
     let client = JellyfinClient::new();
@@ -7488,23 +7493,63 @@ mod tests {
     );
   }
 
+  #[test]
+  fn jellyfin_ids_normalize_to_the_native_undashed_form_across_mappers() {
+    // Regression: the generated client types ids as Uuid (dashed on
+    // `to_string`), while playback-path types deserialize the raw undashed
+    // server form — the same episode compared unequal across the families
+    // and next-episode playables never enriched.
+    let episode_json = |id: &str| {
+      serde_json::json!({
+        "Id": id,
+        "Name": "Episode",
+        "Type": "Episode",
+        "SeriesId": "11111111-2222-3333-4444-555555555555",
+        "SeriesName": "Show",
+        "ParentIndexNumber": 3,
+        "IndexNumber": 17
+      })
+    };
+    let detail: jellyfin_api::models::BaseItemDto =
+      serde_json::from_value(episode_json("330acc95-ef38-9699-9a5d-d43a379de98f"))
+        .expect("episode dto parses");
+    let detail = map_video_item_detail("http://server", detail).expect("detail maps");
+    assert_eq!(detail.id, "330acc95ef3896999a5dd43a379de98f");
+    assert_eq!(
+      detail.series_id.as_deref(),
+      Some("11111111222233334444555555555555")
+    );
+
+    let target: jellyfin_api::models::BaseItemDto =
+      serde_json::from_value(episode_json("330acc95ef3896999a5dd43a379de98f"))
+        .expect("episode dto parses");
+    let target = map_video_playback_target(target).expect("target maps");
+    assert_eq!(target.item_id, detail.id);
+
+    let library: jellyfin_api::models::BaseItemDto =
+      serde_json::from_value(episode_json("330ACC95EF3896999A5DD43A379DE98F"))
+        .expect("episode dto parses");
+    let library = map_video_library_item("http://server", library).expect("library maps");
+    assert_eq!(library.id, detail.id);
+  }
+
   #[tokio::test]
   async fn item_detail_maps_movie_and_episode_metadata() {
-    let movie_id = "00000000-0000-0000-0000-000000000050";
-    let episode_id = "00000000-0000-0000-0000-000000000051";
-    let series_id = "00000000-0000-0000-0000-000000000052";
+    let movie_id = "00000000000000000000000000000050";
+    let episode_id = "00000000000000000000000000000051";
+    let series_id = "00000000000000000000000000000052";
     let (server_url, requests) = serve_responses_with_requests(vec![
       (
         "200 OK",
-        r#"{"Id":"00000000-0000-0000-0000-000000000050","Name":"Detail Movie","Type":"Movie","Overview":"A movie overview.","ProductionYear":2024,"RunTimeTicks":72000000000,"Genres":["Drama","Mystery"],"CommunityRating":8.7,"OfficialRating":"PG-13","People":[{"Name":"  Director A  ","Type":"Director"},{"Name":"Director A","Type":"Creator"},{"Name":"Actor One","Type":"Actor"},{"Name":"Actor Two","Type":"Actor"},{"Name":"Actor One","Type":"Actor"},{"Name":" ","Type":"Actor"},{"Name":"Writer W","Type":"Writer"}],"ImageTags":{"Primary":"poster-detail"},"UserData":{"PlaybackPositionTicks":1200000000,"PlayedPercentage":25.0,"IsFavorite":true,"Played":false},"MediaStreams":[{"Index":0,"Type":"Video","Codec":"h264"},{"Index":1,"Type":"Audio","Language":"eng","DisplayTitle":"English - AAC 2.0","Codec":"aac","IsDefault":true},{"Index":2,"Type":"Audio","Language":"jpn","Codec":"flac"},{"Index":3,"Type":"Subtitle","Language":"eng","DisplayTitle":"English - SRT","Codec":"srt","IsExternal":true}]}"#,
+        r#"{"Id":"00000000000000000000000000000050","Name":"Detail Movie","Type":"Movie","Overview":"A movie overview.","ProductionYear":2024,"RunTimeTicks":72000000000,"Genres":["Drama","Mystery"],"CommunityRating":8.7,"OfficialRating":"PG-13","People":[{"Name":"  Director A  ","Type":"Director"},{"Name":"Director A","Type":"Creator"},{"Name":"Actor One","Type":"Actor"},{"Name":"Actor Two","Type":"Actor"},{"Name":"Actor One","Type":"Actor"},{"Name":" ","Type":"Actor"},{"Name":"Writer W","Type":"Writer"}],"ImageTags":{"Primary":"poster-detail"},"UserData":{"PlaybackPositionTicks":1200000000,"PlayedPercentage":25.0,"IsFavorite":true,"Played":false},"MediaStreams":[{"Index":0,"Type":"Video","Codec":"h264"},{"Index":1,"Type":"Audio","Language":"eng","DisplayTitle":"English - AAC 2.0","Codec":"aac","IsDefault":true},{"Index":2,"Type":"Audio","Language":"jpn","Codec":"flac"},{"Index":3,"Type":"Subtitle","Language":"eng","DisplayTitle":"English - SRT","Codec":"srt","IsExternal":true}]}"#,
       ),
       (
         "200 OK",
-        r#"{"Id":"00000000-0000-0000-0000-000000000051","Name":"Detail Episode","Type":"Episode","SeriesId":"00000000-0000-0000-0000-000000000052","SeriesName":"Example Show","ParentIndexNumber":2,"IndexNumber":3,"Genres":["Sci-Fi"],"CommunityRating":9.1,"OfficialRating":"TV-14","People":[{"Name":"Episode Director","Type":"Director"},{"Name":"Guest Actor","Type":"Actor"}],"UserData":{"PlaybackPositionTicks":0,"PlayedPercentage":0.0,"IsFavorite":false,"Played":true}}"#,
+        r#"{"Id":"00000000000000000000000000000051","Name":"Detail Episode","Type":"Episode","SeriesId":"00000000000000000000000000000052","SeriesName":"Example Show","ParentIndexNumber":2,"IndexNumber":3,"Genres":["Sci-Fi"],"CommunityRating":9.1,"OfficialRating":"TV-14","People":[{"Name":"Episode Director","Type":"Director"},{"Name":"Guest Actor","Type":"Actor"}],"UserData":{"PlaybackPositionTicks":0,"PlayedPercentage":0.0,"IsFavorite":false,"Played":true}}"#,
       ),
       (
         "200 OK",
-        r#"{"Id":"00000000-0000-0000-0000-000000000050","Type":"Movie","MediaStreams":[{"Index":0,"Type":"Video","Codec":"h264"},{"Index":1,"Type":"Audio","Language":"eng","DisplayTitle":"English - AAC 2.0","Codec":"aac","IsDefault":true},{"Index":2,"Type":"Audio","Language":"jpn","Codec":"flac"},{"Index":3,"Type":"Subtitle","Language":"eng","DisplayTitle":"English - SRT","Codec":"srt","IsExternal":true}]}"#,
+        r#"{"Id":"00000000000000000000000000000050","Type":"Movie","MediaStreams":[{"Index":0,"Type":"Video","Codec":"h264"},{"Index":1,"Type":"Audio","Language":"eng","DisplayTitle":"English - AAC 2.0","Codec":"aac","IsDefault":true},{"Index":2,"Type":"Audio","Language":"jpn","Codec":"flac"},{"Index":3,"Type":"Subtitle","Language":"eng","DisplayTitle":"English - SRT","Codec":"srt","IsExternal":true}]}"#,
       ),
     ])
     .await;
@@ -7568,13 +7613,13 @@ mod tests {
     assert_eq!(episode.metadata.cast, vec!["Guest Actor"]);
 
     let captured = requests.lock();
-    assert!(captured[0].starts_with("GET /Items/00000000-0000-0000-0000-000000000050?"));
-    assert!(captured[0].contains("userId=00000000-0000-0000-0000-000000000001"));
+    assert!(captured[0].starts_with("GET /Items/00000000000000000000000000000050?"));
+    assert!(captured[0].contains("userId=00000000000000000000000000000001"));
     assert!(!captured[0].contains("fields=MediaStreams"));
-    assert!(captured[1].starts_with("GET /Items/00000000-0000-0000-0000-000000000051?"));
-    assert!(captured[1].contains("userId=00000000-0000-0000-0000-000000000001"));
+    assert!(captured[1].starts_with("GET /Items/00000000000000000000000000000051?"));
+    assert!(captured[1].contains("userId=00000000000000000000000000000001"));
     assert!(!captured[1].contains("fields=MediaStreams"));
-    assert!(captured[2].starts_with("GET /Items/00000000-0000-0000-0000-000000000050?"));
+    assert!(captured[2].starts_with("GET /Items/00000000000000000000000000000050?"));
     assert!(captured[2].contains("fields=MediaStreams"));
   }
 
@@ -7582,7 +7627,7 @@ mod tests {
   async fn item_detail_rejects_unsupported_item_kinds() {
     let (server_url, _) = serve_responses_with_requests(vec![(
       "200 OK",
-      r#"{"Id":"00000000-0000-0000-0000-000000000053","Name":"A Show","Type":"Series"}"#,
+      r#"{"Id":"00000000000000000000000000000053","Name":"A Show","Type":"Series"}"#,
     )])
     .await;
     let client = JellyfinClient::new();
@@ -7590,7 +7635,7 @@ mod tests {
 
     let err = client
       .library()
-      .item_detail("00000000-0000-0000-0000-000000000053".to_string())
+      .item_detail("00000000000000000000000000000053".to_string())
       .await
       .expect_err("unsupported item kind should return a clear command error");
 
@@ -7602,24 +7647,24 @@ mod tests {
 
   #[tokio::test]
   async fn show_detail_loads_show_seasons_and_next_playable_episode() {
-    let series_id = "00000000-0000-0000-0000-000000000060";
-    let season_id = "00000000-0000-0000-0000-000000000061";
-    let next_episode_id = "00000000-0000-0000-0000-000000000062";
+    let series_id = "00000000000000000000000000000060";
+    let season_id = "00000000000000000000000000000061";
+    let next_episode_id = "00000000000000000000000000000062";
     let (server_url, requests) = serve_route_responses_with_requests(vec![
       (
-        "GET /Items/00000000-0000-0000-0000-000000000060?",
+        "GET /Items/00000000000000000000000000000060?",
         "200 OK",
-        r#"{"Id":"00000000-0000-0000-0000-000000000060","Name":"Example Show","Type":"Series","Overview":"A show overview.","ProductionYear":2023,"Genres":["Drama"],"CommunityRating":8.2,"OfficialRating":"TV-MA","People":[{"Name":"Show Creator","Type":"Creator"},{"Name":"Pilot Director","Type":"Director"},{"Name":"Series Actor","Type":"Actor"}],"ImageTags":{"Primary":"poster-show"},"UserData":{"IsFavorite":true,"Played":false}}"#,
+        r#"{"Id":"00000000000000000000000000000060","Name":"Example Show","Type":"Series","Overview":"A show overview.","ProductionYear":2023,"Genres":["Drama"],"CommunityRating":8.2,"OfficialRating":"TV-MA","People":[{"Name":"Show Creator","Type":"Creator"},{"Name":"Pilot Director","Type":"Director"},{"Name":"Series Actor","Type":"Actor"}],"ImageTags":{"Primary":"poster-show"},"UserData":{"IsFavorite":true,"Played":false}}"#,
       ),
       (
-        "GET /Shows/00000000-0000-0000-0000-000000000060/Seasons?",
+        "GET /Shows/00000000000000000000000000000060/Seasons?",
         "200 OK",
-        r#"{"Items":[{"Id":"00000000-0000-0000-0000-000000000061","Name":"Season 1","Type":"Season","IndexNumber":1,"ImageTags":{"Primary":"poster-season"},"UserData":{"IsFavorite":false,"Played":false}}],"TotalRecordCount":1}"#,
+        r#"{"Items":[{"Id":"00000000000000000000000000000061","Name":"Season 1","Type":"Season","IndexNumber":1,"ImageTags":{"Primary":"poster-season"},"UserData":{"IsFavorite":false,"Played":false}}],"TotalRecordCount":1}"#,
       ),
       (
         "GET /Shows/NextUp?",
         "200 OK",
-        r#"{"Items":[{"Id":"00000000-0000-0000-0000-000000000062","Name":"Next Episode","Type":"Episode","ProductionYear":2023,"UserData":{"PlaybackPositionTicks":300000000,"Played":false}}],"TotalRecordCount":1}"#,
+        r#"{"Items":[{"Id":"00000000000000000000000000000062","Name":"Next Episode","Type":"Episode","ProductionYear":2023,"UserData":{"PlaybackPositionTicks":300000000,"Played":false}}],"TotalRecordCount":1}"#,
       ),
     ])
     .await;
@@ -7661,14 +7706,12 @@ mod tests {
     let captured = requests.lock();
     let item_request = captured
       .iter()
-      .find(|request| request.starts_with("GET /Items/00000000-0000-0000-0000-000000000060?"))
+      .find(|request| request.starts_with("GET /Items/00000000000000000000000000000060?"))
       .expect("show item request should be captured");
-    assert!(item_request.contains("userId=00000000-0000-0000-0000-000000000001"));
+    assert!(item_request.contains("userId=00000000000000000000000000000001"));
     let seasons_request = captured
       .iter()
-      .find(|request| {
-        request.starts_with("GET /Shows/00000000-0000-0000-0000-000000000060/Seasons?")
-      })
+      .find(|request| request.starts_with("GET /Shows/00000000000000000000000000000060/Seasons?"))
       .expect("show seasons request should be captured");
     assert!(seasons_request.contains("enableUserData=true"));
     assert!(seasons_request.contains("isMissing=false"));
@@ -7676,7 +7719,7 @@ mod tests {
       .iter()
       .find(|request| request.starts_with("GET /Shows/NextUp?"))
       .expect("show next-up request should be captured");
-    assert!(next_up_request.contains("seriesId=00000000-0000-0000-0000-000000000060"));
+    assert!(next_up_request.contains("seriesId=00000000000000000000000000000060"));
     assert!(next_up_request.contains("limit=1"));
     assert!(next_up_request.contains("enableResumable=true"));
     assert!(next_up_request.contains("enableRewatching=false"));
@@ -7684,22 +7727,22 @@ mod tests {
 
   #[tokio::test]
   async fn show_detail_fetches_item_seasons_and_next_up_concurrently() {
-    let series_id = "00000000-0000-0000-0000-000000000063";
+    let series_id = "00000000000000000000000000000063";
     let (server_url, requests) = serve_barrier_route_responses_with_requests(vec![
       (
-        "GET /Items/00000000-0000-0000-0000-000000000063?",
+        "GET /Items/00000000000000000000000000000063?",
         "200 OK",
-        r#"{"Id":"00000000-0000-0000-0000-000000000063","Name":"Concurrent Show","Type":"Series","UserData":{"IsFavorite":false,"Played":false}}"#,
+        r#"{"Id":"00000000000000000000000000000063","Name":"Concurrent Show","Type":"Series","UserData":{"IsFavorite":false,"Played":false}}"#,
       ),
       (
-        "GET /Shows/00000000-0000-0000-0000-000000000063/Seasons?",
+        "GET /Shows/00000000000000000000000000000063/Seasons?",
         "200 OK",
-        r#"{"Items":[{"Id":"00000000-0000-0000-0000-000000000064","Name":"Season 1","Type":"Season","IndexNumber":1}],"TotalRecordCount":1}"#,
+        r#"{"Items":[{"Id":"00000000000000000000000000000064","Name":"Season 1","Type":"Season","IndexNumber":1}],"TotalRecordCount":1}"#,
       ),
       (
         "GET /Shows/NextUp?",
         "200 OK",
-        r#"{"Items":[{"Id":"00000000-0000-0000-0000-000000000065","Name":"Next Episode","Type":"Episode"}],"TotalRecordCount":1}"#,
+        r#"{"Items":[{"Id":"00000000000000000000000000000065","Name":"Next Episode","Type":"Episode"}],"TotalRecordCount":1}"#,
       ),
     ])
     .await;
@@ -7721,16 +7764,16 @@ mod tests {
         .next_episode
         .as_ref()
         .map(|episode| episode.id.as_str()),
-      Some("00000000-0000-0000-0000-000000000065")
+      Some("00000000000000000000000000000065")
     );
 
     let captured = requests.lock();
     assert_eq!(captured.len(), 3);
     assert!(captured
       .iter()
-      .any(|request| request.starts_with("GET /Items/00000000-0000-0000-0000-000000000063?")));
+      .any(|request| request.starts_with("GET /Items/00000000000000000000000000000063?")));
     assert!(captured.iter().any(|request| {
-      request.starts_with("GET /Shows/00000000-0000-0000-0000-000000000063/Seasons?")
+      request.starts_with("GET /Shows/00000000000000000000000000000063/Seasons?")
     }));
     assert!(captured
       .iter()
@@ -7739,12 +7782,12 @@ mod tests {
 
   #[tokio::test]
   async fn season_episodes_loads_exact_season_episode_cards() {
-    let series_id = "00000000-0000-0000-0000-000000000070";
-    let season_id = "00000000-0000-0000-0000-000000000071";
-    let episode_id = "00000000-0000-0000-0000-000000000072";
+    let series_id = "00000000000000000000000000000070";
+    let season_id = "00000000000000000000000000000071";
+    let episode_id = "00000000000000000000000000000072";
     let (server_url, requests) = serve_responses_with_requests(vec![(
       "200 OK",
-      r#"{"Items":[{"Id":"00000000-0000-0000-0000-000000000072","Name":"Exact Episode","Type":"Episode","Overview":"Episode synopsis.","RunTimeTicks":18000000000,"ImageTags":{"Primary":"poster-episode"},"UserData":{"IsFavorite":false,"Played":false}}],"TotalRecordCount":1}"#,
+      r#"{"Items":[{"Id":"00000000000000000000000000000072","Name":"Exact Episode","Type":"Episode","Overview":"Episode synopsis.","RunTimeTicks":18000000000,"ImageTags":{"Primary":"poster-episode"},"UserData":{"IsFavorite":false,"Played":false}}],"TotalRecordCount":1}"#,
     )])
     .await;
     let client = JellyfinClient::new();
@@ -7779,20 +7822,20 @@ mod tests {
     );
 
     let captured = requests.lock();
-    assert!(captured[0].starts_with("GET /Shows/00000000-0000-0000-0000-000000000070/Episodes?"));
+    assert!(captured[0].starts_with("GET /Shows/00000000000000000000000000000070/Episodes?"));
     assert!(captured[0].contains("season=1"));
-    assert!(captured[0].contains("seasonId=00000000-0000-0000-0000-000000000071"));
+    assert!(captured[0].contains("seasonId=00000000000000000000000000000071"));
     assert!(captured[0].contains("enableUserData=true"));
     assert!(captured[0].contains("sortBy=ParentIndexNumber%2CIndexNumber"));
   }
 
   #[tokio::test]
   async fn season_episode_page_clamps_limit_and_reports_remaining_jellyfin_results() {
-    let series_id = "00000000-0000-0000-0000-000000000073";
-    let season_id = "00000000-0000-0000-0000-000000000074";
+    let series_id = "00000000000000000000000000000073";
+    let season_id = "00000000000000000000000000000074";
     let (server_url, requests) = serve_responses_with_requests(vec![(
       "200 OK",
-      r#"{"Items":[{"Id":"00000000-0000-0000-0000-000000000075","Name":"Episode 21","Type":"Episode"}],"TotalRecordCount":25,"StartIndex":20}"#,
+      r#"{"Items":[{"Id":"00000000000000000000000000000075","Name":"Episode 21","Type":"Episode"}],"TotalRecordCount":25,"StartIndex":20}"#,
     )])
     .await;
     let client = JellyfinClient::new();
@@ -7835,7 +7878,7 @@ mod tests {
 
   #[tokio::test]
   async fn update_user_data_maps_library_actions_to_jellyfin_userdata_endpoints() {
-    let item_id = "00000000-0000-0000-0000-000000000080";
+    let item_id = "00000000000000000000000000000080";
     let (server_url, requests) = serve_responses_with_requests(vec![
       ("200 OK", r#"{"IsFavorite":true,"Played":false}"#),
       ("200 OK", r#"{"IsFavorite":false,"Played":false}"#),
@@ -7885,50 +7928,44 @@ mod tests {
     assert!(!unplayed.played);
 
     let captured = requests.lock();
-    assert!(
-      captured[0].starts_with("POST /UserFavoriteItems/00000000-0000-0000-0000-000000000080?")
-    );
-    assert!(
-      captured[1].starts_with("DELETE /UserFavoriteItems/00000000-0000-0000-0000-000000000080?")
-    );
-    assert!(captured[2].starts_with("POST /UserPlayedItems/00000000-0000-0000-0000-000000000080?"));
-    assert!(
-      captured[3].starts_with("DELETE /UserPlayedItems/00000000-0000-0000-0000-000000000080?")
-    );
+    assert!(captured[0].starts_with("POST /UserFavoriteItems/00000000000000000000000000000080?"));
+    assert!(captured[1].starts_with("DELETE /UserFavoriteItems/00000000000000000000000000000080?"));
+    assert!(captured[2].starts_with("POST /UserPlayedItems/00000000000000000000000000000080?"));
+    assert!(captured[3].starts_with("DELETE /UserPlayedItems/00000000000000000000000000000080?"));
   }
 
   #[tokio::test]
   async fn emby_video_home_and_shortcuts_load_shared_browser_rows() {
-    let movie_library_id = "00000000-0000-0000-0000-000000000220";
-    let shows_library_id = "00000000-0000-0000-0000-000000000221";
-    let movie_id = "00000000-0000-0000-0000-000000000210";
-    let episode_id = "00000000-0000-0000-0000-000000000211";
-    let resume_episode_id = "00000000-0000-0000-0000-000000000213";
+    let movie_library_id = "00000000000000000000000000000220";
+    let shows_library_id = "00000000000000000000000000000221";
+    let movie_id = "00000000000000000000000000000210";
+    let episode_id = "00000000000000000000000000000211";
+    let resume_episode_id = "00000000000000000000000000000213";
     let (server_url, requests) = serve_route_responses_with_requests(vec![
       (
-        "/Users/00000000-0000-0000-0000-000000000001/Items/Resume",
+        "/Users/00000000000000000000000000000001/Items/Resume",
         "200 OK",
-        r#"{"Items":[{"Id":"00000000-0000-0000-0000-000000000210","Name":"Emby Resume Movie","Type":"Movie","ImageTags":{"Thumb":"thumb-emby","Primary":"poster-emby"},"UserData":{"PlaybackPositionTicks":1500000000,"PlayedPercentage":20.0,"IsFavorite":true,"Played":false}},{"Id":"00000000-0000-0000-0000-000000000213","Name":"Emby Resume Episode","Type":"Episode","ImageTags":{"Primary":"episode-primary-emby"},"UserData":{"PlaybackPositionTicks":600000000,"PlayedPercentage":10.0,"IsFavorite":false,"Played":false}}],"TotalRecordCount":2}"#,
+        r#"{"Items":[{"Id":"00000000000000000000000000000210","Name":"Emby Resume Movie","Type":"Movie","ImageTags":{"Thumb":"thumb-emby","Primary":"poster-emby"},"UserData":{"PlaybackPositionTicks":1500000000,"PlayedPercentage":20.0,"IsFavorite":true,"Played":false}},{"Id":"00000000000000000000000000000213","Name":"Emby Resume Episode","Type":"Episode","ImageTags":{"Primary":"episode-primary-emby"},"UserData":{"PlaybackPositionTicks":600000000,"PlayedPercentage":10.0,"IsFavorite":false,"Played":false}}],"TotalRecordCount":2}"#,
       ),
       (
         "/Shows/NextUp",
         "200 OK",
-        r#"{"Items":[{"Id":"00000000-0000-0000-0000-000000000211","Name":"Emby Next Episode","Type":"Episode","SeriesId":"00000000-0000-0000-0000-000000000212","SeriesName":"Emby Show","ParentIndexNumber":1,"IndexNumber":2,"ImageTags":{"Primary":"next-primary"},"UserData":{"Played":false}}],"TotalRecordCount":1}"#,
+        r#"{"Items":[{"Id":"00000000000000000000000000000211","Name":"Emby Next Episode","Type":"Episode","SeriesId":"00000000000000000000000000000212","SeriesName":"Emby Show","ParentIndexNumber":1,"IndexNumber":2,"ImageTags":{"Primary":"next-primary"},"UserData":{"Played":false}}],"TotalRecordCount":1}"#,
       ),
       (
         "IncludeItemTypes=Movie",
         "200 OK",
-        r#"[{"Id":"00000000-0000-0000-0000-000000000210","Name":"Latest Emby Movie","Type":"Movie","ImageTags":{"Primary":"latest-movie"}}]"#,
+        r#"[{"Id":"00000000000000000000000000000210","Name":"Latest Emby Movie","Type":"Movie","ImageTags":{"Primary":"latest-movie"}}]"#,
       ),
       (
         "IncludeItemTypes=Episode",
         "200 OK",
-        r#"[{"Id":"00000000-0000-0000-0000-000000000211","Name":"Latest Emby Episode","Type":"Episode","SeriesName":"Emby Show"}]"#,
+        r#"[{"Id":"00000000000000000000000000000211","Name":"Latest Emby Episode","Type":"Episode","SeriesName":"Emby Show"}]"#,
       ),
       (
-        "/Users/00000000-0000-0000-0000-000000000001/Views",
+        "/Users/00000000000000000000000000000001/Views",
         "200 OK",
-        r#"{"Items":[{"Id":"00000000-0000-0000-0000-000000000220","Name":"Emby Movies","Type":"CollectionFolder","CollectionType":"movies","RecursiveItemCount":4,"ImageTags":{"Primary":"movies-primary"}},{"Id":"00000000-0000-0000-0000-000000000221","Name":"Emby Shows","Type":"CollectionFolder","CollectionType":"tvshows","RecursiveItemCount":7},{"Id":"00000000-0000-0000-0000-000000000222","Name":"Music","Type":"CollectionFolder","CollectionType":"music"}],"TotalRecordCount":3}"#,
+        r#"{"Items":[{"Id":"00000000000000000000000000000220","Name":"Emby Movies","Type":"CollectionFolder","CollectionType":"movies","RecursiveItemCount":4,"ImageTags":{"Primary":"movies-primary"}},{"Id":"00000000000000000000000000000221","Name":"Emby Shows","Type":"CollectionFolder","CollectionType":"tvshows","RecursiveItemCount":7},{"Id":"00000000000000000000000000000222","Name":"Music","Type":"CollectionFolder","CollectionType":"music"}],"TotalRecordCount":3}"#,
       ),
     ])
     .await;
@@ -7974,26 +8011,25 @@ mod tests {
 
     let captured = requests.lock();
     assert!(captured.iter().any(|request| request
-      .starts_with("GET /emby/Users/00000000-0000-0000-0000-000000000001/Items/Resume?")));
-    assert!(captured
-      .iter()
-      .any(|request| request
-        .starts_with("GET /emby/Users/00000000-0000-0000-0000-000000000001/Views?")));
+      .starts_with("GET /emby/Users/00000000000000000000000000000001/Items/Resume?")));
+    assert!(captured.iter().any(
+      |request| request.starts_with("GET /emby/Users/00000000000000000000000000000001/Views?")
+    ));
   }
 
   #[tokio::test]
   async fn emby_browse_and_search_video_map_to_shared_library_pages() {
-    let movie_library_id = "00000000-0000-0000-0000-000000000220";
-    let movie_id = "00000000-0000-0000-0000-000000000230";
-    let show_id = "00000000-0000-0000-0000-000000000231";
+    let movie_library_id = "00000000000000000000000000000220";
+    let movie_id = "00000000000000000000000000000230";
+    let show_id = "00000000000000000000000000000231";
     let (server_url, requests) = serve_responses_with_requests(vec![
       (
         "200 OK",
-        r#"{"Items":[{"Id":"00000000-0000-0000-0000-000000000230","Name":"Emby Paged Movie","Type":"Movie","ProductionYear":2026,"RunTimeTicks":54000000000,"ImageTags":{"Primary":"movie-primary"},"UserData":{"IsFavorite":true,"Played":false}}],"TotalRecordCount":24}"#,
+        r#"{"Items":[{"Id":"00000000000000000000000000000230","Name":"Emby Paged Movie","Type":"Movie","ProductionYear":2026,"RunTimeTicks":54000000000,"ImageTags":{"Primary":"movie-primary"},"UserData":{"IsFavorite":true,"Played":false}}],"TotalRecordCount":24}"#,
       ),
       (
         "200 OK",
-        r#"{"Items":[{"Id":"00000000-0000-0000-0000-000000000231","Name":"Emby Search Show","Type":"Series"},{"Id":"00000000-0000-0000-0000-000000000230","Name":"Emby Search Movie","Type":"Movie","UserData":{"Played":false}}],"TotalRecordCount":2}"#,
+        r#"{"Items":[{"Id":"00000000000000000000000000000231","Name":"Emby Search Show","Type":"Series"},{"Id":"00000000000000000000000000000230","Name":"Emby Search Movie","Type":"Movie","UserData":{"Played":false}}],"TotalRecordCount":2}"#,
       ),
     ])
     .await;
@@ -8038,9 +8074,9 @@ mod tests {
     );
 
     let captured = requests.lock();
-    assert!(captured[0].starts_with("GET /Users/00000000-0000-0000-0000-000000000001/Items?"));
+    assert!(captured[0].starts_with("GET /Users/00000000000000000000000000000001/Items?"));
     assert_chrome_jellypilot_user_agent(&captured[0]);
-    assert!(captured[0].contains("ParentId=00000000-0000-0000-0000-000000000220"));
+    assert!(captured[0].contains("ParentId=00000000000000000000000000000220"));
     assert!(captured[0].contains("IncludeItemTypes=Movie"));
     assert!(captured[0].contains("MediaTypes=Video"));
     assert!(captured[0].contains("SortBy=PremiereDate"));
@@ -8053,40 +8089,40 @@ mod tests {
 
   #[tokio::test]
   async fn emby_details_show_and_episodes_tolerate_missing_optional_fields() {
-    let movie_id = "00000000-0000-0000-0000-000000000250";
-    let series_id = "00000000-0000-0000-0000-000000000260";
-    let season_id = "00000000-0000-0000-0000-000000000261";
-    let episode_id = "00000000-0000-0000-0000-000000000262";
+    let movie_id = "00000000000000000000000000000250";
+    let series_id = "00000000000000000000000000000260";
+    let season_id = "00000000000000000000000000000261";
+    let episode_id = "00000000000000000000000000000262";
     let (server_url, requests) = serve_route_responses_with_requests(vec![
       (
         "Fields=MediaStreams",
         "200 OK",
-        r#"{"Id":"00000000-0000-0000-0000-000000000250","Type":"Movie","MediaStreams":[{"Index":1,"Type":"Audio","Language":"eng","Codec":"aac","IsDefault":true},{"Index":2,"Type":"Subtitle","Codec":"srt","IsExternal":true}]}"#,
+        r#"{"Id":"00000000000000000000000000000250","Type":"Movie","MediaStreams":[{"Index":1,"Type":"Audio","Language":"eng","Codec":"aac","IsDefault":true},{"Index":2,"Type":"Subtitle","Codec":"srt","IsExternal":true}]}"#,
       ),
       (
-        "GET /Users/00000000-0000-0000-0000-000000000001/Items/00000000-0000-0000-0000-000000000250?",
+        "GET /Users/00000000000000000000000000000001/Items/00000000000000000000000000000250?",
         "200 OK",
-        r#"{"Id":"00000000-0000-0000-0000-000000000250","Name":"Emby Detail Movie","Type":"Movie","RunTimeTicks":72000000000,"CommunityRating":7.5,"OfficialRating":"R","People":[{"Name":"Emby Director","Type":"Director"},{"Name":"Emby Actor","Type":"Actor"}],"UserData":{"PlaybackPositionTicks":600000000,"Played":false},"MediaStreams":[{"Index":1,"Type":"Audio","Language":"eng","Codec":"aac","IsDefault":true},{"Index":2,"Type":"Subtitle","Codec":"srt","IsExternal":true}]}"#,
+        r#"{"Id":"00000000000000000000000000000250","Name":"Emby Detail Movie","Type":"Movie","RunTimeTicks":72000000000,"CommunityRating":7.5,"OfficialRating":"R","People":[{"Name":"Emby Director","Type":"Director"},{"Name":"Emby Actor","Type":"Actor"}],"UserData":{"PlaybackPositionTicks":600000000,"Played":false},"MediaStreams":[{"Index":1,"Type":"Audio","Language":"eng","Codec":"aac","IsDefault":true},{"Index":2,"Type":"Subtitle","Codec":"srt","IsExternal":true}]}"#,
       ),
       (
-        "GET /Users/00000000-0000-0000-0000-000000000001/Items/00000000-0000-0000-0000-000000000260?",
+        "GET /Users/00000000000000000000000000000001/Items/00000000000000000000000000000260?",
         "200 OK",
-        r#"{"Id":"00000000-0000-0000-0000-000000000260","Name":"Emby Show","Type":"Series","People":[{"Name":"Emby Show Creator","Type":"Director"}],"ImageTags":{"Primary":"show-primary"},"UserData":{"IsFavorite":true}}"#,
+        r#"{"Id":"00000000000000000000000000000260","Name":"Emby Show","Type":"Series","People":[{"Name":"Emby Show Creator","Type":"Director"}],"ImageTags":{"Primary":"show-primary"},"UserData":{"IsFavorite":true}}"#,
       ),
       (
-        "GET /Shows/00000000-0000-0000-0000-000000000260/Seasons?",
+        "GET /Shows/00000000000000000000000000000260/Seasons?",
         "200 OK",
-        r#"{"Items":[{"Id":"00000000-0000-0000-0000-000000000261","Name":"Season 1","Type":"Season","IndexNumber":1}],"TotalRecordCount":1}"#,
+        r#"{"Items":[{"Id":"00000000000000000000000000000261","Name":"Season 1","Type":"Season","IndexNumber":1}],"TotalRecordCount":1}"#,
       ),
       (
         "GET /Shows/NextUp?",
         "200 OK",
-        r#"{"Items":[{"Id":"00000000-0000-0000-0000-000000000262","Name":"Next Emby Episode","Type":"Episode","UserData":{"PlaybackPositionTicks":300000000,"Played":false}}],"TotalRecordCount":1}"#,
+        r#"{"Items":[{"Id":"00000000000000000000000000000262","Name":"Next Emby Episode","Type":"Episode","UserData":{"PlaybackPositionTicks":300000000,"Played":false}}],"TotalRecordCount":1}"#,
       ),
       (
-        "GET /Shows/00000000-0000-0000-0000-000000000260/Episodes?",
+        "GET /Shows/00000000000000000000000000000260/Episodes?",
         "200 OK",
-        r#"{"Items":[{"Id":"00000000-0000-0000-0000-000000000262","Name":"Episode One","Type":"Episode","Overview":"Emby episode synopsis.","RunTimeTicks":18000000000,"ParentIndexNumber":1,"IndexNumber":1}],"TotalRecordCount":1}"#,
+        r#"{"Items":[{"Id":"00000000000000000000000000000262","Name":"Episode One","Type":"Episode","Overview":"Emby episode synopsis.","RunTimeTicks":18000000000,"ParentIndexNumber":1,"IndexNumber":1}],"TotalRecordCount":1}"#,
       ),
     ])
     .await;
@@ -8149,7 +8185,7 @@ mod tests {
       .iter()
       .find(|request| {
         request.starts_with(
-          "GET /Users/00000000-0000-0000-0000-000000000001/Items/00000000-0000-0000-0000-000000000250?",
+          "GET /Users/00000000000000000000000000000001/Items/00000000000000000000000000000250?",
         ) && !request.contains("MediaStreams")
       })
       .expect("Emby movie detail request should be captured");
@@ -8159,39 +8195,35 @@ mod tests {
       .any(|request| request.contains("Fields=MediaStreams")));
     assert!(captured.iter().any(|request| {
       request.starts_with(
-        "GET /Users/00000000-0000-0000-0000-000000000001/Items/00000000-0000-0000-0000-000000000260?",
+        "GET /Users/00000000000000000000000000000001/Items/00000000000000000000000000000260?",
       )
     }));
     let seasons_request = captured
       .iter()
-      .find(|request| {
-        request.starts_with("GET /Shows/00000000-0000-0000-0000-000000000260/Seasons?")
-      })
+      .find(|request| request.starts_with("GET /Shows/00000000000000000000000000000260/Seasons?"))
       .expect("Emby seasons request should be captured");
     assert!(seasons_request.contains("IncludeItemTypes=Season"));
     let next_up_request = captured
       .iter()
       .find(|request| request.starts_with("GET /Shows/NextUp?"))
       .expect("Emby next-up request should be captured");
-    assert!(next_up_request.contains("SeriesId=00000000-0000-0000-0000-000000000260"));
+    assert!(next_up_request.contains("SeriesId=00000000000000000000000000000260"));
     assert!(next_up_request.contains("EnableResumable=true"));
     let episodes_request = captured
       .iter()
-      .find(|request| {
-        request.starts_with("GET /Shows/00000000-0000-0000-0000-000000000260/Episodes?")
-      })
+      .find(|request| request.starts_with("GET /Shows/00000000000000000000000000000260/Episodes?"))
       .expect("Emby episodes request should be captured");
-    assert!(episodes_request.contains("ParentId=00000000-0000-0000-0000-000000000261"));
+    assert!(episodes_request.contains("ParentId=00000000000000000000000000000261"));
     assert!(episodes_request.contains("IncludeItemTypes=Episode"));
   }
 
   #[tokio::test]
   async fn emby_season_episode_page_sends_bounds_and_reports_completion() {
-    let series_id = "00000000-0000-0000-0000-000000000266";
-    let season_id = "00000000-0000-0000-0000-000000000267";
+    let series_id = "00000000000000000000000000000266";
+    let season_id = "00000000000000000000000000000267";
     let (server_url, requests) = serve_responses_with_requests(vec![(
       "200 OK",
-      r#"{"Items":[{"Id":"00000000-0000-0000-0000-000000000268","Name":"Episode 11","Type":"Episode"},{"Id":"00000000-0000-0000-0000-000000000269","Name":"Episode 12","Type":"Episode"}],"TotalRecordCount":12,"StartIndex":10}"#,
+      r#"{"Items":[{"Id":"00000000000000000000000000000268","Name":"Episode 11","Type":"Episode"},{"Id":"00000000000000000000000000000269","Name":"Episode 12","Type":"Episode"}],"TotalRecordCount":12,"StartIndex":10}"#,
     )])
     .await;
     let client = JellyfinClient::new();
@@ -8223,22 +8255,22 @@ mod tests {
 
   #[tokio::test]
   async fn emby_show_detail_fetches_item_seasons_and_next_up_concurrently() {
-    let series_id = "00000000-0000-0000-0000-000000000263";
+    let series_id = "00000000000000000000000000000263";
     let (server_url, requests) = serve_barrier_route_responses_with_requests(vec![
       (
-        "GET /Users/00000000-0000-0000-0000-000000000001/Items/00000000-0000-0000-0000-000000000263?",
+        "GET /Users/00000000000000000000000000000001/Items/00000000000000000000000000000263?",
         "200 OK",
-        r#"{"Id":"00000000-0000-0000-0000-000000000263","Name":"Concurrent Emby Show","Type":"Series","UserData":{"IsFavorite":false}}"#,
+        r#"{"Id":"00000000000000000000000000000263","Name":"Concurrent Emby Show","Type":"Series","UserData":{"IsFavorite":false}}"#,
       ),
       (
-        "GET /Shows/00000000-0000-0000-0000-000000000263/Seasons?",
+        "GET /Shows/00000000000000000000000000000263/Seasons?",
         "200 OK",
-        r#"{"Items":[{"Id":"00000000-0000-0000-0000-000000000264","Name":"Season 1","Type":"Season","IndexNumber":1}],"TotalRecordCount":1}"#,
+        r#"{"Items":[{"Id":"00000000000000000000000000000264","Name":"Season 1","Type":"Season","IndexNumber":1}],"TotalRecordCount":1}"#,
       ),
       (
         "GET /Shows/NextUp?",
         "200 OK",
-        r#"{"Items":[{"Id":"00000000-0000-0000-0000-000000000265","Name":"Next Emby Episode","Type":"Episode"}],"TotalRecordCount":1}"#,
+        r#"{"Items":[{"Id":"00000000000000000000000000000265","Name":"Next Emby Episode","Type":"Episode"}],"TotalRecordCount":1}"#,
       ),
     ])
     .await;
@@ -8257,18 +8289,18 @@ mod tests {
     assert_eq!(show.seasons.len(), 1);
     assert_eq!(
       show.next_episode.as_ref().map(|item| item.id.as_str()),
-      Some("00000000-0000-0000-0000-000000000265")
+      Some("00000000000000000000000000000265")
     );
 
     let captured = requests.lock();
     assert_eq!(captured.len(), 3);
     assert!(captured.iter().any(|request| {
       request.starts_with(
-        "GET /Users/00000000-0000-0000-0000-000000000001/Items/00000000-0000-0000-0000-000000000263?",
+        "GET /Users/00000000000000000000000000000001/Items/00000000000000000000000000000263?",
       )
     }));
     assert!(captured.iter().any(|request| {
-      request.starts_with("GET /Shows/00000000-0000-0000-0000-000000000263/Seasons?")
+      request.starts_with("GET /Shows/00000000000000000000000000000263/Seasons?")
     }));
     assert!(captured
       .iter()
@@ -8277,10 +8309,10 @@ mod tests {
 
   #[tokio::test]
   async fn similar_video_filters_non_video_and_current_items_in_provider_order() {
-    let current_id = "00000000-0000-0000-0000-000000000090";
+    let current_id = "00000000000000000000000000000090";
     let (server_url, requests) = serve_responses_with_requests(vec![(
       "200 OK",
-      r#"{"Items":[{"Id":"00000000-0000-0000-0000-000000000091","Name":"Similar Movie","Type":"Movie","UserData":{"IsFavorite":true,"Played":false}},{"Id":"00000000-0000-0000-0000-000000000090","Name":"Current Movie","Type":"Movie"},{"Id":"00000000-0000-0000-0000-000000000092","Name":"Similar Show","Type":"Series","UserData":{"Played":true}},{"Id":"00000000-0000-0000-0000-000000000093","Name":"Similar Episode","Type":"Episode"},{"Id":"00000000-0000-0000-0000-000000000094","Name":"Similar Book","Type":"Book"},{"Id":"00000000-0000-0000-0000-000000000095","Name":"Similar Trailer","Type":"Trailer"}],"TotalRecordCount":6}"#,
+      r#"{"Items":[{"Id":"00000000000000000000000000000091","Name":"Similar Movie","Type":"Movie","UserData":{"IsFavorite":true,"Played":false}},{"Id":"00000000000000000000000000000090","Name":"Current Movie","Type":"Movie"},{"Id":"00000000000000000000000000000092","Name":"Similar Show","Type":"Series","UserData":{"Played":true}},{"Id":"00000000000000000000000000000093","Name":"Similar Episode","Type":"Episode"},{"Id":"00000000000000000000000000000094","Name":"Similar Book","Type":"Book"},{"Id":"00000000000000000000000000000095","Name":"Similar Trailer","Type":"Trailer"}],"TotalRecordCount":6}"#,
     )])
     .await;
     let client = JellyfinClient::new();
@@ -8296,9 +8328,9 @@ mod tests {
     assert_eq!(
       ids,
       vec![
-        "00000000-0000-0000-0000-000000000091",
-        "00000000-0000-0000-0000-000000000092",
-        "00000000-0000-0000-0000-000000000093",
+        "00000000000000000000000000000091",
+        "00000000000000000000000000000092",
+        "00000000000000000000000000000093",
       ]
     );
     assert!(similar[0].favorite, "favorite state is preserved");
@@ -8306,16 +8338,16 @@ mod tests {
     assert!(similar[1].played, "played state is preserved");
 
     let captured = requests.lock();
-    assert!(captured[0].starts_with("GET /Items/00000000-0000-0000-0000-000000000090/Similar?"));
+    assert!(captured[0].starts_with("GET /Items/00000000000000000000000000000090/Similar?"));
     assert!(captured[0].contains("limit=12"));
-    assert!(captured[0].contains("userId=00000000-0000-0000-0000-000000000001"));
+    assert!(captured[0].contains("userId=00000000000000000000000000000001"));
   }
 
   #[tokio::test]
   async fn similar_video_caps_results_at_twelve() {
     let (server_url, _) = serve_responses_with_requests(vec![(
       "200 OK",
-      r#"{"Items":[{"Id":"00000000-0000-0000-0000-0000000000a0","Name":"Similar 0","Type":"Movie"},{"Id":"00000000-0000-0000-0000-0000000000a1","Name":"Similar 1","Type":"Movie"},{"Id":"00000000-0000-0000-0000-0000000000a2","Name":"Similar 2","Type":"Movie"},{"Id":"00000000-0000-0000-0000-0000000000a3","Name":"Similar 3","Type":"Movie"},{"Id":"00000000-0000-0000-0000-0000000000a4","Name":"Similar 4","Type":"Movie"},{"Id":"00000000-0000-0000-0000-0000000000a5","Name":"Similar 5","Type":"Movie"},{"Id":"00000000-0000-0000-0000-0000000000a6","Name":"Similar 6","Type":"Movie"},{"Id":"00000000-0000-0000-0000-0000000000a7","Name":"Similar 7","Type":"Movie"},{"Id":"00000000-0000-0000-0000-0000000000a8","Name":"Similar 8","Type":"Movie"},{"Id":"00000000-0000-0000-0000-0000000000a9","Name":"Similar 9","Type":"Movie"},{"Id":"00000000-0000-0000-0000-0000000000aa","Name":"Similar 10","Type":"Movie"},{"Id":"00000000-0000-0000-0000-0000000000ab","Name":"Similar 11","Type":"Movie"},{"Id":"00000000-0000-0000-0000-0000000000ac","Name":"Similar 12","Type":"Movie"},{"Id":"00000000-0000-0000-0000-0000000000ad","Name":"Similar 13","Type":"Movie"}],"TotalRecordCount":14}"#,
+      r#"{"Items":[{"Id":"000000000000000000000000000000a0","Name":"Similar 0","Type":"Movie"},{"Id":"000000000000000000000000000000a1","Name":"Similar 1","Type":"Movie"},{"Id":"000000000000000000000000000000a2","Name":"Similar 2","Type":"Movie"},{"Id":"000000000000000000000000000000a3","Name":"Similar 3","Type":"Movie"},{"Id":"000000000000000000000000000000a4","Name":"Similar 4","Type":"Movie"},{"Id":"000000000000000000000000000000a5","Name":"Similar 5","Type":"Movie"},{"Id":"000000000000000000000000000000a6","Name":"Similar 6","Type":"Movie"},{"Id":"000000000000000000000000000000a7","Name":"Similar 7","Type":"Movie"},{"Id":"000000000000000000000000000000a8","Name":"Similar 8","Type":"Movie"},{"Id":"000000000000000000000000000000a9","Name":"Similar 9","Type":"Movie"},{"Id":"000000000000000000000000000000aa","Name":"Similar 10","Type":"Movie"},{"Id":"000000000000000000000000000000ab","Name":"Similar 11","Type":"Movie"},{"Id":"000000000000000000000000000000ac","Name":"Similar 12","Type":"Movie"},{"Id":"000000000000000000000000000000ad","Name":"Similar 13","Type":"Movie"}],"TotalRecordCount":14}"#,
     )])
     .await;
     let client = JellyfinClient::new();
@@ -8323,13 +8355,13 @@ mod tests {
 
     let similar = client
       .library()
-      .similar_video("00000000-0000-0000-0000-0000000000ff".to_string())
+      .similar_video("000000000000000000000000000000ff".to_string())
       .await
       .expect("similar items should load from the provider");
 
     assert_eq!(similar.len(), 12);
-    assert_eq!(similar[0].id, "00000000-0000-0000-0000-0000000000a0");
-    assert_eq!(similar[11].id, "00000000-0000-0000-0000-0000000000ab");
+    assert_eq!(similar[0].id, "000000000000000000000000000000a0");
+    assert_eq!(similar[11].id, "000000000000000000000000000000ab");
   }
 
   #[tokio::test]
@@ -8358,7 +8390,7 @@ mod tests {
 
     let err = client
       .library()
-      .similar_video("00000000-0000-0000-0000-000000000090".to_string())
+      .similar_video("00000000000000000000000000000090".to_string())
       .await
       .expect_err("provider failure should propagate instead of substituting results");
 
@@ -8369,10 +8401,10 @@ mod tests {
 
   #[tokio::test]
   async fn emby_similar_video_requests_similar_items_with_user_query() {
-    let current_id = "00000000-0000-0000-0000-000000000300";
+    let current_id = "00000000000000000000000000000300";
     let (server_url, requests) = serve_responses_with_requests(vec![(
       "200 OK",
-      r#"{"Items":[{"Id":"00000000-0000-0000-0000-000000000301","Name":"Emby Similar Movie","Type":"Movie","UserData":{"IsFavorite":false,"Played":true}},{"Id":"00000000-0000-0000-0000-000000000300","Name":"Current Movie","Type":"Movie"},{"Id":"00000000-0000-0000-0000-000000000302","Name":"Emby Similar Show","Type":"Series"}],"TotalRecordCount":3}"#,
+      r#"{"Items":[{"Id":"00000000000000000000000000000301","Name":"Emby Similar Movie","Type":"Movie","UserData":{"IsFavorite":false,"Played":true}},{"Id":"00000000000000000000000000000300","Name":"Current Movie","Type":"Movie"},{"Id":"00000000000000000000000000000302","Name":"Emby Similar Show","Type":"Series"}],"TotalRecordCount":3}"#,
     )])
     .await;
     let client = JellyfinClient::new();
@@ -8388,16 +8420,16 @@ mod tests {
     assert_eq!(
       ids,
       vec![
-        "00000000-0000-0000-0000-000000000301",
-        "00000000-0000-0000-0000-000000000302",
+        "00000000000000000000000000000301",
+        "00000000000000000000000000000302",
       ]
     );
     assert!(similar[0].played, "played state is preserved");
 
     let captured = requests.lock();
-    assert!(captured[0].starts_with("GET /Items/00000000-0000-0000-0000-000000000300/Similar?"));
+    assert!(captured[0].starts_with("GET /Items/00000000000000000000000000000300/Similar?"));
     assert!(captured[0].contains("Limit=12"));
-    assert!(captured[0].contains("UserId=00000000-0000-0000-0000-000000000001"));
+    assert!(captured[0].contains("UserId=00000000000000000000000000000001"));
     assert!(captured[0].contains("EnableUserData=true"));
     assert!(captured[0].contains("EnableImages=true"));
     assert!(captured[0].contains("ImageTypeLimit=1"));
@@ -8407,7 +8439,7 @@ mod tests {
 
   #[tokio::test]
   async fn emby_update_user_data_maps_supported_library_actions() {
-    let item_id = "00000000-0000-0000-0000-000000000280";
+    let item_id = "00000000000000000000000000000280";
     let (server_url, requests) = serve_responses_with_requests(vec![
       ("200 OK", r#"{"IsFavorite":true,"Played":false}"#),
       ("200 OK", r#"{"IsFavorite":false,"Played":false}"#),
@@ -8457,10 +8489,16 @@ mod tests {
     assert!(!unplayed.played);
 
     let captured = requests.lock();
-    assert!(captured[0].starts_with("POST /Users/00000000-0000-0000-0000-000000000001/FavoriteItems/00000000-0000-0000-0000-000000000280"));
-    assert!(captured[1].starts_with("DELETE /Users/00000000-0000-0000-0000-000000000001/FavoriteItems/00000000-0000-0000-0000-000000000280"));
-    assert!(captured[2].starts_with("POST /Users/00000000-0000-0000-0000-000000000001/PlayedItems/00000000-0000-0000-0000-000000000280"));
-    assert!(captured[3].starts_with("DELETE /Users/00000000-0000-0000-0000-000000000001/PlayedItems/00000000-0000-0000-0000-000000000280"));
+    assert!(captured[0].starts_with(
+      "POST /Users/00000000000000000000000000000001/FavoriteItems/00000000000000000000000000000280"
+    ));
+    assert!(captured[1].starts_with("DELETE /Users/00000000000000000000000000000001/FavoriteItems/00000000000000000000000000000280"));
+    assert!(captured[2].starts_with(
+      "POST /Users/00000000000000000000000000000001/PlayedItems/00000000000000000000000000000280"
+    ));
+    assert!(captured[3].starts_with(
+      "DELETE /Users/00000000000000000000000000000001/PlayedItems/00000000000000000000000000000280"
+    ));
   }
 
   #[test]
