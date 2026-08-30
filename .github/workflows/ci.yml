@@ -17,11 +17,10 @@ jobs:
       - name: Install system dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y libwebkit2gtk-4.1-dev build-essential curl wget file libssl-dev libgtk-3-dev libayatana-appindicator3-dev librsvg2-dev xauth xvfb
+          sudo apt-get install -y build-essential pkg-config libxkbcommon-dev libxkbcommon-x11-0 libwayland-dev wayland-protocols libgl1-mesa-dri mesa-vulkan-drivers xauth xvfb
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
-          targets: wasm32-unknown-unknown
       - uses: swatinem/rust-cache@v2
         with:
           workspaces: '.'
@@ -30,46 +29,29 @@ jobs:
       - name: Install dependencies
         run: bun install --frozen-lockfile
 
-      - name: Install pinned WASM toolchain
-        run: bun run task wasm install
-
-      - name: Format and Lint check
+      - name: Format, lint, typecheck, and clippy
         run: bun run check
 
-      - name: Run tests
-        run: bun run task test --all
+      - name: Run Rust tests
+        run: bun run task rust test
 
       - name: Run iced startup smoke
         run: xvfb-run -a bun run task iced run --smoke
 
-      - name: Production build
-        run: bun run build
-
-  compile-backend:
-    name: Compile backend (${{ matrix.os }})
+  compile:
+    name: Compile (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, windows-latest, macos-latest]
+        os: [windows-latest, macos-latest]
     env:
       HUSKY: 0
     steps:
       - uses: actions/checkout@v4
-      - name: Install Linux system dependencies
-        if: runner.os == 'Linux'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y libwebkit2gtk-4.1-dev build-essential curl wget file libssl-dev libgtk-3-dev libayatana-appindicator3-dev librsvg2-dev
       - uses: dtolnay/rust-toolchain@stable
       - uses: swatinem/rust-cache@v2
         with:
           workspaces: '.'
-      - name: Compile iced frontend
-        run: cargo check --locked -p jellypilot-ui -p jellypilot-iced
-
-      # Production feature set = default features (SQLite Library Image Cache).
-      # Deliberately not --all-features so the webdriver harness stays out of
-      # the production compile gate.
-      - name: Compile Tauri backend (production SQLite cache)
-        run: cargo check --locked --manifest-path src-tauri/Cargo.toml
+      - name: Compile workspace
+        run: cargo check --locked --workspace

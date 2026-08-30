@@ -1,6 +1,6 @@
 # JellyPilot Context
 
-JellyPilot is a Jellyfin and Emby companion app that presents itself as a controllable playback target with embedded playback by default and an optional external player.
+JellyPilot is a Jellyfin and Emby companion app that presents itself as a controllable Playback Target, browses video libraries, and plays media through a standalone MPV process.
 
 ## Language
 
@@ -9,48 +9,19 @@ The address of one Jellyfin server that JellyPilot connects to. A Server URL mus
 _Avoid_: Server discovery, server selection
 
 **Playback Target**:
-The JellyPilot install as it appears to media-server users when they choose where media should play. The Playback Target is identified by the configured device name and is independent of the Playback Engine used for a session.
+The JellyPilot install as it appears to media-server users when they choose where media should play. The Playback Target is identified by the configured device name.
 _Avoid_: Generic app instance
 
 **Playback Session**:
-One active presentation of a media item through a fixed Playback Engine. Changing the Playback Engine Preference does not migrate an existing Playback Session.
+One active presentation of a media item through External MPV Playback.
 _Avoid_: Player process, transcode job
-
-**Playback Engine**:
-The presentation mechanism selected for one Playback Session. JellyPilot supports Embedded Web Playback and External MPV Playback.
-_Avoid_: Player mode, renderer
-
-**Playback Engine Preference**:
-The persisted default Playback Engine applied when the next Playback Session starts.
-_Avoid_: Current player, live engine switch
-
-**Playback Engine Override**:
-A one-playback choice that replaces the Playback Engine Preference without changing it.
-_Avoid_: Temporary global setting, automatic fallback
-
-**Embedded Web Playback**:
-Playback presented inside the JellyPilot window. It is the default Playback Engine.
-_Avoid_: Browser playback, embedded MPV, libmpv
 
 **External MPV Playback**:
 Playback presented by a standalone MPV process so the user's MPV configuration, scripts, and shaders remain available.
 _Avoid_: Embedded MPV, libmpv
 
-**Explicit MPV Fallback**:
-A user-selected retry in External MPV Playback after Embedded Web Playback cannot continue, resuming from the last known position without changing the Playback Engine Preference.
-_Avoid_: Automatic failover, silent engine switch
-
-**Local Transcode**:
-Media conversion performed on the JellyPilot device for Embedded Web Playback. It is distinct from a Provider Transcode.
-_Avoid_: Server transcode, remote conversion
-
-**Local Media Toolchain**:
-The paired, version-matched FFmpeg and FFprobe executables that JellyPilot verifies and ships for Local Transcode. FFmpeg produces the local HLS presentation and FFprobe inspects source media; neither executable is resolved from the host's `PATH` as an implicit fallback.
-_Avoid_: System FFmpeg, optional probe, unrelated sidecars
-
 **Provider Transcode**:
-Media conversion performed by the connected Jellyfin or Emby server. Embedded Web Playback does not request a Provider Transcode.
-_Avoid_: Local Transcode
+Media conversion performed by the connected Jellyfin or Emby server. JellyPilot plays the original or direct source through External MPV Playback and does not request a Provider Transcode.
 
 **Quick Connect**:
 A Jellyfin authentication method on the Login screen where JellyPilot shows a short code for the user to approve from another signed-in Jellyfin client. Quick Connect is the default login method and authenticates to a known Server URL; it does not discover or choose servers.
@@ -119,10 +90,6 @@ _Avoid_: Texture, transformed cache variant, decoded cache entry
 **Sidebar**:
 The persistent left navigation area of the authenticated JellyPilot shell. The Sidebar lists Video Home, the user's video libraries, Now Playing, and Settings, and is always visible while JellyPilot is authenticated. At narrow window widths the Sidebar shows icons only.
 _Avoid_: Navigation rail, app drawer, floating controls
-
-**Ambient Glow**:
-The decorative radial glow behind the authenticated shell that brightens while the pointer is over the Sidebar or a Library Browser toolbar. The ambient-glow controller publishes the state as `data-glow` on the shell element.
-_Avoid_: Hover-driven :has selectors, glow state in CSS
 
 **Video Home**:
 The Library Browser landing view built from live Jellyfin rows such as Continue Watching, Next Up, latest Movies, latest Episodes, and video library shortcuts. Video Home is not cached offline and should not show fake media.

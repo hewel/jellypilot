@@ -9,6 +9,9 @@ version.workspace = true
 
 [features]
 debug = ["iced/hot"]
+[[bin]]
+name = "jellypilot"
+path = "src/main.rs"
 
 [dependencies]
 jellypilot-auth = { path = "../crates/jellypilot-auth" }
