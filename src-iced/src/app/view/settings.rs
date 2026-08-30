@@ -160,7 +160,7 @@ fn playback_section(state: &State) -> Element<'_, Message> {
   .padding([7, 10])
   .width(Fill)
   .style(|theme, status| jellypilot_ui::theme::field_variant(theme, status, FieldVariant::Filled));
-  let mode = state.settings.snapshot().intro_mode();
+  let mode = state.kernel.settings.snapshot().intro_mode();
   let trigger = button(text(format!("Intro Skipper: {}", intro_mode_label(mode))))
     .padding([6, 12])
     .on_press(Message::Settings(SettingsMessage::IntroMenuToggled))
@@ -247,7 +247,7 @@ fn subtitles_section(state: &State) -> Element<'_, Message> {
     },
     Message::Settings(SettingsMessage::SubtitleMenuDismissed),
   );
-  let languages = state.settings.snapshot().subtitle_languages();
+  let languages = state.kernel.settings.snapshot().subtitle_languages();
   let mut rows = Column::new().spacing(TOKENS.spacing.s2).width(Fill);
   if languages.is_empty() {
     rows = rows.push(
@@ -321,9 +321,9 @@ fn shortcuts_section(state: &State) -> Element<'_, Message> {
 
 fn shortcut_row<'a>(state: &'a State, label: &'a str, kind: ShortcutKind) -> Element<'a, Message> {
   let binding = match kind {
-    ShortcutKind::Next => state.settings.snapshot().key_next_episode(),
-    ShortcutKind::Previous => state.settings.snapshot().key_previous_episode(),
-    ShortcutKind::IntroSkip => state.settings.snapshot().key_intro_skip(),
+    ShortcutKind::Next => state.kernel.settings.snapshot().key_next_episode(),
+    ShortcutKind::Previous => state.kernel.settings.snapshot().key_previous_episode(),
+    ShortcutKind::IntroSkip => state.kernel.settings.snapshot().key_intro_skip(),
   };
   let capturing = state.settings_view.shortcut_capture == Some(kind);
   let variant = if capturing {
@@ -359,7 +359,7 @@ fn shortcut_row<'a>(state: &'a State, label: &'a str, kind: ShortcutKind) -> Ele
 }
 
 fn interface_section(state: &State) -> Element<'_, Message> {
-  let reduced_motion = state.settings.snapshot().reduced_motion();
+  let reduced_motion = state.kernel.settings.snapshot().reduced_motion();
   section(
     Icon::Settings,
     "Interface",
@@ -374,8 +374,8 @@ fn interface_section(state: &State) -> Element<'_, Message> {
 }
 
 fn cache_section(state: &State) -> Element<'_, Message> {
-  let cache_enabled = state.settings.snapshot().image_cache_enabled();
-  let start_minimized = state.settings.snapshot().start_minimized();
+  let cache_enabled = state.kernel.settings.snapshot().image_cache_enabled();
+  let start_minimized = state.kernel.settings.snapshot().start_minimized();
   section(
     Icon::Database,
     "Cache",

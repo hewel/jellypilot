@@ -307,7 +307,7 @@ fn update_settings(state: &mut State, message: SettingsMessage) -> Task<Message>
     }
     SettingsMessage::SaveMpvPath => {
       let value = state.settings_view.mpv_path_input.clone();
-      let result = state.settings.set_mpv_path(value);
+      let result = state.kernel.settings.set_mpv_path(value);
       if finish_settings_mutation(state, result) {
         apply_playback_configuration(state)
       } else {
@@ -321,9 +321,9 @@ fn update_settings(state: &mut State, message: SettingsMessage) -> Task<Message>
     }
     SettingsMessage::SaveMpvArgs => {
       let value = state.settings_view.mpv_args_input.clone();
-      let result = state.settings.set_mpv_args(&value);
+      let result = state.kernel.settings.set_mpv_args(&value);
       if finish_settings_mutation(state, result) {
-        state.settings_view.mpv_args_input = state.settings.snapshot().mpv_args().join(" ");
+        state.settings_view.mpv_args_input = state.kernel.settings.snapshot().mpv_args().join(" ");
         apply_playback_configuration(state)
       } else {
         Task::none()
@@ -336,7 +336,7 @@ fn update_settings(state: &mut State, message: SettingsMessage) -> Task<Message>
     }
     SettingsMessage::SavePlaybackTargetName => {
       let value = state.settings_view.playback_target_name_input.clone();
-      let result = state.settings.set_playback_target_name(value);
+      let result = state.kernel.settings.set_playback_target_name(value);
       if finish_settings_mutation(state, result) {
         refinalize_playback_target(state)
       } else {
@@ -353,7 +353,7 @@ fn update_settings(state: &mut State, message: SettingsMessage) -> Task<Message>
     }
     SettingsMessage::IntroModeSelected(mode) => {
       state.settings_view.intro_menu_open = false;
-      let result = state.settings.set_intro_mode(mode);
+      let result = state.kernel.settings.set_intro_mode(mode);
       if finish_settings_mutation(state, result) {
         let mode = state.intro_availability().mode;
         apply_playback_input(
@@ -374,7 +374,7 @@ fn update_settings(state: &mut State, message: SettingsMessage) -> Task<Message>
     }
     SettingsMessage::SubtitleLanguageAdded(language) => {
       state.settings_view.subtitle_menu_open = false;
-      let result = state.settings.add_subtitle_language(language);
+      let result = state.kernel.settings.add_subtitle_language(language);
       if finish_settings_mutation(state, result) {
         apply_playback_configuration(state)
       } else {
@@ -382,7 +382,7 @@ fn update_settings(state: &mut State, message: SettingsMessage) -> Task<Message>
       }
     }
     SettingsMessage::SubtitleLanguageMoved { index, offset } => {
-      let result = state.settings.move_subtitle_language(index, offset);
+      let result = state.kernel.settings.move_subtitle_language(index, offset);
       if finish_settings_mutation(state, result) {
         apply_playback_configuration(state)
       } else {
@@ -390,7 +390,7 @@ fn update_settings(state: &mut State, message: SettingsMessage) -> Task<Message>
       }
     }
     SettingsMessage::SubtitleLanguageRemoved(index) => {
-      let result = state.settings.remove_subtitle_language(index);
+      let result = state.kernel.settings.remove_subtitle_language(index);
       if finish_settings_mutation(state, result) {
         apply_playback_configuration(state)
       } else {
@@ -406,7 +406,7 @@ fn update_settings(state: &mut State, message: SettingsMessage) -> Task<Message>
       let Some(kind) = state.settings_view.shortcut_capture.take() else {
         return Task::none();
       };
-      let result = state.settings.set_shortcut(kind, binding);
+      let result = state.kernel.settings.set_shortcut(kind, binding);
       finish_settings_mutation(state, result);
       Task::none()
     }
@@ -415,22 +415,22 @@ fn update_settings(state: &mut State, message: SettingsMessage) -> Task<Message>
       Task::none()
     }
     SettingsMessage::ImageCacheToggled => {
-      let enabled = !state.settings.snapshot().image_cache_enabled();
-      let result = state.settings.set_image_cache_enabled(enabled);
+      let enabled = !state.kernel.settings.snapshot().image_cache_enabled();
+      let result = state.kernel.settings.set_image_cache_enabled(enabled);
       if finish_settings_mutation(state, result) {
         state.kernel.artwork_adapter.set_disk_cache_enabled(enabled);
       }
       Task::none()
     }
     SettingsMessage::StartMinimizedToggled => {
-      let enabled = !state.settings.snapshot().start_minimized();
-      let result = state.settings.set_start_minimized(enabled);
+      let enabled = !state.kernel.settings.snapshot().start_minimized();
+      let result = state.kernel.settings.set_start_minimized(enabled);
       finish_settings_mutation(state, result);
       Task::none()
     }
     SettingsMessage::ReducedMotionToggled => {
-      let enabled = !state.settings.snapshot().reduced_motion();
-      let result = state.settings.set_reduced_motion(enabled);
+      let enabled = !state.kernel.settings.snapshot().reduced_motion();
+      let result = state.kernel.settings.set_reduced_motion(enabled);
       finish_settings_mutation(state, result);
       Task::none()
     }
@@ -534,7 +534,7 @@ fn settings_mutation_error(error: &SettingsMutationError) -> &'static str {
 }
 
 fn apply_playback_configuration(state: &mut State) -> Task<Message> {
-  let config = playback_controller_config(state.settings.snapshot());
+  let config = playback_controller_config(state.kernel.settings.snapshot());
   if let Some(controller) = state.playback_controller.as_ref().map(Arc::clone) {
     return Task::perform(
       async move { controller.lock().await.configure_for_next_start(config) },
@@ -582,6 +582,7 @@ fn refinalize_playback_target(state: &mut State) -> Task<Message> {
     return Task::none();
   };
   let name = state
+    .kernel
     .settings
     .snapshot()
     .playback_target_name()
@@ -613,7 +614,7 @@ fn start_remote_session(state: &mut State) -> Task<Message> {
   let Some(client) = state.kernel.client.as_ref().map(Arc::clone) else {
     return Task::none();
   };
-  if let Some(name) = state.settings.snapshot().playback_target_name() {
+  if let Some(name) = state.kernel.settings.snapshot().playback_target_name() {
     client.set_device_name(name.to_owned());
   }
 
@@ -1087,7 +1088,7 @@ fn initialize_playback(state: &mut State) {
   };
   match PlaybackController::discover(
     client,
-    playback_controller_config(state.settings.snapshot()),
+    playback_controller_config(state.kernel.settings.snapshot()),
   ) {
     Ok(controller) => {
       state.playback_controller = Some(Arc::new(tokio::sync::Mutex::new(controller)));
@@ -2887,8 +2888,8 @@ fn persist_browse_filters(
   if !matches!(state.destination, Destination::Library { .. }) {
     return Task::none();
   }
-  let filters = mutation(state.settings.snapshot().browse_filters());
-  if let Err(error) = state.settings.set_browse_filters(filters) {
+  let filters = mutation(state.kernel.settings.snapshot().browse_filters());
+  if let Err(error) = state.kernel.settings.set_browse_filters(filters) {
     state.kernel.notice = Some(format!("Could not save library filters: {error}"));
     return Task::none();
   }
@@ -2906,7 +2907,7 @@ fn start_browse(state: &mut State) -> Task<Message> {
     state.kernel.notice = Some("The selected library is no longer available.".to_owned());
     return Task::none();
   };
-  let preferences = BrowsePreferences::from(state.settings.snapshot().browse_filters());
+  let preferences = BrowsePreferences::from(state.kernel.settings.snapshot().browse_filters());
   let effects = match state.browse.configure_with_preferences(source, preferences) {
     Ok(effects) => effects,
     Err(error) => {
@@ -3737,12 +3738,12 @@ fn complete_authentication(
 
 fn persist_password_submission(state: &mut State, submission: PasswordSubmission) {
   let settings_result = if submission.remember {
-    state.settings.set_login_prefill(
+    state.kernel.settings.set_login_prefill(
       submission.prefill,
       provider_key(submission.provider).to_owned(),
     )
   } else {
-    state.settings.clear_login_prefill()
+    state.kernel.settings.clear_login_prefill()
   };
   if let Err(error) = settings_result {
     state.kernel.notice = Some(format!("Could not update remembered sign-in: {error}"));
@@ -3956,9 +3957,9 @@ mod tests {
       skeleton_phase: 0.0,
       skeleton_animation_start: None,
       login: LoginState::from_settings(settings.snapshot()),
-      settings,
       settings_view,
       kernel: Kernel {
+        settings,
         diagnostics: jellypilot_core::diagnostics::Diagnostics::default(),
         auth_store: AuthStore::default(),
         request_gate,
@@ -4837,7 +4838,7 @@ mod tests {
   fn password_completion_persists_submitted_snapshot_after_form_edits() {
     let mut state = test_state();
     let (settings, _settings_file) = isolated_settings("password-snapshot");
-    state.settings = settings;
+    state.kernel.settings = settings;
     state.login.remember = true;
     state.login.provider = MediaServerProvider::Jellyfin;
     let submission = password_submission(
@@ -4853,7 +4854,7 @@ mod tests {
 
     persist_password_submission(&mut state, submission);
 
-    let persisted = state.settings.snapshot();
+    let persisted = state.kernel.settings.snapshot();
     assert!(persisted.remembers_login_prefill());
     assert_eq!(
       persisted.login_prefill().server_url(),
@@ -5830,7 +5831,7 @@ mod tests {
   fn settings_intro_mode_threads_into_playback_availability() {
     let (settings, _file) = isolated_settings("intro-availability");
     let mut state = test_state();
-    state.settings = settings;
+    state.kernel.settings = settings;
     for (configured, expected) in [
       (
         jellypilot_core::config::IntroMode::Automatic,
@@ -5846,6 +5847,7 @@ mod tests {
       ),
     ] {
       state
+        .kernel
         .settings
         .set_intro_mode(configured)
         .expect("isolated settings should save");
@@ -5859,9 +5861,9 @@ mod tests {
   fn intro_mode_mutation_updates_the_active_playback_session() {
     let (settings, _file) = isolated_settings("live-intro-mode");
     let mut state = active_intro_prompt_state();
-    state.settings = settings;
+    state.kernel.settings = settings;
     state.settings_view =
-      crate::app::state::SettingsState::from_settings(state.settings.snapshot());
+      crate::app::state::SettingsState::from_settings(state.kernel.settings.snapshot());
 
     drop(update_settings(
       &mut state,
@@ -5869,7 +5871,7 @@ mod tests {
     ));
 
     assert_eq!(
-      state.settings.snapshot().intro_mode(),
+      state.kernel.settings.snapshot().intro_mode(),
       jellypilot_core::config::IntroMode::Off
     );
     assert!(state.playback_view.intro_prompt.is_none());
@@ -5962,9 +5964,9 @@ mod tests {
     ));
     let _ = fs::remove_file(&path);
     let mut state = test_state();
-    state.settings = SettingsStore::for_test(path.clone());
+    state.kernel.settings = SettingsStore::for_test(path.clone());
     state.settings_view =
-      crate::app::state::SettingsState::from_settings(state.settings.snapshot());
+      crate::app::state::SettingsState::from_settings(state.kernel.settings.snapshot());
     state.kernel.connection = ConnectionPhase::Connected;
     state.kernel.client = Some(Arc::new(JellyfinClient::new()));
     state.remote_session = Some(RemoteSessionHandle {
@@ -5977,7 +5979,7 @@ mod tests {
     let task = update_settings(&mut state, SettingsMessage::SavePlaybackTargetName);
 
     assert_eq!(
-      state.settings.snapshot().playback_target_name(),
+      state.kernel.settings.snapshot().playback_target_name(),
       Some("Bedroom")
     );
     assert!(state.kernel.diagnostics.rows().any(|event| {
@@ -5991,9 +5993,9 @@ mod tests {
   fn connecting_target_name_mutation_schedules_no_duplicate_registration() {
     let (settings, _file) = isolated_settings("connecting-target-name");
     let mut state = test_state();
-    state.settings = settings;
+    state.kernel.settings = settings;
     state.settings_view =
-      crate::app::state::SettingsState::from_settings(state.settings.snapshot());
+      crate::app::state::SettingsState::from_settings(state.kernel.settings.snapshot());
     state.kernel.connection = ConnectionPhase::Connected;
     state.kernel.client = Some(Arc::new(JellyfinClient::new()));
     state.remote_session = Some(RemoteSessionHandle {
@@ -6015,9 +6017,9 @@ mod tests {
   fn saving_mpv_path_discovers_a_missing_playback_controller() {
     let (settings, _file) = isolated_settings("discover-mpv-path");
     let mut state = test_state();
-    state.settings = settings;
+    state.kernel.settings = settings;
     state.settings_view =
-      crate::app::state::SettingsState::from_settings(state.settings.snapshot());
+      crate::app::state::SettingsState::from_settings(state.kernel.settings.snapshot());
     state.kernel.client = Some(Arc::new(JellyfinClient::new()));
     state.settings_view.mpv_path_input = std::env::current_exe()
       .expect("test executable path should resolve")
@@ -6080,9 +6082,9 @@ mod tests {
     ));
     let _ = fs::remove_file(&path);
     let mut state = test_state();
-    state.settings = SettingsStore::for_test(path);
+    state.kernel.settings = SettingsStore::for_test(path);
     state.settings_view =
-      crate::app::state::SettingsState::from_settings(state.settings.snapshot());
+      crate::app::state::SettingsState::from_settings(state.kernel.settings.snapshot());
     state.settings_view.shortcut_capture = Some(jellypilot_core::config::ShortcutKind::Next);
 
     drop(update_settings(

@@ -3,6 +3,7 @@ use std::sync::Arc;
 use jellypilot_auth::login::ConnectionPhase;
 use jellypilot_auth::{AuthStore, SavedProfileKey};
 use jellypilot_core::artwork_binder::ArtworkBinder;
+use jellypilot_core::config::SettingsStore;
 use jellypilot_core::diagnostics::Diagnostics;
 use jellypilot_core::request_gate::RequestGate;
 use jellypilot_media_server::artwork::ArtworkAdapter;
@@ -15,6 +16,9 @@ use crate::tray::Tray;
 /// auth/connection, request gating, diagnostics, user notifications, tray, and
 /// the artwork pipeline that ADR 0028's streaming loader drives for all views.
 pub struct Kernel {
+  /// Persisted application configuration; read and mutated by several
+  /// surfaces (settings edits, login prefill, playback options, filters).
+  pub settings: SettingsStore,
   pub auth_store: AuthStore,
   pub client: Option<Arc<JellyfinClient>>,
   pub connection: ConnectionPhase,

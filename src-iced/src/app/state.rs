@@ -652,7 +652,6 @@ pub struct State {
   /// are visible so the next loading burst restarts the sweep from phase 0.
   /// `pub(crate)` because update tests construct `State` literals.
   pub(crate) skeleton_animation_start: Option<std::time::Instant>,
-  pub settings: SettingsStore,
   pub settings_view: SettingsState,
   pub kernel: Kernel,
   pub login: LoginState,
@@ -721,9 +720,9 @@ impl State {
       window_size: iced::Size::new(1600.0, 900.0),
       skeleton_phase: 0.0,
       skeleton_animation_start: None,
-      settings,
       settings_view,
       kernel: Kernel {
+        settings,
         diagnostics,
         auth_store: AuthStore::default(),
         request_gate,
@@ -824,7 +823,7 @@ impl State {
   }
   pub fn intro_availability(&self) -> IntroAvailability {
     IntroAvailability {
-      mode: intro_skip_mode(self.settings.snapshot().intro_mode()),
+      mode: intro_skip_mode(self.kernel.settings.snapshot().intro_mode()),
       skipper_available: self
         .kernel
         .client

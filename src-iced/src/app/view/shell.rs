@@ -27,7 +27,7 @@ pub(crate) fn sidebar_width(class: SizeClass) -> f32 {
 
 pub fn view(state: &State) -> Element<'_, Message> {
   let skeleton_phase = state.skeleton_phase;
-  let reduced_motion = state.settings.snapshot().reduced_motion();
+  let reduced_motion = state.kernel.settings.snapshot().reduced_motion();
   let class = SizeClass::from_width(state.window_size.width);
   let sidebar = sidebar(state, class, skeleton_phase, reduced_motion)
     .width(Length::Fixed(sidebar_width(class)));

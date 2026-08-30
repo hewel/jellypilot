@@ -94,7 +94,7 @@ pub fn view(state: &State) -> Element<'_, Message> {
 }
 
 fn toolbar(state: &State) -> Element<'_, Message> {
-  let filters = state.settings.snapshot().browse_filters();
+  let filters = state.kernel.settings.snapshot().browse_filters();
   let sort_trigger = button(
     row![
       icon_for_variant(Icon::Sliders, IconSize::Sm, ButtonVariant::Outlined),
@@ -266,7 +266,7 @@ fn ready_surface<'a>(
   class: SizeClass,
 ) -> Element<'a, Message> {
   let skeleton_phase = state.skeleton_phase;
-  let reduced_motion = state.settings.snapshot().reduced_motion();
+  let reduced_motion = state.kernel.settings.snapshot().reduced_motion();
   let padding = page_padding(class);
   let available_width = grid_available_width(state.window_size.width, class);
   let metrics = ArtworkGridMetrics::for_cards(available_width, CARD_COPY_HEIGHT);
@@ -342,7 +342,7 @@ fn item_at(
 
 fn browse_loading_skeleton<'a>(state: &'a State, class: SizeClass) -> Element<'a, Message> {
   let skeleton_phase = state.skeleton_phase;
-  let reduced_motion = state.settings.snapshot().reduced_motion();
+  let reduced_motion = state.kernel.settings.snapshot().reduced_motion();
   let padding = page_padding(class);
   let metrics = skeleton_grid_metrics(state.window_size.width, class);
   let grid = browse_skeleton_grid(metrics, skeleton_phase, reduced_motion);

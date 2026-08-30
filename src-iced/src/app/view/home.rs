@@ -53,7 +53,7 @@ const fn section_scroll_height(section: HomeSection) -> f32 {
 
 pub fn view(state: &State) -> Element<'_, Message> {
   let skeleton_phase = state.skeleton_phase;
-  let reduced_motion = state.settings.snapshot().reduced_motion();
+  let reduced_motion = state.kernel.settings.snapshot().reduced_motion();
 
   let mut content = Column::new()
     .spacing(TOKENS.spacing.s8)

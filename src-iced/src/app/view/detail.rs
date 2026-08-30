@@ -36,7 +36,7 @@ const DETAIL_BACKDROP_KEY: &str = "detail-backdrop";
 
 pub fn view(state: &State) -> Element<'_, Message> {
   let skeleton_phase = state.skeleton_phase;
-  let reduced_motion = state.settings.snapshot().reduced_motion();
+  let reduced_motion = state.kernel.settings.snapshot().reduced_motion();
   match &state.detail.content {
     LoadState::Idle | LoadState::Loading => detail_skeleton(state, skeleton_phase, reduced_motion),
     LoadState::Failed(error) => detail_failure(state, error),

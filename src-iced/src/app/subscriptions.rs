@@ -35,7 +35,7 @@ pub fn subscription(state: &State) -> Subscription<Message> {
   } else if state.playback_view.now_playing.is_some() {
     subscriptions.push(
       event::listen()
-        .with(playback_shortcuts(state.settings.snapshot()))
+        .with(playback_shortcuts(state.kernel.settings.snapshot()))
         .filter_map(playback_shortcut),
     );
   }
@@ -49,7 +49,8 @@ pub fn subscription(state: &State) -> Subscription<Message> {
   // Drive the shimmer phase only while skeletons are actually on screen (or a
   // smoke run waits on its first frame); an always-on frames subscription
   // would redraw the shell at display refresh for no visible change.
-  if state.smoke || (state.skeletons_active() && !state.settings.snapshot().reduced_motion()) {
+  if state.smoke || (state.skeletons_active() && !state.kernel.settings.snapshot().reduced_motion())
+  {
     subscriptions
       .push(window::frames().map(|instant| Message::Window(WindowMessage::FrameTick(instant))));
   }
@@ -278,8 +279,8 @@ mod tests {
       std::process::id()
     ));
     let _ = std::fs::remove_file(&path);
-    state.settings = jellypilot_core::config::SettingsStore::for_test(path.clone());
-    state.settings.set_reduced_motion(true).unwrap();
+    state.kernel.settings = jellypilot_core::config::SettingsStore::for_test(path.clone());
+    state.kernel.settings.set_reduced_motion(true).unwrap();
     assert_eq!(subscription(&state).units(), 2);
     std::fs::remove_file(path).unwrap();
   }
