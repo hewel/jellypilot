@@ -74,6 +74,7 @@ fn smoke_window_size() -> Size {
 }
 
 fn run_application(smoke: bool) -> iced::Result {
+  tracing::debug!(smoke, "application booting");
   let tray = (!smoke).then(|| tray::Tray::new().ok()).flatten();
   let start_minimized = jellypilot_core::config::SettingsStore::load()
     .unwrap_or_default()

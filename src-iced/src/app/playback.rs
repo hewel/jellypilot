@@ -111,6 +111,10 @@ pub fn update(
   quit_requested: bool,
   message: PlaybackMessage,
 ) -> Task<Message> {
+  tracing::debug!(
+    message = playback_message_name(&message),
+    "playback message"
+  );
   let previous_notice = surface.notice.clone();
   let task = update_playback(surface, kernel, quit_requested, message);
   let toast_task = record_playback_notice(surface, kernel, previous_notice.as_deref());
@@ -1047,6 +1051,25 @@ fn ensure_player_artwork(surface: &mut Surface, kernel: &mut Kernel) -> Task<Mes
   }
 }
 
+fn playback_message_name(message: &PlaybackMessage) -> &'static str {
+  match message {
+    PlaybackMessage::Intent(_) => "intent",
+    PlaybackMessage::Event(_) => "event",
+    PlaybackMessage::SeekChanged(_) => "seek-changed",
+    PlaybackMessage::SeekReleased => "seek-released",
+    PlaybackMessage::VolumeChanged(_) => "volume-changed",
+    PlaybackMessage::VolumeReleased => "volume-released",
+    PlaybackMessage::AudioMenuToggled => "audio-menu-toggled",
+    PlaybackMessage::AudioMenuDismissed => "audio-menu-dismissed",
+    PlaybackMessage::AudioTrackSelected(_) => "audio-track-selected",
+    PlaybackMessage::SubtitleMenuToggled => "subtitle-menu-toggled",
+    PlaybackMessage::SubtitleMenuDismissed => "subtitle-menu-dismissed",
+    PlaybackMessage::SubtitleTrackSelected(_) => "subtitle-track-selected",
+    PlaybackMessage::ControllerSettled { .. } => "controller-settled",
+    PlaybackMessage::AdjacentSettled { .. } => "adjacent-settled",
+    PlaybackMessage::ArtworkLoaded { .. } => "artwork-loaded",
+  }
+}
 fn playable_kind(playable: &Playable) -> &'static str {
   match playable {
     Playable::Library(_) => "library",
