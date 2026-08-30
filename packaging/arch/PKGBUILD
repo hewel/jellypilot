@@ -61,7 +61,7 @@ package() {
   ln -s "/usr/lib/$pkgname/jellypilot" "$pkgdir/usr/bin/jellypilot"
   install -Dm644 "$srcdir/top.pigfun.jellypilot.desktop" \
     "$pkgdir/usr/share/applications/top.pigfun.jellypilot.desktop"
-  install -Dm644 "src-tauri/icons/128x128.png" \
+  install -Dm644 "assets/icons/128x128.png" \
     "$pkgdir/usr/share/icons/hicolor/128x128/apps/top.pigfun.jellypilot.png"
   install -Dm644 "LICENSE" "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
   install -Dm644 "packaging/ffmpeg/THIRD_PARTY_NOTICES.md" \

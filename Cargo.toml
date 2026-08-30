@@ -12,8 +12,8 @@ members = [
   "src-tauri",
 ]
 exclude = [
-  "src-tauri/media-server-api/emby",
-  "src-tauri/media-server-api/jellyfin",
+  "crates/media-server-api/emby",
+  "crates/media-server-api/jellyfin",
 ]
 resolver = "2"
 
