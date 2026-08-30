@@ -12,7 +12,7 @@ use jellypilot_ui::tokens::TOKENS;
 use jellypilot_ui::variants::{BadgeVariant, ButtonVariant, FieldVariant, SurfaceVariant};
 
 pub fn view(state: &State) -> Element<'_, Message> {
-  let login = &state.login;
+  let login = &state.login.flow;
   let title = text("Sign in to JellyPilot")
     .font(SPACE_GROTESK_FONT)
     .size(32)
@@ -92,7 +92,7 @@ fn provider_button<'a>(
   provider: MediaServerProvider,
   state: &'a State,
 ) -> Element<'a, Message> {
-  let selected = state.login.provider == provider;
+  let selected = state.login.flow.provider == provider;
   let variant = if selected {
     ButtonVariant::Primary
   } else {
@@ -117,7 +117,7 @@ fn method_button<'a>(
   method: LoginMethod,
   state: &'a State,
 ) -> Element<'a, Message> {
-  let selected = state.login.method == method;
+  let selected = state.login.flow.method == method;
   let icon = match method {
     LoginMethod::QuickConnect => Icon::QrCode,
     LoginMethod::Password => Icon::Lock,
@@ -139,7 +139,7 @@ fn method_button<'a>(
 }
 
 fn quick_connect(state: &State) -> Element<'_, Message> {
-  let login = &state.login;
+  let login = &state.login.flow;
   let content: Element<'_, Message> = match &login.quick_connect {
     QuickConnectState::Idle | QuickConnectState::Failed => {
       let label = if matches!(login.quick_connect, QuickConnectState::Failed) {
@@ -239,7 +239,7 @@ fn cancel_button<'a>() -> Element<'a, Message> {
 }
 
 fn password(state: &State) -> Element<'_, Message> {
-  let login = &state.login;
+  let login = &state.login.flow;
   let username = text_input("Username", &login.username)
     .on_input(|value| Message::Login(LoginMessage::UsernameChanged(value)))
     .padding([8, 12])
@@ -315,9 +315,9 @@ fn saved_profiles(state: &State) -> Element<'_, Message> {
     .spacing(TOKENS.spacing.s2)
     .align_y(Alignment::Center),
   );
-  for profile in &state.login.profiles {
+  for profile in &state.login.flow.profiles {
     let key = profile.key().clone();
-    let is_busy = state.login.busy_profile.as_ref() == Some(&key);
+    let is_busy = state.login.flow.busy_profile.as_ref() == Some(&key);
     let restore = button(
       row![
         icon_for_variant_disabled(Icon::User, IconSize::Sm, ButtonVariant::Secondary, is_busy),
@@ -351,7 +351,7 @@ fn saved_profiles(state: &State) -> Element<'_, Message> {
     .style(|theme, status| {
       jellypilot_ui::theme::button_variant(theme, status, ButtonVariant::Text)
     });
-    let forget = if state.login.busy_profile.is_none() {
+    let forget = if state.login.flow.busy_profile.is_none() {
       forget.on_press(Message::Login(LoginMessage::AskForgetProfile(key.clone())))
     } else {
       forget
@@ -361,7 +361,8 @@ fn saved_profiles(state: &State) -> Element<'_, Message> {
       text(profile.subtitle()).color(TOKENS.colors.onSurfaceVariant),
     ]
     .spacing(8);
-    if state.login.busy_profile.is_none() && state.login.forget_confirmation.as_ref() == Some(&key)
+    if state.login.flow.busy_profile.is_none()
+      && state.login.flow.forget_confirmation.as_ref() == Some(&key)
     {
       profile_content = profile_content.push(
         column![

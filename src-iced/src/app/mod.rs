@@ -1,4 +1,5 @@
 pub mod kernel;
+pub mod login;
 pub mod message;
 pub mod state;
 mod subscriptions;
@@ -16,7 +17,7 @@ pub fn boot(smoke: bool, tray: Option<crate::tray::Tray>) -> (State, Task<Messag
   if let Some(tray) = &state.kernel.tray {
     tray.sync(&state.playback_view, false);
   }
-  let task = update::load_saved_profiles(&state).map(Message::Login);
+  let task = login::load_saved_profiles(&state.login, &state.kernel).map(Message::Login);
   let task = Task::batch([
     task,
     iced::window::latest()
