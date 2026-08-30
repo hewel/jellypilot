@@ -1,6 +1,7 @@
 pub mod kernel;
 pub mod login;
 pub mod message;
+pub mod settings;
 pub mod state;
 mod subscriptions;
 mod update;

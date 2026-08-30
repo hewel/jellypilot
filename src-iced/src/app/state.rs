@@ -652,7 +652,7 @@ pub struct State {
   /// are visible so the next loading burst restarts the sweep from phase 0.
   /// `pub(crate)` because update tests construct `State` literals.
   pub(crate) skeleton_animation_start: Option<std::time::Instant>,
-  pub settings_view: SettingsState,
+  pub settings: crate::app::settings::Surface,
   pub kernel: Kernel,
   pub login: crate::app::login::Surface,
   pub playback_notice: Option<String>,
@@ -719,7 +719,9 @@ impl State {
       window_size: iced::Size::new(1600.0, 900.0),
       skeleton_phase: 0.0,
       skeleton_animation_start: None,
-      settings_view,
+      settings: crate::app::settings::Surface {
+        view: settings_view,
+      },
       kernel: Kernel {
         settings,
         diagnostics,

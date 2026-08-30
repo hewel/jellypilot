@@ -30,7 +30,7 @@ pub fn subscription(state: &State) -> Subscription<Message> {
         .map(|_| Message::Playback(PlaybackMessage::Intent(PlaybackIntent::Tick))),
     );
   }
-  if state.settings_view.shortcut_capture.is_some() {
+  if state.settings.view.shortcut_capture.is_some() {
     subscriptions.push(event::listen_with(shortcut_capture));
   } else if state.playback_view.now_playing.is_some() {
     subscriptions.push(
@@ -246,7 +246,7 @@ mod tests {
       volume: 75.0,
       muted: false,
     });
-    state.settings_view.shortcut_capture = Some(jellypilot_core::config::ShortcutKind::Next);
+    state.settings.view.shortcut_capture = Some(jellypilot_core::config::ShortcutKind::Next);
 
     // window events, resize events, playback tick, shortcut capture
     assert_eq!(subscription(&state).units(), 4);

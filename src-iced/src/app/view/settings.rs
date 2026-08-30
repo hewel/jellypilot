@@ -50,10 +50,10 @@ pub fn view(state: &State) -> Element<'_, Message> {
 }
 
 fn feedback(state: &State) -> Element<'_, Message> {
-  if let Some(error) = state.settings_view.error {
+  if let Some(error) = state.settings.view.error {
     return text(error).size(13).color(TOKENS.colors.error).into();
   }
-  if let Some(saved) = state.settings_view.saved {
+  if let Some(saved) = state.settings.view.saved {
     return badge(saved, BadgeVariant::Success);
   }
   space::vertical().height(0).into()
@@ -112,7 +112,7 @@ fn connection_section(state: &State) -> Element<'_, Message> {
 }
 
 fn mpv_section(state: &State) -> Element<'_, Message> {
-  let path = text_input("Auto-detect from PATH", &state.settings_view.mpv_path_input)
+  let path = text_input("Auto-detect from PATH", &state.settings.view.mpv_path_input)
     .on_input(|value| Message::Settings(SettingsMessage::MpvPathChanged(value)))
     .on_submit(Message::Settings(SettingsMessage::SaveMpvPath))
     .padding([7, 10])
@@ -122,7 +122,7 @@ fn mpv_section(state: &State) -> Element<'_, Message> {
     });
   let args = text_input(
     "Additional MPV arguments",
-    &state.settings_view.mpv_args_input,
+    &state.settings.view.mpv_args_input,
   )
   .on_input(|value| Message::Settings(SettingsMessage::MpvArgsChanged(value)))
   .on_submit(Message::Settings(SettingsMessage::SaveMpvArgs))
@@ -153,7 +153,7 @@ fn mpv_section(state: &State) -> Element<'_, Message> {
 fn playback_section(state: &State) -> Element<'_, Message> {
   let target = text_input(
     "JellyPilot",
-    &state.settings_view.playback_target_name_input,
+    &state.settings.view.playback_target_name_input,
   )
   .on_input(|value| Message::Settings(SettingsMessage::PlaybackTargetNameChanged(value)))
   .on_submit(Message::Settings(SettingsMessage::SavePlaybackTargetName))
@@ -177,7 +177,7 @@ fn playback_section(state: &State) -> Element<'_, Message> {
   let intro = popover(
     trigger,
     menu,
-    state.settings_view.intro_menu_open,
+    state.settings.view.intro_menu_open,
     PopoverOptions {
       width: Some(220.0),
       ..PopoverOptions::default()
@@ -240,7 +240,7 @@ fn subtitles_section(state: &State) -> Element<'_, Message> {
   let add = popover(
     trigger,
     menu,
-    state.settings_view.subtitle_menu_open,
+    state.settings.view.subtitle_menu_open,
     PopoverOptions {
       width: Some(220.0),
       ..PopoverOptions::default()
@@ -325,7 +325,7 @@ fn shortcut_row<'a>(state: &'a State, label: &'a str, kind: ShortcutKind) -> Ele
     ShortcutKind::Previous => state.kernel.settings.snapshot().key_previous_episode(),
     ShortcutKind::IntroSkip => state.kernel.settings.snapshot().key_intro_skip(),
   };
-  let capturing = state.settings_view.shortcut_capture == Some(kind);
+  let capturing = state.settings.view.shortcut_capture == Some(kind);
   let variant = if capturing {
     ButtonVariant::Secondary
   } else {
@@ -404,7 +404,8 @@ fn diagnostics_section(state: &State) -> Element<'_, Message> {
       text(format!(
         "Level: {}",
         state
-          .settings_view
+          .settings
+          .view
           .diagnostic_level
           .map_or("All", DiagnosticLevel::label)
       )),
@@ -430,7 +431,7 @@ fn diagnostics_section(state: &State) -> Element<'_, Message> {
   let level_filter = popover(
     level_trigger,
     level_menu,
-    state.settings_view.diagnostic_level_menu_open,
+    state.settings.view.diagnostic_level_menu_open,
     PopoverOptions {
       width: Some(180.0),
       ..PopoverOptions::default()
@@ -443,7 +444,8 @@ fn diagnostics_section(state: &State) -> Element<'_, Message> {
       text(format!(
         "Category: {}",
         state
-          .settings_view
+          .settings
+          .view
           .diagnostic_category
           .map_or("All", DiagnosticCategory::label)
       )),
@@ -472,7 +474,7 @@ fn diagnostics_section(state: &State) -> Element<'_, Message> {
   let category_filter = popover(
     category_trigger,
     category_menu,
-    state.settings_view.diagnostic_category_menu_open,
+    state.settings.view.diagnostic_category_menu_open,
     PopoverOptions {
       width: Some(210.0),
       ..PopoverOptions::default()
@@ -484,8 +486,8 @@ fn diagnostics_section(state: &State) -> Element<'_, Message> {
   let mut count = 0_usize;
   for diagnostic in state.kernel.diagnostics.rows().filter(|diagnostic| {
     diagnostic_matches(
-      state.settings_view.diagnostic_level,
-      state.settings_view.diagnostic_category,
+      state.settings.view.diagnostic_level,
+      state.settings.view.diagnostic_category,
       diagnostic.level,
       diagnostic.category,
     )

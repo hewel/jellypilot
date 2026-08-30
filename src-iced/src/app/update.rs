@@ -18,7 +18,7 @@ use jellypilot_core::browse_model::{
   BrowseEffect, BrowsePageRequest, BrowsePageSettlement, BrowsePreferences, BrowseSource,
   LibraryBrowseView,
 };
-use jellypilot_core::config::{BrowseFilterSettings, Settings, SettingsMutationError};
+use jellypilot_core::config::{BrowseFilterSettings, IntroMode, Settings};
 use jellypilot_core::detail::{
   apply_user_data_update, load_detail_content, load_season_neighbors, season_page_request,
   DetailContent,
@@ -62,6 +62,7 @@ use super::message::{
   PlaybackMessage, RemoteMessage, RemoteSessionStart, RemoteStartError, SettingsMessage,
   WindowMessage,
 };
+use super::settings;
 use super::state::{
   ArtworkCell, ArtworkCellState, BrowseArtwork, BrowseViewport, Destination, DetailArtwork,
   DetailState, HomeArtwork, HomeSection, HomeState, NoticeLevel, RemoteEventChannel,
@@ -70,14 +71,29 @@ use super::state::{
 use super::view::browse::{grid_available_width, CARD_COPY_HEIGHT};
 use super::view::home::{content_width, section_frame_size};
 
-const SETTINGS_SAVE_ERROR: &str = "Could not save settings.";
-const INVALID_LOGIN_PREFILL_ERROR: &str = "Server and username are required.";
-const INVALID_PROVIDER_ERROR: &str = "The selected provider is invalid.";
-const INVALID_SUBTITLE_LANGUAGE_ERROR: &str = "Choose a valid subtitle language.";
-const DUPLICATE_SUBTITLE_LANGUAGE_ERROR: &str = "That subtitle language is already in the list.";
-const EMPTY_SHORTCUT_ERROR: &str = "Press a non-modifier key for this shortcut.";
-const SHORTCUT_COLLISION_ERROR: &str = "That shortcut is already assigned.";
-const PLAYBACK_CONFIG_APPLY_ERROR: &str = "Settings were saved, but MPV could not be reconfigured.";
+/// Settings fields whose mutation triggers cross-surface follow-ups (playback
+/// reconfiguration, intro-mode input, remote refinalization). The top-level
+/// router snapshots them around the settings surface update so it can hoist
+/// those follow-up writes (ADR 0029).
+struct SettingsPlaybackSnapshot {
+  mpv_path: Option<String>,
+  mpv_args: Vec<String>,
+  subtitle_languages: Vec<String>,
+  intro_mode: IntroMode,
+  playback_target_name: Option<String>,
+}
+
+impl SettingsPlaybackSnapshot {
+  fn capture(settings: &Settings) -> Self {
+    Self {
+      mpv_path: settings.mpv_path().map(str::to_owned),
+      mpv_args: settings.mpv_args().to_vec(),
+      subtitle_languages: settings.subtitle_languages().to_vec(),
+      intro_mode: settings.intro_mode(),
+      playback_target_name: settings.playback_target_name().map(str::to_owned),
+    }
+  }
+}
 
 pub fn update(state: &mut State, message: Message) -> Task<Message> {
   match message {
@@ -175,7 +191,47 @@ pub fn update(state: &mut State, message: Message) -> Task<Message> {
     }
     Message::OpenDetail(item) => open_detail(state, item),
     Message::Detail(message) => update_detail(state, message),
-    Message::Settings(message) => update_settings(state, message),
+    Message::Settings(message) => {
+      // Cross-surface writes hoisted out of the settings surface (ADR 0029):
+      // mutations that change playback-relevant settings reconfigure playback,
+      // re-feed the intro mode, or refinalize the remote target here, and
+      // Disconnect/SignOut tear the remote session down or start the login
+      // surface's profile forget.
+      let settings_before = SettingsPlaybackSnapshot::capture(state.kernel.settings.snapshot());
+      let disconnect = matches!(message, SettingsMessage::Disconnect);
+      let sign_out = matches!(message, SettingsMessage::SignOut);
+      let settings_task = settings::update(&mut state.settings, &mut state.kernel, message);
+      let settings_after = SettingsPlaybackSnapshot::capture(state.kernel.settings.snapshot());
+      let mut tasks = vec![settings_task];
+      if settings_after.mpv_path != settings_before.mpv_path
+        || settings_after.mpv_args != settings_before.mpv_args
+        || settings_after.subtitle_languages != settings_before.subtitle_languages
+      {
+        tasks.push(apply_playback_configuration(state));
+      }
+      if settings_after.intro_mode != settings_before.intro_mode {
+        let mode = state.intro_availability().mode;
+        tasks.push(apply_playback_input(
+          state,
+          PlaybackInput::Intent(PlaybackIntent::SetIntroMode(mode)),
+        ));
+      }
+      if settings_after.playback_target_name != settings_before.playback_target_name {
+        tasks.push(refinalize_playback_target(state));
+      }
+      if disconnect {
+        tasks.push(stop_remote_session_for_login(state).map(Message::Login));
+      } else if sign_out {
+        let sign_out_task = match state.kernel.active_profile.clone() {
+          Some(key) => login::start_forget(&mut state.login, &mut state.kernel, key)
+            .map(|task| task.map(Message::Login))
+            .unwrap_or_else(Task::none),
+          None => stop_remote_session_for_login(state).map(Message::Login),
+        };
+        tasks.push(sign_out_task);
+      }
+      Task::batch(tasks)
+    }
     Message::Playback(message) => {
       let previous_notice = state.playback_notice.clone();
       let task = update_playback(state, message);
@@ -328,240 +384,6 @@ fn update_window(state: &mut State, message: WindowMessage) -> Task<Message> {
 /// `tokens.durations.ms1600` in jellypilot-ui.
 fn skeleton_phase_at(elapsed: Duration) -> f32 {
   (elapsed.as_secs_f32() / Duration::from_millis(1600).as_secs_f32()).fract()
-}
-fn update_settings(state: &mut State, message: SettingsMessage) -> Task<Message> {
-  match message {
-    SettingsMessage::MpvPathChanged(value) => {
-      state.settings_view.mpv_path_input = value;
-      clear_settings_feedback(state);
-      Task::none()
-    }
-    SettingsMessage::SaveMpvPath => {
-      let value = state.settings_view.mpv_path_input.clone();
-      let result = state.kernel.settings.set_mpv_path(value);
-      if finish_settings_mutation(state, result) {
-        apply_playback_configuration(state)
-      } else {
-        Task::none()
-      }
-    }
-    SettingsMessage::MpvArgsChanged(value) => {
-      state.settings_view.mpv_args_input = value;
-      clear_settings_feedback(state);
-      Task::none()
-    }
-    SettingsMessage::SaveMpvArgs => {
-      let value = state.settings_view.mpv_args_input.clone();
-      let result = state.kernel.settings.set_mpv_args(&value);
-      if finish_settings_mutation(state, result) {
-        state.settings_view.mpv_args_input = state.kernel.settings.snapshot().mpv_args().join(" ");
-        apply_playback_configuration(state)
-      } else {
-        Task::none()
-      }
-    }
-    SettingsMessage::PlaybackTargetNameChanged(value) => {
-      state.settings_view.playback_target_name_input = value;
-      clear_settings_feedback(state);
-      Task::none()
-    }
-    SettingsMessage::SavePlaybackTargetName => {
-      let value = state.settings_view.playback_target_name_input.clone();
-      let result = state.kernel.settings.set_playback_target_name(value);
-      if finish_settings_mutation(state, result) {
-        refinalize_playback_target(state)
-      } else {
-        Task::none()
-      }
-    }
-    SettingsMessage::IntroMenuToggled => {
-      state.settings_view.intro_menu_open = !state.settings_view.intro_menu_open;
-      Task::none()
-    }
-    SettingsMessage::IntroMenuDismissed => {
-      state.settings_view.intro_menu_open = false;
-      Task::none()
-    }
-    SettingsMessage::IntroModeSelected(mode) => {
-      state.settings_view.intro_menu_open = false;
-      let result = state.kernel.settings.set_intro_mode(mode);
-      if finish_settings_mutation(state, result) {
-        let mode = state.intro_availability().mode;
-        apply_playback_input(
-          state,
-          PlaybackInput::Intent(PlaybackIntent::SetIntroMode(mode)),
-        )
-      } else {
-        Task::none()
-      }
-    }
-    SettingsMessage::SubtitleMenuToggled => {
-      state.settings_view.subtitle_menu_open = !state.settings_view.subtitle_menu_open;
-      Task::none()
-    }
-    SettingsMessage::SubtitleMenuDismissed => {
-      state.settings_view.subtitle_menu_open = false;
-      Task::none()
-    }
-    SettingsMessage::SubtitleLanguageAdded(language) => {
-      state.settings_view.subtitle_menu_open = false;
-      let result = state.kernel.settings.add_subtitle_language(language);
-      if finish_settings_mutation(state, result) {
-        apply_playback_configuration(state)
-      } else {
-        Task::none()
-      }
-    }
-    SettingsMessage::SubtitleLanguageMoved { index, offset } => {
-      let result = state.kernel.settings.move_subtitle_language(index, offset);
-      if finish_settings_mutation(state, result) {
-        apply_playback_configuration(state)
-      } else {
-        Task::none()
-      }
-    }
-    SettingsMessage::SubtitleLanguageRemoved(index) => {
-      let result = state.kernel.settings.remove_subtitle_language(index);
-      if finish_settings_mutation(state, result) {
-        apply_playback_configuration(state)
-      } else {
-        Task::none()
-      }
-    }
-    SettingsMessage::BeginShortcutCapture(kind) => {
-      state.settings_view.shortcut_capture = Some(kind);
-      clear_settings_feedback(state);
-      Task::none()
-    }
-    SettingsMessage::ShortcutCaptured(binding) => {
-      let Some(kind) = state.settings_view.shortcut_capture.take() else {
-        return Task::none();
-      };
-      let result = state.kernel.settings.set_shortcut(kind, binding);
-      finish_settings_mutation(state, result);
-      Task::none()
-    }
-    SettingsMessage::CancelShortcutCapture => {
-      state.settings_view.shortcut_capture = None;
-      Task::none()
-    }
-    SettingsMessage::ImageCacheToggled => {
-      let enabled = !state.kernel.settings.snapshot().image_cache_enabled();
-      let result = state.kernel.settings.set_image_cache_enabled(enabled);
-      if finish_settings_mutation(state, result) {
-        state.kernel.artwork_adapter.set_disk_cache_enabled(enabled);
-      }
-      Task::none()
-    }
-    SettingsMessage::StartMinimizedToggled => {
-      let enabled = !state.kernel.settings.snapshot().start_minimized();
-      let result = state.kernel.settings.set_start_minimized(enabled);
-      finish_settings_mutation(state, result);
-      Task::none()
-    }
-    SettingsMessage::ReducedMotionToggled => {
-      let enabled = !state.kernel.settings.snapshot().reduced_motion();
-      let result = state.kernel.settings.set_reduced_motion(enabled);
-      finish_settings_mutation(state, result);
-      Task::none()
-    }
-    SettingsMessage::DiagnosticLevelMenuToggled => {
-      state.settings_view.diagnostic_level_menu_open =
-        !state.settings_view.diagnostic_level_menu_open;
-      Task::none()
-    }
-    SettingsMessage::DiagnosticLevelMenuDismissed => {
-      state.settings_view.diagnostic_level_menu_open = false;
-      Task::none()
-    }
-    SettingsMessage::DiagnosticLevelSelected(level) => {
-      state.settings_view.diagnostic_level = level;
-      state.settings_view.diagnostic_level_menu_open = false;
-      Task::none()
-    }
-    SettingsMessage::DiagnosticCategoryMenuToggled => {
-      state.settings_view.diagnostic_category_menu_open =
-        !state.settings_view.diagnostic_category_menu_open;
-      Task::none()
-    }
-    SettingsMessage::DiagnosticCategoryMenuDismissed => {
-      state.settings_view.diagnostic_category_menu_open = false;
-      Task::none()
-    }
-    SettingsMessage::DiagnosticCategorySelected(category) => {
-      state.settings_view.diagnostic_category = category;
-      state.settings_view.diagnostic_category_menu_open = false;
-      Task::none()
-    }
-    SettingsMessage::Disconnect => stop_remote_session_for_login(state).map(Message::Login),
-    SettingsMessage::SignOut => {
-      if let Some(key) = state.kernel.active_profile.clone() {
-        login::start_forget(&mut state.login, &mut state.kernel, key)
-          .map(|task| task.map(Message::Login))
-          .unwrap_or_else(Task::none)
-      } else {
-        stop_remote_session_for_login(state).map(Message::Login)
-      }
-    }
-    SettingsMessage::PlaybackConfigApplied(result) => {
-      if result.is_err() {
-        state.settings_view.error = Some(PLAYBACK_CONFIG_APPLY_ERROR);
-        state.kernel.diagnostics.record(
-          DiagnosticLevel::Error,
-          DiagnosticCategory::Config,
-          PLAYBACK_CONFIG_APPLY_ERROR,
-        );
-      }
-      Task::none()
-    }
-  }
-}
-
-fn clear_settings_feedback(state: &mut State) {
-  state.settings_view.error = None;
-  state.settings_view.saved = None;
-}
-
-fn finish_settings_mutation(
-  state: &mut State,
-  result: Result<bool, SettingsMutationError>,
-) -> bool {
-  match result {
-    Ok(changed) => {
-      state.settings_view.error = None;
-      state.settings_view.saved = Some("Saved");
-      if changed {
-        state.kernel.diagnostics.record(
-          DiagnosticLevel::Info,
-          DiagnosticCategory::Config,
-          "Settings updated.",
-        );
-      }
-      changed
-    }
-    Err(error) => {
-      state.settings_view.saved = None;
-      state.settings_view.error = Some(settings_mutation_error(&error));
-      state.kernel.diagnostics.record(
-        DiagnosticLevel::Error,
-        DiagnosticCategory::Config,
-        error.to_string(),
-      );
-      false
-    }
-  }
-}
-
-fn settings_mutation_error(error: &SettingsMutationError) -> &'static str {
-  match error {
-    SettingsMutationError::Config(_) => SETTINGS_SAVE_ERROR,
-    SettingsMutationError::InvalidLoginPrefill => INVALID_LOGIN_PREFILL_ERROR,
-    SettingsMutationError::InvalidProvider => INVALID_PROVIDER_ERROR,
-    SettingsMutationError::InvalidSubtitleLanguage => INVALID_SUBTITLE_LANGUAGE_ERROR,
-    SettingsMutationError::DuplicateSubtitleLanguage => DUPLICATE_SUBTITLE_LANGUAGE_ERROR,
-    SettingsMutationError::EmptyShortcut => EMPTY_SHORTCUT_ERROR,
-    SettingsMutationError::ShortcutCollision => SHORTCUT_COLLISION_ERROR,
-  }
 }
 
 fn apply_playback_configuration(state: &mut State) -> Task<Message> {
@@ -2170,7 +1992,7 @@ fn navigate_back(state: &mut State) -> Task<Message> {
 
 fn activate_destination(state: &mut State, previous: Destination) -> Task<Message> {
   if previous == Destination::Settings && state.destination != Destination::Settings {
-    state.settings_view.shortcut_capture = None;
+    state.settings.view.shortcut_capture = None;
   }
   if previous == Destination::Home && state.destination != Destination::Home {
     leave_home_view(state);
@@ -3403,7 +3225,9 @@ mod tests {
         flow: LoginState::from_settings(settings.snapshot()),
         quick_connect_task: None,
       },
-      settings_view,
+      settings: crate::app::settings::Surface {
+        view: settings_view,
+      },
       kernel: Kernel {
         settings,
         diagnostics: jellypilot_core::diagnostics::Diagnostics::default(),
@@ -4986,12 +4810,14 @@ mod tests {
     let (settings, _file) = isolated_settings("live-intro-mode");
     let mut state = active_intro_prompt_state();
     state.kernel.settings = settings;
-    state.settings_view =
+    state.settings.view =
       crate::app::state::SettingsState::from_settings(state.kernel.settings.snapshot());
 
-    drop(update_settings(
+    drop(update(
       &mut state,
-      SettingsMessage::IntroModeSelected(jellypilot_core::config::IntroMode::Off),
+      Message::Settings(SettingsMessage::IntroModeSelected(
+        jellypilot_core::config::IntroMode::Off,
+      )),
     ));
 
     assert_eq!(
@@ -5081,7 +4907,7 @@ mod tests {
     let _ = fs::remove_file(&path);
     let mut state = test_state();
     state.kernel.settings = SettingsStore::for_test(path.clone());
-    state.settings_view =
+    state.settings.view =
       crate::app::state::SettingsState::from_settings(state.kernel.settings.snapshot());
     state.kernel.connection = ConnectionPhase::Connected;
     state.kernel.client = Some(Arc::new(JellyfinClient::new()));
@@ -5089,10 +4915,13 @@ mod tests {
       websocket: Arc::new(JellyfinWebSocket::new()),
       lifecycle: Arc::new(tokio::sync::Mutex::new(())),
     });
-    state.settings_view.playback_target_name_input = "Bedroom".to_owned();
+    state.settings.view.playback_target_name_input = "Bedroom".to_owned();
     state.remote_control_state = RemoteControlState::Available;
 
-    let task = update_settings(&mut state, SettingsMessage::SavePlaybackTargetName);
+    let task = update(
+      &mut state,
+      Message::Settings(SettingsMessage::SavePlaybackTargetName),
+    );
 
     assert_eq!(
       state.kernel.settings.snapshot().playback_target_name(),
@@ -5110,7 +4939,7 @@ mod tests {
     let (settings, _file) = isolated_settings("connecting-target-name");
     let mut state = test_state();
     state.kernel.settings = settings;
-    state.settings_view =
+    state.settings.view =
       crate::app::state::SettingsState::from_settings(state.kernel.settings.snapshot());
     state.kernel.connection = ConnectionPhase::Connected;
     state.kernel.client = Some(Arc::new(JellyfinClient::new()));
@@ -5119,9 +4948,12 @@ mod tests {
       lifecycle: Arc::new(tokio::sync::Mutex::new(())),
     });
     state.remote_control_state = RemoteControlState::Connecting;
-    state.settings_view.playback_target_name_input = "Bedroom".to_owned();
+    state.settings.view.playback_target_name_input = "Bedroom".to_owned();
 
-    let task = update_settings(&mut state, SettingsMessage::SavePlaybackTargetName);
+    let task = update(
+      &mut state,
+      Message::Settings(SettingsMessage::SavePlaybackTargetName),
+    );
 
     assert_eq!(task.units(), 0);
     assert!(!state.kernel.diagnostics.rows().any(|event| {
@@ -5134,15 +4966,15 @@ mod tests {
     let (settings, _file) = isolated_settings("discover-mpv-path");
     let mut state = test_state();
     state.kernel.settings = settings;
-    state.settings_view =
+    state.settings.view =
       crate::app::state::SettingsState::from_settings(state.kernel.settings.snapshot());
     state.kernel.client = Some(Arc::new(JellyfinClient::new()));
-    state.settings_view.mpv_path_input = std::env::current_exe()
+    state.settings.view.mpv_path_input = std::env::current_exe()
       .expect("test executable path should resolve")
       .to_string_lossy()
       .into_owned();
 
-    let task = update_settings(&mut state, SettingsMessage::SaveMpvPath);
+    let task = update(&mut state, Message::Settings(SettingsMessage::SaveMpvPath));
 
     assert_eq!(task.units(), 0);
     assert!(state.playback_controller.is_some());
@@ -5154,18 +4986,18 @@ mod tests {
   fn escape_and_leaving_settings_both_clear_shortcut_capture() {
     let mut state = test_state();
     state.destination = Destination::Settings;
-    state.settings_view.shortcut_capture = Some(jellypilot_core::config::ShortcutKind::Next);
+    state.settings.view.shortcut_capture = Some(jellypilot_core::config::ShortcutKind::Next);
 
-    drop(update_settings(
+    drop(update(
       &mut state,
-      SettingsMessage::CancelShortcutCapture,
+      Message::Settings(SettingsMessage::CancelShortcutCapture),
     ));
-    assert!(state.settings_view.shortcut_capture.is_none());
+    assert!(state.settings.view.shortcut_capture.is_none());
 
-    state.settings_view.shortcut_capture = Some(jellypilot_core::config::ShortcutKind::Previous);
+    state.settings.view.shortcut_capture = Some(jellypilot_core::config::ShortcutKind::Previous);
     drop(navigate(&mut state, Destination::Home));
     assert_eq!(state.destination, Destination::Home);
-    assert!(state.settings_view.shortcut_capture.is_none());
+    assert!(state.settings.view.shortcut_capture.is_none());
   }
 
   #[test]
@@ -5175,9 +5007,9 @@ mod tests {
     disconnect.kernel.connection = ConnectionPhase::Connected;
     disconnect.kernel.active_profile = Some(key.clone());
 
-    drop(update_settings(
+    drop(update(
       &mut disconnect,
-      SettingsMessage::Disconnect,
+      Message::Settings(SettingsMessage::Disconnect),
     ));
 
     assert!(disconnect.login.flow.busy_profile.is_none());
@@ -5185,33 +5017,12 @@ mod tests {
     let mut sign_out = test_state();
     sign_out.kernel.connection = ConnectionPhase::Connected;
     sign_out.kernel.active_profile = Some(key.clone());
-    drop(update_settings(&mut sign_out, SettingsMessage::SignOut));
+    drop(update(
+      &mut sign_out,
+      Message::Settings(SettingsMessage::SignOut),
+    ));
 
     assert_eq!(sign_out.login.flow.busy_profile.as_ref(), Some(&key));
-  }
-
-  #[test]
-  fn settings_mutation_errors_use_fixed_inline_copy() {
-    let path = std::env::temp_dir().join(format!(
-      "jellypilot-iced-settings-error-{}.json",
-      std::process::id()
-    ));
-    let _ = fs::remove_file(&path);
-    let mut state = test_state();
-    state.kernel.settings = SettingsStore::for_test(path);
-    state.settings_view =
-      crate::app::state::SettingsState::from_settings(state.kernel.settings.snapshot());
-    state.settings_view.shortcut_capture = Some(jellypilot_core::config::ShortcutKind::Next);
-
-    drop(update_settings(
-      &mut state,
-      SettingsMessage::ShortcutCaptured("Shift+<".to_owned()),
-    ));
-
-    assert_eq!(
-      state.settings_view.error,
-      Some("That shortcut is already assigned.")
-    );
   }
 
   #[test]
