@@ -9,9 +9,29 @@ use iced::{window, Size};
 
 /// Default logical window size at startup.
 const DEFAULT_WINDOW_SIZE: Size = Size::new(1600.0, 900.0);
-
 /// Minimum allowable logical window size.
 const MIN_WINDOW_SIZE: Size = Size::new(1024.0, 640.0);
+
+/// Bundled 256×256 application icon shown in the window decorations and taskbar.
+const WINDOW_ICON_PNG: &[u8] = include_bytes!("../../assets/icons/128x128@2x.png");
+
+/// Bundled 128×128 application icon shown in the system tray.
+pub(crate) const TRAY_ICON_PNG: &[u8] = include_bytes!("../../assets/icons/128x128.png");
+
+/// Decodes a bundled PNG into RGBA pixels for window and tray icons.
+pub(crate) fn decode_icon(png: &[u8]) -> Option<(Vec<u8>, u32, u32)> {
+  let image = image::load_from_memory_with_format(png, image::ImageFormat::Png)
+    .ok()?
+    .to_rgba8();
+  let (width, height) = image.dimensions();
+  Some((image.into_raw(), width, height))
+}
+
+/// Builds the window icon from the bundled asset; absent only if decoding fails.
+fn window_icon() -> Option<window::Icon> {
+  let (rgba, width, height) = decode_icon(WINDOW_ICON_PNG)?;
+  window::icon::from_rgba(rgba, width, height).ok()
+}
 
 /// Starts the cross-platform iced application and blocks until its window closes.
 pub fn run() -> iced::Result {
@@ -77,6 +97,7 @@ fn run_application(smoke: bool) -> iced::Result {
   .window(window::Settings {
     size: window_size,
     min_size: Some(MIN_WINDOW_SIZE),
+    icon: window_icon(),
     visible: !start_hidden,
     resizable: true,
     ..window::Settings::default()
@@ -107,6 +128,7 @@ mod tests {
   }
 
   use super::parse_smoke_size;
+  use super::{decode_icon, TRAY_ICON_PNG, WINDOW_ICON_PNG};
   use iced::Size;
 
   #[test]
@@ -144,6 +166,14 @@ mod tests {
     assert_eq!(parse_smoke_size("1024 640"), None);
     assert_eq!(parse_smoke_size("1024,640"), None);
     assert_eq!(parse_smoke_size("1024:640"), None);
+  }
+
+  #[test]
+  fn bundled_icons_decode_to_rgba() {
+    let (rgba, width, height) = decode_icon(WINDOW_ICON_PNG).expect("window icon decodes");
+    assert_eq!(rgba.len(), (width * height * 4) as usize);
+    let (rgba, width, height) = decode_icon(TRAY_ICON_PNG).expect("tray icon decodes");
+    assert_eq!(rgba.len(), (width * height * 4) as usize);
   }
 
   #[test]

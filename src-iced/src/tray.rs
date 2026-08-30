@@ -280,32 +280,9 @@ pub(crate) fn tray_menu_state(view: &SessionView, quitting: bool) -> TrayMenuSta
 }
 
 fn tray_icon_image() -> Result<Icon, String> {
-  const SIZE: usize = 32;
-  let mut rgba = vec![0_u8; SIZE * SIZE * 4];
-  for pixel in rgba.chunks_exact_mut(4) {
-    pixel.copy_from_slice(&[24, 35, 43, 255]);
-  }
-  for y in 7..25 {
-    for x in 19..24 {
-      set_pixel(&mut rgba, x, y, [89, 214, 196, 255]);
-    }
-  }
-  for y in 20..25 {
-    for x in 9..24 {
-      set_pixel(&mut rgba, x, y, [89, 214, 196, 255]);
-    }
-  }
-  for y in 16..25 {
-    for x in 8..13 {
-      set_pixel(&mut rgba, x, y, [89, 214, 196, 255]);
-    }
-  }
-  Icon::from_rgba(rgba, SIZE as u32, SIZE as u32).map_err(|error| error.to_string())
-}
-
-fn set_pixel(rgba: &mut [u8], x: usize, y: usize, color: [u8; 4]) {
-  let offset = (y * 32 + x) * 4;
-  rgba[offset..offset + 4].copy_from_slice(&color);
+  let (rgba, width, height) = crate::decode_icon(crate::TRAY_ICON_PNG)
+    .ok_or_else(|| "bundled tray icon failed to decode".to_owned())?;
+  Icon::from_rgba(rgba, width, height).map_err(|error| error.to_string())
 }
 
 #[cfg(test)]

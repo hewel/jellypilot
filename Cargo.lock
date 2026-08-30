@@ -2735,6 +2735,7 @@ version = "1.5.0"
 dependencies = [
  "gtk",
  "iced",
+ "image",
  "jellypilot-auth",
  "jellypilot-core",
  "jellypilot-media-server",
