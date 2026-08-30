@@ -1,27 +1,19 @@
-use std::collections::{hash_map::DefaultHasher, HashSet};
+use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
-use std::ops::Range;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use iced::widget::{image, operation};
+use iced::widget::image;
 use iced::Task;
 use jellypilot_auth::login::{should_disconnect_after_forget, ConnectionPhase};
 use jellypilot_core::artwork_binder::{ArtworkSettlement, ArtworkSurface};
-use jellypilot_core::artwork_loader::{grid_cell_visible, PlannedArtworkLoad};
-use jellypilot_core::browse::fetch_browse_page;
-use jellypilot_core::browse_model::{
-  BrowseEffect, BrowsePageRequest, BrowsePageSettlement, BrowsePreferences, BrowseSource,
-  LibraryBrowseView,
-};
-use jellypilot_core::config::{BrowseFilterSettings, IntroMode, Settings};
+use jellypilot_core::browse_model::BrowseSource;
+use jellypilot_core::config::{IntroMode, Settings};
 use jellypilot_core::diagnostics::{DiagnosticCategory, DiagnosticLevel};
 use jellypilot_core::request_gate::RemotePlayToken;
-use jellypilot_media_server::artwork::{
-  ArtworkLoadObservation, ArtworkLoadSummary, ArtworkSizeClass, LoadLane,
-};
-use jellypilot_media_server::{VideoLibraryItem, VideoLibrarySortDirection};
+use jellypilot_media_server::artwork::{ArtworkSizeClass, LoadLane};
+use jellypilot_media_server::VideoLibraryItem;
 use jellypilot_mpv::configured_mpv_args;
 use jellypilot_mpv::playback::{
   media_item_from_playable, Playable, PlaybackController, PlaybackControllerConfig,
@@ -36,26 +28,22 @@ use jellypilot_session::{
   finalize_remote_target, remote_index_value, remote_volume_value, GeneralCommand, JellyfinCommand,
   JellyfinWebSocket, JellyfinWebSocketEvent, PlayRequest, PlaystateRequest, RemoteControlState,
 };
-use jellypilot_ui::layout::SizeClass;
-use jellypilot_ui::widgets::artwork_grid::{ArtworkGridMetrics, ArtworkGridViewport};
 
 use crate::tray::TrayAction;
 
-use super::artwork::stream_artwork_loads;
+use super::browse;
 use super::detail;
 use super::home;
 use super::login;
 use super::message::{
-  ArtworkLoadCompletion, BrowseMessage, DetailMessage, HomeMessage, LoginMessage, Message,
-  PlaybackMessage, RemoteMessage, RemoteSessionStart, RemoteStartError, SettingsMessage,
-  WindowMessage,
+  BrowseMessage, DetailMessage, HomeMessage, LoginMessage, Message, PlaybackMessage, RemoteMessage,
+  RemoteSessionStart, RemoteStartError, SettingsMessage, WindowMessage,
 };
 use super::settings;
 use super::state::{
-  ArtworkCell, ArtworkCellState, BrowseArtwork, BrowseViewport, Destination, NoticeLevel,
-  RemoteEventChannel, RemoteSessionHandle, State,
+  ArtworkCell, ArtworkCellState, Destination, NoticeLevel, RemoteEventChannel, RemoteSessionHandle,
+  State,
 };
-use super::view::browse::{grid_available_width, CARD_COPY_HEIGHT};
 
 /// Settings fields whose mutation triggers cross-surface follow-ups (playback
 /// reconfiguration, intro-mode input, remote refinalization). The top-level
@@ -182,9 +170,48 @@ pub fn update(state: &mut State, message: Message) -> Task<Message> {
       }
       task
     }
+    Message::Browse(BrowseMessage::SearchSubmitted) => {
+      // Navigation stays at the top-level router (ADR 0029): the browse
+      // surface owns the input text, but submitting it writes the shared
+      // destination stack and drives the other surfaces' leave/enter hooks.
+      let query = state.browse.search_input.trim().to_owned();
+      if query.is_empty() {
+        Task::none()
+      } else {
+        navigate(state, Destination::Search(query))
+      }
+    }
     Message::Browse(message) => {
+      // Cross-surface follow-ups hoisted out of the browse surface (ADR
+      // 0029): the router resolves the browse source, library-route,
+      // playback-idle, and window-size reads the surface may not perform,
+      // and a page-settlement or scroll-window sync re-prepares the artwork
+      // pipeline, after which handles are retained here because retention
+      // reads every surface's slot set.
       let previous_notice = state.kernel.notice.clone();
-      let task = update_browse(state, message);
+      let reprepared_artwork = matches!(
+        message,
+        BrowseMessage::PageSettled(_) | BrowseMessage::Scrolled(_)
+      );
+      let source = match &message {
+        BrowseMessage::SortChanged(_)
+        | BrowseMessage::SortDirectionToggled
+        | BrowseMessage::PlayedFilterChanged(_)
+        | BrowseMessage::FavoritesToggled => browse_source(state),
+        _ => None,
+      };
+      let task = browse::update(
+        &mut state.browse,
+        &mut state.kernel,
+        source,
+        matches!(state.destination, Destination::Library { .. }),
+        state.playback_view.now_playing.is_none(),
+        state.window_size,
+        message,
+      );
+      if reprepared_artwork {
+        state.retain_artwork_handles();
+      }
       if let Some(notice) = state
         .kernel
         .notice
@@ -393,7 +420,11 @@ fn update_window(state: &mut State, message: WindowMessage) -> Task<Message> {
     }),
     WindowMessage::Resized(size) => {
       state.window_size = size;
-      sync_browse_scroll_window(state)
+      let task = browse::sync_scroll_window(&mut state.browse, &mut state.kernel, size);
+      // The sync may have re-prepared the artwork pipeline; retention reads
+      // every surface's slot set, so it is hoisted to the router (ADR 0029).
+      state.retain_artwork_handles();
+      task
     }
     WindowMessage::FrameTick(now) => {
       // Smoke runs only need proof that the first frame rendered.
@@ -1686,7 +1717,11 @@ fn activate_destination(state: &mut State, previous: Destination) -> Task<Messag
     state.destination,
     Destination::Library { .. } | Destination::Search(_)
   ) {
-    leave_browse_view(state);
+    browse::leave_view(
+      &mut state.browse,
+      &mut state.kernel,
+      state.playback_view.now_playing.is_none(),
+    );
   } else if matches!(previous, Destination::Detail(_)) && previous != state.destination {
     detail::leave_view(
       &mut state.detail,
@@ -1702,188 +1737,29 @@ fn activate_destination(state: &mut State, previous: Destination) -> Task<Messag
       state.playback_view.now_playing.is_none(),
     ),
     Destination::Library { .. } => {
-      state.search_input.clear();
-      start_browse(state)
+      state.browse.search_input.clear();
+      let source = browse_source(state);
+      browse::start(
+        &mut state.browse,
+        &mut state.kernel,
+        source,
+        state.playback_view.now_playing.is_none(),
+      )
     }
-    Destination::Search(_) => start_browse(state),
+    Destination::Search(_) => {
+      let source = browse_source(state);
+      browse::start(
+        &mut state.browse,
+        &mut state.kernel,
+        source,
+        state.playback_view.now_playing.is_none(),
+      )
+    }
     Destination::Detail(item_id) => {
       detail::start_load(&mut state.detail, &mut state.kernel, Some(item_id))
     }
     Destination::Settings => Task::none(),
   }
-}
-
-fn update_browse(state: &mut State, message: BrowseMessage) -> Task<Message> {
-  match message {
-    BrowseMessage::SearchInputChanged(value) => {
-      state.search_input = value;
-      Task::none()
-    }
-    BrowseMessage::SearchSubmitted => {
-      let query = state.search_input.trim();
-      if query.is_empty() {
-        return Task::none();
-      }
-      navigate(state, Destination::Search(query.to_owned()))
-    }
-    BrowseMessage::SortMenuToggled => {
-      state.browse_sort_menu_open = !state.browse_sort_menu_open;
-      Task::none()
-    }
-    BrowseMessage::SortMenuDismissed => {
-      state.browse_sort_menu_open = false;
-      Task::none()
-    }
-    BrowseMessage::SortChanged(sort) => {
-      state.browse_sort_menu_open = false;
-      persist_browse_filters(state, |filters| filters.with_sort(sort))
-    }
-    BrowseMessage::SortDirectionToggled => persist_browse_filters(state, |filters| {
-      let direction = match filters.sort_direction() {
-        VideoLibrarySortDirection::Ascending => VideoLibrarySortDirection::Descending,
-        VideoLibrarySortDirection::Descending => VideoLibrarySortDirection::Ascending,
-      };
-      filters.with_sort_direction(direction)
-    }),
-    BrowseMessage::PlayedFilterChanged(played_filter) => {
-      persist_browse_filters(state, |filters| filters.with_played_filter(played_filter))
-    }
-    BrowseMessage::FavoritesToggled => persist_browse_filters(state, |filters| {
-      filters.with_favorites_only(!filters.favorites_only())
-    }),
-    BrowseMessage::Scrolled(viewport) => {
-      let bounds = viewport.bounds();
-      let offset = viewport.absolute_offset();
-      state.browse_viewport = BrowseViewport {
-        offset_y: offset.y,
-        height: bounds.height,
-      };
-      sync_browse_scroll_window(state)
-    }
-    BrowseMessage::Retry => {
-      let effects = match state.browse.retry() {
-        Ok(effects) => effects,
-        Err(error) => {
-          state.kernel.notice = Some(format!("Could not retry library browsing: {error}"));
-          return Task::none();
-        }
-      };
-      sync_browse_view(state);
-      apply_browse_effects(state, effects)
-    }
-    BrowseMessage::PageSettled(settlement) => {
-      if state.browse.is_current_settlement(&settlement) {
-        state.browse_page_tasks.remove(&settlement.token);
-      }
-      let effects = match state.browse.settle(settlement) {
-        Ok(effects) => effects,
-        Err(error) => {
-          state.kernel.notice = Some(format!("Could not apply library results: {error}"));
-          return Task::none();
-        }
-      };
-      sync_browse_view(state);
-      Task::batch([
-        apply_browse_effects(state, effects),
-        sync_browse_scroll_window(state),
-        prepare_browse_artwork(state),
-      ])
-    }
-    BrowseMessage::ArtworkLoaded {
-      session,
-      slot,
-      image_id,
-      result,
-    } => {
-      let session_ok = state.kernel.request_gate.is_current_session(session);
-      apply_browse_artwork_completion(
-        state,
-        session_ok,
-        ArtworkLoadCompletion {
-          slot,
-          image_id,
-          result,
-        },
-      );
-      Task::none()
-    }
-  }
-}
-
-fn apply_browse_artwork_completion(
-  state: &mut State,
-  session_ok: bool,
-  completion: ArtworkLoadCompletion,
-) {
-  if state
-    .kernel
-    .artwork_binder
-    .settle(completion.slot, ArtworkSurface::Browse, session_ok)
-    != ArtworkSettlement::Apply
-  {
-    return;
-  }
-  let Some(cell) = state
-    .browse_artwork
-    .cell_mut(completion.slot, &completion.image_id)
-  else {
-    return;
-  };
-  match completion.result {
-    Ok(raster) => {
-      cell.state = ArtworkCellState::Ready;
-      state.kernel.artwork_handles.insert(
-        completion.slot,
-        completion.image_id,
-        image::Handle::from_rgba(raster.width(), raster.height(), raster.into_pixels()),
-      );
-    }
-    Err(jellypilot_media_server::artwork::ArtworkError::Cancelled) => {}
-    Err(_) => cell.state = ArtworkCellState::Failed,
-  }
-}
-
-fn persist_browse_filters(
-  state: &mut State,
-  mutation: impl FnOnce(BrowseFilterSettings) -> BrowseFilterSettings,
-) -> Task<Message> {
-  if !matches!(state.destination, Destination::Library { .. }) {
-    return Task::none();
-  }
-  let filters = mutation(state.kernel.settings.snapshot().browse_filters());
-  if let Err(error) = state.kernel.settings.set_browse_filters(filters) {
-    state.kernel.notice = Some(format!("Could not save library filters: {error}"));
-    return Task::none();
-  }
-  start_browse(state)
-}
-
-fn start_browse(state: &mut State) -> Task<Message> {
-  let Some(source) = browse_source(state) else {
-    abort_browse_pages(state);
-    if let Err(error) = state.browse.reset() {
-      state.kernel.notice = Some(format!("Could not reset library browsing: {error}"));
-      return Task::none();
-    }
-    sync_browse_view(state);
-    state.kernel.notice = Some("The selected library is no longer available.".to_owned());
-    return Task::none();
-  };
-  let preferences = BrowsePreferences::from(state.kernel.settings.snapshot().browse_filters());
-  let effects = match state.browse.configure_with_preferences(source, preferences) {
-    Ok(effects) => effects,
-    Err(error) => {
-      state.kernel.notice = Some(format!("Could not open library browsing: {error}"));
-      sync_browse_view(state);
-      return Task::none();
-    }
-  };
-  if state.playback_view.now_playing.is_none() {
-    state.kernel.artwork_adapter.cancel_pending();
-  }
-  begin_browse_artwork_view(state);
-  sync_browse_view(state);
-  apply_browse_effects(state, effects)
 }
 
 fn browse_source(state: &State) -> Option<BrowseSource> {
@@ -1910,325 +1786,6 @@ fn browse_source(state: &State) -> Option<BrowseSource> {
   }
 }
 
-/// Extra grid rows included in the loading window beyond each viewport edge.
-const BROWSE_WINDOW_MARGIN_ROWS: u32 = 2;
-
-/// Maps scroll geometry to the clamped display-index window the grid covers.
-///
-/// Rows come from dividing the viewport span by the grid row height; item
-/// indexes are rows times the column count, expanded by
-/// [`BROWSE_WINDOW_MARGIN_ROWS`] on each side and clamped to `total`.
-fn visible_display_range(
-  offset_y: f32,
-  viewport_height: f32,
-  metrics: ArtworkGridMetrics,
-  total: u32,
-) -> Range<u32> {
-  if total == 0
-    || metrics.columns == 0
-    || !metrics.row_height.is_finite()
-    || metrics.row_height <= 0.0
-  {
-    return 0..0;
-  }
-  let offset_y = finite_non_negative(offset_y);
-  let viewport_height = finite_non_negative(viewport_height);
-  let columns = u32::try_from(metrics.columns).unwrap_or(u32::MAX);
-  let first_row = (offset_y / metrics.row_height).floor() as u32;
-  let end_row = ((offset_y + viewport_height) / metrics.row_height).ceil() as u32;
-  let start = first_row
-    .saturating_sub(BROWSE_WINDOW_MARGIN_ROWS)
-    .saturating_mul(columns)
-    .min(total);
-  let end = end_row
-    .saturating_add(BROWSE_WINDOW_MARGIN_ROWS)
-    .saturating_mul(columns)
-    .min(total)
-    .max(start);
-  start..end
-}
-
-const fn finite_non_negative(value: f32) -> f32 {
-  if value.is_finite() && value > 0.0 {
-    value
-  } else {
-    0.0
-  }
-}
-
-/// Recomputes the scroll-driven display window and loads newly visible pages.
-///
-/// The model no-ops an unchanged range, so callers may invoke this freely
-/// after scroll, resize, and page-settlement events.
-fn sync_browse_scroll_window(state: &mut State) -> Task<Message> {
-  let LibraryBrowseView::Ready {
-    total_record_count, ..
-  } = &state.browse_view
-  else {
-    return Task::none();
-  };
-  let total = *total_record_count;
-  let class = SizeClass::from_width(state.window_size.width);
-  let metrics = ArtworkGridMetrics::for_cards(
-    grid_available_width(state.window_size.width, class),
-    CARD_COPY_HEIGHT,
-  );
-  // iced only publishes scroll viewport geometry for overflowing content, so
-  // short libraries would never report a height; the window height is a safe
-  // upper bound that keeps the auto-fill trigger alive for them.
-  let viewport_height = state.browse_viewport.height.max(state.window_size.height);
-  let range = visible_display_range(
-    state.browse_viewport.offset_y,
-    viewport_height,
-    metrics,
-    total,
-  );
-  // Metadata-only peek: the hot scroll path must not clone the window's
-  // items via `display_range()` just to compare the range.
-  if state.browse.peek_display_range().as_ref() == Some(&range) {
-    return Task::none();
-  }
-  let effects = match state.browse.set_display_range(range, total) {
-    Ok(effects) => effects,
-    Err(error) => {
-      state.kernel.notice = Some(format!("Could not load more library items: {error}"));
-      return Task::none();
-    }
-  };
-  sync_browse_view(state);
-  Task::batch([
-    apply_browse_effects(state, effects),
-    prepare_browse_artwork(state),
-  ])
-}
-
-fn sync_browse_view(state: &mut State) {
-  state.browse_view = state.browse.view();
-}
-
-fn apply_browse_effects(state: &mut State, effects: Vec<BrowseEffect>) -> Task<Message> {
-  // Viewport resets must land before page requests: Task::batch runs in
-  // parallel, so a fast settlement could evaluate the stale near-tail offset
-  // and advance another window before scroll-to-zero is applied.
-  let mut resets = Vec::new();
-  let mut tasks = Vec::with_capacity(effects.len());
-  for effect in effects {
-    match effect {
-      BrowseEffect::ResetViewport => {
-        state.browse_viewport.offset_y = 0.0;
-        resets.push(operation::scroll_to(
-          state.browse_scroll_id.clone(),
-          operation::AbsoluteOffset { x: 0.0, y: 0.0 },
-        ));
-      }
-      BrowseEffect::RequestPage(request) => {
-        tasks.push(start_browse_page_request(state, request));
-      }
-      BrowseEffect::CancelPage { token } => {
-        if let Some(handle) = state.browse_page_tasks.remove(&token) {
-          handle.abort();
-        }
-      }
-    }
-  }
-  let tasks = Task::batch(tasks);
-  if resets.is_empty() {
-    tasks
-  } else {
-    Task::batch(resets).chain(tasks)
-  }
-}
-
-fn start_browse_page_request(state: &mut State, request: BrowsePageRequest) -> Task<Message> {
-  let token = request.token;
-  let failure_message = browse_failure_message(&request.source);
-  let Some(client) = state.kernel.client.as_ref().map(Arc::clone) else {
-    return Task::done(Message::Browse(BrowseMessage::PageSettled(
-      BrowsePageSettlement {
-        source_id: request.source_id,
-        token,
-        result: Err(failure_message.to_owned()),
-      },
-    )));
-  };
-  let (task, handle) = Task::perform(
-    async move { fixed_browse_failure(fetch_browse_page(client, request).await, failure_message) },
-    |settlement| Message::Browse(BrowseMessage::PageSettled(settlement)),
-  )
-  .abortable();
-  state.browse_page_tasks.insert(token, handle);
-  task
-}
-
-const fn browse_failure_message(source: &BrowseSource) -> &'static str {
-  match source {
-    BrowseSource::Library { .. } => "Could not load this library. Try again.",
-    BrowseSource::Search { .. } => "Could not load these search results. Try again.",
-  }
-}
-
-fn fixed_browse_failure(
-  mut settlement: BrowsePageSettlement,
-  failure_message: &'static str,
-) -> BrowsePageSettlement {
-  if settlement.result.is_err() {
-    settlement.result = Err(failure_message.to_owned());
-  }
-  settlement
-}
-
-fn prepare_browse_artwork(state: &mut State) -> Task<Message> {
-  let LibraryBrowseView::Ready {
-    visible_items,
-    visible_start,
-    ..
-  } = &state.browse_view
-  else {
-    return Task::none();
-  };
-  let visible_start = usize::try_from(*visible_start).unwrap_or(usize::MAX);
-  let specs = visible_items
-    .iter()
-    .enumerate()
-    .filter_map(|(index, slot)| {
-      slot
-        .item
-        .as_ref()
-        .map(|item| (index, item.id.clone(), item.artwork_image_id.clone()))
-    })
-    .collect::<Vec<_>>();
-  let visible_ids = specs
-    .iter()
-    .map(|(_, item_id, _)| item_id.as_str())
-    .collect::<HashSet<_>>();
-  state.browse_artwork.retain_items(&visible_ids);
-  drop(visible_ids);
-  let session = state.kernel.request_gate.current_session();
-  let Some(client) = state.kernel.client.as_ref().map(Arc::clone) else {
-    state.retain_artwork_handles();
-    return Task::none();
-  };
-  let adapter = Arc::clone(&state.kernel.artwork_adapter);
-  let class = SizeClass::from_width(state.window_size.width);
-  let available_width = grid_available_width(state.window_size.width, class);
-  let metrics = ArtworkGridMetrics::for_cards(available_width, CARD_COPY_HEIGHT);
-  // The grid is the first scrollable child, so scroll coordinates are already
-  // grid-local; the window start shifts slot positions to global grid indexes.
-  let grid_viewport = ArtworkGridViewport::from_scroll_geometry(
-    state.browse_viewport.offset_y,
-    state.browse_viewport.height,
-    0.0,
-  );
-  let mut summary = ArtworkLoadSummary::default();
-  let mut load_specs = Vec::new();
-
-  for (index, item_id, image_id) in specs {
-    let Some(image_id) = image_id else {
-      continue;
-    };
-    if let Some(cell) = state.browse_artwork.get(&item_id) {
-      if cell.image_id == image_id {
-        if cell.state == ArtworkCellState::Loading {
-          continue;
-        }
-        if cell.state == ArtworkCellState::Ready
-          && state
-            .kernel
-            .artwork_handles
-            .get(cell.slot, &cell.image_id)
-            .is_some()
-        {
-          continue;
-        }
-      }
-    }
-
-    if let Some(raster) = adapter.cached(&image_id, ArtworkSizeClass::Card) {
-      summary.record(&ArtworkLoadObservation::raster_hit(raster.byte_len() as u64));
-      let slot = state.kernel.artwork_binder.bind_settled();
-      let handle = image::Handle::from_rgba(raster.width(), raster.height(), raster.into_pixels());
-      state
-        .kernel
-        .artwork_handles
-        .insert(slot, image_id.clone(), handle);
-      state.browse_artwork.insert(
-        item_id,
-        ArtworkCell {
-          slot,
-          image_id,
-          state: ArtworkCellState::Ready,
-        },
-      );
-      continue;
-    }
-
-    let slot = state.kernel.artwork_binder.bind(ArtworkSurface::Browse);
-    state.browse_artwork.insert(
-      item_id,
-      ArtworkCell {
-        slot,
-        image_id: image_id.clone(),
-        state: ArtworkCellState::Loading,
-      },
-    );
-    load_specs.push(PlannedArtworkLoad {
-      slot,
-      image_id,
-      size_class: ArtworkSizeClass::Card,
-      visible: grid_cell_visible(
-        visible_start.saturating_add(index),
-        metrics.columns,
-        grid_viewport.offset_y,
-        grid_viewport.height,
-        metrics.row_height,
-      ),
-    });
-  }
-
-  state.retain_artwork_handles();
-  stream_artwork_loads(
-    adapter,
-    client,
-    session,
-    load_specs,
-    summary,
-    |session, completion| {
-      Message::Browse(BrowseMessage::ArtworkLoaded {
-        session,
-        slot: completion.slot,
-        image_id: completion.image_id,
-        result: completion.result,
-      })
-    },
-  )
-}
-
-fn begin_browse_artwork_view(state: &mut State) {
-  state
-    .kernel
-    .artwork_binder
-    .begin_view(ArtworkSurface::Browse);
-  state.browse_artwork.clear();
-}
-
-fn leave_browse_view(state: &mut State) {
-  abort_browse_pages(state);
-  if state.playback_view.now_playing.is_none() {
-    state.kernel.artwork_adapter.cancel_pending();
-  }
-  begin_browse_artwork_view(state);
-  if let Err(error) = state.browse.reset() {
-    state.kernel.notice = Some(format!("Could not reset library browsing: {error}"));
-  }
-  sync_browse_view(state);
-}
-
-fn abort_browse_pages(state: &mut State) {
-  for (_, handle) in state.browse_page_tasks.drain() {
-    handle.abort();
-  }
-}
-
 fn reset_connected_surface(state: &mut State) -> Task<Message> {
   let playback_task =
     apply_playback_input(state, PlaybackInput::Intent(PlaybackIntent::Disconnect));
@@ -2237,20 +1794,15 @@ fn reset_connected_surface(state: &mut State) -> Task<Message> {
   state.remote_events = None;
   state.remote_control_state = RemoteControlState::Unavailable;
   state.remote_stopping = false;
-  abort_browse_pages(state);
+  browse::reset(&mut state.browse, &mut state.kernel);
   state.kernel.artwork_adapter.reset_session();
   state.kernel.artwork_binder.reset();
   state.in_flight_refresh = None;
   state.in_flight_command = None;
   state.home = home::Surface::default();
-  state.browse_artwork = BrowseArtwork::default();
   state.detail = detail::Surface::default();
   state.kernel.artwork_handles.clear();
   state.navigation_stack.clear();
-  if let Err(error) = state.browse.reset() {
-    state.kernel.notice = Some(format!("Could not reset library browsing: {error}"));
-  }
-  state.browse_view = LibraryBrowseView::Inactive;
   state.destination = Destination::Home;
   playback_task
 }
@@ -2278,7 +1830,9 @@ mod tests {
   use crate::app::kernel::Kernel;
   use crate::app::state::LoginState;
   use jellypilot_auth::{AuthStorageError, AuthStore, SavedProfileKey};
+  use jellypilot_core::browse_model::LibraryBrowseView;
   use jellypilot_core::config::SettingsStore;
+  use jellypilot_media_server::artwork::ArtworkLoadSummary;
   use jellypilot_media_server::{JellyfinClient, MediaServerProvider};
   #[test]
   fn skeleton_phase_wraps_once_per_1600ms() {
@@ -2372,33 +1926,9 @@ mod tests {
       remote_stopping: false,
       seek_preview: None,
       volume_preview: None,
-      browse: Default::default(),
-      browse_view: LibraryBrowseView::Inactive,
-      browse_artwork: Default::default(),
-      browse_page_tasks: Default::default(),
-      browse_viewport: BrowseViewport::default(),
-      browse_scroll_id: iced::widget::Id::unique(),
-      browse_sort_menu_open: false,
+      browse: browse::Surface::default(),
       audio_menu_open: false,
       subtitle_menu_open: false,
-      search_input: String::new(),
-    }
-  }
-
-  fn browse_request(effects: Vec<BrowseEffect>) -> BrowsePageRequest {
-    effects
-      .into_iter()
-      .find_map(|effect| match effect {
-        BrowseEffect::RequestPage(request) => Some(request),
-        BrowseEffect::ResetViewport | BrowseEffect::CancelPage { .. } => None,
-      })
-      .expect("browse request should be emitted")
-  }
-
-  fn search_source(state: &State, query: &str) -> BrowseSource {
-    BrowseSource::Search {
-      session: state.kernel.request_gate.current_session(),
-      query: query.to_owned(),
     }
   }
 
@@ -2437,246 +1967,6 @@ mod tests {
       overview: None,
       series_primary_image_tag: None,
     }
-  }
-
-  #[test]
-  fn identical_browse_resubmit_keeps_the_in_flight_request_handle() {
-    let mut state = test_state();
-    state.destination = Destination::Search("arrival".to_owned());
-    let request = browse_request(
-      state
-        .browse
-        .configure(search_source(&state, "arrival"))
-        .expect("search should configure"),
-    );
-    let (_, handle) = Task::<Message>::none().abortable();
-    state.browse_page_tasks.insert(request.token, handle);
-
-    drop(start_browse(&mut state));
-
-    assert!(state.browse_page_tasks.contains_key(&request.token));
-    assert!(matches!(state.browse_view, LibraryBrowseView::Loading));
-  }
-
-  #[test]
-  fn stale_same_session_settlement_keeps_the_reopened_request_handle() {
-    let mut state = test_state();
-    let source = search_source(&state, "arrival");
-    let stale = browse_request(
-      state
-        .browse
-        .configure(source.clone())
-        .expect("first search should configure"),
-    );
-    state.browse.reset().expect("browse epoch should advance");
-    let current = browse_request(
-      state
-        .browse
-        .configure(source)
-        .expect("search should reopen"),
-    );
-    let (_, handle) = Task::<Message>::none().abortable();
-    state.browse_page_tasks.insert(current.token, handle);
-
-    drop(update_browse(
-      &mut state,
-      BrowseMessage::PageSettled(BrowsePageSettlement {
-        source_id: stale.source_id,
-        token: stale.token,
-        result: Err("stale server response".to_owned()),
-      }),
-    ));
-
-    assert!(state.browse_page_tasks.contains_key(&current.token));
-    assert!(matches!(state.browse_view, LibraryBrowseView::Loading));
-  }
-
-  #[test]
-  fn browse_failure_messages_are_fixed_for_library_and_search_sources() {
-    let state = test_state();
-    let library = BrowseSource::Library {
-      session: state.kernel.request_gate.current_session(),
-      shortcut: jellypilot_media_server::VideoLibraryShortcut {
-        id: "library-1".to_owned(),
-        name: "Movies".to_owned(),
-        collection_type: "movies".to_owned(),
-        item_count: None,
-        artwork_image_id: None,
-      },
-    };
-    let search = search_source(&state, "arrival");
-
-    assert_eq!(
-      browse_failure_message(&library),
-      "Could not load this library. Try again."
-    );
-    assert_eq!(
-      browse_failure_message(&search),
-      "Could not load these search results. Try again."
-    );
-    let settlement = fixed_browse_failure(
-      BrowsePageSettlement {
-        source_id: "source".to_owned(),
-        token: jellypilot_core::LibraryBrowseLoadToken {
-          generation: 1,
-          sequence: 1,
-        },
-        result: Err("HTTP 500: raw server response body".to_owned()),
-      },
-      browse_failure_message(&search),
-    );
-    assert_eq!(
-      settlement.result.as_ref().err().map(String::as_str),
-      Some("Could not load these search results. Try again.")
-    );
-  }
-
-  #[test]
-  fn reset_viewport_effect_clears_the_recorded_scroll_offset() {
-    let mut state = test_state();
-    state.browse_viewport.offset_y = 640.0;
-
-    drop(apply_browse_effects(
-      &mut state,
-      vec![BrowseEffect::ResetViewport],
-    ));
-
-    assert_eq!(state.browse_viewport.offset_y, 0.0);
-  }
-
-  #[test]
-  fn browse_scroll_position_drives_the_display_window() {
-    // 1600×900 window: 1248px grid, 8 columns, 275px rows; the 900px window
-    // height covers 4 rows, so the settled bootstrap expands to 6 rows.
-    let mut state = test_state();
-    let library = BrowseSource::Library {
-      session: state.kernel.request_gate.current_session(),
-      shortcut: jellypilot_media_server::VideoLibraryShortcut {
-        id: "library-1".to_owned(),
-        name: "Movies".to_owned(),
-        collection_type: "movies".to_owned(),
-        item_count: Some(264),
-        artwork_image_id: None,
-      },
-    };
-    let initial_request = browse_request(
-      state
-        .browse
-        .configure(library)
-        .expect("library should configure"),
-    );
-    sync_browse_view(&mut state);
-
-    let settlement = BrowsePageSettlement {
-      source_id: initial_request.source_id.clone(),
-      token: initial_request.token,
-      result: Ok(jellypilot_core::browse_model::BrowsePagePayload {
-        start_index: 0,
-        limit: 24,
-        total_record_count: 264,
-        has_more: true,
-        items: (0..24)
-          .map(|index| VideoLibraryItem {
-            id: format!("item-{index}"),
-            name: format!("Item {index}"),
-            item_type: "Movie".to_owned(),
-            production_year: None,
-            runtime_seconds: None,
-            played: false,
-            favorite: false,
-            artwork_image_id: None,
-            series_poster_image_id: None,
-            season_number: None,
-            episode_number: None,
-            series_id: None,
-            series_name: None,
-            resume_position_seconds: None,
-            played_percentage: None,
-            overview: None,
-          })
-          .collect(),
-      }),
-    };
-    drop(update_browse(
-      &mut state,
-      BrowseMessage::PageSettled(settlement),
-    ));
-
-    // Settlement triggers a scroll-window sync that fills the viewport.
-    assert_eq!(state.browse.display_range(), Some(0..48));
-
-    // Scrolling ten rows down shifts the window without resetting it.
-    state.browse_viewport = BrowseViewport {
-      offset_y: 2750.0,
-      height: 800.0,
-    };
-    drop(sync_browse_scroll_window(&mut state));
-    assert_eq!(state.browse.display_range(), Some(64..128));
-
-    // An unchanged viewport keeps the window and emits no page requests.
-    let pending_before = state.browse_page_tasks.len();
-    drop(sync_browse_scroll_window(&mut state));
-    assert_eq!(state.browse.display_range(), Some(64..128));
-    assert_eq!(state.browse_page_tasks.len(), pending_before);
-
-    // Scrolling back up restores the earlier window.
-    state.browse_viewport = BrowseViewport {
-      offset_y: 0.0,
-      height: 800.0,
-    };
-    drop(sync_browse_scroll_window(&mut state));
-    assert_eq!(state.browse.display_range(), Some(0..48));
-  }
-
-  #[test]
-  fn visible_display_range_maps_scroll_geometry_to_item_indexes() {
-    let metrics = ArtworkGridMetrics {
-      columns: 8,
-      cell_width: 142.0,
-      cell_height: 259.0,
-      row_height: 275.0,
-    };
-
-    // Top of the grid: four visible rows plus two margin rows below.
-    assert_eq!(visible_display_range(0.0, 900.0, metrics, 264), 0..48);
-    // Middle: rows 10..14 visible, expanded to rows 8..16.
-    assert_eq!(visible_display_range(2750.0, 900.0, metrics, 264), 64..128);
-    // Near the end the window clamps to the total.
-    assert_eq!(visible_display_range(8800.0, 900.0, metrics, 264), 240..264);
-    // A zero-height viewport still covers its margin rows.
-    assert_eq!(visible_display_range(0.0, 0.0, metrics, 264), 0..16);
-    // An empty library yields an empty window.
-    assert_eq!(visible_display_range(0.0, 900.0, metrics, 0), 0..0);
-  }
-
-  #[test]
-  fn visible_display_range_sanitizes_degenerate_inputs() {
-    let metrics = ArtworkGridMetrics {
-      columns: 8,
-      cell_width: 142.0,
-      cell_height: 259.0,
-      row_height: 275.0,
-    };
-
-    // Non-finite or negative geometry falls back to the grid origin.
-    assert_eq!(visible_display_range(f32::NAN, 900.0, metrics, 264), 0..48);
-    assert_eq!(
-      visible_display_range(2750.0, f32::INFINITY, metrics, 264),
-      64..96
-    );
-    assert_eq!(visible_display_range(-50.0, 900.0, metrics, 264), 0..48);
-
-    // Degenerate metrics cannot map rows, so the window is empty.
-    let zero_row = ArtworkGridMetrics {
-      row_height: 0.0,
-      ..metrics
-    };
-    assert_eq!(visible_display_range(0.0, 900.0, zero_row, 264), 0..0);
-    let no_columns = ArtworkGridMetrics {
-      columns: 0,
-      ..metrics
-    };
-    assert_eq!(visible_display_range(0.0, 900.0, no_columns, 264), 0..0);
   }
 
   struct TestSettingsFile(PathBuf);
@@ -3946,7 +3236,7 @@ mod tests {
 
     let mut item = episode("browse-item-1", 1);
     item.artwork_image_id = Some("browse-art-1".to_owned());
-    state.browse_view = LibraryBrowseView::Ready {
+    state.browse.view = LibraryBrowseView::Ready {
       visible_items: vec![jellypilot_core::browse_model::LibraryItemSlot {
         item: Some(item.clone()),
       }],
@@ -3958,8 +3248,15 @@ mod tests {
       retry_busy: false,
     };
 
-    drop(prepare_browse_artwork(&mut state));
-    let slot = state.browse_artwork.get("browse-item-1").unwrap().slot;
+    // Mirrors the router: a re-prepared pipeline is followed by cross-surface
+    // handle retention (ADR 0029).
+    drop(browse::prepare_artwork(
+      &mut state.browse,
+      &mut state.kernel,
+      state.window_size.width,
+    ));
+    state.retain_artwork_handles();
+    let slot = state.browse.artwork.get("browse-item-1").unwrap().slot;
     let session = state.kernel.request_gate.current_session();
     // A real load stores the raster in the adapter cache; seed it beside the
     // synthesized completion so re-navigation can rebuild from it.
@@ -3968,8 +3265,13 @@ mod tests {
       jellypilot_media_server::artwork::ArtworkSizeClass::Card,
       jellypilot_media_server::artwork::ArtworkRaster::from_raw_for_test(1, 1, vec![1, 2, 3, 4]),
     );
-    drop(update_browse(
-      &mut state,
+    drop(browse::update(
+      &mut state.browse,
+      &mut state.kernel,
+      None,
+      false,
+      state.playback_view.now_playing.is_none(),
+      state.window_size,
       BrowseMessage::ArtworkLoaded {
         session,
         slot,
@@ -3985,7 +3287,8 @@ mod tests {
     ));
     assert_eq!(
       state
-        .browse_artwork
+        .browse
+        .artwork
         .get("browse-item-1")
         .map(|cell| cell.state),
       Some(ArtworkCellState::Ready)
@@ -4001,7 +3304,7 @@ mod tests {
 
     // Return to Browse
     drop(navigate(&mut state, library));
-    state.browse_view = LibraryBrowseView::Ready {
+    state.browse.view = LibraryBrowseView::Ready {
       visible_items: vec![jellypilot_core::browse_model::LibraryItemSlot { item: Some(item) }],
       visible_start: 0,
       mode: jellypilot_core::LibraryBrowseMode::Normal,
@@ -4010,10 +3313,16 @@ mod tests {
       load_more_failure: None,
       retry_busy: false,
     };
-    drop(prepare_browse_artwork(&mut state));
+    drop(browse::prepare_artwork(
+      &mut state.browse,
+      &mut state.kernel,
+      state.window_size.width,
+    ));
+    state.retain_artwork_handles();
 
     let browse_cell = state
-      .browse_artwork
+      .browse
+      .artwork
       .get("browse-item-1")
       .expect("browse cell exists");
     assert_eq!(browse_cell.state, ArtworkCellState::Ready);
@@ -4023,53 +3332,6 @@ mod tests {
       .kernel
       .artwork_handles
       .get(browse_cell.slot, "browse-art-1")
-      .is_some());
-  }
-
-  #[test]
-  fn browse_memory_cache_hit_synchronously_settles_without_retained_handle() {
-    let mut state = test_state();
-    state.kernel.client = Some(Arc::new(JellyfinClient::new()));
-    let mut item = episode("browse-cache-item-1", 1);
-    item.artwork_image_id = Some("browse-cache-art-1".to_owned());
-
-    // Seed the raster cache directly
-    state.kernel.artwork_adapter.seed_raster_for_test(
-      "browse-cache-art-1",
-      jellypilot_media_server::artwork::ArtworkSizeClass::Card,
-      jellypilot_media_server::artwork::ArtworkRaster::from_raw_for_test(
-        1,
-        1,
-        vec![10, 20, 30, 40],
-      ),
-    );
-
-    // Wipe artwork_handles completely so there is NO retained handle in artwork_handles
-    state.kernel.artwork_handles.clear();
-
-    state.browse_view = LibraryBrowseView::Ready {
-      visible_items: vec![jellypilot_core::browse_model::LibraryItemSlot { item: Some(item) }],
-      visible_start: 0,
-      mode: jellypilot_core::LibraryBrowseMode::Normal,
-      total_record_count: 1,
-      is_fetching_more: false,
-      load_more_failure: None,
-      retry_busy: false,
-    };
-
-    let warm_task = prepare_browse_artwork(&mut state);
-    // One sentinel unit reports the aggregate cache-hit telemetry event.
-    assert_eq!(warm_task.units(), 1);
-
-    let browse_cell = state
-      .browse_artwork
-      .get("browse-cache-item-1")
-      .expect("browse cell exists");
-    assert_eq!(browse_cell.state, ArtworkCellState::Ready);
-    assert!(state
-      .kernel
-      .artwork_handles
-      .get(browse_cell.slot, "browse-cache-art-1")
       .is_some());
   }
 
@@ -4206,42 +3468,5 @@ mod tests {
       state.playback_view.now_playing.as_ref().map(|np| np.paused),
       Some(true)
     );
-  }
-
-  #[test]
-  fn page_settle_spawns_all_24_visible_browse_loads_at_once() {
-    let mut state = test_state();
-    state.kernel.client = Some(Arc::new(JellyfinClient::new()));
-    let items = (0..24)
-      .map(|i| {
-        let mut item = episode(&format!("item-{i}"), 1);
-        item.artwork_image_id = Some(format!("art-{i}"));
-        jellypilot_core::browse_model::LibraryItemSlot { item: Some(item) }
-      })
-      .collect::<Vec<_>>();
-
-    state.browse_view = LibraryBrowseView::Ready {
-      visible_items: items,
-      visible_start: 0,
-      mode: jellypilot_core::LibraryBrowseMode::Normal,
-      total_record_count: 24,
-      is_fetching_more: false,
-      load_more_failure: None,
-      retry_busy: false,
-    };
-
-    drop(prepare_browse_artwork(&mut state));
-
-    for i in 0..24 {
-      let cell = state
-        .browse_artwork
-        .get(&format!("item-{i}"))
-        .expect("all 24 cells must be present in browse_artwork");
-      assert_eq!(
-        cell.state,
-        ArtworkCellState::Loading,
-        "all 24 cells must be admitted into Loading in the same pass"
-      );
-    }
   }
 }

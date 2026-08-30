@@ -8,6 +8,7 @@
 //! [`ArtworkLoadCompletion`] settlements.
 
 use jellypilot_media_server::artwork::ArtworkSizeClass;
+use std::ops::Range;
 
 use crate::artwork_binder::ArtworkSlot;
 
@@ -93,6 +94,45 @@ pub fn visible_row_cards(viewport_width: f32, card_width: f32, gap: f32) -> usiz
 
 fn positive_finite(value: f32) -> Option<f32> {
     (value.is_finite() && value > 0.0).then_some(value)
+}
+
+/// Extra grid rows included in the loading window beyond each viewport edge.
+pub const BROWSE_WINDOW_MARGIN_ROWS: u32 = 2;
+
+/// Maps scroll geometry to the clamped display-index window the grid covers.
+///
+/// Rows come from dividing the viewport span by the grid row height; item
+/// indexes are rows times the column count, expanded by
+/// [`BROWSE_WINDOW_MARGIN_ROWS`] on each side and clamped to `total`.
+#[must_use]
+pub fn visible_display_range(
+    offset_y: f32,
+    viewport_height: f32,
+    columns: usize,
+    row_height: f32,
+    total: u32,
+) -> Range<u32> {
+    let Some(row_height) = positive_finite(row_height) else {
+        return 0..0;
+    };
+    if total == 0 || columns == 0 {
+        return 0..0;
+    }
+    let offset_y = finite_non_negative(offset_y);
+    let viewport_height = finite_non_negative(viewport_height);
+    let columns = u32::try_from(columns).unwrap_or(u32::MAX);
+    let first_row = (offset_y / row_height).floor() as u32;
+    let end_row = ((offset_y + viewport_height) / row_height).ceil() as u32;
+    let start = first_row
+        .saturating_sub(BROWSE_WINDOW_MARGIN_ROWS)
+        .saturating_mul(columns)
+        .min(total);
+    let end = end_row
+        .saturating_add(BROWSE_WINDOW_MARGIN_ROWS)
+        .saturating_mul(columns)
+        .min(total)
+        .max(start);
+    start..end
 }
 
 fn finite_non_negative(value: f32) -> f32 {
@@ -235,5 +275,62 @@ mod tests {
             plan,
             vec![load(1, true), load(2, true), load(3, false), load(4, false)]
         );
+    }
+
+    #[test]
+    fn visible_display_range_maps_scroll_geometry_to_item_indexes() {
+        // 8 columns, 275 px rows.
+        let columns = 8;
+        let row_height = 275.0;
+
+        // Top of the grid: four visible rows plus two margin rows below.
+        assert_eq!(
+            visible_display_range(0.0, 900.0, columns, row_height, 264),
+            0..48
+        );
+        // Middle: rows 10..14 visible, expanded to rows 8..16.
+        assert_eq!(
+            visible_display_range(2750.0, 900.0, columns, row_height, 264),
+            64..128
+        );
+        // Near the end the window clamps to the total.
+        assert_eq!(
+            visible_display_range(8800.0, 900.0, columns, row_height, 264),
+            240..264
+        );
+        // A zero-height viewport still covers its margin rows.
+        assert_eq!(
+            visible_display_range(0.0, 0.0, columns, row_height, 264),
+            0..16
+        );
+        // An empty library yields an empty window.
+        assert_eq!(
+            visible_display_range(0.0, 900.0, columns, row_height, 0),
+            0..0
+        );
+    }
+
+    #[test]
+    fn visible_display_range_sanitizes_degenerate_inputs() {
+        let columns = 8;
+        let row_height = 275.0;
+
+        // Non-finite or negative geometry falls back to the grid origin.
+        assert_eq!(
+            visible_display_range(f32::NAN, 900.0, columns, row_height, 264),
+            0..48
+        );
+        assert_eq!(
+            visible_display_range(2750.0, f32::INFINITY, columns, row_height, 264),
+            64..96
+        );
+        assert_eq!(
+            visible_display_range(-50.0, 900.0, columns, row_height, 264),
+            0..48
+        );
+
+        // Degenerate metrics cannot map rows, so the window is empty.
+        assert_eq!(visible_display_range(0.0, 900.0, columns, 0.0, 264), 0..0);
+        assert_eq!(visible_display_range(0.0, 900.0, 0, row_height, 264), 0..0);
     }
 }

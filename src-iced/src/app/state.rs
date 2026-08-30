@@ -4,17 +4,16 @@ use std::sync::Arc;
 
 use tokio::sync::{mpsc, Mutex};
 
-use iced::task;
 use iced::widget::image;
 use jellypilot_auth::login::ConnectionPhase;
 use jellypilot_auth::{AuthStore, SavedProfileKey, SavedProfileSummary, SensitiveSavedSession};
 use jellypilot_core::artwork_binder::{ArtworkBinder, ArtworkSlot};
-use jellypilot_core::browse_model::{BrowseModel, LibraryBrowseView};
+use jellypilot_core::browse_model::LibraryBrowseView;
 use jellypilot_core::config::{IntroMode, LoginPrefill, Settings, SettingsStore, ShortcutKind};
 use jellypilot_core::detail::DetailContent;
 use jellypilot_core::diagnostics::{DiagnosticCategory, DiagnosticLevel, Diagnostics};
 use jellypilot_core::request_gate::{RemoteToken, RequestGate};
-use jellypilot_core::{LibraryBrowseLoadToken, LoadState};
+use jellypilot_core::LoadState;
 use jellypilot_media_server::artwork::ArtworkAdapter;
 use jellypilot_media_server::{
   MediaServerProvider, VideoLibraryItem, VideoLibraryShortcut, VideoSeasonEpisodesPage,
@@ -676,16 +675,9 @@ pub struct State {
   pub remote_stopping: bool,
   pub seek_preview: Option<f64>,
   pub volume_preview: Option<f64>,
-  pub browse: BrowseModel,
-  pub browse_view: LibraryBrowseView,
-  pub browse_artwork: BrowseArtwork,
-  pub browse_page_tasks: HashMap<LibraryBrowseLoadToken, task::Handle>,
-  pub browse_viewport: BrowseViewport,
-  pub browse_scroll_id: iced::widget::Id,
-  pub browse_sort_menu_open: bool,
+  pub browse: crate::app::browse::Surface,
   pub audio_menu_open: bool,
   pub subtitle_menu_open: bool,
-  pub search_input: String,
 }
 
 impl State {
@@ -761,16 +753,9 @@ impl State {
       remote_stopping: false,
       seek_preview: None,
       volume_preview: None,
-      browse: BrowseModel::default(),
-      browse_view: LibraryBrowseView::Inactive,
-      browse_artwork: BrowseArtwork::default(),
-      browse_page_tasks: HashMap::new(),
-      browse_viewport: BrowseViewport::default(),
-      browse_scroll_id: iced::widget::Id::unique(),
-      browse_sort_menu_open: false,
+      browse: crate::app::browse::Surface::default(),
       audio_menu_open: false,
       subtitle_menu_open: false,
-      search_input: String::new(),
     }
   }
   pub fn all_artwork_slots(&self) -> impl Iterator<Item = ArtworkSlot> + '_ {
@@ -778,7 +763,7 @@ impl State {
       .home
       .artwork
       .slots()
-      .chain(self.browse_artwork.slots())
+      .chain(self.browse.artwork.slots())
       .chain(self.detail.artwork.slots())
       .chain(self.playback_artwork.as_ref().map(|cell| cell.slot))
   }
@@ -791,7 +776,7 @@ impl State {
       .iter()
       .any(|section| matches!(self.home.data.section(*section), LoadState::Loading))
       || matches!(self.home.data.shortcuts, LoadState::Loading);
-    let browse_loading = match &self.browse_view {
+    let browse_loading = match &self.browse.view {
       LibraryBrowseView::Loading => true,
       // A ready grid can still hold unloaded placeholder slots while more
       // pages stream in.
@@ -811,7 +796,7 @@ impl State {
     // Artwork cells also display breathing skeleton pulse blocks while in the
     // Loading state across Home hero/sections, Browse grid, and Detail views.
     let artwork_loading = self.home.artwork.has_loading()
-      || self.browse_artwork.has_loading()
+      || self.browse.artwork.has_loading()
       || self.detail.artwork.has_loading();
     home_loading || browse_loading || detail_loading || artwork_loading
   }
@@ -1118,7 +1103,7 @@ mod tests {
     assert!(!state.skeletons_active());
 
     // Browse artwork loading
-    state.browse_artwork.insert(
+    state.browse.artwork.insert(
       "item-browse".to_owned(),
       ArtworkCell {
         slot: slot_3,
@@ -1127,7 +1112,7 @@ mod tests {
       },
     );
     assert!(state.skeletons_active());
-    state.browse_artwork.clear();
+    state.browse.artwork.clear();
     assert!(!state.skeletons_active());
 
     // Detail artwork loading

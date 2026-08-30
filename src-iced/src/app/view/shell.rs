@@ -180,7 +180,7 @@ fn sidebar_full(
       .color(TOKENS.colors.onSurfaceVariant),
   ]
   .spacing(TOKENS.spacing.s1);
-  let search_input = text_input("Search videos", &state.search_input)
+  let search_input = text_input("Search videos", &state.browse.search_input)
     .on_input(|value| Message::Browse(BrowseMessage::SearchInputChanged(value)))
     .on_submit(Message::Browse(BrowseMessage::SearchSubmitted))
     .padding([8, 12])

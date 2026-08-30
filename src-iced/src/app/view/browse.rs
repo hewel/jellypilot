@@ -118,7 +118,7 @@ fn toolbar(state: &State) -> Element<'_, Message> {
   let sort = popover(
     sort_trigger,
     sort_menu,
-    state.browse_sort_menu_open,
+    state.browse.sort_menu_open,
     PopoverOptions {
       width: Some(190.0),
       ..PopoverOptions::default()
@@ -220,7 +220,7 @@ fn played_option(
 
 fn browse_body<'a>(state: &'a State, class: SizeClass) -> Element<'a, Message> {
   let padding = page_padding(class);
-  match &state.browse_view {
+  match &state.browse.view {
     LibraryBrowseView::Inactive => empty_surface("Choose a library to browse.".to_owned(), padding),
     LibraryBrowseView::Loading => browse_loading_skeleton(state, class),
     LibraryBrowseView::Empty => match &state.destination {
@@ -273,8 +273,8 @@ fn ready_surface<'a>(
   // The count row above the grid is short enough that the grid's overscan
   // absorbs it, so no scroll margin is subtracted here.
   let viewport = ArtworkGridViewport::from_scroll_geometry(
-    state.browse_viewport.offset_y,
-    state.browse_viewport.height,
+    state.browse.viewport.offset_y,
+    state.browse.viewport.height,
     0.0,
   );
   let grid = artwork_grid(
@@ -304,7 +304,7 @@ fn ready_surface<'a>(
     .push(container(grid).padding([0.0, padding]).width(Fill));
 
   let body = scrollable(content)
-    .id(state.browse_scroll_id.clone())
+    .id(state.browse.scroll_id.clone())
     .on_scroll(|viewport| Message::Browse(BrowseMessage::Scrolled(viewport)))
     .width(Fill)
     .height(Fill)
@@ -351,7 +351,7 @@ fn browse_loading_skeleton<'a>(state: &'a State, class: SizeClass) -> Element<'a
     .push(container(grid).padding([0.0, padding]).width(Fill));
 
   scrollable(content)
-    .id(state.browse_scroll_id.clone())
+    .id(state.browse.scroll_id.clone())
     .on_scroll(|viewport| Message::Browse(BrowseMessage::Scrolled(viewport)))
     .width(Fill)
     .height(Fill)
@@ -451,7 +451,7 @@ fn video_card<'a>(
   let artwork_height = card_artwork_height(cell_width);
   let artwork = artwork(
     state,
-    state.browse_artwork.get(&item.id),
+    state.browse.artwork.get(&item.id),
     &item.name,
     artwork_height,
     skeleton_phase,
@@ -816,7 +816,7 @@ mod tests {
   fn browse_view_renders_in_loading_state() {
     let mut state = State::boot(false);
     state.skeleton_phase = 0.42;
-    state.browse_view = LibraryBrowseView::Loading;
+    state.browse.view = LibraryBrowseView::Loading;
     let _element = view(&state);
   }
 
@@ -824,7 +824,7 @@ mod tests {
   fn browse_view_renders_with_unloaded_slots_in_ready_state() {
     let mut state = State::boot(false);
     state.skeleton_phase = 0.42;
-    state.browse_view = LibraryBrowseView::Ready {
+    state.browse.view = LibraryBrowseView::Ready {
       visible_items: vec![
         LibraryItemSlot { item: None },
         LibraryItemSlot { item: None },
@@ -874,7 +874,7 @@ mod tests {
       .kernel
       .artwork_binder
       .bind(jellypilot_core::artwork_binder::ArtworkSurface::Browse);
-    state.browse_artwork.insert(
+    state.browse.artwork.insert(
       "item-1".to_owned(),
       ArtworkCell {
         slot: slot_1,
@@ -882,7 +882,7 @@ mod tests {
         state: ArtworkCellState::Loading,
       },
     );
-    state.browse_artwork.insert(
+    state.browse.artwork.insert(
       "item-2".to_owned(),
       ArtworkCell {
         slot: slot_2,
@@ -890,7 +890,7 @@ mod tests {
         state: ArtworkCellState::Failed,
       },
     );
-    state.browse_view = LibraryBrowseView::Ready {
+    state.browse.view = LibraryBrowseView::Ready {
       visible_items: vec![
         LibraryItemSlot { item: Some(item_1) },
         LibraryItemSlot { item: Some(item_2) },
