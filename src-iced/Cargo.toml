@@ -23,6 +23,8 @@ jellypilot-ui = { path = "../crates/jellypilot-ui" }
 iced = { version = "0.14.0", features = ["advanced", "image", "svg", "tokio"] }
 image = { version = "0.25.10", default-features = false, features = ["png"] }
 tokio = { version = "1.50.0", features = ["macros", "rt", "sync", "time"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 tray-icon = { version = "0.23.1", default-features = false }
 url = "2.5.8"
 zeroize = "1.8.1"

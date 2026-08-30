@@ -129,7 +129,7 @@ pub fn bar(state: &State) -> Option<Element<'_, Message>> {
     .spacing(TOKENS.spacing.s2)
     .align_y(Alignment::Center);
   let top = row![
-    playback_artwork(state, 56.0, 56.0),
+    playback_artwork(state, 56.0, 84.0),
     metadata,
     transport,
     track_selection,

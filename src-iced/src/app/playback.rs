@@ -892,6 +892,12 @@ fn update_playback(
           settlement: *settlement,
         }),
       )];
+      tracing::debug!(
+        started = ?started.as_deref().map(|playable| (playable_kind(playable), playable.image_id().map(str::to_owned))),
+        now_playing = ?surface.view.now_playing.as_ref().map(|view| view.item.item_id.clone()),
+        playable = ?surface.playable.as_ref().map(|playable| (playable_kind(playable), playable.image_id().map(str::to_owned))),
+        "controller settled"
+      );
       if let Some(result) = tracks {
         tasks.push(apply_playback_input(
           surface,
@@ -1028,6 +1034,12 @@ fn ensure_player_artwork(surface: &mut Surface, kernel: &mut Kernel) -> Task<Mes
       .as_ref()
       .is_some_and(|playable| playable.item_id() == view.item.item_id)
   });
+  tracing::debug!(
+    covered,
+    now_playing = ?surface.view.now_playing.as_ref().map(|view| view.item.item_id.clone()),
+    playable = ?surface.playable.as_ref().map(|playable| (playable_kind(playable), playable.image_id().map(str::to_owned))),
+    "ensure player artwork"
+  );
   if covered {
     prepare_player_artwork(surface, kernel)
   } else {
@@ -1035,6 +1047,13 @@ fn ensure_player_artwork(surface: &mut Surface, kernel: &mut Kernel) -> Task<Mes
   }
 }
 
+fn playable_kind(playable: &Playable) -> &'static str {
+  match playable {
+    Playable::Library(_) => "library",
+    Playable::Detail(_) => "detail",
+    Playable::Media(_) => "media",
+  }
+}
 /// The shell's quit handshake may exit once the playback session finished
 /// cleaning up and no remote teardown is in flight.
 pub(crate) fn quit_may_exit(surface: &Surface, quit_requested: bool) -> bool {
@@ -1079,6 +1098,12 @@ fn clear_inactive_playback(surface: &mut Surface, kernel: &mut Kernel) -> Task<M
   {
     return Task::none();
   }
+  tracing::debug!(
+    in_flight_command = surface.in_flight_command.is_some(),
+    in_flight_refresh = surface.in_flight_refresh.is_some(),
+    playable = ?surface.playable.as_ref().map(playable_kind),
+    "clearing inactive playback"
+  );
   surface.playable = None;
   surface.adjacent_playables = [None, None];
   clear_player_artwork(surface, kernel);
@@ -1299,6 +1324,10 @@ fn prepare_player_artwork(surface: &mut Surface, kernel: &mut Kernel) -> Task<Me
     .and_then(Playable::image_id)
     .map(str::to_owned);
   let Some(image_id) = image_id else {
+    tracing::debug!(
+      playable = ?surface.playable.as_ref().map(playable_kind),
+      "player artwork cleared: playable has no image"
+    );
     clear_player_artwork(surface, kernel);
     return Task::none();
   };
