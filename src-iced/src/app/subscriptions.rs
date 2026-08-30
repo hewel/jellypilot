@@ -4,6 +4,7 @@ use std::time::Duration;
 use iced::futures::StreamExt;
 use iced::futures::{SinkExt, Stream};
 use iced::{event, keyboard, time, window, Event, Subscription};
+use jellypilot_core::config::ThemeMode;
 use jellypilot_mpv::playback_session::{AdjacentDirection, PlaybackIntent};
 
 use super::message::{Message, PlaybackMessage, RemoteMessage, WindowMessage};
@@ -44,6 +45,11 @@ pub fn subscription(state: &State) -> Subscription<Message> {
   }
   if let Some(tray) = &state.kernel.tray {
     subscriptions.push(Subscription::run_with(tray.channel(), tray_event_stream));
+  }
+  // Follow OS light/dark flips only while the theme mode setting is System;
+  // an explicit Dark/Light setting makes the subscription dead weight.
+  if state.kernel.settings.snapshot().theme_mode() == ThemeMode::System {
+    subscriptions.push(iced::system::theme_changes().map(Message::SystemThemeChanged));
   }
 
   // Drive the shimmer phase only while skeletons are actually on screen (or a
@@ -249,30 +255,30 @@ mod tests {
     });
     state.settings.view.shortcut_capture = Some(jellypilot_core::config::ShortcutKind::Next);
 
-    // window events, resize events, playback tick, shortcut capture
-    assert_eq!(subscription(&state).units(), 4);
+    // window events, resize events, playback tick, shortcut capture, theme changes
+    assert_eq!(subscription(&state).units(), 5);
   }
   #[test]
   fn frames_subscription_only_runs_for_smoke_or_active_skeletons() {
     let mut state = State::boot(false);
-    // window events, resize events; no frames while nothing loads.
-    assert_eq!(subscription(&state).units(), 2);
+    // window events, resize events, theme changes; no frames while nothing loads.
+    assert_eq!(subscription(&state).units(), 3);
 
     state.shell.smoke = true;
-    assert_eq!(subscription(&state).units(), 3);
+    assert_eq!(subscription(&state).units(), 4);
     state.shell.smoke = false;
 
     state.home.data.begin_load();
-    assert_eq!(subscription(&state).units(), 3);
+    assert_eq!(subscription(&state).units(), 4);
     // Episode/neighbor loads render shimmer skeletons independently of the
     // main detail content state; the frames subscription must stay alive.
     let mut detail_state = State::boot(false);
     detail_state.detail.data.season_episodes = LoadState::Loading;
     assert!(detail_state.skeletons_active());
-    assert_eq!(subscription(&detail_state).units(), 3);
+    assert_eq!(subscription(&detail_state).units(), 4);
     detail_state.detail.data.season_episodes = LoadState::Idle;
     detail_state.detail.data.season_neighbors = LoadState::Loading;
-    assert_eq!(subscription(&detail_state).units(), 3);
+    assert_eq!(subscription(&detail_state).units(), 4);
 
     // Reduced motion renders static skeletons, so no frame ticks are needed.
     let path = std::env::temp_dir().join(format!(
@@ -282,7 +288,39 @@ mod tests {
     let _ = std::fs::remove_file(&path);
     state.kernel.settings = jellypilot_core::config::SettingsStore::for_test(path.clone());
     state.kernel.settings.set_reduced_motion(true).unwrap();
-    assert_eq!(subscription(&state).units(), 2);
+    assert_eq!(subscription(&state).units(), 3);
+    std::fs::remove_file(path).unwrap();
+  }
+
+  #[test]
+  fn theme_changes_subscription_only_runs_in_system_mode() {
+    let path = std::env::temp_dir().join(format!(
+      "jellypilot-iced-theme-subscription-{}.json",
+      std::process::id()
+    ));
+    let _ = std::fs::remove_file(&path);
+    let mut state = State::boot(false);
+    state.kernel.settings = jellypilot_core::config::SettingsStore::for_test(path.clone());
+
+    let system_units = subscription(&state).units();
+    state
+      .kernel
+      .settings
+      .set_theme_mode(ThemeMode::Dark)
+      .unwrap();
+    assert_eq!(subscription(&state).units(), system_units - 1);
+    state
+      .kernel
+      .settings
+      .set_theme_mode(ThemeMode::Light)
+      .unwrap();
+    assert_eq!(subscription(&state).units(), system_units - 1);
+    state
+      .kernel
+      .settings
+      .set_theme_mode(ThemeMode::System)
+      .unwrap();
+    assert_eq!(subscription(&state).units(), system_units);
     std::fs::remove_file(path).unwrap();
   }
 

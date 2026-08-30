@@ -1,4 +1,4 @@
-//! JellyPilot's dark-only iced design system.
+//! JellyPilot's iced design system.
 //!
 //! The crate ports the canonical Panda tokens and basic component variants as
 //! the visual vocabulary of the iced application.

@@ -8,7 +8,7 @@ use jellypilot_ui::fonts::SPACE_GROTESK_FONT;
 use jellypilot_ui::icons::{icon_for_variant, icon_with_color, Icon, IconSize};
 use jellypilot_ui::layout::SizeClass;
 use jellypilot_ui::overlay::{tooltip, TooltipOptions};
-use jellypilot_ui::tokens::TOKENS;
+use jellypilot_ui::tokens::{ThemePalette, TOKENS};
 use jellypilot_ui::variants::{ButtonVariant, FieldVariant, SurfaceVariant};
 use jellypilot_ui::widgets::skeleton::skeleton_block;
 pub(crate) const SIDEBAR_WIDTH: f32 = 248.0;
@@ -28,6 +28,7 @@ pub(crate) fn sidebar_width(class: SizeClass) -> f32 {
 }
 
 pub fn view(state: &State) -> Element<'_, Message> {
+  let palette = state.palette();
   let skeleton_phase = state.shell.skeleton_phase;
   let reduced_motion = state.kernel.settings.snapshot().reduced_motion();
   let class = SizeClass::from_width(state.shell.window_size.width);
@@ -42,7 +43,7 @@ pub fn view(state: &State) -> Element<'_, Message> {
   let mut content_stack = stack![content].width(Fill).height(Fill);
   if let Some(toast) = visible_toast(state) {
     content_stack = content_stack.push(
-      container(toast_view(toast))
+      container(toast_view(palette, toast))
         .width(Fill)
         .padding(iced::Padding {
           top: TOKENS.spacing.s2,
@@ -57,7 +58,9 @@ pub fn view(state: &State) -> Element<'_, Message> {
   let sidebar_divider = container(space::vertical())
     .width(HAIRLINE_WIDTH)
     .height(Fill)
-    .style(|_| iced::widget::container::Style::default().background(TOKENS.colors.outlineVariant));
+    .style(move |_| {
+      iced::widget::container::Style::default().background(palette.colors.outlineVariant)
+    });
   // The sidebar docks full-height so its bottom (Settings, user) never moves
   // when the player bar appears; the bar docks under the content region only.
   let mut right = Column::new().spacing(0.0).push(content_stack);
@@ -66,8 +69,8 @@ pub fn view(state: &State) -> Element<'_, Message> {
     let player_divider = container(space::horizontal())
       .width(Fill)
       .height(HAIRLINE_WIDTH)
-      .style(|_| {
-        iced::widget::container::Style::default().background(TOKENS.colors.outlineVariant)
+      .style(move |_| {
+        iced::widget::container::Style::default().background(palette.colors.outlineVariant)
       });
     right = right.push(player_divider).push(player_bar);
   }
@@ -95,8 +98,8 @@ pub fn visible_notice(state: &State) -> Option<&str> {
     .map(|toast| toast.message.as_str())
 }
 
-fn toast_view(toast: &ToastNotice) -> Element<'_, Message> {
-  let colors = TOKENS.colors;
+fn toast_view<'a>(palette: &'static ThemePalette, toast: &'a ToastNotice) -> Element<'a, Message> {
+  let colors = palette.colors;
   let (icon, icon_color, text_color, bg_color) = match toast.level {
     NoticeLevel::Error => (
       Icon::Warning,
@@ -156,7 +159,7 @@ fn toast_view(toast: &ToastNotice) -> Element<'_, Message> {
         width: 0.0,
         radius: TOKENS.radii.lg.into(),
       },
-      shadow: TOKENS.shadows.raised_high.iced(),
+      shadow: palette.shadows.raised_high.iced(),
       ..container::Style::default()
     })
     .into()
@@ -183,10 +186,10 @@ fn sidebar_full(
     text("JellyPilot")
       .font(SPACE_GROTESK_FONT)
       .size(26)
-      .color(TOKENS.colors.onSurface),
+      .color(state.palette().colors.onSurface),
     text("Video Library")
       .size(12)
-      .color(TOKENS.colors.onSurfaceVariant),
+      .color(state.palette().colors.onSurfaceVariant),
   ]
   .spacing(TOKENS.spacing.s1);
   let search_input = text_input("Search videos", &state.browse.search_input)
@@ -245,7 +248,7 @@ fn sidebar_full(
       destinations = destinations.push(
         text("Libraries unavailable")
           .size(12)
-          .color(TOKENS.colors.warning),
+          .color(state.palette().colors.warning),
       );
     }
   }
@@ -355,18 +358,19 @@ fn shortcut_skeleton<'a>(skeleton_phase: f32, reduced_motion: bool) -> Element<'
 }
 
 fn connection_summary(state: &State) -> Element<'_, Message> {
+  let palette = state.palette();
   let Some(identity) = &state.kernel.connected_identity else {
     return space::vertical().into();
   };
   row![
-    icon_with_color(Icon::Server, IconSize::Md, TOKENS.colors.onSurfaceVariant),
+    icon_with_color(Icon::Server, IconSize::Md, palette.colors.onSurfaceVariant),
     column![
       text(&identity.user_name)
         .size(13)
-        .color(TOKENS.colors.onSurface),
+        .color(palette.colors.onSurface),
       text(&identity.server)
         .size(11)
-        .color(TOKENS.colors.onSurfaceVariant),
+        .color(palette.colors.onSurfaceVariant),
     ]
     .spacing(TOKENS.spacing.s0_5),
   ]
@@ -400,6 +404,7 @@ fn compact_destination_button<'a>(
 }
 
 fn compact_connection_status(state: &State) -> Element<'_, Message> {
+  let palette = state.palette();
   let Some(identity) = &state.kernel.connected_identity else {
     return space::vertical().into();
   };
@@ -408,7 +413,7 @@ fn compact_connection_status(state: &State) -> Element<'_, Message> {
     .width(8.0)
     .height(8.0)
     .style(|_theme| container::Style {
-      background: Some(iced::Background::Color(TOKENS.colors.onSurfaceVariant)),
+      background: Some(iced::Background::Color(palette.colors.onSurfaceVariant)),
       border: iced::Border {
         radius: TOKENS.radii.full.into(),
         ..iced::Border::default()

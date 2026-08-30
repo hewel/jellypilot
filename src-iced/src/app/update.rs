@@ -49,6 +49,12 @@ impl SettingsPlaybackSnapshot {
 
 pub fn update(state: &mut State, message: Message) -> Task<Message> {
   match message {
+    // Theme re-resolves every frame from state, so recording the OS mode is
+    // the whole update; the next frame picks up the new effective theme.
+    Message::SystemThemeDiscovered(mode) | Message::SystemThemeChanged(mode) => {
+      state.system_theme = mode;
+      Task::none()
+    }
     Message::Window(message) => {
       // Cross-surface follow-ups hoisted out of the shell surface (ADR 0029):
       // a close without an available tray runs the playback quit handshake,
@@ -411,6 +417,7 @@ mod tests {
     let settings_view = crate::app::state::SettingsState::from_settings(settings.snapshot());
     let login_flow = LoginState::from_settings(settings.snapshot());
     State {
+      system_theme: iced::theme::Mode::None,
       kernel: Kernel {
         settings,
         diagnostics: jellypilot_core::diagnostics::Diagnostics::default(),

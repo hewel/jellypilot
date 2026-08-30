@@ -35,6 +35,29 @@ impl<'de> Deserialize<'de> for IntroMode {
         })
     }
 }
+/// Preferred color scheme: follow the OS, or pin the dark or light theme.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ThemeMode {
+    #[default]
+    System,
+    Dark,
+    Light,
+}
+
+impl<'de> Deserialize<'de> for ThemeMode {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let value = serde_json::Value::deserialize(deserializer)?;
+        Ok(match value.as_str() {
+            Some(mode) if mode.eq_ignore_ascii_case("dark") => Self::Dark,
+            Some(mode) if mode.eq_ignore_ascii_case("light") => Self::Light,
+            _ => Self::System,
+        })
+    }
+}
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct LoginPrefill {
@@ -182,6 +205,8 @@ pub struct Settings {
     username: String,
     #[serde(default)]
     intro_mode: IntroMode,
+    #[serde(default)]
+    theme_mode: ThemeMode,
     #[serde(default, deserialize_with = "deserialize_optional_string")]
     mpv_path: Option<String>,
     #[serde(default, deserialize_with = "deserialize_string_list")]
@@ -226,6 +251,7 @@ impl Default for Settings {
             provider: String::new(),
             username: String::new(),
             intro_mode: IntroMode::Automatic,
+            theme_mode: ThemeMode::System,
             mpv_path: None,
             mpv_args: Vec::new(),
             playback_target_name: None,
@@ -256,6 +282,9 @@ impl Settings {
 
     pub const fn intro_mode(&self) -> IntroMode {
         self.intro_mode
+    }
+    pub const fn theme_mode(&self) -> ThemeMode {
+        self.theme_mode
     }
 
     pub fn mpv_path(&self) -> Option<&str> {
@@ -422,6 +451,12 @@ impl SettingsStore {
     pub fn set_intro_mode(&mut self, mode: IntroMode) -> Result<bool, SettingsMutationError> {
         self.update(|settings| {
             settings.intro_mode = mode;
+            Ok(())
+        })
+    }
+    pub fn set_theme_mode(&mut self, mode: ThemeMode) -> Result<bool, SettingsMutationError> {
+        self.update(|settings| {
+            settings.theme_mode = mode;
             Ok(())
         })
     }
@@ -812,6 +847,7 @@ mod tests {
             provider: "jellyfin".to_owned(),
             username: "alice".to_owned(),
             intro_mode: IntroMode::Manual,
+            theme_mode: ThemeMode::Dark,
             mpv_path: Some("/usr/bin/mpv".to_owned()),
             mpv_args: vec!["--fullscreen".to_owned(), "--profile=gpu-hq".to_owned()],
             playback_target_name: Some("Living Room".to_owned()),
@@ -847,6 +883,7 @@ mod tests {
         let settings = load_from(&path).unwrap();
 
         assert_eq!(settings.intro_mode(), IntroMode::Automatic);
+        assert_eq!(settings.theme_mode(), ThemeMode::System);
         assert_eq!(settings.mpv_path(), None);
         assert!(settings.mpv_args().is_empty());
         assert_eq!(settings.playback_target_name(), None);
@@ -859,6 +896,44 @@ mod tests {
         assert!(!settings.reduced_motion());
         assert_eq!(settings.browse_filters(), BrowseFilterSettings::default());
         fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn theme_mode_is_persisted_and_defaults_to_system() {
+        let path = test_path("theme-mode");
+        let _ = fs::remove_file(&path);
+        let mut store = store_at(path.clone(), Settings::default());
+
+        assert_eq!(Settings::default().theme_mode(), ThemeMode::System);
+        assert!(store.set_theme_mode(ThemeMode::Light).unwrap());
+        assert_eq!(load_from(&path).unwrap().theme_mode(), ThemeMode::Light);
+        fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn unknown_theme_mode_defaults_to_system() {
+        let path = test_path("unknown-theme-mode");
+        let _ = fs::remove_file(&path);
+        fs::write(
+            &path,
+            r#"{"remember":false,"server_url":"","provider":"","username":"","theme_mode":"neon"}"#,
+        )
+        .unwrap();
+
+        assert_eq!(load_from(&path).unwrap().theme_mode(), ThemeMode::System);
+        fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn theme_mode_serializes_as_lowercase_strings() {
+        let settings = Settings {
+            theme_mode: ThemeMode::Light,
+            ..Settings::default()
+        };
+
+        let contents = serde_json::to_string(&settings).unwrap();
+
+        assert!(contents.contains(r#""theme_mode":"light""#));
     }
 
     #[test]

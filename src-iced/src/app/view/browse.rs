@@ -14,7 +14,7 @@ use jellypilot_ui::icons::{
 };
 use jellypilot_ui::layout::SizeClass;
 use jellypilot_ui::overlay::{popover, PopoverOptions};
-use jellypilot_ui::tokens::TOKENS;
+use jellypilot_ui::tokens::{ThemePalette, TOKENS};
 use jellypilot_ui::variants::ButtonVariant;
 use jellypilot_ui::widgets::artwork_grid::{artwork_grid, ArtworkGridMetrics, ArtworkGridViewport};
 use jellypilot_ui::widgets::ellipsis_text::ellipsis_text;
@@ -74,7 +74,7 @@ pub fn view(state: &State) -> Element<'_, Message> {
     text(heading)
       .font(SPACE_GROTESK_FONT)
       .size(34)
-      .color(TOKENS.colors.onSurface),
+      .color(state.palette().colors.onSurface),
   );
   if matches!(state.shell.destination, Destination::Library { .. }) {
     header = header.push(toolbar(state));
@@ -219,22 +219,32 @@ fn played_option(
 fn browse_body<'a>(state: &'a State, class: SizeClass) -> Element<'a, Message> {
   let padding = page_padding(class);
   match &state.browse.view {
-    LibraryBrowseView::Inactive => empty_surface("Choose a library to browse.".to_owned(), padding),
+    LibraryBrowseView::Inactive => empty_surface(
+      state.palette(),
+      "Choose a library to browse.".to_owned(),
+      padding,
+    ),
     LibraryBrowseView::Loading => browse_loading_skeleton(state, class),
     LibraryBrowseView::Empty => match &state.shell.destination {
-      Destination::Search(query) => empty_surface(format!("No results for “{query}”."), padding),
+      Destination::Search(query) => empty_surface(
+        state.palette(),
+        format!("No results for “{query}”."),
+        padding,
+      ),
       Destination::Home
       | Destination::Library { .. }
       | Destination::Detail(_)
-      | Destination::Settings => {
-        empty_surface("This library has no matching items.".to_owned(), padding)
-      }
+      | Destination::Settings => empty_surface(
+        state.palette(),
+        "This library has no matching items.".to_owned(),
+        padding,
+      ),
     },
     LibraryBrowseView::Failed {
       message,
       retryable,
       retry_busy,
-    } => failure_surface(message, *retryable, *retry_busy, padding),
+    } => failure_surface(state.palette(), message, *retryable, *retry_busy, padding),
     LibraryBrowseView::Ready {
       visible_items,
       visible_start,
@@ -295,7 +305,7 @@ fn ready_surface<'a>(
     .push(
       row![text(format!("{total_record_count} items"))
         .size(13)
-        .color(TOKENS.colors.onSurfaceVariant),]
+        .color(state.palette().colors.onSurfaceVariant),]
       .padding([TOKENS.spacing.s3, padding])
       .align_y(Alignment::Center),
     )
@@ -311,7 +321,7 @@ fn ready_surface<'a>(
   // The failure banner stacks above the scrollable (the shell-toast pattern)
   // so it stays pinned to the viewport's bottom edge at any scroll position.
   let mut surface = stack![body].width(Fill).height(Fill);
-  if let Some(banner) = failure_overlay(load_more_failure, retry_busy) {
+  if let Some(banner) = failure_overlay(state.palette(), load_more_failure, retry_busy) {
     surface = surface.push(banner);
   }
   surface.into()
@@ -319,11 +329,12 @@ fn ready_surface<'a>(
 
 /// Builds the viewport-pinned failure banner when the ready surface carries
 /// an incremental load-more failure, or `None` when the tail loaded cleanly.
-fn failure_overlay(
-  load_more_failure: Option<&LibraryBrowseFailure>,
+fn failure_overlay<'a>(
+  palette: &'static ThemePalette,
+  load_more_failure: Option<&'a LibraryBrowseFailure>,
   retry_busy: bool,
-) -> Option<Element<'_, Message>> {
-  load_more_failure.map(|failure| failure_banner(failure, retry_busy))
+) -> Option<Element<'a, Message>> {
+  load_more_failure.map(|failure| failure_banner(palette, failure, retry_busy))
 }
 
 /// Maps a global item index into the sparse window of slots that starts at
@@ -446,6 +457,7 @@ fn video_card<'a>(
   skeleton_phase: f32,
   reduced_motion: bool,
 ) -> Element<'a, Message> {
+  let palette = state.palette();
   let artwork_height = card_artwork_height(cell_width);
   let artwork = artwork(
     state,
@@ -458,10 +470,10 @@ fn video_card<'a>(
   let copy = column![
     ellipsis_text(&item.name)
       .size(14)
-      .color(TOKENS.colors.onSurface),
+      .color(palette.colors.onSurface),
     ellipsis_text(item_caption(item))
       .size(12)
-      .color(TOKENS.colors.onSurfaceVariant),
+      .color(palette.colors.onSurfaceVariant),
   ]
   .spacing(TOKENS.spacing.s1)
   .padding(iced::Padding {
@@ -486,6 +498,7 @@ fn artwork<'a>(
   phase: f32,
   reduced_motion: bool,
 ) -> Element<'a, Message> {
+  let palette = state.palette();
   if let Some(cell) = cell {
     if cell.state == ArtworkCellState::Ready {
       if let Some(handle) = state.kernel.artwork_handles.get(cell.slot, &cell.image_id) {
@@ -500,7 +513,7 @@ fn artwork<'a>(
 
   let failed = cell.is_some_and(|cell| cell.state == ArtworkCellState::Failed);
   if failed {
-    let placeholder_color = TOKENS.colors.warning;
+    let placeholder_color = palette.colors.warning;
     let initial = name
       .trim()
       .chars()
@@ -524,7 +537,7 @@ fn artwork<'a>(
     .center_y(Fill)
     .style(|_theme| container::Style {
       background: Some(iced::Background::Color(
-        TOKENS.colors.surfaceContainerLowest,
+        palette.colors.surfaceContainerLowest,
       )),
       border: iced::Border {
         radius: full_radius(TOKENS.radii.lg),
@@ -539,19 +552,20 @@ fn artwork<'a>(
   skeleton_panel(
     Fill,
     height,
-    TOKENS.colors.surfaceContainerLowest,
+    palette.colors.surfaceContainerLowest,
     full_radius(TOKENS.radii.lg),
     phase,
     reduced_motion,
   )
   .into()
 }
-fn failure_surface(
-  message: &str,
+fn failure_surface<'a>(
+  palette: &'static ThemePalette,
+  message: &'a str,
   retryable: bool,
   retry_busy: bool,
   padding: f32,
-) -> Element<'_, Message> {
+) -> Element<'a, Message> {
   let retry_enabled = retryable && !retry_busy;
   let retry = button(
     row![
@@ -580,8 +594,8 @@ fn failure_surface(
       text("Could not load this library")
         .font(SPACE_GROTESK_FONT)
         .size(24)
-        .color(TOKENS.colors.onSurface),
-      text(message).size(14).color(TOKENS.colors.error),
+        .color(palette.colors.onSurface),
+      text(message).size(14).color(palette.colors.error),
       retry,
     ]
     .spacing(TOKENS.spacing.s3),
@@ -596,8 +610,12 @@ fn failure_surface(
 /// viewport. The outer fill container anchors the banner bottom-center with
 /// an `s4` offset; the banner itself is a flat, opaque error-container fill
 /// with no border or shadow.
-fn failure_banner(failure: &LibraryBrowseFailure, retry_busy: bool) -> Element<'_, Message> {
-  let colors = TOKENS.colors;
+fn failure_banner<'a>(
+  palette: &'static ThemePalette,
+  failure: &'a LibraryBrowseFailure,
+  retry_busy: bool,
+) -> Element<'a, Message> {
+  let colors = palette.colors;
   let retry_enabled = failure.retryable && !retry_busy;
   let retry = button(
     row![
@@ -655,12 +673,20 @@ fn retry_action(retryable: bool, retry_busy: bool) -> Option<Message> {
   (retryable && !retry_busy).then_some(Message::Browse(BrowseMessage::Retry))
 }
 
-fn empty_surface(message: String, padding: f32) -> Element<'static, Message> {
-  container(text(message).size(16).color(TOKENS.colors.onSurfaceVariant))
-    .padding(padding)
-    .width(Fill)
-    .height(Fill)
-    .into()
+fn empty_surface(
+  palette: &ThemePalette,
+  message: String,
+  padding: f32,
+) -> Element<'static, Message> {
+  container(
+    text(message)
+      .size(16)
+      .color(palette.colors.onSurfaceVariant),
+  )
+  .padding(padding)
+  .width(Fill)
+  .height(Fill)
+  .into()
 }
 
 const fn sort_label(sort: VideoLibrarySort) -> &'static str {
@@ -682,15 +708,15 @@ mod tests {
       retryable: true,
     };
     assert!(
-      failure_overlay(Some(&failure), false).is_some(),
+      failure_overlay(&jellypilot_ui::tokens::DARK_PALETTE, Some(&failure), false).is_some(),
       "a ready surface with a load-more failure must pin the banner overlay"
     );
     assert!(
-      failure_overlay(Some(&failure), true).is_some(),
+      failure_overlay(&jellypilot_ui::tokens::DARK_PALETTE, Some(&failure), true).is_some(),
       "the banner stays pinned while a retry is in flight"
     );
     assert!(
-      failure_overlay(None, false).is_none(),
+      failure_overlay(&jellypilot_ui::tokens::DARK_PALETTE, None, false).is_none(),
       "a clean tail renders no overlay"
     );
   }

@@ -9,7 +9,9 @@ use jellypilot_auth::login::ConnectionPhase;
 use jellypilot_auth::{AuthStore, SavedProfileKey, SavedProfileSummary, SensitiveSavedSession};
 use jellypilot_core::artwork_binder::{ArtworkBinder, ArtworkSlot};
 use jellypilot_core::browse_model::LibraryBrowseView;
-use jellypilot_core::config::{IntroMode, LoginPrefill, Settings, SettingsStore, ShortcutKind};
+use jellypilot_core::config::{
+  IntroMode, LoginPrefill, Settings, SettingsStore, ShortcutKind, ThemeMode,
+};
 use jellypilot_core::detail::DetailContent;
 use jellypilot_core::diagnostics::{DiagnosticCategory, DiagnosticLevel, Diagnostics};
 use jellypilot_core::request_gate::{RemoteToken, RequestGate};
@@ -20,6 +22,8 @@ use jellypilot_media_server::{
 };
 use jellypilot_mpv::playback::PlaybackController;
 use jellypilot_session::{IntroSkipMode, JellyfinWebSocket, JellyfinWebSocketEvent};
+use jellypilot_ui::theme::ThemeMode as UiThemeMode;
+use jellypilot_ui::tokens::{ThemePalette, DARK_PALETTE, LIGHT_PALETTE};
 use zeroize::Zeroizing;
 
 use super::kernel::Kernel;
@@ -639,6 +643,9 @@ pub fn diagnostic_matches(
 
 pub struct State {
   pub kernel: Kernel,
+  /// Latest OS light/dark mode report; `None` until the boot one-shot task
+  /// resolves. Read only while the theme mode setting is `System`.
+  pub system_theme: iced::theme::Mode,
   pub login: crate::app::login::Surface,
   pub settings: crate::app::settings::Surface,
   pub home: crate::app::home::Surface,
@@ -670,6 +677,7 @@ impl State {
     artwork_adapter.set_disk_cache_enabled(settings.snapshot().image_cache_enabled());
 
     Self {
+      system_theme: iced::theme::Mode::None,
       kernel: Kernel {
         settings,
         diagnostics,
@@ -744,6 +752,27 @@ impl State {
       || self.detail.artwork.has_loading();
     home_loading || browse_loading || detail_loading || artwork_loading
   }
+  /// Effective UI theme mode: the explicit setting, or the OS mode while the
+  /// setting is `System` (an unreported OS mode falls back to Dark).
+  pub fn theme_mode(&self) -> UiThemeMode {
+    match self.kernel.settings.snapshot().theme_mode() {
+      ThemeMode::Dark => UiThemeMode::Dark,
+      ThemeMode::Light => UiThemeMode::Light,
+      ThemeMode::System => match self.system_theme {
+        iced::theme::Mode::Light => UiThemeMode::Light,
+        iced::theme::Mode::None | iced::theme::Mode::Dark => UiThemeMode::Dark,
+      },
+    }
+  }
+
+  /// Semantic colors and shadows for the effective theme mode.
+  pub fn palette(&self) -> &'static ThemePalette {
+    match self.theme_mode() {
+      UiThemeMode::Dark => &DARK_PALETTE,
+      UiThemeMode::Light => &LIGHT_PALETTE,
+    }
+  }
+
   pub fn retain_artwork_handles(&mut self) {
     let slots: HashSet<_> = self.all_artwork_slots().collect();
     self.kernel.artwork_handles.retain_slots(slots);

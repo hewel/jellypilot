@@ -20,7 +20,7 @@ use iced::border::Radius;
 use iced::widget::{container, space, Container};
 use iced::{Background, Border, Color, Length, Shadow, Theme};
 
-use crate::tokens::TOKENS;
+use crate::tokens::{palette, TOKENS};
 
 /// Interpolates between two surface tones for the breathing pulse at a
 /// normalized `phase` in `[0.0, 1.0]`.
@@ -76,21 +76,24 @@ pub fn skeleton_panel<'a, Message: 'a>(
     container(space::horizontal())
         .width(width)
         .height(height)
-        .style(move |_theme: &Theme| skeleton_panel_style(base, radius, phase, reduced_motion))
+        .style(move |theme: &Theme| {
+            skeleton_panel_style(theme, base, radius, phase, reduced_motion)
+        })
 }
 
 /// Resolves the skeleton block container style: a static `surfaceContainerLow`
 /// block under reduced motion or non-finite phase, tone-breathing between
 /// `surfaceContainerLow` and `surfaceContainerHigh` otherwise. Skeletons are
 /// flat: `lg` radius, no border, no shadow.
-fn skeleton_style(_theme: &Theme, phase: f32, reduced_motion: bool) -> container::Style {
+fn skeleton_style(theme: &Theme, phase: f32, reduced_motion: bool) -> container::Style {
+    let colors = palette(theme).colors;
     let background = if reduced_motion || !phase.is_finite() {
-        TOKENS.colors.surfaceContainerLow
+        colors.surfaceContainerLow
     } else {
         pulse_color(
             phase,
-            TOKENS.colors.surfaceContainerLow,
-            TOKENS.colors.surfaceContainerHigh,
+            colors.surfaceContainerLow,
+            colors.surfaceContainerHigh,
         )
     };
 
@@ -109,6 +112,7 @@ fn skeleton_style(_theme: &Theme, phase: f32, reduced_motion: bool) -> container
 /// Resolves the skeleton panel container style: static base color under reduced
 /// motion or non-finite phase, breathing between `base` and `surfaceContainerHigh` otherwise.
 fn skeleton_panel_style(
+    theme: &Theme,
     base: Color,
     radius: Radius,
     phase: f32,
@@ -117,7 +121,7 @@ fn skeleton_panel_style(
     let background_color = if reduced_motion || !phase.is_finite() {
         base
     } else {
-        pulse_color(phase, base, TOKENS.colors.surfaceContainerHigh)
+        pulse_color(phase, base, palette(theme).colors.surfaceContainerHigh)
     };
 
     container::Style {
@@ -135,6 +139,7 @@ fn skeleton_panel_style(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::tokens::DARK_PALETTE;
 
     const EPSILON: f32 = 1e-6;
 
@@ -202,7 +207,7 @@ mod tests {
 
     #[test]
     fn reduced_motion_renders_the_static_low_surface() {
-        let theme = crate::theme::theme();
+        let theme = crate::theme::theme(crate::theme::ThemeMode::Dark);
         let static_style = static_block_style(&theme);
 
         for phase in [0.0, 0.25, 0.5, 0.75, 1.0, f32::NAN, f32::INFINITY] {
@@ -213,13 +218,13 @@ mod tests {
         }
         assert_eq!(
             static_style.background,
-            Some(Background::Color(TOKENS.colors.surfaceContainerLow))
+            Some(Background::Color(DARK_PALETTE.colors.surfaceContainerLow))
         );
     }
 
     #[test]
     fn non_finite_phase_falls_back_to_the_static_surface() {
-        let theme = crate::theme::theme();
+        let theme = crate::theme::theme(crate::theme::ThemeMode::Dark);
         let static_style = static_block_style(&theme);
 
         for non_finite in [f32::NAN, f32::INFINITY, f32::NEG_INFINITY] {
@@ -232,21 +237,21 @@ mod tests {
 
     #[test]
     fn active_skeleton_block_breathes_between_surface_tones() {
-        let theme = crate::theme::theme();
+        let theme = crate::theme::theme(crate::theme::ThemeMode::Dark);
         let static_style = static_block_style(&theme);
 
         let style_mid = skeleton_style(&theme, 0.5, false);
         let Some(Background::Color(mid_color)) = style_mid.background else {
             panic!("expected background color");
         };
-        assert_color_near(mid_color, TOKENS.colors.surfaceContainerHigh);
+        assert_color_near(mid_color, DARK_PALETTE.colors.surfaceContainerHigh);
         assert_eq!(style_mid.border, static_style.border);
         assert_eq!(style_mid.shadow, static_style.shadow);
 
         let style_start = skeleton_style(&theme, 0.0, false);
         assert_eq!(
             style_start.background,
-            Some(Background::Color(TOKENS.colors.surfaceContainerLow))
+            Some(Background::Color(DARK_PALETTE.colors.surfaceContainerLow))
         );
         assert_eq!(style_start.border, static_style.border);
         assert_eq!(style_start.shadow, static_style.shadow);
@@ -254,7 +259,7 @@ mod tests {
 
     #[test]
     fn skeleton_blocks_are_flat_with_lg_radius() {
-        let theme = crate::theme::theme();
+        let theme = crate::theme::theme(crate::theme::ThemeMode::Dark);
         let style = static_block_style(&theme);
         assert_eq!(style.border.width, 0.0);
         assert_eq!(style.border.radius, Radius::from(TOKENS.radii.lg));
@@ -262,11 +267,12 @@ mod tests {
     }
     #[test]
     fn reduced_motion_panel_renders_static_base() {
+        let theme = crate::theme::theme(crate::theme::ThemeMode::Dark);
         let base = Color::from_rgb(0.2, 0.3, 0.4);
         let radius = Radius::from(8.0);
 
         for phase in [0.0, 0.25, 0.5, 0.75, 1.0, f32::NAN, f32::INFINITY] {
-            let style = skeleton_panel_style(base, radius, phase, true);
+            let style = skeleton_panel_style(&theme, base, radius, phase, true);
             assert_eq!(style.background, Some(Background::Color(base)));
             assert_eq!(style.border.radius, radius);
             assert_eq!(style.border.color, Color::TRANSPARENT);
@@ -277,27 +283,29 @@ mod tests {
 
     #[test]
     fn active_panel_breathes_from_base_to_surface_high() {
+        let theme = crate::theme::theme(crate::theme::ThemeMode::Dark);
         let base = Color::from_rgba(0.2, 0.3, 0.4, 0.8);
         let radius = Radius::from(12.0);
 
-        let style_start = skeleton_panel_style(base, radius, 0.0, false);
+        let style_start = skeleton_panel_style(&theme, base, radius, 0.0, false);
         assert_eq!(style_start.background, Some(Background::Color(base)));
         assert_eq!(style_start.border.radius, radius);
 
-        let style_mid = skeleton_panel_style(base, radius, 0.5, false);
+        let style_mid = skeleton_panel_style(&theme, base, radius, 0.5, false);
         let Some(Background::Color(mid_color)) = style_mid.background else {
             panic!("expected background color");
         };
-        assert_color_near(mid_color, TOKENS.colors.surfaceContainerHigh);
+        assert_color_near(mid_color, DARK_PALETTE.colors.surfaceContainerHigh);
         assert_eq!(style_mid.border.radius, radius);
     }
     #[test]
     fn non_finite_phase_panel_falls_back_to_static_base() {
+        let theme = crate::theme::theme(crate::theme::ThemeMode::Dark);
         let base = Color::from_rgb(0.5, 0.5, 0.5);
         let radius = Radius::from(4.0);
 
         for non_finite in [f32::NAN, f32::INFINITY, f32::NEG_INFINITY] {
-            let style = skeleton_panel_style(base, radius, non_finite, false);
+            let style = skeleton_panel_style(&theme, base, radius, non_finite, false);
             assert_eq!(style.background, Some(Background::Color(base)));
             assert_eq!(style.border.radius, radius);
         }

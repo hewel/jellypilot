@@ -6,7 +6,7 @@ use iced::widget::button;
 use iced::widget::svg::{self, Handle, Svg};
 use iced::{Color, Length, Theme};
 
-use crate::tokens::TOKENS;
+use crate::tokens::palette;
 use crate::variants::ButtonVariant;
 
 /// Default icon dimension in logical pixels (18.0px).
@@ -310,7 +310,13 @@ pub fn icon<'a>(icon: Icon) -> Svg<'a, Theme> {
 
 /// Creates an iced `Svg` widget with explicit size and default surface text color.
 pub fn icon_sized<'a>(icon: Icon, size: impl Into<IconSize>) -> Svg<'a, Theme> {
-    icon_with_color(icon, size, TOKENS.colors.onSurface)
+    let px = size.into().pixels();
+    Svg::new(icon.handle())
+        .width(Length::Fixed(px))
+        .height(Length::Fixed(px))
+        .style(|theme: &Theme, _status| svg::Style {
+            color: Some(palette(theme).colors.onSurface),
+        })
 }
 
 /// Creates an iced `Svg` widget with explicit size and color styling.
@@ -338,17 +344,24 @@ pub fn icon_for_variant_disabled<'a>(
     variant: ButtonVariant,
     disabled: bool,
 ) -> Svg<'a, Theme> {
-    let mut color = match variant {
-        ButtonVariant::Primary => TOKENS.colors.onPrimary,
-        ButtonVariant::Secondary => TOKENS.colors.onSecondaryContainer,
-        ButtonVariant::Tonal | ButtonVariant::TonalActive => TOKENS.colors.onSurface,
-        ButtonVariant::Text => TOKENS.colors.secondary,
-        ButtonVariant::Icon => TOKENS.colors.onSurfaceVariant,
-    };
-    if disabled {
-        color.a *= 0.5;
-    }
-    icon_with_color(icon, size, color)
+    let px = size.into().pixels();
+    Svg::new(icon.handle())
+        .width(Length::Fixed(px))
+        .height(Length::Fixed(px))
+        .style(move |theme: &Theme, _status| {
+            let colors = palette(theme).colors;
+            let mut color = match variant {
+                ButtonVariant::Primary => colors.onPrimary,
+                ButtonVariant::Secondary => colors.onSecondaryContainer,
+                ButtonVariant::Tonal | ButtonVariant::TonalActive => colors.onSurface,
+                ButtonVariant::Text => colors.secondary,
+                ButtonVariant::Icon => colors.onSurfaceVariant,
+            };
+            if disabled {
+                color.a *= 0.5;
+            }
+            svg::Style { color: Some(color) }
+        })
 }
 
 /// Creates an iced `Svg` widget with colors matching a button variant and interaction status.
@@ -446,7 +459,11 @@ mod tests {
     fn icon_helpers_construct_svg_widgets() {
         let _ = icon(Icon::Play);
         let _ = icon_sized(Icon::Home, IconSize::Xl);
-        let _ = icon_with_color(Icon::Heart, IconSize::Sm, TOKENS.colors.error);
+        let _ = icon_with_color(
+            Icon::Heart,
+            IconSize::Sm,
+            crate::tokens::DARK_PALETTE.colors.error,
+        );
         let _ = icon_for_variant(Icon::Play, IconSize::Md, ButtonVariant::Primary);
         let _ = icon_for_variant_disabled(Icon::Play, IconSize::Md, ButtonVariant::Primary, true);
         let _ = icon_for_variant_status(

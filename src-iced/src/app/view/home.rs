@@ -13,7 +13,7 @@ use jellypilot_ui::icons::{
   icon_for_variant, icon_for_variant_disabled, icon_with_color, Icon, IconSize,
 };
 use jellypilot_ui::layout::SizeClass;
-use jellypilot_ui::tokens::TOKENS;
+use jellypilot_ui::tokens::{ThemePalette, TOKENS};
 use jellypilot_ui::variants::{ButtonVariant, SurfaceVariant};
 use jellypilot_ui::widgets::ellipsis_text::ellipsis_text;
 use jellypilot_ui::widgets::skeleton::{skeleton_block, skeleton_panel};
@@ -90,6 +90,7 @@ fn featured_hero<'a>(
   skeleton_phase: f32,
   reduced_motion: bool,
 ) -> Element<'a, Message> {
+  let palette = state.palette();
   let artwork = hero_artwork(
     state,
     state.home.artwork.hero(&item.id),
@@ -103,10 +104,10 @@ fn featured_hero<'a>(
     text(hero_headline(item))
       .font(SPACE_GROTESK_FONT)
       .size(42)
-      .color(TOKENS.colors.onSurface),
+      .color(palette.colors.onSurface),
     text(hero_metadata(item))
       .size(17)
-      .color(TOKENS.colors.onSurfaceVariant),
+      .color(palette.colors.onSurfaceVariant),
   ]
   .spacing(TOKENS.spacing.s3)
   .width(Fill);
@@ -118,7 +119,7 @@ fn featured_hero<'a>(
     copy = copy.push(
       text(overview)
         .size(15)
-        .color(TOKENS.colors.onSurfaceVariant),
+        .color(palette.colors.onSurfaceVariant),
     );
   }
 
@@ -195,8 +196,13 @@ fn section_view(
 ) -> Option<Element<'_, Message>> {
   match state.home.data.section(section) {
     LoadState::Idle => None,
-    LoadState::Loading => Some(section_skeleton(section, skeleton_phase, reduced_motion)),
-    LoadState::Failed(error) => Some(section_error(section.title(), error)),
+    LoadState::Loading => Some(section_skeleton(
+      state.palette(),
+      section,
+      skeleton_phase,
+      reduced_motion,
+    )),
+    LoadState::Failed(error) => Some(section_error(state.palette(), section.title(), error)),
     LoadState::Ready(items) if items.is_empty() => None,
     LoadState::Ready(items) => Some(section_row(
       state,
@@ -236,7 +242,7 @@ fn section_row<'a>(
     text(section.title())
       .font(SPACE_GROTESK_FONT)
       .size(24)
-      .color(TOKENS.colors.onSurface),
+      .color(state.palette().colors.onSurface),
     cards,
   ]
   .spacing(TOKENS.spacing.s3)
@@ -251,6 +257,7 @@ fn video_card<'a>(
   reduced_motion: bool,
 ) -> Element<'a, Message> {
   let (frame_width, frame_height) = section_frame_size(section);
+  let palette = state.palette();
   let is_action_card = matches!(section, HomeSection::ContinueWatching | HomeSection::NextUp);
   let radius = full_radius(TOKENS.radii.lg);
   let poster = card_artwork(
@@ -266,17 +273,17 @@ fn video_card<'a>(
   let text_stack = column![
     ellipsis_text(&item.name)
       .size(14)
-      .color(TOKENS.colors.onSurface),
+      .color(palette.colors.onSurface),
     ellipsis_text(item_caption(item))
       .size(12)
-      .color(TOKENS.colors.onSurfaceVariant),
+      .color(palette.colors.onSurfaceVariant),
   ]
   .spacing(TOKENS.spacing.s1)
   .width(Fill);
 
   if is_action_card {
     let progress_element: Option<Element<'a, Message>> =
-      card_progress(section, item).map(progress_bar);
+      card_progress(section, item).map(|progress| progress_bar(palette, progress));
 
     let play_label = if has_resume_position(item) {
       "Resume"
@@ -344,10 +351,10 @@ fn video_card<'a>(
   let copy = column![
     ellipsis_text(&item.name)
       .size(14)
-      .color(TOKENS.colors.onSurface),
+      .color(palette.colors.onSurface),
     ellipsis_text(item_caption(item))
       .size(12)
-      .color(TOKENS.colors.onSurfaceVariant),
+      .color(palette.colors.onSurfaceVariant),
   ]
   .spacing(TOKENS.spacing.s1)
   .padding(iced::Padding {
@@ -386,6 +393,7 @@ fn hero_artwork<'a>(
   phase: f32,
   reduced_motion: bool,
 ) -> Element<'a, Message> {
+  let palette = state.palette();
   if let Some(cell) = cell {
     if cell.state == ArtworkCellState::Ready {
       if let Some(handle) = state.kernel.artwork_handles.get(cell.slot, &cell.image_id) {
@@ -400,7 +408,7 @@ fn hero_artwork<'a>(
 
   let failed = cell.is_some_and(|cell| cell.state == ArtworkCellState::Failed);
   if failed {
-    let placeholder_color = TOKENS.colors.warning;
+    let placeholder_color = palette.colors.warning;
     let initial = name
       .trim()
       .chars()
@@ -424,7 +432,7 @@ fn hero_artwork<'a>(
     .center_y(Fill)
     .style(|_theme| container::Style {
       background: Some(iced::Background::Color(
-        TOKENS.colors.surfaceContainerLowest,
+        palette.colors.surfaceContainerLowest,
       )),
       border: iced::Border {
         radius: full_radius(TOKENS.radii.lg),
@@ -439,7 +447,7 @@ fn hero_artwork<'a>(
   skeleton_panel(
     width,
     height,
-    TOKENS.colors.surfaceContainerLowest,
+    palette.colors.surfaceContainerLowest,
     full_radius(TOKENS.radii.lg),
     phase,
     reduced_motion,
@@ -456,6 +464,7 @@ fn card_artwork<'a>(
   phase: f32,
   reduced_motion: bool,
 ) -> Element<'a, Message> {
+  let palette = state.palette();
   if let Some(cell) = cell {
     if cell.state == ArtworkCellState::Ready {
       if let Some(handle) = state.kernel.artwork_handles.get(cell.slot, &cell.image_id) {
@@ -470,7 +479,7 @@ fn card_artwork<'a>(
 
   let failed = cell.is_some_and(|cell| cell.state == ArtworkCellState::Failed);
   if failed {
-    let placeholder_color = TOKENS.colors.warning;
+    let placeholder_color = palette.colors.warning;
     let initial = name
       .trim()
       .chars()
@@ -499,7 +508,7 @@ fn card_artwork<'a>(
     .center_y(Fill)
     .style(move |_theme| container::Style {
       background: Some(iced::Background::Color(
-        TOKENS.colors.surfaceContainerLowest,
+        palette.colors.surfaceContainerLowest,
       )),
       border: iced::Border {
         radius,
@@ -514,7 +523,7 @@ fn card_artwork<'a>(
   skeleton_panel(
     width,
     height,
-    TOKENS.colors.surfaceContainerLowest,
+    palette.colors.surfaceContainerLowest,
     radius,
     phase,
     reduced_motion,
@@ -540,7 +549,7 @@ fn card_progress(section: HomeSection, item: &VideoLibraryItem) -> Option<f64> {
   }
 }
 
-fn progress_bar<'a>(progress: f64) -> Element<'a, Message> {
+fn progress_bar<'a>(palette: &'static ThemePalette, progress: f64) -> Element<'a, Message> {
   let filled = (progress.round() as u16).min(100);
   let remaining = 100_u16.saturating_sub(filled);
   // Zero FillPortion lays out as a non-fluid child against the full width, so
@@ -551,7 +560,7 @@ fn progress_bar<'a>(progress: f64) -> Element<'a, Message> {
       container(space::horizontal())
         .width(Length::FillPortion(filled))
         .height(4)
-        .style(|_| iced::widget::container::Style::default().background(TOKENS.colors.primary)),
+        .style(|_| iced::widget::container::Style::default().background(palette.colors.primary)),
     );
   }
   if remaining > 0 {
@@ -560,7 +569,7 @@ fn progress_bar<'a>(progress: f64) -> Element<'a, Message> {
         .width(Length::FillPortion(remaining))
         .height(4)
         .style(|_| {
-          iced::widget::container::Style::default().background(TOKENS.colors.surfaceContainerLow)
+          iced::widget::container::Style::default().background(palette.colors.surfaceContainerLow)
         }),
     );
   }
@@ -568,6 +577,7 @@ fn progress_bar<'a>(progress: f64) -> Element<'a, Message> {
 }
 
 fn section_skeleton<'a>(
+  palette: &ThemePalette,
   section: HomeSection,
   phase: f32,
   reduced_motion: bool,
@@ -588,14 +598,18 @@ fn section_skeleton<'a>(
     text(section.title())
       .font(SPACE_GROTESK_FONT)
       .size(24)
-      .color(TOKENS.colors.onSurface),
+      .color(palette.colors.onSurface),
     cards,
   ]
   .spacing(TOKENS.spacing.s3)
   .into()
 }
 
-fn section_error<'a>(title: &'static str, error: &'a str) -> Element<'a, Message> {
+fn section_error<'a>(
+  palette: &ThemePalette,
+  title: &'static str,
+  error: &'a str,
+) -> Element<'a, Message> {
   let retry = button(text("Retry"))
     .padding([6, 12])
     .on_press(Message::Home(HomeMessage::Retry))
@@ -607,8 +621,8 @@ fn section_error<'a>(title: &'static str, error: &'a str) -> Element<'a, Message
       text(title)
         .font(SPACE_GROTESK_FONT)
         .size(24)
-        .color(TOKENS.colors.onSurface),
-      text(error).size(13).color(TOKENS.colors.error),
+        .color(palette.colors.onSurface),
+      text(error).size(13).color(palette.colors.error),
       retry,
     ]
     .spacing(TOKENS.spacing.s3),

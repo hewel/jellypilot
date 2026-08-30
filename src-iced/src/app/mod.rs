@@ -30,6 +30,7 @@ pub fn boot(smoke: bool, tray: Option<crate::tray::Tray>) -> (State, Task<Messag
     iced::window::latest()
       .and_then(iced::window::size)
       .map(|size| Message::Window(message::WindowMessage::Resized(size))),
+    iced::system::theme().map(Message::SystemThemeDiscovered),
   ]);
   (state, task)
 }
@@ -46,6 +47,6 @@ pub fn subscription(state: &State) -> Subscription<Message> {
   subscriptions::subscription(state)
 }
 
-pub fn theme(_state: &State) -> Theme {
-  jellypilot_ui::theme::theme()
+pub fn theme(state: &State) -> Theme {
+  jellypilot_ui::theme::theme(state.theme_mode())
 }

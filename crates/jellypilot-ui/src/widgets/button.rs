@@ -3,12 +3,14 @@
 use iced::widget::button;
 use iced::{Background, Border, Color, Theme};
 
-use crate::tokens::TOKENS;
+use crate::tokens::{palette, TOKENS};
 use crate::variants::ButtonVariant;
 
 /// Resolves a button variant and interaction status to an iced style.
-pub fn style(_theme: &Theme, variant: ButtonVariant, status: button::Status) -> button::Style {
-    let colors = TOKENS.colors;
+pub fn style(theme: &Theme, variant: ButtonVariant, status: button::Status) -> button::Style {
+    let palette = palette(theme);
+    let colors = palette.colors;
+    let shadows = palette.shadows;
     let (mut background, mut text_color, mut border_color, border_width, mut shadow) = match variant
     {
         ButtonVariant::Primary => (
@@ -16,42 +18,42 @@ pub fn style(_theme: &Theme, variant: ButtonVariant, status: button::Status) -> 
             colors.onPrimary,
             Color::TRANSPARENT,
             0.0,
-            TOKENS.shadows.none.iced(),
+            shadows.none.iced(),
         ),
         ButtonVariant::Secondary => (
             Some(colors.secondaryContainer),
             colors.onSecondaryContainer,
             colors.outlineVariant,
             1.0,
-            TOKENS.shadows.none.iced(),
+            shadows.none.iced(),
         ),
         ButtonVariant::Tonal => (
             Some(colors.surfaceContainerLow),
             colors.onSurface,
             Color::TRANSPARENT,
             0.0,
-            TOKENS.shadows.none.iced(),
+            shadows.none.iced(),
         ),
         ButtonVariant::TonalActive => (
             Some(colors.surfaceContainerHigh),
             colors.onSurface,
             Color::TRANSPARENT,
             0.0,
-            TOKENS.shadows.none.iced(),
+            shadows.none.iced(),
         ),
         ButtonVariant::Text => (
             None,
             colors.secondary,
             Color::TRANSPARENT,
             0.0,
-            TOKENS.shadows.none.iced(),
+            shadows.none.iced(),
         ),
         ButtonVariant::Icon => (
             None,
             colors.onSurfaceVariant,
             Color::TRANSPARENT,
             0.0,
-            TOKENS.shadows.none.iced(),
+            shadows.none.iced(),
         ),
     };
 
@@ -140,7 +142,7 @@ mod tests {
         use crate::variants::ButtonVariant;
         use iced::widget::button::Status;
 
-        let theme = crate::theme::theme();
+        let theme = crate::theme::theme(crate::theme::ThemeMode::Dark);
         for status in [
             Status::Active,
             Status::Hovered,
@@ -166,7 +168,7 @@ mod tests {
         use iced::border::Radius;
         use iced::widget::button::Status;
 
-        let theme = crate::theme::theme();
+        let theme = crate::theme::theme(crate::theme::ThemeMode::Dark);
         for variant in [
             ButtonVariant::Primary,
             ButtonVariant::Secondary,
@@ -190,7 +192,7 @@ mod tests {
         use iced::widget::button::Status;
         use iced::Shadow;
 
-        let theme = crate::theme::theme();
+        let theme = crate::theme::theme(crate::theme::ThemeMode::Dark);
         for variant in [
             ButtonVariant::Primary,
             ButtonVariant::Secondary,
@@ -221,12 +223,12 @@ mod tests {
         use iced::widget::button::Status;
         use iced::Background;
 
-        let theme = crate::theme::theme();
+        let theme = crate::theme::theme(crate::theme::ThemeMode::Dark);
         let idle = super::style(&theme, ButtonVariant::Tonal, Status::Active);
         assert_eq!(
             idle.background,
             Some(Background::Color(
-                crate::tokens::TOKENS.colors.surfaceContainerLow
+                crate::tokens::DARK_PALETTE.colors.surfaceContainerLow
             ))
         );
         assert_eq!(idle.border.width, 0.0);
@@ -235,7 +237,7 @@ mod tests {
         assert_eq!(
             hovered.background,
             Some(Background::Color(
-                crate::tokens::TOKENS.colors.surfaceContainerHigh
+                crate::tokens::DARK_PALETTE.colors.surfaceContainerHigh
             ))
         );
         assert_eq!(hovered.border.width, 0.0);
@@ -247,13 +249,13 @@ mod tests {
         use iced::widget::button::Status;
         use iced::Background;
 
-        let theme = crate::theme::theme();
+        let theme = crate::theme::theme(crate::theme::ThemeMode::Dark);
         for status in [Status::Active, Status::Hovered, Status::Pressed] {
             let style = super::style(&theme, ButtonVariant::TonalActive, status);
             assert_eq!(
                 style.background,
                 Some(Background::Color(
-                    crate::tokens::TOKENS.colors.surfaceContainerHigh
+                    crate::tokens::DARK_PALETTE.colors.surfaceContainerHigh
                 )),
                 "TonalActive must stay filled in status {status:?}"
             );

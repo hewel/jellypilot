@@ -8,7 +8,7 @@ use jellypilot_auth::{
 };
 use jellypilot_core::artwork_binder::ArtworkSlot;
 use jellypilot_core::browse_model::BrowsePageSettlement;
-use jellypilot_core::config::{IntroMode, LoginPrefill, ShortcutKind};
+use jellypilot_core::config::{IntroMode, LoginPrefill, ShortcutKind, ThemeMode};
 use jellypilot_core::diagnostics::{DiagnosticCategory, DiagnosticLevel};
 use jellypilot_core::request_gate::{
   DetailAuxToken, DetailToken, HomeToken, RemotePlayToken, RemoteToken, SessionToken,
@@ -41,6 +41,14 @@ impl std::fmt::Debug for Message {
       Self::Settings(_) => formatter.write_str("Settings"),
       Self::Remote(_) => formatter.write_str("Remote"),
       Self::Tray(action) => formatter.debug_tuple("Tray").field(action).finish(),
+      Self::SystemThemeDiscovered(mode) => formatter
+        .debug_tuple("SystemThemeDiscovered")
+        .field(mode)
+        .finish(),
+      Self::SystemThemeChanged(mode) => formatter
+        .debug_tuple("SystemThemeChanged")
+        .field(mode)
+        .finish(),
       Self::DismissNotice(id) => formatter.debug_tuple("DismissNotice").field(id).finish(),
       Self::ArtworkStreamCompleted(_) => formatter.write_str("ArtworkStreamCompleted"),
     }
@@ -59,6 +67,10 @@ pub enum Message {
   Settings(SettingsMessage),
   Remote(RemoteMessage),
   Tray(crate::tray::TrayAction),
+  /// One-shot OS light/dark mode discovered at boot.
+  SystemThemeDiscovered(iced::theme::Mode),
+  /// OS light/dark mode changed while the theme mode is `System`.
+  SystemThemeChanged(iced::theme::Mode),
   DismissNotice(u64),
   /// A surface's streamed Library Image loads all settled; carries that
   /// stream's own sanitized aggregate for the diagnostics event.
@@ -160,6 +172,7 @@ pub enum SettingsMessage {
   IntroMenuToggled,
   IntroMenuDismissed,
   IntroModeSelected(IntroMode),
+  ThemeModeSelected(ThemeMode),
   SubtitleMenuToggled,
   SubtitleMenuDismissed,
   SubtitleLanguageAdded(String),

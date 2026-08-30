@@ -21,7 +21,7 @@ use jellypilot_ui::fonts::SPACE_GROTESK_FONT;
 use jellypilot_ui::icons::{
   icon_for_variant, icon_for_variant_disabled, icon_with_color, Icon, IconSize,
 };
-use jellypilot_ui::tokens::TOKENS;
+use jellypilot_ui::tokens::{ThemePalette, TOKENS};
 use jellypilot_ui::variants::{ButtonVariant, SurfaceVariant};
 use jellypilot_ui::widgets::skeleton::{skeleton_block, skeleton_panel};
 use jellypilot_ui::{full_radius, rounded_image};
@@ -61,6 +61,7 @@ fn detail_ready<'a>(
   match content {
     DetailContent::Item(item) => {
       page = page.push(summary(
+        state.palette(),
         &item.genres,
         &item.metadata.creators,
         &item.metadata.cast,
@@ -71,6 +72,7 @@ fn detail_ready<'a>(
     }
     DetailContent::Show(show) => {
       page = page.push(summary(
+        state.palette(),
         &show.genres,
         &show.metadata.creators,
         &show.metadata.cast,
@@ -198,6 +200,7 @@ fn hero_at_width<'a>(
   skeleton_phase: f32,
   reduced_motion: bool,
 ) -> Element<'a, Message> {
+  let palette = state.palette();
   let name = content.name;
   let overview = content.overview.filter(|value| !value.trim().is_empty());
   let copy_width = (width - (TOKENS.spacing.s6 * 2.0) - POSTER_WIDTH - TOKENS.spacing.s8).max(1.0);
@@ -221,8 +224,8 @@ fn hero_at_width<'a>(
     reduced_motion,
   );
   let gradient = gradient::Linear::new(Degrees(180.0))
-    .add_stop(0.0, TOKENS.colors.surfaceContainerLowest.scale_alpha(0.0))
-    .add_stop(1.0, TOKENS.colors.surfaceContainerLowest.scale_alpha(0.85));
+    .add_stop(0.0, palette.colors.surfaceContainerLowest.scale_alpha(0.0))
+    .add_stop(1.0, palette.colors.surfaceContainerLowest.scale_alpha(0.85));
   let scrim = container(space::vertical())
     .width(Fill)
     .height(hero_height)
@@ -262,13 +265,13 @@ fn hero_at_width<'a>(
     .push(
       text(content.metadata.clone())
         .size(15)
-        .color(TOKENS.colors.onSurfaceVariant),
+        .color(palette.colors.onSurfaceVariant),
     )
     .push(
       text(name)
         .font(SPACE_GROTESK_FONT)
         .size(45)
-        .color(TOKENS.colors.onSurface),
+        .color(palette.colors.onSurface),
     );
 
   if let Some(overview) = overview {
@@ -277,7 +280,7 @@ fn hero_at_width<'a>(
         container(
           text(overview)
             .size(OVERVIEW_TEXT_SIZE)
-            .color(TOKENS.colors.onSurfaceVariant),
+            .color(palette.colors.onSurfaceVariant),
         )
         .width(Fill)
         .height(collapsed_height)
@@ -287,7 +290,7 @@ fn hero_at_width<'a>(
       copy = copy.push(
         text(overview)
           .size(OVERVIEW_TEXT_SIZE)
-          .color(TOKENS.colors.onSurfaceVariant),
+          .color(palette.colors.onSurfaceVariant),
       );
     }
     if overview_expandable {
@@ -414,17 +417,18 @@ fn detail_actions<'a>(
         UserDataActionKind::Played => "Updating played state…",
       })
       .size(13)
-      .color(TOKENS.colors.onSurfaceVariant),
+      .color(state.palette().colors.onSurfaceVariant),
     );
   }
   let mut content = Column::new().spacing(TOKENS.spacing.s2).push(actions);
   if let Some(error) = &state.detail.data.user_data_error {
-    content = content.push(text(error).size(13).color(TOKENS.colors.error));
+    content = content.push(text(error).size(13).color(state.palette().colors.error));
   }
   content.into()
 }
 
 fn summary<'a>(
+  palette: &ThemePalette,
   genres: &'a [String],
   creators: &'a [String],
   cast: &'a [String],
@@ -434,13 +438,17 @@ fn summary<'a>(
   }
   let mut columns = Row::new().spacing(TOKENS.spacing.s8).width(Fill);
   if !genres.is_empty() {
-    columns = columns.push(summary_column("Genres", genres.join(" • ")));
+    columns = columns.push(summary_column(palette, "Genres", genres.join(" • ")));
   }
   if !creators.is_empty() {
-    columns = columns.push(summary_column("Creators", limited_people(creators, 2)));
+    columns = columns.push(summary_column(
+      palette,
+      "Creators",
+      limited_people(creators, 2),
+    ));
   }
   if !cast.is_empty() {
-    columns = columns.push(summary_column("Cast", limited_people(cast, 4)));
+    columns = columns.push(summary_column(palette, "Cast", limited_people(cast, 4)));
   }
   container(columns)
     .padding(TOKENS.spacing.s5)
@@ -449,10 +457,14 @@ fn summary<'a>(
     .into()
 }
 
-fn summary_column(label: &'static str, values: String) -> Element<'static, Message> {
+fn summary_column(
+  palette: &ThemePalette,
+  label: &'static str,
+  values: String,
+) -> Element<'static, Message> {
   column![
-    text(label).size(12).color(TOKENS.colors.onSurfaceVariant),
-    text(values).size(14).color(TOKENS.colors.onSurface),
+    text(label).size(12).color(palette.colors.onSurfaceVariant),
+    text(values).size(14).color(palette.colors.onSurface),
   ]
   .spacing(TOKENS.spacing.s2)
   .width(Fill)
@@ -468,11 +480,14 @@ fn seasons_section<'a>(
   let title = text("Seasons")
     .font(SPACE_GROTESK_FONT)
     .size(26)
-    .color(TOKENS.colors.onSurface);
+    .color(state.palette().colors.onSurface);
   if show.seasons.is_empty() {
-    return column![title, status_surface("No seasons available")]
-      .spacing(TOKENS.spacing.s3)
-      .into();
+    return column![
+      title,
+      status_surface(state.palette(), "No seasons available")
+    ]
+    .spacing(TOKENS.spacing.s3)
+    .into();
   }
   let loading = matches!(state.detail.data.season_episodes, LoadState::Loading);
   let mut season_buttons = Row::new().spacing(TOKENS.spacing.s2);
@@ -486,14 +501,17 @@ fn seasons_section<'a>(
     .height(48)
     .style(jellypilot_ui::theme::scrollable);
   let episodes = match &state.detail.data.season_episodes {
-    LoadState::Idle => status_surface("Choose a season"),
+    LoadState::Idle => status_surface(state.palette(), "Choose a season"),
     LoadState::Loading => episode_skeletons(skeleton_phase, reduced_motion),
-    LoadState::Failed(error) => {
-      retryable_surface(error, Message::Detail(DetailMessage::RetrySeason))
-    }
-    LoadState::Ready(page) if page.episodes.is_empty() => {
-      status_surface("Jellyfin returned no episodes for this season.")
-    }
+    LoadState::Failed(error) => retryable_surface(
+      state.palette(),
+      error,
+      Message::Detail(DetailMessage::RetrySeason),
+    ),
+    LoadState::Ready(page) if page.episodes.is_empty() => status_surface(
+      state.palette(),
+      "Jellyfin returned no episodes for this season.",
+    ),
     LoadState::Ready(page) => episode_list(state, &page.episodes, skeleton_phase, reduced_motion),
   };
   column![title, selector, episodes]
@@ -536,15 +554,17 @@ fn neighbor_section(
   let title = text("More from this season")
     .font(SPACE_GROTESK_FONT)
     .size(26)
-    .color(TOKENS.colors.onSurface);
+    .color(state.palette().colors.onSurface);
   let body = match &state.detail.data.season_neighbors {
     LoadState::Idle => return space::vertical().height(0).into(),
     LoadState::Loading => episode_skeletons(skeleton_phase, reduced_motion),
-    LoadState::Failed(error) => {
-      retryable_surface(error, Message::Detail(DetailMessage::RetryNeighbors))
-    }
+    LoadState::Failed(error) => retryable_surface(
+      state.palette(),
+      error,
+      Message::Detail(DetailMessage::RetryNeighbors),
+    ),
     LoadState::Ready(items) if items.is_empty() => {
-      status_surface("No neighboring episodes are available.")
+      status_surface(state.palette(), "No neighboring episodes are available.")
     }
     LoadState::Ready(items) => episode_list(state, items, skeleton_phase, reduced_motion),
   };
@@ -560,7 +580,7 @@ fn next_up_section<'a>(
     text("Next Up")
       .font(SPACE_GROTESK_FONT)
       .size(26)
-      .color(TOKENS.colors.onSurface),
+      .color(state.palette().colors.onSurface),
     episode_card(state, episode, skeleton_phase, reduced_motion),
   ]
   .spacing(TOKENS.spacing.s3)
@@ -586,6 +606,7 @@ fn episode_card<'a>(
   skeleton_phase: f32,
   reduced_motion: bool,
 ) -> Element<'a, Message> {
+  let palette = state.palette();
   let key = detail_episode_key(&episode.id);
   let art = artwork(
     state,
@@ -603,7 +624,7 @@ fn episode_card<'a>(
     text(format!("{}  {}", episode_label(episode), episode.name))
       .font(SPACE_GROTESK_FONT)
       .size(18)
-      .color(TOKENS.colors.onSurface),
+      .color(palette.colors.onSurface),
   );
   if let Some(overview) = episode
     .overview
@@ -613,11 +634,11 @@ fn episode_card<'a>(
     copy = copy.push(
       text(overview)
         .size(13)
-        .color(TOKENS.colors.onSurfaceVariant),
+        .color(palette.colors.onSurfaceVariant),
     );
   }
   if let Some(progress) = playback_progress(episode) {
-    copy = copy.push(progress_bar(progress));
+    copy = copy.push(progress_bar(palette, progress));
   }
   let play_label = if has_resume(episode) {
     "Resume"
@@ -682,6 +703,7 @@ fn artwork<'a>(
   phase: f32,
   reduced_motion: bool,
 ) -> Element<'a, Message> {
+  let palette = state.palette();
   let radius = full_radius(TOKENS.radii.lg);
   let cell = state.detail.artwork.get(key);
   if let Some(ArtworkCell {
@@ -700,7 +722,7 @@ fn artwork<'a>(
   }
   let failed = cell.is_some_and(|cell| cell.state == ArtworkCellState::Failed);
   if failed {
-    let placeholder_color = TOKENS.colors.warning;
+    let placeholder_color = palette.colors.warning;
     let initial = name
       .trim()
       .chars()
@@ -725,7 +747,7 @@ fn artwork<'a>(
     .center_y(Fill)
     .style(move |_theme| container::Style {
       background: Some(iced::Background::Color(
-        TOKENS.colors.surfaceContainerLowest,
+        palette.colors.surfaceContainerLowest,
       )),
       border: iced::Border {
         radius,
@@ -740,7 +762,7 @@ fn artwork<'a>(
   skeleton_panel(
     width,
     height,
-    TOKENS.colors.surfaceContainerLowest,
+    palette.colors.surfaceContainerLowest,
     radius,
     phase,
     reduced_motion,
@@ -826,8 +848,8 @@ fn detail_failure<'a>(state: &State, error: &'a str) -> Element<'a, Message> {
       text("Could not load detail")
         .font(SPACE_GROTESK_FONT)
         .size(28)
-        .color(TOKENS.colors.onSurface),
-      text(error).size(14).color(TOKENS.colors.error),
+        .color(state.palette().colors.onSurface),
+      text(error).size(14).color(state.palette().colors.error),
       retry,
     ]
     .spacing(TOKENS.spacing.s3),
@@ -838,10 +860,14 @@ fn detail_failure<'a>(state: &State, error: &'a str) -> Element<'a, Message> {
   .into()
 }
 
-fn retryable_surface<'a>(error: &'a str, retry: Message) -> Element<'a, Message> {
+fn retryable_surface<'a>(
+  palette: &ThemePalette,
+  error: &'a str,
+  retry: Message,
+) -> Element<'a, Message> {
   container(
     row![
-      text(error).size(13).color(TOKENS.colors.error),
+      text(error).size(13).color(palette.colors.error),
       button(
         row![
           icon_for_variant(Icon::Refresh, IconSize::Xs, ButtonVariant::Tonal),
@@ -865,12 +891,16 @@ fn retryable_surface<'a>(error: &'a str, retry: Message) -> Element<'a, Message>
   .into()
 }
 
-fn status_surface(message: &str) -> Element<'_, Message> {
-  container(text(message).size(14).color(TOKENS.colors.onSurfaceVariant))
-    .padding(TOKENS.spacing.s4)
-    .width(Fill)
-    .style(|theme| jellypilot_ui::theme::surface_variant(theme, SurfaceVariant::Canvas))
-    .into()
+fn status_surface<'a>(palette: &'static ThemePalette, message: &'a str) -> Element<'a, Message> {
+  container(
+    text(message)
+      .size(14)
+      .color(palette.colors.onSurfaceVariant),
+  )
+  .padding(TOKENS.spacing.s4)
+  .width(Fill)
+  .style(|theme| jellypilot_ui::theme::surface_variant(theme, SurfaceVariant::Canvas))
+  .into()
 }
 
 fn episode_skeletons<'a>(skeleton_phase: f32, reduced_motion: bool) -> Element<'a, Message> {
@@ -896,7 +926,7 @@ fn episode_skeletons<'a>(skeleton_phase: f32, reduced_motion: bool) -> Element<'
   rows.into()
 }
 
-fn progress_bar<'a>(progress: f64) -> Element<'a, Message> {
+fn progress_bar<'a>(palette: &'static ThemePalette, progress: f64) -> Element<'a, Message> {
   let filled = (progress.round() as u16).min(100);
   let remaining = 100_u16.saturating_sub(filled);
   let mut bar = Row::new().width(Fill).height(4);
@@ -905,7 +935,7 @@ fn progress_bar<'a>(progress: f64) -> Element<'a, Message> {
       container(space::horizontal())
         .width(Length::FillPortion(filled))
         .height(4)
-        .style(|_| iced::widget::container::Style::default().background(TOKENS.colors.primary)),
+        .style(|_| iced::widget::container::Style::default().background(palette.colors.primary)),
     );
   }
   if remaining > 0 {
@@ -914,7 +944,7 @@ fn progress_bar<'a>(progress: f64) -> Element<'a, Message> {
         .width(Length::FillPortion(remaining))
         .height(4)
         .style(|_| {
-          iced::widget::container::Style::default().background(TOKENS.colors.surfaceContainerLow)
+          iced::widget::container::Style::default().background(palette.colors.surfaceContainerLow)
         }),
     );
   }

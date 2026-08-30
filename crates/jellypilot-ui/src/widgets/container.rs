@@ -11,12 +11,13 @@
 use iced::widget::container;
 use iced::{Background, Border, Color, Shadow, Theme};
 
-use crate::tokens::TOKENS;
+use crate::tokens::{palette, TOKENS};
 use crate::variants::SurfaceVariant;
 
 /// Resolves a surface role to an iced container style.
-pub fn style(_theme: &Theme, variant: SurfaceVariant) -> container::Style {
-    let colors = TOKENS.colors;
+pub fn style(theme: &Theme, variant: SurfaceVariant) -> container::Style {
+    let palette = palette(theme);
+    let colors = palette.colors;
     let (background, radius, shadow) = match variant {
         SurfaceVariant::Canvas => (colors.background, TOKENS.radii.none, Shadow::default()),
         SurfaceVariant::Block => (
@@ -27,7 +28,7 @@ pub fn style(_theme: &Theme, variant: SurfaceVariant) -> container::Style {
         SurfaceVariant::Raised => (
             colors.surfaceContainerHigh,
             TOKENS.radii.lg,
-            TOKENS.shadows.raised_high.iced(),
+            palette.shadows.raised_high.iced(),
         ),
     };
 
@@ -47,16 +48,18 @@ pub fn style(_theme: &Theme, variant: SurfaceVariant) -> container::Style {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::theme::ThemeMode;
+    use crate::tokens::DARK_PALETTE;
     use iced::border::Radius;
 
     #[test]
     fn canvas_is_flush_opaque_and_flat() {
-        let theme = crate::theme::theme();
+        let theme = crate::theme::theme(ThemeMode::Dark);
         let style = style(&theme, SurfaceVariant::Canvas);
 
         assert_eq!(
             style.background,
-            Some(Background::Color(TOKENS.colors.background))
+            Some(Background::Color(DARK_PALETTE.colors.background))
         );
         assert_eq!(style.border.width, 0.0);
         assert_eq!(style.border.radius, Radius::from(TOKENS.radii.none));
@@ -65,12 +68,12 @@ mod tests {
 
     #[test]
     fn block_is_opaque_docked_and_flat() {
-        let theme = crate::theme::theme();
+        let theme = crate::theme::theme(ThemeMode::Dark);
         let style = style(&theme, SurfaceVariant::Block);
 
         assert_eq!(
             style.background,
-            Some(Background::Color(TOKENS.colors.surfaceContainerLow))
+            Some(Background::Color(DARK_PALETTE.colors.surfaceContainerLow))
         );
         assert_eq!(style.border.width, 0.0);
         assert_eq!(style.border.radius, Radius::from(TOKENS.radii.none));
@@ -79,21 +82,21 @@ mod tests {
 
     #[test]
     fn raised_is_opaque_rounded_and_carries_the_high_shadow() {
-        let theme = crate::theme::theme();
+        let theme = crate::theme::theme(ThemeMode::Dark);
         let style = style(&theme, SurfaceVariant::Raised);
 
         assert_eq!(
             style.background,
-            Some(Background::Color(TOKENS.colors.surfaceContainerHigh))
+            Some(Background::Color(DARK_PALETTE.colors.surfaceContainerHigh))
         );
         assert_eq!(style.border.width, 0.0);
         assert_eq!(style.border.radius, Radius::from(TOKENS.radii.lg));
-        assert_eq!(style.shadow, TOKENS.shadows.raised_high.iced());
+        assert_eq!(style.shadow, DARK_PALETTE.shadows.raised_high.iced());
     }
 
     #[test]
     fn all_roles_use_fully_opaque_backgrounds() {
-        let theme = crate::theme::theme();
+        let theme = crate::theme::theme(ThemeMode::Dark);
         for variant in [
             SurfaceVariant::Canvas,
             SurfaceVariant::Block,

@@ -4,35 +4,53 @@ use iced::theme::Palette;
 use iced::widget::{button, container, scrollable as iced_scrollable, text_input};
 use iced::{Color, Theme};
 
-use crate::tokens::TOKENS;
+use crate::tokens::{palette, DARK_PALETTE, LIGHT_PALETTE};
 use crate::variants::{BadgeVariant, ButtonVariant, FieldVariant, SurfaceVariant, TextVariant};
 use crate::widgets;
 
-/// Builds the fixed dark JellyPilot iced theme.
-pub fn theme() -> Theme {
+/// Theme mode the app can pin explicitly. `System` is an app-level concern:
+/// the app resolves it against the OS mode before calling [`theme`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ThemeMode {
+    Dark,
+    Light,
+}
+
+/// Builds the JellyPilot iced theme for the given mode. The theme's
+/// `Palette.background` doubles as the palette identity that
+/// [`crate::tokens::palette`] resolves against.
+pub fn theme(mode: ThemeMode) -> Theme {
+    let colors = match mode {
+        ThemeMode::Dark => DARK_PALETTE.colors,
+        ThemeMode::Light => LIGHT_PALETTE.colors,
+    };
     Theme::custom(
-        "JellyPilot Dark",
+        match mode {
+            ThemeMode::Dark => "JellyPilot Dark",
+            ThemeMode::Light => "JellyPilot Light",
+        },
         Palette {
-            background: TOKENS.raw_colors.neutral.n975,
-            text: TOKENS.raw_colors.neutral.n50,
-            primary: TOKENS.raw_colors.indigo.n600,
-            success: TOKENS.raw_colors.teal.n400,
-            warning: TOKENS.raw_colors.amber.n400,
-            danger: TOKENS.raw_colors.red.n400,
+            background: colors.background,
+            text: colors.onSurface,
+            primary: colors.primary,
+            success: colors.tertiary,
+            warning: colors.warning,
+            danger: colors.error,
         },
     )
 }
 
 /// Resolves a semantic text role.
-pub fn text_variant(_theme: &Theme, variant: TextVariant) -> Color {
+pub fn text_variant(theme: &Theme, variant: TextVariant) -> Color {
+    let colors = palette(theme).colors;
     match variant {
-        TextVariant::OnSurface => TOKENS.colors.onSurface,
-        TextVariant::OnSurfaceVariant => TOKENS.colors.onSurfaceVariant,
-        TextVariant::Primary => TOKENS.colors.primary,
-        TextVariant::Secondary => TOKENS.colors.secondary,
-        TextVariant::Tertiary => TOKENS.colors.tertiary,
-        TextVariant::Warning => TOKENS.colors.warning,
-        TextVariant::Error => TOKENS.colors.error,
+        TextVariant::OnSurface => colors.onSurface,
+        TextVariant::OnSurfaceVariant => colors.onSurfaceVariant,
+        TextVariant::Primary => colors.primary,
+        TextVariant::Secondary => colors.secondary,
+        TextVariant::Tertiary => colors.tertiary,
+        TextVariant::Warning => colors.warning,
+        TextVariant::Error => colors.error,
     }
 }
 

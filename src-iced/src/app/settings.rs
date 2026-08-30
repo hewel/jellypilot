@@ -91,6 +91,11 @@ fn update_settings(
       finish_settings_mutation(surface, kernel, result);
       Task::none()
     }
+    SettingsMessage::ThemeModeSelected(mode) => {
+      let result = kernel.settings.set_theme_mode(mode);
+      finish_settings_mutation(surface, kernel, result);
+      Task::none()
+    }
     SettingsMessage::SubtitleMenuToggled => {
       surface.view.subtitle_menu_open = !surface.view.subtitle_menu_open;
       Task::none()

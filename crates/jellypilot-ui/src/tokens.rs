@@ -1,21 +1,20 @@
-//! Dark-only design tokens ported from JellyPilot's canonical Panda theme.
+//! Design tokens ported from JellyPilot's canonical Panda theme, with dark
+//! and light mode palettes derived from the same raw ramps.
 
 use std::time::Duration;
 
-use iced::{Color, Shadow, Vector};
+use iced::{Color, Shadow, Theme, Vector};
 
 /// Complete JellyPilot design-token set.
 #[derive(Debug, Clone, Copy)]
 pub struct DesignTokens {
     pub raw_colors: RawColors,
-    pub colors: SemanticColors,
     pub fonts: Fonts,
     pub spacing: Spacing,
     pub font_sizes: FontSizes,
     pub line_heights: LineHeights,
     pub font_weights: FontWeights,
     pub radii: Radii,
-    pub shadows: Shadows,
     pub z_index: ZIndex,
     pub letter_spacings: LetterSpacings,
     pub durations: Durations,
@@ -270,13 +269,21 @@ impl ShadowToken {
 /// Panda shadow tokens: a two-tier semantic scale. `none` for flush
 /// surfaces, `raised` for small floating chrome, `raised_high` for floating
 /// layers.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Shadows {
     pub none: ShadowToken,
     /// Low lift for small floating chrome (tooltips, scroll indicators).
     pub raised: ShadowToken,
     /// High lift for floating layers (popovers, toasts, raised cards).
     pub raised_high: ShadowToken,
+}
+/// Mode-variant tokens: the semantic colors and shadows for one theme mode.
+/// Everything structural (spacing, radii, fonts, …) is mode-independent and
+/// stays on [`TOKENS`].
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ThemePalette {
+    pub colors: SemanticColors,
+    pub shadows: Shadows,
 }
 
 /// A Panda z-index literal.
@@ -351,7 +358,7 @@ pub struct Breakpoints {
     pub x2l: &'static str,
 }
 
-/// Fixed dark JellyPilot tokens.
+/// Mode-independent JellyPilot tokens.
 pub const TOKENS: DesignTokens = DesignTokens {
     raw_colors: RawColors {
         neutral: Neutral {
@@ -395,42 +402,6 @@ pub const TOKENS: DesignTokens = DesignTokens {
             n900: Color::from_rgb8(75, 17, 25),
             n1000: Color::from_rgb8(51, 0, 6),
         },
-    },
-    colors: SemanticColors {
-        background: Color::from_rgb8(5, 6, 10),
-        error: Color::from_rgb8(255, 107, 122),
-        errorContainer: Color::from_rgb8(75, 17, 25),
-        onBackground: Color::from_rgb8(243, 246, 255),
-        onError: Color::from_rgb8(51, 0, 6),
-        onErrorContainer: Color::from_rgb8(255, 217, 222),
-        onPrimary: Color::from_rgb8(255, 255, 255),
-        onPrimaryContainer: Color::from_rgb8(224, 226, 255),
-        onSecondary: Color::from_rgb8(11, 10, 36),
-        onSecondaryContainer: Color::from_rgb8(224, 226, 255),
-        onSurface: Color::from_rgb8(243, 246, 255),
-        onSurfaceVariant: Color::from_rgb8(174, 184, 204),
-        onTertiary: Color::from_rgb8(0, 31, 22),
-        onTertiaryContainer: Color::from_rgb8(191, 255, 232),
-        onWarning: Color::from_rgb8(42, 26, 0),
-        onWarningContainer: Color::from_rgb8(255, 231, 168),
-        outline: Color::from_rgb8(92, 108, 140),
-        outlineVariant: Color::from_rgb8(38, 46, 66),
-        primary: Color::from_rgb8(79, 70, 229),
-        primaryContainer: Color::from_rgb8(27, 28, 59),
-        secondary: Color::from_rgb8(129, 140, 248),
-        secondaryContainer: Color::from_rgb8(31, 33, 82),
-        surface: Color::from_rgb8(11, 13, 20),
-        surfaceContainer: Color::from_rgb8(17, 20, 32),
-        surfaceContainerHigh: Color::from_rgb8(22, 27, 42),
-        surfaceContainerHighest: Color::from_rgb8(34, 41, 62),
-        surfaceContainerLow: Color::from_rgb8(10, 12, 18),
-        surfaceContainerLowest: Color::from_rgb8(4, 5, 8),
-        surfaceTint: Color::from_rgb8(79, 70, 229),
-        surfaceVariant: Color::from_rgb8(30, 37, 56),
-        tertiary: Color::from_rgb8(79, 227, 177),
-        tertiaryContainer: Color::from_rgb8(6, 56, 42),
-        warning: Color::from_rgb8(246, 199, 104),
-        warningContainer: Color::from_rgb8(63, 46, 8),
     },
     fonts: Fonts {
         display: "'Space Grotesk Variable', 'Inter Variable', ui-sans-serif, system-ui, sans-serif",
@@ -525,11 +496,6 @@ pub const TOKENS: DesignTokens = DesignTokens {
         lg: 8.0,
         full: 9999.0,
     },
-    shadows: Shadows {
-        none: shadow(0.0, 0.0, 0.0, 0.0, 0.0, false),
-        raised: shadow(0.0, 2.0, 8.0, 0.0, 0.4, false),
-        raised_high: shadow(0.0, 8.0, 24.0, 0.0, 0.55, false),
-    },
     z_index: ZIndex {
         auto: ZIndexValue::Auto,
         z0: ZIndexValue::Value(0),
@@ -575,6 +541,113 @@ pub const TOKENS: DesignTokens = DesignTokens {
     },
 };
 
+/// Dark JellyPilot palette: the canonical Panda dark values.
+pub const DARK_PALETTE: ThemePalette = ThemePalette {
+    colors: SemanticColors {
+        background: Color::from_rgb8(5, 6, 10),
+        error: Color::from_rgb8(255, 107, 122),
+        errorContainer: Color::from_rgb8(75, 17, 25),
+        onBackground: Color::from_rgb8(243, 246, 255),
+        onError: Color::from_rgb8(51, 0, 6),
+        onErrorContainer: Color::from_rgb8(255, 217, 222),
+        onPrimary: Color::from_rgb8(255, 255, 255),
+        onPrimaryContainer: Color::from_rgb8(224, 226, 255),
+        onSecondary: Color::from_rgb8(11, 10, 36),
+        onSecondaryContainer: Color::from_rgb8(224, 226, 255),
+        onSurface: Color::from_rgb8(243, 246, 255),
+        onSurfaceVariant: Color::from_rgb8(174, 184, 204),
+        onTertiary: Color::from_rgb8(0, 31, 22),
+        onTertiaryContainer: Color::from_rgb8(191, 255, 232),
+        onWarning: Color::from_rgb8(42, 26, 0),
+        onWarningContainer: Color::from_rgb8(255, 231, 168),
+        outline: Color::from_rgb8(92, 108, 140),
+        outlineVariant: Color::from_rgb8(38, 46, 66),
+        primary: Color::from_rgb8(79, 70, 229),
+        primaryContainer: Color::from_rgb8(27, 28, 59),
+        secondary: Color::from_rgb8(129, 140, 248),
+        secondaryContainer: Color::from_rgb8(31, 33, 82),
+        surface: Color::from_rgb8(11, 13, 20),
+        surfaceContainer: Color::from_rgb8(17, 20, 32),
+        surfaceContainerHigh: Color::from_rgb8(22, 27, 42),
+        surfaceContainerHighest: Color::from_rgb8(34, 41, 62),
+        surfaceContainerLow: Color::from_rgb8(10, 12, 18),
+        surfaceContainerLowest: Color::from_rgb8(4, 5, 8),
+        surfaceTint: Color::from_rgb8(79, 70, 229),
+        surfaceVariant: Color::from_rgb8(30, 37, 56),
+        tertiary: Color::from_rgb8(79, 227, 177),
+        tertiaryContainer: Color::from_rgb8(6, 56, 42),
+        warning: Color::from_rgb8(246, 199, 104),
+        warningContainer: Color::from_rgb8(63, 46, 8),
+    },
+    shadows: Shadows {
+        none: shadow(0.0, 0.0, 0.0, 0.0, 0.0, false),
+        raised: shadow(0.0, 2.0, 8.0, 0.0, 0.4, false),
+        raised_high: shadow(0.0, 8.0, 24.0, 0.0, 0.55, false),
+    },
+};
+
+/// Light JellyPilot palette: the neutral ladder inverted (light surfaces from
+/// the light end of the ramp, `onSurface` from the dark end), brand primary
+/// kept at indigo n600 with white `onPrimary`, and status roles as n900
+/// text/icons on n50 containers. The mid container steps (Low/surface/
+/// Container/High/Variant/Highest) are derived tones: the raw neutral ramp
+/// has no steps between n50 and n300 to invert into. Shadows are lowered
+/// because light surfaces need less lift to read as floating.
+pub const LIGHT_PALETTE: ThemePalette = ThemePalette {
+    colors: SemanticColors {
+        background: Color::from_rgb8(243, 246, 255),
+        error: Color::from_rgb8(75, 17, 25),
+        errorContainer: Color::from_rgb8(255, 217, 222),
+        onBackground: Color::from_rgb8(5, 6, 10),
+        onError: Color::from_rgb8(255, 217, 222),
+        onErrorContainer: Color::from_rgb8(75, 17, 25),
+        onPrimary: Color::from_rgb8(255, 255, 255),
+        onPrimaryContainer: Color::from_rgb8(31, 33, 82),
+        onSecondary: Color::from_rgb8(255, 255, 255),
+        onSecondaryContainer: Color::from_rgb8(31, 33, 82),
+        onSurface: Color::from_rgb8(5, 6, 10),
+        onSurfaceVariant: Color::from_rgb8(92, 108, 140),
+        onTertiary: Color::from_rgb8(191, 255, 232),
+        onTertiaryContainer: Color::from_rgb8(6, 56, 42),
+        onWarning: Color::from_rgb8(255, 231, 168),
+        onWarningContainer: Color::from_rgb8(63, 46, 8),
+        outline: Color::from_rgb8(92, 108, 140),
+        outlineVariant: Color::from_rgb8(174, 184, 204),
+        primary: Color::from_rgb8(79, 70, 229),
+        primaryContainer: Color::from_rgb8(224, 226, 255),
+        secondary: Color::from_rgb8(79, 70, 229),
+        secondaryContainer: Color::from_rgb8(224, 226, 255),
+        surface: Color::from_rgb8(232, 236, 246),
+        surfaceContainer: Color::from_rgb8(226, 231, 242),
+        surfaceContainerHigh: Color::from_rgb8(219, 225, 238),
+        surfaceContainerHighest: Color::from_rgb8(205, 212, 229),
+        surfaceContainerLow: Color::from_rgb8(236, 240, 248),
+        surfaceContainerLowest: Color::from_rgb8(255, 255, 255),
+        surfaceTint: Color::from_rgb8(79, 70, 229),
+        surfaceVariant: Color::from_rgb8(212, 218, 233),
+        tertiary: Color::from_rgb8(6, 56, 42),
+        tertiaryContainer: Color::from_rgb8(191, 255, 232),
+        warning: Color::from_rgb8(63, 46, 8),
+        warningContainer: Color::from_rgb8(255, 231, 168),
+    },
+    shadows: Shadows {
+        none: shadow(0.0, 0.0, 0.0, 0.0, 0.0, false),
+        raised: shadow(0.0, 2.0, 8.0, 0.0, 0.25, false),
+        raised_high: shadow(0.0, 8.0, 24.0, 0.0, 0.35, false),
+    },
+};
+
+/// Resolves the palette for an iced theme by matching its background color
+/// against the two palettes' `background` values. Unknown themes fall back
+/// to the dark palette.
+pub fn palette(theme: &Theme) -> &'static ThemePalette {
+    if theme.palette().background == LIGHT_PALETTE.colors.background {
+        &LIGHT_PALETTE
+    } else {
+        &DARK_PALETTE
+    }
+}
+
 const fn shadow(
     x: f32,
     y: f32,
@@ -594,14 +667,60 @@ const fn shadow(
 
 #[cfg(test)]
 mod tests {
-    use iced::Color;
+    use iced::{Color, Theme};
 
-    use super::{Breakpoints, Fonts, SemanticColors, TOKENS};
+    use super::{
+        palette, Breakpoints, Fonts, SemanticColors, ThemePalette, DARK_PALETTE, LIGHT_PALETTE,
+        TOKENS,
+    };
+
+    fn luminance(color: Color) -> f32 {
+        0.2126 * color.r + 0.7152 * color.g + 0.0722 * color.b
+    }
+
+    fn semantic_color_fields(colors: &SemanticColors) -> [(&'static str, Color); 34] {
+        [
+            ("background", colors.background),
+            ("error", colors.error),
+            ("errorContainer", colors.errorContainer),
+            ("onBackground", colors.onBackground),
+            ("onError", colors.onError),
+            ("onErrorContainer", colors.onErrorContainer),
+            ("onPrimary", colors.onPrimary),
+            ("onPrimaryContainer", colors.onPrimaryContainer),
+            ("onSecondary", colors.onSecondary),
+            ("onSecondaryContainer", colors.onSecondaryContainer),
+            ("onSurface", colors.onSurface),
+            ("onSurfaceVariant", colors.onSurfaceVariant),
+            ("onTertiary", colors.onTertiary),
+            ("onTertiaryContainer", colors.onTertiaryContainer),
+            ("onWarning", colors.onWarning),
+            ("onWarningContainer", colors.onWarningContainer),
+            ("outline", colors.outline),
+            ("outlineVariant", colors.outlineVariant),
+            ("primary", colors.primary),
+            ("primaryContainer", colors.primaryContainer),
+            ("secondary", colors.secondary),
+            ("secondaryContainer", colors.secondaryContainer),
+            ("surface", colors.surface),
+            ("surfaceContainer", colors.surfaceContainer),
+            ("surfaceContainerHigh", colors.surfaceContainerHigh),
+            ("surfaceContainerHighest", colors.surfaceContainerHighest),
+            ("surfaceContainerLow", colors.surfaceContainerLow),
+            ("surfaceContainerLowest", colors.surfaceContainerLowest),
+            ("surfaceTint", colors.surfaceTint),
+            ("surfaceVariant", colors.surfaceVariant),
+            ("tertiary", colors.tertiary),
+            ("tertiaryContainer", colors.tertiaryContainer),
+            ("warning", colors.warning),
+            ("warningContainer", colors.warningContainer),
+        ]
+    }
 
     #[test]
     fn semantic_colors_match_canonical_panda_hex_literals() {
         assert_eq!(
-            TOKENS.colors,
+            DARK_PALETTE.colors,
             SemanticColors {
                 background: Color::from_rgb8(0x05, 0x06, 0x0a),
                 error: Color::from_rgb8(0xff, 0x6b, 0x7a),
@@ -683,7 +802,7 @@ mod tests {
         use iced::Vector;
 
         assert_eq!(
-            TOKENS.shadows.none,
+            DARK_PALETTE.shadows.none,
             ShadowToken {
                 color: Color::from_rgba8(0, 0, 0, 0.0),
                 offset: Vector { x: 0.0, y: 0.0 },
@@ -693,7 +812,7 @@ mod tests {
             }
         );
         assert_eq!(
-            TOKENS.shadows.raised,
+            DARK_PALETTE.shadows.raised,
             ShadowToken {
                 color: Color::from_rgba8(0, 0, 0, 0.4),
                 offset: Vector { x: 0.0, y: 2.0 },
@@ -703,7 +822,7 @@ mod tests {
             }
         );
         assert_eq!(
-            TOKENS.shadows.raised_high,
+            DARK_PALETTE.shadows.raised_high,
             ShadowToken {
                 color: Color::from_rgba8(0, 0, 0, 0.55),
                 offset: Vector { x: 0.0, y: 8.0 },
@@ -712,5 +831,110 @@ mod tests {
                 inset: false,
             }
         );
+    }
+
+    #[test]
+    fn palettes_have_fully_opaque_colors() {
+        for (name, palette) in [("dark", &DARK_PALETTE), ("light", &LIGHT_PALETTE)] {
+            for (field, color) in semantic_color_fields(&palette.colors) {
+                assert_eq!(
+                    color.a, 1.0,
+                    "{name} palette color {field} must be fully opaque"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn light_container_ladder_is_a_distinct_darkening_step_series() {
+        let colors = LIGHT_PALETTE.colors;
+        let ladder = [
+            ("surfaceContainerLowest", colors.surfaceContainerLowest),
+            ("background", colors.background),
+            ("surfaceContainerLow", colors.surfaceContainerLow),
+            ("surface", colors.surface),
+            ("surfaceContainer", colors.surfaceContainer),
+            ("surfaceContainerHigh", colors.surfaceContainerHigh),
+            ("surfaceVariant", colors.surfaceVariant),
+            ("surfaceContainerHighest", colors.surfaceContainerHighest),
+        ];
+
+        for pair in ladder.windows(2) {
+            let (lighter_name, lighter) = pair[0];
+            let (darker_name, darker) = pair[1];
+            assert!(
+                luminance(lighter) > luminance(darker) + 0.005,
+                "light ladder must darken perceptibly: {lighter_name} ({lighter:?}) vs {darker_name} ({darker:?})"
+            );
+        }
+    }
+
+    #[test]
+    fn light_on_colors_order_against_their_surfaces() {
+        let colors = LIGHT_PALETTE.colors;
+        // Primary text darker than secondary text, both darker than the canvas.
+        assert!(luminance(colors.onSurface) < luminance(colors.onSurfaceVariant));
+        assert!(luminance(colors.onSurfaceVariant) < luminance(colors.background));
+        // Dark status text on light status containers.
+        assert!(luminance(colors.onTertiaryContainer) < luminance(colors.tertiaryContainer));
+        assert!(luminance(colors.onWarningContainer) < luminance(colors.warningContainer));
+        assert!(luminance(colors.onErrorContainer) < luminance(colors.errorContainer));
+        assert!(luminance(colors.onPrimaryContainer) < luminance(colors.primaryContainer));
+        assert!(luminance(colors.onSecondaryContainer) < luminance(colors.secondaryContainer));
+        // Light text on the filled brand/status accents.
+        assert!(luminance(colors.onPrimary) > luminance(colors.primary));
+        assert!(luminance(colors.onSecondary) > luminance(colors.secondary));
+        assert!(luminance(colors.onTertiary) > luminance(colors.tertiary));
+        assert!(luminance(colors.onWarning) > luminance(colors.warning));
+        assert!(luminance(colors.onError) > luminance(colors.error));
+        // Outlines read against the canvas.
+        assert!(luminance(colors.outline) < luminance(colors.background));
+        assert!(luminance(colors.outlineVariant) < luminance(colors.background));
+    }
+
+    #[test]
+    fn light_shadows_keep_the_two_tier_scale_with_lower_alphas() {
+        assert_eq!(LIGHT_PALETTE.shadows.none.color.a, 0.0);
+        assert_eq!(LIGHT_PALETTE.shadows.raised.color.a, 0.25);
+        assert_eq!(LIGHT_PALETTE.shadows.raised_high.color.a, 0.35);
+        assert_eq!(
+            LIGHT_PALETTE.shadows.raised.offset,
+            DARK_PALETTE.shadows.raised.offset
+        );
+        assert_eq!(
+            LIGHT_PALETTE.shadows.raised.blur_radius,
+            DARK_PALETTE.shadows.raised.blur_radius
+        );
+        assert_eq!(
+            LIGHT_PALETTE.shadows.raised_high.offset,
+            DARK_PALETTE.shadows.raised_high.offset
+        );
+        assert_eq!(
+            LIGHT_PALETTE.shadows.raised_high.blur_radius,
+            DARK_PALETTE.shadows.raised_high.blur_radius
+        );
+    }
+
+    #[test]
+    fn palette_resolves_by_theme_background_identity() {
+        let dark = crate::theme::theme(crate::theme::ThemeMode::Dark);
+        let light = crate::theme::theme(crate::theme::ThemeMode::Light);
+
+        // Value equality: `&CONST` expressions have no stable address, so
+        // pointer identity is not a reliable assertion for const palettes.
+        assert_eq!(palette(&dark), &DARK_PALETTE);
+        assert_eq!(palette(&light), &LIGHT_PALETTE);
+        // Any other theme (built-in or custom) falls back to the dark palette.
+        assert_eq!(palette(&Theme::Dracula), &DARK_PALETTE);
+        // Even iced's built-in light theme falls back: identity is by exact
+        // JellyPilot background color, not by brightness.
+        assert_eq!(palette(&Theme::Light), &DARK_PALETTE);
+    }
+
+    #[test]
+    fn theme_palette_keeps_colors_and_shadows_together() {
+        let palette: ThemePalette = LIGHT_PALETTE;
+        assert_eq!(palette.colors.background.a, 1.0);
+        assert!(palette.shadows.raised_high.color.a > 0.0);
     }
 }

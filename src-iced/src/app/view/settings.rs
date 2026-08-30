@@ -1,7 +1,7 @@
 use iced::widget::{button, column, container, row, scrollable, space, text, text_input, Column};
 use iced::{Alignment, Element, Fill};
 use jellypilot_auth::login::ConnectionPhase;
-use jellypilot_core::config::{IntroMode, ShortcutKind};
+use jellypilot_core::config::{IntroMode, ShortcutKind, ThemeMode};
 use jellypilot_core::diagnostics::{format_diagnostic_time, DiagnosticCategory, DiagnosticLevel};
 use jellypilot_core::settings::SUBTITLE_LANGUAGE_OPTIONS;
 use jellypilot_ui::fonts::SPACE_GROTESK_FONT;
@@ -9,21 +9,22 @@ use jellypilot_ui::icons::{
   icon_for_variant, icon_for_variant_disabled, icon_with_color, Icon, IconSize,
 };
 use jellypilot_ui::overlay::{popover, tooltip, PopoverOptions, TooltipOptions};
-use jellypilot_ui::tokens::TOKENS;
+use jellypilot_ui::tokens::{ThemePalette, TOKENS};
 use jellypilot_ui::variants::{BadgeVariant, ButtonVariant, FieldVariant, SurfaceVariant};
 
 use crate::app::message::{Message, SettingsMessage};
 use crate::app::state::{diagnostic_matches, State};
 
 pub fn view(state: &State) -> Element<'_, Message> {
+  let palette = state.palette();
   let header = column![
     text("Settings")
       .font(SPACE_GROTESK_FONT)
       .size(28)
-      .color(TOKENS.colors.onSurface),
+      .color(palette.colors.onSurface),
     text("Changes are written to disk when Saved appears.")
       .size(13)
-      .color(TOKENS.colors.onSurfaceVariant),
+      .color(palette.colors.onSurfaceVariant),
   ]
   .spacing(TOKENS.spacing.s1);
 
@@ -38,7 +39,7 @@ pub fn view(state: &State) -> Element<'_, Message> {
     interface_section(state),
     cache_section(state),
     diagnostics_section(state),
-    about_section(),
+    about_section(palette),
   ]
   .spacing(TOKENS.spacing.s4)
   .width(Fill);
@@ -51,7 +52,10 @@ pub fn view(state: &State) -> Element<'_, Message> {
 
 fn feedback(state: &State) -> Element<'_, Message> {
   if let Some(error) = state.settings.view.error {
-    return text(error).size(13).color(TOKENS.colors.error).into();
+    return text(error)
+      .size(13)
+      .color(state.palette().colors.error)
+      .into();
   }
   if let Some(saved) = state.settings.view.saved {
     return badge(saved, BadgeVariant::Success);
@@ -60,6 +64,7 @@ fn feedback(state: &State) -> Element<'_, Message> {
 }
 
 fn connection_section(state: &State) -> Element<'_, Message> {
+  let palette = state.palette();
   let status = match state.kernel.connection {
     ConnectionPhase::Connected => badge("Connected", BadgeVariant::Success),
     ConnectionPhase::Connecting => badge("Working", BadgeVariant::Warning),
@@ -71,17 +76,17 @@ fn connection_section(state: &State) -> Element<'_, Message> {
     || {
       text("No active connection")
         .size(13)
-        .color(TOKENS.colors.onSurfaceVariant)
+        .color(palette.colors.onSurfaceVariant)
         .into()
     },
     |identity| {
       column![
         text(&identity.user_name)
           .size(15)
-          .color(TOKENS.colors.onSurface),
+          .color(palette.colors.onSurface),
         text(&identity.server)
           .size(12)
-          .color(TOKENS.colors.onSurfaceVariant),
+          .color(palette.colors.onSurfaceVariant),
       ]
       .spacing(TOKENS.spacing.s1)
       .into()
@@ -96,6 +101,7 @@ fn connection_section(state: &State) -> Element<'_, Message> {
   );
   let sign_out = action_button(Icon::User, "Sign Out", connected, SettingsMessage::SignOut);
   section(
+    palette,
     Icon::Server,
     "Connection",
     column![
@@ -104,7 +110,7 @@ fn connection_section(state: &State) -> Element<'_, Message> {
         .width(Fill),
       text("Disconnect keeps saved profiles. Sign Out securely removes the active saved profile.")
         .size(12)
-        .color(TOKENS.colors.onSurfaceVariant),
+        .color(palette.colors.onSurfaceVariant),
       row![disconnect, sign_out].spacing(TOKENS.spacing.s2),
     ]
     .spacing(TOKENS.spacing.s3),
@@ -112,6 +118,7 @@ fn connection_section(state: &State) -> Element<'_, Message> {
 }
 
 fn mpv_section(state: &State) -> Element<'_, Message> {
+  let palette = state.palette();
   let path = text_input("Auto-detect from PATH", &state.settings.view.mpv_path_input)
     .on_input(|value| Message::Settings(SettingsMessage::MpvPathChanged(value)))
     .on_submit(Message::Settings(SettingsMessage::SaveMpvPath))
@@ -130,16 +137,19 @@ fn mpv_section(state: &State) -> Element<'_, Message> {
   .width(Fill)
   .style(|theme, status| jellypilot_ui::theme::field_variant(theme, status, FieldVariant::Filled));
   section(
+    palette,
     Icon::Cpu,
     "MPV",
     column![
       labeled_field(
+        palette,
         "Executable path",
         "Leave empty to discover MPV from PATH. Applies to future MPV process starts.",
         path.into(),
         SettingsMessage::SaveMpvPath,
       ),
       labeled_field(
+        palette,
         "Extra arguments",
         "Whitespace-separated arguments. Applies to future playback starts.",
         args.into(),
@@ -151,6 +161,7 @@ fn mpv_section(state: &State) -> Element<'_, Message> {
 }
 
 fn playback_section(state: &State) -> Element<'_, Message> {
+  let palette = state.palette();
   let target = text_input(
     "JellyPilot",
     &state.settings.view.playback_target_name_input,
@@ -185,10 +196,12 @@ fn playback_section(state: &State) -> Element<'_, Message> {
     Message::Settings(SettingsMessage::IntroMenuDismissed),
   );
   section(
+    palette,
     Icon::Sliders,
     "Playback",
     column![
       labeled_field(
+        palette,
         "Playback Target name",
         "Saved names are re-registered with the connected server immediately.",
         target.into(),
@@ -197,10 +210,10 @@ fn playback_section(state: &State) -> Element<'_, Message> {
       column![
         text("Intro Skipper")
           .size(14)
-          .color(TOKENS.colors.onSurface),
+          .color(palette.colors.onSurface),
         text("Automatic skips detected intros; Manual shows the skip action; Off disables it.")
           .size(12)
-          .color(TOKENS.colors.onSurfaceVariant),
+          .color(palette.colors.onSurfaceVariant),
         intro,
       ]
       .spacing(TOKENS.spacing.s2),
@@ -210,6 +223,7 @@ fn playback_section(state: &State) -> Element<'_, Message> {
 }
 
 fn subtitles_section(state: &State) -> Element<'_, Message> {
+  let palette = state.palette();
   let trigger = button(
     row![
       icon_for_variant(Icon::Subtitles, IconSize::Sm, ButtonVariant::Tonal),
@@ -251,7 +265,7 @@ fn subtitles_section(state: &State) -> Element<'_, Message> {
     rows = rows.push(
       text("No preferred subtitle languages.")
         .size(12)
-        .color(TOKENS.colors.onSurfaceVariant),
+        .color(palette.colors.onSurfaceVariant),
     );
   }
   for (index, language) in languages.iter().enumerate() {
@@ -288,12 +302,13 @@ fn subtitles_section(state: &State) -> Element<'_, Message> {
     );
   }
   section(
+    palette,
     Icon::Subtitles,
     "Subtitles",
     column![
       text("Languages are tried from top to bottom on future playback starts.")
         .size(12)
-        .color(TOKENS.colors.onSurfaceVariant),
+        .color(palette.colors.onSurfaceVariant),
       rows,
       add,
     ]
@@ -302,7 +317,9 @@ fn subtitles_section(state: &State) -> Element<'_, Message> {
 }
 
 fn shortcuts_section(state: &State) -> Element<'_, Message> {
+  let palette = state.palette();
   section(
+    palette,
     Icon::Keyboard,
     "Shortcuts",
     column![
@@ -311,7 +328,7 @@ fn shortcuts_section(state: &State) -> Element<'_, Message> {
       shortcut_row(state, "Skip intro", ShortcutKind::IntroSkip),
       text("Shortcut subscriptions read the current persisted bindings.")
         .size(12)
-        .color(TOKENS.colors.onSurfaceVariant),
+        .color(palette.colors.onSurfaceVariant),
     ]
     .spacing(TOKENS.spacing.s2),
   )
@@ -331,7 +348,11 @@ fn shortcut_row<'a>(state: &'a State, label: &'a str, kind: ShortcutKind) -> Ele
   };
   row![
     row![
-      icon_with_color(Icon::Keyboard, IconSize::Sm, TOKENS.colors.onSurfaceVariant),
+      icon_with_color(
+        Icon::Keyboard,
+        IconSize::Sm,
+        state.palette().colors.onSurfaceVariant
+      ),
       text(label).size(13),
     ]
     .spacing(TOKENS.spacing.s2)
@@ -357,34 +378,88 @@ fn shortcut_row<'a>(state: &'a State, label: &'a str, kind: ShortcutKind) -> Ele
 }
 
 fn interface_section(state: &State) -> Element<'_, Message> {
+  let palette = state.palette();
+  let theme_mode = state.kernel.settings.snapshot().theme_mode();
   let reduced_motion = state.kernel.settings.snapshot().reduced_motion();
   section(
+    palette,
     Icon::Settings,
     "Interface",
-    column![toggle_row(
-      "Reduce motion",
-      "Shows skeleton loading placeholders without the shimmer animation.",
-      reduced_motion,
-      SettingsMessage::ReducedMotionToggled,
-    )]
+    column![
+      appearance_row(palette, theme_mode),
+      toggle_row(
+        palette,
+        "Reduce motion",
+        "Shows skeleton loading placeholders without the shimmer animation.",
+        reduced_motion,
+        SettingsMessage::ReducedMotionToggled,
+      ),
+    ]
     .spacing(TOKENS.spacing.s4),
   )
 }
+fn appearance_row<'a>(palette: &ThemePalette, selected: ThemeMode) -> Element<'a, Message> {
+  row![
+    column![
+      text("Appearance").size(14).color(palette.colors.onSurface),
+      text("System follows the OS light/dark setting and switches live.")
+        .size(12)
+        .color(palette.colors.onSurfaceVariant),
+    ]
+    .spacing(TOKENS.spacing.s1)
+    .width(Fill),
+    row![
+      theme_mode_option("System", ThemeMode::System, selected),
+      theme_mode_option("Dark", ThemeMode::Dark, selected),
+      theme_mode_option("Light", ThemeMode::Light, selected),
+    ]
+    .spacing(TOKENS.spacing.s2),
+  ]
+  .spacing(TOKENS.spacing.s3)
+  .align_y(Alignment::Center)
+  .into()
+}
+
+fn theme_mode_option(
+  label: &'static str,
+  value: ThemeMode,
+  selected: ThemeMode,
+) -> Element<'static, Message> {
+  button(text(label))
+    .padding([5, 10])
+    .on_press(Message::Settings(SettingsMessage::ThemeModeSelected(value)))
+    .style(move |theme, status| {
+      jellypilot_ui::theme::button_variant(
+        theme,
+        status,
+        if value == selected {
+          ButtonVariant::TonalActive
+        } else {
+          ButtonVariant::Tonal
+        },
+      )
+    })
+    .into()
+}
 
 fn cache_section(state: &State) -> Element<'_, Message> {
+  let palette = state.palette();
   let cache_enabled = state.kernel.settings.snapshot().image_cache_enabled();
   let start_minimized = state.kernel.settings.snapshot().start_minimized();
   section(
+    palette,
     Icon::Database,
     "Cache",
     column![
       toggle_row(
+        palette,
         "Image disk cache",
         "Caches encoded artwork on disk and applies immediately.",
         cache_enabled,
         SettingsMessage::ImageCacheToggled,
       ),
       toggle_row(
+        palette,
         "Start minimized",
         "Starts hidden only when the system tray initializes successfully.",
         start_minimized,
@@ -396,6 +471,7 @@ fn cache_section(state: &State) -> Element<'_, Message> {
 }
 
 fn diagnostics_section(state: &State) -> Element<'_, Message> {
+  let palette = state.palette();
   let level_trigger = button(
     row![
       icon_for_variant(Icon::Filter, IconSize::Sm, ButtonVariant::Tonal),
@@ -488,9 +564,9 @@ fn diagnostics_section(state: &State) -> Element<'_, Message> {
   }) {
     count = count.saturating_add(1);
     let (level_icon, level_color) = match diagnostic.level {
-      DiagnosticLevel::Info => (Icon::Info, TOKENS.colors.primary),
-      DiagnosticLevel::Warning => (Icon::Warning, TOKENS.colors.warning),
-      DiagnosticLevel::Error => (Icon::Error, TOKENS.colors.error),
+      DiagnosticLevel::Info => (Icon::Info, palette.colors.primary),
+      DiagnosticLevel::Warning => (Icon::Warning, palette.colors.warning),
+      DiagnosticLevel::Error => (Icon::Error, palette.colors.error),
     };
     events = events.push(
       container(
@@ -504,17 +580,17 @@ fn diagnostics_section(state: &State) -> Element<'_, Message> {
             .align_y(Alignment::Center),
             text(diagnostic.category.label())
               .size(12)
-              .color(TOKENS.colors.onSurfaceVariant),
+              .color(palette.colors.onSurfaceVariant),
             space::horizontal(),
             text(format_diagnostic_time(diagnostic.timestamp_seconds))
               .size(11)
-              .color(TOKENS.colors.onSurfaceVariant),
+              .color(palette.colors.onSurfaceVariant),
           ]
           .spacing(TOKENS.spacing.s2)
           .align_y(Alignment::Center),
           text(diagnostic.message)
             .size(12)
-            .color(TOKENS.colors.onSurface),
+            .color(palette.colors.onSurface),
         ]
         .spacing(TOKENS.spacing.s2),
       )
@@ -527,46 +603,53 @@ fn diagnostics_section(state: &State) -> Element<'_, Message> {
     events = events.push(
       text("No diagnostic events match these filters.")
         .size(12)
-        .color(TOKENS.colors.onSurfaceVariant),
+        .color(palette.colors.onSurfaceVariant),
     );
   }
   section(
+    palette,
     Icon::Activity,
     "Diagnostics",
     column![
       row![level_filter, category_filter].spacing(TOKENS.spacing.s2),
       text(format!("Showing {count} of at most 200 retained events."))
         .size(11)
-        .color(TOKENS.colors.onSurfaceVariant),
+        .color(palette.colors.onSurfaceVariant),
       events,
     ]
     .spacing(TOKENS.spacing.s3),
   )
 }
 
-fn about_section<'a>() -> Element<'a, Message> {
+fn about_section<'a>(palette: &ThemePalette) -> Element<'a, Message> {
   section(
+    palette,
     Icon::Info,
     "About",
     column![
-      text("JellyPilot").size(15).color(TOKENS.colors.onSurface),
+      text("JellyPilot").size(15).color(palette.colors.onSurface),
       text(format!("Version {}", env!("CARGO_PKG_VERSION")))
         .size(12)
-        .color(TOKENS.colors.onSurfaceVariant),
+        .color(palette.colors.onSurfaceVariant),
     ]
     .spacing(TOKENS.spacing.s1),
   )
 }
 
-fn section<'a>(icon: Icon, title: &'a str, content: Column<'a, Message>) -> Element<'a, Message> {
+fn section<'a>(
+  palette: &ThemePalette,
+  icon: Icon,
+  title: &'a str,
+  content: Column<'a, Message>,
+) -> Element<'a, Message> {
   container(
     column![
       row![
-        icon_with_color(icon, IconSize::Md, TOKENS.colors.primary),
+        icon_with_color(icon, IconSize::Md, palette.colors.primary),
         text(title)
           .font(SPACE_GROTESK_FONT)
           .size(18)
-          .color(TOKENS.colors.onSurface),
+          .color(palette.colors.onSurface),
       ]
       .spacing(TOKENS.spacing.s2)
       .align_y(Alignment::Center),
@@ -581,14 +664,15 @@ fn section<'a>(icon: Icon, title: &'a str, content: Column<'a, Message>) -> Elem
 }
 
 fn labeled_field<'a>(
+  palette: &ThemePalette,
   label: &'a str,
   help: &'a str,
   field: Element<'a, Message>,
   save: SettingsMessage,
 ) -> Element<'a, Message> {
   column![
-    text(label).size(14).color(TOKENS.colors.onSurface),
-    text(help).size(12).color(TOKENS.colors.onSurfaceVariant),
+    text(label).size(14).color(palette.colors.onSurface),
+    text(help).size(12).color(palette.colors.onSurfaceVariant),
     row![
       field,
       button(
@@ -613,6 +697,7 @@ fn labeled_field<'a>(
 }
 
 fn toggle_row<'a>(
+  palette: &ThemePalette,
   label: &'a str,
   help: &'a str,
   enabled: bool,
@@ -620,8 +705,8 @@ fn toggle_row<'a>(
 ) -> Element<'a, Message> {
   row![
     column![
-      text(label).size(14).color(TOKENS.colors.onSurface),
-      text(help).size(12).color(TOKENS.colors.onSurfaceVariant),
+      text(label).size(14).color(palette.colors.onSurface),
+      text(help).size(12).color(palette.colors.onSurfaceVariant),
     ]
     .spacing(TOKENS.spacing.s1)
     .width(Fill),

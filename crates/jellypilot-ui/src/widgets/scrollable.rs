@@ -3,28 +3,29 @@
 use iced::widget::scrollable;
 use iced::{Background, Border, Color, Theme};
 
-use crate::tokens::TOKENS;
+use crate::tokens::{palette, SemanticColors, ThemePalette, TOKENS};
 
 /// Resolves a scrollable interaction status to JellyPilot scrollbar chrome.
-pub fn style(_theme: &Theme, status: scrollable::Status) -> scrollable::Style {
+pub fn style(theme: &Theme, status: scrollable::Status) -> scrollable::Style {
+    let palette = palette(theme);
     let (horizontal_interactive, vertical_interactive) = axis_interactions(status);
 
     scrollable::Style {
         container: Default::default(),
-        vertical_rail: rail(vertical_interactive),
-        horizontal_rail: rail(horizontal_interactive),
+        vertical_rail: rail(palette.colors, vertical_interactive),
+        horizontal_rail: rail(palette.colors, horizontal_interactive),
         gap: Some(Background::Color(with_alpha(
-            TOKENS.colors.surfaceContainerLowest,
+            palette.colors.surfaceContainerLowest,
             0.4,
         ))),
-        auto_scroll: auto_scroll(),
+        auto_scroll: auto_scroll(palette),
     }
 }
 
-fn rail(is_interactive: bool) -> scrollable::Rail {
+fn rail(colors: SemanticColors, is_interactive: bool) -> scrollable::Rail {
     scrollable::Rail {
         background: Some(Background::Color(with_alpha(
-            TOKENS.colors.surfaceContainerLowest,
+            colors.surfaceContainerLowest,
             0.4,
         ))),
         border: Border {
@@ -33,7 +34,7 @@ fn rail(is_interactive: bool) -> scrollable::Rail {
             width: 0.0,
         },
         scroller: scrollable::Scroller {
-            background: Background::Color(scroller_background(is_interactive)),
+            background: Background::Color(scroller_background(colors, is_interactive)),
             border: Border {
                 radius: TOKENS.radii.full.into(),
                 color: Color::TRANSPARENT,
@@ -65,24 +66,24 @@ fn axis_interactions(status: scrollable::Status) -> (bool, bool) {
     }
 }
 
-fn scroller_background(is_interactive: bool) -> Color {
+fn scroller_background(colors: SemanticColors, is_interactive: bool) -> Color {
     if is_interactive {
-        TOKENS.colors.outline
+        colors.outline
     } else {
-        with_alpha(TOKENS.colors.outlineVariant, 0.8)
+        with_alpha(colors.outlineVariant, 0.8)
     }
 }
 
-fn auto_scroll() -> scrollable::AutoScroll {
+fn auto_scroll(palette: &ThemePalette) -> scrollable::AutoScroll {
     scrollable::AutoScroll {
-        background: Background::Color(TOKENS.colors.surface),
+        background: Background::Color(palette.colors.surface),
         border: Border {
             radius: TOKENS.radii.full.into(),
             color: Color::TRANSPARENT,
             width: 0.0,
         },
-        shadow: TOKENS.shadows.raised.iced(),
-        icon: TOKENS.colors.onSurfaceVariant,
+        shadow: palette.shadows.raised.iced(),
+        icon: palette.colors.onSurfaceVariant,
     }
 }
 
@@ -96,11 +97,11 @@ mod tests {
     use iced::Background;
 
     use super::{style, with_alpha};
-    use crate::tokens::TOKENS;
+    use crate::tokens::DARK_PALETTE;
 
     #[test]
     fn horizontal_hover_does_not_restyle_vertical_scroller() {
-        let theme = crate::theme::theme();
+        let theme = crate::theme::theme(crate::theme::ThemeMode::Dark);
         let styled = style(
             &theme,
             scrollable::Status::Hovered {
@@ -117,15 +118,15 @@ mod tests {
                 styled.vertical_rail.scroller.background,
             ),
             (
-                Background::Color(TOKENS.colors.outline),
-                Background::Color(with_alpha(TOKENS.colors.outlineVariant, 0.8)),
+                Background::Color(DARK_PALETTE.colors.outline),
+                Background::Color(with_alpha(DARK_PALETTE.colors.outlineVariant, 0.8)),
             )
         );
     }
 
     #[test]
     fn vertical_drag_does_not_restyle_horizontal_scroller() {
-        let theme = crate::theme::theme();
+        let theme = crate::theme::theme(crate::theme::ThemeMode::Dark);
         let styled = style(
             &theme,
             scrollable::Status::Dragged {
@@ -142,8 +143,8 @@ mod tests {
                 styled.vertical_rail.scroller.background,
             ),
             (
-                Background::Color(with_alpha(TOKENS.colors.outlineVariant, 0.8)),
-                Background::Color(TOKENS.colors.outline),
+                Background::Color(with_alpha(DARK_PALETTE.colors.outlineVariant, 0.8)),
+                Background::Color(DARK_PALETTE.colors.outline),
             )
         );
     }

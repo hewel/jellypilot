@@ -45,10 +45,10 @@ pub fn bar(state: &State) -> Option<Element<'_, Message>> {
     text(&now_playing.item.title)
       .font(SPACE_GROTESK_FONT)
       .size(16)
-      .color(TOKENS.colors.onSurface),
+      .color(state.palette().colors.onSurface),
     text(playback_caption(state))
       .size(12)
-      .color(TOKENS.colors.onSurfaceVariant),
+      .color(state.palette().colors.onSurfaceVariant),
   ]
   .spacing(TOKENS.spacing.s0_5)
   .width(Length::FillPortion(2));
@@ -173,6 +173,7 @@ pub fn bar(state: &State) -> Option<Element<'_, Message>> {
 
 fn intro_prompt(state: &State) -> Option<Element<'_, Message>> {
   let prompt = state.playback.view.intro_prompt?;
+  let palette = state.palette();
   let label = match prompt.kind {
     IntroSkipKind::Introduction => "Skip intro?",
     IntroSkipKind::Credits => "Skip credits?",
@@ -212,11 +213,11 @@ fn intro_prompt(state: &State) -> Option<Element<'_, Message>> {
   Some(
     container(row![
       row![
-        icon_with_color(Icon::IntroSkip, IconSize::Md, TOKENS.colors.primary),
+        icon_with_color(Icon::IntroSkip, IconSize::Md, palette.colors.primary),
         text(label)
           .font(SPACE_GROTESK_FONT)
           .size(16)
-          .color(TOKENS.colors.onSurface),
+          .color(palette.colors.onSurface),
       ]
       .spacing(TOKENS.spacing.s2)
       .align_y(Alignment::Center),
@@ -261,6 +262,7 @@ fn adjacent_button<'a>(
 }
 
 fn audio_popover(state: &State) -> Element<'_, Message> {
+  let palette = state.palette();
   let has_audio_choices = match &state.playback.view.tracks {
     TracksView::Ready { tracks, .. } => !track_choices(tracks, "audio", false).is_empty(),
     TracksView::Loading | TracksView::Unavailable => false,
@@ -294,7 +296,7 @@ fn audio_popover(state: &State) -> Element<'_, Message> {
       if choices.is_empty() {
         column![text("No audio tracks")
           .size(12)
-          .color(TOKENS.colors.onSurfaceVariant)]
+          .color(palette.colors.onSurfaceVariant)]
         .spacing(TOKENS.spacing.s1)
         .width(Fill)
       } else {
@@ -303,7 +305,7 @@ fn audio_popover(state: &State) -> Element<'_, Message> {
           let active = choice.id == *audio;
           let id = choice.id.unwrap_or_default();
           let active_marker: Element<'_, Message> = if active {
-            icon_with_color(Icon::Check, IconSize::Xs, TOKENS.colors.primary).into()
+            icon_with_color(Icon::Check, IconSize::Xs, palette.colors.primary).into()
           } else {
             space::horizontal().width(14).into()
           };
@@ -325,12 +327,12 @@ fn audio_popover(state: &State) -> Element<'_, Message> {
     }
     TracksView::Loading => column![text("Loading audio tracks…")
       .size(12)
-      .color(TOKENS.colors.onSurfaceVariant)]
+      .color(palette.colors.onSurfaceVariant)]
     .spacing(TOKENS.spacing.s1)
     .width(Fill),
     TracksView::Unavailable => column![text("Audio tracks unavailable")
       .size(12)
-      .color(TOKENS.colors.onSurfaceVariant)]
+      .color(palette.colors.onSurfaceVariant)]
     .spacing(TOKENS.spacing.s1)
     .width(Fill),
   };
@@ -349,6 +351,7 @@ fn audio_popover(state: &State) -> Element<'_, Message> {
 }
 
 fn subtitle_popover(state: &State) -> Element<'_, Message> {
+  let palette = state.palette();
   let has_subtitle_choices = match &state.playback.view.tracks {
     TracksView::Ready { tracks, .. } => !track_choices(tracks, "sub", false).is_empty(),
     TracksView::Loading | TracksView::Unavailable => false,
@@ -385,7 +388,7 @@ fn subtitle_popover(state: &State) -> Element<'_, Message> {
       for choice in choices {
         let active = choice.id == *subtitle;
         let active_marker: Element<'_, Message> = if active {
-          icon_with_color(Icon::Check, IconSize::Xs, TOKENS.colors.primary).into()
+          icon_with_color(Icon::Check, IconSize::Xs, palette.colors.primary).into()
         } else {
           space::horizontal().width(14).into()
         };
@@ -408,12 +411,12 @@ fn subtitle_popover(state: &State) -> Element<'_, Message> {
     }
     TracksView::Loading => column![text("Loading subtitle tracks…")
       .size(12)
-      .color(TOKENS.colors.onSurfaceVariant)]
+      .color(palette.colors.onSurfaceVariant)]
     .spacing(TOKENS.spacing.s1)
     .width(Fill),
     TracksView::Unavailable => column![text("Subtitle tracks unavailable")
       .size(12)
-      .color(TOKENS.colors.onSurfaceVariant)]
+      .color(palette.colors.onSurfaceVariant)]
     .spacing(TOKENS.spacing.s1)
     .width(Fill),
   };
@@ -508,6 +511,7 @@ fn media_caption(
 }
 
 fn playback_artwork(state: &State, width: f32, height: f32) -> Element<'_, Message> {
+  let palette = state.palette();
   if let Some(cell) = &state.playback.artwork {
     if cell.state == ArtworkCellState::Ready {
       if let Some(handle) = state.kernel.artwork_handles.get(cell.slot, &cell.image_id) {
@@ -522,7 +526,7 @@ fn playback_artwork(state: &State, width: f32, height: f32) -> Element<'_, Messa
   container(icon_with_color(
     Icon::Movie,
     IconSize::Custom(26.0),
-    TOKENS.colors.onSurfaceVariant,
+    palette.colors.onSurfaceVariant,
   ))
   .width(width)
   .height(height)
@@ -530,7 +534,7 @@ fn playback_artwork(state: &State, width: f32, height: f32) -> Element<'_, Messa
   .align_y(Alignment::Center)
   .style(|_theme| container::Style {
     background: Some(iced::Background::Color(
-      TOKENS.colors.surfaceContainerLowest,
+      palette.colors.surfaceContainerLowest,
     )),
     border: iced::Border {
       radius: full_radius(TOKENS.radii.lg),
