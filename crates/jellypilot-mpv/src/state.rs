@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 use crate::{MpvClient, MpvError, PropertyValue};
 
 /// Player transport state.
-#[derive(Debug, Clone, Serialize, Deserialize, specta::Type)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PlayerState {
   pub connected: bool,

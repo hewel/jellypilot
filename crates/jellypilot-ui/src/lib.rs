@@ -1,7 +1,7 @@
 //! JellyPilot's dark-only iced design system.
 //!
-//! The crate ports the canonical Panda tokens and basic component variants so
-//! native screens share the same visual vocabulary as the Tauri frontend.
+//! The crate ports the canonical Panda tokens and basic component variants as
+//! the visual vocabulary of the iced application.
 
 pub mod fonts;
 pub mod icons;

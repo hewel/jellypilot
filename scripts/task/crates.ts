@@ -1,21 +1,11 @@
-export type CrateShortName =
-  | 'auth'
-  | 'core'
-  | 'core-wasm'
-  | 'media-server'
-  | 'mpv'
-  | 'session'
-  | 'playback-core'
-  | 'iced';
+export type CrateShortName = 'auth' | 'core' | 'media-server' | 'mpv' | 'session' | 'iced';
 
 export const CRATE_NAMES: Readonly<Record<CrateShortName, readonly string[]>> = {
   auth: ['jellypilot-auth'],
   core: ['jellypilot-core'],
-  'core-wasm': ['jellypilot-core-wasm'],
   'media-server': ['jellypilot-media-server'],
   mpv: ['jellypilot-mpv'],
   session: ['jellypilot-session'],
-  'playback-core': ['jellypilot-playback-core'],
   iced: ['jellypilot-ui', 'jellypilot-iced'],
 };
 
@@ -23,11 +13,9 @@ export function isCrateShortName(value: string): value is CrateShortName {
   return (
     value === 'auth' ||
     value === 'core' ||
-    value === 'core-wasm' ||
     value === 'media-server' ||
     value === 'mpv' ||
     value === 'session' ||
-    value === 'playback-core' ||
     value === 'iced'
   );
 }

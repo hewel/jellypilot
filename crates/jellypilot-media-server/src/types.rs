@@ -5,13 +5,12 @@
 use std::fmt;
 
 use serde::{Deserialize, Serialize};
-use specta::Type;
 use zeroize::Zeroize;
 
 use super::intro_skipper::IntroSkipRange;
 
 /// Playback implementation selected for new sessions.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Type)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum PlaybackEngineKind {
   EmbeddedWeb,
@@ -54,7 +53,7 @@ pub struct User {
 }
 
 /// Server information.
-#[derive(Debug, Clone, Deserialize, Serialize, Type)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(rename_all = "PascalCase")]
 pub(crate) struct ServerInfo {
   pub server_name: String,
@@ -63,7 +62,7 @@ pub(crate) struct ServerInfo {
 }
 
 /// Connection state exposed to frontend.
-#[derive(Debug, Clone, Serialize, Type)]
+#[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ConnectionState {
   pub provider: MediaServerProvider,
@@ -76,7 +75,7 @@ pub struct ConnectionState {
 }
 
 /// Feature capabilities exposed by the active or selected media server provider.
-#[derive(Debug, Clone, Serialize, Type)]
+#[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ProviderCapabilities {
   pub quick_connect: bool,
@@ -87,7 +86,7 @@ pub struct ProviderCapabilities {
 }
 
 /// Media server provider selected for a connection or saved service profile.
-#[derive(Debug, Clone, Copy, Deserialize, Serialize, Type, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub enum MediaServerProvider {
   Jellyfin,
@@ -101,7 +100,7 @@ impl MediaServerProvider {
 }
 
 /// Library Browser landing data exposed to the frontend.
-#[derive(Debug, Clone, Serialize, Type)]
+#[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct VideoHome {
   pub continue_watching: Vec<VideoLibraryItem>,
@@ -111,7 +110,7 @@ pub struct VideoHome {
 }
 
 /// Video library shortcut for drilling into Movies or Shows libraries.
-#[derive(Debug, Clone, Serialize, Type)]
+#[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct VideoLibraryShortcut {
   pub id: String,
@@ -122,7 +121,7 @@ pub struct VideoLibraryShortcut {
 }
 
 /// Supported video library browse families.
-#[derive(Debug, Clone, Copy, Deserialize, Serialize, Type)]
+#[derive(Debug, Clone, Copy, Deserialize, Serialize)]
 pub enum VideoLibraryKind {
   #[serde(rename = "movies")]
   Movies,
@@ -131,7 +130,7 @@ pub enum VideoLibraryKind {
 }
 
 /// Paged Library Browser listing request.
-#[derive(Debug, Clone, Deserialize, Type)]
+#[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct VideoLibraryPageRequest {
   pub library_id: String,
@@ -145,7 +144,7 @@ pub struct VideoLibraryPageRequest {
 }
 
 /// Supported Library Browser sort options.
-#[derive(Debug, Clone, Copy, Deserialize, Eq, PartialEq, Serialize, Type)]
+#[derive(Debug, Clone, Copy, Deserialize, Eq, PartialEq, Serialize)]
 pub enum VideoLibrarySort {
   #[serde(rename = "title")]
   Title,
@@ -156,7 +155,7 @@ pub enum VideoLibrarySort {
 }
 
 /// Supported Library Browser sort directions.
-#[derive(Debug, Clone, Copy, Deserialize, Eq, PartialEq, Serialize, Type)]
+#[derive(Debug, Clone, Copy, Deserialize, Eq, PartialEq, Serialize)]
 pub enum VideoLibrarySortDirection {
   #[serde(rename = "asc")]
   Ascending,
@@ -165,7 +164,7 @@ pub enum VideoLibrarySortDirection {
 }
 
 /// Supported played-state filters for Library Browser results.
-#[derive(Debug, Clone, Copy, Deserialize, Eq, PartialEq, Serialize, Type)]
+#[derive(Debug, Clone, Copy, Deserialize, Eq, PartialEq, Serialize)]
 pub enum VideoLibraryPlayedFilter {
   #[serde(rename = "all")]
   All,
@@ -176,7 +175,7 @@ pub enum VideoLibraryPlayedFilter {
 }
 
 /// Paged Library Browser listing result.
-#[derive(Debug, Clone, Serialize, Type)]
+#[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct VideoLibraryPage {
   pub library_id: String,
@@ -189,7 +188,7 @@ pub struct VideoLibraryPage {
 }
 
 /// Media card summary for Video Home rows, Movies and Shows browse results, episode rows, and recommendation shelves.
-#[derive(Debug, Clone, Serialize, Type)]
+#[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct VideoLibraryItem {
   pub id: String,
@@ -219,7 +218,7 @@ pub struct VideoLibraryItem {
 }
 
 /// Paged video-only Library search request.
-#[derive(Debug, Clone, Deserialize, Type)]
+#[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct VideoSearchRequest {
   pub query: String,
@@ -228,7 +227,7 @@ pub struct VideoSearchRequest {
 }
 
 /// Paged video-only Library search result.
-#[derive(Debug, Clone, Serialize, Type)]
+#[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct VideoSearchPage {
   pub query: String,
@@ -240,7 +239,7 @@ pub struct VideoSearchPage {
 }
 
 /// Provider-neutral credits and ratings shared by item and show detail views.
-#[derive(Debug, Clone, Default, Serialize, Type)]
+#[derive(Debug, Clone, Default, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct VideoDetailMetadata {
   pub community_rating: Option<f32>,
@@ -250,7 +249,7 @@ pub struct VideoDetailMetadata {
 }
 
 /// Playable Movie or Episode detail data exposed to the frontend.
-#[derive(Debug, Clone, Serialize, Type)]
+#[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct VideoItemDetail {
   pub id: String,
@@ -278,7 +277,7 @@ pub struct VideoItemDetail {
 }
 
 /// Selectable audio or subtitle stream exposed before Library playback starts.
-#[derive(Debug, Clone, Serialize, Type)]
+#[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct VideoPlaybackStreamOption {
   pub index: i32,
@@ -290,7 +289,7 @@ pub struct VideoPlaybackStreamOption {
 }
 
 /// Audio and subtitle metadata loaded after the critical item detail.
-#[derive(Debug, Clone, Serialize, Type)]
+#[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct VideoItemStreams {
   pub audio_streams: Vec<VideoPlaybackStreamOption>,
@@ -298,7 +297,7 @@ pub struct VideoItemStreams {
 }
 
 /// Show detail data with seasons and Jellyfin next playable episode.
-#[derive(Debug, Clone, Serialize, Type)]
+#[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct VideoShowDetail {
   pub id: String,
@@ -317,7 +316,7 @@ pub struct VideoShowDetail {
 }
 
 /// Season summary for a Show detail page.
-#[derive(Debug, Clone, Serialize, Type)]
+#[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct VideoSeason {
   pub id: String,
@@ -329,7 +328,7 @@ pub struct VideoSeason {
 }
 
 /// Request for episodes inside a show season.
-#[derive(Debug, Clone, Deserialize, Type)]
+#[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct VideoSeasonEpisodesRequest {
   pub series_id: String,
@@ -338,7 +337,7 @@ pub struct VideoSeasonEpisodesRequest {
 }
 
 /// Episode list for a selected season.
-#[derive(Debug, Clone, Serialize, Type)]
+#[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct VideoSeasonEpisodes {
   pub series_id: String,
@@ -348,7 +347,7 @@ pub struct VideoSeasonEpisodes {
 }
 
 /// Bounded request for a page of episodes inside a show season.
-#[derive(Debug, Clone, Deserialize, Type)]
+#[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct VideoSeasonEpisodesPageRequest {
   pub series_id: String,
@@ -359,7 +358,7 @@ pub struct VideoSeasonEpisodesPageRequest {
 }
 
 /// Bounded page of episodes for a selected season.
-#[derive(Debug, Clone, Serialize, Type)]
+#[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct VideoSeasonEpisodesPage {
   pub series_id: String,
@@ -373,31 +372,6 @@ pub struct VideoSeasonEpisodesPage {
   pub episodes: Vec<VideoLibraryItem>,
 }
 
-/// Library Browser playback mode selected by the user.
-#[derive(Debug, Clone, Copy, Deserialize, Serialize, Type)]
-pub enum VideoLibraryPlayMode {
-  #[serde(rename = "resume")]
-  Resume,
-  #[serde(rename = "start")]
-  Start,
-  #[serde(rename = "show")]
-  Show,
-}
-
-/// Explicit Library Browser playback launch request.
-#[derive(Debug, Clone, Deserialize, Type)]
-#[serde(rename_all = "camelCase")]
-pub struct VideoLibraryPlayRequest {
-  pub item_id: String,
-  pub mode: VideoLibraryPlayMode,
-  /// Optional one-shot engine choice. The configured engine is used when absent.
-  #[serde(default)]
-  pub engine_override: Option<PlaybackEngineKind>,
-  pub start_position_seconds: Option<f64>,
-  pub audio_stream_index: Option<i32>,
-  pub subtitle_stream_index: Option<i32>,
-}
-
 #[derive(Debug, Clone)]
 pub struct VideoPlaybackTarget {
   pub item_id: String,
@@ -405,7 +379,7 @@ pub struct VideoPlaybackTarget {
 }
 
 /// User data action supported by Library Browser detail views.
-#[derive(Debug, Clone, Copy, Deserialize, Serialize, Type)]
+#[derive(Debug, Clone, Copy, Deserialize, Serialize)]
 pub enum VideoUserDataAction {
   #[serde(rename = "favorite")]
   Favorite,
@@ -418,7 +392,7 @@ pub enum VideoUserDataAction {
 }
 
 /// User-scoped Jellyfin user data mutation request.
-#[derive(Debug, Clone, Deserialize, Type)]
+#[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct VideoUserDataUpdateRequest {
   pub item_id: String,
@@ -426,7 +400,7 @@ pub struct VideoUserDataUpdateRequest {
 }
 
 /// Updated user data returned by Jellyfin after a mutation succeeds.
-#[derive(Debug, Clone, Serialize, Type)]
+#[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct VideoUserDataUpdate {
   pub item_id: String,
@@ -435,7 +409,7 @@ pub struct VideoUserDataUpdate {
 }
 
 /// Credentials for authentication.
-#[derive(Clone, Deserialize, Type)]
+#[derive(Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Credentials {
   #[serde(default = "MediaServerProvider::jellyfin")]
@@ -458,7 +432,7 @@ impl fmt::Debug for Credentials {
 }
 
 /// Quick Connect request created by the server.
-#[derive(Clone, Serialize, Type)]
+#[derive(Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct QuickConnectRequest {
   pub code: String,
@@ -494,7 +468,7 @@ impl Drop for QuickConnectRequest {
 }
 
 /// Quick Connect request status exposed to the frontend.
-#[derive(Debug, Clone, Serialize, Type, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub enum QuickConnectStatus {
   Waiting,
@@ -545,7 +519,7 @@ pub struct GeneralCommand {
 }
 
 /// Media item (movie, episode, etc.).
-#[derive(Debug, Clone, Deserialize, Serialize, Type)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(rename_all = "PascalCase")]
 pub struct MediaItem {
   pub id: String,
@@ -750,7 +724,7 @@ pub fn ticks_to_seconds(ticks: i64) -> f64 {
 }
 
 /// Saved session data for persistence.
-#[derive(Clone, Serialize, Deserialize, Type)]
+#[derive(Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SavedSession {
   #[serde(default = "MediaServerProvider::jellyfin")]

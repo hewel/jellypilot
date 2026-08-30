@@ -17,7 +17,6 @@ jellypilot-session = { path = "../jellypilot-session" }
 parking_lot = "0.12.5"
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.149"
-specta = { version = "=2.0.0-rc.25", features = ["derive"] }
 thiserror = "2.0.18"
 tokio = { version = "1.52.3", features = ["full"] }
 which = "8.0.2"

@@ -173,7 +173,7 @@ impl MpvClient {
     *self.extra_args.lock() = args;
   }
 
-  /// Set Tauri's application cache directory for MPV's temporary demuxer cache files.
+  /// Set the application cache directory for MPV's temporary demuxer cache files.
   pub fn set_demuxer_cache_dir(&self, path: PathBuf) {
     *self.demuxer_cache_dir.lock() = Some(path);
   }
@@ -573,7 +573,7 @@ mod tests {
   use super::*;
 
   #[test]
-  fn spawn_args_use_tauri_cache_dir_when_user_has_no_override() {
+  fn spawn_args_use_app_cache_dir_when_user_has_no_override() {
     assert_eq!(
       mpv_spawn_args(&["--fullscreen".to_string()], Some(Path::new("app-cache"))),
       vec![

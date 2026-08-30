@@ -9,19 +9,14 @@ export const FORMAT_PATHS = ['package.json', 'scripts/**/*.ts', 'lint-staged.con
 export const LINT_PATHS = ['scripts'];
 
 export const RUST_FORMAT_PACKAGES = [
-  'jellypilot',
   'jellypilot-auth',
   'jellypilot-core',
-  'jellypilot-core-wasm',
   'jellypilot-media-server',
   'jellypilot-mpv',
   'jellypilot-session',
-  'jellypilot-playback-core',
   'jellypilot-ui',
   'jellypilot-iced',
 ];
-
-export const RUST_CLIPPY_PACKAGES = RUST_FORMAT_PACKAGES.slice(1);
 
 export function command(
   executable: string,
@@ -59,12 +54,11 @@ export function rustFormatCommand(check: boolean): CommandSpec {
 export function rustClippyWorkspaceCommands(): readonly CommandSpec[] {
   const lintArgs = ['--all-targets', '--all-features', '--no-deps', '--', '-D', 'warnings'];
   return [
-    command('cargo', ['clippy', '--manifest-path', 'src-tauri/Cargo.toml', ...lintArgs]),
     command('cargo', [
       'clippy',
       '--manifest-path',
       'Cargo.toml',
-      ...RUST_CLIPPY_PACKAGES.flatMap((packageName) => ['--package', packageName]),
+      ...RUST_FORMAT_PACKAGES.flatMap((packageName) => ['--package', packageName]),
       ...lintArgs,
     ]),
   ];

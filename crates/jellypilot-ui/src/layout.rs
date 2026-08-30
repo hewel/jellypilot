@@ -6,8 +6,7 @@
 
 /// Widest width (exclusive) classified as [`SizeClass::Compact`].
 ///
-/// Aligned with the existing tokens `breakpoints.xl` ("1280px") so native and
-/// Tauri screens switch at the same width. Breakpoints are stored as
+/// Aligned with the design tokens' `breakpoints.xl` ("1280px"). Breakpoints are stored as
 /// `&'static str`, so the value is duplicated here as a plain `f32`.
 pub const COMPACT_MAX_WIDTH: f32 = 1280.0;
 

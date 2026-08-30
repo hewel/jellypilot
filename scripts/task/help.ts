@@ -23,9 +23,7 @@ Utilities:
 
 Crate short names:
   core           jellypilot-core
-  core-wasm      jellypilot-core-wasm
   media-server   jellypilot-media-server
   mpv            jellypilot-mpv
   session        jellypilot-session
-  playback-core  jellypilot-playback-core
   iced           jellypilot-ui, jellypilot-iced`;

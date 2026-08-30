@@ -194,13 +194,13 @@ pub struct MpvEvent {
 }
 
 /// Typed property values from MPV.
-#[derive(Debug, Clone, Serialize, Deserialize, specta::Type)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(untagged)]
 pub enum PropertyValue {
   Bool(bool),
   Number(f64),
   String(String),
-  /// Arrays serialized as JSON string for specta compatibility.
+  /// Arrays and objects carried as their raw JSON text.
   Json(String),
   Null,
 }
