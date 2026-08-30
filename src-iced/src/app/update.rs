@@ -5,7 +5,7 @@
 
 use iced::Task;
 use jellypilot_auth::login::{should_disconnect_after_forget, ConnectionPhase};
-use jellypilot_core::config::{IntroMode, Settings};
+use jellypilot_core::config::{AppMode, IntroMode, Settings};
 use jellypilot_core::diagnostics::{DiagnosticCategory, DiagnosticLevel};
 use jellypilot_mpv::playback_session::{PlaybackInput, PlaybackIntent};
 
@@ -33,6 +33,7 @@ struct SettingsPlaybackSnapshot {
   subtitle_languages: Vec<String>,
   intro_mode: IntroMode,
   playback_target_name: Option<String>,
+  app_mode: AppMode,
 }
 
 impl SettingsPlaybackSnapshot {
@@ -43,6 +44,7 @@ impl SettingsPlaybackSnapshot {
       subtitle_languages: settings.subtitle_languages().to_vec(),
       intro_mode: settings.intro_mode(),
       playback_target_name: settings.playback_target_name().map(str::to_owned),
+      app_mode: settings.app_mode(),
     }
   }
 }
@@ -150,17 +152,28 @@ pub fn update(state: &mut State, message: Message) -> Task<Message> {
           DiagnosticCategory::Connection,
           "Connected to media server.",
         );
-        state.shell.destination = Destination::Home;
+        // Control-Only activates the Now Playing root and never starts the
+        // Library Browser home load.
+        let control_only = state.app_mode() == AppMode::ControlOnly;
+        state.shell.destination = if control_only {
+          Destination::NowPlaying
+        } else {
+          Destination::Home
+        };
         playback::initialize_playback(
           &mut state.playback,
           &mut state.kernel,
           state.shell.quit_requested,
         );
-        let home_task = home::start_load(
-          &mut state.home,
-          &mut state.kernel,
-          state.playback.view.now_playing.is_none(),
-        );
+        let home_task = if control_only {
+          Task::none()
+        } else {
+          home::start_load(
+            &mut state.home,
+            &mut state.kernel,
+            state.playback.view.now_playing.is_none(),
+          )
+        };
         let remote_task = playback::start_remote_session(&mut state.playback, &mut state.kernel);
         Task::batch([login_task, home_task, remote_task])
       } else if was_connected && !is_connected {
@@ -174,7 +187,14 @@ pub fn update(state: &mut State, message: Message) -> Task<Message> {
         login_task
       }
     }
-    Message::Home(HomeMessage::Navigate(destination)) => shell::navigate(state, destination),
+    Message::Home(HomeMessage::Navigate(destination)) => {
+      // Control-Only mode has no Library Browser; reject its destinations.
+      if shell::destination_allowed(state.app_mode(), &destination) {
+        shell::navigate(state, destination)
+      } else {
+        Task::none()
+      }
+    }
     Message::Home(message) => {
       // Cross-surface follow-ups hoisted out of the home surface (ADR 0029): a
       // Loaded settlement re-prepares the artwork pipeline, after which
@@ -198,10 +218,12 @@ pub fn update(state: &mut State, message: Message) -> Task<Message> {
       // surface owns the input text, but submitting it writes the shared
       // destination stack and drives the other surfaces' leave/enter hooks.
       let query = state.browse.search_input.trim().to_owned();
-      if query.is_empty() {
-        Task::none()
-      } else {
-        shell::navigate(state, Destination::Search(query))
+      let destination = (!query.is_empty()).then_some(Destination::Search(query));
+      match destination {
+        Some(destination) if shell::destination_allowed(state.app_mode(), &destination) => {
+          shell::navigate(state, destination)
+        }
+        _ => Task::none(),
       }
     }
     Message::Browse(message) => {
@@ -247,7 +269,14 @@ pub fn update(state: &mut State, message: Message) -> Task<Message> {
         task
       }
     }
-    Message::OpenDetail(item) => shell::open_detail(state, item),
+    Message::OpenDetail(item) => {
+      let destination = Destination::Detail(item.id.clone());
+      if shell::destination_allowed(state.app_mode(), &destination) {
+        shell::open_detail(state, item)
+      } else {
+        Task::none()
+      }
+    }
     Message::Detail(DetailMessage::Back) => shell::navigate_back(state),
     Message::Detail(message) => {
       // Cross-surface follow-ups hoisted out of the detail surface (ADR
@@ -275,6 +304,9 @@ pub fn update(state: &mut State, message: Message) -> Task<Message> {
       }
       task
     }
+    // Back leaves the full-window Settings view in Control-Only mode; the
+    // stack always holds Now Playing beneath it.
+    Message::Settings(SettingsMessage::Back) => shell::navigate_back(state),
     Message::Settings(message) => {
       // Cross-surface writes hoisted out of the settings surface (ADR 0029):
       // mutations that change playback-relevant settings reconfigure playback,
@@ -311,6 +343,9 @@ pub fn update(state: &mut State, message: Message) -> Task<Message> {
           &mut state.playback,
           &mut state.kernel,
         ));
+      }
+      if settings_after.app_mode != settings_before.app_mode {
+        tasks.push(shell::apply_app_mode(state, settings_after.app_mode));
       }
       if disconnect {
         tasks.push(
@@ -1048,5 +1083,107 @@ mod tests {
       .artwork_handles
       .get(browse_cell.slot, "browse-art-1")
       .is_some());
+  }
+  #[test]
+  fn control_only_mode_rejects_library_browser_navigation() {
+    let mut state = test_state();
+    let (mut settings, _guard) = isolated_settings("app-mode-guard");
+    settings
+      .set_app_mode(jellypilot_core::config::AppMode::ControlOnly)
+      .unwrap();
+    state.kernel.settings = settings;
+    state.shell.destination = Destination::NowPlaying;
+
+    drop(update(
+      &mut state,
+      Message::Home(HomeMessage::Navigate(Destination::Library {
+        library_id: "movies".to_owned(),
+        collection_type: "movies".to_owned(),
+      })),
+    ));
+    assert_eq!(state.shell.destination, Destination::NowPlaying);
+
+    state.browse.search_input = "term".to_owned();
+    drop(update(
+      &mut state,
+      Message::Browse(BrowseMessage::SearchSubmitted),
+    ));
+    assert_eq!(state.shell.destination, Destination::NowPlaying);
+
+    drop(update(
+      &mut state,
+      Message::OpenDetail(episode("movie-1", 1)),
+    ));
+    assert_eq!(state.shell.destination, Destination::NowPlaying);
+
+    // Now Playing and Settings remain reachable.
+    drop(update(
+      &mut state,
+      Message::Home(HomeMessage::Navigate(Destination::Settings)),
+    ));
+    assert_eq!(state.shell.destination, Destination::Settings);
+    drop(update(&mut state, Message::Settings(SettingsMessage::Back)));
+    assert_eq!(state.shell.destination, Destination::NowPlaying);
+  }
+
+  #[test]
+  fn entering_control_only_aborts_browse_and_resets_library_surfaces() {
+    let mut state = test_state();
+    state.shell.window_size = iced::Size::new(1440.0, 810.0);
+    state.shell.destination = Destination::Library {
+      library_id: "movies".to_owned(),
+      collection_type: "movies".to_owned(),
+    };
+    state.home.data.shortcuts =
+      jellypilot_core::LoadState::Ready(vec![jellypilot_media_server::VideoLibraryShortcut {
+        id: "movies".to_owned(),
+        name: "Movies".to_owned(),
+        collection_type: "movies".to_owned(),
+        item_count: Some(1),
+        artwork_image_id: None,
+      }]);
+    state.browse.view = LibraryBrowseView::Loading;
+    let (_task, handle) = Task::<Message>::none().abortable();
+    state.browse.page_tasks.insert(
+      jellypilot_core::LibraryBrowseLoadToken {
+        generation: 1,
+        sequence: 1,
+      },
+      handle,
+    );
+
+    drop(shell::apply_app_mode(
+      &mut state,
+      jellypilot_core::config::AppMode::ControlOnly,
+    ));
+
+    assert_eq!(state.shell.destination, Destination::NowPlaying);
+    assert!(state.shell.navigation_stack.is_empty());
+    assert!(state.browse.page_tasks.is_empty());
+    assert!(matches!(state.browse.view, LibraryBrowseView::Inactive));
+    assert!(matches!(
+      state.home.data.shortcuts,
+      jellypilot_core::LoadState::Idle
+    ));
+    assert_eq!(
+      state.shell.full_window_size,
+      Some(iced::Size::new(1440.0, 810.0))
+    );
+  }
+
+  #[test]
+  fn entering_full_restores_home_and_consumes_the_stashed_size() {
+    let mut state = test_state();
+    state.shell.destination = Destination::NowPlaying;
+    state.shell.full_window_size = Some(iced::Size::new(1280.0, 800.0));
+
+    drop(shell::apply_app_mode(
+      &mut state,
+      jellypilot_core::config::AppMode::Full,
+    ));
+
+    assert_eq!(state.shell.destination, Destination::Home);
+    assert!(state.shell.navigation_stack.is_empty());
+    assert_eq!(state.shell.full_window_size, None);
   }
 }

@@ -10,7 +10,7 @@ use jellypilot_auth::{AuthStore, SavedProfileKey, SavedProfileSummary, Sensitive
 use jellypilot_core::artwork_binder::{ArtworkBinder, ArtworkSlot};
 use jellypilot_core::browse_model::LibraryBrowseView;
 use jellypilot_core::config::{
-  IntroMode, LoginPrefill, Settings, SettingsStore, ShortcutKind, ThemeMode,
+  AppMode, IntroMode, LoginPrefill, Settings, SettingsStore, ShortcutKind, ThemeMode,
 };
 use jellypilot_core::detail::DetailContent;
 use jellypilot_core::diagnostics::{DiagnosticCategory, DiagnosticLevel, Diagnostics};
@@ -164,6 +164,9 @@ pub enum Destination {
   Search(String),
   Detail(String),
   Settings,
+  /// Full-window Now Playing; the Control-Only root destination, unused in
+  /// Full mode where the player is a bar above the shell content.
+  NowPlaying,
 }
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
@@ -676,7 +679,7 @@ impl State {
     let artwork_adapter = Arc::new(ArtworkAdapter::new());
     artwork_adapter.set_disk_cache_enabled(settings.snapshot().image_cache_enabled());
 
-    Self {
+    let mut state = Self {
       system_theme: iced::theme::Mode::None,
       kernel: Kernel {
         settings,
@@ -705,10 +708,17 @@ impl State {
       },
       home: crate::app::home::Surface::default(),
       detail: crate::app::detail::Surface::default(),
+
       browse: crate::app::browse::Surface::default(),
       playback,
       shell: crate::app::shell::Surface::new(smoke),
+    };
+    // Control-Only boots straight into the full-window Now Playing root; the
+    // Library Browser destinations stay unreachable (router guard).
+    if state.app_mode() == AppMode::ControlOnly {
+      state.shell.destination = Destination::NowPlaying;
     }
+    state
   }
   pub fn all_artwork_slots(&self) -> impl Iterator<Item = ArtworkSlot> + '_ {
     self
@@ -771,6 +781,11 @@ impl State {
       UiThemeMode::Dark => &DARK_PALETTE,
       UiThemeMode::Light => &LIGHT_PALETTE,
     }
+  }
+  /// Persisted app mode: Full (Library Browser shell) or Control-Only
+  /// (compact Now Playing controller).
+  pub fn app_mode(&self) -> AppMode {
+    self.kernel.settings.snapshot().app_mode()
   }
 
   pub fn retain_artwork_handles(&mut self) {

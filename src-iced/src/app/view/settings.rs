@@ -1,7 +1,7 @@
 use iced::widget::{button, column, container, row, scrollable, space, text, text_input, Column};
 use iced::{Alignment, Element, Fill};
 use jellypilot_auth::login::ConnectionPhase;
-use jellypilot_core::config::{IntroMode, ShortcutKind, ThemeMode};
+use jellypilot_core::config::{AppMode, IntroMode, ShortcutKind, ThemeMode};
 use jellypilot_core::diagnostics::{format_diagnostic_time, DiagnosticCategory, DiagnosticLevel};
 use jellypilot_core::settings::SUBTITLE_LANGUAGE_OPTIONS;
 use jellypilot_ui::fonts::SPACE_GROTESK_FONT;
@@ -28,7 +28,7 @@ pub fn view(state: &State) -> Element<'_, Message> {
   ]
   .spacing(TOKENS.spacing.s1);
 
-  let content = column![
+  let mut content = column![
     header,
     feedback(state),
     connection_section(state),
@@ -44,10 +44,33 @@ pub fn view(state: &State) -> Element<'_, Message> {
   .spacing(TOKENS.spacing.s4)
   .width(Fill);
 
+  // Control-Only renders Settings full-window; the back button returns to
+  // the Now Playing root.
+  if state.app_mode() == AppMode::ControlOnly {
+    content = column![back_to_now_playing(), content]
+      .spacing(TOKENS.spacing.s2)
+      .width(Fill);
+  }
+
   scrollable(container(content).padding([TOKENS.spacing.s4, TOKENS.spacing.s6]))
     .width(Fill)
     .height(Fill)
     .into()
+}
+
+fn back_to_now_playing<'a>() -> Element<'a, Message> {
+  button(
+    row![
+      icon_for_variant(Icon::ChevronLeft, IconSize::Sm, ButtonVariant::Tonal),
+      text("Now Playing"),
+    ]
+    .spacing(TOKENS.spacing.s1_5)
+    .align_y(Alignment::Center),
+  )
+  .padding([6, 10])
+  .on_press(Message::Settings(SettingsMessage::Back))
+  .style(|theme, status| jellypilot_ui::theme::button_variant(theme, status, ButtonVariant::Tonal))
+  .into()
 }
 
 fn feedback(state: &State) -> Element<'_, Message> {
@@ -380,6 +403,7 @@ fn shortcut_row<'a>(state: &'a State, label: &'a str, kind: ShortcutKind) -> Ele
 fn interface_section(state: &State) -> Element<'_, Message> {
   let palette = state.palette();
   let theme_mode = state.kernel.settings.snapshot().theme_mode();
+  let app_mode = state.kernel.settings.snapshot().app_mode();
   let reduced_motion = state.kernel.settings.snapshot().reduced_motion();
   section(
     palette,
@@ -387,6 +411,7 @@ fn interface_section(state: &State) -> Element<'_, Message> {
     "Interface",
     column![
       appearance_row(palette, theme_mode),
+      app_mode_row(palette, app_mode),
       toggle_row(
         palette,
         "Reduce motion",
@@ -428,6 +453,49 @@ fn theme_mode_option(
   button(text(label))
     .padding([5, 10])
     .on_press(Message::Settings(SettingsMessage::ThemeModeSelected(value)))
+    .style(move |theme, status| {
+      jellypilot_ui::theme::button_variant(
+        theme,
+        status,
+        if value == selected {
+          ButtonVariant::TonalActive
+        } else {
+          ButtonVariant::Tonal
+        },
+      )
+    })
+    .into()
+}
+
+fn app_mode_row<'a>(palette: &ThemePalette, selected: AppMode) -> Element<'a, Message> {
+  row![
+    column![
+      text("App mode").size(14).color(palette.colors.onSurface),
+      text("Control only shows a compact fixed-size player window without the library browser; it switches live.")
+        .size(12)
+        .color(palette.colors.onSurfaceVariant),
+    ]
+    .spacing(TOKENS.spacing.s1)
+    .width(Fill),
+    row![
+      app_mode_option("Full", AppMode::Full, selected),
+      app_mode_option("Control only", AppMode::ControlOnly, selected),
+    ]
+    .spacing(TOKENS.spacing.s2),
+  ]
+  .spacing(TOKENS.spacing.s3)
+  .align_y(Alignment::Center)
+  .into()
+}
+
+fn app_mode_option(
+  label: &'static str,
+  value: AppMode,
+  selected: AppMode,
+) -> Element<'static, Message> {
+  button(text(label))
+    .padding([5, 10])
+    .on_press(Message::Settings(SettingsMessage::AppModeSelected(value)))
     .style(move |theme, status| {
       jellypilot_ui::theme::button_variant(
         theme,

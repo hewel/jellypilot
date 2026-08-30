@@ -3,6 +3,7 @@ use crate::app::message::{BrowseMessage, HomeMessage, Message};
 use crate::app::state::{Destination, NoticeLevel, State, ToastNotice};
 use iced::widget::{button, column, container, row, space, stack, text, text_input, Column};
 use iced::{Alignment, Color, Element, Fill, Length};
+use jellypilot_core::config::AppMode;
 use jellypilot_core::LoadState;
 use jellypilot_ui::fonts::SPACE_GROTESK_FONT;
 use jellypilot_ui::icons::{icon_for_variant, icon_with_color, Icon, IconSize};
@@ -28,6 +29,9 @@ pub(crate) fn sidebar_width(class: SizeClass) -> f32 {
 }
 
 pub fn view(state: &State) -> Element<'_, Message> {
+  if state.app_mode() == AppMode::ControlOnly {
+    return control_only_view(state);
+  }
   let palette = state.palette();
   let skeleton_phase = state.shell.skeleton_phase;
   let reduced_motion = state.kernel.settings.snapshot().reduced_motion();
@@ -39,6 +43,9 @@ pub fn view(state: &State) -> Element<'_, Message> {
     Destination::Library { .. } | Destination::Search(_) => browse::view(state),
     Destination::Detail(_) => detail::view(state),
     Destination::Settings => settings::view(state),
+    // Now Playing is the Control-Only root; the router never routes here in
+    // Full mode, where the player is a bar.
+    Destination::NowPlaying => home::view(state),
   };
   let mut content_stack = stack![content].width(Fill).height(Fill);
   if let Some(toast) = visible_toast(state) {
@@ -80,6 +87,38 @@ pub fn view(state: &State) -> Element<'_, Message> {
     .height(Fill);
 
   container(body)
+    .width(Fill)
+    .height(Fill)
+    .style(|theme| jellypilot_ui::theme::surface_variant(theme, SurfaceVariant::Canvas))
+    .into()
+}
+
+/// Control-Only shell: no sidebar, no hairlines, no player bar — the compact
+/// full-window Now Playing view, or full-window Settings, with the toast
+/// layer on top.
+fn control_only_view(state: &State) -> Element<'_, Message> {
+  let palette = state.palette();
+  let content: Element<'_, Message> = match &state.shell.destination {
+    Destination::Settings => settings::view(state),
+    // The router guard keeps Control-Only on Now Playing or Settings; any
+    // other destination here falls back to the compact player.
+    _ => player::full(state),
+  };
+  let mut content_stack = stack![content].width(Fill).height(Fill);
+  if let Some(toast) = visible_toast(state) {
+    content_stack = content_stack.push(
+      container(toast_view(palette, toast))
+        .width(Fill)
+        .padding(iced::Padding {
+          top: TOKENS.spacing.s2,
+          right: TOKENS.spacing.s3,
+          bottom: 0.0,
+          left: TOKENS.spacing.s3,
+        })
+        .align_x(Alignment::End),
+    );
+  }
+  container(content_stack)
     .width(Fill)
     .height(Fill)
     .style(|theme| jellypilot_ui::theme::surface_variant(theme, SurfaceVariant::Canvas))

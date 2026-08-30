@@ -96,6 +96,11 @@ fn update_settings(
       finish_settings_mutation(surface, kernel, result);
       Task::none()
     }
+    SettingsMessage::AppModeSelected(mode) => {
+      let result = kernel.settings.set_app_mode(mode);
+      finish_settings_mutation(surface, kernel, result);
+      Task::none()
+    }
     SettingsMessage::SubtitleMenuToggled => {
       surface.view.subtitle_menu_open = !surface.view.subtitle_menu_open;
       Task::none()
@@ -185,7 +190,8 @@ fn update_settings(
     }
     // Handled entirely by the top-level router: both arms write the remote
     // session state, and SignOut also drives the login surface's forget flow.
-    SettingsMessage::Disconnect | SettingsMessage::SignOut => Task::none(),
+    // Back navigates the shell stack (Control-Only full-window Settings).
+    SettingsMessage::Disconnect | SettingsMessage::SignOut | SettingsMessage::Back => Task::none(),
     SettingsMessage::PlaybackConfigApplied(result) => {
       if result.is_err() {
         surface.view.error = Some(PLAYBACK_CONFIG_APPLY_ERROR);

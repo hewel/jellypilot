@@ -1,12 +1,12 @@
 use std::fmt;
 
-use crate::app::message::{Message, PlaybackMessage};
-use crate::app::state::{ArtworkCellState, State};
+use crate::app::message::{HomeMessage, Message, PlaybackMessage};
+use crate::app::state::{ArtworkCellState, Destination, State};
 use iced::widget::{button, column, container, row, slider, space, text, Column};
 use iced::{Alignment, ContentFit, Element, Fill, Length};
 use jellypilot_mpv::playback::{Playable, TrackInfo};
 use jellypilot_mpv::playback_session::{
-  AdjacentAvailability, AdjacentDirection, PlaybackIntent, TracksView,
+  AdjacentAvailability, AdjacentDirection, NowPlayingView, PlaybackIntent, TracksView,
 };
 use jellypilot_mpv::player::format_duration;
 use jellypilot_session::IntroSkipKind;
@@ -41,18 +41,61 @@ pub fn bar(state: &State) -> Option<Element<'_, Message>> {
     .seek_preview
     .unwrap_or(now_playing.position_seconds);
 
-  let metadata = column![
+  let metadata = now_playing_metadata(state, now_playing, 16.0, 12.0).width(Length::FillPortion(2));
+
+  let top = row![
+    playback_artwork(state, 56.0, 84.0),
+    metadata,
+    transport(state, now_playing),
+    track_selection(state),
+    volume_controls(state, now_playing),
+  ]
+  .spacing(TOKENS.spacing.s3)
+  .align_y(Alignment::Center)
+  .width(Fill);
+
+  let mut content = Column::new().spacing(TOKENS.spacing.s2).push(top);
+
+  if let Some(prompt) = intro_prompt(state) {
+    content = content.push(prompt);
+  }
+
+  if let Some(duration) = duration {
+    content = content.push(seek_row(position, duration));
+  }
+
+  Some(
+    container(content)
+      .padding([TOKENS.spacing.s2, TOKENS.spacing.s3])
+      .width(Fill)
+      .style(|theme| jellypilot_ui::theme::surface_variant(theme, SurfaceVariant::Block))
+      .into(),
+  )
+}
+
+/// Title and series/episode caption shared by the bar and the full-window
+/// compact player.
+fn now_playing_metadata<'a>(
+  state: &State,
+  now_playing: &'a NowPlayingView,
+  title_size: f32,
+  caption_size: f32,
+) -> Column<'a, Message> {
+  column![
     text(&now_playing.item.title)
       .font(SPACE_GROTESK_FONT)
-      .size(16)
+      .size(title_size)
       .color(state.palette().colors.onSurface),
     text(playback_caption(state))
-      .size(12)
+      .size(caption_size)
       .color(state.palette().colors.onSurfaceVariant),
   ]
   .spacing(TOKENS.spacing.s0_5)
-  .width(Length::FillPortion(2));
+}
 
+/// Prev/play-pause/stop/next transport shared by the bar and the compact
+/// full-window player.
+fn transport<'a>(state: &'a State, now_playing: &NowPlayingView) -> Element<'a, Message> {
   let is_paused = now_playing.paused;
   let play_pause_icon = if is_paused { Icon::Play } else { Icon::Pause };
   let play_pause_label = if is_paused { "Play" } else { "Pause" };
@@ -86,18 +129,27 @@ pub fn bar(state: &State) -> Option<Element<'_, Message>> {
   .style(|theme, status| jellypilot_ui::theme::button_variant(theme, status, ButtonVariant::Tonal));
   let stop = tooltip(stop_button, "Stop", TooltipOptions::default());
 
-  let transport = row![
+  row![
     adjacent_button(state, AdjacentDirection::Previous, "Previous"),
     play_pause,
     stop,
     adjacent_button(state, AdjacentDirection::Next, "Next"),
   ]
   .spacing(TOKENS.spacing.s1_5)
-  .align_y(Alignment::Center);
-  let track_selection = row![audio_popover(state), subtitle_popover(state)]
-    .spacing(TOKENS.spacing.s1_5)
-    .align_y(Alignment::Center);
+  .align_y(Alignment::Center)
+  .into()
+}
 
+/// Audio/subtitle popover triggers shared by the bar and the compact player.
+fn track_selection(state: &State) -> Element<'_, Message> {
+  row![audio_popover(state), subtitle_popover(state)]
+    .spacing(TOKENS.spacing.s1_5)
+    .align_y(Alignment::Center)
+    .into()
+}
+
+/// Mute toggle and volume slider shared by the bar and the compact player.
+fn volume_controls<'a>(state: &'a State, now_playing: &NowPlayingView) -> Element<'a, Message> {
   let volume_slider = slider(
     0.0..=100.0,
     state.playback.volume_preview.unwrap_or(now_playing.volume),
@@ -125,50 +177,120 @@ pub fn bar(state: &State) -> Option<Element<'_, Message>> {
   .style(|theme, status| jellypilot_ui::theme::button_variant(theme, status, ButtonVariant::Tonal));
   let mute = tooltip(mute_button, mute_label, TooltipOptions::default());
 
-  let volume = row![mute, volume_slider,]
+  row![mute, volume_slider]
     .spacing(TOKENS.spacing.s2)
-    .align_y(Alignment::Center);
-  let top = row![
-    playback_artwork(state, 56.0, 84.0),
-    metadata,
-    transport,
-    track_selection,
-    volume,
+    .align_y(Alignment::Center)
+    .into()
+}
+
+/// Position/slider/duration seek row shared by the bar and the compact
+/// full-window player.
+fn seek_row(position: f64, duration: f64) -> Element<'static, Message> {
+  row![
+    text(format_duration(position)).size(11),
+    slider(0.0..=duration, position, |value| {
+      Message::Playback(PlaybackMessage::SeekChanged(value))
+    })
+    .on_release(Message::Playback(PlaybackMessage::SeekReleased))
+    .step(1.0)
+    .width(Fill),
+    text(format_duration(duration)).size(11),
   ]
-  .spacing(TOKENS.spacing.s3)
+  .spacing(TOKENS.spacing.s2)
   .align_y(Alignment::Center)
-  .width(Fill);
+  .into()
+}
 
-  let mut content = Column::new().spacing(TOKENS.spacing.s2).push(top);
+/// Full-window Now Playing view for Control-Only mode: a large poster,
+/// metadata, seek, transport, volume, and track menus, with a gear button to
+/// Settings. Without an active playback session it shows an honest idle
+/// state — never fake media.
+pub fn full(state: &State) -> Element<'_, Message> {
+  let palette = state.palette();
+  let settings_button = button(icon_for_variant(
+    Icon::Settings,
+    IconSize::Md,
+    ButtonVariant::Tonal,
+  ))
+  .padding([6, 10])
+  .on_press(Message::Home(HomeMessage::Navigate(Destination::Settings)))
+  .style(|theme, status| jellypilot_ui::theme::button_variant(theme, status, ButtonVariant::Tonal));
+  let header = row![
+    space::horizontal(),
+    tooltip(settings_button, "Settings", TooltipOptions::default()),
+  ]
+  .width(Fill)
+  .align_y(Alignment::Center);
 
-  if let Some(prompt) = intro_prompt(state) {
-    content = content.push(prompt);
-  }
+  let body: Element<'_, Message> = match state.playback.view.now_playing.as_ref() {
+    Some(now_playing) => {
+      let duration = now_playing
+        .duration_seconds
+        .filter(|duration| duration.is_finite() && *duration > 0.0);
+      let position = state
+        .playback
+        .seek_preview
+        .unwrap_or(now_playing.position_seconds);
+      let mut content = Column::new()
+        .spacing(TOKENS.spacing.s3)
+        .align_x(Alignment::Center)
+        .width(Fill)
+        .push(playback_artwork(state, 200.0, 300.0))
+        .push(
+          now_playing_metadata(state, now_playing, 22.0, 13.0)
+            .align_x(Alignment::Center)
+            .width(Fill),
+        );
+      if let Some(duration) = duration {
+        content = content.push(seek_row(position, duration));
+      }
+      if let Some(prompt) = intro_prompt(state) {
+        content = content.push(prompt);
+      }
+      content
+        .push(transport(state, now_playing))
+        .push(
+          row![track_selection(state), volume_controls(state, now_playing)]
+            .spacing(TOKENS.spacing.s3)
+            .align_y(Alignment::Center),
+        )
+        .into()
+    }
+    None => column![
+      icon_with_color(
+        Icon::Movie,
+        IconSize::Custom(40.0),
+        palette.colors.onSurfaceVariant,
+      ),
+      text("JellyPilot")
+        .font(SPACE_GROTESK_FONT)
+        .size(26)
+        .color(palette.colors.onSurface),
+      text("Waiting for playback")
+        .size(13)
+        .color(palette.colors.onSurfaceVariant),
+    ]
+    .spacing(TOKENS.spacing.s2)
+    .align_x(Alignment::Center)
+    .into(),
+  };
 
-  if let Some(duration) = duration {
-    content = content.push(
-      row![
-        text(format_duration(position)).size(11),
-        slider(0.0..=duration, position, |value| {
-          Message::Playback(PlaybackMessage::SeekChanged(value))
-        })
-        .on_release(Message::Playback(PlaybackMessage::SeekReleased))
-        .step(1.0)
-        .width(Fill),
-        text(format_duration(duration)).size(11),
-      ]
-      .spacing(TOKENS.spacing.s2)
-      .align_y(Alignment::Center),
-    );
-  }
-
-  Some(
-    container(content)
-      .padding([TOKENS.spacing.s2, TOKENS.spacing.s3])
-      .width(Fill)
-      .style(|theme| jellypilot_ui::theme::surface_variant(theme, SurfaceVariant::Block))
-      .into(),
+  container(
+    column![
+      header,
+      container(body)
+        .width(Fill)
+        .height(Fill)
+        .align_x(Alignment::Center)
+        .align_y(Alignment::Center),
+    ]
+    .width(Fill)
+    .height(Fill),
   )
+  .padding(TOKENS.spacing.s3)
+  .width(Fill)
+  .height(Fill)
+  .into()
 }
 
 fn intro_prompt(state: &State) -> Option<Element<'_, Message>> {
@@ -590,6 +712,21 @@ mod tests {
     let mut state = State::boot(false);
     state.playback.view.now_playing = Some(test_now_playing());
     assert!(bar(&state).is_some());
+  }
+  #[test]
+  fn full_shows_idle_state_without_playback() {
+    let state = State::boot(false);
+    drop(full(&state));
+  }
+
+  #[test]
+  fn full_renders_compact_player_when_playback_is_active() {
+    let mut state = State::boot(false);
+    state.playback.view.now_playing = Some(test_now_playing());
+    state.playback.view.intro_prompt = Some(IntroPromptView {
+      kind: IntroSkipKind::Introduction,
+    });
+    drop(full(&state));
   }
 
   #[test]

@@ -71,6 +71,14 @@ _Avoid_: Account type, server type
 The user-facing playback status shown by JellyPilot for the current Playback Session. Now Playing may show transport state before rich media-server metadata is available.
 _Avoid_: MPV state, Web player state, playback session internals
 
+**App Mode**:
+The persisted top-level operating mode of JellyPilot: Full or Control-Only. App Mode decides which shell surfaces exist and how the window behaves, and it switches live from Settings without a restart.
+_Avoid_: View preference, layout setting, window profile
+
+**Control-Only Mode**:
+The compact media-controller App Mode: a fixed-size 480x760 window with Now Playing and Settings only, plus the tray and the remote Playback Target. Control-Only Mode has no Library Browser; navigation to Library Browser destinations is rejected and browse state is dropped on entry.
+_Avoid_: Mini player, compact view, floating widget
+
 **Library Browser**:
 The authenticated JellyPilot shell area for browsing video libraries, inspecting item details, launching Playback Sessions, and applying user-scoped media state. Library Browser complements the Playback Target; it is not a goal to replace every Jellyfin or Emby client feature.
 _Avoid_: Full media-server replacement

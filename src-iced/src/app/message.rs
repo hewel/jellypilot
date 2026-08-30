@@ -8,7 +8,7 @@ use jellypilot_auth::{
 };
 use jellypilot_core::artwork_binder::ArtworkSlot;
 use jellypilot_core::browse_model::BrowsePageSettlement;
-use jellypilot_core::config::{IntroMode, LoginPrefill, ShortcutKind, ThemeMode};
+use jellypilot_core::config::{AppMode, IntroMode, LoginPrefill, ShortcutKind, ThemeMode};
 use jellypilot_core::diagnostics::{DiagnosticCategory, DiagnosticLevel};
 use jellypilot_core::request_gate::{
   DetailAuxToken, DetailToken, HomeToken, RemotePlayToken, RemoteToken, SessionToken,
@@ -173,10 +173,14 @@ pub enum SettingsMessage {
   IntroMenuDismissed,
   IntroModeSelected(IntroMode),
   ThemeModeSelected(ThemeMode),
+  AppModeSelected(AppMode),
   SubtitleMenuToggled,
   SubtitleMenuDismissed,
   SubtitleLanguageAdded(String),
-  SubtitleLanguageMoved { index: usize, offset: i32 },
+  SubtitleLanguageMoved {
+    index: usize,
+    offset: i32,
+  },
   SubtitleLanguageRemoved(usize),
   BeginShortcutCapture(ShortcutKind),
   ShortcutCaptured(String),
@@ -192,6 +196,8 @@ pub enum SettingsMessage {
   DiagnosticCategorySelected(Option<DiagnosticCategory>),
   Disconnect,
   SignOut,
+  /// Back from the full-window Settings view in Control-Only mode.
+  Back,
   PlaybackConfigApplied(Result<(), PlaybackError>),
 }
 

@@ -9,6 +9,7 @@ use std::time::Instant;
 
 use iced::Task;
 use jellypilot_core::browse_model::BrowseSource;
+use jellypilot_core::config::AppMode;
 use jellypilot_core::skeleton::skeleton_phase_at;
 use jellypilot_media_server::VideoLibraryItem;
 
@@ -26,6 +27,9 @@ pub struct Surface {
   pub smoke: bool,
   /// Latest known logical window size; drives size-class layout decisions.
   pub window_size: iced::Size,
+  /// Full-mode window size stashed when entering Control-Only mode; restored
+  /// on the way back. In-memory only — never persisted.
+  pub full_window_size: Option<iced::Size>,
   /// Shimmer sweep phase in [0, 1) for skeleton placeholders; advanced by
   /// each `FrameTick` while skeletons are on screen.
   pub skeleton_phase: f32,
@@ -43,6 +47,7 @@ impl Surface {
     Self {
       smoke,
       window_size: iced::Size::new(1600.0, 900.0),
+      full_window_size: None,
       skeleton_phase: 0.0,
       skeleton_animation_start: None,
       quit_requested: false,
@@ -77,6 +82,92 @@ impl Surface {
     };
     self.destination = destination;
     true
+  }
+}
+/// Fixed logical window size in Control-Only mode. `set_min_size ==
+/// set_max_size` plus `set_resizable(false)` is the float hint tiling WMs
+/// (i3/Sway) recognize; there is no standard float API.
+pub const CONTROL_ONLY_WINDOW_SIZE: iced::Size = iced::Size::new(480.0, 760.0);
+/// Minimum logical window size in Full mode.
+pub const FULL_MIN_WINDOW_SIZE: iced::Size = iced::Size::new(1024.0, 640.0);
+/// Full-mode window size applied when no stashed size exists.
+pub const FULL_DEFAULT_WINDOW_SIZE: iced::Size = iced::Size::new(1600.0, 900.0);
+
+/// Window geometry decision for one app mode. Pure so the fixed/restore
+/// policy is testable without executing window tasks.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct ModeGeometry {
+  pub size: iced::Size,
+  pub min_size: Option<iced::Size>,
+  pub max_size: Option<iced::Size>,
+  pub resizable: bool,
+}
+
+pub(crate) fn mode_geometry(mode: AppMode, restore_size: Option<iced::Size>) -> ModeGeometry {
+  match mode {
+    AppMode::ControlOnly => ModeGeometry {
+      size: CONTROL_ONLY_WINDOW_SIZE,
+      min_size: Some(CONTROL_ONLY_WINDOW_SIZE),
+      max_size: Some(CONTROL_ONLY_WINDOW_SIZE),
+      resizable: false,
+    },
+    AppMode::Full => ModeGeometry {
+      size: restore_size.unwrap_or(FULL_DEFAULT_WINDOW_SIZE),
+      min_size: Some(FULL_MIN_WINDOW_SIZE),
+      max_size: None,
+      resizable: true,
+    },
+  }
+}
+
+/// Whether a destination is reachable in the given app mode. Control-Only has
+/// no Library Browser, so the router rejects Home/Library/Search/Detail
+/// navigation before the shell touches its stack.
+pub(crate) fn destination_allowed(mode: AppMode, destination: &Destination) -> bool {
+  mode == AppMode::Full || matches!(destination, Destination::NowPlaying | Destination::Settings)
+}
+
+/// Applies the window geometry decision to the live window.
+fn window_geometry_task(geometry: ModeGeometry) -> Task<Message> {
+  iced::window::latest().and_then(move |id| {
+    Task::batch([
+      iced::window::set_resizable(id, geometry.resizable),
+      iced::window::set_min_size(id, geometry.min_size),
+      iced::window::set_max_size(id, geometry.max_size),
+      iced::window::resize(id, geometry.size),
+    ])
+  })
+}
+
+/// App-mode switch routine, invoked by the top-level router when the App Mode
+/// setting changes. It lives here because it mutates this surface's
+/// destination stack and drives the window (ADR 0029). Entering Control-Only
+/// aborts in-flight Library Browser work, drops the home/browse/detail
+/// surfaces, stashes the window size, and pins the window to the fixed
+/// controller size; entering Full restores the window and lands on Home
+/// through the normal activation path.
+pub(crate) fn apply_app_mode(state: &mut State, mode: AppMode) -> Task<Message> {
+  match mode {
+    AppMode::ControlOnly => {
+      browse::reset(&mut state.browse, &mut state.kernel);
+      if state.playback.view.now_playing.is_none() {
+        state.kernel.artwork_adapter.cancel_pending();
+      }
+      state.home = home::Surface::default();
+      state.detail = detail::Surface::default();
+      state.retain_artwork_handles();
+      state.shell.full_window_size = Some(state.shell.window_size);
+      state.shell.navigation_stack.clear();
+      state.shell.destination = Destination::NowPlaying;
+      window_geometry_task(mode_geometry(mode, None))
+    }
+    AppMode::Full => {
+      let geometry = mode_geometry(mode, state.shell.full_window_size.take());
+      let previous = std::mem::replace(&mut state.shell.destination, Destination::Home);
+      state.shell.navigation_stack.clear();
+      let activation = activate_destination(state, previous);
+      Task::batch([window_geometry_task(geometry), activation])
+    }
   }
 }
 
@@ -206,7 +297,7 @@ fn activate_destination(state: &mut State, previous: Destination) -> Task<Messag
     Destination::Detail(item_id) => {
       detail::start_load(&mut state.detail, &mut state.kernel, Some(item_id))
     }
-    Destination::Settings => Task::none(),
+    Destination::Settings | Destination::NowPlaying => Task::none(),
   }
 }
 
@@ -230,7 +321,10 @@ pub(crate) fn browse_source(state: &State) -> Option<BrowseSource> {
       session,
       query: query.clone(),
     }),
-    Destination::Home | Destination::Detail(_) | Destination::Settings => None,
+    Destination::Home
+    | Destination::Detail(_)
+    | Destination::Settings
+    | Destination::NowPlaying => None,
   }
 }
 
@@ -335,6 +429,53 @@ mod tests {
     ));
 
     assert_eq!(surface.window_size, size);
+  }
+  #[test]
+  fn control_only_geometry_pins_the_window_to_a_fixed_size() {
+    let geometry = mode_geometry(AppMode::ControlOnly, Some(iced::Size::new(1440.0, 810.0)));
+
+    assert_eq!(geometry.size, CONTROL_ONLY_WINDOW_SIZE);
+    assert_eq!(geometry.min_size, Some(CONTROL_ONLY_WINDOW_SIZE));
+    assert_eq!(geometry.max_size, Some(CONTROL_ONLY_WINDOW_SIZE));
+    assert!(!geometry.resizable);
+  }
+
+  #[test]
+  fn full_geometry_restores_the_stashed_size_or_the_default() {
+    let stashed = iced::Size::new(1280.0, 800.0);
+
+    let restored = mode_geometry(AppMode::Full, Some(stashed));
+    assert_eq!(restored.size, stashed);
+    assert_eq!(restored.min_size, Some(FULL_MIN_WINDOW_SIZE));
+    assert_eq!(restored.max_size, None);
+    assert!(restored.resizable);
+
+    let fresh = mode_geometry(AppMode::Full, None);
+    assert_eq!(fresh.size, FULL_DEFAULT_WINDOW_SIZE);
+    assert_eq!(fresh.min_size, Some(FULL_MIN_WINDOW_SIZE));
+    assert_eq!(fresh.max_size, None);
+    assert!(fresh.resizable);
+  }
+
+  #[test]
+  fn control_only_navigation_is_limited_to_now_playing_and_settings() {
+    let library = Destination::Library {
+      library_id: "movies".to_owned(),
+      collection_type: "movies".to_owned(),
+    };
+    for destination in [
+      Destination::Home,
+      library.clone(),
+      Destination::Search("term".to_owned()),
+      Destination::Detail("movie-1".to_owned()),
+    ] {
+      assert!(!destination_allowed(AppMode::ControlOnly, &destination));
+      assert!(destination_allowed(AppMode::Full, &destination));
+    }
+    for destination in [Destination::NowPlaying, Destination::Settings] {
+      assert!(destination_allowed(AppMode::ControlOnly, &destination));
+      assert!(destination_allowed(AppMode::Full, &destination));
+    }
   }
 
   #[test]

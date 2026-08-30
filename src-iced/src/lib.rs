@@ -8,9 +8,11 @@ use std::cell::RefCell;
 use iced::{window, Size};
 
 /// Default logical window size at startup.
-const DEFAULT_WINDOW_SIZE: Size = Size::new(1600.0, 900.0);
-/// Minimum allowable logical window size.
-const MIN_WINDOW_SIZE: Size = Size::new(1024.0, 640.0);
+const DEFAULT_WINDOW_SIZE: Size = app::shell::FULL_DEFAULT_WINDOW_SIZE;
+/// Minimum allowable logical window size in Full mode.
+const MIN_WINDOW_SIZE: Size = app::shell::FULL_MIN_WINDOW_SIZE;
+/// Fixed logical window size in Control-Only mode (min == max, non-resizable).
+const CONTROL_ONLY_WINDOW_SIZE: Size = app::shell::CONTROL_ONLY_WINDOW_SIZE;
 
 /// Bundled 256×256 application icon shown in the window decorations and taskbar.
 const WINDOW_ICON_PNG: &[u8] = include_bytes!("../../assets/icons/128x128@2x.png");
@@ -76,13 +78,15 @@ fn smoke_window_size() -> Size {
 fn run_application(smoke: bool) -> iced::Result {
   tracing::debug!(smoke, "application booting");
   let tray = (!smoke).then(|| tray::Tray::new().ok()).flatten();
-  let start_minimized = jellypilot_core::config::SettingsStore::load()
-    .unwrap_or_default()
-    .snapshot()
-    .start_minimized();
+  let settings = jellypilot_core::config::SettingsStore::load().unwrap_or_default();
+  let start_minimized = settings.snapshot().start_minimized();
+  let control_only =
+    !smoke && settings.snapshot().app_mode() == jellypilot_core::config::AppMode::ControlOnly;
   let start_hidden = should_start_hidden(start_minimized, tray.is_some());
   let window_size = if smoke {
     smoke_window_size()
+  } else if control_only {
+    CONTROL_ONLY_WINDOW_SIZE
   } else {
     DEFAULT_WINDOW_SIZE
   };
@@ -97,10 +101,15 @@ fn run_application(smoke: bool) -> iced::Result {
   .theme(app::theme)
   .window(window::Settings {
     size: window_size,
-    min_size: Some(MIN_WINDOW_SIZE),
+    min_size: Some(if control_only {
+      CONTROL_ONLY_WINDOW_SIZE
+    } else {
+      MIN_WINDOW_SIZE
+    }),
+    max_size: control_only.then_some(CONTROL_ONLY_WINDOW_SIZE),
     icon: window_icon(),
     visible: !start_hidden,
-    resizable: true,
+    resizable: !control_only,
     ..window::Settings::default()
   })
   .exit_on_close_request(false)

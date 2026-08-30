@@ -58,6 +58,29 @@ impl<'de> Deserialize<'de> for ThemeMode {
         })
     }
 }
+/// Top-level operating mode: the full Library Browser shell, or the compact
+/// Control-Only controller window (Now Playing and Settings only).
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum AppMode {
+    #[default]
+    Full,
+    #[serde(rename = "controlonly")]
+    ControlOnly,
+}
+
+impl<'de> Deserialize<'de> for AppMode {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let value = serde_json::Value::deserialize(deserializer)?;
+        Ok(match value.as_str() {
+            Some(mode) if mode.eq_ignore_ascii_case("controlonly") => Self::ControlOnly,
+            _ => Self::Full,
+        })
+    }
+}
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct LoginPrefill {
@@ -207,6 +230,8 @@ pub struct Settings {
     intro_mode: IntroMode,
     #[serde(default)]
     theme_mode: ThemeMode,
+    #[serde(default)]
+    app_mode: AppMode,
     #[serde(default, deserialize_with = "deserialize_optional_string")]
     mpv_path: Option<String>,
     #[serde(default, deserialize_with = "deserialize_string_list")]
@@ -252,6 +277,7 @@ impl Default for Settings {
             username: String::new(),
             intro_mode: IntroMode::Automatic,
             theme_mode: ThemeMode::System,
+            app_mode: AppMode::Full,
             mpv_path: None,
             mpv_args: Vec::new(),
             playback_target_name: None,
@@ -285,6 +311,9 @@ impl Settings {
     }
     pub const fn theme_mode(&self) -> ThemeMode {
         self.theme_mode
+    }
+    pub const fn app_mode(&self) -> AppMode {
+        self.app_mode
     }
 
     pub fn mpv_path(&self) -> Option<&str> {
@@ -457,6 +486,12 @@ impl SettingsStore {
     pub fn set_theme_mode(&mut self, mode: ThemeMode) -> Result<bool, SettingsMutationError> {
         self.update(|settings| {
             settings.theme_mode = mode;
+            Ok(())
+        })
+    }
+    pub fn set_app_mode(&mut self, mode: AppMode) -> Result<bool, SettingsMutationError> {
+        self.update(|settings| {
+            settings.app_mode = mode;
             Ok(())
         })
     }
@@ -848,6 +883,7 @@ mod tests {
             username: "alice".to_owned(),
             intro_mode: IntroMode::Manual,
             theme_mode: ThemeMode::Dark,
+            app_mode: AppMode::ControlOnly,
             mpv_path: Some("/usr/bin/mpv".to_owned()),
             mpv_args: vec!["--fullscreen".to_owned(), "--profile=gpu-hq".to_owned()],
             playback_target_name: Some("Living Room".to_owned()),
@@ -884,6 +920,7 @@ mod tests {
 
         assert_eq!(settings.intro_mode(), IntroMode::Automatic);
         assert_eq!(settings.theme_mode(), ThemeMode::System);
+        assert_eq!(settings.app_mode(), AppMode::Full);
         assert_eq!(settings.mpv_path(), None);
         assert!(settings.mpv_args().is_empty());
         assert_eq!(settings.playback_target_name(), None);
@@ -934,6 +971,43 @@ mod tests {
         let contents = serde_json::to_string(&settings).unwrap();
 
         assert!(contents.contains(r#""theme_mode":"light""#));
+    }
+    #[test]
+    fn app_mode_is_persisted_and_defaults_to_full() {
+        let path = test_path("app-mode");
+        let _ = fs::remove_file(&path);
+        let mut store = store_at(path.clone(), Settings::default());
+
+        assert_eq!(Settings::default().app_mode(), AppMode::Full);
+        assert!(store.set_app_mode(AppMode::ControlOnly).unwrap());
+        assert_eq!(load_from(&path).unwrap().app_mode(), AppMode::ControlOnly);
+        fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn unknown_app_mode_defaults_to_full() {
+        let path = test_path("unknown-app-mode");
+        let _ = fs::remove_file(&path);
+        fs::write(
+            &path,
+            r#"{"remember":false,"server_url":"","provider":"","username":"","app_mode":"theater"}"#,
+        )
+        .unwrap();
+
+        assert_eq!(load_from(&path).unwrap().app_mode(), AppMode::Full);
+        fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn app_mode_serializes_as_lowercase_strings() {
+        let settings = Settings {
+            app_mode: AppMode::ControlOnly,
+            ..Settings::default()
+        };
+
+        let contents = serde_json::to_string(&settings).unwrap();
+
+        assert!(contents.contains(r#""app_mode":"controlonly""#));
     }
 
     #[test]
