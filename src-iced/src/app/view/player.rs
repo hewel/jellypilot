@@ -542,8 +542,8 @@ fn playback_artwork(state: &State, width: f32, height: f32) -> Element<'_, Messa
   ))
   .width(width)
   .height(height)
-  .center_x(Fill)
-  .center_y(Fill)
+  .align_x(Alignment::Center)
+  .align_y(Alignment::Center)
   .style(|_theme| container::Style {
     background: Some(iced::Background::Color(
       TOKENS.colors.surfaceContainerLowest,

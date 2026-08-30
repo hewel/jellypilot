@@ -856,7 +856,7 @@ mod tests {
     ));
 
     // Settlement triggers a scroll-window sync that fills the viewport.
-    assert_eq!(surface.data.display_range(), Some(0..48));
+    assert_eq!(surface.data.display_range(), Some(0..54));
 
     // Scrolling ten rows down shifts the window without resetting it.
     surface.viewport = BrowseViewport {
@@ -864,12 +864,12 @@ mod tests {
       height: 800.0,
     };
     drop(sync_scroll_window(&mut surface, &mut kernel, window_size()));
-    assert_eq!(surface.data.display_range(), Some(64..128));
+    assert_eq!(surface.data.display_range(), Some(72..153));
 
     // An unchanged viewport keeps the window and emits no page requests.
     let pending_before = surface.page_tasks.len();
     drop(sync_scroll_window(&mut surface, &mut kernel, window_size()));
-    assert_eq!(surface.data.display_range(), Some(64..128));
+    assert_eq!(surface.data.display_range(), Some(72..153));
     assert_eq!(surface.page_tasks.len(), pending_before);
 
     // Scrolling back up restores the earlier window.
@@ -878,7 +878,7 @@ mod tests {
       height: 800.0,
     };
     drop(sync_scroll_window(&mut surface, &mut kernel, window_size()));
-    assert_eq!(surface.data.display_range(), Some(0..48));
+    assert_eq!(surface.data.display_range(), Some(0..54));
   }
 
   #[test]

@@ -879,7 +879,6 @@ fn update_playback(
         None
       };
       let shutdown = matches!(settlement.as_ref(), ControllerSettlement::Shutdown(_));
-      let previous_playable = surface.playable.clone();
       if let Some(playable) = started.as_deref() {
         surface.playable = Some(playable.clone());
         surface.adjacent_playables = [None, None];
@@ -893,16 +892,6 @@ fn update_playback(
           settlement: *settlement,
         }),
       )];
-      let start_accepted = started.as_deref().is_some_and(|playable| {
-        surface
-          .view
-          .now_playing
-          .as_ref()
-          .is_some_and(|view| view.item.item_id == playable.item_id())
-      });
-      if started.is_some() && !start_accepted {
-        surface.playable = previous_playable;
-      }
       if let Some(result) = tracks {
         tasks.push(apply_playback_input(
           surface,
@@ -910,9 +899,6 @@ fn update_playback(
           quit_requested,
           PlaybackInput::Event(PlaybackEvent::TracksSettled { id, result }),
         ));
-      }
-      if start_accepted {
-        tasks.push(prepare_player_artwork(surface, kernel));
       }
       if shutdown {
         surface.controller = None;
@@ -949,7 +935,19 @@ fn update_playback(
             .map(|detail| Playable::Detail(*detail))
             .unwrap_or_else(|| Playable::Media(item.clone()))
         });
-      apply_playback_input(
+      // When the current item started from a bare Media playable (cast, or an
+      // adjacent start that beat its own prefetch), the settled enrichment is
+      // the first chance to resolve its artwork.
+      let mut tasks = Vec::new();
+      if let Some(rich) = surface.adjacent_playables[direction.index()].as_ref() {
+        if surface.playable.as_ref().is_some_and(|current| {
+          matches!(current, Playable::Media(_)) && current.item_id() == rich.item_id()
+        }) {
+          surface.playable = Some(rich.clone());
+          tasks.push(prepare_player_artwork(surface, kernel));
+        }
+      }
+      tasks.push(apply_playback_input(
         surface,
         kernel,
         quit_requested,
@@ -958,7 +956,8 @@ fn update_playback(
           direction,
           result,
         }),
-      )
+      ));
+      Task::batch(tasks)
     }
     PlaybackMessage::ArtworkLoaded {
       session,
@@ -1011,10 +1010,28 @@ pub(crate) fn apply_playback_input(
   let effects = surface.session.handle(input, Instant::now());
   let task = execute_playback_effects(surface, kernel, effects);
   sync_playback_projection(surface, kernel, quit_requested);
+  let artwork_task = ensure_player_artwork(surface, kernel);
   if quit_may_exit(surface, quit_requested) {
-    Task::batch([task, iced::exit()])
+    Task::batch([task, artwork_task, iced::exit()])
   } else {
-    task
+    Task::batch([task, artwork_task])
+  }
+}
+/// Re-prepares the player-bar artwork whenever the projected Now Playing item
+/// matches the resolved playable but the artwork cell does not cover it.
+/// Settlements and adjacent enrichments race with projection updates; this
+/// keeps the poster eventually consistent after either ordering.
+fn ensure_player_artwork(surface: &mut Surface, kernel: &mut Kernel) -> Task<Message> {
+  let covered = surface.view.now_playing.as_ref().is_some_and(|view| {
+    surface
+      .playable
+      .as_ref()
+      .is_some_and(|playable| playable.item_id() == view.item.item_id)
+  });
+  if covered {
+    prepare_player_artwork(surface, kernel)
+  } else {
+    Task::none()
   }
 }
 
@@ -1054,7 +1071,12 @@ fn clear_player_artwork(surface: &mut Surface, kernel: &mut Kernel) {
 }
 
 fn clear_inactive_playback(surface: &mut Surface, kernel: &mut Kernel) -> Task<Message> {
-  if surface.view.now_playing.is_some() {
+  // A start or refresh in flight can transiently project no Now Playing
+  // between files; clearing here would wipe the incoming item's artwork.
+  if surface.view.now_playing.is_some()
+    || surface.in_flight_command.is_some()
+    || surface.in_flight_refresh.is_some()
+  {
     return Task::none();
   }
   surface.playable = None;
@@ -1379,12 +1401,12 @@ mod tests {
   use jellypilot_core::config::SettingsStore;
   use jellypilot_core::diagnostics::Diagnostics;
   use jellypilot_core::request_gate::RequestGate;
-  use jellypilot_media_server::{JellyfinClient, MediaItem, VideoLibraryItem};
+  use jellypilot_media_server::{JellyfinClient, MediaItem, VideoItemDetail, VideoLibraryItem};
   use jellypilot_mpv::playback::{
     NowPlayingItem, PlaybackEndReason, PlaybackOutcome, PlaybackRefreshOutcome,
     PlaybackRefreshState, PlaybackSelection, PlaybackSnapshot,
   };
-  use jellypilot_mpv::playback_session::{IntroAvailability, TracksView};
+  use jellypilot_mpv::playback_session::{IntroAvailability, NowPlayingView, TracksView};
   use jellypilot_session::{GeneralCommand, IntroSkipMode, JellyfinCommand, PlayRequest};
 
   use super::*;
@@ -1722,6 +1744,195 @@ mod tests {
 
     assert!(kernel.artwork_handles.get(slot, "player-image").is_none());
     assert!(surface.artwork.is_none());
+  }
+  fn detail_with_series_poster(id: &str, image_id: &str) -> VideoItemDetail {
+    VideoItemDetail {
+      id: id.to_owned(),
+      name: "Episode".to_owned(),
+      item_type: "Episode".to_owned(),
+      overview: None,
+      production_year: None,
+      runtime_seconds: Some(1_800.0),
+      series_id: Some("show-1".to_owned()),
+      series_name: Some("Show".to_owned()),
+      season_number: Some(3),
+      episode_number: Some(17),
+      genres: Vec::new(),
+      played: false,
+      favorite: false,
+      played_percentage: None,
+      resume_position_seconds: None,
+      can_resume: false,
+      can_play: true,
+      artwork_image_id: None,
+      backdrop_image_id: None,
+      series_poster_image_id: Some(image_id.to_owned()),
+      metadata: Default::default(),
+    }
+  }
+
+  #[test]
+  fn clear_inactive_playback_preserves_artwork_while_a_start_is_in_flight() {
+    let (mut surface, mut kernel) = test_fixture();
+    let now = Instant::now();
+    surface.session.handle(
+      PlaybackInput::Event(PlaybackEvent::EngineAvailability(true)),
+      now,
+    );
+    let effects = surface.session.handle(
+      PlaybackInput::Intent(PlaybackIntent::Start {
+        item: Playable::Library(episode("episode-2", 3)),
+        position: PlaybackStartPosition::Beginning,
+        intro: IntroAvailability {
+          mode: IntroSkipMode::Off,
+          skipper_available: false,
+        },
+        selection: Box::default(),
+      }),
+      now,
+    );
+    let (id, _) = controller_effect(effects);
+    surface.in_flight_command = Some(id);
+    let slot = kernel.artwork_binder.bind_player_bar();
+    surface.artwork = Some(ArtworkCell {
+      slot,
+      image_id: "series-poster".to_owned(),
+      state: ArtworkCellState::Ready,
+    });
+    kernel.artwork_handles.insert(
+      slot,
+      "series-poster".to_owned(),
+      image::Handle::from_rgba(1, 1, vec![0, 0, 0, 255]),
+    );
+
+    drop(clear_inactive_playback(&mut surface, &mut kernel));
+
+    assert!(surface.artwork.is_some());
+    assert!(kernel.artwork_handles.get(slot, "series-poster").is_some());
+  }
+
+  #[test]
+  fn start_settlement_keeps_the_new_playable_when_now_playing_has_not_caught_up() {
+    let (mut surface, mut kernel) = test_fixture();
+    kernel.client = Some(Arc::new(JellyfinClient::new()));
+    surface.playable = Some(Playable::Library(episode("episode-1", 1)));
+    let now = Instant::now();
+    surface.session.handle(
+      PlaybackInput::Event(PlaybackEvent::EngineAvailability(true)),
+      now,
+    );
+    let effects = surface.session.handle(
+      PlaybackInput::Intent(PlaybackIntent::Start {
+        item: Playable::Media(media_item("episode-2")),
+        position: PlaybackStartPosition::Beginning,
+        intro: IntroAvailability {
+          mode: IntroSkipMode::Off,
+          skipper_available: false,
+        },
+        selection: Box::default(),
+      }),
+      now,
+    );
+    let (id, _) = controller_effect(effects);
+
+    // The settle arrives while the projection still reports the previous item
+    // (playback_snapshot pins episode-1), so the old revert-on-mismatch would
+    // have discarded the new playable.
+    drop(update_playback(
+      &mut surface,
+      &mut kernel,
+      false,
+      PlaybackMessage::ControllerSettled {
+        id,
+        settlement: Box::new(ControllerSettlement::Started(Ok(PlaybackOutcome {
+          snapshot: playback_snapshot(10.0),
+          warnings: Vec::new(),
+        }))),
+        started: Some(Box::new(Playable::Detail(detail_with_series_poster(
+          "episode-2",
+          "series-poster",
+        )))),
+        tracks: None,
+      },
+    ));
+
+    assert_eq!(
+      surface.playable.as_ref().map(Playable::item_id),
+      Some("episode-2")
+    );
+
+    // Once the projection catches up to the new item, the artwork cell covers
+    // its image again through the eager ensure pass.
+    surface.view.now_playing = Some(NowPlayingView {
+      item: NowPlayingItem {
+        item_id: "episode-2".to_owned(),
+        title: "Second".to_owned(),
+        item_type: "Episode".to_owned(),
+        runtime_seconds: Some(1_800.0),
+        start_position_seconds: 0.0,
+        play_method: "DirectPlay".to_owned(),
+      },
+      paused: false,
+      position_seconds: 0.0,
+      duration_seconds: Some(1_800.0),
+      volume: 75.0,
+      muted: false,
+    });
+    drop(ensure_player_artwork(&mut surface, &mut kernel));
+    assert_eq!(
+      surface.artwork.as_ref().map(|cell| cell.image_id.as_str()),
+      Some("series-poster")
+    );
+  }
+
+  #[test]
+  fn adjacent_settlement_upgrades_a_bare_media_playable_and_restores_artwork() {
+    let (mut surface, mut kernel) = test_fixture();
+    kernel.client = Some(Arc::new(JellyfinClient::new()));
+    surface.playable = Some(Playable::Media(media_item("episode-2")));
+    let remote = surface.remote;
+    let play = kernel.request_gate.begin_remote_play();
+    let now = Instant::now();
+    surface.session.handle(
+      PlaybackInput::Event(PlaybackEvent::EngineAvailability(true)),
+      now,
+    );
+    let effects = surface.session.handle(
+      PlaybackInput::Intent(PlaybackIntent::Start {
+        item: Playable::Library(episode("episode-2", 3)),
+        position: PlaybackStartPosition::Beginning,
+        intro: IntroAvailability {
+          mode: IntroSkipMode::Off,
+          skipper_available: false,
+        },
+        selection: Box::default(),
+      }),
+      now,
+    );
+    let (id, _) = controller_effect(effects);
+
+    drop(update_playback(
+      &mut surface,
+      &mut kernel,
+      false,
+      PlaybackMessage::AdjacentSettled {
+        remote,
+        play,
+        id,
+        direction: AdjacentDirection::Next,
+        result: Ok(Some(media_item("episode-2"))),
+        detail: Some(Box::new(detail_with_series_poster(
+          "episode-2",
+          "series-poster",
+        ))),
+      },
+    ));
+
+    assert!(matches!(surface.playable, Some(Playable::Detail(_))));
+    assert_eq!(
+      surface.artwork.as_ref().map(|cell| cell.image_id.as_str()),
+      Some("series-poster")
+    );
   }
 
   #[test]
