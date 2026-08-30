@@ -24,13 +24,12 @@ const POSTER_FRAME_WIDTH: f32 = 160.0;
 const POSTER_FRAME_HEIGHT: f32 = 240.0;
 
 /// Content width available for home content at a given window width and size class:
-/// window width minus the shell's outer padding, tier-dependent sidebar width,
-/// sidebar-content gap, and the home page horizontal padding.
+/// window width minus the tier-dependent sidebar width, the
+/// shell hairline, and the home page horizontal padding.
 pub(crate) fn content_width(window_width: f32, class: SizeClass) -> f32 {
   (window_width
-    - TOKENS.spacing.s3 * 2.0
     - super::shell::sidebar_width(class)
-    - TOKENS.spacing.s4
+    - super::shell::HAIRLINE_WIDTH
     - TOKENS.spacing.s8 * 2.0)
     .max(1.0)
 }
@@ -637,18 +636,16 @@ mod tests {
 
   #[test]
   fn content_width_standard_matches_pinned_regression_constant() {
-    let expected =
-      1600.0 - TOKENS.spacing.s3 * 2.0 - 248.0 - TOKENS.spacing.s4 - TOKENS.spacing.s8 * 2.0;
+    let expected = 1600.0 - 248.0 - super::super::shell::HAIRLINE_WIDTH - TOKENS.spacing.s8 * 2.0;
     assert_eq!(content_width(1600.0, SizeClass::Standard), expected);
-    assert_eq!(content_width(1600.0, SizeClass::Standard), 1248.0);
+    assert_eq!(content_width(1600.0, SizeClass::Standard), 1287.0);
   }
 
   #[test]
   fn content_width_compact_uses_rail_sidebar() {
-    let expected =
-      1024.0 - TOKENS.spacing.s3 * 2.0 - 72.0 - TOKENS.spacing.s4 - TOKENS.spacing.s8 * 2.0;
+    let expected = 1024.0 - 72.0 - super::super::shell::HAIRLINE_WIDTH - TOKENS.spacing.s8 * 2.0;
     assert_eq!(content_width(1024.0, SizeClass::Compact), expected);
-    assert_eq!(content_width(1024.0, SizeClass::Compact), 848.0);
+    assert_eq!(content_width(1024.0, SizeClass::Compact), 887.0);
   }
 
   #[test]

@@ -13,6 +13,8 @@ use jellypilot_ui::variants::{ButtonVariant, FieldVariant, SurfaceVariant};
 use jellypilot_ui::widgets::skeleton::skeleton_block;
 pub(crate) const SIDEBAR_WIDTH: f32 = 248.0;
 pub(crate) const SIDEBAR_RAIL_WIDTH: f32 = 72.0;
+/// Width of the two shell hairlines (sidebar edge and player-bar edge).
+pub(crate) const HAIRLINE_WIDTH: f32 = 1.0;
 
 /// Returns the sidebar width corresponding to the given window-width [`SizeClass`].
 ///
@@ -53,25 +55,25 @@ pub fn view(state: &State) -> Element<'_, Message> {
   }
   // One of the two shell hairlines: 1px between the sidebar and the content.
   let sidebar_divider = container(space::vertical())
-    .width(1.0)
+    .width(HAIRLINE_WIDTH)
     .height(Fill)
     .style(|_| iced::widget::container::Style::default().background(TOKENS.colors.outlineVariant));
   let body = row![sidebar, sidebar_divider, content_stack]
-    .spacing(TOKENS.spacing.s4)
+    .spacing(0.0)
     .width(Fill)
     .height(Fill);
-  let mut shell = Column::new().spacing(TOKENS.spacing.s3).push(body);
+  let mut shell = Column::new().spacing(0.0).push(body);
   if let Some(player_bar) = player::bar(state) {
     // The second shell hairline: 1px above the player bar.
     let player_divider = container(space::horizontal())
       .width(Fill)
-      .height(1.0)
+      .height(HAIRLINE_WIDTH)
       .style(|_| {
         iced::widget::container::Style::default().background(TOKENS.colors.outlineVariant)
       });
     shell = shell.push(player_divider).push(player_bar);
   }
-  let shell = shell.padding(TOKENS.spacing.s3).width(Fill).height(Fill);
+  let shell = shell.width(Fill).height(Fill);
 
   container(shell)
     .width(Fill)

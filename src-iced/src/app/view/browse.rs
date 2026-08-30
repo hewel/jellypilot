@@ -32,9 +32,8 @@ pub(crate) fn page_padding(class: SizeClass) -> f32 {
     SizeClass::Standard | SizeClass::Wide => PAGE_PADDING,
   }
 }
-/// Grid width derived from the tracked window size: window minus shell
-/// padding, the tier-dependent sidebar, the sidebar-content gap, and the
-/// tier-dependent page padding.
+/// Grid width derived from the tracked window size: window minus the tier-dependent sidebar, the shell
+/// hairline, and the tier-dependent page padding.
 ///
 /// The scrollable's `on_scroll` viewport is NOT used for width: iced only
 /// publishes it when the content overflows the viewport, so a maximized
@@ -42,9 +41,8 @@ pub(crate) fn page_padding(class: SizeClass) -> f32 {
 /// `state.shell.window_size` follows every resize event and never goes stale.
 pub(crate) fn grid_available_width(window_width: f32, class: SizeClass) -> f32 {
   (window_width
-    - TOKENS.spacing.s3 * 2.0
     - super::shell::sidebar_width(class)
-    - TOKENS.spacing.s4
+    - super::shell::HAIRLINE_WIDTH
     - page_padding(class) * 2.0)
     .max(1.0)
 }
@@ -743,15 +741,14 @@ mod tests {
   }
   #[test]
   fn grid_available_width_matches_legacy_startup_geometry() {
-    // 1600×900 default window, full sidebar: the pre-adaptation grid measured
-    // the scrollable at 1312px and subtracted 2×32 page padding.
-    assert_eq!(grid_available_width(1600.0, SizeClass::Standard), 1248.0);
+    // 1600×900 default window, full sidebar, 1px hairline, 2×32 page padding.
+    assert_eq!(grid_available_width(1600.0, SizeClass::Standard), 1287.0);
   }
 
   #[test]
   fn grid_available_width_compact_uses_rail_and_narrow_padding() {
-    // 1024 - 2×12 shell padding - 72 rail - 16 gap - 2×16 page padding.
-    assert_eq!(grid_available_width(1024.0, SizeClass::Compact), 880.0);
+    // 1024 - 72 rail - 1 hairline - 2×16 page padding.
+    assert_eq!(grid_available_width(1024.0, SizeClass::Compact), 919.0);
   }
 
   #[test]
