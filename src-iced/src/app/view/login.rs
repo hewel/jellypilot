@@ -77,13 +77,13 @@ pub fn view(state: &State) -> Element<'_, Message> {
   let card = container(form)
     .width(Length::Fixed(640.0))
     .padding(28)
-    .style(|theme| jellypilot_ui::theme::surface_variant(theme, SurfaceVariant::Elevated));
+    .style(|theme| jellypilot_ui::theme::surface_variant(theme, SurfaceVariant::Raised));
   container(scrollable(card).style(jellypilot_ui::theme::scrollable))
     .width(Fill)
     .height(Fill)
     .center_x(Fill)
     .padding([36, 24])
-    .style(|theme| jellypilot_ui::theme::surface_variant(theme, SurfaceVariant::Filled))
+    .style(|theme| jellypilot_ui::theme::surface_variant(theme, SurfaceVariant::Canvas))
     .into()
 }
 
@@ -96,7 +96,7 @@ fn provider_button<'a>(
   let variant = if selected {
     ButtonVariant::Primary
   } else {
-    ButtonVariant::Outlined
+    ButtonVariant::Tonal
   };
   button(
     row![
@@ -224,7 +224,7 @@ fn quick_connect_progress<'a>(label: &'a str, _code: Option<&'a str>) -> Element
 fn cancel_button<'a>() -> Element<'a, Message> {
   button(
     row![
-      icon_for_variant(Icon::Close, IconSize::Xs, ButtonVariant::Outlined),
+      icon_for_variant(Icon::Close, IconSize::Xs, ButtonVariant::Tonal),
       text("Cancel"),
     ]
     .spacing(TOKENS.spacing.s1_5)
@@ -232,9 +232,7 @@ fn cancel_button<'a>() -> Element<'a, Message> {
   )
   .padding([7, 12])
   .on_press(Message::Login(LoginMessage::QuickConnectCancelled))
-  .style(|theme, status| {
-    jellypilot_ui::theme::button_variant(theme, status, ButtonVariant::Outlined)
-  })
+  .style(|theme, status| jellypilot_ui::theme::button_variant(theme, status, ButtonVariant::Tonal))
   .into()
 }
 
@@ -370,7 +368,7 @@ fn saved_profiles(state: &State) -> Element<'_, Message> {
           row![
             button(
               row![
-                icon_for_variant(Icon::Check, IconSize::Xs, ButtonVariant::Outlined),
+                icon_for_variant(Icon::Check, IconSize::Xs, ButtonVariant::Tonal),
                 text("Keep sign-in"),
               ]
               .spacing(TOKENS.spacing.s1)
@@ -381,7 +379,7 @@ fn saved_profiles(state: &State) -> Element<'_, Message> {
             .style(|theme, status| jellypilot_ui::theme::button_variant(
               theme,
               status,
-              ButtonVariant::Outlined,
+              ButtonVariant::Tonal,
             )),
             button(
               row![
@@ -409,7 +407,7 @@ fn saved_profiles(state: &State) -> Element<'_, Message> {
     profiles = profiles.push(
       container(profile_content)
         .padding(16)
-        .style(|theme| jellypilot_ui::theme::surface_variant(theme, SurfaceVariant::Filled)),
+        .style(|theme| jellypilot_ui::theme::surface_variant(theme, SurfaceVariant::Canvas)),
     );
   }
   profiles.into()

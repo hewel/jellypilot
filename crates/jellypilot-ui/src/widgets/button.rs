@@ -23,13 +23,20 @@ pub fn style(_theme: &Theme, variant: ButtonVariant, status: button::Status) -> 
             colors.onSecondaryContainer,
             colors.outlineVariant,
             1.0,
-            TOKENS.shadows.md.iced(),
+            TOKENS.shadows.none.iced(),
         ),
-        ButtonVariant::Outlined => (
+        ButtonVariant::Tonal => (
             None,
             colors.onSurface,
-            colors.outline,
-            1.0,
+            Color::TRANSPARENT,
+            0.0,
+            TOKENS.shadows.none.iced(),
+        ),
+        ButtonVariant::TonalActive => (
+            Some(colors.surfaceContainerHigh),
+            colors.onSurface,
+            Color::TRANSPARENT,
+            0.0,
             TOKENS.shadows.none.iced(),
         ),
         ButtonVariant::Text => (
@@ -55,10 +62,8 @@ pub fn style(_theme: &Theme, variant: ButtonVariant, status: button::Status) -> 
                 background = background.map(|color| brightness(color, 1.1));
             }
             ButtonVariant::Secondary => border_color = colors.outline,
-            ButtonVariant::Outlined => {
-                background = Some(with_alpha(colors.primary, 0.05));
-                border_color = colors.primary;
-            }
+            ButtonVariant::Tonal => background = Some(colors.surfaceContainerHigh),
+            ButtonVariant::TonalActive => {}
             ButtonVariant::Text => background = Some(with_alpha(colors.secondary, 0.1)),
             ButtonVariant::Icon => {
                 background = Some(with_alpha(colors.primary, 0.1));
@@ -77,7 +82,7 @@ pub fn style(_theme: &Theme, variant: ButtonVariant, status: button::Status) -> 
         background: background.map(Background::Color),
         text_color,
         border: Border {
-            radius: TOKENS.radii.lg.into(),
+            radius: TOKENS.radii.md.into(),
             color: border_color,
             width: border_width,
         },
@@ -156,7 +161,7 @@ mod tests {
     }
 
     #[test]
-    fn button_variants_use_lg_radius_token() {
+    fn button_variants_use_md_radius_token() {
         use crate::variants::ButtonVariant;
         use iced::border::Radius;
         use iced::widget::button::Status;
@@ -165,16 +170,89 @@ mod tests {
         for variant in [
             ButtonVariant::Primary,
             ButtonVariant::Secondary,
-            ButtonVariant::Outlined,
+            ButtonVariant::Tonal,
+            ButtonVariant::TonalActive,
             ButtonVariant::Text,
             ButtonVariant::Icon,
         ] {
             let style = super::style(&theme, variant, Status::Active);
             assert_eq!(
                 style.border.radius,
-                Radius::from(crate::tokens::TOKENS.radii.lg),
-                "Button variant {variant:?} must use lg (8px) radius token"
+                Radius::from(crate::tokens::TOKENS.radii.md),
+                "Button variant {variant:?} must use md (6px) radius token"
             );
+        }
+    }
+
+    #[test]
+    fn buttons_cast_no_shadow_in_any_status() {
+        use crate::variants::ButtonVariant;
+        use iced::widget::button::Status;
+        use iced::Shadow;
+
+        let theme = crate::theme::theme();
+        for variant in [
+            ButtonVariant::Primary,
+            ButtonVariant::Secondary,
+            ButtonVariant::Tonal,
+            ButtonVariant::TonalActive,
+            ButtonVariant::Text,
+            ButtonVariant::Icon,
+        ] {
+            for status in [
+                Status::Active,
+                Status::Hovered,
+                Status::Pressed,
+                Status::Disabled,
+            ] {
+                let style = super::style(&theme, variant, status);
+                assert_eq!(
+                    style.shadow,
+                    Shadow::default(),
+                    "Button variant {variant:?} must cast no shadow in status {status:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn tonal_fills_surface_container_high_only_on_hover() {
+        use crate::variants::ButtonVariant;
+        use iced::widget::button::Status;
+        use iced::Background;
+
+        let theme = crate::theme::theme();
+        let idle = super::style(&theme, ButtonVariant::Tonal, Status::Active);
+        assert_eq!(idle.background, None);
+        assert_eq!(idle.border.width, 0.0);
+
+        let hovered = super::style(&theme, ButtonVariant::Tonal, Status::Hovered);
+        assert_eq!(
+            hovered.background,
+            Some(Background::Color(
+                crate::tokens::TOKENS.colors.surfaceContainerHigh
+            ))
+        );
+        assert_eq!(hovered.border.width, 0.0);
+    }
+
+    #[test]
+    fn tonal_active_is_always_filled_with_surface_container_high() {
+        use crate::variants::ButtonVariant;
+        use iced::widget::button::Status;
+        use iced::Background;
+
+        let theme = crate::theme::theme();
+        for status in [Status::Active, Status::Hovered, Status::Pressed] {
+            let style = super::style(&theme, ButtonVariant::TonalActive, status);
+            assert_eq!(
+                style.background,
+                Some(Background::Color(
+                    crate::tokens::TOKENS.colors.surfaceContainerHigh
+                )),
+                "TonalActive must stay filled in status {status:?}"
+            );
+            assert_eq!(style.border.width, 0.0);
         }
     }
 }

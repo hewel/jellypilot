@@ -77,15 +77,13 @@ pub fn bar(state: &State) -> Option<Element<'_, Message>> {
   let stop_button = button(icon_for_variant(
     Icon::Stop,
     IconSize::Md,
-    ButtonVariant::Outlined,
+    ButtonVariant::Tonal,
   ))
   .padding([6, 10])
   .on_press(Message::Playback(PlaybackMessage::Intent(
     PlaybackIntent::Stop,
   )))
-  .style(|theme, status| {
-    jellypilot_ui::theme::button_variant(theme, status, ButtonVariant::Outlined)
-  });
+  .style(|theme, status| jellypilot_ui::theme::button_variant(theme, status, ButtonVariant::Tonal));
   let stop = tooltip(stop_button, "Stop", TooltipOptions::default());
 
   let transport = row![
@@ -118,15 +116,13 @@ pub fn bar(state: &State) -> Option<Element<'_, Message>> {
   let mute_button = button(icon_for_variant(
     mute_icon,
     IconSize::Md,
-    ButtonVariant::Outlined,
+    ButtonVariant::Tonal,
   ))
   .padding([6, 10])
   .on_press(Message::Playback(PlaybackMessage::Intent(
     PlaybackIntent::SetMuted(!now_playing.muted),
   )))
-  .style(|theme, status| {
-    jellypilot_ui::theme::button_variant(theme, status, ButtonVariant::Outlined)
-  });
+  .style(|theme, status| jellypilot_ui::theme::button_variant(theme, status, ButtonVariant::Tonal));
   let mute = tooltip(mute_button, mute_label, TooltipOptions::default());
 
   let volume = row![mute, volume_slider,]
@@ -170,7 +166,7 @@ pub fn bar(state: &State) -> Option<Element<'_, Message>> {
     container(content)
       .padding([TOKENS.spacing.s2, TOKENS.spacing.s3])
       .width(Fill)
-      .style(|theme| jellypilot_ui::theme::surface_variant(theme, SurfaceVariant::Elevated))
+      .style(|theme| jellypilot_ui::theme::surface_variant(theme, SurfaceVariant::Block))
       .into(),
   )
 }
@@ -199,7 +195,7 @@ fn intro_prompt(state: &State) -> Option<Element<'_, Message>> {
     }),
     button(
       row![
-        icon_for_variant(Icon::Close, IconSize::Xs, ButtonVariant::Outlined),
+        icon_for_variant(Icon::Close, IconSize::Xs, ButtonVariant::Tonal),
         text("Dismiss"),
       ]
       .spacing(TOKENS.spacing.s1_5)
@@ -209,7 +205,7 @@ fn intro_prompt(state: &State) -> Option<Element<'_, Message>> {
       PlaybackIntent::DismissIntro,
     )))
     .style(|theme, status| {
-      jellypilot_ui::theme::button_variant(theme, status, ButtonVariant::Outlined)
+      jellypilot_ui::theme::button_variant(theme, status, ButtonVariant::Tonal)
     }),
   ]
   .spacing(TOKENS.spacing.s2);
@@ -229,7 +225,7 @@ fn intro_prompt(state: &State) -> Option<Element<'_, Message>> {
     ])
     .padding([TOKENS.spacing.s2, TOKENS.spacing.s3])
     .width(Fill)
-    .style(|theme| jellypilot_ui::theme::surface_variant(theme, SurfaceVariant::Elevated))
+    .style(|theme| jellypilot_ui::theme::surface_variant(theme, SurfaceVariant::Raised))
     .into(),
   )
 }
@@ -251,7 +247,7 @@ fn adjacent_button<'a>(
   let btn = button(icon_for_variant_disabled(
     icon_variant,
     IconSize::Md,
-    ButtonVariant::Outlined,
+    ButtonVariant::Tonal,
     !available,
   ))
   .padding([6, 10])
@@ -260,9 +256,7 @@ fn adjacent_button<'a>(
       PlaybackIntent::PlayAdjacent(direction),
     ))),
   )
-  .style(|theme, status| {
-    jellypilot_ui::theme::button_variant(theme, status, ButtonVariant::Outlined)
-  });
+  .style(|theme, status| jellypilot_ui::theme::button_variant(theme, status, ButtonVariant::Tonal));
   tooltip(btn, label, TooltipOptions::default())
 }
 
@@ -272,9 +266,9 @@ fn audio_popover(state: &State) -> Element<'_, Message> {
     TracksView::Loading | TracksView::Unavailable => false,
   };
   let audio_btn_variant = if state.playback.audio_menu_open {
-    ButtonVariant::Secondary
+    ButtonVariant::TonalActive
   } else {
-    ButtonVariant::Outlined
+    ButtonVariant::Tonal
   };
   let trigger = button(
     row![
@@ -368,9 +362,9 @@ fn subtitle_popover(state: &State) -> Element<'_, Message> {
     TracksView::Loading | TracksView::Unavailable => false,
   };
   let sub_btn_variant = if state.playback.subtitle_menu_open {
-    ButtonVariant::Secondary
+    ButtonVariant::TonalActive
   } else {
-    ButtonVariant::Outlined
+    ButtonVariant::Tonal
   };
   let trigger = button(
     row![

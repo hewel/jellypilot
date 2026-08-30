@@ -1,4 +1,12 @@
-//! JellyPilot card surface styles.
+//! JellyPilot container surface roles.
+//!
+//! Every surface is exactly one role:
+//! - `Canvas`: flush with the window background — opaque, square, flat.
+//! - `Block`: a docked block (sidebar, player bar) — opaque
+//!   `surfaceContainerLow`, square, flat; separation comes from the two
+//!   shell hairlines, not from borders or shadows.
+//! - `Raised`: a floating layer (cards, toasts, popovers) — opaque
+//!   `surfaceContainerHigh`, `lg` radius, `raised_high` shadow.
 
 use iced::widget::container;
 use iced::{Background, Border, Color, Shadow, Theme};
@@ -6,50 +14,34 @@ use iced::{Background, Border, Color, Shadow, Theme};
 use crate::tokens::TOKENS;
 use crate::variants::SurfaceVariant;
 
-/// Resolves a card surface variant to an iced container style.
+/// Resolves a surface role to an iced container style.
 pub fn style(_theme: &Theme, variant: SurfaceVariant) -> container::Style {
     let colors = TOKENS.colors;
-    let (background, border, shadow) = match variant {
-        SurfaceVariant::Elevated => (
-            Some(with_alpha(colors.surfaceContainerLow, 0.45)),
-            bordered(TOKENS.radii.xl, with_alpha(colors.primary, 0.2)),
-            TOKENS.shadows.x2l.iced(),
+    let (background, radius, shadow) = match variant {
+        SurfaceVariant::Canvas => (colors.background, TOKENS.radii.none, Shadow::default()),
+        SurfaceVariant::Block => (
+            colors.surfaceContainerLow,
+            TOKENS.radii.none,
+            Shadow::default(),
         ),
-        SurfaceVariant::Filled => (
-            Some(with_alpha(colors.surface, 0.5)),
-            bordered(TOKENS.radii.xl, with_alpha(colors.outlineVariant, 0.8)),
-            TOKENS.shadows.xl.iced(),
+        SurfaceVariant::Raised => (
+            colors.surfaceContainerHigh,
+            TOKENS.radii.lg,
+            TOKENS.shadows.raised_high.iced(),
         ),
     };
 
-    container_style(background, colors.onSurface, border, shadow)
-}
-
-fn container_style(
-    background: Option<Color>,
-    text_color: Color,
-    border: Border,
-    shadow: Shadow,
-) -> container::Style {
     container::Style {
-        background: background.map(Background::Color),
-        text_color: Some(text_color),
-        border,
+        background: Some(Background::Color(background)),
+        text_color: Some(colors.onSurface),
+        border: Border {
+            radius: radius.into(),
+            color: Color::TRANSPARENT,
+            width: 0.0,
+        },
         shadow,
         ..container::Style::default()
     }
-}
-
-fn bordered(radius: f32, color: Color) -> Border {
-    Border {
-        radius: radius.into(),
-        color,
-        width: 1.0,
-    }
-}
-
-fn with_alpha(color: Color, alpha: f32) -> Color {
-    Color { a: alpha, ..color }
 }
 
 #[cfg(test)]
@@ -58,25 +50,60 @@ mod tests {
     use iced::border::Radius;
 
     #[test]
-    fn filled_surface_has_single_card_border() {
+    fn canvas_is_flush_opaque_and_flat() {
         let theme = crate::theme::theme();
-        let style = style(&theme, SurfaceVariant::Filled);
+        let style = style(&theme, SurfaceVariant::Canvas);
 
-        assert_eq!(style.border.width, 1.0);
-        assert_eq!(style.border.radius, Radius::from(TOKENS.radii.xl));
         assert_eq!(
-            style.border.color,
-            with_alpha(TOKENS.colors.outlineVariant, 0.8)
+            style.background,
+            Some(Background::Color(TOKENS.colors.background))
         );
+        assert_eq!(style.border.width, 0.0);
+        assert_eq!(style.border.radius, Radius::from(TOKENS.radii.none));
+        assert_eq!(style.shadow, Shadow::default());
     }
 
     #[test]
-    fn elevated_surface_has_elevated_card_border() {
+    fn block_is_opaque_docked_and_flat() {
         let theme = crate::theme::theme();
-        let style = style(&theme, SurfaceVariant::Elevated);
+        let style = style(&theme, SurfaceVariant::Block);
 
-        assert_eq!(style.border.width, 1.0);
-        assert_eq!(style.border.radius, Radius::from(TOKENS.radii.xl));
-        assert_eq!(style.border.color, with_alpha(TOKENS.colors.primary, 0.2));
+        assert_eq!(
+            style.background,
+            Some(Background::Color(TOKENS.colors.surfaceContainerLow))
+        );
+        assert_eq!(style.border.width, 0.0);
+        assert_eq!(style.border.radius, Radius::from(TOKENS.radii.none));
+        assert_eq!(style.shadow, Shadow::default());
+    }
+
+    #[test]
+    fn raised_is_opaque_rounded_and_carries_the_high_shadow() {
+        let theme = crate::theme::theme();
+        let style = style(&theme, SurfaceVariant::Raised);
+
+        assert_eq!(
+            style.background,
+            Some(Background::Color(TOKENS.colors.surfaceContainerHigh))
+        );
+        assert_eq!(style.border.width, 0.0);
+        assert_eq!(style.border.radius, Radius::from(TOKENS.radii.lg));
+        assert_eq!(style.shadow, TOKENS.shadows.raised_high.iced());
+    }
+
+    #[test]
+    fn all_roles_use_fully_opaque_backgrounds() {
+        let theme = crate::theme::theme();
+        for variant in [
+            SurfaceVariant::Canvas,
+            SurfaceVariant::Block,
+            SurfaceVariant::Raised,
+        ] {
+            let style = style(&theme, variant);
+            let Some(Background::Color(color)) = style.background else {
+                panic!("role {variant:?} must have a color background");
+            };
+            assert_eq!(color.a, 1.0, "role {variant:?} must be fully opaque");
+        }
     }
 }

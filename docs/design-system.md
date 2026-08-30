@@ -1,224 +1,106 @@
-# JellyPilot Control Room Design System
+# JellyPilot Design System (iced)
 
-JellyPilot uses a desktop-first Control Room design system: dark-only, clean OLED surfaces, selective cinematic glass, and clear operational state. The interface should feel like a reliable media companion for a Jellyfin Playback Target, not a generic mobile settings app.
+JellyPilot uses a desktop-first Control Room design system: dark-only, clean OLED surfaces, and clear operational state. The interface should feel like a reliable media companion for a Jellyfin Playback Target, not a generic mobile settings app.
 
-Panda CSS is the sole styling system ([ADR 0011](adr/0011-panda-css-styling.md)). Application styles live in owner-local `.styles.ts` modules and use semantic Panda tokens.
-
-**Viewports:** Supported production Tauri sizes are **1280×720** (minimum) and **1600×900** (default). **800×600**, **640×720**, and **360×720** are responsive stress targets exercised with the review-only Tauri config, not production window sizes.
-
-Reusable visual patterns are components under `src/components/ui`, not global `@layer` class APIs. Compose Panda classes with Solid `class` / `classList` and the generated `cx` under the merge-semantics rules below.
+The design system lives in `crates/jellypilot-ui`: tokens in `tokens.rs` (`TOKENS`), variant enums in `variants.rs`, and the widget catalog in `widgets/`. Views under `src-iced/src/app/view/` compose those pieces; they never invent new token values.
 
 ## Principles
 
-- **Desktop-first media control**: optimize for the production default **1600×900** Tauri window (minimum **1280×720**) while remaining resilient at review stress widths **800×600**, **640×720**, and **360×720** without horizontal scroll.
-- **Clean OLED first**: surfaces are flat, solid, and high-contrast with neutral token shadows only. Glass blur is reserved for overlays over real content (dialog backdrops, drawers, floating chrome).
+- **Clean OLED first**: surfaces are flat, solid, and opaque. Depth comes from exactly two shadow tiers on floating layers, never from translucency or outlines.
+- **Visual restraint**: separation is whitespace first, the two shell hairlines second. Nothing else draws a line.
 - **Operational clarity**: every status uses text and icon, not color alone.
 - **No fake state**: never show fake media artwork, fake playback progress, or pretend controls.
 - **Accessible by default**: normal text contrast must be at least 4.5:1. Large text and meaningful icons must be at least 3:1.
 
-## Color System
+## Surface Roles
 
-All components use semantic tokens. Panda owns token values in `panda.config.ts` and `src/styles/theme-tokens.ts`. `#4f46e5` is the JellyPilot brand seed and primary filled-action background; it is not used as small text on near-black surfaces because contrast is insufficient.
+Every container is exactly one role (`SurfaceVariant`, styled by `widgets/container.rs`). All roles are fully opaque and borderless.
 
-| Token | Hex | Usage |
-|---|---:|---|
-| Primary | `#4f46e5` | Primary filled actions, JellyPilot identity |
-| On Primary | `#ffffff` | Text/icons on primary surfaces |
-| Primary Container | `#1b1c3b` | Indigo tonal surfaces |
-| On Primary Container | `#e0e2ff` | Text on indigo tonal surfaces |
-| Secondary | `#818cf8` | Jellyfin/server/session accent |
-| On Secondary | `#0b0a24` | Text on indigo surfaces |
-| Secondary Container | `#1f2152` | Indigo tonal surfaces |
-| On Secondary Container | `#e0e2ff` | Text on indigo tonal surfaces |
-| Tertiary | `#4fe3b1` | Healthy/ready/success state |
-| On Tertiary | `#001f16` | Text on healthy surfaces |
-| Tertiary Container | `#06382a` | Healthy tonal surfaces |
-| On Tertiary Container | `#bfffe8` | Text on healthy tonal surfaces |
-| Warning | `#f6c768` | Degraded/retryable warning state |
-| On Warning | `#2a1a00` | Text on warning surfaces |
-| Warning Container | `#3f2e08` | Warning tonal surfaces |
-| On Warning Container | `#ffe7a8` | Text on warning surfaces |
-| Error | `#ff6b7a` | Failure/destructive state |
-| On Error | `#330006` | Text on error surfaces |
-| Error Container | `#4b1119` | Error tonal surfaces |
-| On Error Container | `#ffd9de` | Text on error surfaces |
-| Background | `#05060a` | App shell background |
-| Surface | `#0b0d14` | Base surface |
-| Surface Low | `#0a0c12` | Low-depth cards |
-| Surface Container | `#111420` | Default cards |
-| Surface High | `#161b2a` | Inputs, inset controls |
-| Surface Highest | `#22293e` | Overlays and emphasized panels |
-| On Surface | `#f3f6ff` | Primary text |
-| On Surface Variant | `#aeb8cc` | Secondary text, labels |
-| Outline | `#5c6c8c` | Strong borders/focus support |
-| Outline Variant | `#262e42` | Subtle dividers |
+| Role | Background | Radius | Shadow | Use |
+|---|---|---:|---|---|
+| `Canvas` | `background` | 0 | none | Flush with the window: shell root, page content, inline content groups separated by whitespace |
+| `Block` | `surfaceContainerLow` | 0 | none | Docked blocks: sidebar, player bar |
+| `Raised` | `surfaceContainerHigh` | `lg` (8) | `raised_high` | Floating layers: login card, intro prompt, toasts, popovers |
+
+Inline content (home hero and action cards, detail episode/next-up/summary rows, settings sections and rows, saved sign-ins) is **flat Canvas with whitespace separation** — no card chrome. Skeleton placeholders are flat `surfaceContainerLow`↔`surfaceContainerHigh` breathing blocks, radius `lg`, no border or shadow.
+
+## The Two-Hairline Rule
+
+The application draws exactly two lines, both 1px `outlineVariant`, both built as explicit divider containers in `view/shell.rs` (iced has no per-edge borders):
+
+1. A vertical hairline between the sidebar and the content area.
+2. A horizontal hairline above the player bar.
+
+No other element may draw a border or divider. Badges, toasts, popovers, containers, and cards never have outlines; primary-tinted halo borders are gone.
+
+## Shadows
+
+Two semantic tiers (`Shadows` in `tokens.rs`); everything else was deleted.
+
+| Token | Offset / Blur | Alpha | Use |
+|---|---|---:|---|
+| `none` | — | — | Flush surfaces, controls |
+| `raised` | y 2, blur 8 | 0.40 | Small floating chrome: tooltips, scroll-to-bottom indicator |
+| `raised_high` | y 8, blur 24 | 0.55 | Floating layers: popovers, toasts, `Raised` surfaces |
+
+Buttons never cast a shadow. `ShadowToken` keeps the CSS spread/inset fields; the `iced()` conversion maps offset, blur, and color.
+
+## Radii
+
+The scale is `none` (0), `sm` (2), `md` (6), `lg` (8), `full` (9999). Usage mapping:
+
+| Radius | Use |
+|---|---|
+| `none` (0) | Docked blocks (sidebar, player bar), canvas |
+| `sm` (2) | Small inline chrome (toast dismiss button) |
+| `md` (6) | Controls: buttons, fields, badges, tooltips |
+| `lg` (8) | Floating layers, media images, poster artwork, skeletons |
+| `full` | Scrollbars, status dots |
+
+Nested rounding follows the concentric rule: inner radius = parent radius − padding, floored at 0.
+
+## Buttons
+
+Variants (`ButtonVariant`, styled by `widgets/button.rs`): `Primary`, `Secondary`, `Tonal`, `TonalActive`, `Text`, `Icon`. All use radius `md` and cast no shadow.
+
+- **Tonal** is the default quiet control (the old Outlined role): transparent at rest, `surfaceContainerHigh` fill on hover, no border.
+- **TonalActive** is the selected/on state of a tonal control: always filled with `surfaceContainerHigh`. Toggle call sites use the `TonalActive`/`Tonal` pair.
+- **Primary** keeps its 10% hover brightness lift; one primary action per section or state.
+
+## Fields, Badges, Overlays
+
+- **Fields**: opaque `surfaceContainerHigh` fill, radius `md`, no idle border. The single border exemption is functional: `text_input::Status::Focused` draws a 1px `primary` border (accessibility), and an invalid field draws a 1px `error` border. This exemption applies to text inputs only.
+- **Badges**: opaque container fills (`tertiaryContainer` / `warningContainer` / `surfaceContainerHigh`), radius `md`, no border.
+- **Popover**: opaque `surfaceContainerHigh`, `raised_high` shadow, radius `lg`, no border.
+- **Tooltip**: `raised` shadow, radius `md`, no border.
+- **Toast**: `Raised` role (opaque severity container fill, `raised_high` shadow, radius `lg`). Severity is shown by icon and text color, never by a border.
+
+## Media Cards
+
+`PosterCard` draws no hover or press overlay, lift, or tint — the artwork and copy render exactly as provided, and interaction only publishes the press message. Media images use radius `lg`.
+
+The detail hero keeps its backdrop scrim, simplified to two stops: transparent at the top → `surfaceContainerLowest` at 0.85 alpha at the bottom.
+
+## Slop Prohibitions
+
+- **No translucency without blur.** Surfaces, fields, and badges are 100% opaque semantic colors. (Text placeholders, selection, and disabled-state alpha are not surfaces.)
+- **No element-wrapping outlines.** Lines exist only as the two shell hairlines, plus the field focus/error exemption.
+- **No tinted borders.** The `primary`-at-20% halo and all severity borders are deleted.
+- **No hover overlay lifts.** No white overlay rectangles, ghost panels, or elevation changes on hover/press; hover feedback is a fill change on the control itself.
 
 ## Color Semantics
 
-- Indigo means JellyPilot identity, primary app action, local control, and Jellyfin server/session/connection.
-- Teal/green means generic healthy or ready.
-- Amber means degraded, waiting for recovery, or retryable warning.
-- Red means failure or destructive action.
-- Quick Connect waiting is a normal state and should use indigo, not amber.
+Semantic color roles (`SemanticColors` in `tokens.rs`) match the canonical Panda hex literals. Indigo (`primary` `#4f46e5`) means JellyPilot identity and primary app action; teal means healthy/ready; amber means degraded or retryable; red means failure or destructive. `#4f46e5` is not used as small text on near-black surfaces because contrast is insufficient.
 
 ## Typography
 
-Bundled local Fontsource variable fonts are used. No network font imports.
-
-```css
-body { font-family: 'Inter Variable', ui-sans-serif, system-ui, sans-serif; }
-h1, h2, h3, .brand-type { font-family: 'Space Grotesk Variable', 'Inter Variable', ui-sans-serif, system-ui, sans-serif; }
-.code, .diagnostic-value { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; }
-```
-Apply typography in owner-local Panda styles with the tokenized properties below.
-
-| Style | Panda properties | Default color |
-|---|---|---|
-| Display medium | `fontFamily: 'display'`, `fontSize: '45'`, `lineHeight: '52'`, `fontWeight: 'bold'` | — |
-| Display small | `fontFamily: 'display'`, `fontSize: '36'`, `lineHeight: '44'`, `fontWeight: 'bold'` | — |
-| Headline large | `fontFamily: 'display'`, `fontSize: '32'`, `lineHeight: '40'`, `fontWeight: 'bold'` | — |
-| Headline medium | `fontFamily: 'display'`, `fontSize: '28'`, `lineHeight: '36'`, `fontWeight: 'bold'` | — |
-| Headline small | `fontFamily: 'display'`, `fontSize: '24'`, `lineHeight: '32'`, `fontWeight: 'bold'` | — |
-| Title large | `fontSize: '22'`, `lineHeight: '28'`, `fontWeight: 'bold'` | `onSurface` |
-| Title medium | `fontSize: '16'`, `lineHeight: '24'`, `fontWeight: 'semibold'` | `onSurface` |
-| Title small | `fontSize: '14'`, `lineHeight: '20'`, `fontWeight: 'semibold'` | `onSurface` |
-| Body large | `fontSize: '16'`, `lineHeight: '24'` | `onSurfaceVariant` |
-| Body medium | `fontSize: '14'`, `lineHeight: '20'` | `onSurfaceVariant` |
-| Body small | `fontSize: '12'`, `lineHeight: '16'` | `onSurfaceVariant/80` |
-| Label large | `fontSize: '14'`, `lineHeight: '20'`, `fontWeight: 'semibold'` | — |
-| Label medium | `fontSize: '12'`, `lineHeight: '16'`, `fontWeight: 'bold'` | `onSurfaceVariant` |
-| Label small | `fontSize: '11'`, `lineHeight: '16'`, `fontWeight: 'bold'` | `onSurfaceVariant/90` |
-
-## Components
-
-### Buttons
-
-- Use the `<Button>` component (`src/components/ui/Button.tsx`) for `primary`, `secondary`, `tonal`, `outlined`, `text`, and `icon` variants. One primary action per section or state.
-- For Ark triggers that should look like a button (collapsible, dialog, tags-input delete), render `<Button>` through the Ark part's `asChild` prop instead of reaching for a helper class.
-
-### Inputs
-
-- Use `<FieldControl>` / `<FieldTextarea>` (`src/components/ui/FieldControl.tsx`) with `variant="filled"` (Login and configuration) or `variant="outlined"` (compact selectors). In Ark Field parts, render them through `asChild` so Ark keeps owning ARIA/focus.
-- `<TextField>` (`src/components/ui/TextField.tsx`) wraps `FieldControl` with label, error, and hint for plain forms.
-- Every field has a visible label. Errors appear near the field.
-
-### Cards and Surfaces
-
-- Use `<Card>` / `<CardLink>` (`src/components/ui/Card.tsx`) with `variant="filled"` (default solid panel), `"elevated"` (hero/emphasized), or `"outlined"` (extra separation). `<CardLink>` is the card-styled anchor for navigational cards.
-- Hero surfaces may use selective gradient/glass (the non-atomic gradients live in `Card.styles.ts`). Diagnostics and dense text must remain solid.
-
-### Layout helpers
-
-- `<ConsoleShell>`, `<ConsoleContainer>`, and `<ConsoleGrid>` (`src/components/ui/ConsoleLayout.tsx`) compose the authenticated shell, centered content column, and two-column console grid.
-- `<SectionCard>` wraps a `Card` with an icon + title header.
-- `<JellyPilotSelect>` and `<StatusBadge>` are the select and status-pill components.
-
-### Concentric Border Radius
-
-When rounded elements are nested, the inner and outer curves must stay concentric so the spacing around the corner remains visually uniform.
-
-Use this rule:
-
-```text
-inner radius = parent radius - padding
-```
-
-Examples:
-
-| Scenario | Parent Radius | Padding / Gap | Inner Radius |
-|---|---:|---:|---:|
-| Outer card corner | `16px` | `4px` | `12px` |
-| Tab transition | `12px` | `6px` | `6px` |
-| Nested button | `16px` | `8px` | `8px` |
-
-If padding is greater than or equal to the parent radius, use `0` for the inner radius. Do not use negative radius values.
-
-### Text-Icon Badge Alignment
-
-For compact badges, pills, and buttons that nest text with a trailing icon, derive horizontal padding and icon compensation from one vertical padding value. This keeps the control optically balanced across font-size and line-height changes.
-
-Define only the vertical padding:
-
-- `--py = 0.875em`
-
-Derive horizontal padding from the text line box and cap height:
-
-- `--px = --py + (1lh - 1cap) / 2`
-- `padding-block = --py`
-- `padding-inline = --px`
-
-Size the icon to the line box and compensate the trailing edge:
-
-- `icon width = 1lh`
-- `icon height = 1lh`
-- `icon trailing margin = --py - --px`
-
-Use this pattern when the component needs text and icon edges to feel equally inset. Do not hardcode separate horizontal values unless the component has a deliberate asymmetric layout.
-
-### Status Tiles
-
-Each tile has icon, label, value, and supporting text. Status tiles are read-only unless explicitly styled as actions.
-
-### Diagnostics
-
-Diagnostics are a user-facing support view, not a developer console. Use normal cards with terminal-adjacent details: mono timestamps, level badges, compact rows, no fake terminal prompts or chrome.
-
-## Panda CSS Authoring
-
-- Keep styles beside their owner in `Component.styles.ts` or route `*.styles.ts` modules.
-- Import `css`, `cva`, `sva`, or `cx` from `@styled-system/css`; use patterns from `@styled-system/patterns` only when they reduce repetition.
-- Use semantic color, spacing, typography, radius, shadow, duration, easing, and z-index tokens. Add a reusable token before introducing a repeated literal.
-- **Merge vs concatenate.** `css(a, b)`, `.raw()` composition, and `cva` base+variant resolve property conflicts by object merge (later wins) — deterministic. `cx` and `classList` only concatenate class strings; when two concatenated atomic classes set the same property, Panda's generated stylesheet order picks the winner, not the call order. Never use `cx`/`classList` to override a property the base class already sets.
-- **State-driven styles, in order of preference:** (1) a Panda condition in the single style definition when the element already publishes the state — Ark `data-state` (`_open`, `&[data-state=…]`, or `[data-state=open] &` for a child), `aria-pressed` (`_pressed`), `aria-checked` on an ancestor (`_groupChecked` with a `group` class on the ancestor), native `:disabled` (`_disabled`); (2) a `cva` variant when the state is prop-driven; (3) an explicit call-site merge `css(base, flagA && styleA, flagB && styleB)` when several independent flags contest one property (argument order = precedence, last wins); (4) `classList` only for additive conditional classes whose properties the base never sets (e.g. `spin`, `pulse` animations).
-- **`cx` is static composition only** (recipe + class, `props.class` passthrough, or a record lookup selecting one of several mutually exclusive classes like `styles.aspect[aspect]`). No `&&` or ternaries inside `cx`; runtime conditionals go to `classList` (additive) or a condition/variant (override).
-
-```ts
-import { css } from '@styled-system/css';
-
-export const panel = css({
-  backdropFilter: '[blur(12px)]',
-  display: 'flex',
-  gap: '4',
-});
-```
-
-```ts
-// Before (broken): classList concatenation — bg resolves by stylesheet order.
-<button class={styles.seasonTab} classList={{ [styles.activeSeasonTab]: active() }} />
-
-// After: one definition, condition raises specificity — deterministic.
-export const seasonTab = css({
-  bg: '[transparent]',
-  color: 'onSurfaceVariant',
-  _pressed: {
-    bg: 'primary',
-    color: 'onPrimary',
-    _hover: { bg: 'primary', color: 'onPrimary' },
-  },
-});
-// <button class={styles.seasonTab} aria-pressed={active()} />
-```
-
-## Layout
-
-- `<640px`: single-column compact layout.
-- `640–1023px`: two-column status grid where space allows.
-- `≥1024px`: wider console grid and expanded hero/status composition.
-- Use CSS grid for macro layout and flex/stack inside components.
-- No sticky viewport action bars. Keep actions contextual.
+Bundled local fonts only; no network font imports. Body text uses Inter (`sans`), headlines and brand type use Space Grotesk (`display`, exposed as `SPACE_GROTESK_FONT`), diagnostics values use the mono stack. Sizes and weights come from the `font_sizes`, `line_heights`, and `font_weights` tokens.
 
 ## Motion
 
-- 150–220ms transitions for hover, focus, and state changes.
-- Animate opacity and transform only; do not animate layout dimensions.
-- Animated transforms must use the 3D functions (`translate3d`, `scale3d`), never bare `translate()`/`scale()`. 2D transforms get no guaranteed composited layer, so every animation frame repaints on the main thread; 3D transforms force GPU compositing and animate repaint-free. Enforced by `bun scripts/check-styling-boundaries.ts`.
-- Hover/focus feedback must never transform the card or control itself: no translate/scale on the component's own box. Transforming the hovered element moves it under the cursor, which cancels and re-fires `:hover` (oscillation), and pointer-over-scroll retriggers the effect for every row passing beneath the cursor (scroll flash). Apply transforms to inner, composited elements instead (artwork image, badge).
+- Skeleton placeholders breathe between two opaque surface tones; under reduced motion (or a non-finite phase) they render the static `surfaceContainerLow` block.
 - Avoid decorative looping animation except subtle indeterminate waiting indicators.
-- Respect `prefers-reduced-motion`.
-
-## Icons
-
-Use Lucide Solid only for structural icons. Do not use emoji as icons. Standard visual sizes are 16, 20, and 24px, but interactive targets must remain comfortable and keyboard-accessible.
+- Respect the user's reduce-motion setting.
 
 ## Out of Scope
 

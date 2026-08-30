@@ -165,7 +165,7 @@ fn playback_section(state: &State) -> Element<'_, Message> {
     .padding([6, 12])
     .on_press(Message::Settings(SettingsMessage::IntroMenuToggled))
     .style(|theme, status| {
-      jellypilot_ui::theme::button_variant(theme, status, ButtonVariant::Outlined)
+      jellypilot_ui::theme::button_variant(theme, status, ButtonVariant::Tonal)
     });
   let menu = column![
     intro_option("Automatic", IntroMode::Automatic, mode),
@@ -212,7 +212,7 @@ fn playback_section(state: &State) -> Element<'_, Message> {
 fn subtitles_section(state: &State) -> Element<'_, Message> {
   let trigger = button(
     row![
-      icon_for_variant(Icon::Subtitles, IconSize::Sm, ButtonVariant::Outlined),
+      icon_for_variant(Icon::Subtitles, IconSize::Sm, ButtonVariant::Tonal),
       text("Add language"),
     ]
     .spacing(TOKENS.spacing.s1_5)
@@ -220,9 +220,7 @@ fn subtitles_section(state: &State) -> Element<'_, Message> {
   )
   .padding([6, 12])
   .on_press(Message::Settings(SettingsMessage::SubtitleMenuToggled))
-  .style(|theme, status| {
-    jellypilot_ui::theme::button_variant(theme, status, ButtonVariant::Outlined)
-  });
+  .style(|theme, status| jellypilot_ui::theme::button_variant(theme, status, ButtonVariant::Tonal));
   let mut menu = Column::new().spacing(TOKENS.spacing.s1).width(Fill);
   for language in SUBTITLE_LANGUAGE_OPTIONS {
     menu = menu.push(
@@ -327,9 +325,9 @@ fn shortcut_row<'a>(state: &'a State, label: &'a str, kind: ShortcutKind) -> Ele
   };
   let capturing = state.settings.view.shortcut_capture == Some(kind);
   let variant = if capturing {
-    ButtonVariant::Secondary
+    ButtonVariant::TonalActive
   } else {
-    ButtonVariant::Outlined
+    ButtonVariant::Tonal
   };
   row![
     row![
@@ -400,7 +398,7 @@ fn cache_section(state: &State) -> Element<'_, Message> {
 fn diagnostics_section(state: &State) -> Element<'_, Message> {
   let level_trigger = button(
     row![
-      icon_for_variant(Icon::Filter, IconSize::Sm, ButtonVariant::Outlined),
+      icon_for_variant(Icon::Filter, IconSize::Sm, ButtonVariant::Tonal),
       text(format!(
         "Level: {}",
         state
@@ -417,9 +415,7 @@ fn diagnostics_section(state: &State) -> Element<'_, Message> {
   .on_press(Message::Settings(
     SettingsMessage::DiagnosticLevelMenuToggled,
   ))
-  .style(|theme, status| {
-    jellypilot_ui::theme::button_variant(theme, status, ButtonVariant::Outlined)
-  });
+  .style(|theme, status| jellypilot_ui::theme::button_variant(theme, status, ButtonVariant::Tonal));
   let level_menu = column![
     diagnostic_level_option("All", None),
     diagnostic_level_option("Info", Some(DiagnosticLevel::Info)),
@@ -440,7 +436,7 @@ fn diagnostics_section(state: &State) -> Element<'_, Message> {
   );
   let category_trigger = button(
     row![
-      icon_for_variant(Icon::Sliders, IconSize::Sm, ButtonVariant::Outlined),
+      icon_for_variant(Icon::Sliders, IconSize::Sm, ButtonVariant::Tonal),
       text(format!(
         "Category: {}",
         state
@@ -457,9 +453,7 @@ fn diagnostics_section(state: &State) -> Element<'_, Message> {
   .on_press(Message::Settings(
     SettingsMessage::DiagnosticCategoryMenuToggled,
   ))
-  .style(|theme, status| {
-    jellypilot_ui::theme::button_variant(theme, status, ButtonVariant::Outlined)
-  });
+  .style(|theme, status| jellypilot_ui::theme::button_variant(theme, status, ButtonVariant::Tonal));
   let category_menu = column![
     diagnostic_category_option("All", None),
     diagnostic_category_option("Connection", Some(DiagnosticCategory::Connection)),
@@ -526,7 +520,7 @@ fn diagnostics_section(state: &State) -> Element<'_, Message> {
       )
       .padding(TOKENS.spacing.s3)
       .width(Fill)
-      .style(|theme| jellypilot_ui::theme::surface_variant(theme, SurfaceVariant::Filled)),
+      .style(|theme| jellypilot_ui::theme::surface_variant(theme, SurfaceVariant::Canvas)),
     );
   }
   if count == 0 {
@@ -582,7 +576,7 @@ fn section<'a>(icon: Icon, title: &'a str, content: Column<'a, Message>) -> Elem
   )
   .padding(TOKENS.spacing.s4)
   .width(Fill)
-  .style(|theme| jellypilot_ui::theme::surface_variant(theme, SurfaceVariant::Elevated))
+  .style(|theme| jellypilot_ui::theme::surface_variant(theme, SurfaceVariant::Canvas))
   .into()
 }
 
@@ -639,9 +633,9 @@ fn toggle_row<'a>(
           theme,
           status,
           if enabled {
-            ButtonVariant::Secondary
+            ButtonVariant::TonalActive
           } else {
-            ButtonVariant::Outlined
+            ButtonVariant::Tonal
           },
         )
       }),
@@ -659,16 +653,14 @@ fn action_button<'a>(
 ) -> Element<'a, Message> {
   let button = button(
     row![
-      icon_for_variant_disabled(icon, IconSize::Sm, ButtonVariant::Outlined, !enabled),
+      icon_for_variant_disabled(icon, IconSize::Sm, ButtonVariant::Tonal, !enabled),
       text(label),
     ]
     .spacing(TOKENS.spacing.s1_5)
     .align_y(Alignment::Center),
   )
   .padding([6, 12])
-  .style(|theme, status| {
-    jellypilot_ui::theme::button_variant(theme, status, ButtonVariant::Outlined)
-  });
+  .style(|theme, status| jellypilot_ui::theme::button_variant(theme, status, ButtonVariant::Tonal));
   if enabled {
     button.on_press(Message::Settings(message)).into()
   } else {
@@ -685,13 +677,11 @@ fn compact_button<'a>(
   let button = button(icon_for_variant_disabled(
     icon,
     IconSize::Xs,
-    ButtonVariant::Outlined,
+    ButtonVariant::Tonal,
     !enabled,
   ))
   .padding([5, 8])
-  .style(|theme, status| {
-    jellypilot_ui::theme::button_variant(theme, status, ButtonVariant::Outlined)
-  });
+  .style(|theme, status| jellypilot_ui::theme::button_variant(theme, status, ButtonVariant::Tonal));
   let trigger = if enabled {
     button.on_press(Message::Settings(message))
   } else {

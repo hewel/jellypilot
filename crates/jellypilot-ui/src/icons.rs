@@ -341,7 +341,7 @@ pub fn icon_for_variant_disabled<'a>(
     let mut color = match variant {
         ButtonVariant::Primary => TOKENS.colors.onPrimary,
         ButtonVariant::Secondary => TOKENS.colors.onSecondaryContainer,
-        ButtonVariant::Outlined => TOKENS.colors.onSurface,
+        ButtonVariant::Tonal | ButtonVariant::TonalActive => TOKENS.colors.onSurface,
         ButtonVariant::Text => TOKENS.colors.secondary,
         ButtonVariant::Icon => TOKENS.colors.onSurfaceVariant,
     };

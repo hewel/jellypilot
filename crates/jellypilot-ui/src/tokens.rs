@@ -243,10 +243,6 @@ pub struct Radii {
     pub sm: f32,
     pub md: f32,
     pub lg: f32,
-    pub xl: f32,
-    pub x2l: f32,
-    pub x3l: f32,
-    pub x4l: f32,
     pub full: f32,
 }
 
@@ -271,16 +267,16 @@ impl ShadowToken {
     }
 }
 
-/// Panda shadow tokens.
+/// Panda shadow tokens: a two-tier semantic scale. `none` for flush
+/// surfaces, `raised` for small floating chrome, `raised_high` for floating
+/// layers.
 #[derive(Debug, Clone, Copy)]
 pub struct Shadows {
     pub none: ShadowToken,
-    pub sm: ShadowToken,
-    pub md: ShadowToken,
-    pub lg: ShadowToken,
-    pub xl: ShadowToken,
-    pub x2l: ShadowToken,
-    pub inner: ShadowToken,
+    /// Low lift for small floating chrome (tooltips, scroll indicators).
+    pub raised: ShadowToken,
+    /// High lift for floating layers (popovers, toasts, raised cards).
+    pub raised_high: ShadowToken,
 }
 
 /// A Panda z-index literal.
@@ -527,20 +523,12 @@ pub const TOKENS: DesignTokens = DesignTokens {
         sm: 2.0,
         md: 6.0,
         lg: 8.0,
-        xl: 12.0,
-        x2l: 16.0,
-        x3l: 24.0,
-        x4l: 32.0,
         full: 9999.0,
     },
     shadows: Shadows {
         none: shadow(0.0, 0.0, 0.0, 0.0, 0.0, false),
-        sm: shadow(0.0, 1.0, 2.0, 0.0, 0.2, false),
-        md: shadow(0.0, 4.0, 8.0, -2.0, 0.35, false),
-        lg: shadow(0.0, 10.0, 18.0, -6.0, 0.45, false),
-        xl: shadow(0.0, 18.0, 30.0, -10.0, 0.55, false),
-        x2l: shadow(0.0, 25.0, 50.0, -12.0, 0.65, false),
-        inner: shadow(0.0, 2.0, 4.0, 0.0, 0.28, true),
+        raised: shadow(0.0, 2.0, 8.0, 0.0, 0.4, false),
+        raised_high: shadow(0.0, 8.0, 24.0, 0.0, 0.55, false),
     },
     z_index: ZIndex {
         auto: ZIndexValue::Auto,
@@ -681,15 +669,48 @@ mod tests {
     }
 
     #[test]
-    fn radii_scale_matches_canonical_tokens() {
+    fn radii_scale_matches_the_retuned_tokens() {
         assert_eq!(TOKENS.radii.none, 0.0);
         assert_eq!(TOKENS.radii.sm, 2.0);
         assert_eq!(TOKENS.radii.md, 6.0);
         assert_eq!(TOKENS.radii.lg, 8.0);
-        assert_eq!(TOKENS.radii.xl, 12.0);
-        assert_eq!(TOKENS.radii.x2l, 16.0);
-        assert_eq!(TOKENS.radii.x3l, 24.0);
-        assert_eq!(TOKENS.radii.x4l, 32.0);
         assert_eq!(TOKENS.radii.full, 9999.0);
+    }
+
+    #[test]
+    fn shadow_tokens_match_the_two_tier_semantic_scale() {
+        use super::ShadowToken;
+        use iced::Vector;
+
+        assert_eq!(
+            TOKENS.shadows.none,
+            ShadowToken {
+                color: Color::from_rgba8(0, 0, 0, 0.0),
+                offset: Vector { x: 0.0, y: 0.0 },
+                blur_radius: 0.0,
+                spread_radius: 0.0,
+                inset: false,
+            }
+        );
+        assert_eq!(
+            TOKENS.shadows.raised,
+            ShadowToken {
+                color: Color::from_rgba8(0, 0, 0, 0.4),
+                offset: Vector { x: 0.0, y: 2.0 },
+                blur_radius: 8.0,
+                spread_radius: 0.0,
+                inset: false,
+            }
+        );
+        assert_eq!(
+            TOKENS.shadows.raised_high,
+            ShadowToken {
+                color: Color::from_rgba8(0, 0, 0, 0.55),
+                offset: Vector { x: 0.0, y: 8.0 },
+                blur_radius: 24.0,
+                spread_radius: 0.0,
+                inset: false,
+            }
+        );
     }
 }

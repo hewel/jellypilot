@@ -1,9 +1,9 @@
-//! Poster card widget with hover overlay lift on artwork and content-hugging bounds.
+//! Poster card widget with content-hugging bounds.
 //!
 //! Visual contract:
-//! - Hover applies a subtle white overlay lift (~8% alpha) clipped to its rounded bounds.
-//! - Press applies a slightly stronger overlay lift (~12% alpha).
-//! - The copy region (title/caption) remains fixed below the artwork without overlay.
+//! - The artwork and copy render exactly as provided; hover/press apply no
+//!   overlay, lift, or tint — the card stays visually quiet.
+//! - The copy region (title/caption) remains fixed below the artwork.
 //! - No ghost background panel, border, or card-zone elevation shadow is drawn.
 //! - Layout height hugs `poster_height + copy_height` with zero dead space.
 //!
@@ -20,46 +20,10 @@ use iced::advanced::widget::{self, Operation, Tree, Widget};
 use iced::advanced::{Clipboard, Shell};
 use iced::border::Radius;
 use iced::touch;
-use iced::{
-    Background, Border, Color, Element, Event, Length, Point, Rectangle, Shadow, Size, Vector,
-};
+use iced::{Element, Event, Length, Point, Rectangle, Size, Vector};
 
-/// Default overlay alpha for unhovered / idle poster card artwork.
-pub const ACTIVE_OVERLAY_ALPHA: f32 = 0.0;
-/// Overlay alpha applied to the poster artwork when hovered (~8% white lift).
-pub const HOVER_OVERLAY_ALPHA: f32 = 0.08;
-/// Overlay alpha applied to the poster artwork when pressed (~12% white lift).
-pub const PRESSED_OVERLAY_ALPHA: f32 = 0.12;
-/// Overlay alpha applied when the card is disabled.
-pub const DISABLED_OVERLAY_ALPHA: f32 = 0.0;
-
-/// Default corner radius for the poster artwork overlay.
+/// Default corner radius for the poster artwork.
 pub const POSTER_RADIUS: f32 = 8.0;
-
-/// The interaction status of a [`PosterCard`].
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum Status {
-    /// The card is interactive and not hovered.
-    #[default]
-    Active,
-    /// The card is hovered by the cursor.
-    Hovered,
-    /// The card is currently pressed.
-    Pressed,
-    /// The card cannot be interacted with.
-    Disabled,
-}
-
-/// Computes the poster artwork overlay alpha for a given card [`Status`].
-#[must_use]
-pub const fn overlay_alpha(status: Status) -> f32 {
-    match status {
-        Status::Active => ACTIVE_OVERLAY_ALPHA,
-        Status::Hovered => HOVER_OVERLAY_ALPHA,
-        Status::Pressed => PRESSED_OVERLAY_ALPHA,
-        Status::Disabled => DISABLED_OVERLAY_ALPHA,
-    }
-}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 struct State {
@@ -68,8 +32,8 @@ struct State {
 
 /// A card widget displaying a poster artwork with copy beneath it.
 ///
-/// Interaction state (hover/press) applies a rounded brightness overlay over only the
-/// poster artwork without altering card layout geometry, distorting corner clipping, or shifting copy text.
+/// Press handling is the only interaction: hover/press states change nothing
+/// visually and never alter card layout geometry or shift copy text.
 pub struct PosterCard<'a, Message, Theme = iced::Theme, Renderer = iced::Renderer> {
     poster: Element<'a, Message, Theme, Renderer>,
     copy: Element<'a, Message, Theme, Renderer>,
@@ -77,7 +41,6 @@ pub struct PosterCard<'a, Message, Theme = iced::Theme, Renderer = iced::Rendere
     width: Length,
     height: Length,
     radius: Radius,
-    status: Option<Status>,
 }
 
 impl<'a, Message, Theme, Renderer> PosterCard<'a, Message, Theme, Renderer> {
@@ -93,7 +56,6 @@ impl<'a, Message, Theme, Renderer> PosterCard<'a, Message, Theme, Renderer> {
             width: Length::Shrink,
             height: Length::Shrink,
             radius: Radius::from(TOKENS.radii.lg),
-            status: None,
         }
     }
 
@@ -125,7 +87,7 @@ impl<'a, Message, Theme, Renderer> PosterCard<'a, Message, Theme, Renderer> {
         self
     }
 
-    /// Sets the corner [`Radius`] for the poster artwork overlay.
+    /// Sets the corner [`Radius`] for the poster artwork.
     #[must_use]
     pub fn radius(mut self, radius: impl Into<Radius>) -> Self {
         self.radius = radius.into();
@@ -304,25 +266,6 @@ where
             }
             _ => {}
         }
-
-        let current_status = if self.on_press.is_none() {
-            Status::Disabled
-        } else if cursor.is_over(bounds) {
-            let state = tree.state.downcast_ref::<State>();
-            if state.is_pressed {
-                Status::Pressed
-            } else {
-                Status::Hovered
-            }
-        } else {
-            Status::Active
-        };
-
-        if let Event::Window(iced::window::Event::RedrawRequested(_now)) = event {
-            self.status = Some(current_status);
-        } else if self.status.is_some_and(|status| status != current_status) {
-            shell.request_redraw();
-        }
     }
 
     fn draw(
@@ -343,20 +286,6 @@ where
             return;
         };
 
-        let state = tree.state.downcast_ref::<State>();
-        let is_mouse_over = cursor.is_over(layout.bounds());
-        let status = if self.on_press.is_none() {
-            Status::Disabled
-        } else if is_mouse_over {
-            if state.is_pressed {
-                Status::Pressed
-            } else {
-                Status::Hovered
-            }
-        } else {
-            Status::Active
-        };
-
         self.poster.as_widget().draw(
             &tree.children[0],
             renderer,
@@ -366,23 +295,6 @@ where
             cursor,
             viewport,
         );
-
-        let alpha = overlay_alpha(status);
-        if alpha > 0.0 {
-            renderer.fill_quad(
-                renderer::Quad {
-                    bounds: poster_layout.bounds(),
-                    border: Border {
-                        radius: self.radius,
-                        color: Color::TRANSPARENT,
-                        width: 0.0,
-                    },
-                    shadow: Shadow::default(),
-                    snap: false,
-                },
-                Background::Color(Color::from_rgba(1.0, 1.0, 1.0, alpha)),
-            );
-        }
 
         self.copy.as_widget().draw(
             &tree.children[1],
@@ -467,29 +379,11 @@ mod tests {
     use iced::widget::{column, container, space, text};
     use iced::{Element, Event, Point, Rectangle, Size};
 
-    use super::{
-        overlay_alpha, poster_card, Status, ACTIVE_OVERLAY_ALPHA, DISABLED_OVERLAY_ALPHA,
-        HOVER_OVERLAY_ALPHA, POSTER_RADIUS, PRESSED_OVERLAY_ALPHA,
-    };
+    use super::{poster_card, POSTER_RADIUS};
 
     #[derive(Debug, Clone, PartialEq, Eq)]
     enum TestMessage {
         Clicked,
-    }
-
-    #[test]
-    fn overlay_alpha_matches_design_spec() {
-        assert_eq!(overlay_alpha(Status::Active), ACTIVE_OVERLAY_ALPHA);
-        assert_eq!(overlay_alpha(Status::Active), 0.0);
-
-        assert_eq!(overlay_alpha(Status::Hovered), HOVER_OVERLAY_ALPHA);
-        assert_eq!(overlay_alpha(Status::Hovered), 0.08);
-
-        assert_eq!(overlay_alpha(Status::Pressed), PRESSED_OVERLAY_ALPHA);
-        assert_eq!(overlay_alpha(Status::Pressed), 0.12);
-
-        assert_eq!(overlay_alpha(Status::Disabled), DISABLED_OVERLAY_ALPHA);
-        assert_eq!(overlay_alpha(Status::Disabled), 0.0);
     }
 
     #[test]

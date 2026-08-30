@@ -36,7 +36,7 @@ pub fn text_variant(_theme: &Theme, variant: TextVariant) -> Color {
     }
 }
 
-/// Resolves a card surface variant.
+/// Resolves a container surface role.
 pub fn surface_variant(theme: &Theme, variant: SurfaceVariant) -> container::Style {
     widgets::container::style(theme, variant)
 }

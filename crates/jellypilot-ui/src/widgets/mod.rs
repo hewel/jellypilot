@@ -11,5 +11,5 @@ pub mod rounded_image;
 pub mod scrollable;
 pub mod skeleton;
 
-pub use poster_card::{poster_card, PosterCard, Status as PosterCardStatus};
+pub use poster_card::{poster_card, PosterCard};
 pub use rounded_image::{card_top_radius, full_radius, rounded_image, RoundedImage};

@@ -17,7 +17,7 @@ use jellypilot_ui::tokens::TOKENS;
 use jellypilot_ui::variants::{ButtonVariant, SurfaceVariant};
 use jellypilot_ui::widgets::ellipsis_text::ellipsis_text;
 use jellypilot_ui::widgets::skeleton::{skeleton_block, skeleton_panel};
-use jellypilot_ui::{card_top_radius, full_radius, poster_card, rounded_image};
+use jellypilot_ui::{full_radius, poster_card, rounded_image};
 const THUMB_FRAME_WIDTH: f32 = 240.0;
 const THUMB_FRAME_HEIGHT: f32 = 135.0;
 const POSTER_FRAME_WIDTH: f32 = 160.0;
@@ -149,7 +149,7 @@ fn featured_hero<'a>(
   });
   let details = button(
     row![
-      icon_for_variant(Icon::Info, IconSize::Md, ButtonVariant::Outlined),
+      icon_for_variant(Icon::Info, IconSize::Md, ButtonVariant::Tonal),
       text("Details"),
     ]
     .spacing(TOKENS.spacing.s2)
@@ -157,9 +157,7 @@ fn featured_hero<'a>(
   )
   .padding([7, 14])
   .on_press(Message::OpenDetail(item.clone()))
-  .style(|theme, status| {
-    jellypilot_ui::theme::button_variant(theme, status, ButtonVariant::Outlined)
-  });
+  .style(|theme, status| jellypilot_ui::theme::button_variant(theme, status, ButtonVariant::Tonal));
   container(
     row![
       artwork,
@@ -171,7 +169,7 @@ fn featured_hero<'a>(
   )
   .padding(TOKENS.spacing.s6)
   .width(Fill)
-  .style(|theme| jellypilot_ui::theme::surface_variant(theme, SurfaceVariant::Elevated))
+  .style(|theme| jellypilot_ui::theme::surface_variant(theme, SurfaceVariant::Canvas))
   .into()
 }
 
@@ -186,7 +184,7 @@ fn featured_skeleton<'a>(phase: f32, reduced_motion: bool) -> Element<'a, Messag
   container(row![poster, copy].spacing(TOKENS.spacing.s8))
     .padding(TOKENS.spacing.s6)
     .width(Fill)
-    .style(|theme| jellypilot_ui::theme::surface_variant(theme, SurfaceVariant::Elevated))
+    .style(|theme| jellypilot_ui::theme::surface_variant(theme, SurfaceVariant::Canvas))
     .into()
 }
 
@@ -255,11 +253,7 @@ fn video_card<'a>(
 ) -> Element<'a, Message> {
   let (frame_width, frame_height) = section_frame_size(section);
   let is_action_card = matches!(section, HomeSection::ContinueWatching | HomeSection::NextUp);
-  let radius = if is_action_card {
-    card_top_radius(TOKENS.radii.xl)
-  } else {
-    full_radius(TOKENS.radii.lg)
-  };
+  let radius = full_radius(TOKENS.radii.lg);
   let poster = card_artwork(
     state,
     state.home.artwork.card(section, &item.id),
@@ -344,7 +338,7 @@ fn video_card<'a>(
     return container(card_column)
       .width(frame_width)
       .clip(true)
-      .style(|theme| jellypilot_ui::theme::surface_variant(theme, SurfaceVariant::Filled))
+      .style(|theme| jellypilot_ui::theme::surface_variant(theme, SurfaceVariant::Canvas))
       .into();
   }
 
@@ -396,7 +390,7 @@ fn hero_artwork<'a>(
   if let Some(cell) = cell {
     if cell.state == ArtworkCellState::Ready {
       if let Some(handle) = state.kernel.artwork_handles.get(cell.slot, &cell.image_id) {
-        return rounded_image(handle.clone(), full_radius(TOKENS.radii.xl))
+        return rounded_image(handle.clone(), full_radius(TOKENS.radii.lg))
           .content_fit(ContentFit::Cover)
           .width(width)
           .height(height)
@@ -434,7 +428,7 @@ fn hero_artwork<'a>(
         TOKENS.colors.surfaceContainerLowest,
       )),
       border: iced::Border {
-        radius: full_radius(TOKENS.radii.xl),
+        radius: full_radius(TOKENS.radii.lg),
         width: 0.0,
         color: iced::Color::TRANSPARENT,
       },
@@ -447,7 +441,7 @@ fn hero_artwork<'a>(
     width,
     height,
     TOKENS.colors.surfaceContainerLowest,
-    full_radius(TOKENS.radii.xl),
+    full_radius(TOKENS.radii.lg),
     phase,
     reduced_motion,
   )
@@ -566,7 +560,9 @@ fn progress_bar<'a>(progress: f64) -> Element<'a, Message> {
       container(space::horizontal())
         .width(Length::FillPortion(remaining))
         .height(4)
-        .style(|theme| jellypilot_ui::theme::surface_variant(theme, SurfaceVariant::Elevated)),
+        .style(|_| {
+          iced::widget::container::Style::default().background(TOKENS.colors.surfaceContainerLow)
+        }),
     );
   }
   bar.into()
@@ -605,7 +601,7 @@ fn section_error<'a>(title: &'static str, error: &'a str) -> Element<'a, Message
     .padding([6, 12])
     .on_press(Message::Home(HomeMessage::Retry))
     .style(|theme, status| {
-      jellypilot_ui::theme::button_variant(theme, status, ButtonVariant::Outlined)
+      jellypilot_ui::theme::button_variant(theme, status, ButtonVariant::Tonal)
     });
   container(
     column![
@@ -620,7 +616,7 @@ fn section_error<'a>(title: &'static str, error: &'a str) -> Element<'a, Message
   )
   .padding(TOKENS.spacing.s4)
   .width(Fill)
-  .style(|theme| jellypilot_ui::theme::surface_variant(theme, SurfaceVariant::Elevated))
+  .style(|theme| jellypilot_ui::theme::surface_variant(theme, SurfaceVariant::Canvas))
   .into()
 }
 

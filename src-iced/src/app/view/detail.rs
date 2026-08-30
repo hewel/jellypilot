@@ -220,10 +220,9 @@ fn hero_at_width<'a>(
     skeleton_phase,
     reduced_motion,
   );
-  let gradient = gradient::Linear::new(Degrees(90.0))
-    .add_stop(0.0, TOKENS.colors.surfaceContainerLowest)
-    .add_stop(0.52, TOKENS.colors.surfaceContainerLowest.scale_alpha(0.76))
-    .add_stop(1.0, TOKENS.colors.surfaceContainerLowest.scale_alpha(0.18));
+  let gradient = gradient::Linear::new(Degrees(180.0))
+    .add_stop(0.0, TOKENS.colors.surfaceContainerLowest.scale_alpha(0.0))
+    .add_stop(1.0, TOKENS.colors.surfaceContainerLowest.scale_alpha(0.85));
   let scrim = container(space::vertical())
     .width(Fill)
     .height(hero_height)
@@ -237,7 +236,7 @@ fn hero_at_width<'a>(
       icon_for_variant_disabled(
         Icon::ChevronLeft,
         IconSize::Sm,
-        ButtonVariant::Outlined,
+        ButtonVariant::Tonal,
         !back_enabled,
       ),
       text("Back").size(14),
@@ -247,9 +246,7 @@ fn hero_at_width<'a>(
   )
   .padding([6, 10])
   .on_press_maybe(back_enabled.then_some(Message::Detail(DetailMessage::Back)))
-  .style(|theme, status| {
-    jellypilot_ui::theme::button_variant(theme, status, ButtonVariant::Outlined)
-  });
+  .style(|theme, status| jellypilot_ui::theme::button_variant(theme, status, ButtonVariant::Tonal));
   let poster = artwork(
     state,
     DETAIL_POSTER_KEY,
@@ -373,9 +370,9 @@ fn detail_actions<'a>(
   });
   let any_busy = state.detail.data.user_data_busy.is_some();
   let (fav_icon, fav_label, fav_variant) = if favorite {
-    (Icon::HeartFilled, "Favorited", ButtonVariant::Secondary)
+    (Icon::HeartFilled, "Favorited", ButtonVariant::TonalActive)
   } else {
-    (Icon::Heart, "Favorite", ButtonVariant::Outlined)
+    (Icon::Heart, "Favorite", ButtonVariant::Tonal)
   };
   let favorite_button = button(
     row![
@@ -389,9 +386,9 @@ fn detail_actions<'a>(
   .on_press_maybe((!any_busy).then_some(Message::Detail(DetailMessage::FavoriteToggled)))
   .style(move |theme, status| jellypilot_ui::theme::button_variant(theme, status, fav_variant));
   let (played_icon, played_label, played_variant) = if played {
-    (Icon::CircleCheck, "Played", ButtonVariant::Secondary)
+    (Icon::CircleCheck, "Played", ButtonVariant::TonalActive)
   } else {
-    (Icon::Circle, "Mark played", ButtonVariant::Outlined)
+    (Icon::Circle, "Mark played", ButtonVariant::Tonal)
   };
   let played_button = button(
     row![
@@ -448,7 +445,7 @@ fn summary<'a>(
   container(columns)
     .padding(TOKENS.spacing.s5)
     .width(Fill)
-    .style(|theme| jellypilot_ui::theme::surface_variant(theme, SurfaceVariant::Elevated))
+    .style(|theme| jellypilot_ui::theme::surface_variant(theme, SurfaceVariant::Canvas))
     .into()
 }
 
@@ -522,9 +519,9 @@ fn season_button<'a>(
         theme,
         status,
         if active {
-          ButtonVariant::Secondary
+          ButtonVariant::TonalActive
         } else {
-          ButtonVariant::Outlined
+          ButtonVariant::Tonal
         },
       )
     })
@@ -663,7 +660,7 @@ fn episode_card<'a>(
   )
   .padding(TOKENS.spacing.s3)
   .width(Fill)
-  .style(|theme| jellypilot_ui::theme::surface_variant(theme, SurfaceVariant::Elevated))
+  .style(|theme| jellypilot_ui::theme::surface_variant(theme, SurfaceVariant::Canvas))
   .into()
 }
 
@@ -685,11 +682,7 @@ fn artwork<'a>(
   phase: f32,
   reduced_motion: bool,
 ) -> Element<'a, Message> {
-  let radius = if key == DETAIL_BACKDROP_KEY {
-    full_radius(TOKENS.radii.xl)
-  } else {
-    full_radius(TOKENS.radii.lg)
-  };
+  let radius = full_radius(TOKENS.radii.lg);
   let cell = state.detail.artwork.get(key);
   if let Some(ArtworkCell {
     slot,
@@ -766,7 +759,7 @@ fn detail_skeleton(
       icon_for_variant_disabled(
         Icon::ChevronLeft,
         IconSize::Sm,
-        ButtonVariant::Outlined,
+        ButtonVariant::Tonal,
         !back_enabled,
       ),
       text("Back"),
@@ -776,9 +769,7 @@ fn detail_skeleton(
   )
   .padding([6, 10])
   .on_press_maybe(back_enabled.then_some(Message::Detail(DetailMessage::Back)))
-  .style(|theme, status| {
-    jellypilot_ui::theme::button_variant(theme, status, ButtonVariant::Outlined)
-  });
+  .style(|theme, status| jellypilot_ui::theme::button_variant(theme, status, ButtonVariant::Tonal));
   let body = column![
     back,
     row![
@@ -805,7 +796,7 @@ fn detail_failure<'a>(state: &State, error: &'a str) -> Element<'a, Message> {
       icon_for_variant_disabled(
         Icon::ChevronLeft,
         IconSize::Sm,
-        ButtonVariant::Outlined,
+        ButtonVariant::Tonal,
         !back_enabled,
       ),
       text("Back"),
@@ -815,9 +806,7 @@ fn detail_failure<'a>(state: &State, error: &'a str) -> Element<'a, Message> {
   )
   .padding([6, 10])
   .on_press_maybe(back_enabled.then_some(Message::Detail(DetailMessage::Back)))
-  .style(|theme, status| {
-    jellypilot_ui::theme::button_variant(theme, status, ButtonVariant::Outlined)
-  });
+  .style(|theme, status| jellypilot_ui::theme::button_variant(theme, status, ButtonVariant::Tonal));
   let retry = button(
     row![
       icon_for_variant(Icon::Refresh, IconSize::Sm, ButtonVariant::Primary),
@@ -855,7 +844,7 @@ fn retryable_surface<'a>(error: &'a str, retry: Message) -> Element<'a, Message>
       text(error).size(13).color(TOKENS.colors.error),
       button(
         row![
-          icon_for_variant(Icon::Refresh, IconSize::Xs, ButtonVariant::Outlined),
+          icon_for_variant(Icon::Refresh, IconSize::Xs, ButtonVariant::Tonal),
           text("Retry"),
         ]
         .spacing(TOKENS.spacing.s1)
@@ -864,7 +853,7 @@ fn retryable_surface<'a>(error: &'a str, retry: Message) -> Element<'a, Message>
       .padding([6, 10])
       .on_press(retry)
       .style(|theme, status| {
-        jellypilot_ui::theme::button_variant(theme, status, ButtonVariant::Outlined)
+        jellypilot_ui::theme::button_variant(theme, status, ButtonVariant::Tonal)
       }),
     ]
     .spacing(TOKENS.spacing.s3)
@@ -872,7 +861,7 @@ fn retryable_surface<'a>(error: &'a str, retry: Message) -> Element<'a, Message>
   )
   .padding(TOKENS.spacing.s3)
   .width(Fill)
-  .style(|theme| jellypilot_ui::theme::surface_variant(theme, SurfaceVariant::Elevated))
+  .style(|theme| jellypilot_ui::theme::surface_variant(theme, SurfaceVariant::Canvas))
   .into()
 }
 
@@ -880,7 +869,7 @@ fn status_surface(message: &str) -> Element<'_, Message> {
   container(text(message).size(14).color(TOKENS.colors.onSurfaceVariant))
     .padding(TOKENS.spacing.s4)
     .width(Fill)
-    .style(|theme| jellypilot_ui::theme::surface_variant(theme, SurfaceVariant::Elevated))
+    .style(|theme| jellypilot_ui::theme::surface_variant(theme, SurfaceVariant::Canvas))
     .into()
 }
 
@@ -924,7 +913,9 @@ fn progress_bar<'a>(progress: f64) -> Element<'a, Message> {
       container(space::horizontal())
         .width(Length::FillPortion(remaining))
         .height(4)
-        .style(|theme| jellypilot_ui::theme::surface_variant(theme, SurfaceVariant::Filled)),
+        .style(|_| {
+          iced::widget::container::Style::default().background(TOKENS.colors.surfaceContainerLow)
+        }),
     );
   }
   bar.into()

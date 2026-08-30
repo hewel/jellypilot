@@ -97,7 +97,7 @@ fn toolbar(state: &State) -> Element<'_, Message> {
   let filters = state.kernel.settings.snapshot().browse_filters();
   let sort_trigger = button(
     row![
-      icon_for_variant(Icon::Sliders, IconSize::Sm, ButtonVariant::Outlined),
+      icon_for_variant(Icon::Sliders, IconSize::Sm, ButtonVariant::Tonal),
       text(format!("Sort: {}", sort_label(filters.sort()))),
     ]
     .spacing(TOKENS.spacing.s1_5)
@@ -105,9 +105,7 @@ fn toolbar(state: &State) -> Element<'_, Message> {
   )
   .padding([6, 12])
   .on_press(Message::Browse(BrowseMessage::SortMenuToggled))
-  .style(|theme, status| {
-    jellypilot_ui::theme::button_variant(theme, status, ButtonVariant::Outlined)
-  });
+  .style(|theme, status| jellypilot_ui::theme::button_variant(theme, status, ButtonVariant::Tonal));
   let sort_menu = column![
     sort_option("Title", VideoLibrarySort::Title),
     sort_option("Recently added", VideoLibrarySort::RecentlyAdded),
@@ -131,7 +129,7 @@ fn toolbar(state: &State) -> Element<'_, Message> {
   };
   let direction = button(
     row![
-      icon_for_variant(direction_icon, IconSize::Sm, ButtonVariant::Outlined),
+      icon_for_variant(direction_icon, IconSize::Sm, ButtonVariant::Tonal),
       text(direction_label),
     ]
     .spacing(TOKENS.spacing.s1_5)
@@ -139,13 +137,15 @@ fn toolbar(state: &State) -> Element<'_, Message> {
   )
   .padding([6, 12])
   .on_press(Message::Browse(BrowseMessage::SortDirectionToggled))
-  .style(|theme, status| {
-    jellypilot_ui::theme::button_variant(theme, status, ButtonVariant::Outlined)
-  });
+  .style(|theme, status| jellypilot_ui::theme::button_variant(theme, status, ButtonVariant::Tonal));
   let (fav_icon, fav_label, fav_variant) = if filters.favorites_only() {
-    (Icon::HeartFilled, "Favorites: On", ButtonVariant::Secondary)
+    (
+      Icon::HeartFilled,
+      "Favorites: On",
+      ButtonVariant::TonalActive,
+    )
   } else {
-    (Icon::Heart, "Favorites: Off", ButtonVariant::Outlined)
+    (Icon::Heart, "Favorites: Off", ButtonVariant::Tonal)
   };
   let favorites = button(
     row![
@@ -203,9 +203,9 @@ fn played_option(
   selected: VideoLibraryPlayedFilter,
 ) -> Element<'static, Message> {
   let variant = if value == selected {
-    ButtonVariant::Secondary
+    ButtonVariant::TonalActive
   } else {
-    ButtonVariant::Outlined
+    ButtonVariant::Tonal
   };
   button(
     row![icon_for_variant(icon, IconSize::Sm, variant), text(label),]
@@ -596,8 +596,8 @@ fn failure_surface(
 
 /// Incremental load-more failure pinned to the bottom edge of the grid
 /// viewport. The outer fill container anchors the banner bottom-center with
-/// an `s4` offset; the banner itself borrows the shell toast's elevated,
-/// translucent error-container styling.
+/// an `s4` offset; the banner itself is a flat, opaque error-container fill
+/// with no border or shadow.
 fn failure_banner(failure: &LibraryBrowseFailure, retry_busy: bool) -> Element<'_, Message> {
   let colors = TOKENS.colors;
   let retry_enabled = failure.retryable && !retry_busy;
@@ -606,7 +606,7 @@ fn failure_banner(failure: &LibraryBrowseFailure, retry_busy: bool) -> Element<'
       icon_for_variant_disabled(
         Icon::Refresh,
         IconSize::Xs,
-        ButtonVariant::Outlined,
+        ButtonVariant::Tonal,
         !retry_enabled,
       ),
       text(if retry_busy { "Retrying…" } else { "Retry" }),
@@ -615,9 +615,7 @@ fn failure_banner(failure: &LibraryBrowseFailure, retry_busy: bool) -> Element<'
     .align_y(Alignment::Center),
   )
   .padding([6, 10])
-  .style(|theme, status| {
-    jellypilot_ui::theme::button_variant(theme, status, ButtonVariant::Outlined)
-  });
+  .style(|theme, status| jellypilot_ui::theme::button_variant(theme, status, ButtonVariant::Tonal));
   let retry = if let Some(message) = retry_action(failure.retryable, retry_busy) {
     retry.on_press(message)
   } else {
@@ -631,20 +629,13 @@ fn failure_banner(failure: &LibraryBrowseFailure, retry_busy: bool) -> Element<'
   )
   .padding(TOKENS.spacing.s4)
   .style(move |_theme| container::Style {
-    background: Some(iced::Background::Color(Color {
-      a: 0.90,
-      ..colors.errorContainer
-    })),
+    background: Some(iced::Background::Color(colors.errorContainer)),
     text_color: Some(colors.onErrorContainer),
     border: iced::Border {
-      color: Color {
-        a: 0.40,
-        ..colors.error
-      },
-      width: 1.0,
-      radius: TOKENS.radii.xl.into(),
+      color: Color::TRANSPARENT,
+      width: 0.0,
+      radius: TOKENS.radii.md.into(),
     },
-    shadow: TOKENS.shadows.x2l.iced(),
     ..container::Style::default()
   });
 

@@ -20,9 +20,7 @@ use iced::border::Radius;
 use iced::widget::{container, space, Container};
 use iced::{Background, Border, Color, Length, Shadow, Theme};
 
-use crate::theme;
 use crate::tokens::TOKENS;
-use crate::variants::SurfaceVariant;
 
 /// Interpolates between two surface tones for the breathing pulse at a
 /// normalized `phase` in `[0.0, 1.0]`.
@@ -48,9 +46,9 @@ pub fn pulse_color(phase: f32, dim: Color, bright: Color) -> Color {
 
 /// Builds a breathing placeholder block sized to `width` × `height`.
 ///
-/// When `reduced_motion` is set or `phase` is non-finite this renders the same
-/// static Elevated surface as the pre-animation skeleton boxes. Otherwise the
-/// Elevated background color alpha is modulated by [`pulse_scale`].
+/// When `reduced_motion` is set or `phase` is non-finite this renders a
+/// static `surfaceContainerLow` block. Otherwise the background breathes
+/// between `surfaceContainerLow` and `surfaceContainerHigh`.
 pub fn skeleton_block<'a, Message: 'a>(
     width: impl Into<Length>,
     height: impl Into<Length>,
@@ -81,20 +79,31 @@ pub fn skeleton_panel<'a, Message: 'a>(
         .style(move |_theme: &Theme| skeleton_panel_style(base, radius, phase, reduced_motion))
 }
 
-/// Resolves the skeleton block container style: static Elevated surface under reduced
-/// motion or non-finite phase, tone-breathing Elevated background otherwise.
-fn skeleton_style(theme: &Theme, phase: f32, reduced_motion: bool) -> container::Style {
-    let mut style = theme::surface_variant(theme, SurfaceVariant::Elevated);
-    if reduced_motion || !phase.is_finite() {
-        return style;
-    }
+/// Resolves the skeleton block container style: a static `surfaceContainerLow`
+/// block under reduced motion or non-finite phase, tone-breathing between
+/// `surfaceContainerLow` and `surfaceContainerHigh` otherwise. Skeletons are
+/// flat: `lg` radius, no border, no shadow.
+fn skeleton_style(_theme: &Theme, phase: f32, reduced_motion: bool) -> container::Style {
+    let background = if reduced_motion || !phase.is_finite() {
+        TOKENS.colors.surfaceContainerLow
+    } else {
+        pulse_color(
+            phase,
+            TOKENS.colors.surfaceContainerLow,
+            TOKENS.colors.surfaceContainerHigh,
+        )
+    };
 
-    style.background = Some(Background::Color(pulse_color(
-        phase,
-        TOKENS.colors.surfaceContainerLow,
-        TOKENS.colors.surfaceContainerHigh,
-    )));
-    style
+    container::Style {
+        background: Some(Background::Color(background)),
+        border: Border {
+            radius: Radius::from(TOKENS.radii.lg),
+            color: Color::TRANSPARENT,
+            width: 0.0,
+        },
+        shadow: Shadow::default(),
+        ..container::Style::default()
+    }
 }
 
 /// Resolves the skeleton panel container style: static base color under reduced
@@ -187,52 +196,69 @@ mod tests {
         }
     }
 
+    fn static_block_style(theme: &Theme) -> container::Style {
+        skeleton_style(theme, 0.0, true)
+    }
+
     #[test]
-    fn reduced_motion_renders_the_static_elevated_surface() {
+    fn reduced_motion_renders_the_static_low_surface() {
         let theme = crate::theme::theme();
-        let elevated = theme::surface_variant(&theme, SurfaceVariant::Elevated);
+        let static_style = static_block_style(&theme);
 
         for phase in [0.0, 0.25, 0.5, 0.75, 1.0, f32::NAN, f32::INFINITY] {
             let style = skeleton_style(&theme, phase, true);
-            assert_eq!(style.background, elevated.background);
-            assert_eq!(style.border, elevated.border);
-            assert_eq!(style.shadow, elevated.shadow);
+            assert_eq!(style.background, static_style.background);
+            assert_eq!(style.border, static_style.border);
+            assert_eq!(style.shadow, static_style.shadow);
         }
+        assert_eq!(
+            static_style.background,
+            Some(Background::Color(TOKENS.colors.surfaceContainerLow))
+        );
     }
 
     #[test]
     fn non_finite_phase_falls_back_to_the_static_surface() {
         let theme = crate::theme::theme();
-        let elevated = theme::surface_variant(&theme, SurfaceVariant::Elevated);
+        let static_style = static_block_style(&theme);
 
         for non_finite in [f32::NAN, f32::INFINITY, f32::NEG_INFINITY] {
             let style = skeleton_style(&theme, non_finite, false);
-            assert_eq!(style.background, elevated.background);
-            assert_eq!(style.border, elevated.border);
-            assert_eq!(style.shadow, elevated.shadow);
+            assert_eq!(style.background, static_style.background);
+            assert_eq!(style.border, static_style.border);
+            assert_eq!(style.shadow, static_style.shadow);
         }
     }
 
     #[test]
     fn active_skeleton_block_breathes_between_surface_tones() {
         let theme = crate::theme::theme();
-        let elevated = theme::surface_variant(&theme, SurfaceVariant::Elevated);
+        let static_style = static_block_style(&theme);
 
         let style_mid = skeleton_style(&theme, 0.5, false);
         let Some(Background::Color(mid_color)) = style_mid.background else {
             panic!("expected background color");
         };
         assert_color_near(mid_color, TOKENS.colors.surfaceContainerHigh);
-        assert_eq!(style_mid.border, elevated.border);
-        assert_eq!(style_mid.shadow, elevated.shadow);
+        assert_eq!(style_mid.border, static_style.border);
+        assert_eq!(style_mid.shadow, static_style.shadow);
 
         let style_start = skeleton_style(&theme, 0.0, false);
         assert_eq!(
             style_start.background,
             Some(Background::Color(TOKENS.colors.surfaceContainerLow))
         );
-        assert_eq!(style_start.border, elevated.border);
-        assert_eq!(style_start.shadow, elevated.shadow);
+        assert_eq!(style_start.border, static_style.border);
+        assert_eq!(style_start.shadow, static_style.shadow);
+    }
+
+    #[test]
+    fn skeleton_blocks_are_flat_with_lg_radius() {
+        let theme = crate::theme::theme();
+        let style = static_block_style(&theme);
+        assert_eq!(style.border.width, 0.0);
+        assert_eq!(style.border.radius, Radius::from(TOKENS.radii.lg));
+        assert_eq!(style.shadow, Shadow::default());
     }
     #[test]
     fn reduced_motion_panel_renders_static_base() {

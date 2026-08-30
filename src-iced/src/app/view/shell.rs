@@ -51,20 +51,32 @@ pub fn view(state: &State) -> Element<'_, Message> {
         .align_x(Alignment::End),
     );
   }
-  let body = row![sidebar, content_stack]
+  // One of the two shell hairlines: 1px between the sidebar and the content.
+  let sidebar_divider = container(space::vertical())
+    .width(1.0)
+    .height(Fill)
+    .style(|_| iced::widget::container::Style::default().background(TOKENS.colors.outlineVariant));
+  let body = row![sidebar, sidebar_divider, content_stack]
     .spacing(TOKENS.spacing.s4)
     .width(Fill)
     .height(Fill);
   let mut shell = Column::new().spacing(TOKENS.spacing.s3).push(body);
   if let Some(player_bar) = player::bar(state) {
-    shell = shell.push(player_bar);
+    // The second shell hairline: 1px above the player bar.
+    let player_divider = container(space::horizontal())
+      .width(Fill)
+      .height(1.0)
+      .style(|_| {
+        iced::widget::container::Style::default().background(TOKENS.colors.outlineVariant)
+      });
+    shell = shell.push(player_divider).push(player_bar);
   }
   let shell = shell.padding(TOKENS.spacing.s3).width(Fill).height(Fill);
 
   container(shell)
     .width(Fill)
     .height(Fill)
-    .style(|theme| jellypilot_ui::theme::surface_variant(theme, SurfaceVariant::Filled))
+    .style(|theme| jellypilot_ui::theme::surface_variant(theme, SurfaceVariant::Canvas))
     .into()
 }
 fn visible_toast(state: &State) -> Option<&ToastNotice> {
@@ -82,20 +94,18 @@ pub fn visible_notice(state: &State) -> Option<&str> {
 
 fn toast_view(toast: &ToastNotice) -> Element<'_, Message> {
   let colors = TOKENS.colors;
-  let (icon, icon_color, text_color, bg_color, border_color) = match toast.level {
+  let (icon, icon_color, text_color, bg_color) = match toast.level {
     NoticeLevel::Error => (
       Icon::Warning,
       colors.error,
       colors.onErrorContainer,
-      with_alpha(colors.errorContainer, 0.90),
-      with_alpha(colors.error, 0.40),
+      colors.errorContainer,
     ),
     NoticeLevel::Warning => (
       Icon::Warning,
       colors.warning,
       colors.onWarningContainer,
-      with_alpha(colors.warningContainer, 0.90),
-      with_alpha(colors.warning, 0.40),
+      colors.warningContainer,
     ),
   };
 
@@ -139,18 +149,14 @@ fn toast_view(toast: &ToastNotice) -> Element<'_, Message> {
       background: Some(iced::Background::Color(bg_color)),
       text_color: Some(text_color),
       border: iced::Border {
-        color: border_color,
-        width: 1.0,
-        radius: TOKENS.radii.xl.into(),
+        color: Color::TRANSPARENT,
+        width: 0.0,
+        radius: TOKENS.radii.lg.into(),
       },
-      shadow: TOKENS.shadows.x2l.iced(),
+      shadow: TOKENS.shadows.raised_high.iced(),
       ..container::Style::default()
     })
     .into()
-}
-
-fn with_alpha(color: Color, alpha: f32) -> Color {
-  Color { a: alpha, ..color }
 }
 
 fn sidebar(
@@ -192,13 +198,11 @@ fn sidebar_full(
   let search_button = button(icon_for_variant(
     Icon::Search,
     IconSize::Sm,
-    ButtonVariant::Outlined,
+    ButtonVariant::Tonal,
   ))
   .padding([7, 11])
   .on_press(Message::Browse(BrowseMessage::SearchSubmitted))
-  .style(|theme, status| {
-    jellypilot_ui::theme::button_variant(theme, status, ButtonVariant::Outlined)
-  });
+  .style(|theme, status| jellypilot_ui::theme::button_variant(theme, status, ButtonVariant::Tonal));
   let search_slot = row![
     search_input,
     tooltip(search_button, "Search", TooltipOptions::default()),
@@ -264,7 +268,7 @@ fn sidebar_full(
   container(content)
     .padding(TOKENS.spacing.s4)
     .height(Fill)
-    .style(|theme| jellypilot_ui::theme::surface_variant(theme, SurfaceVariant::Elevated))
+    .style(|theme| jellypilot_ui::theme::surface_variant(theme, SurfaceVariant::Block))
 }
 
 fn sidebar_compact(state: &State) -> container::Container<'_, Message> {
@@ -315,7 +319,7 @@ fn sidebar_compact(state: &State) -> container::Container<'_, Message> {
   container(content)
     .padding(TOKENS.spacing.s4)
     .height(Fill)
-    .style(|theme| jellypilot_ui::theme::surface_variant(theme, SurfaceVariant::Elevated))
+    .style(|theme| jellypilot_ui::theme::surface_variant(theme, SurfaceVariant::Block))
 }
 
 fn destination_button<'a>(

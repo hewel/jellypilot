@@ -78,10 +78,10 @@ fn auto_scroll() -> scrollable::AutoScroll {
         background: Background::Color(TOKENS.colors.surface),
         border: Border {
             radius: TOKENS.radii.full.into(),
-            color: TOKENS.colors.outlineVariant,
-            width: 1.0,
+            color: Color::TRANSPARENT,
+            width: 0.0,
         },
-        shadow: TOKENS.shadows.sm.iced(),
+        shadow: TOKENS.shadows.raised.iced(),
         icon: TOKENS.colors.onSurfaceVariant,
     }
 }
