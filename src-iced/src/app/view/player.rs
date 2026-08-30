@@ -316,15 +316,7 @@ fn audio_popover(state: &State) -> Element<'_, Message> {
             .width(Fill)
             .on_press(Message::Playback(PlaybackMessage::AudioTrackSelected(id)))
             .style(move |theme, status| {
-              jellypilot_ui::theme::button_variant(
-                theme,
-                status,
-                if active {
-                  ButtonVariant::Secondary
-                } else {
-                  ButtonVariant::Text
-                },
-              )
+              jellypilot_ui::theme::button_variant(theme, status, ButtonVariant::Text)
             }),
           );
         }
@@ -408,15 +400,7 @@ fn subtitle_popover(state: &State) -> Element<'_, Message> {
             choice.id,
           )))
           .style(move |theme, status| {
-            jellypilot_ui::theme::button_variant(
-              theme,
-              status,
-              if active {
-                ButtonVariant::Secondary
-              } else {
-                ButtonVariant::Text
-              },
-            )
+            jellypilot_ui::theme::button_variant(theme, status, ButtonVariant::Text)
           }),
         );
       }

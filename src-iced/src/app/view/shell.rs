@@ -58,11 +58,9 @@ pub fn view(state: &State) -> Element<'_, Message> {
     .width(HAIRLINE_WIDTH)
     .height(Fill)
     .style(|_| iced::widget::container::Style::default().background(TOKENS.colors.outlineVariant));
-  let body = row![sidebar, sidebar_divider, content_stack]
-    .spacing(0.0)
-    .width(Fill)
-    .height(Fill);
-  let mut shell = Column::new().spacing(0.0).push(body);
+  // The sidebar docks full-height so its bottom (Settings, user) never moves
+  // when the player bar appears; the bar docks under the content region only.
+  let mut right = Column::new().spacing(0.0).push(content_stack);
   if let Some(player_bar) = player::bar(state) {
     // The second shell hairline: 1px above the player bar.
     let player_divider = container(space::horizontal())
@@ -71,11 +69,14 @@ pub fn view(state: &State) -> Element<'_, Message> {
       .style(|_| {
         iced::widget::container::Style::default().background(TOKENS.colors.outlineVariant)
       });
-    shell = shell.push(player_divider).push(player_bar);
+    right = right.push(player_divider).push(player_bar);
   }
-  let shell = shell.width(Fill).height(Fill);
+  let body = row![sidebar, sidebar_divider, right]
+    .spacing(0.0)
+    .width(Fill)
+    .height(Fill);
 
-  container(shell)
+  container(body)
     .width(Fill)
     .height(Fill)
     .style(|theme| jellypilot_ui::theme::surface_variant(theme, SurfaceVariant::Canvas))

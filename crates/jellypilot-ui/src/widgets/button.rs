@@ -26,7 +26,7 @@ pub fn style(_theme: &Theme, variant: ButtonVariant, status: button::Status) -> 
             TOKENS.shadows.none.iced(),
         ),
         ButtonVariant::Tonal => (
-            None,
+            Some(colors.surfaceContainerLow),
             colors.onSurface,
             Color::TRANSPARENT,
             0.0,
@@ -216,14 +216,19 @@ mod tests {
     }
 
     #[test]
-    fn tonal_fills_surface_container_high_only_on_hover() {
+    fn tonal_rests_on_container_low_and_lifts_to_high_on_hover() {
         use crate::variants::ButtonVariant;
         use iced::widget::button::Status;
         use iced::Background;
 
         let theme = crate::theme::theme();
         let idle = super::style(&theme, ButtonVariant::Tonal, Status::Active);
-        assert_eq!(idle.background, None);
+        assert_eq!(
+            idle.background,
+            Some(Background::Color(
+                crate::tokens::TOKENS.colors.surfaceContainerLow
+            ))
+        );
         assert_eq!(idle.border.width, 0.0);
 
         let hovered = super::style(&theme, ButtonVariant::Tonal, Status::Hovered);
