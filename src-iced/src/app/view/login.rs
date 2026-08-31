@@ -327,7 +327,7 @@ fn saved_profiles(state: &State) -> Element<'_, Message> {
     let is_busy = state.login.flow.busy_profile.as_ref() == Some(&key);
     let restore = button(
       row![
-        icon_for_variant_disabled(Icon::User, IconSize::Sm, ButtonVariant::Secondary, is_busy),
+        icon_for_variant_disabled(Icon::User, IconSize::Sm, ButtonVariant::Tonal, is_busy),
         text(if is_busy {
           "Checking saved sign-in…".to_owned()
         } else {
@@ -339,7 +339,7 @@ fn saved_profiles(state: &State) -> Element<'_, Message> {
     )
     .padding([6, 12])
     .style(|theme, status| {
-      jellypilot_ui::theme::button_variant(theme, status, ButtonVariant::Secondary)
+      jellypilot_ui::theme::button_variant(theme, status, ButtonVariant::Tonal)
     });
     let restore = if is_busy {
       restore

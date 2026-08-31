@@ -63,7 +63,8 @@ Nested rounding follows the concentric rule: inner radius = parent radius − pa
 
 Variants (`ButtonVariant`, styled by `widgets/button.rs`): `Primary`, `Secondary`, `Tonal`, `TonalActive`, `Text`, `Icon`. All use radius `md` and cast no shadow.
 
-- **Tonal** is the default quiet control (the old Outlined role): transparent at rest, `surfaceContainerHigh` fill on hover, no border.
+- **Secondary** is the ghost chip — filled `secondaryContainer` with a 1px `outlineVariant` border. It exists ONLY as the active state of a switch group (sidebar destinations, three-way selectors like login method or Intro Mode). Never use it for actions; actions are Tonal or Primary.
+- **Tonal** is the default quiet control: quiet `surfaceContainerLow` fill at rest, `surfaceContainerHigh` on hover, no border.
 - **TonalActive** is the selected/on state of a tonal control: always filled with `surfaceContainerHigh`. Toggle call sites use the `TonalActive`/`Tonal` pair.
 - **Primary** keeps its 10% hover brightness lift; one primary action per section or state.
 
