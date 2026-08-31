@@ -88,7 +88,7 @@ impl From<f32> for IconSize {
     }
 }
 
-const ICON_COUNT: usize = 49;
+const ICON_COUNT: usize = 51;
 static ICON_HANDLES: LazyLock<[Handle; ICON_COUNT]> = LazyLock::new(|| {
     let mut handles = std::array::from_fn(|_| Handle::from_memory(&[]));
     for icon in Icon::all() {
@@ -158,6 +158,9 @@ pub enum Icon {
     Lock,
     User,
     UserCheck,
+    // App mode switching
+    PictureInPicture,
+    ArrowsMaximize,
 }
 
 impl Icon {
@@ -218,6 +221,8 @@ impl Icon {
             Self::Lock => include_bytes!("../assets/icons/lock.svg"),
             Self::User => include_bytes!("../assets/icons/user.svg"),
             Self::UserCheck => include_bytes!("../assets/icons/user-check.svg"),
+            Self::PictureInPicture => include_bytes!("../assets/icons/picture-in-picture.svg"),
+            Self::ArrowsMaximize => include_bytes!("../assets/icons/arrows-maximize.svg"),
         }
     }
 
@@ -299,6 +304,8 @@ impl Icon {
             Self::Lock,
             Self::User,
             Self::UserCheck,
+            Self::PictureInPicture,
+            Self::ArrowsMaximize,
         ]
     }
 }

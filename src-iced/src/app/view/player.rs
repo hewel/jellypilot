@@ -1,9 +1,10 @@
 use std::fmt;
 
-use crate::app::message::{HomeMessage, Message, PlaybackMessage};
+use crate::app::message::{HomeMessage, Message, PlaybackMessage, SettingsMessage};
 use crate::app::state::{ArtworkCellState, Destination, State};
 use iced::widget::{button, column, container, row, slider, space, text, Column};
 use iced::{Alignment, ContentFit, Element, Fill, Length};
+use jellypilot_core::config::AppMode;
 use jellypilot_mpv::playback::{Playable, TrackInfo};
 use jellypilot_mpv::playback_session::{
   AdjacentAvailability, AdjacentDirection, NowPlayingView, PlaybackIntent, TracksView,
@@ -217,9 +218,28 @@ pub fn full(state: &State) -> Element<'_, Message> {
   .style(|theme, status| jellypilot_ui::theme::button_variant(theme, status, ButtonVariant::Tonal));
   let header = row![
     space::horizontal(),
+    tooltip(
+      button(icon_for_variant(
+        Icon::ArrowsMaximize,
+        IconSize::Md,
+        ButtonVariant::Tonal
+      ))
+      .padding([6, 10])
+      .on_press(Message::Settings(SettingsMessage::AppModeSelected(
+        AppMode::Full
+      )))
+      .style(|theme, status| jellypilot_ui::theme::button_variant(
+        theme,
+        status,
+        ButtonVariant::Tonal
+      )),
+      "Full library mode",
+      TooltipOptions::default(),
+    ),
     tooltip(settings_button, "Settings", TooltipOptions::default()),
   ]
   .width(Fill)
+  .spacing(TOKENS.spacing.s2)
   .align_y(Alignment::Center);
 
   let body: Element<'_, Message> = match state.playback.view.now_playing.as_ref() {

@@ -1,5 +1,5 @@
 use super::{browse, detail, home, player, settings};
-use crate::app::message::{BrowseMessage, HomeMessage, Message};
+use crate::app::message::{BrowseMessage, HomeMessage, Message, SettingsMessage};
 use crate::app::state::{Destination, NoticeLevel, State, ToastNotice};
 use iced::widget::{button, column, container, row, space, stack, text, text_input, Column};
 use iced::{Alignment, Color, Element, Fill, Length};
@@ -297,12 +297,34 @@ fn sidebar_full(
     .width(Fill);
   let bottom = column![
     connection_summary(state),
-    destination_button(
-      Icon::Settings,
-      "Settings",
-      Destination::Settings,
-      state.shell.destination == Destination::Settings,
-    ),
+    row![
+      destination_button(
+        Icon::Settings,
+        "Settings",
+        Destination::Settings,
+        state.shell.destination == Destination::Settings,
+      ),
+      tooltip(
+        button(icon_for_variant(
+          Icon::PictureInPicture,
+          IconSize::Md,
+          ButtonVariant::Tonal,
+        ))
+        .padding([7, 12])
+        .on_press(Message::Settings(SettingsMessage::AppModeSelected(
+          AppMode::ControlOnly,
+        )))
+        .style(|theme, status| jellypilot_ui::theme::button_variant(
+          theme,
+          status,
+          ButtonVariant::Tonal
+        )),
+        "Control-only mode",
+        TooltipOptions::default(),
+      ),
+    ]
+    .spacing(TOKENS.spacing.s2)
+    .align_y(Alignment::Center),
   ]
   .spacing(TOKENS.spacing.s3);
   let content = column![main, space::vertical(), bottom]
@@ -350,6 +372,24 @@ fn sidebar_compact(state: &State) -> container::Container<'_, Message> {
       "Settings",
       Destination::Settings,
       state.shell.destination == Destination::Settings,
+    ),
+    tooltip(
+      button(icon_for_variant(
+        Icon::PictureInPicture,
+        IconSize::Md,
+        ButtonVariant::Tonal,
+      ))
+      .padding([7, 12])
+      .on_press(Message::Settings(SettingsMessage::AppModeSelected(
+        AppMode::ControlOnly,
+      )))
+      .style(|theme, status| jellypilot_ui::theme::button_variant(
+        theme,
+        status,
+        ButtonVariant::Tonal,
+      )),
+      "Control-only mode",
+      TooltipOptions::default(),
     ),
   ]
   .spacing(TOKENS.spacing.s3)
