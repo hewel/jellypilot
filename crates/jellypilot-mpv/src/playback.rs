@@ -9,6 +9,7 @@ use std::time::{Duration, Instant};
 
 use crate::{
   collect_player_state_sample, find_mpv, has_mpv_option, MpvClient, MpvEvent, PlayerState,
+  PropertyValue,
 };
 use jellypilot_media_server::{
   ticks_to_seconds, JellyfinClient, MediaItem, MediaServerProvider, MediaSource, MediaStream,
@@ -598,6 +599,10 @@ pub struct PlaybackController {
   last_progress_report_at: Option<Instant>,
   load_event_boundary: LoadEventBoundary,
   pending_client_messages: Vec<String>,
+  /// Fullscreen flag captured when a playback-owned process ended, applied
+  /// once to the next process a play starts, then cleared. Manual stops keep
+  /// no carry-over: an explicit stop resets the window state.
+  pending_fullscreen: Option<bool>,
 }
 
 impl PlaybackController {
@@ -656,6 +661,7 @@ impl PlaybackController {
       last_progress_report_at: None,
       load_event_boundary: LoadEventBoundary::Settled,
       pending_client_messages: Vec::new(),
+      pending_fullscreen: None,
     }
   }
 
@@ -998,6 +1004,15 @@ impl PlaybackController {
       return Err(PlaybackError::MpvStartFailed);
     }
 
+    // A playback-owned process takes its window state with it on teardown;
+    // restore the captured fullscreen flag before loading so the replacement
+    // window opens in the same state the user left.
+    if let Some(fullscreen) = self.pending_fullscreen.take() {
+      if self.mpv.set_fullscreen(fullscreen).await.is_err() {
+        log::warn!("could not restore MPV fullscreen state");
+      }
+    }
+
     let file_options = direct_playback_file_options(
       &resolved.active.now_playing.play_method,
       &self.configured_mpv_args,
@@ -1230,6 +1245,16 @@ impl PlaybackController {
     self.active = None;
   }
 
+  /// Snapshot the outgoing process's fullscreen flag so the next process a
+  /// play starts can restore the window state. A dead or disconnected
+  /// process yields `None`, leaving the next start at MPV's own default.
+  async fn capture_fullscreen(&self) -> Option<bool> {
+    match self.mpv.get_property("fullscreen").await {
+      Ok(PropertyValue::Bool(fullscreen)) => Some(fullscreen),
+      _ => None,
+    }
+  }
+
   fn take_terminal_end_reason(&mut self) -> Option<PlaybackEndReason> {
     let events = self.mpv.events()?;
     let mut reason = None;
@@ -1257,6 +1282,7 @@ impl PlaybackController {
     }
 
     let active = self.active.clone();
+    self.pending_fullscreen = self.capture_fullscreen().await;
     self.last_progress_report_at = None;
     self.load_event_boundary = LoadEventBoundary::Settled;
     self.active_transport_matches_mpv = false;
@@ -1275,6 +1301,7 @@ impl PlaybackController {
 
   async fn finish_ended_playback(&mut self, reason: PlaybackEndReason) -> PlaybackRefreshOutcome {
     let active = self.active.clone();
+    self.pending_fullscreen = self.capture_fullscreen().await;
     self.last_progress_report_at = None;
     self.load_event_boundary = LoadEventBoundary::Settled;
     self.active_transport_matches_mpv = false;
@@ -1996,6 +2023,7 @@ mod tests {
     duration: f64,
     volume: f64,
     muted: bool,
+    fullscreen: bool,
     audio_track: i64,
     subtitle_track: Option<i64>,
   }
@@ -2008,6 +2036,7 @@ mod tests {
         duration: 1_500.0,
         volume: 100.0,
         muted: false,
+        fullscreen: false,
         audio_track: 1,
         subtitle_track: None,
       }
@@ -2023,7 +2052,12 @@ mod tests {
 
   impl InMemoryMpv {
     async fn new() -> Self {
-      let client = MpvClient::new(None);
+      Self::connect(MpvClient::new(None)).await
+    }
+
+    /// Install a fresh in-memory IPC connection on the client, standing in for
+    /// an MPV process listening on that connection.
+    async fn connect(client: MpvClient) -> Self {
       let (client_stream, peer_stream) = duplex(128 * 1024);
       let (reader, writer) = tokio::io::split(client_stream);
       let transport = MpvClient::from_io_for_test(reader, writer)
@@ -2081,6 +2115,12 @@ mod tests {
       }
     }
 
+    /// Simulate the controlled process being replaced: the controller closed
+    /// the old connection on teardown, so install a fresh one.
+    async fn respawn(&self) -> Self {
+      Self::connect(self.client.clone()).await
+    }
+
     fn received_commands(&self) -> Vec<Vec<serde_json::Value>> {
       self
         .received
@@ -2132,6 +2172,7 @@ mod tests {
           Some("pause") => state.paused = value.as_bool().unwrap_or(state.paused),
           Some("volume") => state.volume = value.as_f64().unwrap_or(state.volume),
           Some("mute") => state.muted = value.as_bool().unwrap_or(state.muted),
+          Some("fullscreen") => state.fullscreen = value.as_bool().unwrap_or(state.fullscreen),
           Some("aid") => state.audio_track = value.as_i64().unwrap_or(state.audio_track),
           Some("sid") => state.subtitle_track = value.as_i64(),
           _ => {}
@@ -2151,6 +2192,7 @@ mod tests {
         Some("duration") => serde_json::json!(state.duration),
         Some("volume") => serde_json::json!(state.volume),
         Some("mute") => serde_json::json!(state.muted),
+        Some("fullscreen") => serde_json::json!(state.fullscreen),
         Some("track-list") => serde_json::json!([
           {"id": 1, "type": "audio", "title": "English", "selected": state.audio_track == 1},
           {"id": 2, "type": "audio", "title": "Commentary", "selected": state.audio_track == 2},
@@ -2895,6 +2937,81 @@ mod tests {
           true,
           vec!["item-1".to_owned()],
         )
+      );
+    });
+  }
+
+  #[test]
+  fn ended_playback_restores_fullscreen_on_the_next_process() {
+    run_async(async {
+      let server = Arc::new(MockPlaybackServer::new());
+      let (mut controller, mpv) = controller_harness(server).await;
+
+      let _ = controller
+        .play(
+          library_item("Episode").into(),
+          PlaybackStartPosition::Beginning,
+        )
+        .await
+        .expect("playback should start");
+      mpv
+        .client
+        .set_fullscreen(true)
+        .await
+        .expect("fullscreen should be settable");
+      mpv.emit_eof().await;
+      let refreshed = controller.refresh().await;
+      assert_eq!(
+        refreshed.state,
+        PlaybackRefreshState::Ended(PlaybackEndReason::EndOfFile)
+      );
+
+      let next_process = mpv.respawn().await;
+      let _ = controller
+        .play(
+          library_item("Episode").into(),
+          PlaybackStartPosition::Beginning,
+        )
+        .await
+        .expect("the next episode should start");
+
+      let commands = next_process.received_commands();
+      let fullscreen_at = commands.iter().position(|command| {
+        command.first().and_then(serde_json::Value::as_str) == Some("set_property")
+          && command.get(1).and_then(serde_json::Value::as_str) == Some("fullscreen")
+          && command.get(2).and_then(serde_json::Value::as_bool) == Some(true)
+      });
+      let loadfile_at = commands.iter().position(|command| {
+        command.first().and_then(serde_json::Value::as_str) == Some("loadfile")
+      });
+      assert!(
+        matches!((fullscreen_at, loadfile_at), (Some(fullscreen), Some(load)) if fullscreen < load),
+        "fullscreen restore must precede loadfile, got {commands:?}"
+      );
+    });
+  }
+
+  #[test]
+  fn play_without_a_previous_end_leaves_fullscreen_untouched() {
+    run_async(async {
+      let server = Arc::new(MockPlaybackServer::new());
+      let (mut controller, mpv) = controller_harness(server).await;
+
+      let _ = controller
+        .play(
+          library_item("Episode").into(),
+          PlaybackStartPosition::Beginning,
+        )
+        .await
+        .expect("playback should start");
+
+      let touched_fullscreen = mpv.received_commands().iter().any(|command| {
+        command.first().and_then(serde_json::Value::as_str) == Some("set_property")
+          && command.get(1).and_then(serde_json::Value::as_str) == Some("fullscreen")
+      });
+      assert!(
+        !touched_fullscreen,
+        "a fresh play must not override MPV's own fullscreen default"
       );
     });
   }

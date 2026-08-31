@@ -93,6 +93,15 @@ impl MpvCommand {
     Self::new(vec!["set_property".into(), "mute".into(), muted.into()])
   }
 
+  /// Set fullscreen state.
+  pub fn set_fullscreen(fullscreen: bool) -> Self {
+    Self::new(vec![
+      "set_property".into(),
+      "fullscreen".into(),
+      fullscreen.into(),
+    ])
+  }
+
   /// Set audio track by ID.
   pub fn set_audio_track(id: i64) -> Self {
     Self::new(vec!["set_property".into(), "aid".into(), id.into()])

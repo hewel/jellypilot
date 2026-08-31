@@ -410,6 +410,12 @@ impl MpvClient {
     Ok(())
   }
 
+  /// Set fullscreen state.
+  pub async fn set_fullscreen(&self, fullscreen: bool) -> Result<(), MpvError> {
+    self.send(MpvCommand::set_fullscreen(fullscreen)).await?;
+    Ok(())
+  }
+
   /// Set audio track by ID.
   pub async fn set_audio_track(&self, id: i64) -> Result<(), MpvError> {
     self.send(MpvCommand::set_audio_track(id)).await?;
