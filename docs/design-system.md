@@ -67,6 +67,7 @@ Variants (`ButtonVariant`, styled by `widgets/button.rs`): `Primary`, `Secondary
 - **Tonal** is the default quiet control: quiet `surfaceContainerLow` fill at rest, `surfaceContainerHigh` on hover, no border.
 - **TonalActive** is the selected/on state of a tonal control: always filled with `surfaceContainerHigh`. Toggle call sites use the `TonalActive`/`Tonal` pair.
 - **Primary** keeps its 10% hover brightness lift; one primary action per section or state.
+- **Text** is the ghost vocabulary: tinted `secondary` text on a transparent background. It belongs to navigation-like, switch-group contexts (sidebar destinations, selector rows) where an indigo readout is the "not selected" state. Actions never use Text — they are Tonal or Primary.
 
 ## Fields, Badges, Overlays
 

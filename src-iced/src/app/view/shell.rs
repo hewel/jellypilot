@@ -461,12 +461,12 @@ fn settings_modal(state: &State) -> Element<'_, Message> {
 }
 
 fn settings_button<'a>() -> Element<'a, Message> {
-  // Opening the modal is an action, not a switch state — never ghost (design
-  // system: Secondary is switch-group-only); the full-fill modal hides this
-  // button while open, so there is no active state to show.
+  // Opening the modal is an action, not navigation — it does not wear the
+  // switch group's ghost vocabulary (tinted text on transparent); Tonal keeps
+  // it neutral and quiet beside the destinations.
   button(
     row![
-      icon_for_variant(Icon::Settings, IconSize::Md, ButtonVariant::Text),
+      icon_for_variant(Icon::Settings, IconSize::Md, ButtonVariant::Tonal),
       text("Settings").size(14).width(Fill),
     ]
     .spacing(TOKENS.spacing.s2_5)
@@ -476,18 +476,18 @@ fn settings_button<'a>() -> Element<'a, Message> {
   .width(Fill)
   .on_press(Message::Settings(SettingsMessage::Open))
   .style(move |theme, status| {
-    jellypilot_ui::theme::button_variant(theme, status, ButtonVariant::Text)
+    jellypilot_ui::theme::button_variant(theme, status, ButtonVariant::Tonal)
   })
   .into()
 }
 
 fn compact_settings_button<'a>() -> Element<'a, Message> {
-  // Action, not a switch state — always the quiet Text variant.
+  // Action, not navigation — neutral Tonal, never the ghost vocabulary.
   let btn = button(
     container(icon_for_variant(
       Icon::Settings,
       IconSize::Md,
-      ButtonVariant::Text,
+      ButtonVariant::Tonal,
     ))
     .width(Fill)
     .align_x(Alignment::Center),
@@ -496,7 +496,7 @@ fn compact_settings_button<'a>() -> Element<'a, Message> {
   .width(Fill)
   .on_press(Message::Settings(SettingsMessage::Open))
   .style(move |theme, status| {
-    jellypilot_ui::theme::button_variant(theme, status, ButtonVariant::Text)
+    jellypilot_ui::theme::button_variant(theme, status, ButtonVariant::Tonal)
   });
 
   tooltip(btn, "Settings", TooltipOptions::default())
