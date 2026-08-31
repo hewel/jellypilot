@@ -320,7 +320,7 @@ fn sidebar_full(
   let bottom = column![
     connection_summary(state),
     row![
-      settings_button(state.shell.settings_open),
+      settings_button(),
       tooltip(
         button(icon_for_variant(
           Icon::PictureInPicture,
@@ -384,7 +384,7 @@ fn sidebar_compact(state: &State) -> container::Container<'_, Message> {
 
   let bottom = column![
     compact_connection_status(state),
-    compact_settings_button(state.shell.settings_open),
+    compact_settings_button(),
     tooltip(
       button(icon_for_variant(
         Icon::PictureInPicture,
@@ -460,15 +460,13 @@ fn settings_modal(state: &State) -> Element<'_, Message> {
     .into()
 }
 
-fn settings_button<'a>(active: bool) -> Element<'a, Message> {
-  let variant = if active {
-    ButtonVariant::Secondary
-  } else {
-    ButtonVariant::Text
-  };
+fn settings_button<'a>() -> Element<'a, Message> {
+  // Opening the modal is an action, not a switch state — never ghost (design
+  // system: Secondary is switch-group-only); the full-fill modal hides this
+  // button while open, so there is no active state to show.
   button(
     row![
-      icon_for_variant(Icon::Settings, IconSize::Md, variant),
+      icon_for_variant(Icon::Settings, IconSize::Md, ButtonVariant::Text),
       text("Settings").size(14).width(Fill),
     ]
     .spacing(TOKENS.spacing.s2_5)
@@ -477,25 +475,29 @@ fn settings_button<'a>(active: bool) -> Element<'a, Message> {
   .padding([7, 12])
   .width(Fill)
   .on_press(Message::Settings(SettingsMessage::Open))
-  .style(move |theme, status| jellypilot_ui::theme::button_variant(theme, status, variant))
+  .style(move |theme, status| {
+    jellypilot_ui::theme::button_variant(theme, status, ButtonVariant::Text)
+  })
   .into()
 }
 
-fn compact_settings_button<'a>(active: bool) -> Element<'a, Message> {
-  let variant = if active {
-    ButtonVariant::Secondary
-  } else {
-    ButtonVariant::Text
-  };
+fn compact_settings_button<'a>() -> Element<'a, Message> {
+  // Action, not a switch state — always the quiet Text variant.
   let btn = button(
-    container(icon_for_variant(Icon::Settings, IconSize::Md, variant))
-      .width(Fill)
-      .align_x(Alignment::Center),
+    container(icon_for_variant(
+      Icon::Settings,
+      IconSize::Md,
+      ButtonVariant::Text,
+    ))
+    .width(Fill)
+    .align_x(Alignment::Center),
   )
   .padding([7, 0])
   .width(Fill)
   .on_press(Message::Settings(SettingsMessage::Open))
-  .style(move |theme, status| jellypilot_ui::theme::button_variant(theme, status, variant));
+  .style(move |theme, status| {
+    jellypilot_ui::theme::button_variant(theme, status, ButtonVariant::Text)
+  });
 
   tooltip(btn, "Settings", TooltipOptions::default())
 }
