@@ -161,7 +161,11 @@ pub(crate) fn apply_app_mode(state: &mut State, mode: AppMode) -> Task<Message> 
       close_settings(state);
       browse::reset(&mut state.browse, &mut state.kernel);
       if state.playback.view.now_playing.is_none() {
-        state.kernel.artwork_adapter.cancel_pending();
+        state.kernel.artwork_adapter.reset_session();
+      } else {
+        // Playback artwork may still be loading, so keep in-flight loads; the
+        // dropped browse surfaces' decoded caches are dead weight either way.
+        state.kernel.artwork_adapter.clear_caches();
       }
       state.home = home::Surface::default();
       state.detail = detail::Surface::default();

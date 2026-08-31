@@ -813,6 +813,17 @@ impl ArtworkAdapter {
     self.advance_generation(true);
   }
 
+  /// Clears the encoded and raster caches without cancelling in-flight loads.
+  ///
+  /// Unlike [`Self::reset_session`], in-flight loads still finish and their
+  /// results re-enter the caches. Used when the shell drops browse surfaces
+  /// while playback artwork may still be loading.
+  pub fn clear_caches(&self) {
+    let mut state = self.lock_state();
+    state.encoded_cache.clear();
+    state.raster_cache.clear();
+  }
+
   fn advance_generation(&self, clear_cache: bool) {
     let (generation, waiters) = {
       let mut state = self.lock_state();
@@ -2196,6 +2207,39 @@ mod tests {
       .get(&class_key("cached", ArtworkSizeClass::Card))
       .is_none());
     assert!(state.encoded_cache.get(&Arc::from("encoded")).is_none());
+  }
+
+  #[test]
+  fn clear_caches_drops_cached_data_without_cancelling_in_flight_loads() {
+    let adapter = ArtworkAdapter::default();
+    let pending = begin_leader(&adapter, "in-flight");
+    {
+      let mut state = adapter.lock_state();
+      state
+        .raster_cache
+        .insert(class_key("cached", ArtworkSizeClass::Card), raster(1, 1));
+      state
+        .encoded_cache
+        .insert(Arc::from("encoded"), artwork(&[1, 2, 3, 4]));
+    }
+
+    adapter.clear_caches();
+
+    let mut state = adapter.lock_state();
+    assert!(state
+      .raster_cache
+      .get(&class_key("cached", ArtworkSizeClass::Card))
+      .is_none());
+    assert!(state.encoded_cache.get(&Arc::from("encoded")).is_none());
+    drop(state);
+
+    // The in-flight load still finishes and re-enters the raster cache.
+    pending.complete(&Ok(raster(1, 1)));
+    assert!(adapter
+      .lock_state()
+      .raster_cache
+      .get(&class_key("in-flight", ArtworkSizeClass::Card))
+      .is_some());
   }
 
   #[test]
