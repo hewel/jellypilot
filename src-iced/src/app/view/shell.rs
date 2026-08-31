@@ -243,16 +243,6 @@ fn sidebar_full(
   skeleton_phase: f32,
   reduced_motion: bool,
 ) -> container::Container<'_, Message> {
-  let title = column![
-    text("JellyPilot")
-      .font(SPACE_GROTESK_FONT)
-      .size(26)
-      .color(state.palette().colors.onSurface),
-    text("Video Library")
-      .size(12)
-      .color(state.palette().colors.onSurfaceVariant),
-  ]
-  .spacing(TOKENS.spacing.s1);
   let search_input = text_input("Search videos", &state.browse.search_input)
     .on_input(|value| Message::Browse(BrowseMessage::SearchInputChanged(value)))
     .on_submit(Message::Browse(BrowseMessage::SearchSubmitted))
@@ -314,7 +304,7 @@ fn sidebar_full(
     }
   }
 
-  let main = column![title, search_slot, destinations]
+  let main = column![search_slot, destinations]
     .spacing(TOKENS.spacing.s5)
     .width(Fill);
   let bottom = column![

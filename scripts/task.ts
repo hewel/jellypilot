@@ -3,7 +3,7 @@ import { Cause, Effect, Exit, Fiber, Match } from 'effect';
 import { runCheck } from './task/check';
 import { TaskCliError } from './task/errors';
 import { TASK_HELP } from './task/help';
-import { runIced } from './task/iced';
+import { runHot, runIced } from './task/iced';
 import { runApi } from './task/misc';
 import { parseCli } from './task/parse';
 import { runFormat, runLint, runTypecheck } from './task/quality';
@@ -25,6 +25,7 @@ const program = Effect.try({
       Match.when({ _tag: 'typecheck' }, () => runTypecheck()),
       Match.when({ _tag: 'rust' }, (task) => runRust(task)),
       Match.when({ _tag: 'iced' }, ({ smoke, release }) => runIced(smoke, release)),
+      Match.when({ _tag: 'icedHot' }, () => runHot()),
       Match.when({ _tag: 'api' }, () => runApi()),
       Match.exhaustive,
     ),

@@ -54,6 +54,7 @@ bun run task rust check [crate]  # cargo check (workspace or named crates)
 bun run task rust clippy [crate] # cargo clippy -D warnings
 bun run task rust test [crate]   # cargo test
 bun run task iced run [--smoke] [--release]  # run the app; --smoke exits after first frame
+bun run task iced hot                      # hot-reload dev run via cargo-hot (dev feature)
 bun run task api                 # regenerate OpenAPI clients
 ```
 

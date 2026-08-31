@@ -19,6 +19,7 @@ export type TaskCommand =
       readonly crates: readonly CrateShortName[];
     }
   | { readonly _tag: 'iced'; readonly smoke: boolean; readonly release: boolean }
+  | { readonly _tag: 'icedHot' }
   | { readonly _tag: 'api' };
 
 function unknownOption(command: string, option: string): never {
@@ -76,6 +77,10 @@ export function parseCli(argv: readonly string[]): TaskCommand {
   if (command === 'rust') return parseRust(args);
   if (command === 'iced') {
     const [action, ...rest] = args;
+    if (action === 'hot') {
+      expectNoArguments('iced hot', rest);
+      return { _tag: 'icedHot' };
+    }
     if (action !== 'run') {
       throw new Error(
         action === undefined ? 'Missing iced command.' : `Unknown iced command: ${action}`,

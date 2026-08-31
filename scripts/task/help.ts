@@ -17,6 +17,7 @@ Rust:
 
 Application:
   iced run [--smoke] [--release] (env: JELLYPILOT_SMOKE_SIZE=WxH)
+  iced hot                       (hot reload via cargo-hot, dev feature)
 
 Utilities:
   api

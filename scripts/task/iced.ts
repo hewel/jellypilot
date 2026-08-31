@@ -16,3 +16,16 @@ export const runIced = Effect.fn('task.iced')((smoke: boolean, release: boolean)
     ]),
   ).pipe(Effect.asVoid),
 );
+export const runHot = Effect.fn('task.hot')(() =>
+  runCommand(
+    command('cargo', [
+      'hot',
+      '--manifest-path',
+      'Cargo.toml',
+      '--package',
+      'jellypilot-iced',
+      '--features',
+      'dev',
+    ]),
+  ).pipe(Effect.asVoid),
+);

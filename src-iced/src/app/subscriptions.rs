@@ -263,6 +263,7 @@ mod tests {
   #[test]
   fn shortcut_capture_keeps_playback_tick_subscribed() {
     let mut state = State::boot(false);
+    state.kernel.settings = jellypilot_core::config::SettingsStore::default();
     state.playback.view.now_playing = Some(jellypilot_mpv::playback_session::NowPlayingView {
       item: jellypilot_mpv::playback::NowPlayingItem {
         item_id: "episode-1".to_owned(),
@@ -286,6 +287,7 @@ mod tests {
   #[test]
   fn frames_subscription_only_runs_for_smoke_or_active_skeletons() {
     let mut state = State::boot(false);
+    state.kernel.settings = jellypilot_core::config::SettingsStore::default();
     // window events, resize events, theme changes; no frames while nothing loads.
     assert_eq!(subscription(&state).units(), 3);
 
@@ -298,6 +300,7 @@ mod tests {
     // Episode/neighbor loads render shimmer skeletons independently of the
     // main detail content state; the frames subscription must stay alive.
     let mut detail_state = State::boot(false);
+    detail_state.kernel.settings = jellypilot_core::config::SettingsStore::default();
     detail_state.detail.data.season_episodes = LoadState::Loading;
     assert!(detail_state.skeletons_active());
     assert_eq!(subscription(&detail_state).units(), 4);

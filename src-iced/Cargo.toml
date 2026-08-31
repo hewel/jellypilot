@@ -9,6 +9,7 @@ version.workspace = true
 
 [features]
 debug = ["iced/hot"]
+dev = ["iced/hot"]
 [[bin]]
 name = "jellypilot"
 path = "src/main.rs"
