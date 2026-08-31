@@ -66,9 +66,9 @@ pub fn style(theme: &Theme, variant: ButtonVariant, status: button::Status) -> b
             ButtonVariant::Secondary => border_color = colors.outline,
             ButtonVariant::Tonal => background = Some(colors.surfaceContainerHigh),
             ButtonVariant::TonalActive => {}
-            ButtonVariant::Text => background = Some(with_alpha(colors.secondary, 0.1)),
+            ButtonVariant::Text => background = Some(colors.surfaceContainerHigh),
             ButtonVariant::Icon => {
-                background = Some(with_alpha(colors.primary, 0.1));
+                background = Some(colors.surfaceContainerHigh);
                 text_color = colors.onSurface;
             }
         },
@@ -99,10 +99,6 @@ fn brightness(color: Color, factor: f32) -> Color {
         b: (color.b * factor).min(1.0),
         ..color
     }
-}
-
-fn with_alpha(color: Color, alpha: f32) -> Color {
-    Color { a: alpha, ..color }
 }
 
 fn scale_alpha(color: Color, factor: f32) -> Color {
