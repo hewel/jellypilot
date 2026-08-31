@@ -61,17 +61,13 @@ pub fn view(state: &State) -> Element<'_, Message> {
       | jellypilot_core::LoadState::Failed(_) => "Library",
     },
     Destination::Search(query) => query,
-    Destination::Home
-    | Destination::Detail(_)
-    | Destination::Settings
-    | Destination::NowPlaying => "Library",
+    Destination::Home | Destination::Detail(_) | Destination::NowPlaying => "Library",
   };
   let heading = match &state.shell.destination {
     Destination::Search(_) => format!("Search results for “{title}”"),
     Destination::Home
     | Destination::Library { .. }
     | Destination::Detail(_)
-    | Destination::Settings
     | Destination::NowPlaying => title.to_owned(),
   };
   let mut header = Column::new().spacing(TOKENS.spacing.s3).push(
@@ -238,7 +234,6 @@ fn browse_body<'a>(state: &'a State, class: SizeClass) -> Element<'a, Message> {
       Destination::Home
       | Destination::Library { .. }
       | Destination::Detail(_)
-      | Destination::Settings
       | Destination::NowPlaying => empty_surface(
         state.palette(),
         "This library has no matching items.".to_owned(),

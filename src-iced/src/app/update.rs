@@ -304,9 +304,14 @@ pub fn update(state: &mut State, message: Message) -> Task<Message> {
       }
       task
     }
-    // Back leaves the full-window Settings view in Control-Only mode; the
-    // stack always holds Now Playing beneath it.
-    Message::Settings(SettingsMessage::Back) => shell::navigate_back(state),
+    Message::Settings(SettingsMessage::Open) => {
+      shell::open_settings(state);
+      Task::none()
+    }
+    Message::Settings(SettingsMessage::Close) => {
+      shell::close_settings(state);
+      Task::none()
+    }
     Message::Settings(message) => {
       // Cross-surface writes hoisted out of the settings surface (ADR 0029):
       // mutations that change playback-relevant settings reconfigure playback,
@@ -868,9 +873,9 @@ mod tests {
   }
 
   #[test]
-  fn escape_and_leaving_settings_both_clear_shortcut_capture() {
+  fn escape_and_closing_settings_modal_both_clear_shortcut_capture() {
     let mut state = test_state();
-    state.shell.destination = Destination::Settings;
+    state.shell.settings_open = true;
     state.settings.view.shortcut_capture = Some(jellypilot_core::config::ShortcutKind::Next);
 
     drop(update(
@@ -880,8 +885,11 @@ mod tests {
     assert!(state.settings.view.shortcut_capture.is_none());
 
     state.settings.view.shortcut_capture = Some(jellypilot_core::config::ShortcutKind::Previous);
-    drop(shell::navigate(&mut state, Destination::Home));
-    assert_eq!(state.shell.destination, Destination::Home);
+    drop(update(
+      &mut state,
+      Message::Settings(SettingsMessage::Close),
+    ));
+    assert!(!state.shell.settings_open);
     assert!(state.settings.view.shortcut_capture.is_none());
   }
 
@@ -1116,13 +1124,27 @@ mod tests {
     ));
     assert_eq!(state.shell.destination, Destination::NowPlaying);
 
-    // Now Playing and Settings remain reachable.
+    // Now Playing is the root; Settings modal opens over it.
+    drop(update(&mut state, Message::Settings(SettingsMessage::Open)));
+    assert!(state.shell.settings_open);
+    assert_eq!(state.shell.destination, Destination::NowPlaying);
     drop(update(
       &mut state,
-      Message::Home(HomeMessage::Navigate(Destination::Settings)),
+      Message::Settings(SettingsMessage::Close),
     ));
-    assert_eq!(state.shell.destination, Destination::Settings);
-    drop(update(&mut state, Message::Settings(SettingsMessage::Back)));
+    assert!(!state.shell.settings_open);
+    assert_eq!(state.shell.destination, Destination::NowPlaying);
+  }
+
+  #[test]
+  fn entering_control_only_closes_settings_modal() {
+    let mut state = test_state();
+    state.shell.settings_open = true;
+    drop(shell::apply_app_mode(
+      &mut state,
+      jellypilot_core::config::AppMode::ControlOnly,
+    ));
+    assert!(!state.shell.settings_open);
     assert_eq!(state.shell.destination, Destination::NowPlaying);
   }
 

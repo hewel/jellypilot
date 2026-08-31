@@ -163,6 +163,8 @@ pub enum DetailMessage {
 }
 #[derive(Clone)]
 pub enum SettingsMessage {
+  Open,
+  Close,
   MpvPathChanged(String),
   SaveMpvPath,
   MpvArgsChanged(String),
@@ -177,10 +179,7 @@ pub enum SettingsMessage {
   SubtitleMenuToggled,
   SubtitleMenuDismissed,
   SubtitleLanguageAdded(String),
-  SubtitleLanguageMoved {
-    index: usize,
-    offset: i32,
-  },
+  SubtitleLanguageMoved { index: usize, offset: i32 },
   SubtitleLanguageRemoved(usize),
   BeginShortcutCapture(ShortcutKind),
   ShortcutCaptured(String),
@@ -196,8 +195,6 @@ pub enum SettingsMessage {
   DiagnosticCategorySelected(Option<DiagnosticCategory>),
   Disconnect,
   SignOut,
-  /// Back from the full-window Settings view in Control-Only mode.
-  Back,
   PlaybackConfigApplied(Result<(), PlaybackError>),
 }
 

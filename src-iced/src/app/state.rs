@@ -163,7 +163,6 @@ pub enum Destination {
   },
   Search(String),
   Detail(String),
-  Settings,
   /// Full-window Now Playing; the Control-Only root destination, unused in
   /// Full mode where the player is a bar above the shell content.
   NowPlaying,

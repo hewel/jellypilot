@@ -188,10 +188,13 @@ fn update_settings(
       surface.view.diagnostic_category_menu_open = false;
       Task::none()
     }
-    // Handled entirely by the top-level router: both arms write the remote
-    // session state, and SignOut also drives the login surface's forget flow.
-    // Back navigates the shell stack (Control-Only full-window Settings).
-    SettingsMessage::Disconnect | SettingsMessage::SignOut | SettingsMessage::Back => Task::none(),
+    // Handled entirely by the top-level router: Disconnect and SignOut write
+    // the remote session state (and SignOut drives the login surface's forget flow).
+    // Open and Close drive the shell's Settings Modal lifecycle.
+    SettingsMessage::Open
+    | SettingsMessage::Close
+    | SettingsMessage::Disconnect
+    | SettingsMessage::SignOut => Task::none(),
     SettingsMessage::PlaybackConfigApplied(result) => {
       if result.is_err() {
         surface.view.error = Some(PLAYBACK_CONFIG_APPLY_ERROR);

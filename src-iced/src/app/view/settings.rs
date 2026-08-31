@@ -17,19 +17,7 @@ use crate::app::state::{diagnostic_matches, State};
 
 pub fn view(state: &State) -> Element<'_, Message> {
   let palette = state.palette();
-  let header = column![
-    text("Settings")
-      .font(SPACE_GROTESK_FONT)
-      .size(28)
-      .color(palette.colors.onSurface),
-    text("Changes are written to disk when Saved appears.")
-      .size(13)
-      .color(palette.colors.onSurfaceVariant),
-  ]
-  .spacing(TOKENS.spacing.s1);
-
   let mut content = column![
-    header,
     feedback(state),
     connection_section(state),
     mpv_section(state),
@@ -44,15 +32,15 @@ pub fn view(state: &State) -> Element<'_, Message> {
   .spacing(TOKENS.spacing.s4)
   .width(Fill);
 
-  // Control-Only renders Settings full-window; the back button returns to
-  // the Now Playing root.
+  // Control-Only renders Settings in the modal; the back button closes the
+  // modal and returns to the Now Playing root.
   if state.app_mode() == AppMode::ControlOnly {
     content = column![back_to_now_playing(), content]
       .spacing(TOKENS.spacing.s2)
       .width(Fill);
   }
 
-  scrollable(container(content).padding([TOKENS.spacing.s4, TOKENS.spacing.s6]))
+  scrollable(container(content).padding([TOKENS.spacing.s2, TOKENS.spacing.s6]))
     .width(Fill)
     .height(Fill)
     .into()
@@ -68,7 +56,7 @@ fn back_to_now_playing<'a>() -> Element<'a, Message> {
     .align_y(Alignment::Center),
   )
   .padding([6, 10])
-  .on_press(Message::Settings(SettingsMessage::Back))
+  .on_press(Message::Settings(SettingsMessage::Close))
   .style(|theme, status| jellypilot_ui::theme::button_variant(theme, status, ButtonVariant::Tonal))
   .into()
 }

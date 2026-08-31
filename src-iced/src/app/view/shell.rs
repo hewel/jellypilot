@@ -42,7 +42,6 @@ pub fn view(state: &State) -> Element<'_, Message> {
     Destination::Home => home::view(state),
     Destination::Library { .. } | Destination::Search(_) => browse::view(state),
     Destination::Detail(_) => detail::view(state),
-    Destination::Settings => settings::view(state),
     // Now Playing is the Control-Only root; the router never routes here in
     // Full mode, where the player is a bar.
     Destination::NowPlaying => home::view(state),
@@ -86,11 +85,36 @@ pub fn view(state: &State) -> Element<'_, Message> {
     .width(Fill)
     .height(Fill);
 
-  container(body)
+  let base_view = container(body)
     .width(Fill)
     .height(Fill)
-    .style(|theme| jellypilot_ui::theme::surface_variant(theme, SurfaceVariant::Canvas))
-    .into()
+    .style(|theme| jellypilot_ui::theme::surface_variant(theme, SurfaceVariant::Canvas));
+
+  if state.shell.settings_open {
+    let mut modal_stack = stack![base_view, settings_modal(state)]
+      .width(Fill)
+      .height(Fill);
+    if let Some(toast) = visible_toast(state) {
+      modal_stack = modal_stack.push(
+        container(toast_view(palette, toast))
+          .width(Fill)
+          .padding(iced::Padding {
+            top: TOKENS.spacing.s2,
+            right: TOKENS.spacing.s3,
+            bottom: 0.0,
+            left: TOKENS.spacing.s3,
+          })
+          .align_x(Alignment::End),
+      );
+    }
+    container(modal_stack)
+      .width(Fill)
+      .height(Fill)
+      .style(|theme| jellypilot_ui::theme::surface_variant(theme, SurfaceVariant::Canvas))
+      .into()
+  } else {
+    base_view.into()
+  }
 }
 
 /// Control-Only shell: no sidebar, no hairlines, no player bar — the compact
@@ -98,13 +122,11 @@ pub fn view(state: &State) -> Element<'_, Message> {
 /// layer on top.
 fn control_only_view(state: &State) -> Element<'_, Message> {
   let palette = state.palette();
-  let content: Element<'_, Message> = match &state.shell.destination {
-    Destination::Settings => settings::view(state),
-    // The router guard keeps Control-Only on Now Playing or Settings; any
-    // other destination here falls back to the compact player.
-    _ => player::full(state),
-  };
+  let content: Element<'_, Message> = player::full(state);
   let mut content_stack = stack![content].width(Fill).height(Fill);
+  if state.shell.settings_open {
+    content_stack = content_stack.push(settings_modal(state));
+  }
   if let Some(toast) = visible_toast(state) {
     content_stack = content_stack.push(
       container(toast_view(palette, toast))
@@ -298,12 +320,7 @@ fn sidebar_full(
   let bottom = column![
     connection_summary(state),
     row![
-      destination_button(
-        Icon::Settings,
-        "Settings",
-        Destination::Settings,
-        state.shell.destination == Destination::Settings,
-      ),
+      settings_button(state.shell.settings_open),
       tooltip(
         button(icon_for_variant(
           Icon::PictureInPicture,
@@ -367,12 +384,7 @@ fn sidebar_compact(state: &State) -> container::Container<'_, Message> {
 
   let bottom = column![
     compact_connection_status(state),
-    compact_destination_button(
-      Icon::Settings,
-      "Settings",
-      Destination::Settings,
-      state.shell.destination == Destination::Settings,
-    ),
+    compact_settings_button(state.shell.settings_open),
     tooltip(
       button(icon_for_variant(
         Icon::PictureInPicture,
@@ -405,6 +417,87 @@ fn sidebar_compact(state: &State) -> container::Container<'_, Message> {
     .padding(TOKENS.spacing.s4)
     .height(Fill)
     .style(|theme| jellypilot_ui::theme::surface_variant(theme, SurfaceVariant::Block))
+}
+
+fn settings_modal(state: &State) -> Element<'_, Message> {
+  let palette = state.palette();
+  let close_button = button(icon_for_variant(
+    Icon::Close,
+    IconSize::Md,
+    ButtonVariant::Tonal,
+  ))
+  .padding([6, 10])
+  .on_press(Message::Settings(SettingsMessage::Close))
+  .style(|theme, status| jellypilot_ui::theme::button_variant(theme, status, ButtonVariant::Tonal));
+
+  let header = row![
+    column![
+      text("Settings")
+        .font(SPACE_GROTESK_FONT)
+        .size(28)
+        .color(palette.colors.onSurface),
+      text("Changes are written to disk when Saved appears.")
+        .size(13)
+        .color(palette.colors.onSurfaceVariant),
+    ]
+    .spacing(TOKENS.spacing.s0_5),
+    space::horizontal(),
+    tooltip(close_button, "Close", TooltipOptions::default()),
+  ]
+  .width(Fill)
+  .align_y(Alignment::Center);
+
+  let modal_content = column![header, settings::view(state),]
+    .spacing(TOKENS.spacing.s4)
+    .padding([TOKENS.spacing.s4, TOKENS.spacing.s6])
+    .width(Fill)
+    .height(Fill);
+
+  container(modal_content)
+    .width(Fill)
+    .height(Fill)
+    .style(|theme| jellypilot_ui::theme::surface_variant(theme, SurfaceVariant::Canvas))
+    .into()
+}
+
+fn settings_button<'a>(active: bool) -> Element<'a, Message> {
+  let variant = if active {
+    ButtonVariant::Secondary
+  } else {
+    ButtonVariant::Text
+  };
+  button(
+    row![
+      icon_for_variant(Icon::Settings, IconSize::Md, variant),
+      text("Settings").size(14).width(Fill),
+    ]
+    .spacing(TOKENS.spacing.s2_5)
+    .align_y(Alignment::Center),
+  )
+  .padding([7, 12])
+  .width(Fill)
+  .on_press(Message::Settings(SettingsMessage::Open))
+  .style(move |theme, status| jellypilot_ui::theme::button_variant(theme, status, variant))
+  .into()
+}
+
+fn compact_settings_button<'a>(active: bool) -> Element<'a, Message> {
+  let variant = if active {
+    ButtonVariant::Secondary
+  } else {
+    ButtonVariant::Text
+  };
+  let btn = button(
+    container(icon_for_variant(Icon::Settings, IconSize::Md, variant))
+      .width(Fill)
+      .align_x(Alignment::Center),
+  )
+  .padding([7, 0])
+  .width(Fill)
+  .on_press(Message::Settings(SettingsMessage::Open))
+  .style(move |theme, status| jellypilot_ui::theme::button_variant(theme, status, variant));
+
+  tooltip(btn, "Settings", TooltipOptions::default())
 }
 
 fn destination_button<'a>(
@@ -569,6 +662,25 @@ mod tests {
     let mut state = State::boot(false);
     state.shell.skeleton_phase = 0.42;
     state.home.data.shortcuts = LoadState::Loading;
+    let _element = view(&state);
+  }
+
+  #[test]
+  fn shell_view_renders_settings_modal_in_full_mode() {
+    let mut state = State::boot(false);
+    state.shell.settings_open = true;
+    let _element = view(&state);
+  }
+
+  #[test]
+  fn shell_view_renders_settings_modal_in_control_only_mode() {
+    let mut state = State::boot(false);
+    state
+      .kernel
+      .settings
+      .set_app_mode(AppMode::ControlOnly)
+      .unwrap();
+    state.shell.settings_open = true;
     let _element = view(&state);
   }
 }

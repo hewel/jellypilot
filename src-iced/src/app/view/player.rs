@@ -1,7 +1,7 @@
 use std::fmt;
 
-use crate::app::message::{HomeMessage, Message, PlaybackMessage, SettingsMessage};
-use crate::app::state::{ArtworkCellState, Destination, State};
+use crate::app::message::{Message, PlaybackMessage, SettingsMessage};
+use crate::app::state::{ArtworkCellState, State};
 use iced::widget::{button, column, container, row, slider, space, text, Column};
 use iced::{Alignment, ContentFit, Element, Fill, Length};
 use jellypilot_core::config::AppMode;
@@ -214,7 +214,7 @@ pub fn full(state: &State) -> Element<'_, Message> {
     ButtonVariant::Tonal,
   ))
   .padding([6, 10])
-  .on_press(Message::Home(HomeMessage::Navigate(Destination::Settings)))
+  .on_press(Message::Settings(SettingsMessage::Open))
   .style(|theme, status| jellypilot_ui::theme::button_variant(theme, status, ButtonVariant::Tonal));
   let header = row![
     space::horizontal(),

@@ -76,7 +76,7 @@ The persisted top-level operating mode of JellyPilot: Full or Control-Only. App 
 _Avoid_: View preference, layout setting, window profile
 
 **Control-Only Mode**:
-The compact media-controller App Mode: a fixed-size 480x760 window with Now Playing and Settings only, plus the tray and the remote Playback Target. Control-Only Mode has no Library Browser; navigation to Library Browser destinations is rejected and browse state is dropped on entry.
+The compact media-controller App Mode: a fixed-size 480x760 window centered on Now Playing with access to the Settings Modal, plus the tray and the remote Playback Target. Control-Only Mode has no Library Browser; navigation to Library Browser destinations is rejected and browse state is dropped on entry.
 _Avoid_: Mini player, compact view, floating widget
 
 **Library Browser**:
@@ -96,8 +96,12 @@ An in-memory, display-sized RGBA decode of a Library Image, keyed by the Library
 _Avoid_: Texture, transformed cache variant, decoded cache entry
 
 **Sidebar**:
-The persistent left navigation area of the authenticated JellyPilot shell. The Sidebar lists Video Home, the user's video libraries, Now Playing, and Settings, and is always visible while JellyPilot is authenticated. At narrow window widths the Sidebar shows icons only.
+The persistent left navigation area of the authenticated JellyPilot shell. The Sidebar lists Video Home, the user's video libraries, and Now Playing, and provides an entry to open the Settings Modal. It is always visible while JellyPilot is authenticated. At narrow window widths the Sidebar shows icons only.
 _Avoid_: Navigation rail, app drawer, floating controls
+
+**Settings Modal**:
+The full-fill closable settings layer presented over the current shell context. The Settings Modal is dismissed via the Esc key or the close (✕) button and is never a navigation destination or stack entry.
+_Avoid_: Settings page, settings destination, dialog popup, drawer, click-outside-to-close
 
 **Video Home**:
 The Library Browser landing view built from live Jellyfin rows such as Continue Watching, Next Up, latest Movies, latest Episodes, and video library shortcuts. Video Home is not cached offline and should not show fake media.

@@ -33,6 +33,8 @@ pub fn subscription(state: &State) -> Subscription<Message> {
   }
   if state.settings.view.shortcut_capture.is_some() {
     subscriptions.push(event::listen_with(shortcut_capture));
+  } else if state.shell.settings_open {
+    subscriptions.push(event::listen_with(settings_modal_events));
   } else if state.playback.view.now_playing.is_some() {
     subscriptions.push(
       event::listen()
@@ -146,6 +148,29 @@ fn shortcut_capture(
   Some(Message::Settings(
     super::message::SettingsMessage::ShortcutCaptured(binding),
   ))
+}
+
+fn settings_modal_events(
+  event: Event,
+  status: event::Status,
+  _window_id: window::Id,
+) -> Option<Message> {
+  if status == event::Status::Captured {
+    return None;
+  }
+  let Event::Keyboard(keyboard::Event::KeyPressed {
+    modified_key,
+    repeat: false,
+    ..
+  }) = event
+  else {
+    return None;
+  };
+  if let keyboard::Key::Named(keyboard::key::Named::Escape) = modified_key.as_ref() {
+    Some(Message::Settings(super::message::SettingsMessage::Close))
+  } else {
+    None
+  }
 }
 
 fn remote_event_stream(channel: &RemoteEventChannel) -> impl Stream<Item = Message> {
@@ -360,6 +385,53 @@ mod tests {
         super::super::message::SettingsMessage::CancelShortcutCapture
       ))
     ));
+  }
+
+  #[test]
+  fn escape_closes_settings_modal_when_capture_inactive() {
+    let message = settings_modal_events(
+      key_pressed(
+        keyboard::Key::Named(keyboard::key::Named::Escape),
+        keyboard::Modifiers::NONE,
+      ),
+      event::Status::Ignored,
+      window::Id::unique(),
+    );
+
+    assert!(matches!(
+      message,
+      Some(Message::Settings(
+        super::super::message::SettingsMessage::Close
+      ))
+    ));
+  }
+
+  #[test]
+  fn non_escape_key_does_not_close_settings_modal() {
+    let message = settings_modal_events(
+      key_pressed(
+        keyboard::Key::Character("x".into()),
+        keyboard::Modifiers::NONE,
+      ),
+      event::Status::Ignored,
+      window::Id::unique(),
+    );
+
+    assert!(message.is_none());
+  }
+
+  #[test]
+  fn captured_escape_does_not_close_settings_modal() {
+    let message = settings_modal_events(
+      key_pressed(
+        keyboard::Key::Named(keyboard::key::Named::Escape),
+        keyboard::Modifiers::NONE,
+      ),
+      event::Status::Captured,
+      window::Id::unique(),
+    );
+
+    assert!(message.is_none());
   }
 
   #[test]

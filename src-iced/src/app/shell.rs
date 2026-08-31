@@ -38,6 +38,7 @@ pub struct Surface {
   /// `pub(crate)` because update tests construct `State` literals.
   pub(crate) skeleton_animation_start: Option<Instant>,
   pub quit_requested: bool,
+  pub settings_open: bool,
   pub destination: Destination,
   pub navigation_stack: Vec<Destination>,
 }
@@ -51,6 +52,7 @@ impl Surface {
       skeleton_phase: 0.0,
       skeleton_animation_start: None,
       quit_requested: false,
+      settings_open: false,
       destination: Destination::Home,
       navigation_stack: Vec::new(),
     }
@@ -82,6 +84,13 @@ impl Surface {
     };
     self.destination = destination;
     true
+  }
+  pub fn open_settings(&mut self) {
+    self.settings_open = true;
+  }
+
+  pub fn close_settings(&mut self) {
+    self.settings_open = false;
   }
 }
 /// Fixed logical window size in Control-Only mode. `set_min_size ==
@@ -124,7 +133,7 @@ pub(crate) fn mode_geometry(mode: AppMode, restore_size: Option<iced::Size>) -> 
 /// no Library Browser, so the router rejects Home/Library/Search/Detail
 /// navigation before the shell touches its stack.
 pub(crate) fn destination_allowed(mode: AppMode, destination: &Destination) -> bool {
-  mode == AppMode::Full || matches!(destination, Destination::NowPlaying | Destination::Settings)
+  mode == AppMode::Full || matches!(destination, Destination::NowPlaying)
 }
 
 /// Applies the window geometry decision to the live window.
@@ -149,6 +158,7 @@ fn window_geometry_task(geometry: ModeGeometry) -> Task<Message> {
 pub(crate) fn apply_app_mode(state: &mut State, mode: AppMode) -> Task<Message> {
   match mode {
     AppMode::ControlOnly => {
+      close_settings(state);
       browse::reset(&mut state.browse, &mut state.kernel);
       if state.playback.view.now_playing.is_none() {
         state.kernel.artwork_adapter.cancel_pending();
@@ -238,11 +248,20 @@ pub(crate) fn navigate_back(state: &mut State) -> Task<Message> {
   }
   activate_destination(state, previous)
 }
+pub(crate) fn open_settings(state: &mut State) {
+  state.shell.open_settings();
+}
+
+pub(crate) fn close_settings(state: &mut State) {
+  state.shell.close_settings();
+  state.settings.view.shortcut_capture = None;
+  state.settings.view.intro_menu_open = false;
+  state.settings.view.subtitle_menu_open = false;
+  state.settings.view.diagnostic_level_menu_open = false;
+  state.settings.view.diagnostic_category_menu_open = false;
+}
 
 fn activate_destination(state: &mut State, previous: Destination) -> Task<Message> {
-  if previous == Destination::Settings && state.shell.destination != Destination::Settings {
-    state.settings.view.shortcut_capture = None;
-  }
   if previous == Destination::Home && state.shell.destination != Destination::Home {
     home::leave_view(
       &mut state.home,
@@ -297,7 +316,7 @@ fn activate_destination(state: &mut State, previous: Destination) -> Task<Messag
     Destination::Detail(item_id) => {
       detail::start_load(&mut state.detail, &mut state.kernel, Some(item_id))
     }
-    Destination::Settings | Destination::NowPlaying => Task::none(),
+    Destination::NowPlaying => Task::none(),
   }
 }
 
@@ -321,10 +340,7 @@ pub(crate) fn browse_source(state: &State) -> Option<BrowseSource> {
       session,
       query: query.clone(),
     }),
-    Destination::Home
-    | Destination::Detail(_)
-    | Destination::Settings
-    | Destination::NowPlaying => None,
+    Destination::Home | Destination::Detail(_) | Destination::NowPlaying => None,
   }
 }
 
@@ -345,6 +361,7 @@ pub(crate) fn reset_connected_surface(state: &mut State) -> Task<Message> {
   state.kernel.artwork_handles.clear();
   state.shell.navigation_stack.clear();
   state.shell.destination = Destination::Home;
+  close_settings(state);
   playback_task
 }
 
@@ -458,24 +475,35 @@ mod tests {
   }
 
   #[test]
-  fn control_only_navigation_is_limited_to_now_playing_and_settings() {
+  fn control_only_navigation_is_limited_to_now_playing() {
     let library = Destination::Library {
       library_id: "movies".to_owned(),
       collection_type: "movies".to_owned(),
     };
     for destination in [
       Destination::Home,
-      library.clone(),
+      library,
       Destination::Search("term".to_owned()),
       Destination::Detail("movie-1".to_owned()),
     ] {
       assert!(!destination_allowed(AppMode::ControlOnly, &destination));
       assert!(destination_allowed(AppMode::Full, &destination));
     }
-    for destination in [Destination::NowPlaying, Destination::Settings] {
-      assert!(destination_allowed(AppMode::ControlOnly, &destination));
-      assert!(destination_allowed(AppMode::Full, &destination));
-    }
+    assert!(destination_allowed(
+      AppMode::ControlOnly,
+      &Destination::NowPlaying
+    ));
+    assert!(destination_allowed(AppMode::Full, &Destination::NowPlaying));
+  }
+
+  #[test]
+  fn shell_surface_tracks_settings_open_and_close() {
+    let mut surface = Surface::new(false);
+    assert!(!surface.settings_open);
+    surface.open_settings();
+    assert!(surface.settings_open);
+    surface.close_settings();
+    assert!(!surface.settings_open);
   }
 
   #[test]
