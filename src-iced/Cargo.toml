@@ -22,6 +22,7 @@ jellypilot-session = { path = "../crates/jellypilot-session" }
 jellypilot-ui = { path = "../crates/jellypilot-ui" }
 iced = { version = "0.14.0", features = ["advanced", "image", "svg", "tokio"] }
 image = { version = "0.25.10", default-features = false, features = ["png"] }
+mimalloc = { version = "0.1.48", default-features = false }
 tokio = { version = "1.50.0", features = ["macros", "rt", "sync", "time"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
