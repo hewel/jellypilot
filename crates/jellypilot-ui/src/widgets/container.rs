@@ -3,7 +3,7 @@
 //! Every surface is exactly one role:
 //! - `Canvas`: flush with the window background — opaque, square, flat.
 //! - `Block`: a docked block (sidebar, player bar) — opaque
-//!   `surfaceContainerLow`, square, flat; separation comes from the two
+//!   `surfaceContainerLowest`, square, flat; separation comes from the two
 //!   shell hairlines, not from borders or shadows.
 //! - `Raised`: a floating layer (cards, toasts, popovers) — opaque
 //!   `surfaceContainerHigh`, `lg` radius, `raised_high` shadow.
@@ -21,7 +21,7 @@ pub fn style(theme: &Theme, variant: SurfaceVariant) -> container::Style {
     let (background, radius, shadow) = match variant {
         SurfaceVariant::Canvas => (colors.background, TOKENS.radii.none, Shadow::default()),
         SurfaceVariant::Block => (
-            colors.surfaceContainerLow,
+            colors.surfaceContainerLowest,
             TOKENS.radii.none,
             Shadow::default(),
         ),
@@ -73,7 +73,9 @@ mod tests {
 
         assert_eq!(
             style.background,
-            Some(Background::Color(DARK_PALETTE.colors.surfaceContainerLow))
+            Some(Background::Color(
+                DARK_PALETTE.colors.surfaceContainerLowest
+            ))
         );
         assert_eq!(style.border.width, 0.0);
         assert_eq!(style.border.radius, Radius::from(TOKENS.radii.none));

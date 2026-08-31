@@ -19,7 +19,7 @@ Every container is exactly one role (`SurfaceVariant`, styled by `widgets/contai
 | Role | Background | Radius | Shadow | Use |
 |---|---|---:|---|---|
 | `Canvas` | `background` | 0 | none | Flush with the window: shell root, page content, inline content groups separated by whitespace |
-| `Block` | `surfaceContainerLow` | 0 | none | Docked blocks: sidebar, player bar |
+| `Block` | `surfaceContainerLowest` | 0 | none | Docked blocks: sidebar, player bar |
 | `Raised` | `surfaceContainerHigh` | `lg` (8) | `raised_high` | Floating layers: login card, intro prompt, toasts, popovers |
 
 Inline content (home hero and action cards, detail episode/next-up/summary rows, settings sections and rows, saved sign-ins) is **flat Canvas with whitespace separation** — no card chrome. Skeleton placeholders are flat `surfaceContainerLow`↔`surfaceContainerHigh` breathing blocks, radius `lg`, no border or shadow.
