@@ -741,8 +741,13 @@ impl PlaybackSession {
         Vec::new()
       }
       PlaybackRefreshState::Ended(PlaybackEndReason::EndOfFile) => {
-        self.clear_playback_context();
         self.notice = None;
+        // Natural end of playback advances to the prefetched next episode,
+        // dispatching the same start a manual Next press would.
+        if self.adjacent.item(AdjacentDirection::Next).is_some() {
+          return self.play_adjacent(AdjacentDirection::Next);
+        }
+        self.clear_playback_context();
         Vec::new()
       }
       PlaybackRefreshState::Ended(PlaybackEndReason::Error | PlaybackEndReason::Disconnected) => {
@@ -1779,6 +1784,82 @@ mod tests {
     assert!(effects.is_empty());
     assert!(session.view().now_playing.is_none());
     assert_eq!(session.view().notice, None);
+  }
+
+  #[test]
+  fn eof_refresh_starts_the_next_episode_when_available() {
+    let (mut session, now, auxiliary) = start_session(IntroSkipMode::Off);
+    let next_id = adjacent_id(&auxiliary, AdjacentDirection::Next);
+    session.handle(
+      PlaybackInput::Event(PlaybackEvent::AdjacentSettled {
+        id: next_id,
+        direction: AdjacentDirection::Next,
+        result: Ok(Some(media_item("episode-2", "Second"))),
+      }),
+      now,
+    );
+    let (id, _) =
+      controller_effect(session.handle(PlaybackInput::Intent(PlaybackIntent::Tick), now));
+
+    let effects = session.handle(
+      PlaybackInput::Event(PlaybackEvent::ControllerSettled {
+        id,
+        settlement: ControllerSettlement::Refreshed {
+          outcome: PlaybackRefreshOutcome {
+            snapshot: snapshot("episode-1", "Episode", 1_500.0),
+            state: PlaybackRefreshState::Ended(PlaybackEndReason::EndOfFile),
+            warnings: Vec::new(),
+          },
+          client_messages: Vec::new(),
+        },
+      }),
+      now,
+    );
+
+    let (_, command) = controller_effect(effects);
+    assert!(matches!(
+      command,
+      ControllerCommand::Start {
+        item: Playable::Media(MediaItem { id, .. }),
+        ..
+      } if id == "episode-2"
+    ));
+    assert!(session.view().now_playing.is_some());
+    assert_eq!(session.view().notice, None);
+  }
+
+  #[test]
+  fn eof_refresh_without_a_next_episode_clears_playback() {
+    let (mut session, now, auxiliary) = start_session(IntroSkipMode::Off);
+    let next_id = adjacent_id(&auxiliary, AdjacentDirection::Next);
+    session.handle(
+      PlaybackInput::Event(PlaybackEvent::AdjacentSettled {
+        id: next_id,
+        direction: AdjacentDirection::Next,
+        result: Ok(None),
+      }),
+      now,
+    );
+    let (id, _) =
+      controller_effect(session.handle(PlaybackInput::Intent(PlaybackIntent::Tick), now));
+
+    let effects = session.handle(
+      PlaybackInput::Event(PlaybackEvent::ControllerSettled {
+        id,
+        settlement: ControllerSettlement::Refreshed {
+          outcome: PlaybackRefreshOutcome {
+            snapshot: snapshot("episode-1", "Episode", 1_500.0),
+            state: PlaybackRefreshState::Ended(PlaybackEndReason::EndOfFile),
+            warnings: Vec::new(),
+          },
+          client_messages: Vec::new(),
+        },
+      }),
+      now,
+    );
+
+    assert!(effects.is_empty());
+    assert!(session.view().now_playing.is_none());
   }
 
   #[test]
