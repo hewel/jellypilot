@@ -21,6 +21,8 @@ const DEFAULT_DEVICE_NAME: &str = "JellyPilot";
 const DEVICE_ID_PREFIX: &str = "jellypilot-";
 const CLIENT_NAME: &str = "JellyPilot";
 const CLIENT_VERSION: &str = env!("CARGO_PKG_VERSION");
+/// Formats the Library Image pipeline can decode (artwork decoder features).
+const IMAGE_ACCEPT: &str = "image/jpeg,image/png,image/webp";
 const SUPPORTED_REMOTE_COMMANDS: &[&str] = &[
   "Play",
   "Playstate",
@@ -219,6 +221,10 @@ impl JellyfinClient {
       .get(url)
       .header(header::AUTHORIZATION, authorization)
       .header(header::USER_AGENT, user_agent)
+      // reqwest defaults to `Accept: */*`, which image-processing gateways
+      // take as "serve the original file", answering with full-size images
+      // the decode budget rejects. Advertise the decodable formats instead.
+      .header(header::ACCEPT, IMAGE_ACCEPT)
       .send()
       .await
       .map_err(|_| JellyfinError::HttpError("Origin image request failed".to_string()))?;
@@ -5704,6 +5710,12 @@ mod tests {
         .to_ascii_lowercase()
         .contains("authorization: mediabrowser "),
       "validated image request should carry media-server authorization"
+    );
+    assert!(
+      request
+        .to_ascii_lowercase()
+        .contains(&format!("accept: {IMAGE_ACCEPT}")),
+      "image request should advertise decodable formats instead of Accept: */*"
     );
   }
 

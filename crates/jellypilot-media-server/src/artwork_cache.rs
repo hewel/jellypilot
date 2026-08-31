@@ -86,6 +86,21 @@ impl ArtworkDiskCache {
     .flatten()
   }
 
+  /// Removes one entry if present. Best-effort: a stale entry is only a
+  /// performance concern, so I/O failures are ignored.
+  pub async fn remove(&self, key: String) {
+    if !self.enabled.load(Ordering::Acquire) {
+      return;
+    }
+    let root = Arc::clone(&self.root);
+    let operation_lock = Arc::clone(&self.operation_lock);
+    let _ = tokio::task::spawn_blocking(move || {
+      let _operation = operation_lock.write();
+      let _ = fs::remove_file(entry_path(&root, &key));
+    })
+    .await;
+  }
+
   pub async fn store(&self, key: String, bytes: Arc<[u8]>) {
     if !self.enabled.load(Ordering::Acquire)
       || self.clearing.load(Ordering::Acquire)

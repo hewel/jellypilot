@@ -393,6 +393,13 @@ struct RasterKey {
   size_class: ArtworkSizeClass,
 }
 
+/// Per-load identity and scheduling context carried through fetch and decode.
+struct LoadContext {
+  key: RasterKey,
+  generation: u64,
+  lane: LoadLane,
+}
+
 /// Decodes encoded bytes into a display-sized Library Image Raster.
 ///
 /// Applies EXIF orientation as iced's image loader does, then downsamples to
@@ -770,9 +777,12 @@ impl ArtworkAdapter {
               .fetch_and_decode(
                 client,
                 &request,
-                key.clone(),
+                LoadContext {
+                  key: key.clone(),
+                  generation: load_generation,
+                  lane,
+                },
                 permit,
-                load_generation,
                 &mut generation,
               )
               .await
@@ -886,20 +896,88 @@ impl ArtworkAdapter {
     &self,
     client: &JellyfinClient,
     request: &LibraryImageRequest,
-    key: RasterKey,
+    context: LoadContext,
     permit: LoadPermit,
-    load_generation: u64,
     generation: &mut watch::Receiver<u64>,
   ) -> Result<(ArtworkRaster, ArtworkSource, usize), ArtworkError> {
-    let size_class = key.size_class;
+    let size_class = context.key.size_class;
     let (bytes, source) = tokio::select! {
-      result = self.original_bytes(client, request, key.image_id, load_generation) => result?,
+      result = self.original_bytes(client, request, context.key.image_id.clone(), context.generation) => result?,
       changed = generation.changed() => {
         let _ = changed;
         return Err(ArtworkError::Cancelled);
       }
     };
     let encoded_bytes = bytes.byte_len();
+    match self
+      .decode_tracked(bytes, size_class, permit, generation)
+      .await
+    {
+      Ok(raster) => Ok((raster, source, encoded_bytes)),
+      Err(ArtworkError::DecodedImageTooLarge) if source != ArtworkSource::Network => {
+        self
+          .retry_oversized_from_network(client, request, &context, generation)
+          .await
+      }
+      Err(error) => Err(error),
+    }
+  }
+
+  /// Retries a load whose cached origin bytes exceed the decode budget. The
+  /// cached copies predate the budget or were poisoned by an origin that once
+  /// served the full-size image, so every cached copy is dropped and the
+  /// origin is asked once for a fresh one. An oversized origin response is
+  /// not persisted, so it cannot poison the caches again.
+  async fn retry_oversized_from_network(
+    &self,
+    client: &JellyfinClient,
+    request: &LibraryImageRequest,
+    context: &LoadContext,
+    generation: &mut watch::Receiver<u64>,
+  ) -> Result<(ArtworkRaster, ArtworkSource, usize), ArtworkError> {
+    self
+      .lock_state()
+      .encoded_cache
+      .remove(&context.key.image_id);
+    self
+      .disk_cache
+      .remove(artwork_cache_key(
+        request.server_url(),
+        request.origin_url(),
+      ))
+      .await;
+    let bytes = tokio::select! {
+      result = self.fetch_uncached(client, request) => result?,
+      changed = generation.changed() => {
+        let _ = changed;
+        return Err(ArtworkError::Cancelled);
+      }
+    };
+    let permit = self
+      .acquire_load_permit(&context.key, context.generation, context.lane, generation)
+      .await?;
+    let encoded_bytes = bytes.byte_len();
+    let stored = bytes.clone();
+    let raster = self
+      .decode_tracked(bytes, context.key.size_class, permit, generation)
+      .await?;
+    self.store_network_bytes(
+      request,
+      context.key.image_id.clone(),
+      &stored,
+      context.generation,
+    );
+    Ok((raster, ArtworkSource::Network, encoded_bytes))
+  }
+
+  /// Runs one blocking decode under the load's byte reservation.
+  async fn decode_tracked(
+    &self,
+    bytes: ArtworkBytes,
+    size_class: ArtworkSizeClass,
+    permit: LoadPermit,
+    generation: &mut watch::Receiver<u64>,
+  ) -> Result<ArtworkRaster, ArtworkError> {
     let decode = tokio::task::spawn_blocking(move || {
       // Cancellation may drop the join handle, so the blocking decode owns
       // aggregate admission until it actually stops.
@@ -907,7 +985,7 @@ impl ArtworkAdapter {
       decode_raster(&bytes, size_class)
     });
     tokio::select! {
-      result = decode => result.map_err(|_| ArtworkError::DecodeFailed)?.map(|raster| (raster, source, encoded_bytes)),
+      result = decode => result.map_err(|_| ArtworkError::DecodeFailed)?,
       changed = generation.changed() => {
         let _ = changed;
         Err(ArtworkError::Cancelled)
@@ -942,15 +1020,29 @@ impl ArtworkAdapter {
       return Ok((bytes, ArtworkSource::Disk));
     }
     let bytes = self.fetch_uncached(client, request).await?;
-    if validate_static_image_container(bytes.0.as_ref()).is_ok() {
-      self.cache_encoded(image_key, &bytes, load_generation);
-      let disk_cache = self.disk_cache.clone();
-      let disk_bytes = Arc::clone(&bytes.0);
-      tokio::spawn(async move {
-        disk_cache.store(disk_key, disk_bytes).await;
-      });
-    }
+    self.store_network_bytes(request, image_key, &bytes, load_generation);
     Ok((bytes, ArtworkSource::Network))
+  }
+
+  /// Stores freshly fetched origin bytes in the encoded and disk caches when
+  /// the container is a supported still image.
+  fn store_network_bytes(
+    &self,
+    request: &LibraryImageRequest,
+    image_key: Arc<str>,
+    bytes: &ArtworkBytes,
+    load_generation: u64,
+  ) {
+    if validate_static_image_container(bytes.0.as_ref()).is_err() {
+      return;
+    }
+    self.cache_encoded(image_key, bytes, load_generation);
+    let disk_cache = self.disk_cache.clone();
+    let disk_key = artwork_cache_key(request.server_url(), request.origin_url());
+    let disk_bytes = Arc::clone(&bytes.0);
+    tokio::spawn(async move {
+      disk_cache.store(disk_key, disk_bytes).await;
+    });
   }
 
   /// Stores encoded bytes fetched by a load, unless the load's session has
@@ -1456,6 +1548,12 @@ where
   fn clear(&mut self) {
     self.entries.clear();
     self.total_bytes = 0;
+  }
+
+  fn remove(&mut self, key: &K) {
+    if let Some(previous) = self.entries.remove(key) {
+      self.total_bytes = self.total_bytes.saturating_sub(previous.artwork.byte_len());
+    }
   }
 
   fn insert(&mut self, key: K, artwork: T) {
@@ -2240,6 +2338,75 @@ mod tests {
       .raster_cache
       .get(&class_key("in-flight", ArtworkSizeClass::Card))
       .is_some());
+  }
+
+  #[test]
+  fn oversized_cached_bytes_are_dropped_and_refetched_from_the_network() {
+    let runtime = tokio::runtime::Builder::new_current_thread()
+      .enable_all()
+      .build()
+      .expect("runtime builds");
+    runtime.block_on(async {
+      use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+      let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("listener binds");
+      let port = listener.local_addr().expect("listener address").port();
+      let small = encode_test_png(100, 150);
+      let server = tokio::spawn(async move {
+        let (mut socket, _) = listener.accept().await.expect("accepts one load");
+        let mut head = Vec::new();
+        let mut buffer = [0_u8; 1024];
+        while !head.windows(4).any(|window| window == b"\r\n\r\n") {
+          let read = socket.read(&mut buffer).await.expect("request reads");
+          if read == 0 {
+            break;
+          }
+          head.extend_from_slice(&buffer[..read]);
+        }
+        let response = format!(
+          "HTTP/1.1 200 OK\r\ncontent-type: image/png\r\ncontent-length: {}\r\nconnection: close\r\n\r\n",
+          small.len()
+        );
+        socket
+          .write_all(response.as_bytes())
+          .await
+          .expect("response head writes");
+        socket.write_all(&small).await.expect("response body writes");
+      });
+
+      let server_url = format!("http://127.0.0.1:{port}");
+      let client = JellyfinClient::new();
+      adopt_session(&client, &server_url, "user");
+      let reference = image_id(&server_url);
+      let cache_root = std::env::temp_dir().join(format!(
+        "jellypilot-artwork-test-{}-oversized",
+        std::process::id()
+      ));
+      let adapter = ArtworkAdapter::with_limits_and_disk_cache(
+        ArtworkLimits::default(),
+        crate::ArtworkDiskCache::new(cache_root.clone(), 1 << 20, true),
+      );
+      // 1300×1300 exceeds the Card/Hero source cap, as a stale origin-sized
+      // cache entry from before the decode budget does.
+      let oversized = artwork(&encode_test_png(1300, 1300));
+      let generation = adapter.ticket().generation();
+      adapter.cache_encoded(Arc::from(reference.as_str()), &oversized, generation);
+
+      let (result, observation) = adapter
+        .load(&client, &reference, ArtworkSizeClass::Card, LoadLane::Visible)
+        .await;
+
+      let raster = result.expect("oversized cached bytes are refetched from the origin");
+      assert_eq!((raster.width(), raster.height()), (100, 150));
+      assert!(matches!(
+        observation.settlement,
+        ArtworkLoadSettlement::Loaded(ArtworkSource::Network)
+      ));
+      server.await.expect("server serves the refetch");
+      let _ = std::fs::remove_dir_all(cache_root);
+    });
   }
 
   #[test]
