@@ -1659,11 +1659,19 @@ impl JellyfinClient {
         .push(item_id)
         .push(&format!("stream.{container}"));
     }
-    url
-      .query_pairs_mut()
+    // Direct-link reverse proxies, which 302 media requests to signed storage
+    // URLs, key their signing on a user or device identifier; stock
+    // Jellyfin/Emby ignores both parameters.
+    let mut pairs = url.query_pairs_mut();
+    pairs
       .append_pair("Static", "true")
       .append_pair("MediaSourceId", &media_source.id)
-      .append_pair("api_key", token);
+      .append_pair("deviceId", &state.device_id);
+    if let Some(user_id) = state.user_id.as_deref() {
+      pairs.append_pair("UserId", user_id);
+    }
+    pairs.append_pair("api_key", token);
+    drop(pairs);
     Some(url.into())
   }
 
@@ -8535,7 +8543,10 @@ mod tests {
       client
         .build_stream_url("movie-1", &direct_play)
         .expect("direct play URL"),
-      "http://media.example.test/emby/Videos/movie-1/stream.mkv?Static=true&MediaSourceId=source-1&api_key=emby-token"
+      format!(
+        "http://media.example.test/emby/Videos/movie-1/stream.mkv?Static=true&MediaSourceId=source-1&deviceId={}&UserId=00000000000000000000000000000001&api_key=emby-token",
+        client.device_id()
+      )
     );
     assert_eq!(
       client
@@ -8721,7 +8732,10 @@ mod tests {
 
     assert_eq!(
       url,
-      "http://media.example.test/emby/Videos/movie%2Fone/stream.mkv?Static=true&MediaSourceId=source+%26+alternate&api_key=emby-token"
+      format!(
+        "http://media.example.test/emby/Videos/movie%2Fone/stream.mkv?Static=true&MediaSourceId=source+%26+alternate&deviceId={}&UserId=00000000000000000000000000000001&api_key=emby-token",
+        client.device_id()
+      )
     );
   }
 

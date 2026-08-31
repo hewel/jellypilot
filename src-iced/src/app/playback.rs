@@ -883,6 +883,10 @@ fn update_playback(
         None
       };
       let shutdown = matches!(settlement.as_ref(), ControllerSettlement::Shutdown(_));
+      let settlement_error = match settlement.as_ref() {
+        ControllerSettlement::Started(Err(error)) => Some(error.to_string()),
+        _ => None,
+      };
       if let Some(playable) = started.as_deref() {
         surface.playable = Some(playable.clone());
         surface.adjacent_playables = [None, None];
@@ -900,6 +904,7 @@ fn update_playback(
         started = ?started.as_deref().map(|playable| (playable_kind(playable), playable.image_id().map(str::to_owned))),
         now_playing = ?surface.view.now_playing.as_ref().map(|view| view.item.item_id.clone()),
         playable = ?surface.playable.as_ref().map(|playable| (playable_kind(playable), playable.image_id().map(str::to_owned))),
+        error = ?settlement_error,
         "controller settled"
       );
       if let Some(result) = tracks {

@@ -459,7 +459,10 @@ impl PlaybackServer for JellyfinPlaybackServer {
           request.selection.subtitle_stream_index,
         )
         .await
-        .map_err(|_| PlaybackError::PlaybackInfoUnavailable)?;
+        .map_err(|error| {
+          log::warn!("playback info request failed: {error}");
+          PlaybackError::PlaybackInfoUnavailable
+        })?;
       let media_source = select_media_source(
         &playback.media_sources,
         request.selection.media_source_id.as_deref(),
@@ -999,6 +1002,18 @@ impl PlaybackController {
       &resolved.active.now_playing.play_method,
       &self.configured_mpv_args,
     );
+    // MPV's HTTP fetch defaults to ffmpeg's Lavf agent, which media-fronting
+    // proxies commonly block; presenting the player's identity passes
+    // player-allowlisted servers. The user's own MPV arguments win.
+    if !has_mpv_option(&self.configured_mpv_args, "user-agent")
+      && self
+        .mpv
+        .set_property_string("user-agent", "mpv")
+        .await
+        .is_err()
+    {
+      log::warn!("could not pass the player user agent to MPV");
+    }
     if !self.load_resolved(&resolved, file_options).await {
       self.cleanup_failed_load(previous.as_ref()).await;
       return Err(PlaybackError::MpvLoadFailed);
@@ -1176,6 +1191,10 @@ impl PlaybackController {
       .await
       .is_err()
     {
+      log::warn!(
+        "MPV rejected the loadfile command for {}",
+        stream_url_head(resolved.stream_url.as_str())
+      );
       return false;
     }
 
@@ -1184,7 +1203,11 @@ impl PlaybackController {
         let Ok(event) = events.recv().await else {
           return false;
         };
-        if self.load_event_boundary.observe(&event).is_some() {
+        if let Some(reason) = self.load_event_boundary.observe(&event) {
+          log::warn!(
+            "MPV could not load {}: {reason:?}",
+            stream_url_head(resolved.stream_url.as_str())
+          );
           return false;
         }
         if self.load_event_boundary == LoadEventBoundary::Settled {
@@ -1744,6 +1767,12 @@ fn provider_stream_for_mpv_track<'a>(
   })
 }
 
+/// Stream URL without its query string, where the access token rides. Safe to
+/// log; identifies the server route MPV was asked to open.
+fn stream_url_head(url: &str) -> &str {
+  url.split('?').next().unwrap_or(url)
+}
+
 fn direct_playback_file_options(play_method: &str, configured_args: &[String]) -> Vec<String> {
   if !matches!(play_method, "DirectPlay" | "DirectStream") {
     return Vec::new();
@@ -1989,6 +2018,7 @@ mod tests {
     client: MpvClient,
     writer: Arc<tokio::sync::Mutex<WriteHalf<DuplexStream>>>,
     peer: tokio::task::JoinHandle<()>,
+    received: Arc<Mutex<Vec<Vec<serde_json::Value>>>>,
   }
 
   impl InMemoryMpv {
@@ -2004,6 +2034,8 @@ mod tests {
       let (peer_reader, peer_writer) = tokio::io::split(peer_stream);
       let writer = Arc::new(tokio::sync::Mutex::new(peer_writer));
       let task_writer = Arc::clone(&writer);
+      let received = Arc::new(Mutex::new(Vec::new()));
+      let task_received = Arc::clone(&received);
       let peer = tokio::spawn(async move {
         let mut lines = BufReader::new(peer_reader).lines();
         let mut state = MpvPeerState::default();
@@ -2019,6 +2051,10 @@ mod tests {
             .and_then(serde_json::Value::as_array)
             .cloned()
             .unwrap_or_default();
+          task_received
+            .lock()
+            .expect("received commands should not be poisoned")
+            .push(command.clone());
           let data = apply_mpv_command(&mut state, &command);
           let mut writer = task_writer.lock().await;
           write_mpv_message(
@@ -2041,7 +2077,16 @@ mod tests {
         client,
         writer,
         peer,
+        received,
       }
+    }
+
+    fn received_commands(&self) -> Vec<Vec<serde_json::Value>> {
+      self
+        .received
+        .lock()
+        .expect("received commands should not be poisoned")
+        .clone()
     }
 
     async fn emit_eof(&self) {
@@ -3028,6 +3073,61 @@ mod tests {
           vec![PlaybackWarning::PreviousPlaybackStopNotReported],
         )
       );
+    });
+  }
+
+  #[test]
+  fn play_presents_the_player_user_agent_before_loading() {
+    run_async(async {
+      let server = Arc::new(MockPlaybackServer::new());
+      let (mut controller, mpv) = controller_harness(server).await;
+
+      let _ = controller
+        .play(
+          library_item("Episode").into(),
+          PlaybackStartPosition::Beginning,
+        )
+        .await
+        .expect("playback should start");
+
+      let commands = mpv.received_commands();
+      let user_agent_at = commands.iter().position(|command| {
+        command.first().and_then(serde_json::Value::as_str) == Some("set_property")
+          && command.get(1).and_then(serde_json::Value::as_str) == Some("user-agent")
+          && command.get(2) == Some(&serde_json::json!("mpv"))
+      });
+      let loadfile_at = commands.iter().position(|command| {
+        command.first().and_then(serde_json::Value::as_str) == Some("loadfile")
+      });
+      assert!(
+        matches!((user_agent_at, loadfile_at), (Some(agent), Some(load)) if agent < load),
+        "user-agent must be set before loadfile, got {commands:?}"
+      );
+    });
+  }
+
+  #[test]
+  fn play_respects_a_user_configured_mpv_user_agent() {
+    run_async(async {
+      let server = Arc::new(MockPlaybackServer::new());
+      let mpv = InMemoryMpv::new().await;
+      let mut controller = PlaybackController::from_server(
+        server,
+        mpv.client.clone(),
+        vec!["--user-agent=Custom/1.0".to_owned()],
+      );
+
+      let _ = controller
+        .play(
+          library_item("Episode").into(),
+          PlaybackStartPosition::Beginning,
+        )
+        .await
+        .expect("playback should start");
+
+      assert!(!mpv.received_commands().iter().any(|command| {
+        command.get(1).and_then(serde_json::Value::as_str) == Some("user-agent")
+      }));
     });
   }
 
