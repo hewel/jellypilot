@@ -226,6 +226,11 @@ pub struct Settings {
     server_url: String,
     provider: String,
     username: String,
+    #[serde(
+        default = "default_auto_login",
+        deserialize_with = "deserialize_auto_login"
+    )]
+    auto_login: bool,
     #[serde(default)]
     intro_mode: IntroMode,
     #[serde(default)]
@@ -275,6 +280,7 @@ impl Default for Settings {
             server_url: String::new(),
             provider: String::new(),
             username: String::new(),
+            auto_login: default_auto_login(),
             intro_mode: IntroMode::Automatic,
             theme_mode: ThemeMode::System,
             app_mode: AppMode::Full,
@@ -304,6 +310,9 @@ impl Settings {
 
     pub fn login_provider(&self) -> &str {
         &self.provider
+    }
+    pub const fn auto_login(&self) -> bool {
+        self.auto_login
     }
 
     pub const fn intro_mode(&self) -> IntroMode {
@@ -486,6 +495,12 @@ impl SettingsStore {
     pub fn set_theme_mode(&mut self, mode: ThemeMode) -> Result<bool, SettingsMutationError> {
         self.update(|settings| {
             settings.theme_mode = mode;
+            Ok(())
+        })
+    }
+    pub fn set_auto_login(&mut self, enabled: bool) -> Result<bool, SettingsMutationError> {
+        self.update(|settings| {
+            settings.auto_login = enabled;
             Ok(())
         })
     }
@@ -688,6 +703,10 @@ const fn default_image_cache_enabled() -> bool {
     true
 }
 
+const fn default_auto_login() -> bool {
+    true
+}
+
 fn non_empty_setting(value: String) -> Option<String> {
     let value = value.trim();
     (!value.is_empty()).then(|| value.to_owned())
@@ -772,6 +791,14 @@ where
 {
     let value = serde_json::Value::deserialize(deserializer)?;
     Ok(value.as_bool().unwrap_or_else(default_image_cache_enabled))
+}
+
+fn deserialize_auto_login<'de, D>(deserializer: D) -> Result<bool, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value = serde_json::Value::deserialize(deserializer)?;
+    Ok(value.as_bool().unwrap_or_else(default_auto_login))
 }
 
 fn deserialize_start_minimized<'de, D>(deserializer: D) -> Result<bool, D::Error>
@@ -881,6 +908,7 @@ mod tests {
             server_url: "https://media.example.com".to_owned(),
             provider: "jellyfin".to_owned(),
             username: "alice".to_owned(),
+            auto_login: false,
             intro_mode: IntroMode::Manual,
             theme_mode: ThemeMode::Dark,
             app_mode: AppMode::ControlOnly,
@@ -921,6 +949,7 @@ mod tests {
         assert_eq!(settings.intro_mode(), IntroMode::Automatic);
         assert_eq!(settings.theme_mode(), ThemeMode::System);
         assert_eq!(settings.app_mode(), AppMode::Full);
+        assert!(settings.auto_login());
         assert_eq!(settings.mpv_path(), None);
         assert!(settings.mpv_args().is_empty());
         assert_eq!(settings.playback_target_name(), None);
@@ -971,6 +1000,37 @@ mod tests {
         let contents = serde_json::to_string(&settings).unwrap();
 
         assert!(contents.contains(r#""theme_mode":"light""#));
+    }
+
+    #[test]
+    fn auto_login_serde_defaults_true_and_preserves_false() {
+        let missing: Settings = serde_json::from_str(
+            r#"{"remember":false,"server_url":"","provider":"","username":""}"#,
+        )
+        .unwrap();
+        let explicit_false: Settings = serde_json::from_str(
+            r#"{"remember":false,"server_url":"","provider":"","username":"","auto_login":false}"#,
+        )
+        .unwrap();
+        let malformed: Settings = serde_json::from_str(
+            r#"{"remember":false,"server_url":"","provider":"","username":"","auto_login":"sometimes"}"#,
+        )
+        .unwrap();
+
+        assert!(missing.auto_login());
+        assert!(!explicit_false.auto_login());
+        assert!(malformed.auto_login());
+    }
+
+    #[test]
+    fn auto_login_is_persisted() {
+        let path = test_path("auto-login");
+        let _ = fs::remove_file(&path);
+        let mut store = store_at(path.clone(), Settings::default());
+
+        assert!(store.set_auto_login(false).unwrap());
+        assert!(!load_from(&path).unwrap().auto_login());
+        fs::remove_file(path).unwrap();
     }
     #[test]
     fn app_mode_is_persisted_and_defaults_to_full() {

@@ -122,6 +122,13 @@ fn connection_section(state: &State) -> Element<'_, Message> {
       text("Disconnect keeps saved profiles. Sign Out securely removes the active saved profile.")
         .size(12)
         .color(palette.colors.onSurfaceVariant),
+      toggle_row(
+        palette,
+        "Auto-login on startup",
+        "Reconnects to the last used server when JellyPilot starts.",
+        state.kernel.settings.snapshot().auto_login(),
+        SettingsMessage::AutoLoginToggled,
+      ),
       row![disconnect, sign_out].spacing(TOKENS.spacing.s2),
     ]
     .spacing(TOKENS.spacing.s3),

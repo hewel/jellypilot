@@ -9,6 +9,7 @@ use jellypilot_ui::fonts::SPACE_GROTESK_FONT;
 use jellypilot_ui::icons::{icon_for_variant, icon_with_color, Icon, IconSize};
 use jellypilot_ui::layout::SizeClass;
 use jellypilot_ui::overlay::{tooltip, TooltipOptions};
+use jellypilot_ui::theme::ThemeMode as UiThemeMode;
 use jellypilot_ui::tokens::{ThemePalette, TOKENS};
 use jellypilot_ui::variants::{ButtonVariant, FieldVariant, SurfaceVariant};
 use jellypilot_ui::widgets::skeleton::skeleton_block;
@@ -311,6 +312,7 @@ fn sidebar_full(
     connection_summary(state),
     row![
       settings_button(),
+      theme_toggle_button(state),
       tooltip(
         button(icon_for_variant(
           Icon::PictureInPicture,
@@ -375,6 +377,7 @@ fn sidebar_compact(state: &State) -> container::Container<'_, Message> {
   let bottom = column![
     compact_connection_status(state),
     compact_settings_button(),
+    compact_theme_toggle_button(state),
     tooltip(
       button(icon_for_variant(
         Icon::PictureInPicture,
@@ -490,6 +493,40 @@ fn compact_settings_button<'a>() -> Element<'a, Message> {
   });
 
   tooltip(btn, "Settings", TooltipOptions::default())
+}
+
+fn theme_toggle_icon(state: &State) -> (Icon, &'static str) {
+  match state.theme_mode() {
+    UiThemeMode::Dark => (Icon::Sun, "Switch to light theme"),
+    UiThemeMode::Light => (Icon::Moon, "Switch to dark theme"),
+  }
+}
+
+fn theme_toggle_button(state: &State) -> Element<'_, Message> {
+  let (icon, label) = theme_toggle_icon(state);
+  let btn = button(icon_for_variant(icon, IconSize::Md, ButtonVariant::Tonal))
+    .padding([7, 12])
+    .on_press(Message::Settings(SettingsMessage::ThemeTogglePressed))
+    .style(|theme, status| {
+      jellypilot_ui::theme::button_variant(theme, status, ButtonVariant::Tonal)
+    });
+
+  tooltip(btn, label, TooltipOptions::default())
+}
+
+fn compact_theme_toggle_button(state: &State) -> Element<'_, Message> {
+  let (icon, label) = theme_toggle_icon(state);
+  let btn = button(
+    container(icon_for_variant(icon, IconSize::Md, ButtonVariant::Tonal))
+      .width(Fill)
+      .align_x(Alignment::Center),
+  )
+  .padding([7, 0])
+  .width(Fill)
+  .on_press(Message::Settings(SettingsMessage::ThemeTogglePressed))
+  .style(|theme, status| jellypilot_ui::theme::button_variant(theme, status, ButtonVariant::Tonal));
+
+  tooltip(btn, label, TooltipOptions::default())
 }
 
 fn destination_button<'a>(

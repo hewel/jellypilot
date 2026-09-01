@@ -69,6 +69,7 @@ pub struct LoginState {
   pub profiles: Vec<SavedProfileSummary>,
   pub profiles_loading: bool,
   pub profiles_revision: u64,
+  pub auto_login_attempted: bool,
   pub busy_profile: Option<SavedProfileKey>,
   pub forget_confirmation: Option<SavedProfileKey>,
   pub error: Option<String>,
@@ -92,6 +93,7 @@ impl LoginState {
       profiles: Vec::new(),
       profiles_loading: true,
       profiles_revision: 0,
+      auto_login_attempted: false,
       busy_profile: None,
       forget_confirmation: None,
       error: None,
@@ -818,6 +820,7 @@ impl State {
     };
     let mut login = LoginState::from_settings(settings.snapshot());
     login.error = settings_error.clone();
+    login.auto_login_attempted = smoke;
     let settings_view = SettingsState::from_settings(settings.snapshot());
     let mut diagnostics = Diagnostics::default();
     if let Some(error) = &settings_error {

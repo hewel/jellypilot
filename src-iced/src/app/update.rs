@@ -319,9 +319,15 @@ pub fn update(state: &mut State, message: Message) -> Task<Message> {
       // Disconnect/SignOut tear the remote session down or start the login
       // surface's profile forget.
       let settings_before = SettingsPlaybackSnapshot::capture(state.kernel.settings.snapshot());
+      let effective_theme_mode = state.theme_mode();
       let disconnect = matches!(message, SettingsMessage::Disconnect);
       let sign_out = matches!(message, SettingsMessage::SignOut);
-      let settings_task = settings::update(&mut state.settings, &mut state.kernel, message);
+      let settings_task = settings::update(
+        &mut state.settings,
+        &mut state.kernel,
+        effective_theme_mode,
+        message,
+      );
       let settings_after = SettingsPlaybackSnapshot::capture(state.kernel.settings.snapshot());
       let mut tasks = vec![settings_task];
       if settings_after.mpv_path != settings_before.mpv_path

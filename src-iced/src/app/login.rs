@@ -118,8 +118,17 @@ fn update_login(
         return Task::none();
       }
       match result {
-        Ok(profiles) => surface.flow.profiles = profiles,
+        Ok(profiles) => {
+          let first_key = profiles.first().map(|profile| profile.key().clone());
+          surface.flow.profiles = profiles;
+          if should_auto_login(&mut surface.flow, kernel, first_key.is_some()) {
+            if let Some(first_key) = first_key {
+              return start_restore(surface, kernel, first_key);
+            }
+          }
+        }
         Err(error) => {
+          should_auto_login(&mut surface.flow, kernel, false);
           surface.flow.error = Some(LoginError::AuthStorage(error).to_string());
         }
       }
@@ -237,6 +246,16 @@ fn update_login(
       Task::none()
     }
   }
+}
+
+fn should_auto_login(flow: &mut LoginState, kernel: &Kernel, has_profiles: bool) -> bool {
+  if flow.auto_login_attempted {
+    return false;
+  }
+  flow.auto_login_attempted = true;
+  kernel.connection == ConnectionPhase::SignedOut
+    && has_profiles
+    && kernel.settings.snapshot().auto_login()
 }
 
 fn playback_allows_login(surface: &mut Surface, can_login: bool) -> bool {
@@ -653,6 +672,37 @@ mod tests {
       artwork_handles: ArtworkHandleRetention::default(),
     };
     (surface, kernel)
+  }
+
+  fn auto_login_gate_results(auto_login: bool, has_profiles: bool) -> (bool, bool) {
+    let (mut surface, mut kernel) = test_fixture();
+    let (settings, _settings_file) = isolated_settings("auto-login-gate");
+    kernel.settings = settings;
+    if !auto_login {
+      kernel.settings.set_auto_login(false).unwrap();
+    }
+    let first = should_auto_login(&mut surface.flow, &kernel, has_profiles);
+    let second = should_auto_login(&mut surface.flow, &kernel, true);
+    (first, second)
+  }
+
+  #[test]
+  fn auto_login_boot_gate_fires_once_with_profiles_when_enabled() {
+    assert_eq!(auto_login_gate_results(true, true), (true, false));
+  }
+
+  #[test]
+  fn auto_login_boot_gate_does_not_fire_when_disabled_or_profiles_are_empty() {
+    assert_eq!(auto_login_gate_results(false, true), (false, false));
+    assert_eq!(auto_login_gate_results(true, false), (false, false));
+  }
+
+  #[test]
+  fn auto_login_boot_gate_does_not_fire_in_smoke_mode() {
+    let (mut surface, kernel) = test_fixture();
+    surface.flow.auto_login_attempted = true;
+
+    assert!(!should_auto_login(&mut surface.flow, &kernel, true));
   }
 
   #[test]

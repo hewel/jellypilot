@@ -88,7 +88,7 @@ impl From<f32> for IconSize {
     }
 }
 
-const ICON_COUNT: usize = 51;
+const ICON_COUNT: usize = 53;
 static ICON_HANDLES: LazyLock<[Handle; ICON_COUNT]> = LazyLock::new(|| {
     let mut handles = std::array::from_fn(|_| Handle::from_memory(&[]));
     for icon in Icon::all() {
@@ -141,6 +141,8 @@ pub enum Icon {
     Refresh,
     Trash,
     Close,
+    Sun,
+    Moon,
 
     // Settings & diagnostics
     Server,
@@ -206,6 +208,8 @@ impl Icon {
             Self::Refresh => include_bytes!("../assets/icons/refresh.svg"),
             Self::Trash => include_bytes!("../assets/icons/trash.svg"),
             Self::Close => include_bytes!("../assets/icons/x.svg"),
+            Self::Sun => include_bytes!("../assets/icons/sun.svg"),
+            Self::Moon => include_bytes!("../assets/icons/moon.svg"),
 
             Self::Server => include_bytes!("../assets/icons/server.svg"),
             Self::Cpu => include_bytes!("../assets/icons/cpu.svg"),
@@ -291,6 +295,8 @@ impl Icon {
             Self::Refresh,
             Self::Trash,
             Self::Close,
+            Self::Sun,
+            Self::Moon,
             Self::Server,
             Self::Cpu,
             Self::Sliders,

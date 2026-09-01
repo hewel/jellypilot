@@ -2,8 +2,9 @@
 //! edits, shortcut capture, diagnostic filters, and inline save feedback.
 
 use iced::Task;
-use jellypilot_core::config::SettingsMutationError;
+use jellypilot_core::config::{SettingsMutationError, ThemeMode};
 use jellypilot_core::diagnostics::{DiagnosticCategory, DiagnosticLevel};
+use jellypilot_ui::theme::ThemeMode as UiThemeMode;
 
 use super::kernel::Kernel;
 use super::message::{Message, SettingsMessage};
@@ -31,14 +32,16 @@ pub struct Surface {
 pub fn update(
   surface: &mut Surface,
   kernel: &mut Kernel,
+  effective_theme_mode: UiThemeMode,
   message: SettingsMessage,
 ) -> Task<Message> {
-  update_settings(surface, kernel, message)
+  update_settings(surface, kernel, effective_theme_mode, message)
 }
 
 fn update_settings(
   surface: &mut Surface,
   kernel: &mut Kernel,
+  effective_theme_mode: UiThemeMode,
   message: SettingsMessage,
 ) -> Task<Message> {
   match message {
@@ -96,6 +99,15 @@ fn update_settings(
       finish_settings_mutation(surface, kernel, result);
       Task::none()
     }
+    SettingsMessage::ThemeTogglePressed => {
+      let mode = match effective_theme_mode {
+        UiThemeMode::Dark => ThemeMode::Light,
+        UiThemeMode::Light => ThemeMode::Dark,
+      };
+      let result = kernel.settings.set_theme_mode(mode);
+      finish_settings_mutation(surface, kernel, result);
+      Task::none()
+    }
     SettingsMessage::AppModeSelected(mode) => {
       let result = kernel.settings.set_app_mode(mode);
       finish_settings_mutation(surface, kernel, result);
@@ -148,6 +160,12 @@ fn update_settings(
       if finish_settings_mutation(surface, kernel, result) {
         kernel.artwork_adapter.set_disk_cache_enabled(enabled);
       }
+      Task::none()
+    }
+    SettingsMessage::AutoLoginToggled => {
+      let enabled = !kernel.settings.snapshot().auto_login();
+      let result = kernel.settings.set_auto_login(enabled);
+      finish_settings_mutation(surface, kernel, result);
       Task::none()
     }
     SettingsMessage::StartMinimizedToggled => {
@@ -311,6 +329,7 @@ mod tests {
     drop(update(
       &mut surface,
       &mut kernel,
+      UiThemeMode::Dark,
       SettingsMessage::ShortcutCaptured("Shift+<".to_owned()),
     ));
 
@@ -318,5 +337,74 @@ mod tests {
       surface.view.error,
       Some("That shortcut is already assigned.")
     );
+  }
+
+  #[test]
+  fn auto_login_toggle_persists_the_opposite_value() {
+    let path = std::env::temp_dir().join(format!(
+      "jellypilot-iced-auto-login-toggle-{}.json",
+      std::process::id()
+    ));
+    let _ = fs::remove_file(&path);
+    let (mut surface, mut kernel) = test_fixture();
+    kernel.settings = SettingsStore::for_test(path.clone());
+
+    drop(update(
+      &mut surface,
+      &mut kernel,
+      UiThemeMode::Dark,
+      SettingsMessage::AutoLoginToggled,
+    ));
+
+    assert!(!kernel.settings.snapshot().auto_login());
+    fs::remove_file(path).unwrap();
+  }
+
+  #[test]
+  fn theme_toggle_persists_explicit_opposite_of_effective_mode() {
+    let path = std::env::temp_dir().join(format!(
+      "jellypilot-iced-theme-toggle-{}.json",
+      std::process::id()
+    ));
+    let _ = fs::remove_file(&path);
+    let (mut surface, mut kernel) = test_fixture();
+    kernel.settings = SettingsStore::for_test(path.clone());
+
+    drop(update(
+      &mut surface,
+      &mut kernel,
+      UiThemeMode::Dark,
+      SettingsMessage::ThemeTogglePressed,
+    ));
+    assert_eq!(
+      kernel.settings.snapshot().theme_mode(),
+      ThemeMode::Light,
+      "System with an effective dark theme should switch to explicit light"
+    );
+
+    drop(update(
+      &mut surface,
+      &mut kernel,
+      UiThemeMode::Light,
+      SettingsMessage::ThemeTogglePressed,
+    ));
+    assert_eq!(
+      kernel.settings.snapshot().theme_mode(),
+      ThemeMode::Dark,
+      "explicit light should switch to explicit dark"
+    );
+
+    drop(update(
+      &mut surface,
+      &mut kernel,
+      UiThemeMode::Dark,
+      SettingsMessage::ThemeTogglePressed,
+    ));
+    assert_eq!(
+      kernel.settings.snapshot().theme_mode(),
+      ThemeMode::Light,
+      "explicit dark should switch to explicit light"
+    );
+    fs::remove_file(path).unwrap();
   }
 }
