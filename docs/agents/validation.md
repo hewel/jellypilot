@@ -19,6 +19,24 @@ ships regressions.
    configuration persistence. The smoke gate proves startup, not appearance — visual acceptance
    remains human (see root AGENTS.md).
 
+## Diagnosing Smoke and Playback Failures
+
+When the smoke gate or MPV playback fails, follow this route instead of ad-hoc spelunking:
+
+- **App logging**: `JELLYPILOT_LOG` (tracing EnvFilter syntax) controls app diagnostics; default
+  `warn`, output goes to **stderr** (`src-iced/src/main.rs`). Typical values: `error`, `warn`,
+  `info`, `debug`, `trace`, or module-scoped `jellypilot_iced=debug`. Re-run a failing gate as
+  `JELLYPILOT_LOG=debug bun run task iced run --smoke`.
+- **Stream anatomy**: the dispatcher pipes child output through, so cargo compile lines come first
+  and app tracing starts after cargo's `Running …` line. Compile errors belong to cargo (they name
+  the crate and file); failures after `Running` belong to the app.
+- **Failure segment**: a failing smoke gate ends with an `=== iced smoke [FAILED] ===` segment
+  (command, exit code, hint). Absence of that segment means the failure happened before the app
+  started — inspect the cargo/tooling output above it.
+- **Playback**: MPV runs as an external process over JSON IPC. A missing binary surfaces as the
+  named error `MPV executable not found`; MPV's own diagnostics go to its stderr. App-side IPC
+  errors are visible at `JELLYPILOT_LOG=debug`.
+
 ## Rules
 
 - Do not re-run suites the change cannot affect: no workspace clippy for a `scripts/**`-only edit,
