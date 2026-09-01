@@ -3533,6 +3533,7 @@ async fn continue_watching_items(
       enable_image_types: Some(vec![
         jellyfin_api::models::ImageType::Thumb,
         jellyfin_api::models::ImageType::Primary,
+        jellyfin_api::models::ImageType::Backdrop,
       ]),
       exclude_item_types: None,
       include_item_types: Some(vec![
@@ -3573,7 +3574,10 @@ async fn next_up_items(
       parent_id: None,
       enable_images: Some(true),
       image_type_limit: Some(1),
-      enable_image_types: Some(vec![jellyfin_api::models::ImageType::Primary]),
+      enable_image_types: Some(vec![
+        jellyfin_api::models::ImageType::Primary,
+        jellyfin_api::models::ImageType::Backdrop,
+      ]),
       enable_user_data: Some(true),
       next_up_date_cutoff: None,
       enable_total_record_count: Some(false),
@@ -3614,7 +3618,10 @@ async fn latest_video_items(
       is_played: None,
       enable_images: Some(true),
       image_type_limit: Some(1),
-      enable_image_types: Some(vec![jellyfin_api::models::ImageType::Primary]),
+      enable_image_types: Some(vec![
+        jellyfin_api::models::ImageType::Primary,
+        jellyfin_api::models::ImageType::Backdrop,
+      ]),
       enable_user_data: Some(true),
       limit: Some(12),
       group_items: Some(false),
@@ -3869,6 +3876,18 @@ fn map_video_home_item(
     artwork_url(server_url, &id, item.image_tags.flatten(), image_type),
     ImageRefKind::Artwork,
   );
+  let backdrop_image_id = image_id_for_remote_url(
+    MediaServerProvider::Jellyfin,
+    server_url,
+    backdrop_url(
+      server_url,
+      &id,
+      item.backdrop_image_tags.flatten(),
+      item.parent_backdrop_item_id.flatten().map(jellyfin_id),
+      item.parent_backdrop_image_tags.flatten(),
+    ),
+    ImageRefKind::Backdrop,
+  );
   let series_id = item.series_id.flatten().map(jellyfin_id);
   let series_primary_image_tag = item.series_primary_image_tag.flatten();
   let series_poster_image_id = image_id_for_series_primary(
@@ -3907,6 +3926,7 @@ fn map_video_home_item(
       .and_then(|data| data.is_favorite)
       .unwrap_or(false),
     artwork_image_id,
+    backdrop_image_id,
     series_poster_image_id,
     overview: None,
   })
@@ -3966,6 +3986,7 @@ fn map_video_library_item(
       .and_then(|data| data.is_favorite)
       .unwrap_or(false),
     artwork_image_id,
+    backdrop_image_id: None,
     series_poster_image_id,
     season_number: item.parent_index_number.flatten(),
     episode_number: item.index_number.flatten(),
@@ -4505,7 +4526,7 @@ async fn emby_continue_watching_items(
     ("EnableUserData", "true".to_string()),
     ("EnableImages", "true".to_string()),
     ("ImageTypeLimit", "1".to_string()),
-    ("EnableImageTypes", "Thumb,Primary".to_string()),
+    ("EnableImageTypes", "Thumb,Primary,Backdrop".to_string()),
   ];
   let response = client
     .get_with_query::<emby_api::models::QueryResultBaseItemDto>(
@@ -4538,7 +4559,7 @@ async fn emby_next_up_items(
     ("Fields", emby_home_fields()),
     ("EnableImages", "true".to_string()),
     ("ImageTypeLimit", "1".to_string()),
-    ("EnableImageTypes", "Primary".to_string()),
+    ("EnableImageTypes", "Primary,Backdrop".to_string()),
     ("EnableUserData", "true".to_string()),
     ("EnableResumable", "true".to_string()),
     ("EnableRewatching", "false".to_string()),
@@ -4574,7 +4595,7 @@ async fn emby_latest_video_items(
     ("MediaTypes", "Video".to_string()),
     ("EnableImages", "true".to_string()),
     ("ImageTypeLimit", "1".to_string()),
-    ("EnableImageTypes", "Primary".to_string()),
+    ("EnableImageTypes", "Primary,Backdrop".to_string()),
     ("EnableUserData", "true".to_string()),
     ("GroupItems", "false".to_string()),
   ];
@@ -4855,6 +4876,18 @@ fn map_emby_video_home_item(
     ),
     ImageRefKind::Artwork,
   );
+  let backdrop_image_id = image_id_for_remote_url(
+    MediaServerProvider::Emby,
+    server_url,
+    backdrop_url(
+      server_url,
+      &id,
+      item.backdrop_image_tags,
+      item.parent_backdrop_item_id,
+      item.parent_backdrop_image_tags,
+    ),
+    ImageRefKind::Backdrop,
+  );
   let series_poster_image_id = image_id_for_series_primary(
     MediaServerProvider::Emby,
     server_url,
@@ -4879,6 +4912,7 @@ fn map_emby_video_home_item(
     played: user_data.and_then(|data| data.played).unwrap_or(false),
     favorite: user_data.and_then(|data| data.is_favorite).unwrap_or(false),
     artwork_image_id,
+    backdrop_image_id,
     series_poster_image_id,
     overview: None,
   })
@@ -4932,6 +4966,7 @@ fn map_emby_video_library_item(
     played,
     favorite: user_data.and_then(|data| data.is_favorite).unwrap_or(false),
     artwork_image_id,
+    backdrop_image_id: None,
     series_poster_image_id,
     season_number: item.parent_index_number.flatten(),
     episode_number: item.index_number.flatten(),

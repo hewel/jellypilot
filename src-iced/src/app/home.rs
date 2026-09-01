@@ -49,10 +49,21 @@ pub fn update(
     // destination stack and drives the other surfaces' leave/enter hooks.
     HomeMessage::Navigate(_) => Task::none(),
     HomeMessage::Retry => start_load(surface, kernel, playback_idle),
+    HomeMessage::CardHoverEnter(item_id) => {
+      surface.data.hovered_card = Some(item_id);
+      Task::none()
+    }
+    HomeMessage::CardHoverExit(item_id) => {
+      if surface.data.hovered_card.as_deref() == Some(item_id.as_str()) {
+        surface.data.hovered_card = None;
+      }
+      Task::none()
+    }
     HomeMessage::Loaded { token, result } => {
       if !settle(&mut surface.data, &mut kernel.request_gate, token, result) {
         return Task::none();
       }
+      surface.data.hovered_card = None;
       prepare_artwork(surface, kernel, window_width)
     }
     HomeMessage::ArtworkLoaded {
@@ -157,6 +168,7 @@ fn settle(
 /// settlement cannot apply, and releases pending artwork while playback is
 /// idle.
 pub(crate) fn leave_view(surface: &mut Surface, kernel: &mut Kernel, playback_idle: bool) {
+  surface.data.hovered_card = None;
   kernel.request_gate.begin_home();
   if playback_idle {
     kernel.artwork_adapter.cancel_pending();
@@ -167,6 +179,7 @@ pub(crate) fn leave_view(surface: &mut Surface, kernel: &mut Kernel, playback_id
 #[derive(Clone, Copy)]
 enum ArtworkPlacement {
   Hero,
+  HeroBackdrop,
   Card(HomeSection),
 }
 
@@ -181,6 +194,7 @@ impl ArtworkLoadSpec {
   fn size_class(&self) -> ArtworkSizeClass {
     match self.placement {
       ArtworkPlacement::Hero => ArtworkSizeClass::Hero,
+      ArtworkPlacement::HeroBackdrop => ArtworkSizeClass::Backdrop,
       ArtworkPlacement::Card(_) => ArtworkSizeClass::Card,
     }
   }
@@ -195,6 +209,10 @@ fn prepare_artwork(surface: &mut Surface, kernel: &mut Kernel, window_width: f32
     .iter()
     .find(|spec| matches!(spec.placement, ArtworkPlacement::Hero))
     .map(|spec| spec.item_id.as_str());
+  let hero_backdrop_item_id = specs
+    .iter()
+    .find(|spec| matches!(spec.placement, ArtworkPlacement::HeroBackdrop))
+    .map(|spec| spec.item_id.as_str());
   let mut section_item_ids: [HashSet<&str>; 4] = Default::default();
   for spec in &specs {
     if let ArtworkPlacement::Card(section) = spec.placement {
@@ -203,7 +221,7 @@ fn prepare_artwork(surface: &mut Surface, kernel: &mut Kernel, window_width: f32
   }
   surface
     .artwork
-    .retain_items(hero_item_id, &section_item_ids);
+    .retain_items(hero_item_id, hero_backdrop_item_id, &section_item_ids);
 
   let session = kernel.request_gate.current_session();
   let Some(client) = kernel.client.as_ref().map(Arc::clone) else {
@@ -216,6 +234,7 @@ fn prepare_artwork(surface: &mut Surface, kernel: &mut Kernel, window_width: f32
   for spec in specs {
     let existing_cell = match spec.placement {
       ArtworkPlacement::Hero => surface.artwork.hero(&spec.item_id),
+      ArtworkPlacement::HeroBackdrop => surface.artwork.hero_backdrop(&spec.item_id),
       ArtworkPlacement::Card(section) => surface.artwork.card(section, &spec.item_id),
     };
     if let Some(cell) = existing_cell {
@@ -248,6 +267,9 @@ fn prepare_artwork(surface: &mut Surface, kernel: &mut Kernel, window_width: f32
       };
       match spec.placement {
         ArtworkPlacement::Hero => surface.artwork.insert_hero(spec.item_id, cell),
+        ArtworkPlacement::HeroBackdrop => {
+          surface.artwork.insert_hero_backdrop(spec.item_id, cell);
+        }
         ArtworkPlacement::Card(section) => {
           surface.artwork.insert_card(section, spec.item_id, cell);
         }
@@ -264,6 +286,9 @@ fn prepare_artwork(surface: &mut Surface, kernel: &mut Kernel, window_width: f32
     };
     match spec.placement {
       ArtworkPlacement::Hero => surface.artwork.insert_hero(spec.item_id, cell),
+      ArtworkPlacement::HeroBackdrop => {
+        surface.artwork.insert_hero_backdrop(spec.item_id, cell);
+      }
       ArtworkPlacement::Card(section) => {
         surface.artwork.insert_card(section, spec.item_id, cell);
       }
@@ -295,16 +320,30 @@ fn prepare_artwork(surface: &mut Surface, kernel: &mut Kernel, window_width: f32
 
 fn artwork_specs(data: &HomeState, window_width: f32) -> Vec<ArtworkLoadSpec> {
   let mut specs = Vec::new();
-  if let Some(item) = data.featured_item() {
+  let featured_item = data.featured_item();
+  if let Some(item) = featured_item {
     push_artwork_spec(&mut specs, ArtworkPlacement::Hero, item, true);
+    if let Some(image_id) = &item.backdrop_image_id {
+      specs.push(ArtworkLoadSpec {
+        placement: ArtworkPlacement::HeroBackdrop,
+        item_id: item.id.clone(),
+        image_id: image_id.clone(),
+        visible: true,
+      });
+    }
   }
+  let featured_item_id = featured_item.map(|item| item.id.as_str());
   let class = SizeClass::from_width(window_width);
   let content_width = content_width(window_width, class);
   for section in HomeSection::ALL {
     if let jellypilot_core::LoadState::Ready(items) = data.section(section) {
       let (card_width, _) = section_frame_size(section);
       let visible_cards = visible_row_cards(content_width, card_width, TOKENS.spacing.s4);
-      for (index, item) in items.iter().enumerate() {
+      for (index, item) in items
+        .iter()
+        .filter(|item| Some(item.id.as_str()) != featured_item_id)
+        .enumerate()
+      {
         push_artwork_spec(
           &mut specs,
           ArtworkPlacement::Card(section),
@@ -384,6 +423,7 @@ mod tests {
       played: false,
       favorite: false,
       artwork_image_id: None,
+      backdrop_image_id: None,
       series_poster_image_id: None,
       season_number: Some(season_number),
       episode_number: Some(1),

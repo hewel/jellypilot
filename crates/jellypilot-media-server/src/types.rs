@@ -199,6 +199,7 @@ pub struct VideoLibraryItem {
   pub played: bool,
   pub favorite: bool,
   pub artwork_image_id: Option<String>,
+  pub backdrop_image_id: Option<String>,
   /// Series primary poster for episode player-bar thumbs; absent for movies.
   pub series_poster_image_id: Option<String>,
   /// Episode metadata: season number (1-based), available for Episode items.

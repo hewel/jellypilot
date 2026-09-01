@@ -210,6 +210,7 @@ pub struct HomeState {
   pub next_up: LoadState<Vec<VideoLibraryItem>>,
   pub latest_episodes: LoadState<Vec<VideoLibraryItem>>,
   pub shortcuts: LoadState<Vec<VideoLibraryShortcut>>,
+  pub hovered_card: Option<String>,
 }
 
 impl HomeState {
@@ -304,12 +305,16 @@ pub struct ArtworkCell {
 #[derive(Default)]
 pub struct HomeArtwork {
   hero: Option<(String, ArtworkCell)>,
+  hero_backdrop: Option<(String, ArtworkCell)>,
   sections: [HashMap<String, ArtworkCell>; 4],
 }
 
 impl HomeArtwork {
   pub fn insert_hero(&mut self, item_id: String, cell: ArtworkCell) {
     self.hero = Some((item_id, cell));
+  }
+  pub fn insert_hero_backdrop(&mut self, item_id: String, cell: ArtworkCell) {
+    self.hero_backdrop = Some((item_id, cell));
   }
 
   pub fn insert_card(&mut self, section: HomeSection, item_id: String, cell: ArtworkCell) {
@@ -323,6 +328,13 @@ impl HomeArtwork {
       .filter(|(bound_item_id, _)| bound_item_id == item_id)
       .map(|(_, cell)| cell)
   }
+  pub fn hero_backdrop(&self, item_id: &str) -> Option<&ArtworkCell> {
+    self
+      .hero_backdrop
+      .as_ref()
+      .filter(|(bound_item_id, _)| bound_item_id == item_id)
+      .map(|(_, cell)| cell)
+  }
 
   pub fn card(&self, section: HomeSection, item_id: &str) -> Option<&ArtworkCell> {
     self.sections[section.index()].get(item_id)
@@ -330,6 +342,11 @@ impl HomeArtwork {
 
   pub fn cell_mut(&mut self, slot: ArtworkSlot, image_id: &str) -> Option<&mut ArtworkCell> {
     if let Some((_, cell)) = &mut self.hero {
+      if cell.slot == slot && cell.image_id == image_id {
+        return Some(cell);
+      }
+    }
+    if let Some((_, cell)) = &mut self.hero_backdrop {
       if cell.slot == slot && cell.image_id == image_id {
         return Some(cell);
       }
@@ -347,6 +364,7 @@ impl HomeArtwork {
       .as_ref()
       .map(|(_, cell)| cell.slot)
       .into_iter()
+      .chain(self.hero_backdrop.as_ref().map(|(_, cell)| cell.slot))
       .chain(
         self
           .sections
@@ -359,11 +377,17 @@ impl HomeArtwork {
   pub fn retain_items(
     &mut self,
     hero_item_id: Option<&str>,
+    hero_backdrop_item_id: Option<&str>,
     section_item_ids: &[HashSet<&str>; 4],
   ) {
     if let Some((bound_item_id, _)) = &self.hero {
       if hero_item_id != Some(bound_item_id.as_str()) {
         self.hero = None;
+      }
+    }
+    if let Some((bound_item_id, _)) = &self.hero_backdrop {
+      if hero_backdrop_item_id != Some(bound_item_id.as_str()) {
+        self.hero_backdrop = None;
       }
     }
     for (i, section) in self.sections.iter_mut().enumerate() {
@@ -378,6 +402,11 @@ impl HomeArtwork {
         self.hero = None;
       }
     }
+    if let Some((_, cell)) = &self.hero_backdrop {
+      if cell.state != ArtworkCellState::Ready {
+        self.hero_backdrop = None;
+      }
+    }
     for section in &mut self.sections {
       section.retain(|_, cell| cell.state == ArtworkCellState::Ready);
     }
@@ -388,6 +417,10 @@ impl HomeArtwork {
       .hero
       .as_ref()
       .is_some_and(|(_, cell)| cell.state == ArtworkCellState::Loading)
+      || self
+        .hero_backdrop
+        .as_ref()
+        .is_some_and(|(_, cell)| cell.state == ArtworkCellState::Loading)
       || self
         .sections
         .iter()

@@ -2255,6 +2255,7 @@ mod tests {
       played: false,
       favorite: false,
       artwork_image_id: None,
+      backdrop_image_id: None,
       series_poster_image_id: None,
       season_number: Some(1),
       episode_number: Some(2),
