@@ -2,6 +2,7 @@ use crate::app::message::{HomeMessage, Message, PlaybackMessage};
 use crate::app::state::{has_resume_position, ArtworkCell, ArtworkCellState, HomeSection, State};
 use iced::gradient;
 use iced::widget::canvas::{self, Canvas};
+use iced::widget::image::Image;
 use iced::widget::scrollable::{Direction, Scrollbar};
 use iced::widget::{
   button, column, container, mouse_area, row, scrollable, space, stack, text, Column, Row, Stack,
@@ -358,8 +359,33 @@ fn video_card<'a>(
       .height(frame_height)
       .push(playable_artwork);
     if let Some(progress) = card_progress(section, item) {
+      let frosted_strip = state
+        .home
+        .artwork
+        .card(section, &item.id)
+        .and_then(|cell| {
+          state
+            .kernel
+            .artwork_handles
+            .frosted_strip(cell.slot, &cell.image_id)
+        })
+        .cloned();
+      let frosted = frosted_strip.is_some();
+      if let Some(strip) = frosted_strip {
+        artwork_layers = artwork_layers.push(
+          container(
+            Image::new(strip)
+              .width(Fill)
+              .height(PROGRESS_BAR_HEIGHT)
+              .content_fit(ContentFit::Fill),
+          )
+          .width(Fill)
+          .height(Fill)
+          .align_y(Alignment::End),
+        );
+      }
       artwork_layers = artwork_layers.push(
-        container(progress_bar(palette, progress, radius))
+        container(progress_bar(palette, progress, radius, frosted))
           .width(Fill)
           .height(Fill)
           .align_y(Alignment::End),
@@ -643,19 +669,24 @@ fn card_progress(section: HomeSection, item: &VideoLibraryItem) -> Option<f64> {
   }
 }
 
-const PROGRESS_BAR_HEIGHT: f32 = 8.0;
+pub(crate) const PROGRESS_BAR_HEIGHT: f32 = 8.0;
 
 fn progress_bar<'a>(
   palette: &'static ThemePalette,
   progress: f64,
   radius: iced::border::Radius,
+  frosted: bool,
 ) -> Element<'a, Message> {
   Canvas::new(ProgressOverlay {
     progress: (progress / 100.0).clamp(0.0, 1.0) as f32,
-    fill: palette.colors.primary,
-    // Translucent track: the unfilled portion reads as a scrim over the
-    // artwork instead of an opaque strip (opaque fill stays fully covered).
-    track: palette.colors.surfaceContainerLow.scale_alpha(0.5),
+    // The fill stays translucent as well, so the frosted strip shows through
+    // while the watched portion remains clearly distinguished by hue.
+    fill: palette.colors.primary.scale_alpha(0.8),
+    track: if frosted {
+      palette.colors.surfaceContainerLowest.scale_alpha(0.4)
+    } else {
+      palette.colors.surfaceContainerLow.scale_alpha(0.5)
+    },
     radius,
   })
   .width(Fill)

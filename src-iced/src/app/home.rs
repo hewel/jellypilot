@@ -4,13 +4,12 @@
 use std::collections::HashSet;
 use std::sync::Arc;
 
-use iced::widget::image;
 use iced::Task;
 use jellypilot_core::artwork_binder::{ArtworkSettlement, ArtworkSurface};
 use jellypilot_core::artwork_loader::{visible_row_cards, PlannedArtworkLoad};
 use jellypilot_core::request_gate::{HomeToken, RequestGate};
 use jellypilot_media_server::artwork::{
-  ArtworkLoadObservation, ArtworkLoadSummary, ArtworkSizeClass,
+  ArtworkLoadObservation, ArtworkLoadSummary, ArtworkSizeClass, FrostedStripSpec,
 };
 use jellypilot_media_server::home::{load_home_data, HomeDataResult};
 use jellypilot_media_server::VideoLibraryItem;
@@ -21,7 +20,7 @@ use super::artwork::stream_artwork_loads;
 use super::kernel::Kernel;
 use super::message::{ArtworkLoadCompletion, HomeMessage, Message};
 use super::state::{ArtworkCell, ArtworkCellState, HomeArtwork, HomeSection, HomeState};
-use super::view::home::{content_width, section_frame_size};
+use super::view::home::{content_width, section_frame_size, PROGRESS_BAR_HEIGHT};
 
 /// Home surface slice: Video Home section data plus the artwork cells bound
 /// for the hero and the section card rows.
@@ -113,7 +112,7 @@ fn apply_artwork_completion(
       kernel.artwork_handles.insert(
         completion.slot,
         completion.image_id,
-        image::Handle::from_rgba(raster.width(), raster.height(), raster.into_pixels()),
+        super::state::ArtworkHandles::from_raster(raster),
       );
     }
     Err(jellypilot_media_server::artwork::ArtworkError::Cancelled) => {}
@@ -198,6 +197,21 @@ impl ArtworkLoadSpec {
       ArtworkPlacement::Card(_) => ArtworkSizeClass::Card,
     }
   }
+
+  fn frosted_strip(&self) -> Option<FrostedStripSpec> {
+    let ArtworkPlacement::Card(section @ (HomeSection::ContinueWatching | HomeSection::NextUp)) =
+      self.placement
+    else {
+      return None;
+    };
+    let (frame_width, frame_height) = section_frame_size(section);
+    Some(FrostedStripSpec {
+      frame_width: frame_width as u32,
+      frame_height: frame_height as u32,
+      bar_height: PROGRESS_BAR_HEIGHT as u32,
+      corner_radius: TOKENS.radii.lg as u32,
+    })
+  }
 }
 
 fn prepare_artwork(surface: &mut Surface, kernel: &mut Kernel, window_width: f32) -> Task<Message> {
@@ -232,6 +246,7 @@ fn prepare_artwork(surface: &mut Surface, kernel: &mut Kernel, window_width: f32
   let mut load_specs = Vec::new();
 
   for spec in specs {
+    let frosted_strip = spec.frosted_strip();
     let existing_cell = match spec.placement {
       ArtworkPlacement::Hero => surface.artwork.hero(&spec.item_id),
       ArtworkPlacement::HeroBackdrop => surface.artwork.hero_backdrop(&spec.item_id),
@@ -253,13 +268,16 @@ fn prepare_artwork(surface: &mut Surface, kernel: &mut Kernel, window_width: f32
       }
     }
 
-    if let Some(raster) = adapter.cached(&spec.image_id, spec.size_class()) {
+    if let Some(raster) =
+      adapter.cached_with_frosted_strip(&spec.image_id, spec.size_class(), frosted_strip)
+    {
       summary.record(&ArtworkLoadObservation::raster_hit(raster.byte_len() as u64));
       let slot = kernel.artwork_binder.bind_settled();
-      let handle = image::Handle::from_rgba(raster.width(), raster.height(), raster.into_pixels());
-      kernel
-        .artwork_handles
-        .insert(slot, spec.image_id.clone(), handle);
+      kernel.artwork_handles.insert(
+        slot,
+        spec.image_id.clone(),
+        super::state::ArtworkHandles::from_raster(raster),
+      );
       let cell = ArtworkCell {
         slot,
         image_id: spec.image_id,
@@ -298,6 +316,7 @@ fn prepare_artwork(surface: &mut Surface, kernel: &mut Kernel, window_width: f32
       image_id: spec.image_id,
       size_class,
       visible: spec.visible,
+      frosted_strip,
     });
   }
 
@@ -561,10 +580,10 @@ mod tests {
     surface
       .data
       .settle_video_home(Ok(jellypilot_media_server::VideoHome {
-        continue_watching: vec![item_with_art],
+        continue_watching: Vec::new(),
         latest_movies: Vec::new(),
         next_up: Vec::new(),
-        latest_episodes: Vec::new(),
+        latest_episodes: vec![item_with_art],
       }));
     surface.data.settle_shortcuts(Ok(Vec::new()));
 
@@ -585,7 +604,7 @@ mod tests {
 
     let card_cell = surface
       .artwork
-      .card(HomeSection::ContinueWatching, "item-2")
+      .card(HomeSection::LatestEpisodes, "item-2")
       .expect("card cell exists");
     assert_eq!(card_cell.state, ArtworkCellState::Ready);
     assert!(kernel

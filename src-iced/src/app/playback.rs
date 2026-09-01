@@ -14,7 +14,6 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Instant;
 
-use iced::widget::image;
 use iced::Task;
 use jellypilot_auth::login::ConnectionPhase;
 use jellypilot_core::artwork_binder::{ArtworkSettlement, ArtworkSurface};
@@ -1001,7 +1000,7 @@ fn update_playback(
           kernel.artwork_handles.insert(
             slot,
             image_id,
-            image::Handle::from_rgba(raster.width(), raster.height(), raster.into_pixels()),
+            super::state::ArtworkHandles::from_raster(raster),
           );
         }
         Err(jellypilot_media_server::artwork::ArtworkError::Cancelled) => {}
@@ -1383,10 +1382,11 @@ fn prepare_player_artwork(surface: &mut Surface, kernel: &mut Kernel) -> Task<Me
     .cached(&image_id, ArtworkSizeClass::Card)
   {
     let slot = kernel.artwork_binder.bind_settled();
-    let handle = image::Handle::from_rgba(raster.width(), raster.height(), raster.into_pixels());
-    kernel
-      .artwork_handles
-      .insert(slot, image_id.clone(), handle);
+    kernel.artwork_handles.insert(
+      slot,
+      image_id.clone(),
+      super::state::ArtworkHandles::from_raster(raster),
+    );
     surface.artwork = Some(ArtworkCell {
       slot,
       image_id,
@@ -1767,7 +1767,11 @@ mod tests {
     kernel.artwork_handles.insert(
       old_slot,
       "old-image".to_owned(),
-      image::Handle::from_rgba(1, 1, vec![0, 0, 0, 255]),
+      crate::app::state::ArtworkHandles::from_main(iced::widget::image::Handle::from_rgba(
+        1,
+        1,
+        vec![0, 0, 0, 255],
+      )),
     );
     let mut playable = episode("episode-1", 1);
     playable.artwork_image_id = Some("new-image".to_owned());
@@ -1795,7 +1799,11 @@ mod tests {
     kernel.artwork_handles.insert(
       slot,
       "player-image".to_owned(),
-      image::Handle::from_rgba(1, 1, vec![0, 0, 0, 255]),
+      crate::app::state::ArtworkHandles::from_main(iced::widget::image::Handle::from_rgba(
+        1,
+        1,
+        vec![0, 0, 0, 255],
+      )),
     );
 
     drop(clear_inactive_playback(&mut surface, &mut kernel));
@@ -1860,7 +1868,11 @@ mod tests {
     kernel.artwork_handles.insert(
       slot,
       "series-poster".to_owned(),
-      image::Handle::from_rgba(1, 1, vec![0, 0, 0, 255]),
+      crate::app::state::ArtworkHandles::from_main(iced::widget::image::Handle::from_rgba(
+        1,
+        1,
+        vec![0, 0, 0, 255],
+      )),
     );
 
     drop(clear_inactive_playback(&mut surface, &mut kernel));

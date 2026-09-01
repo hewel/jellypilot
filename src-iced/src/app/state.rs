@@ -16,7 +16,7 @@ use jellypilot_core::detail::DetailContent;
 use jellypilot_core::diagnostics::{DiagnosticCategory, DiagnosticLevel, Diagnostics};
 use jellypilot_core::request_gate::{RemoteToken, RequestGate};
 use jellypilot_core::LoadState;
-use jellypilot_media_server::artwork::ArtworkAdapter;
+use jellypilot_media_server::artwork::{ArtworkAdapter, ArtworkRaster};
 use jellypilot_media_server::{
   MediaServerProvider, VideoLibraryItem, VideoLibraryShortcut, VideoSeasonEpisodesPage,
 };
@@ -601,7 +601,70 @@ impl<T> HandleRetention<T> {
   }
 }
 
-pub type ArtworkHandleRetention = HandleRetention<image::Handle>;
+pub struct ArtworkHandles {
+  main: image::Handle,
+  frosted_strip: Option<image::Handle>,
+}
+
+impl ArtworkHandles {
+  #[must_use]
+  pub fn from_raster(raster: ArtworkRaster) -> Self {
+    let (width, height, pixels, frosted_strip) = raster.into_parts();
+    Self {
+      main: image::Handle::from_rgba(width, height, pixels),
+      frosted_strip: frosted_strip.map(|strip| {
+        let (width, height, pixels, _) = strip.into_parts();
+        image::Handle::from_rgba(width, height, pixels)
+      }),
+    }
+  }
+
+  #[cfg(test)]
+  #[must_use]
+  pub fn from_main(main: image::Handle) -> Self {
+    Self {
+      main,
+      frosted_strip: None,
+    }
+  }
+}
+
+#[derive(Default)]
+pub struct ArtworkHandleRetention {
+  handles: HandleRetention<ArtworkHandles>,
+}
+
+impl ArtworkHandleRetention {
+  pub fn insert(&mut self, slot: ArtworkSlot, image_id: String, handles: ArtworkHandles) {
+    self.handles.insert(slot, image_id, handles);
+  }
+
+  pub fn get(&self, slot: ArtworkSlot, image_id: &str) -> Option<&image::Handle> {
+    self
+      .handles
+      .get(slot, image_id)
+      .map(|handles| &handles.main)
+  }
+
+  pub fn frosted_strip(&self, slot: ArtworkSlot, image_id: &str) -> Option<&image::Handle> {
+    self
+      .handles
+      .get(slot, image_id)
+      .and_then(|handles| handles.frosted_strip.as_ref())
+  }
+
+  pub fn retain_slots(&mut self, slots: impl IntoIterator<Item = ArtworkSlot>) {
+    self.handles.retain_slots(slots);
+  }
+
+  pub fn remove(&mut self, slot: ArtworkSlot) {
+    self.handles.remove(slot);
+  }
+
+  pub fn clear(&mut self) {
+    self.handles.clear();
+  }
+}
 pub type PlaybackControllerHandle = Arc<Mutex<PlaybackController>>;
 #[derive(Clone)]
 pub struct RemoteSessionHandle {

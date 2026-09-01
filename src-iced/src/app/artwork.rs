@@ -57,7 +57,13 @@ where
         };
         let image_id = load.image_id;
         let (result, observation) = adapter
-          .load(&client, &image_id, load.size_class, lane)
+          .load_with_frosted_strip(
+            &client,
+            &image_id,
+            load.size_class,
+            load.frosted_strip,
+            lane,
+          )
           .await;
         if let Ok(mut summary) = summary.lock() {
           summary.record(&observation);

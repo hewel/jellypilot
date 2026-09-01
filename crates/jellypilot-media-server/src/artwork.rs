@@ -342,6 +342,15 @@ impl ArtworkSizeClass {
   }
 }
 
+/// Display geometry for a frosted progress strip derived during artwork decode.
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub struct FrostedStripSpec {
+  pub frame_width: u32,
+  pub frame_height: u32,
+  pub bar_height: u32,
+  pub corner_radius: u32,
+}
+
 /// A Library Image Raster: an in-memory, display-sized RGBA decode of a
 /// Library Image, keyed by the image reference and an [`ArtworkSizeClass`].
 /// Never persisted; renderers build their handle from it synchronously.
@@ -350,6 +359,7 @@ pub struct ArtworkRaster {
   width: u32,
   height: u32,
   pixels: Bytes,
+  frosted_strip: Option<Box<Self>>,
 }
 
 impl ArtworkRaster {
@@ -365,7 +375,27 @@ impl ArtworkRaster {
 
   #[must_use]
   pub fn byte_len(&self) -> usize {
-    self.pixels.len()
+    self
+      .frosted_strip
+      .as_deref()
+      .map_or(self.pixels.len(), |strip| {
+        self.pixels.len().saturating_add(strip.byte_len())
+      })
+  }
+
+  #[must_use]
+  pub fn frosted_strip(&self) -> Option<&Self> {
+    self.frosted_strip.as_deref()
+  }
+
+  #[must_use]
+  pub fn into_parts(self) -> (u32, u32, Bytes, Option<Self>) {
+    (
+      self.width,
+      self.height,
+      self.pixels,
+      self.frosted_strip.map(|strip| *strip),
+    )
   }
 
   #[must_use]
@@ -382,6 +412,7 @@ impl ArtworkRaster {
       width,
       height,
       pixels: pixels.into(),
+      frosted_strip: None,
     }
   }
 }
@@ -391,6 +422,7 @@ impl ArtworkRaster {
 struct RasterKey {
   image_id: Arc<str>,
   size_class: ArtworkSizeClass,
+  frosted_strip: Option<FrostedStripSpec>,
 }
 
 /// Per-load identity and scheduling context carried through fetch and decode.
@@ -405,9 +437,18 @@ struct LoadContext {
 /// Applies EXIF orientation as iced's image loader does, then downsamples to
 /// the size class target box (shrink-only, aspect preserved). Animated
 /// containers are rejected before decode.
+#[cfg(test)]
 fn decode_raster(
   bytes: &ArtworkBytes,
   size_class: ArtworkSizeClass,
+) -> Result<ArtworkRaster, ArtworkError> {
+  decode_raster_with_frosted_strip(bytes, size_class, None)
+}
+
+fn decode_raster_with_frosted_strip(
+  bytes: &ArtworkBytes,
+  size_class: ArtworkSizeClass,
+  frosted_strip: Option<FrostedStripSpec>,
 ) -> Result<ArtworkRaster, ArtworkError> {
   use image::ImageDecoder as _;
 
@@ -442,16 +483,216 @@ fn decode_raster(
     decoded
   };
   let rgba = sized.to_rgba8();
+  let mut frosted_strip = frosted_strip
+    .and_then(|spec| generate_frosted_strip(&rgba, spec))
+    .map(Box::new);
   let (width, height) = rgba.dimensions();
   let pixels = Bytes::from(rgba.into_raw());
   if pixels.len() > size_class.max_raster_bytes() {
     return Err(ArtworkError::DecodedImageTooLarge);
   }
+  if frosted_strip.as_deref().is_some_and(|strip| {
+    pixels.len().saturating_add(strip.byte_len()) > size_class.max_raster_bytes()
+  }) {
+    frosted_strip = None;
+  }
   Ok(ArtworkRaster {
     width,
     height,
     pixels,
+    frosted_strip,
   })
+}
+
+fn generate_frosted_strip(
+  source: &image::RgbaImage,
+  spec: FrostedStripSpec,
+) -> Option<ArtworkRaster> {
+  if source.width() == 0
+    || source.height() == 0
+    || spec.frame_width == 0
+    || spec.frame_height == 0
+    || spec.bar_height == 0
+    || spec.bar_height > spec.frame_height
+  {
+    return None;
+  }
+
+  let mut blurred = source.clone();
+  box_blur_three_passes(&mut blurred, (source.width() / 10).max(8));
+  let source_rect = cover_strip_source_rect(source.dimensions(), spec);
+  let mut strip = resize_fractional(&blurred, source_rect, spec.frame_width, spec.bar_height);
+  mask_bottom_corners(&mut strip, spec.corner_radius as f32);
+  let (width, height) = strip.dimensions();
+  Some(ArtworkRaster {
+    width,
+    height,
+    pixels: Bytes::from(strip.into_raw()),
+    frosted_strip: None,
+  })
+}
+
+fn cover_strip_source_rect(
+  (source_width, source_height): (u32, u32),
+  spec: FrostedStripSpec,
+) -> (f32, f32, f32, f32) {
+  let content_width = source_width as f32;
+  let content_height = source_height as f32;
+  let bounds_width = spec.frame_width as f32;
+  let bounds_height = spec.frame_height as f32;
+  let content_aspect = content_width / content_height;
+  let bounds_aspect = bounds_width / bounds_height;
+  let (drawn_width, drawn_height) = if bounds_aspect < content_aspect {
+    (
+      content_width * bounds_height / content_height,
+      bounds_height,
+    )
+  } else {
+    (bounds_width, content_height * bounds_width / content_width)
+  };
+  let offset_x = (bounds_width - drawn_width) / 2.0;
+  let offset_y = (bounds_height - drawn_height) / 2.0;
+  let scale_x = drawn_width / content_width;
+  let scale_y = drawn_height / content_height;
+  (
+    (0.0 - offset_x) / scale_x,
+    (bounds_height - spec.bar_height as f32 - offset_y) / scale_y,
+    bounds_width / scale_x,
+    spec.bar_height as f32 / scale_y,
+  )
+}
+
+fn resize_fractional(
+  source: &image::RgbaImage,
+  (left, top, width, height): (f32, f32, f32, f32),
+  output_width: u32,
+  output_height: u32,
+) -> image::RgbaImage {
+  image::RgbaImage::from_fn(output_width, output_height, |x, y| {
+    let source_x = left + (x as f32 + 0.5) * width / output_width as f32 - 0.5;
+    let source_y = top + (y as f32 + 0.5) * height / output_height as f32 - 0.5;
+    bilinear_pixel(source, source_x, source_y)
+  })
+}
+
+fn bilinear_pixel(source: &image::RgbaImage, x: f32, y: f32) -> image::Rgba<u8> {
+  let x = x.clamp(0.0, source.width().saturating_sub(1) as f32);
+  let y = y.clamp(0.0, source.height().saturating_sub(1) as f32);
+  let x0 = x.floor() as u32;
+  let y0 = y.floor() as u32;
+  let x1 = x0.saturating_add(1).min(source.width() - 1);
+  let y1 = y0.saturating_add(1).min(source.height() - 1);
+  let x_fraction = x - x0 as f32;
+  let y_fraction = y - y0 as f32;
+  let top_left = source.get_pixel(x0, y0).0;
+  let top_right = source.get_pixel(x1, y0).0;
+  let bottom_left = source.get_pixel(x0, y1).0;
+  let bottom_right = source.get_pixel(x1, y1).0;
+  image::Rgba(std::array::from_fn(|channel| {
+    let top = f32::from(top_left[channel]) * (1.0 - x_fraction)
+      + f32::from(top_right[channel]) * x_fraction;
+    let bottom = f32::from(bottom_left[channel]) * (1.0 - x_fraction)
+      + f32::from(bottom_right[channel]) * x_fraction;
+    (top * (1.0 - y_fraction) + bottom * y_fraction).round() as u8
+  }))
+}
+
+fn box_blur_three_passes(image: &mut image::RgbaImage, radius: u32) {
+  if radius == 0 || image.width() == 0 || image.height() == 0 {
+    return;
+  }
+  let mut scratch = image::RgbaImage::new(image.width(), image.height());
+  for _ in 0..3 {
+    box_blur_horizontal(image, &mut scratch, radius);
+    box_blur_vertical(&scratch, image, radius);
+  }
+}
+
+fn box_blur_horizontal(source: &image::RgbaImage, target: &mut image::RgbaImage, radius: u32) {
+  let width = source.width();
+  let kernel_width = radius.saturating_mul(2).saturating_add(1);
+  for y in 0..source.height() {
+    let mut sums = [0_u64; 4];
+    for offset in 0..kernel_width {
+      let x = offset.saturating_sub(radius).min(width - 1);
+      for (sum, channel) in sums.iter_mut().zip(source.get_pixel(x, y).0) {
+        *sum += u64::from(channel);
+      }
+    }
+    for x in 0..width {
+      target.put_pixel(
+        x,
+        y,
+        image::Rgba(sums.map(|sum| (sum / u64::from(kernel_width)) as u8)),
+      );
+      let leaving = x.saturating_sub(radius);
+      let entering = x.saturating_add(radius).saturating_add(1).min(width - 1);
+      for ((sum, left), right) in sums
+        .iter_mut()
+        .zip(source.get_pixel(leaving, y).0)
+        .zip(source.get_pixel(entering, y).0)
+      {
+        *sum = sum.saturating_sub(u64::from(left)) + u64::from(right);
+      }
+    }
+  }
+}
+
+fn box_blur_vertical(source: &image::RgbaImage, target: &mut image::RgbaImage, radius: u32) {
+  let height = source.height();
+  let kernel_height = radius.saturating_mul(2).saturating_add(1);
+  for x in 0..source.width() {
+    let mut sums = [0_u64; 4];
+    for offset in 0..kernel_height {
+      let y = offset.saturating_sub(radius).min(height - 1);
+      for (sum, channel) in sums.iter_mut().zip(source.get_pixel(x, y).0) {
+        *sum += u64::from(channel);
+      }
+    }
+    for y in 0..height {
+      target.put_pixel(
+        x,
+        y,
+        image::Rgba(sums.map(|sum| (sum / u64::from(kernel_height)) as u8)),
+      );
+      let leaving = y.saturating_sub(radius);
+      let entering = y.saturating_add(radius).saturating_add(1).min(height - 1);
+      for ((sum, top), bottom) in sums
+        .iter_mut()
+        .zip(source.get_pixel(x, leaving).0)
+        .zip(source.get_pixel(x, entering).0)
+      {
+        *sum = sum.saturating_sub(u64::from(top)) + u64::from(bottom);
+      }
+    }
+  }
+}
+
+fn mask_bottom_corners(strip: &mut image::RgbaImage, radius: f32) {
+  if radius <= 0.0 {
+    return;
+  }
+  let width = strip.width() as f32;
+  let height = strip.height() as f32;
+  let center_y = height - radius;
+  for y in 0..strip.height() {
+    let pixel_y = y as f32 + 0.5;
+    for x in 0..strip.width() {
+      let pixel_x = x as f32 + 0.5;
+      let center_x = if pixel_x < radius {
+        radius
+      } else if pixel_x > width - radius {
+        width - radius
+      } else {
+        continue;
+      };
+      let distance = ((pixel_x - center_x).powi(2) + (pixel_y - center_y).powi(2)).sqrt();
+      let coverage = (radius + 0.5 - distance).clamp(0.0, 1.0);
+      let coverage = coverage * coverage * (3.0 - 2.0 * coverage);
+      let alpha = &mut strip.get_pixel_mut(x, y).0[3];
+      *alpha = (f32::from(*alpha) * coverage).round() as u8;
+    }
+  }
 }
 
 /// Where a Library Image load obtained its result.
@@ -655,9 +896,20 @@ impl ArtworkAdapter {
   /// Synchronous fast path: returns the cached Library Image Raster for this
   /// reference and size class, when present.
   pub fn cached(&self, image_id: &str, size_class: ArtworkSizeClass) -> Option<ArtworkRaster> {
+    self.cached_with_frosted_strip(image_id, size_class, None)
+  }
+
+  /// Synchronous fast path for a raster with an optional derived strip.
+  pub fn cached_with_frosted_strip(
+    &self,
+    image_id: &str,
+    size_class: ArtworkSizeClass,
+    frosted_strip: Option<FrostedStripSpec>,
+  ) -> Option<ArtworkRaster> {
     self.lock_state().raster_cache.get(&RasterKey {
       image_id: Arc::from(image_id),
       size_class,
+      frosted_strip,
     })
   }
 
@@ -706,7 +958,28 @@ impl ArtworkAdapter {
     lane: LoadLane,
   ) -> (Result<ArtworkRaster, ArtworkError>, ArtworkLoadObservation) {
     self
-      .load_with_ticket(client, image_id, size_class, self.ticket(), lane)
+      .load_with_ticket(client, image_id, size_class, None, self.ticket(), lane)
+      .await
+  }
+
+  /// Fetches and decodes artwork with an optional derived frosted strip.
+  pub async fn load_with_frosted_strip(
+    &self,
+    client: &JellyfinClient,
+    image_id: &str,
+    size_class: ArtworkSizeClass,
+    frosted_strip: Option<FrostedStripSpec>,
+    lane: LoadLane,
+  ) -> (Result<ArtworkRaster, ArtworkError>, ArtworkLoadObservation) {
+    self
+      .load_with_ticket(
+        client,
+        image_id,
+        size_class,
+        frosted_strip,
+        self.ticket(),
+        lane,
+      )
       .await
   }
 
@@ -716,6 +989,7 @@ impl ArtworkAdapter {
     client: &JellyfinClient,
     image_id: &str,
     size_class: ArtworkSizeClass,
+    frosted_strip: Option<FrostedStripSpec>,
     ticket: ArtworkLoadTicket,
     lane: LoadLane,
   ) -> (Result<ArtworkRaster, ArtworkError>, ArtworkLoadObservation) {
@@ -742,6 +1016,7 @@ impl ArtworkAdapter {
     let key = RasterKey {
       image_id: Arc::from(image_id),
       size_class,
+      frosted_strip,
     };
     let mut generation = self.generation_sender.subscribe();
     let load_generation = ticket.generation();
@@ -910,7 +1185,13 @@ impl ArtworkAdapter {
     };
     let encoded_bytes = bytes.byte_len();
     match self
-      .decode_tracked(bytes, size_class, permit, generation)
+      .decode_tracked(
+        bytes,
+        size_class,
+        context.key.frosted_strip,
+        permit,
+        generation,
+      )
       .await
     {
       Ok(raster) => Ok((raster, source, encoded_bytes)),
@@ -959,7 +1240,13 @@ impl ArtworkAdapter {
     let encoded_bytes = bytes.byte_len();
     let stored = bytes.clone();
     let raster = self
-      .decode_tracked(bytes, context.key.size_class, permit, generation)
+      .decode_tracked(
+        bytes,
+        context.key.size_class,
+        context.key.frosted_strip,
+        permit,
+        generation,
+      )
       .await?;
     self.store_network_bytes(
       request,
@@ -975,6 +1262,7 @@ impl ArtworkAdapter {
     &self,
     bytes: ArtworkBytes,
     size_class: ArtworkSizeClass,
+    frosted_strip: Option<FrostedStripSpec>,
     permit: LoadPermit,
     generation: &mut watch::Receiver<u64>,
   ) -> Result<ArtworkRaster, ArtworkError> {
@@ -982,7 +1270,7 @@ impl ArtworkAdapter {
       // Cancellation may drop the join handle, so the blocking decode owns
       // aggregate admission until it actually stops.
       let _permit = permit;
-      decode_raster(&bytes, size_class)
+      decode_raster_with_frosted_strip(&bytes, size_class, frosted_strip)
     });
     tokio::select! {
       result = decode => result.map_err(|_| ArtworkError::DecodeFailed)?,
@@ -1144,6 +1432,7 @@ impl ArtworkAdapter {
       RasterKey {
         image_id: Arc::from(image_id),
         size_class,
+        frosted_strip: None,
       },
       raster,
     );
@@ -1500,7 +1789,7 @@ impl CacheValue for ArtworkBytes {
 
 impl CacheValue for ArtworkRaster {
   fn byte_len(&self) -> usize {
-    self.pixels.len()
+    self.byte_len()
   }
 }
 
@@ -1610,10 +1899,20 @@ mod tests {
     ArtworkRaster::from_raw_for_test(width, height, Bytes::from(pixels))
   }
 
+  const fn frosted_spec() -> FrostedStripSpec {
+    FrostedStripSpec {
+      frame_width: 240,
+      frame_height: 135,
+      bar_height: 8,
+      corner_radius: 8,
+    }
+  }
+
   fn class_key(image_id: &str, size_class: ArtworkSizeClass) -> RasterKey {
     RasterKey {
       image_id: Arc::from(image_id),
       size_class,
+      frosted_strip: None,
     }
   }
 
@@ -2554,6 +2853,17 @@ mod tests {
   }
 
   #[test]
+  fn frosted_request_does_not_reuse_a_stripless_raster_cache_entry() {
+    let adapter = ArtworkAdapter::default();
+    adapter.seed_raster_for_test("shared", ArtworkSizeClass::Card, raster(2, 2));
+
+    assert!(adapter.cached("shared", ArtworkSizeClass::Card).is_some());
+    assert!(adapter
+      .cached_with_frosted_strip("shared", ArtworkSizeClass::Card, Some(frosted_spec()))
+      .is_none());
+  }
+
+  #[test]
   fn decode_bounds_dimensions_to_the_class_box() {
     // Sources for Card/Hero loads are server-resized to maxWidth=600.
     let png = encode_test_png(600, 900);
@@ -2565,6 +2875,87 @@ mod tests {
     let backdrop =
       decode_raster(&artwork(&png), ArtworkSizeClass::Backdrop).expect("backdrop decodes");
     assert_eq!((backdrop.width(), backdrop.height()), (600, 900));
+  }
+
+  #[test]
+  fn decode_drops_the_optional_strip_when_combined_raster_bytes_exceed_the_class_cap() {
+    let png = encode_test_png(600, 900);
+
+    let raster = decode_raster_with_frosted_strip(
+      &artwork(&png),
+      ArtworkSizeClass::Card,
+      Some(frosted_spec()),
+    )
+    .expect("main raster still decodes");
+
+    assert_eq!(raster.byte_len(), ArtworkSizeClass::Card.max_raster_bytes());
+    assert!(raster.frosted_strip().is_none());
+  }
+
+  #[test]
+  fn frosted_strip_has_exact_frame_width_and_bar_height() {
+    let source = image::RgbaImage::from_pixel(240, 135, image::Rgba([30, 60, 90, 255]));
+
+    let strip = generate_frosted_strip(&source, frosted_spec()).expect("strip is generated");
+
+    assert_eq!((strip.width(), strip.height()), (240, 8));
+  }
+
+  #[test]
+  fn frosted_strip_masks_only_the_bottom_corners() {
+    let source = image::RgbaImage::from_pixel(240, 135, image::Rgba([30, 60, 90, 255]));
+    let strip = generate_frosted_strip(&source, frosted_spec()).expect("strip is generated");
+    let (_, _, pixels, _) = strip.into_parts();
+    let alpha_at = |x: usize, y: usize| pixels[(y * 240 + x) * 4 + 3];
+
+    assert_eq!(alpha_at(0, 7), 0);
+    assert_eq!(alpha_at(239, 7), 0);
+    assert_eq!(alpha_at(120, 4), 255);
+  }
+
+  #[test]
+  fn three_pass_box_blur_reduces_hard_edge_variance() {
+    let mut source = image::RgbaImage::from_fn(64, 16, |x, _| {
+      let value = if x < 32 { 0 } else { 255 };
+      image::Rgba([value, value, value, 255])
+    });
+    let variance = |image: &image::RgbaImage| {
+      let values = image.pixels().map(|pixel| f64::from(pixel.0[0]));
+      let count = f64::from(image.width() * image.height());
+      let mean = values.clone().sum::<f64>() / count;
+      let variance = values
+        .map(|value| {
+          let difference = value - mean;
+          difference * difference
+        })
+        .sum::<f64>()
+        / count;
+      (mean, variance)
+    };
+    let (_, original_variance) = variance(&source);
+
+    box_blur_three_passes(&mut source, 8);
+
+    let (blurred_mean, blurred_variance) = variance(&source);
+    assert!((blurred_mean - 127.5).abs() < 2.0);
+    assert!(blurred_variance < original_variance);
+    assert!((0..64).any(|x| {
+      let value = source.get_pixel(x, 8).0[0];
+      value > 0 && value < 255
+    }));
+  }
+
+  #[test]
+  fn frosted_strip_samples_the_fractional_cover_transform() {
+    let source =
+      image::RgbaImage::from_fn(120, 300, |_, y| image::Rgba([y.min(255) as u8, 0, 0, 255]));
+
+    let strip = generate_frosted_strip(&source, frosted_spec()).expect("strip is generated");
+    let (_, _, pixels, _) = strip.into_parts();
+    let red_at = |y: usize| pixels[(y * 240 + 120) * 4];
+
+    assert_eq!(red_at(0), 180);
+    assert_eq!(red_at(7), 183);
   }
 
   #[test]

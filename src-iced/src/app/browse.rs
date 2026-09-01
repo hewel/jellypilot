@@ -5,7 +5,7 @@
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
-use iced::widget::{image, operation};
+use iced::widget::operation;
 use iced::{task, Task};
 use jellypilot_core::artwork_binder::{ArtworkSettlement, ArtworkSurface};
 use jellypilot_core::artwork_loader::{
@@ -222,7 +222,7 @@ fn apply_artwork_completion(
       kernel.artwork_handles.insert(
         completion.slot,
         completion.image_id,
-        image::Handle::from_rgba(raster.width(), raster.height(), raster.into_pixels()),
+        super::state::ArtworkHandles::from_raster(raster),
       );
     }
     Err(jellypilot_media_server::artwork::ArtworkError::Cancelled) => {}
@@ -499,10 +499,11 @@ pub(crate) fn prepare_artwork(
     if let Some(raster) = adapter.cached(&image_id, ArtworkSizeClass::Card) {
       summary.record(&ArtworkLoadObservation::raster_hit(raster.byte_len() as u64));
       let slot = kernel.artwork_binder.bind_settled();
-      let handle = image::Handle::from_rgba(raster.width(), raster.height(), raster.into_pixels());
-      kernel
-        .artwork_handles
-        .insert(slot, image_id.clone(), handle);
+      kernel.artwork_handles.insert(
+        slot,
+        image_id.clone(),
+        super::state::ArtworkHandles::from_raster(raster),
+      );
       surface.artwork.insert(
         item_id,
         ArtworkCell {
@@ -534,6 +535,7 @@ pub(crate) fn prepare_artwork(
         grid_viewport.height,
         metrics.row_height,
       ),
+      frosted_strip: None,
     });
   }
 
