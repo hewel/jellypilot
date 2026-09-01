@@ -1,11 +1,12 @@
 use crate::app::message::{HomeMessage, Message, PlaybackMessage};
 use crate::app::state::{has_resume_position, ArtworkCell, ArtworkCellState, HomeSection, State};
 use iced::gradient;
+use iced::widget::canvas::{self, Canvas};
 use iced::widget::scrollable::{Direction, Scrollbar};
 use iced::widget::{
   button, column, container, mouse_area, row, scrollable, space, stack, text, Column, Row, Stack,
 };
-use iced::{Alignment, Background, ContentFit, Degrees, Element, Fill, Length};
+use iced::{Alignment, Background, ContentFit, Degrees, Element, Fill};
 use jellypilot_core::cards::{hero_headline, hero_metadata, item_caption};
 use jellypilot_core::LoadState;
 use jellypilot_media_server::VideoLibraryItem;
@@ -642,63 +643,100 @@ fn card_progress(section: HomeSection, item: &VideoLibraryItem) -> Option<f64> {
   }
 }
 
+const PROGRESS_BAR_HEIGHT: f32 = 8.0;
+
 fn progress_bar<'a>(
   palette: &'static ThemePalette,
   progress: f64,
   radius: iced::border::Radius,
 ) -> Element<'a, Message> {
-  let filled = (progress.round() as u16).min(100);
-  let remaining = 100_u16.saturating_sub(filled);
-  // Zero FillPortion lays out as a non-fluid child against the full width, so
-  // omit empty segments entirely at 0% and 100%.
-  let mut bar = Row::new().width(Fill).height(8);
-  if filled > 0 {
-    let filled_radius = iced::border::Radius {
-      top_left: 0.0,
-      top_right: 0.0,
-      bottom_right: if remaining == 0 {
-        radius.bottom_right
-      } else {
-        0.0
-      },
-      bottom_left: radius.bottom_left,
-    };
-    bar = bar.push(
-      container(space::horizontal())
-        .width(Length::FillPortion(filled))
-        .height(8)
-        .style(move |_| iced::widget::container::Style {
-          background: Some(Background::Color(palette.colors.primary)),
-          border: iced::Border {
-            radius: filled_radius,
-            ..iced::Border::default()
+  Canvas::new(ProgressOverlay {
+    progress: (progress / 100.0).clamp(0.0, 1.0) as f32,
+    fill: palette.colors.primary,
+    // Translucent track: the unfilled portion reads as a scrim over the
+    // artwork instead of an opaque strip (opaque fill stays fully covered).
+    track: palette.colors.surfaceContainerLow.scale_alpha(0.5),
+    radius,
+  })
+  .width(Fill)
+  .height(PROGRESS_BAR_HEIGHT)
+  .into()
+}
+
+/// Bottom-edge progress overlay. A bar-height rectangle cannot carry the
+/// artwork's corner radius (border radii clamp to half the bar height), so
+/// this draws the artwork's full rounded-rect contour tall enough to escape
+/// clamping and lets the frame bounds crop everything above the strip: the
+/// exposed corners reproduce the artwork's exact arc. The fill is a dedicated
+/// path with its own bottom corner radius — `Frame::with_clip` is unreliable
+/// across iced 0.14 backends (draft/paste drops or offsets clips), so no clip
+/// regions are used at all.
+struct ProgressOverlay {
+  progress: f32,
+  fill: iced::Color,
+  track: iced::Color,
+  radius: iced::border::Radius,
+}
+
+impl canvas::Program<Message> for ProgressOverlay {
+  type State = ();
+
+  fn draw(
+    &self,
+    _state: &Self::State,
+    renderer: &iced::Renderer,
+    _theme: &iced::Theme,
+    bounds: iced::Rectangle,
+    _cursor: iced::mouse::Cursor,
+  ) -> Vec<canvas::Geometry> {
+    let mut frame = canvas::Frame::new(renderer, bounds.size());
+    let corner = self.radius.bottom_left.max(self.radius.bottom_right);
+    let top = PROGRESS_BAR_HEIGHT - 2.0 * corner;
+    if corner > 0.0 {
+      frame.fill(
+        &canvas::Path::rounded_rectangle(
+          iced::Point::new(0.0, top),
+          iced::Size::new(bounds.width, 2.0 * corner),
+          self.radius,
+        ),
+        self.track,
+      );
+      if self.progress > 0.0 {
+        let fill_radius = iced::border::Radius {
+          top_left: 0.0,
+          top_right: 0.0,
+          bottom_left: self.radius.bottom_left,
+          bottom_right: if self.progress >= 1.0 {
+            self.radius.bottom_right
+          } else {
+            0.0
           },
-          ..iced::widget::container::Style::default()
-        }),
-    );
+        };
+        frame.fill(
+          &canvas::Path::rounded_rectangle(
+            iced::Point::new(0.0, top),
+            iced::Size::new(bounds.width * self.progress, 2.0 * corner),
+            fill_radius,
+          ),
+          self.fill,
+        );
+      }
+    } else {
+      frame.fill_rectangle(
+        iced::Point::ORIGIN,
+        iced::Size::new(bounds.width, PROGRESS_BAR_HEIGHT),
+        self.track,
+      );
+      if self.progress > 0.0 {
+        frame.fill_rectangle(
+          iced::Point::ORIGIN,
+          iced::Size::new(bounds.width * self.progress, PROGRESS_BAR_HEIGHT),
+          self.fill,
+        );
+      }
+    }
+    vec![frame.into_geometry()]
   }
-  if remaining > 0 {
-    let remaining_radius = iced::border::Radius {
-      top_left: 0.0,
-      top_right: 0.0,
-      bottom_right: radius.bottom_right,
-      bottom_left: if filled == 0 { radius.bottom_left } else { 0.0 },
-    };
-    bar = bar.push(
-      container(space::horizontal())
-        .width(Length::FillPortion(remaining))
-        .height(8)
-        .style(move |_| iced::widget::container::Style {
-          background: Some(Background::Color(palette.colors.surfaceContainerLow)),
-          border: iced::Border {
-            radius: remaining_radius,
-            ..iced::Border::default()
-          },
-          ..iced::widget::container::Style::default()
-        }),
-    );
-  }
-  bar.into()
 }
 
 fn section_skeleton<'a>(
