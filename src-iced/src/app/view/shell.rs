@@ -667,6 +667,14 @@ mod tests {
   #[test]
   fn shell_view_renders_settings_modal_in_control_only_mode() {
     let mut state = State::boot(false);
+    // This test persists a settings mutation; run it against a scratch file
+    // instead of the developer's real config (dirs::config_dir).
+    let path = std::env::temp_dir().join(format!(
+      "jellypilot-iced-settings-shell-view-{}.json",
+      std::process::id()
+    ));
+    let _ = std::fs::remove_file(&path);
+    state.kernel.settings = jellypilot_core::config::SettingsStore::for_test(path);
     state
       .kernel
       .settings

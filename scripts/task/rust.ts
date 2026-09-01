@@ -1,3 +1,7 @@
+import { mkdtempSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+
 import { Effect, Match } from 'effect';
 
 import {
@@ -53,19 +57,29 @@ function rustClippyCommands(crates: readonly CrateShortName[]): readonly Command
 }
 
 function rustTestCommands(crates: readonly CrateShortName[]): readonly CommandSpec[] {
+  // App tests exercise real settings mutations; dirs::config_dir honors
+  // XDG_CONFIG_HOME, so point it at a scratch directory to keep the
+  // developer's own ~/.config/jellypilot/config.json untouched.
+  const env = {
+    XDG_CONFIG_HOME: mkdtempSync(join(tmpdir(), 'jellypilot-test-config-')),
+  };
   if (crates.length === 0) {
-    return [command('cargo', ['test', '--manifest-path', 'Cargo.toml', '--workspace'])];
+    return [command('cargo', ['test', '--manifest-path', 'Cargo.toml', '--workspace'], env)];
   }
   return crates.flatMap((crate) =>
     resolveCrates(crate).map((packageName) =>
-      command('cargo', [
-        'test',
-        '--manifest-path',
-        'Cargo.toml',
-        '--package',
-        packageName,
-        ...(crate === 'mpv' ? ['--features', 'test-utils'] : []),
-      ]),
+      command(
+        'cargo',
+        [
+          'test',
+          '--manifest-path',
+          'Cargo.toml',
+          '--package',
+          packageName,
+          ...(crate === 'mpv' ? ['--features', 'test-utils'] : []),
+        ],
+        env,
+      ),
     ),
   );
 }
