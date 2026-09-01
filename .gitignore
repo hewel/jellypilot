@@ -22,3 +22,6 @@ node_modules
 .agents/skills/*
 !.agents/skills/delegate-to-omp/
 !.agents/skills/delegate-to-omp/**
+
+.codex
+.pi
