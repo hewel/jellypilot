@@ -1,5 +1,7 @@
 use crate::app::message::{HomeMessage, Message, PlaybackMessage};
-use crate::app::state::{has_resume_position, ArtworkCell, ArtworkCellState, HomeSection, State};
+use crate::app::state::{
+  has_resume_position, ArtworkCell, ArtworkCellState, HomeRow, HomeSection, State,
+};
 use iced::gradient;
 use iced::widget::canvas::{self, Canvas};
 use iced::widget::image::Image;
@@ -8,7 +10,7 @@ use iced::widget::{
   button, column, container, mouse_area, row, scrollable, space, stack, text, Column, Row, Stack,
 };
 use iced::{Alignment, Background, ContentFit, Degrees, Element, Fill};
-use jellypilot_core::cards::{hero_headline, hero_metadata, item_caption};
+use jellypilot_core::cards::{card_subtitle, card_title, hero_headline, hero_metadata};
 use jellypilot_core::LoadState;
 use jellypilot_media_server::VideoLibraryItem;
 use jellypilot_mpv::playback::{Playable, PlaybackStartPosition};
@@ -25,7 +27,7 @@ use jellypilot_ui::widgets::skeleton::{skeleton_block, skeleton_panel};
 use jellypilot_ui::{full_radius, poster_card, rounded_image};
 const THUMB_FRAME_WIDTH: f32 = 240.0;
 const THUMB_FRAME_HEIGHT: f32 = 135.0;
-const POSTER_FRAME_WIDTH: f32 = 160.0;
+const POSTER_FRAME_WIDTH: f32 = 168.0;
 const POSTER_FRAME_HEIGHT: f32 = 240.0;
 const HERO_HEIGHT: f32 = 360.0;
 const HERO_POSTER_WIDTH: f32 = 160.0;
@@ -43,18 +45,18 @@ pub(crate) fn content_width(window_width: f32, class: SizeClass) -> f32 {
 }
 
 pub(crate) const fn section_frame_size(section: HomeSection) -> (f32, f32) {
-  match section {
-    HomeSection::ContinueWatching | HomeSection::NextUp => (THUMB_FRAME_WIDTH, THUMB_FRAME_HEIGHT),
-    HomeSection::LatestMovies | HomeSection::LatestEpisodes => {
-      (POSTER_FRAME_WIDTH, POSTER_FRAME_HEIGHT)
-    }
+  if section.is_action() {
+    (THUMB_FRAME_WIDTH, THUMB_FRAME_HEIGHT)
+  } else {
+    (POSTER_FRAME_WIDTH, POSTER_FRAME_HEIGHT)
   }
 }
 
 const fn section_scroll_height(section: HomeSection) -> f32 {
-  match section {
-    HomeSection::ContinueWatching | HomeSection::NextUp => 208.0,
-    HomeSection::LatestMovies | HomeSection::LatestEpisodes => 296.0,
+  if section.is_action() {
+    208.0
+  } else {
+    296.0
   }
 }
 
@@ -73,9 +75,9 @@ pub fn view(state: &State) -> Element<'_, Message> {
     content = content.push(featured_skeleton(skeleton_phase, reduced_motion));
   }
 
-  for section in HomeSection::ALL {
-    if let Some(row) = section_view(state, section, skeleton_phase, reduced_motion) {
-      content = content.push(row);
+  for row in state.home.data.rows() {
+    if let Some(section) = section_view(state, row, skeleton_phase, reduced_motion) {
+      content = content.push(section);
     }
   }
 
@@ -87,9 +89,12 @@ pub fn view(state: &State) -> Element<'_, Message> {
 }
 
 fn home_is_loading(state: &State) -> bool {
-  HomeSection::ALL
+  state
+    .home
+    .data
+    .rows()
     .iter()
-    .any(|section| matches!(state.home.data.section(*section), LoadState::Loading))
+    .any(|row| matches!(row.items, LoadState::Loading))
 }
 
 fn featured_hero<'a>(
@@ -239,21 +244,21 @@ fn featured_skeleton<'a>(phase: f32, reduced_motion: bool) -> Element<'a, Messag
     .into()
 }
 
-fn section_view(
-  state: &State,
-  section: HomeSection,
+fn section_view<'a>(
+  state: &'a State,
+  row: &'a HomeRow,
   skeleton_phase: f32,
   reduced_motion: bool,
-) -> Option<Element<'_, Message>> {
-  match state.home.data.section(section) {
+) -> Option<Element<'a, Message>> {
+  match &row.items {
     LoadState::Idle => None,
     LoadState::Loading => Some(section_skeleton(
       state.palette(),
-      section,
+      row,
       skeleton_phase,
       reduced_motion,
     )),
-    LoadState::Failed(error) => Some(section_error(state.palette(), section.title(), error)),
+    LoadState::Failed(error) => Some(section_error(state.palette(), &row.title, error)),
     LoadState::Ready(items)
       if items.iter().all(|item| {
         state
@@ -267,7 +272,7 @@ fn section_view(
     }
     LoadState::Ready(items) => Some(section_row(
       state,
-      section,
+      row,
       items,
       skeleton_phase,
       reduced_motion,
@@ -277,7 +282,7 @@ fn section_view(
 
 fn section_row<'a>(
   state: &'a State,
-  section: HomeSection,
+  home_row: &'a HomeRow,
   items: &'a [VideoLibraryItem],
   skeleton_phase: f32,
   reduced_motion: bool,
@@ -292,7 +297,7 @@ fn section_row<'a>(
   {
     cards = cards.push(video_card(
       state,
-      section,
+      home_row.section,
       item,
       skeleton_phase,
       reduced_motion,
@@ -300,11 +305,11 @@ fn section_row<'a>(
   }
   let cards = scrollable(cards)
     .direction(Direction::Horizontal(Scrollbar::new()))
-    .height(section_scroll_height(section))
+    .height(section_scroll_height(home_row.section))
     .style(jellypilot_ui::theme::scrollable);
 
   column![
-    text(section.title())
+    text(&home_row.title)
       .font(SPACE_GROTESK_FONT)
       .size(24)
       .color(state.palette().colors.onSurface),
@@ -323,12 +328,12 @@ fn video_card<'a>(
 ) -> Element<'a, Message> {
   let (frame_width, frame_height) = section_frame_size(section);
   let palette = state.palette();
-  let is_action_card = matches!(section, HomeSection::ContinueWatching | HomeSection::NextUp);
+  let is_action_card = section.is_action();
   let radius = full_radius(TOKENS.radii.lg);
   let poster = card_artwork(
     state,
     state.home.artwork.card(section, &item.id),
-    &item.name,
+    card_title(item),
     (frame_width, frame_height),
     radius,
     skeleton_phase,
@@ -336,10 +341,10 @@ fn video_card<'a>(
   );
 
   let text_stack = column![
-    ellipsis_text(&item.name)
+    ellipsis_text(card_title(item))
       .size(14)
       .color(palette.colors.onSurface),
-    ellipsis_text(item_caption(item))
+    ellipsis_text(card_subtitle(item))
       .size(12)
       .color(palette.colors.onSurfaceVariant),
   ]
@@ -429,9 +434,9 @@ fn video_card<'a>(
     let copy = container(text_stack)
       .padding(iced::Padding {
         top: TOKENS.spacing.s3,
-        right: TOKENS.spacing.s4,
+        right: 0.0,
         bottom: TOKENS.spacing.s4,
-        left: TOKENS.spacing.s4,
+        left: 0.0,
       })
       .width(Fill);
 
@@ -443,10 +448,10 @@ fn video_card<'a>(
   }
 
   let copy = column![
-    ellipsis_text(&item.name)
+    ellipsis_text(card_title(item))
       .size(14)
       .color(palette.colors.onSurface),
-    ellipsis_text(item_caption(item))
+    ellipsis_text(card_subtitle(item))
       .size(12)
       .color(palette.colors.onSurfaceVariant),
   ]
@@ -458,11 +463,58 @@ fn video_card<'a>(
     left: 0.0,
   })
   .width(frame_width);
+  let mut artwork_layers = Stack::new()
+    .width(frame_width)
+    .height(frame_height)
+    .push(poster);
+  if let Some(badge) = count_badge(palette, section, item) {
+    artwork_layers = artwork_layers.push(
+      container(badge)
+        .padding(TOKENS.spacing.s2)
+        .width(Fill)
+        .height(Fill)
+        .align_x(Alignment::End)
+        .align_y(Alignment::Start),
+    );
+  }
 
-  poster_card(poster, copy)
+  poster_card(artwork_layers, copy)
     .width(frame_width)
     .on_press(Message::OpenDetail(item.clone()))
     .into()
+}
+
+fn unplayed_badge_text(section: HomeSection, item: &VideoLibraryItem) -> Option<String> {
+  if !section.is_latest() || !item.item_type.eq_ignore_ascii_case("Series") {
+    return None;
+  }
+  match item.unplayed_item_count {
+    Some(count @ 1..100) => Some(count.to_string()),
+    Some(100..) => Some("99+".to_owned()),
+    None | Some(0) => None,
+  }
+}
+
+fn count_badge<'a>(
+  palette: &'static ThemePalette,
+  section: HomeSection,
+  item: &VideoLibraryItem,
+) -> Option<Element<'a, Message>> {
+  let label = unplayed_badge_text(section, item)?;
+  Some(
+    container(text(label).size(12).color(palette.colors.onPrimary))
+      .padding([3, 7])
+      .style(move |_| container::Style {
+        background: Some(Background::Color(palette.colors.primary)),
+        text_color: Some(palette.colors.onPrimary),
+        border: iced::Border {
+          radius: full_radius(TOKENS.radii.md),
+          ..iced::Border::default()
+        },
+        ..container::Style::default()
+      })
+      .into(),
+  )
 }
 
 fn play_message(state: &State, item: &VideoLibraryItem) -> Message {
@@ -772,11 +824,11 @@ impl canvas::Program<Message> for ProgressOverlay {
 
 fn section_skeleton<'a>(
   palette: &ThemePalette,
-  section: HomeSection,
+  row: &'a HomeRow,
   phase: f32,
   reduced_motion: bool,
 ) -> Element<'a, Message> {
-  let (width, height) = section_frame_size(section);
+  let (width, height) = section_frame_size(row.section);
   let mut cards = Row::new().spacing(TOKENS.spacing.s4);
   for _ in 0..5 {
     cards = cards.push(
@@ -789,7 +841,7 @@ fn section_skeleton<'a>(
     );
   }
   column![
-    text(section.title())
+    text(&row.title)
       .font(SPACE_GROTESK_FONT)
       .size(24)
       .color(palette.colors.onSurface),
@@ -801,7 +853,7 @@ fn section_skeleton<'a>(
 
 fn section_error<'a>(
   palette: &ThemePalette,
-  title: &'static str,
+  title: &'a str,
   error: &'a str,
 ) -> Element<'a, Message> {
   let retry = button(text("Retry"))
@@ -837,9 +889,9 @@ mod tests {
     assert_eq!((cw_w, cw_h), (THUMB_FRAME_WIDTH, THUMB_FRAME_HEIGHT));
     assert_eq!(section_scroll_height(HomeSection::ContinueWatching), 208.0);
 
-    let (mov_w, mov_h) = section_frame_size(HomeSection::LatestMovies);
+    let (mov_w, mov_h) = section_frame_size(HomeSection::Latest(0));
     assert_eq!((mov_w, mov_h), (POSTER_FRAME_WIDTH, POSTER_FRAME_HEIGHT));
-    assert_eq!(section_scroll_height(HomeSection::LatestMovies), 296.0);
+    assert_eq!(section_scroll_height(HomeSection::Latest(0)), 296.0);
   }
 
   #[test]
@@ -878,6 +930,9 @@ mod tests {
       artwork_image_id: None,
       backdrop_image_id: Some("img-hero-backdrop".to_owned()),
       series_poster_image_id: None,
+      episode_thumb_image_id: None,
+      series_thumb_image_id: None,
+      series_backdrop_image_id: None,
       season_number: None,
       episode_number: None,
       series_id: None,
@@ -885,6 +940,11 @@ mod tests {
       resume_position_seconds: None,
       played_percentage: None,
       overview: Some("Hero overview text".to_owned()),
+      index_number_end: None,
+      season_poster_image_id: None,
+      end_year: None,
+      series_continuing: false,
+      unplayed_item_count: None,
     };
     let card_item = VideoLibraryItem {
       id: "card-1".to_owned(),
@@ -897,6 +957,9 @@ mod tests {
       artwork_image_id: None,
       backdrop_image_id: None,
       series_poster_image_id: None,
+      episode_thumb_image_id: None,
+      series_thumb_image_id: None,
+      series_backdrop_image_id: None,
       season_number: None,
       episode_number: None,
       series_id: None,
@@ -904,15 +967,18 @@ mod tests {
       resume_position_seconds: Some(2430.0),
       played_percentage: Some(45.0),
       overview: None,
+      index_number_end: None,
+      season_poster_image_id: None,
+      end_year: None,
+      series_continuing: false,
+      unplayed_item_count: None,
     };
     state
       .home
       .data
       .settle_video_home(Ok(jellypilot_media_server::VideoHome {
         continue_watching: vec![card_item],
-        latest_movies: vec![hero_item],
-        next_up: Vec::new(),
-        latest_episodes: Vec::new(),
+        next_up: vec![hero_item],
       }));
     state.home.data.settle_shortcuts(Ok(vec![]));
     let slot_1 = state
@@ -941,5 +1007,52 @@ mod tests {
       },
     );
     let _element = view(&state);
+  }
+
+  #[test]
+  fn unplayed_badge_only_formats_nonzero_latest_series_counts() {
+    let mut item = VideoLibraryItem {
+      id: "series-1".to_owned(),
+      name: "Series".to_owned(),
+      item_type: "Series".to_owned(),
+      production_year: Some(2020),
+      runtime_seconds: None,
+      played: false,
+      favorite: false,
+      artwork_image_id: None,
+      backdrop_image_id: None,
+      series_poster_image_id: None,
+      episode_thumb_image_id: None,
+      series_thumb_image_id: None,
+      series_backdrop_image_id: None,
+      season_poster_image_id: None,
+      season_number: None,
+      episode_number: None,
+      index_number_end: None,
+      series_id: None,
+      series_name: None,
+      end_year: None,
+      series_continuing: true,
+      unplayed_item_count: Some(7),
+      resume_position_seconds: None,
+      played_percentage: None,
+      overview: None,
+    };
+
+    assert_eq!(
+      unplayed_badge_text(HomeSection::Latest(0), &item).as_deref(),
+      Some("7")
+    );
+    item.unplayed_item_count = Some(100);
+    assert_eq!(
+      unplayed_badge_text(HomeSection::Latest(0), &item).as_deref(),
+      Some("99+")
+    );
+    item.unplayed_item_count = Some(0);
+    assert!(unplayed_badge_text(HomeSection::Latest(0), &item).is_none());
+    item.unplayed_item_count = Some(5);
+    assert!(unplayed_badge_text(HomeSection::ContinueWatching, &item).is_none());
+    item.item_type = "Movie".to_owned();
+    assert!(unplayed_badge_text(HomeSection::Latest(0), &item).is_none());
   }
 }

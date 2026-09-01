@@ -138,7 +138,8 @@ pub fn start_load(
   let Some(client) = kernel.client.as_ref().map(Arc::clone) else {
     let error = "The connected media server session is unavailable.".to_owned();
     surface.data.settle_video_home(Err(error.clone()));
-    surface.data.settle_shortcuts(Err(error));
+    surface.data.settle_shortcuts(Err(error.clone()));
+    surface.data.settle_latest_rows(Err(error));
     return Task::none();
   };
 
@@ -156,9 +157,10 @@ fn settle(
   if !request_gate.finish_home(token) {
     return false;
   }
-  let (video_home, shortcuts) = result;
+  let (video_home, shortcuts, latest_rows) = result;
   data.settle_video_home(video_home);
   data.settle_shortcuts(shortcuts);
+  data.settle_latest_rows(latest_rows);
   true
 }
 
@@ -199,11 +201,12 @@ impl ArtworkLoadSpec {
   }
 
   fn frosted_strip(&self) -> Option<FrostedStripSpec> {
-    let ArtworkPlacement::Card(section @ (HomeSection::ContinueWatching | HomeSection::NextUp)) =
-      self.placement
-    else {
+    let ArtworkPlacement::Card(section) = self.placement else {
       return None;
     };
+    if !section.is_action() {
+      return None;
+    }
     let (frame_width, frame_height) = section_frame_size(section);
     Some(FrostedStripSpec {
       frame_width: frame_width as u32,
@@ -227,7 +230,9 @@ fn prepare_artwork(surface: &mut Surface, kernel: &mut Kernel, window_width: f32
     .iter()
     .find(|spec| matches!(spec.placement, ArtworkPlacement::HeroBackdrop))
     .map(|spec| spec.item_id.as_str());
-  let mut section_item_ids: [HashSet<&str>; 4] = Default::default();
+  let mut section_item_ids = (0..surface.data.rows().len())
+    .map(|_| HashSet::new())
+    .collect::<Vec<HashSet<&str>>>();
   for spec in &specs {
     if let ArtworkPlacement::Card(section) = spec.placement {
       section_item_ids[section.index()].insert(spec.item_id.as_str());
@@ -354,9 +359,9 @@ fn artwork_specs(data: &HomeState, window_width: f32) -> Vec<ArtworkLoadSpec> {
   let featured_item_id = featured_item.map(|item| item.id.as_str());
   let class = SizeClass::from_width(window_width);
   let content_width = content_width(window_width, class);
-  for section in HomeSection::ALL {
-    if let jellypilot_core::LoadState::Ready(items) = data.section(section) {
-      let (card_width, _) = section_frame_size(section);
+  for row in data.rows() {
+    if let jellypilot_core::LoadState::Ready(items) = &row.items {
+      let (card_width, _) = section_frame_size(row.section);
       let visible_cards = visible_row_cards(content_width, card_width, TOKENS.spacing.s4);
       for (index, item) in items
         .iter()
@@ -365,7 +370,7 @@ fn artwork_specs(data: &HomeState, window_width: f32) -> Vec<ArtworkLoadSpec> {
       {
         push_artwork_spec(
           &mut specs,
-          ArtworkPlacement::Card(section),
+          ArtworkPlacement::Card(row.section),
           item,
           index < visible_cards,
         );
@@ -381,13 +386,39 @@ fn push_artwork_spec(
   item: &VideoLibraryItem,
   visible: bool,
 ) {
-  if let Some(image_id) = &item.artwork_image_id {
+  if let Some(image_id) = artwork_image_id(placement, item) {
     specs.push(ArtworkLoadSpec {
       placement,
       item_id: item.id.clone(),
-      image_id: image_id.clone(),
+      image_id: image_id.to_owned(),
       visible,
     });
+  }
+}
+
+fn artwork_image_id(placement: ArtworkPlacement, item: &VideoLibraryItem) -> Option<&str> {
+  match placement {
+    ArtworkPlacement::Hero | ArtworkPlacement::HeroBackdrop => item.artwork_image_id.as_deref(),
+    ArtworkPlacement::Card(section) if section.is_action() => {
+      if item.item_type.eq_ignore_ascii_case("Episode") {
+        item
+          .episode_thumb_image_id
+          .as_deref()
+          .or(item.series_thumb_image_id.as_deref())
+          .or(item.series_backdrop_image_id.as_deref())
+          .or(item.artwork_image_id.as_deref())
+      } else {
+        item
+          .backdrop_image_id
+          .as_deref()
+          .or(item.artwork_image_id.as_deref())
+      }
+    }
+    ArtworkPlacement::Card(_) if item.item_type.eq_ignore_ascii_case("Episode") => item
+      .season_poster_image_id
+      .as_deref()
+      .or(item.series_poster_image_id.as_deref()),
+    ArtworkPlacement::Card(_) => item.artwork_image_id.as_deref(),
   }
 }
 
@@ -444,6 +475,9 @@ mod tests {
       artwork_image_id: None,
       backdrop_image_id: None,
       series_poster_image_id: None,
+      episode_thumb_image_id: None,
+      series_thumb_image_id: None,
+      series_backdrop_image_id: None,
       season_number: Some(season_number),
       episode_number: Some(1),
       series_id: Some("show-1".to_owned()),
@@ -451,6 +485,11 @@ mod tests {
       resume_position_seconds: None,
       played_percentage: None,
       overview: None,
+      index_number_end: None,
+      season_poster_image_id: None,
+      end_year: None,
+      series_continuing: false,
+      unplayed_item_count: None,
     }
   }
 
@@ -469,11 +508,12 @@ mod tests {
       (
         Err("stale home".to_owned()),
         Err("stale shortcuts".to_owned()),
+        Err("stale latest rows".to_owned()),
       ),
     );
 
     assert!(matches!(
-      (applied, &home.continue_watching, &home.shortcuts),
+      (applied, &home.rows()[0].items, &home.shortcuts),
       (
         false,
         jellypilot_core::LoadState::Loading,
@@ -493,9 +533,7 @@ mod tests {
       .data
       .settle_video_home(Ok(jellypilot_media_server::VideoHome {
         continue_watching: vec![item_with_art.clone()],
-        latest_movies: Vec::new(),
         next_up: Vec::new(),
-        latest_episodes: Vec::new(),
       }));
     surface.data.settle_shortcuts(Ok(Vec::new()));
 
@@ -574,17 +612,21 @@ mod tests {
   fn home_memory_cache_hit_synchronously_settles_without_retained_handle() {
     let (mut surface, mut kernel) = test_fixture();
     kernel.client = Some(Arc::new(JellyfinClient::new()));
-    let item = episode("item-2", 1);
-    let mut item_with_art = item.clone();
-    item_with_art.artwork_image_id = Some("cached-art-2".to_owned());
+    let mut item_with_art = episode("item-2", 1);
+    item_with_art.season_poster_image_id = Some("cached-art-2".to_owned());
     surface
       .data
       .settle_video_home(Ok(jellypilot_media_server::VideoHome {
         continue_watching: Vec::new(),
-        latest_movies: Vec::new(),
-        next_up: Vec::new(),
-        latest_episodes: vec![item_with_art],
+        next_up: vec![episode("featured", 1)],
       }));
+    surface
+      .data
+      .settle_latest_rows(Ok(vec![jellypilot_media_server::LibraryLatestRow {
+        library_id: "shows".to_owned(),
+        library_name: "Shows".to_owned(),
+        result: Ok(vec![item_with_art]),
+      }]));
     surface.data.settle_shortcuts(Ok(Vec::new()));
 
     // Seed the raster cache directly on a fresh fixture, so no handle is
@@ -604,7 +646,7 @@ mod tests {
 
     let card_cell = surface
       .artwork
-      .card(HomeSection::LatestEpisodes, "item-2")
+      .card(HomeSection::Latest(0), "item-2")
       .expect("card cell exists");
     assert_eq!(card_cell.state, ArtworkCellState::Ready);
     assert!(kernel
@@ -627,9 +669,7 @@ mod tests {
       .data
       .settle_video_home(Ok(jellypilot_media_server::VideoHome {
         continue_watching: items,
-        latest_movies: Vec::new(),
         next_up: Vec::new(),
-        latest_episodes: Vec::new(),
       }));
     surface.data.settle_shortcuts(Ok(Vec::new()));
     drop(prepare_artwork(&mut surface, &mut kernel, WINDOW_WIDTH));
@@ -708,9 +748,7 @@ mod tests {
       .data
       .settle_video_home(Ok(jellypilot_media_server::VideoHome {
         continue_watching: vec![item],
-        latest_movies: Vec::new(),
         next_up: Vec::new(),
-        latest_episodes: Vec::new(),
       }));
     surface.data.settle_shortcuts(Ok(Vec::new()));
 
@@ -764,9 +802,7 @@ mod tests {
       .data
       .settle_video_home(Ok(jellypilot_media_server::VideoHome {
         continue_watching: vec![item_with_art],
-        latest_movies: Vec::new(),
         next_up: Vec::new(),
-        latest_episodes: Vec::new(),
       }));
     surface.data.settle_shortcuts(Ok(Vec::new()));
 
@@ -807,5 +843,113 @@ mod tests {
       assert_eq!(warm_task.units(), 0);
       assert_eq!(kernel.artwork_binder.live_slots_count(), 0);
     }
+  }
+
+  #[test]
+  fn settle_consumes_latest_rows_in_server_order() {
+    let mut home = HomeState::default();
+    let mut gate = RequestGate::default();
+    let token = gate.begin_home();
+
+    assert!(settle(
+      &mut home,
+      &mut gate,
+      token,
+      (
+        Ok(jellypilot_media_server::VideoHome {
+          continue_watching: Vec::new(),
+          next_up: Vec::new(),
+        }),
+        Ok(Vec::new()),
+        Ok(vec![
+          jellypilot_media_server::LibraryLatestRow {
+            library_id: "movies".to_owned(),
+            library_name: "Movies".to_owned(),
+            result: Ok(Vec::new()),
+          },
+          jellypilot_media_server::LibraryLatestRow {
+            library_id: "shows".to_owned(),
+            library_name: "Shows".to_owned(),
+            result: Ok(Vec::new()),
+          },
+        ]),
+      ),
+    ));
+    assert_eq!(
+      home
+        .rows()
+        .iter()
+        .map(|row| row.title.as_str())
+        .collect::<Vec<_>>(),
+      vec![
+        "Continue Watching",
+        "Next Up",
+        "Latest Movies",
+        "Latest Shows"
+      ]
+    );
+  }
+
+  #[test]
+  fn card_artwork_selection_follows_action_and_latest_fallback_chains() {
+    let mut item = episode("episode-art", 1);
+    item.episode_thumb_image_id = Some("episode-thumb".to_owned());
+    item.series_thumb_image_id = Some("series-thumb".to_owned());
+    item.series_backdrop_image_id = Some("series-backdrop".to_owned());
+    item.season_poster_image_id = Some("season-poster".to_owned());
+    item.series_poster_image_id = Some("series-poster".to_owned());
+    item.artwork_image_id = Some("episode-primary".to_owned());
+
+    assert_eq!(
+      artwork_image_id(ArtworkPlacement::Card(HomeSection::ContinueWatching), &item,),
+      Some("episode-thumb")
+    );
+    item.episode_thumb_image_id = None;
+    assert_eq!(
+      artwork_image_id(ArtworkPlacement::Card(HomeSection::NextUp), &item),
+      Some("series-thumb")
+    );
+    item.series_thumb_image_id = None;
+    assert_eq!(
+      artwork_image_id(ArtworkPlacement::Card(HomeSection::NextUp), &item),
+      Some("series-backdrop")
+    );
+    item.series_backdrop_image_id = None;
+    assert_eq!(
+      artwork_image_id(ArtworkPlacement::Card(HomeSection::NextUp), &item),
+      Some("episode-primary")
+    );
+    assert_eq!(
+      artwork_image_id(ArtworkPlacement::Card(HomeSection::Latest(0)), &item),
+      Some("season-poster")
+    );
+    item.season_poster_image_id = None;
+    assert_eq!(
+      artwork_image_id(ArtworkPlacement::Card(HomeSection::Latest(0)), &item),
+      Some("series-poster")
+    );
+    item.series_poster_image_id = None;
+    assert_eq!(
+      artwork_image_id(ArtworkPlacement::Card(HomeSection::Latest(0)), &item),
+      None
+    );
+
+    item.item_type = "Movie".to_owned();
+    item.backdrop_image_id = Some("movie-backdrop".to_owned());
+    item.artwork_image_id = Some("movie-poster".to_owned());
+    assert_eq!(
+      artwork_image_id(ArtworkPlacement::Card(HomeSection::ContinueWatching), &item,),
+      Some("movie-backdrop")
+    );
+    assert_eq!(
+      artwork_image_id(ArtworkPlacement::Card(HomeSection::Latest(0)), &item),
+      Some("movie-poster")
+    );
+
+    item.item_type = "Series".to_owned();
+    assert_eq!(
+      artwork_image_id(ArtworkPlacement::Card(HomeSection::Latest(0)), &item),
+      Some("movie-poster")
+    );
   }
 }

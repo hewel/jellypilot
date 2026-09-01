@@ -24,7 +24,7 @@ pub enum ImageRefKind {
 
 impl ImageRefKind {
   /// Maximum width requested from the origin for this reference kind.
-  const fn max_width(self) -> u16 {
+  pub(crate) const fn max_width(self) -> u16 {
     match self {
       Self::Artwork => 600,
       Self::Backdrop => 1920,
@@ -32,7 +32,7 @@ impl ImageRefKind {
   }
 
   /// JPEG/WebP quality requested from the origin for this reference kind.
-  const fn quality(self) -> u8 {
+  pub(crate) const fn quality(self) -> u8 {
     90
   }
 }
@@ -139,6 +139,25 @@ pub fn sized_origin_url(
   kind: ImageRefKind,
   provider: MediaServerProvider,
 ) -> Result<String, ImageRefError> {
+  sized_origin_url_for_width(
+    remote_url,
+    provider,
+    u32::from(kind.max_width()),
+    u32::from(kind.quality()),
+  )
+}
+
+/// Apply an explicit server-side resize profile to an origin URL.
+///
+/// Same query handling as [`sized_origin_url`], but the caller picks the
+/// width, e.g. to clamp a Backdrop-kind reference down to a smaller decode
+/// class's source width.
+pub fn sized_origin_url_for_width(
+  remote_url: &str,
+  provider: MediaServerProvider,
+  max_width: u32,
+  quality: u32,
+) -> Result<String, ImageRefError> {
   let parsed = Url::parse(remote_url).map_err(|_| ImageRefError::InvalidRemoteUrl)?;
   if !is_http_url_without_credentials(&parsed) {
     return Err(ImageRefError::InvalidRemoteUrl);
@@ -184,11 +203,11 @@ pub fn sized_origin_url(
   }
   new_query.push_str(max_width_key);
   new_query.push('=');
-  new_query.push_str(&kind.max_width().to_string());
+  new_query.push_str(&max_width.to_string());
   new_query.push('&');
   new_query.push_str(quality_key);
   new_query.push('=');
-  new_query.push_str(&kind.quality().to_string());
+  new_query.push_str(&quality.to_string());
 
   let mut sized = String::with_capacity(
     base.len() + 1 + new_query.len() + fragment.map(|f| f.len() + 1).unwrap_or(0),

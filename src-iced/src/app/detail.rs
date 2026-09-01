@@ -666,6 +666,9 @@ mod tests {
       artwork_image_id: None,
       backdrop_image_id: None,
       series_poster_image_id: None,
+      episode_thumb_image_id: None,
+      series_thumb_image_id: None,
+      series_backdrop_image_id: None,
       season_number: Some(season_number),
       episode_number: Some(1),
       series_id: Some("show-1".to_owned()),
@@ -673,6 +676,11 @@ mod tests {
       resume_position_seconds: None,
       played_percentage: None,
       overview: None,
+      index_number_end: None,
+      season_poster_image_id: None,
+      end_year: None,
+      series_continuing: false,
+      unplayed_item_count: None,
     }
   }
 
@@ -719,7 +727,7 @@ mod tests {
       &mut detail,
       &mut gate,
       stale,
-      Ok(DetailContent::Item(video_item("stale"))),
+      Ok(DetailContent::Item(Box::new(video_item("stale")))),
     ));
     assert!(matches!(
       detail.content,
@@ -729,7 +737,7 @@ mod tests {
       &mut detail,
       &mut gate,
       current,
-      Ok(DetailContent::Item(video_item("current"))),
+      Ok(DetailContent::Item(Box::new(video_item("current")))),
     ));
     assert!(matches!(
       &detail.content,
@@ -741,7 +749,9 @@ mod tests {
   #[test]
   fn user_data_transition_waits_for_confirmation_and_preserves_data_on_failure() {
     let mut detail = DetailState {
-      content: jellypilot_core::LoadState::Ready(DetailContent::Item(video_item("item-1"))),
+      content: jellypilot_core::LoadState::Ready(DetailContent::Item(Box::new(video_item(
+        "item-1",
+      )))),
       user_data_busy: Some(UserDataActionKind::Favorite),
       ..DetailState::default()
     };
@@ -822,7 +832,7 @@ mod tests {
       .request_gate
       .set_detail_item(Some("item-1".to_owned()));
     surface.data.content =
-      jellypilot_core::LoadState::Ready(DetailContent::Item(video_item("item-1")));
+      jellypilot_core::LoadState::Ready(DetailContent::Item(Box::new(video_item("item-1"))));
     surface.data.user_data_busy = Some(UserDataActionKind::Favorite);
 
     let settlement = settle_user_data_update(
@@ -856,7 +866,7 @@ mod tests {
       Some("season-2")
     );
     let mut detail = DetailState {
-      content: jellypilot_core::LoadState::Ready(DetailContent::Show(show)),
+      content: jellypilot_core::LoadState::Ready(DetailContent::Show(Box::new(show))),
       selected_season_id: Some("season-2".to_owned()),
       ..DetailState::default()
     };
@@ -882,7 +892,7 @@ mod tests {
     kernel.client = Some(Arc::new(JellyfinClient::new()));
     let mut item = video_item("detail-item-1");
     item.artwork_image_id = Some("detail-art-1".to_owned());
-    surface.data.content = jellypilot_core::LoadState::Ready(DetailContent::Item(item));
+    surface.data.content = jellypilot_core::LoadState::Ready(DetailContent::Item(Box::new(item)));
 
     // First prepare starts the initial load
     drop(prepare_artwork(&mut surface, &mut kernel));
@@ -911,7 +921,7 @@ mod tests {
     kernel.client = Some(Arc::new(JellyfinClient::new()));
     let mut item = video_item("detail-cache-item");
     item.artwork_image_id = Some("detail-cache-art".to_owned());
-    surface.data.content = jellypilot_core::LoadState::Ready(DetailContent::Item(item));
+    surface.data.content = jellypilot_core::LoadState::Ready(DetailContent::Item(Box::new(item)));
     kernel.artwork_adapter.seed_raster_for_test(
       "detail-cache-art",
       jellypilot_media_server::artwork::ArtworkSizeClass::Hero,

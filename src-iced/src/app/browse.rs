@@ -669,6 +669,9 @@ mod tests {
       artwork_image_id: None,
       backdrop_image_id: None,
       series_poster_image_id: None,
+      episode_thumb_image_id: None,
+      series_thumb_image_id: None,
+      series_backdrop_image_id: None,
       season_number: Some(season_number),
       episode_number: Some(1),
       series_id: Some("show-1".to_owned()),
@@ -676,6 +679,11 @@ mod tests {
       resume_position_seconds: None,
       played_percentage: None,
       overview: None,
+      index_number_end: None,
+      season_poster_image_id: None,
+      end_year: None,
+      series_continuing: false,
+      unplayed_item_count: None,
     }
   }
 
@@ -838,6 +846,9 @@ mod tests {
             artwork_image_id: None,
             backdrop_image_id: None,
             series_poster_image_id: None,
+            episode_thumb_image_id: None,
+            series_thumb_image_id: None,
+            series_backdrop_image_id: None,
             season_number: None,
             episode_number: None,
             series_id: None,
@@ -845,6 +856,11 @@ mod tests {
             resume_position_seconds: None,
             played_percentage: None,
             overview: None,
+            index_number_end: None,
+            season_poster_image_id: None,
+            end_year: None,
+            series_continuing: false,
+            unplayed_item_count: None,
           })
           .collect(),
       }),

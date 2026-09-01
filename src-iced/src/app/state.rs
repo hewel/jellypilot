@@ -18,7 +18,8 @@ use jellypilot_core::request_gate::{RemoteToken, RequestGate};
 use jellypilot_core::LoadState;
 use jellypilot_media_server::artwork::{ArtworkAdapter, ArtworkRaster};
 use jellypilot_media_server::{
-  MediaServerProvider, VideoLibraryItem, VideoLibraryShortcut, VideoSeasonEpisodesPage,
+  LibraryLatestRow, MediaServerProvider, VideoLibraryItem, VideoLibraryShortcut,
+  VideoSeasonEpisodesPage,
 };
 use jellypilot_mpv::playback::PlaybackController;
 use jellypilot_session::{IntroSkipMode, JellyfinWebSocket, JellyfinWebSocketEvent};
@@ -171,72 +172,107 @@ pub enum Destination {
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub enum HomeSection {
   ContinueWatching,
-  LatestMovies,
   NextUp,
-  LatestEpisodes,
+  Latest(usize),
 }
 
 impl HomeSection {
-  pub const ALL: [Self; 4] = [
-    Self::ContinueWatching,
-    Self::LatestMovies,
-    Self::NextUp,
-    Self::LatestEpisodes,
-  ];
-
-  pub const fn title(self) -> &'static str {
-    match self {
-      Self::ContinueWatching => "Continue Watching",
-      Self::LatestMovies => "Latest Movies",
-      Self::NextUp => "Next Up",
-      Self::LatestEpisodes => "Latest Episodes",
-    }
-  }
-
   pub const fn index(self) -> usize {
     match self {
       Self::ContinueWatching => 0,
-      Self::LatestMovies => 1,
-      Self::NextUp => 2,
-      Self::LatestEpisodes => 3,
+      Self::NextUp => 1,
+      Self::Latest(index) => index + 2,
+    }
+  }
+
+  pub const fn is_latest(self) -> bool {
+    matches!(self, Self::Latest(_))
+  }
+
+  pub const fn is_action(self) -> bool {
+    matches!(self, Self::ContinueWatching | Self::NextUp)
+  }
+}
+
+pub struct HomeRow {
+  pub section: HomeSection,
+  pub title: String,
+  pub items: LoadState<Vec<VideoLibraryItem>>,
+}
+
+impl HomeRow {
+  fn new(
+    section: HomeSection,
+    title: impl Into<String>,
+    items: LoadState<Vec<VideoLibraryItem>>,
+  ) -> Self {
+    Self {
+      section,
+      title: title.into(),
+      items,
     }
   }
 }
 
-#[derive(Default)]
 pub struct HomeState {
-  pub continue_watching: LoadState<Vec<VideoLibraryItem>>,
-  pub latest_movies: LoadState<Vec<VideoLibraryItem>>,
-  pub next_up: LoadState<Vec<VideoLibraryItem>>,
-  pub latest_episodes: LoadState<Vec<VideoLibraryItem>>,
+  pub rows: Vec<HomeRow>,
   pub shortcuts: LoadState<Vec<VideoLibraryShortcut>>,
   pub hovered_card: Option<String>,
 }
 
+impl Default for HomeState {
+  fn default() -> Self {
+    Self {
+      rows: vec![
+        HomeRow::new(
+          HomeSection::ContinueWatching,
+          "Continue Watching",
+          LoadState::Idle,
+        ),
+        HomeRow::new(HomeSection::NextUp, "Next Up", LoadState::Idle),
+      ],
+      shortcuts: LoadState::Idle,
+      hovered_card: None,
+    }
+  }
+}
+
 impl HomeState {
   pub fn begin_load(&mut self) {
-    self.continue_watching = LoadState::Loading;
-    self.latest_movies = LoadState::Loading;
-    self.next_up = LoadState::Loading;
-    self.latest_episodes = LoadState::Loading;
+    for row in &mut self.rows {
+      row.items = LoadState::Loading;
+    }
     self.shortcuts = LoadState::Loading;
   }
 
   pub fn settle_video_home(&mut self, result: Result<jellypilot_media_server::VideoHome, String>) {
     match result {
       Ok(home) => {
-        self.continue_watching = LoadState::Ready(home.continue_watching);
-        self.latest_movies = LoadState::Ready(home.latest_movies);
-        self.next_up = LoadState::Ready(home.next_up);
-        self.latest_episodes = LoadState::Ready(home.latest_episodes);
+        self.rows[HomeSection::ContinueWatching.index()].items =
+          LoadState::Ready(home.continue_watching);
+        self.rows[HomeSection::NextUp.index()].items = LoadState::Ready(home.next_up);
       }
       Err(error) => {
-        self.continue_watching = LoadState::Failed(error.clone());
-        self.latest_movies = LoadState::Failed(error.clone());
-        self.next_up = LoadState::Failed(error.clone());
-        self.latest_episodes = LoadState::Failed(error);
+        self.rows[HomeSection::ContinueWatching.index()].items = LoadState::Failed(error.clone());
+        self.rows[HomeSection::NextUp.index()].items = LoadState::Failed(error);
       }
     }
+  }
+
+  pub fn settle_latest_rows(&mut self, result: Result<Vec<LibraryLatestRow>, String>) {
+    self.rows.truncate(2);
+    let Ok(latest_rows) = result else {
+      return;
+    };
+    self
+      .rows
+      .extend(latest_rows.into_iter().enumerate().map(|(index, row)| {
+        HomeRow::new(
+          HomeSection::Latest(index),
+          format!("Latest {}", row.library_name),
+          row.result.map_or_else(LoadState::Failed, LoadState::Ready),
+        )
+      }));
   }
 
   pub fn settle_shortcuts(&mut self, result: Result<Vec<VideoLibraryShortcut>, String>) {
@@ -246,30 +282,45 @@ impl HomeState {
     };
   }
 
-  pub fn section(&self, section: HomeSection) -> &LoadState<Vec<VideoLibraryItem>> {
-    match section {
-      HomeSection::ContinueWatching => &self.continue_watching,
-      HomeSection::LatestMovies => &self.latest_movies,
-      HomeSection::NextUp => &self.next_up,
-      HomeSection::LatestEpisodes => &self.latest_episodes,
-    }
+  pub fn rows(&self) -> &[HomeRow] {
+    &self.rows
+  }
+
+  pub fn row(&self, section: HomeSection) -> Option<&HomeRow> {
+    self
+      .rows
+      .get(section.index())
+      .filter(|row| row.section == section)
   }
 
   pub fn featured_item(&self) -> Option<&VideoLibraryItem> {
-    ready_items(&self.continue_watching)
+    self
+      .row(HomeSection::ContinueWatching)
+      .and_then(|row| ready_items(&row.items))
       .and_then(|items| items.iter().find(|item| has_resume_position(item)))
-      .or_else(|| ready_items(&self.next_up).and_then(|items| items.first()))
-      .or_else(|| ready_items(&self.latest_movies).and_then(|items| items.first()))
+      .or_else(|| {
+        self
+          .row(HomeSection::NextUp)
+          .and_then(|row| ready_items(&row.items))
+          .and_then(|items| items.first())
+      })
+      .or_else(|| {
+        self
+          .rows
+          .iter()
+          .skip(2)
+          .filter_map(|row| ready_items(&row.items))
+          .find_map(|items| items.first())
+      })
   }
 
   pub fn has_ready_content(&self) -> bool {
-    matches!(self.continue_watching, LoadState::Ready(_))
-      || matches!(self.latest_movies, LoadState::Ready(_))
-      || matches!(self.next_up, LoadState::Ready(_))
-      || matches!(self.latest_episodes, LoadState::Ready(_))
+    self
+      .rows
+      .iter()
+      .any(|row| matches!(row.items, LoadState::Ready(_)))
   }
 }
-
 fn ready_items(state: &LoadState<Vec<VideoLibraryItem>>) -> Option<&[VideoLibraryItem]> {
   match state {
     LoadState::Ready(items) => Some(items),
@@ -306,7 +357,7 @@ pub struct ArtworkCell {
 pub struct HomeArtwork {
   hero: Option<(String, ArtworkCell)>,
   hero_backdrop: Option<(String, ArtworkCell)>,
-  sections: [HashMap<String, ArtworkCell>; 4],
+  sections: Vec<HashMap<String, ArtworkCell>>,
 }
 
 impl HomeArtwork {
@@ -318,6 +369,9 @@ impl HomeArtwork {
   }
 
   pub fn insert_card(&mut self, section: HomeSection, item_id: String, cell: ArtworkCell) {
+    if self.sections.len() <= section.index() {
+      self.sections.resize_with(section.index() + 1, HashMap::new);
+    }
     self.sections[section.index()].insert(item_id, cell);
   }
 
@@ -337,7 +391,7 @@ impl HomeArtwork {
   }
 
   pub fn card(&self, section: HomeSection, item_id: &str) -> Option<&ArtworkCell> {
-    self.sections[section.index()].get(item_id)
+    self.sections.get(section.index())?.get(item_id)
   }
 
   pub fn cell_mut(&mut self, slot: ArtworkSlot, image_id: &str) -> Option<&mut ArtworkCell> {
@@ -378,7 +432,7 @@ impl HomeArtwork {
     &mut self,
     hero_item_id: Option<&str>,
     hero_backdrop_item_id: Option<&str>,
-    section_item_ids: &[HashSet<&str>; 4],
+    section_item_ids: &[HashSet<&str>],
   ) {
     if let Some((bound_item_id, _)) = &self.hero {
       if hero_item_id != Some(bound_item_id.as_str()) {
@@ -390,8 +444,8 @@ impl HomeArtwork {
         self.hero_backdrop = None;
       }
     }
-    for (i, section) in self.sections.iter_mut().enumerate() {
-      let allowed = &section_item_ids[i];
+    self.sections.truncate(section_item_ids.len());
+    for (section, allowed) in self.sections.iter_mut().zip(section_item_ids) {
       section.retain(|item_id, _| allowed.contains(item_id.as_str()));
     }
   }
@@ -829,9 +883,12 @@ impl State {
   /// cell is loading. Gates the frame subscription that advances `skeleton_phase`,
   /// so the shell never redraws at display refresh just for an invisible animation.
   pub(crate) fn skeletons_active(&self) -> bool {
-    let home_loading = HomeSection::ALL
+    let home_loading = self
+      .home
+      .data
+      .rows()
       .iter()
-      .any(|section| matches!(self.home.data.section(*section), LoadState::Loading))
+      .any(|row| matches!(row.items, LoadState::Loading))
       || matches!(self.home.data.shortcuts, LoadState::Loading);
     let browse_loading = match &self.browse.view {
       LibraryBrowseView::Loading => true,
@@ -957,15 +1014,11 @@ mod tests {
 
     assert!(matches!(
       (
-        &home.continue_watching,
-        &home.latest_movies,
-        &home.next_up,
-        &home.latest_episodes,
+        &home.rows()[0].items,
+        &home.rows()[1].items,
         &home.shortcuts,
       ),
       (
-        LoadState::Failed(_),
-        LoadState::Failed(_),
         LoadState::Failed(_),
         LoadState::Failed(_),
         LoadState::Ready(shortcuts),
@@ -980,13 +1033,101 @@ mod tests {
     home.settle_video_home(Ok(jellypilot_media_server::VideoHome {
       continue_watching: Vec::new(),
       next_up: Vec::new(),
-      latest_movies: Vec::new(),
-      latest_episodes: Vec::new(),
     }));
+    home.settle_latest_rows(Ok(vec![LibraryLatestRow {
+      library_id: "shows".to_owned(),
+      library_name: "Shows".to_owned(),
+      result: Ok(Vec::new()),
+    }]));
 
-    assert!(HomeSection::ALL.iter().all(
-      |section| matches!(home.section(*section), LoadState::Ready(items) if items.is_empty())
+    assert!(home
+      .rows()
+      .iter()
+      .all(|row| matches!(&row.items, LoadState::Ready(items) if items.is_empty())));
+  }
+
+  #[test]
+  fn home_rows_keep_fixed_rows_before_latest_libraries_in_server_order() {
+    let mut home = HomeState::default();
+    home.settle_latest_rows(Ok(vec![
+      LibraryLatestRow {
+        library_id: "movies".to_owned(),
+        library_name: "Movies".to_owned(),
+        result: Ok(Vec::new()),
+      },
+      LibraryLatestRow {
+        library_id: "shows".to_owned(),
+        library_name: "TV Shows".to_owned(),
+        result: Ok(Vec::new()),
+      },
+    ]));
+
+    assert_eq!(
+      home
+        .rows()
+        .iter()
+        .map(|row| (row.section, row.title.as_str()))
+        .collect::<Vec<_>>(),
+      vec![
+        (HomeSection::ContinueWatching, "Continue Watching"),
+        (HomeSection::NextUp, "Next Up"),
+        (HomeSection::Latest(0), "Latest Movies"),
+        (HomeSection::Latest(1), "Latest TV Shows"),
+      ]
+    );
+  }
+
+  #[test]
+  fn latest_rows_replace_stale_identities_and_isolate_library_failures() {
+    let mut home = HomeState::default();
+    home.settle_latest_rows(Ok(vec![LibraryLatestRow {
+      library_id: "old".to_owned(),
+      library_name: "Old Library".to_owned(),
+      result: Ok(Vec::new()),
+    }]));
+
+    home.settle_latest_rows(Ok(vec![
+      LibraryLatestRow {
+        library_id: "movies".to_owned(),
+        library_name: "Movies".to_owned(),
+        result: Err("movies failed".to_owned()),
+      },
+      LibraryLatestRow {
+        library_id: "shows".to_owned(),
+        library_name: "Shows".to_owned(),
+        result: Ok(Vec::new()),
+      },
+    ]));
+
+    assert!(matches!(
+      home.rows(),
+      [_, _, HomeRow {
+        title: movies_title,
+        items: LoadState::Failed(movies_error),
+        ..
+      }, HomeRow {
+        title: shows_title,
+        items: LoadState::Ready(shows),
+        ..
+      }] if movies_title == "Latest Movies"
+        && movies_error == "movies failed"
+        && shows_title == "Latest Shows"
+        && shows.is_empty()
     ));
+  }
+
+  #[test]
+  fn latest_rows_clear_stale_identities_when_row_metadata_is_unavailable() {
+    let mut home = HomeState::default();
+    home.settle_latest_rows(Ok(vec![LibraryLatestRow {
+      library_id: "old".to_owned(),
+      library_name: "Old Library".to_owned(),
+      result: Ok(Vec::new()),
+    }]));
+
+    home.settle_latest_rows(Err("shortcuts failed".to_owned()));
+
+    assert_eq!(home.rows().len(), 2);
   }
   #[test]
   fn diagnostic_filters_match_level_and_category_independently() {

@@ -11,8 +11,8 @@ pub const SEASON_EPISODE_PAGE_SIZE: i32 = 30;
 
 #[derive(Clone)]
 pub enum DetailContent {
-    Item(VideoItemDetail),
-    Show(VideoShowDetail),
+    Item(Box<VideoItemDetail>),
+    Show(Box<VideoShowDetail>),
 }
 
 pub async fn load_detail_content(
@@ -24,14 +24,14 @@ pub async fn load_detail_content(
             .library()
             .show_detail(item.id)
             .await
-            .map(DetailContent::Show)
+            .map(|detail| DetailContent::Show(Box::new(detail)))
             .map_err(|error| error.to_string())
     } else {
         client
             .library()
             .item_detail(item.id)
             .await
-            .map(DetailContent::Item)
+            .map(|detail| DetailContent::Item(Box::new(detail)))
             .map_err(|error| error.to_string())
     }
 }
@@ -207,7 +207,7 @@ mod tests {
 
     #[test]
     fn user_data_completion_updates_only_the_matching_detail() {
-        let mut detail = LoadState::Ready(DetailContent::Show(VideoShowDetail {
+        let mut detail = LoadState::Ready(DetailContent::Show(Box::new(VideoShowDetail {
             id: "show-1".to_owned(),
             name: "Show".to_owned(),
             overview: None,
@@ -221,7 +221,7 @@ mod tests {
             next_episode: None,
             seasons: Vec::new(),
             metadata: Default::default(),
-        }));
+        })));
         let stale = VideoUserDataUpdate {
             item_id: "show-2".to_owned(),
             played: true,
@@ -235,12 +235,8 @@ mod tests {
         };
         assert!(apply_user_data_update(&mut detail, &current));
         assert!(matches!(
-            detail,
-            LoadState::Ready(DetailContent::Show(VideoShowDetail {
-                played: true,
-                favorite: true,
-                ..
-            }))
+            &detail,
+            LoadState::Ready(DetailContent::Show(show)) if show.played && show.favorite
         ));
     }
 
@@ -257,12 +253,20 @@ mod tests {
             backdrop_image_id: None,
             series_poster_image_id: None,
             season_number: Some(season_number),
+            episode_thumb_image_id: None,
+            series_thumb_image_id: None,
+            series_backdrop_image_id: None,
             episode_number: Some(1),
             series_id: Some("show-1".to_owned()),
             series_name: Some("Show".to_owned()),
             resume_position_seconds: None,
             played_percentage: None,
             overview: None,
+            index_number_end: None,
+            season_poster_image_id: None,
+            end_year: None,
+            series_continuing: false,
+            unplayed_item_count: None,
         }
     }
 
@@ -312,7 +316,7 @@ mod tests {
 
     #[test]
     fn selected_season_request_resolves_only_a_season_of_the_loaded_show() {
-        let detail = LoadState::Ready(DetailContent::Show(show_detail(None)));
+        let detail = LoadState::Ready(DetailContent::Show(Box::new(show_detail(None))));
 
         let request = selected_season_request(&detail, Some("season-2"))
             .expect("selected season should produce a page");
@@ -336,7 +340,7 @@ mod tests {
     fn detail_user_data_reads_flags_only_from_ready_content() {
         assert!(detail_user_data(&LoadState::Loading).is_none());
 
-        let detail = LoadState::Ready(DetailContent::Show(show_detail(None)));
+        let detail = LoadState::Ready(DetailContent::Show(Box::new(show_detail(None))));
         let (item_id, played, favorite) =
             detail_user_data(&detail).expect("ready content exposes user data");
         assert_eq!(item_id, "show-1");

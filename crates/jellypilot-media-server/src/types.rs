@@ -105,8 +105,6 @@ impl MediaServerProvider {
 pub struct VideoHome {
   pub continue_watching: Vec<VideoLibraryItem>,
   pub next_up: Vec<VideoLibraryItem>,
-  pub latest_movies: Vec<VideoLibraryItem>,
-  pub latest_episodes: Vec<VideoLibraryItem>,
 }
 
 /// Video library shortcut for drilling into Movies or Shows libraries.
@@ -118,6 +116,15 @@ pub struct VideoLibraryShortcut {
   pub collection_type: String,
   pub item_count: Option<i32>,
   pub artwork_image_id: Option<String>,
+}
+
+/// Latest media for one video library, ordered with the user's library shortcuts.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LibraryLatestRow {
+  pub library_id: String,
+  pub library_name: String,
+  pub result: Result<Vec<VideoLibraryItem>, String>,
 }
 
 /// Supported video library browse families.
@@ -202,14 +209,30 @@ pub struct VideoLibraryItem {
   pub backdrop_image_id: Option<String>,
   /// Series primary poster for episode player-bar thumbs; absent for movies.
   pub series_poster_image_id: Option<String>,
+  /// Episode's own Thumb image; absent for non-episode items or when no Thumb exists.
+  pub episode_thumb_image_id: Option<String>,
+  /// Series-level Thumb image for episode cards.
+  pub series_thumb_image_id: Option<String>,
+  /// First series backdrop for episode cards.
+  pub series_backdrop_image_id: Option<String>,
+  /// Season primary poster for episode cards.
+  pub season_poster_image_id: Option<String>,
   /// Episode metadata: season number (1-based), available for Episode items.
   pub season_number: Option<i32>,
   /// Episode metadata: episode number within season (1-based), available for Episode items.
   pub episode_number: Option<i32>,
+  /// Last episode number when a DTO represents an episode range.
+  pub index_number_end: Option<u32>,
   /// Episode metadata: parent series id, available for Episode items.
   pub series_id: Option<String>,
   /// Episode metadata: parent series name, available for Episode items.
   pub series_name: Option<String>,
+  /// Ending year for a completed series.
+  pub end_year: Option<i32>,
+  /// Whether the series status is Continuing.
+  pub series_continuing: bool,
+  /// Total unplayed children reported in user data.
+  pub unplayed_item_count: Option<u32>,
   /// Resume position in seconds, populated for episode rows.
   pub resume_position_seconds: Option<f64>,
   /// Percentage watched (0–100), populated for episode rows.

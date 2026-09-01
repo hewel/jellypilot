@@ -1115,6 +1115,9 @@ mod tests {
       artwork_image_id: None,
       backdrop_image_id: None,
       series_poster_image_id: None,
+      episode_thumb_image_id: None,
+      series_thumb_image_id: None,
+      series_backdrop_image_id: None,
       season_number: Some(1),
       episode_number: Some(1),
       series_id: Some("show-1".to_owned()),
@@ -1122,6 +1125,11 @@ mod tests {
       resume_position_seconds,
       played_percentage,
       overview: None,
+      index_number_end: None,
+      season_poster_image_id: None,
+      end_year: None,
+      series_continuing: false,
+      unplayed_item_count: None,
     }
   }
 
@@ -1177,28 +1185,29 @@ mod tests {
     {
       let mut state = State::boot(false);
       state.shell.skeleton_phase = 0.75;
-      state.detail.data.content = LoadState::Ready(DetailContent::Show(VideoShowDetail {
-        id: "show-1".to_owned(),
-        name: "Show 1".to_owned(),
-        overview: None,
-        production_year: None,
-        genres: Vec::new(),
-        played: false,
-        favorite: false,
-        can_play: true,
-        artwork_image_id: None,
-        backdrop_image_id: None,
-        next_episode: None,
-        seasons: vec![VideoSeason {
-          id: "season-1".to_owned(),
-          name: "Season 1".to_owned(),
-          season_number: Some(1),
+      state.detail.data.content =
+        LoadState::Ready(DetailContent::Show(Box::new(VideoShowDetail {
+          id: "show-1".to_owned(),
+          name: "Show 1".to_owned(),
+          overview: None,
+          production_year: None,
+          genres: Vec::new(),
           played: false,
           favorite: false,
+          can_play: true,
           artwork_image_id: None,
-        }],
-        metadata: Default::default(),
-      }));
+          backdrop_image_id: None,
+          next_episode: None,
+          seasons: vec![VideoSeason {
+            id: "season-1".to_owned(),
+            name: "Season 1".to_owned(),
+            season_number: Some(1),
+            played: false,
+            favorite: false,
+            artwork_image_id: None,
+          }],
+          metadata: Default::default(),
+        })));
       state.detail.data.season_episodes = LoadState::Loading;
       let _element = view(&state);
     }
@@ -1229,7 +1238,7 @@ mod tests {
         series_poster_image_id: None,
         metadata: Default::default(),
       };
-      state.detail.data.content = LoadState::Ready(DetailContent::Item(item));
+      state.detail.data.content = LoadState::Ready(DetailContent::Item(Box::new(item)));
       state.detail.data.season_neighbors = LoadState::Loading;
       let _element = view(&state);
     }
@@ -1274,12 +1283,20 @@ mod tests {
       artwork_image_id: None,
       backdrop_image_id: None,
       series_poster_image_id: None,
+      episode_thumb_image_id: None,
+      series_thumb_image_id: None,
+      series_backdrop_image_id: None,
       season_number: Some(1),
       episode_number: Some(2),
       series_id: Some("series-1".to_owned()),
       series_name: Some("Series 1".to_owned()),
       resume_position_seconds: None,
       played_percentage: None,
+      index_number_end: None,
+      season_poster_image_id: None,
+      end_year: None,
+      series_continuing: false,
+      unplayed_item_count: None,
     };
     let slot_1 = state
       .kernel
@@ -1317,7 +1334,7 @@ mod tests {
         state: ArtworkCellState::Loading,
       },
     );
-    state.detail.data.content = LoadState::Ready(DetailContent::Item(item));
+    state.detail.data.content = LoadState::Ready(DetailContent::Item(Box::new(item)));
     state.detail.data.season_neighbors = LoadState::Ready(vec![neighbor_item]);
     let _element = view(&state);
   }

@@ -1,5 +1,6 @@
 //! Jellyfin HTTP client for REST API calls.
 
+use chrono::Datelike;
 use parking_lot::RwLock;
 use reqwest::{header, Client, Method};
 use std::sync::Arc;
@@ -9,7 +10,7 @@ use zeroize::Zeroize;
 use super::error::JellyfinError;
 use super::image_ref::{
   decode_image_id, image_id_for_url, normalize_server_url as normalize_image_server_url,
-  sized_origin_url, validate_remote_url_for_server, ImageRefKind,
+  sized_origin_url_for_width, validate_remote_url_for_server, ImageRefKind,
 };
 use super::intro_skipper::{
   parse_intro_skipper_ranges, IntroSkipRange, IntroSkipperPluginResponse,
@@ -279,6 +280,17 @@ impl JellyfinClient {
     &self,
     image_id: &str,
   ) -> Result<LibraryImageRequest, JellyfinError> {
+    self.prepare_library_image_request_with_width(image_id, u32::MAX)
+  }
+
+  /// Prepare the origin request with the server-side resize clamped to the
+  /// calling decode class's source width, so a wide-reference (e.g.
+  /// Backdrop-kind) cannot fetch a source that exceeds the class decode cap.
+  fn prepare_library_image_request_with_width(
+    &self,
+    image_id: &str,
+    source_max_width: u32,
+  ) -> Result<LibraryImageRequest, JellyfinError> {
     let payload = decode_image_id(image_id)?;
     let (provider, server_url) = {
       let state = self.state.read();
@@ -301,7 +313,16 @@ impl JellyfinClient {
       )
     };
 
-    let origin_url = sized_origin_url(&payload.remote_url, payload.kind, payload.provider)?;
+    let origin_url = sized_origin_url_for_width(
+      &payload.remote_url,
+      payload.provider,
+      payload
+        .kind
+        .max_width()
+        .min(source_max_width.try_into().unwrap_or(u16::MAX))
+        .into(),
+      payload.kind.quality().into(),
+    )?;
     validate_remote_url_for_server(&server_url, &origin_url)?;
 
     Ok(LibraryImageRequest {
@@ -2445,30 +2466,14 @@ impl<'a> JellyfinLibrary<'a> {
       .client
       .openapi_configuration(&server_url, Some(&token))?;
 
-    let (continue_watching, next_up, latest_movies, latest_episodes) = tokio::try_join!(
+    let (continue_watching, next_up) = tokio::try_join!(
       continue_watching_items(&configuration, &server_url, &user_id),
       next_up_items(&configuration, &server_url, &user_id),
-      latest_video_items(
-        &configuration,
-        &server_url,
-        &user_id,
-        jellyfin_api::models::BaseItemKind::Movie,
-        "Video Home latest movies",
-      ),
-      latest_video_items(
-        &configuration,
-        &server_url,
-        &user_id,
-        jellyfin_api::models::BaseItemKind::Episode,
-        "Video Home latest episodes",
-      ),
     )?;
 
     Ok(VideoHome {
       continue_watching,
       next_up,
-      latest_movies,
-      latest_episodes,
     })
   }
 
@@ -2485,6 +2490,31 @@ impl<'a> JellyfinLibrary<'a> {
       .openapi_configuration(&server_url, Some(&token))?;
 
     video_library_shortcuts(&configuration, &server_url, &user_id).await
+  }
+
+  pub async fn library_latest(
+    &self,
+    library_id: String,
+  ) -> Result<Vec<VideoLibraryItem>, JellyfinError> {
+    if self.client.provider() == MediaServerProvider::Emby {
+      return self.emby_library_latest(library_id).await;
+    }
+
+    let library_id = library_id.trim().to_string();
+    if library_id.is_empty() {
+      return Err(JellyfinError::HttpError(
+        "Library id is required for latest media".to_string(),
+      ));
+    }
+
+    let server_url = self.client.server_url()?;
+    let token = self.client.access_token()?;
+    let user_id = self.client.user_id()?;
+    let configuration = self
+      .client
+      .openapi_configuration(&server_url, Some(&token))?;
+
+    latest_video_items(&configuration, &server_url, &user_id, library_id).await
   }
 
   pub async fn item_shortcut(
@@ -3093,6 +3123,17 @@ impl<'a> JellyfinLibrary<'a> {
   pub fn image_request(&self, image_id: &str) -> Result<LibraryImageRequest, JellyfinError> {
     self.client.prepare_library_image_request(image_id)
   }
+  /// Variant of [`Self::image_request`] that clamps the server-side resize
+  /// to the caller's decode-class source width.
+  pub fn image_request_with_max_width(
+    &self,
+    image_id: &str,
+    source_max_width: u32,
+  ) -> Result<LibraryImageRequest, JellyfinError> {
+    self
+      .client
+      .prepare_library_image_request_with_width(image_id, source_max_width)
+  }
 
   /// Fetch a prepared library image as a streaming HTTP response.
   ///
@@ -3114,19 +3155,31 @@ impl<'a> JellyfinLibrary<'a> {
     let server_url = self.client.server_url()?;
     let user_id = self.client.user_id()?;
 
-    let (continue_watching, next_up, latest_movies, latest_episodes) = tokio::try_join!(
+    let (continue_watching, next_up) = tokio::try_join!(
       emby_continue_watching_items(self.client, &server_url, &user_id),
       emby_next_up_items(self.client, &server_url, &user_id, None, 12),
-      emby_latest_video_items(self.client, &server_url, &user_id, "Movie"),
-      emby_latest_video_items(self.client, &server_url, &user_id, "Episode"),
     )?;
 
     Ok(VideoHome {
       continue_watching,
       next_up,
-      latest_movies,
-      latest_episodes,
     })
+  }
+
+  async fn emby_library_latest(
+    &self,
+    library_id: String,
+  ) -> Result<Vec<VideoLibraryItem>, JellyfinError> {
+    let library_id = library_id.trim().to_string();
+    if library_id.is_empty() {
+      return Err(JellyfinError::HttpError(
+        "Library id is required for latest media".to_string(),
+      ));
+    }
+
+    let server_url = self.client.server_url()?;
+    let user_id = self.client.user_id()?;
+    emby_latest_video_items(self.client, &server_url, &user_id, &library_id).await
   }
 
   async fn emby_library_shortcuts(&self) -> Result<Vec<VideoLibraryShortcut>, JellyfinError> {
@@ -3577,6 +3630,7 @@ async fn next_up_items(
       enable_image_types: Some(vec![
         jellyfin_api::models::ImageType::Primary,
         jellyfin_api::models::ImageType::Backdrop,
+        jellyfin_api::models::ImageType::Thumb,
       ]),
       enable_user_data: Some(true),
       next_up_date_cutoff: None,
@@ -3605,39 +3659,47 @@ async fn latest_video_items(
   configuration: &jellyfin_api::apis::configuration::Configuration,
   server_url: &str,
   user_id: &str,
-  item_type: jellyfin_api::models::BaseItemKind,
-  context: &str,
+  library_id: String,
 ) -> Result<Vec<VideoLibraryItem>, JellyfinError> {
   let items = jellyfin_api::apis::user_library_api::get_latest_media(
     configuration,
     jellyfin_api::apis::user_library_api::GetLatestMediaParams {
       user_id: Some(user_id.to_string()),
-      parent_id: None,
-      fields: Some(video_home_fields()),
-      include_item_types: Some(vec![item_type]),
+      parent_id: Some(library_id),
+      fields: Some(vec![
+        jellyfin_api::models::ItemFields::PrimaryImageAspectRatio,
+        jellyfin_api::models::ItemFields::Path,
+      ]),
+      include_item_types: None,
       is_played: None,
       enable_images: Some(true),
       image_type_limit: Some(1),
       enable_image_types: Some(vec![
         jellyfin_api::models::ImageType::Primary,
         jellyfin_api::models::ImageType::Backdrop,
+        jellyfin_api::models::ImageType::Thumb,
       ]),
       enable_user_data: Some(true),
-      limit: Some(12),
-      group_items: Some(false),
+      limit: Some(16),
+      group_items: Some(true),
     },
   )
   .await
-  .map_err(|err| JellyfinClient::openapi_error(context, err))?;
+  .map_err(|err| JellyfinClient::openapi_error("Library latest media", err))?;
 
-  Ok(
-    items
-      .into_iter()
-      .filter_map(|item| {
-        map_video_home_item(server_url, item, jellyfin_api::models::ImageType::Primary)
-      })
-      .collect(),
-  )
+  Ok(map_latest_video_items(server_url, items))
+}
+
+fn map_latest_video_items(
+  server_url: &str,
+  items: Vec<jellyfin_api::models::BaseItemDto>,
+) -> Vec<VideoLibraryItem> {
+  items
+    .into_iter()
+    .filter_map(|item| {
+      map_video_home_item(server_url, item, jellyfin_api::models::ImageType::Primary)
+    })
+    .collect()
 }
 
 async fn video_library_shortcuts(
@@ -3834,23 +3896,7 @@ fn map_continue_watching_item(
   server_url: &str,
   item: jellyfin_api::models::BaseItemDto,
 ) -> Option<VideoLibraryItem> {
-  let image_type = match item.r#type? {
-    jellyfin_api::models::BaseItemKind::Episode => {
-      let has_thumb = item
-        .image_tags
-        .as_ref()
-        .and_then(|tags| tags.as_ref())
-        .is_some_and(|tags| tags.contains_key("Thumb"));
-      if has_thumb {
-        jellyfin_api::models::ImageType::Thumb
-      } else {
-        jellyfin_api::models::ImageType::Primary
-      }
-    }
-    _ => jellyfin_api::models::ImageType::Primary,
-  };
-
-  map_video_home_item(server_url, item, image_type)
+  map_video_home_item(server_url, item, jellyfin_api::models::ImageType::Primary)
 }
 /// Jellyfin's native item ids are 32 lowercase hex characters without dashes,
 /// but the generated OpenAPI client types them as [`Uuid`], whose `to_string`
@@ -3868,14 +3914,67 @@ fn map_video_home_item(
   image_type: jellyfin_api::models::ImageType,
 ) -> Option<VideoLibraryItem> {
   let id = jellyfin_id(item.id?);
-  let item_type = item.r#type?.to_string();
+  let item_kind = item.r#type?;
+  let item_type = item_kind.to_string();
+  let is_episode = matches!(item_kind, jellyfin_api::models::BaseItemKind::Episode);
   let user_data = item.user_data.flatten();
+  let image_tags = item.image_tags.flatten();
+  let episode_thumb_image_id = is_episode
+    .then(|| {
+      image_id_for_tagged_artwork(
+        MediaServerProvider::Jellyfin,
+        server_url,
+        &id,
+        "Thumb",
+        image_tags
+          .as_ref()
+          .and_then(|tags| tags.get("Thumb"))
+          .map(String::as_str),
+      )
+    })
+    .flatten();
+  let artwork_image_type = if is_episode {
+    jellyfin_api::models::ImageType::Primary
+  } else {
+    image_type
+  };
   let artwork_image_id = image_id_for_remote_url(
     MediaServerProvider::Jellyfin,
     server_url,
-    artwork_url(server_url, &id, item.image_tags.flatten(), image_type),
+    artwork_url(server_url, &id, image_tags, artwork_image_type),
     ImageRefKind::Artwork,
   );
+  let parent_backdrop_item_id = item.parent_backdrop_item_id.flatten().map(jellyfin_id);
+  let parent_backdrop_image_tags = item.parent_backdrop_image_tags.flatten();
+  let series_backdrop_image_id = is_episode
+    .then(|| {
+      image_id_for_remote_url(
+        MediaServerProvider::Jellyfin,
+        server_url,
+        parent_backdrop_url(
+          server_url,
+          parent_backdrop_item_id.as_deref(),
+          parent_backdrop_image_tags.as_deref(),
+        ),
+        ImageRefKind::Backdrop,
+      )
+    })
+    .flatten();
+  let season_poster_image_id = is_episode
+    .then(|| {
+      let parent_id = item
+        .parent_primary_image_item_id
+        .flatten()
+        .map(jellyfin_id)?;
+      image_id_for_tagged_artwork(
+        MediaServerProvider::Jellyfin,
+        server_url,
+        &parent_id,
+        "Primary",
+        item.parent_primary_image_tag.flatten().as_deref(),
+      )
+    })
+    .flatten();
   let backdrop_image_id = image_id_for_remote_url(
     MediaServerProvider::Jellyfin,
     server_url,
@@ -3883,8 +3982,8 @@ fn map_video_home_item(
       server_url,
       &id,
       item.backdrop_image_tags.flatten(),
-      item.parent_backdrop_item_id.flatten().map(jellyfin_id),
-      item.parent_backdrop_image_tags.flatten(),
+      parent_backdrop_item_id,
+      parent_backdrop_image_tags,
     ),
     ImageRefKind::Backdrop,
   );
@@ -3896,6 +3995,18 @@ fn map_video_home_item(
     series_id.as_deref(),
     series_primary_image_tag.as_deref(),
   );
+  let series_thumb_image_tag = item.series_thumb_image_tag.flatten();
+  let series_thumb_image_id = is_episode
+    .then(|| {
+      image_id_for_tagged_artwork(
+        MediaServerProvider::Jellyfin,
+        server_url,
+        series_id.as_deref()?,
+        "Thumb",
+        series_thumb_image_tag.as_deref(),
+      )
+    })
+    .flatten();
 
   Some(VideoLibraryItem {
     id,
@@ -3908,7 +4019,15 @@ fn map_video_home_item(
     series_name: item.series_name.flatten(),
     season_number: item.parent_index_number.flatten(),
     episode_number: item.index_number.flatten(),
+    index_number_end: item.index_number_end.flatten().and_then(nonnegative_u32),
     production_year: item.production_year.flatten(),
+    end_year: item.end_date.flatten().map(|date| date.year()),
+    series_continuing: item.status.flatten().as_deref() == Some("Continuing"),
+    unplayed_item_count: user_data
+      .as_ref()
+      .and_then(|data| data.unplayed_item_count.flatten())
+      .and_then(nonnegative_u32),
+    season_poster_image_id,
     runtime_seconds: item.run_time_ticks.flatten().map(ticks_to_seconds),
     resume_position_seconds: user_data
       .as_ref()
@@ -3928,6 +4047,9 @@ fn map_video_home_item(
     artwork_image_id,
     backdrop_image_id,
     series_poster_image_id,
+    episode_thumb_image_id,
+    series_thumb_image_id,
+    series_backdrop_image_id,
     overview: None,
   })
 }
@@ -3980,6 +4102,11 @@ fn map_video_library_item(
       .unwrap_or_else(|| "Untitled".to_string()),
     item_type,
     production_year: item.production_year.flatten(),
+    end_year: item.end_date.flatten().map(|date| date.year()),
+    series_continuing: item.status.flatten().as_deref() == Some("Continuing"),
+    unplayed_item_count: user_data_ref
+      .and_then(|data| data.unplayed_item_count.flatten())
+      .and_then(nonnegative_u32),
     runtime_seconds: item.run_time_ticks.flatten().map(ticks_to_seconds),
     played,
     favorite: user_data_ref
@@ -3988,8 +4115,13 @@ fn map_video_library_item(
     artwork_image_id,
     backdrop_image_id: None,
     series_poster_image_id,
+    episode_thumb_image_id: None,
+    series_thumb_image_id: None,
+    series_backdrop_image_id: None,
+    season_poster_image_id: None,
     season_number: item.parent_index_number.flatten(),
     episode_number: item.index_number.flatten(),
+    index_number_end: item.index_number_end.flatten().and_then(nonnegative_u32),
     series_id,
     series_name: item.series_name.flatten(),
     resume_position_seconds,
@@ -4332,23 +4464,51 @@ fn artwork_url(
   ))
 }
 
+fn image_id_for_tagged_artwork(
+  provider: MediaServerProvider,
+  server_url: &str,
+  item_id: &str,
+  image_type: &str,
+  image_tag: Option<&str>,
+) -> Option<String> {
+  let tag = image_tag?;
+  image_id_for_remote_url(
+    provider,
+    server_url,
+    Some(format!(
+      "{}/Items/{}/Images/{}?tag={}",
+      server_url, item_id, image_type, tag
+    )),
+    ImageRefKind::Artwork,
+  )
+}
+
 fn image_id_for_series_primary(
   provider: MediaServerProvider,
   server_url: &str,
   series_id: Option<&str>,
   series_primary_image_tag: Option<&str>,
 ) -> Option<String> {
-  let series_id = series_id?;
-  let tag = series_primary_image_tag?;
-  image_id_for_remote_url(
+  image_id_for_tagged_artwork(
     provider,
     server_url,
-    Some(format!(
-      "{}/Items/{}/Images/Primary?tag={}",
-      server_url, series_id, tag
-    )),
-    ImageRefKind::Artwork,
+    series_id?,
+    "Primary",
+    series_primary_image_tag,
   )
+}
+
+fn parent_backdrop_url(
+  server_url: &str,
+  parent_backdrop_item_id: Option<&str>,
+  parent_backdrop_tags: Option<&[String]>,
+) -> Option<String> {
+  let item_id = parent_backdrop_item_id?;
+  let tag = parent_backdrop_tags?.first()?;
+  Some(format!(
+    "{}/Items/{}/Images/Backdrop/0?tag={}",
+    server_url, item_id, tag
+  ))
 }
 
 fn backdrop_url(
@@ -4372,6 +4532,10 @@ fn backdrop_url(
     "{}/Items/{}/Images/Backdrop/0?tag={}",
     server_url, image_item_id, tag
   ))
+}
+
+fn nonnegative_u32(value: i32) -> Option<u32> {
+  u32::try_from(value).ok()
 }
 
 fn image_id_for_remote_url(
@@ -4559,7 +4723,7 @@ async fn emby_next_up_items(
     ("Fields", emby_home_fields()),
     ("EnableImages", "true".to_string()),
     ("ImageTypeLimit", "1".to_string()),
-    ("EnableImageTypes", "Primary,Backdrop".to_string()),
+    ("EnableImageTypes", "Primary,Thumb,Backdrop".to_string()),
     ("EnableUserData", "true".to_string()),
     ("EnableResumable", "true".to_string()),
     ("EnableRewatching", "false".to_string()),
@@ -4586,18 +4750,17 @@ async fn emby_latest_video_items(
   client: &JellyfinClient,
   server_url: &str,
   user_id: &str,
-  item_type: &str,
+  library_id: &str,
 ) -> Result<Vec<VideoLibraryItem>, JellyfinError> {
   let query = vec![
-    ("Limit", "12".to_string()),
-    ("Fields", emby_home_fields()),
-    ("IncludeItemTypes", item_type.to_string()),
-    ("MediaTypes", "Video".to_string()),
+    ("ParentId", library_id.to_string()),
+    ("Limit", "16".to_string()),
+    ("Fields", "PrimaryImageAspectRatio,Path".to_string()),
     ("EnableImages", "true".to_string()),
     ("ImageTypeLimit", "1".to_string()),
-    ("EnableImageTypes", "Primary,Backdrop".to_string()),
+    ("EnableImageTypes", "Primary,Backdrop,Thumb".to_string()),
     ("EnableUserData", "true".to_string()),
-    ("GroupItems", "false".to_string()),
+    ("GroupItems", "true".to_string()),
   ];
   let items = client
     .get_with_query::<Vec<emby_api::models::BaseItemDto>>(
@@ -4837,22 +5000,7 @@ fn map_emby_continue_watching_item(
   server_url: &str,
   item: emby_api::models::BaseItemDto,
 ) -> Option<VideoLibraryItem> {
-  let image_type = match item.r#type.as_deref()? {
-    "Episode" => {
-      let has_thumb = item
-        .image_tags
-        .as_ref()
-        .is_some_and(|tags| tags.contains_key("Thumb"));
-      if has_thumb {
-        "Thumb"
-      } else {
-        "Primary"
-      }
-    }
-    _ => "Primary",
-  };
-
-  map_emby_video_home_item(server_url, item, image_type)
+  map_emby_video_home_item(server_url, item, "Primary")
 }
 
 fn map_emby_video_home_item(
@@ -4862,20 +5010,76 @@ fn map_emby_video_home_item(
 ) -> Option<VideoLibraryItem> {
   let id = item.id?;
   let item_type = item.r#type?;
+  let is_episode = item_type == "Episode";
   let user_data = item.user_data.as_deref();
-  let artwork_image_id = image_id_for_remote_url(
-    MediaServerProvider::Emby,
-    server_url,
-    emby_artwork_url(
+  let image_tags = item.image_tags;
+  let episode_thumb_image_id = is_episode
+    .then(|| {
+      image_id_for_tagged_artwork(
+        MediaServerProvider::Emby,
+        server_url,
+        &id,
+        "Thumb",
+        image_tags
+          .as_ref()
+          .and_then(|tags| tags.get("Thumb"))
+          .map(String::as_str),
+      )
+    })
+    .flatten();
+  let season_poster_image_id = is_episode
+    .then(|| {
+      image_id_for_tagged_artwork(
+        MediaServerProvider::Emby,
+        server_url,
+        item.primary_image_item_id.as_deref()?,
+        "Primary",
+        item.primary_image_tag.as_deref(),
+      )
+    })
+    .flatten();
+  let artwork_image_id = if is_episode {
+    image_id_for_tagged_artwork(
+      MediaServerProvider::Emby,
       server_url,
       &id,
-      item.image_tags,
-      item.primary_image_item_id,
-      item.primary_image_tag,
-      image_type,
-    ),
-    ImageRefKind::Artwork,
-  );
+      "Primary",
+      image_tags
+        .as_ref()
+        .and_then(|tags| tags.get("Primary"))
+        .map(String::as_str),
+    )
+  } else {
+    image_id_for_remote_url(
+      MediaServerProvider::Emby,
+      server_url,
+      emby_artwork_url(
+        server_url,
+        &id,
+        image_tags,
+        item.primary_image_item_id,
+        item.primary_image_tag,
+        image_type,
+      ),
+      ImageRefKind::Artwork,
+    )
+  };
+  let parent_backdrop_item_id = item.parent_backdrop_item_id;
+  let parent_backdrop_image_tags = item.parent_backdrop_image_tags;
+  let series_backdrop_image_id = is_episode
+    .then(|| {
+      image_id_for_remote_url(
+        MediaServerProvider::Emby,
+        server_url,
+        parent_backdrop_url(
+          server_url,
+          parent_backdrop_item_id.as_deref(),
+          parent_backdrop_image_tags.as_deref(),
+        ),
+        ImageRefKind::Backdrop,
+      )
+    })
+    .flatten();
   let backdrop_image_id = image_id_for_remote_url(
     MediaServerProvider::Emby,
     server_url,
@@ -4883,27 +5087,46 @@ fn map_emby_video_home_item(
       server_url,
       &id,
       item.backdrop_image_tags,
-      item.parent_backdrop_item_id,
-      item.parent_backdrop_image_tags,
+      parent_backdrop_item_id,
+      parent_backdrop_image_tags,
     ),
     ImageRefKind::Backdrop,
   );
+  let series_id = item.series_id;
   let series_poster_image_id = image_id_for_series_primary(
     MediaServerProvider::Emby,
     server_url,
-    item.series_id.as_deref(),
+    series_id.as_deref(),
     item.series_primary_image_tag.as_deref(),
   );
+  let series_thumb_image_id = (is_episode
+    && item.parent_thumb_item_id.as_deref() == series_id.as_deref())
+  .then(|| {
+    image_id_for_tagged_artwork(
+      MediaServerProvider::Emby,
+      server_url,
+      series_id.as_deref()?,
+      "Thumb",
+      item.parent_thumb_image_tag.as_deref(),
+    )
+  })
+  .flatten();
 
   Some(VideoLibraryItem {
     id,
     name: item.name.unwrap_or_else(|| "Untitled".to_string()),
     item_type,
-    series_id: item.series_id,
+    series_id,
     series_name: item.series_name,
     season_number: item.parent_index_number.flatten(),
     episode_number: item.index_number.flatten(),
+    index_number_end: item.index_number_end.flatten().and_then(nonnegative_u32),
     production_year: item.production_year.flatten(),
+    end_year: item.end_date.flatten().map(|date| date.year()),
+    series_continuing: item.status.as_deref() == Some("Continuing"),
+    unplayed_item_count: user_data
+      .and_then(|data| data.unplayed_item_count.flatten())
+      .and_then(nonnegative_u32),
     runtime_seconds: item.run_time_ticks.flatten().map(ticks_to_seconds),
     resume_position_seconds: user_data
       .and_then(|data| data.playback_position_ticks)
@@ -4914,6 +5137,10 @@ fn map_emby_video_home_item(
     artwork_image_id,
     backdrop_image_id,
     series_poster_image_id,
+    episode_thumb_image_id,
+    series_thumb_image_id,
+    series_backdrop_image_id,
+    season_poster_image_id,
     overview: None,
   })
 }
@@ -4961,6 +5188,11 @@ fn map_emby_video_library_item(
     id,
     name: item.name.unwrap_or_else(|| "Untitled".to_string()),
     item_type,
+    end_year: item.end_date.flatten().map(|date| date.year()),
+    series_continuing: item.status.as_deref() == Some("Continuing"),
+    unplayed_item_count: user_data
+      .and_then(|data| data.unplayed_item_count.flatten())
+      .and_then(nonnegative_u32),
     production_year: item.production_year.flatten(),
     runtime_seconds: item.run_time_ticks.flatten().map(ticks_to_seconds),
     played,
@@ -4968,9 +5200,14 @@ fn map_emby_video_library_item(
     artwork_image_id,
     backdrop_image_id: None,
     series_poster_image_id,
+    episode_thumb_image_id: None,
+    series_thumb_image_id: None,
+    series_backdrop_image_id: None,
     season_number: item.parent_index_number.flatten(),
+    season_poster_image_id: None,
     episode_number: item.index_number.flatten(),
     series_id: item.series_id,
+    index_number_end: item.index_number_end.flatten().and_then(nonnegative_u32),
     series_name: item.series_name,
     resume_position_seconds,
     played_percentage: user_data.and_then(|data| data.played_percentage.flatten()),
@@ -5297,6 +5534,224 @@ mod tests {
     let image_id = image_id.expect("image id should be present");
     let payload = decode_image_id(image_id).expect("image id should decode");
     assert_eq!(payload.remote_url, expected_url);
+  }
+
+  #[test]
+  fn jellyfin_episode_home_mapping_keeps_primary_and_exposes_fallback_artwork() {
+    let server_url = "https://media.example.com";
+    let episode_id = "00000000000000000000000000000011";
+    let series_id = "00000000000000000000000000000012";
+    let backdrop_id = "00000000000000000000000000000015";
+    let item = serde_json::from_value::<jellyfin_api::models::BaseItemDto>(serde_json::json!({
+      "Id": episode_id,
+      "Name": "Episode",
+      "Type": "Episode",
+      "SeriesId": series_id,
+      "ImageTags": {
+        "Primary": "episode-primary",
+        "Thumb": "episode-thumb"
+      },
+      "SeriesThumbImageTag": "series-thumb",
+      "ParentThumbItemId": "00000000000000000000000000000016",
+      "ParentBackdropItemId": backdrop_id,
+      "ParentBackdropImageTags": ["series-backdrop"]
+    }))
+    .expect("episode DTO should deserialize");
+
+    let mapped = map_video_home_item(server_url, item, jellyfin_api::models::ImageType::Thumb)
+      .expect("episode should map");
+
+    assert_image_ref_url(
+      mapped.artwork_image_id.as_ref(),
+      &format!("{server_url}/Items/{episode_id}/Images/Primary?tag=episode-primary"),
+    );
+    assert_image_ref_url(
+      mapped.episode_thumb_image_id.as_ref(),
+      &format!("{server_url}/Items/{episode_id}/Images/Thumb?tag=episode-thumb"),
+    );
+    assert_image_ref_url(
+      mapped.series_thumb_image_id.as_ref(),
+      &format!("{server_url}/Items/{series_id}/Images/Thumb?tag=series-thumb"),
+    );
+    assert_image_ref_url(
+      mapped.series_backdrop_image_id.as_ref(),
+      &format!("{server_url}/Items/{backdrop_id}/Images/Backdrop/0?tag=series-backdrop"),
+    );
+  }
+
+  #[test]
+  fn jellyfin_latest_mapping_preserves_grouped_series_episode_and_movie_metadata() {
+    let server_url = "https://media.example.com";
+    let series_id = "00000000000000000000000000000021";
+    let episode_id = "00000000000000000000000000000022";
+    let season_id = "00000000000000000000000000000023";
+    let items =
+      serde_json::from_value::<Vec<jellyfin_api::models::BaseItemDto>>(serde_json::json!([
+        {
+          "Id": series_id,
+          "Name": "Grouped Show",
+          "Type": "Series",
+          "ChildCount": 3,
+          "ProductionYear": 2018,
+          "EndDate": "2024-06-01T00:00:00Z",
+          "Status": "Continuing",
+          "ImageTags": {"Primary": "series-primary"},
+          "UserData": {"UnplayedItemCount": 7}
+        },
+        {
+          "Id": episode_id,
+          "Name": "Two Parts",
+          "Type": "Episode",
+          "SeriesId": series_id,
+          "SeriesPrimaryImageTag": "series-primary",
+          "ParentPrimaryImageItemId": season_id,
+          "ParentPrimaryImageTag": "season-primary",
+          "ParentIndexNumber": 6,
+          "IndexNumber": 1,
+          "IndexNumberEnd": 2,
+          "ImageTags": {"Primary": "episode-primary"}
+        },
+        {
+          "Id": "00000000000000000000000000000024",
+          "Name": "Latest Movie",
+          "Type": "Movie",
+          "ProductionYear": 2025,
+          "ImageTags": {"Primary": "movie-primary"}
+        }
+      ]))
+      .expect("latest DTO list should deserialize");
+
+    let mapped = map_latest_video_items(server_url, items);
+
+    assert_eq!(
+      mapped
+        .iter()
+        .map(|item| item.item_type.as_str())
+        .collect::<Vec<_>>(),
+      vec!["Series", "Episode", "Movie"]
+    );
+    assert_eq!(mapped[0].production_year, Some(2018));
+    assert_eq!(mapped[0].end_year, Some(2024));
+    assert!(mapped[0].series_continuing);
+    assert_eq!(mapped[0].unplayed_item_count, Some(7));
+    assert_image_ref_url(
+      mapped[0].artwork_image_id.as_ref(),
+      &format!("{server_url}/Items/{series_id}/Images/Primary?tag=series-primary"),
+    );
+    assert_eq!(mapped[1].index_number_end, Some(2));
+    assert_image_ref_url(
+      mapped[1].season_poster_image_id.as_ref(),
+      &format!("{server_url}/Items/{season_id}/Images/Primary?tag=season-primary"),
+    );
+    assert_image_ref_url(
+      mapped[1].series_poster_image_id.as_ref(),
+      &format!("{server_url}/Items/{series_id}/Images/Primary?tag=series-primary"),
+    );
+  }
+
+  #[test]
+  fn emby_episode_home_mapping_uses_only_a_series_owned_parent_thumb() {
+    let server_url = "https://media.example.com/emby";
+    let episode_id = "episode-1";
+    let series_id = "series-1";
+    let item = serde_json::from_value::<emby_api::models::BaseItemDto>(serde_json::json!({
+      "Id": episode_id,
+      "Name": "Episode",
+      "Type": "Episode",
+      "SeriesId": series_id,
+      "ImageTags": {
+        "Primary": "episode-primary",
+        "Thumb": "episode-thumb"
+      },
+      "ParentThumbItemId": series_id,
+      "ParentThumbImageTag": "series-thumb",
+      "ParentBackdropItemId": series_id,
+      "ParentBackdropImageTags": ["series-backdrop"],
+      "PrimaryImageItemId": "season-1",
+      "PrimaryImageTag": "season-primary",
+    }))
+    .expect("episode DTO should deserialize");
+
+    let mapped = map_emby_video_home_item(server_url, item, "Thumb").expect("episode should map");
+
+    assert_image_ref_url(
+      mapped.artwork_image_id.as_ref(),
+      &format!("{server_url}/Items/{episode_id}/Images/Primary?tag=episode-primary"),
+    );
+    assert_image_ref_url(
+      mapped.episode_thumb_image_id.as_ref(),
+      &format!("{server_url}/Items/{episode_id}/Images/Thumb?tag=episode-thumb"),
+    );
+    assert_image_ref_url(
+      mapped.series_thumb_image_id.as_ref(),
+      &format!("{server_url}/Items/{series_id}/Images/Thumb?tag=series-thumb"),
+    );
+    assert_image_ref_url(
+      mapped.series_backdrop_image_id.as_ref(),
+      &format!("{server_url}/Items/{series_id}/Images/Backdrop/0?tag=series-backdrop"),
+    );
+    assert_image_ref_url(
+      mapped.season_poster_image_id.as_ref(),
+      &format!("{server_url}/Items/season-1/Images/Primary?tag=season-primary"),
+    );
+
+    let season_thumb_item =
+      serde_json::from_value::<emby_api::models::BaseItemDto>(serde_json::json!({
+        "Id": "episode-2",
+        "Name": "Episode",
+        "Type": "Episode",
+        "SeriesId": series_id,
+        "ParentThumbItemId": "season-1",
+        "ParentThumbImageTag": "season-thumb"
+      }))
+      .expect("episode DTO should deserialize");
+    let mapped = map_emby_video_home_item(server_url, season_thumb_item, "Primary")
+      .expect("episode should map");
+    assert!(mapped.series_thumb_image_id.is_none());
+  }
+
+  #[test]
+  fn emby_episode_inherited_primary_is_only_the_season_poster() {
+    let server_url = "https://media.example.com/emby";
+    let item = serde_json::from_value::<emby_api::models::BaseItemDto>(serde_json::json!({
+      "Id": "episode-1",
+      "Name": "Episode",
+      "Type": "Episode",
+      "PrimaryImageItemId": "season-1",
+      "PrimaryImageTag": "season-primary"
+    }))
+    .expect("episode DTO should deserialize");
+
+    let mapped = map_emby_video_home_item(server_url, item, "Primary").expect("episode should map");
+
+    assert!(mapped.artwork_image_id.is_none());
+    assert_image_ref_url(
+      mapped.season_poster_image_id.as_ref(),
+      &format!("{server_url}/Items/season-1/Images/Primary?tag=season-primary"),
+    );
+  }
+
+  #[test]
+  fn emby_latest_series_mapping_preserves_status_end_year_and_unplayed_count() {
+    let item = serde_json::from_value::<emby_api::models::BaseItemDto>(serde_json::json!({
+      "Id": "series-1",
+      "Name": "Grouped Show",
+      "Type": "Series",
+      "ChildCount": 2,
+      "ProductionYear": 2019,
+      "EndDate": "2023-04-02T00:00:00Z",
+      "Status": "Continuing",
+      "ImageTags": {"Primary": "series-primary"},
+      "UserData": {"UnplayedItemCount": 4}
+    }))
+    .expect("series DTO should deserialize");
+
+    let mapped = map_emby_video_home_item("https://media.example.com/emby", item, "Primary")
+      .expect("series should map");
+
+    assert_eq!(mapped.end_year, Some(2023));
+    assert!(mapped.series_continuing);
+    assert_eq!(mapped.unplayed_item_count, Some(4));
   }
 
   async fn serve_off_origin_redirect() -> OffOriginRedirectProbe {
@@ -5751,6 +6206,45 @@ mod tests {
         .to_ascii_lowercase()
         .contains(&format!("accept: {IMAGE_ACCEPT}")),
       "image request should advertise decodable formats instead of Accept: */*"
+    );
+  }
+
+  #[test]
+  fn image_request_clamps_wide_references_to_the_decode_class_width() {
+    let client = JellyfinClient::new();
+    client.login().adopt_validated_session(&SavedSession {
+      provider: MediaServerProvider::Jellyfin,
+      server_url: "http://server.example.com".to_string(),
+      access_token: "image-test-token".to_string(),
+      user_id: "user-1".to_string(),
+      user_name: "Ada".to_string(),
+      server_name: None,
+      device_id: None,
+    });
+    let image_id = image_id_for_url(
+      MediaServerProvider::Jellyfin,
+      "http://server.example.com",
+      "http://server.example.com/Items/1/Images/Backdrop/0?tag=abc".to_string(),
+      ImageRefKind::Backdrop,
+    )
+    .expect("image ID should encode");
+
+    let card_request = client
+      .library()
+      .image_request_with_max_width(&image_id, 600)
+      .expect("signed same-origin image should validate");
+    assert!(
+      card_request.origin_url().contains("maxWidth=600"),
+      "card-class loads must clamp backdrop references to the class source width"
+    );
+
+    let backdrop_request = client
+      .library()
+      .image_request(&image_id)
+      .expect("signed same-origin image should validate");
+    assert!(
+      backdrop_request.origin_url().contains("maxWidth=1920"),
+      "unclamped loads keep the reference kind's size profile"
     );
   }
 
@@ -7228,16 +7722,6 @@ mod tests {
         "200 OK",
         r#"{"Items":[{"Id":"00000000000000000000000000000011","Name":"Next Episode","Type":"Episode","SeriesName":"Example Show","SeriesId":"00000000000000000000000000000012","ParentIndexNumber":1,"IndexNumber":2,"ImageTags":{"Primary":"poster-2"},"UserData":{"PlaybackPositionTicks":0,"PlayedPercentage":0.0,"IsFavorite":false,"Played":false}}],"TotalRecordCount":1}"#,
       ),
-      (
-        "includeItemTypes=Movie",
-        "200 OK",
-        r#"[{"Id":"00000000000000000000000000000010","Name":"Latest Movie","Type":"Movie","ImageTags":{"Primary":"poster-3"}}]"#,
-      ),
-      (
-        "includeItemTypes=Episode",
-        "200 OK",
-        r#"[{"Id":"00000000000000000000000000000011","Name":"Latest Episode","Type":"Episode","SeriesName":"Example Show","ParentIndexNumber":1,"IndexNumber":3}]"#,
-      ),
     ])
     .await;
     let client = JellyfinClient::new();
@@ -7262,16 +7746,22 @@ mod tests {
       home.continue_watching[1].artwork_image_id.as_ref(),
       &expected_episode_artwork,
     );
-    let expected_thumbed_episode_artwork =
-      format!("{server_url}/Items/{resume_thumbed_episode_id}/Images/Thumb?tag=episode-thumb");
+    let expected_thumbed_episode_artwork = format!(
+      "{server_url}/Items/{resume_thumbed_episode_id}/Images/Primary?tag=episode-also-primary"
+    );
     assert_image_ref_url(
       home.continue_watching[2].artwork_image_id.as_ref(),
       &expected_thumbed_episode_artwork,
     );
+    let expected_episode_thumb =
+      format!("{server_url}/Items/{resume_thumbed_episode_id}/Images/Thumb?tag=episode-thumb");
+    assert_image_ref_url(
+      home.continue_watching[2].episode_thumb_image_id.as_ref(),
+      &expected_episode_thumb,
+    );
     assert_eq!(home.next_up[0].id, episode_id);
+
     assert_eq!(home.next_up[0].series_id.as_deref(), Some(series_id));
-    assert_eq!(home.latest_movies[0].name, "Latest Movie");
-    assert_eq!(home.latest_episodes[0].name, "Latest Episode");
 
     let captured = requests.lock();
     let resume_request = captured
@@ -7285,17 +7775,35 @@ mod tests {
     assert!(captured
       .iter()
       .any(|request| request.starts_with("GET /Shows/NextUp?")));
-    assert!(captured
-      .iter()
-      .any(|request| request.starts_with("GET /Items/Latest?")
-        && request.contains("includeItemTypes=Movie")));
-    assert!(captured
-      .iter()
-      .any(|request| request.starts_with("GET /Items/Latest?")
-        && request.contains("includeItemTypes=Episode")));
     assert!(!captured
       .iter()
       .any(|request| request.starts_with("GET /UserViews?")));
+  }
+  #[tokio::test]
+  async fn jellyfin_library_latest_uses_grouped_parent_scoped_request() {
+    let library_id = "00000000000000000000000000000020";
+    let (server_url, requests) = serve_responses_with_requests(vec![("200 OK", "[]")]).await;
+    let client = JellyfinClient::new();
+    connect_test_client(&client, server_url);
+
+    let items = client
+      .library()
+      .library_latest(library_id.to_string())
+      .await
+      .expect("library latest should load");
+
+    assert!(items.is_empty());
+    let captured = requests.lock();
+    let request = &captured[0];
+    assert!(request.starts_with("GET /Items/Latest?"));
+    assert!(request.contains(&format!("parentId={library_id}")));
+    assert!(request.contains("limit=16"));
+    assert!(request.contains("groupItems=true"));
+    assert!(request.contains("imageTypeLimit=1"));
+    assert!(request.contains("enableImageTypes=Primary"));
+    assert!(request.contains("enableImageTypes=Backdrop"));
+    assert!(request.contains("enableImageTypes=Thumb"));
+    assert!(!request.contains("includeItemTypes"));
   }
 
   #[tokio::test]
@@ -8008,16 +8516,6 @@ mod tests {
         r#"{"Items":[{"Id":"00000000000000000000000000000211","Name":"Emby Next Episode","Type":"Episode","SeriesId":"00000000000000000000000000000212","SeriesName":"Emby Show","ParentIndexNumber":1,"IndexNumber":2,"ImageTags":{"Primary":"next-primary"},"UserData":{"Played":false}}],"TotalRecordCount":1}"#,
       ),
       (
-        "IncludeItemTypes=Movie",
-        "200 OK",
-        r#"[{"Id":"00000000000000000000000000000210","Name":"Latest Emby Movie","Type":"Movie","ImageTags":{"Primary":"latest-movie"}}]"#,
-      ),
-      (
-        "IncludeItemTypes=Episode",
-        "200 OK",
-        r#"[{"Id":"00000000000000000000000000000211","Name":"Latest Emby Episode","Type":"Episode","SeriesName":"Emby Show"}]"#,
-      ),
-      (
         "/Users/00000000000000000000000000000001/Views",
         "200 OK",
         r#"{"Items":[{"Id":"00000000000000000000000000000220","Name":"Emby Movies","Type":"CollectionFolder","CollectionType":"movies","RecursiveItemCount":4,"ImageTags":{"Primary":"movies-primary"}},{"Id":"00000000000000000000000000000221","Name":"Emby Shows","Type":"CollectionFolder","CollectionType":"tvshows","RecursiveItemCount":7},{"Id":"00000000000000000000000000000222","Name":"Music","Type":"CollectionFolder","CollectionType":"music"}],"TotalRecordCount":3}"#,
@@ -8054,8 +8552,6 @@ mod tests {
       &format!("{emby_base}/Items/{resume_episode_id}/Images/Primary?tag=episode-primary-emby"),
     );
     assert_eq!(home.next_up[0].id, episode_id);
-    assert_eq!(home.latest_movies[0].name, "Latest Emby Movie");
-    assert_eq!(home.latest_episodes[0].name, "Latest Emby Episode");
     assert_eq!(
       shortcuts
         .iter()
@@ -8070,6 +8566,31 @@ mod tests {
     assert!(captured.iter().any(
       |request| request.starts_with("GET /emby/Users/00000000000000000000000000000001/Views?")
     ));
+  }
+
+  #[tokio::test]
+  async fn emby_library_latest_uses_grouped_parent_scoped_request() {
+    let library_id = "library-1";
+    let (server_url, requests) = serve_responses_with_requests(vec![("200 OK", "[]")]).await;
+    let client = JellyfinClient::new();
+    connect_test_client_as_emby(&client, server_url);
+
+    let items = client
+      .library()
+      .library_latest(library_id.to_string())
+      .await
+      .expect("Emby library latest should load");
+
+    assert!(items.is_empty());
+    let captured = requests.lock();
+    let request = &captured[0];
+    assert!(request.contains("/Items/Latest?"));
+    assert!(request.contains(&format!("ParentId={library_id}")));
+    assert!(request.contains("Limit=16"));
+    assert!(request.contains("GroupItems=true"));
+    assert!(request.contains("ImageTypeLimit=1"));
+    assert!(request.contains("EnableImageTypes=Primary%2CBackdrop%2CThumb"));
+    assert!(!request.contains("IncludeItemTypes"));
   }
 
   #[tokio::test]

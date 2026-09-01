@@ -340,6 +340,18 @@ impl ArtworkSizeClass {
   pub const fn max_decode_bytes(self) -> usize {
     self.max_decode_pixels() as usize * 4
   }
+
+  /// Server-side resize width requested for sources decoded into this class.
+  ///
+  /// Wide-reference kinds (Backdrop at 1920) are clamped down to this width
+  /// when the load targets a smaller class, so the fetched source cannot
+  /// exceed [`Self::max_decode_pixels`].
+  pub(crate) const fn source_max_width(self) -> u32 {
+    match self {
+      Self::Card | Self::Hero => 600,
+      Self::Backdrop => 1920,
+    }
+  }
 }
 
 /// Display geometry for a frosted progress strip derived during artwork decode.
@@ -1006,7 +1018,10 @@ impl ArtworkAdapter {
     }
     // Signed opaque references are authorized against the current session on
     // every call, including decoded cache hits.
-    let request = match client.library().image_request(image_id) {
+    let request = match client
+      .library()
+      .image_request_with_max_width(image_id, size_class.source_max_width())
+    {
       Ok(request) => request,
       Err(_) => {
         let observation = finish_load(&span, started, ArtworkLoadSettlement::Failed, 0);
