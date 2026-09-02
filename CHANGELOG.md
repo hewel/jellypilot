@@ -4,14 +4,26 @@ All notable changes to JellyPilot are documented in this file.
 
 ## [Unreleased]
 
+## [2.0.0] - 2026-09-02
+
 ### Added
-- Added a current-season episode queue to the playback bar and compact player, with direct episode selection through the existing playback lifecycle.
+- Rebuilt JellyPilot as a native Rust application with iced, including Jellyfin and Emby sign-in, saved profiles, library browsing, search, filters, media details, and favorite/played user-data actions.
+- Added External MPV Playback with episode queues, server-hosted subtitles, preferred subtitle languages, automatic next-episode playback, and Jellyfin Intro Skipper support.
+- Added Jellyfin cast-target discovery and Jellyfin/Emby remote transport control across the player bar, Control-Only window, and system tray.
+- Added a disk-cached artwork pipeline, light and dark themes, Control-Only mode, and native Windows, macOS, and Linux packaging.
 
 ### Changed
-- Raised the minimum supported Rust version to 1.98.
+- Consolidated the application into a display-free Rust workspace with a custom iced presentation layer, OS-keychain authentication, and resilient media-server sessions.
+- Raised the minimum supported Rust version to 1.98 and added the native Arch release artifact that the forthcoming `jellypilot-bin` AUR package will consume.
 
 ### Fixed
-- Loaded server-hosted external subtitle tracks into MPV so they appear in playback controls and the selected default subtitle is displayed.
+- Loaded server-hosted external subtitle tracks into MPV and applied the selected default subtitle.
+- Hardened artwork loading, WebSocket reconnection, MPV lifecycle handling, and playback progress synchronization.
+
+### Breaking Changes
+- Removed the Tauri/Solid.js webview frontend and its embedded web playback and local FFmpeg/HLS pipeline.
+- An external MPV executable is required for all playback; `PATH` is the default discovery mechanism, and a custom executable path can be selected in Settings.
+- Existing Tauri settings and saved service profiles are not migrated; connections and preferences must be configured again.
 
 ## [1.4.2] - 2026-07-23
 
@@ -67,5 +79,6 @@ All notable changes to JellyPilot are documented in this file.
 - Configured local release note reader workflow to replace git-cliff.
 - Updated default episode switching keyboard shortcuts to `Shift+>` and `Shift+<` and moved shortcuts display to the right panel.
 
+[2.0.0]: https://github.com/hewel/jellypilot/compare/v1.4.2...v2.0.0
 [1.4.2]: https://github.com/hewel/jellypilot/compare/v1.4.1...v1.4.2
 [1.4.1]: https://github.com/hewel/jellypilot/compare/v1.4.0...v1.4.1

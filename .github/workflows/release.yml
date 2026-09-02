@@ -1,0 +1,188 @@
+name: Native Release
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+  pull_request:
+    paths:
+      - 'Packager.toml'
+      - 'Cargo.toml'
+      - 'package.json'
+      - 'packaging/arch/**'
+      - '.github/release-notes/**'
+      - '.github/workflows/release.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  metadata:
+    name: Validate release metadata
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.versions.outputs.version }}
+      tag: ${{ steps.versions.outputs.tag }}
+      release_notes: ${{ steps.versions.outputs.release_notes }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate versions and release notes
+        id: versions
+        env:
+          REF_NAME: ${{ github.ref_name }}
+          REF_TYPE: ${{ github.ref_type }}
+        run: |
+          python3 - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+          import re
+          import tomllib
+
+          cargo = tomllib.loads(Path('Cargo.toml').read_text())
+          package = json.loads(Path('package.json').read_text())
+          packager = tomllib.loads(Path('Packager.toml').read_text())
+          pkgbuild = Path('packaging/arch/PKGBUILD').read_text()
+          pkgver_match = re.search(r'^pkgver=([^\s#]+)', pkgbuild, re.MULTILINE)
+          if pkgver_match is None:
+              raise SystemExit('packaging/arch/PKGBUILD does not declare pkgver')
+          versions = {
+              'Cargo workspace': cargo['workspace']['package']['version'],
+              'package.json': package['version'],
+              'Packager.toml': packager['version'],
+              'PKGBUILD': pkgver_match.group(1).strip("'\""),
+          }
+          if len(set(versions.values())) != 1:
+              raise SystemExit(f'Release versions disagree: {json.dumps(versions, sort_keys=True)}')
+          version = packager['version']
+          tag = f'v{version}'
+          notes_path = Path('.github/release-notes') / f'{tag}.md'
+          if not notes_path.is_file():
+              raise SystemExit(f'Missing checked-in release notes: {notes_path}')
+          expected_heading = f'## {tag}'
+          actual_heading = notes_path.read_text().splitlines()[0]
+          if actual_heading != expected_heading:
+              raise SystemExit(f'{notes_path} must start with {expected_heading!r}, got {actual_heading!r}')
+          if os.environ['REF_TYPE'] == 'tag':
+              ref_name = os.environ['REF_NAME']
+              if re.fullmatch(r'v[0-9]+\.[0-9]+\.[0-9]+', ref_name) is None:
+                  raise SystemExit(f'Release tag must be stable vMAJOR.MINOR.PATCH, got {ref_name!r}')
+              if ref_name != tag:
+                  raise SystemExit(f'Release tag {ref_name!r} does not match metadata tag {tag!r}')
+          with Path(os.environ['GITHUB_OUTPUT']).open('a') as output:
+              output.write(f'version={version}\n')
+              output.write(f'tag={tag}\n')
+              output.write(f'release_notes={notes_path}\n')
+          PY
+
+  package:
+    name: Package ${{ matrix.platform }} (${{ matrix.format }})
+    needs: metadata
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            platform: windows-x86_64
+            format: nsis
+            asset: '*.exe'
+          - os: ubuntu-latest
+            platform: linux-x86_64
+            format: deb
+            asset: '*.deb'
+          - os: ubuntu-latest
+            platform: linux-x86_64
+            format: appimage
+            asset: '*.AppImage'
+          - os: macos-latest
+            platform: macos
+            format: dmg
+            asset: '*.dmg'
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Linux packaging prerequisites
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential pkg-config libgtk-3-dev libxkbcommon-dev libwayland-dev wayland-protocols libfuse2t64
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: swatinem/rust-cache@v2
+        with:
+          workspaces: '.'
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-packager@0.11.8
+      - name: Build ${{ matrix.format }} package
+        run: cargo packager --release --formats ${{ matrix.format }}
+      - name: Upload ${{ matrix.format }} package
+        uses: actions/upload-artifact@v4
+        with:
+          name: jellypilot-${{ matrix.platform }}-${{ matrix.format }}
+          path: target/release/bundle/${{ matrix.asset }}
+          if-no-files-found: error
+
+  arch:
+    name: Package Arch Linux
+    if: github.event_name == 'push' && github.ref_type == 'tag'
+    needs: metadata
+    runs-on: ubuntu-latest
+    container: archlinux:base-devel
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install declared Arch dependencies
+        run: pacman -Syu --noconfirm --needed git rust gtk3 mpv libxkbcommon wayland
+      - name: Validate PKGBUILD tag
+        run: |
+          pkgver="$(sed -n 's/^pkgver=//p' packaging/arch/PKGBUILD)"
+          test "v${pkgver}" = "${GITHUB_REF_NAME}" || {
+            printf 'PKGBUILD pkgver %s does not match tag %s\n' "${pkgver}" "${GITHUB_REF_NAME}" >&2
+            exit 1
+          }
+      - name: Build native Arch package as an unprivileged user
+        run: |
+          mkdir -p target/release/bundle
+          useradd --create-home builder
+          chown -R builder:builder "${GITHUB_WORKSPACE}"
+          runuser -u builder -- bash -c 'cd "$1" && PKGDEST="$2" makepkg --noconfirm --cleanbuild' _ \
+            "${GITHUB_WORKSPACE}/packaging/arch" "${GITHUB_WORKSPACE}/target/release/bundle"
+      - name: Upload Arch package
+        uses: actions/upload-artifact@v4
+        with:
+          name: jellypilot-linux-x86_64-arch
+          path: target/release/bundle/jellypilot-[0-9]*.pkg.tar.zst
+          if-no-files-found: error
+      - name: Upload optional Arch debug package
+        uses: actions/upload-artifact@v4
+        with:
+          name: jellypilot-linux-x86_64-arch-debug
+          path: target/release/bundle/jellypilot-debug-*.pkg.tar.zst
+          if-no-files-found: ignore
+
+  release:
+    name: Create draft GitHub release
+    if: github.event_name == 'push' && github.ref_type == 'tag'
+    needs: [metadata, package, arch]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - name: Download native packages
+        uses: actions/download-artifact@v4
+        with:
+          path: release-assets
+          merge-multiple: true
+      - name: Generate checksums
+        working-directory: release-assets
+        run: sha256sum * > SHA256SUMS
+      - name: Create or update draft release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ needs.metadata.outputs.tag }}
+          name: JellyPilot ${{ needs.metadata.outputs.version }}
+          body_path: ${{ needs.metadata.outputs.release_notes }}
+          draft: true
+          prerelease: false
+          fail_on_unmatched_files: true
+          files: release-assets/*

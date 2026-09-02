@@ -8,7 +8,6 @@
 [![Rust](https://img.shields.io/badge/Rust-1.98+-orange?logo=rust)](https://www.rust-lang.org/)
 [![iced](https://img.shields.io/badge/iced-0.14-blue)](https://iced.rs/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
-[![AUR](https://img.shields.io/aur/version/jellypilot?label=AUR&logo=archlinux)](https://aur.archlinux.org/packages/jellypilot)
 
 **A native Jellyfin and Emby companion: library browser, cast receiver, and playback controller — always playing through your own MPV.**
 
@@ -92,18 +91,18 @@ Emby support uses the same library and player workflow as Jellyfin where the ser
 
 ### Runtime prerequisites
 
-- [MPV](https://mpv.io/) available on `PATH` — it is the only playback engine.
+- [MPV](https://mpv.io/) available on `PATH` or selected explicitly in Settings — it is the only playback engine.
 
 ### Installation
 
-#### Arch Linux (AUR)
+#### Arch Linux
 
-Install from the [AUR](https://aur.archlinux.org/packages/jellypilot) with any AUR helper:
+Until `jellypilot-bin` is published to the AUR, download the native
+`jellypilot-2.0.0-1-x86_64.pkg.tar.zst` asset from the
+[v2.0.0 release](https://github.com/hewel/jellypilot/releases/tag/v2.0.0) and install it directly:
 
 ```bash
-yay -S jellypilot
-# or
-paru -S jellypilot
+sudo pacman -U ./jellypilot-2.0.0-1-x86_64.pkg.tar.zst
 ```
 
 #### Build from Source

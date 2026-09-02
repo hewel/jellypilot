@@ -2715,7 +2715,7 @@ dependencies = [
 
 [[package]]
 name = "jellypilot-auth"
-version = "1.5.0"
+version = "2.0.0"
 dependencies = [
  "jellypilot-core",
  "jellypilot-media-server",
@@ -2729,7 +2729,7 @@ dependencies = [
 
 [[package]]
 name = "jellypilot-core"
-version = "1.5.0"
+version = "2.0.0"
 dependencies = [
  "dirs",
  "jellypilot-media-server",
@@ -2739,7 +2739,7 @@ dependencies = [
 
 [[package]]
 name = "jellypilot-iced"
-version = "1.5.0"
+version = "2.0.0"
 dependencies = [
  "gtk",
  "iced",
@@ -2762,7 +2762,7 @@ dependencies = [
 
 [[package]]
 name = "jellypilot-media-server"
-version = "1.5.0"
+version = "2.0.0"
 dependencies = [
  "base64",
  "bytes",
@@ -2788,7 +2788,7 @@ dependencies = [
 
 [[package]]
 name = "jellypilot-mpv"
-version = "1.5.0"
+version = "2.0.0"
 dependencies = [
  "async-channel",
  "dirs",
@@ -2806,7 +2806,7 @@ dependencies = [
 
 [[package]]
 name = "jellypilot-session"
-version = "1.5.0"
+version = "2.0.0"
 dependencies = [
  "futures-util",
  "jellypilot-media-server",
@@ -2820,7 +2820,7 @@ dependencies = [
 
 [[package]]
 name = "jellypilot-ui"
-version = "1.5.0"
+version = "2.0.0"
 dependencies = [
  "iced",
  "roxmltree",
