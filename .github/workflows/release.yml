@@ -4,14 +4,6 @@ on:
   push:
     tags:
       - 'v*.*.*'
-  pull_request:
-    paths:
-      - 'Packager.toml'
-      - 'Cargo.toml'
-      - 'package.json'
-      - 'packaging/arch/**'
-      - '.github/release-notes/**'
-      - '.github/workflows/release.yml'
 
 permissions:
   contents: read
