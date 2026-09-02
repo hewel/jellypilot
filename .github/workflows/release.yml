@@ -114,7 +114,7 @@ jobs:
         with:
           tool: cargo-packager@0.11.8
       - name: Build ${{ matrix.format }} package
-        run: cargo packager --release --formats ${{ matrix.format }}
+        run: cargo packager --config Packager.toml --formats ${{ matrix.format }}
       - name: Upload ${{ matrix.format }} package
         uses: actions/upload-artifact@v4
         with:
