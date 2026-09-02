@@ -1,6 +1,6 @@
 <div align="center">
 
-<img src="docs/assets/banner.png" alt="JellyPilot — a Jellyfin and Emby companion app: cast receiver and library browser driving external MPV." width="100%" />
+<img src="assets/promo/hero.webp" alt="JellyPilot — a native Jellyfin and Emby companion that plays through your own MPV." width="100%" />
 
 # JellyPilot
 
@@ -10,9 +10,9 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 [![AUR](https://img.shields.io/aur/version/jellypilot?label=AUR&logo=archlinux)](https://aur.archlinux.org/packages/jellypilot)
 
-**A Jellyfin and Emby companion app: controllable cast receiver and video Library Browser that plays through your own MPV.**
+**A native Jellyfin and Emby companion: library browser, cast receiver, and playback controller — always playing through your own MPV.**
 
-Built with Rust and [iced](https://iced.rs/) — fully custom-drawn, cross-platform, no webview.
+Custom-drawn with Rust and [iced](https://iced.rs/). Cross-platform. No webview, no embedded player, no forced transcoding.
 
 </div>
 
@@ -20,43 +20,73 @@ Built with Rust and [iced](https://iced.rs/) — fully custom-drawn, cross-platf
 
 ## 📖 Overview
 
-JellyPilot signs in to Jellyfin or Emby, browses your video libraries, and presents media through **External MPV Playback**: a standalone MPV process driven over JSON IPC, so your MPV configuration, shaders, and scripts stay in charge. JellyPilot never embeds `libmpv` and never requests a Provider Transcode — MPV plays the original or direct source. For Jellyfin, JellyPilot also registers as a cast target other Jellyfin clients can play to.
+JellyPilot signs in to Jellyfin or Emby, browses your video libraries, and drives **External MPV Playback**: a standalone MPV process controlled over JSON IPC. Your MPV configuration, shaders, and scripts stay in charge — JellyPilot never embeds `libmpv`, never uses a webview, and never asks the server to transcode.
+
+Jellyfin clients can discover JellyPilot as a cast target. Both Jellyfin and Emby sessions can mirror supported remote transport commands to the app, the player bar, and the system tray.
+
+## 🖼️ Screenshots
+
+### Full library and playback
+
+<a href="assets/screenshots/Screenshot%20from%202026-09-02%2017-30-56.png">
+  <img src="assets/screenshots/readme-home.webp" alt="JellyPilot dark theme home screen with Continue Watching, Next Up, and the playback control bar." width="100%" />
+</a>
+
+<p align="center"><sub>Dark theme · Home and playback controls</sub></p>
+
+### Library browsing
+
+<a href="assets/screenshots/Screenshot%20from%202026-09-02%2017-29-31.png">
+  <img src="assets/screenshots/readme-library.webp" alt="JellyPilot light theme movie library with filters and a poster grid." width="100%" />
+</a>
+
+<p align="center"><sub>Light theme · Movie library and filters</sub></p>
+
+### Control-Only mode
+
+<p align="center">
+  <a href="assets/screenshots/Screenshot%20from%202026-09-02%2017-31-01.png">
+    <img src="assets/screenshots/readme-control.webp" alt="JellyPilot dark Control-Only window with artwork, timeline, transport controls, queue, audio, subtitles, and volume." width="52%" />
+  </a>
+</p>
+
+<p align="center"><sub>Control-Only mode · Queue, tracks, transport, and volume</sub></p>
 
 ## ✨ Features
 
-| Feature                       | Description                                                                                  |
-| :---------------------------- | :------------------------------------------------------------------------------------------- |
-| 🎞️ **Jellyfin + Emby**        | Connect to Jellyfin or Emby servers with saved service profiles                              |
-| 📚 **Library Browser**        | Browse Movies and Shows, open item details, and start playback                               |
-| 📺 **Jellyfin Cast Target**   | Appears as a controllable device in Jellyfin's cast menu                                     |
-| 🚀 **External MPV Playback**  | Standalone MPV process over JSON IPC; your configuration, shaders, and scripts apply         |
-| 🔒 **Persistent Auth**        | Login once, stay connected; access tokens live in the OS keychain                            |
-| 🔑 **Jellyfin Quick Connect** | Authenticate by approving a one-time code on another device                                  |
-| 🔄 **Auto-Reconnect**         | Resilient WebSocket connection with exponential backoff                                      |
-| ⏭️ **Smart Playback**         | Automatic next episode and episode navigation from the player bar or tray                    |
-| ✂️ **Intro Skipper**          | Skips Jellyfin Intro Skipper plugin intro and credit ranges during playback                  |
-| 🧠 **Series Memory**          | Remembers per-series audio/subtitle track preferences                                        |
-| ⌨️ **Shortcuts**              | Configurable shortcuts (`Shift+>` / `Shift+<` by default) to skip episodes                   |
-| 🖥️ **System Tray**            | Background operation with transport controls, show window, and quit                          |
-| 🍏 **Cross-Platform**         | Native support for Windows, macOS, and Linux from one custom-drawn codebase                  |
+| Feature                       | Description                                                                                          |
+| :---------------------------- | :--------------------------------------------------------------------------------------------------- |
+| 🎞️ **Jellyfin + Emby**        | Connect to Jellyfin or Emby servers with saved service profiles                                      |
+| 📚 **Library Browser**        | Movies, shows, and search with persisted filters, virtualized grids, and disk-cached artwork         |
+| ⭐ **User Data Actions**     | Favorite or unfavorite items and mark them played or unplayed directly from item details             |
+| 📺 **Jellyfin Cast Target**   | Appears as a controllable device in Jellyfin's cast menu                                             |
+| 🚀 **External MPV Playback**  | Standalone MPV over JSON IPC; your configuration, shaders, and scripts apply to the original source  |
+| 📑 **Episode Queue**          | Current-season episode list in the player bar and compact player — click any episode to switch       |
+| 💬 **External Subtitles**     | Server-hosted external subtitle tracks loaded into MPV, with the default selection applied           |
+| ✂️ **Intro Skipper**          | Skips Jellyfin Intro Skipper plugin intro and credit ranges during playback                          |
+| 🌐 **Subtitle Preferences**  | Configurable preferred subtitle languages passed directly to MPV                                    |
+| ⏭️ **Smart Playback**         | Automatic next episode on natural end, plus episode navigation from the player bar or tray           |
+| 🎛️ **Control-Only Mode**      | A compact always-on-top-style controller window without the library shell                            |
+| 🌗 **Light + Dark Themes**    | System-following palettes from one design-token set                                                  |
+| 🔒 **Persistent Auth**        | Login once, stay connected; access tokens live in the OS keychain                                    |
+| 🔑 **Jellyfin Quick Connect** | Authenticate by approving a one-time code on another device                                          |
+| 🔄 **Auto-Reconnect**         | Resilient WebSocket connection with exponential backoff                                              |
+| ⌨️ **Shortcuts**              | Configurable shortcuts: `Shift+>` / `Shift+<` for episodes and `g` for intro skipping by default     |
+| 🖥️ **System Tray**            | Background operation with transport controls, show window, and quit                                  |
+| 🍏 **Cross-Platform**         | Native support for Windows, macOS, and Linux from one custom-drawn codebase                          |
 
 ## 🧩 Server Support
 
 | Server       | Supported | Notes                                                                                                                                          |
 | :----------- | :-------- | :--------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Jellyfin** | ✅        | Password login, Quick Connect, saved profiles, library browsing, MPV playback, cast target registration, remote control, Intro Skipper support |
-| **Emby**     | ✅        | Password login, saved profiles, library browsing, MPV playback, remote control, and playback progress reporting                                |
+| **Jellyfin** | ✅        | Password login, Quick Connect, saved profiles, library browsing, user data actions, MPV playback, cast target registration, remote control, Intro Skipper support |
+| **Emby**     | ✅        | Password login, saved profiles, library browsing, user data actions, MPV playback, remote control, and playback progress reporting                                |
 
 Emby support uses the same library and player workflow as Jellyfin where the server APIs are compatible. Jellyfin-specific features such as Quick Connect and the Jellyfin Intro Skipper plugin are not advertised for Emby connections.
 
 ## 🗺️ Roadmap
 
-- [x] **[Quick Connect](https://jellyfin.org/docs/general/server/quick-connect/)** — login via code from another device
-- [x] **[Intro Skipper](https://github.com/intro-skipper/intro-skipper) integration** — auto-skip intros/credits
-- [x] **Cross-platform iced frontend** — one custom-drawn native UI for Windows, macOS, and Linux ([ADR 0027](docs/adr/0027-cross-platform-iced-frontend.md))
-- [ ] **Light theme** — system-following light/dark palettes
-- [ ] **Control-only mode** — a lightweight Now Playing + Settings surface without the Library Browser
-- [ ] **MPRIS support** — Linux media player integration for desktop controls
+- [ ] **MPRIS support** — Linux desktop media-player integration for keys and widgets
 
 ## 🚀 Quick Start
 
@@ -101,12 +131,14 @@ The release binary is `target/release/jellypilot`.
 1. **Launch JellyPilot** from your application menu or terminal.
 2. **Choose a server type**: Jellyfin or Emby on the login screen.
 3. **Authenticate** with your Server URL and credentials; Jellyfin also supports Quick Connect.
-4. **Browse or cast**: start playback from JellyPilot's Library Browser, or cast to "JellyPilot" from another Jellyfin client.
-5. **Control playback** from the player bar, the system tray, or another Jellyfin client.
+4. **Browse and manage your library**: open item details to update favorite or played state.
+5. **Play or cast**: start playback directly in JellyPilot, or cast to "JellyPilot" from another Jellyfin client.
+6. **Control playback** from the player bar, the system tray, or a supported Jellyfin/Emby remote session — open the episode queue to jump anywhere in the current season.
+7. **Switch app modes** from Settings: Full library mode, or Control-Only — a compact standalone controller window.
 
 ## 🏗️ Architecture
 
-One Rust workspace; every crate below the app is display-free and test-covered.
+One Rust workspace: `jellypilot-ui` owns the custom iced presentation layer, while the domain and infrastructure crates remain display-free and test-covered.
 
 ```mermaid
 flowchart LR
@@ -117,17 +149,19 @@ flowchart LR
         Session[jellypilot-session WebSocket remote sessions]
         MS[jellypilot-media-server HTTP + artwork]
         Auth[jellypilot-auth login + keyring]
+        Mpv[jellypilot-mpv process lifecycle + IPC]
         App --> UI
         App --> Core
         App --> Session
         App --> MS
         App --> Auth
+        App --> Mpv
     end
 
     Session <-->|WebSocket| Server[Jellyfin / Emby server]
     MS <-->|REST| Server
     Server -->|original/direct source| MPV[External MPV process]
-    App <-->|JSON IPC| MPV
+    Mpv <-->|JSON IPC| MPV
 ```
 
 - `src-iced` — the application: shell, screens, tray, subscriptions, orchestration.
@@ -142,24 +176,26 @@ flowchart LR
 
 ### Commands
 
-| Task                    | Command                                |
-| :---------------------- | :------------------------------------- |
-| **Run the app**         | `bun run task iced run`                |
-| **Startup smoke gate**  | `xvfb-run -a bun run task iced run --smoke` |
-| **Check everything**    | `bun run check`                        |
-| **Rust tests**          | `bun run task rust test`               |
-| **Rust clippy**         | `bun run task rust clippy`             |
-| **Regenerate API clients** | `bun run task api`                  |
+| Task                       | Command                                     |
+| :------------------------- | :------------------------------------------ |
+| **Run the app**            | `bun run task iced run`                     |
+| **Startup smoke gate**     | `xvfb-run -a bun run task iced run --smoke` |
+| **Check everything**       | `bun run check`                             |
+| **Rust tests**             | `bun run task rust test`                    |
+| **Rust clippy**            | `bun run task rust clippy`                  |
+| **Regenerate API clients** | `bun run task api`                          |
+| **Render promo artwork**   | `bun run task promo`                        |
 
 ### Conventions
 
-- **Rust**: 2-space indent (`rustfmt.toml`); `unsafe_code` forbidden workspace-wide; clippy warnings are errors.
+- **Rust**: formatting is enforced by `bun run task rust fmt`; `unsafe_code` is forbidden workspace-wide; clippy warnings are errors.
 - **Display-free logic** lives in `jellypilot-core` and is tested there; `src-iced` keeps orchestration and views.
 - **Domain language**: [CONTEXT.md](CONTEXT.md) is the glossary; [docs/adr/](docs/adr/) records architecture decisions.
+- **Promo artwork**: `bun run task promo` writes optimized README screenshots to `assets/screenshots/` and regenerates the WebP README hero and promotional assets plus the 1280×640 PNG GitHub social preview in `assets/promo/`.
 
-## 📜 Release Notes
+## 📜 Project History
 
-Earlier releases (≤ 1.4.x) shipped a Tauri/Solid.js frontend with an embedded web player and local FFmpeg HLS pipeline. That stack was retired per [ADR 0027](docs/adr/0027-cross-platform-iced-frontend.md): the iced application always presents External MPV Playback, and settings/saved profiles start fresh — no Tauri Store data is imported.
+Releases ≤ 1.4.x shipped a Tauri/Solid.js frontend with an embedded web player and a local FFmpeg HLS pipeline. That stack was retired per [ADR 0027](docs/adr/0027-cross-platform-iced-frontend.md): the iced application always presents External MPV Playback, and settings/saved profiles start fresh — no Tauri Store data is imported.
 
 ## 🙏 Credits
 

@@ -21,6 +21,7 @@ Application:
 
 Utilities:
   api
+  promo                        (render README/promo artwork into assets/promo)
 
 Crate short names:
   core           jellypilot-core

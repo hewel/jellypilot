@@ -20,6 +20,7 @@ export type TaskCommand =
     }
   | { readonly _tag: 'iced'; readonly smoke: boolean; readonly release: boolean }
   | { readonly _tag: 'icedHot' }
+  | { readonly _tag: 'promo' }
   | { readonly _tag: 'api' };
 
 function unknownOption(command: string, option: string): never {
@@ -54,7 +55,7 @@ export function parseCli(argv: readonly string[]): TaskCommand {
   if (command === undefined || command === 'help' || command === '--help' || command === '-h') {
     return { _tag: 'help' };
   }
-  if (command === 'check' || command === 'typecheck' || command === 'api') {
+  if (command === 'check' || command === 'typecheck' || command === 'api' || command === 'promo') {
     expectNoArguments(command, args);
     return { _tag: command };
   }
