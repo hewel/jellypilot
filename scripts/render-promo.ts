@@ -87,6 +87,8 @@ interface ReadmeScreenshot {
   readonly shot: keyof typeof SHOT_FILES;
   readonly width: number;
   readonly height: number;
+  readonly radius: number;
+  readonly padding: number;
 }
 
 const fullCard = (
@@ -320,10 +322,71 @@ const SCENES: readonly Scene[] = [
 ];
 
 const README_SCREENSHOTS: readonly ReadmeScreenshot[] = [
-  { name: 'readme-home', shot: 'darkHome', width: 2623, height: 2135 },
-  { name: 'readme-library', shot: 'lightMovies', width: 2623, height: 2135 },
-  { name: 'readme-control', shot: 'controlDark', width: 840, height: 1330 },
+  {
+    name: 'readme-home',
+    shot: 'darkHome',
+    width: 2623,
+    height: 2135,
+    radius: 52,
+    padding: 72,
+  },
+  {
+    name: 'readme-library',
+    shot: 'lightMovies',
+    width: 2623,
+    height: 2135,
+    radius: 52,
+    padding: 72,
+  },
+  {
+    name: 'readme-control',
+    shot: 'controlDark',
+    width: 840,
+    height: 1330,
+    radius: 32,
+    padding: 44,
+  },
 ];
+
+interface ReadmeRender {
+  readonly svg: string;
+  readonly width: number;
+  readonly height: number;
+}
+
+const renderReadmeScreenshot = (assets: Assets, screenshot: ReadmeScreenshot): ReadmeRender => {
+  const width = screenshot.width + screenshot.padding * 2;
+  const height = screenshot.height + screenshot.padding * 2;
+  const shadowOffset = Math.round(screenshot.padding * 0.22);
+  const shadowBlur = Math.round(screenshot.padding * 0.24);
+  const contactOffset = Math.round(screenshot.padding * 0.06);
+  const contactBlur = Math.round(screenshot.padding * 0.07);
+  const { padding, radius } = screenshot;
+
+  return {
+    width,
+    height,
+    svg: `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}">
+  <defs>
+    <clipPath id="readme-clip">
+      <rect x="${padding}" y="${padding}" width="${screenshot.width}" height="${screenshot.height}" rx="${radius}"/>
+    </clipPath>
+    <filter id="readme-shadow" x="0" y="0" width="${width}" height="${height}" filterUnits="userSpaceOnUse" color-interpolation-filters="sRGB">
+      <feDropShadow in="SourceGraphic" dx="0" dy="${shadowOffset}" stdDeviation="${shadowBlur}" flood-color="#000000" flood-opacity="0.18" result="ambient-shadow"/>
+      <feDropShadow in="SourceGraphic" dx="0" dy="${contactOffset}" stdDeviation="${contactBlur}" flood-color="#000000" flood-opacity="0.14" result="contact-shadow"/>
+      <feMerge>
+        <feMergeNode in="ambient-shadow"/>
+        <feMergeNode in="contact-shadow"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+  </defs>
+  <g filter="url(#readme-shadow)">
+    <image href="${assets.shots[screenshot.shot]}" x="${padding}" y="${padding}" width="${screenshot.width}" height="${screenshot.height}" clip-path="url(#readme-clip)"/>
+  </g>
+</svg>`,
+  };
+};
 
 const loadAssets = async (): Promise<Assets> => {
   const [mark, grotesk, inter, ...shots] = await Promise.all([
@@ -378,24 +441,25 @@ const main = async (): Promise<void> => {
   }
 
   for (const screenshot of README_SCREENSHOTS) {
+    const render = renderReadmeScreenshot(assets, screenshot);
     const webpPath = join(SHOTS_DIR, `${screenshot.name}.webp`);
-    await sharp(join(SHOTS_DIR, SHOT_FILES[screenshot.shot]))
+    await sharp(Buffer.from(render.svg))
       .toColorspace('srgb')
       .webp({ quality: 90, smartSubsample: true, effort: 6 })
       .toFile(webpPath);
     const metadata = await sharp(webpPath).metadata();
     if (
       metadata.format !== 'webp' ||
-      metadata.width !== screenshot.width ||
-      metadata.height !== screenshot.height ||
-      metadata.hasAlpha !== false
+      metadata.width !== render.width ||
+      metadata.height !== render.height ||
+      metadata.hasAlpha !== true
     ) {
       throw new Error(
         `Invalid render for ${screenshot.name}: ${metadata.format} ${metadata.width}x${metadata.height} alpha=${metadata.hasAlpha}`,
       );
     }
     console.log(
-      `rendered assets/screenshots/${screenshot.name}.webp (${screenshot.width}x${screenshot.height})`,
+      `rendered assets/screenshots/${screenshot.name}.webp (${render.width}x${render.height})`,
     );
   }
 };
