@@ -37,21 +37,3 @@ jobs:
 
       - name: Run iced startup smoke
         run: xvfb-run -a bun run task iced run --smoke
-
-  compile:
-    name: Compile (${{ matrix.os }})
-    runs-on: ${{ matrix.os }}
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [windows-latest, macos-latest]
-    env:
-      HUSKY: 0
-    steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: swatinem/rust-cache@v2
-        with:
-          workspaces: '.'
-      - name: Compile workspace
-        run: cargo check --locked --workspace

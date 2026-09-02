@@ -1,0 +1,43 @@
+name: Cross-platform Compile
+on:
+  push:
+    branches: ["main"]
+    paths:
+      - ".github/workflows/compile.yml"
+      - ".cargo/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "rust-toolchain*"
+      - "src-iced/**"
+      - "crates/**"
+      - "assets/icons/**"
+  pull_request:
+    branches: ["main"]
+    paths:
+      - ".github/workflows/compile.yml"
+      - ".cargo/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "rust-toolchain*"
+      - "src-iced/**"
+      - "crates/**"
+      - "assets/icons/**"
+
+jobs:
+  compile:
+    name: Compile (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, macos-latest]
+    env:
+      HUSKY: 0
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: swatinem/rust-cache@v2
+        with:
+          workspaces: '.'
+      - name: Compile workspace
+        run: cargo check --locked --workspace
