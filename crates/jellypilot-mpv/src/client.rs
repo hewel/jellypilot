@@ -503,10 +503,18 @@ impl MpvClient {
   /// Add an external subtitle file and optionally select it.
   ///
   /// When `select` is true, the subtitle is immediately selected after loading.
-  pub async fn sub_add(&self, url: &str, select: bool) -> Result<(), MpvError> {
+  pub async fn sub_add(
+    &self,
+    url: &str,
+    select: bool,
+    title: Option<&str>,
+    language: Option<&str>,
+  ) -> Result<(), MpvError> {
     log::info!("Adding external subtitle (select={select})");
-    let flags = if select { Some("select") } else { None };
-    self.send(MpvCommand::sub_add(url, flags)).await?;
+    let flags = if select { "select" } else { "auto" };
+    self
+      .send(MpvCommand::sub_add(url, flags, title, language))
+      .await?;
     Ok(())
   }
 

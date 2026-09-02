@@ -362,13 +362,40 @@ pub struct PlaybackResolutionRequest {
   pub selection: PlaybackSelection,
 }
 
+/// Authenticated external subtitle and provider metadata needed by MPV.
+#[derive(Clone)]
+pub struct ExternalSubtitle {
+  pub provider_index: i32,
+  pub url: AuthenticatedUrl,
+  pub title: Option<String>,
+  pub language: Option<String>,
+}
+
+fn discover_external_subtitles(
+  streams: &[MediaStream],
+  mut url_for_stream: impl FnMut(&MediaStream) -> Option<AuthenticatedUrl>,
+) -> Vec<ExternalSubtitle> {
+  streams
+    .iter()
+    .filter(|stream| stream.stream_type == "Subtitle" && stream.is_external)
+    .filter_map(|stream| {
+      url_for_stream(stream).map(|url| ExternalSubtitle {
+        provider_index: stream.index,
+        url,
+        title: stream.display_title.clone(),
+        language: stream.language.clone(),
+      })
+    })
+    .collect()
+}
+
 /// Media-server data required to load a resolved item.
 #[derive(Clone)]
 pub struct PlaybackResolution {
   pub media_source: MediaSource,
   pub play_session_id: Option<String>,
   pub stream_url: AuthenticatedUrl,
-  pub external_subtitle_url: Option<AuthenticatedUrl>,
+  pub external_subtitles: Vec<ExternalSubtitle>,
 }
 // MediaSource embeds tokenized stream URLs; keep them out of Debug output.
 impl fmt::Debug for PlaybackResolution {
@@ -475,25 +502,19 @@ impl PlaybackServer for JellyfinPlaybackServer {
         .build_stream_url(&request.item_id, &media_source)
         .map(AuthenticatedUrl::new)
         .ok_or(PlaybackError::StreamUrlUnavailable)?;
-      let external_subtitle_url = request
-        .selection
-        .subtitle_stream_index
-        .filter(|index| *index >= 0)
-        .and_then(|index| find_stream(&media_source.media_streams, "Subtitle", index).ok())
-        .filter(|stream| stream.is_external)
-        .and_then(|stream| {
-          self
-            .0
-            .playback()
-            .build_subtitle_url(&request.item_id, &media_source.id, stream)
-        })
-        .map(AuthenticatedUrl::new);
+      let external_subtitles = discover_external_subtitles(&media_source.media_streams, |stream| {
+        self
+          .0
+          .playback()
+          .build_subtitle_url(&request.item_id, &media_source.id, stream)
+          .map(AuthenticatedUrl::new)
+      });
 
       Ok(PlaybackResolution {
         media_source,
         play_session_id: playback.play_session_id,
         stream_url,
-        external_subtitle_url,
+        external_subtitles,
       })
     })
   }
@@ -735,7 +756,7 @@ impl PlaybackController {
       assign_provider_indexes(
         &mut tracks,
         &active.media_streams,
-        active.subtitle_stream_index,
+        &active.loaded_external_subtitle_indexes,
       );
     }
     Ok(tracks)
@@ -762,13 +783,34 @@ impl PlaybackController {
     &mut self,
     id: Option<i64>,
   ) -> Result<TrackSelectionOutcome, PlaybackError> {
-    match mpv_subtitle_selection(id) {
+    self
+      .active
+      .as_ref()
+      .ok_or(PlaybackError::NoActivePlayback)?;
+    let selection = mpv_subtitle_selection(id);
+    let provider_index = match selection {
+      MpvSubtitleSelection::Track(id) => self
+        .tracks()
+        .await?
+        .iter()
+        .find(|track| track.track_type == "sub" && track.id == id)
+        .and_then(|track| track.provider_index)
+        .ok_or(PlaybackError::TrackUnavailable)?,
+      MpvSubtitleSelection::Value(_) => -1,
+    };
+    match selection {
       MpvSubtitleSelection::Track(id) => self.mpv.set_subtitle_track(id).await,
       MpvSubtitleSelection::Value(value) => self.mpv.set_property_string("sid", value).await,
     }
     .map_err(|_| PlaybackError::MpvControlFailed)?;
+    self
+      .active
+      .as_mut()
+      .ok_or(PlaybackError::NoActivePlayback)?
+      .subtitle_stream_index = Some(provider_index);
+    let tracks = self.tracks().await?;
     Ok(TrackSelectionOutcome {
-      tracks: self.tracks().await?,
+      tracks,
       warnings: Vec::new(),
     })
   }
@@ -1042,29 +1084,81 @@ impl PlaybackController {
     self.active = Some(resolved.active);
     self.active_transport_matches_mpv = true;
 
-    let active = self
-      .active
-      .as_ref()
-      .ok_or(PlaybackError::NoActivePlayback)?;
+    let (title, start_position_seconds, runtime_seconds) = {
+      let active = self
+        .active
+        .as_ref()
+        .ok_or(PlaybackError::NoActivePlayback)?;
+      (
+        active.now_playing.title.clone(),
+        active.now_playing.start_position_seconds,
+        active.now_playing.runtime_seconds,
+      )
+    };
     if self
       .mpv
-      .set_property_string("force-media-title", &active.now_playing.title)
+      .set_property_string("force-media-title", &title)
       .await
       .is_err()
     {
       warnings.push(PlaybackWarning::MediaTitleUnavailable);
     }
-    if let Some(subtitle_url) = resolved.external_subtitle_url {
-      if self.mpv.sub_add(subtitle_url.as_str(), true).await.is_err() {
-        warnings.push(PlaybackWarning::ExternalSubtitleUnavailable);
+
+    let mut external_subtitle_unavailable = resolved.external_subtitle_unavailable;
+    let selected_external_index = resolved.selected_external_subtitle_index;
+    for subtitle in resolved
+      .external_subtitles
+      .iter()
+      .filter(|subtitle| Some(subtitle.provider_index) != selected_external_index)
+      .chain(
+        resolved
+          .external_subtitles
+          .iter()
+          .filter(|subtitle| Some(subtitle.provider_index) == selected_external_index),
+      )
+    {
+      let select = Some(subtitle.provider_index) == selected_external_index;
+      if let Some(active) = self.active.as_mut() {
+        active
+          .loaded_external_subtitle_indexes
+          .push(subtitle.provider_index);
       }
+      if self
+        .mpv
+        .sub_add(
+          subtitle.url.as_str(),
+          select,
+          subtitle.title.as_deref(),
+          subtitle.language.as_deref(),
+        )
+        .await
+        .is_err()
+      {
+        if let Some(active) = self.active.as_mut() {
+          active.loaded_external_subtitle_indexes.pop();
+        }
+        external_subtitle_unavailable = true;
+      }
+    }
+    if selected_external_index.is_none()
+      && !resolved.external_subtitles.is_empty()
+      && resolved.mpv_subtitle_index.is_some()
+    {
+      let result = match mpv_subtitle_selection(resolved.mpv_subtitle_index) {
+        MpvSubtitleSelection::Track(id) => self.mpv.set_subtitle_track(id).await,
+        MpvSubtitleSelection::Value(value) => self.mpv.set_property_string("sid", value).await,
+      };
+      external_subtitle_unavailable |= result.is_err();
+    }
+    if external_subtitle_unavailable {
+      warnings.push(PlaybackWarning::ExternalSubtitleUnavailable);
     }
 
     let mut baseline = self.last_transport.clone();
     baseline.connected = true;
     baseline.paused = false;
-    baseline.time_pos = active.now_playing.start_position_seconds;
-    baseline.duration = active.now_playing.runtime_seconds.unwrap_or_default();
+    baseline.time_pos = start_position_seconds;
+    baseline.duration = runtime_seconds.unwrap_or_default();
     let sample = collect_player_state_sample(&self.mpv).await;
     let mut transport = if sample.is_connected() {
       sample.merge(&baseline)
@@ -1075,7 +1169,7 @@ impl PlaybackController {
     // A late property response can still describe the replaced file.
     transport.connected = true;
     transport.paused = false;
-    transport.time_pos = active.now_playing.start_position_seconds;
+    transport.time_pos = start_position_seconds;
     self.record_transport(&transport);
     let active = self
       .active
@@ -1102,7 +1196,7 @@ impl PlaybackController {
       media_source,
       play_session_id,
       stream_url,
-      external_subtitle_url,
+      external_subtitles,
     } = self
       .server
       .resolve(PlaybackResolutionRequest {
@@ -1117,18 +1211,49 @@ impl PlaybackController {
         .filter(|ticks| *ticks >= 0)
         .map(ticks_to_seconds)
     });
+    let external_subtitle_unavailable = media_source
+      .media_streams
+      .iter()
+      .filter(|stream| stream.stream_type == "Subtitle" && stream.is_external)
+      .count()
+      != external_subtitles.len();
+    let effective_subtitle_index = selection
+      .subtitle_stream_index
+      .or(media_source.default_subtitle_stream_index)
+      .or_else(|| {
+        media_source
+          .media_streams
+          .iter()
+          .find(|stream| stream.stream_type == "Subtitle" && stream.is_default)
+          .map(|stream| stream.index)
+      });
+    let selected_external_subtitle_index = effective_subtitle_index
+      .filter(|index| *index >= 0)
+      .map(|index| {
+        find_stream(&media_source.media_streams, "Subtitle", index).map(|stream| (index, stream))
+      })
+      .transpose()?
+      .filter(|(_, stream)| stream.is_external)
+      .map(|(index, _)| index);
+    if selected_external_subtitle_index.is_some_and(|selected| {
+      !external_subtitles
+        .iter()
+        .any(|subtitle| subtitle.provider_index == selected)
+    }) {
+      return Err(PlaybackError::SubtitleUrlUnavailable);
+    }
     let mpv_audio_index = resolve_mpv_track(
       &media_source.media_streams,
       "Audio",
       selection.audio_stream_index,
     )?;
-    let mpv_subtitle_index = if external_subtitle_url.is_some() {
+    let mpv_subtitle_index = if selected_external_subtitle_index.is_some() {
       None
     } else {
       resolve_mpv_track(
         &media_source.media_streams,
         "Subtitle",
-        selection.subtitle_stream_index,
+        effective_subtitle_index,
       )?
     };
 
@@ -1145,12 +1270,15 @@ impl PlaybackController {
         media_source_id: media_source.id,
         play_session_id,
         audio_stream_index: selection.audio_stream_index,
-        subtitle_stream_index: selection.subtitle_stream_index,
+        subtitle_stream_index: effective_subtitle_index,
         media_streams: media_source.media_streams,
+        loaded_external_subtitle_indexes: Vec::new(),
         last_known_position_seconds: start_position_seconds,
       },
       stream_url,
-      external_subtitle_url,
+      external_subtitles,
+      external_subtitle_unavailable,
+      selected_external_subtitle_index,
       mpv_audio_index,
       mpv_subtitle_index,
     })
@@ -1391,6 +1519,7 @@ struct ActivePlayback {
   audio_stream_index: Option<i32>,
   subtitle_stream_index: Option<i32>,
   media_streams: Vec<MediaStream>,
+  loaded_external_subtitle_indexes: Vec<i32>,
   last_known_position_seconds: f64,
 }
 fn playback_report(active: &ActivePlayback, transport: &PlayerState) -> PlaybackReport {
@@ -1452,7 +1581,9 @@ impl LoadEventBoundary {
 struct ResolvedPlayback {
   active: ActivePlayback,
   stream_url: AuthenticatedUrl,
-  external_subtitle_url: Option<AuthenticatedUrl>,
+  external_subtitles: Vec<ExternalSubtitle>,
+  external_subtitle_unavailable: bool,
+  selected_external_subtitle_index: Option<i32>,
   mpv_audio_index: Option<i64>,
   mpv_subtitle_index: Option<i64>,
 }
@@ -1697,7 +1828,9 @@ fn type_local_track_index(
   find_stream(streams, stream_type, provider_index)?;
   streams
     .iter()
-    .filter(|stream| stream.stream_type == stream_type)
+    .filter(|stream| {
+      stream.stream_type == stream_type && (stream_type != "Subtitle" || !stream.is_external)
+    })
     .position(|stream| stream.index == provider_index)
     .and_then(|position| i64::try_from(position).ok())
     .and_then(|position| position.checked_add(1))
@@ -1751,7 +1884,7 @@ fn parse_track_list(json: &str) -> Result<Vec<TrackInfo>, PlaybackError> {
 fn assign_provider_indexes(
   tracks: &mut [TrackInfo],
   streams: &[MediaStream],
-  selected_subtitle_index: Option<i32>,
+  loaded_external_subtitle_indexes: &[i32],
 ) {
   for track_type in ["audio", "sub"] {
     for (position, track) in tracks
@@ -1759,19 +1892,22 @@ fn assign_provider_indexes(
       .filter(|track| track.track_type == track_type)
       .enumerate()
     {
-      track.provider_index =
-        provider_stream_for_mpv_track(streams, track_type, position, selected_subtitle_index)
-          .map(|stream| stream.index);
+      track.provider_index = provider_index_for_mpv_track(
+        streams,
+        track_type,
+        position,
+        loaded_external_subtitle_indexes,
+      );
     }
   }
 }
 
-fn provider_stream_for_mpv_track<'a>(
-  streams: &'a [MediaStream],
+fn provider_index_for_mpv_track(
+  streams: &[MediaStream],
   track_type: &str,
   position: usize,
-  selected_subtitle_index: Option<i32>,
-) -> Option<&'a MediaStream> {
+  loaded_external_subtitle_indexes: &[i32],
+) -> Option<i32> {
   let provider_type = if track_type == "audio" {
     "Audio"
   } else {
@@ -1782,16 +1918,14 @@ fn provider_stream_for_mpv_track<'a>(
     .filter(|stream| stream.stream_type == provider_type && !stream.is_external);
   let internal_count = internal.clone().count();
   if position < internal_count {
-    return internal.nth(position);
+    return internal.nth(position).map(|stream| stream.index);
   }
-  if track_type != "sub" || position != internal_count {
+  if track_type != "sub" {
     return None;
   }
-  streams.iter().find(|stream| {
-    stream.stream_type == provider_type
-      && stream.is_external
-      && Some(stream.index) == selected_subtitle_index
-  })
+  loaded_external_subtitle_indexes
+    .get(position - internal_count)
+    .copied()
 }
 
 /// Stream URL without its query string, where the access token rides. Safe to
@@ -1860,6 +1994,7 @@ mod tests {
   struct MockPlaybackServer {
     provider: MediaServerProvider,
     resolution: PlaybackResolution,
+    external_subtitle_urls: Vec<(i32, AuthenticatedUrl)>,
     reports: Mutex<MockReports>,
     fail_start: AtomicBool,
     fail_progress: AtomicBool,
@@ -1878,6 +2013,7 @@ mod tests {
             container: Some("mkv".to_owned()),
             run_time_ticks: Some(15_000_000_000),
             media_streams: Vec::new(),
+            default_subtitle_stream_index: None,
             supports_direct_play: true,
             supports_direct_stream: true,
             supports_transcoding: true,
@@ -1889,8 +2025,9 @@ mod tests {
           stream_url: AuthenticatedUrl::new(
             "https://media.example/video?api_key=secret".to_owned(),
           ),
-          external_subtitle_url: None,
+          external_subtitles: Vec::new(),
         },
+        external_subtitle_urls: Vec::new(),
         reports: Mutex::new(MockReports::default()),
         fail_start: AtomicBool::new(false),
         fail_progress: AtomicBool::new(false),
@@ -1901,6 +2038,24 @@ mod tests {
     fn with_provider(mut self, provider: MediaServerProvider) -> Self {
       self.provider = provider;
       self
+    }
+
+    fn with_external_subtitle_url(mut self, provider_index: i32, url: &str) -> Self {
+      self
+        .external_subtitle_urls
+        .push((provider_index, AuthenticatedUrl::new(url.to_owned())));
+      self
+    }
+
+    fn progress_subtitle_indices(&self) -> Vec<Option<i32>> {
+      self
+        .reports
+        .lock()
+        .expect("mock reports should not be poisoned")
+        .progress
+        .iter()
+        .map(|report| report.subtitle_stream_index)
+        .collect()
     }
 
     fn stop_item_ids(&self) -> Vec<String> {
@@ -1952,7 +2107,17 @@ mod tests {
         .expect("mock reports should not be poisoned")
         .resolutions
         .push(request);
-      let resolution = self.resolution.clone();
+      let mut resolution = self.resolution.clone();
+      if !self.external_subtitle_urls.is_empty() {
+        resolution.external_subtitles =
+          discover_external_subtitles(&resolution.media_source.media_streams, |stream| {
+            self
+              .external_subtitle_urls
+              .iter()
+              .find(|(index, _)| *index == stream.index)
+              .map(|(_, url)| url.clone())
+          });
+      }
       Box::pin(async move { Ok(resolution) })
     }
 
@@ -2026,6 +2191,7 @@ mod tests {
     fullscreen: bool,
     audio_track: i64,
     subtitle_track: Option<i64>,
+    external_subtitle_tracks: Vec<(i64, String, Option<String>, Option<String>)>,
   }
 
   impl Default for MpvPeerState {
@@ -2039,7 +2205,36 @@ mod tests {
         fullscreen: false,
         audio_track: 1,
         subtitle_track: None,
+        external_subtitle_tracks: Vec::new(),
       }
+    }
+  }
+
+  #[derive(Clone)]
+  struct SubAddResponseGate {
+    command_received: Arc<tokio::sync::Semaphore>,
+    release_response: Arc<tokio::sync::Semaphore>,
+  }
+
+  impl SubAddResponseGate {
+    fn new() -> Self {
+      Self {
+        command_received: Arc::new(tokio::sync::Semaphore::new(0)),
+        release_response: Arc::new(tokio::sync::Semaphore::new(0)),
+      }
+    }
+
+    async fn wait_for_command(&self) {
+      self
+        .command_received
+        .acquire()
+        .await
+        .expect("sub-add command gate should remain open")
+        .forget();
+    }
+
+    fn release_response(&self) {
+      self.release_response.add_permits(1);
     }
   }
 
@@ -2055,9 +2250,22 @@ mod tests {
       Self::connect(MpvClient::new(None)).await
     }
 
+    async fn new_with_withheld_sub_add() -> (Self, SubAddResponseGate) {
+      let gate = SubAddResponseGate::new();
+      let mpv = Self::connect_with_sub_add_gate(MpvClient::new(None), Some(gate.clone())).await;
+      (mpv, gate)
+    }
+
     /// Install a fresh in-memory IPC connection on the client, standing in for
     /// an MPV process listening on that connection.
     async fn connect(client: MpvClient) -> Self {
+      Self::connect_with_sub_add_gate(client, None).await
+    }
+
+    async fn connect_with_sub_add_gate(
+      client: MpvClient,
+      withheld_sub_add: Option<SubAddResponseGate>,
+    ) -> Self {
       let (client_stream, peer_stream) = duplex(128 * 1024);
       let (reader, writer) = tokio::io::split(client_stream);
       let transport = MpvClient::from_io_for_test(reader, writer)
@@ -2073,6 +2281,7 @@ mod tests {
       let peer = tokio::spawn(async move {
         let mut lines = BufReader::new(peer_reader).lines();
         let mut state = MpvPeerState::default();
+        let mut withheld_sub_add = withheld_sub_add;
         while let Ok(Some(line)) = lines.next_line().await {
           let Ok(message) = serde_json::from_str::<serde_json::Value>(&line) else {
             continue;
@@ -2090,6 +2299,17 @@ mod tests {
             .expect("received commands should not be poisoned")
             .push(command.clone());
           let data = apply_mpv_command(&mut state, &command);
+          if command.first().and_then(serde_json::Value::as_str) == Some("sub-add") {
+            if let Some(gate) = withheld_sub_add.take() {
+              gate.command_received.add_permits(1);
+              gate
+                .release_response
+                .acquire()
+                .await
+                .expect("sub-add response gate should remain open")
+                .forget();
+            }
+          }
           let mut writer = task_writer.lock().await;
           write_mpv_message(
             &mut writer,
@@ -2186,20 +2406,77 @@ mod tests {
           .unwrap_or(state.time_pos);
         serde_json::Value::Null
       }
-      Some("get_property") => match command.get(1).and_then(serde_json::Value::as_str) {
-        Some("pause") => serde_json::json!(state.paused),
-        Some("time-pos") => serde_json::json!(state.time_pos),
-        Some("duration") => serde_json::json!(state.duration),
-        Some("volume") => serde_json::json!(state.volume),
-        Some("mute") => serde_json::json!(state.muted),
-        Some("fullscreen") => serde_json::json!(state.fullscreen),
-        Some("track-list") => serde_json::json!([
-          {"id": 1, "type": "audio", "title": "English", "selected": state.audio_track == 1},
-          {"id": 2, "type": "audio", "title": "Commentary", "selected": state.audio_track == 2},
-          {"id": 3, "type": "sub", "title": "English", "selected": state.subtitle_track == Some(3)},
-        ]),
-        _ => serde_json::Value::Null,
-      },
+      Some("sub-add") => {
+        let url = command
+          .get(1)
+          .and_then(serde_json::Value::as_str)
+          .unwrap_or_default();
+        let title = command
+          .get(3)
+          .and_then(serde_json::Value::as_str)
+          .filter(|title| !title.is_empty())
+          .map(str::to_owned);
+        let language = command
+          .get(4)
+          .and_then(serde_json::Value::as_str)
+          .map(str::to_owned);
+        let id = i64::try_from(state.external_subtitle_tracks.len())
+          .unwrap_or_default()
+          .saturating_add(4);
+        state
+          .external_subtitle_tracks
+          .push((id, url.to_owned(), title, language));
+        if command.get(2).and_then(serde_json::Value::as_str) == Some("select") {
+          state.subtitle_track = Some(id);
+        }
+        serde_json::Value::Null
+      }
+      Some("get_property") => {
+        match command.get(1).and_then(serde_json::Value::as_str) {
+          Some("pause") => serde_json::json!(state.paused),
+          Some("time-pos") => serde_json::json!(state.time_pos),
+          Some("duration") => serde_json::json!(state.duration),
+          Some("volume") => serde_json::json!(state.volume),
+          Some("mute") => serde_json::json!(state.muted),
+          Some("fullscreen") => serde_json::json!(state.fullscreen),
+          Some("track-list") => {
+            let mut tracks = vec![
+              serde_json::json!({
+                "id": 1,
+                "type": "audio",
+                "title": "English",
+                "selected": state.audio_track == 1,
+              }),
+              serde_json::json!({
+                "id": 2,
+                "type": "audio",
+                "title": "Commentary",
+                "selected": state.audio_track == 2,
+              }),
+              serde_json::json!({
+                "id": 3,
+                "type": "sub",
+                "title": "English",
+                "selected": state.subtitle_track == Some(3),
+              }),
+            ];
+            tracks.extend(state.external_subtitle_tracks.iter().map(
+              |(id, url, title, language)| {
+                serde_json::json!({
+                  "id": id,
+                  "type": "sub",
+                  "title": title.as_deref().unwrap_or(url),
+                  "lang": language,
+                  "external": true,
+                  "selected": state.subtitle_track == Some(*id),
+                })
+              },
+            ));
+            serde_json::json!(tracks)
+          }
+          _ => serde_json::Value::Null,
+        }
+      }
       _ => serde_json::Value::Null,
     }
   }
@@ -2211,6 +2488,165 @@ mod tests {
     let controller = PlaybackController::from_server(server, mpv.client.clone(), Vec::new());
     (controller, mpv)
   }
+
+  #[test]
+  fn external_subtitles_are_discovered_and_selectable_without_initial_selection() {
+    run_async(async {
+      const FRENCH_SUBTITLE_URL: &str =
+        "https://media.example/Videos/item-1/source-1/Subtitles/10/Stream.srt?api_key=secret";
+      const SPANISH_SUBTITLE_URL: &str =
+        "https://media.example/Videos/item-1/source-1/Subtitles/11/Stream.srt?api_key=secret";
+
+      let mut server = MockPlaybackServer::new()
+        .with_external_subtitle_url(10, FRENCH_SUBTITLE_URL)
+        .with_external_subtitle_url(11, SPANISH_SUBTITLE_URL);
+      let mut internal = stream(2, "Subtitle");
+      internal.display_title = Some("English".to_owned());
+      let mut french = stream(10, "Subtitle");
+      french.display_title = Some("French".to_owned());
+      french.language = Some("fra".to_owned());
+      french.is_default = true;
+      french.is_external = true;
+      let mut spanish = stream(11, "Subtitle");
+      spanish.display_title = Some("Spanish".to_owned());
+      spanish.language = Some("spa".to_owned());
+      spanish.is_external = true;
+      server.resolution.media_source.media_streams = vec![internal, french, spanish];
+      server.resolution.media_source.default_subtitle_stream_index = Some(11);
+      let (mut controller, mpv) = controller_harness(Arc::new(server)).await;
+
+      let _ = controller
+        .play(
+          library_item("Episode").into(),
+          PlaybackStartPosition::Beginning,
+        )
+        .await
+        .expect("playback should start");
+      let tracks = controller
+        .tracks()
+        .await
+        .expect("MPV track list should be readable");
+
+      let sub_add_commands = mpv
+        .received_commands()
+        .into_iter()
+        .filter(|command| command.first().and_then(serde_json::Value::as_str) == Some("sub-add"))
+        .collect::<Vec<_>>();
+      let external_tracks = tracks
+        .iter()
+        .filter(|track| matches!(track.provider_index, Some(10) | Some(11)))
+        .map(|track| {
+          (
+            track.provider_index,
+            track.title.as_deref(),
+            track.language.as_deref(),
+            track.selected,
+          )
+        })
+        .collect::<Vec<_>>();
+
+      assert_eq!(
+        (sub_add_commands, external_tracks),
+        (
+          vec![
+            vec![
+              serde_json::Value::from("sub-add"),
+              serde_json::Value::from(FRENCH_SUBTITLE_URL),
+              serde_json::Value::from("auto"),
+              serde_json::Value::from("French"),
+              serde_json::Value::from("fra"),
+            ],
+            vec![
+              serde_json::Value::from("sub-add"),
+              serde_json::Value::from(SPANISH_SUBTITLE_URL),
+              serde_json::Value::from("select"),
+              serde_json::Value::from("Spanish"),
+              serde_json::Value::from("spa"),
+            ],
+          ],
+          vec![
+            (Some(10), Some("French"), Some("fra"), false),
+            (Some(11), Some("Spanish"), Some("spa"), true),
+          ],
+        )
+      );
+    });
+  }
+
+  #[test]
+  fn cancelled_sub_add_keeps_provider_mapping_after_mpv_accepts_command() {
+    run_async(async {
+      const SUBTITLE_URL: &str =
+        "https://media.example/Videos/item-1/source-1/Subtitles/10/Stream.srt?api_key=secret";
+
+      let mut server = MockPlaybackServer::new().with_external_subtitle_url(10, SUBTITLE_URL);
+      let internal = stream(2, "Subtitle");
+      let mut external = stream(10, "Subtitle");
+      external.is_external = true;
+      server.resolution.media_source.media_streams = vec![internal, external];
+      let (mpv, gate) = InMemoryMpv::new_with_withheld_sub_add().await;
+      let mut controller =
+        PlaybackController::from_server(Arc::new(server), mpv.client.clone(), Vec::new());
+
+      let mut start = Box::pin(controller.play(
+        library_item("Episode").into(),
+        PlaybackStartPosition::Beginning,
+      ));
+      tokio::select! {
+        _ = &mut start => panic!("playback completed before withheld sub-add response"),
+        () = gate.wait_for_command() => {}
+      }
+      drop(start);
+      gate.release_response();
+
+      let tracks = controller
+        .tracks()
+        .await
+        .expect("MPV track list should be readable after cancellation");
+
+      assert_eq!(
+        tracks
+          .iter()
+          .find(|track| track.id == 4)
+          .and_then(|track| track.provider_index),
+        Some(10)
+      );
+    });
+  }
+
+  #[test]
+  fn selected_external_subtitle_provider_index_is_sent_in_progress_report() {
+    run_async(async {
+      let mut server = MockPlaybackServer::new()
+        .with_external_subtitle_url(10, "https://media.example/subtitle-10?api_key=secret")
+        .with_external_subtitle_url(11, "https://media.example/subtitle-11?api_key=secret");
+      let internal = stream(2, "Subtitle");
+      let mut french = stream(10, "Subtitle");
+      french.is_external = true;
+      let mut spanish = stream(11, "Subtitle");
+      spanish.is_external = true;
+      server.resolution.media_source.media_streams = vec![internal, french, spanish];
+      server.resolution.media_source.default_subtitle_stream_index = Some(11);
+      let server = Arc::new(server);
+      let (mut controller, _mpv) = controller_harness(Arc::clone(&server)).await;
+      let _ = controller
+        .play(
+          library_item("Episode").into(),
+          PlaybackStartPosition::Beginning,
+        )
+        .await
+        .expect("playback should start");
+
+      let _ = controller
+        .select_subtitle_track(Some(4))
+        .await
+        .expect("first external subtitle should be selected");
+      let _ = controller.seek(60.0).await.expect("seek should work");
+
+      assert_eq!(server.progress_subtitle_indices(), vec![Some(10)]);
+    });
+  }
+
   #[test]
   fn track_list_parser_filters_and_maps_tracks() {
     let tracks = parse_track_list(
@@ -2472,6 +2908,7 @@ mod tests {
       audio_stream_index: None,
       subtitle_stream_index: None,
       media_streams: Vec::new(),
+      loaded_external_subtitle_indexes: Vec::new(),
       last_known_position_seconds: position_seconds,
     }
   }
@@ -2595,11 +3032,30 @@ mod tests {
         stream(4, "Audio"),
         stream(7, "Subtitle"),
       ],
-      None,
+      &[],
     );
 
     assert_eq!(tracks[0].provider_index, Some(4));
     assert_eq!(tracks[1].provider_index, Some(7));
+  }
+
+  #[test]
+  fn provider_mapping_uses_only_successfully_loaded_external_subtitles() {
+    let internal = stream(7, "Subtitle");
+    let mut french = stream(10, "Subtitle");
+    french.is_external = true;
+    let mut spanish = stream(11, "Subtitle");
+    spanish.is_external = true;
+    let streams = vec![internal, french, spanish];
+
+    assert_eq!(
+      (
+        provider_index_for_mpv_track(&streams, "sub", 0, &[11]),
+        provider_index_for_mpv_track(&streams, "sub", 1, &[11]),
+        provider_index_for_mpv_track(&streams, "sub", 2, &[11]),
+      ),
+      (Some(7), Some(11), None)
+    );
   }
 
   #[test]
@@ -2639,6 +3095,7 @@ mod tests {
         container: Some("mkv".to_owned()),
         run_time_ticks: Some(15_000_000_000),
         media_streams: Vec::new(),
+        default_subtitle_stream_index: None,
         supports_direct_play: true,
         supports_direct_stream: true,
         supports_transcoding: true,
@@ -2652,7 +3109,7 @@ mod tests {
       stream_url: AuthenticatedUrl(
         "https://media.example/video?api_key=do-not-print-this-token".to_owned(),
       ),
-      external_subtitle_url: None,
+      external_subtitles: Vec::new(),
     };
 
     let debug = format!("{resolution:?}");
@@ -3132,8 +3589,9 @@ mod tests {
   #[test]
   fn track_selection_returns_refreshed_tracks() {
     run_async(async {
-      let server = Arc::new(MockPlaybackServer::new());
-      let (mut controller, _mpv) = controller_harness(server).await;
+      let mut server = MockPlaybackServer::new();
+      server.resolution.media_source.media_streams = vec![stream(7, "Subtitle")];
+      let (mut controller, _mpv) = controller_harness(Arc::new(server)).await;
       let _ = controller
         .play(
           library_item("Episode").into(),
@@ -3168,6 +3626,60 @@ mod tests {
         ),
         (Some(true), Some(true), Vec::new(), Vec::new())
       );
+    });
+  }
+
+  #[test]
+  fn subtitle_selection_fails_when_selected_mpv_track_has_no_provider_mapping() {
+    run_async(async {
+      let server = Arc::new(MockPlaybackServer::new());
+      let (mut controller, mpv) = controller_harness(Arc::clone(&server)).await;
+      let _ = controller
+        .play(
+          library_item("Episode").into(),
+          PlaybackStartPosition::Beginning,
+        )
+        .await
+        .expect("playback should start");
+      let command_count = mpv.received_commands().len();
+
+      let result = controller.select_subtitle_track(Some(3)).await;
+      let _ = controller.seek(60.0).await.expect("seek should work");
+      let commands = mpv.received_commands();
+      let sid_was_mutated = commands[command_count..].iter().any(|command| {
+        command.first().and_then(serde_json::Value::as_str) == Some("set_property")
+          && command.get(1).and_then(serde_json::Value::as_str) == Some("sid")
+      });
+
+      assert!(matches!(result, Err(PlaybackError::TrackUnavailable)));
+      assert!(!sid_was_mutated);
+      assert_eq!(server.progress_subtitle_indices(), vec![None]);
+    });
+  }
+
+  #[test]
+  fn disabled_subtitle_is_sent_as_negative_one_in_progress_report() {
+    run_async(async {
+      let mut server = MockPlaybackServer::new();
+      server.resolution.media_source.media_streams = vec![stream(7, "Subtitle")];
+      server.resolution.media_source.default_subtitle_stream_index = Some(7);
+      let server = Arc::new(server);
+      let (mut controller, _mpv) = controller_harness(Arc::clone(&server)).await;
+      let _ = controller
+        .play(
+          library_item("Episode").into(),
+          PlaybackStartPosition::Beginning,
+        )
+        .await
+        .expect("playback should start");
+
+      let _ = controller
+        .select_subtitle_track(None)
+        .await
+        .expect("subtitles should be disabled");
+      let _ = controller.seek(60.0).await.expect("seek should work");
+
+      assert_eq!(server.progress_subtitle_indices(), vec![Some(-1)]);
     });
   }
 

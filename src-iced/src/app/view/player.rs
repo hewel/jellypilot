@@ -1,8 +1,9 @@
 use std::fmt;
 
 use crate::app::message::{Message, PlaybackMessage, SettingsMessage};
+use crate::app::playback::QueueState;
 use crate::app::state::{ArtworkCellState, State};
-use iced::widget::{button, column, container, row, slider, space, text, Column};
+use iced::widget::{button, column, container, row, scrollable, slider, space, text, Column};
 use iced::{Alignment, ContentFit, Element, Fill, Length};
 use jellypilot_core::config::AppMode;
 use jellypilot_mpv::playback::{Playable, TrackInfo};
@@ -141,12 +142,17 @@ fn transport<'a>(state: &'a State, now_playing: &NowPlayingView) -> Element<'a, 
   .into()
 }
 
-/// Audio/subtitle popover triggers shared by the bar and the compact player.
+/// Episode queue and audio/subtitle popover triggers shared by the bar and the
+/// compact player.
 fn track_selection(state: &State) -> Element<'_, Message> {
-  row![audio_popover(state), subtitle_popover(state)]
-    .spacing(TOKENS.spacing.s1_5)
-    .align_y(Alignment::Center)
-    .into()
+  row![
+    queue_popover(state),
+    audio_popover(state),
+    subtitle_popover(state)
+  ]
+  .spacing(TOKENS.spacing.s1_5)
+  .align_y(Alignment::Center)
+  .into()
 }
 
 /// Mute toggle and volume slider shared by the bar and the compact player.
@@ -573,6 +579,123 @@ fn subtitle_popover(state: &State) -> Element<'_, Message> {
       ..PopoverOptions::default()
     },
     Message::Playback(PlaybackMessage::SubtitleMenuDismissed),
+  )
+}
+
+/// Maximum height of the episode queue list before it scrolls.
+const QUEUE_MENU_MAX_HEIGHT: f32 = 280.0;
+
+/// Current-season episode queue popover shared by the bar and the compact
+/// player. Rows follow season episode order; the actively playing episode is
+/// marked and not selectable.
+fn queue_popover(state: &State) -> Element<'_, Message> {
+  let palette = state.palette();
+  let available = !matches!(state.playback.queue, QueueState::Unavailable);
+  let queue_btn_variant = if state.playback.queue_menu_open {
+    ButtonVariant::TonalActive
+  } else {
+    ButtonVariant::Tonal
+  };
+  let trigger = button(
+    row![
+      icon_for_variant_disabled(Icon::Playlist, IconSize::Sm, queue_btn_variant, !available,),
+      text("Queue"),
+    ]
+    .spacing(TOKENS.spacing.s1_5)
+    .align_y(Alignment::Center),
+  )
+  .padding([6, 10])
+  .on_press_maybe(available.then_some(Message::Playback(PlaybackMessage::QueueMenuToggled)))
+  .style(move |theme, status| {
+    jellypilot_ui::theme::button_variant(theme, status, queue_btn_variant)
+  });
+
+  let menu: Element<'_, Message> = match &state.playback.queue {
+    QueueState::Ready(items) => {
+      if items.is_empty() {
+        column![text("No episodes in this season")
+          .size(12)
+          .color(palette.colors.onSurfaceVariant)]
+        .spacing(TOKENS.spacing.s1)
+        .width(Fill)
+        .into()
+      } else {
+        let current_id = state
+          .playback
+          .view
+          .now_playing
+          .as_ref()
+          .map(|view| view.item.item_id.as_str());
+        let mut rows = Column::new().spacing(TOKENS.spacing.s1).width(Fill);
+        for item in items {
+          let is_current = current_id == Some(item.id.as_str());
+          let row_variant = if is_current {
+            ButtonVariant::Secondary
+          } else {
+            ButtonVariant::Text
+          };
+          let mut label = row![]
+            .spacing(TOKENS.spacing.s2)
+            .align_y(Alignment::Center)
+            .width(Fill);
+          if let (Some(season), Some(episode)) = (item.season_number, item.episode_number) {
+            label = label.push(
+              text(format!("S{season:02}E{episode:02}"))
+                .size(11)
+                .color(palette.colors.onSurfaceVariant),
+            );
+          }
+          label = label.push(text(&item.name).width(Fill).size(13));
+          let marker: Element<'_, Message> = if is_current {
+            icon_with_color(Icon::Check, IconSize::Xs, palette.colors.primary).into()
+          } else {
+            space::horizontal().width(14).into()
+          };
+          rows = rows.push(
+            button(row![label, marker].align_y(Alignment::Center))
+              .padding([6, 10])
+              .width(Fill)
+              .on_press_maybe((!is_current).then_some(Message::Playback(
+                PlaybackMessage::QueueItemSelected(item.clone()),
+              )))
+              .style(move |theme, status| {
+                jellypilot_ui::theme::button_variant(theme, status, row_variant)
+              }),
+          );
+        }
+        container(
+          scrollable(rows)
+            .width(Fill)
+            .style(jellypilot_ui::theme::scrollable),
+        )
+        .max_height(QUEUE_MENU_MAX_HEIGHT)
+        .into()
+      }
+    }
+    QueueState::Loading => column![text("Loading episodes…")
+      .size(12)
+      .color(palette.colors.onSurfaceVariant)]
+    .spacing(TOKENS.spacing.s1)
+    .width(Fill)
+    .into(),
+    QueueState::Unavailable | QueueState::Failed => column![text("Episode queue unavailable")
+      .size(12)
+      .color(palette.colors.onSurfaceVariant)]
+    .spacing(TOKENS.spacing.s1)
+    .width(Fill)
+    .into(),
+  };
+
+  popover(
+    trigger,
+    menu,
+    state.playback.queue_menu_open,
+    PopoverOptions {
+      placement: Placement::Above,
+      width: Some(320.0),
+      ..PopoverOptions::default()
+    },
+    Message::Playback(PlaybackMessage::QueueMenuDismissed),
   )
 }
 
@@ -1086,5 +1209,66 @@ mod tests {
     let sub_el = subtitle_popover(&state);
     drop(audio_el);
     drop(sub_el);
+  }
+
+  fn test_queue_item(
+    id: &str,
+    name: &str,
+    season: Option<i32>,
+    episode: Option<i32>,
+  ) -> VideoLibraryItem {
+    VideoLibraryItem {
+      id: id.to_owned(),
+      name: name.to_owned(),
+      item_type: "Episode".to_owned(),
+      production_year: None,
+      runtime_seconds: Some(2_400.0),
+      played: false,
+      favorite: false,
+      artwork_image_id: None,
+      backdrop_image_id: None,
+      series_poster_image_id: None,
+      episode_thumb_image_id: None,
+      series_thumb_image_id: None,
+      series_backdrop_image_id: None,
+      season_number: season,
+      episode_number: episode,
+      index_number_end: None,
+      series_id: Some("series-1".to_owned()),
+      series_name: Some("Series".to_owned()),
+      end_year: None,
+      series_continuing: false,
+      unplayed_item_count: None,
+      resume_position_seconds: None,
+      played_percentage: None,
+      overview: None,
+      season_poster_image_id: None,
+    }
+  }
+
+  #[test]
+  fn queue_popover_renders_across_queue_states() {
+    let mut state = State::boot(false);
+    state.playback.view.now_playing = Some(test_now_playing());
+
+    for queue in [
+      QueueState::Unavailable,
+      QueueState::Loading,
+      QueueState::Failed,
+      QueueState::Ready(Vec::new()),
+      QueueState::Ready(vec![
+        test_queue_item("episode-1", "Pilot Episode", Some(1), Some(1)),
+        test_queue_item("episode-2", "Second Episode", Some(1), Some(2)),
+        test_queue_item("episode-3", "Untimed Episode", None, None),
+      ]),
+    ] {
+      state.playback.queue = queue;
+      let el = queue_popover(&state);
+      drop(el);
+    }
+
+    state.playback.queue_menu_open = true;
+    let el = queue_popover(&state);
+    drop(el);
   }
 }

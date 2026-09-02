@@ -583,6 +583,8 @@ pub struct MediaSource {
   #[serde(default)]
   pub media_streams: Vec<MediaStream>,
   #[serde(default)]
+  pub default_subtitle_stream_index: Option<i32>,
+  #[serde(default)]
   pub supports_direct_play: bool,
   #[serde(default)]
   pub supports_direct_stream: bool,

@@ -19,13 +19,15 @@ use jellypilot_auth::login::ConnectionPhase;
 use jellypilot_core::artwork_binder::{ArtworkSettlement, ArtworkSurface};
 use jellypilot_core::config::Settings;
 use jellypilot_core::diagnostics::{coalescing_key, DiagnosticCategory, DiagnosticLevel};
-use jellypilot_core::request_gate::{RemotePlayToken, RemoteToken, RequestGate};
+use jellypilot_core::request_gate::{RemotePlayToken, RemoteToken, RequestGate, SessionToken};
 use jellypilot_media_server::artwork::{ArtworkSizeClass, LoadLane};
-use jellypilot_media_server::ticks_to_seconds;
+use jellypilot_media_server::{
+  ticks_to_seconds, VideoLibraryItem, VideoSeasonEpisodes, VideoSeasonEpisodesRequest,
+};
 use jellypilot_mpv::configured_mpv_args;
 use jellypilot_mpv::playback::{
   media_item_from_playable, rich_playable, Playable, PlaybackController, PlaybackControllerConfig,
-  PlaybackStartPosition,
+  PlaybackSelection, PlaybackStartPosition,
 };
 use jellypilot_mpv::playback_session::{
   seek_intent, volume_intent, AdjacentDirection, ControllerCommand, ControllerSettlement, EffectId,
@@ -49,6 +51,27 @@ use super::state::{
   RemoteSessionHandle,
 };
 
+#[derive(Clone)]
+pub enum QueueState {
+  Unavailable,
+  Loading,
+  Ready(Vec<VideoLibraryItem>),
+  Failed,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct QueueSeasonKey {
+  series_id: String,
+  season_number: i32,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct ActiveQueueLoad {
+  session: SessionToken,
+  generation: u64,
+  season: QueueSeasonKey,
+}
+
 /// Playback surface slice: the playback session machine and its projected
 /// view, the resolved current/adjacent playables, the MPV controller handle,
 /// in-flight effect markers, seek/volume previews, track popover flags,
@@ -63,6 +86,12 @@ pub struct Surface {
   pub in_flight_refresh: Option<EffectId>,
   pub in_flight_command: Option<EffectId>,
   pub adjacent_playables: [Option<Playable>; 2],
+  pub queue: QueueState,
+  queue_session: Option<SessionToken>,
+  queue_season: Option<QueueSeasonKey>,
+  queue_generation: u64,
+  active_queue_load: Option<ActiveQueueLoad>,
+  pub queue_menu_open: bool,
   /// Token identifying the current remote registration epoch; stale remote
   /// completions carry an older token and are ignored.
   pub remote: RemoteToken,
@@ -88,6 +117,12 @@ impl Surface {
       in_flight_refresh: None,
       in_flight_command: None,
       adjacent_playables: [None, None],
+      queue: QueueState::Unavailable,
+      queue_session: None,
+      queue_season: None,
+      queue_generation: 0,
+      active_queue_load: None,
+      queue_menu_open: false,
       remote: request_gate.begin_remote(),
       remote_session: None,
       remote_events: None,
@@ -692,6 +727,7 @@ pub(crate) fn initialize_playback(
   surface.notice = None;
   surface.playable = None;
   surface.adjacent_playables = [None, None];
+  clear_queue(surface);
   clear_player_artwork(surface, kernel);
   surface.seek_preview = None;
   surface.volume_preview = None;
@@ -750,6 +786,167 @@ fn apply_local_playback_intent(
     quit_requested,
     PlaybackInput::Intent(intent),
   )
+}
+
+fn episode_queue_request(
+  playable: &Playable,
+) -> Option<(QueueSeasonKey, VideoSeasonEpisodesRequest)> {
+  let (item_type, series_id, season_number) = match playable {
+    Playable::Library(item) => (
+      item.item_type.as_str(),
+      item.series_id.as_deref(),
+      item.season_number,
+    ),
+    Playable::Detail(item) => (
+      item.item_type.as_str(),
+      item.series_id.as_deref(),
+      item.season_number,
+    ),
+    Playable::Media(item) => (
+      item.item_type.as_str(),
+      item.series_id.as_deref(),
+      item.parent_index_number,
+    ),
+  };
+  if item_type != "Episode" {
+    return None;
+  }
+  let series_id = series_id?.trim();
+  if series_id.is_empty() {
+    return None;
+  }
+  let season = QueueSeasonKey {
+    series_id: series_id.to_owned(),
+    season_number: season_number?,
+  };
+  let request = VideoSeasonEpisodesRequest {
+    series_id: season.series_id.clone(),
+    season_id: None,
+    season_number: Some(season.season_number),
+  };
+  Some((season, request))
+}
+
+fn queue_item_start_intent(
+  item: VideoLibraryItem,
+  intro: jellypilot_mpv::playback_session::IntroAvailability,
+) -> PlaybackIntent {
+  PlaybackIntent::Start {
+    item: Playable::Library(item),
+    position: PlaybackStartPosition::Resume,
+    intro,
+    selection: Box::new(PlaybackSelection::default()),
+  }
+}
+
+fn load_queue_after_start(
+  surface: &mut Surface,
+  kernel: &Kernel,
+  playable: &Playable,
+) -> Task<Message> {
+  let Some((season, request)) = episode_queue_request(playable) else {
+    clear_queue(surface);
+    return Task::none();
+  };
+  let session = kernel.request_gate.current_session();
+  let same_queue =
+    surface.queue_session == Some(session) && surface.queue_season.as_ref() == Some(&season);
+  if same_queue
+    && (matches!(surface.queue, QueueState::Ready(_))
+      || (matches!(surface.queue, QueueState::Loading)
+        && surface.active_queue_load.as_ref().is_some_and(|active| {
+          active.session == session
+            && active.generation == surface.queue_generation
+            && active.season == season
+        })))
+  {
+    return Task::none();
+  }
+  let Some(client) = kernel.client.as_ref().map(Arc::clone) else {
+    surface.active_queue_load = None;
+    surface.queue_session = Some(session);
+    surface.queue_season = Some(season);
+    surface.queue = QueueState::Failed;
+    surface.queue_menu_open = false;
+    return Task::none();
+  };
+  surface.queue_generation = surface.queue_generation.wrapping_add(1);
+  let generation = surface.queue_generation;
+  surface.queue_session = Some(session);
+  surface.queue_season = Some(season.clone());
+  surface.active_queue_load = Some(ActiveQueueLoad {
+    session,
+    generation,
+    season: season.clone(),
+  });
+  surface.queue = QueueState::Loading;
+  let series_id = season.series_id;
+  let season_number = season.season_number;
+  Task::perform(
+    async move {
+      client
+        .library()
+        .season_episodes(request)
+        .await
+        .map_err(|error| error.to_string())
+    },
+    move |result| {
+      Message::Playback(PlaybackMessage::QueueLoaded {
+        session,
+        generation,
+        series_id,
+        season_number,
+        result,
+      })
+    },
+  )
+}
+
+fn apply_queue_loaded(
+  surface: &mut Surface,
+  kernel: &Kernel,
+  session: SessionToken,
+  generation: u64,
+  series_id: String,
+  season_number: i32,
+  result: Result<VideoSeasonEpisodes, String>,
+) {
+  let season = QueueSeasonKey {
+    series_id,
+    season_number,
+  };
+  let completion = ActiveQueueLoad {
+    session,
+    generation,
+    season: season.clone(),
+  };
+  if !kernel.request_gate.is_current_session(session)
+    || surface.active_queue_load.as_ref() != Some(&completion)
+    || surface.queue_generation != generation
+    || surface.queue_session != Some(session)
+    || surface.queue_season.as_ref() != Some(&season)
+    || surface
+      .playable
+      .as_ref()
+      .and_then(episode_queue_request)
+      .is_none_or(|(current, _)| current != season)
+  {
+    return;
+  }
+  surface.active_queue_load = None;
+  surface.queue = match result {
+    Ok(season) => QueueState::Ready(season.episodes),
+    Err(_) => QueueState::Failed,
+  };
+}
+
+fn clear_queue(surface: &mut Surface) {
+  surface.queue_generation = surface.queue_generation.wrapping_add(1);
+  surface.active_queue_load = None;
+  surface.queue_session = None;
+  surface.queue_season = None;
+  surface.queue = QueueState::Unavailable;
+  surface.queue_menu_open = false;
 }
 
 fn update_playback(
@@ -831,6 +1028,7 @@ fn update_playback(
     PlaybackMessage::AudioMenuToggled => {
       surface.audio_menu_open = !surface.audio_menu_open;
       surface.subtitle_menu_open = false;
+      surface.queue_menu_open = false;
       Task::none()
     }
     PlaybackMessage::AudioMenuDismissed => {
@@ -849,6 +1047,7 @@ fn update_playback(
     PlaybackMessage::SubtitleMenuToggled => {
       surface.subtitle_menu_open = !surface.subtitle_menu_open;
       surface.audio_menu_open = false;
+      surface.queue_menu_open = false;
       Task::none()
     }
     PlaybackMessage::SubtitleMenuDismissed => {
@@ -863,6 +1062,44 @@ fn update_playback(
         quit_requested,
         PlaybackIntent::SelectSubtitleTrack(id),
       )
+    }
+    PlaybackMessage::QueueMenuToggled => {
+      surface.queue_menu_open = !surface.queue_menu_open;
+      surface.audio_menu_open = false;
+      surface.subtitle_menu_open = false;
+      Task::none()
+    }
+    PlaybackMessage::QueueMenuDismissed => {
+      surface.queue_menu_open = false;
+      Task::none()
+    }
+    PlaybackMessage::QueueItemSelected(item) => {
+      surface.queue_menu_open = false;
+      let intro = kernel.intro_availability();
+      apply_local_playback_intent(
+        surface,
+        kernel,
+        quit_requested,
+        queue_item_start_intent(item, intro),
+      )
+    }
+    PlaybackMessage::QueueLoaded {
+      session,
+      generation,
+      series_id,
+      season_number,
+      result,
+    } => {
+      apply_queue_loaded(
+        surface,
+        kernel,
+        session,
+        generation,
+        series_id,
+        season_number,
+        result,
+      );
+      Task::none()
     }
     PlaybackMessage::ControllerSettled {
       id,
@@ -913,6 +1150,9 @@ fn update_playback(
           quit_requested,
           PlaybackInput::Event(PlaybackEvent::TracksSettled { id, result }),
         ));
+      }
+      if let Some(playable) = started.as_deref() {
+        tasks.push(load_queue_after_start(surface, kernel, playable));
       }
       if shutdown {
         surface.controller = None;
@@ -1069,6 +1309,10 @@ fn playback_message_name(message: &PlaybackMessage) -> &'static str {
     PlaybackMessage::SubtitleMenuToggled => "subtitle-menu-toggled",
     PlaybackMessage::SubtitleMenuDismissed => "subtitle-menu-dismissed",
     PlaybackMessage::SubtitleTrackSelected(_) => "subtitle-track-selected",
+    PlaybackMessage::QueueMenuToggled => "queue-menu-toggled",
+    PlaybackMessage::QueueMenuDismissed => "queue-menu-dismissed",
+    PlaybackMessage::QueueItemSelected(_) => "queue-item-selected",
+    PlaybackMessage::QueueLoaded { .. } => "queue-loaded",
     PlaybackMessage::ControllerSettled { .. } => "controller-settled",
     PlaybackMessage::AdjacentSettled { .. } => "adjacent-settled",
     PlaybackMessage::ArtworkLoaded { .. } => "artwork-loaded",
@@ -1133,6 +1377,7 @@ fn clear_inactive_playback(surface: &mut Surface, kernel: &mut Kernel) -> Task<M
   );
   surface.playable = None;
   surface.adjacent_playables = [None, None];
+  clear_queue(surface);
   clear_player_artwork(surface, kernel);
   surface.seek_preview = None;
   surface.volume_preview = None;
@@ -1439,6 +1684,7 @@ pub(crate) fn disconnect(
     quit_requested,
     PlaybackInput::Intent(PlaybackIntent::Disconnect),
   );
+  clear_queue(surface);
   surface.remote = kernel.request_gate.begin_remote();
   surface.remote_session = None;
   surface.remote_events = None;
@@ -1458,7 +1704,9 @@ mod tests {
   use jellypilot_core::config::SettingsStore;
   use jellypilot_core::diagnostics::Diagnostics;
   use jellypilot_core::request_gate::RequestGate;
-  use jellypilot_media_server::{JellyfinClient, MediaItem, VideoItemDetail, VideoLibraryItem};
+  use jellypilot_media_server::{
+    JellyfinClient, MediaItem, VideoItemDetail, VideoLibraryItem, VideoSeasonEpisodes,
+  };
   use jellypilot_mpv::playback::{
     NowPlayingItem, PlaybackEndReason, PlaybackOutcome, PlaybackRefreshOutcome,
     PlaybackRefreshState, PlaybackSelection, PlaybackSnapshot,
@@ -1599,6 +1847,386 @@ mod tests {
     );
     surface.view = surface.session.view();
     (surface, kernel)
+  }
+
+  #[test]
+  fn library_episode_derives_its_season_queue_request() {
+    let (season, request) = episode_queue_request(&Playable::Library(episode("episode-1", 2)))
+      .expect("library episode should identify its season");
+
+    assert_eq!(
+      (season.series_id.as_str(), season.season_number),
+      ("show-1", 2)
+    );
+    assert_eq!(
+      (request.series_id.as_str(), request.season_number),
+      ("show-1", Some(2))
+    );
+    assert!(request.season_id.is_none());
+  }
+
+  #[test]
+  fn detail_episode_derives_its_season_queue_request() {
+    let (season, request) = episode_queue_request(&Playable::Detail(detail_with_series_poster(
+      "episode-1",
+      "poster",
+    )))
+    .expect("detail episode should identify its season");
+
+    assert_eq!(
+      (season.series_id.as_str(), season.season_number),
+      ("show-1", 3)
+    );
+    assert_eq!(
+      (request.series_id.as_str(), request.season_number),
+      ("show-1", Some(3))
+    );
+    assert!(request.season_id.is_none());
+  }
+
+  #[test]
+  fn media_episode_derives_its_season_queue_request() {
+    let (season, request) = episode_queue_request(&Playable::Media(media_item("episode-1")))
+      .expect("media episode should identify its season");
+
+    assert_eq!(
+      (season.series_id.as_str(), season.season_number),
+      ("series-1", 1)
+    );
+    assert_eq!(
+      (request.series_id.as_str(), request.season_number),
+      ("series-1", Some(1))
+    );
+    assert!(request.season_id.is_none());
+  }
+
+  #[test]
+  fn successful_episode_start_enters_queue_loading_state() {
+    let (mut surface, mut kernel) = test_fixture();
+    kernel.client = Some(Arc::new(JellyfinClient::new()));
+    let now = Instant::now();
+    surface.session.handle(
+      PlaybackInput::Event(PlaybackEvent::EngineAvailability(true)),
+      now,
+    );
+    let started = Playable::Library(episode("episode-1", 1));
+    let effects = surface.session.handle(
+      PlaybackInput::Intent(PlaybackIntent::Start {
+        item: started.clone(),
+        position: PlaybackStartPosition::Beginning,
+        intro: IntroAvailability {
+          mode: IntroSkipMode::Off,
+          skipper_available: false,
+        },
+        selection: Box::default(),
+      }),
+      now,
+    );
+    let (id, _) = controller_effect(effects);
+
+    drop(update_playback(
+      &mut surface,
+      &mut kernel,
+      false,
+      PlaybackMessage::ControllerSettled {
+        id,
+        settlement: Box::new(ControllerSettlement::Started(Ok(PlaybackOutcome {
+          snapshot: playback_snapshot(0.0),
+          warnings: Vec::new(),
+        }))),
+        started: Some(Box::new(started)),
+        tracks: None,
+      },
+    ));
+
+    assert!(matches!(surface.queue, QueueState::Loading));
+  }
+
+  #[test]
+  fn same_season_start_reuses_the_active_queue_load() {
+    let (mut surface, mut kernel) = test_fixture();
+    kernel.client = Some(Arc::new(JellyfinClient::new()));
+    let first = Playable::Library(episode("episode-1", 1));
+    surface.playable = Some(first.clone());
+
+    let first_task = load_queue_after_start(&mut surface, &kernel, &first);
+    let generation = surface.queue_generation;
+    let active = surface.active_queue_load.clone();
+    let second_task = load_queue_after_start(
+      &mut surface,
+      &kernel,
+      &Playable::Library(episode("episode-2", 1)),
+    );
+
+    assert_eq!(first_task.units(), 1);
+    assert_eq!(second_task.units(), 0);
+    assert_eq!(surface.queue_generation, generation);
+    assert_eq!(surface.active_queue_load, active);
+  }
+
+  #[test]
+  fn ready_queue_is_reused_by_exact_season_even_when_started_item_is_absent() {
+    let (mut surface, kernel) = test_fixture();
+    let session = kernel.request_gate.current_session();
+    surface.queue = QueueState::Ready(vec![episode("episode-1", 1)]);
+    surface.queue_session = Some(session);
+    surface.queue_season = Some(QueueSeasonKey {
+      series_id: "show-1".to_owned(),
+      season_number: 1,
+    });
+    surface.queue_menu_open = true;
+
+    let task = load_queue_after_start(
+      &mut surface,
+      &kernel,
+      &Playable::Library(episode("episode-not-in-result", 1)),
+    );
+
+    assert_eq!(task.units(), 0);
+    assert!(matches!(
+      &surface.queue,
+      QueueState::Ready(items) if items.len() == 1
+    ));
+    assert!(surface.queue_menu_open);
+  }
+
+  #[test]
+  fn ready_queue_is_not_reused_for_another_exact_season_key() {
+    let (mut surface, mut kernel) = test_fixture();
+    kernel.client = Some(Arc::new(JellyfinClient::new()));
+    let session = kernel.request_gate.current_session();
+    surface.queue = QueueState::Ready(vec![episode("shared-id", 1)]);
+    surface.queue_session = Some(session);
+    surface.queue_season = Some(QueueSeasonKey {
+      series_id: "another-show".to_owned(),
+      season_number: 1,
+    });
+    let playable = Playable::Library(episode("shared-id", 1));
+    surface.playable = Some(playable.clone());
+
+    let task = load_queue_after_start(&mut surface, &kernel, &playable);
+
+    assert_eq!(task.units(), 1);
+    assert!(matches!(surface.queue, QueueState::Loading));
+    assert_eq!(
+      surface
+        .queue_season
+        .as_ref()
+        .map(|season| season.series_id.as_str()),
+      Some("show-1")
+    );
+  }
+
+  #[test]
+  fn failed_queue_retries_on_a_later_successful_episode_start() {
+    let (mut surface, mut kernel) = test_fixture();
+    let playable = Playable::Library(episode("episode-1", 1));
+    surface.playable = Some(playable.clone());
+
+    let unavailable_task = load_queue_after_start(&mut surface, &kernel, &playable);
+    assert_eq!(unavailable_task.units(), 0);
+    assert!(matches!(surface.queue, QueueState::Failed));
+
+    kernel.client = Some(Arc::new(JellyfinClient::new()));
+    let retry_task = load_queue_after_start(&mut surface, &kernel, &playable);
+
+    assert_eq!(retry_task.units(), 1);
+    assert!(matches!(surface.queue, QueueState::Loading));
+    assert!(surface.active_queue_load.is_some());
+  }
+
+  #[test]
+  fn same_season_completion_applies_after_current_item_changes() {
+    let (mut surface, mut kernel) = test_fixture();
+    kernel.client = Some(Arc::new(JellyfinClient::new()));
+    let first = Playable::Library(episode("episode-1", 1));
+    surface.playable = Some(first.clone());
+    drop(load_queue_after_start(&mut surface, &kernel, &first));
+    let active = surface
+      .active_queue_load
+      .clone()
+      .expect("queue request should be active");
+    surface.playable = Some(Playable::Library(episode("episode-2", 1)));
+
+    apply_queue_loaded(
+      &mut surface,
+      &kernel,
+      active.session,
+      active.generation,
+      active.season.series_id,
+      active.season.season_number,
+      Ok(VideoSeasonEpisodes {
+        series_id: "show-1".to_owned(),
+        season_id: None,
+        season_number: Some(1),
+        episodes: vec![
+          episode("episode-1", 1),
+          episode("episode-2", 1),
+          episode("episode-3", 1),
+        ],
+      }),
+    );
+
+    assert!(matches!(
+      &surface.queue,
+      QueueState::Ready(items)
+        if items.iter().map(|item| item.id.as_str()).eq([
+          "episode-1",
+          "episode-2",
+          "episode-3",
+        ])
+    ));
+    assert!(surface.active_queue_load.is_none());
+  }
+
+  #[test]
+  fn completion_from_prior_session_is_rejected_after_clear_and_relogin() {
+    let (mut surface, mut kernel) = test_fixture();
+    kernel.client = Some(Arc::new(JellyfinClient::new()));
+    let playable = Playable::Library(episode("episode-1", 1));
+    surface.playable = Some(playable.clone());
+    drop(load_queue_after_start(&mut surface, &kernel, &playable));
+    let stale = surface
+      .active_queue_load
+      .clone()
+      .expect("queue request should be active");
+
+    clear_queue(&mut surface);
+    assert_ne!(surface.queue_generation, stale.generation);
+    let new_session = kernel.request_gate.begin_login();
+    assert_ne!(stale.session, new_session);
+    apply_queue_loaded(
+      &mut surface,
+      &kernel,
+      stale.session,
+      stale.generation,
+      stale.season.series_id,
+      stale.season.season_number,
+      Ok(VideoSeasonEpisodes {
+        series_id: "show-1".to_owned(),
+        season_id: None,
+        season_number: Some(1),
+        episodes: vec![episode("stale", 1)],
+      }),
+    );
+
+    assert!(matches!(surface.queue, QueueState::Unavailable));
+    assert!(surface.active_queue_load.is_none());
+  }
+
+  #[test]
+  fn superseded_queue_completion_cannot_replace_new_season_load() {
+    let (mut surface, mut kernel) = test_fixture();
+    kernel.client = Some(Arc::new(JellyfinClient::new()));
+    let season_one = Playable::Library(episode("season-1-episode", 1));
+    surface.playable = Some(season_one.clone());
+    drop(load_queue_after_start(&mut surface, &kernel, &season_one));
+    let stale = surface
+      .active_queue_load
+      .clone()
+      .expect("first queue request should be active");
+    let season_two = Playable::Library(episode("season-2-episode", 2));
+    surface.playable = Some(season_two.clone());
+    drop(load_queue_after_start(&mut surface, &kernel, &season_two));
+    let current = surface
+      .active_queue_load
+      .clone()
+      .expect("second queue request should be active");
+
+    apply_queue_loaded(
+      &mut surface,
+      &kernel,
+      stale.session,
+      stale.generation,
+      stale.season.series_id,
+      stale.season.season_number,
+      Ok(VideoSeasonEpisodes {
+        series_id: "show-1".to_owned(),
+        season_id: None,
+        season_number: Some(1),
+        episodes: vec![episode("stale", 1)],
+      }),
+    );
+
+    assert!(matches!(surface.queue, QueueState::Loading));
+    assert_eq!(surface.active_queue_load, Some(current));
+  }
+
+  #[test]
+  fn completion_is_rejected_when_current_playable_has_another_season() {
+    let (mut surface, mut kernel) = test_fixture();
+    kernel.client = Some(Arc::new(JellyfinClient::new()));
+    let requested = Playable::Library(episode("episode-1", 1));
+    surface.playable = Some(requested.clone());
+    drop(load_queue_after_start(&mut surface, &kernel, &requested));
+    let active = surface
+      .active_queue_load
+      .clone()
+      .expect("queue request should be active");
+    surface.playable = Some(Playable::Library(episode("episode-2", 2)));
+
+    apply_queue_loaded(
+      &mut surface,
+      &kernel,
+      active.session,
+      active.generation,
+      active.season.series_id,
+      active.season.season_number,
+      Ok(VideoSeasonEpisodes {
+        series_id: "show-1".to_owned(),
+        season_id: None,
+        season_number: Some(1),
+        episodes: vec![episode("wrong-season", 1)],
+      }),
+    );
+
+    assert!(matches!(surface.queue, QueueState::Loading));
+    assert!(surface.active_queue_load.is_some());
+  }
+
+  #[test]
+  fn non_episode_start_clears_queue_and_menu() {
+    let (mut surface, kernel) = test_fixture();
+    surface.queue = QueueState::Ready(vec![episode("episode-1", 1)]);
+    surface.queue_menu_open = true;
+    let mut movie = episode("movie-1", 1);
+    movie.item_type = "Movie".to_owned();
+    movie.series_id = None;
+    movie.season_number = None;
+
+    drop(load_queue_after_start(
+      &mut surface,
+      &kernel,
+      &Playable::Library(movie),
+    ));
+
+    assert!(matches!(surface.queue, QueueState::Unavailable));
+    assert!(!surface.queue_menu_open);
+  }
+
+  #[test]
+  fn queue_item_selection_builds_resume_start_with_default_tracks() {
+    let item = episode("episode-2", 1);
+    let intro = IntroAvailability {
+      mode: IntroSkipMode::Manual,
+      skipper_available: true,
+    };
+
+    let PlaybackIntent::Start {
+      item: Playable::Library(selected),
+      position,
+      intro: selected_intro,
+      selection,
+    } = queue_item_start_intent(item, intro)
+    else {
+      panic!("queue row should build a library start intent");
+    };
+
+    assert_eq!(selected.id, "episode-2");
+    assert_eq!(position, PlaybackStartPosition::Resume);
+    assert_eq!(*selection, PlaybackSelection::default());
+    assert_eq!(selected_intro.mode, IntroSkipMode::Manual);
+    assert!(selected_intro.skipper_available);
   }
 
   #[test]

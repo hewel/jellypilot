@@ -17,7 +17,8 @@ use jellypilot_media_server::artwork::{ArtworkError, ArtworkLoadSummary, Artwork
 use jellypilot_media_server::home::HomeDataResult;
 use jellypilot_media_server::{
   JellyfinClient, MediaItem, MediaServerProvider, VideoItemDetail, VideoLibraryItem,
-  VideoLibraryPlayedFilter, VideoLibrarySort, VideoSeasonEpisodesPage, VideoUserDataUpdate,
+  VideoLibraryPlayedFilter, VideoLibrarySort, VideoSeasonEpisodes, VideoSeasonEpisodesPage,
+  VideoUserDataUpdate,
 };
 use jellypilot_mpv::playback::{Playable, PlaybackError, PlaybackSelection, TrackInfo};
 use jellypilot_mpv::playback_session::{
@@ -216,6 +217,16 @@ pub enum PlaybackMessage {
   SubtitleMenuToggled,
   SubtitleMenuDismissed,
   SubtitleTrackSelected(Option<i64>),
+  QueueMenuToggled,
+  QueueMenuDismissed,
+  QueueItemSelected(VideoLibraryItem),
+  QueueLoaded {
+    session: SessionToken,
+    generation: u64,
+    series_id: String,
+    season_number: i32,
+    result: Result<VideoSeasonEpisodes, String>,
+  },
   ControllerSettled {
     id: EffectId,
     settlement: Box<ControllerSettlement>,

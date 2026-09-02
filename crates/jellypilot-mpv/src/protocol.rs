@@ -157,10 +157,13 @@ impl MpvCommand {
   ///
   /// MPV sub-add format: `sub-add <url> [<flags> [<title> [<lang>]]]`
   /// Flags: "select" (select immediately), "auto" (don't select), "cached" (cache only)
-  pub fn sub_add(url: &str, flags: Option<&str>) -> Self {
-    let mut args: Vec<serde_json::Value> = vec!["sub-add".into(), url.into()];
-    if let Some(f) = flags {
-      args.push(f.into());
+  pub fn sub_add(url: &str, flags: &str, title: Option<&str>, language: Option<&str>) -> Self {
+    let mut args: Vec<serde_json::Value> = vec!["sub-add".into(), url.into(), flags.into()];
+    if title.is_some() || language.is_some() {
+      args.push(title.unwrap_or_default().into());
+    }
+    if let Some(language) = language {
+      args.push(language.into());
     }
     Self::new(args)
   }
@@ -282,7 +285,7 @@ mod tests {
   #[test]
   fn command_debug_redacts_external_subtitle_url() {
     let secret_url = "https://media.example/subtitle?api_key=secret-subtitle-token";
-    let command = MpvCommand::sub_add(secret_url, Some("select"));
+    let command = MpvCommand::sub_add(secret_url, "select", None, None);
 
     let debug = format!("{command:?}");
     let expected = format!(
@@ -291,6 +294,27 @@ mod tests {
     );
 
     assert_eq!(debug, expected);
+  }
+
+  #[test]
+  fn sub_add_includes_title_and_language_metadata() {
+    let command = MpvCommand::sub_add(
+      "https://media.example/subtitle",
+      "auto",
+      Some("Spanish"),
+      Some("spa"),
+    );
+
+    assert_eq!(
+      command.command,
+      vec![
+        "sub-add",
+        "https://media.example/subtitle",
+        "auto",
+        "Spanish",
+        "spa",
+      ]
+    );
   }
 
   #[test]

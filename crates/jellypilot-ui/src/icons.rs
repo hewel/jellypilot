@@ -88,7 +88,7 @@ impl From<f32> for IconSize {
     }
 }
 
-const ICON_COUNT: usize = 53;
+const ICON_COUNT: usize = 54;
 static ICON_HANDLES: LazyLock<[Handle; ICON_COUNT]> = LazyLock::new(|| {
     let mut handles = std::array::from_fn(|_| Handle::from_memory(&[]));
     for icon in Icon::all() {
@@ -111,6 +111,7 @@ pub enum Icon {
     AudioTrack,
     Subtitles,
     IntroSkip,
+    Playlist,
 
     // Navigation & library types
     Home,
@@ -180,6 +181,7 @@ impl Icon {
             Self::AudioTrack => include_bytes!("../assets/icons/headphones.svg"),
             Self::Subtitles => include_bytes!("../assets/icons/subtitles.svg"),
             Self::IntroSkip => include_bytes!("../assets/icons/sparkles.svg"),
+            Self::Playlist => include_bytes!("../assets/icons/playlist.svg"),
 
             Self::Home => include_bytes!("../assets/icons/home.svg"),
             Self::Movie => include_bytes!("../assets/icons/movie.svg"),
@@ -269,6 +271,7 @@ impl Icon {
             Self::AudioTrack,
             Self::Subtitles,
             Self::IntroSkip,
+            Self::Playlist,
             Self::Home,
             Self::Movie,
             Self::Tv,

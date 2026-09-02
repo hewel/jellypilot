@@ -2,6 +2,14 @@
 
 All notable changes to JellyPilot are documented in this file.
 
+## [Unreleased]
+
+### Added
+- Added a current-season episode queue to the playback bar and compact player, with direct episode selection through the existing playback lifecycle.
+
+### Fixed
+- Loaded server-hosted external subtitle tracks into MPV so they appear in playback controls and the selected default subtitle is displayed.
+
 ## [1.4.2] - 2026-07-23
 
 ### Added
