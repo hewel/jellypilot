@@ -7,6 +7,9 @@ All notable changes to JellyPilot are documented in this file.
 ### Added
 - Added a current-season episode queue to the playback bar and compact player, with direct episode selection through the existing playback lifecycle.
 
+### Changed
+- Raised the minimum supported Rust version to 1.98.
+
 ### Fixed
 - Loaded server-hosted external subtitle tracks into MPV so they appear in playback controls and the selected default subtitle is displayed.
 

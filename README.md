@@ -5,7 +5,7 @@
 # JellyPilot
 
 [![CI](https://github.com/hewel/jellypilot/actions/workflows/ci.yml/badge.svg)](https://github.com/hewel/jellypilot/actions/workflows/ci.yml)
-[![Rust](https://img.shields.io/badge/Rust-1.88+-orange?logo=rust)](https://www.rust-lang.org/)
+[![Rust](https://img.shields.io/badge/Rust-1.98+-orange?logo=rust)](https://www.rust-lang.org/)
 [![iced](https://img.shields.io/badge/iced-0.14-blue)](https://iced.rs/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 [![AUR](https://img.shields.io/aur/version/jellypilot?label=AUR&logo=archlinux)](https://aur.archlinux.org/packages/jellypilot)
@@ -81,9 +81,9 @@ paru -S jellypilot
 <details>
 <summary>Development prerequisites</summary>
 
-- [Rust](https://rustup.rs/) 1.88 or newer
+- [Rust](https://rustup.rs/) 1.98 or newer
 - [Bun](https://bun.sh/) 1.3.14 or newer (task dispatcher only — there is no JavaScript frontend)
-- Linux: `libxkbcommon` and Wayland development packages
+- Linux: GTK 3, `libxkbcommon`, and Wayland development packages
 
 </details>
 

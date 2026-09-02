@@ -24,7 +24,7 @@ use jellypilot_mpv::playback::{Playable, PlaybackError, PlaybackSelection, Track
 use jellypilot_mpv::playback_session::{
   AdjacentDirection, ControllerSettlement, EffectId, PlaybackEvent, PlaybackIntent,
 };
-use jellypilot_session::JellyfinWebSocketEvent;
+use jellypilot_session::{CapabilityRegistrationError, JellyfinWebSocketEvent};
 
 use super::state::RemoteSessionHandle;
 
@@ -285,7 +285,7 @@ pub enum RemoteMessage {
   },
   Finalized {
     remote: RemoteToken,
-    result: Result<bool, ()>,
+    result: Result<bool, CapabilityRegistrationError>,
   },
   PlayResolved {
     remote: RemoteToken,

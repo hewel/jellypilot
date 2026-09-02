@@ -392,7 +392,7 @@ pub(crate) fn start_remote_session(surface: &mut Surface, kernel: &mut Kernel) -
       }
       let validated = match finalize_remote_target(&client).await {
         Ok(validated) => validated,
-        Err(()) => {
+        Err(_) => {
           websocket.disconnect().await;
           let _ = forwarder.await;
           return Err(RemoteStartError::CapabilityRegistrationFailed);
@@ -501,7 +501,7 @@ fn handle_remote(
           );
           Task::none()
         }
-        Err(()) => fail_remote_finalization(surface, kernel),
+        Err(_) => fail_remote_finalization(surface, kernel),
       }
     }
     RemoteMessage::PlayResolved {

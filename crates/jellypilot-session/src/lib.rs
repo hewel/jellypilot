@@ -11,6 +11,6 @@ pub use intro_skipper::{
 };
 pub use remote_control::{
     finalize_remote_target, remote_index_value, remote_state_after_event, remote_volume_value,
-    RemoteControlState,
+    CapabilityRegistrationError, RemoteControlState,
 };
 pub use websocket::{JellyfinCommand, JellyfinWebSocket, JellyfinWebSocketEvent};

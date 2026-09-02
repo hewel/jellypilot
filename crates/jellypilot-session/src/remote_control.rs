@@ -48,6 +48,18 @@ pub fn remote_index_value(value: Option<&Value>) -> Option<i64> {
     }
 }
 
+/// Capability registration was rejected while finalizing a remote target.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct CapabilityRegistrationError;
+
+impl std::fmt::Display for CapabilityRegistrationError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("remote-control capability registration failed")
+    }
+}
+
+impl std::error::Error for CapabilityRegistrationError {}
+
 /// Registers remote-control capabilities before informational session validation.
 ///
 /// A fresh socket session may not be visible to validation yet, so validation
@@ -55,13 +67,15 @@ pub fn remote_index_value(value: Option<&Value>) -> Option<i64> {
 ///
 /// # Errors
 ///
-/// Returns `Err(())` when capability registration is rejected.
-pub async fn finalize_remote_target(client: &JellyfinClient) -> Result<bool, ()> {
+/// Returns [`CapabilityRegistrationError`] when capability registration is rejected.
+pub async fn finalize_remote_target(
+    client: &JellyfinClient,
+) -> Result<bool, CapabilityRegistrationError> {
     client
         .playback()
         .report_iced_capabilities_checked()
         .await
-        .map_err(|_| ())?;
+        .map_err(|_| CapabilityRegistrationError)?;
     Ok(client.playback().validate_session().await.is_ok())
 }
 
@@ -179,7 +193,10 @@ mod tests {
         ]);
         run_async(async {
             let client = authenticated_client(server_url).await;
-            assert!(finalize_remote_target(&client).await.is_err());
+            let error = finalize_remote_target(&client)
+                .await
+                .expect_err("rejected capability registration should fail finalization");
+            assert_eq!(error, CapabilityRegistrationError);
         });
     }
 
