@@ -1,21 +1,17 @@
 <div align="center">
 
-<img src="docs/assets/banner.png" alt="JellyPilot — Jellyfin + Emby · External MPV. A high-performance desktop client built around your MPV setup." width="100%" />
+<img src="assets/promo/hero.webp" alt="JellyPilot — a native Jellyfin and Emby companion that plays through your own MPV." width="100%" />
 
 # JellyPilot
 
 [![CI](https://github.com/hewel/jellypilot/actions/workflows/ci.yml/badge.svg)](https://github.com/hewel/jellypilot/actions/workflows/ci.yml)
-[![Rust](https://img.shields.io/badge/Rust-1.70+-orange?logo=rust)](https://www.rust-lang.org/)
-[![Tauri](https://img.shields.io/badge/Tauri-v2-blue?logo=tauri)](https://v2.tauri.app/)
-[![Solid.js](https://img.shields.io/badge/Solid.js-1.x-blue?logo=solid)](https://www.solidjs.com/)
+[![Rust](https://img.shields.io/badge/Rust-1.98+-orange?logo=rust)](https://www.rust-lang.org/)
+[![iced](https://img.shields.io/badge/iced-0.14-blue)](https://iced.rs/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
-[![AUR](https://img.shields.io/aur/version/jellypilot?label=AUR&logo=archlinux)](https://aur.archlinux.org/packages/jellypilot)
 
-**A high-performance Jellyfin and Emby desktop client that controls an external MPV player.**
+**A native Jellyfin and Emby companion: library browser, cast receiver, and playback controller — always playing through your own MPV.**
 
-Built with Tauri v2, Solid.js, and Rust.
-
-[Features](#-features) • [Roadmap](#️-roadmap) • [Quick Start](#-quick-start) • [Architecture](#-architecture) • [Troubleshooting](#-troubleshooting)
+Custom-drawn with Rust and [iced](https://iced.rs/). Cross-platform. No webview, no embedded player, no forced transcoding.
 
 </div>
 
@@ -23,151 +19,90 @@ Built with Tauri v2, Solid.js, and Rust.
 
 ## 📖 Overview
 
-JellyPilot lets you sign in to Jellyfin or Emby, browse your video libraries, and play media in MPV with full support for your custom configurations, shaders, and scripts. For Jellyfin, JellyPilot can also register as a cast target for playback from other Jellyfin clients.
+JellyPilot signs in to Jellyfin or Emby, browses your video libraries, and drives **External MPV Playback**: a standalone MPV process controlled over JSON IPC. Your MPV configuration, shaders, and scripts stay in charge — JellyPilot never embeds `libmpv`, never uses a webview, and never asks the server to transcode.
 
-> **💡 Key Philosophy**
->
-> JellyPilot does **NOT** embed `libmpv`. Instead, it spawns and controls a standalone MPV process via JSON IPC. This preserves your existing `mpv.conf`, shader packs (Anime4K, FSR, etc.), and all local customizations without compromise.
+Jellyfin clients can discover JellyPilot as a cast target. Both Jellyfin and Emby sessions can mirror supported remote transport commands to the app, the player bar, and the system tray.
+
+## 🖼️ Screenshots
+
+### Full library and playback
+
+<a href="assets/screenshots/Screenshot%20from%202026-09-02%2017-30-56.png">
+  <img src="assets/screenshots/readme-home.webp" alt="JellyPilot dark theme home screen with Continue Watching, Next Up, and the playback control bar." width="100%" />
+</a>
+
+<p align="center"><sub>Dark theme · Home and playback controls</sub></p>
+
+### Library browsing
+
+<a href="assets/screenshots/Screenshot%20from%202026-09-02%2017-29-31.png">
+  <img src="assets/screenshots/readme-library.webp" alt="JellyPilot light theme movie library with filters and a poster grid." width="100%" />
+</a>
+
+<p align="center"><sub>Light theme · Movie library and filters</sub></p>
+
+### Control-Only mode
+
+<p align="center">
+  <a href="assets/screenshots/Screenshot%20from%202026-09-02%2017-31-01.png">
+    <img src="assets/screenshots/readme-control.webp" alt="JellyPilot dark Control-Only window with artwork, timeline, transport controls, queue, audio, subtitles, and volume." width="52%" />
+  </a>
+</p>
+
+<p align="center"><sub>Control-Only mode · Queue, tracks, transport, and volume</sub></p>
 
 ## ✨ Features
 
-| Feature | Description |
-| :--- | :--- |
-| 🎞️ **Jellyfin + Emby** | Connect to Jellyfin or Emby servers with saved service profiles |
-| 📚 **Library Browser** | Browse Movies and Shows, open item details, and start playback from the desktop app |
-| 📺 **Jellyfin Cast Target** | Appears as a controllable device in Jellyfin's cast menu |
-| 🚀 **External MPV** | Full compatibility with your system MPV configuration and shaders |
-| 🛡️ **Type-Safe** | 100% type-safe Rust-to-TypeScript communication via `tauri-specta` |
-| 🔒 **Persistent Auth** | Login once, stay connected with secure token storage |
-| 🔑 **Jellyfin Quick Connect** | Authenticate with Jellyfin by approving a one-time code on another device |
-| 🔄 **Auto-Reconnect** | Resilient WebSocket connection with exponential backoff strategy |
-| ⏭️ **Smart Playback** | Automatically plays the next episode when the current one finishes |
-| ✂️ **Jellyfin Intro Skipper** | Automatically skips Intro Skipper plugin introduction and credit ranges |
-| 🧠 **Series Memory** | Remembers audio/subtitle language preferences per TV series |
-| ⌨️ **Shortcuts** | Use configurable MPV shortcuts (`Shift+>` / `Shift+<` by default) to skip episodes |
-| 🖥️ **System Tray** | Runs quietly in the background with quick access controls |
-| 🍏 **Cross-Platform** | Native support for Windows, macOS, and Linux |
+| Feature                       | Description                                                                                          |
+| :---------------------------- | :--------------------------------------------------------------------------------------------------- |
+| 🎞️ **Jellyfin + Emby**        | Connect to Jellyfin or Emby servers with saved service profiles                                      |
+| 📚 **Library Browser**        | Movies, shows, and search with persisted filters, virtualized grids, and disk-cached artwork         |
+| ⭐ **User Data Actions**     | Favorite or unfavorite items and mark them played or unplayed directly from item details             |
+| 📺 **Jellyfin Cast Target**   | Appears as a controllable device in Jellyfin's cast menu                                             |
+| 🚀 **External MPV Playback**  | Standalone MPV over JSON IPC; your configuration, shaders, and scripts apply to the original source  |
+| 📑 **Episode Queue**          | Current-season episode list in the player bar and compact player — click any episode to switch       |
+| 💬 **External Subtitles**     | Server-hosted external subtitle tracks loaded into MPV, with the default selection applied           |
+| ✂️ **Intro Skipper**          | Skips Jellyfin Intro Skipper plugin intro and credit ranges during playback                          |
+| 🌐 **Subtitle Preferences**  | Configurable preferred subtitle languages passed directly to MPV                                    |
+| ⏭️ **Smart Playback**         | Automatic next episode on natural end, plus episode navigation from the player bar or tray           |
+| 🎛️ **Control-Only Mode**      | A compact always-on-top-style controller window without the library shell                            |
+| 🌗 **Light + Dark Themes**    | System-following palettes from one design-token set                                                  |
+| 🔒 **Persistent Auth**        | Login once, stay connected; access tokens live in the OS keychain                                    |
+| 🔑 **Jellyfin Quick Connect** | Authenticate by approving a one-time code on another device                                          |
+| 🔄 **Auto-Reconnect**         | Resilient WebSocket connection with exponential backoff                                              |
+| ⌨️ **Shortcuts**              | Configurable shortcuts: `Shift+>` / `Shift+<` for episodes and `g` for intro skipping by default     |
+| 🖥️ **System Tray**            | Background operation with transport controls, show window, and quit                                  |
+| 🍏 **Cross-Platform**         | Native support for Windows, macOS, and Linux from one custom-drawn codebase                          |
 
 ## 🧩 Server Support
 
-| Server | Supported | Notes |
-| :--- | :--- | :--- |
-| **Jellyfin** | ✅ | Password login, Quick Connect, saved profiles, library browsing, MPV playback, cast target registration, remote control, and Intro Skipper plugin support |
-| **Emby** | ✅ | Password login, saved profiles, library browsing, MPV playback, remote control, and playback progress reporting |
+| Server       | Supported | Notes                                                                                                                                          |
+| :----------- | :-------- | :--------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Jellyfin** | ✅        | Password login, Quick Connect, saved profiles, library browsing, user data actions, MPV playback, cast target registration, remote control, Intro Skipper support |
+| **Emby**     | ✅        | Password login, saved profiles, library browsing, user data actions, MPV playback, remote control, and playback progress reporting                                |
 
 Emby support uses the same library and player workflow as Jellyfin where the server APIs are compatible. Jellyfin-specific features such as Quick Connect and the Jellyfin Intro Skipper plugin are not advertised for Emby connections.
 
 ## 🗺️ Roadmap
 
-- [x] **[Quick Connect](https://jellyfin.org/docs/general/server/quick-connect/)** - Login via code from another device
-- [x] **[Intro Skipper](https://github.com/intro-skipper/intro-skipper) Integration** - Auto-skip intros/credits
-- [ ] **Full-Featured Client UI** - Browse libraries, manage media, and control playback like other media server clients
-- [ ] **Embedded Player** - Optional built-in video player without external MPV dependency
-- [ ] **MPRIS Support** - Linux media player integration for desktop controls
-
-## 📦 Release Notes
-
-### v1.4.2
-
-- Added Emby media server support: login, library browsing, playback, and progress reporting.
-- Completed full Panda CSS styling cutover across all application surfaces.
-- Added collapsible sidebar with compositor-animated FLIP transitions.
-- Virtualized large browse grids with prefetched paging and persisted filter state.
-- Redesigned item detail pages for desktop with back navigation and scroll restore.
-- Published to the AUR as [`jellypilot`](https://aur.archlinux.org/packages/jellypilot).
-
-### v1.4.1
-
-- Migrated navigation and layout architecture to TanStack Router file-based nested routing.
-- Adopted vanilla-extract for design tokens and component-specific styling.
-- Added media info hover-cards, playback stream selection, and Intro Skipper manual skip prompt.
-- Migrated from Biome to Oxc linting/formatting.
-
-### v1.4.0
-
-- Added saved-session route gating and automatic reconnect through the authenticated session access path.
-- Added mute-state visibility to the Now Playing controls.
-- Improved Player Bridge command handling, playback control sharing, and Jellyfin websocket ownership for more reliable external MPV control.
-
-### v1.3.2
-
-- Migrated login, diagnostics, settings, subtitle priorities, session dialog, and now playing controls to headless Ark UI Solid primitives while preserving JellyPilot Control Room styling and behavior.
-### v1.3.1
-
-- Added Arch Linux `.pkg.tar.zst` release packaging.
-
-### v1.3.0
-
-- Added Intro Skipper plugin support for automatic introduction and credit skips.
-- Added a global Automation toggle to enable or disable Intro Skipper behavior.
-- Added once-per-session skip semantics so manual seeks back into skipped ranges are respected.
-- Added verification coverage for plugin failures, malformed ranges, disabled behavior, progress reporting, and existing track controls.
-
-## 🏗️ Architecture
-
-JellyPilot utilizes a robust three-actor architecture to ensure stability and separation of concerns.
-
-```mermaid
-graph LR
-    subgraph JellyPilot[JellyPilot Desktop App]
-        A[<b>Sentinel</b><br>Tauri GUI]
-        B[<b>Bridge</b><br>Rust Backend]
-        A <--> B
-    end
-    
-    B <-->|JSON IPC| C[<b>Player</b><br>External MPV]
-    B <-->|WebSocket + REST| D[<b>Jellyfin / Emby Server</b>]
-    
-    style A fill:#00a4dc,stroke:#333,color:white
-    style B fill:#dea584,stroke:#333,color:black
-    style C fill:#4c3c69,stroke:#333,color:white
-    style D fill:#aa5cc3,stroke:#333,color:white
-```
-
-1.  **Sentinel (Tauri GUI)**: Handles UI, server connection, and state management.
-2.  **Bridge (Rust IPC)**: Translates commands and manages the external process.
-3.  **Player (MPV)**: The standalone media player instance running your config.
+- [ ] **MPRIS support** — Linux desktop media-player integration for keys and widgets
 
 ## 🚀 Quick Start
 
-### Prerequisites
+### Runtime prerequisites
 
-*   [MPV](https://mpv.io/) installed and in PATH
+- [MPV](https://mpv.io/) available on `PATH` or selected explicitly in Settings — it is the only playback engine.
 
 ### Installation
 
-#### Download Pre-built Binaries (Recommended)
+#### Arch Linux
 
-Download the latest release for your platform from the [Releases page](https://github.com/hewel/jellypilot/releases):
-
-| Platform | Download |
-| :--- | :--- |
-| **Windows** | `.msi` (installer) or `.exe` (NSIS) |
-| **macOS** | `.dmg` |
-| **Linux** | `.deb`, `.AppImage`, or Arch Linux `.pkg.tar.zst` |
-
-#### Arch Linux (AUR)
-
-Install from the [AUR](https://aur.archlinux.org/packages/jellypilot) with any AUR helper:
+Until `jellypilot-bin` is published to the AUR, download the native
+`jellypilot-2.0.0-1-x86_64.pkg.tar.zst` asset from the
+[v2.0.0 release](https://github.com/hewel/jellypilot/releases/tag/v2.0.0) and install it directly:
 
 ```bash
-yay -S jellypilot
-# or
-paru -S jellypilot
-```
-
-Or build manually:
-
-```bash
-git clone https://aur.archlinux.org/jellypilot.git
-cd jellypilot
-makepkg -si
-```
-
-Install a pre-built Arch package from a release asset with:
-
-```bash
-sudo pacman -U jellypilot-<version>-1-x86_64.pkg.tar.zst
+sudo pacman -U ./jellypilot-2.0.0-1-x86_64.pkg.tar.zst
 ```
 
 #### Build from Source
@@ -175,153 +110,94 @@ sudo pacman -U jellypilot-<version>-1-x86_64.pkg.tar.zst
 <details>
 <summary>Development prerequisites</summary>
 
-*   [Bun](https://bun.sh/) (or npm/yarn)
-*   [Rust](https://rustup.rs/) (latest stable)
-*   Tauri CLI: `bun add -g @tauri-apps/cli`
+- [Rust](https://rustup.rs/) 1.98 or newer
+- [Bun](https://bun.sh/) 1.3.14 or newer (task dispatcher only — there is no JavaScript frontend)
+- Linux: GTK 3, `libxkbcommon`, and Wayland development packages
 
 </details>
 
 ```bash
-# Clone the repository
 git clone https://github.com/hewel/jellypilot.git
 cd jellypilot
-
-# Install dependencies
-bun install
-
-# Build production binaries
-bunx tauri build
+bun install --frozen-lockfile
+bun run task iced run --release
 ```
 
-Binaries will be in `src-tauri/target/release/bundle/`.
+The release binary is `target/release/jellypilot`.
 
-### Usage Steps
+### Usage
 
-1.  **Launch JellyPilot** from your application menu or terminal.
-2.  **Choose a server type**: Select Jellyfin or Emby on the login screen.
-3.  **Authenticate** with your server URL and credentials. Jellyfin also supports Quick Connect.
-4.  **Browse or Cast Media**: Start playback from JellyPilot's Library view. Jellyfin users can also cast to "JellyPilot" from another Jellyfin client.
-5.  **Optional Jellyfin Intro Skipper**: Install the Jellyfin Intro Skipper plugin and keep Operations Console > Automation > Automatic Intro Skip enabled to skip detected intros and credits.
-6.  **Enjoy**: Media plays in MPV on your desktop with full control syncing.
+1. **Launch JellyPilot** from your application menu or terminal.
+2. **Choose a server type**: Jellyfin or Emby on the login screen.
+3. **Authenticate** with your Server URL and credentials; Jellyfin also supports Quick Connect.
+4. **Browse and manage your library**: open item details to update favorite or played state.
+5. **Play or cast**: start playback directly in JellyPilot, or cast to "JellyPilot" from another Jellyfin client.
+6. **Control playback** from the player bar, the system tray, or a supported Jellyfin/Emby remote session — open the episode queue to jump anywhere in the current season.
+7. **Switch app modes** from Settings: Full library mode, or Control-Only — a compact standalone controller window.
 
-## 🛠️ How It Works
+## 🏗️ Architecture
 
-1.  **Authentication**: User logs into Jellyfin or Emby and receives an access token.
-2.  **Registration**: JellyPilot posts supported capabilities to the active media server.
-3.  **WebSocket**: Connects to the server for real-time play state control when supported.
-4.  **Play Event**: Playback can start from JellyPilot's Library Browser or from Jellyfin cast commands.
-5.  **MPV Control**: JellyPilot spawns MPV (if needed) and sends JSON IPC commands.
-6.  **Progress**: Event-driven progress reporting via MPV property observation.
-7.  **Sync**: Pause/seek/volume commands flow bidirectionally between the server and MPV where supported.
-8.  **Auto-Play**: Automatically fetches the next episode upon natural file end.
+One Rust workspace: `jellypilot-ui` owns the custom iced presentation layer, while the domain and infrastructure crates remain display-free and test-covered.
+
+```mermaid
+flowchart LR
+    subgraph JellyPilot[JellyPilot — iced application]
+        App[src-iced shell and screens]
+        UI[jellypilot-ui design system]
+        Core[jellypilot-core browse/config/diagnostics]
+        Session[jellypilot-session WebSocket remote sessions]
+        MS[jellypilot-media-server HTTP + artwork]
+        Auth[jellypilot-auth login + keyring]
+        Mpv[jellypilot-mpv process lifecycle + IPC]
+        App --> UI
+        App --> Core
+        App --> Session
+        App --> MS
+        App --> Auth
+        App --> Mpv
+    end
+
+    Session <-->|WebSocket| Server[Jellyfin / Emby server]
+    MS <-->|REST| Server
+    Server -->|original/direct source| MPV[External MPV process]
+    Mpv <-->|JSON IPC| MPV
+```
+
+- `src-iced` — the application: shell, screens, tray, subscriptions, orchestration.
+- `crates/jellypilot-ui` — the design system: tokens, theme/Catalog styles, custom widgets, overlay.
+- `crates/jellypilot-core` — display-free browse model, configuration, request gate, diagnostics, artwork load planning.
+- `crates/jellypilot-media-server` — Jellyfin/Emby HTTP adapter over the generated OpenAPI clients in `crates/media-server-api/`.
+- `crates/jellypilot-auth` — login workflows and OS keychain token storage.
+- `crates/jellypilot-mpv` — MPV process lifecycle and JSON IPC protocol.
+- `crates/jellypilot-session` — media-server WebSocket remote-control sessions.
 
 ## 💻 Development
 
-### Project Structure
-
-```bash
-jellypilot/
-├── src/                    # Solid.js frontend
-│   ├── index.tsx          # Entry point
-│   ├── bindings.ts        # Auto-generated IPC bindings
-│   └── components/        # UI components
-├── src-tauri/             # Rust backend
-│   ├── src/
-│   │   ├── jellyfin/      # Jellyfin/Emby client implementation
-│   │   └── mpv/           # MPV IPC driver logic
-│   └── tauri.conf.json    # Tauri configuration
-└── docs/PRD.md            # Product requirements
-```
-
 ### Commands
 
-| Task | Command |
-| :--- | :--- |
-| **Frontend Dev** | `bun run dev` |
-| **Tauri Dev** | `bunx tauri dev` |
-| **Build Prod** | `bunx tauri build` |
-| **Test** | `bun run test` |
-| **Lint/Format** | `bun run check` |
+| Task                       | Command                                     |
+| :------------------------- | :------------------------------------------ |
+| **Run the app**            | `bun run task iced run`                     |
+| **Startup smoke gate**     | `xvfb-run -a bun run task iced run --smoke` |
+| **Check everything**       | `bun run check`                             |
+| **Rust tests**             | `bun run task rust test`                    |
+| **Rust clippy**            | `bun run task rust clippy`                  |
+| **Regenerate API clients** | `bun run task api`                          |
+| **Render promo artwork**   | `bun run task promo`                        |
 
-### 📏 Code Conventions
+### Conventions
 
-*   **TypeScript**: Single quotes, Oxfmt formatting.
-*   **Rust**: 2-space indent (standard `rustfmt.toml`).
-*   **IPC**: Always use typed `commands.*` from bindings, never raw `invoke()`.
-*   **Solid.js**: Use `createSignal`, `createResource` — **NOT** React hooks.
+- **Rust**: formatting is enforced by `bun run task rust fmt`; `unsafe_code` is forbidden workspace-wide; clippy warnings are errors.
+- **Display-free logic** lives in `jellypilot-core` and is tested there; `src-iced` keeps orchestration and views.
+- **Domain language**: [CONTEXT.md](CONTEXT.md) is the glossary; [docs/adr/](docs/adr/) records architecture decisions.
+- **Promo artwork**: `bun run task promo` writes optimized README screenshots to `assets/screenshots/` and regenerates the WebP README hero and promotional assets plus the 1280×640 PNG GitHub social preview in `assets/promo/`.
 
-### ➕ Adding a Tauri Command
+## 📜 Project History
 
-1.  **Add function** in `src-tauri/src/command.rs` with `#[tauri::command]` and `#[specta]`.
-2.  **Register** in `src-tauri/src/lib.rs` inside `collect_commands![]`.
-3.  **Regenerate** bindings by running `bunx tauri dev`.
-4.  **Import** from `commands` in your TypeScript file.
+Releases ≤ 1.4.x shipped a Tauri/Solid.js frontend with an embedded web player and a local FFmpeg HLS pipeline. That stack was retired per [ADR 0027](docs/adr/0027-cross-platform-iced-frontend.md): the iced application always presents External MPV Playback, and settings/saved profiles start fresh — no Tauri Store data is imported.
 
-### Technology Stack
+## 🙏 Credits
 
-| Component | Technology |
-| :--- | :--- |
-| **Framework** | [Tauri v2](https://v2.tauri.app) |
-| **Frontend** | [Solid.js](https://www.solidjs.com) + TypeScript |
-| **Backend** | Rust |
-| **Bundler** | Rsbuild |
-| **Styling** | Panda CSS |
-| **IPC** | tauri-specta |
-| **Linting** | Oxlint |
-| **Testing** | Rstest |
-
-## ❓ Troubleshooting
-
-<details>
-<summary><strong>JellyPilot doesn't appear as a Jellyfin cast target</strong></summary>
-
-*   Ensure you're logged in (check Operations Console shows "Connected").
-*   Refresh the Jellyfin web page after JellyPilot connects.
-*   Check Jellyfin Dashboard > Activity for the JellyPilot session.
-*   Emby support is focused on in-app library playback and remote control, not Jellyfin-style cast discovery.
-</details>
-
-<details>
-<summary><strong>MPV doesn't start</strong></summary>
-
-*   Verify MPV is installed: `mpv --version`.
-*   Check MPV is in PATH (or set explicit path in Operations Console settings).
-*   **Windows (Scoop)**: JellyPilot auto-resolves symlinks, but ensure the shim is valid.
-*   Check Operations Console > Player Bridge settings for detected path.
-</details>
-
-<details>
-<summary><strong>Video doesn't play</strong></summary>
-
-*   Check your Jellyfin or Emby transcoding settings.
-*   Verify network connectivity to your Jellyfin or Emby server.
-*   Check Diagnostics in the Operations Console for error messages.
-</details>
-
-<details>
-<summary><strong>Connection lost</strong></summary>
-
-*   JellyPilot auto-reconnects with exponential backoff (1s → 60s).
-*   Check network connectivity.
-*   Toast notifications will indicate connection status.
-</details>
-
-## 🤝 Contributing
-
-Contributions are welcome! Please follow these steps:
-
-1.  Fork the repository.
-2.  Create a feature branch.
-3.  Follow existing code conventions (Oxc for TS, rustfmt for Rust).
-4.  Run `bun run check` before committing.
-5.  Submit a pull request.
-
-## 📄 License
-
-MIT License - see [LICENSE](LICENSE) for details.
-
-## 🙏 Acknowledgments
-
-*   [jellyfin-mpv-shim](https://github.com/jellyfin/jellyfin-mpv-shim) - The original Python inspiration.
-*   [Tauri](https://tauri.app/) - For the amazing desktop framework.
-*   [MPV](https://mpv.io/) - The best media player in existence.
+- [MPV](https://mpv.io/) — the best media player in existence.
+- [iced](https://iced.rs/) — the cross-platform GUI library this app is drawn with.
+- [Jellyfin](https://jellyfin.org/) and [Emby](https://emby.media/) — the media servers JellyPilot companions.

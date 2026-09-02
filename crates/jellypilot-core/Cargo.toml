@@ -1,0 +1,23 @@
+[package]
+name = "jellypilot-core"
+description = "Framework-independent state machines for JellyPilot"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+version.workspace = true
+
+[dependencies]
+dirs = { version = "6.0.0", optional = true }
+jellypilot-media-server = { path = "../jellypilot-media-server", optional = true }
+serde = { version = "1.0.228", features = ["derive"], optional = true }
+serde_json = { version = "1.0.149", optional = true }
+
+[features]
+default = ["native"]
+native = ["dep:dirs", "dep:jellypilot-media-server", "dep:serde", "dep:serde_json"]
+test-utils = []
+
+[lints]
+workspace = true
+

@@ -1,22 +1,22 @@
 # Maintainer: Hewel
 
 pkgname=jellypilot
-pkgver=1.5.0rc1
+pkgver=2.0.0
 pkgrel=1
-pkgdesc='Jellyfin cast receiver that controls external MPV'
+pkgdesc='Jellyfin and Emby companion app: cast receiver and library browser driving external MPV'
 arch=('x86_64')
 url='https://github.com/hewel/jellypilot'
 license=('MIT')
+# makepkg's default LTOFLAGS (-flto=auto) compile aws-lc-sys's C objects into
+# GCC fat-LTO bitcode that rust-lld cannot link; keep the build non-LTO.
 options=('!lto')
 depends=(
-  'webkit2gtk-4.1'
   'gtk3'
-  'libayatana-appindicator'
-  'librsvg'
   'mpv'
+  'libxkbcommon'
+  'wayland'
 )
 makedepends=(
-  'bun'
   'git'
   'rust'
 )
@@ -32,17 +32,16 @@ sha256sums=(
 build() {
   cd "$srcdir/$pkgname"
 
-  bun install --frozen-lockfile
-  bun tauri build --no-bundle --ci
+  cargo build --release --locked -p jellypilot-iced
 }
 
 package() {
   cd "$srcdir/$pkgname"
 
-  install -Dm755 "src-tauri/target/release/jellypilot" "$pkgdir/usr/bin/jellypilot"
+  install -Dm755 "target/release/jellypilot" "$pkgdir/usr/bin/jellypilot"
   install -Dm644 "$srcdir/top.pigfun.jellypilot.desktop" \
     "$pkgdir/usr/share/applications/top.pigfun.jellypilot.desktop"
-  install -Dm644 "src-tauri/icons/128x128.png" \
+  install -Dm644 "assets/icons/128x128.png" \
     "$pkgdir/usr/share/icons/hicolor/128x128/apps/top.pigfun.jellypilot.png"
   install -Dm644 "LICENSE" "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
 }

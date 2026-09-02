@@ -1,0 +1,17 @@
+[package]
+name = "jellypilot-ui"
+description = "Custom-drawn iced design system and widgets for JellyPilot"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+version.workspace = true
+
+[dependencies]
+iced = { version = "0.14.0", features = ["advanced", "image", "svg", "tokio"] }
+
+[dev-dependencies]
+roxmltree = "0.20"
+usvg = "0.45"
+[lints]
+workspace = true

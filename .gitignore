@@ -5,12 +5,8 @@
 
 # Dist
 node_modules
-dist/
-styled-system/
-
+/target/
 # Profile
-.rspack-profile-*/
-
 # IDE
 .vscode/*
 !.vscode/extensions.json
@@ -26,3 +22,6 @@ styled-system/
 .agents/skills/*
 !.agents/skills/delegate-to-omp/
 !.agents/skills/delegate-to-omp/**
+
+.codex
+.pi

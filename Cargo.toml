@@ -1,0 +1,28 @@
+[workspace]
+members = [
+  "crates/jellypilot-core",
+  "crates/jellypilot-auth",
+  "crates/jellypilot-ui",
+  "crates/jellypilot-media-server",
+  "crates/jellypilot-mpv",
+  "crates/jellypilot-session",
+  "src-iced",
+]
+exclude = [
+  "crates/media-server-api/emby",
+  "crates/media-server-api/jellyfin",
+]
+resolver = "2"
+
+[workspace.package]
+edition = "2021"
+license = "MIT"
+repository = "https://github.com/hewel/jellypilot"
+rust-version = "1.98"
+version = "2.0.0"
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
+
+[workspace.lints.clippy]
+all = "warn"

@@ -1,0 +1,21 @@
+[package]
+name = "jellypilot-auth"
+description = "Authentication workflows and secure profile storage for JellyPilot"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+version.workspace = true
+
+[dependencies]
+jellypilot-core = { path = "../jellypilot-core" }
+jellypilot-media-server = { path = "../jellypilot-media-server" }
+keyring = "4.1.2"
+serde = { version = "1.0.228", features = ["derive"] }
+serde_json = "1.0.149"
+tokio = { version = "1.52.3", features = ["rt", "sync", "time"] }
+url = "2.5.8"
+zeroize = "1.8.1"
+
+[lints]
+workspace = true

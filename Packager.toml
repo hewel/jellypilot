@@ -1,0 +1,30 @@
+name = "jellypilot"
+product-name = "JellyPilot"
+version = "2.0.0"
+identifier = "top.pigfun.jellypilot"
+publisher = "hewel"
+authors = ["hewel"]
+license-file = "LICENSE"
+homepage = "https://github.com/hewel/jellypilot"
+description = "Jellyfin and Emby companion app: cast receiver and library browser driving external MPV"
+category = "Video"
+binaries-dir = "target/release"
+out-dir = "target/release/bundle"
+before-packaging-command = "cargo build --release --locked --package jellypilot-iced"
+binaries = [{ path = "jellypilot", main = true }]
+icons = [
+  "assets/icons/32x32.png",
+  "assets/icons/128x128.png",
+  "assets/icons/128x128@2x.png",
+  "assets/icons/icon.ico",
+  "assets/icons/icon.icns",
+]
+
+[nsis]
+installMode = "currentUser"
+
+[deb]
+package-name = "jellypilot"
+section = "video"
+priority = "optional"
+depends = ["libgtk-3-0", "libxkbcommon0", "libwayland-client0", "mpv"]

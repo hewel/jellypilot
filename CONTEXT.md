@@ -1,6 +1,6 @@
 # JellyPilot Context
 
-JellyPilot is a Jellyfin companion app that presents itself as a controllable playback target while delegating media playback to an external player.
+JellyPilot is a Jellyfin and Emby companion app that presents itself as a controllable Playback Target, browses video libraries, and plays media through a standalone MPV process.
 
 ## Language
 
@@ -9,8 +9,19 @@ The address of one Jellyfin server that JellyPilot connects to. A Server URL mus
 _Avoid_: Server discovery, server selection
 
 **Playback Target**:
-The JellyPilot install as it appears to Jellyfin users when they choose where media should play. The Playback Target should be identified by the configured device name.
+The JellyPilot install as it appears to media-server users when they choose where media should play. The Playback Target is identified by the configured device name.
 _Avoid_: Generic app instance
+
+**Playback Session**:
+One active presentation of a media item through External MPV Playback.
+_Avoid_: Player process, transcode job
+
+**External MPV Playback**:
+Playback presented by a standalone MPV process so the user's MPV configuration, scripts, and shaders remain available.
+_Avoid_: Embedded MPV, libmpv
+
+**Provider Transcode**:
+Media conversion performed by the connected Jellyfin or Emby server. JellyPilot plays the original or direct source through External MPV Playback and does not request a Provider Transcode.
 
 **Quick Connect**:
 A Jellyfin authentication method on the Login screen where JellyPilot shows a short code for the user to approve from another signed-in Jellyfin client. Quick Connect is the default login method and authenticates to a known Server URL; it does not discover or choose servers.
@@ -57,12 +68,20 @@ One of the user-selectable ways to authenticate to a known Server URL. Quick Con
 _Avoid_: Account type, server type
 
 **Now Playing**:
-The user-facing playback status shown by JellyPilot for the current external player session. Now Playing may show transport state before rich Jellyfin media metadata is available.
-_Avoid_: MPV state, playback session internals
+The user-facing playback status shown by JellyPilot for the current Playback Session. Now Playing may show transport state before rich media-server metadata is available.
+_Avoid_: MPV state, Web player state, playback session internals
+
+**App Mode**:
+The persisted top-level operating mode of JellyPilot: Full or Control-Only. App Mode decides which shell surfaces exist and how the window behaves, and it switches live from Settings without a restart.
+_Avoid_: View preference, layout setting, window profile
+
+**Control-Only Mode**:
+The compact media-controller App Mode: a fixed-size 480x760 window centered on Now Playing with access to the Settings Modal, plus the tray and the remote Playback Target. Control-Only Mode has no Library Browser; navigation to Library Browser destinations is rejected and browse state is dropped on entry.
+_Avoid_: Mini player, compact view, floating widget
 
 **Library Browser**:
-The authenticated JellyPilot shell area for browsing Jellyfin video libraries, inspecting item details, launching playback through JellyPilot's Playback Target, and applying user-scoped media state. Library Browser complements the Playback Target; it is not a goal to replace every Jellyfin client feature.
-_Avoid_: Full Jellyfin replacement, embedded player
+The authenticated JellyPilot shell area for browsing video libraries, inspecting item details, launching Playback Sessions, and applying user-scoped media state. Library Browser complements the Playback Target; it is not a goal to replace every Jellyfin or Emby client feature.
+_Avoid_: Full media-server replacement
 
 **Library Image**:
 A still image shown in the Library Browser for media content. Library Images include Artwork and Backdrop and are not limited to portrait posters.
@@ -72,13 +91,17 @@ _Avoid_: Poster as the umbrella term, thumbnail
 A best-effort disk copy of a media server's original Library Image response bytes, shared by Saved Service Profiles that refer to the same server. The Library Image Cache accelerates repeat browsing but is never a transformed representation or an offline source of truth.
 _Avoid_: Image optimizer, offline artwork library, Saved Service Profile cache
 
+**Library Image Raster**:
+An in-memory, display-sized RGBA decode of a Library Image, keyed by the Library Image reference and a size class. Library Image Rasters accelerate first paint and repeat rendering across navigations; they are never persisted and are distinct from the Library Image Cache, which stores only origin-encoded bytes.
+_Avoid_: Texture, transformed cache variant, decoded cache entry
+
 **Sidebar**:
-The persistent left navigation area of the authenticated JellyPilot shell. The Sidebar lists Video Home, the user's video libraries, Now Playing, and Settings, and is always visible while JellyPilot is authenticated. At narrow window widths the Sidebar shows icons only.
+The persistent left navigation area of the authenticated JellyPilot shell. The Sidebar lists Video Home, the user's video libraries, and Now Playing, and provides an entry to open the Settings Modal. It is always visible while JellyPilot is authenticated. At narrow window widths the Sidebar shows icons only.
 _Avoid_: Navigation rail, app drawer, floating controls
 
-**Ambient Glow**:
-The decorative radial glow behind the authenticated shell that brightens while the pointer is over the Sidebar or a Library Browser toolbar. The ambient-glow controller publishes the state as `data-glow` on the shell element.
-_Avoid_: Hover-driven :has selectors, glow state in CSS
+**Settings Modal**:
+The full-fill closable settings layer presented over the current shell context. The Settings Modal is dismissed via the Esc key or the close (✕) button and is never a navigation destination or stack entry.
+_Avoid_: Settings page, settings destination, dialog popup, drawer, click-outside-to-close
 
 **Video Home**:
 The Library Browser landing view built from live Jellyfin rows such as Continue Watching, Next Up, latest Movies, latest Episodes, and video library shortcuts. Video Home is not cached offline and should not show fake media.
@@ -181,3 +204,11 @@ Domain expert: "No. The Intro Skipper Setting lets the user turn automatic skipp
 Dev: "Should JellyPilot ask which audio track to use before starting playback?"
 
 Domain expert: "No. Direct Playback starts immediately with backend preference resolution; the user can switch tracks from Now Playing while the session is active."
+
+Dev: "Does the Library Image Cache store decoded rasters?"
+
+Domain expert: "No. The Library Image Cache stores only origin-encoded bytes on disk; Library Image Rasters are display-sized decodes that live in memory and are never persisted."
+
+Dev: "Is a Library Image Raster a new kind of Library Image reference?"
+
+Domain expert: "No. A Library Image Raster is keyed by an existing Library Image reference plus a render-side size class; it does not change what is requested from the server."

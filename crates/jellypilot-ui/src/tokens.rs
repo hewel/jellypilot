@@ -1,0 +1,940 @@
+//! Design tokens ported from JellyPilot's canonical Panda theme, with dark
+//! and light mode palettes derived from the same raw ramps.
+
+use std::time::Duration;
+
+use iced::{Color, Shadow, Theme, Vector};
+
+/// Complete JellyPilot design-token set.
+#[derive(Debug, Clone, Copy)]
+pub struct DesignTokens {
+    pub raw_colors: RawColors,
+    pub fonts: Fonts,
+    pub spacing: Spacing,
+    pub font_sizes: FontSizes,
+    pub line_heights: LineHeights,
+    pub font_weights: FontWeights,
+    pub radii: Radii,
+    pub z_index: ZIndex,
+    pub letter_spacings: LetterSpacings,
+    pub durations: Durations,
+    pub easings: Easings,
+    pub breakpoints: Breakpoints,
+}
+
+/// Raw Panda color palettes.
+#[derive(Debug, Clone, Copy)]
+pub struct RawColors {
+    pub neutral: Neutral,
+    pub indigo: Indigo,
+    pub teal: Teal,
+    pub amber: Amber,
+    pub red: Red,
+}
+
+/// Neutral palette steps.
+#[derive(Debug, Clone, Copy)]
+pub struct Neutral {
+    pub n0: Color,
+    pub n50: Color,
+    pub n300: Color,
+    pub n500: Color,
+    pub n700: Color,
+    pub n750: Color,
+    pub n800: Color,
+    pub n850: Color,
+    pub n900: Color,
+    pub n925: Color,
+    pub n950: Color,
+    pub n975: Color,
+    pub n1000: Color,
+}
+
+/// Indigo palette steps.
+#[derive(Debug, Clone, Copy)]
+pub struct Indigo {
+    pub n50: Color,
+    pub n300: Color,
+    pub n600: Color,
+    pub n900: Color,
+    pub n950: Color,
+    pub n1000: Color,
+}
+
+/// Teal palette steps.
+#[derive(Debug, Clone, Copy)]
+pub struct Teal {
+    pub n50: Color,
+    pub n400: Color,
+    pub n900: Color,
+    pub n1000: Color,
+}
+
+/// Amber palette steps.
+#[derive(Debug, Clone, Copy)]
+pub struct Amber {
+    pub n50: Color,
+    pub n400: Color,
+    pub n900: Color,
+    pub n1000: Color,
+}
+
+/// Red palette steps.
+#[derive(Debug, Clone, Copy)]
+pub struct Red {
+    pub n50: Color,
+    pub n400: Color,
+    pub n900: Color,
+    pub n1000: Color,
+}
+
+/// Panda semantic color roles.
+///
+/// Field spelling deliberately matches `semanticColorHex` so a role has the
+/// same name in web and iced design discussions.
+#[expect(
+    non_snake_case,
+    reason = "Panda semantic token names are the cross-frontend public contract"
+)]
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct SemanticColors {
+    pub background: Color,
+    pub error: Color,
+    pub errorContainer: Color,
+    pub onBackground: Color,
+    pub onError: Color,
+    pub onErrorContainer: Color,
+    pub onPrimary: Color,
+    pub onPrimaryContainer: Color,
+    pub onSecondary: Color,
+    pub onSecondaryContainer: Color,
+    pub onSurface: Color,
+    pub onSurfaceVariant: Color,
+    pub onTertiary: Color,
+    pub onTertiaryContainer: Color,
+    pub onWarning: Color,
+    pub onWarningContainer: Color,
+    pub outline: Color,
+    pub outlineVariant: Color,
+    pub primary: Color,
+    pub primaryContainer: Color,
+    pub secondary: Color,
+    pub secondaryContainer: Color,
+    pub surface: Color,
+    pub surfaceContainer: Color,
+    pub surfaceContainerHigh: Color,
+    pub surfaceContainerHighest: Color,
+    pub surfaceContainerLow: Color,
+    pub surfaceContainerLowest: Color,
+    pub surfaceTint: Color,
+    pub surfaceVariant: Color,
+    pub tertiary: Color,
+    pub tertiaryContainer: Color,
+    pub warning: Color,
+    pub warningContainer: Color,
+}
+
+/// Canonical Panda font-family stacks.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Fonts {
+    pub display: &'static str,
+    pub mono: &'static str,
+    pub sans: &'static str,
+}
+
+/// Panda spacing tokens and component-specific spatial constraints in logical pixels.
+#[derive(Debug, Clone, Copy)]
+pub struct Spacing {
+    pub s0: f32,
+    pub px: f32,
+    pub s0_5: f32,
+    pub s1: f32,
+    pub s1_5: f32,
+    pub s2: f32,
+    pub s2_5: f32,
+    pub s3: f32,
+    pub s3_5: f32,
+    pub s4: f32,
+    pub s5: f32,
+    pub s6: f32,
+    pub s7: f32,
+    pub s8: f32,
+    pub s9: f32,
+    pub s10: f32,
+    pub s11: f32,
+    pub s12: f32,
+    pub s14: f32,
+    pub s16: f32,
+    pub s20: f32,
+    pub s24: f32,
+    pub xs: f32,
+    pub sm: f32,
+    pub md: f32,
+    pub lg: f32,
+    pub xl: f32,
+    pub x2l: f32,
+    pub x3l: f32,
+    pub x4l: f32,
+    pub x5l: f32,
+    pub x6l: f32,
+    pub x7l: f32,
+    pub x8l: f32,
+    pub x9l: f32,
+    pub tooltip_max_width: f32,
+}
+
+/// Panda font-size tokens in logical pixels.
+#[derive(Debug, Clone, Copy)]
+pub struct FontSizes {
+    pub s10: f32,
+    pub s11: f32,
+    pub s12: f32,
+    pub s13: f32,
+    pub s14: f32,
+    pub s15: f32,
+    pub s16: f32,
+    pub s18: f32,
+    pub s20: f32,
+    pub s22: f32,
+    pub s24: f32,
+    pub s28: f32,
+    pub s32: f32,
+    pub s36: f32,
+    pub s45: f32,
+}
+
+/// Panda line-height tokens. Named values are multipliers; numbered values are pixels.
+#[derive(Debug, Clone, Copy)]
+pub struct LineHeights {
+    pub none: f32,
+    pub tight: f32,
+    pub snug: f32,
+    pub normal: f32,
+    pub relaxed: f32,
+    pub loose: f32,
+    pub s14: f32,
+    pub s16: f32,
+    pub s20: f32,
+    pub s22: f32,
+    pub s24: f32,
+    pub s28: f32,
+    pub s32: f32,
+    pub s40: f32,
+    pub s44: f32,
+    pub s52: f32,
+}
+
+/// Panda numeric font-weight tokens.
+#[derive(Debug, Clone, Copy)]
+pub struct FontWeights {
+    pub normal: u16,
+    pub medium: u16,
+    pub semibold: u16,
+    pub bold: u16,
+    pub extrabold: u16,
+    pub black: u16,
+}
+
+/// Panda radius tokens in logical pixels.
+#[derive(Debug, Clone, Copy)]
+pub struct Radii {
+    pub none: f32,
+    pub sm: f32,
+    pub md: f32,
+    pub lg: f32,
+    pub full: f32,
+}
+
+/// A shadow literal that preserves the CSS spread and inset data iced cannot render.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ShadowToken {
+    pub color: Color,
+    pub offset: Vector,
+    pub blur_radius: f32,
+    pub spread_radius: f32,
+    pub inset: bool,
+}
+
+impl ShadowToken {
+    /// Converts the representable offset, blur, and color to an iced shadow.
+    pub const fn iced(self) -> Shadow {
+        Shadow {
+            color: self.color,
+            offset: self.offset,
+            blur_radius: self.blur_radius,
+        }
+    }
+}
+
+/// Panda shadow tokens: a two-tier semantic scale. `none` for flush
+/// surfaces, `raised` for small floating chrome, `raised_high` for floating
+/// layers.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Shadows {
+    pub none: ShadowToken,
+    /// Low lift for small floating chrome (tooltips, scroll indicators).
+    pub raised: ShadowToken,
+    /// High lift for floating layers (popovers, toasts, raised cards).
+    pub raised_high: ShadowToken,
+}
+/// Mode-variant tokens: the semantic colors and shadows for one theme mode.
+/// Everything structural (spacing, radii, fonts, …) is mode-independent and
+/// stays on [`TOKENS`].
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ThemePalette {
+    pub colors: SemanticColors,
+    pub shadows: Shadows,
+}
+
+/// A Panda z-index literal.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ZIndexValue {
+    Auto,
+    Value(i32),
+}
+
+/// Panda z-index tokens.
+#[derive(Debug, Clone, Copy)]
+pub struct ZIndex {
+    pub auto: ZIndexValue,
+    pub z0: ZIndexValue,
+    pub z10: ZIndexValue,
+    pub z20: ZIndexValue,
+    pub z40: ZIndexValue,
+    pub z50: ZIndexValue,
+    pub z60: ZIndexValue,
+    pub z100: ZIndexValue,
+    pub behind: ZIndexValue,
+}
+
+/// Panda letter-spacing tokens in em units.
+#[derive(Debug, Clone, Copy)]
+pub struct LetterSpacings {
+    pub s0: f32,
+    pub s5: f32,
+    pub s8: f32,
+    pub s18: f32,
+    pub s20: f32,
+    pub s25: f32,
+}
+
+/// Panda transition-duration tokens.
+#[derive(Debug, Clone, Copy)]
+pub struct Durations {
+    pub none: Duration,
+    pub ms75: Duration,
+    pub ms100: Duration,
+    pub ms150: Duration,
+    pub ms200: Duration,
+    pub ms300: Duration,
+    pub ms500: Duration,
+    pub ms700: Duration,
+    pub ms1000: Duration,
+}
+
+/// A Panda easing literal.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum Easing {
+    CubicBezier([f32; 4]),
+    Linear,
+}
+
+/// Panda easing tokens.
+#[derive(Debug, Clone, Copy)]
+pub struct Easings {
+    pub standard: Easing,
+    pub emphasized: Easing,
+    pub in_out: Easing,
+    pub linear: Easing,
+}
+
+/// Compile-time Panda responsive breakpoints.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Breakpoints {
+    pub sm: &'static str,
+    pub md: &'static str,
+    pub lg: &'static str,
+    pub xl: &'static str,
+    pub x2l: &'static str,
+}
+
+/// Mode-independent JellyPilot tokens.
+pub const TOKENS: DesignTokens = DesignTokens {
+    raw_colors: RawColors {
+        neutral: Neutral {
+            n0: Color::from_rgb8(255, 255, 255),
+            n50: Color::from_rgb8(243, 246, 255),
+            n300: Color::from_rgb8(174, 184, 204),
+            n500: Color::from_rgb8(92, 108, 140),
+            n700: Color::from_rgb8(38, 46, 66),
+            n750: Color::from_rgb8(34, 41, 62),
+            n800: Color::from_rgb8(30, 37, 56),
+            n850: Color::from_rgb8(22, 27, 42),
+            n900: Color::from_rgb8(17, 20, 32),
+            n925: Color::from_rgb8(11, 13, 20),
+            n950: Color::from_rgb8(10, 12, 18),
+            n975: Color::from_rgb8(5, 6, 10),
+            n1000: Color::from_rgb8(4, 5, 8),
+        },
+        indigo: Indigo {
+            n50: Color::from_rgb8(224, 226, 255),
+            n300: Color::from_rgb8(129, 140, 248),
+            n600: Color::from_rgb8(79, 70, 229),
+            n900: Color::from_rgb8(31, 33, 82),
+            n950: Color::from_rgb8(27, 28, 59),
+            n1000: Color::from_rgb8(11, 10, 36),
+        },
+        teal: Teal {
+            n50: Color::from_rgb8(191, 255, 232),
+            n400: Color::from_rgb8(79, 227, 177),
+            n900: Color::from_rgb8(6, 56, 42),
+            n1000: Color::from_rgb8(0, 31, 22),
+        },
+        amber: Amber {
+            n50: Color::from_rgb8(255, 231, 168),
+            n400: Color::from_rgb8(246, 199, 104),
+            n900: Color::from_rgb8(63, 46, 8),
+            n1000: Color::from_rgb8(42, 26, 0),
+        },
+        red: Red {
+            n50: Color::from_rgb8(255, 217, 222),
+            n400: Color::from_rgb8(255, 107, 122),
+            n900: Color::from_rgb8(75, 17, 25),
+            n1000: Color::from_rgb8(51, 0, 6),
+        },
+    },
+    fonts: Fonts {
+        display: "'Space Grotesk Variable', 'Inter Variable', ui-sans-serif, system-ui, sans-serif",
+        mono: "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace",
+        sans: "'Inter Variable', ui-sans-serif, system-ui, sans-serif",
+    },
+    spacing: Spacing {
+        s0: 0.0,
+        px: 1.0,
+        s0_5: 2.0,
+        s1: 4.0,
+        s1_5: 6.0,
+        s2: 8.0,
+        s2_5: 10.0,
+        s3: 12.0,
+        s3_5: 14.0,
+        s4: 16.0,
+        s5: 20.0,
+        s6: 24.0,
+        s7: 28.0,
+        s8: 32.0,
+        s9: 36.0,
+        s10: 40.0,
+        s11: 44.0,
+        s12: 48.0,
+        s14: 56.0,
+        s16: 64.0,
+        s20: 80.0,
+        s24: 96.0,
+        xs: 12.0,
+        sm: 14.0,
+        md: 16.0,
+        lg: 18.0,
+        xl: 20.0,
+        x2l: 24.0,
+        x3l: 30.0,
+        x4l: 36.0,
+        x5l: 48.0,
+        x6l: 60.0,
+        x7l: 72.0,
+        x8l: 96.0,
+        x9l: 128.0,
+        tooltip_max_width: 300.0,
+    },
+    font_sizes: FontSizes {
+        s10: 10.0,
+        s11: 11.0,
+        s12: 12.0,
+        s13: 13.0,
+        s14: 14.0,
+        s15: 15.0,
+        s16: 16.0,
+        s18: 18.0,
+        s20: 20.0,
+        s22: 22.0,
+        s24: 24.0,
+        s28: 28.0,
+        s32: 32.0,
+        s36: 36.0,
+        s45: 45.0,
+    },
+    line_heights: LineHeights {
+        none: 1.0,
+        tight: 1.25,
+        snug: 1.375,
+        normal: 1.5,
+        relaxed: 1.625,
+        loose: 2.0,
+        s14: 14.0,
+        s16: 16.0,
+        s20: 20.0,
+        s22: 22.0,
+        s24: 24.0,
+        s28: 28.0,
+        s32: 32.0,
+        s40: 40.0,
+        s44: 44.0,
+        s52: 52.0,
+    },
+    font_weights: FontWeights {
+        normal: 400,
+        medium: 500,
+        semibold: 600,
+        bold: 700,
+        extrabold: 800,
+        black: 900,
+    },
+    radii: Radii {
+        none: 0.0,
+        sm: 2.0,
+        md: 6.0,
+        lg: 8.0,
+        full: 9999.0,
+    },
+    z_index: ZIndex {
+        auto: ZIndexValue::Auto,
+        z0: ZIndexValue::Value(0),
+        z10: ZIndexValue::Value(10),
+        z20: ZIndexValue::Value(20),
+        z40: ZIndexValue::Value(40),
+        z50: ZIndexValue::Value(50),
+        z60: ZIndexValue::Value(60),
+        z100: ZIndexValue::Value(100),
+        behind: ZIndexValue::Value(-1),
+    },
+    letter_spacings: LetterSpacings {
+        s0: 0.0,
+        s5: 0.05,
+        s8: 0.08,
+        s18: 0.18,
+        s20: 0.2,
+        s25: 0.25,
+    },
+    durations: Durations {
+        none: Duration::from_millis(0),
+        ms75: Duration::from_millis(75),
+        ms100: Duration::from_millis(100),
+        ms150: Duration::from_millis(150),
+        ms200: Duration::from_millis(200),
+        ms300: Duration::from_millis(300),
+        ms500: Duration::from_millis(500),
+        ms700: Duration::from_millis(700),
+        ms1000: Duration::from_millis(1_000),
+    },
+    easings: Easings {
+        standard: Easing::CubicBezier([0.2, 0.0, 0.0, 1.0]),
+        emphasized: Easing::CubicBezier([0.16, 1.0, 0.3, 1.0]),
+        in_out: Easing::CubicBezier([0.4, 0.0, 0.6, 1.0]),
+        linear: Easing::Linear,
+    },
+    breakpoints: Breakpoints {
+        sm: "640px",
+        md: "768px",
+        lg: "1024px",
+        xl: "1280px",
+        x2l: "1536px",
+    },
+};
+
+/// Dark JellyPilot palette: the canonical Panda dark values.
+pub const DARK_PALETTE: ThemePalette = ThemePalette {
+    colors: SemanticColors {
+        background: Color::from_rgb8(5, 6, 10),
+        error: Color::from_rgb8(255, 107, 122),
+        errorContainer: Color::from_rgb8(75, 17, 25),
+        onBackground: Color::from_rgb8(243, 246, 255),
+        onError: Color::from_rgb8(51, 0, 6),
+        onErrorContainer: Color::from_rgb8(255, 217, 222),
+        onPrimary: Color::from_rgb8(255, 255, 255),
+        onPrimaryContainer: Color::from_rgb8(224, 226, 255),
+        onSecondary: Color::from_rgb8(11, 10, 36),
+        onSecondaryContainer: Color::from_rgb8(224, 226, 255),
+        onSurface: Color::from_rgb8(243, 246, 255),
+        onSurfaceVariant: Color::from_rgb8(174, 184, 204),
+        onTertiary: Color::from_rgb8(0, 31, 22),
+        onTertiaryContainer: Color::from_rgb8(191, 255, 232),
+        onWarning: Color::from_rgb8(42, 26, 0),
+        onWarningContainer: Color::from_rgb8(255, 231, 168),
+        outline: Color::from_rgb8(92, 108, 140),
+        outlineVariant: Color::from_rgb8(38, 46, 66),
+        primary: Color::from_rgb8(79, 70, 229),
+        primaryContainer: Color::from_rgb8(27, 28, 59),
+        secondary: Color::from_rgb8(129, 140, 248),
+        secondaryContainer: Color::from_rgb8(31, 33, 82),
+        surface: Color::from_rgb8(11, 13, 20),
+        surfaceContainer: Color::from_rgb8(17, 20, 32),
+        surfaceContainerHigh: Color::from_rgb8(22, 27, 42),
+        surfaceContainerHighest: Color::from_rgb8(34, 41, 62),
+        surfaceContainerLow: Color::from_rgb8(10, 12, 18),
+        surfaceContainerLowest: Color::from_rgb8(4, 5, 8),
+        surfaceTint: Color::from_rgb8(79, 70, 229),
+        surfaceVariant: Color::from_rgb8(30, 37, 56),
+        tertiary: Color::from_rgb8(79, 227, 177),
+        tertiaryContainer: Color::from_rgb8(6, 56, 42),
+        warning: Color::from_rgb8(246, 199, 104),
+        warningContainer: Color::from_rgb8(63, 46, 8),
+    },
+    shadows: Shadows {
+        none: shadow(0.0, 0.0, 0.0, 0.0, 0.0, false),
+        raised: shadow(0.0, 2.0, 8.0, 0.0, 0.4, false),
+        raised_high: shadow(0.0, 8.0, 24.0, 0.0, 0.55, false),
+    },
+};
+
+/// Light JellyPilot palette: the neutral ladder inverted (light surfaces from
+/// the light end of the ramp, `onSurface` from the dark end), brand primary
+/// kept at indigo n600 with white `onPrimary`, and status roles as n900
+/// text/icons on n50 containers. The mid container steps (Low/surface/
+/// Container/High/Variant/Highest) are derived tones: the raw neutral ramp
+/// has no steps between n50 and n300 to invert into. Shadows are lowered
+/// because light surfaces need less lift to read as floating.
+pub const LIGHT_PALETTE: ThemePalette = ThemePalette {
+    colors: SemanticColors {
+        background: Color::from_rgb8(243, 246, 255),
+        error: Color::from_rgb8(75, 17, 25),
+        errorContainer: Color::from_rgb8(255, 217, 222),
+        onBackground: Color::from_rgb8(5, 6, 10),
+        onError: Color::from_rgb8(255, 217, 222),
+        onErrorContainer: Color::from_rgb8(75, 17, 25),
+        onPrimary: Color::from_rgb8(255, 255, 255),
+        onPrimaryContainer: Color::from_rgb8(31, 33, 82),
+        onSecondary: Color::from_rgb8(255, 255, 255),
+        onSecondaryContainer: Color::from_rgb8(31, 33, 82),
+        onSurface: Color::from_rgb8(5, 6, 10),
+        onSurfaceVariant: Color::from_rgb8(92, 108, 140),
+        onTertiary: Color::from_rgb8(191, 255, 232),
+        onTertiaryContainer: Color::from_rgb8(6, 56, 42),
+        onWarning: Color::from_rgb8(255, 231, 168),
+        onWarningContainer: Color::from_rgb8(63, 46, 8),
+        outline: Color::from_rgb8(92, 108, 140),
+        outlineVariant: Color::from_rgb8(174, 184, 204),
+        primary: Color::from_rgb8(79, 70, 229),
+        primaryContainer: Color::from_rgb8(224, 226, 255),
+        secondary: Color::from_rgb8(79, 70, 229),
+        secondaryContainer: Color::from_rgb8(224, 226, 255),
+        surface: Color::from_rgb8(232, 236, 246),
+        surfaceContainer: Color::from_rgb8(226, 231, 242),
+        surfaceContainerHigh: Color::from_rgb8(219, 225, 238),
+        surfaceContainerHighest: Color::from_rgb8(205, 212, 229),
+        surfaceContainerLow: Color::from_rgb8(236, 240, 248),
+        surfaceContainerLowest: Color::from_rgb8(255, 255, 255),
+        surfaceTint: Color::from_rgb8(79, 70, 229),
+        surfaceVariant: Color::from_rgb8(212, 218, 233),
+        tertiary: Color::from_rgb8(6, 56, 42),
+        tertiaryContainer: Color::from_rgb8(191, 255, 232),
+        warning: Color::from_rgb8(63, 46, 8),
+        warningContainer: Color::from_rgb8(255, 231, 168),
+    },
+    shadows: Shadows {
+        none: shadow(0.0, 0.0, 0.0, 0.0, 0.0, false),
+        raised: shadow(0.0, 2.0, 8.0, 0.0, 0.25, false),
+        raised_high: shadow(0.0, 8.0, 24.0, 0.0, 0.35, false),
+    },
+};
+
+/// Resolves the palette for an iced theme by matching its background color
+/// against the two palettes' `background` values. Unknown themes fall back
+/// to the dark palette.
+pub fn palette(theme: &Theme) -> &'static ThemePalette {
+    if theme.palette().background == LIGHT_PALETTE.colors.background {
+        &LIGHT_PALETTE
+    } else {
+        &DARK_PALETTE
+    }
+}
+
+const fn shadow(
+    x: f32,
+    y: f32,
+    blur_radius: f32,
+    spread_radius: f32,
+    alpha: f32,
+    inset: bool,
+) -> ShadowToken {
+    ShadowToken {
+        color: Color::from_rgba8(0, 0, 0, alpha),
+        offset: Vector { x, y },
+        blur_radius,
+        spread_radius,
+        inset,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use iced::{Color, Theme};
+
+    use super::{
+        palette, Breakpoints, Fonts, SemanticColors, ThemePalette, DARK_PALETTE, LIGHT_PALETTE,
+        TOKENS,
+    };
+
+    fn luminance(color: Color) -> f32 {
+        0.2126 * color.r + 0.7152 * color.g + 0.0722 * color.b
+    }
+
+    fn semantic_color_fields(colors: &SemanticColors) -> [(&'static str, Color); 34] {
+        [
+            ("background", colors.background),
+            ("error", colors.error),
+            ("errorContainer", colors.errorContainer),
+            ("onBackground", colors.onBackground),
+            ("onError", colors.onError),
+            ("onErrorContainer", colors.onErrorContainer),
+            ("onPrimary", colors.onPrimary),
+            ("onPrimaryContainer", colors.onPrimaryContainer),
+            ("onSecondary", colors.onSecondary),
+            ("onSecondaryContainer", colors.onSecondaryContainer),
+            ("onSurface", colors.onSurface),
+            ("onSurfaceVariant", colors.onSurfaceVariant),
+            ("onTertiary", colors.onTertiary),
+            ("onTertiaryContainer", colors.onTertiaryContainer),
+            ("onWarning", colors.onWarning),
+            ("onWarningContainer", colors.onWarningContainer),
+            ("outline", colors.outline),
+            ("outlineVariant", colors.outlineVariant),
+            ("primary", colors.primary),
+            ("primaryContainer", colors.primaryContainer),
+            ("secondary", colors.secondary),
+            ("secondaryContainer", colors.secondaryContainer),
+            ("surface", colors.surface),
+            ("surfaceContainer", colors.surfaceContainer),
+            ("surfaceContainerHigh", colors.surfaceContainerHigh),
+            ("surfaceContainerHighest", colors.surfaceContainerHighest),
+            ("surfaceContainerLow", colors.surfaceContainerLow),
+            ("surfaceContainerLowest", colors.surfaceContainerLowest),
+            ("surfaceTint", colors.surfaceTint),
+            ("surfaceVariant", colors.surfaceVariant),
+            ("tertiary", colors.tertiary),
+            ("tertiaryContainer", colors.tertiaryContainer),
+            ("warning", colors.warning),
+            ("warningContainer", colors.warningContainer),
+        ]
+    }
+
+    #[test]
+    fn semantic_colors_match_canonical_panda_hex_literals() {
+        assert_eq!(
+            DARK_PALETTE.colors,
+            SemanticColors {
+                background: Color::from_rgb8(0x05, 0x06, 0x0a),
+                error: Color::from_rgb8(0xff, 0x6b, 0x7a),
+                errorContainer: Color::from_rgb8(0x4b, 0x11, 0x19),
+                onBackground: Color::from_rgb8(0xf3, 0xf6, 0xff),
+                onError: Color::from_rgb8(0x33, 0x00, 0x06),
+                onErrorContainer: Color::from_rgb8(0xff, 0xd9, 0xde),
+                onPrimary: Color::from_rgb8(0xff, 0xff, 0xff),
+                onPrimaryContainer: Color::from_rgb8(0xe0, 0xe2, 0xff),
+                onSecondary: Color::from_rgb8(0x0b, 0x0a, 0x24),
+                onSecondaryContainer: Color::from_rgb8(0xe0, 0xe2, 0xff),
+                onSurface: Color::from_rgb8(0xf3, 0xf6, 0xff),
+                onSurfaceVariant: Color::from_rgb8(0xae, 0xb8, 0xcc),
+                onTertiary: Color::from_rgb8(0x00, 0x1f, 0x16),
+                onTertiaryContainer: Color::from_rgb8(0xbf, 0xff, 0xe8),
+                onWarning: Color::from_rgb8(0x2a, 0x1a, 0x00),
+                onWarningContainer: Color::from_rgb8(0xff, 0xe7, 0xa8),
+                outline: Color::from_rgb8(0x5c, 0x6c, 0x8c),
+                outlineVariant: Color::from_rgb8(0x26, 0x2e, 0x42),
+                primary: Color::from_rgb8(0x4f, 0x46, 0xe5),
+                primaryContainer: Color::from_rgb8(0x1b, 0x1c, 0x3b),
+                secondary: Color::from_rgb8(0x81, 0x8c, 0xf8),
+                secondaryContainer: Color::from_rgb8(0x1f, 0x21, 0x52),
+                surface: Color::from_rgb8(0x0b, 0x0d, 0x14),
+                surfaceContainer: Color::from_rgb8(0x11, 0x14, 0x20),
+                surfaceContainerHigh: Color::from_rgb8(0x16, 0x1b, 0x2a),
+                surfaceContainerHighest: Color::from_rgb8(0x22, 0x29, 0x3e),
+                surfaceContainerLow: Color::from_rgb8(0x0a, 0x0c, 0x12),
+                surfaceContainerLowest: Color::from_rgb8(0x04, 0x05, 0x08),
+                surfaceTint: Color::from_rgb8(0x4f, 0x46, 0xe5),
+                surfaceVariant: Color::from_rgb8(0x1e, 0x25, 0x38),
+                tertiary: Color::from_rgb8(0x4f, 0xe3, 0xb1),
+                tertiaryContainer: Color::from_rgb8(0x06, 0x38, 0x2a),
+                warning: Color::from_rgb8(0xf6, 0xc7, 0x68),
+                warningContainer: Color::from_rgb8(0x3f, 0x2e, 0x08),
+            }
+        );
+    }
+
+    #[test]
+    fn font_stacks_match_canonical_panda_literals() {
+        assert_eq!(
+            TOKENS.fonts,
+            Fonts {
+                display:
+                    "'Space Grotesk Variable', 'Inter Variable', ui-sans-serif, system-ui, sans-serif",
+                mono: "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace",
+                sans: "'Inter Variable', ui-sans-serif, system-ui, sans-serif",
+            }
+        );
+    }
+
+    #[test]
+    fn breakpoints_match_canonical_panda_literals() {
+        assert_eq!(
+            TOKENS.breakpoints,
+            Breakpoints {
+                sm: "640px",
+                md: "768px",
+                lg: "1024px",
+                xl: "1280px",
+                x2l: "1536px",
+            }
+        );
+    }
+
+    #[test]
+    fn radii_scale_matches_the_retuned_tokens() {
+        assert_eq!(TOKENS.radii.none, 0.0);
+        assert_eq!(TOKENS.radii.sm, 2.0);
+        assert_eq!(TOKENS.radii.md, 6.0);
+        assert_eq!(TOKENS.radii.lg, 8.0);
+        assert_eq!(TOKENS.radii.full, 9999.0);
+    }
+
+    #[test]
+    fn shadow_tokens_match_the_two_tier_semantic_scale() {
+        use super::ShadowToken;
+        use iced::Vector;
+
+        assert_eq!(
+            DARK_PALETTE.shadows.none,
+            ShadowToken {
+                color: Color::from_rgba8(0, 0, 0, 0.0),
+                offset: Vector { x: 0.0, y: 0.0 },
+                blur_radius: 0.0,
+                spread_radius: 0.0,
+                inset: false,
+            }
+        );
+        assert_eq!(
+            DARK_PALETTE.shadows.raised,
+            ShadowToken {
+                color: Color::from_rgba8(0, 0, 0, 0.4),
+                offset: Vector { x: 0.0, y: 2.0 },
+                blur_radius: 8.0,
+                spread_radius: 0.0,
+                inset: false,
+            }
+        );
+        assert_eq!(
+            DARK_PALETTE.shadows.raised_high,
+            ShadowToken {
+                color: Color::from_rgba8(0, 0, 0, 0.55),
+                offset: Vector { x: 0.0, y: 8.0 },
+                blur_radius: 24.0,
+                spread_radius: 0.0,
+                inset: false,
+            }
+        );
+    }
+
+    #[test]
+    fn palettes_have_fully_opaque_colors() {
+        for (name, palette) in [("dark", &DARK_PALETTE), ("light", &LIGHT_PALETTE)] {
+            for (field, color) in semantic_color_fields(&palette.colors) {
+                assert_eq!(
+                    color.a, 1.0,
+                    "{name} palette color {field} must be fully opaque"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn light_container_ladder_is_a_distinct_darkening_step_series() {
+        let colors = LIGHT_PALETTE.colors;
+        let ladder = [
+            ("surfaceContainerLowest", colors.surfaceContainerLowest),
+            ("background", colors.background),
+            ("surfaceContainerLow", colors.surfaceContainerLow),
+            ("surface", colors.surface),
+            ("surfaceContainer", colors.surfaceContainer),
+            ("surfaceContainerHigh", colors.surfaceContainerHigh),
+            ("surfaceVariant", colors.surfaceVariant),
+            ("surfaceContainerHighest", colors.surfaceContainerHighest),
+        ];
+
+        for pair in ladder.windows(2) {
+            let (lighter_name, lighter) = pair[0];
+            let (darker_name, darker) = pair[1];
+            assert!(
+                luminance(lighter) > luminance(darker) + 0.005,
+                "light ladder must darken perceptibly: {lighter_name} ({lighter:?}) vs {darker_name} ({darker:?})"
+            );
+        }
+    }
+
+    #[test]
+    fn light_on_colors_order_against_their_surfaces() {
+        let colors = LIGHT_PALETTE.colors;
+        // Primary text darker than secondary text, both darker than the canvas.
+        assert!(luminance(colors.onSurface) < luminance(colors.onSurfaceVariant));
+        assert!(luminance(colors.onSurfaceVariant) < luminance(colors.background));
+        // Dark status text on light status containers.
+        assert!(luminance(colors.onTertiaryContainer) < luminance(colors.tertiaryContainer));
+        assert!(luminance(colors.onWarningContainer) < luminance(colors.warningContainer));
+        assert!(luminance(colors.onErrorContainer) < luminance(colors.errorContainer));
+        assert!(luminance(colors.onPrimaryContainer) < luminance(colors.primaryContainer));
+        assert!(luminance(colors.onSecondaryContainer) < luminance(colors.secondaryContainer));
+        // Light text on the filled brand/status accents.
+        assert!(luminance(colors.onPrimary) > luminance(colors.primary));
+        assert!(luminance(colors.onSecondary) > luminance(colors.secondary));
+        assert!(luminance(colors.onTertiary) > luminance(colors.tertiary));
+        assert!(luminance(colors.onWarning) > luminance(colors.warning));
+        assert!(luminance(colors.onError) > luminance(colors.error));
+        // Outlines read against the canvas.
+        assert!(luminance(colors.outline) < luminance(colors.background));
+        assert!(luminance(colors.outlineVariant) < luminance(colors.background));
+    }
+
+    #[test]
+    fn light_shadows_keep_the_two_tier_scale_with_lower_alphas() {
+        assert_eq!(LIGHT_PALETTE.shadows.none.color.a, 0.0);
+        assert_eq!(LIGHT_PALETTE.shadows.raised.color.a, 0.25);
+        assert_eq!(LIGHT_PALETTE.shadows.raised_high.color.a, 0.35);
+        assert_eq!(
+            LIGHT_PALETTE.shadows.raised.offset,
+            DARK_PALETTE.shadows.raised.offset
+        );
+        assert_eq!(
+            LIGHT_PALETTE.shadows.raised.blur_radius,
+            DARK_PALETTE.shadows.raised.blur_radius
+        );
+        assert_eq!(
+            LIGHT_PALETTE.shadows.raised_high.offset,
+            DARK_PALETTE.shadows.raised_high.offset
+        );
+        assert_eq!(
+            LIGHT_PALETTE.shadows.raised_high.blur_radius,
+            DARK_PALETTE.shadows.raised_high.blur_radius
+        );
+    }
+
+    #[test]
+    fn palette_resolves_by_theme_background_identity() {
+        let dark = crate::theme::theme(crate::theme::ThemeMode::Dark);
+        let light = crate::theme::theme(crate::theme::ThemeMode::Light);
+
+        // Value equality: `&CONST` expressions have no stable address, so
+        // pointer identity is not a reliable assertion for const palettes.
+        assert_eq!(palette(&dark), &DARK_PALETTE);
+        assert_eq!(palette(&light), &LIGHT_PALETTE);
+        // Any other theme (built-in or custom) falls back to the dark palette.
+        assert_eq!(palette(&Theme::Dracula), &DARK_PALETTE);
+        // Even iced's built-in light theme falls back: identity is by exact
+        // JellyPilot background color, not by brightness.
+        assert_eq!(palette(&Theme::Light), &DARK_PALETTE);
+    }
+
+    #[test]
+    fn theme_palette_keeps_colors_and_shadows_together() {
+        let palette: ThemePalette = LIGHT_PALETTE;
+        assert_eq!(palette.colors.background.a, 1.0);
+        assert!(palette.shadows.raised_high.color.a > 0.0);
+    }
+}

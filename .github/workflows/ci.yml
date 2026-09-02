@@ -17,49 +17,41 @@ jobs:
       - name: Install system dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y libwebkit2gtk-4.1-dev build-essential curl wget file libssl-dev libgtk-3-dev libayatana-appindicator3-dev librsvg2-dev
+          sudo apt-get install -y build-essential pkg-config libgtk-3-dev libxkbcommon-dev libxkbcommon-x11-0 libwayland-dev wayland-protocols libgl1-mesa-dri mesa-vulkan-drivers xauth xvfb
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
       - uses: swatinem/rust-cache@v2
         with:
-          workspaces: 'src-tauri'
+          workspaces: '.'
       - uses: oven-sh/setup-bun@v2
 
       - name: Install dependencies
         run: bun install --frozen-lockfile
 
-      - name: Format and Lint check
+      - name: Format, lint, typecheck, and clippy
         run: bun run check
 
-      - name: Run tests
-        run: bun run test:all
+      - name: Run Rust tests
+        run: bun run task rust test
 
-      - name: Production build
-        run: bun run build
+      - name: Run iced startup smoke
+        run: xvfb-run -a bun run task iced run --smoke
 
-  compile-backend:
-    name: Compile backend (${{ matrix.os }})
+  compile:
+    name: Compile (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, windows-latest, macos-latest]
+        os: [windows-latest, macos-latest]
     env:
       HUSKY: 0
     steps:
       - uses: actions/checkout@v4
-      - name: Install Linux system dependencies
-        if: runner.os == 'Linux'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y libwebkit2gtk-4.1-dev build-essential curl wget file libssl-dev libgtk-3-dev libayatana-appindicator3-dev librsvg2-dev
       - uses: dtolnay/rust-toolchain@stable
       - uses: swatinem/rust-cache@v2
         with:
-          workspaces: 'src-tauri'
-      # Production feature set = default features (SQLite Library Image Cache).
-      # Deliberately not --all-features so the webdriver harness stays out of
-      # the production compile gate.
-      - name: Compile Tauri backend (production SQLite cache)
-        run: cargo check --locked --manifest-path src-tauri/Cargo.toml
+          workspaces: '.'
+      - name: Compile workspace
+        run: cargo check --locked --workspace

@@ -1,12 +1,6 @@
 {
   "version": 1,
   "skills": {
-    "debug-browser-traces": {
-      "source": "hewel/skills",
-      "sourceType": "github",
-      "skillPath": "debug-browser-traces/SKILL.md",
-      "computedHash": "ab1aef3bbddabf4a47fde9c8daed7566120e27a66fe70817af91320a2e4d694f"
-    },
     "effect-best-practices": {
       "source": "makisuo/skills",
       "sourceType": "github",

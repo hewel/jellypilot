@@ -1,0 +1,43 @@
+[package]
+name = "jellypilot-iced"
+description = "Cross-platform iced frontend for JellyPilot"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+version.workspace = true
+
+[features]
+debug = ["iced/hot"]
+dev = ["iced/hot"]
+[[bin]]
+name = "jellypilot"
+path = "src/main.rs"
+
+[dependencies]
+jellypilot-auth = { path = "../crates/jellypilot-auth" }
+jellypilot-core = { path = "../crates/jellypilot-core" }
+jellypilot-media-server = { path = "../crates/jellypilot-media-server" }
+jellypilot-mpv = { path = "../crates/jellypilot-mpv" }
+jellypilot-session = { path = "../crates/jellypilot-session" }
+jellypilot-ui = { path = "../crates/jellypilot-ui" }
+iced = { version = "0.14.0", features = ["advanced", "canvas", "image", "svg", "tokio"] }
+image = { version = "0.25.10", default-features = false, features = ["png"] }
+mimalloc = { version = "0.1.48", default-features = false }
+tokio = { version = "1.50.0", features = ["macros", "rt", "sync", "time"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+tray-icon = { version = "0.23.1", default-features = false }
+url = "2.5.8"
+zeroize = "1.8.1"
+
+[target.'cfg(target_os = "linux")'.dependencies]
+gtk = "0.18.2"
+
+[dev-dependencies]
+jellypilot-media-server = { path = "../crates/jellypilot-media-server", features = ["test-utils"] }
+jellypilot-core = { path = "../crates/jellypilot-core", features = ["test-utils"] }
+serde_json = "1.0.149"
+
+[lints]
+workspace = true
