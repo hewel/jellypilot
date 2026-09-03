@@ -279,10 +279,7 @@ fn hero_at_width<'a>(
   );
   let gradient = gradient::Linear::new(Degrees(180.0)).add_stop(
     0.0,
-    palette
-      .colors
-      .surfaceContainerLowest
-      .scale_alpha(HERO_SCRIM_TOP_ALPHA),
+    palette.colors.background.scale_alpha(HERO_SCRIM_TOP_ALPHA),
   );
   let gradient = if hero_height > base_hero_height {
     // Expanded overview flows below the fixed 16:9 Backdrop; raise the scrim's
@@ -292,18 +289,15 @@ fn hero_at_width<'a>(
     gradient
       .add_stop(
         overview_top,
-        palette
-          .colors
-          .surfaceContainerLowest
-          .scale_alpha(SCRIM_EXPANDED_ALPHA),
+        palette.colors.background.scale_alpha(SCRIM_EXPANDED_ALPHA),
       )
-      .add_stop(1.0, palette.colors.surfaceContainerLowest.scale_alpha(1.0))
+      .add_stop(1.0, palette.colors.background.scale_alpha(1.0))
   } else {
     gradient.add_stop(
       1.0,
       palette
         .colors
-        .surfaceContainerLowest
+        .background
         .scale_alpha(HERO_SCRIM_BOTTOM_ALPHA),
     )
   };

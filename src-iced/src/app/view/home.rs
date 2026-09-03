@@ -200,9 +200,11 @@ fn featured_hero<'a>(
       .style(|theme| jellypilot_ui::theme::surface_variant(theme, SurfaceVariant::Canvas))
       .into();
   };
+  // Fade into the Canvas surface color so the hero bottom blends seamlessly in
+  // both themes (surfaceContainerLowest diverges from background in light).
   let gradient = gradient::Linear::new(Degrees(180.0))
-    .add_stop(0.0, palette.colors.surfaceContainerLowest.scale_alpha(0.4))
-    .add_stop(1.0, palette.colors.surfaceContainerLowest.scale_alpha(0.95));
+    .add_stop(0.0, palette.colors.background.scale_alpha(0.4))
+    .add_stop(1.0, palette.colors.background.scale_alpha(0.95));
   let scrim = container(space::vertical())
     .width(Fill)
     .height(hero_height)
