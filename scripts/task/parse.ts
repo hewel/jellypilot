@@ -1,5 +1,6 @@
 import type { CrateShortName } from './crates';
 import { parseCrates } from './crates';
+import { MONITOR_DEFAULT_INTERVAL_MS, MONITOR_DEFAULT_SAMPLES } from './monitor';
 
 export type TaskCommand =
   | { readonly _tag: 'help' }
@@ -20,6 +21,14 @@ export type TaskCommand =
     }
   | { readonly _tag: 'iced'; readonly smoke: boolean; readonly release: boolean }
   | { readonly _tag: 'icedHot' }
+  | {
+      readonly _tag: 'monitor';
+      readonly pid: number;
+      readonly samples: number;
+      readonly intervalMs: number;
+      readonly output: string;
+      readonly label: string | null;
+    }
   | { readonly _tag: 'promo' }
   | { readonly _tag: 'api' };
 
@@ -76,6 +85,7 @@ export function parseCli(argv: readonly string[]): TaskCommand {
     return { _tag: command, fix };
   }
   if (command === 'rust') return parseRust(args);
+  if (command === 'monitor') return parseMonitor(args);
   if (command === 'iced') {
     const [action, ...rest] = args;
     if (action === 'hot') {
@@ -97,4 +107,58 @@ export function parseCli(argv: readonly string[]): TaskCommand {
     return { _tag: command, smoke, release };
   }
   throw new Error(`Unknown task command: ${command}`);
+}
+
+function parseMonitor(args: readonly string[]): TaskCommand {
+  const result = {
+    pid: Number.NaN,
+    samples: MONITOR_DEFAULT_SAMPLES,
+    label: null as string | null,
+    intervalMs: MONITOR_DEFAULT_INTERVAL_MS,
+    output: '',
+  };
+  for (let index = 0; index < args.length; index += 1) {
+    const argument = args[index];
+    if (argument === '--pid') {
+      const value = args[index + 1];
+      if (value === undefined) throw new Error('Missing monitor pid.');
+      result.pid = Number(value);
+      index += 1;
+    } else if (argument === '--samples') {
+      const value = args[index + 1];
+      if (value === undefined) throw new Error('Missing monitor samples.');
+      result.samples = Number(value);
+      index += 1;
+    } else if (argument === '--interval-ms') {
+      const value = args[index + 1];
+      if (value === undefined) throw new Error('Missing monitor interval.');
+      result.intervalMs = Number(value);
+      index += 1;
+    } else if (argument === '--out') {
+      const value = args[index + 1];
+      if (value === undefined) throw new Error('Missing monitor output.');
+      result.output = value;
+      index += 1;
+    } else if (argument === '--label') {
+      const value = args[index + 1];
+      if (value === undefined) throw new Error('Missing monitor label.');
+      result.label = value;
+      index += 1;
+    } else if (argument === undefined) {
+      throw new Error('Missing monitor argument.');
+    } else {
+      unknownOption('monitor', argument);
+    }
+  }
+  if (!Number.isInteger(result.pid) || result.pid <= 0) {
+    throw new Error('Monitor requires --pid with a positive process id.');
+  }
+  if (!Number.isInteger(result.samples) || result.samples <= 0) {
+    throw new Error('Monitor requires --samples with a positive integer.');
+  }
+  if (!Number.isInteger(result.intervalMs) || result.intervalMs <= 0) {
+    throw new Error('Monitor requires --interval-ms with a positive integer.');
+  }
+  if (result.output.length === 0) throw new Error('Monitor requires --out.');
+  return { _tag: 'monitor', ...result };
 }

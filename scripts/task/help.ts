@@ -21,6 +21,7 @@ Application:
 
 Utilities:
   api
+  monitor --pid <pid> --out <target/path> [--samples 301] [--interval-ms 1000] [--label <text>]
   promo                        (render README/promo artwork into assets/promo)
 
 Crate short names:

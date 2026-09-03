@@ -6,6 +6,7 @@ import {
   lintCommand,
   rustClippyWorkspaceCommands,
   rustFormatCommand,
+  scriptTestCommands,
   typecheckCommands,
 } from './commands';
 import type { TaskProcessError } from './errors';
@@ -66,6 +67,7 @@ export const runCheck = Effect.fn('task.check')(function* () {
     { label: 'fmt --check', commands: [formatCommand(true)] },
     { label: 'lint', commands: [lintCommand(false)] },
     { label: 'typecheck', commands: typecheckCommands() },
+    { label: 'script tests', commands: scriptTestCommands() },
     { label: 'rust fmt --check', commands: [rustFormatCommand(true)] },
     { label: 'rust clippy', commands: rustClippyWorkspaceCommands() },
   ];

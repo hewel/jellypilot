@@ -5,6 +5,7 @@ import {
   lintCommand,
   rustClippyWorkspaceCommands,
   rustFormatCommand,
+  scriptTestCommands,
   typecheckCommands,
 } from './commands';
 import { parseCrates, resolveCrates } from './crates';
@@ -30,8 +31,8 @@ describe('shared command builders', () => {
     expect(typecheckCommands()).toEqual([
       { command: 'bun', args: ['x', 'tsc', '--noEmit', '-p', 'scripts'] },
     ]);
+    expect(scriptTestCommands()).toEqual([{ command: 'bun', args: ['test', 'scripts'] }]);
   });
-
   test('builds workspace Rust formatting and clippy invocations', () => {
     const format = rustFormatCommand(true);
     expect(format.command).toBe('cargo');

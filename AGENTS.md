@@ -46,7 +46,7 @@ playback, no libmpv, no webview, no Tauri.
 ## Commands
 
 ```bash
-bun run check                    # oxfmt/oxlint + scripts typecheck + cargo fmt/clippy (workspace)
+bun run check                    # oxfmt/oxlint + scripts typecheck/tests + cargo fmt/clippy (workspace)
 bun run task fmt [--check]       # oxfmt on package.json + scripts/**
 bun run task lint [--fix]        # oxlint on scripts/**
 bun run task typecheck           # tsc on scripts/**
@@ -56,6 +56,7 @@ bun run task rust test [crate]   # cargo test
 bun run task iced run [--smoke] [--release]  # run the app; --smoke exits after first frame
 bun run task iced hot                      # hot-reload dev run via cargo-hot (dev feature)
 bun run task api                 # regenerate OpenAPI clients
+bun run task monitor --pid <pid> --out <target/path> # Linux raw resource sampler for a running process
 ```
 
 Crate short names: `auth`, `core`, `media-server`, `mpv`, `session`, `iced` (ui + app).

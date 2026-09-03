@@ -67,3 +67,7 @@ export function rustClippyWorkspaceCommands(): readonly CommandSpec[] {
 export function typecheckCommands(): readonly CommandSpec[] {
   return [command('bun', ['x', 'tsc', '--noEmit', '-p', 'scripts'])];
 }
+
+export function scriptTestCommands(): readonly CommandSpec[] {
+  return [command('bun', ['test', 'scripts'])];
+}

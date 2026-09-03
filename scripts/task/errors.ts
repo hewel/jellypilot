@@ -14,3 +14,8 @@ export class TaskCheckError extends Data.TaggedError('TaskCheckError')<{
   readonly failedSteps: readonly string[];
   readonly message: string;
 }> {}
+
+export class TaskMonitorError extends Data.TaggedError('TaskMonitorError')<{
+  readonly pid: number;
+  readonly message: string;
+}> {}

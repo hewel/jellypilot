@@ -5,6 +5,7 @@ import { TaskCliError } from './task/errors';
 import { TASK_HELP } from './task/help';
 import { runHot, runIced } from './task/iced';
 import { runApi } from './task/misc';
+import { runMonitor } from './task/monitor';
 import { parseCli } from './task/parse';
 import { runPromo } from './task/promo';
 import { runFormat, runLint, runTypecheck } from './task/quality';
@@ -28,6 +29,7 @@ const program = Effect.try({
       Match.when({ _tag: 'iced' }, ({ smoke, release }) => runIced(smoke, release)),
       Match.when({ _tag: 'icedHot' }, () => runHot()),
       Match.when({ _tag: 'promo' }, () => runPromo()),
+      Match.when({ _tag: 'monitor' }, (task) => runMonitor(task)),
       Match.when({ _tag: 'api' }, () => runApi()),
       Match.exhaustive,
     ),
