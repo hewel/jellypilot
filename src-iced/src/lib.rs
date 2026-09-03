@@ -1,6 +1,7 @@
 //! Cross-platform iced application shell for JellyPilot.
 
 mod app;
+mod instance;
 mod tray;
 
 use std::cell::RefCell;
@@ -9,11 +10,6 @@ use iced::{window, Size};
 
 /// Default logical window size at startup.
 const DEFAULT_WINDOW_SIZE: Size = app::shell::FULL_DEFAULT_WINDOW_SIZE;
-/// Minimum allowable logical window size in Full mode.
-const MIN_WINDOW_SIZE: Size = app::shell::FULL_MIN_WINDOW_SIZE;
-/// Fixed logical window size in Control-Only mode (min == max, non-resizable).
-const CONTROL_ONLY_WINDOW_SIZE: Size = app::shell::CONTROL_ONLY_WINDOW_SIZE;
-
 /// Bundled 256×256 application icon shown in the window decorations and taskbar.
 const WINDOW_ICON_PNG: &[u8] = include_bytes!("../../assets/icons/128x128@2x.png");
 
@@ -29,18 +25,11 @@ pub(crate) fn decode_icon(png: &[u8]) -> Option<(Vec<u8>, u32, u32)> {
   Some((image.into_raw(), width, height))
 }
 
-/// Builds the window icon from the bundled asset; absent only if decoding fails.
-fn window_icon() -> Option<window::Icon> {
-  let (rgba, width, height) = decode_icon(WINDOW_ICON_PNG)?;
-  window::icon::from_rgba(rgba, width, height).ok()
-}
-
-/// Starts the cross-platform iced application and blocks until its window closes.
+/// Starts the cross-platform iced daemon and blocks until it exits.
 pub fn run() -> iced::Result {
   run_application(false)
 }
-
-/// Starts the iced application and exits after its first rendered window frame.
+/// Starts the iced daemon and exits after its first rendered window frame.
 pub fn run_smoke() -> iced::Result {
   run_application(true)
 }
@@ -60,7 +49,49 @@ pub(crate) fn parse_smoke_size(input: &str) -> Option<Size> {
   Some(Size::new(width, height))
 }
 
-fn smoke_window_size() -> Size {
+fn run_application(smoke: bool) -> iced::Result {
+  tracing::debug!(smoke, "daemon booting");
+  let instance = if smoke {
+    None
+  } else {
+    match instance::acquire() {
+      instance::Startup::Existing => return Ok(()),
+      instance::Startup::Primary(guard) => Some(guard),
+      instance::Startup::Unavailable => None,
+    }
+  };
+  let tray = (!smoke).then(|| tray::Tray::new().ok()).flatten();
+  let instance = RefCell::new(instance);
+  let tray = RefCell::new(tray);
+  let mut daemon = iced::daemon(
+    move || {
+      app::boot(
+        smoke,
+        tray.borrow_mut().take(),
+        instance.borrow_mut().take(),
+      )
+    },
+    app::update,
+    app::view,
+  )
+  .title("JellyPilot")
+  .subscription(app::subscription)
+  .theme(app::theme)
+  .default_font(jellypilot_ui::fonts::INTER_FONT);
+
+  for font in jellypilot_ui::fonts::fonts() {
+    daemon = daemon.font(font);
+  }
+
+  daemon.run()
+}
+
+pub(crate) fn window_icon() -> Option<window::Icon> {
+  let (pixels, width, height) = decode_icon(WINDOW_ICON_PNG)?;
+  window::icon::from_rgba(pixels, width, height).ok()
+}
+
+pub(crate) fn smoke_window_size() -> Size {
   match std::env::var("JELLYPILOT_SMOKE_SIZE") {
     Ok(raw) => match parse_smoke_size(&raw) {
       Some(size) => size,
@@ -75,55 +106,12 @@ fn smoke_window_size() -> Size {
   }
 }
 
-fn run_application(smoke: bool) -> iced::Result {
-  tracing::debug!(smoke, "application booting");
-  let tray = (!smoke).then(|| tray::Tray::new().ok()).flatten();
-  let settings = jellypilot_core::config::SettingsStore::load().unwrap_or_default();
-  let start_minimized = settings.snapshot().start_minimized();
-  let control_only =
-    !smoke && settings.snapshot().app_mode() == jellypilot_core::config::AppMode::ControlOnly;
-  let start_hidden = should_start_hidden(start_minimized, tray.is_some());
-  let window_size = if smoke {
-    smoke_window_size()
-  } else if control_only {
-    CONTROL_ONLY_WINDOW_SIZE
-  } else {
-    DEFAULT_WINDOW_SIZE
-  };
-  let tray = RefCell::new(tray);
-  let mut application = iced::application(
-    move || app::boot(smoke, tray.borrow_mut().take()),
-    app::update,
-    app::view,
-  )
-  .title("JellyPilot")
-  .subscription(app::subscription)
-  .theme(app::theme)
-  .window(window::Settings {
-    size: window_size,
-    min_size: Some(if control_only {
-      CONTROL_ONLY_WINDOW_SIZE
-    } else {
-      MIN_WINDOW_SIZE
-    }),
-    max_size: control_only.then_some(CONTROL_ONLY_WINDOW_SIZE),
-    icon: window_icon(),
-    visible: !start_hidden,
-    resizable: !control_only,
-    ..window::Settings::default()
-  })
-  .exit_on_close_request(false)
-  .default_font(jellypilot_ui::fonts::INTER_FONT);
-
-  for font in jellypilot_ui::fonts::fonts() {
-    application = application.font(font);
-  }
-
-  application.run()
-}
-
-const fn should_start_hidden(start_minimized: bool, tray_initialized: bool) -> bool {
-  start_minimized && tray_initialized
+pub(crate) const fn should_start_hidden(
+  start_minimized: bool,
+  tray_initialized: bool,
+  smoke: bool,
+) -> bool {
+  !smoke && start_minimized && tray_initialized
 }
 
 #[cfg(test)]
@@ -132,9 +120,10 @@ mod tests {
 
   #[test]
   fn start_minimized_requires_an_initialized_tray() {
-    assert!(should_start_hidden(true, true));
-    assert!(!should_start_hidden(true, false));
-    assert!(!should_start_hidden(false, true));
+    assert!(should_start_hidden(true, true, false));
+    assert!(!should_start_hidden(true, false, false));
+    assert!(!should_start_hidden(false, true, false));
+    assert!(!should_start_hidden(true, true, true));
   }
 
   use super::parse_smoke_size;

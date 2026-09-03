@@ -69,6 +69,7 @@ pub fn update(state: &mut State, message: Message) -> Task<Message> {
         &mut state.shell,
         &mut state.kernel,
         skeletons_active,
+        state.playback.view.now_playing.is_some(),
         message,
       );
       let mut tasks = vec![window_task];
@@ -85,11 +86,13 @@ pub fn update(state: &mut State, message: Message) -> Task<Message> {
         ));
       }
       if let WindowMessage::Resized(size) = message {
-        tasks.push(browse::sync_scroll_window(
-          &mut state.browse,
-          &mut state.kernel,
-          size,
-        ));
+        if let Some(full) = state.full.as_mut() {
+          tasks.push(browse::sync_scroll_window(
+            &mut full.browse,
+            &mut state.kernel,
+            size,
+          ));
+        }
         state.retain_artwork_handles();
       }
       Task::batch(tasks)
@@ -167,12 +170,14 @@ pub fn update(state: &mut State, message: Message) -> Task<Message> {
         );
         let home_task = if control_only {
           Task::none()
-        } else {
+        } else if let Some(full) = state.full.as_mut() {
           home::start_load(
-            &mut state.home,
+            &mut full.home,
             &mut state.kernel,
             state.playback.view.now_playing.is_none(),
           )
+        } else {
+          Task::none()
         };
         let remote_task = playback::start_remote_session(&mut state.playback, &mut state.kernel);
         Task::batch([login_task, home_task, remote_task])
@@ -196,13 +201,12 @@ pub fn update(state: &mut State, message: Message) -> Task<Message> {
       }
     }
     Message::Home(message) => {
-      // Cross-surface follow-ups hoisted out of the home surface (ADR 0029): a
-      // Loaded settlement re-prepares the artwork pipeline, after which
-      // handles are retained here because retention reads every surface's
-      // slot set.
+      let Some(full) = state.full.as_mut() else {
+        return Task::none();
+      };
       let reprepared_artwork = matches!(message, HomeMessage::Loaded { .. });
       let task = home::update(
-        &mut state.home,
+        &mut full.home,
         &mut state.kernel,
         state.playback.view.now_playing.is_none(),
         state.shell.window_size.width,
@@ -214,10 +218,12 @@ pub fn update(state: &mut State, message: Message) -> Task<Message> {
       task
     }
     Message::Browse(BrowseMessage::SearchSubmitted) => {
-      // Navigation stays at the top-level router (ADR 0029): the browse
-      // surface owns the input text, but submitting it writes the shared
-      // destination stack and drives the other surfaces' leave/enter hooks.
-      let query = state.browse.search_input.trim().to_owned();
+      // Navigation stays at the top-level router; Control-Only has no browse
+      // composition, so its messages are ignored.
+      let Some(full) = state.full.as_ref() else {
+        return Task::none();
+      };
+      let query = full.browse.search_input.trim().to_owned();
       let destination = (!query.is_empty()).then_some(Destination::Search(query));
       match destination {
         Some(destination) if shell::destination_allowed(state.app_mode(), &destination) => {
@@ -227,12 +233,9 @@ pub fn update(state: &mut State, message: Message) -> Task<Message> {
       }
     }
     Message::Browse(message) => {
-      // Cross-surface follow-ups hoisted out of the browse surface (ADR
-      // 0029): the router resolves the browse source, library-route,
-      // playback-idle, and window-size reads the surface may not perform,
-      // and a page-settlement or scroll-window sync re-prepares the artwork
-      // pipeline, after which handles are retained here because retention
-      // reads every surface's slot set.
+      if state.full.is_none() {
+        return Task::none();
+      }
       let previous_notice = state.kernel.notice.clone();
       let reprepared_artwork = matches!(
         message,
@@ -245,8 +248,9 @@ pub fn update(state: &mut State, message: Message) -> Task<Message> {
         | BrowseMessage::FavoritesToggled => shell::browse_source(state),
         _ => None,
       };
+      let full = state.full.as_mut().expect("FullUi checked above");
       let task = browse::update(
-        &mut state.browse,
+        &mut full.browse,
         &mut state.kernel,
         source,
         matches!(state.shell.destination, Destination::Library { .. }),
@@ -277,12 +281,12 @@ pub fn update(state: &mut State, message: Message) -> Task<Message> {
         Task::none()
       }
     }
-    Message::Detail(DetailMessage::Back) => shell::navigate_back(state),
+    Message::Detail(DetailMessage::Back) if state.full.is_some() => shell::navigate_back(state),
+    Message::Detail(DetailMessage::Back) => Task::none(),
     Message::Detail(message) => {
-      // Cross-surface follow-ups hoisted out of the detail surface (ADR
-      // 0029): a content/season/neighbors settlement re-prepares the artwork
-      // pipeline, after which handles are retained here because retention
-      // reads every surface's slot set.
+      let Some(full) = state.full.as_mut() else {
+        return Task::none();
+      };
       let reprepared_artwork = matches!(
         message,
         DetailMessage::Loaded { .. }
@@ -293,12 +297,7 @@ pub fn update(state: &mut State, message: Message) -> Task<Message> {
         Destination::Detail(item_id) => Some(item_id.as_str()),
         _ => None,
       };
-      let task = detail::update(
-        &mut state.detail,
-        &mut state.kernel,
-        detail_item_id,
-        message,
-      );
+      let task = detail::update(&mut full.detail, &mut state.kernel, detail_item_id, message);
       if reprepared_artwork {
         state.retain_artwork_handles();
       }
@@ -488,9 +487,12 @@ mod tests {
       settings: crate::app::settings::Surface {
         view: settings_view,
       },
-      home: home::Surface::default(),
-      detail: detail::Surface::default(),
-      browse: browse::Surface::default(),
+      instance: None,
+      full: Some(crate::app::state::FullUi {
+        home: home::Surface::default(),
+        detail: detail::Surface::default(),
+        browse: browse::Surface::default(),
+      }),
       playback,
       shell: shell::Surface::new(false),
     }
@@ -996,7 +998,7 @@ mod tests {
       library_id: "movies".to_owned(),
       collection_type: "movies".to_owned(),
     };
-    state.home.data.shortcuts =
+    state.full.as_mut().unwrap().home.data.shortcuts =
       jellypilot_core::LoadState::Ready(vec![jellypilot_media_server::VideoLibraryShortcut {
         id: "movies".to_owned(),
         name: "Movies".to_owned(),
@@ -1009,7 +1011,7 @@ mod tests {
 
     let mut item = episode("browse-item-1", 1);
     item.artwork_image_id = Some("browse-art-1".to_owned());
-    state.browse.view = LibraryBrowseView::Ready {
+    state.full.as_mut().unwrap().browse.view = LibraryBrowseView::Ready {
       visible_items: vec![jellypilot_core::browse_model::LibraryItemSlot {
         item: Some(item.clone()),
       }],
@@ -1024,12 +1026,20 @@ mod tests {
     // Mirrors the router: a re-prepared pipeline is followed by cross-surface
     // handle retention (ADR 0029).
     drop(browse::prepare_artwork(
-      &mut state.browse,
+      &mut state.full.as_mut().unwrap().browse,
       &mut state.kernel,
       state.shell.window_size.width,
     ));
     state.retain_artwork_handles();
-    let slot = state.browse.artwork.get("browse-item-1").unwrap().slot;
+    let slot = state
+      .full
+      .as_mut()
+      .unwrap()
+      .browse
+      .artwork
+      .get("browse-item-1")
+      .unwrap()
+      .slot;
     let session = state.kernel.request_gate.current_session();
     // A real load stores the raster in the adapter cache; seed it beside the
     // synthesized completion so re-navigation can rebuild from it.
@@ -1039,7 +1049,7 @@ mod tests {
       jellypilot_media_server::artwork::ArtworkRaster::from_raw_for_test(1, 1, vec![1, 2, 3, 4]),
     );
     drop(browse::update(
-      &mut state.browse,
+      &mut state.full.as_mut().unwrap().browse,
       &mut state.kernel,
       None,
       false,
@@ -1060,6 +1070,9 @@ mod tests {
     ));
     assert_eq!(
       state
+        .full
+        .as_ref()
+        .unwrap()
         .browse
         .artwork
         .get("browse-item-1")
@@ -1077,7 +1090,7 @@ mod tests {
 
     // Return to Browse
     drop(shell::navigate(&mut state, library));
-    state.browse.view = LibraryBrowseView::Ready {
+    state.full.as_mut().unwrap().browse.view = LibraryBrowseView::Ready {
       visible_items: vec![jellypilot_core::browse_model::LibraryItemSlot { item: Some(item) }],
       visible_start: 0,
       mode: jellypilot_core::LibraryBrowseMode::Normal,
@@ -1087,13 +1100,16 @@ mod tests {
       retry_busy: false,
     };
     drop(browse::prepare_artwork(
-      &mut state.browse,
+      &mut state.full.as_mut().unwrap().browse,
       &mut state.kernel,
       state.shell.window_size.width,
     ));
     state.retain_artwork_handles();
 
     let browse_cell = state
+      .full
+      .as_ref()
+      .unwrap()
       .browse
       .artwork
       .get("browse-item-1")
@@ -1115,6 +1131,7 @@ mod tests {
       .set_app_mode(jellypilot_core::config::AppMode::ControlOnly)
       .unwrap();
     state.kernel.settings = settings;
+    state.full = None;
     state.shell.destination = Destination::NowPlaying;
 
     drop(update(
@@ -1126,7 +1143,8 @@ mod tests {
     ));
     assert_eq!(state.shell.destination, Destination::NowPlaying);
 
-    state.browse.search_input = "term".to_owned();
+    // The browser composition is absent in Control-Only, so stale input is
+    // not retained or routed.
     drop(update(
       &mut state,
       Message::Browse(BrowseMessage::SearchSubmitted),
@@ -1171,7 +1189,7 @@ mod tests {
       library_id: "movies".to_owned(),
       collection_type: "movies".to_owned(),
     };
-    state.home.data.shortcuts =
+    state.full.as_mut().unwrap().home.data.shortcuts =
       jellypilot_core::LoadState::Ready(vec![jellypilot_media_server::VideoLibraryShortcut {
         id: "movies".to_owned(),
         name: "Movies".to_owned(),
@@ -1179,9 +1197,9 @@ mod tests {
         item_count: Some(1),
         artwork_image_id: None,
       }]);
-    state.browse.view = LibraryBrowseView::Loading;
+    state.full.as_mut().unwrap().browse.view = LibraryBrowseView::Loading;
     let (_task, handle) = Task::<Message>::none().abortable();
-    state.browse.page_tasks.insert(
+    state.full.as_mut().unwrap().browse.page_tasks.insert(
       jellypilot_core::LibraryBrowseLoadToken {
         generation: 1,
         sequence: 1,
@@ -1193,25 +1211,16 @@ mod tests {
       &mut state,
       jellypilot_core::config::AppMode::ControlOnly,
     ));
-
     assert_eq!(state.shell.destination, Destination::NowPlaying);
     assert!(state.shell.navigation_stack.is_empty());
-    assert!(state.browse.page_tasks.is_empty());
-    assert!(matches!(state.browse.view, LibraryBrowseView::Inactive));
-    assert!(matches!(
-      state.home.data.shortcuts,
-      jellypilot_core::LoadState::Idle
-    ));
-    assert_eq!(
-      state.shell.full_window_size,
-      Some(iced::Size::new(1440.0, 810.0))
-    );
+    assert!(state.full.is_none());
   }
 
   #[test]
   fn entering_full_restores_home_and_consumes_the_stashed_size() {
     let mut state = test_state();
     state.shell.destination = Destination::NowPlaying;
+    state.shell.window_id = Some(iced::window::Id::unique());
     state.shell.full_window_size = Some(iced::Size::new(1280.0, 800.0));
 
     drop(shell::apply_app_mode(

@@ -25,6 +25,8 @@ use super::state::{Destination, State};
 /// frame (sidebar, content routing, toast layer).
 pub struct Surface {
   pub smoke: bool,
+  /// The live window, when the daemon currently owns one.
+  pub window_id: Option<iced::window::Id>,
   /// Latest known logical window size; drives size-class layout decisions.
   pub window_size: iced::Size,
   /// Full-mode window size stashed when entering Control-Only mode; restored
@@ -42,11 +44,11 @@ pub struct Surface {
   pub destination: Destination,
   pub navigation_stack: Vec<Destination>,
 }
-
 impl Surface {
   pub fn new(smoke: bool) -> Self {
     Self {
       smoke,
+      window_id: None,
       window_size: iced::Size::new(1600.0, 900.0),
       full_window_size: None,
       skeleton_phase: 0.0,
@@ -159,7 +161,9 @@ pub(crate) fn apply_app_mode(state: &mut State, mode: AppMode) -> Task<Message> 
   match mode {
     AppMode::ControlOnly => {
       close_settings(state);
-      browse::reset(&mut state.browse, &mut state.kernel);
+      if let Some(full) = state.full.as_mut() {
+        browse::reset(&mut full.browse, &mut state.kernel);
+      }
       if state.playback.view.now_playing.is_none() {
         state.kernel.artwork_adapter.reset_session();
       } else {
@@ -167,8 +171,7 @@ pub(crate) fn apply_app_mode(state: &mut State, mode: AppMode) -> Task<Message> 
         // dropped browse surfaces' decoded caches are dead weight either way.
         state.kernel.artwork_adapter.clear_caches();
       }
-      state.home = home::Surface::default();
-      state.detail = detail::Surface::default();
+      state.full = None;
       state.retain_artwork_handles();
       state.shell.full_window_size = Some(state.shell.window_size);
       state.shell.navigation_stack.clear();
@@ -176,7 +179,13 @@ pub(crate) fn apply_app_mode(state: &mut State, mode: AppMode) -> Task<Message> 
       window_geometry_task(mode_geometry(mode, None))
     }
     AppMode::Full => {
-      let geometry = mode_geometry(mode, state.shell.full_window_size.take());
+      let restore_size = if state.shell.window_id.is_some() {
+        state.shell.full_window_size.take()
+      } else {
+        state.shell.full_window_size
+      };
+      let geometry = mode_geometry(mode, restore_size);
+      state.full = Some(crate::app::state::FullUi::default());
       let previous = std::mem::replace(&mut state.shell.destination, Destination::Home);
       state.shell.navigation_stack.clear();
       let activation = activate_destination(state, previous);
@@ -195,19 +204,46 @@ pub fn update(
   surface: &mut Surface,
   kernel: &mut Kernel,
   skeletons_active: bool,
+  now_playing: bool,
   message: WindowMessage,
 ) -> Task<Message> {
   match message {
     WindowMessage::CloseRequested(id) if kernel.tray.is_some() => {
-      iced::window::set_mode(id, iced::window::Mode::Hidden)
+      if kernel.settings.snapshot().app_mode() == AppMode::ControlOnly {
+        surface.window_id = None;
+        surface.settings_open = false;
+        surface.skeleton_animation_start = None;
+        surface.skeleton_phase = 0.0;
+        if now_playing {
+          kernel.artwork_adapter.clear_caches();
+        } else {
+          kernel.artwork_adapter.reset_session();
+        }
+        iced::window::close(id)
+      } else {
+        iced::window::set_mode(id, iced::window::Mode::Hidden)
+      }
     }
     WindowMessage::CloseRequested(_) => {
       surface.quit_requested = true;
       Task::none()
     }
-    WindowMessage::ShowRequested(id) => id.map_or_else(Task::none, |id| {
-      iced::window::set_mode(id, iced::window::Mode::Windowed).chain(iced::window::gain_focus(id))
-    }),
+    WindowMessage::ShowRequested(id) => {
+      // A second-instance activation arrives with no id; focus the tracked
+      // window when one exists instead of opening a duplicate.
+      if let Some(id) = id.or(surface.window_id) {
+        surface.window_id = Some(id);
+        iced::window::set_mode(id, iced::window::Mode::Windowed).chain(iced::window::gain_focus(id))
+      } else {
+        let geometry = mode_geometry(
+          kernel.settings.snapshot().app_mode(),
+          surface.full_window_size,
+        );
+        surface.window_size = geometry.size;
+        let (_id, open) = iced::window::open(crate::app::window_settings(geometry));
+        open.map(|id| Message::Window(WindowMessage::ShowRequested(Some(id))))
+      }
+    }
     WindowMessage::Resized(size) => {
       surface.window_size = size;
       Task::none()
@@ -230,7 +266,6 @@ pub fn update(
     }
   }
 }
-
 pub(crate) fn navigate(state: &mut State, destination: Destination) -> Task<Message> {
   let previous = state.shell.destination.clone();
   if !state.shell.navigate_to(destination) {
@@ -240,8 +275,11 @@ pub(crate) fn navigate(state: &mut State, destination: Destination) -> Task<Mess
 }
 
 pub(crate) fn open_detail(state: &mut State, item: VideoLibraryItem) -> Task<Message> {
+  let Some(full) = state.full.as_mut() else {
+    return Task::none();
+  };
   let item_id = item.id.clone();
-  state.detail.items.insert(item_id.clone(), item);
+  full.detail.items.insert(item_id.clone(), item);
   navigate(state, Destination::Detail(item_id))
 }
 
@@ -264,66 +302,46 @@ pub(crate) fn close_settings(state: &mut State) {
   state.settings.view.diagnostic_level_menu_open = false;
   state.settings.view.diagnostic_category_menu_open = false;
 }
-
 fn activate_destination(state: &mut State, previous: Destination) -> Task<Message> {
-  if previous == Destination::Home && state.shell.destination != Destination::Home {
-    home::leave_view(
-      &mut state.home,
-      &mut state.kernel,
-      state.playback.view.now_playing.is_none(),
-    );
+  let destination = state.shell.destination.clone();
+  let playback_idle = state.playback.view.now_playing.is_none();
+  let source = match &destination {
+    Destination::Library { .. } | Destination::Search(_) => browse_source(state),
+    _ => None,
+  };
+  let full = state
+    .full
+    .as_mut()
+    .expect("library destination activation requires FullUi");
+  if previous == Destination::Home && destination != Destination::Home {
+    home::leave_view(&mut full.home, &mut state.kernel, playback_idle);
   } else if matches!(
     previous,
     Destination::Library { .. } | Destination::Search(_)
   ) && !matches!(
-    state.shell.destination,
+    destination,
     Destination::Library { .. } | Destination::Search(_)
   ) {
-    browse::leave_view(
-      &mut state.browse,
-      &mut state.kernel,
-      state.playback.view.now_playing.is_none(),
-    );
-  } else if matches!(previous, Destination::Detail(_)) && previous != state.shell.destination {
-    detail::leave_view(
-      &mut state.detail,
-      &mut state.kernel,
-      state.playback.view.now_playing.is_none(),
-    );
+    browse::leave_view(&mut full.browse, &mut state.kernel, playback_idle);
+  } else if matches!(previous, Destination::Detail(_)) && previous != destination {
+    detail::leave_view(&mut full.detail, &mut state.kernel, playback_idle);
   }
 
-  match &state.shell.destination {
-    Destination::Home => home::start_load(
-      &mut state.home,
-      &mut state.kernel,
-      state.playback.view.now_playing.is_none(),
-    ),
+  match destination {
+    Destination::Home => home::start_load(&mut full.home, &mut state.kernel, playback_idle),
     Destination::Library { .. } => {
-      state.browse.search_input.clear();
-      let source = browse_source(state);
-      browse::start(
-        &mut state.browse,
-        &mut state.kernel,
-        source,
-        state.playback.view.now_playing.is_none(),
-      )
+      full.browse.search_input.clear();
+      browse::start(&mut full.browse, &mut state.kernel, source, playback_idle)
     }
     Destination::Search(_) => {
-      let source = browse_source(state);
-      browse::start(
-        &mut state.browse,
-        &mut state.kernel,
-        source,
-        state.playback.view.now_playing.is_none(),
-      )
+      browse::start(&mut full.browse, &mut state.kernel, source, playback_idle)
     }
     Destination::Detail(item_id) => {
-      detail::start_load(&mut state.detail, &mut state.kernel, Some(item_id))
+      detail::start_load(&mut full.detail, &mut state.kernel, Some(&item_id))
     }
     Destination::NowPlaying => Task::none(),
   }
 }
-
 pub(crate) fn browse_source(state: &State) -> Option<BrowseSource> {
   let session = state.kernel.request_gate.current_session();
   match &state.shell.destination {
@@ -331,7 +349,8 @@ pub(crate) fn browse_source(state: &State) -> Option<BrowseSource> {
       library_id,
       collection_type,
     } => {
-      let jellypilot_core::LoadState::Ready(shortcuts) = &state.home.data.shortcuts else {
+      let full = state.full.as_ref()?;
+      let jellypilot_core::LoadState::Ready(shortcuts) = &full.home.data.shortcuts else {
         return None;
       };
       shortcuts
@@ -357,14 +376,19 @@ pub(crate) fn reset_connected_surface(state: &mut State) -> Task<Message> {
     &mut state.kernel,
     state.shell.quit_requested,
   );
-  browse::reset(&mut state.browse, &mut state.kernel);
+  if let Some(full) = state.full.as_mut() {
+    browse::reset(&mut full.browse, &mut state.kernel);
+  }
   state.kernel.artwork_adapter.reset_session();
   state.kernel.artwork_binder.reset();
-  state.home = home::Surface::default();
-  state.detail = detail::Surface::default();
+  state.full = (state.app_mode() == AppMode::Full).then(crate::app::state::FullUi::default);
   state.kernel.artwork_handles.clear();
   state.shell.navigation_stack.clear();
-  state.shell.destination = Destination::Home;
+  state.shell.destination = if state.app_mode() == AppMode::Full {
+    Destination::Home
+  } else {
+    Destination::NowPlaying
+  };
   close_settings(state);
   playback_task
 }
@@ -413,6 +437,7 @@ mod tests {
       &mut surface,
       &mut kernel,
       true,
+      false,
       WindowMessage::FrameTick(start),
     ));
     assert_eq!(surface.skeleton_phase, 0.0);
@@ -422,6 +447,7 @@ mod tests {
       &mut surface,
       &mut kernel,
       true,
+      false,
       WindowMessage::FrameTick(start + Duration::from_millis(800)),
     ));
     assert_eq!(surface.skeleton_phase, 0.5);
@@ -430,6 +456,7 @@ mod tests {
     drop(update(
       &mut surface,
       &mut kernel,
+      false,
       false,
       WindowMessage::FrameTick(start + Duration::from_millis(1200)),
     ));
@@ -445,6 +472,7 @@ mod tests {
     drop(update(
       &mut surface,
       &mut kernel,
+      false,
       false,
       WindowMessage::Resized(size),
     ));

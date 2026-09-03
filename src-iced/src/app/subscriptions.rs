@@ -23,30 +23,38 @@ pub fn subscription(state: &State) -> Subscription<Message> {
     }
   });
   let mut subscriptions = vec![window_events];
-  subscriptions
-    .push(window::resize_events().map(|(_id, size)| Message::Window(WindowMessage::Resized(size))));
+  if state.shell.window_id.is_some() {
+    subscriptions.push(
+      window::resize_events().map(|(_id, size)| Message::Window(WindowMessage::Resized(size))),
+    );
+  }
   if state.playback.view.now_playing.is_some() {
     subscriptions.push(
       time::every(Duration::from_secs(1))
         .map(|_| Message::Playback(PlaybackMessage::Intent(PlaybackIntent::Tick))),
     );
   }
-  if state.settings.view.shortcut_capture.is_some() {
-    subscriptions.push(event::listen_with(shortcut_capture));
-  } else if state.shell.settings_open {
-    subscriptions.push(event::listen_with(settings_modal_events));
-  } else if state.playback.view.now_playing.is_some() {
-    subscriptions.push(
-      event::listen()
-        .with(playback_shortcuts(state.kernel.settings.snapshot()))
-        .filter_map(playback_shortcut),
-    );
+  if state.shell.window_id.is_some() {
+    if state.settings.view.shortcut_capture.is_some() {
+      subscriptions.push(event::listen_with(shortcut_capture));
+    } else if state.shell.settings_open {
+      subscriptions.push(event::listen_with(settings_modal_events));
+    } else if state.playback.view.now_playing.is_some() {
+      subscriptions.push(
+        event::listen()
+          .with(playback_shortcuts(state.kernel.settings.snapshot()))
+          .filter_map(playback_shortcut),
+      );
+    }
   }
   if let Some(channel) = state.playback.remote_events.clone() {
     subscriptions.push(Subscription::run_with(channel, remote_event_stream));
   }
   if let Some(tray) = &state.kernel.tray {
     subscriptions.push(Subscription::run_with(tray.channel(), tray_event_stream));
+  }
+  if let Some(channel) = state.instance.as_ref().map(crate::instance::Guard::channel) {
+    subscriptions.push(Subscription::run_with(channel, instance_event_stream));
   }
   // Follow OS light/dark flips only while the theme mode setting is System;
   // an explicit Dark/Light setting makes the subscription dead weight.
@@ -57,8 +65,9 @@ pub fn subscription(state: &State) -> Subscription<Message> {
   // Drive the shimmer phase only while skeletons are actually on screen (or a
   // smoke run waits on its first frame); an always-on frames subscription
   // would redraw the shell at display refresh for no visible change.
-  if state.shell.smoke
-    || (state.skeletons_active() && !state.kernel.settings.snapshot().reduced_motion())
+  if state.shell.window_id.is_some()
+    && (state.shell.smoke
+      || (state.skeletons_active() && !state.kernel.settings.snapshot().reduced_motion()))
   {
     subscriptions
       .push(window::frames().map(|instant| Message::Window(WindowMessage::FrameTick(instant))));
@@ -203,6 +212,23 @@ fn tray_event_stream(channel: &crate::tray::TrayEventChannel) -> impl Stream<Ite
     }
   })
 }
+fn instance_event_stream(
+  channel: &crate::instance::ActivationChannel,
+) -> impl Stream<Item = Message> {
+  let channel = channel.clone();
+  iced::stream::channel(1, async move |mut output| loop {
+    let Some(()) = channel.receiver.lock().await.recv().await else {
+      break;
+    };
+    if output
+      .send(Message::Window(WindowMessage::ShowRequested(None)))
+      .await
+      .is_err()
+    {
+      break;
+    }
+  })
+}
 
 fn shortcut_matches(binding: &str, key: &keyboard::Key, modifiers: keyboard::Modifiers) -> bool {
   let mut parts = binding
@@ -264,6 +290,7 @@ mod tests {
   fn shortcut_capture_keeps_playback_tick_subscribed() {
     let mut state = State::boot(false);
     state.kernel.settings = jellypilot_core::config::SettingsStore::default();
+    state.shell.window_id = Some(window::Id::unique());
     state.playback.view.now_playing = Some(jellypilot_mpv::playback_session::NowPlayingView {
       item: jellypilot_mpv::playback::NowPlayingItem {
         item_id: "episode-1".to_owned(),
@@ -282,12 +309,39 @@ mod tests {
     state.settings.view.shortcut_capture = Some(jellypilot_core::config::ShortcutKind::Next);
 
     // window events, resize events, playback tick, shortcut capture, theme changes
+
     assert_eq!(subscription(&state).units(), 5);
+  }
+  #[test]
+  fn window_subscriptions_suspend_without_a_live_window() {
+    let mut state = State::boot(false);
+    state.kernel.settings = jellypilot_core::config::SettingsStore::default();
+    state.playback.view.now_playing = Some(jellypilot_mpv::playback_session::NowPlayingView {
+      item: jellypilot_mpv::playback::NowPlayingItem {
+        item_id: "episode-1".to_owned(),
+        title: "Pilot".to_owned(),
+        item_type: "Episode".to_owned(),
+        runtime_seconds: Some(1_800.0),
+        start_position_seconds: 0.0,
+        play_method: "DirectPlay".to_owned(),
+      },
+      paused: false,
+      position_seconds: 10.0,
+      duration_seconds: Some(1_800.0),
+      volume: 75.0,
+      muted: false,
+    });
+    state.settings.view.shortcut_capture = Some(jellypilot_core::config::ShortcutKind::Next);
+
+    // Close listener, playback tick, and theme changes remain active; all
+    // resize, keyboard, and frame subscriptions require a live window.
+    assert_eq!(subscription(&state).units(), 3);
   }
   #[test]
   fn frames_subscription_only_runs_for_smoke_or_active_skeletons() {
     let mut state = State::boot(false);
     state.kernel.settings = jellypilot_core::config::SettingsStore::default();
+    state.shell.window_id = Some(window::Id::unique());
     // window events, resize events, theme changes; no frames while nothing loads.
     assert_eq!(subscription(&state).units(), 3);
 
@@ -295,17 +349,36 @@ mod tests {
     assert_eq!(subscription(&state).units(), 4);
     state.shell.smoke = false;
 
-    state.home.data.begin_load();
+    state.full.as_mut().unwrap().home.data.begin_load();
     assert_eq!(subscription(&state).units(), 4);
     // Episode/neighbor loads render shimmer skeletons independently of the
     // main detail content state; the frames subscription must stay alive.
     let mut detail_state = State::boot(false);
     detail_state.kernel.settings = jellypilot_core::config::SettingsStore::default();
-    detail_state.detail.data.season_episodes = LoadState::Loading;
+    detail_state.shell.window_id = Some(window::Id::unique());
+    detail_state
+      .full
+      .as_mut()
+      .unwrap()
+      .detail
+      .data
+      .season_episodes = LoadState::Loading;
     assert!(detail_state.skeletons_active());
     assert_eq!(subscription(&detail_state).units(), 4);
-    detail_state.detail.data.season_episodes = LoadState::Idle;
-    detail_state.detail.data.season_neighbors = LoadState::Loading;
+    detail_state
+      .full
+      .as_mut()
+      .unwrap()
+      .detail
+      .data
+      .season_episodes = LoadState::Idle;
+    detail_state
+      .full
+      .as_mut()
+      .unwrap()
+      .detail
+      .data
+      .season_neighbors = LoadState::Loading;
     assert_eq!(subscription(&detail_state).units(), 4);
 
     // Reduced motion renders static skeletons, so no frame ticks are needed.

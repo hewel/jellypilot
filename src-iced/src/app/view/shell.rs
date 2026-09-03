@@ -244,15 +244,21 @@ fn sidebar_full(
   skeleton_phase: f32,
   reduced_motion: bool,
 ) -> container::Container<'_, Message> {
-  let search_input = text_input("Search videos", &state.browse.search_input)
-    .on_input(|value| Message::Browse(BrowseMessage::SearchInputChanged(value)))
-    .on_submit(Message::Browse(BrowseMessage::SearchSubmitted))
-    .padding([8, 12])
-    .size(14)
-    .width(Fill)
-    .style(|theme, status| {
-      jellypilot_ui::theme::field_variant(theme, status, FieldVariant::Filled)
-    });
+  let search_input = text_input(
+    "Search videos",
+    &state
+      .full
+      .as_ref()
+      .expect("FullUi required")
+      .browse
+      .search_input,
+  )
+  .on_input(|value| Message::Browse(BrowseMessage::SearchInputChanged(value)))
+  .on_submit(Message::Browse(BrowseMessage::SearchSubmitted))
+  .padding([8, 12])
+  .size(14)
+  .width(Fill)
+  .style(|theme, status| jellypilot_ui::theme::field_variant(theme, status, FieldVariant::Filled));
   let search_button = button(icon_for_variant(
     Icon::Search,
     IconSize::Sm,
@@ -275,7 +281,14 @@ fn sidebar_full(
       Destination::Home,
       state.shell.destination == Destination::Home,
     ));
-  match &state.home.data.shortcuts {
+  match &state
+    .full
+    .as_ref()
+    .expect("FullUi required")
+    .home
+    .data
+    .shortcuts
+  {
     LoadState::Idle | LoadState::Loading => {
       destinations = destinations
         .push(shortcut_skeleton(skeleton_phase, reduced_motion))
@@ -358,7 +371,14 @@ fn sidebar_compact(state: &State) -> container::Container<'_, Message> {
       Destination::Home,
       state.shell.destination == Destination::Home,
     ));
-  if let LoadState::Ready(shortcuts) = &state.home.data.shortcuts {
+  if let LoadState::Ready(shortcuts) = &state
+    .full
+    .as_ref()
+    .expect("FullUi required")
+    .home
+    .data
+    .shortcuts
+  {
     for shortcut in shortcuts {
       let destination = Destination::Library {
         library_id: shortcut.id.clone(),
@@ -690,7 +710,7 @@ mod tests {
   fn shell_view_renders_in_loading_state() {
     let mut state = State::boot(false);
     state.shell.skeleton_phase = 0.42;
-    state.home.data.shortcuts = LoadState::Loading;
+    state.full.as_mut().unwrap().home.data.shortcuts = LoadState::Loading;
     let _element = view(&state);
   }
 

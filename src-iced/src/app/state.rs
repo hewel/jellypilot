@@ -795,6 +795,13 @@ pub fn diagnostic_matches(
     && category_filter.is_none_or(|filter| filter == category)
 }
 
+#[derive(Default)]
+pub struct FullUi {
+  pub home: crate::app::home::Surface,
+  pub browse: crate::app::browse::Surface,
+  pub detail: crate::app::detail::Surface,
+}
+
 pub struct State {
   pub kernel: Kernel,
   /// Latest OS light/dark mode report; `None` until the boot one-shot task
@@ -802,9 +809,8 @@ pub struct State {
   pub system_theme: iced::theme::Mode,
   pub login: crate::app::login::Surface,
   pub settings: crate::app::settings::Surface,
-  pub home: crate::app::home::Surface,
-  pub detail: crate::app::detail::Surface,
-  pub browse: crate::app::browse::Surface,
+  pub instance: Option<crate::instance::Guard>,
+  pub full: Option<FullUi>,
   pub playback: crate::app::playback::Surface,
   pub shell: crate::app::shell::Surface,
 }
@@ -822,6 +828,7 @@ impl State {
     login.error = settings_error.clone();
     login.auto_login_attempted = smoke;
     let settings_view = SettingsState::from_settings(settings.snapshot());
+    let full_ui = (settings.snapshot().app_mode() == AppMode::Full).then(FullUi::default);
     let mut diagnostics = Diagnostics::default();
     if let Some(error) = &settings_error {
       diagnostics.record(DiagnosticLevel::Error, DiagnosticCategory::Config, error);
@@ -858,10 +865,8 @@ impl State {
       settings: crate::app::settings::Surface {
         view: settings_view,
       },
-      home: crate::app::home::Surface::default(),
-      detail: crate::app::detail::Surface::default(),
-
-      browse: crate::app::browse::Surface::default(),
+      instance: None,
+      full: full_ui,
       playback,
       shell: crate::app::shell::Surface::new(smoke),
     };
@@ -874,29 +879,34 @@ impl State {
   }
   pub fn all_artwork_slots(&self) -> impl Iterator<Item = ArtworkSlot> + '_ {
     self
-      .home
-      .artwork
-      .slots()
-      .chain(self.browse.artwork.slots())
-      .chain(self.detail.artwork.slots())
+      .full
+      .iter()
+      .flat_map(|full| {
+        full
+          .home
+          .artwork
+          .slots()
+          .chain(full.browse.artwork.slots())
+          .chain(full.detail.artwork.slots())
+      })
       .chain(self.playback.artwork.as_ref().map(|cell| cell.slot))
   }
 
-  /// True while any surface renders skeleton placeholders or while any artwork
-  /// cell is loading. Gates the frame subscription that advances `skeleton_phase`,
-  /// so the shell never redraws at display refresh just for an invisible animation.
+  /// True while any full UI surface renders skeleton placeholders or while
+  /// any artwork cell is loading.
   pub(crate) fn skeletons_active(&self) -> bool {
-    let home_loading = self
+    let Some(full) = &self.full else {
+      return false;
+    };
+    let home_loading = full
       .home
       .data
       .rows()
       .iter()
       .any(|row| matches!(row.items, LoadState::Loading))
-      || matches!(self.home.data.shortcuts, LoadState::Loading);
-    let browse_loading = match &self.browse.view {
+      || matches!(full.home.data.shortcuts, LoadState::Loading);
+    let browse_loading = match &full.browse.view {
       LibraryBrowseView::Loading => true,
-      // A ready grid can still hold unloaded placeholder slots while more
-      // pages stream in.
       LibraryBrowseView::Ready { visible_items, .. } => {
         visible_items.iter().any(|slot| slot.item.is_none())
       }
@@ -904,17 +914,12 @@ impl State {
         false
       }
     };
-    // Detail renders episode skeletons for season episodes and continue-watching
-    // neighbors independently of the main content load state; all three keep the
-    // shimmer frames subscription alive.
-    let detail_loading = matches!(self.detail.data.content, LoadState::Loading)
-      || matches!(self.detail.data.season_episodes, LoadState::Loading)
-      || matches!(self.detail.data.season_neighbors, LoadState::Loading);
-    // Artwork cells also display breathing skeleton pulse blocks while in the
-    // Loading state across Home hero/sections, Browse grid, and Detail views.
-    let artwork_loading = self.home.artwork.has_loading()
-      || self.browse.artwork.has_loading()
-      || self.detail.artwork.has_loading();
+    let detail_loading = matches!(full.detail.data.content, LoadState::Loading)
+      || matches!(full.detail.data.season_episodes, LoadState::Loading)
+      || matches!(full.detail.data.season_neighbors, LoadState::Loading);
+    let artwork_loading = full.home.artwork.has_loading()
+      || full.browse.artwork.has_loading()
+      || full.detail.artwork.has_loading();
     home_loading || browse_loading || detail_loading || artwork_loading
   }
   /// Effective UI theme mode: the explicit setting, or the OS mode while the
@@ -1165,7 +1170,7 @@ mod tests {
     let slot_4 = binder.bind(ArtworkSurface::Detail);
 
     // Home hero loading
-    state.home.artwork.insert_hero(
+    state.full.as_mut().unwrap().home.artwork.insert_hero(
       "item-hero".to_owned(),
       ArtworkCell {
         slot: slot_1,
@@ -1174,11 +1179,11 @@ mod tests {
       },
     );
     assert!(state.skeletons_active());
-    state.home.artwork.prune_unready();
+    state.full.as_mut().unwrap().home.artwork.prune_unready();
     assert!(!state.skeletons_active());
 
     // Home card loading
-    state.home.artwork.insert_card(
+    state.full.as_mut().unwrap().home.artwork.insert_card(
       HomeSection::ContinueWatching,
       "item-card".to_owned(),
       ArtworkCell {
@@ -1188,11 +1193,11 @@ mod tests {
       },
     );
     assert!(state.skeletons_active());
-    state.home.artwork.prune_unready();
+    state.full.as_mut().unwrap().home.artwork.prune_unready();
     assert!(!state.skeletons_active());
 
     // Browse artwork loading
-    state.browse.artwork.insert(
+    state.full.as_mut().unwrap().browse.artwork.insert(
       "item-browse".to_owned(),
       ArtworkCell {
         slot: slot_3,
@@ -1201,11 +1206,11 @@ mod tests {
       },
     );
     assert!(state.skeletons_active());
-    state.browse.artwork.clear();
+    state.full.as_mut().unwrap().browse.artwork.clear();
     assert!(!state.skeletons_active());
 
     // Detail artwork loading
-    state.detail.artwork.insert(
+    state.full.as_mut().unwrap().detail.artwork.insert(
       "detail-poster".to_owned(),
       ArtworkCell {
         slot: slot_4,
@@ -1214,7 +1219,7 @@ mod tests {
       },
     );
     assert!(state.skeletons_active());
-    state.detail.artwork.clear();
+    state.full.as_mut().unwrap().detail.artwork.clear();
     assert!(!state.skeletons_active());
   }
 }

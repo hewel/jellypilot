@@ -25,6 +25,7 @@ iced = { version = "0.14.0", features = ["advanced", "canvas", "image", "svg", "
 image = { version = "0.25.10", default-features = false, features = ["png"] }
 mimalloc = { version = "0.1.48", default-features = false }
 tokio = { version = "1.50.0", features = ["macros", "rt", "sync", "time"] }
+interprocess = "2"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 tray-icon = { version = "0.23.1", default-features = false }

@@ -69,13 +69,27 @@ pub fn view(state: &State) -> Element<'_, Message> {
     .padding([TOKENS.spacing.s6, TOKENS.spacing.s8])
     .width(Fill);
 
-  if let Some(item) = state.home.data.featured_item() {
+  if let Some(item) = state
+    .full
+    .as_ref()
+    .expect("FullUi required")
+    .home
+    .data
+    .featured_item()
+  {
     content = content.push(featured_hero(state, item, skeleton_phase, reduced_motion));
   } else if home_is_loading(state) {
     content = content.push(featured_skeleton(skeleton_phase, reduced_motion));
   }
 
-  for row in state.home.data.rows() {
+  for row in state
+    .full
+    .as_ref()
+    .expect("FullUi required")
+    .home
+    .data
+    .rows()
+  {
     if let Some(section) = section_view(state, row, skeleton_phase, reduced_motion) {
       content = content.push(section);
     }
@@ -90,6 +104,9 @@ pub fn view(state: &State) -> Element<'_, Message> {
 
 fn home_is_loading(state: &State) -> bool {
   state
+    .full
+    .as_ref()
+    .expect("FullUi required")
     .home
     .data
     .rows()
@@ -106,7 +123,13 @@ fn featured_hero<'a>(
   let palette = state.palette();
   let poster = hero_artwork(
     state,
-    state.home.artwork.hero(&item.id),
+    state
+      .full
+      .as_ref()
+      .expect("FullUi required")
+      .home
+      .artwork
+      .hero(&item.id),
     &item.name,
     HERO_POSTER_WIDTH,
     HERO_POSTER_HEIGHT,
@@ -262,6 +285,9 @@ fn section_view<'a>(
     LoadState::Ready(items)
       if items.iter().all(|item| {
         state
+          .full
+          .as_ref()
+          .expect("FullUi required")
           .home
           .data
           .featured_item()
@@ -290,7 +316,14 @@ fn section_row<'a>(
   let mut cards = Row::new()
     .spacing(TOKENS.spacing.s4)
     .align_y(Alignment::Start);
-  let featured_item_id = state.home.data.featured_item().map(|item| item.id.as_str());
+  let featured_item_id = state
+    .full
+    .as_ref()
+    .expect("FullUi required")
+    .home
+    .data
+    .featured_item()
+    .map(|item| item.id.as_str());
   for item in items
     .iter()
     .filter(|item| Some(item.id.as_str()) != featured_item_id)
@@ -332,7 +365,13 @@ fn video_card<'a>(
   let radius = full_radius(TOKENS.radii.lg);
   let poster = card_artwork(
     state,
-    state.home.artwork.card(section, &item.id),
+    state
+      .full
+      .as_ref()
+      .expect("FullUi required")
+      .home
+      .artwork
+      .card(section, &item.id),
     card_title(item),
     (frame_width, frame_height),
     radius,
@@ -365,6 +404,9 @@ fn video_card<'a>(
       .push(playable_artwork);
     if let Some(progress) = card_progress(section, item) {
       let frosted_strip = state
+        .full
+        .as_ref()
+        .expect("FullUi required")
         .home
         .artwork
         .card(section, &item.id)
@@ -396,7 +438,16 @@ fn video_card<'a>(
           .align_y(Alignment::End),
       );
     }
-    if state.home.data.hovered_card.as_deref() == Some(item.id.as_str()) {
+    if state
+      .full
+      .as_ref()
+      .expect("FullUi required")
+      .home
+      .data
+      .hovered_card
+      .as_deref()
+      == Some(item.id.as_str())
+    {
       let details = button(icon_for_variant(
         Icon::Info,
         IconSize::Xs,
@@ -530,7 +581,13 @@ fn play_message(state: &State, item: &VideoLibraryItem) -> Message {
   }))
 }
 fn hero_backdrop<'a>(state: &'a State, item: &VideoLibraryItem) -> Option<Element<'a, Message>> {
-  let cell = state.home.artwork.hero_backdrop(&item.id)?;
+  let cell = state
+    .full
+    .as_ref()
+    .expect("FullUi required")
+    .home
+    .artwork
+    .hero_backdrop(&item.id)?;
   if cell.state != ArtworkCellState::Ready {
     return None;
   }
@@ -973,14 +1030,19 @@ mod tests {
       series_continuing: false,
       unplayed_item_count: None,
     };
-    state
-      .home
-      .data
-      .settle_video_home(Ok(jellypilot_media_server::VideoHome {
+    state.full.as_mut().unwrap().home.data.settle_video_home(Ok(
+      jellypilot_media_server::VideoHome {
         continue_watching: vec![card_item],
         next_up: vec![hero_item],
-      }));
-    state.home.data.settle_shortcuts(Ok(vec![]));
+      },
+    ));
+    state
+      .full
+      .as_mut()
+      .unwrap()
+      .home
+      .data
+      .settle_shortcuts(Ok(vec![]));
     let slot_1 = state
       .kernel
       .artwork_binder
@@ -989,15 +1051,21 @@ mod tests {
       .kernel
       .artwork_binder
       .bind(jellypilot_core::artwork_binder::ArtworkSurface::Home);
-    state.home.artwork.insert_hero_backdrop(
-      "hero-1".to_owned(),
-      ArtworkCell {
-        slot: slot_1,
-        image_id: "img-hero-backdrop".to_owned(),
-        state: ArtworkCellState::Loading,
-      },
-    );
-    state.home.artwork.insert_card(
+    state
+      .full
+      .as_mut()
+      .unwrap()
+      .home
+      .artwork
+      .insert_hero_backdrop(
+        "hero-1".to_owned(),
+        ArtworkCell {
+          slot: slot_1,
+          image_id: "img-hero-backdrop".to_owned(),
+          state: ArtworkCellState::Loading,
+        },
+      );
+    state.full.as_mut().unwrap().home.artwork.insert_card(
       HomeSection::ContinueWatching,
       "card-1".to_owned(),
       ArtworkCell {
