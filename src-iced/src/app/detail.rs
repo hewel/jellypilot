@@ -1,6 +1,5 @@
-//! Detail surface (ADR 0029): item/show detail loading, season episode
-//! paging, user-data actions, and the detail artwork pipeline (poster,
-//! backdrop, and episode cards).
+//! Detail surface (ADR 0029): item/show detail loading, auxiliary shelves,
+//! season episode paging, user-data actions, and the detail artwork pipeline.
 
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
@@ -9,12 +8,13 @@ use iced::Task;
 use jellypilot_core::artwork_binder::{ArtworkSettlement, ArtworkSurface};
 use jellypilot_core::artwork_loader::PlannedArtworkLoad;
 use jellypilot_core::detail::{
-  apply_user_data_update, detail_episode_key, detail_user_data, initial_season,
-  load_detail_content, load_season_neighbors, selected_season_request, DetailContent,
+  apply_user_data_update, detail_episode_key, detail_similar_key, detail_user_data, initial_season,
+  load_detail_content, load_season_neighbors, load_similar_items, selected_season_request,
+  DetailContent,
 };
 use jellypilot_core::request_gate::{DetailAuxKind, DetailToken, RequestGate};
 use jellypilot_media_server::artwork::{
-  ArtworkLoadObservation, ArtworkLoadSummary, ArtworkSizeClass,
+  ArtworkLoadObservation, ArtworkLoadSummary, ArtworkSizeClass, DerivedArtwork,
 };
 use jellypilot_media_server::{
   VideoLibraryItem, VideoSeasonEpisodesPage, VideoUserDataAction, VideoUserDataUpdate,
@@ -28,26 +28,25 @@ use super::state::{ArtworkCell, ArtworkCellState, DetailArtwork, DetailState, Us
 
 const DETAIL_FAILURE: &str = "Could not load this item. Try again.";
 const SEASON_FAILURE: &str = "Could not load this season. Try again.";
+const SIMILAR_FAILURE: &str = "Could not load similar items.";
 const USER_DATA_FAILURE: &str = "Could not update user data. Try again.";
 
-const DETAIL_POSTER_KEY: &str = "detail-poster";
+const DETAIL_LOGO_KEY: &str = "detail-logo";
 const DETAIL_BACKDROP_KEY: &str = "detail-backdrop";
 
 /// Detail surface slice: the library items opened into Detail, the loaded
-/// detail view state, and the artwork cells bound for the poster, backdrop,
-/// and episode cards.
+/// detail view state, and the artwork cells bound for hero and shelf artwork.
 #[derive(Default)]
 pub struct Surface {
   pub items: HashMap<String, VideoLibraryItem>,
   pub data: DetailState,
   pub artwork: DetailArtwork,
 }
-
 /// `detail_item_id` is the shell's current `Destination::Detail` item id,
 /// computed by the top-level router so this module never reads navigation
 /// state (ADR 0029). The router also retains artwork handles across all
-/// surfaces after a content/season/neighbors settlement re-prepares the
-/// pipeline, because retention reads every surface's slot set.
+/// surfaces after content or auxiliary settlements re-prepare the pipeline,
+/// because retention reads every surface's slot set.
 pub fn update(
   surface: &mut Surface,
   kernel: &mut Kernel,
@@ -63,6 +62,12 @@ pub fn update(
     DetailMessage::RetrySeason => start_selected_season_load(surface, kernel),
     DetailMessage::OverviewToggled => {
       surface.data.overview_expanded = !surface.data.overview_expanded;
+      Task::none()
+    }
+    DetailMessage::EpisodeOverviewToggled(item_id) => {
+      if !surface.data.expanded_episode_ids.remove(&item_id) {
+        surface.data.expanded_episode_ids.insert(item_id);
+      }
       Task::none()
     }
     DetailMessage::SeasonSelected(season_id) => {
@@ -97,6 +102,16 @@ pub fn update(
       surface.data.season_neighbors = match result {
         Ok(items) => jellypilot_core::LoadState::Ready(items),
         Err(_) => jellypilot_core::LoadState::Failed(SEASON_FAILURE.to_owned()),
+      };
+      prepare_artwork(surface, kernel)
+    }
+    DetailMessage::SimilarLoaded { token, result } => {
+      if !kernel.request_gate.finish_detail_aux(token) {
+        return Task::none();
+      }
+      surface.data.similar_items = match result {
+        Ok(items) => jellypilot_core::LoadState::Ready(items),
+        Err(_) => jellypilot_core::LoadState::Failed(SIMILAR_FAILURE.to_owned()),
       };
       prepare_artwork(surface, kernel)
     }
@@ -227,51 +242,131 @@ fn settle_load(
 }
 
 fn start_followup(surface: &mut Surface, kernel: &mut Kernel) -> Task<Message> {
-  match &surface.data.content {
-    jellypilot_core::LoadState::Ready(DetailContent::Item(item)) => {
-      let request = match (
-        item.series_id.as_ref(),
-        item.season_number,
-        item.item_type.eq_ignore_ascii_case("episode"),
-      ) {
-        (Some(series_id), Some(season_number), true) => {
-          Some((item.id.clone(), series_id.clone(), season_number))
-        }
-        _ => None,
-      };
-      let Some((item_id, series_id, season_number)) = request else {
-        surface.data.season_neighbors = jellypilot_core::LoadState::Idle;
-        return Task::none();
-      };
-      let Some(token) = kernel
-        .request_gate
-        .begin_detail_aux(DetailAuxKind::SeasonNeighbors)
-      else {
-        return Task::none();
-      };
-      surface.data.season_neighbors = jellypilot_core::LoadState::Loading;
-      let Some(client) = kernel.client.as_ref().map(Arc::clone) else {
-        surface.data.season_neighbors =
-          jellypilot_core::LoadState::Failed(SEASON_FAILURE.to_owned());
-        return Task::none();
-      };
-      Task::perform(
-        async move {
-          load_season_neighbors(client, item_id, series_id, season_number)
-            .await
-            .map_err(|_| SEASON_FAILURE.to_owned())
-        },
-        move |result| Message::Detail(DetailMessage::NeighborsLoaded { token, result }),
-      )
-    }
-    jellypilot_core::LoadState::Ready(DetailContent::Show(show)) => {
-      surface.data.selected_season_id = initial_season(show).map(|season| season.id.clone());
-      start_selected_season_load(surface, kernel)
-    }
-    jellypilot_core::LoadState::Idle
-    | jellypilot_core::LoadState::Loading
-    | jellypilot_core::LoadState::Failed(_) => Task::none(),
+  enum Followup {
+    Episode {
+      item_id: String,
+      series_id: String,
+      season_number: i32,
+    },
+    Movie(String),
+    Show {
+      item_id: String,
+      selected_season_id: Option<String>,
+    },
+    None,
   }
+
+  let followup = match &surface.data.content {
+    jellypilot_core::LoadState::Ready(DetailContent::Item(item))
+      if item.item_type.eq_ignore_ascii_case("episode") =>
+    {
+      match (item.series_id.as_ref(), item.season_number) {
+        (Some(series_id), Some(season_number)) => Followup::Episode {
+          item_id: item.id.clone(),
+          series_id: series_id.clone(),
+          season_number,
+        },
+        _ => Followup::None,
+      }
+    }
+    jellypilot_core::LoadState::Ready(DetailContent::Item(item))
+      if item.item_type.eq_ignore_ascii_case("movie") =>
+    {
+      Followup::Movie(item.id.clone())
+    }
+    jellypilot_core::LoadState::Ready(DetailContent::Show(show)) => Followup::Show {
+      item_id: show.id.clone(),
+      selected_season_id: initial_season(show).map(|season| season.id.clone()),
+    },
+    jellypilot_core::LoadState::Ready(DetailContent::Item(_))
+    | jellypilot_core::LoadState::Idle
+    | jellypilot_core::LoadState::Loading
+    | jellypilot_core::LoadState::Failed(_) => Followup::None,
+  };
+
+  match followup {
+    Followup::Episode {
+      item_id,
+      series_id,
+      season_number,
+    } => {
+      surface.data.similar_items = jellypilot_core::LoadState::Idle;
+      start_neighbors_load(surface, kernel, item_id, series_id, season_number)
+    }
+    Followup::Movie(item_id) => {
+      surface.data.season_neighbors = jellypilot_core::LoadState::Idle;
+      start_similar_load(surface, kernel, item_id)
+    }
+    Followup::Show {
+      item_id,
+      selected_season_id,
+    } => {
+      surface.data.selected_season_id = selected_season_id;
+      Task::batch([
+        start_selected_season_load(surface, kernel),
+        start_similar_load(surface, kernel, item_id),
+      ])
+    }
+    Followup::None => {
+      surface.data.season_neighbors = jellypilot_core::LoadState::Idle;
+      surface.data.similar_items = jellypilot_core::LoadState::Idle;
+      Task::none()
+    }
+  }
+}
+
+fn start_neighbors_load(
+  surface: &mut Surface,
+  kernel: &mut Kernel,
+  item_id: String,
+  series_id: String,
+  season_number: i32,
+) -> Task<Message> {
+  let Some(token) = kernel
+    .request_gate
+    .begin_detail_aux(DetailAuxKind::SeasonNeighbors)
+  else {
+    return Task::none();
+  };
+  surface.data.season_neighbors = jellypilot_core::LoadState::Loading;
+  let Some(client) = kernel.client.as_ref().map(Arc::clone) else {
+    surface.data.season_neighbors = jellypilot_core::LoadState::Failed(SEASON_FAILURE.to_owned());
+    return Task::none();
+  };
+  Task::perform(
+    async move {
+      load_season_neighbors(client, item_id, series_id, season_number)
+        .await
+        .map_err(|_| SEASON_FAILURE.to_owned())
+    },
+    move |result| Message::Detail(DetailMessage::NeighborsLoaded { token, result }),
+  )
+}
+
+fn start_similar_load(
+  surface: &mut Surface,
+  kernel: &mut Kernel,
+  item_id: String,
+) -> Task<Message> {
+  let Some(token) = kernel
+    .request_gate
+    .begin_detail_aux(DetailAuxKind::SimilarItems)
+  else {
+    return Task::none();
+  };
+  surface.data.similar_items = jellypilot_core::LoadState::Loading;
+  let Some(client) = kernel.client.as_ref().map(Arc::clone) else {
+    surface.data.similar_items = jellypilot_core::LoadState::Failed(SIMILAR_FAILURE.to_owned());
+    return Task::none();
+  };
+  Task::perform(
+    async move {
+      load_similar_items(client.as_ref(), item_id)
+        .await
+        .map_err(|_| SIMILAR_FAILURE.to_owned())
+    },
+    move |result| Message::Detail(DetailMessage::SimilarLoaded { token, result }),
+  )
 }
 
 fn select_season(detail: &mut DetailState, season_id: &str) -> bool {
@@ -406,8 +501,8 @@ fn prepare_artwork(surface: &mut Surface, kernel: &mut Kernel) -> Task<Message> 
     jellypilot_core::LoadState::Ready(DetailContent::Item(item)) => {
       push_artwork_spec(
         &mut specs,
-        DETAIL_POSTER_KEY.to_owned(),
-        &item.artwork_image_id,
+        DETAIL_LOGO_KEY.to_owned(),
+        &item.logo_image_id,
         ArtworkSizeClass::Hero,
         true,
       );
@@ -429,12 +524,23 @@ fn prepare_artwork(surface: &mut Surface, kernel: &mut Kernel) -> Task<Message> 
           );
         }
       }
+      if let jellypilot_core::LoadState::Ready(items) = &surface.data.similar_items {
+        for item in items {
+          push_artwork_spec(
+            &mut specs,
+            detail_similar_key(&item.id),
+            &item.artwork_image_id,
+            ArtworkSizeClass::Card,
+            false,
+          );
+        }
+      }
     }
     jellypilot_core::LoadState::Ready(DetailContent::Show(show)) => {
       push_artwork_spec(
         &mut specs,
-        DETAIL_POSTER_KEY.to_owned(),
-        &show.artwork_image_id,
+        DETAIL_LOGO_KEY.to_owned(),
+        &show.logo_image_id,
         ArtworkSizeClass::Hero,
         true,
       );
@@ -445,21 +551,23 @@ fn prepare_artwork(surface: &mut Surface, kernel: &mut Kernel) -> Task<Message> 
         ArtworkSizeClass::Backdrop,
         true,
       );
-      if let Some(next) = &show.next_episode {
-        push_artwork_spec(
-          &mut specs,
-          detail_episode_key(&next.id),
-          &next.artwork_image_id,
-          ArtworkSizeClass::Card,
-          false,
-        );
-      }
       if let jellypilot_core::LoadState::Ready(page) = &surface.data.season_episodes {
         for episode in &page.episodes {
           push_artwork_spec(
             &mut specs,
             detail_episode_key(&episode.id),
             &episode.artwork_image_id,
+            ArtworkSizeClass::Card,
+            false,
+          );
+        }
+      }
+      if let jellypilot_core::LoadState::Ready(items) = &surface.data.similar_items {
+        for item in items {
+          push_artwork_spec(
+            &mut specs,
+            detail_similar_key(&item.id),
+            &item.artwork_image_id,
             ArtworkSizeClass::Card,
             false,
           );
@@ -485,6 +593,10 @@ fn prepare_artwork(surface: &mut Surface, kernel: &mut Kernel) -> Task<Message> 
   let mut summary = ArtworkLoadSummary::default();
   let mut load_specs = Vec::new();
   for spec in specs {
+    let derived = DerivedArtwork {
+      frosted_strip: None,
+      logo_shadow: spec.key == DETAIL_LOGO_KEY,
+    };
     if let Some(cell) = surface.artwork.get(&spec.key) {
       if cell.image_id == spec.image_id {
         if cell.state == ArtworkCellState::Loading {
@@ -501,7 +613,7 @@ fn prepare_artwork(surface: &mut Surface, kernel: &mut Kernel) -> Task<Message> 
       }
     }
 
-    if let Some(raster) = adapter.cached(&spec.image_id, spec.size_class) {
+    if let Some(raster) = adapter.cached_with_derived(&spec.image_id, spec.size_class, derived) {
       summary.record(&ArtworkLoadObservation::raster_hit(raster.byte_len() as u64));
       let slot = kernel.artwork_binder.bind_settled();
       kernel.artwork_handles.insert(
@@ -534,7 +646,7 @@ fn prepare_artwork(surface: &mut Surface, kernel: &mut Kernel) -> Task<Message> 
       image_id: spec.image_id,
       size_class: spec.size_class,
       visible: spec.visible,
-      frosted_strip: None,
+      derived,
     });
   }
   stream_artwork_loads(
@@ -649,7 +761,9 @@ mod tests {
       can_play: true,
       artwork_image_id: None,
       backdrop_image_id: None,
+      logo_image_id: None,
       series_poster_image_id: None,
+      media_info: None,
       metadata: Default::default(),
     }
   }
@@ -665,6 +779,7 @@ mod tests {
       favorite: false,
       artwork_image_id: None,
       backdrop_image_id: None,
+      logo_image_id: None,
       series_poster_image_id: None,
       episode_thumb_image_id: None,
       series_thumb_image_id: None,
@@ -707,6 +822,7 @@ mod tests {
       can_play: true,
       artwork_image_id: None,
       backdrop_image_id: None,
+      logo_image_id: None,
       next_episode: Some(episode("episode-2", 2)),
       seasons: vec![season("season-1", 1), season("season-2", 2)],
       metadata: Default::default(),
@@ -887,19 +1003,61 @@ mod tests {
   }
 
   #[test]
-  fn inflight_loading_artwork_is_not_re_issued_on_followup_prepare() {
+  fn episode_followup_never_starts_similar_items() {
+    let (mut surface, mut kernel) = test_fixture();
+    let mut item = video_item("episode-1");
+    item.item_type = "Episode".to_owned();
+    item.series_id = Some("show-1".to_owned());
+    item.season_number = Some(1);
+    surface.data.content = jellypilot_core::LoadState::Ready(DetailContent::Item(Box::new(item)));
+    kernel
+      .request_gate
+      .set_detail_item(Some("episode-1".to_owned()));
+
+    drop(start_followup(&mut surface, &mut kernel));
+
+    assert!(matches!(
+      surface.data.similar_items,
+      jellypilot_core::LoadState::Idle
+    ));
+  }
+
+  #[test]
+  fn episode_overview_toggle_is_per_item_and_clear_resets_detail_state() {
+    let (mut surface, mut kernel) = test_fixture();
+
+    drop(update(
+      &mut surface,
+      &mut kernel,
+      None,
+      DetailMessage::EpisodeOverviewToggled("episode-1".to_owned()),
+    ));
+    surface.data.similar_items = jellypilot_core::LoadState::Ready(Vec::new());
+    assert!(surface.data.expanded_episode_ids.contains("episode-1"));
+
+    surface.data.clear();
+
+    assert!(surface.data.expanded_episode_ids.is_empty());
+    assert!(matches!(
+      surface.data.similar_items,
+      jellypilot_core::LoadState::Idle
+    ));
+  }
+
+  #[test]
+  fn prepare_artwork_registers_the_logo_and_does_not_reissue_its_inflight_load() {
     let (mut surface, mut kernel) = test_fixture();
     kernel.client = Some(Arc::new(JellyfinClient::new()));
     let mut item = video_item("detail-item-1");
-    item.artwork_image_id = Some("detail-art-1".to_owned());
+    item.logo_image_id = Some("detail-logo-1".to_owned());
     surface.data.content = jellypilot_core::LoadState::Ready(DetailContent::Item(Box::new(item)));
 
     // First prepare starts the initial load
     drop(prepare_artwork(&mut surface, &mut kernel));
     let cell = surface
       .artwork
-      .get(DETAIL_POSTER_KEY)
-      .expect("poster cell exists");
+      .get(DETAIL_LOGO_KEY)
+      .expect("logo cell exists");
     let original_slot = cell.slot;
     assert_eq!(cell.state, ArtworkCellState::Loading);
 
@@ -909,8 +1067,8 @@ mod tests {
     assert_eq!(warm_task.units(), 0);
     let second_cell = surface
       .artwork
-      .get(DETAIL_POSTER_KEY)
-      .expect("poster cell exists");
+      .get(DETAIL_LOGO_KEY)
+      .expect("logo cell exists");
     assert_eq!(second_cell.slot, original_slot);
     assert_eq!(second_cell.state, ArtworkCellState::Loading);
   }
@@ -920,11 +1078,15 @@ mod tests {
     let (mut surface, mut kernel) = test_fixture();
     kernel.client = Some(Arc::new(JellyfinClient::new()));
     let mut item = video_item("detail-cache-item");
-    item.artwork_image_id = Some("detail-cache-art".to_owned());
+    item.logo_image_id = Some("detail-cache-logo".to_owned());
     surface.data.content = jellypilot_core::LoadState::Ready(DetailContent::Item(Box::new(item)));
-    kernel.artwork_adapter.seed_raster_for_test(
-      "detail-cache-art",
+    kernel.artwork_adapter.seed_raster_with_derived_for_test(
+      "detail-cache-logo",
       jellypilot_media_server::artwork::ArtworkSizeClass::Hero,
+      jellypilot_media_server::artwork::DerivedArtwork {
+        logo_shadow: true,
+        ..jellypilot_media_server::artwork::DerivedArtwork::default()
+      },
       jellypilot_media_server::artwork::ArtworkRaster::from_raw_for_test(
         1,
         1,
@@ -936,14 +1098,14 @@ mod tests {
     // One sentinel unit reports the aggregate cache-hit telemetry event.
     assert_eq!(warm_task.units(), 1);
 
-    let poster = surface
+    let logo = surface
       .artwork
-      .get(DETAIL_POSTER_KEY)
-      .expect("detail poster exists");
-    assert_eq!(poster.state, ArtworkCellState::Ready);
+      .get(DETAIL_LOGO_KEY)
+      .expect("detail logo exists");
+    assert_eq!(logo.state, ArtworkCellState::Ready);
     assert!(kernel
       .artwork_handles
-      .get(poster.slot, "detail-cache-art")
+      .get(logo.slot, "detail-cache-logo")
       .is_some());
   }
 }

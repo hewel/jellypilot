@@ -9,7 +9,7 @@ use jellypilot_core::artwork_binder::{ArtworkSettlement, ArtworkSurface};
 use jellypilot_core::artwork_loader::{visible_row_cards, PlannedArtworkLoad};
 use jellypilot_core::request_gate::{HomeToken, RequestGate};
 use jellypilot_media_server::artwork::{
-  ArtworkLoadObservation, ArtworkLoadSummary, ArtworkSizeClass, FrostedStripSpec,
+  ArtworkLoadObservation, ArtworkLoadSummary, ArtworkSizeClass, DerivedArtwork, FrostedStripSpec,
 };
 use jellypilot_media_server::home::{load_home_data, HomeDataResult};
 use jellypilot_media_server::VideoLibraryItem;
@@ -200,20 +200,23 @@ impl ArtworkLoadSpec {
     }
   }
 
-  fn frosted_strip(&self) -> Option<FrostedStripSpec> {
-    let ArtworkPlacement::Card(section) = self.placement else {
-      return None;
+  fn derived(&self) -> DerivedArtwork {
+    let frosted_strip = match self.placement {
+      ArtworkPlacement::Card(section) if section.is_action() => {
+        let (frame_width, frame_height) = section_frame_size(section);
+        Some(FrostedStripSpec {
+          frame_width: frame_width as u32,
+          frame_height: frame_height as u32,
+          bar_height: PROGRESS_BAR_HEIGHT as u32,
+          corner_radius: TOKENS.radii.lg as u32,
+        })
+      }
+      _ => None,
     };
-    if !section.is_action() {
-      return None;
+    DerivedArtwork {
+      frosted_strip,
+      logo_shadow: matches!(self.placement, ArtworkPlacement::Hero),
     }
-    let (frame_width, frame_height) = section_frame_size(section);
-    Some(FrostedStripSpec {
-      frame_width: frame_width as u32,
-      frame_height: frame_height as u32,
-      bar_height: PROGRESS_BAR_HEIGHT as u32,
-      corner_radius: TOKENS.radii.lg as u32,
-    })
   }
 }
 
@@ -251,7 +254,7 @@ fn prepare_artwork(surface: &mut Surface, kernel: &mut Kernel, window_width: f32
   let mut load_specs = Vec::new();
 
   for spec in specs {
-    let frosted_strip = spec.frosted_strip();
+    let derived = spec.derived();
     let existing_cell = match spec.placement {
       ArtworkPlacement::Hero => surface.artwork.hero(&spec.item_id),
       ArtworkPlacement::HeroBackdrop => surface.artwork.hero_backdrop(&spec.item_id),
@@ -273,9 +276,7 @@ fn prepare_artwork(surface: &mut Surface, kernel: &mut Kernel, window_width: f32
       }
     }
 
-    if let Some(raster) =
-      adapter.cached_with_frosted_strip(&spec.image_id, spec.size_class(), frosted_strip)
-    {
+    if let Some(raster) = adapter.cached_with_derived(&spec.image_id, spec.size_class(), derived) {
       summary.record(&ArtworkLoadObservation::raster_hit(raster.byte_len() as u64));
       let slot = kernel.artwork_binder.bind_settled();
       kernel.artwork_handles.insert(
@@ -321,7 +322,7 @@ fn prepare_artwork(surface: &mut Surface, kernel: &mut Kernel, window_width: f32
       image_id: spec.image_id,
       size_class,
       visible: spec.visible,
-      frosted_strip,
+      derived,
     });
   }
 
@@ -398,15 +399,18 @@ fn push_artwork_spec(
 
 fn artwork_image_id(placement: ArtworkPlacement, item: &VideoLibraryItem) -> Option<&str> {
   match placement {
-    ArtworkPlacement::Hero | ArtworkPlacement::HeroBackdrop => item.artwork_image_id.as_deref(),
+    ArtworkPlacement::Hero => item.logo_image_id.as_deref(),
+    ArtworkPlacement::HeroBackdrop => {
+      unreachable!("hero backdrop artwork specs are built from backdrop_image_id directly")
+    }
     ArtworkPlacement::Card(section) if section.is_action() => {
       if item.item_type.eq_ignore_ascii_case("Episode") {
         item
-          .episode_thumb_image_id
+          .artwork_image_id
           .as_deref()
+          .or(item.episode_thumb_image_id.as_deref())
           .or(item.series_thumb_image_id.as_deref())
           .or(item.series_backdrop_image_id.as_deref())
-          .or(item.artwork_image_id.as_deref())
       } else {
         item
           .backdrop_image_id
@@ -473,6 +477,7 @@ mod tests {
       played: false,
       favorite: false,
       artwork_image_id: None,
+      logo_image_id: None,
       backdrop_image_id: None,
       series_poster_image_id: None,
       episode_thumb_image_id: None,
@@ -891,17 +896,20 @@ mod tests {
   }
 
   #[test]
-  fn card_artwork_selection_follows_action_and_latest_fallback_chains() {
+  fn episode_action_card_artwork_prefers_primary_then_episode_and_series_fallbacks() {
     let mut item = episode("episode-art", 1);
+    item.artwork_image_id = Some("episode-primary".to_owned());
     item.episode_thumb_image_id = Some("episode-thumb".to_owned());
     item.series_thumb_image_id = Some("series-thumb".to_owned());
     item.series_backdrop_image_id = Some("series-backdrop".to_owned());
-    item.season_poster_image_id = Some("season-poster".to_owned());
-    item.series_poster_image_id = Some("series-poster".to_owned());
-    item.artwork_image_id = Some("episode-primary".to_owned());
 
     assert_eq!(
       artwork_image_id(ArtworkPlacement::Card(HomeSection::ContinueWatching), &item,),
+      Some("episode-primary")
+    );
+    item.artwork_image_id = None;
+    assert_eq!(
+      artwork_image_id(ArtworkPlacement::Card(HomeSection::NextUp), &item),
       Some("episode-thumb")
     );
     item.episode_thumb_image_id = None;
@@ -917,8 +925,35 @@ mod tests {
     item.series_backdrop_image_id = None;
     assert_eq!(
       artwork_image_id(ArtworkPlacement::Card(HomeSection::NextUp), &item),
-      Some("episode-primary")
+      None
     );
+  }
+
+  #[test]
+  fn hero_artwork_spec_uses_logo_and_is_omitted_without_one() {
+    let mut item = episode("featured", 1);
+    item.logo_image_id = Some("series-logo".to_owned());
+    item.artwork_image_id = Some("episode-primary".to_owned());
+    let mut specs = Vec::new();
+
+    push_artwork_spec(&mut specs, ArtworkPlacement::Hero, &item, true);
+
+    assert_eq!(specs.len(), 1);
+    assert!(matches!(specs[0].placement, ArtworkPlacement::Hero));
+    assert_eq!(specs[0].item_id, "featured");
+    assert_eq!(specs[0].image_id, "series-logo");
+
+    item.logo_image_id = None;
+    push_artwork_spec(&mut specs, ArtworkPlacement::Hero, &item, true);
+    assert_eq!(specs.len(), 1);
+  }
+
+  #[test]
+  fn card_artwork_selection_keeps_latest_and_non_episode_action_fallbacks() {
+    let mut item = episode("episode-art", 1);
+    item.season_poster_image_id = Some("season-poster".to_owned());
+    item.series_poster_image_id = Some("series-poster".to_owned());
+
     assert_eq!(
       artwork_image_id(ArtworkPlacement::Card(HomeSection::Latest(0)), &item),
       Some("season-poster")

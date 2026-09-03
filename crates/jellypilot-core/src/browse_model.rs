@@ -586,6 +586,7 @@ mod tests {
                 favorite: false,
                 artwork_image_id: None,
                 backdrop_image_id: None,
+                logo_image_id: None,
                 series_poster_image_id: None,
                 season_number: None,
                 episode_thumb_image_id: None,

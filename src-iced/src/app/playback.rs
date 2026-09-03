@@ -269,7 +269,7 @@ pub(crate) fn apply_playback_configuration(
     Ok(controller) => {
       surface.controller = Some(Arc::new(tokio::sync::Mutex::new(controller)));
       let _ = surface.session.handle(
-        PlaybackInput::Event(PlaybackEvent::EngineAvailability(true)),
+        PlaybackInput::Event(Box::new(PlaybackEvent::EngineAvailability(true))),
         Instant::now(),
       );
       sync_playback_projection(surface, kernel, quit_requested);
@@ -278,7 +278,7 @@ pub(crate) fn apply_playback_configuration(
     }
     Err(error) => {
       let _ = surface.session.handle(
-        PlaybackInput::Event(PlaybackEvent::EngineAvailability(false)),
+        PlaybackInput::Event(Box::new(PlaybackEvent::EngineAvailability(false))),
         Instant::now(),
       );
       sync_playback_projection(surface, kernel, quit_requested);
@@ -528,12 +528,12 @@ fn handle_remote(
         surface,
         kernel,
         quit_requested,
-        PlaybackInput::Intent(PlaybackIntent::Start {
+        PlaybackInput::Intent(Box::new(PlaybackIntent::Start {
           item,
           position,
           intro,
           selection: Box::new(selection),
-        }),
+        })),
       )
     }
     RemoteMessage::RemoteDisconnected => Task::none(),
@@ -568,7 +568,7 @@ fn handle_remote_command(
         surface,
         kernel,
         quit_requested,
-        PlaybackInput::Intent(intent),
+        PlaybackInput::Intent(Box::new(intent)),
       )
     }
     Some(RemoteCommandAction::Play {
@@ -681,7 +681,7 @@ pub(crate) fn update_tray(
       surface,
       kernel,
       quit_requested,
-      PlaybackInput::Intent(PlaybackIntent::TogglePaused),
+      PlaybackInput::Intent(Box::new(PlaybackIntent::TogglePaused)),
     ),
     TrayAction::Next => apply_local_playback_intent(
       surface,
@@ -708,7 +708,7 @@ pub(crate) fn update_tray(
         surface,
         kernel,
         quit_requested,
-        PlaybackInput::Intent(PlaybackIntent::SetMuted(!muted)),
+        PlaybackInput::Intent(Box::new(PlaybackIntent::SetMuted(!muted))),
       )
     }
     TrayAction::Show | TrayAction::Quit => Task::none(),
@@ -746,7 +746,7 @@ pub(crate) fn initialize_playback(
     Ok(controller) => {
       surface.controller = Some(Arc::new(tokio::sync::Mutex::new(controller)));
       let _ = surface.session.handle(
-        PlaybackInput::Event(PlaybackEvent::EngineAvailability(true)),
+        PlaybackInput::Event(Box::new(PlaybackEvent::EngineAvailability(true))),
         Instant::now(),
       );
       surface.view = surface.session.view();
@@ -784,7 +784,7 @@ fn apply_local_playback_intent(
     surface,
     kernel,
     quit_requested,
-    PlaybackInput::Intent(intent),
+    PlaybackInput::Intent(Box::new(intent)),
   )
 }
 
@@ -957,13 +957,13 @@ fn update_playback(
 ) -> Task<Message> {
   match message {
     PlaybackMessage::Intent(intent) => {
-      apply_local_playback_intent(surface, kernel, quit_requested, intent)
+      apply_local_playback_intent(surface, kernel, quit_requested, *intent)
     }
     PlaybackMessage::Event(event) => apply_playback_input(
       surface,
       kernel,
       quit_requested,
-      PlaybackInput::Event(*event),
+      PlaybackInput::Event(Box::new(*event)),
     ),
     PlaybackMessage::SeekChanged(position) => {
       surface.seek_preview = seek_intent(
@@ -1000,7 +1000,7 @@ fn update_playback(
         surface,
         kernel,
         quit_requested,
-        PlaybackInput::Intent(intent),
+        PlaybackInput::Intent(Box::new(intent)),
       )
     }
     PlaybackMessage::VolumeChanged(volume) => {
@@ -1022,7 +1022,7 @@ fn update_playback(
         surface,
         kernel,
         quit_requested,
-        PlaybackInput::Intent(intent),
+        PlaybackInput::Intent(Box::new(intent)),
       )
     }
     PlaybackMessage::AudioMenuToggled => {
@@ -1131,10 +1131,10 @@ fn update_playback(
         surface,
         kernel,
         quit_requested,
-        PlaybackInput::Event(PlaybackEvent::ControllerSettled {
+        PlaybackInput::Event(Box::new(PlaybackEvent::ControllerSettled {
           id,
           settlement: *settlement,
-        }),
+        })),
       )];
       tracing::debug!(
         started = ?started.as_deref().map(|playable| (playable_kind(playable), playable.image_id().map(str::to_owned))),
@@ -1148,7 +1148,7 @@ fn update_playback(
           surface,
           kernel,
           quit_requested,
-          PlaybackInput::Event(PlaybackEvent::TracksSettled { id, result }),
+          PlaybackInput::Event(Box::new(PlaybackEvent::TracksSettled { id, result })),
         ));
       }
       if let Some(playable) = started.as_deref() {
@@ -1157,7 +1157,7 @@ fn update_playback(
       if shutdown {
         surface.controller = None;
         let _ = surface.session.handle(
-          PlaybackInput::Event(PlaybackEvent::EngineAvailability(false)),
+          PlaybackInput::Event(Box::new(PlaybackEvent::EngineAvailability(false))),
           Instant::now(),
         );
         sync_playback_projection(surface, kernel, quit_requested);
@@ -1205,11 +1205,11 @@ fn update_playback(
         surface,
         kernel,
         quit_requested,
-        PlaybackInput::Event(PlaybackEvent::AdjacentSettled {
+        PlaybackInput::Event(Box::new(PlaybackEvent::AdjacentSettled {
           id,
           direction,
           result,
-        }),
+        })),
       ));
       Task::batch(tasks)
     }
@@ -1682,7 +1682,7 @@ pub(crate) fn disconnect(
     surface,
     kernel,
     quit_requested,
-    PlaybackInput::Intent(PlaybackIntent::Disconnect),
+    PlaybackInput::Intent(Box::new(PlaybackIntent::Disconnect)),
   );
   clear_queue(surface);
   surface.remote = kernel.request_gate.begin_remote();
@@ -1743,6 +1743,7 @@ mod tests {
 
   fn episode(id: &str, season_number: i32) -> VideoLibraryItem {
     VideoLibraryItem {
+      logo_image_id: None,
       id: id.to_owned(),
       name: "Episode".to_owned(),
       item_type: "Episode".to_owned(),
@@ -1819,11 +1820,11 @@ mod tests {
     let (mut surface, kernel) = test_fixture();
     let now = Instant::now();
     surface.session.handle(
-      PlaybackInput::Event(PlaybackEvent::EngineAvailability(true)),
+      PlaybackInput::Event(Box::new(PlaybackEvent::EngineAvailability(true))),
       now,
     );
     let effects = surface.session.handle(
-      PlaybackInput::Intent(PlaybackIntent::Start {
+      PlaybackInput::Intent(Box::new(PlaybackIntent::Start {
         item: Playable::Library(episode("episode-1", 1)),
         position: PlaybackStartPosition::Beginning,
         intro: IntroAvailability {
@@ -1831,18 +1832,18 @@ mod tests {
           skipper_available: false,
         },
         selection: Box::default(),
-      }),
+      })),
       now,
     );
     let (id, _) = controller_effect(effects);
     surface.session.handle(
-      PlaybackInput::Event(PlaybackEvent::ControllerSettled {
+      PlaybackInput::Event(Box::new(PlaybackEvent::ControllerSettled {
         id,
         settlement: ControllerSettlement::Started(Ok(PlaybackOutcome {
           snapshot: playback_snapshot(10.0),
           warnings: Vec::new(),
         })),
-      }),
+      })),
       now,
     );
     surface.view = surface.session.view();
@@ -1906,12 +1907,12 @@ mod tests {
     kernel.client = Some(Arc::new(JellyfinClient::new()));
     let now = Instant::now();
     surface.session.handle(
-      PlaybackInput::Event(PlaybackEvent::EngineAvailability(true)),
+      PlaybackInput::Event(Box::new(PlaybackEvent::EngineAvailability(true))),
       now,
     );
     let started = Playable::Library(episode("episode-1", 1));
     let effects = surface.session.handle(
-      PlaybackInput::Intent(PlaybackIntent::Start {
+      PlaybackInput::Intent(Box::new(PlaybackIntent::Start {
         item: started.clone(),
         position: PlaybackStartPosition::Beginning,
         intro: IntroAvailability {
@@ -1919,7 +1920,7 @@ mod tests {
           skipper_available: false,
         },
         selection: Box::default(),
-      }),
+      })),
       now,
     );
     let (id, _) = controller_effect(effects);
@@ -2236,7 +2237,7 @@ mod tests {
     let (refresh_id, command) = controller_effect(
       surface
         .session
-        .handle(PlaybackInput::Intent(PlaybackIntent::Tick), now),
+        .handle(PlaybackInput::Intent(Box::new(PlaybackIntent::Tick)), now),
     );
     assert!(matches!(command, ControllerCommand::Refresh));
     surface.view = surface.session.view();
@@ -2278,7 +2279,7 @@ mod tests {
     let (refresh_id, _) = controller_effect(
       surface
         .session
-        .handle(PlaybackInput::Intent(PlaybackIntent::Tick), now),
+        .handle(PlaybackInput::Intent(Box::new(PlaybackIntent::Tick)), now),
     );
     surface.view = surface.session.view();
     surface.volume_preview = Some(42.0);
@@ -2319,7 +2320,7 @@ mod tests {
     let (_refresh_id, command) = controller_effect(
       surface
         .session
-        .handle(PlaybackInput::Intent(PlaybackIntent::Tick), now),
+        .handle(PlaybackInput::Intent(Box::new(PlaybackIntent::Tick)), now),
     );
     assert!(matches!(command, ControllerCommand::Refresh));
     surface.view = surface.session.view();
@@ -2350,7 +2351,7 @@ mod tests {
     let (_refresh_id, command) = controller_effect(
       surface
         .session
-        .handle(PlaybackInput::Intent(PlaybackIntent::Tick), now),
+        .handle(PlaybackInput::Intent(Box::new(PlaybackIntent::Tick)), now),
     );
     assert!(matches!(command, ControllerCommand::Refresh));
     surface.view = surface.session.view();
@@ -2449,6 +2450,8 @@ mod tests {
   }
   fn detail_with_series_poster(id: &str, image_id: &str) -> VideoItemDetail {
     VideoItemDetail {
+      logo_image_id: None,
+      media_info: None,
       id: id.to_owned(),
       name: "Episode".to_owned(),
       item_type: "Episode".to_owned(),
@@ -2478,11 +2481,11 @@ mod tests {
     let (mut surface, mut kernel) = test_fixture();
     let now = Instant::now();
     surface.session.handle(
-      PlaybackInput::Event(PlaybackEvent::EngineAvailability(true)),
+      PlaybackInput::Event(Box::new(PlaybackEvent::EngineAvailability(true))),
       now,
     );
     let effects = surface.session.handle(
-      PlaybackInput::Intent(PlaybackIntent::Start {
+      PlaybackInput::Intent(Box::new(PlaybackIntent::Start {
         item: Playable::Library(episode("episode-2", 3)),
         position: PlaybackStartPosition::Beginning,
         intro: IntroAvailability {
@@ -2490,7 +2493,7 @@ mod tests {
           skipper_available: false,
         },
         selection: Box::default(),
-      }),
+      })),
       now,
     );
     let (id, _) = controller_effect(effects);
@@ -2524,11 +2527,11 @@ mod tests {
     surface.playable = Some(Playable::Library(episode("episode-1", 1)));
     let now = Instant::now();
     surface.session.handle(
-      PlaybackInput::Event(PlaybackEvent::EngineAvailability(true)),
+      PlaybackInput::Event(Box::new(PlaybackEvent::EngineAvailability(true))),
       now,
     );
     let effects = surface.session.handle(
-      PlaybackInput::Intent(PlaybackIntent::Start {
+      PlaybackInput::Intent(Box::new(PlaybackIntent::Start {
         item: Playable::Media(media_item("episode-2")),
         position: PlaybackStartPosition::Beginning,
         intro: IntroAvailability {
@@ -2536,7 +2539,7 @@ mod tests {
           skipper_available: false,
         },
         selection: Box::default(),
-      }),
+      })),
       now,
     );
     let (id, _) = controller_effect(effects);
@@ -2600,11 +2603,11 @@ mod tests {
     let play = kernel.request_gate.begin_remote_play();
     let now = Instant::now();
     surface.session.handle(
-      PlaybackInput::Event(PlaybackEvent::EngineAvailability(true)),
+      PlaybackInput::Event(Box::new(PlaybackEvent::EngineAvailability(true))),
       now,
     );
     let effects = surface.session.handle(
-      PlaybackInput::Intent(PlaybackIntent::Start {
+      PlaybackInput::Intent(Box::new(PlaybackIntent::Start {
         item: Playable::Library(episode("episode-2", 3)),
         position: PlaybackStartPosition::Beginning,
         intro: IntroAvailability {
@@ -2612,7 +2615,7 @@ mod tests {
           skipper_available: false,
         },
         selection: Box::default(),
-      }),
+      })),
       now,
     );
     let (id, _) = controller_effect(effects);
@@ -2668,7 +2671,7 @@ mod tests {
   fn local_stop_invalidates_an_in_flight_remote_play_resolution() {
     let (mut surface, mut kernel) = test_fixture();
     surface.session.handle(
-      PlaybackInput::Event(PlaybackEvent::EngineAvailability(true)),
+      PlaybackInput::Event(Box::new(PlaybackEvent::EngineAvailability(true))),
       Instant::now(),
     );
     sync_playback_projection(&mut surface, &kernel, false);
@@ -2677,7 +2680,7 @@ mod tests {
       &mut surface,
       &mut kernel,
       false,
-      PlaybackMessage::Intent(PlaybackIntent::Stop),
+      PlaybackMessage::Intent(Box::new(PlaybackIntent::Stop)),
     ));
     assert!(!kernel.request_gate.is_current_remote_play(stale_play));
     let remote = surface.remote;
@@ -2721,7 +2724,7 @@ mod tests {
         &mut surface,
         &mut kernel,
         false,
-        PlaybackMessage::Intent(PlaybackIntent::PlayAdjacent(direction)),
+        PlaybackMessage::Intent(Box::new(PlaybackIntent::PlayAdjacent(direction))),
       ));
 
       assert!(!kernel.request_gate.is_current_remote_play(stale_play));
@@ -2733,11 +2736,11 @@ mod tests {
     let (mut surface, kernel) = test_fixture();
     let now = Instant::now();
     surface.session.handle(
-      PlaybackInput::Event(PlaybackEvent::EngineAvailability(true)),
+      PlaybackInput::Event(Box::new(PlaybackEvent::EngineAvailability(true))),
       now,
     );
     let effects = surface.session.handle(
-      PlaybackInput::Intent(PlaybackIntent::Start {
+      PlaybackInput::Intent(Box::new(PlaybackIntent::Start {
         item: Playable::Library(episode("episode-1", 1)),
         position: PlaybackStartPosition::Beginning,
         intro: IntroAvailability {
@@ -2745,18 +2748,18 @@ mod tests {
           skipper_available: false,
         },
         selection: Box::default(),
-      }),
+      })),
       now,
     );
     let (id, _) = controller_effect(effects);
     let aux = surface.session.handle(
-      PlaybackInput::Event(PlaybackEvent::ControllerSettled {
+      PlaybackInput::Event(Box::new(PlaybackEvent::ControllerSettled {
         id,
         settlement: ControllerSettlement::Started(Ok(PlaybackOutcome {
           snapshot: playback_snapshot(10.0),
           warnings: Vec::new(),
         })),
-      }),
+      })),
       now,
     );
     surface.view = surface.session.view();
@@ -2770,18 +2773,20 @@ mod tests {
 
     // Settle next adjacent item
     surface.session.handle(
-      PlaybackInput::Event(PlaybackEvent::AdjacentSettled {
+      PlaybackInput::Event(Box::new(PlaybackEvent::AdjacentSettled {
         id: next_id,
         direction: AdjacentDirection::Next,
         result: Ok(Some(media_item("episode-2"))),
-      }),
+      })),
       now,
     );
     sync_playback_projection(&mut surface, &kernel, false);
 
     // First adjacent press
     let first_effects = surface.session.handle(
-      PlaybackInput::Intent(PlaybackIntent::PlayAdjacent(AdjacentDirection::Next)),
+      PlaybackInput::Intent(Box::new(PlaybackIntent::PlayAdjacent(
+        AdjacentDirection::Next,
+      ))),
       now,
     );
     let (start_id, _) = controller_effect(first_effects);
@@ -2790,20 +2795,22 @@ mod tests {
 
     // Second adjacent press while first is in flight (suppressed)
     let second_effects = surface.session.handle(
-      PlaybackInput::Intent(PlaybackIntent::PlayAdjacent(AdjacentDirection::Next)),
+      PlaybackInput::Intent(Box::new(PlaybackIntent::PlayAdjacent(
+        AdjacentDirection::Next,
+      ))),
       now,
     );
     assert!(second_effects.is_empty());
 
     // Settle the start
     let settle_effects = surface.session.handle(
-      PlaybackInput::Event(PlaybackEvent::ControllerSettled {
+      PlaybackInput::Event(Box::new(PlaybackEvent::ControllerSettled {
         id: start_id,
         settlement: ControllerSettlement::Started(Ok(PlaybackOutcome {
           snapshot: playback_snapshot(0.0),
           warnings: Vec::new(),
         })),
-      }),
+      })),
       now,
     );
     sync_playback_projection(&mut surface, &kernel, false);
@@ -2824,7 +2831,7 @@ mod tests {
     // First stop
     let first_effects = surface
       .session
-      .handle(PlaybackInput::Intent(PlaybackIntent::Stop), now);
+      .handle(PlaybackInput::Intent(Box::new(PlaybackIntent::Stop)), now);
     let (stop_id, _) = controller_effect(first_effects);
     sync_playback_projection(&mut surface, &kernel, false);
     assert!(surface.view.busy);
@@ -2832,19 +2839,19 @@ mod tests {
     // Second stop while first is in flight
     let second_effects = surface
       .session
-      .handle(PlaybackInput::Intent(PlaybackIntent::Stop), now);
+      .handle(PlaybackInput::Intent(Box::new(PlaybackIntent::Stop)), now);
     assert!(second_effects.is_empty());
 
     // Settle the stop
     let settle_effects = surface.session.handle(
-      PlaybackInput::Event(PlaybackEvent::ControllerSettled {
+      PlaybackInput::Event(Box::new(PlaybackEvent::ControllerSettled {
         id: stop_id,
         settlement: ControllerSettlement::Stopped(Ok(
           jellypilot_mpv::playback::PlaybackStopOutcome {
             warnings: Vec::new(),
           },
         )),
-      }),
+      })),
       now,
     );
     sync_playback_projection(&mut surface, &kernel, false);
@@ -2865,12 +2872,12 @@ mod tests {
 
     let refresh_effects = surface
       .session
-      .handle(PlaybackInput::Intent(PlaybackIntent::Tick), now);
+      .handle(PlaybackInput::Intent(Box::new(PlaybackIntent::Tick)), now);
     let (refresh_id, _) = controller_effect(refresh_effects);
 
     // Simulate EOF refresh settlement
     let settle_effects = surface.session.handle(
-      PlaybackInput::Event(PlaybackEvent::ControllerSettled {
+      PlaybackInput::Event(Box::new(PlaybackEvent::ControllerSettled {
         id: refresh_id,
         settlement: ControllerSettlement::Refreshed {
           outcome: PlaybackRefreshOutcome {
@@ -2880,7 +2887,7 @@ mod tests {
           },
           client_messages: Vec::new(),
         },
-      }),
+      })),
       now,
     );
     sync_playback_projection(&mut surface, &kernel, false);
@@ -3051,7 +3058,7 @@ mod tests {
       &mut surface,
       &mut kernel,
       false,
-      PlaybackMessage::Intent(PlaybackIntent::Tick),
+      PlaybackMessage::Intent(Box::new(PlaybackIntent::Tick)),
     ));
     assert!(surface.in_flight_refresh.is_some());
     assert_eq!(surface.in_flight_command, None);
@@ -3097,7 +3104,7 @@ mod tests {
       &mut surface,
       &mut kernel,
       false,
-      PlaybackMessage::Intent(PlaybackIntent::Tick),
+      PlaybackMessage::Intent(Box::new(PlaybackIntent::Tick)),
     ));
     let refresh_id = surface
       .in_flight_refresh
@@ -3113,7 +3120,7 @@ mod tests {
       &mut surface,
       &mut kernel,
       false,
-      PlaybackMessage::Intent(PlaybackIntent::Seek(50.0)),
+      PlaybackMessage::Intent(Box::new(PlaybackIntent::Seek(50.0))),
     ));
 
     // 3. Settle the in-flight refresh

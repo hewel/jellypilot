@@ -95,6 +95,14 @@ _Avoid_: Image optimizer, offline artwork library, Saved Service Profile cache
 An in-memory, display-sized RGBA decode of a Library Image, keyed by the Library Image reference and a size class. Library Image Rasters accelerate first paint and repeat rendering across navigations; they are never persisted and are distinct from the Library Image Cache, which stores only origin-encoded bytes.
 _Avoid_: Texture, transformed cache variant, decoded cache entry
 
+**Episode Still**:
+An episode's Primary Library Image: a landscape frame taken from the episode itself. Episode Stills are the preferred card image for episode items in Continue Watching and Next Up; when an Episode Still is missing, the card falls back to the episode's Thumb-type Library Image, then the series Thumb, then the series Backdrop. A portrait artwork slot never uses an Episode Still.
+_Avoid_: Screenshot, episode thumbnail as the preferred card image
+
+**Title Logo**:
+A Logo-type Library Image: a transparent title treatment for a movie or series. Heroes show the Title Logo in place of the text headline when one is available; an episode detail hero shows the parent series' Title Logo alongside the episode title text. Title Logos keep their aspect and alpha: they are never cropped or corner-rounded, and heroes render them with a soft drop shadow baked from the logo's alpha so light logos stay legible over bright Backdrops. Hero display size is normalized by visual area: wide logos fit the hero's reference height while narrower marks are boosted toward a shared area target, so small logos keep weight next to wide ones. When no Title Logo exists, the hero falls back to the text headline.
+_Avoid_: Poster substitute, watermark, app icon
+
 **Sidebar**:
 The persistent left navigation area of the authenticated JellyPilot shell. The Sidebar lists Video Home, the user's video libraries, and Now Playing, and provides an entry to open the Settings Modal. It is always visible while JellyPilot is authenticated. At narrow window widths the Sidebar shows icons only.
 _Avoid_: Navigation rail, app drawer, floating controls
@@ -106,6 +114,10 @@ _Avoid_: Settings page, settings destination, dialog popup, drawer, click-outsid
 **Video Home**:
 The Library Browser landing view built from live Jellyfin rows such as Continue Watching, Next Up, latest Movies, latest Episodes, and video library shortcuts. Video Home is not cached offline and should not show fake media.
 _Avoid_: Home page, dashboard mock data
+
+**Featured Item**:
+The Continue Watching item with a resume position that is presented as the Video Home hero; when nothing is resumable, the first Next Up item, then the first item of a later home row. The Featured Item's Backdrop fills the hero background, and its Title Logo (the parent series' Title Logo for episodes) serves as the hero headline. Heroes have no portrait poster slot.
+_Avoid_: Spotlight, hero carousel item
 
 **User Data Action**:
 A user-scoped Jellyfin mutation for item state such as favorite, unfavorite, mark played, or mark unplayed. User Data Actions update visible Library Browser state only after Jellyfin accepts the mutation.
@@ -212,3 +224,11 @@ Domain expert: "No. The Library Image Cache stores only origin-encoded bytes on 
 Dev: "Is a Library Image Raster a new kind of Library Image reference?"
 
 Domain expert: "No. A Library Image Raster is keyed by an existing Library Image reference plus a render-side size class; it does not change what is requested from the server."
+
+Dev: "Which image leads an episode card in Continue Watching or Next Up?"
+
+Domain expert: "The Episode Still. The episode Thumb, series Thumb, and series Backdrop are only fallbacks when the still is missing."
+
+Dev: "Does the Video Home hero show a poster for the Featured Item?"
+
+Domain expert: "No. Heroes show the Title Logo over the Backdrop and fall back to the text headline when no Title Logo exists; Episode Stills are landscape imagery and appear only in landscape card slots."

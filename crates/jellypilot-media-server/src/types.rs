@@ -207,6 +207,8 @@ pub struct VideoLibraryItem {
   pub favorite: bool,
   pub artwork_image_id: Option<String>,
   pub backdrop_image_id: Option<String>,
+  /// Title Logo image; episode items carry the parent series logo.
+  pub logo_image_id: Option<String>,
   /// Series primary poster for episode player-bar thumbs; absent for movies.
   pub series_poster_image_id: Option<String>,
   /// Episode's own Thumb image; absent for non-episode items or when no Thumb exists.
@@ -272,6 +274,34 @@ pub struct VideoDetailMetadata {
   pub cast: Vec<String>,
 }
 
+/// File-level media facts for the detail media-info section.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct VideoMediaInfo {
+  pub container: Option<String>,
+  pub size_bytes: Option<u64>,
+  pub bitrate_bps: Option<u64>,
+  pub video_codec: Option<String>,
+  pub video_width: Option<u32>,
+  pub video_height: Option<u32>,
+  /// e.g. "SDR", "HDR10", "DoVi" from the video stream range metadata.
+  pub video_range: Option<String>,
+  pub audio_streams: Vec<VideoStreamInfo>,
+  pub subtitle_streams: Vec<VideoStreamInfo>,
+}
+
+/// Audio or subtitle stream facts for the detail media-info section.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct VideoStreamInfo {
+  pub codec: Option<String>,
+  pub language: Option<String>,
+  /// Audio channel count; absent for subtitles.
+  pub channels: Option<u32>,
+  /// Server-formatted label, e.g. "English - AAC 2.0".
+  pub display_title: Option<String>,
+}
+
 /// Playable Movie or Episode detail data exposed to the frontend.
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -295,8 +325,11 @@ pub struct VideoItemDetail {
   pub can_play: bool,
   pub artwork_image_id: Option<String>,
   pub backdrop_image_id: Option<String>,
+  /// Title Logo image; episode items carry the parent series logo.
+  pub logo_image_id: Option<String>,
   /// Series primary poster for episode player-bar thumbs; absent for movies.
   pub series_poster_image_id: Option<String>,
+  pub media_info: Option<VideoMediaInfo>,
   pub metadata: VideoDetailMetadata,
 }
 
@@ -334,6 +367,8 @@ pub struct VideoShowDetail {
   pub can_play: bool,
   pub artwork_image_id: Option<String>,
   pub backdrop_image_id: Option<String>,
+  /// Title Logo image.
+  pub logo_image_id: Option<String>,
   pub next_episode: Option<VideoLibraryItem>,
   pub seasons: Vec<VideoSeason>,
   pub metadata: VideoDetailMetadata,

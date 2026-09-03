@@ -2695,7 +2695,9 @@ impl<'a> JellyfinLibrary<'a> {
     let user_id = self.client.user_id()?;
     let item = self
       .client
-      .get(&format!("/Items/{item_id}?userId={user_id}"))
+      .get(&format!(
+        "/Items/{item_id}?userId={user_id}&fields=Overview,Genres,PrimaryImageAspectRatio,People,MediaSources,MediaStreams&enableImages=true&imageTypeLimit=1&enableImageTypes=Primary,Logo,Backdrop"
+      ))
       .await?;
 
     map_video_item_detail(&server_url, item).ok_or_else(|| {
@@ -2752,13 +2754,12 @@ impl<'a> JellyfinLibrary<'a> {
       .client
       .openapi_configuration(&server_url, Some(&token))?;
 
-    let show_item_fut = jellyfin_api::apis::user_library_api::get_item(
-      &configuration,
-      jellyfin_api::apis::user_library_api::GetItemParams {
-        item_id: series_id.clone(),
-        user_id: Some(user_id.clone()),
-      },
+    let show_item_path = format!(
+      "/Items/{series_id}?userId={user_id}&fields=Overview,Genres,PrimaryImageAspectRatio,People&enableImages=true&imageTypeLimit=1&enableImageTypes=Primary,Logo,Backdrop"
     );
+    let show_item_fut = self
+      .client
+      .get::<jellyfin_api::models::BaseItemDto>(&show_item_path);
     let seasons_fut = jellyfin_api::apis::tv_shows_api::get_seasons(
       &configuration,
       jellyfin_api::apis::tv_shows_api::GetSeasonsParams {
@@ -2785,7 +2786,10 @@ impl<'a> JellyfinLibrary<'a> {
         parent_id: None,
         enable_images: Some(true),
         image_type_limit: Some(1),
-        enable_image_types: Some(vec![jellyfin_api::models::ImageType::Primary]),
+        enable_image_types: Some(vec![
+          jellyfin_api::models::ImageType::Primary,
+          jellyfin_api::models::ImageType::Logo,
+        ]),
         enable_user_data: Some(true),
         next_up_date_cutoff: None,
         enable_total_record_count: Some(false),
@@ -2798,8 +2802,7 @@ impl<'a> JellyfinLibrary<'a> {
     let (show_item_result, seasons_result, next_up_result) =
       tokio::join!(show_item_fut, seasons_fut, next_up_fut);
 
-    let show_item =
-      show_item_result.map_err(|err| JellyfinClient::openapi_error("Video show detail", err))?;
+    let show_item = show_item_result?;
     let mut detail = map_video_show_detail(&server_url, show_item).ok_or_else(|| {
       JellyfinError::HttpError(
         "Only Series details are supported by the Show Library Browser".to_string(),
@@ -2918,7 +2921,10 @@ impl<'a> JellyfinLibrary<'a> {
         limit: Some(limit),
         enable_images: Some(true),
         image_type_limit: Some(1),
-        enable_image_types: Some(vec![jellyfin_api::models::ImageType::Primary]),
+        enable_image_types: Some(vec![
+          jellyfin_api::models::ImageType::Primary,
+          jellyfin_api::models::ImageType::Logo,
+        ]),
         enable_user_data: Some(true),
         sort_by: Some("ParentIndexNumber,IndexNumber".to_string()),
       },
@@ -3587,6 +3593,7 @@ async fn continue_watching_items(
         jellyfin_api::models::ImageType::Thumb,
         jellyfin_api::models::ImageType::Primary,
         jellyfin_api::models::ImageType::Backdrop,
+        jellyfin_api::models::ImageType::Logo,
       ]),
       exclude_item_types: None,
       include_item_types: Some(vec![
@@ -3631,6 +3638,7 @@ async fn next_up_items(
         jellyfin_api::models::ImageType::Primary,
         jellyfin_api::models::ImageType::Backdrop,
         jellyfin_api::models::ImageType::Thumb,
+        jellyfin_api::models::ImageType::Logo,
       ]),
       enable_user_data: Some(true),
       next_up_date_cutoff: None,
@@ -3678,6 +3686,7 @@ async fn latest_video_items(
         jellyfin_api::models::ImageType::Primary,
         jellyfin_api::models::ImageType::Backdrop,
         jellyfin_api::models::ImageType::Thumb,
+        jellyfin_api::models::ImageType::Logo,
       ]),
       enable_user_data: Some(true),
       limit: Some(16),
@@ -3818,7 +3827,10 @@ fn video_browse_items_params(
     years: None,
     enable_user_data: Some(true),
     image_type_limit: Some(1),
-    enable_image_types: Some(vec![jellyfin_api::models::ImageType::Primary]),
+    enable_image_types: Some(vec![
+      jellyfin_api::models::ImageType::Primary,
+      jellyfin_api::models::ImageType::Logo,
+    ]),
     person: None,
     person_ids: None,
     person_types: None,
@@ -3933,6 +3945,30 @@ fn map_video_home_item(
       )
     })
     .flatten();
+  let logo_image_id = if is_episode {
+    let parent_id = item.parent_logo_item_id.flatten().map(jellyfin_id);
+    let parent_tag = item.parent_logo_image_tag.flatten();
+    parent_id.as_deref().and_then(|parent_id| {
+      image_id_for_tagged_artwork(
+        MediaServerProvider::Jellyfin,
+        server_url,
+        parent_id,
+        "Logo",
+        parent_tag.as_deref(),
+      )
+    })
+  } else {
+    image_id_for_tagged_artwork(
+      MediaServerProvider::Jellyfin,
+      server_url,
+      &id,
+      "Logo",
+      image_tags
+        .as_ref()
+        .and_then(|tags| tags.get("Logo"))
+        .map(String::as_str),
+    )
+  };
   let artwork_image_type = if is_episode {
     jellyfin_api::models::ImageType::Primary
   } else {
@@ -4046,6 +4082,7 @@ fn map_video_home_item(
       .unwrap_or(false),
     artwork_image_id,
     backdrop_image_id,
+    logo_image_id,
     series_poster_image_id,
     episode_thumb_image_id,
     series_thumb_image_id,
@@ -4059,15 +4096,42 @@ fn map_video_library_item(
   item: jellyfin_api::models::BaseItemDto,
 ) -> Option<VideoLibraryItem> {
   let id = jellyfin_id(item.id?);
-  let item_type = item.r#type?.to_string();
+  let item_kind = item.r#type?;
+  let item_type = item_kind.to_string();
+  let is_episode = matches!(item_kind, jellyfin_api::models::BaseItemKind::Episode);
   let user_data = item.user_data.flatten();
+  let image_tags = item.image_tags.flatten();
+  let logo_image_id = if is_episode {
+    let parent_id = item.parent_logo_item_id.flatten().map(jellyfin_id);
+    let parent_tag = item.parent_logo_image_tag.flatten();
+    parent_id.as_deref().and_then(|parent_id| {
+      image_id_for_tagged_artwork(
+        MediaServerProvider::Jellyfin,
+        server_url,
+        parent_id,
+        "Logo",
+        parent_tag.as_deref(),
+      )
+    })
+  } else {
+    image_id_for_tagged_artwork(
+      MediaServerProvider::Jellyfin,
+      server_url,
+      &id,
+      "Logo",
+      image_tags
+        .as_ref()
+        .and_then(|tags| tags.get("Logo"))
+        .map(String::as_str),
+    )
+  };
   let artwork_image_id = image_id_for_remote_url(
     MediaServerProvider::Jellyfin,
     server_url,
     artwork_url(
       server_url,
       &id,
-      item.image_tags.flatten(),
+      image_tags,
       jellyfin_api::models::ImageType::Primary,
     ),
     ImageRefKind::Artwork,
@@ -4114,6 +4178,7 @@ fn map_video_library_item(
       .unwrap_or(false),
     artwork_image_id,
     backdrop_image_id: None,
+    logo_image_id,
     series_poster_image_id,
     episode_thumb_image_id: None,
     series_thumb_image_id: None,
@@ -4154,13 +4219,24 @@ fn map_video_show_detail(
 
   let id = jellyfin_id(item.id?);
   let user_data = item.user_data.flatten();
+  let image_tags = item.image_tags.flatten();
+  let logo_image_id = image_id_for_tagged_artwork(
+    MediaServerProvider::Jellyfin,
+    server_url,
+    &id,
+    "Logo",
+    image_tags
+      .as_ref()
+      .and_then(|tags| tags.get("Logo"))
+      .map(String::as_str),
+  );
   let artwork_image_id = image_id_for_remote_url(
     MediaServerProvider::Jellyfin,
     server_url,
     artwork_url(
       server_url,
       &id,
-      item.image_tags.flatten(),
+      image_tags,
       jellyfin_api::models::ImageType::Primary,
     ),
     ImageRefKind::Artwork,
@@ -4198,6 +4274,7 @@ fn map_video_show_detail(
     can_play: false,
     artwork_image_id,
     backdrop_image_id,
+    logo_image_id,
     next_episode: None,
     seasons: Vec::new(),
     metadata,
@@ -4272,6 +4349,92 @@ fn map_video_user_data_update(
   }
 }
 
+fn map_jellyfin_video_media_info(item: &jellyfin_api::models::BaseItemDto) -> VideoMediaInfo {
+  let media_sources = item
+    .media_sources
+    .as_ref()
+    .and_then(|sources| sources.as_ref());
+  let media_source = media_sources.and_then(|sources| sources.first());
+  let streams = media_source
+    .and_then(|source| {
+      source
+        .media_streams
+        .as_ref()
+        .and_then(|streams| streams.as_ref())
+    })
+    .map(Vec::as_slice)
+    .unwrap_or_else(|| {
+      if media_source.is_some() {
+        &[]
+      } else {
+        item
+          .media_streams
+          .as_ref()
+          .and_then(|streams| streams.as_ref())
+          .map(Vec::as_slice)
+          .unwrap_or_default()
+      }
+    });
+  let video_stream = streams.iter().find(|stream| {
+    matches!(
+      stream.r#type,
+      Some(jellyfin_api::models::MediaStreamType::Video)
+    )
+  });
+
+  VideoMediaInfo {
+    container: media_source.and_then(|source| source.container.clone().flatten()),
+    size_bytes: media_source
+      .and_then(|source| source.size.flatten())
+      .and_then(|size| u64::try_from(size).ok()),
+    bitrate_bps: media_source
+      .and_then(|source| source.bitrate.flatten())
+      .and_then(|bitrate| u64::try_from(bitrate).ok()),
+    video_codec: video_stream.and_then(|stream| stream.codec.clone().flatten()),
+    video_width: video_stream
+      .and_then(|stream| stream.width.flatten())
+      .and_then(nonnegative_u32),
+    video_height: video_stream
+      .and_then(|stream| stream.height.flatten())
+      .and_then(nonnegative_u32),
+    video_range: video_stream.and_then(|stream| {
+      stream
+        .video_range_type
+        .map(|range| range.to_string().replace("DOVI", "DoVi"))
+        .or_else(|| stream.video_range.map(|range| range.to_string()))
+    }),
+    audio_streams: streams
+      .iter()
+      .filter(|stream| {
+        matches!(
+          stream.r#type,
+          Some(jellyfin_api::models::MediaStreamType::Audio)
+        )
+      })
+      .map(map_jellyfin_video_stream_info)
+      .collect(),
+    subtitle_streams: streams
+      .iter()
+      .filter(|stream| {
+        matches!(
+          stream.r#type,
+          Some(jellyfin_api::models::MediaStreamType::Subtitle)
+        )
+      })
+      .map(map_jellyfin_video_stream_info)
+      .collect(),
+  }
+}
+
+fn map_jellyfin_video_stream_info(stream: &jellyfin_api::models::MediaStream) -> VideoStreamInfo {
+  VideoStreamInfo {
+    codec: stream.codec.clone().flatten(),
+    language: stream.language.clone().flatten(),
+    channels: stream.channels.flatten().and_then(nonnegative_u32),
+    display_title: stream.display_title.clone().flatten(),
+  }
+}
+
 fn map_video_item_detail(
   server_url: &str,
   item: jellyfin_api::models::BaseItemDto,
@@ -4285,6 +4448,7 @@ fn map_video_item_detail(
   }
 
   let metadata = jellyfin_detail_metadata(&item);
+  let media_info = map_jellyfin_video_media_info(&item);
 
   let id = jellyfin_id(item.id?);
   let user_data = item.user_data.flatten();
@@ -4296,13 +4460,38 @@ fn map_video_item_detail(
     .as_ref()
     .and_then(|data| data.played)
     .unwrap_or(false);
+  let image_tags = item.image_tags.flatten();
+  let logo_image_id = if matches!(item_kind, jellyfin_api::models::BaseItemKind::Episode) {
+    let parent_id = item.parent_logo_item_id.flatten().map(jellyfin_id);
+    let parent_tag = item.parent_logo_image_tag.flatten();
+    parent_id.as_deref().and_then(|parent_id| {
+      image_id_for_tagged_artwork(
+        MediaServerProvider::Jellyfin,
+        server_url,
+        parent_id,
+        "Logo",
+        parent_tag.as_deref(),
+      )
+    })
+  } else {
+    image_id_for_tagged_artwork(
+      MediaServerProvider::Jellyfin,
+      server_url,
+      &id,
+      "Logo",
+      image_tags
+        .as_ref()
+        .and_then(|tags| tags.get("Logo"))
+        .map(String::as_str),
+    )
+  };
   let artwork_image_id = image_id_for_remote_url(
     MediaServerProvider::Jellyfin,
     server_url,
     artwork_url(
       server_url,
       &id,
-      item.image_tags.flatten(),
+      image_tags,
       jellyfin_api::models::ImageType::Primary,
     ),
     ImageRefKind::Artwork,
@@ -4357,6 +4546,8 @@ fn map_video_item_detail(
     artwork_image_id,
     backdrop_image_id,
     series_poster_image_id,
+    logo_image_id,
+    media_info: Some(media_info),
     metadata,
   })
 }
@@ -4690,7 +4881,10 @@ async fn emby_continue_watching_items(
     ("EnableUserData", "true".to_string()),
     ("EnableImages", "true".to_string()),
     ("ImageTypeLimit", "1".to_string()),
-    ("EnableImageTypes", "Thumb,Primary,Backdrop".to_string()),
+    (
+      "EnableImageTypes",
+      "Thumb,Primary,Backdrop,Logo".to_string(),
+    ),
   ];
   let response = client
     .get_with_query::<emby_api::models::QueryResultBaseItemDto>(
@@ -4723,7 +4917,10 @@ async fn emby_next_up_items(
     ("Fields", emby_home_fields()),
     ("EnableImages", "true".to_string()),
     ("ImageTypeLimit", "1".to_string()),
-    ("EnableImageTypes", "Primary,Thumb,Backdrop".to_string()),
+    (
+      "EnableImageTypes",
+      "Primary,Thumb,Backdrop,Logo".to_string(),
+    ),
     ("EnableUserData", "true".to_string()),
     ("EnableResumable", "true".to_string()),
     ("EnableRewatching", "false".to_string()),
@@ -4758,7 +4955,10 @@ async fn emby_latest_video_items(
     ("Fields", "PrimaryImageAspectRatio,Path".to_string()),
     ("EnableImages", "true".to_string()),
     ("ImageTypeLimit", "1".to_string()),
-    ("EnableImageTypes", "Primary,Backdrop,Thumb".to_string()),
+    (
+      "EnableImageTypes",
+      "Primary,Backdrop,Thumb,Logo".to_string(),
+    ),
     ("EnableUserData", "true".to_string()),
     ("GroupItems", "true".to_string()),
   ];
@@ -4802,7 +5002,7 @@ fn emby_browse_items_query(query: EmbyBrowseItemsQuery) -> Vec<(&'static str, St
     ("EnableUserData", "true".to_string()),
     ("EnableImages", "true".to_string()),
     ("ImageTypeLimit", "1".to_string()),
-    ("EnableImageTypes", "Primary".to_string()),
+    ("EnableImageTypes", "Primary,Logo".to_string()),
     ("EnableTotalRecordCount", "true".to_string()),
     ("GroupItemsIntoCollections", "false".to_string()),
   ];
@@ -4839,7 +5039,7 @@ fn emby_search_items_query(query: EmbySearchItemsQuery) -> Vec<(&'static str, St
     ("EnableUserData", "true".to_string()),
     ("EnableImages", "true".to_string()),
     ("ImageTypeLimit", "1".to_string()),
-    ("EnableImageTypes", "Primary".to_string()),
+    ("EnableImageTypes", "Primary,Logo".to_string()),
     ("EnableTotalRecordCount", "true".to_string()),
   ]
 }
@@ -4848,12 +5048,12 @@ fn emby_detail_query() -> Vec<(&'static str, String)> {
   vec![
     (
       "Fields",
-      "Overview,Genres,PrimaryImageAspectRatio,People".to_string(),
+      "Overview,Genres,PrimaryImageAspectRatio,People,MediaSources,MediaStreams".to_string(),
     ),
     ("EnableUserData", "true".to_string()),
     ("EnableImages", "true".to_string()),
     ("ImageTypeLimit", "1".to_string()),
-    ("EnableImageTypes", "Primary".to_string()),
+    ("EnableImageTypes", "Primary,Logo,Backdrop".to_string()),
   ]
 }
 
@@ -4889,7 +5089,7 @@ fn emby_episodes_query(
     ("IsMissing", "false".to_string()),
     ("EnableImages", "true".to_string()),
     ("ImageTypeLimit", "1".to_string()),
-    ("EnableImageTypes", "Primary".to_string()),
+    ("EnableImageTypes", "Primary,Logo".to_string()),
     ("EnableUserData", "true".to_string()),
     ("IncludeItemTypes", "Episode".to_string()),
     ("SortBy", "ParentIndexNumber,IndexNumber".to_string()),
@@ -5027,6 +5227,28 @@ fn map_emby_video_home_item(
       )
     })
     .flatten();
+  let logo_image_id = if is_episode {
+    item.parent_logo_item_id.as_deref().and_then(|parent_id| {
+      image_id_for_tagged_artwork(
+        MediaServerProvider::Emby,
+        server_url,
+        parent_id,
+        "Logo",
+        item.parent_logo_image_tag.as_deref(),
+      )
+    })
+  } else {
+    image_id_for_tagged_artwork(
+      MediaServerProvider::Emby,
+      server_url,
+      &id,
+      "Logo",
+      image_tags
+        .as_ref()
+        .and_then(|tags| tags.get("Logo"))
+        .map(String::as_str),
+    )
+  };
   let season_poster_image_id = is_episode
     .then(|| {
       image_id_for_tagged_artwork(
@@ -5136,6 +5358,7 @@ fn map_emby_video_home_item(
     favorite: user_data.and_then(|data| data.is_favorite).unwrap_or(false),
     artwork_image_id,
     backdrop_image_id,
+    logo_image_id,
     series_poster_image_id,
     episode_thumb_image_id,
     series_thumb_image_id,
@@ -5151,14 +5374,38 @@ fn map_emby_video_library_item(
 ) -> Option<VideoLibraryItem> {
   let id = item.id?;
   let item_type = item.r#type?;
+  let is_episode = item_type == "Episode";
   let user_data = item.user_data.as_deref();
+  let image_tags = item.image_tags;
+  let logo_image_id = if is_episode {
+    item.parent_logo_item_id.as_deref().and_then(|parent_id| {
+      image_id_for_tagged_artwork(
+        MediaServerProvider::Emby,
+        server_url,
+        parent_id,
+        "Logo",
+        item.parent_logo_image_tag.as_deref(),
+      )
+    })
+  } else {
+    image_id_for_tagged_artwork(
+      MediaServerProvider::Emby,
+      server_url,
+      &id,
+      "Logo",
+      image_tags
+        .as_ref()
+        .and_then(|tags| tags.get("Logo"))
+        .map(String::as_str),
+    )
+  };
   let artwork_image_id = image_id_for_remote_url(
     MediaServerProvider::Emby,
     server_url,
     emby_artwork_url(
       server_url,
       &id,
-      item.image_tags,
+      image_tags,
       item.primary_image_item_id,
       item.primary_image_tag,
       "Primary",
@@ -5199,6 +5446,7 @@ fn map_emby_video_library_item(
     favorite: user_data.and_then(|data| data.is_favorite).unwrap_or(false),
     artwork_image_id,
     backdrop_image_id: None,
+    logo_image_id,
     series_poster_image_id,
     episode_thumb_image_id: None,
     series_thumb_image_id: None,
@@ -5227,13 +5475,24 @@ fn map_emby_video_show_detail(
 
   let id = item.id?;
   let user_data = item.user_data.as_deref();
+  let image_tags = item.image_tags;
+  let logo_image_id = image_id_for_tagged_artwork(
+    MediaServerProvider::Emby,
+    server_url,
+    &id,
+    "Logo",
+    image_tags
+      .as_ref()
+      .and_then(|tags| tags.get("Logo"))
+      .map(String::as_str),
+  );
   let artwork_image_id = image_id_for_remote_url(
     MediaServerProvider::Emby,
     server_url,
     emby_artwork_url(
       server_url,
       &id,
-      item.image_tags,
+      image_tags,
       item.primary_image_item_id,
       item.primary_image_tag,
       "Primary",
@@ -5264,6 +5523,7 @@ fn map_emby_video_show_detail(
     can_play: false,
     artwork_image_id,
     backdrop_image_id,
+    logo_image_id,
     next_episode: None,
     seasons: Vec::new(),
     metadata,
@@ -5300,6 +5560,77 @@ fn map_emby_video_season(
   })
 }
 
+fn map_emby_video_media_info(item: &emby_api::models::BaseItemDto) -> VideoMediaInfo {
+  let media_source = item
+    .media_sources
+    .as_ref()
+    .and_then(|sources| sources.first());
+  let streams = media_source
+    .and_then(|source| source.media_streams.as_deref())
+    .unwrap_or_else(|| {
+      if media_source.is_some() {
+        &[]
+      } else {
+        item.media_streams.as_deref().unwrap_or_default()
+      }
+    });
+  let video_stream = streams.iter().find(|stream| {
+    matches!(
+      stream.r#type,
+      Some(emby_api::models::MediaStreamType::Video)
+    )
+  });
+
+  VideoMediaInfo {
+    container: media_source.and_then(|source| source.container.clone()),
+    size_bytes: media_source
+      .and_then(|source| source.size.flatten())
+      .and_then(|size| u64::try_from(size).ok()),
+    bitrate_bps: media_source
+      .and_then(|source| source.bitrate.flatten())
+      .and_then(|bitrate| u64::try_from(bitrate).ok()),
+    video_codec: video_stream.and_then(|stream| stream.codec.clone()),
+    video_width: video_stream
+      .and_then(|stream| stream.width.flatten())
+      .and_then(nonnegative_u32),
+    video_height: video_stream
+      .and_then(|stream| stream.height.flatten())
+      .and_then(nonnegative_u32),
+    video_range: video_stream
+      .and_then(|stream| stream.video_range.as_ref())
+      .map(|range| range.replace("DOVI", "DoVi")),
+    audio_streams: streams
+      .iter()
+      .filter(|stream| {
+        matches!(
+          stream.r#type,
+          Some(emby_api::models::MediaStreamType::Audio)
+        )
+      })
+      .map(map_emby_video_stream_info)
+      .collect(),
+    subtitle_streams: streams
+      .iter()
+      .filter(|stream| {
+        matches!(
+          stream.r#type,
+          Some(emby_api::models::MediaStreamType::Subtitle)
+        )
+      })
+      .map(map_emby_video_stream_info)
+      .collect(),
+  }
+}
+
+fn map_emby_video_stream_info(stream: &emby_api::models::MediaStream) -> VideoStreamInfo {
+  VideoStreamInfo {
+    codec: stream.codec.clone(),
+    language: stream.language.clone(),
+    channels: stream.channels.flatten().and_then(nonnegative_u32),
+    display_title: stream.display_title.clone(),
+  }
+}
+
 fn map_emby_video_item_detail(
   server_url: &str,
   item: emby_api::models::BaseItemDto,
@@ -5309,6 +5640,7 @@ fn map_emby_video_item_detail(
   }
 
   let metadata = emby_detail_metadata(&item);
+  let media_info = map_emby_video_media_info(&item);
   let item_type = item.r#type?;
 
   let id = item.id?;
@@ -5317,13 +5649,36 @@ fn map_emby_video_item_detail(
     .and_then(|data| data.playback_position_ticks)
     .map(ticks_to_seconds);
   let played = user_data.and_then(|data| data.played).unwrap_or(false);
+  let image_tags = item.image_tags;
+  let logo_image_id = if item_type == "Episode" {
+    item.parent_logo_item_id.as_deref().and_then(|parent_id| {
+      image_id_for_tagged_artwork(
+        MediaServerProvider::Emby,
+        server_url,
+        parent_id,
+        "Logo",
+        item.parent_logo_image_tag.as_deref(),
+      )
+    })
+  } else {
+    image_id_for_tagged_artwork(
+      MediaServerProvider::Emby,
+      server_url,
+      &id,
+      "Logo",
+      image_tags
+        .as_ref()
+        .and_then(|tags| tags.get("Logo"))
+        .map(String::as_str),
+    )
+  };
   let artwork_image_id = image_id_for_remote_url(
     MediaServerProvider::Emby,
     server_url,
     emby_artwork_url(
       server_url,
       &id,
-      item.image_tags,
+      image_tags,
       item.primary_image_item_id,
       item.primary_image_tag,
       "Primary",
@@ -5369,7 +5724,9 @@ fn map_emby_video_item_detail(
     can_play: true,
     artwork_image_id,
     backdrop_image_id,
+    logo_image_id,
     series_poster_image_id,
+    media_info: Some(media_info),
     metadata,
   })
 }
@@ -7770,11 +8127,14 @@ mod tests {
       .expect("resume request should be captured");
     assert!(resume_request.contains("enableImageTypes=Thumb"));
     assert!(resume_request.contains("enableImageTypes=Primary"));
+    assert!(resume_request.contains("enableImageTypes=Logo"));
     assert!(resume_request.contains("includeItemTypes=Movie"));
     assert!(resume_request.contains("includeItemTypes=Episode"));
-    assert!(captured
+    let next_up_request = captured
       .iter()
-      .any(|request| request.starts_with("GET /Shows/NextUp?")));
+      .find(|request| request.starts_with("GET /Shows/NextUp?"))
+      .expect("next-up request should be captured");
+    assert!(next_up_request.contains("enableImageTypes=Logo"));
     assert!(!captured
       .iter()
       .any(|request| request.starts_with("GET /UserViews?")));
@@ -7803,6 +8163,7 @@ mod tests {
     assert!(request.contains("enableImageTypes=Primary"));
     assert!(request.contains("enableImageTypes=Backdrop"));
     assert!(request.contains("enableImageTypes=Thumb"));
+    assert!(request.contains("enableImageTypes=Logo"));
     assert!(!request.contains("includeItemTypes"));
   }
 
@@ -8057,6 +8418,227 @@ mod tests {
   }
 
   #[test]
+  fn jellyfin_home_logo_mapping_uses_series_logo_for_episodes_and_own_logo_for_movies() {
+    let server_url = "http://server";
+    let episode_id = "00000000000000000000000000000041";
+    let series_id = "00000000000000000000000000000042";
+    let episode: jellyfin_api::models::BaseItemDto = serde_json::from_value(serde_json::json!({
+      "Id": episode_id,
+      "Name": "Episode",
+      "Type": "Episode",
+      "ParentLogoItemId": series_id,
+      "ParentLogoImageTag": "series-logo"
+    }))
+    .expect("episode dto parses");
+    let movie: jellyfin_api::models::BaseItemDto = serde_json::from_value(serde_json::json!({
+      "Id": "00000000000000000000000000000043",
+      "Name": "Movie",
+      "Type": "Movie",
+      "ImageTags": { "Logo": "movie-logo" }
+    }))
+    .expect("movie dto parses");
+    let missing: jellyfin_api::models::BaseItemDto = serde_json::from_value(serde_json::json!({
+      "Id": "00000000000000000000000000000044",
+      "Name": "No Logo",
+      "Type": "Movie"
+    }))
+    .expect("logo-less movie dto parses");
+
+    let episode = map_video_home_item(
+      server_url,
+      episode,
+      jellyfin_api::models::ImageType::Primary,
+    )
+    .expect("episode maps");
+    let movie = map_video_home_item(server_url, movie, jellyfin_api::models::ImageType::Primary)
+      .expect("movie maps");
+    let missing = map_video_home_item(
+      server_url,
+      missing,
+      jellyfin_api::models::ImageType::Primary,
+    )
+    .expect("logo-less movie maps");
+
+    assert_image_ref_url(
+      episode.logo_image_id.as_ref(),
+      &format!("{server_url}/Items/{series_id}/Images/Logo?tag=series-logo"),
+    );
+    assert_image_ref_url(
+      movie.logo_image_id.as_ref(),
+      &format!("{server_url}/Items/00000000000000000000000000000043/Images/Logo?tag=movie-logo"),
+    );
+    assert_eq!(missing.logo_image_id, None);
+  }
+
+  #[test]
+  fn jellyfin_media_info_maps_first_source_and_falls_back_to_top_level_streams() {
+    let sourced: jellyfin_api::models::BaseItemDto = serde_json::from_value(serde_json::json!({
+      "Id": "00000000000000000000000000000045",
+      "Name": "Sourced Movie",
+      "Type": "Movie",
+      "MediaSources": [
+        {
+          "Container": "mkv",
+          "Size": 123456,
+          "Bitrate": 987654,
+          "MediaStreams": [
+            {
+              "Type": "Video",
+              "Codec": "hevc",
+              "Width": 3840,
+              "Height": 2160,
+              "VideoRangeType": "DOVI"
+            },
+            {
+              "Type": "Audio",
+              "Codec": "aac",
+              "Language": "eng",
+              "Channels": 2,
+              "DisplayTitle": "English - AAC 2.0"
+            },
+            {
+              "Type": "Subtitle",
+              "Codec": "srt",
+              "Language": "eng",
+              "DisplayTitle": "English - SRT"
+            }
+          ]
+        },
+        {
+          "Container": "mp4",
+          "Size": 1,
+          "Bitrate": 1,
+          "MediaStreams": []
+        }
+      ],
+      "MediaStreams": [
+        { "Type": "Audio", "Codec": "fallback-should-not-win" }
+      ]
+    }))
+    .expect("sourced movie dto parses");
+    let fallback: jellyfin_api::models::BaseItemDto = serde_json::from_value(serde_json::json!({
+      "Id": "00000000000000000000000000000046",
+      "Name": "Fallback Episode",
+      "Type": "Episode",
+      "MediaSources": [],
+      "MediaStreams": [
+        { "Type": "Audio", "Codec": "opus", "Channels": 6 },
+        { "Type": "Subtitle", "Codec": "ass", "Language": "jpn" }
+      ]
+    }))
+    .expect("fallback episode dto parses");
+
+    let sourced = map_video_item_detail("http://server", sourced).expect("movie maps");
+    let sourced = sourced.media_info.expect("movie media info is populated");
+    assert_eq!(sourced.container.as_deref(), Some("mkv"));
+    assert_eq!(sourced.size_bytes, Some(123456));
+    assert_eq!(sourced.bitrate_bps, Some(987654));
+    assert_eq!(sourced.video_codec.as_deref(), Some("hevc"));
+    assert_eq!(sourced.video_width, Some(3840));
+    assert_eq!(sourced.video_height, Some(2160));
+    assert_eq!(sourced.video_range.as_deref(), Some("DoVi"));
+    assert_eq!(sourced.audio_streams.len(), 1);
+    assert_eq!(sourced.audio_streams[0].channels, Some(2));
+    assert_eq!(
+      sourced.audio_streams[0].display_title.as_deref(),
+      Some("English - AAC 2.0")
+    );
+    assert_eq!(sourced.subtitle_streams.len(), 1);
+    assert_eq!(sourced.subtitle_streams[0].channels, None);
+
+    let fallback = map_video_item_detail("http://server", fallback).expect("episode maps");
+    let fallback = fallback
+      .media_info
+      .expect("episode fallback media info is populated");
+    assert_eq!(fallback.container, None);
+    assert_eq!(fallback.size_bytes, None);
+    assert_eq!(fallback.bitrate_bps, None);
+    assert_eq!(fallback.audio_streams[0].codec.as_deref(), Some("opus"));
+    assert_eq!(fallback.audio_streams[0].channels, Some(6));
+    assert_eq!(
+      fallback.subtitle_streams[0].language.as_deref(),
+      Some("jpn")
+    );
+  }
+
+  #[test]
+  fn emby_logo_and_media_info_mapping_matches_the_shared_contract() {
+    let server_url = "http://server/emby";
+    let series_id = "00000000000000000000000000000047";
+    let episode: emby_api::models::BaseItemDto = serde_json::from_value(serde_json::json!({
+      "Id": "00000000000000000000000000000048",
+      "Name": "Emby Episode",
+      "Type": "Episode",
+      "ParentLogoItemId": series_id,
+      "ParentLogoImageTag": "emby-series-logo"
+    }))
+    .expect("Emby episode dto parses");
+    let movie: emby_api::models::BaseItemDto = serde_json::from_value(serde_json::json!({
+      "Id": "00000000000000000000000000000049",
+      "Name": "Emby Movie",
+      "Type": "Movie",
+      "ImageTags": { "Logo": "emby-movie-logo" },
+      "MediaSources": [
+        {
+          "Container": "mp4",
+          "Size": 654321,
+          "Bitrate": 456789,
+          "MediaStreams": [
+            {
+              "Type": "Video",
+              "Codec": "h264",
+              "Width": 1920,
+              "Height": 1080,
+              "VideoRange": "HDR10"
+            },
+            {
+              "Type": "Audio",
+              "Codec": "ac3",
+              "Language": "eng",
+              "Channels": 6,
+              "DisplayTitle": "English - AC3 5.1"
+            },
+            {
+              "Type": "Subtitle",
+              "Codec": "srt",
+              "Language": "eng",
+              "DisplayTitle": "English - SRT"
+            }
+          ]
+        }
+      ]
+    }))
+    .expect("Emby movie dto parses");
+
+    let episode =
+      map_emby_video_home_item(server_url, episode, "Primary").expect("Emby episode maps");
+    assert_image_ref_url(
+      episode.logo_image_id.as_ref(),
+      &format!("{server_url}/Items/{series_id}/Images/Logo?tag=emby-series-logo"),
+    );
+
+    let movie = map_emby_video_item_detail(server_url, movie).expect("Emby movie maps");
+    assert_image_ref_url(
+      movie.logo_image_id.as_ref(),
+      &format!(
+        "{server_url}/Items/00000000000000000000000000000049/Images/Logo?tag=emby-movie-logo"
+      ),
+    );
+    let media_info = movie
+      .media_info
+      .expect("Emby movie media info is populated");
+    assert_eq!(media_info.container.as_deref(), Some("mp4"));
+    assert_eq!(media_info.size_bytes, Some(654321));
+    assert_eq!(media_info.bitrate_bps, Some(456789));
+    assert_eq!(media_info.video_codec.as_deref(), Some("h264"));
+    assert_eq!(media_info.video_width, Some(1920));
+    assert_eq!(media_info.video_height, Some(1080));
+    assert_eq!(media_info.video_range.as_deref(), Some("HDR10"));
+    assert_eq!(media_info.audio_streams[0].channels, Some(6));
+    assert_eq!(media_info.subtitle_streams[0].channels, None);
+  }
+
+  #[test]
   fn jellyfin_ids_normalize_to_the_native_undashed_form_across_mappers() {
     // Regression: the generated client types ids as Uuid (dashed on
     // `to_string`), while playback-path types deserialize the raw undashed
@@ -8178,10 +8760,14 @@ mod tests {
     let captured = requests.lock();
     assert!(captured[0].starts_with("GET /Items/00000000000000000000000000000050?"));
     assert!(captured[0].contains("userId=00000000000000000000000000000001"));
-    assert!(!captured[0].contains("fields=MediaStreams"));
+    assert!(captured[0]
+      .contains("fields=Overview,Genres,PrimaryImageAspectRatio,People,MediaSources,MediaStreams"));
+    assert!(captured[0].contains("enableImageTypes=Primary,Logo,Backdrop"));
     assert!(captured[1].starts_with("GET /Items/00000000000000000000000000000051?"));
     assert!(captured[1].contains("userId=00000000000000000000000000000001"));
-    assert!(!captured[1].contains("fields=MediaStreams"));
+    assert!(captured[1]
+      .contains("fields=Overview,Genres,PrimaryImageAspectRatio,People,MediaSources,MediaStreams"));
+    assert!(captured[1].contains("enableImageTypes=Primary,Logo,Backdrop"));
     assert!(captured[2].starts_with("GET /Items/00000000000000000000000000000050?"));
     assert!(captured[2].contains("fields=MediaStreams"));
   }
@@ -8217,7 +8803,7 @@ mod tests {
       (
         "GET /Items/00000000000000000000000000000060?",
         "200 OK",
-        r#"{"Id":"00000000000000000000000000000060","Name":"Example Show","Type":"Series","Overview":"A show overview.","ProductionYear":2023,"Genres":["Drama"],"CommunityRating":8.2,"OfficialRating":"TV-MA","People":[{"Name":"Show Creator","Type":"Creator"},{"Name":"Pilot Director","Type":"Director"},{"Name":"Series Actor","Type":"Actor"}],"ImageTags":{"Primary":"poster-show"},"UserData":{"IsFavorite":true,"Played":false}}"#,
+        r#"{"Id":"00000000000000000000000000000060","Name":"Example Show","Type":"Series","Overview":"A show overview.","ProductionYear":2023,"Genres":["Drama"],"CommunityRating":8.2,"OfficialRating":"TV-MA","People":[{"Name":"Show Creator","Type":"Creator"},{"Name":"Pilot Director","Type":"Director"},{"Name":"Series Actor","Type":"Actor"}],"ImageTags":{"Primary":"poster-show","Logo":"logo-show"},"UserData":{"IsFavorite":true,"Played":false}}"#,
       ),
       (
         "GET /Shows/00000000000000000000000000000060/Seasons?",
@@ -8265,6 +8851,8 @@ mod tests {
     );
     let expected_artwork = format!("{server_url}/Items/{series_id}/Images/Primary?tag=poster-show");
     assert_image_ref_url(detail.artwork_image_id.as_ref(), &expected_artwork);
+    let expected_logo = format!("{server_url}/Items/{series_id}/Images/Logo?tag=logo-show");
+    assert_image_ref_url(detail.logo_image_id.as_ref(), &expected_logo);
 
     let captured = requests.lock();
     let item_request = captured
@@ -8272,6 +8860,7 @@ mod tests {
       .find(|request| request.starts_with("GET /Items/00000000000000000000000000000060?"))
       .expect("show item request should be captured");
     assert!(item_request.contains("userId=00000000000000000000000000000001"));
+    assert!(item_request.contains("enableImageTypes=Primary,Logo,Backdrop"));
     let seasons_request = captured
       .iter()
       .find(|request| request.starts_with("GET /Shows/00000000000000000000000000000060/Seasons?"))
@@ -8561,11 +9150,18 @@ mod tests {
     );
 
     let captured = requests.lock();
-    assert!(captured.iter().any(|request| request
-      .starts_with("GET /emby/Users/00000000000000000000000000000001/Items/Resume?")));
-    assert!(captured.iter().any(
-      |request| request.starts_with("GET /emby/Users/00000000000000000000000000000001/Views?")
-    ));
+    let resume_request = captured
+      .iter()
+      .find(|request| {
+        request.starts_with("GET /emby/Users/00000000000000000000000000000001/Items/Resume?")
+      })
+      .expect("Emby resume request should be captured");
+    assert!(resume_request.contains("EnableImageTypes=Thumb%2CPrimary%2CBackdrop%2CLogo"));
+    let next_up_request = captured
+      .iter()
+      .find(|request| request.starts_with("GET /emby/Shows/NextUp?"))
+      .expect("Emby next-up request should be captured");
+    assert!(next_up_request.contains("EnableImageTypes=Primary%2CThumb%2CBackdrop%2CLogo"));
   }
 
   #[tokio::test]
@@ -8589,7 +9185,7 @@ mod tests {
     assert!(request.contains("Limit=16"));
     assert!(request.contains("GroupItems=true"));
     assert!(request.contains("ImageTypeLimit=1"));
-    assert!(request.contains("EnableImageTypes=Primary%2CBackdrop%2CThumb"));
+    assert!(request.contains("EnableImageTypes=Primary%2CBackdrop%2CThumb%2CLogo"));
     assert!(!request.contains("IncludeItemTypes"));
   }
 
@@ -8683,7 +9279,7 @@ mod tests {
       (
         "GET /Users/00000000000000000000000000000001/Items/00000000000000000000000000000260?",
         "200 OK",
-        r#"{"Id":"00000000000000000000000000000260","Name":"Emby Show","Type":"Series","People":[{"Name":"Emby Show Creator","Type":"Director"}],"ImageTags":{"Primary":"show-primary"},"UserData":{"IsFavorite":true}}"#,
+        r#"{"Id":"00000000000000000000000000000260","Name":"Emby Show","Type":"Series","People":[{"Name":"Emby Show Creator","Type":"Director"}],"ImageTags":{"Primary":"show-primary","Logo":"show-logo"},"UserData":{"IsFavorite":true}}"#,
       ),
       (
         "GET /Shows/00000000000000000000000000000260/Seasons?",
@@ -8737,6 +9333,10 @@ mod tests {
     assert_eq!(streams.subtitle_streams[0].label, "srt");
     assert_eq!(show.id, series_id);
     assert!(show.favorite);
+    assert_image_ref_url(
+      show.logo_image_id.as_ref(),
+      &format!("{server_url}/Items/{series_id}/Images/Logo?tag=show-logo"),
+    );
     assert!(show.can_play);
     assert_eq!(show.seasons[0].id, season_id);
     assert_eq!(
@@ -8762,10 +9362,13 @@ mod tests {
       .find(|request| {
         request.starts_with(
           "GET /Users/00000000000000000000000000000001/Items/00000000000000000000000000000250?",
-        ) && !request.contains("MediaStreams")
+        ) && request.contains("MediaSources")
       })
       .expect("Emby movie detail request should be captured");
-    assert!(movie_request.contains("Fields=Overview%2CGenres%2CPrimaryImageAspectRatio%2CPeople"));
+    assert!(movie_request.contains(
+      "Fields=Overview%2CGenres%2CPrimaryImageAspectRatio%2CPeople%2CMediaSources%2CMediaStreams"
+    ));
+    assert!(movie_request.contains("EnableImageTypes=Primary%2CLogo%2CBackdrop"));
     assert!(captured
       .iter()
       .any(|request| request.contains("Fields=MediaStreams")));

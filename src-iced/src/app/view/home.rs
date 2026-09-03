@@ -7,10 +7,13 @@ use iced::widget::canvas::{self, Canvas};
 use iced::widget::image::Image;
 use iced::widget::scrollable::{Direction, Scrollbar};
 use iced::widget::{
-  button, column, container, mouse_area, row, scrollable, space, stack, text, Column, Row, Stack,
+  button, column, container, mouse_area, responsive, row, scrollable, space, stack, text, Column,
+  Row, Stack,
 };
-use iced::{Alignment, Background, ContentFit, Degrees, Element, Fill};
-use jellypilot_core::cards::{card_subtitle, card_title, hero_headline, hero_metadata};
+use iced::{Alignment, Background, ContentFit, Degrees, Element, Fill, Length};
+use jellypilot_core::cards::{
+  card_subtitle, card_title, hero_headline, hero_metadata, logo_display_size,
+};
 use jellypilot_core::LoadState;
 use jellypilot_media_server::VideoLibraryItem;
 use jellypilot_mpv::playback::{Playable, PlaybackStartPosition};
@@ -29,9 +32,12 @@ const THUMB_FRAME_WIDTH: f32 = 240.0;
 const THUMB_FRAME_HEIGHT: f32 = 135.0;
 const POSTER_FRAME_WIDTH: f32 = 168.0;
 const POSTER_FRAME_HEIGHT: f32 = 240.0;
-const HERO_HEIGHT: f32 = 360.0;
-const HERO_POSTER_WIDTH: f32 = 160.0;
-const HERO_POSTER_HEIGHT: f32 = 240.0;
+/// Jellyfin hero backdrops are 16:9; derive the hero height from its width so
+/// the Backdrop renders uncropped.
+fn hero_height_for_width(width: f32) -> f32 {
+  (width * 9.0 / 16.0).max(1.0)
+}
+const HERO_LOGO_HEIGHT: f32 = 96.0;
 
 /// Content width available for home content at a given window width and size class:
 /// window width minus the tier-dependent sidebar width, the
@@ -69,17 +75,21 @@ pub fn view(state: &State) -> Element<'_, Message> {
     .padding([TOKENS.spacing.s6, TOKENS.spacing.s8])
     .width(Fill);
 
-  if let Some(item) = state
+  let featured_item = state
     .full
     .as_ref()
     .expect("FullUi required")
     .home
     .data
-    .featured_item()
-  {
-    content = content.push(featured_hero(state, item, skeleton_phase, reduced_motion));
-  } else if home_is_loading(state) {
-    content = content.push(featured_skeleton(skeleton_phase, reduced_motion));
+    .featured_item();
+  if featured_item.is_some() || home_is_loading(state) {
+    content = content.push(responsive(move |bounds| {
+      if let Some(item) = featured_item {
+        featured_hero(state, item, bounds.width)
+      } else {
+        featured_skeleton(skeleton_phase, reduced_motion, bounds.width)
+      }
+    }));
   }
 
   for row in state
@@ -117,11 +127,11 @@ fn home_is_loading(state: &State) -> bool {
 fn featured_hero<'a>(
   state: &'a State,
   item: &'a VideoLibraryItem,
-  skeleton_phase: f32,
-  reduced_motion: bool,
+  width: f32,
 ) -> Element<'a, Message> {
   let palette = state.palette();
-  let poster = hero_artwork(
+  let hero_height = hero_height_for_width(width);
+  let headline = hero_artwork(
     state,
     state
       .full
@@ -130,21 +140,8 @@ fn featured_hero<'a>(
       .home
       .artwork
       .hero(&item.id),
-    &item.name,
-    HERO_POSTER_WIDTH,
-    HERO_POSTER_HEIGHT,
-    skeleton_phase,
-    reduced_motion,
+    item,
   );
-  let poster = container(poster).style(move |_| iced::widget::container::Style {
-    border: iced::Border {
-      radius: full_radius(TOKENS.radii.lg),
-      width: 1.0,
-      color: palette.colors.outlineVariant,
-    },
-    ..iced::widget::container::Style::default()
-  });
-
   let play_label = if has_resume_position(item) {
     "Resume"
   } else {
@@ -181,40 +178,34 @@ fn featured_hero<'a>(
   .on_press(Message::OpenDetail(item.clone()))
   .style(|theme, status| jellypilot_ui::theme::button_variant(theme, status, ButtonVariant::Tonal));
   let copy = column![
-    text(hero_headline(item))
-      .font(SPACE_GROTESK_FONT)
-      .size(42)
-      .color(palette.colors.onSurface),
+    headline,
     text(hero_metadata(item))
       .size(17)
       .color(palette.colors.onSurfaceVariant),
     row![play, details].spacing(TOKENS.spacing.s2),
   ]
   .spacing(TOKENS.spacing.s3)
+  .align_x(Alignment::Start)
   .width(Fill);
-  let foreground = container(
-    row![poster, copy]
-      .spacing(TOKENS.spacing.s6)
-      .align_y(Alignment::Center),
-  )
-  .padding(TOKENS.spacing.s6)
-  .width(Fill)
-  .height(HERO_HEIGHT)
-  .align_y(Alignment::Center);
+  let foreground = container(copy)
+    .padding(TOKENS.spacing.s6)
+    .width(Fill)
+    .height(hero_height)
+    .align_y(Alignment::End);
 
-  let Some(backdrop) = hero_backdrop(state, item) else {
+  let Some(backdrop) = hero_backdrop(state, item, hero_height) else {
     return container(foreground)
       .width(Fill)
-      .height(HERO_HEIGHT)
+      .height(hero_height)
       .style(|theme| jellypilot_ui::theme::surface_variant(theme, SurfaceVariant::Canvas))
       .into();
   };
-  let gradient = gradient::Linear::new(Degrees(90.0))
-    .add_stop(0.0, palette.colors.background.scale_alpha(0.96))
-    .add_stop(1.0, palette.colors.surfaceContainerLowest.scale_alpha(0.18));
+  let gradient = gradient::Linear::new(Degrees(180.0))
+    .add_stop(0.0, palette.colors.surfaceContainerLowest.scale_alpha(0.4))
+    .add_stop(1.0, palette.colors.surfaceContainerLowest.scale_alpha(0.95));
   let scrim = container(space::vertical())
     .width(Fill)
-    .height(HERO_HEIGHT)
+    .height(hero_height)
     .style(move |_| iced::widget::container::Style {
       background: Some(Background::Gradient(gradient.into())),
       border: iced::Border {
@@ -226,7 +217,7 @@ fn featured_hero<'a>(
 
   container(stack![backdrop, scrim, foreground])
     .width(Fill)
-    .height(HERO_HEIGHT)
+    .height(hero_height)
     .clip(true)
     .style(|_| iced::widget::container::Style {
       border: iced::Border {
@@ -238,11 +229,11 @@ fn featured_hero<'a>(
     .into()
 }
 
-fn featured_skeleton<'a>(phase: f32, reduced_motion: bool) -> Element<'a, Message> {
-  let backdrop = skeleton_block(Fill, HERO_HEIGHT, phase, reduced_motion);
-  let poster = skeleton_block(HERO_POSTER_WIDTH, HERO_POSTER_HEIGHT, phase, reduced_motion);
+fn featured_skeleton<'a>(phase: f32, reduced_motion: bool, width: f32) -> Element<'a, Message> {
+  let hero_height = hero_height_for_width(width);
+  let backdrop = skeleton_block(Fill, hero_height, phase, reduced_motion);
   let copy = column![
-    skeleton_block(360.0, 44.0, phase, reduced_motion),
+    skeleton_block(360.0, HERO_LOGO_HEIGHT, phase, reduced_motion),
     skeleton_block(280.0, 20.0, phase, reduced_motion),
     row![
       skeleton_block(112.0, 38.0, phase, reduced_motion),
@@ -250,20 +241,17 @@ fn featured_skeleton<'a>(phase: f32, reduced_motion: bool) -> Element<'a, Messag
     ]
     .spacing(TOKENS.spacing.s2),
   ]
-  .spacing(TOKENS.spacing.s3);
-  let foreground = container(
-    row![poster, copy]
-      .spacing(TOKENS.spacing.s6)
-      .align_y(Alignment::Center),
-  )
-  .padding(TOKENS.spacing.s6)
-  .width(Fill)
-  .height(HERO_HEIGHT)
-  .align_y(Alignment::Center);
+  .spacing(TOKENS.spacing.s3)
+  .align_x(Alignment::Start);
+  let foreground = container(copy)
+    .padding(TOKENS.spacing.s6)
+    .width(Fill)
+    .height(hero_height)
+    .align_y(Alignment::Center);
 
   stack![backdrop, foreground]
     .width(Fill)
-    .height(HERO_HEIGHT)
+    .height(hero_height)
     .into()
 }
 
@@ -569,7 +557,7 @@ fn count_badge<'a>(
 }
 
 fn play_message(state: &State, item: &VideoLibraryItem) -> Message {
-  Message::Playback(PlaybackMessage::Intent(PlaybackIntent::Start {
+  Message::Playback(PlaybackMessage::Intent(Box::new(PlaybackIntent::Start {
     item: Playable::Library(item.clone()),
     position: if has_resume_position(item) {
       PlaybackStartPosition::Resume
@@ -578,9 +566,13 @@ fn play_message(state: &State, item: &VideoLibraryItem) -> Message {
     },
     intro: state.kernel.intro_availability(),
     selection: Box::default(),
-  }))
+  })))
 }
-fn hero_backdrop<'a>(state: &'a State, item: &VideoLibraryItem) -> Option<Element<'a, Message>> {
+fn hero_backdrop<'a>(
+  state: &'a State,
+  item: &VideoLibraryItem,
+  height: f32,
+) -> Option<Element<'a, Message>> {
   let cell = state
     .full
     .as_ref()
@@ -608,7 +600,7 @@ fn hero_backdrop<'a>(state: &'a State, item: &VideoLibraryItem) -> Option<Elemen
     )
     .padding(1.0)
     .width(Fill)
-    .height(HERO_HEIGHT)
+    .height(height)
     .into(),
   )
 }
@@ -616,72 +608,65 @@ fn hero_backdrop<'a>(state: &'a State, item: &VideoLibraryItem) -> Option<Elemen
 fn hero_artwork<'a>(
   state: &'a State,
   cell: Option<&ArtworkCell>,
-  name: &'a str,
-  width: f32,
-  height: f32,
-  phase: f32,
-  reduced_motion: bool,
+  item: &'a VideoLibraryItem,
 ) -> Element<'a, Message> {
-  let palette = state.palette();
   if let Some(cell) = cell {
     if cell.state == ArtworkCellState::Ready {
       if let Some(handle) = state.kernel.artwork_handles.get(cell.slot, &cell.image_id) {
-        return rounded_image(handle.clone(), full_radius(TOKENS.radii.lg))
-          .content_fit(ContentFit::Cover)
-          .width(width)
-          .height(height)
-          .into();
+        let dims = state
+          .kernel
+          .artwork_handles
+          .dims(cell.slot, &cell.image_id)
+          .filter(|&(w, h)| w > 0 && h > 0);
+        let (logo_width, logo_height) = dims
+          .map(|(w, h)| logo_display_size(w, h, HERO_LOGO_HEIGHT))
+          .unwrap_or((0.0, HERO_LOGO_HEIGHT));
+        let logo_image = Image::new(handle.clone())
+          .content_fit(ContentFit::Contain)
+          .expand(logo_width <= 0.0)
+          .height(logo_height)
+          .width(if logo_width > 0.0 {
+            Length::Fixed(logo_width)
+          } else {
+            Length::Shrink
+          });
+        // The baked shadow canvas carries a transparent margin (height/4 on
+        // top/bottom/right, a constant 3/2 render ratio); indent the logo on
+        // top only so the glyph overlaps its shadow while the left edge stays
+        // flush with the text below.
+        let logo = container(logo_image).padding(iced::Padding {
+          top: logo_height / 4.0,
+          ..iced::Padding::ZERO
+        });
+        let Some(shadow) = state
+          .kernel
+          .artwork_handles
+          .logo_shadow(cell.slot, &cell.image_id)
+        else {
+          return logo.into();
+        };
+        let shadow_height = logo_height * 3.0 / 2.0;
+        let shadow_width =
+          dims.map(|(w, h)| (w as f32 + h as f32 / 2.0) * (logo_height / h as f32));
+        let shadow_image = Image::new(shadow.clone())
+          .content_fit(ContentFit::Contain)
+          .expand(shadow_width.is_none())
+          .height(shadow_height)
+          .width(if let Some(width) = shadow_width {
+            Length::Fixed(width)
+          } else {
+            Length::Shrink
+          });
+        return stack![container(shadow_image), logo].into();
       }
     }
   }
 
-  let failed = cell.is_some_and(|cell| cell.state == ArtworkCellState::Failed);
-  if failed {
-    let placeholder_color = palette.colors.warning;
-    let initial = name
-      .trim()
-      .chars()
-      .next()
-      .map(|character| character.to_uppercase().collect::<String>())
-      .unwrap_or_else(|| "•".to_owned());
-    return container(
-      column![
-        icon_with_color(Icon::Movie, 42.0, placeholder_color),
-        text(initial)
-          .font(SPACE_GROTESK_FONT)
-          .size(32)
-          .color(placeholder_color),
-      ]
-      .spacing(TOKENS.spacing.s1)
-      .align_x(Alignment::Center),
-    )
-    .width(width)
-    .height(height)
-    .center_x(Fill)
-    .center_y(Fill)
-    .style(|_theme| container::Style {
-      background: Some(iced::Background::Color(
-        palette.colors.surfaceContainerLowest,
-      )),
-      border: iced::Border {
-        radius: full_radius(TOKENS.radii.lg),
-        width: 0.0,
-        color: iced::Color::TRANSPARENT,
-      },
-      ..container::Style::default()
-    })
-    .into();
-  }
-
-  skeleton_panel(
-    width,
-    height,
-    palette.colors.surfaceContainerLowest,
-    full_radius(TOKENS.radii.lg),
-    phase,
-    reduced_motion,
-  )
-  .into()
+  text(hero_headline(item))
+    .font(SPACE_GROTESK_FONT)
+    .size(42)
+    .color(state.palette().colors.onSurface)
+    .into()
 }
 
 fn card_artwork<'a>(
@@ -977,6 +962,7 @@ mod tests {
     let mut state = State::boot(false);
     state.shell.skeleton_phase = 0.5;
     let hero_item = VideoLibraryItem {
+      logo_image_id: None,
       id: "hero-1".to_owned(),
       name: "Hero Movie".to_owned(),
       item_type: "Movie".to_owned(),
@@ -1004,6 +990,7 @@ mod tests {
       unplayed_item_count: None,
     };
     let card_item = VideoLibraryItem {
+      logo_image_id: None,
       id: "card-1".to_owned(),
       name: "Card Movie".to_owned(),
       item_type: "Movie".to_owned(),
@@ -1080,6 +1067,7 @@ mod tests {
   #[test]
   fn unplayed_badge_only_formats_nonzero_latest_series_counts() {
     let mut item = VideoLibraryItem {
+      logo_image_id: None,
       id: "series-1".to_owned(),
       name: "Series".to_owned(),
       item_type: "Series".to_owned(),

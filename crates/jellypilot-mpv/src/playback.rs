@@ -2683,6 +2683,7 @@ mod tests {
 
   fn library_item(item_type: &str) -> VideoLibraryItem {
     VideoLibraryItem {
+      logo_image_id: None,
       id: "item-1".to_owned(),
       name: "Pilot".to_owned(),
       item_type: item_type.to_owned(),
@@ -2713,6 +2714,8 @@ mod tests {
 
   fn item_detail(can_play: bool) -> VideoItemDetail {
     VideoItemDetail {
+      logo_image_id: None,
+      media_info: None,
       id: "item-1".to_owned(),
       name: "Pilot".to_owned(),
       item_type: "Episode".to_owned(),

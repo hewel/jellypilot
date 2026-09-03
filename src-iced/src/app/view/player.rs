@@ -107,9 +107,9 @@ fn transport<'a>(state: &'a State, now_playing: &NowPlayingView) -> Element<'a, 
     ButtonVariant::Primary,
   ))
   .padding([7, 11])
-  .on_press(Message::Playback(PlaybackMessage::Intent(
+  .on_press(Message::Playback(PlaybackMessage::Intent(Box::new(
     PlaybackIntent::TogglePaused,
-  )))
+  ))))
   .style(|theme, status| {
     jellypilot_ui::theme::button_variant(theme, status, ButtonVariant::Primary)
   });
@@ -125,9 +125,9 @@ fn transport<'a>(state: &'a State, now_playing: &NowPlayingView) -> Element<'a, 
     ButtonVariant::Tonal,
   ))
   .padding([6, 10])
-  .on_press(Message::Playback(PlaybackMessage::Intent(
+  .on_press(Message::Playback(PlaybackMessage::Intent(Box::new(
     PlaybackIntent::Stop,
-  )))
+  ))))
   .style(|theme, status| jellypilot_ui::theme::button_variant(theme, status, ButtonVariant::Tonal));
   let stop = tooltip(stop_button, "Stop", TooltipOptions::default());
 
@@ -178,9 +178,9 @@ fn volume_controls<'a>(state: &'a State, now_playing: &NowPlayingView) -> Elemen
     ButtonVariant::Tonal,
   ))
   .padding([6, 10])
-  .on_press(Message::Playback(PlaybackMessage::Intent(
+  .on_press(Message::Playback(PlaybackMessage::Intent(Box::new(
     PlaybackIntent::SetMuted(!now_playing.muted),
-  )))
+  ))))
   .style(|theme, status| jellypilot_ui::theme::button_variant(theme, status, ButtonVariant::Tonal));
   let mute = tooltip(mute_button, mute_label, TooltipOptions::default());
 
@@ -336,9 +336,9 @@ fn intro_prompt(state: &State) -> Option<Element<'_, Message>> {
       .align_y(Alignment::Center),
     )
     .padding([6, 12])
-    .on_press(Message::Playback(PlaybackMessage::Intent(
+    .on_press(Message::Playback(PlaybackMessage::Intent(Box::new(
       PlaybackIntent::SkipIntro,
-    )))
+    ))))
     .style(|theme, status| {
       jellypilot_ui::theme::button_variant(theme, status, ButtonVariant::Primary)
     }),
@@ -350,9 +350,9 @@ fn intro_prompt(state: &State) -> Option<Element<'_, Message>> {
       .spacing(TOKENS.spacing.s1_5)
       .align_y(Alignment::Center),
     )
-    .on_press(Message::Playback(PlaybackMessage::Intent(
+    .on_press(Message::Playback(PlaybackMessage::Intent(Box::new(
       PlaybackIntent::DismissIntro,
-    )))
+    ))))
     .style(|theme, status| {
       jellypilot_ui::theme::button_variant(theme, status, ButtonVariant::Tonal)
     }),
@@ -401,9 +401,9 @@ fn adjacent_button<'a>(
   ))
   .padding([6, 10])
   .on_press_maybe(
-    available.then_some(Message::Playback(PlaybackMessage::Intent(
+    available.then_some(Message::Playback(PlaybackMessage::Intent(Box::new(
       PlaybackIntent::PlayAdjacent(direction),
-    ))),
+    )))),
   )
   .style(|theme, status| jellypilot_ui::theme::button_variant(theme, status, ButtonVariant::Tonal));
   tooltip(btn, label, TooltipOptions::default())
@@ -877,12 +877,13 @@ mod tests {
     let mut state = State::boot(false);
     let now = Instant::now();
     state.playback.session.handle(
-      PlaybackInput::Event(PlaybackEvent::EngineAvailability(true)),
+      PlaybackInput::Event(Box::new(PlaybackEvent::EngineAvailability(true))),
       now,
     );
     let start_effects = state.playback.session.handle(
-      PlaybackInput::Intent(PlaybackIntent::Start {
+      PlaybackInput::Intent(Box::new(PlaybackIntent::Start {
         item: Playable::Library(VideoLibraryItem {
+          logo_image_id: None,
           id: "episode-1".to_owned(),
           name: "Pilot Episode".to_owned(),
           item_type: "Episode".to_owned(),
@@ -915,14 +916,14 @@ mod tests {
           skipper_available: false,
         },
         selection: Box::default(),
-      }),
+      })),
       now,
     );
     let [PlaybackEffect::Controller(start_id, _)] = start_effects.as_slice() else {
       panic!("expected start controller effect");
     };
     state.playback.session.handle(
-      PlaybackInput::Event(PlaybackEvent::ControllerSettled {
+      PlaybackInput::Event(Box::new(PlaybackEvent::ControllerSettled {
         id: *start_id,
         settlement: ControllerSettlement::Started(Ok(PlaybackOutcome {
           snapshot: PlaybackSnapshot {
@@ -945,7 +946,7 @@ mod tests {
           },
           warnings: Vec::new(),
         })),
-      }),
+      })),
       now,
     );
     state.playback.view = state.playback.session.view();
@@ -974,7 +975,7 @@ mod tests {
     let tick_effects = state
       .playback
       .session
-      .handle(PlaybackInput::Intent(PlaybackIntent::Tick), now);
+      .handle(PlaybackInput::Intent(Box::new(PlaybackIntent::Tick)), now);
     let [PlaybackEffect::Controller(refresh_id, _)] = tick_effects.as_slice() else {
       panic!("expected refresh controller effect");
     };
@@ -1218,6 +1219,7 @@ mod tests {
     episode: Option<i32>,
   ) -> VideoLibraryItem {
     VideoLibraryItem {
+      logo_image_id: None,
       id: id.to_owned(),
       name: name.to_owned(),
       item_type: "Episode".to_owned(),

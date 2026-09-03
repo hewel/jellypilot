@@ -22,6 +22,7 @@ pub enum DetailAuxKind {
     Streams,
     Recommendations,
     SeasonNeighbors,
+    SimilarItems,
     UserData,
 }
 
@@ -59,8 +60,8 @@ pub struct RequestGate {
     detail_sequence: u64,
     detail: Option<DetailToken>,
     detail_item: Option<String>,
-    aux_sequence: [u64; 4],
-    aux_live: [bool; 4],
+    aux_sequence: [u64; 5],
+    aux_live: [bool; 5],
     remote: u64,
     remote_play: u64,
     image_cache: u64,
@@ -73,7 +74,8 @@ impl DetailAuxKind {
             Self::Streams => 0,
             Self::Recommendations => 1,
             Self::SeasonNeighbors => 2,
-            Self::UserData => 3,
+            Self::SimilarItems => 3,
+            Self::UserData => 4,
         }
     }
 }
@@ -155,7 +157,7 @@ impl RequestGate {
         for sequence in &mut self.aux_sequence {
             *sequence = sequence.saturating_add(1);
         }
-        self.aux_live = [false; 4];
+        self.aux_live = [false; 5];
     }
 
     /// Invalidates one aux family regardless of whether a detail item is set.
@@ -258,7 +260,7 @@ impl RequestGate {
         self.home = None;
         self.detail = None;
         self.detail_item = None;
-        self.aux_live = [false; 4];
+        self.aux_live = [false; 5];
     }
 }
 

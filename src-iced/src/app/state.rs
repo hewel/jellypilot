@@ -578,9 +578,11 @@ pub enum UserDataActionKind {
 pub struct DetailState {
   pub content: LoadState<DetailContent>,
   pub season_neighbors: LoadState<Vec<VideoLibraryItem>>,
+  pub similar_items: LoadState<Vec<VideoLibraryItem>>,
   pub season_episodes: LoadState<VideoSeasonEpisodesPage>,
   pub selected_season_id: Option<String>,
   pub overview_expanded: bool,
+  pub expanded_episode_ids: HashSet<String>,
   pub user_data_busy: Option<UserDataActionKind>,
   pub user_data_error: Option<String>,
 }
@@ -659,17 +661,25 @@ impl<T> HandleRetention<T> {
 
 pub struct ArtworkHandles {
   main: image::Handle,
+  main_width: u32,
+  main_height: u32,
   frosted_strip: Option<image::Handle>,
+  logo_shadow: Option<image::Handle>,
 }
 
 impl ArtworkHandles {
-  #[must_use]
   pub fn from_raster(raster: ArtworkRaster) -> Self {
-    let (width, height, pixels, frosted_strip) = raster.into_parts();
+    let (width, height, pixels, frosted_strip, logo_shadow) = raster.into_parts();
     Self {
       main: image::Handle::from_rgba(width, height, pixels),
+      main_width: width,
+      main_height: height,
       frosted_strip: frosted_strip.map(|strip| {
-        let (width, height, pixels, _) = strip.into_parts();
+        let (width, height, pixels, ..) = strip.into_parts();
+        image::Handle::from_rgba(width, height, pixels)
+      }),
+      logo_shadow: logo_shadow.map(|shadow| {
+        let (width, height, pixels, ..) = shadow.into_parts();
         image::Handle::from_rgba(width, height, pixels)
       }),
     }
@@ -680,7 +690,10 @@ impl ArtworkHandles {
   pub fn from_main(main: image::Handle) -> Self {
     Self {
       main,
+      main_width: 0,
+      main_height: 0,
       frosted_strip: None,
+      logo_shadow: None,
     }
   }
 }
@@ -702,11 +715,25 @@ impl ArtworkHandleRetention {
       .map(|handles| &handles.main)
   }
 
+  pub fn dims(&self, slot: ArtworkSlot, image_id: &str) -> Option<(u32, u32)> {
+    self
+      .handles
+      .get(slot, image_id)
+      .map(|handles| (handles.main_width, handles.main_height))
+  }
+
   pub fn frosted_strip(&self, slot: ArtworkSlot, image_id: &str) -> Option<&image::Handle> {
     self
       .handles
       .get(slot, image_id)
       .and_then(|handles| handles.frosted_strip.as_ref())
+  }
+
+  pub fn logo_shadow(&self, slot: ArtworkSlot, image_id: &str) -> Option<&image::Handle> {
+    self
+      .handles
+      .get(slot, image_id)
+      .and_then(|handles| handles.logo_shadow.as_ref())
   }
 
   pub fn retain_slots(&mut self, slots: impl IntoIterator<Item = ArtworkSlot>) {

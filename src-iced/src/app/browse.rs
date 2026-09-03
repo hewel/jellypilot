@@ -19,7 +19,7 @@ use jellypilot_core::browse_model::{
 use jellypilot_core::config::BrowseFilterSettings;
 use jellypilot_core::LibraryBrowseLoadToken;
 use jellypilot_media_server::artwork::{
-  ArtworkLoadObservation, ArtworkLoadSummary, ArtworkSizeClass,
+  ArtworkLoadObservation, ArtworkLoadSummary, ArtworkSizeClass, DerivedArtwork,
 };
 use jellypilot_media_server::VideoLibrarySortDirection;
 use jellypilot_ui::layout::SizeClass;
@@ -535,7 +535,7 @@ pub(crate) fn prepare_artwork(
         grid_viewport.height,
         metrics.row_height,
       ),
-      frosted_strip: None,
+      derived: DerivedArtwork::default(),
     });
   }
 
@@ -659,6 +659,7 @@ mod tests {
 
   fn episode(id: &str, season_number: i32) -> VideoLibraryItem {
     VideoLibraryItem {
+      logo_image_id: None,
       id: id.to_owned(),
       name: "Episode".to_owned(),
       item_type: "Episode".to_owned(),
@@ -836,6 +837,7 @@ mod tests {
         has_more: true,
         items: (0..24)
           .map(|index| VideoLibraryItem {
+            logo_image_id: None,
             id: format!("item-{index}"),
             name: format!("Item {index}"),
             item_type: "Movie".to_owned(),

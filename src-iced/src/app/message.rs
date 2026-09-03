@@ -138,6 +138,7 @@ pub enum DetailMessage {
   RetryNeighbors,
   RetrySeason,
   OverviewToggled,
+  EpisodeOverviewToggled(String),
   SeasonSelected(String),
   FavoriteToggled,
   PlayedToggled,
@@ -150,6 +151,10 @@ pub enum DetailMessage {
     result: Result<VideoSeasonEpisodesPage, String>,
   },
   NeighborsLoaded {
+    token: DetailAuxToken,
+    result: Result<Vec<VideoLibraryItem>, String>,
+  },
+  SimilarLoaded {
     token: DetailAuxToken,
     result: Result<Vec<VideoLibraryItem>, String>,
   },
@@ -205,7 +210,7 @@ pub enum SettingsMessage {
 
 #[derive(Clone)]
 pub enum PlaybackMessage {
-  Intent(PlaybackIntent),
+  Intent(Box<PlaybackIntent>),
   Event(Box<PlaybackEvent>),
   SeekChanged(f64),
   SeekReleased,

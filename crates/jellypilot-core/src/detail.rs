@@ -1,8 +1,8 @@
 use std::sync::Arc;
 
 use jellypilot_media_server::{
-    JellyfinClient, VideoItemDetail, VideoLibraryItem, VideoSeason, VideoSeasonEpisodesPageRequest,
-    VideoShowDetail, VideoUserDataUpdate,
+    JellyfinClient, JellyfinError, VideoItemDetail, VideoLibraryItem, VideoSeason,
+    VideoSeasonEpisodesPageRequest, VideoShowDetail, VideoUserDataUpdate,
 };
 
 use crate::LoadState;
@@ -59,6 +59,14 @@ pub async fn load_season_neighbors(
                 .collect()
         })
         .map_err(|error| error.to_string())
+}
+
+/// Loads provider-neutral similar video cards for a detail shelf.
+pub async fn load_similar_items(
+    client: &JellyfinClient,
+    item_id: String,
+) -> Result<Vec<VideoLibraryItem>, JellyfinError> {
+    client.library().similar_video(item_id).await
 }
 
 #[must_use]
@@ -130,6 +138,12 @@ pub fn selected_season_request(
 #[must_use]
 pub fn detail_episode_key(item_id: &str) -> String {
     format!("detail-episode:{item_id}")
+}
+
+/// Artwork cell key shared by the detail update and view for a similar-item card.
+#[must_use]
+pub fn detail_similar_key(item_id: &str) -> String {
+    format!("detail-similar:{item_id}")
 }
 
 /// Reads the current (item id, played, favorite) user-data flags of ready
@@ -218,6 +232,7 @@ mod tests {
             can_play: false,
             artwork_image_id: None,
             backdrop_image_id: None,
+            logo_image_id: None,
             next_episode: None,
             seasons: Vec::new(),
             metadata: Default::default(),
@@ -251,6 +266,7 @@ mod tests {
             favorite: false,
             artwork_image_id: None,
             backdrop_image_id: None,
+            logo_image_id: None,
             series_poster_image_id: None,
             season_number: Some(season_number),
             episode_thumb_image_id: None,
@@ -293,6 +309,7 @@ mod tests {
             can_play: true,
             artwork_image_id: None,
             backdrop_image_id: None,
+            logo_image_id: None,
             next_episode,
             seasons: vec![season("season-1", 1), season("season-2", 2)],
             metadata: Default::default(),
@@ -334,6 +351,11 @@ mod tests {
     #[test]
     fn detail_episode_key_scopes_episode_cells_under_the_detail_prefix() {
         assert_eq!(detail_episode_key("ep-1"), "detail-episode:ep-1");
+    }
+
+    #[test]
+    fn detail_similar_key_scopes_cells_under_the_detail_similar_prefix() {
+        assert_eq!(detail_similar_key("movie-1"), "detail-similar:movie-1");
     }
 
     #[test]

@@ -57,13 +57,7 @@ where
         };
         let image_id = load.image_id;
         let (result, observation) = adapter
-          .load_with_frosted_strip(
-            &client,
-            &image_id,
-            load.size_class,
-            load.frosted_strip,
-            lane,
-          )
+          .load_with_derived(&client, &image_id, load.size_class, load.derived, lane)
           .await;
         if let Ok(mut summary) = summary.lock() {
           summary.record(&observation);
@@ -77,7 +71,9 @@ where
     }
   });
   let events = completions
-    .buffer_unordered(concurrency)
+    // max(1): an all-cache-hit prepare yields an empty plan, and
+    // buffer_unordered(0) would never emit the chained completion event.
+    .buffer_unordered(concurrency.max(1))
     .map(ArtworkStreamEvent::Loaded)
     .chain(stream::once(async move {
       let summary = summary.lock().map(|summary| *summary).unwrap_or_default();

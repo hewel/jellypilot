@@ -4,17 +4,22 @@ use iced::advanced::graphics::text::Paragraph as GraphicsParagraph;
 use iced::advanced::text::paragraph::Paragraph;
 use iced::advanced::{text as advanced_text, Text as AdvancedText};
 use iced::gradient;
+use iced::widget::image::Image;
+use iced::widget::scrollable::{Direction, Scrollbar};
 use iced::widget::{
-  button, column, container, responsive, row, scrollable, space, stack, text, Column, Row,
+  button, column, container, responsive, row, scrollable, space, stack, text, Column, Row, Stack,
 };
 use iced::{
   alignment, Alignment, Background, ContentFit, Degrees, Element, Fill, Font, Length, Pixels, Size,
 };
+use jellypilot_core::cards::logo_display_size;
 use jellypilot_core::detail::{
-  detail_episode_key, detail_metadata, show_detail_metadata, DetailContent,
+  detail_episode_key, detail_metadata, detail_similar_key, show_detail_metadata, DetailContent,
 };
 use jellypilot_core::LoadState;
-use jellypilot_media_server::{VideoLibraryItem, VideoSeason, VideoShowDetail};
+use jellypilot_media_server::{
+  VideoItemDetail, VideoLibraryItem, VideoMediaInfo, VideoSeason, VideoShowDetail, VideoStreamInfo,
+};
 use jellypilot_mpv::playback::{Playable, PlaybackStartPosition};
 use jellypilot_mpv::playback_session::PlaybackIntent;
 use jellypilot_ui::fonts::SPACE_GROTESK_FONT;
@@ -23,17 +28,34 @@ use jellypilot_ui::icons::{
 };
 use jellypilot_ui::tokens::{ThemePalette, TOKENS};
 use jellypilot_ui::variants::{ButtonVariant, SurfaceVariant};
+use jellypilot_ui::widgets::ellipsis_text::ellipsis_text;
 use jellypilot_ui::widgets::skeleton::{skeleton_block, skeleton_panel};
-use jellypilot_ui::{full_radius, rounded_image};
+use jellypilot_ui::{full_radius, poster_card, rounded_image};
 
-const HERO_HEIGHT: f32 = 430.0;
-const POSTER_WIDTH: f32 = 220.0;
-const POSTER_HEIGHT: f32 = 330.0;
+/// Jellyfin hero backdrops are 16:9; derive the hero height from its width so
+/// the Backdrop renders uncropped.
+fn hero_height_for_width(width: f32) -> f32 {
+  (width * 9.0 / 16.0).max(1.0)
+}
+const HERO_LOGO_HEIGHT: f32 = 96.0;
+const EPISODE_HERO_LOGO_HEIGHT: f32 = 64.0;
 const EPISODE_ART_WIDTH: f32 = 240.0;
 const EPISODE_ART_HEIGHT: f32 = 135.0;
+const EPISODE_ACTION_WIDTH: f32 = 92.0;
 const OVERVIEW_TEXT_SIZE: f32 = 15.0;
 const OVERVIEW_COLLAPSED_LINES: f32 = 4.0;
-const DETAIL_POSTER_KEY: &str = "detail-poster";
+const EPISODE_OVERVIEW_TEXT_SIZE: f32 = 13.0;
+const EPISODE_OVERVIEW_COLLAPSED_LINES: f32 = 3.0;
+const SIMILAR_CARD_WIDTH: f32 = 160.0;
+const SIMILAR_CARD_HEIGHT: f32 = 240.0;
+const SIMILAR_SCROLL_HEIGHT: f32 = 302.0;
+const HERO_SCRIM_TOP_ALPHA: f32 = 0.4;
+/// Non-overview copy below the overview text: the More/Less toggle, actions
+/// row, spacings, and the hero's bottom padding.
+const SCRIM_TAIL_CHROME: f32 = 130.0;
+const SCRIM_EXPANDED_ALPHA: f32 = 0.97;
+const HERO_SCRIM_BOTTOM_ALPHA: f32 = 0.95;
+const DETAIL_LOGO_KEY: &str = "detail-logo";
 const DETAIL_BACKDROP_KEY: &str = "detail-backdrop";
 
 pub fn view(state: &State) -> Element<'_, Message> {
@@ -73,8 +95,13 @@ fn detail_ready<'a>(
         &item.metadata.creators,
         &item.metadata.cast,
       ));
+      if item.media_info.is_some() {
+        page = page.push(media_info_section(state.palette(), item));
+      }
       if item.item_type.eq_ignore_ascii_case("episode") {
         page = page.push(neighbor_section(state, skeleton_phase, reduced_motion));
+      } else if item.item_type.eq_ignore_ascii_case("movie") {
+        page = page.push(similar_section(state, skeleton_phase, reduced_motion));
       }
     }
     DetailContent::Show(show) => {
@@ -88,6 +115,7 @@ fn detail_ready<'a>(
         page = page.push(next_up_section(state, next, skeleton_phase, reduced_motion));
       }
       page = page.push(seasons_section(state, show, skeleton_phase, reduced_motion));
+      page = page.push(similar_section(state, skeleton_phase, reduced_motion));
     }
   }
 
@@ -122,6 +150,7 @@ fn item_hero<'a>(
         .then(|| (Playable::Detail(item.clone()), position)),
       played: item.played,
       favorite: item.favorite,
+      is_episode: item.item_type.eq_ignore_ascii_case("episode"),
     },
     skeleton_phase,
     reduced_motion,
@@ -165,6 +194,7 @@ fn show_hero<'a>(
       playback,
       played: show.played,
       favorite: show.favorite,
+      is_episode: false,
     },
     skeleton_phase,
     reduced_motion,
@@ -179,6 +209,7 @@ struct HeroContent<'a> {
   playback: Option<(Playable, PlaybackStartPosition)>,
   played: bool,
   favorite: bool,
+  is_episode: bool,
 }
 
 fn hero<'a>(
@@ -210,10 +241,16 @@ fn hero_at_width<'a>(
   let palette = state.palette();
   let name = content.name;
   let overview = content.overview.filter(|value| !value.trim().is_empty());
-  let copy_width = (width - (TOKENS.spacing.s6 * 2.0) - POSTER_WIDTH - TOKENS.spacing.s8).max(1.0);
-  let collapsed_height = overview_collapsed_height();
-  let measured_height = overview.map_or(0.0, |value| overview_height(value, copy_width));
-  let overview_expandable = overview_is_expandable(measured_height, collapsed_height);
+  let copy_width = (width - (TOKENS.spacing.s6 * 2.0)).max(1.0);
+  let collapsed_height = overview_collapsed_height(OVERVIEW_TEXT_SIZE, OVERVIEW_COLLAPSED_LINES);
+  let measured_height = overview.map_or(0.0, |value| {
+    overview_height(value, copy_width, OVERVIEW_TEXT_SIZE)
+  });
+  let overview_expandable = overview_is_expandable(
+    measured_height,
+    OVERVIEW_TEXT_SIZE,
+    OVERVIEW_COLLAPSED_LINES,
+  );
   let overview_expanded = overview_expandable
     && state
       .full
@@ -222,24 +259,54 @@ fn hero_at_width<'a>(
       .detail
       .data
       .overview_expanded;
+  let base_hero_height = hero_height_for_width(width);
   let hero_height = if overview_expanded {
-    HERO_HEIGHT + (measured_height - collapsed_height).max(0.0)
+    base_hero_height + (measured_height - collapsed_height).max(0.0)
   } else {
-    HERO_HEIGHT
+    base_hero_height
   };
 
+  // The Backdrop keeps its 16:9 height when the overview expands; only the
+  // scrim stretches, so the extra text lands on a solid gradient tail.
   let backdrop = artwork(
     state,
     DETAIL_BACKDROP_KEY,
     name,
-    (Fill, Length::Fixed(hero_height)),
+    (Fill, Length::Fixed(base_hero_height)),
     64,
     skeleton_phase,
     reduced_motion,
   );
-  let gradient = gradient::Linear::new(Degrees(180.0))
-    .add_stop(0.0, palette.colors.surfaceContainerLowest.scale_alpha(0.0))
-    .add_stop(1.0, palette.colors.surfaceContainerLowest.scale_alpha(0.85));
+  let gradient = gradient::Linear::new(Degrees(180.0)).add_stop(
+    0.0,
+    palette
+      .colors
+      .surfaceContainerLowest
+      .scale_alpha(HERO_SCRIM_TOP_ALPHA),
+  );
+  let gradient = if hero_height > base_hero_height {
+    // Expanded overview flows below the fixed 16:9 Backdrop; raise the scrim's
+    // solid zone to the overview's top so no paragraph sits on bare image.
+    let overview_top =
+      ((hero_height - measured_height - SCRIM_TAIL_CHROME) / hero_height).clamp(0.0, 1.0);
+    gradient
+      .add_stop(
+        overview_top,
+        palette
+          .colors
+          .surfaceContainerLowest
+          .scale_alpha(SCRIM_EXPANDED_ALPHA),
+      )
+      .add_stop(1.0, palette.colors.surfaceContainerLowest.scale_alpha(1.0))
+  } else {
+    gradient.add_stop(
+      1.0,
+      palette
+        .colors
+        .surfaceContainerLowest
+        .scale_alpha(HERO_SCRIM_BOTTOM_ALPHA),
+    )
+  };
   let scrim = container(space::vertical())
     .width(Fill)
     .height(hero_height)
@@ -264,27 +331,13 @@ fn hero_at_width<'a>(
   .padding([6, 10])
   .on_press_maybe(back_enabled.then_some(Message::Detail(DetailMessage::Back)))
   .style(|theme, status| jellypilot_ui::theme::button_variant(theme, status, ButtonVariant::Tonal));
-  let poster = artwork(
-    state,
-    DETAIL_POSTER_KEY,
-    name,
-    (Length::Fixed(POSTER_WIDTH), Length::Fixed(POSTER_HEIGHT)),
-    54,
-    skeleton_phase,
-    reduced_motion,
-  );
   let mut copy = Column::new()
     .spacing(TOKENS.spacing.s3)
     .width(Fill)
+    .push(hero_title(state, name, content.is_episode))
     .push(
       text(content.metadata.clone())
         .size(15)
-        .color(palette.colors.onSurfaceVariant),
-    )
-    .push(
-      text(name)
-        .font(SPACE_GROTESK_FONT)
-        .size(45)
         .color(palette.colors.onSurface),
     );
 
@@ -337,11 +390,11 @@ fn hero_at_width<'a>(
     content.played,
     content.favorite,
   ));
-
   let foreground = column![
     back,
-    row![poster, copy]
-      .spacing(TOKENS.spacing.s8)
+    container(copy)
+      .width(Fill)
+      .height(Fill)
       .align_y(Alignment::End),
   ]
   .spacing(TOKENS.spacing.s5)
@@ -349,10 +402,113 @@ fn hero_at_width<'a>(
   .width(Fill)
   .height(hero_height);
 
-  stack![backdrop, scrim, foreground]
+  // A Stack's base layer inherits the stack's fixed height as both min and
+  // max, which would stretch the Backdrop on overview expansion; keeping the
+  // Backdrop in an under-layer preserves its fixed 16:9 height.
+  Stack::new()
+    .push_under(backdrop)
+    .push(scrim)
+    .push(foreground)
     .width(Fill)
     .height(hero_height)
     .into()
+}
+
+fn hero_title<'a>(state: &'a State, name: &'a str, is_episode: bool) -> Element<'a, Message> {
+  let title = || -> Element<'a, Message> {
+    text(name)
+      .font(SPACE_GROTESK_FONT)
+      .size(45)
+      .color(state.palette().colors.onSurface)
+      .into()
+  };
+  let Some(logo) = detail_logo(
+    state,
+    if is_episode {
+      EPISODE_HERO_LOGO_HEIGHT
+    } else {
+      HERO_LOGO_HEIGHT
+    },
+  ) else {
+    return title();
+  };
+  if is_episode {
+    column![logo, title()]
+      .spacing(TOKENS.spacing.s2)
+      .align_x(Alignment::Start)
+      .into()
+  } else {
+    logo
+  }
+}
+
+fn detail_logo(state: &State, max_height: f32) -> Option<Element<'_, Message>> {
+  let cell = state
+    .full
+    .as_ref()
+    .expect("FullUi required")
+    .detail
+    .artwork
+    .get(DETAIL_LOGO_KEY)?;
+  if cell.state != ArtworkCellState::Ready {
+    return None;
+  }
+  let handle = state
+    .kernel
+    .artwork_handles
+    .get(cell.slot, &cell.image_id)?
+    .clone();
+  // See the home hero: the shadow canvas margin is vertical/right-only, so
+  // indent the logo on top only and keep its left edge flush with the text.
+  let dims = state
+    .kernel
+    .artwork_handles
+    .dims(cell.slot, &cell.image_id)
+    .filter(|&(w, h)| w > 0 && h > 0);
+  let (logo_width, logo_height) = dims
+    .map(|(w, h)| logo_display_size(w, h, max_height))
+    .unwrap_or((0.0, max_height));
+  let logo_image = Image::new(handle)
+    .content_fit(ContentFit::Contain)
+    .height(logo_height)
+    .width(if logo_width > 0.0 {
+      Length::Fixed(logo_width)
+    } else {
+      Length::Shrink
+    });
+  let logo = container(logo_image)
+    .padding(iced::Padding {
+      top: logo_height / 4.0,
+      ..iced::Padding::ZERO
+    })
+    .width(Fill)
+    .align_x(Alignment::Start);
+  let Some(shadow) = state
+    .kernel
+    .artwork_handles
+    .logo_shadow(cell.slot, &cell.image_id)
+  else {
+    return Some(logo.into());
+  };
+  let shadow_height = logo_height * 3.0 / 2.0;
+  let shadow_width = dims.map(|(w, h)| (w as f32 + h as f32 / 2.0) * (logo_height / h as f32));
+  let shadow_image = Image::new(shadow.clone())
+    .content_fit(ContentFit::Contain)
+    .height(shadow_height)
+    .width(if let Some(width) = shadow_width {
+      Length::Fixed(width)
+    } else {
+      Length::Shrink
+    });
+  Some(
+    stack![
+      container(shadow_image)
+        .width(Fill)
+        .align_x(Alignment::Start),
+      logo,
+    ]
+    .into(),
+  )
 }
 
 fn detail_actions<'a>(
@@ -506,6 +662,136 @@ fn summary_column(
   .into()
 }
 
+fn media_info_section(
+  palette: &'static ThemePalette,
+  item: &VideoItemDetail,
+) -> Element<'static, Message> {
+  let Some(info) = &item.media_info else {
+    return space::vertical().height(0).into();
+  };
+  let mut rows = Column::new().spacing(TOKENS.spacing.s3).width(Fill);
+  if let Some(video) = video_info_label(info) {
+    rows = rows.push(media_info_row(palette, "Video", video));
+  }
+  for stream in &info.audio_streams {
+    if let Some(audio) = audio_info_label(stream) {
+      rows = rows.push(media_info_row(palette, "Audio", audio));
+    }
+  }
+  let subtitles = info
+    .subtitle_streams
+    .iter()
+    .filter_map(subtitle_info_label)
+    .collect::<Vec<_>>()
+    .join(", ");
+  if !subtitles.is_empty() {
+    rows = rows.push(media_info_row(palette, "Subtitles", subtitles));
+  }
+  if let Some(container_name) = nonempty(info.container.as_deref()) {
+    rows = rows.push(media_info_row(
+      palette,
+      "Container",
+      container_name.to_owned(),
+    ));
+  }
+  if let Some(size_bytes) = info.size_bytes {
+    rows = rows.push(media_info_row(palette, "Size", humanized_size(size_bytes)));
+  }
+  if let Some(bitrate_bps) = info.bitrate_bps {
+    rows = rows.push(media_info_row(
+      palette,
+      "Bitrate",
+      format!("{:.1} Mbps", bitrate_bps as f64 / 1_000_000.0),
+    ));
+  }
+
+  column![
+    text("Media Info")
+      .font(SPACE_GROTESK_FONT)
+      .size(26)
+      .color(palette.colors.onSurface),
+    container(rows)
+      .padding(TOKENS.spacing.s5)
+      .width(Fill)
+      .style(|theme| jellypilot_ui::theme::surface_variant(theme, SurfaceVariant::Canvas)),
+  ]
+  .spacing(TOKENS.spacing.s3)
+  .into()
+}
+
+fn media_info_row(
+  palette: &'static ThemePalette,
+  label: &'static str,
+  value: String,
+) -> Element<'static, Message> {
+  row![
+    text(label)
+      .size(12)
+      .color(palette.colors.onSurfaceVariant)
+      .width(120),
+    text(value).size(14).color(palette.colors.onSurface),
+  ]
+  .spacing(TOKENS.spacing.s4)
+  .width(Fill)
+  .into()
+}
+
+fn video_info_label(info: &VideoMediaInfo) -> Option<String> {
+  let mut values = Vec::new();
+  if let Some(height) = info.video_height {
+    values.push(format!("{height}p"));
+  }
+  if let Some(codec) = nonempty(info.video_codec.as_deref()) {
+    values.push(codec.to_owned());
+  }
+  if let Some(range) = nonempty(info.video_range.as_deref()) {
+    values.push(range.to_owned());
+  }
+  (!values.is_empty()).then(|| values.join(" "))
+}
+
+fn audio_info_label(stream: &VideoStreamInfo) -> Option<String> {
+  if let Some(title) = nonempty(stream.display_title.as_deref()) {
+    return Some(title.to_owned());
+  }
+  let mut values = Vec::new();
+  if let Some(codec) = nonempty(stream.codec.as_deref()) {
+    values.push(codec.to_owned());
+  }
+  if let Some(language) = nonempty(stream.language.as_deref()) {
+    values.push(language.to_owned());
+  }
+  if let Some(channels) = stream.channels {
+    values.push(format!("{channels} ch"));
+  }
+  (!values.is_empty()).then(|| values.join(" "))
+}
+
+fn subtitle_info_label(stream: &VideoStreamInfo) -> Option<String> {
+  let values = [
+    nonempty(stream.language.as_deref()),
+    nonempty(stream.codec.as_deref()),
+  ]
+  .into_iter()
+  .flatten()
+  .collect::<Vec<_>>();
+  (!values.is_empty()).then(|| values.join(" "))
+}
+
+fn nonempty(value: Option<&str>) -> Option<&str> {
+  value.filter(|value| !value.trim().is_empty())
+}
+
+fn humanized_size(size_bytes: u64) -> String {
+  const MIB: f64 = 1024.0 * 1024.0;
+  const GIB: f64 = MIB * 1024.0;
+  if size_bytes as f64 >= GIB {
+    format!("{:.1} GiB", size_bytes as f64 / GIB)
+  } else {
+    format!("{:.1} MiB", size_bytes as f64 / MIB)
+  }
+}
+
 fn seasons_section<'a>(
   state: &'a State,
   show: &'a VideoShowDetail,
@@ -636,6 +922,123 @@ fn neighbor_section(
   };
   column![title, body].spacing(TOKENS.spacing.s3).into()
 }
+
+fn similar_section(
+  state: &State,
+  skeleton_phase: f32,
+  reduced_motion: bool,
+) -> Element<'_, Message> {
+  let items = match &state
+    .full
+    .as_ref()
+    .expect("FullUi required")
+    .detail
+    .data
+    .similar_items
+  {
+    LoadState::Loading => {
+      return column![
+        section_title(state.palette(), "More like this"),
+        similar_skeletons(skeleton_phase, reduced_motion),
+      ]
+      .spacing(TOKENS.spacing.s3)
+      .into();
+    }
+    LoadState::Ready(items) if !items.is_empty() => items,
+    LoadState::Idle | LoadState::Ready(_) | LoadState::Failed(_) => {
+      return space::vertical().height(0).into();
+    }
+  };
+  let mut cards = Row::new().spacing(TOKENS.spacing.s3);
+  for item in items {
+    cards = cards.push(similar_card(state, item, skeleton_phase, reduced_motion));
+  }
+  let cards = scrollable(cards)
+    .direction(Direction::Horizontal(Scrollbar::new()))
+    .height(SIMILAR_SCROLL_HEIGHT)
+    .style(jellypilot_ui::theme::scrollable);
+  column![section_title(state.palette(), "More like this"), cards]
+    .spacing(TOKENS.spacing.s3)
+    .into()
+}
+
+fn similar_card<'a>(
+  state: &'a State,
+  item: &'a VideoLibraryItem,
+  skeleton_phase: f32,
+  reduced_motion: bool,
+) -> Element<'a, Message> {
+  let key = detail_similar_key(&item.id);
+  let poster = artwork(
+    state,
+    &key,
+    &item.name,
+    (
+      Length::Fixed(SIMILAR_CARD_WIDTH),
+      Length::Fixed(SIMILAR_CARD_HEIGHT),
+    ),
+    34,
+    skeleton_phase,
+    reduced_motion,
+  );
+  let copy = column![
+    ellipsis_text(&item.name)
+      .size(14)
+      .color(state.palette().colors.onSurface),
+    text(
+      item
+        .production_year
+        .map_or_else(String::new, |year| year.to_string())
+    )
+    .size(12)
+    .color(state.palette().colors.onSurfaceVariant),
+  ]
+  .spacing(TOKENS.spacing.s1)
+  .padding(iced::Padding {
+    top: TOKENS.spacing.s2,
+    right: 0.0,
+    bottom: 0.0,
+    left: 0.0,
+  })
+  .width(Fill);
+  poster_card(poster, copy)
+    .width(SIMILAR_CARD_WIDTH)
+    .on_press(Message::OpenDetail(item.clone()))
+    .into()
+}
+
+fn similar_skeletons<'a>(phase: f32, reduced_motion: bool) -> Element<'a, Message> {
+  let mut cards = Row::new().spacing(TOKENS.spacing.s3);
+  for _ in 0..4 {
+    cards = cards.push(
+      column![
+        skeleton_block(
+          SIMILAR_CARD_WIDTH,
+          SIMILAR_CARD_HEIGHT,
+          phase,
+          reduced_motion,
+        ),
+        skeleton_block(SIMILAR_CARD_WIDTH - 20.0, 18.0, phase, reduced_motion),
+        skeleton_block(54.0, 14.0, phase, reduced_motion),
+      ]
+      .spacing(TOKENS.spacing.s1),
+    );
+  }
+  scrollable(cards)
+    .direction(Direction::Horizontal(Scrollbar::new()))
+    .height(SIMILAR_SCROLL_HEIGHT)
+    .style(jellypilot_ui::theme::scrollable)
+    .into()
+}
+
+fn section_title(palette: &'static ThemePalette, label: &'static str) -> Element<'static, Message> {
+  text(label)
+    .font(SPACE_GROTESK_FONT)
+    .size(26)
+    .color(palette.colors.onSurface)
+    .into()
+}
+
 fn next_up_section<'a>(
   state: &'a State,
   episode: &'a VideoLibraryItem,
@@ -672,6 +1075,20 @@ fn episode_card<'a>(
   skeleton_phase: f32,
   reduced_motion: bool,
 ) -> Element<'a, Message> {
+  responsive(move |bounds| {
+    episode_card_at_width(state, episode, bounds.width, skeleton_phase, reduced_motion)
+  })
+  .height(Length::Shrink)
+  .into()
+}
+
+fn episode_card_at_width<'a>(
+  state: &'a State,
+  episode: &'a VideoLibraryItem,
+  width: f32,
+  skeleton_phase: f32,
+  reduced_motion: bool,
+) -> Element<'a, Message> {
   let palette = state.palette();
   let key = detail_episode_key(&episode.id);
   let art = artwork(
@@ -697,11 +1114,71 @@ fn episode_card<'a>(
     .as_deref()
     .filter(|overview| !overview.trim().is_empty())
   {
-    copy = copy.push(
-      text(overview)
-        .size(13)
-        .color(palette.colors.onSurfaceVariant),
+    let copy_width = (width
+      - (TOKENS.spacing.s3 * 2.0)
+      - EPISODE_ART_WIDTH
+      - EPISODE_ACTION_WIDTH
+      - (TOKENS.spacing.s4 * 2.0))
+      .max(1.0);
+    let collapsed_height =
+      overview_collapsed_height(EPISODE_OVERVIEW_TEXT_SIZE, EPISODE_OVERVIEW_COLLAPSED_LINES);
+    let measured_height = overview_height(overview, copy_width, EPISODE_OVERVIEW_TEXT_SIZE);
+    let expandable = overview_is_expandable(
+      measured_height,
+      EPISODE_OVERVIEW_TEXT_SIZE,
+      EPISODE_OVERVIEW_COLLAPSED_LINES,
     );
+    let expanded = expandable
+      && state
+        .full
+        .as_ref()
+        .expect("FullUi required")
+        .detail
+        .data
+        .expanded_episode_ids
+        .contains(&episode.id);
+    if expandable && !expanded {
+      copy = copy.push(
+        container(
+          text(overview)
+            .size(EPISODE_OVERVIEW_TEXT_SIZE)
+            .color(palette.colors.onSurfaceVariant),
+        )
+        .width(Fill)
+        .height(collapsed_height)
+        .clip(true),
+      );
+    } else {
+      copy = copy.push(
+        text(overview)
+          .size(EPISODE_OVERVIEW_TEXT_SIZE)
+          .color(palette.colors.onSurfaceVariant),
+      );
+    }
+    if expandable {
+      let (label, icon) = if expanded {
+        ("Less", Icon::ChevronUp)
+      } else {
+        ("More", Icon::ChevronDown)
+      };
+      copy = copy.push(
+        button(
+          row![
+            text(label),
+            icon_for_variant(icon, IconSize::Xs, ButtonVariant::Text),
+          ]
+          .spacing(TOKENS.spacing.s1)
+          .align_y(Alignment::Center),
+        )
+        .padding([5, 8])
+        .on_press(Message::Detail(DetailMessage::EpisodeOverviewToggled(
+          episode.id.clone(),
+        )))
+        .style(|theme, status| {
+          jellypilot_ui::theme::button_variant(theme, status, ButtonVariant::Text)
+        }),
+      );
+    }
   }
   if let Some(progress) = playback_progress(episode) {
     copy = copy.push(progress_bar(palette, progress));
@@ -752,12 +1229,12 @@ fn episode_card<'a>(
 }
 
 fn playback_message(state: &State, item: Playable, position: PlaybackStartPosition) -> Message {
-  Message::Playback(PlaybackMessage::Intent(PlaybackIntent::Start {
+  Message::Playback(PlaybackMessage::Intent(Box::new(PlaybackIntent::Start {
     item,
     position,
     intro: state.kernel.intro_availability(),
     selection: Box::default(),
-  }))
+  })))
 }
 
 fn artwork<'a>(
@@ -866,17 +1343,13 @@ fn detail_skeleton(
   .style(|theme, status| jellypilot_ui::theme::button_variant(theme, status, ButtonVariant::Tonal));
   let body = column![
     back,
-    row![
-      skeleton_block(POSTER_WIDTH, POSTER_HEIGHT, skeleton_phase, reduced_motion),
-      column![
-        skeleton_block(240.0, 18.0, skeleton_phase, reduced_motion),
-        skeleton_block(520.0, 48.0, skeleton_phase, reduced_motion),
-        skeleton_block(680.0, 96.0, skeleton_phase, reduced_motion),
-        skeleton_block(430.0, 42.0, skeleton_phase, reduced_motion),
-      ]
-      .spacing(TOKENS.spacing.s4),
+    column![
+      skeleton_block(360.0, HERO_LOGO_HEIGHT, skeleton_phase, reduced_motion),
+      skeleton_block(240.0, 18.0, skeleton_phase, reduced_motion),
+      skeleton_block(680.0, 96.0, skeleton_phase, reduced_motion),
+      skeleton_block(430.0, 42.0, skeleton_phase, reduced_motion),
     ]
-    .spacing(TOKENS.spacing.s8),
+    .spacing(TOKENS.spacing.s4),
   ]
   .spacing(TOKENS.spacing.s5)
   .padding(TOKENS.spacing.s6);
@@ -1127,8 +1600,8 @@ fn season_label(season: &VideoSeason) -> &str {
   &season.name
 }
 
-fn overview_height(overview: &str, width: f32) -> f32 {
-  let size = Pixels(OVERVIEW_TEXT_SIZE);
+fn overview_height(overview: &str, width: f32, text_size: f32) -> f32 {
+  let size = Pixels(text_size);
   let paragraph = GraphicsParagraph::with_text(AdvancedText {
     content: overview,
     bounds: Size::new(width, f32::INFINITY),
@@ -1143,13 +1616,12 @@ fn overview_height(overview: &str, width: f32) -> f32 {
   paragraph.min_height()
 }
 
-fn overview_collapsed_height() -> f32 {
-  f32::from(advanced_text::LineHeight::default().to_absolute(Pixels(OVERVIEW_TEXT_SIZE)))
-    * OVERVIEW_COLLAPSED_LINES
+fn overview_collapsed_height(text_size: f32, line_count: f32) -> f32 {
+  f32::from(advanced_text::LineHeight::default().to_absolute(Pixels(text_size))) * line_count
 }
 
-fn overview_is_expandable(measured_height: f32, collapsed_height: f32) -> bool {
-  measured_height > collapsed_height
+fn overview_is_expandable(measured_height: f32, text_size: f32, line_count: f32) -> bool {
+  measured_height > overview_collapsed_height(text_size, line_count)
 }
 
 fn limited_people(people: &[String], limit: usize) -> String {
@@ -1186,6 +1658,7 @@ mod tests {
       favorite: false,
       artwork_image_id: None,
       backdrop_image_id: None,
+      logo_image_id: None,
       series_poster_image_id: None,
       episode_thumb_image_id: None,
       series_thumb_image_id: None,
@@ -1221,18 +1694,23 @@ mod tests {
 
   #[test]
   fn overview_at_the_collapsed_height_is_not_expandable() {
-    let collapsed_height = overview_collapsed_height();
+    let collapsed_height = overview_collapsed_height(OVERVIEW_TEXT_SIZE, OVERVIEW_COLLAPSED_LINES);
 
-    assert!(!overview_is_expandable(collapsed_height, collapsed_height));
+    assert!(!overview_is_expandable(
+      collapsed_height,
+      OVERVIEW_TEXT_SIZE,
+      OVERVIEW_COLLAPSED_LINES
+    ));
   }
 
   #[test]
   fn overview_taller_than_the_collapsed_height_is_expandable() {
-    let collapsed_height = overview_collapsed_height();
+    let collapsed_height = overview_collapsed_height(OVERVIEW_TEXT_SIZE, OVERVIEW_COLLAPSED_LINES);
 
     assert!(overview_is_expandable(
       collapsed_height + 1.0,
-      collapsed_height
+      OVERVIEW_TEXT_SIZE,
+      OVERVIEW_COLLAPSED_LINES
     ));
   }
 
@@ -1241,7 +1719,27 @@ mod tests {
     let overview = "A detailed overview with enough words to wrap across several lines when the \
       available width is narrow, while fitting into fewer lines when more width is available.";
 
-    assert!(overview_height(overview, 120.0) > overview_height(overview, 800.0));
+    assert!(
+      overview_height(overview, 120.0, OVERVIEW_TEXT_SIZE)
+        > overview_height(overview, 800.0, OVERVIEW_TEXT_SIZE)
+    );
+  }
+
+  #[test]
+  fn episode_overview_uses_the_three_line_thirteen_pixel_boundary() {
+    let collapsed_height =
+      overview_collapsed_height(EPISODE_OVERVIEW_TEXT_SIZE, EPISODE_OVERVIEW_COLLAPSED_LINES);
+
+    assert!(!overview_is_expandable(
+      collapsed_height,
+      EPISODE_OVERVIEW_TEXT_SIZE,
+      EPISODE_OVERVIEW_COLLAPSED_LINES,
+    ));
+    assert!(overview_is_expandable(
+      collapsed_height + 1.0,
+      EPISODE_OVERVIEW_TEXT_SIZE,
+      EPISODE_OVERVIEW_COLLAPSED_LINES,
+    ));
   }
 
   #[test]
@@ -1269,6 +1767,7 @@ mod tests {
           can_play: true,
           artwork_image_id: None,
           backdrop_image_id: None,
+          logo_image_id: None,
           next_episode: None,
           seasons: vec![VideoSeason {
             id: "season-1".to_owned(),
@@ -1307,7 +1806,9 @@ mod tests {
         can_play: true,
         artwork_image_id: None,
         backdrop_image_id: None,
+        logo_image_id: None,
         series_poster_image_id: None,
+        media_info: None,
         metadata: Default::default(),
       };
       state.full.as_mut().unwrap().detail.data.content =
@@ -1341,7 +1842,9 @@ mod tests {
       can_play: true,
       artwork_image_id: None,
       backdrop_image_id: None,
+      logo_image_id: None,
       series_poster_image_id: None,
+      media_info: None,
       metadata: Default::default(),
     };
     let neighbor_item = VideoLibraryItem {
@@ -1355,6 +1858,7 @@ mod tests {
       favorite: false,
       artwork_image_id: None,
       backdrop_image_id: None,
+      logo_image_id: None,
       series_poster_image_id: None,
       episode_thumb_image_id: None,
       series_thumb_image_id: None,
@@ -1392,10 +1896,10 @@ mod tests {
       },
     );
     state.full.as_mut().unwrap().detail.artwork.insert(
-      DETAIL_POSTER_KEY.to_owned(),
+      DETAIL_LOGO_KEY.to_owned(),
       ArtworkCell {
         slot: slot_2,
-        image_id: "img-poster".to_owned(),
+        image_id: "img-logo".to_owned(),
         state: ArtworkCellState::Failed,
       },
     );

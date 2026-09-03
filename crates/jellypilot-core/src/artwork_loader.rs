@@ -7,7 +7,7 @@
 //! frontend executes the plan as a stream of per-image
 //! [`ArtworkLoadCompletion`] settlements.
 
-use jellypilot_media_server::artwork::{ArtworkSizeClass, FrostedStripSpec};
+use jellypilot_media_server::artwork::{ArtworkSizeClass, DerivedArtwork};
 use std::ops::Range;
 
 use crate::artwork_binder::ArtworkSlot;
@@ -20,7 +20,7 @@ pub struct PlannedArtworkLoad {
     pub image_id: String,
     pub size_class: ArtworkSizeClass,
     pub visible: bool,
-    pub frosted_strip: Option<FrostedStripSpec>,
+    pub derived: DerivedArtwork,
 }
 
 /// One settled Library Image load delivered back to its surface.
@@ -154,7 +154,7 @@ mod tests {
             image_id: format!("image-{slot}"),
             size_class: ArtworkSizeClass::Card,
             visible,
-            frosted_strip: None,
+            derived: DerivedArtwork::default(),
         }
     }
 

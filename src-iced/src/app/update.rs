@@ -78,7 +78,7 @@ pub fn update(state: &mut State, message: Message) -> Task<Message> {
           &mut state.playback,
           &mut state.kernel,
           state.shell.quit_requested,
-          PlaybackInput::Intent(PlaybackIntent::Quit),
+          PlaybackInput::Intent(Box::new(PlaybackIntent::Quit)),
         ));
         tasks.push(playback::stop_remote_session_for_quit(
           &mut state.playback,
@@ -292,6 +292,7 @@ pub fn update(state: &mut State, message: Message) -> Task<Message> {
         DetailMessage::Loaded { .. }
           | DetailMessage::SeasonLoaded { .. }
           | DetailMessage::NeighborsLoaded { .. }
+          | DetailMessage::SimilarLoaded { .. }
       );
       let detail_item_id = match &state.shell.destination {
         Destination::Detail(item_id) => Some(item_id.as_str()),
@@ -345,7 +346,7 @@ pub fn update(state: &mut State, message: Message) -> Task<Message> {
           &mut state.playback,
           &mut state.kernel,
           state.shell.quit_requested,
-          PlaybackInput::Intent(PlaybackIntent::SetIntroMode(mode)),
+          PlaybackInput::Intent(Box::new(PlaybackIntent::SetIntroMode(mode))),
         ));
       }
       if settings_after.playback_target_name != settings_before.playback_target_name {
@@ -403,7 +404,7 @@ pub fn update(state: &mut State, message: Message) -> Task<Message> {
           &mut state.playback,
           &mut state.kernel,
           state.shell.quit_requested,
-          PlaybackInput::Intent(PlaybackIntent::Quit),
+          PlaybackInput::Intent(Box::new(PlaybackIntent::Quit)),
         ),
         playback::stop_remote_session_for_quit(&mut state.playback, &mut state.kernel),
       ])
@@ -500,6 +501,7 @@ mod tests {
 
   fn episode(id: &str, season_number: i32) -> VideoLibraryItem {
     VideoLibraryItem {
+      logo_image_id: None,
       id: id.to_owned(),
       name: "Episode".to_owned(),
       item_type: "Episode".to_owned(),
@@ -591,11 +593,11 @@ mod tests {
     let mut state = test_state();
     let now = Instant::now();
     state.playback.session.handle(
-      PlaybackInput::Event(PlaybackEvent::EngineAvailability(true)),
+      PlaybackInput::Event(Box::new(PlaybackEvent::EngineAvailability(true))),
       now,
     );
     let effects = state.playback.session.handle(
-      PlaybackInput::Intent(PlaybackIntent::Start {
+      PlaybackInput::Intent(Box::new(PlaybackIntent::Start {
         item: Playable::Library(episode("episode-1", 1)),
         position: jellypilot_mpv::playback::PlaybackStartPosition::Beginning,
         intro: IntroAvailability {
@@ -603,18 +605,18 @@ mod tests {
           skipper_available: true,
         },
         selection: Box::default(),
-      }),
+      })),
       now,
     );
     let (start_id, _) = controller_effect(effects);
     let auxiliary = state.playback.session.handle(
-      PlaybackInput::Event(PlaybackEvent::ControllerSettled {
+      PlaybackInput::Event(Box::new(PlaybackEvent::ControllerSettled {
         id: start_id,
         settlement: ControllerSettlement::Started(Ok(PlaybackOutcome {
           snapshot: playback_snapshot(0.0),
           warnings: Vec::new(),
         })),
-      }),
+      })),
       now,
     );
     let intro_id = auxiliary
@@ -625,7 +627,7 @@ mod tests {
       })
       .expect("active intro playback should fetch ranges");
     state.playback.session.handle(
-      PlaybackInput::Event(PlaybackEvent::IntroRangesSettled {
+      PlaybackInput::Event(Box::new(PlaybackEvent::IntroRangesSettled {
         id: intro_id,
         result: Ok(vec![jellypilot_session::IntroSkipRange {
           kind: jellypilot_session::IntroSkipKind::Introduction,
@@ -634,17 +636,17 @@ mod tests {
           notified: false,
           skipped: false,
         }]),
-      }),
+      })),
       now,
     );
     let (refresh_id, _) = controller_effect(
       state
         .playback
         .session
-        .handle(PlaybackInput::Intent(PlaybackIntent::Tick), now),
+        .handle(PlaybackInput::Intent(Box::new(PlaybackIntent::Tick)), now),
     );
     let effects = state.playback.session.handle(
-      PlaybackInput::Event(PlaybackEvent::ControllerSettled {
+      PlaybackInput::Event(Box::new(PlaybackEvent::ControllerSettled {
         id: refresh_id,
         settlement: ControllerSettlement::Refreshed {
           outcome: PlaybackRefreshOutcome {
@@ -654,16 +656,16 @@ mod tests {
           },
           client_messages: Vec::new(),
         },
-      }),
+      })),
       now,
     );
     let (prompt_id, command) = controller_effect(effects);
     assert!(matches!(command, ControllerCommand::ShowText { .. }));
     state.playback.session.handle(
-      PlaybackInput::Event(PlaybackEvent::ControllerSettled {
+      PlaybackInput::Event(Box::new(PlaybackEvent::ControllerSettled {
         id: prompt_id,
         settlement: ControllerSettlement::OsdShown(Ok(())),
-      }),
+      })),
       now,
     );
     state.playback.view = state.playback.session.view();

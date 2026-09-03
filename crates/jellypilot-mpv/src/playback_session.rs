@@ -25,8 +25,8 @@ pub struct EffectId {
 
 #[derive(Clone)]
 pub enum PlaybackInput {
-  Intent(PlaybackIntent),
-  Event(PlaybackEvent),
+  Intent(Box<PlaybackIntent>),
+  Event(Box<PlaybackEvent>),
 }
 
 #[derive(Clone)]
@@ -299,8 +299,8 @@ impl Default for PlaybackSession {
 impl PlaybackSession {
   pub fn handle(&mut self, input: PlaybackInput, now: Instant) -> Vec<PlaybackEffect> {
     match input {
-      PlaybackInput::Intent(intent) => self.handle_intent(intent, now),
-      PlaybackInput::Event(event) => self.handle_event(event, now),
+      PlaybackInput::Intent(intent) => self.handle_intent(*intent, now),
+      PlaybackInput::Event(event) => self.handle_event(*event, now),
     }
   }
 
@@ -1408,16 +1408,16 @@ mod tests {
 
   fn start_command(session: &mut PlaybackSession, now: Instant, mode: IntroSkipMode) -> EffectId {
     session.handle(
-      PlaybackInput::Event(PlaybackEvent::EngineAvailability(true)),
+      PlaybackInput::Event(Box::new(PlaybackEvent::EngineAvailability(true))),
       now,
     );
     let (id, command) = controller_effect(session.handle(
-      PlaybackInput::Intent(PlaybackIntent::Start {
+      PlaybackInput::Intent(Box::new(PlaybackIntent::Start {
         item: Playable::Media(media_item("episode-1", "Pilot")),
         position: PlaybackStartPosition::Beginning,
         intro: intro_availability(mode),
         selection: Box::default(),
-      }),
+      })),
       now,
     ));
     assert!(matches!(command, ControllerCommand::Start { .. }));
@@ -1431,13 +1431,13 @@ mod tests {
     item_type: &str,
   ) -> Vec<PlaybackEffect> {
     session.handle(
-      PlaybackInput::Event(PlaybackEvent::ControllerSettled {
+      PlaybackInput::Event(Box::new(PlaybackEvent::ControllerSettled {
         id,
         settlement: ControllerSettlement::Started(Ok(PlaybackOutcome {
           snapshot: snapshot("episode-1", item_type, 0.0),
           warnings: Vec::new(),
         })),
-      }),
+      })),
       now,
     )
   }
@@ -1474,10 +1474,10 @@ mod tests {
 
   fn settle_intro_ranges(session: &mut PlaybackSession, id: EffectId, now: Instant) {
     let effects = session.handle(
-      PlaybackInput::Event(PlaybackEvent::IntroRangesSettled {
+      PlaybackInput::Event(Box::new(PlaybackEvent::IntroRangesSettled {
         id,
         result: Ok(vec![intro_range()]),
-      }),
+      })),
       now,
     );
     assert!(effects.is_empty());
@@ -1490,10 +1490,10 @@ mod tests {
     messages: Vec<String>,
   ) -> Vec<PlaybackEffect> {
     let (id, command) =
-      controller_effect(session.handle(PlaybackInput::Intent(PlaybackIntent::Tick), now));
+      controller_effect(session.handle(PlaybackInput::Intent(Box::new(PlaybackIntent::Tick)), now));
     assert!(matches!(command, ControllerCommand::Refresh));
     session.handle(
-      PlaybackInput::Event(PlaybackEvent::ControllerSettled {
+      PlaybackInput::Event(Box::new(PlaybackEvent::ControllerSettled {
         id,
         settlement: ControllerSettlement::Refreshed {
           outcome: PlaybackRefreshOutcome {
@@ -1503,7 +1503,7 @@ mod tests {
           },
           client_messages: messages,
         },
-      }),
+      })),
       now,
     )
   }
@@ -1511,12 +1511,23 @@ mod tests {
   #[test]
   fn queue_coalesces_each_controller_request_kind() {
     let (mut session, now, _) = start_session(IntroSkipMode::Off);
-    let (busy_id, _) =
-      controller_effect(session.handle(PlaybackInput::Intent(PlaybackIntent::Seek(1.0)), now));
+    let (busy_id, _) = controller_effect(session.handle(
+      PlaybackInput::Intent(Box::new(PlaybackIntent::Seek(1.0))),
+      now,
+    ));
 
-    session.handle(PlaybackInput::Intent(PlaybackIntent::SetVolume(10.0)), now);
-    session.handle(PlaybackInput::Intent(PlaybackIntent::Seek(2.0)), now);
-    session.handle(PlaybackInput::Intent(PlaybackIntent::SetVolume(20.0)), now);
+    session.handle(
+      PlaybackInput::Intent(Box::new(PlaybackIntent::SetVolume(10.0))),
+      now,
+    );
+    session.handle(
+      PlaybackInput::Intent(Box::new(PlaybackIntent::Seek(2.0))),
+      now,
+    );
+    session.handle(
+      PlaybackInput::Intent(Box::new(PlaybackIntent::SetVolume(20.0))),
+      now,
+    );
 
     assert_eq!(
       session
@@ -1536,14 +1547,17 @@ mod tests {
   fn seek_queued_behind_refresh_reaches_the_controller_after_refresh_settles() {
     let (mut session, now, _) = start_session(IntroSkipMode::Off);
     let (refresh_id, command) =
-      controller_effect(session.handle(PlaybackInput::Intent(PlaybackIntent::Tick), now));
+      controller_effect(session.handle(PlaybackInput::Intent(Box::new(PlaybackIntent::Tick)), now));
     assert!(matches!(command, ControllerCommand::Refresh));
 
-    let queued = session.handle(PlaybackInput::Intent(PlaybackIntent::Seek(120.0)), now);
+    let queued = session.handle(
+      PlaybackInput::Intent(Box::new(PlaybackIntent::Seek(120.0))),
+      now,
+    );
     assert!(queued.is_empty());
 
     let effects = session.handle(
-      PlaybackInput::Event(PlaybackEvent::ControllerSettled {
+      PlaybackInput::Event(Box::new(PlaybackEvent::ControllerSettled {
         id: refresh_id,
         settlement: ControllerSettlement::Refreshed {
           outcome: PlaybackRefreshOutcome {
@@ -1553,7 +1567,7 @@ mod tests {
           },
           client_messages: Vec::new(),
         },
-      }),
+      })),
       now,
     );
     let (_, command) = controller_effect(effects);
@@ -1568,13 +1582,16 @@ mod tests {
   fn volume_queued_behind_refresh_reaches_the_controller_after_refresh_settles() {
     let (mut session, now, _) = start_session(IntroSkipMode::Off);
     let (refresh_id, _) =
-      controller_effect(session.handle(PlaybackInput::Intent(PlaybackIntent::Tick), now));
+      controller_effect(session.handle(PlaybackInput::Intent(Box::new(PlaybackIntent::Tick)), now));
 
-    let queued = session.handle(PlaybackInput::Intent(PlaybackIntent::SetVolume(42.0)), now);
+    let queued = session.handle(
+      PlaybackInput::Intent(Box::new(PlaybackIntent::SetVolume(42.0))),
+      now,
+    );
     assert!(queued.is_empty());
 
     let effects = session.handle(
-      PlaybackInput::Event(PlaybackEvent::ControllerSettled {
+      PlaybackInput::Event(Box::new(PlaybackEvent::ControllerSettled {
         id: refresh_id,
         settlement: ControllerSettlement::Refreshed {
           outcome: PlaybackRefreshOutcome {
@@ -1584,7 +1601,7 @@ mod tests {
           },
           client_messages: Vec::new(),
         },
-      }),
+      })),
       now,
     );
     let (_, command) = controller_effect(effects);
@@ -1598,28 +1615,30 @@ mod tests {
   #[test]
   fn start_while_busy_is_queued_until_the_controller_settles() {
     let (mut session, now, _) = start_session(IntroSkipMode::Off);
-    let (busy_id, _) =
-      controller_effect(session.handle(PlaybackInput::Intent(PlaybackIntent::Seek(1.0)), now));
+    let (busy_id, _) = controller_effect(session.handle(
+      PlaybackInput::Intent(Box::new(PlaybackIntent::Seek(1.0))),
+      now,
+    ));
 
     let queued = session.handle(
-      PlaybackInput::Intent(PlaybackIntent::Start {
+      PlaybackInput::Intent(Box::new(PlaybackIntent::Start {
         item: Playable::Media(media_item("episode-2", "Second")),
         position: PlaybackStartPosition::Beginning,
         intro: intro_availability(IntroSkipMode::Off),
         selection: Box::default(),
-      }),
+      })),
       now,
     );
     assert!(queued.is_empty());
 
     let effects = session.handle(
-      PlaybackInput::Event(PlaybackEvent::ControllerSettled {
+      PlaybackInput::Event(Box::new(PlaybackEvent::ControllerSettled {
         id: busy_id,
         settlement: ControllerSettlement::Controlled(Ok(PlaybackOutcome {
           snapshot: snapshot("episode-1", "Episode", 1.0),
           warnings: Vec::new(),
         })),
-      }),
+      })),
       now,
     );
     let (_, command) = controller_effect(effects);
@@ -1633,23 +1652,23 @@ mod tests {
     let start_id = start_command(&mut session, now, IntroSkipMode::Off);
 
     session.handle(
-      PlaybackInput::Intent(PlaybackIntent::Start {
+      PlaybackInput::Intent(Box::new(PlaybackIntent::Start {
         item: Playable::Media(media_item("episode-2", "Second")),
         position: PlaybackStartPosition::Beginning,
         intro: intro_availability(IntroSkipMode::Off),
         selection: Box::default(),
-      }),
+      })),
       now,
     );
     assert_eq!(session.pending.len(), 1);
 
     let duplicate = session.handle(
-      PlaybackInput::Intent(PlaybackIntent::Start {
+      PlaybackInput::Intent(Box::new(PlaybackIntent::Start {
         item: Playable::Media(media_item("episode-1", "Pilot")),
         position: PlaybackStartPosition::Beginning,
         intro: intro_availability(IntroSkipMode::Off),
         selection: Box::default(),
-      }),
+      })),
       now,
     );
 
@@ -1666,11 +1685,11 @@ mod tests {
     let (mut session, now, auxiliary) = start_session(IntroSkipMode::Off);
     let next_id = adjacent_id(&auxiliary, AdjacentDirection::Next);
     session.handle(
-      PlaybackInput::Event(PlaybackEvent::AdjacentSettled {
+      PlaybackInput::Event(Box::new(PlaybackEvent::AdjacentSettled {
         id: next_id,
         direction: AdjacentDirection::Next,
         result: Ok(Some(media_item("episode-2", "Second"))),
-      }),
+      })),
       now,
     );
     assert!(matches!(
@@ -1679,22 +1698,22 @@ mod tests {
     ));
 
     let (refresh_id, _) =
-      controller_effect(session.handle(PlaybackInput::Intent(PlaybackIntent::Tick), now));
+      controller_effect(session.handle(PlaybackInput::Intent(Box::new(PlaybackIntent::Tick)), now));
     session.handle(
-      PlaybackInput::Intent(PlaybackIntent::Start {
+      PlaybackInput::Intent(Box::new(PlaybackIntent::Start {
         item: Playable::Media(media_item("episode-3", "Third")),
         position: PlaybackStartPosition::Beginning,
         intro: intro_availability(IntroSkipMode::Off),
         selection: Box::default(),
-      }),
+      })),
       now,
     );
     session.handle(
-      PlaybackInput::Event(PlaybackEvent::AdjacentSettled {
+      PlaybackInput::Event(Box::new(PlaybackEvent::AdjacentSettled {
         id: next_id,
         direction: AdjacentDirection::Next,
         result: Ok(Some(media_item("episode-2", "Second"))),
-      }),
+      })),
       now,
     );
     assert!(!matches!(
@@ -1703,7 +1722,7 @@ mod tests {
     ));
 
     let effects = session.handle(
-      PlaybackInput::Event(PlaybackEvent::ControllerSettled {
+      PlaybackInput::Event(Box::new(PlaybackEvent::ControllerSettled {
         id: refresh_id,
         settlement: ControllerSettlement::Refreshed {
           outcome: PlaybackRefreshOutcome {
@@ -1713,7 +1732,7 @@ mod tests {
           },
           client_messages: Vec::new(),
         },
-      }),
+      })),
       now,
     );
     assert!(!matches!(
@@ -1729,11 +1748,20 @@ mod tests {
   #[test]
   fn stop_flushes_every_queued_request() {
     let (mut session, now, _) = start_session(IntroSkipMode::Off);
-    let _ = session.handle(PlaybackInput::Intent(PlaybackIntent::Seek(1.0)), now);
-    let _ = session.handle(PlaybackInput::Intent(PlaybackIntent::SetVolume(20.0)), now);
-    let _ = session.handle(PlaybackInput::Intent(PlaybackIntent::SetMuted(true)), now);
+    let _ = session.handle(
+      PlaybackInput::Intent(Box::new(PlaybackIntent::Seek(1.0))),
+      now,
+    );
+    let _ = session.handle(
+      PlaybackInput::Intent(Box::new(PlaybackIntent::SetVolume(20.0))),
+      now,
+    );
+    let _ = session.handle(
+      PlaybackInput::Intent(Box::new(PlaybackIntent::SetMuted(true))),
+      now,
+    );
 
-    let effects = session.handle(PlaybackInput::Intent(PlaybackIntent::Stop), now);
+    let effects = session.handle(PlaybackInput::Intent(Box::new(PlaybackIntent::Stop)), now);
 
     assert!(effects.is_empty());
     assert_eq!(session.pending.len(), 1);
@@ -1764,10 +1792,10 @@ mod tests {
   fn eof_refresh_clears_playback_and_reports_finished() {
     let (mut session, now, _) = start_session(IntroSkipMode::Off);
     let (id, _) =
-      controller_effect(session.handle(PlaybackInput::Intent(PlaybackIntent::Tick), now));
+      controller_effect(session.handle(PlaybackInput::Intent(Box::new(PlaybackIntent::Tick)), now));
 
     let effects = session.handle(
-      PlaybackInput::Event(PlaybackEvent::ControllerSettled {
+      PlaybackInput::Event(Box::new(PlaybackEvent::ControllerSettled {
         id,
         settlement: ControllerSettlement::Refreshed {
           outcome: PlaybackRefreshOutcome {
@@ -1777,7 +1805,7 @@ mod tests {
           },
           client_messages: Vec::new(),
         },
-      }),
+      })),
       now,
     );
 
@@ -1791,18 +1819,18 @@ mod tests {
     let (mut session, now, auxiliary) = start_session(IntroSkipMode::Off);
     let next_id = adjacent_id(&auxiliary, AdjacentDirection::Next);
     session.handle(
-      PlaybackInput::Event(PlaybackEvent::AdjacentSettled {
+      PlaybackInput::Event(Box::new(PlaybackEvent::AdjacentSettled {
         id: next_id,
         direction: AdjacentDirection::Next,
         result: Ok(Some(media_item("episode-2", "Second"))),
-      }),
+      })),
       now,
     );
     let (id, _) =
-      controller_effect(session.handle(PlaybackInput::Intent(PlaybackIntent::Tick), now));
+      controller_effect(session.handle(PlaybackInput::Intent(Box::new(PlaybackIntent::Tick)), now));
 
     let effects = session.handle(
-      PlaybackInput::Event(PlaybackEvent::ControllerSettled {
+      PlaybackInput::Event(Box::new(PlaybackEvent::ControllerSettled {
         id,
         settlement: ControllerSettlement::Refreshed {
           outcome: PlaybackRefreshOutcome {
@@ -1812,7 +1840,7 @@ mod tests {
           },
           client_messages: Vec::new(),
         },
-      }),
+      })),
       now,
     );
 
@@ -1833,18 +1861,18 @@ mod tests {
     let (mut session, now, auxiliary) = start_session(IntroSkipMode::Off);
     let next_id = adjacent_id(&auxiliary, AdjacentDirection::Next);
     session.handle(
-      PlaybackInput::Event(PlaybackEvent::AdjacentSettled {
+      PlaybackInput::Event(Box::new(PlaybackEvent::AdjacentSettled {
         id: next_id,
         direction: AdjacentDirection::Next,
         result: Ok(None),
-      }),
+      })),
       now,
     );
     let (id, _) =
-      controller_effect(session.handle(PlaybackInput::Intent(PlaybackIntent::Tick), now));
+      controller_effect(session.handle(PlaybackInput::Intent(Box::new(PlaybackIntent::Tick)), now));
 
     let effects = session.handle(
-      PlaybackInput::Event(PlaybackEvent::ControllerSettled {
+      PlaybackInput::Event(Box::new(PlaybackEvent::ControllerSettled {
         id,
         settlement: ControllerSettlement::Refreshed {
           outcome: PlaybackRefreshOutcome {
@@ -1854,7 +1882,7 @@ mod tests {
           },
           client_messages: Vec::new(),
         },
-      }),
+      })),
       now,
     );
 
@@ -1868,11 +1896,11 @@ mod tests {
     settle_intro_ranges(&mut session, intro_fetch_id(&auxiliary), now);
     let next_id = adjacent_id(&auxiliary, AdjacentDirection::Next);
     session.handle(
-      PlaybackInput::Event(PlaybackEvent::AdjacentSettled {
+      PlaybackInput::Event(Box::new(PlaybackEvent::AdjacentSettled {
         id: next_id,
         direction: AdjacentDirection::Next,
         result: Ok(Some(media_item("episode-2", "Second"))),
-      }),
+      })),
       now,
     );
 
@@ -1909,13 +1937,13 @@ mod tests {
     settle_intro_ranges(&mut session, intro_fetch_id(&auxiliary), now);
     let (seek_id, _) = controller_effect(refresh_at(&mut session, now, 10.0, Vec::new()));
     session.handle(
-      PlaybackInput::Event(PlaybackEvent::ControllerSettled {
+      PlaybackInput::Event(Box::new(PlaybackEvent::ControllerSettled {
         id: seek_id,
         settlement: ControllerSettlement::Controlled(Ok(PlaybackOutcome {
           snapshot: snapshot("episode-1", "Episode", 30.0),
           warnings: Vec::new(),
         })),
-      }),
+      })),
       now,
     );
 
@@ -1932,17 +1960,23 @@ mod tests {
     let (prompt_id, command) = controller_effect(effects);
     assert!(matches!(command, ControllerCommand::ShowText { .. }));
     assert!(session
-      .handle(PlaybackInput::Intent(PlaybackIntent::SkipIntro), now)
+      .handle(
+        PlaybackInput::Intent(Box::new(PlaybackIntent::SkipIntro)),
+        now
+      )
       .is_empty());
     session.handle(
-      PlaybackInput::Event(PlaybackEvent::ControllerSettled {
+      PlaybackInput::Event(Box::new(PlaybackEvent::ControllerSettled {
         id: prompt_id,
         settlement: ControllerSettlement::OsdShown(Ok(())),
-      }),
+      })),
       now,
     );
 
-    let effects = session.handle(PlaybackInput::Intent(PlaybackIntent::SkipIntro), now);
+    let effects = session.handle(
+      PlaybackInput::Intent(Box::new(PlaybackIntent::SkipIntro)),
+      now,
+    );
 
     let (_, command) = controller_effect(effects);
     assert!(matches!(command, ControllerCommand::Seek(target) if target == 30.0));
@@ -1954,14 +1988,17 @@ mod tests {
     settle_intro_ranges(&mut session, intro_fetch_id(&auxiliary), now);
     let (prompt_id, _) = controller_effect(refresh_at(&mut session, now, 10.0, Vec::new()));
     session.handle(
-      PlaybackInput::Event(PlaybackEvent::ControllerSettled {
+      PlaybackInput::Event(Box::new(PlaybackEvent::ControllerSettled {
         id: prompt_id,
         settlement: ControllerSettlement::OsdShown(Ok(())),
-      }),
+      })),
       now,
     );
 
-    let effects = session.handle(PlaybackInput::Intent(PlaybackIntent::DismissIntro), now);
+    let effects = session.handle(
+      PlaybackInput::Intent(Box::new(PlaybackIntent::DismissIntro)),
+      now,
+    );
 
     assert!(effects.is_empty());
     assert!(session.view().intro_prompt.is_none());
@@ -1973,15 +2010,15 @@ mod tests {
     settle_intro_ranges(&mut session, intro_fetch_id(&auxiliary), now);
     let (prompt_id, _) = controller_effect(refresh_at(&mut session, now, 10.0, Vec::new()));
     session.handle(
-      PlaybackInput::Event(PlaybackEvent::ControllerSettled {
+      PlaybackInput::Event(Box::new(PlaybackEvent::ControllerSettled {
         id: prompt_id,
         settlement: ControllerSettlement::OsdShown(Ok(())),
-      }),
+      })),
       now,
     );
 
     session.handle(
-      PlaybackInput::Intent(PlaybackIntent::Tick),
+      PlaybackInput::Intent(Box::new(PlaybackIntent::Tick)),
       now + INTRO_PROMPT_DURATION,
     );
 
@@ -1994,16 +2031,16 @@ mod tests {
     settle_intro_ranges(&mut session, intro_fetch_id(&auxiliary), now);
     let (prompt_id, _) = controller_effect(refresh_at(&mut session, now, 10.0, Vec::new()));
     session.handle(
-      PlaybackInput::Event(PlaybackEvent::ControllerSettled {
+      PlaybackInput::Event(Box::new(PlaybackEvent::ControllerSettled {
         id: prompt_id,
         settlement: ControllerSettlement::OsdShown(Ok(())),
-      }),
+      })),
       now,
     );
     assert!(session.view().intro_prompt.is_some());
 
     let effects = session.handle(
-      PlaybackInput::Intent(PlaybackIntent::SetIntroMode(IntroSkipMode::Off)),
+      PlaybackInput::Intent(Box::new(PlaybackIntent::SetIntroMode(IntroSkipMode::Off))),
       now,
     );
 
@@ -2020,7 +2057,9 @@ mod tests {
     settle_intro_ranges(&mut session, intro_fetch_id(&auxiliary), now);
 
     session.handle(
-      PlaybackInput::Intent(PlaybackIntent::SetIntroMode(IntroSkipMode::Manual)),
+      PlaybackInput::Intent(Box::new(PlaybackIntent::SetIntroMode(
+        IntroSkipMode::Manual,
+      ))),
       now,
     );
     let effects = refresh_at(&mut session, now, 10.0, Vec::new());
@@ -2043,11 +2082,11 @@ mod tests {
     let now = instant();
     let mut session = PlaybackSession::default();
     session.handle(
-      PlaybackInput::Event(PlaybackEvent::EngineAvailability(true)),
+      PlaybackInput::Event(Box::new(PlaybackEvent::EngineAvailability(true))),
       now,
     );
     let (id, _) = controller_effect(session.handle(
-      PlaybackInput::Intent(PlaybackIntent::Start {
+      PlaybackInput::Intent(Box::new(PlaybackIntent::Start {
         item: Playable::Media(media_item("episode-1", "Pilot")),
         position: PlaybackStartPosition::Beginning,
         intro: IntroAvailability {
@@ -2055,7 +2094,7 @@ mod tests {
           skipper_available: false,
         },
         selection: Box::default(),
-      }),
+      })),
       now,
     ));
 
@@ -2082,7 +2121,10 @@ mod tests {
     let (mut session, now, _) = start_session(IntroSkipMode::Off);
     let old_epoch = session.epoch;
 
-    session.handle(PlaybackInput::Intent(PlaybackIntent::Disconnect), now);
+    session.handle(
+      PlaybackInput::Intent(Box::new(PlaybackIntent::Disconnect)),
+      now,
+    );
 
     assert!(session.view().now_playing.is_none());
     assert_eq!(session.epoch, old_epoch.wrapping_add(1));
@@ -2100,7 +2142,7 @@ mod tests {
     let now = instant();
     let mut session = PlaybackSession::default();
     let start_id = start_command(&mut session, now, IntroSkipMode::Off);
-    session.handle(PlaybackInput::Intent(PlaybackIntent::Quit), now);
+    session.handle(PlaybackInput::Intent(Box::new(PlaybackIntent::Quit)), now);
     assert!(!session.view().quit_may_proceed);
 
     let effects = settle_start(&mut session, start_id, now, "Episode");
@@ -2109,10 +2151,10 @@ mod tests {
     assert!(!session.view().quit_may_proceed);
 
     session.handle(
-      PlaybackInput::Event(PlaybackEvent::ControllerSettled {
+      PlaybackInput::Event(Box::new(PlaybackEvent::ControllerSettled {
         id: shutdown_id,
         settlement: ControllerSettlement::Shutdown(Vec::new()),
-      }),
+      })),
       now,
     );
     assert!(session.view().quit_may_proceed);
@@ -2123,7 +2165,7 @@ mod tests {
     let now = instant();
     let mut session = PlaybackSession::default();
 
-    let effects = session.handle(PlaybackInput::Intent(PlaybackIntent::Quit), now);
+    let effects = session.handle(PlaybackInput::Intent(Box::new(PlaybackIntent::Quit)), now);
 
     assert!(effects.is_empty());
     assert!(session.view().quit_may_proceed);
@@ -2133,21 +2175,24 @@ mod tests {
     let now = instant();
     let mut session = PlaybackSession::default();
     session.handle(
-      PlaybackInput::Event(PlaybackEvent::EngineAvailability(true)),
+      PlaybackInput::Event(Box::new(PlaybackEvent::EngineAvailability(true))),
       now,
     );
 
-    let effects = session.handle(PlaybackInput::Intent(PlaybackIntent::Disconnect), now);
+    let effects = session.handle(
+      PlaybackInput::Intent(Box::new(PlaybackIntent::Disconnect)),
+      now,
+    );
 
     let (shutdown_id, command) = controller_effect(effects);
     assert!(matches!(command, ControllerCommand::Shutdown));
     assert!(!session.view().can_start_login);
 
     session.handle(
-      PlaybackInput::Event(PlaybackEvent::ControllerSettled {
+      PlaybackInput::Event(Box::new(PlaybackEvent::ControllerSettled {
         id: shutdown_id,
         settlement: ControllerSettlement::Shutdown(Vec::new()),
-      }),
+      })),
       now,
     );
     assert!(session.view().can_start_login);
@@ -2163,10 +2208,10 @@ mod tests {
       sequence: 0,
     };
     session.handle(
-      PlaybackInput::Event(PlaybackEvent::TracksSettled {
+      PlaybackInput::Event(Box::new(PlaybackEvent::TracksSettled {
         id: stale,
         result: Ok(Vec::new()),
-      }),
+      })),
       now,
     );
     assert!(!matches!(session.view().tracks, TracksView::Ready { .. }));
@@ -2176,10 +2221,10 @@ mod tests {
       sequence: 0,
     };
     session.handle(
-      PlaybackInput::Event(PlaybackEvent::TracksSettled {
+      PlaybackInput::Event(Box::new(PlaybackEvent::TracksSettled {
         id: current,
         result: Ok(Vec::new()),
-      }),
+      })),
       now,
     );
     assert!(matches!(session.view().tracks, TracksView::Ready { .. }));
@@ -2191,16 +2236,19 @@ mod tests {
     let mut session = PlaybackSession::default();
     let start_id = start_command(&mut session, now, IntroSkipMode::Off);
 
-    session.handle(PlaybackInput::Intent(PlaybackIntent::Disconnect), now);
+    session.handle(
+      PlaybackInput::Intent(Box::new(PlaybackIntent::Disconnect)),
+      now,
+    );
 
     assert!(!session.view().can_start_login);
     let effects = settle_start(&mut session, start_id, now, "Episode");
     let (shutdown_id, _) = controller_effect(effects);
     session.handle(
-      PlaybackInput::Event(PlaybackEvent::ControllerSettled {
+      PlaybackInput::Event(Box::new(PlaybackEvent::ControllerSettled {
         id: shutdown_id,
         settlement: ControllerSettlement::Shutdown(Vec::new()),
-      }),
+      })),
       now,
     );
     assert!(session.view().can_start_login);
@@ -2212,12 +2260,12 @@ mod tests {
     let mut session = PlaybackSession::default();
 
     let effects = session.handle(
-      PlaybackInput::Intent(PlaybackIntent::Start {
+      PlaybackInput::Intent(Box::new(PlaybackIntent::Start {
         item: Playable::Media(media_item("episode-1", "Pilot")),
         position: PlaybackStartPosition::Beginning,
         intro: intro_availability(IntroSkipMode::Automatic),
         selection: Box::default(),
-      }),
+      })),
       now,
     );
 
@@ -2232,11 +2280,11 @@ mod tests {
     let id = adjacent_id(&auxiliary, AdjacentDirection::Previous);
 
     session.handle(
-      PlaybackInput::Event(PlaybackEvent::AdjacentSettled {
+      PlaybackInput::Event(Box::new(PlaybackEvent::AdjacentSettled {
         id,
         direction: AdjacentDirection::Previous,
         result: Ok(Some(media_item("episode-0", "Previous"))),
-      }),
+      })),
       now,
     );
 
@@ -2253,16 +2301,18 @@ mod tests {
     let (mut session, now, auxiliary) = start_session(IntroSkipMode::Off);
     let id = adjacent_id(&auxiliary, AdjacentDirection::Next);
     session.handle(
-      PlaybackInput::Event(PlaybackEvent::AdjacentSettled {
+      PlaybackInput::Event(Box::new(PlaybackEvent::AdjacentSettled {
         id,
         direction: AdjacentDirection::Next,
         result: Ok(Some(media_item("episode-2", "Second"))),
-      }),
+      })),
       now,
     );
 
     let effects = session.handle(
-      PlaybackInput::Intent(PlaybackIntent::PlayAdjacent(AdjacentDirection::Next)),
+      PlaybackInput::Intent(Box::new(PlaybackIntent::PlayAdjacent(
+        AdjacentDirection::Next,
+      ))),
       now,
     );
 
@@ -2281,17 +2331,19 @@ mod tests {
     let (mut session, now, auxiliary) = start_session(IntroSkipMode::Off);
     let id = adjacent_id(&auxiliary, AdjacentDirection::Next);
     session.handle(
-      PlaybackInput::Event(PlaybackEvent::AdjacentSettled {
+      PlaybackInput::Event(Box::new(PlaybackEvent::AdjacentSettled {
         id,
         direction: AdjacentDirection::Next,
         result: Ok(Some(media_item("episode-2", "Second"))),
-      }),
+      })),
       now,
     );
 
     // First press dispatches start for episode-2
     let first_effects = session.handle(
-      PlaybackInput::Intent(PlaybackIntent::PlayAdjacent(AdjacentDirection::Next)),
+      PlaybackInput::Intent(Box::new(PlaybackIntent::PlayAdjacent(
+        AdjacentDirection::Next,
+      ))),
       now,
     );
     let (start_id, command) = controller_effect(first_effects);
@@ -2305,7 +2357,9 @@ mod tests {
 
     // Second press while start is in flight is deduplicated against in-flight start
     let second_effects = session.handle(
-      PlaybackInput::Intent(PlaybackIntent::PlayAdjacent(AdjacentDirection::Next)),
+      PlaybackInput::Intent(Box::new(PlaybackIntent::PlayAdjacent(
+        AdjacentDirection::Next,
+      ))),
       now,
     );
     assert!(second_effects.is_empty());
@@ -2313,13 +2367,13 @@ mod tests {
 
     // Settlement of the first start produces only auxiliary effects, no second start
     let settle_effects = session.handle(
-      PlaybackInput::Event(PlaybackEvent::ControllerSettled {
+      PlaybackInput::Event(Box::new(PlaybackEvent::ControllerSettled {
         id: start_id,
         settlement: ControllerSettlement::Started(Ok(PlaybackOutcome {
           snapshot: snapshot("episode-2", "Episode", 0.0),
           warnings: Vec::new(),
         })),
-      }),
+      })),
       now,
     );
     assert!(!settle_effects
@@ -2332,23 +2386,23 @@ mod tests {
     let (mut session, now, _) = start_session(IntroSkipMode::Off);
 
     // First Stop intent dispatches Stop to controller
-    let first_effects = session.handle(PlaybackInput::Intent(PlaybackIntent::Stop), now);
+    let first_effects = session.handle(PlaybackInput::Intent(Box::new(PlaybackIntent::Stop)), now);
     let (stop_id, command) = controller_effect(first_effects);
     assert!(matches!(command, ControllerCommand::Stop));
 
     // Second Stop intent while Stop is in flight is suppressed
-    let second_effects = session.handle(PlaybackInput::Intent(PlaybackIntent::Stop), now);
+    let second_effects = session.handle(PlaybackInput::Intent(Box::new(PlaybackIntent::Stop)), now);
     assert!(second_effects.is_empty());
     assert!(session.pending.is_empty());
 
     // Settle the first Stop
     let settle_effects = session.handle(
-      PlaybackInput::Event(PlaybackEvent::ControllerSettled {
+      PlaybackInput::Event(Box::new(PlaybackEvent::ControllerSettled {
         id: stop_id,
         settlement: ControllerSettlement::Stopped(Ok(PlaybackStopOutcome {
           warnings: Vec::new(),
         })),
-      }),
+      })),
       now,
     );
 
@@ -2364,14 +2418,17 @@ mod tests {
   fn stale_auxiliary_settlement_does_not_replace_adjacent_state() {
     let (mut session, now, auxiliary) = start_session(IntroSkipMode::Off);
     let id = adjacent_id(&auxiliary, AdjacentDirection::Next);
-    session.handle(PlaybackInput::Intent(PlaybackIntent::Disconnect), now);
+    session.handle(
+      PlaybackInput::Intent(Box::new(PlaybackIntent::Disconnect)),
+      now,
+    );
 
     session.handle(
-      PlaybackInput::Event(PlaybackEvent::AdjacentSettled {
+      PlaybackInput::Event(Box::new(PlaybackEvent::AdjacentSettled {
         id,
         direction: AdjacentDirection::Next,
         result: Ok(Some(media_item("episode-2", "Second"))),
-      }),
+      })),
       now,
     );
 
@@ -2421,10 +2478,10 @@ mod tests {
     let id = start_command(&mut session, now, IntroSkipMode::Off);
 
     session.handle(
-      PlaybackInput::Event(PlaybackEvent::ControllerSettled {
+      PlaybackInput::Event(Box::new(PlaybackEvent::ControllerSettled {
         id,
         settlement: ControllerSettlement::Started(Err(PlaybackError::PlaybackInfoUnavailable)),
-      }),
+      })),
       now,
     );
 
@@ -2437,10 +2494,10 @@ mod tests {
     let id = start_command(&mut session, now, IntroSkipMode::Off);
 
     session.handle(
-      PlaybackInput::Event(PlaybackEvent::ControllerSettled {
+      PlaybackInput::Event(Box::new(PlaybackEvent::ControllerSettled {
         id,
         settlement: ControllerSettlement::Started(Err(PlaybackError::MpvLoadFailed)),
-      }),
+      })),
       now,
     );
 
@@ -2450,19 +2507,23 @@ mod tests {
   #[test]
   fn paused_and_muted_views_are_optimistic_then_reconciled() {
     let (mut session, now, _) = start_session(IntroSkipMode::Off);
-    let (id, _) = controller_effect(
-      session.handle(PlaybackInput::Intent(PlaybackIntent::SetPaused(true)), now),
+    let (id, _) = controller_effect(session.handle(
+      PlaybackInput::Intent(Box::new(PlaybackIntent::SetPaused(true))),
+      now,
+    ));
+    session.handle(
+      PlaybackInput::Intent(Box::new(PlaybackIntent::SetMuted(true))),
+      now,
     );
-    session.handle(PlaybackInput::Intent(PlaybackIntent::SetMuted(true)), now);
     let view = session.view().now_playing.expect("active playback");
     assert!(view.paused);
     assert!(view.muted);
 
     session.handle(
-      PlaybackInput::Event(PlaybackEvent::ControllerSettled {
+      PlaybackInput::Event(Box::new(PlaybackEvent::ControllerSettled {
         id,
         settlement: ControllerSettlement::Controlled(Err(PlaybackError::MpvControlFailed)),
-      }),
+      })),
       now,
     );
 
@@ -2509,16 +2570,18 @@ mod tests {
     let (mut session, now, auxiliary) = start_session(IntroSkipMode::Off);
     let id = adjacent_id(&auxiliary, AdjacentDirection::Next);
     session.handle(
-      PlaybackInput::Event(PlaybackEvent::AdjacentSettled {
+      PlaybackInput::Event(Box::new(PlaybackEvent::AdjacentSettled {
         id,
         direction: AdjacentDirection::Next,
         result: Ok(None),
-      }),
+      })),
       now,
     );
 
     let effects = session.handle(
-      PlaybackInput::Intent(PlaybackIntent::PlayAdjacent(AdjacentDirection::Next)),
+      PlaybackInput::Intent(Box::new(PlaybackIntent::PlayAdjacent(
+        AdjacentDirection::Next,
+      ))),
       now,
     );
 
@@ -2536,10 +2599,10 @@ mod tests {
     let (prompt_id, _) = controller_effect(refresh_at(&mut session, now, 10.0, Vec::new()));
 
     session.handle(
-      PlaybackInput::Event(PlaybackEvent::ControllerSettled {
+      PlaybackInput::Event(Box::new(PlaybackEvent::ControllerSettled {
         id: prompt_id,
         settlement: ControllerSettlement::OsdShown(Err(PlaybackError::MpvControlFailed)),
-      }),
+      })),
       now,
     );
 

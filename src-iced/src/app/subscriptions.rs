@@ -31,7 +31,7 @@ pub fn subscription(state: &State) -> Subscription<Message> {
   if state.playback.view.now_playing.is_some() {
     subscriptions.push(
       time::every(Duration::from_secs(1))
-        .map(|_| Message::Playback(PlaybackMessage::Intent(PlaybackIntent::Tick))),
+        .map(|_| Message::Playback(PlaybackMessage::Intent(Box::new(PlaybackIntent::Tick)))),
     );
   }
   if state.shell.window_id.is_some() {
@@ -104,7 +104,7 @@ fn playback_shortcut(
   } else {
     return None;
   };
-  Some(Message::Playback(PlaybackMessage::Intent(intent)))
+  Some(Message::Playback(PlaybackMessage::Intent(Box::new(intent))))
 }
 
 fn shortcut_capture(
