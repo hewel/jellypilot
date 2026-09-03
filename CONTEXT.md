@@ -72,11 +72,11 @@ The user-facing playback status shown by JellyPilot for the current Playback Ses
 _Avoid_: MPV state, Web player state, playback session internals
 
 **App Mode**:
-The persisted top-level operating mode of JellyPilot: Full or Control-Only. App Mode decides which shell surfaces exist and how the window behaves, and it switches live from Settings without a restart.
+The persisted top-level operating mode of JellyPilot: Full or Control-Only. App Mode decides which UI surfaces exist and how the window behaves; it switches live from Settings without restarting JellyPilot or interrupting the current Playback Session.
 _Avoid_: View preference, layout setting, window profile
 
 **Control-Only Mode**:
-The compact media-controller App Mode: a fixed-size 480x760 window centered on Now Playing with access to the Settings Modal, plus the tray and the remote Playback Target. Control-Only Mode has no Library Browser; navigation to Library Browser destinations is rejected and browse state is dropped on entry.
+The lowest-idle-overhead media-controller App Mode: a fixed-size 480x760 window centered on Now Playing, with every Login Method and the Settings Modal, plus the tray and the remote Playback Target. Control-Only Mode has no Library Browser; closing its window leaves the tray and Playback Target available, and entering the mode drops Library Browser state.
 _Avoid_: Mini player, compact view, floating widget
 
 **Library Browser**:
