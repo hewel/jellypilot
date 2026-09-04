@@ -2,11 +2,10 @@
 
 use std::sync::LazyLock;
 
-use iced::widget::button;
 use iced::widget::svg::{self, Handle, Svg};
 use iced::{Color, Length, Theme};
 
-use crate::tokens::palette;
+use crate::tokens::{palette, ThemePalette};
 use crate::variants::ButtonVariant;
 
 /// Default icon dimension in logical pixels (18.0px).
@@ -319,6 +318,38 @@ impl Icon {
     }
 }
 
+/// Interaction states used by icons owned by a [`crate::widgets::ControlButton`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum IconControlState {
+    Rest,
+    Hovered,
+    Disabled,
+}
+
+fn control_color(
+    palette: &ThemePalette,
+    variant: ButtonVariant,
+    hovered: bool,
+    disabled: bool,
+) -> Color {
+    let colors = palette.colors;
+    let mut color = match variant {
+        ButtonVariant::Primary => colors.onPrimary,
+        ButtonVariant::Secondary => colors.onSecondaryContainer,
+        ButtonVariant::TonalActive => colors.onControlHover,
+        ButtonVariant::Tonal | ButtonVariant::Icon if hovered => colors.onControlHover,
+        ButtonVariant::Tonal | ButtonVariant::Icon => colors.onControl,
+        ButtonVariant::Text if hovered => palette.text.heading,
+        ButtonVariant::Text => palette.text.body,
+    };
+
+    if disabled {
+        color.a *= 0.5;
+    }
+
+    color
+}
+
 /// Creates a standard-sized iced `Svg` widget with default surface text color.
 pub fn icon<'a>(icon: Icon) -> Svg<'a, Theme> {
     icon_sized(icon, IconSize::Md)
@@ -344,6 +375,29 @@ pub fn icon_with_color<'a>(icon: Icon, size: impl Into<IconSize>, color: Color) 
         .style(move |_theme: &Theme, _status| svg::Style { color: Some(color) })
 }
 
+/// Creates an iced `Svg` with a fixed color for a whole-control interaction state.
+pub fn icon_for_control_state<'a>(
+    icon: Icon,
+    size: impl Into<IconSize>,
+    variant: ButtonVariant,
+    state: IconControlState,
+) -> Svg<'a, Theme> {
+    let px = size.into().pixels();
+    Svg::new(icon.handle())
+        .width(Length::Fixed(px))
+        .height(Length::Fixed(px))
+        .style(move |theme: &Theme, _status| {
+            let (hovered, disabled) = match state {
+                IconControlState::Rest => (false, false),
+                IconControlState::Hovered => (true, false),
+                IconControlState::Disabled => (false, true),
+            };
+            svg::Style {
+                color: Some(control_color(palette(theme), variant, hovered, disabled)),
+            }
+        })
+}
+
 /// Creates an iced `Svg` widget with colors matching a button variant.
 pub fn icon_for_variant<'a>(
     icon: Icon,
@@ -364,40 +418,18 @@ pub fn icon_for_variant_disabled<'a>(
     Svg::new(icon.handle())
         .width(Length::Fixed(px))
         .height(Length::Fixed(px))
-        .style(move |theme: &Theme, _status| {
-            let colors = palette(theme).colors;
-            let mut color = match variant {
-                ButtonVariant::Primary => colors.onPrimary,
-                ButtonVariant::Secondary => colors.onSecondaryContainer,
-                ButtonVariant::Tonal | ButtonVariant::TonalActive => colors.onSurface,
-                ButtonVariant::Text => colors.secondary,
-                ButtonVariant::Icon => colors.onSurfaceVariant,
-            };
-            if disabled {
-                color.a *= 0.5;
+        .style(move |theme: &Theme, status: svg::Status| {
+            let hovered = !disabled && matches!(status, svg::Status::Hovered);
+            svg::Style {
+                color: Some(control_color(palette(theme), variant, hovered, disabled)),
             }
-            svg::Style { color: Some(color) }
         })
-}
-
-/// Creates an iced `Svg` widget with colors matching a button variant and interaction status.
-pub fn icon_for_variant_status<'a>(
-    icon: Icon,
-    size: impl Into<IconSize>,
-    variant: ButtonVariant,
-    status: button::Status,
-) -> Svg<'a, Theme> {
-    icon_for_variant_disabled(
-        icon,
-        size,
-        variant,
-        matches!(status, button::Status::Disabled),
-    )
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::tokens::DARK_PALETTE;
 
     #[test]
     fn icon_count_matches_variant_slice() {
@@ -480,13 +512,77 @@ mod tests {
             IconSize::Sm,
             crate::tokens::DARK_PALETTE.colors.error,
         );
-        let _ = icon_for_variant(Icon::Play, IconSize::Md, ButtonVariant::Primary);
-        let _ = icon_for_variant_disabled(Icon::Play, IconSize::Md, ButtonVariant::Primary, true);
-        let _ = icon_for_variant_status(
+        let _ = icon_for_control_state(
             Icon::Play,
             IconSize::Md,
             ButtonVariant::Primary,
-            button::Status::Disabled,
+            IconControlState::Hovered,
         );
+        let _ = icon_for_variant(Icon::Play, IconSize::Md, ButtonVariant::Primary);
+        let _ = icon_for_variant_disabled(Icon::Play, IconSize::Md, ButtonVariant::Primary, true);
+    }
+
+    #[test]
+    fn control_colors_follow_variant_rest_and_hover_roles() {
+        let palette = DARK_PALETTE;
+        let cases = [
+            (
+                ButtonVariant::Primary,
+                palette.colors.onPrimary,
+                palette.colors.onPrimary,
+            ),
+            (
+                ButtonVariant::Secondary,
+                palette.colors.onSecondaryContainer,
+                palette.colors.onSecondaryContainer,
+            ),
+            (
+                ButtonVariant::Tonal,
+                palette.colors.onControl,
+                palette.colors.onControlHover,
+            ),
+            (
+                ButtonVariant::TonalActive,
+                palette.colors.onControlHover,
+                palette.colors.onControlHover,
+            ),
+            (ButtonVariant::Text, palette.text.body, palette.text.heading),
+            (
+                ButtonVariant::Icon,
+                palette.colors.onControl,
+                palette.colors.onControlHover,
+            ),
+        ];
+
+        for (variant, rest, hovered) in cases {
+            assert_eq!(control_color(&palette, variant, false, false), rest);
+            assert_eq!(control_color(&palette, variant, true, false), hovered);
+        }
+    }
+
+    #[test]
+    fn control_color_applies_disabled_alpha_after_variant_and_hover_resolution() {
+        let palette = DARK_PALETTE;
+
+        for variant in [
+            ButtonVariant::Primary,
+            ButtonVariant::Secondary,
+            ButtonVariant::Tonal,
+            ButtonVariant::TonalActive,
+            ButtonVariant::Text,
+            ButtonVariant::Icon,
+        ] {
+            for hovered in [false, true] {
+                let enabled = control_color(&palette, variant, hovered, false);
+                let disabled = control_color(&palette, variant, hovered, true);
+                assert_eq!(
+                    disabled,
+                    Color {
+                        a: enabled.a * 0.5,
+                        ..enabled
+                    }
+                );
+            }
+        }
     }
 }

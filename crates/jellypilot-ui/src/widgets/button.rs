@@ -23,34 +23,34 @@ pub fn style(theme: &Theme, variant: ButtonVariant, status: button::Status) -> b
         ButtonVariant::Secondary => (
             Some(colors.secondaryContainer),
             colors.onSecondaryContainer,
-            colors.outlineVariant,
-            1.0,
+            Color::TRANSPARENT,
+            0.0,
             shadows.none.iced(),
         ),
         ButtonVariant::Tonal => (
-            Some(colors.surfaceContainerLow),
-            colors.onSurface,
+            Some(colors.control),
+            colors.onControl,
             Color::TRANSPARENT,
             0.0,
             shadows.none.iced(),
         ),
         ButtonVariant::TonalActive => (
-            Some(colors.surfaceContainerHigh),
-            colors.onSurface,
+            Some(colors.controlHover),
+            colors.onControlHover,
             Color::TRANSPARENT,
             0.0,
             shadows.none.iced(),
         ),
         ButtonVariant::Text => (
             None,
-            colors.secondary,
+            palette.text.body,
             Color::TRANSPARENT,
             0.0,
             shadows.none.iced(),
         ),
         ButtonVariant::Icon => (
             None,
-            colors.onSurfaceVariant,
+            colors.onControl,
             Color::TRANSPARENT,
             0.0,
             shadows.none.iced(),
@@ -63,13 +63,14 @@ pub fn style(theme: &Theme, variant: ButtonVariant, status: button::Status) -> b
             ButtonVariant::Primary => {
                 background = background.map(|color| brightness(color, 1.1));
             }
-            ButtonVariant::Secondary => border_color = colors.outline,
-            ButtonVariant::Tonal => background = Some(colors.surfaceContainerHigh),
-            ButtonVariant::TonalActive => {}
-            ButtonVariant::Text => background = Some(colors.surfaceContainerHigh),
-            ButtonVariant::Icon => {
-                background = Some(colors.surfaceContainerHigh);
-                text_color = colors.onSurface;
+            ButtonVariant::Secondary | ButtonVariant::TonalActive => {}
+            ButtonVariant::Tonal | ButtonVariant::Icon => {
+                background = Some(colors.controlHover);
+                text_color = colors.onControlHover;
+            }
+            ButtonVariant::Text => {
+                background = Some(colors.control);
+                text_color = palette.text.heading;
             }
         },
         button::Status::Disabled => {
@@ -134,27 +135,29 @@ mod tests {
     }
 
     #[test]
-    fn text_button_variant_never_draws_border_in_any_status() {
+    fn text_and_secondary_variants_never_draw_borders() {
         use crate::variants::ButtonVariant;
         use iced::widget::button::Status;
 
         let theme = crate::theme::theme(crate::theme::ThemeMode::Dark);
-        for status in [
-            Status::Active,
-            Status::Hovered,
-            Status::Pressed,
-            Status::Disabled,
-        ] {
-            let style = super::style(&theme, ButtonVariant::Text, status);
-            assert_eq!(
-                style.border.width, 0.0,
-                "Text button variant must have zero border width in status {status:?}"
-            );
-            assert_eq!(
-                style.border.color,
-                Color::TRANSPARENT,
-                "Text button variant must have transparent border color in status {status:?}"
-            );
+        for variant in [ButtonVariant::Text, ButtonVariant::Secondary] {
+            for status in [
+                Status::Active,
+                Status::Hovered,
+                Status::Pressed,
+                Status::Disabled,
+            ] {
+                let style = super::style(&theme, variant, status);
+                assert_eq!(
+                    style.border.width, 0.0,
+                    "{variant:?} button variant must have zero border width in status {status:?}"
+                );
+                assert_eq!(
+                    style.border.color,
+                    Color::TRANSPARENT,
+                    "{variant:?} button variant must have a transparent border in status {status:?}"
+                );
+            }
         }
     }
 
@@ -214,7 +217,7 @@ mod tests {
     }
 
     #[test]
-    fn tonal_rests_on_container_low_and_lifts_to_high_on_hover() {
+    fn tonal_uses_control_fill_and_content_tokens() {
         use crate::variants::ButtonVariant;
         use iced::widget::button::Status;
         use iced::Background;
@@ -224,8 +227,12 @@ mod tests {
         assert_eq!(
             idle.background,
             Some(Background::Color(
-                crate::tokens::DARK_PALETTE.colors.surfaceContainerLow
+                crate::tokens::DARK_PALETTE.colors.control
             ))
+        );
+        assert_eq!(
+            idle.text_color,
+            crate::tokens::DARK_PALETTE.colors.onControl
         );
         assert_eq!(idle.border.width, 0.0);
 
@@ -233,14 +240,18 @@ mod tests {
         assert_eq!(
             hovered.background,
             Some(Background::Color(
-                crate::tokens::DARK_PALETTE.colors.surfaceContainerHigh
+                crate::tokens::DARK_PALETTE.colors.controlHover
             ))
+        );
+        assert_eq!(
+            hovered.text_color,
+            crate::tokens::DARK_PALETTE.colors.onControlHover
         );
         assert_eq!(hovered.border.width, 0.0);
     }
 
     #[test]
-    fn tonal_active_is_always_filled_with_surface_container_high() {
+    fn tonal_active_always_uses_hovered_control_tokens() {
         use crate::variants::ButtonVariant;
         use iced::widget::button::Status;
         use iced::Background;
@@ -251,9 +262,13 @@ mod tests {
             assert_eq!(
                 style.background,
                 Some(Background::Color(
-                    crate::tokens::DARK_PALETTE.colors.surfaceContainerHigh
+                    crate::tokens::DARK_PALETTE.colors.controlHover
                 )),
                 "TonalActive must stay filled in status {status:?}"
+            );
+            assert_eq!(
+                style.text_color,
+                crate::tokens::DARK_PALETTE.colors.onControlHover
             );
             assert_eq!(style.border.width, 0.0);
         }

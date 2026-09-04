@@ -37,10 +37,9 @@ fn resolve(
     // functional signal: primary while focused (accessibility exemption), or
     // error while the field is invalid.
     let FieldVariant::Filled = variant;
-    let background = colors.surfaceContainerHigh;
-    let (mut border_color, mut border_width) = match status {
-        text_input::Status::Focused { .. } => (colors.primary, 1.0),
-        _ => (Color::TRANSPARENT, 0.0),
+    let (background, mut border_color, mut border_width) = match status {
+        text_input::Status::Focused { .. } => (colors.controlHover, colors.primary, 1.0),
+        _ => (colors.control, Color::TRANSPARENT, 0.0),
     };
 
     if is_error && !disabled {
@@ -63,7 +62,7 @@ fn resolve(
             },
             width: border_width,
         },
-        icon: colors.onSurfaceVariant,
+        icon: colors.onControl,
         placeholder: palette.text.muted,
         value: if disabled {
             scale_alpha(colors.onSurface, 0.5)
@@ -100,8 +99,9 @@ mod tests {
             let style = style(&theme, FieldVariant::Filled, status);
             assert_eq!(
                 style.background,
-                Background::Color(DARK_PALETTE.colors.surfaceContainerHigh)
+                Background::Color(DARK_PALETTE.colors.control)
             );
+            assert_eq!(style.icon, DARK_PALETTE.colors.onControl);
             assert_eq!(style.border.radius, Radius::from(TOKENS.radii.md));
             assert_eq!(style.border.width, 0.0);
         }
@@ -114,6 +114,10 @@ mod tests {
             &theme,
             FieldVariant::Filled,
             Status::Focused { is_hovered: false },
+        );
+        assert_eq!(
+            focused.background,
+            Background::Color(DARK_PALETTE.colors.controlHover)
         );
         assert_eq!(focused.border.width, 1.0);
         assert_eq!(focused.border.color, DARK_PALETTE.colors.primary);

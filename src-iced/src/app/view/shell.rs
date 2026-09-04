@@ -6,12 +6,13 @@ use iced::{Alignment, Color, Element, Fill, Length};
 use jellypilot_core::config::AppMode;
 use jellypilot_core::LoadState;
 use jellypilot_ui::fonts::SPACE_GROTESK_FONT;
-use jellypilot_ui::icons::{icon_for_variant, icon_with_color, Icon, IconSize};
+use jellypilot_ui::icons::{icon_with_color, Icon, IconSize};
 use jellypilot_ui::layout::SizeClass;
 use jellypilot_ui::overlay::{tooltip, TooltipOptions};
 use jellypilot_ui::theme::ThemeMode as UiThemeMode;
 use jellypilot_ui::tokens::{ThemePalette, TOKENS};
 use jellypilot_ui::variants::{ButtonVariant, FieldVariant, SurfaceVariant};
+use jellypilot_ui::widgets::control_button::control_button;
 use jellypilot_ui::widgets::skeleton::skeleton_block;
 pub(crate) const SIDEBAR_WIDTH: f32 = 248.0;
 pub(crate) const SIDEBAR_RAIL_WIDTH: f32 = 72.0;
@@ -259,14 +260,10 @@ fn sidebar_full(
   .size(14)
   .width(Fill)
   .style(|theme, status| jellypilot_ui::theme::field_variant(theme, status, FieldVariant::Filled));
-  let search_button = button(icon_for_variant(
-    Icon::Search,
-    IconSize::Sm,
-    ButtonVariant::Tonal,
-  ))
-  .padding([7, 11])
-  .on_press(Message::Browse(BrowseMessage::SearchSubmitted))
-  .style(|theme, status| jellypilot_ui::theme::button_variant(theme, status, ButtonVariant::Tonal));
+  let search_button = control_button(Some(Icon::Search), None, ButtonVariant::Tonal)
+    .icon_size(IconSize::Sm)
+    .padding([7, 11])
+    .on_press(Message::Browse(BrowseMessage::SearchSubmitted));
   let search_slot = row![
     search_input,
     tooltip(search_button, "Search", TooltipOptions::default()),
@@ -327,20 +324,11 @@ fn sidebar_full(
       settings_button(),
       theme_toggle_button(state),
       tooltip(
-        button(icon_for_variant(
-          Icon::PictureInPicture,
-          IconSize::Md,
-          ButtonVariant::Tonal,
-        ))
-        .padding([7, 12])
-        .on_press(Message::Settings(SettingsMessage::AppModeSelected(
-          AppMode::ControlOnly,
-        )))
-        .style(|theme, status| jellypilot_ui::theme::button_variant(
-          theme,
-          status,
-          ButtonVariant::Tonal
-        )),
+        control_button(Some(Icon::PictureInPicture), None, ButtonVariant::Tonal,)
+          .padding([7, 12])
+          .on_press(Message::Settings(SettingsMessage::AppModeSelected(
+            AppMode::ControlOnly,
+          ))),
         "Control-only mode",
         TooltipOptions::default(),
       ),
@@ -399,20 +387,13 @@ fn sidebar_compact(state: &State) -> container::Container<'_, Message> {
     compact_settings_button(),
     compact_theme_toggle_button(state),
     tooltip(
-      button(icon_for_variant(
-        Icon::PictureInPicture,
-        IconSize::Md,
-        ButtonVariant::Tonal,
-      ))
-      .padding([7, 12])
-      .on_press(Message::Settings(SettingsMessage::AppModeSelected(
-        AppMode::ControlOnly,
-      )))
-      .style(|theme, status| jellypilot_ui::theme::button_variant(
-        theme,
-        status,
-        ButtonVariant::Tonal,
-      )),
+      control_button(Some(Icon::PictureInPicture), None, ButtonVariant::Tonal,)
+        .padding([7, 12])
+        .width(Fill)
+        .content_centered(true)
+        .on_press(Message::Settings(SettingsMessage::AppModeSelected(
+          AppMode::ControlOnly,
+        ))),
       "Control-only mode",
       TooltipOptions::default(),
     ),
@@ -434,14 +415,9 @@ fn sidebar_compact(state: &State) -> container::Container<'_, Message> {
 
 fn settings_modal(state: &State) -> Element<'_, Message> {
   let palette = state.palette();
-  let close_button = button(icon_for_variant(
-    Icon::Close,
-    IconSize::Md,
-    ButtonVariant::Tonal,
-  ))
-  .padding([6, 10])
-  .on_press(Message::Settings(SettingsMessage::Close))
-  .style(|theme, status| jellypilot_ui::theme::button_variant(theme, status, ButtonVariant::Tonal));
+  let close_button = control_button(Some(Icon::Close), None, ButtonVariant::Tonal)
+    .padding([6, 10])
+    .on_press(Message::Settings(SettingsMessage::Close));
 
   let header = row![
     column![
@@ -474,57 +450,48 @@ fn settings_modal(state: &State) -> Element<'_, Message> {
 }
 
 fn settings_button<'a>() -> Element<'a, Message> {
-  // Opening the modal is an action, not navigation — it does not wear the
-  // switch group's ghost vocabulary (tinted text on transparent); Tonal keeps
-  // it neutral and quiet beside the destinations.
-  button(
-    row![
-      icon_for_variant(Icon::Settings, IconSize::Md, ButtonVariant::Tonal),
-      text("Settings").size(14).width(Fill),
-    ]
-    .spacing(TOKENS.spacing.s2_5)
-    .align_y(Alignment::Center),
+  // Opening the modal is an action, not navigation — it does not use the
+  // switch group's neutral ghost vocabulary. Tonal keeps it quiet beside the
+  // destinations.
+  control_button(
+    Some(Icon::Settings),
+    Some("Settings".to_owned()),
+    ButtonVariant::Tonal,
   )
+  .label_size(14.0)
+  .spacing(TOKENS.spacing.s2_5)
   .padding([7, 12])
   .width(Fill)
+  .label_fill(true)
   .on_press(Message::Settings(SettingsMessage::Open))
-  .style(move |theme, status| {
-    jellypilot_ui::theme::button_variant(theme, status, ButtonVariant::Tonal)
-  })
   .into()
 }
 
 fn compact_settings_button<'a>() -> Element<'a, Message> {
   // Action, not navigation — neutral Tonal, never the ghost vocabulary.
-  let btn = button(
-    container(icon_for_variant(
-      Icon::Settings,
-      IconSize::Md,
-      ButtonVariant::Tonal,
-    ))
+  let btn = control_button(Some(Icon::Settings), None, ButtonVariant::Tonal)
+    .padding([7, 0])
     .width(Fill)
-    .align_x(Alignment::Center),
-  )
-  .padding([7, 0])
-  .width(Fill)
-  .on_press(Message::Settings(SettingsMessage::Open))
-  .style(move |theme, status| {
-    jellypilot_ui::theme::button_variant(theme, status, ButtonVariant::Tonal)
-  });
+    .content_centered(true)
+    .on_press(Message::Settings(SettingsMessage::Open));
 
   tooltip(btn, "Settings", TooltipOptions::default())
 }
 
-fn theme_toggle_icon(state: &State) -> (Icon, &'static str) {
+// The theme toggle icon wears a FIXED per-mode color (amber sun in dark,
+// quiet slate moon in light) instead of the Tonal content-color transition,
+// so it stays on an iced button with `icon_with_color`.
+fn theme_toggle_icon(state: &State) -> (Icon, Color, &'static str) {
+  let palette = state.palette();
   match state.theme_mode() {
-    UiThemeMode::Dark => (Icon::Sun, "Switch to light theme"),
-    UiThemeMode::Light => (Icon::Moon, "Switch to dark theme"),
+    UiThemeMode::Dark => (Icon::Sun, palette.colors.warning, "Switch to light theme"),
+    UiThemeMode::Light => (Icon::Moon, palette.colors.onControl, "Switch to dark theme"),
   }
 }
 
 fn theme_toggle_button(state: &State) -> Element<'_, Message> {
-  let (icon, label) = theme_toggle_icon(state);
-  let btn = button(icon_for_variant(icon, IconSize::Md, ButtonVariant::Tonal))
+  let (icon, icon_color, label) = theme_toggle_icon(state);
+  let btn = button(icon_with_color(icon, IconSize::Md, icon_color))
     .padding([7, 12])
     .on_press(Message::Settings(SettingsMessage::ThemeTogglePressed))
     .style(|theme, status| {
@@ -535,9 +502,9 @@ fn theme_toggle_button(state: &State) -> Element<'_, Message> {
 }
 
 fn compact_theme_toggle_button(state: &State) -> Element<'_, Message> {
-  let (icon, label) = theme_toggle_icon(state);
+  let (icon, icon_color, label) = theme_toggle_icon(state);
   let btn = button(
-    container(icon_for_variant(icon, IconSize::Md, ButtonVariant::Tonal))
+    container(icon_with_color(icon, IconSize::Md, icon_color))
       .width(Fill)
       .align_x(Alignment::Center),
   )
@@ -560,19 +527,14 @@ fn destination_button<'a>(
   } else {
     ButtonVariant::Text
   };
-  button(
-    row![
-      icon_for_variant(icon, IconSize::Md, variant),
-      text(label).size(14).width(Fill),
-    ]
+  control_button(Some(icon), Some(label.to_owned()), variant)
+    .label_size(14.0)
     .spacing(TOKENS.spacing.s2_5)
-    .align_y(Alignment::Center),
-  )
-  .padding([7, 12])
-  .width(Fill)
-  .on_press(Message::Home(HomeMessage::Navigate(destination)))
-  .style(move |theme, status| jellypilot_ui::theme::button_variant(theme, status, variant))
-  .into()
+    .padding([7, 12])
+    .width(Fill)
+    .label_fill(true)
+    .on_press(Message::Home(HomeMessage::Navigate(destination)))
+    .into()
 }
 fn shortcut_skeleton<'a>(skeleton_phase: f32, reduced_motion: bool) -> Element<'a, Message> {
   skeleton_block(Length::Fill, 34.0, skeleton_phase, reduced_motion).into()
@@ -583,13 +545,37 @@ fn connection_summary(state: &State) -> Element<'_, Message> {
   let Some(identity) = &state.kernel.connected_identity else {
     return space::vertical().into();
   };
+  let playback_target_name = state
+    .kernel
+    .settings
+    .snapshot()
+    .playback_target_name()
+    .unwrap_or("JellyPilot");
+  let server_icon = container(icon_with_color(
+    Icon::Server,
+    IconSize::Md,
+    palette.colors.onControl,
+  ))
+  .padding(6)
+  .style(move |_theme| container::Style {
+    background: Some(iced::Background::Color(palette.colors.control)),
+    border: iced::Border {
+      radius: TOKENS.radii.md.into(),
+      ..iced::Border::default()
+    },
+    ..container::Style::default()
+  });
   row![
-    icon_with_color(Icon::Server, IconSize::Md, palette.colors.onSurfaceVariant),
+    server_icon,
     column![
       text(&identity.user_name)
         .size(13)
         .color(palette.text.secondary),
       text(&identity.server).size(11).color(palette.text.metadata),
+      text(playback_target_name)
+        .font(iced::Font::MONOSPACE)
+        .size(11)
+        .color(palette.text.metadata),
     ]
     .spacing(TOKENS.spacing.s0_5),
   ]
@@ -609,15 +595,11 @@ fn compact_destination_button<'a>(
   } else {
     ButtonVariant::Text
   };
-  let btn = button(
-    container(icon_for_variant(icon, IconSize::Md, variant))
-      .width(Fill)
-      .align_x(Alignment::Center),
-  )
-  .padding([7, 0])
-  .width(Fill)
-  .on_press(Message::Home(HomeMessage::Navigate(destination)))
-  .style(move |theme, status| jellypilot_ui::theme::button_variant(theme, status, variant));
+  let btn = control_button(Some(icon), None, variant)
+    .padding([7, 0])
+    .width(Fill)
+    .content_centered(true)
+    .on_press(Message::Home(HomeMessage::Navigate(destination)));
 
   tooltip(btn, label, TooltipOptions::default())
 }

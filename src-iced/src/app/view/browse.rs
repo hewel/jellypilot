@@ -9,14 +9,13 @@ use jellypilot_media_server::{
   VideoLibraryItem, VideoLibraryPlayedFilter, VideoLibrarySort, VideoLibrarySortDirection,
 };
 use jellypilot_ui::fonts::SPACE_GROTESK_FONT;
-use jellypilot_ui::icons::{
-  icon_for_variant, icon_for_variant_disabled, icon_with_color, Icon, IconSize,
-};
+use jellypilot_ui::icons::{icon_with_color, Icon, IconSize};
 use jellypilot_ui::layout::SizeClass;
 use jellypilot_ui::overlay::{popover, PopoverOptions};
 use jellypilot_ui::tokens::{ThemePalette, TOKENS};
 use jellypilot_ui::variants::ButtonVariant;
 use jellypilot_ui::widgets::artwork_grid::{artwork_grid, ArtworkGridMetrics, ArtworkGridViewport};
+use jellypilot_ui::widgets::control_button::control_button;
 use jellypilot_ui::widgets::ellipsis_text::ellipsis_text;
 use jellypilot_ui::widgets::skeleton::{skeleton_block, skeleton_panel};
 use jellypilot_ui::{full_radius, poster_card, rounded_image};
@@ -100,17 +99,15 @@ pub fn view(state: &State) -> Element<'_, Message> {
 
 fn toolbar(state: &State) -> Element<'_, Message> {
   let filters = state.kernel.settings.snapshot().browse_filters();
-  let sort_trigger = button(
-    row![
-      icon_for_variant(Icon::Sliders, IconSize::Sm, ButtonVariant::Tonal),
-      text(format!("Sort: {}", sort_label(filters.sort()))),
-    ]
-    .spacing(TOKENS.spacing.s1_5)
-    .align_y(Alignment::Center),
+  let sort_trigger = control_button(
+    Some(Icon::Sliders),
+    Some(format!("Sort: {}", sort_label(filters.sort()))),
+    ButtonVariant::Tonal,
   )
+  .icon_size(IconSize::Sm)
+  .spacing(TOKENS.spacing.s1_5)
   .padding([6, 12])
-  .on_press(Message::Browse(BrowseMessage::SortMenuToggled))
-  .style(|theme, status| jellypilot_ui::theme::button_variant(theme, status, ButtonVariant::Tonal));
+  .on_press(Message::Browse(BrowseMessage::SortMenuToggled));
   let sort_menu = column![
     sort_option("Title", VideoLibrarySort::Title),
     sort_option("Recently added", VideoLibrarySort::RecentlyAdded),
@@ -137,41 +134,48 @@ fn toolbar(state: &State) -> Element<'_, Message> {
     VideoLibrarySortDirection::Ascending => (Icon::SortAscending, "Ascending"),
     VideoLibrarySortDirection::Descending => (Icon::SortDescending, "Descending"),
   };
-  let direction = button(
-    row![
-      icon_for_variant(direction_icon, IconSize::Sm, ButtonVariant::Tonal),
-      text(direction_label),
-    ]
-    .spacing(TOKENS.spacing.s1_5)
-    .align_y(Alignment::Center),
+  let direction = control_button(
+    Some(direction_icon),
+    Some(direction_label.to_owned()),
+    ButtonVariant::Tonal,
   )
+  .icon_size(IconSize::Sm)
+  .spacing(TOKENS.spacing.s1_5)
   .padding([6, 12])
-  .on_press(Message::Browse(BrowseMessage::SortDirectionToggled))
-  .style(|theme, status| jellypilot_ui::theme::button_variant(theme, status, ButtonVariant::Tonal));
-  let (fav_label, fav_variant) = if filters.favorites_only() {
-    ("Favorites: On", ButtonVariant::TonalActive)
-  } else {
-    ("Favorites: Off", ButtonVariant::Tonal)
-  };
-  let favorites = button(
-    row![
-      if filters.favorites_only() {
+  .on_press(Message::Browse(BrowseMessage::SortDirectionToggled));
+  // Favorited state keeps the heart in the fixed rose `favorite` accent
+  // across hover; the off state is an ordinary Tonal `control_button`.
+  let favorites: Element<'_, Message> = if filters.favorites_only() {
+    button(
+      row![
         icon_with_color(
           Icon::HeartFilled,
           IconSize::Sm,
-          state.palette().colors.favorite,
-        )
-      } else {
-        icon_for_variant(Icon::Heart, IconSize::Sm, fav_variant)
-      },
-      text(fav_label),
-    ]
+          state.palette().colors.favorite
+        ),
+        text("Favorites: On"),
+      ]
+      .spacing(TOKENS.spacing.s1_5)
+      .align_y(Alignment::Center),
+    )
+    .padding([6, 12])
+    .on_press(Message::Browse(BrowseMessage::FavoritesToggled))
+    .style(|theme, status| {
+      jellypilot_ui::theme::button_variant(theme, status, ButtonVariant::TonalActive)
+    })
+    .into()
+  } else {
+    control_button(
+      Some(Icon::Heart),
+      Some("Favorites: Off".to_owned()),
+      ButtonVariant::Tonal,
+    )
+    .icon_size(IconSize::Sm)
     .spacing(TOKENS.spacing.s1_5)
-    .align_y(Alignment::Center),
-  )
-  .padding([6, 12])
-  .on_press(Message::Browse(BrowseMessage::FavoritesToggled))
-  .style(move |theme, status| jellypilot_ui::theme::button_variant(theme, status, fav_variant));
+    .padding([6, 12])
+    .on_press(Message::Browse(BrowseMessage::FavoritesToggled))
+    .into()
+  };
 
   row![
     sort,
@@ -202,11 +206,11 @@ fn toolbar(state: &State) -> Element<'_, Message> {
 }
 
 fn sort_option(label: &'static str, sort: VideoLibrarySort) -> Element<'static, Message> {
-  button(text(label).width(Fill))
+  control_button(None, Some(label.to_owned()), ButtonVariant::Text)
     .padding([6, 10])
     .width(Fill)
+    .label_fill(true)
     .on_press(Message::Browse(BrowseMessage::SortChanged(sort)))
-    .style(|theme, status| jellypilot_ui::theme::button_variant(theme, status, ButtonVariant::Text))
     .into()
 }
 
@@ -221,15 +225,12 @@ fn played_option(
   } else {
     ButtonVariant::Tonal
   };
-  button(
-    row![icon_for_variant(icon, IconSize::Sm, variant), text(label),]
-      .spacing(TOKENS.spacing.s1_5)
-      .align_y(Alignment::Center),
-  )
-  .padding([6, 12])
-  .on_press(Message::Browse(BrowseMessage::PlayedFilterChanged(value)))
-  .style(move |theme, status| jellypilot_ui::theme::button_variant(theme, status, variant))
-  .into()
+  control_button(Some(icon), Some(label.to_owned()), variant)
+    .icon_size(IconSize::Sm)
+    .spacing(TOKENS.spacing.s1_5)
+    .padding([6, 12])
+    .on_press(Message::Browse(BrowseMessage::PlayedFilterChanged(value)))
+    .into()
 }
 
 fn browse_body<'a>(state: &'a State, class: SizeClass) -> Element<'a, Message> {
@@ -616,29 +617,19 @@ fn failure_surface<'a>(
   retry_busy: bool,
   padding: f32,
 ) -> Element<'a, Message> {
-  let retry_enabled = retryable && !retry_busy;
-  let retry = button(
-    row![
-      icon_for_variant_disabled(
-        Icon::Refresh,
-        IconSize::Sm,
-        ButtonVariant::Primary,
-        !retry_enabled,
-      ),
-      text(if retry_busy { "Retrying…" } else { "Retry" }),
-    ]
-    .spacing(TOKENS.spacing.s1_5)
-    .align_y(Alignment::Center),
+  let retry = control_button(
+    Some(Icon::Refresh),
+    Some(if retry_busy {
+      "Retrying…".to_owned()
+    } else {
+      "Retry".to_owned()
+    }),
+    ButtonVariant::Primary,
   )
+  .icon_size(IconSize::Sm)
+  .spacing(TOKENS.spacing.s1_5)
   .padding([6, 12])
-  .style(|theme, status| {
-    jellypilot_ui::theme::button_variant(theme, status, ButtonVariant::Primary)
-  });
-  let retry = if let Some(message) = retry_action(retryable, retry_busy) {
-    retry.on_press(message)
-  } else {
-    retry
-  };
+  .on_press_maybe(retry_action(retryable, retry_busy));
   container(
     column![
       text("Could not load this library")
@@ -666,27 +657,19 @@ fn failure_banner<'a>(
   retry_busy: bool,
 ) -> Element<'a, Message> {
   let colors = palette.colors;
-  let retry_enabled = failure.retryable && !retry_busy;
-  let retry = button(
-    row![
-      icon_for_variant_disabled(
-        Icon::Refresh,
-        IconSize::Xs,
-        ButtonVariant::Tonal,
-        !retry_enabled,
-      ),
-      text(if retry_busy { "Retrying…" } else { "Retry" }),
-    ]
-    .spacing(TOKENS.spacing.s1)
-    .align_y(Alignment::Center),
+  let retry = control_button(
+    Some(Icon::Refresh),
+    Some(if retry_busy {
+      "Retrying…".to_owned()
+    } else {
+      "Retry".to_owned()
+    }),
+    ButtonVariant::Tonal,
   )
+  .icon_size(IconSize::Xs)
+  .spacing(TOKENS.spacing.s1)
   .padding([6, 10])
-  .style(|theme, status| jellypilot_ui::theme::button_variant(theme, status, ButtonVariant::Tonal));
-  let retry = if let Some(message) = retry_action(failure.retryable, retry_busy) {
-    retry.on_press(message)
-  } else {
-    retry
-  };
+  .on_press_maybe(retry_action(failure.retryable, retry_busy));
 
   let banner = container(
     row![text(&failure.message).size(13), retry,]

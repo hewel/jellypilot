@@ -25,8 +25,7 @@ pub struct DesignTokens {
 /// Semantic color roles.
 ///
 /// Field spelling follows the Material-3 role names the design contract was
-/// written in; `favorite` is the JellyPilot-specific rose accent for the
-/// favorited-heart state.
+/// written in; `favorite` and the quiet-control roles are JellyPilot-specific.
 #[expect(
     non_snake_case,
     reason = "semantic role names follow the Material-3 spelling of the design contract"
@@ -34,10 +33,18 @@ pub struct DesignTokens {
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct SemanticColors {
     pub background: Color,
+    /// Rest fill for quiet controls and fields.
+    pub control: Color,
+    /// Hover and focus fill for quiet controls and fields.
+    pub controlHover: Color,
     pub error: Color,
     pub errorContainer: Color,
     pub favorite: Color,
     pub onBackground: Color,
+    /// Rest icon and label color for quiet controls and fields.
+    pub onControl: Color,
+    /// Hover icon and label color for quiet controls and fields.
+    pub onControlHover: Color,
     pub onError: Color,
     pub onErrorContainer: Color,
     pub onPrimary: Color,
@@ -461,10 +468,14 @@ pub const TOKENS: DesignTokens = DesignTokens {
 pub const DARK_PALETTE: ThemePalette = ThemePalette {
     colors: SemanticColors {
         background: Color::from_rgb8(0x0a, 0x0b, 0x0e),
+        control: Color::from_rgb8(0x1c, 0x1d, 0x22),
+        controlHover: Color::from_rgb8(0x29, 0x2a, 0x31),
         error: Color::from_rgb8(0xff, 0x6b, 0x7a),
         errorContainer: Color::from_rgb8(0x4b, 0x11, 0x19),
         favorite: Color::from_rgb8(0xf8, 0x71, 0x71),
         onBackground: Color::from_rgb8(0xff, 0xff, 0xff),
+        onControl: Color::from_rgb8(0xe5, 0xe5, 0xe5),
+        onControlHover: Color::from_rgb8(0xff, 0xff, 0xff),
         onError: Color::from_rgb8(0x33, 0x00, 0x06),
         onErrorContainer: Color::from_rgb8(0xff, 0xd9, 0xde),
         onPrimary: Color::from_rgb8(0xff, 0xff, 0xff),
@@ -478,7 +489,7 @@ pub const DARK_PALETTE: ThemePalette = ThemePalette {
         onWarning: Color::from_rgb8(0x2a, 0x1a, 0x00),
         onWarningContainer: Color::from_rgb8(0xfd, 0xe6, 0x8a),
         outline: Color::from_rgb8(0x52, 0x52, 0x5b),
-        outlineVariant: Color::from_rgb8(0x2a, 0x2a, 0x30),
+        outlineVariant: Color::from_rgb8(0x23, 0x26, 0x2b),
         primary: Color::from_rgb8(0x63, 0x66, 0xf1),
         primaryContainer: Color::from_rgb8(0x1a, 0x1b, 0x37),
         secondary: Color::from_rgb8(0x81, 0x8c, 0xf8),
@@ -518,10 +529,14 @@ pub const DARK_PALETTE: ThemePalette = ThemePalette {
 pub const LIGHT_PALETTE: ThemePalette = ThemePalette {
     colors: SemanticColors {
         background: Color::from_rgb8(0xfb, 0xfc, 0xfd),
+        control: Color::from_rgb8(0xf1, 0xf5, 0xf9),
+        controlHover: Color::from_rgb8(0xe2, 0xe8, 0xf0),
         error: Color::from_rgb8(0x4b, 0x11, 0x19),
         errorContainer: Color::from_rgb8(0xff, 0xd9, 0xde),
         favorite: Color::from_rgb8(0xe1, 0x1d, 0x48),
         onBackground: Color::from_rgb8(0x0f, 0x17, 0x2a),
+        onControl: Color::from_rgb8(0x33, 0x41, 0x55),
+        onControlHover: Color::from_rgb8(0x0f, 0x17, 0x2a),
         onError: Color::from_rgb8(0xff, 0xd9, 0xde),
         onErrorContainer: Color::from_rgb8(0x4b, 0x11, 0x19),
         onPrimary: Color::from_rgb8(0xff, 0xff, 0xff),
@@ -535,7 +550,7 @@ pub const LIGHT_PALETTE: ThemePalette = ThemePalette {
         onWarning: Color::from_rgb8(0xff, 0xff, 0xff),
         onWarningContainer: Color::from_rgb8(0x92, 0x40, 0x0e),
         outline: Color::from_rgb8(0x94, 0xa3, 0xb8),
-        outlineVariant: Color::from_rgb8(0xcb, 0xd5, 0xe1),
+        outlineVariant: Color::from_rgb8(0xe7, 0xec, 0xf3),
         primary: Color::from_rgb8(0x63, 0x66, 0xf1),
         primaryContainer: Color::from_rgb8(0xe0, 0xe2, 0xff),
         secondary: Color::from_rgb8(0x4f, 0x46, 0xe5),
@@ -625,13 +640,17 @@ mod tests {
         (hi + 0.05) / (lo + 0.05)
     }
 
-    fn semantic_color_fields(colors: &SemanticColors) -> [(&'static str, Color); 35] {
+    fn semantic_color_fields(colors: &SemanticColors) -> [(&'static str, Color); 39] {
         [
             ("background", colors.background),
+            ("control", colors.control),
+            ("controlHover", colors.controlHover),
             ("error", colors.error),
             ("errorContainer", colors.errorContainer),
             ("favorite", colors.favorite),
             ("onBackground", colors.onBackground),
+            ("onControl", colors.onControl),
+            ("onControlHover", colors.onControlHover),
             ("onError", colors.onError),
             ("onErrorContainer", colors.onErrorContainer),
             ("onPrimary", colors.onPrimary),
@@ -671,10 +690,14 @@ mod tests {
             DARK_PALETTE.colors,
             SemanticColors {
                 background: Color::from_rgb8(0x0a, 0x0b, 0x0e),
+                control: Color::from_rgb8(0x1c, 0x1d, 0x22),
+                controlHover: Color::from_rgb8(0x29, 0x2a, 0x31),
                 error: Color::from_rgb8(0xff, 0x6b, 0x7a),
                 errorContainer: Color::from_rgb8(0x4b, 0x11, 0x19),
                 favorite: Color::from_rgb8(0xf8, 0x71, 0x71),
                 onBackground: Color::from_rgb8(0xff, 0xff, 0xff),
+                onControl: Color::from_rgb8(0xe5, 0xe5, 0xe5),
+                onControlHover: Color::from_rgb8(0xff, 0xff, 0xff),
                 onError: Color::from_rgb8(0x33, 0x00, 0x06),
                 onErrorContainer: Color::from_rgb8(0xff, 0xd9, 0xde),
                 onPrimary: Color::from_rgb8(0xff, 0xff, 0xff),
@@ -688,7 +711,7 @@ mod tests {
                 onWarning: Color::from_rgb8(0x2a, 0x1a, 0x00),
                 onWarningContainer: Color::from_rgb8(0xfd, 0xe6, 0x8a),
                 outline: Color::from_rgb8(0x52, 0x52, 0x5b),
-                outlineVariant: Color::from_rgb8(0x2a, 0x2a, 0x30),
+                outlineVariant: Color::from_rgb8(0x23, 0x26, 0x2b),
                 primary: Color::from_rgb8(0x63, 0x66, 0xf1),
                 primaryContainer: Color::from_rgb8(0x1a, 0x1b, 0x37),
                 secondary: Color::from_rgb8(0x81, 0x8c, 0xf8),
@@ -715,10 +738,14 @@ mod tests {
             LIGHT_PALETTE.colors,
             SemanticColors {
                 background: Color::from_rgb8(0xfb, 0xfc, 0xfd),
+                control: Color::from_rgb8(0xf1, 0xf5, 0xf9),
+                controlHover: Color::from_rgb8(0xe2, 0xe8, 0xf0),
                 error: Color::from_rgb8(0x4b, 0x11, 0x19),
                 errorContainer: Color::from_rgb8(0xff, 0xd9, 0xde),
                 favorite: Color::from_rgb8(0xe1, 0x1d, 0x48),
                 onBackground: Color::from_rgb8(0x0f, 0x17, 0x2a),
+                onControl: Color::from_rgb8(0x33, 0x41, 0x55),
+                onControlHover: Color::from_rgb8(0x0f, 0x17, 0x2a),
                 onError: Color::from_rgb8(0xff, 0xd9, 0xde),
                 onErrorContainer: Color::from_rgb8(0x4b, 0x11, 0x19),
                 onPrimary: Color::from_rgb8(0xff, 0xff, 0xff),
@@ -732,7 +759,7 @@ mod tests {
                 onWarning: Color::from_rgb8(0xff, 0xff, 0xff),
                 onWarningContainer: Color::from_rgb8(0x92, 0x40, 0x0e),
                 outline: Color::from_rgb8(0x94, 0xa3, 0xb8),
-                outlineVariant: Color::from_rgb8(0xcb, 0xd5, 0xe1),
+                outlineVariant: Color::from_rgb8(0xe7, 0xec, 0xf3),
                 primary: Color::from_rgb8(0x63, 0x66, 0xf1),
                 primaryContainer: Color::from_rgb8(0xe0, 0xe2, 0xff),
                 secondary: Color::from_rgb8(0x4f, 0x46, 0xe5),
@@ -808,6 +835,12 @@ mod tests {
         for (name, palette) in [("dark", &DARK_PALETTE), ("light", &LIGHT_PALETTE)] {
             let colors = &palette.colors;
             let pairs = [
+                ("control content", colors.onControl, colors.control),
+                (
+                    "hovered control content",
+                    colors.onControlHover,
+                    colors.controlHover,
+                ),
                 ("warning badge", colors.warning, colors.warningContainer),
                 ("success badge", colors.tertiary, colors.tertiaryContainer),
                 (

@@ -62,16 +62,18 @@ Nested rounding follows the concentric rule: inner radius = parent radius − pa
 ## Buttons
 
 Variants (`ButtonVariant`, styled by `widgets/button.rs`): `Primary`, `Secondary`, `Tonal`, `TonalActive`, `Text`, `Icon`. All use radius `md` and cast no shadow.
+Simple controls with an optional icon and label use the status-aware `control_button` widget; whole-control hover drives both icon and label through the variant's content colors.
+Composite-content buttons and fixed-color icons (the favorited heart, the theme toggle) keep iced `button` with `button_variant` styling; composite rows' icons brighten only under direct icon hover.
 
-- **Secondary** is the ghost chip — filled `secondaryContainer` with a 1px `outlineVariant` border. It exists ONLY as the active state of a switch group (sidebar destinations, three-way selectors like login method or Intro Mode). Never use it for actions; actions are Tonal or Primary.
-- **Tonal** is the default quiet control: quiet `surfaceContainerLow` fill at rest, `surfaceContainerHigh` on hover, no border.
-- **TonalActive** is the selected/on state of a tonal control: always filled with `surfaceContainerHigh`. Toggle call sites use the `TonalActive`/`Tonal` pair.
+- **Secondary** is the borderless tint chip — filled `secondaryContainer` with `onSecondaryContainer` content. It exists ONLY as the active state of a switch group (sidebar destinations, three-way selectors like login method or Intro Mode). Never use it for actions; actions are Tonal or Primary.
+- **Tonal** is the default quiet control: `control` fill with `onControl` content at rest, then `controlHover` fill with `onControlHover` content on hover. It has no border.
+- **TonalActive** is the selected/on state of a tonal control: always `controlHover` fill with `onControlHover` content. Toggle call sites use the `TonalActive`/`Tonal` pair.
 - **Primary** keeps its 10% hover brightness lift; one primary action per section or state.
-- **Text** is the ghost vocabulary: tinted `secondary` text on a transparent background. It belongs to navigation-like, switch-group contexts (sidebar destinations, selector rows) where an indigo readout is the "not selected" state. Actions never use Text — they are Tonal or Primary.
+- **Text** is the neutral ghost vocabulary: `text.body` content on a transparent background, then `control` fill with `text.heading` content on hover. It belongs to navigation-like, switch-group contexts (sidebar destinations, selector rows). Indigo accent text marks ONLY the active/selected state. Actions never use Text — they are Tonal or Primary.
 
 ## Fields, Badges, Overlays
 
-- **Fields**: opaque `surfaceContainerHigh` fill, radius `md`, no idle border. The single border exemption is functional: `text_input::Status::Focused` draws a 1px `primary` border (accessibility), and an invalid field draws a 1px `error` border. This exemption applies to text inputs only.
+- **Fields**: opaque `control` fill at rest and `controlHover` fill when focused, radius `md`, no idle border. The single border exemption is functional: `text_input::Status::Focused` draws a 1px `primary` border (accessibility), and an invalid field draws a 1px `error` border. This exemption applies to text inputs only.
 - **Badges**: opaque container fills (`tertiaryContainer` / `warningContainer` / `surfaceContainerHigh`), radius `md`, no border.
 - **Popover**: opaque `surfaceContainerHigh`, `raised_high` shadow, radius `lg`, no border.
 - **Tooltip**: `raised` shadow, radius `md`, no border.
@@ -94,7 +96,8 @@ The detail hero keeps its backdrop scrim, simplified to two stops: transparent a
 
 The locked palette is a **Neon Indigo** accent over two surface systems: **Charcoal** (dark: near-zero-chroma deep charcoal, 4–7% lightness, never OLED pure black) and **Light Clean** (light: cold-white canvas, pure-white surfaces). Concrete values live in `tokens.rs` (`DARK_PALETTE` / `LIGHT_PALETTE`) and are pinned by contract tests.
 
-- Indigo `#6366f1` (`primary`) means JellyPilot identity and primary app action in both modes. It is a fill and focus color, not small text: accent text uses `secondary` — `#818cf8` on dark, the deeper `#4f46e5` on light.
+- Indigo `#6366f1` (`primary`) means JellyPilot identity and primary app action in both modes. It is a fill and focus color, not general-purpose small text: when accent text marks an active/selected state, it uses `secondary` — `#818cf8` on dark, the deeper `#4f46e5` on light.
+- Control roles keep reusable controls neutral: `control` / `controlHover` are the rest and hover/focus fills, while `onControl` / `onControlHover` are their corresponding content colors.
 - Emerald means healthy/ready (`tertiary`: `#34d399` dark / `#047857` light); amber means ratings and degraded or retryable states (`warning`: `#fbbf24` / `#b45309`); red means failure or destructive (`error`: `#ff6b7a` dark, dark red on light). The favorited heart uses the rose `favorite` accent (`#f87171` / `#e11d48`).
 - Dark mode uses the bright 400-series status steps; light mode drops to 700-series steps so text and icons hold the 4.5:1 floor on the light canvas.
 

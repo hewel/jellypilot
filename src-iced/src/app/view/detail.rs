@@ -23,11 +23,10 @@ use jellypilot_media_server::{
 use jellypilot_mpv::playback::{Playable, PlaybackStartPosition};
 use jellypilot_mpv::playback_session::PlaybackIntent;
 use jellypilot_ui::fonts::SPACE_GROTESK_FONT;
-use jellypilot_ui::icons::{
-  icon_for_variant, icon_for_variant_disabled, icon_with_color, Icon, IconSize,
-};
+use jellypilot_ui::icons::{icon_with_color, Icon, IconSize};
 use jellypilot_ui::tokens::{ThemePalette, TOKENS};
 use jellypilot_ui::variants::{ButtonVariant, SurfaceVariant};
+use jellypilot_ui::widgets::control_button::control_button;
 use jellypilot_ui::widgets::ellipsis_text::ellipsis_text;
 use jellypilot_ui::widgets::skeleton::{skeleton_block, skeleton_panel};
 use jellypilot_ui::{full_radius, poster_card, rounded_image};
@@ -309,22 +308,16 @@ fn hero_at_width<'a>(
     });
 
   let back_enabled = !state.shell.navigation_stack.is_empty();
-  let back = button(
-    row![
-      icon_for_variant_disabled(
-        Icon::ChevronLeft,
-        IconSize::Sm,
-        ButtonVariant::Tonal,
-        !back_enabled,
-      ),
-      text("Back").size(14),
-    ]
-    .spacing(TOKENS.spacing.s1_5)
-    .align_y(Alignment::Center),
+  let back = control_button(
+    Some(Icon::ChevronLeft),
+    Some("Back".to_owned()),
+    ButtonVariant::Tonal,
   )
+  .icon_size(IconSize::Sm)
+  .label_size(14.0)
+  .spacing(TOKENS.spacing.s1_5)
   .padding([6, 10])
-  .on_press_maybe(back_enabled.then_some(Message::Detail(DetailMessage::Back)))
-  .style(|theme, status| jellypilot_ui::theme::button_variant(theme, status, ButtonVariant::Tonal));
+  .on_press_maybe(back_enabled.then_some(Message::Detail(DetailMessage::Back)));
   let mut copy = Column::new()
     .spacing(TOKENS.spacing.s3)
     .width(Fill)
@@ -361,19 +354,16 @@ fn hero_at_width<'a>(
         ("More", Icon::ChevronDown)
       };
       copy = copy.push(
-        button(
-          row![
-            text(overview_label),
-            icon_for_variant(overview_icon, IconSize::Xs, ButtonVariant::Text),
-          ]
-          .spacing(TOKENS.spacing.s1)
-          .align_y(Alignment::Center),
+        control_button(
+          Some(overview_icon),
+          Some(overview_label.to_owned()),
+          ButtonVariant::Text,
         )
+        .icon_size(IconSize::Xs)
+        .trailing_icon(true)
+        .spacing(TOKENS.spacing.s1)
         .padding([5, 8])
-        .on_press(Message::Detail(DetailMessage::OverviewToggled))
-        .style(|theme, status| {
-          jellypilot_ui::theme::button_variant(theme, status, ButtonVariant::Text)
-        }),
+        .on_press(Message::Detail(DetailMessage::OverviewToggled)),
       );
     }
   }
@@ -513,28 +503,18 @@ fn detail_actions<'a>(
   favorite: bool,
 ) -> Element<'a, Message> {
   let playback_enabled = playback_target.is_some() && state.playback.view.engine_available;
-  let playback = button(
-    row![
-      icon_for_variant_disabled(
-        Icon::Play,
-        IconSize::Md,
-        ButtonVariant::Primary,
-        !playback_enabled,
-      ),
-      text(playback_label),
-    ]
-    .spacing(TOKENS.spacing.s2)
-    .align_y(Alignment::Center),
+  let playback = control_button(
+    Some(Icon::Play),
+    Some(playback_label),
+    ButtonVariant::Primary,
   )
+  .spacing(TOKENS.spacing.s2)
   .padding([8, 16])
   .on_press_maybe(
     playback_target
       .filter(|_| playback_enabled)
       .map(|(item, position)| playback_message(state, item, position)),
-  )
-  .style(|theme, status| {
-    jellypilot_ui::theme::button_variant(theme, status, ButtonVariant::Primary)
-  });
+  );
   let any_busy = state
     .full
     .as_ref()
@@ -543,38 +523,51 @@ fn detail_actions<'a>(
     .data
     .user_data_busy
     .is_some();
-  let (fav_label, fav_variant) = if favorite {
-    ("Favorited", ButtonVariant::TonalActive)
+  // The favorited heart stays rose across hover (fixed `favorite` accent);
+  // the unfavorited heart is an ordinary Tonal control on `control_button`.
+  let favorite_button: Element<'_, Message> = if favorite {
+    let mut color = state.palette().colors.favorite;
+    if any_busy {
+      color.a *= 0.5;
+    }
+    button(
+      row![
+        icon_with_color(Icon::HeartFilled, IconSize::Md, color),
+        text("Favorited"),
+      ]
+      .spacing(TOKENS.spacing.s2)
+      .align_y(Alignment::Center),
+    )
+    .padding([8, 14])
+    .on_press_maybe((!any_busy).then_some(Message::Detail(DetailMessage::FavoriteToggled)))
+    .style(|theme, status| {
+      jellypilot_ui::theme::button_variant(theme, status, ButtonVariant::TonalActive)
+    })
+    .into()
   } else {
-    ("Favorite", ButtonVariant::Tonal)
-  };
-  let favorite_button = button(
-    row![
-      favorite_icon(state, favorite, fav_variant, any_busy),
-      text(fav_label),
-    ]
+    control_button(
+      Some(Icon::Heart),
+      Some("Favorite".to_owned()),
+      ButtonVariant::Tonal,
+    )
     .spacing(TOKENS.spacing.s2)
-    .align_y(Alignment::Center),
-  )
-  .padding([8, 14])
-  .on_press_maybe((!any_busy).then_some(Message::Detail(DetailMessage::FavoriteToggled)))
-  .style(move |theme, status| jellypilot_ui::theme::button_variant(theme, status, fav_variant));
+    .padding([8, 14])
+    .on_press_maybe((!any_busy).then_some(Message::Detail(DetailMessage::FavoriteToggled)))
+    .into()
+  };
   let (played_icon, played_label, played_variant) = if played {
     (Icon::CircleCheck, "Played", ButtonVariant::TonalActive)
   } else {
     (Icon::Circle, "Mark played", ButtonVariant::Tonal)
   };
-  let played_button = button(
-    row![
-      icon_for_variant_disabled(played_icon, IconSize::Md, played_variant, any_busy),
-      text(played_label),
-    ]
-    .spacing(TOKENS.spacing.s2)
-    .align_y(Alignment::Center),
+  let played_button = control_button(
+    Some(played_icon),
+    Some(played_label.to_owned()),
+    played_variant,
   )
+  .spacing(TOKENS.spacing.s2)
   .padding([8, 14])
-  .on_press_maybe((!any_busy).then_some(Message::Detail(DetailMessage::PlayedToggled)))
-  .style(move |theme, status| jellypilot_ui::theme::button_variant(theme, status, played_variant));
+  .on_press_maybe((!any_busy).then_some(Message::Detail(DetailMessage::PlayedToggled)));
   let mut actions = Row::new()
     .spacing(TOKENS.spacing.s2)
     .align_y(Alignment::Center)
@@ -610,25 +603,6 @@ fn detail_actions<'a>(
     content = content.push(text(error).size(13).color(state.palette().colors.error));
   }
   content.into()
-}
-
-/// The favorited state lights the heart in the rose `favorite` accent; the
-/// unfavorited state keeps the button-variant icon color.
-fn favorite_icon(
-  state: &State,
-  favorite: bool,
-  variant: ButtonVariant,
-  disabled: bool,
-) -> iced::widget::Svg<'static, iced::Theme> {
-  if favorite {
-    let mut color = state.palette().colors.favorite;
-    if disabled {
-      color.a *= 0.5;
-    }
-    icon_with_color(Icon::HeartFilled, IconSize::Md, color)
-  } else {
-    icon_for_variant_disabled(Icon::Heart, IconSize::Md, variant, disabled)
-  }
 }
 
 fn summary<'a>(
@@ -874,24 +848,18 @@ fn season_button<'a>(
     .selected_season_id
     .as_deref()
     == Some(season.id.as_str());
-  button(text(season_label(season)))
+  let variant = if active {
+    ButtonVariant::TonalActive
+  } else {
+    ButtonVariant::Tonal
+  };
+  control_button(None, Some(season_label(season).to_owned()), variant)
     .padding([6, 12])
     .on_press_maybe(
       (!loading).then_some(Message::Detail(DetailMessage::SeasonSelected(
         season.id.clone(),
       ))),
     )
-    .style(move |theme, status| {
-      jellypilot_ui::theme::button_variant(
-        theme,
-        status,
-        if active {
-          ButtonVariant::TonalActive
-        } else {
-          ButtonVariant::Tonal
-        },
-      )
-    })
     .into()
 }
 
@@ -1163,21 +1131,14 @@ fn episode_card_at_width<'a>(
         ("More", Icon::ChevronDown)
       };
       copy = copy.push(
-        button(
-          row![
-            text(label),
-            icon_for_variant(icon, IconSize::Xs, ButtonVariant::Text),
-          ]
+        control_button(Some(icon), Some(label.to_owned()), ButtonVariant::Text)
+          .icon_size(IconSize::Xs)
+          .trailing_icon(true)
           .spacing(TOKENS.spacing.s1)
-          .align_y(Alignment::Center),
-        )
-        .padding([5, 8])
-        .on_press(Message::Detail(DetailMessage::EpisodeOverviewToggled(
-          episode.id.clone(),
-        )))
-        .style(|theme, status| {
-          jellypilot_ui::theme::button_variant(theme, status, ButtonVariant::Text)
-        }),
+          .padding([5, 8])
+          .on_press(Message::Detail(DetailMessage::EpisodeOverviewToggled(
+            episode.id.clone(),
+          ))),
       );
     }
   }
@@ -1190,19 +1151,13 @@ fn episode_card_at_width<'a>(
     "Play"
   };
   let play_enabled = state.playback.view.engine_available;
-  let play = button(
-    row![
-      icon_for_variant_disabled(
-        Icon::Play,
-        IconSize::Sm,
-        ButtonVariant::Primary,
-        !play_enabled,
-      ),
-      text(play_label),
-    ]
-    .spacing(TOKENS.spacing.s1_5)
-    .align_y(Alignment::Center),
+  let play = control_button(
+    Some(Icon::Play),
+    Some(play_label.to_owned()),
+    ButtonVariant::Primary,
   )
+  .icon_size(IconSize::Sm)
+  .spacing(TOKENS.spacing.s1_5)
   .padding([6, 12])
   .on_press_maybe(play_enabled.then(|| {
     playback_message(
@@ -1214,10 +1169,7 @@ fn episode_card_at_width<'a>(
         PlaybackStartPosition::Beginning
       },
     )
-  }))
-  .style(|theme, status| {
-    jellypilot_ui::theme::button_variant(theme, status, ButtonVariant::Primary)
-  });
+  }));
   container(
     row![art, copy, play]
       .spacing(TOKENS.spacing.s4)
@@ -1326,22 +1278,15 @@ fn detail_skeleton(
   reduced_motion: bool,
 ) -> Element<'_, Message> {
   let back_enabled = !state.shell.navigation_stack.is_empty();
-  let back = button(
-    row![
-      icon_for_variant_disabled(
-        Icon::ChevronLeft,
-        IconSize::Sm,
-        ButtonVariant::Tonal,
-        !back_enabled,
-      ),
-      text("Back"),
-    ]
-    .spacing(TOKENS.spacing.s1_5)
-    .align_y(Alignment::Center),
+  let back = control_button(
+    Some(Icon::ChevronLeft),
+    Some("Back".to_owned()),
+    ButtonVariant::Tonal,
   )
+  .icon_size(IconSize::Sm)
+  .spacing(TOKENS.spacing.s1_5)
   .padding([6, 10])
-  .on_press_maybe(back_enabled.then_some(Message::Detail(DetailMessage::Back)))
-  .style(|theme, status| jellypilot_ui::theme::button_variant(theme, status, ButtonVariant::Tonal));
+  .on_press_maybe(back_enabled.then_some(Message::Detail(DetailMessage::Back)));
   let body = column![
     back,
     column![
@@ -1359,35 +1304,24 @@ fn detail_skeleton(
 
 fn detail_failure<'a>(state: &State, error: &'a str) -> Element<'a, Message> {
   let back_enabled = !state.shell.navigation_stack.is_empty();
-  let back = button(
-    row![
-      icon_for_variant_disabled(
-        Icon::ChevronLeft,
-        IconSize::Sm,
-        ButtonVariant::Tonal,
-        !back_enabled,
-      ),
-      text("Back"),
-    ]
-    .spacing(TOKENS.spacing.s1_5)
-    .align_y(Alignment::Center),
+  let back = control_button(
+    Some(Icon::ChevronLeft),
+    Some("Back".to_owned()),
+    ButtonVariant::Tonal,
   )
+  .icon_size(IconSize::Sm)
+  .spacing(TOKENS.spacing.s1_5)
   .padding([6, 10])
-  .on_press_maybe(back_enabled.then_some(Message::Detail(DetailMessage::Back)))
-  .style(|theme, status| jellypilot_ui::theme::button_variant(theme, status, ButtonVariant::Tonal));
-  let retry = button(
-    row![
-      icon_for_variant(Icon::Refresh, IconSize::Sm, ButtonVariant::Primary),
-      text("Retry"),
-    ]
-    .spacing(TOKENS.spacing.s1_5)
-    .align_y(Alignment::Center),
+  .on_press_maybe(back_enabled.then_some(Message::Detail(DetailMessage::Back)));
+  let retry = control_button(
+    Some(Icon::Refresh),
+    Some("Retry".to_owned()),
+    ButtonVariant::Primary,
   )
+  .icon_size(IconSize::Sm)
+  .spacing(TOKENS.spacing.s1_5)
   .padding([6, 12])
-  .on_press(Message::Detail(DetailMessage::Retry))
-  .style(|theme, status| {
-    jellypilot_ui::theme::button_variant(theme, status, ButtonVariant::Primary)
-  });
+  .on_press(Message::Detail(DetailMessage::Retry));
   container(
     column![
       back,
@@ -1414,19 +1348,15 @@ fn retryable_surface<'a>(
   container(
     row![
       text(error).size(13).color(palette.colors.error),
-      button(
-        row![
-          icon_for_variant(Icon::Refresh, IconSize::Xs, ButtonVariant::Tonal),
-          text("Retry"),
-        ]
-        .spacing(TOKENS.spacing.s1)
-        .align_y(Alignment::Center),
+      control_button(
+        Some(Icon::Refresh),
+        Some("Retry".to_owned()),
+        ButtonVariant::Tonal,
       )
+      .icon_size(IconSize::Xs)
+      .spacing(TOKENS.spacing.s1)
       .padding([6, 10])
-      .on_press(retry)
-      .style(|theme, status| {
-        jellypilot_ui::theme::button_variant(theme, status, ButtonVariant::Tonal)
-      }),
+      .on_press(retry),
     ]
     .spacing(TOKENS.spacing.s3)
     .align_y(Alignment::Center),

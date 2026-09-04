@@ -19,12 +19,11 @@ use jellypilot_media_server::VideoLibraryItem;
 use jellypilot_mpv::playback::{Playable, PlaybackStartPosition};
 use jellypilot_mpv::playback_session::PlaybackIntent;
 use jellypilot_ui::fonts::SPACE_GROTESK_FONT;
-use jellypilot_ui::icons::{
-  icon_for_variant, icon_for_variant_disabled, icon_with_color, Icon, IconSize,
-};
+use jellypilot_ui::icons::{icon_with_color, Icon, IconSize};
 use jellypilot_ui::layout::SizeClass;
 use jellypilot_ui::tokens::{ThemePalette, TOKENS};
 use jellypilot_ui::variants::{ButtonVariant, SurfaceVariant};
+use jellypilot_ui::widgets::control_button::control_button;
 use jellypilot_ui::widgets::ellipsis_text::ellipsis_text;
 use jellypilot_ui::widgets::skeleton::{skeleton_block, skeleton_panel};
 use jellypilot_ui::{full_radius, poster_card, rounded_image};
@@ -148,35 +147,22 @@ fn featured_hero<'a>(
     "Play"
   };
   let play_enabled = state.playback.view.engine_available;
-  let play = button(
-    row![
-      icon_for_variant_disabled(
-        Icon::Play,
-        IconSize::Md,
-        ButtonVariant::Primary,
-        !play_enabled,
-      ),
-      text(play_label),
-    ]
-    .spacing(TOKENS.spacing.s2)
-    .align_y(Alignment::Center),
+  let play = control_button(
+    Some(Icon::Play),
+    Some(play_label.to_owned()),
+    ButtonVariant::Primary,
   )
+  .spacing(TOKENS.spacing.s2)
   .padding([7, 14])
-  .on_press_maybe(play_enabled.then(|| play_message(state, item)))
-  .style(|theme, status| {
-    jellypilot_ui::theme::button_variant(theme, status, ButtonVariant::Primary)
-  });
-  let details = button(
-    row![
-      icon_for_variant(Icon::Info, IconSize::Md, ButtonVariant::Tonal),
-      text("Details"),
-    ]
-    .spacing(TOKENS.spacing.s2)
-    .align_y(Alignment::Center),
+  .on_press_maybe(play_enabled.then(|| play_message(state, item)));
+  let details = control_button(
+    Some(Icon::Info),
+    Some("Details".to_owned()),
+    ButtonVariant::Tonal,
   )
+  .spacing(TOKENS.spacing.s2)
   .padding([7, 14])
-  .on_press(Message::OpenDetail(item.clone()))
-  .style(|theme, status| jellypilot_ui::theme::button_variant(theme, status, ButtonVariant::Tonal));
+  .on_press(Message::OpenDetail(item.clone()));
   let copy = column![
     headline,
     text(hero_metadata(item))
@@ -438,16 +424,10 @@ fn video_card<'a>(
       .as_deref()
       == Some(item.id.as_str())
     {
-      let details = button(icon_for_variant(
-        Icon::Info,
-        IconSize::Xs,
-        ButtonVariant::Tonal,
-      ))
-      .padding(7)
-      .on_press(Message::OpenDetail(item.clone()))
-      .style(|theme, status| {
-        jellypilot_ui::theme::button_variant(theme, status, ButtonVariant::Tonal)
-      });
+      let details = control_button(Some(Icon::Info), None, ButtonVariant::Tonal)
+        .icon_size(IconSize::Xs)
+        .padding(7)
+        .on_press(Message::OpenDetail(item.clone()));
       artwork_layers = artwork_layers.push(
         container(details)
           .padding(TOKENS.spacing.s2)
@@ -900,12 +880,9 @@ fn section_error<'a>(
   title: &'a str,
   error: &'a str,
 ) -> Element<'a, Message> {
-  let retry = button(text("Retry"))
+  let retry = control_button(None, Some("Retry".to_owned()), ButtonVariant::Tonal)
     .padding([6, 12])
-    .on_press(Message::Home(HomeMessage::Retry))
-    .style(|theme, status| {
-      jellypilot_ui::theme::button_variant(theme, status, ButtonVariant::Tonal)
-    });
+    .on_press(Message::Home(HomeMessage::Retry));
   container(
     column![
       text(title)

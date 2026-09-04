@@ -7,6 +7,7 @@ use iced::Theme;
 use crate::tokens::{DARK_PALETTE, LIGHT_PALETTE};
 use crate::variants::{BadgeVariant, ButtonVariant, FieldVariant, SurfaceVariant};
 use crate::widgets;
+pub use crate::widgets::control_button::{control_button, ControlButton};
 
 /// Theme mode the app can pin explicitly. `System` is an app-level concern:
 /// the app resolves it against the OS mode before calling [`theme`].

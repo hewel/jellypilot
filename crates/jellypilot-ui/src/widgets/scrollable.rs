@@ -70,7 +70,7 @@ fn scroller_background(colors: SemanticColors, is_interactive: bool) -> Color {
     if is_interactive {
         colors.outline
     } else {
-        with_alpha(colors.outlineVariant, 0.8)
+        colors.outlineVariant
     }
 }
 
@@ -96,7 +96,7 @@ mod tests {
     use iced::widget::scrollable;
     use iced::Background;
 
-    use super::{style, with_alpha};
+    use super::style;
     use crate::tokens::DARK_PALETTE;
 
     #[test]
@@ -119,7 +119,7 @@ mod tests {
             ),
             (
                 Background::Color(DARK_PALETTE.colors.outline),
-                Background::Color(with_alpha(DARK_PALETTE.colors.outlineVariant, 0.8)),
+                Background::Color(DARK_PALETTE.colors.outlineVariant),
             )
         );
     }
@@ -143,7 +143,7 @@ mod tests {
                 styled.vertical_rail.scroller.background,
             ),
             (
-                Background::Color(with_alpha(DARK_PALETTE.colors.outlineVariant, 0.8)),
+                Background::Color(DARK_PALETTE.colors.outlineVariant),
                 Background::Color(DARK_PALETTE.colors.outline),
             )
         );
