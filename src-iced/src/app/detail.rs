@@ -497,6 +497,7 @@ struct ArtworkLoadSpec {
 
 fn prepare_artwork(surface: &mut Surface, kernel: &mut Kernel) -> Task<Message> {
   let mut specs = Vec::new();
+  let mut next_episode_retention_key = None;
   match &surface.data.content {
     jellypilot_core::LoadState::Ready(DetailContent::Item(item)) => {
       push_artwork_spec(
@@ -551,8 +552,28 @@ fn prepare_artwork(surface: &mut Surface, kernel: &mut Kernel) -> Task<Message> 
         ArtworkSizeClass::Backdrop,
         true,
       );
+      if let Some(next_episode) = &show.next_episode {
+        if next_episode.artwork_image_id.is_some() {
+          push_artwork_spec(
+            &mut specs,
+            detail_episode_key(&next_episode.id),
+            &next_episode.artwork_image_id,
+            ArtworkSizeClass::Card,
+            true,
+          );
+        } else {
+          // Show and season endpoints can disagree on image fields. Keep a
+          // season-populated cell for the always-visible Next Up card.
+          next_episode_retention_key = Some(detail_episode_key(&next_episode.id));
+        }
+      }
       if let jellypilot_core::LoadState::Ready(page) = &surface.data.season_episodes {
         for episode in &page.episodes {
+          if show.next_episode.as_ref().is_some_and(|next_episode| {
+            next_episode.id == episode.id && next_episode.artwork_image_id.is_some()
+          }) {
+            continue;
+          }
           push_artwork_spec(
             &mut specs,
             detail_episode_key(&episode.id),
@@ -579,10 +600,13 @@ fn prepare_artwork(surface: &mut Surface, kernel: &mut Kernel) -> Task<Message> 
     | jellypilot_core::LoadState::Failed(_) => return Task::none(),
   }
 
-  let retained_keys = specs
+  let mut retained_keys = specs
     .iter()
     .map(|spec| spec.key.as_str())
     .collect::<HashSet<_>>();
+  if let Some(key) = next_episode_retention_key.as_deref() {
+    retained_keys.insert(key);
+  }
   surface.artwork.retain_keys(&retained_keys);
   drop(retained_keys);
   let session = kernel.request_gate.current_session();
@@ -1071,6 +1095,48 @@ mod tests {
       .expect("logo cell exists");
     assert_eq!(second_cell.slot, original_slot);
     assert_eq!(second_cell.state, ArtworkCellState::Loading);
+  }
+
+  #[test]
+  fn prepare_artwork_keeps_next_up_image_when_selected_season_changes() {
+    let (mut surface, mut kernel) = test_fixture();
+    kernel.client = Some(Arc::new(JellyfinClient::new()));
+    let next_up = episode("next-up", 1);
+    let mut season_next_up = next_up.clone();
+    season_next_up.artwork_image_id = Some("next-up-image".to_owned());
+    let mut show = show_detail();
+    show.next_episode = Some(next_up);
+    surface.data.content = jellypilot_core::LoadState::Ready(DetailContent::Show(Box::new(show)));
+    surface.data.season_episodes = jellypilot_core::LoadState::Ready(VideoSeasonEpisodesPage {
+      series_id: "show-1".to_owned(),
+      season_id: Some("season-1".to_owned()),
+      season_number: Some(1),
+      start_index: 0,
+      limit: 30,
+      total_record_count: 1,
+      next_start_index: 1,
+      has_more: false,
+      episodes: vec![season_next_up],
+    });
+
+    drop(prepare_artwork(&mut surface, &mut kernel));
+    let next_up_key = detail_episode_key("next-up");
+    assert!(surface.artwork.get(&next_up_key).is_some());
+
+    surface.data.season_episodes = jellypilot_core::LoadState::Ready(VideoSeasonEpisodesPage {
+      series_id: "show-1".to_owned(),
+      season_id: Some("season-2".to_owned()),
+      season_number: Some(2),
+      start_index: 0,
+      limit: 30,
+      total_record_count: 1,
+      next_start_index: 1,
+      has_more: false,
+      episodes: vec![episode("season-2-episode", 2)],
+    });
+    drop(prepare_artwork(&mut surface, &mut kernel));
+
+    assert!(surface.artwork.get(&next_up_key).is_some());
   }
 
   #[test]
