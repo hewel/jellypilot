@@ -3,7 +3,6 @@ use crate::app::state::{ArtworkCell, ArtworkCellState, State, UserDataActionKind
 use iced::advanced::graphics::text::Paragraph as GraphicsParagraph;
 use iced::advanced::text::paragraph::Paragraph;
 use iced::advanced::{text as advanced_text, Text as AdvancedText};
-use iced::gradient;
 use iced::widget::image::Image;
 use iced::widget::scrollable::{Direction, Scrollbar};
 use iced::widget::{
@@ -12,6 +11,7 @@ use iced::widget::{
 use iced::{
   alignment, Alignment, Background, ContentFit, Degrees, Element, Fill, Font, Length, Pixels, Size,
 };
+use iced::{gradient, padding};
 use jellypilot_core::cards::logo_display_size;
 use jellypilot_core::detail::{
   detail_episode_key, detail_metadata, detail_similar_key, show_detail_metadata, DetailContent,
@@ -698,12 +698,9 @@ fn media_info_section(
       format!("{:.1} Mbps", bitrate_bps as f64 / 1_000_000.0),
     ));
   }
-
+  let title = section_title(palette, "Media Info");
   column![
-    text("Media Info")
-      .font(SPACE_GROTESK_FONT)
-      .size(26)
-      .color(palette.colors.onSurface),
+    title,
     container(rows)
       .padding(TOKENS.spacing.s5)
       .width(Fill)
@@ -792,10 +789,7 @@ fn seasons_section<'a>(
   skeleton_phase: f32,
   reduced_motion: bool,
 ) -> Element<'a, Message> {
-  let title = text("Seasons")
-    .font(SPACE_GROTESK_FONT)
-    .size(26)
-    .color(state.palette().colors.onSurface);
+  let title = section_title(state.palette(), "Seasons");
   if show.seasons.is_empty() {
     return column![
       title,
@@ -890,10 +884,7 @@ fn neighbor_section(
   skeleton_phase: f32,
   reduced_motion: bool,
 ) -> Element<'_, Message> {
-  let title = text("More from this season")
-    .font(SPACE_GROTESK_FONT)
-    .size(26)
-    .color(state.palette().colors.onSurface);
+  let title = section_title(state.palette(), "More from this season");
   let body = match &state
     .full
     .as_ref()
@@ -1026,11 +1017,14 @@ fn similar_skeletons<'a>(phase: f32, reduced_motion: bool) -> Element<'a, Messag
 }
 
 fn section_title(palette: &'static ThemePalette, label: &'static str) -> Element<'static, Message> {
-  text(label)
-    .font(SPACE_GROTESK_FONT)
-    .size(26)
-    .color(palette.colors.onSurface)
-    .into()
+  container(
+    text(label)
+      .font(SPACE_GROTESK_FONT)
+      .size(26)
+      .color(palette.colors.onSurface),
+  )
+  .padding(padding::horizontal(TOKENS.spacing.s5))
+  .into()
 }
 
 fn next_up_section<'a>(
@@ -1040,10 +1034,7 @@ fn next_up_section<'a>(
   reduced_motion: bool,
 ) -> Element<'a, Message> {
   column![
-    text("Next Up")
-      .font(SPACE_GROTESK_FONT)
-      .size(26)
-      .color(state.palette().colors.onSurface),
+    section_title(state.palette(), "Next Up"),
     episode_card(state, episode, skeleton_phase, reduced_motion),
   ]
   .spacing(TOKENS.spacing.s3)
