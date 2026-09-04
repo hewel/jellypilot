@@ -448,10 +448,10 @@ fn settings_modal(state: &State) -> Element<'_, Message> {
       text("Settings")
         .font(SPACE_GROTESK_FONT)
         .size(28)
-        .color(palette.colors.onSurface),
+        .color(palette.text.heading),
       text("Changes are written to disk when Saved appears.")
         .size(13)
-        .color(palette.colors.onSurfaceVariant),
+        .color(palette.text.body),
     ]
     .spacing(TOKENS.spacing.s0_5),
     space::horizontal(),
@@ -588,10 +588,8 @@ fn connection_summary(state: &State) -> Element<'_, Message> {
     column![
       text(&identity.user_name)
         .size(13)
-        .color(palette.colors.onSurface),
-      text(&identity.server)
-        .size(11)
-        .color(palette.colors.onSurfaceVariant),
+        .color(palette.text.secondary),
+      text(&identity.server).size(11).color(palette.text.metadata),
     ]
     .spacing(TOKENS.spacing.s0_5),
   ]

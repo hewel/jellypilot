@@ -81,7 +81,7 @@ pub fn view(state: &State) -> Element<'_, Message> {
     text(heading)
       .font(SPACE_GROTESK_FONT)
       .size(34)
-      .color(state.palette().colors.onSurface),
+      .color(state.palette().text.heading),
   );
   if matches!(state.shell.destination, Destination::Library { .. }) {
     header = header.push(toolbar(state));
@@ -148,18 +148,22 @@ fn toolbar(state: &State) -> Element<'_, Message> {
   .padding([6, 12])
   .on_press(Message::Browse(BrowseMessage::SortDirectionToggled))
   .style(|theme, status| jellypilot_ui::theme::button_variant(theme, status, ButtonVariant::Tonal));
-  let (fav_icon, fav_label, fav_variant) = if filters.favorites_only() {
-    (
-      Icon::HeartFilled,
-      "Favorites: On",
-      ButtonVariant::TonalActive,
-    )
+  let (fav_label, fav_variant) = if filters.favorites_only() {
+    ("Favorites: On", ButtonVariant::TonalActive)
   } else {
-    (Icon::Heart, "Favorites: Off", ButtonVariant::Tonal)
+    ("Favorites: Off", ButtonVariant::Tonal)
   };
   let favorites = button(
     row![
-      icon_for_variant(fav_icon, IconSize::Sm, fav_variant),
+      if filters.favorites_only() {
+        icon_with_color(
+          Icon::HeartFilled,
+          IconSize::Sm,
+          state.palette().colors.favorite,
+        )
+      } else {
+        icon_for_variant(Icon::Heart, IconSize::Sm, fav_variant)
+      },
       text(fav_label),
     ]
     .spacing(TOKENS.spacing.s1_5)
@@ -329,7 +333,7 @@ fn ready_surface<'a>(
     .push(
       row![text(format!("{total_record_count} items"))
         .size(13)
-        .color(state.palette().colors.onSurfaceVariant),]
+        .color(state.palette().text.metadata),]
       .padding([TOKENS.spacing.s3, padding])
       .align_y(Alignment::Center),
     )
@@ -516,10 +520,10 @@ fn video_card<'a>(
   let copy = column![
     ellipsis_text(&item.name)
       .size(14)
-      .color(palette.colors.onSurface),
+      .color(palette.text.heading),
     ellipsis_text(item_caption(item))
       .size(12)
-      .color(palette.colors.onSurfaceVariant),
+      .color(palette.text.metadata),
   ]
   .spacing(TOKENS.spacing.s1)
   .padding(iced::Padding {
@@ -640,7 +644,7 @@ fn failure_surface<'a>(
       text("Could not load this library")
         .font(SPACE_GROTESK_FONT)
         .size(24)
-        .color(palette.colors.onSurface),
+        .color(palette.text.heading),
       text(message).size(14).color(palette.colors.error),
       retry,
     ]
@@ -724,15 +728,11 @@ fn empty_surface(
   message: String,
   padding: f32,
 ) -> Element<'static, Message> {
-  container(
-    text(message)
-      .size(16)
-      .color(palette.colors.onSurfaceVariant),
-  )
-  .padding(padding)
-  .width(Fill)
-  .height(Fill)
-  .into()
+  container(text(message).size(16).color(palette.text.metadata))
+    .padding(padding)
+    .width(Fill)
+    .height(Fill)
+    .into()
 }
 
 const fn sort_label(sort: VideoLibrarySort) -> &'static str {

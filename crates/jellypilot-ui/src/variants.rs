@@ -22,7 +22,7 @@ pub enum ButtonVariant {
 pub enum SurfaceVariant {
     /// Flush with the window: opaque `background`, square, no border/shadow.
     Canvas,
-    /// Docked block (sidebar, player bar): opaque `surfaceContainerLow`,
+    /// Docked block (sidebar, player bar): opaque `surfaceContainerLowest`,
     /// square, no border/shadow.
     Block,
     /// Floating layer (cards, toasts, popovers): opaque
@@ -30,19 +30,7 @@ pub enum SurfaceVariant {
     Raised,
 }
 
-/// Semantic text roles used by JellyPilot's Panda component styles.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum TextVariant {
-    OnSurface,
-    OnSurfaceVariant,
-    Primary,
-    Secondary,
-    Tertiary,
-    Warning,
-    Error,
-}
-
-/// Status badge variants from `src/components/ui/StatusBadge.styles.ts`.
+/// Status badge variants.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BadgeVariant {
     Success,
@@ -50,7 +38,7 @@ pub enum BadgeVariant {
     Neutral,
 }
 
-/// Text input variants from `src/components/ui/FieldControl.styles.ts`.
+/// Text input variants.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FieldVariant {
     Filled,

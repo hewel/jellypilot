@@ -8,11 +8,12 @@ use crate::variants::BadgeVariant;
 
 /// Resolves a status badge variant to an iced container style.
 pub fn style(theme: &Theme, variant: BadgeVariant) -> container::Style {
-    let colors = palette(theme).colors;
+    let palette = palette(theme);
+    let colors = palette.colors;
     let (background, text_color) = match variant {
         BadgeVariant::Success => (colors.tertiaryContainer, colors.tertiary),
         BadgeVariant::Warning => (colors.warningContainer, colors.warning),
-        BadgeVariant::Neutral => (colors.surfaceContainerHigh, colors.onSurfaceVariant),
+        BadgeVariant::Neutral => (colors.surfaceContainerHigh, palette.text.secondary),
     };
 
     container::Style {

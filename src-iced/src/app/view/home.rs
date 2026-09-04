@@ -181,7 +181,7 @@ fn featured_hero<'a>(
     headline,
     text(hero_metadata(item))
       .size(17)
-      .color(palette.colors.onSurfaceVariant),
+      .color(palette.text.secondary),
     row![play, details].spacing(TOKENS.spacing.s2),
   ]
   .spacing(TOKENS.spacing.s3)
@@ -335,7 +335,7 @@ fn section_row<'a>(
     text(&home_row.title)
       .font(SPACE_GROTESK_FONT)
       .size(24)
-      .color(state.palette().colors.onSurface),
+      .color(state.palette().text.heading),
     cards,
   ]
   .spacing(TOKENS.spacing.s3)
@@ -372,10 +372,10 @@ fn video_card<'a>(
   let text_stack = column![
     ellipsis_text(card_title(item))
       .size(14)
-      .color(palette.colors.onSurface),
+      .color(palette.text.heading),
     ellipsis_text(card_subtitle(item))
       .size(12)
-      .color(palette.colors.onSurfaceVariant),
+      .color(palette.text.metadata),
   ]
   .spacing(TOKENS.spacing.s1)
   .width(Fill);
@@ -491,10 +491,10 @@ fn video_card<'a>(
   let copy = column![
     ellipsis_text(card_title(item))
       .size(14)
-      .color(palette.colors.onSurface),
+      .color(palette.text.heading),
     ellipsis_text(card_subtitle(item))
       .size(12)
-      .color(palette.colors.onSurfaceVariant),
+      .color(palette.text.metadata),
   ]
   .spacing(TOKENS.spacing.s1)
   .padding(iced::Padding {
@@ -667,7 +667,7 @@ fn hero_artwork<'a>(
   text(hero_headline(item))
     .font(SPACE_GROTESK_FONT)
     .size(42)
-    .color(state.palette().colors.onSurface)
+    .color(state.palette().text.heading)
     .into()
 }
 
@@ -888,7 +888,7 @@ fn section_skeleton<'a>(
     text(&row.title)
       .font(SPACE_GROTESK_FONT)
       .size(24)
-      .color(palette.colors.onSurface),
+      .color(palette.text.heading),
     cards,
   ]
   .spacing(TOKENS.spacing.s3)
@@ -911,7 +911,7 @@ fn section_error<'a>(
       text(title)
         .font(SPACE_GROTESK_FONT)
         .size(24)
-        .color(palette.colors.onSurface),
+        .color(palette.text.heading),
       text(error).size(13).color(palette.colors.error),
       retry,
     ]

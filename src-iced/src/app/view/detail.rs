@@ -332,7 +332,7 @@ fn hero_at_width<'a>(
     .push(
       text(content.metadata.clone())
         .size(15)
-        .color(palette.colors.onSurface),
+        .color(palette.text.secondary),
     );
 
   if let Some(overview) = overview {
@@ -341,7 +341,7 @@ fn hero_at_width<'a>(
         container(
           text(overview)
             .size(OVERVIEW_TEXT_SIZE)
-            .color(palette.colors.onSurfaceVariant),
+            .color(palette.text.body),
         )
         .width(Fill)
         .height(collapsed_height)
@@ -351,7 +351,7 @@ fn hero_at_width<'a>(
       copy = copy.push(
         text(overview)
           .size(OVERVIEW_TEXT_SIZE)
-          .color(palette.colors.onSurfaceVariant),
+          .color(palette.text.body),
       );
     }
     if overview_expandable {
@@ -413,7 +413,7 @@ fn hero_title<'a>(state: &'a State, name: &'a str, is_episode: bool) -> Element<
     text(name)
       .font(SPACE_GROTESK_FONT)
       .size(45)
-      .color(state.palette().colors.onSurface)
+      .color(state.palette().text.heading)
       .into()
   };
   let Some(logo) = detail_logo(
@@ -543,14 +543,14 @@ fn detail_actions<'a>(
     .data
     .user_data_busy
     .is_some();
-  let (fav_icon, fav_label, fav_variant) = if favorite {
-    (Icon::HeartFilled, "Favorited", ButtonVariant::TonalActive)
+  let (fav_label, fav_variant) = if favorite {
+    ("Favorited", ButtonVariant::TonalActive)
   } else {
-    (Icon::Heart, "Favorite", ButtonVariant::Tonal)
+    ("Favorite", ButtonVariant::Tonal)
   };
   let favorite_button = button(
     row![
-      icon_for_variant_disabled(fav_icon, IconSize::Md, fav_variant, any_busy),
+      favorite_icon(state, favorite, fav_variant, any_busy),
       text(fav_label),
     ]
     .spacing(TOKENS.spacing.s2)
@@ -595,7 +595,7 @@ fn detail_actions<'a>(
         UserDataActionKind::Played => "Updating played state…",
       })
       .size(13)
-      .color(state.palette().colors.onSurfaceVariant),
+      .color(state.palette().text.metadata),
     );
   }
   let mut content = Column::new().spacing(TOKENS.spacing.s2).push(actions);
@@ -610,6 +610,25 @@ fn detail_actions<'a>(
     content = content.push(text(error).size(13).color(state.palette().colors.error));
   }
   content.into()
+}
+
+/// The favorited state lights the heart in the rose `favorite` accent; the
+/// unfavorited state keeps the button-variant icon color.
+fn favorite_icon(
+  state: &State,
+  favorite: bool,
+  variant: ButtonVariant,
+  disabled: bool,
+) -> iced::widget::Svg<'static, iced::Theme> {
+  if favorite {
+    let mut color = state.palette().colors.favorite;
+    if disabled {
+      color.a *= 0.5;
+    }
+    icon_with_color(Icon::HeartFilled, IconSize::Md, color)
+  } else {
+    icon_for_variant_disabled(Icon::Heart, IconSize::Md, variant, disabled)
+  }
 }
 
 fn summary<'a>(
@@ -648,8 +667,8 @@ fn summary_column(
   values: String,
 ) -> Element<'static, Message> {
   column![
-    text(label).size(12).color(palette.colors.onSurfaceVariant),
-    text(values).size(14).color(palette.colors.onSurface),
+    text(label).size(12).color(palette.text.metadata),
+    text(values).size(14).color(palette.text.secondary),
   ]
   .spacing(TOKENS.spacing.s2)
   .width(Fill)
@@ -716,11 +735,8 @@ fn media_info_row(
   value: String,
 ) -> Element<'static, Message> {
   row![
-    text(label)
-      .size(12)
-      .color(palette.colors.onSurfaceVariant)
-      .width(120),
-    text(value).size(14).color(palette.colors.onSurface),
+    text(label).size(12).color(palette.text.metadata).width(120),
+    text(value).size(14).color(palette.text.secondary),
   ]
   .spacing(TOKENS.spacing.s4)
   .width(Fill)
@@ -969,14 +985,14 @@ fn similar_card<'a>(
   let copy = column![
     ellipsis_text(&item.name)
       .size(14)
-      .color(state.palette().colors.onSurface),
+      .color(state.palette().text.heading),
     text(
       item
         .production_year
         .map_or_else(String::new, |year| year.to_string())
     )
     .size(12)
-    .color(state.palette().colors.onSurfaceVariant),
+    .color(state.palette().text.metadata),
   ]
   .spacing(TOKENS.spacing.s1)
   .padding(iced::Padding {
@@ -1021,7 +1037,7 @@ fn section_title(palette: &'static ThemePalette, label: &'static str) -> Element
     text(label)
       .font(SPACE_GROTESK_FONT)
       .size(26)
-      .color(palette.colors.onSurface),
+      .color(palette.text.heading),
   )
   .padding(padding::horizontal(TOKENS.spacing.s5))
   .into()
@@ -1092,7 +1108,7 @@ fn episode_card_at_width<'a>(
     text(format!("{}  {}", episode_label(episode), episode.name))
       .font(SPACE_GROTESK_FONT)
       .size(18)
-      .color(palette.colors.onSurface),
+      .color(palette.text.heading),
   );
   if let Some(overview) = episode
     .overview
@@ -1127,7 +1143,7 @@ fn episode_card_at_width<'a>(
         container(
           text(overview)
             .size(EPISODE_OVERVIEW_TEXT_SIZE)
-            .color(palette.colors.onSurfaceVariant),
+            .color(palette.text.body),
         )
         .width(Fill)
         .height(collapsed_height)
@@ -1137,7 +1153,7 @@ fn episode_card_at_width<'a>(
       copy = copy.push(
         text(overview)
           .size(EPISODE_OVERVIEW_TEXT_SIZE)
-          .color(palette.colors.onSurfaceVariant),
+          .color(palette.text.body),
       );
     }
     if expandable {
@@ -1378,7 +1394,7 @@ fn detail_failure<'a>(state: &State, error: &'a str) -> Element<'a, Message> {
       text("Could not load detail")
         .font(SPACE_GROTESK_FONT)
         .size(28)
-        .color(state.palette().colors.onSurface),
+        .color(state.palette().text.heading),
       text(error).size(14).color(state.palette().colors.error),
       retry,
     ]
@@ -1422,15 +1438,11 @@ fn retryable_surface<'a>(
 }
 
 fn status_surface<'a>(palette: &'static ThemePalette, message: &'a str) -> Element<'a, Message> {
-  container(
-    text(message)
-      .size(14)
-      .color(palette.colors.onSurfaceVariant),
-  )
-  .padding(TOKENS.spacing.s4)
-  .width(Fill)
-  .style(|theme| jellypilot_ui::theme::surface_variant(theme, SurfaceVariant::Canvas))
-  .into()
+  container(text(message).size(14).color(palette.text.metadata))
+    .padding(TOKENS.spacing.s4)
+    .width(Fill)
+    .style(|theme| jellypilot_ui::theme::surface_variant(theme, SurfaceVariant::Canvas))
+    .into()
 }
 
 fn episode_skeletons<'a>(skeleton_phase: f32, reduced_motion: bool) -> Element<'a, Message> {

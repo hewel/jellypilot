@@ -1,7 +1,8 @@
 //! JellyPilot's iced design system.
 //!
-//! The crate ports the canonical Panda tokens and basic component variants as
-//! the visual vocabulary of the iced application.
+//! The crate owns the Neon Indigo / Charcoal / Light Clean design tokens and
+//! the component variants that form the visual vocabulary of the iced
+//! application.
 
 pub mod fonts;
 pub mod icons;

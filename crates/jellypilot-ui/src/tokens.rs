@@ -1,5 +1,6 @@
-//! Design tokens ported from JellyPilot's canonical Panda theme, with dark
-//! and light mode palettes derived from the same raw ramps.
+//! JellyPilot design tokens: the locked Neon Indigo accent over Charcoal
+//! (dark) and Light Clean (light) surface systems, each with a five-step
+//! high-contrast text hierarchy.
 
 use std::time::Duration;
 
@@ -8,7 +9,6 @@ use iced::{Color, Shadow, Theme, Vector};
 /// Complete JellyPilot design-token set.
 #[derive(Debug, Clone, Copy)]
 pub struct DesignTokens {
-    pub raw_colors: RawColors,
     pub fonts: Fonts,
     pub spacing: Spacing,
     pub font_sizes: FontSizes,
@@ -22,85 +22,21 @@ pub struct DesignTokens {
     pub breakpoints: Breakpoints,
 }
 
-/// Raw Panda color palettes.
-#[derive(Debug, Clone, Copy)]
-pub struct RawColors {
-    pub neutral: Neutral,
-    pub indigo: Indigo,
-    pub teal: Teal,
-    pub amber: Amber,
-    pub red: Red,
-}
-
-/// Neutral palette steps.
-#[derive(Debug, Clone, Copy)]
-pub struct Neutral {
-    pub n0: Color,
-    pub n50: Color,
-    pub n300: Color,
-    pub n500: Color,
-    pub n700: Color,
-    pub n750: Color,
-    pub n800: Color,
-    pub n850: Color,
-    pub n900: Color,
-    pub n925: Color,
-    pub n950: Color,
-    pub n975: Color,
-    pub n1000: Color,
-}
-
-/// Indigo palette steps.
-#[derive(Debug, Clone, Copy)]
-pub struct Indigo {
-    pub n50: Color,
-    pub n300: Color,
-    pub n600: Color,
-    pub n900: Color,
-    pub n950: Color,
-    pub n1000: Color,
-}
-
-/// Teal palette steps.
-#[derive(Debug, Clone, Copy)]
-pub struct Teal {
-    pub n50: Color,
-    pub n400: Color,
-    pub n900: Color,
-    pub n1000: Color,
-}
-
-/// Amber palette steps.
-#[derive(Debug, Clone, Copy)]
-pub struct Amber {
-    pub n50: Color,
-    pub n400: Color,
-    pub n900: Color,
-    pub n1000: Color,
-}
-
-/// Red palette steps.
-#[derive(Debug, Clone, Copy)]
-pub struct Red {
-    pub n50: Color,
-    pub n400: Color,
-    pub n900: Color,
-    pub n1000: Color,
-}
-
-/// Panda semantic color roles.
+/// Semantic color roles.
 ///
-/// Field spelling deliberately matches `semanticColorHex` so a role has the
-/// same name in web and iced design discussions.
+/// Field spelling follows the Material-3 role names the design contract was
+/// written in; `favorite` is the JellyPilot-specific rose accent for the
+/// favorited-heart state.
 #[expect(
     non_snake_case,
-    reason = "Panda semantic token names are the cross-frontend public contract"
+    reason = "semantic role names follow the Material-3 spelling of the design contract"
 )]
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct SemanticColors {
     pub background: Color,
     pub error: Color,
     pub errorContainer: Color,
+    pub favorite: Color,
     pub onBackground: Color,
     pub onError: Color,
     pub onErrorContainer: Color,
@@ -132,6 +68,26 @@ pub struct SemanticColors {
     pub tertiaryContainer: Color,
     pub warning: Color,
     pub warningContainer: Color,
+}
+
+/// The five-step text hierarchy.
+///
+/// `heading` through `metadata` meet the 4.5:1 normal-text contrast floor on
+/// their mode's canvas. `muted` is exempt from the floor and is reserved for
+/// auxiliary, non-essential text (device IDs, placeholders, loading hints);
+/// anything the user must read must use `metadata` or brighter.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct TextColors {
+    /// Level 1: page titles, item names, primary values.
+    pub heading: Color,
+    /// Level 2: cast and genre values, important subtitles.
+    pub secondary: Color,
+    /// Level 3: overviews and long-form reading text.
+    pub body: Color,
+    /// Level 4: labels, years, timestamps, captions.
+    pub metadata: Color,
+    /// Level 5: auxiliary hints and placeholders only; exempt from the 4.5:1 floor.
+    pub muted: Color,
 }
 
 /// Canonical Panda font-family stacks.
@@ -277,12 +233,13 @@ pub struct Shadows {
     /// High lift for floating layers (popovers, toasts, raised cards).
     pub raised_high: ShadowToken,
 }
-/// Mode-variant tokens: the semantic colors and shadows for one theme mode.
-/// Everything structural (spacing, radii, fonts, …) is mode-independent and
-/// stays on [`TOKENS`].
+/// Mode-variant tokens: the semantic colors, text hierarchy, and shadows for
+/// one theme mode. Everything structural (spacing, radii, fonts, …) is
+/// mode-independent and stays on [`TOKENS`].
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct ThemePalette {
     pub colors: SemanticColors,
+    pub text: TextColors,
     pub shadows: Shadows,
 }
 
@@ -360,49 +317,6 @@ pub struct Breakpoints {
 
 /// Mode-independent JellyPilot tokens.
 pub const TOKENS: DesignTokens = DesignTokens {
-    raw_colors: RawColors {
-        neutral: Neutral {
-            n0: Color::from_rgb8(255, 255, 255),
-            n50: Color::from_rgb8(243, 246, 255),
-            n300: Color::from_rgb8(174, 184, 204),
-            n500: Color::from_rgb8(92, 108, 140),
-            n700: Color::from_rgb8(38, 46, 66),
-            n750: Color::from_rgb8(34, 41, 62),
-            n800: Color::from_rgb8(30, 37, 56),
-            n850: Color::from_rgb8(22, 27, 42),
-            n900: Color::from_rgb8(17, 20, 32),
-            n925: Color::from_rgb8(11, 13, 20),
-            n950: Color::from_rgb8(10, 12, 18),
-            n975: Color::from_rgb8(5, 6, 10),
-            n1000: Color::from_rgb8(4, 5, 8),
-        },
-        indigo: Indigo {
-            n50: Color::from_rgb8(224, 226, 255),
-            n300: Color::from_rgb8(129, 140, 248),
-            n600: Color::from_rgb8(79, 70, 229),
-            n900: Color::from_rgb8(31, 33, 82),
-            n950: Color::from_rgb8(27, 28, 59),
-            n1000: Color::from_rgb8(11, 10, 36),
-        },
-        teal: Teal {
-            n50: Color::from_rgb8(191, 255, 232),
-            n400: Color::from_rgb8(79, 227, 177),
-            n900: Color::from_rgb8(6, 56, 42),
-            n1000: Color::from_rgb8(0, 31, 22),
-        },
-        amber: Amber {
-            n50: Color::from_rgb8(255, 231, 168),
-            n400: Color::from_rgb8(246, 199, 104),
-            n900: Color::from_rgb8(63, 46, 8),
-            n1000: Color::from_rgb8(42, 26, 0),
-        },
-        red: Red {
-            n50: Color::from_rgb8(255, 217, 222),
-            n400: Color::from_rgb8(255, 107, 122),
-            n900: Color::from_rgb8(75, 17, 25),
-            n1000: Color::from_rgb8(51, 0, 6),
-        },
-    },
     fonts: Fonts {
         display: "'Space Grotesk Variable', 'Inter Variable', ui-sans-serif, system-ui, sans-serif",
         mono: "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace",
@@ -541,99 +455,115 @@ pub const TOKENS: DesignTokens = DesignTokens {
     },
 };
 
-/// Dark JellyPilot palette: the canonical Panda dark values.
+/// Dark JellyPilot palette: Charcoal. Near-zero-chroma deep-charcoal surfaces
+/// (4–7% lightness, never OLED pure black) under the Neon Indigo accent
+/// (`#6366f1`); the text hierarchy runs a cool-neutral ladder from white.
 pub const DARK_PALETTE: ThemePalette = ThemePalette {
     colors: SemanticColors {
-        background: Color::from_rgb8(5, 6, 10),
-        error: Color::from_rgb8(255, 107, 122),
-        errorContainer: Color::from_rgb8(75, 17, 25),
-        onBackground: Color::from_rgb8(243, 246, 255),
-        onError: Color::from_rgb8(51, 0, 6),
-        onErrorContainer: Color::from_rgb8(255, 217, 222),
-        onPrimary: Color::from_rgb8(255, 255, 255),
-        onPrimaryContainer: Color::from_rgb8(224, 226, 255),
-        onSecondary: Color::from_rgb8(11, 10, 36),
-        onSecondaryContainer: Color::from_rgb8(224, 226, 255),
-        onSurface: Color::from_rgb8(243, 246, 255),
-        onSurfaceVariant: Color::from_rgb8(174, 184, 204),
-        onTertiary: Color::from_rgb8(0, 31, 22),
-        onTertiaryContainer: Color::from_rgb8(191, 255, 232),
-        onWarning: Color::from_rgb8(42, 26, 0),
-        onWarningContainer: Color::from_rgb8(255, 231, 168),
-        outline: Color::from_rgb8(92, 108, 140),
-        outlineVariant: Color::from_rgb8(38, 46, 66),
-        primary: Color::from_rgb8(79, 70, 229),
-        primaryContainer: Color::from_rgb8(27, 28, 59),
-        secondary: Color::from_rgb8(129, 140, 248),
-        secondaryContainer: Color::from_rgb8(31, 33, 82),
-        surface: Color::from_rgb8(11, 13, 20),
-        surfaceContainer: Color::from_rgb8(17, 20, 32),
-        surfaceContainerHigh: Color::from_rgb8(22, 27, 42),
-        surfaceContainerHighest: Color::from_rgb8(34, 41, 62),
-        surfaceContainerLow: Color::from_rgb8(10, 12, 18),
-        surfaceContainerLowest: Color::from_rgb8(4, 5, 8),
-        surfaceTint: Color::from_rgb8(79, 70, 229),
-        surfaceVariant: Color::from_rgb8(30, 37, 56),
-        tertiary: Color::from_rgb8(79, 227, 177),
-        tertiaryContainer: Color::from_rgb8(6, 56, 42),
-        warning: Color::from_rgb8(246, 199, 104),
-        warningContainer: Color::from_rgb8(63, 46, 8),
+        background: Color::from_rgb8(0x0a, 0x0b, 0x0e),
+        error: Color::from_rgb8(0xff, 0x6b, 0x7a),
+        errorContainer: Color::from_rgb8(0x4b, 0x11, 0x19),
+        favorite: Color::from_rgb8(0xf8, 0x71, 0x71),
+        onBackground: Color::from_rgb8(0xff, 0xff, 0xff),
+        onError: Color::from_rgb8(0x33, 0x00, 0x06),
+        onErrorContainer: Color::from_rgb8(0xff, 0xd9, 0xde),
+        onPrimary: Color::from_rgb8(0xff, 0xff, 0xff),
+        onPrimaryContainer: Color::from_rgb8(0xe0, 0xe2, 0xff),
+        onSecondary: Color::from_rgb8(0x0b, 0x0a, 0x24),
+        onSecondaryContainer: Color::from_rgb8(0x81, 0x8c, 0xf8),
+        onSurface: Color::from_rgb8(0xff, 0xff, 0xff),
+        onSurfaceVariant: Color::from_rgb8(0xa1, 0xa1, 0xaa),
+        onTertiary: Color::from_rgb8(0x00, 0x1f, 0x16),
+        onTertiaryContainer: Color::from_rgb8(0xa7, 0xf3, 0xd0),
+        onWarning: Color::from_rgb8(0x2a, 0x1a, 0x00),
+        onWarningContainer: Color::from_rgb8(0xfd, 0xe6, 0x8a),
+        outline: Color::from_rgb8(0x52, 0x52, 0x5b),
+        outlineVariant: Color::from_rgb8(0x2a, 0x2a, 0x30),
+        primary: Color::from_rgb8(0x63, 0x66, 0xf1),
+        primaryContainer: Color::from_rgb8(0x1a, 0x1b, 0x37),
+        secondary: Color::from_rgb8(0x81, 0x8c, 0xf8),
+        secondaryContainer: Color::from_rgb8(0x18, 0x19, 0x2f),
+        surface: Color::from_rgb8(0x15, 0x16, 0x1c),
+        surfaceContainer: Color::from_rgb8(0x19, 0x1a, 0x21),
+        surfaceContainerHigh: Color::from_rgb8(0x20, 0x22, 0x2b),
+        surfaceContainerHighest: Color::from_rgb8(0x2a, 0x2d, 0x38),
+        surfaceContainerLow: Color::from_rgb8(0x12, 0x13, 0x18),
+        surfaceContainerLowest: Color::from_rgb8(0x0e, 0x0f, 0x14),
+        surfaceTint: Color::from_rgb8(0x63, 0x66, 0xf1),
+        surfaceVariant: Color::from_rgb8(0x1b, 0x1d, 0x26),
+        tertiary: Color::from_rgb8(0x34, 0xd3, 0x99),
+        tertiaryContainer: Color::from_rgb8(0x06, 0x38, 0x2a),
+        warning: Color::from_rgb8(0xfb, 0xbf, 0x24),
+        warningContainer: Color::from_rgb8(0x3f, 0x2e, 0x08),
+    },
+    text: TextColors {
+        heading: Color::from_rgb8(0xff, 0xff, 0xff),
+        secondary: Color::from_rgb8(0xf4, 0xf4, 0xf5),
+        body: Color::from_rgb8(0xd4, 0xd4, 0xd8),
+        metadata: Color::from_rgb8(0xa1, 0xa1, 0xaa),
+        muted: Color::from_rgb8(0x71, 0x71, 0x7a),
     },
     shadows: Shadows {
         none: shadow(0.0, 0.0, 0.0, 0.0, 0.0, false),
-        raised: shadow(0.0, 2.0, 8.0, 0.0, 0.4, false),
-        raised_high: shadow(0.0, 8.0, 24.0, 0.0, 0.55, false),
+        raised: shadow(0.0, 2.0, 8.0, 0.0, 0.45, false),
+        raised_high: shadow(0.0, 8.0, 24.0, 0.0, 0.65, false),
     },
 };
 
-/// Light JellyPilot palette: the neutral ladder inverted (light surfaces from
-/// the light end of the ramp, `onSurface` from the dark end), brand primary
-/// kept at indigo n600 with white `onPrimary`, and status roles as n900
-/// text/icons on n50 containers. The mid container steps (Low/surface/
-/// Container/High/Variant/Highest) are derived tones: the raw neutral ramp
-/// has no steps between n50 and n300 to invert into. Shadows are lowered
-/// because light surfaces need less lift to read as floating.
+/// Light JellyPilot palette: Light Clean. Cold-white canvas with pure-white
+/// surfaces and a Slate text ladder. The Neon Indigo accent stays `#6366f1`;
+/// accent text drops to the deeper `#4f46e5`, and status roles drop to their
+/// 700-series steps so text and icons hold the 4.5:1 floor on the light
+/// canvas.
 pub const LIGHT_PALETTE: ThemePalette = ThemePalette {
     colors: SemanticColors {
-        background: Color::from_rgb8(243, 246, 255),
-        error: Color::from_rgb8(75, 17, 25),
-        errorContainer: Color::from_rgb8(255, 217, 222),
-        onBackground: Color::from_rgb8(5, 6, 10),
-        onError: Color::from_rgb8(255, 217, 222),
-        onErrorContainer: Color::from_rgb8(75, 17, 25),
-        onPrimary: Color::from_rgb8(255, 255, 255),
-        onPrimaryContainer: Color::from_rgb8(31, 33, 82),
-        onSecondary: Color::from_rgb8(255, 255, 255),
-        onSecondaryContainer: Color::from_rgb8(31, 33, 82),
-        onSurface: Color::from_rgb8(5, 6, 10),
-        onSurfaceVariant: Color::from_rgb8(92, 108, 140),
-        onTertiary: Color::from_rgb8(191, 255, 232),
-        onTertiaryContainer: Color::from_rgb8(6, 56, 42),
-        onWarning: Color::from_rgb8(255, 231, 168),
-        onWarningContainer: Color::from_rgb8(63, 46, 8),
-        outline: Color::from_rgb8(92, 108, 140),
-        outlineVariant: Color::from_rgb8(174, 184, 204),
-        primary: Color::from_rgb8(79, 70, 229),
-        primaryContainer: Color::from_rgb8(224, 226, 255),
-        secondary: Color::from_rgb8(79, 70, 229),
-        secondaryContainer: Color::from_rgb8(224, 226, 255),
-        surface: Color::from_rgb8(232, 236, 246),
-        surfaceContainer: Color::from_rgb8(226, 231, 242),
-        surfaceContainerHigh: Color::from_rgb8(219, 225, 238),
-        surfaceContainerHighest: Color::from_rgb8(205, 212, 229),
-        surfaceContainerLow: Color::from_rgb8(236, 240, 248),
-        surfaceContainerLowest: Color::from_rgb8(255, 255, 255),
-        surfaceTint: Color::from_rgb8(79, 70, 229),
-        surfaceVariant: Color::from_rgb8(212, 218, 233),
-        tertiary: Color::from_rgb8(6, 56, 42),
-        tertiaryContainer: Color::from_rgb8(191, 255, 232),
-        warning: Color::from_rgb8(63, 46, 8),
-        warningContainer: Color::from_rgb8(255, 231, 168),
+        background: Color::from_rgb8(0xfb, 0xfc, 0xfd),
+        error: Color::from_rgb8(0x4b, 0x11, 0x19),
+        errorContainer: Color::from_rgb8(0xff, 0xd9, 0xde),
+        favorite: Color::from_rgb8(0xe1, 0x1d, 0x48),
+        onBackground: Color::from_rgb8(0x0f, 0x17, 0x2a),
+        onError: Color::from_rgb8(0xff, 0xd9, 0xde),
+        onErrorContainer: Color::from_rgb8(0x4b, 0x11, 0x19),
+        onPrimary: Color::from_rgb8(0xff, 0xff, 0xff),
+        onPrimaryContainer: Color::from_rgb8(0x1f, 0x21, 0x52),
+        onSecondary: Color::from_rgb8(0xff, 0xff, 0xff),
+        onSecondaryContainer: Color::from_rgb8(0x4f, 0x46, 0xe5),
+        onSurface: Color::from_rgb8(0x0f, 0x17, 0x2a),
+        onSurfaceVariant: Color::from_rgb8(0x64, 0x74, 0x8b),
+        onTertiary: Color::from_rgb8(0xff, 0xff, 0xff),
+        onTertiaryContainer: Color::from_rgb8(0x06, 0x5f, 0x46),
+        onWarning: Color::from_rgb8(0xff, 0xff, 0xff),
+        onWarningContainer: Color::from_rgb8(0x92, 0x40, 0x0e),
+        outline: Color::from_rgb8(0x94, 0xa3, 0xb8),
+        outlineVariant: Color::from_rgb8(0xcb, 0xd5, 0xe1),
+        primary: Color::from_rgb8(0x63, 0x66, 0xf1),
+        primaryContainer: Color::from_rgb8(0xe0, 0xe2, 0xff),
+        secondary: Color::from_rgb8(0x4f, 0x46, 0xe5),
+        secondaryContainer: Color::from_rgb8(0xe8, 0xe8, 0xf9),
+        surface: Color::from_rgb8(0xff, 0xff, 0xff),
+        surfaceContainer: Color::from_rgb8(0xe9, 0xed, 0xf2),
+        surfaceContainerHigh: Color::from_rgb8(0xe2, 0xe8, 0xf0),
+        surfaceContainerHighest: Color::from_rgb8(0xd3, 0xda, 0xe4),
+        surfaceContainerLow: Color::from_rgb8(0xf1, 0xf5, 0xf9),
+        surfaceContainerLowest: Color::from_rgb8(0xfa, 0xfa, 0xfa),
+        surfaceTint: Color::from_rgb8(0x63, 0x66, 0xf1),
+        surfaceVariant: Color::from_rgb8(0xe5, 0xea, 0xf1),
+        tertiary: Color::from_rgb8(0x04, 0x78, 0x57),
+        tertiaryContainer: Color::from_rgb8(0xd1, 0xfa, 0xe5),
+        warning: Color::from_rgb8(0xb4, 0x53, 0x09),
+        warningContainer: Color::from_rgb8(0xfe, 0xf3, 0xc7),
+    },
+    text: TextColors {
+        heading: Color::from_rgb8(0x0f, 0x17, 0x2a),
+        secondary: Color::from_rgb8(0x1e, 0x29, 0x3b),
+        body: Color::from_rgb8(0x47, 0x55, 0x69),
+        metadata: Color::from_rgb8(0x64, 0x74, 0x8b),
+        muted: Color::from_rgb8(0x94, 0xa3, 0xb8),
     },
     shadows: Shadows {
         none: shadow(0.0, 0.0, 0.0, 0.0, 0.0, false),
-        raised: shadow(0.0, 2.0, 8.0, 0.0, 0.25, false),
-        raised_high: shadow(0.0, 8.0, 24.0, 0.0, 0.35, false),
+        raised: shadow(0.0, 2.0, 8.0, 0.0, 0.06, false),
+        raised_high: shadow(0.0, 8.0, 24.0, 0.0, 0.10, false),
     },
 };
 
@@ -670,19 +600,37 @@ mod tests {
     use iced::{Color, Theme};
 
     use super::{
-        palette, Breakpoints, Fonts, SemanticColors, ThemePalette, DARK_PALETTE, LIGHT_PALETTE,
-        TOKENS,
+        palette, Breakpoints, Fonts, SemanticColors, TextColors, ThemePalette, DARK_PALETTE,
+        LIGHT_PALETTE, TOKENS,
     };
 
     fn luminance(color: Color) -> f32 {
         0.2126 * color.r + 0.7152 * color.g + 0.0722 * color.b
     }
 
-    fn semantic_color_fields(colors: &SemanticColors) -> [(&'static str, Color); 34] {
+    fn linearized(channel: f32) -> f32 {
+        if channel <= 0.04045 {
+            channel / 12.92
+        } else {
+            ((channel + 0.055) / 1.055).powf(2.4)
+        }
+    }
+
+    /// WCAG contrast ratio between two opaque colors.
+    fn contrast(a: Color, b: Color) -> f32 {
+        let lum = |c: Color| {
+            0.2126 * linearized(c.r) + 0.7152 * linearized(c.g) + 0.0722 * linearized(c.b)
+        };
+        let (hi, lo) = (lum(a).max(lum(b)), lum(a).min(lum(b)));
+        (hi + 0.05) / (lo + 0.05)
+    }
+
+    fn semantic_color_fields(colors: &SemanticColors) -> [(&'static str, Color); 35] {
         [
             ("background", colors.background),
             ("error", colors.error),
             ("errorContainer", colors.errorContainer),
+            ("favorite", colors.favorite),
             ("onBackground", colors.onBackground),
             ("onError", colors.onError),
             ("onErrorContainer", colors.onErrorContainer),
@@ -718,46 +666,168 @@ mod tests {
     }
 
     #[test]
-    fn semantic_colors_match_canonical_panda_hex_literals() {
+    fn dark_semantic_colors_match_the_locked_charcoal_spec() {
         assert_eq!(
             DARK_PALETTE.colors,
             SemanticColors {
-                background: Color::from_rgb8(0x05, 0x06, 0x0a),
+                background: Color::from_rgb8(0x0a, 0x0b, 0x0e),
                 error: Color::from_rgb8(0xff, 0x6b, 0x7a),
                 errorContainer: Color::from_rgb8(0x4b, 0x11, 0x19),
-                onBackground: Color::from_rgb8(0xf3, 0xf6, 0xff),
+                favorite: Color::from_rgb8(0xf8, 0x71, 0x71),
+                onBackground: Color::from_rgb8(0xff, 0xff, 0xff),
                 onError: Color::from_rgb8(0x33, 0x00, 0x06),
                 onErrorContainer: Color::from_rgb8(0xff, 0xd9, 0xde),
                 onPrimary: Color::from_rgb8(0xff, 0xff, 0xff),
                 onPrimaryContainer: Color::from_rgb8(0xe0, 0xe2, 0xff),
                 onSecondary: Color::from_rgb8(0x0b, 0x0a, 0x24),
-                onSecondaryContainer: Color::from_rgb8(0xe0, 0xe2, 0xff),
-                onSurface: Color::from_rgb8(0xf3, 0xf6, 0xff),
-                onSurfaceVariant: Color::from_rgb8(0xae, 0xb8, 0xcc),
+                onSecondaryContainer: Color::from_rgb8(0x81, 0x8c, 0xf8),
+                onSurface: Color::from_rgb8(0xff, 0xff, 0xff),
+                onSurfaceVariant: Color::from_rgb8(0xa1, 0xa1, 0xaa),
                 onTertiary: Color::from_rgb8(0x00, 0x1f, 0x16),
-                onTertiaryContainer: Color::from_rgb8(0xbf, 0xff, 0xe8),
+                onTertiaryContainer: Color::from_rgb8(0xa7, 0xf3, 0xd0),
                 onWarning: Color::from_rgb8(0x2a, 0x1a, 0x00),
-                onWarningContainer: Color::from_rgb8(0xff, 0xe7, 0xa8),
-                outline: Color::from_rgb8(0x5c, 0x6c, 0x8c),
-                outlineVariant: Color::from_rgb8(0x26, 0x2e, 0x42),
-                primary: Color::from_rgb8(0x4f, 0x46, 0xe5),
-                primaryContainer: Color::from_rgb8(0x1b, 0x1c, 0x3b),
+                onWarningContainer: Color::from_rgb8(0xfd, 0xe6, 0x8a),
+                outline: Color::from_rgb8(0x52, 0x52, 0x5b),
+                outlineVariant: Color::from_rgb8(0x2a, 0x2a, 0x30),
+                primary: Color::from_rgb8(0x63, 0x66, 0xf1),
+                primaryContainer: Color::from_rgb8(0x1a, 0x1b, 0x37),
                 secondary: Color::from_rgb8(0x81, 0x8c, 0xf8),
-                secondaryContainer: Color::from_rgb8(0x1f, 0x21, 0x52),
-                surface: Color::from_rgb8(0x0b, 0x0d, 0x14),
-                surfaceContainer: Color::from_rgb8(0x11, 0x14, 0x20),
-                surfaceContainerHigh: Color::from_rgb8(0x16, 0x1b, 0x2a),
-                surfaceContainerHighest: Color::from_rgb8(0x22, 0x29, 0x3e),
-                surfaceContainerLow: Color::from_rgb8(0x0a, 0x0c, 0x12),
-                surfaceContainerLowest: Color::from_rgb8(0x04, 0x05, 0x08),
-                surfaceTint: Color::from_rgb8(0x4f, 0x46, 0xe5),
-                surfaceVariant: Color::from_rgb8(0x1e, 0x25, 0x38),
-                tertiary: Color::from_rgb8(0x4f, 0xe3, 0xb1),
+                secondaryContainer: Color::from_rgb8(0x18, 0x19, 0x2f),
+                surface: Color::from_rgb8(0x15, 0x16, 0x1c),
+                surfaceContainer: Color::from_rgb8(0x19, 0x1a, 0x21),
+                surfaceContainerHigh: Color::from_rgb8(0x20, 0x22, 0x2b),
+                surfaceContainerHighest: Color::from_rgb8(0x2a, 0x2d, 0x38),
+                surfaceContainerLow: Color::from_rgb8(0x12, 0x13, 0x18),
+                surfaceContainerLowest: Color::from_rgb8(0x0e, 0x0f, 0x14),
+                surfaceTint: Color::from_rgb8(0x63, 0x66, 0xf1),
+                surfaceVariant: Color::from_rgb8(0x1b, 0x1d, 0x26),
+                tertiary: Color::from_rgb8(0x34, 0xd3, 0x99),
                 tertiaryContainer: Color::from_rgb8(0x06, 0x38, 0x2a),
-                warning: Color::from_rgb8(0xf6, 0xc7, 0x68),
+                warning: Color::from_rgb8(0xfb, 0xbf, 0x24),
                 warningContainer: Color::from_rgb8(0x3f, 0x2e, 0x08),
             }
         );
+    }
+
+    #[test]
+    fn light_semantic_colors_match_the_locked_light_clean_spec() {
+        assert_eq!(
+            LIGHT_PALETTE.colors,
+            SemanticColors {
+                background: Color::from_rgb8(0xfb, 0xfc, 0xfd),
+                error: Color::from_rgb8(0x4b, 0x11, 0x19),
+                errorContainer: Color::from_rgb8(0xff, 0xd9, 0xde),
+                favorite: Color::from_rgb8(0xe1, 0x1d, 0x48),
+                onBackground: Color::from_rgb8(0x0f, 0x17, 0x2a),
+                onError: Color::from_rgb8(0xff, 0xd9, 0xde),
+                onErrorContainer: Color::from_rgb8(0x4b, 0x11, 0x19),
+                onPrimary: Color::from_rgb8(0xff, 0xff, 0xff),
+                onPrimaryContainer: Color::from_rgb8(0x1f, 0x21, 0x52),
+                onSecondary: Color::from_rgb8(0xff, 0xff, 0xff),
+                onSecondaryContainer: Color::from_rgb8(0x4f, 0x46, 0xe5),
+                onSurface: Color::from_rgb8(0x0f, 0x17, 0x2a),
+                onSurfaceVariant: Color::from_rgb8(0x64, 0x74, 0x8b),
+                onTertiary: Color::from_rgb8(0xff, 0xff, 0xff),
+                onTertiaryContainer: Color::from_rgb8(0x06, 0x5f, 0x46),
+                onWarning: Color::from_rgb8(0xff, 0xff, 0xff),
+                onWarningContainer: Color::from_rgb8(0x92, 0x40, 0x0e),
+                outline: Color::from_rgb8(0x94, 0xa3, 0xb8),
+                outlineVariant: Color::from_rgb8(0xcb, 0xd5, 0xe1),
+                primary: Color::from_rgb8(0x63, 0x66, 0xf1),
+                primaryContainer: Color::from_rgb8(0xe0, 0xe2, 0xff),
+                secondary: Color::from_rgb8(0x4f, 0x46, 0xe5),
+                secondaryContainer: Color::from_rgb8(0xe8, 0xe8, 0xf9),
+                surface: Color::from_rgb8(0xff, 0xff, 0xff),
+                surfaceContainer: Color::from_rgb8(0xe9, 0xed, 0xf2),
+                surfaceContainerHigh: Color::from_rgb8(0xe2, 0xe8, 0xf0),
+                surfaceContainerHighest: Color::from_rgb8(0xd3, 0xda, 0xe4),
+                surfaceContainerLow: Color::from_rgb8(0xf1, 0xf5, 0xf9),
+                surfaceContainerLowest: Color::from_rgb8(0xfa, 0xfa, 0xfa),
+                surfaceTint: Color::from_rgb8(0x63, 0x66, 0xf1),
+                surfaceVariant: Color::from_rgb8(0xe5, 0xea, 0xf1),
+                tertiary: Color::from_rgb8(0x04, 0x78, 0x57),
+                tertiaryContainer: Color::from_rgb8(0xd1, 0xfa, 0xe5),
+                warning: Color::from_rgb8(0xb4, 0x53, 0x09),
+                warningContainer: Color::from_rgb8(0xfe, 0xf3, 0xc7),
+            }
+        );
+    }
+
+    #[test]
+    fn text_ladders_match_the_locked_spec() {
+        assert_eq!(
+            DARK_PALETTE.text,
+            TextColors {
+                heading: Color::from_rgb8(0xff, 0xff, 0xff),
+                secondary: Color::from_rgb8(0xf4, 0xf4, 0xf5),
+                body: Color::from_rgb8(0xd4, 0xd4, 0xd8),
+                metadata: Color::from_rgb8(0xa1, 0xa1, 0xaa),
+                muted: Color::from_rgb8(0x71, 0x71, 0x7a),
+            }
+        );
+        assert_eq!(
+            LIGHT_PALETTE.text,
+            TextColors {
+                heading: Color::from_rgb8(0x0f, 0x17, 0x2a),
+                secondary: Color::from_rgb8(0x1e, 0x29, 0x3b),
+                body: Color::from_rgb8(0x47, 0x55, 0x69),
+                metadata: Color::from_rgb8(0x64, 0x74, 0x8b),
+                muted: Color::from_rgb8(0x94, 0xa3, 0xb8),
+            }
+        );
+    }
+
+    #[test]
+    fn text_ladder_descends_and_holds_the_contrast_floor() {
+        for (name, palette) in [("dark", &DARK_PALETTE), ("light", &LIGHT_PALETTE)] {
+            let text = palette.text;
+            let canvas = palette.colors.background;
+            let rungs = [text.heading, text.secondary, text.body, text.metadata];
+            // Each step down the hierarchy reads quieter than the one above.
+            for pair in rungs.windows(2) {
+                assert!(
+                    contrast(pair[0], canvas) > contrast(pair[1], canvas),
+                    "{name} text ladder must descend: {:?} vs {:?}",
+                    pair[0],
+                    pair[1]
+                );
+            }
+            // Heading through metadata are normal text and hold the 4.5:1 floor.
+            for rung in rungs {
+                assert!(
+                    contrast(rung, canvas) >= 4.5,
+                    "{name} text rung {rung:?} must reach 4.5:1 on the canvas"
+                );
+            }
+            // `muted` is exempt from the floor: auxiliary hints and placeholders only.
+        }
+    }
+
+    #[test]
+    fn badge_and_chip_text_holds_the_contrast_floor() {
+        for (name, palette) in [("dark", &DARK_PALETTE), ("light", &LIGHT_PALETTE)] {
+            let colors = &palette.colors;
+            let pairs = [
+                ("warning badge", colors.warning, colors.warningContainer),
+                ("success badge", colors.tertiary, colors.tertiaryContainer),
+                (
+                    "neutral badge",
+                    palette.text.secondary,
+                    colors.surfaceContainerHigh,
+                ),
+                (
+                    "active switch chip",
+                    colors.onSecondaryContainer,
+                    colors.secondaryContainer,
+                ),
+            ];
+            for (label, fg, bg) in pairs {
+                assert!(
+                    contrast(fg, bg) >= 4.5,
+                    "{name} {label} text must reach 4.5:1 ({fg:?} on {bg:?})"
+                );
+            }
+        }
     }
 
     #[test]
@@ -814,7 +884,7 @@ mod tests {
         assert_eq!(
             DARK_PALETTE.shadows.raised,
             ShadowToken {
-                color: Color::from_rgba8(0, 0, 0, 0.4),
+                color: Color::from_rgba8(0, 0, 0, 0.45),
                 offset: Vector { x: 0.0, y: 2.0 },
                 blur_radius: 8.0,
                 spread_radius: 0.0,
@@ -824,7 +894,7 @@ mod tests {
         assert_eq!(
             DARK_PALETTE.shadows.raised_high,
             ShadowToken {
-                color: Color::from_rgba8(0, 0, 0, 0.55),
+                color: Color::from_rgba8(0, 0, 0, 0.65),
                 offset: Vector { x: 0.0, y: 8.0 },
                 blur_radius: 24.0,
                 spread_radius: 0.0,
@@ -836,7 +906,17 @@ mod tests {
     #[test]
     fn palettes_have_fully_opaque_colors() {
         for (name, palette) in [("dark", &DARK_PALETTE), ("light", &LIGHT_PALETTE)] {
-            for (field, color) in semantic_color_fields(&palette.colors) {
+            let text_fields = [
+                ("text.heading", palette.text.heading),
+                ("text.secondary", palette.text.secondary),
+                ("text.body", palette.text.body),
+                ("text.metadata", palette.text.metadata),
+                ("text.muted", palette.text.muted),
+            ];
+            for (field, color) in semantic_color_fields(&palette.colors)
+                .into_iter()
+                .chain(text_fields)
+            {
                 assert_eq!(
                     color.a, 1.0,
                     "{name} palette color {field} must be fully opaque"
@@ -849,13 +929,13 @@ mod tests {
     fn light_container_ladder_is_a_distinct_darkening_step_series() {
         let colors = LIGHT_PALETTE.colors;
         let ladder = [
-            ("surfaceContainerLowest", colors.surfaceContainerLowest),
-            ("background", colors.background),
-            ("surfaceContainerLow", colors.surfaceContainerLow),
             ("surface", colors.surface),
+            ("background", colors.background),
+            ("surfaceContainerLowest", colors.surfaceContainerLowest),
+            ("surfaceContainerLow", colors.surfaceContainerLow),
             ("surfaceContainer", colors.surfaceContainer),
-            ("surfaceContainerHigh", colors.surfaceContainerHigh),
             ("surfaceVariant", colors.surfaceVariant),
+            ("surfaceContainerHigh", colors.surfaceContainerHigh),
             ("surfaceContainerHighest", colors.surfaceContainerHighest),
         ];
 
@@ -895,8 +975,8 @@ mod tests {
     #[test]
     fn light_shadows_keep_the_two_tier_scale_with_lower_alphas() {
         assert_eq!(LIGHT_PALETTE.shadows.none.color.a, 0.0);
-        assert_eq!(LIGHT_PALETTE.shadows.raised.color.a, 0.25);
-        assert_eq!(LIGHT_PALETTE.shadows.raised_high.color.a, 0.35);
+        assert_eq!(LIGHT_PALETTE.shadows.raised.color.a, 0.06);
+        assert_eq!(LIGHT_PALETTE.shadows.raised_high.color.a, 0.10);
         assert_eq!(
             LIGHT_PALETTE.shadows.raised.offset,
             DARK_PALETTE.shadows.raised.offset

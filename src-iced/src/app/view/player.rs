@@ -87,10 +87,10 @@ fn now_playing_metadata<'a>(
     text(&now_playing.item.title)
       .font(SPACE_GROTESK_FONT)
       .size(title_size)
-      .color(state.palette().colors.onSurface),
+      .color(state.palette().text.heading),
     text(playback_caption(state))
       .size(caption_size)
-      .color(state.palette().colors.onSurfaceVariant),
+      .color(state.palette().text.metadata),
   ]
   .spacing(TOKENS.spacing.s0_5)
 }
@@ -291,10 +291,10 @@ pub fn full(state: &State) -> Element<'_, Message> {
       text("JellyPilot")
         .font(SPACE_GROTESK_FONT)
         .size(26)
-        .color(palette.colors.onSurface),
+        .color(palette.text.heading),
       text("Waiting for playback")
         .size(13)
-        .color(palette.colors.onSurfaceVariant),
+        .color(palette.text.metadata),
     ]
     .spacing(TOKENS.spacing.s2)
     .align_x(Alignment::Center)
@@ -365,7 +365,7 @@ fn intro_prompt(state: &State) -> Option<Element<'_, Message>> {
         text(label)
           .font(SPACE_GROTESK_FONT)
           .size(16)
-          .color(palette.colors.onSurface),
+          .color(palette.text.secondary),
       ]
       .spacing(TOKENS.spacing.s2)
       .align_y(Alignment::Center),
@@ -444,7 +444,7 @@ fn audio_popover(state: &State) -> Element<'_, Message> {
       if choices.is_empty() {
         column![text("No audio tracks")
           .size(12)
-          .color(palette.colors.onSurfaceVariant)]
+          .color(palette.text.metadata)]
         .spacing(TOKENS.spacing.s1)
         .width(Fill)
       } else {
@@ -475,12 +475,12 @@ fn audio_popover(state: &State) -> Element<'_, Message> {
     }
     TracksView::Loading => column![text("Loading audio tracks…")
       .size(12)
-      .color(palette.colors.onSurfaceVariant)]
+      .color(palette.text.metadata)]
     .spacing(TOKENS.spacing.s1)
     .width(Fill),
     TracksView::Unavailable => column![text("Audio tracks unavailable")
       .size(12)
-      .color(palette.colors.onSurfaceVariant)]
+      .color(palette.text.metadata)]
     .spacing(TOKENS.spacing.s1)
     .width(Fill),
   };
@@ -559,12 +559,12 @@ fn subtitle_popover(state: &State) -> Element<'_, Message> {
     }
     TracksView::Loading => column![text("Loading subtitle tracks…")
       .size(12)
-      .color(palette.colors.onSurfaceVariant)]
+      .color(palette.text.metadata)]
     .spacing(TOKENS.spacing.s1)
     .width(Fill),
     TracksView::Unavailable => column![text("Subtitle tracks unavailable")
       .size(12)
-      .color(palette.colors.onSurfaceVariant)]
+      .color(palette.text.metadata)]
     .spacing(TOKENS.spacing.s1)
     .width(Fill),
   };
@@ -615,7 +615,7 @@ fn queue_popover(state: &State) -> Element<'_, Message> {
       if items.is_empty() {
         column![text("No episodes in this season")
           .size(12)
-          .color(palette.colors.onSurfaceVariant)]
+          .color(palette.text.metadata)]
         .spacing(TOKENS.spacing.s1)
         .width(Fill)
         .into()
@@ -642,7 +642,7 @@ fn queue_popover(state: &State) -> Element<'_, Message> {
             label = label.push(
               text(format!("S{season:02}E{episode:02}"))
                 .size(11)
-                .color(palette.colors.onSurfaceVariant),
+                .color(palette.text.metadata),
             );
           }
           label = label.push(text(&item.name).width(Fill).size(13));
@@ -674,13 +674,13 @@ fn queue_popover(state: &State) -> Element<'_, Message> {
     }
     QueueState::Loading => column![text("Loading episodes…")
       .size(12)
-      .color(palette.colors.onSurfaceVariant)]
+      .color(palette.text.metadata)]
     .spacing(TOKENS.spacing.s1)
     .width(Fill)
     .into(),
     QueueState::Unavailable | QueueState::Failed => column![text("Episode queue unavailable")
       .size(12)
-      .color(palette.colors.onSurfaceVariant)]
+      .color(palette.text.metadata)]
     .spacing(TOKENS.spacing.s1)
     .width(Fill)
     .into(),

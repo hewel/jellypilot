@@ -1,12 +1,12 @@
 # JellyPilot Design System (iced)
 
-JellyPilot uses a desktop-first Control Room design system: dark-only, clean OLED surfaces, and clear operational state. The interface should feel like a reliable media companion for a Jellyfin Playback Target, not a generic mobile settings app.
+JellyPilot uses a desktop-first design system: a Neon Indigo accent over Charcoal (dark) and Light Clean (light) surface systems — flat, clean surfaces and clear operational state in both modes. The interface should feel like a reliable media companion for a Jellyfin Playback Target, not a generic mobile settings app.
 
 The design system lives in `crates/jellypilot-ui`: tokens in `tokens.rs` (`TOKENS`), variant enums in `variants.rs`, and the widget catalog in `widgets/`. Views under `src-iced/src/app/view/` compose those pieces; they never invent new token values.
 
 ## Principles
 
-- **Clean OLED first**: surfaces are flat, solid, and opaque. Depth comes from exactly two shadow tiers on floating layers, never from translucency or outlines.
+- **Clean and flat first**: surfaces are flat, solid, and opaque — Charcoal keeps 4–7% lightness instead of OLED pure black. Depth comes from exactly two shadow tiers on floating layers, never from translucency or outlines.
 - **Visual restraint**: separation is whitespace first, the two shell hairlines second. Nothing else draws a line.
 - **Operational clarity**: every status uses text and icon, not color alone.
 - **No fake state**: never show fake media artwork, fake playback progress, or pretend controls.
@@ -40,8 +40,8 @@ Two semantic tiers (`Shadows` in `tokens.rs`); everything else was deleted.
 | Token | Offset / Blur | Alpha | Use |
 |---|---|---:|---|
 | `none` | — | — | Flush surfaces, controls |
-| `raised` | y 2, blur 8 | 0.40 | Small floating chrome: tooltips, scroll-to-bottom indicator |
-| `raised_high` | y 8, blur 24 | 0.55 | Floating layers: popovers, toasts, `Raised` surfaces |
+| `raised` | y 2, blur 8 | 0.45 dark / 0.06 light | Small floating chrome: tooltips, scroll-to-bottom indicator |
+| `raised_high` | y 8, blur 24 | 0.65 dark / 0.10 light | Floating layers: popovers, toasts, `Raised` surfaces |
 
 Buttons never cast a shadow. `ShadowToken` keeps the CSS spread/inset fields; the `iced()` conversion maps offset, blur, and color.
 
@@ -92,7 +92,25 @@ The detail hero keeps its backdrop scrim, simplified to two stops: transparent a
 
 ## Color Semantics
 
-Semantic color roles (`SemanticColors` in `tokens.rs`) match the canonical Panda hex literals. Indigo (`primary` `#4f46e5`) means JellyPilot identity and primary app action; teal means healthy/ready; amber means degraded or retryable; red means failure or destructive. `#4f46e5` is not used as small text on near-black surfaces because contrast is insufficient.
+The locked palette is a **Neon Indigo** accent over two surface systems: **Charcoal** (dark: near-zero-chroma deep charcoal, 4–7% lightness, never OLED pure black) and **Light Clean** (light: cold-white canvas, pure-white surfaces). Concrete values live in `tokens.rs` (`DARK_PALETTE` / `LIGHT_PALETTE`) and are pinned by contract tests.
+
+- Indigo `#6366f1` (`primary`) means JellyPilot identity and primary app action in both modes. It is a fill and focus color, not small text: accent text uses `secondary` — `#818cf8` on dark, the deeper `#4f46e5` on light.
+- Emerald means healthy/ready (`tertiary`: `#34d399` dark / `#047857` light); amber means ratings and degraded or retryable states (`warning`: `#fbbf24` / `#b45309`); red means failure or destructive (`error`: `#ff6b7a` dark, dark red on light). The favorited heart uses the rose `favorite` accent (`#f87171` / `#e11d48`).
+- Dark mode uses the bright 400-series status steps; light mode drops to 700-series steps so text and icons hold the 4.5:1 floor on the light canvas.
+
+## Text Hierarchy
+
+Five semantic rungs (`ThemePalette.text`), resolved per mode:
+
+| Rung | Dark | Light | Use |
+|---|---|---|---|
+| `heading` | `#ffffff` | `#0f172a` | Page titles, item names, primary values |
+| `secondary` | `#f4f4f5` | `#1e293b` | Cast and genre values, important subtitles, setting names |
+| `body` | `#d4d4d8` | `#475569` | Overviews, descriptions, long-form reading text |
+| `metadata` | `#a1a1aa` | `#64748b` | Labels, years, timestamps, captions, empty-state messages |
+| `muted` | `#71717a` | `#94a3b8` | Auxiliary hints and placeholders only |
+
+`heading` through `metadata` hold at least 4.5:1 contrast on their mode's canvas. `muted` is exempt from the floor: it marks non-essential text (device IDs, version strings, placeholders, loading hints) and must never carry information the user has to read.
 
 ## Typography
 
@@ -106,7 +124,6 @@ Bundled local fonts only; no network font imports. Body text uses Inter (`sans`)
 
 ## Out of Scope
 
-- Light mode.
 - UI sounds or haptics.
 - Raw URL playback controls.
 - Fake artwork or fake playback state.

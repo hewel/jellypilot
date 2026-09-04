@@ -17,10 +17,10 @@ pub fn view(state: &State) -> Element<'_, Message> {
   let title = text("Sign in to JellyPilot")
     .font(SPACE_GROTESK_FONT)
     .size(32)
-    .color(palette.colors.onSurface);
+    .color(palette.text.heading);
   let subtitle = text("Connect directly to your own media server.")
     .size(14)
-    .color(palette.colors.onSurfaceVariant);
+    .color(palette.text.secondary);
 
   let provider_row = row![
     provider_button("Jellyfin", MediaServerProvider::Jellyfin, state),
@@ -40,7 +40,7 @@ pub fn view(state: &State) -> Element<'_, Message> {
       }
     });
   let fields = column![
-    text("Server URL").color(palette.colors.onSurfaceVariant),
+    text("Server URL").color(palette.text.metadata),
     server_field,
   ]
   .spacing(8);
@@ -54,7 +54,7 @@ pub fn view(state: &State) -> Element<'_, Message> {
     .into()
   } else {
     text("Emby uses password sign-in.")
-      .color(palette.colors.onSurfaceVariant)
+      .color(palette.text.body)
       .into()
   };
 
@@ -70,7 +70,7 @@ pub fn view(state: &State) -> Element<'_, Message> {
     form = form.push(text(error).size(15).color(palette.colors.error));
   }
   if login.profiles_loading {
-    form = form.push(text("Loading saved sign-ins…").color(palette.colors.onSurfaceVariant));
+    form = form.push(text("Loading saved sign-ins…").color(palette.text.muted));
   } else if !login.profiles.is_empty() {
     form = form.push(saved_profiles(state));
   }
@@ -183,7 +183,7 @@ fn quick_connect(state: &State) -> Element<'_, Message> {
           text(code)
             .font(SPACE_GROTESK_FONT)
             .size(32)
-            .color(palette.colors.onSurface),
+            .color(palette.text.heading),
         ]
         .spacing(TOKENS.spacing.s3)
         .align_y(Alignment::Center),
@@ -192,7 +192,7 @@ fn quick_connect(state: &State) -> Element<'_, Message> {
       .style(|theme| jellypilot_ui::theme::badge_variant(theme, BadgeVariant::Neutral));
       column![
         text("Enter this code in your Jellyfin dashboard, then approve JellyPilot.")
-          .color(palette.colors.onSurfaceVariant),
+          .color(palette.text.body),
         code_badge,
         cancel_button(),
       ]
@@ -206,8 +206,7 @@ fn quick_connect(state: &State) -> Element<'_, Message> {
   };
 
   column![
-    text("Quick Connect avoids sending your password to this app.")
-      .color(palette.colors.onSurfaceVariant),
+    text("Quick Connect avoids sending your password to this app.").color(palette.text.body),
     content,
   ]
   .spacing(14)
@@ -315,9 +314,7 @@ fn saved_profiles(state: &State) -> Element<'_, Message> {
   let mut profiles = Column::new().spacing(12).push(
     row![
       icon_with_color(Icon::User, IconSize::Lg, palette.colors.primary),
-      text("Saved sign-ins")
-        .size(18)
-        .color(palette.colors.onSurface),
+      text("Saved sign-ins").size(18).color(palette.text.heading),
     ]
     .spacing(TOKENS.spacing.s2)
     .align_y(Alignment::Center),
@@ -365,7 +362,7 @@ fn saved_profiles(state: &State) -> Element<'_, Message> {
     };
     let mut profile_content = column![
       row![restore, forget].spacing(10).align_y(Alignment::Center),
-      text(profile.subtitle()).color(palette.colors.onSurfaceVariant),
+      text(profile.subtitle()).color(palette.text.metadata),
     ]
     .spacing(8);
     if state.login.flow.busy_profile.is_none()

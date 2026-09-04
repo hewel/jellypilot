@@ -87,17 +87,15 @@ fn connection_section(state: &State) -> Element<'_, Message> {
     || {
       text("No active connection")
         .size(13)
-        .color(palette.colors.onSurfaceVariant)
+        .color(palette.text.metadata)
         .into()
     },
     |identity| {
       column![
         text(&identity.user_name)
           .size(15)
-          .color(palette.colors.onSurface),
-        text(&identity.server)
-          .size(12)
-          .color(palette.colors.onSurfaceVariant),
+          .color(palette.text.heading),
+        text(&identity.server).size(12).color(palette.text.metadata),
       ]
       .spacing(TOKENS.spacing.s1)
       .into()
@@ -121,7 +119,7 @@ fn connection_section(state: &State) -> Element<'_, Message> {
         .width(Fill),
       text("Disconnect keeps saved profiles. Sign Out securely removes the active saved profile.")
         .size(12)
-        .color(palette.colors.onSurfaceVariant),
+        .color(palette.text.metadata),
       toggle_row(
         palette,
         "Auto-login on startup",
@@ -226,12 +224,10 @@ fn playback_section(state: &State) -> Element<'_, Message> {
         SettingsMessage::SavePlaybackTargetName,
       ),
       column![
-        text("Intro Skipper")
-          .size(14)
-          .color(palette.colors.onSurface),
+        text("Intro Skipper").size(14).color(palette.text.secondary),
         text("Automatic skips detected intros; Manual shows the skip action; Off disables it.")
           .size(12)
-          .color(palette.colors.onSurfaceVariant),
+          .color(palette.text.body),
         intro,
       ]
       .spacing(TOKENS.spacing.s2),
@@ -283,7 +279,7 @@ fn subtitles_section(state: &State) -> Element<'_, Message> {
     rows = rows.push(
       text("No preferred subtitle languages.")
         .size(12)
-        .color(palette.colors.onSurfaceVariant),
+        .color(palette.text.metadata),
     );
   }
   for (index, language) in languages.iter().enumerate() {
@@ -326,7 +322,7 @@ fn subtitles_section(state: &State) -> Element<'_, Message> {
     column![
       text("Languages are tried from top to bottom on future playback starts.")
         .size(12)
-        .color(palette.colors.onSurfaceVariant),
+        .color(palette.text.metadata),
       rows,
       add,
     ]
@@ -346,7 +342,7 @@ fn shortcuts_section(state: &State) -> Element<'_, Message> {
       shortcut_row(state, "Skip intro", ShortcutKind::IntroSkip),
       text("Shortcut subscriptions read the current persisted bindings.")
         .size(12)
-        .color(palette.colors.onSurfaceVariant),
+        .color(palette.text.metadata),
     ]
     .spacing(TOKENS.spacing.s2),
   )
@@ -421,10 +417,10 @@ fn interface_section(state: &State) -> Element<'_, Message> {
 fn appearance_row<'a>(palette: &ThemePalette, selected: ThemeMode) -> Element<'a, Message> {
   row![
     column![
-      text("Appearance").size(14).color(palette.colors.onSurface),
+      text("Appearance").size(14).color(palette.text.secondary),
       text("System follows the OS light/dark setting and switches live.")
         .size(12)
-        .color(palette.colors.onSurfaceVariant),
+        .color(palette.text.body),
     ]
     .spacing(TOKENS.spacing.s1)
     .width(Fill),
@@ -465,10 +461,10 @@ fn theme_mode_option(
 fn app_mode_row<'a>(palette: &ThemePalette, selected: AppMode) -> Element<'a, Message> {
   row![
     column![
-      text("App mode").size(14).color(palette.colors.onSurface),
+      text("App mode").size(14).color(palette.text.secondary),
       text("Control only shows a compact fixed-size player window without the library browser; it switches live.")
         .size(12)
-        .color(palette.colors.onSurfaceVariant),
+        .color(palette.text.body),
     ]
     .spacing(TOKENS.spacing.s1)
     .width(Fill),
@@ -643,17 +639,17 @@ fn diagnostics_section(state: &State) -> Element<'_, Message> {
             .align_y(Alignment::Center),
             text(diagnostic.category.label())
               .size(12)
-              .color(palette.colors.onSurfaceVariant),
+              .color(palette.text.metadata),
             space::horizontal(),
             text(format_diagnostic_time(diagnostic.timestamp_seconds))
               .size(11)
-              .color(palette.colors.onSurfaceVariant),
+              .color(palette.text.metadata),
           ]
           .spacing(TOKENS.spacing.s2)
           .align_y(Alignment::Center),
           text(diagnostic.message)
             .size(12)
-            .color(palette.colors.onSurface),
+            .color(palette.text.secondary),
         ]
         .spacing(TOKENS.spacing.s2),
       )
@@ -666,7 +662,7 @@ fn diagnostics_section(state: &State) -> Element<'_, Message> {
     events = events.push(
       text("No diagnostic events match these filters.")
         .size(12)
-        .color(palette.colors.onSurfaceVariant),
+        .color(palette.text.metadata),
     );
   }
   section(
@@ -677,7 +673,7 @@ fn diagnostics_section(state: &State) -> Element<'_, Message> {
       row![level_filter, category_filter].spacing(TOKENS.spacing.s2),
       text(format!("Showing {count} of at most 200 retained events."))
         .size(11)
-        .color(palette.colors.onSurfaceVariant),
+        .color(palette.text.metadata),
       events,
     ]
     .spacing(TOKENS.spacing.s3),
@@ -690,10 +686,10 @@ fn about_section<'a>(palette: &ThemePalette) -> Element<'a, Message> {
     Icon::Info,
     "About",
     column![
-      text("JellyPilot").size(15).color(palette.colors.onSurface),
+      text("JellyPilot").size(15).color(palette.text.heading),
       text(format!("Version {}", env!("CARGO_PKG_VERSION")))
         .size(12)
-        .color(palette.colors.onSurfaceVariant),
+        .color(palette.text.muted),
     ]
     .spacing(TOKENS.spacing.s1),
   )
@@ -712,7 +708,7 @@ fn section<'a>(
         text(title)
           .font(SPACE_GROTESK_FONT)
           .size(18)
-          .color(palette.colors.onSurface),
+          .color(palette.text.heading),
       ]
       .spacing(TOKENS.spacing.s2)
       .align_y(Alignment::Center),
@@ -734,8 +730,8 @@ fn labeled_field<'a>(
   save: SettingsMessage,
 ) -> Element<'a, Message> {
   column![
-    text(label).size(14).color(palette.colors.onSurface),
-    text(help).size(12).color(palette.colors.onSurfaceVariant),
+    text(label).size(14).color(palette.text.secondary),
+    text(help).size(12).color(palette.text.body),
     row![
       field,
       button(
@@ -768,8 +764,8 @@ fn toggle_row<'a>(
 ) -> Element<'a, Message> {
   row![
     column![
-      text(label).size(14).color(palette.colors.onSurface),
-      text(help).size(12).color(palette.colors.onSurfaceVariant),
+      text(label).size(14).color(palette.text.secondary),
+      text(help).size(12).color(palette.text.body),
     ]
     .spacing(TOKENS.spacing.s1)
     .width(Fill),

@@ -30,7 +30,8 @@ fn resolve(
     status: text_input::Status,
     is_error: bool,
 ) -> text_input::Style {
-    let colors = palette(theme).colors;
+    let palette = palette(theme);
+    let colors = palette.colors;
     let disabled = matches!(status, text_input::Status::Disabled);
     // Opaque fill with no idle border. The 1px border appears only as a
     // functional signal: primary while focused (accessibility exemption), or
@@ -63,7 +64,7 @@ fn resolve(
             width: border_width,
         },
         icon: colors.onSurfaceVariant,
-        placeholder: with_alpha(colors.onSurfaceVariant, 0.5),
+        placeholder: palette.text.muted,
         value: if disabled {
             scale_alpha(colors.onSurface, 0.5)
         } else {

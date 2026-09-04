@@ -2,10 +2,10 @@
 
 use iced::theme::Palette;
 use iced::widget::{button, container, scrollable as iced_scrollable, text_input};
-use iced::{Color, Theme};
+use iced::Theme;
 
-use crate::tokens::{palette, DARK_PALETTE, LIGHT_PALETTE};
-use crate::variants::{BadgeVariant, ButtonVariant, FieldVariant, SurfaceVariant, TextVariant};
+use crate::tokens::{DARK_PALETTE, LIGHT_PALETTE};
+use crate::variants::{BadgeVariant, ButtonVariant, FieldVariant, SurfaceVariant};
 use crate::widgets;
 
 /// Theme mode the app can pin explicitly. `System` is an app-level concern:
@@ -38,20 +38,6 @@ pub fn theme(mode: ThemeMode) -> Theme {
             danger: colors.error,
         },
     )
-}
-
-/// Resolves a semantic text role.
-pub fn text_variant(theme: &Theme, variant: TextVariant) -> Color {
-    let colors = palette(theme).colors;
-    match variant {
-        TextVariant::OnSurface => colors.onSurface,
-        TextVariant::OnSurfaceVariant => colors.onSurfaceVariant,
-        TextVariant::Primary => colors.primary,
-        TextVariant::Secondary => colors.secondary,
-        TextVariant::Tertiary => colors.tertiary,
-        TextVariant::Warning => colors.warning,
-        TextVariant::Error => colors.error,
-    }
 }
 
 /// Resolves a container surface role.
