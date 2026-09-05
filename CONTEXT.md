@@ -2,10 +2,12 @@
 
 JellyPilot is a Jellyfin and Emby companion app that presents itself as a controllable Playback Target, browses video libraries, and plays media through a standalone MPV process.
 
+These definitions describe accepted product semantics. Delivery status for the Sidebar, Personal Lists, and account changes is tracked in the [native sidebar specification](docs/sidebar-design-spec.md).
+
 ## Language
 
 **Server URL**:
-The address of one Jellyfin server that JellyPilot connects to. A Server URL must be known before a user can authenticate with that server.
+The address of one Jellyfin or Emby server that JellyPilot connects to. A Server URL must be known before a user can authenticate with that server.
 _Avoid_: Server discovery, server selection
 
 **Playback Target**:
@@ -24,7 +26,7 @@ _Avoid_: Embedded MPV, libmpv
 Media conversion performed by the connected Jellyfin or Emby server. JellyPilot plays the original or direct source through External MPV Playback and does not request a Provider Transcode.
 
 **Quick Connect**:
-A Jellyfin authentication method on the Login screen where JellyPilot shows a short code for the user to approve from another signed-in Jellyfin client. Quick Connect is the default login method and authenticates to a known Server URL; it does not discover or choose servers.
+A Jellyfin authentication method where JellyPilot shows a short code for the user to approve from another signed-in Jellyfin client. Quick Connect is the default Jellyfin login method and authenticates to a known Server URL; it does not discover or choose servers.
 _Avoid_: Discovery, pairing, device link
 
 **Quick Connect Request**:
@@ -47,21 +49,33 @@ _Avoid_: Automatic password fallback
 An authenticated media-server profile that JellyPilot can restore after restart without asking the user to log in again. Saved Service Profiles are created the same way after Quick Connect and Password Login, and JellyPilot keeps at most one active profile at a time.
 _Avoid_: Remembered password
 
+**Profile Scope**:
+The combination of media-server provider, Server URL, and server user identity that owns one user's JellyPilot content. Display names do not determine Profile Scope, and the same user identity on different servers belongs to different scopes.
+_Avoid_: Username as account identity, server name as account identity
+
+**Profile Switch**:
+Replacing the active media-server connection with another authenticated profile. A successful Profile Switch ends the old Playback Session; a target authentication failure leaves the current connection and Playback Session in place.
+_Avoid_: Parallel server connection, App Mode switch
+
+**Startup Auto Login**:
+The preference to restore the last successfully activated Saved Service Profile when JellyPilot starts. Startup Auto Login is distinct from reconnecting the remote Playback Target after a network interruption.
+_Avoid_: Network auto-reconnect, first saved account
+
 **Disconnect**:
 Ending JellyPilot's current live media-server connection while keeping saved service profiles available for later reconnect.
 _Avoid_: Sign out, clear session
 
 **Sign Out**:
-Ending the live media-server connection and removing the active Saved Service Profile. Other saved profiles remain available for switching.
-_Avoid_: Temporary disconnect
+Removing a selected Saved Service Profile from this device and ending the live connection if that profile is active. Other saved profiles are unaffected, and deleting the selected profile's local Watchlist is a separate, explicit choice.
+_Avoid_: Temporary disconnect, server account deletion, server-side token revocation
 
 **Login Prefill**:
 Remembered unauthenticated login inputs, such as Server URL and username, used to make Password Login easier. Login Prefill is separate from a Saved Service Profile.
 _Avoid_: Saved Service Profile, remembered password
 
 **Password Login**:
-A fallback authentication method where the user signs in to a known Server URL with Jellyfin username and password.
-_Avoid_: Primary login
+A method where the user signs in to a known Server URL with that server's username and password. Password Login is the fallback to Quick Connect for Jellyfin and the login method for Emby.
+_Avoid_: Remembered password
 
 **Login Method**:
 One of the user-selectable ways to authenticate to a known Server URL. Quick Connect and Password Login are the Login Methods currently exposed by JellyPilot.
@@ -104,23 +118,39 @@ A Logo-type Library Image: a transparent title treatment for a movie or series. 
 _Avoid_: Poster substitute, watermark, app icon
 
 **Sidebar**:
-The persistent left navigation area of the authenticated JellyPilot shell. The Sidebar lists Video Home, the user's video libraries, and Now Playing, and provides an entry to open the Settings Modal. It is always visible while JellyPilot is authenticated. At narrow window widths the Sidebar shows icons only.
+The persistent left navigation area of the authenticated Full-mode shell, providing Video Home, Personal Lists, video libraries, and account and application controls. At narrow window widths the Sidebar shows icons only; Control-Only Mode has no Sidebar.
 _Avoid_: Navigation rail, app drawer, floating controls
 
+**Account Popover**:
+The Sidebar's account surface for the active connection and saved logins, including Profile Switch, adding a login, Disconnect, and Sign Out. It presents the same account-management capabilities that remain available through Settings in Control-Only Mode.
+_Avoid_: Server cluster, member directory
+
 **Settings Modal**:
-The full-fill closable settings layer presented over the current shell context. The Settings Modal is dismissed via the Esc key or the close (✕) button and is never a navigation destination or stack entry.
+The closable settings layer presented over the current shell context, centered in wide windows and filling narrow windows. The Settings Modal is dismissed via the Esc key or the close (✕) button and is never a navigation destination or stack entry.
 _Avoid_: Settings page, settings destination, dialog popup, drawer, click-outside-to-close
 
 **Video Home**:
-The Library Browser landing view built from live Jellyfin rows such as Continue Watching, Next Up, latest Movies, latest Episodes, and video library shortcuts. Video Home is not cached offline and should not show fake media.
+The Library Browser landing view built from live media-server rows such as Continue Watching, Next Up, latest Movies, latest Episodes, and video library shortcuts. Video Home belongs to the current Profile Scope and is not cached offline.
 _Avoid_: Home page, dashboard mock data
+
+**Personal Lists**:
+The Library Browser destination, labeled “我的清单”, that presents Favorites and Watchlist as separate sections for the current Profile Scope. Both sections include movies, series, and individual episodes.
+_Avoid_: Cross-server collection, merged favorite/watchlist state
+
+**Favorites**:
+The current server user's expression of liking a media item, shared through Jellyfin or Emby with other clients. Favorites are independent of Watchlist membership and watched status.
+_Avoid_: Watchlist, planned viewing
+
+**Watchlist**:
+A viewing plan kept on this device for one Profile Scope, labeled “稍后观看”. Its entries remain until explicitly removed, including after viewing or when an item becomes unavailable; Sign Out retains the list unless the user explicitly chooses to delete it.
+_Avoid_: Favorites, unwatched filter, cross-device list
 
 **Featured Item**:
 The Continue Watching item with a resume position that is presented as the Video Home hero; when nothing is resumable, the first Next Up item, then the first item of a later home row. The Featured Item's Backdrop fills the hero background, and its Title Logo (the parent series' Title Logo for episodes) serves as the hero headline. Heroes have no portrait poster slot.
 _Avoid_: Spotlight, hero carousel item
 
 **User Data Action**:
-A user-scoped Jellyfin mutation for item state such as favorite, unfavorite, mark played, or mark unplayed. User Data Actions update visible Library Browser state only after Jellyfin accepts the mutation.
+A user-scoped Jellyfin or Emby mutation for item state such as favorite, unfavorite, mark played, or mark unplayed. User Data Actions update visible Library Browser state only after the server accepts the mutation.
 _Avoid_: Optimistic toggle, local-only media state
 
 **Intro Skipper**:
@@ -161,9 +191,9 @@ Dev: "What if Quick Connect is disabled on the server?"
 
 Domain expert: "The user toggles to Password Login and signs in with their Jellyfin credentials."
 
-Dev: "Can I start Quick Connect from the Operations Console?"
+Dev: "Must I disconnect before adding another Jellyfin login?"
 
-Domain expert: "No. Disconnect first, then authenticate again from the Login screen."
+Domain expert: "No. Connect and switch authenticates the new login while keeping the current connection until the target is ready. An active Playback Session requires confirmation before this flow."
 
 Dev: "When does JellyPilot ask the server for a Quick Connect code?"
 
@@ -192,6 +222,30 @@ Domain expert: "No. After approval, JellyPilot creates a Saved Service Profile j
 Dev: "Does Quick Connect need a remember-me checkbox?"
 
 Domain expert: "No. Quick Connect creates a Saved Service Profile after approval; Login Prefill only applies to Password Login."
+
+Dev: "Does restoring a Saved Service Profile fill in my password?"
+
+Domain expert: "No. A Saved Service Profile restores an authenticated login. Login Prefill remembers the server and username, never the password."
+
+Dev: "Will a failed Profile Switch stop my current movie?"
+
+Domain expert: "Target authentication failure leaves the current connection and movie in place. A successful switch ends that Playback Session before the new profile becomes active."
+
+Dev: "Does Control-Only Mode switch my media-server account?"
+
+Domain expert: "No. An App Mode switch keeps the active profile and Playback Session. A Profile Switch changes the active account."
+
+Dev: "Is a movie removed from Watchlist when I finish watching it?"
+
+Domain expert: "No. Watchlist is your viewing plan, including things you may want to rewatch. Remove the movie explicitly when you no longer want it there."
+
+Dev: "Will my second computer see this Watchlist?"
+
+Domain expert: "No. Each device keeps its own Watchlist for that Profile Scope. Favorites belong to the server user and can be shared with other clients."
+
+Dev: "Can I sign out another saved account without switching to it?"
+
+Domain expert: "Yes. Sign Out removes that device's saved login without disturbing the active account. You can separately choose to delete the selected account's local Watchlist."
 
 Dev: "Is Intro Skipper just any Jellyfin media segment?"
 
