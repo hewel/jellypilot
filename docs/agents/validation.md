@@ -1,15 +1,18 @@
 # Validation Agent Policy
 
-Scale verification to the change's blast radius. Verification is never optional — the tier is the
-variable, not the existence. Running the widest gate for every edit wastes minutes; running nothing
-ships regressions.
+This document is the authority for verification scope, including the final pass. Select checks
+that exercise the changed contract. Existing authorization for implementation includes these
+checks; do not add an approval pause solely because the applicable tier is broader.
 
 ## Tiers
 
-1. **Focused** — the default for localized edits. Run the narrowest gate that exercises the changed
-   contract: `bun run task rust test <crate>` for the touched crate, `bun run task rust clippy
-   <crate>`, plus `bun run task fmt` for touched script files. Use when the change is confined to
-   one crate and alters no cross-crate contract.
+1. **Focused** — the default for localized edits. For Rust behavior, use tests in the touched
+   crate (`bun run task rust test <crate>`), focused clippy (`bun run task rust clippy <crate>`),
+   and `bun run task rust fmt --check`. For scripts, use the relevant Bun tests plus
+   `bun run task typecheck`, `bun run task lint`, and `bun run task fmt --check` as applicable.
+   Documentation and instruction-only changes need link, command, metadata, and consistency
+   checks; they do not require application builds or tests. Use this tier when no cross-crate
+   contract changes.
 2. **Suite** — for contract or cross-crate changes: focused gates first, then `bun run check`
    (fmt + lint + scripts typecheck + workspace clippy) and `bun run task rust test` (workspace).
    Use when public types, crate interfaces, or more than one crate change.
@@ -44,9 +47,11 @@ When the smoke gate or MPV playback fails, follow this route instead of ad-hoc s
 - Prefer cached incremental reruns. A focused `bun run task rust test <crate>` after a warm build is
   seconds; reserve full gates for the final pass of multi-step work, not for every intermediate
   edit.
-- A failing, timed-out, or cancelled verification run is not a pass. Re-run the focused tier to
-  green before yielding.
+- A failing, timed-out, or cancelled verification run is not a pass. Investigate the failure and
+  rerun after a relevant fix or changed prerequisite. If an external prerequisite prevents
+  verification, report the exact blocker and completed checks; do not retry unchanged failures indefinitely.
 - When a change spans tiers, verify each completed step at its own tier and the finished work at
-  the highest applicable tier exactly once.
+  the highest applicable tier. Reuse passing results for unchanged inputs; repeat or broaden
+  checks only after relevant changes, failures, or unresolved concerns.
 - If the user interrupts a verification run as excessive, drop to the lowest tier that still
   exercises the changed contract and state what was and was not verified.

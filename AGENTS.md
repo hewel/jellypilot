@@ -9,7 +9,7 @@ playback, no libmpv, no webview, no Tauri.
 **scoped-implementer**
 
 * Only implements the requested changes.
-* Does not review or approve its own code.
+* Inspects its changes and runs applicable checks; independent approval belongs to a reviewer.
 
 **reviewer**
 
@@ -50,6 +50,7 @@ bun run check                    # oxfmt/oxlint + scripts typecheck/tests + carg
 bun run task fmt [--check]       # oxfmt on package.json + scripts/**
 bun run task lint [--fix]        # oxlint on scripts/**
 bun run task typecheck           # tsc on scripts/**
+bun run task rust fmt [--check]  # rustfmt on maintained Rust packages
 bun run task rust check [crate]  # cargo check (workspace or named crates)
 bun run task rust clippy [crate] # cargo clippy -D warnings
 bun run task rust test [crate]   # cargo test
@@ -64,8 +65,8 @@ Crate short names: `auth`, `core`, `media-server`, `mpv`, `session`, `iced` (ui 
 ## Conventions
 
 - **Rust style**: 2-space indent (`rustfmt.toml`); workspace lints forbid `unsafe_code` and deny
-  clippy warnings. Run focused gates (`bun run task rust clippy iced`) while iterating and
-  `bun run check` once at the end.
+  clippy warnings. Select focused or broader gates from `docs/agents/validation.md`; that policy
+  is authoritative for verification scope, including the final pass.
 - **No cargo directly**: use the `scripts/task.ts` dispatcher (`bun run task rust …`); never invoke
   `cargo` by hand except inside hooks that already do.
 - **Display-free logic lives in `jellypilot-core`** and is tested there; `src-iced` keeps
@@ -84,8 +85,9 @@ Crate short names: `auth`, `core`, `media-server`, `mpv`, `session`, `iced` (ui 
 - **Git**: Never run `git stash`, `git reset`, or any destructive/broad git command. The only
   permitted git mutation is staging and committing specific named files in one step
   (`git add <files> && git commit`); no `git add -A`, `git add .`, or unstaged-sweeping commands.
-- **No slow commands**: prefer fast, focused commands (clippy on touched crates, filtered
-  `cargo test`). Avoid full builds and long-running verification unless the user explicitly asks.
+- **Verification scope**: prefer the focused tier. Run broader checks or the native smoke gate
+  when `docs/agents/validation.md` requires them for the requested change; this is part of
+  authorized implementation. Release builds and unrelated full suites need task-specific justification.
 
 ## Anti-Patterns
 
