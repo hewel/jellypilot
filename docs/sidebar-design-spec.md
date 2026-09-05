@@ -36,6 +36,7 @@ Only authenticated Full mode shows the Sidebar. Control-Only retains its existin
 | Account and tools | Fixed at the bottom | Clickable identity card; Settings, Refresh, Control mode |
 
 - At window widths of 1280 and above, the Sidebar is 240 wide; below 1280, retain the 72-wide icon-only Sidebar. Full mode retains its existing minimum window size.
+- Full mode opens at 1760×900 logical pixels, with the existing 1024×640 minimum. Control-Only remains 480×760; returning to Full mode restores its previous in-session size when available.
 - The expanded Sidebar has horizontal padding of 12. Minimum heights for search, personal navigation, library rows, and bottom tools are 36, 38, 32, and 36 respectively.
   These are iced logical dimensions. The accepted visual targets below refine control geometry through semantic tokens/Catalog styles; they do not change global defaults for other surfaces.
 - The icon-only Sidebar provides full-name tooltips. Truncated long names remain available in full. The original's 15 libraries are sample data; counts and ordering come from actual responses.

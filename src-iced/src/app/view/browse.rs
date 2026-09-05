@@ -806,7 +806,7 @@ mod tests {
   }
   #[test]
   fn grid_available_width_matches_sidebar_contract() {
-    // 1600×900 default window, 240px sidebar, 1px hairline, 2×32 page padding.
+    // 1600×900 window, 240px sidebar, 1px hairline, 2×32 page padding.
     assert_eq!(grid_available_width(1600.0, SizeClass::Standard), 1295.0);
   }
 

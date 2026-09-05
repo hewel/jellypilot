@@ -68,7 +68,7 @@ impl Surface {
     Self {
       smoke,
       window_id: None,
-      window_size: iced::Size::new(1600.0, 900.0),
+      window_size: FULL_DEFAULT_WINDOW_SIZE,
       full_window_size: None,
       skeleton_phase: 0.0,
       skeleton_animation_start: None,
@@ -128,7 +128,7 @@ pub const CONTROL_ONLY_WINDOW_SIZE: iced::Size = iced::Size::new(480.0, 760.0);
 /// Minimum logical window size in Full mode.
 pub const FULL_MIN_WINDOW_SIZE: iced::Size = iced::Size::new(1024.0, 640.0);
 /// Full-mode window size applied when no stashed size exists.
-pub const FULL_DEFAULT_WINDOW_SIZE: iced::Size = iced::Size::new(1600.0, 900.0);
+pub const FULL_DEFAULT_WINDOW_SIZE: iced::Size = iced::Size::new(1760.0, 900.0);
 
 /// Window geometry decision for one app mode. Pure so the fixed/restore
 /// policy is testable without executing window tasks.

@@ -97,7 +97,8 @@ pub(crate) fn smoke_window_size() -> Size {
       Some(size) => size,
       None => {
         eprintln!(
-          "Warning: invalid JELLYPILOT_SMOKE_SIZE {raw:?}; using default 1600x900 window size."
+          "Warning: invalid JELLYPILOT_SMOKE_SIZE {raw:?}; using default {}x{} window size.",
+          DEFAULT_WINDOW_SIZE.width, DEFAULT_WINDOW_SIZE.height
         );
         DEFAULT_WINDOW_SIZE
       }
