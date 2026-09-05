@@ -1508,6 +1508,116 @@ mod tests {
       .get(browse_cell.slot, "browse-art-1")
       .is_some());
   }
+
+  #[test]
+  fn reselecting_active_played_filter_keeps_loaded_artwork() {
+    let mut state = test_state();
+    state.kernel.client = Some(Arc::new(JellyfinClient::new()));
+    state.full.as_mut().unwrap().home.data.shortcuts =
+      jellypilot_core::LoadState::Ready(vec![jellypilot_media_server::VideoLibraryShortcut {
+        id: "movies".to_owned(),
+        name: "Movies".to_owned(),
+        collection_type: "movies".to_owned(),
+        item_count: Some(1),
+        artwork_image_id: None,
+      }]);
+    state.shell.destination = Destination::Library {
+      library_id: "movies".to_owned(),
+      collection_type: "movies".to_owned(),
+    };
+
+    // Configure and settle the browse model exactly like a completed page
+    // load, so the Ready view comes from the model rather than test injection.
+    let source = shell::browse_source(&state).expect("library source resolves");
+    let preferences = jellypilot_core::browse_model::BrowsePreferences::from(
+      state.kernel.settings.snapshot().browse_filters(),
+    );
+    let request = state
+      .full
+      .as_mut()
+      .unwrap()
+      .browse
+      .data
+      .configure_with_preferences(source, preferences)
+      .expect("library configures")
+      .into_iter()
+      .find_map(|effect| match effect {
+        jellypilot_core::browse_model::BrowseEffect::RequestPage(request) => Some(request),
+        _ => None,
+      })
+      .expect("bootstrap page request is emitted");
+    // Seed the raster cache before settlement: the settlement's own artwork
+    // preparation then settles the poster synchronously from cache.
+    state.kernel.artwork_adapter.seed_raster_for_test(
+      "browse-art-1",
+      jellypilot_media_server::artwork::ArtworkSizeClass::Card,
+      jellypilot_media_server::artwork::ArtworkRaster::from_raw_for_test(1, 1, vec![1, 2, 3, 4]),
+    );
+    let mut item = episode("browse-item-1", 1);
+    item.artwork_image_id = Some("browse-art-1".to_owned());
+    drop(browse::update(
+      &mut state.full.as_mut().unwrap().browse,
+      &mut state.kernel,
+      None,
+      false,
+      state.playback.view.now_playing.is_none(),
+      state.shell.window_size,
+      BrowseMessage::PageSettled(jellypilot_core::browse_model::BrowsePageSettlement {
+        source_id: request.source_id.clone(),
+        token: request.token,
+        result: Ok(jellypilot_core::browse_model::BrowsePagePayload {
+          start_index: 0,
+          limit: 24,
+          total_record_count: 1,
+          has_more: false,
+          items: vec![item],
+        }),
+      }),
+    ));
+    assert!(matches!(
+      state.full.as_ref().unwrap().browse.view,
+      LibraryBrowseView::Ready { .. }
+    ));
+
+    state.retain_artwork_handles();
+    assert_eq!(
+      state
+        .full
+        .as_ref()
+        .unwrap()
+        .browse
+        .artwork
+        .get("browse-item-1")
+        .map(|cell| cell.state),
+      Some(ArtworkCellState::Ready)
+    );
+
+    // `All` is the default played filter: this click changes nothing, so the
+    // reconfigure emits no page request and no settlement will re-drive
+    // artwork preparation.
+    drop(update(
+      &mut state,
+      Message::Browse(BrowseMessage::PlayedFilterChanged(
+        jellypilot_media_server::VideoLibraryPlayedFilter::All,
+      )),
+    ));
+
+    let browse = &state.full.as_ref().unwrap().browse;
+    assert!(
+      matches!(browse.view, LibraryBrowseView::Ready { .. }),
+      "no-op reconfigure must keep the settled grid view"
+    );
+    let cell = browse
+      .artwork
+      .get("browse-item-1")
+      .expect("reselecting the active filter must not drop artwork cells");
+    assert_eq!(cell.state, ArtworkCellState::Ready);
+    assert!(state
+      .kernel
+      .artwork_handles
+      .get(cell.slot, "browse-art-1")
+      .is_some());
+  }
   #[test]
   fn search_draft_and_escape_do_not_replace_submitted_results() {
     let mut state = test_state();

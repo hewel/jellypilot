@@ -286,6 +286,16 @@ pub fn start(
       return Task::none();
     }
   };
+  // A reconfigure that changes nothing (same source and preferences, e.g.
+  // re-selecting the active filter) emits no commands: the model retains its
+  // pages, so no page settlement will re-drive artwork preparation. Tearing
+  // the artwork view down here would strand a settled grid on placeholders,
+  // but the view is still re-synced so an in-flight load keeps reflecting
+  // Loading.
+  if effects.is_empty() {
+    sync_view(surface);
+    return Task::none();
+  }
   if playback_idle {
     kernel.artwork_adapter.cancel_pending();
   }
