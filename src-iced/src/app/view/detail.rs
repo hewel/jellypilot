@@ -48,12 +48,11 @@ const EPISODE_OVERVIEW_COLLAPSED_LINES: f32 = 3.0;
 const SIMILAR_CARD_WIDTH: f32 = 160.0;
 const SIMILAR_CARD_HEIGHT: f32 = 240.0;
 const SIMILAR_SCROLL_HEIGHT: f32 = 302.0;
-const HERO_SCRIM_TOP_ALPHA: f32 = 0.4;
+const HERO_SCRIM_TOP_ALPHA: f32 = 0.0;
 /// Non-overview copy below the overview text: the More/Less toggle, actions
 /// row, spacings, and the hero's bottom padding.
-const SCRIM_TAIL_CHROME: f32 = 130.0;
-const SCRIM_EXPANDED_ALPHA: f32 = 0.97;
-const HERO_SCRIM_BOTTOM_ALPHA: f32 = 0.95;
+const SCRIM_TAIL_CHROME: f32 = 10.0;
+const SCRIM_TAIL_ALPHA: f32 = 0.97;
 const DETAIL_LOGO_KEY: &str = "detail-logo";
 const DETAIL_BACKDROP_KEY: &str = "detail-backdrop";
 
@@ -262,44 +261,60 @@ fn hero_at_width<'a>(
   let hero_height = if overview_expanded {
     base_hero_height + (measured_height - collapsed_height).max(0.0)
   } else {
-    base_hero_height
+    base_hero_height + 1.0
   };
 
   // The Backdrop keeps its 16:9 height when the overview expands; only the
   // scrim stretches, so the extra text lands on a solid gradient tail.
-  let backdrop = artwork(
-    state,
-    DETAIL_BACKDROP_KEY,
-    name,
-    (Fill, Length::Fixed(base_hero_height)),
-    64,
-    skeleton_phase,
-    reduced_motion,
-  );
-  let gradient = gradient::Linear::new(Degrees(180.0)).add_stop(
-    0.0,
-    palette.colors.background.scale_alpha(HERO_SCRIM_TOP_ALPHA),
-  );
-  let gradient = if hero_height > base_hero_height {
-    // Expanded overview flows below the fixed 16:9 Backdrop; raise the scrim's
-    // solid zone to the overview's top so no paragraph sits on bare image.
-    let overview_top =
-      ((hero_height - measured_height - SCRIM_TAIL_CHROME) / hero_height).clamp(0.0, 1.0);
-    gradient
-      .add_stop(
-        overview_top,
-        palette.colors.background.scale_alpha(SCRIM_EXPANDED_ALPHA),
-      )
-      .add_stop(1.0, palette.colors.background.scale_alpha(1.0))
-  } else {
-    gradient.add_stop(
-      1.0,
-      palette
-        .colors
-        .background
-        .scale_alpha(HERO_SCRIM_BOTTOM_ALPHA),
+  // An item whose server carries no backdrop never gets a cell planned; skip
+  // the backdrop layer entirely so the hero settles on the plain canvas
+  // instead of holding a placeholder for an image that will never arrive.
+  let backdrop = if state
+    .full
+    .as_ref()
+    .expect("FullUi required")
+    .detail
+    .artwork
+    .get(DETAIL_BACKDROP_KEY)
+    .is_some()
+  {
+    artwork(
+      state,
+      DETAIL_BACKDROP_KEY,
+      name,
+      (Fill, Length::Fixed(base_hero_height)),
+      64,
+      skeleton_phase,
+      reduced_motion,
     )
+  } else {
+    space::vertical()
+      .width(Fill)
+      .height(Length::Fixed(base_hero_height))
+      .into()
   };
+  // The scrim always uses the expanded-style solid tail: a near-opaque zone
+  // rising to the visible overview's top, so no copy sits on bare image in
+  // either the collapsed or the expanded state.
+  let visible_overview_height = if overview.is_none() {
+    0.0
+  } else if overview_expanded {
+    measured_height
+  } else {
+    collapsed_height
+  };
+  let overview_top =
+    ((hero_height - visible_overview_height - SCRIM_TAIL_CHROME) / hero_height).clamp(0.0, 1.0);
+  let gradient = gradient::Linear::new(Degrees(180.0))
+    .add_stop(
+      0.0,
+      palette.colors.background.scale_alpha(HERO_SCRIM_TOP_ALPHA),
+    )
+    .add_stop(
+      overview_top,
+      palette.colors.background.scale_alpha(SCRIM_TAIL_ALPHA),
+    )
+    .add_stop(1.0, palette.colors.background.scale_alpha(1.0));
   let scrim = container(space::vertical())
     .width(Fill)
     .height(hero_height)
@@ -1222,53 +1237,81 @@ fn artwork<'a>(
         .into();
     }
   }
-  let failed = cell.is_some_and(|cell| cell.state == ArtworkCellState::Failed);
-  if failed {
-    let placeholder_color = palette.colors.warning;
-    let initial = name
-      .trim()
-      .chars()
-      .next()
-      .map(|character| character.to_uppercase().collect::<String>())
-      .unwrap_or_else(|| "•".to_owned());
-    let icon_dim = (initial_size as f32).max(28.0);
-    return container(
-      column![
-        icon_with_color(Icon::Movie, icon_dim, placeholder_color),
-        text(initial)
-          .font(SPACE_GROTESK_FONT)
-          .size(initial_size.min(28))
-          .color(placeholder_color),
-      ]
-      .spacing(TOKENS.spacing.s1)
-      .align_x(Alignment::Center),
+  match cell.map(|cell| cell.state) {
+    // The server carries no image for this slot, so no load was ever planned:
+    // settle on a neutral placeholder instead of shimmering forever.
+    None => artwork_placeholder(
+      palette,
+      name,
+      initial_size,
+      width,
+      height,
+      radius,
+      palette.text.metadata,
+    ),
+    Some(ArtworkCellState::Failed) => artwork_placeholder(
+      palette,
+      name,
+      initial_size,
+      width,
+      height,
+      radius,
+      palette.colors.warning,
+    ),
+    _ => skeleton_panel(
+      width,
+      height,
+      palette.colors.surfaceContainerLowest,
+      radius,
+      phase,
+      reduced_motion,
     )
-    .width(width)
-    .height(height)
-    .center_x(Fill)
-    .center_y(Fill)
-    .style(move |_theme| container::Style {
-      background: Some(iced::Background::Color(
-        palette.colors.surfaceContainerLowest,
-      )),
-      border: iced::Border {
-        radius,
-        width: 0.0,
-        color: iced::Color::TRANSPARENT,
-      },
-      ..container::Style::default()
-    })
-    .into();
+    .into(),
   }
+}
 
-  skeleton_panel(
-    width,
-    height,
-    palette.colors.surfaceContainerLowest,
-    radius,
-    phase,
-    reduced_motion,
+fn artwork_placeholder<'a>(
+  palette: &'static ThemePalette,
+  name: &str,
+  initial_size: u32,
+  width: Length,
+  height: Length,
+  radius: iced::border::Radius,
+  color: iced::Color,
+) -> Element<'a, Message> {
+  let initial = name
+    .trim()
+    .chars()
+    .next()
+    .map(|character| character.to_uppercase().collect::<String>())
+    .unwrap_or_else(|| "•".to_owned());
+  let icon_dim = (initial_size as f32).max(28.0);
+  container(
+    column![
+      icon_with_color(Icon::Movie, icon_dim, color),
+      text(initial)
+        .font(SPACE_GROTESK_FONT)
+        .size(initial_size.min(28))
+        .color(color),
+    ]
+    .spacing(TOKENS.spacing.s1)
+    .align_x(Alignment::Center),
   )
+  .width(width)
+  .height(height)
+  .center_x(Fill)
+  .center_y(Fill)
+  .style(move |_theme| container::Style {
+    background: Some(iced::Background::Color(
+      palette.colors.surfaceContainerLowest,
+    )),
+    border: iced::Border {
+      radius,
+      width: 0.0,
+      color: iced::Color::TRANSPARENT,
+    },
+    ..container::Style::default()
+  })
   .into()
 }
 

@@ -562,9 +562,14 @@ fn artwork<'a>(
     }
   }
 
-  let failed = cell.is_some_and(|cell| cell.state == ArtworkCellState::Failed);
-  if failed {
-    let placeholder_color = palette.colors.warning;
+  let placeholder_color = match cell.map(|cell| cell.state) {
+    // No planned load (the server carries no image for this slot): settle on
+    // a neutral placeholder instead of shimmering forever.
+    None => Some(palette.text.metadata),
+    Some(ArtworkCellState::Failed) => Some(palette.colors.warning),
+    _ => None,
+  };
+  if let Some(placeholder_color) = placeholder_color {
     let initial = name
       .trim()
       .chars()
