@@ -922,9 +922,9 @@ mod tests {
 
   #[test]
   fn content_width_standard_matches_pinned_regression_constant() {
-    let expected = 1600.0 - 248.0 - super::super::shell::HAIRLINE_WIDTH - TOKENS.spacing.s8 * 2.0;
+    let expected = 1600.0 - 240.0 - super::super::shell::HAIRLINE_WIDTH - TOKENS.spacing.s8 * 2.0;
     assert_eq!(content_width(1600.0, SizeClass::Standard), expected);
-    assert_eq!(content_width(1600.0, SizeClass::Standard), 1287.0);
+    assert_eq!(content_width(1600.0, SizeClass::Standard), 1295.0);
   }
 
   #[test]

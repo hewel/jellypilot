@@ -139,6 +139,7 @@ fn item_hero<'a>(
   hero(
     state,
     HeroContent {
+      id: &item.id,
       name: &item.name,
       metadata: item_metadata(item),
       overview: item.overview.as_deref(),
@@ -185,6 +186,7 @@ fn show_hero<'a>(
   hero(
     state,
     HeroContent {
+      id: &show.id,
       name: &show.name,
       metadata: show_metadata(show),
       overview: show.overview.as_deref(),
@@ -200,6 +202,7 @@ fn show_hero<'a>(
 }
 
 struct HeroContent<'a> {
+  id: &'a str,
   name: &'a str,
   metadata: String,
   overview: Option<&'a str>,
@@ -386,6 +389,7 @@ fn hero_at_width<'a>(
     state,
     content.playback_label.clone(),
     content.playback.clone(),
+    content.id,
     content.played,
     content.favorite,
   ));
@@ -514,6 +518,7 @@ fn detail_actions<'a>(
   state: &'a State,
   playback_label: String,
   playback_target: Option<(Playable, PlaybackStartPosition)>,
+  item_id: &str,
   played: bool,
   favorite: bool,
 ) -> Element<'a, Message> {
@@ -570,6 +575,32 @@ fn detail_actions<'a>(
     .on_press_maybe((!any_busy).then_some(Message::Detail(DetailMessage::FavoriteToggled)))
     .into()
   };
+  let watchlist = &state.full.as_ref().expect("FullUi required").personal_lists;
+  let watchlisted = watchlist.watchlist_ids.contains(item_id);
+  let watchlist_busy = watchlist.busy_items.contains(item_id);
+  let watchlist_button = control_button(
+    Some(if watchlisted {
+      Icon::BookmarkFilled
+    } else {
+      Icon::Bookmark
+    }),
+    Some(
+      if watchlisted {
+        "In Watchlist"
+      } else {
+        "Add to Watchlist"
+      }
+      .to_owned(),
+    ),
+    if watchlisted {
+      ButtonVariant::TonalActive
+    } else {
+      ButtonVariant::Tonal
+    },
+  )
+  .spacing(TOKENS.spacing.s2)
+  .padding([8, 14])
+  .on_press_maybe((!watchlist_busy).then_some(Message::Detail(DetailMessage::WatchlistToggled)));
   let (played_icon, played_label, played_variant) = if played {
     (Icon::CircleCheck, "Played", ButtonVariant::TonalActive)
   } else {
@@ -588,6 +619,7 @@ fn detail_actions<'a>(
     .align_y(Alignment::Center)
     .push(playback)
     .push(favorite_button)
+    .push(watchlist_button)
     .push(played_button);
   if let Some(kind) = state
     .full
@@ -615,6 +647,9 @@ fn detail_actions<'a>(
     .data
     .user_data_error
   {
+    content = content.push(text(error).size(13).color(state.palette().colors.error));
+  }
+  if let Some(error) = &watchlist.mutation_error {
     content = content.push(text(error).size(13).color(state.palette().colors.error));
   }
   content.into()

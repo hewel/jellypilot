@@ -303,11 +303,28 @@ pub struct PlaybackRefreshOutcome {
 }
 
 /// Result of gracefully disposing the playback controller's runtime state.
-#[must_use = "shutdown reporting warnings must be surfaced to the user"]
+#[must_use = "shutdown cleanup and reporting warnings must be handled"]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PlaybackShutdownOutcome {
   pub warnings: Vec<PlaybackWarning>,
+  pub cleanup: Result<(), PlaybackCleanupError>,
 }
+
+/// Sanitized failure to complete the MPV cleanup boundary.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PlaybackCleanupError {
+  MpvCleanupFailed,
+}
+
+impl fmt::Display for PlaybackCleanupError {
+  fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+    formatter.write_str(match self {
+      Self::MpvCleanupFailed => "MPV process cleanup could not be confirmed",
+    })
+  }
+}
+
+impl std::error::Error for PlaybackCleanupError {}
 
 /// Sanitized playback failure. Authenticated URLs and dependency error payloads
 /// deliberately never cross this boundary.
@@ -876,7 +893,11 @@ impl PlaybackController {
     }
   }
 
-  /// Gracefully stop/report any active item and always clean the MPV runtime.
+  /// Gracefully report any active item stopped, then clean the MPV runtime.
+  ///
+  /// Stop-report failure is returned as a warning and never skips cleanup.
+  /// An MPV cleanup command failure is returned separately so a connection
+  /// handoff can retain this controller and retry before adopting a new account.
   pub async fn shutdown(&mut self) -> PlaybackShutdownOutcome {
     if self.active.is_some() && self.active_transport_matches_mpv {
       let transport = self
@@ -886,22 +907,27 @@ impl PlaybackController {
       self.record_transport(&transport);
     }
     let active = self.active.clone();
-    self.last_progress_report_at = None;
-    self.load_event_boundary = LoadEventBoundary::Settled;
-    self.active_transport_matches_mpv = false;
-    self.last_transport = PlayerState::default();
-    self.pending_client_messages.clear();
-    let _ = self.mpv.quit().await;
-    let warnings = match active {
+    let warnings = match active.as_ref() {
       Some(active) => warning_for_reporting(
-        self.report_stop(&active).await,
+        self.report_stop(active).await,
         PlaybackWarning::PlaybackStopNotReported,
       ),
       None => Vec::new(),
     };
     self.active = None;
+    self.last_progress_report_at = None;
+    self.load_event_boundary = LoadEventBoundary::Settled;
+    self.active_transport_matches_mpv = false;
+    self.last_transport = PlayerState::default();
+    self.pending_client_messages.clear();
+    let cleanup = self
+      .mpv
+      .quit_and_confirm_cleanup()
+      .await
+      .then_some(())
+      .ok_or(PlaybackCleanupError::MpvCleanupFailed);
 
-    PlaybackShutdownOutcome { warnings }
+    PlaybackShutdownOutcome { warnings, cleanup }
   }
 
   /// Pause or resume the current item and report the resulting state.
@@ -1999,6 +2025,7 @@ mod tests {
     fail_start: AtomicBool,
     fail_progress: AtomicBool,
     fail_stop: AtomicBool,
+    stop_report_gate: Option<StopReportGate>,
   }
 
   impl MockPlaybackServer {
@@ -2032,6 +2059,7 @@ mod tests {
         fail_start: AtomicBool::new(false),
         fail_progress: AtomicBool::new(false),
         fail_stop: AtomicBool::new(false),
+        stop_report_gate: None,
       }
     }
 
@@ -2044,6 +2072,11 @@ mod tests {
       self
         .external_subtitle_urls
         .push((provider_index, AuthenticatedUrl::new(url.to_owned())));
+      self
+    }
+
+    fn with_stop_report_gate(mut self, gate: StopReportGate) -> Self {
+      self.stop_report_gate = Some(gate);
       self
     }
 
@@ -2172,13 +2205,55 @@ mod tests {
         .stops
         .push(report);
       let fails = self.fail_stop.load(Ordering::Relaxed);
+      let gate = self.stop_report_gate.clone();
       Box::pin(async move {
+        if let Some(gate) = gate {
+          gate.wait_for_release().await;
+        }
         if fails {
           Err(())
         } else {
           Ok(())
         }
       })
+    }
+  }
+
+  #[derive(Clone)]
+  struct StopReportGate {
+    report_started: Arc<tokio::sync::Semaphore>,
+    release_report: Arc<tokio::sync::Semaphore>,
+  }
+
+  impl StopReportGate {
+    fn new() -> Self {
+      Self {
+        report_started: Arc::new(tokio::sync::Semaphore::new(0)),
+        release_report: Arc::new(tokio::sync::Semaphore::new(0)),
+      }
+    }
+
+    async fn wait_for_report(&self) {
+      self
+        .report_started
+        .acquire()
+        .await
+        .expect("stop report gate should remain open")
+        .forget();
+    }
+
+    async fn wait_for_release(&self) {
+      self.report_started.add_permits(1);
+      self
+        .release_report
+        .acquire()
+        .await
+        .expect("stop report gate should remain open")
+        .forget();
+    }
+
+    fn release_report(&self) {
+      self.release_report.add_permits(1);
     }
   }
 
@@ -2250,6 +2325,10 @@ mod tests {
       Self::connect(MpvClient::new(None)).await
     }
 
+    async fn new_with_failing_quit() -> Self {
+      Self::connect_with_options(MpvClient::new(None), None, true).await
+    }
+
     async fn new_with_withheld_sub_add() -> (Self, SubAddResponseGate) {
       let gate = SubAddResponseGate::new();
       let mpv = Self::connect_with_sub_add_gate(MpvClient::new(None), Some(gate.clone())).await;
@@ -2265,6 +2344,14 @@ mod tests {
     async fn connect_with_sub_add_gate(
       client: MpvClient,
       withheld_sub_add: Option<SubAddResponseGate>,
+    ) -> Self {
+      Self::connect_with_options(client, withheld_sub_add, false).await
+    }
+
+    async fn connect_with_options(
+      client: MpvClient,
+      withheld_sub_add: Option<SubAddResponseGate>,
+      fail_quit: bool,
     ) -> Self {
       let (client_stream, peer_stream) = duplex(128 * 1024);
       let (reader, writer) = tokio::io::split(client_stream);
@@ -2311,11 +2398,17 @@ mod tests {
             }
           }
           let mut writer = task_writer.lock().await;
+          let error =
+            if fail_quit && command.first().and_then(serde_json::Value::as_str) == Some("quit") {
+              "failure containing secret-token"
+            } else {
+              "success"
+            };
           write_mpv_message(
             &mut writer,
             &serde_json::json!({
               "request_id": request_id,
-              "error": "success",
+              "error": error,
               "data": data,
             }),
           )
@@ -3375,6 +3468,135 @@ mod tests {
     ));
 
     assert!(reported);
+  }
+
+  #[test]
+  fn shutdown_reports_stop_before_starting_mpv_cleanup() {
+    run_async(async {
+      let gate = StopReportGate::new();
+      let server = Arc::new(MockPlaybackServer::new().with_stop_report_gate(gate.clone()));
+      let (mut controller, mpv) = controller_harness(server).await;
+      let _ = controller
+        .play(
+          library_item("Episode").into(),
+          PlaybackStartPosition::Beginning,
+        )
+        .await
+        .expect("playback should start");
+      let mut shutdown = Box::pin(controller.shutdown());
+
+      tokio::select! {
+        () = gate.wait_for_report() => {}
+        outcome = &mut shutdown => panic!("shutdown completed before the stop report: {outcome:?}"),
+      }
+
+      assert!(!mpv
+        .received_commands()
+        .iter()
+        .any(|command| { command.first().and_then(serde_json::Value::as_str) == Some("quit") }));
+      gate.release_report();
+      let outcome = shutdown.await;
+      assert!(outcome.cleanup.is_ok());
+      assert!(mpv
+        .received_commands()
+        .iter()
+        .any(|command| { command.first().and_then(serde_json::Value::as_str) == Some("quit") }));
+    });
+  }
+
+  #[test]
+  fn failed_stop_report_still_runs_mpv_cleanup() {
+    run_async(async {
+      let server = Arc::new(MockPlaybackServer::new());
+      let (mut controller, mpv) = controller_harness(Arc::clone(&server)).await;
+      let _ = controller
+        .play(
+          library_item("Episode").into(),
+          PlaybackStartPosition::Beginning,
+        )
+        .await
+        .expect("playback should start");
+      server.fail_stop.store(true, Ordering::Relaxed);
+
+      let outcome = controller.shutdown().await;
+
+      assert_eq!(
+        outcome,
+        PlaybackShutdownOutcome {
+          warnings: vec![PlaybackWarning::PlaybackStopNotReported],
+          cleanup: Ok(()),
+        }
+      );
+      assert!(mpv
+        .received_commands()
+        .iter()
+        .any(|command| { command.first().and_then(serde_json::Value::as_str) == Some("quit") }));
+    });
+  }
+
+  #[test]
+  fn failed_process_cleanup_returns_a_sanitized_failure() {
+    run_async(async {
+      let server = Arc::new(MockPlaybackServer::new());
+      let mpv = InMemoryMpv::new().await;
+      mpv.client.fail_next_cleanup_for_test();
+      let mut controller = PlaybackController::from_server(server, mpv.client.clone(), Vec::new());
+
+      let outcome = controller.shutdown().await;
+
+      let error = outcome
+        .cleanup
+        .expect_err("failed quit must cross the cleanup boundary");
+      assert_eq!(error, PlaybackCleanupError::MpvCleanupFailed);
+      assert_eq!(
+        error.to_string(),
+        "MPV process cleanup could not be confirmed"
+      );
+      assert!(!format!("{error:?}").contains("secret-token"));
+    });
+  }
+
+  #[test]
+  fn failed_graceful_quit_does_not_override_successful_local_cleanup() {
+    run_async(async {
+      let server = Arc::new(MockPlaybackServer::new());
+      let mpv = InMemoryMpv::new_with_failing_quit().await;
+      let mut controller = PlaybackController::from_server(server, mpv.client.clone(), Vec::new());
+
+      let outcome = controller.shutdown().await;
+
+      assert_eq!(outcome.cleanup, Ok(()));
+    });
+  }
+
+  #[test]
+  fn shutdown_retry_does_not_repeat_the_stop_report() {
+    run_async(async {
+      let server = Arc::new(MockPlaybackServer::new());
+      let mpv = InMemoryMpv::new().await;
+      mpv.client.fail_next_cleanup_for_test();
+      let mut controller =
+        PlaybackController::from_server(server.clone(), mpv.client.clone(), Vec::new());
+      let _ = controller
+        .play(
+          library_item("Episode").into(),
+          PlaybackStartPosition::Beginning,
+        )
+        .await
+        .expect("playback should start");
+
+      let first = controller.shutdown().await;
+      let retry = controller.shutdown().await;
+
+      assert_eq!(
+        (first.cleanup, retry.cleanup, server.stop_item_ids()),
+        (
+          Err(PlaybackCleanupError::MpvCleanupFailed),
+          Ok(()),
+          vec!["item-1".to_owned()],
+        )
+      );
+    });
   }
 
   #[test]

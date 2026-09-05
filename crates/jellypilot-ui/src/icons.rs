@@ -87,7 +87,7 @@ impl From<f32> for IconSize {
     }
 }
 
-const ICON_COUNT: usize = 55;
+const ICON_COUNT: usize = 58;
 static ICON_HANDLES: LazyLock<[Handle; ICON_COUNT]> = LazyLock::new(|| {
     let mut handles = std::array::from_fn(|_| Handle::from_memory(&[]));
     for icon in Icon::all() {
@@ -123,8 +123,11 @@ pub enum Icon {
     Settings,
 
     // Actions & state toggles
+    Copy,
     Heart,
     HeartFilled,
+    Bookmark,
+    BookmarkFilled,
     Check,
     CircleCheck,
     Circle,
@@ -194,8 +197,11 @@ impl Icon {
             Self::Search => include_bytes!("../assets/icons/search.svg"),
             Self::Settings => include_bytes!("../assets/icons/settings.svg"),
 
+            Self::Copy => include_bytes!("../assets/icons/copy.svg"),
             Self::Heart => include_bytes!("../assets/icons/heart.svg"),
             Self::HeartFilled => include_bytes!("../assets/icons/heart-filled.svg"),
+            Self::Bookmark => include_bytes!("../assets/icons/bookmark.svg"),
+            Self::BookmarkFilled => include_bytes!("../assets/icons/bookmark-filled.svg"),
             Self::Check => include_bytes!("../assets/icons/check.svg"),
             Self::CircleCheck => include_bytes!("../assets/icons/circle-check.svg"),
             Self::Circle => include_bytes!("../assets/icons/circle.svg"),
@@ -283,8 +289,11 @@ impl Icon {
             Self::Folder,
             Self::Search,
             Self::Settings,
+            Self::Copy,
             Self::Heart,
             Self::HeartFilled,
+            Self::Bookmark,
+            Self::BookmarkFilled,
             Self::Check,
             Self::CircleCheck,
             Self::Circle,

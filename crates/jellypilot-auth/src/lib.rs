@@ -6,6 +6,7 @@ use std::fmt;
 use std::ops::{Deref, DerefMut};
 use std::sync::{Arc, Mutex};
 
+use jellypilot_core::watchlist::ProfileScope;
 use jellypilot_media_server::{Credentials, JellyfinClient, MediaServerProvider, SavedSession};
 use keyring::{Entry, Error as KeyringError};
 use serde::{Deserialize, Serialize};
@@ -14,22 +15,34 @@ use zeroize::{Zeroize, Zeroizing};
 
 const KEYRING_SERVICE: &str = "io.github.hewel.JellyPilot";
 const KEYRING_ACCOUNT: &str = "saved-media-server-profiles-v1";
-const STORAGE_VERSION: u32 = 1;
+const LEGACY_STORAGE_VERSION: u32 = 1;
+const STORAGE_VERSION: u32 = 2;
 const WORKER_THREAD_NAME: &str = "jellypilot-secret-service";
 
 #[derive(Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct StoredProfiles {
     version: u32,
     profiles: Vec<SavedSession>,
+    #[serde(default)]
+    last_successfully_activated: Option<String>,
 }
 
 #[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
 struct StoredProfilesRef<'a> {
     version: u32,
     profiles: &'a [SavedSession],
+    #[serde(skip_serializing_if = "Option::is_none")]
+    last_successfully_activated: Option<&'a str>,
 }
 
 struct SensitiveSessions(Vec<SavedSession>);
+
+struct SensitiveProfileState {
+    sessions: SensitiveSessions,
+    last_successfully_activated: Option<SavedProfileKey>,
+}
 
 pub struct SensitiveSavedSession(Option<SavedSession>);
 
@@ -165,6 +178,11 @@ impl SavedProfileKey {
     pub fn for_session(session: &SavedSession) -> Self {
         profile_key(session)
     }
+
+    /// Derives the stable secure-storage key for a display-free profile scope.
+    pub fn for_scope(scope: &ProfileScope) -> Self {
+        profile_key_for_identity(scope.provider(), scope.server_url(), scope.user_id())
+    }
 }
 
 impl fmt::Debug for SavedProfileKey {
@@ -180,6 +198,7 @@ pub struct SavedProfileSummary {
     pub server_url: String,
     pub server_name: Option<String>,
     pub user_name: String,
+    scope: ProfileScope,
 }
 
 impl SavedProfileSummary {
@@ -197,6 +216,11 @@ impl SavedProfileSummary {
 
     pub fn user_name(&self) -> &str {
         &self.user_name
+    }
+
+    /// Stable server-user identity used to partition device-local data.
+    pub const fn scope(&self) -> &ProfileScope {
+        &self.scope
     }
 
     pub fn title(&self) -> String {
@@ -236,6 +260,27 @@ impl SavedProfileSummary {
 
     fn server_display_name(&self) -> &str {
         self.server_name.as_deref().unwrap_or(&self.server_url)
+    }
+}
+
+/// Redacted saved-profile index plus the only profile eligible for startup restore.
+#[derive(Clone, Debug)]
+pub struct SavedProfilesSnapshot {
+    profiles: Vec<SavedProfileSummary>,
+    last_successfully_activated: Option<SavedProfileKey>,
+}
+
+impl SavedProfilesSnapshot {
+    pub fn profiles(&self) -> &[SavedProfileSummary] {
+        &self.profiles
+    }
+
+    pub fn into_profiles(self) -> Vec<SavedProfileSummary> {
+        self.profiles
+    }
+
+    pub const fn last_successfully_activated(&self) -> Option<&SavedProfileKey> {
+        self.last_successfully_activated.as_ref()
     }
 }
 
@@ -291,7 +336,15 @@ impl AuthStore {
     }
 
     pub async fn load_profiles(&self) -> Result<Vec<SavedProfileSummary>, AuthStorageError> {
-        self.run(|store| store.load_profiles_blocking()).await
+        self.load_profiles_snapshot()
+            .await
+            .map(SavedProfilesSnapshot::into_profiles)
+    }
+
+    /// Loads saved profiles and the last profile successfully adopted by the app.
+    pub async fn load_profiles_snapshot(&self) -> Result<SavedProfilesSnapshot, AuthStorageError> {
+        self.run(|store| store.load_profiles_snapshot_blocking())
+            .await
     }
 
     pub async fn load_session(
@@ -323,6 +376,18 @@ impl AuthStore {
             .await
     }
 
+    /// Records a restorable profile after its validated candidate has been adopted.
+    ///
+    /// Failed validation must not call this method. A stale key returns
+    /// [`AuthStorageError::ProfileNotFound`] without changing the prior selection.
+    pub async fn record_successful_activation(
+        &self,
+        key: SavedProfileKey,
+    ) -> Result<(), AuthStorageError> {
+        self.run(move |store| store.record_successful_activation_blocking(&key))
+            .await
+    }
+
     async fn run<T, F>(&self, operation: F) -> Result<T, AuthStorageError>
     where
         T: Send + 'static,
@@ -339,10 +404,10 @@ impl AuthStore {
         receiver.await.map_err(|_| AuthStorageError::Unavailable)?
     }
 
-    fn load_profiles_blocking(&self) -> Result<Vec<SavedProfileSummary>, AuthStorageError> {
+    fn load_profiles_snapshot_blocking(&self) -> Result<SavedProfilesSnapshot, AuthStorageError> {
         let _operation = self.lock_operation()?;
-        self.load_sessions()
-            .map(|sessions| profile_summaries(&sessions))
+        let state = self.load_state()?;
+        saved_profiles_snapshot(&state)
     }
 
     fn load_session_blocking(
@@ -350,12 +415,13 @@ impl AuthStore {
         key: &SavedProfileKey,
     ) -> Result<SensitiveSavedSession, AuthStorageError> {
         let _operation = self.lock_operation()?;
-        let mut sessions = self.load_sessions()?;
-        let position = sessions
+        let mut state = self.load_state()?;
+        let position = state
+            .sessions
             .iter()
             .position(|session| profile_key(session) == *key)
             .ok_or(AuthStorageError::ProfileNotFound)?;
-        Ok(SensitiveSavedSession::new(sessions.remove(position)))
+        Ok(SensitiveSavedSession::new(state.sessions.remove(position)))
     }
 
     fn save_session_blocking(
@@ -363,11 +429,11 @@ impl AuthStore {
         mut session: SensitiveSavedSession,
     ) -> Result<(SavedProfileKey, Vec<SavedProfileSummary>), AuthStorageError> {
         let _operation = self.lock_operation()?;
-        let mut sessions = self.load_sessions()?;
+        let mut state = self.load_state()?;
         let session = session.take_for_storage();
-        let key = upsert_session(&mut sessions, session);
-        self.write_sessions(&sessions)?;
-        Ok((key, profile_summaries(&sessions)))
+        let key = upsert_session(&mut state.sessions, session);
+        self.write_state(&state)?;
+        Ok((key, profile_summaries(&state.sessions)?))
     }
 
     fn remove_profile_blocking(
@@ -375,41 +441,83 @@ impl AuthStore {
         key: &SavedProfileKey,
     ) -> Result<Vec<SavedProfileSummary>, AuthStorageError> {
         let _operation = self.lock_operation()?;
-        let mut sessions = self.load_sessions()?;
-        if !remove_session(&mut sessions, key) {
+        let mut state = self.load_state()?;
+        if !remove_session(&mut state.sessions, key) {
             return Err(AuthStorageError::ProfileNotFound);
         }
-        if sessions.is_empty() {
+        if state.last_successfully_activated.as_ref() == Some(key) {
+            state.last_successfully_activated = None;
+        }
+        if state.sessions.is_empty() {
             self.delete_all()?;
         } else {
-            self.write_sessions(&sessions)?;
+            self.write_state(&state)?;
         }
-        Ok(profile_summaries(&sessions))
+        profile_summaries(&state.sessions)
     }
 
-    fn load_sessions(&self) -> Result<SensitiveSessions, AuthStorageError> {
+    fn record_successful_activation_blocking(
+        &self,
+        key: &SavedProfileKey,
+    ) -> Result<(), AuthStorageError> {
+        let _operation = self.lock_operation()?;
+        let mut state = self.load_state()?;
+        if !state
+            .sessions
+            .iter()
+            .any(|session| profile_key(session) == *key)
+        {
+            return Err(AuthStorageError::ProfileNotFound);
+        }
+        if state.last_successfully_activated.as_ref() == Some(key) {
+            return Ok(());
+        }
+        state.last_successfully_activated = Some(key.clone());
+        self.write_state(&state)
+    }
+
+    fn load_state(&self) -> Result<SensitiveProfileState, AuthStorageError> {
         let secret = match self.credential.read() {
             Ok(secret) => Zeroizing::new(secret),
-            Err(CredentialError::Missing) => return Ok(SensitiveSessions(Vec::new())),
+            Err(CredentialError::Missing) => {
+                return Ok(SensitiveProfileState {
+                    sessions: SensitiveSessions(Vec::new()),
+                    last_successfully_activated: None,
+                });
+            }
             Err(CredentialError::Unavailable | CredentialError::WriteFailed) => {
                 return Err(AuthStorageError::Unavailable);
             }
         };
         let stored: StoredProfiles =
             serde_json::from_slice(secret.as_slice()).map_err(|_| AuthStorageError::Corrupt)?;
-        let profiles = SensitiveSessions(stored.profiles);
-        if stored.version == STORAGE_VERSION && profiles.iter().all(valid_session) {
-            Ok(profiles)
-        } else {
-            Err(AuthStorageError::Corrupt)
+        let sessions = SensitiveSessions(stored.profiles);
+        if !matches!(stored.version, LEGACY_STORAGE_VERSION | STORAGE_VERSION)
+            || !sessions.iter().all(valid_session)
+        {
+            return Err(AuthStorageError::Corrupt);
         }
+
+        let last_successfully_activated = (stored.version == STORAGE_VERSION)
+            .then_some(stored.last_successfully_activated)
+            .flatten()
+            .map(SavedProfileKey)
+            .filter(|key| sessions.iter().any(|session| profile_key(session) == *key));
+        Ok(SensitiveProfileState {
+            sessions,
+            last_successfully_activated,
+        })
     }
 
-    fn write_sessions(&self, sessions: &[SavedSession]) -> Result<(), AuthStorageError> {
+    fn write_state(&self, state: &SensitiveProfileState) -> Result<(), AuthStorageError> {
         let encoded = Zeroizing::new(
             serde_json::to_vec(&StoredProfilesRef {
                 version: STORAGE_VERSION,
-                profiles: sessions,
+                profiles: &state.sessions,
+                last_successfully_activated: state
+                    .last_successfully_activated
+                    .as_ref()
+                    .map(|key| key.0.as_str()),
             })
             .map_err(|_| AuthStorageError::WriteFailed)?,
         );
@@ -491,17 +599,37 @@ fn remove_session(sessions: &mut Vec<SavedSession>, key: &SavedProfileKey) -> bo
     }
 }
 
-fn profile_summaries(sessions: &[SavedSession]) -> Vec<SavedProfileSummary> {
+fn profile_summaries(
+    sessions: &[SavedSession],
+) -> Result<Vec<SavedProfileSummary>, AuthStorageError> {
     sessions
         .iter()
-        .map(|session| SavedProfileSummary {
-            key: profile_key(session),
-            provider: session.provider,
-            server_url: session.server_url.clone(),
-            server_name: session.server_name.clone(),
-            user_name: session.user_name.clone(),
+        .map(|session| {
+            let scope = ProfileScope::new(
+                session.provider,
+                session.server_url.clone(),
+                session.user_id.clone(),
+            )
+            .map_err(|_| AuthStorageError::Corrupt)?;
+            Ok(SavedProfileSummary {
+                key: SavedProfileKey::for_scope(&scope),
+                provider: session.provider,
+                server_url: session.server_url.clone(),
+                server_name: session.server_name.clone(),
+                user_name: session.user_name.clone(),
+                scope,
+            })
         })
         .collect()
+}
+
+fn saved_profiles_snapshot(
+    state: &SensitiveProfileState,
+) -> Result<SavedProfilesSnapshot, AuthStorageError> {
+    Ok(SavedProfilesSnapshot {
+        profiles: profile_summaries(&state.sessions)?,
+        last_successfully_activated: state.last_successfully_activated.clone(),
+    })
 }
 
 fn profile_key(session: &SavedSession) -> SavedProfileKey {
@@ -519,14 +647,14 @@ fn profile_key_for_identity(
     };
     SavedProfileKey(format!(
         "{provider}|{}|{user_id}",
-        server_url.trim_end_matches('/')
+        server_url.trim().trim_end_matches('/'),
+        user_id = user_id.trim()
     ))
 }
 
 fn valid_session(session: &SavedSession) -> bool {
-    !session.server_url.trim().is_empty()
-        && !session.access_token.is_empty()
-        && !session.user_id.is_empty()
+    ProfileScope::new(session.provider, &session.server_url, &session.user_id).is_ok()
+        && !session.access_token.trim().is_empty()
         && !session.user_name.trim().is_empty()
 }
 
@@ -542,6 +670,7 @@ mod tests {
     struct MemoryCredential {
         secret: Mutex<Option<Vec<u8>>>,
         fail_delete: AtomicBool,
+        fail_write: AtomicBool,
         operation_thread: Mutex<Option<(ThreadId, String)>>,
     }
 
@@ -569,6 +698,9 @@ mod tests {
 
         fn write(&self, secret: &[u8]) -> Result<(), CredentialError> {
             self.record_operation_thread()?;
+            if self.fail_write.load(Ordering::Relaxed) {
+                return Err(CredentialError::WriteFailed);
+            }
             *self
                 .secret
                 .lock()
@@ -635,11 +767,27 @@ mod tests {
 
     #[test]
     fn saved_profile_debug_output_redacts_server_and_key() {
-        let summary = profile_summaries(&[session("secret-token")]).remove(0);
+        let summary = profile_summaries(&[session("secret-token")])
+            .expect("valid session should have a profile scope")
+            .remove(0);
 
         let debug = format!("{summary:?}");
 
         assert!(!debug.contains("media.example.com") && !debug.contains("user-1"));
+    }
+
+    #[test]
+    fn saved_profile_summary_exposes_the_normalized_profile_scope() {
+        let mut saved = session("secret-token");
+        saved.server_url = " https://media.example.com/ ".to_owned();
+        saved.user_id = " user-1 ".to_owned();
+
+        let summary = profile_summaries(&[saved])
+            .expect("valid session should have a profile scope")
+            .remove(0);
+
+        assert_eq!(summary.scope().server_url(), "https://media.example.com");
+        assert_eq!(summary.scope().user_id(), "user-1");
     }
 
     #[test]
@@ -668,6 +816,134 @@ mod tests {
             block_on(store.load_session(key)).expect("memory adapter should load session");
 
         assert_eq!(restored.access_token, "secret-token");
+    }
+
+    #[test]
+    fn legacy_v1_store_loads_without_a_startup_selection() {
+        let credential = Arc::new(MemoryCredential::default());
+        let encoded = serde_json::to_vec(&StoredProfilesRef {
+            version: LEGACY_STORAGE_VERSION,
+            profiles: &[session("legacy-token")],
+            last_successfully_activated: None,
+        })
+        .expect("legacy fixture should serialize");
+        credential
+            .write(&encoded)
+            .expect("legacy fixture should be stored");
+        let store = store_with_credential(credential);
+
+        let snapshot = block_on(store.load_profiles_snapshot())
+            .expect("legacy profile collection should load");
+
+        assert_eq!(snapshot.profiles().len(), 1);
+        assert!(snapshot.last_successfully_activated().is_none());
+    }
+
+    #[test]
+    fn successful_activation_round_trips_with_the_profile_snapshot() {
+        let store = memory_store();
+        let (key, _) =
+            block_on(store.save_session(SensitiveSavedSession::new(session("secret-token"))))
+                .expect("memory adapter should save session");
+
+        block_on(store.record_successful_activation(key.clone()))
+            .expect("saved profile should become the startup selection");
+        let snapshot =
+            block_on(store.load_profiles_snapshot()).expect("profile snapshot should reload");
+
+        assert_eq!(snapshot.last_successfully_activated(), Some(&key));
+    }
+
+    #[test]
+    fn stale_activation_key_preserves_the_last_successful_selection() {
+        let store = memory_store();
+        let (selected, _) =
+            block_on(store.save_session(SensitiveSavedSession::new(session("selected-token"))))
+                .expect("memory adapter should save session");
+        block_on(store.record_successful_activation(selected.clone()))
+            .expect("saved profile should become the startup selection");
+        let missing = SavedProfileKey::for_identity(
+            MediaServerProvider::Jellyfin,
+            "https://other.example.com",
+            "missing-user",
+        );
+
+        let error = block_on(store.record_successful_activation(missing))
+            .expect_err("stale profile key should fail");
+        let snapshot = block_on(store.load_profiles_snapshot())
+            .expect("prior selection should remain readable");
+
+        assert_eq!(error, AuthStorageError::ProfileNotFound);
+        assert_eq!(snapshot.last_successfully_activated(), Some(&selected));
+    }
+
+    #[test]
+    fn failed_activation_write_preserves_the_last_successful_selection() {
+        let credential = Arc::new(MemoryCredential::default());
+        let store = store_with_credential(credential.clone());
+        let (selected, _) =
+            block_on(store.save_session(SensitiveSavedSession::new(session("selected-token"))))
+                .expect("memory adapter should save session");
+        block_on(store.record_successful_activation(selected.clone()))
+            .expect("first selection should persist");
+        let mut other = session("other-token");
+        other.user_id = "user-2".to_owned();
+        other.user_name = "Grace".to_owned();
+        let (other, _) = block_on(store.save_session(SensitiveSavedSession::new(other)))
+            .expect("second profile should persist");
+        credential.fail_write.store(true, Ordering::Relaxed);
+
+        let error = block_on(store.record_successful_activation(other))
+            .expect_err("selection write should fail");
+        credential.fail_write.store(false, Ordering::Relaxed);
+        let snapshot = block_on(store.load_profiles_snapshot())
+            .expect("prior selection should remain readable");
+
+        assert_eq!(error, AuthStorageError::WriteFailed);
+        assert_eq!(snapshot.last_successfully_activated(), Some(&selected));
+    }
+
+    #[test]
+    fn removing_an_inactive_profile_preserves_the_startup_selection() {
+        let store = memory_store();
+        let (selected, _) =
+            block_on(store.save_session(SensitiveSavedSession::new(session("selected-token"))))
+                .expect("memory adapter should save session");
+        let mut inactive_session = session("inactive-token");
+        inactive_session.user_id = "inactive-user".to_owned();
+        inactive_session.user_name = "Grace".to_owned();
+        let (inactive, _) =
+            block_on(store.save_session(SensitiveSavedSession::new(inactive_session)))
+                .expect("inactive profile should save");
+        block_on(store.record_successful_activation(selected.clone()))
+            .expect("saved profile should become the startup selection");
+
+        block_on(store.remove_profile(inactive)).expect("inactive profile should be removed");
+        let snapshot =
+            block_on(store.load_profiles_snapshot()).expect("profile snapshot should reload");
+
+        assert_eq!(snapshot.last_successfully_activated(), Some(&selected));
+    }
+
+    #[test]
+    fn removing_the_selected_profile_clears_the_startup_selection() {
+        let store = memory_store();
+        let (selected, _) =
+            block_on(store.save_session(SensitiveSavedSession::new(session("selected-token"))))
+                .expect("memory adapter should save session");
+        let mut retained_session = session("retained-token");
+        retained_session.user_id = "retained-user".to_owned();
+        retained_session.user_name = "Grace".to_owned();
+        block_on(store.save_session(SensitiveSavedSession::new(retained_session)))
+            .expect("retained profile should save");
+        block_on(store.record_successful_activation(selected.clone()))
+            .expect("saved profile should become the startup selection");
+
+        block_on(store.remove_profile(selected)).expect("selected profile should be removed");
+        let snapshot =
+            block_on(store.load_profiles_snapshot()).expect("profile snapshot should reload");
+
+        assert!(snapshot.last_successfully_activated().is_none());
     }
 
     #[test]
@@ -704,10 +980,26 @@ mod tests {
                 .expect("memory adapter should save session");
         credential.fail_delete.store(true, Ordering::Relaxed);
 
-        let error =
-            block_on(store.remove_profile(key)).expect_err("failed secure deletion should fail");
+        let error = block_on(store.remove_profile(key.clone()))
+            .expect_err("failed secure deletion should fail");
+        credential.fail_delete.store(false, Ordering::Relaxed);
+        let restored = block_on(store.load_session(key))
+            .expect("failed secure deletion must leave the credential readable");
 
         assert_eq!(error, AuthStorageError::WriteFailed);
+        assert_eq!(restored.access_token, "secret-token");
+    }
+
+    #[test]
+    fn cloned_store_uses_the_same_serial_operation_boundary() {
+        let store = memory_store();
+        let clone = store.clone();
+        let _operation = store
+            .operation
+            .lock()
+            .expect("first store should acquire the operation boundary");
+
+        assert!(clone.operation.try_lock().is_err());
     }
 
     #[test]
@@ -732,7 +1024,7 @@ mod tests {
     fn typed_storage_error_round_trips_through_the_async_interface() {
         let credential = Arc::new(MemoryCredential::default());
         credential
-            .write(br#"{"version":2,"profiles":[]}"#)
+            .write(br#"{"version":3,"profiles":[]}"#)
             .expect("fixture should be stored");
         let store = store_with_credential(credential);
 

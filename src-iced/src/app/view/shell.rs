@@ -1,28 +1,41 @@
-use super::{browse, detail, home, player, settings};
-use crate::app::message::{BrowseMessage, HomeMessage, Message, SettingsMessage};
+use super::{account, browse, detail, home, personal_lists, player, settings};
+use crate::app::message::{BrowseMessage, HomeMessage, Message, SettingsMessage, ShellMessage};
+use crate::app::personal_lists::Route;
+use crate::app::shell::{SEARCH_INPUT_ID, SEARCH_TRIGGER_ID, SETTINGS_TRIGGER_ID};
 use crate::app::state::{Destination, NoticeLevel, State, ToastNotice};
-use iced::widget::{button, column, container, row, space, stack, text, text_input, Column};
-use iced::{Alignment, Color, Element, Fill, Length};
+use iced::widget::{
+  button, column, container, row, scrollable, space, stack, text, text_input, Column, Id,
+};
+use iced::{Alignment, Background, Border, Color, Element, Fill, Length};
 use jellypilot_core::config::AppMode;
 use jellypilot_core::LoadState;
 use jellypilot_ui::fonts::SPACE_GROTESK_FONT;
 use jellypilot_ui::icons::{icon_with_color, Icon, IconSize};
 use jellypilot_ui::layout::SizeClass;
-use jellypilot_ui::overlay::{tooltip, TooltipOptions};
-use jellypilot_ui::theme::ThemeMode as UiThemeMode;
+use jellypilot_ui::overlay::{popover, tooltip, PopoverOptions, TooltipOptions};
 use jellypilot_ui::tokens::{ThemePalette, TOKENS};
 use jellypilot_ui::variants::{ButtonVariant, FieldVariant, SurfaceVariant};
 use jellypilot_ui::widgets::control_button::control_button;
+use jellypilot_ui::widgets::escape_input::clear_on_escape;
+use jellypilot_ui::widgets::inert::inert;
 use jellypilot_ui::widgets::skeleton::skeleton_block;
-pub(crate) const SIDEBAR_WIDTH: f32 = 248.0;
+pub(crate) const SIDEBAR_WIDTH: f32 = 240.0;
 pub(crate) const SIDEBAR_RAIL_WIDTH: f32 = 72.0;
 /// Width of the two shell hairlines (sidebar edge and player-bar edge).
 pub(crate) const HAIRLINE_WIDTH: f32 = 1.0;
 
+fn platform_search_hint() -> &'static str {
+  if cfg!(target_os = "macos") {
+    "⌘K"
+  } else {
+    "Ctrl K"
+  }
+}
+
 /// Returns the sidebar width corresponding to the given window-width [`SizeClass`].
 ///
 /// Compact windows collapse the sidebar to a 72px icon rail to maximize screen
-/// real estate for media content, while Standard and Wide windows use the full 248px panel.
+/// real estate for media content, while Standard and Wide windows use the full 240px panel.
 pub(crate) fn sidebar_width(class: SizeClass) -> f32 {
   match class {
     SizeClass::Compact => SIDEBAR_RAIL_WIDTH,
@@ -43,6 +56,7 @@ pub fn view(state: &State) -> Element<'_, Message> {
   let content: Element<'_, Message> = match &state.shell.destination {
     Destination::Home => home::view(state),
     Destination::Library { .. } | Destination::Search(_) => browse::view(state),
+    Destination::PersonalLists(_) => personal_lists::view(state),
     Destination::Detail(_) => detail::view(state),
     // Now Playing is the Control-Only root; the router never routes here in
     // Full mode, where the player is a bar.
@@ -93,22 +107,11 @@ pub fn view(state: &State) -> Element<'_, Message> {
     .style(|theme| jellypilot_ui::theme::surface_variant(theme, SurfaceVariant::Canvas));
 
   if state.shell.settings_open {
-    let mut modal_stack = stack![base_view, settings_modal(state)]
+    // Keep the shell visible below Settings while removing it from input,
+    // overlays, and focus traversal.
+    let modal_stack = stack![inert(base_view), settings_modal(state)]
       .width(Fill)
       .height(Fill);
-    if let Some(toast) = visible_toast(state) {
-      modal_stack = modal_stack.push(
-        container(toast_view(palette, toast))
-          .width(Fill)
-          .padding(iced::Padding {
-            top: TOKENS.spacing.s2,
-            right: TOKENS.spacing.s3,
-            bottom: 0.0,
-            left: TOKENS.spacing.s3,
-          })
-          .align_x(Alignment::End),
-      );
-    }
     container(modal_stack)
       .width(Fill)
       .height(Fill)
@@ -124,11 +127,12 @@ pub fn view(state: &State) -> Element<'_, Message> {
 /// layer on top.
 fn control_only_view(state: &State) -> Element<'_, Message> {
   let palette = state.palette();
-  let content: Element<'_, Message> = player::full(state);
+  let content: Element<'_, Message> = if state.shell.settings_open {
+    settings_modal(state)
+  } else {
+    player::full(state)
+  };
   let mut content_stack = stack![content].width(Fill).height(Fill);
-  if state.shell.settings_open {
-    content_stack = content_stack.push(settings_modal(state));
-  }
   if let Some(toast) = visible_toast(state) {
     content_stack = content_stack.push(
       container(toast_view(palette, toast))
@@ -245,40 +249,31 @@ fn sidebar_full(
   skeleton_phase: f32,
   reduced_motion: bool,
 ) -> container::Container<'_, Message> {
-  let search_input = text_input(
-    "Search videos",
-    &state
-      .full
-      .as_ref()
-      .expect("FullUi required")
-      .browse
-      .search_input,
-  )
-  .on_input(|value| Message::Browse(BrowseMessage::SearchInputChanged(value)))
-  .on_submit(Message::Browse(BrowseMessage::SearchSubmitted))
-  .padding([8, 12])
-  .size(14)
-  .width(Fill)
-  .style(|theme, status| jellypilot_ui::theme::field_variant(theme, status, FieldVariant::Filled));
-  let search_button = control_button(Some(Icon::Search), None, ButtonVariant::Tonal)
-    .icon_size(IconSize::Sm)
-    .padding([7, 11])
-    .on_press(Message::Browse(BrowseMessage::SearchSubmitted));
-  let search_slot = row![
-    search_input,
-    tooltip(search_button, "Search", TooltipOptions::default()),
-  ]
-  .spacing(TOKENS.spacing.s1_5)
-  .align_y(Alignment::Center);
-  let mut destinations = Column::new()
+  let search_draft = &state
+    .full
+    .as_ref()
+    .expect("FullUi required")
+    .browse
+    .search_input;
+  let search_slot = unified_search_field(search_draft, Some(SEARCH_TRIGGER_ID));
+  let personal_destination = Destination::PersonalLists(Route::Overview);
+  let personal_active = matches!(state.shell.destination, Destination::PersonalLists(_));
+  let personal_navigation = Column::new()
     .spacing(TOKENS.spacing.s1_5)
     .push(destination_button(
       Icon::Home,
       "Home",
       Destination::Home,
       state.shell.destination == Destination::Home,
+    ))
+    .push(destination_button(
+      Icon::Heart,
+      "Personal Lists",
+      personal_destination,
+      personal_active,
     ));
-  match &state
+
+  let libraries = match &state
     .full
     .as_ref()
     .expect("FullUi required")
@@ -286,58 +281,64 @@ fn sidebar_full(
     .data
     .shortcuts
   {
-    LoadState::Idle | LoadState::Loading => {
-      destinations = destinations
-        .push(shortcut_skeleton(skeleton_phase, reduced_motion))
-        .push(shortcut_skeleton(skeleton_phase, reduced_motion));
-    }
+    LoadState::Idle | LoadState::Loading => Column::new()
+      .spacing(TOKENS.spacing.s1_5)
+      .push(shortcut_skeleton(skeleton_phase, reduced_motion))
+      .push(shortcut_skeleton(skeleton_phase, reduced_motion)),
     LoadState::Ready(shortcuts) => {
+      let mut libraries = Column::new().spacing(TOKENS.spacing.s1_5);
       for shortcut in shortcuts {
         let destination = Destination::Library {
           library_id: shortcut.id.clone(),
           collection_type: shortcut.collection_type.clone(),
         };
         let active = state.shell.destination == destination;
-        destinations = destinations.push(destination_button(
+        libraries = libraries.push(destination_button(
           Icon::for_collection_type(&shortcut.collection_type),
           &shortcut.name,
           destination,
           active,
         ));
       }
+      libraries
     }
-    LoadState::Failed(_) => {
-      destinations = destinations.push(
-        text("Libraries unavailable")
-          .size(12)
-          .color(state.palette().colors.warning),
-      );
-    }
-  }
+    LoadState::Failed(_) => Column::new().push(
+      text("Libraries unavailable")
+        .size(12)
+        .color(state.palette().colors.warning),
+    ),
+  };
 
-  let main = column![search_slot, destinations]
-    .spacing(TOKENS.spacing.s5)
-    .width(Fill);
+  let library_count = match &state
+    .full
+    .as_ref()
+    .expect("FullUi required")
+    .home
+    .data
+    .shortcuts
+  {
+    LoadState::Ready(shortcuts) => format!("Libraries · {}", shortcuts.len()),
+    _ => "Libraries".to_owned(),
+  };
+  let main = column![
+    search_slot,
+    personal_navigation,
+    text(library_count)
+      .size(12)
+      .color(state.palette().text.metadata),
+  ]
+  .spacing(TOKENS.spacing.s4)
+  .width(Fill);
+  let libraries = scrollable(libraries)
+    .width(Fill)
+    .height(Fill)
+    .style(jellypilot_ui::theme::scrollable);
   let bottom = column![
-    connection_summary(state),
-    row![
-      settings_button(),
-      theme_toggle_button(state),
-      tooltip(
-        control_button(Some(Icon::PictureInPicture), None, ButtonVariant::Tonal,)
-          .padding([7, 12])
-          .on_press(Message::Settings(SettingsMessage::AppModeSelected(
-            AppMode::ControlOnly,
-          ))),
-        "Control-only mode",
-        TooltipOptions::default(),
-      ),
-    ]
-    .spacing(TOKENS.spacing.s2)
-    .align_y(Alignment::Center),
+    account::sidebar_popover(state, false),
+    footer_toolbar(state),
   ]
   .spacing(TOKENS.spacing.s3);
-  let content = column![main, space::vertical(), bottom]
+  let content = column![main, libraries, bottom]
     .spacing(TOKENS.spacing.s4)
     .width(Fill)
     .height(Fill);
@@ -348,8 +349,108 @@ fn sidebar_full(
     .style(|theme| jellypilot_ui::theme::surface_variant(theme, SurfaceVariant::Block))
 }
 
+/// One shared, raised field keeps the full sidebar and compact-search popover
+/// visually and behaviorally identical. The compact rail owns the trigger ID;
+/// the expanded field owns it directly.
+fn unified_search_field<'a>(
+  search_draft: &'a str,
+  trigger_id: Option<&'static str>,
+) -> Element<'a, Message> {
+  let leading = control_button(Some(Icon::Search), None, ButtonVariant::Text)
+    .icon_size(IconSize::Sm)
+    .min_height(36.0)
+    .padding([7, 8])
+    .on_press(Message::Browse(BrowseMessage::SearchSubmitted));
+  let leading = match trigger_id {
+    Some(id) => leading.id(id),
+    None => leading,
+  };
+  let input = clear_on_escape(
+    text_input("Search movies and shows…", search_draft)
+      .on_input(|value| Message::Browse(BrowseMessage::SearchInputChanged(value)))
+      .on_submit(Message::Browse(BrowseMessage::SearchSubmitted))
+      .id(Id::new(SEARCH_INPUT_ID))
+      .padding([8, 2])
+      .size(14)
+      .width(Fill)
+      .style(|theme, status| {
+        let mut style = jellypilot_ui::theme::field_variant(theme, status, FieldVariant::Filled);
+        style.background = Background::Color(
+          jellypilot_ui::tokens::palette(theme)
+            .colors
+            .surfaceContainerHigh,
+        );
+        style
+      }),
+    Message::Shell(ShellMessage::ClearSearch),
+  );
+  let keycap = container(text(platform_search_hint()).size(11))
+    .padding([5, 7])
+    .style(|theme| {
+      let colors = jellypilot_ui::tokens::palette(theme).colors;
+      container::Style {
+        background: Some(Background::Color(colors.control)),
+        text_color: Some(colors.onControl),
+        border: Border {
+          radius: TOKENS.radii.md.into(),
+          color: Color::TRANSPARENT,
+          width: 0.0,
+        },
+        ..container::Style::default()
+      }
+    });
+  let trailing: Element<'_, Message> = if search_draft.is_empty() {
+    keycap.into()
+  } else {
+    tooltip(
+      control_button(Some(Icon::Close), None, ButtonVariant::Text)
+        .min_height(32.0)
+        .padding([6, 7])
+        .on_press(Message::Shell(ShellMessage::ClearSearch)),
+      "Clear search",
+      TooltipOptions::default(),
+    )
+  };
+
+  container(row![leading, input, trailing].align_y(Alignment::Center))
+    .padding(3)
+    .width(Fill)
+    .style(|theme| jellypilot_ui::theme::surface_variant(theme, SurfaceVariant::Raised))
+    .into()
+}
+
 fn sidebar_compact(state: &State) -> container::Container<'_, Message> {
-  let mut destinations = Column::new()
+  let search_trigger = tooltip(
+    control_button(Some(Icon::Search), None, ButtonVariant::Tonal)
+      .id(SEARCH_TRIGGER_ID)
+      .min_height(36.0)
+      .padding([7, 0])
+      .width(Fill)
+      .content_centered(true)
+      .on_press(Message::Shell(ShellMessage::ToggleCompactSearch)),
+    "Search",
+    TooltipOptions::default(),
+  );
+  let search_draft = &state
+    .full
+    .as_ref()
+    .expect("FullUi required")
+    .browse
+    .search_input;
+  let compact_search_content = unified_search_field(search_draft, None);
+  let compact_search = popover(
+    search_trigger,
+    compact_search_content,
+    state.shell.compact_search_open,
+    PopoverOptions {
+      width: Some(288.0),
+      ..PopoverOptions::default()
+    },
+    Message::Shell(ShellMessage::DismissCompactSearch),
+  );
+  let personal_destination = Destination::PersonalLists(Route::Overview);
+  let personal_active = matches!(state.shell.destination, Destination::PersonalLists(_));
+  let personal_navigation = Column::new()
     .spacing(TOKENS.spacing.s1_5)
     .align_x(Alignment::Center)
     .width(Fill)
@@ -359,7 +460,7 @@ fn sidebar_compact(state: &State) -> container::Container<'_, Message> {
       Destination::Home,
       state.shell.destination == Destination::Home,
     ));
-  if let LoadState::Ready(shortcuts) = &state
+  let libraries = match &state
     .full
     .as_ref()
     .expect("FullUi required")
@@ -367,34 +468,79 @@ fn sidebar_compact(state: &State) -> container::Container<'_, Message> {
     .data
     .shortcuts
   {
-    for shortcut in shortcuts {
-      let destination = Destination::Library {
-        library_id: shortcut.id.clone(),
-        collection_type: shortcut.collection_type.clone(),
-      };
-      let active = state.shell.destination == destination;
-      destinations = destinations.push(compact_destination_button(
-        Icon::for_collection_type(&shortcut.collection_type),
-        &shortcut.name,
-        destination,
-        active,
-      ));
+    LoadState::Idle | LoadState::Loading => Column::new()
+      .spacing(TOKENS.spacing.s2)
+      .align_x(Alignment::Center)
+      .push(shortcut_skeleton(
+        state.shell.skeleton_phase,
+        state.kernel.settings.snapshot().reduced_motion(),
+      ))
+      .push(shortcut_skeleton(
+        state.shell.skeleton_phase,
+        state.kernel.settings.snapshot().reduced_motion(),
+      )),
+    LoadState::Ready(shortcuts) => {
+      let mut libraries = Column::new()
+        .spacing(TOKENS.spacing.s1_5)
+        .align_x(Alignment::Center);
+      for shortcut in shortcuts {
+        let destination = Destination::Library {
+          library_id: shortcut.id.clone(),
+          collection_type: shortcut.collection_type.clone(),
+        };
+        let active = state.shell.destination == destination;
+        libraries = libraries.push(compact_destination_button(
+          Icon::for_collection_type(&shortcut.collection_type),
+          &shortcut.name,
+          destination,
+          active,
+        ));
+      }
+      libraries
     }
-  }
+    LoadState::Failed(_) => Column::new().push(icon_with_color(
+      Icon::Warning,
+      IconSize::Sm,
+      state.palette().colors.warning,
+    )),
+  };
+  let personal_navigation = personal_navigation.push(compact_destination_button(
+    Icon::Heart,
+    "Personal Lists",
+    personal_destination,
+    personal_active,
+  ));
+  let refresh = tooltip(
+    control_button(Some(Icon::Refresh), None, ButtonVariant::Tonal)
+      .min_height(36.0)
+      .padding([7, 0])
+      .width(Fill)
+      .content_centered(true)
+      .on_press_maybe(
+        (!state.shell.refresh_busy).then_some(Message::Shell(ShellMessage::RefreshCurrent)),
+      ),
+    if state.shell.refresh_busy {
+      "Refreshing…"
+    } else {
+      "Refresh"
+    },
+    TooltipOptions::default(),
+  );
 
   let bottom = column![
-    compact_connection_status(state),
+    account::sidebar_popover(state, true),
     compact_settings_button(),
-    compact_theme_toggle_button(state),
+    refresh,
     tooltip(
       control_button(Some(Icon::PictureInPicture), None, ButtonVariant::Tonal,)
+        .min_height(36.0)
         .padding([7, 12])
         .width(Fill)
         .content_centered(true)
         .on_press(Message::Settings(SettingsMessage::AppModeSelected(
           AppMode::ControlOnly,
         ))),
-      "Control-only mode",
+      "Control mode",
       TooltipOptions::default(),
     ),
   ]
@@ -402,10 +548,15 @@ fn sidebar_compact(state: &State) -> container::Container<'_, Message> {
   .align_x(Alignment::Center)
   .width(Fill);
 
-  let content = column![destinations, space::vertical(), bottom]
-    .spacing(TOKENS.spacing.s4)
-    .width(Fill)
-    .height(Fill);
+  let content = column![
+    compact_search,
+    personal_navigation,
+    scrollable(libraries).height(Fill),
+    bottom
+  ]
+  .spacing(TOKENS.spacing.s4)
+  .width(Fill)
+  .height(Fill);
 
   container(content)
     .padding(TOKENS.spacing.s4)
@@ -442,34 +593,47 @@ fn settings_modal(state: &State) -> Element<'_, Message> {
     .width(Fill)
     .height(Fill);
 
-  container(modal_content)
-    .width(Fill)
-    .height(Fill)
-    .style(|theme| jellypilot_ui::theme::surface_variant(theme, SurfaceVariant::Canvas))
-    .into()
+  let narrow = state.app_mode() == AppMode::ControlOnly
+    || SizeClass::from_width(state.shell.window_size.width) == SizeClass::Compact;
+  if narrow {
+    return container(modal_content)
+      .width(Fill)
+      .height(Fill)
+      .style(|theme| jellypilot_ui::theme::surface_variant(theme, SurfaceVariant::Canvas))
+      .into();
+  }
+
+  container(
+    container(modal_content)
+      .width(Length::Fixed(896.0))
+      .height(Length::Fixed(
+        (state.shell.window_size.height - 48.0).clamp(0.0, 620.0),
+      ))
+      .style(|theme| jellypilot_ui::theme::surface_variant(theme, SurfaceVariant::Raised)),
+  )
+  .width(Fill)
+  .height(Fill)
+  .padding(24)
+  .center_x(Fill)
+  .center_y(Fill)
+  .into()
 }
 
 fn settings_button<'a>() -> Element<'a, Message> {
-  // Opening the modal is an action, not navigation — it does not use the
-  // switch group's neutral ghost vocabulary. Tonal keeps it quiet beside the
-  // destinations.
-  control_button(
-    Some(Icon::Settings),
-    Some("Settings".to_owned()),
-    ButtonVariant::Tonal,
-  )
-  .label_size(14.0)
-  .spacing(TOKENS.spacing.s2_5)
-  .padding([7, 12])
-  .width(Fill)
-  .label_fill(true)
-  .on_press(Message::Settings(SettingsMessage::Open))
-  .into()
+  control_button(Some(Icon::Settings), None, ButtonVariant::Text)
+    .id(SETTINGS_TRIGGER_ID)
+    .min_height(40.0)
+    .width(Fill)
+    .content_centered(true)
+    .on_press(Message::Settings(SettingsMessage::Open))
+    .into()
 }
 
 fn compact_settings_button<'a>() -> Element<'a, Message> {
   // Action, not navigation — neutral Tonal, never the ghost vocabulary.
   let btn = control_button(Some(Icon::Settings), None, ButtonVariant::Tonal)
+    .id(SETTINGS_TRIGGER_ID)
+    .min_height(36.0)
     .padding([7, 0])
     .width(Fill)
     .content_centered(true)
@@ -478,42 +642,49 @@ fn compact_settings_button<'a>() -> Element<'a, Message> {
   tooltip(btn, "Settings", TooltipOptions::default())
 }
 
-// The theme toggle icon wears a FIXED per-mode color (amber sun in dark,
-// quiet slate moon in light) instead of the Tonal content-color transition,
-// so it stays on an iced button with `icon_with_color`.
-fn theme_toggle_icon(state: &State) -> (Icon, Color, &'static str) {
+/// The full sidebar groups its three global actions into one compact control
+/// strip so the account trigger remains the clear visual anchor at the bottom.
+fn footer_toolbar(state: &State) -> Element<'_, Message> {
   let palette = state.palette();
-  match state.theme_mode() {
-    UiThemeMode::Dark => (Icon::Sun, palette.colors.warning, "Switch to light theme"),
-    UiThemeMode::Light => (Icon::Moon, palette.colors.onControl, "Switch to dark theme"),
-  }
-}
-
-fn theme_toggle_button(state: &State) -> Element<'_, Message> {
-  let (icon, icon_color, label) = theme_toggle_icon(state);
-  let btn = button(icon_with_color(icon, IconSize::Md, icon_color))
-    .padding([7, 12])
-    .on_press(Message::Settings(SettingsMessage::ThemeTogglePressed))
-    .style(|theme, status| {
-      jellypilot_ui::theme::button_variant(theme, status, ButtonVariant::Tonal)
-    });
-
-  tooltip(btn, label, TooltipOptions::default())
-}
-
-fn compact_theme_toggle_button(state: &State) -> Element<'_, Message> {
-  let (icon, icon_color, label) = theme_toggle_icon(state);
-  let btn = button(
-    container(icon_with_color(icon, IconSize::Md, icon_color))
+  let divider = || {
+    container(space::horizontal())
+      .width(1.0)
+      .height(24.0)
+      .style(move |_| container::Style::default().background(palette.colors.outlineVariant))
+  };
+  let settings = tooltip(settings_button(), "Settings", TooltipOptions::default());
+  let refresh = tooltip(
+    control_button(Some(Icon::Refresh), None, ButtonVariant::Text)
+      .min_height(40.0)
       .width(Fill)
-      .align_x(Alignment::Center),
-  )
-  .padding([7, 0])
-  .width(Fill)
-  .on_press(Message::Settings(SettingsMessage::ThemeTogglePressed))
-  .style(|theme, status| jellypilot_ui::theme::button_variant(theme, status, ButtonVariant::Tonal));
+      .content_centered(true)
+      .on_press_maybe(
+        (!state.shell.refresh_busy).then_some(Message::Shell(ShellMessage::RefreshCurrent)),
+      ),
+    if state.shell.refresh_busy {
+      "Refreshing…"
+    } else {
+      "Refresh"
+    },
+    TooltipOptions::default(),
+  );
+  let control = tooltip(
+    control_button(Some(Icon::PictureInPicture), None, ButtonVariant::Text)
+      .min_height(40.0)
+      .width(Fill)
+      .content_centered(true)
+      .on_press(Message::Settings(SettingsMessage::AppModeSelected(
+        AppMode::ControlOnly,
+      ))),
+    "Control mode",
+    TooltipOptions::default(),
+  );
 
-  tooltip(btn, label, TooltipOptions::default())
+  container(row![settings, divider(), refresh, divider(), control].align_y(Alignment::Center))
+    .padding(3)
+    .width(Fill)
+    .style(|theme| jellypilot_ui::theme::surface_variant(theme, SurfaceVariant::Raised))
+    .into()
 }
 
 fn destination_button<'a>(
@@ -522,12 +693,18 @@ fn destination_button<'a>(
   destination: Destination,
   active: bool,
 ) -> Element<'a, Message> {
+  let min_height = if matches!(&destination, Destination::Library { .. }) {
+    32.0
+  } else {
+    38.0
+  };
   let variant = if active {
     ButtonVariant::Secondary
   } else {
     ButtonVariant::Text
   };
   control_button(Some(icon), Some(label.to_owned()), variant)
+    .min_height(min_height)
     .label_size(14.0)
     .spacing(TOKENS.spacing.s2_5)
     .padding([7, 12])
@@ -538,50 +715,6 @@ fn destination_button<'a>(
 }
 fn shortcut_skeleton<'a>(skeleton_phase: f32, reduced_motion: bool) -> Element<'a, Message> {
   skeleton_block(Length::Fill, 34.0, skeleton_phase, reduced_motion).into()
-}
-
-fn connection_summary(state: &State) -> Element<'_, Message> {
-  let palette = state.palette();
-  let Some(identity) = &state.kernel.connected_identity else {
-    return space::vertical().into();
-  };
-  let playback_target_name = state
-    .kernel
-    .settings
-    .snapshot()
-    .playback_target_name()
-    .unwrap_or("JellyPilot");
-  let server_icon = container(icon_with_color(
-    Icon::Server,
-    IconSize::Md,
-    palette.colors.onControl,
-  ))
-  .padding(6)
-  .style(move |_theme| container::Style {
-    background: Some(iced::Background::Color(palette.colors.control)),
-    border: iced::Border {
-      radius: TOKENS.radii.md.into(),
-      ..iced::Border::default()
-    },
-    ..container::Style::default()
-  });
-  row![
-    server_icon,
-    column![
-      text(&identity.user_name)
-        .size(13)
-        .color(palette.text.secondary),
-      text(&identity.server).size(11).color(palette.text.metadata),
-      text(playback_target_name)
-        .font(iced::Font::MONOSPACE)
-        .size(11)
-        .color(palette.text.metadata),
-    ]
-    .spacing(TOKENS.spacing.s0_5),
-  ]
-  .spacing(TOKENS.spacing.s2)
-  .align_y(Alignment::Center)
-  .into()
 }
 
 fn compact_destination_button<'a>(
@@ -596,6 +729,11 @@ fn compact_destination_button<'a>(
     ButtonVariant::Text
   };
   let btn = control_button(Some(icon), None, variant)
+    .min_height(if matches!(&destination, Destination::Library { .. }) {
+      32.0
+    } else {
+      38.0
+    })
     .padding([7, 0])
     .width(Fill)
     .content_centered(true)
@@ -604,29 +742,6 @@ fn compact_destination_button<'a>(
   tooltip(btn, label, TooltipOptions::default())
 }
 
-fn compact_connection_status(state: &State) -> Element<'_, Message> {
-  let palette = state.palette();
-  let Some(identity) = &state.kernel.connected_identity else {
-    return space::vertical().into();
-  };
-  let summary = format!("{} • {}", identity.user_name, identity.server);
-  let dot = container(space::horizontal())
-    .width(8.0)
-    .height(8.0)
-    .style(|_theme| container::Style {
-      background: Some(iced::Background::Color(palette.colors.onSurfaceVariant)),
-      border: iced::Border {
-        radius: TOKENS.radii.full.into(),
-        ..iced::Border::default()
-      },
-      ..container::Style::default()
-    });
-  let trigger = container(dot)
-    .padding(TOKENS.spacing.s2)
-    .width(Fill)
-    .align_x(Alignment::Center);
-  tooltip(trigger, summary, TooltipOptions::default())
-}
 #[cfg(test)]
 mod tests {
   use super::*;
@@ -682,8 +797,8 @@ mod tests {
   #[test]
   fn sidebar_width_maps_size_classes_to_expected_widths() {
     assert_eq!(sidebar_width(SizeClass::Compact), 72.0);
-    assert_eq!(sidebar_width(SizeClass::Standard), 248.0);
-    assert_eq!(sidebar_width(SizeClass::Wide), 248.0);
+    assert_eq!(sidebar_width(SizeClass::Standard), 240.0);
+    assert_eq!(sidebar_width(SizeClass::Wide), 240.0);
   }
 
   #[test]

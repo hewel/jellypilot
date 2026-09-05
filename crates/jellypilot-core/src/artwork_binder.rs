@@ -15,6 +15,7 @@ pub enum ArtworkSurface {
     Home,
     Browse,
     Detail,
+    PersonalLists,
     PlayerBar,
 }
 
@@ -36,6 +37,7 @@ pub struct ArtworkBinder {
     home_epoch: u64,
     browse_epoch: u64,
     detail_epoch: u64,
+    personal_lists_epoch: u64,
     player_bar_epoch: u64,
     slots: HashMap<ArtworkSlot, SlotRecord>,
 }
@@ -95,6 +97,7 @@ impl ArtworkBinder {
         self.bump(ArtworkSurface::Home);
         self.bump(ArtworkSurface::Browse);
         self.bump(ArtworkSurface::Detail);
+        self.bump(ArtworkSurface::PersonalLists);
         self.bump(ArtworkSurface::PlayerBar);
     }
 
@@ -116,6 +119,9 @@ impl ArtworkBinder {
             ArtworkSurface::Home => self.home_epoch = self.home_epoch.saturating_add(1),
             ArtworkSurface::Browse => self.browse_epoch = self.browse_epoch.saturating_add(1),
             ArtworkSurface::Detail => self.detail_epoch = self.detail_epoch.saturating_add(1),
+            ArtworkSurface::PersonalLists => {
+                self.personal_lists_epoch = self.personal_lists_epoch.saturating_add(1)
+            }
             ArtworkSurface::PlayerBar => {
                 self.player_bar_epoch = self.player_bar_epoch.saturating_add(1)
             }
@@ -130,6 +136,7 @@ impl ArtworkBinder {
             ArtworkSurface::Home => self.home_epoch,
             ArtworkSurface::Browse => self.browse_epoch,
             ArtworkSurface::Detail => self.detail_epoch,
+            ArtworkSurface::PersonalLists => self.personal_lists_epoch,
             ArtworkSurface::PlayerBar => self.player_bar_epoch,
         }
     }
@@ -180,9 +187,28 @@ mod tests {
         binder.begin_view(ArtworkSurface::Home);
         binder.begin_view(ArtworkSurface::Browse);
         binder.begin_view(ArtworkSurface::Detail);
+        binder.begin_view(ArtworkSurface::PersonalLists);
         binder.begin_view(ArtworkSurface::PlayerBar);
         assert_eq!(
             binder.settle(player, ArtworkSurface::PlayerBar, true),
+            ArtworkSettlement::Apply
+        );
+    }
+
+    #[test]
+    fn personal_lists_view_bump_drops_only_personal_list_slots() {
+        let mut binder = ArtworkBinder::default();
+        let lists = binder.bind(ArtworkSurface::PersonalLists);
+        let home = binder.bind(ArtworkSurface::Home);
+
+        binder.begin_view(ArtworkSurface::PersonalLists);
+
+        assert_eq!(
+            binder.settle(lists, ArtworkSurface::PersonalLists, true),
+            ArtworkSettlement::Drop
+        );
+        assert_eq!(
+            binder.settle(home, ArtworkSurface::Home, true),
             ArtworkSettlement::Apply
         );
     }

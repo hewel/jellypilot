@@ -1,10 +1,14 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use crate::{AuthCredentials, AuthStorageError, SavedProfileKey, SavedProfileSummary};
+use crate::{
+    AuthCredentials, AuthStorageError, AuthStore, SavedProfileKey, SavedProfileSummary,
+    SavedProfilesSnapshot, SensitiveSavedSession,
+};
 use jellypilot_core::config::LoginPrefill;
 use jellypilot_core::diagnostics::{DiagnosticCategory, DiagnosticLevel};
 use jellypilot_core::request_gate::SessionToken;
+use jellypilot_core::watchlist::ProfileScope;
 use jellypilot_media_server::{
     JellyfinClient, JellyfinError, MediaServerProvider, QuickConnectStatus, SavedSession,
 };
@@ -15,7 +19,7 @@ use zeroize::{Zeroize, Zeroizing};
 pub const QUICK_CONNECT_POLL_INTERVAL: Duration = Duration::from_secs(5);
 pub const QUICK_CONNECT_TIMEOUT: Duration = Duration::from_secs(5 * 60);
 
-#[derive(Clone, Copy, Default, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub enum ConnectionPhase {
     #[default]
     SignedOut,
@@ -26,7 +30,7 @@ pub enum ConnectionPhase {
 
 #[derive(Clone)]
 pub enum LoginEvent {
-    SavedProfiles(Result<Vec<SavedProfileSummary>, AuthStorageError>),
+    SavedProfiles(Result<SavedProfilesSnapshot, AuthStorageError>),
     SavedSessionStored {
         session: SessionToken,
         result: Result<(SavedProfileKey, Vec<SavedProfileSummary>), AuthStorageError>,
@@ -43,12 +47,6 @@ pub enum LoginEvent {
     QuickConnectApproving {
         session: SessionToken,
     },
-    ForgotProfile {
-        session: SessionToken,
-        key: SavedProfileKey,
-        sign_out: bool,
-        result: Result<Vec<SavedProfileSummary>, AuthStorageError>,
-    },
 }
 
 #[derive(Clone)]
@@ -61,6 +59,123 @@ impl From<AuthStorageError> for LoginError {
     fn from(error: AuthStorageError) -> Self {
         Self::AuthStorage(error)
     }
+}
+
+/// A saved profile validated on an isolated client and ready for app handoff.
+///
+/// Constructing this value never changes the current live client. Dropping a
+/// cancelled candidate clears both token-owning fields through their owners.
+pub struct ValidatedProfileCandidate {
+    key: SavedProfileKey,
+    scope: ProfileScope,
+    client: Arc<JellyfinClient>,
+    refreshed_session: SensitiveSavedSession,
+}
+
+impl ValidatedProfileCandidate {
+    pub const fn key(&self) -> &SavedProfileKey {
+        &self.key
+    }
+
+    pub const fn scope(&self) -> &ProfileScope {
+        &self.scope
+    }
+
+    pub const fn client(&self) -> &Arc<JellyfinClient> {
+        &self.client
+    }
+
+    /// Redacted account label suitable for confirmation UI.
+    pub fn account_title(&self) -> String {
+        format!(
+            "{}@{}",
+            self.refreshed_session.user_name,
+            self.refreshed_session
+                .server_name
+                .as_deref()
+                .unwrap_or(&self.refreshed_session.server_url)
+        )
+    }
+
+    /// Transfers the validated connection and refreshed session to the app's
+    /// serialized handoff coordinator.
+    pub fn into_parts(
+        self,
+    ) -> (
+        SavedProfileKey,
+        ProfileScope,
+        Arc<JellyfinClient>,
+        SensitiveSavedSession,
+    ) {
+        (self.key, self.scope, self.client, self.refreshed_session)
+    }
+
+    /// Captures a client that has just completed password or Quick Connect
+    /// authentication as an isolated handoff candidate.
+    ///
+    /// The client must already hold a complete authenticated session. This
+    /// constructor performs no network requests and never changes the app's
+    /// active client.
+    pub fn from_authenticated_client(client: Arc<JellyfinClient>) -> Result<Self, LoginError> {
+        let refreshed_session = SensitiveSavedSession::from_client(&client).ok_or_else(|| {
+            LoginError::Request("The authenticated session could not be prepared.".to_owned())
+        })?;
+        if !crate::valid_session(&refreshed_session) {
+            return Err(LoginError::Request(
+                "The authenticated session could not be prepared.".to_owned(),
+            ));
+        }
+        let scope = ProfileScope::new(
+            refreshed_session.provider,
+            refreshed_session.server_url.clone(),
+            refreshed_session.user_id.clone(),
+        )
+        .map_err(|_| {
+            LoginError::Request("The authenticated session could not be prepared.".to_owned())
+        })?;
+        let key = SavedProfileKey::for_scope(&scope);
+
+        Ok(Self {
+            key,
+            scope,
+            client,
+            refreshed_session,
+        })
+    }
+}
+
+impl std::fmt::Debug for ValidatedProfileCandidate {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("ValidatedProfileCandidate")
+            .field("key", &self.key)
+            .field("scope", &"[redacted]")
+            .field("client", &"[redacted]")
+            .field("refreshed_session", &"[redacted]")
+            .finish()
+    }
+}
+
+/// Loads and validates a saved login without mutating the active connection.
+pub async fn validate_saved_profile(
+    store: AuthStore,
+    key: SavedProfileKey,
+) -> Result<ValidatedProfileCandidate, LoginError> {
+    let stored_session = store.load_session(key.clone()).await?;
+    let candidate = Arc::new(JellyfinClient::for_saved_profile(&stored_session));
+    candidate
+        .login()
+        .restore_session(&stored_session)
+        .await
+        .map_err(|_| LoginError::Request("Saved sign-in validation failed.".to_owned()))?;
+    let validated = ValidatedProfileCandidate::from_authenticated_client(candidate)
+        .map_err(|_| LoginError::Request("Saved sign-in validation failed.".to_owned()))?;
+    if validated.key() != &key {
+        return Err(LoginError::Request(
+            "Saved sign-in validation failed.".to_owned(),
+        ));
+    }
+    Ok(validated)
 }
 
 impl std::fmt::Display for LoginError {
@@ -106,11 +221,6 @@ pub enum LoginEffect {
         session: SessionToken,
         key: SavedProfileKey,
     },
-    RunForget {
-        session: SessionToken,
-        key: SavedProfileKey,
-        sign_out: bool,
-    },
 }
 
 impl std::fmt::Debug for LoginEvent {
@@ -118,7 +228,7 @@ impl std::fmt::Debug for LoginEvent {
         match self {
             Self::SavedProfiles(result) => formatter
                 .debug_tuple("SavedProfiles")
-                .field(&result.as_ref().map(Vec::len))
+                .field(&result.as_ref().map(|snapshot| snapshot.profiles().len()))
                 .finish(),
             Self::SavedSessionStored { session, result } => formatter
                 .debug_struct("SavedSessionStored")
@@ -143,18 +253,6 @@ impl std::fmt::Debug for LoginEvent {
             Self::QuickConnectApproving { session } => formatter
                 .debug_struct("QuickConnectApproving")
                 .field("session", session)
-                .finish(),
-            Self::ForgotProfile {
-                session,
-                key,
-                sign_out,
-                result,
-            } => formatter
-                .debug_struct("ForgotProfile")
-                .field("session", session)
-                .field("key", key)
-                .field("sign_out", sign_out)
-                .field("successful", &result.is_ok())
                 .finish(),
         }
     }
@@ -262,20 +360,6 @@ pub const fn can_start_login(connection: ConnectionPhase) -> bool {
 }
 
 #[must_use]
-pub fn should_disconnect_after_forget(
-    sign_out: bool,
-    operation_session: SessionToken,
-    current_session: SessionToken,
-    connection: ConnectionPhase,
-    active_profile_matches: bool,
-) -> bool {
-    sign_out
-        && operation_session == current_session
-        && matches!(connection, ConnectionPhase::Connected)
-        && active_profile_matches
-}
-
-#[must_use]
 pub const fn provider_for(selected: u32) -> MediaServerProvider {
     if selected == 1 {
         MediaServerProvider::Emby
@@ -351,13 +435,68 @@ pub fn path_segments_are_safe(path: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use jellypilot_core::request_gate::RequestGate;
+    use jellypilot_media_server::SavedSession;
 
     use super::*;
+
+    fn saved_session() -> SavedSession {
+        SavedSession {
+            provider: MediaServerProvider::Jellyfin,
+            server_url: "https://media.example.test".to_owned(),
+            access_token: "secret-token".to_owned(),
+            user_id: "user-1".to_owned(),
+            user_name: "Ada".to_owned(),
+            server_name: Some("Media Room".to_owned()),
+            device_id: Some("saved-device".to_owned()),
+        }
+    }
 
     #[test]
     fn quick_connect_is_available_only_for_jellyfin() {
         assert!(quick_connect_available(MediaServerProvider::Jellyfin));
         assert!(!quick_connect_available(MediaServerProvider::Emby));
+    }
+
+    #[test]
+    fn validated_candidate_debug_output_redacts_identity_and_token() {
+        let session = saved_session();
+        let scope = ProfileScope::new(
+            session.provider,
+            session.server_url.clone(),
+            session.user_id.clone(),
+        )
+        .expect("session should provide a profile scope");
+        let candidate = ValidatedProfileCandidate {
+            key: SavedProfileKey::for_scope(&scope),
+            scope,
+            client: Arc::new(JellyfinClient::for_saved_profile(&session)),
+            refreshed_session: SensitiveSavedSession::new(session),
+        };
+
+        let debug = format!("{candidate:?}");
+
+        assert!(!debug.contains("secret-token"));
+        assert!(!debug.contains("media.example.test"));
+        assert!(!debug.contains("user-1"));
+    }
+
+    #[test]
+    fn authenticated_candidate_rejects_incomplete_session_fields() {
+        for malformed in [
+            SavedSession {
+                access_token: String::new(),
+                ..saved_session()
+            },
+            SavedSession {
+                user_name: "   ".to_owned(),
+                ..saved_session()
+            },
+        ] {
+            let client = Arc::new(JellyfinClient::new());
+            client.login().adopt_validated_session(&malformed);
+
+            assert!(ValidatedProfileCandidate::from_authenticated_client(client).is_err());
+        }
     }
 
     #[test]
@@ -393,38 +532,6 @@ mod tests {
             quick_connect_timeout_message(),
             "Quick Connect code expired. Request a new code to try again."
         );
-    }
-
-    #[test]
-    fn saved_profile_deletion_only_signs_out_the_originating_live_session() {
-        let mut gate = RequestGate::default();
-        for _ in 0..4 {
-            gate.disconnect();
-        }
-        let current = gate.current_session();
-        gate.disconnect();
-        let other = gate.current_session();
-        assert!(should_disconnect_after_forget(
-            true,
-            current,
-            current,
-            ConnectionPhase::Connected,
-            true,
-        ));
-        assert!(!should_disconnect_after_forget(
-            true,
-            current,
-            other,
-            ConnectionPhase::Connected,
-            true,
-        ));
-        assert!(!should_disconnect_after_forget(
-            true,
-            current,
-            current,
-            ConnectionPhase::Connected,
-            false,
-        ));
     }
 
     #[test]

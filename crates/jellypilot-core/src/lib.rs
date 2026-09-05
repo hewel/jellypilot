@@ -24,6 +24,8 @@ pub mod request_gate;
 #[cfg(feature = "native")]
 pub mod settings;
 pub mod skeleton;
+#[cfg(feature = "native")]
+pub mod watchlist;
 
 mod model;
 mod reducer;

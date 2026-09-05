@@ -4,7 +4,8 @@ use iced::widget::scrollable;
 use iced::window;
 use jellypilot_auth::login::{LoginError, LoginEvent};
 use jellypilot_auth::{
-  AuthStorageError, SavedProfileKey, SavedProfileSummary, SensitiveSavedSession,
+  AuthStorageError, SavedProfileKey, SavedProfileSummary, SavedProfilesSnapshot,
+  SensitiveSavedSession,
 };
 use jellypilot_core::artwork_binder::ArtworkSlot;
 use jellypilot_core::browse_model::BrowsePageSettlement;
@@ -33,6 +34,9 @@ impl std::fmt::Debug for Message {
   fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
     match self {
       Self::Window(message) => formatter.debug_tuple("Window").field(message).finish(),
+      Self::Shell(_) => formatter.write_str("Shell"),
+      Self::PersonalLists(_) => formatter.write_str("PersonalLists"),
+      Self::Account(_) => formatter.write_str("Account([redacted])"),
       Self::Login(_) => formatter.write_str("Login([redacted])"),
       Self::Home(_) => formatter.write_str("Home"),
       Self::Browse(_) => formatter.write_str("Browse"),
@@ -59,6 +63,9 @@ impl std::fmt::Debug for Message {
 #[derive(Clone)]
 pub enum Message {
   Window(WindowMessage),
+  Shell(ShellMessage),
+  PersonalLists(super::personal_lists::PersonalListsMessage),
+  Account(super::accounts::Message),
   Login(LoginMessage),
   Home(HomeMessage),
   Browse(BrowseMessage),
@@ -86,6 +93,31 @@ pub enum WindowMessage {
   /// One rendered frame; carries the compositor timestamp so animation
   /// phases derive from frame cadence instead of wall-clock polling.
   FrameTick(std::time::Instant),
+}
+
+#[derive(Clone, Debug)]
+pub enum ShellMessage {
+  ToggleCompactSearch,
+  DismissCompactSearch,
+  FocusSearch,
+  ClearSearch,
+  RefreshCurrent,
+  ToggleAccountPopover,
+  DismissAccountPopover,
+  DismissAccountLayer,
+  SearchEscape,
+  SearchFocusChecked(bool),
+  FocusNext,
+  FocusPrevious,
+  DirectoryLoaded {
+    session: jellypilot_core::request_gate::SessionToken,
+    generation: u64,
+    result: Result<Vec<jellypilot_media_server::VideoLibraryShortcut>, String>,
+  },
+  RefreshFinished {
+    session: jellypilot_core::request_gate::SessionToken,
+    generation: u64,
+  },
 }
 
 /// One settled Library Image load delivered to a surface.
@@ -141,6 +173,7 @@ pub enum DetailMessage {
   EpisodeOverviewToggled(String),
   SeasonSelected(String),
   FavoriteToggled,
+  WatchlistToggled,
   PlayedToggled,
   Loaded {
     token: DetailToken,
@@ -173,6 +206,7 @@ pub enum DetailMessage {
 pub enum SettingsMessage {
   Open,
   Close,
+  SectionSelected(super::state::SettingsSection),
   MpvPathChanged(String),
   SaveMpvPath,
   MpvArgsChanged(String),
@@ -183,7 +217,6 @@ pub enum SettingsMessage {
   IntroMenuDismissed,
   IntroModeSelected(IntroMode),
   ThemeModeSelected(ThemeMode),
-  ThemeTogglePressed,
   AppModeSelected(AppMode),
   SubtitleMenuToggled,
   SubtitleMenuDismissed,
@@ -205,8 +238,6 @@ pub enum SettingsMessage {
   DiagnosticCategorySelected(Option<DiagnosticCategory>),
   ExportLogs,
   LogsExported(Result<String, String>),
-  Disconnect,
-  SignOut,
   PlaybackConfigApplied(Result<(), PlaybackError>),
 }
 
@@ -371,10 +402,14 @@ pub enum LoginMessage {
   QuickConnectSubmitted,
   QuickConnectCancelled,
   PasswordSubmitted,
-  RemoteDisconnected,
   ProfilesLoaded {
     revision: u64,
-    result: Result<Vec<SavedProfileSummary>, AuthStorageError>,
+    result: Result<SavedProfilesSnapshot, AuthStorageError>,
+  },
+  ActivationRecorded {
+    session: SessionToken,
+    key: SavedProfileKey,
+    result: Result<(), AuthStorageError>,
   },
   WorkflowEvent(LoginEvent),
   PasswordFinished {
@@ -392,15 +427,6 @@ pub enum LoginMessage {
     session: SessionToken,
     key: SavedProfileKey,
     result: Result<ProtectedSavedSession, LoginError>,
-  },
-  AskForgetProfile(SavedProfileKey),
-  CancelForgetProfile,
-  ConfirmForgetProfile(SavedProfileKey),
-  ForgetFinished {
-    session: SessionToken,
-    key: SavedProfileKey,
-    sign_out: bool,
-    result: Result<Vec<SavedProfileSummary>, AuthStorageError>,
   },
 }
 

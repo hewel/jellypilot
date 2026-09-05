@@ -43,6 +43,7 @@ pub struct Surface {
   pub scroll_id: iced::widget::Id,
   pub sort_menu_open: bool,
   pub search_input: String,
+  refresh_fallback: Option<LibraryBrowseView>,
 }
 
 impl Default for Surface {
@@ -56,6 +57,7 @@ impl Default for Surface {
       scroll_id: iced::widget::Id::unique(),
       sort_menu_open: false,
       search_input: String::new(),
+      refresh_fallback: None,
     }
   }
 }
@@ -158,8 +160,14 @@ pub fn update(
       apply_effects(surface, kernel, effects)
     }
     BrowseMessage::PageSettled(settlement) => {
-      if surface.data.is_current_settlement(&settlement) {
+      let current = surface.data.is_current_settlement(&settlement);
+      if current {
         surface.page_tasks.remove(&settlement.token);
+        if surface.refresh_fallback.is_some() {
+          if let Err(error) = &settlement.result {
+            kernel.notice = Some(format!("Could not refresh this page: {error}"));
+          }
+        }
       }
       let effects = match surface.data.settle(settlement) {
         Ok(effects) => effects,
@@ -258,6 +266,7 @@ pub fn start(
   source: Option<BrowseSource>,
   playback_idle: bool,
 ) -> Task<Message> {
+  surface.refresh_fallback = None;
   let Some(source) = source else {
     abort_pages(surface);
     if let Err(error) = surface.data.reset() {
@@ -341,7 +350,39 @@ pub(crate) fn sync_scroll_window(
 }
 
 fn sync_view(surface: &mut Surface) {
-  surface.view = surface.data.view();
+  let view = surface.data.view();
+  if matches!(
+    view,
+    LibraryBrowseView::Loading | LibraryBrowseView::Failed { .. }
+  ) {
+    surface.view = surface.refresh_fallback.clone().unwrap_or(view);
+  } else {
+    surface.refresh_fallback = None;
+    surface.view = view;
+  }
+}
+
+/// Reloads the current request identity while keeping usable cards on a failed refresh.
+pub(crate) fn refresh(
+  surface: &mut Surface,
+  kernel: &mut Kernel,
+  source: Option<BrowseSource>,
+  playback_idle: bool,
+) -> Task<Message> {
+  let fallback = matches!(
+    surface.view,
+    LibraryBrowseView::Ready { .. } | LibraryBrowseView::Empty
+  )
+  .then(|| surface.view.clone());
+  abort_pages(surface);
+  if let Err(error) = surface.data.reset() {
+    kernel.notice = Some(format!("Could not refresh this page: {error}"));
+    return Task::none();
+  }
+  let task = start(surface, kernel, source, playback_idle);
+  surface.refresh_fallback = fallback;
+  sync_view(surface);
+  task
 }
 
 fn apply_effects(
@@ -579,6 +620,7 @@ pub(crate) fn leave_view(surface: &mut Surface, kernel: &mut Kernel, playback_id
 /// Browse portion of the router's connected-surface reset: aborts in-flight
 /// page requests, drops the artwork cells, and resets the model and view.
 pub(crate) fn reset(surface: &mut Surface, kernel: &mut Kernel) {
+  surface.refresh_fallback = None;
   abort_pages(surface);
   surface.artwork = BrowseArtwork::default();
   if let Err(error) = surface.data.reset() {

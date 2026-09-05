@@ -2,6 +2,7 @@ use std::fmt;
 
 use crate::app::message::{Message, PlaybackMessage, SettingsMessage};
 use crate::app::playback::QueueState;
+use crate::app::shell::SETTINGS_TRIGGER_ID;
 use crate::app::state::{ArtworkCellState, State};
 use iced::widget::{button, column, container, row, scrollable, slider, space, text, Column};
 use iced::{Alignment, ContentFit, Element, Fill, Length};
@@ -198,6 +199,7 @@ fn seek_row(position: f64, duration: f64) -> Element<'static, Message> {
 pub fn full(state: &State) -> Element<'_, Message> {
   let palette = state.palette();
   let settings_button = control_button(Some(Icon::Settings), None, ButtonVariant::Tonal)
+    .id(SETTINGS_TRIGGER_ID)
     .padding([6, 10])
     .on_press(Message::Settings(SettingsMessage::Open));
   let header = row![

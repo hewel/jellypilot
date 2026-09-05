@@ -41,6 +41,7 @@ pub struct Surface {
   pub items: HashMap<String, VideoLibraryItem>,
   pub data: DetailState,
   pub artwork: DetailArtwork,
+  refresh_token: Option<DetailToken>,
 }
 /// `detail_item_id` is the shell's current `Destination::Detail` item id,
 /// computed by the top-level router so this module never reads navigation
@@ -56,7 +57,7 @@ pub fn update(
   match message {
     // Handled entirely by the top-level router: navigation writes the shared
     // destination stack and drives the other surfaces' leave/enter hooks.
-    DetailMessage::Back => Task::none(),
+    DetailMessage::Back | DetailMessage::WatchlistToggled => Task::none(),
     DetailMessage::Retry => start_load(surface, kernel, detail_item_id),
     DetailMessage::RetryNeighbors => start_followup(surface, kernel),
     DetailMessage::RetrySeason => start_selected_season_load(surface, kernel),
@@ -83,8 +84,19 @@ pub fn update(
       start_user_data_update(surface, kernel, UserDataActionKind::Played)
     }
     DetailMessage::Loaded { token, result } => {
+      if surface.refresh_token == Some(token) {
+        surface.refresh_token = None;
+      }
+      let failed_refresh =
+        result.is_err() && matches!(surface.data.content, jellypilot_core::LoadState::Ready(_));
       if !settle_load(&mut surface.data, &mut kernel.request_gate, token, *result) {
         return Task::none();
+      }
+      if failed_refresh {
+        return kernel.show_toast(
+          super::state::NoticeLevel::Error,
+          "Could not refresh this item. Existing details were kept.".to_owned(),
+        );
       }
       let followup = start_followup(surface, kernel);
       Task::batch([followup, prepare_artwork(surface, kernel)])
@@ -234,11 +246,47 @@ fn settle_load(
   if !gate.finish_detail(token) {
     return false;
   }
-  detail.content = match result {
-    Ok(content) => jellypilot_core::LoadState::Ready(content),
-    Err(_) => jellypilot_core::LoadState::Failed(DETAIL_FAILURE.to_owned()),
-  };
+  match result {
+    Ok(content) => detail.content = jellypilot_core::LoadState::Ready(content),
+    Err(_) if matches!(detail.content, jellypilot_core::LoadState::Ready(_)) => {}
+    Err(_) => detail.content = jellypilot_core::LoadState::Failed(DETAIL_FAILURE.to_owned()),
+  }
   true
+}
+
+pub(crate) fn refresh(surface: &mut Surface, kernel: &mut Kernel, item_id: &str) -> Task<Message> {
+  if surface.data.user_data_busy.is_some()
+    || matches!(
+      surface.data.season_episodes,
+      jellypilot_core::LoadState::Loading
+    )
+  {
+    return Task::none();
+  }
+  if !matches!(surface.data.content, jellypilot_core::LoadState::Ready(_)) {
+    return start_load(surface, kernel, Some(item_id));
+  }
+  let Some(item) = surface.items.get(item_id).cloned() else {
+    return Task::none();
+  };
+  let Some(client) = kernel.client.clone() else {
+    return Task::none();
+  };
+  let token = kernel.request_gate.begin_detail();
+  surface.refresh_token = Some(token);
+  Task::perform(
+    async move {
+      load_detail_content(client, item)
+        .await
+        .map_err(|_| DETAIL_FAILURE.to_owned())
+    },
+    move |result| {
+      Message::Detail(DetailMessage::Loaded {
+        token,
+        result: Box::new(result),
+      })
+    },
+  )
 }
 
 fn start_followup(surface: &mut Surface, kernel: &mut Kernel) -> Task<Message> {
@@ -276,7 +324,13 @@ fn start_followup(surface: &mut Surface, kernel: &mut Kernel) -> Task<Message> {
     }
     jellypilot_core::LoadState::Ready(DetailContent::Show(show)) => Followup::Show {
       item_id: show.id.clone(),
-      selected_season_id: initial_season(show).map(|season| season.id.clone()),
+      selected_season_id: surface
+        .data
+        .selected_season_id
+        .as_ref()
+        .filter(|id| show.seasons.iter().any(|season| &season.id == *id))
+        .cloned()
+        .or_else(|| initial_season(show).map(|season| season.id.clone())),
     },
     jellypilot_core::LoadState::Ready(DetailContent::Item(_))
     | jellypilot_core::LoadState::Idle
@@ -452,6 +506,11 @@ fn start_user_data_update(
     return Task::none();
   };
   surface.data.user_data_busy = Some(kind);
+  // A refresh may have read the flags before this write. Its delayed response
+  // must not overwrite the confirmed mutation; unrelated season loads stay valid.
+  if let Some(refresh_token) = surface.refresh_token.take() {
+    let _ = kernel.request_gate.finish_detail(refresh_token);
+  }
   surface.data.user_data_error = None;
   let request = VideoUserDataUpdateRequest { item_id, action };
   Task::perform(
@@ -966,6 +1025,56 @@ mod tests {
         if item.favorite && !item.played
     ));
     assert_eq!(detail.user_data_error.as_deref(), Some(USER_DATA_FAILURE));
+  }
+
+  #[test]
+  fn show_refresh_preserves_the_selected_season_and_does_not_supersede_its_load() {
+    let (mut surface, mut kernel) = test_fixture();
+    kernel.client = Some(Arc::new(JellyfinClient::new()));
+    kernel
+      .request_gate
+      .set_detail_item(Some("show-1".to_owned()));
+    surface.data.content =
+      jellypilot_core::LoadState::Ready(DetailContent::Show(Box::new(show_detail())));
+    surface.data.selected_season_id = Some("season-2".to_owned());
+    surface
+      .items
+      .insert("show-1".to_owned(), episode("show-1", 1));
+    drop(start_followup(&mut surface, &mut kernel));
+    assert_eq!(surface.data.selected_season_id.as_deref(), Some("season-2"));
+    let season_token = kernel.request_gate.begin_detail();
+    drop(refresh(&mut surface, &mut kernel, "show-1"));
+    assert!(kernel.request_gate.finish_detail(season_token));
+    assert!(surface.refresh_token.is_none());
+  }
+
+  #[test]
+  fn user_data_write_rejects_an_older_refresh_and_blocks_an_overlapping_refresh() {
+    let (mut surface, mut kernel) = test_fixture();
+    kernel.client = Some(Arc::new(JellyfinClient::new()));
+    kernel
+      .request_gate
+      .set_detail_item(Some("item-1".to_owned()));
+    surface
+      .items
+      .insert("item-1".to_owned(), episode("item-1", 1));
+    surface.data.content =
+      jellypilot_core::LoadState::Ready(DetailContent::Item(Box::new(video_item("item-1"))));
+    let _ = refresh(&mut surface, &mut kernel, "item-1");
+    let stale = surface.refresh_token.expect("refresh starts");
+    let _ = start_user_data_update(&mut surface, &mut kernel, UserDataActionKind::Favorite);
+    assert!(surface.data.user_data_busy.is_some());
+    assert!(!settle_load(
+      &mut surface.data,
+      &mut kernel.request_gate,
+      stale,
+      Ok(DetailContent::Item(Box::new(video_item("stale"))))
+    ));
+    let _ = refresh(&mut surface, &mut kernel, "item-1");
+    assert!(surface.refresh_token.is_none());
+    assert!(
+      matches!(&surface.data.content, jellypilot_core::LoadState::Ready(DetailContent::Item(item)) if item.id == "item-1")
+    );
   }
 
   #[test]

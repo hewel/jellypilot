@@ -1,6 +1,6 @@
 # Validate the target profile before replacing the active connection
 
-_Status: Accepted, 2026-09-05. Amends [ADR 0009](0009-saved-service-profiles.md)'s switch ordering, active-only Sign Out naming, and Settings-only management entry; carries forward [ADR 0023](0023-secure-gtk-saved-service-profiles.md)'s isolated validation and secure deletion into the iced runtime of [ADR 0027](0027-cross-platform-iced-frontend.md). Implementation and acceptance remain pending in the [native sidebar specification](../sidebar-design-spec.md)._
+_Status: Accepted and implemented, 2026-09-05. Amends [ADR 0009](0009-saved-service-profiles.md)'s switch ordering, active-only Sign Out naming, and Settings-only management entry; carries forward [ADR 0023](0023-secure-gtk-saved-service-profiles.md)'s isolated validation and secure deletion into the iced runtime of [ADR 0027](0027-cross-platform-iced-frontend.md). Human visual and live-server acceptance remain pending in the [native sidebar specification](../sidebar-design-spec.md)._
 
 An offline or invalid saved login should not destroy a working connection or its playback.
 Authenticate the target on an isolated candidate while the old profile remains the sole active

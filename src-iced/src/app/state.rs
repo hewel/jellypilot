@@ -71,7 +71,6 @@ pub struct LoginState {
   pub profiles_revision: u64,
   pub auto_login_attempted: bool,
   pub busy_profile: Option<SavedProfileKey>,
-  pub forget_confirmation: Option<SavedProfileKey>,
   pub error: Option<String>,
 }
 
@@ -95,7 +94,6 @@ impl LoginState {
       profiles_revision: 0,
       auto_login_attempted: false,
       busy_profile: None,
-      forget_confirmation: None,
       error: None,
     };
     state.force_supported_method();
@@ -141,17 +139,18 @@ impl LoginState {
 #[derive(Clone)]
 pub struct ConnectedIdentity {
   pub user_name: String,
-  pub server: String,
+  pub provider: jellypilot_media_server::MediaServerProvider,
+  pub server_url: String,
+  pub server_name: Option<String>,
 }
 
 impl ConnectedIdentity {
   pub fn from_session(session: &SensitiveSavedSession) -> Self {
     Self {
       user_name: session.user_name.clone(),
-      server: session
-        .server_name
-        .clone()
-        .unwrap_or_else(|| session.server_url.clone()),
+      provider: session.provider,
+      server_url: session.server_url.clone(),
+      server_name: session.server_name.clone(),
     }
   }
 }
@@ -165,6 +164,7 @@ pub enum Destination {
     collection_type: String,
   },
   Search(String),
+  PersonalLists(crate::app::personal_lists::Route),
   Detail(String),
   /// Full-window Now Playing; the Control-Only root destination, unused in
   /// Full mode where the player is a bar above the shell content.
@@ -244,7 +244,9 @@ impl HomeState {
     for row in &mut self.rows {
       row.items = LoadState::Loading;
     }
-    self.shortcuts = LoadState::Loading;
+    if !matches!(self.shortcuts, LoadState::Ready(_)) {
+      self.shortcuts = LoadState::Loading;
+    }
   }
 
   pub fn settle_video_home(&mut self, result: Result<jellypilot_media_server::VideoHome, String>) {
@@ -255,8 +257,11 @@ impl HomeState {
         self.rows[HomeSection::NextUp.index()].items = LoadState::Ready(home.next_up);
       }
       Err(error) => {
-        self.rows[HomeSection::ContinueWatching.index()].items = LoadState::Failed(error.clone());
-        self.rows[HomeSection::NextUp.index()].items = LoadState::Failed(error);
+        for section in [HomeSection::ContinueWatching, HomeSection::NextUp] {
+          if !matches!(self.rows[section.index()].items, LoadState::Ready(_)) {
+            self.rows[section.index()].items = LoadState::Failed(error.clone());
+          }
+        }
       }
     }
   }
@@ -775,7 +780,53 @@ pub fn intro_skip_mode(mode: IntroMode) -> IntroSkipMode {
   }
 }
 
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum SettingsSection {
+  #[default]
+  Account,
+  Mpv,
+  Playback,
+  Subtitles,
+  Shortcuts,
+  Appearance,
+  Storage,
+  Diagnostics,
+}
+
+impl SettingsSection {
+  pub const ALL: [Self; 8] = [
+    Self::Account,
+    Self::Mpv,
+    Self::Playback,
+    Self::Subtitles,
+    Self::Shortcuts,
+    Self::Appearance,
+    Self::Storage,
+    Self::Diagnostics,
+  ];
+
+  pub const fn label(self) -> &'static str {
+    match self {
+      Self::Account => "Accounts and connection",
+      Self::Mpv => "MPV",
+      Self::Playback => "Playback",
+      Self::Subtitles => "Subtitles",
+      Self::Shortcuts => "Shortcuts",
+      Self::Appearance => "Appearance",
+      Self::Storage => "Storage",
+      Self::Diagnostics => "Diagnostics and about",
+    }
+  }
+}
+
+impl std::fmt::Display for SettingsSection {
+  fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    formatter.write_str(self.label())
+  }
+}
+
 pub struct SettingsState {
+  pub active_section: SettingsSection,
   pub mpv_path_input: String,
   pub mpv_args_input: String,
   pub playback_target_name_input: String,
@@ -793,6 +844,7 @@ pub struct SettingsState {
 impl SettingsState {
   pub fn from_settings(settings: &Settings) -> Self {
     Self {
+      active_section: SettingsSection::default(),
       mpv_path_input: settings.mpv_path().unwrap_or_default().to_owned(),
       mpv_args_input: settings.mpv_args().join(" "),
       playback_target_name_input: settings
@@ -824,6 +876,7 @@ pub fn diagnostic_matches(
 
 #[derive(Default)]
 pub struct FullUi {
+  pub personal_lists: crate::app::personal_lists::Surface,
   pub home: crate::app::home::Surface,
   pub browse: crate::app::browse::Surface,
   pub detail: crate::app::detail::Surface,
@@ -840,6 +893,8 @@ pub struct State {
   pub full: Option<FullUi>,
   pub playback: crate::app::playback::Surface,
   pub shell: crate::app::shell::Surface,
+  pub watchlist: crate::app::personal_lists::Runtime,
+  pub accounts: crate::app::accounts::Surface,
 }
 
 impl State {
@@ -896,6 +951,8 @@ impl State {
       full: full_ui,
       playback,
       shell: crate::app::shell::Surface::new(smoke),
+      watchlist: crate::app::personal_lists::Runtime::default(),
+      accounts: crate::app::accounts::Surface::new(),
     };
     // Control-Only boots straight into the full-window Now Playing root; the
     // Library Browser destinations stay unreachable (router guard).
@@ -915,6 +972,7 @@ impl State {
           .slots()
           .chain(full.browse.artwork.slots())
           .chain(full.detail.artwork.slots())
+          .chain(full.personal_lists.artwork.values().map(|cell| cell.slot))
       })
       .chain(self.playback.artwork.as_ref().map(|cell| cell.slot))
   }
@@ -947,7 +1005,14 @@ impl State {
     let artwork_loading = full.home.artwork.has_loading()
       || full.browse.artwork.has_loading()
       || full.detail.artwork.has_loading();
-    home_loading || browse_loading || detail_loading || artwork_loading
+    let lists_loading = full.personal_lists.favorites.loading
+      || full.personal_lists.watchlist.loading
+      || full
+        .personal_lists
+        .artwork
+        .values()
+        .any(|cell| cell.state == ArtworkCellState::Loading);
+    home_loading || browse_loading || detail_loading || artwork_loading || lists_loading
   }
   /// Effective UI theme mode: the explicit setting, or the OS mode while the
   /// setting is `System` (an unreported OS mode falls back to Dark).

@@ -27,7 +27,7 @@ use jellypilot_media_server::{
 use jellypilot_mpv::configured_mpv_args;
 use jellypilot_mpv::playback::{
   media_item_from_playable, rich_playable, Playable, PlaybackController, PlaybackControllerConfig,
-  PlaybackSelection, PlaybackStartPosition,
+  PlaybackSelection, PlaybackStartPosition, PlaybackWarning,
 };
 use jellypilot_mpv::playback_session::{
   seek_intent, volume_intent, AdjacentDirection, ControllerCommand, ControllerSettlement, EffectId,
@@ -41,10 +41,10 @@ use jellypilot_session::{
 
 use crate::tray::TrayAction;
 
+use super::accounts;
 use super::kernel::Kernel;
 use super::message::{
-  LoginMessage, Message, PlaybackMessage, RemoteMessage, RemoteSessionStart, RemoteStartError,
-  SettingsMessage,
+  Message, PlaybackMessage, RemoteMessage, RemoteSessionStart, RemoteStartError, SettingsMessage,
 };
 use super::state::{
   ArtworkCell, ArtworkCellState, NoticeLevel, PlaybackControllerHandle, RemoteEventChannel,
@@ -70,6 +70,17 @@ struct ActiveQueueLoad {
   session: SessionToken,
   generation: u64,
   season: QueueSeasonKey,
+}
+
+struct AccountPlaybackHandoff {
+  generation: u64,
+  settlement: Option<Result<(), String>>,
+}
+
+pub(crate) struct AccountHandoffStart {
+  pub playback: Task<Message>,
+  pub remote: Task<accounts::Message>,
+  pub playback_cleanup: Option<Result<(), String>>,
 }
 
 /// Playback surface slice: the playback session machine and its projected
@@ -99,6 +110,8 @@ pub struct Surface {
   pub remote_events: Option<RemoteEventChannel>,
   pub remote_control_state: RemoteControlState,
   pub remote_stopping: bool,
+  account_playback_handoff: Option<AccountPlaybackHandoff>,
+  account_remote_handoff: Option<u64>,
   pub seek_preview: Option<f64>,
   pub volume_preview: Option<f64>,
   pub audio_menu_open: bool,
@@ -128,6 +141,8 @@ impl Surface {
       remote_events: None,
       remote_control_state: RemoteControlState::Unavailable,
       remote_stopping: false,
+      account_playback_handoff: None,
+      account_remote_handoff: None,
       seek_preview: None,
       volume_preview: None,
       audio_menu_open: false,
@@ -205,6 +220,26 @@ fn record_playback_notice(
     _ => NoticeLevel::Warning,
   };
   kernel.show_toast(toast_level, notice)
+}
+
+fn record_failed_shutdown_warnings(
+  kernel: &mut Kernel,
+  warnings: &[PlaybackWarning],
+) -> Task<Message> {
+  if warnings.is_empty() {
+    return Task::none();
+  }
+  for warning in warnings {
+    kernel.diagnostics.record(
+      DiagnosticLevel::Warning,
+      DiagnosticCategory::Playback,
+      format!("Playback cleanup warning: {warning}."),
+    );
+  }
+  kernel.show_toast(
+    NoticeLevel::Warning,
+    "Playback ended, but reporting to the media server could not be completed.".to_owned(),
+  )
 }
 
 fn record_remote_change(
@@ -644,26 +679,6 @@ pub(crate) fn stop_remote_session_for_quit(
   Task::perform(
     async move { disconnect_remote_session(session).await },
     |()| Message::Remote(RemoteMessage::QuitStopped),
-  )
-}
-
-/// Tears the remote session down before a sign-out; the completion arrives as
-/// [`LoginMessage::RemoteDisconnected`] so the login surface finishes the
-/// transition. Called by the router's login/settings arms.
-pub(crate) fn stop_remote_session_for_login(
-  surface: &mut Surface,
-  kernel: &mut Kernel,
-) -> Task<LoginMessage> {
-  surface.remote = kernel.request_gate.begin_remote();
-  surface.remote_events = None;
-  surface.remote_control_state = RemoteControlState::Unavailable;
-  let Some(session) = surface.remote_session.take() else {
-    return Task::done(LoginMessage::RemoteDisconnected);
-  };
-  surface.remote_stopping = true;
-  Task::perform(
-    async move { disconnect_remote_session(session).await },
-    |()| LoginMessage::RemoteDisconnected,
   )
 }
 
@@ -1118,7 +1133,18 @@ fn update_playback(
       } else {
         None
       };
-      let shutdown = matches!(settlement.as_ref(), ControllerSettlement::Shutdown(_));
+      let shutdown_cleanup = match settlement.as_ref() {
+        ControllerSettlement::Shutdown(outcome) => {
+          Some(outcome.cleanup.map_err(|error| error.to_string()))
+        }
+        _ => None,
+      };
+      let failed_shutdown_warnings = match settlement.as_ref() {
+        ControllerSettlement::Shutdown(outcome) if outcome.cleanup.is_err() => {
+          outcome.warnings.clone()
+        }
+        _ => Vec::new(),
+      };
       let settlement_error = match settlement.as_ref() {
         ControllerSettlement::Started(Err(error)) => Some(error.to_string()),
         _ => None,
@@ -1136,6 +1162,12 @@ fn update_playback(
           settlement: *settlement,
         })),
       )];
+      if !failed_shutdown_warnings.is_empty() {
+        tasks.push(record_failed_shutdown_warnings(
+          kernel,
+          &failed_shutdown_warnings,
+        ));
+      }
       tracing::debug!(
         started = ?started.as_deref().map(|playable| (playable_kind(playable), playable.image_id().map(str::to_owned))),
         now_playing = ?surface.view.now_playing.as_ref().map(|view| view.item.item_id.clone()),
@@ -1154,13 +1186,18 @@ fn update_playback(
       if let Some(playable) = started.as_deref() {
         tasks.push(load_queue_after_start(surface, kernel, playable));
       }
-      if shutdown {
+      if matches!(shutdown_cleanup, Some(Ok(()))) {
         surface.controller = None;
         let _ = surface.session.handle(
           PlaybackInput::Event(Box::new(PlaybackEvent::EngineAvailability(false))),
           Instant::now(),
         );
         sync_playback_projection(surface, kernel, quit_requested);
+      }
+      if let (Some(result), Some(handoff)) =
+        (shutdown_cleanup, surface.account_playback_handoff.as_mut())
+      {
+        handoff.settlement = Some(result);
       }
       if !surface.view.busy {
         surface.seek_preview = None;
@@ -1342,6 +1379,7 @@ fn sync_playback_projection(surface: &mut Surface, kernel: &Kernel, quit_request
     PlaybackNotice::Warnings(_) => {
       "Playback is active, but setup or reporting could not be completed.".to_owned()
     }
+    PlaybackNotice::CleanupFailed(error) => error.to_string(),
   });
   sync_tray(surface, kernel, quit_requested);
 }
@@ -1574,7 +1612,7 @@ fn execute_controller_command(
         }
         ControllerCommand::Shutdown => {
           let outcome = controller.shutdown().await;
-          (ControllerSettlement::Shutdown(outcome.warnings), None)
+          (ControllerSettlement::Shutdown(outcome), None)
         }
       }
     },
@@ -1671,6 +1709,80 @@ fn prepare_player_artwork(surface: &mut Surface, kernel: &mut Kernel) -> Task<Me
   )
 }
 
+/// Starts the teardown barrier used by profile switch, Disconnect, and active
+/// Sign Out. The caller keeps the old [`Kernel`] client alive until both the
+/// returned remote task and playback cleanup settlement have completed.
+pub(crate) fn begin_account_handoff(
+  surface: &mut Surface,
+  kernel: &mut Kernel,
+  quit_requested: bool,
+  generation: u64,
+) -> AccountHandoffStart {
+  let remote_already_stopping = surface.account_remote_handoff == Some(generation);
+  let quit_remote_stopping =
+    quit_requested && surface.remote_stopping && surface.account_remote_handoff.is_none();
+  let remote_session = (!remote_already_stopping && !quit_remote_stopping)
+    .then(|| surface.remote_session.take())
+    .flatten();
+  let playback = disconnect(surface, kernel, quit_requested);
+
+  let remote = if quit_remote_stopping {
+    // The quit-owned RemoteMessage::QuitStopped remains the join point. Do
+    // not synthesize an account settlement that could clear its guard early.
+    Task::none()
+  } else if remote_already_stopping {
+    surface.remote_stopping = true;
+    Task::none()
+  } else if let Some(session) = remote_session {
+    surface.account_remote_handoff = Some(generation);
+    surface.remote_stopping = true;
+    Task::perform(
+      async move { disconnect_remote_session(session).await },
+      move |()| accounts::Message::RemoteHandoffSettled { generation },
+    )
+  } else {
+    surface.account_remote_handoff = None;
+    Task::done(accounts::Message::RemoteHandoffSettled { generation })
+  };
+
+  let playback_cleanup = if surface.view.can_start_login {
+    surface.account_playback_handoff = None;
+    Some(Ok(()))
+  } else {
+    surface.account_playback_handoff = Some(AccountPlaybackHandoff {
+      generation,
+      settlement: None,
+    });
+    None
+  };
+
+  AccountHandoffStart {
+    playback,
+    remote,
+    playback_cleanup,
+  }
+}
+
+/// Clears the remote half of an account handoff after its async disconnect
+/// message reaches the router.
+pub(crate) fn finish_account_remote_handoff(surface: &mut Surface, generation: u64) {
+  if surface.account_remote_handoff == Some(generation) {
+    surface.account_remote_handoff = None;
+    surface.remote_stopping = false;
+  }
+}
+
+/// Takes one sanitized playback-cleanup settlement for the account reducer.
+pub(crate) fn take_account_handoff_settlement(
+  surface: &mut Surface,
+) -> Option<(u64, Result<(), String>)> {
+  let handoff = surface.account_playback_handoff.as_mut()?;
+  let settlement = handoff.settlement.take()?;
+  let generation = handoff.generation;
+  surface.account_playback_handoff = None;
+  Some((generation, settlement))
+}
+
 /// Tears down playback and the remote session on sign-out/disconnect. The
 /// router performs the other surfaces' resets around this call (ADR 0029).
 pub(crate) fn disconnect(
@@ -1678,6 +1790,7 @@ pub(crate) fn disconnect(
   kernel: &mut Kernel,
   quit_requested: bool,
 ) -> Task<Message> {
+  let remote_stopping = surface.remote_stopping;
   let task = apply_playback_input(
     surface,
     kernel,
@@ -1689,7 +1802,7 @@ pub(crate) fn disconnect(
   surface.remote_session = None;
   surface.remote_events = None;
   surface.remote_control_state = RemoteControlState::Unavailable;
-  surface.remote_stopping = false;
+  surface.remote_stopping = quit_requested && remote_stopping;
   surface.in_flight_refresh = None;
   surface.in_flight_command = None;
   task
@@ -3046,6 +3159,27 @@ mod tests {
     assert!(quit_may_exit(&surface, true));
     surface.remote_stopping = true;
     assert!(!quit_may_exit(&surface, true));
+  }
+
+  #[test]
+  fn account_handoff_does_not_clear_a_quit_owned_remote_teardown() {
+    let (mut surface, mut kernel) = test_fixture();
+    surface.remote_stopping = true;
+
+    let _start = begin_account_handoff(&mut surface, &mut kernel, true, 12);
+
+    assert!(surface.remote_stopping);
+    assert!(surface.account_remote_handoff.is_none());
+    finish_account_remote_handoff(&mut surface, 12);
+    assert!(surface.remote_stopping);
+
+    drop(update_remote(
+      &mut surface,
+      &mut kernel,
+      true,
+      RemoteMessage::QuitStopped,
+    ));
+    assert!(!surface.remote_stopping);
   }
 
   #[test]

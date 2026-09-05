@@ -1,48 +1,127 @@
 use iced::widget::{column, container, row, scrollable, space, text, text_input, Column};
-use iced::{Alignment, Element, Fill};
-use jellypilot_auth::login::ConnectionPhase;
+use iced::{Alignment, Element, Fill, Length};
 use jellypilot_core::config::{AppMode, IntroMode, ShortcutKind, ThemeMode};
 use jellypilot_core::diagnostics::{format_diagnostic_time, DiagnosticCategory, DiagnosticLevel};
 use jellypilot_core::settings::SUBTITLE_LANGUAGE_OPTIONS;
 use jellypilot_ui::fonts::SPACE_GROTESK_FONT;
 use jellypilot_ui::icons::{icon_with_color, Icon, IconSize};
+use jellypilot_ui::layout::SizeClass;
 use jellypilot_ui::overlay::{popover, tooltip, PopoverOptions, TooltipOptions};
 use jellypilot_ui::tokens::{ThemePalette, TOKENS};
 use jellypilot_ui::variants::{BadgeVariant, ButtonVariant, FieldVariant, SurfaceVariant};
 use jellypilot_ui::widgets::control_button::control_button;
 
+use super::account;
+
 use crate::app::message::{Message, SettingsMessage};
-use crate::app::state::{diagnostic_matches, State};
+use crate::app::shell::SETTINGS_INITIAL_FOCUS_ID;
+use crate::app::state::{diagnostic_matches, SettingsSection, State};
 
 pub fn view(state: &State) -> Element<'_, Message> {
-  let palette = state.palette();
-  let mut content = column![
-    feedback(state),
-    connection_section(state),
-    mpv_section(state),
-    playback_section(state),
-    subtitles_section(state),
-    shortcuts_section(state),
-    interface_section(state),
-    cache_section(state),
-    diagnostics_section(state),
-    about_section(palette),
-  ]
-  .spacing(TOKENS.spacing.s4)
-  .width(Fill);
+  let active = state.settings.view.active_section;
+  let selected = selected_section(state, active);
+  let feedback = feedback(state);
+  let class = SizeClass::from_width(state.shell.window_size.width);
+  let show_two_columns = state.app_mode() == AppMode::Full && class != SizeClass::Compact;
 
-  // Control-Only renders Settings in the modal; the back button closes the
-  // modal and returns to the Now Playing root.
+  if show_two_columns {
+    let navigation = settings_navigation(active);
+    let content = scrollable(
+      column![feedback, selected]
+        .spacing(TOKENS.spacing.s4)
+        .padding([TOKENS.spacing.s2, TOKENS.spacing.s6])
+        .width(Fill),
+    )
+    .width(Fill)
+    .height(Fill)
+    .style(jellypilot_ui::theme::scrollable);
+    return row![
+      container(navigation)
+        .width(Length::Fixed(208.0))
+        .height(Fill)
+        .padding([TOKENS.spacing.s2, TOKENS.spacing.s3])
+        .style(|theme| jellypilot_ui::theme::surface_variant(theme, SurfaceVariant::Block)),
+      content,
+    ]
+    .spacing(TOKENS.spacing.s4)
+    .width(Fill)
+    .height(Fill)
+    .into();
+  }
+
+  let mut content = column![feedback, settings_navigation(active), selected,]
+    .spacing(TOKENS.spacing.s4)
+    .width(Fill);
   if state.app_mode() == AppMode::ControlOnly {
     content = column![back_to_now_playing(), content]
       .spacing(TOKENS.spacing.s2)
       .width(Fill);
   }
-
   scrollable(container(content).padding([TOKENS.spacing.s2, TOKENS.spacing.s6]))
     .width(Fill)
     .height(Fill)
+    .style(jellypilot_ui::theme::scrollable)
     .into()
+}
+
+fn selected_section<'a>(state: &'a State, section: SettingsSection) -> Element<'a, Message> {
+  match section {
+    SettingsSection::Account => connection_section(state),
+    SettingsSection::Mpv => mpv_section(state),
+    SettingsSection::Playback => playback_section(state),
+    SettingsSection::Subtitles => subtitles_section(state),
+    SettingsSection::Shortcuts => shortcuts_section(state),
+    SettingsSection::Appearance => interface_section(state),
+    SettingsSection::Storage => cache_section(state),
+    SettingsSection::Diagnostics => {
+      column![diagnostics_section(state), about_section(state.palette())]
+        .spacing(TOKENS.spacing.s4)
+        .width(Fill)
+        .into()
+    }
+  }
+}
+
+fn settings_navigation(active: SettingsSection) -> Column<'static, Message> {
+  let mut navigation = Column::new().spacing(TOKENS.spacing.s1_5).width(Fill);
+  for section in SettingsSection::ALL {
+    let variant = if section == active {
+      ButtonVariant::Secondary
+    } else {
+      ButtonVariant::Text
+    };
+    let button = control_button(
+      Some(settings_icon(section)),
+      Some(section.label().to_owned()),
+      variant,
+    )
+    .icon_size(IconSize::Sm)
+    .label_size(13.0)
+    .spacing(TOKENS.spacing.s2)
+    .padding([7, 10])
+    .width(Fill)
+    .label_fill(true)
+    .on_press(Message::Settings(SettingsMessage::SectionSelected(section)));
+    navigation = navigation.push(if section == active {
+      button.id(SETTINGS_INITIAL_FOCUS_ID)
+    } else {
+      button
+    });
+  }
+  navigation
+}
+
+const fn settings_icon(section: SettingsSection) -> Icon {
+  match section {
+    SettingsSection::Account => Icon::User,
+    SettingsSection::Mpv => Icon::Cpu,
+    SettingsSection::Playback => Icon::Sliders,
+    SettingsSection::Subtitles => Icon::Subtitles,
+    SettingsSection::Shortcuts => Icon::Keyboard,
+    SettingsSection::Appearance => Icon::Settings,
+    SettingsSection::Storage => Icon::Database,
+    SettingsSection::Diagnostics => Icon::Activity,
+  }
 }
 
 fn back_to_now_playing<'a>() -> Element<'a, Message> {
@@ -72,62 +151,7 @@ fn feedback(state: &State) -> Element<'_, Message> {
 }
 
 fn connection_section(state: &State) -> Element<'_, Message> {
-  let palette = state.palette();
-  let status = match state.kernel.connection {
-    ConnectionPhase::Connected => badge("Connected", BadgeVariant::Success),
-    ConnectionPhase::Connecting => badge("Working", BadgeVariant::Warning),
-    ConnectionPhase::SignedOut | ConnectionPhase::Failed => {
-      badge("Disconnected", BadgeVariant::Neutral)
-    }
-  };
-  let identity: Element<'_, Message> = state.kernel.connected_identity.as_ref().map_or_else(
-    || {
-      text("No active connection")
-        .size(13)
-        .color(palette.text.metadata)
-        .into()
-    },
-    |identity| {
-      column![
-        text(&identity.user_name)
-          .size(15)
-          .color(palette.text.heading),
-        text(&identity.server).size(12).color(palette.text.metadata),
-      ]
-      .spacing(TOKENS.spacing.s1)
-      .into()
-    },
-  );
-  let connected = state.kernel.connection == ConnectionPhase::Connected;
-  let disconnect = action_button(
-    Icon::Close,
-    "Disconnect",
-    connected,
-    SettingsMessage::Disconnect,
-  );
-  let sign_out = action_button(Icon::User, "Sign Out", connected, SettingsMessage::SignOut);
-  section(
-    palette,
-    Icon::Server,
-    "Connection",
-    column![
-      row![identity, space::horizontal(), status]
-        .align_y(Alignment::Center)
-        .width(Fill),
-      text("Disconnect keeps saved profiles. Sign Out securely removes the active saved profile.")
-        .size(12)
-        .color(palette.text.metadata),
-      toggle_row(
-        palette,
-        "Auto-login on startup",
-        "Reconnects to the last used server when JellyPilot starts.",
-        state.kernel.settings.snapshot().auto_login(),
-        SettingsMessage::AutoLoginToggled,
-      ),
-      row![disconnect, sign_out].spacing(TOKENS.spacing.s2),
-    ]
-    .spacing(TOKENS.spacing.s3),
-  )
+  account::management(state)
 }
 
 fn mpv_section(state: &State) -> Element<'_, Message> {
@@ -779,20 +803,6 @@ fn toggle_row<'a>(
   .spacing(TOKENS.spacing.s3)
   .align_y(Alignment::Center)
   .into()
-}
-
-fn action_button<'a>(
-  icon: Icon,
-  label: &'a str,
-  enabled: bool,
-  message: SettingsMessage,
-) -> Element<'a, Message> {
-  control_button(Some(icon), Some(label.to_owned()), ButtonVariant::Tonal)
-    .icon_size(IconSize::Sm)
-    .spacing(TOKENS.spacing.s1_5)
-    .padding([6, 12])
-    .on_press_maybe(enabled.then_some(Message::Settings(message)))
-    .into()
 }
 
 fn compact_button<'a>(

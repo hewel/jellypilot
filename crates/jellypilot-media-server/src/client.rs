@@ -3,6 +3,7 @@
 use chrono::Datelike;
 use parking_lot::RwLock;
 use reqwest::{header, Client, Method};
+use std::collections::HashSet;
 use std::sync::Arc;
 use uuid::Uuid;
 use zeroize::Zeroize;
@@ -42,6 +43,7 @@ const ICED_REMOTE_COMMANDS: &[&str] = &[
   "SetSubtitleStreamIndex",
 ];
 const EMBEDDED_REMOTE_COMMANDS: &[&str] = &["Play", "Playstate", "SetVolume", "ToggleMute"];
+const MAX_VIDEO_ITEM_BATCH_SIZE: usize = 100;
 const MAX_SEASON_EPISODE_PAGE_SIZE: i32 = 100;
 const MAX_COMPAT_SEASON_EPISODES: i32 = 10_000;
 
@@ -2591,7 +2593,7 @@ impl<'a> JellyfinLibrary<'a> {
       &configuration,
       video_browse_items_params(VideoBrowseItemsQuery {
         user_id,
-        library_id: request.library_id.clone(),
+        parent_id: Some(request.library_id.clone()),
         start_index,
         limit,
         include_item_types,
@@ -2623,6 +2625,102 @@ impl<'a> JellyfinLibrary<'a> {
       has_more: start_index.saturating_add(returned_count) < total_record_count,
       items,
     })
+  }
+
+  /// Loads a root-level page of Movie, Series, and Episode Favorites.
+  pub async fn favorites(
+    &self,
+    request: FavoritesPageRequest,
+  ) -> Result<FavoritesPage, JellyfinError> {
+    if self.client.provider() == MediaServerProvider::Emby {
+      return self.emby_favorites(request).await;
+    }
+
+    let server_url = self.client.server_url()?;
+    let token = self.client.access_token()?;
+    let user_id = self.client.user_id()?;
+    let configuration = self
+      .client
+      .openapi_configuration(&server_url, Some(&token))?;
+    let start_index = request.start_index.max(0);
+    let limit = request.limit.clamp(1, 100);
+    let response = jellyfin_api::apis::items_api::get_items(
+      &configuration,
+      video_favorites_items_params(user_id, start_index, limit),
+    )
+    .await
+    .map_err(|err| JellyfinClient::openapi_error("Video favorites", err))?;
+
+    let total_record_count = response.total_record_count.unwrap_or(0).max(0);
+    let returned_count = response
+      .items
+      .as_ref()
+      .map_or(0, |items| i32::try_from(items.len()).unwrap_or(i32::MAX));
+    let items = response
+      .items
+      .unwrap_or_default()
+      .into_iter()
+      .filter_map(|item| map_video_library_item(&server_url, item))
+      .collect();
+
+    Ok(FavoritesPage {
+      start_index,
+      limit,
+      total_record_count,
+      has_more: start_index.saturating_add(returned_count) < total_record_count,
+      items,
+    })
+  }
+
+  /// Resolves the existing video items for a batch of IDs.
+  ///
+  /// A successful response may omit missing or inaccessible IDs. Transport and
+  /// HTTP failures fail the entire batch so callers do not mistake them for
+  /// confirmed unavailable items.
+  pub async fn video_items_by_ids(
+    &self,
+    item_ids: Vec<String>,
+  ) -> Result<Vec<VideoLibraryItem>, JellyfinError> {
+    let item_ids = normalized_item_ids(item_ids);
+    if item_ids.is_empty() {
+      return Ok(Vec::new());
+    }
+    if self.client.provider() == MediaServerProvider::Emby {
+      return self.emby_video_items_by_ids(&item_ids).await;
+    }
+
+    let server_url = self.client.server_url()?;
+    let token = self.client.access_token()?;
+    let user_id = self.client.user_id()?;
+    let configuration = self
+      .client
+      .openapi_configuration(&server_url, Some(&token))?;
+    let mut items = Vec::new();
+
+    for chunk in item_ids.chunks(MAX_VIDEO_ITEM_BATCH_SIZE) {
+      let ids = chunk
+        .iter()
+        .map(|item_id| {
+          Uuid::parse_str(item_id)
+            .map_err(|_| JellyfinError::HttpError(format!("Invalid Jellyfin item id: {item_id}")))
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+      let response = jellyfin_api::apis::items_api::get_items(
+        &configuration,
+        video_items_by_ids_params(user_id.clone(), ids),
+      )
+      .await
+      .map_err(|err| JellyfinClient::openapi_error("Video items by id", err))?;
+      items.extend(
+        response
+          .items
+          .unwrap_or_default()
+          .into_iter()
+          .filter_map(|item| map_video_library_item(&server_url, item)),
+      );
+    }
+
+    Ok(items)
   }
 
   pub async fn search_video(
@@ -3298,6 +3396,71 @@ impl<'a> JellyfinLibrary<'a> {
     })
   }
 
+  async fn emby_favorites(
+    &self,
+    request: FavoritesPageRequest,
+  ) -> Result<FavoritesPage, JellyfinError> {
+    let server_url = self.client.server_url()?;
+    let user_id = self.client.user_id()?;
+    let start_index = request.start_index.max(0);
+    let limit = request.limit.clamp(1, 100);
+    let response = self
+      .client
+      .get_with_query::<emby_api::models::QueryResultBaseItemDto>(
+        &format!("/Users/{user_id}/Items"),
+        &emby_favorites_items_query(start_index, limit),
+      )
+      .await?;
+
+    let total_record_count = response.total_record_count.unwrap_or(0).max(0);
+    let returned_count = response
+      .items
+      .as_ref()
+      .map_or(0, |items| i32::try_from(items.len()).unwrap_or(i32::MAX));
+    let items = response
+      .items
+      .unwrap_or_default()
+      .into_iter()
+      .filter_map(|item| map_emby_video_library_item(&server_url, item))
+      .collect();
+
+    Ok(FavoritesPage {
+      start_index,
+      limit,
+      total_record_count,
+      has_more: start_index.saturating_add(returned_count) < total_record_count,
+      items,
+    })
+  }
+
+  async fn emby_video_items_by_ids(
+    &self,
+    item_ids: &[String],
+  ) -> Result<Vec<VideoLibraryItem>, JellyfinError> {
+    let server_url = self.client.server_url()?;
+    let user_id = self.client.user_id()?;
+    let mut items = Vec::new();
+
+    for chunk in item_ids.chunks(MAX_VIDEO_ITEM_BATCH_SIZE) {
+      let response = self
+        .client
+        .get_with_query::<emby_api::models::QueryResultBaseItemDto>(
+          &format!("/Users/{user_id}/Items"),
+          &emby_video_items_by_ids_query(chunk),
+        )
+        .await?;
+      items.extend(
+        response
+          .items
+          .unwrap_or_default()
+          .into_iter()
+          .filter_map(|item| map_emby_video_library_item(&server_url, item)),
+      );
+    }
+
+    Ok(items)
+  }
+
   async fn emby_search_video(
     &self,
     request: VideoSearchRequest,
@@ -3743,7 +3906,7 @@ async fn video_library_shortcuts(
 
 struct VideoBrowseItemsQuery {
   user_id: String,
-  library_id: String,
+  parent_id: Option<String>,
   start_index: i32,
   limit: i32,
   include_item_types: Vec<jellyfin_api::models::BaseItemKind>,
@@ -3811,7 +3974,7 @@ fn video_browse_items_params(
     recursive: Some(true),
     search_term: None,
     sort_order: Some(vec![sort_order]),
-    parent_id: Some(query.library_id),
+    parent_id: query.parent_id,
     fields: Some(video_home_fields()),
     exclude_item_types: None,
     include_item_types: Some(query.include_item_types),
@@ -3865,6 +4028,51 @@ fn video_browse_items_params(
   }
 }
 
+fn video_root_items_params(
+  user_id: String,
+  start_index: i32,
+  limit: i32,
+  favorites_only: bool,
+) -> jellyfin_api::apis::items_api::GetItemsParams {
+  video_browse_items_params(VideoBrowseItemsQuery {
+    user_id,
+    parent_id: None,
+    start_index,
+    limit,
+    include_item_types: vec![
+      jellyfin_api::models::BaseItemKind::Movie,
+      jellyfin_api::models::BaseItemKind::Series,
+      jellyfin_api::models::BaseItemKind::Episode,
+    ],
+    media_types: None,
+    sort: VideoLibrarySort::Title,
+    sort_direction: VideoLibrarySortDirection::Ascending,
+    played_filter: VideoLibraryPlayedFilter::All,
+    favorites_only,
+  })
+}
+
+fn video_favorites_items_params(
+  user_id: String,
+  start_index: i32,
+  limit: i32,
+) -> jellyfin_api::apis::items_api::GetItemsParams {
+  video_root_items_params(user_id, start_index, limit, true)
+}
+
+fn video_items_by_ids_params(
+  user_id: String,
+  ids: Vec<Uuid>,
+) -> jellyfin_api::apis::items_api::GetItemsParams {
+  let limit = i32::try_from(ids.len()).unwrap_or(MAX_VIDEO_ITEM_BATCH_SIZE as i32);
+  let mut params = video_root_items_params(user_id, 0, limit, false);
+  params.ids = Some(ids);
+  params.sort_by = None;
+  params.sort_order = None;
+  params.enable_total_record_count = Some(false);
+  params
+}
+
 struct VideoSearchItemsQuery {
   user_id: String,
   query: String,
@@ -3875,25 +4083,19 @@ struct VideoSearchItemsQuery {
 fn video_search_items_params(
   query: VideoSearchItemsQuery,
 ) -> jellyfin_api::apis::items_api::GetItemsParams {
-  let mut params = video_browse_items_params(VideoBrowseItemsQuery {
-    user_id: query.user_id,
-    library_id: String::new(),
-    start_index: query.start_index,
-    limit: query.limit,
-    include_item_types: vec![
-      jellyfin_api::models::BaseItemKind::Movie,
-      jellyfin_api::models::BaseItemKind::Series,
-      jellyfin_api::models::BaseItemKind::Episode,
-    ],
-    media_types: None,
-    sort: VideoLibrarySort::Title,
-    sort_direction: VideoLibrarySortDirection::Ascending,
-    played_filter: VideoLibraryPlayedFilter::All,
-    favorites_only: false,
-  });
-  params.parent_id = None;
+  let mut params = video_root_items_params(query.user_id, query.start_index, query.limit, false);
   params.search_term = Some(query.query);
   params
+}
+
+fn normalized_item_ids(item_ids: Vec<String>) -> Vec<String> {
+  let mut seen = HashSet::new();
+  item_ids
+    .into_iter()
+    .map(|item_id| item_id.trim().to_owned())
+    .filter(|item_id| !item_id.is_empty())
+    .filter(|item_id| seen.insert(item_id.clone()))
+    .collect()
 }
 
 fn video_home_fields() -> Vec<jellyfin_api::models::ItemFields> {
@@ -5026,15 +5228,12 @@ fn emby_browse_items_query(query: EmbyBrowseItemsQuery) -> Vec<(&'static str, St
   params
 }
 
-fn emby_search_items_query(query: EmbySearchItemsQuery) -> Vec<(&'static str, String)> {
+fn emby_root_video_items_query(start_index: i32, limit: i32) -> Vec<(&'static str, String)> {
   vec![
-    ("StartIndex", query.start_index.to_string()),
-    ("Limit", query.limit.to_string()),
+    ("StartIndex", start_index.to_string()),
+    ("Limit", limit.to_string()),
     ("Recursive", "true".to_string()),
-    ("SearchTerm", query.query),
     ("IncludeItemTypes", "Movie,Series,Episode".to_string()),
-    ("SortBy", "SortName".to_string()),
-    ("SortOrder", "Ascending".to_string()),
     ("Fields", emby_home_fields()),
     ("EnableUserData", "true".to_string()),
     ("EnableImages", "true".to_string()),
@@ -5042,6 +5241,33 @@ fn emby_search_items_query(query: EmbySearchItemsQuery) -> Vec<(&'static str, St
     ("EnableImageTypes", "Primary,Logo".to_string()),
     ("EnableTotalRecordCount", "true".to_string()),
   ]
+}
+
+fn emby_favorites_items_query(start_index: i32, limit: i32) -> Vec<(&'static str, String)> {
+  let mut query = emby_root_video_items_query(start_index, limit);
+  query.extend([
+    ("IsFavorite", "true".to_string()),
+    ("SortBy", "SortName".to_string()),
+    ("SortOrder", "Ascending".to_string()),
+  ]);
+  query
+}
+
+fn emby_video_items_by_ids_query(item_ids: &[String]) -> Vec<(&'static str, String)> {
+  let limit = i32::try_from(item_ids.len()).unwrap_or(MAX_VIDEO_ITEM_BATCH_SIZE as i32);
+  let mut query = emby_root_video_items_query(0, limit);
+  query.push(("Ids", item_ids.join(",")));
+  query
+}
+
+fn emby_search_items_query(query: EmbySearchItemsQuery) -> Vec<(&'static str, String)> {
+  let mut params = emby_root_video_items_query(query.start_index, query.limit);
+  params.extend([
+    ("SearchTerm", query.query),
+    ("SortBy", "SortName".to_string()),
+    ("SortOrder", "Ascending".to_string()),
+  ]);
+  params
 }
 
 fn emby_detail_query() -> Vec<(&'static str, String)> {
@@ -8343,6 +8569,130 @@ mod tests {
   }
 
   #[tokio::test]
+  async fn favorites_loads_all_video_types_from_the_current_user_root() {
+    let movie_id = "00000000000000000000000000000030";
+    let episode_id = "00000000000000000000000000000032";
+    let (server_url, requests) = serve_responses_with_requests(vec![(
+      "200 OK",
+      r#"{"Items":[{"Id":"00000000000000000000000000000030","Name":"Favorite Movie","Type":"Movie","UserData":{"IsFavorite":true}},{"Id":"00000000000000000000000000000032","Name":"Favorite Episode","Type":"Episode","SeriesName":"Example Show","ParentIndexNumber":1,"IndexNumber":2,"UserData":{"IsFavorite":true}}],"TotalRecordCount":5,"StartIndex":2}"#,
+    )])
+    .await;
+    let client = JellyfinClient::new();
+    connect_test_client(&client, server_url);
+
+    let page = client
+      .library()
+      .favorites(FavoritesPageRequest {
+        start_index: 2,
+        limit: 2,
+      })
+      .await
+      .expect("favorites page should load");
+
+    assert_eq!(page.start_index, 2);
+    assert_eq!(page.limit, 2);
+    assert_eq!(page.total_record_count, 5);
+    assert!(page.has_more);
+    assert_eq!(
+      page
+        .items
+        .iter()
+        .map(|item| (item.id.as_str(), item.item_type.as_str()))
+        .collect::<Vec<_>>(),
+      vec![(movie_id, "Movie"), (episode_id, "Episode")]
+    );
+
+    let captured = requests.lock();
+    let request = &captured[0];
+    assert!(request.starts_with("GET /Items?"));
+    assert!(request.contains("userId=00000000000000000000000000000001"));
+    assert!(request.contains("startIndex=2"));
+    assert!(request.contains("limit=2"));
+    assert!(request.contains("recursive=true"));
+    assert!(request.contains("includeItemTypes=Movie"));
+    assert!(request.contains("includeItemTypes=Series"));
+    assert!(request.contains("includeItemTypes=Episode"));
+    assert!(request.contains("isFavorite=true"));
+    assert!(request.contains("sortBy=SortName"));
+    assert!(request.contains("sortOrder=Ascending"));
+    assert!(request.contains("enableTotalRecordCount=true"));
+    assert!(!request.contains("parentId="));
+  }
+
+  #[tokio::test]
+  async fn video_items_by_ids_returns_only_existing_items_from_a_successful_response() {
+    let existing_id = "00000000000000000000000000000040";
+    let missing_id = "00000000000000000000000000000041";
+    let (server_url, requests) = serve_responses_with_requests(vec![(
+      "200 OK",
+      r#"{"Items":[{"Id":"00000000000000000000000000000040","Name":"Existing Movie","Type":"Movie"}],"TotalRecordCount":1}"#,
+    )])
+    .await;
+    let client = JellyfinClient::new();
+    connect_test_client(&client, server_url);
+
+    let items = client
+      .library()
+      .video_items_by_ids(vec![
+        format!(" {existing_id} "),
+        missing_id.to_owned(),
+        existing_id.to_owned(),
+      ])
+      .await
+      .expect("successful lookup should return its existing subset");
+
+    assert_eq!(items.len(), 1);
+    assert_eq!(items[0].id, existing_id);
+    let captured = requests.lock();
+    let request = &captured[0];
+    assert!(request.contains("limit=2"));
+    assert!(request.contains(&format!(
+      "ids={}",
+      Uuid::parse_str(existing_id).expect("fixture id should parse")
+    )));
+    assert!(request.contains(&format!(
+      "ids={}",
+      Uuid::parse_str(missing_id).expect("fixture id should parse")
+    )));
+    assert!(request.contains("includeItemTypes=Movie"));
+    assert!(request.contains("includeItemTypes=Series"));
+    assert!(request.contains("includeItemTypes=Episode"));
+    assert!(!request.contains("parentId="));
+  }
+
+  #[tokio::test]
+  async fn video_items_by_ids_keeps_request_failures_distinct_from_missing_items() {
+    let (server_url, _) = serve_responses_with_requests(vec![(
+      "503 Service Unavailable",
+      r#"{"Message":"temporarily unavailable"}"#,
+    )])
+    .await;
+    let client = JellyfinClient::new();
+    connect_test_client(&client, server_url);
+
+    let error = client
+      .library()
+      .video_items_by_ids(vec!["00000000000000000000000000000040".to_owned()])
+      .await
+      .expect_err("request failure must not look like an empty successful batch");
+
+    assert!(matches!(error, JellyfinError::HttpError(_)));
+  }
+
+  #[tokio::test]
+  async fn empty_video_item_batch_does_not_require_a_connection() {
+    let client = JellyfinClient::new();
+
+    let items = client
+      .library()
+      .video_items_by_ids(vec!["  ".to_owned()])
+      .await
+      .expect("empty normalized batch should be a no-op");
+
+    assert!(items.is_empty());
+  }
+
+  #[tokio::test]
   async fn browse_video_rejects_missing_library_id() {
     let client = JellyfinClient::new();
     connect_test_client(&client, "http://127.0.0.1:8096".to_string());
@@ -9283,6 +9633,64 @@ mod tests {
     assert!(captured[0].contains("IsFavorite=true"));
     assert!(captured[1].contains("SearchTerm=emby+show"));
     assert!(captured[1].contains("IncludeItemTypes=Movie%2CSeries%2CEpisode"));
+  }
+
+  #[tokio::test]
+  async fn emby_favorites_and_item_batches_use_the_current_user_root() {
+    let existing_id = "00000000000000000000000000000230";
+    let missing_id = "00000000000000000000000000000231";
+    let (server_url, requests) = serve_responses_with_requests(vec![
+      (
+        "200 OK",
+        r#"{"Items":[{"Id":"00000000000000000000000000000230","Name":"Emby Favorite","Type":"Movie","UserData":{"IsFavorite":true}}],"TotalRecordCount":3}"#,
+      ),
+      (
+        "200 OK",
+        r#"{"Items":[{"Id":"00000000000000000000000000000230","Name":"Emby Existing","Type":"Movie"}],"TotalRecordCount":1}"#,
+      ),
+    ])
+    .await;
+    let client = JellyfinClient::new();
+    connect_test_client_as_emby(&client, server_url);
+
+    let favorites = client
+      .library()
+      .favorites(FavoritesPageRequest {
+        start_index: 1,
+        limit: 1,
+      })
+      .await
+      .expect("Emby favorites should load");
+    let items = client
+      .library()
+      .video_items_by_ids(vec![existing_id.to_owned(), missing_id.to_owned()])
+      .await
+      .expect("Emby item batch should return its existing subset");
+
+    assert_eq!(favorites.total_record_count, 3);
+    assert!(favorites.has_more);
+    assert_eq!(favorites.items[0].id, existing_id);
+    assert_eq!(items.len(), 1);
+    assert_eq!(items[0].id, existing_id);
+
+    let captured = requests.lock();
+    let favorites_request = &captured[0];
+    assert!(favorites_request.starts_with("GET /Users/00000000000000000000000000000001/Items?"));
+    assert!(favorites_request.contains("StartIndex=1"));
+    assert!(favorites_request.contains("Limit=1"));
+    assert!(favorites_request.contains("Recursive=true"));
+    assert!(favorites_request.contains("IncludeItemTypes=Movie%2CSeries%2CEpisode"));
+    assert!(favorites_request.contains("IsFavorite=true"));
+    assert!(favorites_request.contains("SortBy=SortName"));
+    assert!(favorites_request.contains("SortOrder=Ascending"));
+    assert!(!favorites_request.contains("ParentId="));
+
+    let batch_request = &captured[1];
+    assert!(batch_request.starts_with("GET /Users/00000000000000000000000000000001/Items?"));
+    assert!(batch_request.contains("Limit=2"));
+    assert!(batch_request.contains(&format!("Ids={existing_id}%2C{missing_id}")));
+    assert!(batch_request.contains("IncludeItemTypes=Movie%2CSeries%2CEpisode"));
+    assert!(!batch_request.contains("ParentId="));
   }
 
   #[tokio::test]

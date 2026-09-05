@@ -67,11 +67,15 @@ pub fn view(state: &State) -> Element<'_, Message> {
       | jellypilot_core::LoadState::Failed(_) => "Library",
     },
     Destination::Search(query) => query,
-    Destination::Home | Destination::Detail(_) | Destination::NowPlaying => "Library",
+    Destination::Home
+    | Destination::PersonalLists(_)
+    | Destination::Detail(_)
+    | Destination::NowPlaying => "Library",
   };
   let heading = match &state.shell.destination {
     Destination::Search(_) => format!("Search results for “{title}”"),
     Destination::Home
+    | Destination::PersonalLists(_)
     | Destination::Library { .. }
     | Destination::Detail(_)
     | Destination::NowPlaying => title.to_owned(),
@@ -249,6 +253,7 @@ fn browse_body<'a>(state: &'a State, class: SizeClass) -> Element<'a, Message> {
         padding,
       ),
       Destination::Home
+      | Destination::PersonalLists(_)
       | Destination::Library { .. }
       | Destination::Detail(_)
       | Destination::NowPlaying => empty_surface(
@@ -800,9 +805,9 @@ mod tests {
     assert_eq!(page_padding(SizeClass::Wide), 32.0);
   }
   #[test]
-  fn grid_available_width_matches_legacy_startup_geometry() {
-    // 1600×900 default window, full sidebar, 1px hairline, 2×32 page padding.
-    assert_eq!(grid_available_width(1600.0, SizeClass::Standard), 1287.0);
+  fn grid_available_width_matches_sidebar_contract() {
+    // 1600×900 default window, 240px sidebar, 1px hairline, 2×32 page padding.
+    assert_eq!(grid_available_width(1600.0, SizeClass::Standard), 1295.0);
   }
 
   #[test]

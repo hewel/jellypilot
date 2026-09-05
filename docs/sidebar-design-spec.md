@@ -1,6 +1,6 @@
 # JellyPilot Native Sidebar and Account Interaction Specification
 
-**Status: Design accepted; feature implementation and acceptance pending.** Confirmed in the 2026-09-05 interview. This delivery consists of this specification, domain terminology, and two ADRs.
+**Status: Implemented; human visual and live-server acceptance pending.** Design confirmed in the 2026-09-05 interview. The native implementation follows this specification and ADRs 0032–0033.
 
 The original reference is the external `sidebar_design_spec.md` v2.4:
 `/home/hewel/.gemini/antigravity/brain/9c8bf3e5-d520-4caf-9dd1-854e63204365/sidebar_design_spec.md`.
@@ -24,7 +24,7 @@ Only authenticated Full mode shows the Sidebar. Control-Only retains its existin
 | Area | Fixed and scrolling behavior | Content |
 | --- | --- | --- |
 | Top search | Fixed | Search input, submit action, shortcut hint or clear button |
-| Personal navigation | Fixed | Home, Personal Lists ("我的清单") |
+| Personal navigation | Fixed | Home, Personal Lists |
 | Library heading | Fixed | Libraries and their actual count |
 | Video libraries | Independent vertical scrolling, filling the remaining height | Video libraries browsable by the current account, with actual names and types |
 | Account and tools | Fixed at the bottom | Clickable identity card; Settings, Refresh, Control mode |
@@ -51,7 +51,8 @@ Verify each color pairing against design-system contrast requirements rather tha
 Search Movie, Series, and Episode items across all video libraries of the current account using the server's SearchTerm capability.
 Do not promise original-title/tag matching, AND/OR/NOT syntax, or typo-tolerant fuzzy search.
 
-- Typing updates only the draft. Enter or the submit button displays results in the main content area. Use existing pagination with a page size of 24 and ascending name order.
+- Use one rounded search field with a leading clickable magnifier, the placeholder "Search movies and shows…", and an inset platform shortcut keycap (⌘K on macOS, Ctrl K elsewhere). Product interface labels are English throughout.
+- Typing updates only the draft. Enter or the leading magnifier displays results in the main content area; there is no separate Search button. Use existing pagination with a page size of 24 and ascending name order.
 - The expanded Sidebar exposes the input directly. In the icon-only Sidebar, clicking the search icon or pressing the shortcut opens an **input popover** anchored to that icon; submission closes it, and results still appear in the main content area.
 - An empty input shows the platform shortcut hint; a nonempty input provides a clear button. Whitespace-only drafts do not send requests.
 - Clear or Esc while searching empties the draft and removes focus from the input. Previously submitted results retain their query until another submission or navigation.
@@ -59,7 +60,7 @@ Do not promise original-title/tag matching, AND/OR/NOT syntax, or typo-tolerant 
 
 ### Refresh
 
-The bottom action is named Refresh ("刷新"). It reloads the current account's library directory and current page content; it is not a server scan task.
+The bottom action is named Refresh. It reloads the current account's library directory and current page content; it is not a server scan task.
 Personal Lists refreshes Favorites and server information for currently visible Watchlist entries without changing local Watchlist membership.
 Show real request activity and coalesce repeated triggers. Preserve current navigation, retain usable content on failure, and provide retry.
 If a directory refresh confirms that the current library is no longer accessible, return to Home and explain why. Refresh results from the old account must not update the new account.
@@ -92,7 +93,7 @@ Do not combine both counts into an ambiguous badge. The overview reuses Home car
 Detail views expose separate Favorites and Watchlist actions; list cards provide the corresponding removal action.
 Episodes show the series title and episode number. An item can belong to both lists; changing one membership does not change the other.
 
-Watchlist ("稍后观看") records retain a stable account scope, item ID, time added, and the minimum name/type/episode information needed to identify an unavailable item.
+Watchlist records retain a stable account scope, item ID, time added, and the minimum name/type/episode information needed to identify an unavailable item.
 Online queries fill in current content, using the existing Library Image mechanism. These records do not provide offline library browsing or offline playback.
 When a successful server response confirms that an item is missing or inaccessible, show it as Unavailable, retaining its count and manual removal action.
 A network failure does not mean an item was deleted and must not cause bulk marking or deletion of Watchlist entries.
@@ -101,24 +102,24 @@ A network failure does not mean an item was deleted and must not cause bulk mark
 
 ### Presentation and Entry Points
 
-The identity card uses the actual username, provider, and server name, falling back to the server address when the name is missing. A monogram may be derived from the username.
+The identity card uses a rounded-square monogram, connection indicator, and two-line username/provider/server identity, falling back to the server address when the name is missing. In the expanded Sidebar, a separate rounded toolbar places Settings, Refresh, and Control mode in three equal columns with dividers.
 The Playback Target's device identity must not masquerade as a server node code. Show actual login status and separately describe existing remote-control connection status.
 "Signed in" does not mean continuously reachable; do not display unmeasured Mbps or latency.
 
-The Account Popover is anchored above the identity card by default, start-aligned, with a target width of 288.
+The Account Popover is anchored above the identity card by default, start-aligned, with a target width of 368.
 It may extend into the main content area. Its position and maximum height are constrained by the entire window; flip placement when space is insufficient and scroll long account lists independently.
 Outside click or Esc closes it. Closing a busy menu does not itself cancel background operations.
 
 Order the content as current identity/address with a copy action, saved logins, Startup Auto Login preference, then adding an account and lifecycle actions.
 Copy the address through the native clipboard. Show Copied only after success and allow retry on failure.
-Label the list Saved and indicate the current selection. Normal mode selects a profile to switch; management mode exposes each entry's Sign Out action, also accessible by keyboard.
+Label the list Switch server / account, show the saved-account count, and indicate the current selection with a tinted row and checkmark. Profile rows include a monogram, provider badge, and server identity. Normal mode selects a profile to switch; management mode exposes each entry's Sign Out action, also accessible by keyboard. Place the add-account action across the available width, followed by paired Disconnect and Sign Out actions.
 Retain offline or failed-restore records for retry or Sign Out; failure does not automatically delete them.
 
 Full mode enters through the Sidebar. The account category in Settings reuses the same management capability so Control-Only can also add, switch, and sign out.
 
 ### Switching and Adding
 
-1. Selecting the current account does not rebuild its connection. When choosing another account or submitting Connect and switch ("连接并切换"), first confirm that the current Playback Session will end, if one exists.
+1. Selecting the current account does not rebuild its connection. When choosing another account or submitting Connect and switch, first confirm that the current Playback Session will end, if one exists.
 2. Validate the saved login or authenticate the new account on an isolated candidate. The old account remains the only active connection; cancellation or target validation failure preserves its connection and playback.
 3. After validation, enter handoff and block repeated switching or Sign Out. If playback began during validation and stopping it has not yet been confirmed for this attempt, request confirmation first; cancellation discards the candidate.
    End the old playback and attempt its stop report while its authentication is still available. Adopt the candidate only after MPV cleanup finishes.
@@ -144,7 +145,7 @@ This behavior is distinct from network reconnection of an already-connected remo
 ### Disconnect and Sign Out
 
 - **Disconnect** ends the current connection and Playback Session, retaining saved logins and Watchlist records. Stop reporting and MPV cleanup still precede clearing runtime authentication.
-- **Sign Out** removes the selected login from this device. The confirmation identifies the account and offers "Also delete this device's Watchlist" ("同时删除本机稍后观看清单"), unchecked by default.
+- **Sign Out** removes the selected login from this device. The confirmation identifies the account and offers "Also delete this account's local Watchlist", unchecked by default.
 - An inactive account can be signed out directly without affecting the current connection or playback. For the active account, delete credentials securely first; after success, use its old authentication to finish stopping playback and disconnecting. Credential deletion failure preserves the current session.
 - Opt-in Watchlist cleanup affects only the selected Profile Scope. Credentials and Watchlist are not one transaction: credential deletion failure prevents subsequent list cleanup; list cleanup failure explicitly reports that the login was removed but the list remains, with retry for that scope.
 - Restoring the same Profile Scope makes a retained Watchlist available again. Sign Out neither invokes server-side token revocation nor deletes the server user.
@@ -162,7 +163,7 @@ theme, reduced motion, start minimized, image cache, diagnostics, and about info
 Subtitle ordering retains Add/Move up/Move down/Remove controls. Extra arguments continue to carry advanced MPV configuration.
 This work does not add IPC path editing, a hardware-decoding toggle, a filter editor, multiple dark-theme variants, or an accent-color picker.
 
-The third bottom tool is named Control mode ("控制模式") and switches to existing Control-Only; it does not add a floating mini window.
+The third bottom tool is named Control mode and switches to existing Control-Only; it does not add a floating mini window.
 Follow the existing App Mode contract: release Full browse state while preserving the connection, Playback Session, tray, and remote control. Settings retains the entry to return to Full mode.
 
 ## 6. Interfaces and Ownership for Future Implementation
@@ -188,7 +189,7 @@ Repeated requests, concurrent membership changes, list cleanup, and saves must p
 
 ## 7. Acceptance Scenarios — Pending Verification
 
-The checkboxes below are for future feature acceptance. Publishing documentation, compiling, or starting successfully cannot substitute for the corresponding behavior and human visual acceptance.
+The checkboxes below track end-to-end acceptance with representative accounts and human visual review. Automated regression coverage and startup checks do not substitute for these scenarios.
 
 ### Content and Persistence
 
@@ -220,8 +221,9 @@ The checkboxes below are for future feature acceptance. Publishing documentation
 
 ### Validation Tiers
 
-The [validation policy](agents/validation.md) is authoritative. This documentation delivery checks only links, terminology, ADR references, metadata, and command consistency.
-Future implementation uses focused checks for the boundaries it touches. Public-interface or cross-crate changes add Suite checks; windows, subscriptions, lifecycle, and configuration persistence add native smoke.
+The [validation policy](agents/validation.md) is authoritative. This implementation requires focused checks, Suite checks for its public-interface and cross-crate changes, and native smoke for window, subscription, lifecycle, and persistence boundaries.
+
+Automated verification completed on 2026-09-05: `bun run check` passed, workspace Rust tests passed (one subprocess helper ignored by the normal runner), and the native smoke gate exited successfully. Regression coverage includes isolated account candidates, Quit/handoff ordering, credential and MPV cleanup failures and retries, account-scoped Watchlist persistence, late settlements, and refresh/mutation ordering. Human visual review and live Jellyfin/Emby acceptance remain unverified.
 
 ```bash
 bun run task rust test <crate>

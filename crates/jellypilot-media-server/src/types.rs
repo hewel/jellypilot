@@ -194,6 +194,25 @@ pub struct VideoLibraryPage {
   pub items: Vec<VideoLibraryItem>,
 }
 
+/// Root-level page request for the current user's video Favorites.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FavoritesPageRequest {
+  pub start_index: i32,
+  pub limit: i32,
+}
+
+/// Root-level page of the current user's favorite videos.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FavoritesPage {
+  pub start_index: i32,
+  pub limit: i32,
+  pub total_record_count: i32,
+  pub has_more: bool,
+  pub items: Vec<VideoLibraryItem>,
+}
+
 /// Media card summary for Video Home rows, Movies and Shows browse results, episode rows, and recommendation shelves.
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]

@@ -116,6 +116,8 @@ pub struct MpvClient {
 struct RuntimeState {
   process: Option<Child>,
   ipc: Option<Arc<MpvIpc>>,
+  #[cfg(test)]
+  fail_next_cleanup: bool,
 }
 
 struct StartFailure {
@@ -235,11 +237,23 @@ impl MpvClient {
 
   /// Stop MPV and disconnect.
   pub async fn stop(&self) {
+    let _ = self.stop_and_confirm_cleanup().await;
+  }
+
+  async fn stop_and_confirm_cleanup(&self) -> bool {
     let _lifecycle = self.lifecycle.lock().await;
     log::info!("stop() called - closing IPC connection");
-    let (ipc, mut child) = {
+    let (ipc, mut child, cleanup_failure_injected) = {
       let mut runtime = self.runtime.lock();
-      (runtime.ipc.take(), runtime.process.take())
+      #[cfg(test)]
+      let cleanup_failure_injected = std::mem::take(&mut runtime.fail_next_cleanup);
+      #[cfg(not(test))]
+      let cleanup_failure_injected = false;
+      (
+        runtime.ipc.take(),
+        runtime.process.take(),
+        cleanup_failure_injected,
+      )
     };
 
     if let Some(ipc) = ipc {
@@ -249,14 +263,27 @@ impl MpvClient {
       log::warn!("No IPC connection to close");
     }
 
-    if let Some(child) = child.as_mut() {
-      terminate_child(child).await;
+    let process_reaped = if cleanup_failure_injected {
+      false
+    } else if let Some(child) = child.as_mut() {
+      terminate_child(child).await
     } else {
       log::warn!("No MPV process handle to kill");
+      true
+    };
+
+    if !process_reaped {
+      if let Some(child) = child {
+        self.runtime.lock().process = Some(child);
+      }
+      log::error!("MPV process cleanup is incomplete; retaining process handle for retry");
     }
 
     cleanup_ipc();
-    log::info!("MPV client stopped");
+    if process_reaped {
+      log::info!("MPV client stopped");
+    }
+    process_reaped
   }
 
   fn refresh_runtime(&self) {
@@ -525,6 +552,15 @@ impl MpvClient {
     result
   }
 
+  /// Attempt graceful quit and confirm that every owned process was reaped.
+  ///
+  /// The IPC command result is deliberately advisory: the local process
+  /// cleanup establishes whether ownership can safely cross a handoff.
+  pub(crate) async fn quit_and_confirm_cleanup(&self) -> bool {
+    let _ = self.send(MpvCommand::quit()).await;
+    self.stop_and_confirm_cleanup().await
+  }
+
   /// Observe a property for changes.
   /// Returns events via the events() receiver with event="property-change".
   pub async fn observe_property(&self, observer_id: i64, property: &str) -> Result<(), MpvError> {
@@ -560,6 +596,11 @@ impl MpvClient {
   pub fn install_ipc_for_test(&self, transport: Self) {
     let ipc = transport.runtime.lock().ipc.take();
     self.runtime.lock().ipc = ipc;
+  }
+
+  #[cfg(test)]
+  pub(crate) fn fail_next_cleanup_for_test(&self) {
+    self.runtime.lock().fail_next_cleanup = true;
   }
 }
 
@@ -642,7 +683,9 @@ mod tests {
     command.spawn().expect("controlled lifecycle child")
   }
 
-  async fn client_with_failing_command_peer() -> (MpvClient, tokio::task::JoinHandle<()>) {
+  async fn client_with_command_peer(
+    response_error: &'static str,
+  ) -> (MpvClient, tokio::task::JoinHandle<()>) {
     let (client_stream, peer_stream) = duplex(1024);
     let (reader, writer) = tokio::io::split(client_stream);
     let client = MpvClient::from_io_for_test(reader, writer)
@@ -662,7 +705,7 @@ mod tests {
         .and_then(serde_json::Value::as_i64)
         .expect("command should contain a request ID");
       let response = serde_json::json!({
-        "error": "failure containing secret-token",
+        "error": response_error,
         "data": null,
         "request_id": request_id,
       });
@@ -729,7 +772,7 @@ mod tests {
 
   #[tokio::test]
   async fn quit_returns_sanitized_command_failure() {
-    let (client, peer) = client_with_failing_command_peer().await;
+    let (client, peer) = client_with_command_peer("failure containing secret-token").await;
 
     let error = client
       .quit()
@@ -742,7 +785,7 @@ mod tests {
 
   #[tokio::test]
   async fn quit_stops_local_process_when_command_fails() {
-    let (client, peer) = client_with_failing_command_peer().await;
+    let (client, peer) = client_with_command_peer("failure containing secret-token").await;
     client.runtime.lock().process = Some(lifecycle_test_child());
 
     let _error = client
@@ -751,6 +794,26 @@ mod tests {
       .expect_err("failed quit command should be returned after cleanup");
     peer.await.expect("test peer should finish");
 
+    assert!(client.runtime.lock().process.is_none());
+  }
+
+  #[tokio::test]
+  async fn checked_cleanup_retains_an_unreaped_process_for_retry() {
+    let (client, peer) = client_with_command_peer("success").await;
+    let child = lifecycle_test_child();
+    let original_pid = child.id();
+    client.runtime.lock().process = Some(child);
+    client.fail_next_cleanup_for_test();
+
+    let first_cleanup = client.quit_and_confirm_cleanup().await;
+    peer.await.expect("test peer should finish");
+
+    assert!(!first_cleanup);
+    assert_eq!(
+      client.runtime.lock().process.as_ref().and_then(Child::id),
+      original_pid
+    );
+    assert!(client.quit_and_confirm_cleanup().await);
     assert!(client.runtime.lock().process.is_none());
   }
 

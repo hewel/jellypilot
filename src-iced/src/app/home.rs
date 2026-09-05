@@ -59,11 +59,28 @@ pub fn update(
       Task::none()
     }
     HomeMessage::Loaded { token, result } => {
+      let failed = result.0.is_err()
+        || result.1.is_err()
+        || result
+          .2
+          .as_ref()
+          .map_or(true, |rows| rows.iter().any(|row| row.result.is_err()));
       if !settle(&mut surface.data, &mut kernel.request_gate, token, result) {
         return Task::none();
       }
       surface.data.hovered_card = None;
-      prepare_artwork(surface, kernel, window_width)
+      let artwork = prepare_artwork(surface, kernel, window_width);
+      if failed {
+        Task::batch([
+          artwork,
+          kernel.show_toast(
+            super::state::NoticeLevel::Error,
+            "Some home content could not be refreshed. Available content was kept.".to_owned(),
+          ),
+        ])
+      } else {
+        artwork
+      }
     }
     HomeMessage::ArtworkLoaded {
       session,
@@ -137,9 +154,12 @@ pub fn start_load(
   let token = kernel.request_gate.begin_home();
   let Some(client) = kernel.client.as_ref().map(Arc::clone) else {
     let error = "The connected media server session is unavailable.".to_owned();
-    surface.data.settle_video_home(Err(error.clone()));
-    surface.data.settle_shortcuts(Err(error.clone()));
-    surface.data.settle_latest_rows(Err(error));
+    settle(
+      &mut surface.data,
+      &mut kernel.request_gate,
+      token,
+      (Err(error.clone()), Err(error.clone()), Err(error)),
+    );
     return Task::none();
   };
 
@@ -159,8 +179,20 @@ fn settle(
   }
   let (video_home, shortcuts, latest_rows) = result;
   data.settle_video_home(video_home);
-  data.settle_shortcuts(shortcuts);
-  data.settle_latest_rows(latest_rows);
+  if shortcuts.is_ok() || !matches!(data.shortcuts, jellypilot_core::LoadState::Ready(_)) {
+    data.settle_shortcuts(shortcuts);
+  }
+  let latest_ready = data
+    .rows()
+    .iter()
+    .skip(2)
+    .any(|row| matches!(row.items, jellypilot_core::LoadState::Ready(_)));
+  let latest_failed = latest_rows
+    .as_ref()
+    .map_or(true, |rows| rows.iter().any(|row| row.result.is_err()));
+  if !latest_failed || !latest_ready {
+    data.settle_latest_rows(latest_rows);
+  }
   true
 }
 
@@ -503,6 +535,66 @@ mod tests {
       series_continuing: false,
       unplayed_item_count: None,
     }
+  }
+
+  #[test]
+  fn refreshing_failed_home_rows_retains_an_already_loaded_directory() {
+    let (mut surface, mut kernel) = test_fixture();
+    surface
+      .data
+      .settle_video_home(Err("unavailable rows".to_owned()));
+    surface
+      .data
+      .settle_shortcuts(Ok(vec![jellypilot_media_server::VideoLibraryShortcut {
+        id: "movies".to_owned(),
+        name: "Movies".to_owned(),
+        collection_type: "movies".to_owned(),
+        item_count: Some(3),
+        artwork_image_id: None,
+      }]));
+    assert!(!surface.data.has_ready_content());
+    drop(start_load(&mut surface, &mut kernel, PLAYBACK_IDLE));
+    assert!(
+      matches!(&surface.data.shortcuts, jellypilot_core::LoadState::Ready(shortcuts)
+      if shortcuts.len() == 1 && shortcuts[0].id == "movies")
+    );
+  }
+
+  #[test]
+  fn failed_refresh_keeps_usable_home_rows_and_directory() {
+    let mut home = HomeState::default();
+    let mut gate = RequestGate::default();
+    home.settle_video_home(Ok(jellypilot_media_server::VideoHome {
+      continue_watching: vec![episode("kept", 1)],
+      next_up: Vec::new(),
+    }));
+    home.settle_shortcuts(Ok(Vec::new()));
+    home.settle_latest_rows(Ok(vec![jellypilot_media_server::LibraryLatestRow {
+      library_id: "movies".to_owned(),
+      library_name: "Movies".to_owned(),
+      result: Ok(vec![episode("latest", 1)]),
+    }]));
+    let token = gate.begin_home();
+    assert!(settle(
+      &mut home,
+      &mut gate,
+      token,
+      (
+        Err("offline".to_owned()),
+        Err("offline".to_owned()),
+        Err("offline".to_owned()),
+      )
+    ));
+    assert!(
+      matches!(&home.rows()[0].items, jellypilot_core::LoadState::Ready(items) if items[0].id == "kept")
+    );
+    assert!(
+      matches!(&home.rows()[2].items, jellypilot_core::LoadState::Ready(items) if items[0].id == "latest")
+    );
+    assert!(matches!(
+      home.shortcuts,
+      jellypilot_core::LoadState::Ready(_)
+    ));
   }
 
   #[test]

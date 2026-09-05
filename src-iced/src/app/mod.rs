@@ -1,3 +1,4 @@
+pub mod accounts;
 pub mod artwork;
 pub mod browse;
 pub mod detail;
@@ -5,6 +6,7 @@ pub mod home;
 pub mod kernel;
 pub mod login;
 pub mod message;
+pub mod personal_lists;
 pub mod playback;
 pub mod settings;
 pub mod shell;

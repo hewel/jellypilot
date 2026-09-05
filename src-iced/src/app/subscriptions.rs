@@ -7,7 +7,7 @@ use iced::{event, keyboard, time, window, Event, Subscription};
 use jellypilot_core::config::ThemeMode;
 use jellypilot_mpv::playback_session::{AdjacentDirection, PlaybackIntent};
 
-use super::message::{Message, PlaybackMessage, RemoteMessage, WindowMessage};
+use super::message::{Message, PlaybackMessage, RemoteMessage, ShellMessage, WindowMessage};
 use super::state::{RemoteEventChannel, State};
 
 pub fn subscription(state: &State) -> Subscription<Message> {
@@ -37,14 +37,39 @@ pub fn subscription(state: &State) -> Subscription<Message> {
   if state.shell.window_id.is_some() {
     if state.settings.view.shortcut_capture.is_some() {
       subscriptions.push(event::listen_with(shortcut_capture));
-    } else if state.shell.settings_open {
-      subscriptions.push(event::listen_with(settings_modal_events));
-    } else if state.playback.view.now_playing.is_some() {
-      subscriptions.push(
-        event::listen()
+    } else {
+      if state.kernel.connection == jellypilot_auth::login::ConnectionPhase::Connected
+        || super::accounts::blocking_modal(&state.accounts)
+      {
+        subscriptions.push(
+          event::listen_with(|event, status, _| Some((event, status)))
+            .with((
+              state.full.is_some(),
+              state.shell.settings_open,
+              state.shell.account_popover_open,
+              state.shell.compact_search_open,
+              super::accounts::blocking_modal(&state.accounts),
+            ))
+            .filter_map(application_shortcut),
+        );
+      } else if state.shell.settings_open {
+        subscriptions.push(event::listen_with(settings_modal_events));
+      }
+      if !state.shell.settings_open
+        && !state.shell.account_popover_open
+        && !state.shell.compact_search_open
+        && !super::accounts::blocking_modal(&state.accounts)
+        && super::accounts::handoff_generation(&state.accounts).is_none()
+        && state.playback.view.now_playing.is_some()
+      {
+        subscriptions.push(
+          event::listen_with(|event, status, _| {
+            (status == event::Status::Ignored).then_some(event)
+          })
           .with(playback_shortcuts(state.kernel.settings.snapshot()))
           .filter_map(playback_shortcut),
-      );
+        );
+      }
     }
   }
   if let Some(channel) = state.playback.remote_events.clone() {
@@ -73,6 +98,70 @@ pub fn subscription(state: &State) -> Subscription<Message> {
       .push(window::frames().map(|instant| Message::Window(WindowMessage::FrameTick(instant))));
   }
   Subscription::batch(subscriptions)
+}
+
+type ApplicationShortcutEvent = ((bool, bool, bool, bool, bool), (Event, event::Status));
+
+fn application_shortcut(
+  ((full, settings, account, compact_search, blocking), (event, status)): ApplicationShortcutEvent,
+) -> Option<Message> {
+  let Event::Keyboard(keyboard::Event::KeyPressed {
+    modified_key,
+    modifiers,
+    repeat: false,
+    ..
+  }) = event
+  else {
+    return None;
+  };
+  let command = if cfg!(target_os = "macos") {
+    keyboard::Modifiers::LOGO
+  } else {
+    keyboard::Modifiers::CTRL
+  };
+  if modifiers == command && !blocking {
+    match modified_key.as_ref() {
+      keyboard::Key::Character("k" | "K") if full && !settings && !account => {
+        return Some(Message::Shell(ShellMessage::FocusSearch));
+      }
+      keyboard::Key::Character(",") if !account && !compact_search => {
+        return Some(Message::Settings(super::message::SettingsMessage::Open));
+      }
+      _ => {}
+    }
+  }
+  // Account forms contain text inputs which consume Escape while removing
+  // focus. The account layer still owns dismissal of that same key press.
+  if blocking && modified_key.as_ref() == keyboard::Key::Named(keyboard::key::Named::Escape) {
+    return Some(Message::Shell(ShellMessage::DismissAccountLayer));
+  }
+  if status == event::Status::Captured {
+    return None;
+  }
+  if modified_key.as_ref() == keyboard::Key::Named(keyboard::key::Named::Tab) {
+    return match modifiers {
+      keyboard::Modifiers::NONE => Some(Message::Shell(ShellMessage::FocusNext)),
+      keyboard::Modifiers::SHIFT => Some(Message::Shell(ShellMessage::FocusPrevious)),
+      _ => None,
+    };
+  }
+  if modified_key.as_ref() != keyboard::Key::Named(keyboard::key::Named::Escape) {
+    return None;
+  }
+  if blocking {
+    return None;
+  }
+  if compact_search {
+    Some(Message::Shell(ShellMessage::DismissCompactSearch))
+  } else if account {
+    Some(Message::Shell(ShellMessage::DismissAccountPopover))
+  } else if settings {
+    Some(Message::Settings(super::message::SettingsMessage::Close))
+  } else if full {
+    Some(Message::Shell(ShellMessage::SearchEscape))
+  } else {
+    None
+  }
 }
 
 fn playback_shortcuts(settings: &jellypilot_core::config::Settings) -> (String, String, String) {
@@ -284,6 +373,64 @@ mod tests {
       text: None,
       repeat: false,
     })
+  }
+
+  #[test]
+  fn application_search_shortcut_respects_mode_and_modal_scope() {
+    let command = if cfg!(target_os = "macos") {
+      keyboard::Modifiers::LOGO
+    } else {
+      keyboard::Modifiers::CTRL
+    };
+    let event = key_pressed(keyboard::Key::Character("k".into()), command);
+    assert!(matches!(
+      application_shortcut((
+        (true, false, false, false, false),
+        (event.clone(), event::Status::Captured)
+      )),
+      Some(Message::Shell(ShellMessage::FocusSearch))
+    ));
+    for scope in [
+      (false, false, false, false, false),
+      (true, true, false, false, false),
+      (true, false, true, false, false),
+    ] {
+      assert!(application_shortcut((scope, (event.clone(), event::Status::Ignored))).is_none());
+    }
+  }
+
+  #[test]
+  fn application_escape_handles_only_the_top_layer() {
+    let escape = key_pressed(
+      keyboard::Key::Named(keyboard::key::Named::Escape),
+      keyboard::Modifiers::NONE,
+    );
+    assert!(matches!(
+      application_shortcut((
+        (true, false, false, false, true),
+        (escape.clone(), event::Status::Captured)
+      )),
+      Some(Message::Shell(ShellMessage::DismissAccountLayer))
+    ));
+    assert!(application_shortcut((
+      (true, true, false, false, false),
+      (escape.clone(), event::Status::Captured)
+    ))
+    .is_none());
+    assert!(matches!(
+      application_shortcut((
+        (true, true, true, false, false),
+        (escape.clone(), event::Status::Ignored)
+      )),
+      Some(Message::Shell(ShellMessage::DismissAccountPopover))
+    ));
+    assert!(matches!(
+      application_shortcut((
+        (true, false, false, true, false),
+        (escape, event::Status::Ignored)
+      )),
+      Some(Message::Shell(ShellMessage::DismissCompactSearch))
+    ));
   }
 
   #[test]

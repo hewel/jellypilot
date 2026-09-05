@@ -4,19 +4,20 @@
 //! window resize/close effects, tray window actions) are hoisted here.
 
 use iced::Task;
-use jellypilot_auth::login::{should_disconnect_after_forget, ConnectionPhase};
+use jellypilot_auth::login::ConnectionPhase;
 use jellypilot_core::config::{AppMode, IntroMode, Settings};
 use jellypilot_core::diagnostics::{DiagnosticCategory, DiagnosticLevel};
 use jellypilot_mpv::playback_session::{PlaybackInput, PlaybackIntent};
 
 use crate::tray::TrayAction;
 
+use super::accounts;
 use super::browse;
 use super::detail;
 use super::home;
 use super::login;
 use super::message::{
-  BrowseMessage, DetailMessage, HomeMessage, LoginMessage, Message, SettingsMessage, WindowMessage,
+  BrowseMessage, DetailMessage, HomeMessage, Message, SettingsMessage, WindowMessage,
 };
 use super::playback;
 use super::settings;
@@ -49,8 +50,176 @@ impl SettingsPlaybackSnapshot {
   }
 }
 
+fn activate_connection(state: &mut State) -> Task<Message> {
+  let control_only = state.app_mode() == AppMode::ControlOnly;
+  state.shell.destination = if control_only {
+    Destination::NowPlaying
+  } else {
+    Destination::Home
+  };
+  playback::initialize_playback(
+    &mut state.playback,
+    &mut state.kernel,
+    state.shell.quit_requested,
+  );
+  let mut tasks = vec![playback::start_remote_session(
+    &mut state.playback,
+    &mut state.kernel,
+  )];
+  if let Some(full) = state.full.as_mut() {
+    tasks.push(home::start_load(
+      &mut full.home,
+      &mut state.kernel,
+      state.playback.view.now_playing.is_none(),
+    ));
+    tasks.push(super::personal_lists::load_membership(
+      &mut full.personal_lists,
+      &mut state.kernel,
+      &state.watchlist,
+    ));
+  }
+  Task::batch(tasks)
+}
+
+fn update_account(state: &mut State, message: accounts::Message) -> Task<Message> {
+  let was_modal = accounts::blocking_modal(&state.accounts);
+  let closing = matches!(
+    &message,
+    accounts::Message::CancelConfirmation | accounts::Message::CloseAddAccount
+  );
+  match &message {
+    accounts::Message::SwitchProfile(key) | accounts::Message::AskSignOut(key) => {
+      if let Some(index) = state
+        .login
+        .flow
+        .profiles
+        .iter()
+        .position(|profile| profile.key() == key)
+      {
+        let action = if matches!(&message, accounts::Message::SwitchProfile(_)) {
+          "switch"
+        } else {
+          "signout"
+        };
+        state.shell.account_focus_return = shell::profile_action_id(index, action);
+      }
+    }
+    accounts::Message::AddAccount => {
+      state.shell.account_focus_return = shell::ACCOUNT_ADD_TRIGGER_ID.to_owned()
+    }
+    accounts::Message::Disconnect => {
+      state.shell.account_focus_return = shell::ACCOUNT_DISCONNECT_TRIGGER_ID.to_owned()
+    }
+    _ => {}
+  }
+  if let accounts::Message::RemoteHandoffSettled { generation } = &message {
+    playback::finish_account_remote_handoff(&mut state.playback, *generation);
+  }
+  let previous_error = accounts::view(state).error.map(str::to_owned);
+  let result = accounts::update(
+    &mut state.accounts,
+    &mut state.login.flow,
+    &mut state.kernel,
+    &state.watchlist,
+    accounts::RuntimeFacts {
+      quit_requested: state.shell.quit_requested,
+      playback_active: state.playback.view.now_playing.is_some()
+        || state.playback.in_flight_command.is_some(),
+    },
+    message,
+  );
+  let mut tasks = vec![result.task.map(Message::Account)];
+  match result.effect {
+    Some(accounts::Effect::BeginHandoff { generation }) => {
+      let start = playback::begin_account_handoff(
+        &mut state.playback,
+        &mut state.kernel,
+        state.shell.quit_requested,
+        generation,
+      );
+      tasks.push(start.playback);
+      tasks.push(start.remote.map(Message::Account));
+      if let Some(result) = start.playback_cleanup {
+        tasks.push(Task::done(Message::Account(
+          accounts::Message::PlaybackHandoffSettled { generation, result },
+        )));
+      }
+    }
+    Some(accounts::Effect::Activated) => {
+      shell::reset_connected_content(state);
+      tasks.push(activate_connection(state));
+    }
+    Some(accounts::Effect::Disconnected) => shell::reset_connected_content(state),
+    None => {}
+  }
+  if let Some(error) = accounts::view(state)
+    .error
+    .map(str::to_owned)
+    .filter(|error| Some(error) != previous_error.as_ref())
+  {
+    state
+      .kernel
+      .diagnostics
+      .record(DiagnosticLevel::Error, DiagnosticCategory::Auth, &error);
+    tasks.push(state.kernel.show_toast(NoticeLevel::Error, error));
+  }
+  if playback::quit_may_exit(&state.playback, state.shell.quit_requested) {
+    tasks.push(iced::exit());
+  }
+  let is_modal = accounts::blocking_modal(&state.accounts);
+  if !was_modal && is_modal {
+    tasks.push(iced::widget::operation::focus_next());
+  } else if closing && was_modal && !is_modal {
+    tasks.push(iced::widget::operation::focus(
+      state.shell.account_focus_return.clone(),
+    ));
+  }
+  Task::batch(tasks)
+}
+
 pub fn update(state: &mut State, message: Message) -> Task<Message> {
   match message {
+    Message::Account(message) => update_account(state, message),
+    Message::Shell(message) => {
+      let previous_notice = state.kernel.notice.clone();
+      let task = shell::update_shell(state, message);
+      if let Some(notice) = state
+        .kernel
+        .notice
+        .clone()
+        .filter(|notice| Some(notice) != previous_notice.as_ref())
+      {
+        Task::batch([task, state.kernel.show_toast(NoticeLevel::Error, notice)])
+      } else {
+        task
+      }
+    }
+    Message::PersonalLists(message) => {
+      if accounts::content_mutations_blocked(&state.accounts)
+        && matches!(
+          &message,
+          super::personal_lists::PersonalListsMessage::ToggleWatchlist(_)
+            | super::personal_lists::PersonalListsMessage::RemoveWatchlist(_)
+            | super::personal_lists::PersonalListsMessage::RemoveFavorite(_)
+        )
+      {
+        return state.kernel.show_toast(
+          NoticeLevel::Warning,
+          "Wait for the account change to finish before changing your lists.".to_owned(),
+        );
+      }
+      let Some(full) = state.full.as_mut() else {
+        return Task::none();
+      };
+      let task = super::personal_lists::update(
+        &mut full.personal_lists,
+        &mut state.kernel,
+        &state.watchlist,
+        message,
+      );
+      state.retain_artwork_handles();
+      task
+    }
     // Theme re-resolves every frame from state, so recording the OS mode is
     // the whole update; the next frame picks up the new effective theme.
     Message::SystemThemeDiscovered(mode) | Message::SystemThemeChanged(mode) => {
@@ -100,46 +269,12 @@ pub fn update(state: &mut State, message: Message) -> Task<Message> {
     Message::Login(message) => {
       let was_connected = state.kernel.connection == ConnectionPhase::Connected;
       let previous_error = state.login.flow.error.clone();
-      // Cross-surface writes hoisted out of the login surface (ADR 0029): a
-      // forget that signs out tears the remote session down, and the teardown
-      // completion clears the remote stopping flag.
-      let forget_disconnect = match &message {
-        LoginMessage::ForgetFinished {
-          session,
-          key,
-          sign_out,
-          result,
-        } => {
-          result.is_ok()
-            && should_disconnect_after_forget(
-              *sign_out,
-              *session,
-              state.kernel.request_gate.current_session(),
-              state.kernel.connection,
-              state.kernel.active_profile.as_ref() == Some(key),
-            )
-        }
-        _ => false,
-      };
-      let remote_disconnected = matches!(message, LoginMessage::RemoteDisconnected);
       let login_task = login::update(
         &mut state.login,
         &mut state.kernel,
         state.playback.view.can_start_login,
         message,
       );
-      if remote_disconnected {
-        state.playback.remote_stopping = false;
-      }
-      let login_task = if forget_disconnect {
-        Task::batch([
-          login_task,
-          playback::stop_remote_session_for_login(&mut state.playback, &mut state.kernel)
-            .map(Message::Login),
-        ])
-      } else {
-        login_task
-      };
       let is_connected = state.kernel.connection == ConnectionPhase::Connected;
       if state.login.flow.error != previous_error {
         if let Some(error) = &state.login.flow.error {
@@ -155,32 +290,7 @@ pub fn update(state: &mut State, message: Message) -> Task<Message> {
           DiagnosticCategory::Connection,
           "Connected to media server.",
         );
-        // Control-Only activates the Now Playing root and never starts the
-        // Library Browser home load.
-        let control_only = state.app_mode() == AppMode::ControlOnly;
-        state.shell.destination = if control_only {
-          Destination::NowPlaying
-        } else {
-          Destination::Home
-        };
-        playback::initialize_playback(
-          &mut state.playback,
-          &mut state.kernel,
-          state.shell.quit_requested,
-        );
-        let home_task = if control_only {
-          Task::none()
-        } else if let Some(full) = state.full.as_mut() {
-          home::start_load(
-            &mut full.home,
-            &mut state.kernel,
-            state.playback.view.now_playing.is_none(),
-          )
-        } else {
-          Task::none()
-        };
-        let remote_task = playback::start_remote_session(&mut state.playback, &mut state.kernel);
-        Task::batch([login_task, home_task, remote_task])
+        Task::batch([login_task, activate_connection(state)])
       } else if was_connected && !is_connected {
         state.kernel.diagnostics.record(
           DiagnosticLevel::Info,
@@ -218,6 +328,7 @@ pub fn update(state: &mut State, message: Message) -> Task<Message> {
       task
     }
     Message::Browse(BrowseMessage::SearchSubmitted) => {
+      state.shell.compact_search_open = false;
       // Navigation stays at the top-level router; Control-Only has no browse
       // composition, so its messages are ignored.
       let Some(full) = state.full.as_ref() else {
@@ -283,7 +394,41 @@ pub fn update(state: &mut State, message: Message) -> Task<Message> {
     }
     Message::Detail(DetailMessage::Back) if state.full.is_some() => shell::navigate_back(state),
     Message::Detail(DetailMessage::Back) => Task::none(),
+    Message::Detail(DetailMessage::WatchlistToggled) => {
+      if accounts::content_mutations_blocked(&state.accounts) {
+        return state.kernel.show_toast(
+          NoticeLevel::Warning,
+          "Wait for the account change to finish before changing your lists.".to_owned(),
+        );
+      }
+      let Some(full) = state.full.as_mut() else {
+        return Task::none();
+      };
+      let Destination::Detail(id) = &state.shell.destination else {
+        return Task::none();
+      };
+      let Some(item) = full.detail.items.get(id).cloned() else {
+        return Task::none();
+      };
+      super::personal_lists::update(
+        &mut full.personal_lists,
+        &mut state.kernel,
+        &state.watchlist,
+        super::personal_lists::PersonalListsMessage::ToggleWatchlist(item),
+      )
+    }
     Message::Detail(message) => {
+      if accounts::content_mutations_blocked(&state.accounts)
+        && matches!(
+          &message,
+          DetailMessage::FavoriteToggled | DetailMessage::PlayedToggled
+        )
+      {
+        return state.kernel.show_toast(
+          NoticeLevel::Warning,
+          "Wait for the account change to finish before changing this item.".to_owned(),
+        );
+      }
       let Some(full) = state.full.as_mut() else {
         return Task::none();
       };
@@ -306,28 +451,19 @@ pub fn update(state: &mut State, message: Message) -> Task<Message> {
     }
     Message::Settings(SettingsMessage::Open) => {
       shell::open_settings(state);
-      Task::none()
+      iced::widget::operation::focus(shell::SETTINGS_INITIAL_FOCUS_ID)
     }
     Message::Settings(SettingsMessage::Close) => {
+      accounts::hide(&mut state.accounts);
       shell::close_settings(state);
-      Task::none()
+      iced::widget::operation::focus(shell::SETTINGS_TRIGGER_ID)
     }
     Message::Settings(message) => {
       // Cross-surface writes hoisted out of the settings surface (ADR 0029):
       // mutations that change playback-relevant settings reconfigure playback,
-      // re-feed the intro mode, or refinalize the remote target here, and
-      // Disconnect/SignOut tear the remote session down or start the login
-      // surface's profile forget.
+      // re-feed the intro mode, or refinalize the remote target here.
       let settings_before = SettingsPlaybackSnapshot::capture(state.kernel.settings.snapshot());
-      let effective_theme_mode = state.theme_mode();
-      let disconnect = matches!(message, SettingsMessage::Disconnect);
-      let sign_out = matches!(message, SettingsMessage::SignOut);
-      let settings_task = settings::update(
-        &mut state.settings,
-        &mut state.kernel,
-        effective_theme_mode,
-        message,
-      );
+      let settings_task = settings::update(&mut state.settings, &mut state.kernel, message);
       let settings_after = SettingsPlaybackSnapshot::capture(state.kernel.settings.snapshot());
       let mut tasks = vec![settings_task];
       if settings_after.mpv_path != settings_before.mpv_path
@@ -358,29 +494,44 @@ pub fn update(state: &mut State, message: Message) -> Task<Message> {
       if settings_after.app_mode != settings_before.app_mode {
         tasks.push(shell::apply_app_mode(state, settings_after.app_mode));
       }
-      if disconnect {
-        tasks.push(
-          playback::stop_remote_session_for_login(&mut state.playback, &mut state.kernel)
-            .map(Message::Login),
-        );
-      } else if sign_out {
-        let sign_out_task = match state.kernel.active_profile.clone() {
-          Some(key) => login::start_forget(&mut state.login, &mut state.kernel, key)
-            .map(|task| task.map(Message::Login))
-            .unwrap_or_else(Task::none),
-          None => playback::stop_remote_session_for_login(&mut state.playback, &mut state.kernel)
-            .map(Message::Login),
-        };
-        tasks.push(sign_out_task);
-      }
+
       Task::batch(tasks)
     }
-    Message::Playback(message) => playback::update(
-      &mut state.playback,
-      &mut state.kernel,
-      state.shell.quit_requested,
-      message,
-    ),
+    Message::Playback(message) => {
+      if accounts::handoff_generation(&state.accounts).is_some()
+        && matches!(
+          &message,
+          super::message::PlaybackMessage::Intent(_)
+            | super::message::PlaybackMessage::SeekChanged(_)
+            | super::message::PlaybackMessage::SeekReleased
+            | super::message::PlaybackMessage::VolumeChanged(_)
+            | super::message::PlaybackMessage::VolumeReleased
+            | super::message::PlaybackMessage::AudioTrackSelected(_)
+            | super::message::PlaybackMessage::SubtitleTrackSelected(_)
+            | super::message::PlaybackMessage::QueueItemSelected(_)
+        )
+      {
+        return Task::none();
+      }
+      let task = playback::update(
+        &mut state.playback,
+        &mut state.kernel,
+        state.shell.quit_requested,
+        message,
+      );
+      if let Some((generation, result)) =
+        playback::take_account_handoff_settlement(&mut state.playback)
+      {
+        Task::batch([
+          task,
+          Task::done(Message::Account(
+            accounts::Message::PlaybackHandoffSettled { generation, result },
+          )),
+        ])
+      } else {
+        task
+      }
+    }
     Message::Remote(message) => playback::update_remote(
       &mut state.playback,
       &mut state.kernel,
@@ -409,12 +560,17 @@ pub fn update(state: &mut State, message: Message) -> Task<Message> {
         playback::stop_remote_session_for_quit(&mut state.playback, &mut state.kernel),
       ])
     }
-    Message::Tray(action) => playback::update_tray(
-      &mut state.playback,
-      &mut state.kernel,
-      state.shell.quit_requested,
-      action,
-    ),
+    Message::Tray(action) => {
+      if accounts::handoff_generation(&state.accounts).is_some() {
+        return Task::none();
+      }
+      playback::update_tray(
+        &mut state.playback,
+        &mut state.kernel,
+        state.shell.quit_requested,
+        action,
+      )
+    }
     Message::DismissNotice(id) => {
       state.dismiss_toast(id);
       Task::none()
@@ -434,6 +590,7 @@ pub fn update(state: &mut State, message: Message) -> Task<Message> {
 
 #[cfg(test)]
 mod tests {
+  use crate::app::message::LoginMessage;
   use std::fs;
   use std::path::PathBuf;
   use std::sync::Arc;
@@ -493,9 +650,12 @@ mod tests {
         home: home::Surface::default(),
         detail: detail::Surface::default(),
         browse: browse::Surface::default(),
+        personal_lists: super::super::personal_lists::Surface::default(),
       }),
       playback,
       shell: shell::Surface::new(false),
+      watchlist: super::super::personal_lists::Runtime::default(),
+      accounts: super::super::accounts::Surface::new(),
     }
   }
 
@@ -774,21 +934,61 @@ mod tests {
   }
 
   #[test]
-  fn login_state_changes_only_after_remote_teardown_completion() {
+  fn account_disconnect_waits_for_both_cleanup_settlements() {
     let mut state = test_state();
     state.kernel.connection = ConnectionPhase::Connected;
-    state.kernel.client = Some(Arc::new(JellyfinClient::new()));
+    let client = Arc::new(JellyfinClient::new());
+    client
+      .login()
+      .adopt_validated_session(&jellypilot_media_server::SavedSession {
+        provider: MediaServerProvider::Jellyfin,
+        server_url: "https://example.test".to_owned(),
+        user_id: "user".to_owned(),
+        user_name: "User".to_owned(),
+        access_token: "test-token".to_owned(),
+        server_name: None,
+        device_id: None,
+      });
+    state.kernel.client = Some(client);
 
-    drop(playback::stop_remote_session_for_login(
-      &mut state.playback,
-      &mut state.kernel,
+    drop(update(
+      &mut state,
+      Message::Account(accounts::Message::Disconnect),
     ));
-
-    assert!(state.kernel.connection == ConnectionPhase::Connected);
+    let generation = accounts::handoff_generation(&state.accounts).expect("handoff started");
+    assert_eq!(state.kernel.connection, ConnectionPhase::Connected);
     assert!(state.kernel.client.is_some());
     drop(update(
       &mut state,
-      Message::Login(LoginMessage::RemoteDisconnected),
+      Message::PersonalLists(
+        super::super::personal_lists::PersonalListsMessage::ToggleWatchlist(episode(
+          "late-write",
+          1,
+        )),
+      ),
+    ));
+    assert!(state
+      .full
+      .as_ref()
+      .unwrap()
+      .personal_lists
+      .busy_items
+      .is_empty());
+    assert!(matches!(
+      state.kernel.active_toast.as_ref().map(|toast| toast.level),
+      Some(NoticeLevel::Warning)
+    ));
+    drop(update(
+      &mut state,
+      Message::Account(accounts::Message::PlaybackHandoffSettled {
+        generation,
+        result: Ok(()),
+      }),
+    ));
+    assert_eq!(state.kernel.connection, ConnectionPhase::Connected);
+    drop(update(
+      &mut state,
+      Message::Account(accounts::Message::RemoteHandoffSettled { generation }),
     ));
     assert!(state.kernel.connection == ConnectionPhase::SignedOut);
     assert!(state.kernel.client.is_none());
@@ -913,7 +1113,7 @@ mod tests {
   }
 
   #[test]
-  fn sign_out_starts_secure_profile_removal_while_disconnect_does_not() {
+  fn sign_out_does_not_remove_credentials_when_the_saved_profile_summary_is_missing() {
     let key = profile_key("active");
     let mut disconnect = test_state();
     disconnect.kernel.connection = ConnectionPhase::Connected;
@@ -921,7 +1121,7 @@ mod tests {
 
     drop(update(
       &mut disconnect,
-      Message::Settings(SettingsMessage::Disconnect),
+      Message::Account(accounts::Message::Disconnect),
     ));
 
     assert!(disconnect.login.flow.busy_profile.is_none());
@@ -931,10 +1131,13 @@ mod tests {
     sign_out.kernel.active_profile = Some(key.clone());
     drop(update(
       &mut sign_out,
-      Message::Settings(SettingsMessage::SignOut),
+      Message::Account(accounts::Message::AskSignOut(key.clone())),
     ));
 
-    assert_eq!(sign_out.login.flow.busy_profile.as_ref(), Some(&key));
+    assert!(sign_out.login.flow.busy_profile.is_none());
+    assert!(accounts::view(&sign_out).error.is_some());
+    assert_eq!(sign_out.kernel.active_profile.as_ref(), Some(&key));
+    assert_eq!(sign_out.kernel.connection, ConnectionPhase::Connected);
   }
 
   #[test]
@@ -1125,6 +1328,39 @@ mod tests {
       .get(browse_cell.slot, "browse-art-1")
       .is_some());
   }
+  #[test]
+  fn search_draft_and_escape_do_not_replace_submitted_results() {
+    let mut state = test_state();
+    state.shell.destination = Destination::Search("submitted title".to_owned());
+    drop(update(
+      &mut state,
+      Message::Browse(BrowseMessage::SearchInputChanged("new draft".to_owned())),
+    ));
+    assert_eq!(
+      state.shell.destination,
+      Destination::Search("submitted title".to_owned())
+    );
+    state.shell.compact_search_open = true;
+    drop(update(
+      &mut state,
+      Message::Shell(super::super::message::ShellMessage::ClearSearch),
+    ));
+    assert!(state.full.as_ref().unwrap().browse.search_input.is_empty());
+    assert!(!state.shell.compact_search_open);
+    assert_eq!(
+      state.shell.destination,
+      Destination::Search("submitted title".to_owned())
+    );
+    drop(update(
+      &mut state,
+      Message::Browse(BrowseMessage::SearchSubmitted),
+    ));
+    assert_eq!(
+      state.shell.destination,
+      Destination::Search("submitted title".to_owned())
+    );
+  }
+
   #[test]
   fn control_only_mode_rejects_library_browser_navigation() {
     let mut state = test_state();

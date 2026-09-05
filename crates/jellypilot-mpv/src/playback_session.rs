@@ -8,9 +8,10 @@ use jellypilot_session::{
 };
 
 use crate::playback::{
-  NowPlayingItem, Playable, PlaybackEndReason, PlaybackError, PlaybackOutcome,
-  PlaybackRefreshOutcome, PlaybackRefreshState, PlaybackSelection, PlaybackSnapshot,
-  PlaybackStartPosition, PlaybackStopOutcome, PlaybackWarning, TrackInfo, TrackSelectionOutcome,
+  NowPlayingItem, Playable, PlaybackCleanupError, PlaybackEndReason, PlaybackError,
+  PlaybackOutcome, PlaybackRefreshOutcome, PlaybackRefreshState, PlaybackSelection,
+  PlaybackShutdownOutcome, PlaybackSnapshot, PlaybackStartPosition, PlaybackStopOutcome,
+  PlaybackWarning, TrackInfo, TrackSelectionOutcome,
 };
 
 const INTRO_PROMPT_DURATION: Duration = Duration::from_secs(3);
@@ -95,7 +96,7 @@ pub enum ControllerSettlement {
   },
   TrackSelected(Result<TrackSelectionOutcome, PlaybackError>),
   OsdShown(Result<(), PlaybackError>),
-  Shutdown(Vec<PlaybackWarning>),
+  Shutdown(PlaybackShutdownOutcome),
 }
 
 #[derive(Clone)]
@@ -141,7 +142,10 @@ impl ControllerCommand {
         ControllerSettlement::TrackSelected(Err(PlaybackError::NoActivePlayback))
       }
       Self::ShowText { .. } => ControllerSettlement::OsdShown(Err(PlaybackError::NoActivePlayback)),
-      Self::Shutdown => ControllerSettlement::Shutdown(Vec::new()),
+      Self::Shutdown => ControllerSettlement::Shutdown(PlaybackShutdownOutcome {
+        warnings: Vec::new(),
+        cleanup: Ok(()),
+      }),
       Self::Refresh => ControllerSettlement::Refreshed {
         outcome: PlaybackRefreshOutcome {
           snapshot: PlaybackSnapshot {
@@ -237,6 +241,7 @@ pub struct IntroPromptView {
 pub enum PlaybackNotice {
   Failed(PlaybackError),
   Warnings(Vec<PlaybackWarning>),
+  CleanupFailed(PlaybackCleanupError),
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -572,9 +577,8 @@ impl PlaybackSession {
       if detached.id == id {
         self.detached = None;
         if detached.was_shutdown {
-          self.cleanup_pending = false;
-          if let ControllerSettlement::Shutdown(warnings) = settlement {
-            self.set_warning_notice(warnings);
+          if let ControllerSettlement::Shutdown(outcome) = settlement {
+            self.finish_shutdown(outcome);
           }
           return Vec::new();
         }
@@ -646,9 +650,8 @@ impl PlaybackSession {
         }
         Vec::new()
       }
-      (ControllerOperation::Shutdown, ControllerSettlement::Shutdown(warnings)) => {
-        self.cleanup_pending = false;
-        self.set_warning_notice(warnings);
+      (ControllerOperation::Shutdown, ControllerSettlement::Shutdown(outcome)) => {
+        self.finish_shutdown(outcome);
         Vec::new()
       }
       _ => Vec::new(),
@@ -767,6 +770,19 @@ impl PlaybackSession {
       Err(error) => {
         self.tracks = TracksView::Unavailable;
         self.notice = Some(PlaybackNotice::Failed(error));
+      }
+    }
+  }
+
+  fn finish_shutdown(&mut self, outcome: PlaybackShutdownOutcome) {
+    match outcome.cleanup {
+      Ok(()) => {
+        self.cleanup_pending = false;
+        self.set_warning_notice(outcome.warnings);
+      }
+      Err(error) => {
+        self.cleanup_pending = !self.quitting;
+        self.notice = Some(PlaybackNotice::CleanupFailed(error));
       }
     }
   }
@@ -1403,6 +1419,13 @@ mod tests {
       | None => {
         panic!("expected one controller effect")
       }
+    }
+  }
+
+  fn shutdown_outcome(cleanup: Result<(), PlaybackCleanupError>) -> PlaybackShutdownOutcome {
+    PlaybackShutdownOutcome {
+      warnings: Vec::new(),
+      cleanup,
     }
   }
 
@@ -2153,7 +2176,7 @@ mod tests {
     session.handle(
       PlaybackInput::Event(Box::new(PlaybackEvent::ControllerSettled {
         id: shutdown_id,
-        settlement: ControllerSettlement::Shutdown(Vec::new()),
+        settlement: ControllerSettlement::Shutdown(shutdown_outcome(Ok(()))),
       })),
       now,
     );
@@ -2191,7 +2214,7 @@ mod tests {
     session.handle(
       PlaybackInput::Event(Box::new(PlaybackEvent::ControllerSettled {
         id: shutdown_id,
-        settlement: ControllerSettlement::Shutdown(Vec::new()),
+        settlement: ControllerSettlement::Shutdown(shutdown_outcome(Ok(()))),
       })),
       now,
     );
@@ -2247,11 +2270,80 @@ mod tests {
     session.handle(
       PlaybackInput::Event(Box::new(PlaybackEvent::ControllerSettled {
         id: shutdown_id,
-        settlement: ControllerSettlement::Shutdown(Vec::new()),
+        settlement: ControllerSettlement::Shutdown(shutdown_outcome(Ok(()))),
       })),
       now,
     );
     assert!(session.view().can_start_login);
+  }
+
+  #[test]
+  fn failed_disconnect_cleanup_keeps_login_blocked_and_can_be_retried() {
+    let now = instant();
+    let mut session = PlaybackSession::default();
+    session.handle(
+      PlaybackInput::Event(Box::new(PlaybackEvent::EngineAvailability(true))),
+      now,
+    );
+    let (shutdown_id, _) = controller_effect(session.handle(
+      PlaybackInput::Intent(Box::new(PlaybackIntent::Disconnect)),
+      now,
+    ));
+
+    session.handle(
+      PlaybackInput::Event(Box::new(PlaybackEvent::ControllerSettled {
+        id: shutdown_id,
+        settlement: ControllerSettlement::Shutdown(shutdown_outcome(Err(
+          PlaybackCleanupError::MpvCleanupFailed,
+        ))),
+      })),
+      now,
+    );
+
+    assert!(!session.view().can_start_login);
+    assert_eq!(
+      session.view().notice,
+      Some(PlaybackNotice::CleanupFailed(
+        PlaybackCleanupError::MpvCleanupFailed
+      ))
+    );
+    let (retry_id, retry) = controller_effect(session.handle(
+      PlaybackInput::Intent(Box::new(PlaybackIntent::Disconnect)),
+      now,
+    ));
+    assert!(matches!(retry, ControllerCommand::Shutdown));
+    session.handle(
+      PlaybackInput::Event(Box::new(PlaybackEvent::ControllerSettled {
+        id: retry_id,
+        settlement: ControllerSettlement::Shutdown(shutdown_outcome(Ok(()))),
+      })),
+      now,
+    );
+    assert!(session.view().can_start_login);
+  }
+
+  #[test]
+  fn failed_quit_cleanup_does_not_hold_process_exit() {
+    let now = instant();
+    let mut session = PlaybackSession::default();
+    session.handle(
+      PlaybackInput::Event(Box::new(PlaybackEvent::EngineAvailability(true))),
+      now,
+    );
+    let (shutdown_id, _) =
+      controller_effect(session.handle(PlaybackInput::Intent(Box::new(PlaybackIntent::Quit)), now));
+
+    session.handle(
+      PlaybackInput::Event(Box::new(PlaybackEvent::ControllerSettled {
+        id: shutdown_id,
+        settlement: ControllerSettlement::Shutdown(shutdown_outcome(Err(
+          PlaybackCleanupError::MpvCleanupFailed,
+        ))),
+      })),
+      now,
+    );
+
+    assert!(session.view().quit_may_proceed);
   }
 
   #[test]
@@ -2683,7 +2775,7 @@ mod tests {
       ),
       (
         ControllerCommand::Shutdown,
-        ControllerSettlement::Shutdown(Vec::new()),
+        ControllerSettlement::Shutdown(shutdown_outcome(Ok(()))),
       ),
     ];
     for (command, expected) in cases {

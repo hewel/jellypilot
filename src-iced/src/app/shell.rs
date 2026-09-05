@@ -17,9 +17,21 @@ use super::browse;
 use super::detail;
 use super::home;
 use super::kernel::Kernel;
-use super::message::{Message, WindowMessage};
+use super::message::{Message, ShellMessage, WindowMessage};
 use super::playback;
 use super::state::{Destination, State};
+
+pub const SEARCH_INPUT_ID: &str = "shell.search-input";
+pub const SEARCH_TRIGGER_ID: &str = "shell.search-trigger";
+pub const ACCOUNT_TRIGGER_ID: &str = "shell.account-trigger";
+pub const ACCOUNT_ADD_TRIGGER_ID: &str = "shell.account-add-trigger";
+pub const ACCOUNT_DISCONNECT_TRIGGER_ID: &str = "shell.account-disconnect-trigger";
+pub const SETTINGS_TRIGGER_ID: &str = "shell.settings-trigger";
+pub const SETTINGS_INITIAL_FOCUS_ID: &str = "shell.settings-section-account";
+
+pub fn profile_action_id(index: usize, action: &str) -> String {
+  format!("account-profile-{index}-{action}")
+}
 
 /// Shell surface slice: the window and navigation state behind the shell
 /// frame (sidebar, content routing, toast layer).
@@ -41,6 +53,11 @@ pub struct Surface {
   pub(crate) skeleton_animation_start: Option<Instant>,
   pub quit_requested: bool,
   pub settings_open: bool,
+  pub compact_search_open: bool,
+  pub account_popover_open: bool,
+  pub account_focus_return: String,
+  pub refresh_busy: bool,
+  refresh_generation: u64,
   pub destination: Destination,
   pub navigation_stack: Vec<Destination>,
 }
@@ -55,6 +72,11 @@ impl Surface {
       skeleton_animation_start: None,
       quit_requested: false,
       settings_open: false,
+      compact_search_open: false,
+      account_popover_open: false,
+      account_focus_return: ACCOUNT_TRIGGER_ID.to_owned(),
+      refresh_busy: false,
+      refresh_generation: 0,
       destination: Destination::Home,
       navigation_stack: Vec::new(),
     }
@@ -158,11 +180,16 @@ fn window_geometry_task(geometry: ModeGeometry) -> Task<Message> {
 /// controller size; entering Full restores the window and lands on Home
 /// through the normal activation path.
 pub(crate) fn apply_app_mode(state: &mut State, mode: AppMode) -> Task<Message> {
+  state.shell.compact_search_open = false;
+  state.shell.account_popover_open = false;
+  state.shell.refresh_busy = false;
+  state.shell.refresh_generation = state.shell.refresh_generation.wrapping_add(1);
   match mode {
     AppMode::ControlOnly => {
       close_settings(state);
       if let Some(full) = state.full.as_mut() {
         browse::reset(&mut full.browse, &mut state.kernel);
+        super::personal_lists::leave_view(&mut full.personal_lists, &mut state.kernel);
       }
       if state.playback.view.now_playing.is_none() {
         state.kernel.artwork_adapter.reset_session();
@@ -189,7 +216,16 @@ pub(crate) fn apply_app_mode(state: &mut State, mode: AppMode) -> Task<Message> 
       let previous = std::mem::replace(&mut state.shell.destination, Destination::Home);
       state.shell.navigation_stack.clear();
       let activation = activate_destination(state, previous);
-      Task::batch([window_geometry_task(geometry), activation])
+      let membership = if let Some(full) = state.full.as_mut() {
+        super::personal_lists::load_membership(
+          &mut full.personal_lists,
+          &mut state.kernel,
+          &state.watchlist,
+        )
+      } else {
+        Task::none()
+      };
+      Task::batch([window_geometry_task(geometry), activation, membership])
     }
   }
 }
@@ -274,6 +310,165 @@ pub(crate) fn navigate(state: &mut State, destination: Destination) -> Task<Mess
   activate_destination(state, previous)
 }
 
+pub(crate) fn update_shell(state: &mut State, message: ShellMessage) -> Task<Message> {
+  use iced::widget::operation;
+  match message {
+    ShellMessage::FocusNext => operation::focus_next(),
+    ShellMessage::FocusPrevious => operation::focus_previous(),
+    ShellMessage::FocusSearch | ShellMessage::ToggleCompactSearch => {
+      if state.full.is_none() || state.shell.settings_open {
+        return Task::none();
+      }
+      if matches!(message, ShellMessage::ToggleCompactSearch) && state.shell.compact_search_open {
+        return update_shell(state, ShellMessage::DismissCompactSearch);
+      }
+      state.shell.account_popover_open = false;
+      state.shell.compact_search_open = state.shell.window_size.width < 1280.0;
+      operation::focus(SEARCH_INPUT_ID).chain(operation::select_all(SEARCH_INPUT_ID))
+    }
+    ShellMessage::DismissCompactSearch | ShellMessage::ClearSearch => {
+      state.shell.compact_search_open = false;
+      if let Some(full) = state.full.as_mut() {
+        full.browse.search_input.clear();
+      }
+      operation::focus(SEARCH_TRIGGER_ID)
+    }
+    ShellMessage::SearchEscape => operation::is_focused(SEARCH_INPUT_ID)
+      .map(|focused| Message::Shell(ShellMessage::SearchFocusChecked(focused))),
+    ShellMessage::SearchFocusChecked(true) => update_shell(state, ShellMessage::ClearSearch),
+    ShellMessage::SearchFocusChecked(false) => Task::none(),
+    ShellMessage::ToggleAccountPopover => {
+      state.shell.account_popover_open = !state.shell.account_popover_open;
+      if !state.shell.account_popover_open {
+        super::accounts::hide(&mut state.accounts);
+      }
+      state.shell.compact_search_open = false;
+      Task::none()
+    }
+    ShellMessage::DismissAccountPopover => {
+      state.shell.account_popover_open = false;
+      super::accounts::hide(&mut state.accounts);
+      operation::focus(ACCOUNT_TRIGGER_ID)
+    }
+    ShellMessage::DismissAccountLayer => {
+      let account = super::accounts::view(state);
+      let message = if account.confirmation.is_some() {
+        super::accounts::Message::CancelConfirmation
+      } else if account.add_account.is_some() {
+        super::accounts::Message::CloseAddAccount
+      } else {
+        return Task::none();
+      };
+      Task::done(Message::Account(message))
+    }
+    ShellMessage::RefreshCurrent => {
+      if state.shell.refresh_busy || state.full.is_none() {
+        return Task::none();
+      }
+      let Some(client) = state.kernel.client.clone() else {
+        return Task::none();
+      };
+      state.shell.refresh_busy = true;
+      state.shell.refresh_generation = state.shell.refresh_generation.wrapping_add(1);
+      let generation = state.shell.refresh_generation;
+      let session = state.kernel.request_gate.current_session();
+      Task::perform(
+        async move {
+          client
+            .library()
+            .library_shortcuts()
+            .await
+            .map_err(|error| error.to_string())
+        },
+        move |result| {
+          Message::Shell(ShellMessage::DirectoryLoaded {
+            session,
+            generation,
+            result,
+          })
+        },
+      )
+    }
+    ShellMessage::DirectoryLoaded {
+      session,
+      generation,
+      result,
+    } => {
+      if !state.shell.refresh_busy
+        || !state.kernel.request_gate.is_current_session(session)
+        || generation != state.shell.refresh_generation
+      {
+        return Task::none();
+      }
+      let mut removed = false;
+      match result {
+        Ok(shortcuts) => {
+          if let Destination::Library {
+            library_id,
+            collection_type,
+          } = &state.shell.destination
+          {
+            removed = !shortcuts.iter().any(|shortcut| {
+              shortcut.id == *library_id && shortcut.collection_type == *collection_type
+            });
+          }
+          if let Some(full) = state.full.as_mut() {
+            full.home.data.settle_shortcuts(Ok(shortcuts));
+          }
+        }
+        Err(error) => {
+          state.kernel.notice = Some(format!("Could not refresh libraries: {error}"));
+        }
+      }
+      let page = if removed {
+        state.kernel.notice = Some(
+          "The selected library changed or is no longer accessible. Returned to Home.".to_owned(),
+        );
+        navigate(state, Destination::Home)
+      } else {
+        refresh_current_page(state)
+      };
+      page.chain(Task::done(Message::Shell(ShellMessage::RefreshFinished {
+        session,
+        generation,
+      })))
+    }
+    ShellMessage::RefreshFinished {
+      session,
+      generation,
+    } => {
+      if state.kernel.request_gate.is_current_session(session)
+        && generation == state.shell.refresh_generation
+      {
+        state.shell.refresh_busy = false;
+      }
+      Task::none()
+    }
+  }
+}
+
+fn refresh_current_page(state: &mut State) -> Task<Message> {
+  let source = browse_source(state);
+  let Some(full) = state.full.as_mut() else {
+    return Task::none();
+  };
+  let idle = state.playback.view.now_playing.is_none();
+  match &state.shell.destination {
+    Destination::Home => home::start_load(&mut full.home, &mut state.kernel, idle),
+    Destination::Library { .. } | Destination::Search(_) => {
+      browse::refresh(&mut full.browse, &mut state.kernel, source, idle)
+    }
+    Destination::Detail(id) => detail::refresh(&mut full.detail, &mut state.kernel, id),
+    Destination::PersonalLists(route) => super::personal_lists::refresh(
+      &mut full.personal_lists,
+      &mut state.kernel,
+      &state.watchlist,
+      *route,
+    ),
+    Destination::NowPlaying => Task::none(),
+  }
+}
+
 pub(crate) fn open_detail(state: &mut State, item: VideoLibraryItem) -> Task<Message> {
   let Some(full) = state.full.as_mut() else {
     return Task::none();
@@ -291,6 +486,8 @@ pub(crate) fn navigate_back(state: &mut State) -> Task<Message> {
   activate_destination(state, previous)
 }
 pub(crate) fn open_settings(state: &mut State) {
+  state.shell.account_popover_open = false;
+  state.shell.compact_search_open = false;
   state.shell.open_settings();
 }
 
@@ -326,6 +523,9 @@ fn activate_destination(state: &mut State, previous: Destination) -> Task<Messag
   } else if matches!(previous, Destination::Detail(_)) && previous != destination {
     detail::leave_view(&mut full.detail, &mut state.kernel, playback_idle);
   }
+  if matches!(previous, Destination::PersonalLists(_)) && previous != destination {
+    super::personal_lists::leave_view(&mut full.personal_lists, &mut state.kernel);
+  }
 
   match destination {
     Destination::Home => home::start_load(&mut full.home, &mut state.kernel, playback_idle),
@@ -339,6 +539,12 @@ fn activate_destination(state: &mut State, previous: Destination) -> Task<Messag
     Destination::Detail(item_id) => {
       detail::start_load(&mut full.detail, &mut state.kernel, Some(&item_id))
     }
+    Destination::PersonalLists(route) => super::personal_lists::start(
+      &mut full.personal_lists,
+      &mut state.kernel,
+      &state.watchlist,
+      route,
+    ),
     Destination::NowPlaying => Task::none(),
   }
 }
@@ -363,7 +569,10 @@ pub(crate) fn browse_source(state: &State) -> Option<BrowseSource> {
       session,
       query: query.clone(),
     }),
-    Destination::Home | Destination::Detail(_) | Destination::NowPlaying => None,
+    Destination::Home
+    | Destination::PersonalLists(_)
+    | Destination::Detail(_)
+    | Destination::NowPlaying => None,
   }
 }
 
@@ -376,6 +585,16 @@ pub(crate) fn reset_connected_surface(state: &mut State) -> Task<Message> {
     &mut state.kernel,
     state.shell.quit_requested,
   );
+  reset_connected_content(state);
+  playback_task
+}
+
+/// Resets account-owned presentation after the playback handoff has already settled.
+pub(crate) fn reset_connected_content(state: &mut State) {
+  state.shell.refresh_busy = false;
+  state.shell.refresh_generation = state.shell.refresh_generation.wrapping_add(1);
+  state.shell.compact_search_open = false;
+  state.shell.account_popover_open = false;
   if let Some(full) = state.full.as_mut() {
     browse::reset(&mut full.browse, &mut state.kernel);
   }
@@ -390,7 +609,6 @@ pub(crate) fn reset_connected_surface(state: &mut State) -> Task<Message> {
     Destination::NowPlaying
   };
   close_settings(state);
-  playback_task
 }
 
 #[cfg(test)]
@@ -426,6 +644,72 @@ mod tests {
       artwork_handles: ArtworkHandleRetention::default(),
     };
     (Surface::new(false), kernel)
+  }
+
+  #[test]
+  fn directory_refresh_returns_home_only_for_a_current_successful_removal() {
+    let mut state = State::boot(false);
+    state.kernel.settings = SettingsStore::default();
+    state.full = Some(super::super::state::FullUi::default());
+    state.shell.destination = Destination::Library {
+      library_id: "removed".to_owned(),
+      collection_type: "movies".to_owned(),
+    };
+    state.shell.refresh_busy = true;
+    state.shell.refresh_generation = 7;
+    let session = state.kernel.request_gate.current_session();
+    drop(update_shell(
+      &mut state,
+      ShellMessage::DirectoryLoaded {
+        session,
+        generation: 6,
+        result: Ok(Vec::new()),
+      },
+    ));
+    assert!(matches!(
+      state.shell.destination,
+      Destination::Library { .. }
+    ));
+    drop(update_shell(
+      &mut state,
+      ShellMessage::DirectoryLoaded {
+        session,
+        generation: 7,
+        result: Err("offline".to_owned()),
+      },
+    ));
+    assert!(matches!(
+      state.shell.destination,
+      Destination::Library { .. }
+    ));
+    drop(update_shell(
+      &mut state,
+      ShellMessage::DirectoryLoaded {
+        session,
+        generation: 7,
+        result: Ok(Vec::new()),
+      },
+    ));
+    assert_eq!(state.shell.destination, Destination::Home);
+    state.shell.destination = Destination::Library {
+      library_id: "changed".to_owned(),
+      collection_type: "movies".to_owned(),
+    };
+    drop(update_shell(
+      &mut state,
+      ShellMessage::DirectoryLoaded {
+        session,
+        generation: 7,
+        result: Ok(vec![jellypilot_media_server::VideoLibraryShortcut {
+          id: "changed".to_owned(),
+          name: "Changed".to_owned(),
+          collection_type: "tvshows".to_owned(),
+          item_count: None,
+          artwork_image_id: None,
+        }]),
+      },
+    ));
+    assert_eq!(state.shell.destination, Destination::Home);
   }
 
   #[test]

@@ -5,6 +5,7 @@ use iced::advanced::mouse;
 use iced::advanced::renderer;
 use iced::advanced::widget::{self, Operation, Tree, Widget};
 use iced::advanced::{Clipboard, Shell};
+use iced::keyboard::{key, Key};
 use iced::touch;
 use iced::widget::{button, space, text, Row};
 use iced::{Background, Element, Event, Length, Padding, Rectangle, Size, Theme};
@@ -17,11 +18,30 @@ use crate::variants::ButtonVariant;
 struct State {
     is_pressed: bool,
     status: Option<button::Status>,
+    is_focused: bool,
 }
+
+impl widget::operation::Focusable for State {
+    fn is_focused(&self) -> bool {
+        self.is_focused
+    }
+
+    fn focus(&mut self) {
+        self.is_focused = true;
+    }
+
+    fn unfocus(&mut self) {
+        self.is_focused = false;
+    }
+}
+
+type ContentFactory<'a, Message, Renderer> =
+    dyn Fn(IconControlState) -> Element<'a, Message, Theme, Renderer> + 'a;
 
 /// A button whose icon and label share the interaction status of its full bounds.
 pub struct ControlButton<'a, Message, Renderer = iced::Renderer> {
     contents: [Element<'a, Message, Theme, Renderer>; 3],
+    custom_content: Option<Box<ContentFactory<'a, Message, Renderer>>>,
     icon: Option<Icon>,
     label: Option<String>,
     variant: ButtonVariant,
@@ -33,6 +53,8 @@ pub struct ControlButton<'a, Message, Renderer = iced::Renderer> {
     content_centered: bool,
     padding: Padding,
     width: Length,
+    min_height: f32,
+    id: Option<widget::Id>,
     on_press: Option<Message>,
 }
 
@@ -66,6 +88,7 @@ where
 
         Self {
             contents,
+            custom_content: None,
             icon,
             label,
             variant,
@@ -77,8 +100,20 @@ where
             content_centered,
             padding: button::DEFAULT_PADDING,
             width: Length::Shrink,
+            min_height: 0.0,
+            id: None,
             on_press: None,
         }
+    }
+
+    fn with_content(
+        build: impl Fn(IconControlState) -> Element<'a, Message, Theme, Renderer> + 'a,
+        variant: ButtonVariant,
+    ) -> Self {
+        let mut control = Self::new(None, None, variant);
+        control.custom_content = Some(Box::new(build));
+        control.rebuild_contents();
+        control
     }
 
     /// Sets the icon size.
@@ -143,6 +178,20 @@ where
         self
     }
 
+    /// Ensures the interactive bounds meet a surface-specific minimum height.
+    #[must_use]
+    pub fn min_height(mut self, min_height: f32) -> Self {
+        self.min_height = min_height.max(0.0);
+        self
+    }
+
+    /// Sets a stable widget identifier for programmatic focus restoration.
+    #[must_use]
+    pub fn id(mut self, id: impl Into<widget::Id>) -> Self {
+        self.id = Some(id.into());
+        self
+    }
+
     /// Sets the message produced by a completed press.
     #[must_use]
     pub fn on_press(mut self, on_press: Message) -> Self {
@@ -158,6 +207,15 @@ where
     }
 
     fn rebuild_contents(&mut self) {
+        if let Some(build) = &self.custom_content {
+            self.contents = [
+                IconControlState::Rest,
+                IconControlState::Hovered,
+                IconControlState::Disabled,
+            ]
+            .map(build);
+            return;
+        }
         self.contents = build_contents(
             self.icon,
             self.label.as_deref(),
@@ -179,6 +237,16 @@ pub fn control_button<'a, Message: Clone + 'a>(
     variant: ButtonVariant,
 ) -> ControlButton<'a, Message> {
     ControlButton::new(icon, label, variant)
+}
+
+/// Creates a keyboard-focusable button with caller-composed, non-interactive
+/// content for each visual state. The factory owns the internal layout and
+/// colors; icon/label layout builders do not alter custom content.
+pub fn control_button_content<'a, Message: Clone + 'a>(
+    build: impl Fn(IconControlState) -> Element<'a, Message> + 'a,
+    variant: ButtonVariant,
+) -> ControlButton<'a, Message> {
+    ControlButton::with_content(build, variant)
 }
 
 #[expect(
@@ -366,7 +434,11 @@ where
     fn size(&self) -> Size<Length> {
         Size {
             width: self.width,
-            height: Length::Shrink,
+            height: if self.min_height > 0.0 {
+                Length::Fixed(self.min_height)
+            } else {
+                Length::Shrink
+            },
         }
     }
 
@@ -376,7 +448,12 @@ where
         renderer: &Renderer,
         limits: &layout::Limits,
     ) -> layout::Node {
-        layout::padded(limits, self.width, Length::Shrink, self.padding, |limits| {
+        let height = if self.min_height > 0.0 {
+            Length::Fixed(self.min_height)
+        } else {
+            Length::Shrink
+        };
+        layout::padded(limits, self.width, height, self.padding, |limits| {
             let node =
                 self.contents[0]
                     .as_widget_mut()
@@ -399,13 +476,10 @@ where
         renderer: &Renderer,
         operation: &mut dyn Operation,
     ) {
-        let index = content_index(
-            tree.state
-                .downcast_ref::<State>()
-                .status
-                .unwrap_or(button::Status::Active),
-        );
-        operation.container(None, layout.bounds());
+        let state = tree.state.downcast_mut::<State>();
+        let index = content_index(state.status.unwrap_or(button::Status::Active));
+        operation.focusable(self.id.as_ref(), layout.bounds(), state);
+        operation.container(self.id.as_ref(), layout.bounds());
         if let Some(content_layout) = layout.children().next() {
             operation.traverse(&mut |operation| {
                 self.contents[index].as_widget_mut().operate(
@@ -431,6 +505,22 @@ where
     ) {
         let bounds = layout.bounds();
         let state = tree.state.downcast_mut::<State>();
+
+        if state.is_focused
+            && self.on_press.is_some()
+            && matches!(
+                event,
+                Event::Keyboard(iced::keyboard::Event::KeyPressed {
+                    key: Key::Named(key::Named::Enter | key::Named::Space),
+                    ..
+                })
+            )
+        {
+            if let Some(on_press) = &self.on_press {
+                shell.publish(on_press.clone());
+                shell.capture_event();
+            }
+        }
 
         if self.on_press.is_none() {
             state.is_pressed = false;
@@ -486,7 +576,11 @@ where
     ) {
         let bounds = layout.bounds();
         let status = status(self, tree.state.downcast_ref::<State>(), bounds, cursor);
-        let style = crate::widgets::button::style(theme, self.variant, status);
+        let mut style = crate::widgets::button::style(theme, self.variant, status);
+        if tree.state.downcast_ref::<State>().is_focused {
+            style.border.color = crate::tokens::palette(theme).colors.primary;
+            style.border.width = 2.0;
+        }
 
         if style.background.is_some() || style.border.width > 0.0 || style.shadow.color.a > 0.0 {
             renderer.fill_quad(
@@ -550,8 +644,10 @@ where
 mod tests {
     use iced::advanced::layout::{self, Layout};
     use iced::advanced::mouse;
-    use iced::advanced::widget::{Tree, Widget};
+    use iced::advanced::widget::operation::focusable;
+    use iced::advanced::widget::{Id, Operation, Tree, Widget};
     use iced::advanced::Shell;
+    use iced::keyboard::{key, Event as KeyboardEvent, Key, Location, Modifiers};
     use iced::{Event, Length, Point, Rectangle, Size, Theme};
 
     use super::{control_button, ControlButton, State};
@@ -698,5 +794,56 @@ mod tests {
         );
 
         assert_eq!(published, vec![TestMessage::Clicked]);
+    }
+
+    #[test]
+    fn stable_id_receives_focus_and_activates_with_enter() {
+        for mut button in [
+            ControlButton::new(Some(Icon::Home), None, ButtonVariant::Tonal),
+            ControlButton::with_content(
+                |_| iced::widget::Space::new().width(36.0).height(36.0).into(),
+                ButtonVariant::Tonal,
+            )
+            .spacing(8.0),
+        ]
+        .map(|button: ControlButton<'_, TestMessage, ()>| {
+            button
+                .width(Length::Fixed(80.0))
+                .padding(0)
+                .id("control-button-test")
+                .on_press(TestMessage::Clicked)
+        }) {
+            let mut tree = Tree::new(&button as &dyn Widget<TestMessage, Theme, ()>);
+            let limits = layout::Limits::new(Size::ZERO, Size::new(100.0, 100.0));
+            let node = button.layout(&mut tree, &(), &limits);
+            let layout = Layout::new(&node);
+            let mut focus: Box<dyn Operation> =
+                Box::new(focusable::focus::<()>(Id::new("control-button-test")));
+            button.operate(&mut tree, layout, &(), focus.as_mut());
+            assert!(tree.state.downcast_ref::<State>().is_focused);
+
+            let mut messages = Vec::new();
+            let mut shell = Shell::new(&mut messages);
+            let mut clipboard = iced::advanced::clipboard::Null;
+            button.update(
+                &mut tree,
+                &Event::Keyboard(KeyboardEvent::KeyPressed {
+                    key: Key::Named(key::Named::Enter),
+                    modified_key: Key::Named(key::Named::Enter),
+                    physical_key: key::Physical::Code(key::Code::Enter),
+                    location: Location::Standard,
+                    modifiers: Modifiers::default(),
+                    text: None,
+                    repeat: false,
+                }),
+                layout,
+                mouse::Cursor::Unavailable,
+                &(),
+                &mut clipboard,
+                &mut shell,
+                &Rectangle::with_size(Size::new(100.0, 100.0)),
+            );
+            assert_eq!(messages, vec![TestMessage::Clicked]);
+        }
     }
 }

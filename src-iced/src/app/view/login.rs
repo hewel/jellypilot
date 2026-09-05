@@ -1,4 +1,5 @@
 use crate::app::message::{LoginMessage, Message};
+use crate::app::shell::profile_action_id;
 use crate::app::state::{LoginMethod, QuickConnectState, State};
 use iced::widget::{column, container, row, scrollable, text, text_input, Column};
 use iced::{Alignment, Element, Fill, Length};
@@ -277,7 +278,7 @@ fn saved_profiles(state: &State) -> Element<'_, Message> {
     .spacing(TOKENS.spacing.s2)
     .align_y(Alignment::Center),
   );
-  for profile in &state.login.flow.profiles {
+  for (index, profile) in state.login.flow.profiles.iter().enumerate() {
     let key = profile.key().clone();
     let is_busy = state.login.flow.busy_profile.as_ref() == Some(&key);
     let restore_label = if is_busy {
@@ -287,17 +288,19 @@ fn saved_profiles(state: &State) -> Element<'_, Message> {
     };
     let restore = control_button(Some(Icon::User), Some(restore_label), ButtonVariant::Tonal)
       .icon_size(IconSize::Sm)
+      .id(profile_action_id(index, "switch"))
       .spacing(TOKENS.spacing.s2)
       .padding([6, 12])
       .on_press_maybe(
         (!is_busy).then_some(Message::Login(LoginMessage::RestoreProfile(key.clone()))),
       );
-    let forget = control_button(
+    let sign_out = control_button(
       Some(Icon::Trash),
-      Some("Forget".to_owned()),
+      Some("Sign Out".to_owned()),
       ButtonVariant::Text,
     )
     .icon_size(IconSize::Xs)
+    .id(profile_action_id(index, "signout"))
     .spacing(TOKENS.spacing.s1)
     .padding([6, 12])
     .on_press_maybe(
@@ -306,46 +309,17 @@ fn saved_profiles(state: &State) -> Element<'_, Message> {
         .flow
         .busy_profile
         .is_none()
-        .then_some(Message::Login(LoginMessage::AskForgetProfile(key.clone()))),
+        .then_some(Message::Account(crate::app::accounts::Message::AskSignOut(
+          key.clone(),
+        ))),
     );
-    let mut profile_content = column![
-      row![restore, forget].spacing(10).align_y(Alignment::Center),
+    let profile_content = column![
+      row![restore, sign_out]
+        .spacing(10)
+        .align_y(Alignment::Center),
       text(profile.subtitle()).color(palette.text.metadata),
     ]
     .spacing(8);
-    if state.login.flow.busy_profile.is_none()
-      && state.login.flow.forget_confirmation.as_ref() == Some(&key)
-    {
-      profile_content = profile_content.push(
-        column![
-          text(profile.forget_confirmation()).color(palette.colors.warning),
-          row![
-            control_button(
-              Some(Icon::Check),
-              Some("Keep sign-in".to_owned()),
-              ButtonVariant::Tonal,
-            )
-            .icon_size(IconSize::Xs)
-            .spacing(TOKENS.spacing.s1)
-            .padding([6, 10])
-            .on_press(Message::Login(LoginMessage::CancelForgetProfile)),
-            control_button(
-              Some(Icon::Trash),
-              Some("Forget sign-in".to_owned()),
-              ButtonVariant::Primary,
-            )
-            .icon_size(IconSize::Xs)
-            .spacing(TOKENS.spacing.s1)
-            .padding([6, 10])
-            .on_press(Message::Login(LoginMessage::ConfirmForgetProfile(
-              key.clone(),
-            ))),
-          ]
-          .spacing(10),
-        ]
-        .spacing(10),
-      );
-    }
     profiles = profiles.push(
       container(profile_content)
         .padding(16)

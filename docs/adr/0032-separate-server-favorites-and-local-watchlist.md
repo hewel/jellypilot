@@ -1,6 +1,6 @@
 # Separate server Favorites from the device-local Watchlist
 
-_Status: Accepted, 2026-09-05. Feature implementation and acceptance remain pending in the [native sidebar specification](../sidebar-design-spec.md)._
+_Status: Accepted and implemented, 2026-09-05. Human visual and live-server acceptance remain pending in the [native sidebar specification](../sidebar-design-spec.md)._
 
 Favorites express liking an item; Watchlist expresses a viewing plan, so treating the server's
 favorite flag as “watch later” would collapse two independent user intentions. Personal Lists
