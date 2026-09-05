@@ -4,6 +4,15 @@ All notable changes to JellyPilot are documented in this file.
 
 ## [Unreleased]
 
+### Changed
+- Refined the native Sidebar and Account Popover with scoped light/dark surfaces, a separate library-count badge, and segmented tools.
+- Simplified the Account Popover into a quick menu: show the current account once, quiet the address and actions, and move preferences and saved-login removal to a direct Accounts Settings entry.
+
+### Fixed
+- Kept account avatars fixed-size, fitted short account menus to their content, and exposed truncated names and addresses through hover and keyboard-focus hints.
+- Centered Sidebar control icons and labels, restricted button focus feedback to keyboard use, and prevented trigger tooltips from overlapping open popovers.
+- Preserved the Account trigger's keyboard focus return when Settings is refocused with Ctrl/Cmd+, after entering through Manage accounts.
+
 ## [2.0.0] - 2026-09-02
 
 ### Added

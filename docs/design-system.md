@@ -4,17 +4,19 @@ JellyPilot uses a desktop-first design system: a Neon Indigo accent over Charcoa
 
 The design system lives in `crates/jellypilot-ui`: tokens in `tokens.rs` (`TOKENS`), variant enums in `variants.rs`, and the widget catalog in `widgets/`. Views under `src-iced/src/app/view/` compose those pieces; they never invent new token values.
 
+**2026-09-06 Sidebar surface revision: implemented; human visual acceptance pending.** The scoped rules below describe the Sidebar and Account Popover treatment. Existing default tokens and unrelated surfaces are unchanged; see the [native Sidebar specification](sidebar-design-spec.md#appearance) for geometry and pending human acceptance.
+
 ## Principles
 
-- **Clean and flat first**: surfaces are flat, solid, and opaque — Charcoal keeps 4–7% lightness instead of OLED pure black. Depth comes from exactly two shadow tiers on floating layers, never from translucency or outlines.
-- **Visual restraint**: separation is whitespace first, the two shell hairlines second. Nothing else draws a line.
+- **Clean and flat first**: surfaces are flat, solid, and opaque — Charcoal keeps 4–7% lightness instead of OLED pure black. Depth comes from the two semantic shadow tiers on floating layers, never from translucency. Permitted structural outlines identify boundaries, not elevation.
+- **Visual restraint**: separation is whitespace first, shell hairlines second. The Sidebar surface revision permits a small, explicit set of structural outlines and toolbar separators, not blanket element framing.
 - **Operational clarity**: every status uses text and icon, not color alone.
 - **No fake state**: never show fake media artwork, fake playback progress, or pretend controls.
 - **Accessible by default**: normal text contrast must be at least 4.5:1. Large text and meaningful icons must be at least 3:1.
 
 ## Surface Roles
 
-Every container is exactly one role (`SurfaceVariant`, styled by `widgets/container.rs`). All roles are fully opaque and borderless.
+Every container has a semantic surface role (`SurfaceVariant`, styled by `widgets/container.rs`). Base roles remain fully opaque and borderless by default. The accepted Sidebar surface treatments below refine those defaults through jellypilot-ui styles; they are not a second styling system.
 
 | Role | Background | Radius | Shadow | Use |
 |---|---|---:|---|---|
@@ -24,14 +26,29 @@ Every container is exactly one role (`SurfaceVariant`, styled by `widgets/contai
 
 Inline content (home hero and action cards, detail episode/next-up/summary rows, settings sections and rows, saved sign-ins) is **flat Canvas with whitespace separation** — no card chrome. Skeleton placeholders are flat `surfaceContainerLow`↔`surfaceContainerHigh` breathing blocks, radius `lg`, no border or shadow.
 
-## The Two-Hairline Rule
+## Shell Hairlines and Structural Boundaries
 
-The application draws exactly two lines, both 1px `outlineVariant`, both built as explicit divider containers in `view/shell.rs` (iced has no per-edge borders):
+The shell keeps two 1px `outlineVariant` dividers, both built as explicit divider containers in `view/shell.rs` (iced has no per-edge borders):
 
 1. A vertical hairline between the sidebar and the content area.
 2. A horizontal hairline above the player bar.
 
-No other element may draw a border or divider. Badges, toasts, popovers, containers, and cards never have outlines; primary-tinted halo borders are gone.
+Outside the scoped Sidebar treatment below, surfaces retain their borderless defaults. Badges, toasts, media cards, and ordinary navigation rows do not gain outlines. Decorative primary-tinted halo borders remain prohibited; functional focus and error indications are distinct from decorative structure.
+
+### Sidebar Surface Revision
+
+**Implemented scoped treatment; human visual acceptance pending.** Scope: the entire Sidebar, including search, navigation, library heading/rows, bottom identity card, toolbar, and Account Popover. It does not extend to Home, Settings, add-account or confirmation modals. Shared account functionality is not permission to restyle its Settings presentation.
+
+- Keep the general 6/8 radius scale and default palette values unchanged. Represent the new treatments with semantic tokens and Catalog styles in jellypilot-ui, not per-widget literals, a global token replacement, or a separate theme mechanism.
+- Target radius 12 for Sidebar search, personal navigation, bottom identity card, and toolbar; radius 8 for library rows. The Account Popover targets radius 20 with padding 12 and radius 8 inset rows/controls. Geometry and dimensions are authoritative in the [native Sidebar specification](sidebar-design-spec.md#accepted-visual-targets).
+- Light-mode Account Popover: white opaque surface, quiet transparent menu rows, pale neutral hover surfaces, and a soft floating shadow. Dark mode uses corresponding Charcoal roles with preserved hierarchy and contrast. Do not globally recolor the shared `Raised` role to achieve this.
+- Permit low-contrast 1px structural outlines on the Account Popover outer edge, bottom identity card, and necessary inset controls, plus fine separators between the bottom toolbar's three segments. These boundaries use theme-aware neutral semantics. Do not frame every row, badge, or action button, and do not add Account Popover section rules by default.
+- Search and docked controls remain visually quiet; they do not inherit prominent `Raised` elevation merely to achieve rounded geometry. Account Popover elevation uses the existing semantic shadow vocabulary, without glass blur or decorative looping effects.
+- Selected Sidebar navigation rows use a pale indigo fill with readable accent content. The Account Popover instead shows the current identity once in its header and lists only alternatives. Fixed-size avatars must not absorb spare row width; Settings retains its existing profile-selection presentation.
+- Opening the Account Popover does not itself create a strong purple identity-card outline. Preserve separately visible keyboard focus and error states; the ban on decorative outlines must not suppress functional accessibility feedback.
+- The Account Popover is a quick menu: identity/address, alternate accounts, then Add account, Manage accounts, and connected-only Disconnect. Startup Auto Login, remote-control details, and Sign Out remain in Accounts and connection Settings with their existing controls and semantics.
+
+The revision restores the reference's surface hierarchy, not every reference detail: no sample account roles, fake Mbps, avatar gradients, or new product capabilities. Implementation must leave unrelated default components unchanged and pass human visual acceptance in both themes.
 
 ## Shadows
 
@@ -58,25 +75,28 @@ The scale is `none` (0), `sm` (2), `md` (6), `lg` (8), `full` (9999). Usage mapp
 | `full` | Scrollbars, status dots |
 
 Nested rounding follows the concentric rule: inner radius = parent radius − padding, floored at 0.
+The Sidebar surface revision adds scoped role targets of 12 and 20 without changing these existing token values or their default consumers.
 
 ## Buttons
 
-Variants (`ButtonVariant`, styled by `widgets/button.rs`): `Primary`, `Secondary`, `Tonal`, `TonalActive`, `Text`, `Icon`. All use radius `md` and cast no shadow.
+Variants (`ButtonVariant`, styled by `widgets/button.rs`): `Primary`, `Secondary`, `Tonal`, `TonalActive`, `Text`, `Icon`. Defaults use radius `md` and cast no shadow. The accepted Sidebar treatment refines geometry through semantic Catalog styles without changing every consumer of these variants.
 Simple controls with an optional icon and label use the status-aware `control_button` widget; whole-control hover drives both icon and label through the variant's content colors.
-Composite-content buttons and fixed-color icons (the favorited heart, the theme toggle) keep iced `button` with `button_variant` styling; composite rows' icons brighten only under direct icon hover.
+Composite Sidebar and profile rows use `control_button_content` for whole-control hover and keyboard focus. Existing iced `button` consumers and fixed-color icons (the favorited heart, the theme toggle) retain their established `button_variant` treatment.
 
 - **Secondary** is the borderless tint chip — filled `secondaryContainer` with `onSecondaryContainer` content. It exists ONLY as the active state of a switch group (sidebar destinations, three-way selectors like login method or Intro Mode). Never use it for actions; actions are Tonal or Primary.
 - **Tonal** is the default quiet control: `control` fill with `onControl` content at rest, then `controlHover` fill with `onControlHover` content on hover. It has no border.
 - **TonalActive** is the selected/on state of a tonal control: always `controlHover` fill with `onControlHover` content. Toggle call sites use the `TonalActive`/`Tonal` pair.
 - **Primary** keeps its 10% hover brightness lift; one primary action per section or state.
 - **Text** is the neutral ghost vocabulary: `text.body` content on a transparent background, then `control` fill with `text.heading` content on hover. It belongs to navigation-like, switch-group contexts (sidebar destinations, selector rows). Indigo accent text marks ONLY the active/selected state. Actions never use Text — they are Tonal or Primary.
+- **Sidebar menu actions** opt into a scoped Tonal/Icon Catalog treatment: transparent at rest, neutral hover/press feedback, and minimum 40px hit height. The copy icon has a 40×40 target. This exception avoids a stack of filled buttons in the Account Popover without changing other Tonal controls.
+- **Button focus**: focus rings and focus-triggered hints appear only for keyboard interaction. Pointer presses clear button focus, including presses captured by overlays; pointer-origin dismissal must not create hidden button focus that later reappears. This does not change native text-input focus or caret behavior.
 
 ## Fields, Badges, Overlays
 
-- **Fields**: opaque `control` fill at rest and `controlHover` fill when focused, radius `md`, no idle border. The single border exemption is functional: `text_input::Status::Focused` draws a 1px `primary` border (accessibility), and an invalid field draws a 1px `error` border. This exemption applies to text inputs only.
+- **Fields**: opaque `control` fill at rest and `controlHover` fill when focused, radius `md`, no idle border by default. Functional feedback remains: `text_input::Status::Focused` draws a 1px `primary` border and an invalid field draws a 1px `error` border. Sidebar structural boundaries are a separate, scoped treatment; they do not replace visible focus or error feedback.
 - **Badges**: opaque container fills (`tertiaryContainer` / `warningContainer` / `surfaceContainerHigh`), radius `md`, no border.
-- **Popover**: opaque `surfaceContainerHigh`, `raised_high` shadow, radius `lg`, no border.
-- **Tooltip**: `raised` shadow, radius `md`, no border.
+- **Popover**: defaults to opaque `surfaceContainerHigh`, `raised_high` shadow, radius `lg`, no border. The Account Popover opts into the scoped surface treatment above; other popovers retain their defaults.
+- **Tooltip**: `raised` shadow, radius `md`, no border. Opt-in Sidebar full-value hints also appear on keyboard focus and wrap long unbroken values within their bounded surface. An open popover suppresses its trigger's hover and focus hints while preserving hints within the popover content.
 - **Toast**: `Raised` role (opaque severity container fill, `raised_high` shadow, radius `lg`). Severity is shown by icon and text color, never by a border.
 
 ## Media Cards
@@ -88,8 +108,8 @@ The detail hero keeps its backdrop scrim, simplified to two stops: transparent a
 ## Slop Prohibitions
 
 - **No translucency without blur.** Surfaces, fields, and badges are 100% opaque semantic colors. (Text placeholders, selection, and disabled-state alpha are not surfaces.)
-- **No element-wrapping outlines.** Lines exist only as the two shell hairlines, plus the field focus/error exemption.
-- **No tinted borders.** The `primary`-at-20% halo and all severity borders are deleted.
+- **No blanket element-wrapping outlines.** Keep the two shell hairlines, scoped Sidebar structural boundaries, and functional focus/error feedback; do not extend outlines to unrelated surfaces.
+- **No decorative tinted borders.** Primary halo and severity framing remain prohibited. This does not prohibit visible functional focus or invalid-field indicators.
 - **No hover overlay lifts.** No white overlay rectangles, ghost panels, or elevation changes on hover/press; hover feedback is a fill change on the control itself.
 
 ## Color Semantics

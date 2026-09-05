@@ -36,6 +36,7 @@ zeroize = "1.8.1"
 gtk = "0.18.2"
 
 [dev-dependencies]
+iced_runtime = "0.14.0"
 jellypilot-media-server = { path = "../crates/jellypilot-media-server", features = ["test-utils"] }
 jellypilot-core = { path = "../crates/jellypilot-core", features = ["test-utils"] }
 serde_json = "1.0.149"

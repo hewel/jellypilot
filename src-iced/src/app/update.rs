@@ -449,14 +449,32 @@ pub fn update(state: &mut State, message: Message) -> Task<Message> {
       }
       task
     }
-    Message::Settings(SettingsMessage::Open) => {
+    Message::Settings(message @ (SettingsMessage::Open | SettingsMessage::OpenAccounts)) => {
+      if !state.shell.settings_open {
+        state.shell.settings_focus_return = if matches!(message, SettingsMessage::OpenAccounts) {
+          shell::ACCOUNT_TRIGGER_ID
+        } else {
+          shell::SETTINGS_TRIGGER_ID
+        };
+      }
+      let prepare = if matches!(message, SettingsMessage::OpenAccounts) {
+        settings::update(
+          &mut state.settings,
+          &mut state.kernel,
+          SettingsMessage::SectionSelected(super::state::SettingsSection::Account),
+        )
+      } else {
+        Task::none()
+      };
       shell::open_settings(state);
-      iced::widget::operation::focus(shell::SETTINGS_INITIAL_FOCUS_ID)
+      prepare.chain(iced::widget::operation::focus(
+        shell::SETTINGS_INITIAL_FOCUS_ID,
+      ))
     }
     Message::Settings(SettingsMessage::Close) => {
       accounts::hide(&mut state.accounts);
       shell::close_settings(state);
-      iced::widget::operation::focus(shell::SETTINGS_TRIGGER_ID)
+      iced::widget::operation::focus(state.shell.settings_focus_return)
     }
     Message::Settings(message) => {
       // Cross-surface writes hoisted out of the settings surface (ADR 0029):
@@ -657,6 +675,168 @@ mod tests {
       watchlist: super::super::personal_lists::Runtime::default(),
       accounts: super::super::accounts::Surface::new(),
     }
+  }
+
+  #[tokio::test]
+  async fn account_settings_entry_keeps_its_focus_origin_when_reopened() {
+    use iced::advanced::{clipboard, renderer::Headless, widget};
+    use iced::futures::StreamExt;
+    use iced::{keyboard, mouse, Event, Font, Size};
+    use iced_runtime::user_interface::{Cache, UserInterface};
+
+    type Ui<'a> = UserInterface<'a, Message, iced::Theme, iced::Renderer>;
+
+    async fn apply_focus(task: Task<Message>, ui: &mut Ui<'_>, renderer: &iced::Renderer) {
+      if let Some(mut stream) = iced_runtime::task::into_stream(task) {
+        while let Some(action) = stream.next().await {
+          if let iced_runtime::Action::Widget(mut operation) = action {
+            loop {
+              ui.operate(renderer, operation.as_mut());
+              match operation.finish() {
+                widget::operation::Outcome::Chain(next) => operation = next,
+                _ => break,
+              }
+            }
+          }
+        }
+      }
+    }
+
+    fn key(key: keyboard::key::Named) -> Event {
+      Event::Keyboard(keyboard::Event::KeyPressed {
+        key: keyboard::Key::Named(key),
+        modified_key: keyboard::Key::Named(key),
+        physical_key: keyboard::key::Physical::Code(keyboard::key::Code::Enter),
+        location: keyboard::Location::Standard,
+        modifiers: keyboard::Modifiers::NONE,
+        text: None,
+        repeat: false,
+      })
+    }
+
+    let mut state = test_state();
+    state.kernel.connection = ConnectionPhase::Connected;
+    state.kernel.connected_identity = Some(crate::app::state::ConnectedIdentity {
+      user_name: "Current user".to_owned(),
+      provider: jellypilot_media_server::MediaServerProvider::Jellyfin,
+      server_url: "https://media.example.test".to_owned(),
+      server_name: Some("Media server".to_owned()),
+    });
+    state.login.flow.profiles_loading = false;
+    state.settings.view.active_section = crate::app::state::SettingsSection::Appearance;
+    state.shell.account_popover_open = true;
+    let mut renderer = iced::Renderer::new(Font::DEFAULT, 14.0.into(), Some("tiny-skia"))
+      .await
+      .expect("software renderer");
+    let bounds = Size::new(1600.0, 900.0);
+    let window = iced::window::Id::unique();
+    let mut ui = UserInterface::build(
+      crate::app::view(&state, window),
+      bounds,
+      Cache::new(),
+      &mut renderer,
+    );
+    let mut messages = Vec::new();
+    ui.update(
+      &[key(keyboard::key::Named::Tab)],
+      mouse::Cursor::Unavailable,
+      &mut renderer,
+      &mut clipboard::Null,
+      &mut messages,
+    );
+    ui.operate(
+      &renderer,
+      &mut widget::operation::focusable::focus::<()>(widget::Id::new("account-settings")),
+    );
+    ui.update(
+      &[key(keyboard::key::Named::Enter)],
+      mouse::Cursor::Unavailable,
+      &mut renderer,
+      &mut clipboard::Null,
+      &mut messages,
+    );
+    let open = messages.pop().expect("Manage accounts keyboard activation");
+    let cache = ui.into_cache();
+    let task = update(&mut state, open);
+    assert!(state.shell.settings_open);
+    assert!(!state.shell.account_popover_open);
+    assert_eq!(
+      state.settings.view.active_section,
+      crate::app::state::SettingsSection::Account
+    );
+    let mut ui = UserInterface::build(
+      crate::app::view(&state, window),
+      bounds,
+      cache,
+      &mut renderer,
+    );
+    apply_focus(task, &mut ui, &renderer).await;
+    let cache = ui.into_cache();
+
+    // Ctrl/Cmd+, focuses an already-open modal; it must not replace its origin.
+    let task = update(&mut state, Message::Settings(SettingsMessage::Open));
+    let mut ui = UserInterface::build(
+      crate::app::view(&state, window),
+      bounds,
+      cache,
+      &mut renderer,
+    );
+    apply_focus(task, &mut ui, &renderer).await;
+    let cache = ui.into_cache();
+    let task = update(&mut state, Message::Settings(SettingsMessage::Close));
+    let mut ui = UserInterface::build(
+      crate::app::view(&state, window),
+      bounds,
+      cache,
+      &mut renderer,
+    );
+    apply_focus(task, &mut ui, &renderer).await;
+    messages.clear();
+    ui.update(
+      &[key(keyboard::key::Named::Enter)],
+      mouse::Cursor::Unavailable,
+      &mut renderer,
+      &mut clipboard::Null,
+      &mut messages,
+    );
+    assert!(matches!(
+      messages.as_slice(),
+      [Message::Shell(
+        crate::app::message::ShellMessage::ToggleAccountPopover
+      )]
+    ));
+    let cache = ui.into_cache();
+
+    // A subsequent ordinary Settings entry restores its own trigger instead.
+    let task = update(&mut state, Message::Settings(SettingsMessage::Open));
+    let mut ui = UserInterface::build(
+      crate::app::view(&state, window),
+      bounds,
+      cache,
+      &mut renderer,
+    );
+    apply_focus(task, &mut ui, &renderer).await;
+    let cache = ui.into_cache();
+    let task = update(&mut state, Message::Settings(SettingsMessage::Close));
+    let mut ui = UserInterface::build(
+      crate::app::view(&state, window),
+      bounds,
+      cache,
+      &mut renderer,
+    );
+    apply_focus(task, &mut ui, &renderer).await;
+    messages.clear();
+    ui.update(
+      &[key(keyboard::key::Named::Enter)],
+      mouse::Cursor::Unavailable,
+      &mut renderer,
+      &mut clipboard::Null,
+      &mut messages,
+    );
+    assert!(matches!(
+      messages.as_slice(),
+      [Message::Settings(SettingsMessage::Open)]
+    ));
   }
 
   fn episode(id: &str, season_number: i32) -> VideoLibraryItem {

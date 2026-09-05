@@ -80,7 +80,10 @@ pub fn update(state: &mut State, message: Message) -> Task<Message> {
 }
 
 pub fn view(state: &State, _window_id: iced::window::Id) -> iced::Element<'_, Message> {
-  view::view(state)
+  jellypilot_ui::widgets::focus_scope::focus_scope(
+    view::view(state),
+    state.shell.focus_visibility.clone(),
+  )
 }
 
 pub fn subscription(state: &State) -> Subscription<Message> {

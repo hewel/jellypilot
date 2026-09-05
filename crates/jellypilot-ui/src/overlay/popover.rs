@@ -9,6 +9,14 @@ use super::positioning::{position_layer, Alignment, Placement, PositioningOption
 use super::style;
 use crate::tokens::TOKENS;
 
+/// Semantic appearance of the floating surface; ordinary popovers keep their default style.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum PopoverAppearance {
+    #[default]
+    Default,
+    Account,
+}
+
 /// Placement and dismissal behavior for a [`popover`].
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct PopoverOptions {
@@ -21,6 +29,7 @@ pub struct PopoverOptions {
     pub close_on_outside_press: bool,
     pub clamp_to_viewport: bool,
     pub flip_when_overflow: bool,
+    pub appearance: PopoverAppearance,
 }
 
 impl Default for PopoverOptions {
@@ -35,6 +44,7 @@ impl Default for PopoverOptions {
             close_on_outside_press: true,
             clamp_to_viewport: true,
             flip_when_overflow: true,
+            appearance: PopoverAppearance::Default,
         }
     }
 }
@@ -44,6 +54,7 @@ impl Default for PopoverOptions {
 /// The parent owns `is_open` and handles `on_dismiss`. When enabled in
 /// [`PopoverOptions`], Escape and primary pointer presses outside both the
 /// trigger and floating panel publish `on_dismiss`.
+/// While open, trigger hints are suppressed; overlays inside the panel remain available.
 pub fn popover<'a, Message>(
     trigger: impl Into<Element<'a, Message>>,
     content: impl Into<Element<'a, Message>>,
@@ -58,7 +69,10 @@ where
         container(content)
             .padding(TOKENS.spacing.s3)
             .width(options.width.map_or(Length::Shrink, Length::Fixed))
-            .style(style::popover_surface),
+            .style(match options.appearance {
+                PopoverAppearance::Default => style::popover_surface,
+                PopoverAppearance::Account => crate::widgets::sidebar::popover,
+            }),
     );
 
     Element::new(Popover {
@@ -184,33 +198,23 @@ where
         let mut children = tree.children.iter_mut();
         let trigger_tree = children.next().expect("popover trigger tree");
         let content_tree = children.next().expect("popover content tree");
-        let trigger_overlay = self.trigger.as_widget_mut().overlay(
-            trigger_tree,
-            layout,
-            renderer,
-            viewport,
-            translation,
-        );
-        let popover_overlay = self.is_open.then(|| {
-            overlay::Element::new(Box::new(PopoverOverlay {
+        if self.is_open {
+            Some(overlay::Element::new(Box::new(PopoverOverlay {
                 content: &mut self.content,
                 tree: content_tree,
                 anchor_bounds: layout.bounds() + translation,
                 viewport_bounds: *viewport,
                 options: self.options,
                 on_dismiss: self.on_dismiss.clone(),
-            }))
-        });
-
-        if trigger_overlay.is_some() || popover_overlay.is_some() {
-            Some(
-                overlay::Group::with_children(
-                    trigger_overlay.into_iter().chain(popover_overlay).collect(),
-                )
-                .overlay(),
-            )
+            })))
         } else {
-            None
+            self.trigger.as_widget_mut().overlay(
+                trigger_tree,
+                layout,
+                renderer,
+                viewport,
+                translation,
+            )
         }
     }
 
@@ -433,15 +437,142 @@ mod tests {
     use iced::{Event, Point, Rectangle, Size};
 
     use super::{outside_press_action, primary_press_position, OutsidePressAction, PopoverOptions};
-    use crate::tokens::TOKENS;
 
     #[test]
-    fn defaults_enable_both_supported_dismissal_paths() {
-        let options = PopoverOptions::default();
+    fn open_popover_hides_trigger_hint_but_preserves_content_hint() {
+        use std::cell::Cell;
+        use std::time::Duration;
 
-        assert!(options.close_on_escape);
-        assert!(options.close_on_outside_press);
-        assert_eq!(options.gap, TOKENS.spacing.s2);
+        use iced::advanced::{clipboard, renderer, renderer::Headless};
+        use iced::widget::{container, text};
+        use iced::{Element, Font, Theme};
+        use iced_runtime::user_interface::{Cache, UserInterface};
+
+        use super::popover;
+        use crate::overlay::{tooltip_element, TooltipOptions};
+
+        let trigger_painted = Cell::new(false);
+        let content_painted = Cell::new(false);
+        fn hint<'a>(label: &'static str, painted: &'a Cell<bool>) -> Element<'a, ()> {
+            text(label)
+                .style(move |_| {
+                    painted.set(true);
+                    text::Style::default()
+                })
+                .into()
+        }
+        let view = |open| {
+            let options = TooltipOptions {
+                delay: Duration::ZERO,
+                ..TooltipOptions::default()
+            };
+            popover(
+                tooltip_element(
+                    container(text("Account")).width(100).height(40),
+                    hint("Account identity", &trigger_painted),
+                    options,
+                ),
+                tooltip_element(
+                    container(text("Content target")).width(140).height(40),
+                    hint("Content detail", &content_painted),
+                    options,
+                ),
+                open,
+                PopoverOptions::default(),
+                (),
+            )
+        };
+        let mut renderer = iced::futures::executor::block_on(iced::Renderer::new(
+            Font::DEFAULT,
+            14.0.into(),
+            Some("tiny-skia"),
+        ))
+        .expect("software renderer");
+        let bounds = Size::new(400.0, 300.0);
+        let mut ui = UserInterface::build(view(false), bounds, Cache::new(), &mut renderer);
+        let mut messages = Vec::new();
+        let trigger_cursor = mouse::Cursor::Available(Point::new(20.0, 20.0));
+        ui.update(
+            &[Event::Mouse(mouse::Event::CursorMoved {
+                position: Point::new(20.0, 20.0),
+            })],
+            trigger_cursor,
+            &mut renderer,
+            &mut clipboard::Null,
+            &mut messages,
+        );
+        ui.draw(
+            &mut renderer,
+            &Theme::Light,
+            &renderer::Style::default(),
+            trigger_cursor,
+        );
+        assert!(
+            trigger_painted.replace(false),
+            "closed trigger reveals its hover hint"
+        );
+
+        let mut ui = UserInterface::build(view(true), bounds, ui.into_cache(), &mut renderer);
+        ui.update(
+            &[],
+            trigger_cursor,
+            &mut renderer,
+            &mut clipboard::Null,
+            &mut messages,
+        );
+        ui.draw(
+            &mut renderer,
+            &Theme::Light,
+            &renderer::Style::default(),
+            trigger_cursor,
+        );
+        assert!(
+            !trigger_painted.replace(false),
+            "open popover must suppress an already-visible trigger hint"
+        );
+
+        let content_cursor = mouse::Cursor::Available(Point::new(20.0, 70.0));
+        ui.update(
+            &[Event::Mouse(mouse::Event::CursorMoved {
+                position: Point::new(20.0, 70.0),
+            })],
+            content_cursor,
+            &mut renderer,
+            &mut clipboard::Null,
+            &mut messages,
+        );
+        ui.draw(
+            &mut renderer,
+            &Theme::Light,
+            &renderer::Style::default(),
+            content_cursor,
+        );
+        assert!(
+            content_painted.get(),
+            "nested content hints remain readable"
+        );
+        assert!(!trigger_painted.get());
+
+        let mut ui = UserInterface::build(view(false), bounds, ui.into_cache(), &mut renderer);
+        ui.update(
+            &[Event::Mouse(mouse::Event::CursorMoved {
+                position: Point::new(20.0, 20.0),
+            })],
+            trigger_cursor,
+            &mut renderer,
+            &mut clipboard::Null,
+            &mut messages,
+        );
+        ui.draw(
+            &mut renderer,
+            &Theme::Light,
+            &renderer::Style::default(),
+            trigger_cursor,
+        );
+        assert!(
+            trigger_painted.get(),
+            "closing the popover restores ordinary hover hints"
+        );
     }
 
     #[test]

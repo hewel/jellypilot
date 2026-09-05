@@ -462,6 +462,11 @@ pub const TOKENS: DesignTokens = DesignTokens {
     },
 };
 
+/// Rounded Sidebar controls without changing the default control radius.
+pub const SIDEBAR_CONTROL_RADIUS: f32 = 12.0;
+/// Account Popover radius around its 12-pixel inset content.
+pub const ACCOUNT_POPOVER_RADIUS: f32 = 20.0;
+
 /// Dark JellyPilot palette: Charcoal. Near-zero-chroma deep-charcoal surfaces
 /// (4–7% lightness, never OLED pure black) under the Neon Indigo accent
 /// (`#6366f1`); the text hierarchy runs a cool-neutral ladder from white.

@@ -240,10 +240,8 @@ fn update_settings(
       }
       Task::none()
     }
-    // Handled entirely by the top-level router: Disconnect and SignOut write
-    // the remote session state (and SignOut drives the login surface's forget flow).
-    // Open and Close drive the shell's Settings Modal lifecycle.
-    SettingsMessage::Open | SettingsMessage::Close => Task::none(),
+    // Modal lifecycle belongs to the top-level router.
+    SettingsMessage::Open | SettingsMessage::OpenAccounts | SettingsMessage::Close => Task::none(),
     SettingsMessage::PlaybackConfigApplied(result) => {
       if result.is_err() {
         surface.view.error = Some(PLAYBACK_CONFIG_APPLY_ERROR);

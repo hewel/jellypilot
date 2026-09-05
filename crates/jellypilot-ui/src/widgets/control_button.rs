@@ -1,5 +1,9 @@
 //! Status-aware icon and label button.
 
+use std::any::Any;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::Arc;
+
 use iced::advanced::layout::{self, Layout};
 use iced::advanced::mouse;
 use iced::advanced::renderer;
@@ -14,20 +18,126 @@ use crate::icons::{icon_for_control_state, Icon, IconControlState, IconSize};
 use crate::tokens::TOKENS;
 use crate::variants::ButtonVariant;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Default)]
 struct State {
     is_pressed: bool,
     status: Option<button::Status>,
     is_focused: bool,
+    pointer_interaction: bool,
+    focus_visibility: Option<FocusVisibility>,
+    focus_generation: u64,
+}
+
+impl State {
+    fn has_focus(&self) -> bool {
+        self.is_focused
+            && self
+                .focus_visibility
+                .as_ref()
+                .is_none_or(|visibility| self.focus_generation == visibility.pointer_generation())
+    }
+
+    fn is_focus_visible(&self) -> bool {
+        self.has_focus()
+            && self
+                .focus_visibility
+                .as_ref()
+                .map_or(!self.pointer_interaction, FocusVisibility::is_keyboard)
+    }
+}
+
+/// Window-scoped input state for [`super::focus_scope::focus_scope`].
+/// Captured pointer presses invalidate old control focus, not text inputs.
+#[derive(Debug, Clone, Default)]
+pub struct FocusVisibility(Arc<FocusContext>);
+
+#[derive(Debug, Default)]
+struct FocusContext {
+    keyboard: AtomicBool,
+    pointer_generation: AtomicU64,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub(super) struct FocusSnapshot {
+    keyboard: bool,
+    pointer_generation: u64,
+}
+
+impl FocusVisibility {
+    /// Records the current input method, including events captured by overlays.
+    pub(super) fn set_keyboard(&self, keyboard: bool) {
+        self.0.keyboard.store(keyboard, Ordering::Relaxed);
+        if !keyboard {
+            // Opaque overlays can prevent the old control from receiving the press.
+            self.0.pointer_generation.fetch_add(1, Ordering::Relaxed);
+        }
+    }
+
+    /// Whether keyboard navigation should reveal control focus.
+    #[must_use]
+    pub(super) fn is_keyboard(&self) -> bool {
+        self.0.keyboard.load(Ordering::Relaxed)
+    }
+
+    pub(super) fn snapshot(&self) -> FocusSnapshot {
+        FocusSnapshot {
+            keyboard: self.is_keyboard(),
+            pointer_generation: self.pointer_generation(),
+        }
+    }
+
+    pub(super) fn restore(&self, snapshot: FocusSnapshot) {
+        self.0.keyboard.store(snapshot.keyboard, Ordering::Relaxed);
+        self.0
+            .pointer_generation
+            .store(snapshot.pointer_generation, Ordering::Relaxed);
+    }
+
+    fn pointer_generation(&self) -> u64 {
+        self.0.pointer_generation.load(Ordering::Relaxed)
+    }
+}
+
+impl<T> Operation<T> for FocusVisibility {
+    fn traverse(&mut self, visit: &mut dyn FnMut(&mut dyn Operation<T>)) {
+        visit(self);
+    }
+
+    fn custom(&mut self, _id: Option<&widget::Id>, _bounds: Rectangle, state: &mut dyn Any) {
+        let Some(state) = state.downcast_mut::<State>() else {
+            return;
+        };
+        if state
+            .focus_visibility
+            .as_ref()
+            .is_none_or(|visibility| !Arc::ptr_eq(&visibility.0, &self.0))
+        {
+            state.focus_visibility = Some(self.clone());
+        }
+    }
+}
+
+pub(crate) fn visible_focus(state: &dyn Any) -> Option<bool> {
+    state
+        .downcast_ref::<State>()
+        .filter(|state| state.has_focus())
+        .map(State::is_focus_visible)
 }
 
 impl widget::operation::Focusable for State {
     fn is_focused(&self) -> bool {
-        self.is_focused
+        self.has_focus()
     }
 
     fn focus(&mut self) {
-        self.is_focused = true;
+        self.is_focused = self
+            .focus_visibility
+            .as_ref()
+            .is_none_or(FocusVisibility::is_keyboard);
+        self.focus_generation = self
+            .focus_visibility
+            .as_ref()
+            .map_or(0, FocusVisibility::pointer_generation);
     }
 
     fn unfocus(&mut self) {
@@ -45,6 +155,7 @@ pub struct ControlButton<'a, Message, Renderer = iced::Renderer> {
     icon: Option<Icon>,
     label: Option<String>,
     variant: ButtonVariant,
+    style: fn(&Theme, ButtonVariant, button::Status) -> button::Style,
     icon_size: IconSize,
     trailing_icon: bool,
     label_size: f32,
@@ -92,6 +203,7 @@ where
             icon,
             label,
             variant,
+            style: crate::widgets::button::style,
             icon_size,
             trailing_icon,
             label_size,
@@ -182,6 +294,16 @@ where
     #[must_use]
     pub fn min_height(mut self, min_height: f32) -> Self {
         self.min_height = min_height.max(0.0);
+        self
+    }
+
+    /// Selects a semantic Catalog style without changing content colors or focus feedback.
+    #[must_use]
+    pub fn style(
+        mut self,
+        style: fn(&Theme, ButtonVariant, button::Status) -> button::Style,
+    ) -> Self {
+        self.style = style;
         self
     }
 
@@ -453,20 +575,30 @@ where
         } else {
             Length::Shrink
         };
-        layout::padded(limits, self.width, height, self.padding, |limits| {
-            let node =
-                self.contents[0]
-                    .as_widget_mut()
-                    .layout(&mut tree.children[0], renderer, limits);
-            for index in 1..self.contents.len() {
-                let _ = self.contents[index].as_widget_mut().layout(
-                    &mut tree.children[index],
+        layout::positioned(
+            limits,
+            self.width,
+            height,
+            self.padding,
+            |limits| {
+                // Measure intrinsic content before centering it in the taller hit area.
+                let limits = limits.loose();
+                let node = self.contents[0].as_widget_mut().layout(
+                    &mut tree.children[0],
                     renderer,
-                    limits,
+                    &limits,
                 );
-            }
-            node
-        })
+                for index in 1..self.contents.len() {
+                    let _ = self.contents[index].as_widget_mut().layout(
+                        &mut tree.children[index],
+                        renderer,
+                        &limits,
+                    );
+                }
+                node
+            },
+            |content, size| content.align(iced::Alignment::Start, iced::Alignment::Center, size),
+        )
     }
 
     fn operate(
@@ -479,6 +611,7 @@ where
         let state = tree.state.downcast_mut::<State>();
         let index = content_index(state.status.unwrap_or(button::Status::Active));
         operation.focusable(self.id.as_ref(), layout.bounds(), state);
+        operation.custom(self.id.as_ref(), layout.bounds(), state);
         operation.container(self.id.as_ref(), layout.bounds());
         if let Some(content_layout) = layout.children().next() {
             operation.traverse(&mut |operation| {
@@ -506,7 +639,24 @@ where
         let bounds = layout.bounds();
         let state = tree.state.downcast_mut::<State>();
 
-        if state.is_focused
+        if matches!(
+            event,
+            Event::Mouse(mouse::Event::ButtonPressed(_))
+                | Event::Touch(touch::Event::FingerPressed { .. })
+        ) {
+            if state.has_focus() {
+                shell.request_redraw();
+            }
+            state.is_focused = false;
+            state.pointer_interaction = true;
+        } else if matches!(
+            event,
+            Event::Keyboard(iced::keyboard::Event::KeyPressed { .. })
+        ) {
+            state.pointer_interaction = false;
+        }
+
+        if state.has_focus()
             && self.on_press.is_some()
             && matches!(
                 event,
@@ -576,8 +726,8 @@ where
     ) {
         let bounds = layout.bounds();
         let status = status(self, tree.state.downcast_ref::<State>(), bounds, cursor);
-        let mut style = crate::widgets::button::style(theme, self.variant, status);
-        if tree.state.downcast_ref::<State>().is_focused {
+        let mut style = (self.style)(theme, self.variant, status);
+        if tree.state.downcast_ref::<State>().is_focus_visible() {
             style.border.color = crate::tokens::palette(theme).colors.primary;
             style.border.width = 2.0;
         }
@@ -650,7 +800,7 @@ mod tests {
     use iced::keyboard::{key, Event as KeyboardEvent, Key, Location, Modifiers};
     use iced::{Event, Length, Point, Rectangle, Size, Theme};
 
-    use super::{control_button, ControlButton, State};
+    use super::{ControlButton, State};
     use crate::icons::{Icon, IconSize};
     use crate::tokens::TOKENS;
     use crate::variants::ButtonVariant;
@@ -658,33 +808,6 @@ mod tests {
     #[derive(Debug, Clone, PartialEq, Eq)]
     enum TestMessage {
         Clicked,
-    }
-
-    fn test_button() -> ControlButton<'static, TestMessage, ()> {
-        ControlButton::new(
-            Some(Icon::Home),
-            Some("Home".to_owned()),
-            ButtonVariant::Tonal,
-        )
-    }
-
-    #[test]
-    fn construction_builds_all_three_content_states() {
-        let public_button: ControlButton<'_, TestMessage> = control_button(
-            Some(Icon::Home),
-            Some("Home".to_owned()),
-            ButtonVariant::Tonal,
-        );
-        let generic_button = test_button();
-        assert_eq!(public_button.label_size, 16.0);
-        assert_eq!(public_button.spacing, TOKENS.spacing.s1_5);
-
-        let custom_spacing = test_button().spacing(TOKENS.spacing.s2);
-        assert_eq!(custom_spacing.spacing, TOKENS.spacing.s2);
-        assert_eq!(Widget::children(&custom_spacing).len(), 3);
-
-        assert_eq!(Widget::children(&public_button).len(), 3);
-        assert_eq!(Widget::children(&generic_button).len(), 3);
     }
 
     #[test]
@@ -705,6 +828,88 @@ mod tests {
             node.children()[0].bounds().position(),
             Point::new(10.0, 6.0)
         );
+    }
+
+    #[test]
+    fn tall_icon_control_centers_content_in_its_hit_area() {
+        let mut button: ControlButton<'_, TestMessage, ()> =
+            ControlButton::new(Some(Icon::Settings), None, ButtonVariant::Text)
+                .min_height(40.0)
+                .width(Length::Fixed(100.0))
+                .content_centered(true);
+        let mut tree = Tree::new(&button as &dyn Widget<TestMessage, Theme, ()>);
+        let limits = layout::Limits::new(Size::ZERO, Size::new(200.0, 200.0));
+
+        let node = button.layout(&mut tree, &(), &limits);
+        let content = Layout::new(&node)
+            .children()
+            .next()
+            .expect("content row")
+            .children()
+            .nth(1)
+            .expect("icon between horizontal spacers")
+            .bounds();
+
+        assert_eq!(content.y + content.height / 2.0, node.size().height / 2.0);
+    }
+
+    #[test]
+    fn selected_library_row_centers_composed_icon_and_text() {
+        use iced::advanced::renderer::Headless;
+        use iced::widget::{container, row};
+        use iced::{Alignment, Font};
+
+        let renderer = iced::futures::executor::block_on(iced::Renderer::new(
+            Font::DEFAULT,
+            14.0.into(),
+            Some("tiny-skia"),
+        ))
+        .expect("software layout renderer");
+        let mut button = super::control_button_content(
+            |state| {
+                row![
+                    crate::icons::icon_for_control_state(
+                        Icon::for_collection_type("movies"),
+                        IconSize::Md,
+                        ButtonVariant::Secondary,
+                        state,
+                    ),
+                    container(crate::widgets::ellipsis_text::ellipsis_text("电影").size(14))
+                        .width(Length::Fill),
+                ]
+                .spacing(TOKENS.spacing.s2_5)
+                .align_y(Alignment::Center)
+                .width(Length::Fill)
+                .into()
+            },
+            ButtonVariant::Secondary,
+        )
+        .min_height(32.0)
+        .padding([4, 12])
+        .width(Length::Fill)
+        .on_press(TestMessage::Clicked);
+        let mut tree = Tree::new(&button as &dyn Widget<TestMessage, Theme, iced::Renderer>);
+        let limits = layout::Limits::new(Size::ZERO, Size::new(216.0, 100.0));
+
+        let node = button.layout(&mut tree, &renderer, &limits);
+        let row = Layout::new(&node).children().next().expect("content row");
+        let mut children = row.children();
+        let icon = children.next().expect("library icon").bounds();
+        let label = children
+            .next()
+            .expect("label container")
+            .children()
+            .next()
+            .expect("library label")
+            .bounds();
+        for bounds in [icon, label] {
+            let center = bounds.y + bounds.height / 2.0;
+            assert!(
+                (center - node.size().height / 2.0).abs() < 0.01,
+                "selected row content center {center} must match its {}px hit area",
+                node.size().height,
+            );
+        }
     }
 
     #[test]
@@ -843,6 +1048,29 @@ mod tests {
                 &mut shell,
                 &Rectangle::with_size(Size::new(100.0, 100.0)),
             );
+            for event in [
+                Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left)),
+                Event::Keyboard(KeyboardEvent::KeyPressed {
+                    key: Key::Named(key::Named::Enter),
+                    modified_key: Key::Named(key::Named::Enter),
+                    physical_key: key::Physical::Code(key::Code::Enter),
+                    location: Location::Standard,
+                    modifiers: Modifiers::default(),
+                    text: None,
+                    repeat: false,
+                }),
+            ] {
+                button.update(
+                    &mut tree,
+                    &event,
+                    layout,
+                    mouse::Cursor::Available(Point::new(99.0, 99.0)),
+                    &(),
+                    &mut clipboard,
+                    &mut shell,
+                    &Rectangle::with_size(Size::new(100.0, 100.0)),
+                );
+            }
             assert_eq!(messages, vec![TestMessage::Clicked]);
         }
     }

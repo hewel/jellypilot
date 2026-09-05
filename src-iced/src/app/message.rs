@@ -205,6 +205,7 @@ pub enum DetailMessage {
 #[derive(Clone)]
 pub enum SettingsMessage {
   Open,
+  OpenAccounts,
   Close,
   SectionSelected(super::state::SettingsSection),
   MpvPathChanged(String),

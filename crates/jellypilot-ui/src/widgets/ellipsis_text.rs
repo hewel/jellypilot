@@ -94,6 +94,13 @@ where
         }
     }
 
+    /// Selects the font used for both measuring and drawing the shortened text.
+    #[must_use]
+    pub fn font(mut self, font: Renderer::Font) -> Self {
+        self.format.font = Some(font);
+        self
+    }
+
     /// Sets the size of the text.
     #[must_use]
     pub fn size(mut self, size: impl Into<Pixels>) -> Self {
