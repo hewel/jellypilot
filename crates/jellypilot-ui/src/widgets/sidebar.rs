@@ -49,7 +49,7 @@ pub fn toolbar(theme: &Theme) -> container::Style {
 
 /// Neutral structural separator between toolbar actions.
 pub fn divider(theme: &Theme) -> container::Style {
-    container::Style::default().background(palette(theme).colors.outlineVariant)
+    container::Style::default().background(palette(theme).colors.outline)
 }
 
 /// Bounded inset control surface for compact Sidebar details.
