@@ -1,0 +1,9 @@
+{
+  "$schema": "https://raw.githubusercontent.com/can1357/oh-my-pi/main/packages/coding-agent/src/config/mcp-schema.json",
+  "mcpServers": {
+    "reicon": {
+      "type": "stdio",
+      "command": "bun ./node_modules/reicon-mcp/bin/run.cjs"
+    }
+  }
+}

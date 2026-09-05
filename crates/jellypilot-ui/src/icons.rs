@@ -1,4 +1,4 @@
-//! Curated Tabler outline/filled SVG icon catalog and iced widget helpers.
+//! Curated Reicon outline/filled SVG icon catalog and iced widget helpers.
 
 use std::sync::LazyLock;
 
@@ -96,7 +96,7 @@ static ICON_HANDLES: LazyLock<[Handle; ICON_COUNT]> = LazyLock::new(|| {
     handles
 });
 
-/// Semantic icon variants vendored from Tabler icons.
+/// Semantic icon variants vendored from Reicon icons.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Icon {
     // Media transport
@@ -488,6 +488,14 @@ mod tests {
             assert!(
                 tree.size().width() > 0.0 && tree.size().height() > 0.0,
                 "Icon {icon:?} must have non-zero dimensions in usvg"
+            );
+
+            // iced recolors icons through `svg::Style::color`, which only reaches
+            // artwork painted with `currentColor`; a hardcoded fill/stroke would
+            // silently ignore theme tinting.
+            assert!(
+                text.contains("currentColor"),
+                "Icon {icon:?} must paint with currentColor so theme tinting applies"
             );
         }
     }
