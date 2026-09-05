@@ -203,6 +203,8 @@ pub enum SettingsMessage {
   DiagnosticCategoryMenuToggled,
   DiagnosticCategoryMenuDismissed,
   DiagnosticCategorySelected(Option<DiagnosticCategory>),
+  ExportLogs,
+  LogsExported(Result<String, String>),
   Disconnect,
   SignOut,
   PlaybackConfigApplied(Result<(), PlaybackError>),

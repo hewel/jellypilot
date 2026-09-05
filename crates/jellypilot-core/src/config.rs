@@ -10,7 +10,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::browse_model::BrowsePreferences;
 
-const CONFIG_DIRECTORY: &str = "jellypilot";
+pub(crate) const CONFIG_DIRECTORY: &str = "jellypilot";
 const CONFIG_FILE: &str = "config.json";
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize)]

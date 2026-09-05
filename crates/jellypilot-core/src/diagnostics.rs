@@ -112,7 +112,7 @@ impl Diagnostics {
     }
 
     #[cfg(test)]
-    fn record_at(
+    pub(crate) fn record_at(
         &mut self,
         timestamp_seconds: u64,
         level: DiagnosticLevel,
@@ -288,7 +288,7 @@ pub fn coalescing_key(prefix: &str, message: &str) -> String {
     format!("{prefix}-{:x}", hasher.finish())
 }
 
-fn current_timestamp_seconds() -> u64 {
+pub(crate) fn current_timestamp_seconds() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
@@ -372,6 +372,20 @@ pub fn format_diagnostic_time(timestamp_seconds: u64) -> String {
     let second = seconds_of_day % 60;
     let (year, month, day) = civil_date_from_unix_days(days);
     format!("{year:04}-{month:02}-{day:02} {hour:02}:{minute:02}:{second:02} UTC")
+}
+
+/// Formats a Unix timestamp as `yyyymmdd-hhmmss` (UTC) for use in file names.
+#[must_use]
+pub fn format_file_timestamp(timestamp_seconds: u64) -> String {
+    let days = (timestamp_seconds / 86_400) as i64;
+    let seconds_of_day = timestamp_seconds % 86_400;
+    let (year, month, day) = civil_date_from_unix_days(days);
+    format!(
+        "{year:04}{month:02}{day:02}-{:02}{:02}{:02}",
+        seconds_of_day / 3_600,
+        (seconds_of_day % 3_600) / 60,
+        seconds_of_day % 60,
+    )
 }
 
 fn civil_date_from_unix_days(days: i64) -> (i64, i64, i64) {

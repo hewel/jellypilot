@@ -18,6 +18,7 @@ const DUPLICATE_SUBTITLE_LANGUAGE_ERROR: &str = "That subtitle language is alrea
 const EMPTY_SHORTCUT_ERROR: &str = "Press a non-modifier key for this shortcut.";
 const SHORTCUT_COLLISION_ERROR: &str = "That shortcut is already assigned.";
 const PLAYBACK_CONFIG_APPLY_ERROR: &str = "Settings were saved, but MPV could not be reconfigured.";
+const LOG_EXPORT_ERROR: &str = "Could not export logs.";
 
 /// Settings surface slice: the editable form state behind the Settings page.
 pub struct Surface {
@@ -206,6 +207,43 @@ fn update_settings(
       surface.view.diagnostic_category_menu_open = false;
       Task::none()
     }
+    SettingsMessage::ExportLogs => {
+      clear_settings_feedback(surface);
+      let exported_at = jellypilot_core::logs::now_seconds();
+      let document = jellypilot_core::logs::build_support_document(
+        env!("CARGO_PKG_VERSION"),
+        exported_at,
+        kernel.diagnostics.rows(),
+        &jellypilot_core::logs::global().snapshot(),
+      );
+      Task::perform(
+        async move {
+          jellypilot_core::logs::write_support_document(&document, exported_at)
+            .map(|path| path.display().to_string())
+            .map_err(|_| LOG_EXPORT_ERROR.to_owned())
+        },
+        |result| Message::Settings(SettingsMessage::LogsExported(result)),
+      )
+    }
+    SettingsMessage::LogsExported(result) => {
+      match result {
+        Ok(path) => {
+          surface.view.saved = Some("Logs exported");
+          kernel.diagnostics.record(
+            DiagnosticLevel::Info,
+            DiagnosticCategory::Config,
+            format!("Logs exported to {path}."),
+          );
+        }
+        Err(message) => {
+          surface.view.error = Some(LOG_EXPORT_ERROR);
+          kernel
+            .diagnostics
+            .record(DiagnosticLevel::Error, DiagnosticCategory::Config, message);
+        }
+      }
+      Task::none()
+    }
     // Handled entirely by the top-level router: Disconnect and SignOut write
     // the remote session state (and SignOut drives the login surface's forget flow).
     // Open and Close drive the shell's Settings Modal lifecycle.
@@ -337,6 +375,44 @@ mod tests {
       surface.view.error,
       Some("That shortcut is already assigned.")
     );
+  }
+
+  #[test]
+  fn logs_exported_reports_path_via_badge_and_diagnostics() {
+    let (mut surface, mut kernel) = test_fixture();
+
+    drop(update(
+      &mut surface,
+      &mut kernel,
+      UiThemeMode::Dark,
+      SettingsMessage::LogsExported(Ok("/tmp/jellypilot-logs-19700102-000001.log".to_owned())),
+    ));
+
+    assert_eq!(surface.view.saved, Some("Logs exported"));
+    assert!(surface.view.error.is_none());
+    assert!(kernel
+      .diagnostics
+      .rows()
+      .any(|row| row.message.contains("jellypilot-logs-19700102-000001.log")));
+  }
+
+  #[test]
+  fn logs_exported_failure_shows_fixed_inline_error() {
+    let (mut surface, mut kernel) = test_fixture();
+
+    drop(update(
+      &mut surface,
+      &mut kernel,
+      UiThemeMode::Dark,
+      SettingsMessage::LogsExported(Err(LOG_EXPORT_ERROR.to_owned())),
+    ));
+
+    assert_eq!(surface.view.error, Some(LOG_EXPORT_ERROR));
+    assert!(surface.view.saved.is_none());
+    assert!(kernel
+      .diagnostics
+      .rows()
+      .any(|row| row.level == DiagnosticLevel::Error));
   }
 
   #[test]

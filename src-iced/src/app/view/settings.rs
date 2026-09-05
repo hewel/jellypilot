@@ -594,6 +594,15 @@ fn diagnostics_section(state: &State) -> Element<'_, Message> {
     },
     Message::Settings(SettingsMessage::DiagnosticCategoryMenuDismissed),
   );
+  let export_button = control_button(
+    Some(Icon::Download),
+    Some("Export logs".to_owned()),
+    ButtonVariant::Tonal,
+  )
+  .icon_size(IconSize::Sm)
+  .spacing(TOKENS.spacing.s1_5)
+  .padding([6, 10])
+  .on_press(Message::Settings(SettingsMessage::ExportLogs));
 
   let mut events = Column::new().spacing(TOKENS.spacing.s2).width(Fill);
   let mut count = 0_usize;
@@ -654,7 +663,13 @@ fn diagnostics_section(state: &State) -> Element<'_, Message> {
     Icon::Activity,
     "Diagnostics",
     column![
-      row![level_filter, category_filter].spacing(TOKENS.spacing.s2),
+      row![
+        level_filter,
+        category_filter,
+        space::horizontal().width(Fill),
+        export_button,
+      ]
+      .spacing(TOKENS.spacing.s2),
       text(format!("Showing {count} of at most 200 retained events."))
         .size(11)
         .color(palette.text.metadata),

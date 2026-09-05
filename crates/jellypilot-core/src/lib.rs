@@ -18,6 +18,8 @@ pub mod config;
 pub mod detail;
 pub mod diagnostics;
 mod load_state;
+#[cfg(feature = "native")]
+pub mod logs;
 pub mod request_gate;
 #[cfg(feature = "native")]
 pub mod settings;
