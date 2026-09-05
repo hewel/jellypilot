@@ -348,11 +348,18 @@ fn artwork_specs(data: &HomeState, window_width: f32) -> Vec<ArtworkLoadSpec> {
   let featured_item = data.featured_item();
   if let Some(item) = featured_item {
     push_artwork_spec(&mut specs, ArtworkPlacement::Hero, item, true);
-    if let Some(image_id) = &item.backdrop_image_id {
+    // Fall back to the item's own artwork (the episode still or movie poster)
+    // when the server carries no backdrop, mirroring the action-card chain,
+    // so the hero never settles empty.
+    let hero_backdrop = item
+      .backdrop_image_id
+      .as_deref()
+      .or(item.artwork_image_id.as_deref());
+    if let Some(image_id) = hero_backdrop {
       specs.push(ArtworkLoadSpec {
         placement: ArtworkPlacement::HeroBackdrop,
         item_id: item.id.clone(),
-        image_id: image_id.clone(),
+        image_id: image_id.to_owned(),
         visible: true,
       });
     }
@@ -611,6 +618,30 @@ mod tests {
       .expect("refetched handle exists")
       .id();
     assert_eq!(initial_handle_id, refetch_handle_id);
+  }
+
+  #[test]
+  fn hero_backdrop_falls_back_to_primary_artwork_when_backdrop_is_missing() {
+    let (mut surface, mut kernel) = test_fixture();
+    kernel.client = Some(Arc::new(JellyfinClient::new()));
+    let mut item = episode("item-1", 1);
+    item.resume_position_seconds = Some(120.0);
+    item.artwork_image_id = Some("art-1".to_owned());
+    surface
+      .data
+      .settle_video_home(Ok(jellypilot_media_server::VideoHome {
+        continue_watching: vec![item],
+        next_up: Vec::new(),
+      }));
+    surface.data.settle_shortcuts(Ok(Vec::new()));
+
+    drop(prepare_artwork(&mut surface, &mut kernel, WINDOW_WIDTH));
+
+    let cell = surface
+      .artwork
+      .hero_backdrop("item-1")
+      .expect("hero backdrop cell exists");
+    assert_eq!(cell.image_id, "art-1");
   }
 
   #[test]

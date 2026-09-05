@@ -507,10 +507,16 @@ fn prepare_artwork(surface: &mut Surface, kernel: &mut Kernel) -> Task<Message> 
         ArtworkSizeClass::Hero,
         true,
       );
+      // Fall back to the item's own artwork (episode still / poster) when the
+      // server carries no backdrop, so the hero never settles empty.
+      let hero_backdrop = item
+        .backdrop_image_id
+        .clone()
+        .or_else(|| item.artwork_image_id.clone());
       push_artwork_spec(
         &mut specs,
         DETAIL_BACKDROP_KEY.to_owned(),
-        &item.backdrop_image_id,
+        &hero_backdrop,
         ArtworkSizeClass::Backdrop,
         true,
       );
@@ -545,10 +551,16 @@ fn prepare_artwork(surface: &mut Surface, kernel: &mut Kernel) -> Task<Message> 
         ArtworkSizeClass::Hero,
         true,
       );
+      // Fall back to the show's own poster artwork when the server carries no
+      // backdrop, so the hero never settles empty.
+      let hero_backdrop = show
+        .backdrop_image_id
+        .clone()
+        .or_else(|| show.artwork_image_id.clone());
       push_artwork_spec(
         &mut specs,
         DETAIL_BACKDROP_KEY.to_owned(),
-        &show.backdrop_image_id,
+        &hero_backdrop,
         ArtworkSizeClass::Backdrop,
         true,
       );
@@ -1134,9 +1146,45 @@ mod tests {
       has_more: false,
       episodes: vec![episode("season-2-episode", 2)],
     });
+
     drop(prepare_artwork(&mut surface, &mut kernel));
 
     assert!(surface.artwork.get(&next_up_key).is_some());
+  }
+
+  #[test]
+  fn prepare_artwork_falls_back_to_primary_artwork_when_backdrop_is_missing() {
+    let (mut surface, mut kernel) = test_fixture();
+    kernel.client = Some(Arc::new(JellyfinClient::new()));
+    let mut item = video_item("detail-item-1");
+    item.artwork_image_id = Some("detail-primary-1".to_owned());
+    surface.data.content = jellypilot_core::LoadState::Ready(DetailContent::Item(Box::new(item)));
+
+    drop(prepare_artwork(&mut surface, &mut kernel));
+
+    let cell = surface
+      .artwork
+      .get(DETAIL_BACKDROP_KEY)
+      .expect("backdrop cell exists");
+    assert_eq!(cell.image_id, "detail-primary-1");
+  }
+
+  #[test]
+  fn prepare_artwork_prefers_the_real_backdrop_over_primary_artwork() {
+    let (mut surface, mut kernel) = test_fixture();
+    kernel.client = Some(Arc::new(JellyfinClient::new()));
+    let mut item = video_item("detail-item-1");
+    item.backdrop_image_id = Some("detail-backdrop-1".to_owned());
+    item.artwork_image_id = Some("detail-primary-1".to_owned());
+    surface.data.content = jellypilot_core::LoadState::Ready(DetailContent::Item(Box::new(item)));
+
+    drop(prepare_artwork(&mut surface, &mut kernel));
+
+    let cell = surface
+      .artwork
+      .get(DETAIL_BACKDROP_KEY)
+      .expect("backdrop cell exists");
+    assert_eq!(cell.image_id, "detail-backdrop-1");
   }
 
   #[test]
