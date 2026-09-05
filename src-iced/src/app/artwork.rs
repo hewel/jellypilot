@@ -9,7 +9,7 @@ use std::sync::{Arc, Mutex};
 use iced::futures::stream::{self, StreamExt};
 use iced::Task;
 use jellypilot_core::artwork_loader::{plan_artwork_loads, PlannedArtworkLoad};
-use jellypilot_media_server::artwork::{ArtworkLoadSummary, LoadLane};
+use jellypilot_media_server::artwork::{ArtworkLoadSummary, LoadLane, MAX_QUEUED_LOADS};
 use jellypilot_media_server::JellyfinClient;
 
 use super::message::{ArtworkLoadCompletion, Message};
@@ -42,7 +42,10 @@ where
   }
   let summary = Arc::new(Mutex::new(summary));
   let planned = plan_artwork_loads(loads);
-  let concurrency = planned.len();
+  // Firing every planned load at once overfills the adapter's bounded queue
+  // and surfaces as spurious Overloaded failures; clamp in-flight work to the
+  // queue capacity so backpressure comes from the stream instead.
+  let concurrency = planned.len().min(MAX_QUEUED_LOADS);
   let completions = stream::iter(planned).map({
     let summary = Arc::clone(&summary);
     move |load| {
@@ -59,6 +62,14 @@ where
         let (result, observation) = adapter
           .load_with_derived(&client, &image_id, load.size_class, load.derived, lane)
           .await;
+        if let Err(error) = &result {
+          tracing::debug!(
+            size_class = ?load.size_class,
+            lane = ?lane,
+            error = ?error,
+            "library image load failed"
+          );
+        }
         if let Ok(mut summary) = summary.lock() {
           summary.record(&observation);
         }

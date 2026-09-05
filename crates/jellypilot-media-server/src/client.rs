@@ -5302,6 +5302,12 @@ fn map_emby_video_home_item(
       )
     })
     .flatten();
+  let has_own_backdrop_tags = item
+    .backdrop_image_tags
+    .as_ref()
+    .is_some_and(|tags| !tags.is_empty());
+  let has_parent_backdrop_id = parent_backdrop_item_id.is_some();
+  let parent_backdrop_tag_count = parent_backdrop_image_tags.as_ref().map_or(0, Vec::len);
   let backdrop_image_id = image_id_for_remote_url(
     MediaServerProvider::Emby,
     server_url,
@@ -5314,6 +5320,13 @@ fn map_emby_video_home_item(
     ),
     ImageRefKind::Backdrop,
   );
+  if backdrop_image_id.is_none() {
+    log::debug!(
+      "Emby {item_type} home item mapped without a backdrop image reference: \
+      own_tags={has_own_backdrop_tags}, parent_id={has_parent_backdrop_id}, \
+      parent_tags={parent_backdrop_tag_count}"
+    );
+  }
   let series_id = item.series_id;
   let series_poster_image_id = image_id_for_series_primary(
     MediaServerProvider::Emby,
@@ -5685,6 +5698,12 @@ fn map_emby_video_item_detail(
     ),
     ImageRefKind::Artwork,
   );
+  let has_own_backdrop_tags = item
+    .backdrop_image_tags
+    .as_ref()
+    .is_some_and(|tags| !tags.is_empty());
+  let has_parent_backdrop_id = item.parent_backdrop_item_id.is_some();
+  let parent_backdrop_tag_count = item.parent_backdrop_image_tags.as_ref().map_or(0, Vec::len);
   let backdrop_image_id = image_id_for_remote_url(
     MediaServerProvider::Emby,
     server_url,
@@ -5697,6 +5716,13 @@ fn map_emby_video_item_detail(
     ),
     ImageRefKind::Backdrop,
   );
+  if backdrop_image_id.is_none() {
+    log::debug!(
+      "Emby {item_type} detail mapped without a backdrop image reference: \
+      own_tags={has_own_backdrop_tags}, parent_id={has_parent_backdrop_id}, \
+      parent_tags={parent_backdrop_tag_count}"
+    );
+  }
   let series_poster_image_id = image_id_for_series_primary(
     MediaServerProvider::Emby,
     server_url,
