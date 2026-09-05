@@ -848,7 +848,9 @@ fn seasons_section<'a>(
       .season_episodes,
     LoadState::Loading
   );
-  let mut season_buttons = Row::new().spacing(TOKENS.spacing.s2);
+  let mut season_buttons = Row::new()
+    .spacing(TOKENS.spacing.s2)
+    .padding(padding::horizontal(TOKENS.spacing.s5));
   for season in &show.seasons {
     season_buttons = season_buttons.push(season_button(state, season, loading));
   }

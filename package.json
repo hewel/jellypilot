@@ -11,7 +11,8 @@
     "check": "bun scripts/task.ts check"
   },
   "dependencies": {
-    "effect": "^4.0.0-beta.102"
+    "effect": "^4.0.0-beta.102",
+    "reicon-mcp": "^1.1.102"
   },
   "devDependencies": {
     "@effect/tsgo": "0.24.3",

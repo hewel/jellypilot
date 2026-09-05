@@ -11,16 +11,11 @@ use super::message::{Message, PlaybackMessage, RemoteMessage, ShellMessage, Wind
 use super::state::{RemoteEventChannel, State};
 
 pub fn subscription(state: &State) -> Subscription<Message> {
-  let window_events = event::listen_with(|event, status, window_id| {
-    if status == event::Status::Captured {
-      return None;
+  let window_events = event::listen_with(|event, status, window_id| match event {
+    Event::Window(window::Event::CloseRequested) if status == event::Status::Ignored => {
+      Some(Message::Window(WindowMessage::CloseRequested(window_id)))
     }
-    match event {
-      Event::Window(window::Event::CloseRequested) => {
-        Some(Message::Window(WindowMessage::CloseRequested(window_id)))
-      }
-      _ => None,
-    }
+    _ => None,
   });
   let mut subscriptions = vec![window_events];
   if state.shell.window_id.is_some() {
