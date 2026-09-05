@@ -183,14 +183,13 @@ flowchart LR
 | **Rust tests**             | `bun run task rust test`                    |
 | **Rust clippy**            | `bun run task rust clippy`                  |
 | **Regenerate API clients** | `bun run task api`                          |
-| **Render promo artwork**   | `bun run task promo`                        |
 
 ### Conventions
 
 - **Rust**: formatting is enforced by `bun run task rust fmt`; `unsafe_code` is forbidden workspace-wide; clippy warnings are errors.
 - **Display-free logic** lives in `jellypilot-core` and is tested there; `src-iced` keeps orchestration and views.
 - **Domain language**: [CONTEXT.md](CONTEXT.md) is the glossary; [docs/adr/](docs/adr/) records architecture decisions.
-- **Promo artwork**: `bun run task promo` writes optimized README screenshots to `assets/screenshots/` and regenerates the WebP README hero and promotional assets plus the 1280×640 PNG GitHub social preview in `assets/promo/`.
+- **Design and promo artwork**: logo sources, screenshots, fonts, and the renderer live in the separate `jellypilot-design` project. From that checkout, run `bun run promo`, then preview publication with `bun run sync:app -- /absolute/path/to/jellypilot`; add `--write` to copy the selected exports. This repository keeps the published files in `assets/promo/` and `assets/screenshots/`, plus the logo used by those assets.
 
 ## 📜 Project History
 

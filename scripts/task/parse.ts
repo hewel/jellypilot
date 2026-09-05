@@ -29,7 +29,6 @@ export type TaskCommand =
       readonly output: string;
       readonly label: string | null;
     }
-  | { readonly _tag: 'promo' }
   | { readonly _tag: 'api' };
 
 function unknownOption(command: string, option: string): never {
@@ -64,7 +63,7 @@ export function parseCli(argv: readonly string[]): TaskCommand {
   if (command === undefined || command === 'help' || command === '--help' || command === '-h') {
     return { _tag: 'help' };
   }
-  if (command === 'check' || command === 'typecheck' || command === 'api' || command === 'promo') {
+  if (command === 'check' || command === 'typecheck' || command === 'api') {
     expectNoArguments(command, args);
     return { _tag: command };
   }

@@ -7,7 +7,6 @@ import { runHot, runIced } from './task/iced';
 import { runApi } from './task/misc';
 import { runMonitor } from './task/monitor';
 import { parseCli } from './task/parse';
-import { runPromo } from './task/promo';
 import { runFormat, runLint, runTypecheck } from './task/quality';
 import { runRust } from './task/rust';
 
@@ -28,7 +27,6 @@ const program = Effect.try({
       Match.when({ _tag: 'rust' }, (task) => runRust(task)),
       Match.when({ _tag: 'iced' }, ({ smoke, release }) => runIced(smoke, release)),
       Match.when({ _tag: 'icedHot' }, () => runHot()),
-      Match.when({ _tag: 'promo' }, () => runPromo()),
       Match.when({ _tag: 'monitor' }, (task) => runMonitor(task)),
       Match.when({ _tag: 'api' }, () => runApi()),
       Match.exhaustive,
