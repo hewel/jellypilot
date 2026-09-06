@@ -966,7 +966,7 @@ fn full_window_modal<'a>(state: &'a State, content: Element<'a, Message>) -> Ele
       .max_width(640.0)
       .width(Fill)
       .padding(TOKENS.spacing.s5)
-      .style(|theme| jellypilot_ui::theme::surface_variant(theme, SurfaceVariant::Raised)),
+      .style(|theme| jellypilot_ui::theme::surface_variant(theme, SurfaceVariant::Floating)),
   )
   .width(Fill)
   .height(Fill)

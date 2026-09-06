@@ -22,7 +22,8 @@ Every container has a semantic surface role (`SurfaceVariant`, styled by `widget
 |---|---|---:|---|---|
 | `Canvas` | `background` | 0 | none | Flush with the window: shell root, page content, inline content groups separated by whitespace |
 | `Block` | `surfaceContainerLowest` | 0 | none | Docked blocks: sidebar, player bar |
-| `Raised` | `surfaceContainerHigh` | `lg` (8) | `raised_high` | Floating layers: login card, intro prompt, toasts, popovers |
+| `Raised` | `surfaceContainerHigh` | `lg` (8) | `raised_high` | Standalone floating card: the login card |
+| `Floating` | `surfaceContainerHigh` | `lg` (8) | `raised_high` + 1px `outlineVariant` edge | Layered floating cards: popovers, modal cards, toasts (with severity fills), floating prompts (Skip Intro) |
 
 Inline content (home hero and action cards, detail episode/next-up/summary rows, settings sections and rows, saved sign-ins) is **flat Canvas with whitespace separation** — no card chrome. Skeleton placeholders are flat `surfaceContainerLow`↔`surfaceContainerHigh` breathing blocks, radius `lg`, no border or shadow.
 
@@ -33,7 +34,7 @@ The shell keeps two 1px `outlineVariant` dividers, both built as explicit divide
 1. A vertical hairline between the sidebar and the content area.
 2. A horizontal hairline above the player bar.
 
-Outside the scoped Sidebar treatment below, surfaces retain their borderless defaults. Badges, toasts, media cards, and ordinary navigation rows do not gain outlines. Decorative primary-tinted halo borders remain prohibited; functional focus and error indications are distinct from decorative structure.
+Outside the scoped Sidebar treatment below, surfaces retain their borderless defaults. Badges, media cards, and ordinary navigation rows do not gain outlines. The exception is layered floating surfaces — popovers, modal cards, toasts, and floating prompts — which carry a 1px `outlineVariant` structural edge alongside their shadow so they read as a separate layer above content; the standalone login card, tooltips, and the scroll-to-bottom indicator stay borderless. Decorative primary-tinted halo borders remain prohibited; functional focus and error indications are distinct from decorative structure. Outline width encodes persistence: 1px marks persistent structural or functional state (boundaries, floating-layer edges, field focus, field error); 2px is reserved for the transient keyboard-only button focus ring.
 
 ### Sidebar Surface Revision
 
@@ -89,15 +90,16 @@ Composite Sidebar and profile rows use `control_button_content` for whole-contro
 - **Primary** keeps its 10% hover brightness lift; one primary action per section or state.
 - **Text** is the neutral ghost vocabulary: `text.body` content on a transparent background, then `control` fill with `text.heading` content on hover. It belongs to navigation-like, switch-group contexts (sidebar destinations, selector rows). Indigo accent text marks ONLY the active/selected state. Actions never use Text — they are Tonal or Primary.
 - **Sidebar menu actions** opt into a scoped Tonal/Icon Catalog treatment: transparent at rest, neutral hover/press feedback, and minimum 40px hit height. The copy icon has a 40×40 target. This exception avoids a stack of filled buttons in the Account Popover without changing other Tonal controls.
-- **Button focus**: focus rings and focus-triggered hints appear only for keyboard interaction. Pointer presses clear button focus, including presses captured by overlays; pointer-origin dismissal must not create hidden button focus that later reappears. This does not change native text-input focus or caret behavior.
+- **Button focus**: focus rings and focus-triggered hints appear only for keyboard interaction. Pointer presses clear button focus, including presses captured by overlays; pointer-origin dismissal must not create hidden button focus that later reappears. This does not change native text-input focus or caret behavior. The ring is 2px per the outline width rule in Shell Hairlines and Structural Boundaries.
 
 ## Fields, Badges, Overlays
 
 - **Fields**: opaque `control` fill at rest and `controlHover` fill when focused, radius `md`, no idle border by default. Functional feedback remains: `text_input::Status::Focused` draws a 1px `primary` border and an invalid field draws a 1px `error` border. Sidebar structural boundaries are a separate, scoped treatment; they do not replace visible focus or error feedback.
 - **Badges**: opaque container fills (`tertiaryContainer` / `warningContainer` / `surfaceContainerHigh`), radius `md`, no border.
-- **Popover**: defaults to opaque `surfaceContainerHigh`, `raised_high` shadow, radius `lg`, no border. The Account Popover opts into the scoped surface treatment above; other popovers retain their defaults.
+- **Popover**: opaque `surfaceContainerHigh`, `raised_high` shadow, radius `lg`, and the floating-layer 1px `outlineVariant` edge. The Account Popover keeps its scoped Sidebar treatment with the same outline color.
 - **Tooltip**: `raised` shadow, radius `md`, no border. Opt-in Sidebar full-value hints also appear on keyboard focus and wrap long unbroken values within their bounded surface. An open popover suppresses its trigger's hover and focus hints while preserving hints within the popover content.
-- **Toast**: `Raised` role (opaque severity container fill, `raised_high` shadow, radius `lg`). Severity is shown by icon and text color, never by a border.
+- **Toast**: floating-layer treatment (opaque severity container fill, `raised_high` shadow, radius `lg`, 1px `outlineVariant` edge). Severity is shown by icon, text color, and fill — the structural edge is always neutral.
+- **Modal cards** (settings, add-account, confirmation): `Floating` role. Narrow or control-only layouts that render edge-to-edge use `Canvas` and stay borderless.
 
 ## Media Cards
 

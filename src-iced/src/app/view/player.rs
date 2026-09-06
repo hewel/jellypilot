@@ -337,7 +337,7 @@ fn intro_prompt(state: &State) -> Option<Element<'_, Message>> {
     ])
     .padding([TOKENS.spacing.s2, TOKENS.spacing.s3])
     .width(Fill)
-    .style(|theme| jellypilot_ui::theme::surface_variant(theme, SurfaceVariant::Raised))
+    .style(|theme| jellypilot_ui::theme::surface_variant(theme, SurfaceVariant::Floating))
     .into(),
   )
 }

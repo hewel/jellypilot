@@ -464,6 +464,10 @@ pub const TOKENS: DesignTokens = DesignTokens {
 
 /// Rounded Sidebar controls without changing the default control radius.
 pub const SIDEBAR_CONTROL_RADIUS: f32 = 12.0;
+
+/// Inset radius inside a 12 px Sidebar pill with 3 px padding — the concentric
+/// rule (outer radius − padding) for controls nested in the search field.
+pub const SIDEBAR_INSET_RADIUS: f32 = SIDEBAR_CONTROL_RADIUS - 3.0;
 /// Account Popover radius around its 12-pixel inset content.
 pub const ACCOUNT_POPOVER_RADIUS: f32 = 20.0;
 

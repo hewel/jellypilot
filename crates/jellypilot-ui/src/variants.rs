@@ -28,6 +28,9 @@ pub enum SurfaceVariant {
     /// Floating layer (cards, toasts, popovers): opaque
     /// `surfaceContainerHigh`, radius `lg`, `raised_high` shadow.
     Raised,
+    /// Floating layer with a structural outline (modals, toasts, popovers):
+    /// same surface as `Raised` plus a 1px `outlineVariant` border.
+    Floating,
 }
 
 /// Status badge variants.

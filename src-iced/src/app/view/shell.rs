@@ -21,6 +21,7 @@ use jellypilot_ui::widgets::control_button::{control_button, control_button_cont
 use jellypilot_ui::widgets::ellipsis_text::ellipsis_text;
 use jellypilot_ui::widgets::escape_input::clear_on_escape;
 use jellypilot_ui::widgets::inert::inert;
+use jellypilot_ui::widgets::search_field::search_field;
 use jellypilot_ui::widgets::sidebar;
 use jellypilot_ui::widgets::skeleton::skeleton_block;
 pub(crate) const SIDEBAR_WIDTH: f32 = 240.0;
@@ -226,8 +227,8 @@ fn toast_view<'a>(palette: &'static ThemePalette, toast: &'a ToastNotice) -> Ele
       background: Some(iced::Background::Color(bg_color)),
       text_color: Some(text_color),
       border: iced::Border {
-        color: Color::TRANSPARENT,
-        width: 0.0,
+        color: colors.outlineVariant,
+        width: 1.0,
         radius: TOKENS.radii.lg.into(),
       },
       shadow: palette.shadows.raised_high.iced(),
@@ -363,10 +364,10 @@ fn unified_search_field<'a>(
   trigger_id: Option<&'static str>,
 ) -> Element<'a, Message> {
   let leading = control_button(Some(Icon::Search), None, ButtonVariant::Text)
-    .style(sidebar::action)
+    .style(sidebar::search_action)
     .icon_size(IconSize::Sm)
-    .min_height(36.0)
-    .padding([7, 8])
+    .min_height(40.0)
+    .padding([7, 12])
     .on_press(Message::Browse(BrowseMessage::SearchSubmitted));
   let leading = match trigger_id {
     Some(id) => leading.id(id),
@@ -384,7 +385,7 @@ fn unified_search_field<'a>(
     Message::Shell(ShellMessage::ClearSearch),
   );
   let keycap = container(text(platform_search_hint()).size(11))
-    .padding([5, 7])
+    .padding([2, 4])
     .center_x(Length::Fixed(48.0))
     .center_y(Length::Fixed(32.0))
     .style(sidebar::inset);
@@ -393,9 +394,9 @@ fn unified_search_field<'a>(
   } else {
     tooltip(
       control_button(Some(Icon::Close), None, ButtonVariant::Text)
-        .style(sidebar::action)
-        .min_height(32.0)
-        .padding([6, 7])
+        .style(sidebar::search_action)
+        .min_height(40.0)
+        .padding([4, 4])
         .width(Length::Fixed(48.0))
         .content_centered(true)
         .on_press(Message::Shell(ShellMessage::ClearSearch)),
@@ -404,11 +405,7 @@ fn unified_search_field<'a>(
     )
   };
 
-  container(row![leading, input, trailing].align_y(Alignment::Center))
-    .padding(3)
-    .width(Fill)
-    .style(sidebar::search)
-    .into()
+  search_field(leading, input, trailing).into()
 }
 
 fn sidebar_compact(state: &State) -> container::Container<'_, Message> {
@@ -604,7 +601,7 @@ fn settings_modal(state: &State) -> Element<'_, Message> {
       .height(Length::Fixed(
         (state.shell.window_size.height - 48.0).clamp(0.0, 620.0),
       ))
-      .style(|theme| jellypilot_ui::theme::surface_variant(theme, SurfaceVariant::Raised)),
+      .style(|theme| jellypilot_ui::theme::surface_variant(theme, SurfaceVariant::Floating)),
   )
   .width(Fill)
   .height(Fill)

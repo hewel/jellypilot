@@ -10,8 +10,8 @@ pub(super) fn popover_surface(theme: &Theme) -> container::Style {
         text_color: Some(palette.colors.onSurface),
         border: Border {
             radius: TOKENS.radii.lg.into(),
-            color: Color::TRANSPARENT,
-            width: 0.0,
+            color: palette.colors.outlineVariant,
+            width: 1.0,
         },
         shadow: palette.shadows.raised_high.iced(),
         ..container::Style::default()
@@ -35,13 +35,13 @@ pub(super) fn tooltip_surface(theme: &Theme) -> container::Style {
 
 #[cfg(test)]
 mod tests {
-    use iced::{Background, Color};
+    use iced::Background;
 
     use super::{popover_surface, tooltip_surface};
     use crate::tokens::{DARK_PALETTE, TOKENS};
 
     #[test]
-    fn popover_surface_is_an_opaque_borderless_raised_layer() {
+    fn popover_surface_is_an_opaque_outlined_raised_layer() {
         let style = popover_surface(&crate::theme::theme(crate::theme::ThemeMode::Dark));
         match style.background {
             Some(Background::Color(color)) => {
@@ -50,8 +50,8 @@ mod tests {
             }
             other => panic!("expected Color background, got {other:?}"),
         }
-        assert_eq!(style.border.color, Color::TRANSPARENT);
-        assert_eq!(style.border.width, 0.0);
+        assert_eq!(style.border.color, DARK_PALETTE.colors.outlineVariant);
+        assert_eq!(style.border.width, 1.0);
         assert_eq!(
             style.border.radius,
             iced::border::Radius::from(TOKENS.radii.lg)

@@ -13,9 +13,11 @@ pub mod inert;
 pub mod poster_card;
 pub mod rounded_image;
 pub mod scrollable;
+pub mod search_field;
 pub mod sidebar;
 pub mod skeleton;
 
 pub use control_button::{control_button, ControlButton};
 pub use poster_card::{poster_card, PosterCard};
 pub use rounded_image::{card_top_radius, full_radius, rounded_image, RoundedImage};
+pub use search_field::{search_field, SearchField};

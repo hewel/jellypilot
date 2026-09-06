@@ -60,7 +60,7 @@ These treatments belong in jellypilot-ui's semantic tokens and Catalog styles, a
 
 | Region | Geometry and presentation target |
 | --- | --- |
-| Search | Minimum height 36, radius 12; one pale neutral field with leading magnifier and inset shortcut keycap or clear action; no prominent floating shadow |
+| Search | Minimum height 36, radius 12; one pale neutral field with leading magnifier and inset shortcut keycap or clear action; no prominent floating shadow. The whole pill is the field: at rest it carries the 1px `outlineVariant` structural edge over a `control` fill; when its input holds editing focus (pointer or keyboard), the edge becomes 1px `primary` and the fill `controlHover`. The inner input never draws its own ring or background |
 | Personal navigation | Minimum row height 38, radius 12; pale indigo selected fill and clear accent icon/text, without a heavy outline |
 | Library heading | Libraries label on the left, actual count in a separate right-aligned neutral badge; do not use the inline `Libraries · N` treatment |
 | Library rows | Minimum height 32, radius 8; aligned typed icons and names, with independent scrolling |

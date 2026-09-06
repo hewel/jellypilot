@@ -18,28 +18,49 @@ use crate::variants::SurfaceVariant;
 pub fn style(theme: &Theme, variant: SurfaceVariant) -> container::Style {
     let palette = palette(theme);
     let colors = palette.colors;
-    let (background, radius, shadow) = match variant {
-        SurfaceVariant::Canvas => (colors.background, TOKENS.radii.none, Shadow::default()),
+    let (background, shadow, border) = match variant {
+        SurfaceVariant::Canvas => (
+            colors.background,
+            Shadow::default(),
+            Border {
+                radius: TOKENS.radii.none.into(),
+                color: Color::TRANSPARENT,
+                width: 0.0,
+            },
+        ),
         SurfaceVariant::Block => (
             colors.surfaceContainerLowest,
-            TOKENS.radii.none,
             Shadow::default(),
+            Border {
+                radius: TOKENS.radii.none.into(),
+                color: Color::TRANSPARENT,
+                width: 0.0,
+            },
         ),
         SurfaceVariant::Raised => (
             colors.surfaceContainerHigh,
-            TOKENS.radii.lg,
             palette.shadows.raised_high.iced(),
+            Border {
+                radius: TOKENS.radii.lg.into(),
+                color: Color::TRANSPARENT,
+                width: 0.0,
+            },
+        ),
+        SurfaceVariant::Floating => (
+            colors.surfaceContainerHigh,
+            palette.shadows.raised_high.iced(),
+            Border {
+                radius: TOKENS.radii.lg.into(),
+                color: colors.outlineVariant,
+                width: 1.0,
+            },
         ),
     };
 
     container::Style {
         background: Some(Background::Color(background)),
         text_color: Some(colors.onSurface),
-        border: Border {
-            radius: radius.into(),
-            color: Color::TRANSPARENT,
-            width: 0.0,
-        },
+        border,
         shadow,
         ..container::Style::default()
     }
@@ -97,12 +118,27 @@ mod tests {
     }
 
     #[test]
+    fn floating_matches_raised_plus_outline() {
+        let theme = crate::theme::theme(ThemeMode::Dark);
+        let floating = style(&theme, SurfaceVariant::Floating);
+        let raised = style(&theme, SurfaceVariant::Raised);
+
+        assert_eq!(floating.background, raised.background);
+        assert_eq!(floating.shadow, raised.shadow);
+        assert_eq!(floating.border.radius, raised.border.radius);
+        assert_eq!(floating.border.width, 1.0);
+        assert_eq!(floating.border.color, DARK_PALETTE.colors.outlineVariant);
+        assert_eq!(raised.border.width, 0.0);
+    }
+
+    #[test]
     fn all_roles_use_fully_opaque_backgrounds() {
         let theme = crate::theme::theme(ThemeMode::Dark);
         for variant in [
             SurfaceVariant::Canvas,
             SurfaceVariant::Block,
             SurfaceVariant::Raised,
+            SurfaceVariant::Floating,
         ] {
             let style = style(&theme, variant);
             let Some(Background::Color(color)) = style.background else {
