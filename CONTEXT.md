@@ -2,7 +2,7 @@
 
 JellyPilot is a Jellyfin and Emby companion app that presents itself as a controllable Playback Target, browses video libraries, and plays media through a standalone MPV process.
 
-These definitions describe accepted product semantics. Delivery status for the Sidebar, Personal Lists, and account changes is tracked in the [native sidebar specification](docs/sidebar-design-spec.md).
+These definitions describe accepted product semantics. Delivery status for the Sidebar, Personal Lists, and account changes is tracked in the [native sidebar specification](docs/sidebar-design-spec.md); the [Video Home Hero specification](docs/home-hero-design-spec.md) records the carousel design separately from its implementation status.
 
 ## Language
 
@@ -133,6 +133,14 @@ _Avoid_: Settings page, settings destination, dialog popup, drawer, click-outsid
 The Library Browser landing view built from live media-server rows such as Continue Watching, Next Up, latest Movies, latest Episodes, and video library shortcuts. Video Home belongs to the current Profile Scope and is not cached offline.
 _Avoid_: Home page, dashboard mock data
 
+**Continue Watching**:
+The Video Home section for unfinished movies and episodes with a usable resume position. Each entry directly resumes its own item independently of the Featured Item, including when that item is also featured.
+_Avoid_: Next Up, hero selection
+
+**Next Up**:
+The media server's episode-continuation suggestions for the current Profile Scope, distinct from the user's unfinished viewing in Continue Watching. Suggestions can include resumable episodes, so the two sections are not mutually exclusive.
+_Avoid_: Discovery recommendations, guaranteed zero-progress episodes
+
 **Personal Lists**:
 The Library Browser destination, labeled “我的清单”, that presents Favorites and Watchlist as separate sections for the current Profile Scope. Both sections include movies, series, and individual episodes.
 _Avoid_: Cross-server collection, merged favorite/watchlist state
@@ -146,8 +154,12 @@ A viewing plan kept on this device for one Profile Scope, labeled “稍后观�
 _Avoid_: Favorites, unwatched filter, cross-device list
 
 **Featured Item**:
-The Continue Watching item with a resume position that is presented as the Video Home hero; when nothing is resumable, the first Next Up item, then the first item of a later home row. The Featured Item's Backdrop fills the hero background, and its Title Logo (the parent series' Title Logo for episodes) serves as the hero headline. Heroes have no portrait poster slot.
-_Avoid_: Spotlight, hero carousel item
+The media item currently selected for the Video Home hero, with Continue Watching prioritized for the initial selection; choosing a different Featured Item does not start playback or remove its direct-play entry from a home row. The hero uses the Featured Item's Backdrop (the series Backdrop for episodes) as its principal image and its Title Logo (the series Title Logo for episodes) as its headline; heroes have no portrait poster slot.
+_Avoid_: Playback queue item, exclusive resume entry
+
+**Hero Selection Rail**:
+The row of image cards for choosing the Featured Item without starting playback, separate from Continue Watching's direct-resume entries. Candidates place Continue Watching before Next Up, represent each series at most once with a resumable item preferred, and fall back to latest home content only when both continuation sources are empty.
+_Avoid_: Playback queue, Continue Watching
 
 **User Data Action**:
 A user-scoped Jellyfin or Emby mutation for item state such as favorite, unfavorite, mark played, or mark unplayed. User Data Actions update visible Library Browser state only after the server accepts the mutation.

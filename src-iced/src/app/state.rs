@@ -14,6 +14,7 @@ use jellypilot_core::config::{
 };
 use jellypilot_core::detail::DetailContent;
 use jellypilot_core::diagnostics::{DiagnosticCategory, DiagnosticLevel, Diagnostics};
+use jellypilot_core::home_hero::{self, HeroCandidate, HeroSource};
 use jellypilot_core::request_gate::{RemoteToken, RequestGate};
 use jellypilot_core::LoadState;
 use jellypilot_media_server::artwork::{ArtworkAdapter, ArtworkRaster};
@@ -220,6 +221,8 @@ pub struct HomeState {
   pub rows: Vec<HomeRow>,
   pub shortcuts: LoadState<Vec<VideoLibraryShortcut>>,
   pub hovered_card: Option<String>,
+  hero_candidates: Vec<HeroCandidate>,
+  selected_hero_id: Option<String>,
 }
 
 impl Default for HomeState {
@@ -235,6 +238,8 @@ impl Default for HomeState {
       ],
       shortcuts: LoadState::Idle,
       hovered_card: None,
+      hero_candidates: Vec::new(),
+      selected_hero_id: None,
     }
   }
 }
@@ -264,11 +269,13 @@ impl HomeState {
         }
       }
     }
+    self.refresh_hero_candidates();
   }
 
   pub fn settle_latest_rows(&mut self, result: Result<Vec<LibraryLatestRow>, String>) {
     self.rows.truncate(2);
     let Ok(latest_rows) = result else {
+      self.refresh_hero_candidates();
       return;
     };
     self
@@ -280,6 +287,7 @@ impl HomeState {
           row.result.map_or_else(LoadState::Failed, LoadState::Ready),
         )
       }));
+    self.refresh_hero_candidates();
   }
 
   pub fn settle_shortcuts(&mut self, result: Result<Vec<VideoLibraryShortcut>, String>) {
@@ -300,25 +308,61 @@ impl HomeState {
       .filter(|row| row.section == section)
   }
 
+  pub fn hero_candidates(&self) -> impl Iterator<Item = (HomeSection, &VideoLibraryItem)> {
+    self.hero_candidates.iter().filter_map(|candidate| {
+      let section = match candidate.source {
+        HeroSource::ContinueWatching => HomeSection::ContinueWatching,
+        HeroSource::NextUp => HomeSection::NextUp,
+        HeroSource::Latest(index) => HomeSection::Latest(index),
+      };
+      let items = ready_items(&self.row(section)?.items)?;
+      Some((section, items.get(candidate.item_index)?))
+    })
+  }
+
   pub fn featured_item(&self) -> Option<&VideoLibraryItem> {
+    self.featured_candidate().map(|(_, item)| item)
+  }
+
+  pub fn featured_section(&self) -> Option<HomeSection> {
+    self.featured_candidate().map(|(section, _)| section)
+  }
+
+  fn featured_candidate(&self) -> Option<(HomeSection, &VideoLibraryItem)> {
     self
-      .row(HomeSection::ContinueWatching)
-      .and_then(|row| ready_items(&row.items))
-      .and_then(|items| items.iter().find(|item| has_resume_position(item)))
-      .or_else(|| {
-        self
-          .row(HomeSection::NextUp)
-          .and_then(|row| ready_items(&row.items))
-          .and_then(|items| items.first())
-      })
-      .or_else(|| {
-        self
-          .rows
-          .iter()
-          .skip(2)
-          .filter_map(|row| ready_items(&row.items))
-          .find_map(|items| items.first())
-      })
+      .hero_candidates()
+      .find(|(_, item)| Some(item.id.as_str()) == self.selected_hero_id.as_deref())
+      .or_else(|| self.hero_candidates().next())
+  }
+
+  pub fn select_hero(&mut self, item_id: &str) -> Option<usize> {
+    let index = self
+      .hero_candidates()
+      .position(|(_, item)| item.id == item_id)?;
+    if self.selected_hero_id.as_deref() != Some(item_id) {
+      self.selected_hero_id = Some(item_id.to_owned());
+    }
+    Some(index)
+  }
+
+  fn refresh_hero_candidates(&mut self) {
+    self.hero_candidates = home_hero::candidates(
+      &self.rows[HomeSection::ContinueWatching.index()].items,
+      &self.rows[HomeSection::NextUp.index()].items,
+      self.rows.iter().skip(2).map(|row| &row.items),
+    );
+  }
+
+  /// Reconcile only after the complete Home response has replaced its sources.
+  /// A selected item may move from continuation into the latest-content fallback.
+  pub fn reconcile_hero_selection(&mut self) {
+    let selected = home_hero::retained_selection(
+      self.selected_hero_id.as_deref(),
+      self.hero_candidates().map(|(_, item)| item),
+    );
+    if selected != self.selected_hero_id.as_deref() {
+      self.selected_hero_id = selected.map(str::to_owned);
+    }
   }
 
   pub fn has_ready_content(&self) -> bool {
@@ -333,17 +377,6 @@ fn ready_items(state: &LoadState<Vec<VideoLibraryItem>>) -> Option<&[VideoLibrar
     LoadState::Ready(items) => Some(items),
     LoadState::Idle | LoadState::Loading | LoadState::Failed(_) => None,
   }
-}
-
-pub fn has_resume_position(item: &VideoLibraryItem) -> bool {
-  !item.played
-    && item.resume_position_seconds.is_some_and(|position| {
-      position.is_finite()
-        && position > 0.0
-        && item
-          .runtime_seconds
-          .is_none_or(|runtime| !runtime.is_finite() || runtime <= 0.0 || position < runtime)
-    })
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -365,6 +398,7 @@ pub struct HomeArtwork {
   hero: Option<(String, ArtworkCell)>,
   hero_backdrop: Option<(String, ArtworkCell)>,
   sections: Vec<HashMap<String, ArtworkCell>>,
+  selection: HashMap<String, ArtworkCell>,
 }
 
 impl HomeArtwork {
@@ -380,6 +414,18 @@ impl HomeArtwork {
       self.sections.resize_with(section.index() + 1, HashMap::new);
     }
     self.sections[section.index()].insert(item_id, cell);
+  }
+
+  pub fn insert_selection(&mut self, item_id: String, cell: ArtworkCell) {
+    self.selection.insert(item_id, cell);
+  }
+
+  pub fn selection_card(&self, section: HomeSection, item_id: &str) -> Option<&ArtworkCell> {
+    if section.is_latest() {
+      self.selection.get(item_id)
+    } else {
+      self.card(section, item_id)
+    }
   }
 
   pub fn hero(&self, item_id: &str) -> Option<&ArtworkCell> {
@@ -416,6 +462,7 @@ impl HomeArtwork {
       .sections
       .iter_mut()
       .flat_map(HashMap::values_mut)
+      .chain(self.selection.values_mut())
       .find(|cell| cell.slot == slot && cell.image_id == image_id)
   }
 
@@ -426,6 +473,7 @@ impl HomeArtwork {
       .map(|(_, cell)| cell.slot)
       .into_iter()
       .chain(self.hero_backdrop.as_ref().map(|(_, cell)| cell.slot))
+      .chain(self.selection.values().map(|cell| cell.slot))
       .chain(
         self
           .sections
@@ -440,6 +488,7 @@ impl HomeArtwork {
     hero_item_id: Option<&str>,
     hero_backdrop_item_id: Option<&str>,
     section_item_ids: &[HashSet<&str>],
+    selection_item_ids: &HashSet<&str>,
   ) {
     if let Some((bound_item_id, _)) = &self.hero {
       if hero_item_id != Some(bound_item_id.as_str()) {
@@ -455,6 +504,9 @@ impl HomeArtwork {
     for (section, allowed) in self.sections.iter_mut().zip(section_item_ids) {
       section.retain(|item_id, _| allowed.contains(item_id.as_str()));
     }
+    self
+      .selection
+      .retain(|item_id, _| selection_item_ids.contains(item_id.as_str()));
   }
 
   pub fn prune_unready(&mut self) {
@@ -471,6 +523,9 @@ impl HomeArtwork {
     for section in &mut self.sections {
       section.retain(|_, cell| cell.state == ArtworkCellState::Ready);
     }
+    self
+      .selection
+      .retain(|_, cell| cell.state == ArtworkCellState::Ready);
   }
 
   pub fn has_loading(&self) -> bool {
@@ -486,6 +541,7 @@ impl HomeArtwork {
         .sections
         .iter()
         .flat_map(HashMap::values)
+        .chain(self.selection.values())
         .any(|cell| cell.state == ArtworkCellState::Loading)
   }
 }

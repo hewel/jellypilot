@@ -93,8 +93,7 @@ impl ArtworkLimits {
   #[must_use]
   pub fn normalized(mut self) -> Self {
     self.max_active_loads = self.max_active_loads.max(1);
-    // A normalized custom budget must admit one maximum-sized Backdrop band;
-    // ordinary stripless loads still reserve only their actual load shape.
+    // A normalized custom budget must admit one maximum-sized Backdrop band.
     let max_backdrop_load = self
       .load_reservation_bytes(ArtworkSizeClass::Backdrop)
       .saturating_add(ArtworkSizeClass::Backdrop.max_frosted_strip_bytes());
@@ -492,8 +491,8 @@ impl ArtworkRaster {
 }
 
 /// Derived raster variants baked alongside the main decode. Part of the cache
-/// and coalescing identity: plain, strip-bearing, and shadow-bearing rasters
-/// of the same image coexist independently.
+/// and coalescing identity: strip-bearing and shadow-bearing variants of the
+/// same image coexist independently.
 #[derive(Clone, Copy, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub struct DerivedArtwork {
   /// Frosted strip baked from the source (progress bars, hero bands).
@@ -2214,18 +2213,31 @@ mod tests {
   }
 
   #[test]
-  fn normalized_budget_admits_one_maximum_backdrop_band() {
+  fn normalized_budget_admits_a_maximum_backdrop_band() {
     let limits = ArtworkLimits {
       max_active_bytes: 0,
       ..ArtworkLimits::default()
     }
     .normalized();
+    let (width, height) = ArtworkSizeClass::Backdrop.target_box();
+    let derived = DerivedArtwork {
+      frosted_strip: Some(FrostedStripSpec {
+        frame_width: width,
+        frame_height: height,
+        bar_height: height,
+        corner_radius: 0,
+      }),
+      ..DerivedArtwork::default()
+    };
+    let mut scheduler = LoadScheduler::default();
+    let (queued, _) = scheduler.enqueue(LoadLane::Visible);
 
-    assert_eq!(
+    assert!(scheduler.try_activate(
+      queued,
+      limits.max_active_loads,
       limits.max_active_bytes,
-      limits.load_reservation_bytes(ArtworkSizeClass::Backdrop)
-        + ArtworkSizeClass::Backdrop.max_frosted_strip_bytes()
-    );
+      limits.load_reservation_bytes_with_derived(ArtworkSizeClass::Backdrop, derived),
+    ));
   }
 
   #[test]

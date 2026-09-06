@@ -48,6 +48,15 @@ pub fn update(
     // destination stack and drives the other surfaces' leave/enter hooks.
     HomeMessage::Navigate(_) => Task::none(),
     HomeMessage::Retry => start_load(surface, kernel, playback_idle),
+    HomeMessage::HeroSelected(item_id) => {
+      let Some(index) = surface.data.select_hero(&item_id) else {
+        return Task::none();
+      };
+      Task::batch([
+        prepare_artwork(surface, kernel, window_width),
+        super::view::home::reveal_hero_selection(index),
+      ])
+    }
     HomeMessage::CardHoverEnter(item_id) => {
       surface.data.hovered_card = Some(item_id);
       Task::none()
@@ -193,6 +202,7 @@ fn settle(
   if !latest_failed || !latest_ready {
     data.settle_latest_rows(latest_rows);
   }
+  data.reconcile_hero_selection();
   true
 }
 
@@ -214,6 +224,7 @@ enum ArtworkPlacement {
   Hero,
   HeroBackdrop,
   Card(HomeSection),
+  Selection(HomeSection),
 }
 
 struct ArtworkLoadSpec {
@@ -228,7 +239,7 @@ impl ArtworkLoadSpec {
     match self.placement {
       ArtworkPlacement::Hero => ArtworkSizeClass::Hero,
       ArtworkPlacement::HeroBackdrop => ArtworkSizeClass::Backdrop,
-      ArtworkPlacement::Card(_) => ArtworkSizeClass::Card,
+      ArtworkPlacement::Card(_) | ArtworkPlacement::Selection(_) => ArtworkSizeClass::Card,
     }
   }
 
@@ -268,14 +279,22 @@ fn prepare_artwork(surface: &mut Surface, kernel: &mut Kernel, window_width: f32
   let mut section_item_ids = (0..surface.data.rows().len())
     .map(|_| HashSet::new())
     .collect::<Vec<HashSet<&str>>>();
+  let selection_item_ids = specs
+    .iter()
+    .filter(|spec| matches!(spec.placement, ArtworkPlacement::Selection(_)))
+    .map(|spec| spec.item_id.as_str())
+    .collect::<HashSet<_>>();
   for spec in &specs {
     if let ArtworkPlacement::Card(section) = spec.placement {
       section_item_ids[section.index()].insert(spec.item_id.as_str());
     }
   }
-  surface
-    .artwork
-    .retain_items(hero_item_id, hero_backdrop_item_id, &section_item_ids);
+  surface.artwork.retain_items(
+    hero_item_id,
+    hero_backdrop_item_id,
+    &section_item_ids,
+    &selection_item_ids,
+  );
 
   let session = kernel.request_gate.current_session();
   let Some(client) = kernel.client.as_ref().map(Arc::clone) else {
@@ -291,6 +310,9 @@ fn prepare_artwork(surface: &mut Surface, kernel: &mut Kernel, window_width: f32
       ArtworkPlacement::Hero => surface.artwork.hero(&spec.item_id),
       ArtworkPlacement::HeroBackdrop => surface.artwork.hero_backdrop(&spec.item_id),
       ArtworkPlacement::Card(section) => surface.artwork.card(section, &spec.item_id),
+      ArtworkPlacement::Selection(section) => {
+        surface.artwork.selection_card(section, &spec.item_id)
+      }
     };
     if let Some(cell) = existing_cell {
       if cell.image_id == spec.image_id {
@@ -329,6 +351,7 @@ fn prepare_artwork(surface: &mut Surface, kernel: &mut Kernel, window_width: f32
         ArtworkPlacement::Card(section) => {
           surface.artwork.insert_card(section, spec.item_id, cell);
         }
+        ArtworkPlacement::Selection(_) => surface.artwork.insert_selection(spec.item_id, cell),
       }
       continue;
     }
@@ -348,6 +371,7 @@ fn prepare_artwork(surface: &mut Surface, kernel: &mut Kernel, window_width: f32
       ArtworkPlacement::Card(section) => {
         surface.artwork.insert_card(section, spec.item_id, cell);
       }
+      ArtworkPlacement::Selection(_) => surface.artwork.insert_selection(spec.item_id, cell),
     }
     load_specs.push(PlannedArtworkLoad {
       slot,
@@ -380,13 +404,14 @@ fn artwork_specs(data: &HomeState, window_width: f32) -> Vec<ArtworkLoadSpec> {
   let featured_item = data.featured_item();
   if let Some(item) = featured_item {
     push_artwork_spec(&mut specs, ArtworkPlacement::Hero, item, true);
-    // Fall back to the item's own artwork (the episode still or movie poster)
-    // when the server carries no backdrop, mirroring the action-card chain,
-    // so the hero never settles empty.
-    let hero_backdrop = item
-      .backdrop_image_id
-      .as_deref()
-      .or(item.artwork_image_id.as_deref());
+    let hero_backdrop = if item.item_type.eq_ignore_ascii_case("Episode") {
+      item
+        .series_backdrop_image_id
+        .as_deref()
+        .or(item.backdrop_image_id.as_deref())
+    } else {
+      item.backdrop_image_id.as_deref()
+    };
     if let Some(image_id) = hero_backdrop {
       specs.push(ArtworkLoadSpec {
         placement: ArtworkPlacement::HeroBackdrop,
@@ -396,18 +421,13 @@ fn artwork_specs(data: &HomeState, window_width: f32) -> Vec<ArtworkLoadSpec> {
       });
     }
   }
-  let featured_item_id = featured_item.map(|item| item.id.as_str());
   let class = SizeClass::from_width(window_width);
   let content_width = content_width(window_width, class);
   for row in data.rows() {
     if let jellypilot_core::LoadState::Ready(items) = &row.items {
       let (card_width, _) = section_frame_size(row.section);
       let visible_cards = visible_row_cards(content_width, card_width, TOKENS.spacing.s4);
-      for (index, item) in items
-        .iter()
-        .filter(|item| Some(item.id.as_str()) != featured_item_id)
-        .enumerate()
-      {
+      for (index, item) in items.iter().enumerate() {
         push_artwork_spec(
           &mut specs,
           ArtworkPlacement::Card(row.section),
@@ -415,6 +435,11 @@ fn artwork_specs(data: &HomeState, window_width: f32) -> Vec<ArtworkLoadSpec> {
           index < visible_cards,
         );
       }
+    }
+  }
+  for (section, item) in data.hero_candidates() {
+    if section.is_latest() {
+      push_artwork_spec(&mut specs, ArtworkPlacement::Selection(section), item, true);
     }
   }
   specs
@@ -442,26 +467,29 @@ fn artwork_image_id(placement: ArtworkPlacement, item: &VideoLibraryItem) -> Opt
     ArtworkPlacement::HeroBackdrop => {
       unreachable!("hero backdrop artwork specs are built from backdrop_image_id directly")
     }
-    ArtworkPlacement::Card(section) if section.is_action() => {
-      if item.item_type.eq_ignore_ascii_case("Episode") {
-        item
-          .artwork_image_id
-          .as_deref()
-          .or(item.episode_thumb_image_id.as_deref())
-          .or(item.series_thumb_image_id.as_deref())
-          .or(item.series_backdrop_image_id.as_deref())
-      } else {
-        item
-          .backdrop_image_id
-          .as_deref()
-          .or(item.artwork_image_id.as_deref())
-      }
-    }
+    ArtworkPlacement::Card(section) if section.is_action() => landscape_image_id(item),
+    ArtworkPlacement::Selection(_) => landscape_image_id(item),
     ArtworkPlacement::Card(_) if item.item_type.eq_ignore_ascii_case("Episode") => item
       .season_poster_image_id
       .as_deref()
       .or(item.series_poster_image_id.as_deref()),
     ArtworkPlacement::Card(_) => item.artwork_image_id.as_deref(),
+  }
+}
+
+fn landscape_image_id(item: &VideoLibraryItem) -> Option<&str> {
+  if item.item_type.eq_ignore_ascii_case("Episode") {
+    item
+      .artwork_image_id
+      .as_deref()
+      .or(item.episode_thumb_image_id.as_deref())
+      .or(item.series_thumb_image_id.as_deref())
+      .or(item.series_backdrop_image_id.as_deref())
+  } else {
+    item
+      .backdrop_image_id
+      .as_deref()
+      .or(item.artwork_image_id.as_deref())
   }
 }
 
@@ -537,6 +565,158 @@ mod tests {
       series_continuing: false,
       unplayed_item_count: None,
     }
+  }
+
+  #[test]
+  fn manual_hero_selection_survives_refresh_and_ignores_previous_artwork_completion() {
+    let (mut surface, mut kernel) = test_fixture();
+    kernel.client = Some(Arc::new(JellyfinClient::new()));
+    let mut a = episode("a", 1);
+    a.series_id = Some("series-a".to_owned());
+    a.resume_position_seconds = Some(120.0);
+    a.series_backdrop_image_id = Some("backdrop-a".to_owned());
+    let mut b = episode("b", 1);
+    b.series_id = Some("series-b".to_owned());
+    b.resume_position_seconds = Some(360.0);
+    b.series_backdrop_image_id = Some("backdrop-b".to_owned());
+    surface
+      .data
+      .settle_video_home(Ok(jellypilot_media_server::VideoHome {
+        continue_watching: vec![a.clone(), b.clone()],
+        next_up: Vec::new(),
+      }));
+    drop(prepare_artwork(&mut surface, &mut kernel, WINDOW_WIDTH));
+    let old = surface
+      .artwork
+      .hero_backdrop("a")
+      .expect("initial backdrop")
+      .clone();
+
+    drop(update(
+      &mut surface,
+      &mut kernel,
+      PLAYBACK_IDLE,
+      WINDOW_WIDTH,
+      HomeMessage::HeroSelected("b".to_owned()),
+    ));
+    apply_artwork_completion(
+      &mut surface,
+      &mut kernel,
+      true,
+      ArtworkLoadCompletion {
+        slot: old.slot,
+        image_id: old.image_id,
+        result: Ok(
+          jellypilot_media_server::artwork::ArtworkRaster::from_raw_for_test(
+            1,
+            1,
+            vec![255, 0, 0, 255],
+          ),
+        ),
+      },
+    );
+    assert!(surface.artwork.hero_backdrop("a").is_none());
+    let current = surface
+      .artwork
+      .hero_backdrop("b")
+      .expect("selected backdrop");
+    assert!(kernel
+      .artwork_handles
+      .get(current.slot, &current.image_id)
+      .is_none());
+    assert_eq!(
+      surface.data.featured_item().map(|item| item.id.as_str()),
+      Some("b")
+    );
+
+    let token = kernel.request_gate.begin_home();
+    assert!(settle(
+      &mut surface.data,
+      &mut kernel.request_gate,
+      token,
+      (
+        Ok(jellypilot_media_server::VideoHome {
+          continue_watching: vec![b, a],
+          next_up: Vec::new(),
+        }),
+        Ok(Vec::new()),
+        Ok(Vec::new()),
+      ),
+    ));
+    assert_eq!(
+      surface.data.featured_item().map(|item| item.id.as_str()),
+      Some("b")
+    );
+    assert!(matches!(
+      &surface.data.rows()[HomeSection::ContinueWatching.index()].items,
+      jellypilot_core::LoadState::Ready(items) if items.iter().any(|item| item.id == "a")
+    ));
+  }
+
+  #[test]
+  fn selected_identity_survives_moving_between_home_sources_in_one_response() {
+    let mut home = HomeState::default();
+    let mut gate = RequestGate::default();
+    let mut a = episode("a", 1);
+    a.item_type = "Movie".to_owned();
+    let mut b = episode("b", 1);
+    b.item_type = "Movie".to_owned();
+    b.resume_position_seconds = Some(120.0);
+    let mut c = episode("c", 1);
+    c.item_type = "Movie".to_owned();
+    let latest = |items| {
+      vec![jellypilot_media_server::LibraryLatestRow {
+        library_id: "movies".to_owned(),
+        library_name: "Movies".to_owned(),
+        result: Ok(items),
+      }]
+    };
+    let token = gate.begin_home();
+    assert!(settle(
+      &mut home,
+      &mut gate,
+      token,
+      (
+        Ok(jellypilot_media_server::VideoHome {
+          continue_watching: vec![b.clone()],
+          next_up: Vec::new(),
+        }),
+        Ok(Vec::new()),
+        Ok(latest(vec![a.clone()])),
+      )
+    ));
+    home.select_hero("b").expect("resumable candidate");
+    let token = gate.begin_home();
+    assert!(settle(
+      &mut home,
+      &mut gate,
+      token,
+      (
+        Ok(jellypilot_media_server::VideoHome {
+          continue_watching: Vec::new(),
+          next_up: Vec::new(),
+        }),
+        Ok(Vec::new()),
+        Ok(latest(vec![c.clone(), b, a.clone()])),
+      )
+    ));
+    assert_eq!(home.featured_item().map(|item| item.id.as_str()), Some("b"));
+
+    let token = gate.begin_home();
+    assert!(settle(
+      &mut home,
+      &mut gate,
+      token,
+      (
+        Ok(jellypilot_media_server::VideoHome {
+          continue_watching: Vec::new(),
+          next_up: Vec::new(),
+        }),
+        Ok(Vec::new()),
+        Ok(latest(vec![c, a])),
+      )
+    ));
+    assert_eq!(home.featured_item().map(|item| item.id.as_str()), Some("c"));
   }
 
   #[test]
@@ -712,30 +892,6 @@ mod tests {
       .expect("refetched handle exists")
       .id();
     assert_eq!(initial_handle_id, refetch_handle_id);
-  }
-
-  #[test]
-  fn hero_backdrop_falls_back_to_primary_artwork_when_backdrop_is_missing() {
-    let (mut surface, mut kernel) = test_fixture();
-    kernel.client = Some(Arc::new(JellyfinClient::new()));
-    let mut item = episode("item-1", 1);
-    item.resume_position_seconds = Some(120.0);
-    item.artwork_image_id = Some("art-1".to_owned());
-    surface
-      .data
-      .settle_video_home(Ok(jellypilot_media_server::VideoHome {
-        continue_watching: vec![item],
-        next_up: Vec::new(),
-      }));
-    surface.data.settle_shortcuts(Ok(Vec::new()));
-
-    drop(prepare_artwork(&mut surface, &mut kernel, WINDOW_WIDTH));
-
-    let cell = surface
-      .artwork
-      .hero_backdrop("item-1")
-      .expect("hero backdrop cell exists");
-    assert_eq!(cell.image_id, "art-1");
   }
 
   #[test]

@@ -135,6 +135,7 @@ pub type ArtworkLoadCompletion =
 pub enum HomeMessage {
   Navigate(super::state::Destination),
   Retry,
+  HeroSelected(String),
   CardHoverEnter(String),
   CardHoverExit(String),
   Loaded {

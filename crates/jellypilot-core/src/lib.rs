@@ -17,6 +17,8 @@ pub mod config;
 #[cfg(feature = "native")]
 pub mod detail;
 pub mod diagnostics;
+#[cfg(feature = "native")]
+pub mod home_hero;
 mod load_state;
 #[cfg(feature = "native")]
 pub mod logs;

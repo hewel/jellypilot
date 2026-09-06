@@ -330,7 +330,10 @@ pub fn update(state: &mut State, message: Message) -> Task<Message> {
       let Some(full) = state.full.as_mut() else {
         return Task::none();
       };
-      let reprepared_artwork = matches!(message, HomeMessage::Loaded { .. });
+      let reprepared_artwork = matches!(
+        message,
+        HomeMessage::Loaded { .. } | HomeMessage::HeroSelected(_)
+      );
       let task = home::update(
         &mut full.home,
         &mut state.kernel,
@@ -885,6 +888,437 @@ mod tests {
       end_year: None,
       series_continuing: false,
       unplayed_item_count: None,
+    }
+  }
+
+  #[tokio::test]
+  async fn hero_selection_and_visible_resume_cards_have_independent_keyboard_actions() {
+    use iced::advanced::{clipboard, renderer::Headless, widget};
+    use iced::futures::StreamExt;
+    use iced::{keyboard, mouse, Event, Font, Rectangle, Size};
+    use iced_runtime::user_interface::{Cache, UserInterface};
+
+    struct FindControl {
+      id: widget::Id,
+      bounds: Option<Rectangle>,
+      rail: Option<(Rectangle, iced::Vector)>,
+      page: Option<Rectangle>,
+      background: Option<Rectangle>,
+      captions: Vec<Rectangle>,
+      hero_text: Vec<Rectangle>,
+      hero_controls: Vec<Rectangle>,
+    }
+    impl widget::Operation for FindControl {
+      fn traverse(&mut self, visit: &mut dyn FnMut(&mut dyn widget::Operation)) {
+        visit(self);
+      }
+      fn container(&mut self, id: Option<&widget::Id>, bounds: Rectangle) {
+        if id == Some(&widget::Id::new("home-backdrop")) {
+          self.background = Some(bounds);
+        }
+      }
+      fn focusable(
+        &mut self,
+        id: Option<&widget::Id>,
+        bounds: Rectangle,
+        _state: &mut dyn widget::operation::Focusable,
+      ) {
+        if id == Some(&self.id) {
+          self.bounds = Some(bounds);
+        }
+        if [
+          "home-hero-play",
+          "home-hero-details",
+          "home-hero-rail-prev",
+          "home-hero-rail-next",
+        ]
+        .iter()
+        .any(|name| id == Some(&widget::Id::new(name)))
+        {
+          self.hero_controls.push(bounds);
+        }
+      }
+      fn scrollable(
+        &mut self,
+        id: Option<&widget::Id>,
+        bounds: Rectangle,
+        _content: Rectangle,
+        translation: iced::Vector,
+        _state: &mut dyn widget::operation::Scrollable,
+      ) {
+        if id == Some(&widget::Id::new("home-hero-rail")) {
+          self.rail = Some((bounds, translation));
+        } else if id == Some(&widget::Id::new("home-page")) {
+          self.page = Some(bounds);
+          assert_eq!(translation.y, 0.0, "selection must not scroll the page");
+        }
+      }
+      fn text(&mut self, _id: Option<&widget::Id>, bounds: Rectangle, text: &str) {
+        if text.starts_with("A long series") || text == "S1:E1 - Episode A" {
+          self.captions.push(bounds);
+        }
+        if text.starts_with("B long series") || text.contains("Episode B") {
+          self.hero_text.push(bounds);
+        }
+      }
+    }
+    impl FindControl {
+      fn new(id: &'static str) -> Self {
+        Self {
+          id: widget::Id::new(id),
+          bounds: None,
+          rail: None,
+          page: None,
+          background: None,
+          captions: Vec::new(),
+          hero_text: Vec::new(),
+          hero_controls: Vec::new(),
+        }
+      }
+
+      fn assert_selected_visible(&self) {
+        let card = self.bounds.expect("selected rail control");
+        let (rail, translation) = self.rail.expect("selection rail");
+        let x = card.x - translation.x;
+        assert!(
+          x >= rail.x && x + card.width <= rail.x + rail.width,
+          "selected card is clipped: {card:?}, rail {rail:?}, offset {translation:?}"
+        );
+        let page = self.page.expect("Home viewport");
+        for control in &self.hero_controls {
+          assert!(
+            control.x >= page.x
+              && control.y >= page.y
+              && control.x + control.width <= page.x + page.width
+              && control.y + control.height <= page.y + page.height,
+            "Hero control outside the viewport: {control:?}, page {page:?}"
+          );
+        }
+        for text in self
+          .hero_text
+          .iter()
+          .filter(|text| text.y < rail.y + rail.height)
+        {
+          for control in self.hero_controls.iter().chain(std::iter::once(&rail)) {
+            assert!(
+              text.x + text.width <= control.x
+                || text.x >= control.x + control.width
+                || text.y + text.height <= control.y
+                || text.y >= control.y + control.height,
+              "Hero identification overlaps a control: {text:?}, control {control:?}"
+            );
+          }
+        }
+      }
+    }
+
+    async fn apply_widgets(
+      task: Task<Message>,
+      ui: &mut UserInterface<'_, Message, iced::Theme, iced::Renderer>,
+      renderer: &iced::Renderer,
+    ) {
+      if let Some(mut stream) = iced_runtime::task::into_stream(task) {
+        while let Some(action) = stream.next().await {
+          if let iced_runtime::Action::Widget(mut operation) = action {
+            loop {
+              ui.operate(renderer, operation.as_mut());
+              match operation.finish() {
+                widget::operation::Outcome::Chain(next) => operation = next,
+                _ => break,
+              }
+            }
+          }
+        }
+      }
+    }
+    fn key(key: keyboard::key::Named) -> Event {
+      Event::Keyboard(keyboard::Event::KeyPressed {
+        key: keyboard::Key::Named(key),
+        modified_key: keyboard::Key::Named(key),
+        physical_key: keyboard::key::Physical::Code(keyboard::key::Code::Enter),
+        location: keyboard::Location::Standard,
+        modifiers: keyboard::Modifiers::NONE,
+        text: None,
+        repeat: false,
+      })
+    }
+    let mut renderer = iced::Renderer::new(Font::DEFAULT, 14.0.into(), Some("tiny-skia"))
+      .await
+      .expect("software renderer");
+    for (bounds, with_player, with_prompt) in [
+      (Size::new(1024.0, 640.0), false, false),
+      (Size::new(1024.0, 640.0), true, false),
+      (Size::new(1024.0, 640.0), true, true),
+      (Size::new(1760.0, 900.0), false, false),
+      (Size::new(1760.0, 900.0), true, false),
+      (Size::new(1760.0, 900.0), true, true),
+    ] {
+      let mut state = test_state();
+      state.kernel.connection = ConnectionPhase::Connected;
+      state.shell.window_size = bounds;
+      state.playback.view.engine_available = true;
+      let mut a = episode("a", 1);
+      a.series_id = Some("series-a".to_owned());
+      a.resume_position_seconds = Some(120.0);
+      a.name = "Episode A".to_owned();
+      a.series_name =
+        Some("A long series title that must remain identifiable in a compact window".to_owned());
+      let mut b = episode("b", 1);
+      b.series_id = Some("series-b".to_owned());
+      b.resume_position_seconds = Some(360.0);
+      b.name = "Episode B".to_owned();
+      b.series_name = Some("B long series title with many words that must not expand the selection card or cover the playback controls".to_owned());
+      let mut candidates = vec![a];
+      candidates.extend((0..8).map(|index| {
+        let mut candidate = episode(&format!("filler-{index}"), 1);
+        candidate.series_id = Some(format!("series-{index}"));
+        candidate.resume_position_seconds = Some(120.0);
+        candidate
+      }));
+      candidates.push(b);
+      state
+        .full
+        .as_mut()
+        .expect("Full mode")
+        .home
+        .data
+        .settle_video_home(Ok(jellypilot_media_server::VideoHome {
+          continue_watching: candidates,
+          next_up: Vec::new(),
+        }));
+      if with_player {
+        state.playback.view.now_playing = Some(jellypilot_mpv::playback_session::NowPlayingView {
+          item: jellypilot_mpv::playback::NowPlayingItem {
+            item_id: "another".to_owned(),
+            title: "Another movie".to_owned(),
+            item_type: "Movie".to_owned(),
+            runtime_seconds: Some(2400.0),
+            start_position_seconds: 0.0,
+            play_method: "DirectPlay".to_owned(),
+          },
+          paused: false,
+          position_seconds: 120.0,
+          duration_seconds: Some(2400.0),
+          volume: 85.0,
+          muted: false,
+        });
+      }
+      if with_prompt {
+        state.playback.view.intro_prompt =
+          Some(jellypilot_mpv::playback_session::IntroPromptView {
+            kind: jellypilot_session::IntroSkipKind::Introduction,
+          });
+      }
+      let window = iced::window::Id::unique();
+      let mut ui = UserInterface::build(
+        crate::app::view(&state, window),
+        bounds,
+        Cache::new(),
+        &mut renderer,
+      );
+      let mut messages = Vec::new();
+      ui.update(
+        &[key(keyboard::key::Named::Tab)],
+        mouse::Cursor::Unavailable,
+        &mut renderer,
+        &mut clipboard::Null,
+        &mut messages,
+      );
+      ui.operate(
+        &renderer,
+        &mut widget::operation::focusable::focus::<()>(widget::Id::new("home-hero-rail-card-b")),
+      );
+      ui.update(
+        &[key(keyboard::key::Named::Enter)],
+        mouse::Cursor::Unavailable,
+        &mut renderer,
+        &mut clipboard::Null,
+        &mut messages,
+      );
+      assert!(
+        matches!(
+          messages.as_slice(),
+          [Message::Home(HomeMessage::HeroSelected(id))] if id == "b"
+        ),
+        "unexpected rail action: {messages:?}, window {bounds:?}, player {with_player}"
+      );
+      let selected = messages.pop().expect("selection action");
+      let cache = ui.into_cache();
+      let selection_task = update(&mut state, selected);
+      assert_eq!(
+        state
+          .full
+          .as_ref()
+          .expect("Full mode")
+          .home
+          .data
+          .featured_item()
+          .map(|item| item.id.as_str()),
+        Some("b"),
+      );
+      let mut ui = UserInterface::build(
+        crate::app::view(&state, window),
+        bounds,
+        cache,
+        &mut renderer,
+      );
+      apply_widgets(selection_task, &mut ui, &renderer).await;
+      let mut selected_geometry = FindControl::new("home-hero-rail-card-b");
+      ui.operate(&renderer, &mut selected_geometry);
+      selected_geometry.assert_selected_visible();
+      let mut before_artwork = FindControl::new("home-card-play-0-a");
+      ui.operate(&renderer, &mut before_artwork);
+      let resume_before_artwork = before_artwork.bounds.expect("resume before backdrop");
+
+      // An uncached Backdrop settling must not reset the rail's scroll or focus.
+      let cache = ui.into_cache();
+      let slot = state
+        .kernel
+        .artwork_binder
+        .bind(jellypilot_core::artwork_binder::ArtworkSurface::Home);
+      state
+        .full
+        .as_mut()
+        .expect("Full mode")
+        .home
+        .artwork
+        .insert_hero_backdrop(
+          "b".to_owned(),
+          crate::app::state::ArtworkCell {
+            slot,
+            image_id: "backdrop-b".to_owned(),
+            state: crate::app::state::ArtworkCellState::Ready,
+          },
+        );
+      let (image_width, image_height) = if with_prompt {
+        (9_u32, 16_u32)
+      } else {
+        (16, 9)
+      };
+      state.kernel.artwork_handles.insert(
+        slot,
+        "backdrop-b".to_owned(),
+        crate::app::state::ArtworkHandles::from_raster(
+          jellypilot_media_server::artwork::ArtworkRaster::from_raw_for_test(
+            image_width,
+            image_height,
+            [120, 180, 210, 255].repeat((image_width * image_height) as usize),
+          ),
+        ),
+      );
+      let mut ui = UserInterface::build(
+        crate::app::view(&state, window),
+        bounds,
+        cache,
+        &mut renderer,
+      );
+      let mut settled_geometry = FindControl::new("home-hero-rail-card-b");
+      ui.operate(&renderer, &mut settled_geometry);
+      settled_geometry.assert_selected_visible();
+      ui.draw(
+        &mut renderer,
+        &iced::Theme::Dark,
+        &iced::advanced::renderer::Style::default(),
+        mouse::Cursor::Unavailable,
+      );
+      ui.update(
+        &[key(keyboard::key::Named::Enter)],
+        mouse::Cursor::Unavailable,
+        &mut renderer,
+        &mut clipboard::Null,
+        &mut messages,
+      );
+      assert!(
+        matches!(messages.as_slice(),
+          [Message::Home(HomeMessage::HeroSelected(id))] if id == "b"
+        ),
+        "artwork settlement must preserve selection focus"
+      );
+      messages.clear();
+      let mut query = FindControl::new("home-card-play-0-a");
+      ui.operate(&renderer, &mut query);
+      let card = query.bounds.expect("independent resume control");
+      let page = query.page.expect("Home viewport");
+      assert_eq!(
+        card, resume_before_artwork,
+        "backdrop must not move the resume row"
+      );
+      let background = query.background.expect("ready backdrop");
+      assert_eq!(background.x, page.x, "backdrop must start at the page edge");
+      assert_eq!(background.y, page.y, "backdrop must start at the page top");
+      assert_eq!(
+        background.width, page.width,
+        "backdrop must span the full page width"
+      );
+      assert!(
+        (background.height / background.width - image_height as f32 / image_width as f32).abs()
+          < 0.0001,
+        "backdrop aspect changed: {background:?}, source {image_width}x{image_height}"
+      );
+      let caption_bottom = query
+        .captions
+        .iter()
+        .map(|text| text.y + text.height)
+        .fold(0.0_f32, f32::max);
+      assert!(caption_bottom <= page.y + page.height,
+        "Continue Watching titles clipped: bottom {caption_bottom}, viewport {page:?}, prompt {with_prompt}");
+      assert!(
+        card.x >= page.x
+          && card.y >= page.y
+          && card.x + card.width <= page.x + page.width
+          && card.y + card.height <= page.y + page.height,
+        "resume target outside first screen: {card:?}, window {bounds:?}, player {with_player}",
+      );
+      ui.operate(
+        &renderer,
+        &mut widget::operation::focusable::focus::<()>(query.id),
+      );
+      ui.update(
+        &[key(keyboard::key::Named::Enter)],
+        mouse::Cursor::Unavailable,
+        &mut renderer,
+        &mut clipboard::Null,
+        &mut messages,
+      );
+      assert!(matches!(
+        messages.as_slice(),
+        [Message::Playback(crate::app::message::PlaybackMessage::Intent(intent))]
+          if matches!(intent.as_ref(), jellypilot_mpv::playback_session::PlaybackIntent::Start {
+            item: Playable::Library(item),
+            position: jellypilot_mpv::playback::PlaybackStartPosition::Resume,
+            ..
+          } if item.id == "a")
+      ));
+      messages.clear();
+      let cursor = mouse::Cursor::Available(iced::Point::new(
+        card.center_x(),
+        card.y + card.height - 3.0,
+      ));
+      ui.update(
+        &[
+          Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left)),
+          Event::Mouse(mouse::Event::ButtonReleased(mouse::Button::Left)),
+        ],
+        cursor,
+        &mut renderer,
+        &mut clipboard::Null,
+        &mut messages,
+      );
+      assert!(
+        messages.iter().any(|message| matches!(
+          message,
+          Message::Playback(crate::app::message::PlaybackMessage::Intent(intent))
+            if matches!(intent.as_ref(), jellypilot_mpv::playback_session::PlaybackIntent::Start {
+              item: Playable::Library(item),
+              position: jellypilot_mpv::playback::PlaybackStartPosition::Resume,
+              ..
+            } if item.id == "a")
+        )),
+        "the resume target's lower edge must not be clipped by the viewport or player bar"
+      );
+      assert!(!messages
+        .iter()
+        .any(|message| matches!(message, Message::Home(HomeMessage::HeroSelected(_)))));
     }
   }
 

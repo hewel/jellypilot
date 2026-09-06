@@ -8,6 +8,7 @@ All notable changes to JellyPilot are documented in this file.
 - Refined the native Sidebar and Account Popover with scoped light/dark surfaces, a separate library-count badge, and segmented tools.
 - Simplified the Account Popover into a quick menu: show the current account once, quiet the address and actions, and move preferences and saved-login removal to a direct Accounts Settings entry.
 - Widened the default Full-mode window from 1600×900 to 1760×900 logical pixels without changing its height, minimum size, or Control-Only sizing.
+- Reworked Video Home with a full-width, aspect-preserving Backdrop behind scrolling content, a detail-style bottom gradient, and a subdued thumbnail selection rail with hover/focus information. Added manual selection, series-grouped continuation candidates, and selection retained across same-profile refreshes; kept the separate Continue Watching row directly resumable and visible in compact windows.
 
 ### Fixed
 - Kept account avatars fixed-size, fitted short account menus to their content, and exposed truncated names and addresses through hover and keyboard-focus hints.
