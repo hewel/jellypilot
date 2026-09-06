@@ -750,7 +750,7 @@ fn card_progress(section: HomeSection, item: &VideoLibraryItem) -> Option<f64> {
   }
 }
 
-pub(crate) const PROGRESS_BAR_HEIGHT: f32 = 8.0;
+pub(crate) const PROGRESS_BAR_HEIGHT: f32 = 4.0;
 
 fn progress_bar<'a>(
   palette: &'static ThemePalette,
@@ -762,7 +762,7 @@ fn progress_bar<'a>(
     progress: (progress / 100.0).clamp(0.0, 1.0) as f32,
     // The fill stays translucent as well, so the frosted strip shows through
     // while the watched portion remains clearly distinguished by hue.
-    fill: palette.colors.primary.scale_alpha(0.8),
+    fill: palette.colors.primary.scale_alpha(0.5),
     track: if frosted {
       palette.colors.surfaceContainerLowest.scale_alpha(0.4)
     } else {
