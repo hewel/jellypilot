@@ -156,6 +156,7 @@ fn update_settings(
       let result = kernel.settings.set_image_cache_enabled(enabled);
       if finish_settings_mutation(surface, kernel, result) {
         kernel.artwork_adapter.set_disk_cache_enabled(enabled);
+        kernel.avatar_adapter.set_disk_cache_enabled(enabled);
       }
       Task::none()
     }
@@ -339,6 +340,8 @@ mod tests {
       artwork_adapter: Arc::new(jellypilot_media_server::artwork::ArtworkAdapter::new()),
       artwork_binder: Default::default(),
       artwork_handles: ArtworkHandleRetention::default(),
+      profile_avatars: Default::default(),
+      avatar_adapter: Arc::new(jellypilot_media_server::artwork::ArtworkAdapter::new()),
     };
     (surface, kernel)
   }

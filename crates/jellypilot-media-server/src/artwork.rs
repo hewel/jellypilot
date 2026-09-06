@@ -325,6 +325,11 @@ pub enum ArtworkSizeClass {
   Hero,
   /// Detail backdrop; the server already caps these requests at 1920px.
   Backdrop,
+  /// Account avatars. Jellyfin serves user photos only at original
+  /// resolution (10.11's legacy route discards sizing parameters; the
+  /// current route has none), so the decode budget matches Backdrop while
+  /// the raster box stays thumbnail-small.
+  Avatar,
 }
 
 impl ArtworkSizeClass {
@@ -336,6 +341,7 @@ impl ArtworkSizeClass {
       Self::Card => (400, 600),
       Self::Hero => (440, 660),
       Self::Backdrop => (1920, 1920),
+      Self::Avatar => (128, 128),
     }
   }
 
@@ -365,11 +371,10 @@ impl ArtworkSizeClass {
   /// (Backdrop); the caps admit generous aspect extremes while rejecting
   /// decompression-bomb-shaped sources before the full RGBA buffer is
   /// allocated.
-  #[must_use]
   pub const fn max_decode_pixels(self) -> u64 {
     match self {
       Self::Card | Self::Hero => 600 * 2400,
-      Self::Backdrop => 1920 * 4320,
+      Self::Backdrop | Self::Avatar => 1920 * 4320,
     }
   }
 
@@ -389,6 +394,7 @@ impl ArtworkSizeClass {
     match self {
       Self::Card | Self::Hero => 600,
       Self::Backdrop => 1920,
+      Self::Avatar => 128,
     }
   }
 }
@@ -2912,6 +2918,72 @@ mod tests {
   }
 
   #[test]
+  fn user_image_loads_through_adapter_with_avatar_kind() {
+    let runtime = tokio::runtime::Builder::new_current_thread()
+      .enable_all()
+      .build()
+      .expect("runtime builds");
+    runtime.block_on(async {
+      use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+      let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("listener binds");
+      let port = listener.local_addr().expect("listener address").port();
+      let png = encode_test_png(96, 96);
+      let server = tokio::spawn(async move {
+        let (mut socket, _) = listener.accept().await.expect("accepts one load");
+        let mut head = Vec::new();
+        let mut buffer = [0_u8; 1024];
+        while !head.windows(4).any(|window| window == b"\r\n\r\n") {
+          let read = socket.read(&mut buffer).await.expect("request reads");
+          if read == 0 {
+            break;
+          }
+          head.extend_from_slice(&buffer[..read]);
+        }
+        let response = format!(
+          "HTTP/1.1 200 OK\r\ncontent-type: image/png\r\ncontent-length: {}\r\nconnection: close\r\n\r\n",
+          png.len()
+        );
+        socket
+          .write_all(response.as_bytes())
+          .await
+          .expect("response head writes");
+        socket.write_all(&png).await.expect("response body writes");
+        String::from_utf8_lossy(&head).into_owned()
+      });
+
+      let server_url = format!("http://127.0.0.1:{port}");
+      let client = JellyfinClient::new();
+      adopt_session(&client, &server_url, "user-1");
+      let reference = crate::user_image_id(MediaServerProvider::Jellyfin, &server_url, "user-1")
+        .expect("user image ref is valid");
+      let cache_root = std::env::temp_dir().join(format!(
+        "jellypilot-artwork-test-{}-avatar",
+        std::process::id()
+      ));
+      let adapter = ArtworkAdapter::with_limits_and_disk_cache(
+        ArtworkLimits::default(),
+        crate::ArtworkDiskCache::new(cache_root.clone(), 1 << 20, true),
+      );
+
+      let (result, _observation) = adapter
+        .load(&client, &reference, ArtworkSizeClass::Avatar, LoadLane::Offscreen)
+        .await;
+
+      let raster = result.expect("user image should load through the adapter");
+      assert_eq!((raster.width(), raster.height()), (96, 96));
+      let head = server.await.expect("server serves the request");
+      assert!(
+        head.contains("/Users/user-1/Images/Primary?maxWidth=128"),
+        "avatar origin should hit the user image route at 128px: {head}"
+      );
+      let _ = std::fs::remove_dir_all(cache_root);
+    });
+  }
+
+  #[test]
   fn stale_success_after_reset_session_does_not_repopulate_raster_cache() {
     let adapter = ArtworkAdapter::default();
     let pending = begin_leader(&adapter, "stale");
@@ -3353,6 +3425,31 @@ mod tests {
     let backdrop =
       decode_raster(&artwork(&png), ArtworkSizeClass::Backdrop).expect("backdrop decodes");
     assert_eq!((backdrop.width(), backdrop.height()), (1300, 1300));
+  }
+
+  #[test]
+  fn avatar_class_decodes_full_size_photos_but_rejects_extreme_sources() {
+    // Jellyfin serves user photos at original resolution regardless of the
+    // requested size, so a straight from-the-camera shot must decode (and
+    // shrink into the 128px box) while genuinely extreme sources stay
+    // rejected before the full buffer is allocated.
+    let photo = decode_raster(
+      &artwork(&encode_test_png(2000, 2000)),
+      ArtworkSizeClass::Avatar,
+    )
+    .expect("original-resolution user photo decodes");
+    assert!(
+      photo.width() <= 128 && photo.height() <= 128,
+      "avatar raster stays thumbnail-sized"
+    );
+
+    assert_eq!(
+      decode_raster(
+        &artwork(&encode_test_png(4000, 3000)),
+        ArtworkSizeClass::Avatar
+      ),
+      Err(ArtworkError::DecodedImageTooLarge)
+    );
   }
 
   #[test]

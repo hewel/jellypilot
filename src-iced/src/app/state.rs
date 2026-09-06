@@ -753,6 +753,62 @@ impl ArtworkHandleRetention {
     self.handles.clear();
   }
 }
+
+/// Decoded user photos for saved profiles, keyed by profile identity.
+///
+/// Linear scans: profile counts stay in the single digits, and
+/// `SavedProfileKey` deliberately has no `Hash`.
+#[derive(Default)]
+pub struct ProfileAvatarHandles {
+  loaded: Vec<(SavedProfileKey, image::Handle)>,
+  loading: Vec<SavedProfileKey>,
+}
+
+impl ProfileAvatarHandles {
+  pub fn get(&self, key: &SavedProfileKey) -> Option<&image::Handle> {
+    self
+      .loaded
+      .iter()
+      .find(|(loaded_key, _)| loaded_key == key)
+      .map(|(_, handle)| handle)
+  }
+
+  /// Marks a profile's avatar as in flight; `false` when the photo is already
+  /// cached or the load is already running, so callers fire at most one load.
+  pub fn begin_loading(&mut self, key: SavedProfileKey) -> bool {
+    if self.get(&key).is_some() || self.loading.contains(&key) {
+      return false;
+    }
+    self.loading.push(key);
+    true
+  }
+
+  /// Stores a settled load, replacing any previous photo for the profile.
+  pub fn insert(&mut self, key: SavedProfileKey, handle: image::Handle) {
+    self.loading.retain(|loading_key| loading_key != &key);
+    if let Some((_, existing)) = self
+      .loaded
+      .iter_mut()
+      .find(|(loaded_key, _)| loaded_key == &key)
+    {
+      *existing = handle;
+    } else {
+      self.loaded.push((key, handle));
+    }
+  }
+
+  /// Clears the in-flight mark without storing a photo (load failed); the
+  /// next refresh may retry.
+  pub fn finish_loading(&mut self, key: &SavedProfileKey) {
+    self.loading.retain(|loading_key| loading_key != key);
+  }
+
+  /// Drops photos and in-flight marks for profiles no longer saved.
+  pub fn retain(&mut self, keys: &[SavedProfileKey]) {
+    self.loaded.retain(|(key, _)| keys.contains(key));
+    self.loading.retain(|key| keys.contains(key));
+  }
+}
 pub type PlaybackControllerHandle = Arc<Mutex<PlaybackController>>;
 #[derive(Clone)]
 pub struct RemoteSessionHandle {
@@ -919,6 +975,8 @@ impl State {
     let playback = crate::app::playback::Surface::new(&mut request_gate);
     let artwork_adapter = Arc::new(ArtworkAdapter::new());
     artwork_adapter.set_disk_cache_enabled(settings.snapshot().image_cache_enabled());
+    let avatar_adapter = Arc::new(ArtworkAdapter::new());
+    avatar_adapter.set_disk_cache_enabled(settings.snapshot().image_cache_enabled());
 
     let mut state = Self {
       system_theme: iced::theme::Mode::None,
@@ -937,8 +995,10 @@ impl State {
         next_toast_id: 0,
         tray: None,
         artwork_adapter,
+        avatar_adapter,
         artwork_binder: ArtworkBinder::default(),
         artwork_handles: ArtworkHandleRetention::default(),
+        profile_avatars: Default::default(),
       },
       login: crate::app::login::Surface {
         flow: login,

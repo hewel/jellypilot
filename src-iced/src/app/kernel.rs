@@ -13,7 +13,8 @@ use jellypilot_mpv::playback_session::IntroAvailability;
 
 use super::message::Message;
 use super::state::{
-  intro_skip_mode, ArtworkHandleRetention, ConnectedIdentity, NoticeLevel, ToastNotice,
+  intro_skip_mode, ArtworkHandleRetention, ConnectedIdentity, NoticeLevel, ProfileAvatarHandles,
+  ToastNotice,
 };
 use crate::tray::Tray;
 
@@ -35,9 +36,14 @@ pub struct Kernel {
   pub active_toast: Option<ToastNotice>,
   pub next_toast_id: u64,
   pub tray: Option<Tray>,
+  /// Avatar loads run on their own adapter so surface navigation
+  /// (`cancel_pending`/`reset_session` on `artwork_adapter`) can never cancel
+  /// them; avatar photos are few and small.
+  pub avatar_adapter: Arc<ArtworkAdapter>,
   pub artwork_adapter: Arc<ArtworkAdapter>,
   pub artwork_binder: ArtworkBinder,
   pub artwork_handles: ArtworkHandleRetention,
+  pub profile_avatars: ProfileAvatarHandles,
 }
 
 impl Kernel {

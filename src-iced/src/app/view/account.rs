@@ -1,10 +1,11 @@
 //! Shared account presentation for the sidebar popover and Settings.
 
-use iced::widget::{column, container, row, scrollable, space, stack, text, text_input, Column};
+use iced::widget::{column, container, image, row, scrollable, space, text, text_input, Column};
 use iced::{Alignment, Background, Border, Color, Element, Fill, Length};
 use jellypilot_auth::login::ConnectionPhase;
 use jellypilot_media_server::MediaServerProvider;
 use jellypilot_session::RemoteControlState;
+use jellypilot_ui::brands::{brand_svg, Brand};
 use jellypilot_ui::fonts::SPACE_GROTESK_FONT;
 use jellypilot_ui::icons::{icon_with_color, Icon, IconControlState, IconSize};
 use jellypilot_ui::overlay::{
@@ -15,6 +16,7 @@ use jellypilot_ui::tokens::{ThemePalette, TOKENS};
 use jellypilot_ui::variants::{BadgeVariant, ButtonVariant, FieldVariant, SurfaceVariant};
 use jellypilot_ui::widgets::control_button::{control_button, control_button_content};
 use jellypilot_ui::widgets::ellipsis_text::ellipsis_text;
+use jellypilot_ui::widgets::rounded_image::{full_radius, rounded_image};
 use jellypilot_ui::widgets::sidebar;
 
 use crate::app::accounts::{self, AccountView, ConfirmationKind, CopyStatus};
@@ -28,12 +30,6 @@ use crate::app::state::{LoginMethod, QuickConnectState, State};
 const POPOVER_WIDTH: f32 = 368.0;
 const POPOVER_CONTENT_HEIGHT: f32 = 520.0;
 const PROFILE_LIST_HEIGHT: f32 = 192.0;
-
-#[derive(Clone, Copy)]
-enum AvatarShape {
-  Circle,
-  RoundedSquare,
-}
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Presentation {
@@ -143,17 +139,26 @@ fn identity_card<'a>(
   account: &AccountView<'a>,
   compact: bool,
 ) -> Element<'a, Message> {
-  let (name, server, provider) = account.current.as_ref().map_or_else(
-    || ("Account".to_owned(), "Not signed in".to_owned(), None),
+  let (name, server, provider, provider_kind) = account.current.as_ref().map_or_else(
+    || ("Account".to_owned(), "Not signed in".to_owned(), None, None),
     |current| {
       (
         current.user_name.to_owned(),
         current.server_name.unwrap_or(current.server_url).to_owned(),
         Some(provider_name(current.provider)),
+        Some(current.provider),
       )
     },
   );
-  let connected = state.kernel.connection == ConnectionPhase::Connected;
+  let photo = account
+    .active_key
+    .and_then(|key| state.kernel.profile_avatars.get(key))
+    .cloned();
+  let identity = if account.current.is_some() {
+    format!("{name}@{server}")
+  } else {
+    name.clone()
+  };
   let subtitle = provider.map_or_else(
     || server.clone(),
     |provider| format!("{provider} · {server}"),
@@ -163,15 +168,9 @@ fn identity_card<'a>(
     return focus_tooltip(
       control_button_content(
         move |_| {
-          container(avatar(
-            &name,
-            connected,
-            28.0,
-            AvatarShape::RoundedSquare,
-            false,
-          ))
-          .center_x(Fill)
-          .into()
+          container(avatar(&identity, photo.clone(), 28.0, false))
+            .center_x(Fill)
+            .into()
         },
         ButtonVariant::Text,
       )
@@ -190,8 +189,20 @@ fn identity_card<'a>(
   focus_tooltip(
     control_button_content(
       move |_| {
+        let subtitle_line: Element<'_, Message> = match provider_kind {
+          Some(kind) => row![
+            brand_svg(brand_for(kind), 12.0),
+            container(ellipsis_text(subtitle.clone()).size(11).color(metadata)).width(Fill),
+          ]
+          .spacing(TOKENS.spacing.s1)
+          .align_y(Alignment::Center)
+          .into(),
+          None => container(ellipsis_text(subtitle.clone()).size(11).color(metadata))
+            .width(Fill)
+            .into(),
+        };
         row![
-          avatar(&name, connected, 28.0, AvatarShape::RoundedSquare, false),
+          avatar(&identity, photo.clone(), 28.0, false),
           column![
             container(
               ellipsis_text(name.clone())
@@ -199,7 +210,7 @@ fn identity_card<'a>(
                 .size(15)
             )
             .width(Fill),
-            container(ellipsis_text(subtitle.clone()).size(11).color(metadata)).width(Fill),
+            subtitle_line,
           ]
           .spacing(TOKENS.spacing.s0_5)
           .width(Fill),
@@ -241,13 +252,6 @@ fn quick_menu<'a>(state: &'a State, account: &AccountView<'a>) -> Element<'a, Me
     content = content.push(
       column![
         row![
-          avatar(
-            current.user_name,
-            false,
-            32.0,
-            AvatarShape::RoundedSquare,
-            false
-          ),
           column![
             Presentation::Sidebar.text(
               current.user_name,
@@ -256,13 +260,18 @@ fn quick_menu<'a>(state: &'a State, account: &AccountView<'a>) -> Element<'a, Me
               Some(SPACE_GROTESK_FONT),
               Fill,
             ),
-            Presentation::Sidebar.text(
-              format!("{provider} · {server}"),
-              11.0,
-              palette.text.metadata,
-              None,
-              Fill,
-            ),
+            row![
+              brand_svg(brand_for(current.provider), 12.0),
+              Presentation::Sidebar.text(
+                format!("{provider} · {server}"),
+                11.0,
+                palette.text.metadata,
+                None,
+                Fill,
+              ),
+            ]
+            .spacing(TOKENS.spacing.s1)
+            .align_y(Alignment::Center),
           ]
           .spacing(TOKENS.spacing.s0_5)
           .width(Fill),
@@ -435,10 +444,12 @@ fn management_content<'a>(state: &'a State, account: &AccountView<'a>) -> Elemen
       column![
         row![
           avatar(
-            current.user_name,
-            state.kernel.connection == ConnectionPhase::Connected,
+            &format!("{}@{}", current.user_name, server),
+            account
+              .active_key
+              .and_then(|key| state.kernel.profile_avatars.get(key))
+              .cloned(),
             36.0,
-            AvatarShape::Circle,
             false,
           ),
           column![
@@ -450,11 +461,7 @@ fn management_content<'a>(state: &'a State, account: &AccountView<'a>) -> Elemen
                 Some(SPACE_GROTESK_FONT),
                 Length::Shrink,
               ),
-              provider_badge(
-                provider_name(current.provider),
-                IconControlState::Rest,
-                palette,
-              ),
+              provider_badge(current.provider, IconControlState::Rest, palette),
             ]
             .spacing(TOKENS.spacing.s1)
             .align_y(Alignment::Center),
@@ -610,28 +617,35 @@ fn status_badge(label: &'static str, variant: BadgeVariant) -> Element<'static, 
 }
 
 fn provider_badge(
-  label: &'static str,
+  provider: MediaServerProvider,
   status: IconControlState,
   palette: &'static ThemePalette,
 ) -> Element<'static, Message> {
   let disabled = status == IconControlState::Disabled;
   let text_color = control_content_color(status, palette.text.metadata, palette.text.secondary);
-  container(text(label).size(10).color(text_color))
-    .padding([2, 5])
-    .style(move |_| container::Style {
-      background: Some(Background::Color(with_disabled_alpha(
-        palette.colors.surfaceContainerHigh,
-        disabled,
-      ))),
-      text_color: Some(text_color),
-      border: Border {
-        radius: TOKENS.radii.md.into(),
-        color: Color::TRANSPARENT,
-        width: 0.0,
-      },
-      ..container::Style::default()
-    })
-    .into()
+  container(
+    row![
+      brand_svg(brand_for(provider), 10.0),
+      text(provider_name(provider)).size(10).color(text_color),
+    ]
+    .spacing(TOKENS.spacing.s0_5)
+    .align_y(Alignment::Center),
+  )
+  .padding([2, 5])
+  .style(move |_| container::Style {
+    background: Some(Background::Color(with_disabled_alpha(
+      palette.colors.surfaceContainerHigh,
+      disabled,
+    ))),
+    text_color: Some(text_color),
+    border: Border {
+      radius: TOKENS.radii.md.into(),
+      color: Color::TRANSPARENT,
+      width: 0.0,
+    },
+    ..container::Style::default()
+  })
+  .into()
 }
 
 fn control_content_color(status: IconControlState, rest: Color, hovered: Color) -> Color {
@@ -653,77 +667,78 @@ fn with_disabled_alpha(color: Color, disabled: bool) -> Color {
   }
 }
 
+fn brand_for(provider: MediaServerProvider) -> Brand {
+  match provider {
+    MediaServerProvider::Jellyfin => Brand::Jellyfin,
+    MediaServerProvider::Emby => Brand::Emby,
+  }
+}
+
+/// Account identity tile: the user's server-side photo when loaded, else a
+/// local initial-tile fallback tinted by a stable hash of `identity`.
+/// `identity` supplies both the initial (first char) and the tint seed, so
+/// pass a full `user@server` string to keep same-name accounts distinct.
 fn avatar<'a>(
-  label: &str,
-  connected: bool,
+  identity: &str,
+  photo: Option<image::Handle>,
   size: f32,
-  shape: AvatarShape,
   disabled: bool,
 ) -> Element<'a, Message> {
-  let initial = label
-    .chars()
-    .next()
-    .map(|character| character.to_uppercase().to_string())
-    .unwrap_or_else(|| "?".to_owned());
-  let base = container(text(initial).font(SPACE_GROTESK_FONT).size(size * 0.42))
-    .width(Length::Fixed(size))
-    .height(Length::Fixed(size))
-    .align_x(Alignment::Center)
-    .align_y(Alignment::Center)
-    .style(move |theme| {
-      let colors = jellypilot_ui::tokens::palette(theme).colors;
-      container::Style {
-        background: Some(Background::Color(with_disabled_alpha(
-          colors.primary,
-          disabled,
-        ))),
-        text_color: Some(with_disabled_alpha(colors.onPrimary, disabled)),
-        border: Border {
-          radius: match shape {
-            AvatarShape::Circle => TOKENS.radii.full,
-            AvatarShape::RoundedSquare => TOKENS.radii.md,
-          }
-          .into(),
-          color: Color::TRANSPARENT,
-          width: 0.0,
-        },
-        ..container::Style::default()
+  match photo {
+    Some(handle) => {
+      let mut tile = rounded_image(handle, full_radius(TOKENS.radii.md))
+        .width(Length::Fixed(size))
+        .height(Length::Fixed(size));
+      if disabled {
+        tile = tile.opacity(0.5_f32);
       }
-    });
-  if !connected {
-    return base.into();
-  }
-  let dot_size = (size * 0.28).max(8.0);
-  stack![
-    base,
-    container(
-      container(space::horizontal())
-        .width(Length::Fixed(dot_size))
-        .height(Length::Fixed(dot_size))
+      tile.into()
+    }
+    None => {
+      let initial = identity
+        .chars()
+        .next()
+        .map(|character| character.to_uppercase().to_string())
+        .unwrap_or_else(|| "?".to_owned());
+      let accent = fallback_accent(identity);
+      container(text(initial).font(SPACE_GROTESK_FONT).size(size * 0.42))
+        .width(Length::Fixed(size))
+        .height(Length::Fixed(size))
+        .align_x(Alignment::Center)
+        .align_y(Alignment::Center)
         .style(move |theme| {
           let colors = jellypilot_ui::tokens::palette(theme).colors;
+          let (fill, ink) = match accent {
+            0 => (colors.primary, colors.onPrimary),
+            1 => (colors.secondary, colors.onSecondary),
+            _ => (colors.tertiary, colors.onTertiary),
+          };
           container::Style {
-            background: Some(Background::Color(with_disabled_alpha(
-              theme.palette().success,
-              disabled,
-            ))),
+            background: Some(Background::Color(with_disabled_alpha(fill, disabled))),
+            text_color: Some(with_disabled_alpha(ink, disabled)),
             border: Border {
-              radius: TOKENS.radii.full.into(),
-              color: colors.surfaceContainerHigh,
-              width: 2.0,
+              radius: TOKENS.radii.md.into(),
+              color: Color::TRANSPARENT,
+              width: 0.0,
             },
             ..container::Style::default()
           }
-        }),
-    )
-    .width(Length::Fixed(size))
-    .height(Length::Fixed(size))
-    .align_x(iced::alignment::Horizontal::Right)
-    .align_y(iced::alignment::Vertical::Bottom),
-  ]
-  .width(Length::Fixed(size))
-  .height(Length::Fixed(size))
-  .into()
+        })
+        .into()
+    }
+  }
+}
+
+/// Stable token-accent index for a fallback tile, so two same-initial
+/// accounts read as distinct without a photo. Hashes the identity string
+/// (FNV-1a); the palette triplet stays inside the theme (ADR 0027).
+fn fallback_accent(label: &str) -> u8 {
+  let mut hash: u32 = 0x811c_9dc5;
+  for byte in label.as_bytes() {
+    hash ^= u32::from(*byte);
+    hash = hash.wrapping_mul(0x0100_0193);
+  }
+  (hash % 3) as u8
 }
 
 fn profile_header<'a>(
@@ -782,7 +797,6 @@ fn saved_profiles<'a>(
   }
   let mut profiles = Column::new().spacing(TOKENS.spacing.s1);
   let palette = state.palette();
-  let connected = state.kernel.connection == ConnectionPhase::Connected;
   let management_open = presentation == Presentation::Settings && account.management_open;
   for (index, profile) in account.profiles.iter().enumerate() {
     let active = account.current.is_some() && account.active_key == Some(profile.key());
@@ -819,6 +833,7 @@ fn saved_profiles<'a>(
       Presentation::Settings => profile_server,
     };
     let provider = profile.provider();
+    let photo = state.kernel.profile_avatars.get(profile.key()).cloned();
     let profile_control = control_button_content(
       move |status| {
         let disabled = status == IconControlState::Disabled;
@@ -847,28 +862,27 @@ fn saved_profiles<'a>(
         );
         let title: Element<'_, Message> = match presentation {
           Presentation::Sidebar => title,
-          Presentation::Settings => row![
-            title,
-            provider_badge(provider_name(provider), status, palette),
-          ]
-          .spacing(TOKENS.spacing.s1)
-          .align_y(Alignment::Center)
-          .into(),
+          Presentation::Settings => row![title, provider_badge(provider, status, palette),]
+            .spacing(TOKENS.spacing.s1)
+            .align_y(Alignment::Center)
+            .into(),
         };
         row![
-          avatar(
-            &profile_title,
-            active && connected,
-            28.0,
-            match presentation {
-              Presentation::Sidebar => AvatarShape::RoundedSquare,
-              Presentation::Settings => AvatarShape::Circle,
-            },
-            disabled,
-          ),
+          avatar(&profile.title(), photo.clone(), 28.0, disabled),
           column![
             title,
-            presentation.text(profile_subtitle.clone(), 11.0, metadata_color, None, Fill),
+            match presentation {
+              Presentation::Sidebar => row![
+                brand_svg(brand_for(provider), 12.0),
+                presentation.text(profile_subtitle.clone(), 11.0, metadata_color, None, Fill),
+              ]
+              .spacing(TOKENS.spacing.s1)
+              .align_y(Alignment::Center)
+              .into(),
+              Presentation::Settings => {
+                presentation.text(profile_subtitle.clone(), 11.0, metadata_color, None, Fill)
+              }
+            },
           ]
           .spacing(TOKENS.spacing.s0_5)
           .width(Fill),
@@ -1278,30 +1292,38 @@ const fn provider_name(provider: MediaServerProvider) -> &'static str {
 #[cfg(test)]
 mod tests {
   use iced::advanced::{layout, renderer::Headless, widget::Tree};
+  use iced::widget::image;
   use iced::{Font, Size};
 
-  use super::{avatar, AvatarShape};
+  use super::avatar;
 
   #[tokio::test]
-  async fn profile_avatars_keep_square_bounds_with_and_without_status() {
+  async fn profile_avatars_share_one_layout_box_across_states() {
     let renderer = iced::Renderer::new(Font::DEFAULT, 14.0.into(), Some("tiny-skia"))
       .await
       .expect("software layout renderer");
-    for connected in [false, true] {
-      let mut avatar = avatar(
-        "Long profile name",
-        connected,
-        28.0,
-        AvatarShape::Circle,
-        false,
-      );
+    let mut sizes = Vec::new();
+    for photo in [None, Some(image::Handle::from_rgba(2, 2, vec![0; 16]))] {
+      let mut avatar = avatar("Long profile name@server", photo, 28.0, false);
       let mut tree = Tree::new(&avatar);
       let node = avatar.as_widget_mut().layout(
         &mut tree,
         &renderer,
         &layout::Limits::new(Size::ZERO, Size::new(336.0, 600.0)),
       );
-      assert_eq!(node.size(), Size::new(28.0, 28.0), "connected={connected}");
+      sizes.push(node.size());
     }
+    let [fallback, photo] = [sizes[0], sizes[1]];
+    // A photo arriving must not shift the row: both states occupy one box,
+    // exactly the tile's square.
+    assert_eq!(
+      fallback, photo,
+      "photo and fallback tiles must share the layout box"
+    );
+    assert_eq!(
+      fallback,
+      Size::new(28.0, 28.0),
+      "avatar box stays tile-sized"
+    );
   }
 }

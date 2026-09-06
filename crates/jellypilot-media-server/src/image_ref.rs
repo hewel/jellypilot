@@ -20,6 +20,7 @@ static SIGNER: OnceLock<ImageRefSigner> = OnceLock::new();
 pub enum ImageRefKind {
   Artwork,
   Backdrop,
+  Avatar,
 }
 
 impl ImageRefKind {
@@ -28,6 +29,7 @@ impl ImageRefKind {
     match self {
       Self::Artwork => 600,
       Self::Backdrop => 1920,
+      Self::Avatar => 128,
     }
   }
 
@@ -118,6 +120,21 @@ pub fn image_id_for_url(
     kind,
   };
   signer().encode(&payload)
+}
+
+/// Signed reference to a user's primary profile image.
+///
+/// `/Users/{userId}/Images/Primary` is served by both providers (Jellyfin
+/// keeps it as its legacy-compatible route); a user without an image settles
+/// as a load failure so callers fall back to a local placeholder.
+pub fn user_image_id(
+  provider: MediaServerProvider,
+  server_url: &str,
+  user_id: &str,
+) -> Result<String, ImageRefError> {
+  let server_url = normalize_server_url(server_url);
+  let remote_url = format!("{server_url}/Users/{user_id}/Images/Primary");
+  image_id_for_url(provider, server_url, remote_url, ImageRefKind::Avatar)
 }
 
 pub(crate) fn decode_image_id(token: &str) -> Result<ImageRefPayload, ImageRefError> {
@@ -335,11 +352,39 @@ mod tests {
   }
 
   #[test]
+  fn user_image_id_targets_primary_image_with_avatar_sizing() {
+    let token = user_image_id(
+      MediaServerProvider::Jellyfin,
+      "https://media.example.com/",
+      "user-1",
+    )
+    .expect("user image ref should encode");
+
+    let payload = decode_image_id(&token).expect("image ref should decode");
+
+    assert_eq!(
+      payload.remote_url,
+      "https://media.example.com/Users/user-1/Images/Primary"
+    );
+    assert_eq!(payload.server_url, "https://media.example.com");
+    assert_eq!(payload.kind, ImageRefKind::Avatar);
+
+    let origin = sized_origin_url(&payload.remote_url, payload.kind, payload.provider)
+      .expect("origin url should size");
+    assert!(
+      origin.contains("maxWidth=128"),
+      "avatar origin should cap at 128px: {origin}"
+    );
+  }
+
+  #[test]
   fn image_ref_kind_profiles_match_contract() {
     assert_eq!(ImageRefKind::Artwork.max_width(), 600);
     assert_eq!(ImageRefKind::Backdrop.max_width(), 1920);
+    assert_eq!(ImageRefKind::Avatar.max_width(), 128);
     assert_eq!(ImageRefKind::Artwork.quality(), 90);
     assert_eq!(ImageRefKind::Backdrop.quality(), 90);
+    assert_eq!(ImageRefKind::Avatar.quality(), 90);
   }
 
   #[test]

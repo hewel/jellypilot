@@ -347,7 +347,13 @@ pub(crate) fn update_shell(state: &mut State, message: ShellMessage) -> Task<Mes
         super::accounts::hide(&mut state.accounts);
       }
       state.shell.compact_search_open = false;
-      Task::none()
+      if state.shell.account_popover_open {
+        // Opening the account menu is the natural retry point for avatar
+        // loads that failed earlier (e.g. server down at boot).
+        super::avatars::refresh(&mut state.kernel, &state.login.flow.profiles)
+      } else {
+        Task::none()
+      }
     }
     ShellMessage::DismissAccountPopover => {
       state.shell.account_popover_open = false;
@@ -644,8 +650,10 @@ mod tests {
       next_toast_id: 0,
       tray: None,
       artwork_adapter: Arc::new(jellypilot_media_server::artwork::ArtworkAdapter::new()),
+      avatar_adapter: Arc::new(jellypilot_media_server::artwork::ArtworkAdapter::new()),
       artwork_binder: Default::default(),
       artwork_handles: ArtworkHandleRetention::default(),
+      profile_avatars: Default::default(),
     };
     (Surface::new(false), kernel)
   }

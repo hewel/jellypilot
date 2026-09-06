@@ -12,12 +12,13 @@ use jellypilot_mpv::playback_session::{PlaybackInput, PlaybackIntent};
 use crate::tray::TrayAction;
 
 use super::accounts;
+use super::avatars;
 use super::browse;
 use super::detail;
 use super::home;
 use super::login;
 use super::message::{
-  BrowseMessage, DetailMessage, HomeMessage, Message, SettingsMessage, WindowMessage,
+  BrowseMessage, DetailMessage, HomeMessage, LoginMessage, Message, SettingsMessage, WindowMessage,
 };
 use super::playback;
 use super::settings;
@@ -174,6 +175,10 @@ fn update_account(state: &mut State, message: accounts::Message) -> Task<Message
       state.shell.account_focus_return.clone(),
     ));
   }
+  tasks.push(avatars::refresh(
+    &mut state.kernel,
+    &state.login.flow.profiles,
+  ));
   Task::batch(tasks)
 }
 
@@ -269,12 +274,19 @@ pub fn update(state: &mut State, message: Message) -> Task<Message> {
     Message::Login(message) => {
       let was_connected = state.kernel.connection == ConnectionPhase::Connected;
       let previous_error = state.login.flow.error.clone();
+      let profiles_landed = matches!(&message, LoginMessage::ProfilesLoaded { .. });
       let login_task = login::update(
         &mut state.login,
         &mut state.kernel,
         state.playback.view.can_start_login,
         message,
       );
+      let avatar_task = if profiles_landed {
+        avatars::refresh(&mut state.kernel, &state.login.flow.profiles)
+      } else {
+        Task::none()
+      };
+      let login_task = Task::batch([login_task, avatar_task]);
       let is_connected = state.kernel.connection == ConnectionPhase::Connected;
       if state.login.flow.error != previous_error {
         if let Some(error) = &state.login.flow.error {
@@ -301,6 +313,10 @@ pub fn update(state: &mut State, message: Message) -> Task<Message> {
       } else {
         login_task
       }
+    }
+    Message::ProfileAvatarLoaded { key, outcome } => {
+      avatars::settle(&mut state.kernel, key, outcome);
+      Task::none()
     }
     Message::Home(HomeMessage::Navigate(destination)) => {
       // Control-Only mode has no Library Browser; reject its destinations.
@@ -653,8 +669,10 @@ mod tests {
         next_toast_id: 0,
         tray: None,
         artwork_adapter: Arc::new(jellypilot_media_server::artwork::ArtworkAdapter::new()),
+        avatar_adapter: Arc::new(jellypilot_media_server::artwork::ArtworkAdapter::new()),
         artwork_binder: Default::default(),
         artwork_handles: Default::default(),
+        profile_avatars: Default::default(),
       },
       login: crate::app::login::Surface {
         flow: login_flow,

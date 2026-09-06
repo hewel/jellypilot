@@ -1845,8 +1845,10 @@ mod tests {
       next_toast_id: 0,
       tray: None,
       artwork_adapter: Arc::new(ArtworkAdapter::new()),
+      avatar_adapter: Arc::new(ArtworkAdapter::new()),
       artwork_binder: ArtworkBinder::default(),
       artwork_handles: super::super::state::ArtworkHandleRetention::default(),
+      profile_avatars: Default::default(),
     };
     (kernel, login, TestSettingsFile(path))
   }

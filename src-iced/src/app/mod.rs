@@ -1,5 +1,6 @@
 pub mod accounts;
 pub mod artwork;
+pub(crate) mod avatars;
 pub mod browse;
 pub mod detail;
 pub mod home;

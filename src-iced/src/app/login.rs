@@ -990,8 +990,10 @@ mod tests {
       next_toast_id: 0,
       tray: None,
       artwork_adapter: Arc::new(jellypilot_media_server::artwork::ArtworkAdapter::new()),
+      avatar_adapter: Arc::new(jellypilot_media_server::artwork::ArtworkAdapter::new()),
       artwork_binder: Default::default(),
       artwork_handles: ArtworkHandleRetention::default(),
+      profile_avatars: Default::default(),
     };
     (surface, kernel)
   }

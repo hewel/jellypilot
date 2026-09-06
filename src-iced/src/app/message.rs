@@ -56,6 +56,7 @@ impl std::fmt::Debug for Message {
         .finish(),
       Self::DismissNotice(id) => formatter.debug_tuple("DismissNotice").field(id).finish(),
       Self::ArtworkStreamCompleted(_) => formatter.write_str("ArtworkStreamCompleted"),
+      Self::ProfileAvatarLoaded { .. } => formatter.write_str("ProfileAvatarLoaded([redacted])"),
     }
   }
 }
@@ -83,6 +84,12 @@ pub enum Message {
   /// A surface's streamed Library Image loads all settled; carries that
   /// stream's own sanitized aggregate for the diagnostics event.
   ArtworkStreamCompleted(ArtworkLoadSummary),
+  /// One saved profile's user image settled through the artwork pipeline;
+  /// `None` when the profile's session could not be loaded at all.
+  ProfileAvatarLoaded {
+    key: SavedProfileKey,
+    outcome: Option<Result<ArtworkRaster, ArtworkError>>,
+  },
 }
 
 #[derive(Clone, Copy, Debug)]

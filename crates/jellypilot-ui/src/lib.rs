@@ -4,6 +4,7 @@
 //! the component variants that form the visual vocabulary of the iced
 //! application.
 
+pub mod brands;
 pub mod fonts;
 pub mod icons;
 pub mod layout;
@@ -13,6 +14,7 @@ pub mod tokens;
 pub mod variants;
 pub mod widgets;
 
+pub use brands::{brand_svg, Brand};
 pub use icons::{
     icon, icon_for_control_state, icon_for_variant, icon_for_variant_disabled, icon_sized,
     icon_with_color, Icon, IconControlState, IconSize, DEFAULT_ICON_SIZE, ICON_SIZE_2XL,
