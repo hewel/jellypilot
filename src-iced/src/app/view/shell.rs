@@ -384,11 +384,19 @@ fn unified_search_field<'a>(
       .style(sidebar::search_input),
     Message::Shell(ShellMessage::ClearSearch),
   );
-  let keycap = container(text(platform_search_hint()).size(11))
-    .padding([2, 4])
-    .center_x(Length::Fixed(48.0))
-    .center_y(Length::Fixed(32.0))
-    .style(sidebar::inset);
+  let keycap = container(
+    container(text(platform_search_hint()).size(11))
+      .padding([2, 4])
+      .center_x(Length::Fixed(48.0))
+      .center_y(Length::Fixed(32.0))
+      .style(sidebar::inset),
+  )
+  .padding(iced::Padding {
+    top: 0.0,
+    right: 2.0,
+    bottom: 0.0,
+    left: 0.0,
+  });
   let trailing: Element<'_, Message> = if search_draft.is_empty() {
     keycap.into()
   } else {
