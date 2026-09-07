@@ -743,21 +743,16 @@ pub struct ArtworkHandles {
   main: image::Handle,
   main_width: u32,
   main_height: u32,
-  frosted_strip: Option<image::Handle>,
   logo_shadow: Option<image::Handle>,
 }
 
 impl ArtworkHandles {
   pub fn from_raster(raster: ArtworkRaster) -> Self {
-    let (width, height, pixels, frosted_strip, logo_shadow) = raster.into_parts();
+    let (width, height, pixels, logo_shadow) = raster.into_parts();
     Self {
       main: image::Handle::from_rgba(width, height, pixels),
       main_width: width,
       main_height: height,
-      frosted_strip: frosted_strip.map(|strip| {
-        let (width, height, pixels, ..) = strip.into_parts();
-        image::Handle::from_rgba(width, height, pixels)
-      }),
       logo_shadow: logo_shadow.map(|shadow| {
         let (width, height, pixels, ..) = shadow.into_parts();
         image::Handle::from_rgba(width, height, pixels)
@@ -772,7 +767,6 @@ impl ArtworkHandles {
       main,
       main_width: 0,
       main_height: 0,
-      frosted_strip: None,
       logo_shadow: None,
     }
   }
@@ -800,13 +794,6 @@ impl ArtworkHandleRetention {
       .handles
       .get(slot, image_id)
       .map(|handles| (handles.main_width, handles.main_height))
-  }
-
-  pub fn frosted_strip(&self, slot: ArtworkSlot, image_id: &str) -> Option<&image::Handle> {
-    self
-      .handles
-      .get(slot, image_id)
-      .and_then(|handles| handles.frosted_strip.as_ref())
   }
 
   pub fn logo_shadow(&self, slot: ArtworkSlot, image_id: &str) -> Option<&image::Handle> {

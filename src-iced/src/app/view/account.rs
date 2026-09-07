@@ -1,6 +1,8 @@
 //! Shared account presentation for the sidebar popover and Settings.
 
-use iced::widget::{column, container, image, row, scrollable, space, text, text_input, Column};
+use iced::widget::{
+  column, container, image, modal, row, scrollable, space, text, text_input, Column,
+};
 use iced::{Alignment, Background, Border, Color, Element, Fill, Length};
 use jellypilot_auth::login::ConnectionPhase;
 use jellypilot_media_server::MediaServerProvider;
@@ -115,8 +117,8 @@ pub fn management(state: &State) -> Element<'_, Message> {
   management_content(state, &account)
 }
 
-/// Adds an opaque, focus-contained full-window layer for account confirmation
-/// and new-account authentication. Hiding the presentation never cancels an
+/// Adds a blurred-backdrop, focus-contained full-window layer for account
+/// confirmation and new-account authentication. Hiding the presentation never cancels an
 /// in-flight candidate or handoff; the account reducer owns that work.
 pub fn modal_layer(state: &State) -> Option<Element<'_, Message>> {
   let account = accounts::view(state);
@@ -967,22 +969,26 @@ fn auto_login(locale: Localizer, auto_login: bool) -> Element<'static, Message> 
 }
 
 fn full_window_modal<'a>(state: &'a State, content: Element<'a, Message>) -> Element<'a, Message> {
-  container(
-    container(content)
-      .width(Length::Fill.max(640.0))
-      .padding(TOKENS.spacing.s5)
-      .style(|theme| jellypilot_ui::theme::surface_variant(theme, SurfaceVariant::Floating)),
+  modal(
+    12.0,
+    container(
+      container(content)
+        .width(Length::Fill.max(640.0))
+        .padding(TOKENS.spacing.s5)
+        .style(|theme| jellypilot_ui::theme::surface_variant(theme, SurfaceVariant::Floating)),
+    )
+    .width(Fill)
+    .height(Fill)
+    .center_x(Fill)
+    .center_y(Fill)
+    .padding(TOKENS.spacing.s4)
+    .style(move |_theme| container::Style {
+      background: Some(iced::Background::Color(
+        state.palette().colors.surface.scale_alpha(0.6),
+      )),
+      ..container::Style::default()
+    }),
   )
-  .width(Fill)
-  .height(Fill)
-  .center_x(Fill)
-  .center_y(Fill)
-  .padding(TOKENS.spacing.s4)
-  .style(move |_theme| container::Style {
-    background: Some(iced::Background::Color(state.palette().colors.surface)),
-    ..container::Style::default()
-  })
-  .into()
 }
 
 fn confirmation_modal<'a>(

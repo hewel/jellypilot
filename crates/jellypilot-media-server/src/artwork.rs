@@ -51,7 +51,7 @@ impl Default for ArtworkLimits {
 }
 
 impl ArtworkLimits {
-  /// Bytes one stripless load admits against the aggregate budget: the
+  /// Bytes one plain load admits against the aggregate budget: the
   /// encoded body, bounded full-size decode buffer, and working raster
   /// buffers.
   #[must_use]
@@ -71,14 +71,6 @@ impl ArtworkLimits {
     size_class: ArtworkSizeClass,
     derived: DerivedArtwork,
   ) -> usize {
-    let frosted_bytes = derived.frosted_strip.map_or(0, |spec| {
-      let output_bytes = spec.output_bytes();
-      if output_bytes <= size_class.max_frosted_strip_bytes() {
-        output_bytes
-      } else {
-        0
-      }
-    });
     let shadow_bytes = if derived.logo_shadow {
       size_class.max_logo_shadow_bytes()
     } else {
@@ -86,17 +78,14 @@ impl ArtworkLimits {
     };
     self
       .load_reservation_bytes(size_class)
-      .saturating_add(frosted_bytes)
       .saturating_add(shadow_bytes)
   }
 
   #[must_use]
   pub fn normalized(mut self) -> Self {
     self.max_active_loads = self.max_active_loads.max(1);
-    // A normalized custom budget must admit one maximum-sized Backdrop band.
-    let max_backdrop_load = self
-      .load_reservation_bytes(ArtworkSizeClass::Backdrop)
-      .saturating_add(ArtworkSizeClass::Backdrop.max_frosted_strip_bytes());
+    // A normalized custom budget must admit one maximum-sized Backdrop.
+    let max_backdrop_load = self.load_reservation_bytes(ArtworkSizeClass::Backdrop);
     self.max_active_bytes = self.max_active_bytes.max(max_backdrop_load);
     self
   }
@@ -357,12 +346,6 @@ impl ArtworkSizeClass {
     let (width, height) = self.target_box();
     (width as usize + height as usize / 2) * (height as usize * 3 / 2) * 4
   }
-  /// Upper bound on an optional derived frosted strip. The strip has its own
-  /// class-sized allowance so a tall band does not compete with the main
-  /// raster's byte cap.
-  const fn max_frosted_strip_bytes(self) -> usize {
-    self.max_raster_bytes()
-  }
 
   /// Cap on the source-image area decoded before downsampling, in pixels.
   ///
@@ -398,23 +381,6 @@ impl ArtworkSizeClass {
   }
 }
 
-/// Display geometry for a frosted progress strip derived during artwork decode.
-#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
-pub struct FrostedStripSpec {
-  pub frame_width: u32,
-  pub frame_height: u32,
-  pub bar_height: u32,
-  pub corner_radius: u32,
-}
-
-impl FrostedStripSpec {
-  fn output_bytes(self) -> usize {
-    (self.frame_width as usize)
-      .saturating_mul(self.bar_height as usize)
-      .saturating_mul(4)
-  }
-}
-
 /// A Library Image Raster: an in-memory, display-sized RGBA decode of a
 /// Library Image, keyed by the image reference and an [`ArtworkSizeClass`].
 /// Never persisted; renderers build their handle from it synchronously.
@@ -423,7 +389,6 @@ pub struct ArtworkRaster {
   width: u32,
   height: u32,
   pixels: Bytes,
-  frosted_strip: Option<Box<Self>>,
   logo_shadow: Option<Box<Self>>,
 }
 
@@ -441,17 +406,9 @@ impl ArtworkRaster {
   #[must_use]
   pub fn byte_len(&self) -> usize {
     self
-      .frosted_strip
-      .as_deref()
-      .map_or(self.pixels.len(), |strip| {
-        self.pixels.len().saturating_add(strip.byte_len())
-      })
+      .pixels
+      .len()
       .saturating_add(self.logo_shadow.as_deref().map_or(0, Self::byte_len))
-  }
-
-  #[must_use]
-  pub fn frosted_strip(&self) -> Option<&Self> {
-    self.frosted_strip.as_deref()
   }
 
   #[must_use]
@@ -460,12 +417,11 @@ impl ArtworkRaster {
   }
 
   #[must_use]
-  pub fn into_parts(self) -> (u32, u32, Bytes, Option<Self>, Option<Self>) {
+  pub fn into_parts(self) -> (u32, u32, Bytes, Option<Self>) {
     (
       self.width,
       self.height,
       self.pixels,
-      self.frosted_strip.map(|strip| *strip),
       self.logo_shadow.map(|shadow| *shadow),
     )
   }
@@ -484,19 +440,16 @@ impl ArtworkRaster {
       width,
       height,
       pixels: pixels.into(),
-      frosted_strip: None,
       logo_shadow: None,
     }
   }
 }
 
 /// Derived raster variants baked alongside the main decode. Part of the cache
-/// and coalescing identity: strip-bearing and shadow-bearing variants of the
-/// same image coexist independently.
+/// and coalescing identity: plain and shadow-bearing variants of the same image
+/// coexist independently.
 #[derive(Clone, Copy, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub struct DerivedArtwork {
-  /// Frosted strip baked from the source (progress bars, hero bands).
-  pub frosted_strip: Option<FrostedStripSpec>,
   /// Soft drop shadow baked from the source alpha for Title Logos.
   pub logo_shadow: bool,
 }
@@ -567,14 +520,6 @@ fn decode_raster_with_derived(
     decoded
   };
   let rgba = sized.to_rgba8();
-  // Validate the derived allocation independently of the main raster. A
-  // Backdrop may retain a tall band even when the two buffers together exceed
-  // the historical single-raster cap.
-  let frosted_strip = derived
-    .frosted_strip
-    .filter(|spec| spec.output_bytes() <= size_class.max_frosted_strip_bytes())
-    .and_then(|spec| generate_frosted_strip(&rgba, spec))
-    .map(Box::new);
   let logo_shadow = derived
     .logo_shadow
     .then(|| Box::new(generate_logo_shadow(&rgba)));
@@ -587,7 +532,6 @@ fn decode_raster_with_derived(
     width,
     height,
     pixels,
-    frosted_strip,
     logo_shadow,
   })
 }
@@ -619,7 +563,6 @@ fn generate_logo_shadow(source: &image::RgbaImage) -> ArtworkRaster {
     width: padded_width,
     height: padded_height,
     pixels: Bytes::from(tight.into_raw()),
-    frosted_strip: None,
     logo_shadow: None,
   }
 }
@@ -641,109 +584,6 @@ fn logo_shadow_tight_radius(source_width: u32) -> u32 {
 
 fn logo_shadow_diffuse_radius(source_width: u32) -> u32 {
   (source_width / 53).clamp(8, 14)
-}
-
-fn generate_frosted_strip(
-  source: &image::RgbaImage,
-  spec: FrostedStripSpec,
-) -> Option<ArtworkRaster> {
-  // The band may occupy most of its reference frame; only invalid geometry
-  // is rejected here. Its allocation is class-bounded before this function is
-  // reached from decode.
-  if source.width() == 0
-    || source.height() == 0
-    || spec.frame_width == 0
-    || spec.frame_height == 0
-    || spec.bar_height == 0
-    || spec.bar_height > spec.frame_height
-  {
-    return None;
-  }
-
-  let mut blurred = source.clone();
-  box_blur_three_passes(&mut blurred, frosted_blur_radius(source.width()));
-  // Work in full reference-frame coordinates: tall bands use the same cover
-  // transform as narrow progress strips and need no separate height cap.
-  let source_rect = cover_strip_source_rect(source.dimensions(), spec);
-  let mut strip = resize_fractional(&blurred, source_rect, spec.frame_width, spec.bar_height);
-  mask_bottom_corners(&mut strip, spec.corner_radius as f32);
-  let (width, height) = strip.dimensions();
-  Some(ArtworkRaster {
-    width,
-    height,
-    pixels: Bytes::from(strip.into_raw()),
-    frosted_strip: None,
-    logo_shadow: None,
-  })
-}
-
-fn cover_strip_source_rect(
-  (source_width, source_height): (u32, u32),
-  spec: FrostedStripSpec,
-) -> (f32, f32, f32, f32) {
-  let content_width = source_width as f32;
-  let content_height = source_height as f32;
-  let bounds_width = spec.frame_width as f32;
-  let bounds_height = spec.frame_height as f32;
-  let content_aspect = content_width / content_height;
-  let bounds_aspect = bounds_width / bounds_height;
-  let (drawn_width, drawn_height) = if bounds_aspect < content_aspect {
-    (
-      content_width * bounds_height / content_height,
-      bounds_height,
-    )
-  } else {
-    (bounds_width, content_height * bounds_width / content_width)
-  };
-  let offset_x = (bounds_width - drawn_width) / 2.0;
-  let offset_y = (bounds_height - drawn_height) / 2.0;
-  let scale_x = drawn_width / content_width;
-  let scale_y = drawn_height / content_height;
-  (
-    (0.0 - offset_x) / scale_x,
-    (bounds_height - spec.bar_height as f32 - offset_y) / scale_y,
-    bounds_width / scale_x,
-    spec.bar_height as f32 / scale_y,
-  )
-}
-
-fn resize_fractional(
-  source: &image::RgbaImage,
-  (left, top, width, height): (f32, f32, f32, f32),
-  output_width: u32,
-  output_height: u32,
-) -> image::RgbaImage {
-  image::RgbaImage::from_fn(output_width, output_height, |x, y| {
-    let source_x = left + (x as f32 + 0.5) * width / output_width as f32 - 0.5;
-    let source_y = top + (y as f32 + 0.5) * height / output_height as f32 - 0.5;
-    bilinear_pixel(source, source_x, source_y)
-  })
-}
-
-fn bilinear_pixel(source: &image::RgbaImage, x: f32, y: f32) -> image::Rgba<u8> {
-  let x = x.clamp(0.0, source.width().saturating_sub(1) as f32);
-  let y = y.clamp(0.0, source.height().saturating_sub(1) as f32);
-  let x0 = x.floor() as u32;
-  let y0 = y.floor() as u32;
-  let x1 = x0.saturating_add(1).min(source.width() - 1);
-  let y1 = y0.saturating_add(1).min(source.height() - 1);
-  let x_fraction = x - x0 as f32;
-  let y_fraction = y - y0 as f32;
-  let top_left = source.get_pixel(x0, y0).0;
-  let top_right = source.get_pixel(x1, y0).0;
-  let bottom_left = source.get_pixel(x0, y1).0;
-  let bottom_right = source.get_pixel(x1, y1).0;
-  image::Rgba(std::array::from_fn(|channel| {
-    let top = f32::from(top_left[channel]) * (1.0 - x_fraction)
-      + f32::from(top_right[channel]) * x_fraction;
-    let bottom = f32::from(bottom_left[channel]) * (1.0 - x_fraction)
-      + f32::from(bottom_right[channel]) * x_fraction;
-    (top * (1.0 - y_fraction) + bottom * y_fraction).round() as u8
-  }))
-}
-
-fn frosted_blur_radius(source_width: u32) -> u32 {
-  (source_width / 10).max(8)
 }
 
 fn box_blur_three_passes(image: &mut image::RgbaImage, radius: u32) {
@@ -817,33 +657,6 @@ fn box_blur_vertical(source: &image::RgbaImage, target: &mut image::RgbaImage, r
       {
         *sum = sum.saturating_sub(u64::from(top)) + u64::from(bottom);
       }
-    }
-  }
-}
-
-fn mask_bottom_corners(strip: &mut image::RgbaImage, radius: f32) {
-  if radius <= 0.0 {
-    return;
-  }
-  let width = strip.width() as f32;
-  let height = strip.height() as f32;
-  let center_y = height - radius;
-  for y in 0..strip.height() {
-    let pixel_y = y as f32 + 0.5;
-    for x in 0..strip.width() {
-      let pixel_x = x as f32 + 0.5;
-      let center_x = if pixel_x < radius {
-        radius
-      } else if pixel_x > width - radius {
-        width - radius
-      } else {
-        continue;
-      };
-      let distance = ((pixel_x - center_x).powi(2) + (pixel_y - center_y).powi(2)).sqrt();
-      let coverage = (radius + 0.5 - distance).clamp(0.0, 1.0);
-      let coverage = coverage * coverage * (3.0 - 2.0 * coverage);
-      let alpha = &mut strip.get_pixel_mut(x, y).0[3];
-      *alpha = (f32::from(*alpha) * coverage).round() as u8;
     }
   }
 }
@@ -2061,24 +1874,6 @@ mod tests {
     ArtworkRaster::from_raw_for_test(width, height, Bytes::from(pixels))
   }
 
-  const fn frosted_spec() -> FrostedStripSpec {
-    FrostedStripSpec {
-      frame_width: 240,
-      frame_height: 135,
-      bar_height: 8,
-      corner_radius: 8,
-    }
-  }
-
-  const fn band_spec() -> FrostedStripSpec {
-    FrostedStripSpec {
-      frame_width: 1600,
-      frame_height: 480,
-      bar_height: 264,
-      corner_radius: 0,
-    }
-  }
-
   fn class_key(image_id: &str, size_class: ArtworkSizeClass) -> RasterKey {
     RasterKey {
       image_id: Arc::from(image_id),
@@ -2173,7 +1968,7 @@ mod tests {
   }
 
   #[test]
-  fn aggregate_reservation_matches_stripless_and_frosted_load_shapes() {
+  fn aggregate_reservation_matches_plain_and_shadowed_load_shapes() {
     let limits = ArtworkLimits::default();
 
     for size_class in [
@@ -2186,49 +1981,24 @@ mod tests {
         + size_class.max_raster_bytes() * DECODE_PIXEL_BUFFER_RESERVATIONS;
       assert_eq!(limits.load_reservation_bytes(size_class), base);
       assert_eq!(
-        limits.load_reservation_bytes_with_derived(
-          size_class,
-          DerivedArtwork {
-            frosted_strip: Some(frosted_spec()),
-            ..DerivedArtwork::default()
-          },
-        ),
-        base + frosted_spec().output_bytes()
-      );
-      assert_eq!(
         limits.load_reservation_bytes_with_derived(size_class, DerivedArtwork::default()),
         base
       );
       assert_eq!(
-        limits.load_reservation_bytes_with_derived(
-          size_class,
-          DerivedArtwork {
-            logo_shadow: true,
-            ..DerivedArtwork::default()
-          },
-        ),
+        limits
+          .load_reservation_bytes_with_derived(size_class, DerivedArtwork { logo_shadow: true },),
         base + size_class.max_logo_shadow_bytes()
       );
     }
   }
 
   #[test]
-  fn normalized_budget_admits_a_maximum_backdrop_band() {
+  fn normalized_budget_admits_a_maximum_backdrop() {
     let limits = ArtworkLimits {
       max_active_bytes: 0,
       ..ArtworkLimits::default()
     }
     .normalized();
-    let (width, height) = ArtworkSizeClass::Backdrop.target_box();
-    let derived = DerivedArtwork {
-      frosted_strip: Some(FrostedStripSpec {
-        frame_width: width,
-        frame_height: height,
-        bar_height: height,
-        corner_radius: 0,
-      }),
-      ..DerivedArtwork::default()
-    };
     let mut scheduler = LoadScheduler::default();
     let (queued, _) = scheduler.enqueue(LoadLane::Visible);
 
@@ -2236,7 +2006,7 @@ mod tests {
       queued,
       limits.max_active_loads,
       limits.max_active_bytes,
-      limits.load_reservation_bytes_with_derived(ArtworkSizeClass::Backdrop, derived),
+      limits.load_reservation_bytes(ArtworkSizeClass::Backdrop),
     ));
   }
 
@@ -3140,25 +2910,6 @@ mod tests {
   }
 
   #[test]
-  fn backdrop_band_request_does_not_reuse_a_stripless_raster_cache_entry() {
-    let adapter = ArtworkAdapter::default();
-    adapter.seed_raster_for_test("shared", ArtworkSizeClass::Backdrop, raster(2, 2));
-
-    assert!(adapter
-      .cached("shared", ArtworkSizeClass::Backdrop)
-      .is_some());
-    assert!(adapter
-      .cached_with_derived(
-        "shared",
-        ArtworkSizeClass::Backdrop,
-        DerivedArtwork {
-          frosted_strip: Some(band_spec()),
-          ..DerivedArtwork::default()
-        },
-      )
-      .is_none());
-  }
-  #[test]
   fn logo_shadow_matches_source_geometry_with_darkened_soft_alpha() {
     let source = image::RgbaImage::from_pixel(240, 135, image::Rgba([200, 40, 40, 255]));
 
@@ -3225,17 +2976,18 @@ mod tests {
   }
 
   #[test]
-  fn logo_shadow_flag_separates_raster_keys() {
-    let plain = class_key("logo", ArtworkSizeClass::Hero);
-    let shadowed = RasterKey {
-      derived: DerivedArtwork {
-        logo_shadow: true,
-        ..DerivedArtwork::default()
-      },
-      ..class_key("logo", ArtworkSizeClass::Hero)
-    };
+  fn logo_shadow_request_does_not_reuse_a_plain_raster() {
+    let adapter = ArtworkAdapter::default();
+    adapter.seed_raster_for_test("logo", ArtworkSizeClass::Hero, raster(2, 2));
 
-    assert_ne!(plain, shadowed);
+    assert!(adapter.cached("logo", ArtworkSizeClass::Hero).is_some());
+    assert!(adapter
+      .cached_with_derived(
+        "logo",
+        ArtworkSizeClass::Hero,
+        DerivedArtwork { logo_shadow: true },
+      )
+      .is_none());
   }
 
   #[test]
@@ -3250,97 +3002,6 @@ mod tests {
     let backdrop =
       decode_raster(&artwork(&png), ArtworkSizeClass::Backdrop).expect("backdrop decodes");
     assert_eq!((backdrop.width(), backdrop.height()), (600, 900));
-  }
-
-  #[test]
-  fn decode_retains_optional_strip_beyond_the_main_raster_byte_cap() {
-    let png = encode_test_png(600, 900);
-
-    let raster = decode_raster_with_derived(
-      &artwork(&png),
-      ArtworkSizeClass::Card,
-      DerivedArtwork {
-        frosted_strip: Some(frosted_spec()),
-        ..DerivedArtwork::default()
-      },
-    )
-    .expect("main raster and independently bounded strip decode");
-
-    assert_eq!(
-      raster.byte_len(),
-      ArtworkSizeClass::Card.max_raster_bytes() + 240 * 8 * 4
-    );
-    assert!(raster.frosted_strip().is_some());
-  }
-
-  #[test]
-  fn frosted_strip_has_exact_frame_width_and_bar_height() {
-    let source = image::RgbaImage::from_pixel(240, 135, image::Rgba([30, 60, 90, 255]));
-
-    let strip = generate_frosted_strip(&source, frosted_spec()).expect("strip is generated");
-
-    assert_eq!((strip.width(), strip.height()), (240, 8));
-  }
-
-  #[test]
-  fn backdrop_band_has_requested_output_dimensions() {
-    let png = encode_test_png(1920, 480);
-
-    let raster = decode_raster_with_derived(
-      &artwork(&png),
-      ArtworkSizeClass::Backdrop,
-      DerivedArtwork {
-        frosted_strip: Some(band_spec()),
-        ..DerivedArtwork::default()
-      },
-    )
-    .expect("Backdrop raster and band decode");
-    let band = raster.frosted_strip().expect("band is retained");
-
-    assert_eq!((raster.width(), raster.height()), (1920, 480));
-    assert_eq!((band.width(), band.height()), (1600, 264));
-  }
-
-  #[test]
-  fn frosted_output_allocation_is_bounded_before_generation() {
-    let png = encode_test_png(32, 18);
-    let oversized = FrostedStripSpec {
-      frame_width: u32::MAX,
-      frame_height: 1,
-      bar_height: 1,
-      corner_radius: 0,
-    };
-
-    let raster = decode_raster_with_derived(
-      &artwork(&png),
-      ArtworkSizeClass::Backdrop,
-      DerivedArtwork {
-        frosted_strip: Some(oversized),
-        ..DerivedArtwork::default()
-      },
-    )
-    .expect("main raster still decodes");
-
-    assert!(raster.frosted_strip().is_none());
-  }
-
-  #[test]
-  fn frosted_strip_masks_only_the_bottom_corners() {
-    let source = image::RgbaImage::from_pixel(240, 135, image::Rgba([30, 60, 90, 255]));
-    let strip = generate_frosted_strip(&source, frosted_spec()).expect("strip is generated");
-    let (_, _, pixels, ..) = strip.into_parts();
-    let alpha_at = |x: usize, y: usize| pixels[(y * 240 + x) * 4 + 3];
-
-    assert_eq!(alpha_at(0, 7), 0);
-    assert_eq!(alpha_at(239, 7), 0);
-    assert_eq!(alpha_at(120, 4), 255);
-  }
-
-  #[test]
-  fn frosted_blur_radius_preserves_card_formula_and_scales_for_backdrops() {
-    assert_eq!(frosted_blur_radius(64), 8);
-    assert_eq!(frosted_blur_radius(240), 24);
-    assert_eq!(frosted_blur_radius(1920), 192);
   }
 
   #[test]
@@ -3373,19 +3034,6 @@ mod tests {
       let value = source.get_pixel(x, 8).0[0];
       value > 0 && value < 255
     }));
-  }
-
-  #[test]
-  fn frosted_strip_samples_the_fractional_cover_transform() {
-    let source =
-      image::RgbaImage::from_fn(120, 300, |_, y| image::Rgba([y.min(255) as u8, 0, 0, 255]));
-
-    let strip = generate_frosted_strip(&source, frosted_spec()).expect("strip is generated");
-    let (_, _, pixels, ..) = strip.into_parts();
-    let red_at = |y: usize| pixels[(y * 240 + 120) * 4];
-
-    assert_eq!(red_at(0), 180);
-    assert_eq!(red_at(7), 183);
   }
 
   #[test]

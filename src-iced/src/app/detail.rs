@@ -707,7 +707,6 @@ fn prepare_artwork(surface: &mut Surface, kernel: &mut Kernel) -> Task<Message> 
   let mut load_specs = Vec::new();
   for spec in specs {
     let derived = DerivedArtwork {
-      frosted_strip: None,
       logo_shadow: spec.key == DETAIL_LOGO_KEY,
     };
     if let Some(cell) = surface.artwork.get(&spec.key) {
@@ -1327,10 +1326,7 @@ mod tests {
     kernel.artwork_adapter.seed_raster_with_derived_for_test(
       "detail-cache-logo",
       jellypilot_media_server::artwork::ArtworkSizeClass::Hero,
-      jellypilot_media_server::artwork::DerivedArtwork {
-        logo_shadow: true,
-        ..jellypilot_media_server::artwork::DerivedArtwork::default()
-      },
+      jellypilot_media_server::artwork::DerivedArtwork { logo_shadow: true },
       jellypilot_media_server::artwork::ArtworkRaster::from_raw_for_test(
         1,
         1,

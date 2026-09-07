@@ -15,8 +15,8 @@ exclude = [
 resolver = "2"
 
 [workspace.dependencies]
-iced = { git = "https://github.com/hewel/iced.git", rev = "bc93c1f1", features = ["advanced", "advanced-shaping", "image", "svg", "tokio"] }
-iced_runtime = { git = "https://github.com/hewel/iced.git", rev = "bc93c1f1" }
+iced = { git = "https://github.com/hewel/iced.git", rev = "f812ae504989444eb57d9f8669c1ab5a2e326c95", features = ["advanced", "advanced-shaping", "image", "svg", "tokio"] }
+iced_runtime = { git = "https://github.com/hewel/iced.git", rev = "f812ae504989444eb57d9f8669c1ab5a2e326c95" }
 
 [workspace.package]
 edition = "2021"

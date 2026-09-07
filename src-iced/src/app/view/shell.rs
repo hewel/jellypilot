@@ -7,7 +7,7 @@ use crate::app::shell::{SEARCH_INPUT_ID, SEARCH_TRIGGER_ID, SETTINGS_TRIGGER_ID}
 use crate::app::state::{Destination, State};
 use crate::i18n::Localizer;
 use iced::widget::{
-  button, column, container, row, scrollable, space, stack, text, text_input, Column, Id,
+  button, column, container, modal, row, scrollable, space, stack, text, text_input, Column, Id,
 };
 use iced::{Alignment, Element, Fill, Length};
 use jellypilot_core::config::AppMode;
@@ -505,7 +505,7 @@ fn settings_modal(state: &State) -> Element<'_, Message> {
       .into();
   }
 
-  container(
+  let dialog = container(
     container(modal_content)
       .width(Length::Fixed(896.0))
       .height(Length::Fixed(
@@ -518,7 +518,13 @@ fn settings_modal(state: &State) -> Element<'_, Message> {
   .padding(24)
   .center_x(Fill)
   .center_y(Fill)
-  .into()
+  .style(move |_| container::Style::default().background(palette.colors.surface.scale_alpha(0.6)));
+  // The account layer blurs the complete scene, including Settings, once.
+  if crate::app::accounts::blocking_modal(&state.accounts) {
+    dialog.into()
+  } else {
+    modal(12.0, dialog)
+  }
 }
 
 fn settings_button<'a>() -> Element<'a, Message> {

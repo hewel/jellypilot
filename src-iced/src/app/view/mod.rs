@@ -14,23 +14,26 @@ use iced::{Alignment, Color, Element, Fill, Length};
 use jellypilot_auth::login::ConnectionPhase;
 use jellypilot_ui::icons::{icon_with_color, Icon, IconSize};
 use jellypilot_ui::tokens::{ThemePalette, TOKENS};
+use jellypilot_ui::widgets::inert::inert;
 
 use super::message::Message;
 use super::state::{NoticeLevel, State, ToastNotice};
 
 pub fn view(state: &State) -> Element<'_, Message> {
-  // Candidate login and confirmation replace the background widget tree so
-  // Tab cannot reach its controls. Shared feedback still sits above the modal.
-  let base = account::modal_layer(state).unwrap_or_else(|| {
-    if state.kernel.connection == ConnectionPhase::Connected {
-      shell::view(state)
-    } else {
-      login::view(state)
-    }
-  });
+  let base = if state.kernel.connection == ConnectionPhase::Connected {
+    shell::view(state)
+  } else {
+    login::view(state)
+  };
   // Keep this ancestor stable: adding or removing it would reset descendant
   // input focus, cursor positions, and scroll state during iced reconciliation.
-  let mut layers = stack![base].width(Fill).height(Fill);
+  let mut layers = if let Some(modal) = account::modal_layer(state) {
+    stack![inert(base), modal]
+  } else {
+    stack![base]
+  }
+  .width(Fill)
+  .height(Fill);
   if let Some(toast) = state.kernel.active_toast.as_ref() {
     layers = layers.push(
       container(toast_view(state.palette(), state.kernel.locale, toast))

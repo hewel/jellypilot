@@ -94,6 +94,21 @@ pub fn style(theme: &Theme, variant: ButtonVariant, status: button::Status) -> b
         ..button::Style::default()
     }
 }
+
+/// Translucent Hero fills over the native Backdrop blur, retaining each
+/// variant's content contrast and interaction colors.
+pub fn hero_glass(theme: &Theme, variant: ButtonVariant, status: button::Status) -> button::Style {
+    let mut style = style(theme, variant, status);
+    if let Some(Background::Color(color)) = style.background {
+        let opacity = if variant == ButtonVariant::Primary {
+            0.88
+        } else {
+            0.72
+        };
+        style.background = Some(color.scale_alpha(opacity).into());
+    }
+    style
+}
 fn brightness(color: Color, factor: f32) -> Color {
     Color {
         r: (color.r * factor).min(1.0),

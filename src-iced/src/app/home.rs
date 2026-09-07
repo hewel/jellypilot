@@ -11,7 +11,7 @@ use jellypilot_core::artwork_loader::{visible_row_cards, PlannedArtworkLoad};
 use jellypilot_core::diagnostics::{DiagnosticCategory, DiagnosticLevel, Diagnostics};
 use jellypilot_core::request_gate::{HomeToken, RequestGate};
 use jellypilot_media_server::artwork::{
-  ArtworkLoadObservation, ArtworkLoadSummary, ArtworkSizeClass, DerivedArtwork, FrostedStripSpec,
+  ArtworkLoadObservation, ArtworkLoadSummary, ArtworkSizeClass, DerivedArtwork,
 };
 use jellypilot_media_server::home::{load_home_data, HomeDataResult};
 use jellypilot_media_server::VideoLibraryItem;
@@ -22,7 +22,7 @@ use super::artwork::stream_artwork_loads;
 use super::kernel::Kernel;
 use super::message::{ArtworkLoadCompletion, HomeMessage, Message};
 use super::state::{ArtworkCell, ArtworkCellState, HomeArtwork, HomeSection, HomeState};
-use super::view::home::{content_width, section_frame_size, PROGRESS_BAR_HEIGHT};
+use super::view::home::{content_width, section_frame_size};
 
 /// Home surface slice: Video Home section data plus the artwork cells bound
 /// for the hero and the section card rows.
@@ -288,20 +288,7 @@ impl ArtworkLoadSpec {
   }
 
   fn derived(&self) -> DerivedArtwork {
-    let frosted_strip = match self.placement {
-      ArtworkPlacement::Card(section) if section.is_action() => {
-        let (frame_width, frame_height) = section_frame_size(section);
-        Some(FrostedStripSpec {
-          frame_width: frame_width as u32,
-          frame_height: frame_height as u32,
-          bar_height: PROGRESS_BAR_HEIGHT as u32,
-          corner_radius: TOKENS.radii.lg as u32,
-        })
-      }
-      _ => None,
-    };
     DerivedArtwork {
-      frosted_strip,
       logo_shadow: matches!(self.placement, ArtworkPlacement::Hero),
     }
   }

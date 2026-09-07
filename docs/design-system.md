@@ -8,7 +8,7 @@ The design system lives in `crates/jellypilot-ui`: tokens in `tokens.rs` (`TOKEN
 
 ## Principles
 
-- **Clean and flat first**: surfaces are flat, solid, and opaque — Charcoal keeps 4–7% lightness instead of OLED pure black. Depth comes from the two semantic shadow tiers on floating layers, never from translucency. Permitted structural outlines identify boundaries, not elevation.
+- **Clean and flat first**: ordinary surfaces are flat, solid, and opaque — Charcoal keeps 4–7% lightness instead of OLED pure black. Depth comes from the two semantic shadow tiers on floating layers. The scoped native blur treatments below are exceptions, not a general glass surface system. Permitted structural outlines identify boundaries, not elevation.
 - **Visual restraint**: separation is whitespace first, shell hairlines second. The Sidebar surface revision permits a small, explicit set of structural outlines and toolbar separators, not blanket element framing.
 - **Operational clarity**: every status uses text and icon, not color alone.
 - **No fake state**: never show fake media artwork, fake playback progress, or pretend controls.
@@ -106,6 +106,15 @@ Composite Sidebar and profile rows use `control_button_content` for whole-contro
 `PosterCard` draws no hover or press overlay, lift, or tint — the artwork and copy render exactly as provided, and interaction only publishes the press message. Media images use radius `lg`.
 
 The detail hero keeps its backdrop scrim, simplified to two stops: transparent at the top → `surfaceContainerLowest` at 0.85 alpha at the bottom.
+
+### Native Image and Modal Blur
+
+- Home Hero actions sample only the original Backdrop, at its full-width natural-aspect `Contain` frame with the same theme fade. Native image blur sits below local semantic button tint, sharp labels/icons, and focus borders. Missing artwork retains normal opaque button surfaces; Title Logos are never the blur source.
+- Card progress samples the original artwork with native blur. The full card frame, radius, smoothing, and snap policy define the mask; a separate rectangular reveal exposes the bottom four logical pixels. Track tint precedes the percentage-clipped played color, with selection/focus treatment above both. Updating progress does not change blur parameters.
+- Wide Settings and account dialogs blur the live lower scene before dimming it; dialogs and higher Toasts remain sharp. Account dialogs retain the underlying widget tree while shielding its input, focus traversal, and overlays. Account-over-Settings uses one scene marker. Narrow and Control-Only full-screen Settings, and ordinary Popovers, keep their existing presentation.
+- This integration pins the iced fork to `f812ae504989444eb57d9f8669c1ab5a2e326c95`. WGPU uses isolated targets and downsampled Gaussian blur; software uses a premultiplied three-box approximation. Active rendition axes are capped at 1024 pixels on GPU and 2048 in software; backend results are not pixel-identical.
+- Matching sources and effective blur parameters can share cached results. Position, opacity, mask, tint, or progress-only changes do not require another convolution; source, crop, scale, and sigma changes can miss. Scene-cache hits neither freeze the background nor eliminate all lower-scene drawing. Large software-blurred scenes remain expensive.
+- Advanced WGPU drawing with `Renderer::draw(None)` rejects positive scene blur; the ordinary window compositor supplies a clear color. Human acceptance must check both themes, scrolling/resize alignment, the card's bottom corners, live modal backgrounds, sharp Toasts, and keyboard focus. Code-level/headless checks do not establish visual acceptance.
 
 ## Slop Prohibitions
 

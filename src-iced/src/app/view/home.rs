@@ -309,7 +309,20 @@ fn featured_hero<'a>(
     state.t("home-play")
   };
   let play_enabled = state.playback.view.engine_available;
+  let scrim_start = hero_height - TOKENS.spacing.s4 - 40.0 - TOKENS.spacing.s3 - metadata_height;
+  let backdrop = hero_backdrop(
+    state,
+    home.artwork.hero_backdrop(&item.id),
+    width,
+    scrim_start,
+  );
+  let button_style = if backdrop.is_some() {
+    jellypilot_ui::widgets::button::hero_glass
+  } else {
+    jellypilot_ui::widgets::button::style
+  };
   let play = control_button(Some(Icon::Play), Some(play_label), ButtonVariant::Primary)
+    .style(button_style)
     .spacing(TOKENS.spacing.s2)
     .padding([7, 14])
     .min_height(40.0)
@@ -320,6 +333,7 @@ fn featured_hero<'a>(
     Some(state.t("home-details")),
     ButtonVariant::Tonal,
   )
+  .style(button_style)
   .spacing(TOKENS.spacing.s2)
   .padding([7, 14])
   .min_height(40.0)
@@ -416,8 +430,12 @@ fn featured_hero<'a>(
     .height(hero_height)
     .clip(true);
   (
-    hero.into(),
-    hero_height - TOKENS.spacing.s4 - 40.0 - TOKENS.spacing.s3 - metadata_height,
+    Element::new(HeroGlass {
+      content: hero.into(),
+      backdrop,
+      buttons: HeroButtonBounds::default(),
+    }),
+    scrim_start,
   )
 }
 
@@ -569,19 +587,15 @@ fn video_card<'a>(
           reduced_motion,
         ));
         if let Some(progress) = card_progress(section, item) {
-          let strip = cell.and_then(|cell| {
-            state
-              .kernel
-              .artwork_handles
-              .frosted_strip(cell.slot, &cell.image_id)
-          });
+          let handle =
+            cell.and_then(|cell| state.kernel.artwork_handles.get(cell.slot, &cell.image_id));
           artwork = artwork.push(
             container(progress_bar(
               palette,
               progress,
               radius,
               frame_height,
-              strip.cloned(),
+              handle.cloned(),
             ))
             .width(Fill)
             .height(Fill)
@@ -755,24 +769,12 @@ fn hero_imagery<'a>(
   width: f32,
   scrim_start: f32,
 ) -> (Element<'a, Message>, f32) {
-  let empty = || (space::horizontal().height(0).into(), 0.0);
-  let Some(cell) = cell.filter(|cell| cell.state == ArtworkCellState::Ready) else {
-    return empty();
+  let Some(backdrop) = hero_backdrop(state, cell, width, scrim_start) else {
+    return (space::horizontal().height(0).into(), 0.0);
   };
-  let Some(handle) = state.kernel.artwork_handles.get(cell.slot, &cell.image_id) else {
-    return empty();
-  };
-  let Some((image_width, image_height)) = state
-    .kernel
-    .artwork_handles
-    .dims(cell.slot, &cell.image_id)
-    .filter(|&(width, height)| width > 0 && height > 0)
-  else {
-    return empty();
-  };
-  let height = width * image_height as f32 / image_width as f32;
+  let height = backdrop.size.height;
   let image = container(
-    Image::new(handle.clone())
+    Image::new(backdrop.handle)
       .content_fit(ContentFit::Contain)
       .width(Fill)
       .height(height),
@@ -780,6 +782,39 @@ fn hero_imagery<'a>(
   .id(widget::Id::new("home-backdrop"))
   .width(Fill)
   .height(height);
+  let fade = backdrop.fade;
+  (
+    stack![image, hero_fade(fade)]
+      .width(Fill)
+      .height(height)
+      .into(),
+    height,
+  )
+}
+
+struct HeroBackdrop {
+  handle: iced::widget::image::Handle,
+  size: iced::Size,
+  fade: gradient::Linear,
+}
+
+fn hero_backdrop(
+  state: &State,
+  cell: Option<&ArtworkCell>,
+  width: f32,
+  scrim_start: f32,
+) -> Option<HeroBackdrop> {
+  let cell = cell.filter(|cell| cell.state == ArtworkCellState::Ready)?;
+  let handle = state
+    .kernel
+    .artwork_handles
+    .get(cell.slot, &cell.image_id)?;
+  let (image_width, image_height) = state
+    .kernel
+    .artwork_handles
+    .dims(cell.slot, &cell.image_id)
+    .filter(|&(width, height)| width > 0 && height > 0)?;
+  let height = width * image_height as f32 / image_width as f32;
   let background = state.palette().colors.background;
   let fade = gradient::Linear::new(Degrees(180.0))
     .add_stop(0.0, background.scale_alpha(0.0))
@@ -788,13 +823,194 @@ fn hero_imagery<'a>(
       background.scale_alpha(0.97),
     )
     .add_stop(1.0, background);
-  (
-    stack![image, hero_fade(fade)]
-      .width(Fill)
-      .height(height)
-      .into(),
-    height,
-  )
+  Some(HeroBackdrop {
+    handle: handle.clone(),
+    size: iced::Size::new(width, height),
+    fade,
+  })
+}
+
+#[derive(Default)]
+struct HeroButtonBounds([Option<iced::Rectangle>; 2]);
+
+impl widget::Operation for HeroButtonBounds {
+  fn traverse(&mut self, operate: &mut dyn FnMut(&mut dyn widget::Operation)) {
+    operate(self);
+  }
+
+  fn focusable(
+    &mut self,
+    id: Option<&widget::Id>,
+    bounds: iced::Rectangle,
+    _state: &mut dyn widget::operation::Focusable,
+  ) {
+    for (index, name) in ["home-hero-play", "home-hero-details"].iter().enumerate() {
+      if id == Some(&widget::Id::new(name)) {
+        self.0[index] = Some(bounds);
+      }
+    }
+  }
+}
+
+/// Samples only the Backdrop behind the actual laid-out controls. Measuring
+/// their existing IDs avoids guessing localized label widths or copy offsets.
+struct HeroGlass<'a> {
+  content: Element<'a, Message>,
+  backdrop: Option<HeroBackdrop>,
+  buttons: HeroButtonBounds,
+}
+
+impl Widget<Message, iced::Theme, iced::Renderer> for HeroGlass<'_> {
+  fn diff(&mut self, tree: &mut widget::Tree) {
+    tree.diff_children(&mut [self.content.as_widget_mut()]);
+  }
+
+  fn size(&self) -> iced::Size<Length> {
+    self.content.as_widget().size()
+  }
+
+  fn layout(
+    &mut self,
+    tree: &mut widget::Tree,
+    renderer: &iced::Renderer,
+    limits: &layout::Limits,
+  ) -> layout::Node {
+    let node = self
+      .content
+      .as_widget_mut()
+      .layout(&mut tree.children[0], renderer, limits);
+    self.buttons = HeroButtonBounds::default();
+    self.content.as_widget_mut().operate(
+      &mut tree.children[0],
+      Layout::new(&node),
+      renderer,
+      &mut self.buttons,
+    );
+    node
+  }
+
+  fn operate(
+    &mut self,
+    tree: &mut widget::Tree,
+    layout: Layout<'_>,
+    renderer: &iced::Renderer,
+    operation: &mut dyn widget::Operation,
+  ) {
+    self
+      .content
+      .as_widget_mut()
+      .operate(&mut tree.children[0], layout, renderer, operation);
+  }
+
+  fn update(
+    &mut self,
+    tree: &mut widget::Tree,
+    event: &iced::Event,
+    layout: Layout<'_>,
+    cursor: iced::mouse::Cursor,
+    renderer: &iced::Renderer,
+    shell: &mut iced::advanced::Shell<'_, Message>,
+    viewport: &iced::Rectangle,
+  ) {
+    self.content.as_widget_mut().update(
+      &mut tree.children[0],
+      event,
+      layout,
+      cursor,
+      renderer,
+      shell,
+      viewport,
+    );
+  }
+
+  fn draw(
+    &self,
+    tree: &widget::Tree,
+    renderer: &mut iced::Renderer,
+    theme: &iced::Theme,
+    style: &renderer::Style,
+    layout: Layout<'_>,
+    cursor: iced::mouse::Cursor,
+    viewport: &iced::Rectangle,
+  ) {
+    let Some(visible) = layout.bounds().intersection(viewport) else {
+      return;
+    };
+    let origin = iced::Vector::new(layout.bounds().x, layout.bounds().y);
+    if let Some(backdrop) = &self.backdrop {
+      for bounds in self.buttons.0.iter().flatten() {
+        let node = layout::Node::new(bounds.size()).move_to(bounds.position() + origin);
+        let image = Image::new(backdrop.handle.clone())
+          .content_fit(ContentFit::Contain)
+          .display_frame(iced::Rectangle::new(
+            iced::Point::new(-bounds.x, -bounds.y),
+            backdrop.size,
+          ))
+          .mask_frame(iced::Rectangle::new(iced::Point::ORIGIN, bounds.size()))
+          .border_radius(TOKENS.radii.md)
+          .border_smoothing(jellypilot_ui::widgets::container::SURFACE_SMOOTHING)
+          .blur(16.0)
+          // Image anchors the gradient to the full display frame, not the mask.
+          .tint(backdrop.fade);
+        <Image as Widget<Message, iced::Theme, iced::Renderer>>::draw(
+          &image,
+          tree,
+          renderer,
+          theme,
+          style,
+          Layout::new(&node),
+          cursor,
+          &visible,
+        );
+      }
+    }
+    // Keep Catalog fills, labels and focus borders above native image batches.
+    renderer.with_layer(visible, |renderer| {
+      self.content.as_widget().draw(
+        &tree.children[0],
+        renderer,
+        theme,
+        style,
+        layout,
+        cursor,
+        &visible,
+      );
+    });
+  }
+
+  fn mouse_interaction(
+    &self,
+    tree: &widget::Tree,
+    layout: Layout<'_>,
+    cursor: iced::mouse::Cursor,
+    viewport: &iced::Rectangle,
+    renderer: &iced::Renderer,
+  ) -> iced::mouse::Interaction {
+    self.content.as_widget().mouse_interaction(
+      &tree.children[0],
+      layout,
+      cursor,
+      viewport,
+      renderer,
+    )
+  }
+
+  fn overlay<'a>(
+    &'a mut self,
+    tree: &'a mut widget::Tree,
+    layout: Layout<'a>,
+    renderer: &iced::Renderer,
+    viewport: &iced::Rectangle,
+    translation: iced::Vector,
+  ) -> Option<iced::advanced::overlay::Element<'a, Message, iced::Theme, iced::Renderer>> {
+    self.content.as_widget_mut().overlay(
+      &mut tree.children[0],
+      layout,
+      renderer,
+      viewport,
+      translation,
+    )
+  }
 }
 
 fn hero_artwork<'a>(
@@ -1137,19 +1353,19 @@ fn progress_bar<'a>(
   progress: f64,
   radius: iced::border::Radius,
   frame_height: f32,
-  frosted_strip: Option<iced::widget::image::Handle>,
+  artwork: Option<iced::widget::image::Handle>,
 ) -> Element<'a, Message> {
   Element::new(ProgressOverlay {
     progress: (progress / 100.0).clamp(0.0, 1.0) as f32,
     fill: palette.colors.primary.scale_alpha(0.5),
-    track: if frosted_strip.is_some() {
+    track: if artwork.is_some() {
       palette.colors.surfaceContainerLowest.scale_alpha(0.4)
     } else {
       palette.colors.surfaceContainerLow.scale_alpha(0.5)
     },
     radius,
     frame_height,
-    frosted_strip,
+    artwork,
   })
 }
 
@@ -1162,7 +1378,7 @@ struct ProgressOverlay {
   track: iced::Color,
   radius: iced::border::Radius,
   frame_height: f32,
-  frosted_strip: Option<iced::widget::image::Handle>,
+  artwork: Option<iced::widget::image::Handle>,
 }
 
 impl Widget<Message, iced::Theme, iced::Renderer> for ProgressOverlay {
@@ -1189,7 +1405,7 @@ impl Widget<Message, iced::Theme, iced::Renderer> for ProgressOverlay {
     _cursor: iced::mouse::Cursor,
     viewport: &iced::Rectangle,
   ) {
-    use iced::advanced::image::Renderer as _;
+    let smoothing = jellypilot_ui::widgets::container::SURFACE_SMOOTHING;
     let strip = layout.bounds();
     let Some(visible) = strip.intersection(viewport) else {
       return;
@@ -1201,18 +1417,28 @@ impl Widget<Message, iced::Theme, iced::Renderer> for ProgressOverlay {
     };
     let border = iced::Border {
       radius: self.radius,
-      smoothing: jellypilot_ui::widgets::container::SURFACE_SMOOTHING,
+      smoothing,
       ..iced::Border::default()
     };
     renderer.with_layer(visible, |renderer| {
-      if let Some(handle) = &self.frosted_strip {
-        renderer.draw_image(
-          iced::advanced::image::Image::new(handle.clone())
-            .border_radius(self.radius)
-            .border_smoothing(jellypilot_ui::widgets::container::SURFACE_SMOOTHING)
-            .snap(false),
-          strip,
-          frame,
+      if let Some(handle) = &self.artwork {
+        let local_frame = iced::Rectangle {
+          x: 0.0,
+          y: strip.height - self.frame_height,
+          width: strip.width,
+          height: self.frame_height,
+        };
+        let image = Image::new(handle.clone())
+          .content_fit(ContentFit::Cover)
+          .display_frame(local_frame)
+          .mask_frame(local_frame)
+          .visible_region(iced::Rectangle::new(iced::Point::ORIGIN, strip.size()))
+          .border_radius(self.radius)
+          .border_smoothing(smoothing)
+          .snap(false)
+          .blur(12.0);
+        <Image as Widget<Message, iced::Theme, iced::Renderer>>::draw(
+          &image, _tree, renderer, _theme, _style, layout, _cursor, viewport,
         );
       }
       // A separate layer keeps the tint above the frosted image on WGPU.
