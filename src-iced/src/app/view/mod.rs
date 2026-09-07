@@ -6,6 +6,7 @@ mod login;
 mod modal_dismiss;
 mod personal_lists;
 mod player;
+pub(crate) mod scroll_memory;
 mod settings;
 pub(crate) mod shell;
 

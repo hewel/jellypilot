@@ -386,7 +386,7 @@ pub fn update(state: &mut State, message: Message) -> Task<Message> {
       let previous_notice = state.kernel.notice.clone();
       let reprepared_artwork = matches!(
         message,
-        BrowseMessage::PageSettled(_) | BrowseMessage::Scrolled(_)
+        BrowseMessage::PageSettled(..) | BrowseMessage::Scrolled(_)
       );
       let source = match &message {
         BrowseMessage::SortChanged(_)
@@ -2117,136 +2117,92 @@ mod tests {
   }
 
   #[test]
-  fn browse_re_navigation_rebuilds_from_the_raster_cache() {
+  fn back_restores_search_results_viewport_and_cached_artwork() {
+    use jellypilot_core::browse_model::{BrowseEffect, BrowsePagePayload, BrowsePageSettlement};
     let mut state = test_state();
     state.kernel.client = Some(Arc::new(JellyfinClient::new()));
-    let library = Destination::Library {
-      library_id: "movies".to_owned(),
-      collection_type: "movies".to_owned(),
-    };
-    state.full.as_mut().unwrap().home.data.shortcuts =
-      jellypilot_core::LoadState::Ready(vec![jellypilot_media_server::VideoLibraryShortcut {
-        id: "movies".to_owned(),
-        name: "Movies".to_owned(),
-        collection_type: "movies".to_owned(),
-        item_count: Some(1),
-        artwork_image_id: None,
-      }]);
-
-    drop(shell::navigate(&mut state, library.clone()));
-
+    let destination = Destination::Search("original query".to_owned());
+    state.shell.navigate_to(destination.clone());
+    let source = shell::browse_source(&state).expect("search source");
+    let browse = &mut state.full.as_mut().unwrap().browse;
+    let request = browse
+      .data
+      .configure(source)
+      .unwrap()
+      .into_iter()
+      .find_map(|effect| {
+        if let BrowseEffect::RequestPage(request) = effect {
+          Some(request)
+        } else {
+          None
+        }
+      })
+      .unwrap();
     let mut item = episode("browse-item-1", 1);
     item.artwork_image_id = Some("browse-art-1".to_owned());
-    state.full.as_mut().unwrap().browse.view = LibraryBrowseView::Ready {
-      visible_items: vec![jellypilot_core::browse_model::LibraryItemSlot {
-        item: Some(item.clone()),
-      }],
-      visible_start: 0,
-      mode: jellypilot_core::LibraryBrowseMode::Normal,
-      total_record_count: 1,
-      is_fetching_more: false,
-      load_more_failure: None,
-      retry_busy: false,
-    };
-
-    // Mirrors the router: a re-prepared pipeline is followed by cross-surface
-    // handle retention (ADR 0029).
-    drop(browse::prepare_artwork(
-      &mut state.full.as_mut().unwrap().browse,
-      &mut state.kernel,
-      state.shell.window_size.width,
-    ));
-    state.retain_artwork_handles();
-    let slot = state
-      .full
-      .as_mut()
-      .unwrap()
-      .browse
-      .artwork
-      .get("browse-item-1")
-      .unwrap()
-      .slot;
-    let session = state.kernel.request_gate.current_session();
-    // A real load stores the raster in the adapter cache; seed it beside the
-    // synthesized completion so re-navigation can rebuild from it.
+    browse
+      .data
+      .settle(BrowsePageSettlement {
+        source_id: request.source_id,
+        token: request.token,
+        result: Ok(BrowsePagePayload {
+          start_index: 0,
+          limit: 24,
+          total_record_count: 24,
+          has_more: false,
+          items: (1..=24)
+            .map(|index| {
+              let mut item = item.clone();
+              item.id = format!("browse-item-{index}");
+              item
+            })
+            .collect(),
+        }),
+      })
+      .unwrap();
+    browse.view = browse.data.view();
+    browse.viewport.offset_y = 500.0;
+    browse.search_input = "original query".to_owned();
     state.kernel.artwork_adapter.seed_raster_for_test(
       "browse-art-1",
       jellypilot_media_server::artwork::ArtworkSizeClass::Card,
       jellypilot_media_server::artwork::ArtworkRaster::from_raw_for_test(1, 1, vec![1, 2, 3, 4]),
     );
-    drop(browse::update(
-      &mut state.full.as_mut().unwrap().browse,
-      &mut state.kernel,
-      None,
-      false,
-      state.playback.view.now_playing.is_none(),
-      state.shell.window_size,
-      BrowseMessage::ArtworkLoaded {
-        session,
-        slot,
-        image_id: "browse-art-1".to_owned(),
-        result: Ok(
-          jellypilot_media_server::artwork::ArtworkRaster::from_raw_for_test(
-            1,
-            1,
-            vec![1, 2, 3, 4],
-          ),
-        ),
-      },
+
+    drop(shell::open_detail(&mut state, item));
+    // Visiting a second result set must not overwrite the earlier history entry.
+    drop(shell::navigate(
+      &mut state,
+      Destination::Search("second query".to_owned()),
     ));
-    assert_eq!(
-      state
-        .full
-        .as_ref()
-        .unwrap()
-        .browse
-        .artwork
-        .get("browse-item-1")
-        .map(|cell| cell.state),
-      Some(ArtworkCellState::Ready)
-    );
-    assert!(state
-      .kernel
-      .artwork_handles
-      .get(slot, "browse-art-1")
-      .is_some());
+    drop(shell::navigate_back(&mut state));
+    drop(shell::navigate_back(&mut state));
+    drop(update(
+      &mut state,
+      Message::Browse(BrowseMessage::SearchInputChanged("third query".to_owned())),
+    ));
+    drop(update(
+      &mut state,
+      Message::Browse(BrowseMessage::SearchSubmitted),
+    ));
+    drop(shell::navigate_back(&mut state));
 
-    // Navigate away to Home
-    drop(shell::navigate(&mut state, Destination::Home));
-
-    // Return to Browse
-    drop(shell::navigate(&mut state, library));
-    state.full.as_mut().unwrap().browse.view = LibraryBrowseView::Ready {
-      visible_items: vec![jellypilot_core::browse_model::LibraryItemSlot { item: Some(item) }],
-      visible_start: 0,
-      mode: jellypilot_core::LibraryBrowseMode::Normal,
-      total_record_count: 1,
-      is_fetching_more: false,
-      load_more_failure: None,
-      retry_busy: false,
+    assert_eq!(state.shell.destination, destination);
+    let browse = &state.full.as_ref().unwrap().browse;
+    assert_eq!(browse.search_input, "original query");
+    assert_eq!(browse.viewport.offset_y, 500.0);
+    let LibraryBrowseView::Ready { visible_items, .. } = &browse.view else {
+      panic!("back must show cached results without entering Loading");
     };
-    drop(browse::prepare_artwork(
-      &mut state.full.as_mut().unwrap().browse,
-      &mut state.kernel,
-      state.shell.window_size.width,
-    ));
-    state.retain_artwork_handles();
-
-    let browse_cell = state
-      .full
-      .as_ref()
-      .unwrap()
-      .browse
+    assert_eq!(visible_items[0].item.as_ref().unwrap().id, "browse-item-1");
+    let cell = browse
       .artwork
       .get("browse-item-1")
-      .expect("browse cell exists");
-    assert_eq!(browse_cell.state, ArtworkCellState::Ready);
-    // The handle is rebuilt synchronously from the raster cache; there is no
-    // cross-navigation handle identity to preserve.
+      .expect("restored poster");
     assert!(state
       .kernel
       .artwork_handles
-      .get(browse_cell.slot, "browse-art-1")
+      .get(cell.slot, "browse-art-1")
       .is_some());
   }
 
@@ -2303,17 +2259,20 @@ mod tests {
       false,
       state.playback.view.now_playing.is_none(),
       state.shell.window_size,
-      BrowseMessage::PageSettled(jellypilot_core::browse_model::BrowsePageSettlement {
-        source_id: request.source_id.clone(),
-        token: request.token,
-        result: Ok(jellypilot_core::browse_model::BrowsePagePayload {
-          start_index: 0,
-          limit: 24,
-          total_record_count: 1,
-          has_more: false,
-          items: vec![item],
-        }),
-      }),
+      BrowseMessage::PageSettled(
+        0,
+        jellypilot_core::browse_model::BrowsePageSettlement {
+          source_id: request.source_id.clone(),
+          token: request.token,
+          result: Ok(jellypilot_core::browse_model::BrowsePagePayload {
+            start_index: 0,
+            limit: 24,
+            total_record_count: 1,
+            has_more: false,
+            items: vec![item],
+          }),
+        },
+      ),
     ));
     assert!(matches!(
       state.full.as_ref().unwrap().browse.view,
@@ -2524,7 +2483,7 @@ mod tests {
         translation: iced::Vector,
         scroll: &mut dyn widget::operation::Scrollable,
       ) {
-        if id == Some(&widget::Id::new("home-page")) {
+        if id == Some(&widget::Id::new("home-page-loading")) {
           self.observed = Some(translation.y);
           if let Some(y) = self.set {
             scroll.scroll_to(widget::operation::scrollable::AbsoluteOffset {

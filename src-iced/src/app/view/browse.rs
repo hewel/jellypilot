@@ -107,7 +107,13 @@ pub fn view(state: &State) -> Element<'_, Message> {
 }
 
 fn toolbar(state: &State) -> Element<'_, Message> {
-  let filters = state.kernel.settings.snapshot().browse_filters();
+  let filters = state
+    .full
+    .as_ref()
+    .expect("FullUi required")
+    .browse
+    .filters
+    .unwrap_or_else(|| state.kernel.settings.snapshot().browse_filters());
   let sort_trigger = control_button(
     Some(Icon::Sliders),
     Some(state.format(
@@ -431,16 +437,6 @@ fn browse_loading_skeleton<'a>(state: &'a State, class: SizeClass) -> Element<'a
     .push(container(grid).padding([0.0, padding]).width(Fill));
 
   scrollable(content)
-    .id(
-      state
-        .full
-        .as_ref()
-        .expect("FullUi required")
-        .browse
-        .scroll_id
-        .clone(),
-    )
-    .on_scroll(|viewport| Message::Browse(BrowseMessage::Scrolled(viewport)))
     .width(Fill)
     .height(Fill)
     .style(jellypilot_ui::theme::scrollable)

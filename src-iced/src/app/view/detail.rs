@@ -125,6 +125,7 @@ fn detail_ready<'a>(
   }
 
   scrollable(page.padding([TOKENS.spacing.s8, TOKENS.spacing.s6]))
+    .id(iced::widget::Id::new("detail-page"))
     .width(Fill)
     .height(Fill)
     .style(jellypilot_ui::theme::scrollable)
@@ -899,6 +900,7 @@ fn seasons_section<'a>(
     season_buttons = season_buttons.push(season_button(state, season, loading));
   }
   let selector = scrollable(season_buttons)
+    .id(iced::widget::Id::new("detail-seasons"))
     .direction(iced::widget::scrollable::Direction::Horizontal(
       iced::widget::scrollable::Scrollbar::new(),
     ))
@@ -1020,6 +1022,7 @@ fn similar_section(
     cards = cards.push(similar_card(state, item, skeleton_phase, reduced_motion));
   }
   let cards = scrollable(cards)
+    .id(iced::widget::Id::new("detail-similar"))
     .direction(Direction::Horizontal(Scrollbar::new()))
     .height(SIMILAR_SCROLL_HEIGHT)
     .style(jellypilot_ui::theme::scrollable);

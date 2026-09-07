@@ -46,6 +46,16 @@ fn overview(state: &State) -> Element<'_, Message> {
   .padding([TOKENS.spacing.s6, TOKENS.spacing.s8])
   .width(Fill);
   scrollable(content)
+    .id(iced::widget::Id::new(
+      if lists.favorites.entries.is_empty()
+        && lists.watchlist.entries.is_empty()
+        && (lists.favorites.loading || lists.watchlist.loading)
+      {
+        "personal-lists-overview-loading"
+      } else {
+        "personal-lists-overview"
+      },
+    ))
     .width(Fill)
     .height(Fill)
     .style(jellypilot_ui::theme::scrollable)
@@ -117,6 +127,13 @@ fn list_page<'a>(state: &'a State, kind: Kind) -> Element<'a, Message> {
   .padding([TOKENS.spacing.s5, TOKENS.spacing.s8])
   .width(Fill);
   scrollable(content)
+    .id(iced::widget::Id::new(
+      if page.loading && page.entries.is_empty() {
+        "personal-list-loading"
+      } else {
+        "personal-list-page"
+      },
+    ))
     .width(Fill)
     .height(Fill)
     .style(jellypilot_ui::theme::scrollable)

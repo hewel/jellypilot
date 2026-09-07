@@ -60,7 +60,7 @@ pub fn update(
     // destination stack and drives the other surfaces' leave/enter hooks.
     DetailMessage::Back | DetailMessage::WatchlistToggled => Task::none(),
     DetailMessage::Retry => start_load(surface, kernel, detail_item_id),
-    DetailMessage::RetryNeighbors => start_followup(surface, kernel),
+    DetailMessage::RetryNeighbors => start_followup(surface, kernel, false),
     DetailMessage::RetrySeason => start_selected_season_load(surface, kernel),
     DetailMessage::OverviewToggled => {
       surface.data.overview_expanded = !surface.data.overview_expanded;
@@ -99,7 +99,7 @@ pub fn update(
           UiText::new("detail-refresh-error"),
         );
       }
-      let followup = start_followup(surface, kernel);
+      let followup = start_followup(surface, kernel, false);
       Task::batch([followup, prepare_artwork(surface, kernel)])
     }
     DetailMessage::SeasonLoaded { token, result } => {
@@ -244,6 +244,27 @@ pub fn start_load(
   )
 }
 
+pub(crate) fn restore(
+  surface: &mut Surface,
+  kernel: &mut Kernel,
+  item_id: &str,
+  data: DetailState,
+) -> Task<Message> {
+  surface.data = data;
+  surface.data.user_data_busy = None;
+  surface.refresh_token = None;
+  kernel
+    .request_gate
+    .set_detail_item(Some(item_id.to_owned()));
+  if !matches!(surface.data.content, jellypilot_core::LoadState::Ready(_)) {
+    return start_load(surface, kernel, Some(item_id));
+  }
+  Task::batch([
+    start_followup(surface, kernel, true),
+    prepare_artwork(surface, kernel),
+  ])
+}
+
 fn settle_load(
   detail: &mut DetailState,
   gate: &mut RequestGate,
@@ -301,7 +322,7 @@ pub(crate) fn refresh(surface: &mut Surface, kernel: &mut Kernel, item_id: &str)
   )
 }
 
-fn start_followup(surface: &mut Surface, kernel: &mut Kernel) -> Task<Message> {
+fn start_followup(surface: &mut Surface, kernel: &mut Kernel, only_missing: bool) -> Task<Message> {
   enum Followup {
     Episode {
       item_id: String,
@@ -356,10 +377,26 @@ fn start_followup(surface: &mut Surface, kernel: &mut Kernel) -> Task<Message> {
       series_id,
       season_number,
     } => {
+      if only_missing
+        && !matches!(
+          surface.data.season_neighbors,
+          jellypilot_core::LoadState::Idle | jellypilot_core::LoadState::Loading
+        )
+      {
+        return Task::none();
+      }
       surface.data.similar_items = jellypilot_core::LoadState::Idle;
       start_neighbors_load(surface, kernel, item_id, series_id, season_number)
     }
     Followup::Movie(item_id) => {
+      if only_missing
+        && !matches!(
+          surface.data.similar_items,
+          jellypilot_core::LoadState::Idle | jellypilot_core::LoadState::Loading
+        )
+      {
+        return Task::none();
+      }
       surface.data.season_neighbors = jellypilot_core::LoadState::Idle;
       start_similar_load(surface, kernel, item_id)
     }
@@ -368,10 +405,25 @@ fn start_followup(surface: &mut Surface, kernel: &mut Kernel) -> Task<Message> {
       selected_season_id,
     } => {
       surface.data.selected_season_id = selected_season_id;
-      Task::batch([
-        start_selected_season_load(surface, kernel),
-        start_similar_load(surface, kernel, item_id),
-      ])
+      let episodes = if !only_missing
+        || matches!(
+          surface.data.season_episodes,
+          jellypilot_core::LoadState::Idle | jellypilot_core::LoadState::Loading
+        ) {
+        start_selected_season_load(surface, kernel)
+      } else {
+        Task::none()
+      };
+      let similar = if !only_missing
+        || matches!(
+          surface.data.similar_items,
+          jellypilot_core::LoadState::Idle | jellypilot_core::LoadState::Loading
+        ) {
+        start_similar_load(surface, kernel, item_id)
+      } else {
+        Task::none()
+      };
+      Task::batch([episodes, similar])
     }
     Followup::None => {
       surface.data.season_neighbors = jellypilot_core::LoadState::Idle;
@@ -945,6 +997,31 @@ mod tests {
   }
 
   #[test]
+  fn restoring_detail_preserves_expansion_and_ready_related_content() {
+    let (mut surface, mut kernel) = test_fixture();
+    surface.data.content =
+      jellypilot_core::LoadState::Ready(DetailContent::Item(Box::new(video_item("original"))));
+    surface.data.similar_items = jellypilot_core::LoadState::Ready(vec![episode("related", 1)]);
+    surface.data.overview_expanded = true;
+    surface
+      .data
+      .expanded_episode_ids
+      .insert("related".to_owned());
+    let saved = std::mem::take(&mut surface.data);
+    leave_view(&mut surface, &mut kernel, true);
+    drop(start_load(&mut surface, &mut kernel, Some("other")));
+    drop(restore(&mut surface, &mut kernel, "original", saved));
+    assert!(
+      matches!(&surface.data.content, jellypilot_core::LoadState::Ready(DetailContent::Item(item)) if item.id == "original")
+    );
+    assert!(surface.data.overview_expanded);
+    assert!(surface.data.expanded_episode_ids.contains("related"));
+    assert!(
+      matches!(&surface.data.similar_items, jellypilot_core::LoadState::Ready(items) if items[0].id == "related")
+    );
+  }
+
+  #[test]
   fn stale_detail_settlement_cannot_replace_the_current_request() {
     let mut detail = DetailState {
       content: jellypilot_core::LoadState::Loading,
@@ -1060,7 +1137,7 @@ mod tests {
     surface
       .items
       .insert("show-1".to_owned(), episode("show-1", 1));
-    drop(start_followup(&mut surface, &mut kernel));
+    drop(start_followup(&mut surface, &mut kernel, false));
     assert_eq!(surface.data.selected_season_id.as_deref(), Some("season-2"));
     let season_token = kernel.request_gate.begin_detail();
     drop(refresh(&mut surface, &mut kernel, "show-1"));
@@ -1179,7 +1256,7 @@ mod tests {
       .request_gate
       .set_detail_item(Some("episode-1".to_owned()));
 
-    drop(start_followup(&mut surface, &mut kernel));
+    drop(start_followup(&mut surface, &mut kernel, false));
 
     assert!(matches!(
       surface.data.similar_items,

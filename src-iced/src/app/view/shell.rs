@@ -70,6 +70,7 @@ pub fn view(state: &State) -> Element<'_, Message> {
     // Full mode, where the player is a bar.
     Destination::NowPlaying => home::view(state),
   };
+  let content = super::scroll_memory::remember(content, &state.shell.scroll_memory);
   // One of the two shell hairlines: 1px between the sidebar and the content.
   let sidebar_divider = container(space::vertical())
     .width(HAIRLINE_WIDTH)

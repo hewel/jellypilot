@@ -238,7 +238,11 @@ fn home_content(state: &State, viewport: iced::Size) -> Element<'_, Message> {
     )
     .width(Fill);
   scrollable(page)
-    .id(widget::Id::new("home-page"))
+    .id(widget::Id::new(if home_is_loading(state) {
+      "home-page-loading"
+    } else {
+      "home-page"
+    }))
     .width(Fill)
     .height(Fill)
     .style(jellypilot_ui::theme::scrollable)
@@ -525,6 +529,10 @@ fn section_row<'a>(
     ));
   }
   let cards = scrollable(cards)
+    .id(widget::Id::from(format!(
+      "home-row-{}",
+      home_row.section.index()
+    )))
     .direction(Direction::Horizontal(Scrollbar::new()))
     .height(section_scroll_height(home_row.section))
     .style(jellypilot_ui::theme::scrollable);

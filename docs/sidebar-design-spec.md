@@ -23,6 +23,15 @@ Quoted Chinese UI labels below preserve the copy agreed during the interview; th
 Home, Search, libraries, Favorites, and Watchlist all belong to the **current provider, Server URL, and server user**.
 Multiple saved logins support switching, not simultaneous connections or aggregation across servers. A server name, username, or item ID alone cannot identify the account scope.
 
+### Returning to a page
+
+- Back restores the history entry's absolute scroll offsets, including horizontal Home rows and detail carousels, rather than reopening the route at the top.
+- Browse history retains loaded result pages, filters, sorting, and the committed search query. Detail history retains loaded content, selected season, and expanded descriptions; Personal Lists retains its page offsets and visible entries.
+- Restore positions during layout before drawing ready content. Loading placeholders must not consume a saved ready-content position. Pending browse requests resume with a new delivery generation, and a failed refresh retains usable cached cards.
+- A new search or changed filter/sort starts a new result set at the top. Navigating to an existing non-detail history destination restores that entry and truncates the intervening history.
+- History is in-memory and account-scoped; disconnect, account handoff, or switching to Control-Only clears it. Restoration uses absolute logical offsets, not item anchors, so resizing into a different grid column count does not guarantee the same card remains at the same screen position.
+- Human acceptance: scroll a library, open a card and return; repeat with Home's vertical and horizontal positions, nested details, and Personal Lists. Confirm no initial top flash, unchanged query/filter context, fresh results starting at the top, and no restored positions after changing accounts.
+
 ### Sidebar
 
 Only authenticated Full mode shows the Sidebar. Control-Only retains its existing complete controller window.

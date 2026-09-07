@@ -20,7 +20,26 @@ use super::kernel::Kernel;
 use super::message::{Message, ShellMessage, WindowMessage};
 use super::playback;
 use super::state::{Destination, State};
+use super::view::scroll_memory::ScrollMemory;
 use crate::i18n::UiText;
+
+pub(crate) struct NavigationEntry {
+  destination: Destination,
+  scroll_memory: ScrollMemory,
+  page_state: Option<PageState>,
+}
+
+enum PageState {
+  Home,
+  Browse(Box<browse::Snapshot>),
+  Detail(Box<super::state::DetailState>),
+  PersonalLists(
+    Box<(
+      super::personal_lists::ListPage,
+      super::personal_lists::ListPage,
+    )>,
+  ),
+}
 
 pub const SEARCH_INPUT_ID: &str = "shell.search-input";
 pub const SEARCH_TRIGGER_ID: &str = "shell.search-trigger";
@@ -62,7 +81,10 @@ pub struct Surface {
   pub refresh_busy: bool,
   refresh_generation: u64,
   pub destination: Destination,
-  pub navigation_stack: Vec<Destination>,
+  pub navigation_stack: Vec<NavigationEntry>,
+  pub scroll_memory: ScrollMemory,
+  /// Staged when leaving; consumed by the destination's activation on return.
+  page_state: Option<PageState>,
 }
 impl Surface {
   pub fn new(smoke: bool) -> Self {
@@ -84,6 +106,8 @@ impl Surface {
       refresh_generation: 0,
       destination: Destination::Home,
       navigation_stack: Vec::new(),
+      scroll_memory: ScrollMemory::default(),
+      page_state: None,
     }
   }
 
@@ -95,24 +119,39 @@ impl Surface {
       if let Some(index) = self
         .navigation_stack
         .iter()
-        .rposition(|entry| entry == &destination)
+        .rposition(|entry| entry.destination == destination)
       {
+        let entry = self.navigation_stack.remove(index);
         self.navigation_stack.truncate(index);
-        self.destination = destination;
+        self.destination = entry.destination;
+        self.scroll_memory = entry.scroll_memory;
+        self.page_state = entry.page_state;
         return true;
       }
     }
-    self.navigation_stack.push(self.destination.clone());
+    self.navigation_stack.push(NavigationEntry {
+      destination: self.destination.clone(),
+      scroll_memory: std::mem::take(&mut self.scroll_memory),
+      page_state: self.page_state.take(),
+    });
     self.destination = destination;
     true
   }
 
   pub fn navigate_back(&mut self) -> bool {
-    let Some(destination) = self.navigation_stack.pop() else {
+    let Some(entry) = self.navigation_stack.pop() else {
       return false;
     };
-    self.destination = destination;
+    self.destination = entry.destination;
+    self.scroll_memory = entry.scroll_memory;
+    self.page_state = entry.page_state;
     true
+  }
+
+  fn clear_history(&mut self) {
+    self.navigation_stack.clear();
+    self.scroll_memory = ScrollMemory::default();
+    self.page_state = None;
   }
   pub fn open_settings(&mut self) {
     self.settings_open = true;
@@ -206,7 +245,7 @@ pub(crate) fn apply_app_mode(state: &mut State, mode: AppMode) -> Task<Message> 
       state.full = None;
       state.retain_artwork_handles();
       state.shell.full_window_size = Some(state.shell.window_size);
-      state.shell.navigation_stack.clear();
+      state.shell.clear_history();
       state.shell.destination = Destination::NowPlaying;
       window_geometry_task(mode_geometry(mode, None))
     }
@@ -219,7 +258,7 @@ pub(crate) fn apply_app_mode(state: &mut State, mode: AppMode) -> Task<Message> 
       let geometry = mode_geometry(mode, restore_size);
       state.full = Some(crate::app::state::FullUi::default());
       let previous = std::mem::replace(&mut state.shell.destination, Destination::Home);
-      state.shell.navigation_stack.clear();
+      state.shell.clear_history();
       let activation = activate_destination(state, previous);
       let membership = if let Some(full) = state.full.as_mut() {
         super::personal_lists::load_membership(
@@ -309,10 +348,36 @@ pub fn update(
 }
 pub(crate) fn navigate(state: &mut State, destination: Destination) -> Task<Message> {
   let previous = state.shell.destination.clone();
-  if !state.shell.navigate_to(destination) {
+  if previous == destination {
     return Task::none();
   }
+  state.shell.page_state = capture_page(state);
+  state.shell.navigate_to(destination);
   activate_destination(state, previous)
+}
+
+fn capture_page(state: &mut State) -> Option<PageState> {
+  let full = state.full.as_mut()?;
+  match &state.shell.destination {
+    Destination::Library { .. } | Destination::Search(_) => {
+      Some(PageState::Browse(Box::new(browse::snapshot(
+        &mut full.browse,
+        match &state.shell.destination {
+          Destination::Search(query) => Some(query),
+          _ => None,
+        },
+      ))))
+    }
+    Destination::Detail(_) => Some(PageState::Detail(Box::new(std::mem::take(
+      &mut full.detail.data,
+    )))),
+    Destination::PersonalLists(_) => Some(PageState::PersonalLists(Box::new((
+      std::mem::take(&mut full.personal_lists.favorites),
+      std::mem::take(&mut full.personal_lists.watchlist),
+    )))),
+    Destination::Home => Some(PageState::Home),
+    Destination::NowPlaying => None,
+  }
 }
 
 pub(crate) fn update_shell(state: &mut State, message: ShellMessage) -> Task<Message> {
@@ -527,10 +592,8 @@ fn activate_destination(state: &mut State, previous: Destination) -> Task<Messag
   } else if matches!(
     previous,
     Destination::Library { .. } | Destination::Search(_)
-  ) && !matches!(
-    destination,
-    Destination::Library { .. } | Destination::Search(_)
-  ) {
+  ) && previous != destination
+  {
     browse::leave_view(&mut full.browse, &mut state.kernel, playback_idle);
   } else if matches!(previous, Destination::Detail(_)) && previous != destination {
     detail::leave_view(&mut full.detail, &mut state.kernel, playback_idle);
@@ -539,13 +602,50 @@ fn activate_destination(state: &mut State, previous: Destination) -> Task<Messag
     super::personal_lists::leave_view(&mut full.personal_lists, &mut state.kernel);
   }
 
+  if let Some(page_state) = state.shell.page_state.take() {
+    return match page_state {
+      PageState::Home => home::restore(
+        &mut full.home,
+        &mut state.kernel,
+        playback_idle,
+        state.shell.window_size.width,
+      ),
+      PageState::Browse(snapshot) => browse::restore(
+        &mut full.browse,
+        &mut state.kernel,
+        *snapshot,
+        state.shell.window_size,
+      ),
+      PageState::Detail(snapshot) => {
+        let Destination::Detail(item_id) = &destination else {
+          return Task::none();
+        };
+        detail::restore(&mut full.detail, &mut state.kernel, item_id, *snapshot)
+      }
+      PageState::PersonalLists(snapshot) => {
+        (full.personal_lists.favorites, full.personal_lists.watchlist) = *snapshot;
+        let Destination::PersonalLists(route) = destination else {
+          return Task::none();
+        };
+        super::personal_lists::refresh(
+          &mut full.personal_lists,
+          &mut state.kernel,
+          &state.watchlist,
+          route,
+        )
+      }
+    };
+  }
   match destination {
     Destination::Home => home::start_load(&mut full.home, &mut state.kernel, playback_idle),
     Destination::Library { .. } => {
+      full.browse.filters = None;
       full.browse.search_input.clear();
       browse::start(&mut full.browse, &mut state.kernel, source, playback_idle)
     }
-    Destination::Search(_) => {
+    Destination::Search(query) => {
+      full.browse.search_input = query;
+      full.browse.filters = None;
       browse::start(&mut full.browse, &mut state.kernel, source, playback_idle)
     }
     Destination::Detail(item_id) => {
@@ -614,7 +714,7 @@ pub(crate) fn reset_connected_content(state: &mut State) {
   state.kernel.artwork_binder.reset();
   state.full = (state.app_mode() == AppMode::Full).then(crate::app::state::FullUi::default);
   state.kernel.artwork_handles.clear();
-  state.shell.navigation_stack.clear();
+  state.shell.clear_history();
   state.shell.destination = if state.app_mode() == AppMode::Full {
     Destination::Home
   } else {
@@ -876,7 +976,14 @@ mod tests {
     assert!(surface.navigate_to(library.clone()));
 
     assert_eq!(surface.destination, library);
-    assert_eq!(surface.navigation_stack, vec![Destination::Home]);
+    assert_eq!(
+      surface
+        .navigation_stack
+        .iter()
+        .map(|entry| &entry.destination)
+        .collect::<Vec<_>>(),
+      vec![&Destination::Home],
+    );
   }
 
   #[test]
@@ -909,8 +1016,12 @@ mod tests {
     assert!(surface.navigate_to(detail.clone()));
 
     assert_eq!(
-      surface.navigation_stack,
-      vec![Destination::Home, detail, library.clone()]
+      surface
+        .navigation_stack
+        .iter()
+        .map(|entry| &entry.destination)
+        .collect::<Vec<_>>(),
+      vec![&Destination::Home, &detail, &library]
     );
     assert!(surface.navigate_back());
     assert_eq!(surface.destination, library);

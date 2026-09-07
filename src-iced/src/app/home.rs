@@ -186,6 +186,25 @@ pub fn start_load(
   })
 }
 
+pub(crate) fn restore(
+  surface: &mut Surface,
+  kernel: &mut Kernel,
+  playback_idle: bool,
+  window_width: f32,
+) -> Task<Message> {
+  if !surface.data.has_ready_content()
+    || surface
+      .data
+      .rows()
+      .iter()
+      .any(|row| matches!(row.items, jellypilot_core::LoadState::Loading))
+  {
+    start_load(surface, kernel, playback_idle)
+  } else {
+    prepare_artwork(surface, kernel, window_width)
+  }
+}
+
 fn settle(
   data: &mut HomeState,
   request_gate: &mut RequestGate,
