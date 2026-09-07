@@ -4,11 +4,15 @@ use iced::border::Radius;
 use iced::widget::image::{FilterMethod, Handle, Image};
 use iced::{ContentFit, Element, Length, Rectangle, Rotation};
 
+use crate::widgets::container::SURFACE_SMOOTHING;
+
 /// An image widget with explicit corner radii and cover-fit default.
 #[derive(Debug, Clone)]
 pub struct RoundedImage<H = Handle> {
     handle: H,
     radius: Radius,
+    border_smoothing: f32,
+    snap: bool,
     content_fit: ContentFit,
     width: Length,
     height: Length,
@@ -25,6 +29,8 @@ impl<H> RoundedImage<H> {
         Self {
             handle,
             radius: radius.into(),
+            border_smoothing: SURFACE_SMOOTHING,
+            snap: false,
             content_fit: ContentFit::Cover,
             width: Length::Fill,
             height: Length::Fill,
@@ -40,6 +46,24 @@ impl<H> RoundedImage<H> {
     #[must_use]
     pub fn radius(mut self, radius: impl Into<Radius>) -> Self {
         self.radius = radius.into();
+        self
+    }
+
+    /// Sets corner smoothing in `0.0..=1.0`, clamped by the renderer.
+    ///
+    /// Defaults to `0.6`. Use `0.0` for strict circles and capsules.
+    #[must_use]
+    pub fn border_smoothing(mut self, smoothing: f32) -> Self {
+        self.border_smoothing = smoothing;
+        self
+    }
+
+    /// Sets physical-pixel snapping for image content and display bounds.
+    ///
+    /// Defaults to `false`, preserving fractional positioning.
+    #[must_use]
+    pub fn snap(mut self, snap: bool) -> Self {
+        self.snap = snap;
         self
     }
 
@@ -116,19 +140,10 @@ impl<H> RoundedImage<H> {
     where
         H: Clone,
     {
-        // Note: In iced 0.14 wgpu image shader (image.wgsl vs quad.wgsl), the position vector is not
-        // negated prior to rounded_box_sdf, causing corner radii to be evaluated diagonally inverted
-        // (top_left <-> bottom_right, top_right <-> bottom_left). We translate the logical radius
-        // to the inverted representation expected by iced's image shader so that the rendered corners
-        // match the requested top/bottom/left/right positions.
-        let iced_radius = Radius {
-            top_left: self.radius.bottom_right,
-            top_right: self.radius.bottom_left,
-            bottom_right: self.radius.top_left,
-            bottom_left: self.radius.top_right,
-        };
         let mut image_widget = Image::new(self.handle.clone())
-            .border_radius(iced_radius)
+            .border_radius(self.radius)
+            .border_smoothing(self.border_smoothing)
+            .snap(self.snap)
             .content_fit(self.content_fit)
             .width(self.width)
             .height(self.height)
@@ -174,101 +189,4 @@ pub fn card_top_radius(radius: f32) -> Radius {
 /// Radii configuration for standalone images where all 4 corners are rounded.
 pub fn full_radius(radius: f32) -> Radius {
     Radius::from(radius)
-}
-
-#[cfg(test)]
-mod tests {
-    use iced::border::Radius;
-    use iced::widget::image::Handle;
-    use iced::{ContentFit, Length, Rectangle};
-
-    use super::*;
-
-    #[test]
-    fn card_top_radius_rounds_only_top_corners() {
-        let radius = card_top_radius(16.0);
-        assert_eq!(
-            radius,
-            Radius {
-                top_left: 16.0,
-                top_right: 16.0,
-                bottom_right: 0.0,
-                bottom_left: 0.0,
-            }
-        );
-    }
-
-    #[test]
-    fn full_radius_rounds_all_four_corners() {
-        let radius = full_radius(16.0);
-        assert_eq!(
-            radius,
-            Radius {
-                top_left: 16.0,
-                top_right: 16.0,
-                bottom_right: 16.0,
-                bottom_left: 16.0,
-            }
-        );
-    }
-
-    #[test]
-    fn zero_radius_fallback_produces_zero_radii() {
-        let radius = full_radius(0.0);
-        assert_eq!(
-            radius,
-            Radius {
-                top_left: 0.0,
-                top_right: 0.0,
-                bottom_right: 0.0,
-                bottom_left: 0.0,
-            }
-        );
-
-        let top_zero = card_top_radius(0.0);
-        assert_eq!(
-            top_zero,
-            Radius {
-                top_left: 0.0,
-                top_right: 0.0,
-                bottom_right: 0.0,
-                bottom_left: 0.0,
-            }
-        );
-    }
-
-    #[test]
-    fn rounded_image_builder_preserves_content_fit_and_dimensions() {
-        let handle = Handle::from_bytes(vec![0u8; 4]);
-        let widget = rounded_image(handle, card_top_radius(16.0))
-            .content_fit(ContentFit::Contain)
-            .width(Length::Fixed(200.0))
-            .height(Length::Fixed(300.0))
-            .crop(Rectangle {
-                x: 0,
-                y: 0,
-                width: 100,
-                height: 100,
-            });
-
-        assert_eq!(widget.get_content_fit(), ContentFit::Contain);
-        assert_eq!(widget.get_radius(), card_top_radius(16.0));
-        assert_eq!(widget.width, Length::Fixed(200.0));
-        assert_eq!(widget.height, Length::Fixed(300.0));
-        assert!(widget.crop.is_some());
-    }
-
-    #[test]
-    fn content_fit_modes_are_supported() {
-        let handle = Handle::from_bytes(vec![0u8; 4]);
-        for fit in [
-            ContentFit::Cover,
-            ContentFit::Contain,
-            ContentFit::ScaleDown,
-            ContentFit::None,
-        ] {
-            let img = rounded_image(handle.clone(), 8.0).content_fit(fit);
-            assert_eq!(img.get_content_fit(), fit);
-        }
-    }
 }

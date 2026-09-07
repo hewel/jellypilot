@@ -9,10 +9,13 @@
 //!   `surfaceContainerHigh`, `lg` radius, `raised_high` shadow.
 
 use iced::widget::container;
-use iced::{Background, Border, Color, Shadow, Theme};
+use iced::{Background, Border, Color, Theme};
 
 use crate::tokens::{palette, TOKENS};
 use crate::variants::SurfaceVariant;
+
+/// Shared contour choice for ordinary rounded rectangle surfaces.
+pub const SURFACE_SMOOTHING: f32 = 0.6;
 
 /// Resolves a surface role to an iced container style.
 pub fn style(theme: &Theme, variant: SurfaceVariant) -> container::Style {
@@ -21,8 +24,9 @@ pub fn style(theme: &Theme, variant: SurfaceVariant) -> container::Style {
     let (background, shadow, border) = match variant {
         SurfaceVariant::Canvas => (
             colors.background,
-            Shadow::default(),
+            iced::Shadow::default(),
             Border {
+                smoothing: 0.0,
                 radius: TOKENS.radii.none.into(),
                 color: Color::TRANSPARENT,
                 width: 0.0,
@@ -30,8 +34,9 @@ pub fn style(theme: &Theme, variant: SurfaceVariant) -> container::Style {
         ),
         SurfaceVariant::Block => (
             colors.surfaceContainerLowest,
-            Shadow::default(),
+            iced::Shadow::default(),
             Border {
+                smoothing: 0.0,
                 radius: TOKENS.radii.none.into(),
                 color: Color::TRANSPARENT,
                 width: 0.0,
@@ -41,6 +46,7 @@ pub fn style(theme: &Theme, variant: SurfaceVariant) -> container::Style {
             colors.surfaceContainerHigh,
             palette.shadows.raised_high.iced(),
             Border {
+                smoothing: SURFACE_SMOOTHING,
                 radius: TOKENS.radii.lg.into(),
                 color: Color::TRANSPARENT,
                 width: 0.0,
@@ -50,6 +56,7 @@ pub fn style(theme: &Theme, variant: SurfaceVariant) -> container::Style {
             colors.surfaceContainerHigh,
             palette.shadows.raised_high.iced(),
             Border {
+                smoothing: SURFACE_SMOOTHING,
                 radius: TOKENS.radii.lg.into(),
                 color: colors.outlineVariant,
                 width: 1.0,
@@ -72,6 +79,7 @@ mod tests {
     use crate::theme::ThemeMode;
     use crate::tokens::DARK_PALETTE;
     use iced::border::Radius;
+    use iced::Shadow;
 
     #[test]
     fn canvas_is_flush_opaque_and_flat() {

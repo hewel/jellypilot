@@ -1,6 +1,6 @@
 //! Parent-controlled floating popover widget.
 
-use iced::advanced::{layout, mouse, overlay, renderer, widget, Clipboard, Layout, Shell, Widget};
+use iced::advanced::{layout, mouse, overlay, renderer, widget, Layout, Shell, Widget};
 use iced::keyboard::{key, Key};
 use iced::widget::{container, opaque};
 use iced::{Element, Event, Length, Point, Rectangle, Size, Theme, Vector};
@@ -68,7 +68,7 @@ where
     let content = opaque(
         container(content)
             .padding(TOKENS.spacing.s3)
-            .width(options.width.map_or(Length::Shrink, Length::Fixed))
+            .width(options.width.map_or(Length::Fit, Length::Fixed))
             .style(match options.appearance {
                 PopoverAppearance::Default => style::popover_surface,
                 PopoverAppearance::Account => crate::widgets::sidebar::popover,
@@ -96,23 +96,12 @@ impl<Message> Widget<Message, Theme, iced::Renderer> for Popover<'_, Message>
 where
     Message: Clone,
 {
-    fn children(&self) -> Vec<widget::Tree> {
-        vec![
-            widget::Tree::new(&self.trigger),
-            widget::Tree::new(&self.content),
-        ]
-    }
-
-    fn diff(&self, tree: &mut widget::Tree) {
-        tree.diff_children(&[self.trigger.as_widget(), self.content.as_widget()]);
+    fn diff(&mut self, tree: &mut widget::Tree) {
+        tree.diff_children(&mut [self.trigger.as_widget_mut(), self.content.as_widget_mut()]);
     }
 
     fn size(&self) -> Size<Length> {
         self.trigger.as_widget().size()
-    }
-
-    fn size_hint(&self) -> Size<Length> {
-        self.trigger.as_widget().size_hint()
     }
 
     fn layout(
@@ -133,7 +122,6 @@ where
         layout: Layout<'_>,
         cursor: mouse::Cursor,
         renderer: &iced::Renderer,
-        clipboard: &mut dyn Clipboard,
         shell: &mut Shell<'_, Message>,
         viewport: &Rectangle,
     ) {
@@ -143,7 +131,6 @@ where
             layout,
             cursor,
             renderer,
-            clipboard,
             shell,
             viewport,
         );
@@ -261,7 +248,7 @@ where
         } else if self.options.match_trigger_width {
             limits = limits.width(Length::Fixed(self.anchor_bounds.width));
         } else {
-            limits = limits.width(Length::Shrink);
+            limits = limits.width(Length::Fit);
         }
 
         let node = self
@@ -290,7 +277,6 @@ where
         layout: Layout<'_>,
         cursor: mouse::Cursor,
         renderer: &iced::Renderer,
-        clipboard: &mut dyn Clipboard,
         shell: &mut Shell<'_, Message>,
     ) {
         if self.options.close_on_escape && is_escape_press(event) {
@@ -318,7 +304,6 @@ where
             layout,
             cursor,
             renderer,
-            clipboard,
             shell,
             &overlay_bounds,
         );
@@ -443,13 +428,16 @@ mod tests {
         use std::cell::Cell;
         use std::time::Duration;
 
-        use iced::advanced::{clipboard, renderer, renderer::Headless};
+        use iced::advanced::{renderer, renderer::Headless};
         use iced::widget::{container, text};
-        use iced::{Element, Font, Theme};
+        use iced::{Element, Theme};
         use iced_runtime::user_interface::{Cache, UserInterface};
 
         use super::popover;
-        use crate::overlay::{tooltip_element, TooltipOptions};
+        use crate::{
+            fonts::DEFAULT_LINE_HEIGHT,
+            overlay::{tooltip_element, TooltipOptions},
+        };
 
         let trigger_painted = Cell::new(false);
         let content_painted = Cell::new(false);
@@ -483,22 +471,27 @@ mod tests {
             )
         };
         let mut renderer = iced::futures::executor::block_on(iced::Renderer::new(
-            Font::DEFAULT,
-            14.0.into(),
+            renderer::Settings {
+                font: iced::Font::DEFAULT,
+                text_size: 14.0.into(),
+                line_height: DEFAULT_LINE_HEIGHT,
+                metrics_hinting: false,
+            },
             Some("tiny-skia"),
         ))
         .expect("software renderer");
         let bounds = Size::new(400.0, 300.0);
         let mut ui = UserInterface::build(view(false), bounds, Cache::new(), &mut renderer);
-        let mut messages = Vec::new();
+        let mut messages = iced::advanced::shell::Bus::new();
         let trigger_cursor = mouse::Cursor::Available(Point::new(20.0, 20.0));
         ui.update(
+            &iced::window::Headless,
+            &iced::advanced::shell::Waker::noop(),
             &[Event::Mouse(mouse::Event::CursorMoved {
                 position: Point::new(20.0, 20.0),
             })],
             trigger_cursor,
             &mut renderer,
-            &mut clipboard::Null,
             &mut messages,
         );
         ui.draw(
@@ -514,10 +507,11 @@ mod tests {
 
         let mut ui = UserInterface::build(view(true), bounds, ui.into_cache(), &mut renderer);
         ui.update(
+            &iced::window::Headless,
+            &iced::advanced::shell::Waker::noop(),
             &[],
             trigger_cursor,
             &mut renderer,
-            &mut clipboard::Null,
             &mut messages,
         );
         ui.draw(
@@ -533,12 +527,13 @@ mod tests {
 
         let content_cursor = mouse::Cursor::Available(Point::new(20.0, 70.0));
         ui.update(
+            &iced::window::Headless,
+            &iced::advanced::shell::Waker::noop(),
             &[Event::Mouse(mouse::Event::CursorMoved {
                 position: Point::new(20.0, 70.0),
             })],
             content_cursor,
             &mut renderer,
-            &mut clipboard::Null,
             &mut messages,
         );
         ui.draw(
@@ -555,12 +550,13 @@ mod tests {
 
         let mut ui = UserInterface::build(view(false), bounds, ui.into_cache(), &mut renderer);
         ui.update(
+            &iced::window::Headless,
+            &iced::advanced::shell::Waker::noop(),
             &[Event::Mouse(mouse::Event::CursorMoved {
                 position: Point::new(20.0, 20.0),
             })],
             trigger_cursor,
             &mut renderer,
-            &mut clipboard::Null,
             &mut messages,
         );
         ui.draw(

@@ -13,7 +13,7 @@ use iced::advanced::widget::{tree, Operation, Tree};
 use iced::advanced::{layout, renderer, Layout, Widget};
 use iced::mouse;
 use iced::widget::text::{Catalog, Format, State, Style, StyleFn, Wrapping};
-use iced::{Color, Element, Length, Pixels, Rectangle, Size};
+use iced::{Color, Element, Font, Length, Pixels, Rectangle, Size};
 
 const ELLIPSIS: &str = "…";
 
@@ -67,20 +67,18 @@ pub fn truncate_to_fit<'a>(
 /// A single-line [`iced::widget::Text`] replacement that
 /// truncates overflowing content with an ellipsis instead of painting past
 /// its layout bounds.
-pub struct EllipsisText<'a, Theme = iced::Theme, Renderer = iced::Renderer>
+pub struct EllipsisText<'a, Theme = iced::Theme>
 where
     Theme: Catalog,
-    Renderer: text::Renderer,
 {
     fragment: text::Fragment<'a>,
-    format: Format<Renderer::Font>,
+    format: Format,
     class: Theme::Class<'a>,
 }
 
-impl<'a, Theme, Renderer> EllipsisText<'a, Theme, Renderer>
+impl<'a, Theme> EllipsisText<'a, Theme>
 where
     Theme: Catalog,
-    Renderer: text::Renderer,
 {
     /// Creates a new [`EllipsisText`] with the given content.
     pub fn new(fragment: impl text::IntoFragment<'a>) -> Self {
@@ -96,7 +94,7 @@ where
 
     /// Selects the font used for both measuring and drawing the shortened text.
     #[must_use]
-    pub fn font(mut self, font: Renderer::Font) -> Self {
+    pub fn font(mut self, font: Font) -> Self {
         self.format.font = Some(font);
         self
     }
@@ -139,18 +137,14 @@ where
 }
 
 /// Convenience constructor for [`EllipsisText`].
-pub fn ellipsis_text<'a, Theme, Renderer>(
-    fragment: impl text::IntoFragment<'a>,
-) -> EllipsisText<'a, Theme, Renderer>
+pub fn ellipsis_text<'a, Theme>(fragment: impl text::IntoFragment<'a>) -> EllipsisText<'a, Theme>
 where
     Theme: Catalog,
-    Renderer: text::Renderer,
 {
     EllipsisText::new(fragment)
 }
 
-impl<Message, Theme, Renderer> Widget<Message, Theme, Renderer>
-    for EllipsisText<'_, Theme, Renderer>
+impl<Message, Theme, Renderer> Widget<Message, Theme, Renderer> for EllipsisText<'_, Theme>
 where
     Theme: Catalog,
     Renderer: text::Renderer,
@@ -180,20 +174,27 @@ where
 
         layout::sized(limits, self.format.width, self.format.height, |limits| {
             let bounds = limits.max();
-            let size = self.format.size.unwrap_or_else(|| renderer.default_size());
-            let font = self.format.font.unwrap_or_else(|| renderer.default_font());
+            let size = self.format.size.unwrap_or_else(|| renderer.text_size());
+            let font = self.format.font.unwrap_or_else(|| renderer.font());
+            let line_height = self
+                .format
+                .line_height
+                .unwrap_or_else(|| renderer.line_height());
+            let hint_factor = renderer.hint_factor();
 
             let truncated = truncate_to_fit(&self.fragment, bounds.width, |content| {
                 let _ = state.update(text::Text {
                     content,
                     bounds,
                     size,
-                    line_height: self.format.line_height,
+                    line_height,
                     font,
                     align_x: self.format.align_x,
                     align_y: self.format.align_y,
                     shaping: self.format.shaping,
                     wrapping: Wrapping::None,
+                    ellipsis: text::Ellipsis::None,
+                    hint_factor,
                 });
                 state.min_bounds().width
             });
@@ -204,12 +205,14 @@ where
                 content: &truncated,
                 bounds,
                 size,
-                line_height: self.format.line_height,
+                line_height,
                 font,
                 align_x: self.format.align_x,
                 align_y: self.format.align_y,
                 shaping: self.format.shaping,
                 wrapping: Wrapping::None,
+                ellipsis: text::Ellipsis::None,
+                hint_factor,
             });
 
             state.min_bounds()
@@ -250,14 +253,14 @@ where
     }
 }
 
-impl<'a, Message, Theme, Renderer> From<EllipsisText<'a, Theme, Renderer>>
+impl<'a, Message, Theme, Renderer> From<EllipsisText<'a, Theme>>
     for Element<'a, Message, Theme, Renderer>
 where
     Message: 'a,
     Theme: Catalog + 'a,
     Renderer: text::Renderer + 'a,
 {
-    fn from(text: EllipsisText<'a, Theme, Renderer>) -> Self {
+    fn from(text: EllipsisText<'a, Theme>) -> Self {
         Element::new(text)
     }
 }

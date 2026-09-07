@@ -356,7 +356,7 @@ fn quick_menu<'a>(state: &'a State, account: &AccountView<'a>) -> Element<'a, Me
   }
   content = content.push(actions);
   scrollable(content)
-    .height(Length::Shrink)
+    .height(Length::Fit)
     .style(jellypilot_ui::theme::scrollable)
     .into()
 }
@@ -462,13 +462,13 @@ fn management_content<'a>(state: &'a State, account: &AccountView<'a>) -> Elemen
                 16.0,
                 palette.text.heading,
                 Some(HEADING_FONT),
-                Length::Shrink,
+                Length::Fit,
               ),
               provider_badge(current.provider, IconControlState::Rest, palette),
             ]
             .spacing(TOKENS.spacing.s1)
             .align_y(Alignment::Center),
-            presentation.text(server, 12.0, palette.text.metadata, None, Length::Shrink),
+            presentation.text(server, 12.0, palette.text.metadata, None, Length::Fit),
           ]
           .spacing(TOKENS.spacing.s0_5)
           .width(Fill),
@@ -634,6 +634,7 @@ fn provider_badge(
     ))),
     text_color: Some(text_color),
     border: Border {
+      smoothing: jellypilot_ui::widgets::container::SURFACE_SMOOTHING,
       radius: TOKENS.radii.md.into(),
       color: Color::TRANSPARENT,
       width: 0.0,
@@ -712,6 +713,7 @@ fn avatar<'a>(
             background: Some(Background::Color(with_disabled_alpha(fill, disabled))),
             text_color: Some(with_disabled_alpha(ink, disabled)),
             border: Border {
+              smoothing: jellypilot_ui::widgets::container::SURFACE_SMOOTHING,
               radius: TOKENS.radii.md.into(),
               color: Color::TRANSPARENT,
               width: 0.0,
@@ -921,11 +923,13 @@ fn saved_profiles<'a>(
   }
   let profiles = scrollable(profiles)
     .height(match presentation {
-      Presentation::Sidebar => Length::Shrink,
+      Presentation::Sidebar => Length::Fit,
       Presentation::Settings => Length::Fixed(PROFILE_LIST_HEIGHT),
     })
     .style(jellypilot_ui::theme::scrollable);
-  container(profiles).max_height(PROFILE_LIST_HEIGHT).into()
+  container(profiles)
+    .height(Length::Fit.max(PROFILE_LIST_HEIGHT))
+    .into()
 }
 
 fn auto_login(locale: Localizer, auto_login: bool) -> Element<'static, Message> {
@@ -965,8 +969,7 @@ fn auto_login(locale: Localizer, auto_login: bool) -> Element<'static, Message> 
 fn full_window_modal<'a>(state: &'a State, content: Element<'a, Message>) -> Element<'a, Message> {
   container(
     container(content)
-      .max_width(640.0)
-      .width(Fill)
+      .width(Length::Fill.max(640.0))
       .padding(TOKENS.spacing.s5)
       .style(|theme| jellypilot_ui::theme::surface_variant(theme, SurfaceVariant::Floating)),
   )
@@ -1238,13 +1241,13 @@ fn candidate_sign_in<'a>(
       QuickConnectState::Approving => text(locale.text("login-approving")).size(13).into(),
     },
     LoginMethod::Password => {
-      let username = text_input(&locale.text("login-username"), &flow.username)
+      let username = text_input(locale.text("login-username"), &flow.username)
         .on_input(|value| account_message(CandidateMessage::UsernameChanged(value)))
         .padding([8, 12])
         .style(|theme, status| {
           jellypilot_ui::theme::field_variant(theme, status, FieldVariant::Filled)
         });
-      let password = text_input(&locale.text("login-password"), &flow.password)
+      let password = text_input(locale.text("login-password"), flow.password.as_str())
         .on_input(|value| account_message(CandidateMessage::PasswordChanged(value)))
         .secure(true)
         .on_submit(account_message(CandidateMessage::PasswordSubmitted))
@@ -1301,7 +1304,7 @@ const fn provider_name(provider: MediaServerProvider) -> &'static str {
 
 #[cfg(test)]
 mod tests {
-  use iced::advanced::{layout, renderer::Headless, widget::Tree};
+  use iced::advanced::{layout, renderer, renderer::Headless, widget::Tree};
   use iced::widget::image;
   use iced::{Font, Size};
 
@@ -1309,13 +1312,22 @@ mod tests {
 
   #[tokio::test]
   async fn profile_avatars_share_one_layout_box_across_states() {
-    let renderer = iced::Renderer::new(Font::DEFAULT, 14.0.into(), Some("tiny-skia"))
-      .await
-      .expect("software layout renderer");
+    let renderer = iced::Renderer::new(
+      renderer::Settings {
+        font: Font::DEFAULT,
+        text_size: 14.0.into(),
+        line_height: jellypilot_ui::fonts::DEFAULT_LINE_HEIGHT,
+        metrics_hinting: false,
+      },
+      Some("tiny-skia"),
+    )
+    .await
+    .expect("software layout renderer");
     let mut sizes = Vec::new();
     for photo in [None, Some(image::Handle::from_rgba(2, 2, vec![0; 16]))] {
       let mut avatar = avatar("Long profile name@server", photo, 28.0, false);
       let mut tree = Tree::new(&avatar);
+      tree.diff(avatar.as_widget_mut());
       let node = avatar.as_widget_mut().layout(
         &mut tree,
         &renderer,

@@ -628,6 +628,7 @@ fn artwork<'a>(
         palette.colors.surfaceContainerLowest,
       )),
       border: iced::Border {
+        smoothing: jellypilot_ui::widgets::container::SURFACE_SMOOTHING,
         radius: full_radius(TOKENS.radii.lg),
         width: 0.0,
         color: iced::Color::TRANSPARENT,
@@ -734,6 +735,7 @@ fn failure_banner<'a>(
     background: Some(iced::Background::Color(colors.errorContainer)),
     text_color: Some(colors.onErrorContainer),
     border: iced::Border {
+      smoothing: jellypilot_ui::widgets::container::SURFACE_SMOOTHING,
       color: Color::TRANSPARENT,
       width: 0.0,
       radius: TOKENS.radii.md.into(),

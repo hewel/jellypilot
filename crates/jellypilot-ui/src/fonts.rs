@@ -19,8 +19,11 @@ pub const MISANS: &[u8] = include_bytes!("../assets/fonts/MiSansVF.ttf");
 /// Primary body typeface, rendered at weight 300 rather than the font's default 200.
 pub const BODY_FONT: Font = Font {
     weight: Weight::Light,
-    ..Font::with_name("Manrope V5")
+    ..Font::new("Manrope V5")
 };
+/// Retains the application's pre-fork line spacing during the native-corner trial.
+pub const DEFAULT_LINE_HEIGHT: iced::advanced::text::LineHeight =
+    iced::advanced::text::LineHeight::Relative(1.3);
 /// Display typeface for page-level and hero titles, rendered at weight 400:
 /// lighter than small headings because the size already carries hierarchy.
 pub const DISPLAY_FONT: Font = Font {
@@ -166,7 +169,6 @@ mod tests {
             let attrs = text::to_attributes(font);
             let mut buffer = Buffer::new(&mut system, Metrics::new(32.0, 40.0));
             buffer.set_text(
-                &mut system,
                 sample,
                 &attrs,
                 text::to_shaping(iced::advanced::text::Shaping::default(), sample),
@@ -214,13 +216,7 @@ mod tests {
             // at the requested weight. Default widget layout must use matching metrics.
             let mut measure_ascii = |shaping| {
                 let mut paragraph = Buffer::new(&mut system, Metrics::new(32.0, 40.0));
-                paragraph.set_text(
-                    &mut system,
-                    "HiW",
-                    &attrs,
-                    text::to_shaping(shaping, "HiW"),
-                    None,
-                );
+                paragraph.set_text("HiW", &attrs, text::to_shaping(shaping, "HiW"), None);
                 paragraph.shape_until_scroll(&mut system, false);
                 paragraph.layout_runs().map(|run| run.line_w).sum::<f32>()
             };

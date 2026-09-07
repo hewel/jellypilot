@@ -2,9 +2,8 @@ use crate::app::message::{HomeMessage, Message, PlaybackMessage};
 use crate::app::state::{ArtworkCell, ArtworkCellState, HomeRow, HomeSection, State};
 use crate::i18n::media::{card_subtitle, hero_metadata, runtime_caption};
 use crate::i18n::{Localizer, UiText};
-use iced::advanced::widget;
+use iced::advanced::{layout, renderer, widget, Layout, Renderer as _, Widget};
 use iced::gradient;
-use iced::widget::canvas::{self, Canvas};
 use iced::widget::image::Image;
 use iced::widget::scrollable::{Direction, Scrollbar};
 use iced::widget::{
@@ -558,7 +557,7 @@ fn video_card<'a>(
     // keeps the artwork chrome-free so only the keyboard focus ring draws.
     let playable_artwork = control_button_content(
       move |_| -> Element<'a, Message> {
-        card_artwork(
+        let mut artwork = Stack::new().push(card_artwork(
           state,
           cell,
           card_title(item),
@@ -566,10 +565,32 @@ fn video_card<'a>(
           radius,
           skeleton_phase,
           reduced_motion,
-        )
+        ));
+        if let Some(progress) = card_progress(section, item) {
+          let strip = cell.and_then(|cell| {
+            state
+              .kernel
+              .artwork_handles
+              .frosted_strip(cell.slot, &cell.image_id)
+          });
+          artwork = artwork.push(
+            container(progress_bar(
+              palette,
+              progress,
+              radius,
+              frame_height,
+              strip.cloned(),
+            ))
+            .width(Fill)
+            .height(Fill)
+            .align_y(Alignment::End),
+          );
+        }
+        artwork.into()
       },
       ButtonVariant::Text,
     )
+    .overlay_border()
     .padding(0)
     .width(Length::Fixed(frame_width))
     .min_height(frame_height)
@@ -584,34 +605,6 @@ fn video_card<'a>(
       .width(frame_width)
       .height(frame_height)
       .push(playable_artwork);
-    if let Some(progress) = card_progress(section, item) {
-      let frosted_strip = cell.and_then(|cell| {
-        state
-          .kernel
-          .artwork_handles
-          .frosted_strip(cell.slot, &cell.image_id)
-      });
-      let frosted = frosted_strip.is_some();
-      if let Some(strip) = frosted_strip {
-        artwork_layers = artwork_layers.push(
-          container(
-            Image::new(strip.clone())
-              .width(Fill)
-              .height(PROGRESS_BAR_HEIGHT)
-              .content_fit(ContentFit::Fill),
-          )
-          .width(Fill)
-          .height(Fill)
-          .align_y(Alignment::End),
-        );
-      }
-      artwork_layers = artwork_layers.push(
-        container(progress_bar(palette, progress, radius, frosted))
-          .width(Fill)
-          .height(Fill)
-          .align_y(Alignment::End),
-      );
-    }
     if state
       .full
       .as_ref()
@@ -642,14 +635,7 @@ fn video_card<'a>(
     )
     .width(frame_width)
     .height(frame_height)
-    .clip(true)
-    .style(move |_| iced::widget::container::Style {
-      border: iced::Border {
-        radius,
-        ..iced::Border::default()
-      },
-      ..iced::widget::container::Style::default()
-    });
+    .clip(true);
     let copy = container(text_stack)
       .padding(iced::Padding {
         top: TOKENS.spacing.s3,
@@ -739,7 +725,8 @@ fn count_badge<'a>(
         border: iced::Border {
           radius: full_radius(TOKENS.radii.md),
           ..iced::Border::default()
-        },
+        }
+        .smoothing(jellypilot_ui::widgets::container::SURFACE_SMOOTHING),
         ..container::Style::default()
       })
       .into(),
@@ -840,7 +827,7 @@ fn hero_artwork<'a>(
           .width(if logo_width > 0.0 {
             Length::Fixed(logo_width)
           } else {
-            Length::Shrink
+            Length::Fit
           });
         // The baked shadow canvas carries a transparent margin (height/4 on
         // top/bottom/right, a constant 3/2 render ratio); indent the logo on
@@ -867,7 +854,7 @@ fn hero_artwork<'a>(
           .width(if let Some(width) = shadow_width {
             Length::Fixed(width)
           } else {
-            Length::Shrink
+            Length::Fit
           });
         return stack![container(shadow_image), logo].into();
       }
@@ -956,7 +943,7 @@ fn hero_rail_card<'a>(
     .selection_card(section, &item.id);
   let title = card_title(item);
   let content = move |_| -> Element<'a, Message> {
-    card_artwork(
+    let artwork = card_artwork(
       state,
       cell,
       title,
@@ -964,9 +951,37 @@ fn hero_rail_card<'a>(
       radius,
       skeleton_phase,
       reduced_motion,
-    )
+    );
+    Stack::new()
+      .push(artwork)
+      .push(
+        container(space())
+          .width(RAIL_IMAGE_WIDTH)
+          .height(RAIL_IMAGE_HEIGHT)
+          .style(move |_| container::Style {
+            border: iced::Border {
+              smoothing: jellypilot_ui::widgets::container::SURFACE_SMOOTHING,
+              color: if selected {
+                palette.colors.primary
+              } else {
+                iced::Color::TRANSPARENT
+              },
+              width: 2.0,
+              radius,
+            },
+            snap: false,
+            ..container::Style::default()
+          }),
+      )
+      .into()
   };
   let card = control_button_content(content, ButtonVariant::Text)
+    .overlay_border()
+    .style(|theme, variant, status| {
+      let mut style = jellypilot_ui::widgets::button::style(theme, variant, status);
+      style.snap = false;
+      style
+    })
     .padding(TOKENS.spacing.s0_5)
     .width(Length::Fixed(RAIL_IMAGE_WIDTH + TOKENS.spacing.s0_5 * 2.0))
     .id(iced::widget::Id::from(format!(
@@ -974,20 +989,7 @@ fn hero_rail_card<'a>(
       item.id
     )))
     .on_press(Message::Home(HomeMessage::HeroSelected(item.id.clone())));
-  let card = container(card)
-    .padding(2.0)
-    .style(move |_| iced::widget::container::Style {
-      border: iced::Border {
-        color: if selected {
-          palette.colors.primary
-        } else {
-          iced::Color::TRANSPARENT
-        },
-        width: 2.0,
-        radius: full_radius(TOKENS.radii.lg),
-      },
-      ..iced::widget::container::Style::default()
-    });
+  let card = container(card).padding(2.0);
   focus_tooltip(
     card,
     rail_label(state.kernel.locale, section, item),
@@ -1016,10 +1018,12 @@ fn artwork_button_style(
   _status: button::Status,
 ) -> button::Style {
   button::Style {
+    snap: false,
     border: iced::Border {
       radius: full_radius(TOKENS.radii.lg),
       ..iced::Border::default()
-    },
+    }
+    .smoothing(jellypilot_ui::widgets::container::SURFACE_SMOOTHING),
     ..button::Style::default()
   }
 }
@@ -1085,6 +1089,7 @@ fn card_artwork<'a>(
         palette.colors.surfaceContainerLowest,
       )),
       border: iced::Border {
+        smoothing: jellypilot_ui::widgets::container::SURFACE_SMOOTHING,
         radius,
         width: 0.0,
         color: iced::Color::TRANSPARENT,
@@ -1129,98 +1134,115 @@ fn progress_bar<'a>(
   palette: &'static ThemePalette,
   progress: f64,
   radius: iced::border::Radius,
-  frosted: bool,
+  frame_height: f32,
+  frosted_strip: Option<iced::widget::image::Handle>,
 ) -> Element<'a, Message> {
-  Canvas::new(ProgressOverlay {
+  Element::new(ProgressOverlay {
     progress: (progress / 100.0).clamp(0.0, 1.0) as f32,
-    // The fill stays translucent as well, so the frosted strip shows through
-    // while the watched portion remains clearly distinguished by hue.
     fill: palette.colors.primary.scale_alpha(0.5),
-    track: if frosted {
+    track: if frosted_strip.is_some() {
       palette.colors.surfaceContainerLowest.scale_alpha(0.4)
     } else {
       palette.colors.surfaceContainerLow.scale_alpha(0.5)
     },
     radius,
+    frame_height,
+    frosted_strip,
   })
-  .width(Fill)
-  .height(PROGRESS_BAR_HEIGHT)
-  .into()
 }
 
-/// Bottom-edge progress overlay. A bar-height rectangle cannot carry the
-/// artwork's corner radius (border radii clamp to half the bar height), so
-/// this draws the artwork's full rounded-rect contour tall enough to escape
-/// clamping and lets the frame bounds crop everything above the strip: the
-/// exposed corners reproduce the artwork's exact arc. The fill is a dedicated
-/// path with its own bottom corner radius — `Frame::with_clip` is unreliable
-/// across iced 0.14 backends (draft/paste drops or offsets clips), so no clip
-/// regions are used at all.
+/// The bottom strip uses the full artwork's native display-frame mask.
+/// Scissoring reveals only the strip; it never creates new rounded corners at
+/// the clipping edges or clamps the image radius to half the strip height.
 struct ProgressOverlay {
   progress: f32,
   fill: iced::Color,
   track: iced::Color,
   radius: iced::border::Radius,
+  frame_height: f32,
+  frosted_strip: Option<iced::widget::image::Handle>,
 }
 
-impl canvas::Program<Message> for ProgressOverlay {
-  type State = ();
+impl Widget<Message, iced::Theme, iced::Renderer> for ProgressOverlay {
+  fn size(&self) -> iced::Size<Length> {
+    iced::Size::new(Fill, Length::Fixed(PROGRESS_BAR_HEIGHT))
+  }
+
+  fn layout(
+    &mut self,
+    _tree: &mut widget::Tree,
+    _renderer: &iced::Renderer,
+    limits: &layout::Limits,
+  ) -> layout::Node {
+    layout::atomic(limits, Fill, Length::Fixed(PROGRESS_BAR_HEIGHT))
+  }
 
   fn draw(
     &self,
-    _state: &Self::State,
-    renderer: &iced::Renderer,
+    _tree: &widget::Tree,
+    renderer: &mut iced::Renderer,
     _theme: &iced::Theme,
-    bounds: iced::Rectangle,
+    _style: &renderer::Style,
+    layout: Layout<'_>,
     _cursor: iced::mouse::Cursor,
-  ) -> Vec<canvas::Geometry> {
-    let mut frame = canvas::Frame::new(renderer, bounds.size());
-    let corner = self.radius.bottom_left.max(self.radius.bottom_right);
-    let top = PROGRESS_BAR_HEIGHT - 2.0 * corner;
-    if corner > 0.0 {
-      frame.fill(
-        &canvas::Path::rounded_rectangle(
-          iced::Point::new(0.0, top),
-          iced::Size::new(bounds.width, 2.0 * corner),
-          self.radius,
-        ),
-        self.track,
-      );
-      if self.progress > 0.0 {
-        let fill_radius = iced::border::Radius {
-          top_left: 0.0,
-          top_right: 0.0,
-          bottom_left: self.radius.bottom_left,
-          bottom_right: if self.progress >= 1.0 {
-            self.radius.bottom_right
-          } else {
-            0.0
+    viewport: &iced::Rectangle,
+  ) {
+    use iced::advanced::image::Renderer as _;
+    let strip = layout.bounds();
+    let Some(visible) = strip.intersection(viewport) else {
+      return;
+    };
+    let frame = iced::Rectangle {
+      y: strip.y + strip.height - self.frame_height,
+      height: self.frame_height,
+      ..strip
+    };
+    let border = iced::Border {
+      radius: self.radius,
+      smoothing: jellypilot_ui::widgets::container::SURFACE_SMOOTHING,
+      ..iced::Border::default()
+    };
+    renderer.with_layer(visible, |renderer| {
+      if let Some(handle) = &self.frosted_strip {
+        renderer.draw_image(
+          iced::advanced::image::Image::new(handle.clone())
+            .border_radius(self.radius)
+            .border_smoothing(jellypilot_ui::widgets::container::SURFACE_SMOOTHING)
+            .snap(false),
+          strip,
+          frame,
+        );
+      }
+      // A separate layer keeps the tint above the frosted image on WGPU.
+      renderer.with_layer(visible, |renderer| {
+        renderer.fill_quad(
+          renderer::Quad {
+            bounds: frame,
+            border,
+            snap: false,
+            ..renderer::Quad::default()
           },
-        };
-        frame.fill(
-          &canvas::Path::rounded_rectangle(
-            iced::Point::new(0.0, top),
-            iced::Size::new(bounds.width * self.progress, 2.0 * corner),
-            fill_radius,
-          ),
-          self.fill,
+          self.track,
         );
+      });
+      let watched = iced::Rectangle {
+        width: strip.width * self.progress,
+        ..strip
+      };
+      if let Some(watched) = watched.intersection(&visible) {
+        renderer.with_layer(watched, |renderer| {
+          renderer.fill_quad(
+            renderer::Quad {
+              bounds: frame,
+              border,
+              snap: false,
+              ..renderer::Quad::default()
+            },
+            self.fill,
+          );
+        });
       }
-    } else {
-      frame.fill_rectangle(
-        iced::Point::ORIGIN,
-        iced::Size::new(bounds.width, PROGRESS_BAR_HEIGHT),
-        self.track,
-      );
-      if self.progress > 0.0 {
-        frame.fill_rectangle(
-          iced::Point::ORIGIN,
-          iced::Size::new(bounds.width * self.progress, PROGRESS_BAR_HEIGHT),
-          self.fill,
-        );
-      }
-    }
-    vec![frame.into_geometry()]
+    });
   }
 }
 

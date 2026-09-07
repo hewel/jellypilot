@@ -6,7 +6,9 @@
 
 use iced::advanced::graphics::text::Paragraph;
 use iced::advanced::text::{self, paragraph::Plain, Renderer as _};
-use iced::advanced::{layout, mouse, overlay, renderer, widget, Clipboard, Layout, Shell, Widget};
+use iced::advanced::{
+  layout, mouse, overlay, renderer, widget, Layout, Renderer as _, Shell, Widget,
+};
 use iced::{alignment, Element, Event, Length, Pixels, Rectangle, Size, Theme, Vector};
 
 use crate::app::message::Message;
@@ -47,12 +49,12 @@ impl Widget<Message, Theme, iced::Renderer> for OverviewLayout<'_> {
     widget::tree::State::new(Plain::<Paragraph>::default())
   }
 
-  fn diff(&self, _tree: &mut widget::Tree) {
+  fn diff(&mut self, _tree: &mut widget::Tree) {
     // The child depends on the available width; diff it during layout.
   }
 
   fn size(&self) -> Size<Length> {
-    Size::new(Length::Fill, Length::Shrink)
+    Size::new(Length::Fill, Length::Fit)
   }
 
   fn layout(
@@ -61,7 +63,7 @@ impl Widget<Message, Theme, iced::Renderer> for OverviewLayout<'_> {
     renderer: &iced::Renderer,
     limits: &layout::Limits,
   ) -> layout::Node {
-    let limits = limits.width(Length::Fill).height(Length::Shrink);
+    let limits = limits.width(Length::Fill).height(Length::Fit);
     let width = limits.max().width;
     let paragraph = tree.state.downcast_mut::<Plain<Paragraph>>();
     let height = if let Some(overview) = self.overview {
@@ -69,12 +71,14 @@ impl Widget<Message, Theme, iced::Renderer> for OverviewLayout<'_> {
         content: overview,
         bounds: Size::new((width - self.copy_inset).max(1.0), f32::INFINITY),
         size: self.text_size,
-        line_height: text::LineHeight::default(),
-        font: renderer.default_font(),
+        line_height: renderer.line_height(),
+        font: renderer.font(),
         align_x: text::Alignment::Default,
         align_y: alignment::Vertical::Top,
         shaping: text::Shaping::default(),
         wrapping: text::Wrapping::Word,
+        ellipsis: text::Ellipsis::default(),
+        hint_factor: renderer.hint_factor(),
       });
       paragraph.min_height()
     } else {
@@ -84,13 +88,13 @@ impl Widget<Message, Theme, iced::Renderer> for OverviewLayout<'_> {
       0.0
     };
     self.content = (self.view)(width, height);
-    tree.diff_children(std::slice::from_ref(&self.content));
+    tree.diff_children(std::slice::from_mut(&mut self.content));
     let node =
       self
         .content
         .as_widget_mut()
         .layout(&mut tree.children[0], renderer, &limits.loose());
-    let size = limits.resolve(Length::Fill, Length::Shrink, node.size());
+    let size = limits.resolve(Length::Fill, Length::Fit, node.size());
     layout::Node::with_children(size, vec![node])
   }
 
@@ -101,7 +105,6 @@ impl Widget<Message, Theme, iced::Renderer> for OverviewLayout<'_> {
     layout: Layout<'_>,
     cursor: mouse::Cursor,
     renderer: &iced::Renderer,
-    clipboard: &mut dyn Clipboard,
     shell: &mut Shell<'_, Message>,
     viewport: &Rectangle,
   ) {
@@ -111,7 +114,6 @@ impl Widget<Message, Theme, iced::Renderer> for OverviewLayout<'_> {
       layout.children().next().expect("overview child"),
       cursor,
       renderer,
-      clipboard,
       shell,
       viewport,
     );
@@ -191,7 +193,7 @@ impl Widget<Message, Theme, iced::Renderer> for OverviewLayout<'_> {
 #[cfg(test)]
 mod tests {
   use super::*;
-  use iced::advanced::renderer::Headless;
+  use iced::advanced::{renderer, renderer::Headless};
   use iced::Font;
 
   #[test]
@@ -217,15 +219,19 @@ mod tests {
       (Some(overview), 180.0, 40.0, 13.0, Font::DEFAULT),
     ] {
       let renderer = iced::futures::executor::block_on(iced::Renderer::new(
-        font,
-        16.0.into(),
+        renderer::Settings {
+          font,
+          text_size: 16.0.into(),
+          line_height: jellypilot_ui::fonts::DEFAULT_LINE_HEIGHT,
+          metrics_hinting: false,
+        },
         Some("tiny-skia"),
       ))
       .expect("headless renderer");
       let mut element = overview_layout(content, inset, size, |_, height| {
         iced::widget::space().height(height).into()
       });
-      tree.diff(element.as_widget());
+      tree.diff(element.as_widget_mut());
       let limits = layout::Limits::new(Size::ZERO, Size::new(width, f32::INFINITY));
       let height = element
         .as_widget_mut()
@@ -237,6 +243,7 @@ mod tests {
         .map_or(0.0, |content| {
           let mut text: Element<'_, Message> = iced::widget::text(content).size(size).into();
           let mut text_tree = widget::Tree::new(&text);
+          text_tree.diff(text.as_widget_mut());
           text
             .as_widget_mut()
             .layout(

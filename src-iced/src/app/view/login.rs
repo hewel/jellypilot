@@ -223,14 +223,14 @@ fn cancel_button<'a>(state: &State) -> Element<'a, Message> {
 
 fn password(state: &State) -> Element<'_, Message> {
   let login = &state.login.flow;
-  let username = text_input(&state.t("login-username"), &login.username)
+  let username = text_input(state.t("login-username"), &login.username)
     .on_input(|value| Message::Login(LoginMessage::UsernameChanged(value)))
     .padding([8, 12])
     .size(14)
     .style(|theme, status| {
       jellypilot_ui::theme::field_variant(theme, status, FieldVariant::Filled)
     });
-  let password = text_input(&state.t("login-password"), &login.password)
+  let password = text_input(state.t("login-password"), login.password.as_str())
     .on_input(|value| Message::Login(LoginMessage::PasswordChanged(value)))
     .secure(true)
     .padding([8, 12])

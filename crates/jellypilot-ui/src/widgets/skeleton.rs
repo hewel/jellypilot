@@ -28,7 +28,6 @@ use crate::tokens::{palette, TOKENS};
 /// Smooth cosine curve: phase 0.0 -> `dim`, 0.5 -> `bright`, 1.0 -> `dim`.
 /// The function is total: any non-finite `phase` (e.g. `NaN`, `INFINITY`)
 /// returns `dim`.
-#[must_use]
 pub fn pulse_color(phase: f32, dim: Color, bright: Color) -> Color {
     let factor = if phase.is_finite() {
         0.5 - 0.5 * (phase * std::f32::consts::TAU).cos()
@@ -100,6 +99,7 @@ fn skeleton_style(theme: &Theme, phase: f32, reduced_motion: bool) -> container:
     container::Style {
         background: Some(Background::Color(background)),
         border: Border {
+            smoothing: 0.0,
             radius: Radius::from(TOKENS.radii.lg),
             color: Color::TRANSPARENT,
             width: 0.0,
@@ -127,6 +127,7 @@ fn skeleton_panel_style(
     container::Style {
         background: Some(Background::Color(background_color)),
         border: Border {
+            smoothing: 0.0,
             radius,
             color: Color::TRANSPARENT,
             width: 0.0,

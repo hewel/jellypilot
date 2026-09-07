@@ -4,7 +4,7 @@
 //! wrapper observes the child focus before forwarding the event, so a parent
 //! can clear a search draft (or close an anchored search layer) as one action.
 
-use iced::advanced::{layout, mouse, overlay, renderer, widget, Clipboard, Layout, Shell, Widget};
+use iced::advanced::{layout, mouse, overlay, renderer, widget, Layout, Shell, Widget};
 use iced::keyboard::{key, Key};
 use iced::{Element, Event, Length, Rectangle, Size, Theme, Vector};
 
@@ -32,20 +32,12 @@ impl<Message> Widget<Message, Theme, iced::Renderer> for EscapeInput<'_, Message
 where
     Message: Clone,
 {
-    fn children(&self) -> Vec<widget::Tree> {
-        vec![widget::Tree::new(&self.input)]
-    }
-
-    fn diff(&self, tree: &mut widget::Tree) {
-        tree.diff_children(&[self.input.as_widget()]);
+    fn diff(&mut self, tree: &mut widget::Tree) {
+        tree.diff_children(&mut [self.input.as_widget_mut()]);
     }
 
     fn size(&self) -> Size<Length> {
         self.input.as_widget().size()
-    }
-
-    fn size_hint(&self) -> Size<Length> {
-        self.input.as_widget().size_hint()
     }
 
     fn layout(
@@ -78,7 +70,6 @@ where
         layout: Layout<'_>,
         cursor: mouse::Cursor,
         renderer: &iced::Renderer,
-        clipboard: &mut dyn Clipboard,
         shell: &mut Shell<'_, Message>,
         viewport: &Rectangle,
     ) {
@@ -100,7 +91,6 @@ where
             layout,
             cursor,
             renderer,
-            clipboard,
             shell,
             viewport,
         );
@@ -162,11 +152,11 @@ where
     }
 }
 
-fn child_is_focused<Message>(
-    input: &mut dyn Widget<Message, Theme, iced::Renderer>,
+pub(crate) fn child_is_focused<Message, Renderer: iced::advanced::Renderer>(
+    input: &mut dyn Widget<Message, Theme, Renderer>,
     tree: &mut widget::Tree,
     layout: Layout<'_>,
-    renderer: &iced::Renderer,
+    renderer: &Renderer,
 ) -> bool {
     struct FocusProbe {
         focused: bool,

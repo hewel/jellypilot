@@ -7,12 +7,18 @@ use crate::tokens::{
     palette, ACCOUNT_POPOVER_RADIUS, SIDEBAR_CONTROL_RADIUS, SIDEBAR_INSET_RADIUS, TOKENS,
 };
 use crate::variants::{ButtonVariant, FieldVariant};
+use crate::widgets::container::SURFACE_SMOOTHING;
 
 fn surface(theme: &Theme, fill: Color, radius: f32, outlined: bool) -> container::Style {
     container::Style {
         background: Some(Background::Color(fill)),
         text_color: Some(palette(theme).text.body),
         border: Border {
+            smoothing: if radius == 0.0 {
+                0.0
+            } else {
+                SURFACE_SMOOTHING
+            },
             radius: radius.into(),
             color: palette(theme).colors.outlineVariant,
             width: if outlined { 1.0 } else { 0.0 },
@@ -27,6 +33,7 @@ pub fn search_input(theme: &Theme, status: text_input::Status) -> text_input::St
     let mut style = super::field::style(theme, FieldVariant::Filled, status);
     style.background = Background::Color(Color::TRANSPARENT);
     style.border = Border {
+        smoothing: SURFACE_SMOOTHING,
         radius: TOKENS.radii.lg.into(),
         color: Color::TRANSPARENT,
         width: 0.0,
@@ -180,7 +187,6 @@ mod tests {
         ] {
             let got = search_input(&theme, status);
             let expected = field_style(&theme, status);
-            assert_eq!(got.icon, expected.icon, "icon color in {status:?}");
             assert_eq!(
                 got.placeholder, expected.placeholder,
                 "placeholder color in {status:?}"

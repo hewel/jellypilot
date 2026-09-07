@@ -54,6 +54,7 @@ fn resolve(
             background
         }),
         border: Border {
+            smoothing: super::container::SURFACE_SMOOTHING,
             radius: TOKENS.radii.md.into(),
             color: if disabled {
                 scale_alpha(border_color, 0.5)
@@ -62,7 +63,6 @@ fn resolve(
             },
             width: border_width,
         },
-        icon: colors.onControl,
         placeholder: palette.text.muted,
         value: if disabled {
             scale_alpha(colors.onSurface, 0.5)
@@ -101,7 +101,6 @@ mod tests {
                 style.background,
                 Background::Color(DARK_PALETTE.colors.control)
             );
-            assert_eq!(style.icon, DARK_PALETTE.colors.onControl);
             assert_eq!(style.border.radius, Radius::from(TOKENS.radii.md));
             assert_eq!(style.border.width, 0.0);
         }

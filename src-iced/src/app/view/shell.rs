@@ -272,7 +272,7 @@ fn unified_search_field<'a>(
     None => leading,
   };
   let input = clear_on_escape(
-    text_input(&locale.text("shell-search-placeholder"), search_draft)
+    text_input(locale.text("shell-search-placeholder"), search_draft)
       .on_input(|value| Message::Browse(BrowseMessage::SearchInputChanged(value)))
       .on_submit(Message::Browse(BrowseMessage::SearchSubmitted))
       .id(Id::new(SEARCH_INPUT_ID))

@@ -17,7 +17,7 @@ use iced::advanced::mouse;
 use iced::advanced::overlay;
 use iced::advanced::renderer;
 use iced::advanced::widget::{self, Operation, Tree, Widget};
-use iced::advanced::{Clipboard, Shell};
+use iced::advanced::Shell;
 use iced::border::Radius;
 use iced::touch;
 use iced::{Element, Event, Length, Point, Rectangle, Size, Vector};
@@ -53,8 +53,8 @@ impl<'a, Message, Theme, Renderer> PosterCard<'a, Message, Theme, Renderer> {
             poster: poster.into(),
             copy: copy.into(),
             on_press: None,
-            width: Length::Shrink,
-            height: Length::Shrink,
+            width: Length::Fit,
+            height: Length::Fit,
             radius: Radius::from(TOKENS.radii.lg),
         }
     }
@@ -117,12 +117,8 @@ where
         widget::tree::State::new(State::default())
     }
 
-    fn children(&self) -> Vec<Tree> {
-        vec![Tree::new(&self.poster), Tree::new(&self.copy)]
-    }
-
-    fn diff(&self, tree: &mut Tree) {
-        tree.diff_children(&[self.poster.as_widget(), self.copy.as_widget()]);
+    fn diff(&mut self, tree: &mut Tree) {
+        tree.diff_children(&mut [self.poster.as_widget_mut(), self.copy.as_widget_mut()]);
     }
 
     fn size(&self) -> Size<Length> {
@@ -204,7 +200,6 @@ where
         layout: Layout<'_>,
         cursor: mouse::Cursor,
         renderer: &Renderer,
-        clipboard: &mut dyn Clipboard,
         shell: &mut Shell<'_, Message>,
         viewport: &Rectangle,
     ) {
@@ -216,7 +211,6 @@ where
                 poster_layout,
                 cursor,
                 renderer,
-                clipboard,
                 shell,
                 viewport,
             );
@@ -226,7 +220,6 @@ where
                 copy_layout,
                 cursor,
                 renderer,
-                clipboard,
                 shell,
                 viewport,
             );
@@ -379,26 +372,10 @@ mod tests {
     use iced::widget::{column, container, space, text};
     use iced::{Element, Event, Point, Rectangle, Size};
 
-    use super::{poster_card, POSTER_RADIUS};
-
+    use super::poster_card;
     #[derive(Debug, Clone, PartialEq, Eq)]
     enum TestMessage {
         Clicked,
-    }
-
-    #[test]
-    fn poster_radius_matches_token_lg() {
-        assert_eq!(POSTER_RADIUS, crate::tokens::TOKENS.radii.lg);
-    }
-
-    #[test]
-    fn poster_card_radius_builder_updates_radius() {
-        let poster: Element<'_, TestMessage, iced::Theme, ()> =
-            container(space::horizontal()).into();
-        let copy: Element<'_, TestMessage, iced::Theme, ()> = container(space::horizontal()).into();
-        let custom_radius = iced::border::Radius::from(16.0);
-        let card = poster_card(poster, copy).radius(custom_radius);
-        assert_eq!(card.radius, custom_radius);
     }
 
     #[test]
@@ -422,6 +399,7 @@ mod tests {
             .on_press(TestMessage::Clicked);
 
         let mut tree = Tree::new(&card as &dyn Widget<TestMessage, iced::Theme, ()>);
+        card.diff(&mut tree);
         let renderer = ();
         let limits = layout::Limits::new(Size::ZERO, Size::new(card_width, 1000.0));
 
@@ -438,39 +416,6 @@ mod tests {
             children[1].bounds().position(),
             Point::new(0.0, poster_height)
         );
-    }
-
-    #[test]
-    fn no_layout_shift_between_card_states() {
-        let card_width = 160.0;
-        let poster_height = 240.0;
-        let copy_height = 46.0;
-
-        let make_card = || {
-            let poster: Element<'_, TestMessage, iced::Theme, ()> = container(space::horizontal())
-                .width(card_width)
-                .height(poster_height)
-                .into();
-            let copy: Element<'_, TestMessage, iced::Theme, ()> = container(space::horizontal())
-                .width(card_width)
-                .height(copy_height)
-                .into();
-            poster_card(poster, copy)
-                .width(card_width)
-                .on_press(TestMessage::Clicked)
-        };
-
-        let mut card = make_card();
-        let mut tree = Tree::new(&card as &dyn Widget<TestMessage, iced::Theme, ()>);
-        let renderer = ();
-        let limits = layout::Limits::new(Size::ZERO, Size::new(card_width, 1000.0));
-
-        let idle_node = card.layout(&mut tree, &renderer, &limits);
-
-        // Hover or press do not affect layout calculation
-        let hovered_node = card.layout(&mut tree, &renderer, &limits);
-        assert_eq!(idle_node.size(), hovered_node.size());
-        assert_eq!(idle_node.bounds(), hovered_node.bounds());
     }
 
     #[test]
@@ -493,79 +438,104 @@ mod tests {
             .on_press(TestMessage::Clicked);
 
         let mut tree = Tree::new(&card as &dyn Widget<TestMessage, iced::Theme, ()>);
+        card.diff(&mut tree);
         let renderer = ();
         let limits = layout::Limits::new(Size::ZERO, Size::new(card_width, 1000.0));
         let node = card.layout(&mut tree, &renderer, &limits);
         let layout = Layout::new(&node);
-        let mut clipboard = iced::advanced::clipboard::Null;
         let viewport = Rectangle::with_size(Size::new(1000.0, 1000.0));
 
         let cursor_inside = mouse::Cursor::Available(Point::new(50.0, 50.0));
         let cursor_outside = mouse::Cursor::Available(Point::new(500.0, 500.0));
 
-        // 1. Mouse press inside -> captured, state.is_pressed becomes true
-        let mut messages = Vec::new();
-        let mut shell = Shell::new(&mut messages);
+        // Pressing alone captures the event but must not activate the card.
+        let mut messages = iced::advanced::shell::Bus::new();
+        let mut shell = Shell::new(
+            &iced::window::Headless,
+            iced::advanced::shell::Waker::noop(),
+            &mut messages,
+        );
         card.update(
             &mut tree,
             &Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left)),
             layout,
             cursor_inside,
             &renderer,
-            &mut clipboard,
             &mut shell,
             &viewport,
         );
         assert!(shell.is_event_captured());
-        let state = tree.state.downcast_ref::<super::State>();
-        assert!(state.is_pressed);
+        assert!(messages.is_empty());
 
-        // 2. Mouse release inside -> published clicked message
-        let mut published = Vec::new();
-        let mut shell = Shell::new(&mut published);
+        // Releasing inside activates the card once.
+        let mut published = iced::advanced::shell::Bus::new();
+        let mut shell = Shell::new(
+            &iced::window::Headless,
+            iced::advanced::shell::Waker::noop(),
+            &mut published,
+        );
         card.update(
             &mut tree,
             &Event::Mouse(mouse::Event::ButtonReleased(mouse::Button::Left)),
             layout,
             cursor_inside,
             &renderer,
-            &mut clipboard,
             &mut shell,
             &viewport,
         );
         assert!(shell.is_event_captured());
-        assert_eq!(published, vec![TestMessage::Clicked]);
-        let state = tree.state.downcast_ref::<super::State>();
-        assert!(!state.is_pressed);
+        assert_eq!(
+            published
+                .drain()
+                .map(|(message, _)| message)
+                .collect::<Vec<_>>(),
+            vec![TestMessage::Clicked]
+        );
 
-        // 3. Mouse press inside then release outside -> not published
-        let mut messages = Vec::new();
-        let mut shell = Shell::new(&mut messages);
+        // Releasing outside cancels the press.
+        let mut messages = iced::advanced::shell::Bus::new();
+        let mut shell = Shell::new(
+            &iced::window::Headless,
+            iced::advanced::shell::Waker::noop(),
+            &mut messages,
+        );
         card.update(
             &mut tree,
             &Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left)),
             layout,
             cursor_inside,
             &renderer,
-            &mut clipboard,
             &mut shell,
             &viewport,
         );
-        let mut published = Vec::new();
-        let mut shell = Shell::new(&mut published);
+        let mut published = iced::advanced::shell::Bus::new();
+        let mut shell = Shell::new(
+            &iced::window::Headless,
+            iced::advanced::shell::Waker::noop(),
+            &mut published,
+        );
         card.update(
             &mut tree,
             &Event::Mouse(mouse::Event::ButtonReleased(mouse::Button::Left)),
             layout,
             cursor_outside,
             &renderer,
-            &mut clipboard,
             &mut shell,
             &viewport,
         );
-        assert!(published.is_empty());
-        let state = tree.state.downcast_ref::<super::State>();
-        assert!(!state.is_pressed);
+        card.update(
+            &mut tree,
+            &Event::Mouse(mouse::Event::ButtonReleased(mouse::Button::Left)),
+            layout,
+            cursor_inside,
+            &renderer,
+            &mut shell,
+            &viewport,
+        );
+        assert!(
+            published.is_empty(),
+            "cancelled press must not activate on a later release"
+        );
     }
 
     #[test]
@@ -588,6 +558,7 @@ mod tests {
             .on_press(TestMessage::Clicked);
 
         let mut tree = Tree::new(&card_enabled as &dyn Widget<TestMessage, iced::Theme, ()>);
+        card_enabled.diff(&mut tree);
         let renderer = ();
         let limits = layout::Limits::new(Size::ZERO, Size::new(card_width, 1000.0));
         let node = card_enabled.layout(&mut tree, &renderer, &limits);

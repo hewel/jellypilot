@@ -68,6 +68,12 @@ fn run_application(smoke: bool) -> Result<(), Box<dyn std::error::Error + Send +
     app::update,
     app::view,
   )
+  .settings(iced::Settings {
+    line_height: jellypilot_ui::fonts::DEFAULT_LINE_HEIGHT,
+    // iced 0.14 measured text without the new metrics-hinting quantization.
+    metrics_hinting: false,
+    ..iced::Settings::default()
+  })
   .title("JellyPilot")
   .subscription(app::subscription)
   .theme(app::theme)

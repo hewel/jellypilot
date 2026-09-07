@@ -1,6 +1,6 @@
 //! JellyPilot iced theme and widget catalog entry points.
 
-use iced::theme::Palette;
+use iced::theme::palette;
 use iced::widget::{button, container, scrollable as iced_scrollable, text_input};
 use iced::Theme;
 
@@ -30,7 +30,7 @@ pub fn theme(mode: ThemeMode) -> Theme {
             ThemeMode::Dark => "JellyPilot Dark",
             ThemeMode::Light => "JellyPilot Light",
         },
-        Palette {
+        palette::Seed {
             background: colors.background,
             text: colors.onSurface,
             primary: colors.primary,

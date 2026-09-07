@@ -163,7 +163,7 @@ fn list_body<'a>(
       card_row = card_row.push(
         container(list_card(state, kind, entry))
           .width(Length::FillPortion(1))
-          .height(Length::Shrink),
+          .height(Length::Fit),
       );
     }
     grid = grid.push(card_row);
@@ -279,6 +279,7 @@ fn list_artwork<'a>(state: &'a State, entry: &'a ListEntry) -> Element<'a, Messa
         state.palette().colors.surfaceContainerLowest,
       )),
       border: iced::Border {
+        smoothing: jellypilot_ui::widgets::container::SURFACE_SMOOTHING,
         color: Color::TRANSPARENT,
         width: 0.0,
         radius: full_radius(TOKENS.radii.lg),

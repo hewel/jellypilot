@@ -85,6 +85,7 @@ pub fn style(theme: &Theme, variant: ButtonVariant, status: button::Status) -> b
         background: background.map(Background::Color),
         text_color,
         border: Border {
+            smoothing: super::container::SURFACE_SMOOTHING,
             radius: TOKENS.radii.md.into(),
             color: border_color,
             width: border_width,

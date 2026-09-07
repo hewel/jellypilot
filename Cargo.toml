@@ -14,6 +14,10 @@ exclude = [
 ]
 resolver = "2"
 
+[workspace.dependencies]
+iced = { git = "https://github.com/hewel/iced.git", rev = "bc93c1f1", features = ["advanced", "advanced-shaping", "image", "svg", "tokio"] }
+iced_runtime = { git = "https://github.com/hewel/iced.git", rev = "bc93c1f1" }
+
 [workspace.package]
 edition = "2021"
 license = "MIT"

@@ -21,7 +21,7 @@ jellypilot-media-server = { path = "../crates/jellypilot-media-server" }
 jellypilot-mpv = { path = "../crates/jellypilot-mpv" }
 jellypilot-session = { path = "../crates/jellypilot-session" }
 jellypilot-ui = { path = "../crates/jellypilot-ui" }
-iced = { version = "0.14.0", features = ["advanced", "advanced-shaping", "canvas", "image", "svg", "tokio"] }
+iced = { workspace = true }
 fluent-templates = "0.15.1"
 image = { version = "0.25.10", default-features = false, features = ["png"] }
 mimalloc = { version = "0.1.48", default-features = false }
@@ -39,7 +39,7 @@ gtk = "0.18.2"
 
 [dev-dependencies]
 fluent-syntax = "0.12"
-iced_runtime = "0.14.0"
+iced_runtime = { workspace = true }
 jellypilot-media-server = { path = "../crates/jellypilot-media-server", features = ["test-utils"] }
 jellypilot-core = { path = "../crates/jellypilot-core", features = ["test-utils"] }
 serde_json = "1.0.149"

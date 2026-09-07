@@ -5,6 +5,7 @@ use iced::{Background, Border, Color, Theme};
 
 use crate::tokens::{palette, TOKENS};
 use crate::variants::BadgeVariant;
+use crate::widgets::container::SURFACE_SMOOTHING;
 
 /// Resolves a status badge variant to an iced container style.
 pub fn style(theme: &Theme, variant: BadgeVariant) -> container::Style {
@@ -20,6 +21,7 @@ pub fn style(theme: &Theme, variant: BadgeVariant) -> container::Style {
         background: Some(Background::Color(background)),
         text_color: Some(text_color),
         border: Border {
+            smoothing: SURFACE_SMOOTHING,
             radius: TOKENS.radii.md.into(),
             color: Color::TRANSPARENT,
             width: 0.0,

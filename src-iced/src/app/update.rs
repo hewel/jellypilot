@@ -662,10 +662,30 @@ mod tests {
     ControllerCommand, ControllerSettlement, IntroAvailability, PlaybackEffect, PlaybackEvent,
   };
   use jellypilot_session::IntroSkipMode;
+  use jellypilot_ui::fonts;
 
   use super::*;
   use crate::app::kernel::Kernel;
   use crate::app::state::{ArtworkCellState, LoginState, RemoteSessionHandle};
+
+  fn update_ui(
+    ui: &mut iced_runtime::user_interface::UserInterface<'_, Message, iced::Theme, iced::Renderer>,
+    renderer: &mut iced::Renderer,
+    events: &[iced::Event],
+    cursor: iced::mouse::Cursor,
+    messages: &mut Vec<Message>,
+  ) {
+    let mut bus = iced::advanced::shell::Bus::new();
+    let (_, _) = ui.update(
+      &iced::window::Headless,
+      &iced::advanced::shell::Waker::noop(),
+      events,
+      cursor,
+      renderer,
+      &mut bus,
+    );
+    messages.extend(bus.drain().map(|(message, _)| message));
+  }
 
   fn test_state() -> State {
     let settings = SettingsStore::default();
@@ -718,7 +738,7 @@ mod tests {
 
   #[tokio::test]
   async fn account_settings_entry_keeps_its_focus_origin_when_reopened() {
-    use iced::advanced::{clipboard, renderer::Headless, widget};
+    use iced::advanced::{renderer::Headless, widget};
     use iced::futures::StreamExt;
     use iced::{keyboard, mouse, Event, Font, Size};
     use iced_runtime::user_interface::{Cache, UserInterface};
@@ -764,9 +784,17 @@ mod tests {
     state.login.flow.profiles_loading = false;
     state.settings.view.active_section = crate::app::state::SettingsSection::Appearance;
     state.shell.account_popover_open = true;
-    let mut renderer = iced::Renderer::new(Font::DEFAULT, 14.0.into(), Some("tiny-skia"))
-      .await
-      .expect("software renderer");
+    let mut renderer = iced::Renderer::new(
+      iced::advanced::renderer::Settings {
+        font: Font::DEFAULT,
+        text_size: 14.0.into(),
+        line_height: fonts::DEFAULT_LINE_HEIGHT,
+        metrics_hinting: false,
+      },
+      Some("tiny-skia"),
+    )
+    .await
+    .expect("software renderer");
     let bounds = Size::new(1600.0, 900.0);
     let window = iced::window::Id::unique();
     let mut ui = UserInterface::build(
@@ -776,22 +804,22 @@ mod tests {
       &mut renderer,
     );
     let mut messages = Vec::new();
-    ui.update(
+    update_ui(
+      &mut ui,
+      &mut renderer,
       &[key(keyboard::key::Named::Tab)],
       mouse::Cursor::Unavailable,
-      &mut renderer,
-      &mut clipboard::Null,
       &mut messages,
     );
     ui.operate(
       &renderer,
       &mut widget::operation::focusable::focus::<()>(widget::Id::new("account-settings")),
     );
-    ui.update(
+    update_ui(
+      &mut ui,
+      &mut renderer,
       &[key(keyboard::key::Named::Enter)],
       mouse::Cursor::Unavailable,
-      &mut renderer,
-      &mut clipboard::Null,
       &mut messages,
     );
     let open = messages.pop().expect("Manage accounts keyboard activation");
@@ -831,11 +859,11 @@ mod tests {
     );
     apply_focus(task, &mut ui, &renderer).await;
     messages.clear();
-    ui.update(
+    update_ui(
+      &mut ui,
+      &mut renderer,
       &[key(keyboard::key::Named::Enter)],
       mouse::Cursor::Unavailable,
-      &mut renderer,
-      &mut clipboard::Null,
       &mut messages,
     );
     assert!(matches!(
@@ -865,11 +893,11 @@ mod tests {
     );
     apply_focus(task, &mut ui, &renderer).await;
     messages.clear();
-    ui.update(
+    update_ui(
+      &mut ui,
+      &mut renderer,
       &[key(keyboard::key::Named::Enter)],
       mouse::Cursor::Unavailable,
-      &mut renderer,
-      &mut clipboard::Null,
       &mut messages,
     );
     assert!(matches!(
@@ -911,7 +939,7 @@ mod tests {
 
   #[tokio::test]
   async fn hero_selection_and_visible_resume_cards_have_independent_keyboard_actions() {
-    use iced::advanced::{clipboard, renderer::Headless, widget};
+    use iced::advanced::{renderer::Headless, widget};
     use iced::futures::StreamExt;
     use iced::{keyboard, mouse, Event, Font, Rectangle, Size};
     use iced_runtime::user_interface::{Cache, UserInterface};
@@ -1060,9 +1088,17 @@ mod tests {
         repeat: false,
       })
     }
-    let mut renderer = iced::Renderer::new(Font::DEFAULT, 14.0.into(), Some("tiny-skia"))
-      .await
-      .expect("software renderer");
+    let mut renderer = iced::Renderer::new(
+      iced::advanced::renderer::Settings {
+        font: Font::DEFAULT,
+        text_size: 14.0.into(),
+        line_height: fonts::DEFAULT_LINE_HEIGHT,
+        metrics_hinting: false,
+      },
+      Some("tiny-skia"),
+    )
+    .await
+    .expect("software renderer");
     for (bounds, with_player, with_prompt) in [
       (Size::new(1024.0, 640.0), false, false),
       (Size::new(1024.0, 640.0), true, false),
@@ -1135,22 +1171,22 @@ mod tests {
         &mut renderer,
       );
       let mut messages = Vec::new();
-      ui.update(
+      update_ui(
+        &mut ui,
+        &mut renderer,
         &[key(keyboard::key::Named::Tab)],
         mouse::Cursor::Unavailable,
-        &mut renderer,
-        &mut clipboard::Null,
         &mut messages,
       );
       ui.operate(
         &renderer,
         &mut widget::operation::focusable::focus::<()>(widget::Id::new("home-hero-rail-card-b")),
       );
-      ui.update(
+      update_ui(
+        &mut ui,
+        &mut renderer,
         &[key(keyboard::key::Named::Enter)],
         mouse::Cursor::Unavailable,
-        &mut renderer,
-        &mut clipboard::Null,
         &mut messages,
       );
       assert!(
@@ -1239,11 +1275,11 @@ mod tests {
         &iced::advanced::renderer::Style::default(),
         mouse::Cursor::Unavailable,
       );
-      ui.update(
+      update_ui(
+        &mut ui,
+        &mut renderer,
         &[key(keyboard::key::Named::Enter)],
         mouse::Cursor::Unavailable,
-        &mut renderer,
-        &mut clipboard::Null,
         &mut messages,
       );
       assert!(
@@ -1291,11 +1327,11 @@ mod tests {
         &renderer,
         &mut widget::operation::focusable::focus::<()>(query.id),
       );
-      ui.update(
+      update_ui(
+        &mut ui,
+        &mut renderer,
         &[key(keyboard::key::Named::Enter)],
         mouse::Cursor::Unavailable,
-        &mut renderer,
-        &mut clipboard::Null,
         &mut messages,
       );
       assert!(matches!(
@@ -1312,14 +1348,14 @@ mod tests {
         card.center_x(),
         card.y + card.height - 3.0,
       ));
-      ui.update(
+      update_ui(
+        &mut ui,
+        &mut renderer,
         &[
           Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left)),
           Event::Mouse(mouse::Event::ButtonReleased(mouse::Button::Left)),
         ],
         cursor,
-        &mut renderer,
-        &mut clipboard::Null,
         &mut messages,
       );
       assert!(
@@ -1478,9 +1514,17 @@ mod tests {
     ));
     assert_eq!(fs::read_to_string(&file.0).unwrap(), "unreadable JSON");
 
-    let mut renderer = iced::Renderer::new(Font::DEFAULT, 14.0.into(), Some("tiny-skia"))
-      .await
-      .expect("software renderer");
+    let mut renderer = iced::Renderer::new(
+      iced::advanced::renderer::Settings {
+        font: Font::DEFAULT,
+        text_size: 14.0.into(),
+        line_height: fonts::DEFAULT_LINE_HEIGHT,
+        metrics_hinting: false,
+      },
+      Some("tiny-skia"),
+    )
+    .await
+    .expect("software renderer");
     for settings_open in [false, true] {
       state.shell.settings_open = settings_open;
       state.kernel.connection = if settings_open {
@@ -1511,7 +1555,7 @@ mod tests {
 
   #[tokio::test]
   async fn toast_appearance_and_dismissal_preserve_login_input_focus() {
-    use iced::advanced::{clipboard, renderer::Headless, widget};
+    use iced::advanced::{renderer::Headless, widget};
     use iced::{mouse, Event, Font, Rectangle, Size};
     use iced_runtime::user_interface::{Cache, UserInterface};
 
@@ -1544,9 +1588,17 @@ mod tests {
       }
     }
     let mut state = test_state();
-    let mut renderer = iced::Renderer::new(Font::DEFAULT, 14.0.into(), Some("tiny-skia"))
-      .await
-      .expect("software renderer");
+    let mut renderer = iced::Renderer::new(
+      iced::advanced::renderer::Settings {
+        font: Font::DEFAULT,
+        text_size: 14.0.into(),
+        line_height: fonts::DEFAULT_LINE_HEIGHT,
+        metrics_hinting: false,
+      },
+      Some("tiny-skia"),
+    )
+    .await
+    .expect("software renderer");
     let bounds = Size::new(1600.0, 900.0);
     let window = iced::window::Id::unique();
     let mut ui = UserInterface::build(
@@ -1557,14 +1609,14 @@ mod tests {
     );
     let mut probe = InputProbe::default();
     ui.operate(&renderer, &mut probe);
-    ui.update(
+    update_ui(
+      &mut ui,
+      &mut renderer,
       &[
         Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left)),
         Event::Mouse(mouse::Event::ButtonReleased(mouse::Button::Left)),
       ],
       mouse::Cursor::Available(probe.input.expect("login server input").center()),
-      &mut renderer,
-      &mut clipboard::Null,
       &mut Vec::new(),
     );
     let mut probe = InputProbe::default();

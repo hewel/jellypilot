@@ -8,11 +8,11 @@ rust-version.workspace = true
 version.workspace = true
 
 [dependencies]
-iced = { version = "0.14.0", features = ["advanced", "advanced-shaping", "image", "svg", "tokio"] }
+iced = { workspace = true }
 unicode-script = "0.5"
 
 [dev-dependencies]
-iced_runtime = "0.14.0"
+iced_runtime = { workspace = true }
 roxmltree = "0.20"
 usvg = "0.45"
 [lints]

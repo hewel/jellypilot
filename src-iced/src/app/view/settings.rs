@@ -161,7 +161,7 @@ fn connection_section(state: &State) -> Element<'_, Message> {
 fn mpv_section(state: &State) -> Element<'_, Message> {
   let palette = state.palette();
   let path = text_input(
-    &state.t("settings-mpv-path-placeholder"),
+    state.t("settings-mpv-path-placeholder"),
     &state.settings.view.mpv_path_input,
   )
   .on_input(|value| Message::Settings(SettingsMessage::MpvPathChanged(value)))
@@ -170,7 +170,7 @@ fn mpv_section(state: &State) -> Element<'_, Message> {
   .width(Fill)
   .style(|theme, status| jellypilot_ui::theme::field_variant(theme, status, FieldVariant::Filled));
   let args = text_input(
-    &state.t("settings-mpv-args-placeholder"),
+    state.t("settings-mpv-args-placeholder"),
     &state.settings.view.mpv_args_input,
   )
   .on_input(|value| Message::Settings(SettingsMessage::MpvArgsChanged(value)))

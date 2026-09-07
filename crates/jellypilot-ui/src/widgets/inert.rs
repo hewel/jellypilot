@@ -1,6 +1,6 @@
 //! A visual-only wrapper for temporarily obscured application surfaces.
 
-use iced::advanced::{layout, mouse, overlay, renderer, widget, Clipboard, Layout, Shell, Widget};
+use iced::advanced::{layout, mouse, overlay, renderer, widget, Layout, Shell, Widget};
 use iced::{Element, Event, Length, Rectangle, Size, Theme, Vector};
 
 /// Draws `content` while excluding it from input, overlays, and focus traversal.
@@ -21,20 +21,12 @@ impl<Message> Widget<Message, Theme, iced::Renderer> for Inert<'_, Message>
 where
     Message: 'static,
 {
-    fn children(&self) -> Vec<widget::Tree> {
-        vec![widget::Tree::new(&self.content)]
-    }
-
-    fn diff(&self, tree: &mut widget::Tree) {
-        tree.diff_children(&[self.content.as_widget()]);
+    fn diff(&mut self, tree: &mut widget::Tree) {
+        tree.diff_children(&mut [self.content.as_widget_mut()]);
     }
 
     fn size(&self) -> Size<Length> {
         self.content.as_widget().size()
-    }
-
-    fn size_hint(&self) -> Size<Length> {
-        self.content.as_widget().size_hint()
     }
 
     fn layout(
@@ -55,7 +47,6 @@ where
         _layout: Layout<'_>,
         _cursor: mouse::Cursor,
         _renderer: &iced::Renderer,
-        _clipboard: &mut dyn Clipboard,
         _shell: &mut Shell<'_, Message>,
         _viewport: &Rectangle,
     ) {

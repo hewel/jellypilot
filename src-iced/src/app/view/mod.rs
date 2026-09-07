@@ -10,7 +10,7 @@ pub(crate) mod shell;
 
 use crate::i18n::Localizer;
 use iced::widget::{button, container, row, stack, text};
-use iced::{Alignment, Color, Element, Fill};
+use iced::{Alignment, Color, Element, Fill, Length};
 use jellypilot_auth::login::ConnectionPhase;
 use jellypilot_ui::icons::{icon_with_color, Icon, IconSize};
 use jellypilot_ui::tokens::{ThemePalette, TOKENS};
@@ -88,7 +88,8 @@ fn toast_view<'a>(
         border: iced::Border {
           radius: TOKENS.radii.sm.into(),
           ..iced::Border::default()
-        },
+        }
+        .smoothing(jellypilot_ui::widgets::container::SURFACE_SMOOTHING),
         ..button::Style::default()
       }
     });
@@ -105,12 +106,13 @@ fn toast_view<'a>(
   .align_y(Alignment::Center);
 
   container(toast_content)
-    .max_width(440.0)
+    .width(Length::Fill.max(440.0))
     .padding([10, 14])
     .style(move |_theme| container::Style {
       background: Some(iced::Background::Color(bg_color)),
       text_color: Some(text_color),
       border: iced::Border {
+        smoothing: jellypilot_ui::widgets::container::SURFACE_SMOOTHING,
         color: colors.outlineVariant,
         width: 1.0,
         radius: TOKENS.radii.lg.into(),

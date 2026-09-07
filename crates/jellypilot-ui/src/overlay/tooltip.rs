@@ -3,7 +3,7 @@
 use std::time::Duration;
 
 use iced::widget::{container, text, tooltip as iced_tooltip};
-use iced::Element;
+use iced::{Element, Length};
 
 use super::style;
 use super::Placement;
@@ -59,7 +59,7 @@ pub fn tooltip_element<'a, Message: 'a>(
 
     iced_tooltip(
         trigger,
-        container(content).max_width(options.max_width),
+        container(content).width(Length::Fit.max(options.max_width)),
         iced_position(options.placement),
     )
     .delay(options.delay)

@@ -1,6 +1,6 @@
 //! Opt-in text hints for controls whose full value must also be readable by keyboard.
 
-use iced::advanced::{layout, mouse, overlay, renderer, widget, Clipboard, Layout, Shell, Widget};
+use iced::advanced::{layout, mouse, overlay, renderer, widget, Layout, Shell, Widget};
 use iced::widget::{container, text};
 use iced::{Element, Event, Length, Rectangle, Size, Theme, Vector};
 
@@ -30,7 +30,7 @@ pub fn focus_tooltip<'a, Message: 'a>(
                 .size(TOKENS.font_sizes.s12)
                 .wrapping(text::Wrapping::WordOrGlyph),
         )
-        .max_width(options.max_width)
+        .width(Length::Fit.max(options.max_width))
         .padding(TOKENS.spacing.s2)
         .style(super::style::tooltip_surface)
         .into(),
@@ -74,23 +74,12 @@ impl widget::Operation for FocusProbe {
 }
 
 impl<Message> Widget<Message, Theme, iced::Renderer> for FocusTooltip<'_, Message> {
-    fn children(&self) -> Vec<widget::Tree> {
-        vec![
-            widget::Tree::new(&self.trigger),
-            widget::Tree::new(&self.hint),
-        ]
-    }
-
-    fn diff(&self, tree: &mut widget::Tree) {
-        tree.diff_children(&[&self.trigger, &self.hint]);
+    fn diff(&mut self, tree: &mut widget::Tree) {
+        tree.diff_children(&mut [&mut self.trigger, &mut self.hint]);
     }
 
     fn size(&self) -> Size<Length> {
         self.trigger.as_widget().size()
-    }
-
-    fn size_hint(&self) -> Size<Length> {
-        self.trigger.as_widget().size_hint()
     }
 
     fn layout(
@@ -111,7 +100,6 @@ impl<Message> Widget<Message, Theme, iced::Renderer> for FocusTooltip<'_, Messag
         layout: Layout<'_>,
         cursor: mouse::Cursor,
         renderer: &iced::Renderer,
-        clipboard: &mut dyn Clipboard,
         shell: &mut Shell<'_, Message>,
         viewport: &Rectangle,
     ) {
@@ -121,7 +109,6 @@ impl<Message> Widget<Message, Theme, iced::Renderer> for FocusTooltip<'_, Messag
             layout,
             cursor,
             renderer,
-            clipboard,
             shell,
             viewport,
         );
@@ -260,18 +247,22 @@ impl<Message> overlay::Overlay<Message, Theme, iced::Renderer> for FocusHint<'_,
 
 #[cfg(test)]
 mod tests {
-    use iced::advanced::renderer::Headless;
+    use iced::advanced::renderer::{Headless, Settings as RendererSettings};
     use iced::advanced::widget::operation::focusable;
-    use iced::{Font, Point};
+    use iced::Point;
 
     use super::*;
-    use crate::{control_button, variants::ButtonVariant};
+    use crate::{control_button, fonts::DEFAULT_LINE_HEIGHT, variants::ButtonVariant};
 
     #[test]
     fn nonclickable_selection_reveals_full_value_only_while_focused() {
         let renderer = iced::futures::executor::block_on(iced::Renderer::new(
-            Font::DEFAULT,
-            14.0.into(),
+            RendererSettings {
+                font: iced::Font::DEFAULT,
+                text_size: 14.0.into(),
+                line_height: DEFAULT_LINE_HEIGHT,
+                metrics_hinting: false,
+            },
             Some("tiny-skia"),
         ))
         .expect("software layout renderer");
@@ -286,6 +277,7 @@ mod tests {
             TooltipOptions::default(),
         );
         let mut tree = widget::Tree::new(&control);
+        tree.diff(&mut control);
         let viewport = Rectangle::with_size(Size::new(368.0, 300.0));
         let node = control
             .as_widget_mut()
@@ -322,15 +314,18 @@ mod tests {
             "the complete unbroken value must wrap within the hint"
         );
         drop(hint);
-        let mut messages = Vec::new();
+        let mut messages = iced::advanced::shell::Bus::new();
         control.as_widget_mut().update(
             &mut tree,
             &Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left)),
             layout,
             mouse::Cursor::Unavailable,
             &renderer,
-            &mut iced::advanced::clipboard::Null,
-            &mut Shell::new(&mut messages),
+            &mut Shell::new(
+                &iced::window::Headless,
+                iced::advanced::shell::Waker::noop(),
+                &mut messages,
+            ),
             &viewport,
         );
         assert!(control

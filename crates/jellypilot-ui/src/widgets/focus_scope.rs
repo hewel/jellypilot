@@ -2,7 +2,7 @@
 
 use std::collections::VecDeque;
 
-use iced::advanced::{layout, mouse, overlay, renderer, widget, Clipboard, Layout, Shell, Widget};
+use iced::advanced::{layout, mouse, overlay, renderer, widget, Layout, Shell, Widget};
 use iced::{Element, Event, Length, Rectangle, Size, Theme, Vector};
 
 use super::control_button::{FocusSnapshot, FocusVisibility};
@@ -40,20 +40,12 @@ impl<Message> Widget<Message, Theme, iced::Renderer> for FocusScope<'_, Message>
         widget::tree::State::new(State::default())
     }
 
-    fn children(&self) -> Vec<widget::Tree> {
-        vec![widget::Tree::new(&self.content)]
-    }
-
-    fn diff(&self, tree: &mut widget::Tree) {
-        tree.diff_children(&[&self.content]);
+    fn diff(&mut self, tree: &mut widget::Tree) {
+        tree.diff_children(&mut [&mut self.content]);
     }
 
     fn size(&self) -> Size<Length> {
         self.content.as_widget().size()
-    }
-
-    fn size_hint(&self) -> Size<Length> {
-        self.content.as_widget().size_hint()
     }
 
     fn layout(
@@ -80,7 +72,6 @@ impl<Message> Widget<Message, Theme, iced::Renderer> for FocusScope<'_, Message>
         layout: Layout<'_>,
         cursor: mouse::Cursor,
         renderer: &iced::Renderer,
-        clipboard: &mut dyn Clipboard,
         shell: &mut Shell<'_, Message>,
         viewport: &Rectangle,
     ) {
@@ -100,7 +91,6 @@ impl<Message> Widget<Message, Theme, iced::Renderer> for FocusScope<'_, Message>
             layout,
             cursor,
             renderer,
-            clipboard,
             shell,
             viewport,
         );
@@ -233,13 +223,12 @@ impl<Message> overlay::Overlay<Message, Theme, iced::Renderer> for FocusOverlay<
         layout: Layout<'_>,
         cursor: mouse::Cursor,
         renderer: &iced::Renderer,
-        clipboard: &mut dyn Clipboard,
         shell: &mut Shell<'_, Message>,
     ) {
         observe(self.visibility, event, shell);
         self.content
             .as_overlay_mut()
-            .update(event, layout, cursor, renderer, clipboard, shell);
+            .update(event, layout, cursor, renderer, shell);
         if input_method(event).is_some() && shell.event_status() == iced::event::Status::Ignored {
             if let Some(pending) = self.pending.as_mut() {
                 pending.push_back(self.visibility.snapshot());
@@ -300,7 +289,7 @@ impl<Message> overlay::Overlay<Message, Theme, iced::Renderer> for FocusOverlay<
 
 #[cfg(test)]
 mod tests {
-    use iced::advanced::{clipboard, renderer::Headless, widget::operation::focusable};
+    use iced::advanced::{renderer, renderer::Headless, widget::operation::focusable};
     use iced::keyboard::{self, key::Named};
     use iced::widget::{column, text};
     use iced::{Font, Point};
@@ -395,8 +384,12 @@ mod tests {
     #[test]
     fn captured_panel_press_cancels_background_and_nested_control_activation() {
         let mut renderer = iced::futures::executor::block_on(iced::Renderer::new(
-            Font::DEFAULT,
-            14.0.into(),
+            renderer::Settings {
+                font: Font::DEFAULT,
+                text_size: 14.0.into(),
+                line_height: crate::fonts::DEFAULT_LINE_HEIGHT,
+                metrics_hinting: false,
+            },
             Some("tiny-skia"),
         ))
         .expect("software renderer");
@@ -407,13 +400,14 @@ mod tests {
                 Cache::new(),
                 &mut renderer,
             );
-            let mut messages = Vec::new();
+            let mut messages = iced::advanced::shell::Bus::new();
             for target in ["trigger", "action"] {
                 ui.update(
+                    &iced::window::Headless,
+                    &iced::advanced::shell::Waker::noop(),
                     &[key(Named::Tab)],
                     mouse::Cursor::Unavailable,
                     &mut renderer,
-                    &mut clipboard::Null,
                     &mut messages,
                 );
                 ui.operate(
@@ -424,13 +418,14 @@ mod tests {
                 let action = focus_info(&mut ui, &renderer, "action").1;
                 let header = mouse::Cursor::Available(Point::new(action.x + 8.0, action.y - 8.0));
                 let (_, statuses) = ui.update(
+                    &iced::window::Headless,
+                    &iced::advanced::shell::Waker::noop(),
                     &[
                         Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left)),
                         key(Named::Enter),
                     ],
                     header,
                     &mut renderer,
-                    &mut clipboard::Null,
                     &mut messages,
                 );
                 assert_eq!(
@@ -452,22 +447,26 @@ mod tests {
                     &mut focusable::focus::<()>(widget::Id::new(target)),
                 );
                 ui.update(
+                    &iced::window::Headless,
+                    &iced::advanced::shell::Waker::noop(),
                     &[
                         key(Named::Enter),
                         Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left)),
                     ],
                     header,
                     &mut renderer,
-                    &mut clipboard::Null,
                     &mut messages,
                 );
                 assert_eq!(
-                    messages,
+                    messages
+                        .drain()
+                        .map(|(message, _)| message)
+                        .collect::<Vec<_>>(),
                     vec![Message::Activate],
                     "a later press must not swallow an earlier key activation"
                 );
                 assert!(!focus_info(&mut ui, &renderer, target).0);
-                messages.clear();
+                messages.drain().for_each(drop);
             }
         }
     }
@@ -475,8 +474,12 @@ mod tests {
     #[test]
     fn captured_escape_restores_keyboard_focus_before_any_subscription_message() {
         let mut renderer = iced::futures::executor::block_on(iced::Renderer::new(
-            Font::DEFAULT,
-            14.0.into(),
+            renderer::Settings {
+                font: Font::DEFAULT,
+                text_size: 14.0.into(),
+                line_height: crate::fonts::DEFAULT_LINE_HEIGHT,
+                metrics_hinting: false,
+            },
             Some("tiny-skia"),
         ))
         .expect("software renderer");
@@ -488,23 +491,27 @@ mod tests {
             Cache::new(),
             &mut renderer,
         );
-        let mut messages = Vec::new();
+        let mut messages = iced::advanced::shell::Bus::new();
         // iced processes the overlay's whole event batch before the base widget.
         let (_, statuses) = ui.update(
+            &iced::window::Headless,
+            &iced::advanced::shell::Waker::noop(),
             &[
                 Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left)),
                 key(Named::Escape),
             ],
             mouse::Cursor::Available(Point::new(350.0, 350.0)),
             &mut renderer,
-            &mut clipboard::Null,
             &mut messages,
         );
         assert_eq!(
             statuses,
             vec![iced::event::Status::Ignored, iced::event::Status::Captured]
         );
-        assert_eq!(messages.last(), Some(&Message::Dismiss));
+        assert_eq!(
+            messages.drain().last().map(|(message, _)| message),
+            Some(Message::Dismiss)
+        );
         let mut ui = UserInterface::build(
             view(visibility, false, false),
             bounds,
@@ -519,24 +526,32 @@ mod tests {
             focus_info(&mut ui, &renderer, "trigger").0,
             "Esc restores the trigger synchronously"
         );
-        messages.clear();
+        messages.drain().for_each(drop);
         ui.update(
+            &iced::window::Headless,
+            &iced::advanced::shell::Waker::noop(),
             &[key(Named::Enter)],
             mouse::Cursor::Unavailable,
             &mut renderer,
-            &mut clipboard::Null,
             &mut messages,
         );
-        assert_eq!(messages, vec![Message::Activate]);
+        assert_eq!(
+            messages
+                .drain()
+                .map(|(message, _)| message)
+                .collect::<Vec<_>>(),
+            vec![Message::Activate]
+        );
 
-        messages.clear();
+        messages.drain().for_each(drop);
         ui.update(
+            &iced::window::Headless,
+            &iced::advanced::shell::Waker::noop(),
             &[Event::Mouse(mouse::Event::ButtonPressed(
                 mouse::Button::Left,
             ))],
             mouse::Cursor::Unavailable,
             &mut renderer,
-            &mut clipboard::Null,
             &mut messages,
         );
         ui.operate(
@@ -544,10 +559,11 @@ mod tests {
             &mut focusable::focus::<()>(widget::Id::new("trigger")),
         );
         ui.update(
+            &iced::window::Headless,
+            &iced::advanced::shell::Waker::noop(),
             &[key(Named::Enter)],
             mouse::Cursor::Unavailable,
             &mut renderer,
-            &mut clipboard::Null,
             &mut messages,
         );
         assert!(

@@ -575,7 +575,7 @@ pub const LIGHT_PALETTE: ThemePalette = ThemePalette {
 /// against the two palettes' `background` values. Unknown themes fall back
 /// to the dark palette.
 pub fn palette(theme: &Theme) -> &'static ThemePalette {
-    if theme.palette().background == LIGHT_PALETTE.colors.background {
+    if theme.palette().background.base.color == LIGHT_PALETTE.colors.background {
         &LIGHT_PALETTE
     } else {
         &DARK_PALETTE

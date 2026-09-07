@@ -628,7 +628,7 @@ fn queue_popover(state: &State) -> Element<'_, Message> {
             .width(Fill)
             .style(jellypilot_ui::theme::scrollable),
         )
-        .max_height(QUEUE_MENU_MAX_HEIGHT)
+        .height(Length::Fit.max(QUEUE_MENU_MAX_HEIGHT))
         .into()
       }
     }
@@ -787,6 +787,7 @@ fn playback_artwork(state: &State, width: f32, height: f32) -> Element<'_, Messa
       palette.colors.surfaceContainerLowest,
     )),
     border: iced::Border {
+      smoothing: jellypilot_ui::widgets::container::SURFACE_SMOOTHING,
       radius: full_radius(TOKENS.radii.lg),
       width: 0.0,
       color: iced::Color::TRANSPARENT,

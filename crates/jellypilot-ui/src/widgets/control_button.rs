@@ -8,7 +8,7 @@ use iced::advanced::layout::{self, Layout};
 use iced::advanced::mouse;
 use iced::advanced::renderer;
 use iced::advanced::widget::{self, Operation, Tree, Widget};
-use iced::advanced::{Clipboard, Shell};
+use iced::advanced::Shell;
 use iced::keyboard::{key, Key};
 use iced::touch;
 use iced::widget::{button, space, text, Row};
@@ -156,6 +156,7 @@ pub struct ControlButton<'a, Message, Renderer = iced::Renderer> {
     label: Option<String>,
     variant: ButtonVariant,
     style: fn(&Theme, ButtonVariant, button::Status) -> button::Style,
+    overlay_border: bool,
     icon_size: IconSize,
     trailing_icon: bool,
     label_size: f32,
@@ -204,6 +205,7 @@ where
             label,
             variant,
             style: crate::widgets::button::style,
+            overlay_border: false,
             icon_size,
             trailing_icon,
             label_size,
@@ -211,7 +213,7 @@ where
             label_fill,
             content_centered,
             padding: button::DEFAULT_PADDING,
-            width: Length::Shrink,
+            width: Length::Fit,
             min_height: 0.0,
             id: None,
             on_press: None,
@@ -304,6 +306,14 @@ where
         style: fn(&Theme, ButtonVariant, button::Status) -> button::Style,
     ) -> Self {
         self.style = style;
+        self
+    }
+
+    /// Paints the native border after the content so full-bleed artwork cannot
+    /// hide its keyboard focus ring. Layout and interaction stay unchanged.
+    #[must_use]
+    pub fn overlay_border(mut self) -> Self {
+        self.overlay_border = true;
         self
     }
 
@@ -545,12 +555,8 @@ where
         widget::tree::State::new(State::default())
     }
 
-    fn children(&self) -> Vec<Tree> {
-        self.contents.iter().map(Tree::new).collect()
-    }
-
-    fn diff(&self, tree: &mut Tree) {
-        tree.diff_children(&self.contents);
+    fn diff(&mut self, tree: &mut Tree) {
+        tree.diff_children(&mut self.contents);
     }
 
     fn size(&self) -> Size<Length> {
@@ -559,7 +565,7 @@ where
             height: if self.min_height > 0.0 {
                 Length::Fixed(self.min_height)
             } else {
-                Length::Shrink
+                Length::Fit
             },
         }
     }
@@ -573,7 +579,7 @@ where
         let height = if self.min_height > 0.0 {
             Length::Fixed(self.min_height)
         } else {
-            Length::Shrink
+            Length::Fit
         };
         layout::positioned(
             limits,
@@ -632,7 +638,6 @@ where
         layout: Layout<'_>,
         cursor: mouse::Cursor,
         _renderer: &Renderer,
-        _clipboard: &mut dyn Clipboard,
         shell: &mut Shell<'_, Message>,
         _viewport: &Rectangle,
     ) {
@@ -732,11 +737,21 @@ where
             style.border.width = 2.0;
         }
 
-        if style.background.is_some() || style.border.width > 0.0 || style.shadow.color.a > 0.0 {
+        if style.background.is_some()
+            || (!self.overlay_border && style.border.width > 0.0)
+            || style.shadow.color.a > 0.0
+        {
             renderer.fill_quad(
                 renderer::Quad {
                     bounds,
-                    border: style.border,
+                    border: if self.overlay_border {
+                        iced::Border {
+                            width: 0.0,
+                            ..style.border
+                        }
+                    } else {
+                        style.border
+                    },
                     shadow: style.shadow,
                     snap: style.snap,
                 },
@@ -757,6 +772,21 @@ where
                 cursor,
                 viewport,
             );
+        }
+        if self.overlay_border && style.border.width > 0.0 && style.border.color.a > 0.0 {
+            // WGPU batches quads before images inside a layer; a later call
+            // alone would still leave the focus border behind full-bleed art.
+            renderer.with_layer(*viewport, |renderer| {
+                renderer.fill_quad(
+                    renderer::Quad {
+                        bounds,
+                        border: style.border,
+                        snap: style.snap,
+                        ..renderer::Quad::default()
+                    },
+                    Background::Color(iced::Color::TRANSPARENT),
+                );
+            });
         }
     }
 
@@ -818,6 +848,7 @@ mod tests {
                 .width(Length::Fixed(120.0))
                 .padding([6.0, 10.0]);
         let mut tree = Tree::new(&button as &dyn Widget<TestMessage, Theme, ()>);
+        button.diff(&mut tree);
         let limits = layout::Limits::new(Size::ZERO, Size::new(200.0, 200.0));
 
         let node = button.layout(&mut tree, &(), &limits);
@@ -838,6 +869,7 @@ mod tests {
                 .width(Length::Fixed(100.0))
                 .content_centered(true);
         let mut tree = Tree::new(&button as &dyn Widget<TestMessage, Theme, ()>);
+        button.diff(&mut tree);
         let limits = layout::Limits::new(Size::ZERO, Size::new(200.0, 200.0));
 
         let node = button.layout(&mut tree, &(), &limits);
@@ -855,13 +887,17 @@ mod tests {
 
     #[test]
     fn selected_library_row_centers_composed_icon_and_text() {
-        use iced::advanced::renderer::Headless;
+        use iced::advanced::renderer::{Headless, Settings as RendererSettings};
         use iced::widget::{container, row};
-        use iced::{Alignment, Font};
+        use iced::Alignment;
 
         let renderer = iced::futures::executor::block_on(iced::Renderer::new(
-            Font::DEFAULT,
-            14.0.into(),
+            RendererSettings {
+                font: iced::Font::DEFAULT,
+                text_size: 14.0.into(),
+                line_height: crate::fonts::DEFAULT_LINE_HEIGHT,
+                metrics_hinting: false,
+            },
             Some("tiny-skia"),
         ))
         .expect("software layout renderer");
@@ -889,6 +925,7 @@ mod tests {
         .width(Length::Fill)
         .on_press(TestMessage::Clicked);
         let mut tree = Tree::new(&button as &dyn Widget<TestMessage, Theme, iced::Renderer>);
+        button.diff(&mut tree);
         let limits = layout::Limits::new(Size::ZERO, Size::new(216.0, 100.0));
 
         let node = button.layout(&mut tree, &renderer, &limits);
@@ -923,6 +960,7 @@ mod tests {
         .spacing(spacing)
         .padding(0);
         let mut tree = Tree::new(&button as &dyn Widget<TestMessage, Theme, ()>);
+        button.diff(&mut tree);
         let limits = layout::Limits::new(Size::ZERO, Size::new(200.0, 200.0));
 
         let node = button.layout(&mut tree, &(), &limits);
@@ -938,52 +976,61 @@ mod tests {
                 .padding(0)
                 .on_press(TestMessage::Clicked);
         let mut tree = Tree::new(&button as &dyn Widget<TestMessage, Theme, ()>);
+        button.diff(&mut tree);
         let limits = layout::Limits::new(Size::ZERO, Size::new(100.0, 100.0));
         let node = button.layout(&mut tree, &(), &limits);
         let layout = Layout::new(&node);
         let viewport = Rectangle::with_size(Size::new(100.0, 100.0));
         let inside = mouse::Cursor::Available(Point::new(5.0, 5.0));
         let outside = mouse::Cursor::Available(Point::new(90.0, 90.0));
-        let mut clipboard = iced::advanced::clipboard::Null;
 
-        let mut messages = Vec::new();
-        let mut shell = Shell::new(&mut messages);
+        let mut messages = iced::advanced::shell::Bus::new();
+        let mut shell = Shell::new(
+            &iced::window::Headless,
+            iced::advanced::shell::Waker::noop(),
+            &mut messages,
+        );
         button.update(
             &mut tree,
             &Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left)),
             layout,
             inside,
             &(),
-            &mut clipboard,
             &mut shell,
             &viewport,
         );
         assert!(tree.state.downcast_ref::<State>().is_pressed);
 
-        let mut cancelled = Vec::new();
-        let mut shell = Shell::new(&mut cancelled);
+        let mut cancelled = iced::advanced::shell::Bus::new();
+        let mut shell = Shell::new(
+            &iced::window::Headless,
+            iced::advanced::shell::Waker::noop(),
+            &mut cancelled,
+        );
         button.update(
             &mut tree,
             &Event::Mouse(mouse::Event::ButtonReleased(mouse::Button::Left)),
             layout,
             outside,
             &(),
-            &mut clipboard,
             &mut shell,
             &viewport,
         );
         assert!(cancelled.is_empty());
         assert!(!tree.state.downcast_ref::<State>().is_pressed);
 
-        let mut published = Vec::new();
-        let mut shell = Shell::new(&mut published);
+        let mut published = iced::advanced::shell::Bus::new();
+        let mut shell = Shell::new(
+            &iced::window::Headless,
+            iced::advanced::shell::Waker::noop(),
+            &mut published,
+        );
         button.update(
             &mut tree,
             &Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left)),
             layout,
             inside,
             &(),
-            &mut clipboard,
             &mut shell,
             &viewport,
         );
@@ -993,12 +1040,17 @@ mod tests {
             layout,
             inside,
             &(),
-            &mut clipboard,
             &mut shell,
             &viewport,
         );
 
-        assert_eq!(published, vec![TestMessage::Clicked]);
+        assert_eq!(
+            published
+                .drain()
+                .map(|(message, _)| message)
+                .collect::<Vec<_>>(),
+            vec![TestMessage::Clicked]
+        );
     }
 
     #[test]
@@ -1019,6 +1071,7 @@ mod tests {
                 .on_press(TestMessage::Clicked)
         }) {
             let mut tree = Tree::new(&button as &dyn Widget<TestMessage, Theme, ()>);
+            button.diff(&mut tree);
             let limits = layout::Limits::new(Size::ZERO, Size::new(100.0, 100.0));
             let node = button.layout(&mut tree, &(), &limits);
             let layout = Layout::new(&node);
@@ -1027,9 +1080,13 @@ mod tests {
             button.operate(&mut tree, layout, &(), focus.as_mut());
             assert!(tree.state.downcast_ref::<State>().is_focused);
 
-            let mut messages = Vec::new();
-            let mut shell = Shell::new(&mut messages);
-            let mut clipboard = iced::advanced::clipboard::Null;
+            let mut messages = iced::advanced::shell::Bus::new();
+            let mut shell = Shell::new(
+                &iced::window::Headless,
+                iced::advanced::shell::Waker::noop(),
+                &mut messages,
+            );
+
             button.update(
                 &mut tree,
                 &Event::Keyboard(KeyboardEvent::KeyPressed {
@@ -1044,7 +1101,6 @@ mod tests {
                 layout,
                 mouse::Cursor::Unavailable,
                 &(),
-                &mut clipboard,
                 &mut shell,
                 &Rectangle::with_size(Size::new(100.0, 100.0)),
             );
@@ -1066,12 +1122,17 @@ mod tests {
                     layout,
                     mouse::Cursor::Available(Point::new(99.0, 99.0)),
                     &(),
-                    &mut clipboard,
                     &mut shell,
                     &Rectangle::with_size(Size::new(100.0, 100.0)),
                 );
             }
-            assert_eq!(messages, vec![TestMessage::Clicked]);
+            assert_eq!(
+                messages
+                    .drain()
+                    .map(|(message, _)| message)
+                    .collect::<Vec<_>>(),
+                vec![TestMessage::Clicked]
+            );
         }
     }
 }

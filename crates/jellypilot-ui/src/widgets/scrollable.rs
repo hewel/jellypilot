@@ -29,6 +29,7 @@ fn rail(colors: SemanticColors, is_interactive: bool) -> scrollable::Rail {
             0.4,
         ))),
         border: Border {
+            smoothing: 0.0,
             radius: TOKENS.radii.full.into(),
             color: Color::TRANSPARENT,
             width: 0.0,
@@ -36,6 +37,7 @@ fn rail(colors: SemanticColors, is_interactive: bool) -> scrollable::Rail {
         scroller: scrollable::Scroller {
             background: Background::Color(scroller_background(colors, is_interactive)),
             border: Border {
+                smoothing: 0.0,
                 radius: TOKENS.radii.full.into(),
                 color: Color::TRANSPARENT,
                 width: 2.0,
@@ -78,6 +80,7 @@ fn auto_scroll(palette: &ThemePalette) -> scrollable::AutoScroll {
     scrollable::AutoScroll {
         background: Background::Color(palette.colors.surface),
         border: Border {
+            smoothing: 0.0,
             radius: TOKENS.radii.full.into(),
             color: Color::TRANSPARENT,
             width: 0.0,

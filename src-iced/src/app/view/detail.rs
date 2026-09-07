@@ -6,7 +6,6 @@ use crate::app::message::{DetailMessage, Message, PlaybackMessage};
 use crate::app::state::{ArtworkCell, ArtworkCellState, State, UserDataActionKind};
 use crate::i18n::media::{detail_metadata, show_detail_metadata};
 use crate::i18n::{Localizer, UiText};
-use iced::advanced::text as advanced_text;
 use iced::widget::image::Image;
 use iced::widget::scrollable::{Direction, Scrollbar};
 use iced::widget::{
@@ -493,7 +492,7 @@ fn detail_logo(state: &State, max_height: f32) -> Option<Element<'_, Message>> {
     .width(if logo_width > 0.0 {
       Length::Fixed(logo_width)
     } else {
-      Length::Shrink
+      Length::Fit
     });
   let logo = container(logo_image)
     .padding(iced::Padding {
@@ -517,7 +516,7 @@ fn detail_logo(state: &State, max_height: f32) -> Option<Element<'_, Message>> {
     .width(if let Some(width) = shadow_width {
       Length::Fixed(width)
     } else {
-      Length::Shrink
+      Length::Fit
     });
   Some(
     stack![
@@ -1392,6 +1391,7 @@ fn artwork_placeholder<'a>(
       palette.colors.surfaceContainerLowest,
     )),
     border: iced::Border {
+      smoothing: jellypilot_ui::widgets::container::SURFACE_SMOOTHING,
       radius,
       width: 0.0,
       color: iced::Color::TRANSPARENT,
@@ -1656,7 +1656,7 @@ fn season_label(season: &VideoSeason) -> &str {
 }
 
 fn overview_collapsed_height(text_size: f32, line_count: f32) -> f32 {
-  f32::from(advanced_text::LineHeight::default().to_absolute(Pixels(text_size))) * line_count
+  f32::from(jellypilot_ui::fonts::DEFAULT_LINE_HEIGHT.to_absolute(Pixels(text_size))) * line_count
 }
 
 fn overview_is_expandable(measured_height: f32, text_size: f32, line_count: f32) -> bool {

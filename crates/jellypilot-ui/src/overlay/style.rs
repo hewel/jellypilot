@@ -2,6 +2,7 @@ use iced::widget::container;
 use iced::{Background, Border, Color, Theme};
 
 use crate::tokens::{palette, TOKENS};
+use crate::widgets::container::SURFACE_SMOOTHING;
 
 pub(super) fn popover_surface(theme: &Theme) -> container::Style {
     let palette = palette(theme);
@@ -9,6 +10,7 @@ pub(super) fn popover_surface(theme: &Theme) -> container::Style {
         background: Some(Background::Color(palette.colors.surfaceContainerHigh)),
         text_color: Some(palette.colors.onSurface),
         border: Border {
+            smoothing: SURFACE_SMOOTHING,
             radius: TOKENS.radii.lg.into(),
             color: palette.colors.outlineVariant,
             width: 1.0,
@@ -24,6 +26,7 @@ pub(super) fn tooltip_surface(theme: &Theme) -> container::Style {
         background: Some(Background::Color(palette.colors.surfaceContainerHighest)),
         text_color: Some(palette.colors.onSurface),
         border: Border {
+            smoothing: SURFACE_SMOOTHING,
             radius: TOKENS.radii.md.into(),
             color: Color::TRANSPARENT,
             width: 0.0,

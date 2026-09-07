@@ -576,11 +576,16 @@ fn copy_server_address(surface: &mut Surface, kernel: &Kernel) -> Update {
   surface.copy_status = CopyStatus::Idle;
   let contents = identity.server_url.clone();
   let expected = contents.clone();
-  let verification = iced::clipboard::read().map(move |actual| Message::ClipboardVerified {
-    generation,
-    matched: actual.as_deref() == Some(expected.as_str()),
-  });
-  Update::task(iced::clipboard::write(contents).chain(verification))
+  Update::task(
+    iced::clipboard::write(contents)
+      .discard()
+      .chain(
+        iced::clipboard::read_text().map(move |actual| Message::ClipboardVerified {
+          generation,
+          matched: actual.as_deref().ok() == Some(&expected),
+        }),
+      ),
+  )
 }
 
 fn finish_clipboard_verification(surface: &mut Surface, generation: u64, matched: bool) -> Update {
