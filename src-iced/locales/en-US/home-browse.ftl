@@ -1,5 +1,5 @@
-home-continue-watching = Continue Watching
-home-next-up = Next Up
+home-continue-watching = Continue watching
+home-next-up = Next up
 home-latest = Latest { $name }
 home-content-load-failed = Could not load home content: { $details }
 home-libraries-load-failed = Could not load libraries: { $details }
@@ -31,7 +31,7 @@ browse-item-count = { $count ->
     }
 browse-retrying = Retrying…
 browse-retry = Retry
-browse-search-load-failed = Could not load these search results
+browse-search-load-failed = Could not load search results
 browse-library-load-failed = Could not load this library
 browse-retry-failed = Could not retry library browsing: { $details }
 browse-refresh-failed = Could not refresh this page: { $details }

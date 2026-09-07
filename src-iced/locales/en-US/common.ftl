@@ -32,9 +32,9 @@ language-label = Interface language
 language-system = Follow system
 language-english = English
 language-chinese = 简体中文
-language-description = Changes JellyPilot's interface only, not media metadata, audio, subtitles, or MPV. Untranslated messages appear in English.
-language-save-failed = Could not save the interface language. Your previous language is still selected.
-startup-settings-load-failed = Saved settings could not be loaded. Default settings are in use.
+language-description = Changes JellyPilot's interface only, not media metadata, audio, subtitles, or MPV. Untranslated text appears in English.
+language-save-failed = Could not save interface language. The previous language is still selected.
+startup-settings-load-failed = Could not load saved settings. Default settings are in use.
 duration-minutes = { $count ->
     [one] { $count } minute
    *[other] { $count } minutes
