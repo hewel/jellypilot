@@ -295,7 +295,8 @@ pub(crate) fn current_timestamp_seconds() -> u64 {
         .as_secs()
 }
 
-fn sanitize_message(message: &str) -> String {
+/// Redacts known bearer credentials and sensitive URL query values before presentation.
+pub fn sanitize_message(message: &str) -> String {
     let lowercase = message.to_ascii_lowercase();
     let lowercase_bytes = lowercase.as_bytes();
     let mut sanitized = String::with_capacity(message.len());

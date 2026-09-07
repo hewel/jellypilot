@@ -1,6 +1,7 @@
+use crate::i18n::{Localizer, UiText};
 use iced::widget::{column, container, row, scrollable, space, text, Column, Row};
 use iced::{Alignment, Color, ContentFit, Element, Fill, Length};
-use jellypilot_ui::fonts::SPACE_GROTESK_FONT;
+use jellypilot_ui::fonts::HEADING_FONT;
 use jellypilot_ui::icons::{icon_with_color, Icon, IconSize};
 use jellypilot_ui::tokens::{ThemePalette, TOKENS};
 use jellypilot_ui::variants::{ButtonVariant, SurfaceVariant};
@@ -35,8 +36,8 @@ fn overview(state: &State) -> Element<'_, Message> {
   let content = column![
     page_heading(
       state.palette(),
-      "Personal Lists",
-      "Favorites and Watchlist are kept separate."
+      state.t("lists-title"),
+      state.t("lists-separate-help")
     ),
     overview_section(state, Kind::Favorites, &lists.favorites),
     overview_section(state, Kind::Watchlist, &lists.watchlist),
@@ -53,11 +54,14 @@ fn overview(state: &State) -> Element<'_, Message> {
 
 fn overview_section<'a>(state: &'a State, kind: Kind, page: &'a ListPage) -> Element<'a, Message> {
   let route = route_for(kind);
-  let title = title_for(kind);
-  let label = format!("{title} · {}", page.total);
+  let title = title_for(state.kernel.locale, kind);
+  let label = state.format(
+    "lists-section-count",
+    &[("title", title.into()), ("count", page.total.into())],
+  );
   let view_all = control_button(
     Some(Icon::ChevronRight),
-    Some("View all".to_owned()),
+    Some(state.t("lists-view-all")),
     ButtonVariant::Tonal,
   )
   .trailing_icon(true)
@@ -71,7 +75,7 @@ fn overview_section<'a>(state: &'a State, kind: Kind, page: &'a ListPage) -> Ele
   column![
     row![
       text(label)
-        .font(SPACE_GROTESK_FONT)
+        .font(HEADING_FONT)
         .size(20)
         .color(state.palette().text.heading),
       space::horizontal(),
@@ -87,10 +91,10 @@ fn overview_section<'a>(state: &'a State, kind: Kind, page: &'a ListPage) -> Ele
 
 fn list_page<'a>(state: &'a State, kind: Kind) -> Element<'a, Message> {
   let page = page_for(state, kind);
-  let title = title_for(kind);
+  let title = title_for(state.kernel.locale, kind);
   let back = control_button(
     Some(Icon::ChevronLeft),
-    Some("Personal Lists".to_owned()),
+    Some(state.t("lists-title")),
     ButtonVariant::Tonal,
   )
   .icon_size(IconSize::Sm)
@@ -104,10 +108,10 @@ fn list_page<'a>(state: &'a State, kind: Kind) -> Element<'a, Message> {
     page_heading(
       state.palette(),
       title,
-      format!("{} saved items", page.total),
+      state.format("lists-saved-count", &[("count", page.total.into())]),
     ),
     list_body(state, kind, page, usize::MAX),
-    pagination(kind, page),
+    pagination(state.kernel.locale, kind, page),
   ]
   .spacing(TOKENS.spacing.s4)
   .padding([TOKENS.spacing.s5, TOKENS.spacing.s8])
@@ -126,7 +130,7 @@ fn page_heading(
 ) -> Element<'static, Message> {
   column![
     text(title.into())
-      .font(SPACE_GROTESK_FONT)
+      .font(HEADING_FONT)
       .size(28)
       .color(palette.text.heading),
     text(subtitle.into()).size(13).color(palette.text.metadata),
@@ -145,10 +149,10 @@ fn list_body<'a>(
     return skeleton_grid(state).into();
   }
   if let Some(error) = &page.error {
-    return failure_surface(state.palette(), kind, error).into();
+    return failure_surface(state.palette(), state.kernel.locale, kind, error).into();
   }
   if page.entries.is_empty() {
-    return empty_surface(state.palette(), kind).into();
+    return empty_surface(state.palette(), state.kernel.locale, kind).into();
   }
 
   let entries = page.entries.iter().take(limit).collect::<Vec<_>>();
@@ -171,7 +175,10 @@ fn list_card<'a>(state: &'a State, kind: Kind, entry: &'a ListEntry) -> Element<
   let artwork = list_artwork(state, entry);
   let unavailable = entry.availability == ItemAvailability::Unavailable;
   let title = if unavailable {
-    format!("{} · Unavailable", entry.name)
+    state.format(
+      "lists-unavailable-item",
+      &[("name", entry.name.as_str().into())],
+    )
   } else {
     entry.name.clone()
   };
@@ -179,7 +186,7 @@ fn list_card<'a>(state: &'a State, kind: Kind, entry: &'a ListEntry) -> Element<
     ellipsis_text(title)
       .size(14)
       .color(state.palette().text.heading),
-    ellipsis_text(&entry.subtitle)
+    ellipsis_text(entry.subtitle.text(state.kernel.locale))
       .size(12)
       .color(state.palette().text.metadata),
   ]
@@ -216,7 +223,11 @@ fn list_card<'a>(state: &'a State, kind: Kind, entry: &'a ListEntry) -> Element<
     .contains(&entry.id);
   let remove_button = control_button(
     Some(Icon::Trash),
-    Some(if busy { "Removing…" } else { "Remove" }.to_owned()),
+    Some(if busy {
+      state.t("lists-removing")
+    } else {
+      state.t("lists-remove")
+    }),
     ButtonVariant::Tonal,
   )
   .icon_size(IconSize::Xs)
@@ -319,11 +330,12 @@ fn skeleton_grid<'a>(state: &'a State) -> Column<'a, Message> {
 
 fn empty_surface<'a>(
   palette: &'static ThemePalette,
+  locale: Localizer,
   kind: Kind,
 ) -> iced::widget::Container<'a, Message> {
   let label = match kind {
-    Kind::Favorites => "No favorites yet.",
-    Kind::Watchlist => "Your Watchlist is empty.",
+    Kind::Favorites => locale.text("lists-favorites-empty"),
+    Kind::Watchlist => locale.text("lists-watchlist-empty"),
   };
   let icon = match kind {
     Kind::Favorites => Icon::Heart,
@@ -345,12 +357,13 @@ fn empty_surface<'a>(
 
 fn failure_surface<'a>(
   palette: &'static ThemePalette,
+  locale: Localizer,
   kind: Kind,
-  error: &'a str,
+  error: &'a UiText,
 ) -> iced::widget::Container<'a, Message> {
   let retry = control_button(
     Some(Icon::Refresh),
-    Some("Retry".to_owned()),
+    Some(locale.text("lists-retry")),
     ButtonVariant::Primary,
   )
   .icon_size(IconSize::Sm)
@@ -359,10 +372,12 @@ fn failure_surface<'a>(
   .on_press(Message::PersonalLists(PersonalListsMessage::Retry(kind)));
   container(
     column![
-      text("Could not load this list")
+      text(locale.text("lists-load-heading"))
         .size(15)
         .color(palette.text.heading),
-      text(error).size(13).color(palette.colors.error),
+      text(locale.message(error))
+        .size(13)
+        .color(palette.colors.error),
       retry,
     ]
     .spacing(TOKENS.spacing.s2),
@@ -372,10 +387,10 @@ fn failure_surface<'a>(
   .style(|theme| jellypilot_ui::theme::surface_variant(theme, SurfaceVariant::Canvas))
 }
 
-fn pagination<'a>(kind: Kind, page: &'a ListPage) -> Element<'a, Message> {
+fn pagination<'a>(locale: Localizer, kind: Kind, page: &'a ListPage) -> Element<'a, Message> {
   let previous = control_button(
     Some(Icon::ChevronLeft),
-    Some("Previous".to_owned()),
+    Some(locale.text("lists-previous")),
     ButtonVariant::Tonal,
   )
   .icon_size(IconSize::Sm)
@@ -389,7 +404,7 @@ fn pagination<'a>(kind: Kind, page: &'a ListPage) -> Element<'a, Message> {
   let has_next = page.offset.saturating_add(page.entries.len()) < page.total;
   let next = control_button(
     Some(Icon::ChevronRight),
-    Some("Next".to_owned()),
+    Some(locale.text("lists-next")),
     ButtonVariant::Tonal,
   )
   .trailing_icon(true)
@@ -421,9 +436,9 @@ fn page_for(state: &State, kind: Kind) -> &ListPage {
   }
 }
 
-fn title_for(kind: Kind) -> &'static str {
+fn title_for(locale: Localizer, kind: Kind) -> String {
   match kind {
-    Kind::Favorites => "Favorites",
-    Kind::Watchlist => "Watchlist",
+    Kind::Favorites => locale.text("lists-favorites"),
+    Kind::Watchlist => locale.text("lists-watchlist"),
   }
 }

@@ -4,9 +4,11 @@
 use std::collections::HashSet;
 use std::sync::Arc;
 
+use crate::i18n::UiText;
 use iced::Task;
 use jellypilot_core::artwork_binder::{ArtworkSettlement, ArtworkSurface};
 use jellypilot_core::artwork_loader::{visible_row_cards, PlannedArtworkLoad};
+use jellypilot_core::diagnostics::{DiagnosticCategory, DiagnosticLevel, Diagnostics};
 use jellypilot_core::request_gate::{HomeToken, RequestGate};
 use jellypilot_media_server::artwork::{
   ArtworkLoadObservation, ArtworkLoadSummary, ArtworkSizeClass, DerivedArtwork, FrostedStripSpec,
@@ -74,7 +76,13 @@ pub fn update(
           .2
           .as_ref()
           .map_or(true, |rows| rows.iter().any(|row| row.result.is_err()));
-      if !settle(&mut surface.data, &mut kernel.request_gate, token, result) {
+      if !settle(
+        &mut surface.data,
+        &mut kernel.request_gate,
+        &mut kernel.diagnostics,
+        token,
+        result,
+      ) {
         return Task::none();
       }
       surface.data.hovered_card = None;
@@ -84,7 +92,7 @@ pub fn update(
           artwork,
           kernel.show_toast(
             super::state::NoticeLevel::Error,
-            "Some home content could not be refreshed. Available content was kept.".to_owned(),
+            UiText::new("home-refresh-failed"),
           ),
         ])
       } else {
@@ -162,10 +170,11 @@ pub fn start_load(
   }
   let token = kernel.request_gate.begin_home();
   let Some(client) = kernel.client.as_ref().map(Arc::clone) else {
-    let error = "The connected media server session is unavailable.".to_owned();
+    let error = "media-server-session-unavailable".to_owned();
     settle(
       &mut surface.data,
       &mut kernel.request_gate,
+      &mut kernel.diagnostics,
       token,
       (Err(error.clone()), Err(error.clone()), Err(error)),
     );
@@ -180,6 +189,7 @@ pub fn start_load(
 fn settle(
   data: &mut HomeState,
   request_gate: &mut RequestGate,
+  diagnostics: &mut Diagnostics,
   token: HomeToken,
   result: HomeDataResult,
 ) -> bool {
@@ -187,6 +197,40 @@ fn settle(
     return false;
   }
   let (video_home, shortcuts, latest_rows) = result;
+  if let Err(error) = &video_home {
+    diagnostics.record(
+      DiagnosticLevel::Error,
+      DiagnosticCategory::Connection,
+      format!("Home content load failed: {error}"),
+    );
+  }
+  if let Err(error) = &shortcuts {
+    diagnostics.record(
+      DiagnosticLevel::Error,
+      DiagnosticCategory::Connection,
+      format!("Home libraries load failed: {error}"),
+    );
+  }
+  match &latest_rows {
+    Err(error) => {
+      diagnostics.record(
+        DiagnosticLevel::Error,
+        DiagnosticCategory::Connection,
+        format!("Home latest rows load failed: {error}"),
+      );
+    }
+    Ok(rows) => {
+      for row in rows {
+        if let Err(error) = &row.result {
+          diagnostics.record(
+            DiagnosticLevel::Error,
+            DiagnosticCategory::Connection,
+            format!("Home latest row {} load failed: {error}", row.library_id),
+          );
+        }
+      }
+    }
+  }
   data.settle_video_home(video_home);
   if shortcuts.is_ok() || !matches!(data.shortcuts, jellypilot_core::LoadState::Ready(_)) {
     data.settle_shortcuts(shortcuts);
@@ -500,7 +544,6 @@ mod tests {
   use jellypilot_auth::login::ConnectionPhase;
   use jellypilot_auth::AuthStore;
   use jellypilot_core::config::SettingsStore;
-  use jellypilot_core::diagnostics::Diagnostics;
   use jellypilot_core::request_gate::RequestGate;
   use jellypilot_media_server::JellyfinClient;
 
@@ -516,6 +559,7 @@ mod tests {
     let settings = SettingsStore::default();
     let kernel = Kernel {
       settings,
+      locale: crate::i18n::Localizer::default(),
       diagnostics: Diagnostics::default(),
       auth_store: AuthStore::default(),
       request_gate: RequestGate::default(),
@@ -633,6 +677,7 @@ mod tests {
     assert!(settle(
       &mut surface.data,
       &mut kernel.request_gate,
+      &mut kernel.diagnostics,
       token,
       (
         Ok(jellypilot_media_server::VideoHome {
@@ -675,6 +720,7 @@ mod tests {
     assert!(settle(
       &mut home,
       &mut gate,
+      &mut Diagnostics::default(),
       token,
       (
         Ok(jellypilot_media_server::VideoHome {
@@ -690,6 +736,7 @@ mod tests {
     assert!(settle(
       &mut home,
       &mut gate,
+      &mut Diagnostics::default(),
       token,
       (
         Ok(jellypilot_media_server::VideoHome {
@@ -706,6 +753,7 @@ mod tests {
     assert!(settle(
       &mut home,
       &mut gate,
+      &mut Diagnostics::default(),
       token,
       (
         Ok(jellypilot_media_server::VideoHome {
@@ -760,6 +808,7 @@ mod tests {
     assert!(settle(
       &mut home,
       &mut gate,
+      &mut Diagnostics::default(),
       token,
       (
         Err("offline".to_owned()),
@@ -790,6 +839,7 @@ mod tests {
     let applied = settle(
       &mut home,
       &mut gate,
+      &mut Diagnostics::default(),
       stale,
       (
         Err("stale home".to_owned()),
@@ -1140,6 +1190,7 @@ mod tests {
     assert!(settle(
       &mut home,
       &mut gate,
+      &mut Diagnostics::default(),
       token,
       (
         Ok(jellypilot_media_server::VideoHome {
@@ -1151,12 +1202,12 @@ mod tests {
           jellypilot_media_server::LibraryLatestRow {
             library_id: "movies".to_owned(),
             library_name: "Movies".to_owned(),
-            result: Ok(Vec::new()),
+            result: Ok(vec![episode("movie-item", 1)]),
           },
           jellypilot_media_server::LibraryLatestRow {
             library_id: "shows".to_owned(),
             library_name: "Shows".to_owned(),
-            result: Ok(Vec::new()),
+            result: Ok(vec![episode("show-item", 1)]),
           },
         ]),
       ),
@@ -1165,14 +1216,13 @@ mod tests {
       home
         .rows()
         .iter()
-        .map(|row| row.title.as_str())
+        .skip(2)
+        .map(|row| match &row.items {
+          jellypilot_core::LoadState::Ready(items) => items[0].id.as_str(),
+          _ => panic!("latest row must be ready"),
+        })
         .collect::<Vec<_>>(),
-      vec![
-        "Continue Watching",
-        "Next Up",
-        "Latest Movies",
-        "Latest Shows"
-      ]
+      vec!["movie-item", "show-item"]
     );
   }
 

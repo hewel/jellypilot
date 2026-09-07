@@ -4,6 +4,8 @@ JellyPilot is a Jellyfin and Emby companion app that presents itself as a contro
 
 These definitions describe accepted product semantics. Delivery status for the Sidebar, Personal Lists, and account changes is tracked in the [native sidebar specification](docs/sidebar-design-spec.md); the [Video Home Hero specification](docs/home-hero-design-spec.md) records the carousel design separately from its implementation status.
 
+The [UI internationalization specification](docs/i18n-design-spec.md) records UI Language decisions separately from their implementation status.
+
 ## Language
 
 **Server URL**:
@@ -129,6 +131,13 @@ _Avoid_: Server cluster, member directory
 The closable settings layer presented over the current shell context, centered in wide windows and filling narrow windows. The Settings Modal is dismissed via the Esc key or the close (✕) button and is never a navigation destination or stack entry.
 _Avoid_: Settings page, settings destination, dialog popup, drawer, click-outside-to-close
 
+**UI Language**:
+The language used for JellyPilot-owned interface text in both App Modes, including the Settings Modal, account flows, in-app feedback, and tray menus. UI Language is independent of media-server content language and audio or subtitle preferences.
+_Avoid_: Subtitle language, metadata language, MPV language
+
+**UI Language Preference**:
+The saved choice to follow system language preferences or use a fixed UI Language. Selecting a different UI Language takes effect without restarting JellyPilot or interrupting the current Playback Session or login flow.
+
 **Video Home**:
 The Library Browser landing view built from live media-server rows such as Continue Watching, Next Up, latest Movies, latest Episodes, and video library shortcuts. Video Home belongs to the current Profile Scope and is not cached offline.
 _Avoid_: Home page, dashboard mock data
@@ -142,7 +151,7 @@ The media server's episode-continuation suggestions for the current Profile Scop
 _Avoid_: Discovery recommendations, guaranteed zero-progress episodes
 
 **Personal Lists**:
-The Library Browser destination, labeled “我的清单”, that presents Favorites and Watchlist as separate sections for the current Profile Scope. Both sections include movies, series, and individual episodes.
+The Library Browser destination, labeled “我的清单” in Simplified Chinese, that presents Favorites and Watchlist as separate sections for the current Profile Scope. Both sections include movies, series, and individual episodes.
 _Avoid_: Cross-server collection, merged favorite/watchlist state
 
 **Favorites**:
@@ -150,7 +159,7 @@ The current server user's expression of liking a media item, shared through Jell
 _Avoid_: Watchlist, planned viewing
 
 **Watchlist**:
-A viewing plan kept on this device for one Profile Scope, labeled “稍后观看”. Its entries remain until explicitly removed, including after viewing or when an item becomes unavailable; Sign Out retains the list unless the user explicitly chooses to delete it.
+A viewing plan kept on this device for one Profile Scope, labeled “稍后观看” in Simplified Chinese. Its entries remain until explicitly removed, including after viewing or when an item becomes unavailable; Sign Out retains the list unless the user explicitly chooses to delete it.
 _Avoid_: Favorites, unwatched filter, cross-device list
 
 **Featured Item**:

@@ -11,6 +11,7 @@ use jellypilot_core::artwork_binder::ArtworkSlot;
 use jellypilot_core::browse_model::BrowsePageSettlement;
 use jellypilot_core::config::{AppMode, IntroMode, LoginPrefill, ShortcutKind, ThemeMode};
 use jellypilot_core::diagnostics::{DiagnosticCategory, DiagnosticLevel};
+use jellypilot_core::locale::LanguagePreference;
 use jellypilot_core::request_gate::{
   DetailAuxToken, DetailToken, HomeToken, RemotePlayToken, RemoteToken, SessionToken,
 };
@@ -46,6 +47,10 @@ impl std::fmt::Debug for Message {
       Self::Settings(_) => formatter.write_str("Settings"),
       Self::Remote(_) => formatter.write_str("Remote"),
       Self::Tray(action) => formatter.debug_tuple("Tray").field(action).finish(),
+      Self::UiLanguageSelected(preference) => formatter
+        .debug_tuple("UiLanguageSelected")
+        .field(preference)
+        .finish(),
       Self::SystemThemeDiscovered(mode) => formatter
         .debug_tuple("SystemThemeDiscovered")
         .field(mode)
@@ -76,6 +81,7 @@ pub enum Message {
   Settings(SettingsMessage),
   Remote(RemoteMessage),
   Tray(crate::tray::TrayAction),
+  UiLanguageSelected(LanguagePreference),
   /// One-shot OS light/dark mode discovered at boot.
   SystemThemeDiscovered(iced::theme::Mode),
   /// OS light/dark mode changed while the theme mode is `System`.
@@ -227,6 +233,7 @@ pub enum SettingsMessage {
   IntroModeSelected(IntroMode),
   ThemeModeSelected(ThemeMode),
   AppModeSelected(AppMode),
+  FontLicensesToggled,
   SubtitleMenuToggled,
   SubtitleMenuDismissed,
   SubtitleLanguageAdded(String),

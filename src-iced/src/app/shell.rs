@@ -20,6 +20,7 @@ use super::kernel::Kernel;
 use super::message::{Message, ShellMessage, WindowMessage};
 use super::playback;
 use super::state::{Destination, State};
+use crate::i18n::UiText;
 
 pub const SEARCH_INPUT_ID: &str = "shell.search-input";
 pub const SEARCH_TRIGGER_ID: &str = "shell.search-trigger";
@@ -427,13 +428,14 @@ pub(crate) fn update_shell(state: &mut State, message: ShellMessage) -> Task<Mes
           }
         }
         Err(error) => {
-          state.kernel.notice = Some(format!("Could not refresh libraries: {error}"));
+          state.kernel.notice = Some(UiText::new("shell-library-refresh-failed").arg(
+            "details",
+            jellypilot_core::diagnostics::sanitize_message(&error),
+          ));
         }
       }
       let page = if removed {
-        state.kernel.notice = Some(
-          "The selected library changed or is no longer accessible. Returned to Home.".to_owned(),
-        );
+        state.kernel.notice = Some(UiText::new("shell-library-unavailable"));
         navigate(state, Destination::Home)
       } else {
         refresh_current_page(state)
@@ -638,6 +640,7 @@ mod tests {
   fn test_fixture() -> (Surface, Kernel) {
     let kernel = Kernel {
       settings: SettingsStore::default(),
+      locale: crate::i18n::Localizer::default(),
       diagnostics: Diagnostics::default(),
       auth_store: AuthStore::default(),
       request_gate: RequestGate::default(),

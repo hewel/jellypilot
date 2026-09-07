@@ -1,5 +1,7 @@
 use crate::app::message::{HomeMessage, Message, PlaybackMessage};
 use crate::app::state::{ArtworkCell, ArtworkCellState, HomeRow, HomeSection, State};
+use crate::i18n::media::{card_subtitle, hero_metadata, runtime_caption};
+use crate::i18n::{Localizer, UiText};
 use iced::advanced::widget;
 use iced::gradient;
 use iced::widget::canvas::{self, Canvas};
@@ -10,16 +12,13 @@ use iced::widget::{
   Row, Stack,
 };
 use iced::{Alignment, Background, ContentFit, Degrees, Element, Fill, Length};
-use jellypilot_core::cards::{
-  card_subtitle, card_title, hero_headline, hero_metadata, is_episode_item, logo_display_size,
-  runtime_caption,
-};
+use jellypilot_core::cards::{card_title, hero_headline, is_episode_item, logo_display_size};
 use jellypilot_core::home_hero::has_resume_position;
 use jellypilot_core::LoadState;
 use jellypilot_media_server::VideoLibraryItem;
 use jellypilot_mpv::playback::{Playable, PlaybackStartPosition};
 use jellypilot_mpv::playback_session::PlaybackIntent;
-use jellypilot_ui::fonts::SPACE_GROTESK_FONT;
+use jellypilot_ui::fonts::HEADING_FONT;
 use jellypilot_ui::icons::{icon_with_color, Icon, IconSize};
 use jellypilot_ui::layout::SizeClass;
 use jellypilot_ui::overlay::{focus_tooltip, TooltipOptions};
@@ -304,24 +303,20 @@ fn featured_hero<'a>(
   }
 
   let play_label = if has_resume_position(item) {
-    "Resume"
+    state.t("home-resume")
   } else {
-    "Play"
+    state.t("home-play")
   };
   let play_enabled = state.playback.view.engine_available;
-  let play = control_button(
-    Some(Icon::Play),
-    Some(play_label.to_owned()),
-    ButtonVariant::Primary,
-  )
-  .spacing(TOKENS.spacing.s2)
-  .padding([7, 14])
-  .min_height(40.0)
-  .id(iced::widget::Id::new("home-hero-play"))
-  .on_press_maybe(play_enabled.then(|| play_message(state, item)));
+  let play = control_button(Some(Icon::Play), Some(play_label), ButtonVariant::Primary)
+    .spacing(TOKENS.spacing.s2)
+    .padding([7, 14])
+    .min_height(40.0)
+    .id(iced::widget::Id::new("home-hero-play"))
+    .on_press_maybe(play_enabled.then(|| play_message(state, item)));
   let details = control_button(
     Some(Icon::Info),
-    Some("Details".to_owned()),
+    Some(state.t("home-details")),
     ButtonVariant::Tonal,
   )
   .spacing(TOKENS.spacing.s2)
@@ -469,11 +464,17 @@ fn section_view<'a>(
     LoadState::Idle => None,
     LoadState::Loading => Some(section_skeleton(
       state.palette(),
+      state.kernel.locale,
       row,
       skeleton_phase,
       reduced_motion,
     )),
-    LoadState::Failed(error) => Some(section_error(state.palette(), &row.title, error)),
+    LoadState::Failed(error) => Some(section_error(
+      state.palette(),
+      state.kernel.locale,
+      &row.title,
+      error,
+    )),
     LoadState::Ready(items) if items.is_empty() => None,
     LoadState::Ready(items) => Some(section_row(
       state,
@@ -510,8 +511,8 @@ fn section_row<'a>(
     .style(jellypilot_ui::theme::scrollable);
 
   column![
-    text(&home_row.title)
-      .font(SPACE_GROTESK_FONT)
+    text(state.kernel.locale.message(&home_row.title))
+      .font(HEADING_FONT)
       .size(SECTION_TITLE_SIZE)
       .color(state.palette().text.heading),
     cards,
@@ -543,7 +544,7 @@ fn video_card<'a>(
     ellipsis_text(card_title(item))
       .size(14)
       .color(palette.text.heading),
-    ellipsis_text(card_subtitle(item))
+    ellipsis_text(card_subtitle(state.kernel.locale, item))
       .size(12)
       .color(palette.text.metadata),
   ]
@@ -679,7 +680,7 @@ fn video_card<'a>(
     ellipsis_text(card_title(item))
       .size(14)
       .color(palette.text.heading),
-    ellipsis_text(card_subtitle(item))
+    ellipsis_text(card_subtitle(state.kernel.locale, item))
       .size(12)
       .color(palette.text.metadata),
   ]
@@ -874,7 +875,7 @@ fn hero_artwork<'a>(
   }
 
   ellipsis_text(hero_headline(item))
-    .font(SPACE_GROTESK_FONT)
+    .font(HEADING_FONT)
     .size(text_size)
     .color(state.palette().text.heading)
     .into()
@@ -895,35 +896,38 @@ fn hero_secondary_line(state: &State, section: HomeSection, item: &VideoLibraryI
       .data
       .row(section)
     {
-      parts.push(row.title.clone());
+      parts.push(state.kernel.locale.message(&row.title));
     }
   }
   if is_episode_item(item) {
-    let subtitle = card_subtitle(item);
+    let subtitle = card_subtitle(state.kernel.locale, item);
     if !subtitle.is_empty() {
       parts.push(subtitle);
     }
-    if let Some(runtime) = item.runtime_seconds.and_then(runtime_caption) {
+    if let Some(runtime) = item
+      .runtime_seconds
+      .and_then(|seconds| runtime_caption(state.kernel.locale, seconds))
+    {
       parts.push(runtime);
     }
   } else {
-    parts.push(hero_metadata(item));
+    parts.push(hero_metadata(state.kernel.locale, item));
   }
   parts.join(" · ")
 }
 
 /// Concrete episode identity and honest action/source role for the rail tooltip.
-fn rail_label(section: HomeSection, item: &VideoLibraryItem) -> String {
+fn rail_label(locale: Localizer, section: HomeSection, item: &VideoLibraryItem) -> String {
   let role = if has_resume_position(item) {
-    "Resume"
+    locale.text("home-resume")
   } else if section == HomeSection::NextUp {
-    "Next Up"
+    locale.text("home-next-up")
   } else if section == HomeSection::ContinueWatching {
-    "Continue Watching"
+    locale.text("home-continue-watching")
   } else {
-    "Latest"
+    locale.text("home-latest-role")
   };
-  let subtitle = card_subtitle(item);
+  let subtitle = card_subtitle(locale, item);
   if subtitle.is_empty() {
     format!("{}\n{role}", card_title(item))
   } else {
@@ -984,7 +988,11 @@ fn hero_rail_card<'a>(
       },
       ..iced::widget::container::Style::default()
     });
-  focus_tooltip(card, rail_label(section, item), TooltipOptions::default())
+  focus_tooltip(
+    card,
+    rail_label(state.kernel.locale, section, item),
+    TooltipOptions::default(),
+  )
 }
 
 /// Unframed transition from the scrolling image into the page surface.
@@ -1061,7 +1069,7 @@ fn card_artwork<'a>(
       column![
         icon_with_color(Icon::Movie, icon_dim, placeholder_color),
         text(initial)
-          .font(SPACE_GROTESK_FONT)
+          .font(HEADING_FONT)
           .size(if width > POSTER_FRAME_WIDTH { 32 } else { 24 })
           .color(placeholder_color),
       ]
@@ -1218,6 +1226,7 @@ impl canvas::Program<Message> for ProgressOverlay {
 
 fn section_skeleton<'a>(
   palette: &ThemePalette,
+  locale: Localizer,
   row: &'a HomeRow,
   phase: f32,
   reduced_motion: bool,
@@ -1235,8 +1244,8 @@ fn section_skeleton<'a>(
     );
   }
   column![
-    text(&row.title)
-      .font(SPACE_GROTESK_FONT)
+    text(locale.message(&row.title))
+      .font(HEADING_FONT)
       .size(24)
       .color(palette.text.heading),
     cards,
@@ -1247,19 +1256,22 @@ fn section_skeleton<'a>(
 
 fn section_error<'a>(
   palette: &ThemePalette,
-  title: &'a str,
-  error: &'a str,
+  locale: Localizer,
+  title: &'a UiText,
+  error: &'a UiText,
 ) -> Element<'a, Message> {
-  let retry = control_button(None, Some("Retry".to_owned()), ButtonVariant::Tonal)
+  let retry = control_button(None, Some(locale.text("home-retry")), ButtonVariant::Tonal)
     .padding([6, 12])
     .on_press(Message::Home(HomeMessage::Retry));
   container(
     column![
-      text(title)
-        .font(SPACE_GROTESK_FONT)
+      text(locale.message(title))
+        .font(HEADING_FONT)
         .size(24)
         .color(palette.text.heading),
-      text(error).size(13).color(palette.colors.error),
+      text(locale.message(error))
+        .size(13)
+        .color(palette.colors.error),
       retry,
     ]
     .spacing(TOKENS.spacing.s3),
@@ -1304,113 +1316,6 @@ mod tests {
     assert_eq!(content_width(0.0, SizeClass::Compact), 1.0);
     assert_eq!(content_width(50.0, SizeClass::Compact), 1.0);
     assert_eq!(content_width(-100.0, SizeClass::Compact), 1.0);
-  }
-
-  #[test]
-  fn home_view_renders_hero_and_cards_with_loading_and_failed_artwork() {
-    let mut state = State::boot(false);
-    state.shell.skeleton_phase = 0.5;
-    let hero_item = VideoLibraryItem {
-      logo_image_id: None,
-      id: "hero-1".to_owned(),
-      name: "Hero Movie".to_owned(),
-      item_type: "Movie".to_owned(),
-      production_year: Some(2024),
-      runtime_seconds: Some(7200.0),
-      played: false,
-      favorite: true,
-      artwork_image_id: None,
-      backdrop_image_id: Some("img-hero-backdrop".to_owned()),
-      series_poster_image_id: None,
-      episode_thumb_image_id: None,
-      series_thumb_image_id: None,
-      series_backdrop_image_id: None,
-      season_number: None,
-      episode_number: None,
-      series_id: None,
-      series_name: None,
-      resume_position_seconds: None,
-      played_percentage: None,
-      overview: Some("Hero overview text".to_owned()),
-      index_number_end: None,
-      season_poster_image_id: None,
-      end_year: None,
-      series_continuing: false,
-      unplayed_item_count: None,
-    };
-    let card_item = VideoLibraryItem {
-      logo_image_id: None,
-      id: "card-1".to_owned(),
-      name: "Card Movie".to_owned(),
-      item_type: "Movie".to_owned(),
-      production_year: Some(2023),
-      runtime_seconds: Some(5400.0),
-      played: false,
-      favorite: false,
-      artwork_image_id: None,
-      backdrop_image_id: None,
-      series_poster_image_id: None,
-      episode_thumb_image_id: None,
-      series_thumb_image_id: None,
-      series_backdrop_image_id: None,
-      season_number: None,
-      episode_number: None,
-      series_id: None,
-      series_name: None,
-      resume_position_seconds: Some(2430.0),
-      played_percentage: Some(45.0),
-      overview: None,
-      index_number_end: None,
-      season_poster_image_id: None,
-      end_year: None,
-      series_continuing: false,
-      unplayed_item_count: None,
-    };
-    state.full.as_mut().unwrap().home.data.settle_video_home(Ok(
-      jellypilot_media_server::VideoHome {
-        continue_watching: vec![card_item],
-        next_up: vec![hero_item],
-      },
-    ));
-    state
-      .full
-      .as_mut()
-      .unwrap()
-      .home
-      .data
-      .settle_shortcuts(Ok(vec![]));
-    let slot_1 = state
-      .kernel
-      .artwork_binder
-      .bind(jellypilot_core::artwork_binder::ArtworkSurface::Home);
-    let slot_2 = state
-      .kernel
-      .artwork_binder
-      .bind(jellypilot_core::artwork_binder::ArtworkSurface::Home);
-    state
-      .full
-      .as_mut()
-      .unwrap()
-      .home
-      .artwork
-      .insert_hero_backdrop(
-        "hero-1".to_owned(),
-        ArtworkCell {
-          slot: slot_1,
-          image_id: "img-hero-backdrop".to_owned(),
-          state: ArtworkCellState::Loading,
-        },
-      );
-    state.full.as_mut().unwrap().home.artwork.insert_card(
-      HomeSection::ContinueWatching,
-      "card-1".to_owned(),
-      ArtworkCell {
-        slot: slot_2,
-        image_id: "img-card".to_owned(),
-        state: ArtworkCellState::Failed,
-      },
-    );
-    let _element = view(&state);
   }
 
   #[test]

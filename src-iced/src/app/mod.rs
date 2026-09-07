@@ -22,16 +22,14 @@ use jellypilot_core::config::AppMode;
 pub use message::Message;
 pub use state::State;
 
-pub fn boot(
-  smoke: bool,
-  tray: Option<crate::tray::Tray>,
-  instance: Option<crate::instance::Guard>,
-) -> (State, Task<Message>) {
+pub fn boot(smoke: bool, instance: Option<crate::instance::Guard>) -> (State, Task<Message>) {
   let mut state = State::boot(smoke);
   state.instance = instance;
-  state.kernel.tray = tray;
+  state.kernel.tray = (!smoke)
+    .then(|| crate::tray::Tray::new(state.kernel.locale).ok())
+    .flatten();
   if let Some(tray) = &state.kernel.tray {
-    tray.sync(&state.playback.view, false);
+    tray.sync(&state.playback.view, false, state.kernel.locale);
   }
 
   let start_hidden = crate::should_start_hidden(

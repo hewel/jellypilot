@@ -4,6 +4,7 @@
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
+use crate::i18n::UiText;
 use iced::Task;
 use jellypilot_core::artwork_binder::{ArtworkSettlement, ArtworkSurface};
 use jellypilot_core::artwork_loader::PlannedArtworkLoad;
@@ -26,10 +27,10 @@ use super::kernel::Kernel;
 use super::message::{ArtworkLoadCompletion, DetailMessage, Message};
 use super::state::{ArtworkCell, ArtworkCellState, DetailArtwork, DetailState, UserDataActionKind};
 
-const DETAIL_FAILURE: &str = "Could not load this item. Try again.";
-const SEASON_FAILURE: &str = "Could not load this season. Try again.";
-const SIMILAR_FAILURE: &str = "Could not load similar items.";
-const USER_DATA_FAILURE: &str = "Could not update user data. Try again.";
+const DETAIL_FAILURE: &str = "detail-load-error";
+const SEASON_FAILURE: &str = "detail-season-error";
+const SIMILAR_FAILURE: &str = "detail-similar-error";
+const USER_DATA_FAILURE: &str = "detail-user-data-error";
 
 const DETAIL_LOGO_KEY: &str = "detail-logo";
 const DETAIL_BACKDROP_KEY: &str = "detail-backdrop";
@@ -95,7 +96,7 @@ pub fn update(
       if failed_refresh {
         return kernel.show_toast(
           super::state::NoticeLevel::Error,
-          "Could not refresh this item. Existing details were kept.".to_owned(),
+          UiText::new("detail-refresh-error"),
         );
       }
       let followup = start_followup(surface, kernel);
@@ -113,7 +114,10 @@ pub fn update(
       }
       surface.data.season_neighbors = match result {
         Ok(items) => jellypilot_core::LoadState::Ready(items),
-        Err(_) => jellypilot_core::LoadState::Failed(SEASON_FAILURE.to_owned()),
+        Err(error) => {
+          tracing::warn!(error = %jellypilot_core::diagnostics::sanitize_message(error.as_str()), "Detail request failed");
+          jellypilot_core::LoadState::Failed(UiText::new(SEASON_FAILURE))
+        }
       };
       prepare_artwork(surface, kernel)
     }
@@ -123,7 +127,10 @@ pub fn update(
       }
       surface.data.similar_items = match result {
         Ok(items) => jellypilot_core::LoadState::Ready(items),
-        Err(_) => jellypilot_core::LoadState::Failed(SIMILAR_FAILURE.to_owned()),
+        Err(error) => {
+          tracing::warn!(error = %jellypilot_core::diagnostics::sanitize_message(error.as_str()), "Detail request failed");
+          jellypilot_core::LoadState::Failed(UiText::new(SIMILAR_FAILURE))
+        }
       };
       prepare_artwork(surface, kernel)
     }
@@ -207,7 +214,7 @@ pub fn start_load(
     return Task::none();
   };
   let Some(item) = surface.items.get(item_id).cloned() else {
-    surface.data.content = jellypilot_core::LoadState::Failed(DETAIL_FAILURE.to_owned());
+    surface.data.content = jellypilot_core::LoadState::Failed(UiText::new(DETAIL_FAILURE));
     return Task::none();
   };
   surface.data.clear();
@@ -218,7 +225,7 @@ pub fn start_load(
   let token = kernel.request_gate.begin_detail();
   surface.data.content = jellypilot_core::LoadState::Loading;
   let Some(client) = kernel.client.as_ref().map(Arc::clone) else {
-    surface.data.content = jellypilot_core::LoadState::Failed(DETAIL_FAILURE.to_owned());
+    surface.data.content = jellypilot_core::LoadState::Failed(UiText::new(DETAIL_FAILURE));
     return Task::none();
   };
 
@@ -226,7 +233,7 @@ pub fn start_load(
     async move {
       load_detail_content(client, item)
         .await
-        .map_err(|_| DETAIL_FAILURE.to_owned())
+        .map_err(|error| error.to_string())
     },
     move |result| {
       Message::Detail(DetailMessage::Loaded {
@@ -248,8 +255,13 @@ fn settle_load(
   }
   match result {
     Ok(content) => detail.content = jellypilot_core::LoadState::Ready(content),
-    Err(_) if matches!(detail.content, jellypilot_core::LoadState::Ready(_)) => {}
-    Err(_) => detail.content = jellypilot_core::LoadState::Failed(DETAIL_FAILURE.to_owned()),
+    Err(error) if matches!(detail.content, jellypilot_core::LoadState::Ready(_)) => {
+      tracing::warn!(error = %jellypilot_core::diagnostics::sanitize_message(error.as_str()), "Detail refresh failed");
+    }
+    Err(error) => {
+      tracing::warn!(error = %jellypilot_core::diagnostics::sanitize_message(error.as_str()), "Detail request failed");
+      detail.content = jellypilot_core::LoadState::Failed(UiText::new(DETAIL_FAILURE));
+    }
   }
   true
 }
@@ -278,7 +290,7 @@ pub(crate) fn refresh(surface: &mut Surface, kernel: &mut Kernel, item_id: &str)
     async move {
       load_detail_content(client, item)
         .await
-        .map_err(|_| DETAIL_FAILURE.to_owned())
+        .map_err(|error| error.to_string())
     },
     move |result| {
       Message::Detail(DetailMessage::Loaded {
@@ -384,14 +396,14 @@ fn start_neighbors_load(
   };
   surface.data.season_neighbors = jellypilot_core::LoadState::Loading;
   let Some(client) = kernel.client.as_ref().map(Arc::clone) else {
-    surface.data.season_neighbors = jellypilot_core::LoadState::Failed(SEASON_FAILURE.to_owned());
+    surface.data.season_neighbors = jellypilot_core::LoadState::Failed(UiText::new(SEASON_FAILURE));
     return Task::none();
   };
   Task::perform(
     async move {
       load_season_neighbors(client, item_id, series_id, season_number)
         .await
-        .map_err(|_| SEASON_FAILURE.to_owned())
+        .map_err(|error| error.to_string())
     },
     move |result| Message::Detail(DetailMessage::NeighborsLoaded { token, result }),
   )
@@ -410,14 +422,14 @@ fn start_similar_load(
   };
   surface.data.similar_items = jellypilot_core::LoadState::Loading;
   let Some(client) = kernel.client.as_ref().map(Arc::clone) else {
-    surface.data.similar_items = jellypilot_core::LoadState::Failed(SIMILAR_FAILURE.to_owned());
+    surface.data.similar_items = jellypilot_core::LoadState::Failed(UiText::new(SIMILAR_FAILURE));
     return Task::none();
   };
   Task::perform(
     async move {
       load_similar_items(client.as_ref(), item_id)
         .await
-        .map_err(|_| SIMILAR_FAILURE.to_owned())
+        .map_err(|error| error.to_string())
     },
     move |result| Message::Detail(DetailMessage::SimilarLoaded { token, result }),
   )
@@ -447,7 +459,7 @@ fn start_selected_season_load(surface: &mut Surface, kernel: &mut Kernel) -> Tas
   let token = kernel.request_gate.begin_detail();
   surface.data.season_episodes = jellypilot_core::LoadState::Loading;
   let Some(client) = kernel.client.as_ref().map(Arc::clone) else {
-    surface.data.season_episodes = jellypilot_core::LoadState::Failed(SEASON_FAILURE.to_owned());
+    surface.data.season_episodes = jellypilot_core::LoadState::Failed(UiText::new(SEASON_FAILURE));
     return Task::none();
   };
   Task::perform(
@@ -456,7 +468,7 @@ fn start_selected_season_load(surface: &mut Surface, kernel: &mut Kernel) -> Tas
         .library()
         .season_episodes_page(request)
         .await
-        .map_err(|_| SEASON_FAILURE.to_owned())
+        .map_err(|error| error.to_string())
     },
     move |result| Message::Detail(DetailMessage::SeasonLoaded { token, result }),
   )
@@ -473,7 +485,10 @@ fn settle_season_load(
   }
   detail.season_episodes = match result {
     Ok(page) => jellypilot_core::LoadState::Ready(page),
-    Err(_) => jellypilot_core::LoadState::Failed(SEASON_FAILURE.to_owned()),
+    Err(error) => {
+      tracing::warn!(error = %jellypilot_core::diagnostics::sanitize_message(error.as_str()), "Detail request failed");
+      jellypilot_core::LoadState::Failed(UiText::new(SEASON_FAILURE))
+    }
   };
   true
 }
@@ -502,7 +517,7 @@ fn start_user_data_update(
     return Task::none();
   };
   let Some(client) = kernel.client.as_ref().map(Arc::clone) else {
-    surface.data.user_data_error = Some(USER_DATA_FAILURE.to_owned());
+    surface.data.user_data_error = Some(UiText::new(USER_DATA_FAILURE));
     return Task::none();
   };
   surface.data.user_data_busy = Some(kind);
@@ -519,7 +534,7 @@ fn start_user_data_update(
         .library()
         .update_user_data(request)
         .await
-        .map_err(|_| USER_DATA_FAILURE.to_owned())
+        .map_err(|error| error.to_string())
     },
     move |result| Message::Detail(DetailMessage::UserDataUpdated { token, result }),
   )
@@ -535,13 +550,16 @@ fn settle_user_data_update(
     return None;
   }
   detail.user_data_busy = None;
+  if let Err(error) = &result {
+    tracing::warn!(error = %jellypilot_core::diagnostics::sanitize_message(error.as_str()), "Detail user data update failed");
+  }
   match result {
     Ok(update) if apply_user_data_update(&mut detail.content, &update) => {
       detail.user_data_error = None;
       Some(Some(update))
     }
     Ok(_) | Err(_) => {
-      detail.user_data_error = Some(USER_DATA_FAILURE.to_owned());
+      detail.user_data_error = Some(UiText::new(USER_DATA_FAILURE));
       Some(None)
     }
   }
@@ -817,6 +835,7 @@ mod tests {
     let settings = SettingsStore::default();
     let kernel = Kernel {
       settings,
+      locale: crate::i18n::Localizer::default(),
       diagnostics: Diagnostics::default(),
       auth_store: AuthStore::default(),
       request_gate: RequestGate::default(),
@@ -1026,7 +1045,7 @@ mod tests {
       jellypilot_core::LoadState::Ready(DetailContent::Item(item))
         if item.favorite && !item.played
     ));
-    assert_eq!(detail.user_data_error.as_deref(), Some(USER_DATA_FAILURE));
+    assert!(detail.user_data_error.is_some());
   }
 
   #[test]

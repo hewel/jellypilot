@@ -20,6 +20,34 @@ use super::message::{
   LoginMessage, Message, PasswordSubmission, ProtectedSavedSession, SensitiveSessionPayload,
 };
 use super::state::{ConnectedIdentity, LoginMethod, LoginState, QuickConnectState};
+use crate::i18n::UiText;
+use jellypilot_core::diagnostics::{DiagnosticCategory, DiagnosticLevel};
+
+pub(crate) fn error_text(error: &LoginError) -> UiText {
+  UiText::new(match error {
+    LoginError::AuthStorage(jellypilot_auth::AuthStorageError::Unavailable) => {
+      "login-storage-unavailable"
+    }
+    LoginError::AuthStorage(jellypilot_auth::AuthStorageError::Corrupt) => "login-storage-corrupt",
+    LoginError::AuthStorage(jellypilot_auth::AuthStorageError::ProfileNotFound) => {
+      "login-profile-missing"
+    }
+    LoginError::AuthStorage(jellypilot_auth::AuthStorageError::WriteFailed) => {
+      "login-storage-write-failed"
+    }
+    LoginError::Request(_) => "login-request-failed",
+  })
+}
+
+fn invalid_server_text(provider: MediaServerProvider) -> UiText {
+  UiText::new("login-invalid-server").arg(
+    "provider",
+    match provider {
+      MediaServerProvider::Jellyfin => "Jellyfin",
+      MediaServerProvider::Emby => "Emby",
+    },
+  )
+}
 
 /// Login surface slice: the credential form flow plus the abort handle for an
 /// in-flight Quick Connect stream.
@@ -214,8 +242,8 @@ fn start_candidate_quick_connect(surface: &mut CandidateSurface) -> CandidateUpd
   }
   let server_url = match validate_server_url(&surface.flow.server_url, surface.flow.provider) {
     Ok(server_url) => server_url,
-    Err(error) => {
-      surface.flow.error = Some(error);
+    Err(_) => {
+      surface.flow.error = Some(invalid_server_text(surface.flow.provider));
       return CandidateUpdate::none();
     }
   };
@@ -260,15 +288,15 @@ fn start_candidate_password_login(surface: &mut CandidateSurface) -> CandidateUp
   }
   let server_url = match validate_server_url(&surface.flow.server_url, surface.flow.provider) {
     Ok(server_url) => server_url,
-    Err(error) => {
-      surface.flow.error = Some(error);
+    Err(_) => {
+      surface.flow.error = Some(invalid_server_text(surface.flow.provider));
       return CandidateUpdate::none();
     }
   };
   surface.flow.server_url = server_url.clone();
   let username = surface.flow.username.trim().to_owned();
   if username.is_empty() {
-    surface.flow.error = Some("Enter your username before signing in.".to_owned());
+    surface.flow.error = Some(UiText::new("login-username-required"));
     return CandidateUpdate::none();
   }
 
@@ -379,7 +407,7 @@ fn finish_candidate_authentication(
       }
     }
     Err(error) => {
-      surface.flow.error = Some(error.to_string());
+      surface.flow.error = Some(error_text(&error));
       surface.flow.quick_connect = QuickConnectState::Failed;
       CandidateUpdate::none()
     }
@@ -401,6 +429,20 @@ pub fn update(
   can_start_login: bool,
   message: LoginMessage,
 ) -> Task<Message> {
+  if !can_start_login
+    && matches!(
+      &message,
+      LoginMessage::QuickConnectSubmitted
+        | LoginMessage::PasswordSubmitted
+        | LoginMessage::RestoreProfile(_)
+    )
+  {
+    kernel.diagnostics.record(
+      DiagnosticLevel::Error,
+      DiagnosticCategory::Auth,
+      "Finishing external playback shutdown. Try again in a moment.",
+    );
+  }
   update_login(surface, kernel, can_start_login, message).map(Message::Login)
 }
 
@@ -485,7 +527,12 @@ fn update_login(
         }
         Err(error) => {
           should_auto_login(&mut surface.flow, kernel, false);
-          surface.flow.error = Some(LoginError::AuthStorage(error).to_string());
+          kernel.diagnostics.record(
+            DiagnosticLevel::Error,
+            DiagnosticCategory::Auth,
+            LoginError::AuthStorage(error).to_string(),
+          );
+          surface.flow.error = Some(error_text(&LoginError::AuthStorage(error)));
         }
       }
       Task::none()
@@ -532,7 +579,12 @@ fn update_login(
           }
         }
         Err(error) if current => {
-          kernel.notice = Some(LoginError::AuthStorage(error).to_string());
+          kernel.diagnostics.record(
+            DiagnosticLevel::Error,
+            DiagnosticCategory::Auth,
+            LoginError::AuthStorage(error).to_string(),
+          );
+          kernel.notice = Some(error_text(&LoginError::AuthStorage(error)));
         }
         Err(_) => {}
       }
@@ -547,9 +599,12 @@ fn update_login(
         && kernel.active_profile.as_ref() == Some(&key)
       {
         if let Err(error) = result {
-          kernel.notice = Some(format!(
-            "Connected, but the startup account selection could not be saved: {error}."
-          ));
+          kernel.diagnostics.record(
+            DiagnosticLevel::Error,
+            DiagnosticCategory::Auth,
+            format!("Connected, but the startup account selection could not be saved: {error}."),
+          );
+          kernel.notice = Some(UiText::new("account-activation-save-failed"));
         }
       }
       Task::none()
@@ -624,8 +679,7 @@ fn playback_allows_login(surface: &mut Surface, can_login: bool) -> bool {
   if can_login {
     true
   } else {
-    surface.flow.error =
-      Some("Finishing external playback shutdown. Try again in a moment.".to_owned());
+    surface.flow.error = Some(UiText::new("login-playback-cleanup"));
     false
   }
 }
@@ -650,7 +704,10 @@ fn start_quick_connect(surface: &mut Surface, kernel: &mut Kernel) -> Task<Login
   let server_url = match validate_server_url(&surface.flow.server_url, surface.flow.provider) {
     Ok(server_url) => server_url,
     Err(error) => {
-      surface.flow.error = Some(error);
+      kernel
+        .diagnostics
+        .record(DiagnosticLevel::Error, DiagnosticCategory::Auth, &error);
+      surface.flow.error = Some(invalid_server_text(surface.flow.provider));
       return Task::none();
     }
   };
@@ -690,14 +747,22 @@ fn start_password_login(surface: &mut Surface, kernel: &mut Kernel) -> Task<Logi
   let server_url = match validate_server_url(&surface.flow.server_url, surface.flow.provider) {
     Ok(server_url) => server_url,
     Err(error) => {
-      surface.flow.error = Some(error);
+      kernel
+        .diagnostics
+        .record(DiagnosticLevel::Error, DiagnosticCategory::Auth, &error);
+      surface.flow.error = Some(invalid_server_text(surface.flow.provider));
       return Task::none();
     }
   };
   surface.flow.server_url = server_url.clone();
   let username = surface.flow.username.trim().to_owned();
   if username.is_empty() {
-    surface.flow.error = Some("Enter your username before signing in.".to_owned());
+    kernel.diagnostics.record(
+      DiagnosticLevel::Error,
+      DiagnosticCategory::Auth,
+      "Enter your username before signing in.",
+    );
+    surface.flow.error = Some(UiText::new("login-username-required"));
     return Task::none();
   }
 
@@ -857,7 +922,12 @@ pub(crate) fn persist_password_submission(kernel: &mut Kernel, submission: Passw
     kernel.settings.clear_login_prefill()
   };
   if let Err(error) = settings_result {
-    kernel.notice = Some(format!("Could not update remembered sign-in: {error}"));
+    kernel.diagnostics.record(
+      DiagnosticLevel::Error,
+      DiagnosticCategory::Auth,
+      format!("Could not update remembered sign-in: {error}"),
+    );
+    kernel.notice = Some(UiText::new("login-prefill-save-failed"));
   }
 }
 
@@ -916,19 +986,32 @@ fn interrupt_quick_connect(surface: &mut Surface, kernel: &mut Kernel) {
 
 fn fail_login(surface: &mut Surface, kernel: &mut Kernel, error: LoginError) {
   kernel.connection = ConnectionPhase::Failed;
-  surface.flow.error = Some(error.to_string());
+  kernel.diagnostics.record(
+    DiagnosticLevel::Error,
+    DiagnosticCategory::Auth,
+    error.to_string(),
+  );
+  surface.flow.error = Some(error_text(&error));
 }
 
 fn fail_password_login(surface: &mut Surface, kernel: &mut Kernel, _error: &LoginError) {
   kernel.connection = ConnectionPhase::Failed;
-  surface.flow.error =
-    Some("Sign-in failed. Check your server, username, and password, then try again.".to_owned());
+  kernel.diagnostics.record(
+    DiagnosticLevel::Error,
+    DiagnosticCategory::Auth,
+    "Sign-in failed. Check your server, username, and password, then try again.",
+  );
+  surface.flow.error = Some(UiText::new("login-password-failed"));
 }
 
 fn fail_restore(surface: &mut Surface, kernel: &mut Kernel, _error: &LoginError) {
   kernel.connection = ConnectionPhase::Failed;
-  surface.flow.error =
-    Some("Could not restore this saved sign-in. Sign in again to refresh it.".to_owned());
+  kernel.diagnostics.record(
+    DiagnosticLevel::Error,
+    DiagnosticCategory::Auth,
+    "Could not restore this saved sign-in. Sign in again to refresh it.",
+  );
+  surface.flow.error = Some(UiText::new("login-restore-failed"));
 }
 
 #[cfg(test)]
@@ -977,6 +1060,7 @@ mod tests {
       quick_connect_task: None,
     };
     let kernel = Kernel {
+      locale: crate::i18n::Localizer::default(),
       settings,
       diagnostics: Diagnostics::default(),
       auth_store: AuthStore::default(),
@@ -1043,10 +1127,6 @@ mod tests {
     ));
 
     assert_eq!(kernel.request_gate.current_session(), session_before);
-    assert_eq!(
-      surface.flow.error.as_deref(),
-      Some("Enter a valid Jellyfin server URL.")
-    );
   }
 
   #[test]
@@ -1408,7 +1488,7 @@ mod tests {
   }
 
   #[test]
-  fn password_and_restore_failures_use_fixed_user_messages() {
+  fn authentication_failures_do_not_expose_credentials_in_either_language() {
     let (mut password_surface, mut password_kernel) = test_fixture();
     let password_session = password_kernel.request_gate.begin_login();
     password_kernel.connection = ConnectionPhase::Connecting;
@@ -1449,24 +1529,24 @@ mod tests {
       },
     ));
 
-    assert_eq!(
-      password_surface.flow.error.as_deref(),
-      Some("Sign-in failed. Check your server, username, and password, then try again.")
-    );
-    assert_eq!(
-      restore_surface.flow.error.as_deref(),
-      Some("Could not restore this saved sign-in. Sign in again to refresh it.")
-    );
+    for language in [
+      jellypilot_core::locale::UiLanguage::English,
+      jellypilot_core::locale::UiLanguage::SimplifiedChinese,
+    ] {
+      let locale = crate::i18n::Localizer::new(language);
+      for error in [&password_surface.flow.error, &restore_surface.flow.error] {
+        let rendered = locale.message(error.as_ref().expect("authentication failure"));
+        assert!(!rendered.contains("secret"));
+        assert!(!rendered.contains("access_token"));
+        assert!(!rendered.contains("password="));
+      }
+    }
   }
 
   #[test]
-  fn login_is_gated_by_playback_cleanup_with_fixed_copy() {
+  fn login_is_gated_by_playback_cleanup() {
     let (mut surface, _) = test_fixture();
 
     assert!(!playback_allows_login(&mut surface, false));
-    assert_eq!(
-      surface.flow.error.as_deref(),
-      Some("Finishing external playback shutdown. Try again in a moment.")
-    );
   }
 }

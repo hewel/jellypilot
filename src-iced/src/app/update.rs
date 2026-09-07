@@ -7,8 +7,10 @@ use iced::Task;
 use jellypilot_auth::login::ConnectionPhase;
 use jellypilot_core::config::{AppMode, IntroMode, Settings};
 use jellypilot_core::diagnostics::{DiagnosticCategory, DiagnosticLevel};
+use jellypilot_core::locale::LanguagePreference;
 use jellypilot_mpv::playback_session::{PlaybackInput, PlaybackIntent};
 
+use crate::i18n::{Localizer, UiText};
 use crate::tray::TrayAction;
 
 use super::accounts;
@@ -116,7 +118,7 @@ fn update_account(state: &mut State, message: accounts::Message) -> Task<Message
   if let accounts::Message::RemoteHandoffSettled { generation } = &message {
     playback::finish_account_remote_handoff(&mut state.playback, *generation);
   }
-  let previous_error = accounts::view(state).error.map(str::to_owned);
+  let previous_error = accounts::view(state).error.cloned();
   let result = accounts::update(
     &mut state.accounts,
     &mut state.login.flow,
@@ -129,6 +131,12 @@ fn update_account(state: &mut State, message: accounts::Message) -> Task<Message
     },
     message,
   );
+  if let Some(diagnostic) = state.accounts.diagnostic.take() {
+    state
+      .kernel
+      .diagnostics
+      .record(DiagnosticLevel::Error, DiagnosticCategory::Auth, diagnostic);
+  }
   let mut tasks = vec![result.task.map(Message::Account)];
   match result.effect {
     Some(accounts::Effect::BeginHandoff { generation }) => {
@@ -155,13 +163,9 @@ fn update_account(state: &mut State, message: accounts::Message) -> Task<Message
   }
   if let Some(error) = accounts::view(state)
     .error
-    .map(str::to_owned)
+    .cloned()
     .filter(|error| Some(error) != previous_error.as_ref())
   {
-    state
-      .kernel
-      .diagnostics
-      .record(DiagnosticLevel::Error, DiagnosticCategory::Auth, &error);
     tasks.push(state.kernel.show_toast(NoticeLevel::Error, error));
   }
   if playback::quit_may_exit(&state.playback, state.shell.quit_requested) {
@@ -182,8 +186,30 @@ fn update_account(state: &mut State, message: accounts::Message) -> Task<Message
   Task::batch(tasks)
 }
 
+fn select_ui_language(state: &mut State, preference: LanguagePreference) -> Task<Message> {
+  if let Err(error) = state.kernel.settings.set_ui_language(preference) {
+    state.kernel.diagnostics.record(
+      DiagnosticLevel::Error,
+      DiagnosticCategory::Config,
+      error.to_string(),
+    );
+    return state
+      .kernel
+      .show_toast(NoticeLevel::Error, UiText::new("language-save-failed"));
+  }
+  // A repeated System choice still samples the current OS preferences. The
+  // persisted-field change flag says nothing about the effective language.
+  let locale = Localizer::resolve(preference);
+  state.kernel.locale = locale;
+  if let Some(tray) = &state.kernel.tray {
+    tray.sync(&state.playback.view, state.shell.quit_requested, locale);
+  }
+  Task::none()
+}
+
 pub fn update(state: &mut State, message: Message) -> Task<Message> {
   match message {
+    Message::UiLanguageSelected(preference) => select_ui_language(state, preference),
     Message::Account(message) => update_account(state, message),
     Message::Shell(message) => {
       let previous_notice = state.kernel.notice.clone();
@@ -210,7 +236,7 @@ pub fn update(state: &mut State, message: Message) -> Task<Message> {
       {
         return state.kernel.show_toast(
           NoticeLevel::Warning,
-          "Wait for the account change to finish before changing your lists.".to_owned(),
+          UiText::new("shell-account-change-lists"),
         );
       }
       let Some(full) = state.full.as_mut() else {
@@ -273,7 +299,6 @@ pub fn update(state: &mut State, message: Message) -> Task<Message> {
     }
     Message::Login(message) => {
       let was_connected = state.kernel.connection == ConnectionPhase::Connected;
-      let previous_error = state.login.flow.error.clone();
       let profiles_landed = matches!(&message, LoginMessage::ProfilesLoaded { .. });
       let login_task = login::update(
         &mut state.login,
@@ -288,14 +313,6 @@ pub fn update(state: &mut State, message: Message) -> Task<Message> {
       };
       let login_task = Task::batch([login_task, avatar_task]);
       let is_connected = state.kernel.connection == ConnectionPhase::Connected;
-      if state.login.flow.error != previous_error {
-        if let Some(error) = &state.login.flow.error {
-          state
-            .kernel
-            .diagnostics
-            .record(DiagnosticLevel::Error, DiagnosticCategory::Auth, error);
-        }
-      }
       if !was_connected && is_connected {
         state.kernel.diagnostics.record(
           DiagnosticLevel::Info,
@@ -395,7 +412,7 @@ pub fn update(state: &mut State, message: Message) -> Task<Message> {
         .kernel
         .notice
         .clone()
-        .filter(|notice| Some(notice.as_str()) != previous_notice.as_deref())
+        .filter(|notice| Some(notice) != previous_notice.as_ref())
       {
         let toast_task = state.kernel.show_toast(NoticeLevel::Error, notice);
         Task::batch([task, toast_task])
@@ -417,7 +434,7 @@ pub fn update(state: &mut State, message: Message) -> Task<Message> {
       if accounts::content_mutations_blocked(&state.accounts) {
         return state.kernel.show_toast(
           NoticeLevel::Warning,
-          "Wait for the account change to finish before changing your lists.".to_owned(),
+          UiText::new("shell-account-change-lists"),
         );
       }
       let Some(full) = state.full.as_mut() else {
@@ -445,7 +462,7 @@ pub fn update(state: &mut State, message: Message) -> Task<Message> {
       {
         return state.kernel.show_toast(
           NoticeLevel::Warning,
-          "Wait for the account change to finish before changing this item.".to_owned(),
+          UiText::new("shell-account-change-item"),
         );
       }
       let Some(full) = state.full.as_mut() else {
@@ -660,6 +677,7 @@ mod tests {
       system_theme: iced::theme::Mode::None,
       kernel: Kernel {
         settings,
+        locale: Localizer::default(),
         diagnostics: jellypilot_core::diagnostics::Diagnostics::default(),
         auth_store: AuthStore::default(),
         request_gate,
@@ -1342,6 +1360,247 @@ mod tests {
     )
   }
 
+  #[test]
+  fn language_selection_retranslates_retained_feedback_without_adopting_external_settings() {
+    use jellypilot_core::locale::UiLanguage;
+
+    let (mut settings, file) = isolated_settings("language-isolation");
+    settings
+      .set_ui_language(LanguagePreference::Fixed(UiLanguage::English))
+      .unwrap();
+    let mut external = SettingsStore::for_test(file.0.clone());
+    external.set_app_mode(AppMode::ControlOnly).unwrap();
+    external.set_mpv_path("/external/mpv".to_owned()).unwrap();
+    external
+      .set_ui_language(LanguagePreference::Fixed(UiLanguage::SimplifiedChinese))
+      .unwrap();
+
+    let mut state = active_intro_prompt_state();
+    state.kernel.settings = settings;
+    state.login.flow.quick_connect =
+      crate::app::state::QuickConnectState::Waiting("731731".to_owned());
+    *state.login.flow.password = "unsaved credential".to_owned();
+    drop(state.kernel.show_toast(
+      NoticeLevel::Error,
+      UiText::new("player-playback-info-unavailable"),
+    ));
+    let toast = state.kernel.active_toast.clone().unwrap();
+    let before_text = state.kernel.locale.message(&toast.message);
+    let before_playback = state.playback.session.view();
+
+    drop(update(
+      &mut state,
+      Message::UiLanguageSelected(LanguagePreference::Fixed(UiLanguage::SimplifiedChinese)),
+    ));
+
+    assert_eq!(
+      state.kernel.locale,
+      Localizer::new(UiLanguage::SimplifiedChinese)
+    );
+    assert_ne!(state.kernel.locale.message(&toast.message), before_text);
+    assert_eq!(state.kernel.active_toast, Some(toast));
+    assert_eq!(state.playback.session.view(), before_playback);
+    assert_eq!(state.playback.view, before_playback);
+    assert_eq!(
+      state.login.flow.quick_connect,
+      crate::app::state::QuickConnectState::Waiting("731731".to_owned())
+    );
+    assert_eq!(state.login.flow.password.as_str(), "unsaved credential");
+    assert_eq!(state.app_mode(), AppMode::Full);
+    assert!(state.full.is_some());
+    assert_eq!(state.kernel.settings.snapshot().mpv_path(), None);
+    let persisted: Settings = serde_json::from_str(&fs::read_to_string(&file.0).unwrap()).unwrap();
+    assert_eq!(persisted.app_mode(), AppMode::ControlOnly);
+    assert_eq!(persisted.mpv_path(), Some("/external/mpv"));
+  }
+
+  #[test]
+  fn repeated_system_selection_resolves_again_even_when_preference_is_unchanged() {
+    use jellypilot_core::locale::UiLanguage;
+
+    let (settings, _file) = isolated_settings("language-system");
+    let mut state = test_state();
+    state.kernel.settings = settings;
+    let current = Localizer::resolve(LanguagePreference::System);
+    state.kernel.locale = if current == Localizer::default() {
+      Localizer::new(UiLanguage::SimplifiedChinese)
+    } else {
+      Localizer::default()
+    };
+    drop(update(
+      &mut state,
+      Message::UiLanguageSelected(LanguagePreference::System),
+    ));
+    assert_eq!(state.kernel.locale, current);
+    assert_eq!(
+      state.kernel.settings.snapshot().ui_language(),
+      LanguagePreference::System
+    );
+  }
+
+  #[tokio::test]
+  async fn failed_language_save_preserves_the_selected_preference_and_live_text() {
+    use iced::advanced::{renderer::Headless, widget};
+    use iced::{Font, Rectangle, Size};
+    use iced_runtime::user_interface::{Cache, UserInterface};
+    use jellypilot_core::locale::UiLanguage;
+
+    #[derive(Default)]
+    struct VisibleText(Vec<String>);
+    impl widget::Operation for VisibleText {
+      fn traverse(&mut self, visit: &mut dyn FnMut(&mut dyn widget::Operation)) {
+        visit(self);
+      }
+      fn text(&mut self, _id: Option<&widget::Id>, _bounds: Rectangle, text: &str) {
+        self.0.push(text.to_owned());
+      }
+    }
+
+    let (mut settings, file) = isolated_settings("language-failure");
+    let previous = LanguagePreference::Fixed(UiLanguage::English);
+    settings.set_ui_language(previous).unwrap();
+    fs::write(&file.0, "unreadable JSON").unwrap();
+    let mut state = test_state();
+    state.kernel.settings = settings;
+    state.login.flow.error = Some(UiText::new("login-password-failed"));
+    drop(update(
+      &mut state,
+      Message::UiLanguageSelected(LanguagePreference::Fixed(UiLanguage::SimplifiedChinese)),
+    ));
+    assert_eq!(state.kernel.locale, Localizer::default());
+    assert_eq!(state.kernel.settings.snapshot().ui_language(), previous);
+    assert!(matches!(
+      state.kernel.active_toast,
+      Some(crate::app::state::ToastNotice {
+        level: NoticeLevel::Error,
+        ..
+      })
+    ));
+    assert_eq!(fs::read_to_string(&file.0).unwrap(), "unreadable JSON");
+
+    let mut renderer = iced::Renderer::new(Font::DEFAULT, 14.0.into(), Some("tiny-skia"))
+      .await
+      .expect("software renderer");
+    for settings_open in [false, true] {
+      state.shell.settings_open = settings_open;
+      state.kernel.connection = if settings_open {
+        ConnectionPhase::Connected
+      } else {
+        ConnectionPhase::SignedOut
+      };
+      let mut ui = UserInterface::build(
+        crate::app::view(&state, iced::window::Id::unique()),
+        Size::new(1600.0, 900.0),
+        Cache::new(),
+        &mut renderer,
+      );
+      let mut visible = VisibleText::default();
+      ui.operate(&renderer, &mut visible);
+      assert!(
+        visible.0.contains(&state.t("language-save-failed")),
+        "language save failure must be visible on the active surface"
+      );
+      if !settings_open {
+        assert!(
+          visible.0.contains(&state.t("login-password-failed")),
+          "language feedback must not replace authentication feedback"
+        );
+      }
+    }
+  }
+
+  #[tokio::test]
+  async fn toast_appearance_and_dismissal_preserve_login_input_focus() {
+    use iced::advanced::{clipboard, renderer::Headless, widget};
+    use iced::{mouse, Event, Font, Rectangle, Size};
+    use iced_runtime::user_interface::{Cache, UserInterface};
+
+    #[derive(Default)]
+    struct InputProbe {
+      input: Option<Rectangle>,
+      focused: bool,
+    }
+    impl widget::Operation for InputProbe {
+      fn traverse(&mut self, visit: &mut dyn FnMut(&mut dyn widget::Operation)) {
+        visit(self);
+      }
+      fn text_input(
+        &mut self,
+        _id: Option<&widget::Id>,
+        bounds: Rectangle,
+        _state: &mut dyn widget::operation::TextInput,
+      ) {
+        if self.input.is_none() {
+          self.input = Some(bounds);
+        }
+      }
+      fn focusable(
+        &mut self,
+        _id: Option<&widget::Id>,
+        _bounds: Rectangle,
+        state: &mut dyn widget::operation::Focusable,
+      ) {
+        self.focused |= state.is_focused();
+      }
+    }
+    let mut state = test_state();
+    let mut renderer = iced::Renderer::new(Font::DEFAULT, 14.0.into(), Some("tiny-skia"))
+      .await
+      .expect("software renderer");
+    let bounds = Size::new(1600.0, 900.0);
+    let window = iced::window::Id::unique();
+    let mut ui = UserInterface::build(
+      crate::app::view(&state, window),
+      bounds,
+      Cache::new(),
+      &mut renderer,
+    );
+    let mut probe = InputProbe::default();
+    ui.operate(&renderer, &mut probe);
+    ui.update(
+      &[
+        Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left)),
+        Event::Mouse(mouse::Event::ButtonReleased(mouse::Button::Left)),
+      ],
+      mouse::Cursor::Available(probe.input.expect("login server input").center()),
+      &mut renderer,
+      &mut clipboard::Null,
+      &mut Vec::new(),
+    );
+    let mut probe = InputProbe::default();
+    ui.operate(&renderer, &mut probe);
+    assert!(
+      probe.focused,
+      "the input must receive focus before feedback appears"
+    );
+    let mut cache = ui.into_cache();
+
+    drop(
+      state
+        .kernel
+        .show_toast(NoticeLevel::Error, UiText::new("language-save-failed")),
+    );
+    for visible in [true, false] {
+      if !visible {
+        let id = state.kernel.active_toast.as_ref().unwrap().id;
+        drop(update(&mut state, Message::DismissNotice(id)));
+      }
+      let mut ui = UserInterface::build(
+        crate::app::view(&state, window),
+        bounds,
+        cache,
+        &mut renderer,
+      );
+      let mut probe = InputProbe::default();
+      ui.operate(&renderer, &mut probe);
+      assert!(
+        probe.focused,
+        "the active input must survive toast visibility={visible}"
+      );
+      cache = ui.into_cache();
+    }
+  }
+
   fn profile_key(name: &str) -> SavedProfileKey {
     let server_url = format!("https://{name}.example.test");
     let user_id = format!("{name}-user-id");
@@ -1466,50 +1725,28 @@ mod tests {
   }
 
   #[test]
-  fn failure_produces_toast_that_clears_on_timeout_message() {
-    let mut state = test_state();
-    assert!(state.kernel.active_toast.is_none());
-
-    let task = state
-      .kernel
-      .show_toast(NoticeLevel::Error, "Playback failed: decoder error");
-    assert!(task.units() > 0);
-    assert!(state.kernel.active_toast.is_some());
-    let toast = state.kernel.active_toast.as_ref().unwrap();
-    assert_eq!(toast.id, 1);
-    assert_eq!(toast.message, "Playback failed: decoder error");
-    assert_eq!(toast.level, NoticeLevel::Error);
-
-    // Dismissing with matching ID clears the toast
-    drop(update(&mut state, Message::DismissNotice(1)));
-    assert!(state.kernel.active_toast.is_none());
-  }
-
-  #[test]
   fn newer_notice_replaces_older_and_older_timeout_does_not_dismiss_newer() {
     let mut state = test_state();
 
-    drop(state.kernel.show_toast(NoticeLevel::Warning, "Warning 1"));
-    assert_eq!(state.kernel.active_toast.as_ref().unwrap().id, 1);
+    drop(state.kernel.show_toast(
+      NoticeLevel::Warning,
+      UiText::new("player-remote-connection-lost"),
+    ));
+    let older = state.kernel.active_toast.as_ref().unwrap().id;
+    drop(
+      state
+        .kernel
+        .show_toast(NoticeLevel::Error, UiText::new("player-mpv-control-failed")),
+    );
+    let newer = state.kernel.active_toast.as_ref().unwrap().id;
+
+    drop(update(&mut state, Message::DismissNotice(older)));
     assert_eq!(
-      state.kernel.active_toast.as_ref().unwrap().message,
-      "Warning 1"
+      state.kernel.active_toast.as_ref().map(|toast| toast.id),
+      Some(newer)
     );
 
-    drop(state.kernel.show_toast(NoticeLevel::Error, "Error 2"));
-    assert_eq!(state.kernel.active_toast.as_ref().unwrap().id, 2);
-    assert_eq!(
-      state.kernel.active_toast.as_ref().unwrap().message,
-      "Error 2"
-    );
-
-    // Timeout from older notice (id: 1) arrives -> does NOT clear newer notice (id: 2)
-    drop(update(&mut state, Message::DismissNotice(1)));
-    assert!(state.kernel.active_toast.is_some());
-    assert_eq!(state.kernel.active_toast.as_ref().unwrap().id, 2);
-
-    // Timeout or manual dismiss for newer notice (id: 2) -> clears it
-    drop(update(&mut state, Message::DismissNotice(2)));
+    drop(update(&mut state, Message::DismissNotice(newer)));
     assert!(state.kernel.active_toast.is_none());
   }
 

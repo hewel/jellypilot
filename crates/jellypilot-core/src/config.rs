@@ -9,6 +9,7 @@ use jellypilot_media_server::{
 use serde::{Deserialize, Serialize};
 
 use crate::browse_model::BrowsePreferences;
+use crate::locale::LanguagePreference;
 
 pub(crate) const CONFIG_DIRECTORY: &str = "jellypilot";
 const CONFIG_FILE: &str = "config.json";
@@ -236,6 +237,8 @@ pub struct Settings {
     #[serde(default)]
     theme_mode: ThemeMode,
     #[serde(default)]
+    ui_language: LanguagePreference,
+    #[serde(default)]
     app_mode: AppMode,
     #[serde(default, deserialize_with = "deserialize_optional_string")]
     mpv_path: Option<String>,
@@ -283,6 +286,7 @@ impl Default for Settings {
             auto_login: default_auto_login(),
             intro_mode: IntroMode::Automatic,
             theme_mode: ThemeMode::System,
+            ui_language: LanguagePreference::System,
             app_mode: AppMode::Full,
             mpv_path: None,
             mpv_args: Vec::new(),
@@ -320,6 +324,9 @@ impl Settings {
     }
     pub const fn theme_mode(&self) -> ThemeMode {
         self.theme_mode
+    }
+    pub const fn ui_language(&self) -> LanguagePreference {
+        self.ui_language
     }
     pub const fn app_mode(&self) -> AppMode {
         self.app_mode
@@ -498,6 +505,29 @@ impl SettingsStore {
             Ok(())
         })
     }
+
+    /// Persists against the latest disk settings, but commits only the live language.
+    /// Returns whether the live preference changed, even if disk already matched.
+    pub fn set_ui_language(
+        &mut self,
+        preference: LanguagePreference,
+    ) -> Result<bool, SettingsMutationError> {
+        let (mut candidate, missing) = match read_from(&self.path) {
+            Ok(settings) => (settings, false),
+            Err(ConfigError::Io(error)) if error.kind() == io::ErrorKind::NotFound => {
+                (self.settings.clone(), true)
+            }
+            Err(error) => return Err(error.into()),
+        };
+        if missing || candidate.ui_language != preference {
+            candidate.ui_language = preference;
+            save_to(&self.path, &candidate)?;
+        }
+        let changed = self.settings.ui_language != preference;
+        self.settings.ui_language = preference;
+        Ok(changed)
+    }
+
     pub fn set_auto_login(&mut self, enabled: bool) -> Result<bool, SettingsMutationError> {
         self.update(|settings| {
             settings.auto_login = enabled;
@@ -677,13 +707,15 @@ impl SettingsStore {
         let mut candidate = read_from(&self.path).unwrap_or_else(|_| self.settings.clone());
         let previous = candidate.clone();
         mutation(&mut candidate)?;
-        if candidate == previous {
-            self.settings = candidate;
-            return Ok(false);
+        let changed = candidate != previous;
+        if changed {
+            save_to(&self.path, &candidate)?;
         }
-        save_to(&self.path, &candidate)?;
+        // Only explicit language selection commits this new field live. Preserve
+        // pending disk language edits without importing them during other saves.
+        candidate.ui_language = self.settings.ui_language;
         self.settings = candidate;
-        Ok(true)
+        Ok(changed)
     }
 }
 
@@ -894,12 +926,53 @@ fn save_to(path: &Path, settings: &Settings) -> Result<(), ConfigError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::locale::UiLanguage;
 
     fn test_path(name: &str) -> PathBuf {
         std::env::temp_dir().join(format!(
             "jellypilot-settings-{}-{name}.json",
             std::process::id()
         ))
+    }
+
+    #[test]
+    fn generic_mutations_preserve_live_language_and_pending_disk_language() {
+        for changed in [false, true] {
+            let path = test_path(if changed {
+                "language-generic-change"
+            } else {
+                "language-generic-noop"
+            });
+            let live = Settings {
+                ui_language: LanguagePreference::Fixed(UiLanguage::English),
+                theme_mode: ThemeMode::Dark,
+                ..Settings::default()
+            };
+            save_to(&path, &live).unwrap();
+            let mut store = store_at(path.clone(), live);
+            let mut disk = read_from(&path).unwrap();
+            disk.ui_language = LanguagePreference::Fixed(UiLanguage::SimplifiedChinese);
+            disk.app_mode = AppMode::ControlOnly;
+            save_to(&path, &disk).unwrap();
+
+            store
+                .set_theme_mode(if changed {
+                    ThemeMode::Light
+                } else {
+                    ThemeMode::Dark
+                })
+                .unwrap();
+            assert_eq!(
+                store.snapshot().ui_language(),
+                LanguagePreference::Fixed(UiLanguage::English)
+            );
+            assert_eq!(store.snapshot().app_mode(), AppMode::ControlOnly);
+            assert_eq!(
+                read_from(&path).unwrap().ui_language(),
+                LanguagePreference::Fixed(UiLanguage::SimplifiedChinese)
+            );
+            fs::remove_file(path).unwrap();
+        }
     }
 
     fn remembered_settings() -> Settings {
@@ -911,6 +984,7 @@ mod tests {
             auto_login: false,
             intro_mode: IntroMode::Manual,
             theme_mode: ThemeMode::Dark,
+            ui_language: LanguagePreference::System,
             app_mode: AppMode::ControlOnly,
             mpv_path: Some("/usr/bin/mpv".to_owned()),
             mpv_args: vec!["--fullscreen".to_owned(), "--profile=gpu-hq".to_owned()],
@@ -932,6 +1006,140 @@ mod tests {
 
     fn store_at(path: PathBuf, settings: Settings) -> SettingsStore {
         SettingsStore { path, settings }
+    }
+
+    #[test]
+    fn invalid_or_missing_language_recovers_without_losing_other_settings() {
+        let expected = remembered_settings();
+        for invalid in [
+            None,
+            Some(serde_json::json!("zh-Hant")),
+            Some(serde_json::json!(null)),
+            Some(serde_json::json!(17)),
+            Some(serde_json::json!(["en-US"])),
+            Some(serde_json::json!({"language": "en-US"})),
+        ] {
+            let mut value = serde_json::to_value(&expected).unwrap();
+            let object = value.as_object_mut().unwrap();
+            if let Some(invalid) = invalid {
+                object.insert("ui_language".to_owned(), invalid);
+            } else {
+                object.remove("ui_language");
+            }
+            let recovered: Settings = serde_json::from_value(value).unwrap();
+            assert_eq!(recovered, expected);
+        }
+    }
+
+    #[test]
+    fn language_save_preserves_independent_disk_and_live_settings() {
+        let path = test_path("language-isolated-commit");
+        let mut live = remembered_settings();
+        live.app_mode = AppMode::Full;
+        let mut disk = live.clone();
+        disk.app_mode = AppMode::ControlOnly;
+        disk.subtitle_languages = vec!["zho".to_owned()];
+        disk.username = "disk-user".to_owned();
+        save_to(&path, &disk).unwrap();
+        let mut store = store_at(path.clone(), live.clone());
+        let preference = LanguagePreference::Fixed(UiLanguage::SimplifiedChinese);
+
+        assert!(store.set_ui_language(preference).unwrap());
+
+        live.ui_language = preference;
+        disk.ui_language = preference;
+        assert_eq!(store.snapshot(), &live);
+        assert_eq!(load_from(&path).unwrap(), disk);
+        fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn disk_equal_language_commits_live_without_rewriting_settings() {
+        let path = test_path("language-disk-already-selected");
+        let mut live = remembered_settings();
+        let preference = LanguagePreference::Fixed(UiLanguage::English);
+        let mut disk = live.clone();
+        disk.ui_language = preference;
+        disk.subtitle_languages = vec!["fra".to_owned()];
+        save_to(&path, &disk).unwrap();
+        let persisted = fs::read(&path).unwrap();
+        let temporary = temporary_path(&path);
+        fs::create_dir(&temporary).unwrap();
+        let mut store = store_at(path.clone(), live.clone());
+
+        assert!(store.set_ui_language(preference).unwrap());
+        live.ui_language = preference;
+        assert_eq!(store.snapshot(), &live);
+        assert_eq!(fs::read(&path).unwrap(), persisted);
+        assert!(!store.set_ui_language(preference).unwrap());
+        fs::remove_dir(temporary).unwrap();
+        fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn unchanged_live_language_repairs_disk_without_reporting_a_live_change() {
+        let path = test_path("language-live-already-selected");
+        let live = remembered_settings();
+        let mut disk = live.clone();
+        disk.ui_language = LanguagePreference::Fixed(UiLanguage::English);
+        save_to(&path, &disk).unwrap();
+        let mut store = store_at(path.clone(), live.clone());
+
+        assert!(!store.set_ui_language(LanguagePreference::System).unwrap());
+        assert_eq!(load_from(&path).unwrap(), live);
+        fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn failed_language_save_keeps_the_live_snapshot_and_disk_intact() {
+        let path = test_path("language-save-failure");
+        let live = remembered_settings();
+        save_to(&path, &live).unwrap();
+        let temporary = temporary_path(&path);
+        // A staging-path directory forces a write failure even under privileged tests.
+        fs::create_dir(&temporary).unwrap();
+        let mut store = store_at(path.clone(), live.clone());
+
+        let result = store.set_ui_language(LanguagePreference::Fixed(UiLanguage::English));
+
+        assert!(matches!(result, Err(SettingsMutationError::Config(_))));
+        assert_eq!(store.snapshot(), &live);
+        assert_eq!(load_from(&path).unwrap(), live);
+        fs::remove_dir(temporary).unwrap();
+        fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn language_reselection_recreates_a_removed_settings_file() {
+        let path = test_path("language-missing-file");
+        let mut live = remembered_settings();
+        live.ui_language = LanguagePreference::Fixed(UiLanguage::SimplifiedChinese);
+        save_to(&path, &live).unwrap();
+        let mut store = store_at(path.clone(), live.clone());
+        fs::remove_file(&path).unwrap();
+
+        assert!(!store.set_ui_language(live.ui_language).unwrap());
+        assert_eq!(load_from(&path).unwrap(), live);
+        fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn language_save_does_not_replace_unreadable_settings_from_a_stale_snapshot() {
+        let path = test_path("language-invalid-file");
+        let live = remembered_settings();
+        let disk = b"{\"app_mode\":\"control-only\",\"subtitle_languages\":[\"zho\"]";
+        fs::write(&path, disk).unwrap();
+        let mut store = store_at(path.clone(), live.clone());
+
+        let result = store.set_ui_language(LanguagePreference::Fixed(UiLanguage::English));
+
+        assert!(matches!(
+            result,
+            Err(SettingsMutationError::Config(ConfigError::Json(_)))
+        ));
+        assert_eq!(store.snapshot(), &live);
+        assert_eq!(fs::read(&path).unwrap(), disk);
+        fs::remove_file(path).unwrap();
     }
 
     #[test]

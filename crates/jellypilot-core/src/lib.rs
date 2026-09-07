@@ -20,6 +20,7 @@ pub mod diagnostics;
 #[cfg(feature = "native")]
 pub mod home_hero;
 mod load_state;
+pub mod locale;
 #[cfg(feature = "native")]
 pub mod logs;
 pub mod request_gate;

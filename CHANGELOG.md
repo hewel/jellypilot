@@ -4,7 +4,12 @@ All notable changes to JellyPilot are documented in this file.
 
 ## [Unreleased]
 
+### Added
+- Added English, Simplified Chinese, and Follow system interface preferences shared by Login and Settings, with immediate relocalization of screens, retained feedback, and available tray controls without resetting login or playback.
+- Added embedded Fluent resources, localized count/duration grammar, and font license notices in Settings.
+
 ### Changed
+- Replaced bundled Inter/Space Grotesk typography with the original Manrope V5 and MiSans variable fonts, including mixed-script fallback and explicit body/heading weights.
 - Refined the native Sidebar and Account Popover with scoped light/dark surfaces, a separate library-count badge, and segmented tools.
 - Simplified the Account Popover into a quick menu: show the current account once, quiet the address and actions, and move preferences and saved-login removal to a direct Accounts Settings entry.
 - Widened the default Full-mode window from 1600×900 to 1760×900 logical pixels without changing its height, minimum size, or Control-Only sizing.

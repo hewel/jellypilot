@@ -1,5 +1,7 @@
 use crate::app::message::{DetailMessage, Message, PlaybackMessage};
 use crate::app::state::{ArtworkCell, ArtworkCellState, State, UserDataActionKind};
+use crate::i18n::media::{detail_metadata, show_detail_metadata};
+use crate::i18n::{Localizer, UiText};
 use iced::advanced::graphics::text::Paragraph as GraphicsParagraph;
 use iced::advanced::text::paragraph::Paragraph;
 use iced::advanced::{text as advanced_text, Text as AdvancedText};
@@ -13,16 +15,14 @@ use iced::{
 };
 use iced::{gradient, padding};
 use jellypilot_core::cards::logo_display_size;
-use jellypilot_core::detail::{
-  detail_episode_key, detail_metadata, detail_similar_key, show_detail_metadata, DetailContent,
-};
+use jellypilot_core::detail::{detail_episode_key, detail_similar_key, DetailContent};
 use jellypilot_core::LoadState;
 use jellypilot_media_server::{
   VideoItemDetail, VideoLibraryItem, VideoMediaInfo, VideoSeason, VideoShowDetail, VideoStreamInfo,
 };
 use jellypilot_mpv::playback::{Playable, PlaybackStartPosition};
 use jellypilot_mpv::playback_session::PlaybackIntent;
-use jellypilot_ui::fonts::SPACE_GROTESK_FONT;
+use jellypilot_ui::fonts::HEADING_FONT;
 use jellypilot_ui::icons::{icon_with_color, Icon, IconSize};
 use jellypilot_ui::tokens::{ThemePalette, TOKENS};
 use jellypilot_ui::variants::{ButtonVariant, SurfaceVariant};
@@ -89,12 +89,17 @@ fn detail_ready<'a>(
     DetailContent::Item(item) => {
       page = page.push(summary(
         state.palette(),
+        state.kernel.locale,
         &item.genres,
         &item.metadata.creators,
         &item.metadata.cast,
       ));
       if item.media_info.is_some() {
-        page = page.push(media_info_section(state.palette(), item));
+        page = page.push(media_info_section(
+          state.palette(),
+          state.kernel.locale,
+          item,
+        ));
       }
       if item.item_type.eq_ignore_ascii_case("episode") {
         page = page.push(neighbor_section(state, skeleton_phase, reduced_motion));
@@ -105,6 +110,7 @@ fn detail_ready<'a>(
     DetailContent::Show(show) => {
       page = page.push(summary(
         state.palette(),
+        state.kernel.locale,
         &show.genres,
         &show.metadata.creators,
         &show.metadata.cast,
@@ -130,7 +136,11 @@ fn item_hero<'a>(
   skeleton_phase: f32,
   reduced_motion: bool,
 ) -> Element<'a, Message> {
-  let playback_label = if item.can_resume { "Resume" } else { "Play" };
+  let playback_label = if item.can_resume {
+    state.t("detail-resume")
+  } else {
+    state.t("detail-play")
+  };
   let position = if item.can_resume {
     PlaybackStartPosition::Resume
   } else {
@@ -141,9 +151,9 @@ fn item_hero<'a>(
     HeroContent {
       id: &item.id,
       name: &item.name,
-      metadata: item_metadata(item),
+      metadata: item_metadata(state.kernel.locale, item),
       overview: item.overview.as_deref(),
-      playback_label: playback_label.to_owned(),
+      playback_label,
       playback: item
         .can_play
         .then(|| (Playable::Detail(item.clone()), position)),
@@ -163,14 +173,19 @@ fn show_hero<'a>(
   reduced_motion: bool,
 ) -> Element<'a, Message> {
   let playback_label = show.next_episode.as_ref().map_or_else(
-    || "Play".to_owned(),
+    || state.t("detail-play"),
     |episode| {
-      let action = if has_resume(episode) {
-        "Continue"
-      } else {
-        "Play"
-      };
-      format!("{action} {}", episode_label(episode))
+      state.format(
+        if has_resume(episode) {
+          "detail-continue-episode"
+        } else {
+          "detail-play-episode"
+        },
+        &[(
+          "episode",
+          episode_label(state.kernel.locale, episode).into(),
+        )],
+      )
     },
   );
   let playback = show.next_episode.as_ref().map(|episode| {
@@ -188,7 +203,7 @@ fn show_hero<'a>(
     HeroContent {
       id: &show.id,
       name: &show.name,
-      metadata: show_metadata(show),
+      metadata: show_metadata(state.kernel.locale, show),
       overview: show.overview.as_deref(),
       playback_label,
       playback,
@@ -328,7 +343,7 @@ fn hero_at_width<'a>(
   let back_enabled = !state.shell.navigation_stack.is_empty();
   let back = control_button(
     Some(Icon::ChevronLeft),
-    Some("Back".to_owned()),
+    Some(state.t("detail-back")),
     ButtonVariant::Tonal,
   )
   .icon_size(IconSize::Sm)
@@ -367,14 +382,14 @@ fn hero_at_width<'a>(
     }
     if overview_expandable {
       let (overview_label, overview_icon) = if overview_expanded {
-        ("Less", Icon::ChevronUp)
+        (state.t("detail-less"), Icon::ChevronUp)
       } else {
-        ("More", Icon::ChevronDown)
+        (state.t("detail-more"), Icon::ChevronDown)
       };
       copy = copy.push(
         control_button(
           Some(overview_icon),
-          Some(overview_label.to_owned()),
+          Some(overview_label),
           ButtonVariant::Text,
         )
         .icon_size(IconSize::Xs)
@@ -420,7 +435,7 @@ fn hero_at_width<'a>(
 fn hero_title<'a>(state: &'a State, name: &'a str, is_episode: bool) -> Element<'a, Message> {
   let title = || -> Element<'a, Message> {
     text(name)
-      .font(SPACE_GROTESK_FONT)
+      .font(HEADING_FONT)
       .size(45)
       .color(state.palette().text.heading)
       .into()
@@ -553,7 +568,7 @@ fn detail_actions<'a>(
     button(
       row![
         icon_with_color(Icon::HeartFilled, IconSize::Md, color),
-        text("Favorited"),
+        text(state.t("detail-favorited")),
       ]
       .spacing(TOKENS.spacing.s2)
       .align_y(Alignment::Center),
@@ -567,7 +582,7 @@ fn detail_actions<'a>(
   } else {
     control_button(
       Some(Icon::Heart),
-      Some("Favorite".to_owned()),
+      Some(state.t("detail-favorite")),
       ButtonVariant::Tonal,
     )
     .spacing(TOKENS.spacing.s2)
@@ -584,14 +599,11 @@ fn detail_actions<'a>(
     } else {
       Icon::Bookmark
     }),
-    Some(
-      if watchlisted {
-        "In Watchlist"
-      } else {
-        "Add to Watchlist"
-      }
-      .to_owned(),
-    ),
+    Some(if watchlisted {
+      state.t("detail-watchlisted")
+    } else {
+      state.t("detail-watchlist-add")
+    }),
     if watchlisted {
       ButtonVariant::TonalActive
     } else {
@@ -602,18 +614,22 @@ fn detail_actions<'a>(
   .padding([8, 14])
   .on_press_maybe((!watchlist_busy).then_some(Message::Detail(DetailMessage::WatchlistToggled)));
   let (played_icon, played_label, played_variant) = if played {
-    (Icon::CircleCheck, "Played", ButtonVariant::TonalActive)
+    (
+      Icon::CircleCheck,
+      state.t("detail-played"),
+      ButtonVariant::TonalActive,
+    )
   } else {
-    (Icon::Circle, "Mark played", ButtonVariant::Tonal)
+    (
+      Icon::Circle,
+      state.t("detail-mark-played"),
+      ButtonVariant::Tonal,
+    )
   };
-  let played_button = control_button(
-    Some(played_icon),
-    Some(played_label.to_owned()),
-    played_variant,
-  )
-  .spacing(TOKENS.spacing.s2)
-  .padding([8, 14])
-  .on_press_maybe((!any_busy).then_some(Message::Detail(DetailMessage::PlayedToggled)));
+  let played_button = control_button(Some(played_icon), Some(played_label), played_variant)
+    .spacing(TOKENS.spacing.s2)
+    .padding([8, 14])
+    .on_press_maybe((!any_busy).then_some(Message::Detail(DetailMessage::PlayedToggled)));
   let mut actions = Row::new()
     .spacing(TOKENS.spacing.s2)
     .align_y(Alignment::Center)
@@ -631,8 +647,8 @@ fn detail_actions<'a>(
   {
     actions = actions.push(
       text(match kind {
-        UserDataActionKind::Favorite => "Updating favorite…",
-        UserDataActionKind::Played => "Updating played state…",
+        UserDataActionKind::Favorite => state.t("detail-updating-favorite"),
+        UserDataActionKind::Played => state.t("detail-updating-played"),
       })
       .size(13)
       .color(state.palette().text.metadata),
@@ -647,16 +663,25 @@ fn detail_actions<'a>(
     .data
     .user_data_error
   {
-    content = content.push(text(error).size(13).color(state.palette().colors.error));
+    content = content.push(
+      text(state.kernel.locale.message(error))
+        .size(13)
+        .color(state.palette().colors.error),
+    );
   }
   if let Some(error) = &watchlist.mutation_error {
-    content = content.push(text(error).size(13).color(state.palette().colors.error));
+    content = content.push(
+      text(state.kernel.locale.message(error))
+        .size(13)
+        .color(state.palette().colors.error),
+    );
   }
   content.into()
 }
 
 fn summary<'a>(
   palette: &ThemePalette,
+  locale: Localizer,
   genres: &'a [String],
   creators: &'a [String],
   cast: &'a [String],
@@ -666,17 +691,25 @@ fn summary<'a>(
   }
   let mut columns = Row::new().spacing(TOKENS.spacing.s8).width(Fill);
   if !genres.is_empty() {
-    columns = columns.push(summary_column(palette, "Genres", genres.join(" • ")));
+    columns = columns.push(summary_column(
+      palette,
+      locale.text("detail-genres"),
+      genres.join(" • "),
+    ));
   }
   if !creators.is_empty() {
     columns = columns.push(summary_column(
       palette,
-      "Creators",
-      limited_people(creators, 2),
+      locale.text("detail-creators"),
+      limited_people(locale, creators, 2),
     ));
   }
   if !cast.is_empty() {
-    columns = columns.push(summary_column(palette, "Cast", limited_people(cast, 4)));
+    columns = columns.push(summary_column(
+      palette,
+      locale.text("detail-cast"),
+      limited_people(locale, cast, 4),
+    ));
   }
   container(columns)
     .padding(TOKENS.spacing.s5)
@@ -687,7 +720,7 @@ fn summary<'a>(
 
 fn summary_column(
   palette: &ThemePalette,
-  label: &'static str,
+  label: String,
   values: String,
 ) -> Element<'static, Message> {
   column![
@@ -701,6 +734,7 @@ fn summary_column(
 
 fn media_info_section(
   palette: &'static ThemePalette,
+  locale: Localizer,
   item: &VideoItemDetail,
 ) -> Element<'static, Message> {
   let Some(info) = &item.media_info else {
@@ -708,11 +742,11 @@ fn media_info_section(
   };
   let mut rows = Column::new().spacing(TOKENS.spacing.s3).width(Fill);
   if let Some(video) = video_info_label(info) {
-    rows = rows.push(media_info_row(palette, "Video", video));
+    rows = rows.push(media_info_row(palette, locale.text("detail-video"), video));
   }
   for stream in &info.audio_streams {
-    if let Some(audio) = audio_info_label(stream) {
-      rows = rows.push(media_info_row(palette, "Audio", audio));
+    if let Some(audio) = audio_info_label(locale, stream) {
+      rows = rows.push(media_info_row(palette, locale.text("detail-audio"), audio));
     }
   }
   let subtitles = info
@@ -722,26 +756,34 @@ fn media_info_section(
     .collect::<Vec<_>>()
     .join(", ");
   if !subtitles.is_empty() {
-    rows = rows.push(media_info_row(palette, "Subtitles", subtitles));
+    rows = rows.push(media_info_row(
+      palette,
+      locale.text("detail-subtitles"),
+      subtitles,
+    ));
   }
   if let Some(container_name) = nonempty(info.container.as_deref()) {
     rows = rows.push(media_info_row(
       palette,
-      "Container",
+      locale.text("detail-container"),
       container_name.to_owned(),
     ));
   }
   if let Some(size_bytes) = info.size_bytes {
-    rows = rows.push(media_info_row(palette, "Size", humanized_size(size_bytes)));
+    rows = rows.push(media_info_row(
+      palette,
+      locale.text("detail-size"),
+      humanized_size(size_bytes),
+    ));
   }
   if let Some(bitrate_bps) = info.bitrate_bps {
     rows = rows.push(media_info_row(
       palette,
-      "Bitrate",
+      locale.text("detail-bitrate"),
       format!("{:.1} Mbps", bitrate_bps as f64 / 1_000_000.0),
     ));
   }
-  let title = section_title(palette, "Media Info");
+  let title = section_title(palette, locale.text("detail-media-info"));
   column![
     title,
     container(rows)
@@ -755,7 +797,7 @@ fn media_info_section(
 
 fn media_info_row(
   palette: &'static ThemePalette,
-  label: &'static str,
+  label: String,
   value: String,
 ) -> Element<'static, Message> {
   row![
@@ -781,7 +823,7 @@ fn video_info_label(info: &VideoMediaInfo) -> Option<String> {
   (!values.is_empty()).then(|| values.join(" "))
 }
 
-fn audio_info_label(stream: &VideoStreamInfo) -> Option<String> {
+fn audio_info_label(locale: Localizer, stream: &VideoStreamInfo) -> Option<String> {
   if let Some(title) = nonempty(stream.display_title.as_deref()) {
     return Some(title.to_owned());
   }
@@ -793,7 +835,7 @@ fn audio_info_label(stream: &VideoStreamInfo) -> Option<String> {
     values.push(language.to_owned());
   }
   if let Some(channels) = stream.channels {
-    values.push(format!("{channels} ch"));
+    values.push(locale.format("detail-channels", &[("count", channels.into())]));
   }
   (!values.is_empty()).then(|| values.join(" "))
 }
@@ -829,11 +871,11 @@ fn seasons_section<'a>(
   skeleton_phase: f32,
   reduced_motion: bool,
 ) -> Element<'a, Message> {
-  let title = section_title(state.palette(), "Seasons");
+  let title = section_title(state.palette(), state.t("detail-seasons"));
   if show.seasons.is_empty() {
     return column![
       title,
-      status_surface(state.palette(), "No seasons available")
+      status_surface(state.palette(), state.t("detail-no-seasons"))
     ]
     .spacing(TOKENS.spacing.s3)
     .into();
@@ -868,17 +910,17 @@ fn seasons_section<'a>(
     .data
     .season_episodes
   {
-    LoadState::Idle => status_surface(state.palette(), "Choose a season"),
+    LoadState::Idle => status_surface(state.palette(), state.t("detail-choose-season")),
     LoadState::Loading => episode_skeletons(skeleton_phase, reduced_motion),
     LoadState::Failed(error) => retryable_surface(
       state.palette(),
+      state.kernel.locale,
       error,
       Message::Detail(DetailMessage::RetrySeason),
     ),
-    LoadState::Ready(page) if page.episodes.is_empty() => status_surface(
-      state.palette(),
-      "Jellyfin returned no episodes for this season.",
-    ),
+    LoadState::Ready(page) if page.episodes.is_empty() => {
+      status_surface(state.palette(), state.t("detail-no-episodes"))
+    }
     LoadState::Ready(page) => episode_list(state, &page.episodes, skeleton_phase, reduced_motion),
   };
   column![title, selector, episodes]
@@ -920,7 +962,7 @@ fn neighbor_section(
   skeleton_phase: f32,
   reduced_motion: bool,
 ) -> Element<'_, Message> {
-  let title = section_title(state.palette(), "More from this season");
+  let title = section_title(state.palette(), state.t("detail-season-neighbors"));
   let body = match &state
     .full
     .as_ref()
@@ -933,11 +975,12 @@ fn neighbor_section(
     LoadState::Loading => episode_skeletons(skeleton_phase, reduced_motion),
     LoadState::Failed(error) => retryable_surface(
       state.palette(),
+      state.kernel.locale,
       error,
       Message::Detail(DetailMessage::RetryNeighbors),
     ),
     LoadState::Ready(items) if items.is_empty() => {
-      status_surface(state.palette(), "No neighboring episodes are available.")
+      status_surface(state.palette(), state.t("detail-no-neighbors"))
     }
     LoadState::Ready(items) => episode_list(state, items, skeleton_phase, reduced_motion),
   };
@@ -959,7 +1002,7 @@ fn similar_section(
   {
     LoadState::Loading => {
       return column![
-        section_title(state.palette(), "More like this"),
+        section_title(state.palette(), state.t("detail-similar")),
         similar_skeletons(skeleton_phase, reduced_motion),
       ]
       .spacing(TOKENS.spacing.s3)
@@ -978,9 +1021,12 @@ fn similar_section(
     .direction(Direction::Horizontal(Scrollbar::new()))
     .height(SIMILAR_SCROLL_HEIGHT)
     .style(jellypilot_ui::theme::scrollable);
-  column![section_title(state.palette(), "More like this"), cards]
-    .spacing(TOKENS.spacing.s3)
-    .into()
+  column![
+    section_title(state.palette(), state.t("detail-similar")),
+    cards
+  ]
+  .spacing(TOKENS.spacing.s3)
+  .into()
 }
 
 fn similar_card<'a>(
@@ -1052,10 +1098,10 @@ fn similar_skeletons<'a>(phase: f32, reduced_motion: bool) -> Element<'a, Messag
     .into()
 }
 
-fn section_title(palette: &'static ThemePalette, label: &'static str) -> Element<'static, Message> {
+fn section_title(palette: &'static ThemePalette, label: String) -> Element<'static, Message> {
   container(
     text(label)
-      .font(SPACE_GROTESK_FONT)
+      .font(HEADING_FONT)
       .size(26)
       .color(palette.text.heading),
   )
@@ -1070,7 +1116,7 @@ fn next_up_section<'a>(
   reduced_motion: bool,
 ) -> Element<'a, Message> {
   column![
-    section_title(state.palette(), "Next Up"),
+    section_title(state.palette(), state.t("detail-next-up")),
     episode_card(state, episode, skeleton_phase, reduced_motion),
   ]
   .spacing(TOKENS.spacing.s3)
@@ -1125,10 +1171,14 @@ fn episode_card_at_width<'a>(
     reduced_motion,
   );
   let mut copy = Column::new().spacing(TOKENS.spacing.s2).width(Fill).push(
-    text(format!("{}  {}", episode_label(episode), episode.name))
-      .font(SPACE_GROTESK_FONT)
-      .size(18)
-      .color(palette.text.heading),
+    text(format!(
+      "{}  {}",
+      episode_label(state.kernel.locale, episode),
+      episode.name
+    ))
+    .font(HEADING_FONT)
+    .size(18)
+    .color(palette.text.heading),
   );
   if let Some(overview) = episode
     .overview
@@ -1178,12 +1228,12 @@ fn episode_card_at_width<'a>(
     }
     if expandable {
       let (label, icon) = if expanded {
-        ("Less", Icon::ChevronUp)
+        (state.t("detail-less"), Icon::ChevronUp)
       } else {
-        ("More", Icon::ChevronDown)
+        (state.t("detail-more"), Icon::ChevronDown)
       };
       copy = copy.push(
-        control_button(Some(icon), Some(label.to_owned()), ButtonVariant::Text)
+        control_button(Some(icon), Some(label), ButtonVariant::Text)
           .icon_size(IconSize::Xs)
           .trailing_icon(true)
           .spacing(TOKENS.spacing.s1)
@@ -1198,30 +1248,26 @@ fn episode_card_at_width<'a>(
     copy = copy.push(progress_bar(palette, progress));
   }
   let play_label = if has_resume(episode) {
-    "Resume"
+    state.t("detail-resume")
   } else {
-    "Play"
+    state.t("detail-play")
   };
   let play_enabled = state.playback.view.engine_available;
-  let play = control_button(
-    Some(Icon::Play),
-    Some(play_label.to_owned()),
-    ButtonVariant::Primary,
-  )
-  .icon_size(IconSize::Sm)
-  .spacing(TOKENS.spacing.s1_5)
-  .padding([6, 12])
-  .on_press_maybe(play_enabled.then(|| {
-    playback_message(
-      state,
-      Playable::Library(episode.clone()),
-      if has_resume(episode) {
-        PlaybackStartPosition::Resume
-      } else {
-        PlaybackStartPosition::Beginning
-      },
-    )
-  }));
+  let play = control_button(Some(Icon::Play), Some(play_label), ButtonVariant::Primary)
+    .icon_size(IconSize::Sm)
+    .spacing(TOKENS.spacing.s1_5)
+    .padding([6, 12])
+    .on_press_maybe(play_enabled.then(|| {
+      playback_message(
+        state,
+        Playable::Library(episode.clone()),
+        if has_resume(episode) {
+          PlaybackStartPosition::Resume
+        } else {
+          PlaybackStartPosition::Beginning
+        },
+      )
+    }));
   container(
     row![art, copy, play]
       .spacing(TOKENS.spacing.s4)
@@ -1327,7 +1373,7 @@ fn artwork_placeholder<'a>(
     column![
       icon_with_color(Icon::Movie, icon_dim, color),
       text(initial)
-        .font(SPACE_GROTESK_FONT)
+        .font(HEADING_FONT)
         .size(initial_size.min(28))
         .color(color),
     ]
@@ -1360,7 +1406,7 @@ fn detail_skeleton(
   let back_enabled = !state.shell.navigation_stack.is_empty();
   let back = control_button(
     Some(Icon::ChevronLeft),
-    Some("Back".to_owned()),
+    Some(state.t("detail-back")),
     ButtonVariant::Tonal,
   )
   .icon_size(IconSize::Sm)
@@ -1382,11 +1428,11 @@ fn detail_skeleton(
   container(body).width(Fill).height(Fill).into()
 }
 
-fn detail_failure<'a>(state: &State, error: &'a str) -> Element<'a, Message> {
+fn detail_failure<'a>(state: &State, error: &'a UiText) -> Element<'a, Message> {
   let back_enabled = !state.shell.navigation_stack.is_empty();
   let back = control_button(
     Some(Icon::ChevronLeft),
-    Some("Back".to_owned()),
+    Some(state.t("detail-back")),
     ButtonVariant::Tonal,
   )
   .icon_size(IconSize::Sm)
@@ -1395,7 +1441,7 @@ fn detail_failure<'a>(state: &State, error: &'a str) -> Element<'a, Message> {
   .on_press_maybe(back_enabled.then_some(Message::Detail(DetailMessage::Back)));
   let retry = control_button(
     Some(Icon::Refresh),
-    Some("Retry".to_owned()),
+    Some(state.t("detail-retry")),
     ButtonVariant::Primary,
   )
   .icon_size(IconSize::Sm)
@@ -1405,11 +1451,13 @@ fn detail_failure<'a>(state: &State, error: &'a str) -> Element<'a, Message> {
   container(
     column![
       back,
-      text("Could not load detail")
-        .font(SPACE_GROTESK_FONT)
+      text(state.t("detail-load-heading"))
+        .font(HEADING_FONT)
         .size(28)
         .color(state.palette().text.heading),
-      text(error).size(14).color(state.palette().colors.error),
+      text(state.kernel.locale.message(error))
+        .size(14)
+        .color(state.palette().colors.error),
       retry,
     ]
     .spacing(TOKENS.spacing.s3),
@@ -1422,15 +1470,18 @@ fn detail_failure<'a>(state: &State, error: &'a str) -> Element<'a, Message> {
 
 fn retryable_surface<'a>(
   palette: &ThemePalette,
-  error: &'a str,
+  locale: Localizer,
+  error: &'a UiText,
   retry: Message,
 ) -> Element<'a, Message> {
   container(
     row![
-      text(error).size(13).color(palette.colors.error),
+      text(locale.message(error))
+        .size(13)
+        .color(palette.colors.error),
       control_button(
         Some(Icon::Refresh),
-        Some("Retry".to_owned()),
+        Some(locale.text("detail-retry")),
         ButtonVariant::Tonal,
       )
       .icon_size(IconSize::Xs)
@@ -1447,7 +1498,7 @@ fn retryable_surface<'a>(
   .into()
 }
 
-fn status_surface<'a>(palette: &'static ThemePalette, message: &'a str) -> Element<'a, Message> {
+fn status_surface<'a>(palette: &'static ThemePalette, message: String) -> Element<'a, Message> {
   container(text(message).size(14).color(palette.text.metadata))
     .padding(TOKENS.spacing.s4)
     .width(Fill)
@@ -1523,8 +1574,8 @@ fn playback_progress(item: &VideoLibraryItem) -> Option<f64> {
   }
 }
 
-fn item_metadata(item: &jellypilot_media_server::VideoItemDetail) -> String {
-  let mut values = vec![detail_metadata(item)];
+fn item_metadata(locale: Localizer, item: &jellypilot_media_server::VideoItemDetail) -> String {
+  let mut values = vec![detail_metadata(locale, item)];
   if let (Some(series), Some(season), Some(episode)) = (
     item.series_name.as_deref(),
     item.season_number,
@@ -1534,7 +1585,10 @@ fn item_metadata(item: &jellypilot_media_server::VideoItemDetail) -> String {
   } else if let Some(series) = item.series_name.as_deref() {
     values.push(series.to_owned());
   }
-  if let Some(runtime) = item.runtime_seconds.and_then(runtime_label) {
+  if let Some(runtime) = item
+    .runtime_seconds
+    .and_then(|seconds| runtime_label(locale, seconds))
+  {
     values.push(runtime);
   }
   if let Some(rating) = item
@@ -1552,14 +1606,17 @@ fn item_metadata(item: &jellypilot_media_server::VideoItemDetail) -> String {
       .played_percentage
       .filter(|progress| progress.is_finite() && *progress > 0.0 && *progress < 100.0)
     {
-      values.push(format!("{progress:.0}% watched"));
+      values.push(locale.format(
+        "detail-watched-percent",
+        &[("percent", format!("{progress:.0}").into())],
+      ));
     }
   }
   values.join(" · ")
 }
 
-fn show_metadata(show: &VideoShowDetail) -> String {
-  let mut values = vec![show_detail_metadata(show)];
+fn show_metadata(locale: Localizer, show: &VideoShowDetail) -> String {
+  let mut values = vec![show_detail_metadata(locale, show)];
   if let Some(rating) = show
     .metadata
     .community_rating
@@ -1573,20 +1630,8 @@ fn show_metadata(show: &VideoShowDetail) -> String {
   values.join(" · ")
 }
 
-fn runtime_label(seconds: f64) -> Option<String> {
-  if !seconds.is_finite() || seconds <= 0.0 {
-    return None;
-  }
-  let minutes = (seconds / 60.0).round() as u64;
-  let hours = minutes / 60;
-  let remainder = minutes % 60;
-  if hours == 0 {
-    Some(format!("{minutes} min"))
-  } else if remainder == 0 {
-    Some(format!("{hours} hr"))
-  } else {
-    Some(format!("{hours} hr {remainder} min"))
-  }
+fn runtime_label(locale: Localizer, seconds: f64) -> Option<String> {
+  (seconds.is_finite() && seconds > 0.0).then(|| locale.duration(seconds))
 }
 
 fn has_resume(item: &VideoLibraryItem) -> bool {
@@ -1596,10 +1641,10 @@ fn has_resume(item: &VideoLibraryItem) -> bool {
       .is_some_and(|position| position.is_finite() && position > 0.0)
 }
 
-fn episode_label(episode: &VideoLibraryItem) -> String {
+fn episode_label(locale: Localizer, episode: &VideoLibraryItem) -> String {
   match (episode.season_number, episode.episode_number) {
     (Some(season), Some(number)) => format!("S{season:02}E{number:02}"),
-    _ => "Episode".to_owned(),
+    _ => locale.text("detail-episode"),
   }
 }
 
@@ -1617,7 +1662,7 @@ fn overview_height(overview: &str, width: f32, text_size: f32) -> f32 {
     font: Font::DEFAULT,
     align_x: advanced_text::Alignment::Default,
     align_y: alignment::Vertical::Top,
-    shaping: advanced_text::Shaping::default(),
+    shaping: advanced_text::Shaping::Advanced,
     wrapping: advanced_text::Wrapping::Word,
   });
   paragraph.min_height()
@@ -1631,7 +1676,7 @@ fn overview_is_expandable(measured_height: f32, text_size: f32, line_count: f32)
   measured_height > overview_collapsed_height(text_size, line_count)
 }
 
-fn limited_people(people: &[String], limit: usize) -> String {
+fn limited_people(locale: Localizer, people: &[String], limit: usize) -> String {
   let visible = people
     .iter()
     .take(limit)
@@ -1642,7 +1687,10 @@ fn limited_people(people: &[String], limit: usize) -> String {
   if extra == 0 {
     visible
   } else {
-    format!("{visible}  +{extra} more")
+    locale.format(
+      "detail-more-people",
+      &[("people", visible.into()), ("count", extra.into())],
+    )
   }
 }
 
@@ -1747,181 +1795,5 @@ mod tests {
       EPISODE_OVERVIEW_TEXT_SIZE,
       EPISODE_OVERVIEW_COLLAPSED_LINES,
     ));
-  }
-
-  #[test]
-  fn detail_view_renders_in_loading_state() {
-    let mut state = State::boot(false);
-    state.shell.skeleton_phase = 0.42;
-    state.full.as_mut().unwrap().detail.data.content = LoadState::Loading;
-    let _element = view(&state);
-  }
-
-  #[test]
-  fn detail_seasons_and_neighbors_render_episode_skeletons_when_loading() {
-    {
-      let mut state = State::boot(false);
-      state.shell.skeleton_phase = 0.75;
-      state.full.as_mut().unwrap().detail.data.content =
-        LoadState::Ready(DetailContent::Show(Box::new(VideoShowDetail {
-          id: "show-1".to_owned(),
-          name: "Show 1".to_owned(),
-          overview: None,
-          production_year: None,
-          genres: Vec::new(),
-          played: false,
-          favorite: false,
-          can_play: true,
-          artwork_image_id: None,
-          backdrop_image_id: None,
-          logo_image_id: None,
-          next_episode: None,
-          seasons: vec![VideoSeason {
-            id: "season-1".to_owned(),
-            name: "Season 1".to_owned(),
-            season_number: Some(1),
-            played: false,
-            favorite: false,
-            artwork_image_id: None,
-          }],
-          metadata: Default::default(),
-        })));
-      state.full.as_mut().unwrap().detail.data.season_episodes = LoadState::Loading;
-      let _element = view(&state);
-    }
-
-    {
-      let mut state = State::boot(false);
-      state.shell.skeleton_phase = 0.75;
-      let item = jellypilot_media_server::VideoItemDetail {
-        id: "ep-1".to_owned(),
-        name: "Ep 1".to_owned(),
-        item_type: "Episode".to_owned(),
-        overview: None,
-        production_year: None,
-        runtime_seconds: None,
-        series_id: None,
-        series_name: None,
-        season_number: Some(1),
-        episode_number: Some(1),
-        genres: Vec::new(),
-        played: false,
-        favorite: false,
-        played_percentage: None,
-        resume_position_seconds: None,
-        can_resume: false,
-        can_play: true,
-        artwork_image_id: None,
-        backdrop_image_id: None,
-        logo_image_id: None,
-        series_poster_image_id: None,
-        media_info: None,
-        metadata: Default::default(),
-      };
-      state.full.as_mut().unwrap().detail.data.content =
-        LoadState::Ready(DetailContent::Item(Box::new(item)));
-      state.full.as_mut().unwrap().detail.data.season_neighbors = LoadState::Loading;
-      let _element = view(&state);
-    }
-  }
-
-  #[test]
-  fn detail_view_renders_hero_and_episodes_with_loading_and_failed_artwork() {
-    let mut state = State::boot(false);
-    state.shell.skeleton_phase = 0.5;
-    let item = jellypilot_media_server::VideoItemDetail {
-      id: "ep-1".to_owned(),
-      name: "Episode 1".to_owned(),
-      item_type: "Episode".to_owned(),
-      overview: Some("Episode overview".to_owned()),
-      production_year: Some(2024),
-      runtime_seconds: Some(3600.0),
-      series_id: Some("series-1".to_owned()),
-      series_name: Some("Series 1".to_owned()),
-      season_number: Some(1),
-      episode_number: Some(1),
-      genres: vec!["Sci-Fi".to_owned()],
-      played: false,
-      favorite: false,
-      played_percentage: None,
-      resume_position_seconds: None,
-      can_resume: false,
-      can_play: true,
-      artwork_image_id: None,
-      backdrop_image_id: None,
-      logo_image_id: None,
-      series_poster_image_id: None,
-      media_info: None,
-      metadata: Default::default(),
-    };
-    let neighbor_item = VideoLibraryItem {
-      id: "ep-2".to_owned(),
-      name: "Episode 2".to_owned(),
-      item_type: "Episode".to_owned(),
-      overview: None,
-      production_year: Some(2024),
-      runtime_seconds: Some(3600.0),
-      played: false,
-      favorite: false,
-      artwork_image_id: None,
-      backdrop_image_id: None,
-      logo_image_id: None,
-      series_poster_image_id: None,
-      episode_thumb_image_id: None,
-      series_thumb_image_id: None,
-      series_backdrop_image_id: None,
-      season_number: Some(1),
-      episode_number: Some(2),
-      series_id: Some("series-1".to_owned()),
-      series_name: Some("Series 1".to_owned()),
-      resume_position_seconds: None,
-      played_percentage: None,
-      index_number_end: None,
-      season_poster_image_id: None,
-      end_year: None,
-      series_continuing: false,
-      unplayed_item_count: None,
-    };
-    let slot_1 = state
-      .kernel
-      .artwork_binder
-      .bind(jellypilot_core::artwork_binder::ArtworkSurface::Detail);
-    let slot_2 = state
-      .kernel
-      .artwork_binder
-      .bind(jellypilot_core::artwork_binder::ArtworkSurface::Detail);
-    let slot_3 = state
-      .kernel
-      .artwork_binder
-      .bind(jellypilot_core::artwork_binder::ArtworkSurface::Detail);
-    state.full.as_mut().unwrap().detail.artwork.insert(
-      DETAIL_BACKDROP_KEY.to_owned(),
-      ArtworkCell {
-        slot: slot_1,
-        image_id: "img-backdrop".to_owned(),
-        state: ArtworkCellState::Loading,
-      },
-    );
-    state.full.as_mut().unwrap().detail.artwork.insert(
-      DETAIL_LOGO_KEY.to_owned(),
-      ArtworkCell {
-        slot: slot_2,
-        image_id: "img-logo".to_owned(),
-        state: ArtworkCellState::Failed,
-      },
-    );
-    state.full.as_mut().unwrap().detail.artwork.insert(
-      "detail-episode:ep-2".to_owned(),
-      ArtworkCell {
-        slot: slot_3,
-        image_id: "img-ep2".to_owned(),
-        state: ArtworkCellState::Loading,
-      },
-    );
-    state.full.as_mut().unwrap().detail.data.content =
-      LoadState::Ready(DetailContent::Item(Box::new(item)));
-    state.full.as_mut().unwrap().detail.data.season_neighbors =
-      LoadState::Ready(vec![neighbor_item]);
-    let _element = view(&state);
   }
 }

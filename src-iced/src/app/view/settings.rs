@@ -2,8 +2,9 @@ use iced::widget::{column, container, row, scrollable, space, text, text_input, 
 use iced::{Alignment, Element, Fill, Length};
 use jellypilot_core::config::{AppMode, IntroMode, ShortcutKind, ThemeMode};
 use jellypilot_core::diagnostics::{format_diagnostic_time, DiagnosticCategory, DiagnosticLevel};
+use jellypilot_core::locale::{LanguagePreference, UiLanguage};
 use jellypilot_core::settings::SUBTITLE_LANGUAGE_OPTIONS;
-use jellypilot_ui::fonts::SPACE_GROTESK_FONT;
+use jellypilot_ui::fonts::{FONT_ATTRIBUTIONS, FONT_LICENSES, HEADING_FONT};
 use jellypilot_ui::icons::{icon_with_color, Icon, IconSize};
 use jellypilot_ui::layout::SizeClass;
 use jellypilot_ui::overlay::{popover, tooltip, PopoverOptions, TooltipOptions};
@@ -16,6 +17,7 @@ use super::account;
 use crate::app::message::{Message, SettingsMessage};
 use crate::app::shell::SETTINGS_INITIAL_FOCUS_ID;
 use crate::app::state::{diagnostic_matches, SettingsSection, State};
+use crate::i18n::Localizer;
 
 pub fn view(state: &State) -> Element<'_, Message> {
   let active = state.settings.view.active_section;
@@ -25,7 +27,7 @@ pub fn view(state: &State) -> Element<'_, Message> {
   let show_two_columns = state.app_mode() == AppMode::Full && class != SizeClass::Compact;
 
   if show_two_columns {
-    let navigation = settings_navigation(active);
+    let navigation = settings_navigation(active, state.kernel.locale);
     let content = scrollable(
       column![feedback, selected]
         .spacing(TOKENS.spacing.s4)
@@ -49,11 +51,15 @@ pub fn view(state: &State) -> Element<'_, Message> {
     .into();
   }
 
-  let mut content = column![feedback, settings_navigation(active), selected,]
-    .spacing(TOKENS.spacing.s4)
-    .width(Fill);
+  let mut content = column![
+    feedback,
+    settings_navigation(active, state.kernel.locale),
+    selected,
+  ]
+  .spacing(TOKENS.spacing.s4)
+  .width(Fill);
   if state.app_mode() == AppMode::ControlOnly {
-    content = column![back_to_now_playing(), content]
+    content = column![back_to_now_playing(state.kernel.locale), content]
       .spacing(TOKENS.spacing.s2)
       .width(Fill);
   }
@@ -73,16 +79,14 @@ fn selected_section<'a>(state: &'a State, section: SettingsSection) -> Element<'
     SettingsSection::Shortcuts => shortcuts_section(state),
     SettingsSection::Appearance => interface_section(state),
     SettingsSection::Storage => cache_section(state),
-    SettingsSection::Diagnostics => {
-      column![diagnostics_section(state), about_section(state.palette())]
-        .spacing(TOKENS.spacing.s4)
-        .width(Fill)
-        .into()
-    }
+    SettingsSection::Diagnostics => column![diagnostics_section(state), about_section(state)]
+      .spacing(TOKENS.spacing.s4)
+      .width(Fill)
+      .into(),
   }
 }
 
-fn settings_navigation(active: SettingsSection) -> Column<'static, Message> {
+fn settings_navigation(active: SettingsSection, locale: Localizer) -> Column<'static, Message> {
   let mut navigation = Column::new().spacing(TOKENS.spacing.s1_5).width(Fill);
   for section in SettingsSection::ALL {
     let variant = if section == active {
@@ -92,7 +96,7 @@ fn settings_navigation(active: SettingsSection) -> Column<'static, Message> {
     };
     let button = control_button(
       Some(settings_icon(section)),
-      Some(section.label().to_owned()),
+      Some(section.label(locale)),
       variant,
     )
     .icon_size(IconSize::Sm)
@@ -124,10 +128,10 @@ const fn settings_icon(section: SettingsSection) -> Icon {
   }
 }
 
-fn back_to_now_playing<'a>() -> Element<'a, Message> {
+fn back_to_now_playing<'a>(locale: Localizer) -> Element<'a, Message> {
   control_button(
     Some(Icon::ChevronLeft),
-    Some("Now Playing".to_owned()),
+    Some(locale.text("settings-now-playing")),
     ButtonVariant::Tonal,
   )
   .icon_size(IconSize::Sm)
@@ -138,14 +142,14 @@ fn back_to_now_playing<'a>() -> Element<'a, Message> {
 }
 
 fn feedback(state: &State) -> Element<'_, Message> {
-  if let Some(error) = state.settings.view.error {
-    return text(error)
+  if let Some(error) = &state.settings.view.error {
+    return text(state.kernel.locale.message(error))
       .size(13)
       .color(state.palette().colors.error)
       .into();
   }
-  if let Some(saved) = state.settings.view.saved {
-    return badge(saved, BadgeVariant::Success);
+  if let Some(saved) = &state.settings.view.saved {
+    return badge(state.kernel.locale.message(saved), BadgeVariant::Success);
   }
   space::vertical().height(0).into()
 }
@@ -156,16 +160,17 @@ fn connection_section(state: &State) -> Element<'_, Message> {
 
 fn mpv_section(state: &State) -> Element<'_, Message> {
   let palette = state.palette();
-  let path = text_input("Auto-detect from PATH", &state.settings.view.mpv_path_input)
-    .on_input(|value| Message::Settings(SettingsMessage::MpvPathChanged(value)))
-    .on_submit(Message::Settings(SettingsMessage::SaveMpvPath))
-    .padding([7, 10])
-    .width(Fill)
-    .style(|theme, status| {
-      jellypilot_ui::theme::field_variant(theme, status, FieldVariant::Filled)
-    });
+  let path = text_input(
+    &state.t("settings-mpv-path-placeholder"),
+    &state.settings.view.mpv_path_input,
+  )
+  .on_input(|value| Message::Settings(SettingsMessage::MpvPathChanged(value)))
+  .on_submit(Message::Settings(SettingsMessage::SaveMpvPath))
+  .padding([7, 10])
+  .width(Fill)
+  .style(|theme, status| jellypilot_ui::theme::field_variant(theme, status, FieldVariant::Filled));
   let args = text_input(
-    "Additional MPV arguments",
+    &state.t("settings-mpv-args-placeholder"),
     &state.settings.view.mpv_args_input,
   )
   .on_input(|value| Message::Settings(SettingsMessage::MpvArgsChanged(value)))
@@ -176,19 +181,21 @@ fn mpv_section(state: &State) -> Element<'_, Message> {
   section(
     palette,
     Icon::Cpu,
-    "MPV",
+    state.t("settings-mpv"),
     column![
       labeled_field(
         palette,
-        "Executable path",
-        "Leave empty to discover MPV from PATH. Applies to future MPV process starts.",
+        state.kernel.locale,
+        state.t("settings-mpv-path"),
+        state.t("settings-mpv-path-help"),
         path.into(),
         SettingsMessage::SaveMpvPath,
       ),
       labeled_field(
         palette,
-        "Extra arguments",
-        "Whitespace-separated arguments. Applies to future playback starts.",
+        state.kernel.locale,
+        state.t("settings-mpv-args"),
+        state.t("settings-mpv-args-help"),
         args.into(),
         SettingsMessage::SaveMpvArgs,
       ),
@@ -211,15 +218,22 @@ fn playback_section(state: &State) -> Element<'_, Message> {
   let mode = state.kernel.settings.snapshot().intro_mode();
   let trigger = control_button(
     None,
-    Some(format!("Intro Skipper: {}", intro_mode_label(mode))),
+    Some(state.format(
+      "settings-intro-selected",
+      &[("mode", intro_mode_label(state.kernel.locale, mode).into())],
+    )),
     ButtonVariant::Tonal,
   )
   .padding([6, 12])
   .on_press(Message::Settings(SettingsMessage::IntroMenuToggled));
   let menu = column![
-    intro_option("Automatic", IntroMode::Automatic, mode),
-    intro_option("Manual", IntroMode::Manual, mode),
-    intro_option("Off", IntroMode::Off, mode),
+    intro_option(
+      state.t("settings-intro-automatic"),
+      IntroMode::Automatic,
+      mode
+    ),
+    intro_option(state.t("settings-intro-manual"), IntroMode::Manual, mode),
+    intro_option(state.t("settings-off"), IntroMode::Off, mode),
   ]
   .spacing(TOKENS.spacing.s1)
   .width(Fill);
@@ -236,18 +250,21 @@ fn playback_section(state: &State) -> Element<'_, Message> {
   section(
     palette,
     Icon::Sliders,
-    "Playback",
+    state.t("settings-playback"),
     column![
       labeled_field(
         palette,
-        "Playback Target name",
-        "Saved names are re-registered with the connected server immediately.",
+        state.kernel.locale,
+        state.t("settings-target-name"),
+        state.t("settings-target-name-help"),
         target.into(),
         SettingsMessage::SavePlaybackTargetName,
       ),
       column![
-        text("Intro Skipper").size(14).color(palette.text.secondary),
-        text("Automatic skips detected intros; Manual shows the skip action; Off disables it.")
+        text(state.t("settings-intro"))
+          .size(14)
+          .color(palette.text.secondary),
+        text(state.t("settings-intro-help"))
           .size(12)
           .color(palette.text.body),
         intro,
@@ -262,7 +279,7 @@ fn subtitles_section(state: &State) -> Element<'_, Message> {
   let palette = state.palette();
   let trigger = control_button(
     Some(Icon::Subtitles),
-    Some("Add language".to_owned()),
+    Some(state.t("settings-add-language")),
     ButtonVariant::Tonal,
   )
   .icon_size(IconSize::Sm)
@@ -274,7 +291,7 @@ fn subtitles_section(state: &State) -> Element<'_, Message> {
     menu = menu.push(
       control_button(
         None,
-        Some(subtitle_language_label(language).to_owned()),
+        Some(subtitle_language_label(state.kernel.locale, language)),
         ButtonVariant::Text,
       )
       .padding([6, 10])
@@ -299,7 +316,7 @@ fn subtitles_section(state: &State) -> Element<'_, Message> {
   let mut rows = Column::new().spacing(TOKENS.spacing.s2).width(Fill);
   if languages.is_empty() {
     rows = rows.push(
-      text("No preferred subtitle languages.")
+      text(state.t("settings-subtitle-empty"))
         .size(12)
         .color(palette.text.metadata),
     );
@@ -307,28 +324,33 @@ fn subtitles_section(state: &State) -> Element<'_, Message> {
   for (index, language) in languages.iter().enumerate() {
     rows = rows.push(
       row![
-        text(format!(
-          "{}. {}",
-          index + 1,
-          subtitle_language_label(language)
+        text(state.format(
+          "settings-subtitle-ranked",
+          &[
+            ("index", (index + 1).into()),
+            (
+              "language",
+              subtitle_language_label(state.kernel.locale, language).into()
+            ),
+          ]
         ))
         .size(13)
         .width(Fill),
         compact_button(
           Icon::ArrowUp,
-          "Move up",
+          state.t("settings-move-up"),
           index > 0,
           SettingsMessage::SubtitleLanguageMoved { index, offset: -1 },
         ),
         compact_button(
           Icon::ArrowDown,
-          "Move down",
+          state.t("settings-move-down"),
           index + 1 < languages.len(),
           SettingsMessage::SubtitleLanguageMoved { index, offset: 1 },
         ),
         compact_button(
           Icon::Trash,
-          "Remove",
+          state.t("settings-remove"),
           true,
           SettingsMessage::SubtitleLanguageRemoved(index),
         ),
@@ -340,9 +362,9 @@ fn subtitles_section(state: &State) -> Element<'_, Message> {
   section(
     palette,
     Icon::Subtitles,
-    "Subtitles",
+    state.t("settings-subtitles"),
     column![
-      text("Languages are tried from top to bottom on future playback starts.")
+      text(state.t("settings-subtitles-help"))
         .size(12)
         .color(palette.text.metadata),
       rows,
@@ -357,12 +379,20 @@ fn shortcuts_section(state: &State) -> Element<'_, Message> {
   section(
     palette,
     Icon::Keyboard,
-    "Shortcuts",
+    state.t("settings-shortcuts"),
     column![
-      shortcut_row(state, "Next episode", ShortcutKind::Next),
-      shortcut_row(state, "Previous episode", ShortcutKind::Previous),
-      shortcut_row(state, "Skip intro", ShortcutKind::IntroSkip),
-      text("Shortcut subscriptions read the current persisted bindings.")
+      shortcut_row(state, state.t("settings-next-episode"), ShortcutKind::Next),
+      shortcut_row(
+        state,
+        state.t("settings-previous-episode"),
+        ShortcutKind::Previous
+      ),
+      shortcut_row(
+        state,
+        state.t("settings-skip-intro"),
+        ShortcutKind::IntroSkip
+      ),
+      text(state.t("settings-shortcuts-help"))
         .size(12)
         .color(palette.text.metadata),
     ]
@@ -370,7 +400,7 @@ fn shortcuts_section(state: &State) -> Element<'_, Message> {
   )
 }
 
-fn shortcut_row<'a>(state: &'a State, label: &'a str, kind: ShortcutKind) -> Element<'a, Message> {
+fn shortcut_row<'a>(state: &'a State, label: String, kind: ShortcutKind) -> Element<'a, Message> {
   let binding = match kind {
     ShortcutKind::Next => state.kernel.settings.snapshot().key_next_episode(),
     ShortcutKind::Previous => state.kernel.settings.snapshot().key_previous_episode(),
@@ -397,7 +427,7 @@ fn shortcut_row<'a>(state: &'a State, label: &'a str, kind: ShortcutKind) -> Ele
     control_button(
       Some(Icon::Keyboard),
       Some(if capturing {
-        "Press a key…".to_owned()
+        state.t("settings-press-key")
       } else {
         binding.to_owned()
       }),
@@ -423,14 +453,16 @@ fn interface_section(state: &State) -> Element<'_, Message> {
   section(
     palette,
     Icon::Settings,
-    "Interface",
+    state.t("settings-interface"),
     column![
-      appearance_row(palette, theme_mode),
-      app_mode_row(palette, app_mode),
+      language_row(state),
+      appearance_row(palette, state.kernel.locale, theme_mode),
+      app_mode_row(palette, state.kernel.locale, app_mode),
       toggle_row(
         palette,
-        "Reduce motion",
-        "Shows skeleton loading placeholders without the shimmer animation.",
+        state.kernel.locale,
+        state.t("settings-reduce-motion"),
+        state.t("settings-reduce-motion-help"),
         reduced_motion,
         SettingsMessage::ReducedMotionToggled,
       ),
@@ -438,20 +470,26 @@ fn interface_section(state: &State) -> Element<'_, Message> {
     .spacing(TOKENS.spacing.s4),
   )
 }
-fn appearance_row<'a>(palette: &ThemePalette, selected: ThemeMode) -> Element<'a, Message> {
+fn appearance_row<'a>(
+  palette: &ThemePalette,
+  locale: Localizer,
+  selected: ThemeMode,
+) -> Element<'a, Message> {
   row![
     column![
-      text("Appearance").size(14).color(palette.text.secondary),
-      text("System follows the OS light/dark setting and switches live.")
+      text(locale.text("settings-appearance"))
+        .size(14)
+        .color(palette.text.secondary),
+      text(locale.text("settings-appearance-help"))
         .size(12)
         .color(palette.text.body),
     ]
     .spacing(TOKENS.spacing.s1)
     .width(Fill),
     row![
-      theme_mode_option("System", ThemeMode::System, selected),
-      theme_mode_option("Dark", ThemeMode::Dark, selected),
-      theme_mode_option("Light", ThemeMode::Light, selected),
+      theme_mode_option(locale.text("settings-system"), ThemeMode::System, selected),
+      theme_mode_option(locale.text("settings-dark"), ThemeMode::Dark, selected),
+      theme_mode_option(locale.text("settings-light"), ThemeMode::Light, selected),
     ]
     .spacing(TOKENS.spacing.s2),
   ]
@@ -461,7 +499,7 @@ fn appearance_row<'a>(palette: &ThemePalette, selected: ThemeMode) -> Element<'a
 }
 
 fn theme_mode_option(
-  label: &'static str,
+  label: String,
   value: ThemeMode,
   selected: ThemeMode,
 ) -> Element<'static, Message> {
@@ -470,25 +508,39 @@ fn theme_mode_option(
   } else {
     ButtonVariant::Tonal
   };
-  control_button(None, Some(label.to_owned()), variant)
+  control_button(None, Some(label), variant)
     .padding([5, 10])
     .on_press(Message::Settings(SettingsMessage::ThemeModeSelected(value)))
     .into()
 }
 
-fn app_mode_row<'a>(palette: &ThemePalette, selected: AppMode) -> Element<'a, Message> {
+fn app_mode_row<'a>(
+  palette: &ThemePalette,
+  locale: Localizer,
+  selected: AppMode,
+) -> Element<'a, Message> {
   row![
     column![
-      text("App mode").size(14).color(palette.text.secondary),
-      text("Control only shows a compact fixed-size player window without the library browser; it switches live.")
+      text(locale.text("settings-app-mode"))
+        .size(14)
+        .color(palette.text.secondary),
+      text(locale.text("settings-app-mode-help"))
         .size(12)
         .color(palette.text.body),
     ]
     .spacing(TOKENS.spacing.s1)
     .width(Fill),
     row![
-      app_mode_option("Full", AppMode::Full, selected),
-      app_mode_option("Control only", AppMode::ControlOnly, selected),
+      app_mode_option(
+        locale.text("settings-app-mode-full"),
+        AppMode::Full,
+        selected
+      ),
+      app_mode_option(
+        locale.text("settings-app-mode-control-only"),
+        AppMode::ControlOnly,
+        selected
+      ),
     ]
     .spacing(TOKENS.spacing.s2),
   ]
@@ -497,17 +549,13 @@ fn app_mode_row<'a>(palette: &ThemePalette, selected: AppMode) -> Element<'a, Me
   .into()
 }
 
-fn app_mode_option(
-  label: &'static str,
-  value: AppMode,
-  selected: AppMode,
-) -> Element<'static, Message> {
+fn app_mode_option(label: String, value: AppMode, selected: AppMode) -> Element<'static, Message> {
   let variant = if value == selected {
     ButtonVariant::TonalActive
   } else {
     ButtonVariant::Tonal
   };
-  control_button(None, Some(label.to_owned()), variant)
+  control_button(None, Some(label), variant)
     .padding([5, 10])
     .on_press(Message::Settings(SettingsMessage::AppModeSelected(value)))
     .into()
@@ -520,19 +568,21 @@ fn cache_section(state: &State) -> Element<'_, Message> {
   section(
     palette,
     Icon::Database,
-    "Cache",
+    state.t("settings-cache"),
     column![
       toggle_row(
         palette,
-        "Image disk cache",
-        "Caches encoded artwork on disk and applies immediately.",
+        state.kernel.locale,
+        state.t("settings-image-cache"),
+        state.t("settings-image-cache-help"),
         cache_enabled,
         SettingsMessage::ImageCacheToggled,
       ),
       toggle_row(
         palette,
-        "Start minimized",
-        "Starts hidden only when the system tray initializes successfully.",
+        state.kernel.locale,
+        state.t("settings-start-minimized"),
+        state.t("settings-start-minimized-help"),
         start_minimized,
         SettingsMessage::StartMinimizedToggled,
       ),
@@ -545,13 +595,12 @@ fn diagnostics_section(state: &State) -> Element<'_, Message> {
   let palette = state.palette();
   let level_trigger = control_button(
     Some(Icon::Filter),
-    Some(format!(
-      "Level: {}",
-      state
-        .settings
-        .view
-        .diagnostic_level
-        .map_or("All", DiagnosticLevel::label)
+    Some(state.format(
+      "settings-level-filter",
+      &[(
+        "level",
+        diagnostic_level_label(state.kernel.locale, state.settings.view.diagnostic_level).into(),
+      )],
     )),
     ButtonVariant::Tonal,
   )
@@ -562,10 +611,16 @@ fn diagnostics_section(state: &State) -> Element<'_, Message> {
     SettingsMessage::DiagnosticLevelMenuToggled,
   ));
   let level_menu = column![
-    diagnostic_level_option("All", None),
-    diagnostic_level_option("Info", Some(DiagnosticLevel::Info)),
-    diagnostic_level_option("Warning", Some(DiagnosticLevel::Warning)),
-    diagnostic_level_option("Error", Some(DiagnosticLevel::Error)),
+    diagnostic_level_option(state.t("settings-all"), None),
+    diagnostic_level_option(state.t("settings-level-info"), Some(DiagnosticLevel::Info)),
+    diagnostic_level_option(
+      state.t("settings-level-warning"),
+      Some(DiagnosticLevel::Warning)
+    ),
+    diagnostic_level_option(
+      state.t("settings-level-error"),
+      Some(DiagnosticLevel::Error)
+    ),
   ]
   .spacing(TOKENS.spacing.s1)
   .width(Fill);
@@ -581,14 +636,16 @@ fn diagnostics_section(state: &State) -> Element<'_, Message> {
   );
   let category_trigger = control_button(
     Some(Icon::Sliders),
-    Some(format!(
-      "Category: {}",
-      state
-        .settings
-        .view
-        .diagnostic_category
-        .map_or("All", DiagnosticCategory::label)
-    )),
+    Some(
+      state.format(
+        "settings-category-filter",
+        &[(
+          "category",
+          diagnostic_category_label(state.kernel.locale, state.settings.view.diagnostic_category)
+            .into(),
+        )],
+      ),
+    ),
     ButtonVariant::Tonal,
   )
   .icon_size(IconSize::Sm)
@@ -598,13 +655,31 @@ fn diagnostics_section(state: &State) -> Element<'_, Message> {
     SettingsMessage::DiagnosticCategoryMenuToggled,
   ));
   let category_menu = column![
-    diagnostic_category_option("All", None),
-    diagnostic_category_option("Connection", Some(DiagnosticCategory::Connection)),
-    diagnostic_category_option("Auth", Some(DiagnosticCategory::Auth)),
-    diagnostic_category_option("Playback", Some(DiagnosticCategory::Playback)),
-    diagnostic_category_option("Remote Control", Some(DiagnosticCategory::RemoteControl)),
-    diagnostic_category_option("Artwork", Some(DiagnosticCategory::Artwork)),
-    diagnostic_category_option("Config", Some(DiagnosticCategory::Config)),
+    diagnostic_category_option(state.t("settings-all"), None),
+    diagnostic_category_option(
+      state.t("settings-category-connection"),
+      Some(DiagnosticCategory::Connection)
+    ),
+    diagnostic_category_option(
+      state.t("settings-category-auth"),
+      Some(DiagnosticCategory::Auth)
+    ),
+    diagnostic_category_option(
+      state.t("settings-playback"),
+      Some(DiagnosticCategory::Playback)
+    ),
+    diagnostic_category_option(
+      state.t("settings-category-remote-control"),
+      Some(DiagnosticCategory::RemoteControl)
+    ),
+    diagnostic_category_option(
+      state.t("settings-category-artwork"),
+      Some(DiagnosticCategory::Artwork)
+    ),
+    diagnostic_category_option(
+      state.t("settings-category-config"),
+      Some(DiagnosticCategory::Config)
+    ),
   ]
   .spacing(TOKENS.spacing.s1)
   .width(Fill);
@@ -620,7 +695,7 @@ fn diagnostics_section(state: &State) -> Element<'_, Message> {
   );
   let export_button = control_button(
     Some(Icon::Download),
-    Some("Export logs".to_owned()),
+    Some(state.t("settings-export-logs")),
     ButtonVariant::Tonal,
   )
   .icon_size(IconSize::Sm)
@@ -650,13 +725,19 @@ fn diagnostics_section(state: &State) -> Element<'_, Message> {
           row![
             row![
               icon_with_color(level_icon, IconSize::Xs, level_color),
-              badge(diagnostic.level.label(), diagnostic_badge(diagnostic.level)),
+              badge(
+                diagnostic_level_label(state.kernel.locale, Some(diagnostic.level)),
+                diagnostic_badge(diagnostic.level)
+              ),
             ]
             .spacing(TOKENS.spacing.s1)
             .align_y(Alignment::Center),
-            text(diagnostic.category.label())
-              .size(12)
-              .color(palette.text.metadata),
+            text(diagnostic_category_label(
+              state.kernel.locale,
+              Some(diagnostic.category)
+            ))
+            .size(12)
+            .color(palette.text.metadata),
             space::horizontal(),
             text(format_diagnostic_time(diagnostic.timestamp_seconds))
               .size(11)
@@ -677,7 +758,7 @@ fn diagnostics_section(state: &State) -> Element<'_, Message> {
   }
   if count == 0 {
     events = events.push(
-      text("No diagnostic events match these filters.")
+      text(state.t("settings-diagnostics-empty"))
         .size(12)
         .color(palette.text.metadata),
     );
@@ -685,7 +766,7 @@ fn diagnostics_section(state: &State) -> Element<'_, Message> {
   section(
     palette,
     Icon::Activity,
-    "Diagnostics",
+    state.t("settings-diagnostics"),
     column![
       row![
         level_filter,
@@ -694,7 +775,7 @@ fn diagnostics_section(state: &State) -> Element<'_, Message> {
         export_button,
       ]
       .spacing(TOKENS.spacing.s2),
-      text(format!("Showing {count} of at most 200 retained events."))
+      text(state.format("settings-event-count", &[("count", count.into())]))
         .size(11)
         .color(palette.text.metadata),
       events,
@@ -703,25 +784,46 @@ fn diagnostics_section(state: &State) -> Element<'_, Message> {
   )
 }
 
-fn about_section<'a>(palette: &ThemePalette) -> Element<'a, Message> {
-  section(
-    palette,
-    Icon::Info,
-    "About",
-    column![
-      text("JellyPilot").size(15).color(palette.text.heading),
-      text(format!("Version {}", env!("CARGO_PKG_VERSION")))
+fn about_section(state: &State) -> Element<'_, Message> {
+  let palette = state.palette();
+  let expanded = state.settings.view.font_licenses_expanded;
+  let mut content = column![
+    text("JellyPilot").size(15).color(palette.text.heading),
+    text(state.format(
+      "settings-version",
+      &[("version", env!("CARGO_PKG_VERSION").into())]
+    ))
+    .size(12)
+    .color(palette.text.muted),
+    text(FONT_ATTRIBUTIONS).size(12).color(palette.text.body),
+    control_button(
+      None,
+      Some(state.t(if expanded {
+        "settings-hide-font-licenses"
+      } else {
+        "settings-show-font-licenses"
+      })),
+      ButtonVariant::Tonal,
+    )
+    .padding([6, 10])
+    .on_press(Message::Settings(SettingsMessage::FontLicensesToggled)),
+  ]
+  .spacing(TOKENS.spacing.s3);
+  if expanded {
+    content = content.push(
+      text(FONT_LICENSES)
         .size(12)
-        .color(palette.text.muted),
-    ]
-    .spacing(TOKENS.spacing.s1),
-  )
+        .color(palette.text.body)
+        .width(Fill),
+    );
+  }
+  section(palette, Icon::Info, state.t("settings-about"), content)
 }
 
 fn section<'a>(
   palette: &ThemePalette,
   icon: Icon,
-  title: &'a str,
+  title: String,
   content: Column<'a, Message>,
 ) -> Element<'a, Message> {
   container(
@@ -729,7 +831,7 @@ fn section<'a>(
       row![
         icon_with_color(icon, IconSize::Md, palette.colors.primary),
         text(title)
-          .font(SPACE_GROTESK_FONT)
+          .font(HEADING_FONT)
           .size(18)
           .color(palette.text.heading),
       ]
@@ -747,8 +849,9 @@ fn section<'a>(
 
 fn labeled_field<'a>(
   palette: &ThemePalette,
-  label: &'a str,
-  help: &'a str,
+  locale: Localizer,
+  label: String,
+  help: String,
   field: Element<'a, Message>,
   save: SettingsMessage,
 ) -> Element<'a, Message> {
@@ -759,7 +862,7 @@ fn labeled_field<'a>(
       field,
       control_button(
         Some(Icon::Check),
-        Some("Save".to_owned()),
+        Some(locale.text("settings-save")),
         ButtonVariant::Primary,
       )
       .icon_size(IconSize::Sm)
@@ -776,8 +879,9 @@ fn labeled_field<'a>(
 
 fn toggle_row<'a>(
   palette: &ThemePalette,
-  label: &'a str,
-  help: &'a str,
+  locale: Localizer,
+  label: String,
+  help: String,
   enabled: bool,
   message: SettingsMessage,
 ) -> Element<'a, Message> {
@@ -790,7 +894,11 @@ fn toggle_row<'a>(
     .width(Fill),
     control_button(
       None,
-      Some(if enabled { "On" } else { "Off" }.to_owned()),
+      Some(locale.text(if enabled {
+        "settings-on"
+      } else {
+        "settings-off"
+      })),
       if enabled {
         ButtonVariant::TonalActive
       } else {
@@ -807,7 +915,7 @@ fn toggle_row<'a>(
 
 fn compact_button<'a>(
   icon: Icon,
-  label: &'a str,
+  label: String,
   enabled: bool,
   message: SettingsMessage,
 ) -> Element<'a, Message> {
@@ -818,17 +926,13 @@ fn compact_button<'a>(
   tooltip(trigger, label, TooltipOptions::default())
 }
 
-fn intro_option(
-  label: &'static str,
-  value: IntroMode,
-  selected: IntroMode,
-) -> Element<'static, Message> {
+fn intro_option(label: String, value: IntroMode, selected: IntroMode) -> Element<'static, Message> {
   let variant = if value == selected {
     ButtonVariant::Secondary
   } else {
     ButtonVariant::Text
   };
-  control_button(None, Some(label.to_owned()), variant)
+  control_button(None, Some(label), variant)
     .padding([6, 10])
     .width(Fill)
     .label_fill(true)
@@ -837,10 +941,10 @@ fn intro_option(
 }
 
 fn diagnostic_level_option(
-  label: &'static str,
+  label: String,
   level: Option<DiagnosticLevel>,
 ) -> Element<'static, Message> {
-  control_button(None, Some(label.to_owned()), ButtonVariant::Text)
+  control_button(None, Some(label), ButtonVariant::Text)
     .padding([6, 10])
     .width(Fill)
     .label_fill(true)
@@ -851,10 +955,10 @@ fn diagnostic_level_option(
 }
 
 fn diagnostic_category_option(
-  label: &'static str,
+  label: String,
   category: Option<DiagnosticCategory>,
 ) -> Element<'static, Message> {
-  control_button(None, Some(label.to_owned()), ButtonVariant::Text)
+  control_button(None, Some(label), ButtonVariant::Text)
     .padding([6, 10])
     .width(Fill)
     .label_fill(true)
@@ -864,33 +968,34 @@ fn diagnostic_category_option(
     .into()
 }
 
-const fn intro_mode_label(mode: IntroMode) -> &'static str {
-  match mode {
-    IntroMode::Automatic => "Automatic",
-    IntroMode::Manual => "Manual",
-    IntroMode::Off => "Off",
-  }
+fn intro_mode_label(locale: Localizer, mode: IntroMode) -> String {
+  locale.text(match mode {
+    IntroMode::Automatic => "settings-intro-automatic",
+    IntroMode::Manual => "settings-intro-manual",
+    IntroMode::Off => "settings-off",
+  })
 }
 
-fn subtitle_language_label(code: &str) -> &str {
-  match code {
-    "eng" => "English",
-    "spa" => "Spanish",
-    "fra" | "fre" => "French",
-    "deu" | "ger" => "German",
-    "ita" => "Italian",
-    "por" => "Portuguese",
-    "rus" => "Russian",
-    "zho" | "chi" => "Chinese",
-    "jpn" => "Japanese",
-    "kor" => "Korean",
-    "ara" => "Arabic",
-    "hin" => "Hindi",
-    _ => code,
-  }
+fn subtitle_language_label(locale: Localizer, code: &str) -> String {
+  let id = match code {
+    "eng" => "settings-subtitle-english",
+    "spa" => "settings-subtitle-spanish",
+    "fra" | "fre" => "settings-subtitle-french",
+    "deu" | "ger" => "settings-subtitle-german",
+    "ita" => "settings-subtitle-italian",
+    "por" => "settings-subtitle-portuguese",
+    "rus" => "settings-subtitle-russian",
+    "zho" | "chi" => "settings-subtitle-chinese",
+    "jpn" => "settings-subtitle-japanese",
+    "kor" => "settings-subtitle-korean",
+    "ara" => "settings-subtitle-arabic",
+    "hin" => "settings-subtitle-hindi",
+    _ => return code.to_owned(),
+  };
+  locale.text(id)
 }
 
-fn badge<'a, Message: 'a>(label: &'a str, variant: BadgeVariant) -> Element<'a, Message> {
+fn badge<'a, Message: 'a>(label: String, variant: BadgeVariant) -> Element<'a, Message> {
   container(text(label).size(12))
     .padding([3, 8])
     .style(move |theme| jellypilot_ui::theme::badge_variant(theme, variant))
@@ -905,34 +1010,65 @@ const fn diagnostic_badge(level: DiagnosticLevel) -> BadgeVariant {
   }
 }
 
-#[cfg(test)]
-mod tests {
-  use super::*;
+fn diagnostic_level_label(locale: Localizer, level: Option<DiagnosticLevel>) -> String {
+  locale.text(match level {
+    None => "settings-all",
+    Some(DiagnosticLevel::Info) => "settings-level-info",
+    Some(DiagnosticLevel::Warning) => "settings-level-warning",
+    Some(DiagnosticLevel::Error) => "settings-level-error",
+  })
+}
 
-  #[test]
-  fn diagnostic_badge_maps_levels() {
-    assert_eq!(
-      diagnostic_badge(DiagnosticLevel::Info),
-      BadgeVariant::Neutral
-    );
-    assert_eq!(
-      diagnostic_badge(DiagnosticLevel::Warning),
-      BadgeVariant::Warning
-    );
-    assert_eq!(
-      diagnostic_badge(DiagnosticLevel::Error),
-      BadgeVariant::Neutral
+fn diagnostic_category_label(locale: Localizer, category: Option<DiagnosticCategory>) -> String {
+  locale.text(match category {
+    None => "settings-all",
+    Some(DiagnosticCategory::Connection) => "settings-category-connection",
+    Some(DiagnosticCategory::Auth) => "settings-category-auth",
+    Some(DiagnosticCategory::Playback) => "settings-playback",
+    Some(DiagnosticCategory::RemoteControl) => "settings-category-remote-control",
+    Some(DiagnosticCategory::Artwork) => "settings-category-artwork",
+    Some(DiagnosticCategory::Config) => "settings-category-config",
+  })
+}
+
+fn language_row(state: &State) -> Element<'_, Message> {
+  let palette = state.palette();
+  let selected = state.kernel.settings.snapshot().ui_language();
+  let mut options = row![].spacing(TOKENS.spacing.s2);
+  for (id, value) in [
+    ("language-system", LanguagePreference::System),
+    (
+      "language-english",
+      LanguagePreference::Fixed(UiLanguage::English),
+    ),
+    (
+      "language-chinese",
+      LanguagePreference::Fixed(UiLanguage::SimplifiedChinese),
+    ),
+  ] {
+    options = options.push(
+      control_button(
+        None,
+        Some(state.t(id)),
+        if selected == value {
+          ButtonVariant::TonalActive
+        } else {
+          ButtonVariant::Tonal
+        },
+      )
+      .padding([5, 10])
+      .on_press(Message::UiLanguageSelected(value)),
     );
   }
-
-  #[test]
-  fn subtitle_language_options_all_have_human_readable_labels() {
-    for code in SUBTITLE_LANGUAGE_OPTIONS {
-      let label = subtitle_language_label(code);
-      assert_ne!(
-        label, code,
-        "Configured subtitle language option {code:?} must have a human-readable label"
-      );
-    }
-  }
+  column![
+    text(state.t("language-label"))
+      .size(14)
+      .color(palette.text.secondary),
+    text(state.t("language-description"))
+      .size(12)
+      .color(palette.text.body),
+    options.wrap(),
+  ]
+  .spacing(TOKENS.spacing.s2)
+  .into()
 }

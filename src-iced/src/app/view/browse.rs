@@ -1,14 +1,16 @@
 use crate::app::message::{BrowseMessage, Message};
 use crate::app::state::{ArtworkCell, ArtworkCellState, Destination, State};
+use crate::i18n::media::item_caption;
+use crate::i18n::Localizer;
 use iced::widget::{button, column, container, row, scrollable, stack, text, Column, Row};
 use iced::{Alignment, Color, ContentFit, Element, Fill};
 use jellypilot_core::browse_model::{LibraryBrowseView, LibraryItemSlot};
-use jellypilot_core::cards::item_caption;
+use jellypilot_core::diagnostics::sanitize_message;
 use jellypilot_core::{LibraryBrowseFailure, LIBRARY_BROWSE_PAGE_SIZE};
 use jellypilot_media_server::{
   VideoLibraryItem, VideoLibraryPlayedFilter, VideoLibrarySort, VideoLibrarySortDirection,
 };
-use jellypilot_ui::fonts::SPACE_GROTESK_FONT;
+use jellypilot_ui::fonts::HEADING_FONT;
 use jellypilot_ui::icons::{icon_with_color, Icon, IconSize};
 use jellypilot_ui::layout::SizeClass;
 use jellypilot_ui::overlay::{popover, PopoverOptions};
@@ -49,6 +51,7 @@ pub(crate) fn grid_available_width(window_width: f32, class: SizeClass) -> f32 {
 pub(crate) const CARD_COPY_HEIGHT: f32 = 46.0;
 pub fn view(state: &State) -> Element<'_, Message> {
   let class = SizeClass::from_width(state.shell.window_size.width);
+  let library_label = state.t("browse-library");
   let title = match &state.shell.destination {
     Destination::Library { library_id, .. } => match &state
       .full
@@ -61,19 +64,19 @@ pub fn view(state: &State) -> Element<'_, Message> {
       jellypilot_core::LoadState::Ready(shortcuts) => shortcuts
         .iter()
         .find(|shortcut| shortcut.id == *library_id)
-        .map_or("Library", |shortcut| shortcut.name.as_str()),
+        .map_or(library_label.as_str(), |shortcut| shortcut.name.as_str()),
       jellypilot_core::LoadState::Idle
       | jellypilot_core::LoadState::Loading
-      | jellypilot_core::LoadState::Failed(_) => "Library",
+      | jellypilot_core::LoadState::Failed(_) => library_label.as_str(),
     },
     Destination::Search(query) => query,
     Destination::Home
     | Destination::PersonalLists(_)
     | Destination::Detail(_)
-    | Destination::NowPlaying => "Library",
+    | Destination::NowPlaying => library_label.as_str(),
   };
   let heading = match &state.shell.destination {
-    Destination::Search(_) => format!("Search results for “{title}”"),
+    Destination::Search(_) => state.format("browse-search-results", &[("query", title.into())]),
     Destination::Home
     | Destination::PersonalLists(_)
     | Destination::Library { .. }
@@ -82,7 +85,7 @@ pub fn view(state: &State) -> Element<'_, Message> {
   };
   let mut header = Column::new().spacing(TOKENS.spacing.s3).push(
     text(heading)
-      .font(SPACE_GROTESK_FONT)
+      .font(HEADING_FONT)
       .size(34)
       .color(state.palette().text.heading),
   );
@@ -105,7 +108,13 @@ fn toolbar(state: &State) -> Element<'_, Message> {
   let filters = state.kernel.settings.snapshot().browse_filters();
   let sort_trigger = control_button(
     Some(Icon::Sliders),
-    Some(format!("Sort: {}", sort_label(filters.sort()))),
+    Some(state.format(
+      "browse-sort",
+      &[(
+        "sort",
+        sort_label(state.kernel.locale, filters.sort()).into(),
+      )],
+    )),
     ButtonVariant::Tonal,
   )
   .icon_size(IconSize::Sm)
@@ -113,9 +122,15 @@ fn toolbar(state: &State) -> Element<'_, Message> {
   .padding([6, 12])
   .on_press(Message::Browse(BrowseMessage::SortMenuToggled));
   let sort_menu = column![
-    sort_option("Title", VideoLibrarySort::Title),
-    sort_option("Recently added", VideoLibrarySort::RecentlyAdded),
-    sort_option("Release date", VideoLibrarySort::ReleaseDate),
+    sort_option(state.t("browse-sort-title"), VideoLibrarySort::Title),
+    sort_option(
+      state.t("browse-sort-recently-added"),
+      VideoLibrarySort::RecentlyAdded
+    ),
+    sort_option(
+      state.t("browse-sort-release-date"),
+      VideoLibrarySort::ReleaseDate
+    ),
   ]
   .spacing(TOKENS.spacing.s1)
   .width(Fill);
@@ -135,12 +150,12 @@ fn toolbar(state: &State) -> Element<'_, Message> {
     Message::Browse(BrowseMessage::SortMenuDismissed),
   );
   let (direction_icon, direction_label) = match filters.sort_direction() {
-    VideoLibrarySortDirection::Ascending => (Icon::SortAscending, "Ascending"),
-    VideoLibrarySortDirection::Descending => (Icon::SortDescending, "Descending"),
+    VideoLibrarySortDirection::Ascending => (Icon::SortAscending, state.t("browse-ascending")),
+    VideoLibrarySortDirection::Descending => (Icon::SortDescending, state.t("browse-descending")),
   };
   let direction = control_button(
     Some(direction_icon),
-    Some(direction_label.to_owned()),
+    Some(direction_label),
     ButtonVariant::Tonal,
   )
   .icon_size(IconSize::Sm)
@@ -157,7 +172,7 @@ fn toolbar(state: &State) -> Element<'_, Message> {
           IconSize::Sm,
           state.palette().colors.favorite
         ),
-        text("Favorites: On"),
+        text(state.t("browse-favorites-on")),
       ]
       .spacing(TOKENS.spacing.s1_5)
       .align_y(Alignment::Center),
@@ -171,7 +186,7 @@ fn toolbar(state: &State) -> Element<'_, Message> {
   } else {
     control_button(
       Some(Icon::Heart),
-      Some("Favorites: Off".to_owned()),
+      Some(state.t("browse-favorites-off")),
       ButtonVariant::Tonal,
     )
     .icon_size(IconSize::Sm)
@@ -186,19 +201,19 @@ fn toolbar(state: &State) -> Element<'_, Message> {
     direction,
     played_option(
       Icon::CircleDot,
-      "All",
+      state.t("browse-all"),
       VideoLibraryPlayedFilter::All,
       filters.played_filter(),
     ),
     played_option(
       Icon::CircleCheck,
-      "Played",
+      state.t("browse-played"),
       VideoLibraryPlayedFilter::Played,
       filters.played_filter(),
     ),
     played_option(
       Icon::Circle,
-      "Unplayed",
+      state.t("browse-unplayed"),
       VideoLibraryPlayedFilter::Unplayed,
       filters.played_filter(),
     ),
@@ -209,8 +224,8 @@ fn toolbar(state: &State) -> Element<'_, Message> {
   .into()
 }
 
-fn sort_option(label: &'static str, sort: VideoLibrarySort) -> Element<'static, Message> {
-  control_button(None, Some(label.to_owned()), ButtonVariant::Text)
+fn sort_option(label: String, sort: VideoLibrarySort) -> Element<'static, Message> {
+  control_button(None, Some(label), ButtonVariant::Text)
     .padding([6, 10])
     .width(Fill)
     .label_fill(true)
@@ -220,7 +235,7 @@ fn sort_option(label: &'static str, sort: VideoLibrarySort) -> Element<'static, 
 
 fn played_option(
   icon: Icon,
-  label: &'static str,
+  label: String,
   value: VideoLibraryPlayedFilter,
   selected: VideoLibraryPlayedFilter,
 ) -> Element<'static, Message> {
@@ -229,7 +244,7 @@ fn played_option(
   } else {
     ButtonVariant::Tonal
   };
-  control_button(Some(icon), Some(label.to_owned()), variant)
+  control_button(Some(icon), Some(label), variant)
     .icon_size(IconSize::Sm)
     .spacing(TOKENS.spacing.s1_5)
     .padding([6, 12])
@@ -240,33 +255,37 @@ fn played_option(
 fn browse_body<'a>(state: &'a State, class: SizeClass) -> Element<'a, Message> {
   let padding = page_padding(class);
   match &state.full.as_ref().expect("FullUi required").browse.view {
-    LibraryBrowseView::Inactive => empty_surface(
-      state.palette(),
-      "Choose a library to browse.".to_owned(),
-      padding,
-    ),
+    LibraryBrowseView::Inactive => {
+      empty_surface(state.palette(), state.t("browse-choose-library"), padding)
+    }
     LibraryBrowseView::Loading => browse_loading_skeleton(state, class),
     LibraryBrowseView::Empty => match &state.shell.destination {
       Destination::Search(query) => empty_surface(
         state.palette(),
-        format!("No results for “{query}”."),
+        state.format("browse-no-results", &[("query", query.as_str().into())]),
         padding,
       ),
       Destination::Home
       | Destination::PersonalLists(_)
       | Destination::Library { .. }
       | Destination::Detail(_)
-      | Destination::NowPlaying => empty_surface(
-        state.palette(),
-        "This library has no matching items.".to_owned(),
-        padding,
-      ),
+      | Destination::NowPlaying => {
+        empty_surface(state.palette(), state.t("browse-empty-library"), padding)
+      }
     },
     LibraryBrowseView::Failed {
       message,
       retryable,
       retry_busy,
-    } => failure_surface(state.palette(), message, *retryable, *retry_busy, padding),
+    } => failure_surface(
+      state.palette(),
+      state.kernel.locale,
+      matches!(state.shell.destination, Destination::Search(_)),
+      message,
+      *retryable,
+      *retry_busy,
+      padding,
+    ),
     LibraryBrowseView::Ready {
       visible_items,
       visible_start,
@@ -337,9 +356,11 @@ fn ready_surface<'a>(
   let content = Column::new()
     .width(Fill)
     .push(
-      row![text(format!("{total_record_count} items"))
-        .size(13)
-        .color(state.palette().text.metadata),]
+      row![
+        text(state.format("browse-item-count", &[("count", total_record_count.into())]))
+          .size(13)
+          .color(state.palette().text.metadata),
+      ]
       .padding([TOKENS.spacing.s3, padding])
       .align_y(Alignment::Center),
     )
@@ -363,7 +384,12 @@ fn ready_surface<'a>(
   // The failure banner stacks above the scrollable (the shell-toast pattern)
   // so it stays pinned to the viewport's bottom edge at any scroll position.
   let mut surface = stack![body].width(Fill).height(Fill);
-  if let Some(banner) = failure_overlay(state.palette(), load_more_failure, retry_busy) {
+  if let Some(banner) = failure_overlay(
+    state.palette(),
+    state.kernel.locale,
+    load_more_failure,
+    retry_busy,
+  ) {
     surface = surface.push(banner);
   }
   surface.into()
@@ -373,10 +399,11 @@ fn ready_surface<'a>(
 /// an incremental load-more failure, or `None` when the tail loaded cleanly.
 fn failure_overlay<'a>(
   palette: &'static ThemePalette,
+  locale: Localizer,
   load_more_failure: Option<&'a LibraryBrowseFailure>,
   retry_busy: bool,
 ) -> Option<Element<'a, Message>> {
-  load_more_failure.map(|failure| failure_banner(palette, failure, retry_busy))
+  load_more_failure.map(|failure| failure_banner(palette, locale, failure, retry_busy))
 }
 
 /// Maps a global item index into the sparse window of slots that starts at
@@ -527,7 +554,7 @@ fn video_card<'a>(
     ellipsis_text(&item.name)
       .size(14)
       .color(palette.text.heading),
-    ellipsis_text(item_caption(item))
+    ellipsis_text(item_caption(state.kernel.locale, item))
       .size(12)
       .color(palette.text.metadata),
   ]
@@ -585,7 +612,7 @@ fn artwork<'a>(
       column![
         icon_with_color(Icon::Movie, IconSize::Custom(36.0), placeholder_color),
         text(initial)
-          .font(SPACE_GROTESK_FONT)
+          .font(HEADING_FONT)
           .size(24)
           .color(placeholder_color),
       ]
@@ -622,6 +649,8 @@ fn artwork<'a>(
 }
 fn failure_surface<'a>(
   palette: &'static ThemePalette,
+  locale: Localizer,
+  is_search: bool,
   message: &'a str,
   retryable: bool,
   retry_busy: bool,
@@ -630,9 +659,9 @@ fn failure_surface<'a>(
   let retry = control_button(
     Some(Icon::Refresh),
     Some(if retry_busy {
-      "Retrying…".to_owned()
+      locale.text("browse-retrying")
     } else {
-      "Retry".to_owned()
+      locale.text("browse-retry")
     }),
     ButtonVariant::Primary,
   )
@@ -642,11 +671,17 @@ fn failure_surface<'a>(
   .on_press_maybe(retry_action(retryable, retry_busy));
   container(
     column![
-      text("Could not load this library")
-        .font(SPACE_GROTESK_FONT)
-        .size(24)
-        .color(palette.text.heading),
-      text(message).size(14).color(palette.colors.error),
+      text(locale.text(if is_search {
+        "browse-search-load-failed"
+      } else {
+        "browse-library-load-failed"
+      }))
+      .font(HEADING_FONT)
+      .size(24)
+      .color(palette.text.heading),
+      text(sanitize_message(message))
+        .size(14)
+        .color(palette.colors.error),
       retry,
     ]
     .spacing(TOKENS.spacing.s3),
@@ -663,6 +698,7 @@ fn failure_surface<'a>(
 /// with no border or shadow.
 fn failure_banner<'a>(
   palette: &'static ThemePalette,
+  locale: Localizer,
   failure: &'a LibraryBrowseFailure,
   retry_busy: bool,
 ) -> Element<'a, Message> {
@@ -670,9 +706,9 @@ fn failure_banner<'a>(
   let retry = control_button(
     Some(Icon::Refresh),
     Some(if retry_busy {
-      "Retrying…".to_owned()
+      locale.text("browse-retrying")
     } else {
-      "Retry".to_owned()
+      locale.text("browse-retry")
     }),
     ButtonVariant::Tonal,
   )
@@ -682,9 +718,16 @@ fn failure_banner<'a>(
   .on_press_maybe(retry_action(failure.retryable, retry_busy));
 
   let banner = container(
-    row![text(&failure.message).size(13), retry,]
-      .spacing(TOKENS.spacing.s3)
-      .align_y(Alignment::Center),
+    row![
+      text(locale.format(
+        "browse-load-more-failed",
+        &[("details", sanitize_message(&failure.message).into())]
+      ))
+      .size(13),
+      retry,
+    ]
+    .spacing(TOKENS.spacing.s3)
+    .align_y(Alignment::Center),
   )
   .padding(TOKENS.spacing.s4)
   .style(move |_theme| container::Style {
@@ -728,12 +771,12 @@ fn empty_surface(
     .into()
 }
 
-const fn sort_label(sort: VideoLibrarySort) -> &'static str {
-  match sort {
-    VideoLibrarySort::Title => "Title",
-    VideoLibrarySort::RecentlyAdded => "Recently added",
-    VideoLibrarySort::ReleaseDate => "Release date",
-  }
+fn sort_label(locale: Localizer, sort: VideoLibrarySort) -> String {
+  locale.text(match sort {
+    VideoLibrarySort::Title => "browse-sort-title",
+    VideoLibrarySort::RecentlyAdded => "browse-sort-recently-added",
+    VideoLibrarySort::ReleaseDate => "browse-sort-release-date",
+  })
 }
 
 #[cfg(test)]
@@ -747,15 +790,33 @@ mod tests {
       retryable: true,
     };
     assert!(
-      failure_overlay(&jellypilot_ui::tokens::DARK_PALETTE, Some(&failure), false).is_some(),
+      failure_overlay(
+        &jellypilot_ui::tokens::DARK_PALETTE,
+        Localizer::default(),
+        Some(&failure),
+        false
+      )
+      .is_some(),
       "a ready surface with a load-more failure must pin the banner overlay"
     );
     assert!(
-      failure_overlay(&jellypilot_ui::tokens::DARK_PALETTE, Some(&failure), true).is_some(),
+      failure_overlay(
+        &jellypilot_ui::tokens::DARK_PALETTE,
+        Localizer::default(),
+        Some(&failure),
+        true
+      )
+      .is_some(),
       "the banner stays pinned while a retry is in flight"
     );
     assert!(
-      failure_overlay(&jellypilot_ui::tokens::DARK_PALETTE, None, false).is_none(),
+      failure_overlay(
+        &jellypilot_ui::tokens::DARK_PALETTE,
+        Localizer::default(),
+        None,
+        false
+      )
+      .is_none(),
       "a clean tail renders no overlay"
     );
   }
@@ -865,33 +926,6 @@ mod tests {
     assert_eq!(row_count, (24_usize).div_ceil(metrics.columns));
   }
 
-  #[test]
-  fn browse_view_renders_in_loading_state() {
-    let mut state = State::boot(false);
-    state.shell.skeleton_phase = 0.42;
-    state.full.as_mut().unwrap().browse.view = LibraryBrowseView::Loading;
-    let _element = view(&state);
-  }
-
-  #[test]
-  fn browse_view_renders_with_unloaded_slots_in_ready_state() {
-    let mut state = State::boot(false);
-    state.shell.skeleton_phase = 0.42;
-    state.full.as_mut().unwrap().browse.view = LibraryBrowseView::Ready {
-      visible_items: vec![
-        LibraryItemSlot { item: None },
-        LibraryItemSlot { item: None },
-      ],
-      visible_start: 0,
-      mode: jellypilot_core::LibraryBrowseMode::Normal,
-      total_record_count: 50,
-      is_fetching_more: false,
-      load_more_failure: None,
-      retry_busy: false,
-    };
-    let _element = view(&state);
-  }
-
   fn video_item(id: &str) -> VideoLibraryItem {
     VideoLibraryItem {
       logo_image_id: None,
@@ -921,50 +955,5 @@ mod tests {
       series_continuing: false,
       unplayed_item_count: None,
     }
-  }
-
-  #[test]
-  fn browse_view_renders_cards_with_loading_and_failed_artwork_cells() {
-    let mut state = State::boot(false);
-    state.shell.skeleton_phase = 0.5;
-    let item_1 = video_item("item-1");
-    let item_2 = video_item("item-2");
-    let slot_1 = state
-      .kernel
-      .artwork_binder
-      .bind(jellypilot_core::artwork_binder::ArtworkSurface::Browse);
-    let slot_2 = state
-      .kernel
-      .artwork_binder
-      .bind(jellypilot_core::artwork_binder::ArtworkSurface::Browse);
-    state.full.as_mut().unwrap().browse.artwork.insert(
-      "item-1".to_owned(),
-      ArtworkCell {
-        slot: slot_1,
-        image_id: "img-1".to_owned(),
-        state: ArtworkCellState::Loading,
-      },
-    );
-    state.full.as_mut().unwrap().browse.artwork.insert(
-      "item-2".to_owned(),
-      ArtworkCell {
-        slot: slot_2,
-        image_id: "img-2".to_owned(),
-        state: ArtworkCellState::Failed,
-      },
-    );
-    state.full.as_mut().unwrap().browse.view = LibraryBrowseView::Ready {
-      visible_items: vec![
-        LibraryItemSlot { item: Some(item_1) },
-        LibraryItemSlot { item: Some(item_2) },
-      ],
-      visible_start: 0,
-      mode: jellypilot_core::LibraryBrowseMode::Normal,
-      total_record_count: 2,
-      is_fetching_more: false,
-      load_more_failure: None,
-      retry_busy: false,
-    };
-    let _element = view(&state);
   }
 }

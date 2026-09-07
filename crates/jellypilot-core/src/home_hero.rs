@@ -25,15 +25,15 @@ pub struct HeroCandidate {
 /// one candidate per media item and known series. Latest rows participate only
 /// when both continuation requests have successfully returned empty lists.
 #[must_use]
-pub fn candidates<'a>(
-    continue_watching: &'a LoadState<Vec<VideoLibraryItem>>,
-    next_up: &'a LoadState<Vec<VideoLibraryItem>>,
-    latest: impl IntoIterator<Item = &'a LoadState<Vec<VideoLibraryItem>>>,
+pub fn candidates<'a, E: 'a>(
+    continue_watching: &'a LoadState<Vec<VideoLibraryItem>, E>,
+    next_up: &'a LoadState<Vec<VideoLibraryItem>, E>,
+    latest: impl IntoIterator<Item = &'a LoadState<Vec<VideoLibraryItem>, E>>,
 ) -> Vec<HeroCandidate> {
     let mut result = Vec::new();
     let mut item_ids = HashSet::new();
     let mut series_ids = HashSet::new();
-    let mut append = |source, state: &'a LoadState<Vec<VideoLibraryItem>>| {
+    let mut append = |source, state: &'a LoadState<Vec<VideoLibraryItem>, E>| {
         let LoadState::Ready(items) = state else {
             return;
         };
@@ -168,7 +168,7 @@ mod tests {
 
     #[test]
     fn resumes_win_series_and_item_duplicates_without_reordering_sources() {
-        let watching = LoadState::Ready(vec![
+        let watching: LoadState<_> = LoadState::Ready(vec![
             item("not-started", "Episode", Some("series-a")),
             resume("a1", Some("series-a")),
             resume("a2", Some("series-a")),
@@ -194,7 +194,7 @@ mod tests {
 
     #[test]
     fn missing_series_identities_and_movie_metadata_do_not_merge_unrelated_items() {
-        let next = LoadState::Ready(vec![
+        let next: LoadState<_> = LoadState::Ready(vec![
             item("a", "Episode", None),
             item("b", "Episode", None),
             item("c", "Episode", Some("")),
@@ -213,7 +213,7 @@ mod tests {
 
     #[test]
     fn latest_groups_across_rows_and_preserves_original_row_positions() {
-        let empty = LoadState::Ready(vec![]);
+        let empty: LoadState<_> = LoadState::Ready(vec![]);
         let latest = [
             LoadState::Loading,
             LoadState::Ready(vec![
@@ -253,7 +253,7 @@ mod tests {
 
     #[test]
     fn unusable_resume_is_not_a_successfully_empty_response() {
-        let watching = LoadState::Ready(vec![item("a", "Episode", Some("series-a"))]);
+        let watching: LoadState<_> = LoadState::Ready(vec![item("a", "Episode", Some("series-a"))]);
         let latest = LoadState::Ready(vec![item("movie", "Movie", None)]);
         assert!(candidates(&watching, &LoadState::Ready(vec![]), [&latest]).is_empty());
     }

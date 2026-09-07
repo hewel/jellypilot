@@ -69,38 +69,6 @@ pub async fn load_similar_items(
     client.library().similar_video(item_id).await
 }
 
-#[must_use]
-pub fn detail_metadata(detail: &VideoItemDetail) -> String {
-    let mut details = Vec::new();
-    if let Some(year) = detail.production_year {
-        details.push(year.to_string());
-    }
-    details.push(detail.item_type.clone());
-    if !detail.genres.is_empty() {
-        details.push(detail.genres.join(", "));
-    }
-    if detail.favorite {
-        details.push("Favorite".to_owned());
-    }
-    details.join(" · ")
-}
-
-#[must_use]
-pub fn show_detail_metadata(detail: &VideoShowDetail) -> String {
-    let mut details = Vec::new();
-    if let Some(year) = detail.production_year {
-        details.push(year.to_string());
-    }
-    details.push("Series".to_owned());
-    if !detail.genres.is_empty() {
-        details.push(detail.genres.join(", "));
-    }
-    if detail.favorite {
-        details.push("Favorite".to_owned());
-    }
-    details.join(" · ")
-}
-
 /// Picks the season a show detail opens on: the season of the next-up
 /// episode, falling back to the first listed season.
 #[must_use]
@@ -119,8 +87,8 @@ pub fn initial_season(show: &VideoShowDetail) -> Option<&VideoSeason> {
 /// Builds the first-page episodes request for the show's selected season, or
 /// `None` when the selection does not resolve to a season of the loaded show.
 #[must_use]
-pub fn selected_season_request(
-    detail: &LoadState<DetailContent>,
+pub fn selected_season_request<E>(
+    detail: &LoadState<DetailContent, E>,
     selected_season_id: Option<&str>,
 ) -> Option<VideoSeasonEpisodesPageRequest> {
     let LoadState::Ready(DetailContent::Show(show)) = detail else {
@@ -149,7 +117,7 @@ pub fn detail_similar_key(item_id: &str) -> String {
 /// Reads the current (item id, played, favorite) user-data flags of ready
 /// detail content; `None` while no content is ready.
 #[must_use]
-pub fn detail_user_data(detail: &LoadState<DetailContent>) -> Option<(String, bool, bool)> {
+pub fn detail_user_data<E>(detail: &LoadState<DetailContent, E>) -> Option<(String, bool, bool)> {
     match detail {
         LoadState::Ready(DetailContent::Item(item)) => {
             Some((item.id.clone(), item.played, item.favorite))
@@ -176,8 +144,8 @@ pub fn season_page_request(
     }
 }
 
-pub fn apply_user_data_update(
-    detail: &mut LoadState<DetailContent>,
+pub fn apply_user_data_update<E>(
+    detail: &mut LoadState<DetailContent, E>,
     update: &VideoUserDataUpdate,
 ) -> bool {
     match detail {
@@ -221,22 +189,23 @@ mod tests {
 
     #[test]
     fn user_data_completion_updates_only_the_matching_detail() {
-        let mut detail = LoadState::Ready(DetailContent::Show(Box::new(VideoShowDetail {
-            id: "show-1".to_owned(),
-            name: "Show".to_owned(),
-            overview: None,
-            production_year: None,
-            genres: Vec::new(),
-            played: false,
-            favorite: false,
-            can_play: false,
-            artwork_image_id: None,
-            backdrop_image_id: None,
-            logo_image_id: None,
-            next_episode: None,
-            seasons: Vec::new(),
-            metadata: Default::default(),
-        })));
+        let mut detail: LoadState<_> =
+            LoadState::Ready(DetailContent::Show(Box::new(VideoShowDetail {
+                id: "show-1".to_owned(),
+                name: "Show".to_owned(),
+                overview: None,
+                production_year: None,
+                genres: Vec::new(),
+                played: false,
+                favorite: false,
+                can_play: false,
+                artwork_image_id: None,
+                backdrop_image_id: None,
+                logo_image_id: None,
+                next_episode: None,
+                seasons: Vec::new(),
+                metadata: Default::default(),
+            })));
         let stale = VideoUserDataUpdate {
             item_id: "show-2".to_owned(),
             played: true,
@@ -333,7 +302,8 @@ mod tests {
 
     #[test]
     fn selected_season_request_resolves_only_a_season_of_the_loaded_show() {
-        let detail = LoadState::Ready(DetailContent::Show(Box::new(show_detail(None))));
+        let detail: LoadState<_> =
+            LoadState::Ready(DetailContent::Show(Box::new(show_detail(None))));
 
         let request = selected_season_request(&detail, Some("season-2"))
             .expect("selected season should produce a page");
@@ -345,7 +315,10 @@ mod tests {
 
         assert!(selected_season_request(&detail, Some("missing-season")).is_none());
         assert!(selected_season_request(&detail, None).is_none());
-        assert!(selected_season_request(&LoadState::Loading, Some("season-2")).is_none());
+        assert!(
+            selected_season_request(&LoadState::<DetailContent>::Loading, Some("season-2"))
+                .is_none()
+        );
     }
 
     #[test]
@@ -360,9 +333,10 @@ mod tests {
 
     #[test]
     fn detail_user_data_reads_flags_only_from_ready_content() {
-        assert!(detail_user_data(&LoadState::Loading).is_none());
+        assert!(detail_user_data(&LoadState::<DetailContent>::Loading).is_none());
 
-        let detail = LoadState::Ready(DetailContent::Show(Box::new(show_detail(None))));
+        let detail: LoadState<_> =
+            LoadState::Ready(DetailContent::Show(Box::new(show_detail(None))));
         let (item_id, played, favorite) =
             detail_user_data(&detail).expect("ready content exposes user data");
         assert_eq!(item_id, "show-1");

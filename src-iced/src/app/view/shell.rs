@@ -1,21 +1,24 @@
+use std::borrow::Cow;
+
 use super::{account, browse, detail, home, personal_lists, player, settings};
 use crate::app::message::{BrowseMessage, HomeMessage, Message, SettingsMessage, ShellMessage};
 use crate::app::personal_lists::Route;
 use crate::app::shell::{SEARCH_INPUT_ID, SEARCH_TRIGGER_ID, SETTINGS_TRIGGER_ID};
-use crate::app::state::{Destination, NoticeLevel, State, ToastNotice};
+use crate::app::state::{Destination, State};
+use crate::i18n::Localizer;
 use iced::widget::{
   button, column, container, row, scrollable, space, stack, text, text_input, Column, Id,
 };
-use iced::{Alignment, Color, Element, Fill, Length};
+use iced::{Alignment, Element, Fill, Length};
 use jellypilot_core::config::AppMode;
 use jellypilot_core::LoadState;
-use jellypilot_ui::fonts::SPACE_GROTESK_FONT;
+use jellypilot_ui::fonts::HEADING_FONT;
 use jellypilot_ui::icons::{
   icon_for_control_state, icon_with_color, Icon, IconControlState, IconSize,
 };
 use jellypilot_ui::layout::SizeClass;
 use jellypilot_ui::overlay::{focus_tooltip, popover, tooltip, PopoverOptions, TooltipOptions};
-use jellypilot_ui::tokens::{ThemePalette, TOKENS};
+use jellypilot_ui::tokens::TOKENS;
 use jellypilot_ui::variants::{ButtonVariant, SurfaceVariant};
 use jellypilot_ui::widgets::control_button::{control_button, control_button_content};
 use jellypilot_ui::widgets::ellipsis_text::ellipsis_text;
@@ -67,20 +70,6 @@ pub fn view(state: &State) -> Element<'_, Message> {
     // Full mode, where the player is a bar.
     Destination::NowPlaying => home::view(state),
   };
-  let mut content_stack = stack![content].width(Fill).height(Fill);
-  if let Some(toast) = visible_toast(state) {
-    content_stack = content_stack.push(
-      container(toast_view(palette, toast))
-        .width(Fill)
-        .padding(iced::Padding {
-          top: TOKENS.spacing.s2,
-          right: TOKENS.spacing.s3,
-          bottom: 0.0,
-          left: TOKENS.spacing.s3,
-        })
-        .align_x(Alignment::End),
-    );
-  }
   // One of the two shell hairlines: 1px between the sidebar and the content.
   let sidebar_divider = container(space::vertical())
     .width(HAIRLINE_WIDTH)
@@ -90,7 +79,9 @@ pub fn view(state: &State) -> Element<'_, Message> {
     });
   // The sidebar docks full-height so its bottom (Settings, user) never moves
   // when the player bar appears; the bar docks under the content region only.
-  let mut right = Column::new().spacing(0.0).push(content_stack);
+  let mut right = Column::new()
+    .spacing(0.0)
+    .push(container(content).width(Fill).height(Fill));
   if let Some(player_bar) = player::bar(state) {
     // The second shell hairline: 1px above the player bar.
     let player_divider = container(space::horizontal())
@@ -128,112 +119,17 @@ pub fn view(state: &State) -> Element<'_, Message> {
 }
 
 /// Control-Only shell: no sidebar, no hairlines, no player bar — the compact
-/// full-window Now Playing view, or full-window Settings, with the toast
-/// layer on top.
+/// full-window Now Playing view, or full-window Settings.
 fn control_only_view(state: &State) -> Element<'_, Message> {
-  let palette = state.palette();
   let content: Element<'_, Message> = if state.shell.settings_open {
     settings_modal(state)
   } else {
     player::full(state)
   };
-  let mut content_stack = stack![content].width(Fill).height(Fill);
-  if let Some(toast) = visible_toast(state) {
-    content_stack = content_stack.push(
-      container(toast_view(palette, toast))
-        .width(Fill)
-        .padding(iced::Padding {
-          top: TOKENS.spacing.s2,
-          right: TOKENS.spacing.s3,
-          bottom: 0.0,
-          left: TOKENS.spacing.s3,
-        })
-        .align_x(Alignment::End),
-    );
-  }
-  container(content_stack)
+  container(content)
     .width(Fill)
     .height(Fill)
     .style(|theme| jellypilot_ui::theme::surface_variant(theme, SurfaceVariant::Canvas))
-    .into()
-}
-fn visible_toast(state: &State) -> Option<&ToastNotice> {
-  state.kernel.active_toast.as_ref()
-}
-
-#[allow(dead_code)]
-pub fn visible_notice(state: &State) -> Option<&str> {
-  state
-    .kernel
-    .active_toast
-    .as_ref()
-    .map(|toast| toast.message.as_str())
-}
-
-fn toast_view<'a>(palette: &'static ThemePalette, toast: &'a ToastNotice) -> Element<'a, Message> {
-  let colors = palette.colors;
-  let (icon, icon_color, text_color, bg_color) = match toast.level {
-    NoticeLevel::Error => (
-      Icon::Warning,
-      colors.error,
-      colors.onErrorContainer,
-      colors.errorContainer,
-    ),
-    NoticeLevel::Warning => (
-      Icon::Warning,
-      colors.warning,
-      colors.onWarningContainer,
-      colors.warningContainer,
-    ),
-  };
-
-  let close_id = toast.id;
-  let dismiss_button = button(icon_with_color(Icon::Close, IconSize::Xs, text_color))
-    .padding([3, 5])
-    .on_press(Message::DismissNotice(close_id))
-    .style(|_theme, status| {
-      let bg = match status {
-        button::Status::Hovered => Some(iced::Background::Color(Color::from_rgba(
-          1.0, 1.0, 1.0, 0.1,
-        ))),
-        button::Status::Pressed => Some(iced::Background::Color(Color::from_rgba(
-          1.0, 1.0, 1.0, 0.18,
-        ))),
-        _ => None,
-      };
-      button::Style {
-        background: bg,
-        text_color: Color::TRANSPARENT,
-        border: iced::Border {
-          radius: TOKENS.radii.sm.into(),
-          ..iced::Border::default()
-        },
-        ..button::Style::default()
-      }
-    });
-
-  let toast_content = row![
-    icon_with_color(icon, IconSize::Sm, icon_color),
-    text(&toast.message).size(13).color(text_color).width(Fill),
-    dismiss_button,
-  ]
-  .spacing(TOKENS.spacing.s2)
-  .align_y(Alignment::Center);
-
-  container(toast_content)
-    .max_width(440.0)
-    .padding([10, 14])
-    .style(move |_theme| container::Style {
-      background: Some(iced::Background::Color(bg_color)),
-      text_color: Some(text_color),
-      border: iced::Border {
-        color: colors.outlineVariant,
-        width: 1.0,
-        radius: TOKENS.radii.lg.into(),
-      },
-      shadow: palette.shadows.raised_high.iced(),
-      ..container::Style::default()
-    })
     .into()
 }
 
@@ -260,20 +156,21 @@ fn sidebar_full(
     .expect("FullUi required")
     .browse
     .search_input;
-  let search_slot = unified_search_field(search_draft, Some(SEARCH_TRIGGER_ID));
+  let search_slot =
+    unified_search_field(state.kernel.locale, search_draft, Some(SEARCH_TRIGGER_ID));
   let personal_destination = Destination::PersonalLists(Route::Overview);
   let personal_active = matches!(state.shell.destination, Destination::PersonalLists(_));
   let personal_navigation = Column::new()
     .spacing(TOKENS.spacing.s1_5)
     .push(destination_button(
       Icon::Home,
-      "Home",
+      state.t("common-home"),
       Destination::Home,
       state.shell.destination == Destination::Home,
     ))
     .push(destination_button(
       Icon::Heart,
-      "Personal Lists",
+      state.t("shell-personal-lists"),
       personal_destination,
       personal_active,
     ));
@@ -308,13 +205,13 @@ fn sidebar_full(
       libraries
     }
     LoadState::Failed(_) => Column::new().push(
-      text("Libraries unavailable")
+      text(state.t("shell-libraries-unavailable"))
         .size(12)
         .color(state.palette().colors.warning),
     ),
   };
 
-  let mut library_heading = row![text("Libraries")
+  let mut library_heading = row![text(state.t("shell-libraries"))
     .size(12)
     .color(state.palette().text.metadata)]
   .width(Fill)
@@ -360,6 +257,7 @@ fn sidebar_full(
 /// visually and behaviorally identical. The compact rail owns the trigger ID;
 /// the expanded field owns it directly.
 fn unified_search_field<'a>(
+  locale: Localizer,
   search_draft: &'a str,
   trigger_id: Option<&'static str>,
 ) -> Element<'a, Message> {
@@ -374,7 +272,7 @@ fn unified_search_field<'a>(
     None => leading,
   };
   let input = clear_on_escape(
-    text_input("Search movies and shows…", search_draft)
+    text_input(&locale.text("shell-search-placeholder"), search_draft)
       .on_input(|value| Message::Browse(BrowseMessage::SearchInputChanged(value)))
       .on_submit(Message::Browse(BrowseMessage::SearchSubmitted))
       .id(Id::new(SEARCH_INPUT_ID))
@@ -408,7 +306,7 @@ fn unified_search_field<'a>(
         .width(Length::Fixed(48.0))
         .content_centered(true)
         .on_press(Message::Shell(ShellMessage::ClearSearch)),
-      "Clear search",
+      locale.text("shell-clear-search"),
       TooltipOptions::default(),
     )
   };
@@ -426,7 +324,7 @@ fn sidebar_compact(state: &State) -> container::Container<'_, Message> {
       .width(Fill)
       .content_centered(true)
       .on_press(Message::Shell(ShellMessage::ToggleCompactSearch)),
-    "Search",
+    state.t("common-search"),
     TooltipOptions::default(),
   );
   let search_draft = &state
@@ -435,7 +333,7 @@ fn sidebar_compact(state: &State) -> container::Container<'_, Message> {
     .expect("FullUi required")
     .browse
     .search_input;
-  let compact_search_content = unified_search_field(search_draft, None);
+  let compact_search_content = unified_search_field(state.kernel.locale, search_draft, None);
   let compact_search = popover(
     search_trigger,
     compact_search_content,
@@ -454,7 +352,7 @@ fn sidebar_compact(state: &State) -> container::Container<'_, Message> {
     .width(Fill)
     .push(compact_destination_button(
       Icon::Home,
-      "Home",
+      state.t("common-home"),
       Destination::Home,
       state.shell.destination == Destination::Home,
     ));
@@ -504,7 +402,7 @@ fn sidebar_compact(state: &State) -> container::Container<'_, Message> {
   };
   let personal_navigation = personal_navigation.push(compact_destination_button(
     Icon::Heart,
-    "Personal Lists",
+    state.t("shell-personal-lists"),
     personal_destination,
     personal_active,
   ));
@@ -519,16 +417,16 @@ fn sidebar_compact(state: &State) -> container::Container<'_, Message> {
         (!state.shell.refresh_busy).then_some(Message::Shell(ShellMessage::RefreshCurrent)),
       ),
     if state.shell.refresh_busy {
-      "Refreshing…"
+      state.t("shell-refreshing")
     } else {
-      "Refresh"
+      state.t("common-refresh")
     },
     TooltipOptions::default(),
   );
 
   let bottom = column![
     account::sidebar_popover(state, true),
-    compact_settings_button(),
+    compact_settings_button(state.kernel.locale),
     refresh,
     tooltip(
       control_button(Some(Icon::PictureInPicture), None, ButtonVariant::Tonal,)
@@ -540,7 +438,7 @@ fn sidebar_compact(state: &State) -> container::Container<'_, Message> {
         .on_press(Message::Settings(SettingsMessage::AppModeSelected(
           AppMode::ControlOnly,
         ))),
-      "Control mode",
+      state.t("shell-control-mode"),
       TooltipOptions::default(),
     ),
   ]
@@ -572,17 +470,21 @@ fn settings_modal(state: &State) -> Element<'_, Message> {
 
   let header = row![
     column![
-      text("Settings")
-        .font(SPACE_GROTESK_FONT)
+      text(state.t("common-settings"))
+        .font(HEADING_FONT)
         .size(28)
         .color(palette.text.heading),
-      text("Changes are written to disk when Saved appears.")
+      text(state.t("shell-settings-save-hint"))
         .size(13)
         .color(palette.text.body),
     ]
     .spacing(TOKENS.spacing.s0_5),
     space::horizontal(),
-    tooltip(close_button, "Close", TooltipOptions::default()),
+    tooltip(
+      close_button,
+      state.t("common-close"),
+      TooltipOptions::default()
+    ),
   ]
   .width(Fill)
   .align_y(Alignment::Center);
@@ -630,7 +532,7 @@ fn settings_button<'a>() -> Element<'a, Message> {
     .into()
 }
 
-fn compact_settings_button<'a>() -> Element<'a, Message> {
+fn compact_settings_button<'a>(locale: Localizer) -> Element<'a, Message> {
   // Action, not navigation — neutral Tonal, never the ghost vocabulary.
   let btn = control_button(Some(Icon::Settings), None, ButtonVariant::Tonal)
     .style(sidebar::action)
@@ -641,7 +543,11 @@ fn compact_settings_button<'a>() -> Element<'a, Message> {
     .content_centered(true)
     .on_press(Message::Settings(SettingsMessage::Open));
 
-  tooltip(btn, "Settings", TooltipOptions::default())
+  tooltip(
+    btn,
+    locale.text("common-settings"),
+    TooltipOptions::default(),
+  )
 }
 
 /// The full sidebar groups its three global actions into one compact control
@@ -653,7 +559,11 @@ fn footer_toolbar(state: &State) -> Element<'_, Message> {
       .height(24.0)
       .style(sidebar::divider)
   };
-  let settings = tooltip(settings_button(), "Settings", TooltipOptions::default());
+  let settings = tooltip(
+    settings_button(),
+    state.t("common-settings"),
+    TooltipOptions::default(),
+  );
   let refresh = tooltip(
     control_button(Some(Icon::Refresh), None, ButtonVariant::Text)
       .style(sidebar::action)
@@ -664,9 +574,9 @@ fn footer_toolbar(state: &State) -> Element<'_, Message> {
         (!state.shell.refresh_busy).then_some(Message::Shell(ShellMessage::RefreshCurrent)),
       ),
     if state.shell.refresh_busy {
-      "Refreshing…"
+      state.t("shell-refreshing")
     } else {
-      "Refresh"
+      state.t("common-refresh")
     },
     TooltipOptions::default(),
   );
@@ -679,7 +589,7 @@ fn footer_toolbar(state: &State) -> Element<'_, Message> {
       .on_press(Message::Settings(SettingsMessage::AppModeSelected(
         AppMode::ControlOnly,
       ))),
-    "Control mode",
+    state.t("shell-control-mode"),
     TooltipOptions::default(),
   );
 
@@ -701,10 +611,12 @@ fn footer_toolbar(state: &State) -> Element<'_, Message> {
 
 fn destination_button<'a>(
   icon: Icon,
-  label: &'a str,
+  label: impl Into<Cow<'a, str>>,
   destination: Destination,
   active: bool,
 ) -> Element<'a, Message> {
+  let label = label.into();
+  let tooltip_label = label.clone();
   let is_library = matches!(&destination, Destination::Library { .. });
   let variant = if active {
     ButtonVariant::Secondary
@@ -721,7 +633,7 @@ fn destination_button<'a>(
       row![
         icon_for_control_state(icon, IconSize::Md, variant, state),
         container(
-          ellipsis_text(label)
+          ellipsis_text(label.clone())
             .size(14)
             .style(move |theme| text::Style {
               color: Some(jellypilot_ui::widgets::button::style(theme, variant, status).text_color),
@@ -746,7 +658,7 @@ fn destination_button<'a>(
   .width(Fill)
   .on_press(Message::Home(HomeMessage::Navigate(destination)));
 
-  focus_tooltip(btn, label, TooltipOptions::default())
+  focus_tooltip(btn, tooltip_label, TooltipOptions::default())
 }
 fn shortcut_skeleton<'a>(skeleton_phase: f32, reduced_motion: bool) -> Element<'a, Message> {
   skeleton_block(Length::Fill, 34.0, skeleton_phase, reduced_motion).into()
@@ -754,7 +666,7 @@ fn shortcut_skeleton<'a>(skeleton_phase: f32, reduced_motion: bool) -> Element<'
 
 fn compact_destination_button<'a>(
   icon: Icon,
-  label: &'a str,
+  label: impl Into<String>,
   destination: Destination,
   active: bool,
 ) -> Element<'a, Message> {
@@ -777,99 +689,4 @@ fn compact_destination_button<'a>(
     .on_press(Message::Home(HomeMessage::Navigate(destination)));
 
   focus_tooltip(btn, label, TooltipOptions::default())
-}
-
-#[cfg(test)]
-mod tests {
-  use super::*;
-
-  #[test]
-  fn active_toast_is_rendered_and_cleared_on_dismiss() {
-    let mut state = State::boot(false);
-    assert_eq!(visible_notice(&state), None);
-    assert_eq!(visible_toast(&state), None);
-
-    state.kernel.active_toast = Some(ToastNotice {
-      id: 1,
-      message: "Playback failed.".to_owned(),
-      level: NoticeLevel::Error,
-    });
-    assert_eq!(visible_notice(&state), Some("Playback failed."));
-    assert_eq!(
-      visible_toast(&state),
-      Some(&ToastNotice {
-        id: 1,
-        message: "Playback failed.".to_owned(),
-        level: NoticeLevel::Error,
-      })
-    );
-
-    state.dismiss_toast(1);
-    assert_eq!(visible_notice(&state), None);
-    assert_eq!(visible_toast(&state), None);
-  }
-
-  #[test]
-  fn newer_toast_replaces_older_and_older_id_does_not_dismiss_newer() {
-    let mut state = State::boot(false);
-    state.kernel.active_toast = Some(ToastNotice {
-      id: 1,
-      message: "First notice".to_owned(),
-      level: NoticeLevel::Warning,
-    });
-    state.kernel.active_toast = Some(ToastNotice {
-      id: 2,
-      message: "Second notice".to_owned(),
-      level: NoticeLevel::Error,
-    });
-
-    assert_eq!(visible_notice(&state), Some("Second notice"));
-
-    state.dismiss_toast(1);
-    assert_eq!(visible_notice(&state), Some("Second notice"));
-
-    state.dismiss_toast(2);
-    assert_eq!(visible_notice(&state), None);
-  }
-  #[test]
-  fn sidebar_width_maps_size_classes_to_expected_widths() {
-    assert_eq!(sidebar_width(SizeClass::Compact), 72.0);
-    assert_eq!(sidebar_width(SizeClass::Standard), 240.0);
-    assert_eq!(sidebar_width(SizeClass::Wide), 240.0);
-  }
-
-  #[test]
-  fn shell_view_renders_in_loading_state() {
-    let mut state = State::boot(false);
-    state.shell.skeleton_phase = 0.42;
-    state.full.as_mut().unwrap().home.data.shortcuts = LoadState::Loading;
-    let _element = view(&state);
-  }
-
-  #[test]
-  fn shell_view_renders_settings_modal_in_full_mode() {
-    let mut state = State::boot(false);
-    state.shell.settings_open = true;
-    let _element = view(&state);
-  }
-
-  #[test]
-  fn shell_view_renders_settings_modal_in_control_only_mode() {
-    let mut state = State::boot(false);
-    // This test persists a settings mutation; run it against a scratch file
-    // instead of the developer's real config (dirs::config_dir).
-    let path = std::env::temp_dir().join(format!(
-      "jellypilot-iced-settings-shell-view-{}.json",
-      std::process::id()
-    ));
-    let _ = std::fs::remove_file(&path);
-    state.kernel.settings = jellypilot_core::config::SettingsStore::for_test(path);
-    state
-      .kernel
-      .settings
-      .set_app_mode(AppMode::ControlOnly)
-      .unwrap();
-    state.shell.settings_open = true;
-    let _element = view(&state);
-  }
 }

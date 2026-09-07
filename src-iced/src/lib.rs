@@ -1,6 +1,7 @@
 //! Cross-platform iced application shell for JellyPilot.
 
 mod app;
+mod i18n;
 mod instance;
 mod tray;
 
@@ -26,11 +27,11 @@ pub(crate) fn decode_icon(png: &[u8]) -> Option<(Vec<u8>, u32, u32)> {
 }
 
 /// Starts the cross-platform iced daemon and blocks until it exits.
-pub fn run() -> iced::Result {
+pub fn run() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
   run_application(false)
 }
 /// Starts the iced daemon and exits after its first rendered window frame.
-pub fn run_smoke() -> iced::Result {
+pub fn run_smoke() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
   run_application(true)
 }
 
@@ -49,7 +50,7 @@ pub(crate) fn parse_smoke_size(input: &str) -> Option<Size> {
   Some(Size::new(width, height))
 }
 
-fn run_application(smoke: bool) -> iced::Result {
+fn run_application(smoke: bool) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
   tracing::debug!(smoke, "daemon booting");
   let instance = if smoke {
     None
@@ -60,30 +61,23 @@ fn run_application(smoke: bool) -> iced::Result {
       instance::Startup::Unavailable => None,
     }
   };
-  let tray = (!smoke).then(|| tray::Tray::new().ok()).flatten();
+  jellypilot_ui::fonts::initialize()?;
   let instance = RefCell::new(instance);
-  let tray = RefCell::new(tray);
   let mut daemon = iced::daemon(
-    move || {
-      app::boot(
-        smoke,
-        tray.borrow_mut().take(),
-        instance.borrow_mut().take(),
-      )
-    },
+    move || app::boot(smoke, instance.borrow_mut().take()),
     app::update,
     app::view,
   )
   .title("JellyPilot")
   .subscription(app::subscription)
   .theme(app::theme)
-  .default_font(jellypilot_ui::fonts::INTER_FONT);
+  .default_font(jellypilot_ui::fonts::BODY_FONT);
 
   for font in jellypilot_ui::fonts::fonts() {
     daemon = daemon.font(font);
   }
 
-  daemon.run()
+  daemon.run().map_err(Into::into)
 }
 
 pub(crate) fn window_icon() -> Option<window::Icon> {

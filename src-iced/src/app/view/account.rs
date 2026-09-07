@@ -6,7 +6,7 @@ use jellypilot_auth::login::ConnectionPhase;
 use jellypilot_media_server::MediaServerProvider;
 use jellypilot_session::RemoteControlState;
 use jellypilot_ui::brands::{brand_svg, Brand};
-use jellypilot_ui::fonts::SPACE_GROTESK_FONT;
+use jellypilot_ui::fonts::HEADING_FONT;
 use jellypilot_ui::icons::{icon_with_color, Icon, IconControlState, IconSize};
 use jellypilot_ui::overlay::{
   focus_tooltip, popover, Alignment as PopoverAlignment, Placement, PopoverAppearance,
@@ -26,6 +26,7 @@ use crate::app::shell::{
   profile_action_id, ACCOUNT_ADD_TRIGGER_ID, ACCOUNT_DISCONNECT_TRIGGER_ID, ACCOUNT_TRIGGER_ID,
 };
 use crate::app::state::{LoginMethod, QuickConnectState, State};
+use crate::i18n::Localizer;
 
 const POPOVER_WIDTH: f32 = 368.0;
 const POPOVER_CONTENT_HEIGHT: f32 = 520.0;
@@ -140,7 +141,14 @@ fn identity_card<'a>(
   compact: bool,
 ) -> Element<'a, Message> {
   let (name, server, provider, provider_kind) = account.current.as_ref().map_or_else(
-    || ("Account".to_owned(), "Not signed in".to_owned(), None, None),
+    || {
+      (
+        state.t("account-title"),
+        state.t("account-not-signed-in"),
+        None,
+        None,
+      )
+    },
     |current| {
       (
         current.user_name.to_owned(),
@@ -204,12 +212,7 @@ fn identity_card<'a>(
         row![
           avatar(&identity, photo.clone(), 28.0, false),
           column![
-            container(
-              ellipsis_text(name.clone())
-                .font(SPACE_GROTESK_FONT)
-                .size(15)
-            )
-            .width(Fill),
+            container(ellipsis_text(name.clone()).font(HEADING_FONT).size(15)).width(Fill),
             subtitle_line,
           ]
           .spacing(TOKENS.spacing.s0_5)
@@ -245,9 +248,9 @@ fn quick_menu<'a>(state: &'a State, account: &AccountView<'a>) -> Element<'a, Me
     let server = current.server_name.unwrap_or(current.server_url);
     let provider = provider_name(current.provider);
     let (copy_icon, copy_hint) = match account.copy_status {
-      CopyStatus::Idle => (Icon::Copy, "Copy server address"),
-      CopyStatus::Copied => (Icon::Check, "Address copied"),
-      CopyStatus::Failed => (Icon::Warning, "Copy failed — retry"),
+      CopyStatus::Idle => (Icon::Copy, state.t("account-copy-server-address")),
+      CopyStatus::Copied => (Icon::Check, state.t("account-address-copied")),
+      CopyStatus::Failed => (Icon::Warning, state.t("account-copy-failed")),
     };
     content = content.push(
       column![
@@ -257,7 +260,7 @@ fn quick_menu<'a>(state: &'a State, account: &AccountView<'a>) -> Element<'a, Me
               current.user_name,
               16.0,
               palette.text.heading,
-              Some(SPACE_GROTESK_FONT),
+              Some(HEADING_FONT),
               Fill,
             ),
             row![
@@ -313,9 +316,9 @@ fn quick_menu<'a>(state: &'a State, account: &AccountView<'a>) -> Element<'a, Me
     content = content.push(
       column![
         text(if account.current.is_some() {
-          "Switch account"
+          state.t("account-switch")
         } else {
-          "Saved accounts"
+          state.t("account-saved")
         })
         .size(12)
         .color(palette.text.metadata),
@@ -327,24 +330,24 @@ fn quick_menu<'a>(state: &'a State, account: &AccountView<'a>) -> Element<'a, Me
   let mut actions = column![
     menu_action(
       Icon::User,
-      if account.handoff_blocking {
-        "Switching account…"
+      &if account.handoff_blocking {
+        state.t("account-switching")
       } else {
-        "Add account"
+        state.t("account-add")
       }
     )
     .id(ACCOUNT_ADD_TRIGGER_ID)
     .on_press_maybe(
       (!account.handoff_blocking).then_some(Message::Account(accounts::Message::AddAccount))
     ),
-    menu_action(Icon::Settings, "Manage accounts")
+    menu_action(Icon::Settings, &state.t("account-manage-accounts"))
       .id("account-settings")
       .on_press(Message::Settings(SettingsMessage::OpenAccounts)),
   ]
   .spacing(TOKENS.spacing.s0_5);
   if account.current.is_some() {
     actions = actions.push(
-      menu_action(Icon::Close, "Disconnect")
+      menu_action(Icon::Close, &state.t("account-disconnect"))
         .id(ACCOUNT_DISCONNECT_TRIGGER_ID)
         .on_press_maybe(
           (!account.handoff_blocking).then_some(Message::Account(accounts::Message::Disconnect)),
@@ -384,7 +387,7 @@ fn account_feedback<'a>(
   if let Some(error) = account.error {
     feedback = feedback.push(
       row![
-        text(error)
+        text(state.kernel.locale.message(error))
           .size(12)
           .color(state.palette().colors.error)
           .width(Fill),
@@ -402,7 +405,7 @@ fn account_feedback<'a>(
     feedback = feedback.push(
       control_button(
         Some(Icon::Refresh),
-        Some("Retry account handoff cleanup".to_owned()),
+        Some(state.t("account-retry-handoff")),
         ButtonVariant::Primary,
       )
       .style(presentation.action_style())
@@ -416,7 +419,7 @@ fn account_feedback<'a>(
     feedback = feedback.push(
       control_button(
         Some(Icon::Refresh),
-        Some("Retry Watchlist cleanup".to_owned()),
+        Some(state.t("account-retry-watchlist")),
         ButtonVariant::Tonal,
       )
       .style(presentation.action_style())
@@ -436,9 +439,9 @@ fn management_content<'a>(state: &'a State, account: &AccountView<'a>) -> Elemen
   if let Some(current) = &account.current {
     let server = current.server_name.unwrap_or(current.server_url);
     let copy_label = match account.copy_status {
-      CopyStatus::Idle => "Copy address",
-      CopyStatus::Copied => "Copied",
-      CopyStatus::Failed => "Retry copy",
+      CopyStatus::Idle => state.t("account-copy-address"),
+      CopyStatus::Copied => state.t("account-copied"),
+      CopyStatus::Failed => state.t("account-retry-copy"),
     };
     content = content.push(
       column![
@@ -458,7 +461,7 @@ fn management_content<'a>(state: &'a State, account: &AccountView<'a>) -> Elemen
                 current.user_name,
                 16.0,
                 palette.text.heading,
-                Some(SPACE_GROTESK_FONT),
+                Some(HEADING_FONT),
                 Length::Shrink,
               ),
               provider_badge(current.provider, IconControlState::Rest, palette),
@@ -477,16 +480,12 @@ fn management_content<'a>(state: &'a State, account: &AccountView<'a>) -> Elemen
           row![
             presentation.text(current.server_url, 12.0, palette.text.body, None, Fill),
             account_tooltip(
-              control_button(
-                Some(Icon::Copy),
-                Some(copy_label.to_owned()),
-                ButtonVariant::Text,
-              )
-              .style(presentation.action_style())
-              .icon_size(IconSize::Xs)
-              .spacing(TOKENS.spacing.s1)
-              .padding([5, 7])
-              .on_press(Message::Account(accounts::Message::CopyServerAddress)),
+              control_button(Some(Icon::Copy), Some(copy_label), ButtonVariant::Text,)
+                .style(presentation.action_style())
+                .icon_size(IconSize::Xs)
+                .spacing(TOKENS.spacing.s1)
+                .padding([5, 7])
+                .on_press(Message::Account(accounts::Message::CopyServerAddress)),
               format!("{} · {server} · {}", current.user_name, current.server_url),
               presentation,
             ),
@@ -496,7 +495,7 @@ fn management_content<'a>(state: &'a State, account: &AccountView<'a>) -> Elemen
         )
         .padding([6, 8])
         .style(|theme| jellypilot_ui::theme::surface_variant(theme, SurfaceVariant::Block)),
-        remote_status(account.remote_control),
+        remote_status(state.kernel.locale, account.remote_control),
       ]
       .spacing(TOKENS.spacing.s2),
     );
@@ -504,31 +503,27 @@ fn management_content<'a>(state: &'a State, account: &AccountView<'a>) -> Elemen
 
   content = content.extend(account_feedback(state, account, presentation));
 
-  content = content.push(profile_header(account, presentation));
+  content = content.push(profile_header(state.kernel.locale, account, presentation));
   content = content.push(saved_profiles(state, account, presentation));
-  content = content.push(auto_login(account.auto_login));
+  content = content.push(auto_login(state.kernel.locale, account.auto_login));
 
   let add_label = if account.handoff_blocking {
-    "Switching account…"
+    state.t("account-switching")
   } else {
-    "Add account"
+    state.t("account-add")
   };
   content = content.push(
-    control_button(
-      Some(Icon::UserCheck),
-      Some(add_label.to_owned()),
-      ButtonVariant::Tonal,
-    )
-    .style(presentation.action_style())
-    .id(ACCOUNT_ADD_TRIGGER_ID)
-    .icon_size(IconSize::Sm)
-    .spacing(TOKENS.spacing.s1_5)
-    .padding([8, 12])
-    .width(Fill)
-    .content_centered(true)
-    .on_press_maybe(
-      (!account.handoff_blocking).then_some(Message::Account(accounts::Message::AddAccount)),
-    ),
+    control_button(Some(Icon::UserCheck), Some(add_label), ButtonVariant::Tonal)
+      .style(presentation.action_style())
+      .id(ACCOUNT_ADD_TRIGGER_ID)
+      .icon_size(IconSize::Sm)
+      .spacing(TOKENS.spacing.s1_5)
+      .padding([8, 12])
+      .width(Fill)
+      .content_centered(true)
+      .on_press_maybe(
+        (!account.handoff_blocking).then_some(Message::Account(accounts::Message::AddAccount)),
+      ),
   );
   let active_sign_out = account
     .active_key
@@ -537,7 +532,7 @@ fn management_content<'a>(state: &'a State, account: &AccountView<'a>) -> Elemen
     row![
       control_button(
         Some(Icon::Close),
-        Some("Disconnect".to_owned()),
+        Some(state.t("account-disconnect")),
         ButtonVariant::Tonal,
       )
       .style(presentation.action_style())
@@ -560,7 +555,7 @@ fn management_content<'a>(state: &'a State, account: &AccountView<'a>) -> Elemen
           row![
             space::horizontal(),
             icon_with_color(Icon::Trash, IconSize::Xs, color),
-            text("Sign Out").size(14).color(color),
+            text(state.t("account-sign-out")).size(14).color(color),
             space::horizontal(),
           ]
           .spacing(TOKENS.spacing.s1)
@@ -591,25 +586,25 @@ fn connection_badge(state: &State) -> Element<'static, Message> {
     ConnectionPhase::SignedOut | ConnectionPhase::Failed => BadgeVariant::Neutral,
   };
   let label = match state.kernel.connection {
-    ConnectionPhase::Connected => "Connected",
-    ConnectionPhase::Connecting => "Connecting",
-    ConnectionPhase::SignedOut => "Signed out",
-    ConnectionPhase::Failed => "Connection failed",
+    ConnectionPhase::Connected => "account-connected",
+    ConnectionPhase::Connecting => "account-connecting",
+    ConnectionPhase::SignedOut => "account-signed-out",
+    ConnectionPhase::Failed => "account-connection-failed",
   };
-  status_badge(label, variant)
+  status_badge(state.t(label), variant)
 }
 
-fn remote_status(state: RemoteControlState) -> Element<'static, Message> {
+fn remote_status(locale: Localizer, state: RemoteControlState) -> Element<'static, Message> {
   let (label, variant) = match state {
-    RemoteControlState::Available => ("Remote control: available", BadgeVariant::Success),
-    RemoteControlState::Connecting => ("Remote control: connecting", BadgeVariant::Warning),
-    RemoteControlState::Lost => ("Remote control: connection lost", BadgeVariant::Warning),
-    RemoteControlState::Unavailable => ("Remote control: unavailable", BadgeVariant::Neutral),
+    RemoteControlState::Available => ("account-remote-available", BadgeVariant::Success),
+    RemoteControlState::Connecting => ("account-remote-connecting", BadgeVariant::Warning),
+    RemoteControlState::Lost => ("account-remote-lost", BadgeVariant::Warning),
+    RemoteControlState::Unavailable => ("account-remote-unavailable", BadgeVariant::Neutral),
   };
-  status_badge(label, variant)
+  status_badge(locale.text(label), variant)
 }
 
-fn status_badge(label: &'static str, variant: BadgeVariant) -> Element<'static, Message> {
+fn status_badge(label: String, variant: BadgeVariant) -> Element<'static, Message> {
   container(text(label).size(11))
     .padding([3, 6])
     .style(move |theme| jellypilot_ui::theme::badge_variant(theme, variant))
@@ -701,7 +696,7 @@ fn avatar<'a>(
         .map(|character| character.to_uppercase().to_string())
         .unwrap_or_else(|| "?".to_owned());
       let accent = fallback_accent(identity);
-      container(text(initial).font(SPACE_GROTESK_FONT).size(size * 0.42))
+      container(text(initial).font(HEADING_FONT).size(size * 0.42))
         .width(Length::Fixed(size))
         .height(Length::Fixed(size))
         .align_x(Alignment::Center)
@@ -742,18 +737,22 @@ fn fallback_accent(label: &str) -> u8 {
 }
 
 fn profile_header<'a>(
+  locale: Localizer,
   account: &AccountView<'a>,
   presentation: Presentation,
 ) -> Element<'a, Message> {
   let availability = if account.loading {
-    "Loading…".to_owned()
+    locale.text("common-loading")
   } else {
-    format!("{} available", account.profiles.len())
+    locale.format(
+      "account-available",
+      &[("count", account.profiles.len().into())],
+    )
   };
   row![
     column![
-      text("Switch server / account")
-        .font(SPACE_GROTESK_FONT)
+      text(locale.text("account-switch-server"))
+        .font(HEADING_FONT)
         .size(14),
       text(availability).size(11),
     ]
@@ -761,14 +760,11 @@ fn profile_header<'a>(
     .width(Fill),
     control_button(
       Some(Icon::Sliders),
-      Some(
-        if account.management_open {
-          "Done"
-        } else {
-          "Manage"
-        }
-        .to_owned(),
-      ),
+      Some(if account.management_open {
+        locale.text("account-done")
+      } else {
+        locale.text("account-manage")
+      },),
       ButtonVariant::Text,
     )
     .style(presentation.action_style())
@@ -790,10 +786,10 @@ fn saved_profiles<'a>(
   presentation: Presentation,
 ) -> Element<'a, Message> {
   if account.loading {
-    return text("Loading saved accounts…").size(12).into();
+    return text(state.t("account-loading-saved")).size(12).into();
   }
   if account.profiles.is_empty() {
-    return text("No saved accounts yet.").size(12).into();
+    return text(state.t("account-no-saved")).size(12).into();
   }
   let mut profiles = Column::new().spacing(TOKENS.spacing.s1);
   let palette = state.palette();
@@ -851,13 +847,13 @@ fn saved_profiles<'a>(
         };
         let title = presentation.text(
           if busy {
-            "Working…".to_owned()
+            state.t("account-working")
           } else {
             profile_title.clone()
           },
           13.0,
           title_color,
-          Some(SPACE_GROTESK_FONT),
+          Some(HEADING_FONT),
           Fill,
         );
         let title: Element<'_, Message> = match presentation {
@@ -932,10 +928,14 @@ fn saved_profiles<'a>(
   container(profiles).max_height(PROFILE_LIST_HEIGHT).into()
 }
 
-fn auto_login(auto_login: bool) -> Element<'static, Message> {
+fn auto_login(locale: Localizer, auto_login: bool) -> Element<'static, Message> {
   let switch = control_button(
     None,
-    Some(if auto_login { "On" } else { "Off" }.to_owned()),
+    Some(locale.text(if auto_login {
+      "common-on"
+    } else {
+      "common-off"
+    })),
     if auto_login {
       ButtonVariant::TonalActive
     } else {
@@ -946,8 +946,10 @@ fn auto_login(auto_login: bool) -> Element<'static, Message> {
   .on_press(Message::Settings(SettingsMessage::AutoLoginToggled));
   row![
     column![
-      text("Automatic sign-in").font(SPACE_GROTESK_FONT).size(13),
-      text("Sign in to the last-used account at startup")
+      text(locale.text("account-auto-login"))
+        .font(HEADING_FONT)
+        .size(13),
+      text(locale.text("account-auto-login-description"))
         .size(11)
         .width(Fill),
     ]
@@ -985,38 +987,38 @@ fn confirmation_modal<'a>(
   confirmation: accounts::ConfirmationView<'a>,
 ) -> Element<'a, Message> {
   let palette = state.palette();
+  let locale = state.kernel.locale;
+  let account = confirmation
+    .account
+    .map_or_else(|| state.t("account-this-account"), str::to_owned);
   let (title, detail) = match confirmation.kind {
     ConfirmationKind::SwitchAccount => (
-      "Switch account",
-      format!(
-        "Switch to {}? The current playback session will end.",
-        confirmation.account.unwrap_or("this account")
-      ),
+      state.t("account-switch"),
+      locale.format("account-confirm-switch", &[("account", account.into())]),
     ),
     ConfirmationKind::ConnectAndSwitch => (
-      "Connect and switch",
-      "The current playback session will end before this account is adopted.".to_owned(),
+      state.t("account-connect-switch"),
+      state.t("account-confirm-connect-switch"),
     ),
     ConfirmationKind::Disconnect => (
-      "Disconnect",
-      "End the current connection and playback session?".to_owned(),
+      state.t("account-disconnect"),
+      state.t("account-confirm-disconnect"),
     ),
     ConfirmationKind::SignOut => (
-      "Sign Out",
-      format!(
-        "Remove {} from this device{}?",
-        confirmation.account.unwrap_or("this account"),
+      state.t("account-sign-out"),
+      locale.format(
         if confirmation.active_profile {
-          " and end the current session"
+          "account-confirm-signout-active"
         } else {
-          ""
-        }
+          "account-confirm-signout"
+        },
+        &[("account", account.into())],
       ),
     ),
   };
   let mut body = column![
     text(title)
-      .font(SPACE_GROTESK_FONT)
+      .font(HEADING_FONT)
       .size(24)
       .color(palette.text.heading),
     text(detail).size(14).color(palette.text.body),
@@ -1025,19 +1027,16 @@ fn confirmation_modal<'a>(
   if confirmation.kind == ConfirmationKind::SignOut {
     body = body.push(
       row![
-        text("Also delete this account's local Watchlist")
+        text(state.t("account-delete-watchlist"))
           .size(13)
           .width(Fill),
         control_button(
           None,
-          Some(
-            if confirmation.delete_watchlist {
-              "On"
-            } else {
-              "Off"
-            }
-            .to_owned()
-          ),
+          Some(if confirmation.delete_watchlist {
+            state.t("common-on")
+          } else {
+            state.t("common-off")
+          }),
           if confirmation.delete_watchlist {
             ButtonVariant::TonalActive
           } else {
@@ -1055,7 +1054,7 @@ fn confirmation_modal<'a>(
     row![
       control_button(
         Some(Icon::Close),
-        Some("Cancel".to_owned()),
+        Some(state.t("common-cancel")),
         ButtonVariant::Tonal
       )
       .icon_size(IconSize::Sm)
@@ -1065,7 +1064,7 @@ fn confirmation_modal<'a>(
       space::horizontal(),
       control_button(
         Some(Icon::Check),
-        Some("Confirm".to_owned()),
+        Some(state.t("account-confirm")),
         ButtonVariant::Primary
       )
       .icon_size(IconSize::Sm)
@@ -1097,23 +1096,31 @@ fn add_account_modal<'a>(
     });
   let method: Element<'_, Message> = if flow.provider == MediaServerProvider::Jellyfin {
     row![
-      candidate_method("Quick Connect", LoginMethod::QuickConnect, flow.method),
-      candidate_method("Password", LoginMethod::Password, flow.method),
+      candidate_method(
+        state.t("login-quick-connect"),
+        LoginMethod::QuickConnect,
+        flow.method
+      ),
+      candidate_method(
+        state.t("login-password"),
+        LoginMethod::Password,
+        flow.method
+      ),
     ]
     .spacing(TOKENS.spacing.s2)
     .into()
   } else {
-    text("Emby uses password sign-in.").size(13).into()
+    text(state.t("login-emby-password")).size(13).into()
   };
-  let sign_in = candidate_sign_in(candidate);
+  let sign_in = candidate_sign_in(state.kernel.locale, candidate);
   let mut form = column![
     row![
       column![
-        text("Add account")
-          .font(SPACE_GROTESK_FONT)
+        text(state.t("account-add"))
+          .font(HEADING_FONT)
           .size(24)
           .color(palette.text.heading),
-        text("Authenticate first, then connect and switch.")
+        text(state.t("account-add-description"))
           .size(13)
           .color(palette.text.metadata),
       ]
@@ -1125,14 +1132,20 @@ fn add_account_modal<'a>(
     ]
     .align_y(Alignment::Center),
     provider,
-    text("Server URL").size(12).color(palette.text.metadata),
+    text(state.t("login-server-url"))
+      .size(12)
+      .color(palette.text.metadata),
     server,
     method,
     sign_in,
   ]
   .spacing(TOKENS.spacing.s3);
   if let Some(error) = &flow.error {
-    form = form.push(text(error).size(13).color(palette.colors.error));
+    form = form.push(
+      text(state.kernel.locale.message(error))
+        .size(13)
+        .color(palette.colors.error),
+    );
   }
   scrollable(form)
     .height(Fill)
@@ -1164,7 +1177,7 @@ fn candidate_button<'a>(
 }
 
 fn candidate_method<'a>(
-  label: &'a str,
+  label: String,
   method: LoginMethod,
   selected: LoginMethod,
 ) -> Element<'a, Message> {
@@ -1174,7 +1187,7 @@ fn candidate_method<'a>(
     } else {
       Icon::Lock
     }),
-    Some(label.to_owned()),
+    Some(label),
     if method == selected {
       ButtonVariant::Secondary
     } else {
@@ -1188,13 +1201,16 @@ fn candidate_method<'a>(
   .into()
 }
 
-fn candidate_sign_in<'a>(candidate: &'a CandidateSurface) -> Element<'a, Message> {
+fn candidate_sign_in<'a>(
+  locale: Localizer,
+  candidate: &'a CandidateSurface,
+) -> Element<'a, Message> {
   let flow = &candidate.flow;
   match flow.method {
     LoginMethod::QuickConnect => match &flow.quick_connect {
       QuickConnectState::Idle | QuickConnectState::Failed => control_button(
         Some(Icon::QrCode),
-        Some("Request Quick Connect code".to_owned()),
+        Some(locale.text("login-request-code")),
         ButtonVariant::Primary,
       )
       .spacing(TOKENS.spacing.s2)
@@ -1203,13 +1219,13 @@ fn candidate_sign_in<'a>(candidate: &'a CandidateSurface) -> Element<'a, Message
         (!candidate.busy()).then_some(account_message(CandidateMessage::QuickConnectSubmitted)),
       )
       .into(),
-      QuickConnectState::Requesting => text("Requesting a code…").size(13).into(),
+      QuickConnectState::Requesting => text(locale.text("login-requesting-code")).size(13).into(),
       QuickConnectState::Waiting(code) => column![
-        text(code).font(SPACE_GROTESK_FONT).size(30),
-        text("Approve this code in your Jellyfin dashboard.").size(13),
+        text(code).font(HEADING_FONT).size(30),
+        text(locale.text("account-approve-code")).size(13),
         control_button(
           Some(Icon::Close),
-          Some("Cancel".to_owned()),
+          Some(locale.text("common-cancel")),
           ButtonVariant::Tonal
         )
         .icon_size(IconSize::Xs)
@@ -1219,16 +1235,16 @@ fn candidate_sign_in<'a>(candidate: &'a CandidateSurface) -> Element<'a, Message
       ]
       .spacing(TOKENS.spacing.s2)
       .into(),
-      QuickConnectState::Approving => text("Approval received. Signing in…").size(13).into(),
+      QuickConnectState::Approving => text(locale.text("login-approving")).size(13).into(),
     },
     LoginMethod::Password => {
-      let username = text_input("Username", &flow.username)
+      let username = text_input(&locale.text("login-username"), &flow.username)
         .on_input(|value| account_message(CandidateMessage::UsernameChanged(value)))
         .padding([8, 12])
         .style(|theme, status| {
           jellypilot_ui::theme::field_variant(theme, status, FieldVariant::Filled)
         });
-      let password = text_input("Password", &flow.password)
+      let password = text_input(&locale.text("login-password"), &flow.password)
         .on_input(|value| account_message(CandidateMessage::PasswordChanged(value)))
         .secure(true)
         .on_submit(account_message(CandidateMessage::PasswordSubmitted))
@@ -1238,14 +1254,11 @@ fn candidate_sign_in<'a>(candidate: &'a CandidateSurface) -> Element<'a, Message
         });
       let remember = control_button(
         None,
-        Some(
-          if flow.remember {
-            "Remember login inputs: On"
-          } else {
-            "Remember login inputs: Off"
-          }
-          .to_owned(),
-        ),
+        Some(if flow.remember {
+          locale.text("account-remember-on")
+        } else {
+          locale.text("account-remember-off")
+        }),
         if flow.remember {
           ButtonVariant::TonalActive
         } else {
@@ -1256,14 +1269,11 @@ fn candidate_sign_in<'a>(candidate: &'a CandidateSurface) -> Element<'a, Message
       .on_press(account_message(CandidateMessage::RememberToggled));
       let submit = control_button(
         Some(Icon::UserCheck),
-        Some(
-          if candidate.password_busy {
-            "Signing in…"
-          } else {
-            "Connect and switch"
-          }
-          .to_owned(),
-        ),
+        Some(if candidate.password_busy {
+          locale.text("login-signing-in")
+        } else {
+          locale.text("account-connect-switch")
+        }),
         ButtonVariant::Primary,
       )
       .spacing(TOKENS.spacing.s2)

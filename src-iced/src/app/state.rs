@@ -29,6 +29,7 @@ use jellypilot_ui::tokens::{ThemePalette, DARK_PALETTE, LIGHT_PALETTE};
 use zeroize::Zeroizing;
 
 use super::kernel::Kernel;
+use crate::i18n::{FluentValue, Localizer, UiText};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum NoticeLevel {
@@ -36,10 +37,10 @@ pub enum NoticeLevel {
   Error,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct ToastNotice {
   pub id: u64,
-  pub message: String,
+  pub message: UiText,
   pub level: NoticeLevel,
 }
 
@@ -72,7 +73,7 @@ pub struct LoginState {
   pub profiles_revision: u64,
   pub auto_login_attempted: bool,
   pub busy_profile: Option<SavedProfileKey>,
-  pub error: Option<String>,
+  pub error: Option<UiText>,
 }
 
 impl LoginState {
@@ -199,19 +200,19 @@ impl HomeSection {
 
 pub struct HomeRow {
   pub section: HomeSection,
-  pub title: String,
-  pub items: LoadState<Vec<VideoLibraryItem>>,
+  pub title: UiText,
+  pub items: LoadState<Vec<VideoLibraryItem>, UiText>,
 }
 
 impl HomeRow {
   fn new(
     section: HomeSection,
-    title: impl Into<String>,
-    items: LoadState<Vec<VideoLibraryItem>>,
+    title: UiText,
+    items: LoadState<Vec<VideoLibraryItem>, UiText>,
   ) -> Self {
     Self {
       section,
-      title: title.into(),
+      title,
       items,
     }
   }
@@ -219,7 +220,7 @@ impl HomeRow {
 
 pub struct HomeState {
   pub rows: Vec<HomeRow>,
-  pub shortcuts: LoadState<Vec<VideoLibraryShortcut>>,
+  pub shortcuts: LoadState<Vec<VideoLibraryShortcut>, UiText>,
   pub hovered_card: Option<String>,
   hero_candidates: Vec<HeroCandidate>,
   selected_hero_id: Option<String>,
@@ -231,10 +232,14 @@ impl Default for HomeState {
       rows: vec![
         HomeRow::new(
           HomeSection::ContinueWatching,
-          "Continue Watching",
+          UiText::new("home-continue-watching"),
           LoadState::Idle,
         ),
-        HomeRow::new(HomeSection::NextUp, "Next Up", LoadState::Idle),
+        HomeRow::new(
+          HomeSection::NextUp,
+          UiText::new("home-next-up"),
+          LoadState::Idle,
+        ),
       ],
       shortcuts: LoadState::Idle,
       hovered_card: None,
@@ -262,9 +267,12 @@ impl HomeState {
         self.rows[HomeSection::NextUp.index()].items = LoadState::Ready(home.next_up);
       }
       Err(error) => {
+        let error = jellypilot_core::diagnostics::sanitize_message(&error);
         for section in [HomeSection::ContinueWatching, HomeSection::NextUp] {
           if !matches!(self.rows[section.index()].items, LoadState::Ready(_)) {
-            self.rows[section.index()].items = LoadState::Failed(error.clone());
+            self.rows[section.index()].items = LoadState::Failed(
+              UiText::new("home-content-load-failed").arg("details", error.clone()),
+            );
           }
         }
       }
@@ -283,8 +291,16 @@ impl HomeState {
       .extend(latest_rows.into_iter().enumerate().map(|(index, row)| {
         HomeRow::new(
           HomeSection::Latest(index),
-          format!("Latest {}", row.library_name),
-          row.result.map_or_else(LoadState::Failed, LoadState::Ready),
+          UiText::new("home-latest").arg("name", row.library_name),
+          row.result.map_or_else(
+            |error| {
+              LoadState::Failed(UiText::new("home-content-load-failed").arg(
+                "details",
+                jellypilot_core::diagnostics::sanitize_message(&error),
+              ))
+            },
+            LoadState::Ready,
+          ),
         )
       }));
     self.refresh_hero_candidates();
@@ -293,7 +309,10 @@ impl HomeState {
   pub fn settle_shortcuts(&mut self, result: Result<Vec<VideoLibraryShortcut>, String>) {
     self.shortcuts = match result {
       Ok(shortcuts) => LoadState::Ready(shortcuts),
-      Err(error) => LoadState::Failed(error),
+      Err(error) => LoadState::Failed(UiText::new("home-libraries-load-failed").arg(
+        "details",
+        jellypilot_core::diagnostics::sanitize_message(&error),
+      )),
     };
   }
 
@@ -372,7 +391,7 @@ impl HomeState {
       .any(|row| matches!(row.items, LoadState::Ready(_)))
   }
 }
-fn ready_items(state: &LoadState<Vec<VideoLibraryItem>>) -> Option<&[VideoLibraryItem]> {
+fn ready_items(state: &LoadState<Vec<VideoLibraryItem>, UiText>) -> Option<&[VideoLibraryItem]> {
   match state {
     LoadState::Ready(items) => Some(items),
     LoadState::Idle | LoadState::Loading | LoadState::Failed(_) => None,
@@ -637,15 +656,15 @@ pub enum UserDataActionKind {
 
 #[derive(Default)]
 pub struct DetailState {
-  pub content: LoadState<DetailContent>,
-  pub season_neighbors: LoadState<Vec<VideoLibraryItem>>,
-  pub similar_items: LoadState<Vec<VideoLibraryItem>>,
-  pub season_episodes: LoadState<VideoSeasonEpisodesPage>,
+  pub content: LoadState<DetailContent, UiText>,
+  pub season_neighbors: LoadState<Vec<VideoLibraryItem>, UiText>,
+  pub similar_items: LoadState<Vec<VideoLibraryItem>, UiText>,
+  pub season_episodes: LoadState<VideoSeasonEpisodesPage, UiText>,
   pub selected_season_id: Option<String>,
   pub overview_expanded: bool,
   pub expanded_episode_ids: HashSet<String>,
   pub user_data_busy: Option<UserDataActionKind>,
-  pub user_data_error: Option<String>,
+  pub user_data_error: Option<UiText>,
 }
 
 impl DetailState {
@@ -917,23 +936,17 @@ impl SettingsSection {
     Self::Diagnostics,
   ];
 
-  pub const fn label(self) -> &'static str {
-    match self {
-      Self::Account => "Accounts and connection",
-      Self::Mpv => "MPV",
-      Self::Playback => "Playback",
-      Self::Subtitles => "Subtitles",
-      Self::Shortcuts => "Shortcuts",
-      Self::Appearance => "Appearance",
-      Self::Storage => "Storage",
-      Self::Diagnostics => "Diagnostics and about",
-    }
-  }
-}
-
-impl std::fmt::Display for SettingsSection {
-  fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-    formatter.write_str(self.label())
+  pub fn label(self, locale: Localizer) -> String {
+    locale.text(match self {
+      Self::Account => "settings-account",
+      Self::Mpv => "settings-mpv",
+      Self::Playback => "settings-playback",
+      Self::Subtitles => "settings-subtitles",
+      Self::Shortcuts => "settings-shortcuts",
+      Self::Appearance => "settings-interface",
+      Self::Storage => "settings-storage",
+      Self::Diagnostics => "settings-diagnostics",
+    })
   }
 }
 
@@ -946,11 +959,12 @@ pub struct SettingsState {
   pub subtitle_menu_open: bool,
   pub diagnostic_level_menu_open: bool,
   pub diagnostic_category_menu_open: bool,
+  pub font_licenses_expanded: bool,
   pub diagnostic_level: Option<DiagnosticLevel>,
   pub diagnostic_category: Option<DiagnosticCategory>,
   pub shortcut_capture: Option<ShortcutKind>,
-  pub error: Option<&'static str>,
-  pub saved: Option<&'static str>,
+  pub error: Option<UiText>,
+  pub saved: Option<UiText>,
 }
 
 impl SettingsState {
@@ -967,6 +981,7 @@ impl SettingsState {
       subtitle_menu_open: false,
       diagnostic_level_menu_open: false,
       diagnostic_category_menu_open: false,
+      font_licenses_expanded: false,
       diagnostic_level: None,
       diagnostic_category: None,
       shortcut_capture: None,
@@ -1019,7 +1034,9 @@ impl State {
       ),
     };
     let mut login = LoginState::from_settings(settings.snapshot());
-    login.error = settings_error.clone();
+    login.error = settings_error
+      .as_ref()
+      .map(|_| UiText::new("startup-settings-load-failed"));
     login.auto_login_attempted = smoke;
     let settings_view = SettingsState::from_settings(settings.snapshot());
     let full_ui = (settings.snapshot().app_mode() == AppMode::Full).then(FullUi::default);
@@ -1033,11 +1050,13 @@ impl State {
     artwork_adapter.set_disk_cache_enabled(settings.snapshot().image_cache_enabled());
     let avatar_adapter = Arc::new(ArtworkAdapter::new());
     avatar_adapter.set_disk_cache_enabled(settings.snapshot().image_cache_enabled());
+    let locale = Localizer::resolve(settings.snapshot().ui_language());
 
     let mut state = Self {
       system_theme: iced::theme::Mode::None,
       kernel: Kernel {
         settings,
+        locale,
         diagnostics,
         auth_store: AuthStore::default(),
         request_gate,
@@ -1076,6 +1095,14 @@ impl State {
       state.shell.destination = Destination::NowPlaying;
     }
     state
+  }
+
+  pub fn t(&self, id: &str) -> String {
+    self.kernel.locale.text(id)
+  }
+
+  pub fn format(&self, id: &str, args: &[(&str, FluentValue<'_>)]) -> String {
+    self.kernel.locale.format(id, args)
   }
   pub fn all_artwork_slots(&self) -> impl Iterator<Item = ArtworkSlot> + '_ {
     self
@@ -1282,15 +1309,23 @@ mod tests {
       home
         .rows()
         .iter()
-        .map(|row| (row.section, row.title.as_str()))
+        .map(|row| row.section)
         .collect::<Vec<_>>(),
       vec![
-        (HomeSection::ContinueWatching, "Continue Watching"),
-        (HomeSection::NextUp, "Next Up"),
-        (HomeSection::Latest(0), "Latest Movies"),
-        (HomeSection::Latest(1), "Latest TV Shows"),
+        HomeSection::ContinueWatching,
+        HomeSection::NextUp,
+        HomeSection::Latest(0),
+        HomeSection::Latest(1),
       ]
     );
+    for language in [
+      jellypilot_core::locale::UiLanguage::English,
+      jellypilot_core::locale::UiLanguage::SimplifiedChinese,
+    ] {
+      let locale = Localizer::new(language);
+      assert!(locale.message(&home.rows()[2].title).contains("Movies"));
+      assert!(locale.message(&home.rows()[3].title).contains("TV Shows"));
+    }
   }
 
   #[test]
@@ -1319,15 +1354,14 @@ mod tests {
       home.rows(),
       [_, _, HomeRow {
         title: movies_title,
-        items: LoadState::Failed(movies_error),
+        items: LoadState::Failed(_),
         ..
       }, HomeRow {
         title: shows_title,
         items: LoadState::Ready(shows),
         ..
-      }] if movies_title == "Latest Movies"
-        && movies_error == "movies failed"
-        && shows_title == "Latest Shows"
+      }] if Localizer::default().message(movies_title).contains("Movies")
+        && Localizer::default().message(shows_title).contains("Shows")
         && shows.is_empty()
     ));
   }

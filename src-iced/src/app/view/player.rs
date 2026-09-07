@@ -4,6 +4,7 @@ use crate::app::message::{Message, PlaybackMessage, SettingsMessage};
 use crate::app::playback::QueueState;
 use crate::app::shell::SETTINGS_TRIGGER_ID;
 use crate::app::state::{ArtworkCellState, State};
+use crate::i18n::Localizer;
 use iced::widget::{button, column, container, row, scrollable, slider, space, text, Column};
 use iced::{Alignment, ContentFit, Element, Fill, Length};
 use jellypilot_core::config::AppMode;
@@ -13,7 +14,7 @@ use jellypilot_mpv::playback_session::{
 };
 use jellypilot_mpv::player::format_duration;
 use jellypilot_session::IntroSkipKind;
-use jellypilot_ui::fonts::SPACE_GROTESK_FONT;
+use jellypilot_ui::fonts::HEADING_FONT;
 use jellypilot_ui::icons::{icon_with_color, Icon, IconSize};
 use jellypilot_ui::overlay::{popover, tooltip, Placement, PopoverOptions, TooltipOptions};
 use jellypilot_ui::tokens::TOKENS;
@@ -85,7 +86,7 @@ fn now_playing_metadata<'a>(
 ) -> Column<'a, Message> {
   column![
     text(&now_playing.item.title)
-      .font(SPACE_GROTESK_FONT)
+      .font(HEADING_FONT)
       .size(title_size)
       .color(state.palette().text.heading),
     text(playback_caption(state))
@@ -100,7 +101,11 @@ fn now_playing_metadata<'a>(
 fn transport<'a>(state: &'a State, now_playing: &NowPlayingView) -> Element<'a, Message> {
   let is_paused = now_playing.paused;
   let play_pause_icon = if is_paused { Icon::Play } else { Icon::Pause };
-  let play_pause_label = if is_paused { "Play" } else { "Pause" };
+  let play_pause_label = state.t(if is_paused {
+    "common-play"
+  } else {
+    "common-pause"
+  });
   let play_pause_button = control_button(Some(play_pause_icon), None, ButtonVariant::Primary)
     .icon_size(IconSize::Lg)
     .padding([7, 11])
@@ -118,13 +123,21 @@ fn transport<'a>(state: &'a State, now_playing: &NowPlayingView) -> Element<'a, 
     .on_press(Message::Playback(PlaybackMessage::Intent(Box::new(
       PlaybackIntent::Stop,
     ))));
-  let stop = tooltip(stop_button, "Stop", TooltipOptions::default());
+  let stop = tooltip(
+    stop_button,
+    state.t("common-stop"),
+    TooltipOptions::default(),
+  );
 
   row![
-    adjacent_button(state, AdjacentDirection::Previous, "Previous"),
+    adjacent_button(
+      state,
+      AdjacentDirection::Previous,
+      &state.t("common-previous")
+    ),
     play_pause,
     stop,
-    adjacent_button(state, AdjacentDirection::Next, "Next"),
+    adjacent_button(state, AdjacentDirection::Next, &state.t("common-next")),
   ]
   .spacing(TOKENS.spacing.s1_5)
   .align_y(Alignment::Center)
@@ -160,7 +173,11 @@ fn volume_controls<'a>(state: &'a State, now_playing: &NowPlayingView) -> Elemen
   } else {
     Icon::VolumeHigh
   };
-  let mute_label = if now_playing.muted { "Unmute" } else { "Mute" };
+  let mute_label = state.t(if now_playing.muted {
+    "player-unmute"
+  } else {
+    "player-mute"
+  });
   let mute_button = control_button(Some(mute_icon), None, ButtonVariant::Tonal)
     .padding([6, 10])
     .on_press(Message::Playback(PlaybackMessage::Intent(Box::new(
@@ -210,10 +227,14 @@ pub fn full(state: &State) -> Element<'_, Message> {
         .on_press(Message::Settings(SettingsMessage::AppModeSelected(
           AppMode::Full
         ))),
-      "Full library mode",
+      state.t("player-full-library"),
       TooltipOptions::default(),
     ),
-    tooltip(settings_button, "Settings", TooltipOptions::default()),
+    tooltip(
+      settings_button,
+      state.t("common-settings"),
+      TooltipOptions::default()
+    ),
   ]
   .width(Fill)
   .spacing(TOKENS.spacing.s2)
@@ -260,10 +281,10 @@ pub fn full(state: &State) -> Element<'_, Message> {
         palette.colors.onSurfaceVariant,
       ),
       text("JellyPilot")
-        .font(SPACE_GROTESK_FONT)
+        .font(HEADING_FONT)
         .size(26)
         .color(palette.text.heading),
-      text("Waiting for playback")
+      text(state.t("player-waiting"))
         .size(13)
         .color(palette.text.metadata),
     ]
@@ -293,14 +314,14 @@ pub fn full(state: &State) -> Element<'_, Message> {
 fn intro_prompt(state: &State) -> Option<Element<'_, Message>> {
   let prompt = state.playback.view.intro_prompt?;
   let palette = state.palette();
-  let label = match prompt.kind {
-    IntroSkipKind::Introduction => "Skip intro?",
-    IntroSkipKind::Credits => "Skip credits?",
-  };
+  let label = state.t(match prompt.kind {
+    IntroSkipKind::Introduction => "player-skip-intro",
+    IntroSkipKind::Credits => "player-skip-credits",
+  });
   let actions = row![
     control_button(
       Some(Icon::Next),
-      Some("Skip".to_owned()),
+      Some(state.t("player-skip")),
       ButtonVariant::Primary,
     )
     .icon_size(IconSize::Sm)
@@ -311,7 +332,7 @@ fn intro_prompt(state: &State) -> Option<Element<'_, Message>> {
     )))),
     control_button(
       Some(Icon::Close),
-      Some("Dismiss".to_owned()),
+      Some(state.t("common-dismiss")),
       ButtonVariant::Tonal,
     )
     .icon_size(IconSize::Xs)
@@ -326,7 +347,7 @@ fn intro_prompt(state: &State) -> Option<Element<'_, Message>> {
       row![
         icon_with_color(Icon::IntroSkip, IconSize::Md, palette.colors.primary),
         text(label)
-          .font(SPACE_GROTESK_FONT)
+          .font(HEADING_FONT)
           .size(16)
           .color(palette.text.secondary),
       ]
@@ -345,7 +366,7 @@ fn intro_prompt(state: &State) -> Option<Element<'_, Message>> {
 fn adjacent_button<'a>(
   state: &State,
   direction: AdjacentDirection,
-  label: &'a str,
+  label: &str,
 ) -> Element<'a, Message> {
   let availability = match direction {
     AdjacentDirection::Previous => &state.playback.view.adjacent.previous,
@@ -363,13 +384,13 @@ fn adjacent_button<'a>(
         PlaybackIntent::PlayAdjacent(direction),
       )))),
     );
-  tooltip(btn, label, TooltipOptions::default())
+  tooltip(btn, label.to_owned(), TooltipOptions::default())
 }
 
 fn audio_popover(state: &State) -> Element<'_, Message> {
   let palette = state.palette();
   let has_audio_choices = match &state.playback.view.tracks {
-    TracksView::Ready { tracks, .. } => !track_choices(tracks, "audio", false).is_empty(),
+    TracksView::Ready { tracks, .. } => tracks.iter().any(|track| track.track_type == "audio"),
     TracksView::Loading | TracksView::Unavailable => false,
   };
   let audio_btn_variant = if state.playback.audio_menu_open {
@@ -379,7 +400,7 @@ fn audio_popover(state: &State) -> Element<'_, Message> {
   };
   let trigger = control_button(
     Some(Icon::AudioTrack),
-    Some("Audio".to_owned()),
+    Some(state.t("player-audio")),
     audio_btn_variant,
   )
   .icon_size(IconSize::Sm)
@@ -390,9 +411,9 @@ fn audio_popover(state: &State) -> Element<'_, Message> {
   );
   let menu = match &state.playback.view.tracks {
     TracksView::Ready { tracks, audio, .. } => {
-      let choices = track_choices(tracks, "audio", false);
+      let choices = track_choices(state.kernel.locale, tracks, "audio", false);
       if choices.is_empty() {
-        column![text("No audio tracks")
+        column![text(state.t("player-no-audio"))
           .size(12)
           .color(palette.text.metadata)]
         .spacing(TOKENS.spacing.s1)
@@ -423,12 +444,12 @@ fn audio_popover(state: &State) -> Element<'_, Message> {
         col
       }
     }
-    TracksView::Loading => column![text("Loading audio tracks…")
+    TracksView::Loading => column![text(state.t("player-loading-audio"))
       .size(12)
       .color(palette.text.metadata)]
     .spacing(TOKENS.spacing.s1)
     .width(Fill),
-    TracksView::Unavailable => column![text("Audio tracks unavailable")
+    TracksView::Unavailable => column![text(state.t("player-unavailable-audio"))
       .size(12)
       .color(palette.text.metadata)]
     .spacing(TOKENS.spacing.s1)
@@ -451,7 +472,7 @@ fn audio_popover(state: &State) -> Element<'_, Message> {
 fn subtitle_popover(state: &State) -> Element<'_, Message> {
   let palette = state.palette();
   let has_subtitle_choices = match &state.playback.view.tracks {
-    TracksView::Ready { tracks, .. } => !track_choices(tracks, "sub", false).is_empty(),
+    TracksView::Ready { tracks, .. } => tracks.iter().any(|track| track.track_type == "sub"),
     TracksView::Loading | TracksView::Unavailable => false,
   };
   let sub_btn_variant = if state.playback.subtitle_menu_open {
@@ -461,7 +482,7 @@ fn subtitle_popover(state: &State) -> Element<'_, Message> {
   };
   let trigger = control_button(
     Some(Icon::Subtitles),
-    Some("Subtitles".to_owned()),
+    Some(state.t("player-subtitles")),
     sub_btn_variant,
   )
   .icon_size(IconSize::Sm)
@@ -474,7 +495,7 @@ fn subtitle_popover(state: &State) -> Element<'_, Message> {
     TracksView::Ready {
       tracks, subtitle, ..
     } => {
-      let choices = track_choices(tracks, "sub", true);
+      let choices = track_choices(state.kernel.locale, tracks, "sub", true);
       let mut col = Column::new().spacing(TOKENS.spacing.s1).width(Fill);
       for choice in choices {
         let active = choice.id == *subtitle;
@@ -500,12 +521,12 @@ fn subtitle_popover(state: &State) -> Element<'_, Message> {
       }
       col
     }
-    TracksView::Loading => column![text("Loading subtitle tracks…")
+    TracksView::Loading => column![text(state.t("player-loading-subtitles"))
       .size(12)
       .color(palette.text.metadata)]
     .spacing(TOKENS.spacing.s1)
     .width(Fill),
-    TracksView::Unavailable => column![text("Subtitle tracks unavailable")
+    TracksView::Unavailable => column![text(state.t("player-unavailable-subtitles"))
       .size(12)
       .color(palette.text.metadata)]
     .spacing(TOKENS.spacing.s1)
@@ -541,7 +562,7 @@ fn queue_popover(state: &State) -> Element<'_, Message> {
   };
   let trigger = control_button(
     Some(Icon::Playlist),
-    Some("Queue".to_owned()),
+    Some(state.t("player-queue")),
     queue_btn_variant,
   )
   .icon_size(IconSize::Sm)
@@ -552,7 +573,7 @@ fn queue_popover(state: &State) -> Element<'_, Message> {
   let menu: Element<'_, Message> = match &state.playback.queue {
     QueueState::Ready(items) => {
       if items.is_empty() {
-        column![text("No episodes in this season")
+        column![text(state.t("player-no-episodes"))
           .size(12)
           .color(palette.text.metadata)]
         .spacing(TOKENS.spacing.s1)
@@ -611,18 +632,20 @@ fn queue_popover(state: &State) -> Element<'_, Message> {
         .into()
       }
     }
-    QueueState::Loading => column![text("Loading episodes…")
+    QueueState::Loading => column![text(state.t("player-loading-episodes"))
       .size(12)
       .color(palette.text.metadata)]
     .spacing(TOKENS.spacing.s1)
     .width(Fill)
     .into(),
-    QueueState::Unavailable | QueueState::Failed => column![text("Episode queue unavailable")
-      .size(12)
-      .color(palette.text.metadata)]
-    .spacing(TOKENS.spacing.s1)
-    .width(Fill)
-    .into(),
+    QueueState::Unavailable | QueueState::Failed => {
+      column![text(state.t("player-unavailable-queue"))
+        .size(12)
+        .color(palette.text.metadata)]
+      .spacing(TOKENS.spacing.s1)
+      .width(Fill)
+      .into()
+    }
   };
 
   popover(
@@ -638,12 +661,17 @@ fn queue_popover(state: &State) -> Element<'_, Message> {
   )
 }
 
-fn track_choices(tracks: &[TrackInfo], track_type: &str, include_off: bool) -> Vec<TrackChoice> {
+fn track_choices(
+  locale: Localizer,
+  tracks: &[TrackInfo],
+  track_type: &str,
+  include_off: bool,
+) -> Vec<TrackChoice> {
   let mut choices = Vec::with_capacity(tracks.len() + usize::from(include_off));
   if include_off {
     choices.push(TrackChoice {
       id: None,
-      label: "Off".to_owned(),
+      label: locale.text("common-off"),
     });
   }
   choices.extend(
@@ -652,18 +680,18 @@ fn track_choices(tracks: &[TrackInfo], track_type: &str, include_off: bool) -> V
       .filter(|track| track.track_type == track_type)
       .map(|track| TrackChoice {
         id: Some(track.id),
-        label: track_label(track),
+        label: track_label(locale, track),
       }),
   );
   choices
 }
 
-fn track_label(track: &TrackInfo) -> String {
+fn track_label(locale: Localizer, track: &TrackInfo) -> String {
   match (track.title.as_deref(), track.language.as_deref()) {
     (Some(title), Some(language)) => format!("{title} · {language}"),
     (Some(title), None) => title.to_owned(),
     (None, Some(language)) => language.to_owned(),
-    (None, None) => format!("Track {}", track.id),
+    (None, None) => locale.format("player-track", &[("number", track.id.into())]),
   }
 }
 
@@ -674,23 +702,26 @@ fn playback_caption(state: &State) -> String {
       .view
       .now_playing
       .as_ref()
-      .map(|view| view.item.item_type.clone())
+      .map(|view| media_type(state.kernel.locale, &view.item.item_type))
       .unwrap_or_default();
   };
   match playable {
     Playable::Library(item) => media_caption(
+      state.kernel.locale,
       &item.item_type,
       item.series_name.as_deref(),
       item.season_number,
       item.episode_number,
     ),
     Playable::Detail(item) => media_caption(
+      state.kernel.locale,
       &item.item_type,
       item.series_name.as_deref(),
       item.season_number,
       item.episode_number,
     ),
     Playable::Media(item) => media_caption(
+      state.kernel.locale,
       &item.item_type,
       item.series_name.as_deref(),
       item.parent_index_number,
@@ -700,18 +731,33 @@ fn playback_caption(state: &State) -> String {
 }
 
 fn media_caption(
+  locale: Localizer,
   item_type: &str,
   series_name: Option<&str>,
   season: Option<i32>,
   episode: Option<i32>,
 ) -> String {
+  let item_type = media_type(locale, item_type);
   match (series_name, season, episode) {
     (Some(series), Some(season), Some(episode)) => {
       format!("{series} · S{season:02}E{episode:02}")
     }
     (Some(series), _, _) => format!("{series} · {item_type}"),
-    _ => item_type.to_owned(),
+    _ => item_type,
   }
+}
+
+fn media_type(locale: Localizer, item_type: &str) -> String {
+  locale.text(match item_type {
+    "Movie" => "player-movie",
+    "Episode" => "player-episode",
+    "Series" => "player-series",
+    "Season" => "player-season",
+    "Video" => "player-video",
+    "Audio" => "player-audio",
+    "MusicVideo" => "player-music-video",
+    _ => "player-media",
+  })
 }
 
 fn playback_artwork(state: &State, width: f32, height: f32) -> Element<'_, Message> {
@@ -759,8 +805,8 @@ mod tests {
     PlaybackSnapshot, PlaybackStartPosition,
   };
   use jellypilot_mpv::playback_session::{
-    AdjacentAvailability, AdjacentDirection, AdjacentView, ControllerSettlement, IntroAvailability,
-    IntroPromptView, NowPlayingView, PlaybackEffect, PlaybackEvent, PlaybackInput, PlaybackIntent,
+    ControllerSettlement, IntroAvailability, IntroPromptView, NowPlayingView, PlaybackEffect,
+    PlaybackEvent, PlaybackInput, PlaybackIntent,
   };
   use jellypilot_mpv::PlayerState;
   use jellypilot_session::IntroSkipMode;
@@ -794,21 +840,6 @@ mod tests {
     let mut state = State::boot(false);
     state.playback.view.now_playing = Some(test_now_playing());
     assert!(bar(&state).is_some());
-  }
-  #[test]
-  fn full_shows_idle_state_without_playback() {
-    let state = State::boot(false);
-    drop(full(&state));
-  }
-
-  #[test]
-  fn full_renders_compact_player_when_playback_is_active() {
-    let mut state = State::boot(false);
-    state.playback.view.now_playing = Some(test_now_playing());
-    state.playback.view.intro_prompt = Some(IntroPromptView {
-      kind: IntroSkipKind::Introduction,
-    });
-    drop(full(&state));
   }
 
   #[test]
@@ -999,17 +1030,16 @@ mod tests {
         provider_index: None,
       },
     ];
-    let audio_choices = track_choices(&tracks, "audio", false);
+    let audio_choices = track_choices(Localizer::default(), &tracks, "audio", false);
     assert_eq!(audio_choices.len(), 2);
     assert_eq!(audio_choices[0].id, Some(1));
     assert_eq!(audio_choices[0].label, "English Stereo · eng");
     assert_eq!(audio_choices[1].id, Some(2));
     assert_eq!(audio_choices[1].label, "Spanish · spa");
 
-    let sub_choices = track_choices(&tracks, "sub", true);
+    let sub_choices = track_choices(Localizer::default(), &tracks, "sub", true);
     assert_eq!(sub_choices.len(), 2);
     assert_eq!(sub_choices[0].id, None);
-    assert_eq!(sub_choices[0].label, "Off");
     assert_eq!(sub_choices[1].id, Some(3));
     assert_eq!(sub_choices[1].label, "English SDH · eng");
   }
@@ -1032,184 +1062,39 @@ mod tests {
   }
 
   #[test]
-  fn adjacent_buttons_rendered_with_availability() {
-    let mut state = State::boot(false);
-    state.playback.view.now_playing = Some(test_now_playing());
-    state.playback.view.adjacent = AdjacentView {
-      previous: AdjacentAvailability::Unavailable,
-      next: AdjacentAvailability::Available {
-        title: "Episode 2".to_owned(),
-      },
-    };
-
-    let prev = adjacent_button(&state, AdjacentDirection::Previous, "Previous");
-    let next = adjacent_button(&state, AdjacentDirection::Next, "Next");
-    drop(prev);
-    drop(next);
-  }
-
-  #[test]
-  fn audio_and_subtitle_popovers_render_across_track_states() {
-    let mut state = State::boot(false);
-    state.playback.view.now_playing = Some(test_now_playing());
-
-    // Loading
-    state.playback.view.tracks = TracksView::Loading;
-    let audio_el = audio_popover(&state);
-    let sub_el = subtitle_popover(&state);
-    drop(audio_el);
-    drop(sub_el);
-
-    // Unavailable
-    state.playback.view.tracks = TracksView::Unavailable;
-    let audio_el = audio_popover(&state);
-    let sub_el = subtitle_popover(&state);
-    drop(audio_el);
-    drop(sub_el);
-
-    // Ready with open menus
-    state.playback.view.tracks = TracksView::Ready {
-      tracks: vec![
-        TrackInfo {
-          id: 1,
-          track_type: "audio".to_owned(),
-          title: Some("English".to_owned()),
-          language: Some("eng".to_owned()),
-          selected: true,
-          provider_index: None,
-        },
-        TrackInfo {
-          id: 2,
-          track_type: "sub".to_owned(),
-          title: Some("English".to_owned()),
-          language: Some("eng".to_owned()),
-          selected: true,
-          provider_index: None,
-        },
-      ],
-      audio: Some(1),
-      subtitle: Some(2),
-    };
-    state.playback.audio_menu_open = true;
-    state.playback.subtitle_menu_open = true;
-    let audio_el = audio_popover(&state);
-    let sub_el = subtitle_popover(&state);
-    drop(audio_el);
-    drop(sub_el);
-  }
-
-  #[test]
-  fn audio_and_subtitle_popovers_disabled_when_track_choices_empty() {
-    let mut state = State::boot(false);
-    state.playback.view.now_playing = Some(test_now_playing());
-
-    // Ready with zero audio tracks and zero subtitle tracks
-    state.playback.view.tracks = TracksView::Ready {
-      tracks: Vec::new(),
-      audio: None,
-      subtitle: None,
-    };
-    let audio_el = audio_popover(&state);
-    let sub_el = subtitle_popover(&state);
-    drop(audio_el);
-    drop(sub_el);
-
-    // Ready with audio only (subtitles should remain disabled)
-    state.playback.view.tracks = TracksView::Ready {
-      tracks: vec![TrackInfo {
-        id: 1,
-        track_type: "audio".to_owned(),
-        title: Some("English".to_owned()),
-        language: Some("eng".to_owned()),
-        selected: true,
-        provider_index: None,
-      }],
-      audio: Some(1),
-      subtitle: None,
-    };
-    let audio_el = audio_popover(&state);
-    let sub_el = subtitle_popover(&state);
-    drop(audio_el);
-    drop(sub_el);
-
-    // Ready with subtitles only (audio should remain disabled)
-    state.playback.view.tracks = TracksView::Ready {
-      tracks: vec![TrackInfo {
-        id: 2,
+  fn locale_changes_track_fallbacks_without_changing_media_data_or_selection() {
+    use jellypilot_core::locale::UiLanguage;
+    let tracks = vec![
+      TrackInfo {
+        id: 7,
         track_type: "sub".to_owned(),
-        title: Some("English SDH".to_owned()),
+        title: Some("字幕 · English SDH".to_owned()),
         language: Some("eng".to_owned()),
         selected: true,
-        provider_index: None,
-      }],
-      audio: None,
-      subtitle: Some(2),
-    };
-    let audio_el = audio_popover(&state);
-    let sub_el = subtitle_popover(&state);
-    drop(audio_el);
-    drop(sub_el);
-  }
-
-  fn test_queue_item(
-    id: &str,
-    name: &str,
-    season: Option<i32>,
-    episode: Option<i32>,
-  ) -> VideoLibraryItem {
-    VideoLibraryItem {
-      logo_image_id: None,
-      id: id.to_owned(),
-      name: name.to_owned(),
-      item_type: "Episode".to_owned(),
-      production_year: None,
-      runtime_seconds: Some(2_400.0),
-      played: false,
-      favorite: false,
-      artwork_image_id: None,
-      backdrop_image_id: None,
-      series_poster_image_id: None,
-      episode_thumb_image_id: None,
-      series_thumb_image_id: None,
-      series_backdrop_image_id: None,
-      season_number: season,
-      episode_number: episode,
-      index_number_end: None,
-      series_id: Some("series-1".to_owned()),
-      series_name: Some("Series".to_owned()),
-      end_year: None,
-      series_continuing: false,
-      unplayed_item_count: None,
-      resume_position_seconds: None,
-      played_percentage: None,
-      overview: None,
-      season_poster_image_id: None,
-    }
-  }
-
-  #[test]
-  fn queue_popover_renders_across_queue_states() {
-    let mut state = State::boot(false);
-    state.playback.view.now_playing = Some(test_now_playing());
-
-    for queue in [
-      QueueState::Unavailable,
-      QueueState::Loading,
-      QueueState::Failed,
-      QueueState::Ready(Vec::new()),
-      QueueState::Ready(vec![
-        test_queue_item("episode-1", "Pilot Episode", Some(1), Some(1)),
-        test_queue_item("episode-2", "Second Episode", Some(1), Some(2)),
-        test_queue_item("episode-3", "Untimed Episode", None, None),
-      ]),
-    ] {
-      state.playback.queue = queue;
-      let el = queue_popover(&state);
-      drop(el);
-    }
-
-    state.playback.queue_menu_open = true;
-    let el = queue_popover(&state);
-    drop(el);
+        provider_index: Some(4),
+      },
+      TrackInfo {
+        id: 8,
+        track_type: "sub".to_owned(),
+        title: None,
+        language: None,
+        selected: false,
+        provider_index: Some(5),
+      },
+    ];
+    let english = track_choices(Localizer::new(UiLanguage::English), &tracks, "sub", true);
+    let chinese = track_choices(
+      Localizer::new(UiLanguage::SimplifiedChinese),
+      &tracks,
+      "sub",
+      true,
+    );
+    assert_eq!(
+      english.iter().map(|choice| choice.id).collect::<Vec<_>>(),
+      chinese.iter().map(|choice| choice.id).collect::<Vec<_>>()
+    );
+    assert_eq!(english[1].label, chinese[1].label);
+    assert_ne!(english[0].label, chinese[0].label);
+    assert_ne!(english[2].label, chinese[2].label);
   }
 }

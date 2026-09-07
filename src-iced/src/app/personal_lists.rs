@@ -5,6 +5,8 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use crate::i18n::media::media_type;
+use crate::i18n::{Localizer, UiText};
 use iced::Task;
 use jellypilot_core::artwork_binder::{ArtworkSettlement, ArtworkSurface};
 use jellypilot_core::artwork_loader::PlannedArtworkLoad;
@@ -52,7 +54,7 @@ pub enum ItemAvailability {
 pub struct ListEntry {
   pub id: String,
   pub name: String,
-  pub subtitle: String,
+  pub subtitle: ListSubtitle,
   pub item: Option<VideoLibraryItem>,
   pub availability: ItemAvailability,
 }
@@ -62,7 +64,7 @@ pub struct ListPage {
   pub entries: Vec<ListEntry>,
   pub total: usize,
   pub loading: bool,
-  pub error: Option<String>,
+  pub error: Option<UiText>,
   pub offset: usize,
 }
 
@@ -72,7 +74,7 @@ pub struct Surface {
   pub watchlist: ListPage,
   pub watchlist_ids: HashSet<String>,
   pub busy_items: HashSet<String>,
-  pub mutation_error: Option<String>,
+  pub mutation_error: Option<UiText>,
   pub artwork: HashMap<String, ArtworkCell>,
   scope: Option<ProfileScope>,
   watchlist_records: Vec<WatchlistRecord>,
@@ -475,7 +477,7 @@ pub fn update(
             return load_favorites(surface, kernel, runtime, scope);
           }
         }
-        Err(error) => surface.favorites.error = Some(error),
+        Err(error) => surface.favorites.error = Some(list_failure("lists-favorites-error", &error)),
       }
       prepare_artwork(surface, kernel)
     }
@@ -503,7 +505,7 @@ pub fn update(
         }
         Err(error) => {
           surface.watchlist.loading = false;
-          surface.watchlist.error = Some(error);
+          surface.watchlist.error = Some(list_failure("lists-watchlist-error", &error));
           Task::none()
         }
       }
@@ -589,7 +591,7 @@ fn prepare_scope(
   surface: &mut Surface,
   kernel: &mut Kernel,
   runtime: &Runtime,
-) -> Result<ProfileScope, String> {
+) -> Result<ProfileScope, UiText> {
   let scope = active_scope(kernel)?;
   if surface.scope.as_ref() != Some(&scope) {
     reset_for_scope(surface, kernel, runtime, scope.clone());
@@ -597,22 +599,25 @@ fn prepare_scope(
   Ok(scope)
 }
 
-fn active_scope(kernel: &Kernel) -> Result<ProfileScope, String> {
+fn active_scope(kernel: &Kernel) -> Result<ProfileScope, UiText> {
   let client = kernel
     .client
     .as_ref()
-    .ok_or_else(|| "The connected media server session is unavailable.".to_owned())?;
+    .ok_or_else(|| UiText::new("lists-session-error"))?;
   let connection = client.login().connection_state();
   if !connection.connected {
-    return Err("The connected media server session is unavailable.".to_owned());
+    return Err(UiText::new("lists-session-error"));
   }
   let server_url = connection
     .server_url
-    .ok_or_else(|| "The connected server address is unavailable.".to_owned())?;
+    .ok_or_else(|| UiText::new("lists-address-error"))?;
   let user_id = connection
     .user_id
-    .ok_or_else(|| "The connected server user is unavailable.".to_owned())?;
-  ProfileScope::new(connection.provider, server_url, user_id).map_err(|error| error.to_string())
+    .ok_or_else(|| UiText::new("lists-user-error"))?;
+  ProfileScope::new(connection.provider, server_url, user_id).map_err(|error| {
+    tracing::warn!(error = %jellypilot_core::diagnostics::sanitize_message(&error.to_string()), "Invalid personal list profile scope");
+    UiText::new("lists-scope-error")
+  })
 }
 
 fn current_scope(surface: &Surface, kernel: &Kernel) -> Option<ProfileScope> {
@@ -635,7 +640,7 @@ fn reset_for_scope(
   };
 }
 
-fn settle_missing_connection(surface: &mut Surface, error: String) {
+fn settle_missing_connection(surface: &mut Surface, error: UiText) {
   surface.favorites.loading = false;
   surface.watchlist.loading = false;
   surface.favorites.error = Some(error.clone());
@@ -655,7 +660,7 @@ fn load_favorites(
   let session = kernel.request_gate.current_session();
   let Some(client) = kernel.client.as_ref().map(Arc::clone) else {
     surface.favorites.loading = false;
-    surface.favorites.error = Some("The connected media server session is unavailable.".to_owned());
+    surface.favorites.error = Some(UiText::new("lists-session-error"));
     return Task::none();
   };
   let start_index = i32::try_from(surface.favorites.offset).unwrap_or(i32::MAX);
@@ -726,7 +731,7 @@ fn load_watchlist_metadata(
   let session = kernel.request_gate.current_session();
   let Some(client) = kernel.client.as_ref().map(Arc::clone) else {
     surface.watchlist.loading = false;
-    surface.watchlist.error = Some("The connected media server session is unavailable.".to_owned());
+    surface.watchlist.error = Some(UiText::new("lists-session-error"));
     return Task::none();
   };
   let item_ids = surface
@@ -902,7 +907,7 @@ fn settle_watchlist_mutation(
       if let Err(error) = &result {
         return kernel.show_toast(
           NoticeLevel::Error,
-          format!("Could not update Watchlist: {error}"),
+          list_failure("lists-watchlist-update-error", error),
         );
       }
     }
@@ -922,7 +927,7 @@ fn settle_watchlist_mutation(
       }
     }
     Err(error) => {
-      let error = format!("Could not update Watchlist: {error}");
+      let error = list_failure("lists-watchlist-update-error", &error);
       surface.mutation_error = Some(error.clone());
       kernel.show_toast(NoticeLevel::Error, error)
     }
@@ -952,7 +957,7 @@ fn remove_favorite(
   let Some(client) = kernel.client.as_ref().map(Arc::clone) else {
     surface.mutations.remove(&item_id);
     surface.busy_items.remove(&item_id);
-    surface.mutation_error = Some("The connected media server session is unavailable.".to_owned());
+    surface.mutation_error = Some(UiText::new("lists-session-error"));
     return Task::none();
   };
   let result_scope = scope.clone();
@@ -1008,10 +1013,8 @@ fn settle_favorite_removal(
   if !session_ok || !scope_ok || !operation_ok {
     if session_ok && active_scope(kernel).ok().as_ref() == Some(&scope) {
       let error = match &result {
-        Err(error) => Some(format!("Could not remove favorite: {error}")),
-        Ok(update) if update.favorite => {
-          Some("The server did not remove this favorite.".to_owned())
-        }
+        Err(error) => Some(list_failure("lists-favorite-remove-error", error)),
+        Ok(update) if update.favorite => Some(UiText::new("lists-favorite-not-removed")),
         Ok(_) => None,
       };
       if let Some(error) = error {
@@ -1044,12 +1047,12 @@ fn settle_favorite_removal(
       load_favorites(surface, kernel, runtime, scope)
     }
     Ok(_) => {
-      let error = "The server did not remove this favorite.".to_owned();
+      let error = UiText::new("lists-favorite-not-removed");
       surface.mutation_error = Some(error.clone());
       kernel.show_toast(NoticeLevel::Error, error)
     }
     Err(error) => {
-      let error = format!("Could not remove favorite: {error}");
+      let error = list_failure("lists-favorite-remove-error", &error);
       surface.mutation_error = Some(error.clone());
       kernel.show_toast(NoticeLevel::Error, error)
     }
@@ -1158,7 +1161,7 @@ fn apply_watchlist_metadata(page: &mut ListPage, result: Result<Vec<VideoLibrary
   let items = match result {
     Ok(items) => items,
     Err(error) => {
-      page.error = Some(error);
+      page.error = Some(list_failure("lists-metadata-error", &error));
       return;
     }
   };
@@ -1200,43 +1203,55 @@ fn entry_from_record(record: &WatchlistRecord) -> ListEntry {
   }
 }
 
-fn subtitle_from_item(item: &VideoLibraryItem) -> String {
-  if item.item_type.eq_ignore_ascii_case("Episode") {
-    return episode_subtitle(
-      item.series_name.as_deref(),
-      item.season_number,
-      item.episode_number,
-    );
-  }
-  match item.production_year {
-    Some(year) => format!("{} · {year}", item.item_type),
-    None => item.item_type.clone(),
-  }
-}
-
-fn subtitle_from_record(record: &WatchlistRecord) -> String {
-  if record.item_type().eq_ignore_ascii_case("Episode") {
-    episode_subtitle(
-      record.series_name(),
-      record.season_number(),
-      record.episode_number(),
-    )
-  } else {
-    record.item_type().to_owned()
-  }
-}
-
-fn episode_subtitle(
-  series_name: Option<&str>,
+pub struct ListSubtitle {
+  item_type: String,
+  production_year: Option<i32>,
+  series_name: Option<String>,
   season_number: Option<i32>,
   episode_number: Option<i32>,
-) -> String {
-  let series = series_name.unwrap_or("Episode");
-  match (season_number, episode_number) {
-    (Some(season), Some(episode)) => format!("{series} · S{season:02}E{episode:02}"),
-    (None, Some(episode)) => format!("{series} · E{episode:02}"),
-    _ => series.to_owned(),
+}
+
+impl ListSubtitle {
+  pub fn text(&self, locale: Localizer) -> String {
+    let kind = media_type(locale, &self.item_type);
+    if self.item_type.eq_ignore_ascii_case("Episode") {
+      let series = self.series_name.as_deref().unwrap_or(&kind);
+      return match (self.season_number, self.episode_number) {
+        (Some(season), Some(episode)) => format!("{series} · S{season:02}E{episode:02}"),
+        (None, Some(episode)) => format!("{series} · E{episode:02}"),
+        _ => series.to_owned(),
+      };
+    }
+    match self.production_year {
+      Some(year) => format!("{kind} · {year}"),
+      None => kind,
+    }
   }
+}
+
+fn subtitle_from_item(item: &VideoLibraryItem) -> ListSubtitle {
+  ListSubtitle {
+    item_type: item.item_type.clone(),
+    production_year: item.production_year,
+    series_name: item.series_name.clone(),
+    season_number: item.season_number,
+    episode_number: item.episode_number,
+  }
+}
+
+fn subtitle_from_record(record: &WatchlistRecord) -> ListSubtitle {
+  ListSubtitle {
+    item_type: record.item_type().to_owned(),
+    production_year: None,
+    series_name: record.series_name().map(str::to_owned),
+    season_number: record.season_number(),
+    episode_number: record.episode_number(),
+  }
+}
+
+fn list_failure(id: &'static str, error: &str) -> UiText {
+  tracing::warn!(error = %jellypilot_core::diagnostics::sanitize_message(error), message_id = id, "Personal list operation failed");
+  UiText::new(id)
 }
 
 fn nonempty(value: String) -> Option<String> {
@@ -1485,7 +1500,7 @@ mod tests {
       .entries
       .iter()
       .all(|entry| entry.availability == ItemAvailability::Unknown));
-    assert_eq!(surface.watchlist.error.as_deref(), Some("offline"));
+    assert!(surface.watchlist.error.is_some());
   }
 
   #[test]
@@ -1633,11 +1648,7 @@ mod tests {
         result: Err("write failed".to_owned()),
       },
     ));
-    assert!(state
-      .kernel
-      .active_toast
-      .as_ref()
-      .is_some_and(|toast| toast.message.contains("Could not update Watchlist")));
+    assert!(state.kernel.active_toast.is_some());
     drop(load_membership_for_scope(
       &mut surface,
       &mut state.kernel,

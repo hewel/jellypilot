@@ -1,0 +1,12 @@
+shell-personal-lists = Personal Lists
+shell-libraries = Libraries
+shell-libraries-unavailable = Libraries unavailable
+shell-search-placeholder = Search movies and shows…
+shell-clear-search = Clear search
+shell-refreshing = Refreshing…
+shell-control-mode = Control mode
+shell-settings-save-hint = Changes are written to disk when applied.
+shell-library-refresh-failed = Could not refresh libraries: { $details }
+shell-library-unavailable = The selected library changed or is no longer accessible. Returned to Home.
+shell-account-change-lists = Wait for the account change to finish before changing Personal Lists.
+shell-account-change-item = Wait for the account change to finish before updating this item.

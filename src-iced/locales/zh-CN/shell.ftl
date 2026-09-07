@@ -1,0 +1,12 @@
+shell-personal-lists = 个人清单
+shell-libraries = 媒体库
+shell-libraries-unavailable = 媒体库暂不可用
+shell-search-placeholder = 搜索电影和剧集…
+shell-clear-search = 清空搜索
+shell-refreshing = 正在刷新…
+shell-control-mode = 控制模式
+shell-settings-save-hint = 应用更改时会保存到磁盘。
+shell-library-refresh-failed = 无法刷新媒体库：{ $details }
+shell-library-unavailable = 所选媒体库已更改或不再可访问，已返回首页。
+shell-account-change-lists = 请等待账户切换完成后再更改个人清单。
+shell-account-change-item = 请等待账户切换完成后再更新此项目。

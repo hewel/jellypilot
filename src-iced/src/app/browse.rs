@@ -5,6 +5,7 @@
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
+use crate::i18n::UiText;
 use iced::widget::operation;
 use iced::{task, Task};
 use jellypilot_core::artwork_binder::{ArtworkSettlement, ArtworkSurface};
@@ -17,6 +18,7 @@ use jellypilot_core::browse_model::{
   BrowseSource, LibraryBrowseView,
 };
 use jellypilot_core::config::BrowseFilterSettings;
+use jellypilot_core::diagnostics::{sanitize_message, DiagnosticCategory, DiagnosticLevel};
 use jellypilot_core::LibraryBrowseLoadToken;
 use jellypilot_media_server::artwork::{
   ArtworkLoadObservation, ArtworkLoadSummary, ArtworkSizeClass, DerivedArtwork,
@@ -152,7 +154,14 @@ pub fn update(
       let effects = match surface.data.retry() {
         Ok(effects) => effects,
         Err(error) => {
-          kernel.notice = Some(format!("Could not retry library browsing: {error}"));
+          kernel.diagnostics.record(
+            DiagnosticLevel::Error,
+            DiagnosticCategory::Connection,
+            format!("Could not retry library browsing: {error}"),
+          );
+          kernel.notice = Some(
+            UiText::new("browse-retry-failed").arg("details", sanitize_message(&error.to_string())),
+          );
           return Task::none();
         }
       };
@@ -162,17 +171,39 @@ pub fn update(
     BrowseMessage::PageSettled(settlement) => {
       let current = surface.data.is_current_settlement(&settlement);
       if current {
+        if let Err(error) = &settlement.result {
+          kernel.diagnostics.record(
+            DiagnosticLevel::Error,
+            DiagnosticCategory::Connection,
+            format!("Browse page load failed: {error}"),
+          );
+        }
         surface.page_tasks.remove(&settlement.token);
         if surface.refresh_fallback.is_some() {
           if let Err(error) = &settlement.result {
-            kernel.notice = Some(format!("Could not refresh this page: {error}"));
+            kernel.diagnostics.record(
+              DiagnosticLevel::Error,
+              DiagnosticCategory::Connection,
+              format!("Could not refresh this page: {error}"),
+            );
+            kernel.notice = Some(
+              UiText::new("browse-refresh-failed")
+                .arg("details", sanitize_message(&error.to_string())),
+            );
           }
         }
       }
       let effects = match surface.data.settle(settlement) {
         Ok(effects) => effects,
         Err(error) => {
-          kernel.notice = Some(format!("Could not apply library results: {error}"));
+          kernel.diagnostics.record(
+            DiagnosticLevel::Error,
+            DiagnosticCategory::Connection,
+            format!("Could not apply library results: {error}"),
+          );
+          kernel.notice = Some(
+            UiText::new("browse-apply-failed").arg("details", sanitize_message(&error.to_string())),
+          );
           return Task::none();
         }
       };
@@ -251,7 +282,15 @@ fn persist_filters(
   }
   let filters = mutation(kernel.settings.snapshot().browse_filters());
   if let Err(error) = kernel.settings.set_browse_filters(filters) {
-    kernel.notice = Some(format!("Could not save library filters: {error}"));
+    kernel.diagnostics.record(
+      DiagnosticLevel::Error,
+      DiagnosticCategory::Connection,
+      format!("Could not save library filters: {error}"),
+    );
+    kernel.notice = Some(
+      UiText::new("browse-save-filters-failed")
+        .arg("details", sanitize_message(&error.to_string())),
+    );
     return Task::none();
   }
   start(surface, kernel, source, playback_idle)
@@ -270,18 +309,32 @@ pub fn start(
   let Some(source) = source else {
     abort_pages(surface);
     if let Err(error) = surface.data.reset() {
-      kernel.notice = Some(format!("Could not reset library browsing: {error}"));
+      kernel.diagnostics.record(
+        DiagnosticLevel::Error,
+        DiagnosticCategory::Connection,
+        format!("Could not reset library browsing: {error}"),
+      );
+      kernel.notice = Some(
+        UiText::new("browse-reset-failed").arg("details", sanitize_message(&error.to_string())),
+      );
       return Task::none();
     }
     sync_view(surface);
-    kernel.notice = Some("The selected library is no longer available.".to_owned());
+    kernel.notice = Some(UiText::new("browse-library-unavailable"));
     return Task::none();
   };
   let preferences = BrowsePreferences::from(kernel.settings.snapshot().browse_filters());
   let effects = match surface.data.configure_with_preferences(source, preferences) {
     Ok(effects) => effects,
     Err(error) => {
-      kernel.notice = Some(format!("Could not open library browsing: {error}"));
+      kernel.diagnostics.record(
+        DiagnosticLevel::Error,
+        DiagnosticCategory::Connection,
+        format!("Could not open library browsing: {error}"),
+      );
+      kernel.notice = Some(
+        UiText::new("browse-open-failed").arg("details", sanitize_message(&error.to_string())),
+      );
       sync_view(surface);
       return Task::none();
     }
@@ -348,7 +401,14 @@ pub(crate) fn sync_scroll_window(
   let effects = match surface.data.set_display_range(range, total) {
     Ok(effects) => effects,
     Err(error) => {
-      kernel.notice = Some(format!("Could not load more library items: {error}"));
+      kernel.diagnostics.record(
+        DiagnosticLevel::Error,
+        DiagnosticCategory::Connection,
+        format!("Could not load more library items: {error}"),
+      );
+      kernel.notice = Some(
+        UiText::new("browse-load-more-failed").arg("details", sanitize_message(&error.to_string())),
+      );
       return Task::none();
     }
   };
@@ -386,7 +446,14 @@ pub(crate) fn refresh(
   .then(|| surface.view.clone());
   abort_pages(surface);
   if let Err(error) = surface.data.reset() {
-    kernel.notice = Some(format!("Could not refresh this page: {error}"));
+    kernel.diagnostics.record(
+      DiagnosticLevel::Error,
+      DiagnosticCategory::Connection,
+      format!("Could not refresh this page: {error}"),
+    );
+    kernel.notice = Some(
+      UiText::new("browse-refresh-failed").arg("details", sanitize_message(&error.to_string())),
+    );
     return Task::none();
   }
   let task = start(surface, kernel, source, playback_idle);
@@ -438,40 +505,21 @@ fn start_page_request(
   request: BrowsePageRequest,
 ) -> Task<Message> {
   let token = request.token;
-  let failure_message = failure_message(&request.source);
   let Some(client) = kernel.client.as_ref().map(Arc::clone) else {
     return Task::done(Message::Browse(BrowseMessage::PageSettled(
       BrowsePageSettlement {
         source_id: request.source_id,
         token,
-        result: Err(failure_message.to_owned()),
+        result: Err("media-server-session-unavailable".to_owned()),
       },
     )));
   };
-  let (task, handle) = Task::perform(
-    async move { fixed_failure(fetch_browse_page(client, request).await, failure_message) },
-    |settlement| Message::Browse(BrowseMessage::PageSettled(settlement)),
-  )
+  let (task, handle) = Task::perform(fetch_browse_page(client, request), |settlement| {
+    Message::Browse(BrowseMessage::PageSettled(settlement))
+  })
   .abortable();
   surface.page_tasks.insert(token, handle);
   task
-}
-
-const fn failure_message(source: &BrowseSource) -> &'static str {
-  match source {
-    BrowseSource::Library { .. } => "Could not load this library. Try again.",
-    BrowseSource::Search { .. } => "Could not load these search results. Try again.",
-  }
-}
-
-fn fixed_failure(
-  mut settlement: BrowsePageSettlement,
-  failure_message: &'static str,
-) -> BrowsePageSettlement {
-  if settlement.result.is_err() {
-    settlement.result = Err(failure_message.to_owned());
-  }
-  settlement
 }
 
 /// `pub(crate)` so the router-level re-navigation test in `update.rs` can
@@ -622,7 +670,13 @@ pub(crate) fn leave_view(surface: &mut Surface, kernel: &mut Kernel, playback_id
   }
   begin_artwork_view(surface, kernel);
   if let Err(error) = surface.data.reset() {
-    kernel.notice = Some(format!("Could not reset library browsing: {error}"));
+    kernel.diagnostics.record(
+      DiagnosticLevel::Error,
+      DiagnosticCategory::Connection,
+      format!("Could not reset library browsing: {error}"),
+    );
+    kernel.notice =
+      Some(UiText::new("browse-reset-failed").arg("details", sanitize_message(&error.to_string())));
   }
   sync_view(surface);
 }
@@ -634,7 +688,13 @@ pub(crate) fn reset(surface: &mut Surface, kernel: &mut Kernel) {
   abort_pages(surface);
   surface.artwork = BrowseArtwork::default();
   if let Err(error) = surface.data.reset() {
-    kernel.notice = Some(format!("Could not reset library browsing: {error}"));
+    kernel.diagnostics.record(
+      DiagnosticLevel::Error,
+      DiagnosticCategory::Connection,
+      format!("Could not reset library browsing: {error}"),
+    );
+    kernel.notice =
+      Some(UiText::new("browse-reset-failed").arg("details", sanitize_message(&error.to_string())));
   }
   surface.view = LibraryBrowseView::Inactive;
 }
@@ -674,6 +734,7 @@ mod tests {
     let settings = SettingsStore::default();
     let kernel = Kernel {
       settings,
+      locale: crate::i18n::Localizer::default(),
       diagnostics: Diagnostics::default(),
       auth_store: AuthStore::default(),
       request_gate: RequestGate::default(),
@@ -802,46 +863,6 @@ mod tests {
 
     assert!(surface.page_tasks.contains_key(&current.token));
     assert!(matches!(surface.view, LibraryBrowseView::Loading));
-  }
-
-  #[test]
-  fn browse_failure_messages_are_fixed_for_library_and_search_sources() {
-    let (_, kernel) = test_fixture();
-    let library = BrowseSource::Library {
-      session: kernel.request_gate.current_session(),
-      shortcut: jellypilot_media_server::VideoLibraryShortcut {
-        id: "library-1".to_owned(),
-        name: "Movies".to_owned(),
-        collection_type: "movies".to_owned(),
-        item_count: None,
-        artwork_image_id: None,
-      },
-    };
-    let search = search_source(&kernel, "arrival");
-
-    assert_eq!(
-      failure_message(&library),
-      "Could not load this library. Try again."
-    );
-    assert_eq!(
-      failure_message(&search),
-      "Could not load these search results. Try again."
-    );
-    let settlement = fixed_failure(
-      BrowsePageSettlement {
-        source_id: "source".to_owned(),
-        token: jellypilot_core::LibraryBrowseLoadToken {
-          generation: 1,
-          sequence: 1,
-        },
-        result: Err("HTTP 500: raw server response body".to_owned()),
-      },
-      failure_message(&search),
-    );
-    assert_eq!(
-      settlement.result.as_ref().err().map(String::as_str),
-      Some("Could not load these search results. Try again.")
-    );
   }
 
   #[test]

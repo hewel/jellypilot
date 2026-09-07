@@ -30,7 +30,7 @@ impl std::io::Write for LogTeeWriter {
   }
 }
 
-fn main() -> iced::Result {
+fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
   let filter = std::env::var("JELLYPILOT_LOG").unwrap_or_else(|_| "warn".to_owned());
   tracing_subscriber::fmt()
     .with_env_filter(filter)

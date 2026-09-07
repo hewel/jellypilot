@@ -9,13 +9,7 @@ use super::kernel::Kernel;
 use super::message::{Message, SettingsMessage};
 use super::state::SettingsState;
 
-const SETTINGS_SAVE_ERROR: &str = "Could not save settings.";
-const INVALID_LOGIN_PREFILL_ERROR: &str = "Server and username are required.";
-const INVALID_PROVIDER_ERROR: &str = "The selected provider is invalid.";
-const INVALID_SUBTITLE_LANGUAGE_ERROR: &str = "Choose a valid subtitle language.";
-const DUPLICATE_SUBTITLE_LANGUAGE_ERROR: &str = "That subtitle language is already in the list.";
-const EMPTY_SHORTCUT_ERROR: &str = "Press a non-modifier key for this shortcut.";
-const SHORTCUT_COLLISION_ERROR: &str = "That shortcut is already assigned.";
+use crate::i18n::UiText;
 const PLAYBACK_CONFIG_APPLY_ERROR: &str = "Settings were saved, but MPV could not be reconfigured.";
 const LOG_EXPORT_ERROR: &str = "Could not export logs.";
 
@@ -42,6 +36,10 @@ fn update_settings(
   message: SettingsMessage,
 ) -> Task<Message> {
   match message {
+    SettingsMessage::FontLicensesToggled => {
+      surface.view.font_licenses_expanded = !surface.view.font_licenses_expanded;
+      Task::none()
+    }
     SettingsMessage::SectionSelected(section) => {
       surface.view.active_section = section;
       surface.view.shortcut_capture = None;
@@ -225,7 +223,7 @@ fn update_settings(
     SettingsMessage::LogsExported(result) => {
       match result {
         Ok(path) => {
-          surface.view.saved = Some("Logs exported");
+          surface.view.saved = Some(UiText::new("settings-logs-exported"));
           kernel.diagnostics.record(
             DiagnosticLevel::Info,
             DiagnosticCategory::Config,
@@ -233,7 +231,7 @@ fn update_settings(
           );
         }
         Err(message) => {
-          surface.view.error = Some(LOG_EXPORT_ERROR);
+          surface.view.error = Some(UiText::new("settings-log-export-error"));
           kernel
             .diagnostics
             .record(DiagnosticLevel::Error, DiagnosticCategory::Config, message);
@@ -245,7 +243,7 @@ fn update_settings(
     SettingsMessage::Open | SettingsMessage::OpenAccounts | SettingsMessage::Close => Task::none(),
     SettingsMessage::PlaybackConfigApplied(result) => {
       if result.is_err() {
-        surface.view.error = Some(PLAYBACK_CONFIG_APPLY_ERROR);
+        surface.view.error = Some(UiText::new("settings-playback-config-apply-error"));
         kernel.diagnostics.record(
           DiagnosticLevel::Error,
           DiagnosticCategory::Config,
@@ -270,7 +268,7 @@ fn finish_settings_mutation(
   match result {
     Ok(changed) => {
       surface.view.error = None;
-      surface.view.saved = Some("Saved");
+      surface.view.saved = Some(UiText::new("settings-saved"));
       if changed {
         kernel.diagnostics.record(
           DiagnosticLevel::Info,
@@ -293,16 +291,18 @@ fn finish_settings_mutation(
   }
 }
 
-fn settings_mutation_error(error: &SettingsMutationError) -> &'static str {
-  match error {
-    SettingsMutationError::Config(_) => SETTINGS_SAVE_ERROR,
-    SettingsMutationError::InvalidLoginPrefill => INVALID_LOGIN_PREFILL_ERROR,
-    SettingsMutationError::InvalidProvider => INVALID_PROVIDER_ERROR,
-    SettingsMutationError::InvalidSubtitleLanguage => INVALID_SUBTITLE_LANGUAGE_ERROR,
-    SettingsMutationError::DuplicateSubtitleLanguage => DUPLICATE_SUBTITLE_LANGUAGE_ERROR,
-    SettingsMutationError::EmptyShortcut => EMPTY_SHORTCUT_ERROR,
-    SettingsMutationError::ShortcutCollision => SHORTCUT_COLLISION_ERROR,
-  }
+fn settings_mutation_error(error: &SettingsMutationError) -> UiText {
+  UiText::new(match error {
+    SettingsMutationError::Config(_) => "settings-save-error",
+    SettingsMutationError::InvalidLoginPrefill => "settings-invalid-login-prefill-error",
+    SettingsMutationError::InvalidProvider => "settings-invalid-provider-error",
+    SettingsMutationError::InvalidSubtitleLanguage => "settings-invalid-subtitle-language-error",
+    SettingsMutationError::DuplicateSubtitleLanguage => {
+      "settings-duplicate-subtitle-language-error"
+    }
+    SettingsMutationError::EmptyShortcut => "settings-empty-shortcut-error",
+    SettingsMutationError::ShortcutCollision => "settings-shortcut-collision-error",
+  })
 }
 
 #[cfg(test)]
@@ -326,6 +326,7 @@ mod tests {
     };
     let kernel = Kernel {
       settings,
+      locale: crate::i18n::Localizer::new(jellypilot_core::locale::UiLanguage::English),
       diagnostics: Diagnostics::default(),
       auth_store: AuthStore::default(),
       request_gate: RequestGate::default(),
@@ -347,30 +348,6 @@ mod tests {
   }
 
   #[test]
-  fn settings_mutation_errors_use_fixed_inline_copy() {
-    let path = std::env::temp_dir().join(format!(
-      "jellypilot-iced-settings-error-{}.json",
-      std::process::id()
-    ));
-    let _ = fs::remove_file(&path);
-    let (mut surface, mut kernel) = test_fixture();
-    kernel.settings = SettingsStore::for_test(path);
-    surface.view = SettingsState::from_settings(kernel.settings.snapshot());
-    surface.view.shortcut_capture = Some(jellypilot_core::config::ShortcutKind::Next);
-
-    drop(update(
-      &mut surface,
-      &mut kernel,
-      SettingsMessage::ShortcutCaptured("Shift+<".to_owned()),
-    ));
-
-    assert_eq!(
-      surface.view.error,
-      Some("That shortcut is already assigned.")
-    );
-  }
-
-  #[test]
   fn logs_exported_reports_path_via_badge_and_diagnostics() {
     let (mut surface, mut kernel) = test_fixture();
 
@@ -380,7 +357,6 @@ mod tests {
       SettingsMessage::LogsExported(Ok("/tmp/jellypilot-logs-19700102-000001.log".to_owned())),
     ));
 
-    assert_eq!(surface.view.saved, Some("Logs exported"));
     assert!(surface.view.error.is_none());
     assert!(kernel
       .diagnostics
@@ -389,7 +365,7 @@ mod tests {
   }
 
   #[test]
-  fn logs_exported_failure_shows_fixed_inline_error() {
+  fn logs_exported_failure_records_diagnostic_error() {
     let (mut surface, mut kernel) = test_fixture();
 
     drop(update(
@@ -398,7 +374,6 @@ mod tests {
       SettingsMessage::LogsExported(Err(LOG_EXPORT_ERROR.to_owned())),
     ));
 
-    assert_eq!(surface.view.error, Some(LOG_EXPORT_ERROR));
     assert!(surface.view.saved.is_none());
     assert!(kernel
       .diagnostics

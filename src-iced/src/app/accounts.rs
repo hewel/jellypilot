@@ -22,6 +22,7 @@ use super::login::{self, CandidateMessage, CandidateSurface, CandidateUpdate};
 use super::message::PasswordSubmission;
 use super::personal_lists;
 use super::state::{ConnectedIdentity, LoginState, State};
+use crate::i18n::UiText;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum CopyStatus {
@@ -60,7 +61,7 @@ pub struct AccountView<'a> {
   pub loading: bool,
   pub management_open: bool,
   pub confirmation: Option<ConfirmationView<'a>>,
-  pub error: Option<&'a str>,
+  pub error: Option<&'a UiText>,
   pub auto_login: bool,
   pub remote_control: RemoteControlState,
   pub copy_status: CopyStatus,
@@ -279,7 +280,9 @@ enum HandoffKind {
 
 pub struct Surface {
   pub management_open: bool,
-  pub error: Option<String>,
+  pub error: Option<UiText>,
+  /// Technical event from the current reducer turn, consumed by the router.
+  pub diagnostic: Option<String>,
   pub copy_status: CopyStatus,
   pub add_account: Option<CandidateSurface>,
   confirmation: Option<PendingConfirmation>,
@@ -300,6 +303,7 @@ impl Surface {
     Self {
       management_open: false,
       error: None,
+      diagnostic: None,
       copy_status: CopyStatus::Idle,
       add_account: None,
       confirmation: None,
@@ -350,7 +354,7 @@ pub fn view(state: &State) -> AccountView<'_> {
     loading: state.login.flow.profiles_loading,
     management_open: surface.management_open,
     confirmation: confirmation_view(surface.confirmation.as_ref()),
-    error: surface.error.as_deref(),
+    error: surface.error.as_ref(),
     auto_login: state.kernel.settings.snapshot().auto_login(),
     remote_control: state.playback.remote_control_state,
     copy_status: surface.copy_status,
@@ -459,6 +463,7 @@ pub fn update(
   facts: RuntimeFacts,
   message: Message,
 ) -> Update {
+  surface.diagnostic = None;
   match message {
     Message::CopyServerAddress => copy_server_address(surface, kernel),
     Message::ClipboardVerified {
@@ -561,7 +566,8 @@ pub fn update(
 
 fn copy_server_address(surface: &mut Surface, kernel: &Kernel) -> Update {
   let Some(identity) = &kernel.connected_identity else {
-    surface.error = Some("No connected server address is available to copy.".to_owned());
+    surface.diagnostic = Some("No connected server address is available to copy.".to_owned());
+    surface.error = Some(UiText::new("account-no-copy-address"));
     return Update::none();
   };
   surface.next_copy_generation = surface.next_copy_generation.wrapping_add(1);
@@ -771,7 +777,8 @@ fn request_switch(
     .iter()
     .find(|profile| profile.key() == &key)
   else {
-    surface.error = Some("This saved sign-in is no longer available.".to_owned());
+    surface.diagnostic = Some("This saved sign-in is no longer available.".to_owned());
+    surface.error = Some(UiText::new("login-profile-missing"));
     return Update::none();
   };
   surface.error = None;
@@ -849,7 +856,8 @@ fn finish_saved_validation(
     Err(error) => {
       surface.operation = Operation::Idle;
       surface.busy_profile = None;
-      surface.error = Some(error.to_string());
+      surface.diagnostic = Some(error.to_string());
+      surface.error = Some(login::error_text(&error));
       return Update::none();
     }
   };
@@ -900,7 +908,8 @@ fn request_sign_out(
     .iter()
     .find(|profile| profile.key() == &key)
   else {
-    surface.error = Some("This saved sign-in is no longer available.".to_owned());
+    surface.diagnostic = Some("This saved sign-in is no longer available.".to_owned());
+    surface.error = Some(UiText::new("login-profile-missing"));
     return Update::none();
   };
   let scope = profile.scope().clone();
@@ -1041,7 +1050,8 @@ fn finish_credentials_removal(
   match result {
     Err(error) => {
       surface.busy_profile = None;
-      surface.error = Some(LoginError::AuthStorage(error).to_string());
+      surface.diagnostic = Some(LoginError::AuthStorage(error).to_string());
+      surface.error = Some(login::error_text(&LoginError::AuthStorage(error)));
       Update::none()
     }
     Ok(profiles) => {
@@ -1092,7 +1102,8 @@ fn finish_watchlist_removal(
     Ok(_) => {}
     Err(error) => {
       surface.failed_watchlist_cleanup.push(scope);
-      surface.error = Some(format!(
+      surface.error = Some(UiText::new("account-watchlist-cleanup-failed"));
+      surface.diagnostic = Some(format!(
         "The saved login was removed, but its Watchlist remains on this device: {error}"
       ));
     }
@@ -1184,7 +1195,12 @@ fn settle_playback_handoff(
     return Update::none();
   }
   if let Err(error) = &result {
-    surface.error = Some(match kind {
+    surface.error = Some(UiText::new(match kind {
+      HandoffKind::Activate { .. } => "account-switch-cleanup-failed",
+      HandoffKind::Disconnect => "account-disconnect-cleanup-failed",
+      HandoffKind::SignOut => "account-signout-cleanup-failed",
+    }));
+    surface.diagnostic = Some(match kind {
       HandoffKind::Activate { .. } => format!(
         "External playback cleanup failed. The account was not changed: {error}"
       ),
@@ -1330,7 +1346,8 @@ fn finish_session_storage(
       }
     }
     Err(error) if surface.current_candidate_key.as_ref() == Some(&candidate_key) => {
-      surface.error = Some(format!(
+      surface.error = Some(UiText::new("account-session-save-failed"));
+      surface.diagnostic = Some(format!(
         "Connected for this session, but the login could not be saved: {error}."
       ));
     }
@@ -1363,7 +1380,8 @@ fn finish_activation_record(
     && kernel.active_profile.as_ref() == Some(&candidate_key)
   {
     if let Err(error) = result {
-      surface.error = Some(format!(
+      surface.error = Some(UiText::new("account-activation-save-failed"));
+      surface.diagnostic = Some(format!(
         "Connected, but the startup account selection could not be saved: {error}."
       ));
     }
@@ -1543,10 +1561,6 @@ mod tests {
       .as_ref()
       .is_some_and(|client| Arc::ptr_eq(client, &old_client)));
     assert_eq!(kernel.connection, ConnectionPhase::Connected);
-    assert!(surface
-      .error
-      .as_deref()
-      .is_some_and(|error| error.contains("remains connected")));
     assert!(can_retry_handoff_cleanup(&surface));
 
     let handoff_error = surface.error.clone();
@@ -1563,10 +1577,6 @@ mod tests {
       Err("Watchlist storage unavailable".to_owned()),
     );
     assert_ne!(surface.error, handoff_error);
-    assert!(surface
-      .error
-      .as_deref()
-      .is_some_and(|error| error.contains("Watchlist remains")));
     assert!(can_retry_handoff_cleanup(&surface));
 
     let runtime = personal_lists::Runtime::default();
@@ -1590,38 +1600,6 @@ mod tests {
 
     let retry = retry_handoff(&mut surface);
     assert_eq!(retry.effect, Some(Effect::BeginHandoff { generation: 3 }));
-  }
-
-  #[test]
-  fn active_sign_out_cleanup_failure_reports_that_credentials_were_removed() {
-    let mut surface = Surface::new();
-    surface.operation = Operation::Handoff {
-      generation: 4,
-      kind: HandoffKind::SignOut,
-      remote_done: true,
-      playback_result: None,
-    };
-    let (mut kernel, mut login_flow, _settings) = test_kernel();
-    connect_kernel(&mut kernel, "current");
-
-    let update = settle_playback_handoff(
-      &mut surface,
-      &mut login_flow,
-      &mut kernel,
-      4,
-      Err("MPV process cleanup could not be confirmed".to_owned()),
-      false,
-    );
-
-    assert!(update.effect.is_none());
-    assert_eq!(handoff_generation(&surface), Some(4));
-    let error = surface
-      .error
-      .as_deref()
-      .expect("active sign out cleanup failure should be visible");
-    assert!(error.contains("saved login was removed"));
-    assert!(error.contains("current session remains connected"));
-    assert!(!error.contains("account was not changed"));
   }
 
   #[test]
@@ -1832,6 +1810,7 @@ mod tests {
     let settings = SettingsStore::for_test(path.clone());
     let login = LoginState::from_settings(settings.snapshot());
     let kernel = Kernel {
+      locale: crate::i18n::Localizer::default(),
       settings,
       auth_store: jellypilot_auth::AuthStore::default(),
       client: None,

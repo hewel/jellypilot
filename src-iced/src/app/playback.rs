@@ -39,7 +39,9 @@ use jellypilot_session::{
   finalize_remote_target, JellyfinWebSocket, JellyfinWebSocketEvent, RemoteControlState,
 };
 
+use crate::i18n::UiText;
 use crate::tray::TrayAction;
+use jellypilot_mpv::playback::PlaybackError;
 
 use super::accounts;
 use super::kernel::Kernel;
@@ -88,7 +90,7 @@ pub(crate) struct AccountHandoffStart {
 /// in-flight effect markers, seek/volume previews, track popover flags,
 /// player-bar artwork, and the remote Playback Target session state.
 pub struct Surface {
-  pub notice: Option<String>,
+  pub notice: Option<UiText>,
   pub artwork: Option<ArtworkCell>,
   pub controller: Option<PlaybackControllerHandle>,
   pub session: PlaybackSession,
@@ -164,9 +166,15 @@ pub fn update(
     message = playback_message_name(&message),
     "playback message"
   );
-  let previous_notice = surface.notice.clone();
+  let previous_notice = surface.notice.as_ref().map(UiText::id);
+  let previous_view_notice = surface.view.notice.clone();
   let task = update_playback(surface, kernel, quit_requested, message);
-  let toast_task = record_playback_notice(surface, kernel, previous_notice.as_deref());
+  let toast_task = record_playback_notice(
+    surface,
+    kernel,
+    previous_notice,
+    previous_view_notice.as_ref(),
+  );
   Task::batch([task, toast_task])
 }
 
@@ -180,10 +188,9 @@ pub fn update_remote(
   message: RemoteMessage,
 ) -> Task<Message> {
   let previous_state = surface.remote_control_state;
-  let previous_notice = kernel.notice.clone();
+  let previous_notice = kernel.notice.as_ref().map(UiText::id);
   let task = handle_remote(surface, kernel, quit_requested, message);
-  let toast_task =
-    record_remote_change(surface, kernel, previous_state, previous_notice.as_deref());
+  let toast_task = record_remote_change(surface, kernel, previous_state, previous_notice);
   Task::batch([task, toast_task])
 }
 
@@ -191,6 +198,7 @@ fn record_playback_notice(
   surface: &mut Surface,
   kernel: &mut Kernel,
   previous: Option<&str>,
+  previous_view_notice: Option<&PlaybackNotice>,
 ) -> Task<Message> {
   let Some(notice) = surface.notice.clone() else {
     if previous.is_some() {
@@ -198,22 +206,27 @@ fn record_playback_notice(
     }
     return Task::none();
   };
-  if Some(notice.as_str()) == previous {
+  if Some(notice.id()) == previous && surface.view.notice.as_ref() == previous_view_notice {
     return Task::none();
   }
-  let level = if notice.contains("failed")
-    || notice.contains("Failed")
-    || notice.contains("unavailable")
-    || notice.contains("Unavailable")
-  {
-    DiagnosticLevel::Error
-  } else {
-    DiagnosticLevel::Warning
+  let level = match &surface.view.notice {
+    Some(PlaybackNotice::Warnings(_)) => DiagnosticLevel::Warning,
+    _ => DiagnosticLevel::Error,
   };
-  let key = coalescing_key("playback", &notice);
+  let diagnostic = match &surface.view.notice {
+    Some(PlaybackNotice::Failed(error)) => error.to_string(),
+    Some(PlaybackNotice::CleanupFailed(error)) => error.to_string(),
+    Some(PlaybackNotice::Warnings(warnings)) => warnings
+      .iter()
+      .map(ToString::to_string)
+      .collect::<Vec<_>>()
+      .join("; "),
+    None => "External playback is unavailable because MPV could not be found.".to_owned(),
+  };
+  let key = coalescing_key("playback", &diagnostic);
   kernel
     .diagnostics
-    .record_coalesced(&key, level, DiagnosticCategory::Playback, &notice);
+    .record_coalesced(&key, level, DiagnosticCategory::Playback, &diagnostic);
 
   let toast_level = match level {
     DiagnosticLevel::Error => NoticeLevel::Error,
@@ -238,7 +251,7 @@ fn record_failed_shutdown_warnings(
   }
   kernel.show_toast(
     NoticeLevel::Warning,
-    "Playback ended, but reporting to the media server could not be completed.".to_owned(),
+    UiText::new("player-reporting-incomplete"),
   )
 }
 
@@ -270,16 +283,39 @@ fn record_remote_change(
   if let Some(notice) = kernel
     .notice
     .clone()
-    .filter(|notice| Some(notice.as_str()) != previous_notice)
+    .filter(|notice| Some(notice.id()) != previous_notice)
   {
-    kernel.diagnostics.record(
-      DiagnosticLevel::Warning,
-      DiagnosticCategory::RemoteControl,
-      &notice,
-    );
     return kernel.show_toast(NoticeLevel::Warning, notice);
   }
   Task::none()
+}
+
+fn remote_notice(kernel: &mut Kernel, id: &'static str, diagnostic: &str) {
+  kernel.diagnostics.record(
+    DiagnosticLevel::Warning,
+    DiagnosticCategory::RemoteControl,
+    diagnostic,
+  );
+  kernel.notice = Some(UiText::new(id));
+}
+
+fn playback_error_text(error: PlaybackError) -> UiText {
+  UiText::new(match error {
+    PlaybackError::MpvNotFound => "player-mpv-not-found",
+    PlaybackError::UnsupportedItemType => "player-unsupported-item",
+    PlaybackError::ItemNotPlayable => "player-item-not-playable",
+    PlaybackError::InvalidStartPosition => "player-invalid-position",
+    PlaybackError::InvalidVolume => "player-invalid-volume",
+    PlaybackError::PlaybackInfoUnavailable => "player-playback-info-unavailable",
+    PlaybackError::MediaSourceUnavailable => "player-source-unavailable",
+    PlaybackError::StreamUrlUnavailable => "player-stream-unavailable",
+    PlaybackError::SubtitleUrlUnavailable => "player-subtitle-stream-unavailable",
+    PlaybackError::TrackUnavailable => "player-track-unavailable",
+    PlaybackError::MpvStartFailed => "player-mpv-start-failed",
+    PlaybackError::MpvLoadFailed => "player-mpv-load-failed",
+    PlaybackError::MpvControlFailed => "player-mpv-control-failed",
+    PlaybackError::NoActivePlayback => "player-no-active-playback",
+  })
 }
 
 /// Re-applies the configured MPV path/arguments: reconfigures the live
@@ -317,11 +353,10 @@ pub(crate) fn apply_playback_configuration(
         Instant::now(),
       );
       sync_playback_projection(surface, kernel, quit_requested);
-      surface.notice =
-        Some("External playback is unavailable because MPV could not be found.".into());
+      surface.notice = Some(playback_error_text(PlaybackError::MpvNotFound));
       let toast_task = kernel.show_toast(
         NoticeLevel::Error,
-        "External playback is unavailable because MPV could not be found.",
+        playback_error_text(PlaybackError::MpvNotFound),
       );
       Task::batch([
         Task::done(Message::Settings(SettingsMessage::PlaybackConfigApplied(
@@ -439,9 +474,8 @@ pub(crate) fn start_remote_session(surface: &mut Surface, kernel: &mut Kernel) -
   )
 }
 
-const REMOTE_CONNECTION_LOST_NOTICE: &str = "Remote playback connection lost; reconnecting…";
-const REMOTE_TRACKS_UNAVAILABLE_NOTICE: &str =
-  "Remote track selection ignored because playback tracks are not loaded.";
+const REMOTE_CONNECTION_LOST_NOTICE: &str = "player-remote-connection-lost";
+const REMOTE_TRACKS_UNAVAILABLE_NOTICE: &str = "player-remote-tracks-unavailable";
 
 fn handle_remote(
   surface: &mut Surface,
@@ -471,9 +505,10 @@ fn handle_remote(
           surface.remote_session = Some(session);
           surface.remote_control_state = RemoteControlState::Available;
           if !validated {
-            kernel.notice = Some(
-              "Remote playback target connected, but server session validation is still pending."
-                .to_owned(),
+            remote_notice(
+              kernel,
+              "player-remote-validation-pending",
+              "Remote playback target connected, but server session validation is still pending.",
             );
           }
         }
@@ -482,7 +517,15 @@ fn handle_remote(
           surface.remote_session = None;
           surface.remote_events = None;
           surface.remote_control_state = RemoteControlState::Unavailable;
-          kernel.notice = Some(error.diagnostic().to_owned());
+          remote_notice(
+            kernel,
+            match error {
+              RemoteStartError::SessionUnavailable => "player-remote-session-unavailable",
+              RemoteStartError::ConnectionFailed => "player-remote-connect-failed",
+              RemoteStartError::CapabilityRegistrationFailed => "player-remote-registration-failed",
+            },
+            error.diagnostic(),
+          );
         }
       }
       Task::none()
@@ -510,7 +553,11 @@ fn handle_remote(
         }
         JellyfinWebSocketEvent::ConnectionLost => {
           surface.remote_control_state = RemoteControlState::Lost;
-          kernel.notice = Some(REMOTE_CONNECTION_LOST_NOTICE.to_owned());
+          remote_notice(
+            kernel,
+            REMOTE_CONNECTION_LOST_NOTICE,
+            "Remote playback connection lost; reconnecting…",
+          );
           Task::none()
         }
         JellyfinWebSocketEvent::Connected => Task::none(),
@@ -523,16 +570,17 @@ fn handle_remote(
       match result {
         Ok(true) => {
           surface.remote_control_state = RemoteControlState::Available;
-          if kernel.notice.as_deref() == Some(REMOTE_CONNECTION_LOST_NOTICE) {
+          if kernel.notice.as_ref().map(UiText::id) == Some(REMOTE_CONNECTION_LOST_NOTICE) {
             kernel.notice = None;
           }
           Task::none()
         }
         Ok(false) => {
           surface.remote_control_state = RemoteControlState::Available;
-          kernel.notice = Some(
-            "Remote playback target reconnected, but server session validation is still pending."
-              .to_owned(),
+          remote_notice(
+            kernel,
+            "player-remote-revalidation-pending",
+            "Remote playback target reconnected, but server session validation is still pending.",
           );
           Task::none()
         }
@@ -552,7 +600,11 @@ fn handle_remote(
         return Task::none();
       }
       let Ok(item) = *result else {
-        kernel.notice = Some("Remote playback item could not be loaded.".to_owned());
+        remote_notice(
+          kernel,
+          "player-remote-item-unavailable",
+          "Remote playback item could not be loaded.",
+        );
         return Task::none();
       };
       let position = start_position_ticks.map_or(PlaybackStartPosition::Beginning, |ticks| {
@@ -596,7 +648,11 @@ fn handle_remote_command(
         kernel.request_gate.begin_remote_play();
       }
       let Some(intent) = intent.into_playback_intent(&surface.view) else {
-        kernel.notice = Some(REMOTE_TRACKS_UNAVAILABLE_NOTICE.to_owned());
+        remote_notice(
+          kernel,
+          REMOTE_TRACKS_UNAVAILABLE_NOTICE,
+          "Remote track selection ignored because playback tracks are not loaded.",
+        );
         return Task::none();
       };
       apply_playback_input(
@@ -646,7 +702,11 @@ fn fail_remote_finalization(surface: &mut Surface, kernel: &mut Kernel) -> Task<
   surface.remote = kernel.request_gate.begin_remote();
   surface.remote_events = None;
   surface.remote_control_state = RemoteControlState::Unavailable;
-  kernel.notice = Some("Remote playback target capabilities could not be registered.".to_owned());
+  remote_notice(
+    kernel,
+    "player-remote-registration-failed",
+    "Remote playback target capabilities could not be registered.",
+  );
   let Some(session) = surface.remote_session.take() else {
     return Task::none();
   };
@@ -768,8 +828,7 @@ pub(crate) fn initialize_playback(
     }
     Err(_) => {
       surface.controller = None;
-      surface.notice =
-        Some("External playback is unavailable because MPV could not be found.".into());
+      surface.notice = Some(playback_error_text(PlaybackError::MpvNotFound));
     }
   }
   sync_tray(surface, kernel, quit_requested);
@@ -1375,11 +1434,9 @@ fn sync_playback_projection(surface: &mut Surface, kernel: &Kernel, quit_request
   }
   surface.view = view;
   surface.notice = surface.view.notice.as_ref().map(|notice| match notice {
-    PlaybackNotice::Failed(error) => error.to_string(),
-    PlaybackNotice::Warnings(_) => {
-      "Playback is active, but setup or reporting could not be completed.".to_owned()
-    }
-    PlaybackNotice::CleanupFailed(error) => error.to_string(),
+    PlaybackNotice::Failed(error) => playback_error_text(*error),
+    PlaybackNotice::Warnings(_) => UiText::new("player-setup-incomplete"),
+    PlaybackNotice::CleanupFailed(_) => UiText::new("player-cleanup-failed"),
   });
   sync_tray(surface, kernel, quit_requested);
 }
@@ -1388,7 +1445,7 @@ fn sync_playback_projection(surface: &mut Surface, kernel: &Kernel, quit_request
 /// kernel tray state; `pub(crate)` for the router's tray Quit arm.
 pub(crate) fn sync_tray(surface: &Surface, kernel: &Kernel, quit_requested: bool) {
   if let Some(tray) = &kernel.tray {
-    tray.sync(&surface.view, quit_requested);
+    tray.sync(&surface.view, quit_requested, kernel.locale);
   }
 }
 
@@ -1835,6 +1892,7 @@ mod tests {
     let mut request_gate = RequestGate::default();
     let surface = Surface::new(&mut request_gate);
     let kernel = Kernel {
+      locale: crate::i18n::Localizer::default(),
       settings,
       diagnostics: Diagnostics::default(),
       auth_store: AuthStore::default(),
@@ -1854,6 +1912,36 @@ mod tests {
       profile_avatars: Default::default(),
     };
     (surface, kernel)
+  }
+
+  #[test]
+  fn different_warnings_with_the_same_ui_summary_remain_in_diagnostics() {
+    let (mut surface, mut kernel) = test_fixture();
+    let first = PlaybackNotice::Warnings(vec![PlaybackWarning::PlaybackStartNotReported]);
+    surface.notice = Some(UiText::new("player-setup-incomplete"));
+    surface.view.notice = Some(first.clone());
+    drop(record_playback_notice(
+      &mut surface,
+      &mut kernel,
+      None,
+      None,
+    ));
+
+    let next = PlaybackWarning::PlaybackProgressNotReported;
+    surface.view.notice = Some(PlaybackNotice::Warnings(vec![next]));
+    drop(record_playback_notice(
+      &mut surface,
+      &mut kernel,
+      Some("player-setup-incomplete"),
+      Some(&first),
+    ));
+    assert!(
+      kernel
+        .diagnostics
+        .rows()
+        .any(|event| event.message == next.to_string()),
+      "a shared localized summary must not suppress a distinct technical warning"
+    );
   }
 
   fn episode(id: &str, season_number: i32) -> VideoLibraryItem {
@@ -2777,7 +2865,7 @@ mod tests {
     ));
 
     assert_eq!(
-      kernel.notice.as_deref(),
+      kernel.notice.as_ref().map(UiText::id),
       Some(REMOTE_TRACKS_UNAVAILABLE_NOTICE)
     );
   }
@@ -3043,7 +3131,9 @@ mod tests {
   #[test]
   fn successful_reconnect_clears_only_the_connection_lost_notice() {
     let (mut surface, mut kernel) = test_fixture();
-    kernel.notice = Some(REMOTE_CONNECTION_LOST_NOTICE.to_owned());
+    kernel.notice = Some(UiText::new(REMOTE_CONNECTION_LOST_NOTICE));
+    kernel.locale =
+      crate::i18n::Localizer::new(jellypilot_core::locale::UiLanguage::SimplifiedChinese);
     let remote = surface.remote;
 
     drop(handle_remote(
@@ -3057,7 +3147,7 @@ mod tests {
     ));
 
     assert!(kernel.notice.is_none());
-    kernel.notice = Some("Unrelated notice".to_owned());
+    kernel.notice = Some(UiText::new(REMOTE_TRACKS_UNAVAILABLE_NOTICE));
     drop(handle_remote(
       &mut surface,
       &mut kernel,
@@ -3067,7 +3157,10 @@ mod tests {
         result: Ok(true),
       },
     ));
-    assert_eq!(kernel.notice.as_deref(), Some("Unrelated notice"));
+    assert_eq!(
+      kernel.notice.as_ref().map(UiText::id),
+      Some(REMOTE_TRACKS_UNAVAILABLE_NOTICE)
+    );
   }
 
   #[test]

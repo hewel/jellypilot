@@ -16,6 +16,7 @@ use super::state::{
   intro_skip_mode, ArtworkHandleRetention, ConnectedIdentity, NoticeLevel, ProfileAvatarHandles,
   ToastNotice,
 };
+use crate::i18n::{Localizer, UiText};
 use crate::tray::Tray;
 
 /// Cross-surface machinery shared by every surface module (ADR 0029): server
@@ -25,6 +26,7 @@ pub struct Kernel {
   /// Persisted application configuration; read and mutated by several
   /// surfaces (settings edits, login prefill, playback options, filters).
   pub settings: SettingsStore,
+  pub locale: Localizer,
   pub auth_store: AuthStore,
   pub client: Option<Arc<JellyfinClient>>,
   pub connection: ConnectionPhase,
@@ -32,7 +34,7 @@ pub struct Kernel {
   pub active_profile: Option<SavedProfileKey>,
   pub request_gate: RequestGate,
   pub diagnostics: Diagnostics,
-  pub notice: Option<String>,
+  pub notice: Option<UiText>,
   pub active_toast: Option<ToastNotice>,
   pub next_toast_id: u64,
   pub tray: Option<Tray>,
@@ -49,10 +51,9 @@ pub struct Kernel {
 impl Kernel {
   /// Shows a toast notification and mirrors it into the persistent notice
   /// line; the toast auto-dismisses after five seconds.
-  pub fn show_toast(&mut self, level: NoticeLevel, message: impl Into<String>) -> Task<Message> {
+  pub fn show_toast(&mut self, level: NoticeLevel, message: UiText) -> Task<Message> {
     self.next_toast_id = self.next_toast_id.wrapping_add(1);
     let id = self.next_toast_id;
-    let message = message.into();
     self.active_toast = Some(ToastNotice {
       id,
       message: message.clone(),

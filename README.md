@@ -1,6 +1,6 @@
 <div align="center">
 
-<img src="assets/promo/hero.webp" alt="JellyPilot — a native Jellyfin and Emby companion that plays through your own MPV." width="100%" />
+<img src="assets/promo/brand-light.webp" alt="JellyPilot — a native Jellyfin and Emby companion that plays through your own MPV." width="100%" />
 
 # JellyPilot
 
@@ -27,7 +27,7 @@ Jellyfin clients can discover JellyPilot as a cast target. Both Jellyfin and Emb
 
 ### Full library and playback
 
-<a href="assets/screenshots/Screenshot%20from%202026-09-02%2017-30-56.png">
+<a href="assets/screenshots/Screenshot%20from%202026-09-06%2023-48-49.png">
   <img src="assets/screenshots/readme-home.webp" alt="JellyPilot dark theme home screen with Continue Watching, Next Up, and the playback control bar." width="100%" />
 </a>
 
@@ -35,11 +35,11 @@ Jellyfin clients can discover JellyPilot as a cast target. Both Jellyfin and Emb
 
 ### Library browsing
 
-<a href="assets/screenshots/Screenshot%20from%202026-09-02%2017-29-31.png">
-  <img src="assets/screenshots/readme-library.webp" alt="JellyPilot light theme movie library with filters and a poster grid." width="100%" />
+<a href="assets/screenshots/Screenshot%20from%202026-09-06%2023-49-02.png">
+  <img src="assets/screenshots/readme-library.webp" alt="JellyPilot dark theme series library with filters, a poster grid, and playback controls." width="100%" />
 </a>
 
-<p align="center"><sub>Light theme · Movie library and filters</sub></p>
+<p align="center"><sub>Dark theme · Series library and filters</sub></p>
 
 ### Control-Only mode
 

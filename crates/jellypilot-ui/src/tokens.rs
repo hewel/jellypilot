@@ -97,7 +97,7 @@ pub struct TextColors {
     pub muted: Color,
 }
 
-/// Canonical Panda font-family stacks.
+/// Preferred font-family stacks; native matching lives in [`crate::fonts`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Fonts {
     pub display: &'static str,
@@ -325,9 +325,9 @@ pub struct Breakpoints {
 /// Mode-independent JellyPilot tokens.
 pub const TOKENS: DesignTokens = DesignTokens {
     fonts: Fonts {
-        display: "'Space Grotesk Variable', 'Inter Variable', ui-sans-serif, system-ui, sans-serif",
+        display: "'Manrope V5', 'MiSans VF', ui-sans-serif, system-ui, sans-serif",
         mono: "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace",
-        sans: "'Inter Variable', ui-sans-serif, system-ui, sans-serif",
+        sans: "'Manrope V5', 'MiSans VF', ui-sans-serif, system-ui, sans-serif",
     },
     spacing: Spacing {
         s0: 0.0,
@@ -624,7 +624,7 @@ mod tests {
     use iced::{Color, Theme};
 
     use super::{
-        palette, Breakpoints, Fonts, SemanticColors, TextColors, ThemePalette, DARK_PALETTE,
+        palette, Breakpoints, SemanticColors, TextColors, ThemePalette, DARK_PALETTE,
         LIGHT_PALETTE, TOKENS,
     };
 
@@ -870,19 +870,6 @@ mod tests {
                 );
             }
         }
-    }
-
-    #[test]
-    fn font_stacks_match_canonical_panda_literals() {
-        assert_eq!(
-            TOKENS.fonts,
-            Fonts {
-                display:
-                    "'Space Grotesk Variable', 'Inter Variable', ui-sans-serif, system-ui, sans-serif",
-                mono: "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace",
-                sans: "'Inter Variable', ui-sans-serif, system-ui, sans-serif",
-            }
-        );
     }
 
     #[test]

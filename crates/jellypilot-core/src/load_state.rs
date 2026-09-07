@@ -1,9 +1,9 @@
 /// Lifecycle state for an asynchronous value.
 #[derive(Clone, Default)]
-pub enum LoadState<T> {
+pub enum LoadState<T, E = String> {
     #[default]
     Idle,
     Loading,
     Ready(T),
-    Failed(String),
+    Failed(E),
 }

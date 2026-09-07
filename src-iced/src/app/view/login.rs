@@ -4,21 +4,22 @@ use crate::app::state::{LoginMethod, QuickConnectState, State};
 use iced::widget::{column, container, row, scrollable, text, text_input, Column};
 use iced::{Alignment, Element, Fill, Length};
 use jellypilot_auth::login::{can_start_login, ConnectionPhase};
+use jellypilot_core::locale::{LanguagePreference, UiLanguage};
 use jellypilot_media_server::MediaServerProvider;
-use jellypilot_ui::fonts::SPACE_GROTESK_FONT;
+use jellypilot_ui::fonts::HEADING_FONT;
 use jellypilot_ui::icons::{icon_with_color, Icon, IconSize};
-use jellypilot_ui::tokens::{ThemePalette, TOKENS};
+use jellypilot_ui::tokens::TOKENS;
 use jellypilot_ui::variants::{BadgeVariant, ButtonVariant, FieldVariant, SurfaceVariant};
 use jellypilot_ui::widgets::control_button::control_button;
 
 pub fn view(state: &State) -> Element<'_, Message> {
   let palette = state.palette();
   let login = &state.login.flow;
-  let title = text("Sign in to JellyPilot")
-    .font(SPACE_GROTESK_FONT)
+  let title = text(state.t("login-title"))
+    .font(HEADING_FONT)
     .size(32)
     .color(palette.text.heading);
-  let subtitle = text("Connect directly to your own media server.")
+  let subtitle = text(state.t("login-subtitle"))
     .size(14)
     .color(palette.text.secondary);
 
@@ -40,20 +41,24 @@ pub fn view(state: &State) -> Element<'_, Message> {
       }
     });
   let fields = column![
-    text("Server URL").color(palette.text.metadata),
+    text(state.t("login-server-url")).color(palette.text.metadata),
     server_field,
   ]
   .spacing(8);
 
   let method_tabs: Element<'_, Message> = if login.provider == MediaServerProvider::Jellyfin {
     row![
-      method_button("Quick Connect", LoginMethod::QuickConnect, state),
-      method_button("Password", LoginMethod::Password, state),
+      method_button(
+        state.t("login-quick-connect"),
+        LoginMethod::QuickConnect,
+        state
+      ),
+      method_button(state.t("login-password"), LoginMethod::Password, state),
     ]
     .spacing(10)
     .into()
   } else {
-    text("Emby uses password sign-in.")
+    text(state.t("login-emby-password"))
       .color(palette.text.body)
       .into()
   };
@@ -63,14 +68,26 @@ pub fn view(state: &State) -> Element<'_, Message> {
     LoginMethod::Password => password(state),
   };
 
-  let mut form = column![title, subtitle, provider_row, fields, method_tabs, method]
-    .spacing(14)
-    .width(Fill);
+  let mut form = column![
+    language_selector(state),
+    title,
+    subtitle,
+    provider_row,
+    fields,
+    method_tabs,
+    method
+  ]
+  .spacing(14)
+  .width(Fill);
   if let Some(error) = &login.error {
-    form = form.push(text(error).size(15).color(palette.colors.error));
+    form = form.push(
+      text(state.kernel.locale.message(error))
+        .size(15)
+        .color(palette.colors.error),
+    );
   }
   if login.profiles_loading {
-    form = form.push(text("Loading saved sign-ins…").color(palette.text.muted));
+    form = form.push(text(state.t("login-loading-saved")).color(palette.text.muted));
   } else if !login.profiles.is_empty() {
     form = form.push(saved_profiles(state));
   }
@@ -106,11 +123,7 @@ fn provider_button<'a>(
     .into()
 }
 
-fn method_button<'a>(
-  label: &'a str,
-  method: LoginMethod,
-  state: &'a State,
-) -> Element<'a, Message> {
+fn method_button<'a>(label: String, method: LoginMethod, state: &'a State) -> Element<'a, Message> {
   let selected = state.login.flow.method == method;
   let icon = match method {
     LoginMethod::QuickConnect => Icon::QrCode,
@@ -121,7 +134,7 @@ fn method_button<'a>(
   } else {
     ButtonVariant::Text
   };
-  control_button(Some(icon), Some(label.to_owned()), variant)
+  control_button(Some(icon), Some(label), variant)
     .icon_size(IconSize::Sm)
     .spacing(TOKENS.spacing.s1_5)
     .padding([7, 14])
@@ -135,28 +148,26 @@ fn quick_connect(state: &State) -> Element<'_, Message> {
   let content: Element<'_, Message> = match &login.quick_connect {
     QuickConnectState::Idle | QuickConnectState::Failed => {
       let label = if matches!(login.quick_connect, QuickConnectState::Failed) {
-        "Request a new code"
+        state.t("login-request-new-code")
       } else {
-        "Request Quick Connect code"
+        state.t("login-request-code")
       };
       let can_login = can_start_login(state.kernel.connection);
-      control_button(
-        Some(Icon::QrCode),
-        Some(label.to_owned()),
-        ButtonVariant::Primary,
-      )
-      .spacing(TOKENS.spacing.s2)
-      .padding([8, 16])
-      .on_press_maybe(can_login.then_some(Message::Login(LoginMessage::QuickConnectSubmitted)))
-      .into()
+      control_button(Some(Icon::QrCode), Some(label), ButtonVariant::Primary)
+        .spacing(TOKENS.spacing.s2)
+        .padding([8, 16])
+        .on_press_maybe(can_login.then_some(Message::Login(LoginMessage::QuickConnectSubmitted)))
+        .into()
     }
-    QuickConnectState::Requesting => quick_connect_progress(palette, "Requesting a code…", None),
+    QuickConnectState::Requesting => {
+      quick_connect_progress(state, state.t("login-requesting-code"))
+    }
     QuickConnectState::Waiting(code) => {
       let code_badge = container(
         row![
           icon_with_color(Icon::QrCode, IconSize::X2l, palette.colors.primary),
           text(code)
-            .font(SPACE_GROTESK_FONT)
+            .font(HEADING_FONT)
             .size(32)
             .color(palette.text.heading),
         ]
@@ -166,47 +177,41 @@ fn quick_connect(state: &State) -> Element<'_, Message> {
       .padding([12, 20])
       .style(|theme| jellypilot_ui::theme::badge_variant(theme, BadgeVariant::Neutral));
       column![
-        text("Enter this code in your Jellyfin dashboard, then approve JellyPilot.")
-          .color(palette.text.body),
+        text(state.t("login-code-instructions")).color(palette.text.body),
         code_badge,
-        cancel_button(),
+        cancel_button(state),
       ]
       .align_x(Alignment::Start)
       .spacing(14)
       .into()
     }
-    QuickConnectState::Approving => {
-      quick_connect_progress(palette, "Approval received. Signing in…", None)
-    }
+    QuickConnectState::Approving => quick_connect_progress(state, state.t("login-approving")),
   };
 
   column![
-    text("Quick Connect avoids sending your password to this app.").color(palette.text.body),
+    text(state.t("login-quick-connect-description")).color(palette.text.body),
     content,
   ]
   .spacing(14)
   .into()
 }
 
-fn quick_connect_progress<'a>(
-  palette: &ThemePalette,
-  label: &'a str,
-  _code: Option<&'a str>,
-) -> Element<'a, Message> {
+fn quick_connect_progress<'a>(state: &State, label: String) -> Element<'a, Message> {
+  let palette = state.palette();
   column![
     container(text(label).color(palette.colors.onSurface))
       .padding([8, 12])
       .style(|theme| jellypilot_ui::theme::badge_variant(theme, BadgeVariant::Warning)),
-    cancel_button(),
+    cancel_button(state),
   ]
   .spacing(12)
   .into()
 }
 
-fn cancel_button<'a>() -> Element<'a, Message> {
+fn cancel_button<'a>(state: &State) -> Element<'a, Message> {
   control_button(
     Some(Icon::Close),
-    Some("Cancel".to_owned()),
+    Some(state.t("common-cancel")),
     ButtonVariant::Tonal,
   )
   .icon_size(IconSize::Xs)
@@ -218,14 +223,14 @@ fn cancel_button<'a>() -> Element<'a, Message> {
 
 fn password(state: &State) -> Element<'_, Message> {
   let login = &state.login.flow;
-  let username = text_input("Username", &login.username)
+  let username = text_input(&state.t("login-username"), &login.username)
     .on_input(|value| Message::Login(LoginMessage::UsernameChanged(value)))
     .padding([8, 12])
     .size(14)
     .style(|theme, status| {
       jellypilot_ui::theme::field_variant(theme, status, FieldVariant::Filled)
     });
-  let password = text_input("Password", &login.password)
+  let password = text_input(&state.t("login-password"), &login.password)
     .on_input(|value| Message::Login(LoginMessage::PasswordChanged(value)))
     .secure(true)
     .padding([8, 12])
@@ -239,24 +244,21 @@ fn password(state: &State) -> Element<'_, Message> {
     password
   };
   let remember_label = if login.remember {
-    "Remember server and username: On"
+    state.t("login-remember-on")
   } else {
-    "Remember server and username: Off"
+    state.t("login-remember-off")
   };
-  let remember = control_button(None, Some(remember_label.to_owned()), ButtonVariant::Text)
+  let remember = control_button(None, Some(remember_label), ButtonVariant::Text)
     .padding([6, 12])
     .on_press(Message::Login(LoginMessage::RememberToggled));
   let can_login = can_start_login(state.kernel.connection);
   let submit = control_button(
     Some(Icon::UserCheck),
-    Some(
-      if state.kernel.connection == ConnectionPhase::Connecting {
-        "Signing in…"
-      } else {
-        "Sign in"
-      }
-      .to_owned(),
-    ),
+    Some(if state.kernel.connection == ConnectionPhase::Connecting {
+      state.t("login-signing-in")
+    } else {
+      state.t("login-sign-in")
+    }),
     ButtonVariant::Primary,
   )
   .spacing(TOKENS.spacing.s2)
@@ -273,7 +275,9 @@ fn saved_profiles(state: &State) -> Element<'_, Message> {
   let mut profiles = Column::new().spacing(12).push(
     row![
       icon_with_color(Icon::User, IconSize::Lg, palette.colors.primary),
-      text("Saved sign-ins").size(18).color(palette.text.heading),
+      text(state.t("login-saved"))
+        .size(18)
+        .color(palette.text.heading),
     ]
     .spacing(TOKENS.spacing.s2)
     .align_y(Alignment::Center),
@@ -282,7 +286,7 @@ fn saved_profiles(state: &State) -> Element<'_, Message> {
     let key = profile.key().clone();
     let is_busy = state.login.flow.busy_profile.as_ref() == Some(&key);
     let restore_label = if is_busy {
-      "Checking saved sign-in…".to_owned()
+      state.t("login-checking-saved")
     } else {
       profile.title()
     };
@@ -296,7 +300,7 @@ fn saved_profiles(state: &State) -> Element<'_, Message> {
       );
     let sign_out = control_button(
       Some(Icon::Trash),
-      Some("Sign Out".to_owned()),
+      Some(state.t("account-sign-out")),
       ButtonVariant::Text,
     )
     .icon_size(IconSize::Xs)
@@ -327,4 +331,38 @@ fn saved_profiles(state: &State) -> Element<'_, Message> {
     );
   }
   profiles.into()
+}
+
+fn language_selector(state: &State) -> Element<'_, Message> {
+  let selected = state.kernel.settings.snapshot().ui_language();
+  let mut choices = iced::widget::Row::new().spacing(TOKENS.spacing.s1);
+  for (preference, label) in [
+    (LanguagePreference::System, "language-system"),
+    (
+      LanguagePreference::Fixed(UiLanguage::English),
+      "language-english",
+    ),
+    (
+      LanguagePreference::Fixed(UiLanguage::SimplifiedChinese),
+      "language-chinese",
+    ),
+  ] {
+    choices = choices.push(
+      control_button(
+        None,
+        Some(state.t(label)),
+        if preference == selected {
+          ButtonVariant::Secondary
+        } else {
+          ButtonVariant::Text
+        },
+      )
+      .padding([7, 10])
+      .min_height(40.0)
+      .on_press(Message::UiLanguageSelected(preference)),
+    );
+  }
+  column![text(state.t("language-label")).size(12), choices]
+    .spacing(TOKENS.spacing.s1)
+    .into()
 }
