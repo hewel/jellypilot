@@ -27,7 +27,9 @@ use jellypilot_ui::tokens::{ThemePalette, TOKENS};
 use jellypilot_ui::variants::{ButtonVariant, SurfaceVariant};
 use jellypilot_ui::widgets::control_button::control_button;
 use jellypilot_ui::widgets::ellipsis_text::ellipsis_text;
-use jellypilot_ui::widgets::skeleton::{skeleton_block, skeleton_panel};
+use jellypilot_ui::widgets::skeleton::{
+  skeleton_block, skeleton_block_with_radius, skeleton_panel,
+};
 use jellypilot_ui::{full_radius, poster_card, rounded_image};
 
 /// Jellyfin hero backdrops are 16:9; derive the hero height from its width so
@@ -301,7 +303,7 @@ fn hero_at_width<'a>(
       DETAIL_BACKDROP_KEY,
       name,
       (Fill, Length::Fixed(base_hero_height)),
-      64,
+      ArtworkKind::Hero,
       skeleton_phase,
       reduced_motion,
     )
@@ -1044,7 +1046,7 @@ fn similar_card<'a>(
       Length::Fixed(SIMILAR_CARD_WIDTH),
       Length::Fixed(SIMILAR_CARD_HEIGHT),
     ),
-    34,
+    ArtworkKind::Similar,
     skeleton_phase,
     reduced_motion,
   );
@@ -1079,9 +1081,10 @@ fn similar_skeletons<'a>(phase: f32, reduced_motion: bool) -> Element<'a, Messag
   for _ in 0..4 {
     cards = cards.push(
       column![
-        skeleton_block(
+        skeleton_block_with_radius(
           SIMILAR_CARD_WIDTH,
           SIMILAR_CARD_HEIGHT,
+          full_radius(TOKENS.radii.xl),
           phase,
           reduced_motion,
         ),
@@ -1175,7 +1178,7 @@ fn episode_card_content<'a>(
       Length::Fixed(EPISODE_ART_WIDTH),
       Length::Fixed(EPISODE_ART_HEIGHT),
     ),
-    34,
+    ArtworkKind::Episode,
     skeleton_phase,
     reduced_motion,
   );
@@ -1290,17 +1293,42 @@ fn playback_message(state: &State, item: Playable, position: PlaybackStartPositi
   })))
 }
 
+#[derive(Clone, Copy)]
+enum ArtworkKind {
+  Hero,
+  Similar,
+  Episode,
+}
+
+impl ArtworkKind {
+  fn initial_size(self) -> u32 {
+    match self {
+      Self::Hero => 64,
+      Self::Similar | Self::Episode => 34,
+    }
+  }
+
+  fn radius(self) -> iced::border::Radius {
+    let radius = match self {
+      Self::Similar => TOKENS.radii.xl,
+      Self::Hero | Self::Episode => TOKENS.radii.lg,
+    };
+    full_radius(radius)
+  }
+}
+
 fn artwork<'a>(
   state: &'a State,
   key: &str,
   name: &'a str,
   (width, height): (Length, Length),
-  initial_size: u32,
+  kind: ArtworkKind,
   phase: f32,
   reduced_motion: bool,
 ) -> Element<'a, Message> {
   let palette = state.palette();
-  let radius = full_radius(TOKENS.radii.lg);
+  let initial_size = kind.initial_size();
+  let radius = kind.radius();
   let cell = state
     .full
     .as_ref()

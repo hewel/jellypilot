@@ -25,7 +25,9 @@ use jellypilot_ui::tokens::{ThemePalette, TOKENS};
 use jellypilot_ui::variants::{ButtonVariant, SurfaceVariant};
 use jellypilot_ui::widgets::control_button::{control_button, control_button_content};
 use jellypilot_ui::widgets::ellipsis_text::ellipsis_text;
-use jellypilot_ui::widgets::skeleton::{skeleton_block, skeleton_panel};
+use jellypilot_ui::widgets::skeleton::{
+  skeleton_block, skeleton_block_with_radius, skeleton_panel,
+};
 use jellypilot_ui::{full_radius, poster_card, rounded_image};
 const THUMB_FRAME_WIDTH: f32 = 240.0;
 const THUMB_FRAME_HEIGHT: f32 = 135.0;
@@ -530,7 +532,7 @@ fn video_card<'a>(
   let (frame_width, frame_height) = section_frame_size(section);
   let palette = state.palette();
   let is_action_card = section.is_action();
-  let radius = full_radius(TOKENS.radii.lg);
+  let radius = full_radius(TOKENS.radii.xl);
   let cell = state
     .full
     .as_ref()
@@ -1020,7 +1022,7 @@ fn artwork_button_style(
   button::Style {
     snap: false,
     border: iced::Border {
-      radius: full_radius(TOKENS.radii.lg),
+      radius: full_radius(TOKENS.radii.xl),
       ..iced::Border::default()
     }
     .smoothing(jellypilot_ui::widgets::container::SURFACE_SMOOTHING),
@@ -1258,7 +1260,13 @@ fn section_skeleton<'a>(
   for _ in 0..5 {
     cards = cards.push(
       column![
-        skeleton_block(width, height, phase, reduced_motion),
+        skeleton_block_with_radius(
+          width,
+          height,
+          full_radius(TOKENS.radii.xl),
+          phase,
+          reduced_motion,
+        ),
         skeleton_block(width, 18.0, phase, reduced_motion),
         skeleton_block(width * 0.6, 14.0, phase, reduced_motion),
       ]

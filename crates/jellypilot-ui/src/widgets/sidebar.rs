@@ -3,9 +3,7 @@
 use iced::widget::{button, container, text_input};
 use iced::{Background, Border, Color, Theme};
 
-use crate::tokens::{
-    palette, ACCOUNT_POPOVER_RADIUS, SIDEBAR_CONTROL_RADIUS, SIDEBAR_INSET_RADIUS, TOKENS,
-};
+use crate::tokens::{palette, SIDEBAR_CONTROL_RADIUS, SIDEBAR_INSET_RADIUS, TOKENS};
 use crate::variants::{ButtonVariant, FieldVariant};
 use crate::widgets::container::SURFACE_SMOOTHING;
 
@@ -73,12 +71,7 @@ pub fn count_badge(theme: &Theme) -> container::Style {
 
 /// Account-only floating surface; other popovers retain their default appearance.
 pub fn popover(theme: &Theme) -> container::Style {
-    let mut style = surface(
-        theme,
-        palette(theme).colors.surface,
-        ACCOUNT_POPOVER_RADIUS,
-        true,
-    );
+    let mut style = surface(theme, palette(theme).colors.surface, TOKENS.radii.x2l, true);
     style.shadow = palette(theme).shadows.raised_high.iced();
     style
 }

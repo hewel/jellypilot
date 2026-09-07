@@ -251,7 +251,7 @@ fn list_artwork<'a>(state: &'a State, entry: &'a ListEntry) -> Element<'a, Messa
   if let Some(cell) = cell {
     if cell.state == ArtworkCellState::Ready {
       if let Some(handle) = state.kernel.artwork_handles.get(cell.slot, &cell.image_id) {
-        return rounded_image(handle.clone(), full_radius(TOKENS.radii.lg))
+        return rounded_image(handle.clone(), full_radius(TOKENS.radii.xl))
           .content_fit(ContentFit::Cover)
           .width(Fill)
           .height(CARD_ARTWORK_HEIGHT)
@@ -282,7 +282,7 @@ fn list_artwork<'a>(state: &'a State, entry: &'a ListEntry) -> Element<'a, Messa
         smoothing: jellypilot_ui::widgets::container::SURFACE_SMOOTHING,
         color: Color::TRANSPARENT,
         width: 0.0,
-        radius: full_radius(TOKENS.radii.lg),
+        radius: full_radius(TOKENS.radii.xl),
       },
       ..container::Style::default()
     })
@@ -301,7 +301,7 @@ fn skeleton_grid<'a>(state: &'a State) -> Column<'a, Message> {
           Fill,
           CARD_ARTWORK_HEIGHT,
           base,
-          full_radius(TOKENS.radii.lg),
+          full_radius(TOKENS.radii.xl),
           phase,
           reduced_motion
         ),

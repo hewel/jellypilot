@@ -511,7 +511,7 @@ fn settings_modal(state: &State) -> Element<'_, Message> {
       .height(Length::Fixed(
         (state.shell.window_size.height - 48.0).clamp(0.0, 620.0),
       ))
-      .style(|theme| jellypilot_ui::theme::surface_variant(theme, SurfaceVariant::Floating)),
+      .style(|theme| jellypilot_ui::theme::surface_variant(theme, SurfaceVariant::Dialog)),
   )
   .width(Fill)
   .height(Fill)

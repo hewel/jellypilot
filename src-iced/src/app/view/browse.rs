@@ -19,7 +19,9 @@ use jellypilot_ui::variants::ButtonVariant;
 use jellypilot_ui::widgets::artwork_grid::{artwork_grid, ArtworkGridMetrics, ArtworkGridViewport};
 use jellypilot_ui::widgets::control_button::control_button;
 use jellypilot_ui::widgets::ellipsis_text::ellipsis_text;
-use jellypilot_ui::widgets::skeleton::{skeleton_block, skeleton_panel};
+use jellypilot_ui::widgets::skeleton::{
+  skeleton_block, skeleton_block_with_radius, skeleton_panel,
+};
 use jellypilot_ui::{full_radius, poster_card, rounded_image};
 
 pub(crate) const PAGE_PADDING: f32 = 32.0;
@@ -507,7 +509,13 @@ fn skeleton_cell<'a>(
   reduced_motion: bool,
 ) -> Element<'a, Message> {
   let artwork_height = card_artwork_height(cell_width);
-  let poster = skeleton_block(cell_width, artwork_height, skeleton_phase, reduced_motion);
+  let poster = skeleton_block_with_radius(
+    cell_width,
+    artwork_height,
+    full_radius(TOKENS.radii.xl),
+    skeleton_phase,
+    reduced_motion,
+  );
   let copy = column![
     skeleton_block(cell_width, 18.0, skeleton_phase, reduced_motion),
     skeleton_block(cell_width * 0.6, 14.0, skeleton_phase, reduced_motion),
@@ -585,7 +593,7 @@ fn artwork<'a>(
   if let Some(cell) = cell {
     if cell.state == ArtworkCellState::Ready {
       if let Some(handle) = state.kernel.artwork_handles.get(cell.slot, &cell.image_id) {
-        return rounded_image(handle.clone(), full_radius(TOKENS.radii.lg))
+        return rounded_image(handle.clone(), full_radius(TOKENS.radii.xl))
           .content_fit(ContentFit::Cover)
           .width(Fill)
           .height(height)
@@ -629,7 +637,7 @@ fn artwork<'a>(
       )),
       border: iced::Border {
         smoothing: jellypilot_ui::widgets::container::SURFACE_SMOOTHING,
-        radius: full_radius(TOKENS.radii.lg),
+        radius: full_radius(TOKENS.radii.xl),
         width: 0.0,
         color: iced::Color::TRANSPARENT,
       },
@@ -642,7 +650,7 @@ fn artwork<'a>(
     Fill,
     height,
     palette.colors.surfaceContainerLowest,
-    full_radius(TOKENS.radii.lg),
+    full_radius(TOKENS.radii.xl),
     phase,
     reduced_motion,
   )

@@ -60,6 +60,22 @@ pub fn skeleton_block<'a, Message: 'a>(
         .style(move |theme: &Theme| skeleton_style(theme, phase, reduced_motion))
 }
 
+/// Builds a breathing placeholder block with an explicit corner radius.
+pub fn skeleton_block_with_radius<'a, Message: 'a>(
+    width: impl Into<Length>,
+    height: impl Into<Length>,
+    radius: Radius,
+    phase: f32,
+    reduced_motion: bool,
+) -> Container<'a, Message> {
+    container(space::horizontal())
+        .width(width)
+        .height(height)
+        .style(move |theme: &Theme| {
+            skeleton_style_with_radius(theme, radius, phase, reduced_motion)
+        })
+}
+
 /// Builds a pulsing placeholder panel sized to `width` × `height` with a custom `base` color and `radius`.
 ///
 /// When `reduced_motion` is set or `phase` is non-finite this renders a static flat panel with the
@@ -85,6 +101,15 @@ pub fn skeleton_panel<'a, Message: 'a>(
 /// `surfaceContainerLow` and `surfaceContainerHigh` otherwise. Skeletons are
 /// flat: `lg` radius, no border, no shadow.
 fn skeleton_style(theme: &Theme, phase: f32, reduced_motion: bool) -> container::Style {
+    skeleton_style_with_radius(theme, Radius::from(TOKENS.radii.lg), phase, reduced_motion)
+}
+
+fn skeleton_style_with_radius(
+    theme: &Theme,
+    radius: Radius,
+    phase: f32,
+    reduced_motion: bool,
+) -> container::Style {
     let colors = palette(theme).colors;
     let background = if reduced_motion || !phase.is_finite() {
         colors.surfaceContainerLow
@@ -100,7 +125,7 @@ fn skeleton_style(theme: &Theme, phase: f32, reduced_motion: bool) -> container:
         background: Some(Background::Color(background)),
         border: Border {
             smoothing: 0.0,
-            radius: Radius::from(TOKENS.radii.lg),
+            radius,
             color: Color::TRANSPARENT,
             width: 0.0,
         },
@@ -265,6 +290,14 @@ mod tests {
         assert_eq!(style.border.width, 0.0);
         assert_eq!(style.border.radius, Radius::from(TOKENS.radii.lg));
         assert_eq!(style.shadow, Shadow::default());
+    }
+    #[test]
+    fn custom_skeleton_block_radius_is_preserved() {
+        let theme = crate::theme::theme(crate::theme::ThemeMode::Dark);
+        let radius = Radius::from(TOKENS.radii.xl);
+        let style = skeleton_style_with_radius(&theme, radius, 0.0, true);
+
+        assert_eq!(style.border.radius, radius);
     }
     #[test]
     fn reduced_motion_panel_renders_static_base() {

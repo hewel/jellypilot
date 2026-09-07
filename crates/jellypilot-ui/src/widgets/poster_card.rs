@@ -23,7 +23,7 @@ use iced::touch;
 use iced::{Element, Event, Length, Point, Rectangle, Size, Vector};
 
 /// Default corner radius for the poster artwork.
-pub const POSTER_RADIUS: f32 = 8.0;
+pub const POSTER_RADIUS: f32 = TOKENS.radii.xl;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 struct State {
@@ -55,7 +55,7 @@ impl<'a, Message, Theme, Renderer> PosterCard<'a, Message, Theme, Renderer> {
             on_press: None,
             width: Length::Fit,
             height: Length::Fit,
-            radius: Radius::from(TOKENS.radii.lg),
+            radius: Radius::from(TOKENS.radii.xl),
         }
     }
 

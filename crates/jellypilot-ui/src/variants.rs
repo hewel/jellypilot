@@ -17,7 +17,8 @@ pub enum ButtonVariant {
 
 /// Container surface roles. A surface is exactly one of: flush with the app
 /// background (`Canvas`), a docked block separated only by the shell
-/// hairlines (`Block`), or a floating layer with the high shadow (`Raised`).
+/// hairlines (`Block`), or a floating layer with the high shadow (`Raised`,
+/// `Floating`, or `Dialog`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SurfaceVariant {
     /// Flush with the window: opaque `background`, square, no border/shadow.
@@ -31,6 +32,8 @@ pub enum SurfaceVariant {
     /// Floating layer with a structural outline (modals, toasts, popovers):
     /// same surface as `Raised` plus a 1px `outlineVariant` border.
     Floating,
+    /// Large outlined dialog surface, using the `x2l` radius token.
+    Dialog,
 }
 
 /// Status badge variants.

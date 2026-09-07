@@ -193,6 +193,8 @@ pub struct Radii {
     pub sm: f32,
     pub md: f32,
     pub lg: f32,
+    pub xl: f32,
+    pub x2l: f32,
     pub full: f32,
 }
 
@@ -395,6 +397,8 @@ pub const TOKENS: DesignTokens = DesignTokens {
         sm: 2.0,
         md: 6.0,
         lg: 8.0,
+        xl: 12.0,
+        x2l: 20.0,
         full: 9999.0,
     },
     z_index: ZIndex {
@@ -442,14 +446,12 @@ pub const TOKENS: DesignTokens = DesignTokens {
     },
 };
 
-/// Rounded Sidebar controls without changing the default control radius.
-pub const SIDEBAR_CONTROL_RADIUS: f32 = 12.0;
+/// Rounded Sidebar controls using the `xl` radius token.
+pub const SIDEBAR_CONTROL_RADIUS: f32 = TOKENS.radii.xl;
 
 /// Inset radius inside a 12 px Sidebar pill with 3 px padding — the concentric
 /// rule (outer radius − padding) for controls nested in the search field.
 pub const SIDEBAR_INSET_RADIUS: f32 = SIDEBAR_CONTROL_RADIUS - 3.0;
-/// Account Popover radius around its 12-pixel inset content.
-pub const ACCOUNT_POPOVER_RADIUS: f32 = 20.0;
 
 /// Dark JellyPilot palette: Charcoal. Near-zero-chroma deep-charcoal surfaces
 /// (4–7% lightness, never OLED pure black) under the Neon Indigo accent
@@ -872,6 +874,8 @@ mod tests {
         assert_eq!(TOKENS.radii.sm, 2.0);
         assert_eq!(TOKENS.radii.md, 6.0);
         assert_eq!(TOKENS.radii.lg, 8.0);
+        assert_eq!(TOKENS.radii.xl, 12.0);
+        assert_eq!(TOKENS.radii.x2l, 20.0);
         assert_eq!(TOKENS.radii.full, 9999.0);
     }
 

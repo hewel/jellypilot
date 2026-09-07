@@ -7,6 +7,8 @@
 //!   shell hairlines, not from borders or shadows.
 //! - `Raised`: a floating layer (cards, toasts, popovers) — opaque
 //!   `surfaceContainerHigh`, `lg` radius, `raised_high` shadow.
+//! - `Floating`: an outlined floating layer using the `lg` radius.
+//! - `Dialog`: an outlined large dialog using the `x2l` radius.
 
 use iced::widget::container;
 use iced::{Background, Border, Color, Theme};
@@ -58,6 +60,16 @@ pub fn style(theme: &Theme, variant: SurfaceVariant) -> container::Style {
             Border {
                 smoothing: SURFACE_SMOOTHING,
                 radius: TOKENS.radii.lg.into(),
+                color: colors.outlineVariant,
+                width: 1.0,
+            },
+        ),
+        SurfaceVariant::Dialog => (
+            colors.surfaceContainerHigh,
+            palette.shadows.raised_high.iced(),
+            Border {
+                smoothing: SURFACE_SMOOTHING,
+                radius: TOKENS.radii.x2l.into(),
                 color: colors.outlineVariant,
                 width: 1.0,
             },
@@ -140,6 +152,19 @@ mod tests {
     }
 
     #[test]
+    fn dialog_uses_the_large_radius_and_floating_surface_chrome() {
+        let theme = crate::theme::theme(ThemeMode::Dark);
+        let dialog = style(&theme, SurfaceVariant::Dialog);
+        let floating = style(&theme, SurfaceVariant::Floating);
+
+        assert_eq!(dialog.background, floating.background);
+        assert_eq!(dialog.shadow, floating.shadow);
+        assert_eq!(dialog.border.radius, Radius::from(TOKENS.radii.x2l));
+        assert_eq!(dialog.border.width, 1.0);
+        assert_eq!(dialog.border.color, DARK_PALETTE.colors.outlineVariant);
+    }
+
+    #[test]
     fn all_roles_use_fully_opaque_backgrounds() {
         let theme = crate::theme::theme(ThemeMode::Dark);
         for variant in [
@@ -147,6 +172,7 @@ mod tests {
             SurfaceVariant::Block,
             SurfaceVariant::Raised,
             SurfaceVariant::Floating,
+            SurfaceVariant::Dialog,
         ] {
             let style = style(&theme, variant);
             let Some(Background::Color(color)) = style.background else {
