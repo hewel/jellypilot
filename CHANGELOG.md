@@ -16,6 +16,7 @@ All notable changes to JellyPilot are documented in this file.
 - Reworked Video Home with a full-width, aspect-preserving Backdrop behind scrolling content, a detail-style bottom gradient, and a subdued thumbnail selection rail with hover/focus information. Added manual selection, series-grouped continuation candidates, and selection retained across same-profile refreshes; kept the separate Continue Watching row directly resumable and visible in compact windows.
 
 ### Fixed
+- Avoided repeated overview text shaping on detail pages during playback updates, preventing long layout stalls while scrolling.
 - Kept account avatars fixed-size, fitted short account menus to their content, and exposed truncated names and addresses through hover and keyboard-focus hints.
 - Centered Sidebar control icons and labels, restricted button focus feedback to keyboard use, and prevented trigger tooltips from overlapping open popovers.
 - Preserved the Account trigger's keyboard focus return when Settings is refocused with Ctrl/Cmd+, after entering through Manage accounts.

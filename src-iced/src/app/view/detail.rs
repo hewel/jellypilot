@@ -1,19 +1,19 @@
+mod overview;
+
+use overview::overview_layout;
+
 use crate::app::message::{DetailMessage, Message, PlaybackMessage};
 use crate::app::state::{ArtworkCell, ArtworkCellState, State, UserDataActionKind};
 use crate::i18n::media::{detail_metadata, show_detail_metadata};
 use crate::i18n::{Localizer, UiText};
-use iced::advanced::graphics::text::Paragraph as GraphicsParagraph;
-use iced::advanced::text::paragraph::Paragraph;
-use iced::advanced::{text as advanced_text, Text as AdvancedText};
+use iced::advanced::text as advanced_text;
 use iced::widget::image::Image;
 use iced::widget::scrollable::{Direction, Scrollbar};
 use iced::widget::{
-  button, column, container, responsive, row, scrollable, space, stack, text, Column, Row, Stack,
-};
-use iced::{
-  alignment, Alignment, Background, ContentFit, Degrees, Element, Fill, Font, Length, Pixels, Size,
+  button, column, container, row, scrollable, space, stack, text, Column, Row, Stack,
 };
 use iced::{gradient, padding};
+use iced::{Alignment, Background, ContentFit, Degrees, Element, Fill, Length, Pixels};
 use jellypilot_core::cards::logo_display_size;
 use jellypilot_core::detail::{detail_episode_key, detail_similar_key, DetailContent};
 use jellypilot_core::LoadState;
@@ -234,34 +234,35 @@ fn hero<'a>(
   skeleton_phase: f32,
   reduced_motion: bool,
 ) -> Element<'a, Message> {
-  responsive(move |bounds| {
-    hero_at_width(
-      state,
-      &content,
-      bounds.width,
-      skeleton_phase,
-      reduced_motion,
-    )
-  })
-  .height(Length::Shrink)
-  .into()
+  overview_layout(
+    content.overview,
+    TOKENS.spacing.s6 * 2.0,
+    OVERVIEW_TEXT_SIZE,
+    move |width, measured_height| {
+      hero_at_width(
+        state,
+        &content,
+        width,
+        measured_height,
+        skeleton_phase,
+        reduced_motion,
+      )
+    },
+  )
 }
 
 fn hero_at_width<'a>(
   state: &'a State,
   content: &HeroContent<'a>,
   width: f32,
+  measured_height: f32,
   skeleton_phase: f32,
   reduced_motion: bool,
 ) -> Element<'a, Message> {
   let palette = state.palette();
   let name = content.name;
   let overview = content.overview.filter(|value| !value.trim().is_empty());
-  let copy_width = (width - (TOKENS.spacing.s6 * 2.0)).max(1.0);
   let collapsed_height = overview_collapsed_height(OVERVIEW_TEXT_SIZE, OVERVIEW_COLLAPSED_LINES);
-  let measured_height = overview.map_or(0.0, |value| {
-    overview_height(value, copy_width, OVERVIEW_TEXT_SIZE)
-  });
   let overview_expandable = overview_is_expandable(
     measured_height,
     OVERVIEW_TEXT_SIZE,
@@ -1142,17 +1143,26 @@ fn episode_card<'a>(
   skeleton_phase: f32,
   reduced_motion: bool,
 ) -> Element<'a, Message> {
-  responsive(move |bounds| {
-    episode_card_at_width(state, episode, bounds.width, skeleton_phase, reduced_motion)
-  })
-  .height(Length::Shrink)
-  .into()
+  overview_layout(
+    episode.overview.as_deref(),
+    TOKENS.spacing.s3 * 2.0 + EPISODE_ART_WIDTH + EPISODE_ACTION_WIDTH + TOKENS.spacing.s4 * 2.0,
+    EPISODE_OVERVIEW_TEXT_SIZE,
+    move |_, measured_height| {
+      episode_card_content(
+        state,
+        episode,
+        measured_height,
+        skeleton_phase,
+        reduced_motion,
+      )
+    },
+  )
 }
 
-fn episode_card_at_width<'a>(
+fn episode_card_content<'a>(
   state: &'a State,
   episode: &'a VideoLibraryItem,
-  width: f32,
+  measured_height: f32,
   skeleton_phase: f32,
   reduced_motion: bool,
 ) -> Element<'a, Message> {
@@ -1185,15 +1195,8 @@ fn episode_card_at_width<'a>(
     .as_deref()
     .filter(|overview| !overview.trim().is_empty())
   {
-    let copy_width = (width
-      - (TOKENS.spacing.s3 * 2.0)
-      - EPISODE_ART_WIDTH
-      - EPISODE_ACTION_WIDTH
-      - (TOKENS.spacing.s4 * 2.0))
-      .max(1.0);
     let collapsed_height =
       overview_collapsed_height(EPISODE_OVERVIEW_TEXT_SIZE, EPISODE_OVERVIEW_COLLAPSED_LINES);
-    let measured_height = overview_height(overview, copy_width, EPISODE_OVERVIEW_TEXT_SIZE);
     let expandable = overview_is_expandable(
       measured_height,
       EPISODE_OVERVIEW_TEXT_SIZE,
@@ -1652,22 +1655,6 @@ fn season_label(season: &VideoSeason) -> &str {
   &season.name
 }
 
-fn overview_height(overview: &str, width: f32, text_size: f32) -> f32 {
-  let size = Pixels(text_size);
-  let paragraph = GraphicsParagraph::with_text(AdvancedText {
-    content: overview,
-    bounds: Size::new(width, f32::INFINITY),
-    size,
-    line_height: advanced_text::LineHeight::default(),
-    font: Font::DEFAULT,
-    align_x: advanced_text::Alignment::Default,
-    align_y: alignment::Vertical::Top,
-    shaping: advanced_text::Shaping::Advanced,
-    wrapping: advanced_text::Wrapping::Word,
-  });
-  paragraph.min_height()
-}
-
 fn overview_collapsed_height(text_size: f32, line_count: f32) -> f32 {
   f32::from(advanced_text::LineHeight::default().to_absolute(Pixels(text_size))) * line_count
 }
@@ -1767,17 +1754,6 @@ mod tests {
       OVERVIEW_TEXT_SIZE,
       OVERVIEW_COLLAPSED_LINES
     ));
-  }
-
-  #[test]
-  fn overview_measurement_uses_the_available_width() {
-    let overview = "A detailed overview with enough words to wrap across several lines when the \
-      available width is narrow, while fitting into fewer lines when more width is available.";
-
-    assert!(
-      overview_height(overview, 120.0, OVERVIEW_TEXT_SIZE)
-        > overview_height(overview, 800.0, OVERVIEW_TEXT_SIZE)
-    );
   }
 
   #[test]
