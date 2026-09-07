@@ -126,12 +126,14 @@ pub fn modal_layer(state: &State) -> Option<Element<'_, Message>> {
     return Some(full_window_modal(
       state,
       confirmation_modal(state, confirmation),
+      Message::Account(accounts::Message::CancelConfirmation),
     ));
   }
   if let Some(candidate) = account.add_account {
     return Some(full_window_modal(
       state,
       add_account_modal(state, candidate),
+      Message::Account(accounts::Message::CloseAddAccount),
     ));
   }
   None
@@ -968,15 +970,20 @@ fn auto_login(locale: Localizer, auto_login: bool) -> Element<'static, Message> 
   .into()
 }
 
-fn full_window_modal<'a>(state: &'a State, content: Element<'a, Message>) -> Element<'a, Message> {
+fn full_window_modal<'a>(
+  state: &'a State,
+  content: Element<'a, Message>,
+  dismiss: Message,
+) -> Element<'a, Message> {
   modal(
-    12.0,
-    container(
+    TOKENS.modal.backdrop_blur_sigma,
+    container(super::modal_dismiss::dismissible(
       container(content)
         .width(Length::Fill.max(640.0))
         .padding(TOKENS.spacing.s5)
         .style(|theme| jellypilot_ui::theme::surface_variant(theme, SurfaceVariant::Floating)),
-    )
+      dismiss,
+    ))
     .width(Fill)
     .height(Fill)
     .center_x(Fill)

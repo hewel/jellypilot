@@ -2501,4 +2501,270 @@ mod tests {
     assert!(state.shell.navigation_stack.is_empty());
     assert_eq!(state.shell.full_window_size, None);
   }
+
+  #[tokio::test]
+  async fn settings_modal_preserves_home_scroll_after_open_and_close() {
+    use iced::advanced::{renderer::Headless, widget};
+    use iced_runtime::user_interface::{Cache, UserInterface};
+
+    #[derive(Default)]
+    struct PageScroll {
+      set: Option<f32>,
+      observed: Option<f32>,
+    }
+    impl widget::Operation for PageScroll {
+      fn traverse(&mut self, visit: &mut dyn FnMut(&mut dyn widget::Operation)) {
+        visit(self);
+      }
+      fn scrollable(
+        &mut self,
+        id: Option<&widget::Id>,
+        _bounds: iced::Rectangle,
+        _content: iced::Rectangle,
+        translation: iced::Vector,
+        scroll: &mut dyn widget::operation::Scrollable,
+      ) {
+        if id == Some(&widget::Id::new("home-page")) {
+          self.observed = Some(translation.y);
+          if let Some(y) = self.set {
+            scroll.scroll_to(widget::operation::scrollable::AbsoluteOffset {
+              x: None,
+              y: Some(y),
+            });
+          }
+        }
+      }
+    }
+
+    let mut state = test_state();
+    state.kernel.connection = ConnectionPhase::Connected;
+    state.full.as_mut().expect("full UI").home.data.begin_load();
+    let bounds = iced::Size::new(1400.0, 600.0);
+    state.shell.window_size = bounds;
+    let mut renderer = iced::Renderer::new(
+      iced::advanced::renderer::Settings {
+        font: iced::Font::DEFAULT,
+        text_size: 14.0.into(),
+        line_height: fonts::DEFAULT_LINE_HEIGHT,
+        metrics_hinting: false,
+      },
+      Some("tiny-skia"),
+    )
+    .await
+    .expect("software renderer");
+    let window = iced::window::Id::unique();
+    let mut ui = UserInterface::build(
+      crate::app::view(&state, window),
+      bounds,
+      Cache::new(),
+      &mut renderer,
+    );
+    ui.operate(
+      &renderer,
+      &mut PageScroll {
+        set: Some(120.0),
+        observed: None,
+      },
+    );
+    let mut before = PageScroll::default();
+    ui.operate(&renderer, &mut before);
+    assert_eq!(before.observed, Some(120.0));
+    let cache = ui.into_cache();
+    drop(update(&mut state, Message::Settings(SettingsMessage::Open)));
+    let mut ui = UserInterface::build(
+      crate::app::view(&state, window),
+      bounds,
+      cache,
+      &mut renderer,
+    );
+    let mut obscured = PageScroll::default();
+    ui.operate(&renderer, &mut obscured);
+    assert_eq!(
+      obscured.observed, None,
+      "background stays excluded from operations"
+    );
+    let cache = ui.into_cache();
+    drop(update(
+      &mut state,
+      Message::Settings(SettingsMessage::Close),
+    ));
+    let mut ui = UserInterface::build(
+      crate::app::view(&state, window),
+      bounds,
+      cache,
+      &mut renderer,
+    );
+    let mut after = PageScroll::default();
+    ui.operate(&renderer, &mut after);
+    assert_eq!(after.observed, before.observed);
+  }
+
+  #[tokio::test]
+  async fn backdrop_click_dismisses_only_the_top_modal_and_never_the_dialog_body() {
+    use iced::advanced::renderer::Headless;
+    use iced::{mouse, Event, Point, Size};
+    use iced_runtime::user_interface::{Cache, UserInterface};
+
+    let mut renderer = iced::Renderer::new(
+      iced::advanced::renderer::Settings {
+        font: iced::Font::DEFAULT,
+        text_size: 14.0.into(),
+        line_height: fonts::DEFAULT_LINE_HEIGHT,
+        metrics_hinting: false,
+      },
+      Some("tiny-skia"),
+    )
+    .await
+    .expect("software renderer");
+    for kind in [
+      "settings",
+      "add-account",
+      "confirmation",
+      "compact-settings",
+    ] {
+      let mut state = test_state();
+      state.kernel.connection = ConnectionPhase::Connected;
+      let bounds = if kind == "compact-settings" {
+        Size::new(600.0, 600.0)
+      } else {
+        Size::new(1400.0, 900.0)
+      };
+      state.shell.window_size = bounds;
+      state.shell.settings_open = true;
+      if kind == "add-account" {
+        drop(update(
+          &mut state,
+          Message::Account(accounts::Message::AddAccount),
+        ));
+      } else if kind == "confirmation" {
+        drop(accounts::update(
+          &mut state.accounts,
+          &mut state.login.flow,
+          &mut state.kernel,
+          &state.watchlist,
+          accounts::RuntimeFacts {
+            quit_requested: false,
+            playback_active: true,
+          },
+          accounts::Message::Disconnect,
+        ));
+      }
+      let mut ui = UserInterface::build(
+        crate::app::view(&state, iced::window::Id::unique()),
+        bounds,
+        Cache::new(),
+        &mut renderer,
+      );
+      let dismisses = |message: &Message| {
+        matches!(
+          message,
+          Message::Settings(SettingsMessage::Close)
+            | Message::Account(
+              accounts::Message::CloseAddAccount | accounts::Message::CancelConfirmation
+            )
+        )
+      };
+      let mut messages = Vec::new();
+      update_ui(
+        &mut ui,
+        &mut renderer,
+        &[
+          Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left)),
+          Event::Mouse(mouse::Event::ButtonReleased(mouse::Button::Left)),
+        ],
+        mouse::Cursor::Available(Point::new(bounds.width / 2.0, bounds.height / 2.0)),
+        &mut messages,
+      );
+      assert!(!messages.iter().any(dismisses), "dialog interior: {kind}");
+      messages.clear();
+      update_ui(
+        &mut ui,
+        &mut renderer,
+        &[
+          Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Right)),
+          Event::Mouse(mouse::Event::ButtonReleased(mouse::Button::Right)),
+        ],
+        mouse::Cursor::Available(Point::new(5.0, 5.0)),
+        &mut messages,
+      );
+      assert!(!messages.iter().any(dismisses), "secondary click: {kind}");
+      messages.clear();
+      let inside = Point::new(bounds.width / 2.0, bounds.height / 2.0);
+      update_ui(
+        &mut ui,
+        &mut renderer,
+        &[
+          Event::Touch(iced::touch::Event::FingerPressed {
+            id: iced::touch::Finger(1),
+            position: inside,
+          }),
+          Event::Touch(iced::touch::Event::FingerLifted {
+            id: iced::touch::Finger(1),
+            position: inside,
+          }),
+        ],
+        mouse::Cursor::Available(inside),
+        &mut messages,
+      );
+      assert!(
+        !messages.iter().any(dismisses),
+        "touch inside dialog: {kind}"
+      );
+      messages.clear();
+      let outside = Point::new(5.0, 5.0);
+      update_ui(
+        &mut ui,
+        &mut renderer,
+        &[
+          Event::Touch(iced::touch::Event::FingerPressed {
+            id: iced::touch::Finger(2),
+            position: outside,
+          }),
+          Event::Touch(iced::touch::Event::FingerLifted {
+            id: iced::touch::Finger(2),
+            position: outside,
+          }),
+        ],
+        mouse::Cursor::Unavailable,
+        &mut messages,
+      );
+      assert_eq!(
+        messages.iter().filter(|message| dismisses(message)).count(),
+        usize::from(kind != "compact-settings"),
+        "touch backdrop: {kind}"
+      );
+      messages.clear();
+      update_ui(
+        &mut ui,
+        &mut renderer,
+        &[
+          Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left)),
+          Event::Mouse(mouse::Event::ButtonReleased(mouse::Button::Left)),
+        ],
+        mouse::Cursor::Available(Point::new(5.0, 5.0)),
+        &mut messages,
+      );
+      drop(ui);
+      match kind {
+        "settings" => assert!(matches!(
+          messages.as_slice(),
+          [Message::Settings(SettingsMessage::Close)]
+        )),
+        "add-account" => assert!(matches!(
+          messages.as_slice(),
+          [Message::Account(accounts::Message::CloseAddAccount)]
+        )),
+        "confirmation" => assert!(matches!(
+          messages.as_slice(),
+          [Message::Account(accounts::Message::CancelConfirmation)]
+        )),
+        _ => assert!(messages.is_empty(), "fullscreen Settings has no backdrop"),
+      }
+      for message in messages {
+        drop(update(&mut state, message));
+      }
+      assert_eq!(state.shell.settings_open, kind != "settings");
+      assert!(!accounts::blocking_modal(&state.accounts));
+    }
+  }
 }

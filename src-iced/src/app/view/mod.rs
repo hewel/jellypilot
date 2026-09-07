@@ -3,6 +3,7 @@ pub(crate) mod browse;
 mod detail;
 pub(crate) mod home;
 mod login;
+mod modal_dismiss;
 mod personal_lists;
 mod player;
 mod settings;

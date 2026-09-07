@@ -19,6 +19,7 @@ pub struct DesignTokens {
     pub durations: Durations,
     pub easings: Easings,
     pub breakpoints: Breakpoints,
+    pub modal: Modal,
 }
 
 /// Semantic color roles.
@@ -312,8 +313,18 @@ pub struct Breakpoints {
     pub x2l: &'static str,
 }
 
+/// Mode-independent modal presentation.
+#[derive(Debug, Clone, Copy)]
+pub struct Modal {
+    /// Approximate Gaussian sigma in logical pixels for live scene backdrop blur.
+    pub backdrop_blur_sigma: f32,
+}
+
 /// Mode-independent JellyPilot tokens.
 pub const TOKENS: DesignTokens = DesignTokens {
+    modal: Modal {
+        backdrop_blur_sigma: 40.0,
+    },
     fonts: Fonts {
         display: "'Manrope V5', 'MiSans VF', ui-sans-serif, system-ui, sans-serif",
         mono: "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace",

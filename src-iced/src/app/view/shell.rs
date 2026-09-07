@@ -102,20 +102,14 @@ pub fn view(state: &State) -> Element<'_, Message> {
     .height(Fill)
     .style(|theme| jellypilot_ui::theme::surface_variant(theme, SurfaceVariant::Canvas));
 
-  if state.shell.settings_open {
-    // Keep the shell visible below Settings while removing it from input,
-    // overlays, and focus traversal.
-    let modal_stack = stack![inert(base_view), settings_modal(state)]
-      .width(Fill)
-      .height(Fill);
-    container(modal_stack)
-      .width(Fill)
-      .height(Fill)
-      .style(|theme| jellypilot_ui::theme::surface_variant(theme, SurfaceVariant::Canvas))
-      .into()
+  // Keep the background at the same tree position across modal transitions;
+  // inserting a Stack only when open discards descendant scroll state.
+  let layers = if state.shell.settings_open {
+    stack![inert(base_view), settings_modal(state)]
   } else {
-    base_view.into()
-  }
+    stack![base_view]
+  };
+  layers.width(Fill).height(Fill).into()
 }
 
 /// Control-Only shell: no sidebar, no hairlines, no player bar — the compact
@@ -505,14 +499,15 @@ fn settings_modal(state: &State) -> Element<'_, Message> {
       .into();
   }
 
-  let dialog = container(
+  let dialog = container(super::modal_dismiss::dismissible(
     container(modal_content)
       .width(Length::Fixed(896.0))
       .height(Length::Fixed(
         (state.shell.window_size.height - 48.0).clamp(0.0, 620.0),
       ))
       .style(|theme| jellypilot_ui::theme::surface_variant(theme, SurfaceVariant::Dialog)),
-  )
+    Message::Settings(SettingsMessage::Close),
+  ))
   .width(Fill)
   .height(Fill)
   .padding(24)
@@ -523,7 +518,7 @@ fn settings_modal(state: &State) -> Element<'_, Message> {
   if crate::app::accounts::blocking_modal(&state.accounts) {
     dialog.into()
   } else {
-    modal(12.0, dialog)
+    modal(TOKENS.modal.backdrop_blur_sigma, dialog)
   }
 }
 
