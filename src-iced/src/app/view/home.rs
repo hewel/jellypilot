@@ -18,7 +18,7 @@ use jellypilot_core::LoadState;
 use jellypilot_media_server::VideoLibraryItem;
 use jellypilot_mpv::playback::{Playable, PlaybackStartPosition};
 use jellypilot_mpv::playback_session::PlaybackIntent;
-use jellypilot_ui::fonts::HEADING_FONT;
+use jellypilot_ui::fonts::{BODY_FONT, DISPLAY_FONT, HEADING_FONT};
 use jellypilot_ui::icons::{icon_with_color, Icon, IconSize};
 use jellypilot_ui::layout::SizeClass;
 use jellypilot_ui::overlay::{focus_tooltip, TooltipOptions};
@@ -512,7 +512,7 @@ fn section_row<'a>(
 
   column![
     text(state.kernel.locale.message(&home_row.title))
-      .font(HEADING_FONT)
+      .font(BODY_FONT)
       .size(SECTION_TITLE_SIZE)
       .color(state.palette().text.heading),
     cards,
@@ -875,7 +875,7 @@ fn hero_artwork<'a>(
   }
 
   ellipsis_text(hero_headline(item))
-    .font(HEADING_FONT)
+    .font(DISPLAY_FONT)
     .size(text_size)
     .color(state.palette().text.heading)
     .into()
@@ -1245,7 +1245,7 @@ fn section_skeleton<'a>(
   }
   column![
     text(locale.message(&row.title))
-      .font(HEADING_FONT)
+      .font(DISPLAY_FONT)
       .size(24)
       .color(palette.text.heading),
     cards,
@@ -1266,7 +1266,7 @@ fn section_error<'a>(
   container(
     column![
       text(locale.message(title))
-        .font(HEADING_FONT)
+        .font(DISPLAY_FONT)
         .size(24)
         .color(palette.text.heading),
       text(locale.message(error))

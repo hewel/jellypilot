@@ -13,7 +13,6 @@ pub struct DesignTokens {
     pub spacing: Spacing,
     pub font_sizes: FontSizes,
     pub line_heights: LineHeights,
-    pub font_weights: FontWeights,
     pub radii: Radii,
     pub z_index: ZIndex,
     pub letter_spacings: LetterSpacings,
@@ -185,17 +184,6 @@ pub struct LineHeights {
     pub s40: f32,
     pub s44: f32,
     pub s52: f32,
-}
-
-/// Panda numeric font-weight tokens.
-#[derive(Debug, Clone, Copy)]
-pub struct FontWeights {
-    pub normal: u16,
-    pub medium: u16,
-    pub semibold: u16,
-    pub bold: u16,
-    pub extrabold: u16,
-    pub black: u16,
 }
 
 /// Panda radius tokens in logical pixels.
@@ -401,14 +389,6 @@ pub const TOKENS: DesignTokens = DesignTokens {
         s40: 40.0,
         s44: 44.0,
         s52: 52.0,
-    },
-    font_weights: FontWeights {
-        normal: 400,
-        medium: 500,
-        semibold: 600,
-        bold: 700,
-        extrabold: 800,
-        black: 900,
     },
     radii: Radii {
         none: 0.0,

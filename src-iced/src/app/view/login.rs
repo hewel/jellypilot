@@ -6,7 +6,7 @@ use iced::{Alignment, Element, Fill, Length};
 use jellypilot_auth::login::{can_start_login, ConnectionPhase};
 use jellypilot_core::locale::{LanguagePreference, UiLanguage};
 use jellypilot_media_server::MediaServerProvider;
-use jellypilot_ui::fonts::HEADING_FONT;
+use jellypilot_ui::fonts::{DISPLAY_FONT, HEADING_FONT};
 use jellypilot_ui::icons::{icon_with_color, Icon, IconSize};
 use jellypilot_ui::tokens::TOKENS;
 use jellypilot_ui::variants::{BadgeVariant, ButtonVariant, FieldVariant, SurfaceVariant};
@@ -16,7 +16,7 @@ pub fn view(state: &State) -> Element<'_, Message> {
   let palette = state.palette();
   let login = &state.login.flow;
   let title = text(state.t("login-title"))
-    .font(HEADING_FONT)
+    .font(DISPLAY_FONT)
     .size(32)
     .color(palette.text.heading);
   let subtitle = text(state.t("login-subtitle"))

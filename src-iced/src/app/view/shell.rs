@@ -12,7 +12,7 @@ use iced::widget::{
 use iced::{Alignment, Element, Fill, Length};
 use jellypilot_core::config::AppMode;
 use jellypilot_core::LoadState;
-use jellypilot_ui::fonts::HEADING_FONT;
+use jellypilot_ui::fonts::DISPLAY_FONT;
 use jellypilot_ui::icons::{
   icon_for_control_state, icon_with_color, Icon, IconControlState, IconSize,
 };
@@ -471,7 +471,7 @@ fn settings_modal(state: &State) -> Element<'_, Message> {
   let header = row![
     column![
       text(state.t("common-settings"))
-        .font(HEADING_FONT)
+        .font(DISPLAY_FONT)
         .size(28)
         .color(palette.text.heading),
       text(state.t("shell-settings-save-hint"))

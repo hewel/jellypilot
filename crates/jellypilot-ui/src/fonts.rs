@@ -16,14 +16,20 @@ pub const MANROPE: &[u8] = include_bytes!("../assets/fonts/ManropeV5VF.ttf");
 /// Unmodified MiSans variable font, including its named Regular at weight 330.
 pub const MISANS: &[u8] = include_bytes!("../assets/fonts/MiSansVF.ttf");
 
-/// Primary body typeface, rendered at weight 400 rather than the font's default 200.
+/// Primary body typeface, rendered at weight 300 rather than the font's default 200.
 pub const BODY_FONT: Font = Font {
-    weight: Weight::Normal,
+    weight: Weight::Light,
     ..Font::with_name("Manrope V5")
 };
-/// Primary heading typeface, rendered at weight 600.
+/// Display typeface for page-level and hero titles, rendered at weight 400:
+/// lighter than small headings because the size already carries hierarchy.
+pub const DISPLAY_FONT: Font = Font {
+    weight: Weight::Normal,
+    ..BODY_FONT
+};
+/// Primary heading typeface, rendered at weight 500.
 pub const HEADING_FONT: Font = Font {
-    weight: Weight::Semibold,
+    weight: Weight::Medium,
     ..BODY_FONT
 };
 
@@ -66,7 +72,7 @@ pub fn initialize() -> Result<(), io::Error> {
 fn configure(system: &mut FontSystem) -> Result<(), &'static str> {
     // fontdb reads OS/2 weight, not the variable axis range. cosmic-text 0.15
     // only considers exact-weight faces for primary and configured fallback
-    // families. Register runtime matching descriptors for our two semantic
+    // families. Register runtime matching descriptors for our three semantic
     // weights; the shaper and rasterizer apply the real wght axis to the shared,
     // unchanged source. Keep the original face's weight and names intact.
     for family in ["Manrope V5", "MiSans VF"] {
@@ -87,7 +93,7 @@ fn configure(system: &mut FontSystem) -> Result<(), &'static str> {
         for id in conflicting {
             db.remove_face(id);
         }
-        for font in [BODY_FONT, HEADING_FONT] {
+        for font in [BODY_FONT, DISPLAY_FONT, HEADING_FONT] {
             let mut instance = original.clone();
             instance.id = fontdb::ID::dummy();
             instance.weight = text::to_attributes(font).weight;
@@ -156,7 +162,7 @@ mod tests {
         configure(&mut system).expect("bundled font setup");
         let sample = "Hello中文，";
         let mut cache = SwashCache::new();
-        for font in [BODY_FONT, HEADING_FONT] {
+        for font in [BODY_FONT, DISPLAY_FONT, HEADING_FONT] {
             let attrs = text::to_attributes(font);
             let mut buffer = Buffer::new(&mut system, Metrics::new(32.0, 40.0));
             buffer.set_text(

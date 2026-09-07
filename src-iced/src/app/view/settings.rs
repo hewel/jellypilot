@@ -4,7 +4,7 @@ use jellypilot_core::config::{AppMode, IntroMode, ShortcutKind, ThemeMode};
 use jellypilot_core::diagnostics::{format_diagnostic_time, DiagnosticCategory, DiagnosticLevel};
 use jellypilot_core::locale::{LanguagePreference, UiLanguage};
 use jellypilot_core::settings::SUBTITLE_LANGUAGE_OPTIONS;
-use jellypilot_ui::fonts::{FONT_ATTRIBUTIONS, FONT_LICENSES, HEADING_FONT};
+use jellypilot_ui::fonts::{BODY_FONT, FONT_ATTRIBUTIONS, FONT_LICENSES};
 use jellypilot_ui::icons::{icon_with_color, Icon, IconSize};
 use jellypilot_ui::layout::SizeClass;
 use jellypilot_ui::overlay::{popover, tooltip, PopoverOptions, TooltipOptions};
@@ -831,7 +831,7 @@ fn section<'a>(
       row![
         icon_with_color(icon, IconSize::Md, palette.colors.primary),
         text(title)
-          .font(HEADING_FONT)
+          .font(BODY_FONT)
           .size(18)
           .color(palette.text.heading),
       ]

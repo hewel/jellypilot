@@ -22,7 +22,7 @@ use jellypilot_media_server::{
 };
 use jellypilot_mpv::playback::{Playable, PlaybackStartPosition};
 use jellypilot_mpv::playback_session::PlaybackIntent;
-use jellypilot_ui::fonts::HEADING_FONT;
+use jellypilot_ui::fonts::{BODY_FONT, DISPLAY_FONT, HEADING_FONT};
 use jellypilot_ui::icons::{icon_with_color, Icon, IconSize};
 use jellypilot_ui::tokens::{ThemePalette, TOKENS};
 use jellypilot_ui::variants::{ButtonVariant, SurfaceVariant};
@@ -436,7 +436,7 @@ fn hero_at_width<'a>(
 fn hero_title<'a>(state: &'a State, name: &'a str, is_episode: bool) -> Element<'a, Message> {
   let title = || -> Element<'a, Message> {
     text(name)
-      .font(HEADING_FONT)
+      .font(DISPLAY_FONT)
       .size(45)
       .color(state.palette().text.heading)
       .into()
@@ -1102,7 +1102,7 @@ fn similar_skeletons<'a>(phase: f32, reduced_motion: bool) -> Element<'a, Messag
 fn section_title(palette: &'static ThemePalette, label: String) -> Element<'static, Message> {
   container(
     text(label)
-      .font(HEADING_FONT)
+      .font(BODY_FONT)
       .size(26)
       .color(palette.text.heading),
   )
@@ -1455,7 +1455,7 @@ fn detail_failure<'a>(state: &State, error: &'a UiText) -> Element<'a, Message> 
     column![
       back,
       text(state.t("detail-load-heading"))
-        .font(HEADING_FONT)
+        .font(DISPLAY_FONT)
         .size(28)
         .color(state.palette().text.heading),
       text(state.kernel.locale.message(error))

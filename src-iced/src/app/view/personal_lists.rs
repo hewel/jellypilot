@@ -1,7 +1,7 @@
 use crate::i18n::{Localizer, UiText};
 use iced::widget::{column, container, row, scrollable, space, text, Column, Row};
 use iced::{Alignment, Color, ContentFit, Element, Fill, Length};
-use jellypilot_ui::fonts::HEADING_FONT;
+use jellypilot_ui::fonts::{BODY_FONT, DISPLAY_FONT};
 use jellypilot_ui::icons::{icon_with_color, Icon, IconSize};
 use jellypilot_ui::tokens::{ThemePalette, TOKENS};
 use jellypilot_ui::variants::{ButtonVariant, SurfaceVariant};
@@ -75,7 +75,7 @@ fn overview_section<'a>(state: &'a State, kind: Kind, page: &'a ListPage) -> Ele
   column![
     row![
       text(label)
-        .font(HEADING_FONT)
+        .font(BODY_FONT)
         .size(20)
         .color(state.palette().text.heading),
       space::horizontal(),
@@ -130,7 +130,7 @@ fn page_heading(
 ) -> Element<'static, Message> {
   column![
     text(title.into())
-      .font(HEADING_FONT)
+      .font(DISPLAY_FONT)
       .size(28)
       .color(palette.text.heading),
     text(subtitle.into()).size(13).color(palette.text.metadata),

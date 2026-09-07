@@ -6,7 +6,7 @@ use jellypilot_auth::login::ConnectionPhase;
 use jellypilot_media_server::MediaServerProvider;
 use jellypilot_session::RemoteControlState;
 use jellypilot_ui::brands::{brand_svg, Brand};
-use jellypilot_ui::fonts::HEADING_FONT;
+use jellypilot_ui::fonts::{DISPLAY_FONT, HEADING_FONT};
 use jellypilot_ui::icons::{icon_with_color, Icon, IconControlState, IconSize};
 use jellypilot_ui::overlay::{
   focus_tooltip, popover, Alignment as PopoverAlignment, Placement, PopoverAppearance,
@@ -1018,7 +1018,7 @@ fn confirmation_modal<'a>(
   };
   let mut body = column![
     text(title)
-      .font(HEADING_FONT)
+      .font(DISPLAY_FONT)
       .size(24)
       .color(palette.text.heading),
     text(detail).size(14).color(palette.text.body),
@@ -1117,7 +1117,7 @@ fn add_account_modal<'a>(
     row![
       column![
         text(state.t("account-add"))
-          .font(HEADING_FONT)
+          .font(DISPLAY_FONT)
           .size(24)
           .color(palette.text.heading),
         text(state.t("account-add-description"))

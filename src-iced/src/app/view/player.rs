@@ -14,7 +14,7 @@ use jellypilot_mpv::playback_session::{
 };
 use jellypilot_mpv::player::format_duration;
 use jellypilot_session::IntroSkipKind;
-use jellypilot_ui::fonts::HEADING_FONT;
+use jellypilot_ui::fonts::{DISPLAY_FONT, HEADING_FONT};
 use jellypilot_ui::icons::{icon_with_color, Icon, IconSize};
 use jellypilot_ui::overlay::{popover, tooltip, Placement, PopoverOptions, TooltipOptions};
 use jellypilot_ui::tokens::TOKENS;
@@ -281,7 +281,7 @@ pub fn full(state: &State) -> Element<'_, Message> {
         palette.colors.onSurfaceVariant,
       ),
       text("JellyPilot")
-        .font(HEADING_FONT)
+        .font(DISPLAY_FONT)
         .size(26)
         .color(palette.text.heading),
       text(state.t("player-waiting"))

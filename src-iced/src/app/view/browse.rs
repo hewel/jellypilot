@@ -10,7 +10,7 @@ use jellypilot_core::{LibraryBrowseFailure, LIBRARY_BROWSE_PAGE_SIZE};
 use jellypilot_media_server::{
   VideoLibraryItem, VideoLibraryPlayedFilter, VideoLibrarySort, VideoLibrarySortDirection,
 };
-use jellypilot_ui::fonts::HEADING_FONT;
+use jellypilot_ui::fonts::{DISPLAY_FONT, HEADING_FONT};
 use jellypilot_ui::icons::{icon_with_color, Icon, IconSize};
 use jellypilot_ui::layout::SizeClass;
 use jellypilot_ui::overlay::{popover, PopoverOptions};
@@ -85,7 +85,7 @@ pub fn view(state: &State) -> Element<'_, Message> {
   };
   let mut header = Column::new().spacing(TOKENS.spacing.s3).push(
     text(heading)
-      .font(HEADING_FONT)
+      .font(DISPLAY_FONT)
       .size(34)
       .color(state.palette().text.heading),
   );
@@ -676,7 +676,7 @@ fn failure_surface<'a>(
       } else {
         "browse-library-load-failed"
       }))
-      .font(HEADING_FONT)
+      .font(DISPLAY_FONT)
       .size(24)
       .color(palette.text.heading),
       text(sanitize_message(message))
