@@ -1,6 +1,6 @@
 mod overview;
 
-use overview::overview_layout;
+use overview::{hero_foreground, overview_layout};
 
 use super::image_observer::{observe_image, ImageAxis};
 use crate::app::artwork::{ArtworkSurface, ImageSpec, ImageStatus};
@@ -15,7 +15,7 @@ use crate::i18n::{Localizer, UiText};
 use iced::widget::image::Image;
 use iced::widget::scrollable::{Direction, Scrollbar};
 use iced::widget::{
-  button, column, container, row, scrollable, space, stack, text, Column, Row, Stack,
+  button, column, container, responsive, row, scrollable, space, stack, text, Column, Row, Stack,
 };
 use iced::{gradient, padding};
 use iced::{Alignment, Background, ContentFit, Degrees, Element, Fill, Length, Pixels};
@@ -286,7 +286,7 @@ fn hero_at_width<'a>(
   let hero_height = if overview_expanded {
     base_hero_height + (measured_height - collapsed_height).max(0.0)
   } else {
-    base_hero_height + 1.0
+    base_hero_height
   };
 
   // The Backdrop keeps its 16:9 height when the overview expands; only the
@@ -317,24 +317,27 @@ fn hero_at_width<'a>(
   } else {
     collapsed_height
   };
-  let overview_top =
-    ((hero_height - visible_overview_height - SCRIM_TAIL_CHROME) / hero_height).clamp(0.0, 1.0);
-  let gradient = gradient::Linear::new(Degrees(180.0))
-    .add_stop(
-      0.0,
-      palette.colors.background.scale_alpha(HERO_SCRIM_TOP_ALPHA),
-    )
-    .add_stop(
-      overview_top,
-      palette.colors.background.scale_alpha(SCRIM_TAIL_ALPHA),
-    )
-    .add_stop(1.0, palette.colors.background.scale_alpha(1.0));
-  let scrim = container(space::vertical())
-    .width(Fill)
-    .height(hero_height)
-    .style(move |_| {
-      iced::widget::container::Style::default().background(Background::Gradient(gradient.into()))
-    });
+  let scrim = responsive(move |bounds| {
+    let overview_top = ((bounds.height - visible_overview_height - SCRIM_TAIL_CHROME)
+      / bounds.height)
+      .clamp(0.0, 1.0);
+    let gradient = gradient::Linear::new(Degrees(180.0))
+      .add_stop(
+        0.0,
+        palette.colors.background.scale_alpha(HERO_SCRIM_TOP_ALPHA),
+      )
+      .add_stop(
+        overview_top,
+        palette.colors.background.scale_alpha(SCRIM_TAIL_ALPHA),
+      )
+      .add_stop(1.0, palette.colors.background.scale_alpha(1.0));
+    container(space::vertical())
+      .width(Fill)
+      .height(Fill)
+      .style(move |_| {
+        iced::widget::container::Style::default().background(Background::Gradient(gradient.into()))
+      })
+  });
 
   let back_enabled = !state.shell.navigation_stack.is_empty();
   let back = control_button(
@@ -404,27 +407,15 @@ fn hero_at_width<'a>(
     content.played,
     content.favorite,
   ));
-  let foreground = column![
-    back,
-    container(copy)
-      .width(Fill)
-      .height(Fill)
-      .align_y(Alignment::End),
-  ]
-  .spacing(TOKENS.spacing.s5)
-  .padding(TOKENS.spacing.s6)
-  .width(Fill)
-  .height(hero_height);
+  let foreground = hero_foreground(back.into(), copy.into(), hero_height);
 
-  // A Stack's base layer inherits the stack's fixed height as both min and
-  // max, which would stretch the Backdrop on overview expansion; keeping the
-  // Backdrop in an under-layer preserves its fixed 16:9 height.
+  // Only the foreground sets the stack's intrinsic height. Under-layers get
+  // loose limits, so the Backdrop retains its own 16:9 frame.
   Stack::new()
-    .push_under(backdrop)
-    .push(scrim)
     .push(foreground)
+    .push_under(scrim)
+    .push_under(backdrop)
     .width(Fill)
-    .height(hero_height)
     .into()
 }
 
@@ -646,7 +637,9 @@ fn detail_actions<'a>(
       .color(state.palette().text.metadata),
     );
   }
-  let mut content = Column::new().spacing(TOKENS.spacing.s2).push(actions);
+  let mut content = Column::new()
+    .spacing(TOKENS.spacing.s2)
+    .push(actions.wrap());
   if let Some(error) = &state
     .full
     .as_ref()
@@ -1782,6 +1775,190 @@ fn limited_people(locale: Localizer, people: &[String], limit: usize) -> String 
 #[cfg(test)]
 mod tests {
   use super::*;
+
+  fn hero_state() -> State {
+    use crate::app::state::{FullUi, LoginState, SettingsState};
+    use crate::app::{accounts, kernel::Kernel, playback, shell};
+    use jellypilot_auth::login::ConnectionPhase;
+    use jellypilot_core::config::SettingsStore;
+    use std::sync::Arc;
+
+    let settings = SettingsStore::default();
+    let login = crate::app::login::Surface {
+      flow: LoginState::from_settings(settings.snapshot()),
+      quick_connect_task: None,
+    };
+    let settings_view = SettingsState::from_settings(settings.snapshot());
+    let mut request_gate = jellypilot_core::request_gate::RequestGate::default();
+    let playback = playback::Surface::new(&mut request_gate);
+    State {
+      kernel: Kernel {
+        settings,
+        locale: Localizer::default(),
+        diagnostics: Default::default(),
+        auth_store: Default::default(),
+        request_gate,
+        client: None,
+        connection: ConnectionPhase::SignedOut,
+        connected_identity: None,
+        active_profile: None,
+        notice: None,
+        active_toast: None,
+        next_toast_id: 0,
+        tray: None,
+        artwork_adapter: Arc::new(jellypilot_media_server::artwork::ArtworkAdapter::new()),
+        avatar_adapter: Arc::new(jellypilot_media_server::artwork::ArtworkAdapter::new()),
+        profile_avatars: Default::default(),
+      },
+      image_diagnostics: Default::default(),
+      system_theme: iced::theme::Mode::None,
+      login,
+      settings: crate::app::settings::Surface {
+        view: settings_view,
+      },
+      instance: None,
+      full: Some(FullUi::default()),
+      playback,
+      shell: shell::Surface::new(false),
+      watchlist: Default::default(),
+      accounts: accounts::Surface::new(),
+    }
+  }
+
+  #[test]
+  fn hero_actions_keep_intrinsic_height_when_copy_outgrows_the_backdrop() {
+    use iced::advanced::{layout, renderer, renderer::Headless, widget};
+    use iced::{Font, Size};
+    use jellypilot_core::locale::UiLanguage;
+
+    fn layout_element(
+      mut element: Element<'_, Message>,
+      renderer: &iced::Renderer,
+      width: f32,
+    ) -> layout::Node {
+      let mut tree = widget::Tree::new(&element);
+      tree.diff(element.as_widget_mut());
+      element.as_widget_mut().layout(
+        &mut tree,
+        renderer,
+        &layout::Limits::new(Size::ZERO, Size::new(width, f32::INFINITY)),
+      )
+    }
+
+    fn assert_contained(node: &layout::Node) {
+      for child in node.children() {
+        let bounds = child.bounds();
+        assert!(bounds.x >= -0.01 && bounds.y >= -0.01);
+        assert!(bounds.x + bounds.width <= node.size().width + 0.01);
+        assert!(bounds.y + bounds.height <= node.size().height + 0.01);
+        assert_contained(child);
+      }
+    }
+
+    let renderer = iced::futures::executor::block_on(iced::Renderer::new(
+      renderer::Settings {
+        font: Font::DEFAULT,
+        text_size: 16.0.into(),
+        line_height: jellypilot_ui::fonts::DEFAULT_LINE_HEIGHT,
+        metrics_hinting: false,
+      },
+      Some("tiny-skia"),
+    ))
+    .expect("headless renderer");
+    let mut state = hero_state();
+    let overview = "A voyage through unfamiliar lands reveals the history of a forgotten \
+      civilization, while the travellers confront the consequences of their choices. "
+      .repeat(20);
+    for language in [UiLanguage::English, UiLanguage::SimplifiedChinese] {
+      state.kernel.locale = Localizer::new(language);
+      for width in [360.0, 720.0, 960.0, 1800.0] {
+        let mut heights = Vec::new();
+        for expanded in [false, true] {
+          state.full.as_mut().unwrap().detail.data.overview_expanded = expanded;
+          let content = HeroContent {
+            id: "item",
+            name:
+              "遥远的旅程 — A very long title about travellers returning to an unfamiliar world",
+            metadata: "2026 · 科幻与冒险 · Feature-length extended international edition · \
+              2160p · Dolby Vision · 多语言音轨"
+              .to_owned(),
+            overview: Some(&overview),
+            playback_label: state.t("detail-play"),
+            playback: None,
+            played: false,
+            favorite: true,
+            is_episode: true,
+          };
+          let reference = layout_element(
+            detail_actions(
+              &state,
+              content.playback_label.clone(),
+              None,
+              content.id,
+              false,
+              true,
+            ),
+            &renderer,
+            width - TOKENS.spacing.s6 * 2.0,
+          );
+          let node = layout_element(hero(&state, content, 0.0, true), &renderer, width);
+          let layers = node.children()[0].children();
+          let backdrop = &layers[0];
+          let foreground = &layers[2];
+          let back = &foreground.children()[0];
+          let copy = &foreground.children()[1];
+          assert_eq!(
+            backdrop.size(),
+            Size::new(width, hero_height_for_width(width))
+          );
+          assert_eq!(back.bounds().y, TOKENS.spacing.s6, "Back stays at the top");
+          assert!(copy.bounds().y >= back.bounds().y + back.size().height + TOKENS.spacing.s5);
+          assert!(
+            (copy.bounds().y + copy.size().height + TOKENS.spacing.s6 - node.size().height).abs()
+              < 0.01
+          );
+          for pair in copy.children().windows(2) {
+            assert!(pair[0].bounds().y + pair[0].size().height <= pair[1].bounds().y + 0.01);
+          }
+          let actions = copy.children().last().unwrap();
+          assert_eq!(
+            actions.size(),
+            reference.size(),
+            "hero must not compress its actions"
+          );
+          for (button, natural) in actions.children()[0]
+            .children()
+            .iter()
+            .zip(reference.children()[0].children())
+          {
+            assert_eq!(
+              button.size(),
+              natural.size(),
+              "each action keeps its natural text height"
+            );
+          }
+          assert_contained(actions);
+          heights.push(node.size().height);
+        }
+        assert!(
+          heights[1] > heights[0],
+          "expanded overview must extend the hero"
+        );
+        if width == 360.0 {
+          assert!(
+            heights[0] > hero_height_for_width(width),
+            "collapsed copy may outgrow the image"
+          );
+        } else if width == 1800.0 {
+          assert_eq!(
+            heights[0],
+            hero_height_for_width(width),
+            "wide copy remains bottom-aligned over the image"
+          );
+        }
+      }
+    }
+  }
 
   fn episode_with_progress(
     resume_position_seconds: Option<f64>,

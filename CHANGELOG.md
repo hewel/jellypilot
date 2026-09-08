@@ -26,6 +26,8 @@ All notable changes to JellyPilot are documented in this file.
 - Isolated shared image demand between pages and Now Playing, cancelled work when its final consumer leaves, and released native image handles outside the visible range without adding another pixel cache.
 - Kept Browse poster placeholders at the image's fixed height, preventing repeated image admission and cancellation at prefetch boundaries and the resulting redraw-invalidation loop while scrolling.
 - Rejected late browse deliveries across history restoration and model recreation, kept failed refreshes retryable, and tied refresh activity to the captured page/query rather than the lifetime of its first task.
+- Sized Browse columns from the actual opened window instead of the requested startup size, preventing clipped posters when the window manager constrains the default window.
+- Let detail hero content grow beyond the backdrop's fixed 16:9 frame and wrap action rows, keeping buttons and labels readable at narrower widths and with longer localized copy.
 
 ## [2.0.0] - 2026-09-02
 

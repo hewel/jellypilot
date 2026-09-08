@@ -15,14 +15,14 @@ pub fn subscription(state: &State) -> Subscription<Message> {
     Event::Window(window::Event::CloseRequested) if status == event::Status::Ignored => {
       Some(Message::Window(WindowMessage::CloseRequested(window_id)))
     }
+    // The compositor can constrain the requested startup size before a resize
+    // subscription exists. Opened carries the actual logical layout size.
+    Event::Window(window::Event::Opened { size, .. } | window::Event::Resized(size)) => {
+      Some(Message::Window(WindowMessage::Resized(size)))
+    }
     _ => None,
   });
   let mut subscriptions = vec![window_events];
-  if state.shell.window_id.is_some() {
-    subscriptions.push(
-      window::resize_events().map(|(_id, size)| Message::Window(WindowMessage::Resized(size))),
-    );
-  }
   if state.playback.view.now_playing.is_some() {
     subscriptions.push(
       time::every(Duration::from_secs(1))
@@ -428,71 +428,47 @@ mod tests {
     ));
   }
 
-  #[test]
-  fn shortcut_capture_keeps_playback_tick_subscribed() {
+  async fn emitted_messages(
+    state: &State,
+    input: iced::advanced::subscription::Event,
+  ) -> Vec<Message> {
+    use iced::advanced::subscription::into_recipes;
+    use iced::futures::stream;
+
+    stream::select_all(
+      into_recipes(subscription(state))
+        .into_iter()
+        .map(|recipe| recipe.stream(Box::pin(stream::iter([input.clone()])))),
+    )
+    .collect()
+    .await
+  }
+
+  async fn emits_frame(state: &State) -> bool {
+    let input = iced::advanced::subscription::Event::Interaction {
+      window: state.shell.window_id.unwrap_or_else(window::Id::unique),
+      event: Event::Window(window::Event::RedrawRequested(std::time::Instant::now())),
+      status: event::Status::Ignored,
+    };
+    emitted_messages(state, input)
+      .await
+      .iter()
+      .any(|message| matches!(message, Message::Window(WindowMessage::FrameTick(_))))
+  }
+
+  #[tokio::test]
+  async fn frames_subscription_only_runs_for_smoke_or_active_skeletons() {
     let mut state = State::boot(false);
     state.kernel.settings = jellypilot_core::config::SettingsStore::default();
     state.shell.window_id = Some(window::Id::unique());
-    state.playback.view.now_playing = Some(jellypilot_mpv::playback_session::NowPlayingView {
-      item: jellypilot_mpv::playback::NowPlayingItem {
-        item_id: "episode-1".to_owned(),
-        title: "Pilot".to_owned(),
-        item_type: "Episode".to_owned(),
-        runtime_seconds: Some(1_800.0),
-        start_position_seconds: 0.0,
-        play_method: "DirectPlay".to_owned(),
-      },
-      paused: false,
-      position_seconds: 10.0,
-      duration_seconds: Some(1_800.0),
-      volume: 75.0,
-      muted: false,
-    });
-    state.settings.view.shortcut_capture = Some(jellypilot_core::config::ShortcutKind::Next);
-
-    // window events, resize events, playback tick, shortcut capture, theme changes
-
-    assert_eq!(subscription(&state).units(), 5);
-  }
-  #[test]
-  fn window_subscriptions_suspend_without_a_live_window() {
-    let mut state = State::boot(false);
-    state.kernel.settings = jellypilot_core::config::SettingsStore::default();
-    state.playback.view.now_playing = Some(jellypilot_mpv::playback_session::NowPlayingView {
-      item: jellypilot_mpv::playback::NowPlayingItem {
-        item_id: "episode-1".to_owned(),
-        title: "Pilot".to_owned(),
-        item_type: "Episode".to_owned(),
-        runtime_seconds: Some(1_800.0),
-        start_position_seconds: 0.0,
-        play_method: "DirectPlay".to_owned(),
-      },
-      paused: false,
-      position_seconds: 10.0,
-      duration_seconds: Some(1_800.0),
-      volume: 75.0,
-      muted: false,
-    });
-    state.settings.view.shortcut_capture = Some(jellypilot_core::config::ShortcutKind::Next);
-
-    // Close listener, playback tick, and theme changes remain active; all
-    // resize, keyboard, and frame subscriptions require a live window.
-    assert_eq!(subscription(&state).units(), 3);
-  }
-  #[test]
-  fn frames_subscription_only_runs_for_smoke_or_active_skeletons() {
-    let mut state = State::boot(false);
-    state.kernel.settings = jellypilot_core::config::SettingsStore::default();
-    state.shell.window_id = Some(window::Id::unique());
-    // window events, resize events, theme changes; no frames while nothing loads.
-    assert_eq!(subscription(&state).units(), 3);
+    assert!(!emits_frame(&state).await);
 
     state.shell.smoke = true;
-    assert_eq!(subscription(&state).units(), 4);
+    assert!(emits_frame(&state).await);
     state.shell.smoke = false;
 
     state.full.as_mut().unwrap().home.data.begin_load();
-    assert_eq!(subscription(&state).units(), 4);
+    assert!(emits_frame(&state).await);
     // Episode/neighbor loads render shimmer skeletons independently of the
     // main detail content state; the frames subscription must stay alive.
     let mut detail_state = State::boot(false);
@@ -505,8 +481,7 @@ mod tests {
       .detail
       .data
       .season_episodes = LoadState::Loading;
-    assert!(detail_state.skeletons_active());
-    assert_eq!(subscription(&detail_state).units(), 4);
+    assert!(emits_frame(&detail_state).await);
     detail_state
       .full
       .as_mut()
@@ -521,7 +496,9 @@ mod tests {
       .detail
       .data
       .season_neighbors = LoadState::Loading;
-    assert_eq!(subscription(&detail_state).units(), 4);
+    assert!(emits_frame(&detail_state).await);
+    detail_state.shell.window_id = None;
+    assert!(!emits_frame(&detail_state).await);
 
     // Reduced motion renders static skeletons, so no frame ticks are needed.
     let path = std::env::temp_dir().join(format!(
@@ -531,12 +508,12 @@ mod tests {
     let _ = std::fs::remove_file(&path);
     state.kernel.settings = jellypilot_core::config::SettingsStore::for_test(path.clone());
     state.kernel.settings.set_reduced_motion(true).unwrap();
-    assert_eq!(subscription(&state).units(), 3);
+    assert!(!emits_frame(&state).await);
     std::fs::remove_file(path).unwrap();
   }
 
-  #[test]
-  fn theme_changes_subscription_only_runs_in_system_mode() {
+  #[tokio::test]
+  async fn theme_changes_subscription_only_runs_in_system_mode() {
     let path = std::env::temp_dir().join(format!(
       "jellypilot-iced-theme-subscription-{}.json",
       std::process::id()
@@ -545,25 +522,23 @@ mod tests {
     let mut state = State::boot(false);
     state.kernel.settings = jellypilot_core::config::SettingsStore::for_test(path.clone());
 
-    let system_units = subscription(&state).units();
-    state
-      .kernel
-      .settings
-      .set_theme_mode(ThemeMode::Dark)
-      .unwrap();
-    assert_eq!(subscription(&state).units(), system_units - 1);
-    state
-      .kernel
-      .settings
-      .set_theme_mode(ThemeMode::Light)
-      .unwrap();
-    assert_eq!(subscription(&state).units(), system_units - 1);
-    state
-      .kernel
-      .settings
-      .set_theme_mode(ThemeMode::System)
-      .unwrap();
-    assert_eq!(subscription(&state).units(), system_units);
+    let event = iced::advanced::subscription::Event::SystemThemeChanged(iced::theme::Mode::Dark);
+    for mode in [
+      ThemeMode::System,
+      ThemeMode::Dark,
+      ThemeMode::Light,
+      ThemeMode::System,
+    ] {
+      state.kernel.settings.set_theme_mode(mode).unwrap();
+      let messages = emitted_messages(&state, event.clone()).await;
+      let delivered = messages.iter().any(|message| {
+        matches!(
+          message,
+          Message::SystemThemeChanged(iced::theme::Mode::Dark)
+        )
+      });
+      assert_eq!(delivered, mode == ThemeMode::System);
+    }
     std::fs::remove_file(path).unwrap();
   }
 

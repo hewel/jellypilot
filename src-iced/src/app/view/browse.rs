@@ -45,7 +45,7 @@ pub(crate) fn page_padding(class: SizeClass) -> f32 {
 /// The scrollable's `on_scroll` viewport is NOT used for width: iced only
 /// publishes it when the content overflows the viewport, so a maximized
 /// window whose grid fits vertically would keep reporting a stale width.
-/// `state.shell.window_size` follows every resize event and never goes stale.
+/// The shell must seed this from the actual opened window and track later resizes.
 pub(crate) fn grid_available_width(window_width: f32, class: SizeClass) -> f32 {
   (window_width
     - super::shell::sidebar_width(class)
@@ -478,23 +478,6 @@ fn browse_skeleton_grid<'a>(
   grid.into()
 }
 
-#[cfg(test)]
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub(crate) struct SkeletonCellDimensions {
-  pub cell_width: f32,
-  pub cell_height: f32,
-  pub artwork_height: f32,
-}
-
-#[cfg(test)]
-pub(crate) fn skeleton_cell_dimensions(metrics: ArtworkGridMetrics) -> SkeletonCellDimensions {
-  SkeletonCellDimensions {
-    cell_width: metrics.cell_width,
-    cell_height: metrics.cell_height,
-    artwork_height: card_artwork_height(metrics.cell_width),
-  }
-}
-
 pub(crate) fn card_artwork_height(cell_width: f32) -> f32 {
   cell_width * POSTER_FRAME_HEIGHT / POSTER_FRAME_WIDTH
 }
@@ -810,6 +793,9 @@ fn sort_label(locale: Localizer, sort: VideoLibrarySort) -> String {
 #[cfg(test)]
 mod tests {
   use super::*;
+  use iced::advanced::{layout, renderer, renderer::Headless, widget::Tree};
+  use iced::futures::StreamExt;
+  use iced::{Font, Size};
 
   #[test]
   fn failure_banner_overlays_only_when_a_load_more_failure_is_present() {
@@ -874,84 +860,134 @@ mod tests {
     assert!(retry_action(false, false).is_none());
   }
 
-  #[test]
-  fn browse_card_metrics_match_exact_poster_and_copy_height() {
-    let metrics = ArtworkGridMetrics::for_cards(640.0, CARD_COPY_HEIGHT);
-    assert_eq!(CARD_COPY_HEIGHT, 46.0);
-    assert_eq!(
-      metrics.cell_height,
-      metrics.cell_width * 1.5 + CARD_COPY_HEIGHT
-    );
-  }
+  #[tokio::test]
+  async fn browse_rows_keep_complete_equal_posters_at_responsive_window_widths() {
+    let renderer = iced::Renderer::new(
+      renderer::Settings {
+        font: Font::DEFAULT,
+        text_size: 16.0.into(),
+        line_height: jellypilot_ui::fonts::DEFAULT_LINE_HEIGHT,
+        metrics_hinting: false,
+      },
+      Some("tiny-skia"),
+    )
+    .await
+    .expect("software layout renderer");
+    let mut state = State::boot(true);
+    state.kernel.settings = jellypilot_core::config::SettingsStore::default();
+    state.full = Some(crate::app::state::FullUi::default());
+    state.shell.window_size = Size::new(1760.0, 900.0);
+    let window_id = iced::window::Id::unique();
+    let items: Vec<_> = (0..LIBRARY_BROWSE_PAGE_SIZE)
+      .map(|index| LibraryItemSlot {
+        item: Some(video_item(&index.to_string())),
+      })
+      .collect();
 
-  #[test]
-  fn page_padding_matches_tier_contract() {
-    assert_eq!(page_padding(SizeClass::Compact), TOKENS.spacing.s4);
-    assert_eq!(page_padding(SizeClass::Compact), 16.0);
-    assert_eq!(page_padding(SizeClass::Standard), PAGE_PADDING);
-    assert_eq!(page_padding(SizeClass::Standard), 32.0);
-    assert_eq!(page_padding(SizeClass::Wide), PAGE_PADDING);
-    assert_eq!(page_padding(SizeClass::Wide), 32.0);
-  }
-  #[test]
-  fn grid_available_width_matches_sidebar_contract() {
-    // 1600×900 window, 240px sidebar, 1px hairline, 2×32 page padding.
-    assert_eq!(grid_available_width(1600.0, SizeClass::Standard), 1295.0);
-  }
+    for (index, width) in [
+      1280.0, 800.0, 1024.0, 1279.5, 1440.0, 1760.0, 1919.5, 1920.0,
+    ]
+    .into_iter()
+    .enumerate()
+    {
+      let size = Size::new(width, 900.0);
+      let event = if index == 0 {
+        iced::window::Event::Opened {
+          position: None,
+          size,
+          scale_factor: 1.25,
+        }
+      } else {
+        iced::window::Event::Resized(size)
+      };
+      let input = iced::advanced::subscription::Event::Interaction {
+        window: window_id,
+        event: iced::Event::Window(event),
+        status: iced::event::Status::Ignored,
+      };
+      let streams = iced::advanced::subscription::into_recipes(crate::app::subscription(&state))
+        .into_iter()
+        .map(|recipe| recipe.stream(Box::pin(iced::futures::stream::iter(vec![input.clone()]))));
+      let messages: Vec<_> = iced::futures::stream::select_all(streams).collect().await;
+      for message in messages {
+        drop(crate::app::update(&mut state, message));
+      }
+      if index == 0 {
+        // iced delivers Opened before the open task resolves with the window id.
+        drop(crate::app::update(
+          &mut state,
+          Message::Window(crate::app::message::WindowMessage::ShowRequested(Some(
+            window_id,
+          ))),
+        ));
+      }
+      let class = SizeClass::from_width(width);
+      let content_width =
+        width - super::super::shell::sidebar_width(class) - super::super::shell::HAIRLINE_WIDTH;
+      let metrics = skeleton_grid_metrics(width, class);
+      let limits = layout::Limits::new(Size::ZERO, Size::new(content_width, 700.0));
+      let mut ready = ready_surface(
+        &state,
+        &items,
+        0,
+        LIBRARY_BROWSE_PAGE_SIZE,
+        None,
+        false,
+        class,
+      );
+      let mut tree = Tree::new(&ready);
+      tree.diff(ready.as_widget_mut());
+      let ready_node = ready.as_widget_mut().layout(&mut tree, &renderer, &limits);
+      let scroll = &ready_node.children()[0];
+      let grid_container = &scroll.children()[0].children()[1];
+      let grid = &grid_container.children()[0];
+      assert!(
+        (grid.size().width - grid_available_width(width, class)).abs() < 0.01,
+        "render and paging widths diverged at window width {width}"
+      );
+      // The first and last grid children are virtualization spacers.
+      for row in &grid.children()[1..grid.children().len() - 1] {
+        for cell in row.children() {
+          let card = &cell.children()[0];
+          let poster = &card.children()[0];
+          assert!(
+            cell.bounds().x >= 0.0
+              && cell.bounds().x + cell.size().width <= grid.size().width + 0.01
+              && (cell.size().width - metrics.cell_width).abs() < 0.01
+              && (card.size().width - metrics.cell_width).abs() < 0.01
+              && (poster.size().width - metrics.cell_width).abs() < 0.01
+              && (poster.size().height - card_artwork_height(metrics.cell_width)).abs() < 0.01
+              && poster.size().height <= card.size().height,
+            "incomplete or unequal poster at window width {width}: cell={:?}, card={:?}, poster={:?}",
+            cell.bounds(),
+            card.bounds(),
+            poster.bounds(),
+          );
+        }
+      }
+      assert_eq!(grid.children()[1].children().len(), metrics.columns);
 
-  #[test]
-  fn grid_available_width_compact_uses_rail_and_narrow_padding() {
-    // 1024 - 72 rail - 1 hairline - 2×16 page padding.
-    assert_eq!(grid_available_width(1024.0, SizeClass::Compact), 919.0);
-  }
-
-  #[test]
-  fn grid_available_width_never_falls_below_one() {
-    assert_eq!(grid_available_width(100.0, SizeClass::Compact), 1.0);
-  }
-
-  #[test]
-  fn skeleton_grid_metrics_match_loaded_grid_metrics_at_same_window_width() {
-    for (width, class) in [
-      (1024.0, SizeClass::Compact),
-      (1600.0, SizeClass::Standard),
-      (1920.0, SizeClass::Wide),
-    ] {
-      let expected =
-        ArtworkGridMetrics::for_cards(grid_available_width(width, class), CARD_COPY_HEIGHT);
-      let actual = skeleton_grid_metrics(width, class);
-      assert_eq!(actual, expected);
-      assert_eq!(actual.columns, expected.columns);
-      assert_eq!(actual.cell_width, expected.cell_width);
-      assert_eq!(actual.cell_height, expected.cell_height);
-      assert_eq!(actual.row_height, expected.row_height);
+      let mut loading = browse_loading_skeleton(&state, class);
+      let mut tree = Tree::new(&loading);
+      tree.diff(loading.as_widget_mut());
+      let loading_node = loading
+        .as_widget_mut()
+        .layout(&mut tree, &renderer, &limits);
+      let skeleton_grid = &loading_node.children()[0].children()[0].children()[0];
+      let skeleton_row = &skeleton_grid.children()[0];
+      for (skeleton, loaded) in skeleton_row
+        .children()
+        .iter()
+        .zip(grid.children()[1].children())
+      {
+        assert!(
+          (skeleton.size().width - loaded.size().width).abs() < 0.01
+            && (skeleton.size().height - loaded.size().height).abs() < 0.01,
+          "loading and loaded cells shift geometry at window width {width}"
+        );
+      }
+      assert_eq!(skeleton_row.children().len(), metrics.columns);
     }
-  }
-
-  #[test]
-  fn skeleton_cell_dimensions_match_card_geometry() {
-    let metrics = ArtworkGridMetrics::for_cards(1248.0, CARD_COPY_HEIGHT);
-    let dims = skeleton_cell_dimensions(metrics);
-    assert_eq!(dims.cell_width, metrics.cell_width);
-    assert_eq!(dims.cell_height, metrics.cell_height);
-    assert_eq!(dims.artwork_height, metrics.cell_width * 1.5);
-    assert_eq!(dims.cell_height, dims.artwork_height + CARD_COPY_HEIGHT);
-  }
-
-  #[test]
-  fn card_artwork_height_matches_video_card_aspect_ratio() {
-    assert_eq!(card_artwork_height(160.0), 240.0);
-    assert_eq!(card_artwork_height(200.0), 300.0);
-  }
-
-  #[test]
-  fn skeleton_grid_row_and_cell_count_covers_full_page() {
-    let metrics = ArtworkGridMetrics::for_cards(1248.0, CARD_COPY_HEIGHT);
-    let total_cells = LIBRARY_BROWSE_PAGE_SIZE as usize;
-    let row_count = total_cells.div_ceil(metrics.columns);
-    assert_eq!(total_cells, 24);
-    assert!(row_count >= 1);
-    assert_eq!(row_count, (24_usize).div_ceil(metrics.columns));
   }
 
   fn video_item(id: &str) -> VideoLibraryItem {
