@@ -22,6 +22,7 @@ All notable changes to JellyPilot are documented in this file.
 - Consolidated Intro Skipper eligibility and prompt lifetime into one display-free policy, preserving Automatic, Manual, and Off modes, exact-start skipping, and one automatic attempt per range.
 
 ### Fixed
+- Added Jellyfin 12.0 compatibility: updated the generated API client, migrated API and playback/subtitle/WebSocket authentication away from disabled legacy forms, and redacted the modern `ApiKey` query parameter in diagnostics. Emby authentication remains unchanged.
 - Restored history-specific vertical and horizontal scroll positions when returning to Home, browse results, details, and Personal Lists. Back navigation retains loaded content and query context; new searches and filter changes still start at the top.
 - Avoided repeated overview text shaping on detail pages during playback updates, preventing long layout stalls while scrolling.
 - Kept account avatars fixed-size, fitted short account menus to their content, and exposed truncated names and addresses through hover and keyboard-focus hints.

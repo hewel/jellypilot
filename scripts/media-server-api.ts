@@ -13,7 +13,6 @@ interface Provider {
   outputDir: string;
   userAgent: string;
   fetchError: string;
-  afterGenerate?: () => Promise<void>;
   createGeneratorSpec?: () => Promise<string>;
 }
 
@@ -25,7 +24,6 @@ const providers: Record<'jellyfin' | 'emby', Provider> = {
     outputDir: 'crates/media-server-api/jellyfin',
     userAgent: 'jmsr-openapi-snapshot',
     fetchError: 'Failed to fetch Jellyfin OpenAPI stable spec',
-    afterGenerate: patchJellyfinGeneratedClient,
   },
   emby: {
     specUrl: `https://raw.githubusercontent.com/MediaBrowser/Emby.SDK/${EMBY_SDK_TAG}/Resources/OpenApi/openapi_v3.json`,
@@ -85,37 +83,6 @@ async function createPatchedEmbyGeneratorSpec(): Promise<string> {
   return patchedSpecPath;
 }
 
-async function patchJellyfinGeneratedClient(): Promise<void> {
-  const path = `${provider.outputDir}/src/models/transcoding_info.rs`;
-  const source = await readFile(path, 'utf8');
-  const patched = source.replace(
-    `pub enum TranscodeReasons {
-}
-
-impl Default for TranscodeReasons {
-    fn default() -> TranscodeReasons {
-        Self::
-    }
-}`,
-    `pub enum TranscodeReasons {
-    #[serde(other)]
-    Unknown,
-}
-
-impl Default for TranscodeReasons {
-    fn default() -> TranscodeReasons {
-        Self::Unknown
-    }
-}`,
-  );
-
-  if (patched === source) {
-    throw new Error('Generated TranscodeReasons patch did not apply');
-  }
-
-  await writeFile(path, patched);
-}
-
 async function runGenerator(): Promise<void> {
   await rm(provider.outputDir, { force: true, recursive: true });
   const generatorSpecPath = provider.createGeneratorSpec
@@ -157,8 +124,6 @@ async function runGenerator(): Promise<void> {
       await rm(generatorSpecPath, { force: true });
     }
   }
-
-  await provider.afterGenerate?.();
 }
 
 function printUsage(): void {

@@ -347,6 +347,7 @@ fn sensitive_query_value_start(message: &[u8], index: usize) -> Option<usize> {
     let key = &message[key_start..equals];
     let sensitive = [
         b"api_key".as_slice(),
+        b"apikey".as_slice(),
         b"access_token".as_slice(),
         b"token".as_slice(),
         b"password".as_slice(),
@@ -437,7 +438,7 @@ mod tests {
             1,
             DiagnosticLevel::Error,
             DiagnosticCategory::Playback,
-            "GET https://media.example/video?api_key=secret&token=other Password bearer TOP-SECRET",
+            "GET https://media.example/video?ApiKey=modern-secret&api_key=secret&token=other Password bearer TOP-SECRET",
         );
 
         let row = diagnostics.rows().next().expect("event recorded");
@@ -447,11 +448,11 @@ mod tests {
         assert_eq!(row.category, DiagnosticCategory::Playback);
         assert_eq!(
       row.message,
-      "GET https://media.example/video?api_key=[REDACTED]&token=[REDACTED] Password bearer [REDACTED]"
+      "GET https://media.example/video?ApiKey=[REDACTED]&api_key=[REDACTED]&token=[REDACTED] Password bearer [REDACTED]"
     );
         assert_eq!(
       diagnostics.export_text(|timestamp| format!("{timestamp} UTC")),
-      "[1 UTC] ERROR [Playback] GET https://media.example/video?api_key=[REDACTED]&token=[REDACTED] Password bearer [REDACTED]"
+      "[1 UTC] ERROR [Playback] GET https://media.example/video?ApiKey=[REDACTED]&api_key=[REDACTED]&token=[REDACTED] Password bearer [REDACTED]"
     );
         assert_eq!(
             sanitize_message("Authorization:Bearer another-secret"),

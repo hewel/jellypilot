@@ -1,7 +1,7 @@
 {
   "library": "reqwest",
   "packageName": "jellyfin_api",
-  "packageVersion": "10.11.10",
+  "packageVersion": "12.0.0",
   "supportAsync": true,
   "hideGenerationTimestamp": true,
   "reqwestDefaultFeatures": "",

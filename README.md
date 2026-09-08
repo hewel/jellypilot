@@ -83,6 +83,11 @@ Jellyfin clients can discover JellyPilot as a cast target. Both Jellyfin and Emb
 
 Emby support uses the same library and player workflow as Jellyfin where the server APIs are compatible. Jellyfin-specific features such as Quick Connect and the Jellyfin Intro Skipper plugin are not advertised for Emby connections.
 
+Jellyfin 12.0 does not require legacy authorization to be enabled: JellyPilot uses the standard
+`Authorization` header for API requests and `ApiKey` for playback, subtitles, and remote sessions.
+Enter the server's actual base URL, including any configured reverse-proxy base path; Jellyfin 12
+removed the automatic `/emby` and `/mediabrowser` route aliases.
+
 ## 🗺️ Roadmap
 
 - [ ] **MPRIS support** — Linux desktop media-player integration for keys and widgets
