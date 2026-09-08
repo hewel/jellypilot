@@ -1,4 +1,4 @@
-//! Local video playback and a compositable iced video surface.
+//! Local and HTTP(S)/HLS video playback with a compositable iced video surface.
 //!
 //! [`Player`] owns request ordering, frame invalidation, the GStreamer worker and GPU
 //! resources. Callers keep interaction state (for example a dragged timeline value),
@@ -16,14 +16,14 @@
 //!
 //! ```no_run
 //! use iced::Task;
-//! use jellypilot_player::{AudioOutput, PlaybackError, Player};
+//! use jellypilot_player::{AudioOutput, PlaybackError, PlaybackSource, Player};
 //!
 //! #[derive(Debug, Clone)]
 //! enum Message { Changed, Stopped(Result<(), PlaybackError>) }
 //!
 //! fn boot() -> Result<(Player, Task<Message>), PlaybackError> {
 //!   let (mut player, notifications) = Player::new(AudioOutput::System)?;
-//!   player.open("movie.mp4")?;
+//!   player.open(PlaybackSource::Local("movie.mp4".into()))?;
 //!   Ok((player, Task::run(notifications, |()| Message::Changed)))
 //! }
 //!
@@ -38,8 +38,12 @@
 //! ```
 
 mod playback;
+mod source;
+mod transport;
 mod video;
 
+#[cfg(test)]
+mod network_tests;
 #[cfg(test)]
 mod tests;
 use iced::{
@@ -50,10 +54,29 @@ use iced::{
   Task,
 };
 use playback::{Command, FrameToken, PlaybackWorker, Snapshot};
-use std::{path::PathBuf, sync::Arc, time::Duration};
+use std::{sync::Arc, time::Duration};
 use video::{Video, VideoSurface};
 
 pub use playback::{PlaybackError, PlaybackPhase};
+pub use source::{NetworkSource, NetworkTimeouts, PlaybackSource};
+
+/// Currently reported seek window, independent of media duration.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SeekRange {
+  /// Earliest available stream position.
+  pub start: Duration,
+  /// Latest available position; `None` means no finite endpoint was reported.
+  pub end: Option<Duration>,
+}
+
+impl SeekRange {
+  fn clamp(self, position: Duration) -> Option<Duration> {
+    self
+      .end
+      .filter(|end| *end > self.start)
+      .map(|end| position.clamp(self.start, end))
+  }
+}
 
 /// Audio routing for this player instance; it never changes on file replacement.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -77,13 +100,17 @@ pub struct Status {
   pub duration: Option<Duration>,
   /// Whether the backend supports time seeking.
   pub seekable: bool,
+  /// Backend-reported seek window; it can move independently of duration.
+  pub seek_range: Option<SeekRange>,
+  /// Filling percentage (0..=99), separate from user pause/playing intent.
+  pub buffering: Option<u8>,
   /// Linear volume in 0..=1, retained across file replacements and mute changes.
   pub volume: f64,
   /// Mute state, independent of saved volume.
   pub muted: bool,
   /// Latest asynchronous error, cleared when a new open or seek is submitted.
   pub error: Option<PlaybackError>,
-  /// A submitted local path is waiting for backend validation.
+  /// A submitted source is waiting for backend acceptance.
   pub opening: bool,
   /// A submitted seek is waiting for acceptance or its new frame.
   pub seeking: bool,
@@ -100,6 +127,8 @@ impl Default for Status {
       position: None,
       duration: None,
       seekable: false,
+      seek_range: None,
+      buffering: None,
       volume: 1.0,
       muted: false,
       error: None,
@@ -120,7 +149,11 @@ impl Status {
   }
   /// Whether an interactive timeline can commit a seek.
   pub fn can_seek(&self) -> bool {
-    self.ready() && self.seekable && self.duration.is_some_and(|duration| !duration.is_zero())
+    self.ready()
+      && self.seekable
+      && self
+        .seek_range
+        .is_some_and(|range| range.clamp(range.start).is_some())
   }
 }
 
@@ -233,6 +266,8 @@ impl Player {
     self.status.position = snapshot.position;
     self.status.duration = snapshot.duration;
     self.status.seekable = snapshot.seekable;
+    self.status.seek_range = snapshot.seek_range;
+    self.status.buffering = snapshot.buffering;
     self.status.queue_depth = snapshot.queue_depth;
     self.status.dropped = snapshot.dropped;
     self.status.opening = self.pending_open.is_some();
@@ -245,22 +280,24 @@ impl Player {
     Ok(())
   }
 
-  /// Opens a local path asynchronously, starting valid media from the beginning.
+  /// Opens an explicit local or network source asynchronously.
   ///
-  /// Empty paths are rejected immediately. Invalid paths keep the previous media;
-  /// readable regular files that cannot decode stop it and enter `Error`.
-  pub fn open(&mut self, path: impl Into<PathBuf>) -> Result<(), PlaybackError> {
-    let path = path.into();
-    if path.as_os_str().is_empty() {
-      return Err(PlaybackError::Open {
-        path,
-        reason: "empty local path".into(),
-      });
+  /// Invalid local paths preserve the previous media. Accepted network sources
+  /// replace it before connecting; HTTP, TLS, manifest and decoding errors then
+  /// enter `Error`. Network credentials never appear in returned diagnostics.
+  pub fn open(&mut self, source: PlaybackSource) -> Result<(), PlaybackError> {
+    if let PlaybackSource::Local(path) = &source {
+      if path.as_os_str().is_empty() {
+        return Err(PlaybackError::Open {
+          path: path.clone(),
+          reason: "empty local path".into(),
+        });
+      }
     }
     self.request_sequence = next_sequence(self.request_sequence, "open")?;
     self.send(Command::Open {
       generation: self.request_sequence,
-      path,
+      source,
     })?;
     self.pending_open = Some(self.request_sequence);
     self.status.opening = true;
@@ -284,7 +321,7 @@ impl Player {
     Ok(())
   }
 
-  /// Commits an accurate flushing seek, clamped to the known duration.
+  /// Commits an accurate flushing seek, clamped to the reported seek window.
   ///
   /// Paused playback stays paused and updates the preview frame. Seeking from EOS
   /// previews while paused. Call on timeline release, not on every drag change.
@@ -295,8 +332,9 @@ impl Player {
     self.seek_sequence = next_sequence(self.seek_sequence, "seek")?;
     let position = self
       .status
-      .duration
-      .map_or(position, |duration| position.min(duration));
+      .seek_range
+      .and_then(|range| range.clamp(position))
+      .ok_or_else(|| control_error("seek", "no finite seek window is available"))?;
     let token = FrameToken {
       generation: self.snapshot.token.generation,
       seek_generation: self.seek_sequence,
@@ -372,6 +410,7 @@ impl Player {
     self.status.playing = false;
     self.status.opening = false;
     self.status.seeking = false;
+    self.status.buffering = None;
     let retired = self.retire_surface();
     let worker = self.worker.take();
     if let Some(worker) = &worker {

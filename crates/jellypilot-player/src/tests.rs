@@ -2,7 +2,7 @@ use super::*;
 use iced::futures::StreamExt;
 use std::pin::Pin;
 
-async fn wait_for(
+pub(super) async fn wait_for(
   player: &mut Player,
   notifications: &mut Pin<Box<impl Stream<Item = ()>>>,
   predicate: impl Fn(&Status) -> bool,
@@ -23,10 +23,12 @@ async fn wait_for(
   .unwrap_or_else(|_| panic!("player transition timed out: {:?}", player.status()));
 }
 
-async fn close(player: &mut Player) {
+pub(super) async fn close(player: &mut Player) {
   let task = player.close();
   assert!(
-    player.open("ignored.mp4").is_err(),
+    player
+      .open(PlaybackSource::Local("ignored.mp4".into()))
+      .is_err(),
     "closed player rejects opens"
   );
   assert!(
@@ -58,7 +60,7 @@ fn replay_and_seek_without_refresh_preserve_latest_transport_intent() {
     .block_on(async {
       let (mut player, notifications) = Player::new(AudioOutput::Discard).unwrap();
       let mut notifications = Box::pin(notifications);
-      player.open(path).unwrap();
+      player.open(PlaybackSource::Local(path)).unwrap();
       wait_for(&mut player, &mut notifications, |s| {
         s.phase == PlaybackPhase::Ended
       })
@@ -105,7 +107,7 @@ fn invalid_replacement_preserves_media_and_valid_replacement_recovers() {
     .block_on(async {
       let (mut player, notifications) = Player::new(AudioOutput::Discard).unwrap();
       let mut notifications = Box::pin(notifications);
-      player.open(path.clone()).unwrap();
+      player.open(PlaybackSource::Local(path.clone())).unwrap();
       wait_for(&mut player, &mut notifications, |s| s.can_seek()).await;
       player.set_playing(false).unwrap();
       wait_for(&mut player, &mut notifications, |s| {
@@ -113,7 +115,9 @@ fn invalid_replacement_preserves_media_and_valid_replacement_recovers() {
       })
       .await;
       let duration = player.status().duration;
-      player.open(directory.path().join("missing.mp4")).unwrap();
+      player
+        .open(PlaybackSource::Local(directory.path().join("missing.mp4")))
+        .unwrap();
       wait_for(&mut player, &mut notifications, |s| {
         !s.opening && s.error.is_some()
       })
@@ -126,7 +130,7 @@ fn invalid_replacement_preserves_media_and_valid_replacement_recovers() {
       assert_eq!(player.status().duration, duration);
       assert!(player.status().can_seek());
 
-      player.open(path.clone()).unwrap();
+      player.open(PlaybackSource::Local(path.clone())).unwrap();
       wait_for(&mut player, &mut notifications, |s| {
         !s.opening && s.phase == PlaybackPhase::Playing
       })
@@ -135,13 +139,13 @@ fn invalid_replacement_preserves_media_and_valid_replacement_recovers() {
       assert!(player.status().playing);
       let corrupt = directory.path().join("not-video.mp4");
       std::fs::write(&corrupt, b"not a media container").unwrap();
-      player.open(corrupt).unwrap();
+      player.open(PlaybackSource::Local(corrupt)).unwrap();
       wait_for(&mut player, &mut notifications, |s| {
         s.phase == PlaybackPhase::Error
       })
       .await;
       assert!(player.status().error.is_some());
-      player.open(path).unwrap();
+      player.open(PlaybackSource::Local(path)).unwrap();
       player.refresh().unwrap();
       wait_for(&mut player, &mut notifications, |s| {
         !s.opening && s.phase == PlaybackPhase::Playing

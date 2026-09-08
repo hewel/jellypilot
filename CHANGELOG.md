@@ -9,6 +9,7 @@ All notable changes to JellyPilot are documented in this file.
 - Added embedded Fluent resources, localized count/duration grammar, and font license notices in Settings.
 - Added default-enabled per-season player volume memory, stored locally per server and account, with a Playback setting that pauses saving/restoring without deleting records. Unknown seasons and movies use MPV startup volume; temporary mute carries across continuous episode playback only.
 - Added an isolated, reusable `jellypilot-player` crate for GStreamer local-video playback and an iced/wgpu surface, with a standalone demo and private worker/frame/shutdown ownership. Production playback remains External MPV Playback; no GStreamer dependency was added to the application workspace.
+- Added explicit HTTP(S)/HLS sources to the isolated player/demo, with a cancellable same-origin authenticated relay, bounded playlist rewriting, network deadlines, buffering/seek-window state, and a credential-safe `--url-env` launch path. Production Jellyfin/Emby playback remains External MPV Playback.
 
 ### Changed
 - Replaced bundled Inter/Space Grotesk typography with the original Manrope V5 and MiSans variable fonts, including mixed-script fallback and explicit body/heading weights.

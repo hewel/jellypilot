@@ -2,7 +2,9 @@ use iced::widget::{
   column, container, progress_bar, row, scrollable, slider, stack, text, text_input,
 };
 use iced::{window, Element, Length::Fill, Subscription, Task, Theme};
-use jellypilot_player::{AudioOutput, PlaybackError, PlaybackPhase, Player};
+use jellypilot_player::{
+  AudioOutput, NetworkSource, PlaybackError, PlaybackPhase, PlaybackSource, Player,
+};
 use jellypilot_ui::{
   control_button,
   theme::{field_variant, surface_variant, theme, ThemeMode},
@@ -20,33 +22,44 @@ use std::{
 const DEFAULT_FILE: &str = "test-videos/bbb_h264_1080p_5mb.mp4";
 #[derive(Clone)]
 struct Options {
-  file: Option<String>,
+  source: Option<PlaybackSource>,
   smoke: bool,
 }
 impl Options {
   fn parse() -> Result<Self, String> {
     let mut options = Self {
-      file: None,
+      source: None,
       smoke: false,
     };
     let mut arguments = std::env::args().skip(1);
     while let Some(argument) = arguments.next() {
       match argument.as_str() {
         "--smoke-test" if !options.smoke => options.smoke = true,
-        "--file" if options.file.is_none() => {
+        "--file" | "--url" if options.source.is_none() => {
           let value = arguments
             .next()
             .filter(|s| !s.trim().is_empty() && !s.starts_with("--"))
-            .ok_or("--file requires a local path")?;
-          options.file = Some(value);
+            .ok_or("Source option requires a non-empty value")?;
+          options.source = Some(if argument == "--file" {
+            PlaybackSource::Local(value.into())
+          } else {
+            PlaybackSource::Network(NetworkSource::new(&value).map_err(|error| error.to_string())?)
+          });
         }
-        _ => return Err(format!("Unknown or duplicate argument: {argument}")),
+        "--url-env" if options.source.is_none() => {
+          let value = std::env::var("JELLYPILOT_VIDEO_URL")
+            .map_err(|_| "JELLYPILOT_VIDEO_URL requires a valid Unicode URL")?;
+          options.source = Some(PlaybackSource::Network(
+            NetworkSource::new(&value).map_err(|error| error.to_string())?,
+          ));
+        }
+        _ => return Err("Unknown, conflicting, or duplicate argument".into()),
       }
     }
     Ok(options)
   }
 }
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 enum Message {
   PathChanged(String),
   Open,
@@ -60,27 +73,67 @@ enum Message {
   Stopped(Result<(), PlaybackError>),
   SmokeDeadline,
 }
+// Text input may contain signed URLs; iced diagnostics must never expose it.
+impl std::fmt::Debug for Message {
+  fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    formatter.write_str(match self {
+      Self::PathChanged(_) => "PathChanged([redacted])",
+      Self::Open => "Open",
+      Self::BackendChanged => "BackendChanged",
+      Self::TogglePlaying => "TogglePlaying",
+      Self::DragSeek(_) => "DragSeek",
+      Self::CommitSeek => "CommitSeek",
+      Self::Volume(_) => "Volume",
+      Self::ToggleMuted => "ToggleMuted",
+      Self::CloseRequested(_) => "CloseRequested",
+      Self::Stopped(_) => "Stopped",
+      Self::SmokeDeadline => "SmokeDeadline",
+    })
+  }
+}
+
+fn source_presentation(source: &PlaybackSource) -> String {
+  match source {
+    PlaybackSource::Local(path) => path.to_string_lossy().into_owned(),
+    PlaybackSource::Network(source) => source.redacted_url(),
+  }
+}
+
 struct App {
   path: String,
+  selected_source: Option<PlaybackSource>,
   player: Option<Player>,
   drag_position: Option<Duration>,
   error: Option<String>,
   closing: bool,
   window: Option<window::Id>,
   smoke: bool,
+  smoke_timeout: Duration,
   failed: Arc<AtomicBool>,
 }
 impl App {
   fn boot(options: Options, failed: Arc<AtomicBool>) -> (Self, Task<Message>) {
-    let auto_open = options.file.is_some() || options.smoke;
+    let auto_open = options.source.is_some() || options.smoke;
+    let smoke_timeout = Duration::from_secs(
+      if matches!(&options.source, Some(PlaybackSource::Network(_))) {
+        45
+      } else {
+        10
+      },
+    );
     let mut app = Self {
-      path: options.file.unwrap_or_else(|| DEFAULT_FILE.into()),
+      path: options
+        .source
+        .as_ref()
+        .map_or_else(|| DEFAULT_FILE.into(), source_presentation),
+      selected_source: options.source,
       player: None,
       drag_position: None,
       error: None,
       closing: false,
       window: None,
       smoke: options.smoke,
+      smoke_timeout,
       failed,
     };
     let audio = if options.smoke {
@@ -100,7 +153,7 @@ impl App {
     let notifications = Task::run(notifications, |()| Message::BackendChanged);
     let deadline = if options.smoke {
       Task::perform(
-        async { tokio::time::sleep(Duration::from_secs(10)).await },
+        async move { tokio::time::sleep(smoke_timeout).await },
         |()| Message::SmokeDeadline,
       )
     } else {
@@ -151,6 +204,15 @@ impl App {
         .as_ref()
         .is_some_and(|player| player.status().can_seek())
   }
+  fn seek_bounds(&self) -> Option<(f64, f64)> {
+    if !self.can_seek() {
+      return None;
+    }
+    let range = self.player.as_ref()?.status().seek_range?;
+    let start = range.start.as_secs_f64();
+    let end = range.end?.as_secs_f64();
+    (end > start).then_some((start, end))
+  }
   fn update(&mut self, message: Message) -> Task<Message> {
     if let Message::Stopped(result) = message {
       if let Err(error) = result {
@@ -170,16 +232,48 @@ impl App {
         self.window = Some(id);
         return self.close();
       }
-      Message::PathChanged(path) => self.path = path,
+      Message::PathChanged(path) => {
+        // Any edit invalidates the retained credentials, even if the text later matches.
+        self.selected_source = None;
+        self.path = path;
+      }
       Message::Open => {
         if self.path.trim().is_empty() {
-          self.error = Some("请输入本地视频路径".into());
+          self.error = Some("请输入本地视频路径或 HTTP(S) URL".into());
           return Task::none();
         }
         self.drag_position = None;
         self.error = None;
-        let path = self.path.clone();
-        self.command(|player| player.open(path));
+        let source = if let Some(source) = &self.selected_source {
+          source.clone()
+        } else {
+          let network = self
+            .path
+            .get(..7)
+            .is_some_and(|prefix| prefix.eq_ignore_ascii_case("http://"))
+            || self
+              .path
+              .get(..8)
+              .is_some_and(|prefix| prefix.eq_ignore_ascii_case("https://"));
+          if network {
+            match NetworkSource::new(&self.path) {
+              Ok(source) => PlaybackSource::Network(source),
+              Err(error) => {
+                self.report(error.to_string(), self.smoke);
+                return if self.smoke {
+                  self.close()
+                } else {
+                  Task::none()
+                };
+              }
+            }
+          } else {
+            PlaybackSource::Local(self.path.clone().into())
+          }
+        };
+        self.path = source_presentation(&source);
+        self.selected_source = Some(source.clone());
+        self.command(|player| player.open(source));
       }
       Message::BackendChanged => {
         if let Some(player) = &mut self.player {
@@ -219,14 +313,8 @@ impl App {
         self.command(|player| player.set_playing(!player.status().playing));
       }
       Message::DragSeek(seconds) if self.can_seek() && seconds.is_finite() => {
-        if let Some(duration) = self
-          .player
-          .as_ref()
-          .and_then(|player| player.status().duration)
-        {
-          self.drag_position = Some(Duration::from_secs_f64(
-            seconds.clamp(0.0, duration.as_secs_f64()),
-          ));
+        if let Some((start, end)) = self.seek_bounds() {
+          self.drag_position = Some(Duration::from_secs_f64(seconds.clamp(start, end)));
         }
       }
       Message::CommitSeek if self.can_seek() => {
@@ -243,7 +331,10 @@ impl App {
       }
       Message::SmokeDeadline if self.smoke => {
         self.report(
-          "Smoke timed out: no video frame uploaded within 10 seconds".into(),
+          format!(
+            "Smoke timed out: no video frame uploaded within {} seconds",
+            self.smoke_timeout.as_secs()
+          ),
           true,
         );
         return self.close();
@@ -268,7 +359,7 @@ impl App {
     let muted = status.is_some_and(|status| status.muted);
     let duration = status.and_then(|status| status.duration);
     let spacing = TOKENS.spacing.s3;
-    let path = text_input("本地视频文件路径", &self.path)
+    let path = text_input("本地视频路径或 HTTP(S) URL", &self.path)
       .padding(spacing)
       .style(|theme, status| field_variant(theme, status, FieldVariant::Filled));
     let path = if self.closing {
@@ -279,12 +370,12 @@ impl App {
     let open = control_button(None, Some("打开".into()), ButtonVariant::Primary)
       .on_press_maybe((!self.closing).then_some(Message::Open));
     let label = match phase {
-      PlaybackPhase::Idle => "输入本地视频路径并打开",
+      PlaybackPhase::Idle => "输入本地视频路径或 HTTP(S) URL 并打开",
       PlaybackPhase::Loading => "加载中",
       PlaybackPhase::Playing => "正在播放",
       PlaybackPhase::Paused => "已暂停",
       PlaybackPhase::Ended => "播放结束",
-      PlaybackPhase::Error => "播放错误，可打开其他文件",
+      PlaybackPhase::Error => "播放错误，可打开其他来源",
       PlaybackPhase::Closing => "正在停止播放",
     };
     let video: Element<'_, Message> = match &self.player {
@@ -298,6 +389,10 @@ impl App {
     } else {
       "播放"
     };
+    let label = status.and_then(|status| status.buffering).map_or_else(
+      || label.to_owned(),
+      |percent| format!("{label} · 缓冲 {percent}%"),
+    );
     let transport = container(
       row![
         control_button(None, Some(play_label.into()), ButtonVariant::Tonal)
@@ -322,11 +417,12 @@ impl App {
     let position = self
       .drag_position
       .or(status.and_then(|status| status.position));
-    let timeline: Element<'_, Message> = if self.can_seek() {
-      let end = duration.map_or(1.0, |d| d.as_secs_f64());
+    let timeline: Element<'_, Message> = if let Some((start, end)) = self.seek_bounds() {
       slider(
-        0.0..=end,
-        position.map_or(0.0, |d| d.as_secs_f64()).min(end),
+        start..=end,
+        position
+          .map_or(start, |d| d.as_secs_f64())
+          .clamp(start, end),
         Message::DragSeek,
       )
       .step(0.01)

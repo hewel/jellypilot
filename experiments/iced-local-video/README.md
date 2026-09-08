@@ -1,6 +1,6 @@
-# 本地视频实验 / Local video experiment
+# 视频播放实验 / Video playback experiment
 
-Standalone Linux-first demo of the reusable `jellypilot-player` library: GStreamer decodes a local video and synchronized audio; a CPU-readable RGBA sample is uploaded through the pinned iced fork's custom shader seam. The demo remains disposable. Library reuse is **not** a production Playback Session or approval to embed playback in JellyPilot. Production continues to use External MPV Playback.
+Standalone Linux-first demo of the reusable `jellypilot-player` library: GStreamer decodes local files or controlled HTTP(S)/HLS sources with synchronized audio; a CPU-readable RGBA sample is uploaded through the pinned iced fork's custom shader seam. The demo remains disposable. Library reuse is **not** a production Playback Session or approval to embed playback in JellyPilot. Production continues to use External MPV Playback.
 
 ## Isolation and decisions
 
@@ -9,15 +9,16 @@ Standalone Linux-first demo of the reusable `jellypilot-player` library: GStream
 - GStreamer core/app/video bindings pinned to 0.25.2, native floor 1.28. `gstreamer-base` is additionally constrained to 0.25.2: actual resolution selected 0.25.3, which failed compilation because it references `gst::pad_panic_to_error!`, absent from pinned core 0.25.2.
 - `iced_video_player` 0.6.0 was not used: its iced 0.14/wgpu 27 types are incompatible with this fork's iced 0.15.0-dev/wgpu 29. The small appsink → CPU → texture architecture is retained, not its NV12 shader or playback abstraction.
 - One OS worker owns playbin3, bus and appsink. Control messages are serialized; one latest-frame slot plus a two-buffer leaky appsink queue bounds frame retention. UI notifications coalesce independently from retained state/errors.
-- No network playback, file picker dependency, subtitles, visualization, playlist, persistence, external-player fallback, webview, native child video window, HDR guarantee, or zero-copy/hardware-decoding guarantee.
+- No file picker dependency, subtitles, product playlist/queue, persistence, external-player fallback, webview, native child video window, HDR guarantee, or zero-copy/hardware-decoding guarantee. Network support and its deliberately restricted HLS subset are described below.
 
 ## Layout and reuse boundary
 
-- `crates/jellypilot-player/src/lib.rs`: public `Player`, `Status`, `AudioOutput`, `PlaybackPhase` and `PlaybackError` interface, with its usage contract in rustdoc.
+- `crates/jellypilot-player/src/lib.rs`: public `Player`, `PlaybackSource`, `NetworkSource`, `NetworkTimeouts`, `SeekRange`, `Status`, `AudioOutput`, `PlaybackPhase` and `PlaybackError` interface, with its usage contract in rustdoc.
 - `crates/jellypilot-player/src/{playback.rs,video.rs,video.wgsl}`: private worker/pipeline, frame handoff and renderer implementation; backend and rendering regressions live beside that implementation.
-- `experiments/iced-local-video/src/main.rs`: demo boot/update/view, CLI, path input, transport controls, drag preview, window shutdown and smoke orchestration. The demo uses a path dependency on the library and belongs to the isolated workspace via `workspace = "../../crates/jellypilot-player"`.
+- `crates/jellypilot-player/src/{source.rs,transport.rs}`: validated private request credentials and a session-scoped loopback relay; HTTP seam and real decoder regressions cover network behavior.
+- `experiments/iced-local-video/src/main.rs`: demo boot/update/view, CLI, source input, transport controls, drag preview, window shutdown and smoke orchestration. The demo uses a path dependency on the library and belongs to the isolated workspace via `workspace = "../../crates/jellypilot-player"`.
 
-A caller creates `Player::new(AudioOutput::System)` and consumes the returned wake stream with `iced::Task::run`, calling `refresh` on each notification. Read `status()` for observed phase, playing intent, position/duration, seekability, volume/mute, pending open/seek and errors; use `ready()` / `can_seek()` to gate controls. Submit open, play/pause, seek, volume and mute through `Player` methods. Immediate command/refresh failures are `Result` errors; asynchronous open/seek failures appear in `Status::error`.
+A caller creates `Player::new(AudioOutput::System)` and consumes the returned wake stream with `iced::Task::run`, calling `refresh` on each notification. Open an explicit `PlaybackSource::Local(path)` or `PlaybackSource::Network(source)`. Read `status()` for observed phase, playing intent, position/duration, finite seek window, buffering percentage, volume/mute, pending open/seek and errors; use `ready()` / `can_seek()` to gate controls. Submit open, play/pause, seek, volume and mute through `Player` methods. Immediate command/refresh failures are `Result` errors; asynchronous open/seek failures appear in `Status::error`.
 
 Compose `Player::view()` inside the caller's own layout, Canvas and transport overlay. Request/seek generations, sample slots, GStreamer/GPU types and worker ownership remain private; callers do not allocate tokens or manage renderer resources. The library does not impose window chrome, transport controls, persistence or a product playback session.
 
@@ -27,13 +28,15 @@ On shutdown, call `Player::close()` and **execute its returned iced task before 
 
 Rust 1.98+, Bun, and GStreamer **1.28+** development/runtime packages are required for this isolated library/demo workspace, including its checks and tests; the library is not a native-dependency-free facade. Bindings do not install native libraries. On Arch Linux the relevant packages are `gstreamer`, `gst-plugins-base`, `gst-plugins-good`, `gst-plugins-bad`, `gst-plugins-ugly`, and `gst-libav`; package installation is a human/system-administration action. Other distributions need equivalent development packages and plugin packages. This promotion does not add GStreamer to the production workspace dependency graph.
 
-Required playback elements: `playbin3`, `videoconvert`, `appsink`, `autoaudiosink`, an MP4 demuxer and H.264/AAC decoders. Self-contained lifecycle tests additionally require `videotestsrc`, `vp8enc`, `webmmux`, `vp8dec`, and `fakesink`.
+Required playback elements: `playbin3`, `videoconvert`, `appsink`, `autoaudiosink`, an MP4 demuxer and H.264/AAC decoders. HTTP/HLS additionally needs `souphttpsrc` and `hlsdemux2`. Self-contained lifecycle tests require `videotestsrc`, `vp8enc`, `webmmux`, `vp8dec`, and `fakesink`; HLS tests also require `x264enc`, `h264parse`, and `mpegtsmux`.
 
 Run from the repository root:
 
 ```sh
 bun run task iced local-video run
 bun run task iced local-video run --file test-videos/bbb_h264_aac_1080p.mp4
+# Supply JELLYPILOT_VIDEO_URL privately in the environment, not in shell history.
+bun run task iced local-video run --url-env
 bun run task iced local-video check
 bun run task iced local-video test
 bun run task iced local-video clippy
@@ -43,9 +46,32 @@ xvfb-run -a bun run task iced local-video run --smoke --file test-videos/bbb_h26
 
 `run --release` is optional. `--file` is one argv element: quote paths containing spaces, Chinese characters or `#`. A missing action or unsupported option is rejected by the dispatcher. `test` accepts one optional test-name filter, not arbitrary cargo options. Never run cargo directly in this repository.
 
+`--url-env` reads `JELLYPILOT_VIDEO_URL` in the demo without putting its value in Bun/cargo arguments or command diagnostics. `--url <url>` is available for non-secret examples, but the original caller argv, Bun echo and shell history expose that value even though the dispatcher hands it to cargo through the environment. Do not put real tokens in `--url`, shared terminal recordings or native verbose debug logs. Environment handoff is not isolation from other processes with the same user's privileges.
+
 Every `iced local-video` action uses `--manifest-path crates/jellypilot-player/Cargo.toml`. `run` selects only `jellypilot-local-video`; `check`, `test`, `clippy` and `fmt` explicitly select **both** `jellypilot-player` and `jellypilot-local-video`, so moving implementation/tests into the library cannot silently remove them from the gate. Check/clippy retain `--all-targets`, clippy denies warnings, and the optional test filter applies to both packages. Non-format actions retain `--target-dir target/iced-local-video`; fmt has no target directory. Formal `iced run` / `iced hot` and root Rust command scope are unchanged.
 
-Normal run uses real `autoaudiosink`; unattended smoke uses synchronized `fakesink` and **does not validate audible output**. Smoke must wait for a decoded frame's shader upload, then stop/join/close; startup alone is not success. Smoke errors and ten-second upload timeout must exit nonzero.
+Normal run uses real `autoaudiosink`; unattended smoke uses synchronized `fakesink` and **does not validate audible output**. Smoke must wait for a decoded frame's shader upload, then stop/join/close; startup alone is not success. Smoke errors and upload timeout (10 seconds for local sources, 45 seconds for network sources) must exit nonzero.
+
+## Network source contract
+
+Build a `NetworkSource::new(url)?`, optionally add caller-selected credentials with `.with_header("Authorization", bearer_value)?`, and pass it to `Player::open(PlaybackSource::Network(source))`. Header values and full URLs are omitted from public Debug/error output; the demo displays only the origin, because paths can also contain credentials. Jellyfin/Emby source selection, `RequiredHttpHeaders`, transcode/opening lifecycles and progress reporting remain outside this generic player and are **not integrated into the production app**.
+
+- Each open owns an ephemeral loopback listener and random 256-bit route capability. GStreamer sees relay URLs; the relay owns upstream requests, TLS verification, caller headers, Range transfers and HLS URI rewriting. Stop/replacement cancels requests and joins the session; no proxy inheritance, retries, media cache, transcoding or player fallback is added.
+- Every redirect and child resource must match the original scheme, hostname and effective port. Cross-origin CDN redirects and HTTPS downgrade fail closed. Decoder cookies are not forwarded and upstream `Set-Cookie` is not exposed to the decoder. HLS relative references resolve against the final redirected playlist URL; existing child queries are preserved, but parent query tokens are **not** inherited automatically. Header-authenticated HLS supplies the same selected headers to each same-origin child.
+- Ordinary HLS VOD is exercised end to end. The strict tag/attribute subset rewrites variants, alternate media, segments, maps and identity AES-128 key URIs; GStreamer owns decryption. DASH/XML, variable substitution, content steering, DRM/non-identity encryption and unknown loading forms are rejected. LL-HLS delivery directives (`EXT-X-SERVER-CONTROL`) and delta playlists (`EXT-X-SKIP`) are rejected before decoding, not advertised and then allowed to fail on reload.
+- Limits: 1 MiB incoming playlist, 4 MiB rewritten playlist, 32 active connections, five redirects. Raw media entry points require a recognized binary signature; an arbitrary nonzero Range offset may require a bounded beginning-of-resource probe. Media-segment routes can carry opaque encrypted bytes.
+- `NetworkTimeouts` configures connect/read/startup/seek deadlines (defaults 10/15/30/15 seconds; each must be nonzero and at most 300 seconds). Read is an idle-network deadline, not a minimum video-frame-rate watchdog. Buffering preserves play intent; user pause is not undone when buffering ends, and live buffering does not auto-pause the pipeline. Seeking requires an observed finite seek window; unknown duration is not invented.
+
+### Network verification
+
+Verified on Linux with GStreamer 1.28.6:
+
+- **28 player/relay regressions and one compiled rustdoc example** passed, including authenticated HTTP Range/paused seek, authenticated HLS segment decoding/paused seek, cross-origin denial, read timeout, cancellation while stalled, error recovery, redaction and buffering transitions. Player/demo clippy passed.
+- `bun run check` passed, including **21 script tests**. The production workspace suite passed **955 tests, one ignored**.
+- Native headless HTTP H.264/AAC and signed HLS smokes decoded 1920×1080 RGBA, uploaded frames through wgpu, joined and exited **0**. The denied cross-origin redirect smoke exited **1** with a sanitized origin error. Captured stdout/stderr for all three `--url-env` runs contained neither the synthetic token nor its query key.
+- Independent read-only reviews covered relay security and player/demo lifecycle. The advertised-but-unsupported HLS reload finding was corrected and rechecked; its HTTP regression failed before the fix and passed afterward.
+
+This is not real Jellyfin/Emby server acceptance, TLS/certificate-failure coverage, encrypted-playback acceptance, sustained resource measurement or human visual/audio acceptance. For the human network check: play a real server URL, confirm audio/video synchronization, pause and seek, resume, observe buffering during an actual interruption, replace the source, and close while loading. Verify errors reveal no token and unknown/unbounded seek windows do not expose a working timeline slider.
 
 ## Real acceptance media
 
@@ -132,6 +158,6 @@ The nine-format matrix above remains pre-promotion evidence; this promotion rera
 
 ## Using the window
 
-Without `--file`, the short H.264 path is prefilled but does not auto-open. Edit the path and press Enter or **打开** to open/replace. The transport card overlays the image; the bottom slider previews time while dragging and commits on release. Unknown duration is `--:--` and has no interactive seek control. Opening invalid paths preserves the current video; valid but undecodable media stops the old pipeline and reports a recoverable error. Volume/mute persist only during this experiment run. Window close disables interaction and joins the stopping worker on a blocking task before closing the native window.
+Without an explicit source option, the short H.264 path is prefilled but does not auto-open. Enter a local path or HTTP(S) URL and press Enter or **打开** to open/replace. An accepted network URL is displayed as origin only; the validated full source remains private until replacement. The transport card overlays the image; the bottom slider previews time while dragging and commits on release within an observed finite seek window. Unknown duration is `--:--`; an unknown/unbounded seek window has no interactive seek control. Invalid source syntax preserves the current video; a valid but unreadable/undecodable source stops the old pipeline and reports a recoverable error. Volume/mute persist only during this experiment run. Window close disables interaction and joins the stopping worker on a blocking task before closing the native window.
 
-Native tests on Unix also use the standard `mkfifo` utility for the non-regular-file regression. A file replaced concurrently between filesystem validation and GStreamer opening is not treated as a hostile-input security boundary. This is a disposable local experiment, not a sandbox for untrusted media.
+Native tests on Unix also use the standard `mkfifo` utility for the non-regular-file regression. A file replaced concurrently between filesystem validation and GStreamer opening is not treated as a hostile-input security boundary. The relay restricts network requests; it is not a sandbox for native codecs or a substitute for trusting the selected media origin.

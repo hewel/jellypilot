@@ -1,3 +1,4 @@
+use crate::{transport::NetworkSession, NetworkTimeouts, PlaybackSource, SeekRange};
 use gst::prelude::*;
 use gstreamer as gst;
 use gstreamer_app as gst_app;
@@ -32,6 +33,11 @@ pub enum PlaybackError {
   Frame(String),
   #[error("Playback worker: {0}")]
   Worker(String),
+  #[error("Network {operation}: {reason}")]
+  Network {
+    operation: &'static str,
+    reason: String,
+  },
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -87,6 +93,8 @@ pub struct Snapshot {
   pub position: Option<Duration>,
   pub duration: Option<Duration>,
   pub seekable: bool,
+  pub seek_range: Option<SeekRange>,
+  pub buffering: Option<u8>,
   pub frames: Arc<FrameSlot>,
   pub open_result: Option<(u64, Result<(), PlaybackError>)>,
   pub seek_result: Option<(u64, Result<(), PlaybackError>)>,
@@ -104,6 +112,8 @@ impl Default for Snapshot {
       position: None,
       duration: None,
       seekable: false,
+      seek_range: None,
+      buffering: None,
       frames: Arc::default(),
       open_result: None,
       seek_result: None,
@@ -118,7 +128,7 @@ impl Default for Snapshot {
 pub enum Command {
   Open {
     generation: u64,
-    path: PathBuf,
+    source: PlaybackSource,
   },
   SetPlaying {
     generation: u64,
@@ -224,6 +234,10 @@ struct Current {
   waiting: Option<Instant>,
   observed: gst::State,
   buffering: bool,
+  live: bool,
+  network: Option<NetworkSession>,
+  timeouts: NetworkTimeouts,
+  wait_timeout: Duration,
 }
 struct Worker {
   receiver: mpsc::Receiver<Command>,
@@ -258,14 +272,23 @@ impl Worker {
     Ok(())
   }
   fn stop(&mut self) -> Result<(), PlaybackError> {
-    if let Some(current) = self.current.take() {
-      let result = current
+    if let Some(mut current) = self.current.take() {
+      // Cancel upstream reads first: Null must not wait for a stalled network body.
+      if let Some(network) = &current.network {
+        network.cancel();
+      }
+      let stopped = current
         .pipeline
         .set_state(gst::State::Null)
         .map_err(|e| control("stop", e));
-      self.state.frames.replace(None)?;
-      result?;
+      let joined = current
+        .network
+        .take()
+        .map_or(Ok(()), NetworkSession::shutdown);
+      let cleared = self.state.frames.replace(None).map(|_| ());
+      stopped.and(joined).and(cleared)?;
     }
+    self.state.buffering = None;
     Ok(())
   }
   fn fail(&mut self, error: PlaybackError) -> Result<(), PlaybackError> {
@@ -274,6 +297,7 @@ impl Worker {
     self.state.phase = PlaybackPhase::Error;
     self.state.playing = false;
     self.state.seekable = false;
+    self.state.seek_range = None;
     self.state.error = Some(error);
     if let Err(error) = stopped {
       self.state.error = Some(error);
@@ -323,7 +347,7 @@ impl Worker {
         self.publish()?;
         return Ok(false);
       }
-      Command::Open { generation, path } => self.open(generation, path)?,
+      Command::Open { generation, source } => self.open(generation, source)?,
       Command::SetVolume(volume) => {
         if volume.is_finite() {
           self.volume = volume.clamp(0.0, 1.0);
@@ -353,11 +377,14 @@ impl Worker {
           }
           self.state.playing = playing;
           if let Some(c) = &self.current {
-            if let Err(error) = c.pipeline.set_state(if playing && !c.buffering {
-              gst::State::Playing
-            } else {
-              gst::State::Paused
-            }) {
+            if let Err(error) = c
+              .pipeline
+              .set_state(if playing && (!c.buffering || c.live) {
+                gst::State::Playing
+              } else {
+                gst::State::Paused
+              })
+            {
               self.fail(control("play/pause", error))?;
             }
           }
@@ -387,22 +414,41 @@ impl Worker {
     }
     Ok(true)
   }
-  fn open(&mut self, generation: u64, path: PathBuf) -> Result<(), PlaybackError> {
-    let validated = (|| {
-      let canonical = path.canonicalize().map_err(|e| e.to_string())?;
-      if !canonical.metadata().map_err(|e| e.to_string())?.is_file() {
-        return Err("not a regular local file".into());
+  fn open(&mut self, generation: u64, source: PlaybackSource) -> Result<(), PlaybackError> {
+    let prepared = (|| match source {
+      PlaybackSource::Local(path) => {
+        let uri = (|| {
+          let canonical = path.canonicalize().map_err(|e| e.to_string())?;
+          if !canonical.metadata().map_err(|e| e.to_string())?.is_file() {
+            return Err("not a regular local file".into());
+          }
+          let file = File::open(&canonical).map_err(|e| e.to_string())?;
+          if !file.metadata().map_err(|e| e.to_string())?.is_file() {
+            return Err("not a regular local file".into());
+          }
+          url::Url::from_file_path(canonical).map_err(|()| "cannot construct local file URI".into())
+        })()
+        .map_err(|reason| PlaybackError::Open { path, reason })?;
+        Ok((
+          uri.to_string(),
+          None,
+          NetworkTimeouts {
+            startup: Duration::from_secs(10),
+            seek: Duration::from_secs(10),
+            ..NetworkTimeouts::default()
+          },
+        ))
       }
-      let file = File::open(&canonical).map_err(|e| e.to_string())?;
-      if !file.metadata().map_err(|e| e.to_string())?.is_file() {
-        return Err("not a regular local file".into());
+      PlaybackSource::Network(source) => {
+        let timeouts = source.timeouts();
+        let network = NetworkSession::start(source)?;
+        Ok((network.uri().to_owned(), Some(network), timeouts))
       }
-      url::Url::from_file_path(canonical).map_err(|()| "cannot construct local file URI".into())
     })();
-    let uri = match validated {
-      Ok(uri) => uri,
-      Err(reason) => {
-        self.state.open_result = Some((generation, Err(PlaybackError::Open { path, reason })));
+    let (uri, network, timeouts) = match prepared {
+      Ok(prepared) => prepared,
+      Err(error) => {
+        self.state.open_result = Some((generation, Err(error)));
         return self.publish();
       }
     };
@@ -421,12 +467,20 @@ impl Worker {
       ..Snapshot::default()
     };
     self.publish()?;
-    match self.build(uri.as_str()) {
-      Ok(current) => {
+    match self.build(&uri) {
+      Ok(mut current) => {
+        current.network = network;
+        current.timeouts = timeouts;
+        current.wait_timeout = timeouts.startup;
         self.current = Some(current);
         self.last_query = Instant::now() - Duration::from_secs(1);
       }
-      Err(error) => self.fail(error)?,
+      Err(error) => {
+        if let Some(network) = network {
+          network.shutdown()?;
+        }
+        self.fail(error)?;
+      }
     }
     Ok(())
   }
@@ -485,12 +539,15 @@ impl Worker {
     let bus = pipeline
       .bus()
       .ok_or_else(|| control("create", "missing bus"))?;
-    if let Err(error) = pipeline.set_state(gst::State::Playing) {
-      pipeline
-        .set_state(gst::State::Null)
-        .map_err(|e| control("stop failed startup", e))?;
-      return Err(control("open playback", error));
-    }
+    let transition = match pipeline.set_state(gst::State::Playing) {
+      Ok(transition) => transition,
+      Err(error) => {
+        pipeline
+          .set_state(gst::State::Null)
+          .map_err(|e| control("stop failed startup", e))?;
+        return Err(control("open playback", error));
+      }
+    };
     Ok(Current {
       pipeline,
       sink,
@@ -498,6 +555,14 @@ impl Worker {
       waiting: Some(Instant::now()),
       observed: gst::State::Null,
       buffering: false,
+      live: transition == gst::StateChangeSuccess::NoPreroll,
+      network: None,
+      timeouts: NetworkTimeouts {
+        startup: Duration::from_secs(10),
+        seek: Duration::from_secs(10),
+        ..NetworkTimeouts::default()
+      },
+      wait_timeout: Duration::from_secs(10),
     })
   }
   fn seek(&mut self, seek_generation: u64, position: Duration) -> Result<bool, PlaybackError> {
@@ -507,10 +572,18 @@ impl Worker {
     if seek_generation <= self.state.token.seek_generation {
       return Ok(false);
     }
-    let position = self
+    let Some(position) = self
       .state
-      .duration
-      .map_or(position, |duration| position.min(duration));
+      .seek_range
+      .and_then(|range| range.clamp(position))
+    else {
+      self.state.seek_result = Some((
+        seek_generation,
+        Err(control("seek", "no finite seek window is available")),
+      ));
+      self.publish()?;
+      return Ok(false);
+    };
     let old = self.state.frames.replace(None)?;
     // No second producer: flushing seek and sample extraction run on this thread.
     let result = u64::try_from(position.as_nanos())
@@ -537,11 +610,12 @@ impl Worker {
       self.state.phase = PlaybackPhase::Paused;
     }
     current.waiting = Some(Instant::now());
+    current.wait_timeout = current.timeouts.seek;
     self.publish()?;
     Ok(true)
   }
   fn query(&mut self) {
-    if let Some(current) = &self.current {
+    if let Some(current) = &mut self.current {
       if self.state.phase != PlaybackPhase::Ended {
         self.state.position = current
           .pipeline
@@ -555,12 +629,36 @@ impl Worker {
         .map(|v| Duration::from_nanos(v.nseconds()));
       let mut seeking = gst::query::Seeking::new(gst::Format::Time);
       self.state.seekable = current.pipeline.query(&mut seeking) && seeking.result().0;
+      self.state.seek_range = match seeking.result() {
+        (
+          true,
+          gst::GenericFormattedValue::Time(Some(start)),
+          gst::GenericFormattedValue::Time(end),
+        ) => Some(SeekRange {
+          start: Duration::from_nanos(start.nseconds()),
+          end: end.map(|end| Duration::from_nanos(end.nseconds())),
+        }),
+        _ => None,
+      };
+      // Latency queries describe the sink's scheduling too, not just a live source.
+      current.live |= matches!(
+        current.pipeline.state(gst::ClockTime::ZERO).0,
+        Ok(gst::StateChangeSuccess::NoPreroll)
+      );
       self.state.queue_depth = current.sink.current_level_buffers();
       self.state.dropped = current.sink.dropped();
       self.last_query = Instant::now();
     }
   }
   fn poll(&mut self) -> Result<(), PlaybackError> {
+    if let Some(error) = self
+      .current
+      .as_ref()
+      .and_then(|current| current.network.as_ref())
+      .and_then(NetworkSession::error)
+    {
+      return Err(error);
+    }
     let mut changed = false;
     loop {
       let Some(message) = self.current.as_ref().and_then(|c| c.bus.pop()) else {
@@ -568,19 +666,36 @@ impl Worker {
       };
       match message.view() {
         gst::MessageView::Error(error) => {
+          if let Some(network) = self
+            .current
+            .as_ref()
+            .and_then(|current| current.network.as_ref())
+          {
+            // Native debug strings may include token-bearing upstream or relay URLs.
+            // Transport failures carry their own sanitized, actionable diagnostics.
+            return Err(network.error().unwrap_or_else(|| PlaybackError::Network {
+              operation: "decode",
+              reason: format!(
+                "GStreamer failed in {:?} (code {})",
+                error.error().domain(),
+                error.error().code()
+              ),
+            }));
+          }
           return Err(PlaybackError::Pipeline {
             element: error
               .src()
               .map_or_else(|| "pipeline".into(), |s| s.path_string().to_string()),
             message: error.error().to_string(),
             debug: error.debug().map(|s| s.to_string()),
-          })
+          });
         }
         gst::MessageView::Eos(_) => {
           self.query();
           self.state.phase = PlaybackPhase::Ended;
           self.state.playing = false;
           self.state.position = self.state.duration.or(self.state.position);
+          self.state.buffering = None;
           if let Some(c) = &mut self.current {
             c.waiting = None;
             c.pipeline
@@ -615,14 +730,19 @@ impl Worker {
         }
         gst::MessageView::Buffering(buffer) => {
           if let Some(c) = &mut self.current {
+            c.live |= buffer.buffering_stats().0 == gst::BufferingMode::Live;
             c.buffering = buffer.percent() < 100;
-            c.pipeline
-              .set_state(if self.state.playing && !c.buffering {
-                gst::State::Playing
-              } else {
-                gst::State::Paused
-              })
-              .map_err(|e| control("buffering", e))?;
+            self.state.buffering = c.buffering.then_some(buffer.percent().clamp(0, 99) as u8);
+            changed = true;
+            if !c.live {
+              c.pipeline
+                .set_state(if self.state.playing && !c.buffering {
+                  gst::State::Playing
+                } else {
+                  gst::State::Paused
+                })
+                .map_err(|e| control("buffering", e))?;
+            }
           }
         }
         _ => {}
@@ -662,11 +782,14 @@ impl Worker {
       }
       if c
         .waiting
-        .is_some_and(|start| start.elapsed() >= Duration::from_secs(10))
+        .is_some_and(|start| start.elapsed() >= c.wait_timeout)
       {
         return Err(control(
           "load/seek",
-          "timed out waiting for a video frame (10 seconds)",
+          format!(
+            "timed out waiting for a video frame ({} seconds)",
+            c.wait_timeout.as_secs_f64()
+          ),
         ));
       }
       if !matches!(
@@ -674,7 +797,7 @@ impl Worker {
         PlaybackPhase::Ended | PlaybackPhase::Error
       ) && self.state.frames.latest(self.state.token)?.is_some()
       {
-        let phase = if c.observed == gst::State::Playing {
+        let phase = if c.buffering && self.state.playing || c.observed == gst::State::Playing {
           PlaybackPhase::Playing
         } else if c.observed == gst::State::Paused {
           PlaybackPhase::Paused
@@ -847,7 +970,7 @@ pub(crate) mod tests {
     backend
       .send(Command::Open {
         generation: 1,
-        path: path.clone(),
+        source: PlaybackSource::Local(path.clone()),
       })
       .expect("open fixture");
     let playing = wait_for(
@@ -926,7 +1049,7 @@ pub(crate) mod tests {
     backend
       .send(Command::Open {
         generation: 2,
-        path: directory.path().join("missing.webm"),
+        source: PlaybackSource::Local(directory.path().join("missing.webm")),
       })
       .expect("open missing file");
     let rejected = wait_for(
@@ -949,7 +1072,7 @@ pub(crate) mod tests {
     backend
       .send(Command::Open {
         generation: 3,
-        path: damaged,
+        source: PlaybackSource::Local(damaged),
       })
       .expect("open damaged file");
     let failed = wait_for(
@@ -970,7 +1093,7 @@ pub(crate) mod tests {
     backend
       .send(Command::Open {
         generation: 4,
-        path,
+        source: PlaybackSource::Local(path),
       })
       .expect("recover with valid file");
     // The previous Error snapshot may still be current until Open is accepted.
@@ -1037,7 +1160,7 @@ pub(crate) mod tests {
       .backend
       .send(Command::Open {
         generation: 1,
-        path,
+        source: PlaybackSource::Local(path),
       })
       .expect("open fixture");
     let playing = wait_for(
@@ -1063,7 +1186,7 @@ pub(crate) mod tests {
     backend
       .send(Command::Open {
         generation: 1,
-        path,
+        source: PlaybackSource::Local(path),
       })
       .unwrap();
     wait_for(&runtime, backend, &mut notifications, "EOS", |s| {
@@ -1120,7 +1243,7 @@ pub(crate) mod tests {
       .backend
       .send(Command::Open {
         generation: 1,
-        path: fifo,
+        source: PlaybackSource::Local(fifo),
       })
       .unwrap();
     let rejected = wait_for(
@@ -1158,7 +1281,7 @@ pub(crate) mod tests {
     worker
       .command(Command::Open {
         generation: 1,
-        path: path.clone(),
+        source: PlaybackSource::Local(path.clone()),
       })
       .unwrap();
     let original = NullOnDrop(
@@ -1175,7 +1298,7 @@ pub(crate) mod tests {
     worker
       .command(Command::Open {
         generation: 2,
-        path: directory.path().join("missing.webm"),
+        source: PlaybackSource::Local(directory.path().join("missing.webm")),
       })
       .unwrap();
     assert_eq!(
@@ -1188,7 +1311,7 @@ pub(crate) mod tests {
     worker
       .command(Command::Open {
         generation: 3,
-        path: damaged,
+        source: PlaybackSource::Local(damaged),
       })
       .unwrap();
     assert_eq!(
@@ -1199,7 +1322,7 @@ pub(crate) mod tests {
     worker
       .command(Command::Open {
         generation: 4,
-        path,
+        source: PlaybackSource::Local(path),
       })
       .unwrap();
     let replacement = NullOnDrop(
@@ -1229,6 +1352,118 @@ pub(crate) mod tests {
       gst::State::Null,
       "shutdown left pipeline active"
     );
+  }
+
+  #[test]
+  fn buffering_preserves_play_intent_and_completion_respects_user_pause() {
+    let (_directory, path) = fixture();
+    let (_commands, receiver) = mpsc::channel();
+    let (wake, _notifications) = tokio::sync::mpsc::channel(1);
+    let mut worker = Worker {
+      receiver,
+      wake,
+      shared: Arc::new(Mutex::new(Snapshot::default())),
+      state: Snapshot::default(),
+      current: None,
+      volume: 1.0,
+      muted: false,
+      silent: true,
+      sequence: 0,
+      last_query: Instant::now(),
+    };
+    worker.open(1, PlaybackSource::Local(path)).unwrap();
+    let pipeline = NullOnDrop(worker.current.as_ref().unwrap().pipeline.clone());
+    pipeline
+      .0
+      .state(gst::ClockTime::from_seconds(15))
+      .0
+      .unwrap();
+    worker.poll().unwrap();
+    pipeline
+      .0
+      .post_message(
+        gst::message::Buffering::builder(25)
+          .src(&pipeline.0)
+          .build(),
+      )
+      .unwrap();
+    worker.poll().unwrap();
+    pipeline
+      .0
+      .state(gst::ClockTime::from_seconds(15))
+      .0
+      .unwrap();
+    worker.poll().unwrap();
+    assert_eq!(
+      pipeline.0.current_state(),
+      gst::State::Paused,
+      "live={}, buffering={:?}",
+      worker.current.as_ref().unwrap().live,
+      worker.state.buffering
+    );
+    assert!(worker.state.playing, "buffering is not a user pause");
+    assert_eq!(worker.state.buffering, Some(25));
+    assert_eq!(worker.state.phase, PlaybackPhase::Playing);
+
+    worker
+      .command(Command::SetPlaying {
+        generation: 1,
+        seek_generation: 1,
+        playing: false,
+      })
+      .unwrap();
+    pipeline
+      .0
+      .post_message(
+        gst::message::Buffering::builder(100)
+          .src(&pipeline.0)
+          .build(),
+      )
+      .unwrap();
+    worker.poll().unwrap();
+    pipeline
+      .0
+      .state(gst::ClockTime::from_seconds(15))
+      .0
+      .unwrap();
+    worker.poll().unwrap();
+    assert!(!worker.state.playing);
+    assert_eq!(worker.state.phase, PlaybackPhase::Paused);
+    assert_eq!(
+      pipeline.0.current_state(),
+      gst::State::Paused,
+      "buffer completion must not resume a user-paused stream"
+    );
+    assert_eq!(worker.state.buffering, None);
+    worker
+      .command(Command::SetPlaying {
+        generation: 1,
+        seek_generation: 2,
+        playing: true,
+      })
+      .unwrap();
+    pipeline
+      .0
+      .state(gst::ClockTime::from_seconds(15))
+      .0
+      .unwrap();
+    pipeline
+      .0
+      .post_message(
+        gst::message::Buffering::builder(25)
+          .src(&pipeline.0)
+          .stats(gst::BufferingMode::Live, -1, -1, -1)
+          .build(),
+      )
+      .unwrap();
+    worker.poll().unwrap();
+    assert_eq!(
+      pipeline.0.current_state(),
+      gst::State::Playing,
+      "a live source must not be paused to buffer"
+    );
+    assert_eq!(worker.state.buffering, Some(25));
+    worker.stop().unwrap();
   }
 
   struct TrackedBytes {

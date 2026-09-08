@@ -27,6 +27,8 @@ export type TaskCommand =
       readonly smoke: boolean;
       readonly release: boolean;
       readonly file: string | null;
+      readonly url: string | null;
+      readonly urlFromEnv: boolean;
     }
   | {
       readonly _tag: 'icedLocalVideo';
@@ -77,48 +79,57 @@ function parseLocalVideo(args: readonly string[]): TaskCommand {
     let smoke = false;
     let release = false;
     let file: string | null = null;
+    let url: string | null = null;
+    let urlFromEnv = false;
     for (let index = 0; index < rest.length; index += 1) {
       const argument = rest[index];
       if (argument === '--smoke') smoke = true;
       else if (argument === '--release') release = true;
-      else if (argument === '--file') {
-        if (file !== null) throw new Error('Duplicate iced local-video run --file.');
-        const value = rest[index + 1];
-        if (value === undefined || value.length === 0 || value.startsWith('--')) {
-          throw new Error('iced local-video run --file requires a non-empty path.');
+      else if (argument === '--file' || argument === '--url' || argument === '--url-env') {
+        if (file !== null || url !== null || urlFromEnv) {
+          throw new Error('Specify exactly one --file, --url or --url-env source.');
         }
-        file = value;
+        if (argument === '--url-env') {
+          urlFromEnv = true;
+          continue;
+        }
+        const value = rest[index + 1];
+        if (value === undefined || value.trim().length === 0 || value.startsWith('--')) {
+          throw new Error(`iced local-video run ${argument} requires a non-empty value.`);
+        }
+        if (argument === '--file') file = value;
+        else url = value;
         index += 1;
       } else if (argument !== undefined) {
-        unknownOption('iced local-video run', argument);
+        throw new Error('Unknown iced local-video run option.');
       }
     }
-    return { _tag: 'icedLocalVideo', action, smoke, release, file };
+    return { _tag: 'icedLocalVideo', action, smoke, release, file, url, urlFromEnv };
   }
   if (action === 'check' || action === 'clippy') {
-    expectNoArguments(`iced local-video ${action}`, rest);
+    if (rest.length > 0) throw new Error(`Unexpected iced local-video ${action} arguments.`);
     return { _tag: 'icedLocalVideo', action, testFilter: null };
   }
   if (action === 'test') {
     const [filter, ...extra] = rest;
     if (filter !== undefined && (filter.length === 0 || filter.startsWith('-'))) {
-      unknownOption('iced local-video test', filter);
+      throw new Error('Invalid iced local-video test filter.');
     }
-    expectNoArguments('iced local-video test', extra);
+    if (extra.length > 0) throw new Error('Unexpected iced local-video test arguments.');
     return { _tag: 'icedLocalVideo', action, testFilter: filter ?? null };
   }
   if (action === 'fmt') {
     let check = false;
     for (const argument of rest) {
       if (argument === '--check') check = true;
-      else unknownOption('iced local-video fmt', argument);
+      else throw new Error('Unknown iced local-video fmt option.');
     }
     return { _tag: 'icedLocalVideo', action, check };
   }
   throw new Error(
     action === undefined
       ? 'Missing iced local-video command.'
-      : `Unknown iced local-video command: ${action}`,
+      : 'Unknown iced local-video command.',
   );
 }
 

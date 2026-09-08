@@ -49,6 +49,7 @@ export function icedLocalVideoCommand(
       args.push('--');
       if (task.smoke) args.push('--smoke-test');
       if (task.file !== null) args.push('--file', task.file);
+      if (task.url !== null || task.urlFromEnv) args.push('--url-env');
     } else if (task.action === 'test') {
       if (task.testFilter !== null) args.push(task.testFilter);
     } else {
@@ -56,7 +57,11 @@ export function icedLocalVideoCommand(
       if (task.action === 'clippy') args.push('--', '-D', 'warnings');
     }
   }
-  return command('cargo', args);
+  return command(
+    'cargo',
+    args,
+    task.action === 'run' && task.url !== null ? { JELLYPILOT_VIDEO_URL: task.url } : undefined,
+  );
 }
 
 export const runLocalVideo = Effect.fn('task.iced.localVideo')(

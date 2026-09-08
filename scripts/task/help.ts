@@ -20,7 +20,8 @@ Application:
   iced hot                       (hot reload via cargo-hot, dev feature)
 
 Local video experiment:
-  iced local-video run [--smoke] [--release] [--file <path>]
+  iced local-video run [--smoke] [--release] [--file <path> | --url-env | --url <http(s)url>]
+    --url-env reads JELLYPILOT_VIDEO_URL; --url exposes it in caller argv/history.
   iced local-video check
   iced local-video clippy
   iced local-video test [filter]
