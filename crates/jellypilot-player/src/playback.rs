@@ -228,6 +228,7 @@ impl PlaybackWorker {
   }
 }
 struct Current {
+  dovi: crate::dovi::Capture,
   pipeline: gst::Pipeline,
   sink: gst_app::AppSink,
   bus: gst::Bus,
@@ -502,6 +503,9 @@ impl Worker {
     sink.set_property("enable-last-sample", false);
     sink.set_wait_on_eos(false);
     let convert = element("videoconvert")?;
+    // This sink performs the measured P010 -> RGBA conversion, not the decoder.
+    let conversion_threads = thread::available_parallelism().map_or(1, |n| n.get().min(4)) as u32;
+    convert.set_property("n-threads", conversion_threads);
     let bin = gst::Bin::new();
     bin
       .add_many([&convert, sink.upcast_ref()])
@@ -539,6 +543,7 @@ impl Worker {
     let bus = pipeline
       .bus()
       .ok_or_else(|| control("create", "missing bus"))?;
+    let dovi = crate::dovi::install(&pipeline, &sink);
     let transition = match pipeline.set_state(gst::State::Playing) {
       Ok(transition) => transition,
       Err(error) => {
@@ -549,6 +554,7 @@ impl Worker {
       }
     };
     Ok(Current {
+      dovi,
       pipeline,
       sink,
       bus,
@@ -651,6 +657,13 @@ impl Worker {
     }
   }
   fn poll(&mut self) -> Result<(), PlaybackError> {
+    if let Some(error) = self
+      .current
+      .as_ref()
+      .and_then(|current| current.dovi.error())
+    {
+      return Err(error);
+    }
     if let Some(error) = self
       .current
       .as_ref()

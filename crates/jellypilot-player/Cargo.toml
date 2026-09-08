@@ -11,6 +11,9 @@ members = ["../../experiments/iced-local-video"]
 resolver = "2"
 
 [dependencies]
+dolby_vision = "=3.4.0"
+bytemuck = { version = "1.25.2", features = ["derive"] }
+rayon = "1.12.0"
 iced = { git = "https://github.com/hewel/iced.git", rev = "f812ae504989444eb57d9f8669c1ab5a2e326c95", features = ["advanced", "advanced-shaping", "image", "svg", "tokio"] }
 gstreamer = { version = "=0.25.2", features = ["v1_28"] }
 gstreamer-app = { version = "=0.25.2", features = ["v1_28"] }

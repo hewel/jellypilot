@@ -1,6 +1,6 @@
 # 视频播放实验 / Video playback experiment
 
-Standalone Linux-first demo of the reusable `jellypilot-player` library: GStreamer decodes local files or controlled HTTP(S)/HLS sources with synchronized audio; a CPU-readable RGBA sample is uploaded through the pinned iced fork's custom shader seam. The demo remains disposable. Library reuse is **not** a production Playback Session or approval to embed playback in JellyPilot. Production continues to use External MPV Playback.
+Standalone Linux-first demo of the reusable `jellypilot-player` library: GStreamer decodes local files or controlled HTTP(S)/HLS sources with synchronized audio. Ordinary video uses CPU-readable RGBA; supported Dolby Vision Profile 5 uses P010 plus per-frame RPU metadata and an SDR shader through the pinned iced fork. The demo remains disposable. Library reuse is **not** a production Playback Session or approval to embed playback in JellyPilot. Production continues to use External MPV Playback.
 
 ## Isolation and decisions
 
@@ -15,6 +15,7 @@ Standalone Linux-first demo of the reusable `jellypilot-player` library: GStream
 
 - `crates/jellypilot-player/src/lib.rs`: public `Player`, `PlaybackSource`, `NetworkSource`, `NetworkTimeouts`, `SeekRange`, `Status`, `AudioOutput`, `PlaybackPhase` and `PlaybackError` interface, with its usage contract in rustdoc.
 - `crates/jellypilot-player/src/{playback.rs,video.rs,video.wgsl}`: private worker/pipeline, frame handoff and renderer implementation; backend and rendering regressions live beside that implementation.
+- `crates/jellypilot-player/src/{dovi.rs,dovi_color.rs,dovi.wgsl}`: bounded HEVC RPU capture/parsing, intrinsic frame metadata, and supported Profile 5 → SDR conversion.
 - `crates/jellypilot-player/src/{source.rs,transport.rs}`: validated private request credentials and a session-scoped loopback relay; HTTP seam and real decoder regressions cover network behavior.
 - `experiments/iced-local-video/src/main.rs`: demo boot/update/view, CLI, source input, transport controls, drag preview, window shutdown and smoke orchestration. The demo uses a path dependency on the library and belongs to the isolated workspace via `workspace = "../../crates/jellypilot-player"`.
 
@@ -41,7 +42,7 @@ bun run task iced local-video check
 bun run task iced local-video test
 bun run task iced local-video clippy
 bun run task iced local-video fmt --check
-xvfb-run -a bun run task iced local-video run --smoke --file test-videos/bbb_h264_1080p_5mb.mp4
+env -u WAYLAND_DISPLAY -u WAYLAND_SOCKET xvfb-run -a bun run task iced local-video run --smoke --file test-videos/bbb_h264_1080p_5mb.mp4
 ```
 
 `run --release` is optional. `--file` is one argv element: quote paths containing spaces, Chinese characters or `#`. A missing action or unsupported option is rejected by the dispatcher. `test` accepts one optional test-name filter, not arbitrary cargo options. Never run cargo directly in this repository.
@@ -51,6 +52,8 @@ xvfb-run -a bun run task iced local-video run --smoke --file test-videos/bbb_h26
 Every `iced local-video` action uses `--manifest-path crates/jellypilot-player/Cargo.toml`. `run` selects only `jellypilot-local-video`; `check`, `test`, `clippy` and `fmt` explicitly select **both** `jellypilot-player` and `jellypilot-local-video`, so moving implementation/tests into the library cannot silently remove them from the gate. Check/clippy retain `--all-targets`, clippy denies warnings, and the optional test filter applies to both packages. Non-format actions retain `--target-dir target/iced-local-video`; fmt has no target directory. Formal `iced run` / `iced hot` and root Rust command scope are unchanged.
 
 Normal run uses real `autoaudiosink`; unattended smoke uses synchronized `fakesink` and **does not validate audible output**. Smoke must wait for a decoded frame's shader upload, then stop/join/close; startup alone is not success. Smoke errors and upload timeout (10 seconds for local sources, 45 seconds for network sources) must exit nonzero.
+
+For actual headless verification on a Wayland desktop, unset both `WAYLAND_DISPLAY` and `WAYLAND_SOCKET` as above. winit prefers Wayland over Xvfb's `DISPLAY`; `xvfb-run` alone does not isolate the window from the desktop compositor.
 
 ## Network source contract
 
@@ -72,6 +75,33 @@ Verified on Linux with GStreamer 1.28.6:
 - Independent read-only reviews covered relay security and player/demo lifecycle. The advertised-but-unsupported HLS reload finding was corrected and rechecked; its HTTP regression failed before the fix and passed afterward.
 
 This is not real Jellyfin/Emby server acceptance, TLS/certificate-failure coverage, encrypted-playback acceptance, sustained resource measurement or human visual/audio acceptance. For the human network check: play a real server URL, confirm audio/video synchronization, pause and seek, resume, observe buffering during an actual interruption, replace the source, and close while loading. Verify errors reveal no token and unknown/unbounded seek windows do not expose a working timeline slider.
+
+## Dolby Vision Profile 5 → SDR
+
+This is a metadata-driven, explicitly bounded Profile 5 path, not generic P010 interpreted as ordinary YUV:
+
+- Capture HEVC type-62 RPU from AU-aligned Annex-B or hvc1/hev1 decoder input; parse with pinned `dolby_vision` 3.4.0. A video-tagged GStreamer CustomMeta carries the parsed RPU and resolved mapping through native decoder reordering to its own decoded frame. No unbounded timestamp map or previous-frame display-metadata substitution is used.
+- Flush, stream and caps transitions clear reusable mapping state. Decoded PTS must match the encoded AU or its exact segment-clipped interval after accurate seek. Missing required metadata, stale mapping references, unsupported profiles/variants and invalid layouts fail explicitly rather than displaying a guessed color conversion.
+- Preserve two-plane `P010_10LE`; apply current-frame reshape curves, fixed-point matrices/offsets and PQ/IPT processing on the GPU. The selected output is **BT.709/sRGB SDR**, nominal 203-nit white and 1000:1 contrast, linear tone mapping and saturation gamut intent. HDR output, Dolby display certification and equivalence to libplacebo's default perceptual rendering are not claimed.
+- The ordinary RGBA converter uses at most four threads. P010 uploads use a shared pool of at most four workers to copy directly into wgpu staging, then transfer aligned luma/chroma planes. This addresses slowly CPU-readable VA memory even when negotiated caps say `SystemMemory`; it is still a CPU transfer, not zero-copy.
+
+The numerical reference uses FFmpeg 9.0.1/libplacebo 7.360.1 with the same source frames and real RPU metadata: `apply_dolbyvision=true`, BT.709/sRGB full-range output, `tonemapping=linear`, `tonemapping_param=1`, `gamut_mode=saturation`, peak detection/contrast recovery/dithering disabled, bilinear plane/image scaling, and `tone_map_metadata=hdr10`. The fixed target and rendering intent are deliberate; changing them requires a new matched reference comparison.
+
+Relevant primary-source semantics: [FFmpeg cumulative RPU pivots](https://github.com/FFmpeg/FFmpeg/blob/35b7df64a0146fc0e2effb88151f912dcd80756b/libavcodec/dovi_rpudec.c#L557-L570), [libplacebo RPU normalization](https://github.com/haasn/libplacebo/blob/3330a515d62139259c26239014f286e233bd3a5c/src/include/libplacebo/utils/libav_internal.h#L963-L980), and [GStreamer frame completion/clipping](https://github.com/GStreamer/gstreamer/blob/1.28.6/subprojects/gst-plugins-base/gst-libs/gst/video/gstvideodecoder.c#L3557-L3681).
+
+### Automated evidence
+
+On this Linux host with the supplied 3840×2160, 24 fps Profile 5 source:
+
+- Converter-only probe: four threads reduced measured P010 → RGBA conversion from roughly 59 ms to 16–18 ms; P010 passthrough avoided that conversion. These timings establish performance, not color correctness.
+- Intrinsic metadata probe: 510 encoded RPUs and 362 observed renderer frames across three flush epochs, including paused seek/resume. An additional off-frame-boundary reproduction failed at 30.013 s before segment-aware validation, then passed at both 30.013 s and 2.013 s.
+- Final GPU readback on RX 7900 XTX / Vulkan matched the configured FFmpeg/libplacebo reference at frames 48, 360, 600 and 720: **maximum RGB error 1/255**, mean absolute error 0.00746–0.18881/255. The sRGB attachment check also stayed within 1/255; the odd-dimension chroma comparison had zero difference. This is numerical output verification, not a screenshot or human visual judgment.
+- With Wayland variables cleared, the full Xvfb window gate passed: **482 observed uploads in 20.004 s (about 24 fps), zero appsink drops**; paused 30 s / 2 s seeks stayed stable; muted/unmuted/final resumes observed 48/73/120 uploads over 2/3/5 s. The 33.2 s control sequence joined and exited 0. Xvfb lacks DRI3 here, so this window gate used **llvmpipe/OpenGL**, while decoding used `vah265dec`; do not relabel it as hardware-presentation throughput.
+- The synchronized discard sink observed **950 timestamped F32LE, 48 kHz, six-channel audio buffers** spanning the initial segment and both seeks. All 64 buffers in the stable muted interval contained zero nonzero samples. Real speakers, audible volume and perceived audio/video synchronization were not exercised.
+- Read-only review covered intrinsic metadata/seek clipping and bounded parallel staging/queue ordering. Temporary network/GPU/window/audio probes were removed; no source URL, credential or copyrighted reference frame is added to this repository.
+- Final isolated gates passed: **38 regressions and one compiled rustdoc example**, clippy with warnings denied, and formatting check. After probe removal, both the real H.264/AAC RGBA smoke and supplied Profile 5 P010 smoke uploaded a frame, joined and exited 0 under isolated Xvfb. The unaffected production workspace suite was not rerun.
+
+Human acceptance for this Dolby Vision change remains required: use the same source on an SDR desktop; inspect skin tones, highlights and shadow detail against the same configured reference, resize the window and inspect the overlay, seek to non-frame-aligned positions while paused, resume repeatedly, check audible mute/volume and synchronization, and confirm closing stops audio. Prior H.264 human acceptance below does not cover this new color path.
 
 ## Real acceptance media
 

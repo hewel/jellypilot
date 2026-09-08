@@ -6,8 +6,10 @@
 //! **wgpu** backend; software rendering does not support its custom shader.
 //!
 //! Native GStreamer 1.28+ and decoding/audio plugins must be installed separately.
-//! This is an SDR CPU-readable RGBA path, not a zero-copy or HDR contract. It does
-//! not replace JellyPilot's production external MPV playback.
+//! Ordinary video uses CPU-readable RGBA; supported Dolby Vision Profile 5 uses
+//! per-frame RPU metadata and two-plane P010 for BT.709/sRGB SDR conversion.
+//! Unsupported Dolby Vision variants fail explicitly. Neither path guarantees
+//! zero-copy or HDR output, and neither replaces production external MPV playback.
 //!
 //! Consume the notification stream and call [`Player::refresh`] on each wake. Wakes
 //! coalesce; the latest status and frame are retained independently. Compose
@@ -37,6 +39,8 @@
 //! }
 //! ```
 
+mod dovi;
+mod dovi_color;
 mod playback;
 mod source;
 mod transport;
