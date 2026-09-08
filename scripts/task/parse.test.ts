@@ -1,5 +1,6 @@
 import { describe, expect, test } from 'bun:test';
 
+import { icedLocalVideoCommand } from './iced';
 import { parseCli } from './parse';
 
 describe('parseCli', () => {
@@ -24,6 +25,54 @@ describe('parseCli', () => {
       release: true,
     });
     expect(parseCli(['iced', 'hot'])).toEqual({ _tag: 'icedHot' });
+  });
+
+  test('preserves a local video path as one application argument, not cargo options', () => {
+    const file = 'test-videos/中文 clips/movie #1.mp4';
+    const task = parseCli(['iced', 'local-video', 'run', '--file', file, '--release', '--smoke']);
+    expect(task).toMatchObject({
+      _tag: 'icedLocalVideo',
+      action: 'run',
+      file,
+      smoke: true,
+      release: true,
+    });
+    if (task._tag !== 'icedLocalVideo') throw new Error('Expected local video task.');
+    const { args } = icedLocalVideoCommand(task);
+    expect(args.slice(args.indexOf('--') + 1)).toEqual(['--smoke-test', '--file', file]);
+  });
+
+  test('distinguishes local video test filters from cargo options and extra arguments', () => {
+    expect(parseCli(['iced', 'local-video', 'test', 'playback::paused_seek'])).toMatchObject({
+      _tag: 'icedLocalVideo',
+      action: 'test',
+      testFilter: 'playback::paused_seek',
+    });
+    for (const args of [
+      ['test', '--release'],
+      ['test', '--', '--nocapture'],
+      ['test', 'paused_seek', 'replacement'],
+      ['check', '--file', 'movie.mp4'],
+      ['clippy', '--smoke'],
+      ['fmt', '--release'],
+      ['run', '--features', 'dev'],
+      ['run', 'movie.mp4'],
+      [],
+      ['hot'],
+    ]) {
+      expect(() => parseCli(['iced', 'local-video', ...args])).toThrow();
+    }
+  });
+
+  test('rejects missing, empty, option-like, or duplicate local video file values', () => {
+    for (const args of [
+      ['--file'],
+      ['--file', ''],
+      ['--file', '--smoke'],
+      ['--file', 'first.mp4', '--file', 'second.mp4'],
+    ]) {
+      expect(() => parseCli(['iced', 'local-video', 'run', ...args])).toThrow();
+    }
   });
 
   test('parses monitor process options with defaults and explicit overrides', () => {

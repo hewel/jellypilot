@@ -2,6 +2,7 @@ import { Effect } from 'effect';
 
 import { command, type CommandSpec } from './commands';
 import type { TaskProcessError } from './errors';
+import type { TaskCommand } from './parse';
 import { runCommand } from './process';
 
 export function icedRunCommand(smoke: boolean, release: boolean): CommandSpec {
@@ -27,6 +28,41 @@ export function icedHotCommand(): CommandSpec {
     'dev',
   ]);
 }
+
+export function icedLocalVideoCommand(
+  task: Extract<TaskCommand, { readonly _tag: 'icedLocalVideo' }>,
+): CommandSpec {
+  const args = [
+    task.action,
+    '--manifest-path',
+    'crates/jellypilot-player/Cargo.toml',
+    '--package',
+    'jellypilot-local-video',
+  ];
+  if (task.action !== 'run') args.push('--package', 'jellypilot-player');
+  if (task.action === 'fmt') {
+    if (task.check) args.push('--', '--check');
+  } else {
+    args.push('--target-dir', 'target/iced-local-video');
+    if (task.action === 'run') {
+      if (task.release) args.push('--release');
+      args.push('--');
+      if (task.smoke) args.push('--smoke-test');
+      if (task.file !== null) args.push('--file', task.file);
+    } else if (task.action === 'test') {
+      if (task.testFilter !== null) args.push(task.testFilter);
+    } else {
+      args.push('--all-targets');
+      if (task.action === 'clippy') args.push('--', '-D', 'warnings');
+    }
+  }
+  return command('cargo', args);
+}
+
+export const runLocalVideo = Effect.fn('task.iced.localVideo')(
+  (task: Extract<TaskCommand, { readonly _tag: 'icedLocalVideo' }>) =>
+    runCommand(icedLocalVideoCommand(task)).pipe(Effect.asVoid),
+);
 
 // Mirrors the `=== step [FAILED] ===` convention from check.ts so a failing
 // smoke gate ends with an attributable segment instead of a bare error dump.

@@ -19,6 +19,13 @@ Application:
   iced run [--smoke] [--release] (env: JELLYPILOT_SMOKE_SIZE=WxH)
   iced hot                       (hot reload via cargo-hot, dev feature)
 
+Local video experiment:
+  iced local-video run [--smoke] [--release] [--file <path>]
+  iced local-video check
+  iced local-video clippy
+  iced local-video test [filter]
+  iced local-video fmt [--check]
+
 Utilities:
   api
   monitor --pid <pid> --out <target/path> [--samples 301] [--interval-ms 1000] [--label <text>]

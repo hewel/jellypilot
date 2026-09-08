@@ -8,6 +8,7 @@ All notable changes to JellyPilot are documented in this file.
 - Added English, Simplified Chinese, and Follow system interface preferences shared by Login and Settings, with immediate relocalization of screens, retained feedback, and available tray controls without resetting login or playback.
 - Added embedded Fluent resources, localized count/duration grammar, and font license notices in Settings.
 - Added default-enabled per-season player volume memory, stored locally per server and account, with a Playback setting that pauses saving/restoring without deleting records. Unknown seasons and movies use MPV startup volume; temporary mute carries across continuous episode playback only.
+- Added an isolated, reusable `jellypilot-player` crate for GStreamer local-video playback and an iced/wgpu surface, with a standalone demo and private worker/frame/shutdown ownership. Production playback remains External MPV Playback; no GStreamer dependency was added to the application workspace.
 
 ### Changed
 - Replaced bundled Inter/Space Grotesk typography with the original Manrope V5 and MiSans variable fonts, including mixed-script fallback and explicit body/heading weights.

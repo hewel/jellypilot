@@ -1,0 +1,32 @@
+[package]
+name = "jellypilot-player"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.98"
+license = "MIT"
+publish = false
+
+[workspace]
+members = ["../../experiments/iced-local-video"]
+resolver = "2"
+
+[dependencies]
+iced = { git = "https://github.com/hewel/iced.git", rev = "f812ae504989444eb57d9f8669c1ab5a2e326c95", features = ["advanced", "advanced-shaping", "image", "svg", "tokio"] }
+gstreamer = { version = "=0.25.2", features = ["v1_28"] }
+gstreamer-app = { version = "=0.25.2", features = ["v1_28"] }
+gstreamer-video = { version = "=0.25.2", features = ["v1_28"] }
+# 0.25.3 base uses a macro absent from the pinned 0.25.2 core bindings.
+gstreamer-base = "=0.25.2"
+tokio = { version = "1.50.0", features = ["rt", "sync", "time"] }
+url = "2.5.8"
+thiserror = "2"
+
+[dev-dependencies]
+tempfile = "3"
+
+iced_runtime = { git = "https://github.com/hewel/iced.git", rev = "f812ae504989444eb57d9f8669c1ab5a2e326c95" }
+[lints.rust]
+unsafe_code = "forbid"
+
+[lints.clippy]
+all = "warn"
