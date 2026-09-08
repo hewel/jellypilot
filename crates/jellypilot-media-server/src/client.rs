@@ -13,9 +13,7 @@ use super::image_ref::{
   decode_image_id, image_id_for_url, normalize_server_url as normalize_image_server_url,
   sized_origin_url_for_width, validate_remote_url_for_server, ImageRefKind,
 };
-use super::intro_skipper::{
-  parse_intro_skipper_ranges, IntroSkipRange, IntroSkipperPluginResponse,
-};
+use super::intro_skipper::{parse_intro_skipper_ranges, IntroSkipRange};
 use super::types::*;
 
 /// Device info for Jellyfin client identification.
@@ -1398,7 +1396,7 @@ impl JellyfinClient {
     Self::provider_capabilities(&state).remote_control
   }
 
-  /// Whether the connected server offers the Intro Skipper plugin endpoint.
+  /// Whether this provider supports the native media-segment skip feature.
   pub fn supports_intro_skipper(&self) -> bool {
     let state = self.state.read();
     Self::provider_capabilities(&state).intro_skipper
@@ -1729,16 +1727,27 @@ impl JellyfinClient {
     Some(url.into())
   }
 
-  /// Fetch active Intro Skipper plugin ranges for a media item.
-  ///
-  /// Missing, disabled, invalid, or failing plugin endpoints are treated as no
-  /// ranges so playback can continue normally.
+  /// Fetch native intro/outro segments without collapsing repeated segment types.
+  /// Endpoint failures propagate; the playback caller treats them as unavailable ranges.
   async fn get_intro_skipper_ranges(
     &self,
     item_id: &str,
   ) -> Result<Vec<IntroSkipRange>, JellyfinError> {
-    let path = format!("/Episode/{}/IntroSkipperSegments", item_id);
-    let response = self.get::<IntroSkipperPluginResponse>(&path).await?;
+    let server_url = self.server_url()?;
+    let token = self.access_token()?;
+    let configuration = self.openapi_configuration(&server_url, Some(&token))?;
+    let response = jellyfin_api::apis::media_segment_api::get_item_segments(
+      &configuration,
+      jellyfin_api::apis::media_segment_api::GetItemSegmentsParams {
+        item_id: item_id.to_string(),
+        include_segment_types: Some(vec![
+          jellyfin_api::models::MediaSegmentType::Intro,
+          jellyfin_api::models::MediaSegmentType::Outro,
+        ]),
+      },
+    )
+    .await
+    .map_err(|err| Self::openapi_error("Media segments", err))?;
 
     Ok(parse_intro_skipper_ranges(response))
   }
@@ -8438,72 +8447,107 @@ mod tests {
   }
 
   #[tokio::test]
-  async fn intro_skipper_ranges_parse_valid_introduction_response() {
-    let server_url = serve_once(
+  async fn intro_skipper_ranges_load_native_segments_without_collapsing_types() {
+    let (server_url, requests) = serve_route_responses_with_requests(vec![(
+      "GET /jellyfin/MediaSegments/item-1?includeSegmentTypes=Intro&includeSegmentTypes=Outro ",
       "200 OK",
-      r#"{"Introduction":{"EpisodeId":"00000000000000000000000000000001","Start":8.5,"End":68.25}}"#,
-    )
+      r#"{"Items":[{"Type":"Intro","StartTicks":85000000,"EndTicks":682500000},{"Type":"Intro","StartTicks":1000000000,"EndTicks":1200000000},{"Type":"Outro","StartTicks":12000000000,"EndTicks":12600000000}],"TotalRecordCount":3,"StartIndex":0}"#,
+    )])
     .await;
     let client = JellyfinClient::new();
-    connect_test_client(&client, server_url);
+    connect_test_client(&client, format!("{server_url}/jellyfin"));
 
     let ranges = client
+      .playback()
       .get_intro_skipper_ranges("item-1")
       .await
-      .expect("intro skipper response should parse");
+      .expect("native media segments should load");
 
-    assert_eq!(ranges.len(), 1);
-    assert_eq!(ranges[0].start_seconds, 8.5);
-    assert_eq!(ranges[0].end_seconds, 68.25);
-  }
-
-  #[tokio::test]
-  async fn intro_skipper_ranges_return_empty_for_unsupported_or_invalid_segments() {
-    let server_url = serve_once(
-      "200 OK",
-      r#"{"Recap":{"Start":1200.0,"End":1260.0},"Preview":{"Start":1.0,"End":20.0},"Commercial":{"Start":30.0,"End":45.0},"Introduction":{"Start":90.0,"End":80.0}}"#,
-    )
-    .await;
-    let client = JellyfinClient::new();
-    connect_test_client(&client, server_url);
-
-    let ranges = client
-      .get_intro_skipper_ranges("item-1")
-      .await
-      .expect("unsupported segments should be ignored");
-
-    assert!(ranges.is_empty());
-  }
-
-  #[tokio::test]
-  async fn intro_skipper_ranges_return_empty_for_empty_plugin_response() {
-    let server_url = serve_once("200 OK", r#"{}"#).await;
-    let client = JellyfinClient::new();
-    connect_test_client(&client, server_url);
-
-    let ranges = client
-      .get_intro_skipper_ranges("item-1")
-      .await
-      .expect("empty plugin response should parse");
-
-    assert!(ranges.is_empty());
-  }
-
-  #[tokio::test]
-  async fn intro_skipper_ranges_report_endpoint_failure_to_caller() {
-    let server_url = serve_once("404 Not Found", r#"{"Message":"missing plugin"}"#).await;
-    let client = JellyfinClient::new();
-    connect_test_client(&client, server_url);
-
-    let err = client
-      .get_intro_skipper_ranges("item-1")
-      .await
-      .expect_err("missing plugin endpoint should be an HTTP error");
-
-    assert!(
-      matches!(err, JellyfinError::HttpError(_)),
-      "expected HTTP error for missing endpoint, got {err:?}"
+    assert_eq!(
+      ranges,
+      vec![
+        IntroSkipRange {
+          kind: crate::IntroSkipKind::Introduction,
+          start_seconds: 8.5,
+          end_seconds: 68.25
+        },
+        IntroSkipRange {
+          kind: crate::IntroSkipKind::Introduction,
+          start_seconds: 100.0,
+          end_seconds: 120.0
+        },
+        IntroSkipRange {
+          kind: crate::IntroSkipKind::Credits,
+          start_seconds: 1200.0,
+          end_seconds: 1260.0
+        },
+      ]
     );
+    let captured = requests.lock();
+    assert!(captured[0]
+      .to_ascii_lowercase()
+      .contains("\r\nauthorization: mediabrowser "));
+    assert!(captured[0].contains("Token=\"token-1\""));
+  }
+
+  #[tokio::test]
+  async fn intro_skipper_ranges_filter_invalid_segments_without_losing_valid_ones() {
+    let server_url = serve_once(
+      "200 OK",
+      r#"{"Items":[{"Type":"Recap","StartTicks":0,"EndTicks":10000000},{"Type":"Preview","StartTicks":0,"EndTicks":10000000},{"Type":"Commercial","StartTicks":0,"EndTicks":10000000},{"Type":"Unknown","StartTicks":0,"EndTicks":10000000},{"Type":"Intro","StartTicks":-1,"EndTicks":10000000},{"Type":"Intro","StartTicks":20000000,"EndTicks":10000000},{"Type":"Outro","StartTicks":10000000,"EndTicks":10000000},{"Type":"Intro","EndTicks":10000000},{"Type":"Intro","StartTicks":0},{"StartTicks":0,"EndTicks":10000000},{"Type":"Intro","StartTicks":0,"EndTicks":10000000}]}"#,
+    )
+    .await;
+    let client = JellyfinClient::new();
+    connect_test_client(&client, server_url);
+
+    let ranges = client
+      .playback()
+      .get_intro_skipper_ranges("item-1")
+      .await
+      .unwrap();
+    assert_eq!(
+      ranges,
+      vec![IntroSkipRange {
+        kind: crate::IntroSkipKind::Introduction,
+        start_seconds: 0.0,
+        end_seconds: 1.0,
+      }]
+    );
+  }
+
+  #[tokio::test]
+  async fn intro_skipper_ranges_return_empty_for_empty_native_response() {
+    let server_url = serve_once(
+      "200 OK",
+      r#"{"Items":[],"TotalRecordCount":0,"StartIndex":0}"#,
+    )
+    .await;
+    let client = JellyfinClient::new();
+    connect_test_client(&client, server_url);
+    let ranges = client
+      .playback()
+      .get_intro_skipper_ranges("item-1")
+      .await
+      .unwrap();
+    assert!(ranges.is_empty());
+  }
+
+  #[tokio::test]
+  async fn intro_skipper_ranges_report_endpoint_failure_without_legacy_fallback() {
+    let (server_url, requests) = serve_responses_with_requests(vec![(
+      "404 Not Found",
+      r#"{"title":"Not Found","status":404}"#,
+    )])
+    .await;
+    let client = JellyfinClient::new();
+    connect_test_client(&client, server_url);
+    let err = client
+      .playback()
+      .get_intro_skipper_ranges("item-1")
+      .await
+      .unwrap_err();
+    assert!(matches!(err, JellyfinError::HttpError(_)));
+    assert_eq!(requests.lock().len(), 1);
   }
 
   #[tokio::test]

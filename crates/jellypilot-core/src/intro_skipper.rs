@@ -264,6 +264,10 @@ mod tests {
     fn automatic_attempt_is_consumed_without_success_and_seek_back_never_rearms_it() {
         let now = Instant::now();
         let mut policy = policy(IntroSkipMode::Automatic);
+        policy.replace_ranges(vec![
+            range(IntroSkipKind::Introduction, 10.0, 30.0),
+            range(IntroSkipKind::Introduction, 50.0, 60.0),
+        ]);
         assert_eq!(
             policy.observe(20.0, now, IntroSkipInput::Position),
             Some(IntroSkipAction::Seek(30.0))
@@ -272,6 +276,11 @@ mod tests {
         assert_eq!(policy.observe(20.0, now, IntroSkipInput::Position), None);
         assert_eq!(policy.observe(0.0, now, IntroSkipInput::Position), None);
         assert_eq!(policy.observe(10.0, now, IntroSkipInput::Position), None);
+        assert_eq!(
+            policy.observe(50.0, now, IntroSkipInput::Position),
+            Some(IntroSkipAction::Seek(60.0))
+        );
+        assert_eq!(policy.observe(50.0, now, IntroSkipInput::Position), None);
     }
 
     #[test]
@@ -294,6 +303,30 @@ mod tests {
             policy.observe(20.0, now, IntroSkipInput::Position),
             Some(IntroSkipAction::Seek(40.0))
         );
+    }
+
+    #[test]
+    fn manual_prompts_and_consumption_are_independent_for_repeated_segment_types() {
+        let now = Instant::now();
+        let mut policy = IntroSkipper::new(IntroSkipMode::Manual);
+        policy.replace_ranges(vec![
+            range(IntroSkipKind::Introduction, 10.0, 30.0),
+            range(IntroSkipKind::Introduction, 50.0, 60.0),
+        ]);
+        let first = prompt(&mut policy, now, 10.0);
+        policy.prompt_settled(first, true, now);
+        assert_eq!(
+            policy.observe(10.0, now, IntroSkipInput::ManualSkip),
+            Some(IntroSkipAction::ManualSkip(30.0))
+        );
+        let second = prompt(&mut policy, now, 50.0);
+        policy.prompt_settled(second, true, now);
+        assert_eq!(
+            policy.observe(50.0, now, IntroSkipInput::ManualSkip),
+            Some(IntroSkipAction::ManualSkip(60.0))
+        );
+        assert_eq!(policy.observe(10.0, now, IntroSkipInput::Position), None);
+        assert_eq!(policy.observe(50.0, now, IntroSkipInput::Position), None);
     }
 
     #[test]

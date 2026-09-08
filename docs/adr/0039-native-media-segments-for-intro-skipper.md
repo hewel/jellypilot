@@ -1,0 +1,9 @@
+# Read Intro Skipper ranges through native Jellyfin media segments
+
+_Status: Accepted and implemented, 2026-09-08. Supersedes [ADR 0002](0002-intro-skipper-plugin-boundary.md)'s plugin-only endpoint boundary and removes the Intro Skipper HTTP exception in [ADR 0007](0007-generated-jellyfin-openapi-client.md). Preserves [ADR 0038](0038-state-owned-intro-skipper-policy.md)'s playback policy._
+
+Intro Skipper v12.0.2.0 deprecates its playback endpoints and collapses multiple stored segments to one range per type on those endpoints. JellyPilot now reads `GET /MediaSegments/{itemId}` through the generated Jellyfin client, maps native `Intro`/`Outro` segments to Introduction/Credits, converts ticks to seconds, and preserves every valid range. There is no legacy endpoint fallback; an unavailable native endpoint leaves playback running without skip ranges.
+
+The native response does not identify the supplying plugin. The Intro Skipper feature therefore consumes server-published intro/outro ranges regardless of their provider; it does not consume Recap, Preview, Commercial, or Unknown segments. The user-facing name and Automatic/Manual/Off behavior remain unchanged, with consumption and prompts tracked per range. The plugin's new plural `Episode/{itemId}/Segments` endpoints are deliberately excluded: they are elevation-gated editing APIs and expose stored segments rather than the playback-filtered view.
+
+Sources: [plugin playback endpoint deprecation](https://github.com/intro-skipper/intro-skipper/blob/12.0/v12.0.2.0/IntroSkipper/Controllers/SkipIntroController.cs), [native Jellyfin controller](https://github.com/jellyfin/jellyfin/blob/v12.0/Jellyfin.Api/Controllers/MediaSegmentsController.cs), [plugin editor API](https://github.com/intro-skipper/intro-skipper/blob/12.0/v12.0.2.0/IntroSkipper/Controllers/SegmentsController.cs).

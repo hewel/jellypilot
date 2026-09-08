@@ -175,7 +175,7 @@ A user-scoped Jellyfin or Emby mutation for item state such as favorite, unfavor
 _Avoid_: Optimistic toggle, local-only media state
 
 **Intro Skipper**:
-A Jellyfin server plugin that detects intro and credit ranges for media items so a Playback Target can skip those ranges during playback. In JellyPilot, Intro Skipper refers to the plugin-provided ranges, not Jellyfin media segments in general.
+The JellyPilot playback feature that skips server-published intro and credit ranges, including ranges supplied by the Intro Skipper plugin. Each range is independent, even when several share a type. The feature is not restricted to one supplying plugin, but excludes recap, preview, commercial, and unknown segments.
 _Avoid_: Media Segment Skipping, chapter skipping, generic skip markers
 
 **Automatic Intro Skip**:
@@ -274,11 +274,11 @@ Domain expert: "Yes. Sign Out removes that device's saved login without disturbi
 
 Dev: "Is Intro Skipper just any Jellyfin media segment?"
 
-Domain expert: "No. For this feature, Intro Skipper means ranges supplied by the Intro Skipper plugin specifically."
+Domain expert: "No. The feature accepts intro and credit ranges, including those supplied by the Intro Skipper plugin, but not other segment kinds. A media item can have several independent ranges of the same kind."
 
 Dev: "Should JellyPilot show a skip button over MPV?"
 
-Domain expert: "No. Automatic Intro Skip means JellyPilot skips the plugin range silently."
+Domain expert: "No. Automatic Intro Skip means JellyPilot skips the eligible range silently."
 
 Dev: "If the user seeks back into a skipped intro, should JellyPilot skip it again?"
 

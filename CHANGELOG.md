@@ -20,6 +20,7 @@ All notable changes to JellyPilot are documented in this file.
 - Made Library Image loading follow measured visibility, with immediate visible-image admission and one viewport of prefetch before and after scrolling across Home, Browse, Detail, and Personal Lists.
 - Moved Library/Search restoration and refresh ownership into the display-free browse model, retaining complete usable results and scroll position while replacement data loads.
 - Consolidated Intro Skipper eligibility and prompt lifetime into one display-free policy, preserving Automatic, Manual, and Off modes, exact-start skipping, and one automatic attempt per range.
+- Migrated Intro Skipper playback to Jellyfin's native media-segment API, preserving multiple intro/credit ranges and Automatic/Manual/Off behavior without the deprecated plugin endpoint or elevated editor API.
 
 ### Fixed
 - Added Jellyfin 12.0 compatibility: updated the generated API client, migrated API and playback/subtitle/WebSocket authentication away from disabled legacy forms, and redacted the modern `ApiKey` query parameter in diagnostics. Emby authentication remains unchanged.

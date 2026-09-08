@@ -62,7 +62,7 @@ Jellyfin clients can discover JellyPilot as a cast target. Both Jellyfin and Emb
 | 🚀 **External MPV Playback**  | Standalone MPV over JSON IPC; your configuration, shaders, and scripts apply to the original source  |
 | 📑 **Episode Queue**          | Current-season episode list in the player bar and compact player — click any episode to switch       |
 | 💬 **External Subtitles**     | Server-hosted external subtitle tracks loaded into MPV, with the default selection applied           |
-| ✂️ **Intro Skipper**          | Skips Jellyfin Intro Skipper plugin intro and credit ranges during playback                          |
+| ✂️ **Intro Skipper**          | Skips Jellyfin native intro and credit ranges, including multiple ranges of the same type             |
 | 🌐 **Subtitle Preferences**  | Configurable preferred subtitle languages passed directly to MPV                                    |
 | ⏭️ **Smart Playback**         | Automatic next episode on natural end, plus episode navigation from the player bar or tray           |
 | 🎛️ **Control-Only Mode**      | A compact always-on-top-style controller window without the library shell                            |
@@ -81,12 +81,18 @@ Jellyfin clients can discover JellyPilot as a cast target. Both Jellyfin and Emb
 | **Jellyfin** | ✅        | Password login, Quick Connect, saved profiles, library browsing, user data actions, MPV playback, cast target registration, remote control, Intro Skipper support |
 | **Emby**     | ✅        | Password login, saved profiles, library browsing, user data actions, MPV playback, remote control, and playback progress reporting                                |
 
-Emby support uses the same library and player workflow as Jellyfin where the server APIs are compatible. Jellyfin-specific features such as Quick Connect and the Jellyfin Intro Skipper plugin are not advertised for Emby connections.
+Emby support uses the same library and player workflow as Jellyfin where the server APIs are compatible. Jellyfin-specific features such as Quick Connect and Intro Skipper are not advertised for Emby connections.
 
 Jellyfin 12.0 does not require legacy authorization to be enabled: JellyPilot uses the standard
 `Authorization` header for API requests and `ApiKey` for playback, subtitles, and remote sessions.
 Enter the server's actual base URL, including any configured reverse-proxy base path; Jellyfin 12
 removed the automatic `/emby` and `/mediabrowser` route aliases.
+
+Intro Skipper reads Jellyfin's native media segments, including ranges published by the Intro Skipper
+plugin or another server provider. Automatic, Manual, and Off still apply to intro/credit ranges only;
+each range is handled independently. The deprecated plugin endpoint is no longer used. If no native
+ranges are available, playback continues without skipping; ensure the server's segment extraction or
+plugin synchronization has populated them.
 
 ## 🗺️ Roadmap
 
