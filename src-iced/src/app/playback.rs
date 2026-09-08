@@ -11,6 +11,7 @@
 //! window/shell state.
 
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -19,6 +20,8 @@ use jellypilot_auth::login::ConnectionPhase;
 use jellypilot_core::config::Settings;
 use jellypilot_core::diagnostics::{coalescing_key, DiagnosticCategory, DiagnosticLevel};
 use jellypilot_core::request_gate::{RemotePlayToken, RemoteToken, RequestGate, SessionToken};
+use jellypilot_core::volume_memory::SeasonVolumeStore;
+use jellypilot_core::watchlist::ProfileScope;
 use jellypilot_media_server::artwork::{ArtworkSizeClass, DerivedArtwork};
 use jellypilot_media_server::{
   ticks_to_seconds, VideoLibraryItem, VideoSeasonEpisodes, VideoSeasonEpisodesRequest,
@@ -26,7 +29,7 @@ use jellypilot_media_server::{
 use jellypilot_mpv::configured_mpv_args;
 use jellypilot_mpv::playback::{
   media_item_from_playable, rich_playable, Playable, PlaybackController, PlaybackControllerConfig,
-  PlaybackSelection, PlaybackStartPosition, PlaybackWarning,
+  PlaybackSelection, PlaybackStartPosition, PlaybackWarning, VolumeMemoryPreference,
 };
 use jellypilot_mpv::playback_session::{
   seek_intent, volume_intent, AdjacentDirection, ControllerCommand, ControllerSettlement, EffectId,
@@ -86,6 +89,38 @@ pub(crate) struct AccountHandoffStart {
   pub playback_cleanup: Option<Result<(), String>>,
 }
 
+/// Shared only with tasks for one controller. Configuration snapshots and the
+/// live memory preference have separate revisions because MPV arguments may
+/// change without a volume-memory transition.
+struct ControllerConfiguration {
+  revision: AtomicU64,
+  volume_memory: VolumeMemoryPreference,
+}
+
+impl Default for ControllerConfiguration {
+  fn default() -> Self {
+    Self {
+      revision: AtomicU64::new(0),
+      volume_memory: VolumeMemoryPreference::new(true),
+    }
+  }
+}
+
+impl ControllerConfiguration {
+  fn publish(&self, enabled: bool) -> u64 {
+    // Publish without waiting for the controller lock: an in-flight start may
+    // still be resolving media when the user disables restoration/persistence.
+    self.volume_memory.set_enabled(enabled);
+    self.revision.fetch_add(1, Ordering::AcqRel).wrapping_add(1)
+  }
+
+  fn invalidate_pending(&self) {
+    // Shutdown still needs the last desired gate to capture the old account's
+    // final accepted volume. Retire config snapshots without disabling memory.
+    self.revision.fetch_add(1, Ordering::AcqRel);
+  }
+}
+
 /// Playback surface slice: the playback session machine and its projected
 /// view, the resolved current/adjacent playables, the MPV controller handle,
 /// in-flight effect markers, seek/volume previews, track popover flags,
@@ -95,6 +130,7 @@ pub struct Surface {
   pub artwork: ImageCollection,
   pub artwork_enabled: bool,
   pub controller: Option<PlaybackControllerHandle>,
+  controller_configuration: Arc<ControllerConfiguration>,
   pub session: PlaybackSession,
   pub view: SessionView,
   pub playable: Option<Playable>,
@@ -153,6 +189,7 @@ impl Surface {
       audio_menu_open: false,
       subtitle_menu_open: false,
       controller: None,
+      controller_configuration: Arc::default(),
     }
   }
 }
@@ -330,17 +367,36 @@ pub(crate) fn apply_playback_configuration(
   quit_requested: bool,
 ) -> Task<Message> {
   let config = playback_controller_config(kernel.settings.snapshot());
+  let revision = surface
+    .controller_configuration
+    .publish(kernel.settings.snapshot().remember_season_volume());
   if let Some(controller) = surface.controller.as_ref().map(Arc::clone) {
+    let desired = Arc::clone(&surface.controller_configuration);
     return Task::perform(
-      async move { controller.lock().await.configure_for_next_start(config) },
+      async move {
+        let mut controller = controller.lock().await;
+        controller.synchronize_volume_memory_preference().await;
+        if desired.revision.load(Ordering::Acquire) != revision {
+          return Ok(());
+        }
+        let result = controller.configure_for_next_start(config).await;
+        controller.synchronize_volume_memory_preference().await;
+        result
+      },
       |result| Message::Settings(SettingsMessage::PlaybackConfigApplied(result)),
     );
   }
   let Some(client) = kernel.client.as_ref().map(Arc::clone) else {
     return Task::none();
   };
-  match PlaybackController::discover(client, config) {
-    Ok(controller) => {
+  match discover_playback_controller(kernel, client, config) {
+    Ok(mut controller) => {
+      surface.controller_configuration = Arc::new(ControllerConfiguration::default());
+      surface
+        .controller_configuration
+        .publish(kernel.settings.snapshot().remember_season_volume());
+      controller
+        .set_volume_memory_preference(surface.controller_configuration.volume_memory.clone());
       surface.controller = Some(Arc::new(tokio::sync::Mutex::new(controller)));
       let _ = surface.session.handle(
         PlaybackInput::Event(Box::new(PlaybackEvent::EngineAvailability(true))),
@@ -812,16 +868,23 @@ pub(crate) fn initialize_playback(
   surface.remote = kernel.request_gate.begin_remote();
   surface.in_flight_refresh = None;
   surface.in_flight_command = None;
+  // Retire the old controller's settings tasks before creating an account-scoped
+  // replacement. Old futures retain only the retired controller and gate.
+  surface.controller_configuration.invalidate_pending();
+  surface.controller_configuration = Arc::new(ControllerConfiguration::default());
+  surface
+    .controller_configuration
+    .publish(kernel.settings.snapshot().remember_season_volume());
 
   let Some(client) = kernel.client.as_ref().map(Arc::clone) else {
     surface.controller = None;
     return;
   };
-  match PlaybackController::discover(
-    client,
-    playback_controller_config(kernel.settings.snapshot()),
-  ) {
-    Ok(controller) => {
+  let config = playback_controller_config(kernel.settings.snapshot());
+  match discover_playback_controller(kernel, client, config) {
+    Ok(mut controller) => {
+      controller
+        .set_volume_memory_preference(surface.controller_configuration.volume_memory.clone());
       surface.controller = Some(Arc::new(tokio::sync::Mutex::new(controller)));
       let _ = surface.session.handle(
         PlaybackInput::Event(Box::new(PlaybackEvent::EngineAvailability(true))),
@@ -838,11 +901,48 @@ pub(crate) fn initialize_playback(
 }
 
 fn playback_controller_config(settings: &Settings) -> PlaybackControllerConfig {
-  let config = PlaybackControllerConfig::default().with_extra_args(configured_mpv_args(settings));
+  let config = PlaybackControllerConfig::default()
+    .with_extra_args(configured_mpv_args(settings))
+    .with_volume_memory_enabled(settings.remember_season_volume());
   match settings.mpv_path() {
     Some(path) => config.with_mpv_path(PathBuf::from(path)),
     None => config,
   }
+}
+
+fn discover_playback_controller(
+  kernel: &mut Kernel,
+  client: Arc<jellypilot_media_server::JellyfinClient>,
+  config: PlaybackControllerConfig,
+) -> Result<PlaybackController, PlaybackError> {
+  let connection = client.login().connection_state();
+  let mut controller = PlaybackController::discover(client, config)?;
+  if let (true, Some(server_url), Some(user_id)) = (
+    connection.connected,
+    connection.server_url,
+    connection.user_id,
+  ) {
+    match ProfileScope::new(connection.provider, server_url, user_id) {
+      Ok(scope) => match SeasonVolumeStore::load(scope) {
+        Ok(store) => controller.set_volume_memory(store),
+        Err(error) => {
+          kernel.diagnostics.record(
+            DiagnosticLevel::Warning,
+            DiagnosticCategory::Config,
+            format!("Could not load season volume memory: {error}"),
+          );
+        }
+      },
+      Err(error) => {
+        kernel.diagnostics.record(
+          DiagnosticLevel::Warning,
+          DiagnosticCategory::Config,
+          format!("Could not identify season volume memory account: {error}"),
+        );
+      }
+    }
+  }
+  Ok(controller)
 }
 
 fn apply_local_playback_intent(
@@ -1249,6 +1349,7 @@ fn update_playback(
         tasks.push(load_queue_after_start(surface, kernel, playable));
       }
       if matches!(shutdown_cleanup, Some(Ok(()))) {
+        surface.controller_configuration.invalidate_pending();
         surface.controller = None;
         let _ = surface.session.handle(
           PlaybackInput::Event(Box::new(PlaybackEvent::EngineAvailability(false))),
@@ -1593,12 +1694,17 @@ fn execute_controller_command(
   Task::perform(
     async move {
       let mut controller = controller.lock().await;
+      controller.synchronize_volume_memory_preference().await;
       match command {
         ControllerCommand::Start {
           item,
           position,
           selection,
+          continue_playback,
         } => {
+          if !continue_playback {
+            controller.discard_continuation();
+          }
           let result = controller.play_selected(item, position, selection).await;
           let tracks = if result.is_ok() {
             Some(controller.tracks().await)
@@ -1773,6 +1879,7 @@ pub(crate) fn disconnect(
   kernel: &mut Kernel,
   quit_requested: bool,
 ) -> Task<Message> {
+  surface.controller_configuration.invalidate_pending();
   let remote_stopping = surface.remote_stopping;
   let task = apply_playback_input(
     surface,

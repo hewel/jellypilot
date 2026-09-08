@@ -11,6 +11,7 @@ use jellypilot_ui::overlay::{popover, tooltip, PopoverOptions, TooltipOptions};
 use jellypilot_ui::tokens::{ThemePalette, TOKENS};
 use jellypilot_ui::variants::{BadgeVariant, ButtonVariant, FieldVariant, SurfaceVariant};
 use jellypilot_ui::widgets::control_button::control_button;
+use jellypilot_ui::widgets::switch::switch;
 
 use super::account;
 
@@ -270,6 +271,27 @@ fn playback_section(state: &State) -> Element<'_, Message> {
         intro,
       ]
       .spacing(TOKENS.spacing.s2),
+      row![
+        column![
+          text(state.t("settings-season-volume"))
+            .size(14)
+            .color(palette.text.secondary),
+          text(state.t("settings-season-volume-help"))
+            .size(12)
+            .color(palette.text.body),
+        ]
+        .spacing(TOKENS.spacing.s1)
+        .width(Fill),
+        switch(state.kernel.settings.snapshot().remember_season_volume())
+          .id("settings-season-volume")
+          .on_press(Message::Settings(
+            SettingsMessage::RememberSeasonVolumeChanged(
+              !state.kernel.settings.snapshot().remember_season_volume(),
+            )
+          )),
+      ]
+      .spacing(TOKENS.spacing.s3)
+      .align_y(Alignment::Center),
     ]
     .spacing(TOKENS.spacing.s4),
   )

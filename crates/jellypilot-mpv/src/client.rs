@@ -425,7 +425,7 @@ impl MpvClient {
     Ok(())
   }
 
-  /// Set volume (0-100).
+  /// Set volume, including amplification above 100 supported by MPV.
   pub async fn set_volume(&self, volume: f64) -> Result<(), MpvError> {
     self.send(MpvCommand::set_volume(volume)).await?;
     Ok(())
@@ -567,6 +567,19 @@ impl MpvClient {
     self
       .send(MpvCommand::observe_property(observer_id, property))
       .await?;
+    Ok(())
+  }
+
+  /// Stop receiving changes for an observer.
+  pub async fn unobserve_property(&self, observer_id: i64) -> Result<(), MpvError> {
+    self
+      .send(MpvCommand::unobserve_property(observer_id))
+      .await?;
+    Ok(())
+  }
+
+  pub(crate) async fn stop_playback(&self) -> Result<(), MpvError> {
+    self.send(MpvCommand::stop_playback()).await?;
     Ok(())
   }
 

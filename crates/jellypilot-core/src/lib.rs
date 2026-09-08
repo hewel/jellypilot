@@ -31,6 +31,8 @@ pub mod request_gate;
 pub mod settings;
 pub mod skeleton;
 #[cfg(feature = "native")]
+pub mod volume_memory;
+#[cfg(feature = "native")]
 pub mod watchlist;
 
 mod model;

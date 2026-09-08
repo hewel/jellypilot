@@ -268,6 +268,11 @@ pub struct Settings {
         deserialize_with = "deserialize_image_cache_enabled"
     )]
     image_cache_enabled: bool,
+    #[serde(
+        default = "default_remember_season_volume",
+        deserialize_with = "deserialize_remember_season_volume"
+    )]
+    remember_season_volume: bool,
     #[serde(default, deserialize_with = "deserialize_start_minimized")]
     start_minimized: bool,
     #[serde(default, deserialize_with = "deserialize_reduced_motion")]
@@ -296,6 +301,7 @@ impl Default for Settings {
             key_previous_episode: default_key_previous_episode(),
             key_intro_skip: default_key_intro_skip(),
             image_cache_enabled: default_image_cache_enabled(),
+            remember_season_volume: default_remember_season_volume(),
             start_minimized: false,
             reduced_motion: false,
             library_filters: BrowseFilterSettings::default(),
@@ -362,6 +368,10 @@ impl Settings {
 
     pub const fn image_cache_enabled(&self) -> bool {
         self.image_cache_enabled
+    }
+
+    pub const fn remember_season_volume(&self) -> bool {
+        self.remember_season_volume
     }
 
     pub const fn start_minimized(&self) -> bool {
@@ -673,6 +683,16 @@ impl SettingsStore {
         })
     }
 
+    pub fn set_remember_season_volume(
+        &mut self,
+        enabled: bool,
+    ) -> Result<bool, SettingsMutationError> {
+        self.update(|settings| {
+            settings.remember_season_volume = enabled;
+            Ok(())
+        })
+    }
+
     pub fn set_start_minimized(
         &mut self,
         start_minimized: bool,
@@ -732,6 +752,10 @@ fn default_key_intro_skip() -> String {
 }
 
 const fn default_image_cache_enabled() -> bool {
+    true
+}
+
+const fn default_remember_season_volume() -> bool {
     true
 }
 
@@ -825,6 +849,16 @@ where
     Ok(value.as_bool().unwrap_or_else(default_image_cache_enabled))
 }
 
+fn deserialize_remember_season_volume<'de, D>(deserializer: D) -> Result<bool, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value = serde_json::Value::deserialize(deserializer)?;
+    Ok(value
+        .as_bool()
+        .unwrap_or_else(default_remember_season_volume))
+}
+
 fn deserialize_auto_login<'de, D>(deserializer: D) -> Result<bool, D::Error>
 where
     D: serde::Deserializer<'de>,
@@ -904,7 +938,14 @@ fn read_from(path: &Path) -> Result<Settings, ConfigError> {
 }
 
 fn save_to(path: &Path, settings: &Settings) -> Result<(), ConfigError> {
-    let contents = serde_json::to_string_pretty(settings)?;
+    save_json_to(path, settings)
+}
+
+pub(crate) fn save_json_to<T: Serialize + ?Sized>(
+    path: &Path,
+    value: &T,
+) -> Result<(), ConfigError> {
+    let contents = serde_json::to_string_pretty(value)?;
     if fs::read_to_string(path).ok().as_deref() == Some(contents.as_str()) {
         return Ok(());
     }
@@ -933,6 +974,29 @@ mod tests {
             "jellypilot-settings-{}-{name}.json",
             std::process::id()
         ))
+    }
+
+    #[test]
+    fn volume_memory_setting_recovers_legacy_values_and_persists_independently() {
+        let path = test_path("season-volume-setting");
+        let expected = remembered_settings();
+        for invalid in [None, Some(serde_json::json!("false"))] {
+            let mut value = serde_json::to_value(&expected).unwrap();
+            let object = value.as_object_mut().unwrap();
+            if let Some(invalid) = invalid {
+                object.insert("remember_season_volume".to_owned(), invalid);
+            } else {
+                object.remove("remember_season_volume");
+            }
+            fs::write(&path, serde_json::to_vec(&value).unwrap()).unwrap();
+            let recovered = load_from(&path).unwrap();
+            assert!(recovered.remember_season_volume());
+            let mut store = store_at(path.clone(), recovered);
+            assert!(store.set_remember_season_volume(false).unwrap());
+            assert_eq!(load_from(&path).unwrap(), expected);
+            assert!(!store.set_remember_season_volume(false).unwrap());
+        }
+        fs::remove_file(path).unwrap();
     }
 
     #[test]
@@ -994,6 +1058,7 @@ mod tests {
             key_previous_episode: "P".to_owned(),
             key_intro_skip: "I".to_owned(),
             image_cache_enabled: false,
+            remember_season_volume: false,
             start_minimized: true,
             reduced_motion: false,
             library_filters: BrowseFilterSettings::default()

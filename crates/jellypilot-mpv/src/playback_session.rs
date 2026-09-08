@@ -111,6 +111,7 @@ pub enum ControllerCommand {
     item: Playable,
     position: PlaybackStartPosition,
     selection: PlaybackSelection,
+    continue_playback: bool,
   },
   SetPaused(bool),
   Seek(f64),
@@ -352,7 +353,9 @@ impl PlaybackSession {
         if !self.engine_available || self.quitting {
           return Vec::new();
         }
-        self.enqueue(ControllerRequest::start(item, position, intro, *selection))
+        self.enqueue(ControllerRequest::start(
+          item, position, intro, *selection, false,
+        ))
       }
       PlaybackIntent::TogglePaused => {
         let Some(paused) = self.current_paused() else {
@@ -844,6 +847,7 @@ impl PlaybackSession {
         skipper_available: self.skipper_available,
       },
       PlaybackSelection::default(),
+      true,
     ))
   }
 
@@ -1040,6 +1044,7 @@ impl ControllerRequest {
     position: PlaybackStartPosition,
     intro: IntroAvailability,
     selection: PlaybackSelection,
+    continue_playback: bool,
   ) -> Self {
     let target_id = item.item_id().to_owned();
     Self {
@@ -1050,6 +1055,7 @@ impl ControllerRequest {
         item,
         position,
         selection,
+        continue_playback,
       },
       operation: ControllerOperation::Start { target_id, intro },
     }
@@ -1300,7 +1306,13 @@ mod tests {
       })),
       now,
     ));
-    assert!(matches!(command, ControllerCommand::Start { .. }));
+    assert!(matches!(
+      command,
+      ControllerCommand::Start {
+        continue_playback: false,
+        ..
+      }
+    ));
     id
   }
 
@@ -2208,6 +2220,7 @@ mod tests {
       command,
       ControllerCommand::Start {
         item: Playable::Media(MediaItem { id, .. }),
+        continue_playback: true,
         ..
       } if id == "episode-2"
     ));
@@ -2238,6 +2251,7 @@ mod tests {
       command,
       ControllerCommand::Start {
         item: Playable::Media(MediaItem { id, .. }),
+        continue_playback: true,
         ..
       } if id == "episode-2"
     ));
@@ -2530,6 +2544,7 @@ mod tests {
           item,
           position: PlaybackStartPosition::Beginning,
           selection: PlaybackSelection::default(),
+          continue_playback: false,
         },
         ControllerSettlement::Started(Err(PlaybackError::MpvNotFound)),
       ),

@@ -41,6 +41,10 @@ impl MpvCommand {
     }
   }
 
+  pub fn stop_playback() -> Self {
+    Self::new(vec!["stop".into()])
+  }
+
   pub(crate) fn command_name(&self) -> &str {
     self
       .command
@@ -83,7 +87,7 @@ impl MpvCommand {
     Self::new(vec!["set_property".into(), "pause".into(), paused.into()])
   }
 
-  /// Set volume (0-100).
+  /// Set volume, including amplification above 100 supported by MPV.
   pub fn set_volume(volume: f64) -> Self {
     Self::new(vec!["set_property".into(), "volume".into(), volume.into()])
   }
@@ -148,7 +152,6 @@ impl MpvCommand {
   }
 
   /// Stop observing a property.
-  #[allow(dead_code)]
   pub fn unobserve_property(observer_id: i64) -> Self {
     Self::new(vec!["unobserve_property".into(), observer_id.into()])
   }

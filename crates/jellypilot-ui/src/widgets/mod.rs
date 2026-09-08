@@ -16,6 +16,7 @@ pub mod scrollable;
 pub mod search_field;
 pub mod sidebar;
 pub mod skeleton;
+pub mod switch;
 
 pub use control_button::{control_button, ControlButton};
 pub use poster_card::{poster_card, PosterCard};

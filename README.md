@@ -91,7 +91,7 @@ Emby support uses the same library and player workflow as Jellyfin where the ser
 
 ### Runtime prerequisites
 
-- [MPV](https://mpv.io/) available on `PATH` or selected explicitly in Settings — it is the only playback engine.
+- [MPV](https://mpv.io/) with Lua scripting support, available on `PATH` or selected explicitly in Settings — it is the only playback engine. A bundled Lua hook captures volume and temporary mute before MPV resets file-local options at the end of playback.
 
 ### Installation
 
@@ -134,6 +134,17 @@ The release binary is `target/release/jellypilot`.
 5. **Play or cast**: start playback directly in JellyPilot, or cast to "JellyPilot" from another Jellyfin client.
 6. **Control playback** from the player bar, the system tray, or a supported Jellyfin/Emby remote session — open the episode queue to jump anywhere in the current season.
 7. **Switch app modes** from Settings: Full library mode, or Control-Only — a compact standalone controller window.
+
+**Season volume memory** is enabled by default under **Settings → Playback**. Player volume
+adjustments are remembered per season on this device, separately for each server and account.
+The next episode, a manually selected episode, or a later session restores that season's volume
+before playback starts. Movies and episodes without a saved, reliably identified season use
+MPV's startup volume instead. This remembers the player's volume, not system volume, and does
+not normalize audio loudness.
+
+Turning the switch off stops saving and restoring without deleting existing records or changing
+the current volume. Turning it back on restores saved values on the next load. Temporary mute
+is retained during continuous episode playback, but is not saved for a later playback session.
 
 ## 🏗️ Architecture
 

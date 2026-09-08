@@ -36,6 +36,7 @@ struct SettingsPlaybackSnapshot {
   mpv_args: Vec<String>,
   subtitle_languages: Vec<String>,
   intro_mode: IntroMode,
+  remember_season_volume: bool,
   playback_target_name: Option<String>,
   app_mode: AppMode,
 }
@@ -47,6 +48,7 @@ impl SettingsPlaybackSnapshot {
       mpv_args: settings.mpv_args().to_vec(),
       subtitle_languages: settings.subtitle_languages().to_vec(),
       intro_mode: settings.intro_mode(),
+      remember_season_volume: settings.remember_season_volume(),
       playback_target_name: settings.playback_target_name().map(str::to_owned),
       app_mode: settings.app_mode(),
     }
@@ -518,6 +520,7 @@ fn route_message(state: &mut State, message: Message) -> Task<Message> {
       if settings_after.mpv_path != settings_before.mpv_path
         || settings_after.mpv_args != settings_before.mpv_args
         || settings_after.subtitle_languages != settings_before.subtitle_languages
+        || settings_after.remember_season_volume != settings_before.remember_season_volume
       {
         tasks.push(playback::apply_playback_configuration(
           &mut state.playback,
@@ -785,6 +788,79 @@ mod tests {
       watchlist: super::super::personal_lists::Runtime::default(),
       accounts: super::super::accounts::Surface::new(),
     }
+  }
+
+  #[tokio::test]
+  async fn season_volume_switch_is_keyboard_operable_and_persists() {
+    use iced::advanced::{renderer::Headless, widget};
+    use iced::{keyboard, mouse, Event, Font, Size};
+    use iced_runtime::user_interface::{Cache, UserInterface};
+
+    let (settings, _file) = isolated_settings("season-volume-keyboard");
+    let mut state = test_state();
+    state.kernel.settings = settings;
+    state.kernel.connection = ConnectionPhase::Connected;
+    state.shell.settings_open = true;
+    state.settings.view.active_section = crate::app::state::SettingsSection::Playback;
+    let mut renderer = iced::Renderer::new(
+      iced::advanced::renderer::Settings {
+        font: Font::DEFAULT,
+        text_size: 14.0.into(),
+        line_height: fonts::DEFAULT_LINE_HEIGHT,
+        metrics_hinting: false,
+      },
+      Some("tiny-skia"),
+    )
+    .await
+    .expect("software renderer");
+    let mut ui = UserInterface::build(
+      crate::app::view(&state, iced::window::Id::unique()),
+      Size::new(1200.0, 900.0),
+      Cache::new(),
+      &mut renderer,
+    );
+    let key = |named| {
+      Event::Keyboard(keyboard::Event::KeyPressed {
+        key: keyboard::Key::Named(named),
+        modified_key: keyboard::Key::Named(named),
+        physical_key: keyboard::key::Physical::Code(keyboard::key::Code::Enter),
+        location: keyboard::Location::Standard,
+        modifiers: keyboard::Modifiers::NONE,
+        text: None,
+        repeat: false,
+      })
+    };
+    let mut messages = Vec::new();
+    update_ui(
+      &mut ui,
+      &mut renderer,
+      &[key(keyboard::key::Named::Tab)],
+      mouse::Cursor::Unavailable,
+      &mut messages,
+    );
+    ui.operate(
+      &renderer,
+      &mut widget::operation::focusable::focus::<()>(widget::Id::new("settings-season-volume")),
+    );
+    update_ui(
+      &mut ui,
+      &mut renderer,
+      &[key(keyboard::key::Named::Enter)],
+      mouse::Cursor::Unavailable,
+      &mut messages,
+    );
+    drop(ui);
+    let message = messages
+      .into_iter()
+      .find(|message| {
+        matches!(
+          message,
+          Message::Settings(SettingsMessage::RememberSeasonVolumeChanged(_))
+        )
+      })
+      .expect("keyboard activation should toggle season volume memory");
+    drop(update(&mut state, message));
+    assert!(!state.kernel.settings.snapshot().remember_season_volume());
   }
 
   fn image_reference(state: &mut State, name: &str) -> String {

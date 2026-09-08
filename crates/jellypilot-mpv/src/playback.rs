@@ -11,6 +11,7 @@ use crate::{
   collect_player_state_sample, find_mpv, has_mpv_option, MpvClient, MpvEvent, PlayerState,
   PropertyValue,
 };
+use jellypilot_core::volume_memory::{SeasonVolumeKey, SeasonVolumeStore};
 use jellypilot_media_server::{
   ticks_to_seconds, JellyfinClient, MediaItem, MediaServerProvider, MediaSource, MediaStream,
   PlaybackProgressInfo, PlaybackStartInfo, PlaybackStopInfo, VideoItemDetail, VideoLibraryItem,
@@ -37,9 +38,17 @@ pub struct PlaybackControllerConfig {
   mpv_path: Option<PathBuf>,
   extra_args: Vec<String>,
   demuxer_cache_dir: Option<PathBuf>,
+  volume_memory_disabled: bool,
 }
 
 impl PlaybackControllerConfig {
+  /// Enable per-season volume restoration and capture without changing current volume.
+  #[must_use]
+  pub fn with_volume_memory_enabled(mut self, enabled: bool) -> Self {
+    self.volume_memory_disabled = !enabled;
+    self
+  }
+
   /// Use an explicit MPV executable instead of PATH discovery.
   #[must_use]
   pub fn with_mpv_path(mut self, mpv_path: PathBuf) -> Self {
@@ -353,7 +362,7 @@ impl fmt::Display for PlaybackError {
       Self::UnsupportedItemType => "only movies and episodes can be played",
       Self::ItemNotPlayable => "the selected item is not playable",
       Self::InvalidStartPosition => "playback start position is invalid",
-      Self::InvalidVolume => "volume must be a finite value from 0 to 100",
+      Self::InvalidVolume => "volume must be a finite nonnegative value",
       Self::PlaybackInfoUnavailable => "playback information is unavailable",
       Self::MediaSourceUnavailable => "no playable media source is available",
       Self::StreamUrlUnavailable => "the authenticated media stream is unavailable",
@@ -626,6 +635,36 @@ impl From<PlaybackStopReport> for PlaybackStopInfo {
   }
 }
 
+/// Live desired preference, publishable while a controller command is awaiting IPC.
+#[derive(Clone)]
+pub struct VolumeMemoryPreference(Arc<std::sync::atomic::AtomicU64>);
+
+impl VolumeMemoryPreference {
+  #[must_use]
+  pub fn new(enabled: bool) -> Self {
+    Self(Arc::new(std::sync::atomic::AtomicU64::new(u64::from(
+      enabled,
+    ))))
+  }
+
+  pub fn set_enabled(&self, enabled: bool) {
+    let _ = self.0.fetch_update(
+      std::sync::atomic::Ordering::AcqRel,
+      std::sync::atomic::Ordering::Acquire,
+      |current| {
+        ((current & 1 != 0) != enabled)
+          .then_some(((current & !1).wrapping_add(2)) | u64::from(enabled))
+      },
+    );
+  }
+
+  #[must_use]
+  pub fn snapshot(&self) -> (u64, bool) {
+    let value = self.0.load(std::sync::atomic::Ordering::Acquire);
+    (value >> 1, value & 1 != 0)
+  }
+}
+
 /// Single-current-item playback adapter shared by GTK application code.
 pub struct PlaybackController {
   server: Arc<dyn PlaybackServer>,
@@ -641,6 +680,22 @@ pub struct PlaybackController {
   /// once to the next process a play starts, then cleared. Manual stops keep
   /// no carry-over: an explicit stop resets the window state.
   pending_fullscreen: Option<bool>,
+  volume_memory: Option<SeasonVolumeStore>,
+  volume_memory_enabled: bool,
+  active_volume_key: Option<SeasonVolumeKey>,
+  active_volume_generation: Option<u64>,
+  next_volume_generation: u64,
+  startup_volume: Option<f64>,
+  observed_volume: Option<f64>,
+  pending_mute: Option<bool>,
+  volume_observer: Option<i64>,
+  next_volume_observer: i64,
+  playback_events: Option<async_channel::Receiver<MpvEvent>>,
+  volume_observer_initial: bool,
+  pending_end_reason: Option<PlaybackEndReason>,
+  unloading: bool,
+  volume_preference: Option<VolumeMemoryPreference>,
+  volume_preference_revision: u64,
 }
 
 impl PlaybackController {
@@ -664,7 +719,9 @@ impl PlaybackController {
       mpv.set_demuxer_cache_dir(cache_dir);
     }
 
-    Ok(Self::from_mpv(server, mpv, config.extra_args))
+    let mut controller = Self::from_mpv(server, mpv, config.extra_args);
+    controller.volume_memory_enabled = !config.volume_memory_disabled;
+    Ok(controller)
   }
 
   /// Create a controller around an existing MPV client.
@@ -700,7 +757,80 @@ impl PlaybackController {
       load_event_boundary: LoadEventBoundary::Settled,
       pending_client_messages: Vec::new(),
       pending_fullscreen: None,
+      volume_memory: None,
+      volume_memory_enabled: true,
+      active_volume_key: None,
+      active_volume_generation: None,
+      next_volume_generation: 0,
+      startup_volume: None,
+      observed_volume: None,
+      pending_mute: None,
+      volume_observer: None,
+      next_volume_observer: 1,
+      playback_events: None,
+      volume_observer_initial: false,
+      pending_end_reason: None,
+      unloading: false,
+      volume_preference: None,
+      volume_preference_revision: 0,
     }
+  }
+
+  /// Attach account-scoped persistent volume memory.
+  pub fn set_volume_memory(&mut self, store: SeasonVolumeStore) {
+    self.volume_memory = Some(store);
+    self.observed_volume = None;
+  }
+
+  pub fn set_volume_memory_preference(&mut self, preference: VolumeMemoryPreference) {
+    self.volume_preference_revision = preference.snapshot().0;
+    self.volume_preference = Some(preference);
+  }
+
+  pub async fn synchronize_volume_memory_preference(&mut self) {
+    while let Some(preference) = &self.volume_preference {
+      let (revision, enabled) = preference.snapshot();
+      if revision == self.volume_preference_revision && enabled == self.volume_memory_enabled {
+        break;
+      }
+      self.set_volume_memory_enabled(false).await;
+      self.set_volume_memory_enabled(enabled).await;
+      self.volume_preference_revision = revision;
+    }
+  }
+
+  fn volume_memory_is_enabled(&self) -> bool {
+    self
+      .volume_preference
+      .as_ref()
+      .map_or(self.volume_memory_enabled, |preference| {
+        preference.snapshot().1
+      })
+  }
+
+  /// Change volume memory without changing the playing file's volume.
+  pub async fn set_volume_memory_enabled(&mut self, enabled: bool) {
+    if enabled == self.volume_memory_enabled {
+      return;
+    }
+    self.volume_memory_enabled = false;
+    if let Some(observer) = self.volume_observer.take() {
+      let _ = self.mpv.unobserve_property(observer).await;
+    }
+    self.observed_volume = if enabled && !self.unloading {
+      self.read_volume().await.ok()
+    } else {
+      None
+    };
+    self.volume_memory_enabled = enabled;
+    if enabled && self.active.is_some() && !self.unloading {
+      self.observe_volume().await;
+    }
+  }
+
+  /// Discard mute retained for an adjacent start without changing window state.
+  pub fn discard_continuation(&mut self) {
+    self.pending_mute = None;
   }
 
   /// Update process settings used the next time MPV starts.
@@ -709,10 +839,17 @@ impl PlaybackController {
   ///
   /// Returns [`PlaybackError::MpvNotFound`] when no explicit or discoverable
   /// executable is available.
-  pub fn configure_for_next_start(
+  pub async fn configure_for_next_start(
     &mut self,
     config: PlaybackControllerConfig,
   ) -> Result<(), PlaybackError> {
+    if self.volume_preference.is_some() {
+      self.synchronize_volume_memory_preference().await;
+    } else {
+      self
+        .set_volume_memory_enabled(!config.volume_memory_disabled)
+        .await;
+    }
     let mpv_path = match config.mpv_path {
       Some(path) => path,
       None => find_mpv().ok_or(PlaybackError::MpvNotFound)?,
@@ -863,7 +1000,9 @@ impl PlaybackController {
       };
     }
 
-    if let Some(reason) = self.take_terminal_end_reason() {
+    let ended = self.take_terminal_end_reason().await;
+    self.capture_volume().await;
+    if let Some(reason) = ended {
       return self.finish_ended_playback(reason).await;
     }
 
@@ -899,6 +1038,11 @@ impl PlaybackController {
   /// An MPV cleanup command failure is returned separately so a connection
   /// handoff can retain this controller and retry before adopting a new account.
   pub async fn shutdown(&mut self) -> PlaybackShutdownOutcome {
+    self.take_terminal_end_reason().await;
+    self.capture_volume().await;
+    self.unload_before_quit().await;
+    self.reset_volume_session();
+    self.pending_fullscreen = None;
     if self.active.is_some() && self.active_transport_matches_mpv {
       let transport = self
         .collect_transport()
@@ -979,7 +1123,7 @@ impl PlaybackController {
     Ok(self.control_outcome(transport, reporting))
   }
 
-  /// Set MPV volume on its 0–100 scale.
+  /// Set MPV volume, including amplification above 100 when MPV accepts it.
   ///
   /// # Errors
   ///
@@ -988,17 +1132,20 @@ impl PlaybackController {
   pub async fn set_volume(&mut self, volume: f64) -> Result<PlaybackOutcome, PlaybackError> {
     self.require_active()?;
     validate_volume(volume)?;
+    self.capture_volume().await;
     self
       .mpv
       .set_volume(volume)
       .await
       .map_err(|_| PlaybackError::MpvControlFailed)?;
 
+    let accepted_volume = self.read_volume().await?;
+    self.remember_volume(accepted_volume);
     let mut transport = self
       .collect_transport()
       .await
       .unwrap_or_else(|| self.last_transport.clone());
-    transport.volume = volume;
+    transport.volume = accepted_volume;
     self.record_transport(&transport);
     let reporting = self.report_progress_now(&transport).await;
     Ok(self.control_outcome(transport, reporting))
@@ -1034,6 +1181,11 @@ impl PlaybackController {
   /// Returns [`PlaybackError::NoActivePlayback`] when no item is current.
   pub async fn stop(&mut self) -> Result<PlaybackStopOutcome, PlaybackError> {
     self.require_active()?;
+    self.take_terminal_end_reason().await;
+    self.capture_volume().await;
+    self.unload_before_quit().await;
+    self.reset_volume_session();
+    self.pending_fullscreen = None;
     let transport = self
       .collect_transport()
       .await
@@ -1060,7 +1212,9 @@ impl PlaybackController {
     request: PlayableRequest,
   ) -> Result<PlaybackOutcome, PlaybackError> {
     let resolved = self.resolve(request).await?;
+    self.capture_volume().await;
     let mut warnings = self.settle_disconnected_previous().await;
+    // Keep the outgoing observer until on_unload has captured its final value.
     // Keep the previous item owned by the controller until the replacement is
     // fully loaded. This makes cancellation safe: shutdown can still report and
     // clean the old item if the shell drops an in-flight start future.
@@ -1071,6 +1225,20 @@ impl PlaybackController {
       self.cleanup_failed_load(previous.as_ref()).await;
       return Err(PlaybackError::MpvStartFailed);
     }
+    if self.startup_volume.is_none() {
+      match self.read_volume().await {
+        Ok(volume) => self.startup_volume = Some(volume),
+        Err(_) => {
+          self.cleanup_failed_load(previous.as_ref()).await;
+          return Err(PlaybackError::MpvLoadFailed);
+        }
+      }
+    }
+    let mute = match self.pending_mute.take() {
+      Some(muted) => Some(muted),
+      None if previous.is_some() => self.read_mute().await,
+      None => None,
+    };
 
     // A playback-owned process takes its window state with it on teardown;
     // restore the captured fullscreen flag before loading so the replacement
@@ -1081,10 +1249,13 @@ impl PlaybackController {
       }
     }
 
-    let file_options = direct_playback_file_options(
+    let mut file_options = direct_playback_file_options(
       &resolved.active.now_playing.play_method,
       &self.configured_mpv_args,
     );
+    // Per-file pause prevents profiles and loadfile options from exposing audio
+    // before the final accepted volume and temporary mute have been restored.
+    file_options.push("pause=yes".to_owned());
     // MPV's HTTP fetch defaults to ffmpeg's Lavf agent, which media-fronting
     // proxies commonly block; presenting the player's identity passes
     // player-allowlisted servers. The user's own MPV arguments win.
@@ -1097,7 +1268,61 @@ impl PlaybackController {
     {
       log::warn!("could not pass the player user agent to MPV");
     }
+    self.next_volume_generation = self.next_volume_generation.wrapping_add(1);
+    let generation = self.next_volume_generation;
+    if self
+      .mpv
+      .set_property_string(
+        "user-data/jellypilot-volume-generation",
+        &generation.to_string(),
+      )
+      .await
+      .is_err()
+    {
+      self.cleanup_failed_load(previous.as_ref()).await;
+      return Err(PlaybackError::MpvLoadFailed);
+    }
     if !self.load_resolved(&resolved, file_options).await {
+      self.cleanup_failed_load(previous.as_ref()).await;
+      return Err(PlaybackError::MpvLoadFailed);
+    }
+    let restored_volume = if self.volume_memory_is_enabled() {
+      resolved
+        .volume_key
+        .as_ref()
+        .and_then(|key| self.volume_memory.as_ref()?.get(key))
+        .or(self.startup_volume)
+    } else {
+      None
+    };
+    let mute = self.pending_mute.take().or(mute);
+    let restore = async {
+      if let Some(volume) = restored_volume {
+        self.mpv.set_volume(volume).await?;
+      }
+      if let Some(muted) = mute {
+        self.mpv.set_mute(muted).await?;
+      }
+      Ok::<(), crate::MpvError>(())
+    }
+    .await;
+    if restore.is_err() {
+      log::warn!("could not restore MPV volume or mute before playback");
+      self.cleanup_failed_load(previous.as_ref()).await;
+      return Err(PlaybackError::MpvLoadFailed);
+    }
+    let observed_volume = match self.read_volume().await {
+      Ok(volume) => volume,
+      Err(_) => {
+        self.cleanup_failed_load(previous.as_ref()).await;
+        return Err(PlaybackError::MpvLoadFailed);
+      }
+    };
+    self.active_volume_key = resolved.volume_key;
+    self.active_volume_generation = Some(generation);
+    self.observed_volume = Some(observed_volume);
+    self.observe_volume().await;
+    if self.mpv.set_pause(false).await.is_err() {
       self.cleanup_failed_load(previous.as_ref()).await;
       return Err(PlaybackError::MpvLoadFailed);
     }
@@ -1284,6 +1509,7 @@ impl PlaybackController {
     };
 
     Ok(ResolvedPlayback {
+      volume_key: request.volume_key,
       active: ActivePlayback {
         now_playing: NowPlayingItem {
           item_id: request.item_id,
@@ -1332,6 +1558,100 @@ impl PlaybackController {
     Some(sample.merge(&self.last_transport))
   }
 
+  async fn read_volume(&self) -> Result<f64, PlaybackError> {
+    let value = self.mpv.get_property("volume").await;
+    let volume = match value {
+      Ok(PropertyValue::Number(volume)) => Some(volume),
+      _ => None,
+    };
+    match volume.filter(|volume| validate_volume(*volume).is_ok()) {
+      Some(volume) => Ok(volume),
+      None => {
+        log::warn!("could not read a valid MPV volume");
+        Err(PlaybackError::MpvControlFailed)
+      }
+    }
+  }
+
+  async fn read_mute(&self) -> Option<bool> {
+    match self.mpv.get_property("mute").await {
+      Ok(PropertyValue::Bool(muted)) => Some(muted),
+      _ => {
+        log::warn!("could not read MPV mute state");
+        None
+      }
+    }
+  }
+
+  async fn capture_volume(&mut self) {
+    self.pending_end_reason = self.take_terminal_end_reason().await;
+    if self.active.is_some() && self.active_transport_matches_mpv && !self.unloading {
+      let volume = self.read_volume().await;
+      // The script may have finalized this file while get_property was in
+      // flight. Drain its ordered message before trusting the sampled value.
+      self.pending_end_reason = self.take_terminal_end_reason().await;
+      if !self.unloading {
+        if let Ok(volume) = volume {
+          self.remember_volume(volume);
+        }
+      }
+      if self.volume_observer.is_none() && self.volume_memory_enabled && !self.unloading {
+        self.observe_volume().await;
+      }
+    }
+  }
+
+  fn remember_volume(&mut self, volume: f64) {
+    let previous = self.observed_volume.replace(volume);
+    if self.volume_memory_is_enabled()
+      && self
+        .volume_preference
+        .as_ref()
+        .is_none_or(|preference| preference.snapshot().0 == self.volume_preference_revision)
+      && previous.is_some_and(|previous| previous != volume)
+    {
+      if let (Some(store), Some(key)) = (&mut self.volume_memory, &self.active_volume_key) {
+        if let Err(error) = store.remember(key, volume) {
+          log::warn!("could not persist season volume: {error}");
+        }
+      }
+    }
+  }
+
+  fn reset_volume_session(&mut self) {
+    self.active_volume_key = None;
+    self.active_volume_generation = None;
+    self.observed_volume = None;
+    self.startup_volume = None;
+    self.pending_mute = None;
+    self.volume_observer = None;
+    self.playback_events = None;
+    self.pending_end_reason = None;
+    self.unloading = false;
+  }
+
+  async fn observe_volume(&mut self) {
+    if !self.volume_memory_enabled || self.volume_memory.is_none() {
+      return;
+    }
+    if self.next_volume_observer > 1
+      && self
+        .mpv
+        .unobserve_property(self.next_volume_observer - 1)
+        .await
+        .is_err()
+    {
+      log::warn!("could not retire MPV volume observer");
+    }
+    let observer = self.next_volume_observer;
+    self.next_volume_observer += 1;
+    self.volume_observer_initial = true;
+    self.playback_events = self.mpv.events();
+    match self.mpv.observe_property(observer, "volume").await {
+      Ok(()) => self.volume_observer = Some(observer),
+      Err(_) => log::warn!("could not observe MPV volume changes"),
+    }
+  }
   async fn load_resolved(
     &mut self,
     resolved: &ResolvedPlayback,
@@ -1341,7 +1661,7 @@ impl PlaybackController {
       self.load_event_boundary = LoadEventBoundary::Settled;
       return false;
     };
-    while events.try_recv().is_ok() {}
+    self.take_terminal_end_reason().await;
     self.load_event_boundary = LoadEventBoundary::AwaitingStart;
     // From this point MPV may already have accepted the replacement even if
     // the awaiting Rust future is cancelled. Keep the previous server item for
@@ -1372,6 +1692,7 @@ impl PlaybackController {
         let Ok(event) = events.recv().await else {
           return false;
         };
+        self.handle_unload_hook(&event);
         if let Some(reason) = self.load_event_boundary.observe(&event) {
           log::warn!(
             "MPV could not load {}: {reason:?}",
@@ -1380,6 +1701,10 @@ impl PlaybackController {
           return false;
         }
         if self.load_event_boundary == LoadEventBoundary::Settled {
+          self.unloading = false;
+          // Events still queued for the outgoing observer describe its option
+          // reset, not a user adjustment belonging to the replacement.
+          self.volume_observer = None;
           return true;
         }
       }
@@ -1388,6 +1713,7 @@ impl PlaybackController {
   }
 
   async fn cleanup_failed_load(&mut self, previous: Option<&ActivePlayback>) {
+    self.reset_volume_session();
     self.last_progress_report_at = None;
     self.load_event_boundary = LoadEventBoundary::Settled;
     self.active_transport_matches_mpv = false;
@@ -1409,10 +1735,78 @@ impl PlaybackController {
     }
   }
 
-  fn take_terminal_end_reason(&mut self) -> Option<PlaybackEndReason> {
-    let events = self.mpv.events()?;
-    let mut reason = None;
+  async fn unload_before_quit(&mut self) {
+    if self.unloading || self.active.is_none() {
+      return;
+    }
+    let Some(events) = self.mpv.events() else {
+      return;
+    };
+    if self.mpv.stop_playback().await.is_err() {
+      return;
+    }
+    // Service on_unload before quit closes IPC, including the final local
+    // adjustment. If MPV is broken, process cleanup remains authoritative.
+    let _ = tokio::time::timeout(MPV_FILE_LOAD_TIMEOUT, async {
+      while let Ok(event) = events.recv().await {
+        self.handle_unload_hook(&event);
+        if event.event == "end-file" || event.event == "shutdown" {
+          break;
+        }
+      }
+    })
+    .await;
+  }
+
+  fn handle_unload_hook(&mut self, event: &MpvEvent) {
+    let Some(args) = event.args.as_deref() else {
+      return;
+    };
+    if event.event != "client-message"
+      || args.first().map(String::as_str) != Some("jellypilot-volume-unload")
+    {
+      return;
+    }
+    self.unloading = true;
+    let generation = args.get(1).and_then(|value| value.parse::<u64>().ok());
+    if generation.is_none() || generation != self.active_volume_generation {
+      return;
+    }
+    // Lua samples inside on_unload before MPV restores option backups. The
+    // message is queued before end-file; querying MPV here would be too late.
+    if let Some(volume) = args
+      .get(2)
+      .and_then(|value| value.parse::<f64>().ok())
+      .filter(|volume| validate_volume(*volume).is_ok())
+    {
+      self.remember_volume(volume);
+    }
+    self.pending_mute = args.get(3).and_then(|value| value.parse::<bool>().ok());
+  }
+  async fn take_terminal_end_reason(&mut self) -> Option<PlaybackEndReason> {
+    let events = self.playback_events.clone().or_else(|| self.mpv.events())?;
+    let mut reason = self.pending_end_reason.take();
     while let Ok(event) = events.try_recv() {
+      self.handle_unload_hook(&event);
+      if event.event == "property-change"
+        && event.name.as_deref() == Some("volume")
+        && event.id == self.volume_observer
+        && self.volume_observer.is_some()
+        && !self.unloading
+      {
+        if self.volume_observer_initial {
+          self.volume_observer_initial = false;
+          continue;
+        }
+        if let Some(volume) = event
+          .data
+          .as_ref()
+          .and_then(serde_json::Value::as_f64)
+          .filter(|volume| validate_volume(*volume).is_ok())
+        {
+          self.remember_volume(volume);
+        }
+      }
       if event.event == "client-message" {
         if let Some(message) = event.args.as_ref().and_then(|args| args.first()) {
           self.pending_client_messages.push(message.clone());
@@ -1428,7 +1822,8 @@ impl PlaybackController {
       return Vec::new();
     }
 
-    if self.take_terminal_end_reason().is_none() {
+    let reason = self.take_terminal_end_reason().await;
+    if reason.is_none() {
       if let Some(transport) = self.collect_transport().await {
         self.record_transport(&transport);
         return Vec::new();
@@ -1437,6 +1832,16 @@ impl PlaybackController {
 
     let active = self.active.clone();
     self.pending_fullscreen = self.capture_fullscreen().await;
+    if reason != Some(PlaybackEndReason::EndOfFile) {
+      self.pending_mute = None;
+    }
+    self.startup_volume = None;
+    self.active_volume_key = None;
+    self.observed_volume = None;
+    self.volume_observer = None;
+    self.playback_events = None;
+    self.pending_end_reason = None;
+    self.unloading = false;
     self.last_progress_report_at = None;
     self.load_event_boundary = LoadEventBoundary::Settled;
     self.active_transport_matches_mpv = false;
@@ -1456,6 +1861,18 @@ impl PlaybackController {
   async fn finish_ended_playback(&mut self, reason: PlaybackEndReason) -> PlaybackRefreshOutcome {
     let active = self.active.clone();
     self.pending_fullscreen = self.capture_fullscreen().await;
+    if reason != PlaybackEndReason::EndOfFile {
+      self.pending_mute = None;
+    } else if !self.unloading {
+      self.pending_mute = self.read_mute().await;
+    }
+    self.startup_volume = None;
+    self.active_volume_key = None;
+    self.observed_volume = None;
+    self.volume_observer = None;
+    self.playback_events = None;
+    self.pending_end_reason = None;
+    self.unloading = false;
     self.last_progress_report_at = None;
     self.load_event_boundary = LoadEventBoundary::Settled;
     self.active_transport_matches_mpv = false;
@@ -1605,6 +2022,7 @@ impl LoadEventBoundary {
 }
 
 struct ResolvedPlayback {
+  volume_key: Option<SeasonVolumeKey>,
   active: ActivePlayback,
   stream_url: AuthenticatedUrl,
   external_subtitles: Vec<ExternalSubtitle>,
@@ -1637,6 +2055,7 @@ impl fmt::Debug for AuthenticatedUrl {
 }
 
 struct PlayableRequest {
+  volume_key: Option<SeasonVolumeKey>,
   item_id: String,
   title: String,
   item_type: String,
@@ -1656,6 +2075,11 @@ impl PlayableRequest {
       Playable::Library(item) => {
         validate_item_type(&item.item_type)?;
         Ok(Self {
+          volume_key: season_volume_key(
+            &item.item_type,
+            item.series_id.as_deref(),
+            item.season_number,
+          ),
           item_id: item.id,
           title: item_title(
             &item.name,
@@ -1677,6 +2101,11 @@ impl PlayableRequest {
           return Err(PlaybackError::ItemNotPlayable);
         }
         Ok(Self {
+          volume_key: season_volume_key(
+            &item.item_type,
+            item.series_id.as_deref(),
+            item.season_number,
+          ),
           item_id: item.id,
           title: item_title(
             &item.name,
@@ -1695,6 +2124,11 @@ impl PlayableRequest {
       Playable::Media(item) => {
         validate_item_type(&item.item_type)?;
         Ok(Self {
+          volume_key: season_volume_key(
+            &item.item_type,
+            item.series_id.as_deref(),
+            item.parent_index_number,
+          ),
           item_id: item.id,
           title: item_title(
             &item.name,
@@ -1727,6 +2161,17 @@ impl PlayableRequest {
   }
 }
 
+fn season_volume_key(
+  item_type: &str,
+  series_id: Option<&str>,
+  season: Option<i32>,
+) -> Option<SeasonVolumeKey> {
+  if item_type != "Episode" {
+    return None;
+  }
+  SeasonVolumeKey::new(series_id?, season?)
+}
+
 fn validate_item_type(item_type: &str) -> Result<(), PlaybackError> {
   if matches!(item_type, "Movie" | "Episode") {
     Ok(())
@@ -1747,7 +2192,7 @@ fn checked_seconds_to_ticks(seconds: f64) -> Result<i64, PlaybackError> {
 }
 
 fn validate_volume(volume: f64) -> Result<(), PlaybackError> {
-  if volume.is_finite() && (0.0..=100.0).contains(&volume) {
+  if volume.is_finite() && volume >= 0.0 {
     Ok(())
   } else {
     Err(PlaybackError::InvalidVolume)
@@ -2026,6 +2471,7 @@ mod tests {
     fail_progress: AtomicBool,
     fail_stop: AtomicBool,
     stop_report_gate: Option<StopReportGate>,
+    resolution_gate: Mutex<Option<SubAddResponseGate>>,
   }
 
   impl MockPlaybackServer {
@@ -2060,6 +2506,7 @@ mod tests {
         fail_progress: AtomicBool::new(false),
         fail_stop: AtomicBool::new(false),
         stop_report_gate: None,
+        resolution_gate: Mutex::new(None),
       }
     }
 
@@ -2151,7 +2598,19 @@ mod tests {
               .map(|(_, url)| url.clone())
           });
       }
-      Box::pin(async move { Ok(resolution) })
+      let gate = self.resolution_gate.lock().expect("resolution gate").take();
+      Box::pin(async move {
+        if let Some(gate) = gate {
+          gate.command_received.add_permits(1);
+          gate
+            .release_response
+            .acquire()
+            .await
+            .expect("resolution release")
+            .forget();
+        }
+        Ok(resolution)
+      })
     }
 
     fn report_playback_start(
@@ -2263,6 +2722,8 @@ mod tests {
     duration: f64,
     volume: f64,
     muted: bool,
+    requested_generation: String,
+    loaded_generation: String,
     fullscreen: bool,
     audio_track: i64,
     subtitle_track: Option<i64>,
@@ -2277,6 +2738,8 @@ mod tests {
         duration: 1_500.0,
         volume: 100.0,
         muted: false,
+        requested_generation: "0".to_owned(),
+        loaded_generation: "0".to_owned(),
         fullscreen: false,
         audio_track: 1,
         subtitle_track: None,
@@ -2318,6 +2781,10 @@ mod tests {
     writer: Arc<tokio::sync::Mutex<WriteHalf<DuplexStream>>>,
     peer: tokio::task::JoinHandle<()>,
     received: Arc<Mutex<Vec<Vec<serde_json::Value>>>>,
+    unload_volume: Arc<Mutex<Option<f64>>>,
+    fail_command: Arc<Mutex<Option<Vec<serde_json::Value>>>>,
+    end_reason: Arc<Mutex<&'static str>>,
+    withheld_volume: Arc<Mutex<Option<SubAddResponseGate>>>,
   }
 
   impl InMemoryMpv {
@@ -2365,10 +2832,20 @@ mod tests {
       let task_writer = Arc::clone(&writer);
       let received = Arc::new(Mutex::new(Vec::new()));
       let task_received = Arc::clone(&received);
+      let unload_volume = Arc::new(Mutex::new(None));
+      let task_unload_volume = Arc::clone(&unload_volume);
+      let fail_command = Arc::new(Mutex::new(None));
+      let task_fail_command = Arc::clone(&fail_command);
+      let end_reason = Arc::new(Mutex::new("eof"));
+      let task_end_reason = Arc::clone(&end_reason);
+      let withheld_volume = Arc::new(Mutex::new(None::<SubAddResponseGate>));
+      let task_withheld_volume = Arc::clone(&withheld_volume);
       let peer = tokio::spawn(async move {
         let mut lines = BufReader::new(peer_reader).lines();
         let mut state = MpvPeerState::default();
         let mut withheld_sub_add = withheld_sub_add;
+        let mut volume_observer = None;
+        let mut loaded = false;
         while let Ok(Some(line)) = lines.next_line().await {
           let Ok(message) = serde_json::from_str::<serde_json::Value>(&line) else {
             continue;
@@ -2385,7 +2862,29 @@ mod tests {
             .lock()
             .expect("received commands should not be poisoned")
             .push(command.clone());
-          let data = apply_mpv_command(&mut state, &command);
+          let name = command.first().and_then(serde_json::Value::as_str);
+          let replacing = name == Some("loadfile") && loaded;
+          let failed =
+            task_fail_command.lock().expect("failure control").as_ref() == Some(&command);
+          let data = if replacing || failed {
+            serde_json::Value::Null
+          } else {
+            apply_mpv_command(&mut state, &command)
+          };
+          if name == Some("set_property")
+            && command.get(1).and_then(serde_json::Value::as_str) == Some("volume")
+          {
+            let gate = task_withheld_volume.lock().expect("volume gate").take();
+            if let Some(gate) = gate {
+              gate.command_received.add_permits(1);
+              gate
+                .release_response
+                .acquire()
+                .await
+                .expect("volume release")
+                .forget();
+            }
+          }
           if command.first().and_then(serde_json::Value::as_str) == Some("sub-add") {
             if let Some(gate) = withheld_sub_add.take() {
               gate.command_received.add_permits(1);
@@ -2398,12 +2897,11 @@ mod tests {
             }
           }
           let mut writer = task_writer.lock().await;
-          let error =
-            if fail_quit && command.first().and_then(serde_json::Value::as_str) == Some("quit") {
-              "failure containing secret-token"
-            } else {
-              "success"
-            };
+          let error = if failed || (fail_quit && name == Some("quit")) {
+            "failure containing secret-token"
+          } else {
+            "success"
+          };
           write_mpv_message(
             &mut writer,
             &serde_json::json!({
@@ -2413,7 +2911,85 @@ mod tests {
             }),
           )
           .await;
+          if failed {
+            continue;
+          }
+          let ending = name == Some("get_property")
+            && command.get(1).and_then(serde_json::Value::as_str) == Some("test-end-file");
+          if replacing || name == Some("stop") || ending {
+            if !ending {
+              *task_end_reason.lock().expect("end reason") = "stop";
+            }
+            if let Some(volume) = task_unload_volume.lock().expect("unload volume").take() {
+              state.volume = volume;
+            }
+            write_mpv_message(
+              &mut writer,
+              &serde_json::json!({
+                "event": "client-message",
+                "args": ["jellypilot-volume-unload", state.loaded_generation, state.volume.to_string(), state.muted.to_string()],
+              }),
+            )
+            .await;
+            // Real MPV restores file-local option backups only after the hook.
+            state.volume = 100.0;
+            state.muted = false;
+            if let Some(id) = volume_observer {
+              write_mpv_message(
+                &mut writer,
+                &serde_json::json!({
+                  "event": "property-change", "id": id, "name": "volume", "data": state.volume,
+                }),
+              )
+              .await;
+            }
+            let end_reason = *task_end_reason.lock().expect("end reason");
+            write_mpv_message(
+              &mut writer,
+              &serde_json::json!({
+                "event": "end-file", "reason": end_reason,
+              }),
+            )
+            .await;
+            loaded = false;
+            *task_end_reason.lock().expect("end reason") = "eof";
+            if replacing {
+              apply_mpv_command(&mut state, &command);
+              loaded = true;
+              write_mpv_message(&mut writer, &serde_json::json!({"event": "start-file"})).await;
+              write_mpv_message(&mut writer, &serde_json::json!({"event": "file-loaded"})).await;
+            }
+            continue;
+          }
+          match command.first().and_then(serde_json::Value::as_str) {
+            Some("observe_property")
+              if command.get(2).and_then(serde_json::Value::as_str) == Some("volume") =>
+            {
+              volume_observer = command.get(1).and_then(serde_json::Value::as_i64);
+            }
+            Some("unobserve_property")
+              if command.get(1).and_then(serde_json::Value::as_i64) == volume_observer =>
+            {
+              volume_observer = None;
+            }
+            _ => {}
+          }
+          if command.first().and_then(serde_json::Value::as_str) == Some("observe_property")
+            || (command.first().and_then(serde_json::Value::as_str) == Some("set_property")
+              && command.get(1).and_then(serde_json::Value::as_str) == Some("volume"))
+          {
+            if let Some(id) = volume_observer {
+              write_mpv_message(
+                &mut writer,
+                &serde_json::json!({
+                  "event": "property-change", "id": id, "name": "volume", "data": state.volume,
+                }),
+              )
+              .await;
+            }
+          }
           if command.first().and_then(serde_json::Value::as_str) == Some("loadfile") {
+            loaded = true;
             write_mpv_message(&mut writer, &serde_json::json!({"event": "start-file"})).await;
             write_mpv_message(&mut writer, &serde_json::json!({"event": "file-loaded"})).await;
           }
@@ -2425,6 +3001,10 @@ mod tests {
         writer,
         peer,
         received,
+        unload_volume,
+        fail_command,
+        end_reason,
+        withheld_volume,
       }
     }
 
@@ -2443,19 +3023,16 @@ mod tests {
     }
 
     async fn emit_eof(&self) {
-      {
-        let mut writer = self.writer.lock().await;
-        write_mpv_message(
-          &mut writer,
-          &serde_json::json!({"event": "end-file", "reason": "eof"}),
-        )
-        .await;
-      }
+      self
+        .client
+        .get_property("test-end-file")
+        .await
+        .expect("trigger EOF");
       self
         .client
         .get_property("pause")
         .await
-        .expect("barrier property should be readable");
+        .expect("event barrier");
     }
   }
 
@@ -2478,10 +3055,29 @@ mod tests {
   ) -> serde_json::Value {
     let name = command.first().and_then(serde_json::Value::as_str);
     match name {
+      Some("loadfile") => {
+        state
+          .loaded_generation
+          .clone_from(&state.requested_generation);
+        if let Some(options) = command.get(4).and_then(serde_json::Value::as_str) {
+          for option in options.split(',') {
+            if let Some(value) = option.strip_prefix("pause=") {
+              state.paused = value == "yes";
+            }
+            if let Some(value) = option.strip_prefix("start=") {
+              state.time_pos = value.parse().expect("valid load start");
+            }
+          }
+        }
+        serde_json::Value::Null
+      }
       Some("set_property") => {
         let property = command.get(1).and_then(serde_json::Value::as_str);
         let value = command.get(2).cloned().unwrap_or(serde_json::Value::Null);
         match property {
+          Some("user-data/jellypilot-volume-generation") => {
+            state.requested_generation = value.as_str().expect("string generation").to_owned();
+          }
           Some("pause") => state.paused = value.as_bool().unwrap_or(state.paused),
           Some("volume") => state.volume = value.as_f64().unwrap_or(state.volume),
           Some("mute") => state.muted = value.as_bool().unwrap_or(state.muted),
@@ -2803,6 +3399,472 @@ mod tests {
       played_percentage: None,
       overview: None,
     }
+  }
+
+  struct VolumeFixture(PathBuf);
+
+  impl VolumeFixture {
+    fn new() -> Self {
+      static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+      Self(std::env::temp_dir().join(format!(
+        "jellypilot-mpv-volume-{}-{}",
+        std::process::id(),
+        NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
+      )))
+    }
+
+    fn store(&self) -> SeasonVolumeStore {
+      SeasonVolumeStore::load_from(
+        self.0.join("volume.json"),
+        jellypilot_core::watchlist::ProfileScope::new(
+          MediaServerProvider::Jellyfin,
+          "https://server.example",
+          "user",
+        )
+        .expect("valid scope"),
+      )
+      .expect("volume store")
+    }
+  }
+
+  impl Drop for VolumeFixture {
+    fn drop(&mut self) {
+      let _ = std::fs::remove_dir_all(&self.0);
+    }
+  }
+
+  #[test]
+  fn season_volume_restores_before_audio_and_does_not_leak_to_other_items() {
+    run_async(async {
+      let files = VolumeFixture::new();
+      let key = SeasonVolumeKey::new("series-1", 1).expect("season");
+      let mut store = files.store();
+      store.remember(&key, 125.5).expect("remember");
+      let (mut controller, mpv) = controller_harness(Arc::new(MockPlaybackServer::new())).await;
+      // A configured startup default is captured before the first load.
+      mpv.client.set_volume(63.0).await.expect("startup volume");
+      controller.set_volume_memory(store);
+      let outcome = controller
+        .play(
+          library_item("Episode").into(),
+          PlaybackStartPosition::Resume,
+        )
+        .await
+        .expect("play");
+      assert_eq!(outcome.snapshot.transport.volume, 125.5);
+      let commands = mpv.received_commands();
+      let load = commands
+        .iter()
+        .position(|c| c[0] == "loadfile")
+        .expect("load");
+      assert!(commands[load][4]
+        .as_str()
+        .expect("options")
+        .contains("pause=yes"));
+      let restore = commands
+        .iter()
+        .position(|c| c[0] == "set_property" && c[1] == "volume" && c[2] == 125.5)
+        .expect("restore");
+      let unpause = commands
+        .iter()
+        .position(|c| c[0] == "set_property" && c[1] == "pause" && c[2] == false)
+        .expect("unpause");
+      assert!(load < restore && restore < unpause);
+      let _ = controller.set_volume(0.0).await.expect("zero");
+      let same = controller
+        .play(
+          library_item("Episode").into(),
+          PlaybackStartPosition::Beginning,
+        )
+        .await
+        .expect("same season");
+      assert_eq!(same.snapshot.transport.volume, 0.0);
+      let mut other = library_item("Episode");
+      other.season_number = Some(2);
+      let other = controller
+        .play(other.into(), PlaybackStartPosition::Beginning)
+        .await
+        .expect("other season");
+      assert_eq!(other.snapshot.transport.volume, 63.0);
+      let movie = controller
+        .play(
+          library_item("Movie").into(),
+          PlaybackStartPosition::Beginning,
+        )
+        .await
+        .expect("movie");
+      assert_eq!(movie.snapshot.transport.volume, 63.0);
+      assert_eq!(files.store().get(&key), Some(0.0));
+      assert_eq!(
+        files
+          .store()
+          .get(&SeasonVolumeKey::new("series-1", 2).expect("season")),
+        None
+      );
+    });
+  }
+
+  #[test]
+  fn cancelled_replacement_unload_cannot_overwrite_the_outgoing_season() {
+    run_async(async {
+      let files = VolumeFixture::new();
+      let key = SeasonVolumeKey::new("series-1", 1).expect("season");
+      let mut store = files.store();
+      store.remember(&key, 45.0).expect("saved volume");
+      let (mut controller, mpv) = controller_harness(Arc::new(MockPlaybackServer::new())).await;
+      controller.set_volume_memory(store);
+      let _ = controller
+        .play(
+          library_item("Episode").into(),
+          PlaybackStartPosition::Beginning,
+        )
+        .await
+        .expect("outgoing episode");
+
+      let gate = SubAddResponseGate::new();
+      *mpv.withheld_volume.lock().expect("volume gate") = Some(gate.clone());
+      let mut other = library_item("Episode");
+      other.season_number = Some(2);
+      let mut start = Box::pin(controller.play(other.into(), PlaybackStartPosition::Beginning));
+      tokio::select! {
+        () = gate.wait_for_command() => {}
+        result = &mut start => panic!("replacement unexpectedly settled: {result:?}"),
+      }
+      // MPV has accepted the incoming file and its restore command, but the
+      // controller still owns the outgoing season while the future is dropped.
+      drop(start);
+      gate.release_response();
+      let shutdown = controller.shutdown().await;
+      assert!(shutdown.cleanup.is_ok());
+      assert_eq!(files.store().get(&key), Some(45.0));
+      assert_eq!(
+        files
+          .store()
+          .get(&SeasonVolumeKey::new("series-1", 2).expect("incoming season"),),
+        None
+      );
+    });
+  }
+
+  #[test]
+  fn playback_error_discards_temporary_mute() {
+    run_async(async {
+      let (mut controller, mpv) = controller_harness(Arc::new(MockPlaybackServer::new())).await;
+      let _ = controller
+        .play(
+          library_item("Episode").into(),
+          PlaybackStartPosition::Beginning,
+        )
+        .await
+        .expect("start");
+      mpv.client.set_mute(true).await.expect("mute");
+      *mpv.end_reason.lock().expect("end reason") = "error";
+      mpv.emit_eof().await;
+      assert_eq!(
+        controller.refresh().await.state,
+        PlaybackRefreshState::Ended(PlaybackEndReason::Error)
+      );
+      let _next = mpv.respawn().await;
+      let outcome = controller
+        .play(
+          library_item("Episode").into(),
+          PlaybackStartPosition::Beginning,
+        )
+        .await
+        .expect("restart");
+      assert!(!outcome.snapshot.transport.muted);
+    });
+  }
+
+  #[test]
+  fn replacement_keeps_the_final_unobserved_change_before_option_reset() {
+    run_async(async {
+      let files = VolumeFixture::new();
+      let key = SeasonVolumeKey::new("series-1", 1).expect("season");
+      let (mut controller, mpv) = controller_harness(Arc::new(MockPlaybackServer::new())).await;
+      controller.set_volume_memory(files.store());
+      let _ = controller
+        .play(
+          library_item("Episode").into(),
+          PlaybackStartPosition::Beginning,
+        )
+        .await
+        .expect("start");
+      *mpv.unload_volume.lock().expect("unload control") = Some(47.25);
+      let outcome = controller
+        .play(
+          library_item("Episode").into(),
+          PlaybackStartPosition::Beginning,
+        )
+        .await
+        .expect("replace");
+      assert_eq!(outcome.snapshot.transport.volume, 47.25);
+      assert_eq!(files.store().get(&key), Some(47.25));
+    });
+  }
+
+  #[test]
+  fn enabled_memory_without_a_store_restores_pristine_startup_volume() {
+    run_async(async {
+      let (mut controller, mpv) = controller_harness(Arc::new(MockPlaybackServer::new())).await;
+      mpv
+        .client
+        .set_volume(63.0)
+        .await
+        .expect("configured default");
+      let _ = controller
+        .play(
+          library_item("Episode").into(),
+          PlaybackStartPosition::Beginning,
+        )
+        .await
+        .expect("start");
+      let _ = controller.set_volume(45.0).await.expect("adjust");
+      let outcome = controller
+        .play(
+          library_item("Movie").into(),
+          PlaybackStartPosition::Beginning,
+        )
+        .await
+        .expect("movie");
+      assert_eq!(outcome.snapshot.transport.volume, 63.0);
+    });
+  }
+
+  #[test]
+  fn unrelated_start_discards_eof_mute_without_discarding_fullscreen() {
+    run_async(async {
+      let (mut controller, mpv) = controller_harness(Arc::new(MockPlaybackServer::new())).await;
+      let _ = controller
+        .play(
+          library_item("Movie").into(),
+          PlaybackStartPosition::Beginning,
+        )
+        .await
+        .expect("start");
+      mpv.client.set_mute(true).await.expect("mute");
+      mpv.client.set_fullscreen(true).await.expect("fullscreen");
+      mpv.emit_eof().await;
+      let _ = controller.refresh().await;
+      controller.discard_continuation();
+      let _next = mpv.respawn().await;
+      let outcome = controller
+        .play(
+          library_item("Movie").into(),
+          PlaybackStartPosition::Beginning,
+        )
+        .await
+        .expect("unrelated movie");
+      assert!(!outcome.snapshot.transport.muted);
+      assert_eq!(controller.capture_fullscreen().await, Some(true));
+    });
+  }
+
+  #[test]
+  fn restoration_and_unpause_failures_are_destructive_start_failures() {
+    run_async(async {
+      for command in [
+        serde_json::json!(["set_property", "volume", 100.0]),
+        serde_json::json!(["get_property", "volume"]),
+        serde_json::json!(["set_property", "pause", false]),
+      ] {
+        let (mut controller, mpv) = controller_harness(Arc::new(MockPlaybackServer::new())).await;
+        let _ = controller
+          .play(
+            library_item("Episode").into(),
+            PlaybackStartPosition::Beginning,
+          )
+          .await
+          .expect("start");
+        *mpv.fail_command.lock().expect("failure control") =
+          Some(command.as_array().expect("command").clone());
+        let result = controller
+          .play(
+            library_item("Episode").into(),
+            PlaybackStartPosition::Beginning,
+          )
+          .await;
+        assert!(matches!(result, Err(PlaybackError::MpvLoadFailed)));
+        assert!(controller.active.is_none());
+        assert!(!mpv.client.is_connected());
+      }
+    });
+  }
+
+  #[test]
+  fn disabling_during_resolution_prevents_late_volume_restore_and_writes() {
+    run_async(async {
+      let files = VolumeFixture::new();
+      let key = SeasonVolumeKey::new("series-1", 1).expect("season");
+      let mut store = files.store();
+      store.remember(&key, 45.0).expect("saved volume");
+      let server = Arc::new(MockPlaybackServer::new());
+      let (mut controller, mpv) = controller_harness(Arc::clone(&server)).await;
+      let preference = VolumeMemoryPreference::new(true);
+      controller.set_volume_memory_preference(preference.clone());
+      controller.set_volume_memory(store);
+      let _ = controller
+        .play(
+          library_item("Episode").into(),
+          PlaybackStartPosition::Beginning,
+        )
+        .await
+        .expect("start");
+      let gate = SubAddResponseGate::new();
+      *server.resolution_gate.lock().expect("resolution gate") = Some(gate.clone());
+      let (outcome, ()) = tokio::join!(
+        controller.play(
+          library_item("Episode").into(),
+          PlaybackStartPosition::Beginning
+        ),
+        async {
+          gate.wait_for_command().await;
+          preference.set_enabled(false);
+          mpv
+            .client
+            .set_volume(81.0)
+            .await
+            .expect("disabled local change");
+          gate.release_response();
+        },
+      );
+      assert_eq!(
+        outcome.expect("replacement").snapshot.transport.volume,
+        100.0
+      );
+      assert_eq!(files.store().get(&key), Some(45.0));
+    });
+  }
+
+  #[test]
+  fn local_volume_is_finalized_at_eof_and_mute_only_survives_continuous_playback() {
+    run_async(async {
+      let files = VolumeFixture::new();
+      let key = SeasonVolumeKey::new("series-1", 1).expect("season");
+      let (mut controller, mpv) = controller_harness(Arc::new(MockPlaybackServer::new())).await;
+      controller.set_volume_memory(files.store());
+      let _ = controller
+        .play(
+          library_item("Episode").into(),
+          PlaybackStartPosition::Beginning,
+        )
+        .await
+        .expect("play");
+      mpv.client.set_volume(142.25).await.expect("local volume");
+      mpv.client.set_mute(true).await.expect("local mute");
+      mpv.emit_eof().await;
+      assert!(matches!(
+        controller.refresh().await.state,
+        PlaybackRefreshState::Ended(_)
+      ));
+      assert_eq!(files.store().get(&key), Some(142.25));
+      let next = mpv.respawn().await;
+      let outcome = controller
+        .play(
+          library_item("Episode").into(),
+          PlaybackStartPosition::Beginning,
+        )
+        .await
+        .expect("next");
+      assert_eq!(
+        (
+          outcome.snapshot.transport.volume,
+          outcome.snapshot.transport.muted
+        ),
+        (142.25, true)
+      );
+      let _ = controller.stop().await.expect("stop");
+      let _fresh = next.respawn().await;
+      let outcome = controller
+        .play(
+          library_item("Episode").into(),
+          PlaybackStartPosition::Beginning,
+        )
+        .await
+        .expect("fresh session");
+      assert!(!outcome.snapshot.transport.muted);
+    });
+  }
+
+  #[test]
+  fn volume_toggle_ignores_disabled_changes_and_stale_observer_events() {
+    run_async(async {
+      let files = VolumeFixture::new();
+      let key = SeasonVolumeKey::new("series-1", 1).expect("season");
+      let (mut controller, mpv) = controller_harness(Arc::new(MockPlaybackServer::new())).await;
+      controller.set_volume_memory(files.store());
+      let _ = controller
+        .play(
+          library_item("Episode").into(),
+          PlaybackStartPosition::Beginning,
+        )
+        .await
+        .expect("play");
+      let _ = controller.set_volume(45.0).await.expect("remember volume");
+      let config = |enabled| {
+        PlaybackControllerConfig::default()
+          .with_mpv_path(PathBuf::from("mpv"))
+          .with_volume_memory_enabled(enabled)
+      };
+      controller
+        .configure_for_next_start(config(false))
+        .await
+        .expect("disable");
+      mpv.client.set_volume(83.0).await.expect("disabled change");
+      controller
+        .configure_for_next_start(config(true))
+        .await
+        .expect("enable");
+      assert_eq!(files.store().get(&key), Some(45.0));
+      // The first adjustment after enabling happens before the next refresh.
+      mpv
+        .client
+        .set_volume(52.0)
+        .await
+        .expect("enabled local change");
+      {
+        let mut writer = mpv.writer.lock().await;
+        write_mpv_message(
+          &mut writer,
+          &serde_json::json!({
+            "event": "property-change", "id": 1, "name": "volume", "data": 9.0,
+          }),
+        )
+        .await;
+      }
+      let _ = controller.refresh().await;
+      assert_eq!(files.store().get(&key), Some(52.0));
+    });
+  }
+
+  #[test]
+  fn disconnected_process_retains_its_last_queued_volume_adjustment() {
+    run_async(async {
+      let files = VolumeFixture::new();
+      let key = SeasonVolumeKey::new("series-1", 1).expect("season");
+      let (mut controller, mpv) = controller_harness(Arc::new(MockPlaybackServer::new())).await;
+      controller.set_volume_memory(files.store());
+      let _ = controller
+        .play(
+          library_item("Episode").into(),
+          PlaybackStartPosition::Beginning,
+        )
+        .await
+        .expect("play");
+      mpv.client.set_volume(137.0).await.expect("local volume");
+      // The reply to a later command fences delivery of the volume event.
+      mpv
+        .client
+        .get_property("pause")
+        .await
+        .expect("event barrier");
+      mpv.client.stop().await;
+      assert!(matches!(
+        controller.refresh().await.state,
+        PlaybackRefreshState::Ended(PlaybackEndReason::Disconnected)
+      ));
+      assert_eq!(files.store().get(&key), Some(137.0));
+    });
   }
 
   fn item_detail(can_play: bool) -> VideoItemDetail {

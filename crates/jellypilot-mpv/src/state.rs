@@ -52,8 +52,8 @@ impl TransportSnapshot {
       }
       "volume" => {
         if let Some(volume) = data.as_f64() {
-          if volume.is_finite() {
-            self.volume = volume.clamp(0.0, 100.0);
+          if volume.is_finite() && volume >= 0.0 {
+            self.volume = volume;
             self.connected = true;
           }
         }
@@ -233,7 +233,7 @@ impl PropertySample {
       }
     };
     let volume = match self.volume {
-      Ok(PropertyValue::Number(volume)) if volume.is_finite() => Some(volume.clamp(0.0, 100.0)),
+      Ok(PropertyValue::Number(volume)) if volume.is_finite() && volume >= 0.0 => Some(volume),
       Ok(_) => None,
       Err(error) => {
         log::warn!("Failed to get volume property: {error}");
@@ -327,15 +327,12 @@ mod tests {
   }
 
   #[test]
-  fn snapshot_projects_volume_observation_clamped_to_player_range() {
-    let loud = observed(&[("volume", serde_json::json!(130.0))]);
-    assert_eq!(loud.project(None).volume, 100.0);
+  fn snapshot_preserves_amplification_and_rejects_negative_volume() {
+    let mut loud = observed(&[("volume", serde_json::json!(130.0))]);
+    assert_eq!(loud.project(None).volume, 130.0);
 
-    let negative = observed(&[("volume", serde_json::json!(-5.0))]);
-    assert_eq!(negative.project(None).volume, 0.0);
-
-    let normal = observed(&[("volume", serde_json::json!(64.0))]);
-    assert_eq!(normal.project(None).volume, 64.0);
+    loud.apply_property("volume", &serde_json::json!(-5.0));
+    assert_eq!(loud.project(None).volume, 130.0);
   }
 
   #[test]

@@ -222,6 +222,7 @@ pub enum SettingsMessage {
   IntroMenuToggled,
   IntroMenuDismissed,
   IntroModeSelected(IntroMode),
+  RememberSeasonVolumeChanged(bool),
   ThemeModeSelected(ThemeMode),
   AppModeSelected(AppMode),
   FontLicensesToggled,

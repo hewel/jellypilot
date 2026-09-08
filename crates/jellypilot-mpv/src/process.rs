@@ -1,5 +1,6 @@
 //! MPV process detection and spawning.
 
+use std::io::Write;
 use std::path::PathBuf;
 use std::process::Stdio;
 
@@ -118,6 +119,37 @@ fn ensure_input_conf() -> Option<PathBuf> {
   }
 
   Some(path)
+}
+
+fn volume_hook_path() -> PathBuf {
+  std::env::var_os("XDG_RUNTIME_DIR")
+    .map(PathBuf::from)
+    .unwrap_or_else(std::env::temp_dir)
+    .join(format!(
+      "jellypilot-volume-unload-{}.lua",
+      std::process::id()
+    ))
+}
+
+fn write_volume_hook() -> Result<PathBuf, std::io::Error> {
+  let path = volume_hook_path();
+  let mut file = std::fs::OpenOptions::new()
+    .write(true)
+    .create_new(true)
+    .open(&path)?;
+  file.write_all(
+    br#"local generation = "0"
+mp.add_hook("on_load", 50, function()
+  generation = mp.get_property_native("user-data/jellypilot-volume-generation", "0")
+end)
+mp.add_hook("on_unload", 50, function()
+  mp.commandv("script-message", "jellypilot-volume-unload", generation,
+    tostring(mp.get_property_number("volume")),
+    tostring(mp.get_property_bool("mute")))
+end)
+"#,
+  )?;
+  Ok(path)
 }
 
 /// Canonicalize a path to resolve symlinks and junctions.
@@ -247,12 +279,18 @@ pub fn spawn_mpv(mpv_path: Option<&PathBuf>, extra_args: &[String]) -> Result<Ch
   for arg in extra_args {
     cmd.arg(arg);
   }
+  // Explicit scripts remain enabled with --load-scripts=no and append to user scripts.
+  let volume_hook = write_volume_hook()?;
+  cmd.arg(format!("--scripts-append={}", volume_hook.display()));
 
   let child = cmd
     .stdin(Stdio::null())
     .stdout(Stdio::null())
     .stderr(Stdio::null())
-    .spawn()?;
+    .spawn()
+    .inspect_err(|_| {
+      let _ = std::fs::remove_file(&volume_hook);
+    })?;
 
   Ok(child)
 }
@@ -265,6 +303,7 @@ pub fn cleanup_ipc() {
     let _ = std::fs::remove_file(&path);
   }
   // Windows named pipes are cleaned up automatically
+  let _ = std::fs::remove_file(volume_hook_path());
 }
 
 #[cfg(test)]
