@@ -1025,7 +1025,6 @@ mod tests {
   use jellypilot_core::request_gate::RequestGate;
 
   use super::*;
-  use crate::app::state::ArtworkHandleRetention;
 
   struct TestSettingsFile(PathBuf);
 
@@ -1075,8 +1074,6 @@ mod tests {
       tray: None,
       artwork_adapter: Arc::new(jellypilot_media_server::artwork::ArtworkAdapter::new()),
       avatar_adapter: Arc::new(jellypilot_media_server::artwork::ArtworkAdapter::new()),
-      artwork_binder: Default::default(),
-      artwork_handles: ArtworkHandleRetention::default(),
       profile_avatars: Default::default(),
     };
     (surface, kernel)

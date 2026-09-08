@@ -2,35 +2,30 @@
 //! preferences, the scroll-driven display window, the sidebar search input,
 //! and the browse artwork pipeline (grid cards).
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use crate::i18n::UiText;
 use iced::widget::operation;
 use iced::{task, Task};
-use jellypilot_core::artwork_binder::{ArtworkSettlement, ArtworkSurface};
-use jellypilot_core::artwork_loader::{
-  grid_cell_visible, visible_display_range, PlannedArtworkLoad,
-};
 use jellypilot_core::browse::fetch_browse_page;
 use jellypilot_core::browse_model::{
   BrowseEffect, BrowseModel, BrowsePageRequest, BrowsePageSettlement, BrowsePreferences,
   BrowseSource, LibraryBrowseView,
 };
+use jellypilot_core::browse_window::visible_display_range;
 use jellypilot_core::config::BrowseFilterSettings;
 use jellypilot_core::diagnostics::{sanitize_message, DiagnosticCategory, DiagnosticLevel};
 use jellypilot_core::LibraryBrowseLoadToken;
-use jellypilot_media_server::artwork::{
-  ArtworkLoadObservation, ArtworkLoadSummary, ArtworkSizeClass, DerivedArtwork,
-};
+use jellypilot_media_server::artwork::{ArtworkSizeClass, DerivedArtwork};
 use jellypilot_media_server::VideoLibrarySortDirection;
 use jellypilot_ui::layout::SizeClass;
 use jellypilot_ui::widgets::artwork_grid::{ArtworkGridMetrics, ArtworkGridViewport};
 
-use super::artwork::stream_artwork_loads;
+use super::artwork::{ImageCollection, ImageSpec};
 use super::kernel::Kernel;
-use super::message::{ArtworkLoadCompletion, BrowseMessage, Message};
-use super::state::{ArtworkCell, ArtworkCellState, BrowseArtwork, BrowseViewport};
+use super::message::{BrowseMessage, Message};
+use super::state::BrowseViewport;
 use super::view::browse::{grid_available_width, CARD_COPY_HEIGHT};
 
 /// Browse surface slice: the Library Browser model and its derived view, the
@@ -39,9 +34,10 @@ use super::view::browse::{grid_available_width, CARD_COPY_HEIGHT};
 pub struct Surface {
   pub data: BrowseModel,
   pub view: LibraryBrowseView,
-  pub artwork: BrowseArtwork,
+  pub artwork: ImageCollection,
   pub page_tasks: HashMap<LibraryBrowseLoadToken, task::Handle>,
   pub viewport: BrowseViewport,
+  pub grid_viewport: Option<ArtworkGridViewport>,
   pub scroll_id: iced::widget::Id,
   pub sort_menu_open: bool,
   pub search_input: String,
@@ -56,9 +52,10 @@ impl Default for Surface {
     Self {
       data: BrowseModel::default(),
       view: LibraryBrowseView::Inactive,
-      artwork: BrowseArtwork::default(),
+      artwork: ImageCollection::default(),
       page_tasks: HashMap::new(),
       viewport: BrowseViewport::default(),
+      grid_viewport: None,
       scroll_id: iced::widget::Id::unique(),
       sort_menu_open: false,
       search_input: String::new(),
@@ -67,6 +64,16 @@ impl Default for Surface {
       page_requests: HashMap::new(),
       refresh_fallback: None,
     }
+  }
+}
+
+impl Surface {
+  /// Before layout, bound materialization by the window rather than waiting for
+  /// scroll input. Only the image observers may turn these cells into demand.
+  pub(crate) fn grid_viewport(&self, window_size: iced::Size) -> ArtworkGridViewport {
+    self.grid_viewport.unwrap_or_else(|| {
+      ArtworkGridViewport::from_scroll_geometry(self.viewport.offset_y, window_size.height, 0.0)
+    })
   }
 }
 
@@ -102,7 +109,7 @@ pub(crate) fn restore(
   window_size: iced::Size,
 ) -> Task<Message> {
   abort_pages(surface);
-  begin_artwork_view(surface, kernel);
+  begin_artwork_view(surface);
   surface.data = snapshot.data;
   surface.view = snapshot.view;
   surface.viewport = snapshot.viewport;
@@ -119,26 +126,22 @@ pub(crate) fn restore(
   Task::batch([
     Task::batch(requests),
     sync_scroll_window(surface, kernel, window_size),
-    prepare_artwork(surface, kernel, window_size.width),
+    prepare_artwork(surface),
   ])
 }
 
 /// `source` is the router-resolved browse source for the current destination
 /// (computed only for the filter-mutation messages, the only arms that
 /// restart browsing), `in_library` whether the current destination is a
-/// Library route (filter mutations apply nowhere else), `playback_idle` the
-/// playback surface's `now_playing.is_none()` fact, and `window_size` the
-/// shell's tracked window size; all are computed by the top-level router so
+/// Library route (filter mutations apply nowhere else), and `window_size` the
+/// shell's tracked window size. These are computed by the top-level router so
 /// this module never reads navigation, home, playback, or shell state (ADR
-/// 0029). The router also retains artwork handles across all surfaces after a
-/// page settlement or scroll-window sync re-prepares the pipeline, because
-/// retention reads every surface's slot set.
+/// 0029).
 pub fn update(
   surface: &mut Surface,
   kernel: &mut Kernel,
   source: Option<BrowseSource>,
   in_library: bool,
-  playback_idle: bool,
   window_size: iced::Size,
   message: BrowseMessage,
 ) -> Task<Message> {
@@ -161,52 +164,47 @@ pub fn update(
     }
     BrowseMessage::SortChanged(sort) => {
       surface.sort_menu_open = false;
-      persist_filters(
-        surface,
-        kernel,
-        source,
-        in_library,
-        playback_idle,
-        |filters| filters.with_sort(sort),
-      )
+      persist_filters(surface, kernel, source, in_library, |filters| {
+        filters.with_sort(sort)
+      })
     }
-    BrowseMessage::SortDirectionToggled => persist_filters(
-      surface,
-      kernel,
-      source,
-      in_library,
-      playback_idle,
-      |filters| {
+    BrowseMessage::SortDirectionToggled => {
+      persist_filters(surface, kernel, source, in_library, |filters| {
         let direction = match filters.sort_direction() {
           VideoLibrarySortDirection::Ascending => VideoLibrarySortDirection::Descending,
           VideoLibrarySortDirection::Descending => VideoLibrarySortDirection::Ascending,
         };
         filters.with_sort_direction(direction)
-      },
-    ),
-    BrowseMessage::PlayedFilterChanged(played_filter) => persist_filters(
-      surface,
-      kernel,
-      source,
-      in_library,
-      playback_idle,
-      |filters| filters.with_played_filter(played_filter),
-    ),
-    BrowseMessage::FavoritesToggled => persist_filters(
-      surface,
-      kernel,
-      source,
-      in_library,
-      playback_idle,
-      |filters| filters.with_favorites_only(!filters.favorites_only()),
-    ),
+      })
+    }
+    BrowseMessage::PlayedFilterChanged(played_filter) => {
+      persist_filters(surface, kernel, source, in_library, |filters| {
+        filters.with_played_filter(played_filter)
+      })
+    }
+    BrowseMessage::FavoritesToggled => {
+      persist_filters(surface, kernel, source, in_library, |filters| {
+        filters.with_favorites_only(!filters.favorites_only())
+      })
+    }
     BrowseMessage::Scrolled(viewport) => {
-      let bounds = viewport.bounds();
       let offset = viewport.absolute_offset();
-      surface.viewport = BrowseViewport {
-        offset_y: offset.y,
-        height: bounds.height,
-      };
+      surface.viewport = BrowseViewport { offset_y: offset.y };
+      Task::none()
+    }
+    BrowseMessage::GridViewportMeasured {
+      epoch,
+      offset_y,
+      height,
+    } => {
+      if epoch != surface.artwork.epoch() {
+        return Task::none();
+      }
+      let measured = ArtworkGridViewport { offset_y, height };
+      if surface.grid_viewport == Some(measured) {
+        return Task::none();
+      }
+      surface.grid_viewport = Some(measured);
       sync_scroll_window(surface, kernel, window_size)
     }
     BrowseMessage::Retry => {
@@ -274,61 +272,15 @@ pub fn update(
       Task::batch([
         apply_effects(surface, kernel, effects),
         sync_scroll_window(surface, kernel, window_size),
-        prepare_artwork(surface, kernel, window_size.width),
+        prepare_artwork(surface),
       ])
     }
-    BrowseMessage::ArtworkLoaded {
-      session,
-      slot,
-      image_id,
-      result,
-    } => {
-      let session_ok = kernel.request_gate.is_current_session(session);
-      apply_artwork_completion(
-        surface,
-        kernel,
-        session_ok,
-        ArtworkLoadCompletion {
-          slot,
-          image_id,
-          result,
-        },
-      );
+    BrowseMessage::ArtworkLoaded(completion) => {
+      surface
+        .artwork
+        .settle(kernel.request_gate.current_session(), completion);
       Task::none()
     }
-  }
-}
-
-fn apply_artwork_completion(
-  surface: &mut Surface,
-  kernel: &mut Kernel,
-  session_ok: bool,
-  completion: ArtworkLoadCompletion,
-) {
-  if kernel
-    .artwork_binder
-    .settle(completion.slot, ArtworkSurface::Browse, session_ok)
-    != ArtworkSettlement::Apply
-  {
-    return;
-  }
-  let Some(cell) = surface
-    .artwork
-    .cell_mut(completion.slot, &completion.image_id)
-  else {
-    return;
-  };
-  match completion.result {
-    Ok(raster) => {
-      cell.state = ArtworkCellState::Ready;
-      kernel.artwork_handles.insert(
-        completion.slot,
-        completion.image_id,
-        super::state::ArtworkHandles::from_raster(raster),
-      );
-    }
-    Err(jellypilot_media_server::artwork::ArtworkError::Cancelled) => {}
-    Err(_) => cell.state = ArtworkCellState::Failed,
   }
 }
 
@@ -337,7 +289,6 @@ fn persist_filters(
   kernel: &mut Kernel,
   source: Option<BrowseSource>,
   in_library: bool,
-  playback_idle: bool,
   mutation: impl FnOnce(BrowseFilterSettings) -> BrowseFilterSettings,
 ) -> Task<Message> {
   if !in_library {
@@ -361,7 +312,7 @@ fn persist_filters(
     return Task::none();
   }
   surface.filters = Some(filters);
-  start(surface, kernel, source, playback_idle)
+  start(surface, kernel, source)
 }
 
 /// Starts (or reconfigures) the Library Browser for `source`. The top-level
@@ -371,11 +322,11 @@ pub fn start(
   surface: &mut Surface,
   kernel: &mut Kernel,
   source: Option<BrowseSource>,
-  playback_idle: bool,
 ) -> Task<Message> {
   surface.refresh_fallback = None;
   let Some(source) = source else {
     abort_pages(surface);
+    begin_artwork_view(surface);
     if let Err(error) = surface.data.reset() {
       kernel.diagnostics.record(
         DiagnosticLevel::Error,
@@ -420,10 +371,7 @@ pub fn start(
     sync_view(surface);
     return Task::none();
   }
-  if playback_idle {
-    kernel.artwork_adapter.cancel_pending();
-  }
-  begin_artwork_view(surface, kernel);
+  begin_artwork_view(surface);
   sync_view(surface);
   apply_effects(surface, kernel, effects)
 }
@@ -432,10 +380,7 @@ pub fn start(
 ///
 /// The model no-ops an unchanged range, so callers may invoke this freely
 /// after scroll, resize, and page-settlement events.
-/// `pub(crate)` because the top-level router also invokes this on window
-/// resize; when the range changed it re-prepares the artwork pipeline, so the
-/// router retains artwork handles afterwards (retention reads every surface's
-/// slot set, ADR 0029).
+/// `pub(crate)` because the top-level router also invokes this on window resize.
 pub(crate) fn sync_scroll_window(
   surface: &mut Surface,
   kernel: &mut Kernel,
@@ -453,13 +398,10 @@ pub(crate) fn sync_scroll_window(
     grid_available_width(window_size.width, class),
     CARD_COPY_HEIGHT,
   );
-  // iced only publishes scroll viewport geometry for overflowing content, so
-  // short libraries would never report a height; the window height is a safe
-  // upper bound that keeps the auto-fill trigger alive for them.
-  let viewport_height = surface.viewport.height.max(window_size.height);
+  let viewport = surface.grid_viewport(window_size);
   let range = visible_display_range(
-    surface.viewport.offset_y,
-    viewport_height,
+    viewport.offset_y,
+    viewport.height,
     metrics.columns,
     metrics.row_height,
     total,
@@ -486,7 +428,7 @@ pub(crate) fn sync_scroll_window(
   sync_view(surface);
   Task::batch([
     apply_effects(surface, kernel, effects),
-    prepare_artwork(surface, kernel, window_size.width),
+    prepare_artwork(surface),
   ])
 }
 
@@ -508,7 +450,6 @@ pub(crate) fn refresh(
   surface: &mut Surface,
   kernel: &mut Kernel,
   source: Option<BrowseSource>,
-  playback_idle: bool,
 ) -> Task<Message> {
   let fallback = matches!(
     surface.view,
@@ -527,7 +468,7 @@ pub(crate) fn refresh(
     );
     return Task::none();
   }
-  let task = start(surface, kernel, source, playback_idle);
+  let task = start(surface, kernel, source);
   surface.refresh_fallback = fallback;
   sync_view(surface);
   task
@@ -547,6 +488,7 @@ fn apply_effects(
     match effect {
       BrowseEffect::ResetViewport => {
         surface.viewport.offset_y = 0.0;
+        surface.grid_viewport = None;
         // Loading placeholders have no ready-grid ID. A new query identity
         // also resets remembered offsets when its first real layout appears.
         surface.scroll_id = iced::widget::Id::unique();
@@ -600,153 +542,38 @@ fn start_page_request(
   task
 }
 
-/// `pub(crate)` so the router-level re-navigation test in `update.rs` can
-/// drive the pipeline directly. Unlike the old `prepare_browse_artwork`,
-/// this does not retain artwork handles: retention reads every surface's
-/// slot set, so the top-level router performs it after the messages that
-/// re-prepare the pipeline (ADR 0029).
-pub(crate) fn prepare_artwork(
-  surface: &mut Surface,
-  kernel: &mut Kernel,
-  window_width: f32,
-) -> Task<Message> {
-  let LibraryBrowseView::Ready {
-    visible_items,
-    visible_start,
-    ..
-  } = &surface.view
-  else {
-    return Task::none();
-  };
-  let visible_start = usize::try_from(*visible_start).unwrap_or(usize::MAX);
-  let specs = visible_items
-    .iter()
-    .enumerate()
-    .filter_map(|(index, slot)| {
-      slot
-        .item
-        .as_ref()
-        .map(|item| (index, item.id.clone(), item.artwork_image_id.clone()))
-    })
-    .collect::<Vec<_>>();
-  let visible_ids = specs
-    .iter()
-    .map(|(_, item_id, _)| item_id.as_str())
-    .collect::<HashSet<_>>();
-  surface.artwork.retain_items(&visible_ids);
-  drop(visible_ids);
-  let session = kernel.request_gate.current_session();
-  let Some(client) = kernel.client.as_ref().map(Arc::clone) else {
-    return Task::none();
-  };
-  let adapter = Arc::clone(&kernel.artwork_adapter);
-  let class = SizeClass::from_width(window_width);
-  let available_width = grid_available_width(window_width, class);
-  let metrics = ArtworkGridMetrics::for_cards(available_width, CARD_COPY_HEIGHT);
-  // The grid is the first scrollable child, so scroll coordinates are already
-  // grid-local; the window start shifts slot positions to global grid indexes.
-  let grid_viewport = ArtworkGridViewport::from_scroll_geometry(
-    surface.viewport.offset_y,
-    surface.viewport.height,
-    0.0,
-  );
-  let mut summary = ArtworkLoadSummary::default();
-  let mut load_specs = Vec::new();
-
-  for (index, item_id, image_id) in specs {
-    let Some(image_id) = image_id else {
-      continue;
-    };
-    if let Some(cell) = surface.artwork.get(&item_id) {
-      if cell.image_id == image_id {
-        if cell.state == ArtworkCellState::Loading {
-          continue;
-        }
-        if cell.state == ArtworkCellState::Ready
-          && kernel
-            .artwork_handles
-            .get(cell.slot, &cell.image_id)
-            .is_some()
-        {
-          continue;
-        }
-      }
-    }
-
-    if let Some(raster) = adapter.cached(&image_id, ArtworkSizeClass::Card) {
-      summary.record(&ArtworkLoadObservation::raster_hit(raster.byte_len() as u64));
-      let slot = kernel.artwork_binder.bind_settled();
-      kernel.artwork_handles.insert(
-        slot,
-        image_id.clone(),
-        super::state::ArtworkHandles::from_raster(raster),
-      );
-      surface.artwork.insert(
-        item_id,
-        ArtworkCell {
-          slot,
-          image_id,
-          state: ArtworkCellState::Ready,
-        },
-      );
-      continue;
-    }
-
-    let slot = kernel.artwork_binder.bind(ArtworkSurface::Browse);
-    surface.artwork.insert(
-      item_id,
-      ArtworkCell {
-        slot,
-        image_id: image_id.clone(),
-        state: ArtworkCellState::Loading,
-      },
-    );
-    load_specs.push(PlannedArtworkLoad {
-      slot,
-      image_id,
-      size_class: ArtworkSizeClass::Card,
-      visible: grid_cell_visible(
-        visible_start.saturating_add(index),
-        metrics.columns,
-        grid_viewport.offset_y,
-        grid_viewport.height,
-        metrics.row_height,
-      ),
-      derived: DerivedArtwork::default(),
-    });
-  }
-
-  stream_artwork_loads(
-    adapter,
-    client,
-    session,
-    load_specs,
-    summary,
-    |session, completion| {
-      Message::Browse(BrowseMessage::ArtworkLoaded {
-        session,
-        slot: completion.slot,
-        image_id: completion.image_id,
-        result: completion.result,
+/// Retains candidates in the sparse metadata window; measured images start loads.
+pub(crate) fn prepare_artwork(surface: &mut Surface) -> Task<Message> {
+  let specs = match &surface.view {
+    LibraryBrowseView::Ready { visible_items, .. } => visible_items
+      .iter()
+      .filter_map(|slot| slot.item.as_ref())
+      .filter_map(|item| {
+        Some(ImageSpec {
+          key: item.id.clone(),
+          image_id: item.artwork_image_id.clone()?,
+          size_class: ArtworkSizeClass::Card,
+          derived: DerivedArtwork::default(),
+        })
       })
-    },
-  )
+      .collect::<Vec<_>>(),
+    _ => Vec::new(),
+  };
+  surface.artwork.retain(&specs);
+  Task::none()
 }
 
-fn begin_artwork_view(surface: &mut Surface, kernel: &mut Kernel) {
-  kernel.artwork_binder.begin_view(ArtworkSurface::Browse);
+fn begin_artwork_view(surface: &mut Surface) {
   surface.artwork.clear();
+  surface.grid_viewport = None;
 }
 
 /// Browse leave hook, invoked by the top-level router when the destination
 /// switches away from Library/Search: aborts in-flight page requests,
-/// cancels pending artwork while playback is idle, and resets the model.
-pub(crate) fn leave_view(surface: &mut Surface, kernel: &mut Kernel, playback_idle: bool) {
+/// releases this view's image demand, and resets the model.
+pub(crate) fn leave_view(surface: &mut Surface, kernel: &mut Kernel) {
   abort_pages(surface);
-  if playback_idle {
-    kernel.artwork_adapter.cancel_pending();
-  }
-  begin_artwork_view(surface, kernel);
+  begin_artwork_view(surface);
   if let Err(error) = surface.data.reset() {
     kernel.diagnostics.record(
       DiagnosticLevel::Error,
@@ -765,7 +592,7 @@ pub(crate) fn reset(surface: &mut Surface, kernel: &mut Kernel) {
   surface.refresh_fallback = None;
   surface.filters = None;
   abort_pages(surface);
-  surface.artwork = BrowseArtwork::default();
+  begin_artwork_view(surface);
   if let Err(error) = surface.data.reset() {
     kernel.diagnostics.record(
       DiagnosticLevel::Error,
@@ -795,17 +622,14 @@ mod tests {
   use jellypilot_core::config::SettingsStore;
   use jellypilot_core::diagnostics::Diagnostics;
   use jellypilot_core::request_gate::RequestGate;
-  use jellypilot_media_server::{JellyfinClient, VideoLibraryItem};
+  use jellypilot_media_server::VideoLibraryItem;
 
   use super::*;
-  use crate::app::state::ArtworkHandleRetention;
 
   /// Matches the 1600px window width of the old update.rs `test_state`.
   const WINDOW_WIDTH: f32 = 1600.0;
   /// Matches the 900px window height of the old update.rs `test_state`.
   const WINDOW_HEIGHT: f32 = 900.0;
-  /// The old `test_state` has no now-playing entry, so playback is idle.
-  const PLAYBACK_IDLE: bool = true;
 
   fn window_size() -> iced::Size {
     iced::Size::new(WINDOW_WIDTH, WINDOW_HEIGHT)
@@ -829,8 +653,6 @@ mod tests {
       tray: None,
       artwork_adapter: Arc::new(jellypilot_media_server::artwork::ArtworkAdapter::new()),
       avatar_adapter: Arc::new(jellypilot_media_server::artwork::ArtworkAdapter::new()),
-      artwork_binder: Default::default(),
-      artwork_handles: ArtworkHandleRetention::default(),
       profile_avatars: Default::default(),
     };
     (Surface::default(), kernel)
@@ -857,18 +679,17 @@ mod tests {
       })
       .unwrap();
     sync_view(&mut surface);
-    drop(refresh(&mut surface, &mut kernel, Some(source), true));
+    drop(refresh(&mut surface, &mut kernel, Some(source)));
     let request = surface.page_requests.values().next().unwrap().clone();
     let departed = surface.request_generation;
     let saved = snapshot(&mut surface, Some("original"));
-    leave_view(&mut surface, &mut kernel, true);
+    leave_view(&mut surface, &mut kernel);
     drop(restore(&mut surface, &mut kernel, saved, window_size()));
     drop(update(
       &mut surface,
       &mut kernel,
       None,
       false,
-      true,
       window_size(),
       BrowseMessage::PageSettled(
         departed,
@@ -891,7 +712,6 @@ mod tests {
       &mut kernel,
       None,
       false,
-      true,
       window_size(),
       BrowseMessage::PageSettled(
         current,
@@ -969,12 +789,7 @@ mod tests {
     let (_, handle) = Task::<Message>::none().abortable();
     surface.page_tasks.insert(request.token, handle);
 
-    drop(start(
-      &mut surface,
-      &mut kernel,
-      Some(source),
-      PLAYBACK_IDLE,
-    ));
+    drop(start(&mut surface, &mut kernel, Some(source)));
 
     assert!(surface.page_tasks.contains_key(&request.token));
     assert!(matches!(surface.view, LibraryBrowseView::Loading));
@@ -1005,7 +820,6 @@ mod tests {
       &mut kernel,
       None,
       false,
-      PLAYBACK_IDLE,
       window_size(),
       BrowseMessage::PageSettled(
         0,
@@ -1037,8 +851,6 @@ mod tests {
 
   #[test]
   fn browse_scroll_position_drives_the_display_window() {
-    // 1600×900 window: 1248px grid, 8 columns, 275px rows; the 900px window
-    // height covers 4 rows, so the settled bootstrap expands to 6 rows.
     let (mut surface, mut kernel) = test_fixture();
     let library = BrowseSource::Library {
       session: kernel.request_gate.current_session(),
@@ -1103,87 +915,103 @@ mod tests {
       &mut kernel,
       None,
       false,
-      PLAYBACK_IDLE,
       window_size(),
       BrowseMessage::PageSettled(0, settlement),
     ));
 
-    // Settlement triggers a scroll-window sync that fills the viewport.
-    assert_eq!(surface.data.display_range(), Some(0..54));
+    let metrics = ArtworkGridMetrics::for_cards(
+      grid_available_width(WINDOW_WIDTH, SizeClass::from_width(WINDOW_WIDTH)),
+      CARD_COPY_HEIGHT,
+    );
+    let initial = surface.data.display_range().expect("metadata window");
+    assert_eq!(initial.start, 0);
+    assert!(
+      (initial.end as usize / metrics.columns) as f32 * metrics.row_height >= 2.0 * WINDOW_HEIGHT
+    );
+    assert!(initial.end < 264, "scroll projection must remain sparse");
+
+    let epoch = surface.artwork.epoch();
+    drop(update(
+      &mut surface,
+      &mut kernel,
+      None,
+      false,
+      window_size(),
+      BrowseMessage::GridViewportMeasured {
+        epoch,
+        offset_y: -120.0,
+        height: WINDOW_HEIGHT,
+      },
+    ));
+    let measured_initial = surface
+      .data
+      .display_range()
+      .expect("measured metadata window");
+    assert_eq!(
+      measured_initial,
+      visible_display_range(
+        -120.0,
+        WINDOW_HEIGHT,
+        metrics.columns,
+        metrics.row_height,
+        264
+      )
+    );
 
     // Scrolling ten rows down shifts the window without resetting it.
-    surface.viewport = BrowseViewport {
-      offset_y: 2750.0,
-      height: 800.0,
-    };
-    drop(sync_scroll_window(&mut surface, &mut kernel, window_size()));
-    assert_eq!(surface.data.display_range(), Some(72..153));
+    surface.viewport.offset_y = 2870.0;
+    drop(update(
+      &mut surface,
+      &mut kernel,
+      None,
+      false,
+      window_size(),
+      BrowseMessage::GridViewportMeasured {
+        epoch,
+        offset_y: 2750.0,
+        height: WINDOW_HEIGHT,
+      },
+    ));
+    let scrolled = surface
+      .data
+      .display_range()
+      .expect("scrolled metadata window");
+    let first_row = scrolled.start as usize / metrics.columns;
+    let end_row = scrolled.end as usize / metrics.columns;
+    assert!(first_row as f32 * metrics.row_height <= 2750.0 - WINDOW_HEIGHT);
+    assert!(end_row as f32 * metrics.row_height >= 2750.0 + 2.0 * WINDOW_HEIGHT);
+    assert!(first_row as f32 * metrics.row_height + metrics.row_height > 2750.0 - WINDOW_HEIGHT);
+    assert!(
+      end_row as f32 * metrics.row_height - metrics.row_height < 2750.0 + 2.0 * WINDOW_HEIGHT
+    );
+    assert_eq!(surface.viewport.offset_y, 2870.0);
+    assert!(scrolled.start > 0 && scrolled.end < 264);
 
     // An unchanged viewport keeps the window and emits no page requests.
     let pending_before = surface.page_tasks.len();
     drop(sync_scroll_window(&mut surface, &mut kernel, window_size()));
-    assert_eq!(surface.data.display_range(), Some(72..153));
+    assert_eq!(surface.data.display_range(), Some(scrolled));
     assert_eq!(surface.page_tasks.len(), pending_before);
 
     // Scrolling back up restores the earlier window.
-    surface.viewport = BrowseViewport {
-      offset_y: 0.0,
-      height: 800.0,
-    };
-    drop(sync_scroll_window(&mut surface, &mut kernel, window_size()));
-    assert_eq!(surface.data.display_range(), Some(0..54));
+    drop(update(
+      &mut surface,
+      &mut kernel,
+      None,
+      false,
+      window_size(),
+      BrowseMessage::GridViewportMeasured {
+        epoch,
+        offset_y: -120.0,
+        height: WINDOW_HEIGHT,
+      },
+    ));
+    assert_eq!(surface.data.display_range(), Some(measured_initial));
   }
 
   #[test]
-  fn browse_memory_cache_hit_synchronously_settles_without_retained_handle() {
-    let (mut surface, mut kernel) = test_fixture();
-    kernel.client = Some(Arc::new(JellyfinClient::new()));
-    let mut item = episode("browse-cache-item-1", 1);
-    item.artwork_image_id = Some("browse-cache-art-1".to_owned());
-
-    // Seed the raster cache directly
-    kernel.artwork_adapter.seed_raster_for_test(
-      "browse-cache-art-1",
-      jellypilot_media_server::artwork::ArtworkSizeClass::Card,
-      jellypilot_media_server::artwork::ArtworkRaster::from_raw_for_test(
-        1,
-        1,
-        vec![10, 20, 30, 40],
-      ),
-    );
-
-    // Wipe artwork_handles completely so there is NO retained handle in artwork_handles
-    kernel.artwork_handles.clear();
-
-    surface.view = LibraryBrowseView::Ready {
-      visible_items: vec![jellypilot_core::browse_model::LibraryItemSlot { item: Some(item) }],
-      visible_start: 0,
-      mode: jellypilot_core::LibraryBrowseMode::Normal,
-      total_record_count: 1,
-      is_fetching_more: false,
-      load_more_failure: None,
-      retry_busy: false,
-    };
-
-    let warm_task = prepare_artwork(&mut surface, &mut kernel, WINDOW_WIDTH);
-    // One sentinel unit reports the aggregate cache-hit telemetry event.
-    assert_eq!(warm_task.units(), 1);
-
-    let browse_cell = surface
-      .artwork
-      .get("browse-cache-item-1")
-      .expect("browse cell exists");
-    assert_eq!(browse_cell.state, ArtworkCellState::Ready);
-    assert!(kernel
-      .artwork_handles
-      .get(browse_cell.slot, "browse-cache-art-1")
-      .is_some());
-  }
-
-  #[test]
-  fn page_settle_spawns_all_24_visible_browse_loads_at_once() {
-    let (mut surface, mut kernel) = test_fixture();
-    kernel.client = Some(Arc::new(JellyfinClient::new()));
+  fn preparing_metadata_does_not_admit_unobserved_images() {
+    let (mut surface, _) = test_fixture();
     let items = (0..24)
       .map(|i| {
         let mut item = episode(&format!("item-{i}"), 1);
@@ -1202,18 +1030,53 @@ mod tests {
       retry_busy: false,
     };
 
-    drop(prepare_artwork(&mut surface, &mut kernel, WINDOW_WIDTH));
+    drop(prepare_artwork(&mut surface));
 
-    for i in 0..24 {
-      let cell = surface
-        .artwork
-        .get(&format!("item-{i}"))
-        .expect("all 24 cells must be present in browse_artwork");
-      assert_eq!(
-        cell.state,
-        ArtworkCellState::Loading,
-        "all 24 cells must be admitted into Loading in the same pass"
-      );
-    }
+    assert!(surface.artwork.is_empty());
+  }
+
+  #[test]
+  fn initial_short_grid_materializes_cards_without_scroll_input_or_image_demand() {
+    let (surface, _) = test_fixture();
+    let metrics = ArtworkGridMetrics::for_cards(
+      grid_available_width(WINDOW_WIDTH, SizeClass::from_width(WINDOW_WIDTH)),
+      CARD_COPY_HEIGHT,
+    );
+    let built = std::cell::RefCell::new(Vec::new());
+    let _grid: iced::Element<'_, Message> = jellypilot_ui::widgets::artwork_grid::artwork_grid(
+      3,
+      metrics,
+      surface.grid_viewport(window_size()),
+      |index| {
+        built.borrow_mut().push(index);
+        iced::widget::Space::new().into()
+      },
+    );
+    assert_eq!(*built.borrow(), vec![0, 1, 2]);
+    assert!(surface.artwork.is_empty());
+  }
+
+  #[test]
+  fn recreated_grid_ignores_previous_epoch_geometry() {
+    let (mut surface, mut kernel) = test_fixture();
+    let epoch = surface.artwork.epoch();
+    surface.grid_viewport = Some(ArtworkGridViewport {
+      offset_y: 400.0,
+      height: 300.0,
+    });
+    leave_view(&mut surface, &mut kernel);
+    drop(update(
+      &mut surface,
+      &mut kernel,
+      None,
+      false,
+      window_size(),
+      BrowseMessage::GridViewportMeasured {
+        epoch,
+        offset_y: 400.0,
+        height: 300.0,
+      },
+    ));
+    assert_eq!(surface.grid_viewport, None);
   }
 }

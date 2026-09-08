@@ -59,6 +59,8 @@ pub struct Surface {
   pub smoke: bool,
   /// The live window, when the daemon currently owns one.
   pub window_id: Option<iced::window::Id>,
+  /// False after hide/close; queued geometry must not recreate hidden demand.
+  pub images_visible: bool,
   /// Latest known logical window size; drives size-class layout decisions.
   pub window_size: iced::Size,
   /// Full-mode window size stashed when entering Control-Only mode; restored
@@ -91,6 +93,7 @@ impl Surface {
     Self {
       smoke,
       window_id: None,
+      images_visible: true,
       window_size: FULL_DEFAULT_WINDOW_SIZE,
       full_window_size: None,
       skeleton_phase: 0.0,
@@ -233,7 +236,7 @@ pub(crate) fn apply_app_mode(state: &mut State, mode: AppMode) -> Task<Message> 
       close_settings(state);
       if let Some(full) = state.full.as_mut() {
         browse::reset(&mut full.browse, &mut state.kernel);
-        super::personal_lists::leave_view(&mut full.personal_lists, &mut state.kernel);
+        super::personal_lists::leave_view(&mut full.personal_lists);
       }
       if state.playback.view.now_playing.is_none() {
         state.kernel.artwork_adapter.reset_session();
@@ -243,7 +246,6 @@ pub(crate) fn apply_app_mode(state: &mut State, mode: AppMode) -> Task<Message> 
         state.kernel.artwork_adapter.clear_caches();
       }
       state.full = None;
-      state.retain_artwork_handles();
       state.shell.full_window_size = Some(state.shell.window_size);
       state.shell.clear_history();
       state.shell.destination = Destination::NowPlaying;
@@ -277,7 +279,7 @@ pub(crate) fn apply_app_mode(state: &mut State, mode: AppMode) -> Task<Message> 
 /// Shell surface entry point: reduces a [`WindowMessage`]. Cross-surface
 /// follow-ups are hoisted to the top-level router (ADR 0029): a close without
 /// an available tray runs the playback quit handshake there, and a resize
-/// re-syncs the browse scroll window and re-retains artwork handles there.
+/// re-syncs the browse scroll window there.
 /// `skeletons_active` is the router-computed read across every surface's load
 /// states, so this module never reads home/browse/detail state.
 pub fn update(
@@ -287,6 +289,9 @@ pub fn update(
   now_playing: bool,
   message: WindowMessage,
 ) -> Task<Message> {
+  if matches!(message, WindowMessage::CloseRequested(_)) {
+    surface.images_visible = false;
+  }
   match message {
     WindowMessage::CloseRequested(id) if kernel.tray.is_some() => {
       if kernel.settings.snapshot().app_mode() == AppMode::ControlOnly {
@@ -313,6 +318,7 @@ pub fn update(
       // window when one exists instead of opening a duplicate.
       if let Some(id) = id.or(surface.window_id) {
         surface.window_id = Some(id);
+        surface.images_visible = true;
         iced::window::set_mode(id, iced::window::Mode::Windowed).chain(iced::window::gain_focus(id))
       } else {
         let geometry = mode_geometry(
@@ -529,11 +535,10 @@ fn refresh_current_page(state: &mut State) -> Task<Message> {
   let Some(full) = state.full.as_mut() else {
     return Task::none();
   };
-  let idle = state.playback.view.now_playing.is_none();
   match &state.shell.destination {
-    Destination::Home => home::start_load(&mut full.home, &mut state.kernel, idle),
+    Destination::Home => home::start_load(&mut full.home, &mut state.kernel),
     Destination::Library { .. } | Destination::Search(_) => {
-      browse::refresh(&mut full.browse, &mut state.kernel, source, idle)
+      browse::refresh(&mut full.browse, &mut state.kernel, source)
     }
     Destination::Detail(id) => detail::refresh(&mut full.detail, &mut state.kernel, id),
     Destination::PersonalLists(route) => super::personal_lists::refresh(
@@ -578,7 +583,6 @@ pub(crate) fn close_settings(state: &mut State) {
 }
 fn activate_destination(state: &mut State, previous: Destination) -> Task<Message> {
   let destination = state.shell.destination.clone();
-  let playback_idle = state.playback.view.now_playing.is_none();
   let source = match &destination {
     Destination::Library { .. } | Destination::Search(_) => browse_source(state),
     _ => None,
@@ -588,28 +592,23 @@ fn activate_destination(state: &mut State, previous: Destination) -> Task<Messag
     .as_mut()
     .expect("library destination activation requires FullUi");
   if previous == Destination::Home && destination != Destination::Home {
-    home::leave_view(&mut full.home, &mut state.kernel, playback_idle);
+    home::leave_view(&mut full.home, &mut state.kernel);
   } else if matches!(
     previous,
     Destination::Library { .. } | Destination::Search(_)
   ) && previous != destination
   {
-    browse::leave_view(&mut full.browse, &mut state.kernel, playback_idle);
+    browse::leave_view(&mut full.browse, &mut state.kernel);
   } else if matches!(previous, Destination::Detail(_)) && previous != destination {
-    detail::leave_view(&mut full.detail, &mut state.kernel, playback_idle);
+    detail::leave_view(&mut full.detail, &mut state.kernel);
   }
   if matches!(previous, Destination::PersonalLists(_)) && previous != destination {
-    super::personal_lists::leave_view(&mut full.personal_lists, &mut state.kernel);
+    super::personal_lists::leave_view(&mut full.personal_lists);
   }
 
   if let Some(page_state) = state.shell.page_state.take() {
     return match page_state {
-      PageState::Home => home::restore(
-        &mut full.home,
-        &mut state.kernel,
-        playback_idle,
-        state.shell.window_size.width,
-      ),
+      PageState::Home => home::restore(&mut full.home, &mut state.kernel),
       PageState::Browse(snapshot) => browse::restore(
         &mut full.browse,
         &mut state.kernel,
@@ -637,16 +636,16 @@ fn activate_destination(state: &mut State, previous: Destination) -> Task<Messag
     };
   }
   match destination {
-    Destination::Home => home::start_load(&mut full.home, &mut state.kernel, playback_idle),
+    Destination::Home => home::start_load(&mut full.home, &mut state.kernel),
     Destination::Library { .. } => {
       full.browse.filters = None;
       full.browse.search_input.clear();
-      browse::start(&mut full.browse, &mut state.kernel, source, playback_idle)
+      browse::start(&mut full.browse, &mut state.kernel, source)
     }
     Destination::Search(query) => {
       full.browse.search_input = query;
       full.browse.filters = None;
-      browse::start(&mut full.browse, &mut state.kernel, source, playback_idle)
+      browse::start(&mut full.browse, &mut state.kernel, source)
     }
     Destination::Detail(item_id) => {
       detail::start_load(&mut full.detail, &mut state.kernel, Some(&item_id))
@@ -711,9 +710,8 @@ pub(crate) fn reset_connected_content(state: &mut State) {
     browse::reset(&mut full.browse, &mut state.kernel);
   }
   state.kernel.artwork_adapter.reset_session();
-  state.kernel.artwork_binder.reset();
   state.full = (state.app_mode() == AppMode::Full).then(crate::app::state::FullUi::default);
-  state.kernel.artwork_handles.clear();
+  state.playback.artwork.clear();
   state.shell.clear_history();
   state.shell.destination = if state.app_mode() == AppMode::Full {
     Destination::Home
@@ -735,7 +733,6 @@ mod tests {
   use jellypilot_core::request_gate::RequestGate;
 
   use super::*;
-  use crate::app::state::ArtworkHandleRetention;
 
   fn test_fixture() -> (Surface, Kernel) {
     let kernel = Kernel {
@@ -754,8 +751,6 @@ mod tests {
       tray: None,
       artwork_adapter: Arc::new(jellypilot_media_server::artwork::ArtworkAdapter::new()),
       avatar_adapter: Arc::new(jellypilot_media_server::artwork::ArtworkAdapter::new()),
-      artwork_binder: Default::default(),
-      artwork_handles: ArtworkHandleRetention::default(),
       profile_avatars: Default::default(),
     };
     (Surface::new(false), kernel)

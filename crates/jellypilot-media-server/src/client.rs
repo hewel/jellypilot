@@ -58,6 +58,9 @@ fn season_episode_page_has_more(
 }
 
 /// Jellyfin HTTP API client.
+///
+/// Clones share the live authentication state and HTTP connection pools.
+#[derive(Clone)]
 pub struct JellyfinClient {
   authenticated_http: Client,
   image_http: Client,

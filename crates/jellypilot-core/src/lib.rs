@@ -3,13 +3,12 @@
 //! This crate owns browse and request state machines, settings persistence,
 //! diagnostic buffering, artwork correlation, and display-free page helpers.
 
-pub mod artwork_binder;
-#[cfg(feature = "native")]
-pub mod artwork_loader;
 #[cfg(feature = "native")]
 pub mod browse;
 #[cfg(feature = "native")]
 pub mod browse_model;
+#[cfg(feature = "native")]
+pub mod browse_window;
 #[cfg(feature = "native")]
 pub mod cards;
 #[cfg(feature = "native")]
@@ -19,6 +18,8 @@ pub mod detail;
 pub mod diagnostics;
 #[cfg(feature = "native")]
 pub mod home_hero;
+#[cfg(feature = "native")]
+pub mod image_lifecycle;
 mod load_state;
 pub mod locale;
 #[cfg(feature = "native")]

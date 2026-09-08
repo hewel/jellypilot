@@ -317,7 +317,6 @@ mod tests {
   use jellypilot_core::request_gate::RequestGate;
 
   use super::*;
-  use crate::app::state::ArtworkHandleRetention;
 
   fn test_fixture() -> (Surface, Kernel) {
     let settings = SettingsStore::default();
@@ -339,8 +338,6 @@ mod tests {
       next_toast_id: 0,
       tray: None,
       artwork_adapter: Arc::new(jellypilot_media_server::artwork::ArtworkAdapter::new()),
-      artwork_binder: Default::default(),
-      artwork_handles: ArtworkHandleRetention::default(),
       profile_avatars: Default::default(),
       avatar_adapter: Arc::new(jellypilot_media_server::artwork::ArtworkAdapter::new()),
     };

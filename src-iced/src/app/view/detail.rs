@@ -2,8 +2,14 @@ mod overview;
 
 use overview::overview_layout;
 
+use super::image_observer::{observe_image, ImageAxis};
+use crate::app::artwork::{ArtworkSurface, ImageSpec, ImageStatus};
+use crate::app::detail::{
+  card_image_spec, detail_next_up_key, episode_image_spec, hero_image_spec, DETAIL_BACKDROP_KEY,
+  DETAIL_LOGO_KEY,
+};
 use crate::app::message::{DetailMessage, Message, PlaybackMessage};
-use crate::app::state::{ArtworkCell, ArtworkCellState, State, UserDataActionKind};
+use crate::app::state::{State, UserDataActionKind};
 use crate::i18n::media::{detail_metadata, show_detail_metadata};
 use crate::i18n::{Localizer, UiText};
 use iced::widget::image::Image;
@@ -54,8 +60,6 @@ const HERO_SCRIM_TOP_ALPHA: f32 = 0.0;
 /// row, spacings, and the hero's bottom padding.
 const SCRIM_TAIL_CHROME: f32 = 10.0;
 const SCRIM_TAIL_ALPHA: f32 = 0.97;
-const DETAIL_LOGO_KEY: &str = "detail-logo";
-const DETAIL_BACKDROP_KEY: &str = "detail-backdrop";
 
 pub fn view(state: &State) -> Element<'_, Message> {
   let skeleton_phase = state.shell.skeleton_phase;
@@ -287,21 +291,10 @@ fn hero_at_width<'a>(
 
   // The Backdrop keeps its 16:9 height when the overview expands; only the
   // scrim stretches, so the extra text lands on a solid gradient tail.
-  // An item whose server carries no backdrop never gets a cell planned; skip
-  // the backdrop layer entirely so the hero settles on the plain canvas
-  // instead of holding a placeholder for an image that will never arrive.
-  let backdrop = if state
-    .full
-    .as_ref()
-    .expect("FullUi required")
-    .detail
-    .artwork
-    .get(DETAIL_BACKDROP_KEY)
-    .is_some()
-  {
+  let backdrop = if let Some(spec) = hero_spec(state, DETAIL_BACKDROP_KEY) {
     artwork(
       state,
-      DETAIL_BACKDROP_KEY,
+      Some(spec),
       name,
       (Fill, Length::Fixed(base_hero_height)),
       ArtworkKind::Hero,
@@ -451,8 +444,19 @@ fn hero_title<'a>(state: &'a State, name: &'a str, is_episode: bool) -> Element<
       HERO_LOGO_HEIGHT
     },
   ) else {
-    return title();
+    return observe_detail(
+      title(),
+      state,
+      hero_spec(state, DETAIL_LOGO_KEY),
+      ImageAxis::Vertical,
+    );
   };
+  let logo = observe_detail(
+    logo,
+    state,
+    hero_spec(state, DETAIL_LOGO_KEY),
+    ImageAxis::Vertical,
+  );
   if is_episode {
     column![logo, title()]
       .spacing(TOKENS.spacing.s2)
@@ -471,21 +475,10 @@ fn detail_logo(state: &State, max_height: f32) -> Option<Element<'_, Message>> {
     .detail
     .artwork
     .get(DETAIL_LOGO_KEY)?;
-  if cell.state != ArtworkCellState::Ready {
-    return None;
-  }
-  let handle = state
-    .kernel
-    .artwork_handles
-    .get(cell.slot, &cell.image_id)?
-    .clone();
+  let handle = cell.handle()?.clone();
   // See the home hero: the shadow canvas margin is vertical/right-only, so
   // indent the logo on top only and keep its left edge flush with the text.
-  let dims = state
-    .kernel
-    .artwork_handles
-    .dims(cell.slot, &cell.image_id)
-    .filter(|&(w, h)| w > 0 && h > 0);
+  let dims = cell.dims().filter(|&(w, h)| w > 0 && h > 0);
   let (logo_width, logo_height) = dims
     .map(|(w, h)| logo_display_size(w, h, max_height))
     .unwrap_or((0.0, max_height));
@@ -504,11 +497,7 @@ fn detail_logo(state: &State, max_height: f32) -> Option<Element<'_, Message>> {
     })
     .width(Fill)
     .align_x(Alignment::Start);
-  let Some(shadow) = state
-    .kernel
-    .artwork_handles
-    .logo_shadow(cell.slot, &cell.image_id)
-  else {
+  let Some(shadow) = cell.logo_shadow() else {
     return Some(logo.into());
   };
   let shadow_height = logo_height * 3.0 / 2.0;
@@ -1043,7 +1032,7 @@ fn similar_card<'a>(
   let key = detail_similar_key(&item.id);
   let poster = artwork(
     state,
-    &key,
+    card_image_spec(key, item),
     &item.name,
     (
       Length::Fixed(SIMILAR_CARD_WIDTH),
@@ -1123,7 +1112,7 @@ fn next_up_section<'a>(
 ) -> Element<'a, Message> {
   column![
     section_title(state.palette(), state.t("detail-next-up")),
-    episode_card(state, episode, skeleton_phase, reduced_motion),
+    episode_card(state, episode, true, skeleton_phase, reduced_motion),
   ]
   .spacing(TOKENS.spacing.s3)
   .into()
@@ -1137,7 +1126,13 @@ fn episode_list<'a>(
 ) -> Element<'a, Message> {
   let mut cards = Column::new().spacing(TOKENS.spacing.s3).width(Fill);
   for episode in episodes {
-    cards = cards.push(episode_card(state, episode, skeleton_phase, reduced_motion));
+    cards = cards.push(episode_card(
+      state,
+      episode,
+      false,
+      skeleton_phase,
+      reduced_motion,
+    ));
   }
   cards.into()
 }
@@ -1145,6 +1140,7 @@ fn episode_list<'a>(
 fn episode_card<'a>(
   state: &'a State,
   episode: &'a VideoLibraryItem,
+  next_up: bool,
   skeleton_phase: f32,
   reduced_motion: bool,
 ) -> Element<'a, Message> {
@@ -1156,6 +1152,7 @@ fn episode_card<'a>(
       episode_card_content(
         state,
         episode,
+        next_up,
         measured_height,
         skeleton_phase,
         reduced_motion,
@@ -1167,15 +1164,24 @@ fn episode_card<'a>(
 fn episode_card_content<'a>(
   state: &'a State,
   episode: &'a VideoLibraryItem,
+  next_up: bool,
   measured_height: f32,
   skeleton_phase: f32,
   reduced_motion: bool,
 ) -> Element<'a, Message> {
   let palette = state.palette();
-  let key = detail_episode_key(&episode.id);
+  let key = if next_up {
+    detail_next_up_key(&episode.id)
+  } else {
+    detail_episode_key(&episode.id)
+  };
   let art = artwork(
     state,
-    &key,
+    episode_image_spec(
+      &state.full.as_ref().expect("FullUi required").detail.data,
+      key,
+      episode,
+    ),
     &episode.name,
     (
       Length::Fixed(EPISODE_ART_WIDTH),
@@ -1320,9 +1326,73 @@ impl ArtworkKind {
   }
 }
 
+fn hero_spec(state: &State, key: &str) -> Option<ImageSpec> {
+  let LoadState::Ready(content) = &state
+    .full
+    .as_ref()
+    .expect("FullUi required")
+    .detail
+    .data
+    .content
+  else {
+    return None;
+  };
+  hero_image_spec(content, key)
+}
+
+fn observe_detail<'a>(
+  content: Element<'a, Message>,
+  state: &State,
+  spec: Option<ImageSpec>,
+  axis: ImageAxis,
+) -> Element<'a, Message> {
+  match spec {
+    Some(spec) => observe_image(
+      content,
+      ArtworkSurface::Detail,
+      state
+        .full
+        .as_ref()
+        .expect("FullUi required")
+        .detail
+        .artwork
+        .epoch(),
+      spec,
+      axis,
+    ),
+    None => content,
+  }
+}
+
 fn artwork<'a>(
   state: &'a State,
-  key: &str,
+  spec: Option<ImageSpec>,
+  name: &'a str,
+  size: (Length, Length),
+  kind: ArtworkKind,
+  phase: f32,
+  reduced_motion: bool,
+) -> Element<'a, Message> {
+  let content = render_artwork(
+    state,
+    spec.as_ref().map(|spec| spec.key.as_str()),
+    name,
+    size,
+    kind,
+    phase,
+    reduced_motion,
+  );
+  let axis = if matches!(kind, ArtworkKind::Similar) {
+    ImageAxis::Horizontal
+  } else {
+    ImageAxis::Vertical
+  };
+  observe_detail(content, state, spec, axis)
+}
+
+fn render_artwork<'a>(
+  state: &'a State,
+  key: Option<&str>,
   name: &'a str,
   (width, height): (Length, Length),
   kind: ArtworkKind,
@@ -1332,20 +1402,17 @@ fn artwork<'a>(
   let palette = state.palette();
   let initial_size = kind.initial_size();
   let radius = kind.radius();
-  let cell = state
-    .full
-    .as_ref()
-    .expect("FullUi required")
-    .detail
-    .artwork
-    .get(key);
-  if let Some(ArtworkCell {
-    slot,
-    image_id,
-    state: ArtworkCellState::Ready,
-  }) = cell
-  {
-    if let Some(handle) = state.kernel.artwork_handles.get(*slot, image_id) {
+  let cell = key.and_then(|key| {
+    state
+      .full
+      .as_ref()
+      .expect("FullUi required")
+      .detail
+      .artwork
+      .get(key)
+  });
+  if let Some(cell) = cell {
+    if let Some(handle) = cell.handle() {
       return rounded_image(handle.clone(), radius)
         .content_fit(ContentFit::Cover)
         .width(width)
@@ -1356,7 +1423,7 @@ fn artwork<'a>(
   match cell.map(|cell| cell.state) {
     // The server carries no image for this slot, so no load was ever planned:
     // settle on a neutral placeholder instead of shimmering forever.
-    None => artwork_placeholder(
+    None if key.is_none() => artwork_placeholder(
       palette,
       name,
       initial_size,
@@ -1365,7 +1432,7 @@ fn artwork<'a>(
       radius,
       palette.text.metadata,
     ),
-    Some(ArtworkCellState::Failed) => artwork_placeholder(
+    Some(ImageStatus::Failed) => artwork_placeholder(
       palette,
       name,
       initial_size,

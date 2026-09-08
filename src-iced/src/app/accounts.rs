@@ -1802,7 +1802,6 @@ mod tests {
   }
 
   fn test_kernel() -> (Kernel, LoginState, TestSettingsFile) {
-    use jellypilot_core::artwork_binder::ArtworkBinder;
     use jellypilot_core::config::SettingsStore;
     use jellypilot_core::diagnostics::Diagnostics;
     use jellypilot_core::request_gate::RequestGate;
@@ -1830,8 +1829,6 @@ mod tests {
       tray: None,
       artwork_adapter: Arc::new(ArtworkAdapter::new()),
       avatar_adapter: Arc::new(ArtworkAdapter::new()),
-      artwork_binder: ArtworkBinder::default(),
-      artwork_handles: super::super::state::ArtworkHandleRetention::default(),
       profile_avatars: Default::default(),
     };
     (kernel, login, TestSettingsFile(path))

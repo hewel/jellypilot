@@ -1,4 +1,4 @@
-use std::collections::{HashMap, VecDeque};
+use std::collections::HashMap;
 use std::fmt;
 use std::io::Cursor;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
@@ -18,7 +18,6 @@ pub const MAX_RASTER_CACHED_BYTES: usize = 64 * 1024 * 1024;
 pub const MAX_RASTER_CACHED_ENTRIES: usize = 512;
 pub const MAX_ACTIVE_LOADS: usize = 24;
 pub const MAX_ACTIVE_BYTES: usize = 384 * 1024 * 1024;
-pub const MAX_QUEUED_LOADS: usize = 128;
 pub const DECODE_PIXEL_BUFFER_RESERVATIONS: usize = 2;
 
 const MAX_IMAGE_REFERENCE_BYTES: usize = 32 * 1024;
@@ -32,7 +31,6 @@ pub struct ArtworkLimits {
   pub max_raster_cached_entries: usize,
   pub max_active_loads: usize,
   pub max_active_bytes: usize,
-  pub max_queued_loads: usize,
 }
 
 impl Default for ArtworkLimits {
@@ -45,7 +43,6 @@ impl Default for ArtworkLimits {
       max_raster_cached_entries: MAX_RASTER_CACHED_ENTRIES,
       max_active_loads: MAX_ACTIVE_LOADS,
       max_active_bytes: MAX_ACTIVE_BYTES,
-      max_queued_loads: MAX_QUEUED_LOADS,
     }
   }
 }
@@ -106,14 +103,7 @@ impl ArtworkLoadTicket {
   }
 }
 
-pub enum LoadAdmission<T, R> {
-  Cached(T),
-  Follower(R),
-  Leader(u64),
-  Cancelled,
-}
-
-/// Admission priority for a queued Library Image load.
+/// Admission priority for live Library Image demand awaiting a resource permit.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum LoadLane {
   Visible,
@@ -121,128 +111,41 @@ pub enum LoadLane {
 }
 
 #[derive(Default)]
-pub struct LoadScheduler {
-  next_queue_id: u64,
+struct LoadBudget {
   active_loads: usize,
   active_bytes: usize,
-  visible: VecDeque<QueuedEntry>,
-  offscreen: VecDeque<QueuedEntry>,
 }
 
-struct QueuedEntry {
-  id: u64,
-  notify: Arc<Notify>,
-}
-
-impl LoadScheduler {
-  #[must_use]
-  pub fn enqueue(&mut self, lane: LoadLane) -> (u64, Arc<Notify>) {
-    let id = self.next_queue_id;
-    self.next_queue_id = self.next_queue_id.wrapping_add(1);
-    let notify = Arc::new(Notify::new());
-    self.lane_mut(lane).push_back(QueuedEntry {
-      id,
-      notify: Arc::clone(&notify),
-    });
-    (id, notify)
-  }
-
-  fn lane_mut(&mut self, lane: LoadLane) -> &mut VecDeque<QueuedEntry> {
-    match lane {
-      LoadLane::Visible => &mut self.visible,
-      LoadLane::Offscreen => &mut self.offscreen,
-    }
-  }
-
-  /// The entry admitted next: the visible lane always drains first.
-  fn front(&self) -> Option<&QueuedEntry> {
-    self.visible.front().or_else(|| self.offscreen.front())
-  }
-
-  #[must_use]
-  pub fn queued_loads(&self) -> usize {
-    self.visible.len() + self.offscreen.len()
-  }
-  #[must_use]
-  pub const fn active_loads(&self) -> usize {
+impl LoadBudget {
+  #[cfg(test)]
+  const fn active_loads(&self) -> usize {
     self.active_loads
   }
 
-  #[must_use]
-  pub const fn active_bytes(&self) -> usize {
+  #[cfg(test)]
+  const fn active_bytes(&self) -> usize {
     self.active_bytes
   }
 
-  pub fn try_activate(
+  fn try_reserve(
     &mut self,
-    queue_id: u64,
     max_active_loads: usize,
     max_active_bytes: usize,
-    reserved_bytes: usize,
+    bytes: usize,
   ) -> bool {
-    let is_next = self.front().is_some_and(|entry| entry.id == queue_id);
-    let bytes_fit = reserved_bytes <= max_active_bytes.saturating_sub(self.active_bytes);
-    if !is_next || self.active_loads >= max_active_loads || !bytes_fit {
-      return false;
-    }
-
-    if self
-      .visible
-      .front()
-      .is_some_and(|entry| entry.id == queue_id)
+    if self.active_loads >= max_active_loads
+      || bytes > max_active_bytes.saturating_sub(self.active_bytes)
     {
-      self.visible.pop_front();
-    } else {
-      self.offscreen.pop_front();
+      return false;
     }
     self.active_loads += 1;
-    self.active_bytes += reserved_bytes;
+    self.active_bytes += bytes;
     true
   }
 
-  pub fn release(&mut self, reserved_bytes: usize) {
-    if self.active_loads > 0 {
-      self.active_loads -= 1;
-    }
+  fn release(&mut self, reserved_bytes: usize) {
+    self.active_loads = self.active_loads.saturating_sub(1);
     self.active_bytes = self.active_bytes.saturating_sub(reserved_bytes);
-    self.notify_front();
-  }
-
-  /// Moves a still-queued offscreen entry to the back of the visible lane.
-  /// Returns `false` when the entry is no longer queued (already active,
-  /// cancelled, or already visible).
-  pub fn promote_to_visible(&mut self, queue_id: u64) -> bool {
-    let Some(index) = self.offscreen.iter().position(|entry| entry.id == queue_id) else {
-      return false;
-    };
-    let Some(entry) = self.offscreen.remove(index) else {
-      return false;
-    };
-    self.visible.push_back(entry);
-    true
-  }
-
-  pub fn cancel(&mut self, queue_id: u64) {
-    let was_front = self.front().is_some_and(|entry| entry.id == queue_id);
-    if let Some(index) = self.visible.iter().position(|entry| entry.id == queue_id) {
-      self.visible.remove(index);
-    } else if let Some(index) = self.offscreen.iter().position(|entry| entry.id == queue_id) {
-      self.offscreen.remove(index);
-    }
-    if was_front {
-      self.notify_front();
-    }
-  }
-
-  fn notify_front(&self) {
-    if let Some(entry) = self.front() {
-      entry.notify.notify_one();
-    }
-  }
-
-  pub fn cancel_queued(&mut self) {
-    self.visible.clear();
-    self.offscreen.clear();
   }
 }
 
@@ -466,7 +369,7 @@ struct RasterKey {
 struct LoadContext {
   key: RasterKey,
   generation: u64,
-  lane: LoadLane,
+  attempt: u64,
 }
 
 /// Decodes encoded bytes into a display-sized Library Image Raster.
@@ -799,15 +702,14 @@ impl ArtworkLoadSummary {
   }
 }
 
-type AdapterLoadResult = Result<ArtworkRaster, ArtworkError>;
 type AdapterFetchResult = Result<(ArtworkBytes, ArtworkSource), ArtworkError>;
-type AdapterLoadAdmission = LoadAdmission<ArtworkRaster, oneshot::Receiver<AdapterLoadResult>>;
 
 /// Authenticated, bounded, coalescing artwork pipeline.
 ///
 /// Loads decode to a Library Image Raster sized by an [`ArtworkSizeClass`]:
 /// the raster cache (byte-budgeted) is consulted first, then the encoded
 /// memory cache, coalesced in-flight work, the disk cache, and the network.
+#[derive(Clone)]
 pub struct ArtworkAdapter {
   state: Arc<Mutex<AdapterState>>,
   generation_sender: watch::Sender<u64>,
@@ -846,7 +748,9 @@ impl ArtworkAdapter {
           limits.max_raster_cached_entries,
         ),
         in_flight: HashMap::new(),
-        scheduler: LoadScheduler::default(),
+        next_identity: 0,
+        admission_changed: Arc::new(Notify::new()),
+        scheduler: LoadBudget::default(),
       })),
       generation_sender,
       limits,
@@ -959,102 +863,156 @@ impl ArtworkAdapter {
     ticket: ArtworkLoadTicket,
     lane: LoadLane,
   ) -> (Result<ArtworkRaster, ArtworkError>, ArtworkLoadObservation) {
-    let started = Instant::now();
-    let span = tracing::info_span!(
-      "library_image_load",
-      source = tracing::field::Empty,
-      encoded_bytes = tracing::field::Empty,
-      duration_ms = tracing::field::Empty,
-    );
-    if let Err(error) = validate_image_reference(image_id) {
-      let observation = finish_load(&span, started, ArtworkLoadSettlement::Failed, 0);
-      return (Err(error), observation);
+    match self.demand_inner(client, image_id, size_class, derived, ticket, lane) {
+      ArtworkDemand::Ready(settlement) => settlement,
+      ArtworkDemand::Pending { control, receiver } => {
+        let settlement = receiver.await.unwrap_or_else(|_| cancelled_settlement());
+        drop(control);
+        settlement
+      }
     }
-    // Signed opaque references are authorized against the current session on
-    // every call, including decoded cache hits.
-    let request = match client
+  }
+
+  /// Registers independent live demand; cache hits and rejected requests settle synchronously.
+  pub fn demand(
+    self: &Arc<Self>,
+    client: Arc<JellyfinClient>,
+    image_id: String,
+    size_class: ArtworkSizeClass,
+    derived: DerivedArtwork,
+    ticket: ArtworkLoadTicket,
+    lane: LoadLane,
+  ) -> ArtworkDemand {
+    self.demand_inner(&client, &image_id, size_class, derived, ticket, lane)
+  }
+
+  fn demand_inner(
+    &self,
+    client: &JellyfinClient,
+    image_id: &str,
+    size_class: ArtworkSizeClass,
+    derived: DerivedArtwork,
+    ticket: ArtworkLoadTicket,
+    lane: LoadLane,
+  ) -> ArtworkDemand {
+    let rejected = |error| {
+      ArtworkDemand::Ready((
+        Err(error),
+        ArtworkLoadObservation {
+          settlement: if error == ArtworkError::Cancelled {
+            ArtworkLoadSettlement::Cancelled
+          } else {
+            ArtworkLoadSettlement::Failed
+          },
+          duration: Duration::ZERO,
+          bytes: 0,
+        },
+      ))
+    };
+    if let Err(error) = validate_image_reference(image_id) {
+      return rejected(error);
+    }
+    // Authorization precedes even decoded-cache access.
+    let Ok(request) = client
       .library()
       .image_request_with_max_width(image_id, size_class.source_max_width())
-    {
-      Ok(request) => request,
-      Err(_) => {
-        let observation = finish_load(&span, started, ArtworkLoadSettlement::Failed, 0);
-        return (Err(ArtworkError::RequestRejected), observation);
-      }
+    else {
+      return rejected(ArtworkError::RequestRejected);
     };
     let key = RasterKey {
       image_id: Arc::from(image_id),
       size_class,
       derived,
     };
-    let mut generation = self.generation_sender.subscribe();
-    let load_generation = ticket.generation();
-    match self.admit(key.clone(), load_generation, lane) {
-      LoadAdmission::Cached(raster) => {
-        let bytes = raster.byte_len();
-        let observation = finish_load(
-          &span,
-          started,
-          ArtworkLoadSettlement::Loaded(ArtworkSource::Raster),
-          bytes,
-        );
-        (Ok(raster), observation)
-      }
-      LoadAdmission::Follower(receiver) => {
-        let result = wait_for_follower(receiver, &mut generation).await;
-        let (settlement, bytes) = match &result {
-          Ok(artwork) => (ArtworkLoadSettlement::Shared, artwork.byte_len()),
-          Err(ArtworkError::Cancelled) => (ArtworkLoadSettlement::Cancelled, 0),
-          Err(_) => (ArtworkLoadSettlement::Failed, 0),
-        };
-        let observation = finish_load(&span, started, settlement, bytes);
-        (result, observation)
-      }
-      LoadAdmission::Leader(load_generation) => {
-        let pending = PendingLoad::new(self, key.clone(), load_generation);
-        let result = match self
-          .acquire_load_permit(&key, load_generation, lane, &mut generation)
-          .await
-        {
-          Ok(permit) => {
-            self
-              .fetch_and_decode(
-                client,
-                &request,
-                LoadContext {
-                  key: key.clone(),
-                  generation: load_generation,
-                  lane,
-                },
-                permit,
-                &mut generation,
-              )
-              .await
-          }
-          Err(error) => Err(error),
-        };
-        // Non-raster sources report the encoded body length so the aggregate
-        // keeps transfer bytes distinct from raster pixel bytes.
-        let (settlement, bytes) = match &result {
-          Ok((_, source, encoded_bytes)) => {
-            (ArtworkLoadSettlement::Loaded(*source), *encoded_bytes)
-          }
-          Err(ArtworkError::Cancelled) => (ArtworkLoadSettlement::Cancelled, 0),
-          Err(_) => (ArtworkLoadSettlement::Failed, 0),
-        };
-        let settled = result
-          .as_ref()
-          .map(|(raster, _, _)| raster.clone())
-          .map_err(|error| *error);
-        pending.complete(&settled);
-        let observation = finish_load(&span, started, settlement, bytes);
-        (result.map(|(raster, _, _)| raster), observation)
-      }
-      LoadAdmission::Cancelled => {
-        let observation = finish_load(&span, started, ArtworkLoadSettlement::Cancelled, 0);
-        (Err(ArtworkError::Cancelled), observation)
-      }
+    let mut state = self.lock_state();
+    if ticket.generation() != state.generation {
+      return rejected(ArtworkError::Cancelled);
     }
+    if let Some(raster) = state.raster_cache.get(&key) {
+      let observation = ArtworkLoadObservation::raster_hit(raster.byte_len() as u64);
+      return ArtworkDemand::Ready((Ok(raster), observation));
+    }
+    let Some(id) = state.next_identity.checked_add(1) else {
+      return rejected(ArtworkError::Overloaded);
+    };
+    state.next_identity = id;
+    let (sender, receiver) = oneshot::channel();
+    let consumer = DemandConsumer {
+      lane,
+      sender,
+      started: Instant::now(),
+    };
+    let attempt = if let Some(load) = state.in_flight.get_mut(&key) {
+      let attempt = load.attempt;
+      load.demands.insert(id, consumer);
+      state.admission_changed.notify_waiters();
+      attempt
+    } else {
+      let generation = state.generation;
+      let adapter = self.clone();
+      let client = client.clone();
+      let context = LoadContext {
+        key: key.clone(),
+        generation,
+        attempt: id,
+      };
+      // Spawn while holding the registry lock so a fast completion cannot
+      // race installation. The worker, never the initiating consumer, owns work.
+      let worker = tokio::spawn(async move {
+        adapter.run_load(client, request, context).await;
+      });
+      state.in_flight.insert(
+        key.clone(),
+        InFlightLoad {
+          attempt: id,
+          demands: HashMap::from([(id, consumer)]),
+          waiting: true,
+          worker: worker.abort_handle(),
+        },
+      );
+      state.admission_changed.notify_waiters();
+      id
+    };
+    ArtworkDemand::Pending {
+      control: ArtworkDemandControl {
+        state: Arc::clone(&self.state),
+        key,
+        attempt,
+        id,
+      },
+      receiver,
+    }
+  }
+
+  async fn run_load(
+    &self,
+    client: JellyfinClient,
+    request: LibraryImageRequest,
+    context: LoadContext,
+  ) {
+    let started = Instant::now();
+    let span = tracing::info_span!(
+      "library_image_load",
+      source = tracing::field::Empty,
+      encoded_bytes = tracing::field::Empty,
+      duration_ms = tracing::field::Empty
+    );
+    let mut generation = self.generation_sender.subscribe();
+    let result = match self.acquire_load_permit(&context, &mut generation).await {
+      Ok(permit) => {
+        self
+          .fetch_and_decode(&client, &request, &context, permit, &mut generation)
+          .await
+      }
+      Err(error) => Err(error),
+    };
+    let (settlement, bytes) = match &result {
+      Ok((_, source, bytes)) => (ArtworkLoadSettlement::Loaded(*source), *bytes),
+      Err(ArtworkError::Cancelled) => (ArtworkLoadSettlement::Cancelled, 0),
+      Err(_) => (ArtworkLoadSettlement::Failed, 0),
+    };
+    let observation = finish_load(&span, started, settlement, bytes);
+    self.finish_pending(&context, (result.map(|(raster, _, _)| raster), observation));
   }
 
   /// Cancels queued and network work from the previous consumer generation.
@@ -1079,7 +1037,7 @@ impl ArtworkAdapter {
   }
 
   fn advance_generation(&self, clear_cache: bool) {
-    let (generation, waiters) = {
+    let waiters = {
       let mut state = self.lock_state();
       state.generation = state.generation.wrapping_add(1);
       let generation = state.generation;
@@ -1087,40 +1045,75 @@ impl ArtworkAdapter {
         state.cache_generation = generation;
       }
       let waiters = state.cancel_stale(clear_cache);
-      (generation, waiters)
+      let _ = self.generation_sender.send_replace(generation);
+      waiters
     };
-    let _ = self.generation_sender.send_replace(generation);
     notify_cancelled(waiters);
-  }
-
-  fn admit(&self, key: RasterKey, generation: u64, lane: LoadLane) -> AdapterLoadAdmission {
-    self.lock_state().admit(key, generation, lane)
   }
 
   async fn acquire_load_permit(
     &self,
-    key: &RasterKey,
-    load_generation: u64,
-    lane: LoadLane,
+    context: &LoadContext,
     generation: &mut watch::Receiver<u64>,
   ) -> Result<LoadPermit, ArtworkError> {
-    let queued = QueuedLoad::new(self, load_generation, lane)?;
-    // Publish the queue entry so a visible follower can promote this leader
-    // while it is still queued.
-    if let Some(load) = self.lock_state().in_flight.get_mut(key) {
-      if load.generation == load_generation {
-        load.queued_id = Some(queued.id());
-      }
-    }
+    let changed = Arc::clone(&self.lock_state().admission_changed);
     let reservation = self
       .limits
-      .load_reservation_bytes_with_derived(key.size_class, key.derived);
+      .load_reservation_bytes_with_derived(context.key.size_class, context.key.derived);
+    {
+      let mut state = self.lock_state();
+      let Some(load) = state
+        .in_flight
+        .get_mut(&context.key)
+        .filter(|load| load.attempt == context.attempt)
+      else {
+        return Err(ArtworkError::Cancelled);
+      };
+      load.waiting = true;
+    }
     loop {
-      if self.try_activate(queued.id(), reservation) {
-        return Ok(queued.activate(reservation));
+      // Register before checking admission so release cannot be lost between
+      // the check and suspension. Waiting work holds metadata, never permits.
+      let notified = changed.notified();
+      tokio::pin!(notified);
+      notified.as_mut().enable();
+      {
+        let mut state = self.lock_state();
+        if state.generation != context.generation
+          || !state
+            .in_flight
+            .get(&context.key)
+            .is_some_and(|load| load.attempt == context.attempt)
+        {
+          return Err(ArtworkError::Cancelled);
+        }
+        let next = state
+          .in_flight
+          .values()
+          .filter(|load| load.waiting)
+          .min_by_key(|load| (load.lane() != LoadLane::Visible, load.attempt))
+          .map(|load| load.attempt);
+        // Demand is admitted directly when physical capacity is available;
+        // it need not occupy a bounded physical scheduler queue beforehand.
+        if next == Some(context.attempt)
+          && state.scheduler.try_reserve(
+            self.limits.max_active_loads,
+            self.limits.max_active_bytes,
+            reservation,
+          )
+        {
+          if let Some(load) = state.in_flight.get_mut(&context.key) {
+            load.waiting = false;
+          }
+          changed.notify_waiters();
+          return Ok(LoadPermit {
+            state: Arc::clone(&self.state),
+            reserved_bytes: reservation,
+          });
+        }
       }
       tokio::select! {
-        () = queued.wait() => {}
+        () = notified => {}
         changed = generation.changed() => {
           let _ = changed;
           return Err(ArtworkError::Cancelled);
@@ -1129,20 +1122,11 @@ impl ArtworkAdapter {
     }
   }
 
-  fn try_activate(&self, queue_id: u64, reservation: usize) -> bool {
-    self.lock_state().scheduler.try_activate(
-      queue_id,
-      self.limits.max_active_loads,
-      self.limits.max_active_bytes,
-      reservation,
-    )
-  }
-
   async fn fetch_and_decode(
     &self,
     client: &JellyfinClient,
     request: &LibraryImageRequest,
-    context: LoadContext,
+    context: &LoadContext,
     permit: LoadPermit,
     generation: &mut watch::Receiver<u64>,
   ) -> Result<(ArtworkRaster, ArtworkSource, usize), ArtworkError> {
@@ -1162,7 +1146,7 @@ impl ArtworkAdapter {
       Ok(raster) => Ok((raster, source, encoded_bytes)),
       Err(ArtworkError::DecodedImageTooLarge) if source != ArtworkSource::Network => {
         self
-          .retry_oversized_from_network(client, request, &context, generation)
+          .retry_oversized_from_network(client, request, context, generation)
           .await
       }
       Err(error) => Err(error),
@@ -1192,6 +1176,7 @@ impl ArtworkAdapter {
         request.origin_url(),
       ))
       .await;
+    let permit = self.acquire_load_permit(context, generation).await?;
     let bytes = tokio::select! {
       result = self.fetch_uncached(client, request) => result?,
       changed = generation.changed() => {
@@ -1199,9 +1184,6 @@ impl ArtworkAdapter {
         return Err(ArtworkError::Cancelled);
       }
     };
-    let permit = self
-      .acquire_load_permit(&context.key, context.generation, context.lane, generation)
-      .await?;
     let encoded_bytes = bytes.byte_len();
     let stored = bytes.clone();
     let raster = self
@@ -1352,32 +1334,43 @@ impl ArtworkAdapter {
     Ok(ArtworkBytes(Arc::from(body)))
   }
 
-  fn finish_pending(&self, key: RasterKey, generation: u64, result: &AdapterLoadResult) {
-    let waiters = {
+  fn finish_pending(&self, context: &LoadContext, settlement: ArtworkDemandSettlement) {
+    let consumers = {
       let mut state = self.lock_state();
-      if let Ok(raster) = result {
-        if generation >= state.cache_generation {
-          state.raster_cache.insert(key.clone(), raster.clone());
-        }
-      }
-      if state.generation == generation {
-        state
+      if state.generation != context.generation
+        || !state
           .in_flight
-          .remove(&key)
-          .map(|load| load.waiters)
-          .unwrap_or_default()
-      } else {
-        Vec::new()
+          .get(&context.key)
+          .is_some_and(|load| load.attempt == context.attempt)
+      {
+        return;
       }
+      if let Ok(raster) = &settlement.0 {
+        state
+          .raster_cache
+          .insert(context.key.clone(), raster.clone());
+      }
+      state
+        .in_flight
+        .remove(&context.key)
+        .map(|load| load.demands)
+        .unwrap_or_default()
     };
-
-    for waiter in waiters {
-      let _ = waiter.send(result.clone());
+    // Attribute the actual physical source to one surviving consumer, even
+    // when the initiating consumer left; other consumers report sharing.
+    let reporter = consumers.keys().min().copied();
+    for (id, consumer) in consumers {
+      let mut observation = settlement.1;
+      observation.duration = consumer.started.elapsed();
+      if Some(id) != reporter && settlement.0.is_ok() {
+        observation.settlement = ArtworkLoadSettlement::Shared;
+        observation.bytes = settlement
+          .0
+          .as_ref()
+          .map_or(0, |raster| raster.byte_len() as u64);
+      }
+      let _ = consumer.sender.send((settlement.0.clone(), observation));
     }
-  }
-
-  fn cancel_queued_load(&self, queue_id: u64) {
-    self.lock_state().scheduler.cancel(queue_id);
   }
 
   fn lock_state(&self) -> MutexGuard<'_, AdapterState> {
@@ -1420,76 +1413,122 @@ struct AdapterState {
   encoded_cache: ArtworkCache<Arc<str>, ArtworkBytes>,
   raster_cache: ArtworkCache<RasterKey, ArtworkRaster>,
   in_flight: HashMap<RasterKey, InFlightLoad>,
-  scheduler: LoadScheduler,
+  next_identity: u64,
+  admission_changed: Arc<Notify>,
+  scheduler: LoadBudget,
 }
 
 impl AdapterState {
-  fn admit(&mut self, key: RasterKey, generation: u64, lane: LoadLane) -> AdapterLoadAdmission {
-    if generation != self.generation {
-      return LoadAdmission::Cancelled;
-    }
-    if let Some(raster) = self.raster_cache.get(&key) {
-      return LoadAdmission::Cached(raster);
-    }
-    if let Some(load) = self.in_flight.get_mut(&key) {
-      if load.generation != generation {
-        return LoadAdmission::Cancelled;
-      }
-      // A visible joiner promotes a still-queued offscreen leader so the
-      // shared fetch drains with visible work.
-      if lane == LoadLane::Visible {
-        if let Some(queue_id) = load.queued_id {
-          self.scheduler.promote_to_visible(queue_id);
-        }
-      }
-      let (sender, receiver) = oneshot::channel();
-      load.waiters.push(sender);
-      return LoadAdmission::Follower(receiver);
-    }
-    self.in_flight.insert(
-      key,
-      InFlightLoad {
-        generation,
-        waiters: Vec::new(),
-        queued_id: None,
-      },
-    );
-    LoadAdmission::Leader(generation)
-  }
-
-  fn cancel_stale(&mut self, clear_cache: bool) -> Vec<oneshot::Sender<AdapterLoadResult>> {
+  fn cancel_stale(&mut self, clear_cache: bool) -> Vec<oneshot::Sender<ArtworkDemandSettlement>> {
     if clear_cache {
       self.encoded_cache.clear();
       self.raster_cache.clear();
     }
-    self.scheduler.cancel_queued();
+    self.admission_changed.notify_waiters();
     self
       .in_flight
       .drain()
-      .flat_map(|(_, load)| load.waiters)
+      .flat_map(|(_, load)| {
+        load.worker.abort();
+        load.demands.into_values().map(|consumer| consumer.sender)
+      })
       .collect()
   }
 }
 
 struct InFlightLoad {
-  generation: u64,
-  waiters: Vec<oneshot::Sender<AdapterLoadResult>>,
-  /// Scheduler entry while the leader waits for a permit; lets a visible
-  /// follower promote a still-queued offscreen leader.
-  queued_id: Option<u64>,
+  attempt: u64,
+  demands: HashMap<u64, DemandConsumer>,
+  waiting: bool,
+  worker: tokio::task::AbortHandle,
 }
 
-async fn wait_for_follower(
-  receiver: oneshot::Receiver<AdapterLoadResult>,
-  generation: &mut watch::Receiver<u64>,
-) -> AdapterLoadResult {
-  tokio::select! {
-    result = receiver => result.unwrap_or(Err(ArtworkError::Cancelled)),
-    changed = generation.changed() => {
-      let _ = changed;
-      Err(ArtworkError::Cancelled)
+impl InFlightLoad {
+  fn lane(&self) -> LoadLane {
+    if self
+      .demands
+      .values()
+      .any(|consumer| consumer.lane == LoadLane::Visible)
+    {
+      LoadLane::Visible
+    } else {
+      LoadLane::Offscreen
     }
   }
+}
+
+struct DemandConsumer {
+  lane: LoadLane,
+  sender: oneshot::Sender<ArtworkDemandSettlement>,
+  started: Instant,
+}
+
+/// A decoded result and its truthful per-consumer load observation.
+pub type ArtworkDemandSettlement = (Result<ArtworkRaster, ArtworkError>, ArtworkLoadObservation);
+
+/// Synchronous admission outcome or independently controlled asynchronous demand.
+pub enum ArtworkDemand {
+  Ready(ArtworkDemandSettlement),
+  Pending {
+    control: ArtworkDemandControl,
+    receiver: oneshot::Receiver<ArtworkDemandSettlement>,
+  },
+}
+
+/// Owns one demand. Dropping the last demand cancels its physical work.
+pub struct ArtworkDemandControl {
+  state: Arc<Mutex<AdapterState>>,
+  key: RasterKey,
+  attempt: u64,
+  id: u64,
+}
+
+impl ArtworkDemandControl {
+  /// Updates this consumer's live scheduling priority without restarting work.
+  pub fn set_lane(&self, lane: LoadLane) {
+    let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
+    if let Some(load) = state
+      .in_flight
+      .get_mut(&self.key)
+      .filter(|load| load.attempt == self.attempt)
+    {
+      if let Some(consumer) = load.demands.get_mut(&self.id) {
+        consumer.lane = lane;
+      }
+      state.admission_changed.notify_waiters();
+    }
+  }
+}
+
+impl Drop for ArtworkDemandControl {
+  fn drop(&mut self) {
+    let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
+    let Some(load) = state
+      .in_flight
+      .get_mut(&self.key)
+      .filter(|load| load.attempt == self.attempt)
+    else {
+      return;
+    };
+    load.demands.remove(&self.id);
+    if load.demands.is_empty() {
+      if let Some(load) = state.in_flight.remove(&self.key) {
+        load.worker.abort();
+      }
+    }
+    state.admission_changed.notify_waiters();
+  }
+}
+
+fn cancelled_settlement() -> ArtworkDemandSettlement {
+  (
+    Err(ArtworkError::Cancelled),
+    ArtworkLoadObservation {
+      settlement: ArtworkLoadSettlement::Cancelled,
+      duration: Duration::ZERO,
+      bytes: 0,
+    },
+  )
 }
 
 /// Builds the per-load observation and records the load's tracing span fields.
@@ -1512,63 +1551,9 @@ fn finish_load(
   }
 }
 
-fn notify_cancelled(waiters: Vec<oneshot::Sender<AdapterLoadResult>>) {
+fn notify_cancelled(waiters: Vec<oneshot::Sender<ArtworkDemandSettlement>>) {
   for waiter in waiters {
-    let _ = waiter.send(Err(ArtworkError::Cancelled));
-  }
-}
-
-struct QueuedLoad<'a> {
-  adapter: &'a ArtworkAdapter,
-  id: Option<u64>,
-  notify: Arc<Notify>,
-}
-
-impl<'a> QueuedLoad<'a> {
-  fn new(
-    adapter: &'a ArtworkAdapter,
-    generation: u64,
-    lane: LoadLane,
-  ) -> Result<Self, ArtworkError> {
-    let (id, notify) = {
-      let mut state = adapter.lock_state();
-      if state.generation != generation {
-        return Err(ArtworkError::Cancelled);
-      }
-      if state.scheduler.queued_loads() >= adapter.limits.max_queued_loads {
-        return Err(ArtworkError::Overloaded);
-      }
-      state.scheduler.enqueue(lane)
-    };
-    Ok(Self {
-      adapter,
-      id: Some(id),
-      notify,
-    })
-  }
-
-  fn id(&self) -> u64 {
-    self.id.unwrap_or_default()
-  }
-
-  async fn wait(&self) {
-    self.notify.notified().await;
-  }
-
-  fn activate(mut self, reserved_bytes: usize) -> LoadPermit {
-    self.id.take();
-    LoadPermit {
-      state: Arc::clone(&self.adapter.state),
-      reserved_bytes,
-    }
-  }
-}
-
-impl Drop for QueuedLoad<'_> {
-  fn drop(&mut self) {
-    if let Some(id) = self.id.take() {
-      self.adapter.cancel_queued_load(id);
-    }
+    let _ = waiter.send(cancelled_settlement());
   }
 }
 
@@ -1579,46 +1564,15 @@ struct LoadPermit {
 
 impl Drop for LoadPermit {
   fn drop(&mut self) {
-    self
-      .state
-      .lock()
-      .unwrap_or_else(PoisonError::into_inner)
-      .scheduler
-      .release(self.reserved_bytes);
+    let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
+    state.scheduler.release(self.reserved_bytes);
+    state.admission_changed.notify_waiters();
   }
 }
 
-struct PendingLoad<'a> {
-  adapter: &'a ArtworkAdapter,
-  key: Option<RasterKey>,
-  generation: u64,
-}
-
-impl<'a> PendingLoad<'a> {
-  fn new(adapter: &'a ArtworkAdapter, key: RasterKey, generation: u64) -> Self {
-    Self {
-      adapter,
-      key: Some(key),
-      generation,
-    }
-  }
-
-  fn complete(mut self, result: &AdapterLoadResult) {
-    if let Some(key) = self.key.take() {
-      self.adapter.finish_pending(key, self.generation, result);
-    }
-  }
-}
-
-impl Drop for PendingLoad<'_> {
-  fn drop(&mut self) {
-    if let Some(key) = self.key.take() {
-      self
-        .adapter
-        .finish_pending(key, self.generation, &Err(ArtworkError::Cancelled));
-    }
-  }
-}
+#[cfg(test)]
+#[path = "artwork_demand_tests.rs"]
+mod demand_tests;
 
 fn validate_disk_artwork(bytes: &[u8]) -> bool {
   validate_static_image_container(bytes).is_ok()
@@ -1869,7 +1823,7 @@ mod tests {
     ArtworkBytes(Arc::from(data))
   }
 
-  fn raster(width: u32, height: u32) -> ArtworkRaster {
+  pub(super) fn raster(width: u32, height: u32) -> ArtworkRaster {
     let pixels = vec![7u8; width as usize * height as usize * 4];
     ArtworkRaster::from_raw_for_test(width, height, Bytes::from(pixels))
   }
@@ -1882,30 +1836,22 @@ mod tests {
     }
   }
 
-  fn begin_leader<'a>(adapter: &'a ArtworkAdapter, key: &str) -> PendingLoad<'a> {
-    let generation = adapter.lock_state().generation;
-    let LoadAdmission::Leader(generation) = adapter.admit(
-      class_key(key, ArtworkSizeClass::Card),
-      generation,
-      LoadLane::Offscreen,
-    ) else {
-      panic!("expected a leader admission");
-    };
-    PendingLoad::new(adapter, class_key(key, ArtworkSizeClass::Card), generation)
-  }
-
   fn activate_permit(adapter: &ArtworkAdapter) -> LoadPermit {
-    let generation = adapter.lock_state().generation;
-    let queued =
-      QueuedLoad::new(adapter, generation, LoadLane::Visible).expect("queue has capacity");
     let reservation = adapter
       .limits
       .load_reservation_bytes(ArtworkSizeClass::Card);
-    assert!(adapter.try_activate(queued.id(), reservation));
-    queued.activate(reservation)
+    assert!(adapter.lock_state().scheduler.try_reserve(
+      adapter.limits.max_active_loads,
+      adapter.limits.max_active_bytes,
+      reservation,
+    ));
+    LoadPermit {
+      state: Arc::clone(&adapter.state),
+      reserved_bytes: reservation,
+    }
   }
 
-  fn adopt_session(client: &JellyfinClient, server_url: &str, user_id: &str) {
+  pub(super) fn adopt_session(client: &JellyfinClient, server_url: &str, user_id: &str) {
     client.login().adopt_validated_session(&SavedSession {
       provider: MediaServerProvider::Jellyfin,
       server_url: server_url.to_owned(),
@@ -1917,7 +1863,7 @@ mod tests {
     });
   }
 
-  fn image_id(server_url: &str) -> String {
+  pub(super) fn image_id(server_url: &str) -> String {
     image_id_for_url(
       MediaServerProvider::Jellyfin,
       server_url,
@@ -1928,7 +1874,7 @@ mod tests {
   }
 
   /// Encodes a deterministic RGBA image of the given size as PNG.
-  fn encode_test_png(width: u32, height: u32) -> Vec<u8> {
+  pub(super) fn encode_test_png(width: u32, height: u32) -> Vec<u8> {
     let buffer = image::RgbaImage::from_pixel(width, height, image::Rgba([3, 90, 200, 255]));
     let mut encoded = Cursor::new(Vec::new());
     buffer
@@ -1999,11 +1945,9 @@ mod tests {
       ..ArtworkLimits::default()
     }
     .normalized();
-    let mut scheduler = LoadScheduler::default();
-    let (queued, _) = scheduler.enqueue(LoadLane::Visible);
+    let mut scheduler = LoadBudget::default();
 
-    assert!(scheduler.try_activate(
-      queued,
+    assert!(scheduler.try_reserve(
       limits.max_active_loads,
       limits.max_active_bytes,
       limits.load_reservation_bytes(ArtworkSizeClass::Backdrop),
@@ -2025,80 +1969,13 @@ mod tests {
 
   #[test]
   fn scheduler_bounds_active_loads_and_aggregate_bytes() {
-    let mut scheduler = LoadScheduler::default();
-    let (first, _) = scheduler.enqueue(LoadLane::Visible);
-    let (second, _) = scheduler.enqueue(LoadLane::Visible);
-    let (third, _) = scheduler.enqueue(LoadLane::Visible);
-
-    assert!(scheduler.try_activate(first, 2, 100, 40));
-    assert!(scheduler.try_activate(second, 2, 100, 40));
-    assert!(!scheduler.try_activate(third, 2, 100, 40));
+    let mut scheduler = LoadBudget::default();
+    assert!(scheduler.try_reserve(2, 100, 40));
+    assert!(scheduler.try_reserve(2, 100, 40));
+    assert!(!scheduler.try_reserve(2, 100, 40));
     scheduler.release(40);
-    assert!(scheduler.try_activate(third, 2, 100, 40));
-  }
-  #[test]
-  fn full_24_poster_page_activates_concurrently_without_queueing() {
-    let adapter = ArtworkAdapter::default();
-    let generation = adapter.lock_state().generation;
-    let reservation = adapter
-      .limits
-      .load_reservation_bytes(ArtworkSizeClass::Card);
-    let loads = (0..MAX_ACTIVE_LOADS)
-      .map(|_| {
-        QueuedLoad::new(&adapter, generation, LoadLane::Visible).expect("load should be queued")
-      })
-      .collect::<Vec<_>>();
-    for load in &loads {
-      assert!(
-        adapter.try_activate(load.id(), reservation),
-        "all 24 visible page loads should activate in the same pass"
-      );
-    }
-    assert_eq!(
-      adapter.lock_state().scheduler.active_loads(),
-      MAX_ACTIVE_LOADS
-    );
-    assert_eq!(adapter.lock_state().scheduler.queued_loads(), 0);
-  }
-
-  #[test]
-  fn visible_lane_preempts_queued_offscreen_loads_when_a_permit_frees() {
-    let mut scheduler = LoadScheduler::default();
-    let (offscreen_first, _) = scheduler.enqueue(LoadLane::Offscreen);
-    let (offscreen_second, _) = scheduler.enqueue(LoadLane::Offscreen);
-    let reservation = 40;
-
-    assert!(scheduler.try_activate(offscreen_first, 1, 100, reservation));
-    assert!(!scheduler.try_activate(offscreen_second, 1, 100, reservation));
-
-    // A visible load queued later still drains before the waiting offscreen load.
-    let (visible, _) = scheduler.enqueue(LoadLane::Visible);
-    assert!(!scheduler.try_activate(visible, 1, 100, reservation));
-    scheduler.release(reservation);
-    assert!(scheduler.try_activate(visible, 1, 100, reservation));
-    assert!(!scheduler.try_activate(offscreen_second, 1, 100, reservation));
-    scheduler.release(reservation);
-    assert!(scheduler.try_activate(offscreen_second, 1, 100, reservation));
-
-    assert_eq!(scheduler.queued_loads(), 0);
-    scheduler.release(reservation);
-    assert_eq!(scheduler.active_loads(), 0);
-    assert_eq!(scheduler.active_bytes(), 0);
-  }
-
-  #[test]
-  fn cancelling_a_visible_load_keeps_lane_ordering_intact() {
-    let mut scheduler = LoadScheduler::default();
-    let (offscreen, _) = scheduler.enqueue(LoadLane::Offscreen);
-    let (visible_first, _) = scheduler.enqueue(LoadLane::Visible);
-    let (visible_second, _) = scheduler.enqueue(LoadLane::Visible);
-
-    scheduler.cancel(visible_first);
-
-    // The remaining visible load drains before the earlier offscreen load.
-    assert!(scheduler.try_activate(visible_second, 2, 100, 40));
-    assert!(scheduler.try_activate(offscreen, 2, 100, 40));
-    assert_eq!(scheduler.queued_loads(), 0);
+    assert!(!scheduler.try_reserve(2, 100, 61));
+    assert!(scheduler.try_reserve(2, 100, 60));
   }
 
   #[test]
@@ -2161,230 +2038,6 @@ mod tests {
   }
 
   #[test]
-  fn promotion_moves_a_queued_offscreen_entry_to_the_visible_lane() {
-    let mut scheduler = LoadScheduler::default();
-    let (promoted, _) = scheduler.enqueue(LoadLane::Offscreen);
-    let (earlier_offscreen, _) = scheduler.enqueue(LoadLane::Offscreen);
-    let (visible, _) = scheduler.enqueue(LoadLane::Visible);
-    let reservation = 40;
-
-    assert!(scheduler.promote_to_visible(promoted));
-
-    assert!(scheduler.try_activate(visible, 3, 200, reservation));
-    assert!(scheduler.try_activate(promoted, 3, 200, reservation));
-    assert!(scheduler.try_activate(earlier_offscreen, 3, 200, reservation));
-    // Already-activated entries cannot be promoted again.
-    assert!(!scheduler.promote_to_visible(promoted));
-  }
-
-  #[test]
-  fn visible_follower_promotes_a_queued_offscreen_leader() {
-    let adapter = ArtworkAdapter::default();
-    let mut permits = (0..MAX_ACTIVE_LOADS)
-      .map(|_| activate_permit(&adapter))
-      .collect::<Vec<_>>();
-    let generation = adapter.lock_state().generation;
-    // An unrelated offscreen load queues ahead of the leader.
-    let earlier =
-      QueuedLoad::new(&adapter, generation, LoadLane::Offscreen).expect("queue has capacity");
-    let _pending = begin_leader(&adapter, "shared");
-    let leader =
-      QueuedLoad::new(&adapter, generation, LoadLane::Offscreen).expect("queue has capacity");
-    adapter
-      .lock_state()
-      .in_flight
-      .get_mut(&class_key("shared", ArtworkSizeClass::Card))
-      .expect("leader is in flight")
-      .queued_id = Some(leader.id());
-
-    let LoadAdmission::Follower(_receiver) = adapter.admit(
-      class_key("shared", ArtworkSizeClass::Card),
-      generation,
-      LoadLane::Visible,
-    ) else {
-      panic!("expected a follower admission");
-    };
-
-    // When one permit frees, the promoted leader drains before the earlier
-    // offscreen load.
-    drop(permits.pop());
-    let reservation = adapter
-      .limits
-      .load_reservation_bytes(ArtworkSizeClass::Card);
-    assert!(adapter.try_activate(leader.id(), reservation));
-    assert!(!adapter.try_activate(earlier.id(), reservation));
-  }
-
-  #[test]
-  fn load_summary_message_is_sanitized_and_empty_summary_records_nothing() {
-    assert_eq!(ArtworkLoadSummary::default().diagnostic_message(), None);
-
-    let summary = ArtworkLoadSummary {
-      raster_loads: 4,
-      memory_loads: 8,
-      disk_loads: 3,
-      network_loads: 1,
-      failed_loads: 2,
-      total_duration_millis: 640,
-      total_bytes: 1_234_567,
-    };
-    let message = summary
-      .diagnostic_message()
-      .expect("settled loads describe");
-
-    assert!(message.contains("18"));
-    assert!(message.contains("4 raster"));
-    assert!(message.contains("8 memory"));
-    assert!(message.contains("3 disk"));
-    assert!(message.contains("1 network"));
-    assert!(message.contains("2 failed"));
-    assert!(message.contains("1234567 bytes"));
-    assert!(message.contains("average 40 ms"));
-    assert!(!message.contains("https://"));
-  }
-
-  #[test]
-  fn ordinary_home_batch_queues_and_drains_in_fifo_order() {
-    let mut scheduler = LoadScheduler::default();
-    let queued = (0..48)
-      .map(|_| scheduler.enqueue(LoadLane::Visible).0)
-      .collect::<Vec<_>>();
-    let reservation = 40;
-
-    for (index, id) in queued.into_iter().enumerate() {
-      assert!(scheduler.try_activate(id, 1, reservation, reservation));
-      assert_eq!(scheduler.active_loads, 1, "load {index} should be active");
-      assert_eq!(scheduler.active_bytes, reservation);
-      scheduler.release(reservation);
-    }
-    assert_eq!(scheduler.active_loads, 0);
-    assert_eq!(scheduler.active_bytes, 0);
-    assert_eq!(scheduler.queued_loads(), 0);
-  }
-
-  #[test]
-  fn errors_are_redacted() {
-    let secret = "https://server.invalid/image?api_key=secret";
-    let errors = [
-      ArtworkError::RequestRejected,
-      ArtworkError::FetchFailed,
-      ArtworkError::OriginRejected,
-      ArtworkError::UnsupportedContentType,
-      ArtworkError::AnimatedImageUnsupported,
-      ArtworkError::ResponseTooLarge,
-      ArtworkError::EmptyResponse,
-      ArtworkError::DecodeFailed,
-      ArtworkError::CacheUnavailable,
-      ArtworkError::DecodedImageTooLarge,
-      ArtworkError::Cancelled,
-      ArtworkError::Overloaded,
-    ];
-    for error in errors {
-      assert!(!error.to_string().contains(secret));
-    }
-  }
-
-  #[test]
-  fn queue_accepts_an_ordinary_48_image_home_and_bounds_pathological_backlog() {
-    let adapter = ArtworkAdapter::default();
-    let generation = adapter.lock_state().generation;
-    let home = (0..48)
-      .map(|_| {
-        QueuedLoad::new(&adapter, generation, LoadLane::Visible).expect("home queue has capacity")
-      })
-      .collect::<Vec<_>>();
-    let margin = (48..MAX_QUEUED_LOADS)
-      .map(|_| {
-        QueuedLoad::new(&adapter, generation, LoadLane::Offscreen)
-          .expect("bounded margin has capacity")
-      })
-      .collect::<Vec<_>>();
-
-    assert!(matches!(
-      QueuedLoad::new(&adapter, generation, LoadLane::Visible),
-      Err(ArtworkError::Overloaded)
-    ));
-
-    drop(home);
-    drop(margin);
-  }
-
-  #[test]
-  fn cancelling_a_generation_removes_stale_backlog_before_current_work() {
-    let adapter = ArtworkAdapter::default();
-    let reservation = adapter
-      .limits
-      .load_reservation_bytes(ArtworkSizeClass::Card);
-    let stale_generation = adapter.lock_state().generation;
-    let stale = (0..MAX_QUEUED_LOADS)
-      .map(|_| {
-        QueuedLoad::new(&adapter, stale_generation, LoadLane::Offscreen)
-          .expect("stale queue has capacity")
-      })
-      .collect::<Vec<_>>();
-
-    adapter.cancel_pending();
-
-    let current_generation = adapter.lock_state().generation;
-    let current = QueuedLoad::new(&adapter, current_generation, LoadLane::Visible)
-      .expect("current load is admitted");
-    assert!(adapter.try_activate(current.id(), reservation));
-    let current = current.activate(reservation);
-    drop(stale);
-    drop(current);
-
-    let state = adapter.lock_state();
-    assert_eq!(state.scheduler.active_loads(), 0);
-    assert_eq!(state.scheduler.active_bytes(), 0);
-    assert_eq!(state.scheduler.queued_loads(), 0);
-  }
-
-  #[test]
-  fn generation_advance_without_receivers_is_retained_for_later_loads() {
-    let adapter = ArtworkAdapter::default();
-
-    adapter.cancel_pending();
-
-    let generation = *adapter.generation_sender.subscribe().borrow();
-    assert_eq!(generation, 1);
-    assert!(matches!(
-      adapter.admit(
-        class_key("current", ArtworkSizeClass::Card),
-        generation,
-        LoadLane::Offscreen
-      ),
-      LoadAdmission::Leader(1)
-    ));
-  }
-
-  #[test]
-  fn cancelling_a_queued_load_allows_the_next_unique_load_to_run() {
-    let adapter = ArtworkAdapter::default();
-    let reservation = adapter
-      .limits
-      .load_reservation_bytes(ArtworkSizeClass::Card);
-    let first = activate_permit(&adapter);
-    let second = activate_permit(&adapter);
-    let generation = adapter.lock_state().generation;
-    let cancelled =
-      QueuedLoad::new(&adapter, generation, LoadLane::Visible).expect("queue has capacity");
-    let next =
-      QueuedLoad::new(&adapter, generation, LoadLane::Visible).expect("queue has capacity");
-
-    assert!(!adapter.try_activate(next.id(), reservation));
-    drop(cancelled);
-    drop(first);
-    assert!(adapter.try_activate(next.id(), reservation));
-
-    let next = next.activate(reservation);
-    drop(second);
-    drop(next);
-    let state = adapter.lock_state();
-    assert_eq!(state.scheduler.active_loads(), 0);
-    assert_eq!(state.scheduler.active_bytes(), 0);
-  }
-
-  #[test]
   fn owned_permit_stays_admitted_until_background_work_drops_it() {
     let adapter = ArtworkAdapter::default();
     let permit = activate_permit(&adapter);
@@ -2404,174 +2057,6 @@ mod tests {
     let state = adapter.lock_state();
     assert_eq!(state.scheduler.active_loads(), 0);
     assert_eq!(state.scheduler.active_bytes(), 0);
-  }
-
-  #[test]
-  fn in_flight_admission_coalesces_one_result_and_storage() {
-    let adapter = ArtworkAdapter::default();
-    let pending = begin_leader(&adapter, "same");
-    let LoadAdmission::Follower(receiver) = adapter.admit(
-      class_key("same", ArtworkSizeClass::Card),
-      0,
-      LoadLane::Offscreen,
-    ) else {
-      panic!("expected a follower admission");
-    };
-    let decoded = raster(1, 1);
-    let pixels = decoded.pixels.as_ptr();
-
-    pending.complete(&Ok(decoded));
-    let received = receiver
-      .blocking_recv()
-      .expect("leader sends a result")
-      .expect("leader succeeds");
-
-    assert_eq!(received.pixels.as_ptr(), pixels);
-    let LoadAdmission::Cached(cached) = adapter.admit(
-      class_key("same", ArtworkSizeClass::Card),
-      0,
-      LoadLane::Offscreen,
-    ) else {
-      panic!("expected a raster cache hit");
-    };
-    assert_eq!(cached.pixels.as_ptr(), pixels);
-  }
-
-  #[test]
-  fn coalescing_distinguishes_size_classes() {
-    let adapter = ArtworkAdapter::default();
-    let generation = adapter.lock_state().generation;
-
-    assert!(matches!(
-      adapter.admit(
-        class_key("shared", ArtworkSizeClass::Card),
-        generation,
-        LoadLane::Offscreen
-      ),
-      LoadAdmission::Leader(_)
-    ));
-    assert!(matches!(
-      adapter.admit(
-        class_key("shared", ArtworkSizeClass::Card),
-        generation,
-        LoadLane::Offscreen
-      ),
-      LoadAdmission::Follower(_)
-    ));
-    // A different size class of the same reference coalesces separately.
-    assert!(matches!(
-      adapter.admit(
-        class_key("shared", ArtworkSizeClass::Hero),
-        generation,
-        LoadLane::Offscreen
-      ),
-      LoadAdmission::Leader(_)
-    ));
-  }
-
-  #[test]
-  fn cancelled_follower_does_not_cancel_the_shared_leader() {
-    let adapter = ArtworkAdapter::default();
-    let pending = begin_leader(&adapter, "same");
-    let LoadAdmission::Follower(receiver) = adapter.admit(
-      class_key("same", ArtworkSizeClass::Card),
-      0,
-      LoadLane::Offscreen,
-    ) else {
-      panic!("expected a follower admission");
-    };
-    drop(receiver);
-    pending.complete(&Ok(raster(1, 1)));
-
-    assert!(matches!(
-      adapter.admit(
-        class_key("same", ArtworkSizeClass::Card),
-        0,
-        LoadLane::Offscreen
-      ),
-      LoadAdmission::Cached(_)
-    ));
-  }
-
-  #[test]
-  fn cancelled_leader_notifies_followers_and_releases_the_key() {
-    let adapter = ArtworkAdapter::default();
-    let pending = begin_leader(&adapter, "same");
-    let LoadAdmission::Follower(receiver) = adapter.admit(
-      class_key("same", ArtworkSizeClass::Card),
-      0,
-      LoadLane::Offscreen,
-    ) else {
-      panic!("expected a follower admission");
-    };
-
-    drop(pending);
-
-    assert!(matches!(
-      receiver.blocking_recv().expect("leader sends cancellation"),
-      Err(ArtworkError::Cancelled)
-    ));
-    assert!(matches!(
-      adapter.admit(
-        class_key("same", ArtworkSizeClass::Card),
-        0,
-        LoadLane::Offscreen
-      ),
-      LoadAdmission::Leader(_)
-    ));
-  }
-
-  #[test]
-  fn completed_error_releases_the_coalescing_key() {
-    let adapter = ArtworkAdapter::default();
-    let pending = begin_leader(&adapter, "same");
-    pending.complete(&Err(ArtworkError::FetchFailed));
-
-    assert!(matches!(
-      adapter.admit(
-        class_key("same", ArtworkSizeClass::Card),
-        0,
-        LoadLane::Offscreen
-      ),
-      LoadAdmission::Leader(_)
-    ));
-  }
-
-  #[test]
-  fn generation_cancellation_notifies_followers_and_rejects_stale_admission() {
-    let adapter = ArtworkAdapter::default();
-    let pending = begin_leader(&adapter, "same");
-    let LoadAdmission::Follower(receiver) = adapter.admit(
-      class_key("same", ArtworkSizeClass::Card),
-      0,
-      LoadLane::Offscreen,
-    ) else {
-      panic!("expected a follower admission");
-    };
-
-    adapter.cancel_pending();
-
-    assert!(matches!(
-      receiver.blocking_recv().expect("follower is notified"),
-      Err(ArtworkError::Cancelled)
-    ));
-    assert!(matches!(
-      adapter.admit(
-        class_key("stale", ArtworkSizeClass::Card),
-        0,
-        LoadLane::Offscreen
-      ),
-      LoadAdmission::Cancelled
-    ));
-    assert!(matches!(
-      adapter.admit(
-        class_key("current", ArtworkSizeClass::Card),
-        1,
-        LoadLane::Offscreen
-      ),
-      LoadAdmission::Leader(1)
-    ));
-    drop(pending);
   }
 
   #[test]
@@ -2595,39 +2080,6 @@ mod tests {
       .get(&class_key("cached", ArtworkSizeClass::Card))
       .is_none());
     assert!(state.encoded_cache.get(&Arc::from("encoded")).is_none());
-  }
-
-  #[test]
-  fn clear_caches_drops_cached_data_without_cancelling_in_flight_loads() {
-    let adapter = ArtworkAdapter::default();
-    let pending = begin_leader(&adapter, "in-flight");
-    {
-      let mut state = adapter.lock_state();
-      state
-        .raster_cache
-        .insert(class_key("cached", ArtworkSizeClass::Card), raster(1, 1));
-      state
-        .encoded_cache
-        .insert(Arc::from("encoded"), artwork(&[1, 2, 3, 4]));
-    }
-
-    adapter.clear_caches();
-
-    let mut state = adapter.lock_state();
-    assert!(state
-      .raster_cache
-      .get(&class_key("cached", ArtworkSizeClass::Card))
-      .is_none());
-    assert!(state.encoded_cache.get(&Arc::from("encoded")).is_none());
-    drop(state);
-
-    // The in-flight load still finishes and re-enters the raster cache.
-    pending.complete(&Ok(raster(1, 1)));
-    assert!(adapter
-      .lock_state()
-      .raster_cache
-      .get(&class_key("in-flight", ArtworkSizeClass::Card))
-      .is_some());
   }
 
   #[test]
@@ -2763,46 +2215,6 @@ mod tests {
       );
       let _ = std::fs::remove_dir_all(cache_root);
     });
-  }
-
-  #[test]
-  fn stale_success_after_reset_session_does_not_repopulate_raster_cache() {
-    let adapter = ArtworkAdapter::default();
-    let pending = begin_leader(&adapter, "stale");
-
-    adapter.reset_session();
-    pending.complete(&Ok(raster(1, 1)));
-
-    assert!(adapter
-      .lock_state()
-      .raster_cache
-      .get(&class_key("stale", ArtworkSizeClass::Card))
-      .is_none());
-  }
-
-  #[test]
-  fn ticket_captured_before_reset_cannot_adopt_the_new_generation() {
-    let adapter = ArtworkAdapter::default();
-    let stale = adapter.ticket();
-
-    adapter.reset_session();
-
-    assert!(matches!(
-      adapter.admit(
-        class_key("stale", ArtworkSizeClass::Card),
-        stale.generation(),
-        LoadLane::Offscreen
-      ),
-      LoadAdmission::Cancelled
-    ));
-    assert!(matches!(
-      adapter.admit(
-        class_key("current", ArtworkSizeClass::Card),
-        adapter.ticket().generation(),
-        LoadLane::Offscreen
-      ),
-      LoadAdmission::Leader(_)
-    ));
   }
 
   #[test]

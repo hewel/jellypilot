@@ -37,6 +37,10 @@ pub fn boot(smoke: bool, instance: Option<crate::instance::Guard>) -> (State, Ta
     state.kernel.tray.is_some(),
     smoke,
   );
+  if start_hidden {
+    state.shell.images_visible = false;
+    playback::suspend_artwork(&mut state.playback);
+  }
   let mut tasks = vec![
     login::load_saved_profiles(&state.login, &state.kernel).map(Message::Login),
     iced::system::theme().map(Message::SystemThemeDiscovered),
@@ -80,7 +84,7 @@ pub fn update(state: &mut State, message: Message) -> Task<Message> {
 
 pub fn view(state: &State, _window_id: iced::window::Id) -> iced::Element<'_, Message> {
   jellypilot_ui::widgets::focus_scope::focus_scope(
-    view::view(state),
+    view::image_observer::observe_images(view::view(state)),
     state.shell.focus_visibility.clone(),
   )
 }

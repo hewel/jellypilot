@@ -7,7 +7,6 @@ use jellypilot_auth::{
   AuthStorageError, SavedProfileKey, SavedProfileSummary, SavedProfilesSnapshot,
   SensitiveSavedSession,
 };
-use jellypilot_core::artwork_binder::ArtworkSlot;
 use jellypilot_core::browse_model::BrowsePageSettlement;
 use jellypilot_core::config::{AppMode, IntroMode, LoginPrefill, ShortcutKind, ThemeMode};
 use jellypilot_core::diagnostics::{DiagnosticCategory, DiagnosticLevel};
@@ -15,7 +14,7 @@ use jellypilot_core::locale::LanguagePreference;
 use jellypilot_core::request_gate::{
   DetailAuxToken, DetailToken, HomeToken, RemotePlayToken, RemoteToken, SessionToken,
 };
-use jellypilot_media_server::artwork::{ArtworkError, ArtworkLoadSummary, ArtworkRaster};
+use jellypilot_media_server::artwork::{ArtworkError, ArtworkRaster};
 use jellypilot_media_server::home::HomeDataResult;
 use jellypilot_media_server::{
   JellyfinClient, MediaItem, MediaServerProvider, VideoItemDetail, VideoLibraryItem,
@@ -60,7 +59,8 @@ impl std::fmt::Debug for Message {
         .field(mode)
         .finish(),
       Self::DismissNotice(id) => formatter.debug_tuple("DismissNotice").field(id).finish(),
-      Self::ArtworkStreamCompleted(_) => formatter.write_str("ArtworkStreamCompleted"),
+      Self::ArtworkSummaryReady => formatter.write_str("ArtworkSummaryReady"),
+      Self::ImageObserved { .. } => formatter.write_str("ImageObserved"),
       Self::ProfileAvatarLoaded { .. } => formatter.write_str("ProfileAvatarLoaded([redacted])"),
     }
   }
@@ -87,9 +87,14 @@ pub enum Message {
   /// OS light/dark mode changed while the theme mode is `System`.
   SystemThemeChanged(iced::theme::Mode),
   DismissNotice(u64),
-  /// A surface's streamed Library Image loads all settled; carries that
-  /// stream's own sanitized aggregate for the diagnostics event.
-  ArtworkStreamCompleted(ArtworkLoadSummary),
+  /// Flushes the current burst of sanitized Library Image counters.
+  ArtworkSummaryReady,
+  ImageObserved {
+    surface: super::artwork::ArtworkSurface,
+    epoch: u64,
+    spec: super::artwork::ImageSpec,
+    priority: Option<super::artwork::ImagePriority>,
+  },
   /// One saved profile's user image settled through the artwork pipeline;
   /// `None` when the profile's session could not be loaded at all.
   ProfileAvatarLoaded {
@@ -133,10 +138,6 @@ pub enum ShellMessage {
   },
 }
 
-/// One settled Library Image load delivered to a surface.
-pub type ArtworkLoadCompletion =
-  jellypilot_core::artwork_loader::ArtworkLoadCompletion<Result<ArtworkRaster, ArtworkError>>;
-
 #[derive(Clone)]
 pub enum HomeMessage {
   Navigate(super::state::Destination),
@@ -148,12 +149,7 @@ pub enum HomeMessage {
     token: HomeToken,
     result: HomeDataResult,
   },
-  ArtworkLoaded {
-    session: SessionToken,
-    slot: ArtworkSlot,
-    image_id: String,
-    result: Result<ArtworkRaster, ArtworkError>,
-  },
+  ArtworkLoaded(super::artwork::ImageCompletion),
 }
 
 #[derive(Clone)]
@@ -167,14 +163,14 @@ pub enum BrowseMessage {
   PlayedFilterChanged(VideoLibraryPlayedFilter),
   FavoritesToggled,
   Scrolled(scrollable::Viewport),
+  GridViewportMeasured {
+    epoch: u64,
+    offset_y: f32,
+    height: f32,
+  },
   Retry,
   PageSettled(u64, BrowsePageSettlement),
-  ArtworkLoaded {
-    session: SessionToken,
-    slot: ArtworkSlot,
-    image_id: String,
-    result: Result<ArtworkRaster, ArtworkError>,
-  },
+  ArtworkLoaded(super::artwork::ImageCompletion),
 }
 
 #[derive(Clone)]
@@ -209,12 +205,7 @@ pub enum DetailMessage {
     token: DetailAuxToken,
     result: Result<VideoUserDataUpdate, String>,
   },
-  ArtworkLoaded {
-    session: SessionToken,
-    slot: ArtworkSlot,
-    image_id: String,
-    result: Result<ArtworkRaster, ArtworkError>,
-  },
+  ArtworkLoaded(super::artwork::ImageCompletion),
 }
 #[derive(Clone)]
 pub enum SettingsMessage {
@@ -295,12 +286,7 @@ pub enum PlaybackMessage {
     result: Result<Option<MediaItem>, ()>,
     detail: Option<Box<VideoItemDetail>>,
   },
-  ArtworkLoaded {
-    session: SessionToken,
-    slot: ArtworkSlot,
-    image_id: String,
-    result: Result<ArtworkRaster, ArtworkError>,
-  },
+  ArtworkLoaded(super::artwork::ImageCompletion),
 }
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum RemoteStartError {

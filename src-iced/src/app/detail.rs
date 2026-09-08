@@ -1,39 +1,35 @@
 //! Detail surface (ADR 0029): item/show detail loading, auxiliary shelves,
 //! season episode paging, user-data actions, and the detail artwork pipeline.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use crate::i18n::UiText;
 use iced::Task;
-use jellypilot_core::artwork_binder::{ArtworkSettlement, ArtworkSurface};
-use jellypilot_core::artwork_loader::PlannedArtworkLoad;
 use jellypilot_core::detail::{
   apply_user_data_update, detail_episode_key, detail_similar_key, detail_user_data, initial_season,
   load_detail_content, load_season_neighbors, load_similar_items, selected_season_request,
   DetailContent,
 };
 use jellypilot_core::request_gate::{DetailAuxKind, DetailToken, RequestGate};
-use jellypilot_media_server::artwork::{
-  ArtworkLoadObservation, ArtworkLoadSummary, ArtworkSizeClass, DerivedArtwork,
-};
+use jellypilot_media_server::artwork::{ArtworkSizeClass, DerivedArtwork};
 use jellypilot_media_server::{
   VideoLibraryItem, VideoSeasonEpisodesPage, VideoUserDataAction, VideoUserDataUpdate,
   VideoUserDataUpdateRequest,
 };
 
-use super::artwork::stream_artwork_loads;
+use super::artwork::{ImageCollection, ImageSpec};
 use super::kernel::Kernel;
-use super::message::{ArtworkLoadCompletion, DetailMessage, Message};
-use super::state::{ArtworkCell, ArtworkCellState, DetailArtwork, DetailState, UserDataActionKind};
+use super::message::{DetailMessage, Message};
+use super::state::{DetailState, UserDataActionKind};
 
 const DETAIL_FAILURE: &str = "detail-load-error";
 const SEASON_FAILURE: &str = "detail-season-error";
 const SIMILAR_FAILURE: &str = "detail-similar-error";
 const USER_DATA_FAILURE: &str = "detail-user-data-error";
 
-const DETAIL_LOGO_KEY: &str = "detail-logo";
-const DETAIL_BACKDROP_KEY: &str = "detail-backdrop";
+pub(crate) const DETAIL_LOGO_KEY: &str = "detail-logo";
+pub(crate) const DETAIL_BACKDROP_KEY: &str = "detail-backdrop";
 
 /// Detail surface slice: the library items opened into Detail, the loaded
 /// detail view state, and the artwork cells bound for hero and shelf artwork.
@@ -41,14 +37,10 @@ const DETAIL_BACKDROP_KEY: &str = "detail-backdrop";
 pub struct Surface {
   pub items: HashMap<String, VideoLibraryItem>,
   pub data: DetailState,
-  pub artwork: DetailArtwork,
+  pub artwork: ImageCollection,
   refresh_token: Option<DetailToken>,
 }
-/// `detail_item_id` is the shell's current `Destination::Detail` item id,
-/// computed by the top-level router so this module never reads navigation
-/// state (ADR 0029). The router also retains artwork handles across all
-/// surfaces after content or auxiliary settlements re-prepare the pipeline,
-/// because retention reads every surface's slot set.
+/// Updates Detail content and its locally owned images.
 pub fn update(
   surface: &mut Surface,
   kernel: &mut Kernel,
@@ -100,13 +92,13 @@ pub fn update(
         );
       }
       let followup = start_followup(surface, kernel, false);
-      Task::batch([followup, prepare_artwork(surface, kernel)])
+      Task::batch([followup, prepare_artwork(surface)])
     }
     DetailMessage::SeasonLoaded { token, result } => {
       if !settle_season_load(&mut surface.data, &mut kernel.request_gate, token, result) {
         return Task::none();
       }
-      prepare_artwork(surface, kernel)
+      prepare_artwork(surface)
     }
     DetailMessage::NeighborsLoaded { token, result } => {
       if !kernel.request_gate.finish_detail_aux(token) {
@@ -119,7 +111,7 @@ pub fn update(
           jellypilot_core::LoadState::Failed(UiText::new(SEASON_FAILURE))
         }
       };
-      prepare_artwork(surface, kernel)
+      prepare_artwork(surface)
     }
     DetailMessage::SimilarLoaded { token, result } => {
       if !kernel.request_gate.finish_detail_aux(token) {
@@ -132,7 +124,7 @@ pub fn update(
           jellypilot_core::LoadState::Failed(UiText::new(SIMILAR_FAILURE))
         }
       };
-      prepare_artwork(surface, kernel)
+      prepare_artwork(surface)
     }
     DetailMessage::UserDataUpdated { token, result } => {
       let Some(update) =
@@ -148,58 +140,12 @@ pub fn update(
       }
       Task::none()
     }
-    DetailMessage::ArtworkLoaded {
-      session,
-      slot,
-      image_id,
-      result,
-    } => {
-      let session_ok = kernel.request_gate.is_current_session(session);
-      apply_artwork_completion(
-        surface,
-        kernel,
-        session_ok,
-        ArtworkLoadCompletion {
-          slot,
-          image_id,
-          result,
-        },
-      );
+    DetailMessage::ArtworkLoaded(completion) => {
+      surface
+        .artwork
+        .settle(kernel.request_gate.current_session(), completion);
       Task::none()
     }
-  }
-}
-
-fn apply_artwork_completion(
-  surface: &mut Surface,
-  kernel: &mut Kernel,
-  session_ok: bool,
-  completion: ArtworkLoadCompletion,
-) {
-  if kernel
-    .artwork_binder
-    .settle(completion.slot, ArtworkSurface::Detail, session_ok)
-    != ArtworkSettlement::Apply
-  {
-    return;
-  }
-  let Some(cell) = surface
-    .artwork
-    .cell_mut(completion.slot, &completion.image_id)
-  else {
-    return;
-  };
-  match completion.result {
-    Ok(raster) => {
-      cell.state = ArtworkCellState::Ready;
-      kernel.artwork_handles.insert(
-        completion.slot,
-        completion.image_id,
-        super::state::ArtworkHandles::from_raster(raster),
-      );
-    }
-    Err(jellypilot_media_server::artwork::ArtworkError::Cancelled) => {}
-    Err(_) => cell.state = ArtworkCellState::Failed,
   }
 }
 
@@ -218,7 +164,7 @@ pub fn start_load(
     return Task::none();
   };
   surface.data.clear();
-  begin_artwork_view(surface, kernel);
+  surface.artwork.clear();
   kernel
     .request_gate
     .set_detail_item(Some(item_id.to_owned()));
@@ -261,7 +207,7 @@ pub(crate) fn restore(
   }
   Task::batch([
     start_followup(surface, kernel, true),
-    prepare_artwork(surface, kernel),
+    prepare_artwork(surface),
   ])
 }
 
@@ -275,7 +221,24 @@ fn settle_load(
     return false;
   }
   match result {
-    Ok(content) => detail.content = jellypilot_core::LoadState::Ready(content),
+    Ok(mut content) => {
+      if let (
+        DetailContent::Show(show),
+        jellypilot_core::LoadState::Ready(DetailContent::Show(previous)),
+      ) = (&mut content, &detail.content)
+      {
+        if let Some(next) = &mut show.next_episode {
+          if next.artwork_image_id.is_none() {
+            next.artwork_image_id = previous
+              .next_episode
+              .as_ref()
+              .filter(|previous| previous.id == next.id)
+              .and_then(|previous| previous.artwork_image_id.clone());
+          }
+        }
+      }
+      detail.content = jellypilot_core::LoadState::Ready(content);
+    }
     Err(error) if matches!(detail.content, jellypilot_core::LoadState::Ready(_)) => {
       tracing::warn!(error = %jellypilot_core::diagnostics::sanitize_message(error.as_str()), "Detail refresh failed");
     }
@@ -510,6 +473,7 @@ fn start_selected_season_load(surface: &mut Surface, kernel: &mut Kernel) -> Tas
   };
   let token = kernel.request_gate.begin_detail();
   surface.data.season_episodes = jellypilot_core::LoadState::Loading;
+  drop(prepare_artwork(surface));
   let Some(client) = kernel.client.as_ref().map(Arc::clone) else {
     surface.data.season_episodes = jellypilot_core::LoadState::Failed(UiText::new(SEASON_FAILURE));
     return Task::none();
@@ -536,7 +500,21 @@ fn settle_season_load(
     return false;
   }
   detail.season_episodes = match result {
-    Ok(page) => jellypilot_core::LoadState::Ready(page),
+    Ok(page) => {
+      // Preserve richer season metadata for Next Up across season switches.
+      if let jellypilot_core::LoadState::Ready(DetailContent::Show(show)) = &mut detail.content {
+        if let Some(next) = &mut show.next_episode {
+          if next.artwork_image_id.is_none() {
+            next.artwork_image_id = page
+              .episodes
+              .iter()
+              .find(|episode| episode.id == next.id)
+              .and_then(|episode| episode.artwork_image_id.clone());
+          }
+        }
+      }
+      jellypilot_core::LoadState::Ready(page)
+    }
     Err(error) => {
       tracing::warn!(error = %jellypilot_core::diagnostics::sanitize_message(error.as_str()), "Detail request failed");
       jellypilot_core::LoadState::Failed(UiText::new(SEASON_FAILURE))
@@ -617,251 +595,111 @@ fn settle_user_data_update(
   }
 }
 
-struct ArtworkLoadSpec {
-  key: String,
-  image_id: String,
-  size_class: ArtworkSizeClass,
-  visible: bool,
-}
-
-fn prepare_artwork(surface: &mut Surface, kernel: &mut Kernel) -> Task<Message> {
+fn prepare_artwork(surface: &mut Surface) -> Task<Message> {
   let mut specs = Vec::new();
-  let mut next_episode_retention_key = None;
-  match &surface.data.content {
-    jellypilot_core::LoadState::Ready(DetailContent::Item(item)) => {
-      push_artwork_spec(
-        &mut specs,
-        DETAIL_LOGO_KEY.to_owned(),
-        &item.logo_image_id,
-        ArtworkSizeClass::Hero,
-        true,
-      );
-      // Fall back to the item's own artwork (episode still / poster) when the
-      // server carries no backdrop, so the hero never settles empty.
-      let hero_backdrop = item
-        .backdrop_image_id
-        .clone()
-        .or_else(|| item.artwork_image_id.clone());
-      push_artwork_spec(
-        &mut specs,
-        DETAIL_BACKDROP_KEY.to_owned(),
-        &hero_backdrop,
-        ArtworkSizeClass::Backdrop,
-        true,
-      );
-      if let jellypilot_core::LoadState::Ready(neighbors) = &surface.data.season_neighbors {
-        for episode in neighbors {
-          push_artwork_spec(
-            &mut specs,
-            detail_episode_key(&episode.id),
-            &episode.artwork_image_id,
-            ArtworkSizeClass::Card,
-            false,
+  if let jellypilot_core::LoadState::Ready(content) = &surface.data.content {
+    specs.extend(hero_image_spec(content, DETAIL_LOGO_KEY));
+    specs.extend(hero_image_spec(content, DETAIL_BACKDROP_KEY));
+    match content {
+      DetailContent::Item(_) => {
+        if let jellypilot_core::LoadState::Ready(items) = &surface.data.season_neighbors {
+          specs.extend(
+            items
+              .iter()
+              .filter_map(|item| card_image_spec(detail_episode_key(&item.id), item)),
           );
         }
       }
-      if let jellypilot_core::LoadState::Ready(items) = &surface.data.similar_items {
-        for item in items {
-          push_artwork_spec(
-            &mut specs,
-            detail_similar_key(&item.id),
-            &item.artwork_image_id,
-            ArtworkSizeClass::Card,
-            false,
-          );
+      DetailContent::Show(show) => {
+        if let Some(next) = &show.next_episode {
+          specs.extend(card_image_spec(detail_next_up_key(&next.id), next));
+        }
+        if let jellypilot_core::LoadState::Ready(page) = &surface.data.season_episodes {
+          specs.extend(page.episodes.iter().filter_map(|item| {
+            episode_image_spec(&surface.data, detail_episode_key(&item.id), item)
+          }));
         }
       }
     }
-    jellypilot_core::LoadState::Ready(DetailContent::Show(show)) => {
-      push_artwork_spec(
-        &mut specs,
-        DETAIL_LOGO_KEY.to_owned(),
-        &show.logo_image_id,
-        ArtworkSizeClass::Hero,
-        true,
+    if let jellypilot_core::LoadState::Ready(items) = &surface.data.similar_items {
+      specs.extend(
+        items
+          .iter()
+          .filter_map(|item| card_image_spec(detail_similar_key(&item.id), item)),
       );
-      // Fall back to the show's own poster artwork when the server carries no
-      // backdrop, so the hero never settles empty.
-      let hero_backdrop = show
-        .backdrop_image_id
-        .clone()
-        .or_else(|| show.artwork_image_id.clone());
-      push_artwork_spec(
-        &mut specs,
-        DETAIL_BACKDROP_KEY.to_owned(),
-        &hero_backdrop,
-        ArtworkSizeClass::Backdrop,
-        true,
-      );
-      if let Some(next_episode) = &show.next_episode {
-        if next_episode.artwork_image_id.is_some() {
-          push_artwork_spec(
-            &mut specs,
-            detail_episode_key(&next_episode.id),
-            &next_episode.artwork_image_id,
-            ArtworkSizeClass::Card,
-            true,
-          );
-        } else {
-          // Show and season endpoints can disagree on image fields. Keep a
-          // season-populated cell for the always-visible Next Up card.
-          next_episode_retention_key = Some(detail_episode_key(&next_episode.id));
-        }
-      }
-      if let jellypilot_core::LoadState::Ready(page) = &surface.data.season_episodes {
-        for episode in &page.episodes {
-          if show.next_episode.as_ref().is_some_and(|next_episode| {
-            next_episode.id == episode.id && next_episode.artwork_image_id.is_some()
-          }) {
-            continue;
-          }
-          push_artwork_spec(
-            &mut specs,
-            detail_episode_key(&episode.id),
-            &episode.artwork_image_id,
-            ArtworkSizeClass::Card,
-            false,
-          );
-        }
-      }
-      if let jellypilot_core::LoadState::Ready(items) = &surface.data.similar_items {
-        for item in items {
-          push_artwork_spec(
-            &mut specs,
-            detail_similar_key(&item.id),
-            &item.artwork_image_id,
-            ArtworkSizeClass::Card,
-            false,
-          );
-        }
-      }
     }
-    jellypilot_core::LoadState::Idle
-    | jellypilot_core::LoadState::Loading
-    | jellypilot_core::LoadState::Failed(_) => return Task::none(),
   }
+  surface.artwork.retain(&specs);
+  Task::none()
+}
 
-  let mut retained_keys = specs
-    .iter()
-    .map(|spec| spec.key.as_str())
-    .collect::<HashSet<_>>();
-  if let Some(key) = next_episode_retention_key.as_deref() {
-    retained_keys.insert(key);
-  }
-  surface.artwork.retain_keys(&retained_keys);
-  drop(retained_keys);
-  let session = kernel.request_gate.current_session();
-  let Some(client) = kernel.client.as_ref().map(Arc::clone) else {
-    return Task::none();
+pub(crate) fn detail_next_up_key(item_id: &str) -> String {
+  format!("detail-next-up:{item_id}")
+}
+
+pub(crate) fn card_image_spec(key: String, item: &VideoLibraryItem) -> Option<ImageSpec> {
+  Some(ImageSpec {
+    key,
+    image_id: item.artwork_image_id.clone()?,
+    size_class: ArtworkSizeClass::Card,
+    derived: DerivedArtwork::default(),
+  })
+}
+
+pub(crate) fn hero_image_spec(content: &DetailContent, key: &str) -> Option<ImageSpec> {
+  let (logo, backdrop, primary) = match content {
+    DetailContent::Item(item) => (
+      &item.logo_image_id,
+      &item.backdrop_image_id,
+      &item.artwork_image_id,
+    ),
+    DetailContent::Show(show) => (
+      &show.logo_image_id,
+      &show.backdrop_image_id,
+      &show.artwork_image_id,
+    ),
   };
-  let adapter = Arc::clone(&kernel.artwork_adapter);
-  let mut summary = ArtworkLoadSummary::default();
-  let mut load_specs = Vec::new();
-  for spec in specs {
-    let derived = DerivedArtwork {
-      logo_shadow: spec.key == DETAIL_LOGO_KEY,
-    };
-    if let Some(cell) = surface.artwork.get(&spec.key) {
-      if cell.image_id == spec.image_id {
-        if cell.state == ArtworkCellState::Loading {
-          continue;
-        }
-        if cell.state == ArtworkCellState::Ready
-          && kernel
-            .artwork_handles
-            .get(cell.slot, &cell.image_id)
-            .is_some()
-        {
-          continue;
-        }
-      }
-    }
-
-    if let Some(raster) = adapter.cached_with_derived(&spec.image_id, spec.size_class, derived) {
-      summary.record(&ArtworkLoadObservation::raster_hit(raster.byte_len() as u64));
-      let slot = kernel.artwork_binder.bind_settled();
-      kernel.artwork_handles.insert(
-        slot,
-        spec.image_id.clone(),
-        super::state::ArtworkHandles::from_raster(raster),
-      );
-      surface.artwork.insert(
-        spec.key,
-        ArtworkCell {
-          slot,
-          image_id: spec.image_id,
-          state: ArtworkCellState::Ready,
-        },
-      );
-      continue;
-    }
-
-    let slot = kernel.artwork_binder.bind(ArtworkSurface::Detail);
-    surface.artwork.insert(
-      spec.key,
-      ArtworkCell {
-        slot,
-        image_id: spec.image_id.clone(),
-        state: ArtworkCellState::Loading,
-      },
-    );
-    load_specs.push(PlannedArtworkLoad {
-      slot,
-      image_id: spec.image_id,
-      size_class: spec.size_class,
-      visible: spec.visible,
-      derived,
-    });
-  }
-  stream_artwork_loads(
-    adapter,
-    client,
-    session,
-    load_specs,
-    summary,
-    |session, completion| {
-      Message::Detail(DetailMessage::ArtworkLoaded {
-        session,
-        slot: completion.slot,
-        image_id: completion.image_id,
-        result: completion.result,
-      })
+  let is_logo = key == DETAIL_LOGO_KEY;
+  Some(ImageSpec {
+    key: key.to_owned(),
+    image_id: if is_logo {
+      logo.as_ref()
+    } else {
+      backdrop.as_ref().or(primary.as_ref())
+    }?
+    .clone(),
+    size_class: if is_logo {
+      ArtworkSizeClass::Hero
+    } else {
+      ArtworkSizeClass::Backdrop
     },
-  )
+    derived: DerivedArtwork {
+      logo_shadow: is_logo,
+    },
+  })
 }
 
-fn push_artwork_spec(
-  specs: &mut Vec<ArtworkLoadSpec>,
+pub(crate) fn episode_image_spec(
+  data: &DetailState,
   key: String,
-  image_id: &Option<String>,
-  size_class: ArtworkSizeClass,
-  visible: bool,
-) {
-  if let Some(image_id) = image_id {
-    specs.push(ArtworkLoadSpec {
-      key,
-      image_id: image_id.clone(),
-      size_class,
-      visible,
-    });
+  item: &VideoLibraryItem,
+) -> Option<ImageSpec> {
+  if let jellypilot_core::LoadState::Ready(DetailContent::Show(show)) = &data.content {
+    if let Some(next) = show
+      .next_episode
+      .as_ref()
+      .filter(|next| next.id == item.id && next.artwork_image_id.is_some())
+    {
+      return card_image_spec(key, next);
+    }
   }
+  card_image_spec(key, item)
 }
 
-fn begin_artwork_view(surface: &mut Surface, kernel: &mut Kernel) {
-  kernel.artwork_binder.begin_view(ArtworkSurface::Detail);
-  surface.artwork.clear();
-}
-
-/// Detail leave hook, invoked by the top-level router when the destination
-/// switches away from Detail: invalidates in-flight detail requests so a late
-/// settlement cannot apply, and cancels pending artwork while playback is
-/// idle.
-pub(crate) fn leave_view(surface: &mut Surface, kernel: &mut Kernel, playback_idle: bool) {
+/// Leaving Detail revokes only its own images and invalidates metadata work.
+pub(crate) fn leave_view(surface: &mut Surface, kernel: &mut Kernel) {
   kernel.request_gate.navigate();
-  if playback_idle {
-    kernel.artwork_adapter.cancel_pending();
-  }
-  begin_artwork_view(surface, kernel);
+  surface.artwork.clear();
   surface.data.clear();
 }
 
@@ -877,10 +715,6 @@ mod tests {
   use jellypilot_media_server::{JellyfinClient, VideoSeason};
 
   use super::*;
-  use crate::app::state::ArtworkHandleRetention;
-
-  /// The old `test_state` has no now-playing entry, so playback is idle.
-  const PLAYBACK_IDLE: bool = true;
 
   fn test_fixture() -> (Surface, Kernel) {
     let settings = SettingsStore::default();
@@ -900,8 +734,6 @@ mod tests {
       tray: None,
       artwork_adapter: Arc::new(jellypilot_media_server::artwork::ArtworkAdapter::new()),
       avatar_adapter: Arc::new(jellypilot_media_server::artwork::ArtworkAdapter::new()),
-      artwork_binder: Default::default(),
-      artwork_handles: ArtworkHandleRetention::default(),
       profile_avatars: Default::default(),
     };
     (Surface::default(), kernel)
@@ -1008,7 +840,7 @@ mod tests {
       .expanded_episode_ids
       .insert("related".to_owned());
     let saved = std::mem::take(&mut surface.data);
-    leave_view(&mut surface, &mut kernel, true);
+    leave_view(&mut surface, &mut kernel);
     drop(start_load(&mut surface, &mut kernel, Some("other")));
     drop(restore(&mut surface, &mut kernel, "original", saved));
     assert!(
@@ -1185,7 +1017,7 @@ mod tests {
       .begin_detail_aux(DetailAuxKind::UserData)
       .expect("detail item should permit user-data update");
 
-    leave_view(&mut surface, &mut kernel, PLAYBACK_IDLE);
+    leave_view(&mut surface, &mut kernel);
     kernel
       .request_gate
       .set_detail_item(Some("item-1".to_owned()));
@@ -1287,36 +1119,7 @@ mod tests {
   }
 
   #[test]
-  fn prepare_artwork_registers_the_logo_and_does_not_reissue_its_inflight_load() {
-    let (mut surface, mut kernel) = test_fixture();
-    kernel.client = Some(Arc::new(JellyfinClient::new()));
-    let mut item = video_item("detail-item-1");
-    item.logo_image_id = Some("detail-logo-1".to_owned());
-    surface.data.content = jellypilot_core::LoadState::Ready(DetailContent::Item(Box::new(item)));
-
-    // First prepare starts the initial load
-    drop(prepare_artwork(&mut surface, &mut kernel));
-    let cell = surface
-      .artwork
-      .get(DETAIL_LOGO_KEY)
-      .expect("logo cell exists");
-    let original_slot = cell.slot;
-    assert_eq!(cell.state, ArtworkCellState::Loading);
-
-    // Follow-up prepare (e.g. neighbors loaded) does not re-issue or replace the slot
-    surface.data.season_neighbors = jellypilot_core::LoadState::Ready(Vec::new());
-    let warm_task = prepare_artwork(&mut surface, &mut kernel);
-    assert_eq!(warm_task.units(), 0);
-    let second_cell = surface
-      .artwork
-      .get(DETAIL_LOGO_KEY)
-      .expect("logo cell exists");
-    assert_eq!(second_cell.slot, original_slot);
-    assert_eq!(second_cell.state, ArtworkCellState::Loading);
-  }
-
-  #[test]
-  fn prepare_artwork_keeps_next_up_image_when_selected_season_changes() {
+  fn next_up_keeps_season_image_after_switching_seasons_and_refreshing() {
     let (mut surface, mut kernel) = test_fixture();
     kernel.client = Some(Arc::new(JellyfinClient::new()));
     let next_up = episode("next-up", 1);
@@ -1325,104 +1128,85 @@ mod tests {
     let mut show = show_detail();
     show.next_episode = Some(next_up);
     surface.data.content = jellypilot_core::LoadState::Ready(DetailContent::Show(Box::new(show)));
-    surface.data.season_episodes = jellypilot_core::LoadState::Ready(VideoSeasonEpisodesPage {
-      series_id: "show-1".to_owned(),
-      season_id: Some("season-1".to_owned()),
-      season_number: Some(1),
-      start_index: 0,
-      limit: 30,
-      total_record_count: 1,
-      next_start_index: 1,
-      has_more: false,
-      episodes: vec![season_next_up],
-    });
+    let token = kernel.request_gate.begin_detail();
+    assert!(settle_season_load(
+      &mut surface.data,
+      &mut kernel.request_gate,
+      token,
+      Ok(VideoSeasonEpisodesPage {
+        series_id: "show-1".to_owned(),
+        season_id: Some("season-1".to_owned()),
+        season_number: Some(1),
+        start_index: 0,
+        limit: 30,
+        total_record_count: 1,
+        next_start_index: 1,
+        has_more: false,
+        episodes: vec![season_next_up],
+      })
+    ));
 
-    drop(prepare_artwork(&mut surface, &mut kernel));
-    let next_up_key = detail_episode_key("next-up");
-    assert!(surface.artwork.get(&next_up_key).is_some());
-
-    surface.data.season_episodes = jellypilot_core::LoadState::Ready(VideoSeasonEpisodesPage {
-      series_id: "show-1".to_owned(),
-      season_id: Some("season-2".to_owned()),
-      season_number: Some(2),
-      start_index: 0,
-      limit: 30,
-      total_record_count: 1,
-      next_start_index: 1,
-      has_more: false,
-      episodes: vec![episode("season-2-episode", 2)],
-    });
-
-    drop(prepare_artwork(&mut surface, &mut kernel));
-
-    assert!(surface.artwork.get(&next_up_key).is_some());
-  }
-
-  #[test]
-  fn prepare_artwork_falls_back_to_primary_artwork_when_backdrop_is_missing() {
-    let (mut surface, mut kernel) = test_fixture();
-    kernel.client = Some(Arc::new(JellyfinClient::new()));
-    let mut item = video_item("detail-item-1");
-    item.artwork_image_id = Some("detail-primary-1".to_owned());
-    surface.data.content = jellypilot_core::LoadState::Ready(DetailContent::Item(Box::new(item)));
-
-    drop(prepare_artwork(&mut surface, &mut kernel));
-
-    let cell = surface
-      .artwork
-      .get(DETAIL_BACKDROP_KEY)
-      .expect("backdrop cell exists");
-    assert_eq!(cell.image_id, "detail-primary-1");
-  }
-
-  #[test]
-  fn prepare_artwork_prefers_the_real_backdrop_over_primary_artwork() {
-    let (mut surface, mut kernel) = test_fixture();
-    kernel.client = Some(Arc::new(JellyfinClient::new()));
-    let mut item = video_item("detail-item-1");
-    item.backdrop_image_id = Some("detail-backdrop-1".to_owned());
-    item.artwork_image_id = Some("detail-primary-1".to_owned());
-    surface.data.content = jellypilot_core::LoadState::Ready(DetailContent::Item(Box::new(item)));
-
-    drop(prepare_artwork(&mut surface, &mut kernel));
-
-    let cell = surface
-      .artwork
-      .get(DETAIL_BACKDROP_KEY)
-      .expect("backdrop cell exists");
-    assert_eq!(cell.image_id, "detail-backdrop-1");
-  }
-
-  #[test]
-  fn detail_memory_cache_hit_synchronously_settles_without_retained_handle() {
-    let (mut surface, mut kernel) = test_fixture();
-    kernel.client = Some(Arc::new(JellyfinClient::new()));
-    let mut item = video_item("detail-cache-item");
-    item.logo_image_id = Some("detail-cache-logo".to_owned());
-    surface.data.content = jellypilot_core::LoadState::Ready(DetailContent::Item(Box::new(item)));
-    kernel.artwork_adapter.seed_raster_with_derived_for_test(
-      "detail-cache-logo",
-      jellypilot_media_server::artwork::ArtworkSizeClass::Hero,
-      jellypilot_media_server::artwork::DerivedArtwork { logo_shadow: true },
-      jellypilot_media_server::artwork::ArtworkRaster::from_raw_for_test(
-        1,
-        1,
-        vec![10, 20, 30, 40],
-      ),
+    drop(prepare_artwork(&mut surface));
+    let jellypilot_core::LoadState::Ready(DetailContent::Show(show)) = &surface.data.content else {
+      panic!("show remains ready")
+    };
+    assert_eq!(
+      show
+        .next_episode
+        .as_ref()
+        .and_then(|next| next.artwork_image_id.as_deref()),
+      Some("next-up-image")
     );
-    kernel.artwork_handles.clear();
-    let warm_task = prepare_artwork(&mut surface, &mut kernel);
-    // One sentinel unit reports the aggregate cache-hit telemetry event.
-    assert_eq!(warm_task.units(), 1);
 
-    let logo = surface
-      .artwork
-      .get(DETAIL_LOGO_KEY)
-      .expect("detail logo exists");
-    assert_eq!(logo.state, ArtworkCellState::Ready);
-    assert!(kernel
-      .artwork_handles
-      .get(logo.slot, "detail-cache-logo")
-      .is_some());
+    let token = kernel.request_gate.begin_detail();
+    assert!(settle_season_load(
+      &mut surface.data,
+      &mut kernel.request_gate,
+      token,
+      Ok(VideoSeasonEpisodesPage {
+        series_id: "show-1".to_owned(),
+        season_id: Some("season-2".to_owned()),
+        season_number: Some(2),
+        start_index: 0,
+        limit: 30,
+        total_record_count: 1,
+        next_start_index: 1,
+        has_more: false,
+        episodes: vec![episode("season-2-episode", 2)],
+      })
+    ));
+
+    drop(prepare_artwork(&mut surface));
+
+    let jellypilot_core::LoadState::Ready(DetailContent::Show(show)) = &surface.data.content else {
+      panic!("show remains ready")
+    };
+    assert_eq!(
+      show
+        .next_episode
+        .as_ref()
+        .and_then(|next| next.artwork_image_id.as_deref()),
+      Some("next-up-image")
+    );
+
+    let mut refreshed = show_detail();
+    refreshed.next_episode = Some(episode("next-up", 1));
+    let token = kernel.request_gate.begin_detail();
+    assert!(settle_load(
+      &mut surface.data,
+      &mut kernel.request_gate,
+      token,
+      Ok(DetailContent::Show(Box::new(refreshed)))
+    ));
+    let jellypilot_core::LoadState::Ready(DetailContent::Show(show)) = &surface.data.content else {
+      panic!("show remains ready")
+    };
+    assert_eq!(
+      show
+        .next_episode
+        .as_ref()
+        .and_then(|next| next.artwork_image_id.as_deref()),
+      Some("next-up-image")
+    );
   }
 }

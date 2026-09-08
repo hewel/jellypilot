@@ -2,6 +2,7 @@ mod account;
 pub(crate) mod browse;
 mod detail;
 pub(crate) mod home;
+pub(crate) mod image_observer;
 mod login;
 mod modal_dismiss;
 mod personal_lists;

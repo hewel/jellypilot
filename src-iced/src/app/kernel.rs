@@ -3,7 +3,6 @@ use std::sync::Arc;
 use iced::Task;
 use jellypilot_auth::login::ConnectionPhase;
 use jellypilot_auth::{AuthStore, SavedProfileKey};
-use jellypilot_core::artwork_binder::ArtworkBinder;
 use jellypilot_core::config::SettingsStore;
 use jellypilot_core::diagnostics::Diagnostics;
 use jellypilot_core::request_gate::RequestGate;
@@ -13,15 +12,14 @@ use jellypilot_mpv::playback_session::IntroAvailability;
 
 use super::message::Message;
 use super::state::{
-  intro_skip_mode, ArtworkHandleRetention, ConnectedIdentity, NoticeLevel, ProfileAvatarHandles,
-  ToastNotice,
+  intro_skip_mode, ConnectedIdentity, NoticeLevel, ProfileAvatarHandles, ToastNotice,
 };
 use crate::i18n::{Localizer, UiText};
 use crate::tray::Tray;
 
 /// Cross-surface machinery shared by every surface module (ADR 0029): server
 /// auth/connection, request gating, diagnostics, user notifications, tray, and
-/// the artwork pipeline that ADR 0028's streaming loader drives for all views.
+/// the shared Library Image byte/raster adapter; pages own their own demands.
 pub struct Kernel {
   /// Persisted application configuration; read and mutated by several
   /// surfaces (settings edits, login prefill, playback options, filters).
@@ -38,13 +36,9 @@ pub struct Kernel {
   pub active_toast: Option<ToastNotice>,
   pub next_toast_id: u64,
   pub tray: Option<Tray>,
-  /// Avatar loads run on their own adapter so surface navigation
-  /// (`cancel_pending`/`reset_session` on `artwork_adapter`) can never cancel
-  /// them; avatar photos are few and small.
+  /// Saved-profile photos have an independent authorization and cache lifecycle.
   pub avatar_adapter: Arc<ArtworkAdapter>,
   pub artwork_adapter: Arc<ArtworkAdapter>,
-  pub artwork_binder: ArtworkBinder,
-  pub artwork_handles: ArtworkHandleRetention,
   pub profile_avatars: ProfileAvatarHandles,
 }
 

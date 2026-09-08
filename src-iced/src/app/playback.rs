@@ -16,11 +16,10 @@ use std::time::Instant;
 
 use iced::Task;
 use jellypilot_auth::login::ConnectionPhase;
-use jellypilot_core::artwork_binder::{ArtworkSettlement, ArtworkSurface};
 use jellypilot_core::config::Settings;
 use jellypilot_core::diagnostics::{coalescing_key, DiagnosticCategory, DiagnosticLevel};
 use jellypilot_core::request_gate::{RemotePlayToken, RemoteToken, RequestGate, SessionToken};
-use jellypilot_media_server::artwork::{ArtworkSizeClass, LoadLane};
+use jellypilot_media_server::artwork::{ArtworkSizeClass, DerivedArtwork};
 use jellypilot_media_server::{
   ticks_to_seconds, VideoLibraryItem, VideoSeasonEpisodes, VideoSeasonEpisodesRequest,
 };
@@ -44,14 +43,16 @@ use crate::tray::TrayAction;
 use jellypilot_mpv::playback::PlaybackError;
 
 use super::accounts;
+use super::artwork::{ImageCollection, ImagePriority, ImageSpec};
 use super::kernel::Kernel;
 use super::message::{
   Message, PlaybackMessage, RemoteMessage, RemoteSessionStart, RemoteStartError, SettingsMessage,
 };
 use super::state::{
-  ArtworkCell, ArtworkCellState, NoticeLevel, PlaybackControllerHandle, RemoteEventChannel,
-  RemoteSessionHandle,
+  NoticeLevel, PlaybackControllerHandle, RemoteEventChannel, RemoteSessionHandle,
 };
+
+pub(crate) const PLAYER_IMAGE_KEY: &str = "now-playing";
 
 #[derive(Clone)]
 pub enum QueueState {
@@ -91,7 +92,8 @@ pub(crate) struct AccountHandoffStart {
 /// player-bar artwork, and the remote Playback Target session state.
 pub struct Surface {
   pub notice: Option<UiText>,
-  pub artwork: Option<ArtworkCell>,
+  pub artwork: ImageCollection,
+  pub artwork_enabled: bool,
   pub controller: Option<PlaybackControllerHandle>,
   pub session: PlaybackSession,
   pub view: SessionView,
@@ -125,7 +127,8 @@ impl Surface {
     let session = PlaybackSession::default();
     Self {
       notice: None,
-      artwork: None,
+      artwork: ImageCollection::default(),
+      artwork_enabled: true,
       view: session.view(),
       session,
       playable: None,
@@ -803,7 +806,7 @@ pub(crate) fn initialize_playback(
   surface.playable = None;
   surface.adjacent_playables = [None, None];
   clear_queue(surface);
-  clear_player_artwork(surface, kernel);
+  surface.artwork.clear();
   surface.seek_preview = None;
   surface.volume_preview = None;
   surface.remote = kernel.request_gate.begin_remote();
@@ -1262,7 +1265,7 @@ fn update_playback(
         surface.seek_preview = None;
         surface.volume_preview = None;
       }
-      tasks.push(clear_inactive_playback(surface, kernel));
+      tasks.push(clear_inactive_playback(surface));
       Task::batch(tasks)
     }
     PlaybackMessage::AdjacentSettled {
@@ -1309,39 +1312,10 @@ fn update_playback(
       ));
       Task::batch(tasks)
     }
-    PlaybackMessage::ArtworkLoaded {
-      session,
-      slot,
-      image_id,
-      result,
-    } => {
-      let session_ok = kernel.request_gate.is_current_session(session);
-      if kernel
-        .artwork_binder
-        .settle(slot, ArtworkSurface::PlayerBar, session_ok)
-        != ArtworkSettlement::Apply
-      {
-        return Task::none();
-      }
-      let Some(cell) = surface
+    PlaybackMessage::ArtworkLoaded(completion) => {
+      surface
         .artwork
-        .as_mut()
-        .filter(|cell| cell.slot == slot && cell.image_id == image_id)
-      else {
-        return Task::none();
-      };
-      match result {
-        Ok(raster) => {
-          cell.state = ArtworkCellState::Ready;
-          kernel.artwork_handles.insert(
-            slot,
-            image_id,
-            super::state::ArtworkHandles::from_raster(raster),
-          );
-        }
-        Err(jellypilot_media_server::artwork::ArtworkError::Cancelled) => {}
-        Err(_) => cell.state = ArtworkCellState::Failed,
-      }
+        .settle(kernel.request_gate.current_session(), completion);
       Task::none()
     }
   }
@@ -1411,7 +1385,7 @@ fn playback_message_name(message: &PlaybackMessage) -> &'static str {
     PlaybackMessage::QueueLoaded { .. } => "queue-loaded",
     PlaybackMessage::ControllerSettled { .. } => "controller-settled",
     PlaybackMessage::AdjacentSettled { .. } => "adjacent-settled",
-    PlaybackMessage::ArtworkLoaded { .. } => "artwork-loaded",
+    PlaybackMessage::ArtworkLoaded(_) => "artwork-loaded",
   }
 }
 fn playable_kind(playable: &Playable) -> &'static str {
@@ -1449,13 +1423,19 @@ pub(crate) fn sync_tray(surface: &Surface, kernel: &Kernel, quit_requested: bool
   }
 }
 
-fn clear_player_artwork(surface: &mut Surface, kernel: &mut Kernel) {
-  if let Some(cell) = surface.artwork.take() {
-    kernel.artwork_handles.remove(cell.slot);
-  }
+/// Releases only Now Playing's image demand while its window is hidden.
+pub(crate) fn suspend_artwork(surface: &mut Surface) {
+  surface.artwork_enabled = false;
+  surface.artwork.clear();
 }
 
-fn clear_inactive_playback(surface: &mut Surface, kernel: &mut Kernel) -> Task<Message> {
+/// Restores the selected image after the shell makes playback visible.
+pub(crate) fn resume_artwork(surface: &mut Surface, kernel: &mut Kernel) -> Task<Message> {
+  surface.artwork_enabled = true;
+  ensure_player_artwork(surface, kernel)
+}
+
+fn clear_inactive_playback(surface: &mut Surface) -> Task<Message> {
   // A start or refresh in flight can transiently project no Now Playing
   // between files; clearing here would wipe the incoming item's artwork.
   if surface.view.now_playing.is_some()
@@ -1473,7 +1453,7 @@ fn clear_inactive_playback(surface: &mut Surface, kernel: &mut Kernel) -> Task<M
   surface.playable = None;
   surface.adjacent_playables = [None, None];
   clear_queue(surface);
-  clear_player_artwork(surface, kernel);
+  surface.artwork.clear();
   surface.seek_preview = None;
   surface.volume_preview = None;
   surface.audio_menu_open = false;
@@ -1685,84 +1665,30 @@ fn execute_controller_command(
 }
 
 fn prepare_player_artwork(surface: &mut Surface, kernel: &mut Kernel) -> Task<Message> {
-  let image_id = surface
-    .playable
-    .as_ref()
-    .and_then(Playable::image_id)
-    .map(str::to_owned);
-  let Some(image_id) = image_id else {
-    tracing::debug!(
-      playable = ?surface.playable.as_ref().map(playable_kind),
-      "player artwork cleared: playable has no image"
-    );
-    clear_player_artwork(surface, kernel);
+  if !surface.artwork_enabled {
+    return Task::none();
+  }
+  let Some(image_id) = surface.playable.as_ref().and_then(Playable::image_id) else {
+    surface.artwork.clear();
     return Task::none();
   };
+  let spec = ImageSpec {
+    key: PLAYER_IMAGE_KEY.to_owned(),
+    image_id: image_id.to_owned(),
+    size_class: ArtworkSizeClass::Card,
+    derived: DerivedArtwork::default(),
+  };
+  surface.artwork.retain(std::slice::from_ref(&spec));
   let Some(client) = kernel.client.as_ref().map(Arc::clone) else {
     return Task::none();
   };
-  if let Some(cell) = &surface.artwork {
-    if cell.image_id == image_id {
-      if cell.state == ArtworkCellState::Loading {
-        return Task::none();
-      }
-      if cell.state == ArtworkCellState::Ready
-        && kernel
-          .artwork_handles
-          .get(cell.slot, &cell.image_id)
-          .is_some()
-      {
-        return Task::none();
-      }
-    }
-  }
-  clear_player_artwork(surface, kernel);
-  if let Some(raster) = kernel
-    .artwork_adapter
-    .cached(&image_id, ArtworkSizeClass::Card)
-  {
-    let slot = kernel.artwork_binder.bind_settled();
-    kernel.artwork_handles.insert(
-      slot,
-      image_id.clone(),
-      super::state::ArtworkHandles::from_raster(raster),
-    );
-    surface.artwork = Some(ArtworkCell {
-      slot,
-      image_id,
-      state: ArtworkCellState::Ready,
-    });
-    return Task::none();
-  }
-  let slot = kernel.artwork_binder.bind_player_bar();
-  surface.artwork = Some(ArtworkCell {
-    slot,
-    image_id: image_id.clone(),
-    state: ArtworkCellState::Loading,
-  });
-  let adapter = Arc::clone(&kernel.artwork_adapter);
-  let session = kernel.request_gate.current_session();
-  let completion_image_id = image_id.clone();
-  Task::perform(
-    async move {
-      adapter
-        .load(
-          &client,
-          &image_id,
-          ArtworkSizeClass::Card,
-          LoadLane::Visible,
-        )
-        .await
-        .0
-    },
-    move |result| {
-      Message::Playback(PlaybackMessage::ArtworkLoaded {
-        session,
-        slot,
-        image_id: completion_image_id,
-        result,
-      })
-    },
+  surface.artwork.observe(
+    kernel.request_gate.current_session(),
+    spec,
+    Some(ImagePriority::Visible),
+    client,
+    Arc::clone(&kernel.artwork_adapter),
+    |completion| Message::Playback(PlaybackMessage::ArtworkLoaded(completion)),
   )
 }
 
@@ -1885,7 +1811,6 @@ mod tests {
   use jellypilot_session::{GeneralCommand, IntroSkipMode, JellyfinCommand, PlayRequest};
 
   use super::*;
-  use crate::app::state::ArtworkHandleRetention;
 
   fn test_fixture() -> (Surface, Kernel) {
     let settings = SettingsStore::default();
@@ -1907,8 +1832,6 @@ mod tests {
       tray: None,
       artwork_adapter: Arc::new(jellypilot_media_server::artwork::ArtworkAdapter::new()),
       avatar_adapter: Arc::new(jellypilot_media_server::artwork::ArtworkAdapter::new()),
-      artwork_binder: Default::default(),
-      artwork_handles: ArtworkHandleRetention::default(),
       profile_avatars: Default::default(),
     };
     (surface, kernel)
@@ -2587,7 +2510,7 @@ mod tests {
     surface.seek_preview = Some(42.0);
     surface.volume_preview = Some(80.0);
 
-    drop(clear_inactive_playback(&mut surface, &mut kernel));
+    drop(clear_inactive_playback(&mut surface));
 
     assert!(!surface.audio_menu_open);
     assert!(!surface.subtitle_menu_open);
@@ -2595,62 +2518,122 @@ mod tests {
     assert_eq!(surface.volume_preview, None);
   }
 
-  #[test]
-  fn player_artwork_rebind_releases_the_previous_decoded_handle() {
+  fn cached_player_fixture() -> (Surface, Kernel, String) {
+    use jellypilot_media_server::{
+      artwork::ArtworkRaster, image_id_for_url, ImageRefKind, MediaServerProvider, SavedSession,
+    };
+
     let (mut surface, mut kernel) = test_fixture();
-    let old_slot = kernel.artwork_binder.bind_player_bar();
-    surface.artwork = Some(ArtworkCell {
-      slot: old_slot,
-      image_id: "old-image".to_owned(),
-      state: ArtworkCellState::Ready,
+    let server_url = "https://images.example.com";
+    let client = Arc::new(JellyfinClient::new());
+    client.login().adopt_validated_session(&SavedSession {
+      provider: MediaServerProvider::Jellyfin,
+      server_url: server_url.to_owned(),
+      access_token: "token".to_owned(),
+      user_id: "user".to_owned(),
+      user_name: "user".to_owned(),
+      server_name: None,
+      device_id: None,
     });
-    kernel.artwork_handles.insert(
-      old_slot,
-      "old-image".to_owned(),
-      crate::app::state::ArtworkHandles::from_main(iced::widget::image::Handle::from_rgba(
-        1,
-        1,
-        vec![0, 0, 0, 255],
-      )),
+    let image_id = image_id_for_url(
+      MediaServerProvider::Jellyfin,
+      server_url,
+      format!("{server_url}/Items/episode-1/Images/Primary"),
+      ImageRefKind::Artwork,
+    )
+    .expect("valid image reference");
+    kernel.artwork_adapter.seed_raster_for_test(
+      &image_id,
+      ArtworkSizeClass::Card,
+      ArtworkRaster::from_raw_for_test(1, 1, vec![1, 2, 3, 255]),
     );
-    let mut playable = episode("episode-1", 1);
-    playable.artwork_image_id = Some("new-image".to_owned());
-    surface.playable = Some(Playable::Library(playable));
-    kernel.client = Some(Arc::new(JellyfinClient::new()));
+    kernel.client = Some(client);
+    let mut item = episode("episode-1", 1);
+    item.artwork_image_id = Some(image_id.clone());
+    surface.playable = Some(Playable::Library(item));
+    surface.view.now_playing = Some(NowPlayingView {
+      item: playback_snapshot(10.0).now_playing.expect("active item"),
+      paused: false,
+      position_seconds: 10.0,
+      duration_seconds: Some(1_800.0),
+      volume: 75.0,
+      muted: false,
+    });
+    drop(ensure_player_artwork(&mut surface, &mut kernel));
+    (surface, kernel, image_id)
+  }
 
-    drop(prepare_player_artwork(&mut surface, &mut kernel));
+  #[test]
+  fn progress_updates_preserve_the_displayed_player_image() {
+    let (mut surface, mut kernel, _) = cached_player_fixture();
+    let handle = surface
+      .artwork
+      .get(PLAYER_IMAGE_KEY)
+      .and_then(|cell| cell.handle())
+      .expect("cached player image")
+      .id();
 
-    assert!(kernel.artwork_handles.get(old_slot, "old-image").is_none());
-    assert_ne!(
-      surface.artwork.as_ref().map(|cell| cell.slot),
-      Some(old_slot)
+    surface
+      .view
+      .now_playing
+      .as_mut()
+      .expect("active playback")
+      .position_seconds = 11.0;
+    drop(ensure_player_artwork(&mut surface, &mut kernel));
+
+    assert_eq!(
+      surface
+        .artwork
+        .get(PLAYER_IMAGE_KEY)
+        .and_then(|cell| cell.handle())
+        .map(|handle| handle.id()),
+      Some(handle),
     );
   }
 
   #[test]
-  fn clearing_playback_releases_the_current_decoded_player_handle() {
-    let (mut surface, mut kernel) = test_fixture();
-    let slot = kernel.artwork_binder.bind_player_bar();
-    surface.artwork = Some(ArtworkCell {
-      slot,
-      image_id: "player-image".to_owned(),
-      state: ArtworkCellState::Ready,
-    });
-    kernel.artwork_handles.insert(
-      slot,
-      "player-image".to_owned(),
-      crate::app::state::ArtworkHandles::from_main(iced::widget::image::Handle::from_rgba(
-        1,
-        1,
-        vec![0, 0, 0, 255],
-      )),
+  fn suspending_playback_releases_its_image_without_clearing_browsing() {
+    let (mut surface, mut kernel, image_id) = cached_player_fixture();
+    let mut browsing = ImageCollection::default();
+    drop(browsing.observe(
+      kernel.request_gate.current_session(),
+      ImageSpec {
+        key: "browse-item".to_owned(),
+        image_id,
+        size_class: ArtworkSizeClass::Card,
+        derived: DerivedArtwork::default(),
+      },
+      Some(ImagePriority::Visible),
+      Arc::clone(kernel.client.as_ref().expect("authenticated client")),
+      Arc::clone(&kernel.artwork_adapter),
+      |completion| Message::Playback(PlaybackMessage::ArtworkLoaded(completion)),
+    ));
+    let handle = browsing
+      .get("browse-item")
+      .and_then(|cell| cell.handle())
+      .expect("cached browsing image")
+      .id();
+
+    suspend_artwork(&mut surface);
+    drop(ensure_player_artwork(&mut surface, &mut kernel));
+
+    assert!(surface.artwork.is_empty());
+    assert_eq!(
+      browsing
+        .get("browse-item")
+        .and_then(|cell| cell.handle())
+        .map(|handle| handle.id()),
+      Some(handle),
     );
 
-    drop(clear_inactive_playback(&mut surface, &mut kernel));
-
-    assert!(kernel.artwork_handles.get(slot, "player-image").is_none());
-    assert!(surface.artwork.is_none());
+    drop(resume_artwork(&mut surface, &mut kernel));
+    assert!(surface
+      .artwork
+      .get(PLAYER_IMAGE_KEY)
+      .and_then(|cell| cell.handle())
+      .is_some());
   }
+
   fn detail_with_series_poster(id: &str, image_id: &str) -> VideoItemDetail {
     VideoItemDetail {
       logo_image_id: None,
@@ -2701,26 +2684,22 @@ mod tests {
     );
     let (id, _) = controller_effect(effects);
     surface.in_flight_command = Some(id);
-    let slot = kernel.artwork_binder.bind_player_bar();
-    surface.artwork = Some(ArtworkCell {
-      slot,
-      image_id: "series-poster".to_owned(),
-      state: ArtworkCellState::Ready,
-    });
-    kernel.artwork_handles.insert(
-      slot,
-      "series-poster".to_owned(),
-      crate::app::state::ArtworkHandles::from_main(iced::widget::image::Handle::from_rgba(
-        1,
-        1,
-        vec![0, 0, 0, 255],
-      )),
+    kernel.client = Some(Arc::new(JellyfinClient::new()));
+    surface.playable = Some(Playable::Detail(detail_with_series_poster(
+      "episode-1",
+      "series-poster",
+    )));
+    drop(prepare_player_artwork(&mut surface, &mut kernel));
+
+    drop(clear_inactive_playback(&mut surface));
+
+    assert_eq!(
+      surface
+        .artwork
+        .get(PLAYER_IMAGE_KEY)
+        .map(|cell| cell.image_id.as_str()),
+      Some("series-poster"),
     );
-
-    drop(clear_inactive_playback(&mut surface, &mut kernel));
-
-    assert!(surface.artwork.is_some());
-    assert!(kernel.artwork_handles.get(slot, "series-poster").is_some());
   }
 
   #[test]
@@ -2792,7 +2771,10 @@ mod tests {
     });
     drop(ensure_player_artwork(&mut surface, &mut kernel));
     assert_eq!(
-      surface.artwork.as_ref().map(|cell| cell.image_id.as_str()),
+      surface
+        .artwork
+        .get(PLAYER_IMAGE_KEY)
+        .map(|cell| cell.image_id.as_str()),
       Some("series-poster")
     );
   }
@@ -2842,7 +2824,10 @@ mod tests {
 
     assert!(matches!(surface.playable, Some(Playable::Detail(_))));
     assert_eq!(
-      surface.artwork.as_ref().map(|cell| cell.image_id.as_str()),
+      surface
+        .artwork
+        .get(PLAYER_IMAGE_KEY)
+        .map(|cell| cell.image_id.as_str()),
       Some("series-poster")
     );
   }

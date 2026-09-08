@@ -1,5 +1,8 @@
+use super::image_observer::{observe_grid_viewport, observe_image, ImageAxis};
+use crate::app::artwork::{ArtworkSurface, ImageStatus};
+use crate::app::artwork::{ImageCell, ImageSpec};
 use crate::app::message::{BrowseMessage, Message};
-use crate::app::state::{ArtworkCell, ArtworkCellState, Destination, State};
+use crate::app::state::{Destination, State};
 use crate::i18n::media::item_caption;
 use crate::i18n::Localizer;
 use iced::widget::{button, column, container, row, scrollable, stack, text, Column, Row};
@@ -7,6 +10,7 @@ use iced::{Alignment, Color, ContentFit, Element, Fill};
 use jellypilot_core::browse_model::{LibraryBrowseView, LibraryItemSlot};
 use jellypilot_core::diagnostics::sanitize_message;
 use jellypilot_core::{LibraryBrowseFailure, LIBRARY_BROWSE_PAGE_SIZE};
+use jellypilot_media_server::artwork::{ArtworkSizeClass, DerivedArtwork};
 use jellypilot_media_server::{
   VideoLibraryItem, VideoLibraryPlayedFilter, VideoLibrarySort, VideoLibrarySortDirection,
 };
@@ -16,7 +20,7 @@ use jellypilot_ui::layout::SizeClass;
 use jellypilot_ui::overlay::{popover, PopoverOptions};
 use jellypilot_ui::tokens::{ThemePalette, TOKENS};
 use jellypilot_ui::variants::ButtonVariant;
-use jellypilot_ui::widgets::artwork_grid::{artwork_grid, ArtworkGridMetrics, ArtworkGridViewport};
+use jellypilot_ui::widgets::artwork_grid::{artwork_grid, ArtworkGridMetrics};
 use jellypilot_ui::widgets::control_button::control_button;
 use jellypilot_ui::widgets::ellipsis_text::ellipsis_text;
 use jellypilot_ui::widgets::skeleton::{
@@ -327,25 +331,8 @@ fn ready_surface<'a>(
   let padding = page_padding(class);
   let available_width = grid_available_width(state.shell.window_size.width, class);
   let metrics = ArtworkGridMetrics::for_cards(available_width, CARD_COPY_HEIGHT);
-  // The count row above the grid is short enough that the grid's overscan
-  // absorbs it, so no scroll margin is subtracted here.
-  let viewport = ArtworkGridViewport::from_scroll_geometry(
-    state
-      .full
-      .as_ref()
-      .expect("FullUi required")
-      .browse
-      .viewport
-      .offset_y,
-    state
-      .full
-      .as_ref()
-      .expect("FullUi required")
-      .browse
-      .viewport
-      .height,
-    0.0,
-  );
+  let surface = &state.full.as_ref().expect("FullUi required").browse;
+  let viewport = surface.grid_viewport(state.shell.window_size);
   let grid = artwork_grid(
     total_record_count as usize,
     metrics,
@@ -361,6 +348,7 @@ fn ready_surface<'a>(
       None => skeleton_cell(metrics.cell_width, skeleton_phase, reduced_motion),
     },
   );
+  let grid = observe_grid_viewport(grid, surface.artwork.epoch());
   let content = Column::new()
     .width(Fill)
     .push(
@@ -554,6 +542,28 @@ fn video_card<'a>(
     skeleton_phase,
     reduced_motion,
   );
+  let artwork = if let Some(image_id) = &item.artwork_image_id {
+    observe_image(
+      artwork,
+      ArtworkSurface::Browse,
+      state
+        .full
+        .as_ref()
+        .expect("FullUi required")
+        .browse
+        .artwork
+        .epoch(),
+      ImageSpec {
+        key: item.id.clone(),
+        image_id: image_id.clone(),
+        size_class: ArtworkSizeClass::Card,
+        derived: DerivedArtwork::default(),
+      },
+      ImageAxis::Vertical,
+    )
+  } else {
+    artwork
+  };
   let copy = column![
     ellipsis_text(&item.name)
       .size(14)
@@ -579,7 +589,7 @@ fn video_card<'a>(
 
 fn artwork<'a>(
   state: &'a State,
-  cell: Option<&ArtworkCell>,
+  cell: Option<&ImageCell>,
   name: &'a str,
   height: f32,
   phase: f32,
@@ -587,8 +597,8 @@ fn artwork<'a>(
 ) -> Element<'a, Message> {
   let palette = state.palette();
   if let Some(cell) = cell {
-    if cell.state == ArtworkCellState::Ready {
-      if let Some(handle) = state.kernel.artwork_handles.get(cell.slot, &cell.image_id) {
+    if cell.state == ImageStatus::Ready {
+      if let Some(handle) = cell.handle() {
         return rounded_image(handle.clone(), full_radius(TOKENS.radii.xl))
           .content_fit(ContentFit::Cover)
           .width(Fill)
@@ -599,10 +609,10 @@ fn artwork<'a>(
   }
 
   let placeholder_color = match cell.map(|cell| cell.state) {
-    // No planned load (the server carries no image for this slot): settle on
-    // a neutral placeholder instead of shimmering forever.
+    // No active demand also uses the neutral placeholder. Keep its image bounds
+    // unchanged across admission and removal to avoid visibility feedback.
     None => Some(palette.text.metadata),
-    Some(ArtworkCellState::Failed) => Some(palette.colors.warning),
+    Some(ImageStatus::Failed) => Some(palette.colors.warning),
     _ => None,
   };
   if let Some(placeholder_color) = placeholder_color {
@@ -626,7 +636,7 @@ fn artwork<'a>(
     .width(Fill)
     .height(height)
     .center_x(Fill)
-    .center_y(Fill)
+    .align_y(Alignment::Center)
     .style(|_theme| container::Style {
       background: Some(iced::Background::Color(
         palette.colors.surfaceContainerLowest,

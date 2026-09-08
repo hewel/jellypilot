@@ -1,5 +1,8 @@
+use super::image_observer::{observe_image, ImageAxis};
+use crate::app::artwork::{ArtworkSurface, ImageCell, ImageSpec, ImageStatus};
+use crate::app::home::ArtworkPlacement;
 use crate::app::message::{HomeMessage, Message, PlaybackMessage};
-use crate::app::state::{ArtworkCell, ArtworkCellState, HomeRow, HomeSection, State};
+use crate::app::state::{HomeRow, HomeSection, State};
 use crate::i18n::media::{card_subtitle, hero_metadata, runtime_caption};
 use crate::i18n::{Localizer, UiText};
 use iced::advanced::{layout, renderer, widget, Layout, Renderer as _, Widget};
@@ -19,7 +22,6 @@ use jellypilot_mpv::playback::{Playable, PlaybackStartPosition};
 use jellypilot_mpv::playback_session::PlaybackIntent;
 use jellypilot_ui::fonts::{BODY_FONT, DISPLAY_FONT, HEADING_FONT};
 use jellypilot_ui::icons::{icon_with_color, Icon, IconSize};
-use jellypilot_ui::layout::SizeClass;
 use jellypilot_ui::overlay::{focus_tooltip, TooltipOptions};
 use jellypilot_ui::tokens::{ThemePalette, TOKENS};
 use jellypilot_ui::variants::{ButtonVariant, SurfaceVariant};
@@ -101,17 +103,6 @@ pub(crate) fn reveal_hero_selection(index: usize) -> iced::Task<Message> {
     index,
     id: hero_rail_scroll_id(),
   })
-}
-
-/// Content width available for home content at a given window width and size class:
-/// window width minus the tier-dependent sidebar width, the
-/// shell hairline, and the home page horizontal padding.
-pub(crate) fn content_width(window_width: f32, class: SizeClass) -> f32 {
-  (window_width
-    - super::shell::sidebar_width(class)
-    - super::shell::HAIRLINE_WIDTH
-    - TOKENS.spacing.s8 * 2.0)
-    .max(1.0)
 }
 
 pub(crate) const fn section_frame_size(section: HomeSection) -> (f32, f32) {
@@ -212,15 +203,7 @@ fn home_content(state: &State, viewport: iced::Size) -> Element<'_, Message> {
 
   let (background, backdrop_height) = hero_imagery(
     state,
-    featured.and_then(|(item, _)| {
-      state
-        .full
-        .as_ref()
-        .expect("FullUi required")
-        .home
-        .artwork
-        .hero_backdrop(&item.id)
-    }),
+    featured.map(|(item, _)| item),
     viewport.width,
     scrim_start,
   );
@@ -287,13 +270,19 @@ fn featured_hero<'a>(
   let copy_height = headline_height + metadata_height + TOKENS.spacing.s3 + 40.0;
   let headline = hero_artwork(
     state,
-    home.artwork.hero(&item.id),
+    home.artwork.get(&ArtworkPlacement::Hero.key(&item.id)),
     item,
     hero_logo_height(hero_height),
     iced::Size::new(text_zone, headline_height),
     (hero_height * 0.15)
       .clamp(20.0, 42.0)
       .min(headline_height / 1.3),
+  );
+  let headline = observe_home(
+    headline,
+    state,
+    ArtworkPlacement::Hero.spec(item),
+    ImageAxis::Vertical,
   );
   let mut info = Column::new()
     .spacing(TOKENS.spacing.s0_5)
@@ -316,7 +305,9 @@ fn featured_hero<'a>(
   let scrim_start = hero_height - TOKENS.spacing.s4 - 40.0 - TOKENS.spacing.s3 - metadata_height;
   let backdrop = hero_backdrop(
     state,
-    home.artwork.hero_backdrop(&item.id),
+    home
+      .artwork
+      .get(&ArtworkPlacement::HeroBackdrop.key(&item.id)),
     width,
     scrim_start,
   );
@@ -559,13 +550,14 @@ fn video_card<'a>(
   let palette = state.palette();
   let is_action_card = section.is_action();
   let radius = full_radius(TOKENS.radii.xl);
+  let spec = ArtworkPlacement::Card(section).spec(item);
   let cell = state
     .full
     .as_ref()
     .expect("FullUi required")
     .home
     .artwork
-    .card(section, &item.id);
+    .get(&ArtworkPlacement::Card(section).key(&item.id));
 
   let text_stack = column![
     ellipsis_text(card_title(item))
@@ -587,7 +579,7 @@ fn video_card<'a>(
       move |_| -> Element<'a, Message> {
         let mut artwork = Stack::new().push(card_artwork(
           state,
-          cell,
+          spec.clone(),
           card_title(item),
           (frame_width, frame_height),
           radius,
@@ -595,8 +587,7 @@ fn video_card<'a>(
           reduced_motion,
         ));
         if let Some(progress) = card_progress(section, item) {
-          let handle =
-            cell.and_then(|cell| state.kernel.artwork_handles.get(cell.slot, &cell.image_id));
+          let handle = cell.and_then(ImageCell::handle);
           artwork = artwork.push(
             container(progress_bar(
               palette,
@@ -678,7 +669,7 @@ fn video_card<'a>(
 
   let poster = card_artwork(
     state,
-    cell,
+    spec,
     card_title(item),
     (frame_width, frame_height),
     radius,
@@ -773,12 +764,31 @@ fn play_message(state: &State, item: &VideoLibraryItem) -> Message {
 /// vertical fade follows the detail Hero's readable-copy/solid-tail pattern.
 fn hero_imagery<'a>(
   state: &'a State,
-  cell: Option<&ArtworkCell>,
+  item: Option<&VideoLibraryItem>,
   width: f32,
   scrim_start: f32,
 ) -> (Element<'a, Message>, f32) {
+  let spec = item.and_then(|item| ArtworkPlacement::HeroBackdrop.spec(item));
+  let cell = spec.as_ref().and_then(|spec| {
+    state
+      .full
+      .as_ref()
+      .expect("FullUi required")
+      .home
+      .artwork
+      .get(&spec.key)
+  });
   let Some(backdrop) = hero_backdrop(state, cell, width, scrim_start) else {
-    return (space::horizontal().height(0).into(), 0.0);
+    // The under-layer does not affect layout; keep a measurable image area
+    // while the foreground still determines the page's height.
+    let placeholder = space::horizontal()
+      .width(width)
+      .height(width * 9.0 / 16.0)
+      .into();
+    return (
+      observe_home(placeholder, state, spec, ImageAxis::Vertical),
+      0.0,
+    );
   };
   let height = backdrop.size.height;
   let image = container(
@@ -792,10 +802,15 @@ fn hero_imagery<'a>(
   .height(height);
   let fade = backdrop.fade;
   (
-    stack![image, hero_fade(fade)]
-      .width(Fill)
-      .height(height)
-      .into(),
+    observe_home(
+      stack![image, hero_fade(fade)]
+        .width(Fill)
+        .height(height)
+        .into(),
+      state,
+      spec,
+      ImageAxis::Vertical,
+    ),
     height,
   )
 }
@@ -808,19 +823,14 @@ struct HeroBackdrop {
 
 fn hero_backdrop(
   state: &State,
-  cell: Option<&ArtworkCell>,
+  cell: Option<&ImageCell>,
   width: f32,
   scrim_start: f32,
 ) -> Option<HeroBackdrop> {
-  let cell = cell.filter(|cell| cell.state == ArtworkCellState::Ready)?;
-  let handle = state
-    .kernel
-    .artwork_handles
-    .get(cell.slot, &cell.image_id)?;
-  let (image_width, image_height) = state
-    .kernel
-    .artwork_handles
-    .dims(cell.slot, &cell.image_id)
+  let cell = cell?;
+  let handle = cell.handle()?;
+  let (image_width, image_height) = cell
+    .dims()
     .filter(|&(width, height)| width > 0 && height > 0)?;
   let height = width * image_height as f32 / image_width as f32;
   let background = state.palette().colors.background;
@@ -1023,20 +1033,16 @@ impl Widget<Message, iced::Theme, iced::Renderer> for HeroGlass<'_> {
 
 fn hero_artwork<'a>(
   state: &'a State,
-  cell: Option<&ArtworkCell>,
+  cell: Option<&ImageCell>,
   item: &'a VideoLibraryItem,
   ref_height: f32,
   bounds: iced::Size,
   text_size: f32,
 ) -> Element<'a, Message> {
   if let Some(cell) = cell {
-    if cell.state == ArtworkCellState::Ready {
-      if let Some(handle) = state.kernel.artwork_handles.get(cell.slot, &cell.image_id) {
-        let dims = state
-          .kernel
-          .artwork_handles
-          .dims(cell.slot, &cell.image_id)
-          .filter(|&(w, h)| w > 0 && h > 0);
+    if cell.state == ImageStatus::Ready {
+      if let Some(handle) = cell.handle() {
+        let dims = cell.dims().filter(|&(w, h)| w > 0 && h > 0);
         let (logo_width, logo_height) = dims
           .map(|(w, h)| logo_display_size(w, h, ref_height))
           .unwrap_or((0.0, ref_height));
@@ -1063,11 +1069,7 @@ fn hero_artwork<'a>(
           top: logo_height / 4.0,
           ..iced::Padding::ZERO
         });
-        let Some(shadow) = state
-          .kernel
-          .artwork_handles
-          .logo_shadow(cell.slot, &cell.image_id)
-        else {
+        let Some(shadow) = cell.logo_shadow() else {
           return logo.into();
         };
         let shadow_height = logo_height * 3.0 / 2.0;
@@ -1160,18 +1162,12 @@ fn hero_rail_card<'a>(
 ) -> Element<'a, Message> {
   let palette = state.palette();
   let radius = full_radius(TOKENS.radii.md);
-  let cell = state
-    .full
-    .as_ref()
-    .expect("FullUi required")
-    .home
-    .artwork
-    .selection_card(section, &item.id);
+  let spec = ArtworkPlacement::Selection(section).spec(item);
   let title = card_title(item);
   let content = move |_| -> Element<'a, Message> {
     let artwork = card_artwork(
       state,
-      cell,
+      spec.clone(),
       title,
       (RAIL_IMAGE_WIDTH, RAIL_IMAGE_HEIGHT),
       radius,
@@ -1254,9 +1250,67 @@ fn artwork_button_style(
   }
 }
 
+fn observe_home<'a>(
+  content: Element<'a, Message>,
+  state: &State,
+  spec: Option<ImageSpec>,
+  axis: ImageAxis,
+) -> Element<'a, Message> {
+  match spec {
+    Some(spec) => observe_image(
+      content,
+      ArtworkSurface::Home,
+      state
+        .full
+        .as_ref()
+        .expect("FullUi required")
+        .home
+        .artwork
+        .epoch(),
+      spec,
+      axis,
+    ),
+    None => content,
+  }
+}
+
 fn card_artwork<'a>(
   state: &'a State,
-  cell: Option<&ArtworkCell>,
+  spec: Option<ImageSpec>,
+  name: &'a str,
+  size: (f32, f32),
+  radius: iced::border::Radius,
+  phase: f32,
+  reduced_motion: bool,
+) -> Element<'a, Message> {
+  let cell = spec.as_ref().and_then(|spec| {
+    state
+      .full
+      .as_ref()
+      .expect("FullUi required")
+      .home
+      .artwork
+      .get(&spec.key)
+  });
+  let content = if spec.is_some() && cell.is_none() {
+    skeleton_panel(
+      size.0,
+      size.1,
+      state.palette().colors.surfaceContainerLowest,
+      radius,
+      phase,
+      reduced_motion,
+    )
+    .into()
+  } else {
+    render_card_artwork(state, cell, name, size, radius, phase, reduced_motion)
+  };
+  observe_home(content, state, spec, ImageAxis::Horizontal)
+}
+
+fn render_card_artwork<'a>(
+  state: &'a State,
+  cell: Option<&ImageCell>,
   name: &'a str,
   (width, height): (f32, f32),
   radius: iced::border::Radius,
@@ -1265,8 +1319,8 @@ fn card_artwork<'a>(
 ) -> Element<'a, Message> {
   let palette = state.palette();
   if let Some(cell) = cell {
-    if cell.state == ArtworkCellState::Ready {
-      if let Some(handle) = state.kernel.artwork_handles.get(cell.slot, &cell.image_id) {
+    if cell.state == ImageStatus::Ready {
+      if let Some(handle) = cell.handle() {
         return rounded_image(handle.clone(), radius)
           .content_fit(ContentFit::Cover)
           .width(width)
@@ -1280,7 +1334,7 @@ fn card_artwork<'a>(
     // No planned load (the server carries no image for this slot): settle on
     // a neutral placeholder instead of shimmering forever.
     None => Some(palette.text.metadata),
-    Some(ArtworkCellState::Failed) => Some(palette.colors.warning),
+    Some(ImageStatus::Failed) => Some(palette.colors.warning),
     _ => None,
   };
   if let Some(placeholder_color) = placeholder_color {
@@ -1559,27 +1613,6 @@ mod tests {
     let (mov_w, mov_h) = section_frame_size(HomeSection::Latest(0));
     assert_eq!((mov_w, mov_h), (POSTER_FRAME_WIDTH, POSTER_FRAME_HEIGHT));
     assert_eq!(section_scroll_height(HomeSection::Latest(0)), 296.0);
-  }
-
-  #[test]
-  fn content_width_standard_matches_pinned_regression_constant() {
-    let expected = 1600.0 - 240.0 - super::super::shell::HAIRLINE_WIDTH - TOKENS.spacing.s8 * 2.0;
-    assert_eq!(content_width(1600.0, SizeClass::Standard), expected);
-    assert_eq!(content_width(1600.0, SizeClass::Standard), 1295.0);
-  }
-
-  #[test]
-  fn content_width_compact_uses_rail_sidebar() {
-    let expected = 1024.0 - 72.0 - super::super::shell::HAIRLINE_WIDTH - TOKENS.spacing.s8 * 2.0;
-    assert_eq!(content_width(1024.0, SizeClass::Compact), expected);
-    assert_eq!(content_width(1024.0, SizeClass::Compact), 887.0);
-  }
-
-  #[test]
-  fn content_width_clamps_to_floor_at_narrow_widths() {
-    assert_eq!(content_width(0.0, SizeClass::Compact), 1.0);
-    assert_eq!(content_width(50.0, SizeClass::Compact), 1.0);
-    assert_eq!(content_width(-100.0, SizeClass::Compact), 1.0);
   }
 
   #[test]

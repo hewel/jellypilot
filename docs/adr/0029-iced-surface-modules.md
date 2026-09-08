@@ -2,6 +2,8 @@
 
 _Status: Accepted. Applies ADR 0026's page-reducer pattern to the iced frontend as its permanent architecture._
 
+_Library Image binder and handle ownership are amended by [ADR 0036](0036-demand-owned-library-image-lifecycle.md); the per-surface composition remains unchanged._
+
 ## Context
 
 `src-iced/src/app/update.rs` grew to 6,763 lines (3,846 implementation, 2,917 tests)

@@ -10,11 +10,14 @@ use jellypilot_ui::widgets::ellipsis_text::ellipsis_text;
 use jellypilot_ui::widgets::skeleton::skeleton_panel;
 use jellypilot_ui::{full_radius, poster_card, rounded_image};
 
+use super::image_observer::{observe_image, ImageAxis};
+use crate::app::artwork::{ArtworkSurface, ImageStatus};
 use crate::app::message::{HomeMessage, Message};
 use crate::app::personal_lists::{
-  ItemAvailability, Kind, ListEntry, ListPage, PersonalListsMessage, Route,
+  artwork_key, artwork_spec, ItemAvailability, Kind, ListEntry, ListPage, PersonalListsMessage,
+  Route,
 };
-use crate::app::state::{ArtworkCellState, Destination, State};
+use crate::app::state::{Destination, State};
 
 const CARD_ARTWORK_HEIGHT: f32 = 220.0;
 const OVERVIEW_LIMIT: usize = 6;
@@ -189,7 +192,24 @@ fn list_body<'a>(
 }
 
 fn list_card<'a>(state: &'a State, kind: Kind, entry: &'a ListEntry) -> Element<'a, Message> {
-  let artwork = list_artwork(state, entry);
+  let artwork = list_artwork(state, kind, entry);
+  let artwork = if let Some(spec) = artwork_spec(kind, entry) {
+    observe_image(
+      artwork,
+      ArtworkSurface::PersonalLists,
+      state
+        .full
+        .as_ref()
+        .expect("FullUi required")
+        .personal_lists
+        .artwork
+        .epoch(),
+      spec,
+      ImageAxis::Vertical,
+    )
+  } else {
+    artwork
+  };
   let unavailable = entry.availability == ItemAvailability::Unavailable;
   let title = if unavailable {
     state.format(
@@ -257,17 +277,17 @@ fn list_card<'a>(state: &'a State, kind: Kind, entry: &'a ListEntry) -> Element<
     .into()
 }
 
-fn list_artwork<'a>(state: &'a State, entry: &'a ListEntry) -> Element<'a, Message> {
+fn list_artwork<'a>(state: &'a State, kind: Kind, entry: &'a ListEntry) -> Element<'a, Message> {
   let cell = state
     .full
     .as_ref()
     .expect("FullUi required")
     .personal_lists
     .artwork
-    .get(&entry.id);
+    .get(&artwork_key(kind, &entry.id));
   if let Some(cell) = cell {
-    if cell.state == ArtworkCellState::Ready {
-      if let Some(handle) = state.kernel.artwork_handles.get(cell.slot, &cell.image_id) {
+    if cell.state == ImageStatus::Ready {
+      if let Some(handle) = cell.handle() {
         return rounded_image(handle.clone(), full_radius(TOKENS.radii.xl))
           .content_fit(ContentFit::Cover)
           .width(Fill)
@@ -277,7 +297,7 @@ fn list_artwork<'a>(state: &'a State, entry: &'a ListEntry) -> Element<'a, Messa
     }
   }
   let color = match cell.map(|cell| cell.state) {
-    Some(ArtworkCellState::Failed) => state.palette().colors.warning,
+    Some(ImageStatus::Failed) => state.palette().colors.warning,
     None if entry.availability == ItemAvailability::Unavailable => state.palette().colors.warning,
     _ => state.palette().text.metadata,
   };

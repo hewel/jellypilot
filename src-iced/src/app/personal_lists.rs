@@ -8,22 +8,18 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use crate::i18n::media::media_type;
 use crate::i18n::{Localizer, UiText};
 use iced::Task;
-use jellypilot_core::artwork_binder::{ArtworkSettlement, ArtworkSurface};
-use jellypilot_core::artwork_loader::PlannedArtworkLoad;
 use jellypilot_core::request_gate::SessionToken;
 use jellypilot_core::watchlist::{ProfileScope, WatchlistRecord, WatchlistStore};
-use jellypilot_media_server::artwork::{
-  ArtworkLoadObservation, ArtworkLoadSummary, ArtworkSizeClass, DerivedArtwork,
-};
+use jellypilot_media_server::artwork::{ArtworkSizeClass, DerivedArtwork};
 use jellypilot_media_server::{
   FavoritesPage, FavoritesPageRequest, VideoLibraryItem, VideoUserDataAction, VideoUserDataUpdate,
   VideoUserDataUpdateRequest,
 };
 
-use super::artwork::stream_artwork_loads;
+use super::artwork::{ImageCollection, ImageCompletion, ImageSpec};
 use super::kernel::Kernel;
-use super::message::{ArtworkLoadCompletion, Message};
-use super::state::{ArtworkCell, ArtworkCellState, NoticeLevel};
+use super::message::Message;
+use super::state::NoticeLevel;
 
 pub const PAGE_SIZE: usize = 24;
 
@@ -75,7 +71,7 @@ pub struct Surface {
   pub watchlist_ids: HashSet<String>,
   pub busy_items: HashSet<String>,
   pub mutation_error: Option<UiText>,
-  pub artwork: HashMap<String, ArtworkCell>,
+  pub artwork: ImageCollection,
   scope: Option<ProfileScope>,
   watchlist_records: Vec<WatchlistRecord>,
   store_revision: u64,
@@ -333,15 +329,7 @@ pub enum PersonalListsMessage {
     item_id: String,
     result: Result<VideoUserDataUpdate, String>,
   },
-  ArtworkLoaded {
-    session: SessionToken,
-    slot: jellypilot_core::artwork_binder::ArtworkSlot,
-    image_id: String,
-    result: Result<
-      jellypilot_media_server::artwork::ArtworkRaster,
-      jellypilot_media_server::artwork::ArtworkError,
-    >,
-  },
+  ArtworkLoaded(ImageCompletion),
 }
 
 /// Starts the requested Personal Lists route.
@@ -394,14 +382,14 @@ pub fn refresh(
 }
 
 /// Invalidates work tied to the route being left and releases its artwork bindings.
-pub fn leave_view(surface: &mut Surface, kernel: &mut Kernel) {
+pub fn leave_view(surface: &mut Surface) {
   surface.favorites_generation = 0;
   surface.watchlist_generation = 0;
   surface.mutations.clear();
   surface.busy_items.clear();
   surface.favorites.loading = false;
   surface.watchlist.loading = false;
-  begin_artwork_view(surface, kernel);
+  begin_artwork_view(surface);
 }
 
 /// Loads device-local membership for the connected account.
@@ -479,7 +467,7 @@ pub fn update(
         }
         Err(error) => surface.favorites.error = Some(list_failure("lists-favorites-error", &error)),
       }
-      prepare_artwork(surface, kernel)
+      prepare_artwork(surface)
     }
     PersonalListsMessage::MembershipLoaded {
       session,
@@ -527,7 +515,7 @@ pub fn update(
         return Task::none();
       }
       apply_watchlist_metadata(&mut surface.watchlist, result);
-      prepare_artwork(surface, kernel)
+      prepare_artwork(surface)
     }
     PersonalListsMessage::WatchlistMutationFinished {
       session,
@@ -565,23 +553,10 @@ pub fn update(
         result,
       },
     ),
-    PersonalListsMessage::ArtworkLoaded {
-      session,
-      slot,
-      image_id,
-      result,
-    } => {
-      let session_ok = kernel.request_gate.is_current_session(session);
-      apply_artwork_completion(
-        surface,
-        kernel,
-        session_ok,
-        ArtworkLoadCompletion {
-          slot,
-          image_id,
-          result,
-        },
-      );
+    PersonalListsMessage::ArtworkLoaded(completion) => {
+      surface
+        .artwork
+        .settle(kernel.request_gate.current_session(), completion);
       Task::none()
     }
   }
@@ -594,7 +569,7 @@ fn prepare_scope(
 ) -> Result<ProfileScope, UiText> {
   let scope = active_scope(kernel)?;
   if surface.scope.as_ref() != Some(&scope) {
-    reset_for_scope(surface, kernel, runtime, scope.clone());
+    reset_for_scope(surface, runtime, scope.clone());
   }
   Ok(scope)
 }
@@ -625,13 +600,8 @@ fn current_scope(surface: &Surface, kernel: &Kernel) -> Option<ProfileScope> {
   (surface.scope.as_ref() == Some(&scope)).then_some(scope)
 }
 
-fn reset_for_scope(
-  surface: &mut Surface,
-  kernel: &mut Kernel,
-  runtime: &Runtime,
-  scope: ProfileScope,
-) {
-  begin_artwork_view(surface, kernel);
+fn reset_for_scope(surface: &mut Surface, runtime: &Runtime, scope: ProfileScope) {
+  begin_artwork_view(surface);
   *surface = Surface {
     scope: Some(scope),
     favorites_generation: runtime.next_generation(),
@@ -725,7 +695,7 @@ fn load_watchlist_metadata(
   rebuild_watchlist_page(surface);
   if surface.watchlist.entries.is_empty() {
     surface.watchlist.loading = false;
-    return prepare_artwork(surface, kernel);
+    return prepare_artwork(surface);
   }
   surface.watchlist.loading = true;
   let session = kernel.request_gate.current_session();
@@ -1259,101 +1229,39 @@ fn nonempty(value: String) -> Option<String> {
   (!value.is_empty()).then_some(value)
 }
 
-fn prepare_artwork(surface: &mut Surface, kernel: &mut Kernel) -> Task<Message> {
-  let mut seen = HashSet::new();
-  let specs = surface
-    .favorites
-    .entries
-    .iter()
-    .chain(&surface.watchlist.entries)
-    .filter_map(|entry| {
-      let item = entry.item.as_ref()?;
-      let image_id = list_artwork_image_id(item)?.to_owned();
-      seen
-        .insert(entry.id.clone())
-        .then(|| (entry.id.clone(), image_id))
-    })
-    .collect::<Vec<_>>();
-  let expected = specs.iter().cloned().collect::<HashMap<_, _>>();
-  surface.artwork.retain(|item_id, cell| {
-    expected
-      .get(item_id)
-      .is_some_and(|image_id| image_id == &cell.image_id)
-  });
+fn prepare_artwork(surface: &mut Surface) -> Task<Message> {
+  let specs = [
+    (Kind::Favorites, &surface.favorites),
+    (Kind::Watchlist, &surface.watchlist),
+  ]
+  .into_iter()
+  .flat_map(|(kind, page)| {
+    page
+      .entries
+      .iter()
+      .filter_map(move |entry| artwork_spec(kind, entry))
+  })
+  .collect::<Vec<_>>();
+  surface.artwork.retain(&specs);
+  Task::none()
+}
 
-  let session = kernel.request_gate.current_session();
-  let Some(client) = kernel.client.as_ref().map(Arc::clone) else {
-    return Task::none();
+pub(crate) fn artwork_key(kind: Kind, item_id: &str) -> String {
+  let list = match kind {
+    Kind::Favorites => "favorites",
+    Kind::Watchlist => "watchlist",
   };
-  let adapter = Arc::clone(&kernel.artwork_adapter);
-  let mut summary = ArtworkLoadSummary::default();
-  let mut loads = Vec::new();
-  for (index, (item_id, image_id)) in specs.into_iter().enumerate() {
-    if let Some(cell) = surface.artwork.get(&item_id) {
-      if cell.state == ArtworkCellState::Loading {
-        continue;
-      }
-      if cell.state == ArtworkCellState::Ready
-        && kernel
-          .artwork_handles
-          .get(cell.slot, &cell.image_id)
-          .is_some()
-      {
-        continue;
-      }
-    }
-    if let Some(raster) =
-      adapter.cached_with_derived(&image_id, ArtworkSizeClass::Card, DerivedArtwork::default())
-    {
-      summary.record(&ArtworkLoadObservation::raster_hit(raster.byte_len() as u64));
-      let slot = kernel.artwork_binder.bind_settled();
-      kernel.artwork_handles.insert(
-        slot,
-        image_id.clone(),
-        super::state::ArtworkHandles::from_raster(raster),
-      );
-      surface.artwork.insert(
-        item_id,
-        ArtworkCell {
-          slot,
-          image_id,
-          state: ArtworkCellState::Ready,
-        },
-      );
-      continue;
-    }
-    let slot = kernel.artwork_binder.bind(ArtworkSurface::PersonalLists);
-    surface.artwork.insert(
-      item_id,
-      ArtworkCell {
-        slot,
-        image_id: image_id.clone(),
-        state: ArtworkCellState::Loading,
-      },
-    );
-    loads.push(PlannedArtworkLoad {
-      slot,
-      image_id,
-      size_class: ArtworkSizeClass::Card,
-      visible: index < 12,
-      derived: DerivedArtwork::default(),
-    });
-  }
-  stream_artwork_loads(
-    adapter,
-    client,
-    session,
-    loads,
-    summary,
-    |session, completion| {
-      Message::PersonalLists(PersonalListsMessage::ArtworkLoaded {
-        session,
-        slot: completion.slot,
-        image_id: completion.image_id,
-        result: completion.result,
-      })
-    },
-  )
+  format!("{list}:{item_id}")
+}
+
+pub(crate) fn artwork_spec(kind: Kind, entry: &ListEntry) -> Option<ImageSpec> {
+  let item = entry.item.as_ref()?;
+  Some(ImageSpec {
+    key: artwork_key(kind, &entry.id),
+    image_id: list_artwork_image_id(item)?.to_owned(),
+    size_class: ArtworkSizeClass::Card,
+    derived: DerivedArtwork::default(),
+  })
 }
 
 fn list_artwork_image_id(item: &VideoLibraryItem) -> Option<&str> {
@@ -1368,50 +1276,28 @@ fn list_artwork_image_id(item: &VideoLibraryItem) -> Option<&str> {
   }
 }
 
-fn apply_artwork_completion(
-  surface: &mut Surface,
-  kernel: &mut Kernel,
-  session_ok: bool,
-  completion: ArtworkLoadCompletion,
-) {
-  if kernel
-    .artwork_binder
-    .settle(completion.slot, ArtworkSurface::PersonalLists, session_ok)
-    != ArtworkSettlement::Apply
-  {
-    return;
-  }
-  let Some(cell) = surface
-    .artwork
-    .values_mut()
-    .find(|cell| cell.slot == completion.slot && cell.image_id == completion.image_id)
-  else {
-    return;
-  };
-  match completion.result {
-    Ok(raster) => {
-      cell.state = ArtworkCellState::Ready;
-      kernel.artwork_handles.insert(
-        completion.slot,
-        completion.image_id,
-        super::state::ArtworkHandles::from_raster(raster),
-      );
-    }
-    Err(jellypilot_media_server::artwork::ArtworkError::Cancelled) => {}
-    Err(_) => cell.state = ArtworkCellState::Failed,
-  }
-}
-
-fn begin_artwork_view(surface: &mut Surface, kernel: &mut Kernel) {
-  kernel
-    .artwork_binder
-    .begin_view(ArtworkSurface::PersonalLists);
+fn begin_artwork_view(surface: &mut Surface) {
   surface.artwork.clear();
 }
 
 #[cfg(test)]
 mod tests {
   use super::*;
+  #[test]
+  fn leaving_favorites_does_not_revoke_the_same_watchlist_image() {
+    use jellypilot_core::image_lifecycle::{ImageLifecycle, ImagePriority, ImageStatus};
+
+    let mut metadata = item("shared-item", "Shared");
+    metadata.artwork_image_id = Some("shared-poster".to_owned());
+    let entry = entry_from_item(metadata);
+    let favorite = artwork_spec(Kind::Favorites, &entry).expect("favorite artwork");
+    let watchlist = artwork_spec(Kind::Watchlist, &entry).expect("watchlist artwork");
+    let mut lifecycle = ImageLifecycle::default();
+    drop(lifecycle.observe(favorite.clone(), Some(ImagePriority::Visible)));
+    drop(lifecycle.observe(watchlist.clone(), Some(ImagePriority::Visible)));
+    drop(lifecycle.observe(favorite, None));
+    assert_eq!(lifecycle.status(&watchlist.key), Some(ImageStatus::Loading));
+  }
 
   fn item(id: &str, name: &str) -> VideoLibraryItem {
     VideoLibraryItem {
@@ -1634,7 +1520,7 @@ mod tests {
     ));
     assert!(surface.favorites.entries.is_empty());
 
-    leave_view(&mut surface, &mut state.kernel);
+    leave_view(&mut surface);
     let scope = active_scope(&state.kernel).expect("active scope");
     drop(settle_watchlist_mutation(
       &mut surface,
@@ -1662,7 +1548,7 @@ mod tests {
       &runtime,
       scope.clone(),
     ));
-    leave_view(&mut surface, &mut state.kernel);
+    leave_view(&mut surface);
     drop(update(
       &mut surface,
       &mut state.kernel,

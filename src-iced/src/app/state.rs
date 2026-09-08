@@ -1,4 +1,4 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 
@@ -7,7 +7,6 @@ use tokio::sync::{mpsc, Mutex};
 use iced::widget::image;
 use jellypilot_auth::login::ConnectionPhase;
 use jellypilot_auth::{AuthStore, SavedProfileKey, SavedProfileSummary, SensitiveSavedSession};
-use jellypilot_core::artwork_binder::{ArtworkBinder, ArtworkSlot};
 use jellypilot_core::browse_model::LibraryBrowseView;
 use jellypilot_core::config::{
   AppMode, IntroMode, LoginPrefill, Settings, SettingsStore, ShortcutKind, ThemeMode,
@@ -17,7 +16,7 @@ use jellypilot_core::diagnostics::{DiagnosticCategory, DiagnosticLevel, Diagnost
 use jellypilot_core::home_hero::{self, HeroCandidate, HeroSource};
 use jellypilot_core::request_gate::{RemoteToken, RequestGate};
 use jellypilot_core::LoadState;
-use jellypilot_media_server::artwork::{ArtworkAdapter, ArtworkRaster};
+use jellypilot_media_server::artwork::ArtworkAdapter;
 use jellypilot_media_server::{
   LibraryLatestRow, MediaServerProvider, VideoLibraryItem, VideoLibraryShortcut,
   VideoSeasonEpisodesPage,
@@ -399,256 +398,6 @@ fn ready_items(state: &LoadState<Vec<VideoLibraryItem>, UiText>) -> Option<&[Vid
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum ArtworkCellState {
-  Loading,
-  Ready,
-  Failed,
-}
-
-#[derive(Clone, Debug, PartialEq)]
-pub struct ArtworkCell {
-  pub slot: ArtworkSlot,
-  pub image_id: String,
-  pub state: ArtworkCellState,
-}
-
-#[derive(Default)]
-pub struct HomeArtwork {
-  hero: Option<(String, ArtworkCell)>,
-  hero_backdrop: Option<(String, ArtworkCell)>,
-  sections: Vec<HashMap<String, ArtworkCell>>,
-  selection: HashMap<String, ArtworkCell>,
-}
-
-impl HomeArtwork {
-  pub fn insert_hero(&mut self, item_id: String, cell: ArtworkCell) {
-    self.hero = Some((item_id, cell));
-  }
-  pub fn insert_hero_backdrop(&mut self, item_id: String, cell: ArtworkCell) {
-    self.hero_backdrop = Some((item_id, cell));
-  }
-
-  pub fn insert_card(&mut self, section: HomeSection, item_id: String, cell: ArtworkCell) {
-    if self.sections.len() <= section.index() {
-      self.sections.resize_with(section.index() + 1, HashMap::new);
-    }
-    self.sections[section.index()].insert(item_id, cell);
-  }
-
-  pub fn insert_selection(&mut self, item_id: String, cell: ArtworkCell) {
-    self.selection.insert(item_id, cell);
-  }
-
-  pub fn selection_card(&self, section: HomeSection, item_id: &str) -> Option<&ArtworkCell> {
-    if section.is_latest() {
-      self.selection.get(item_id)
-    } else {
-      self.card(section, item_id)
-    }
-  }
-
-  pub fn hero(&self, item_id: &str) -> Option<&ArtworkCell> {
-    self
-      .hero
-      .as_ref()
-      .filter(|(bound_item_id, _)| bound_item_id == item_id)
-      .map(|(_, cell)| cell)
-  }
-  pub fn hero_backdrop(&self, item_id: &str) -> Option<&ArtworkCell> {
-    self
-      .hero_backdrop
-      .as_ref()
-      .filter(|(bound_item_id, _)| bound_item_id == item_id)
-      .map(|(_, cell)| cell)
-  }
-
-  pub fn card(&self, section: HomeSection, item_id: &str) -> Option<&ArtworkCell> {
-    self.sections.get(section.index())?.get(item_id)
-  }
-
-  pub fn cell_mut(&mut self, slot: ArtworkSlot, image_id: &str) -> Option<&mut ArtworkCell> {
-    if let Some((_, cell)) = &mut self.hero {
-      if cell.slot == slot && cell.image_id == image_id {
-        return Some(cell);
-      }
-    }
-    if let Some((_, cell)) = &mut self.hero_backdrop {
-      if cell.slot == slot && cell.image_id == image_id {
-        return Some(cell);
-      }
-    }
-    self
-      .sections
-      .iter_mut()
-      .flat_map(HashMap::values_mut)
-      .chain(self.selection.values_mut())
-      .find(|cell| cell.slot == slot && cell.image_id == image_id)
-  }
-
-  pub fn slots(&self) -> impl Iterator<Item = ArtworkSlot> + '_ {
-    self
-      .hero
-      .as_ref()
-      .map(|(_, cell)| cell.slot)
-      .into_iter()
-      .chain(self.hero_backdrop.as_ref().map(|(_, cell)| cell.slot))
-      .chain(self.selection.values().map(|cell| cell.slot))
-      .chain(
-        self
-          .sections
-          .iter()
-          .flat_map(HashMap::values)
-          .map(|cell| cell.slot),
-      )
-  }
-
-  pub fn retain_items(
-    &mut self,
-    hero_item_id: Option<&str>,
-    hero_backdrop_item_id: Option<&str>,
-    section_item_ids: &[HashSet<&str>],
-    selection_item_ids: &HashSet<&str>,
-  ) {
-    if let Some((bound_item_id, _)) = &self.hero {
-      if hero_item_id != Some(bound_item_id.as_str()) {
-        self.hero = None;
-      }
-    }
-    if let Some((bound_item_id, _)) = &self.hero_backdrop {
-      if hero_backdrop_item_id != Some(bound_item_id.as_str()) {
-        self.hero_backdrop = None;
-      }
-    }
-    self.sections.truncate(section_item_ids.len());
-    for (section, allowed) in self.sections.iter_mut().zip(section_item_ids) {
-      section.retain(|item_id, _| allowed.contains(item_id.as_str()));
-    }
-    self
-      .selection
-      .retain(|item_id, _| selection_item_ids.contains(item_id.as_str()));
-  }
-
-  pub fn prune_unready(&mut self) {
-    if let Some((_, cell)) = &self.hero {
-      if cell.state != ArtworkCellState::Ready {
-        self.hero = None;
-      }
-    }
-    if let Some((_, cell)) = &self.hero_backdrop {
-      if cell.state != ArtworkCellState::Ready {
-        self.hero_backdrop = None;
-      }
-    }
-    for section in &mut self.sections {
-      section.retain(|_, cell| cell.state == ArtworkCellState::Ready);
-    }
-    self
-      .selection
-      .retain(|_, cell| cell.state == ArtworkCellState::Ready);
-  }
-
-  pub fn has_loading(&self) -> bool {
-    self
-      .hero
-      .as_ref()
-      .is_some_and(|(_, cell)| cell.state == ArtworkCellState::Loading)
-      || self
-        .hero_backdrop
-        .as_ref()
-        .is_some_and(|(_, cell)| cell.state == ArtworkCellState::Loading)
-      || self
-        .sections
-        .iter()
-        .flat_map(HashMap::values)
-        .chain(self.selection.values())
-        .any(|cell| cell.state == ArtworkCellState::Loading)
-  }
-}
-
-#[derive(Default)]
-pub struct BrowseArtwork {
-  cells: HashMap<String, ArtworkCell>,
-}
-
-impl BrowseArtwork {
-  pub fn clear(&mut self) {
-    self.cells.clear();
-  }
-
-  pub fn insert(&mut self, item_id: String, cell: ArtworkCell) {
-    self.cells.insert(item_id, cell);
-  }
-
-  pub fn get(&self, item_id: &str) -> Option<&ArtworkCell> {
-    self.cells.get(item_id)
-  }
-
-  pub fn cell_mut(&mut self, slot: ArtworkSlot, image_id: &str) -> Option<&mut ArtworkCell> {
-    self
-      .cells
-      .values_mut()
-      .find(|cell| cell.slot == slot && cell.image_id == image_id)
-  }
-
-  pub fn retain_items(&mut self, item_ids: &HashSet<&str>) {
-    self
-      .cells
-      .retain(|item_id, _| item_ids.contains(item_id.as_str()));
-  }
-
-  pub fn slots(&self) -> impl Iterator<Item = ArtworkSlot> + '_ {
-    self.cells.values().map(|cell| cell.slot)
-  }
-
-  pub fn has_loading(&self) -> bool {
-    self
-      .cells
-      .values()
-      .any(|cell| cell.state == ArtworkCellState::Loading)
-  }
-}
-#[derive(Default)]
-pub struct DetailArtwork {
-  cells: HashMap<String, ArtworkCell>,
-}
-
-impl DetailArtwork {
-  pub fn clear(&mut self) {
-    self.cells.clear();
-  }
-
-  pub fn insert(&mut self, key: String, cell: ArtworkCell) {
-    self.cells.insert(key, cell);
-  }
-
-  pub fn get(&self, key: &str) -> Option<&ArtworkCell> {
-    self.cells.get(key)
-  }
-
-  pub fn cell_mut(&mut self, slot: ArtworkSlot, image_id: &str) -> Option<&mut ArtworkCell> {
-    self
-      .cells
-      .values_mut()
-      .find(|cell| cell.slot == slot && cell.image_id == image_id)
-  }
-
-  pub fn retain_keys(&mut self, keys: &HashSet<&str>) {
-    self.cells.retain(|key, _| keys.contains(key.as_str()));
-  }
-
-  pub fn slots(&self) -> impl Iterator<Item = ArtworkSlot> + '_ {
-    self.cells.values().map(|cell| cell.slot)
-  }
-
-  pub fn has_loading(&self) -> bool {
-    self
-      .cells
-      .values()
-      .any(|cell| cell.state == ArtworkCellState::Loading)
-  }
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum UserDataActionKind {
   Favorite,
   Played,
@@ -673,147 +422,9 @@ impl DetailState {
   }
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, Default)]
 pub struct BrowseViewport {
   pub offset_y: f32,
-  pub height: f32,
-}
-
-impl Default for BrowseViewport {
-  fn default() -> Self {
-    Self {
-      offset_y: 0.0,
-      height: 720.0,
-    }
-  }
-}
-
-struct RetainedHandle<T> {
-  image_id: String,
-  value: T,
-}
-
-pub struct HandleRetention<T> {
-  entries: HashMap<ArtworkSlot, RetainedHandle<T>>,
-}
-
-impl<T> Default for HandleRetention<T> {
-  fn default() -> Self {
-    Self {
-      entries: HashMap::new(),
-    }
-  }
-}
-
-impl<T> HandleRetention<T> {
-  pub fn insert(&mut self, slot: ArtworkSlot, image_id: String, value: T) {
-    self
-      .entries
-      .insert(slot, RetainedHandle { image_id, value });
-  }
-
-  pub fn get(&self, slot: ArtworkSlot, image_id: &str) -> Option<&T> {
-    self
-      .entries
-      .get(&slot)
-      .filter(|entry| entry.image_id == image_id)
-      .map(|entry| &entry.value)
-  }
-
-  pub fn retain_slots(&mut self, slots: impl IntoIterator<Item = ArtworkSlot>) {
-    let slots: HashSet<_> = slots.into_iter().collect();
-    self.entries.retain(|slot, _| slots.contains(slot));
-  }
-
-  pub fn remove(&mut self, slot: ArtworkSlot) {
-    self.entries.remove(&slot);
-  }
-
-  pub fn clear(&mut self) {
-    self.entries.clear();
-  }
-
-  #[cfg(test)]
-  fn len(&self) -> usize {
-    self.entries.len()
-  }
-}
-
-pub struct ArtworkHandles {
-  main: image::Handle,
-  main_width: u32,
-  main_height: u32,
-  logo_shadow: Option<image::Handle>,
-}
-
-impl ArtworkHandles {
-  pub fn from_raster(raster: ArtworkRaster) -> Self {
-    let (width, height, pixels, logo_shadow) = raster.into_parts();
-    Self {
-      main: image::Handle::from_rgba(width, height, pixels),
-      main_width: width,
-      main_height: height,
-      logo_shadow: logo_shadow.map(|shadow| {
-        let (width, height, pixels, ..) = shadow.into_parts();
-        image::Handle::from_rgba(width, height, pixels)
-      }),
-    }
-  }
-
-  #[cfg(test)]
-  #[must_use]
-  pub fn from_main(main: image::Handle) -> Self {
-    Self {
-      main,
-      main_width: 0,
-      main_height: 0,
-      logo_shadow: None,
-    }
-  }
-}
-
-#[derive(Default)]
-pub struct ArtworkHandleRetention {
-  handles: HandleRetention<ArtworkHandles>,
-}
-
-impl ArtworkHandleRetention {
-  pub fn insert(&mut self, slot: ArtworkSlot, image_id: String, handles: ArtworkHandles) {
-    self.handles.insert(slot, image_id, handles);
-  }
-
-  pub fn get(&self, slot: ArtworkSlot, image_id: &str) -> Option<&image::Handle> {
-    self
-      .handles
-      .get(slot, image_id)
-      .map(|handles| &handles.main)
-  }
-
-  pub fn dims(&self, slot: ArtworkSlot, image_id: &str) -> Option<(u32, u32)> {
-    self
-      .handles
-      .get(slot, image_id)
-      .map(|handles| (handles.main_width, handles.main_height))
-  }
-
-  pub fn logo_shadow(&self, slot: ArtworkSlot, image_id: &str) -> Option<&image::Handle> {
-    self
-      .handles
-      .get(slot, image_id)
-      .and_then(|handles| handles.logo_shadow.as_ref())
-  }
-
-  pub fn retain_slots(&mut self, slots: impl IntoIterator<Item = ArtworkSlot>) {
-    self.handles.retain_slots(slots);
-  }
-
-  pub fn remove(&mut self, slot: ArtworkSlot) {
-    self.handles.remove(slot);
-  }
-
-  pub fn clear(&mut self) {
-    self.handles.clear();
-  }
 }
 
 /// Decoded user photos for saved profiles, keyed by profile identity.
@@ -998,6 +609,7 @@ pub struct FullUi {
 
 pub struct State {
   pub kernel: Kernel,
+  pub image_diagnostics: super::artwork::ImageDiagnostics,
   /// Latest OS light/dark mode report; `None` until the boot one-shot task
   /// resolves. Read only while the theme mode setting is `System`.
   pub system_theme: iced::theme::Mode,
@@ -1040,6 +652,7 @@ impl State {
     let locale = Localizer::resolve(settings.snapshot().ui_language());
 
     let mut state = Self {
+      image_diagnostics: Default::default(),
       system_theme: iced::theme::Mode::None,
       kernel: Kernel {
         settings,
@@ -1058,8 +671,6 @@ impl State {
         tray: None,
         artwork_adapter,
         avatar_adapter,
-        artwork_binder: ArtworkBinder::default(),
-        artwork_handles: ArtworkHandleRetention::default(),
         profile_avatars: Default::default(),
       },
       login: crate::app::login::Surface {
@@ -1090,21 +701,6 @@ impl State {
 
   pub fn format(&self, id: &str, args: &[(&str, FluentValue<'_>)]) -> String {
     self.kernel.locale.format(id, args)
-  }
-  pub fn all_artwork_slots(&self) -> impl Iterator<Item = ArtworkSlot> + '_ {
-    self
-      .full
-      .iter()
-      .flat_map(|full| {
-        full
-          .home
-          .artwork
-          .slots()
-          .chain(full.browse.artwork.slots())
-          .chain(full.detail.artwork.slots())
-          .chain(full.personal_lists.artwork.values().map(|cell| cell.slot))
-      })
-      .chain(self.playback.artwork.as_ref().map(|cell| cell.slot))
   }
 
   /// True while any full UI surface renders skeleton placeholders or while
@@ -1137,11 +733,7 @@ impl State {
       || full.detail.artwork.has_loading();
     let lists_loading = full.personal_lists.favorites.loading
       || full.personal_lists.watchlist.loading
-      || full
-        .personal_lists
-        .artwork
-        .values()
-        .any(|cell| cell.state == ArtworkCellState::Loading);
+      || full.personal_lists.artwork.has_loading();
     home_loading || browse_loading || detail_loading || artwork_loading || lists_loading
   }
   /// Effective UI theme mode: the explicit setting, or the OS mode while the
@@ -1170,11 +762,6 @@ impl State {
     self.kernel.settings.snapshot().app_mode()
   }
 
-  pub fn retain_artwork_handles(&mut self) {
-    let slots: HashSet<_> = self.all_artwork_slots().collect();
-    self.kernel.artwork_handles.retain_slots(slots);
-  }
-
   /// Dismisses the kernel toast and clears the playback surface's notice;
   /// cross-surface so it stays on `State` (ADR 0029).
   pub fn dismiss_toast(&mut self, id: u64) {
@@ -1200,40 +787,8 @@ impl State {
 
 #[cfg(test)]
 mod tests {
-  use jellypilot_core::artwork_binder::ArtworkSurface;
 
   use super::*;
-
-  #[test]
-  fn handle_retention_evicts_slots_outside_the_current_window() {
-    let mut binder = ArtworkBinder::default();
-    let retained_slot = binder.bind(ArtworkSurface::Home);
-    let evicted_slot = binder.bind(ArtworkSurface::Home);
-    let mut handles = HandleRetention::default();
-    handles.insert(retained_slot, "retained".to_owned(), 1_u8);
-    handles.insert(evicted_slot, "evicted".to_owned(), 2_u8);
-
-    handles.retain_slots([retained_slot]);
-
-    assert_eq!(
-      (
-        handles.len(),
-        handles.get(retained_slot, "retained"),
-        handles.get(evicted_slot, "evicted"),
-      ),
-      (1, Some(&1), None)
-    );
-  }
-
-  #[test]
-  fn handle_retention_rejects_a_reused_slot_with_the_wrong_image_id() {
-    let mut binder = ArtworkBinder::default();
-    let slot = binder.bind(ArtworkSurface::Home);
-    let mut handles = HandleRetention::default();
-    handles.insert(slot, "current".to_owned(), 1_u8);
-
-    assert!(handles.get(slot, "stale").is_none());
-  }
 
   #[test]
   fn home_sections_transition_from_loading_to_independent_results() {
@@ -1386,69 +941,5 @@ mod tests {
       DiagnosticLevel::Error,
       DiagnosticCategory::Config,
     ));
-  }
-  #[test]
-  fn skeletons_active_returns_true_when_artwork_cells_are_loading() {
-    let mut state = State::boot(false);
-    assert!(!state.skeletons_active());
-
-    let mut binder = ArtworkBinder::default();
-    let slot_1 = binder.bind(ArtworkSurface::Home);
-    let slot_2 = binder.bind(ArtworkSurface::Home);
-    let slot_3 = binder.bind(ArtworkSurface::Browse);
-    let slot_4 = binder.bind(ArtworkSurface::Detail);
-
-    // Home hero loading
-    state.full.as_mut().unwrap().home.artwork.insert_hero(
-      "item-hero".to_owned(),
-      ArtworkCell {
-        slot: slot_1,
-        image_id: "img-hero".to_owned(),
-        state: ArtworkCellState::Loading,
-      },
-    );
-    assert!(state.skeletons_active());
-    state.full.as_mut().unwrap().home.artwork.prune_unready();
-    assert!(!state.skeletons_active());
-
-    // Home card loading
-    state.full.as_mut().unwrap().home.artwork.insert_card(
-      HomeSection::ContinueWatching,
-      "item-card".to_owned(),
-      ArtworkCell {
-        slot: slot_2,
-        image_id: "img-card".to_owned(),
-        state: ArtworkCellState::Loading,
-      },
-    );
-    assert!(state.skeletons_active());
-    state.full.as_mut().unwrap().home.artwork.prune_unready();
-    assert!(!state.skeletons_active());
-
-    // Browse artwork loading
-    state.full.as_mut().unwrap().browse.artwork.insert(
-      "item-browse".to_owned(),
-      ArtworkCell {
-        slot: slot_3,
-        image_id: "img-browse".to_owned(),
-        state: ArtworkCellState::Loading,
-      },
-    );
-    assert!(state.skeletons_active());
-    state.full.as_mut().unwrap().browse.artwork.clear();
-    assert!(!state.skeletons_active());
-
-    // Detail artwork loading
-    state.full.as_mut().unwrap().detail.artwork.insert(
-      "detail-poster".to_owned(),
-      ArtworkCell {
-        slot: slot_4,
-        image_id: "img-detail".to_owned(),
-        state: ArtworkCellState::Loading,
-      },
-    );
-    assert!(state.skeletons_active());
-    state.full.as_mut().unwrap().detail.artwork.clear();
-    assert!(!state.skeletons_active());
   }
 }

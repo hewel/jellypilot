@@ -14,6 +14,7 @@ All notable changes to JellyPilot are documented in this file.
 - Simplified the Account Popover into a quick menu: show the current account once, quiet the address and actions, and move preferences and saved-login removal to a direct Accounts Settings entry.
 - Widened the default Full-mode window from 1600×900 to 1760×900 logical pixels without changing its height, minimum size, or Control-Only sizing.
 - Reworked Video Home with a full-width, aspect-preserving Backdrop behind scrolling content, a detail-style bottom gradient, and a subdued thumbnail selection rail with hover/focus information. Added manual selection, series-grouped continuation candidates, and selection retained across same-profile refreshes; kept the separate Continue Watching row directly resumable and visible in compact windows.
+- Made Library Image loading follow measured visibility, with immediate visible-image admission and one viewport of prefetch before and after scrolling across Home, Browse, Detail, and Personal Lists.
 
 ### Fixed
 - Restored history-specific vertical and horizontal scroll positions when returning to Home, browse results, details, and Personal Lists. Back navigation retains loaded content and query context; new searches and filter changes still start at the top.
@@ -21,6 +22,8 @@ All notable changes to JellyPilot are documented in this file.
 - Kept account avatars fixed-size, fitted short account menus to their content, and exposed truncated names and addresses through hover and keyboard-focus hints.
 - Centered Sidebar control icons and labels, restricted button focus feedback to keyboard use, and prevented trigger tooltips from overlapping open popovers.
 - Preserved the Account trigger's keyboard focus return when Settings is refocused with Ctrl/Cmd+, after entering through Manage accounts.
+- Isolated shared image demand between pages and Now Playing, cancelled work when its final consumer leaves, and released native image handles outside the visible range without adding another pixel cache.
+- Kept Browse poster placeholders at the image's fixed height, preventing repeated image admission and cancellation at prefetch boundaries and the resulting redraw-invalidation loop while scrolling.
 
 ## [2.0.0] - 2026-09-02
 

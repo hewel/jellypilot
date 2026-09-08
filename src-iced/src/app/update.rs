@@ -70,11 +70,7 @@ fn activate_connection(state: &mut State) -> Task<Message> {
     &mut state.kernel,
   )];
   if let Some(full) = state.full.as_mut() {
-    tasks.push(home::start_load(
-      &mut full.home,
-      &mut state.kernel,
-      state.playback.view.now_playing.is_none(),
-    ));
+    tasks.push(home::start_load(&mut full.home, &mut state.kernel));
     tasks.push(super::personal_lists::load_membership(
       &mut full.personal_lists,
       &mut state.kernel,
@@ -208,6 +204,28 @@ fn select_ui_language(state: &mut State, preference: LanguagePreference) -> Task
 }
 
 pub fn update(state: &mut State, message: Message) -> Task<Message> {
+  let task = route_message(state, message);
+  if let Some(full) = state.full.as_mut() {
+    state
+      .image_diagnostics
+      .record(full.home.artwork.take_summary());
+    state
+      .image_diagnostics
+      .record(full.browse.artwork.take_summary());
+    state
+      .image_diagnostics
+      .record(full.detail.artwork.take_summary());
+    state
+      .image_diagnostics
+      .record(full.personal_lists.artwork.take_summary());
+  }
+  state
+    .image_diagnostics
+    .record(state.playback.artwork.take_summary());
+  Task::batch([task, state.image_diagnostics.schedule()])
+}
+
+fn route_message(state: &mut State, message: Message) -> Task<Message> {
   match message {
     Message::UiLanguageSelected(preference) => select_ui_language(state, preference),
     Message::Account(message) => update_account(state, message),
@@ -242,14 +260,12 @@ pub fn update(state: &mut State, message: Message) -> Task<Message> {
       let Some(full) = state.full.as_mut() else {
         return Task::none();
       };
-      let task = super::personal_lists::update(
+      super::personal_lists::update(
         &mut full.personal_lists,
         &mut state.kernel,
         &state.watchlist,
         message,
-      );
-      state.retain_artwork_handles();
-      task
+      )
     }
     // Theme re-resolves every frame from state, so recording the OS mode is
     // the whole update; the next frame picks up the new effective theme.
@@ -258,10 +274,8 @@ pub fn update(state: &mut State, message: Message) -> Task<Message> {
       Task::none()
     }
     Message::Window(message) => {
-      // Cross-surface follow-ups hoisted out of the shell surface (ADR 0029):
-      // a close without an available tray runs the playback quit handshake,
-      // and a resize re-syncs the browse scroll window, after which handles
-      // are retained here because retention reads every surface's slot set.
+      // Window lifecycle owns cross-surface demand suspension; a resize also
+      // re-syncs the sparse metadata window before geometry observes its images.
       let skeletons_active = state.skeletons_active();
       let close_without_tray =
         matches!(message, WindowMessage::CloseRequested(_)) && state.kernel.tray.is_none();
@@ -273,6 +287,20 @@ pub fn update(state: &mut State, message: Message) -> Task<Message> {
         message,
       );
       let mut tasks = vec![window_task];
+      if !state.shell.images_visible {
+        playback::suspend_artwork(&mut state.playback);
+        if let Some(full) = state.full.as_mut() {
+          full.home.artwork.clear();
+          full.browse.artwork.clear();
+          full.detail.artwork.clear();
+          full.personal_lists.artwork.clear();
+        }
+      } else if matches!(message, WindowMessage::ShowRequested(_)) {
+        tasks.push(playback::resume_artwork(
+          &mut state.playback,
+          &mut state.kernel,
+        ));
+      }
       if close_without_tray {
         tasks.push(playback::apply_playback_input(
           &mut state.playback,
@@ -293,7 +321,6 @@ pub fn update(state: &mut State, message: Message) -> Task<Message> {
             size,
           ));
         }
-        state.retain_artwork_handles();
       }
       Task::batch(tasks)
     }
@@ -347,21 +374,7 @@ pub fn update(state: &mut State, message: Message) -> Task<Message> {
       let Some(full) = state.full.as_mut() else {
         return Task::none();
       };
-      let reprepared_artwork = matches!(
-        message,
-        HomeMessage::Loaded { .. } | HomeMessage::HeroSelected(_)
-      );
-      let task = home::update(
-        &mut full.home,
-        &mut state.kernel,
-        state.playback.view.now_playing.is_none(),
-        state.shell.window_size.width,
-        message,
-      );
-      if reprepared_artwork {
-        state.retain_artwork_handles();
-      }
-      task
+      home::update(&mut full.home, &mut state.kernel, message)
     }
     Message::Browse(BrowseMessage::SearchSubmitted) => {
       state.shell.compact_search_open = false;
@@ -384,10 +397,6 @@ pub fn update(state: &mut State, message: Message) -> Task<Message> {
         return Task::none();
       }
       let previous_notice = state.kernel.notice.clone();
-      let reprepared_artwork = matches!(
-        message,
-        BrowseMessage::PageSettled(..) | BrowseMessage::Scrolled(_)
-      );
       let source = match &message {
         BrowseMessage::SortChanged(_)
         | BrowseMessage::SortDirectionToggled
@@ -401,13 +410,9 @@ pub fn update(state: &mut State, message: Message) -> Task<Message> {
         &mut state.kernel,
         source,
         matches!(state.shell.destination, Destination::Library { .. }),
-        state.playback.view.now_playing.is_none(),
         state.shell.window_size,
         message,
       );
-      if reprepared_artwork {
-        state.retain_artwork_handles();
-      }
       if let Some(notice) = state
         .kernel
         .notice
@@ -468,22 +473,11 @@ pub fn update(state: &mut State, message: Message) -> Task<Message> {
       let Some(full) = state.full.as_mut() else {
         return Task::none();
       };
-      let reprepared_artwork = matches!(
-        message,
-        DetailMessage::Loaded { .. }
-          | DetailMessage::SeasonLoaded { .. }
-          | DetailMessage::NeighborsLoaded { .. }
-          | DetailMessage::SimilarLoaded { .. }
-      );
       let detail_item_id = match &state.shell.destination {
         Destination::Detail(item_id) => Some(item_id.as_str()),
         _ => None,
       };
-      let task = detail::update(&mut full.detail, &mut state.kernel, detail_item_id, message);
-      if reprepared_artwork {
-        state.retain_artwork_handles();
-      }
-      task
+      detail::update(&mut full.detail, &mut state.kernel, detail_item_id, message)
     }
     Message::Settings(message @ (SettingsMessage::Open | SettingsMessage::OpenAccounts)) => {
       if !state.shell.settings_open {
@@ -629,7 +623,8 @@ pub fn update(state: &mut State, message: Message) -> Task<Message> {
       state.dismiss_toast(id);
       Task::none()
     }
-    Message::ArtworkStreamCompleted(summary) => {
+    Message::ArtworkSummaryReady => {
+      let summary = state.image_diagnostics.drain();
       if let Some(message) = summary.diagnostic_message() {
         state.kernel.diagnostics.record(
           DiagnosticLevel::Info,
@@ -639,7 +634,58 @@ pub fn update(state: &mut State, message: Message) -> Task<Message> {
       }
       Task::none()
     }
+    Message::ImageObserved {
+      surface,
+      epoch,
+      spec,
+      priority,
+    } => observe_image(state, surface, epoch, spec, priority),
   }
+}
+
+fn observe_image(
+  state: &mut State,
+  surface: super::artwork::ArtworkSurface,
+  epoch: u64,
+  spec: super::artwork::ImageSpec,
+  priority: Option<super::artwork::ImagePriority>,
+) -> Task<Message> {
+  use super::artwork::ArtworkSurface;
+  if !state.shell.images_visible || !matches!(state.kernel.connection, ConnectionPhase::Connected) {
+    return Task::none();
+  }
+  let Some(client) = state.kernel.client.clone() else {
+    return Task::none();
+  };
+  let collection = match (&state.shell.destination, surface, state.full.as_mut()) {
+    (Destination::Home, ArtworkSurface::Home, Some(full)) => &mut full.home.artwork,
+    (Destination::Library { .. } | Destination::Search(_), ArtworkSurface::Browse, Some(full)) => {
+      &mut full.browse.artwork
+    }
+    (Destination::Detail(_), ArtworkSurface::Detail, Some(full)) => &mut full.detail.artwork,
+    (Destination::PersonalLists(_), ArtworkSurface::PersonalLists, Some(full)) => {
+      &mut full.personal_lists.artwork
+    }
+    _ => return Task::none(),
+  };
+  if collection.epoch() != epoch {
+    return Task::none();
+  }
+  collection.observe(
+    state.kernel.request_gate.current_session(),
+    spec,
+    priority,
+    client,
+    std::sync::Arc::clone(&state.kernel.artwork_adapter),
+    move |completion| match surface {
+      ArtworkSurface::Home => Message::Home(HomeMessage::ArtworkLoaded(completion)),
+      ArtworkSurface::Browse => Message::Browse(BrowseMessage::ArtworkLoaded(completion)),
+      ArtworkSurface::Detail => Message::Detail(DetailMessage::ArtworkLoaded(completion)),
+      ArtworkSurface::PersonalLists => Message::PersonalLists(
+        super::personal_lists::PersonalListsMessage::ArtworkLoaded(completion),
+      ),
+    },
+  )
 }
 
 #[cfg(test)]
@@ -653,7 +699,6 @@ mod tests {
   use jellypilot_auth::{AuthStorageError, AuthStore, SavedProfileKey};
   use jellypilot_core::browse_model::LibraryBrowseView;
   use jellypilot_core::config::SettingsStore;
-  use jellypilot_media_server::artwork::ArtworkLoadSummary;
   use jellypilot_media_server::{JellyfinClient, MediaServerProvider, VideoLibraryItem};
   use jellypilot_mpv::playback::{
     Playable, PlaybackOutcome, PlaybackRefreshOutcome, PlaybackRefreshState, PlaybackSnapshot,
@@ -664,9 +709,10 @@ mod tests {
   use jellypilot_session::IntroSkipMode;
   use jellypilot_ui::fonts;
 
+  use super::super::artwork::{ArtworkSurface, ImagePriority, ImageSpec, ImageStatus};
   use super::*;
   use crate::app::kernel::Kernel;
-  use crate::app::state::{ArtworkCellState, LoginState, RemoteSessionHandle};
+  use crate::app::state::{LoginState, RemoteSessionHandle};
 
   fn update_ui(
     ui: &mut iced_runtime::user_interface::UserInterface<'_, Message, iced::Theme, iced::Renderer>,
@@ -684,7 +730,12 @@ mod tests {
       renderer,
       &mut bus,
     );
-    messages.extend(bus.drain().map(|(message, _)| message));
+    messages.extend(
+      bus
+        .drain()
+        .map(|(message, _)| message)
+        .filter(|message| !matches!(message, Message::ImageObserved { .. })),
+    );
   }
 
   fn test_state() -> State {
@@ -695,6 +746,7 @@ mod tests {
     let login_flow = LoginState::from_settings(settings.snapshot());
     State {
       system_theme: iced::theme::Mode::None,
+      image_diagnostics: Default::default(),
       kernel: Kernel {
         settings,
         locale: Localizer::default(),
@@ -711,8 +763,6 @@ mod tests {
         tray: None,
         artwork_adapter: Arc::new(jellypilot_media_server::artwork::ArtworkAdapter::new()),
         avatar_adapter: Arc::new(jellypilot_media_server::artwork::ArtworkAdapter::new()),
-        artwork_binder: Default::default(),
-        artwork_handles: Default::default(),
         profile_avatars: Default::default(),
       },
       login: crate::app::login::Surface {
@@ -734,6 +784,50 @@ mod tests {
       watchlist: super::super::personal_lists::Runtime::default(),
       accounts: super::super::accounts::Surface::new(),
     }
+  }
+
+  fn image_reference(state: &mut State, name: &str) -> String {
+    use jellypilot_media_server::{
+      image_id_for_url, ImageRefKind, MediaServerProvider, SavedSession,
+    };
+    let server_url = "https://images.example.com";
+    let client = Arc::new(JellyfinClient::new());
+    client.login().adopt_validated_session(&SavedSession {
+      provider: MediaServerProvider::Jellyfin,
+      server_url: server_url.into(),
+      access_token: "test-token".into(),
+      user_id: "user".into(),
+      user_name: "user".into(),
+      server_name: None,
+      device_id: None,
+    });
+    state.kernel.client = Some(client);
+    state.kernel.connection = ConnectionPhase::Connected;
+    image_id_for_url(
+      MediaServerProvider::Jellyfin,
+      server_url,
+      format!("{server_url}/Items/{name}/Images/Primary"),
+      ImageRefKind::Artwork,
+    )
+    .expect("signed test image")
+  }
+
+  fn observe_browse_image(state: &mut State, key: &str, image_id: &str) {
+    let epoch = state.full.as_ref().unwrap().browse.artwork.epoch();
+    drop(update(
+      state,
+      Message::ImageObserved {
+        surface: ArtworkSurface::Browse,
+        epoch,
+        spec: ImageSpec {
+          key: key.into(),
+          image_id: image_id.into(),
+          size_class: jellypilot_media_server::artwork::ArtworkSizeClass::Card,
+          derived: Default::default(),
+        },
+        priority: Some(ImagePriority::Visible),
+      },
+    ));
   }
 
   #[tokio::test]
@@ -1109,6 +1203,7 @@ mod tests {
     ] {
       let mut state = test_state();
       state.kernel.connection = ConnectionPhase::Connected;
+      let backdrop_id = image_reference(&mut state, "backdrop-b");
       state.shell.window_size = bounds;
       state.playback.view.engine_available = true;
       let mut a = episode("a", 1);
@@ -1119,6 +1214,7 @@ mod tests {
         Some("A long series title that must remain identifiable in a compact window".to_owned());
       let mut b = episode("b", 1);
       b.series_id = Some("series-b".to_owned());
+      b.series_backdrop_image_id = Some(backdrop_id.clone());
       b.resume_position_seconds = Some(360.0);
       b.name = "Episode B".to_owned();
       b.series_name = Some("B long series title with many words that must not expand the selection card or cover the playback controls".to_owned());
@@ -1226,40 +1322,35 @@ mod tests {
 
       // An uncached Backdrop settling must not reset the rail's scroll or focus.
       let cache = ui.into_cache();
-      let slot = state
-        .kernel
-        .artwork_binder
-        .bind(jellypilot_core::artwork_binder::ArtworkSurface::Home);
-      state
-        .full
-        .as_mut()
-        .expect("Full mode")
-        .home
-        .artwork
-        .insert_hero_backdrop(
-          "b".to_owned(),
-          crate::app::state::ArtworkCell {
-            slot,
-            image_id: "backdrop-b".to_owned(),
-            state: crate::app::state::ArtworkCellState::Ready,
-          },
-        );
       let (image_width, image_height) = if with_prompt {
         (9_u32, 16_u32)
       } else {
         (16, 9)
       };
-      state.kernel.artwork_handles.insert(
-        slot,
-        "backdrop-b".to_owned(),
-        crate::app::state::ArtworkHandles::from_raster(
-          jellypilot_media_server::artwork::ArtworkRaster::from_raw_for_test(
-            image_width,
-            image_height,
-            [120, 180, 210, 255].repeat((image_width * image_height) as usize),
-          ),
+      state.kernel.artwork_adapter.seed_raster_for_test(
+        &backdrop_id,
+        jellypilot_media_server::artwork::ArtworkSizeClass::Backdrop,
+        jellypilot_media_server::artwork::ArtworkRaster::from_raw_for_test(
+          image_width,
+          image_height,
+          [120, 180, 210, 255].repeat((image_width * image_height) as usize),
         ),
       );
+      let epoch = state.full.as_ref().unwrap().home.artwork.epoch();
+      drop(update(
+        &mut state,
+        Message::ImageObserved {
+          surface: ArtworkSurface::Home,
+          epoch,
+          spec: ImageSpec {
+            key: home::ArtworkPlacement::HeroBackdrop.key("b"),
+            image_id: backdrop_id,
+            size_class: jellypilot_media_server::artwork::ArtworkSizeClass::Backdrop,
+            derived: Default::default(),
+          },
+          priority: Some(ImagePriority::Visible),
+        },
+      ));
       let mut ui = UserInterface::build(
         crate::app::view(&state, window),
         bounds,
@@ -2080,47 +2171,222 @@ mod tests {
   }
 
   #[test]
-  fn artwork_stream_completion_records_one_sanitized_aggregate_event() {
+  fn image_bursts_record_one_event_only_when_the_aggregate_is_flushed() {
     let mut state = test_state();
-    let summary = ArtworkLoadSummary {
-      raster_loads: 1,
-      memory_loads: 2,
-      disk_loads: 1,
-      network_loads: 3,
-      failed_loads: 1,
-      total_duration_millis: 120,
-      total_bytes: 4096,
-    };
-
-    drop(update(&mut state, Message::ArtworkStreamCompleted(summary)));
-
-    let artwork_events = state
+    let image_id = image_reference(&mut state, "shared");
+    state.shell.destination = Destination::Search("images".into());
+    state.kernel.artwork_adapter.seed_raster_for_test(
+      &image_id,
+      jellypilot_media_server::artwork::ArtworkSizeClass::Card,
+      jellypilot_media_server::artwork::ArtworkRaster::from_raw_for_test(1, 1, vec![1, 2, 3, 255]),
+    );
+    observe_browse_image(&mut state, "one", &image_id);
+    observe_browse_image(&mut state, "two", &image_id);
+    assert!(!state
       .kernel
       .diagnostics
       .rows()
-      .filter(|row| row.category == DiagnosticCategory::Artwork)
-      .count();
-    assert_eq!(artwork_events, 1);
+      .any(|event| event.category == DiagnosticCategory::Artwork));
+    drop(update(&mut state, Message::ArtworkSummaryReady));
+    drop(update(&mut state, Message::ArtworkSummaryReady));
+    assert_eq!(
+      state
+        .kernel
+        .diagnostics
+        .rows()
+        .filter(|event| event.category == DiagnosticCategory::Artwork)
+        .count(),
+      1
+    );
+  }
 
-    // An empty summary records nothing.
+  #[test]
+  fn disappearing_image_revocation_survives_metadata_retention_and_allows_reentry() {
+    let mut state = test_state();
+    let image_id = image_reference(&mut state, "retained");
+    state.shell.destination = Destination::Search("images".into());
+    let spec = ImageSpec {
+      key: "card".into(),
+      image_id: image_id.clone(),
+      size_class: jellypilot_media_server::artwork::ArtworkSizeClass::Card,
+      derived: Default::default(),
+    };
+    state.kernel.artwork_adapter.seed_raster_for_test(
+      &image_id,
+      spec.size_class,
+      jellypilot_media_server::artwork::ArtworkRaster::from_raw_for_test(1, 1, vec![1, 2, 3, 255]),
+    );
+    observe_browse_image(&mut state, "card", &image_id);
+    let images = &mut state.full.as_mut().unwrap().browse.artwork;
+    let epoch = images.epoch();
+    // A failed refresh may retain its data while replacing all cards with an
+    // error surface. Its last rendered marker still owns the final revocation.
+    images.retain(std::slice::from_ref(&spec));
     drop(update(
       &mut state,
-      Message::ArtworkStreamCompleted(ArtworkLoadSummary::default()),
+      Message::ImageObserved {
+        surface: ArtworkSurface::Browse,
+        epoch,
+        spec,
+        priority: None,
+      },
     ));
-    let artwork_events = state
-      .kernel
-      .diagnostics
-      .rows()
-      .filter(|row| row.category == DiagnosticCategory::Artwork)
-      .count();
-    assert_eq!(artwork_events, 1);
+    assert!(state
+      .full
+      .as_ref()
+      .unwrap()
+      .browse
+      .artwork
+      .get("card")
+      .is_none());
+    observe_browse_image(&mut state, "card", &image_id);
+    assert!(state
+      .full
+      .as_ref()
+      .unwrap()
+      .browse
+      .artwork
+      .get("card")
+      .unwrap()
+      .handle()
+      .is_some());
+  }
+
+  #[tokio::test]
+  async fn browse_scrolling_with_cached_images_settles_before_redraw_retry_limit() {
+    use iced::advanced::renderer::Headless;
+    use iced::{mouse, Event, Font, Point, Size};
+    use iced_runtime::user_interface::{Cache, UserInterface};
+    use jellypilot_core::browse_model::{BrowseEffect, BrowsePagePayload, BrowsePageSettlement};
+
+    let mut state = test_state();
+    let image_id = image_reference(&mut state, "scroll-regression");
+    state
+      .shell
+      .navigate_to(Destination::Search("scroll regression".into()));
+    let source = shell::browse_source(&state).unwrap();
+    let browse = &mut state.full.as_mut().unwrap().browse;
+    let mut effects = browse.data.configure(source).unwrap();
+    let mut expanded = false;
+    while let Some(effect) = effects.pop() {
+      let BrowseEffect::RequestPage(request) = effect else {
+        continue;
+      };
+      let end = (request.start_index + request.limit).min(240);
+      effects.extend(
+        browse
+          .data
+          .settle(BrowsePageSettlement {
+            source_id: request.source_id,
+            token: request.token,
+            result: Ok(BrowsePagePayload {
+              start_index: request.start_index,
+              limit: request.limit,
+              total_record_count: 240,
+              has_more: end < 240,
+              items: (request.start_index..end)
+                .map(|index| {
+                  let mut item = episode(&format!("scroll-{index}"), 1);
+                  item.artwork_image_id = Some(image_id.clone());
+                  item
+                })
+                .collect(),
+            }),
+          })
+          .unwrap(),
+      );
+      if !expanded {
+        expanded = true;
+        effects.extend(browse.data.set_display_range(0..240, 240).unwrap());
+      }
+    }
+    browse.view = browse.data.view();
+    state.kernel.artwork_adapter.seed_raster_for_test(
+      &image_id,
+      jellypilot_media_server::artwork::ArtworkSizeClass::Card,
+      jellypilot_media_server::artwork::ArtworkRaster::from_raw_for_test(2, 3, vec![255; 24]),
+    );
+    let mut renderer = iced::Renderer::new(
+      iced::advanced::renderer::Settings {
+        font: Font::DEFAULT,
+        text_size: 14.0.into(),
+        line_height: fonts::DEFAULT_LINE_HEIGHT,
+        metrics_hinting: false,
+      },
+      Some("tiny-skia"),
+    )
+    .await
+    .unwrap();
+    // Fractional card sizes expose demand-boundary crossings where a placeholder
+    // that fills the copy area can repeatedly admit and revoke the same image.
+    let bounds = Size::new(1349.0, 731.0);
+    state.shell.window_size = bounds;
+    let window = iced::window::Id::unique();
+    let cursor = mouse::Cursor::Available(Point::new(800.0, 450.0));
+    let mut cache = Cache::new();
+    for frame in 0..80 {
+      if frame > 0 {
+        let mut ui = UserInterface::build(
+          crate::app::view(&state, window),
+          bounds,
+          cache,
+          &mut renderer,
+        );
+        let mut bus = iced::advanced::shell::Bus::new();
+        ui.update(
+          &iced::window::Headless,
+          &iced::advanced::shell::Waker::noop(),
+          &[Event::Mouse(mouse::Event::WheelScrolled {
+            delta: mouse::ScrollDelta::Pixels { x: 0.0, y: -100.0 },
+          })],
+          cursor,
+          &mut renderer,
+          &mut bus,
+        );
+        cache = ui.into_cache();
+        for (message, _) in bus.drain() {
+          drop(update(&mut state, message));
+        }
+      }
+      let redraw = Event::Window(iced::window::Event::RedrawRequested(Instant::now()));
+      for pass in 0..3 {
+        let mut ui = UserInterface::build(
+          crate::app::view(&state, window),
+          bounds,
+          cache,
+          &mut renderer,
+        );
+        let mut bus = iced::advanced::shell::Bus::new();
+        let (ui_state, _) = ui.update(
+          &iced::window::Headless,
+          &iced::advanced::shell::Waker::noop(),
+          std::slice::from_ref(&redraw),
+          cursor,
+          &mut renderer,
+          &mut bus,
+        );
+        cache = ui.into_cache();
+        let messages = bus.drain().map(|(message, _)| message).collect::<Vec<_>>();
+        let unstable = !messages.is_empty() || ui_state.has_layout_changed();
+        assert!(
+          !unstable || pass < 2,
+          "redraw retry limit at frame {frame}, pass {pass}: {messages:?}",
+        );
+        for message in messages {
+          drop(update(&mut state, message));
+        }
+        if !unstable {
+          break;
+        }
+      }
+    }
   }
 
   #[test]
   fn back_restores_search_results_viewport_and_cached_artwork() {
     use jellypilot_core::browse_model::{BrowseEffect, BrowsePagePayload, BrowsePageSettlement};
     let mut state = test_state();
-    state.kernel.client = Some(Arc::new(JellyfinClient::new()));
+    let image_id = image_reference(&mut state, "browse-art-1");
     let destination = Destination::Search("original query".to_owned());
     state.shell.navigate_to(destination.clone());
     let source = shell::browse_source(&state).expect("search source");
@@ -2139,7 +2405,7 @@ mod tests {
       })
       .unwrap();
     let mut item = episode("browse-item-1", 1);
-    item.artwork_image_id = Some("browse-art-1".to_owned());
+    item.artwork_image_id = Some(image_id.clone());
     browse
       .data
       .settle(BrowsePageSettlement {
@@ -2164,7 +2430,7 @@ mod tests {
     browse.viewport.offset_y = 500.0;
     browse.search_input = "original query".to_owned();
     state.kernel.artwork_adapter.seed_raster_for_test(
-      "browse-art-1",
+      &image_id,
       jellypilot_media_server::artwork::ArtworkSizeClass::Card,
       jellypilot_media_server::artwork::ArtworkRaster::from_raw_for_test(1, 1, vec![1, 2, 3, 4]),
     );
@@ -2186,6 +2452,7 @@ mod tests {
       Message::Browse(BrowseMessage::SearchSubmitted),
     ));
     drop(shell::navigate_back(&mut state));
+    observe_browse_image(&mut state, "browse-item-1", &image_id);
 
     assert_eq!(state.shell.destination, destination);
     let browse = &state.full.as_ref().unwrap().browse;
@@ -2199,17 +2466,13 @@ mod tests {
       .artwork
       .get("browse-item-1")
       .expect("restored poster");
-    assert!(state
-      .kernel
-      .artwork_handles
-      .get(cell.slot, "browse-art-1")
-      .is_some());
+    assert!(cell.handle().is_some());
   }
 
   #[test]
   fn reselecting_active_played_filter_keeps_loaded_artwork() {
     let mut state = test_state();
-    state.kernel.client = Some(Arc::new(JellyfinClient::new()));
+    let image_id = image_reference(&mut state, "browse-art-1");
     state.full.as_mut().unwrap().home.data.shortcuts =
       jellypilot_core::LoadState::Ready(vec![jellypilot_media_server::VideoLibraryShortcut {
         id: "movies".to_owned(),
@@ -2243,21 +2506,19 @@ mod tests {
         _ => None,
       })
       .expect("bootstrap page request is emitted");
-    // Seed the raster cache before settlement: the settlement's own artwork
-    // preparation then settles the poster synchronously from cache.
+    // Data settlement retains candidates; geometry admits the cached image.
     state.kernel.artwork_adapter.seed_raster_for_test(
-      "browse-art-1",
+      &image_id,
       jellypilot_media_server::artwork::ArtworkSizeClass::Card,
       jellypilot_media_server::artwork::ArtworkRaster::from_raw_for_test(1, 1, vec![1, 2, 3, 4]),
     );
     let mut item = episode("browse-item-1", 1);
-    item.artwork_image_id = Some("browse-art-1".to_owned());
+    item.artwork_image_id = Some(image_id.clone());
     drop(browse::update(
       &mut state.full.as_mut().unwrap().browse,
       &mut state.kernel,
       None,
       false,
-      state.playback.view.now_playing.is_none(),
       state.shell.window_size,
       BrowseMessage::PageSettled(
         0,
@@ -2279,7 +2540,7 @@ mod tests {
       LibraryBrowseView::Ready { .. }
     ));
 
-    state.retain_artwork_handles();
+    observe_browse_image(&mut state, "browse-item-1", &image_id);
     assert_eq!(
       state
         .full
@@ -2289,7 +2550,7 @@ mod tests {
         .artwork
         .get("browse-item-1")
         .map(|cell| cell.state),
-      Some(ArtworkCellState::Ready)
+      Some(ImageStatus::Ready)
     );
 
     // `All` is the default played filter: this click changes nothing, so the
@@ -2311,12 +2572,8 @@ mod tests {
       .artwork
       .get("browse-item-1")
       .expect("reselecting the active filter must not drop artwork cells");
-    assert_eq!(cell.state, ArtworkCellState::Ready);
-    assert!(state
-      .kernel
-      .artwork_handles
-      .get(cell.slot, "browse-art-1")
-      .is_some());
+    assert_eq!(cell.state, ImageStatus::Ready);
+    assert!(cell.handle().is_some());
   }
   #[test]
   fn search_draft_and_escape_do_not_replace_submitted_results() {

@@ -17,10 +17,8 @@ pub const POSTER_ASPECT_RATIO: f32 = 1.5;
 
 const COLUMN_GAP: f32 = TOKENS.spacing.s4;
 const ROW_GAP: f32 = TOKENS.spacing.s4;
-const MIN_OVERSCAN_ROWS: usize = 6;
-const MAX_OVERSCAN_ROWS: usize = 18;
 
-/// The part of a grid intersecting its parent scroll viewport.
+/// The full parent scroll viewport in signed grid-local coordinates.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct ArtworkGridViewport {
     pub offset_y: f32,
@@ -48,13 +46,14 @@ impl ArtworkGridViewport {
         viewport_height: f32,
         grid_scroll_margin: f32,
     ) -> Self {
-        let margin = finite_non_negative(grid_scroll_margin);
-        let viewport_end = viewport_offset + viewport_height;
-        let visible_start = viewport_offset.max(margin);
-
+        let offset_y = viewport_offset - grid_scroll_margin;
         Self {
-            offset_y: (viewport_offset - margin).max(0.0),
-            height: (viewport_end - visible_start).clamp(0.0, viewport_height),
+            offset_y: if offset_y.is_finite() { offset_y } else { 0.0 },
+            height: if offset_y.is_finite() {
+                finite_non_negative(viewport_height)
+            } else {
+                0.0
+            },
         }
     }
 }
@@ -106,10 +105,9 @@ impl ArtworkGridMetrics {
 
 /// Renders the visible and overscanned rows of a responsive artwork grid.
 ///
-/// The parent stores the latest [`scrollable::Viewport`] received from
-/// [`scrollable::Scrollable::on_scroll`], converts it with
-/// [`ArtworkGridViewport::from_scrollable`], and supplies the measured grid
-/// width. Cells look up items by global item index and may contain any normal
+/// The parent supplies measured, grid-local viewport geometry and grid width.
+/// Before its first measurement it may supply a bounded fallback viewport.
+/// Cells look up items by global item index and may contain any normal
 /// iced widgets.
 pub fn artwork_grid<'a, Message, Builder>(
     item_count: usize,
@@ -121,6 +119,9 @@ where
     Message: 'a,
     Builder: Fn(usize) -> Element<'a, Message>,
 {
+    if metrics.columns == 0 {
+        return Space::new().into();
+    }
     let row_count = item_count.div_ceil(metrics.columns);
     let window = row_window(
         row_count,
@@ -174,7 +175,7 @@ struct RowWindow {
 }
 
 fn row_window(row_count: usize, offset_y: f32, viewport_height: f32, row_height: f32) -> RowWindow {
-    if row_count == 0 {
+    if row_count == 0 || !row_height.is_finite() || row_height <= 0.0 {
         return RowWindow {
             visible_start: 0,
             visible_end: 0,
@@ -185,20 +186,25 @@ fn row_window(row_count: usize, offset_y: f32, viewport_height: f32, row_height:
         };
     }
 
-    let row_height = if row_height.is_finite() && row_height > 0.0 {
-        row_height
+    let viewport_height = if offset_y.is_finite() {
+        finite_non_negative(viewport_height)
     } else {
-        1.0
+        0.0
     };
-    let offset_y = finite_non_negative(offset_y);
-    let viewport_height = finite_non_negative(viewport_height);
     let visible_start = ((offset_y / row_height).floor() as usize).min(row_count);
-    let visible_end = (((offset_y + viewport_height) / row_height).ceil() as usize)
-        .max(visible_start)
-        .min(row_count);
-    let overscan = overscan_rows(viewport_height, row_height);
-    let start = visible_start.saturating_sub(overscan);
-    let end = visible_end.saturating_add(overscan).min(row_count);
+    let visible_end = if viewport_height == 0.0 {
+        visible_start
+    } else {
+        (((offset_y + viewport_height) / row_height).ceil() as usize).min(row_count)
+    };
+    let (start, end) = if viewport_height == 0.0 {
+        (0, 0)
+    } else {
+        (
+            (((offset_y - viewport_height).max(0.0) / row_height).floor() as usize).min(row_count),
+            (((offset_y + 2.0 * viewport_height) / row_height).ceil() as usize).min(row_count),
+        )
+    };
 
     let remaining_rows = row_count.saturating_sub(end);
 
@@ -207,27 +213,17 @@ fn row_window(row_count: usize, offset_y: f32, viewport_height: f32, row_height:
         visible_end,
         start,
         end,
-        top_spacer: start as f32 * row_height,
+        top_spacer: if start == row_count {
+            (start as f32 * row_height - ROW_GAP).max(0.0)
+        } else {
+            start as f32 * row_height
+        },
         bottom_spacer: if remaining_rows == 0 {
             0.0
         } else {
             (remaining_rows as f32 * row_height - ROW_GAP).max(0.0)
         },
     }
-}
-
-fn overscan_rows(viewport_height: f32, row_height: f32) -> usize {
-    if !viewport_height.is_finite()
-        || viewport_height <= 0.0
-        || !row_height.is_finite()
-        || row_height <= 0.0
-    {
-        return MIN_OVERSCAN_ROWS;
-    }
-
-    ((viewport_height / row_height).ceil() as usize)
-        .saturating_mul(2)
-        .clamp(MIN_OVERSCAN_ROWS, MAX_OVERSCAN_ROWS)
 }
 
 fn finite_non_negative(value: f32) -> f32 {
@@ -245,89 +241,58 @@ mod tests {
     use iced::Element;
 
     use super::{
-        artwork_grid, overscan_rows, row_window, ArtworkGridMetrics, ArtworkGridViewport,
-        RowWindow, MAX_OVERSCAN_ROWS, MIN_OVERSCAN_ROWS, ROW_GAP,
+        artwork_grid, row_window, ArtworkGridMetrics, ArtworkGridViewport, RowWindow, ROW_GAP,
     };
 
     const ROW_HEIGHT: f32 = 100.0;
 
     #[test]
-    fn offset_zero_renders_visible_rows_and_forward_overscan() {
-        assert_eq!(
-            row_window(100, 0.0, 300.0, ROW_HEIGHT),
-            RowWindow {
-                visible_start: 0,
-                visible_end: 3,
-                start: 0,
-                end: 9,
-                top_spacer: 0.0,
-                bottom_spacer: 9_084.0,
-            }
-        );
+    fn prefetch_window_rounds_outward_without_expanding_visible_classification() {
+        let offset = 200_025.0;
+        let height = 325.0;
+        let window = row_window(100_000, offset, height, ROW_HEIGHT);
+        assert_eq!((window.visible_start, window.visible_end), (2_000, 2_004));
+        let start_y = window.start as f32 * ROW_HEIGHT;
+        let end_y = window.end as f32 * ROW_HEIGHT;
+        assert!(start_y <= offset - height && start_y + ROW_HEIGHT > offset - height);
+        assert!(end_y >= offset + 2.0 * height && end_y - ROW_HEIGHT < offset + 2.0 * height);
+        assert!(window.end - window.start <= (3.0 * height / ROW_HEIGHT).ceil() as usize + 1);
     }
 
     #[test]
-    fn middle_offset_overscans_both_sides() {
-        assert_eq!(
-            row_window(100, 2_000.0, 300.0, ROW_HEIGHT),
-            RowWindow {
-                visible_start: 20,
-                visible_end: 23,
-                start: 14,
-                end: 29,
-                top_spacer: 1_400.0,
-                bottom_spacer: 7_084.0,
-            }
-        );
+    fn prefetch_window_clips_at_both_content_edges() {
+        let top = row_window(100, 0.0, 300.0, ROW_HEIGHT);
+        let bottom = row_window(100, 9_700.0, 300.0, ROW_HEIGHT);
+        assert_eq!((top.start, top.end), (0, 6));
+        assert_eq!((bottom.start, bottom.end), (94, 100));
+        assert_eq!(top.top_spacer, 0.0);
+        assert_eq!(bottom.bottom_spacer, 0.0);
     }
 
     #[test]
-    fn end_offset_clamps_window_and_bottom_spacer() {
-        assert_eq!(
-            row_window(100, 9_700.0, 300.0, ROW_HEIGHT),
-            RowWindow {
-                visible_start: 97,
-                visible_end: 100,
-                start: 91,
-                end: 100,
-                top_spacer: 9_100.0,
-                bottom_spacer: 0.0,
-            }
-        );
-    }
-
-    #[test]
-    fn viewport_resize_recomputes_visible_and_overscan_rows() {
+    fn viewport_resize_recomputes_visible_and_prefetch_rows() {
         let small = row_window(100, 2_000.0, 100.0, ROW_HEIGHT);
         let large = row_window(100, 2_000.0, 1_000.0, ROW_HEIGHT);
-
-        assert_eq!(
-            (
-                small.visible_start,
-                small.visible_end,
-                small.start,
-                small.end
-            ),
-            (20, 21, 14, 27)
-        );
-        assert_eq!(
-            (
-                large.visible_start,
-                large.visible_end,
-                large.start,
-                large.end
-            ),
-            (20, 30, 2, 48)
-        );
+        assert_eq!(small.visible_start, large.visible_start);
+        assert_eq!(large.visible_end - small.visible_end, 9);
+        assert_eq!(small.start - large.start, 9);
+        assert_eq!(large.end - small.end, 18);
     }
 
     #[test]
-    fn overscan_policy_clamps_to_documented_boundaries() {
-        assert_eq!(overscan_rows(100.0, ROW_HEIGHT), MIN_OVERSCAN_ROWS);
-        assert_eq!(overscan_rows(300.0, ROW_HEIGHT), MIN_OVERSCAN_ROWS);
-        assert_eq!(overscan_rows(900.0, ROW_HEIGHT), MAX_OVERSCAN_ROWS);
-        assert_eq!(overscan_rows(2_000.0, ROW_HEIGHT), MAX_OVERSCAN_ROWS);
-        assert_eq!(overscan_rows(f32::NAN, ROW_HEIGHT), MIN_OVERSCAN_ROWS);
+    fn unusable_geometry_materializes_no_rows() {
+        for invalid in [0.0, -1.0, f32::NAN, f32::INFINITY] {
+            let invalid_viewport = row_window(100, 250.0, invalid, ROW_HEIGHT);
+            let invalid_row = row_window(100, 250.0, 300.0, invalid);
+            assert_eq!(invalid_viewport.start, invalid_viewport.end);
+            assert_eq!(invalid_viewport.visible_start, invalid_viewport.visible_end);
+            assert_eq!(invalid_row.start, invalid_row.end);
+        }
+        for invalid_offset in [f32::NAN, f32::INFINITY, f32::NEG_INFINITY] {
+            let window = row_window(100, invalid_offset, 300.0, ROW_HEIGHT);
+            assert_eq!(window.start, window.end);
+            assert_eq!(window.visible_start, window.visible_end);
+        }
     }
 
     #[test]
@@ -347,11 +312,11 @@ mod tests {
     }
 
     #[test]
-    fn offset_beyond_content_keeps_a_trailing_overscan_window() {
+    fn offset_beyond_prefetch_distance_materializes_no_rows() {
         let window = row_window(10, 5_000.0, 300.0, ROW_HEIGHT);
 
         assert_eq!((window.visible_start, window.visible_end), (10, 10));
-        assert_eq!((window.start, window.end), (4, 10));
+        assert_eq!((window.start, window.end), (10, 10));
     }
 
     #[test]
@@ -375,14 +340,49 @@ mod tests {
     }
 
     #[test]
-    fn from_scrollable_conversion_clips_the_viewport_before_the_grid() {
+    fn from_scrollable_conversion_preserves_signed_top_and_full_height() {
         assert_eq!(
             ArtworkGridViewport::from_scroll_geometry(80.0, 100.0, 120.0),
             ArtworkGridViewport {
-                offset_y: 0.0,
-                height: 60.0,
+                offset_y: -40.0,
+                height: 100.0,
             }
         );
+    }
+
+    #[test]
+    fn invalid_scroll_geometry_cannot_materialize_demand_rows() {
+        for (offset, height, margin) in [
+            (f32::NAN, 300.0, 120.0),
+            (0.0, f32::INFINITY, 120.0),
+            (0.0, 300.0, f32::NAN),
+            (0.0, 0.0, 120.0),
+        ] {
+            let viewport = ArtworkGridViewport::from_scroll_geometry(offset, height, margin);
+            let window = row_window(100, viewport.offset_y, viewport.height, ROW_HEIGHT);
+            assert_eq!(window.start, window.end);
+        }
+    }
+
+    #[test]
+    fn header_offset_keeps_the_preceding_demanded_row_when_scrolling_both_ways() {
+        for raw_offset in [520.0, 920.0, 520.0] {
+            let viewport = ArtworkGridViewport::from_scroll_geometry(raw_offset, 300.0, 120.0);
+            let window = row_window(100, viewport.offset_y, viewport.height, ROW_HEIGHT);
+            assert_eq!(
+                window.start,
+                ((raw_offset - 120.0 - 300.0) / ROW_HEIGHT) as usize
+            );
+            assert_eq!(
+                window.end,
+                ((raw_offset - 120.0 + 600.0) / ROW_HEIGHT) as usize
+            );
+        }
+        let above_grid = row_window(100, -120.0, 300.0, ROW_HEIGHT);
+        assert_eq!((above_grid.visible_start, above_grid.visible_end), (0, 2));
+        assert_eq!((above_grid.start, above_grid.end), (0, 5));
+        let distant = row_window(100, -700.0, 300.0, ROW_HEIGHT);
+        assert_eq!((distant.start, distant.end), (0, 0));
     }
 
     #[test]
@@ -409,30 +409,15 @@ mod tests {
             wide_metrics.row_height,
         );
 
-        assert_eq!(
-            (
-                narrow_metrics.columns,
-                narrow_row_count,
-                narrow_window.visible_start,
-                narrow_window.visible_end,
-                narrow_window.start,
-                narrow_window.end,
-                narrow_window.bottom_spacer,
-            ),
-            (1, 60, 3, 5, 0, 11, 15_468.0)
-        );
-        assert_eq!(
-            (
-                wide_metrics.columns,
-                wide_row_count,
-                wide_window.visible_start,
-                wide_window.visible_end,
-                wide_window.start,
-                wide_window.end,
-                wide_window.bottom_spacer,
-            ),
-            (3, 20, 4, 7, 0, 13, 1_440.0)
-        );
+        assert_ne!(narrow_metrics.columns, wide_metrics.columns);
+        for (metrics, window) in [(narrow_metrics, narrow_window), (wide_metrics, wide_window)] {
+            let first_y = window.start as f32 * metrics.row_height;
+            let end_y = window.end as f32 * metrics.row_height;
+            assert!(first_y <= viewport.offset_y - viewport.height);
+            assert!(first_y + metrics.row_height > viewport.offset_y - viewport.height);
+            assert!(end_y >= viewport.offset_y + 2.0 * viewport.height);
+            assert!(end_y - metrics.row_height < viewport.offset_y + 2.0 * viewport.height);
+        }
     }
 
     #[test]
@@ -444,9 +429,11 @@ mod tests {
             row_window(row_count, 0.0, 300.0, ROW_HEIGHT),
             row_window(row_count, 2_000.0, 300.0, ROW_HEIGHT),
             row_window(row_count, 9_700.0, 300.0, ROW_HEIGHT),
+            row_window(row_count, 20_000.0, 300.0, ROW_HEIGHT),
+            row_window(row_count, 250.0, 0.0, ROW_HEIGHT),
         ] {
             let mut rendered_extent = window.end.saturating_sub(window.start) as f32 * ROW_HEIGHT;
-            if window.end == row_count {
+            if window.end == row_count && window.start < window.end {
                 rendered_extent -= ROW_GAP;
             }
 
@@ -481,24 +468,22 @@ mod tests {
             cell_height: 100.0,
             row_height: 100.0,
         };
-        // With row_height=100.0 and viewport_height=100.0, overscan is MIN_OVERSCAN_ROWS (6).
-        // An offset_y of 800.0 puts visible_start at row 8, so window start is row 2 (8 - 6 = 2).
-        // For columns=4, row 2 starts at global item index 8.
         let viewport = ArtworkGridViewport {
-            offset_y: 800.0,
-            height: 100.0,
+            offset_y: 200_025.0,
+            height: 2_025.0,
         };
-        let _element: Element<'_, ()> = artwork_grid(100, metrics, viewport, |index| {
+        let _element: Element<'_, ()> = artwork_grid(1_000_000, metrics, viewport, |index| {
             built_indexes.borrow_mut().push(index);
             iced::widget::Space::new().into()
         });
 
         let indexes = built_indexes.into_inner();
-        assert_eq!(indexes.first(), Some(&8));
-        // Window end is visible_end (9) + overscan (6) = 15.
-        // Row 14 ends at global item index 60 (exclusive).
-        assert_eq!(indexes.last(), Some(&59));
-        assert_eq!(indexes, (8..60).collect::<Vec<_>>());
+        let expected_rows = 1_980..2_041;
+        assert_eq!(
+            indexes,
+            (expected_rows.start * metrics.columns..expected_rows.end * metrics.columns)
+                .collect::<Vec<_>>()
+        );
     }
 
     #[test]

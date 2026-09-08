@@ -2,6 +2,8 @@
 
 _Status: Accepted. Complements [ADR 0017](0017-origin-encoded-library-image-cache.md) and amends the loading half of [ADR 0027](0027-cross-platform-iced-frontend.md) slice 5._
 
+_Loading granularity, demand ownership, and handle correlation are amended by [ADR 0036](0036-demand-owned-library-image-lifecycle.md). The original decision below records the earlier trade-off._
+
 ## Context
 
 The iced frontend's Library Image pipeline (ADR 0027 slice 5) fetches through a

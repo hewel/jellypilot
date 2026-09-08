@@ -1,9 +1,9 @@
 use std::fmt;
 
 use crate::app::message::{Message, PlaybackMessage, SettingsMessage};
-use crate::app::playback::QueueState;
+use crate::app::playback::{QueueState, PLAYER_IMAGE_KEY};
 use crate::app::shell::SETTINGS_TRIGGER_ID;
-use crate::app::state::{ArtworkCellState, State};
+use crate::app::state::State;
 use crate::i18n::Localizer;
 use iced::widget::{button, column, container, row, scrollable, slider, space, text, Column};
 use iced::{Alignment, ContentFit, Element, Fill, Length};
@@ -762,16 +762,17 @@ fn media_type(locale: Localizer, item_type: &str) -> String {
 
 fn playback_artwork(state: &State, width: f32, height: f32) -> Element<'_, Message> {
   let palette = state.palette();
-  if let Some(cell) = &state.playback.artwork {
-    if cell.state == ArtworkCellState::Ready {
-      if let Some(handle) = state.kernel.artwork_handles.get(cell.slot, &cell.image_id) {
-        return rounded_image(handle.clone(), full_radius(TOKENS.radii.lg))
-          .content_fit(ContentFit::Cover)
-          .width(width)
-          .height(height)
-          .into();
-      }
-    }
+  if let Some(handle) = state
+    .playback
+    .artwork
+    .get(PLAYER_IMAGE_KEY)
+    .and_then(|cell| cell.handle())
+  {
+    return rounded_image(handle.clone(), full_radius(TOKENS.radii.lg))
+      .content_fit(ContentFit::Cover)
+      .width(width)
+      .height(height)
+      .into();
   }
   container(icon_with_color(
     Icon::Movie,
@@ -844,7 +845,7 @@ mod tests {
   }
 
   #[test]
-  fn bar_composition_and_artwork_stable_across_position_settlement() {
+  fn bar_keeps_playing_across_position_settlement() {
     let mut state = State::boot(false);
     let now = Instant::now();
     state.playback.session.handle(
@@ -922,24 +923,6 @@ mod tests {
     );
     state.playback.view = state.playback.session.view();
 
-    let slot = state.kernel.artwork_binder.bind_player_bar();
-    let image_id = "test-artwork-image".to_owned();
-    state.playback.artwork = Some(crate::app::state::ArtworkCell {
-      slot,
-      image_id: image_id.clone(),
-      state: ArtworkCellState::Ready,
-    });
-    state.kernel.artwork_handles.insert(
-      slot,
-      image_id.clone(),
-      crate::app::state::ArtworkHandles::from_main(iced::widget::image::Handle::from_rgba(
-        2,
-        1,
-        vec![0; 8],
-      )),
-    );
-
-    let initial_artwork = state.playback.artwork.clone();
     assert!(bar(&state).is_some());
 
     // Issue tick intent to trigger refresh
@@ -997,9 +980,6 @@ mod tests {
       Some(121.0)
     );
 
-    // Verify artwork cell, slot, image_id, and retained handle identity remain unchanged
-    assert_eq!(state.playback.artwork, initial_artwork);
-    assert!(state.kernel.artwork_handles.get(slot, &image_id).is_some());
     assert!(bar(&state).is_some());
   }
 
