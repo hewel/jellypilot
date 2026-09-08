@@ -2,6 +2,8 @@
 
 _Status: Accepted. Amends ADR 0022's adapter placement; implements ADR 0024's shared-session decision._
 
+_Intro Skipper evaluation ownership is amended by [ADR 0038](0038-state-owned-intro-skipper-policy.md), which implements a state-owning policy module in `jellypilot-core`. WebSocket ownership remains unchanged. The original extraction decision follows._
+
 ## Context
 
 ADR 0022 kept the Jellyfin `SessionManager`, WebSocket command channel, and playback-event

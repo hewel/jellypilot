@@ -1799,6 +1799,7 @@ mod tests {
   use jellypilot_auth::AuthStore;
   use jellypilot_core::config::SettingsStore;
   use jellypilot_core::diagnostics::Diagnostics;
+  use jellypilot_core::intro_skipper::IntroSkipMode;
   use jellypilot_core::request_gate::RequestGate;
   use jellypilot_media_server::{
     JellyfinClient, MediaItem, VideoItemDetail, VideoLibraryItem, VideoSeasonEpisodes,
@@ -1808,7 +1809,7 @@ mod tests {
     PlaybackRefreshState, PlaybackSelection, PlaybackSnapshot,
   };
   use jellypilot_mpv::playback_session::{IntroAvailability, NowPlayingView, TracksView};
-  use jellypilot_session::{GeneralCommand, IntroSkipMode, JellyfinCommand, PlayRequest};
+  use jellypilot_session::{GeneralCommand, JellyfinCommand, PlayRequest};
 
   use super::*;
 

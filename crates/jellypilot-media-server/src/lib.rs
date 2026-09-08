@@ -21,8 +21,5 @@ pub use image_ref::{
   image_id_for_url, normalize_server_url, sized_origin_url, user_image_id, ImageRefError,
   ImageRefKind,
 };
-pub use intro_skipper::{
-  evaluate_manual_skip, evaluate_skip, evaluate_skip_prompt, IntroSkipDecision, IntroSkipKind,
-  IntroSkipRange,
-};
+pub use intro_skipper::{IntroSkipKind, IntroSkipRange};
 pub use types::*;

@@ -154,7 +154,6 @@ fn update_settings(
       let result = kernel.settings.set_image_cache_enabled(enabled);
       if finish_settings_mutation(surface, kernel, result) {
         kernel.artwork_adapter.set_disk_cache_enabled(enabled);
-        kernel.avatar_adapter.set_disk_cache_enabled(enabled);
       }
       Task::none()
     }

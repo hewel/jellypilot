@@ -1,6 +1,6 @@
 [package]
 name = "jellypilot-session"
-description = "Shared Jellyfin session protocol and Intro Skipper evaluation for JellyPilot"
+description = "Shared Jellyfin session protocol for JellyPilot"
 edition.workspace = true
 license.workspace = true
 repository.workspace = true

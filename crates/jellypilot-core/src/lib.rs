@@ -1,7 +1,7 @@
 //! Framework-independent application state and presentation logic for JellyPilot.
 //!
 //! This crate owns browse and request state machines, settings persistence,
-//! diagnostic buffering, artwork correlation, and display-free page helpers.
+//! Intro Skipper policy, diagnostic buffering, artwork correlation, and display-free page helpers.
 
 #[cfg(feature = "native")]
 pub mod browse;
@@ -20,6 +20,8 @@ pub mod diagnostics;
 pub mod home_hero;
 #[cfg(feature = "native")]
 pub mod image_lifecycle;
+#[cfg(feature = "native")]
+pub mod intro_skipper;
 mod load_state;
 pub mod locale;
 #[cfg(feature = "native")]

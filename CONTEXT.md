@@ -179,15 +179,19 @@ A Jellyfin server plugin that detects intro and credit ranges for media items so
 _Avoid_: Media Segment Skipping, chapter skipping, generic skip markers
 
 **Automatic Intro Skip**:
-JellyPilot advancing playback past an Intro Skipper range without asking the user for confirmation. Automatic Intro Skip is a playback behavior of the Playback Target, not an MPV overlay or prompt, and each fetched range is skipped at most once per playback session.
+JellyPilot advancing playback past an Intro Skipper range without asking the user for confirmation, once the observed playback position is within that range rather than before its start. Automatic Intro Skip is silent Playback Target behavior: each fetched range triggers at most one automatic seek attempt per Playback Session, even if that attempt fails.
 _Avoid_: Skip prompt, countdown, overlay
+
+**Manual Intro Skip**:
+JellyPilot advancing playback past an Intro Skipper range only when the user invokes the skip action while that range's prompt is active. Manual Intro Skip is distinct from silent Automatic Intro Skip.
+_Avoid_: Automatic Intro Skip, next episode command
 
 **Credit Skip**:
 JellyPilot advancing playback past an Intro Skipper credit range. Credit Skip does not directly start the next episode; if the skip reaches natural end of playback, JellyPilot's normal next-episode behavior applies.
 _Avoid_: Next episode command, outro button
 
 **Intro Skipper Setting**:
-A global user preference that controls whether JellyPilot uses Intro Skipper ranges during playback. The Intro Skipper Setting defaults to enabled so plugin ranges are used unless the user turns the behavior off.
+A global user preference selecting Automatic, Manual, or Off for Intro Skipper ranges during playback. Automatic is the default and skips silently; Manual offers a prompt for a user-invoked skip, while Off disables Intro Skipper behavior.
 _Avoid_: Automation, Playback automation, Plugin install state, server setting
 
 **Diagnostics**:

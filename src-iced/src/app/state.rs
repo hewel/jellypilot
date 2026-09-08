@@ -14,15 +14,16 @@ use jellypilot_core::config::{
 use jellypilot_core::detail::DetailContent;
 use jellypilot_core::diagnostics::{DiagnosticCategory, DiagnosticLevel, Diagnostics};
 use jellypilot_core::home_hero::{self, HeroCandidate, HeroSource};
+use jellypilot_core::intro_skipper::IntroSkipMode;
 use jellypilot_core::request_gate::{RemoteToken, RequestGate};
 use jellypilot_core::LoadState;
-use jellypilot_media_server::artwork::ArtworkAdapter;
+use jellypilot_media_server::artwork::{ArtworkAdapter, ArtworkLimits};
 use jellypilot_media_server::{
-  LibraryLatestRow, MediaServerProvider, VideoLibraryItem, VideoLibraryShortcut,
+  ArtworkDiskCache, LibraryLatestRow, MediaServerProvider, VideoLibraryItem, VideoLibraryShortcut,
   VideoSeasonEpisodesPage,
 };
 use jellypilot_mpv::playback::PlaybackController;
-use jellypilot_session::{IntroSkipMode, JellyfinWebSocket, JellyfinWebSocketEvent};
+use jellypilot_session::{JellyfinWebSocket, JellyfinWebSocketEvent};
 use jellypilot_ui::theme::ThemeMode as UiThemeMode;
 use jellypilot_ui::tokens::{ThemePalette, DARK_PALETTE, LIGHT_PALETTE};
 use zeroize::Zeroizing;
@@ -645,10 +646,17 @@ impl State {
     }
     let mut request_gate = RequestGate::default();
     let playback = crate::app::playback::Surface::new(&mut request_gate);
-    let artwork_adapter = Arc::new(ArtworkAdapter::new());
-    artwork_adapter.set_disk_cache_enabled(settings.snapshot().image_cache_enabled());
-    let avatar_adapter = Arc::new(ArtworkAdapter::new());
-    avatar_adapter.set_disk_cache_enabled(settings.snapshot().image_cache_enabled());
+    let disk_cache = ArtworkDiskCache::default();
+    disk_cache.set_enabled(settings.snapshot().image_cache_enabled());
+    // Share disk coordination, not authentication or in-memory demand lifetimes.
+    let artwork_adapter = Arc::new(ArtworkAdapter::with_limits_and_disk_cache(
+      ArtworkLimits::default(),
+      disk_cache.clone(),
+    ));
+    let avatar_adapter = Arc::new(ArtworkAdapter::with_limits_and_disk_cache(
+      ArtworkLimits::default(),
+      disk_cache,
+    ));
     let locale = Localizer::resolve(settings.snapshot().ui_language());
 
     let mut state = Self {

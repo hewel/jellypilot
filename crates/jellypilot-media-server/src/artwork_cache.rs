@@ -102,6 +102,9 @@ impl ArtworkDiskCache {
   }
 
   pub async fn store(&self, key: String, bytes: Arc<[u8]>) {
+    // Snapshot before admission checks so a concurrent Clear cannot finish
+    // between those checks and lend this already-started write its new epoch.
+    let expected_epoch = self.epoch.load(Ordering::Acquire);
     if !self.enabled.load(Ordering::Acquire)
       || self.clearing.load(Ordering::Acquire)
       || bytes.len() as u64 > self.max_bytes
@@ -109,7 +112,6 @@ impl ArtworkDiskCache {
       return;
     }
     let cache = self.clone();
-    let expected_epoch = self.epoch.load(Ordering::Acquire);
     let _ =
       tokio::task::spawn_blocking(move || cache.store_entry(key, bytes, expected_epoch)).await;
   }
@@ -377,7 +379,8 @@ mod tests {
     let temporary = root.join(".entry-1-7.tmp");
     fs::write(&temporary, [4_u8, 5, 6]).unwrap();
 
-    clear_entries(&root).unwrap();
+    let cache = ArtworkDiskCache::new(root.clone(), 1024, true);
+    run_async(cache.clear()).unwrap();
 
     assert!(!entry.exists());
     assert!(!temporary.exists());
@@ -400,7 +403,8 @@ mod tests {
     let cache = ArtworkDiskCache::new(root.clone(), 1024, true);
     run_async(cache.store("entry".to_owned(), Arc::from([1_u8, 2, 3].as_slice())));
 
-    let hit = run_async(cache.load("entry".to_owned(), 1024, valid)).expect("disk hit");
+    let other_consumer = cache.clone();
+    let hit = run_async(other_consumer.load("entry".to_owned(), 1024, valid)).expect("disk hit");
 
     assert_eq!(hit.as_ref(), [1, 2, 3]);
     fs::remove_dir_all(root).unwrap();
@@ -428,11 +432,20 @@ mod tests {
     let root = test_root("disabled");
     fs::create_dir_all(&root).unwrap();
     fs::write(entry_path(&root, "existing"), [1_u8]).unwrap();
-    let cache = ArtworkDiskCache::new(root.clone(), 1024, false);
+    let cache = ArtworkDiskCache::new(root.clone(), 1024, true);
+    let other_consumer = cache.clone();
+    cache.set_enabled(false);
 
-    assert!(run_async(cache.load("existing".to_owned(), 1024, valid)).is_none());
-    run_async(cache.store("new".to_owned(), Arc::from([2_u8].as_slice())));
-    assert!(!entry_path(&root, "new").exists());
+    assert!(run_async(other_consumer.load("existing".to_owned(), 1024, valid)).is_none());
+    run_async(other_consumer.store("new".to_owned(), Arc::from([2_u8].as_slice())));
+    other_consumer.set_enabled(true);
+    assert!(run_async(cache.load("new".to_owned(), 1024, valid)).is_none());
+    assert_eq!(
+      run_async(cache.load("existing".to_owned(), 1024, valid))
+        .expect("disabling preserves existing origin bytes")
+        .as_ref(),
+      [1]
+    );
     fs::remove_dir_all(root).unwrap();
   }
 
@@ -465,9 +478,6 @@ mod tests {
 
   #[test]
   fn cache_key_is_cross_process_stable_and_server_scoped() {
-    let process_one_reference = "signed-reference-from-process-one";
-    let process_two_reference = "signed-reference-from-process-two";
-    assert_ne!(process_one_reference, process_two_reference);
     let origin = "https://media.example/Items/item/Images/Primary?maxHeight=220";
 
     assert_eq!(
@@ -488,34 +498,104 @@ mod tests {
   }
 
   #[test]
-  fn stale_store_from_before_clear_epoch_is_discarded() {
-    let root = test_root("clear-epoch");
+  fn clear_from_other_consumer_discards_admitted_store_but_allows_later_writes() {
+    let root = test_root("clear-admitted-store");
     let cache = ArtworkDiskCache::new(root.clone(), 1024, true);
-    let stale_epoch = cache.epoch.load(Ordering::Acquire);
-    cache.epoch.fetch_add(1, Ordering::AcqRel);
+    let other_consumer = cache.clone();
+    run_async(cache.store("existing".to_owned(), Arc::from([1_u8])));
 
-    cache
-      .store_entry("stale".to_owned(), Arc::from([1_u8, 2, 3]), stale_epoch)
-      .unwrap();
+    // Occupy this consumer's blocking worker so store is admitted but cannot
+    // touch disk until the other consumer has completed Clear on another pool.
+    let runtime = tokio::runtime::Builder::new_current_thread()
+      .max_blocking_threads(1)
+      .build()
+      .expect("test runtime");
+    let (started, admitted) = std::sync::mpsc::channel();
+    let (release, blocked) = std::sync::mpsc::channel();
+    let worker = runtime.spawn_blocking(move || {
+      started.send(()).unwrap();
+      blocked.recv().unwrap();
+    });
+    admitted.recv().unwrap();
+    let mut store = std::pin::pin!(cache.store("stale".to_owned(), Arc::from([2_u8])));
+    runtime.block_on(std::future::poll_fn(|context| {
+      assert!(store.as_mut().poll(context).is_pending());
+      std::task::Poll::Ready(())
+    }));
 
-    assert!(!entry_path(&root, "stale").exists());
+    run_async(other_consumer.clear()).unwrap();
+    release.send(()).unwrap();
+    runtime.block_on(store);
+    runtime.block_on(worker).unwrap();
+
+    assert!(run_async(cache.load("existing".to_owned(), 1024, valid)).is_none());
+    assert!(run_async(cache.load("stale".to_owned(), 1024, valid)).is_none());
+    assert_eq!(
+      run_async(cache.stats()).unwrap(),
+      ArtworkCacheStats::default()
+    );
+
+    run_async(other_consumer.store("fresh".to_owned(), Arc::from([3_u8, 4])));
+    assert_eq!(
+      run_async(cache.load("fresh".to_owned(), 1024, valid))
+        .expect("a write started after Clear may repopulate disk")
+        .as_ref(),
+      [3, 4]
+    );
     fs::remove_dir_all(root).unwrap();
   }
 
-  #[test]
-  fn stats_and_clear_tolerate_entries_that_vanish_mid_pass() {
-    let root = test_root("vanished");
-    fs::create_dir_all(&root).unwrap();
-    let vanished = entry_path(&root, "vanished");
+  #[tokio::test]
+  async fn shared_consumers_read_complete_entries_while_storing_and_evicting() {
+    let root = test_root("shared-mutations");
+    let cache = ArtworkDiskCache::new(root.clone(), 12, true);
+    let other_consumer = cache.clone();
 
-    assert!(tolerate_not_found(fs::metadata(&vanished))
-      .unwrap()
-      .is_none());
-    assert!(tolerate_not_found(fs::remove_file(&vanished))
-      .unwrap()
-      .is_none());
-    assert_eq!(cache_stats(&root).unwrap(), ArtworkCacheStats::default());
-    clear_entries(&root).unwrap();
+    tokio::join!(
+      async {
+        for index in 1_u8..=16 {
+          cache
+            .store(format!("library-{index}"), Arc::from([index; 3]))
+            .await;
+          if let Some(bytes) = cache.load(format!("avatar-{index}"), 3, valid).await {
+            assert_eq!(bytes.as_ref(), [index + 16; 3]);
+          }
+          assert!(cache.stats().await.unwrap().bytes <= 12);
+        }
+      },
+      async {
+        for index in 1_u8..=16 {
+          other_consumer
+            .store(format!("avatar-{index}"), Arc::from([index + 16; 3]))
+            .await;
+          if let Some(bytes) = other_consumer
+            .load(format!("library-{index}"), 3, valid)
+            .await
+          {
+            assert_eq!(bytes.as_ref(), [index; 3]);
+          }
+          assert!(other_consumer.stats().await.unwrap().bytes <= 12);
+        }
+      }
+    );
+
+    let mut surviving_entries = 0;
+    for index in 1_u8..=16 {
+      for (prefix, expected) in [("library", index), ("avatar", index + 16)] {
+        if let Some(bytes) = cache.load(format!("{prefix}-{index}"), 3, valid).await {
+          assert_eq!(bytes.as_ref(), [expected; 3]);
+          surviving_entries += 1;
+        }
+      }
+    }
+    assert_eq!(surviving_entries, 4);
+    assert_eq!(
+      other_consumer.stats().await.unwrap(),
+      ArtworkCacheStats {
+        bytes: 12,
+        entries: surviving_entries,
+      }
+    );
     fs::remove_dir_all(root).unwrap();
   }
 

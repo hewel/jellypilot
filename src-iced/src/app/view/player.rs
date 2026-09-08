@@ -8,12 +8,12 @@ use crate::i18n::Localizer;
 use iced::widget::{button, column, container, row, scrollable, slider, space, text, Column};
 use iced::{Alignment, ContentFit, Element, Fill, Length};
 use jellypilot_core::config::AppMode;
+use jellypilot_media_server::IntroSkipKind;
 use jellypilot_mpv::playback::{Playable, TrackInfo};
 use jellypilot_mpv::playback_session::{
   AdjacentAvailability, AdjacentDirection, NowPlayingView, PlaybackIntent, TracksView,
 };
 use jellypilot_mpv::player::format_duration;
-use jellypilot_session::IntroSkipKind;
 use jellypilot_ui::fonts::{DISPLAY_FONT, HEADING_FONT};
 use jellypilot_ui::icons::{icon_with_color, Icon, IconSize};
 use jellypilot_ui::overlay::{popover, tooltip, Placement, PopoverOptions, TooltipOptions};
@@ -801,6 +801,7 @@ fn playback_artwork(state: &State, width: f32, height: f32) -> Element<'_, Messa
 mod tests {
   use super::*;
   use crate::app::message::{Message, PlaybackMessage};
+  use jellypilot_core::intro_skipper::IntroSkipMode;
   use jellypilot_media_server::VideoLibraryItem;
   use jellypilot_mpv::playback::{
     NowPlayingItem, Playable, PlaybackOutcome, PlaybackRefreshOutcome, PlaybackRefreshState,
@@ -811,7 +812,6 @@ mod tests {
     PlaybackEvent, PlaybackInput, PlaybackIntent,
   };
   use jellypilot_mpv::PlayerState;
-  use jellypilot_session::IntroSkipMode;
   use std::time::Instant;
   fn test_now_playing() -> NowPlayingView {
     NowPlayingView {

@@ -700,6 +700,7 @@ mod tests {
   use jellypilot_auth::{AuthStorageError, AuthStore, SavedProfileKey};
   use jellypilot_core::browse_model::LibraryBrowseView;
   use jellypilot_core::config::SettingsStore;
+  use jellypilot_core::intro_skipper::IntroSkipMode;
   use jellypilot_media_server::{JellyfinClient, MediaServerProvider, VideoLibraryItem};
   use jellypilot_mpv::playback::{
     Playable, PlaybackOutcome, PlaybackRefreshOutcome, PlaybackRefreshState, PlaybackSnapshot,
@@ -707,7 +708,6 @@ mod tests {
   use jellypilot_mpv::playback_session::{
     ControllerCommand, ControllerSettlement, IntroAvailability, PlaybackEffect, PlaybackEvent,
   };
-  use jellypilot_session::IntroSkipMode;
   use jellypilot_ui::fonts;
 
   use super::super::artwork::{ArtworkSurface, ImagePriority, ImageSpec, ImageStatus};
@@ -1257,7 +1257,7 @@ mod tests {
       if with_prompt {
         state.playback.view.intro_prompt =
           Some(jellypilot_mpv::playback_session::IntroPromptView {
-            kind: jellypilot_session::IntroSkipKind::Introduction,
+            kind: jellypilot_media_server::IntroSkipKind::Introduction,
           });
       }
       let window = iced::window::Id::unique();
@@ -1824,12 +1824,10 @@ mod tests {
     state.playback.session.handle(
       PlaybackInput::Event(Box::new(PlaybackEvent::IntroRangesSettled {
         id: intro_id,
-        result: Ok(vec![jellypilot_session::IntroSkipRange {
-          kind: jellypilot_session::IntroSkipKind::Introduction,
+        result: Ok(vec![jellypilot_media_server::IntroSkipRange {
+          kind: jellypilot_media_server::IntroSkipKind::Introduction,
           start_seconds: 10.0,
           end_seconds: 30.0,
-          notified: false,
-          skipped: false,
         }]),
       })),
       now,
@@ -1902,16 +1900,13 @@ mod tests {
     for (configured, expected) in [
       (
         jellypilot_core::config::IntroMode::Automatic,
-        jellypilot_session::IntroSkipMode::Automatic,
+        IntroSkipMode::Automatic,
       ),
       (
         jellypilot_core::config::IntroMode::Manual,
-        jellypilot_session::IntroSkipMode::Manual,
+        IntroSkipMode::Manual,
       ),
-      (
-        jellypilot_core::config::IntroMode::Off,
-        jellypilot_session::IntroSkipMode::Off,
-      ),
+      (jellypilot_core::config::IntroMode::Off, IntroSkipMode::Off),
     ] {
       state
         .kernel

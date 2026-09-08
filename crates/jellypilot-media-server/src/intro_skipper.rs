@@ -1,9 +1,7 @@
-//! Intro Skipper plugin range parsing and skip decisions.
+//! Intro Skipper plugin range parsing.
 
 use serde::Deserialize;
 use std::collections::HashMap;
-
-const LOOKAHEAD_SECONDS: f64 = 1.0;
 
 /// Intro Skipper segment kind supported by JellyPilot.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -12,20 +10,12 @@ pub enum IntroSkipKind {
   Credits,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub struct IntroSkipDecision {
-  pub kind: IntroSkipKind,
-  pub seek_target: f64,
-}
-
-/// Active Intro Skipper range for the current playback session.
+/// Validated Intro Skipper plugin segment data.
 #[derive(Debug, Clone, PartialEq)]
 pub struct IntroSkipRange {
   pub kind: IntroSkipKind,
   pub start_seconds: f64,
   pub end_seconds: f64,
-  pub notified: bool,
-  pub skipped: bool,
 }
 
 impl IntroSkipRange {
@@ -42,8 +32,6 @@ impl IntroSkipRange {
       kind,
       start_seconds,
       end_seconds,
-      notified: false,
-      skipped: false,
     })
   }
 }
@@ -73,64 +61,6 @@ pub(crate) fn parse_intro_skipper_ranges(
     .collect()
 }
 
-/// Return the seek target when playback is inside a skippable range.
-pub fn evaluate_skip(position_seconds: f64, ranges: &mut [IntroSkipRange]) -> Option<f64> {
-  evaluate_skip_decision(position_seconds, ranges).map(|decision| decision.seek_target)
-}
-
-fn evaluate_skip_decision(
-  position_seconds: f64,
-  ranges: &mut [IntroSkipRange],
-) -> Option<IntroSkipDecision> {
-  if !position_seconds.is_finite() {
-    return None;
-  }
-
-  ranges
-    .iter_mut()
-    .find(|range| is_active(position_seconds, range))
-    .map(|range| {
-      range.skipped = true;
-      range.notified = true;
-      IntroSkipDecision {
-        kind: range.kind,
-        seek_target: range.end_seconds,
-      }
-    })
-}
-
-/// Return the segment kind when playback enters a skippable range that has not been prompted.
-pub fn evaluate_skip_prompt(
-  position_seconds: f64,
-  ranges: &mut [IntroSkipRange],
-) -> Option<IntroSkipKind> {
-  if !position_seconds.is_finite() {
-    return None;
-  }
-
-  ranges
-    .iter_mut()
-    .find(|range| is_active(position_seconds, range) && !range.notified)
-    .map(|range| {
-      range.notified = true;
-      range.kind
-    })
-}
-
-/// Return the skip decision for the current active segment without requiring a prior prompt.
-pub fn evaluate_manual_skip(
-  position_seconds: f64,
-  ranges: &mut [IntroSkipRange],
-) -> Option<IntroSkipDecision> {
-  evaluate_skip_decision(position_seconds, ranges)
-}
-
-fn is_active(position_seconds: f64, range: &IntroSkipRange) -> bool {
-  !range.skipped
-    && position_seconds >= range.start_seconds - LOOKAHEAD_SECONDS
-    && position_seconds < range.end_seconds
-}
-
 #[cfg(test)]
 mod tests {
   use super::*;
@@ -148,8 +78,6 @@ mod tests {
       kind,
       start_seconds,
       end_seconds,
-      notified: false,
-      skipped: false,
     }
   }
 
@@ -207,105 +135,5 @@ mod tests {
     let ranges = parse_intro_skipper_ranges(HashMap::new());
 
     assert!(ranges.is_empty());
-  }
-
-  #[test]
-  fn first_entry_into_unskipped_range_returns_seek_target_once() {
-    let mut ranges = vec![intro_range(10.0, 80.0)];
-
-    assert_eq!(evaluate_skip(10.0, &mut ranges), Some(80.0));
-    assert!(ranges[0].notified);
-    assert!(ranges[0].skipped);
-    assert_eq!(evaluate_skip(10.5, &mut ranges), None);
-  }
-
-  #[test]
-  fn resume_or_manual_seek_into_unskipped_range_still_skips() {
-    let mut ranges = vec![intro_range(10.0, 80.0)];
-
-    assert_eq!(evaluate_skip(42.0, &mut ranges), Some(80.0));
-  }
-
-  #[test]
-  fn manual_seek_back_into_already_skipped_range_does_not_skip_again() {
-    let mut ranges = vec![intro_range(10.0, 80.0)];
-
-    assert_eq!(evaluate_skip(10.0, &mut ranges), Some(80.0));
-    assert_eq!(evaluate_skip(20.0, &mut ranges), None);
-  }
-
-  #[test]
-  fn new_playback_range_set_resets_skipped_state() {
-    let mut first_session_ranges = vec![intro_range(10.0, 80.0)];
-    assert_eq!(evaluate_skip(10.0, &mut first_session_ranges), Some(80.0));
-
-    let mut next_session_ranges = vec![intro_range(10.0, 80.0)];
-
-    assert_eq!(evaluate_skip(10.0, &mut next_session_ranges), Some(80.0));
-  }
-
-  #[test]
-  fn returns_seek_target_inside_half_open_range() {
-    let mut at_start = vec![intro_range(10.0, 80.0)];
-    let mut before_end = vec![intro_range(10.0, 80.0)];
-    let mut at_end = vec![intro_range(10.0, 80.0)];
-
-    assert_eq!(evaluate_skip(10.0, &mut at_start), Some(80.0));
-    assert_eq!(evaluate_skip(79.99, &mut before_end), Some(80.0));
-    assert_eq!(evaluate_skip(80.0, &mut at_end), None);
-  }
-
-  #[test]
-  fn returns_seek_target_inside_one_second_lookahead_window() {
-    let mut inside_lookahead = vec![intro_range(10.0, 80.0)];
-    let mut outside_lookahead = vec![intro_range(10.0, 80.0)];
-
-    assert_eq!(evaluate_skip(9.0, &mut inside_lookahead), Some(80.0));
-    assert_eq!(evaluate_skip(8.99, &mut outside_lookahead), None);
-  }
-
-  #[test]
-  fn position_near_range_end_does_not_retrigger_after_skip() {
-    let mut ranges = vec![intro_range(10.0, 80.0)];
-
-    assert_eq!(evaluate_skip(79.5, &mut ranges), Some(80.0));
-    assert_eq!(evaluate_skip(79.75, &mut ranges), None);
-  }
-
-  #[test]
-  fn credit_range_uses_same_seek_rules() {
-    let mut lookahead_ranges = vec![credit_range(1200.0, 1260.0)];
-    let mut start_ranges = vec![credit_range(1200.0, 1260.0)];
-
-    assert_eq!(evaluate_skip(1199.0, &mut lookahead_ranges), Some(1260.0));
-    assert_eq!(evaluate_skip(1200.0, &mut start_ranges), Some(1260.0));
-  }
-
-  #[test]
-  fn manual_prompt_marks_notified_without_skipping() {
-    let mut ranges = vec![intro_range(10.0, 80.0)];
-
-    assert_eq!(
-      evaluate_skip_prompt(10.0, &mut ranges),
-      Some(IntroSkipKind::Introduction)
-    );
-    assert!(ranges[0].notified);
-    assert!(!ranges[0].skipped);
-    assert_eq!(evaluate_skip_prompt(10.5, &mut ranges), None);
-  }
-
-  #[test]
-  fn manual_skip_returns_kind_and_marks_range_skipped() {
-    let mut ranges = vec![credit_range(1200.0, 1260.0)];
-
-    assert_eq!(
-      evaluate_manual_skip(1200.0, &mut ranges),
-      Some(IntroSkipDecision {
-        kind: IntroSkipKind::Credits,
-        seek_target: 1260.0
-      })
-    );
-    assert!(ranges[0].notified);
-    assert!(ranges[0].skipped);
   }
 }

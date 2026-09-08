@@ -1,11 +1,10 @@
 use std::collections::VecDeque;
-use std::time::{Duration, Instant};
+use std::time::Instant;
 
-use jellypilot_media_server::MediaItem;
-use jellypilot_session::{
-  evaluate_intro_skip, evaluate_manual_skip, IntroSkipAction, IntroSkipKind, IntroSkipMode,
-  IntroSkipRange,
+use jellypilot_core::intro_skipper::{
+  IntroPromptToken, IntroSkipAction, IntroSkipInput, IntroSkipMode, IntroSkipper,
 };
+use jellypilot_media_server::{IntroSkipKind, IntroSkipRange, MediaItem};
 
 use crate::playback::{
   NowPlayingItem, Playable, PlaybackCleanupError, PlaybackEndReason, PlaybackError,
@@ -14,8 +13,6 @@ use crate::playback::{
   PlaybackWarning, TrackInfo, TrackSelectionOutcome,
 };
 
-const INTRO_PROMPT_DURATION: Duration = Duration::from_secs(3);
-const INTRO_PROMPT_DURATION_MS: i64 = 3_000;
 const INTRO_CONFIRMATION_DURATION_MS: i64 = 1_500;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -261,7 +258,8 @@ pub struct PlaybackSession {
   snapshot: Option<crate::playback::PlaybackSnapshot>,
   tracks: TracksView,
   adjacent: AdjacentState,
-  intro: IntroState,
+  intro: IntroSkipper,
+  skipper_available: bool,
   notice: Option<PlaybackNotice>,
   engine_available: bool,
   desired_paused: Option<bool>,
@@ -283,7 +281,8 @@ impl Default for PlaybackSession {
       snapshot: None,
       tracks: TracksView::Unavailable,
       adjacent: AdjacentState::default(),
-      intro: IntroState::default(),
+      intro: IntroSkipper::default(),
+      skipper_available: false,
       notice: None,
       engine_available: false,
       desired_paused: None,
@@ -332,9 +331,8 @@ impl PlaybackSession {
       adjacent: self.adjacent.view(),
       intro_prompt: self
         .intro
-        .active_prompt
-        .as_ref()
-        .map(|prompt| IntroPromptView { kind: prompt.kind }),
+        .prompt_kind()
+        .map(|kind| IntroPromptView { kind }),
       notice: self.notice.clone(),
       engine_available: self.engine_available,
       busy: self.controller_busy(),
@@ -410,11 +408,11 @@ impl PlaybackSession {
       PlaybackIntent::PlayAdjacent(direction) => self.play_adjacent(direction),
       PlaybackIntent::SkipIntro => self.apply_intro_action(now, true),
       PlaybackIntent::DismissIntro => {
-        self.intro.active_prompt = None;
+        self.intro.dismiss_prompt();
         Vec::new()
       }
       PlaybackIntent::Tick => {
-        self.expire_intro_prompt(now);
+        self.intro.advance_time(now);
         if self.snapshot.is_none() || self.quitting {
           Vec::new()
         } else {
@@ -424,11 +422,9 @@ impl PlaybackSession {
       PlaybackIntent::Disconnect => self.begin_teardown(false),
       PlaybackIntent::Quit => self.begin_teardown(true),
       PlaybackIntent::SetIntroMode(mode) => {
+        self.intro.set_mode(mode);
         if mode == IntroSkipMode::Off {
-          self.intro.disable();
           self.pending_intro = None;
-        } else {
-          self.intro.mode = mode;
         }
         Vec::new()
       }
@@ -449,7 +445,7 @@ impl PlaybackSession {
           return Vec::new();
         }
         self.pending_intro = None;
-        self.intro.ranges = result.unwrap_or_default();
+        self.intro.replace_ranges(result.unwrap_or_default());
         Vec::new()
       }
       PlaybackEvent::AdjacentSettled {
@@ -627,20 +623,10 @@ impl PlaybackSession {
         self.finish_track_selection(result);
         Vec::new()
       }
-      (
-        ControllerOperation::Prompt { range_index, kind },
-        ControllerSettlement::OsdShown(result),
-      ) => {
-        match result {
-          Ok(()) if self.intro.range_is_promptable(range_index) => {
-            self.intro.active_prompt = Some(ActiveIntroPrompt {
-              range_index,
-              kind,
-              expires_at: now + INTRO_PROMPT_DURATION,
-            });
-          }
-          Ok(()) => {}
-          Err(error) => self.notice = Some(PlaybackNotice::Failed(error)),
+      (ControllerOperation::Prompt { token }, ControllerSettlement::OsdShown(result)) => {
+        self.intro.prompt_settled(token, result.is_ok(), now);
+        if let Err(error) = result {
+          self.notice = Some(PlaybackNotice::Failed(error));
         }
         Vec::new()
       }
@@ -670,11 +656,8 @@ impl PlaybackSession {
         self.sync_desired_transport();
         self.tracks = TracksView::Unavailable;
         self.adjacent = AdjacentState::default();
-        self.intro = IntroState {
-          mode: intro.mode,
-          skipper_available: intro.skipper_available,
-          ..IntroState::default()
-        };
+        self.intro = IntroSkipper::new(intro.mode);
+        self.skipper_available = intro.skipper_available;
         self.set_warning_notice(warnings);
         self.start_auxiliary(intro)
       }
@@ -857,8 +840,8 @@ impl PlaybackSession {
       Playable::Media(item),
       PlaybackStartPosition::Beginning,
       IntroAvailability {
-        mode: self.intro.mode,
-        skipper_available: self.intro.skipper_available,
+        mode: self.intro.mode(),
+        skipper_available: self.skipper_available,
       },
       PlaybackSelection::default(),
     ))
@@ -872,39 +855,27 @@ impl PlaybackSession {
     else {
       return Vec::new();
     };
-    let active_prompt_range = self.active_intro_prompt_range(now);
-    let Some(action) = evaluate_intro_ui_action(
-      position,
-      &mut self.intro.ranges,
-      self.intro.mode,
-      manual_requested,
-      active_prompt_range,
-    ) else {
+    let input = if manual_requested {
+      IntroSkipInput::ManualSkip
+    } else {
+      IntroSkipInput::Position
+    };
+    let Some(action) = self.intro.observe(position, now, input) else {
       return Vec::new();
     };
     match action {
-      IntroUiAction::Seek { target, .. } => self.enqueue(ControllerRequest::controlled(
+      IntroSkipAction::Seek(target) => self.enqueue(ControllerRequest::controlled(
         RequestKind::Seek,
         ControllerCommand::Seek(target),
       )),
-      IntroUiAction::Prompt { range_index, kind } => self.enqueue(ControllerRequest::prompt(
-        range_index,
-        kind,
-        "Skip available — use the JellyPilot skip-intro shortcut".to_owned(),
-      )),
-      IntroUiAction::ManualSkip {
-        range_index,
-        seek_target,
-        ..
-      } => {
-        if self
-          .intro
-          .active_prompt
-          .as_ref()
-          .is_some_and(|prompt| prompt.range_index == range_index)
-        {
-          self.intro.active_prompt = None;
-        }
+      IntroSkipAction::ShowPrompt { token, duration_ms } => {
+        self.enqueue(ControllerRequest::prompt(
+          token,
+          duration_ms,
+          "Skip available — use the JellyPilot skip-intro shortcut".to_owned(),
+        ))
+      }
+      IntroSkipAction::ManualSkip(seek_target) => {
         let effects = self.enqueue(ControllerRequest::controlled(
           RequestKind::Seek,
           ControllerCommand::Seek(seek_target),
@@ -915,26 +886,6 @@ impl PlaybackSession {
         ));
         effects
       }
-    }
-  }
-
-  fn active_intro_prompt_range(&mut self, now: Instant) -> Option<usize> {
-    self.expire_intro_prompt(now);
-    self
-      .intro
-      .active_prompt
-      .as_ref()
-      .map(|prompt| prompt.range_index)
-  }
-
-  fn expire_intro_prompt(&mut self, now: Instant) {
-    if self
-      .intro
-      .active_prompt
-      .as_ref()
-      .is_some_and(|prompt| now >= prompt.expires_at)
-    {
-      self.intro.active_prompt = None;
     }
   }
 
@@ -1007,7 +958,8 @@ impl PlaybackSession {
     self.desired_muted = None;
     self.tracks = TracksView::Unavailable;
     self.adjacent = AdjacentState::default();
-    self.intro = IntroState::default();
+    self.intro = IntroSkipper::default();
+    self.skipper_available = false;
     self.invalidate_auxiliary();
   }
 
@@ -1056,8 +1008,7 @@ enum ControllerOperation {
   Refresh,
   TrackSelection,
   Prompt {
-    range_index: usize,
-    kind: IntroSkipKind,
+    token: IntroPromptToken,
   },
   Osd,
   Shutdown,
@@ -1128,14 +1079,14 @@ impl ControllerRequest {
     }
   }
 
-  fn prompt(range_index: usize, kind: IntroSkipKind, text: String) -> Self {
+  fn prompt(token: IntroPromptToken, duration_ms: u32, text: String) -> Self {
     Self {
       kind: RequestKind::ShowText,
       command: ControllerCommand::ShowText {
         text,
-        duration_ms: INTRO_PROMPT_DURATION_MS,
+        duration_ms: i64::from(duration_ms),
       },
-      operation: ControllerOperation::Prompt { range_index, kind },
+      operation: ControllerOperation::Prompt { token },
     }
   }
 
@@ -1209,98 +1160,6 @@ impl AdjacentSlot {
       Self::Unavailable => AdjacentAvailability::Unavailable,
     }
   }
-}
-
-struct IntroState {
-  mode: IntroSkipMode,
-  skipper_available: bool,
-  ranges: Vec<IntroSkipRange>,
-  active_prompt: Option<ActiveIntroPrompt>,
-}
-
-impl Default for IntroState {
-  fn default() -> Self {
-    Self {
-      mode: IntroSkipMode::Off,
-      skipper_available: false,
-      ranges: Vec::new(),
-      active_prompt: None,
-    }
-  }
-}
-
-impl IntroState {
-  fn range_is_promptable(&self, range_index: usize) -> bool {
-    self.mode == IntroSkipMode::Manual
-      && self
-        .ranges
-        .get(range_index)
-        .is_some_and(|range| range.notified && !range.skipped)
-  }
-
-  fn disable(&mut self) {
-    self.mode = IntroSkipMode::Off;
-    self.ranges.clear();
-    self.active_prompt = None;
-  }
-}
-
-struct ActiveIntroPrompt {
-  range_index: usize,
-  kind: IntroSkipKind,
-  expires_at: Instant,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq)]
-enum IntroUiAction {
-  Seek {
-    range_index: usize,
-    target: f64,
-  },
-  Prompt {
-    range_index: usize,
-    kind: IntroSkipKind,
-  },
-  ManualSkip {
-    range_index: usize,
-    kind: IntroSkipKind,
-    seek_target: f64,
-  },
-}
-
-fn evaluate_intro_ui_action(
-  position_seconds: f64,
-  ranges: &mut [IntroSkipRange],
-  mode: IntroSkipMode,
-  manual_requested: bool,
-  active_prompt_range: Option<usize>,
-) -> Option<IntroUiAction> {
-  let range_index = ranges.iter().position(|range| {
-    !range.skipped
-      && position_seconds.is_finite()
-      && position_seconds >= range.start_seconds
-      && position_seconds < range.end_seconds
-  })?;
-  let range = std::slice::from_mut(&mut ranges[range_index]);
-  if manual_requested {
-    if mode != IntroSkipMode::Manual || active_prompt_range != Some(range_index) {
-      return None;
-    }
-    return evaluate_manual_skip(position_seconds, range).map(|decision| {
-      IntroUiAction::ManualSkip {
-        range_index,
-        kind: decision.kind,
-        seek_target: decision.seek_target,
-      }
-    });
-  }
-  evaluate_intro_skip(position_seconds, range, mode).map(|action| match action {
-    IntroSkipAction::Seek(target) => IntroUiAction::Seek {
-      range_index,
-      target,
-    },
-    IntroSkipAction::ShowPrompt(kind) => IntroUiAction::Prompt { range_index, kind },
-  })
 }
 
 fn should_fetch_intro_ranges(availability: IntroAvailability, item_type: &str) -> bool {
@@ -1406,8 +1265,6 @@ mod tests {
       kind: IntroSkipKind::Introduction,
       start_seconds: 10.0,
       end_seconds: 30.0,
-      notified: false,
-      skipped: false,
     }
   }
 
@@ -1939,40 +1796,6 @@ mod tests {
 
     let (_, command) = controller_effect(effects);
     assert!(matches!(command, ControllerCommand::Start { .. }));
-    assert!(!session.intro.ranges[0].skipped);
-  }
-
-  #[test]
-  fn automatic_skip_fires_once_at_the_exact_start_boundary() {
-    let (mut session, now, auxiliary) = start_session(IntroSkipMode::Automatic);
-    settle_intro_ranges(&mut session, intro_fetch_id(&auxiliary), now);
-
-    let effects = refresh_at(&mut session, now, 10.0, Vec::new());
-
-    let (_, command) = controller_effect(effects);
-    assert!(matches!(command, ControllerCommand::Seek(target) if target == 30.0));
-    assert!(session.intro.ranges[0].skipped);
-  }
-
-  #[test]
-  fn seeking_back_does_not_skip_an_automatic_range_twice() {
-    let (mut session, now, auxiliary) = start_session(IntroSkipMode::Automatic);
-    settle_intro_ranges(&mut session, intro_fetch_id(&auxiliary), now);
-    let (seek_id, _) = controller_effect(refresh_at(&mut session, now, 10.0, Vec::new()));
-    session.handle(
-      PlaybackInput::Event(Box::new(PlaybackEvent::ControllerSettled {
-        id: seek_id,
-        settlement: ControllerSettlement::Controlled(Ok(PlaybackOutcome {
-          snapshot: snapshot("episode-1", "Episode", 30.0),
-          warnings: Vec::new(),
-        })),
-      })),
-      now,
-    );
-
-    let effects = refresh_at(&mut session, now, 10.0, Vec::new());
-
-    assert!(effects.is_empty());
   }
 
   #[test]
@@ -2006,91 +1829,63 @@ mod tests {
   }
 
   #[test]
-  fn dismiss_intro_clears_the_live_prompt_without_seeking() {
-    let (mut session, now, auxiliary) = start_session(IntroSkipMode::Manual);
-    settle_intro_ranges(&mut session, intro_fetch_id(&auxiliary), now);
-    let (prompt_id, _) = controller_effect(refresh_at(&mut session, now, 10.0, Vec::new()));
-    session.handle(
-      PlaybackInput::Event(Box::new(PlaybackEvent::ControllerSettled {
-        id: prompt_id,
-        settlement: ControllerSettlement::OsdShown(Ok(())),
-      })),
-      now,
-    );
-
-    let effects = session.handle(
-      PlaybackInput::Intent(Box::new(PlaybackIntent::DismissIntro)),
-      now,
-    );
-
-    assert!(effects.is_empty());
-    assert!(session.view().intro_prompt.is_none());
-  }
-
-  #[test]
-  fn tick_expires_the_intro_prompt_at_its_deadline() {
-    let (mut session, now, auxiliary) = start_session(IntroSkipMode::Manual);
-    settle_intro_ranges(&mut session, intro_fetch_id(&auxiliary), now);
-    let (prompt_id, _) = controller_effect(refresh_at(&mut session, now, 10.0, Vec::new()));
-    session.handle(
-      PlaybackInput::Event(Box::new(PlaybackEvent::ControllerSettled {
-        id: prompt_id,
-        settlement: ControllerSettlement::OsdShown(Ok(())),
-      })),
-      now,
-    );
-
-    session.handle(
-      PlaybackInput::Intent(Box::new(PlaybackIntent::Tick)),
-      now + INTRO_PROMPT_DURATION,
-    );
-
-    assert!(session.view().intro_prompt.is_none());
-  }
-
-  #[test]
-  fn set_intro_mode_off_purges_live_ranges_and_prompt() {
-    let (mut session, now, auxiliary) = start_session(IntroSkipMode::Manual);
-    settle_intro_ranges(&mut session, intro_fetch_id(&auxiliary), now);
-    let (prompt_id, _) = controller_effect(refresh_at(&mut session, now, 10.0, Vec::new()));
-    session.handle(
-      PlaybackInput::Event(Box::new(PlaybackEvent::ControllerSettled {
-        id: prompt_id,
-        settlement: ControllerSettlement::OsdShown(Ok(())),
-      })),
-      now,
-    );
-    assert!(session.view().intro_prompt.is_some());
-
-    let effects = session.handle(
-      PlaybackInput::Intent(Box::new(PlaybackIntent::SetIntroMode(IntroSkipMode::Off))),
-      now,
-    );
-
-    assert!(effects.is_empty());
-    assert!(session.view().intro_prompt.is_none());
-    assert!(session.intro.ranges.is_empty());
-    assert_eq!(session.intro.mode, IntroSkipMode::Off);
-    assert!(session.pending_intro.is_none());
-  }
-
-  #[test]
-  fn set_intro_mode_updates_live_tick_evaluation() {
+  fn failed_automatic_seek_reports_failure_without_retrying() {
     let (mut session, now, auxiliary) = start_session(IntroSkipMode::Automatic);
     settle_intro_ranges(&mut session, intro_fetch_id(&auxiliary), now);
-
+    let (seek_id, command) = controller_effect(refresh_at(&mut session, now, 10.0, Vec::new()));
+    assert!(matches!(command, ControllerCommand::Seek(30.0)));
     session.handle(
-      PlaybackInput::Intent(Box::new(PlaybackIntent::SetIntroMode(
-        IntroSkipMode::Manual,
-      ))),
+      PlaybackInput::Event(Box::new(PlaybackEvent::ControllerSettled {
+        id: seek_id,
+        settlement: ControllerSettlement::Controlled(Err(PlaybackError::MpvControlFailed)),
+      })),
       now,
     );
-    let effects = refresh_at(&mut session, now, 10.0, Vec::new());
-
-    let (_, command) = controller_effect(effects);
-    assert!(matches!(command, ControllerCommand::ShowText { .. }));
-    assert!(!session.intro.ranges[0].skipped);
+    assert_eq!(
+      session.view().notice,
+      Some(PlaybackNotice::Failed(PlaybackError::MpvControlFailed))
+    );
+    assert!(refresh_at(&mut session, now, 10.0, Vec::new()).is_empty());
   }
+
+  #[test]
+  fn off_rejects_in_flight_fetch_even_after_reenabling() {
+    let (mut session, now, auxiliary) = start_session(IntroSkipMode::Automatic);
+    let fetch_id = intro_fetch_id(&auxiliary);
+    for mode in [IntroSkipMode::Off, IntroSkipMode::Automatic] {
+      session.handle(
+        PlaybackInput::Intent(Box::new(PlaybackIntent::SetIntroMode(mode))),
+        now,
+      );
+    }
+    settle_intro_ranges(&mut session, fetch_id, now);
+    assert!(refresh_at(&mut session, now, 10.0, Vec::new()).is_empty());
+  }
+
+  #[test]
+  fn disconnect_rejects_delayed_prompt_presentation_and_shuts_down() {
+    let (mut session, now, auxiliary) = start_session(IntroSkipMode::Manual);
+    settle_intro_ranges(&mut session, intro_fetch_id(&auxiliary), now);
+    let (prompt_id, _) = controller_effect(refresh_at(&mut session, now, 10.0, Vec::new()));
+    session.handle(
+      PlaybackInput::Intent(Box::new(PlaybackIntent::Disconnect)),
+      now,
+    );
+    let effects = session.handle(
+      PlaybackInput::Event(Box::new(PlaybackEvent::ControllerSettled {
+        id: prompt_id,
+        settlement: ControllerSettlement::OsdShown(Ok(())),
+      })),
+      now,
+    );
+    assert!(matches!(
+      controller_effect(effects).1,
+      ControllerCommand::Shutdown
+    ));
+    assert!(session.view().intro_prompt.is_none());
+    assert!(session.view().now_playing.is_none());
+  }
+
   #[test]
   fn intro_mode_off_never_fetches_ranges() {
     let (_, _, auxiliary) = start_session(IntroSkipMode::Off);

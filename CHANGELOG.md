@@ -16,6 +16,7 @@ All notable changes to JellyPilot are documented in this file.
 - Reworked Video Home with a full-width, aspect-preserving Backdrop behind scrolling content, a detail-style bottom gradient, and a subdued thumbnail selection rail with hover/focus information. Added manual selection, series-grouped continuation candidates, and selection retained across same-profile refreshes; kept the separate Continue Watching row directly resumable and visible in compact windows.
 - Made Library Image loading follow measured visibility, with immediate visible-image admission and one viewport of prefetch before and after scrolling across Home, Browse, Detail, and Personal Lists.
 - Moved Library/Search restoration and refresh ownership into the display-free browse model, retaining complete usable results and scroll position while replacement data loads.
+- Consolidated Intro Skipper eligibility and prompt lifetime into one display-free policy, preserving Automatic, Manual, and Off modes, exact-start skipping, and one automatic attempt per range.
 
 ### Fixed
 - Restored history-specific vertical and horizontal scroll positions when returning to Home, browse results, details, and Personal Lists. Back navigation retains loaded content and query context; new searches and filter changes still start at the top.
@@ -28,6 +29,7 @@ All notable changes to JellyPilot are documented in this file.
 - Rejected late browse deliveries across history restoration and model recreation, kept failed refreshes retryable, and tied refresh activity to the captured page/query rather than the lifetime of its first task.
 - Sized Browse columns from the actual opened window instead of the requested startup size, preventing clipped posters when the window manager constrains the default window.
 - Let detail hero content grow beyond the backdrop's fixed 16:9 frame and wrap action rows, keeping buttons and labels readable at narrower widths and with longer localized copy.
+- Shared disk-cache coordination between Library Images and account avatars, keeping their authentication and in-memory lifecycles independent while coordinating cache clearing, writes, and eviction.
 
 ## [2.0.0] - 2026-09-02
 
